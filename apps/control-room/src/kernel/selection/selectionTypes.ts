@@ -2,6 +2,7 @@ import type { ModuleId } from "../types";
 import type { CrossSectionQualityMetric } from "../api/apiTypes";
 import type {
   AnalysisFieldOverlayKContextKind,
+  AnalysisFieldOverlayRepresentation,
   AnalysisFieldOverlaySource,
 } from "../visualization/AnalysisFieldOverlayController";
 
@@ -33,10 +34,7 @@ type ObjectSelectionKind =
   | "object.extension.topological-charge"
   | "object.visualization"
   | "object.visualization.debug"
-  | "object.mode_visualization"
-  | "object.mode_visualization.group"
-  | "object.mode_visualization.field"
-  | "object.mode_visualization.view";
+  | "object.mode_visualization";
 
 type MeshQualitySelectionMetric = CrossSectionQualityMetric;
 export type RegionVisualizationTargetId = `region:${string}:${string}`;
@@ -580,15 +578,20 @@ export type SelectionRef =
       calculationMode?: string;
       fieldId?: string;
       fmrPeakIndex?: number;
+      frequencyHz?: number;
       frequencyIndex?: number;
+      kPathCoordinateRadPerM?: number;
       kind: string;
       modeIndex?: number;
       nodeId: string;
       observableId?: string;
+      representation?: AnalysisFieldOverlayRepresentation | string;
       resourceRef?: string;
       sampleIndex?: number;
+      source?: AnalysisFieldOverlaySource;
       studyProduct?: string;
       type: "frequency-domain";
+      wavevectorKf?: readonly [number, number, number];
     }
   | {
       analysisRunId?: string;
@@ -596,26 +599,23 @@ export type SelectionRef =
       artifactRevision?: number | string;
       equilibriumId?: string;
       fieldId: string;
-      fieldIds?: readonly string[];
+      frequencyHz?: number;
       frequencyIndex?: number;
       kContextKind?: AnalysisFieldOverlayKContextKind;
-      kind:
-        | "object.mode_visualization"
-        | "object.mode_visualization.group"
-        | "object.mode_visualization.field"
-        | "object.mode_visualization.view";
+      kPathCoordinateRadPerM?: number;
+      kind: "object.mode_visualization";
       modeIndex?: number;
-      modeVisualizationRootFieldId?: string;
-      modeVisualizationRootSource?: AnalysisFieldOverlaySource;
       nodeId: string;
       objectId: string;
       resourceRef?: string;
+      representation?: AnalysisFieldOverlayRepresentation;
       sampleIndex?: number;
       source: AnalysisFieldOverlaySource;
       studyProduct?: string;
       type: "mode-visualization";
       view?: string;
       visualizationTargetId: `mode:${string}:${AnalysisFieldOverlaySource}:${string}`;
+      wavevectorKf?: readonly [number, number, number];
     };
 
 export interface Selection {
@@ -1015,13 +1015,19 @@ export function selectionRefEquals(
         nullableStringEquals(left.equilibriumId, right.equilibriumId) &&
         nullableStringEquals(left.fieldId, right.fieldId) &&
         (left.fmrPeakIndex ?? null) === (right.fmrPeakIndex ?? null) &&
+        (left.frequencyHz ?? null) === (right.frequencyHz ?? null) &&
         left.frequencyIndex === right.frequencyIndex &&
         nullableStringEquals(left.kContextKind, right.kContextKind) &&
+        (left.kPathCoordinateRadPerM ?? null) ===
+          (right.kPathCoordinateRadPerM ?? null) &&
         left.modeIndex === right.modeIndex &&
         nullableStringEquals(left.observableId, right.observableId) &&
+        nullableStringEquals(left.representation, right.representation) &&
         nullableStringEquals(left.resourceRef, right.resourceRef) &&
         left.sampleIndex === right.sampleIndex &&
-        nullableStringEquals(left.studyProduct, right.studyProduct)
+        nullableStringEquals(left.source, right.source) &&
+        nullableStringEquals(left.studyProduct, right.studyProduct) &&
+        centroidEquals(left.wavevectorKf, right.wavevectorKf)
       );
     case "mode-visualization":
       return (
@@ -1034,24 +1040,20 @@ export function selectionRefEquals(
         (left.artifactRevision ?? null) === (right.artifactRevision ?? null) &&
         nullableStringEquals(left.equilibriumId, right.equilibriumId) &&
         left.fieldId === right.fieldId &&
-        arrayEquals(left.fieldIds, right.fieldIds) &&
-        nullableStringEquals(
-          left.modeVisualizationRootFieldId,
-          right.modeVisualizationRootFieldId,
-        ) &&
-        nullableStringEquals(
-          left.modeVisualizationRootSource,
-          right.modeVisualizationRootSource,
-        ) &&
         left.source === right.source &&
+        (left.frequencyHz ?? null) === (right.frequencyHz ?? null) &&
         left.frequencyIndex === right.frequencyIndex &&
         nullableStringEquals(left.kContextKind, right.kContextKind) &&
+        (left.kPathCoordinateRadPerM ?? null) ===
+          (right.kPathCoordinateRadPerM ?? null) &&
         left.modeIndex === right.modeIndex &&
+        nullableStringEquals(left.representation, right.representation) &&
         nullableStringEquals(left.resourceRef, right.resourceRef) &&
         left.sampleIndex === right.sampleIndex &&
         nullableStringEquals(left.studyProduct, right.studyProduct) &&
         nullableStringEquals(left.view, right.view) &&
-        left.visualizationTargetId === right.visualizationTargetId
+        left.visualizationTargetId === right.visualizationTargetId &&
+        centroidEquals(left.wavevectorKf, right.wavevectorKf)
       );
   }
 }

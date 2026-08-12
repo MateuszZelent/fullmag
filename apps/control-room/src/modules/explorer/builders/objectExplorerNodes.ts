@@ -197,6 +197,9 @@ function modeVisualizationNode(
     parentId,
     badge: activeOverlay.source === "eigen-mode" ? "Modal" : "Driven",
     analysisFieldSource: activeOverlay.source,
+    ...(provenance?.representation
+      ? { analysisFieldRepresentation: provenance.representation }
+      : {}),
     ...(activeOverlay.query.view ? { analysisFieldView: activeOverlay.query.view } : {}),
     ...(provenance?.runId ? { analysisRunId: provenance.runId } : {}),
     ...(provenance?.stageId ? { analysisStageId: provenance.stageId } : {}),
@@ -208,11 +211,15 @@ function modeVisualizationNode(
     ...(activeOverlay.frequencyIndex !== undefined
       ? { frequencyIndex: activeOverlay.frequencyIndex }
       : {}),
+    ...(activeOverlay.frequencyHz !== undefined
+      ? { frequencyHz: activeOverlay.frequencyHz }
+      : {}),
     ...(provenance?.kContextKind
       ? { kContextKind: provenance.kContextKind }
       : {}),
-    modeVisualizationRootFieldId: activeOverlay.fieldId,
-    modeVisualizationRootSource: activeOverlay.source,
+    ...(activeOverlay.kPathCoordinateRadPerM !== undefined
+      ? { kPathCoordinateRadPerM: activeOverlay.kPathCoordinateRadPerM }
+      : {}),
     icon: "wave",
     ...(activeOverlay.modeIndex !== undefined
       ? { modeIndex: activeOverlay.modeIndex }
@@ -224,6 +231,7 @@ function modeVisualizationNode(
       : {}),
     status: "ready",
     ...(provenance?.studyProduct ? { studyProduct: provenance.studyProduct } : {}),
+    ...(activeOverlay.wavevectorKf ? { wavevectorKf: activeOverlay.wavevectorKf } : {}),
   };
 }
 

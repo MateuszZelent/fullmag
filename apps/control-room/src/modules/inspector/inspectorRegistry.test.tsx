@@ -127,6 +127,15 @@ function frequencyDomainPanelId(kind: string): string {
 }
 
 describe("inspectorRegistry", () => {
+  it("does not retain orphan mode-visualization child routes", () => {
+    expect(resolveInspectorRoute("object.mode_visualization")?.id).toBe(
+      "object-mode-visualization-overview",
+    );
+    expect(resolveInspectorRoute("object.mode_visualization.group")).toBeNull();
+    expect(resolveInspectorRoute("object.mode_visualization.field")).toBeNull();
+    expect(resolveInspectorRoute("object.mode_visualization.view")).toBeNull();
+  });
+
   it("routes a pinned Quick Chart to its preview-only Inspector", () => {
     expect(resolveInspectorPanel({ kind: "results.quick_chart" })?.id).toBe(
       "quick-chart",
@@ -194,13 +203,10 @@ describe("inspectorRegistry", () => {
     );
   });
 
-  it("resolves mode visualization levels to distinct owner panels", () => {
+  it("resolves only the canonical mode visualization owner panel", () => {
     expect(resolveInspectorPanel({ kind: "object.mode_visualization" })?.id).toBe(
       "object-mode-visualization-overview",
     );
-    expect(
-      resolveInspectorPanel({ kind: "object.mode_visualization.view" })?.id,
-    ).toBe("object-mode-visualization-view");
   });
 
   it("resolves object region and magnetic texture groups", () => {
@@ -704,11 +710,13 @@ describe("inspectorRegistry", () => {
       "results.resonance.driven.stage",
       "results.resonance.modal.spectrum",
       "results.resonance.modal.modes",
+      "results.resonance.modal.mode",
       "results.resonance.modal.coupling",
       "results.resonance.driven.spectrum",
       "results.resonance.driven.peaks",
       "results.resonance.driven.frequency_points",
       "results.resonance.driven.fields",
+      "results.resonance.driven.field",
       "results.dispersion.root",
       "results.dispersion.modal.stage",
       "results.dispersion.driven.stage",
@@ -716,7 +724,9 @@ describe("inspectorRegistry", () => {
       "results.dispersion.modal.relation",
       "results.dispersion.modal.branches",
       "results.dispersion.modal.modes_at_k",
+      "results.dispersion.modal.mode_at_k",
       "results.dispersion.driven.response_map",
+      "results.dispersion.driven.field_at_k",
       "results.hysteresis.root",
       "results.analysis_views.root",
       "results.analysis_views.definition",

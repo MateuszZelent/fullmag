@@ -497,7 +497,7 @@ describe("analysis field overlay commands", () => {
     const selection = new SelectionController(new EventBus<KernelEventMap>());
     selection.set(
       {
-        kind: "results.frequency_response.frequency_point",
+        kind: "results.resonance.driven.field",
         label: "1.5 GHz",
         nodeId: "results:frequency-response:stage-1:frequency:3",
         objectId: null,
@@ -744,13 +744,16 @@ describe("analysis field overlay commands", () => {
           analysisStageId: "response-stage",
           artifactRevision: 11,
           equilibriumId: "eq-4",
-          fieldId: "analysis:frequency-response:frequency-0003",
+          fieldId: "response-field-3",
           frequencyIndex: 3,
-          kContextKind: "gamma",
-          kind: "results.frequency_response.frequency_point",
+          frequencyHz: 1.5e9,
+          kContextKind: "fixed_k",
+          kind: "results.resonance.driven.field",
           nodeId: "results:run-1:response:frequency:3",
           observableId: "mx",
-          resourceRef: "data/fields/analysis:frequency-response:frequency-0003",
+          representation: "complex-vector-xyz",
+          resourceRef: "data/fields/response-field-3",
+          source: "frequency-response",
           studyProduct: "driven_response",
           type: "frequency-domain",
         },
@@ -775,8 +778,9 @@ describe("analysis field overlay commands", () => {
 
     expect(result.status).toBe("completed");
     expect(overlay.getSnapshot()).toMatchObject({
-      fieldId: "analysis:frequency-response:frequency-0003",
+      fieldId: "response-field-3",
       frequencyIndex: 3,
+      frequencyHz: 1.5e9,
       cellOrigin: [1, 2, 3],
       floquetSpatialConvention:
         "dst_equals_src_exp_minus_i_k_dot_delta_r",
@@ -784,10 +788,11 @@ describe("analysis field overlay commands", () => {
       provenance: {
         artifactRevision: 11,
         equilibriumId: "eq-4",
-        kContextKind: "gamma",
+        kContextKind: "fixed_k",
         normalization: "unit_l2",
         observableId: "mx",
-        resourceRef: "data/fields/analysis:frequency-response:frequency-0003",
+        representation: "complex-vector-xyz",
+        resourceRef: "data/fields/response-field-3",
         runId: "run-1",
         stageId: "response-stage",
         studyProduct: "driven_response",
@@ -813,6 +818,7 @@ describe("analysis field overlay commands", () => {
         artifactRevision: 4,
         equilibriumId: "eq-old",
         kContextKind: "gamma",
+        representation: "complex-vector-xyz",
         resourceRef: "data/fields/analysis:eigen:old-mode",
         runId: "run-old",
         stageId: "eigen-old",
@@ -826,7 +832,7 @@ describe("analysis field overlay commands", () => {
     overlay.setResultContext("run-new");
     selection.set(
       {
-        kind: "results.eigen.mode",
+        kind: "results.resonance.modal.mode",
         label: "New mode",
         nodeId: "results:run-new:eigen:mode:2",
         objectId: null,
@@ -835,13 +841,16 @@ describe("analysis field overlay commands", () => {
           analysisStageId: "eigen-new",
           artifactRevision: 8,
           equilibriumId: "eq-new",
-          fieldId: "analysis:eigen:new-mode",
+          fieldId: "mode-field:new",
+          frequencyHz: 13e9,
           kContextKind: "gamma",
-          kind: "results.eigen.mode",
+          kind: "results.resonance.modal.mode",
           modeIndex: 2,
           nodeId: "results:run-new:eigen:mode:2",
-          resourceRef: "data/fields/analysis:eigen:new-mode",
+          representation: "complex-vector-xyz",
+          resourceRef: "data/fields/mode-field:new",
           sampleIndex: 0,
+          source: "eigen-mode",
           studyProduct: "modal_eigen",
           type: "frequency-domain",
         },
@@ -861,7 +870,7 @@ describe("analysis field overlay commands", () => {
     expect(result.status).toBe("completed");
     expect(overlay.getSnapshot()).toMatchObject({
       appearance: { scalarColorPalette: "viridis", vectorBudget: 512 },
-      fieldId: "analysis:eigen:new-mode",
+      fieldId: "mode-field:new",
       modeIndex: 2,
       provenance: { runId: "run-new", stageId: "eigen-new" },
       visualizationPhaseRad: 0.5,
@@ -882,13 +891,13 @@ describe("analysis field overlay commands", () => {
     overlay.setResultContext("run-new");
     selection.set(
       {
-        kind: "results.eigen.mode",
+        kind: "results.resonance.modal.mode",
         label: "Unowned mode",
         nodeId: "results:eigen:mode:2",
         objectId: null,
         ref: {
           fieldId: "analysis:eigen:new-mode",
-          kind: "results.eigen.mode",
+          kind: "results.resonance.modal.mode",
           modeIndex: 2,
           nodeId: "results:eigen:mode:2",
           sampleIndex: 0,
@@ -906,7 +915,7 @@ describe("analysis field overlay commands", () => {
       commands
         .get("analysis.frequency-domain.rebind-3d-overlay")
         ?.disabledReason?.(context),
-    ).toContain("owner identity");
+    ).toBe("Selected analysis target artifact revision is missing.");
   });
 
   it("clears the active analysis field", async () => {

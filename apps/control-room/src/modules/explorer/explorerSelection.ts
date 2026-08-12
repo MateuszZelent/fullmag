@@ -127,13 +127,6 @@ function modeVisualizationSourceFromNode(
   return null;
 }
 
-function modeVisualizationViewFromNode(node: ExplorerNode): string | undefined {
-  if (node.analysisFieldView) return node.analysisFieldView;
-  const marker = ":view:";
-  const markerIndex = node.id.lastIndexOf(marker);
-  return markerIndex >= 0 ? node.id.slice(markerIndex + marker.length) : undefined;
-}
-
 function selectionRefFromNode(node: ExplorerNode): SelectionRef | null {
   if (node.kind === "results.quick_chart") {
     const descriptor = parsePinnedQuickChart(node);
@@ -259,24 +252,30 @@ function selectionRefFromNode(node: ExplorerNode): SelectionRef | null {
       ...(node.frequencyIndex !== undefined
         ? { frequencyIndex: node.frequencyIndex }
         : {}),
+      ...(node.frequencyHz !== undefined ? { frequencyHz: node.frequencyHz } : {}),
       kind: node.kind,
+      ...(node.kPathCoordinateRadPerM !== undefined
+        ? { kPathCoordinateRadPerM: node.kPathCoordinateRadPerM }
+        : {}),
       ...(node.modeIndex !== undefined ? { modeIndex: node.modeIndex } : {}),
       nodeId: node.id,
       ...(node.observableId ? { observableId: node.observableId } : {}),
       ...(node.resourceRef ? { resourceRef: node.resourceRef } : {}),
+      ...(node.analysisFieldRepresentation
+        ? { representation: node.analysisFieldRepresentation }
+        : {}),
       ...(node.sampleIndex !== undefined ? { sampleIndex: node.sampleIndex } : {}),
+      ...(node.analysisFieldSource ? { source: node.analysisFieldSource } : {}),
       ...(node.studyProduct ? { studyProduct: node.studyProduct } : {}),
       type: "frequency-domain",
+      ...(node.wavevectorKf ? { wavevectorKf: node.wavevectorKf } : {}),
     };
   }
 
   if (
     node.objectId &&
     node.fieldId &&
-    (node.kind === "object.mode_visualization" ||
-      node.kind === "object.mode_visualization.group" ||
-      node.kind === "object.mode_visualization.field" ||
-      node.kind === "object.mode_visualization.view")
+    node.kind === "object.mode_visualization"
   ) {
     const source = modeVisualizationSourceFromNode(node);
     if (!source) return null;
@@ -288,34 +287,33 @@ function selectionRefFromNode(node: ExplorerNode): SelectionRef | null {
         : {}),
       ...(node.equilibriumId ? { equilibriumId: node.equilibriumId } : {}),
       fieldId: node.fieldId,
-      ...(node.fieldIds ? { fieldIds: node.fieldIds } : {}),
       ...(node.frequencyIndex !== undefined
         ? { frequencyIndex: node.frequencyIndex }
         : {}),
+      ...(node.frequencyHz !== undefined ? { frequencyHz: node.frequencyHz } : {}),
       kind: node.kind,
       ...(node.kContextKind ? { kContextKind: node.kContextKind } : {}),
+      ...(node.kPathCoordinateRadPerM !== undefined
+        ? { kPathCoordinateRadPerM: node.kPathCoordinateRadPerM }
+        : {}),
       ...(node.modeIndex !== undefined ? { modeIndex: node.modeIndex } : {}),
-      ...(node.modeVisualizationRootFieldId
-        ? { modeVisualizationRootFieldId: node.modeVisualizationRootFieldId }
-        : {}),
-      ...(node.modeVisualizationRootSource
-        ? { modeVisualizationRootSource: node.modeVisualizationRootSource }
-        : {}),
       nodeId: node.id,
       objectId: node.objectId,
       ...(node.resourceRef ? { resourceRef: node.resourceRef } : {}),
+      ...(node.analysisFieldRepresentation
+        ? { representation: node.analysisFieldRepresentation }
+        : {}),
       ...(node.sampleIndex !== undefined ? { sampleIndex: node.sampleIndex } : {}),
       source,
       ...(node.studyProduct ? { studyProduct: node.studyProduct } : {}),
       type: "mode-visualization",
-      ...(modeVisualizationViewFromNode(node)
-        ? { view: modeVisualizationViewFromNode(node) }
-        : {}),
+      ...(node.analysisFieldView ? { view: node.analysisFieldView } : {}),
       visualizationTargetId: modeVisualizationTargetId(
         node.objectId,
         source,
         node.fieldId,
       ),
+      ...(node.wavevectorKf ? { wavevectorKf: node.wavevectorKf } : {}),
     };
   }
 

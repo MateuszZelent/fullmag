@@ -1,11 +1,18 @@
 import { describe, expect, it } from "vitest";
 
+import { EventBus } from "@/kernel/events/EventBus";
+import type { KernelEventMap } from "@/kernel/events/eventTypes";
+import { fieldVectorResourceKey } from "@/kernel/api/fieldQueryIdentity";
+import { SelectionController } from "@/kernel/selection/SelectionController";
+import type { KernelApi } from "@/kernel/types";
+
 import { flattenExplorerNodes } from "./buildModelTree";
 import {
   buildPhysicsFirstResultsTree,
   physicsFirstResultsSnapshotFromResources,
   type PhysicsFirstResultEntry,
 } from "./resultsExplorerNodes";
+import { selectExplorerNode } from "../explorerSelection";
 
 const modalFinite = {
   artifactRevision: "spectrum-r7",
@@ -150,6 +157,172 @@ describe("buildPhysicsFirstResultsTree", () => {
 });
 
 describe("physicsFirstResultsSnapshotFromResources", () => {
+  it("publishes a concrete canonical modal field target with complete provenance", () => {
+    const adapted = physicsFirstResultsSnapshotFromResources({
+      currentRun: { revision: 17, run_id: "runtime-run-17" },
+      manifest: {
+        result_manifest: {
+          payload: {
+            equilibrium_identity: "eq-relax-r4",
+            requested_execution: { boundary_context: "finite_open" },
+            revision: "eigen-r9",
+            stage_id: "eigen-stage",
+            study_product: "modal_eigen",
+          },
+          status: "ready",
+        },
+      },
+      spectrum: {
+        payload: {
+          modes: [{
+            frequency_hz: 12.5e9,
+            mode_field_id: "analysis:eigen:sample-0000:mode-0002",
+            mode_field_resource_key: "data/fields/analysis:eigen:sample-0000:mode-0002",
+            raw_mode_index: 2,
+            sample_index: 0,
+          }],
+        },
+        status: "ready",
+      },
+    });
+    const target = flattenExplorerNodes(buildPhysicsFirstResultsTree(adapted.snapshot))
+      .find((node) => node.kind === "results.resonance.modal.mode");
+
+    expect(target).toMatchObject({
+      analysisFieldRepresentation: "complex-vector-xyz",
+      analysisFieldSource: "eigen-mode",
+      analysisFieldView: "phase_rotated_real",
+      analysisRunId: "runtime-run-17",
+      analysisStageId: "eigen-stage",
+      artifactRevision: "eigen-r9",
+      equilibriumId: "eq-relax-r4",
+      fieldId: "analysis:eigen:sample-0000:mode-0002",
+      frequencyHz: 12.5e9,
+      kContextKind: "finite_open",
+      modeIndex: 2,
+      resourceRef: "data/fields/analysis:eigen:sample-0000:mode-0002",
+      sampleIndex: 0,
+      studyProduct: "modal_eigen",
+    });
+    if (!target) throw new Error("Missing canonical modal field target");
+    const selection = new SelectionController(new EventBus<KernelEventMap>());
+    selectExplorerNode({ selection } as KernelApi, target, "explorer");
+    expect(selection.get().ref).toMatchObject({
+      analysisRunId: "runtime-run-17",
+      analysisStageId: "eigen-stage",
+      artifactRevision: "eigen-r9",
+      equilibriumId: "eq-relax-r4",
+      fieldId: "analysis:eigen:sample-0000:mode-0002",
+      frequencyHz: 12.5e9,
+      kind: "results.resonance.modal.mode",
+      representation: "complex-vector-xyz",
+      resourceRef: "data/fields/analysis:eigen:sample-0000:mode-0002",
+      source: "eigen-mode",
+      studyProduct: "modal_eigen",
+      type: "frequency-domain",
+    });
+  });
+
+  it("publishes exact path sample identity for a canonical mode-at-k target", () => {
+    const adapted = physicsFirstResultsSnapshotFromResources({
+      currentRun: { revision: 18, run_id: "runtime-run-18" },
+      dispersion: {
+        path_metadata: {
+          sampling: {
+            kind: "path",
+            points: [
+              { k_vector: [0, 0, 0], label: "Γ" },
+              { k_vector: [1e8, 0, 0], label: "X" },
+            ],
+            samples_per_segment: [4],
+          },
+        },
+        status: "ready",
+        text: [
+          "sample_index,raw_mode_index,path_s_rad_per_m,frequency_hz,mode_field_id,mode_field_resource_key",
+          "2,3,5e7,13e9,analysis:eigen:sample-0002:mode-0003,data/fields/analysis:eigen:sample-0002:mode-0003",
+        ].join("\n"),
+      },
+      manifest: {
+        result_manifest: {
+          payload: {
+            equilibrium_identity: "eq-path",
+            requested_execution: { boundary_context: "floquet_periodic" },
+            revision: "dispersion-r4",
+            stage_id: "dispersion-stage",
+            study_product: "modal_eigen",
+          },
+          status: "ready",
+        },
+      },
+      spectrum: { status: "ready" },
+    });
+    const target = flattenExplorerNodes(buildPhysicsFirstResultsTree(adapted.snapshot))
+      .find((node) => node.kind === "results.dispersion.modal.mode_at_k");
+
+    expect(target).toMatchObject({
+      fieldId: "analysis:eigen:sample-0002:mode-0003",
+      kContextKind: "k_path",
+      kPathCoordinateRadPerM: 5e7,
+      modeIndex: 3,
+      sampleIndex: 2,
+      wavevectorKf: [5e7, 0, 0],
+    });
+  });
+
+  it("publishes a concrete canonical driven field target with exact frequency identity", () => {
+    const adapted = physicsFirstResultsSnapshotFromResources({
+      currentRun: { revision: 19, run_id: "runtime-run-19" },
+      manifest: {
+        result_manifest: {
+          payload: {
+            equilibrium_identity: "eq-driven",
+            requested_execution: { boundary_context: "finite_open" },
+            resources: {
+              response_field_resources: [{
+                field_resource_id: "analysis:response:frequency-0004",
+                frequency_index: 4,
+              }],
+            },
+            revision: "response-r5",
+            stage_id: "response-stage",
+            study_product: "driven_response",
+          },
+          status: "ready",
+        },
+      },
+      responseSweep: {
+        payload: {
+          points: [{
+            frequency_hz: 8.25e9,
+            frequency_index: 4,
+            observable_id: "mx",
+          }],
+          schema_version: "magnetic_response_sweep.v2",
+        },
+        status: "ready",
+      },
+    });
+    const target = flattenExplorerNodes(buildPhysicsFirstResultsTree(adapted.snapshot))
+      .find((node) => node.kind === "results.resonance.driven.field");
+
+    expect(target).toMatchObject({
+      analysisFieldRepresentation: "complex-vector-xyz",
+      analysisFieldSource: "frequency-response",
+      analysisRunId: "runtime-run-19",
+      analysisStageId: "response-stage",
+      artifactRevision: "response-r5",
+      equilibriumId: "eq-driven",
+      fieldId: "analysis:response:frequency-0004",
+      frequencyHz: 8.25e9,
+      frequencyIndex: 4,
+      kContextKind: "finite_open",
+      observableId: "mx",
+      resourceRef: fieldVectorResourceKey("analysis:response:frequency-0004"),
+      studyProduct: "driven_response",
+    });
+  });
+
   it("does not fabricate a driven response map from modal path metadata and a response sweep", () => {
     const adapted = physicsFirstResultsSnapshotFromResources({
       currentRun: { revision: 21, run_id: "run-21" },

@@ -4,12 +4,11 @@ import { selectionRefEquals, type SelectionRef } from "./selectionTypes";
 
 type ModeVisualizationRef = Extract<SelectionRef, { type: "mode-visualization" }>;
 
-function modeRef(fieldIds: readonly string[]): ModeVisualizationRef {
+function modeRef(fieldId = "field-a"): ModeVisualizationRef {
   return {
-    fieldId: fieldIds[0] ?? "field-a",
-    fieldIds,
-    kind: "object.mode_visualization.group",
-    nodeId: "model:object:film:visualization:mode-visualization:eigen",
+    fieldId,
+    kind: "object.mode_visualization",
+    nodeId: "model:object:film:visualization:mode-visualization",
     objectId: "film",
     source: "eigen-mode",
     type: "mode-visualization",
@@ -18,17 +17,16 @@ function modeRef(fieldIds: readonly string[]): ModeVisualizationRef {
 }
 
 describe("mode visualization selection identity", () => {
-  it("includes the canonical ordered field list in equality", () => {
-    const first = modeRef(["field-a", "field-b"]);
+  it("uses the exact canonical field in equality", () => {
+    const first = modeRef("field-a");
 
-    expect(selectionRefEquals(first, modeRef(["field-a", "field-b"]))).toBe(true);
-    expect(selectionRefEquals(first, modeRef(["field-a", "field-c"]))).toBe(false);
-    expect(selectionRefEquals(first, modeRef(["field-b", "field-a"]))).toBe(false);
+    expect(selectionRefEquals(first, modeRef("field-a"))).toBe(true);
+    expect(selectionRefEquals(first, modeRef("field-b"))).toBe(false);
   });
 
   it("includes result provenance in overlay selection equality", () => {
     const first = {
-      ...modeRef(["field-a"]),
+      ...modeRef("field-a"),
       analysisRunId: "run-1",
       analysisStageId: "stage-1",
       artifactRevision: 7,
@@ -39,7 +37,7 @@ describe("mode visualization selection identity", () => {
     } satisfies ModeVisualizationRef;
 
     expect(selectionRefEquals(first, { ...first })).toBe(true);
-    for (const change of [
+    const changes: Partial<ModeVisualizationRef>[] = [
       { analysisRunId: "run-2" },
       { analysisStageId: "stage-2" },
       { artifactRevision: 8 },
@@ -47,7 +45,8 @@ describe("mode visualization selection identity", () => {
       { kContextKind: "fixed_k" },
       { resourceRef: "data/fields/field-b" },
       { studyProduct: "driven_response" },
-    ]) {
+    ];
+    for (const change of changes) {
       expect(selectionRefEquals(first, { ...first, ...change })).toBe(false);
     }
   });
@@ -59,10 +58,13 @@ describe("mode visualization selection identity", () => {
       artifactRevision: 7,
       equilibriumId: "eq-1",
       fieldId: "field-a",
+      frequencyHz: 12.5e9,
       kContextKind: "gamma",
-      kind: "results.eigen.mode",
+      kind: "results.resonance.modal.mode",
       nodeId: "results:run-1:mode-1",
+      representation: "complex-vector-xyz",
       resourceRef: "data/fields/field-a",
+      source: "eigen-mode",
       studyProduct: "modal_eigen",
       type: "frequency-domain",
     };
@@ -71,6 +73,8 @@ describe("mode visualization selection identity", () => {
     expect(selectionRefEquals(first, { ...first, artifactRevision: 8 })).toBe(false);
     expect(selectionRefEquals(first, { ...first, equilibriumId: "eq-2" })).toBe(false);
     expect(selectionRefEquals(first, { ...first, kContextKind: "fixed_k" })).toBe(false);
+    expect(selectionRefEquals(first, { ...first, frequencyHz: 13e9 })).toBe(false);
+    expect(selectionRefEquals(first, { ...first, representation: "other" })).toBe(false);
     expect(
       selectionRefEquals(first, { ...first, studyProduct: "driven_response" }),
     ).toBe(false);

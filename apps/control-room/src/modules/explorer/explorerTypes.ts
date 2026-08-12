@@ -55,9 +55,6 @@ export type ExplorerNodeKind =
   | "object.visualization"
   | "object.visualization.debug"
   | "object.mode_visualization"
-  | "object.mode_visualization.group"
-  | "object.mode_visualization.field"
-  | "object.mode_visualization.view"
   | "airbox.root"
   | "airbox.mesh"
   | "airbox.mesh.parameters"
@@ -150,11 +147,13 @@ export type ExplorerNodeKind =
   | "results.resonance.driven.stage"
   | "results.resonance.modal.spectrum"
   | "results.resonance.modal.modes"
+  | "results.resonance.modal.mode"
   | "results.resonance.modal.coupling"
   | "results.resonance.driven.spectrum"
   | "results.resonance.driven.peaks"
   | "results.resonance.driven.frequency_points"
   | "results.resonance.driven.fields"
+  | "results.resonance.driven.field"
   | "results.dispersion.root"
   | "results.dispersion.modal.stage"
   | "results.dispersion.driven.stage"
@@ -162,7 +161,9 @@ export type ExplorerNodeKind =
   | "results.dispersion.modal.relation"
   | "results.dispersion.modal.branches"
   | "results.dispersion.modal.modes_at_k"
+  | "results.dispersion.modal.mode_at_k"
   | "results.dispersion.driven.response_map"
+  | "results.dispersion.driven.field_at_k"
   | "results.hysteresis.root"
   | "results.analysis_views.root"
   | "results.analysis_views.definition"
@@ -325,6 +326,7 @@ export interface ExplorerNode {
   label: string;
   parentId: string | null;
   activeAnalysisField?: boolean;
+  analysisFieldRepresentation?: "complex-vector-xyz";
   badge?: string;
   children?: ExplorerNode[];
   contextCommands?: CommandId[];
@@ -334,6 +336,7 @@ export interface ExplorerNode {
   artifactRevision?: number | string;
   equilibriumId?: string;
   kContextKind?: "finite_open" | "fixed_k" | "gamma" | "k_grid" | "k_path";
+  kPathCoordinateRadPerM?: number;
   studyProduct?: "driven_response" | "modal_eigen" | string;
   artifactPath?: string;
   branchId?: string;
@@ -342,7 +345,6 @@ export interface ExplorerNode {
   crossSectionDraftId?: "draft";
   crossSectionPlotId?: string;
   fieldId?: string;
-  fieldIds?: readonly string[];
   extensionId?: string;
   fieldOrientation?: string;
   fieldRevision?: number | string;
@@ -361,11 +363,10 @@ export interface ExplorerNode {
   inactiveCellCount?: number;
   membershipRevision?: string | null;
   fmrPeakIndex?: number;
+  frequencyHz?: number;
   frequencyIndex?: number;
   analysisFieldSource?: "eigen-mode" | "frequency-response";
   analysisFieldView?: string;
-  modeVisualizationRootFieldId?: string;
-  modeVisualizationRootSource?: "eigen-mode" | "frequency-response";
   icon?: ExplorerIconToken;
   hysteresisExecutionNodeId?: string;
   hysteresisExecutionNodeKind?: string;
@@ -406,6 +407,7 @@ export interface ExplorerNode {
    */
   yAxisIds?: readonly string[];
   sampleIndex?: number;
+  wavevectorKf?: readonly [number, number, number];
   stageId?: string;
   stageIndex?: number;
   availability?: ExplorerAvailability;

@@ -1,11 +1,7 @@
 "use client";
 
 import { useKernel } from "@/kernel/KernelContext";
-import {
-  modeVisualizationTargetId,
-  type Selection,
-  type SelectionRef,
-} from "@/kernel/selection/selectionTypes";
+import type { Selection, SelectionRef } from "@/kernel/selection/selectionTypes";
 
 import type { InspectorPanelProps } from "../../inspectorTypes";
 
@@ -43,39 +39,12 @@ function modeRootNodeId(nodeId: string, objectId: string): string {
     : `model:object:${objectId}:visualization${MODE_VISUALIZATION_NODE_MARKER}`;
 }
 
-function modeRootRef(
-  target: ModeVisualizationSelectionRef,
-  nodeId: string,
-): ModeVisualizationSelectionRef {
-  const rootFieldId =
-    target.modeVisualizationRootFieldId ?? target.fieldId;
-  const rootSource =
-    target.modeVisualizationRootSource ?? target.source;
-  return {
-    fieldId: rootFieldId,
-    kind: "object.mode_visualization",
-    modeVisualizationRootFieldId: rootFieldId,
-    modeVisualizationRootSource: rootSource,
-    nodeId,
-    objectId: target.objectId,
-    source: rootSource,
-    type: "mode-visualization",
-    view: undefined,
-    visualizationTargetId: modeVisualizationTargetId(
-      target.objectId,
-      rootSource,
-      rootFieldId,
-    ),
-  };
-}
-
 export function buildModeVisualizationBreadcrumbs(
   selection: InspectorPanelProps["selection"],
 ): ModeVisualizationBreadcrumb[] {
   const target = modeVisualizationSelectionRef(selection);
   if (!target) return [];
   const rootNodeId = modeRootNodeId(target.nodeId, target.objectId);
-  const atRoot = target.kind === "object.mode_visualization";
   return [
     {
       current: false,
@@ -96,7 +65,7 @@ export function buildModeVisualizationBreadcrumbs(
       },
     },
     {
-      current: atRoot,
+      current: true,
       id: rootNodeId,
       label: "Mode visualization",
       selection: {
@@ -104,19 +73,9 @@ export function buildModeVisualizationBreadcrumbs(
         label: "Mode visualization",
         nodeId: rootNodeId,
         objectId: target.objectId,
-        ref: modeRootRef(target, rootNodeId),
+        ref: target,
       },
     },
-    ...(atRoot
-      ? []
-      : [
-          {
-            current: true,
-            id: target.nodeId,
-            label: selection.label ?? "Selection",
-            selection,
-          },
-        ]),
   ];
 }
 

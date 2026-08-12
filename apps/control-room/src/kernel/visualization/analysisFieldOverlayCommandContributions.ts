@@ -10,6 +10,7 @@ import type { SelectionRef } from "../selection/selectionTypes";
 import type {
   AnalysisFieldOverlayAppearanceState,
   AnalysisFieldOverlayKContextKind,
+  AnalysisFieldOverlayRepresentation,
   AnalysisFieldOverlaySource,
   AnalysisFieldOverlayState,
 } from "./AnalysisFieldOverlayController";
@@ -34,10 +35,12 @@ interface AnalysisFieldOverlayCommandInput {
   fieldId?: string | null;
   floquetSpatialConvention?: string | null;
   frequencyIndex?: number | null;
+  frequencyHz?: number | null;
   displayGain?: number | null;
   geometryScope?: string | null;
   label?: string | null;
   kContextKind?: string | null;
+  kPathCoordinateRadPerM?: number | null;
   modeIndex?: number | null;
   normalization?: string | null;
   observableId?: string | null;
@@ -45,6 +48,7 @@ interface AnalysisFieldOverlayCommandInput {
   phasorConvention?: string | null;
   shaderVisible?: boolean | null;
   resourceRef?: string | null;
+  representation?: string | null;
   runId?: string | null;
   sampleIndex?: number | null;
   source?: AnalysisFieldOverlaySource | null;
@@ -129,6 +133,10 @@ function kContextKindValue(
     value === "k_path"
     ? value
     : null;
+}
+
+function representationValue(value: unknown): AnalysisFieldOverlayRepresentation | null {
+  return value === "complex-vector-xyz" ? value : null;
 }
 
 function clampAnimationRateHz(value: number | null): number {
@@ -246,6 +254,9 @@ function sourceFromSelectionRef(
   ref: Extract<SelectionRef, { type: "frequency-domain" }> | null,
 ): AnalysisFieldOverlaySource | null {
   if (!ref) return null;
+  if (ref.source === "eigen-mode" || ref.source === "frequency-response") {
+    return ref.source;
+  }
   if (
     ref.kind.startsWith("results.eigen") ||
     ref.kind.startsWith("resources.analysis.eigen") ||
@@ -378,7 +389,9 @@ function overlayStateFromContext(
     phasorConventionValue(input.phasorConvention) ??
     activeIdentityOverlay?.phasorConvention;
   const wavevectorKf =
-    vector3Value(input.wavevectorKf) ?? activeIdentityOverlay?.wavevectorKf;
+    vector3Value(input.wavevectorKf) ??
+    (identityRef?.wavevectorKf ? [...identityRef.wavevectorKf] as [number, number, number] : null) ??
+    activeIdentityOverlay?.wavevectorKf;
   const artifactRevision =
     identityRef?.artifactRevision ?? input.artifactRevision ?? undefined;
   const equilibriumId =
@@ -387,6 +400,10 @@ function overlayStateFromContext(
     identityRef?.kContextKind ?? kContextKindValue(input.kContextKind) ?? undefined;
   const resourceRef =
     identityRef?.resourceRef ?? stringValue(input.resourceRef) ?? undefined;
+  const representation =
+    representationValue(identityRef?.representation) ??
+    representationValue(input.representation) ??
+    undefined;
   const runId =
     identityRef?.analysisRunId ?? stringValue(input.runId) ?? undefined;
   const stageId =
@@ -402,6 +419,15 @@ function overlayStateFromContext(
       ? {
           frequencyIndex:
             numberValue(input.frequencyIndex) ?? identityRef?.frequencyIndex,
+        }
+      : {}),
+    ...((numberValue(input.frequencyHz) ?? identityRef?.frequencyHz) !== undefined
+      ? { frequencyHz: numberValue(input.frequencyHz) ?? identityRef?.frequencyHz }
+      : {}),
+    ...((numberValue(input.kPathCoordinateRadPerM) ?? identityRef?.kPathCoordinateRadPerM) !== undefined
+      ? {
+          kPathCoordinateRadPerM:
+            numberValue(input.kPathCoordinateRadPerM) ?? identityRef?.kPathCoordinateRadPerM,
         }
       : {}),
     label: overlayLabelFromContext(context, resolvedSource),
@@ -430,6 +456,7 @@ function overlayStateFromContext(
               selectedRef?.observableId ??
               stringValue(input.observableId) ??
               activeIdentityOverlay?.provenance?.observableId,
+            representation,
             resourceRef,
             runId,
             stageId,

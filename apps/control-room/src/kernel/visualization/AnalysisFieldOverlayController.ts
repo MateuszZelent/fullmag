@@ -14,6 +14,7 @@ import type {
 } from "./ObjectVisualizationController";
 
 export type AnalysisFieldOverlaySource = "eigen-mode" | "frequency-response";
+export type AnalysisFieldOverlayRepresentation = "complex-vector-xyz";
 export type AnalysisFieldOverlayKContextKind =
   | "finite_open"
   | "fixed_k"
@@ -47,7 +48,9 @@ export interface AnalysisFieldOverlayState {
   appearance?: AnalysisFieldOverlayAppearanceState;
   animation?: AnalysisFieldOverlayAnimationState;
   fieldId: string;
+  frequencyHz?: number;
   frequencyIndex?: number;
+  kPathCoordinateRadPerM?: number;
   label: string;
   modeIndex?: number;
   query: FieldVectorQuery;
@@ -64,6 +67,7 @@ export interface AnalysisFieldOverlayState {
     kContextKind?: AnalysisFieldOverlayKContextKind;
     normalization?: string;
     observableId?: string;
+    representation?: AnalysisFieldOverlayRepresentation;
     resourceRef?: string;
     runId?: string;
     stageId?: string;
@@ -179,10 +183,19 @@ export class AnalysisFieldOverlayController {
       this.resultRunId,
     );
     if (targetContext.status === "unverified") {
-      return "Selected analysis target owner identity is incomplete and cannot be rebound.";
+      return (
+        targetContext.reason?.replace(
+          "Active analysis overlay",
+          "Selected analysis target",
+        ) ??
+        "Selected analysis target owner identity is incomplete and cannot be rebound."
+      );
     }
     if (targetContext.status === "foreign") {
-      return targetContext.reason;
+      return targetContext.reason?.replace(
+        "Active analysis overlay",
+        "Selected analysis target",
+      ) ?? "Selected analysis target belongs to another result context.";
     }
     return targetContext.status === "compatible" ? null : "Selected analysis target is unavailable.";
   }
@@ -238,31 +251,82 @@ function nonEmptyString(value: string | null | undefined): string | null {
     : null;
 }
 
-function hasRequiredOverlayOwnerIdentity(
+function finiteVector3(
+  value: readonly number[] | null | undefined,
+): value is readonly [number, number, number] {
+  return Boolean(
+    value &&
+      value.length === 3 &&
+      value.every((component) => Number.isFinite(component)),
+  );
+}
+
+function nonzeroVector(value: readonly [number, number, number]): boolean {
+  return value.some((component) => Math.abs(component) > 1e-12);
+}
+
+function overlayOwnerIdentityIssue(
   overlay: AnalysisFieldOverlayState,
-): boolean {
+): string | null {
   const provenance = overlay.provenance;
   const hasArtifactRevision =
     typeof provenance?.artifactRevision === "number" ||
-    nonEmptyString(provenance?.artifactRevision) !== null;
-  const hasSampleIdentity =
-    overlay.source === "eigen-mode"
-      ? Number.isInteger(overlay.sampleIndex) && Number.isInteger(overlay.modeIndex)
-      : Number.isInteger(overlay.frequencyIndex);
+    (nonEmptyString(provenance?.artifactRevision) !== null &&
+      provenance?.artifactRevision !== "unknown");
   const phaseRad = overlay.visualizationPhaseRad ?? overlay.query.phase_rad;
-  return Boolean(
-    nonEmptyString(overlay.fieldId) &&
-      nonEmptyString(overlay.query.view) &&
-      Number.isFinite(phaseRad) &&
-      hasArtifactRevision &&
-      nonEmptyString(provenance?.equilibriumId) &&
-      nonEmptyString(provenance?.kContextKind) &&
-      nonEmptyString(provenance?.resourceRef) &&
-      nonEmptyString(provenance?.runId) &&
-      nonEmptyString(provenance?.stageId) &&
-      nonEmptyString(provenance?.studyProduct) &&
-      hasSampleIdentity,
-  );
+  if (!nonEmptyString(overlay.fieldId)) return "Active analysis overlay field identity is missing.";
+  if (!nonEmptyString(overlay.query.view)) return "Active analysis overlay view representation is missing.";
+  if (!Number.isFinite(phaseRad)) return "Active analysis overlay phase is invalid.";
+  if (!hasArtifactRevision) return "Active analysis overlay artifact revision is missing.";
+  if (!nonEmptyString(provenance?.equilibriumId)) return "Active analysis overlay equilibrium identity is missing.";
+  if (!nonEmptyString(provenance?.resourceRef)) return "Active analysis overlay field resource identity is missing.";
+  if (!nonEmptyString(provenance?.runId)) return "Active analysis overlay run identity is missing.";
+  if (!nonEmptyString(provenance?.stageId)) return "Active analysis overlay stage identity is missing.";
+  if (provenance?.representation !== "complex-vector-xyz") {
+    return "Active analysis overlay representation is missing or is not a spatial complex XYZ vector.";
+  }
+  if (!Number.isFinite(overlay.frequencyHz)) {
+    return "Active analysis overlay frequency identity is missing.";
+  }
+  if (overlay.source === "eigen-mode") {
+    if (provenance?.studyProduct !== "modal_eigen") {
+      return "Active analysis overlay source does not match its modal study product.";
+    }
+    if (!Number.isInteger(overlay.sampleIndex) || !Number.isInteger(overlay.modeIndex)) {
+      return "Active analysis overlay modal sample or mode identity is missing.";
+    }
+  } else {
+    if (provenance?.studyProduct !== "driven_response") {
+      return "Active analysis overlay source does not match its driven study product.";
+    }
+    if (!Number.isInteger(overlay.frequencyIndex) || !Number.isFinite(overlay.frequencyHz)) {
+      return "Active analysis overlay frequency sample identity is incomplete.";
+    }
+  }
+
+  const kContextKind = provenance?.kContextKind;
+  if (!kContextKind) return "Active analysis overlay k-sampling kind is missing.";
+  if (kContextKind === "finite_open") return null;
+  if (kContextKind === "gamma") {
+    return finiteVector3(overlay.wavevectorKf) && nonzeroVector(overlay.wavevectorKf)
+      ? "Active analysis overlay gamma identity has a nonzero wavevector."
+      : null;
+  }
+  if (!finiteVector3(overlay.wavevectorKf)) {
+    return "Active analysis overlay exact wavevector identity is missing.";
+  }
+  if (kContextKind === "fixed_k") {
+    return nonzeroVector(overlay.wavevectorKf)
+      ? null
+      : "Active analysis overlay fixed-k identity has a zero wavevector.";
+  }
+  if (!Number.isInteger(overlay.sampleIndex)) {
+    return `Active analysis overlay ${kContextKind} sample index is missing.`;
+  }
+  if (kContextKind === "k_path" && !Number.isFinite(overlay.kPathCoordinateRadPerM)) {
+    return "Active analysis overlay k-path coordinate is missing.";
+  }
+  return null;
 }
 
 function analysisFieldOverlayContextSnapshot(
@@ -272,10 +336,11 @@ function analysisFieldOverlayContextSnapshot(
   if (!overlay) {
     return { overlay: null, reason: null, resultRunId, status: "inactive" };
   }
-  if (!hasRequiredOverlayOwnerIdentity(overlay)) {
+  const identityIssue = overlayOwnerIdentityIssue(overlay);
+  if (identityIssue) {
     return {
       overlay,
-      reason: "Active analysis overlay owner identity is incomplete and cannot be verified.",
+      reason: identityIssue,
       resultRunId,
       status: "unverified",
     };
@@ -317,7 +382,10 @@ function analysisFieldOverlayStateEquals(
   if (!left || !right) return false;
   return (
     left.fieldId === right.fieldId &&
+    (left.frequencyHz ?? null) === (right.frequencyHz ?? null) &&
     (left.frequencyIndex ?? null) === (right.frequencyIndex ?? null) &&
+    (left.kPathCoordinateRadPerM ?? null) ===
+      (right.kPathCoordinateRadPerM ?? null) &&
     left.label === right.label &&
     (left.modeIndex ?? null) === (right.modeIndex ?? null) &&
     (left.sampleIndex ?? null) === (right.sampleIndex ?? null) &&
@@ -347,6 +415,7 @@ function analysisFieldOverlayProvenanceEquals(
     (left.kContextKind ?? null) === (right.kContextKind ?? null) &&
     (left.normalization ?? null) === (right.normalization ?? null) &&
     (left.observableId ?? null) === (right.observableId ?? null) &&
+    (left.representation ?? null) === (right.representation ?? null) &&
     (left.resourceRef ?? null) === (right.resourceRef ?? null) &&
     (left.runId ?? null) === (right.runId ?? null) &&
     (left.stageId ?? null) === (right.stageId ?? null) &&

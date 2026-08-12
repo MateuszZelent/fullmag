@@ -410,6 +410,7 @@ describe("inspector route coverage", () => {
         "results.resonance.modal.stage",
         "results.resonance.modal.spectrum",
         "results.resonance.modal.modes",
+        "results.resonance.modal.mode",
         "results.analysis_views.root",
         "results.derived_values.root",
         "results.tables.root",

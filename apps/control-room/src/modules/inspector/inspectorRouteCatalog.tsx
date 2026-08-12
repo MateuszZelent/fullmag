@@ -94,10 +94,7 @@ import { FieldQuantityInspectorPanel } from "./panels/FieldQuantityInspectorPane
 import { MeshDetailsPanel } from "./panels/MeshDetailsPanel";
 import { MeshPartVisualizationPanel } from "./panels/MeshPartVisualizationPanel";
 import { FdmGridInspectorPanel } from "./panels/fdm-grid/FdmGridInspectorPanel";
-import { ModeVisualizationFieldPanel } from "./panels/mode-visualization/ModeVisualizationFieldPanel";
-import { ModeVisualizationGroupPanel } from "./panels/mode-visualization/ModeVisualizationGroupPanel";
 import { ModeVisualizationOverviewPanel } from "./panels/mode-visualization/ModeVisualizationOverviewPanel";
-import { ModeVisualizationViewPanel } from "./panels/mode-visualization/ModeVisualizationViewPanel";
 import { ObjectGeneralPanel } from "./panels/ObjectGeneralPanel";
 import { ObjectMagneticTexturePanel } from "./panels/ObjectMagneticTexturePanel";
 import { ObjectMaterialPanel } from "./panels/ObjectMaterialPanel";
@@ -137,9 +134,11 @@ import {
   DispersionKSamplingResultInspector,
   DispersionModalStageResultInspector,
   DispersionModesAtKResultInspector,
+  DispersionModeAtKResultInspector,
   DispersionOverviewResultInspector,
   DispersionRelationResultInspector,
   DispersionResponseMapResultInspector,
+  DispersionResponseFieldAtKResultInspector,
   DynamicsResultInspector,
   ExportDefinitionInspector,
   ExportsOverviewInspector,
@@ -150,10 +149,12 @@ import {
   ResonanceFrequencyPointsResultInspector,
   ResonanceModalCouplingResultInspector,
   ResonanceModalSpectrumResultInspector,
+  ResonanceModalModeResultInspector,
   ResonanceModalStageResultInspector,
   ResonanceModeShapesResultInspector,
   ResonanceOverviewResultInspector,
   ResonanceResponseFieldsResultInspector,
+  ResonanceResponseFieldResultInspector,
   TableDefinitionInspector,
   TablesOverviewInspector,
 } from "./panels/physics-first/PhysicsFirstResultInspectors";
@@ -281,11 +282,13 @@ export const FREQUENCY_DOMAIN_INSPECTOR_SELECTION_KINDS = [
   "results.resonance.driven.stage",
   "results.resonance.modal.spectrum",
   "results.resonance.modal.modes",
+  "results.resonance.modal.mode",
   "results.resonance.modal.coupling",
   "results.resonance.driven.spectrum",
   "results.resonance.driven.peaks",
   "results.resonance.driven.frequency_points",
   "results.resonance.driven.fields",
+  "results.resonance.driven.field",
   "results.dispersion.root",
   "results.dispersion.modal.stage",
   "results.dispersion.driven.stage",
@@ -293,7 +296,9 @@ export const FREQUENCY_DOMAIN_INSPECTOR_SELECTION_KINDS = [
   "results.dispersion.modal.relation",
   "results.dispersion.modal.branches",
   "results.dispersion.modal.modes_at_k",
+  "results.dispersion.modal.mode_at_k",
   "results.dispersion.driven.response_map",
+  "results.dispersion.driven.field_at_k",
   "results.hysteresis.root",
   "results.analysis_views.root",
   "results.analysis_views.definition",
@@ -438,12 +443,14 @@ const FREQUENCY_DOMAIN_NAMED_PANELS: Partial<
   "results.resonance.driven.stage": ResonanceDrivenStageResultInspector,
   "results.resonance.modal.spectrum": ResonanceModalSpectrumResultInspector,
   "results.resonance.modal.modes": ResonanceModeShapesResultInspector,
+  "results.resonance.modal.mode": ResonanceModalModeResultInspector,
   "results.resonance.modal.coupling": ResonanceModalCouplingResultInspector,
   "results.resonance.driven.spectrum": ResonanceDrivenSpectrumResultInspector,
   "results.resonance.driven.peaks": ResonanceDrivenPeaksResultInspector,
   "results.resonance.driven.frequency_points":
     ResonanceFrequencyPointsResultInspector,
   "results.resonance.driven.fields": ResonanceResponseFieldsResultInspector,
+  "results.resonance.driven.field": ResonanceResponseFieldResultInspector,
   "results.dispersion.root": DispersionOverviewResultInspector,
   "results.dispersion.modal.stage": DispersionModalStageResultInspector,
   "results.dispersion.driven.stage": DispersionDrivenStageResultInspector,
@@ -451,7 +458,9 @@ const FREQUENCY_DOMAIN_NAMED_PANELS: Partial<
   "results.dispersion.modal.relation": DispersionRelationResultInspector,
   "results.dispersion.modal.branches": DispersionBranchesResultInspector,
   "results.dispersion.modal.modes_at_k": DispersionModesAtKResultInspector,
+  "results.dispersion.modal.mode_at_k": DispersionModeAtKResultInspector,
   "results.dispersion.driven.response_map": DispersionResponseMapResultInspector,
+  "results.dispersion.driven.field_at_k": DispersionResponseFieldAtKResultInspector,
   "results.hysteresis.root": HysteresisResultInspector,
   "results.analysis_views.root": AnalysisViewsOverviewInspector,
   "results.analysis_views.definition": AnalysisViewDefinitionInspector,
@@ -787,24 +796,6 @@ const INSPECTOR_ROUTE_CONTRIBUTIONS: InspectorPanelContribution[] = [
     title: "Mode Visualization Overview",
     selectionKinds: ["object.mode_visualization"],
     component: ModeVisualizationOverviewPanel,
-  },
-  {
-    id: "object-mode-visualization-group",
-    title: "Mode Visualization Group",
-    selectionKinds: ["object.mode_visualization.group"],
-    component: ModeVisualizationGroupPanel,
-  },
-  {
-    id: "object-mode-visualization-field",
-    title: "Mode Visualization Field",
-    selectionKinds: ["object.mode_visualization.field"],
-    component: ModeVisualizationFieldPanel,
-  },
-  {
-    id: "object-mode-visualization-view",
-    title: "Mode Visualization View",
-    selectionKinds: ["object.mode_visualization.view"],
-    component: ModeVisualizationViewPanel,
   },
   {
     id: "physics-interaction",

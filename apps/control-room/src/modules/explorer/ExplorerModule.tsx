@@ -113,6 +113,7 @@ import {
 import type { ModelTreeMeshSnapshot } from "./explorerTypes";
 import { ExplorerTreeView } from "./ExplorerTreeView";
 import { ResultContextSelector } from "./ResultContextSelector";
+import { useAnalysisFieldOverlayResultContext } from "./useAnalysisFieldOverlayResultContext";
 
 type TextureLoadNodeRequestedEvent =
   KernelEventMap["explorer:texture-load-node-requested"];
@@ -592,9 +593,10 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
     }
   }, [currentRunId, resolvedResultContextRunId, resultContextRunId]);
 
-  useEffect(() => {
-    kernel.analysisFieldOverlay.setResultContext(resolvedResultContextRunId);
-  }, [kernel.analysisFieldOverlay, resolvedResultContextRunId]);
+  useAnalysisFieldOverlayResultContext(
+    kernel.analysisFieldOverlay,
+    resolvedResultContextRunId,
+  );
 
   useEffect(() => {
     if (activeTab !== "model") return;

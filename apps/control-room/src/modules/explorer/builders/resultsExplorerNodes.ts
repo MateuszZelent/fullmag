@@ -2,6 +2,15 @@ import {
   classifyFrequencyDomainResult,
   type FrequencyDomainResultEvidence,
 } from "@/shared/domain/analysis/frequencyDomainResultClassification";
+import {
+  buildEigenDispersionChartModel,
+  buildEigenSpectrumChartModel,
+  buildFrequencyResponseChartModel,
+  responseFieldResourcesFromManifest,
+  type FrequencyDomainJsonArtifactLike,
+  type FrequencyDomainTextArtifactLike,
+} from "@/shared/domain/analysis/frequencyDomainChartModels";
+import { fieldVectorResourceKey } from "@/kernel/api/fieldQueryIdentity";
 
 import type { ExplorerNode, ExplorerNodeKind } from "../explorerTypes";
 import type { PostprocessingDefinition } from "@/shared/domain/analysis/postprocessingDefinitions";
@@ -19,9 +28,26 @@ export interface PhysicsFirstResultProducts {
 }
 
 export interface PhysicsFirstResultEntry extends FrequencyDomainResultEvidence {
+  analysisFieldTargets?: readonly PhysicsFirstAnalysisFieldTarget[];
   artifactRevision: number | string;
   products: PhysicsFirstResultProducts;
   stageLabel: string;
+}
+
+export interface PhysicsFirstAnalysisFieldTarget {
+  fieldId: string;
+  frequencyHz: number;
+  frequencyIndex?: number;
+  kPathCoordinateRadPerM?: number;
+  label: string;
+  modeIndex?: number;
+  observableId?: string;
+  representation: "complex-vector-xyz";
+  resourceRef: string;
+  sampleIndex?: number;
+  source: "eigen-mode" | "frequency-response";
+  view: "phase_rotated_real";
+  wavevectorKf?: readonly [number, number, number];
 }
 
 export interface PhysicsFirstResultsSnapshot {
@@ -41,10 +67,10 @@ interface ResultManifestLike extends ResultResourceLike {
 export interface PhysicsFirstResultResourceInput {
   branches?: ResultResourceLike | null;
   currentRun?: { revision: number | string; run_id: string } | null;
-  dispersion?: (ResultResourceLike & { path_metadata?: unknown }) | null;
+  dispersion?: (ResultResourceLike & { path_metadata?: unknown; text?: string | null }) | null;
   manifest?: { result_manifest?: ResultManifestLike | null } | null;
-  responseSweep?: ResultResourceLike | null;
-  spectrum?: ResultResourceLike | null;
+  responseSweep?: (ResultResourceLike & { payload?: unknown }) | null;
+  spectrum?: (ResultResourceLike & { payload?: unknown }) | null;
 }
 
 export interface PhysicsFirstResultAdaptation {
@@ -62,8 +88,37 @@ function nonEmptyString(value: unknown): string | null {
   return typeof value === "string" && value.length > 0 ? value : null;
 }
 
+function finiteNumber(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function vector3(value: unknown): readonly [number, number, number] | null {
+  return Array.isArray(value) && value.length === 3 && value.every((item) => finiteNumber(item) !== null)
+    ? [value[0] as number, value[1] as number, value[2] as number]
+    : null;
+}
+
 function ready(resource: ResultResourceLike | null | undefined): boolean {
   return resource?.status === "ready";
+}
+
+function jsonArtifact(
+  resource: (ResultResourceLike & { payload?: unknown }) | null | undefined,
+): FrequencyDomainJsonArtifactLike | null {
+  return resource
+    ? { payload: resource.payload, status: resource.status ?? "idle" }
+    : null;
+}
+
+function dispersionArtifact(
+  resource:
+    | (ResultResourceLike & { path_metadata?: unknown; text?: string | null })
+    | null
+    | undefined,
+): FrequencyDomainTextArtifactLike | null {
+  return resource
+    ? { status: resource.status ?? "idle", text: resource.text }
+    : null;
 }
 
 function pathSamplingFromMetadata(value: unknown): FrequencyDomainResultEvidence["kSampling"] | null {
@@ -81,6 +136,137 @@ function pathSamplingFromMetadata(value: unknown): FrequencyDomainResultEvidence
     label: labels.length > 1 ? labels.join("–") : undefined,
     sampleCount: segmentSamples.reduce((sum, count) => sum + count, 0) + 1,
   };
+}
+
+function singleKSamplingFromRequestedExecution(
+  requested: Record<string, unknown> | null,
+): FrequencyDomainResultEvidence["kSampling"] | null {
+  const sampling = record(requested?.k_sampling);
+  const vector = vector3(
+    sampling?.vector_rad_per_m ??
+      sampling?.vector ??
+      requested?.k_vector_rad_per_m ??
+      requested?.wavevector_kf,
+  );
+  return vector ? { kind: "single", vectorRadPerM: vector } : null;
+}
+
+function pathWavevectorAtSample(
+  value: unknown,
+  sampleIndex: number,
+): readonly [number, number, number] | null {
+  const sampling = record(record(value)?.sampling);
+  if (sampling?.kind !== "path" || !Number.isInteger(sampleIndex) || sampleIndex < 0) {
+    return null;
+  }
+  const points = Array.isArray(sampling.points)
+    ? sampling.points.map((point) => vector3(record(point)?.k_vector))
+    : [];
+  const counts = Array.isArray(sampling.samples_per_segment)
+    ? sampling.samples_per_segment.map(finiteNumber)
+    : [];
+  if (points.length < 2 || counts.some((count) => count === null || !Number.isInteger(count) || count <= 0)) {
+    return null;
+  }
+  let segmentStart = 0;
+  for (let segmentIndex = 0; segmentIndex < counts.length; segmentIndex += 1) {
+    const count = counts[segmentIndex]!;
+    if (sampleIndex > segmentStart + count) {
+      segmentStart += count;
+      continue;
+    }
+    const start = points[segmentIndex];
+    const end = points[segmentIndex + 1] ?? (sampling.closed === true ? points[0] : null);
+    if (!start || !end) return null;
+    const fraction = (sampleIndex - segmentStart) / count;
+    return [
+      start[0] + (end[0] - start[0]) * fraction,
+      start[1] + (end[1] - start[1]) * fraction,
+      start[2] + (end[2] - start[2]) * fraction,
+    ];
+  }
+  return null;
+}
+
+function modalFieldTargets({
+  dispersion,
+  kSampling,
+  spectrum,
+}: {
+  dispersion?: (ResultResourceLike & { path_metadata?: unknown; text?: string | null }) | null;
+  kSampling?: FrequencyDomainResultEvidence["kSampling"];
+  spectrum?: (ResultResourceLike & { payload?: unknown }) | null;
+}): PhysicsFirstAnalysisFieldTarget[] {
+  if (kSampling?.kind === "path") {
+    return buildEigenDispersionChartModel(dispersionArtifact(dispersion)).points.flatMap((point) => {
+      if (!point.modeFieldId) return [];
+      const wavevectorKf = pathWavevectorAtSample(dispersion?.path_metadata, point.sampleIndex);
+      if (!wavevectorKf || !Number.isFinite(point.pathS)) return [];
+      return [{
+        fieldId: point.modeFieldId,
+        frequencyHz: point.frequencyHz,
+        kPathCoordinateRadPerM: point.pathS,
+        label: `Sample ${point.sampleIndex} · Mode ${point.rawModeIndex}`,
+        modeIndex: point.rawModeIndex,
+        representation: "complex-vector-xyz" as const,
+        resourceRef: point.modeFieldResourceKey ?? fieldVectorResourceKey(point.modeFieldId),
+        sampleIndex: point.sampleIndex,
+        source: "eigen-mode" as const,
+        view: "phase_rotated_real" as const,
+        wavevectorKf,
+      }];
+    });
+  }
+  const fixedWavevector = kSampling?.kind === "single" ? kSampling.vectorRadPerM : undefined;
+  return buildEigenSpectrumChartModel(jsonArtifact(spectrum)).points.flatMap((point) =>
+    point.modeFieldId
+      ? [{
+          fieldId: point.modeFieldId,
+          frequencyHz: point.frequencyHz,
+          label: `Sample ${point.sampleIndex} · Mode ${point.rawModeIndex}`,
+          modeIndex: point.rawModeIndex,
+          representation: "complex-vector-xyz" as const,
+          resourceRef: point.modeFieldResourceKey ?? fieldVectorResourceKey(point.modeFieldId),
+          sampleIndex: point.sampleIndex,
+          source: "eigen-mode" as const,
+          view: "phase_rotated_real" as const,
+          ...(fixedWavevector ? { wavevectorKf: fixedWavevector } : {}),
+        }]
+      : [],
+  );
+}
+
+function responseFieldTargets(
+  manifestPayload: unknown,
+  responseSweep: (ResultResourceLike & { payload?: unknown }) | null | undefined,
+  kSampling: FrequencyDomainResultEvidence["kSampling"] | undefined,
+): PhysicsFirstAnalysisFieldTarget[] {
+  const fieldIds = new Map(
+    responseFieldResourcesFromManifest(manifestPayload).map((resource) => [
+      resource.frequencyIndex,
+      resource.fieldResourceId,
+    ]),
+  );
+  const fixedWavevector = kSampling?.kind === "single" ? kSampling.vectorRadPerM : undefined;
+  const seen = new Set<number>();
+  return buildFrequencyResponseChartModel(jsonArtifact(responseSweep)).points.flatMap((point) => {
+    if (point.frequencyIndex === null || seen.has(point.frequencyIndex)) return [];
+    const fieldId = point.fieldId ?? fieldIds.get(point.frequencyIndex);
+    if (!fieldId) return [];
+    seen.add(point.frequencyIndex);
+    return [{
+      fieldId,
+      frequencyHz: point.frequencyHz,
+      frequencyIndex: point.frequencyIndex,
+      label: `Frequency ${point.frequencyIndex}`,
+      observableId: point.observableId,
+      representation: "complex-vector-xyz" as const,
+      resourceRef: fieldVectorResourceKey(fieldId),
+      source: "frequency-response" as const,
+      view: "phase_rotated_real" as const,
+      ...(fixedWavevector ? { wavevectorKf: fixedWavevector } : {}),
+    }];
+  });
 }
 
 function observablesFromPayload(value: unknown): FrequencyDomainResultEvidence["observables"] {
@@ -135,7 +321,9 @@ export function physicsFirstResultsSnapshotFromResources(
     return { contractGaps, snapshot: emptySnapshot };
   }
 
-  const kSampling = pathSamplingFromMetadata(input.dispersion?.path_metadata);
+  const kSampling =
+    pathSamplingFromMetadata(input.dispersion?.path_metadata) ??
+    singleKSamplingFromRequestedExecution(requested);
   const artifactRevision =
     nonEmptyString(payload.revision) ?? input.currentRun?.revision ?? "unknown";
   const products: PhysicsFirstResultProducts =
@@ -152,6 +340,14 @@ export function physicsFirstResultsSnapshotFromResources(
           responseSpectrum: ready(input.responseSweep),
         };
   const entry: PhysicsFirstResultEntry = {
+    analysisFieldTargets:
+      studyProduct === "modal_eigen"
+        ? modalFieldTargets({
+            dispersion: input.dispersion,
+            ...(kSampling ? { kSampling } : {}),
+            spectrum: input.spectrum,
+          })
+        : responseFieldTargets(payload, input.responseSweep, kSampling ?? undefined),
     artifactRevision,
     boundaryContext,
     equilibriumId,
@@ -201,6 +397,7 @@ function leaf(
   kind: ExplorerNodeKind,
   label: string,
   entry: PhysicsFirstResultEntry,
+  overrides: Partial<ExplorerNode> = {},
 ): ExplorerNode {
   const classification = classifyFrequencyDomainResult(entry);
   return node(`${stageId}:${suffix}`, kind, label, stageId, {
@@ -212,7 +409,52 @@ function leaf(
     kContextKind: classification.kContext.kind,
     resourceRef: `artifact-revision:${entry.artifactRevision}`,
     studyProduct: entry.studyProduct,
+    ...overrides,
   });
+}
+
+function analysisFieldTargetNodes(
+  parentId: string,
+  entry: PhysicsFirstResultEntry,
+  kind:
+    | "results.dispersion.driven.field_at_k"
+    | "results.dispersion.modal.mode_at_k"
+    | "results.resonance.driven.field"
+    | "results.resonance.modal.mode",
+): ExplorerNode[] {
+  const classification = classifyFrequencyDomainResult(entry);
+  return (entry.analysisFieldTargets ?? []).map((target) =>
+    node(
+      `${parentId}:${target.source}:${key(target.fieldId)}`,
+      kind,
+      target.label,
+      parentId,
+      {
+        analysisFieldRepresentation: target.representation,
+        analysisFieldSource: target.source,
+        analysisFieldView: target.view,
+        analysisRunId: entry.runId,
+        analysisStageId: entry.stageId,
+        artifactRevision: entry.artifactRevision,
+        equilibriumId: entry.equilibriumId,
+        fieldId: target.fieldId,
+        frequencyHz: target.frequencyHz,
+        ...(target.frequencyIndex !== undefined
+          ? { frequencyIndex: target.frequencyIndex }
+          : {}),
+        kContextKind: classification.kContext.kind,
+        ...(target.kPathCoordinateRadPerM !== undefined
+          ? { kPathCoordinateRadPerM: target.kPathCoordinateRadPerM }
+          : {}),
+        ...(target.modeIndex !== undefined ? { modeIndex: target.modeIndex } : {}),
+        ...(target.observableId ? { observableId: target.observableId } : {}),
+        resourceRef: target.resourceRef,
+        ...(target.sampleIndex !== undefined ? { sampleIndex: target.sampleIndex } : {}),
+        studyProduct: entry.studyProduct,
+        ...(target.wavevectorKf ? { wavevectorKf: target.wavevectorKf } : {}),
+      },
+    ),
+  );
 }
 
 function hasPublishedProduct(products: PhysicsFirstResultProducts): boolean {
@@ -243,7 +485,14 @@ function resonanceStage(
       );
     }
     if (entry.products.modeShapes) {
-      children.push(leaf(stageId, "modes", "results.resonance.modal.modes", "Mode Shapes", entry));
+      const parentId = `${stageId}:modes`;
+      children.push(leaf(stageId, "modes", "results.resonance.modal.modes", "Mode Shapes", entry, {
+        children: analysisFieldTargetNodes(
+          parentId,
+          entry,
+          "results.resonance.modal.mode",
+        ),
+      }));
     }
     if (entry.products.coupling && classification.fmrQualified) {
       children.push(
@@ -277,8 +526,15 @@ function resonanceStage(
       );
     }
     if (entry.products.responseFields) {
+      const parentId = `${stageId}:response-fields`;
       children.push(
-        leaf(stageId, "response-fields", "results.resonance.driven.fields", "Response Fields", entry),
+        leaf(stageId, "response-fields", "results.resonance.driven.fields", "Response Fields", entry, {
+          children: analysisFieldTargetNodes(
+            parentId,
+            entry,
+            "results.resonance.driven.field",
+          ),
+        }),
       );
     }
   }
@@ -329,11 +585,25 @@ function kResolvedStage(
       children.push(leaf(stageId, "branches", "results.dispersion.modal.branches", "Mode Branches", entry));
     }
     if (entry.products.modeShapes) {
-      children.push(leaf(stageId, "modes-at-k", "results.dispersion.modal.modes_at_k", "Modes at k", entry));
+      const parentId = `${stageId}:modes-at-k`;
+      children.push(leaf(stageId, "modes-at-k", "results.dispersion.modal.modes_at_k", "Modes at k", entry, {
+        children: analysisFieldTargetNodes(
+          parentId,
+          entry,
+          "results.dispersion.modal.mode_at_k",
+        ),
+      }));
     }
   } else if (entry.products.responseMap) {
+    const parentId = `${stageId}:response-map`;
     children.push(
-      leaf(stageId, "response-map", "results.dispersion.driven.response_map", classification.resultLabel, entry),
+      leaf(stageId, "response-map", "results.dispersion.driven.response_map", classification.resultLabel, entry, {
+        children: analysisFieldTargetNodes(
+          parentId,
+          entry,
+          "results.dispersion.driven.field_at_k",
+        ),
+      }),
     );
   }
   children.push(

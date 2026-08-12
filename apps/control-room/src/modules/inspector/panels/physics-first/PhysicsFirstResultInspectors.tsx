@@ -9,10 +9,12 @@ import {
   EigenStudyInspectorPanel,
   FrequencyResponseFrequencyPointsInspectorPanel,
   FrequencyResponseFieldsInspectorPanel,
+  FrequencyResponsePointInspectorPanel,
   FrequencyResponseStudyInspectorPanel,
   FmrPeaksInspectorPanel,
 } from "../frequency-domain/FrequencyDomainResultInspectors";
 import { EigenDispersionInspectorPanel } from "../frequency-domain/EigenDispersionInspectorPanel";
+import { EigenModeInspectorPanel } from "../frequency-domain/EigenModeInspectorPanel";
 import { PhysicsFirstResultInspectorPanel } from "./PhysicsFirstResultInspectorPanel";
 
 function render(
@@ -46,6 +48,10 @@ export function ResonanceModeShapesResultInspector(props: InspectorPanelProps) {
   return render(EigenModesInspectorPanel, props);
 }
 
+export function ResonanceModalModeResultInspector(props: InspectorPanelProps) {
+  return render(EigenModeInspectorPanel, props);
+}
+
 export function ResonanceModalCouplingResultInspector(props: InspectorPanelProps) {
   return render(PhysicsFirstResultInspectorPanel, props);
 }
@@ -64,6 +70,10 @@ export function ResonanceFrequencyPointsResultInspector(props: InspectorPanelPro
 
 export function ResonanceResponseFieldsResultInspector(props: InspectorPanelProps) {
   return render(FrequencyResponseFieldsInspectorPanel, props);
+}
+
+export function ResonanceResponseFieldResultInspector(props: InspectorPanelProps) {
+  return render(FrequencyResponsePointInspectorPanel, props);
 }
 
 export function DispersionOverviewResultInspector(props: InspectorPanelProps) {
@@ -94,8 +104,16 @@ export function DispersionModesAtKResultInspector(props: InspectorPanelProps) {
   return render(EigenModesInspectorPanel, props);
 }
 
+export function DispersionModeAtKResultInspector(props: InspectorPanelProps) {
+  return render(EigenModeInspectorPanel, props);
+}
+
 export function DispersionResponseMapResultInspector(props: InspectorPanelProps) {
   return render(PhysicsFirstResultInspectorPanel, props);
+}
+
+export function DispersionResponseFieldAtKResultInspector(props: InspectorPanelProps) {
+  return render(FrequencyResponsePointInspectorPanel, props);
 }
 
 export function HysteresisResultInspector(props: InspectorPanelProps) {

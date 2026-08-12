@@ -629,19 +629,6 @@ async function qualifyInspectorRoutingMatrix(page, inspector, screenshotFiles) {
     label: "Film",
   });
   await assertHealthyViewportCanvas(page, "mode visualization");
-  const modeRootId = "model:object:film:visualization:mode-visualization";
-  const modeFieldId = `${modeRootId}:active`;
-  await expandInspectorNode(page, modeRootId);
-  await expandInspectorNode(page, modeFieldId);
-  await selectInspectorNode(
-    page,
-    inspector,
-    `${modeFieldId}:view:phase_rotated_real`,
-    {
-      owner: "object-mode-visualization-view",
-      label: "Phase-rotated real mode view",
-    },
-  );
   const phaseSlider = inspector.getByRole("slider", {
     name: "Mode visualization phase slider",
   });

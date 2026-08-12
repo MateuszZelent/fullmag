@@ -36,24 +36,6 @@ describe("resolveInspectorDescriptor", () => {
         "mode",
         "Mode visualization overview",
       ],
-      [
-        "object.mode_visualization.group",
-        "object-mode-visualization-group",
-        "mode",
-        "Mode visualization fields",
-      ],
-      [
-        "object.mode_visualization.field",
-        "object-mode-visualization-field",
-        "mode",
-        "Mode visualization field",
-      ],
-      [
-        "object.mode_visualization.view",
-        "object-mode-visualization-view",
-        "mode",
-        "Mode visualization view",
-      ],
     ] as const;
 
     const descriptors = cases.map(([kind]) =>
