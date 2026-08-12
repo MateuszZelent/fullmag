@@ -67,6 +67,7 @@ describe("planar field resources", () => {
   ) => ({
     ...revisions,
     links: metaLinks(quantityId, monitorId, origin, revisions),
+    sample_token: "planar-sample-v2:exact",
   });
 
   it("normalizes query order into one resource identity", () => {
@@ -236,6 +237,22 @@ describe("planar field resources", () => {
         metaIdentity("m", "plane-1", "", revisions),
       ),
     ).toMatchObject({ ok: true });
+  });
+
+  it.each([
+    ["mismatch", "planar-sample-v2:other"],
+    ["empty", ""],
+    ["missing", undefined],
+    ["invalid prefix", "other-sample:exact"],
+  ])("rejects %s metadata sample token without throwing", (_name, sampleToken) => {
+    const meta = {
+      ...metaIdentity(),
+      sample_token: sampleToken as string,
+    };
+    expect(() => planarFieldQueryFromMeta("m", "plane-1", meta)).not.toThrow();
+    expect(planarFieldQueryFromMeta("m", "plane-1", meta)).toMatchObject({
+      ok: false,
+    });
   });
 
   it.each(["abc", "+1", "-1", " 1", "1 ", "01", "18446744073709551616"])(

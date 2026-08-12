@@ -41,6 +41,7 @@ type PlanarFieldMetaIdentity = Pick<
   | "links"
   | "mesh_revision"
   | "monitor_revision"
+  | "sample_token"
   | "scene_revision"
 >;
 
@@ -86,6 +87,13 @@ export function planarFieldQueryFromMeta(
   meta: PlanarFieldMetaIdentity,
 ): PlanarFieldMetaParseResult {
   try {
+    if (
+      typeof meta.sample_token !== "string" ||
+      !meta.sample_token.startsWith("planar-sample-v2:") ||
+      meta.sample_token.length === "planar-sample-v2:".length
+    ) {
+      throw new Error("Canonical planar metadata sample_token is invalid");
+    }
     const metaRevisions = {
       expected_carrier_revision: meta.carrier_revision,
       expected_field_revision: meta.field_revision,
@@ -124,6 +132,11 @@ export function planarFieldQueryFromMeta(
 
     if (!canonicalQuery) {
       throw new Error("Canonical planar metadata links are empty");
+    }
+    if (canonicalQuery.sample_token !== meta.sample_token) {
+      throw new Error(
+        "Canonical planar metadata sample_token disagrees with link identity",
+      );
     }
     for (const [name, revision] of Object.entries(metaRevisions) as [
       keyof typeof metaRevisions,
