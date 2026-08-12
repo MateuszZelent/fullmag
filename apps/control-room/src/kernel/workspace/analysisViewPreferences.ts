@@ -117,6 +117,11 @@ function migrateSubview(surface: AnalysisSurface, value: unknown): AnalysisSubvi
   if ((ANALYSIS_SUBVIEWS[surface] as readonly string[]).includes(value)) {
     return value as AnalysisSubview;
   }
+  // Compatibility owner: Analysis subview preference parser.
+  // Legacy reader version: analysis-view-preferences:v2.
+  // Removal gate: remove legacy subview aliases when schema v3 ships after one
+  // released v2 writer has emitted only canonical IDs and migration tests prove
+  // no supported stored preference depends on the aliases.
   const legacy: Partial<Record<AnalysisSurface, Readonly<Record<string, AnalysisSubview>>>> = {
     comparison: { comparison: "comparison.sources" },
     dispersion: {

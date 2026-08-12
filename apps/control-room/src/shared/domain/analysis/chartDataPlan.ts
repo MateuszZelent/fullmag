@@ -8,8 +8,8 @@ export const ANALYSIS_CHART_COLUMNS = Object.freeze([
 const MAX_CHART_ROWS = 5_000;
 const MIN_TARGET_POINTS = 160;
 const OPTIONAL_RUNTIME_COLUMNS: Readonly<Record<string, AxisColumnDescriptor>> = {
-  active_runtime_s: { column_id: "active_runtime_s", label: "active runtime", unit: "s" },
-  pseudo_time_s: { column_id: "pseudo_time_s", label: "pseudo time", unit: "s" },
+  active_runtime_s: { column_id: "active_runtime_s", component: null, dimension: "time", label: "active runtime", quantity_id: "active_runtime_s", reduction: null, scope: "global", unit: "s" },
+  pseudo_time_s: { column_id: "pseudo_time_s", component: null, dimension: "time", label: "pseudo time", quantity_id: "pseudo_time_s", reduction: null, scope: "global", unit: "s" },
 };
 
 export function analysisColumnDescriptorsForQuery(
@@ -20,7 +20,16 @@ export function analysisColumnDescriptorsForQuery(
   return queryColumns.flatMap((columnId) => {
     const column = byId.get(columnId) ?? OPTIONAL_RUNTIME_COLUMNS[columnId];
     return column
-      ? [{ column_id: column.column_id, label: column.label || column.column_id, unit: column.unit }]
+      ? [{
+          column_id: column.column_id,
+          ...(column.component !== undefined ? { component: column.component } : {}),
+          ...(column.dimension !== undefined ? { dimension: column.dimension } : {}),
+          label: column.label || column.column_id,
+          ...(column.quantity_id !== undefined ? { quantity_id: column.quantity_id } : {}),
+          ...(column.reduction !== undefined ? { reduction: column.reduction } : {}),
+          ...(column.scope !== undefined ? { scope: column.scope } : {}),
+          unit: column.unit,
+        }]
       : [];
   });
 }
@@ -256,9 +265,16 @@ function sameColumns(
 ): boolean {
   return (
     left.columnCount === right.columnCount &&
+    left.columns.length === right.columns.length &&
     left.columns.every(
       (column, index) =>
-        column.column_id === right.columns[index]?.column_id,
+        column.column_id === right.columns[index]?.column_id &&
+        column.component === right.columns[index]?.component &&
+        column.dimension === right.columns[index]?.dimension &&
+        column.quantity_id === right.columns[index]?.quantity_id &&
+        column.reduction === right.columns[index]?.reduction &&
+        column.scope === right.columns[index]?.scope &&
+        column.unit === right.columns[index]?.unit,
     )
   );
 }

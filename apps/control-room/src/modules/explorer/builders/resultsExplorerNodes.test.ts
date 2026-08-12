@@ -150,6 +150,38 @@ describe("buildPhysicsFirstResultsTree", () => {
 });
 
 describe("physicsFirstResultsSnapshotFromResources", () => {
+  it("does not fabricate a driven response map from modal path metadata and a response sweep", () => {
+    const adapted = physicsFirstResultsSnapshotFromResources({
+      currentRun: { revision: 21, run_id: "run-21" },
+      dispersion: {
+        path_metadata: {
+          sampling: {
+            kind: "path",
+            points: [{ label: "Γ" }, { label: "X" }],
+            samples_per_segment: [8],
+          },
+        },
+        status: "ready",
+      },
+      manifest: {
+        result_manifest: {
+          payload: {
+            equilibrium_identity: "eq-21",
+            requested_execution: { boundary_context: "floquet_periodic" },
+            stage_id: "response-21",
+            study_product: "driven_response",
+          },
+          status: "ready",
+        },
+      },
+      responseSweep: { status: "ready" },
+    });
+
+    expect(adapted.snapshot.entries[0]?.products.responseMap).toBeFalsy();
+    expect(flattenExplorerNodes(buildPhysicsFirstResultsTree(adapted.snapshot)).map((node) => node.label))
+      .not.toContain("Spectral Response Map · A(k,f)");
+  });
+
   it("adapts explicit manifest provenance without trusting the manifest run placeholder", () => {
     const adapted = physicsFirstResultsSnapshotFromResources({
       currentRun: { revision: 17, run_id: "runtime-run-17" },

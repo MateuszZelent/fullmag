@@ -1155,7 +1155,7 @@ describe("frequencyDomainChartModels", () => {
     const route = routeFrequencyDomainCalculationMode({
       artifacts: { response_map_v2_path: "response/map.v2.bin" },
       requested_execution: { calculation_mode: "response_map" },
-      resources: { response_map_resource_key: "/v2/sessions/current/analysis/frequency-domain/response/map" },
+      resources: { response_map_resource_key: "analysis.response-map:run-1:stage-1@revision-1" },
     });
     expect(route).toMatchObject({
       mode: "response_map",

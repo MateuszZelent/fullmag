@@ -149,7 +149,6 @@ export function physicsFirstResultsSnapshotFromResources(
           frequencyPoints: ready(input.responseSweep),
           peaks: ready(input.responseSweep),
           responseFields: ready(input.responseSweep),
-          responseMap: Boolean(kSampling) && ready(input.responseSweep),
           responseSpectrum: ready(input.responseSweep),
         };
   const entry: PhysicsFirstResultEntry = {

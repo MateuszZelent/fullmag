@@ -192,8 +192,8 @@ describe("analysis plot scalar selection", () => {
     });
     expect(resource?.columns).toEqual([
       expect.objectContaining({ column_id: "step", unit: "1" }),
-      { column_id: "pseudo_time_s", label: "pseudo time", unit: "s" },
-      { column_id: "active_runtime_s", label: "active runtime", unit: "s" },
+      { column_id: "pseudo_time_s", component: null, dimension: "time", label: "pseudo time", quantity_id: "pseudo_time_s", reduction: null, scope: "global", unit: "s" },
+      { column_id: "active_runtime_s", component: null, dimension: "time", label: "active runtime", quantity_id: "active_runtime_s", reduction: null, scope: "global", unit: "s" },
     ]);
     expect(resource?.values).toBe(values);
   });

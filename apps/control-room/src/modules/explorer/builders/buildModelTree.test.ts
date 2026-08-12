@@ -3218,7 +3218,7 @@ describe("buildModelTree", () => {
     });
   });
 
-  it("shows a driven response map under k-resolved Results with explicit ownership", () => {
+  it("does not fabricate a driven response map from k metadata and a response sweep", () => {
     const results = flattenExplorerNodes(
       buildExplorerTree("results", {
         currentRun: currentRun("run-response-map", 8),
@@ -3253,21 +3253,7 @@ describe("buildModelTree", () => {
       }),
     );
 
-    expect(
-      results.find(
-        (node) =>
-          node.id ===
-          "results:run:run-response-map:k-resolved:stage:response-stage:driven_response:response-map",
-      ),
-    ).toMatchObject({
-      analysisRunId: "run-response-map",
-      analysisStageId: "response-stage",
-      artifactRevision: "response-map-r8",
-      equilibriumId: "equilibrium-r5",
-      kind: "results.dispersion.driven.response_map",
-      label: "Spectral Response Map · A(k,f)",
-      studyProduct: "driven_response",
-    });
+    expect(results.some((node) => node.kind === "results.dispersion.driven.response_map")).toBe(false);
   });
   it("exposes study runtime and recovery commands through explorer context menus", () => {
     const flattened = flattenExplorerNodes(

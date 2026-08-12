@@ -12,12 +12,12 @@ import { analysisWorkspaceStore, resetAnalysisWorkspaceForTests } from "@/kernel
 let activeSurface = "resonance-fmr";
 let frequencyRouteMode: "fmr_response" | "free_modes" = "free_modes";
 let selectedDatasetRef: string | null = null;
-let comparisonDatasetRef: string | null = null;
 let descriptorPreferences: Record<string, { displayUnits: Record<string, string>; range: null; selectedSeriesIds: string[] }> = {};
 const setDescriptorPreference = vi.fn();
+const setActiveSubview = vi.fn();
 
-vi.mock("@/kernel/workspace/useAnalysisWorkspace", () => ({ useAnalysisWorkspaceSelector: (selector: (state: { activeSurface: string; selectedDatasetRef: string | null; comparisonDatasetRef: string | null; comparisonSelectedSeriesKeys: string[]; hasChartState: boolean; hasComparisonSelection: boolean; selectedSeriesIds: string[]; sourceChartId: string | null; xAxisId: string | null }) => unknown) => selector({ activeSurface, comparisonDatasetRef, comparisonSelectedSeriesKeys: [], hasChartState: false, hasComparisonSelection: false, selectedDatasetRef, selectedSeriesIds: [], sourceChartId: null, xAxisId: null }) }));
-vi.mock("@/kernel/workspace/useAnalysisViewPreferencesHydration", () => ({ useAnalysisViewPreferencesHydration: () => ({ isHydrated: false, preferences: { descriptorPreferences, selectedDatasetRef: null }, setActiveSurface: vi.fn(), setDescriptorPreference, setSelectedDatasetRef: vi.fn() }) }));
+vi.mock("@/kernel/workspace/useAnalysisWorkspace", () => ({ useAnalysisWorkspaceSelector: (selector: (state: { activeSurface: string; hasChartState: boolean; selectedDatasetRef: string | null; selectedSeriesIds: string[]; sourceChartId: string | null; xAxisId: string | null }) => unknown) => selector({ activeSurface, hasChartState: false, selectedDatasetRef, selectedSeriesIds: [], sourceChartId: null, xAxisId: null }) }));
+vi.mock("@/kernel/workspace/useAnalysisViewPreferencesHydration", () => ({ useAnalysisViewPreferencesHydration: () => ({ isHydrated: false, preferences: { activeSubviews: { comparison: "comparison.sources", dispersion: "dispersion.modal", dynamics: "dynamics.time-traces", hysteresis: "hysteresis.loop", "resonance-fmr": "resonance.eigenmodes" }, descriptorPreferences, selectedDatasetRef: null }, setActiveSubview, setActiveSurface: vi.fn(), setDescriptorPreference, setSelectedDatasetRef: vi.fn() }) }));
 vi.mock("@/kernel/resources/spinWaveResources", () => ({ useDynamicStructureFactorResource: () => ({ data: null, status: "idle" }), useSpinWaveGammaResource: () => ({ data: null, status: "idle" }) }));
 vi.mock("@/kernel/selection/useSelection", () => ({ useSelectionSelector: () => null }));
 vi.mock("./hooks/useAnalysisDatasetData", () => ({ useAnalysisDatasetData: () => ({ rows: { status: "idle" }, tableList: { data: null }, unsupportedReason: null, visibleRevision: null, visibleTable: null }) }));
@@ -33,8 +33,7 @@ function Probe({ kernel }: { kernel: TestKernel }) {
   useEffect(() => {
     if (didSelect.current) return;
     didSelect.current = true;
-    const isComparison = activeSurface === "comparison";
-    controller.onPointSelect({ label: "Mode", point: { rowIndex: 0, x: frequencyRouteMode === "fmr_response" ? 12.5 : 1, y: 9 }, quantity: "frequency", seriesId: "eigen", source: { kind: isComparison ? "data.table.rows" : "analysis.frequency_domain", resourceKey: isComparison ? "table-b" : "artifact://spectrum", tableId: isComparison ? "table-b" : "eigen" }, unit: "GHz", xUnit: "index" });
+    controller.onPointSelect({ label: "Mode", point: { rowIndex: 0, x: frequencyRouteMode === "fmr_response" ? 12.5 : 1, y: 9 }, quantity: "frequency", seriesId: "eigen", source: { kind: "analysis.frequency_domain", resourceKey: "artifact://spectrum", tableId: "eigen" }, unit: "GHz", xUnit: "index" });
   }, [controller]);
   return null;
 }
@@ -65,6 +64,22 @@ function CaptureProbe({ kernel }: { kernel: TestKernel }) {
 }
 
 describe("Analysis controller frequency selection", () => {
+  it("exposes and persists the active contextual subview", async () => {
+    activeSurface = "resonance-fmr";
+    setActiveSubview.mockClear();
+    const dom = installSimulationPreparationTestDom(); const root = createRoot(dom.document.createElement("div") as unknown as Element); const selection = new SelectionController(new EventBus<KernelEventMap>());
+    try {
+      await act(async () => root.render(<CaptureProbe kernel={{ selection }} />));
+      const controller = capturedController as unknown as { activeSubview?: string; onSubviewChange?: (subview: string) => void };
+      expect(controller.activeSubview).toBe("resonance.eigenmodes");
+      controller.onSubviewChange?.("resonance.modal-driven");
+      expect(setActiveSubview).toHaveBeenCalledWith("resonance-fmr", "resonance.modal-driven");
+    } finally {
+      capturedController = null;
+      await act(async () => root.unmount()); dom.restore();
+    }
+  });
+
   it("mounts eigenmode selection with field-vector and parent artifact provenance", async () => {
     const dom = installSimulationPreparationTestDom(); const root = createRoot(dom.document.createElement("div") as unknown as Element); const selection = new SelectionController(new EventBus<KernelEventMap>());
     try { await act(async () => root.render(<Probe kernel={{ selection }} />)); expect(selection.get().ref).toMatchObject({ artifactPath: "artifact://spectrum", chartId: "resonance-fmr:artifact://spectrum", fieldId: "mode-1", resourceRef: "field://mode-1", type: "frequency-domain" }); }
@@ -78,18 +93,17 @@ describe("Analysis controller frequency selection", () => {
     try { await act(async () => root.render(<Probe kernel={{ selection }} />)); expect(selection.get().ref).toMatchObject({ chartId: "resonance-fmr:artifact://spectrum", fieldId: "response-field-7", frequencyIndex: 7, observableId: "mx", type: "frequency-domain" }); }
     finally { activeSurface = "resonance-fmr"; frequencyRouteMode = "free_modes"; selectedDatasetRef = null; await act(async () => root.unmount()); dom.restore(); }
   });
-  it("focuses the right comparison pane from its point rather than the primary dataset", async () => {
+  it("exposes an honest controller-level Comparison contract gap", async () => {
     activeSurface = "comparison";
     selectedDatasetRef = "table-a";
-    comparisonDatasetRef = "table-b";
     resetAnalysisWorkspaceForTests();
     const dom = installSimulationPreparationTestDom(); const root = createRoot(dom.document.createElement("div") as unknown as Element); const selection = new SelectionController(new EventBus<KernelEventMap>());
     try {
-      await act(async () => root.render(<Probe kernel={{ selection }} />));
-      expect(analysisWorkspaceStore.getSnapshot().focusedChartId).toBe("comparison:table-b");
-      expect(selection.get().ref).toMatchObject({ chartId: "comparison:table-b", tableId: "table-b" });
+      await act(async () => root.render(<CaptureProbe kernel={{ selection }} />));
+      expect(capturedController?.comparisonUnavailableReason).toContain("typed owner identities");
+      expect(analysisWorkspaceStore.getSnapshot().focusedChartId).toBeNull();
     } finally {
-      activeSurface = "resonance-fmr"; selectedDatasetRef = null; comparisonDatasetRef = null;
+      activeSurface = "resonance-fmr"; selectedDatasetRef = null; capturedController = null;
       await act(async () => root.unmount()); dom.restore();
     }
   });

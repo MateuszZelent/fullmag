@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { readFileSync } from "node:fs";
 
 import {
   ANALYSIS_VIEW_PREFERENCES_STORAGE_KEY,
@@ -67,6 +68,14 @@ describe("analysis view preferences", () => {
       "resonance-fmr": "resonance.frequency-response",
     });
     expect(serializeAnalysisViewPreferences(migrated)).not.toMatch(/:"(?:time-traces|response-map|frequency-response)"/);
+  });
+
+  it("bounds the legacy subview reader with an explicit owner, version, and removal gate", () => {
+    const source = readFileSync(new URL("./analysisViewPreferences.ts", import.meta.url), "utf8");
+
+    expect(source).toContain("Compatibility owner: Analysis subview preference parser.");
+    expect(source).toContain("Legacy reader version: analysis-view-preferences:v2.");
+    expect(source).toContain("Removal gate: remove legacy subview aliases");
   });
 
   it("bounds complete descriptor preferences and drops malformed descriptors", () => {
