@@ -133,6 +133,10 @@ fn resolves_bounded_public_fdm_gpu_m1_spin_transport() {
         .expect("bounded GPU M1 spin plan");
 
     assert_eq!(
+        resolved.requested_execution,
+        problem.spin_transport_modules[0].requested_execution
+    );
+    assert_eq!(
         resolved.requested_execution.discretization,
         BackendTarget::Fdm
     );

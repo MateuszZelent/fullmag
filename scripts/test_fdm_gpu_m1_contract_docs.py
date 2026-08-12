@@ -34,9 +34,116 @@ RACETRACK_PLAN = (
     ROOT / "docs/superpowers/plans/2026-08-11-solved-current-skyrmion-racetrack.md"
 )
 
+CAPABILITY_STATUS_VOCABULARY = {
+    "unsupported",
+    "source_visible",
+    "semantic_only",
+    "reference_executable",
+    "development_executable",
+    "partial_production_executable",
+    "implemented",
+    "production_executable",
+    "validated",
+}
+CAPABILITY_LANES = {
+    "fdm_cpu_reference",
+    "fdm_gpu_production",
+    "fem_cpu_public",
+    "fem_gpu_public",
+}
+TASK_3_BOUNDED_CAPABILITIES = {
+    "transport.spin.steady_drift_diffusion.fdm_gpu_bounded_m1.v1": (
+        "transport.spin.steady_drift_diffusion",
+        "transport_constitutive.one_way.fullmag.v1",
+    ),
+    "transport.spin.direct_she.fdm_gpu_bounded_m1.v1": (
+        "transport.spin.direct_she",
+        "transport_constitutive.one_way.fullmag.v1",
+    ),
+    "transport.spin.mixing_conductance.fdm_gpu_bounded_m1.v1": (
+        "transport.spin.mixing_conductance",
+        "magnetoelectronic.fullmag.v2",
+    ),
+    "coupling.transport_llg.one_way.fdm_gpu_bounded_m1.v1": (
+        "coupling.transport_llg.one_way",
+        "transport_torque_angular_momentum.fullmag.v1",
+    ),
+}
+
 
 def _normalise(value: str) -> str:
     return " ".join(value.replace("`", "").split())
+
+
+def _assert_capability_matrix_schema(matrix: object) -> None:
+    if not isinstance(matrix, dict):
+        raise AssertionError("capability matrix must be a JSON object")
+    if matrix.get("schema_version") != "capability_matrix.v0":
+        raise AssertionError("capability matrix lost schema_version=capability_matrix.v0")
+    vocabulary = matrix.get("status_vocabulary")
+    if not isinstance(vocabulary, dict) or set(vocabulary) != CAPABILITY_STATUS_VOCABULARY:
+        raise AssertionError("capability status vocabulary differs from the canonical set")
+    if set(matrix.get("lanes", ())) != CAPABILITY_LANES:
+        raise AssertionError("capability matrix lanes differ from the canonical four-lane set")
+    features = matrix.get("features")
+    if not isinstance(features, list):
+        raise AssertionError("capability matrix must contain features[]")
+    feature_ids = [
+        feature.get("id")
+        for feature in features
+        if isinstance(feature, dict) and isinstance(feature.get("id"), str)
+    ]
+    if len(feature_ids) != len(features):
+        raise AssertionError("every capability feature must be an object with a string id")
+    if len(feature_ids) != len(set(feature_ids)):
+        raise AssertionError("capability matrix contains duplicate feature ids")
+    for feature in features:
+        lanes = feature.get("lanes")
+        if not isinstance(lanes, dict) or set(lanes) != CAPABILITY_LANES:
+            raise AssertionError(f"capability {feature['id']} lost the canonical four lanes")
+        unknown_statuses = set(lanes.values()) - CAPABILITY_STATUS_VOCABULARY
+        if unknown_statuses:
+            raise AssertionError(
+                f"capability {feature['id']} uses unknown lane statuses: {sorted(unknown_statuses)}"
+            )
+
+
+def _assert_task_3_bounded_capability_rows(matrix: dict[str, object]) -> None:
+    features = matrix["features"]
+    by_id = {feature["id"]: feature for feature in features}
+    actual_ids = {
+        feature_id
+        for feature_id in by_id
+        if feature_id.endswith(".fdm_gpu_bounded_m1.v1")
+        and feature_id != "transport.charge.ohmic.fdm_gpu_bounded_m1.v1"
+    }
+    if actual_ids != set(TASK_3_BOUNDED_CAPABILITIES):
+        raise AssertionError("Task 3 bounded capability row ids differ from the exact four-row set")
+    expected_lanes = {
+        "fdm_cpu_reference": "unsupported",
+        "fdm_gpu_production": "implemented",
+        "fem_cpu_public": "unsupported",
+        "fem_gpu_public": "unsupported",
+    }
+    for feature_id, (capability_id, formula_version) in TASK_3_BOUNDED_CAPABILITIES.items():
+        feature = by_id[feature_id]
+        expected = {
+            "capability_id": capability_id,
+            "formula_version": formula_version,
+            "operator_versions": ["fv_spin_upwind_v1"],
+            "lanes": expected_lanes,
+            "precision_scope": ["double"],
+            "execution_mode_scope": ["strict"],
+            "implementation_state": "implemented",
+            "validation_state": "unvalidated",
+            "validated_workloads": [],
+        }
+        for field, value in expected.items():
+            if feature.get(field) != value:
+                raise AssertionError(
+                    f"Task 3 capability {feature_id}.{field} must be {value!r}, "
+                    f"got {feature.get(field)!r}"
+                )
 
 
 def _gpu_section(page: str) -> str:
@@ -1241,7 +1348,7 @@ def _status_sections() -> dict[str, str]:
         ),
         "capability": _anchored_section(
             capability,
-            "PR-15 nie promuje FDM GPU/FP64 M1.",
+            "PR-15 does not promote FDM GPU/FP64 M1.",
             "\n\n| Capability id |",
         ),
         "plan": plan[
@@ -1369,6 +1476,34 @@ def _assert_page_contract(page: str) -> None:
 
 
 class FdmGpuM1ContractDocsTests(unittest.TestCase):
+    def test_capability_json_has_canonical_vocabulary_and_exact_task_3_rows(self) -> None:
+        capability = json.loads(CAPABILITY_JSON.read_text(encoding="utf-8"))
+        _assert_capability_matrix_schema(capability)
+        _assert_task_3_bounded_capability_rows(capability)
+
+        mutations = []
+        unknown_status = json.loads(json.dumps(capability))
+        unknown_status["features"][0]["lanes"]["fdm_cpu_reference"] = "implemented_unqualified"
+        mutations.append((_assert_capability_matrix_schema, unknown_status))
+        widened_precision = json.loads(json.dumps(capability))
+        next(
+            feature
+            for feature in widened_precision["features"]
+            if feature["id"] == "transport.spin.direct_she.fdm_gpu_bounded_m1.v1"
+        )["precision_scope"].append("single")
+        mutations.append((_assert_task_3_bounded_capability_rows, widened_precision))
+        promoted_validation = json.loads(json.dumps(capability))
+        next(
+            feature
+            for feature in promoted_validation["features"]
+            if feature["id"] == "coupling.transport_llg.one_way.fdm_gpu_bounded_m1.v1"
+        )["validation_state"] = "validated"
+        mutations.append((_assert_task_3_bounded_capability_rows, promoted_validation))
+        for validator, mutation in mutations:
+            with self.subTest(validator=validator.__name__):
+                with self.assertRaises(AssertionError):
+                    validator(mutation)
+
     def test_fdm_gpu_m1_fp64_contract_is_frozen_without_capability_promotion(self) -> None:
         page = PAGE.read_text(encoding="utf-8")
         runtime = _normalise(RUNTIME.read_text(encoding="utf-8"))
