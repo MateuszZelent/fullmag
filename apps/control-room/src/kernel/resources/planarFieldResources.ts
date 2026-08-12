@@ -20,6 +20,7 @@ import type {
   ResourceRevision,
 } from "../api/apiTypes";
 import {
+  isCanonicalU64Decimal,
   normalizePlanarFieldQuery,
   planarFieldResourcePath,
   planarFieldResourceKey,
@@ -29,9 +30,19 @@ import { useKernel } from "../KernelContext";
 import { ResourceCache } from "./ResourceCache";
 import { useResource } from "./useResource";
 
-export type PlanarFieldMetaLinksParseResult =
+export type PlanarFieldMetaParseResult =
   | { ok: true; query: PlanarFieldQuery }
   | { error: Error; ok: false };
+
+type PlanarFieldMetaIdentity = Pick<
+  PlanarFieldMetaResource,
+  | "carrier_revision"
+  | "field_revision"
+  | "links"
+  | "mesh_revision"
+  | "monitor_revision"
+  | "scene_revision"
+>;
 
 interface ResourceHookOptions {
   enabled?: boolean;
@@ -69,12 +80,22 @@ const metaLinkPaths = {
   vectors: DATA_PLANAR_FIELD_VECTORS_PATH,
 } as const satisfies Record<keyof PlanarFieldMetaResource["links"], string>;
 
-export function planarFieldQueryFromMetaLinks(
+export function planarFieldQueryFromMeta(
   quantityId: string,
   monitorId: string,
-  links: PlanarFieldMetaResource["links"],
-): PlanarFieldMetaLinksParseResult {
+  meta: PlanarFieldMetaIdentity,
+): PlanarFieldMetaParseResult {
   try {
+    const metaRevisions = {
+      expected_carrier_revision: meta.carrier_revision,
+      expected_field_revision: meta.field_revision,
+      expected_mesh_revision: meta.mesh_revision,
+      expected_monitor_revision: meta.monitor_revision,
+      expected_scene_revision: meta.scene_revision,
+    } as const;
+    for (const [name, revision] of Object.entries(metaRevisions)) {
+      requireCanonicalU64(revision, `metadata ${name}`);
+    }
     let canonicalIdentity: string | null = null;
     let canonicalQuery: PlanarFieldQuery | null = null;
 
@@ -82,7 +103,7 @@ export function planarFieldQueryFromMetaLinks(
       keyof PlanarFieldMetaResource["links"],
       string,
     ][]) {
-      const link = links[kind];
+      const link = meta.links[kind];
       const query = planarFieldQueryFromMetaLink(link);
       const url = new URL(link, "http://fullmag.invalid");
       const expectedPath = planarFieldResourcePath(
@@ -103,6 +124,16 @@ export function planarFieldQueryFromMetaLinks(
 
     if (!canonicalQuery) {
       throw new Error("Canonical planar metadata links are empty");
+    }
+    for (const [name, revision] of Object.entries(metaRevisions) as [
+      keyof typeof metaRevisions,
+      string,
+    ][]) {
+      if (canonicalQuery[name] !== revision) {
+        throw new Error(
+          `Canonical planar metadata ${name} disagrees with link identity`,
+        );
+      }
     }
     return { ok: true, query: canonicalQuery };
   } catch (error) {
@@ -134,6 +165,8 @@ function planarFieldQueryFromMetaLink(link: string): PlanarFieldQuery {
     }
     return value;
   };
+  const revision = (name: string): string =>
+    requireCanonicalU64(required(name), `link ${name}`);
   const includeMesh = required("include_mesh");
   if (includeMesh !== "true" && includeMesh !== "false") {
     throw new Error("Canonical planar metadata link has invalid include_mesh");
@@ -142,11 +175,11 @@ function planarFieldQueryFromMetaLink(link: string): PlanarFieldQuery {
   return normalizePlanarFieldQuery({
     sample_token: required("sample_token"),
     component: required("component"),
-    expected_carrier_revision: required("expected_carrier_revision"),
-    expected_field_revision: required("expected_field_revision"),
-    expected_mesh_revision: required("expected_mesh_revision"),
-    expected_monitor_revision: required("expected_monitor_revision"),
-    expected_scene_revision: required("expected_scene_revision"),
+    expected_carrier_revision: revision("expected_carrier_revision"),
+    expected_field_revision: revision("expected_field_revision"),
+    expected_mesh_revision: revision("expected_mesh_revision"),
+    expected_monitor_revision: revision("expected_monitor_revision"),
+    expected_scene_revision: revision("expected_scene_revision"),
     include_mesh: includeMesh === "true",
     quality: required("quality"),
     resolution_x: integer("resolution_x"),
@@ -156,6 +189,13 @@ function planarFieldQueryFromMetaLink(link: string): PlanarFieldQuery {
     snapshot_id: url.searchParams.get("snapshot_id") ?? undefined,
     stage_id: url.searchParams.get("stage_id") ?? undefined,
   });
+}
+
+function requireCanonicalU64(value: string, name: string): string {
+  if (!isCanonicalU64Decimal(value)) {
+    throw new Error(`Canonical planar ${name} is not a valid u64 decimal`);
+  }
+  return value;
 }
 
 export function resolvePlanarFieldResourceKey(

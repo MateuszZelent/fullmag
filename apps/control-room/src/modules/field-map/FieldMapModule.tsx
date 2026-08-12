@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { useKernel } from "@/kernel/KernelContext";
 import {
-  planarFieldQueryFromMetaLinks,
+  planarFieldQueryFromMeta,
   usePlanarFieldMetaResource,
   usePlanarMaskResource,
   usePlanarMeshOverlayResource,
@@ -106,10 +106,10 @@ export default function FieldMapModule() {
   const canonicalSample = useMemo(
     () =>
       meta.status === "ready" && meta.data
-        ? planarFieldQueryFromMetaLinks(
+        ? planarFieldQueryFromMeta(
             plan.quantityId,
             plan.monitorId,
-            meta.data.links,
+            meta.data,
           )
         : null,
     [meta.data, meta.status, plan.monitorId, plan.quantityId],

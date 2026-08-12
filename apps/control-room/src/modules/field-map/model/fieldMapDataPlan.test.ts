@@ -94,10 +94,10 @@ describe("field-map data plan", () => {
 
     expect(source).not.toContain("status.data?.resources.field_revision");
     expect(source).not.toContain("monitor.data?.scene_revision");
-    expect(source).toContain("planarFieldQueryFromMetaLinks(");
+    expect(source).toContain("planarFieldQueryFromMeta(");
     expect(source).toContain("plan.quantityId");
     expect(source).toContain("plan.monitorId");
-    expect(source).toContain("meta.data.links");
+    expect(source).toContain("meta.data");
     expect(source).toContain("canonicalSample?.ok ? canonicalSample.query : null");
     expect(source).toContain("const canonicalSampleReady = canonicalQuery !== null");
     expect(source).toContain("canonicalSampleError");

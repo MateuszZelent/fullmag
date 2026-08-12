@@ -226,6 +226,17 @@ const PLANAR_FIELD_QUERY_ORDER = [
   "vector_budget",
 ] as const satisfies readonly (keyof PlanarFieldQuery)[];
 
+const U64_MAX_DECIMAL = "18446744073709551615";
+
+export function isCanonicalU64Decimal(value: string): boolean {
+  if (value === "0") return true;
+  if (!/^[1-9][0-9]*$/.test(value)) return false;
+  if (value.length !== U64_MAX_DECIMAL.length) {
+    return value.length < U64_MAX_DECIMAL.length;
+  }
+  return value <= U64_MAX_DECIMAL;
+}
+
 export function normalizePlanarFieldQuery(
   query: PlanarFieldQuery = {},
 ): PlanarFieldQuery {

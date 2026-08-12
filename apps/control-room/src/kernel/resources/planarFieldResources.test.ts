@@ -17,22 +17,33 @@ import { ResourceCache } from "./ResourceCache";
 import {
   loadCachedPlanarBinary,
   loadCachedPlanarScalar,
-  planarFieldQueryFromMetaLinks,
+  planarFieldQueryFromMeta,
   resolvePlanarFieldResourceKey,
 } from "./planarFieldResources";
 
 describe("planar field resources", () => {
-  const canonicalSuffix =
-    "?sample_token=planar-sample-v2%3Aexact&component=normal" +
-    "&expected_scene_revision=101&expected_monitor_revision=202" +
-    "&expected_mesh_revision=303&expected_carrier_revision=304" +
-    "&expected_field_revision=404&resolution_x=128&resolution_y=64" +
-    "&scope_kind=monitor_target&quality=interactive&include_mesh=false";
+  const defaultRevisions = {
+    carrier_revision: "304",
+    field_revision: "404",
+    mesh_revision: "303",
+    monitor_revision: "202",
+    scene_revision: "101",
+  } as const;
   const metaLinks = (
     quantityId = "m",
     monitorId = "plane-1",
     origin = "",
+    revisions: Record<keyof typeof defaultRevisions, string> = defaultRevisions,
   ) => {
+    const canonicalSuffix =
+      "?sample_token=planar-sample-v2%3Aexact&component=normal" +
+      `&expected_scene_revision=${revisions.scene_revision}` +
+      `&expected_monitor_revision=${revisions.monitor_revision}` +
+      `&expected_mesh_revision=${revisions.mesh_revision}` +
+      `&expected_carrier_revision=${revisions.carrier_revision}` +
+      `&expected_field_revision=${revisions.field_revision}` +
+      "&resolution_x=128&resolution_y=64" +
+      "&scope_kind=monitor_target&quality=interactive&include_mesh=false";
     const link = (path: string) =>
       origin +
       path
@@ -48,6 +59,15 @@ describe("planar field resources", () => {
       vectors: link(DATA_PLANAR_FIELD_VECTORS_PATH),
     };
   };
+  const metaIdentity = (
+    quantityId = "m",
+    monitorId = "plane-1",
+    origin = "",
+    revisions: Record<keyof typeof defaultRevisions, string> = defaultRevisions,
+  ) => ({
+    ...revisions,
+    links: metaLinks(quantityId, monitorId, origin, revisions),
+  });
 
   it("normalizes query order into one resource identity", () => {
     const first = planarFieldResourceKey("m /% żółć", "plane/a", {
@@ -101,10 +121,10 @@ describe("planar field resources", () => {
   });
 
   it("derives exact binary identity from valid same-origin metadata links", () => {
-    const result = planarFieldQueryFromMetaLinks(
+    const result = planarFieldQueryFromMeta(
       "m",
       "plane-1",
-      metaLinks("m", "plane-1", "http://fullmag.invalid"),
+      metaIdentity("m", "plane-1", "http://fullmag.invalid"),
     );
 
     expect(result).toMatchObject({ ok: true });
@@ -127,67 +147,141 @@ describe("planar field resources", () => {
     const quantityId = "m /% żółć";
     const monitorId = "plane /% żółć";
     expect(
-      planarFieldQueryFromMetaLinks(
+      planarFieldQueryFromMeta(
         quantityId,
         monitorId,
-        metaLinks(quantityId, monitorId),
+        metaIdentity(quantityId, monitorId),
       ),
     ).toMatchObject({ ok: true });
   });
 
   it.each([
-    ["wrong quantity", "m", "plane-1", metaLinks("H_eff", "plane-1")],
-    ["wrong monitor", "m", "plane-1", metaLinks("m", "plane-2")],
-    ["external origin", "m", "plane-1", metaLinks("m", "plane-1", "https://example.invalid")],
-  ])("rejects %s without throwing", (_name, quantityId, monitorId, links) => {
+    ["wrong quantity", "m", "plane-1", metaIdentity("H_eff", "plane-1")],
+    ["wrong monitor", "m", "plane-1", metaIdentity("m", "plane-2")],
+    ["external origin", "m", "plane-1", metaIdentity("m", "plane-1", "https://example.invalid")],
+  ])("rejects %s without throwing", (_name, quantityId, monitorId, meta) => {
     expect(() =>
-      planarFieldQueryFromMetaLinks(quantityId, monitorId, links),
+      planarFieldQueryFromMeta(quantityId, monitorId, meta),
     ).not.toThrow();
-    expect(planarFieldQueryFromMetaLinks(quantityId, monitorId, links)).toMatchObject({
+    expect(planarFieldQueryFromMeta(quantityId, monitorId, meta)).toMatchObject({
       ok: false,
     });
   });
 
   it("rejects an arbitrary shared prefix and identity disagreement", () => {
-    const links = metaLinks();
+    const meta = metaIdentity();
     const falsePrefix = Object.fromEntries(
-      Object.entries(links).map(([kind, link]) => [
+      Object.entries(meta.links).map(([kind, link]) => [
         kind,
         link.replace(
           DATA_PLANAR_FIELD_SCALAR_PATH.split("{quantity_id}")[0],
           "/not-the-planar-resource-family/",
         ),
       ]),
-    ) as typeof links;
-    expect(planarFieldQueryFromMetaLinks("m", "plane-1", falsePrefix)).toMatchObject({
+    ) as typeof meta.links;
+    expect(planarFieldQueryFromMeta("m", "plane-1", {
+      ...meta,
+      links: falsePrefix,
+    })).toMatchObject({
       ok: false,
     });
     expect(
-      planarFieldQueryFromMetaLinks("m", "plane-1", {
-        ...links,
-        vectors: links.vectors.replace(
-          "expected_field_revision=404",
-          "expected_field_revision=405",
-        ),
+      planarFieldQueryFromMeta("m", "plane-1", {
+        ...meta,
+        links: {
+          ...meta.links,
+          vectors: meta.links.vectors.replace(
+            "expected_field_revision=404",
+            "expected_field_revision=405",
+          ),
+        },
       }),
     ).toMatchObject({ ok: false });
   });
 
   it("returns a controlled error for malformed links", () => {
-    const links = metaLinks();
-    const malformed = {
-      ...links,
-      scalar: links.scalar.slice(0, links.scalar.indexOf("?")),
+    const meta = metaIdentity();
+    const malformedLinks = {
+      ...meta.links,
+      scalar: meta.links.scalar.slice(0, meta.links.scalar.indexOf("?")),
     };
 
     expect(() =>
-      planarFieldQueryFromMetaLinks("m", "plane-1", malformed),
+      planarFieldQueryFromMeta("m", "plane-1", {
+        ...meta,
+        links: malformedLinks,
+      }),
     ).not.toThrow();
-    const result = planarFieldQueryFromMetaLinks("m", "plane-1", malformed);
+    const result = planarFieldQueryFromMeta("m", "plane-1", {
+      ...meta,
+      links: malformedLinks,
+    });
     expect(result).toMatchObject({ ok: false });
     if (result.ok) return;
     expect(result.error.message).toContain("Canonical planar metadata link is missing");
   });
+
+  it("accepts canonical zero and maximum u64 revisions", () => {
+    const revisions = {
+      carrier_revision: "18446744073709551615",
+      field_revision: "0",
+      mesh_revision: "18446744073709551615",
+      monitor_revision: "0",
+      scene_revision: "18446744073709551615",
+    };
+    expect(
+      planarFieldQueryFromMeta(
+        "m",
+        "plane-1",
+        metaIdentity("m", "plane-1", "", revisions),
+      ),
+    ).toMatchObject({ ok: true });
+  });
+
+  it.each(["abc", "+1", "-1", " 1", "1 ", "01", "18446744073709551616"])(
+    "rejects non-canonical link revision %j",
+    (revision) => {
+      const meta = metaIdentity();
+      const links = Object.fromEntries(
+        Object.entries(meta.links).map(([kind, link]) => [
+          kind,
+          link.replace("expected_field_revision=404", `expected_field_revision=${revision}`),
+        ]),
+      ) as typeof meta.links;
+      expect(planarFieldQueryFromMeta("m", "plane-1", { ...meta, links })).toMatchObject({
+        ok: false,
+      });
+    },
+  );
+
+  it.each([
+    ["expected_carrier_revision", "304"],
+    ["expected_field_revision", "404"],
+    ["expected_mesh_revision", "303"],
+    ["expected_monitor_revision", "202"],
+    ["expected_scene_revision", "101"],
+  ])("rejects non-canonical %s", (name, validRevision) => {
+    const meta = metaIdentity();
+    const links = Object.fromEntries(
+      Object.entries(meta.links).map(([kind, link]) => [
+        kind,
+        link.replace(`${name}=${validRevision}`, `${name}=01`),
+      ]),
+    ) as typeof meta.links;
+    expect(planarFieldQueryFromMeta("m", "plane-1", { ...meta, links })).toMatchObject({
+      ok: false,
+    });
+  });
+
+  it.each(Object.keys(defaultRevisions) as (keyof typeof defaultRevisions)[])(
+    "rejects non-canonical metadata revision %s",
+    (name) => {
+      const meta = { ...metaIdentity(), [name]: "01" };
+      expect(planarFieldQueryFromMeta("m", "plane-1", meta)).toMatchObject({
+        ok: false,
+      });
+    },
+  );
 
   it("rejects a 304 response when no matching cached payload exists", async () => {
     const cache = new ResourceCache<ArrayBuffer>({ maxBytes: 1024 });
