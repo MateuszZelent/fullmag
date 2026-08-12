@@ -131,10 +131,6 @@ static void abm3_fill_diagnostics(Context &ctx, double dt, fullmag_fdm_step_stat
         return;
     }
 
-    int n = static_cast<int>(ctx.cell_count);
-    int grid = (n + 255) / 256;
-    double alpha = ctx.alpha;
-    double gamma_bar = ctx.gamma / (1.0 + alpha * alpha);
     if (ctx.enable_exchange) launch_exchange_field_fp64(ctx);
     if (ctx.enable_demag)    launch_demag_field_fp64(ctx);
     launch_effective_field_fp64(ctx, ctx.current_time);
@@ -155,20 +151,10 @@ static void abm3_fill_diagnostics(Context &ctx, double dt, fullmag_fdm_step_stat
         ctx.m.x, ctx.m.y, ctx.m.z,
         ctx.work.x, ctx.work.y, ctx.work.z, ctx.cell_count);
 
-    // Max |dm/dt| — compute RHS at new state
-    llg_rhs_fp64_kernel<<<grid, 256>>>(
-        static_cast<const double*>(ctx.m.x),
-        static_cast<const double*>(ctx.m.y),
-        static_cast<const double*>(ctx.m.z),
-        static_cast<const double*>(ctx.work.x),
-        static_cast<const double*>(ctx.work.y),
-        static_cast<const double*>(ctx.work.z),
-        static_cast<double*>(ctx.k1.x),
-        static_cast<double*>(ctx.k1.y),
-        static_cast<double*>(ctx.k1.z),
-        n, gamma_bar, alpha, ctx.disable_precession ? 1 : 0,
-        stt_params_from_ctx(ctx), sot_params_from_ctx(ctx));
-    double max_dm_dt = reduce_max_norm_fp64(ctx, ctx.k1.x, ctx.k1.y, ctx.k1.z, ctx.cell_count);
+    // The accepted endpoint derivative, including solved transport, is stored
+    // transactionally in abm_f_n before diagnostics.
+    double max_dm_dt = reduce_max_norm_fp64(
+        ctx, ctx.abm_f_n.x, ctx.abm_f_n.y, ctx.abm_f_n.z, ctx.cell_count);
 
     stats->step = ctx.step_count;
     stats->time_seconds = ctx.current_time;
@@ -227,6 +213,10 @@ void launch_abm3_step_fp64(Context &ctx, double dt, fullmag_fdm_step_stats *stat
             static_cast<double*>(ctx.k1.z),
             n, gamma_bar, alpha, ctx.disable_precession ? 1 : 0,
             stt_params_from_ctx(ctx), sot_params_from_ctx(ctx));
+        if (!context_evaluate_gpu_transport_rhs(
+                ctx, ctx.m, step_start_time,
+                ctx.gpu_transport_active_attempt_id, 1) ||
+            !launch_add_gpu_transport_torque_fp64(ctx, ctx.m, ctx.k1)) return;
         if (abort_step_from_tmp(ctx, false)) return;
 
         // Predictor: m_pred = normalize(m + dt·k1)
@@ -261,6 +251,10 @@ void launch_abm3_step_fp64(Context &ctx, double dt, fullmag_fdm_step_stats *stat
             static_cast<double*>(ctx.h_ex.z),
             n, gamma_bar, alpha, ctx.disable_precession ? 1 : 0,
             stt_params_from_ctx(ctx), sot_params_from_ctx(ctx));
+        if (!context_evaluate_gpu_transport_rhs(
+                ctx, ctx.m, step_start_time + dt,
+                ctx.gpu_transport_active_attempt_id, 2) ||
+            !launch_add_gpu_transport_torque_fp64(ctx, ctx.m, ctx.h_ex)) return;
         if (abort_step_from_tmp(ctx, false)) return;
 
         // Corrector: m_new = normalize(m_orig + 0.5·dt·(k1 + k2))
@@ -280,16 +274,10 @@ void launch_abm3_step_fp64(Context &ctx, double dt, fullmag_fdm_step_stats *stat
             n, 0.5 * dt);
         if (abort_step_from_tmp(ctx, false)) return;
 
-        ctx.step_count++;
-        ctx.current_time += dt;
-
         // Compute RHS at accepted point and store in history
         if (ctx.enable_exchange) launch_exchange_field_fp64(ctx);
         if (ctx.enable_demag)    launch_demag_field_fp64(ctx);
-        launch_effective_field_fp64(ctx, ctx.current_time);
-
-        // Rotate history, then store new f_n
-        abm3_rotate_history(ctx, ctx.cell_count);
+        launch_effective_field_fp64(ctx, step_start_time + dt);
 
         llg_rhs_fp64_kernel<<<grid, 256>>>(
             static_cast<const double*>(ctx.m.x),
@@ -298,11 +286,23 @@ void launch_abm3_step_fp64(Context &ctx, double dt, fullmag_fdm_step_stats *stat
             static_cast<const double*>(ctx.work.x),
             static_cast<const double*>(ctx.work.y),
             static_cast<const double*>(ctx.work.z),
-            static_cast<double*>(ctx.abm_f_n.x),
-            static_cast<double*>(ctx.abm_f_n.y),
-            static_cast<double*>(ctx.abm_f_n.z),
+            static_cast<double*>(ctx.h_ex.x),
+            static_cast<double*>(ctx.h_ex.y),
+            static_cast<double*>(ctx.h_ex.z),
             n, gamma_bar, alpha, ctx.disable_precession ? 1 : 0,
             stt_params_from_ctx(ctx), sot_params_from_ctx(ctx));
+        if (!context_evaluate_gpu_transport_rhs(
+                ctx, ctx.m, step_start_time + dt,
+                ctx.gpu_transport_active_attempt_id, 3) ||
+            !launch_add_gpu_transport_torque_fp64(ctx, ctx.m, ctx.h_ex)) return;
+        if (abort_step_from_tmp(ctx, false)) return;
+
+        ctx.step_count++;
+        ctx.current_time += dt;
+        abm3_rotate_history(ctx, ctx.cell_count);
+        cudaMemcpy(ctx.abm_f_n.x, ctx.h_ex.x, bytes, cudaMemcpyDeviceToDevice);
+        cudaMemcpy(ctx.abm_f_n.y, ctx.h_ex.y, bytes, cudaMemcpyDeviceToDevice);
+        cudaMemcpy(ctx.abm_f_n.z, ctx.h_ex.z, bytes, cudaMemcpyDeviceToDevice);
 
         ctx.abm_startup++;
         ctx.abm_last_dt = dt;
@@ -358,6 +358,10 @@ void launch_abm3_step_fp64(Context &ctx, double dt, fullmag_fdm_step_stats *stat
         static_cast<double*>(ctx.k1.z),
         n, gamma_bar, alpha, ctx.disable_precession ? 1 : 0,
         stt_params_from_ctx(ctx), sot_params_from_ctx(ctx));
+    if (!context_evaluate_gpu_transport_rhs(
+            ctx, ctx.m, step_start_time + dt,
+            ctx.gpu_transport_active_attempt_id, 1) ||
+        !launch_add_gpu_transport_torque_fp64(ctx, ctx.m, ctx.k1)) return;
     if (abort_step_from_tmp(ctx, false)) return;
 
     // AM3 corrector: m = normalize(m_orig + dt·(5/12·f* + 8/12·f_n - 1/12·f_{n-1}))
@@ -380,14 +384,35 @@ void launch_abm3_step_fp64(Context &ctx, double dt, fullmag_fdm_step_stats *stat
         n, dt);
     if (abort_step_from_tmp(ctx, false)) return;
 
+    // Re-evaluate at the corrected accepted endpoint.  The predictor
+    // derivative must not become the accepted spin/ABM state.
+    if (ctx.enable_exchange) launch_exchange_field_fp64(ctx);
+    if (ctx.enable_demag)    launch_demag_field_fp64(ctx);
+    launch_effective_field_fp64(ctx, step_start_time + dt);
+    llg_rhs_fp64_kernel<<<grid, 256>>>(
+        static_cast<const double*>(ctx.m.x),
+        static_cast<const double*>(ctx.m.y),
+        static_cast<const double*>(ctx.m.z),
+        static_cast<const double*>(ctx.work.x),
+        static_cast<const double*>(ctx.work.y),
+        static_cast<const double*>(ctx.work.z),
+        static_cast<double*>(ctx.h_ex.x),
+        static_cast<double*>(ctx.h_ex.y),
+        static_cast<double*>(ctx.h_ex.z),
+        n, gamma_bar, alpha, ctx.disable_precession ? 1 : 0,
+        stt_params_from_ctx(ctx), sot_params_from_ctx(ctx));
+    if (!context_evaluate_gpu_transport_rhs(
+            ctx, ctx.m, step_start_time + dt,
+            ctx.gpu_transport_active_attempt_id, 2) ||
+        !launch_add_gpu_transport_torque_fp64(ctx, ctx.m, ctx.h_ex)) return;
+    if (abort_step_from_tmp(ctx, false)) return;
+
     ctx.step_count++;
     ctx.current_time += dt;
-
-    // Rotate history and store f* as new f_n
     abm3_rotate_history(ctx, ctx.cell_count);
-    cudaMemcpy(ctx.abm_f_n.x, ctx.k1.x, bytes, cudaMemcpyDeviceToDevice);
-    cudaMemcpy(ctx.abm_f_n.y, ctx.k1.y, bytes, cudaMemcpyDeviceToDevice);
-    cudaMemcpy(ctx.abm_f_n.z, ctx.k1.z, bytes, cudaMemcpyDeviceToDevice);
+    cudaMemcpy(ctx.abm_f_n.x, ctx.h_ex.x, bytes, cudaMemcpyDeviceToDevice);
+    cudaMemcpy(ctx.abm_f_n.y, ctx.h_ex.y, bytes, cudaMemcpyDeviceToDevice);
+    cudaMemcpy(ctx.abm_f_n.z, ctx.h_ex.z, bytes, cudaMemcpyDeviceToDevice);
     ctx.abm_last_dt = dt;
 
     // Fill diagnostics on accepted state

@@ -1932,7 +1932,6 @@ class RacetrackM1PhysicsContractDocsTests(unittest.TestCase):
                 "ResolvedFdmSpinTransportIR.transport_active_mask",
                 "ResolvedSpinTransportPlanIR.fdm_gpu_double",
                 "GpuM1TransportSession::prepare",
-                "fullmag_fdm_context_bind_gpu_transport_v1",
                 "TransportStageCheckpointV1",
                 "execution_provenance.transport_m1_v1",
                 "SkyrmionTrajectoryV1",
@@ -1965,10 +1964,6 @@ class RacetrackM1PhysicsContractDocsTests(unittest.TestCase):
                     "Task 4",
                     "GpuM1TransportSession::prepare",
                 ): "crates/fullmag-runner/src/fdm/gpu/cuda/spin_transport.rs",
-                (
-                    "Task 5",
-                    "fullmag_fdm_context_bind_gpu_transport_v1",
-                ): "native/include/fullmag_fdm.h",
                 (
                     "Task 6",
                     "TransportStageCheckpointV1",

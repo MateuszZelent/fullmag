@@ -3,6 +3,7 @@
 
 #include <cuda_runtime_api.h>
 
+#include <algorithm>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -33,6 +34,8 @@ struct ControlledOperator {
     double *torque = nullptr;
     double *m_audit = nullptr;
     bool audit_m_stage_on_compute_stream = false;
+    bool stage_dependent_torque = false;
+    double torque_amplitude = 1.0;
     uint64_t evaluations = 0;
     std::vector<double> target_stage_my;
     std::vector<double> stage_times;
@@ -95,6 +98,14 @@ bool controlled_transport_rhs(
         return false;
     }
     active_operator->target_stage_my.push_back(target_my);
+    if (active_operator->stage_dependent_torque) {
+        const double stage_torque = active_operator->torque_amplitude *
+                                    ((stage_id & 1U) != 0U ? 1.0 : -1.0);
+        check_cuda(cudaMemcpy(active_operator->torque + kCells + 1,
+                              &stage_torque, sizeof(stage_torque),
+                              cudaMemcpyHostToDevice),
+                   "upload stage-dependent adaptive torque");
+    }
     active_operator->stage_times.push_back(t_stage);
     active_operator->attempt_ids.push_back(attempt_id);
     active_operator->stage_ids.push_back(stage_id);
@@ -109,7 +120,8 @@ bool controlled_transport_rhs(
 fullmag_fdm_backend *create_backend(
     fullmag_fdm_integrator integrator,
     double alpha,
-    fullmag_fdm_stats_mode stats_mode = FULLMAG_FDM_STATS_NONE)
+    fullmag_fdm_stats_mode stats_mode = FULLMAG_FDM_STATS_NONE,
+    double adaptive_max_error = 0.0)
 {
     std::vector<double> m0(3 * kCells, 0.0);
     for (uint64_t cell = 0; cell < kCells; ++cell) m0[3 * cell] = 1.0;
@@ -123,6 +135,7 @@ fullmag_fdm_backend *create_backend(
     plan.initial_magnetization_xyz = m0.data();
     plan.initial_magnetization_len = m0.size();
     plan.stats_mode = stats_mode;
+    plan.adaptive_max_error = adaptive_max_error;
     fullmag_fdm_backend *handle = fullmag_fdm_backend_create(&plan);
     check(handle != nullptr, "backend creation returned null");
     check(fullmag_fdm_backend_last_error(handle) == nullptr,
@@ -130,10 +143,11 @@ fullmag_fdm_backend *create_backend(
     return handle;
 }
 
-ControlledOperator create_controlled_operator() {
+ControlledOperator create_controlled_operator(double torque_amplitude = 1.0) {
     ControlledOperator result{};
+    result.torque_amplitude = torque_amplitude;
     std::vector<double> torque(3 * kCells, 0.0);
-    torque[kCells + 1] = 1.0; // target FM cell only; HM/outside-FM stay zero.
+    torque[kCells + 1] = torque_amplitude; // target FM cell only.
     check_cuda(cudaMalloc(reinterpret_cast<void **>(&result.torque),
                           torque.size() * sizeof(double)),
                "allocate controlled torque");
@@ -158,6 +172,19 @@ std::vector<double> read_m(fullmag_fdm_backend *handle) {
               handle, FULLMAG_FDM_OBSERVABLE_M, result.data(), result.size()) ==
               FULLMAG_FDM_OK,
           "magnetization readback failed");
+    return result;
+}
+
+std::vector<double> read_device_field(const DeviceVectorField &field) {
+    std::vector<double> result(3 * kCells, 0.0);
+    check_cuda(cudaMemcpy(result.data(), field.x, kCells * sizeof(double),
+                          cudaMemcpyDeviceToHost), "read device field x");
+    check_cuda(cudaMemcpy(result.data() + kCells, field.y,
+                          kCells * sizeof(double), cudaMemcpyDeviceToHost),
+               "read device field y");
+    check_cuda(cudaMemcpy(result.data() + 2 * kCells, field.z,
+                          kCells * sizeof(double), cudaMemcpyDeviceToHost),
+               "read device field z");
     return result;
 }
 
@@ -364,15 +391,21 @@ void verify_late_stage_failure_rolls_back(
     ControlledOperator op = create_controlled_operator();
     op.fail_stage = fail_stage;
     bind_controlled_operator(handle, op);
+    auto *ctx = reinterpret_cast<Context *>(handle);
+    if (integrator == FULLMAG_FDM_INTEGRATOR_RK23 ||
+        integrator == FULLMAG_FDM_INTEGRATOR_DP45) {
+        ctx->fsal_valid = true;
+    }
     const std::vector<double> before = read_m(handle);
     fullmag_fdm_step_stats stats{};
     check(fullmag_fdm_backend_step(handle, 1.0e-3, &stats) == FULLMAG_FDM_ERR_CUDA,
           "late transport stage failure was accepted");
     check(read_m(handle) == before,
           "late transport stage failure did not restore magnetization bitwise");
-    auto *ctx = reinterpret_cast<Context *>(handle);
     check(ctx->step_count == 0 && ctx->current_time == 0.0,
           "late transport stage failure advanced accepted time or step");
+    check(!ctx->fsal_valid,
+          "bound rollback preserved an FSAL derivative that transport may mutate");
     const uint64_t failed_evaluations = op.evaluations;
     op.fail_stage = 0;
     check(fullmag_fdm_backend_step(handle, 1.0e-3, &stats) == FULLMAG_FDM_OK,
@@ -398,6 +431,78 @@ void verify_late_stage_failure_rolls_back(
     active_operator = nullptr;
 }
 
+void verify_adaptive_retry_gets_fresh_transport_attempt(
+    fullmag_fdm_integrator integrator)
+{
+    fullmag_fdm_backend *handle = create_backend(
+        integrator, 0.0, FULLMAG_FDM_STATS_NONE, 1.0e-8);
+    ControlledOperator op = create_controlled_operator(1.0e6);
+    op.stage_dependent_torque = true;
+    bind_controlled_operator(handle, op);
+    fullmag_fdm_step_stats stats{};
+    const int status = fullmag_fdm_backend_step(handle, 1.0e-3, &stats);
+    if (status != FULLMAG_FDM_OK) {
+        const char *error = fullmag_fdm_backend_last_error(handle);
+        std::fprintf(stderr, "adaptive retry status=%d error=%s\n", status,
+                     error != nullptr ? error : "<none>");
+    }
+    check(status == FULLMAG_FDM_OK,
+          "adaptive transport retry did not reach an accepted step");
+    check(!op.attempt_ids.empty(), "adaptive transport retry produced no stages");
+    check(*std::max_element(op.attempt_ids.begin(), op.attempt_ids.end()) > 1,
+          "adaptive rejection reused one transport attempt identity");
+    uint64_t previous_attempt = 0;
+    for (size_t index = 0; index < op.attempt_ids.size(); ++index) {
+        if (op.attempt_ids[index] != previous_attempt) {
+            check(op.stage_ids[index] == 1,
+                  "adaptive transport retry did not restart at stage one");
+            previous_attempt = op.attempt_ids[index];
+        }
+    }
+    check_cuda(cudaFree(op.torque), "free adaptive retry torque");
+    fullmag_fdm_backend_destroy(handle);
+    active_operator = nullptr;
+}
+
+void verify_abm3_history_survives_full_step_rollback() {
+    fullmag_fdm_backend *handle = create_backend(FULLMAG_FDM_INTEGRATOR_ABM3, 0.0);
+    ControlledOperator op = create_controlled_operator();
+    op.stage_dependent_torque = true;
+    bind_controlled_operator(handle, op);
+    fullmag_fdm_step_stats stats{};
+    for (int startup = 0; startup < 3; ++startup) {
+        check(fullmag_fdm_backend_step(handle, 1.0e-3, &stats) == FULLMAG_FDM_OK,
+              "ABM3 transport warmup failed");
+    }
+    auto *ctx = reinterpret_cast<Context *>(handle);
+    const std::vector<double> accepted_m = read_m(handle);
+    const std::vector<double> accepted_fn = read_device_field(ctx->abm_f_n);
+    const std::vector<double> accepted_fn1 = read_device_field(ctx->abm_f_n1);
+    const std::vector<double> accepted_fn2 = read_device_field(ctx->abm_f_n2);
+    const uint32_t accepted_startup = ctx->abm_startup;
+    const double accepted_last_dt = ctx->abm_last_dt;
+    op.fail_stage = 3;
+    check(fullmag_fdm_backend_step(handle, 2.0e-3, &stats) == FULLMAG_FDM_ERR_CUDA,
+          "ABM3 full-step transport failure was accepted");
+    check(read_m(handle) == accepted_m &&
+              read_device_field(ctx->abm_f_n) == accepted_fn &&
+              read_device_field(ctx->abm_f_n1) == accepted_fn1 &&
+              read_device_field(ctx->abm_f_n2) == accepted_fn2 &&
+              ctx->abm_startup == accepted_startup &&
+              ctx->abm_last_dt == accepted_last_dt,
+          "ABM3 rollback changed accepted multistep history");
+    op.fail_stage = 0;
+    check(fullmag_fdm_backend_step(handle, 1.0e-3, &stats) == FULLMAG_FDM_OK,
+          "ABM3 full-step retry failed");
+    const std::vector<double> accepted_endpoint_rhs = read_device_field(ctx->abm_f_n);
+    check(!op.target_stage_my.empty(), "ABM3 full step produced no transport stages");
+    check(accepted_endpoint_rhs[kCells + 1] == -1.0,
+          "ABM3 history contains predictor rather than corrected-endpoint derivative");
+    check_cuda(cudaFree(op.torque), "free ABM3 history torque");
+    fullmag_fdm_backend_destroy(handle);
+    active_operator = nullptr;
+}
+
 } // namespace
 
 int main() {
@@ -413,8 +518,19 @@ int main() {
     verify_single_rhs_gilbert_transform();
     verify_integrator(FULLMAG_FDM_INTEGRATOR_HEUN, 3);
     verify_integrator(FULLMAG_FDM_INTEGRATOR_RK4, 5);
+    verify_integrator(FULLMAG_FDM_INTEGRATOR_RK23, 4);
+    verify_integrator(FULLMAG_FDM_INTEGRATOR_DP45, 7);
+    verify_integrator(FULLMAG_FDM_INTEGRATOR_ABM3, 3);
     verify_late_stage_failure_rolls_back(FULLMAG_FDM_INTEGRATOR_HEUN, 3);
     verify_late_stage_failure_rolls_back(FULLMAG_FDM_INTEGRATOR_RK4, 5);
+    verify_late_stage_failure_rolls_back(FULLMAG_FDM_INTEGRATOR_RK23, 4);
+    verify_late_stage_failure_rolls_back(FULLMAG_FDM_INTEGRATOR_DP45, 7);
+    verify_late_stage_failure_rolls_back(FULLMAG_FDM_INTEGRATOR_ABM3, 3);
+    verify_adaptive_retry_gets_fresh_transport_attempt(
+        FULLMAG_FDM_INTEGRATOR_RK23);
+    verify_adaptive_retry_gets_fresh_transport_attempt(
+        FULLMAG_FDM_INTEGRATOR_DP45);
+    verify_abm3_history_survives_full_step_rollback();
     verify_no_binding_preserves_rhs();
     std::puts("PASS: GPU M1 transport LLG stage contract");
     return 0;

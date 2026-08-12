@@ -201,7 +201,8 @@ static void copy_field_d2d(DeviceVectorField &dst, const DeviceVectorField &src,
  */
 
 static bool compute_rhs_into(Context &ctx, DeviceVectorField &rhs_out,
-    int n, int grid, double gamma_bar, double alpha, double evaluation_time)
+    int n, int grid, double gamma_bar, double alpha, double evaluation_time,
+    uint64_t stage_id)
 {
     if (ctx.enable_exchange) {
         launch_exchange_field_fp64(ctx);
@@ -235,6 +236,12 @@ static bool compute_rhs_into(Context &ctx, DeviceVectorField &rhs_out,
         static_cast<double*>(rhs_out.z),
         n, gamma_bar, alpha, ctx.disable_precession ? 1 : 0,
         stt_params_from_ctx(ctx), sot_params_from_ctx(ctx));
+    if (!context_evaluate_gpu_transport_rhs(
+            ctx, ctx.m, evaluation_time,
+            ctx.gpu_transport_active_attempt_id, stage_id) ||
+        !launch_add_gpu_transport_torque_fp64(ctx, ctx.m, rhs_out)) {
+        return false;
+    }
     if (poll_interrupt(ctx)) {
         abort_step_after_interrupt(ctx);
         return false;
@@ -275,10 +282,11 @@ void launch_dp45_step_fp64(Context &ctx, double dt, fullmag_fdm_step_stats *stat
     for (;;) {
         ctx.current_dt = dt;
         // Stage 1 — FSAL: reuse k_fsal if valid
-        if (ctx.fsal_valid) {
+        if (ctx.fsal_valid && !ctx.gpu_transport_rhs.active) {
             copy_field_d2d(ctx.k1, ctx.k_fsal, ctx.cell_count, context_compute_stream(ctx));
         } else {
-            if (!compute_rhs_into(ctx, ctx.k1, n, grid, gamma_bar, alpha, step_start_time)) return;
+            if (!compute_rhs_into(ctx, ctx.k1, n, grid, gamma_bar, alpha,
+                                  step_start_time, 1)) return;
         }
         if (abort_step_from_tmp(ctx)) return;
 
@@ -289,7 +297,7 @@ void launch_dp45_step_fp64(Context &ctx, double dt, fullmag_fdm_step_stats *stat
             static_cast<double*>(ctx.m.x), static_cast<double*>(ctx.m.y), static_cast<double*>(ctx.m.z),
             n, dt, A21);
         if (!compute_rhs_into(ctx, ctx.k2, n, grid, gamma_bar, alpha,
-                              step_start_time + (1.0 / 5.0) * dt)) return;
+                              step_start_time + (1.0 / 5.0) * dt, 2)) return;
         if (abort_step_from_tmp(ctx)) return;
 
         // Stage 3: y3 = m0 + dt*(A31*k1 + A32*k2) → compute k3
@@ -300,7 +308,7 @@ void launch_dp45_step_fp64(Context &ctx, double dt, fullmag_fdm_step_stats *stat
             static_cast<double*>(ctx.m.x), static_cast<double*>(ctx.m.y), static_cast<double*>(ctx.m.z),
             n, dt, A31, A32);
         if (!compute_rhs_into(ctx, ctx.k3, n, grid, gamma_bar, alpha,
-                              step_start_time + (3.0 / 10.0) * dt)) return;
+                              step_start_time + (3.0 / 10.0) * dt, 3)) return;
         if (abort_step_from_tmp(ctx)) return;
 
         // Stage 4: y4 = m0 + dt*(A41*k1 + A42*k2 + A43*k3)
@@ -313,7 +321,7 @@ void launch_dp45_step_fp64(Context &ctx, double dt, fullmag_fdm_step_stats *stat
             static_cast<double*>(ctx.m.x), static_cast<double*>(ctx.m.y), static_cast<double*>(ctx.m.z),
             n, dt, A41, A42, A43, 0.0);
         if (!compute_rhs_into(ctx, ctx.k4, n, grid, gamma_bar, alpha,
-                              step_start_time + (4.0 / 5.0) * dt)) return;
+                              step_start_time + (4.0 / 5.0) * dt, 4)) return;
         if (abort_step_from_tmp(ctx)) return;
 
         // Stage 5: y5 = m0 + dt*(A51*k1 + A52*k2 + A53*k3 + A54*k4)
@@ -326,7 +334,7 @@ void launch_dp45_step_fp64(Context &ctx, double dt, fullmag_fdm_step_stats *stat
             static_cast<double*>(ctx.m.x), static_cast<double*>(ctx.m.y), static_cast<double*>(ctx.m.z),
             n, dt, A51, A52, A53, A54);
         if (!compute_rhs_into(ctx, ctx.k5, n, grid, gamma_bar, alpha,
-                              step_start_time + (8.0 / 9.0) * dt)) return;
+                              step_start_time + (8.0 / 9.0) * dt, 5)) return;
         if (abort_step_from_tmp(ctx)) return;
 
         // Stage 6: y6 = m0 + dt*(A61*k1 + A62*k2 + A63*k3 + A64*k4 + A65*k5)
@@ -340,7 +348,7 @@ void launch_dp45_step_fp64(Context &ctx, double dt, fullmag_fdm_step_stats *stat
             static_cast<double*>(ctx.m.x), static_cast<double*>(ctx.m.y), static_cast<double*>(ctx.m.z),
             n, dt, A61, A62, A63, A64, A65);
         if (!compute_rhs_into(ctx, ctx.k6, n, grid, gamma_bar, alpha,
-                              step_start_time + dt)) return;
+                              step_start_time + dt, 6)) return;
         if (abort_step_from_tmp(ctx)) return;
 
         // 5th-order solution: y5 = m0 + dt*(B1*k1 + B3*k3 + B4*k4 + B5*k5 + B6*k6)
@@ -356,9 +364,12 @@ void launch_dp45_step_fp64(Context &ctx, double dt, fullmag_fdm_step_stats *stat
         if (abort_step_from_tmp(ctx)) return;
 
         if (!ctx.adaptive_enabled) {
+            if (!compute_rhs_into(ctx, ctx.k_fsal, n, grid, gamma_bar, alpha,
+                                  step_start_time + dt, 7)) return;
+            if (abort_step_from_tmp(ctx)) return;
             ctx.step_count++;
             ctx.current_time += dt;
-            ctx.fsal_valid = false;
+            ctx.fsal_valid = !ctx.gpu_transport_rhs.active;
             context_refresh_observables(ctx);
             if (!fullmag_fdm_should_fill_step_stats(ctx)) {
                 fullmag_fdm_fill_step_stats_metadata(ctx, stats, dt);
@@ -371,7 +382,7 @@ void launch_dp45_step_fp64(Context &ctx, double dt, fullmag_fdm_step_stats *stat
 
         // Stage 7 (FSAL): compute k7 = RHS(y5) — this becomes k1 for next step
         if (!compute_rhs_into(ctx, ctx.k_fsal, n, grid, gamma_bar, alpha,
-                              step_start_time + dt)) return;
+                              step_start_time + dt, 7)) return;
         if (abort_step_from_tmp(ctx)) return;
 
         // Error estimate
@@ -388,6 +399,12 @@ void launch_dp45_step_fp64(Context &ctx, double dt, fullmag_fdm_step_stats *stat
             n, dt, ctx.adaptive_atol, ctx.adaptive_rtol);
 
         AdaptiveErrorPolicy policy = reduce_error_policy(ctx, ctx.cell_count, dt);
+        if (ctx.gpu_transport_test_force_adaptive_retry) {
+            ctx.gpu_transport_test_force_adaptive_retry = false;
+            policy.accepted = 0;
+            policy.dt_candidate = fmax(ctx.adaptive_dt_min, 0.5 * dt);
+            policy.dt_min_exhausted = false;
+        }
 
         if (policy.dt_min_exhausted) {
             if (fsal_valid_before_step) {
@@ -455,6 +472,11 @@ void launch_dp45_step_fp64(Context &ctx, double dt, fullmag_fdm_step_stats *stat
 
         // Restore original m
         copy_field_d2d(ctx.m, ctx.tmp, ctx.cell_count, context_compute_stream(ctx));
+        if (!context_retry_gpu_transport_step(ctx)) {
+            if (ctx.last_error.empty())
+                ctx.last_error = "failed to restart bound transport adaptive trial";
+            return;
+        }
     }
 }
 

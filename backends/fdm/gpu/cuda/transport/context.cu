@@ -169,6 +169,8 @@ struct Slot {
     std::array<uint8_t, 32> hierarchy_digest{};
     uint64_t spin_accepted_commit_count = 0;
     uint64_t spin_failed_rollback_count = 0;
+    bool test_last_retry_sparse_state_empty = false;
+    bool test_last_retry_trial_metadata_empty = false;
     bool spin_solve_active = false;
     uint64_t spin_solve_token = 0;
     uint64_t spin_hierarchy_build_count = 0;
@@ -385,6 +387,35 @@ void reset_spin_trial_metadata(Slot &slot) {
     slot.spin_trial_interface_balance = 0.0;
     slot.spin_trial_torque_balance = 0.0;
     slot.spin_trial_compute_digest.fill(0);
+}
+
+bool spin_sparse_state_empty(const SpinSparseState &state) {
+    return state.storage.owned_bytes == 0 &&
+           state.hierarchy.owned_bytes == 0 &&
+           state.hierarchy.level_count == 0 && !state.hierarchy.valid &&
+           state.workspace.owned_bytes == 0;
+}
+
+bool spin_trial_metadata_empty(const Slot &slot) {
+    const auto all_zero = [](const auto &bytes) {
+        return std::all_of(bytes.begin(), bytes.end(),
+                           [](uint8_t value) { return value == 0; });
+    };
+    return slot.spin_trial_hierarchy_build_count == 0 &&
+           slot.spin_trial_hierarchy_cache_hit_count == 0 &&
+           slot.spin_trial_amg_apply_count == 0 &&
+           slot.spin_trial_fine_unknown_count == 0 &&
+           slot.spin_trial_coarse_unknown_count == 0 &&
+           slot.spin_trial_hierarchy_levels == 0 &&
+           all_zero(slot.spin_trial_hierarchy_digest) &&
+           slot.spin_trial_iterations == 0 &&
+           slot.spin_trial_work_budget == 0 &&
+           slot.spin_trial_convergence_reason == 0 &&
+           slot.spin_trial_local_balance == 0.0 &&
+           slot.spin_trial_global_balance == 0.0 &&
+           slot.spin_trial_interface_balance == 0.0 &&
+           slot.spin_trial_torque_balance == 0.0 &&
+           all_zero(slot.spin_trial_compute_digest);
 }
 
 uint32_t accepted_charge_content_digest(
@@ -4486,9 +4517,13 @@ bool context_bind_gpu_transport_rhs(
         ctx.precision != FULLMAG_FDM_PRECISION_DOUBLE ||
         ctx.has_multilayer_plan_v2 ||
         (ctx.integrator != FULLMAG_FDM_INTEGRATOR_HEUN &&
-         ctx.integrator != FULLMAG_FDM_INTEGRATOR_RK4)) {
+         ctx.integrator != FULLMAG_FDM_INTEGRATOR_RK4 &&
+         ctx.integrator != FULLMAG_FDM_INTEGRATOR_RK23 &&
+         ctx.integrator != FULLMAG_FDM_INTEGRATOR_DP45 &&
+         ctx.integrator != FULLMAG_FDM_INTEGRATOR_ABM3)) {
         ctx.last_error =
-            "GPU transport LLG binding requires single-grid FP64 Heun or RK4";
+            "GPU transport LLG binding requires a supported single-grid FP64 "
+            "explicit integrator";
         return false;
     }
 
@@ -4590,6 +4625,67 @@ bool context_begin_gpu_transport_step(Context &ctx, uint64_t attempt_id) {
     parent.llg_step_has_stage_time = false;
     parent.llg_step_last_stage_time = 0.0;
     return true;
+}
+
+bool context_retry_gpu_transport_step(Context &ctx) {
+    if (!ctx.gpu_transport_rhs.active) return true;
+    if (ctx.gpu_transport_attempt_generation == UINT64_MAX) {
+        ctx.last_error = "bound spin-transport attempt identity exhausted";
+        return false;
+    }
+    // Unit-level controlled evaluators have no registry owner, but still use
+    // the same monotonic attempt identity contract as public bindings.
+    if (ctx.gpu_transport_owner_id == 0) {
+        ctx.gpu_transport_active_attempt_id =
+            ++ctx.gpu_transport_attempt_generation;
+        return true;
+    }
+    std::lock_guard<std::mutex> lock(registry_mutex);
+    const auto binding = ctx.gpu_transport_rhs.descriptor;
+    if (binding.transport_context.slot >= slots.size() ||
+        binding.charge_snapshot.slot >= slots.size()) return false;
+    Slot &parent = slots[binding.transport_context.slot];
+    Slot &snapshot = slots[binding.charge_snapshot.slot];
+    if (!same(binding.transport_context, binding.transport_context.slot,
+              parent.generation) || !parent.active ||
+        parent.llg_binding_owner_id != ctx.gpu_transport_owner_id ||
+        !parent.llg_step_transaction_active || parent.llg_torque_in_flight ||
+        parent.spin_solve_active || !snapshot.active ||
+        snapshot.generation != binding.charge_snapshot.generation) {
+        return false;
+    }
+    release_spin_buffers(snapshot.spin_trial);
+    release_spin_sparse_state(parent.spin_sparse_state);
+    ++parent.spin_failed_rollback_count;
+    reset_spin_trial_metadata(parent);
+    parent.test_last_retry_sparse_state_empty =
+        spin_sparse_state_empty(parent.spin_sparse_state);
+    parent.test_last_retry_trial_metadata_empty =
+        spin_trial_metadata_empty(parent);
+    const uint64_t attempt_id = ++ctx.gpu_transport_attempt_generation;
+    ctx.gpu_transport_active_attempt_id = attempt_id;
+    parent.llg_step_attempt_id = attempt_id;
+    parent.llg_step_has_stage_time = false;
+    parent.llg_step_last_stage_time = 0.0;
+    return true;
+}
+
+extern "C" uint32_t fullmag_fdm_gpu_transport_test_retry_reset_audit_v1(
+    fullmag_fdm_gpu_transport_context_handle_v1 context,
+    uint64_t *sparse_release_count, uint64_t *trial_reset_count)
+{
+    if (sparse_release_count == nullptr || trial_reset_count == nullptr)
+        return FULLMAG_FDM_GPU_TRANSPORT_ERROR_INVALID_DESCRIPTOR;
+    std::lock_guard<std::mutex> lock(registry_mutex);
+    if (context.registry_cookie != kCookie || context.type_tag != kContextTag ||
+        context.slot >= slots.size())
+        return FULLMAG_FDM_GPU_TRANSPORT_ERROR_INVALID_STATE;
+    const Slot &slot = slots[context.slot];
+    if (!same(context, context.slot, slot.generation) || !slot.active)
+        return FULLMAG_FDM_GPU_TRANSPORT_ERROR_INVALID_STATE;
+    *sparse_release_count = slot.test_last_retry_sparse_state_empty ? 1 : 0;
+    *trial_reset_count = slot.test_last_retry_trial_metadata_empty ? 1 : 0;
+    return FULLMAG_FDM_GPU_TRANSPORT_ERROR_OK;
 }
 
 bool context_commit_gpu_transport_step(Context &ctx) {

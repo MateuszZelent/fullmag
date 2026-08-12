@@ -1478,6 +1478,8 @@ bool context_capture_gpu_transport_pre_step_m(Context &ctx) {
         return false;
     }
     ctx.gpu_transport_pre_step_m_valid = true;
+    ctx.gpu_transport_pre_step_abm_startup = ctx.abm_startup;
+    ctx.gpu_transport_pre_step_abm_last_dt = ctx.abm_last_dt;
     return true;
 }
 
@@ -1512,6 +1514,12 @@ bool context_restore_gpu_transport_pre_step_m(Context &ctx) {
         return false;
     }
     ctx.gpu_transport_pre_step_m_valid = false;
+    // A bound attempt may overwrite k_fsal with a transport-dependent
+    // derivative.  Conservatively invalidate it so a later unbound step can
+    // never reuse rejected transport state.
+    ctx.fsal_valid = false;
+    ctx.abm_startup = ctx.gpu_transport_pre_step_abm_startup;
+    ctx.abm_last_dt = ctx.gpu_transport_pre_step_abm_last_dt;
     return true;
 }
 

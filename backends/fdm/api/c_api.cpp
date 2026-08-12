@@ -1221,6 +1221,17 @@ int fullmag_fdm_context_bind_gpu_transport_v1(
 #endif
 }
 
+extern "C" int fullmag_fdm_test_force_gpu_transport_adaptive_retry(
+    fullmag_fdm_backend *handle)
+{
+    if (handle == nullptr) return FULLMAG_FDM_ERR_INVALID;
+    auto *ctx = reinterpret_cast<Context *>(handle);
+    if (!ctx->gpu_transport_rhs.active || !ctx->adaptive_enabled)
+        return FULLMAG_FDM_ERR_INVALID;
+    ctx->gpu_transport_test_force_adaptive_retry = true;
+    return FULLMAG_FDM_OK;
+}
+
 int fullmag_fdm_context_unbind_gpu_transport_v1(fullmag_fdm_backend *handle) {
 #if FULLMAG_HAS_CUDA
     if (handle == nullptr) return FULLMAG_FDM_ERR_INVALID;

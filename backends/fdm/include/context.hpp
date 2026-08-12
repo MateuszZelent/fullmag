@@ -281,6 +281,7 @@ struct Context {
     // Test-only completion boundary selected by the bound transport owner.
     // Zero is the production path.
     uint32_t gpu_transport_test_completion_fault = 0;
+    bool gpu_transport_test_force_adaptive_retry = false;
 
     // Device state (SoA layout)
     DeviceVectorField m;      // magnetization
@@ -293,6 +294,8 @@ struct Context {
     // step.  Integrators may freely reuse tmp without weakening rollback.
     DeviceVectorField gpu_transport_pre_step_m;
     bool gpu_transport_pre_step_m_valid = false;
+    uint32_t gpu_transport_pre_step_abm_startup = 0;
+    double gpu_transport_pre_step_abm_last_dt = 0.0;
     DeviceVectorField work;   // effective field / scratch
 
     // --- DP45-specific stage buffers ---
@@ -455,6 +458,7 @@ bool context_evaluate_gpu_transport_rhs(
     uint64_t stage_id);
 bool context_complete_gpu_transport_rhs(Context &ctx);
 bool context_begin_gpu_transport_step(Context &ctx, uint64_t attempt_id);
+bool context_retry_gpu_transport_step(Context &ctx);
 bool context_commit_gpu_transport_step(Context &ctx);
 bool context_rollback_gpu_transport_step(Context &ctx);
 bool launch_add_gpu_transport_torque_fp64(

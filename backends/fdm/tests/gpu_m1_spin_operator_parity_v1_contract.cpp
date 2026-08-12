@@ -40,6 +40,10 @@ extern "C" uint32_t fullmag_fdm_gpu_transport_test_release_llg_hold_v1(
 extern "C" uint32_t fullmag_fdm_gpu_transport_test_retry_llg_drain_v1(
     fullmag_fdm_gpu_transport_context_handle_v1);
 extern "C" uint32_t fullmag_fdm_gpu_transport_test_spin_solve_barrier_v1(uint32_t);
+extern "C" int fullmag_fdm_test_force_gpu_transport_adaptive_retry(
+    fullmag_fdm_backend *);
+extern "C" uint32_t fullmag_fdm_gpu_transport_test_retry_reset_audit_v1(
+    fullmag_fdm_gpu_transport_context_handle_v1, uint64_t *, uint64_t *);
 
 namespace {
 
@@ -1091,7 +1095,51 @@ GpuResult solve_gpu(const Scenario &scenario) {
                 scenario.name + ": Heun owner could not release claim");
         fullmag_fdm_backend_destroy(llg);
 
+        llg_plan.integrator = FULLMAG_FDM_INTEGRATOR_RK23;
+        llg_plan.adaptive_max_error = 1.0e-8;
+        fullmag_fdm_backend *rk23_llg = fullmag_fdm_backend_create(&llg_plan);
+        require(rk23_llg != nullptr &&
+                    fullmag_fdm_backend_last_error(rk23_llg) == nullptr,
+                scenario.name + ": bound RK23 LLG context create failed");
+        require(fullmag_fdm_context_bind_gpu_transport_v1(rk23_llg, &binding) ==
+                    FULLMAG_FDM_OK,
+                scenario.name + ": public RK23 transport binding failed");
+        const SpinAudit adaptive_before = spin_audit(created.context_handle);
+        uint64_t sparse_releases_before = 0, trial_resets_before = 0;
+        require(fullmag_fdm_gpu_transport_test_retry_reset_audit_v1(
+                    created.context_handle, &sparse_releases_before,
+                    &trial_resets_before) ==
+                    FULLMAG_FDM_GPU_TRANSPORT_ERROR_OK,
+                scenario.name + ": retry reset audit readback failed");
+        require(fullmag_fdm_test_force_gpu_transport_adaptive_retry(rk23_llg) ==
+                    FULLMAG_FDM_OK,
+                scenario.name + ": force adaptive retry setup failed");
+        require(fullmag_fdm_backend_step(rk23_llg, 1.0e-18, &llg_stats) ==
+                    FULLMAG_FDM_OK,
+                scenario.name + ": public RK23 retry step failed");
+        const SpinAudit adaptive_after = spin_audit(created.context_handle);
+        uint64_t sparse_releases_after = 0, trial_resets_after = 0;
+        require(fullmag_fdm_gpu_transport_test_retry_reset_audit_v1(
+                    created.context_handle, &sparse_releases_after,
+                    &trial_resets_after) ==
+                    FULLMAG_FDM_GPU_TRANSPORT_ERROR_OK,
+                scenario.name + ": post-retry reset audit readback failed");
+        require(adaptive_after.failed_rollbacks ==
+                    adaptive_before.failed_rollbacks + 1 &&
+                    adaptive_after.accepted_commits ==
+                    adaptive_before.accepted_commits + 1,
+                scenario.name +
+                    ": adaptive retry did not discard exactly one public trial");
+        require(sparse_releases_after == 1 && trial_resets_after == 1,
+                scenario.name +
+                    ": adaptive retry did not release sparse state and reset trial metadata");
+        require(fullmag_fdm_context_unbind_gpu_transport_v1(rk23_llg) ==
+                    FULLMAG_FDM_OK,
+                scenario.name + ": RK23 owner could not release claim");
+        fullmag_fdm_backend_destroy(rk23_llg);
+
         llg_plan.integrator = FULLMAG_FDM_INTEGRATOR_RK4;
+        llg_plan.adaptive_max_error = 0.0;
         fullmag_fdm_backend *rk4_llg = fullmag_fdm_backend_create(&llg_plan);
         require(rk4_llg != nullptr &&
                     fullmag_fdm_backend_last_error(rk4_llg) == nullptr,

@@ -1012,7 +1012,15 @@ Ogólny agregat pozostaje `semantic_only`, ponieważ poza bounded
 Agregat FDM GPU M1 ma `implementation_state=partial`: oprócz ograniczonego
 charge-only FP64 slice istnieje natywny solver steady spin/direct-SHE,
 mixing i torque oraz niekwalifikowane etapowe sprzężenie torque z FP64
-Heun/RK4. Wyłączny claim wiąże jeden kontekst LLG z jednym accepted charge
+Heun/RK4. Implementacja Task 6 obejmuje także etapowe oceny RK23 i DP45,
+łącznie z końcowym solve dla zaakceptowanego `m` oraz transakcyjnym resetem
+trial, sparse cache, czasu etapów i monotonicznej tożsamości przy wewnętrznym
+adaptive retry. Task 6 obejmuje ponadto trzy transportowe oceny podczas
+warmupu ABM3, dwie oceny pełnego kroku predictor-corrector i zapis pochodnej
+dla skorygowanego zaakceptowanego końca zamiast pochodnej predyktora. Te
+integratory pozostają poza claimem do zamknięcia restartu FSAL/historii ABM i
+checkpointu. Wyłączny claim wiąże jeden
+kontekst LLG z jednym accepted charge
 snapshotem. Rozwiązania spinowe etapów są stanem trial; dopiero przyjęcie
 całego kroku LLG promuje trial policzony dla końcowego zaakceptowanego `m` do
 `spin_accepted`; wybór poziomu statystyk nie uruchamia dodatkowego solve i nie
@@ -1027,7 +1035,8 @@ obsługiwane. Stan
 walidacji pozostaje `validation_state=unvalidated`, z
 `validated_workloads=[]`. Managed lifecycle gate po zmianach
 final-state/statistics/rollback i stream-local pin/drain przechodzi testy
-Heun/RK4, błędy launch/event-record/event-sync, teardown rejection podczas
+Heun/RK4 oraz wstępny kontrakt etapów i późnego rollbacku RK23/DP45, błędy
+launch/event-record/event-sync, teardown rejection podczas
 in-flight, C11/Rust ABI oraz dwa przebiegi `compute-sanitizer` bez błędów. Jest
 to dowód testów kontraktowych, a nie promocja capability ani kwalifikacja
 produkcyjna; globalna serializacja registry i pełna ścieżka publicznego
@@ -2271,7 +2280,9 @@ a qualified workload without the validation gates above.
 | Native FDM GPU M1 spin solver | backends/fdm/gpu/cuda/transport/spin/device_solver.cu | solve_device | FP64 steady spin/direct-SHE, dynamic mixing and target-masked transport torque on the context-owned stream | managed GPU CPU-parity contract; partial and unvalidated |
 | Native FDM GPU M1 LLG binding ABI | native/include/fullmag_fdm.h | fullmag_fdm_context_bind_gpu_transport_v1 | append-only 144-byte binding record and public bind/unbind entry points | C11/C++/Rust layout and actual-device ownership contract |
 | Native FDM GPU M1 LLG binding | backends/fdm/gpu/cuda/transport/context.cu | context_bind_gpu_transport_rhs; context_begin_gpu_transport_step; context_commit_gpu_transport_step; context_rollback_gpu_transport_step | exclusive one-owner binding, stage trial state and accepted-step promotion/rollback | `just verify-fdm-gpu-m1-transport-llg-lifecycle-contract`; not production qualification |
-| Native FDM GPU M1 torque RHS | backends/fdm/gpu/cuda/integrators/transport_rhs_fp64.cu | launch_add_gpu_transport_torque_fp64 | add Gilbert-form transport torque exactly once and pin transport storage through kernel completion | managed Heun/RK4 stage contract and compute-sanitizer |
+| Native FDM GPU M1 torque RHS | backends/fdm/gpu/cuda/integrators/transport_rhs_fp64.cu | launch_add_gpu_transport_torque_fp64 | add Gilbert-form transport torque exactly once and pin transport storage through kernel completion | managed Heun/RK4 stage contract and compute-sanitizer; RK23/DP45 Task 6 integration remains under qualification |
+| Native FDM GPU M1 adaptive RK stages | backends/fdm/gpu/cuda/integrators/llg_rk23_fp64.cu; backends/fdm/gpu/cuda/integrators/llg_dp45_fp64.cu | compute_rhs_into | evaluate solved transport for every current-attempt RK stage and for the accepted endpoint without cross-attempt FSAL reuse | stage, late-failure rollback and fresh-attempt adaptive-retry contract; restart gate still open |
+| Native FDM GPU M1 ABM3 stages | backends/fdm/gpu/cuda/integrators/llg_abm3_fp64.cu | launch_abm3_step_fp64 | evaluate solved transport in warmup and predictor-corrector stages, publish only the corrected-endpoint derivative into accepted ABM history, and preserve history on pre-commit failure | warmup, full-step and late-failure history contract; checkpoint/restart gate still open |
 | Rust M1 parity oracle | crates/fullmag-engine/examples/fdm_spin_oracle_v1.rs | main | nonzero mixing charge/spin fixture and public interface observations | managed Rust/native parity |
 | Native M1 parity comparator | backends/fdm/tests/cpu_spin_transport_parity.cpp | main | solved-field, reaction, torque, balance, and public interface-flux comparison | managed Rust/native parity |
 | Planner regression | crates/fullmag-plan/src/spin_transport.rs | resolves_bounded_fem_m2_to_reciprocal_descriptor_without_fallback | no-fallback M2 planning invariant | focused managed test |
