@@ -17,6 +17,14 @@ using fullmag::fdm::DeviceVectorField;
 
 static_assert(std::is_standard_layout_v<fullmag_fdm_gpu_transport_llg_binding_v1>);
 static_assert(std::is_standard_layout_v<fullmag_fdm_llg_checkpoint_info_v1>);
+static_assert(sizeof(fullmag_fdm_llg_checkpoint_info_v1) == 96);
+static_assert(offsetof(fullmag_fdm_llg_checkpoint_info_v1, cell_count) == 16);
+static_assert(offsetof(fullmag_fdm_llg_checkpoint_info_v1, current_time) == 40);
+static_assert(offsetof(fullmag_fdm_llg_checkpoint_info_v1,
+                       transport_attempt_generation) == 56);
+static_assert(offsetof(fullmag_fdm_llg_checkpoint_info_v1, abm_last_dt) == 72);
+static_assert(offsetof(fullmag_fdm_llg_checkpoint_info_v1,
+                       adaptive_previous_error) == 88);
 static_assert(sizeof(fullmag_fdm_gpu_transport_llg_binding_v1) == 144);
 static_assert(offsetof(fullmag_fdm_gpu_transport_llg_binding_v1, transport_context) == 32);
 static_assert(offsetof(fullmag_fdm_gpu_transport_llg_binding_v1, charge_snapshot) == 64);
