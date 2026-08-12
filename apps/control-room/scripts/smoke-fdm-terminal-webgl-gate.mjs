@@ -48,6 +48,27 @@ async function main() {
     }
   }, apiPhaseTimeoutMs);
   const { final_step: finalStep, final_time: finalTime, run, sessionStatus } = terminalRun;
+  const scene = await getJson("/v2/sessions/current/model/scene");
+  const sceneObject = Array.isArray(scene?.objects)
+    ? scene.objects.find((candidate) => candidate?.id === objectId)
+    : null;
+  if (!sceneObject?.id) {
+    throw new Error(`Terminal FDM smoke object ${objectId} is absent from model/scene.`);
+  }
+  const explorerTargets = {
+    airbox: {
+      nodeId: "model:airbox:visualization",
+      parentNodeIds: ["model:airbox"],
+      inspectorOwner: "airbox.visualization",
+      targetId: "fdm-universe-outside-support",
+    },
+    object: {
+      nodeId: `model:object:${sceneObject.id}:visualization`,
+      parentNodeIds: ["model:objects", `model:object:${sceneObject.id}`],
+      inspectorOwner: "object.visualization",
+      targetId: `object:${sceneObject.id}`,
+    },
+  };
   setPhase("terminal-field-catalog");
   const scopes = { airbox: { scopeId: "airbox", scopeKind: "airbox" }, object: { scopeId: objectId, scopeKind: "object" } };
   const fieldEntries = [
@@ -94,15 +115,15 @@ async function main() {
     if (!canvasHealth.visible || canvasHealth.is_context_lost || canvasHealth.drawing_buffer.some((value) => value <= 0)) throw new Error(`WebGL canvas unhealthy: ${JSON.stringify(canvasHealth)}`);
     const switches = [];
     setPhase("object-quantity-switches");
-    switches.push(await switchInspectorQuantity({ page, quantityId: "H_demag", requests, scope: "object", scopes }));
+    switches.push(await switchInspectorQuantity({ page, explorerTargets, quantityId: "H_demag", requests, scope: "object", scopes }));
     switches.push(await switchRibbonQuantity({ page, quantityId: "H_eff", requests, scope: "object", scopes }));
-    switches.push(await switchInspectorQuantity({ page, quantityId: "H_ext", requests, scope: "object", scopes }));
-    switches.push(await switchInspectorQuantity({ page, quantityId: "eden_demag", requests, scope: "object", scopes }));
+    switches.push(await switchInspectorQuantity({ page, explorerTargets, quantityId: "H_ext", requests, scope: "object", scopes }));
+    switches.push(await switchInspectorQuantity({ page, explorerTargets, quantityId: "eden_demag", requests, scope: "object", scopes }));
     setPhase("airbox-quantity-gate");
-    const airboxMagnetization = await assertAirboxMagnetizationUnavailable({ page, scopes });
+    const airboxMagnetization = await assertAirboxMagnetizationUnavailable({ page, explorerTargets, scopes });
     setPhase("airbox-field-switches");
     for (const [scope, quantityId] of [["airbox", "H_demag"], ["airbox", "H_eff"]]) {
-      switches.push(await switchInspectorQuantity({ page, quantityId, requests, scope, scopes }));
+      switches.push(await switchInspectorQuantity({ page, explorerTargets, quantityId, requests, scope, scopes }));
     }
     setPhase("screenshot");
     const screenshotPath = `${artifactDir}/fdm-terminal-webgl.png`;
@@ -166,13 +187,15 @@ async function switchRibbonQuantity({ page, quantityId, requests, scope, scopes 
   return { quantity_id: quantityId, request, scope, surface: "ribbon" };
 }
 
-async function switchInspectorQuantity({ page, quantityId, requests, scope, scopes }) {
+async function switchInspectorQuantity({ page, explorerTargets, quantityId, requests, scope, scopes }) {
   await patchJson("/v2/sessions/current/visualization/state", {
     domains: { active_scope_id: scopes[scope].scopeId, active_scope_kind: scopes[scope].scopeKind },
   });
-  const target = page.getByText(scope === "airbox" ? "Airbox" : objectId, { exact: true }).first();
-  await target.click({ timeout: timeoutMs });
-  const quantity = page.locator('select[aria-label="Quantity Source"]').first();
+  const inspector = await selectExplorerVisualizationTarget(page, explorerTargets[scope]);
+  const quantity = inspector.locator('select[aria-label="Quantity Source"]');
+  if (await quantity.count() !== 1) {
+    throw new Error(`Selected ${scope} visualization inspector must expose exactly one Quantity Source select; found ${await quantity.count()}.`);
+  }
   await quantity.waitFor({ state: "visible", timeout: timeoutMs });
   const before = requests.length;
   await quantity.selectOption(quantityId);
@@ -185,16 +208,67 @@ async function switchInspectorQuantity({ page, quantityId, requests, scope, scop
   return { scope, quantity_id: quantityId, request, request_count_delta: requests.length - before, surface: "inspector" };
 }
 
-async function assertAirboxMagnetizationUnavailable({ page, scopes }) {
+async function assertAirboxMagnetizationUnavailable({ page, explorerTargets, scopes }) {
   await patchJson("/v2/sessions/current/visualization/state", {
     domains: { active_scope_id: scopes.airbox.scopeId, active_scope_kind: scopes.airbox.scopeKind },
   });
-  await page.getByText("Airbox", { exact: true }).first().click({ timeout: timeoutMs });
-  const option = page.locator('select[aria-label="Quantity Source"] option[value="m"]').first();
+  const inspector = await selectExplorerVisualizationTarget(page, explorerTargets.airbox);
+  const option = inspector.locator('select[aria-label="Quantity Source"] option[value="m"]');
   const count = await option.count();
   const disabled = count === 0 ? null : await option.isDisabled();
   if (count > 0 && !disabled) throw new Error("Airbox exposes magnetic-only m as an enabled quantity.");
   return { option_count: count, disabled };
+}
+
+function explorerTreeItem(page, nodeId) {
+  return page.locator(`[role="treeitem"][data-node-id=${JSON.stringify(nodeId)}]`);
+}
+
+async function selectExplorerVisualizationTarget(page, target) {
+  const modelTab = page.getByRole("tab", { name: "Model", exact: true });
+  await modelTab.waitFor({ state: "visible", timeout: timeoutMs });
+  if (await modelTab.getAttribute("aria-selected") !== "true") {
+    await modelTab.click({ timeout: timeoutMs });
+  }
+  for (const parentNodeId of target.parentNodeIds) {
+    const parent = explorerTreeItem(page, parentNodeId);
+    await parent.waitFor({ state: "visible", timeout: timeoutMs });
+    if (await parent.getAttribute("aria-expanded") === "false") {
+      await parent.focus();
+      await page.keyboard.press("ArrowRight");
+    }
+  }
+  const row = explorerTreeItem(page, target.nodeId);
+  await row.waitFor({ state: "visible", timeout: timeoutMs });
+  await row.click({ timeout: timeoutMs });
+  await poll(`Explorer selection ${target.nodeId}`, async () =>
+    await row.getAttribute("aria-selected") === "true" ? true : null,
+  );
+  const inspector = page.locator(`.fm-inspector-panel[data-inspector-owner="${target.inspectorOwner}"]`);
+  await inspector.waitFor({ state: "visible", timeout: timeoutMs });
+  const targetGroup = inspector.locator('[data-slot="inspector-group"]', {
+    has: inspector.getByRole("heading", { name: "Target", exact: true }),
+  });
+  if (await targetGroup.count() !== 1) {
+    throw new Error(`Selected ${target.inspectorOwner} inspector must expose exactly one Target group; found ${await targetGroup.count()}.`);
+  }
+  const trigger = targetGroup.locator('[data-slot="inspector-group-trigger"]');
+  if (await trigger.count() !== 1) {
+    throw new Error(`Selected ${target.inspectorOwner} Target group must expose exactly one disclosure trigger; found ${await trigger.count()}.`);
+  }
+  if (await trigger.getAttribute("aria-expanded") === "false") {
+    await trigger.click({ timeout: timeoutMs });
+  }
+  const targetId = await targetGroup.locator(".fm-inspector-field-row").evaluateAll((rows) => {
+    const row = rows.find((candidate) =>
+      candidate.querySelector(".fm-inspector-field-row__label")?.textContent?.trim() === "Target ID",
+    );
+    return row?.querySelector(".fm-inspector-field-row__value")?.textContent?.trim() ?? null;
+  });
+  if (targetId !== target.targetId) {
+    throw new Error(`Explorer ${target.nodeId} opened ${target.inspectorOwner} with Target ID ${targetId ?? "none"}; expected ${target.targetId}.`);
+  }
+  return inspector;
 }
 
 async function waitForScopedFieldRequest({ requests, quantityId, scope, start = 0 }) {

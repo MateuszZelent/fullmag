@@ -225,7 +225,7 @@ test("terminal telemetry requires final step/time, a positive dt, and nonzero av
   );
 });
 
-test("browser smoke forbids manual compute_fields and records screenshots", () => {
+test("browser smoke selects canonical Explorer visualization rows before using inspector quantities", () => {
   assert.doesNotMatch(smokeSource, /kind\s*:\s*["']compute_fields["']/);
   assert.match(smokeSource, /screenshot\(/);
   assert.match(smokeSource, /assertCompletedTerminalFieldContract/);
@@ -234,4 +234,12 @@ test("browser smoke forbids manual compute_fields and records screenshots", () =
   assert.match(smokeSource, /switchInspectorQuantity/);
   assert.match(smokeSource, /assertAirboxMagnetizationUnavailable/);
   assert.match(smokeSource, /assertCompletedTerminalTelemetry/);
+  assert.match(smokeSource, /\/v2\/sessions\/current\/model\/scene/);
+  assert.match(smokeSource, /model:object:\$\{sceneObject\.id\}:visualization/);
+  assert.match(smokeSource, /model:airbox:visualization/);
+  assert.match(smokeSource, /\[role="treeitem"\]\[data-node-id=/);
+  assert.match(smokeSource, /aria-selected/);
+  assert.match(smokeSource, /data-inspector-owner/);
+  assert.match(smokeSource, /getByRole\("heading", \{ name: "Target", exact: true \}\)/);
+  assert.doesNotMatch(smokeSource, /getByText\(scope === "airbox" \? "Airbox" : objectId, \{ exact: true \}\)\.first\(\)/);
 });
