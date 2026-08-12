@@ -3384,43 +3384,13 @@ pub fn run_problem_with_interactive_fdm_runtime_live_preview_interruptible(
         });
     }
 
-    let final_stats = executed.result.steps.last().cloned().unwrap_or(StepStats {
-        step: 0,
-        time: 0.0,
-        dt: 0.0,
-        e_ex: 0.0,
-        e_demag: 0.0,
-        e_ext: 0.0,
-        e_ani: 0.0,
-        e_total: 0.0,
-        max_dm_dt: 0.0,
-        max_h_eff: 0.0,
-        max_h_demag: 0.0,
-        wall_time_ns: 0,
-        ..StepStats::default()
-    });
-    let final_m: Vec<f64> = executed
-        .result
-        .final_magnetization
-        .iter()
-        .flat_map(|vector| vector.iter().copied())
-        .collect();
-    on_step(StepUpdate {
-        coupled_checkpoint: None,
-        stats: final_stats,
-        grid: fdm.grid.cells,
-        fem_mesh_generation_id: None,
-        magnetization: Some(final_m),
-        preview_field: None,
-        cached_preview_fields: None,
-        hysteresis_field_m_t: None,
-        hysteresis_point_index: None,
-        hysteresis_settle_step_index: None,
-        hysteresis_settle_step_kind: None,
-        hysteresis_settle_step_method: None,
-        scalar_row_due: true,
-        finished: true,
-    });
+    let terminal_update = interactive::runtime::build_atomic_terminal_update(
+        runtime,
+        &plan,
+        display_selection().revision,
+        &executed,
+    )?;
+    on_step(terminal_update);
 
     Ok(executed.result)
 }

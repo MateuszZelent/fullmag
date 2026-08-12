@@ -260,10 +260,15 @@ mod tests {
         reset_direct_field_assembly_calls, reset_observe_state_calls,
     };
     use crate::interactive::display::{DisplayKind, DisplaySelectionState};
-    use crate::types::{LivePreviewRequest, StateObservables, StepAction};
+    use crate::interactive::runtime::build_atomic_terminal_update;
+    use crate::types::{
+        ExecutedRun, ExecutionProvenance, LivePreviewRequest, RunResult, StateObservables,
+        StepAction, StepStats,
+    };
     use fullmag_ir::{
-        ExchangeBoundaryCondition, ExecutionPrecision, FdmMaterialIR, FdmPlanIR, GridDimensions,
-        IntegratorChoice, RelaxationAlgorithmIR, RelaxationControlIR,
+        BackendPlanIR, ExchangeBoundaryCondition, ExecutionPrecision, FdmMaterialIR, FdmPlanIR,
+        GridDimensions, IntegratorChoice, ProblemIR, RelaxationAlgorithmIR, RelaxationControlIR,
+        ResolvedAntennaZeemanMaskIR, TimeDependenceIR,
     };
     use std::collections::HashMap;
 
@@ -788,7 +793,20 @@ mod tests {
 
     #[test]
     fn completed_cpu_interactive_runtime_materializes_final_active_fields() {
-        let plan = make_soa_fdm_plan();
+        let mut plan = make_soa_fdm_plan();
+        plan.active_mask = Some(vec![true, true, true, true, false, false, false, false]);
+        plan.external_field = Some([10.0, 20.0, 30.0]);
+        plan.antenna_zeeman_masks = vec![ResolvedAntennaZeemanMaskIR {
+            source: "antenna".to_string(),
+            object: "free".to_string(),
+            amplitude_b_t: 1e-3,
+            direction: [0.0, 1.0, 0.0],
+            spatial_profile: None,
+            waveform: Some(TimeDependenceIR::PiecewiseLinear {
+                points: vec![[0.0, 0.25], [2e-14, 1.0]],
+            }),
+            field_xyz: vec![[0.0, 250.0, -125.0]; plan.initial_magnetization.len()],
+        }];
         let mut runtime =
             InteractiveFdmPreviewRuntime::from_fdm_plan(&plan, FdmEngine::CpuReference, None)
                 .expect("CPU interactive runtime should build");
@@ -818,7 +836,7 @@ mod tests {
             .expect("CPU interactive runtime should execute");
 
         assert_eq!(result.result.status, crate::RunStatus::Completed);
-        let terminal_field_batches = updates
+        let backend_terminal_field_batches = updates
             .iter()
             .filter_map(|update| {
                 update
@@ -827,12 +845,45 @@ mod tests {
                     .filter(|fields| fields.iter().any(|field| field.quantity == "eden_total"))
             })
             .collect::<Vec<_>>();
-        assert_eq!(
-            terminal_field_batches.len(),
-            1,
-            "completed runtime should publish exactly one terminal materialized field batch"
+        assert!(
+            backend_terminal_field_batches.is_empty(),
+            "backend must defer terminal fields to the atomic runtime finalizer"
         );
-        let final_fields = terminal_field_batches[0];
+        let final_stats = result
+            .result
+            .steps
+            .last()
+            .expect("completed runtime should report final step stats");
+        assert!((final_stats.time - 2e-14).abs() <= 1e-28);
+        let mut execution_plan =
+            fullmag_plan::plan(&ProblemIR::bootstrap_example()).expect("bootstrap execution plan");
+        execution_plan.backend_plan = BackendPlanIR::Fdm(plan.clone());
+        let terminal_update =
+            build_atomic_terminal_update(&mut runtime, &execution_plan, 17, &result)
+                .expect("completed runtime should build atomic terminal update");
+        assert!(terminal_update.finished);
+        assert_eq!(
+            updates.iter().filter(|update| update.finished).count()
+                + usize::from(terminal_update.finished),
+            1,
+            "the full runtime path must expose exactly one terminal update"
+        );
+        assert_eq!(terminal_update.stats.step, final_stats.step);
+        assert_eq!(terminal_update.stats.time, final_stats.time);
+        let expected_final_m = result
+            .result
+            .final_magnetization
+            .iter()
+            .flat_map(|value| value.iter().copied())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            terminal_update.magnetization.as_deref(),
+            Some(expected_final_m.as_slice())
+        );
+        let final_fields = terminal_update
+            .cached_preview_fields
+            .as_ref()
+            .expect("atomic terminal update should carry final fields");
         let active = crate::quantities::field_materialization_quantity_ids();
         let expected = crate::quantities::active_fdm_preview_quantities(
             FdmEngine::CpuReference,
@@ -846,6 +897,11 @@ mod tests {
                 .collect::<Vec<_>>(),
             expected
         );
+        assert!(final_fields.iter().all(|field| {
+            field.source_step == final_stats.step
+                && field.source_revision == final_stats.step
+                && field.materialized_at_unix_ms > 0
+        }));
         let final_m = final_fields
             .iter()
             .find(|field| field.quantity == "m")
@@ -866,17 +922,44 @@ mod tests {
                 .unwrap_or_else(|| panic!("terminal materialization should include {quantity}"))
                 .vector_field_values
         };
+        for antenna in field_values("H_ant").chunks_exact(3) {
+            assert!((antenna[0] - 0.0).abs() <= 1e-12);
+            assert!((antenna[1] - 250.0).abs() <= 1e-9);
+            assert!((antenna[2] + 125.0).abs() <= 1e-9);
+        }
         let active_field_components = final_fields
             .iter()
             .filter(|field| field.quantity.starts_with("H_") && field.quantity != "H_eff")
             .map(|field| field.vector_field_values.as_slice())
             .collect::<Vec<_>>();
-        for (index, effective) in field_values("H_eff").iter().enumerate() {
-            let expected = active_field_components
-                .iter()
-                .map(|field| field[index])
-                .sum::<f64>();
-            assert!((effective - expected).abs() <= 1e-9);
+        let active_mask = plan.active_mask.as_deref().expect("Airbox fixture mask");
+        let h_eff = field_values("H_eff");
+        let h_demag = field_values("H_demag");
+        let h_ext = field_values("H_ext");
+        let h_ant = field_values("H_ant");
+        assert!(active_mask.iter().enumerate().any(|(cell, active)| {
+            !active
+                && h_demag[cell * 3..cell * 3 + 3]
+                    .iter()
+                    .any(|value| value.abs() > 1e-12)
+        }));
+        for (cell, active) in active_mask.iter().copied().enumerate() {
+            for component in 0..3 {
+                let index = cell * 3 + component;
+                let expected = if active {
+                    active_field_components
+                        .iter()
+                        .map(|field| field[index])
+                        .sum::<f64>()
+                } else {
+                    h_demag[index] + h_ext[index] + h_ant[index]
+                };
+                assert!(
+                    (h_eff[index] - expected).abs() <= 1e-9,
+                    "H_eff mismatch at cell {cell}, component {component}: effective={} expected={expected}",
+                    h_eff[index]
+                );
+            }
         }
     }
 
@@ -891,7 +974,112 @@ mod tests {
             crate::RunStatus::Paused,
         ] {
             assert!(!should_materialize_terminal_fdm_fields(status));
+
+            let plan = make_soa_fdm_plan();
+            let mut execution_plan = fullmag_plan::plan(&ProblemIR::bootstrap_example())
+                .expect("bootstrap execution plan");
+            execution_plan.backend_plan = BackendPlanIR::Fdm(plan.clone());
+            let mut runtime =
+                InteractiveFdmPreviewRuntime::from_fdm_plan(&plan, FdmEngine::CpuReference, None)
+                    .expect("CPU interactive runtime should build");
+            let executed = ExecutedRun {
+                result: RunResult {
+                    status,
+                    steps: vec![StepStats {
+                        step: 3,
+                        time: 2e-14,
+                        ..StepStats::default()
+                    }],
+                    final_magnetization: plan.initial_magnetization.clone(),
+                    completion: None,
+                },
+                initial_magnetization: plan.initial_magnetization.clone(),
+                field_snapshots: Vec::new(),
+                field_snapshot_count: 0,
+                auxiliary_artifacts: Vec::new(),
+                provenance: ExecutionProvenance::default(),
+            };
+            let update = build_atomic_terminal_update(&mut runtime, &execution_plan, 0, &executed)
+                .expect("non-success terminal update should not snapshot fields");
+            assert!(update.finished);
+            assert!(update.cached_preview_fields.is_none());
         }
+    }
+
+    #[cfg(feature = "cuda")]
+    #[test]
+    fn completed_cuda_interactive_runtime_materializes_one_atomic_terminal_field_set_when_available(
+    ) {
+        if !crate::fdm::gpu::cuda::native::is_cuda_available() {
+            eprintln!("skipping terminal CUDA FDM field test: CUDA backend is unavailable");
+            return;
+        }
+
+        let plan = make_soa_fdm_plan();
+        let mut runtime =
+            InteractiveFdmPreviewRuntime::from_fdm_plan(&plan, FdmEngine::CudaFdm, None)
+                .expect("CUDA interactive runtime should build");
+        let display_selection = || DisplaySelectionState::default();
+        let mut backend_terminal_batches = 0;
+        let executed = runtime
+            .execute_with_live_preview_streaming(
+                &plan,
+                2e-14,
+                &[],
+                plan.grid.cells,
+                u64::MAX,
+                &display_selection,
+                None,
+                None,
+                &mut |update| {
+                    if update.cached_preview_fields.as_ref().is_some_and(|fields| {
+                        fields.iter().any(|field| field.quantity == "eden_total")
+                    }) {
+                        backend_terminal_batches += 1;
+                    }
+                    StepAction::Continue
+                },
+            )
+            .expect("CUDA interactive runtime should execute");
+        assert_eq!(backend_terminal_batches, 0);
+
+        let mut execution_plan =
+            fullmag_plan::plan(&ProblemIR::bootstrap_example()).expect("bootstrap execution plan");
+        execution_plan.backend_plan = BackendPlanIR::Fdm(plan.clone());
+        let terminal = build_atomic_terminal_update(&mut runtime, &execution_plan, 23, &executed)
+            .expect("CUDA terminal update should materialize");
+        assert!(terminal.finished);
+        let fields = terminal
+            .cached_preview_fields
+            .expect("CUDA terminal update should carry fields");
+        assert_eq!(
+            fields
+                .iter()
+                .map(|field| field.quantity.as_str())
+                .collect::<Vec<_>>(),
+            crate::quantities::active_fdm_preview_quantities(
+                FdmEngine::CudaFdm,
+                &plan,
+                &crate::quantities::field_materialization_quantity_ids(),
+            )
+        );
+        let final_stats = executed.result.steps.last().expect("final CUDA stats");
+        assert!(fields.iter().all(|field| {
+            field.source_step == final_stats.step && field.source_revision == final_stats.step
+        }));
+        let m = fields
+            .iter()
+            .find(|field| field.quantity == "m")
+            .expect("CUDA terminal m");
+        assert_eq!(
+            m.vector_field_values,
+            executed
+                .result
+                .final_magnetization
+                .iter()
+                .flat_map(|value| value.iter().copied())
+                .collect::<Vec<_>>()
+        );
     }
 
     #[test]
@@ -1362,7 +1550,7 @@ impl InteractiveFdmPreviewRuntime {
         artifact_writer: Option<ArtifactPipelineSender>,
         on_step: &mut dyn FnMut(StepUpdate) -> StepAction,
     ) -> Result<ExecutedRun, RunError> {
-        let result = match &mut self.inner {
+        match &mut self.inner {
             InteractiveFdmPreviewRuntimeInner::Cpu(runtime) => runtime
                 .execute_with_live_preview_streaming(
                     plan,
@@ -1388,45 +1576,7 @@ impl InteractiveFdmPreviewRuntime {
                     artifact_writer,
                     on_step,
                 ),
-        }?;
-
-        if should_materialize_terminal_fdm_fields(result.result.status) {
-            let display_state = display_selection();
-            let request = LivePreviewRequest {
-                revision: display_state.revision,
-                quantity: "m".to_string(),
-                component: "3D".to_string(),
-                layer: 0,
-                all_layers: true,
-                every_n: 1,
-                x_chosen_size: 0,
-                y_chosen_size: 0,
-                auto_scale_enabled: false,
-                max_points: 0,
-            };
-            let quantities = crate::quantities::field_materialization_quantity_ids();
-            let cached_preview_fields = self.snapshot_vector_fields(&quantities, &request)?;
-            if let Some(stats) = result.result.steps.last().cloned() {
-                let _ = on_step(StepUpdate {
-                    coupled_checkpoint: None,
-                    stats,
-                    grid,
-                    fem_mesh_generation_id: None,
-                    magnetization: None,
-                    preview_field: None,
-                    cached_preview_fields: Some(cached_preview_fields),
-                    hysteresis_field_m_t: None,
-                    hysteresis_point_index: None,
-                    hysteresis_settle_step_index: None,
-                    hysteresis_settle_step_kind: None,
-                    hysteresis_settle_step_method: None,
-                    scalar_row_due: false,
-                    finished: false,
-                });
-            }
         }
-
-        Ok(result)
     }
 }
 
@@ -1821,6 +1971,18 @@ impl CpuInteractiveFdmPreviewRuntime {
             &self.plan_signature,
             quantities,
         );
+        let sample_count = self.state.magnetization().len();
+        self.problem.terms.per_node_field =
+            cpu_reference::resolved_per_node_external_field_for_count(
+                &self.plan_signature,
+                sample_count,
+                self.state.time_seconds,
+            );
+        let antenna_field = cpu_reference::resolved_antenna_zeeman_field_for_count(
+            &self.plan_signature,
+            sample_count,
+            self.state.time_seconds,
+        );
         cpu_reference::snapshot_vector_fields_from_state(
             &self.problem,
             &self.state,
@@ -1828,6 +1990,7 @@ impl CpuInteractiveFdmPreviewRuntime {
             request,
             self.original_grid,
             self.plan_signature.active_mask.as_deref(),
+            Some(&antenna_field),
         )
     }
 

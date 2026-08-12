@@ -298,13 +298,21 @@ fn build_oersted(plan: &FdmPlanIR) -> Option<OerstedCylinderConfig> {
 }
 
 fn resolved_per_node_external_field(plan: &FdmPlanIR, time_seconds: f64) -> Option<Vec<Vector3>> {
+    resolved_per_node_external_field_for_count(plan, plan.initial_magnetization.len(), time_seconds)
+}
+
+pub(crate) fn resolved_per_node_external_field_for_count(
+    plan: &FdmPlanIR,
+    sample_count: usize,
+    time_seconds: f64,
+) -> Option<Vec<Vector3>> {
     let antenna = if plan.antenna_zeeman_masks.is_empty() {
         None
     } else {
         Some(
             crate::antenna_fields::combined_antenna_zeeman_mask_field_at_time(
                 &plan.antenna_zeeman_masks,
-                plan.initial_magnetization.len(),
+                sample_count,
                 time_seconds,
             ),
         )
@@ -325,9 +333,17 @@ fn resolved_per_node_external_field(plan: &FdmPlanIR, time_seconds: f64) -> Opti
 }
 
 fn resolved_antenna_zeeman_field(plan: &FdmPlanIR, time_seconds: f64) -> Vec<Vector3> {
+    resolved_antenna_zeeman_field_for_count(plan, plan.initial_magnetization.len(), time_seconds)
+}
+
+pub(crate) fn resolved_antenna_zeeman_field_for_count(
+    plan: &FdmPlanIR,
+    sample_count: usize,
+    time_seconds: f64,
+) -> Vec<Vector3> {
     crate::antenna_fields::combined_antenna_zeeman_mask_field_at_time(
         &plan.antenna_zeeman_masks,
-        plan.initial_magnetization.len(),
+        sample_count,
         time_seconds,
     )
 }
@@ -399,7 +415,8 @@ pub(crate) fn snapshot_vector_fields(
     request: &LivePreviewRequest,
 ) -> Result<Vec<crate::LivePreviewField>, RunError> {
     resolve_cpu_fft_backend_name_for_demag(plan.enable_demag)?;
-    let (problem, state) = build_snapshot_problem_and_state(plan)?;
+    let (mut problem, state) = build_snapshot_problem_and_state(plan)?;
+    problem.terms.per_node_field = resolved_per_node_external_field(plan, state.time_seconds);
     snapshot_vector_fields_from_state(
         &problem,
         &state,
@@ -407,6 +424,7 @@ pub(crate) fn snapshot_vector_fields(
         request,
         plan.grid.cells,
         plan.active_mask.as_deref(),
+        Some(&resolved_antenna_zeeman_field(plan, state.time_seconds)),
     )
 }
 
@@ -417,8 +435,10 @@ pub(crate) fn snapshot_vector_fields_from_state(
     request: &LivePreviewRequest,
     grid: [u32; 3],
     active_mask: Option<&[bool]>,
+    antenna_field: Option<&[Vector3]>,
 ) -> Result<Vec<crate::LivePreviewField>, RunError> {
-    let mut direct_fields = DirectFieldSnapshotCache::new(problem, state);
+    let mut direct_fields =
+        DirectFieldSnapshotCache::new_with_antenna_field(problem, state, antenna_field);
     let mut observables = None;
     let mut cached = Vec::new();
     let mut seen = std::collections::HashSet::new();
@@ -443,10 +463,25 @@ pub(crate) fn snapshot_vector_fields_from_state(
             });
         } else {
             if observables.is_none() {
-                observables = Some(observe_state(problem, state)?);
+                observables = Some(observe_state_with_antenna_field(
+                    problem,
+                    state,
+                    antenna_field.map(<[_]>::to_vec),
+                )?);
             }
             let values =
                 select_observables(observables.as_ref().expect("observables"), quantity)?.to_vec();
+            let expected_len = grid[0] as usize * grid[1] as usize * grid[2] as usize;
+            if values.len() != expected_len {
+                return Err(RunError {
+                    message: format!(
+                        "CPU FDM snapshot '{}': expected {} grid values, received {}",
+                        quantity,
+                        expected_len,
+                        values.len()
+                    ),
+                });
+            }
             cached.push(build_grid_preview_field(
                 &preview_request,
                 &values,
@@ -2334,10 +2369,19 @@ struct DirectFieldSnapshotCache<'a> {
     oersted_field: Option<Vec<Vector3>>,
     effective_field: Option<Vec<Vector3>>,
     torque_field: Option<Vec<Vector3>>,
+    antenna_field: Option<&'a [Vector3]>,
 }
 
 impl<'a> DirectFieldSnapshotCache<'a> {
     fn new(problem: &'a ExchangeLlgProblem, state: &'a ExchangeLlgState) -> Self {
+        Self::new_with_antenna_field(problem, state, None)
+    }
+
+    fn new_with_antenna_field(
+        problem: &'a ExchangeLlgProblem,
+        state: &'a ExchangeLlgState,
+        antenna_field: Option<&'a [Vector3]>,
+    ) -> Self {
         Self {
             problem,
             state,
@@ -2350,6 +2394,7 @@ impl<'a> DirectFieldSnapshotCache<'a> {
             oersted_field: None,
             effective_field: None,
             torque_field: None,
+            antenna_field,
         }
     }
 
@@ -2537,7 +2582,7 @@ impl<'a> DirectFieldSnapshotCache<'a> {
                     &demag_field,
                     &external_field,
                     &oersted_field,
-                    &[],
+                    self.antenna_field.unwrap_or(&[]),
                     active_mask,
                 );
             }

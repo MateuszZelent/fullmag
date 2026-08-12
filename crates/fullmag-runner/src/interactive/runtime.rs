@@ -4,13 +4,88 @@ use std::sync::atomic::AtomicBool;
 use crate::artifact_pipeline::ArtifactPipeline;
 use crate::artifacts;
 use crate::types::{
-    LivePreviewField, LivePreviewRequest, RunError, RunResult, StepAction, StepStats, StepUpdate,
+    ExecutedRun, LivePreviewField, LivePreviewRequest, RunError, RunResult, StepAction, StepStats,
+    StepUpdate,
 };
-use fullmag_ir::{ExecutionPlanIR, ProblemIR, StudyIR};
+use fullmag_ir::{BackendPlanIR, ExecutionPlanIR, ProblemIR, StudyIR};
 
 use super::backend::{BackendGeometry, InteractiveBackend};
 use super::cache::DisplayCache;
 use super::display::{DisplayKind, DisplayPayload, DisplaySelection, DisplaySelectionState};
+
+pub(crate) fn build_atomic_terminal_update(
+    backend: &mut dyn InteractiveBackend,
+    plan: &ExecutionPlanIR,
+    display_revision: u64,
+    executed: &ExecutedRun,
+) -> Result<StepUpdate, RunError> {
+    let final_stats = executed.result.steps.last().cloned().unwrap_or_default();
+    let final_m = executed
+        .result
+        .final_magnetization
+        .iter()
+        .flat_map(|value| value.iter().copied())
+        .collect::<Vec<_>>();
+    let (grid, fem_mesh_generation_id) = match backend.geometry() {
+        BackendGeometry::Fdm { grid } => (grid, None),
+        BackendGeometry::Fem { mesh } => ([0u32, 0, 0], mesh.generation_id),
+    };
+    let should_materialize =
+        crate::interactive_runtime::should_materialize_terminal_fdm_fields(executed.result.status)
+            && matches!(plan.backend_plan, BackendPlanIR::Fdm(_));
+    let cached_preview_fields = if should_materialize {
+        let request = LivePreviewRequest {
+            revision: display_revision,
+            quantity: "m".to_string(),
+            component: "3D".to_string(),
+            layer: 0,
+            all_layers: true,
+            every_n: 1,
+            x_chosen_size: 0,
+            y_chosen_size: 0,
+            auto_scale_enabled: false,
+            max_points: 0,
+        };
+        let quantities = crate::quantities::field_materialization_quantity_ids();
+        let mut fields = backend
+            .snapshot_vector_fields(&quantities, &request)
+            .map_err(|error| RunError {
+                message: format!(
+                    "completed FDM solve could not be finalized because terminal field materialization failed: {}",
+                    error.message
+                ),
+            })?;
+        let materialized_at_unix_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as u64;
+        for field in &mut fields {
+            field.source_step = final_stats.step;
+            field.source_revision = final_stats.step;
+            field.materialized_at_unix_ms = materialized_at_unix_ms;
+        }
+        Some(fields)
+    } else {
+        None
+    };
+
+    Ok(StepUpdate {
+        coupled_checkpoint: None,
+        stats: final_stats,
+        grid,
+        fem_mesh_generation_id,
+        magnetization: Some(final_m),
+        preview_field: None,
+        cached_preview_fields,
+        hysteresis_field_m_t: None,
+        hysteresis_point_index: None,
+        hysteresis_settle_step_index: None,
+        hysteresis_settle_step_kind: None,
+        hysteresis_settle_step_method: None,
+        scalar_row_due: true,
+        finished: true,
+    })
+}
 
 /// Unified interactive runtime facade.
 ///
@@ -295,36 +370,12 @@ impl InteractiveRuntime {
             });
         }
 
-        // Emit the final "finished" StepUpdate.
-        let final_stats = executed.result.steps.last().cloned().unwrap_or_default();
-        let final_m: Vec<f64> = executed
-            .result
-            .final_magnetization
-            .iter()
-            .flat_map(|v| v.iter().copied())
-            .collect();
-
-        let (grid, fem_mesh_generation_id) = match self.backend.geometry() {
-            BackendGeometry::Fdm { grid } => (grid, None),
-            BackendGeometry::Fem { mesh } => ([0u32, 0, 0], mesh.generation_id),
-        };
-
-        on_step(StepUpdate {
-            coupled_checkpoint: None,
-            stats: final_stats,
-            grid,
-            fem_mesh_generation_id,
-            magnetization: Some(final_m),
-            preview_field: None,
-            cached_preview_fields: None,
-            hysteresis_field_m_t: None,
-            hysteresis_point_index: None,
-            hysteresis_settle_step_index: None,
-            hysteresis_settle_step_kind: None,
-            hysteresis_settle_step_method: None,
-            scalar_row_due: true,
-            finished: true,
-        });
+        // The backend is still alive here. Build and publish one atomic
+        // terminal update after every required finalization step succeeded.
+        let display_revision = display_selection().revision;
+        let terminal_update =
+            build_atomic_terminal_update(self.backend.as_mut(), plan, display_revision, &executed)?;
+        on_step(terminal_update);
 
         self.state_revision += 1;
         self.display_cache.invalidate();
