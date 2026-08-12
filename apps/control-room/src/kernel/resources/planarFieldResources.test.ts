@@ -17,12 +17,38 @@ import { ResourceCache } from "./ResourceCache";
 import {
   loadCachedPlanarBinary,
   loadCachedPlanarScalar,
-  planarFieldQueryFromMetaLink,
   planarFieldQueryFromMetaLinks,
   resolvePlanarFieldResourceKey,
 } from "./planarFieldResources";
 
 describe("planar field resources", () => {
+  const canonicalSuffix =
+    "?sample_token=planar-sample-v2%3Aexact&component=normal" +
+    "&expected_scene_revision=101&expected_monitor_revision=202" +
+    "&expected_mesh_revision=303&expected_carrier_revision=304" +
+    "&expected_field_revision=404&resolution_x=128&resolution_y=64" +
+    "&scope_kind=monitor_target&quality=interactive&include_mesh=false";
+  const metaLinks = (
+    quantityId = "m",
+    monitorId = "plane-1",
+    origin = "",
+  ) => {
+    const link = (path: string) =>
+      origin +
+      path
+        .replace("{quantity_id}", encodeURIComponent(quantityId))
+        .replace("{monitor_id}", encodeURIComponent(monitorId)) +
+      canonicalSuffix;
+    return {
+      empty_mask: link(DATA_PLANAR_FIELD_EMPTY_MASK_PATH),
+      mesh_overlay: link(DATA_PLANAR_FIELD_MESH_OVERLAY_PATH),
+      probe: link(DATA_PLANAR_FIELD_PROBE_PATH),
+      render_png: link(DATA_PLANAR_FIELD_RENDER_PNG_PATH),
+      scalar: link(DATA_PLANAR_FIELD_SCALAR_PATH),
+      vectors: link(DATA_PLANAR_FIELD_VECTORS_PATH),
+    };
+  };
+
   it("normalizes query order into one resource identity", () => {
     const first = planarFieldResourceKey("m /% żółć", "plane/a", {
       resolution_y: 64,
@@ -74,99 +100,93 @@ describe("planar field resources", () => {
     }
   });
 
-  it("derives the exact binary query from the canonical metadata link", () => {
-    const scalarPath = DATA_PLANAR_FIELD_SCALAR_PATH
-      .replace("{quantity_id}", "m")
-      .replace("{monitor_id}", "plane-1");
-    const query = planarFieldQueryFromMetaLink(
-      scalarPath +
-        "?sample_token=planar-sample-v2%3Aexact" +
-        "&component=normal" +
-        "&expected_scene_revision=101" +
-        "&expected_monitor_revision=202" +
-        "&expected_mesh_revision=303" +
-        "&expected_carrier_revision=304" +
-        "&expected_field_revision=404" +
-        "&resolution_x=128&resolution_y=64" +
-        "&scope_kind=mesh_part&scope_id=part-7" +
-        "&quality=export&include_mesh=true",
+  it("derives exact binary identity from valid same-origin metadata links", () => {
+    const result = planarFieldQueryFromMetaLinks(
+      "m",
+      "plane-1",
+      metaLinks("m", "plane-1", "http://fullmag.invalid"),
     );
 
-    expect(query).toMatchObject({
+    expect(result).toMatchObject({ ok: true });
+    if (!result.ok) return;
+    expect(result.query).toMatchObject({
       sample_token: "planar-sample-v2:exact",
       expected_scene_revision: "101",
       expected_monitor_revision: "202",
       expected_mesh_revision: "303",
       expected_carrier_revision: "304",
       expected_field_revision: "404",
-      quality: "export",
+      quality: "interactive",
       resolution_x: 128,
       resolution_y: 64,
-      scope_id: "part-7",
-      scope_kind: "mesh_part",
+      scope_kind: "monitor_target",
     });
   });
 
-  it("accepts canonical meta links only when every resource shares exact identity", () => {
-    const suffix =
-      "?sample_token=planar-sample-v2%3Aexact&component=normal" +
-      "&expected_scene_revision=101&expected_monitor_revision=202" +
-      "&expected_mesh_revision=303&expected_carrier_revision=304" +
-      "&expected_field_revision=404&resolution_x=128&resolution_y=64" +
-      "&scope_kind=monitor_target&quality=interactive&include_mesh=false";
-    const link = (path: string) =>
-      path.replace("{quantity_id}", "m").replace("{monitor_id}", "plane-1") +
-      suffix;
-    const links = {
-      empty_mask: link(DATA_PLANAR_FIELD_EMPTY_MASK_PATH),
-      mesh_overlay: link(DATA_PLANAR_FIELD_MESH_OVERLAY_PATH),
-      probe: link(DATA_PLANAR_FIELD_PROBE_PATH),
-      render_png: link(DATA_PLANAR_FIELD_RENDER_PNG_PATH),
-      scalar: link(DATA_PLANAR_FIELD_SCALAR_PATH),
-      vectors: link(DATA_PLANAR_FIELD_VECTORS_PATH),
+  it("accepts exact canonical paths for specially encoded ids", () => {
+    const quantityId = "m /% żółć";
+    const monitorId = "plane /% żółć";
+    expect(
+      planarFieldQueryFromMetaLinks(
+        quantityId,
+        monitorId,
+        metaLinks(quantityId, monitorId),
+      ),
+    ).toMatchObject({ ok: true });
+  });
+
+  it.each([
+    ["wrong quantity", "m", "plane-1", metaLinks("H_eff", "plane-1")],
+    ["wrong monitor", "m", "plane-1", metaLinks("m", "plane-2")],
+    ["external origin", "m", "plane-1", metaLinks("m", "plane-1", "https://example.invalid")],
+  ])("rejects %s without throwing", (_name, quantityId, monitorId, links) => {
+    expect(() =>
+      planarFieldQueryFromMetaLinks(quantityId, monitorId, links),
+    ).not.toThrow();
+    expect(planarFieldQueryFromMetaLinks(quantityId, monitorId, links)).toMatchObject({
+      ok: false,
+    });
+  });
+
+  it("rejects an arbitrary shared prefix and identity disagreement", () => {
+    const links = metaLinks();
+    const falsePrefix = Object.fromEntries(
+      Object.entries(links).map(([kind, link]) => [
+        kind,
+        link.replace(
+          DATA_PLANAR_FIELD_SCALAR_PATH.split("{quantity_id}")[0],
+          "/not-the-planar-resource-family/",
+        ),
+      ]),
+    ) as typeof links;
+    expect(planarFieldQueryFromMetaLinks("m", "plane-1", falsePrefix)).toMatchObject({
+      ok: false,
+    });
+    expect(
+      planarFieldQueryFromMetaLinks("m", "plane-1", {
+        ...links,
+        vectors: links.vectors.replace(
+          "expected_field_revision=404",
+          "expected_field_revision=405",
+        ),
+      }),
+    ).toMatchObject({ ok: false });
+  });
+
+  it("returns a controlled error for malformed links", () => {
+    const links = metaLinks();
+    const malformed = {
+      ...links,
+      scalar: links.scalar.slice(0, links.scalar.indexOf("?")),
     };
 
-    expect(planarFieldQueryFromMetaLinks(links)).toMatchObject({
-      sample_token: "planar-sample-v2:exact",
-      expected_scene_revision: "101",
-      expected_monitor_revision: "202",
-      expected_field_revision: "404",
-    });
     expect(() =>
-      planarFieldQueryFromMetaLinks({
-        ...links,
-        vectors: links.vectors.replace("expected_field_revision=404", "expected_field_revision=405"),
-      }),
-    ).toThrow("disagree on sample identity");
-  });
-
-  it("fails closed when a canonical metadata link omits sample identity", () => {
-    const scalarPath = DATA_PLANAR_FIELD_SCALAR_PATH
-      .replace("{quantity_id}", "m")
-      .replace("{monitor_id}", "plane-1");
-    expect(() =>
-      planarFieldQueryFromMetaLink(
-        scalarPath +
-          "?component=normal&resolution_x=128&resolution_y=64" +
-          "&scope_kind=monitor_target&quality=interactive&include_mesh=false",
-      ),
-    ).toThrow("missing sample_token");
-  });
-
-  it("rejects metadata links from another origin", () => {
-    const scalarPath = DATA_PLANAR_FIELD_SCALAR_PATH
-      .replace("{quantity_id}", "m")
-      .replace("{monitor_id}", "plane-1");
-    expect(() =>
-      planarFieldQueryFromMetaLink(
-        `https://example.invalid${scalarPath}` +
-          "?sample_token=planar-sample-v2%3Aexact&component=normal" +
-          "&expected_scene_revision=101&expected_monitor_revision=202" +
-          "&expected_mesh_revision=303&expected_carrier_revision=304" +
-          "&expected_field_revision=404&resolution_x=128&resolution_y=64" +
-          "&scope_kind=monitor_target&quality=interactive&include_mesh=false",
-      ),
-    ).toThrow("must be same-origin");
+      planarFieldQueryFromMetaLinks("m", "plane-1", malformed),
+    ).not.toThrow();
+    const result = planarFieldQueryFromMetaLinks("m", "plane-1", malformed);
+    expect(result).toMatchObject({ ok: false });
+    if (result.ok) return;
+    expect(result.error.message).toContain("Canonical planar metadata link is missing");
   });
 
   it("rejects a 304 response when no matching cached payload exists", async () => {

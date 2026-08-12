@@ -21,7 +21,7 @@ import type {
 } from "../api/apiTypes";
 import {
   normalizePlanarFieldQuery,
-  planarFieldQueryFromMetaLink,
+  planarFieldResourcePath,
   planarFieldResourceKey,
 } from "../api/fieldQueryIdentity";
 import { useKernel } from "../KernelContext";
@@ -29,7 +29,9 @@ import { useKernel } from "../KernelContext";
 import { ResourceCache } from "./ResourceCache";
 import { useResource } from "./useResource";
 
-export { planarFieldQueryFromMetaLink };
+export type PlanarFieldMetaLinksParseResult =
+  | { ok: true; query: PlanarFieldQuery }
+  | { error: Error; ok: false };
 
 interface ResourceHookOptions {
   enabled?: boolean;
@@ -68,37 +70,92 @@ const metaLinkPaths = {
 } as const satisfies Record<keyof PlanarFieldMetaResource["links"], string>;
 
 export function planarFieldQueryFromMetaLinks(
+  quantityId: string,
+  monitorId: string,
   links: PlanarFieldMetaResource["links"],
-): PlanarFieldQuery {
-  let canonicalPrefix: string | null = null;
-  let canonicalIdentity: string | null = null;
-  let canonicalQuery: PlanarFieldQuery | null = null;
+): PlanarFieldMetaLinksParseResult {
+  try {
+    let canonicalIdentity: string | null = null;
+    let canonicalQuery: PlanarFieldQuery | null = null;
 
-  for (const [kind, template] of Object.entries(metaLinkPaths) as [
-    keyof PlanarFieldMetaResource["links"],
-    string,
-  ][]) {
-    const link = links[kind];
-    const query = planarFieldQueryFromMetaLink(link);
-    const pathSuffix = template.split("{monitor_id}")[1];
-    const url = new URL(link, "http://fullmag.invalid");
-    if (!pathSuffix || !url.pathname.endsWith(pathSuffix)) {
-      throw new Error(`Canonical planar metadata ${kind} link has invalid path`);
+    for (const [kind, template] of Object.entries(metaLinkPaths) as [
+      keyof PlanarFieldMetaResource["links"],
+      string,
+    ][]) {
+      const link = links[kind];
+      const query = planarFieldQueryFromMetaLink(link);
+      const url = new URL(link, "http://fullmag.invalid");
+      const expectedPath = planarFieldResourcePath(
+        quantityId,
+        monitorId,
+        template,
+      );
+      if (url.pathname !== expectedPath) {
+        throw new Error(`Canonical planar metadata ${kind} link has invalid path`);
+      }
+      const identity = JSON.stringify(query);
+      canonicalIdentity ??= identity;
+      canonicalQuery ??= query;
+      if (identity !== canonicalIdentity) {
+        throw new Error("Canonical planar metadata links disagree on sample identity");
+      }
     }
-    const prefix = url.pathname.slice(0, -pathSuffix.length);
-    const identity = JSON.stringify(query);
-    canonicalPrefix ??= prefix;
-    canonicalIdentity ??= identity;
-    canonicalQuery ??= query;
-    if (prefix !== canonicalPrefix || identity !== canonicalIdentity) {
-      throw new Error("Canonical planar metadata links disagree on sample identity");
+
+    if (!canonicalQuery) {
+      throw new Error("Canonical planar metadata links are empty");
     }
+    return { ok: true, query: canonicalQuery };
+  } catch (error) {
+    return {
+      error: error instanceof Error ? error : new Error(String(error)),
+      ok: false,
+    };
+  }
+}
+
+function planarFieldQueryFromMetaLink(link: string): PlanarFieldQuery {
+  const expectedOrigin =
+    typeof window === "undefined" ? "http://fullmag.invalid" : window.location.origin;
+  const url = new URL(link, expectedOrigin);
+  if (url.origin !== expectedOrigin) {
+    throw new Error("Canonical planar metadata link must be same-origin");
+  }
+  const required = (name: string): string => {
+    const value = url.searchParams.get(name);
+    if (!value) {
+      throw new Error(`Canonical planar metadata link is missing ${name}`);
+    }
+    return value;
+  };
+  const integer = (name: string): number => {
+    const value = Number(required(name));
+    if (!Number.isSafeInteger(value)) {
+      throw new Error(`Canonical planar metadata link has invalid ${name}`);
+    }
+    return value;
+  };
+  const includeMesh = required("include_mesh");
+  if (includeMesh !== "true" && includeMesh !== "false") {
+    throw new Error("Canonical planar metadata link has invalid include_mesh");
   }
 
-  if (!canonicalQuery) {
-    throw new Error("Canonical planar metadata links are empty");
-  }
-  return canonicalQuery;
+  return normalizePlanarFieldQuery({
+    sample_token: required("sample_token"),
+    component: required("component"),
+    expected_carrier_revision: required("expected_carrier_revision"),
+    expected_field_revision: required("expected_field_revision"),
+    expected_mesh_revision: required("expected_mesh_revision"),
+    expected_monitor_revision: required("expected_monitor_revision"),
+    expected_scene_revision: required("expected_scene_revision"),
+    include_mesh: includeMesh === "true",
+    quality: required("quality"),
+    resolution_x: integer("resolution_x"),
+    resolution_y: integer("resolution_y"),
+    scope_id: url.searchParams.get("scope_id") ?? undefined,
+    scope_kind: required("scope_kind"),
+    snapshot_id: url.searchParams.get("snapshot_id") ?? undefined,
+    stage_id: url.searchParams.get("stage_id") ?? undefined,
+  });
 }
 
 export function resolvePlanarFieldResourceKey(

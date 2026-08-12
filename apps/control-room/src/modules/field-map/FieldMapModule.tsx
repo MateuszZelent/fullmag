@@ -103,13 +103,21 @@ export default function FieldMapModule() {
     plan.query,
     { enabled: plan.enabled },
   );
-  const canonicalQuery = useMemo(
+  const canonicalSample = useMemo(
     () =>
       meta.status === "ready" && meta.data
-        ? planarFieldQueryFromMetaLinks(meta.data.links)
+        ? planarFieldQueryFromMetaLinks(
+            plan.quantityId,
+            plan.monitorId,
+            meta.data.links,
+          )
         : null,
-    [meta.data, meta.status],
+    [meta.data, meta.status, plan.monitorId, plan.quantityId],
   );
+  const canonicalQuery =
+    canonicalSample?.ok ? canonicalSample.query : null;
+  const canonicalSampleError =
+    canonicalSample && !canonicalSample.ok ? canonicalSample.error : null;
   const dataQuery = canonicalQuery ?? plan.query;
   const canonicalSampleReady = canonicalQuery !== null;
   const scalar = usePlanarScalarResource(
@@ -197,11 +205,20 @@ export default function FieldMapModule() {
       />
     );
   }
-  if (meta.status === "error" || scalar.status === "error") {
+  if (
+    meta.status === "error" ||
+    scalar.status === "error" ||
+    canonicalSampleError !== null
+  ) {
     return (
       <FieldMapStatus
         kind="error"
-        message={meta.error?.message ?? scalar.error?.message ?? "Planar field unavailable."}
+        message={
+          meta.error?.message ??
+          scalar.error?.message ??
+          canonicalSampleError?.message ??
+          "Planar field unavailable."
+        }
         planarStatus="error"
       />
     );

@@ -246,49 +246,14 @@ export function normalizePlanarFieldQuery(
   return normalized;
 }
 
-export function planarFieldQueryFromMetaLink(link: string): PlanarFieldQuery {
-  const expectedOrigin =
-    typeof window === "undefined" ? "http://fullmag.invalid" : window.location.origin;
-  const url = new URL(link, expectedOrigin);
-  if (url.origin !== expectedOrigin) {
-    throw new Error("Canonical planar metadata link must be same-origin");
-  }
-  const required = (name: string): string => {
-    const value = url.searchParams.get(name);
-    if (!value) {
-      throw new Error(`Canonical planar metadata link is missing ${name}`);
-    }
-    return value;
-  };
-  const integer = (name: string): number => {
-    const value = Number(required(name));
-    if (!Number.isSafeInteger(value)) {
-      throw new Error(`Canonical planar metadata link has invalid ${name}`);
-    }
-    return value;
-  };
-  const includeMesh = required("include_mesh");
-  if (includeMesh !== "true" && includeMesh !== "false") {
-    throw new Error("Canonical planar metadata link has invalid include_mesh");
-  }
-
-  return normalizePlanarFieldQuery({
-    sample_token: required("sample_token"),
-    component: required("component"),
-    expected_carrier_revision: required("expected_carrier_revision"),
-    expected_field_revision: required("expected_field_revision"),
-    expected_mesh_revision: required("expected_mesh_revision"),
-    expected_monitor_revision: required("expected_monitor_revision"),
-    expected_scene_revision: required("expected_scene_revision"),
-    include_mesh: includeMesh === "true",
-    quality: required("quality"),
-    resolution_x: integer("resolution_x"),
-    resolution_y: integer("resolution_y"),
-    scope_id: url.searchParams.get("scope_id") ?? undefined,
-    scope_kind: required("scope_kind"),
-    snapshot_id: url.searchParams.get("snapshot_id") ?? undefined,
-    stage_id: url.searchParams.get("stage_id") ?? undefined,
-  });
+export function planarFieldResourcePath(
+  quantityId: string,
+  monitorId: string,
+  path: string = DATA_PLANAR_FIELD_META_PATH,
+): string {
+  return path
+    .replace("{quantity_id}", encodeURIComponent(quantityId))
+    .replace("{monitor_id}", encodeURIComponent(monitorId));
 }
 
 export function planarFieldResourceKey(
@@ -297,9 +262,7 @@ export function planarFieldResourceKey(
   query: PlanarFieldQuery = {},
   path: string = DATA_PLANAR_FIELD_META_PATH,
 ): string {
-  const resolvedPath = path
-    .replace("{quantity_id}", encodeURIComponent(quantityId))
-    .replace("{monitor_id}", encodeURIComponent(monitorId));
+  const resolvedPath = planarFieldResourcePath(quantityId, monitorId, path);
   const search = new URLSearchParams();
   const normalized = normalizePlanarFieldQuery(query);
   for (const key of PLANAR_FIELD_QUERY_ORDER) {
