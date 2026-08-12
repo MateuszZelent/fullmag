@@ -3,8 +3,13 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it, vi } from "vitest";
 
 import {
+  DATA_PLANAR_FIELD_EMPTY_MASK_PATH,
   DATA_PLANAR_FIELD_META_PATH,
+  DATA_PLANAR_FIELD_MESH_OVERLAY_PATH,
+  DATA_PLANAR_FIELD_PROBE_PATH,
+  DATA_PLANAR_FIELD_RENDER_PNG_PATH,
   DATA_PLANAR_FIELD_SCALAR_PATH,
+  DATA_PLANAR_FIELD_VECTORS_PATH,
 } from "../api/apiPaths";
 import { planarFieldResourceKey } from "../api/fieldQueryIdentity";
 
@@ -12,6 +17,8 @@ import { ResourceCache } from "./ResourceCache";
 import {
   loadCachedPlanarBinary,
   loadCachedPlanarScalar,
+  planarFieldQueryFromMetaLink,
+  planarFieldQueryFromMetaLinks,
   resolvePlanarFieldResourceKey,
 } from "./planarFieldResources";
 
@@ -65,6 +72,101 @@ describe("planar field resources", () => {
     for (const [name, revision] of Object.entries(revisions)) {
       expect(first).toContain(`${name}=${revision}`);
     }
+  });
+
+  it("derives the exact binary query from the canonical metadata link", () => {
+    const scalarPath = DATA_PLANAR_FIELD_SCALAR_PATH
+      .replace("{quantity_id}", "m")
+      .replace("{monitor_id}", "plane-1");
+    const query = planarFieldQueryFromMetaLink(
+      scalarPath +
+        "?sample_token=planar-sample-v2%3Aexact" +
+        "&component=normal" +
+        "&expected_scene_revision=101" +
+        "&expected_monitor_revision=202" +
+        "&expected_mesh_revision=303" +
+        "&expected_carrier_revision=304" +
+        "&expected_field_revision=404" +
+        "&resolution_x=128&resolution_y=64" +
+        "&scope_kind=mesh_part&scope_id=part-7" +
+        "&quality=export&include_mesh=true",
+    );
+
+    expect(query).toMatchObject({
+      sample_token: "planar-sample-v2:exact",
+      expected_scene_revision: "101",
+      expected_monitor_revision: "202",
+      expected_mesh_revision: "303",
+      expected_carrier_revision: "304",
+      expected_field_revision: "404",
+      quality: "export",
+      resolution_x: 128,
+      resolution_y: 64,
+      scope_id: "part-7",
+      scope_kind: "mesh_part",
+    });
+  });
+
+  it("accepts canonical meta links only when every resource shares exact identity", () => {
+    const suffix =
+      "?sample_token=planar-sample-v2%3Aexact&component=normal" +
+      "&expected_scene_revision=101&expected_monitor_revision=202" +
+      "&expected_mesh_revision=303&expected_carrier_revision=304" +
+      "&expected_field_revision=404&resolution_x=128&resolution_y=64" +
+      "&scope_kind=monitor_target&quality=interactive&include_mesh=false";
+    const link = (path: string) =>
+      path.replace("{quantity_id}", "m").replace("{monitor_id}", "plane-1") +
+      suffix;
+    const links = {
+      empty_mask: link(DATA_PLANAR_FIELD_EMPTY_MASK_PATH),
+      mesh_overlay: link(DATA_PLANAR_FIELD_MESH_OVERLAY_PATH),
+      probe: link(DATA_PLANAR_FIELD_PROBE_PATH),
+      render_png: link(DATA_PLANAR_FIELD_RENDER_PNG_PATH),
+      scalar: link(DATA_PLANAR_FIELD_SCALAR_PATH),
+      vectors: link(DATA_PLANAR_FIELD_VECTORS_PATH),
+    };
+
+    expect(planarFieldQueryFromMetaLinks(links)).toMatchObject({
+      sample_token: "planar-sample-v2:exact",
+      expected_scene_revision: "101",
+      expected_monitor_revision: "202",
+      expected_field_revision: "404",
+    });
+    expect(() =>
+      planarFieldQueryFromMetaLinks({
+        ...links,
+        vectors: links.vectors.replace("expected_field_revision=404", "expected_field_revision=405"),
+      }),
+    ).toThrow("disagree on sample identity");
+  });
+
+  it("fails closed when a canonical metadata link omits sample identity", () => {
+    const scalarPath = DATA_PLANAR_FIELD_SCALAR_PATH
+      .replace("{quantity_id}", "m")
+      .replace("{monitor_id}", "plane-1");
+    expect(() =>
+      planarFieldQueryFromMetaLink(
+        scalarPath +
+          "?component=normal&resolution_x=128&resolution_y=64" +
+          "&scope_kind=monitor_target&quality=interactive&include_mesh=false",
+      ),
+    ).toThrow("missing sample_token");
+  });
+
+  it("rejects metadata links from another origin", () => {
+    const scalarPath = DATA_PLANAR_FIELD_SCALAR_PATH
+      .replace("{quantity_id}", "m")
+      .replace("{monitor_id}", "plane-1");
+    expect(() =>
+      planarFieldQueryFromMetaLink(
+        `https://example.invalid${scalarPath}` +
+          "?sample_token=planar-sample-v2%3Aexact&component=normal" +
+          "&expected_scene_revision=101&expected_monitor_revision=202" +
+          "&expected_mesh_revision=303&expected_carrier_revision=304" +
+          "&expected_field_revision=404&resolution_x=128&resolution_y=64" +
+          "&scope_kind=monitor_target&quality=interactive&include_mesh=false",
+      ),
+    ).toThrow("must be same-origin");
   });
 
   it("rejects a 304 response when no matching cached payload exists", async () => {

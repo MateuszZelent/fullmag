@@ -6,6 +6,7 @@ import {
   DATA_PLANAR_FIELD_EMPTY_MASK_PATH,
   DATA_PLANAR_FIELD_MESH_OVERLAY_PATH,
   DATA_PLANAR_FIELD_META_PATH,
+  DATA_PLANAR_FIELD_PROBE_PATH,
   DATA_PLANAR_FIELD_RENDER_PNG_PATH,
   DATA_PLANAR_FIELD_SCALAR_PATH,
   DATA_PLANAR_FIELD_VECTORS_PATH,
@@ -20,12 +21,15 @@ import type {
 } from "../api/apiTypes";
 import {
   normalizePlanarFieldQuery,
+  planarFieldQueryFromMetaLink,
   planarFieldResourceKey,
 } from "../api/fieldQueryIdentity";
 import { useKernel } from "../KernelContext";
 
 import { ResourceCache } from "./ResourceCache";
 import { useResource } from "./useResource";
+
+export { planarFieldQueryFromMetaLink };
 
 interface ResourceHookOptions {
   enabled?: boolean;
@@ -53,6 +57,49 @@ const binaryPaths: Record<BinaryKind, string> = {
   scalar: DATA_PLANAR_FIELD_SCALAR_PATH,
   vectors: DATA_PLANAR_FIELD_VECTORS_PATH,
 };
+
+const metaLinkPaths = {
+  empty_mask: DATA_PLANAR_FIELD_EMPTY_MASK_PATH,
+  mesh_overlay: DATA_PLANAR_FIELD_MESH_OVERLAY_PATH,
+  probe: DATA_PLANAR_FIELD_PROBE_PATH,
+  render_png: DATA_PLANAR_FIELD_RENDER_PNG_PATH,
+  scalar: DATA_PLANAR_FIELD_SCALAR_PATH,
+  vectors: DATA_PLANAR_FIELD_VECTORS_PATH,
+} as const satisfies Record<keyof PlanarFieldMetaResource["links"], string>;
+
+export function planarFieldQueryFromMetaLinks(
+  links: PlanarFieldMetaResource["links"],
+): PlanarFieldQuery {
+  let canonicalPrefix: string | null = null;
+  let canonicalIdentity: string | null = null;
+  let canonicalQuery: PlanarFieldQuery | null = null;
+
+  for (const [kind, template] of Object.entries(metaLinkPaths) as [
+    keyof PlanarFieldMetaResource["links"],
+    string,
+  ][]) {
+    const link = links[kind];
+    const query = planarFieldQueryFromMetaLink(link);
+    const pathSuffix = template.split("{monitor_id}")[1];
+    const url = new URL(link, "http://fullmag.invalid");
+    if (!pathSuffix || !url.pathname.endsWith(pathSuffix)) {
+      throw new Error(`Canonical planar metadata ${kind} link has invalid path`);
+    }
+    const prefix = url.pathname.slice(0, -pathSuffix.length);
+    const identity = JSON.stringify(query);
+    canonicalPrefix ??= prefix;
+    canonicalIdentity ??= identity;
+    canonicalQuery ??= query;
+    if (prefix !== canonicalPrefix || identity !== canonicalIdentity) {
+      throw new Error("Canonical planar metadata links disagree on sample identity");
+    }
+  }
+
+  if (!canonicalQuery) {
+    throw new Error("Canonical planar metadata links are empty");
+  }
+  return canonicalQuery;
+}
 
 export function resolvePlanarFieldResourceKey(
   quantityId: string,

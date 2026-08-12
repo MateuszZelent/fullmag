@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+
 import { describe, expect, it } from "vitest";
 
 import {
@@ -50,13 +52,20 @@ describe("field-map data plan", () => {
     });
   });
 
-  it("keeps the exact view scope and revision identity on the shared query", () => {
+  it("does not substitute scene or global field revisions for exact sample revisions", () => {
+    const sceneRevision = "101";
+    const monitorRevision = "202";
+    const globalFieldRevision = "303";
+    const quantityRevision = "404";
+    expect(sceneRevision).not.toBe(monitorRevision);
+    expect(globalFieldRevision).not.toBe(quantityRevision);
     const plan = buildFieldMapDataPlan({
       active: true,
       component: "normal",
-      expectedFieldRevision: "9007199254741001",
-      expectedMeshRevision: "9007199254741002",
-      expectedMonitorRevision: "9007199254741003",
+      ...{
+        expectedFieldRevision: globalFieldRevision,
+        expectedMonitorRevision: sceneRevision,
+      },
       includeMesh: true,
       monitorId: "plane-1",
       quantityId: "m",
@@ -68,14 +77,28 @@ describe("field-map data plan", () => {
     });
 
     expect(plan.query).toMatchObject({
-      expected_field_revision: "9007199254741001",
-      expected_mesh_revision: "9007199254741002",
-      expected_monitor_revision: "9007199254741003",
       scope_id: "part-7",
       scope_kind: "mesh_part",
       snapshot_id: "snapshot-4",
       stage_id: "stage-2",
     });
+    expect(plan.query).not.toHaveProperty("expected_field_revision");
+    expect(plan.query).not.toHaveProperty("expected_monitor_revision");
+  });
+
+  it("gates binary resources on the canonical metadata sample", () => {
+    const source = readFileSync(
+      new URL("../FieldMapModule.tsx", import.meta.url),
+      "utf8",
+    );
+
+    expect(source).not.toContain("status.data?.resources.field_revision");
+    expect(source).not.toContain("monitor.data?.scene_revision");
+    expect(source).toContain(
+      "planarFieldQueryFromMetaLinks(meta.data.links)",
+    );
+    expect(source).toContain("const dataQuery = canonicalQuery ?? plan.query");
+    expect(source.match(/canonicalSampleReady/g)).toHaveLength(6);
   });
 
   it.each([

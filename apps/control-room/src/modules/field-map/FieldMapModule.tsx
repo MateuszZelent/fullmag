@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { useKernel } from "@/kernel/KernelContext";
 import {
+  planarFieldQueryFromMetaLinks,
   usePlanarFieldMetaResource,
   usePlanarMaskResource,
   usePlanarMeshOverlayResource,
@@ -53,24 +54,8 @@ export default function FieldMapModule() {
   });
   const domain = useDomainMetaResource({ enabled: active });
   const runtime = useSessionStatusSelector(
-    (status) => ({
-      expectedFieldRevision:
-        typeof status.data?.resources.field_revision === "number"
-          ? status.data.resources.field_revision
-          : null,
-      expectedMeshRevision:
-        typeof status.data?.resources.mesh_revision === "number"
-          ? status.data.resources.mesh_revision
-          : null,
-      discretization: status.data?.domain.discretization ?? null,
-    }),
-    {
-      enabled: active,
-      isEqual: (left, right) =>
-        left.expectedFieldRevision === right.expectedFieldRevision &&
-        left.expectedMeshRevision === right.expectedMeshRevision &&
-        left.discretization === right.discretization,
-    },
+    (status) => status.data?.domain.discretization ?? null,
+    { enabled: active },
   );
   const selectedFieldSnapshot = useSelectionSelector((selection) => {
     const ref = selection.ref;
@@ -99,13 +84,7 @@ export default function FieldMapModule() {
     active,
     component: planar?.component ?? state.component,
     discretization:
-      domain.data?.discretization ?? runtime.discretization ?? null,
-    expectedFieldRevision: runtime.expectedFieldRevision,
-    expectedMeshRevision: runtime.expectedMeshRevision,
-    expectedMonitorRevision:
-      typeof monitor.data?.scene_revision === "number"
-        ? monitor.data.scene_revision
-        : null,
+      domain.data?.discretization ?? runtime ?? null,
     includeMesh: planar?.layers.mesh ?? true,
     monitorId: activeMonitorId,
     quantityId: planar?.quantity_id ?? state.quantityId,
@@ -124,35 +103,44 @@ export default function FieldMapModule() {
     plan.query,
     { enabled: plan.enabled },
   );
+  const canonicalQuery = useMemo(
+    () =>
+      meta.status === "ready" && meta.data
+        ? planarFieldQueryFromMetaLinks(meta.data.links)
+        : null,
+    [meta.data, meta.status],
+  );
+  const dataQuery = canonicalQuery ?? plan.query;
+  const canonicalSampleReady = canonicalQuery !== null;
   const scalar = usePlanarScalarResource(
     plan.quantityId,
     plan.monitorId,
-    plan.query,
-    { enabled: plan.requestScalar },
+    dataQuery,
+    { enabled: plan.requestScalar && canonicalSampleReady },
   );
   const mask = usePlanarMaskResource(
     plan.quantityId,
     plan.monitorId,
-    plan.query,
-    { enabled: plan.requestMask },
+    dataQuery,
+    { enabled: plan.requestMask && canonicalSampleReady },
   );
   const vectors = usePlanarVectorResource(
     plan.quantityId,
     plan.monitorId,
-    plan.query,
-    { enabled: plan.requestVectors },
+    dataQuery,
+    { enabled: plan.requestVectors && canonicalSampleReady },
   );
   const meshOverlay = usePlanarMeshOverlayResource(
     plan.quantityId,
     plan.monitorId,
-    plan.query,
-    { enabled: plan.requestMesh },
+    dataQuery,
+    { enabled: plan.requestMesh && canonicalSampleReady },
   );
   const probe = usePlanarProbeResource(
     plan.quantityId,
     plan.monitorId,
-    buildFieldMapProbeQuery(plan.query, pinned?.[0] ?? 0, pinned?.[1] ?? 0),
-    { enabled: plan.enabled && pinned !== null },
+    buildFieldMapProbeQuery(dataQuery, pinned?.[0] ?? 0, pinned?.[1] ?? 0),
+    { enabled: plan.enabled && canonicalSampleReady && pinned !== null },
   );
   const frame = useMemo(
     () =>
