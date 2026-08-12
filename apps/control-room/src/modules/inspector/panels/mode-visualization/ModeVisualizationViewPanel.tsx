@@ -21,14 +21,15 @@ import {
 interface ModeVisualizationPhaseControlProps {
   animate?: boolean;
   animationDirection?: -1 | 1;
+  animationLoop?: boolean;
   animationRateHz?: number;
   disabled: boolean;
-  onChange?: (value: string) => void;
   onSetPhase: (value: string) => void;
   onAnimationChange?: (next: {
     animatePhase: boolean;
     animationRateHz: number;
     direction: -1 | 1;
+    loop: boolean;
   }) => void;
   phaseRad: string;
 }
@@ -36,14 +37,16 @@ interface ModeVisualizationPhaseControlProps {
 export function ModeVisualizationPhaseControl({
   animate = false,
   animationDirection = 1,
+  animationLoop = true,
   animationRateHz = 1,
   disabled,
-  onChange,
   onSetPhase,
   onAnimationChange,
   phaseRad,
 }: ModeVisualizationPhaseControlProps) {
   const [phaseDraft, setPhaseDraft] = useState(phaseRad);
+  const [isPhaseEditing, setIsPhaseEditing] = useState(false);
+  const numericPhaseValue = isPhaseEditing ? phaseDraft : phaseRad;
 
   return (
     <div className="fm-mode-phase-control">
@@ -60,11 +63,9 @@ export function ModeVisualizationPhaseControl({
               min="0"
               step="0.01"
               type="range"
-              value={phaseDraft}
+              value={phaseRad}
               onChange={(event) => {
                 const value = event.currentTarget.value;
-                setPhaseDraft(value);
-                onChange?.(value);
                 onSetPhase(value);
               }}
             />
@@ -75,11 +76,14 @@ export function ModeVisualizationPhaseControl({
             inputMode="decimal"
             step="any"
             type="number"
-            value={phaseDraft}
+            value={numericPhaseValue}
+            onBlur={() => setIsPhaseEditing(false)}
             onChange={(event) => {
-              const value = event.currentTarget.value;
-              setPhaseDraft(value);
-              onChange?.(value);
+              setPhaseDraft(event.currentTarget.value);
+            }}
+            onFocus={() => {
+              setPhaseDraft(phaseRad);
+              setIsPhaseEditing(true);
             }}
           />
           <Button
@@ -87,7 +91,10 @@ export function ModeVisualizationPhaseControl({
             disabled={disabled}
             size="sm"
             type="button"
-            onClick={() => onSetPhase(phaseDraft)}
+            onClick={() => {
+              onSetPhase(numericPhaseValue);
+              setIsPhaseEditing(false);
+            }}
           >
             Set phase
           </Button>
@@ -104,6 +111,7 @@ export function ModeVisualizationPhaseControl({
             animatePhase: !animate,
             animationRateHz,
             direction: animationDirection,
+            loop: animationLoop,
           })}
         >
           {animate ? "Pause" : "Play"}
@@ -117,6 +125,7 @@ export function ModeVisualizationPhaseControl({
             animatePhase: animate,
             animationRateHz: Number(event.currentTarget.value),
             direction: animationDirection,
+            loop: animationLoop,
           })}
         >
           <option value="0.1">0.1 Hz</option>
@@ -135,9 +144,26 @@ export function ModeVisualizationPhaseControl({
             animatePhase: animate,
             animationRateHz,
             direction: animationDirection === 1 ? -1 : 1,
+            loop: animationLoop,
           })}
         >
           {animationDirection === 1 ? "Forward" : "Reverse"}
+        </Button>
+        <Button
+          aria-label="Loop mode phase animation"
+          aria-pressed={animationLoop}
+          disabled={disabled}
+          size="sm"
+          type="button"
+          variant={animationLoop ? "primary" : "secondary"}
+          onClick={() => onAnimationChange?.({
+            animatePhase: animate,
+            animationRateHz,
+            direction: animationDirection,
+            loop: !animationLoop,
+          })}
+        >
+          Loop
         </Button>
         <Button
           aria-label="Reset mode phase"
@@ -147,7 +173,7 @@ export function ModeVisualizationPhaseControl({
           variant="secondary"
           onClick={() => {
             setPhaseDraft("0");
-            onChange?.("0");
+            setIsPhaseEditing(false);
             onSetPhase("0");
           }}
         >
@@ -204,15 +230,15 @@ export function ModeVisualizationViewPanel({ selection }: InspectorPanelProps) {
         <FieldRow label="View semantics" value={target?.view ?? "active overlay view"} />
         {target ? (
           <ModeVisualizationPhaseControl
-            key={`${target.fieldId}:${target.source}:${overlayPhaseRad}`}
+            key={`${target.fieldId}:${target.source}`}
             disabled={!activeTargetOverlay}
             animate={activeTargetOverlay?.animation?.animatePhase ?? false}
             animationDirection={activeTargetOverlay?.animation?.direction ?? 1}
+            animationLoop={activeTargetOverlay?.animation?.loop ?? true}
             animationRateHz={activeTargetOverlay?.animation?.animationRateHz ?? 1}
             onAnimationChange={(animation) => {
               kernel.analysisFieldOverlay.update({ animation });
             }}
-            onChange={setPhase}
             onSetPhase={setPhase}
             phaseRad={String(overlayPhaseRad)}
           />

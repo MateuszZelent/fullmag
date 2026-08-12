@@ -19,6 +19,7 @@ interface AnalysisFieldOverlayAnimationState {
   animatePhase: boolean;
   animationRateHz: number;
   direction?: -1 | 1;
+  loop?: boolean;
 }
 
 export interface AnalysisFieldOverlayAppearanceState {
@@ -213,7 +214,8 @@ function analysisFieldOverlayAnimationEquals(
   return (
     left.animatePhase === right.animatePhase &&
     left.animationRateHz === right.animationRateHz &&
-    (left.direction ?? 1) === (right.direction ?? 1)
+    (left.direction ?? 1) === (right.direction ?? 1) &&
+    (left.loop ?? true) === (right.loop ?? true)
   );
 }
 

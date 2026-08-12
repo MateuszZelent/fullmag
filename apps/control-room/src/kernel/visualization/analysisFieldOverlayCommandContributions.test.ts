@@ -732,6 +732,12 @@ describe("analysis field overlay commands", () => {
     const commands = commandRegistry();
     const overlay = new AnalysisFieldOverlayController();
     overlay.set({
+      animation: {
+        animatePhase: true,
+        animationRateHz: 0.5,
+        direction: -1,
+        loop: false,
+      },
       fieldId: "analysis:frequency-response:frequency-0001",
       label: "1 GHz",
       query: {
@@ -877,6 +883,12 @@ describe("analysis field overlay commands", () => {
     const commands = commandRegistry();
     const overlay = new AnalysisFieldOverlayController();
     overlay.set({
+      animation: {
+        animatePhase: true,
+        animationRateHz: 0.5,
+        direction: -1,
+        loop: false,
+      },
       fieldId: "analysis:frequency-response:frequency-0001",
       label: "1 GHz",
       query: {
@@ -927,6 +939,8 @@ describe("analysis field overlay commands", () => {
       animation: {
         animatePhase: false,
         animationRateHz: 2,
+        direction: -1,
+        loop: false,
       },
       fieldId: "analysis:frequency-response:frequency-0001",
       source: "frequency-response",

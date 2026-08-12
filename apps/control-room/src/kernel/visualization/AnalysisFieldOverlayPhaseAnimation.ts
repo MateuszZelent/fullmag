@@ -54,11 +54,11 @@ export function startAnalysisFieldOverlayPhaseAnimation(
       snapshot.visualizationPhaseRad ?? snapshot.query.phase_rad ?? 0;
     const animationRateHz =
       snapshot.animation.animationRateHz * (snapshot.animation.direction ?? 1);
-    controller.update({
-      visualizationPhaseRad: wrapPhaseRad(
-        phaseRad + TWO_PI * animationRateHz * (intervalMs / 1000),
-      ),
-    });
+    applyPhaseStep(
+      controller,
+      snapshot,
+      phaseRad + TWO_PI * animationRateHz * (intervalMs / 1000),
+    );
   };
 
   const frame = (timeMs: number) => {
@@ -75,15 +75,15 @@ export function startAnalysisFieldOverlayPhaseAnimation(
       );
       const phaseRad =
         snapshot.visualizationPhaseRad ?? snapshot.query.phase_rad ?? 0;
-      controller.update({
-        visualizationPhaseRad: wrapPhaseRad(
-          phaseRad +
-            TWO_PI *
-              snapshot.animation.animationRateHz *
-              (snapshot.animation.direction ?? 1) *
-              elapsedSeconds,
-        ),
-      });
+      applyPhaseStep(
+        controller,
+        snapshot,
+        phaseRad +
+          TWO_PI *
+            snapshot.animation.animationRateHz *
+            (snapshot.animation.direction ?? 1) *
+            elapsedSeconds,
+      );
     }
     previousFrameTimeMs = timeMs;
     if (
@@ -150,4 +150,29 @@ function isAnimatingAnalysisOverlay(
 function wrapPhaseRad(phaseRad: number): number {
   const wrapped = phaseRad % TWO_PI;
   return wrapped >= 0 ? wrapped : wrapped + TWO_PI;
+}
+
+function applyPhaseStep(
+  controller: AnalysisFieldOverlayController,
+  snapshot: AnalysisFieldOverlayState & {
+    animation: NonNullable<AnalysisFieldOverlayState["animation"]>;
+  },
+  nextPhaseRad: number,
+): void {
+  if (snapshot.animation.loop ?? true) {
+    controller.update({ visualizationPhaseRad: wrapPhaseRad(nextPhaseRad) });
+    return;
+  }
+  const completed = nextPhaseRad < 0 || nextPhaseRad >= TWO_PI;
+  controller.update({
+    ...(completed
+      ? {
+          animation: {
+            ...snapshot.animation,
+            animatePhase: false,
+          },
+        }
+      : {}),
+    visualizationPhaseRad: Math.min(TWO_PI, Math.max(0, nextPhaseRad)),
+  });
 }

@@ -629,6 +629,49 @@ async function qualifyInspectorRoutingMatrix(page, inspector, screenshotFiles) {
     label: "Film",
   });
   await assertHealthyViewportCanvas(page, "mode visualization");
+  const modeRootId = "model:object:film:visualization:mode-visualization";
+  const modeFieldId = `${modeRootId}:active`;
+  await expandInspectorNode(page, modeRootId);
+  await expandInspectorNode(page, modeFieldId);
+  await selectInspectorNode(
+    page,
+    inspector,
+    `${modeFieldId}:view:phase_rotated_real`,
+    {
+      owner: "object-mode-visualization-view",
+      label: "Phase-rotated real mode view",
+    },
+  );
+  const phaseSlider = inspector.getByRole("slider", {
+    name: "Mode visualization phase slider",
+  });
+  await phaseSlider.focus();
+  await phaseSlider.press("ArrowRight");
+  const playPhase = inspector.getByRole("button", {
+    name: "Play mode phase animation",
+  });
+  await playPhase.focus();
+  await playPhase.press("Enter");
+  await inspector.getByRole("button", { name: "Pause mode phase animation" }).waitFor();
+  const loopPhase = inspector.getByRole("button", {
+    name: "Loop mode phase animation",
+  });
+  assert(
+    (await loopPhase.getAttribute("aria-pressed")) === "true",
+    "Mode phase animation is not loop-enabled by default.",
+  );
+  await loopPhase.click();
+  assert(
+    (await loopPhase.getAttribute("aria-pressed")) === "false",
+    "Mode phase animation loop toggle did not update.",
+  );
+  const modeViewScreenshot = "mode-visualization-phase-controls-416.png";
+  await inspector.screenshot({ path: resolve(outputDir, modeViewScreenshot) });
+  screenshotFiles.push(modeViewScreenshot);
+  assert(
+    await inspector.evaluate((element) => element.scrollWidth <= element.clientWidth),
+    "Mode visualization Inspector has horizontal overflow.",
+  );
 
   await selectInspectorNode(page, inspector, "model:object:film:visualization", {
     owner: "object-visualization",

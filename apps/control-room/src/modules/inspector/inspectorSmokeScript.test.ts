@@ -29,6 +29,8 @@ describe("explorer Inspector browser smoke script", () => {
     expect(smokeScript).toContain("Mode visualization Plot 3D action is disabled");
     expect(smokeScript).toContain("physics-first-frequency-points-416.png");
     expect(smokeScript).toContain("physics-first-response-fields-416.png");
+    expect(smokeScript).toContain("mode-visualization-phase-controls-416.png");
+    expect(smokeScript).toContain("Loop mode phase animation");
     expect(smokeScript).toContain('press("Space")');
     expect(smokeScript).toContain('press("Enter")');
     expect(smokeScript).toContain("isContextLost");

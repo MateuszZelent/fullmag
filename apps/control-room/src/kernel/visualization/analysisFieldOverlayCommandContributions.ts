@@ -487,6 +487,8 @@ function setOverlayAnimationCommand(options: {
         animation: {
           animatePhase,
           animationRateHz,
+          direction: overlay.animation?.direction ?? 1,
+          loop: overlay.animation?.loop ?? true,
         },
         visualizationPhaseRad,
         query: animatePhase
@@ -547,6 +549,8 @@ function stopOverlayAnimationCommand(options: {
         animation: {
           animatePhase: false,
           animationRateHz: 0,
+          direction: overlay.animation?.direction ?? 1,
+          loop: overlay.animation?.loop ?? true,
         },
       });
       return {

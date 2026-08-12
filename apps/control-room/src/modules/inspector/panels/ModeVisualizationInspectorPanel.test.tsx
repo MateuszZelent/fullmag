@@ -1,3 +1,5 @@
+import { act } from "react";
+import { createRoot } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 
@@ -8,6 +10,12 @@ import { AnalysisFieldOverlayController } from "@/kernel/visualization/AnalysisF
 import { VisualizationDebugController } from "@/kernel/visualization/VisualizationDebugController";
 import { ANALYSIS_FIELD_OVERLAY_COMMANDS } from "@/kernel/visualization/analysisFieldOverlayCommandContributions";
 import type { FrequencyDomainFieldResource } from "@/kernel/api/apiTypes";
+import {
+  findElement,
+  installSimulationPreparationTestDom,
+  TestElement,
+  TestEvent,
+} from "@/kernel/layout/simulationPreparationTestDom.test-support";
 
 import {
   buildModeFieldDiagnosticRows,
@@ -268,6 +276,77 @@ describe("ModeVisualizationInspectorPanel", () => {
     expect(html).not.toContain("0 rad command default");
   });
 
+  it("keeps a numeric phase draft stable while external animation updates the slider", async () => {
+    const dom = installSimulationPreparationTestDom();
+    const createElement = dom.document.createElement.bind(dom.document);
+    dom.document.createElement = ((tagName: string) => {
+      const element = createElement(tagName);
+      if (tagName === "select") Object.assign(element, { options: [] });
+      return element;
+    }) as typeof dom.document.createElement;
+    const container = dom.document.createElement("div");
+    const root = createRoot(container as unknown as Element);
+    const onSetPhase = vi.fn();
+    const renderPhaseControl = async (phaseRad: string) => {
+      await act(async () => {
+        root.render(
+          <ModeVisualizationPhaseControl
+            disabled={false}
+            onSetPhase={onSetPhase}
+            phaseRad={phaseRad}
+          />,
+        );
+      });
+    };
+
+    try {
+      await renderPhaseControl("1");
+      const phaseInput = findElement(
+        container,
+        (element) =>
+          element.getAttribute("aria-label") === "Mode visualization phase",
+        "Mode visualization phase input",
+      ) as TestElement & { value: string };
+      const phaseSlider = findElement(
+        container,
+        (element) =>
+          element.getAttribute("aria-label") === "Mode visualization phase slider",
+        "Mode visualization phase slider",
+      ) as TestElement & { value: string };
+      Object.assign(phaseInput, {
+        attachEvent: () => undefined,
+        detachEvent: () => undefined,
+      });
+
+      await act(async () => {
+        phaseInput.dispatchEvent(new TestEvent("focusin", { bubbles: true }));
+      });
+      await renderPhaseControl("2");
+
+      expect(phaseInput.value).toBe("1");
+      expect(phaseSlider.value).toBe("2");
+
+      await act(async () => {
+        phaseInput.dispatchEvent(new TestEvent("focusout", { bubbles: true }));
+      });
+      expect(phaseInput.value).toBe("2");
+
+      const setPhaseButton = findElement(
+        container,
+        (element) =>
+          element.tagName === "BUTTON" && element.textContent === "Set phase",
+        "Set phase button",
+      );
+      await act(async () => {
+        setPhaseButton.dispatchEvent(new TestEvent("click", { bubbles: true }));
+      });
+      expect(onSetPhase).toHaveBeenLastCalledWith("2");
+    } finally {
+      await act(async () => root.unmount());
+      dom.restore();
+    }
+  });
+
   it("exposes presentation-only color, amplitude, and glyph scaling", () => {
     const html = renderModeOwner("object.mode_visualization.view");
 
@@ -333,13 +412,13 @@ describe("ModeVisualizationInspectorPanel", () => {
       const phaseHtml = renderToStaticMarkup(
         <ModeVisualizationPhaseControl
           disabled={false}
-          onChange={() => undefined}
           onSetPhase={() => undefined}
           phaseRad={String(overlay.getSnapshot()?.visualizationPhaseRad ?? 0)}
         />,
       );
       expect(phaseHtml).toContain('aria-label="Mode visualization phase"');
       expect(phaseHtml).toContain('value="1.25"');
+      expect(phaseHtml).toContain('aria-label="Loop mode phase animation"');
     },
   );
 
