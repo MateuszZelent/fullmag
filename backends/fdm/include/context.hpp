@@ -34,6 +34,23 @@ struct DeviceVectorField {
     void *z = nullptr;
 };
 
+struct Context;
+
+using GpuTransportRhsEvaluator = bool (*)(
+    Context &ctx,
+    const DeviceVectorField &m_stage,
+    double t_stage,
+    uint64_t attempt_id,
+    uint64_t stage_id,
+    DeviceVectorField &torque_view);
+
+struct GpuTransportRhsBinding {
+    fullmag_fdm_gpu_transport_llg_binding_v1 descriptor{};
+    GpuTransportRhsEvaluator evaluate = nullptr;
+    DeviceVectorField torque_view{}; // non-owning view into transport-owned storage
+    bool active = false;
+};
+
 struct DeviceDemagKernel {
     void *xx = nullptr;
     void *yy = nullptr;
@@ -254,6 +271,17 @@ struct Context {
     uint64_t step_count = 0;
     double current_time = 0.0;
 
+    // Non-owning adapter to transport-owned stage solve and torque storage.
+    GpuTransportRhsBinding gpu_transport_rhs;
+    uint64_t gpu_transport_owner_id = 0;
+    // Monotonic per-context attempt identity.  Unlike step_count, this is not
+    // rewound when a coupled transport attempt is rejected and retried.
+    uint64_t gpu_transport_attempt_generation = 0;
+    uint64_t gpu_transport_active_attempt_id = 0;
+    // Test-only completion boundary selected by the bound transport owner.
+    // Zero is the production path.
+    uint32_t gpu_transport_test_completion_fault = 0;
+
     // Device state (SoA layout)
     DeviceVectorField m;      // magnetization
     DeviceVectorField h_ex;   // exchange field
@@ -261,6 +289,10 @@ struct Context {
     DeviceVectorField h_ani;  // anisotropy field
     DeviceVectorField k1;     // RHS stage 1 (all integrators)
     DeviceVectorField tmp;    // predictor state / scratch
+    // Transaction-owned accepted m snapshot for an active bound transport
+    // step.  Integrators may freely reuse tmp without weakening rollback.
+    DeviceVectorField gpu_transport_pre_step_m;
+    bool gpu_transport_pre_step_m_valid = false;
     DeviceVectorField work;   // effective field / scratch
 
     // --- DP45-specific stage buffers ---
@@ -405,6 +437,30 @@ cudaStream_t context_compute_stream(Context &ctx);
 #endif
 bool context_begin_compute_stream_work(Context &ctx, const char *operation);
 bool context_end_compute_stream_work(Context &ctx, const char *operation);
+bool context_test_copy_f64_on_compute_stream(
+    Context &ctx, double *destination, const double *source, uint64_t values);
+bool context_capture_gpu_transport_pre_step_m(Context &ctx);
+bool context_restore_gpu_transport_pre_step_m(Context &ctx);
+void context_invalidate_gpu_transport_pre_step_m(Context &ctx);
+
+bool context_bind_gpu_transport_rhs(
+    Context &ctx,
+    const fullmag_fdm_gpu_transport_llg_binding_v1 &binding);
+bool context_unbind_gpu_transport_rhs(Context &ctx);
+bool context_evaluate_gpu_transport_rhs(
+    Context &ctx,
+    const DeviceVectorField &m_stage,
+    double t_stage,
+    uint64_t attempt_id,
+    uint64_t stage_id);
+bool context_complete_gpu_transport_rhs(Context &ctx);
+bool context_begin_gpu_transport_step(Context &ctx, uint64_t attempt_id);
+bool context_commit_gpu_transport_step(Context &ctx);
+bool context_rollback_gpu_transport_step(Context &ctx);
+bool launch_add_gpu_transport_torque_fp64(
+    Context &ctx,
+    const DeviceVectorField &m_stage,
+    DeviceVectorField &rhs);
 
 struct AsyncFieldSnapshot {
     fullmag_fdm_precision precision = FULLMAG_FDM_PRECISION_DOUBLE;

@@ -998,7 +998,7 @@ map is `coupled_charge_spin.rs::initial_state_guess`,
 `coupled_block_linear.rs::BlockLinePreconditioner`.
 
 (fdm-gpu-m1-fp64-contract)=
-### 3.1.1 FDM GPU/FP64 M1 realization contract (PR-15; bounded charge implementation)
+### 3.1.1 FDM GPU/FP64 M1 realization contract (PR-15; partial native implementation)
 
 This section freezes the first native CUDA milestone for one-way M1 charge,
 steady spin/direct-SHE, interface mixing, and transport torque. It is a
@@ -1009,13 +1009,29 @@ share mutable solver state or implementation workspaces.
 
 Ogólny agregat pozostaje `semantic_only`, ponieważ poza bounded
 `CurrentTransport` charge-only nie ma jeszcze publicznej ścieżki dla tego ABI.
-Agregat FDM GPU M1 ma `implementation_state=partial`: zaimplementowany jest
-wyłącznie ograniczony charge-only FP64 slice, natomiast steady spin, direct
-SHE, mixing i torque z tego kontraktu nadal nie mają realizacji CUDA. Stan
+Agregat FDM GPU M1 ma `implementation_state=partial`: oprócz ograniczonego
+charge-only FP64 slice istnieje natywny solver steady spin/direct-SHE,
+mixing i torque oraz niekwalifikowane etapowe sprzężenie torque z FP64
+Heun/RK4. Wyłączny claim wiąże jeden kontekst LLG z jednym accepted charge
+snapshotem. Rozwiązania spinowe etapów są stanem trial; dopiero przyjęcie
+całego kroku LLG promuje trial policzony dla końcowego zaakceptowanego `m` do
+`spin_accepted`; wybór poziomu statystyk nie uruchamia dodatkowego solve i nie
+zmienia stanu naukowego. Awaria późnego etapu przywraca bitowo `m`, czas i
+liczniki accepted oraz usuwa trial i mutowalny sparse cache. `t_stage` jest
+sprawdzany pod kątem skończoności i niemalejącej kolejności, lecz ten ograniczony
+slice używa jednego niemutowalnego accepted charge snapshotu przez wszystkie
+kroki danego wiązania.
+Realizuje więc tylko stałe w czasie $J_c$; wymuszenie $J_c(t)$ z ogólnego
+kontraktu sekcji 2.6 pozostaje niewykonywalne i nie może być deklarowane jako
+obsługiwane. Stan
 walidacji pozostaje `validation_state=unvalidated`, z
-`validated_workloads=[]`. Świeży managed device proof poniżej jest dowodem
-wykonania testów kontraktowych, nie promocją capability ani kwalifikacją
-produkcyjną.
+`validated_workloads=[]`. Managed lifecycle gate po zmianach
+final-state/statistics/rollback i stream-local pin/drain przechodzi testy
+Heun/RK4, błędy launch/event-record/event-sync, teardown rejection podczas
+in-flight, C11/Rust ABI oraz dwa przebiegi `compute-sanitizer` bez błędów. Jest
+to dowód testów kontraktowych, a nie promocja capability ani kwalifikacja
+produkcyjna; globalna serializacja registry i pełna ścieżka publicznego
+ProblemIR/plannera/runnera pozostają otwarte.
 
 #### Stan ograniczonej implementacji M1 charge z 2026-08-11
 
@@ -1128,8 +1144,8 @@ Zaimportowany iterate jest
 odtwarzany jako accepted snapshot, ale następny solve nie konsumuje jeszcze
 tego stanu jako persistent Krylov warm start. Nie ma publicznego runnera,
 ProblemIR stage ani stabilnych artefaktów/proweniencji tego slice'u. Nie ma też
-CUDA steady spin, SHE, mixing, torque, FP32, periodic, multi-device, konwergencji
-siatkowej ani kwalifikacji wydajnościowej. W historycznym runie wiersze
+publicznego dispatchu spin, FP32, periodic, multi-device, konwergencji siatkowej
+ani kwalifikacji wydajnościowej. W historycznym runie wiersze
 `component_gauge_v1`, `determinism_restart_v1`, `public_path_v1`, spin/SHE/mixing/torque,
 `convergence_v1` i `performance_v1` pozostają niezamknięte.
 
@@ -1168,7 +1184,7 @@ Ten wynik zamyka managed proof bounded zero-mean realization, ale nie zmienia
 granic publicznej kwalifikacji: publiczny zero-mean gauge istnieje wyłącznie
 dla opisanego w sekcji 7.3 pełnopowierzchniowego profilu dwóch elektrod
 `NormalCurrentElectrode`. Nie ma persistent Krylov warm start w tym przepływie,
-CUDA steady spin/SHE/mixing/torque, compute-sanitizer, mesh convergence,
+publicznego dispatchu spin/SHE/mixing/torque, mesh convergence,
 cross-backend parity ani produkcyjnego statusu. Ogólna capability pozostaje
 `semantic_only`.
 
@@ -2252,6 +2268,10 @@ a qualified workload without the validation gates above.
 | Native FDM M1 validation helpers | backends/fdm/cpu/transport/spin_transport_validation_v1.cpp | evaluate_local_residual_gate | cell-local FV acceptance and independently testable direct-SHE contraction | native spin contract |
 | Native FDM M1 charge regression | backends/fdm/tests/cpu_charge_transport_contract.cpp | main | oriented traces, conservative current, reversed orientation, and finite-conductance validation | native charge contract |
 | Native FDM M1 spin regression | backends/fdm/tests/cpu_spin_transport_contract.cpp | main | independent mixing/reaction/torque algebra, local residual rejection, and six SHE contractions | native spin contract |
+| Native FDM GPU M1 spin solver | backends/fdm/gpu/cuda/transport/spin/device_solver.cu | solve_device | FP64 steady spin/direct-SHE, dynamic mixing and target-masked transport torque on the context-owned stream | managed GPU CPU-parity contract; partial and unvalidated |
+| Native FDM GPU M1 LLG binding ABI | native/include/fullmag_fdm.h | fullmag_fdm_context_bind_gpu_transport_v1 | append-only 144-byte binding record and public bind/unbind entry points | C11/C++/Rust layout and actual-device ownership contract |
+| Native FDM GPU M1 LLG binding | backends/fdm/gpu/cuda/transport/context.cu | context_bind_gpu_transport_rhs; context_begin_gpu_transport_step; context_commit_gpu_transport_step; context_rollback_gpu_transport_step | exclusive one-owner binding, stage trial state and accepted-step promotion/rollback | `just verify-fdm-gpu-m1-transport-llg-lifecycle-contract`; not production qualification |
+| Native FDM GPU M1 torque RHS | backends/fdm/gpu/cuda/integrators/transport_rhs_fp64.cu | launch_add_gpu_transport_torque_fp64 | add Gilbert-form transport torque exactly once and pin transport storage through kernel completion | managed Heun/RK4 stage contract and compute-sanitizer |
 | Rust M1 parity oracle | crates/fullmag-engine/examples/fdm_spin_oracle_v1.rs | main | nonzero mixing charge/spin fixture and public interface observations | managed Rust/native parity |
 | Native M1 parity comparator | backends/fdm/tests/cpu_spin_transport_parity.cpp | main | solved-field, reaction, torque, balance, and public interface-flux comparison | managed Rust/native parity |
 | Planner regression | crates/fullmag-plan/src/spin_transport.rs | resolves_bounded_fem_m2_to_reciprocal_descriptor_without_fallback | no-fallback M2 planning invariant | focused managed test |

@@ -72,6 +72,23 @@ bool select_cuda_device_if_requested(Context &ctx) {
     }
     return true;
 }
+
+bool rollback_bound_fp64_step(
+    Context &ctx, uint64_t accepted_step, double accepted_time)
+{
+    if (!ctx.gpu_transport_rhs.active ||
+        ctx.precision != FULLMAG_FDM_PRECISION_DOUBLE || ctx.cell_count == 0) {
+        return true;
+    }
+    if (!context_restore_gpu_transport_pre_step_m(ctx)) return false;
+    ctx.step_count = accepted_step;
+    ctx.current_time = accepted_time;
+    if (!context_rollback_gpu_transport_step(ctx)) {
+        ctx.last_error = "failed to roll back bound spin-transport trial state";
+        return false;
+    }
+    return true;
+}
 #endif
 
 #if FULLMAG_HAS_CUDA
@@ -1042,8 +1059,31 @@ int fullmag_fdm_backend_step(
         ctx->last_error = "FDM step requires dt_seconds > 0";
         return FULLMAG_FDM_ERR_INVALID;
     }
+    // A rejected transport-coupled attempt is retryable. Its diagnostic must
+    // not poison the next explicit public step.
+    if (ctx->gpu_transport_rhs.active) ctx->last_error.clear();
     ctx->current_dt = dt_seconds;
     ctx->step_interrupted = false;
+    const uint64_t accepted_step = ctx->step_count;
+    const double accepted_time = ctx->current_time;
+    uint64_t transport_attempt_id = 0;
+    if (ctx->gpu_transport_rhs.active) {
+        if (ctx->gpu_transport_attempt_generation == UINT64_MAX) {
+            ctx->last_error = "bound spin-transport attempt identity exhausted";
+            return FULLMAG_FDM_ERR_INVALID;
+        }
+        transport_attempt_id = ++ctx->gpu_transport_attempt_generation;
+        ctx->gpu_transport_active_attempt_id = transport_attempt_id;
+    }
+    if (!context_begin_gpu_transport_step(*ctx, transport_attempt_id)) {
+        ctx->gpu_transport_active_attempt_id = 0;
+        ctx->last_error = "failed to begin bound spin-transport step transaction";
+        return FULLMAG_FDM_ERR_CUDA;
+    }
+    if (!context_capture_gpu_transport_pre_step_m(*ctx)) {
+        (void)context_rollback_gpu_transport_step(*ctx);
+        return FULLMAG_FDM_ERR_CUDA;
+    }
     fullmag_fdm_reset_hot_loop_audit(*ctx);
     if (ctx->has_multilayer_plan_v2) {
         if (ctx->integrator != FULLMAG_FDM_INTEGRATOR_HEUN &&
@@ -1122,6 +1162,8 @@ int fullmag_fdm_backend_step(
     }
 
     if (ctx->step_interrupted) {
+        if (!rollback_bound_fp64_step(*ctx, accepted_step, accepted_time))
+            return FULLMAG_FDM_ERR_CUDA;
         if (!context_fill_current_stats(*ctx, out_stats)) {
             return FULLMAG_FDM_ERR_CUDA;
         }
@@ -1131,9 +1173,11 @@ int fullmag_fdm_backend_step(
     }
 
     if (ctx->last_error == "dt_min_exhausted") {
+        (void)rollback_bound_fp64_step(*ctx, accepted_step, accepted_time);
         return FULLMAG_FDM_ERR_DT_MIN_EXHAUSTED;
     }
     if (!ctx->last_error.empty()) {
+        (void)rollback_bound_fp64_step(*ctx, accepted_step, accepted_time);
         return FULLMAG_FDM_ERR_CUDA;
     }
 
@@ -1141,13 +1185,50 @@ int fullmag_fdm_backend_step(
     cudaError_t err = cudaGetLastError();
     if (err != cudaSuccess) {
         set_cuda_error(*ctx, "integrator_step", err);
+        (void)rollback_bound_fp64_step(*ctx, accepted_step, accepted_time);
         return FULLMAG_FDM_ERR_CUDA;
     }
+
+    if (!context_commit_gpu_transport_step(*ctx)) {
+        ctx->last_error = "failed to commit bound spin-transport step transaction";
+        (void)rollback_bound_fp64_step(*ctx, accepted_step, accepted_time);
+        return FULLMAG_FDM_ERR_CUDA;
+    }
+    context_invalidate_gpu_transport_pre_step_m(*ctx);
 
     fullmag_fdm_publish_hot_loop_audit(*ctx, out_stats);
     return FULLMAG_FDM_OK;
 #else
     (void)handle; (void)dt_seconds; (void)out_stats;
+    return FULLMAG_FDM_ERR_CUDA;
+#endif
+}
+
+int fullmag_fdm_context_bind_gpu_transport_v1(
+    fullmag_fdm_backend *handle,
+    const fullmag_fdm_gpu_transport_llg_binding_v1 *binding)
+{
+#if FULLMAG_HAS_CUDA
+    if (handle == nullptr || binding == nullptr) return FULLMAG_FDM_ERR_INVALID;
+    auto *ctx = reinterpret_cast<Context *>(handle);
+    return context_bind_gpu_transport_rhs(*ctx, *binding)
+        ? FULLMAG_FDM_OK
+        : FULLMAG_FDM_ERR_INVALID;
+#else
+    (void)handle;
+    (void)binding;
+    return FULLMAG_FDM_ERR_CUDA;
+#endif
+}
+
+int fullmag_fdm_context_unbind_gpu_transport_v1(fullmag_fdm_backend *handle) {
+#if FULLMAG_HAS_CUDA
+    if (handle == nullptr) return FULLMAG_FDM_ERR_INVALID;
+    return context_unbind_gpu_transport_rhs(*reinterpret_cast<Context *>(handle))
+        ? FULLMAG_FDM_OK
+        : FULLMAG_FDM_ERR_INVALID;
+#else
+    (void)handle;
     return FULLMAG_FDM_ERR_CUDA;
 #endif
 }
@@ -1742,6 +1823,9 @@ void fullmag_fdm_backend_destroy(fullmag_fdm_backend *handle) {
     if (!handle) return;
 #if FULLMAG_HAS_CUDA
     auto *ctx = reinterpret_cast<Context *>(handle);
+    if (ctx->gpu_transport_rhs.active && !context_unbind_gpu_transport_rhs(*ctx)) {
+        return;
+    }
     context_free_device(*ctx);
     delete ctx;
 #endif

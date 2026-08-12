@@ -679,6 +679,22 @@ verify-fdm-gpu-m1-spin-observables-contract:
       -e FULLMAG_CUDA_ARCHITECTURES="${FULLMAG_CUDA_ARCHITECTURES:-native}" \
       fem-gpu bash -lc 'set -euo pipefail; cd /workspace; build_dir=/mnt/fullmag-zfn2-native/fdm-gpu-m1-spin-observables; mkdir -p "$build_dir" "$build_dir/cargo-home" "$build_dir/cargo-target"; cmake -S native -B "$build_dir" -DCMAKE_CUDA_ARCHITECTURES="$FULLMAG_CUDA_ARCHITECTURES" -DFULLMAG_ENABLE_CUDA=ON -DFULLMAG_ENABLE_FEM_GPU=OFF -DFULLMAG_USE_MFEM_STACK=OFF -DFULLMAG_FEM_WITH_SLEPC=OFF; cmake --build "$build_dir" --target fullmag_fdm fdm_gpu_transport_layout_abi_v1_c11_contract fdm_gpu_m1_spin_operator_parity_v1_contract; FULLMAG_FDM_LIB_DIR="$build_dir/backends/fdm" LD_LIBRARY_PATH="$build_dir/backends/fdm${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" CARGO_HOME="$build_dir/cargo-home" CARGO_TARGET_DIR="$build_dir/cargo-target" CARGO_INCREMENTAL=0 cargo test -p fullmag-fdm-sys gpu_transport_abi_v1::tests -- --nocapture; ctest --test-dir "$build_dir/backends/fdm" --output-on-failure -R "^fdm_gpu_transport_layout_abi_v1_c11_contract$"; "$build_dir/backends/fdm/fdm_gpu_m1_spin_operator_parity_v1_contract"'
 
+verify-fdm-gpu-m1-transport-llg-native-contract:
+    docker compose -p fullmag --profile fem-gpu run --rm --no-deps \
+      -v /mnt/fullmag-zfn2-native:/mnt/fullmag-zfn2-native \
+      -e CMAKE_BUILD_PARALLEL_LEVEL="${FULLMAG_NATIVE_BUILD_JOBS:-2}" \
+      -e FULLMAG_CUDA_ARCHITECTURES="${FULLMAG_CUDA_ARCHITECTURES:-native}" \
+      fem-gpu bash -lc 'set -euo pipefail; cd /workspace; build_dir=/mnt/fullmag-zfn2-native/fdm-gpu-m1-transport-llg; mkdir -p "$build_dir/cargo-home" "$build_dir/cargo-target"; cmake -S native -B "$build_dir" -DCMAKE_CUDA_ARCHITECTURES="$FULLMAG_CUDA_ARCHITECTURES" -DFULLMAG_ENABLE_CUDA=ON -DFULLMAG_ENABLE_FEM_GPU=OFF -DFULLMAG_USE_MFEM_STACK=OFF -DFULLMAG_FEM_WITH_SLEPC=OFF; cmake --build "$build_dir" --target fullmag_fdm fdm_gpu_transport_layout_abi_v1_c11_contract fdm_gpu_m1_transport_llg_stage_v1_contract fdm_gpu_m1_spin_operator_parity_v1_contract; LD_LIBRARY_PATH="$build_dir/backends/fdm${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" "$build_dir/backends/fdm/fdm_gpu_m1_transport_llg_stage_v1_contract"; "$build_dir/backends/fdm/fdm_gpu_m1_spin_operator_parity_v1_contract"; ctest --test-dir "$build_dir/backends/fdm" --output-on-failure -R "^fdm_gpu_transport_layout_abi_v1_c11_contract$"; FULLMAG_FDM_LIB_DIR="$build_dir/backends/fdm" LD_LIBRARY_PATH="$build_dir/backends/fdm${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" CARGO_HOME="$build_dir/cargo-home" CARGO_TARGET_DIR="$build_dir/cargo-target" CARGO_INCREMENTAL=0 cargo test -p fullmag-fdm-sys gpu_transport_abi_v1::tests -- --nocapture'
+
+verify-fdm-gpu-m1-transport-llg-lifecycle-contract: verify-fdm-gpu-m1-transport-llg-native-contract
+
+verify-fdm-gpu-m1-transport-llg-compute-sanitizer: verify-fdm-gpu-m1-transport-llg-lifecycle-contract
+    docker compose -p fullmag --profile fem-gpu run --rm --no-deps \
+      -v /mnt/fullmag-zfn2-native:/mnt/fullmag-zfn2-native \
+      fem-gpu bash -lc 'set -euo pipefail; build_dir=/mnt/fullmag-zfn2-native/fdm-gpu-m1-transport-llg; command -v compute-sanitizer >/dev/null; export LD_LIBRARY_PATH="$build_dir/backends/fdm${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"; compute-sanitizer --tool memcheck --error-exitcode 99 "$build_dir/backends/fdm/fdm_gpu_m1_transport_llg_stage_v1_contract"; compute-sanitizer --tool memcheck --error-exitcode 99 "$build_dir/backends/fdm/fdm_gpu_m1_spin_operator_parity_v1_contract"; compute-sanitizer --tool synccheck --error-exitcode 99 "$build_dir/backends/fdm/fdm_gpu_m1_transport_llg_stage_v1_contract"; compute-sanitizer --tool synccheck --error-exitcode 99 "$build_dir/backends/fdm/fdm_gpu_m1_spin_operator_parity_v1_contract"'
+
+verify-fdm-gpu-m1-transport-llg-sanitizer: verify-fdm-gpu-m1-transport-llg-compute-sanitizer
+
 verify-fdm-gpu-m1-spin-sparse-performance-contract:
     docker compose --profile fem-gpu run --rm --no-deps \
       -v /mnt/fullmag-zfn2-native:/mnt/fullmag-zfn2-native \

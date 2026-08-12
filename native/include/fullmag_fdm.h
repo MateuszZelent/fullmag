@@ -529,6 +529,38 @@ typedef struct fullmag_fdm_backend fullmag_fdm_backend;
 typedef struct fullmag_fdm_field_snapshot fullmag_fdm_field_snapshot;
 typedef struct fullmag_fdm_preview_snapshot fullmag_fdm_preview_snapshot;
 
+/*
+ * Append-only binding between a single-grid FP64 LLG context and an accepted
+ * GPU M1 charge snapshot.  The record contains registry identities and solver
+ * policy only: CUDA pointers, streams, and transport buffers remain owned by
+ * the native GPU transport context.
+ */
+#if defined(__cplusplus)
+#define FULLMAG_FDM_BINDING_ALIGN8 alignas(8)
+#define FULLMAG_FDM_BINDING_ALIGN8_FIELD
+#else
+#define FULLMAG_FDM_BINDING_ALIGN8
+#define FULLMAG_FDM_BINDING_ALIGN8_FIELD _Alignas(8)
+#endif
+typedef struct FULLMAG_FDM_BINDING_ALIGN8 fullmag_fdm_gpu_transport_llg_binding_v1 {
+    FULLMAG_FDM_BINDING_ALIGN8_FIELD uint32_t abi_version;
+    uint32_t struct_version;
+    uint32_t struct_size;
+    uint32_t reserved_flags;
+    uint64_t required_features;
+    uint64_t reserved0;
+    fullmag_fdm_gpu_transport_context_handle_v1 transport_context;
+    fullmag_fdm_gpu_charge_snapshot_handle_v1 charge_snapshot;
+    uint64_t accepted_sequence;
+    uint64_t source_revision;
+    uint64_t operator_revision;
+    double relative_tolerance;
+    uint64_t max_iterations;
+    uint64_t reserved1;
+} fullmag_fdm_gpu_transport_llg_binding_v1;
+#undef FULLMAG_FDM_BINDING_ALIGN8_FIELD
+#undef FULLMAG_FDM_BINDING_ALIGN8
+
 /* ── Functions ── */
 
 /**
@@ -570,6 +602,14 @@ int fullmag_fdm_backend_step(
     fullmag_fdm_backend    *handle,
     double                  dt_seconds,
     fullmag_fdm_step_stats *out_stats);
+
+/* Bind/unbind the stage-wise GPU transport torque source for Heun or RK4. */
+int fullmag_fdm_context_bind_gpu_transport_v1(
+    fullmag_fdm_backend *handle,
+    const fullmag_fdm_gpu_transport_llg_binding_v1 *binding);
+
+int fullmag_fdm_context_unbind_gpu_transport_v1(
+    fullmag_fdm_backend *handle);
 
 int fullmag_fdm_backend_set_interrupt_poll(
     fullmag_fdm_backend *handle,

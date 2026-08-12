@@ -8,19 +8,38 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <chrono>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <limits>
+#include <mutex>
 #include <stdexcept>
 #include <string>
+#include <thread>
 #include <tuple>
 #include <utility>
 #include <vector>
 
 namespace charge = fullmag::fdm::cpu::transport::v1;
 namespace spin = fullmag::fdm::cpu::transport::spin::v1;
+
+extern "C" uint32_t fullmag_fdm_gpu_transport_test_spin_audit_v1(
+    fullmag_fdm_gpu_transport_context_handle_v1,
+    uint64_t *, uint64_t *, uint64_t *, uint64_t *, uint64_t *, uint64_t *,
+    uint32_t *, uint8_t[32], uint64_t *, uint64_t *);
+extern "C" uint32_t fullmag_fdm_gpu_transport_test_fail_llg_stage_v1(
+    fullmag_fdm_gpu_transport_context_handle_v1, uint64_t, uint64_t);
+extern "C" uint32_t fullmag_fdm_gpu_transport_test_set_llg_completion_fault_v1(
+    fullmag_fdm_gpu_transport_context_handle_v1, uint32_t);
+extern "C" uint32_t fullmag_fdm_gpu_transport_test_llg_hold_state_v1(
+    fullmag_fdm_gpu_transport_context_handle_v1, uint32_t *);
+extern "C" uint32_t fullmag_fdm_gpu_transport_test_release_llg_hold_v1(
+    fullmag_fdm_gpu_transport_context_handle_v1);
+extern "C" uint32_t fullmag_fdm_gpu_transport_test_retry_llg_drain_v1(
+    fullmag_fdm_gpu_transport_context_handle_v1);
+extern "C" uint32_t fullmag_fdm_gpu_transport_test_spin_solve_barrier_v1(uint32_t);
 
 namespace {
 
@@ -32,6 +51,11 @@ constexpr double kRelativeTolerance = 2.0e-8;
 constexpr double kAbsolutePotentialTolerance = 2.0e-11;
 constexpr double kAbsoluteFluxTolerance = 2.0e-7;
 constexpr double kAbsoluteTorqueTolerance = 2.0e-3;
+constexpr uint32_t kFaultKernelLaunch = 1;
+constexpr uint32_t kFaultEventRecord = 2;
+constexpr uint32_t kFaultEventSync = 3;
+constexpr uint32_t kFaultHoldInFlight = 4;
+constexpr uint32_t kFaultPrimaryAndFallbackDrain = 5;
 
 template <typename T> void init_record(T &record, uint64_t features = 0) {
     std::memset(&record, 0, sizeof(record));
@@ -101,6 +125,7 @@ struct Scenario {
     double dephasing = 0.0;
     std::array<double, 3> magnetization{0.0, 0.0, 1.0};
     std::vector<uint32_t> region_ids;
+    std::vector<uint8_t> torque_targets;
     std::vector<InterfaceSpec> interfaces;
 };
 
@@ -332,7 +357,9 @@ CpuResult solve_cpu(const Scenario &scenario) {
                 interface.magnetization));
         }
     }
-    spin_problem.torque_targets.target_cells.assign(cells(scenario), 1);
+    spin_problem.torque_targets.target_cells = scenario.torque_targets;
+    if (spin_problem.torque_targets.target_cells.empty())
+        spin_problem.torque_targets.target_cells.assign(cells(scenario), 1);
     spin_problem.torque_targets.saturation_magnetization_a_per_m.assign(cells(scenario), 8.0e5);
     spin_problem.torque_targets.gamma_e_rad_per_s_t = 1.76085963023e11;
     spin::SolverOptions options;
@@ -377,8 +404,17 @@ fullmag_fdm_gpu_transport_spin_interface_v1 gpu_interface(
     result.G_down = spec.g_down;
     result.G_r = spec.g_r;
     result.G_i = spec.g_i;
-    std::copy(spec.magnetization.begin(), spec.magnetization.end(),
-              result.magnetization_xyz);
+    if (spec.kind ==
+        FULLMAG_FDM_GPU_TRANSPORT_SPIN_INTERFACE_MIXING_CONDUCTANCE_V2) {
+        // Deliberately disagree with m_stage: mixing must use the current
+        // stage magnetization, never this frozen compatibility payload.
+        result.magnetization_xyz[0] = 1.0;
+        result.magnetization_xyz[1] = 0.0;
+        result.magnetization_xyz[2] = 0.0;
+    } else {
+        std::copy(spec.magnetization.begin(), spec.magnetization.end(),
+                  result.magnetization_xyz);
+    }
     result.source_id = spec.source_id;
     result.topology_id = spec.topology_id;
     result.charge_edge_enabled =
@@ -394,6 +430,149 @@ struct GpuResult {
     std::vector<fullmag_fdm_gpu_transport_spin_observation_record_v1> observations;
     fullmag_fdm_gpu_steady_spin_solve_result_v1 diagnostics{};
 };
+
+struct SpinAudit {
+    uint64_t hierarchy_builds = 0;
+    uint64_t hierarchy_hits = 0;
+    uint64_t amg_applies = 0;
+    uint64_t host_fallbacks = 0;
+    uint64_t fine_unknowns = 0;
+    uint64_t coarse_unknowns = 0;
+    uint32_t hierarchy_levels = 0;
+    std::array<uint8_t, 32> hierarchy_digest{};
+    uint64_t accepted_commits = 0;
+    uint64_t failed_rollbacks = 0;
+};
+
+SpinAudit spin_audit(fullmag_fdm_gpu_transport_context_handle_v1 context) {
+    SpinAudit audit{};
+    require(fullmag_fdm_gpu_transport_test_spin_audit_v1(
+                context, &audit.hierarchy_builds, &audit.hierarchy_hits,
+                &audit.amg_applies, &audit.host_fallbacks,
+                &audit.fine_unknowns, &audit.coarse_unknowns,
+                &audit.hierarchy_levels, audit.hierarchy_digest.data(),
+                &audit.accepted_commits, &audit.failed_rollbacks) ==
+                FULLMAG_FDM_GPU_TRANSPORT_ERROR_OK,
+            "public spin audit failed");
+    return audit;
+}
+
+std::vector<double> read_llg_m(fullmag_fdm_backend *llg, uint64_t count) {
+    std::vector<double> result(3 * count);
+    require(fullmag_fdm_backend_copy_field_f64(
+                llg, FULLMAG_FDM_OBSERVABLE_M, result.data(), result.size()) ==
+                FULLMAG_FDM_OK,
+            "public LLG magnetization readback failed");
+    return result;
+}
+
+void require_vectors_identical(const std::string &label,
+                               const std::vector<double> &left,
+                               const std::vector<double> &right) {
+    require(left.size() == right.size(), label + ": vector length differs");
+    double max_difference = 0.0;
+    double max_scale = 0.0;
+    uint64_t max_index = 0;
+    for (uint64_t index = 0; index < left.size(); ++index) {
+        const double difference = std::abs(left[index] - right[index]);
+        if (difference > max_difference) {
+            max_difference = difference;
+            max_index = index;
+        }
+        max_scale = std::max(max_scale,
+                             std::max(std::abs(left[index]), std::abs(right[index])));
+    }
+    char difference_text[64]{};
+    char scale_text[64]{};
+    std::snprintf(difference_text, sizeof(difference_text), "%.17e", max_difference);
+    std::snprintf(scale_text, sizeof(scale_text), "%.17e", max_scale);
+    require(max_difference == 0.0,
+            label + ": vectors differ at index " + std::to_string(max_index) +
+                ", max_abs=" + difference_text + ", scale=" + scale_text);
+}
+
+void require_retry_matches_fresh(
+    const std::string &label,
+    const SpinAudit &before_fresh,
+    const SpinAudit &after_fresh,
+    const SpinAudit &before_retry,
+    const SpinAudit &after_retry)
+{
+    const auto delta = [](uint64_t after, uint64_t before) {
+        return after - before;
+    };
+    const std::string fresh_counters =
+        "builds=" + std::to_string(delta(after_fresh.hierarchy_builds,
+                                           before_fresh.hierarchy_builds)) +
+        ",hits=" + std::to_string(delta(after_fresh.hierarchy_hits,
+                                         before_fresh.hierarchy_hits)) +
+        ",amg=" + std::to_string(delta(after_fresh.amg_applies,
+                                        before_fresh.amg_applies)) +
+        ",fallbacks=" + std::to_string(delta(after_fresh.host_fallbacks,
+                                              before_fresh.host_fallbacks));
+    const std::string retry_counters =
+        "builds=" + std::to_string(delta(after_retry.hierarchy_builds,
+                                           before_retry.hierarchy_builds)) +
+        ",hits=" + std::to_string(delta(after_retry.hierarchy_hits,
+                                         before_retry.hierarchy_hits)) +
+        ",amg=" + std::to_string(delta(after_retry.amg_applies,
+                                        before_retry.amg_applies)) +
+        ",fallbacks=" + std::to_string(delta(after_retry.host_fallbacks,
+                                              before_retry.host_fallbacks));
+    require(after_fresh.accepted_commits - before_fresh.accepted_commits == 1 &&
+                after_retry.accepted_commits - before_retry.accepted_commits == 1,
+            label + ": accepted commit delta differs from fresh baseline");
+    require(after_fresh.hierarchy_builds - before_fresh.hierarchy_builds ==
+                after_retry.hierarchy_builds - before_retry.hierarchy_builds &&
+                after_fresh.hierarchy_hits - before_fresh.hierarchy_hits ==
+                after_retry.hierarchy_hits - before_retry.hierarchy_hits &&
+                after_fresh.amg_applies - before_fresh.amg_applies ==
+                after_retry.amg_applies - before_retry.amg_applies &&
+                after_fresh.host_fallbacks - before_fresh.host_fallbacks ==
+                after_retry.host_fallbacks - before_retry.host_fallbacks,
+            label + ": sparse hierarchy counter deltas differ: fresh(" +
+                fresh_counters + ") retry(" + retry_counters + ")");
+    require(after_fresh.fine_unknowns == after_retry.fine_unknowns &&
+                after_fresh.coarse_unknowns == after_retry.coarse_unknowns &&
+                after_fresh.hierarchy_levels == after_retry.hierarchy_levels &&
+                after_fresh.hierarchy_digest == after_retry.hierarchy_digest,
+            label + ": accepted sparse hierarchy provenance differs: fresh(fine=" +
+                std::to_string(after_fresh.fine_unknowns) + ",coarse=" +
+                std::to_string(after_fresh.coarse_unknowns) + ",levels=" +
+                std::to_string(after_fresh.hierarchy_levels) + ") retry(fine=" +
+                std::to_string(after_retry.fine_unknowns) + ",coarse=" +
+                std::to_string(after_retry.coarse_unknowns) + ",levels=" +
+                std::to_string(after_retry.hierarchy_levels) + ")");
+}
+
+void require_observations_equal(
+    const std::string &label,
+    const std::vector<fullmag_fdm_gpu_transport_spin_observation_record_v1> &left,
+    const std::vector<fullmag_fdm_gpu_transport_spin_observation_record_v1> &right)
+{
+    require(left.size() == right.size(),
+            label + ": accepted observation count differs from fresh baseline");
+    constexpr size_t numeric_offset = offsetof(
+        fullmag_fdm_gpu_transport_spin_observation_record_v1,
+        charge_from_trace_v);
+    constexpr size_t numeric_count =
+        (sizeof(fullmag_fdm_gpu_transport_spin_observation_record_v1) -
+         numeric_offset) / sizeof(double);
+    for (uint64_t index = 0; index < left.size(); ++index) {
+        require(std::memcmp(&left[index], &right[index], numeric_offset) == 0,
+                label + ": accepted observation metadata differs at record " +
+                    std::to_string(index));
+        const auto *left_values = reinterpret_cast<const double *>(
+            reinterpret_cast<const uint8_t *>(&left[index]) + numeric_offset);
+        const auto *right_values = reinterpret_cast<const double *>(
+            reinterpret_cast<const uint8_t *>(&right[index]) + numeric_offset);
+        require_vectors_identical(
+            label + ": accepted observation values at record " +
+                std::to_string(index),
+            std::vector<double>(left_values, left_values + numeric_count),
+            std::vector<double>(right_values, right_values + numeric_count));
+    }
+}
 
 std::vector<double> readback(
     fullmag_fdm_gpu_transport_context_handle_v1 context,
@@ -477,7 +656,9 @@ GpuResult solve_gpu(const Scenario &scenario) {
     for (uint64_t cell = 0; cell < cells(scenario); ++cell) {
         auto &record = cell_records[cell];
         init_record(record, kCharge);
-        record.active = record.conductor = record.spin_active = record.torque_target = 1;
+        record.active = record.conductor = record.spin_active = 1;
+        record.torque_target = scenario.torque_targets.empty()
+            ? 1 : scenario.torque_targets[cell];
         record.material_index = 7;
         record.region_id = scenario.region_ids.empty() ? 1 : scenario.region_ids[cell];
         record.saturation_magnetization = 8.0e5;
@@ -630,6 +811,419 @@ GpuResult solve_gpu(const Scenario &scenario) {
                              3 * cells(scenario));
     output.observations = readback_observations(
         created.context_handle, snapshot, 2 * cells(scenario) + scenario.interfaces.size());
+    if (scenario.name == "transparent_full_transverse_reversed_unsorted_multiple") {
+        std::vector<double> llg_m(3 * cells(scenario), 0.0);
+        for (uint64_t cell = 0; cell < cells(scenario); ++cell)
+            for (uint32_t component = 0; component < 3; ++component)
+                llg_m[3 * cell + component] = scenario.magnetization[component];
+        fullmag_fdm_plan_desc llg_plan{};
+        llg_plan.grid = {static_cast<uint32_t>(scenario.nx),
+                         static_cast<uint32_t>(scenario.ny),
+                         static_cast<uint32_t>(scenario.nz),
+                         scenario.dx, scenario.dy, scenario.dz};
+        llg_plan.material = {8.0e5, 0.0, 0.0, 2.211e5};
+        llg_plan.precision = FULLMAG_FDM_PRECISION_DOUBLE;
+        llg_plan.integrator = FULLMAG_FDM_INTEGRATOR_HEUN;
+        llg_plan.initial_magnetization_xyz = llg_m.data();
+        llg_plan.initial_magnetization_len = llg_m.size();
+        llg_plan.stats_mode = FULLMAG_FDM_STATS_NONE;
+        fullmag_fdm_backend *llg = fullmag_fdm_backend_create(&llg_plan);
+        require(llg != nullptr && fullmag_fdm_backend_last_error(llg) == nullptr,
+                scenario.name + ": bound LLG context create failed");
+        fullmag_fdm_gpu_transport_llg_binding_v1 binding{};
+        binding.abi_version = FULLMAG_FDM_GPU_TRANSPORT_ABI_V1;
+        binding.struct_version = 1;
+        binding.struct_size = sizeof(binding);
+        binding.required_features = kChargeSpin |
+            (has_mixing ? FULLMAG_FDM_GPU_TRANSPORT_FEATURE_MIXING_V2 : 0);
+        binding.transport_context = created.context_handle;
+        binding.charge_snapshot = snapshot.snapshot_handle;
+        binding.accepted_sequence = snapshot.accepted_sequence;
+        binding.source_revision = descriptor.source_revision;
+        binding.operator_revision = formula.spin_operator_revision;
+        binding.relative_tolerance = 1.0e-10;
+        binding.max_iterations = 4000;
+        require(fullmag_fdm_context_bind_gpu_transport_v1(llg, &binding) ==
+                    FULLMAG_FDM_OK,
+                scenario.name + ": public transport-to-LLG binding failed");
+        require(fullmag_fdm_context_bind_gpu_transport_v1(llg, &binding) ==
+                    FULLMAG_FDM_ERR_INVALID,
+                scenario.name + ": duplicate bind was not rejected");
+        fullmag_fdm_backend *second_llg = fullmag_fdm_backend_create(&llg_plan);
+        require(second_llg != nullptr &&
+                    fullmag_fdm_backend_last_error(second_llg) == nullptr,
+                scenario.name + ": second bound LLG context create failed");
+        require(fullmag_fdm_context_bind_gpu_transport_v1(second_llg, &binding) ==
+                    FULLMAG_FDM_ERR_INVALID,
+                scenario.name + ": second LLG owner claimed the same transport slot");
+        require(fullmag_fdm_gpu_charge_snapshot_destroy_v1(snapshot.snapshot_handle) ==
+                    FULLMAG_FDM_GPU_TRANSPORT_ERROR_INVALID_STATE,
+                scenario.name + ": claimed snapshot was destroyed");
+        require(fullmag_fdm_context_unbind_gpu_transport_v1(llg) ==
+                    FULLMAG_FDM_OK,
+                scenario.name + ": owner could not release claim after rejected bind");
+        require(fullmag_fdm_context_bind_gpu_transport_v1(llg, &binding) ==
+                    FULLMAG_FDM_OK,
+                scenario.name + ": owner could not reacquire claim after rejected bind");
+        fullmag_fdm_step_stats llg_stats{};
+        for (const auto &[fault, label] : {
+                 std::pair{kFaultKernelLaunch, "kernel launch"},
+                 std::pair{kFaultEventRecord, "completion event record"},
+                 std::pair{kFaultEventSync, "completion event sync"}}) {
+            require(fullmag_fdm_gpu_transport_test_set_llg_completion_fault_v1(
+                        created.context_handle, fault) ==
+                        FULLMAG_FDM_GPU_TRANSPORT_ERROR_OK,
+                    scenario.name + ": could not inject " + label + " failure");
+            require(fullmag_fdm_backend_step(llg, 1.0e-18, &llg_stats) ==
+                        FULLMAG_FDM_ERR_CUDA,
+                    scenario.name + ": " + label + " failure was accepted");
+            require(fullmag_fdm_context_unbind_gpu_transport_v1(llg) ==
+                        FULLMAG_FDM_OK,
+                    scenario.name + ": " + label +
+                        " failure left transport storage pinned");
+            require(fullmag_fdm_context_bind_gpu_transport_v1(llg, &binding) ==
+                        FULLMAG_FDM_OK,
+                    scenario.name + ": could not rebind after " + label + " failure");
+        }
+
+        require(fullmag_fdm_gpu_transport_test_set_llg_completion_fault_v1(
+                    created.context_handle, kFaultPrimaryAndFallbackDrain) ==
+                    FULLMAG_FDM_GPU_TRANSPORT_ERROR_OK,
+                scenario.name + ": could not inject primary plus fallback drain failure");
+        require(fullmag_fdm_backend_step(llg, 1.0e-18, &llg_stats) ==
+                    FULLMAG_FDM_ERR_CUDA,
+                scenario.name + ": unconfirmed drain failure was accepted");
+        require(fullmag_fdm_context_unbind_gpu_transport_v1(llg) ==
+                    FULLMAG_FDM_ERR_INVALID,
+                scenario.name + ": unbind released an unconfirmed in-flight torque");
+        require(fullmag_fdm_gpu_charge_snapshot_destroy_v1(snapshot.snapshot_handle) ==
+                    FULLMAG_FDM_GPU_TRANSPORT_ERROR_INVALID_STATE,
+                scenario.name + ": snapshot teardown ignored unconfirmed drain");
+        require(fullmag_fdm_gpu_transport_context_destroy_v1(created.context_handle) ==
+                    FULLMAG_FDM_GPU_TRANSPORT_ERROR_INVALID_STATE,
+                scenario.name + ": context teardown ignored unconfirmed drain");
+        require(fullmag_fdm_gpu_transport_test_retry_llg_drain_v1(
+                    created.context_handle) ==
+                    FULLMAG_FDM_GPU_TRANSPORT_ERROR_OK,
+                scenario.name + ": subsequent explicit torque drain failed");
+        require(fullmag_fdm_context_unbind_gpu_transport_v1(llg) ==
+                    FULLMAG_FDM_OK,
+                scenario.name + ": owner could not unbind after confirmed drain");
+        require(fullmag_fdm_context_bind_gpu_transport_v1(llg, &binding) ==
+                    FULLMAG_FDM_OK,
+                scenario.name + ": owner could not rebind after confirmed drain");
+
+        require(fullmag_fdm_gpu_transport_test_set_llg_completion_fault_v1(
+                    created.context_handle, kFaultHoldInFlight) ==
+                    FULLMAG_FDM_GPU_TRANSPORT_ERROR_OK,
+                scenario.name + ": could not arm in-flight hold");
+        int held_step_status = FULLMAG_FDM_OK;
+        std::thread held_step([&] {
+            held_step_status = fullmag_fdm_backend_step(llg, 1.0e-18, &llg_stats);
+        });
+        const auto hold_deadline =
+            std::chrono::steady_clock::now() + std::chrono::seconds(10);
+        uint32_t hold_reached = 0;
+        while (std::chrono::steady_clock::now() < hold_deadline) {
+            require(fullmag_fdm_gpu_transport_test_llg_hold_state_v1(
+                        created.context_handle, &hold_reached) ==
+                        FULLMAG_FDM_GPU_TRANSPORT_ERROR_OK,
+                    scenario.name + ": in-flight hold query failed");
+            if (hold_reached != 0) break;
+            std::this_thread::yield();
+        }
+        require(hold_reached != 0,
+                scenario.name + ": transport RHS did not reach the in-flight hold");
+        require(fullmag_fdm_context_unbind_gpu_transport_v1(llg) ==
+                    FULLMAG_FDM_ERR_INVALID,
+                scenario.name + ": unbind succeeded while torque storage was in flight");
+        require(fullmag_fdm_gpu_charge_snapshot_destroy_v1(snapshot.snapshot_handle) ==
+                    FULLMAG_FDM_GPU_TRANSPORT_ERROR_INVALID_STATE,
+                scenario.name + ": snapshot destroy succeeded while torque was in flight");
+        require(fullmag_fdm_gpu_transport_context_destroy_v1(created.context_handle) ==
+                    FULLMAG_FDM_GPU_TRANSPORT_ERROR_INVALID_STATE,
+                scenario.name + ": transport context destroy succeeded while torque was in flight");
+        require(fullmag_fdm_gpu_transport_test_release_llg_hold_v1(
+                    created.context_handle) == FULLMAG_FDM_GPU_TRANSPORT_ERROR_OK,
+                scenario.name + ": in-flight hold release failed");
+        held_step.join();
+        require(held_step_status == FULLMAG_FDM_OK,
+                scenario.name + ": held transport step did not finish after release");
+        require(fullmag_fdm_context_unbind_gpu_transport_v1(llg) ==
+                    FULLMAG_FDM_OK,
+                scenario.name + ": held Heun owner could not release claim");
+        fullmag_fdm_backend_destroy(llg);
+        llg = fullmag_fdm_backend_create(&llg_plan);
+        require(llg != nullptr && fullmag_fdm_backend_last_error(llg) == nullptr &&
+                    fullmag_fdm_context_bind_gpu_transport_v1(llg, &binding) ==
+                        FULLMAG_FDM_OK,
+                scenario.name + ": fresh synchronous Heun create/bind failed");
+        // Fresh and retry now use the same synchronous public step path.  The
+        // threaded held step above proves lifecycle only and is not a numeric
+        // baseline.
+        require(fullmag_fdm_gpu_transport_test_fail_llg_stage_v1(
+                    created.context_handle, 1, 3) ==
+                    FULLMAG_FDM_GPU_TRANSPORT_ERROR_OK,
+                scenario.name + ": Heun baseline reset injection failed");
+        require(fullmag_fdm_backend_step(llg, 1.0e-18, &llg_stats) ==
+                    FULLMAG_FDM_ERR_CUDA,
+                scenario.name + ": Heun baseline reset attempt was accepted");
+        require(fullmag_fdm_context_unbind_gpu_transport_v1(llg) ==
+                    FULLMAG_FDM_OK,
+                scenario.name + ": Heun baseline reset owner could not release claim");
+        fullmag_fdm_backend_destroy(llg);
+        llg = fullmag_fdm_backend_create(&llg_plan);
+        require(llg != nullptr && fullmag_fdm_backend_last_error(llg) == nullptr &&
+                    fullmag_fdm_context_bind_gpu_transport_v1(llg, &binding) ==
+                        FULLMAG_FDM_OK,
+                scenario.name + ": fresh synchronous Heun recreate/bind failed");
+        const SpinAudit heun_before_fresh = spin_audit(created.context_handle);
+        require(fullmag_fdm_backend_step(llg, 1.0e-18, &llg_stats) ==
+                    FULLMAG_FDM_OK,
+                scenario.name + ": fresh synchronous Heun step failed");
+        const SpinAudit heun_after_fresh = spin_audit(created.context_handle);
+        const std::vector<double> heun_fresh_m = read_llg_m(llg, cells(scenario));
+        const std::vector<double> heun_fresh_mu = readback(
+            created.context_handle, snapshot,
+            FULLMAG_FDM_GPU_TRANSPORT_ARTIFACT_FIELD_MU_S, 3 * cells(scenario));
+        const std::vector<double> heun_fresh_torque = readback(
+            created.context_handle, snapshot,
+            FULLMAG_FDM_GPU_TRANSPORT_ARTIFACT_FIELD_TORQUE_STT,
+            3 * cells(scenario));
+        const auto heun_fresh_observations = readback_observations(
+            created.context_handle, snapshot,
+            2 * cells(scenario) + scenario.interfaces.size());
+        require(fullmag_fdm_context_unbind_gpu_transport_v1(llg) ==
+                    FULLMAG_FDM_OK,
+                scenario.name + ": fresh Heun owner could not release claim");
+        fullmag_fdm_backend_destroy(llg);
+        llg = fullmag_fdm_backend_create(&llg_plan);
+        require(llg != nullptr && fullmag_fdm_backend_last_error(llg) == nullptr &&
+                    fullmag_fdm_context_bind_gpu_transport_v1(llg, &binding) ==
+                        FULLMAG_FDM_OK,
+                scenario.name + ": retry Heun context create/bind failed");
+        const std::vector<double> accepted_mu_before_fault = readback(
+            created.context_handle, snapshot,
+            FULLMAG_FDM_GPU_TRANSPORT_ARTIFACT_FIELD_MU_S,
+            3 * cells(scenario));
+        const std::vector<double> accepted_m_before_fault =
+            read_llg_m(llg, cells(scenario));
+        uint64_t hierarchy_builds = 0, hierarchy_hits = 0, amg_applies = 0;
+        uint64_t host_fallbacks = 0, fine_unknowns = 0, coarse_unknowns = 0;
+        uint64_t accepted_commits = 0, failed_rollbacks = 0;
+        uint32_t hierarchy_levels = 0;
+        uint8_t hierarchy_digest[32]{};
+        require(fullmag_fdm_gpu_transport_test_spin_audit_v1(
+                    created.context_handle, &hierarchy_builds, &hierarchy_hits,
+                    &amg_applies, &host_fallbacks, &fine_unknowns,
+                    &coarse_unknowns, &hierarchy_levels, hierarchy_digest,
+                    &accepted_commits, &failed_rollbacks) ==
+                    FULLMAG_FDM_GPU_TRANSPORT_ERROR_OK,
+                scenario.name + ": pre-fault spin audit failed");
+        const uint64_t accepted_commits_before_fault = accepted_commits;
+        const uint64_t failed_rollbacks_before_fault = failed_rollbacks;
+        const auto accepted_audit_before_fault = std::make_tuple(
+            hierarchy_builds, hierarchy_hits, amg_applies, host_fallbacks,
+            fine_unknowns, coarse_unknowns, hierarchy_levels);
+        std::array<uint8_t, 32> digest_before_fault{};
+        std::memcpy(digest_before_fault.data(), hierarchy_digest, 32);
+        require(fullmag_fdm_gpu_transport_test_fail_llg_stage_v1(
+                    created.context_handle, 1, 3) ==
+                    FULLMAG_FDM_GPU_TRANSPORT_ERROR_OK,
+                scenario.name + ": late-stage failure injection failed");
+        require(fullmag_fdm_backend_step(llg, 1.0e-18, &llg_stats) ==
+                    FULLMAG_FDM_ERR_CUDA,
+                scenario.name + ": late-stage failure was accepted");
+        const std::vector<double> accepted_mu_after_fault = readback(
+            created.context_handle, snapshot,
+            FULLMAG_FDM_GPU_TRANSPORT_ARTIFACT_FIELD_MU_S,
+            3 * cells(scenario));
+        require(accepted_mu_after_fault == accepted_mu_before_fault,
+                scenario.name + ": rejected step changed accepted spin state");
+        require_vectors_identical(scenario.name + ": rejected Heun m rollback",
+            read_llg_m(llg, cells(scenario)), accepted_m_before_fault);
+        require(fullmag_fdm_gpu_transport_test_spin_audit_v1(
+                    created.context_handle, &hierarchy_builds, &hierarchy_hits,
+                    &amg_applies, &host_fallbacks, &fine_unknowns,
+                    &coarse_unknowns, &hierarchy_levels, hierarchy_digest,
+                    &accepted_commits, &failed_rollbacks) ==
+                    FULLMAG_FDM_GPU_TRANSPORT_ERROR_OK,
+                scenario.name + ": post-fault spin audit failed");
+        require(accepted_commits == accepted_commits_before_fault,
+                scenario.name + ": rejected step incremented accepted spin commits");
+        require(failed_rollbacks == failed_rollbacks_before_fault + 1,
+                scenario.name + ": rejected step did not record exactly one rollback");
+        require(std::make_tuple(hierarchy_builds, hierarchy_hits, amg_applies,
+                    host_fallbacks, fine_unknowns, coarse_unknowns,
+                    hierarchy_levels) ==
+                    accepted_audit_before_fault &&
+                    std::memcmp(hierarchy_digest, digest_before_fault.data(), 32) == 0,
+                scenario.name + ": rejected step changed accepted spin audit counters");
+        const SpinAudit heun_before_retry = spin_audit(created.context_handle);
+        const int llg_step_status =
+            fullmag_fdm_backend_step(llg, 1.0e-18, &llg_stats);
+        require(llg_step_status == FULLMAG_FDM_OK,
+                scenario.name + ": public bound Heun step failed: " +
+                    (fullmag_fdm_backend_last_error(llg) == nullptr
+                         ? std::string("no diagnostic")
+                         : fullmag_fdm_backend_last_error(llg)));
+        const SpinAudit heun_after_retry = spin_audit(created.context_handle);
+        require_vectors_identical(scenario.name + ": Heun retry m",
+            read_llg_m(llg, cells(scenario)), heun_fresh_m);
+        require_vectors_identical(scenario.name + ": Heun retry mu_s",
+            readback(created.context_handle, snapshot,
+                    FULLMAG_FDM_GPU_TRANSPORT_ARTIFACT_FIELD_MU_S,
+                    3 * cells(scenario)), heun_fresh_mu);
+        require_vectors_identical(scenario.name + ": Heun retry torque",
+            readback(created.context_handle, snapshot,
+                    FULLMAG_FDM_GPU_TRANSPORT_ARTIFACT_FIELD_TORQUE_STT,
+                    3 * cells(scenario)), heun_fresh_torque);
+        require_observations_equal(
+            scenario.name + ": Heun retry",
+            readback_observations(created.context_handle, snapshot,
+                2 * cells(scenario) + scenario.interfaces.size()),
+            heun_fresh_observations);
+        require_retry_matches_fresh(
+            scenario.name + ": Heun retry", heun_before_fresh,
+            heun_after_fresh, heun_before_retry, heun_after_retry);
+        require(fullmag_fdm_context_unbind_gpu_transport_v1(llg) ==
+                    FULLMAG_FDM_OK,
+                scenario.name + ": Heun owner could not release claim");
+        fullmag_fdm_backend_destroy(llg);
+
+        llg_plan.integrator = FULLMAG_FDM_INTEGRATOR_RK4;
+        fullmag_fdm_backend *rk4_llg = fullmag_fdm_backend_create(&llg_plan);
+        require(rk4_llg != nullptr &&
+                    fullmag_fdm_backend_last_error(rk4_llg) == nullptr,
+                scenario.name + ": bound RK4 LLG context create failed");
+        require(fullmag_fdm_context_bind_gpu_transport_v1(rk4_llg, &binding) ==
+                    FULLMAG_FDM_OK,
+                scenario.name + ": public RK4 transport binding failed");
+        // Start the fresh RK4 baseline and the retry from the same empty sparse
+        // cache state.  A rejected disposable attempt exercises the public
+        // rollback path instead of reaching into transport internals.
+        require(fullmag_fdm_gpu_transport_test_fail_llg_stage_v1(
+                    created.context_handle, 1, 5) ==
+                    FULLMAG_FDM_GPU_TRANSPORT_ERROR_OK,
+                scenario.name + ": RK4 baseline reset injection failed");
+        require(fullmag_fdm_backend_step(rk4_llg, 1.0e-18, &llg_stats) ==
+                    FULLMAG_FDM_ERR_CUDA,
+                scenario.name + ": RK4 baseline reset attempt was accepted");
+        require(fullmag_fdm_context_unbind_gpu_transport_v1(rk4_llg) ==
+                    FULLMAG_FDM_OK,
+                scenario.name + ": RK4 baseline reset owner could not release claim");
+        fullmag_fdm_backend_destroy(rk4_llg);
+        rk4_llg = fullmag_fdm_backend_create(&llg_plan);
+        require(rk4_llg != nullptr &&
+                    fullmag_fdm_backend_last_error(rk4_llg) == nullptr &&
+                    fullmag_fdm_context_bind_gpu_transport_v1(rk4_llg, &binding) ==
+                        FULLMAG_FDM_OK,
+                scenario.name + ": fresh RK4 context create/bind failed");
+        const SpinAudit rk4_before_fresh = spin_audit(created.context_handle);
+        require(fullmag_fdm_backend_step(rk4_llg, 1.0e-18, &llg_stats) ==
+                    FULLMAG_FDM_OK,
+                scenario.name + ": fresh RK4 baseline step failed");
+        const SpinAudit rk4_after_fresh = spin_audit(created.context_handle);
+        const std::vector<double> rk4_fresh_m = read_llg_m(rk4_llg, cells(scenario));
+        const std::vector<double> rk4_fresh_mu = readback(
+            created.context_handle, snapshot,
+            FULLMAG_FDM_GPU_TRANSPORT_ARTIFACT_FIELD_MU_S, 3 * cells(scenario));
+        const std::vector<double> rk4_fresh_torque = readback(
+            created.context_handle, snapshot,
+            FULLMAG_FDM_GPU_TRANSPORT_ARTIFACT_FIELD_TORQUE_STT,
+            3 * cells(scenario));
+        const auto rk4_fresh_observations = readback_observations(
+            created.context_handle, snapshot,
+            2 * cells(scenario) + scenario.interfaces.size());
+        require(fullmag_fdm_context_unbind_gpu_transport_v1(rk4_llg) ==
+                    FULLMAG_FDM_OK,
+                scenario.name + ": fresh RK4 owner could not release claim");
+        fullmag_fdm_backend_destroy(rk4_llg);
+        rk4_llg = fullmag_fdm_backend_create(&llg_plan);
+        require(rk4_llg != nullptr &&
+                    fullmag_fdm_backend_last_error(rk4_llg) == nullptr &&
+                    fullmag_fdm_context_bind_gpu_transport_v1(rk4_llg, &binding) ==
+                        FULLMAG_FDM_OK,
+                scenario.name + ": retry RK4 context create/bind failed");
+        const SpinAudit rk4_before_fault = spin_audit(created.context_handle);
+        const std::vector<double> accepted_mu_before_rk4_fault = readback(
+            created.context_handle, snapshot,
+            FULLMAG_FDM_GPU_TRANSPORT_ARTIFACT_FIELD_MU_S,
+            3 * cells(scenario));
+        const std::vector<double> accepted_m_before_rk4_fault =
+            read_llg_m(rk4_llg, cells(scenario));
+        require(fullmag_fdm_gpu_transport_test_fail_llg_stage_v1(
+                    created.context_handle, 1, 5) ==
+                    FULLMAG_FDM_GPU_TRANSPORT_ERROR_OK,
+                scenario.name + ": RK4 late-stage failure injection failed");
+        require(fullmag_fdm_backend_step(rk4_llg, 1.0e-18, &llg_stats) ==
+                    FULLMAG_FDM_ERR_CUDA,
+                scenario.name + ": RK4 late-stage failure was accepted");
+        require(readback(created.context_handle, snapshot,
+                    FULLMAG_FDM_GPU_TRANSPORT_ARTIFACT_FIELD_MU_S,
+                    3 * cells(scenario)) == accepted_mu_before_rk4_fault,
+                scenario.name + ": rejected RK4 step changed accepted spin state");
+        require_vectors_identical(scenario.name + ": rejected RK4 m rollback",
+            read_llg_m(rk4_llg, cells(scenario)), accepted_m_before_rk4_fault);
+        const SpinAudit rk4_after_fault = spin_audit(created.context_handle);
+        require(rk4_after_fault.accepted_commits ==
+                    rk4_before_fault.accepted_commits &&
+                    rk4_after_fault.failed_rollbacks ==
+                        rk4_before_fault.failed_rollbacks + 1,
+                scenario.name + ": RK4 rollback counters are not transactional");
+        require(rk4_after_fault.hierarchy_builds ==
+                    rk4_before_fault.hierarchy_builds &&
+                    rk4_after_fault.hierarchy_hits ==
+                        rk4_before_fault.hierarchy_hits &&
+                    rk4_after_fault.amg_applies == rk4_before_fault.amg_applies &&
+                    rk4_after_fault.host_fallbacks ==
+                        rk4_before_fault.host_fallbacks &&
+                    rk4_after_fault.fine_unknowns ==
+                        rk4_before_fault.fine_unknowns &&
+                    rk4_after_fault.coarse_unknowns ==
+                        rk4_before_fault.coarse_unknowns &&
+                    rk4_after_fault.hierarchy_levels ==
+                        rk4_before_fault.hierarchy_levels &&
+                    rk4_after_fault.hierarchy_digest ==
+                        rk4_before_fault.hierarchy_digest,
+                scenario.name + ": rejected RK4 step changed accepted spin audit counters");
+        const SpinAudit rk4_before_retry = spin_audit(created.context_handle);
+        require(fullmag_fdm_backend_step(rk4_llg, 1.0e-18, &llg_stats) ==
+                    FULLMAG_FDM_OK,
+                scenario.name + ": RK4 retry after rollback failed");
+        const SpinAudit rk4_after_retry = spin_audit(created.context_handle);
+        require_vectors_identical(scenario.name + ": RK4 retry m",
+            read_llg_m(rk4_llg, cells(scenario)), rk4_fresh_m);
+        require_vectors_identical(scenario.name + ": RK4 retry mu_s",
+            readback(created.context_handle, snapshot,
+                    FULLMAG_FDM_GPU_TRANSPORT_ARTIFACT_FIELD_MU_S,
+                    3 * cells(scenario)), rk4_fresh_mu);
+        require_vectors_identical(scenario.name + ": RK4 retry torque",
+            readback(created.context_handle, snapshot,
+                    FULLMAG_FDM_GPU_TRANSPORT_ARTIFACT_FIELD_TORQUE_STT,
+                    3 * cells(scenario)), rk4_fresh_torque);
+        require_observations_equal(
+            scenario.name + ": RK4 retry",
+            readback_observations(created.context_handle, snapshot,
+                2 * cells(scenario) + scenario.interfaces.size()),
+            rk4_fresh_observations);
+        require_retry_matches_fresh(
+            scenario.name + ": RK4 retry", rk4_before_fresh,
+            rk4_after_fresh, rk4_before_retry, rk4_after_retry);
+        // Owner teardown must release the exact claim before its CUDA state
+        // disappears, allowing a different LLG context to claim the slot.
+        fullmag_fdm_backend_destroy(rk4_llg);
+        require(fullmag_fdm_context_bind_gpu_transport_v1(second_llg, &binding) ==
+                    FULLMAG_FDM_OK,
+                scenario.name + ": owner teardown did not release the exact claim");
+        require(fullmag_fdm_context_unbind_gpu_transport_v1(second_llg) ==
+                    FULLMAG_FDM_OK,
+                scenario.name + ": public transport-to-LLG unbind failed");
+        require(fullmag_fdm_context_unbind_gpu_transport_v1(second_llg) ==
+                    FULLMAG_FDM_ERR_INVALID,
+                scenario.name + ": public unbind accepted a missing/zero claim");
+        fullmag_fdm_backend_destroy(second_llg);
+    }
     (void)cudaFree(m_device);
     (void)cudaFree(torque_device);
     require(fullmag_fdm_gpu_charge_snapshot_destroy_v1(snapshot.snapshot_handle) ==
@@ -707,6 +1301,13 @@ GpuResult verify_case(const Scenario &scenario) {
             scenario.name + ": full Q_x/Q_y/Q_z");
     compare(gpu.torque, flatten_torque(cpu.spin.solution), kAbsoluteTorqueTolerance,
             scenario.name + ": total torque");
+    if (!scenario.torque_targets.empty()) {
+        for (uint64_t cell = 0; cell < cells(scenario); ++cell)
+            if (scenario.torque_targets[cell] == 0)
+                for (uint32_t component = 0; component < 3; ++component)
+                    require(gpu.torque[component * cells(scenario) + cell] == 0.0,
+                            scenario.name + ": torque escaped the FM target mask");
+    }
     require(gpu.observations.size() == 2 * cells(scenario) + scenario.interfaces.size(),
             scenario.name + ": observation stream length mismatch");
     for (uint64_t cell = 0; cell < cells(scenario); ++cell) {
@@ -902,6 +1503,7 @@ Scenario unsorted_interfaces() {
     scenario.right_spin_sink = true;
     scenario.left_spin_potential = {2.0e-4, -1.0e-4, 0.5e-4};
     scenario.region_ids = {1, 2, 3, 4};
+    scenario.torque_targets = {0, 0, 1, 1};
     scenario.interfaces = {
         {FULLMAG_FDM_GPU_TRANSPORT_SPIN_INTERFACE_MIXING_CONDUCTANCE_V2,
          0, 2, 3, 3, 2, 3.0, 1.0, 2.0, -0.5,
@@ -928,6 +1530,29 @@ int main() {
                           "integrated direct-SHE sign reversal");
         (void)verify_case(volume_reaction_torque());
         (void)verify_case(unsorted_interfaces());
+        Scenario concurrent_a = signed_she(1.0e-3);
+        Scenario concurrent_b = concurrent_a;
+        concurrent_a.name = "independent_concurrent_spin_a";
+        concurrent_b.name = "independent_concurrent_spin_b";
+        require(fullmag_fdm_gpu_transport_test_spin_solve_barrier_v1(2) ==
+                    FULLMAG_FDM_GPU_TRANSPORT_ERROR_OK,
+                "could not arm independent spin-solve barrier");
+        std::exception_ptr concurrent_error;
+        std::mutex concurrent_error_mutex;
+        auto run_concurrent = [&](const Scenario &scenario) {
+            try {
+                (void)verify_case(scenario);
+            } catch (...) {
+                std::lock_guard<std::mutex> lock(concurrent_error_mutex);
+                if (!concurrent_error) concurrent_error = std::current_exception();
+            }
+        };
+        std::thread first(run_concurrent, std::cref(concurrent_a));
+        std::thread second(run_concurrent, std::cref(concurrent_b));
+        first.join();
+        second.join();
+        (void)fullmag_fdm_gpu_transport_test_spin_solve_barrier_v1(0);
+        if (concurrent_error) std::rethrow_exception(concurrent_error);
         std::puts("FDM GPU M1 complete spin-operator CPU parity contract: PASS");
         return EXIT_SUCCESS;
     } catch (const std::exception &error) {

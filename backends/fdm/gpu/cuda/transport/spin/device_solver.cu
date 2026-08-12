@@ -416,7 +416,10 @@ __device__ void mixing_flux(
     for (uint32_t component = 0; component < 3; ++component)
         delta[component] = mu == nullptr ? 0.0
             : mu[component * cells + from] - mu[component * cells + to];
-    const double *m = interface_record.magnetization_xyz;
+    const double m[3] = {
+        in.m_stage[to],
+        in.m_stage[cells + to],
+        in.m_stage[2 * cells + to]};
     const double projection = m[0] * delta[0] + m[1] * delta[1] + m[2] * delta[2];
     const double delta_cross_m[3] = {
         delta[1] * m[2] - delta[2] * m[1],
@@ -803,7 +806,11 @@ __global__ void assemble_sparse_interfaces_kernel(
         const double scale=in.cell_size[(iface->axis+1)%3]*
                            in.cell_size[(iface->axis+2)%3]/volume;
         const double gl=0.5*(iface->G_up+iface->G_down);
-        const double *m=iface->magnetization_xyz;
+        const uint64_t cells=in.grid[0]*in.grid[1]*in.grid[2];
+        const uint64_t magnetic_cell=iface->to_cell;
+        const double m[3]={in.m_stage[magnetic_cell],
+            in.m_stage[cells+magnetic_cell],
+            in.m_stage[2*cells+magnetic_cell]};
         for(uint32_t r=0;r<3;++r) for(uint32_t c=0;c<3;++c) {
             const double longitudinal=gl*m[r]*m[c];
             const double cross=(r==0&&c==1)?m[2]:(r==0&&c==2)?-m[1]:
@@ -1983,7 +1990,6 @@ uint32_t solve_device(const SolveInput &input, SolveOutput *output) noexcept {
     op.resolved_device_budget_bytes = resolved_device_budget_bytes;
     for(uint32_t i=0;i<32;++i) op.operator_digest[i]=uint8_t(
         (digest_words[i / 8] >> ((i % 8) * 8)) ^
-        input.accepted_snapshot_digest[i] ^
         (input.operator_revision >> (i % 8)) ^ (0x5d+i*17));
     sparse::BuildMetrics build{};
     const bool was_cached=state.hierarchy.valid && state.hierarchy.operator_revision==op.operator_revision &&

@@ -3,6 +3,8 @@
 #![allow(non_camel_case_types)]
 #![allow(non_snake_case)]
 
+use crate::fullmag_fdm_backend;
+
 #[repr(C)]
 #[derive(Clone, Copy, Default)]
 pub struct gpu_prefix_v1 {
@@ -30,6 +32,16 @@ pub struct fullmag_fdm_gpu_charge_snapshot_handle_v1 {
     pub type_tag: u64,
 }
 macro_rules! record { ($name:ident { $($field:ident:$ty:ty),* $(,)? }) => { #[repr(C)] #[derive(Clone,Copy,Default)] pub struct $name { pub prefix:gpu_prefix_v1,$(pub $field:$ty),* } }; }
+record!(fullmag_fdm_gpu_transport_llg_binding_v1 {
+    transport_context: fullmag_fdm_gpu_transport_context_handle_v1,
+    charge_snapshot: fullmag_fdm_gpu_charge_snapshot_handle_v1,
+    accepted_sequence: u64,
+    source_revision: u64,
+    operator_revision: u64,
+    relative_tolerance: f64,
+    max_iterations: u64,
+    reserved1: u64
+});
 record!(fullmag_fdm_gpu_transport_buffer_view_v1 {
     address: u64,
     element_count: u64,
@@ -476,6 +488,11 @@ pub const FULLMAG_FDM_GPU_TRANSPORT_SPIN_LOCAL_RESIDUAL_FV_V1: u32 = 1;
 pub const FULLMAG_FDM_GPU_TRANSPORT_SPIN_SOLVER_POLICY_RESTARTED_GMRES_COMPONENT_AMG_V1: u32 = 1;
 
 extern "C" {
+    pub fn fullmag_fdm_context_bind_gpu_transport_v1(
+        context: *mut fullmag_fdm_backend,
+        binding: *const fullmag_fdm_gpu_transport_llg_binding_v1,
+    ) -> i32;
+    pub fn fullmag_fdm_context_unbind_gpu_transport_v1(context: *mut fullmag_fdm_backend) -> i32;
     pub fn fullmag_fdm_gpu_transport_context_create_v1(
         request: *const fullmag_fdm_gpu_transport_context_create_request_v1,
         result: *mut fullmag_fdm_gpu_transport_context_create_result_v1,
@@ -560,6 +577,7 @@ mod tests {
     macro_rules! layout {($t:ty,$size:expr,$($f:ident:$o:expr),+)=>{{assert_eq!(size_of::<$t>(),$size);assert_eq!(align_of::<$t>(),8);$(assert_eq!(offset_of!($t,$f),$o);)+}}}
     #[test]
     fn gpu_transport_abi_layout_matches_every_frozen_tail_offset() {
+        layout!(fullmag_fdm_gpu_transport_llg_binding_v1,144,transport_context:32,charge_snapshot:64,accepted_sequence:96,source_revision:104,operator_revision:112,relative_tolerance:120,max_iterations:128,reserved1:136);
         layout!(fullmag_fdm_gpu_transport_buffer_view_v1,80,address:32,element_count:40,byte_stride:48,byte_length:56,element_type:64,pointer_space:68,component_order:72,reserved1:76);
         layout!(fullmag_fdm_gpu_transport_charge_cell_v1,48,active:32,conductor:36,material_index:40,reserved1:44);
         layout!(fullmag_fdm_gpu_transport_charge_material_v1,56,material_index:32,reserved1:36,conductivity:40,material_revision:48);

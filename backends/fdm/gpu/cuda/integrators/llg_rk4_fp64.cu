@@ -102,7 +102,8 @@ static void copy_field_d2d(DeviceVectorField &dst, const DeviceVectorField &src,
 /* ── Compute fields + LLG RHS ── */
 
 static bool compute_rhs_into(Context &ctx, DeviceVectorField &rhs_out,
-    int n, int grid, double gamma_bar, double alpha, double evaluation_time)
+    int n, int grid, double gamma_bar, double alpha, double evaluation_time,
+    uint64_t stage_id)
 {
     if (ctx.enable_exchange) {
         launch_exchange_field_fp64(ctx);
@@ -123,6 +124,9 @@ static bool compute_rhs_into(Context &ctx, DeviceVectorField &rhs_out,
         abort_step_after_interrupt(ctx, false);
         return false;
     }
+    if (!context_evaluate_gpu_transport_rhs(
+            ctx, ctx.m, evaluation_time,
+            ctx.gpu_transport_active_attempt_id, stage_id)) return false;
 
     llg_rhs_fp64_kernel<<<grid, 256>>>(
         static_cast<const double*>(ctx.m.x),
@@ -136,6 +140,7 @@ static bool compute_rhs_into(Context &ctx, DeviceVectorField &rhs_out,
         static_cast<double*>(rhs_out.z),
         n, gamma_bar, alpha, ctx.disable_precession ? 1 : 0,
         stt_params_from_ctx(ctx), sot_params_from_ctx(ctx));
+    if (!launch_add_gpu_transport_torque_fp64(ctx, ctx.m, rhs_out)) return false;
     if (poll_interrupt(ctx)) {
         abort_step_after_interrupt(ctx, false);
         return false;
@@ -157,7 +162,8 @@ void launch_rk4_step_fp64(Context &ctx, double dt, fullmag_fdm_step_stats *stats
     copy_field_d2d(ctx.tmp, ctx.m, ctx.cell_count);
 
     // Stage 1: k1 = RHS(m0)
-    if (!compute_rhs_into(ctx, ctx.k1, n, grid, gamma_bar, alpha, step_start_time)) return;
+    if (!compute_rhs_into(ctx, ctx.k1, n, grid, gamma_bar, alpha,
+                          step_start_time, 1)) return;
     if (abort_step_from_tmp(ctx, false)) return;
 
     // Stage 2: m2 = normalize(m0 + 0.5*dt*k1), k2 = RHS(m2)
@@ -167,7 +173,7 @@ void launch_rk4_step_fp64(Context &ctx, double dt, fullmag_fdm_step_stats *stats
         static_cast<double*>(ctx.m.x), static_cast<double*>(ctx.m.y), static_cast<double*>(ctx.m.z),
         n, 0.5 * dt);
     if (!compute_rhs_into(ctx, ctx.k2, n, grid, gamma_bar, alpha,
-                          step_start_time + 0.5 * dt)) return;
+                          step_start_time + 0.5 * dt, 2)) return;
     if (abort_step_from_tmp(ctx, false)) return;
 
     // Stage 3: m3 = normalize(m0 + 0.5*dt*k2), k3 = RHS(m3)
@@ -177,7 +183,7 @@ void launch_rk4_step_fp64(Context &ctx, double dt, fullmag_fdm_step_stats *stats
         static_cast<double*>(ctx.m.x), static_cast<double*>(ctx.m.y), static_cast<double*>(ctx.m.z),
         n, 0.5 * dt);
     if (!compute_rhs_into(ctx, ctx.k3, n, grid, gamma_bar, alpha,
-                          step_start_time + 0.5 * dt)) return;
+                          step_start_time + 0.5 * dt, 3)) return;
     if (abort_step_from_tmp(ctx, false)) return;
 
     // Stage 4: m4 = normalize(m0 + dt*k3), k4 = RHS(m4)
@@ -187,7 +193,7 @@ void launch_rk4_step_fp64(Context &ctx, double dt, fullmag_fdm_step_stats *stats
         static_cast<double*>(ctx.m.x), static_cast<double*>(ctx.m.y), static_cast<double*>(ctx.m.z),
         n, dt);
     if (!compute_rhs_into(ctx, ctx.k4, n, grid, gamma_bar, alpha,
-                          step_start_time + dt)) return;
+                          step_start_time + dt, 4)) return;
     if (abort_step_from_tmp(ctx, false)) return;
 
     // Final: m_new = normalize(m0 + dt/6*(k1 + 2k2 + 2k3 + k4))
@@ -201,10 +207,17 @@ void launch_rk4_step_fp64(Context &ctx, double dt, fullmag_fdm_step_stats *stats
         n, dt / 6.0);
     if (abort_step_from_tmp(ctx, false)) return;
 
+    // Close the transport transaction on the final accepted magnetization for
+    // every stats mode.  The diagnostic branch below only consumes this view.
+    if (!context_evaluate_gpu_transport_rhs(
+            ctx, ctx.m, step_start_time + dt,
+            ctx.gpu_transport_active_attempt_id, 5)) return;
+
     ctx.step_count++;
     ctx.current_time += dt;
 
     if (!fullmag_fdm_should_fill_step_stats(ctx)) {
+        if (!context_complete_gpu_transport_rhs(ctx)) return;
         fullmag_fdm_fill_step_stats_metadata(ctx, stats, dt);
         return;
     }
@@ -230,7 +243,7 @@ void launch_rk4_step_fp64(Context &ctx, double dt, fullmag_fdm_step_stats *stats
         ctx.m.x, ctx.m.y, ctx.m.z,
         ctx.work.x, ctx.work.y, ctx.work.z, ctx.cell_count);
 
-    // Max |dm/dt| — compute RHS at final state
+    // Max |dm/dt| — compute RHS from the already evaluated accepted state.
     llg_rhs_fp64_kernel<<<grid, 256>>>(
         static_cast<const double*>(ctx.m.x),
         static_cast<const double*>(ctx.m.y),
@@ -243,6 +256,7 @@ void launch_rk4_step_fp64(Context &ctx, double dt, fullmag_fdm_step_stats *stats
         static_cast<double*>(ctx.k1.z),
         n, gamma_bar, alpha, ctx.disable_precession ? 1 : 0,
         stt_params_from_ctx(ctx), sot_params_from_ctx(ctx));
+    if (!launch_add_gpu_transport_torque_fp64(ctx, ctx.m, ctx.k1)) return;
     double max_dm_dt = reduce_max_norm_fp64(ctx, ctx.k1.x, ctx.k1.y, ctx.k1.z, ctx.cell_count);
 
     stats->step = ctx.step_count;

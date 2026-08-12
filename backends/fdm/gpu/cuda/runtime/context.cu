@@ -1456,6 +1456,69 @@ bool context_alloc_device(Context &ctx) {
     return true;
 }
 
+bool context_capture_gpu_transport_pre_step_m(Context &ctx) {
+    if (!ctx.gpu_transport_rhs.active || ctx.precision != FULLMAG_FDM_PRECISION_DOUBLE)
+        return true;
+    if (ctx.gpu_transport_pre_step_m.x == nullptr &&
+        !alloc_vector_field(ctx, ctx.gpu_transport_pre_step_m))
+        return false;
+    const size_t bytes = static_cast<size_t>(ctx.cell_count) * sizeof(double);
+    const cudaStream_t stream = context_compute_stream(ctx);
+    // Legacy fixed-step kernels still publish m on the default stream.  Order
+    // that producer before the transaction-owned compute-stream snapshot.
+    if (cudaStreamSynchronize(nullptr) != cudaSuccess ||
+        cudaMemcpyAsync(ctx.gpu_transport_pre_step_m.x, ctx.m.x, bytes,
+                        cudaMemcpyDeviceToDevice, stream) != cudaSuccess ||
+        cudaMemcpyAsync(ctx.gpu_transport_pre_step_m.y, ctx.m.y, bytes,
+                        cudaMemcpyDeviceToDevice, stream) != cudaSuccess ||
+        cudaMemcpyAsync(ctx.gpu_transport_pre_step_m.z, ctx.m.z, bytes,
+                        cudaMemcpyDeviceToDevice, stream) != cudaSuccess ||
+        cudaStreamSynchronize(stream) != cudaSuccess) {
+        ctx.last_error = "failed to capture bound transport pre-step magnetization";
+        return false;
+    }
+    ctx.gpu_transport_pre_step_m_valid = true;
+    return true;
+}
+
+bool context_restore_gpu_transport_pre_step_m(Context &ctx) {
+    if (!ctx.gpu_transport_rhs.active || ctx.precision != FULLMAG_FDM_PRECISION_DOUBLE)
+        return true;
+    if (!ctx.gpu_transport_pre_step_m_valid) {
+        ctx.last_error = "bound transport pre-step magnetization snapshot is unavailable";
+        return false;
+    }
+    const size_t bytes = static_cast<size_t>(ctx.cell_count) * sizeof(double);
+    const cudaStream_t stream = context_compute_stream(ctx);
+    // A rejected legacy fixed-step integrator can still have default-stream
+    // writers in flight.  Complete those writers before restoring on the
+    // dedicated compute stream.
+    if (cudaStreamSynchronize(nullptr) != cudaSuccess) {
+        ctx.last_error = "failed to order rejected integrator work before rollback";
+        return false;
+    }
+    const cudaError_t copy_x = cudaMemcpyAsync(
+        ctx.m.x, ctx.gpu_transport_pre_step_m.x, bytes,
+        cudaMemcpyDeviceToDevice, stream);
+    const cudaError_t copy_y = cudaMemcpyAsync(
+        ctx.m.y, ctx.gpu_transport_pre_step_m.y, bytes,
+        cudaMemcpyDeviceToDevice, stream);
+    const cudaError_t copy_z = cudaMemcpyAsync(
+        ctx.m.z, ctx.gpu_transport_pre_step_m.z, bytes,
+        cudaMemcpyDeviceToDevice, stream);
+    if (copy_x != cudaSuccess || copy_y != cudaSuccess || copy_z != cudaSuccess ||
+        cudaStreamSynchronize(stream) != cudaSuccess) {
+        ctx.last_error = "failed to restore bound transport pre-step magnetization";
+        return false;
+    }
+    ctx.gpu_transport_pre_step_m_valid = false;
+    return true;
+}
+
+void context_invalidate_gpu_transport_pre_step_m(Context &ctx) {
+    ctx.gpu_transport_pre_step_m_valid = false;
+}
+
 void context_free_device(Context &ctx) {
     context_destroy_compute_stream(ctx);
     free_multilayer_plan_v2(ctx);
@@ -1465,6 +1528,7 @@ void context_free_device(Context &ctx) {
     free_vector_field(ctx.h_ani);
     free_vector_field(ctx.k1);
     free_vector_field(ctx.tmp);
+    free_vector_field(ctx.gpu_transport_pre_step_m);
     free_vector_field(ctx.work);
     // DP45 stage buffers
     free_vector_field(ctx.k2);

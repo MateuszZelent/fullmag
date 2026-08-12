@@ -350,7 +350,7 @@ __global__ void heun_corrector_fp64_kernel(
 
 static const int BLOCK_SIZE = 256;
 
-double reduce_current_rhs_norm_fp64(Context &ctx) {
+double reduce_current_rhs_norm_from_evaluated_transport_fp64(Context &ctx) {
     const int n = static_cast<int>(ctx.cell_count);
     const int grid = (n + BLOCK_SIZE - 1) / BLOCK_SIZE;
     const double alpha = ctx.alpha;
@@ -368,8 +368,16 @@ double reduce_current_rhs_norm_fp64(Context &ctx) {
         static_cast<double*>(ctx.k1.z),
         n, gamma_bar, alpha, ctx.disable_precession ? 1 : 0,
         stt_params_from_ctx(ctx), sot_params_from_ctx(ctx));
+    if (!launch_add_gpu_transport_torque_fp64(ctx, ctx.m, ctx.k1)) return 0.0;
 
     return reduce_max_norm_fp64(ctx, ctx.k1.x, ctx.k1.y, ctx.k1.z, ctx.cell_count);
+}
+
+double reduce_current_rhs_norm_fp64(Context &ctx) {
+    if (!context_evaluate_gpu_transport_rhs(
+            ctx, ctx.m, ctx.current_time,
+            ctx.gpu_transport_active_attempt_id, UINT64_MAX)) return 0.0;
+    return reduce_current_rhs_norm_from_evaluated_transport_fp64(ctx);
 }
 
 void launch_heun_step_fp64(Context &ctx, double dt, fullmag_fdm_step_stats *stats) {
@@ -397,6 +405,9 @@ void launch_heun_step_fp64(Context &ctx, double dt, fullmag_fdm_step_stats *stat
     if (abort_step_from_tmp(ctx, false)) return;
 
     // --- Step 2: Compute k1 = RHS(m, H_eff) ---
+    if (!context_evaluate_gpu_transport_rhs(
+            ctx, ctx.m, step_start_time,
+            ctx.gpu_transport_active_attempt_id, 1)) return;
     llg_rhs_fp64_kernel<<<grid, BLOCK_SIZE>>>(
         static_cast<const double*>(ctx.m.x),
         static_cast<const double*>(ctx.m.y),
@@ -409,6 +420,7 @@ void launch_heun_step_fp64(Context &ctx, double dt, fullmag_fdm_step_stats *stat
         static_cast<double*>(ctx.k1.z),
         n, gamma_bar, alpha, ctx.disable_precession ? 1 : 0,
         stt_params_from_ctx(ctx), sot_params_from_ctx(ctx));
+    if (!launch_add_gpu_transport_torque_fp64(ctx, ctx.m, ctx.k1)) return;
     if (abort_step_from_tmp(ctx, false)) return;
 
     // --- Step 3: Predictor: m_pred = normalize(m + dt·k1) ---
@@ -438,6 +450,9 @@ void launch_heun_step_fp64(Context &ctx, double dt, fullmag_fdm_step_stats *stat
 
     // --- Step 5: Compute k2 = RHS(m_pred, H_eff_pred) ---
     // Store k2 in h_ex (reuse buffer after H_eff has been formed in work)
+    if (!context_evaluate_gpu_transport_rhs(
+            ctx, ctx.m, step_start_time + dt,
+            ctx.gpu_transport_active_attempt_id, 2)) return;
     llg_rhs_fp64_kernel<<<grid, BLOCK_SIZE>>>(
         static_cast<const double*>(ctx.m.x),
         static_cast<const double*>(ctx.m.y),
@@ -450,6 +465,7 @@ void launch_heun_step_fp64(Context &ctx, double dt, fullmag_fdm_step_stats *stat
         static_cast<double*>(ctx.h_ex.z),
         n, gamma_bar, alpha, ctx.disable_precession ? 1 : 0,
         stt_params_from_ctx(ctx), sot_params_from_ctx(ctx));
+    if (!launch_add_gpu_transport_torque_fp64(ctx, ctx.m, ctx.h_ex)) return;
     if (abort_step_from_tmp(ctx, false)) return;
 
     // --- Step 6: Corrector: m_new = normalize(m_orig + 0.5·dt·(k1 + k2)) ---
@@ -469,7 +485,15 @@ void launch_heun_step_fp64(Context &ctx, double dt, fullmag_fdm_step_stats *stat
         n, 0.5 * dt);
     if (abort_step_from_tmp(ctx, false)) return;
 
+    // Persist the spin solution associated with the final accepted
+    // magnetization independently of the diagnostic policy.  Diagnostics may
+    // consume this torque view, but must never trigger another spin solve.
+    if (!context_evaluate_gpu_transport_rhs(
+            ctx, ctx.m, step_start_time + dt,
+            ctx.gpu_transport_active_attempt_id, 3)) return;
+
     if (!fullmag_fdm_should_fill_step_stats_for_step(ctx, ctx.step_count + 1)) {
+        if (!context_complete_gpu_transport_rhs(ctx)) return;
         ctx.step_count++;
         ctx.current_time += dt;
         fullmag_fdm_fill_step_stats_metadata(ctx, stats, dt);
@@ -511,7 +535,7 @@ void launch_heun_step_fp64(Context &ctx, double dt, fullmag_fdm_step_stats *stat
         ctx.work.x, ctx.work.y, ctx.work.z, ctx.cell_count);
 
     // Max |dm/dt| — full accepted-state RHS, including direct torques.
-    double max_dm_dt = reduce_current_rhs_norm_fp64(ctx);
+    double max_dm_dt = reduce_current_rhs_norm_from_evaluated_transport_fp64(ctx);
 
     // Update context time
     ctx.step_count++;

@@ -4,6 +4,8 @@
     FULLMAG_ABI_FIELD(T, struct_size, 8); FULLMAG_ABI_FIELD(T, reserved_flags, 12); \
     FULLMAG_ABI_FIELD(T, required_features, 16); FULLMAG_ABI_FIELD(T, reserved0, 24)
 
+FULLMAG_ABI_PREFIX(fullmag_fdm_gpu_transport_llg_binding_v1);
+FULLMAG_ABI_FIELD(fullmag_fdm_gpu_transport_llg_binding_v1,transport_context,32); FULLMAG_ABI_FIELD(fullmag_fdm_gpu_transport_llg_binding_v1,charge_snapshot,64); FULLMAG_ABI_FIELD(fullmag_fdm_gpu_transport_llg_binding_v1,accepted_sequence,96); FULLMAG_ABI_FIELD(fullmag_fdm_gpu_transport_llg_binding_v1,source_revision,104); FULLMAG_ABI_FIELD(fullmag_fdm_gpu_transport_llg_binding_v1,operator_revision,112); FULLMAG_ABI_FIELD(fullmag_fdm_gpu_transport_llg_binding_v1,relative_tolerance,120); FULLMAG_ABI_FIELD(fullmag_fdm_gpu_transport_llg_binding_v1,max_iterations,128); FULLMAG_ABI_FIELD(fullmag_fdm_gpu_transport_llg_binding_v1,reserved1,136);
 FULLMAG_ABI_PREFIX(fullmag_fdm_gpu_transport_buffer_view_v1);
 FULLMAG_ABI_FIELD(fullmag_fdm_gpu_transport_buffer_view_v1,address,32); FULLMAG_ABI_FIELD(fullmag_fdm_gpu_transport_buffer_view_v1,element_count,40); FULLMAG_ABI_FIELD(fullmag_fdm_gpu_transport_buffer_view_v1,byte_stride,48); FULLMAG_ABI_FIELD(fullmag_fdm_gpu_transport_buffer_view_v1,byte_length,56); FULLMAG_ABI_FIELD(fullmag_fdm_gpu_transport_buffer_view_v1,element_type,64); FULLMAG_ABI_FIELD(fullmag_fdm_gpu_transport_buffer_view_v1,pointer_space,68); FULLMAG_ABI_FIELD(fullmag_fdm_gpu_transport_buffer_view_v1,component_order,72); FULLMAG_ABI_FIELD(fullmag_fdm_gpu_transport_buffer_view_v1,reserved1,76);
 FULLMAG_ABI_PREFIX(fullmag_fdm_gpu_transport_spin_cell_v1);

@@ -1,4 +1,5 @@
 #include "fullmag/fdm/transport/gpu_abi_v1.h"
+#include "context.hpp"
 #include "charge/device_solver.hpp"
 #include "charge/checkpoint_codec.hpp"
 #include "spin/checkpoint_codec.hpp"
@@ -8,6 +9,7 @@
 
 #include <array>
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <cstddef>
 #include <cmath>
@@ -16,6 +18,7 @@
 #include <cstring>
 #include <limits>
 #include <mutex>
+#include <thread>
 #include <new>
 #include <stdexcept>
 #include <string>
@@ -109,7 +112,41 @@ struct Slot {
     ChargeBuffers provisional{};
     ChargeBuffers accepted{};
     SpinBuffers spin_accepted{};
+    SpinBuffers spin_trial{};
     SpinSparseState spin_sparse_state{};
+    double *llg_m_stage = nullptr;
+    double *llg_torque = nullptr;
+    uint64_t llg_cells = 0;
+    cudaEvent_t llg_m_ready = nullptr;
+    cudaEvent_t llg_torque_ready = nullptr;
+    uint64_t llg_stage_evaluation_count = 0;
+    uint64_t llg_binding_owner_id = 0;
+    uint64_t llg_binding_snapshot_slot = UINT64_MAX;
+    uint64_t llg_binding_snapshot_generation = 0;
+    bool llg_torque_in_flight = false;
+    bool llg_step_transaction_active = false;
+    uint64_t llg_step_attempt_id = 0;
+    bool llg_step_has_stage_time = false;
+    double llg_step_last_stage_time = 0.0;
+    uint64_t test_fail_llg_attempt_id = 0;
+    uint64_t test_fail_llg_stage_id = 0;
+    uint32_t test_llg_completion_fault = 0;
+    std::atomic<uint32_t> test_llg_hold_state{0};
+    uint64_t spin_trial_hierarchy_build_count = 0;
+    uint64_t spin_trial_hierarchy_cache_hit_count = 0;
+    uint64_t spin_trial_amg_apply_count = 0;
+    uint64_t spin_trial_fine_unknown_count = 0;
+    uint64_t spin_trial_coarse_unknown_count = 0;
+    uint32_t spin_trial_hierarchy_levels = 0;
+    std::array<uint8_t, 32> spin_trial_hierarchy_digest{};
+    uint64_t spin_trial_iterations = 0;
+    uint64_t spin_trial_work_budget = 0;
+    uint32_t spin_trial_convergence_reason = 0;
+    double spin_trial_local_balance = 0.0;
+    double spin_trial_global_balance = 0.0;
+    double spin_trial_interface_balance = 0.0;
+    double spin_trial_torque_balance = 0.0;
+    std::array<uint8_t, 32> spin_trial_compute_digest{};
     ChargeHierarchyCache hierarchy_cache{};
     uint64_t iterations = 0;
     double algebraic_residual = 0.0;
@@ -132,6 +169,8 @@ struct Slot {
     std::array<uint8_t, 32> hierarchy_digest{};
     uint64_t spin_accepted_commit_count = 0;
     uint64_t spin_failed_rollback_count = 0;
+    bool spin_solve_active = false;
+    uint64_t spin_solve_token = 0;
     uint64_t spin_hierarchy_build_count = 0;
     uint64_t spin_hierarchy_cache_hit_count = 0;
     uint64_t spin_amg_apply_count = 0;
@@ -154,6 +193,9 @@ struct Slot {
 
 std::array<Slot, 4> slots{};
 std::mutex registry_mutex;
+uint64_t next_llg_binding_owner_id = 1;
+std::atomic<uint32_t> test_spin_solve_barrier_arrivals{0};
+std::atomic<uint32_t> test_spin_solve_barrier_expected{0};
 
 bool same(const fullmag_fdm_gpu_transport_context_handle_v1 &, size_t,
           uint64_t);
@@ -304,6 +346,45 @@ void release_spin_buffers(SpinBuffers &buffers) {
 
 void release_spin_sparse_state(SpinSparseState &state) {
     fullmag::fdm::gpu::transport::spin::release(state);
+}
+
+void release_llg_binding_storage(Slot &slot) {
+    if (slot.llg_m_ready != nullptr) (void)cudaEventDestroy(slot.llg_m_ready);
+    if (slot.llg_torque_ready != nullptr) (void)cudaEventDestroy(slot.llg_torque_ready);
+    if (slot.llg_m_stage != nullptr) (void)cudaFree(slot.llg_m_stage);
+    if (slot.llg_torque != nullptr) (void)cudaFree(slot.llg_torque);
+    slot.llg_m_ready = nullptr;
+    slot.llg_torque_ready = nullptr;
+    slot.llg_m_stage = nullptr;
+    slot.llg_torque = nullptr;
+    slot.llg_cells = 0;
+    slot.llg_stage_evaluation_count = 0;
+    slot.llg_binding_owner_id = 0;
+    slot.llg_binding_snapshot_slot = UINT64_MAX;
+    slot.llg_binding_snapshot_generation = 0;
+    slot.llg_torque_in_flight = false;
+    slot.llg_step_transaction_active = false;
+    slot.llg_step_attempt_id = 0;
+    slot.llg_step_has_stage_time = false;
+    slot.llg_step_last_stage_time = 0.0;
+}
+
+void reset_spin_trial_metadata(Slot &slot) {
+    slot.spin_trial_hierarchy_build_count = 0;
+    slot.spin_trial_hierarchy_cache_hit_count = 0;
+    slot.spin_trial_amg_apply_count = 0;
+    slot.spin_trial_fine_unknown_count = 0;
+    slot.spin_trial_coarse_unknown_count = 0;
+    slot.spin_trial_hierarchy_levels = 0;
+    slot.spin_trial_hierarchy_digest.fill(0);
+    slot.spin_trial_iterations = 0;
+    slot.spin_trial_work_budget = 0;
+    slot.spin_trial_convergence_reason = 0;
+    slot.spin_trial_local_balance = 0.0;
+    slot.spin_trial_global_balance = 0.0;
+    slot.spin_trial_interface_balance = 0.0;
+    slot.spin_trial_torque_balance = 0.0;
+    slot.spin_trial_compute_digest.fill(0);
 }
 
 uint32_t accepted_charge_content_digest(
@@ -776,6 +857,28 @@ extern "C" uint32_t fullmag_fdm_gpu_transport_context_create_v1(
         slot.hierarchy_levels = 0;
         slot.hierarchy_digest.fill(0);
         slot.spin_sparse_state = {};
+        slot.llg_m_stage = nullptr;
+        slot.llg_torque = nullptr;
+        slot.llg_cells = 0;
+        slot.llg_m_ready = nullptr;
+        slot.llg_torque_ready = nullptr;
+        slot.llg_stage_evaluation_count = 0;
+        slot.llg_binding_owner_id = 0;
+        slot.llg_binding_snapshot_slot = UINT64_MAX;
+        slot.llg_binding_snapshot_generation = 0;
+        slot.llg_torque_in_flight = false;
+        slot.llg_step_transaction_active = false;
+        slot.llg_step_attempt_id = 0;
+        slot.llg_step_has_stage_time = false;
+        slot.llg_step_last_stage_time = 0.0;
+        slot.test_fail_llg_attempt_id = 0;
+        slot.test_fail_llg_stage_id = 0;
+        slot.test_llg_completion_fault = 0;
+        slot.test_llg_hold_state.store(0, std::memory_order_relaxed);
+        slot.spin_solve_active = false;
+        slot.spin_solve_token = 0;
+        release_spin_buffers(slot.spin_trial);
+        reset_spin_trial_metadata(slot);
         slot.spin_accepted_commit_count = 0;
         slot.spin_failed_rollback_count = 0;
         slot.spin_hierarchy_build_count = 0;
@@ -834,6 +937,9 @@ extern "C" uint32_t fullmag_fdm_gpu_transport_context_destroy_v1(
     if (!slot.active) {
         return FULLMAG_FDM_GPU_TRANSPORT_ERROR_INVALID_STATE;
     }
+    if (slot.llg_binding_owner_id != 0 || slot.spin_solve_active) {
+        return FULLMAG_FDM_GPU_TRANSPORT_ERROR_INVALID_STATE;
+    }
     if (slot.live_snapshots != 0) {
         return FULLMAG_FDM_GPU_TRANSPORT_ERROR_LIVE_SNAPSHOT;
     }
@@ -841,8 +947,10 @@ extern "C" uint32_t fullmag_fdm_gpu_transport_context_destroy_v1(
     release_charge_buffers(slot.provisional);
     release_charge_buffers(slot.accepted);
     release_spin_buffers(slot.spin_accepted);
+    release_spin_buffers(slot.spin_trial);
     release_spin_sparse_state(slot.spin_sparse_state);
     release_charge_hierarchy(slot.hierarchy_cache);
+    release_llg_binding_storage(slot);
     if (cudaStreamDestroy(slot.stream) != cudaSuccess) {
         return FULLMAG_FDM_GPU_TRANSPORT_ERROR_CUDA_RUNTIME_ERROR;
     }
@@ -2178,7 +2286,7 @@ extern "C" uint32_t fullmag_fdm_gpu_transport_solve_steady_spin_v1(
         torque_view->required_features, 0, torque_view->reserved0);
     if (status != FULLMAG_FDM_GPU_TRANSPORT_ERROR_OK) return status;
 
-    std::lock_guard<std::mutex> lock(registry_mutex);
+    std::unique_lock<std::mutex> lock(registry_mutex);
     const auto &context = request->context_handle;
     const auto &snapshot_handle = request->snapshot_handle;
     if (context.registry_cookie != kCookie || context.type_tag != kContextTag ||
@@ -2199,6 +2307,14 @@ extern "C" uint32_t fullmag_fdm_gpu_transport_solve_steady_spin_v1(
     if (request->source_revision != parent.source_revision ||
         request->operator_revision != parent.spin_operator_revision)
         return FULLMAG_FDM_GPU_TRANSPORT_ERROR_INVALID_STATE;
+    const bool transactional = parent.llg_binding_owner_id != 0;
+    if (transactional &&
+        (!parent.llg_step_transaction_active ||
+         parent.llg_step_attempt_id != request->attempt_id ||
+         parent.llg_binding_snapshot_slot != snapshot_handle.slot ||
+         parent.llg_binding_snapshot_generation != snapshot_handle.generation)) {
+        return FULLMAG_FDM_GPU_TRANSPORT_ERROR_INVALID_STATE;
+    }
 
     const uint64_t cells = parent.grid[0] * parent.grid[1] * parent.grid[2];
     uint64_t vector_values = 0;
@@ -2265,11 +2381,14 @@ extern "C" uint32_t fullmag_fdm_gpu_transport_solve_steady_spin_v1(
                        snapshot.accepted.jy_count + snapshot.accepted.jz_count +
                        4 * snapshot.accepted.interface_count) * sizeof(double);
     resident_bytes += 2 * vector_values * sizeof(double);
-    resident_bytes += snapshot.spin_accepted.owned_bytes;
+    resident_bytes += snapshot.spin_accepted.owned_bytes +
+        snapshot.spin_trial.owned_bytes;
     input.resident_external_bytes = resident_bytes;
-    input.old_accepted_bytes = snapshot.spin_accepted.owned_bytes;
+    input.old_accepted_bytes = transactional
+        ? snapshot.spin_trial.owned_bytes
+        : snapshot.spin_accepted.owned_bytes;
     input.tracked_resident_bytes =
-        resident_bytes - snapshot.spin_accepted.owned_bytes;
+        resident_bytes - input.old_accepted_bytes;
     size_t free_device_bytes = 0;
     size_t total_device_bytes = 0;
     if (cudaMemGetInfo(&free_device_bytes, &total_device_bytes) != cudaSuccess ||
@@ -2278,8 +2397,41 @@ extern "C" uint32_t fullmag_fdm_gpu_transport_solve_steady_spin_v1(
     input.free_device_bytes = free_device_bytes;
     input.total_device_bytes = total_device_bytes;
     input.static_baseline_bytes = total_device_bytes - free_device_bytes;
+    if (parent.spin_solve_active || parent.spin_solve_token == UINT64_MAX)
+        return FULLMAG_FDM_GPU_TRANSPORT_ERROR_INVALID_STATE;
+    const uint64_t solve_token = ++parent.spin_solve_token;
+    const uint64_t context_generation = parent.generation;
+    const uint64_t snapshot_generation = snapshot.generation;
+    parent.spin_solve_active = true;
+    lock.unlock();
+    const uint32_t barrier_expected =
+        test_spin_solve_barrier_expected.load(std::memory_order_acquire);
+    bool barrier_complete = true;
+    if (barrier_expected != 0) {
+        test_spin_solve_barrier_arrivals.fetch_add(1, std::memory_order_acq_rel);
+        const auto deadline = std::chrono::steady_clock::now() +
+            std::chrono::seconds(5);
+        while (test_spin_solve_barrier_arrivals.load(std::memory_order_acquire) <
+               barrier_expected) {
+            if (std::chrono::steady_clock::now() >= deadline) {
+                barrier_complete = false;
+                break;
+            }
+            std::this_thread::yield();
+        }
+    }
     fullmag::fdm::gpu::transport::spin::SolveOutput output{};
-    status = fullmag::fdm::gpu::transport::spin::solve_device(input, &output);
+    status = barrier_complete
+        ? fullmag::fdm::gpu::transport::spin::solve_device(input, &output)
+        : FULLMAG_FDM_GPU_TRANSPORT_ERROR_INVALID_STATE;
+    lock.lock();
+    if (!parent.active || parent.generation != context_generation ||
+        !snapshot.active || snapshot.generation != snapshot_generation ||
+        !parent.spin_solve_active || parent.spin_solve_token != solve_token) {
+        release_spin_buffers(output.buffers);
+        return FULLMAG_FDM_GPU_TRANSPORT_ERROR_INVALID_STATE;
+    }
+    parent.spin_solve_active = false;
     parent.spin_memory_plan = output.memory_plan;
     result->iterations = output.iterations;
     result->reason = output.reason;
@@ -2292,7 +2444,7 @@ extern "C" uint32_t fullmag_fdm_gpu_transport_solve_steady_spin_v1(
     result->transfer_bytes = output.transfer_bytes;
     result->peak_bytes = output.peak_bytes;
     if (status != FULLMAG_FDM_GPU_TRANSPORT_ERROR_OK) {
-        ++parent.spin_failed_rollback_count;
+        if (!transactional) ++parent.spin_failed_rollback_count;
         append_charge_telemetry(
             parent, FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_DIRECTION_NONE,
             FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_REASON_REJECTED_ATTEMPT,
@@ -2301,6 +2453,33 @@ extern "C" uint32_t fullmag_fdm_gpu_transport_solve_steady_spin_v1(
             0, 0, request->attempt_id, request->stage_id, output.iterations,
             snapshot.candidate_digest.data());
         return status;
+    }
+
+    if (transactional) {
+        release_spin_buffers(snapshot.spin_trial);
+        snapshot.spin_trial = output.buffers;
+        parent.spin_trial_hierarchy_build_count += output.hierarchy_build_count;
+        parent.spin_trial_hierarchy_cache_hit_count += output.cache_hit_count;
+        parent.spin_trial_amg_apply_count += output.amg_apply_count;
+        parent.spin_trial_fine_unknown_count = output.fine_unknowns;
+        parent.spin_trial_coarse_unknown_count = output.coarse_unknowns;
+        parent.spin_trial_hierarchy_levels = output.hierarchy_levels;
+        std::memcpy(parent.spin_trial_hierarchy_digest.data(),
+                    output.hierarchy_digest, 32);
+        parent.spin_trial_iterations = output.iterations;
+        parent.spin_trial_work_budget = request->max_iterations;
+        parent.spin_trial_convergence_reason = output.reason;
+        parent.spin_trial_local_balance = output.local_balance;
+        parent.spin_trial_global_balance = output.global_balance;
+        parent.spin_trial_interface_balance = output.interface_balance;
+        parent.spin_trial_torque_balance = output.torque_balance;
+        std::memcpy(parent.spin_trial_compute_digest.data(),
+                    output.deterministic_compute_digest, 32);
+        std::memcpy(result->snapshot_content_digest,
+                    snapshot.candidate_digest.data(), 32);
+        std::memcpy(result->deterministic_compute_digest,
+                    output.deterministic_compute_digest, 32);
+        return FULLMAG_FDM_GPU_TRANSPORT_ERROR_OK;
     }
 
     release_spin_buffers(snapshot.spin_accepted);
@@ -2325,6 +2504,15 @@ extern "C" uint32_t fullmag_fdm_gpu_transport_solve_steady_spin_v1(
     std::memcpy(result->snapshot_content_digest, snapshot.candidate_digest.data(), 32);
     std::memcpy(result->deterministic_compute_digest,
                 output.deterministic_compute_digest, 32);
+    return FULLMAG_FDM_GPU_TRANSPORT_ERROR_OK;
+}
+
+extern "C" uint32_t fullmag_fdm_gpu_transport_test_spin_solve_barrier_v1(
+    uint32_t expected) {
+    if (expected != 0 && expected != 2)
+        return FULLMAG_FDM_GPU_TRANSPORT_ERROR_INVALID_DESCRIPTOR;
+    test_spin_solve_barrier_arrivals.store(0, std::memory_order_release);
+    test_spin_solve_barrier_expected.store(expected, std::memory_order_release);
     return FULLMAG_FDM_GPU_TRANSPORT_ERROR_OK;
 }
 
@@ -3613,12 +3801,20 @@ extern "C" uint32_t fullmag_fdm_gpu_charge_snapshot_destroy_v1(
     if (!slot.active) return FULLMAG_FDM_GPU_TRANSPORT_ERROR_STALE_SNAPSHOT;
     if (slot.parent_slot < slots.size()) {
         Slot &parent = slots[slot.parent_slot];
+        if (parent.generation == slot.parent_generation &&
+            (parent.spin_solve_active ||
+             (parent.llg_binding_owner_id != 0 &&
+              parent.llg_binding_snapshot_slot == snapshot.slot &&
+              parent.llg_binding_snapshot_generation == snapshot.generation))) {
+            return FULLMAG_FDM_GPU_TRANSPORT_ERROR_INVALID_STATE;
+        }
         if (parent.device >= 0) (void)cudaSetDevice(parent.device);
         if (parent.generation == slot.parent_generation && parent.live_snapshots != 0)
             --parent.live_snapshots;
     }
     release_charge_buffers(slot.accepted);
     release_spin_buffers(slot.spin_accepted);
+    release_spin_buffers(slot.spin_trial);
     slot.active = false;
     slot.tombstone = true;
     slot.parent_slot = UINT64_MAX;
@@ -3900,6 +4096,114 @@ extern "C" uint32_t fullmag_fdm_gpu_transport_test_spin_audit_v1(
     return FULLMAG_FDM_GPU_TRANSPORT_ERROR_OK;
 }
 
+extern "C" uint32_t fullmag_fdm_gpu_transport_test_fail_llg_stage_v1(
+    fullmag_fdm_gpu_transport_context_handle_v1 context,
+    uint64_t attempt_id, uint64_t stage_id) {
+    if (attempt_id == 0 || stage_id == 0)
+        return FULLMAG_FDM_GPU_TRANSPORT_ERROR_INVALID_DESCRIPTOR;
+    std::lock_guard<std::mutex> lock(registry_mutex);
+    if (context.registry_cookie != kCookie || context.type_tag != kContextTag ||
+        context.slot >= slots.size())
+        return FULLMAG_FDM_GPU_TRANSPORT_ERROR_INVALID_STATE;
+    Slot &slot = slots[context.slot];
+    if (!same(context, context.slot, slot.generation) || !slot.active ||
+        slot.llg_binding_owner_id == 0 || slot.llg_step_transaction_active)
+        return FULLMAG_FDM_GPU_TRANSPORT_ERROR_INVALID_STATE;
+    slot.test_fail_llg_attempt_id = attempt_id;
+    slot.test_fail_llg_stage_id = stage_id;
+    return FULLMAG_FDM_GPU_TRANSPORT_ERROR_OK;
+}
+
+extern "C" uint32_t fullmag_fdm_gpu_transport_test_set_llg_completion_fault_v1(
+    fullmag_fdm_gpu_transport_context_handle_v1 context, uint32_t boundary) {
+    if (boundary < 1 || boundary > 5)
+        return FULLMAG_FDM_GPU_TRANSPORT_ERROR_INVALID_DESCRIPTOR;
+    std::lock_guard<std::mutex> lock(registry_mutex);
+    if (context.registry_cookie != kCookie || context.type_tag != kContextTag ||
+        context.slot >= slots.size())
+        return FULLMAG_FDM_GPU_TRANSPORT_ERROR_INVALID_STATE;
+    Slot &slot = slots[context.slot];
+    if (!same(context, context.slot, slot.generation) || !slot.active ||
+        slot.llg_binding_owner_id == 0 || slot.llg_step_transaction_active ||
+        slot.llg_torque_in_flight)
+        return FULLMAG_FDM_GPU_TRANSPORT_ERROR_INVALID_STATE;
+    slot.test_llg_completion_fault = boundary;
+    slot.test_llg_hold_state.store(0, std::memory_order_release);
+    return FULLMAG_FDM_GPU_TRANSPORT_ERROR_OK;
+}
+
+extern "C" uint32_t fullmag_fdm_gpu_transport_test_retry_llg_drain_v1(
+    fullmag_fdm_gpu_transport_context_handle_v1 context) {
+    cudaStream_t stream = nullptr;
+    int device = -1;
+    {
+        std::lock_guard<std::mutex> lock(registry_mutex);
+        if (context.registry_cookie != kCookie || context.type_tag != kContextTag ||
+            context.slot >= slots.size())
+            return FULLMAG_FDM_GPU_TRANSPORT_ERROR_INVALID_STATE;
+        Slot &slot = slots[context.slot];
+        if (!same(context, context.slot, slot.generation) || !slot.active ||
+            !slot.llg_torque_in_flight)
+            return FULLMAG_FDM_GPU_TRANSPORT_ERROR_INVALID_STATE;
+        stream = slot.stream;
+        device = slot.device;
+    }
+    if (cudaSetDevice(device) != cudaSuccess ||
+        cudaStreamSynchronize(stream) != cudaSuccess)
+        return FULLMAG_FDM_GPU_TRANSPORT_ERROR_CUDA_RUNTIME_ERROR;
+    std::lock_guard<std::mutex> lock(registry_mutex);
+    Slot &slot = slots[context.slot];
+    if (!same(context, context.slot, slot.generation) || !slot.active ||
+        !slot.llg_torque_in_flight)
+        return FULLMAG_FDM_GPU_TRANSPORT_ERROR_INVALID_STATE;
+    slot.llg_torque_in_flight = false;
+    if (slot.llg_step_transaction_active &&
+        slot.llg_binding_snapshot_slot < slots.size()) {
+        Slot &snapshot = slots[slot.llg_binding_snapshot_slot];
+        if (snapshot.active &&
+            snapshot.generation == slot.llg_binding_snapshot_generation) {
+            release_spin_buffers(snapshot.spin_trial);
+            release_spin_sparse_state(slot.spin_sparse_state);
+            ++slot.spin_failed_rollback_count;
+            slot.llg_step_transaction_active = false;
+            slot.llg_step_attempt_id = 0;
+            slot.llg_step_has_stage_time = false;
+            slot.llg_step_last_stage_time = 0.0;
+            reset_spin_trial_metadata(slot);
+        }
+    }
+    return FULLMAG_FDM_GPU_TRANSPORT_ERROR_OK;
+}
+
+extern "C" uint32_t fullmag_fdm_gpu_transport_test_llg_hold_state_v1(
+    fullmag_fdm_gpu_transport_context_handle_v1 context, uint32_t *reached) {
+    if (reached == nullptr)
+        return FULLMAG_FDM_GPU_TRANSPORT_ERROR_INVALID_DESCRIPTOR;
+    std::lock_guard<std::mutex> lock(registry_mutex);
+    if (context.registry_cookie != kCookie || context.type_tag != kContextTag ||
+        context.slot >= slots.size())
+        return FULLMAG_FDM_GPU_TRANSPORT_ERROR_INVALID_STATE;
+    Slot &slot = slots[context.slot];
+    if (!same(context, context.slot, slot.generation) || !slot.active)
+        return FULLMAG_FDM_GPU_TRANSPORT_ERROR_INVALID_STATE;
+    *reached = slot.test_llg_hold_state.load(std::memory_order_acquire);
+    return FULLMAG_FDM_GPU_TRANSPORT_ERROR_OK;
+}
+
+extern "C" uint32_t fullmag_fdm_gpu_transport_test_release_llg_hold_v1(
+    fullmag_fdm_gpu_transport_context_handle_v1 context) {
+    std::lock_guard<std::mutex> lock(registry_mutex);
+    if (context.registry_cookie != kCookie || context.type_tag != kContextTag ||
+        context.slot >= slots.size())
+        return FULLMAG_FDM_GPU_TRANSPORT_ERROR_INVALID_STATE;
+    Slot &slot = slots[context.slot];
+    if (!same(context, context.slot, slot.generation) || !slot.active ||
+        slot.test_llg_hold_state.load(std::memory_order_acquire) != 1)
+        return FULLMAG_FDM_GPU_TRANSPORT_ERROR_INVALID_STATE;
+    slot.test_llg_hold_state.store(2, std::memory_order_release);
+    return FULLMAG_FDM_GPU_TRANSPORT_ERROR_OK;
+}
+
 extern "C" uint32_t fullmag_fdm_gpu_transport_test_spin_memory_plan_v1(
     fullmag_fdm_gpu_transport_context_handle_v1 context,
     fullmag::fdm::gpu::transport::spin::memory::Plan *plan) {
@@ -3924,3 +4228,563 @@ extern "C" uint32_t fullmag_fdm_gpu_transport_test_retire_slot_v1(uint64_t slot_
     slots[slot_index].tombstone=true;
     return FULLMAG_FDM_GPU_TRANSPORT_ERROR_OK;
 }
+
+namespace fullmag::fdm {
+namespace {
+
+bool ensure_llg_binding_storage(Slot &slot, uint64_t cells) {
+    if (slot.llg_cells == cells && slot.llg_m_stage != nullptr &&
+        slot.llg_torque != nullptr && slot.llg_m_ready != nullptr &&
+        slot.llg_torque_ready != nullptr) {
+        return true;
+    }
+    release_llg_binding_storage(slot);
+    if (cells == 0 || cells > UINT64_MAX / (6 * sizeof(double))) return false;
+    const uint64_t owned_bytes = 6 * cells * sizeof(double);
+    if (slot.allocator_limit != 0 && owned_bytes > slot.allocator_limit) return false;
+    const size_t vector_bytes = static_cast<size_t>(3 * cells * sizeof(double));
+    if (cudaMalloc(reinterpret_cast<void **>(&slot.llg_m_stage), vector_bytes) !=
+            cudaSuccess ||
+        cudaMalloc(reinterpret_cast<void **>(&slot.llg_torque), vector_bytes) !=
+            cudaSuccess ||
+        cudaEventCreateWithFlags(&slot.llg_m_ready, cudaEventDisableTiming) !=
+            cudaSuccess ||
+        cudaEventCreateWithFlags(&slot.llg_torque_ready, cudaEventDisableTiming) !=
+            cudaSuccess) {
+        release_llg_binding_storage(slot);
+        return false;
+    }
+    slot.llg_cells = cells;
+    return true;
+}
+
+bool device_field_matches(const DeviceVectorField &field, int device) {
+    const void *pointers[3] = {field.x, field.y, field.z};
+    for (const void *pointer : pointers) {
+        cudaPointerAttributes attributes{};
+        if (pointer == nullptr || cudaPointerGetAttributes(&attributes, pointer) !=
+                cudaSuccess ||
+            attributes.type != cudaMemoryTypeDevice || attributes.device != device) {
+            return false;
+        }
+    }
+    return true;
+}
+
+bool evaluate_bound_gpu_transport_rhs(
+    Context &ctx,
+    const DeviceVectorField &m_stage,
+    double t_stage,
+    uint64_t attempt_id,
+    uint64_t stage_id,
+    DeviceVectorField &torque_view)
+{
+    const auto binding = ctx.gpu_transport_rhs.descriptor;
+    fullmag_fdm_gpu_transport_buffer_view_v1 m_view{};
+    fullmag_fdm_gpu_transport_buffer_view_v1 torque_buffer_view{};
+    {
+        std::lock_guard<std::mutex> lock(registry_mutex);
+        const auto &context = binding.transport_context;
+        const auto &snapshot_handle = binding.charge_snapshot;
+        if (context.registry_cookie != kCookie || context.type_tag != kContextTag ||
+            context.slot >= slots.size() ||
+            snapshot_handle.registry_cookie != kCookie ||
+            snapshot_handle.type_tag != kSnapshotTag ||
+            snapshot_handle.slot >= slots.size()) {
+            ctx.last_error = "bound GPU transport handle is stale";
+            return false;
+        }
+        Slot &parent = slots[context.slot];
+        const Slot &snapshot = slots[snapshot_handle.slot];
+        if (!same(context, context.slot, parent.generation) || !parent.active ||
+            !snapshot.active || snapshot.generation != snapshot_handle.generation ||
+            snapshot.parent_slot != context.slot ||
+            snapshot.parent_generation != context.generation ||
+            snapshot.accepted_sequence != binding.accepted_sequence ||
+            parent.source_revision != binding.source_revision ||
+            parent.spin_operator_revision != binding.operator_revision ||
+            parent.grid[0] != ctx.nx || parent.grid[1] != ctx.ny ||
+            parent.grid[2] != ctx.nz || parent.llg_cells != ctx.cell_count ||
+            !device_field_matches(m_stage, parent.device)) {
+            ctx.last_error = "bound GPU transport state no longer matches the LLG context";
+            return false;
+        }
+        if (ctx.gpu_transport_owner_id == 0 ||
+            parent.llg_binding_owner_id != ctx.gpu_transport_owner_id ||
+            parent.llg_binding_snapshot_slot != snapshot_handle.slot ||
+            parent.llg_binding_snapshot_generation != snapshot_handle.generation ||
+            parent.llg_torque_in_flight) {
+            ctx.last_error = "GPU transport LLG binding ownership is not exclusive";
+            return false;
+        }
+        if (!std::isfinite(t_stage) || !parent.llg_step_transaction_active ||
+            parent.llg_step_attempt_id != attempt_id ||
+            (parent.llg_step_has_stage_time &&
+             t_stage < parent.llg_step_last_stage_time)) {
+            ctx.last_error =
+                "GPU transport LLG stage time or attempt ordering is invalid";
+            return false;
+        }
+        parent.llg_step_has_stage_time = true;
+        parent.llg_step_last_stage_time = t_stage;
+        if (parent.test_fail_llg_attempt_id == attempt_id &&
+            parent.test_fail_llg_stage_id == stage_id) {
+            parent.test_fail_llg_attempt_id = 0;
+            parent.test_fail_llg_stage_id = 0;
+            ctx.last_error = "test-injected late GPU transport stage failure";
+            return false;
+        }
+        if (cudaSetDevice(parent.device) != cudaSuccess ||
+            cudaEventRecord(parent.llg_m_ready, context_compute_stream(ctx)) !=
+                cudaSuccess ||
+            cudaStreamWaitEvent(parent.stream, parent.llg_m_ready, 0) != cudaSuccess) {
+            ctx.last_error = "failed to order LLG stage state before GPU transport solve";
+            return false;
+        }
+        const size_t component_bytes =
+            static_cast<size_t>(ctx.cell_count * sizeof(double));
+        if (cudaMemcpyAsync(parent.llg_m_stage, m_stage.x, component_bytes,
+                            cudaMemcpyDeviceToDevice, parent.stream) != cudaSuccess ||
+            cudaMemcpyAsync(parent.llg_m_stage + ctx.cell_count, m_stage.y,
+                            component_bytes, cudaMemcpyDeviceToDevice,
+                            parent.stream) != cudaSuccess ||
+            cudaMemcpyAsync(parent.llg_m_stage + 2 * ctx.cell_count, m_stage.z,
+                            component_bytes, cudaMemcpyDeviceToDevice,
+                            parent.stream) != cudaSuccess) {
+            ctx.last_error = "failed to stage device-resident LLG magnetization";
+            return false;
+        }
+        const uint64_t values = 3 * ctx.cell_count;
+        m_view = {};
+        m_view.abi_version = FULLMAG_FDM_GPU_TRANSPORT_ABI_V1;
+        m_view.struct_version = 1;
+        m_view.struct_size = sizeof(m_view);
+        m_view.address = reinterpret_cast<uint64_t>(parent.llg_m_stage);
+        m_view.element_count = values;
+        m_view.byte_stride = sizeof(double);
+        m_view.byte_length = values * sizeof(double);
+        m_view.element_type = FULLMAG_FDM_GPU_TRANSPORT_ELEMENT_TYPE_F64;
+        m_view.pointer_space = FULLMAG_FDM_GPU_TRANSPORT_POINTER_SPACE_DEVICE_READ_ONLY;
+        m_view.component_order = FULLMAG_FDM_GPU_TRANSPORT_COMPONENT_ORDER_SOA_XYZ;
+        torque_buffer_view = m_view;
+        torque_buffer_view.address = reinterpret_cast<uint64_t>(parent.llg_torque);
+        torque_buffer_view.pointer_space =
+            FULLMAG_FDM_GPU_TRANSPORT_POINTER_SPACE_DEVICE_WRITE_ONLY;
+        parent.llg_torque_in_flight = true;
+    }
+
+    fullmag_fdm_gpu_steady_spin_solve_request_v1 request{};
+    request.abi_version = FULLMAG_FDM_GPU_TRANSPORT_ABI_V1;
+    request.struct_version = 1;
+    request.struct_size = sizeof(request);
+    request.required_features = binding.required_features;
+    request.context_handle = binding.transport_context;
+    request.snapshot_handle = binding.charge_snapshot;
+    request.accepted_sequence = binding.accepted_sequence;
+    request.m_stage_view_ptr = reinterpret_cast<uint64_t>(&m_view);
+    request.torque_view_ptr = reinterpret_cast<uint64_t>(&torque_buffer_view);
+    request.solver_policy =
+        FULLMAG_FDM_GPU_TRANSPORT_SPIN_SOLVER_POLICY_RESTARTED_GMRES_COMPONENT_AMG_V1;
+    request.attempt_id = attempt_id;
+    request.stage_id = stage_id;
+    request.source_revision = binding.source_revision;
+    request.operator_revision = binding.operator_revision;
+    request.relative_tolerance = binding.relative_tolerance;
+    request.max_iterations = binding.max_iterations;
+    fullmag_fdm_gpu_steady_spin_solve_result_v1 result{};
+    result.abi_version = FULLMAG_FDM_GPU_TRANSPORT_ABI_V1;
+    result.struct_version = 1;
+    result.struct_size = sizeof(result);
+    result.required_features = binding.required_features;
+    const uint32_t status = fullmag_fdm_gpu_transport_solve_steady_spin_v1(
+        &request, &result);
+    if (status != FULLMAG_FDM_GPU_TRANSPORT_ERROR_OK) {
+        cudaStream_t transport_stream = nullptr;
+        int device = -1;
+        {
+            std::lock_guard<std::mutex> lock(registry_mutex);
+            if (binding.transport_context.slot < slots.size()) {
+                Slot &parent = slots[binding.transport_context.slot];
+                if (same(binding.transport_context,
+                         binding.transport_context.slot, parent.generation) &&
+                    parent.active &&
+                    parent.llg_binding_owner_id == ctx.gpu_transport_owner_id) {
+                    transport_stream = parent.stream;
+                    device = parent.device;
+                }
+            }
+        }
+        const bool drained = transport_stream != nullptr &&
+            cudaSetDevice(device) == cudaSuccess &&
+            cudaStreamSynchronize(transport_stream) == cudaSuccess;
+        {
+            std::lock_guard<std::mutex> lock(registry_mutex);
+            if (binding.transport_context.slot < slots.size()) {
+                Slot &parent = slots[binding.transport_context.slot];
+                if (same(binding.transport_context,
+                         binding.transport_context.slot, parent.generation) &&
+                    parent.active &&
+                    parent.llg_binding_owner_id == ctx.gpu_transport_owner_id &&
+                    drained)
+                    parent.llg_torque_in_flight = false;
+            }
+        }
+        ctx.last_error = drained
+            ? "GPU transport stage solve failed with status " +
+                  std::to_string(status)
+            : "GPU transport stage solve failed and its stream could not be drained";
+        return false;
+    }
+
+    std::lock_guard<std::mutex> lock(registry_mutex);
+    const auto &context = binding.transport_context;
+    if (context.slot >= slots.size()) {
+        ctx.last_error = "bound GPU transport context disappeared after stage solve";
+        return false;
+    }
+    Slot &parent = slots[context.slot];
+    if (!same(context, context.slot, parent.generation) || !parent.active ||
+        parent.llg_binding_owner_id != ctx.gpu_transport_owner_id ||
+        !parent.llg_torque_in_flight ||
+        cudaSetDevice(parent.device) != cudaSuccess ||
+        cudaEventRecord(parent.llg_torque_ready, parent.stream) != cudaSuccess ||
+        cudaStreamWaitEvent(context_compute_stream(ctx), parent.llg_torque_ready, 0) !=
+            cudaSuccess) {
+        if (parent.llg_binding_owner_id == ctx.gpu_transport_owner_id)
+            parent.llg_torque_in_flight = false;
+        ctx.last_error = "failed to order GPU transport torque before LLG RHS";
+        return false;
+    }
+    torque_view.x = parent.llg_torque;
+    torque_view.y = parent.llg_torque + ctx.cell_count;
+    torque_view.z = parent.llg_torque + 2 * ctx.cell_count;
+    ctx.gpu_transport_test_completion_fault = parent.test_llg_completion_fault;
+    parent.test_llg_completion_fault = 0;
+    ++parent.llg_stage_evaluation_count;
+    return true;
+}
+
+} // namespace
+
+bool context_bind_gpu_transport_rhs(
+    Context &ctx,
+    const fullmag_fdm_gpu_transport_llg_binding_v1 &binding)
+{
+    const uint32_t status = validate_prefix(
+        binding.abi_version, binding.struct_version, binding.struct_size,
+        sizeof(binding), binding.reserved_flags, binding.required_features,
+        UINT64_C(0x1f), binding.reserved0);
+    constexpr uint64_t required =
+        FULLMAG_FDM_GPU_TRANSPORT_FEATURE_M1_CHARGE |
+        FULLMAG_FDM_GPU_TRANSPORT_FEATURE_STEADY_SPIN;
+    if (ctx.gpu_transport_rhs.active ||
+        status != FULLMAG_FDM_GPU_TRANSPORT_ERROR_OK || binding.reserved1 != 0 ||
+        (binding.required_features & required) != required ||
+        !std::isfinite(binding.relative_tolerance) ||
+        binding.relative_tolerance <= 0.0 || binding.relative_tolerance >= 1.0 ||
+        binding.max_iterations == 0 ||
+        ctx.precision != FULLMAG_FDM_PRECISION_DOUBLE ||
+        ctx.has_multilayer_plan_v2 ||
+        (ctx.integrator != FULLMAG_FDM_INTEGRATOR_HEUN &&
+         ctx.integrator != FULLMAG_FDM_INTEGRATOR_RK4)) {
+        ctx.last_error =
+            "GPU transport LLG binding requires single-grid FP64 Heun or RK4";
+        return false;
+    }
+
+    std::lock_guard<std::mutex> lock(registry_mutex);
+    const auto &context = binding.transport_context;
+    const auto &snapshot_handle = binding.charge_snapshot;
+    if (context.registry_cookie != kCookie || context.type_tag != kContextTag ||
+        context.slot >= slots.size() ||
+        snapshot_handle.registry_cookie != kCookie ||
+        snapshot_handle.type_tag != kSnapshotTag ||
+        snapshot_handle.slot >= slots.size()) {
+        ctx.last_error = "GPU transport LLG binding uses stale registry handles";
+        return false;
+    }
+    Slot &parent = slots[context.slot];
+    const Slot &snapshot = slots[snapshot_handle.slot];
+    const uint64_t enabled_required = required | binding.required_features;
+    if (!same(context, context.slot, parent.generation) || !parent.active ||
+        !parent.static_uploaded || !snapshot.active ||
+        snapshot.generation != snapshot_handle.generation ||
+        snapshot.parent_slot != context.slot ||
+        snapshot.parent_generation != context.generation ||
+        snapshot.accepted_sequence != binding.accepted_sequence ||
+        parent.source_revision != binding.source_revision ||
+        parent.spin_operator_revision != binding.operator_revision ||
+        parent.llg_binding_owner_id != 0 ||
+        (parent.enabled_features & enabled_required) != enabled_required ||
+        parent.grid[0] != ctx.nx || parent.grid[1] != ctx.ny ||
+        parent.grid[2] != ctx.nz ||
+        cudaSetDevice(parent.device) != cudaSuccess ||
+        !device_field_matches(ctx.m, parent.device) ||
+        !ensure_llg_binding_storage(parent, ctx.cell_count)) {
+        ctx.last_error =
+            "GPU transport descriptor, snapshot, grid, or device does not match LLG";
+        return false;
+    }
+    if (ctx.gpu_transport_owner_id == 0) {
+        if (next_llg_binding_owner_id == 0) ++next_llg_binding_owner_id;
+        ctx.gpu_transport_owner_id = next_llg_binding_owner_id++;
+    }
+    parent.llg_binding_owner_id = ctx.gpu_transport_owner_id;
+    parent.llg_binding_snapshot_slot = snapshot_handle.slot;
+    parent.llg_binding_snapshot_generation = snapshot_handle.generation;
+    parent.llg_torque_in_flight = false;
+    ctx.gpu_transport_rhs.descriptor = binding;
+    ctx.gpu_transport_rhs.evaluate = &evaluate_bound_gpu_transport_rhs;
+    ctx.gpu_transport_rhs.torque_view = {};
+    ctx.gpu_transport_rhs.active = true;
+    ctx.last_error.clear();
+    return true;
+}
+
+bool context_unbind_gpu_transport_rhs(Context &ctx) {
+    if (!ctx.gpu_transport_rhs.active) return false;
+    // Unit-level evaluators do not own a transport registry Slot.  Public
+    // bindings always receive a non-zero owner id in context_bind above.
+    if (ctx.gpu_transport_owner_id == 0) {
+        ctx.gpu_transport_rhs = {};
+        return true;
+    }
+    std::lock_guard<std::mutex> lock(registry_mutex);
+    const auto context = ctx.gpu_transport_rhs.descriptor.transport_context;
+    if (context.slot >= slots.size()) return false;
+    Slot &parent = slots[context.slot];
+    if (!same(context, context.slot, parent.generation) || !parent.active ||
+        parent.llg_binding_owner_id != ctx.gpu_transport_owner_id ||
+        parent.llg_torque_in_flight || parent.llg_step_transaction_active ||
+        parent.spin_solve_active) {
+        return false;
+    }
+    parent.llg_binding_owner_id = 0;
+    parent.llg_binding_snapshot_slot = UINT64_MAX;
+    parent.llg_binding_snapshot_generation = 0;
+    ctx.gpu_transport_rhs = {};
+    return true;
+}
+
+bool context_begin_gpu_transport_step(Context &ctx, uint64_t attempt_id) {
+    if (!ctx.gpu_transport_rhs.active || ctx.gpu_transport_owner_id == 0)
+        return true;
+    std::lock_guard<std::mutex> lock(registry_mutex);
+    const auto binding = ctx.gpu_transport_rhs.descriptor;
+    if (binding.transport_context.slot >= slots.size() ||
+        binding.charge_snapshot.slot >= slots.size()) return false;
+    Slot &parent = slots[binding.transport_context.slot];
+    Slot &snapshot = slots[binding.charge_snapshot.slot];
+    if (!same(binding.transport_context, binding.transport_context.slot,
+              parent.generation) || !parent.active ||
+        parent.llg_binding_owner_id != ctx.gpu_transport_owner_id ||
+        parent.llg_step_transaction_active || parent.llg_torque_in_flight ||
+        !snapshot.active ||
+        snapshot.generation != binding.charge_snapshot.generation) {
+        return false;
+    }
+    release_spin_buffers(snapshot.spin_trial);
+    reset_spin_trial_metadata(parent);
+    parent.llg_step_transaction_active = true;
+    parent.llg_step_attempt_id = attempt_id;
+    parent.llg_step_has_stage_time = false;
+    parent.llg_step_last_stage_time = 0.0;
+    return true;
+}
+
+bool context_commit_gpu_transport_step(Context &ctx) {
+    if (!ctx.gpu_transport_rhs.active) {
+        ctx.gpu_transport_active_attempt_id = 0;
+        return true;
+    }
+    if (ctx.gpu_transport_owner_id == 0) {
+        ctx.gpu_transport_active_attempt_id = 0;
+        return true;
+    }
+    std::lock_guard<std::mutex> lock(registry_mutex);
+    const auto binding = ctx.gpu_transport_rhs.descriptor;
+    if (binding.transport_context.slot >= slots.size() ||
+        binding.charge_snapshot.slot >= slots.size()) return false;
+    Slot &parent = slots[binding.transport_context.slot];
+    Slot &snapshot = slots[binding.charge_snapshot.slot];
+    if (parent.llg_binding_owner_id != ctx.gpu_transport_owner_id ||
+        !parent.llg_step_transaction_active || parent.llg_torque_in_flight ||
+        !snapshot.active || snapshot.spin_trial.owned_bytes == 0) return false;
+    release_spin_buffers(snapshot.spin_accepted);
+    snapshot.spin_accepted = snapshot.spin_trial;
+    snapshot.spin_trial = {};
+    ++parent.spin_accepted_commit_count;
+    parent.spin_hierarchy_build_count += parent.spin_trial_hierarchy_build_count;
+    parent.spin_hierarchy_cache_hit_count += parent.spin_trial_hierarchy_cache_hit_count;
+    parent.spin_amg_apply_count += parent.spin_trial_amg_apply_count;
+    parent.spin_fine_unknown_count = parent.spin_trial_fine_unknown_count;
+    parent.spin_coarse_unknown_count = parent.spin_trial_coarse_unknown_count;
+    parent.spin_hierarchy_levels = parent.spin_trial_hierarchy_levels;
+    parent.spin_hierarchy_digest = parent.spin_trial_hierarchy_digest;
+    snapshot.spin_iterations = parent.spin_trial_iterations;
+    snapshot.spin_work_budget = parent.spin_trial_work_budget;
+    snapshot.spin_convergence_reason = parent.spin_trial_convergence_reason;
+    snapshot.spin_local_balance = parent.spin_trial_local_balance;
+    snapshot.spin_global_balance = parent.spin_trial_global_balance;
+    snapshot.spin_interface_balance = parent.spin_trial_interface_balance;
+    snapshot.spin_torque_balance = parent.spin_trial_torque_balance;
+    snapshot.spin_deterministic_compute_digest = parent.spin_trial_compute_digest;
+    parent.llg_step_transaction_active = false;
+    parent.llg_step_attempt_id = 0;
+    parent.llg_step_has_stage_time = false;
+    parent.llg_step_last_stage_time = 0.0;
+    reset_spin_trial_metadata(parent);
+    ctx.gpu_transport_active_attempt_id = 0;
+    return true;
+}
+
+bool context_rollback_gpu_transport_step(Context &ctx) {
+    if (!ctx.gpu_transport_rhs.active) {
+        ctx.gpu_transport_active_attempt_id = 0;
+        return true;
+    }
+    if (ctx.gpu_transport_owner_id == 0) {
+        ctx.gpu_transport_active_attempt_id = 0;
+        return true;
+    }
+    std::lock_guard<std::mutex> lock(registry_mutex);
+    const auto binding = ctx.gpu_transport_rhs.descriptor;
+    if (binding.transport_context.slot >= slots.size() ||
+        binding.charge_snapshot.slot >= slots.size()) return false;
+    Slot &parent = slots[binding.transport_context.slot];
+    Slot &snapshot = slots[binding.charge_snapshot.slot];
+    if (parent.llg_binding_owner_id != ctx.gpu_transport_owner_id ||
+        !parent.llg_step_transaction_active || parent.llg_torque_in_flight ||
+        !snapshot.active) return false;
+    release_spin_buffers(snapshot.spin_trial);
+    // Sparse operator/hierarchy/workspace state is mutated while solving trial
+    // stages.  It is not accepted scientific state, so a rejected outer step
+    // discards it explicitly; retry rebuilds from the accepted snapshot.
+    release_spin_sparse_state(parent.spin_sparse_state);
+    ++parent.spin_failed_rollback_count;
+    parent.llg_step_transaction_active = false;
+    parent.llg_step_attempt_id = 0;
+    parent.llg_step_has_stage_time = false;
+    parent.llg_step_last_stage_time = 0.0;
+    reset_spin_trial_metadata(parent);
+    ctx.gpu_transport_active_attempt_id = 0;
+    return true;
+}
+
+bool context_evaluate_gpu_transport_rhs(
+    Context &ctx,
+    const DeviceVectorField &m_stage,
+    double t_stage,
+    uint64_t attempt_id,
+    uint64_t stage_id)
+{
+    if (!ctx.gpu_transport_rhs.active) {
+        ctx.gpu_transport_rhs.torque_view = {};
+        return true;
+    }
+    if (ctx.gpu_transport_rhs.evaluate == nullptr) {
+        ctx.last_error = "GPU transport RHS binding has no evaluator";
+        return false;
+    }
+    if (!context_begin_compute_stream_work(ctx, "GPU transport m_stage"))
+        return false;
+    DeviceVectorField torque_view{};
+    if (!ctx.gpu_transport_rhs.evaluate(
+            ctx, m_stage, t_stage, attempt_id, stage_id, torque_view)) {
+        if (ctx.last_error.empty())
+            ctx.last_error = "GPU transport RHS evaluator rejected the stage";
+        return false;
+    }
+    if (torque_view.x == nullptr || torque_view.y == nullptr ||
+        torque_view.z == nullptr) {
+        ctx.last_error = "GPU transport RHS evaluator returned an empty torque view";
+        return false;
+    }
+    ctx.gpu_transport_rhs.torque_view = torque_view;
+    return true;
+}
+
+bool context_complete_gpu_transport_rhs(Context &ctx) {
+    if (!ctx.gpu_transport_rhs.active) return true;
+    if (ctx.gpu_transport_owner_id == 0) {
+        const bool drained =
+            cudaStreamSynchronize(context_compute_stream(ctx)) == cudaSuccess;
+        ctx.gpu_transport_rhs.torque_view = {};
+        return drained;
+    }
+    const auto context = ctx.gpu_transport_rhs.descriptor.transport_context;
+    int device = -1;
+    cudaEvent_t completion_event = nullptr;
+    std::atomic<uint32_t> *hold_state = nullptr;
+    {
+        std::lock_guard<std::mutex> lock(registry_mutex);
+        if (context.slot >= slots.size()) return false;
+        Slot &parent = slots[context.slot];
+        if (!same(context, context.slot, parent.generation) || !parent.active ||
+            parent.llg_binding_owner_id != ctx.gpu_transport_owner_id ||
+            !parent.llg_torque_in_flight) {
+            return false;
+        }
+        device = parent.device;
+        completion_event = parent.llg_torque_ready;
+        hold_state = &parent.test_llg_hold_state;
+        if (ctx.gpu_transport_test_completion_fault == 4)
+            hold_state->store(1, std::memory_order_release);
+    }
+
+    while (hold_state->load(std::memory_order_acquire) == 1)
+        std::this_thread::yield();
+
+    const cudaStream_t stream = context_compute_stream(ctx);
+    const bool inject_record_failure =
+        ctx.gpu_transport_test_completion_fault == 2 ||
+        ctx.gpu_transport_test_completion_fault == 5;
+    const bool inject_sync_failure =
+        ctx.gpu_transport_test_completion_fault == 3;
+    const bool inject_fallback_failure =
+        ctx.gpu_transport_test_completion_fault == 5;
+    bool completion_ok = cudaSetDevice(device) == cudaSuccess;
+    const cudaError_t record_status = !completion_ok
+        ? cudaErrorInvalidDevice
+        : inject_record_failure
+            ? cudaErrorUnknown
+            : cudaEventRecord(completion_event, stream);
+    completion_ok = completion_ok && record_status == cudaSuccess;
+    cudaError_t sync_status = cudaSuccess;
+    if (record_status == cudaSuccess)
+        sync_status = inject_sync_failure
+            ? cudaErrorUnknown
+            : cudaEventSynchronize(completion_event);
+    bool fallback_drained = false;
+    if (record_status != cudaSuccess || sync_status != cudaSuccess ||
+        inject_fallback_failure) {
+        // A stream synchronization is the local fallback drain.  It never
+        // blocks unrelated contexts or devices like cudaDeviceSynchronize.
+        fallback_drained = !inject_fallback_failure &&
+            cudaStreamSynchronize(stream) == cudaSuccess;
+        completion_ok = false;
+    }
+    const bool drain_confirmed =
+        (record_status == cudaSuccess && sync_status == cudaSuccess &&
+         !inject_fallback_failure) || fallback_drained;
+
+    {
+        std::lock_guard<std::mutex> lock(registry_mutex);
+        if (context.slot >= slots.size()) return false;
+        Slot &parent = slots[context.slot];
+        if (!same(context, context.slot, parent.generation) || !parent.active ||
+            parent.llg_binding_owner_id != ctx.gpu_transport_owner_id ||
+            !parent.llg_torque_in_flight) {
+            return false;
+        }
+        if (drain_confirmed) {
+            parent.llg_torque_in_flight = false;
+            parent.test_llg_hold_state.store(0, std::memory_order_release);
+        }
+    }
+    if (drain_confirmed) ctx.gpu_transport_rhs.torque_view = {};
+    ctx.gpu_transport_test_completion_fault = 0;
+    return completion_ok && !inject_record_failure && !inject_sync_failure;
+}
+
+} // namespace fullmag::fdm

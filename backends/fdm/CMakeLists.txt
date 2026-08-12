@@ -40,6 +40,7 @@ if(FULLMAG_ENABLE_CUDA)
         gpu/cuda/interactions/demag_fp32.cu
         gpu/cuda/interactions/demag_boundary_fp64.cu
         gpu/cuda/integrators/llg_fp64.cu
+        gpu/cuda/integrators/transport_rhs_fp64.cu
         gpu/cuda/integrators/llg_fp32.cu
         gpu/cuda/integrators/llg_dp45_fp64.cu
         gpu/cuda/integrators/llg_dp45_fp32.cu
@@ -567,6 +568,24 @@ if(FULLMAG_ENABLE_CUDA)
     endif()
     add_test(NAME fdm_gpu_m1_spin_sparse_performance_v1_contract
              COMMAND fdm_gpu_m1_spin_sparse_performance_v1_contract)
+
+    add_executable(fdm_gpu_m1_transport_llg_stage_v1_contract
+        tests/gpu_m1_transport_llg_stage_v1_contract.cpp
+    )
+    target_include_directories(fdm_gpu_m1_transport_llg_stage_v1_contract PRIVATE
+        ${CMAKE_SOURCE_DIR}/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
+    )
+    target_link_libraries(fdm_gpu_m1_transport_llg_stage_v1_contract PRIVATE
+        fullmag_fdm CUDA::cudart
+    )
+    if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+        target_compile_options(fdm_gpu_m1_transport_llg_stage_v1_contract PRIVATE
+            -Wall -Wextra -Wpedantic -Werror
+        )
+    endif()
+    add_test(NAME fdm_gpu_m1_transport_llg_stage_v1_contract
+             COMMAND fdm_gpu_m1_transport_llg_stage_v1_contract)
 endif()
 
 if(NOT FULLMAG_ENABLE_CUDA)
