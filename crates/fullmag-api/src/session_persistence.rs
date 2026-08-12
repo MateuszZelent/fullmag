@@ -43,6 +43,8 @@ struct PersistedCurrentLiveSnapshot {
     latest_fields: crate::types::LatestFields,
     #[serde(default)]
     accepted_terminal_field_generation: Option<crate::types::CurrentLiveFieldGeneration>,
+    #[serde(default)]
+    terminal_field_generations: BTreeMap<String, u64>,
     artifacts: Vec<crate::types::ArtifactEntry>,
     display_selection: crate::types::CurrentDisplaySelection,
     #[serde(default)]
@@ -76,6 +78,7 @@ impl From<&SessionStateResponse> for PersistedCurrentLiveSnapshot {
             fem_mesh: value.fem_mesh.clone(),
             latest_fields: value.latest_fields.clone(),
             accepted_terminal_field_generation: value.accepted_terminal_field_generation.clone(),
+            terminal_field_generations: value.terminal_field_generations.clone(),
             artifacts: value.artifacts.clone(),
             display_selection: value.display_selection.clone(),
             preview_config: value.preview_config.clone(),
@@ -92,6 +95,13 @@ impl From<&SessionStateResponse> for PersistedCurrentLiveSnapshot {
 impl From<PersistedCurrentLiveSnapshot> for SessionStateResponse {
     fn from(value: PersistedCurrentLiveSnapshot) -> Self {
         let scalar_revision = value.scalar_rows.len() as u64;
+        let accepted_terminal_field_generation = value.accepted_terminal_field_generation;
+        let mut terminal_field_generations = value.terminal_field_generations;
+        if let Some(generation) = accepted_terminal_field_generation.as_ref() {
+            terminal_field_generations
+                .entry(generation.run_id.clone())
+                .or_insert(generation.sequence);
+        }
         SessionStateResponse {
             session_protocol_version: value.session_protocol_version,
             capability_profile_version: value.capability_profile_version,
@@ -125,7 +135,8 @@ impl From<PersistedCurrentLiveSnapshot> for SessionStateResponse {
             field_catalog_revision: 0,
             field_samples_revision: 0,
             field_quantity_revisions: BTreeMap::new(),
-            accepted_terminal_field_generation: value.accepted_terminal_field_generation,
+            accepted_terminal_field_generation,
+            terminal_field_generations,
             stage_execution_revision: 0,
             simulation_preparation_revision: 0,
             region_realization_revisions: value.region_realization_revisions,
@@ -2284,5 +2295,44 @@ mod coupled_checkpoint_identity_tests {
                 "{value}"
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod terminal_field_generation_persistence_tests {
+    use super::*;
+    use crate::session::{apply_current_live_field_frame, default_current_live_state};
+    use crate::types::{CurrentLiveFieldFrameRequest, CurrentLiveSnapshotRequest};
+
+    fn terminal_frame(run_id: &str, sequence: u64) -> CurrentLiveFieldFrameRequest {
+        serde_json::from_value(serde_json::json!({
+            "session_id": "persisted-session",
+            "replace_latest_fields": true,
+            "clear_preview_cache": true,
+            "field_generation": { "run_id": run_id, "sequence": sequence },
+            "latest_fields": { "m": { "values": [[0.0, 0.0, 1.0]], "layout": { "grid_cells": [1, 1, 1] } } }
+        }))
+        .expect("terminal field frame")
+    }
+
+    #[test]
+    fn restored_terminal_generation_accepts_new_run_and_rejects_old_run() {
+        let request: CurrentLiveSnapshotRequest = serde_json::from_value(serde_json::json!({
+            "session_id": "persisted-session"
+        }))
+        .expect("bootstrap request");
+        let mut snapshot = default_current_live_state(&request);
+        apply_current_live_field_frame(&mut snapshot, terminal_frame("run-before-restart", 9))
+            .expect("first run terminal frame");
+
+        let persisted = PersistedCurrentLiveSnapshot::from(&snapshot);
+        let mut restored: crate::types::SessionStateResponse = persisted.into();
+        apply_current_live_field_frame(&mut restored, terminal_frame("run-after-restart", 1))
+            .expect("new run may restart its local sequence at one");
+
+        let error =
+            apply_current_live_field_frame(&mut restored, terminal_frame("run-before-restart", 10))
+                .expect_err("delayed frame from retired run must remain stale");
+        assert_eq!(error.status, axum::http::StatusCode::CONFLICT);
     }
 }

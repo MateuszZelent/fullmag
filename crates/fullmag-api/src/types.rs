@@ -700,6 +700,11 @@ pub(crate) struct SessionStateResponse {
     /// runner bridge. It is internal state, not a browser resource payload.
     #[serde(skip, default)]
     pub accepted_terminal_field_generation: Option<CurrentLiveFieldGeneration>,
+    /// Highest accepted terminal generation per run. Retained durably so a
+    /// restarted bridge can begin a new run at sequence 1 without admitting a
+    /// delayed terminal frame from an earlier run.
+    #[serde(skip, default)]
+    pub terminal_field_generations: BTreeMap<String, u64>,
     /// Revision for simulation stage execution state.
     #[serde(skip)]
     pub stage_execution_revision: u64,
@@ -1632,6 +1637,7 @@ mod tests {
             field_samples_revision: 0,
             field_quantity_revisions: BTreeMap::new(),
             accepted_terminal_field_generation: None,
+            terminal_field_generations: BTreeMap::new(),
             stage_execution_revision: 0,
             simulation_preparation_revision: 0,
             region_realization_revisions: fullmag_authoring::RegionRealizationRevisions::default(),

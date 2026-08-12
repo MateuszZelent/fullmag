@@ -919,7 +919,7 @@ pub(crate) struct CurrentLiveSnapshotPayload {
     pub fem_mesh: Option<fullmag_runner::FemMeshPayload>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub(crate) struct CurrentLiveFieldGeneration {
     pub run_id: String,
     pub sequence: u64,

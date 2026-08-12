@@ -1119,6 +1119,21 @@ fn merge_pending_publish_payload(
     slot.field_generation = field_generation;
 }
 
+fn acknowledge_terminal_field_publish(
+    slot: &mut CurrentLiveSnapshotPayload,
+    published: &CurrentLiveSnapshotPayload,
+) {
+    if published.replace_latest_fields
+        && published.field_generation.is_some()
+        && slot.replace_latest_fields
+        && slot.field_generation == published.field_generation
+    {
+        slot.replace_latest_fields = false;
+        slot.field_generation = None;
+        slot.clear_preview_cache = false;
+    }
+}
+
 fn canonicalize_carried_active_preview(
     latest_step: &mut LiveStepView,
     incoming_preview_fields: Option<&[fullmag_runner::LivePreviewField]>,
@@ -2547,6 +2562,105 @@ mod tests {
         );
     }
 
+    #[test]
+    fn successful_terminal_publish_does_not_poison_the_next_ordinary_update() {
+        let observed = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let sink_observed = std::sync::Arc::clone(&observed);
+        let publisher = CurrentLivePublisher::spawn_with_test_sink(
+            "terminal-ack-clears-pending-slot",
+            move |_, payload| {
+                sink_observed.lock().unwrap().push((
+                    payload.replace_latest_fields,
+                    payload.field_generation.clone(),
+                    payload
+                        .live_state
+                        .as_ref()
+                        .map(|state| state.latest_step.step),
+                ));
+                Ok(())
+            },
+        );
+        let mut terminal = workspace_with_domain_mesh()
+            .snapshot()
+            .build_publish_payload(false, None, true);
+        terminal.replace_latest_fields = true;
+        terminal.field_generation = Some(crate::types::CurrentLiveFieldGeneration {
+            run_id: "run-terminal".to_string(),
+            sequence: 7,
+        });
+        terminal.latest_fields = Some(Default::default());
+        publisher.replace(terminal);
+        wait_for_publish_count(&publisher, 1);
+
+        let mut ordinary = workspace_with_domain_mesh()
+            .snapshot()
+            .build_publish_payload(false, None, false);
+        ordinary.live_state.as_mut().unwrap().latest_step.step = 8;
+        publisher.replace(ordinary);
+        wait_for_publish_count(&publisher, 2);
+
+        let observed = observed.lock().unwrap();
+        assert_eq!(observed.len(), 2);
+        assert_eq!(
+            observed[0].1.as_ref().map(|generation| generation.sequence),
+            Some(7)
+        );
+        assert!(
+            !observed[1].0,
+            "ordinary update must not replay terminal replace"
+        );
+        assert!(
+            observed[1].1.is_none(),
+            "ordinary update must not replay generation"
+        );
+        assert_eq!(observed[1].2, Some(8));
+    }
+
+    #[test]
+    fn failed_terminal_publish_retains_generation_for_retry() {
+        let attempts = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
+        let retry_generation = std::sync::Arc::new(std::sync::Mutex::new(None));
+        let sink_attempts = std::sync::Arc::clone(&attempts);
+        let sink_generation = std::sync::Arc::clone(&retry_generation);
+        let publisher = CurrentLivePublisher::spawn_with_test_sink(
+            "terminal-failure-retains-pending-slot",
+            move |_, payload| {
+                let attempt = sink_attempts.fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+                if attempt == 0 {
+                    return Err(anyhow::anyhow!("injected terminal sink failure"));
+                }
+                *sink_generation.lock().unwrap() = payload.field_generation.clone();
+                assert!(payload.replace_latest_fields);
+                assert!(payload.clear_preview_cache);
+                Ok(())
+            },
+        );
+        let mut terminal = workspace_with_domain_mesh()
+            .snapshot()
+            .build_publish_payload(false, None, true);
+        terminal.replace_latest_fields = true;
+        terminal.field_generation = Some(crate::types::CurrentLiveFieldGeneration {
+            run_id: "run-terminal".to_string(),
+            sequence: 7,
+        });
+        terminal.latest_fields = Some(Default::default());
+        publisher.replace(terminal);
+
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while retry_generation.lock().unwrap().is_none() && std::time::Instant::now() < deadline {
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        assert_eq!(attempts.load(std::sync::atomic::Ordering::Acquire), 2);
+        assert_eq!(
+            retry_generation
+                .lock()
+                .unwrap()
+                .as_ref()
+                .map(|generation| generation.sequence),
+            Some(7)
+        );
+    }
+
     fn workspace_state_with_preparation(revision: u64) -> LocalLiveWorkspaceState {
         let mut state = workspace_with_domain_mesh().snapshot();
         let mut preparation = SimulationPreparationState::new("prep-test", 1_700_000_000_000);
@@ -3949,6 +4063,11 @@ fn current_live_publisher_loop(
                     );
                 }
             }
+            if publish_result.succeeded() {
+                if let Ok(mut slot) = payload.lock() {
+                    acknowledge_terminal_field_publish(&mut slot, &snapshot);
+                }
+            }
             if let Some(error) = scalar_publish_error.as_ref() {
                 eprintln!("fullmag live scalar sync warning: {error:#}; retrying");
             }
@@ -4033,6 +4152,11 @@ fn current_live_publisher_loop(
                 } else if fallback_allowed {
                     eprintln!("fullmag final live snapshot sync warning: {:#}", error);
                 }
+            }
+        }
+        if publish_result.primary.succeeded() {
+            if let Ok(mut slot) = payload.lock() {
+                acknowledge_terminal_field_publish(&mut slot, &snapshot);
             }
         }
         if let Some(error) = publish_result.authoritative_error {

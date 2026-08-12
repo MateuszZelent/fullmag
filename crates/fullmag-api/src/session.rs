@@ -1081,6 +1081,7 @@ pub(crate) fn default_current_live_state(req: &CurrentLiveSnapshotRequest) -> Se
         field_samples_revision: 0,
         field_quantity_revisions: BTreeMap::new(),
         accepted_terminal_field_generation: None,
+        terminal_field_generations: BTreeMap::new(),
         stage_execution_revision: 0,
         simulation_preparation_revision,
         region_realization_revisions: fullmag_authoring::RegionRealizationRevisions::default(),
@@ -1603,16 +1604,18 @@ fn validate_terminal_field_replacement(
         ));
     };
     if let Some(accepted) = current.accepted_terminal_field_generation.as_ref() {
-        if incoming.sequence < accepted.sequence {
-            return Err(ApiError::conflict("stale_terminal_field_generation"));
-        }
-        if incoming.sequence == accepted.sequence {
-            if accepted.run_id == incoming.run_id {
+        if accepted.run_id == incoming.run_id {
+            if incoming.sequence < accepted.sequence {
+                return Err(ApiError::conflict("stale_terminal_field_generation"));
+            }
+            if incoming.sequence == accepted.sequence {
                 return Ok(TerminalFieldReplacementAdmission::Duplicate);
             }
-            return Err(ApiError::conflict(
-                "terminal_field_generation_sequence_collision",
-            ));
+        } else if current
+            .terminal_field_generations
+            .contains_key(&incoming.run_id)
+        {
+            return Err(ApiError::conflict("stale_terminal_field_generation"));
         }
     }
     Ok(TerminalFieldReplacementAdmission::Apply)
@@ -1747,6 +1750,11 @@ pub(crate) fn apply_current_live_snapshot(
         }
     }
     if req.replace_latest_fields {
+        if let Some(generation) = req.field_generation.as_ref() {
+            current
+                .terminal_field_generations
+                .insert(generation.run_id.clone(), generation.sequence);
+        }
         current.accepted_terminal_field_generation = req.field_generation;
     }
     if req.clear_preview_cache {
@@ -2011,6 +2019,11 @@ pub(crate) fn apply_current_live_field_frame(
         }
     }
     if frame.replace_latest_fields {
+        if let Some(generation) = frame.field_generation.as_ref() {
+            current
+                .terminal_field_generations
+                .insert(generation.run_id.clone(), generation.sequence);
+        }
         current.accepted_terminal_field_generation = frame.field_generation;
     }
     if frame.clear_preview_cache {
