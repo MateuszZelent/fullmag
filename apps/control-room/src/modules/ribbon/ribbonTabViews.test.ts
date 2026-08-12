@@ -23,6 +23,13 @@ describe("quantityItemsForVisualizationTarget", () => {
         (item) => item.value,
       ),
     ).toEqual(["H_demag", "H_ant"]);
+    expect(
+      quantityItemsForVisualizationTarget("H_eff", "airbox", fieldCatalog),
+    ).toEqual([
+      { disabled: true, label: "Unavailable / H_eff", value: "H_eff" },
+      { label: "Demag field / H_demag", value: "H_demag" },
+      { label: "Antenna field / H_ant", value: "H_ant" },
+    ]);
     expect(quantityItemsForVisualizationTarget("H_demag", "airbox")).toEqual([]);
   });
 });

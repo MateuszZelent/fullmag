@@ -88,7 +88,7 @@ export function quantityItemsForVisualizationTarget(
   activeQuantityId: string,
   targetKind?: VisualizationTargetKind,
   fieldCatalog?: FieldCatalogResource | null,
-): Array<{ label: string; value: string }> {
+): Array<{ disabled?: boolean; label: string; value: string }> {
   const baseItems =
     targetKind === "airbox"
       ? QUANTITY_ITEMS.filter((item) =>
@@ -102,7 +102,17 @@ export function quantityItemsForVisualizationTarget(
   if (targetKind === "airbox" && !fieldCatalog) return baseItems;
   return baseItems.some((item) => item.value === activeQuantityId)
     ? baseItems
-    : [{ value: activeQuantityId, label: activeQuantityId }, ...baseItems];
+    : [
+        {
+          disabled: targetKind === "airbox",
+          value: activeQuantityId,
+          label:
+            targetKind === "airbox"
+              ? `Unavailable / ${activeQuantityId}`
+              : activeQuantityId,
+        },
+        ...baseItems,
+      ];
 }
 
 export const VECTOR_COLOR_ITEMS: Array<{
