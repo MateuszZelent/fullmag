@@ -63,9 +63,21 @@ wektorów jednorodnych, pól bias ani brakujących wartości covariance.
 
 Jest to fizyczny skan po bias field, nie konfiguracja oracle Kittela. Writer
 publikuje go tylko wtedy, gdy każdy sample ma skończone
-`bias_field_a_per_m[3]` w per-sample native diagnostics. Dane
+`external_field_a_per_m[3]` w opublikowanym spectrum (z zachowaniem
+`bias_field_a_per_m` jako nazwy wartości skanu). Dane
 `FemEigenK0KittelValidationIR.samples[]` są wyłącznie referencją postsolve i nie
 mogą zasilać tego artefaktu.
+Nazwa osi writera jest zamrożona jako
+`scan_axis.coordinate="bias_field_a_per_m"`; `external_field_a_per_m` pozostaje
+diagnostycznym polem źródłowego spectrum, nie nazwą osi artefaktu.
+
+`source.revision`, `source_revision` oraz każde `modes[].source_revision` muszą
+być SHA-256 rzeczywistych bajtów `eigen/spectrum.v2.json`. `cross_artifact_refs`
+musi zawierać dokładnie `source_spectrum` i `source_branches`, z digestami
+rzeczywistych bajtów odpowiednio `eigen/spectrum.v2.json` i
+`eigen/branches.v2.json`. Digest koperty `revision == content_sha256` jest
+niezależny od digestu source i obejmuje po wyzerowaniu tych dwóch pól całą
+deklarację skanu.
 
 ```json
 {
@@ -103,10 +115,42 @@ mogą zasilać tego artefaktu.
 }
 ```
 
+Mode bez zweryfikowanego pełnego payloadu Cartesian complex XYZ jest
+`spectrum-only`: nie może mieć `mode_field_id`, `mode_field_resource_key` ani
+`mode_artifact_path`. Dla `complete=true` każdy mode wizualizowalny musi mieć
+jednoznaczną referencję do branch, metadanych i payloadu; brakujący lub częściowy
+payload żądanego eksportu jest błędem writera, nie zerowym wektorem zastępczym.
+
 `sample_id` i `mode_id` są stabilną tożsamością danych, natomiast
 `sample_index`/`raw_mode_index` są indeksami prezentacyjnymi. Każdy mode field
 referuje Cartesian complex payload; sam tangent-local vector bez rekonstrukcji
 `global_xyz` nie jest poprawnym `mode_field_id` do wizualizacji.
+
+Każdy zapisany mode field musi ponadto nieść niezmienną
+`source_mesh_identity`: niepusty `mesh_id`, pełny lowercase
+`topology_fingerprint=sha256:<64 hex>`, opcjonalne generation ID i revision,
+`indexing="full_domain_node_order"` oraz `node_count` równy długości obu części
+Cartesian complex payloadu. Writer waliduje całą tożsamość przed utworzeniem
+metadanych, payloadu albo `mode_field_id`; brak lub niekanoniczny fingerprint
+przerywa publikację zamiast tworzyć niekonsumowalny handoff. Endpoint binarnego
+pola porównuje tę tożsamość z aktualnym zasobem siatki przed serializacją FMVP.
+Brak tożsamości w starym artefakcie lub dowolna niezgodność daje
+`409 stale_eigen_mode_mesh`; serwer nie może podpisać starego wektora aktualnym
+mesh revision nawet wtedy, gdy liczba węzłów jest taka sama.
+
+`relax_to_eigen_handoff_sha256` i `source_mesh_topology_sha256` są opcjonalne
+wyłącznie dla lane'u, który nie deklaruje zaakceptowanego cross-stage
+`relax -> eigen` handoffu. Jeżeli którekolwiek pole występuje, oba są
+obowiązkowymi lowercase tokenami `sha256:<64 hex>`. Topology digest musi być
+równy `source_mesh_identity.topology_fingerprint`, a oba digesty muszą być
+identyczne w odpowiadającym mode summary `eigen/spectrum.v2.json`, wpisie
+`eigen/metadata/eigen_summary.json` i per-mode metadata. Promotion verifier
+odrzuca brak pary, niekanoniczny digest albo dowolny cross-artifact drift.
+
+Zmiana `real`/`imag`/`abs`/`phase` dla zgodnego mode field podmienia wyłącznie
+bufor pola. Zmiana topologii unieważnia bufor i wymaga ponownego pobrania albo
+regeneracji artefaktu; klient nie rekonstruuje zera ani pola zastępczego z
+metadanych.
 
 ### `fmr/peaks.v1.json`
 
@@ -936,6 +980,9 @@ Required fields:
 - `gamma0_rad_s_per_A_m`,
 - `mu0_T_m_per_A`,
 - `k_vector`,
+- `relax_to_eigen_handoff_sha256` i `source_mesh_topology_sha256` jako atomowa
+  para dla zaakceptowanego cross-stage handoffu,
+- `source_mesh_identity` związane topology digestem z tą parą,
 - `mode_field_sample_count`,
 - `amplitude_summary`,
 - `component_summary`.
@@ -950,7 +997,8 @@ The per-mode metadata payload is the detailed version of the corresponding
 same `(sample_index, raw_mode_index)`, the metadata payload must match the
 spectrum summary for phasor convention, eigenvalue mapping, eigenvalue
 components, `frequency_imag_hz`, `omega_rad_s`, mass norm, tangent leakage
-diagnostics, and SI constants.
+diagnostics, SI constants, `relax_to_eigen_handoff_sha256`, and
+`source_mesh_topology_sha256`.
 
 For native shared-domain FEM modal samples, the per-mode metadata must also
 carry the sample's physical and handoff provenance: `external_field_a_per_m`,

@@ -99,6 +99,10 @@ struct ModeSummaryArtifact {
     mu0_t_m_per_a: f64,
     dominant_polarization: String,
     k_vector: [f64; 3],
+    #[serde(skip_serializing_if = "Option::is_none")]
+    relax_to_eigen_handoff_sha256: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    source_mesh_topology_sha256: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -188,6 +192,18 @@ struct ModeComponentSummary {
 }
 
 #[derive(Debug, Clone, Serialize)]
+struct ModeSourceMeshIdentity {
+    mesh_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    mesh_generation_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    mesh_revision: Option<u64>,
+    topology_fingerprint: String,
+    indexing: &'static str,
+    node_count: usize,
+}
+
+#[derive(Debug, Clone, Serialize)]
 struct ModeArtifact {
     schema_version: &'static str,
     solver_model: String,
@@ -241,6 +257,11 @@ struct ModeArtifact {
     linearization_state_sha256: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     periodic_mesh_certificate_sha256: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    relax_to_eigen_handoff_sha256: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    source_mesh_topology_sha256: Option<String>,
+    source_mesh_identity: ModeSourceMeshIdentity,
     value_kind: &'static str,
     component_basis: &'static str,
     component_count: usize,
@@ -947,6 +968,7 @@ fn summarize_mode(
     let residual_linf = finite_or_default(mode.residual_linf, residual_absolute_l2);
     let tangent_leakage_mean_abs = finite_or_default(mode.tangent_leakage_mean_abs, 0.0);
     let tangent_leakage_max_abs = finite_or_default(mode.tangent_leakage_max_abs, 0.0);
+    let diagnostics = sample_native_solver_diagnostics(sample);
     ModeSummaryArtifact {
         mode_id: format!(
             "sample-{:04}/mode-{:04}",
@@ -979,6 +1001,11 @@ fn summarize_mode(
         mu0_t_m_per_a: crate::MU0,
         dominant_polarization: mode.dominant_polarization.clone(),
         k_vector: sample.sample.k_vector,
+        relax_to_eigen_handoff_sha256: diagnostic_string(
+            diagnostics,
+            "relax_to_eigen_handoff_sha256",
+        ),
+        source_mesh_topology_sha256: diagnostic_string(diagnostics, "source_mesh_topology_sha256"),
     }
 }
 
@@ -1756,6 +1783,70 @@ fn diagnostic_string_any(diagnostics: Option<&serde_json::Value>, keys: &[&str])
         .find_map(|key| diagnostic_string(diagnostics, key))
 }
 
+fn is_canonical_sha256(value: &str) -> bool {
+    value.strip_prefix("sha256:").is_some_and(|suffix| {
+        suffix.len() == 64
+            && suffix
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
+    })
+}
+
+fn mode_source_mesh_identity(
+    diagnostics: Option<&serde_json::Value>,
+    node_count: usize,
+) -> std::io::Result<ModeSourceMeshIdentity> {
+    let invalid = |message: &str| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!("mode field publication requires valid source mesh identity: {message}"),
+        )
+    };
+    let mesh_id = diagnostic_string_any(diagnostics, &["mesh_id", "topology_id"])
+        .filter(|value| !value.trim().is_empty() && value != "topology:not_provided")
+        .ok_or_else(|| invalid("missing mesh_id"))?;
+    let source_mesh_topology_sha256 = diagnostic_string(diagnostics, "source_mesh_topology_sha256");
+    let declared_topology_fingerprint = diagnostic_string_any(
+        diagnostics,
+        &["topology_fingerprint", "source_topology_fingerprint"],
+    );
+    let topology_fingerprint = source_mesh_topology_sha256
+        .clone()
+        .or_else(|| declared_topology_fingerprint.clone())
+        .ok_or_else(|| invalid("missing topology fingerprint"))?;
+    if !is_canonical_sha256(&topology_fingerprint) {
+        return Err(invalid(
+            "topology fingerprint must be sha256:<64 lowercase hex>",
+        ));
+    }
+    if let (Some(source_topology), Some(declared_fingerprint)) =
+        (source_mesh_topology_sha256, declared_topology_fingerprint)
+    {
+        if source_topology != declared_fingerprint {
+            return Err(invalid(
+                "source_mesh_topology_sha256 must match topology_fingerprint",
+            ));
+        }
+    }
+    Ok(ModeSourceMeshIdentity {
+        mesh_id,
+        mesh_generation_id: diagnostic_string_any(
+            diagnostics,
+            &[
+                "mesh_generation_id",
+                "mesh_generation_identity",
+                "domain_generation_id",
+            ],
+        ),
+        mesh_revision: diagnostics
+            .and_then(|value| value.get("mesh_revision"))
+            .and_then(serde_json::Value::as_u64),
+        topology_fingerprint,
+        indexing: "full_domain_node_order",
+        node_count,
+    })
+}
+
 fn diagnostic_field_a_per_m(diagnostics: Option<&serde_json::Value>) -> Option<[f64; 3]> {
     let candidates = [
         diagnostics.and_then(|value| value.get("external_field_a_per_m")),
@@ -1999,7 +2090,27 @@ pub fn build_frequency_domain_field_sweep_artifact(
     if !topology_consistent && status == ServerArtifactStatus::Complete {
         status = ServerArtifactStatus::Partial;
     }
+    let requested_sample_count = result
+        .samples
+        .iter()
+        .filter_map(|sample| {
+            let diagnostics = sample_native_solver_diagnostics(sample)?;
+            diagnostics
+                .get("field_sweep")
+                .and_then(|value| value.get("requested_sample_count"))
+                .or_else(|| diagnostics.get("requested_sample_count"))
+                .and_then(serde_json::Value::as_u64)
+                .and_then(|value| usize::try_from(value).ok())
+        })
+        .max()
+        .unwrap_or(samples.len())
+        .max(samples.len());
+    let completed_sample_count = samples
+        .iter()
+        .filter(|sample| sample.status == ServerArtifactStatus::Complete)
+        .count();
     let complete = status == ServerArtifactStatus::Complete
+        && completed_sample_count == requested_sample_count
         && samples.iter().all(|sample| {
             sample.equilibrium_artifact_sha256.is_some()
                 && sample.linearization_state_sha256.is_some()
@@ -2033,11 +2144,8 @@ pub fn build_frequency_domain_field_sweep_artifact(
         complete,
         interrupted: status == ServerArtifactStatus::Interrupted,
         stop_reason: samples.iter().find_map(|sample| sample.stop_reason.clone()),
-        requested_sample_count: samples.len(),
-        completed_sample_count: samples
-            .iter()
-            .filter(|sample| !sample.modes.is_empty())
-            .count(),
+        requested_sample_count,
+        completed_sample_count,
         scan_axis: field_sweep_axis(),
         units: server_artifact_units_modal(),
         topology: if topology_consistent {
@@ -2070,9 +2178,34 @@ pub fn write_frequency_domain_field_sweep_artifact(
     base_dir: &Path,
     result: &PathSolveResult,
 ) -> std::io::Result<bool> {
-    let Some(artifact) = build_frequency_domain_field_sweep_artifact(result)? else {
+    let Some(mut artifact) = build_frequency_domain_field_sweep_artifact(result)? else {
         return Ok(false);
     };
+    let spectrum_path = base_dir.join("eigen").join("spectrum.v2.json");
+    let branches_path = base_dir.join("eigen").join("branches.v2.json");
+    let spectrum_revision = sha256_prefixed(&fs::read(&spectrum_path)?);
+    let branches_revision = sha256_prefixed(&fs::read(&branches_path)?);
+    artifact.source.revision = spectrum_revision.clone();
+    artifact.source_revision = spectrum_revision.clone();
+    for sample in &mut artifact.samples {
+        for mode in &mut sample.modes {
+            mode.source_revision = spectrum_revision.clone();
+        }
+    }
+    artifact.cross_artifact_refs = vec![
+        ServerArtifactReference {
+            relation: "source_spectrum".to_string(),
+            artifact: "eigen/spectrum.v2.json".to_string(),
+            revision: spectrum_revision,
+        },
+        ServerArtifactReference {
+            relation: "source_branches".to_string(),
+            artifact: "eigen/branches.v2.json".to_string(),
+            revision: branches_revision,
+        },
+    ];
+    artifact.content_sha256 = canonical_artifact_digest(&artifact);
+    artifact.revision = artifact.content_sha256.clone();
     let path = base_dir.join("eigen").join("field_sweep.v1.json");
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
@@ -2915,7 +3048,10 @@ fn write_complex_vector_field_payload(
     imag_values: &[[f64; 3]],
 ) -> std::io::Result<()> {
     if real_values.is_empty() || imag_values.is_empty() {
-        return Ok(());
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "complex vector payload requires non-empty real and imaginary Cartesian samples",
+        ));
     }
     if real_values.len() != imag_values.len() {
         return Err(std::io::Error::new(
@@ -2934,6 +3070,12 @@ fn write_complex_vector_field_payload(
     let mut bytes = Vec::with_capacity(real_values.len() * 3 * 2 * std::mem::size_of::<f64>());
     for (real, imag) in real_values.iter().zip(imag_values.iter()) {
         for component in 0..3 {
+            if !real[component].is_finite() || !imag[component].is_finite() {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "complex vector payload contains a non-finite Cartesian component",
+                ));
+            }
             bytes.extend_from_slice(&real[component].to_le_bytes());
             bytes.extend_from_slice(&imag[component].to_le_bytes());
         }
@@ -4751,13 +4893,61 @@ fn vector_norm(vector: [f64; 3]) -> f64 {
 }
 
 pub fn write_mode_bundle(base_dir: &Path, result: &PathSolveResult) -> std::io::Result<()> {
+    for sample in &result.samples {
+        let diagnostics = sample_native_solver_diagnostics(sample);
+        for mode in &sample.modes {
+            let real = mode.lifted_real.as_deref().ok_or_else(|| {
+                std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "mode field publication requires reconstructed global_xyz real payload",
+                )
+            })?;
+            let imag = mode.lifted_imag.as_deref().ok_or_else(|| {
+                std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "mode field publication requires reconstructed global_xyz imaginary payload",
+                )
+            })?;
+            if real.is_empty() || imag.is_empty() || real.len() != imag.len() {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    format!(
+                        "mode field publication requires equal non-empty real/imag payloads: real={}, imag={}",
+                        real.len(),
+                        imag.len()
+                    ),
+                ));
+            }
+            mode_source_mesh_identity(diagnostics, real.len())?;
+        }
+    }
     let eigen_dir = base_dir.join("eigen").join("modes");
     for sample in &result.samples {
         let sample_dir = eigen_dir.join(format!("sample_{:04}", sample.sample.sample_index));
         fs::create_dir_all(&sample_dir)?;
         for mode in &sample.modes {
-            let real = mode.lifted_real.as_deref().unwrap_or(&[]);
-            let imag = mode.lifted_imag.as_deref().unwrap_or(&[]);
+            let real = mode.lifted_real.as_deref().ok_or_else(|| {
+                std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "mode field publication requires reconstructed global_xyz real payload",
+                )
+            })?;
+            let imag = mode.lifted_imag.as_deref().ok_or_else(|| {
+                std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "mode field publication requires reconstructed global_xyz imaginary payload",
+                )
+            })?;
+            if real.is_empty() || imag.is_empty() || real.len() != imag.len() {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    format!(
+                        "mode field publication requires equal non-empty real/imag payloads: real={}, imag={}",
+                        real.len(),
+                        imag.len()
+                    ),
+                ));
+            }
             let amplitude = mode.amplitude.as_deref().unwrap_or(&[]);
             let mode_field_id =
                 eigen_mode_field_id(sample.sample.sample_index, mode.raw_mode_index);
@@ -4823,6 +5013,15 @@ pub fn write_mode_bundle(base_dir: &Path, result: &PathSolveResult) -> std::io::
                     diagnostics,
                     "periodic_mesh_certificate_sha256",
                 ),
+                relax_to_eigen_handoff_sha256: diagnostic_string(
+                    diagnostics,
+                    "relax_to_eigen_handoff_sha256",
+                ),
+                source_mesh_topology_sha256: diagnostic_string(
+                    diagnostics,
+                    "source_mesh_topology_sha256",
+                ),
+                source_mesh_identity: mode_source_mesh_identity(diagnostics, real.len())?,
                 value_kind: "complex_spatial_vector",
                 component_basis: "global_xyz",
                 component_count: 3,
@@ -4831,8 +5030,8 @@ pub fn write_mode_bundle(base_dir: &Path, result: &PathSolveResult) -> std::io::
                 compatibility_binary_payload_path: compatibility_binary_payload_path.clone(),
                 payload_encoding: "f64_interleaved_real_imag_xyz",
                 binary_layout: "complex_f64_pairs_little_endian",
-                complex_pair_count: real.len().max(imag.len()) * 3,
-                payload_value_count: real.len().max(imag.len()) * 6,
+                complex_pair_count: real.len() * 3,
+                payload_value_count: real.len() * 6,
                 available_views: [
                     "complex",
                     "real",
@@ -4844,7 +5043,7 @@ pub fn write_mode_bundle(base_dir: &Path, result: &PathSolveResult) -> std::io::
                 ],
                 default_view: "phase_rotated_real",
                 default_phase_rad: 0.0,
-                mode_field_sample_count: real.len().max(imag.len()),
+                mode_field_sample_count: real.len(),
                 amplitude_summary: mode_amplitude_summary(amplitude),
                 component_summary: mode_component_summary(real, imag),
             };
@@ -4947,7 +5146,12 @@ mod tests {
                 relaxation_steps: 0,
                 solver_model,
                 solver_notes: vec!["test fixture".to_string()],
-                solver_diagnostics: None,
+                solver_diagnostics: Some(serde_json::json!({
+                    "mesh_id": "mesh:test",
+                    "mesh_generation_id": "mesh-generation:test",
+                    "mesh_revision": 17,
+                    "topology_fingerprint": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                })),
             }],
             branches: vec![TrackedBranch {
                 branch_id: 0,
@@ -5557,11 +5761,14 @@ mod tests {
         let temp = TempDirGuard::new("eigen-artifacts-mode-provenance");
         let mut result = sample_result_with_k0_kittel_sweep();
         result.samples[0].solver_diagnostics = Some(serde_json::json!({
+            "mesh_id": "mesh:test",
             "assembly_kind": "mfem_weak_form_shared_domain",
             "operator_input_signature_sha256": "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
             "phase_constraint_sha256": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
             "equilibrium_artifact_sha256": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
             "linearization_state_sha256": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+            "relax_to_eigen_handoff_sha256": "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+            "source_mesh_topology_sha256": "sha256:9999999999999999999999999999999999999999999999999999999999999999",
             "periodic_mesh_certificate_sha256": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
         }));
 
@@ -5585,6 +5792,77 @@ mod tests {
             mode["linearization_state_sha256"],
             "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
         );
+        assert_eq!(
+            mode["relax_to_eigen_handoff_sha256"],
+            "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+        );
+        assert_eq!(
+            mode["source_mesh_topology_sha256"],
+            "sha256:9999999999999999999999999999999999999999999999999999999999999999"
+        );
+    }
+
+    #[test]
+    fn mode_bundle_binds_field_payload_to_immutable_source_mesh_identity() {
+        let temp = TempDirGuard::new("eigen-artifacts-mode-source-mesh");
+        let mut result = sample_result();
+        result.samples[0].solver_diagnostics = Some(serde_json::json!({
+            "mesh_id": "mesh:test",
+            "mesh_generation_id": "mesh-generation:test",
+            "mesh_revision": 17,
+            "topology_fingerprint": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        }));
+
+        write_mode_bundle(&temp.path, &result).expect("mode bundle should write");
+        let mode: Value = serde_json::from_slice(
+            &std::fs::read(temp.path.join("eigen/modes/sample_0000/mode_0000.json"))
+                .expect("mode metadata should be written"),
+        )
+        .expect("mode metadata should parse");
+
+        assert_eq!(
+            mode["source_mesh_identity"],
+            serde_json::json!({
+                "mesh_id": "mesh:test",
+                "mesh_generation_id": "mesh-generation:test",
+                "mesh_revision": 17,
+                "topology_fingerprint": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "indexing": "full_domain_node_order",
+                "node_count": 1,
+            })
+        );
+    }
+
+    #[test]
+    fn mode_bundle_rejects_invalid_source_mesh_identity_before_publication() {
+        for (slug, diagnostics) in [
+            ("missing", serde_json::json!({})),
+            (
+                "missing-mesh-id",
+                serde_json::json!({
+                    "topology_fingerprint": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                }),
+            ),
+            (
+                "noncanonical-topology",
+                serde_json::json!({
+                    "mesh_id": "mesh:test",
+                    "topology_fingerprint": "mesh-rev:1",
+                }),
+            ),
+        ] {
+            let temp = TempDirGuard::new(&format!("eigen-artifacts-mode-source-mesh-{slug}"));
+            let mut result = sample_result();
+            result.samples[0].solver_diagnostics = Some(diagnostics);
+
+            let error = write_mode_bundle(&temp.path, &result)
+                .expect_err("invalid source mesh identity must block mode-field publication");
+
+            assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
+            assert!(error.to_string().contains("source mesh identity"));
+            assert!(!temp.path.join("eigen/modes").exists());
+            assert!(!temp.path.join("eigen/mode_fields").exists());
+        }
     }
 
     #[test]
@@ -5987,6 +6265,7 @@ mod tests {
             "external_field_a_per_m": [40_000.0, 0.0, 0.0],
             "mesh_id": "mesh:test",
             "topology_revision": "mesh-rev:1",
+            "topology_fingerprint": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
             "operator_input_signature_sha256": "sha256:operator",
             "equilibrium_artifact_sha256": "sha256:equilibrium",
             "linearization_state_sha256": "sha256:linearization",
@@ -6017,6 +6296,81 @@ mod tests {
                 .operator_input_signature_sha256
                 .as_deref(),
             Some("sha256:operator")
+        );
+    }
+
+    #[test]
+    fn partial_field_sweep_uses_declared_requested_count_and_completed_statuses() {
+        let mut result =
+            sample_result_with_solver_model(EigenSolverModel::ProductionCpuShiftInvert);
+        result.samples[0].solver_diagnostics = Some(serde_json::json!({
+            "external_field_a_per_m": [40_000.0, 0.0, 0.0],
+            "mesh_id": "mesh:test",
+            "topology_revision": "mesh-rev:1",
+            "operator_input_signature_sha256": "sha256:operator",
+            "equilibrium_artifact_sha256": "sha256:equilibrium",
+            "linearization_state_sha256": "sha256:linearization",
+            "status": "completed",
+            "field_sweep": {
+                "requested_sample_count": 3,
+                "completed_sample_count": 1
+            }
+        }));
+
+        let artifact = build_frequency_domain_field_sweep_artifact(&result)
+            .expect("partial field-sweep source should validate")
+            .expect("physical bias field should produce a typed artifact");
+
+        assert_eq!(artifact.requested_sample_count, 3);
+        assert_eq!(artifact.completed_sample_count, 1);
+        assert_eq!(artifact.status, ServerArtifactStatus::Partial);
+        assert!(!artifact.complete);
+    }
+
+    #[test]
+    fn field_sweep_writer_binds_to_published_spectrum_and_branches_bytes() {
+        let temp = TempDirGuard::new("field-sweep-published-source-digests");
+        let mut result =
+            sample_result_with_solver_model(EigenSolverModel::ProductionCpuShiftInvert);
+        result.samples[0].solver_diagnostics = Some(serde_json::json!({
+            "external_field_a_per_m": [40_000.0, 0.0, 0.0],
+            "mesh_id": "mesh:test",
+            "topology_revision": "mesh-rev:1",
+            "topology_fingerprint": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "operator_input_signature_sha256": "sha256:operator",
+            "equilibrium_artifact_sha256": "sha256:equilibrium",
+            "linearization_state_sha256": "sha256:linearization",
+            "status": "completed"
+        }));
+        write_path_bundle(&temp.path, &result).expect("spectrum should be published first");
+        write_branch_bundle(&temp.path, &result).expect("branches should be published first");
+        write_mode_bundle(&temp.path, &result).expect("mode metadata should be published first");
+
+        write_frequency_domain_field_sweep_artifact(&temp.path, &result)
+            .expect("field sweep should bind published sources");
+
+        let field_sweep: Value = serde_json::from_slice(
+            &std::fs::read(temp.path.join("eigen/field_sweep.v1.json"))
+                .expect("field sweep should be written"),
+        )
+        .expect("field sweep should be valid JSON");
+        let spectrum_revision = sha256_prefixed(
+            &std::fs::read(temp.path.join("eigen/spectrum.v2.json"))
+                .expect("spectrum bytes should be readable"),
+        );
+        let branches_revision = sha256_prefixed(
+            &std::fs::read(temp.path.join("eigen/branches.v2.json"))
+                .expect("branches bytes should be readable"),
+        );
+
+        assert_eq!(field_sweep["source"]["revision"], spectrum_revision);
+        assert_eq!(field_sweep["source_revision"], spectrum_revision);
+        assert_eq!(
+            field_sweep["cross_artifact_refs"],
+            serde_json::json!([
+                {"relation": "source_spectrum", "artifact": "eigen/spectrum.v2.json", "revision": spectrum_revision},
+                {"relation": "source_branches", "artifact": "eigen/branches.v2.json", "revision": branches_revision},
+            ])
         );
     }
 

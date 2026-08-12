@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import hashlib
 import json
 import math
 import sys
@@ -92,12 +93,89 @@ def fail(message: str) -> None:
 
 
 def load_json(path: Path) -> dict:
-    return json.loads(path.read_text())
+    require_file(path)
+    try:
+        value = json.loads(path.read_text())
+    except json.JSONDecodeError as error:
+        fail(f"invalid JSON artifact {path}: {error}")
+    if not isinstance(value, dict):
+        fail(f"JSON artifact {path} must be an object")
+    return value
 
 
 def require_file(path: Path) -> None:
     if not path.is_file():
         fail(f"missing required artifact: {path}")
+
+
+def require_bundle_path(root: Path, value: object, name: str) -> tuple[str, Path]:
+    """Resolve an artifact path without permitting escape from the bundle."""
+    relative_path = require_non_empty_string(value, name)
+    candidate = Path(relative_path)
+    if candidate.is_absolute() or ".." in candidate.parts:
+        fail(f"{name} must be a relative path inside the artifact bundle")
+    root_resolved = root.resolve()
+    resolved = (root / candidate).resolve()
+    try:
+        resolved.relative_to(root_resolved)
+    except ValueError:
+        fail(f"{name} escapes the artifact bundle")
+    require_file(resolved)
+    return relative_path, resolved
+
+
+def sha256_file_token(path: Path) -> str:
+    return "sha256:" + hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def serde_json_compact_bytes(value: object) -> bytes:
+    """Serialize JSON with the compact, key-sorted serde_json::Value form."""
+
+    def encode(item: object) -> str:
+        if item is None:
+            return "null"
+        if item is True:
+            return "true"
+        if item is False:
+            return "false"
+        if isinstance(item, int):
+            return str(item)
+        if isinstance(item, float):
+            if not math.isfinite(item):
+                fail("field_sweep canonical digest contains a non-finite number")
+            rendered = repr(item)
+            if "e" in rendered:
+                mantissa, exponent = rendered.split("e", 1)
+                sign = ""
+                if exponent[0] in "+-":
+                    sign, exponent = exponent[0], exponent[1:]
+                rendered = f"{mantissa}e{sign}{int(exponent)}"
+            return rendered
+        if isinstance(item, str):
+            return json.dumps(item, ensure_ascii=False)
+        if isinstance(item, list):
+            return "[" + ",".join(encode(entry) for entry in item) + "]"
+        if isinstance(item, dict):
+            if not all(isinstance(key, str) for key in item):
+                fail("field_sweep canonical digest requires string object keys")
+            return "{" + ",".join(
+                f"{json.dumps(key, ensure_ascii=False)}:{encode(item[key])}"
+                for key in sorted(item)
+            ) + "}"
+        fail("field_sweep canonical digest contains a non-JSON value")
+
+    return encode(value).encode("utf-8")
+
+
+def canonical_artifact_self_digest(artifact: dict, name: str) -> str:
+    normalized = dict(artifact)
+    normalized["revision"] = ""
+    normalized["content_sha256"] = ""
+    try:
+        canonical_bytes = serde_json_compact_bytes(normalized)
+    except (TypeError, ValueError) as error:
+        fail(f"{name} cannot be canonically serialized: {error}")
+    return "sha256:" + hashlib.sha256(canonical_bytes).hexdigest()
 
 
 def require_equal(actual: object, expected: object, name: str) -> None:
@@ -484,6 +562,54 @@ def require_mode_metadata_summaries(metadata: dict, metadata_path: str) -> None:
     )
 
 
+def require_mode_source_mesh_identity(
+    metadata: dict,
+    metadata_path: str,
+    sample_count: int,
+) -> None:
+    identity = metadata.get("source_mesh_identity")
+    if not isinstance(identity, dict):
+        fail(f"{metadata_path}.source_mesh_identity must be an object")
+    require_non_empty_string(
+        identity.get("mesh_id"),
+        f"{metadata_path}.source_mesh_identity.mesh_id",
+    )
+    topology_fingerprint = require_sha256_token(
+        identity.get("topology_fingerprint"),
+        f"{metadata_path}.source_mesh_identity.topology_fingerprint",
+    )
+    source_mesh_topology_sha256 = metadata.get("source_mesh_topology_sha256")
+    if source_mesh_topology_sha256 is not None:
+        require_equal(
+            require_sha256_token(
+                source_mesh_topology_sha256,
+                f"{metadata_path}.source_mesh_topology_sha256",
+            ),
+            topology_fingerprint,
+            f"{metadata_path}.source_mesh_topology_sha256 vs source_mesh_identity.topology_fingerprint",
+        )
+    require_equal(
+        identity.get("indexing"),
+        "full_domain_node_order",
+        f"{metadata_path}.source_mesh_identity.indexing",
+    )
+    require_equal(
+        identity.get("node_count"),
+        sample_count,
+        f"{metadata_path}.source_mesh_identity.node_count",
+    )
+    if identity.get("mesh_generation_id") is not None:
+        require_non_empty_string(
+            identity.get("mesh_generation_id"),
+            f"{metadata_path}.source_mesh_identity.mesh_generation_id",
+        )
+    if identity.get("mesh_revision") is not None:
+        require_non_negative_int(
+            identity.get("mesh_revision"),
+            f"{metadata_path}.source_mesh_identity.mesh_revision",
+        )
+
+
 def require_mode_field_metadata(
     metadata: dict,
     metadata_path: str,
@@ -647,6 +773,17 @@ def validate_mode_diagnostics_fields(
     payload_path: str,
     frequency_hz: float,
 ) -> None:
+    relax_to_eigen_handoff_sha256 = payload.get("relax_to_eigen_handoff_sha256")
+    source_mesh_topology_sha256 = payload.get("source_mesh_topology_sha256")
+    if relax_to_eigen_handoff_sha256 is not None or source_mesh_topology_sha256 is not None:
+        require_sha256_token(
+            relax_to_eigen_handoff_sha256,
+            f"{payload_path}.relax_to_eigen_handoff_sha256",
+        )
+        require_sha256_token(
+            source_mesh_topology_sha256,
+            f"{payload_path}.source_mesh_topology_sha256",
+        )
     frequency_imag_hz = require_finite_number(
         payload.get("frequency_imag_hz"),
         f"{payload_path}.frequency_imag_hz",
@@ -841,6 +978,8 @@ def require_mode_metadata_matches_summary(
     for field_name in [
         "phasor_convention",
         "eigenvalue_mapping",
+        "relax_to_eigen_handoff_sha256",
+        "source_mesh_topology_sha256",
     ]:
         require_equal(
             metadata.get(field_name),
@@ -875,6 +1014,8 @@ def require_eigen_summary_mode_matches_spectrum(
     for field_name in [
         "phasor_convention",
         "eigenvalue_mapping",
+        "relax_to_eigen_handoff_sha256",
+        "source_mesh_topology_sha256",
     ]:
         require_equal(
             mode.get(field_name),
@@ -915,12 +1056,18 @@ def validate_mode_summary(
     raw_mode_index = require_non_negative_int(mode.get("raw_mode_index"), "mode.raw_mode_index")
     expected_field_id = mode_field_id(sample_index, raw_mode_index)
     expected_resource_key = mode_field_resource_key(expected_field_id)
-    require_equal(mode.get("mode_field_id"), expected_field_id, "mode.mode_field_id")
-    require_equal(
-        mode.get("mode_field_resource_key"),
-        expected_resource_key,
-        "mode.mode_field_resource_key",
-    )
+    has_field_id = mode.get("mode_field_id") is not None
+    has_resource_key = mode.get("mode_field_resource_key") is not None
+    if has_field_id != has_resource_key:
+        missing_name = "mode.mode_field_resource_key" if has_field_id else "mode.mode_field_id"
+        fail(f"{missing_name} requires the paired mode field handoff")
+    if has_field_id:
+        require_equal(mode.get("mode_field_id"), expected_field_id, "mode.mode_field_id")
+        require_equal(
+            mode.get("mode_field_resource_key"),
+            expected_resource_key,
+            "mode.mode_field_resource_key",
+        )
     frequency_hz = require_finite_number(mode.get("frequency_hz"), "mode.frequency_hz")
     require_frequency_inside_window(frequency_hz, requested_window_hz, "mode.frequency_hz")
     frequency_real_hz = require_finite_number(mode.get("frequency_real_hz"), "mode.frequency_real_hz")
@@ -941,6 +1088,16 @@ def validate_mode_summary(
     )
     validate_mode_diagnostics_fields(mode, "mode", frequency_hz)
     require_non_empty_string(mode.get("dominant_polarization"), "mode.dominant_polarization")
+
+    if not has_field_id:
+        return (
+            sample_index,
+            raw_mode_index,
+            frequency_hz,
+            frequency_real_hz,
+            frequency_imag_hz,
+            angular_frequency_rad_per_s,
+        )
 
     metadata_path = nested_mode_path(sample_index, raw_mode_index)
     if manifest_mode_paths and metadata_path not in manifest_mode_paths:
@@ -985,6 +1142,14 @@ def validate_mode_summary(
     require_mode_metadata_matches_summary(mode, metadata, metadata_path)
     validate_mode_diagnostics_fields(metadata, metadata_path, frequency_hz)
     require_mode_metadata_summaries(metadata, metadata_path)
+    require_mode_source_mesh_identity(
+        metadata,
+        metadata_path,
+        require_non_negative_int(
+            metadata.get("mode_field_sample_count"),
+            f"{metadata_path}.mode_field_sample_count",
+        ),
+    )
     require_mode_field_metadata(
         metadata,
         metadata_path,
@@ -3833,6 +3998,7 @@ def validate_low_k_de_bv_analytic_dispersion(
 def validate_dispersion(
     root: Path,
     known_modes: dict[tuple[int, int], tuple[float, float, float, float]],
+    known_mode_summaries: dict[tuple[int, int], dict],
     known_samples: dict[int, tuple[float, tuple[float, float, float], str]],
     branch_ids_by_mode: dict[tuple[int, int], int],
     tracking_sources_by_mode: dict[tuple[int, int], str],
@@ -3981,18 +4147,30 @@ def validate_dispersion(
                     f"dispersion row {row_index}.overlap_score",
                     absolute_tolerance=1.0e-12,
                 )
-        expected_field_id = mode_field_id(sample_index, raw_mode_index)
-        expected_resource_key = mode_field_resource_key(expected_field_id)
-        require_equal(
-            row.get("mode_field_id"),
-            expected_field_id,
-            f"dispersion row {row_index}.mode_field_id",
-        )
-        require_equal(
-            row.get("mode_field_resource_key"),
-            expected_resource_key,
-            f"dispersion row {row_index}.mode_field_resource_key",
-        )
+        if known_mode_summaries[mode_key].get("mode_field_id") is None:
+            require_equal(
+                row.get("mode_field_id"),
+                "",
+                f"dispersion row {row_index}.mode_field_id",
+            )
+            require_equal(
+                row.get("mode_field_resource_key"),
+                "",
+                f"dispersion row {row_index}.mode_field_resource_key",
+            )
+        else:
+            expected_field_id = mode_field_id(sample_index, raw_mode_index)
+            expected_resource_key = mode_field_resource_key(expected_field_id)
+            require_equal(
+                row.get("mode_field_id"),
+                expected_field_id,
+                f"dispersion row {row_index}.mode_field_id",
+            )
+            require_equal(
+                row.get("mode_field_resource_key"),
+                expected_resource_key,
+                f"dispersion row {row_index}.mode_field_resource_key",
+            )
         frequency_hz = require_finite_number(
             float(row["frequency_hz"]),
             f"dispersion row {row_index}.frequency_hz",
@@ -4035,6 +4213,285 @@ def validate_dispersion(
     if missing_mode_keys:
         fail(f"missing dispersion rows for modes: {sorted(missing_mode_keys)!r}")
     return rows_by_mode
+
+
+def validate_typed_modal_field_sweep(
+    root: Path,
+    manifest: dict,
+    solver_diagnostics: dict,
+    known_modes: dict[tuple[int, int], tuple[float, float, float, float]],
+    known_mode_summaries: dict[tuple[int, int], dict],
+    branch_ids_by_mode: dict[tuple[int, int], int],
+) -> None:
+    """Validate the optional A1S native modal field-sweep envelope.
+
+    This is deliberately stricter than the v2 transport decoder: discovering a
+    field-sweep artifact in the manifest means the on-disk source graph, every
+    mode reference and every completion claim must be scientifically usable.
+    """
+    def declares_bias_field_sweep(value: object) -> bool:
+        return (
+            isinstance(value, dict)
+            and isinstance(value.get("field_sweep"), dict)
+            and value["field_sweep"].get("kind") == "bias_field_sweep"
+        )
+
+    declared = any(
+        declares_bias_field_sweep(value)
+        for value in [manifest, manifest.get("diagnostics"), solver_diagnostics]
+    )
+    artifact_path = manifest.get("artifacts", {}).get("field_sweep_v1_path")
+    if artifact_path is None:
+        if declared:
+            fail(
+                "manifest.artifacts.field_sweep_v1_path is required for a declared "
+                "bias_field_sweep"
+            )
+        return
+    relative_path, path = require_bundle_path(
+        root, artifact_path, "manifest.artifacts.field_sweep_v1_path"
+    )
+    require_equal(relative_path, "eigen/field_sweep.v1.json", "manifest.artifacts.field_sweep_v1_path")
+    resources = manifest.get("resources")
+    if not isinstance(resources, dict):
+        fail("manifest.resources must be an object")
+    require_equal(
+        resources.get("field_sweep_resource_key"),
+        "/v2/sessions/current/analysis/frequency-domain/eigen/field-sweep.v1",
+        "manifest.resources.field_sweep_resource_key",
+    )
+    field_sweep = load_json(path)
+    prefix = "field_sweep"
+    require_equal(field_sweep.get("schema_version"), "eigen/field_sweep.v1", f"{prefix}.schema_version")
+    require_non_empty_string(field_sweep.get("artifact_id"), f"{prefix}.artifact_id")
+    source = field_sweep.get("source")
+    if not isinstance(source, dict):
+        fail(f"{prefix}.source must be an object")
+    require_equal(source.get("kind"), "modal_eigensolve", f"{prefix}.source.kind")
+    source_artifact, source_path = require_bundle_path(
+        root, source.get("artifact"), f"{prefix}.source.artifact"
+    )
+    require_equal(source_artifact, "eigen/spectrum.v2.json", f"{prefix}.source.artifact")
+    source_revision = require_sha256_token(source.get("revision"), f"{prefix}.source.revision")
+    require_equal(source_revision, sha256_file_token(source_path), f"{prefix}.source.revision")
+    require_equal(field_sweep.get("source_revision"), source_revision, f"{prefix}.source_revision")
+    for name in ["run_id", "stage_id", "scope_id", "runtime_id"]:
+        require_non_empty_string(field_sweep.get(name), f"{prefix}.{name}")
+    self_revision = require_sha256_token(
+        field_sweep.get("revision"), f"{prefix}.revision"
+    )
+    content_sha256 = require_sha256_token(
+        field_sweep.get("content_sha256"), f"{prefix}.content_sha256"
+    )
+
+    status = require_non_empty_string(field_sweep.get("status"), f"{prefix}.status")
+    if status not in {"complete", "partial", "interrupted", "corrupt"}:
+        fail(f"{prefix}.status is invalid")
+    complete = require_boolean(field_sweep.get("complete"), f"{prefix}.complete")
+    interrupted = require_boolean(field_sweep.get("interrupted"), f"{prefix}.interrupted")
+    stop_reason = field_sweep.get("stop_reason")
+    if stop_reason is not None:
+        require_non_empty_string(stop_reason, f"{prefix}.stop_reason")
+    if complete:
+        require_equal(status, "complete", f"{prefix}.status")
+        require_equal(interrupted, False, f"{prefix}.interrupted")
+        require_equal(stop_reason, None, f"{prefix}.stop_reason")
+    elif status == "interrupted":
+        require_equal(interrupted, True, f"{prefix}.interrupted")
+        require_non_empty_string(stop_reason, f"{prefix}.stop_reason")
+    elif interrupted:
+        fail(f"{prefix}.interrupted requires status='interrupted'")
+    if not complete and ("promotion_binding" in field_sweep or "promotion" in field_sweep):
+        fail(f"{prefix} must not carry a promotion binding when incomplete")
+
+    requested_sample_count = require_non_negative_int(
+        field_sweep.get("requested_sample_count"), f"{prefix}.requested_sample_count"
+    )
+    completed_sample_count = require_non_negative_int(
+        field_sweep.get("completed_sample_count"), f"{prefix}.completed_sample_count"
+    )
+    samples = require_object_list(field_sweep.get("samples"), f"{prefix}.samples")
+    if complete:
+        require_equal(requested_sample_count, len(samples), f"{prefix}.requested_sample_count")
+        require_equal(completed_sample_count, len(samples), f"{prefix}.completed_sample_count")
+    elif requested_sample_count < len(samples):
+        fail(f"{prefix}.requested_sample_count must cover all published samples")
+
+    scan_axis = field_sweep.get("scan_axis")
+    if not isinstance(scan_axis, dict):
+        fail(f"{prefix}.scan_axis must be an object")
+    require_equal(scan_axis.get("kind"), "bias_field", f"{prefix}.scan_axis.kind")
+    require_equal(scan_axis.get("coordinate"), "bias_field_a_per_m", f"{prefix}.scan_axis.coordinate")
+    require_equal(scan_axis.get("unit"), "A/m", f"{prefix}.scan_axis.unit")
+    units = field_sweep.get("units")
+    if not isinstance(units, dict):
+        fail(f"{prefix}.units must be an object")
+    for field_name, expected in [
+        ("frequency", "Hz"),
+        ("angular_frequency", "rad/s"),
+        ("bias_field", "A/m"),
+        ("bias_field_display", "mu0 H (T)"),
+    ]:
+        require_equal(units.get(field_name), expected, f"{prefix}.units.{field_name}")
+
+    topology = field_sweep.get("topology")
+    if not isinstance(topology, dict):
+        fail(f"{prefix}.topology must be an object")
+    for field_name in ["mesh_id", "topology_revision", "indexing", "sample_axis", "mode_axis"]:
+        require_non_empty_string(topology.get(field_name), f"{prefix}.topology.{field_name}")
+    require_equal(topology.get("indexing"), "sample_index_then_raw_mode_index", f"{prefix}.topology.indexing")
+    require_equal(topology.get("sample_axis"), "sample_id", f"{prefix}.topology.sample_axis")
+    require_equal(topology.get("mode_axis"), "mode_id", f"{prefix}.topology.mode_axis")
+    node_count = topology.get("node_count")
+    if node_count is not None:
+        require_non_negative_int(node_count, f"{prefix}.topology.node_count")
+    for execution_name in ["requested_execution", "resolved_execution"]:
+        execution = field_sweep.get(execution_name)
+        if not isinstance(execution, dict):
+            fail(f"{prefix}.{execution_name} must be an object")
+        for field_name in ["backend", "device", "precision", "execution_mode", "engine", "status"]:
+            require_non_empty_string(execution.get(field_name), f"{prefix}.{execution_name}.{field_name}")
+
+    references = require_object_list(field_sweep.get("cross_artifact_refs"), f"{prefix}.cross_artifact_refs")
+    required_refs = {
+        "source_spectrum": "eigen/spectrum.v2.json",
+        "source_branches": "eigen/branches.v2.json",
+    }
+    seen_ref_relations: set[str] = set()
+    for index, reference in enumerate(references):
+        ref_prefix = f"{prefix}.cross_artifact_refs[{index}]"
+        relation = require_non_empty_string(reference.get("relation"), f"{ref_prefix}.relation")
+        if relation in seen_ref_relations:
+            fail(f"{prefix}.cross_artifact_refs contains duplicate relation {relation!r}")
+        seen_ref_relations.add(relation)
+        expected_path = required_refs.get(relation)
+        if expected_path is None:
+            fail(f"{ref_prefix}.relation is not a supported modal source relation")
+        artifact, ref_path = require_bundle_path(root, reference.get("artifact"), f"{ref_prefix}.artifact")
+        require_equal(artifact, expected_path, f"{ref_prefix}.artifact")
+        revision = require_sha256_token(reference.get("revision"), f"{ref_prefix}.revision")
+        require_equal(revision, sha256_file_token(ref_path), f"{ref_prefix}.revision")
+    if seen_ref_relations != set(required_refs):
+        fail(f"{prefix}.cross_artifact_refs must contain spectrum and branches source refs")
+
+    seen_sample_ids: set[str] = set()
+    seen_sample_indices: set[int] = set()
+    completed_from_rows = 0
+    known_branch_ids = set(branch_ids_by_mode.values())
+    covered_modes: set[tuple[int, int]] = set()
+    for sample_position, sample in enumerate(samples):
+        sample_prefix = f"{prefix}.samples[{sample_position}]"
+        sample_id = require_non_empty_string(sample.get("sample_id"), f"{sample_prefix}.sample_id")
+        if sample_id in seen_sample_ids:
+            fail(f"{prefix}.samples contains duplicate sample_id {sample_id!r}")
+        seen_sample_ids.add(sample_id)
+        sample_index = require_non_negative_int(sample.get("sample_index"), f"{sample_prefix}.sample_index")
+        if sample_index in seen_sample_indices:
+            fail(f"{prefix}.samples contains duplicate sample_index {sample_index}")
+        seen_sample_indices.add(sample_index)
+        require_equal(sample_id, f"bias-field-sample-{sample_index:04d}", f"{sample_prefix}.sample_id")
+        if sample_index not in {sample_key[0] for sample_key in known_modes}:
+            fail(f"{sample_prefix}.sample_index does not resolve in spectrum")
+        require_equal(sample.get("scan_axis"), scan_axis, f"{sample_prefix}.scan_axis")
+        for field_name, scale in [("bias_field_a_per_m", 1.0), ("bias_field_mu0_t", MU0)]:
+            values = sample.get(field_name)
+            if not isinstance(values, list) or len(values) != 3:
+                fail(f"{sample_prefix}.{field_name} must be a length-3 array")
+            for component_index, value in enumerate(values):
+                finite = require_finite_number(value, f"{sample_prefix}.{field_name}[{component_index}]")
+                if field_name == "bias_field_mu0_t":
+                    source_value = require_finite_number(
+                        sample["bias_field_a_per_m"][component_index],
+                        f"{sample_prefix}.bias_field_a_per_m[{component_index}]",
+                    )
+                    require_close(finite, source_value * scale, f"{sample_prefix}.{field_name}[{component_index}]", absolute_tolerance=1.0e-12)
+        sample_topology = sample.get("topology")
+        if not isinstance(sample_topology, dict):
+            fail(f"{sample_prefix}.topology must be an object")
+        require_equal(sample_topology, topology, f"{sample_prefix}.topology")
+        sample_status = require_non_empty_string(sample.get("status"), f"{sample_prefix}.status")
+        if sample_status not in {"complete", "partial", "interrupted", "corrupt"}:
+            fail(f"{sample_prefix}.status is invalid")
+        if sample_status == "complete":
+            completed_from_rows += 1
+            for handoff in [
+                "equilibrium_artifact_sha256",
+                "linearization_state_sha256",
+                "operator_input_signature_sha256",
+            ]:
+                require_sha256_token(sample.get(handoff), f"{sample_prefix}.{handoff}")
+        sample_stop_reason = sample.get("stop_reason")
+        if sample_status in {"partial", "interrupted", "corrupt"}:
+            require_non_empty_string(sample_stop_reason, f"{sample_prefix}.stop_reason")
+        elif sample_stop_reason is not None:
+            fail(f"{sample_prefix}.stop_reason must be null for a complete sample")
+        branch_ids = sample.get("branch_ids")
+        if not isinstance(branch_ids, list):
+            fail(f"{sample_prefix}.branch_ids must be an integer list")
+        sample_branch_ids: set[int] = set()
+        for branch_position, branch_id in enumerate(branch_ids):
+            numeric_branch_id = require_non_negative_int(branch_id, f"{sample_prefix}.branch_ids[{branch_position}]")
+            if numeric_branch_id in sample_branch_ids:
+                fail(f"{sample_prefix}.branch_ids contains duplicate branch_id")
+            sample_branch_ids.add(numeric_branch_id)
+            if numeric_branch_id not in known_branch_ids:
+                fail(f"{sample_prefix}.branch_ids references an unknown branch")
+        modes = require_object_list(sample.get("modes"), f"{sample_prefix}.modes")
+        for mode_position, mode in enumerate(modes):
+            mode_prefix = f"{sample_prefix}.modes[{mode_position}]"
+            require_equal(mode.get("sample_id"), sample_id, f"{mode_prefix}.sample_id")
+            raw_mode_index = require_non_negative_int(mode.get("raw_mode_index"), f"{mode_prefix}.raw_mode_index")
+            mode_key = (sample_index, raw_mode_index)
+            if mode_key not in known_modes:
+                fail(f"{mode_prefix}.raw_mode_index does not resolve in spectrum")
+            if mode_key in covered_modes:
+                fail(f"{prefix}.samples contains duplicate sample/mode mapping {mode_key!r}")
+            covered_modes.add(mode_key)
+            require_equal(mode.get("mode_id"), f"sample-{sample_index:04d}/mode-{raw_mode_index:04d}", f"{mode_prefix}.mode_id")
+            expected_branch_id = branch_ids_by_mode.get(mode_key)
+            require_equal(mode.get("branch_id"), expected_branch_id, f"{mode_prefix}.branch_id")
+            if expected_branch_id not in sample_branch_ids:
+                fail(f"{mode_prefix}.branch_id is absent from {sample_prefix}.branch_ids")
+            expected_frequency, _, _, expected_omega = known_modes[mode_key]
+            require_close(
+                require_finite_number(mode.get("frequency_hz"), f"{mode_prefix}.frequency_hz"),
+                expected_frequency,
+                f"{mode_prefix}.frequency_hz",
+            )
+            require_close(
+                require_finite_number(mode.get("angular_frequency_rad_per_s"), f"{mode_prefix}.angular_frequency_rad_per_s"),
+                expected_omega,
+                f"{mode_prefix}.angular_frequency_rad_per_s",
+                absolute_tolerance=1.0e-3,
+            )
+            metadata_rel, metadata_path = require_bundle_path(root, mode.get("mode_artifact_path"), f"{mode_prefix}.mode_artifact_path")
+            require_equal(metadata_rel, nested_mode_path(sample_index, raw_mode_index), f"{mode_prefix}.mode_artifact_path")
+            metadata = load_json(metadata_path)
+            expected_summary = known_mode_summaries[mode_key]
+            require_equal(mode.get("mode_field_id"), expected_summary.get("mode_field_id"), f"{mode_prefix}.mode_field_id")
+            require_equal(mode.get("mode_field_resource_key"), expected_summary.get("mode_field_resource_key"), f"{mode_prefix}.mode_field_resource_key")
+            require_equal(metadata.get("mode_field_id"), mode.get("mode_field_id"), f"{mode_prefix}.mode_field_id")
+            require_equal(metadata.get("mode_field_resource_key"), mode.get("mode_field_resource_key"), f"{mode_prefix}.mode_field_resource_key")
+            require_equal(metadata.get("component_basis"), "global_xyz", f"{mode_prefix}.component_basis")
+            require_equal(metadata.get("value_kind"), "complex_spatial_vector", f"{mode_prefix}.value_kind")
+            require_equal(mode.get("source_revision"), source_revision, f"{mode_prefix}.source_revision")
+            require_finite_number(mode.get("residual_relative_l2"), f"{mode_prefix}.residual_relative_l2")
+            require_equal(mode.get("status"), sample_status, f"{mode_prefix}.status")
+    require_equal(completed_sample_count, completed_from_rows, f"{prefix}.completed_sample_count")
+    visualizable_modes = {
+        mode_key
+        for mode_key, mode_summary in known_mode_summaries.items()
+        if mode_summary.get("mode_field_id") is not None
+    }
+    if complete and covered_modes != visualizable_modes:
+        fail(f"{prefix}.complete requires every visualizable spectrum mode to resolve in the field sweep")
+    expected_self_digest = canonical_artifact_self_digest(field_sweep, prefix)
+    require_equal(
+        content_sha256,
+        expected_self_digest,
+        f"{prefix}.content_sha256",
+    )
+    require_equal(self_revision, expected_self_digest, f"{prefix}.revision")
 
 
 def parse_args(argv: list[str]) -> argparse.Namespace:
@@ -4300,6 +4757,13 @@ def main(argv: list[str] | None = None) -> int:
             "manifest.artifacts.mode_field_zarr_store_path",
         )
         require_zarr_mode_fields = False
+    elif mode_field_storage_format == "none":
+        require_equal(
+            manifest.get("artifacts", {}).get("mode_field_zarr_store_path"),
+            None,
+            "manifest.artifacts.mode_field_zarr_store_path",
+        )
+        require_zarr_mode_fields = False
     else:
         fail(
             "manifest.artifacts.mode_field_storage_format must be 'zarr'"
@@ -4376,6 +4840,11 @@ def main(argv: list[str] | None = None) -> int:
             known_mode_summaries[(known_sample_index, known_raw_mode_index)] = mode
     if not known_modes:
         fail("spectrum.samples must include at least one mode")
+    if mode_field_storage_format == "none":
+        if manifest_mode_paths or manifest_mode_resources:
+            fail("spectrum-only manifest must not declare mode metadata paths or field resources")
+        if any(mode.get("mode_field_id") is not None for mode in known_mode_summaries.values()):
+            fail("spectrum-only manifest must not publish mode field handoffs")
     spectrum_mode_count = require_non_negative_int(
         spectrum.get("mode_count"),
         "spectrum.mode_count",
@@ -4472,13 +4941,18 @@ def main(argv: list[str] | None = None) -> int:
                         "branch point.tracking_confidence",
                         absolute_tolerance=1.0e-12,
                     )
-            require_mode_field_handoff(
-                point,
-                "branch point",
-                sample_index,
-                raw_mode_index,
-            )
             if branch_mode_key in known_modes:
+                spectrum_mode = known_mode_summaries[branch_mode_key]
+                if spectrum_mode.get("mode_field_id") is None:
+                    if point.get("mode_field_id") is not None or point.get("mode_field_resource_key") is not None:
+                        fail("spectrum-only mode must not acquire a branch mode field handoff")
+                else:
+                    require_mode_field_handoff(
+                        point,
+                        "branch point",
+                        sample_index,
+                        raw_mode_index,
+                    )
                 frequency_hz = require_finite_number(
                     point.get("frequency_hz"),
                     "branch point.frequency_hz",
@@ -4527,10 +5001,19 @@ def main(argv: list[str] | None = None) -> int:
     dispersion_rows_by_mode = validate_dispersion(
         root,
         known_modes,
+        known_mode_summaries,
         known_samples,
         branch_ids_by_mode,
         tracking_sources_by_mode,
         overlap_by_mode,
+    )
+    validate_typed_modal_field_sweep(
+        root,
+        manifest,
+        solver_diagnostics,
+        known_modes,
+        known_mode_summaries,
+        branch_ids_by_mode,
     )
 
     if args.require_reference_full_2x2_floquet:
