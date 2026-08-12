@@ -4,6 +4,10 @@ import { useEffect, useRef, useState } from "react";
 
 import { decodeFieldVector } from "@/kernel/api/codecs";
 
+import {
+  planarRasterChecksum,
+  type PlanarRenderEvidence,
+} from "../model/fieldMapEvidence";
 import { resolvePlanarVectorComponents } from "../model/fieldMapRenderModel";
 import { localProbe } from "../model/fieldMapProbe";
 import { finiteScalarRange } from "./colorRaster";
@@ -24,6 +28,8 @@ interface PlanarSurfaceProps {
   mask?: ArrayBuffer | null;
   meshOverlay?: ArrayBuffer | null;
   onPin?: (u: number, v: number) => void;
+  onRenderEvidence?: (evidence: PlanarRenderEvidence) => void;
+  sampleIdentity: string;
   scalar: ArrayBuffer;
   vectors?: ArrayBuffer | null;
   width: number;
@@ -36,6 +42,8 @@ export function PlanarSurface({
   mask,
   meshOverlay,
   onPin,
+  onRenderEvidence,
+  sampleIdentity,
   scalar,
   vectors,
   width,
@@ -57,9 +65,20 @@ export function PlanarSurface({
       new URL("./planarRendererWorker.ts", import.meta.url),
       { type: "module" },
     );
-    const colorizer = createPlanarColorizer(worker, (pixels) =>
-      renderer.draw(pixels, width, height),
-    );
+    let renderEvidence: Omit<PlanarRenderEvidence, "raster"> | null = null;
+    let rasterSummary: PlanarRenderEvidence["raster"] = null;
+    const colorizer = createPlanarColorizer(worker, (pixels) => {
+      renderer.draw(pixels, width, height);
+      if (!renderEvidence || !rasterSummary) return;
+      onRenderEvidence?.({
+        ...renderEvidence,
+        raster: {
+          ...rasterSummary,
+          checksum: planarRasterChecksum(pixels),
+        },
+        sampleIdentity,
+      });
+    });
     let drawOverlay: () => void = () => undefined;
     const observer = new ResizeObserver(([entry]) => {
       if (!entry) return;
@@ -83,6 +102,14 @@ export function PlanarSurface({
     valuesRef.current = decoded.values;
     maskRef.current = emptyMask ?? null;
     const range = finiteScalarRange(values, emptyMask);
+    rasterSummary = range
+      ? {
+          checksum: "",
+          max: range.max,
+          min: range.min,
+          sampleCount: values.length,
+        }
+      : null;
     if (range) colorizer.colorize(values, range, emptyMask);
     const contours = range
       ? marchingSquares(
@@ -99,6 +126,14 @@ export function PlanarSurface({
       : null;
     const glyphs = planarVectors ? buildVectorGlyphs(planarVectors, 2_000) : [];
     const mesh = meshOverlay ? decodePlanarMeshOverlay(meshOverlay) : null;
+    renderEvidence = {
+      glyphCount: glyphs.length,
+      overlayCounts: {
+        contours: contours.length,
+        meshSegments: mesh?.segmentCount ?? 0,
+      },
+      sampleIdentity,
+    };
     drawOverlay = () =>
       drawPlanarOverlays(overlayContext, overlayCanvas.width, overlayCanvas.height, {
         contours,
@@ -117,7 +152,17 @@ export function PlanarSurface({
       valuesRef.current = null;
       maskRef.current = null;
     };
-  }, [frame, height, mask, meshOverlay, scalar, vectors, width]);
+  }, [
+    frame,
+    height,
+    mask,
+    meshOverlay,
+    onRenderEvidence,
+    sampleIdentity,
+    scalar,
+    vectors,
+    width,
+  ]);
 
   return (
     <div

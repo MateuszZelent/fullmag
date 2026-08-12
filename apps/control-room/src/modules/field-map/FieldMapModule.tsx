@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { useKernel } from "@/kernel/KernelContext";
 import {
@@ -29,12 +29,19 @@ import {
   resolveFieldMapAuxiliaryDiagnostics,
   surfaceProjectionStatus,
 } from "./model/fieldMapRenderModel";
+import {
+  createPlanarEvidence,
+  type PlanarEvidenceStatus,
+  type PlanarRenderEvidence,
+} from "./model/fieldMapEvidence";
 import { PlanarSurface } from "./renderer/PlanarSurface";
 
 export default function FieldMapModule() {
   const { layout } = useKernel();
   const state = useFieldMapState();
   const [pinned, setPinned] = useState<readonly [number, number] | null>(null);
+  const [renderEvidence, setRenderEvidence] =
+    useState<PlanarRenderEvidence | null>(null);
   const active = layout.get().activeViewportMainModuleId === "field-map";
   const visualization = useVisualizationStateResource({ enabled: active });
   const planar = visualization.data?.planar;
@@ -157,6 +164,37 @@ export default function FieldMapModule() {
         : null,
     [meta.data],
   );
+  const component = planar?.component ?? state.component;
+  const quantityId = planar?.quantity_id ?? state.quantityId;
+  const onRenderEvidence = useCallback(
+    (next: PlanarRenderEvidence) => setRenderEvidence(next),
+    [],
+  );
+
+  const evidenceStatus: PlanarEvidenceStatus =
+    meta.status === "error" || scalar.status === "error"
+      ? "error"
+      : meta.status === "ready" &&
+          scalar.status === "ready" &&
+          renderEvidence?.raster &&
+          renderEvidence.sampleIdentity === meta.data?.etag
+        ? "ready"
+        : "loading";
+  const evidence = createPlanarEvidence({
+    component,
+    fieldRevision: meta.data?.field_revision ?? null,
+    glyphCount: renderEvidence?.glyphCount ?? 0,
+    monitorId: activeMonitorId ?? "",
+    operatorKind: monitor.data?.monitor.operator.kind ?? null,
+    overlayCounts: renderEvidence?.overlayCounts ?? {
+      contours: 0,
+      meshSegments: 0,
+    },
+    quantityId,
+    raster: renderEvidence?.raster ?? null,
+    sampleIdentity: meta.data?.etag ?? null,
+    status: evidenceStatus,
+  });
 
   if (!activeMonitorId) {
     return <FieldMapStatus message="Select a planar monitor to open the 2D view." />;
@@ -173,6 +211,7 @@ export default function FieldMapModule() {
       <FieldMapStatus
         kind="error"
         message={meta.error?.message ?? scalar.error?.message ?? "Planar field unavailable."}
+        planarStatus="error"
       />
     );
   }
@@ -180,12 +219,30 @@ export default function FieldMapModule() {
     return <FieldMapStatus message="No planar field is published for this revision." />;
   }
   if (!meta.data || !scalar.data || !frame) {
-    return <FieldMapStatus message="Loading planar field…" />;
+    return <FieldMapStatus message="Loading planar field…" planarStatus="loading" />;
   }
 
   const [width, height] = meta.data.resolution;
   return (
     <section className="fm-field-map">
+      <output
+        aria-label="Planar field evidence"
+        data-planar-component={evidence.component}
+        data-planar-evidence={JSON.stringify(evidence)}
+        data-planar-field-revision={String(evidence.fieldRevision ?? "")}
+        data-planar-glyph-count={String(evidence.glyphCount)}
+        data-planar-monitor-id={evidence.monitorId}
+        data-planar-operator-kind={evidence.operatorKind ?? ""}
+        data-planar-raster-checksum={evidence.raster?.checksum ?? ""}
+        data-planar-raster-max={String(evidence.raster?.max ?? "")}
+        data-planar-raster-min={String(evidence.raster?.min ?? "")}
+        data-planar-sample-identity={evidence.sampleIdentity ?? ""}
+        data-planar-status={evidence.status}
+        data-planar-contour-count={String(evidence.overlayCounts.contours)}
+        data-planar-mesh-segment-count={String(evidence.overlayCounts.meshSegments)}
+        data-planar-quantity-id={evidence.quantityId}
+        hidden
+      />
       <header className="fm-field-map__toolbar">
         <strong>{plan.quantityId}</strong>
         <span>{planar?.component ?? state.component}</span>
@@ -205,6 +262,8 @@ export default function FieldMapModule() {
           mask={mask.data}
           meshOverlay={meshOverlay.data}
           onPin={(u, v) => setPinned([u, v])}
+          onRenderEvidence={onRenderEvidence}
+          sampleIdentity={meta.data.etag}
           scalar={scalar.data}
           vectors={vectors.data}
           width={width ?? 1}
@@ -267,12 +326,18 @@ function FieldMapAuxiliaryDiagnostics({
 function FieldMapStatus({
   kind = "status",
   message,
+  planarStatus,
 }: {
   kind?: "error" | "status";
   message: string;
+  planarStatus?: PlanarEvidenceStatus;
 }) {
   return (
-    <div className={`fm-field-map fm-field-map--${kind}`} role={kind === "error" ? "alert" : "status"}>
+    <div
+      className={`fm-field-map fm-field-map--${kind}`}
+      data-planar-status={planarStatus}
+      role={kind === "error" ? "alert" : "status"}
+    >
       {message}
     </div>
   );

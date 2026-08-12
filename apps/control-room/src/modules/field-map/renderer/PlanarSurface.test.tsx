@@ -148,6 +148,7 @@ describe("PlanarSurface lifecycle", () => {
       PLANAR_OCCUPANCY.empty,
       PLANAR_OCCUPANCY.occupied,
     ]).buffer;
+    const onRenderEvidence = vi.fn();
     let scalarCanvas: TestElement | null = null;
     try {
       await act(async () => {
@@ -161,6 +162,8 @@ describe("PlanarSurface lifecycle", () => {
             }}
             height={1}
             mask={mask}
+            onRenderEvidence={onRenderEvidence}
+            sampleIdentity={'"fm-planar-sha256:current"'}
             scalar={makeScalarBuffer([10, 20])}
             width={2}
           />,
@@ -182,6 +185,17 @@ describe("PlanarSurface lifecycle", () => {
       expect(mask.byteLength).toBe(2);
       expect(Array.from(raster.data.slice(0, 4))).toEqual([0, 0, 0, 0]);
       expect(raster.data[7]).toBe(255);
+      expect(onRenderEvidence).toHaveBeenLastCalledWith({
+        glyphCount: 0,
+        overlayCounts: { contours: 0, meshSegments: 0 },
+        raster: {
+          checksum: "fnv1a32:4c4ff03b",
+          max: 20,
+          min: 20,
+          sampleCount: 2,
+        },
+        sampleIdentity: "\"fm-planar-sha256:current\"",
+      });
 
       const occupiedPointerMove = new TestEvent("pointermove", { bubbles: true });
       Object.assign(occupiedPointerMove, { clientX: 150, clientY: 50 });

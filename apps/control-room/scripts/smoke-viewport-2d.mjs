@@ -41,10 +41,27 @@ async function main() {
     viewport: { height: 900, width: 1440 },
   });
   const errors = [];
+  const observedPlanarMeta = [];
   page.on("console", (message) => {
     if (message.type() === "error") errors.push(message.text());
   });
   page.on("pageerror", (error) => errors.push(error.message));
+  page.on("response", async (response) => {
+    const requestUrl = new URL(response.url());
+    const match = requestUrl.pathname.match(
+      /^\/v2\/sessions\/current\/data\/fields\/([^/]+)\/planar-monitors\/([^/]+)\/meta$/,
+    );
+    if (!match || response.status() !== 200) return;
+    try {
+      observedPlanarMeta.push({
+        monitorId: decodeURIComponent(match[2]),
+        payload: await response.json(),
+        quantityId: decodeURIComponent(match[1]),
+      });
+    } catch (error) {
+      errors.push(`Planar meta inspection failed: ${String(error)}`);
+    }
+  });
   await page.addInitScript((baseUrl) => {
     window.__FULLMAG_CONFIG__ = {
       ...(window.__FULLMAG_CONFIG__ ?? {}),
@@ -53,7 +70,8 @@ async function main() {
   }, apiBase);
 
   try {
-    await selectMonitor(required[0], 128);
+    const initialMonitor = monitorById(monitors, required[0]);
+    await selectMonitor(initialMonitor.id, 128);
     await page.goto(workspaceUrl, {
       timeout: timeoutMs,
       waitUntil: "domcontentloaded",
@@ -62,7 +80,12 @@ async function main() {
     await open2d.waitFor({ state: "visible", timeout: timeoutMs });
     const initialOpenStarted = performance.now();
     await open2d.click();
-    await assertFieldMapCanvas(page);
+    const initialCanvas = await assertFieldMapCanvas(page);
+    const initialEvidence = await assertPlanarEvidence(
+      page,
+      expectedPlanarEvidence(initialMonitor),
+      observedPlanarMeta,
+    );
     const initialOpenMs = performance.now() - initialOpenStarted;
     if (initialOpenMs > 10_000) {
       throw new Error(`initial 2D open exceeded 10 s: ${initialOpenMs}`);
@@ -77,40 +100,68 @@ async function main() {
     });
 
     const performanceMetrics = { initial_open_ms: initialOpenMs };
-    performanceMetrics.small_switch_ms = await timedMonitorSwitch(
+    const smokeEvidence = [initialEvidence];
+    const smallSwitch = await timedMonitorSwitch(
       page,
-      "xy-slab",
+      monitorById(monitors, "xy-slab"),
       128,
       path.join(outputDir, "slab-vectors.png"),
+      observedPlanarMeta,
     );
-    performanceMetrics.large_switch_ms = await timedMonitorSwitch(
+    performanceMetrics.small_switch_ms = smallSwitch.duration;
+    smokeEvidence.push(smallSwitch.evidence);
+    const largeSwitch = await timedMonitorSwitch(
       page,
-      required[0],
+      initialMonitor,
       1024,
+      undefined,
+      observedPlanarMeta,
     );
+    performanceMetrics.large_switch_ms = largeSwitch.duration;
+    smokeEvidence.push(largeSwitch.evidence);
     if (backend === "fem") {
-      performanceMetrics.surface_switch_ms = await timedMonitorSwitch(
+      const surfaceSwitch = await timedMonitorSwitch(
         page,
-        "object-surface",
+        monitorById(monitors, "object-surface"),
         256,
         path.join(outputDir, "surface-projection.png"),
+        observedPlanarMeta,
       );
-      await timedMonitorSwitch(
+      performanceMetrics.surface_switch_ms = surfaceSwitch.duration;
+      smokeEvidence.push(surfaceSwitch.evidence);
+      const meshSwitch = await timedMonitorSwitch(
         page,
-        "xy-plane",
+        monitorById(monitors, "xy-plane"),
         256,
         path.join(outputDir, "fem-mesh-overlay.png"),
+        observedPlanarMeta,
       );
+      smokeEvidence.push(meshSwitch.evidence);
     }
     await capturePlanarFramePreview(
       page,
-      monitors.monitors.find((monitor) => monitor.id === required[0]),
+      initialMonitor,
+    );
+    smokeEvidence.push(
+      await assertPlanarEvidence(
+        page,
+        expectedPlanarEvidence(initialMonitor),
+        observedPlanarMeta,
+      ),
     );
 
     const memoryBefore = await usedHeap(page);
     for (let index = 0; index < switchCount; index += 1) {
-      await selectMonitor(required[index % required.length], 128);
+      const monitor = monitorById(monitors, required[index % required.length]);
+      await selectMonitor(monitor.id, 128);
       await waitForCanvasPaint(page);
+      smokeEvidence.push(
+        await assertPlanarEvidence(
+          page,
+          expectedPlanarEvidence(monitor),
+          observedPlanarMeta,
+        ),
+      );
     }
     const memoryAfter = await usedHeap(page);
     const memoryGrowthBytes =
@@ -131,15 +182,17 @@ async function main() {
     const report = {
       backend,
       canvas: "2d",
+      canvas_proof: initialCanvas,
+      evidence: smokeEvidence,
       keyboard_shortcut: "2",
       memory_after_bytes: memoryAfter,
       memory_before_bytes: memoryBefore,
       memory_growth_bytes: memoryGrowthBytes,
-      pass: true,
+      pass: smokeEvidence.every((evidence) => evidence.status === "ready"),
       performance: performanceMetrics,
       reduced_motion: true,
       planar_frame_preview_3d: true,
-      schema_version: "viewport-2d-browser-smoke-v1",
+      schema_version: "viewport-2d-browser-smoke-v2",
       switch_count: switchCount,
     };
     await fs.writeFile(
@@ -188,18 +241,29 @@ async function capturePlanarFramePreview(page, monitor) {
   await assertFieldMapCanvas(page);
 }
 
-async function timedMonitorSwitch(page, monitorId, resolution, screenshot) {
+async function timedMonitorSwitch(
+  page,
+  monitor,
+  resolution,
+  screenshot,
+  observedPlanarMeta,
+) {
   const started = performance.now();
-  await selectMonitor(monitorId, resolution);
+  await selectMonitor(monitor.id, resolution);
   await waitForCanvasPaint(page);
+  const evidence = await assertPlanarEvidence(
+    page,
+    expectedPlanarEvidence(monitor),
+    observedPlanarMeta,
+  );
   const duration = performance.now() - started;
   if (duration > 10_000) {
     throw new Error(
-      `${monitorId} ${resolution}x${resolution} switch exceeded 10 s: ${duration}`,
+      `${monitor.id} ${resolution}x${resolution} switch exceeded 10 s: ${duration}`,
     );
   }
   if (screenshot) await page.screenshot({ fullPage: true, path: screenshot });
-  return duration;
+  return { duration, evidence };
 }
 
 async function assertFieldMapCanvas(page) {
@@ -230,6 +294,92 @@ async function assertFieldMapCanvas(page) {
   if (proof.width <= 0 || proof.height <= 0 || !proof.nonTransparent) {
     throw new Error(`2D canvas is blank: ${JSON.stringify(proof)}`);
   }
+  return proof;
+}
+
+function monitorById(monitors, monitorId) {
+  const monitor = monitors.monitors.find((candidate) => candidate.id === monitorId);
+  if (!monitor) throw new Error(`Missing planar monitor ${monitorId}`);
+  return monitor;
+}
+
+function expectedPlanarEvidence(monitor) {
+  if (typeof monitor.operator?.kind !== "string") {
+    throw new Error(`Planar monitor ${monitor.id} has no operator kind`);
+  }
+  return {
+    component: "magnitude",
+    monitorId: monitor.id,
+    operatorKind: monitor.operator.kind,
+    quantityId: "m",
+  };
+}
+
+async function assertPlanarEvidence(page, expected, observedPlanarMeta) {
+  const evidence = await page.waitForFunction(
+    (request) => {
+      const raw = document
+        .querySelector("[aria-label='Planar field evidence']")
+        ?.getAttribute("data-planar-evidence");
+      if (!raw) return null;
+      try {
+        const evidence = JSON.parse(raw);
+        if (evidence.status === "error") return evidence;
+        return evidence.status === "ready" &&
+          evidence.monitorId === request.monitorId &&
+          evidence.operatorKind === request.operatorKind &&
+          evidence.quantityId === request.quantityId &&
+          evidence.component === request.component
+          ? evidence
+          : null;
+      } catch {
+        return null;
+      }
+    },
+    expected,
+    { timeout: timeoutMs },
+  );
+  const value = await evidence.jsonValue();
+  if (value.status !== "ready") {
+    throw new Error(`Planar evidence entered ${value.status}: ${JSON.stringify(value)}`);
+  }
+  if (!value.raster?.checksum || !Number.isFinite(value.raster.min) || !Number.isFinite(value.raster.max)) {
+    throw new Error(`Planar evidence has no raster proof: ${JSON.stringify(value)}`);
+  }
+  if (value.raster.min > value.raster.max) {
+    throw new Error(`Planar evidence has an inverted raster range: ${JSON.stringify(value)}`);
+  }
+  if (!Number.isInteger(value.glyphCount) || value.glyphCount < 0) {
+    throw new Error(`Planar evidence has an invalid glyph count: ${JSON.stringify(value)}`);
+  }
+  for (const [name, count] of Object.entries(value.overlayCounts ?? {})) {
+    if (!Number.isInteger(count) || count < 0) {
+      throw new Error(`Planar evidence has invalid ${name}: ${JSON.stringify(value)}`);
+    }
+  }
+  const matchingMeta = await waitForObservedPlanarMeta(observedPlanarMeta, value, expected);
+  if (matchingMeta.field_revision !== value.fieldRevision) {
+    throw new Error(`Planar field revision mismatch: ${JSON.stringify({ evidence: value, meta: matchingMeta })}`);
+  }
+  if (matchingMeta.etag !== value.sampleIdentity) {
+    throw new Error(`Planar sample identity mismatch: ${JSON.stringify({ evidence: value, meta: matchingMeta })}`);
+  }
+  return value;
+}
+
+async function waitForObservedPlanarMeta(observedPlanarMeta, evidence, expected) {
+  const deadline = Date.now() + Math.min(timeoutMs, 10_000);
+  while (Date.now() < deadline) {
+    const match = [...observedPlanarMeta].reverse().find(
+      (entry) =>
+        entry.monitorId === expected.monitorId &&
+        entry.quantityId === expected.quantityId &&
+        entry.payload?.etag === evidence.sampleIdentity,
+    );
+    if (match) return match.payload;
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  throw new Error(`No browser-consumed planar meta matched ${JSON.stringify({ evidence, expected })}`);
 }
 
 async function waitForCanvasPaint(page) {
