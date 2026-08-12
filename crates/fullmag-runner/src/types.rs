@@ -918,8 +918,7 @@ impl Default for StepStats {
 #[cfg(test)]
 mod all_in_gpu_fem_transfer_audit_tests {
     use super::{
-        ExecutionProvenance, FdmMultilayerStageTelemetry, FdmMultilayerTransferTelemetry,
-        StepStats,
+        ExecutionProvenance, FdmMultilayerStageTelemetry, FdmMultilayerTransferTelemetry, StepStats,
     };
 
     #[test]
@@ -1325,7 +1324,10 @@ mod all_in_gpu_fem_transfer_audit_tests {
         let value = serde_json::to_value(provenance).expect("provenance should serialize");
         let telemetry = &value["fdm_multilayer_stage_telemetry"];
         assert_eq!(telemetry["status"], "recorded");
-        assert_eq!(telemetry["execution_engine"], "cuda_native_multilayer_demag_v2");
+        assert_eq!(
+            telemetry["execution_engine"],
+            "cuda_native_multilayer_demag_v2"
+        );
         assert_eq!(telemetry["data_residency"], "device_resident_per_refresh");
         assert_eq!(telemetry["fft_backend"], "cuFFT");
         assert_eq!(telemetry["layer_count"], 3);
@@ -1481,9 +1483,19 @@ impl StepUpdate {
     /// the optional magnetization + preview fields as `LiveQuantityFrame`s.
     pub fn to_v2(&self) -> fullmag_quantities::StepUpdateV2 {
         let mut frames = Vec::new();
+        let cached_m = self.cached_preview_fields.as_ref().and_then(|cached| {
+            cached
+                .iter()
+                .find(|field| field.quantity == "m" && field.preview_grid == field.original_grid)
+                .or_else(|| cached.iter().find(|field| field.quantity == "m"))
+        });
 
-        // Magnetization → LiveQuantityFrame
-        if let Some(ref mag) = self.magnetization {
+        // A full-grid materialized m is the canonical terminal frame.  Do not
+        // emit the legacy magnetization copy beside it: V2 consumers must not
+        // resolve duplicate m frames by last-write-wins.
+        if let Some(field) = cached_m {
+            frames.push(live_quantity_frame_from_preview(field));
+        } else if let Some(ref mag) = self.magnetization {
             frames.push(fullmag_quantities::LiveQuantityFrame {
                 quantity_id: "m".to_string(),
                 unit: fullmag_quantities::quantity_unit("m").to_string(),
@@ -1493,36 +1505,26 @@ impl StepUpdate {
                     .unwrap_or(3),
                 values: mag.clone(),
                 active_mask: None,
+                provenance: None,
+                spatial_kind: None,
+                quantity_domain: None,
+                layout: None,
             });
         }
 
         // Active preview field → LiveQuantityFrame
         if let Some(ref pf) = self.preview_field {
-            frames.push(fullmag_quantities::LiveQuantityFrame {
-                quantity_id: pf.quantity.clone(),
-                unit: fullmag_quantities::quantity_unit(&pf.quantity).to_string(),
-                grid: pf.preview_grid,
-                n_comp: fullmag_quantities::quantity_spec(&pf.quantity)
-                    .map(|spec| spec.n_comp)
-                    .unwrap_or(3),
-                values: pf.vector_field_values.clone(),
-                active_mask: pf.active_mask.clone(),
-            });
+            if pf.quantity != "m" || cached_m.is_none() && self.magnetization.is_none() {
+                frames.push(live_quantity_frame_from_preview(pf));
+            }
         }
 
         // Cached preview fields → LiveQuantityFrame each
         if let Some(ref cached) = self.cached_preview_fields {
             for cf in cached {
-                frames.push(fullmag_quantities::LiveQuantityFrame {
-                    quantity_id: cf.quantity.clone(),
-                    unit: fullmag_quantities::quantity_unit(&cf.quantity).to_string(),
-                    grid: cf.preview_grid,
-                    n_comp: fullmag_quantities::quantity_spec(&cf.quantity)
-                        .map(|spec| spec.n_comp)
-                        .unwrap_or(3),
-                    values: cf.vector_field_values.clone(),
-                    active_mask: cf.active_mask.clone(),
-                });
+                if cf.quantity != "m" {
+                    frames.push(live_quantity_frame_from_preview(cf));
+                }
             }
         }
 
@@ -1532,6 +1534,40 @@ impl StepUpdate {
             frames,
             finished: self.finished,
         }
+    }
+}
+
+fn live_quantity_frame_from_preview(
+    field: &LivePreviewField,
+) -> fullmag_quantities::LiveQuantityFrame {
+    fullmag_quantities::LiveQuantityFrame {
+        quantity_id: field.quantity.clone(),
+        unit: fullmag_quantities::quantity_unit(&field.quantity).to_string(),
+        grid: field.preview_grid,
+        n_comp: fullmag_quantities::quantity_spec(&field.quantity)
+            .map(|spec| spec.n_comp)
+            .unwrap_or(3),
+        values: field.vector_field_values.clone(),
+        active_mask: field.active_mask.clone(),
+        provenance: Some(fullmag_quantities::LiveQuantityFrameProvenance {
+            config_revision: field.config_revision,
+            source_step: field.source_step,
+            source_revision: field.source_revision,
+            materialized_at_unix_ms: field.materialized_at_unix_ms,
+            materialization_wall_time_ns: field.materialization_wall_time_ns,
+        }),
+        spatial_kind: Some(field.spatial_kind.clone()),
+        quantity_domain: Some(field.quantity_domain.clone()),
+        layout: Some(fullmag_quantities::LiveQuantityFrameLayout {
+            original_grid: field.original_grid,
+            x_chosen_size: field.x_chosen_size,
+            y_chosen_size: field.y_chosen_size,
+            applied_x_chosen_size: field.applied_x_chosen_size,
+            applied_y_chosen_size: field.applied_y_chosen_size,
+            applied_layer_stride: field.applied_layer_stride,
+            auto_downscaled: field.auto_downscaled,
+            auto_downscale_message: field.auto_downscale_message.clone(),
+        }),
     }
 }
 
@@ -3787,6 +3823,79 @@ mod tests {
         assert_eq!(frame.unit, spec.unit);
         assert_eq!(frame.n_comp, spec.n_comp);
         assert!(!frame.unit.is_empty());
+    }
+
+    #[test]
+    fn to_v2_promotes_one_full_grid_m_frame_with_field_provenance() {
+        let mut stats = StepStats::default();
+        stats.step = 41;
+        stats.time = 2.5e-12;
+        let update = StepUpdate {
+            coupled_checkpoint: None,
+            stats,
+            grid: [2, 1, 1],
+            fem_mesh_generation_id: None,
+            magnetization: Some(vec![9.0, 9.0, 9.0, 9.0, 9.0, 9.0]),
+            preview_field: None,
+            cached_preview_fields: Some(vec![LivePreviewField {
+                config_revision: 7,
+                source_step: 41,
+                source_revision: 13,
+                materialized_at_unix_ms: 1234,
+                materialization_wall_time_ns: 55,
+                quantity: "m".to_string(),
+                unit: "wrong".to_string(),
+                spatial_kind: "grid".to_string(),
+                quantity_domain: "magnetic_only".to_string(),
+                preview_grid: [2, 1, 1],
+                original_grid: [2, 1, 1],
+                vector_field_values: vec![1.0, 0.0, 0.0, 0.0, 1.0, 0.0],
+                x_chosen_size: 2,
+                y_chosen_size: 1,
+                applied_x_chosen_size: 2,
+                applied_y_chosen_size: 1,
+                applied_layer_stride: 1,
+                auto_downscaled: false,
+                auto_downscale_message: None,
+                active_mask: Some(vec![true, false]),
+            }]),
+            hysteresis_field_m_t: None,
+            hysteresis_point_index: None,
+            hysteresis_settle_step_index: None,
+            hysteresis_settle_step_kind: None,
+            hysteresis_settle_step_method: None,
+            scalar_row_due: false,
+            finished: true,
+        };
+
+        let v2 = update.to_v2();
+        let magnetization: Vec<_> = v2
+            .frames
+            .iter()
+            .filter(|frame| frame.quantity_id == "m")
+            .collect();
+
+        assert_eq!(
+            magnetization.len(),
+            1,
+            "m must be canonical, not last-write-wins"
+        );
+        let frame = magnetization[0];
+        assert_eq!(frame.values, vec![1.0, 0.0, 0.0, 0.0, 1.0, 0.0]);
+        assert_eq!(frame.grid, [2, 1, 1]);
+        assert_eq!(v2.diagnostics.step, 41);
+        assert_eq!(v2.diagnostics.time, 2.5e-12);
+        let provenance = frame.provenance.as_ref().expect("field provenance");
+        assert_eq!(provenance.config_revision, 7);
+        assert_eq!(provenance.source_step, 41);
+        assert_eq!(provenance.source_revision, 13);
+        assert_eq!(provenance.materialized_at_unix_ms, 1234);
+        assert_eq!(frame.spatial_kind.as_deref(), Some("grid"));
+        assert_eq!(frame.quantity_domain.as_deref(), Some("magnetic_only"));
+        assert_eq!(
+            frame.layout.as_ref().map(|layout| layout.original_grid),
+            Some([2, 1, 1])
+        );
     }
 
     #[test]

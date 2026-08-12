@@ -1080,6 +1080,7 @@ pub(crate) fn default_current_live_state(req: &CurrentLiveSnapshotRequest) -> Se
         field_catalog_revision: 0,
         field_samples_revision: 0,
         field_quantity_revisions: BTreeMap::new(),
+        accepted_terminal_field_generation: None,
         stage_execution_revision: 0,
         simulation_preparation_revision,
         region_realization_revisions: fullmag_authoring::RegionRealizationRevisions::default(),
@@ -1571,11 +1572,69 @@ fn annotate_solver_profile_publisher_apply(
     }
 }
 
+enum TerminalFieldReplacementAdmission {
+    Apply,
+    Duplicate,
+}
+
+fn validate_terminal_field_replacement(
+    current: &SessionStateResponse,
+    replace_latest_fields: bool,
+    latest_fields: Option<&LatestFields>,
+    field_generation: Option<&CurrentLiveFieldGeneration>,
+    clear_preview_cache: bool,
+) -> Result<TerminalFieldReplacementAdmission, ApiError> {
+    if !replace_latest_fields {
+        return Ok(TerminalFieldReplacementAdmission::Apply);
+    }
+    if latest_fields.is_none() {
+        return Err(ApiError::bad_request(
+            "terminal_field_replace_requires_latest_fields",
+        ));
+    }
+    if !clear_preview_cache {
+        return Err(ApiError::bad_request(
+            "terminal_field_replace_requires_preview_cache_clear",
+        ));
+    }
+    let Some(incoming) = field_generation else {
+        return Err(ApiError::bad_request(
+            "terminal_field_replace_requires_generation",
+        ));
+    };
+    if let Some(accepted) = current.accepted_terminal_field_generation.as_ref() {
+        if incoming.sequence < accepted.sequence {
+            return Err(ApiError::conflict("stale_terminal_field_generation"));
+        }
+        if incoming.sequence == accepted.sequence {
+            if accepted.run_id == incoming.run_id {
+                return Ok(TerminalFieldReplacementAdmission::Duplicate);
+            }
+            return Err(ApiError::conflict(
+                "terminal_field_generation_sequence_collision",
+            ));
+        }
+    }
+    Ok(TerminalFieldReplacementAdmission::Apply)
+}
+
 pub(crate) fn apply_current_live_snapshot(
     current: &mut SessionStateResponse,
     req: CurrentLiveSnapshotRequest,
 ) -> Result<(), ApiError> {
     let apply_start = std::time::Instant::now();
+    if matches!(
+        validate_terminal_field_replacement(
+            current,
+            req.replace_latest_fields,
+            req.latest_fields.as_ref(),
+            req.field_generation.as_ref(),
+            req.clear_preview_cache,
+        )?,
+        TerminalFieldReplacementAdmission::Duplicate
+    ) {
+        return Ok(());
+    }
     let mut affected_field_quantities = BTreeSet::new();
     if let Some(latest_fields) = req.latest_fields.as_ref() {
         affected_field_quantities.extend(
@@ -1687,6 +1746,9 @@ pub(crate) fn apply_current_live_snapshot(
             merge_latest_fields(&mut current.latest_fields, latest_fields);
         }
     }
+    if req.replace_latest_fields {
+        current.accepted_terminal_field_generation = req.field_generation;
+    }
     if req.clear_preview_cache {
         current.preview_cache = CachedPreviewFields::default();
     }
@@ -1698,12 +1760,14 @@ pub(crate) fn apply_current_live_snapshot(
     // This runs after a cache clear but before the explicit preview-field
     // batch. The latter is the terminal/cache-authoritative channel and must
     // win an equal-generation conflict with a carried active field.
-    if let Some(preview_field) = current
-        .live_state
-        .as_ref()
-        .and_then(|ls| ls.latest_step.preview_field.clone())
-    {
-        merge_cached_preview_fields(&mut current.preview_cache, vec![preview_field]);
+    if !req.replace_latest_fields {
+        if let Some(preview_field) = current
+            .live_state
+            .as_ref()
+            .and_then(|ls| ls.latest_step.preview_field.clone())
+        {
+            merge_cached_preview_fields(&mut current.preview_cache, vec![preview_field]);
+        }
     }
     if let Some(preview_fields) = req.preview_fields {
         merge_authoritative_cached_preview_fields(&mut current.preview_cache, preview_fields);
@@ -1896,6 +1960,18 @@ pub(crate) fn apply_current_live_field_frame(
     current: &mut SessionStateResponse,
     frame: CurrentLiveFieldFrameRequest,
 ) -> Result<(), ApiError> {
+    if matches!(
+        validate_terminal_field_replacement(
+            current,
+            frame.replace_latest_fields,
+            frame.latest_fields.as_ref(),
+            frame.field_generation.as_ref(),
+            frame.clear_preview_cache,
+        )?,
+        TerminalFieldReplacementAdmission::Duplicate
+    ) {
+        return Ok(());
+    }
     let mut affected_field_quantities = BTreeSet::new();
     if let Some(latest_fields) = frame.latest_fields.as_ref() {
         affected_field_quantities.extend(
@@ -1933,6 +2009,9 @@ pub(crate) fn apply_current_live_field_frame(
         } else {
             merge_latest_fields(&mut current.latest_fields, latest_fields);
         }
+    }
+    if frame.replace_latest_fields {
+        current.accepted_terminal_field_generation = frame.field_generation;
     }
     if frame.clear_preview_cache {
         current.preview_cache = CachedPreviewFields::default();
@@ -2187,6 +2266,7 @@ mod tests {
             latest_scalar_row: None,
             latest_fields: None,
             replace_latest_fields: false,
+            field_generation: None,
             preview_fields: None,
             clear_preview_cache: false,
             engine_log: None,
@@ -2370,6 +2450,7 @@ mod tests {
             latest_scalar_row: None,
             latest_fields: None,
             replace_latest_fields: false,
+            field_generation: None,
             preview_fields: None,
             clear_preview_cache: false,
             engine_log: None,
@@ -2423,6 +2504,7 @@ mod tests {
             latest_scalar_row: None,
             latest_fields: None,
             replace_latest_fields: false,
+            field_generation: None,
             preview_fields: None,
             clear_preview_cache: false,
             engine_log: None,
@@ -2657,6 +2739,7 @@ mod tests {
             latest_scalar_row: None,
             latest_fields: None,
             replace_latest_fields: false,
+            field_generation: None,
             preview_fields: None,
             clear_preview_cache: false,
             engine_log: None,
@@ -2735,6 +2818,7 @@ mod tests {
                 latest_scalar_row: None,
                 latest_fields: Some(stale_latest_fields),
                 replace_latest_fields: false,
+                field_generation: None,
                 preview_fields: None,
                 clear_preview_cache: false,
                 engine_log: None,
@@ -2769,6 +2853,7 @@ mod tests {
                 latest_scalar_row: None,
                 latest_fields: None,
                 replace_latest_fields: false,
+                field_generation: None,
                 preview_fields: None,
                 clear_preview_cache: false,
                 engine_log: None,
@@ -2804,6 +2889,7 @@ mod tests {
             latest_scalar_row: None,
             latest_fields: None,
             replace_latest_fields: false,
+            field_generation: None,
             preview_fields: None,
             clear_preview_cache: false,
             engine_log: None,
@@ -3253,6 +3339,7 @@ mod tests {
             latest_scalar_row: None,
             latest_fields: None,
             replace_latest_fields: false,
+            field_generation: None,
             preview_fields: None,
             clear_preview_cache: false,
             engine_log: None,
@@ -3525,6 +3612,7 @@ mod tests {
             latest_scalar_row: None,
             latest_fields: None,
             replace_latest_fields: false,
+            field_generation: None,
             preview_fields: None,
             clear_preview_cache: false,
             engine_log: None,
@@ -3747,6 +3835,7 @@ mod tests {
                 latest_scalar_row: None,
                 latest_fields: None,
                 replace_latest_fields: false,
+                field_generation: None,
                 preview_fields: None,
                 clear_preview_cache: false,
                 engine_log: None,
@@ -3938,6 +4027,7 @@ mod tests {
             latest_scalar_row: None,
             latest_fields: None,
             replace_latest_fields: false,
+            field_generation: None,
             preview_fields: None,
             clear_preview_cache: false,
             engine_log: None,
@@ -4068,6 +4158,7 @@ mod tests {
             latest_scalar_row: None,
             latest_fields: None,
             replace_latest_fields: false,
+            field_generation: None,
             preview_fields: Some(vec![terminal.clone()]),
             clear_preview_cache: false,
             engine_log: None,
@@ -4112,6 +4203,7 @@ mod tests {
                 session_id: "test-session".to_string(),
                 latest_fields: None,
                 replace_latest_fields: false,
+                field_generation: None,
                 preview_fields: Some(vec![terminal.clone()]),
                 clear_preview_cache: false,
             },
@@ -4135,6 +4227,7 @@ mod tests {
                 session_id: "test-session".to_string(),
                 latest_fields: None,
                 replace_latest_fields: false,
+                field_generation: None,
                 preview_fields: Some(vec![older]),
                 clear_preview_cache: false,
             },
@@ -4180,6 +4273,7 @@ mod tests {
                 session_id: "test-session".to_string(),
                 latest_fields: None,
                 replace_latest_fields: false,
+                field_generation: None,
                 preview_fields: Some(vec![terminal.clone()]),
                 clear_preview_cache: false,
             },
@@ -4200,6 +4294,7 @@ mod tests {
                 session_id: "test-session".to_string(),
                 latest_fields: None,
                 replace_latest_fields: false,
+                field_generation: None,
                 preview_fields: Some(vec![terminal]),
                 clear_preview_cache: false,
             },
@@ -4226,6 +4321,7 @@ mod tests {
                 session_id: "test-session".to_string(),
                 latest_fields: Some(genuinely_newer_latest),
                 replace_latest_fields: false,
+                field_generation: None,
                 preview_fields: None,
                 clear_preview_cache: false,
             },
@@ -4262,6 +4358,7 @@ mod tests {
                     session_id: "test-session".to_string(),
                     latest_fields: Some(latest_fields),
                     replace_latest_fields: false,
+                    field_generation: None,
                     preview_fields: None,
                     clear_preview_cache: false,
                 },
@@ -4308,6 +4405,8 @@ mod tests {
             serde_json::from_value(json!({
                 "session_id": "test-session",
                 "replace_latest_fields": true,
+                "field_generation": { "run_id": "test-run", "sequence": 11 },
+                "clear_preview_cache": true,
                 "latest_fields": {
                     "H_eff": {
                         "values": [[0.0, 1.0, 0.0]],
@@ -4352,12 +4451,127 @@ mod tests {
         let frame = serde_json::from_value(json!({
             "session_id": "test-session",
             "replace_latest_fields": true,
+            "field_generation": { "run_id": "test-run", "sequence": 11 },
+            "clear_preview_cache": true,
             "latest_fields": {}
         }))
         .expect("empty terminal field frame");
 
         apply_current_live_field_frame(&mut current, frame).expect("empty frame should apply");
         assert_eq!(current.latest_fields.len(), 0);
+    }
+
+    #[test]
+    fn replacement_without_a_complete_field_snapshot_is_rejected() {
+        let mut current = test_current_snapshot();
+        let frame = CurrentLiveFieldFrameRequest {
+            session_id: "test-session".to_string(),
+            latest_fields: None,
+            replace_latest_fields: true,
+            field_generation: None,
+            preview_fields: None,
+            clear_preview_cache: false,
+        };
+
+        let error = apply_current_live_field_frame(&mut current, frame)
+            .expect_err("replace without fields and cache clear must be invalid");
+        assert_eq!(error.status, axum::http::StatusCode::BAD_REQUEST);
+    }
+
+    #[test]
+    fn replacement_requires_preview_cache_clear() {
+        let mut current = test_current_snapshot();
+        let frame = CurrentLiveFieldFrameRequest {
+            session_id: "test-session".to_string(),
+            latest_fields: Some(LatestFields::default()),
+            replace_latest_fields: true,
+            field_generation: None,
+            preview_fields: None,
+            clear_preview_cache: false,
+        };
+
+        let error = apply_current_live_field_frame(&mut current, frame)
+            .expect_err("replace without cache clear must be invalid");
+        assert_eq!(error.status, axum::http::StatusCode::BAD_REQUEST);
+    }
+
+    #[test]
+    fn stale_terminal_field_generation_is_rejected_without_revision_churn() {
+        let mut current = test_current_snapshot();
+        let terminal_frame = |sequence: u64, value: f64| {
+            serde_json::from_value(json!({
+                "session_id": "test-session",
+                "replace_latest_fields": true,
+                "clear_preview_cache": true,
+                "field_generation": { "run_id": "run-1", "sequence": sequence },
+                "latest_fields": {
+                    "H_eff": {
+                        "values": [[value, 0.0, 0.0]],
+                        "layout": { "grid_cells": [1, 1, 1] }
+                    }
+                }
+            }))
+            .expect("terminal field frame")
+        };
+
+        apply_current_live_field_frame(&mut current, terminal_frame(2, 2.0))
+            .expect("newer generation should apply");
+        let catalog_revision = current.field_catalog_revision;
+        let sample_revision = current.field_samples_revision;
+        let error = apply_current_live_field_frame(&mut current, terminal_frame(1, 1.0))
+            .expect_err("older generation must be rejected");
+
+        assert_eq!(error.status, axum::http::StatusCode::CONFLICT);
+        assert_eq!(current.field_catalog_revision, catalog_revision);
+        assert_eq!(current.field_samples_revision, sample_revision);
+        assert_eq!(
+            current.latest_fields.get("H_eff").expect("newer H_eff")["values"][0][0],
+            serde_json::json!(2.0)
+        );
+    }
+
+    #[test]
+    fn terminal_snapshot_exposes_completed_runtime_and_final_fields_together() {
+        let mut current = test_current_snapshot();
+        let mut completed = live_state_with_magnetization(9, vec![0.0, 0.0, 1.0]);
+        completed.status = "completed".to_string();
+        completed.latest_step.finished = true;
+        let request: CurrentLiveSnapshotRequest = serde_json::from_value(json!({
+            "session_id": "test-session",
+            "live_state": completed,
+            "replace_latest_fields": true,
+            "field_generation": { "run_id": "run-atomic", "sequence": 3 },
+            "clear_preview_cache": true,
+            "latest_fields": {
+                "m": {
+                    "values": [[0.0, 0.0, 1.0]],
+                    "layout": { "grid_cells": [1, 1, 1], "spatial_kind": "grid" }
+                },
+                "H_eff": {
+                    "values": [[0.0, 1.0, 0.0]],
+                    "layout": { "grid_cells": [1, 1, 1], "spatial_kind": "grid" }
+                }
+            }
+        }))
+        .expect("terminal snapshot");
+
+        apply_current_live_snapshot(&mut current, request)
+            .expect("terminal snapshot should apply atomically");
+
+        assert_eq!(
+            current
+                .live_state
+                .as_ref()
+                .map(|state| state.status.as_str()),
+            Some("completed")
+        );
+        assert!(current
+            .live_state
+            .as_ref()
+            .is_some_and(|state| state.latest_step.finished));
+        assert!(current.latest_fields.get("m").is_some());
+        assert!(current.latest_fields.get("H_eff").is_some());
+        assert_eq!(current.preview_cache.iter().count(), 0);
     }
 
     #[test]
@@ -4436,6 +4650,7 @@ mod tests {
             latest_scalar_row: None,
             latest_fields: None,
             replace_latest_fields: false,
+            field_generation: None,
             preview_fields: None,
             clear_preview_cache: true,
             engine_log: None,

@@ -1,5 +1,5 @@
 use std::collections::{BTreeMap, VecDeque};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{mpsc, Arc, Mutex, OnceLock};
 use std::time::Instant;
 
@@ -28,6 +28,7 @@ use crate::types::*;
 /// Global feature flags resolved once at startup.
 /// Call `init_feature_flags()` early in `run_script_mode()` to populate.
 static FEATURE_FLAGS: OnceLock<FeatureFlags> = OnceLock::new();
+static NEXT_TERMINAL_FIELD_GENERATION_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 /// Initialize the global feature flags. Call once early in startup.
 pub(crate) fn init_feature_flags(flags: FeatureFlags) {
@@ -51,6 +52,7 @@ pub(crate) struct LocalLiveWorkspaceState {
     pub latest_scalar_row: Option<CurrentLiveScalarRow>,
     pub latest_fields: CurrentLiveLatestFields,
     pub replace_latest_fields: bool,
+    pub field_generation: Option<CurrentLiveFieldGeneration>,
     pub preview_fields: CurrentLivePreviewFieldCache,
     pub pending_preview_fields: CurrentLivePreviewFieldCache,
     pub superseded_pending_preview_fields: Vec<fullmag_runner::LivePreviewField>,
@@ -114,8 +116,10 @@ impl LocalLiveWorkspaceState {
             live_state: Some(live_state),
             mesh_workspace: self.mesh_workspace.clone(),
             latest_scalar_row: self.latest_scalar_row.clone(),
-            latest_fields: (!self.latest_fields.is_empty()).then_some(self.latest_fields.clone()),
+            latest_fields: (self.replace_latest_fields || !self.latest_fields.is_empty())
+                .then_some(self.latest_fields.clone()),
             replace_latest_fields: self.replace_latest_fields,
+            field_generation: self.field_generation.clone(),
             preview_fields,
             clear_preview_cache,
             engine_log: Some(self.engine_log.clone()),
@@ -147,6 +151,7 @@ impl LocalLiveWorkspaceState {
             && next_mesh_generation_id != self.published_fem_mesh_generation_id;
         let mut payload = self.build_publish_payload(include_mesh, None, clear_preview_cache);
         payload.replace_latest_fields = std::mem::take(&mut self.replace_latest_fields);
+        payload.field_generation = std::mem::take(&mut self.field_generation);
         if let Some(generation_id) = next_mesh_generation_id.filter(|_| include_mesh) {
             self.published_fem_mesh_generation_id = Some(generation_id);
         }
@@ -1064,6 +1069,11 @@ fn merge_pending_publish_payload(
         (should_merge_pending && slot.clear_preview_cache) || incoming.clear_preview_cache;
     let replace_latest_fields =
         (should_merge_pending && slot.replace_latest_fields) || incoming.replace_latest_fields;
+    let field_generation = incoming.field_generation.clone().or_else(|| {
+        should_merge_pending
+            .then(|| slot.field_generation.clone())
+            .flatten()
+    });
 
     // Always carry forward heavy payload fields (magnetization, fem_mesh)
     // from the slot even when `should_merge_pending` is false.  The CLI
@@ -1106,6 +1116,7 @@ fn merge_pending_publish_payload(
     slot.preview_fields = merged_preview_fields;
     slot.clear_preview_cache = clear_preview_cache;
     slot.replace_latest_fields = replace_latest_fields;
+    slot.field_generation = field_generation;
 }
 
 fn canonicalize_carried_active_preview(
@@ -1972,6 +1983,7 @@ mod tests {
                 latest_scalar_row: None,
                 latest_fields: Default::default(),
                 replace_latest_fields: false,
+                field_generation: None,
                 preview_fields: Default::default(),
                 pending_preview_fields: Default::default(),
                 superseded_pending_preview_fields: Vec::new(),
@@ -4465,14 +4477,18 @@ pub(crate) fn ingest_preview_fields_from_update(
     if cached_preview_fields.is_some() || preview_field.is_some() {
         state.advance_preview_cache_revision();
     }
+    let source_step = update.stats.step;
     if terminal_authoritative {
         state.latest_fields = CurrentLiveLatestFields::default();
         state.preview_fields.clear();
         state.pending_preview_fields.clear();
         state.replace_latest_fields = true;
+        state.field_generation = Some(CurrentLiveFieldGeneration {
+            run_id: state.run.run_id.clone(),
+            sequence: NEXT_TERMINAL_FIELD_GENERATION_SEQUENCE.fetch_add(1, Ordering::Relaxed) + 1,
+        });
         state.clear_preview_cache = true;
     }
-    let source_step = update.stats.step;
     if let Some(fields) = cached_preview_fields {
         for mut field in fields {
             align_preview_field_source_step(&mut field, source_step);

@@ -1029,6 +1029,7 @@ mod tests {
             latest_scalar_row: None,
             latest_fields: CurrentLiveLatestFields::default(),
             replace_latest_fields: false,
+            field_generation: None,
             preview_fields: CurrentLivePreviewFieldCache::default(),
             pending_preview_fields: CurrentLivePreviewFieldCache::default(),
             superseded_pending_preview_fields: Vec::new(),

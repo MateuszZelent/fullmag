@@ -6,6 +6,31 @@
 use crate::step_data::{GlobalQuantityRow, StepDiagnostics};
 use serde::{Deserialize, Serialize};
 
+/// Provenance retained when a materialized preview field is promoted to the
+/// canonical live-quantity transport.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct LiveQuantityFrameProvenance {
+    pub config_revision: u64,
+    pub source_step: u64,
+    pub source_revision: u64,
+    pub materialized_at_unix_ms: u64,
+    pub materialization_wall_time_ns: u64,
+}
+
+/// The spatial layout used to produce a live quantity frame.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct LiveQuantityFrameLayout {
+    pub original_grid: [u32; 3],
+    pub x_chosen_size: u32,
+    pub y_chosen_size: u32,
+    pub applied_x_chosen_size: u32,
+    pub applied_y_chosen_size: u32,
+    pub applied_layer_stride: u32,
+    pub auto_downscaled: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub auto_downscale_message: Option<String>,
+}
+
 /// A single live quantity frame attached to a step update.
 ///
 /// Replaces the old `LivePreviewField` approach with a generic,
@@ -25,6 +50,18 @@ pub struct LiveQuantityFrame {
     /// Per-cell boolean mask (same spatial dims as grid).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub active_mask: Option<Vec<bool>>,
+    /// Source and materialization provenance for a promoted preview field.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provenance: Option<LiveQuantityFrameProvenance>,
+    /// Spatial kind projected from the producer's field descriptor.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub spatial_kind: Option<String>,
+    /// Physical domain projected from the producer's field descriptor.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub quantity_domain: Option<String>,
+    /// Source and sampled-grid layout for this frame.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub layout: Option<LiveQuantityFrameLayout>,
 }
 
 /// V2 step update — cleanly separates diagnostics, scalar row, and spatial frames.

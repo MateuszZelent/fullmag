@@ -6542,6 +6542,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
             latest_scalar_row: None,
             latest_fields: CurrentLiveLatestFields::default(),
             replace_latest_fields: false,
+            field_generation: None,
             preview_fields: CurrentLivePreviewFieldCache::default(),
             pending_preview_fields: CurrentLivePreviewFieldCache::default(),
             superseded_pending_preview_fields: Vec::new(),
@@ -6851,6 +6852,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                 latest_scalar_row: None,
                 latest_fields: CurrentLiveLatestFields::default(),
                 replace_latest_fields: false,
+                field_generation: None,
                 preview_fields: CurrentLivePreviewFieldCache::default(),
                 pending_preview_fields: CurrentLivePreviewFieldCache::default(),
                 superseded_pending_preview_fields: Vec::new(),
@@ -7093,6 +7095,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
         latest_scalar_row: None,
         latest_fields: CurrentLiveLatestFields::default(),
         replace_latest_fields: false,
+        field_generation: None,
         preview_fields: CurrentLivePreviewFieldCache::default(),
         pending_preview_fields: CurrentLivePreviewFieldCache::default(),
         superseded_pending_preview_fields: Vec::new(),
@@ -10758,6 +10761,7 @@ pub(crate) fn prepare_live_workspace_for_ui(
             latest_scalar_row: None,
             latest_fields: CurrentLiveLatestFields::default(),
             replace_latest_fields: false,
+            field_generation: None,
             preview_fields: CurrentLivePreviewFieldCache::default(),
             pending_preview_fields: CurrentLivePreviewFieldCache::default(),
             superseded_pending_preview_fields: Vec::new(),
@@ -11370,6 +11374,7 @@ mod tests {
             latest_scalar_row: None,
             latest_fields: CurrentLiveLatestFields::default(),
             replace_latest_fields: false,
+            field_generation: None,
             preview_fields: CurrentLivePreviewFieldCache::default(),
             pending_preview_fields: CurrentLivePreviewFieldCache::default(),
             superseded_pending_preview_fields: Vec::new(),
@@ -13164,12 +13169,16 @@ mod tests {
             state.latest_fields.0["m"]["layout"]["spatial_kind"],
             serde_json::json!("grid")
         );
-        let payload = state.publish_delta();
+        let payload =
+            serde_json::to_value(state.publish_delta()).expect("terminal payload serializes");
+        assert_eq!(payload["replace_latest_fields"], serde_json::json!(true));
         assert_eq!(
-            serde_json::to_value(payload).expect("terminal payload serializes")
-                ["replace_latest_fields"],
-            serde_json::json!(true)
+            payload["field_generation"]["run_id"],
+            serde_json::json!("test-run")
         );
+        assert!(payload["field_generation"]["sequence"]
+            .as_u64()
+            .is_some_and(|sequence| sequence > 0));
     }
 
     #[test]

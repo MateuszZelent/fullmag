@@ -41,6 +41,8 @@ struct PersistedCurrentLiveSnapshot {
     quantities: Vec<crate::types::QuantityDescriptor>,
     fem_mesh: Option<fullmag_runner::FemMeshPayload>,
     latest_fields: crate::types::LatestFields,
+    #[serde(default)]
+    accepted_terminal_field_generation: Option<crate::types::CurrentLiveFieldGeneration>,
     artifacts: Vec<crate::types::ArtifactEntry>,
     display_selection: crate::types::CurrentDisplaySelection,
     #[serde(default)]
@@ -73,6 +75,7 @@ impl From<&SessionStateResponse> for PersistedCurrentLiveSnapshot {
             quantities: value.quantities.clone(),
             fem_mesh: value.fem_mesh.clone(),
             latest_fields: value.latest_fields.clone(),
+            accepted_terminal_field_generation: value.accepted_terminal_field_generation.clone(),
             artifacts: value.artifacts.clone(),
             display_selection: value.display_selection.clone(),
             preview_config: value.preview_config.clone(),
@@ -122,6 +125,7 @@ impl From<PersistedCurrentLiveSnapshot> for SessionStateResponse {
             field_catalog_revision: 0,
             field_samples_revision: 0,
             field_quantity_revisions: BTreeMap::new(),
+            accepted_terminal_field_generation: value.accepted_terminal_field_generation,
             stage_execution_revision: 0,
             simulation_preparation_revision: 0,
             region_realization_revisions: value.region_realization_revisions,

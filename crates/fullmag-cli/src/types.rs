@@ -896,6 +896,9 @@ pub(crate) struct CurrentLiveSnapshotPayload {
     /// Terminal field materialization replaces the complete latest-field set
     /// for its generation instead of merging into a prior run.
     pub replace_latest_fields: bool,
+    /// Identity used by the bridge to reject an out-of-order terminal field
+    /// generation without changing the current data-plane revisions.
+    pub field_generation: Option<CurrentLiveFieldGeneration>,
     pub preview_fields: Option<Vec<fullmag_runner::LivePreviewField>>,
     pub clear_preview_cache: bool,
     pub engine_log: Option<Vec<EngineLogEntry>>,
@@ -914,6 +917,12 @@ pub(crate) struct CurrentLiveSnapshotPayload {
     /// an independent event, not hidden inside `live_state.latest_step`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub fem_mesh: Option<fullmag_runner::FemMeshPayload>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub(crate) struct CurrentLiveFieldGeneration {
+    pub run_id: String,
+    pub sequence: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Default)]
@@ -998,6 +1007,8 @@ pub(crate) struct CurrentLiveSnapshotRequest<'a> {
     pub latest_fields: Option<&'a CurrentLiveLatestFields>,
     pub replace_latest_fields: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub field_generation: Option<&'a CurrentLiveFieldGeneration>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub preview_fields: Option<&'a [fullmag_runner::LivePreviewField]>,
     pub clear_preview_cache: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1059,6 +1070,8 @@ pub(crate) struct CurrentLiveFieldFrameRequest<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub latest_fields: Option<&'a CurrentLiveLatestFields>,
     pub replace_latest_fields: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub field_generation: Option<&'a CurrentLiveFieldGeneration>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub preview_fields: Option<&'a [fullmag_runner::LivePreviewField]>,
     pub clear_preview_cache: bool,

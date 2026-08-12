@@ -37,8 +37,9 @@ pub use reduction::QuantityReduction;
 pub use schema_version::SCHEMA_VERSION;
 pub use step_data::{GlobalQuantityRow, StepDiagnostics};
 pub use transport::{
-    build_wire_catalog, LiveQuantityFrame, QuantityCatalogResponse, QuantityDescriptorLive,
-    QuantityDescriptorWire, QuantityPreviewRequest, StepUpdateV2,
+    build_wire_catalog, LiveQuantityFrame, LiveQuantityFrameLayout, LiveQuantityFrameProvenance,
+    QuantityCatalogResponse, QuantityDescriptorLive, QuantityDescriptorWire,
+    QuantityPreviewRequest, StepUpdateV2,
 };
 
 // Provider trait and registry (QB-05)

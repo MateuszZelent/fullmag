@@ -1351,6 +1351,7 @@ pub(crate) fn sync_current_live_snapshot(
             latest_scalar_row: payload.latest_scalar_row.as_ref(),
             latest_fields: payload.latest_fields.as_ref(),
             replace_latest_fields: payload.replace_latest_fields,
+            field_generation: payload.field_generation.as_ref(),
             preview_fields: payload.preview_fields.as_deref(),
             clear_preview_cache: payload.clear_preview_cache,
             engine_log: payload.engine_log.as_deref(),
@@ -1434,6 +1435,7 @@ fn sync_current_live_field_frame(
             session_id,
             latest_fields: payload.latest_fields.as_ref(),
             replace_latest_fields: payload.replace_latest_fields,
+            field_generation: payload.field_generation.as_ref(),
             preview_fields: payload.preview_fields.as_deref(),
             clear_preview_cache: payload.clear_preview_cache,
         })
@@ -1454,20 +1456,26 @@ fn payload_routes_to_current_live_session_frame(payload: &CurrentLiveSnapshotPay
         || payload.run.is_some()
 }
 
-fn sync_current_live_delta_with<ScalarSync, SessionSync, RuntimeSync, FieldSync>(
+fn sync_current_live_delta_with<SnapshotSync, ScalarSync, SessionSync, RuntimeSync, FieldSync>(
     session_id: &str,
     payload: &CurrentLiveSnapshotPayload,
+    mut snapshot_sync: SnapshotSync,
     mut scalar_sync: ScalarSync,
     mut session_sync: SessionSync,
     mut runtime_sync: RuntimeSync,
     mut field_sync: FieldSync,
 ) -> Result<()>
 where
+    SnapshotSync: FnMut(&str, &CurrentLiveSnapshotPayload) -> Result<()>,
     ScalarSync: FnMut(&str, &CurrentLiveSnapshotPayload) -> Result<()>,
     SessionSync: FnMut(&str, &CurrentLiveSnapshotPayload) -> Result<()>,
     RuntimeSync: FnMut(&str, &CurrentLiveSnapshotPayload) -> Result<()>,
     FieldSync: FnMut(&str, &CurrentLiveSnapshotPayload) -> Result<()>,
 {
+    if payload.replace_latest_fields {
+        return snapshot_sync(session_id, payload);
+    }
+
     if payload.latest_scalar_row.is_some() {
         scalar_sync(session_id, payload)?;
     }
@@ -1502,6 +1510,7 @@ pub(crate) fn sync_current_live_delta(
     sync_current_live_delta_with(
         session_id,
         payload,
+        sync_current_live_snapshot,
         sync_current_live_scalar_frame,
         sync_current_live_session_frame,
         sync_current_live_runtime_frame,
@@ -1574,6 +1583,10 @@ mod live_delta_routing_tests {
             "session-1",
             &payload,
             |_, _| {
+                calls.borrow_mut().push("snapshot");
+                Ok(())
+            },
+            |_, _| {
                 calls.borrow_mut().push("scalar");
                 Ok(())
             },
@@ -1602,6 +1615,10 @@ mod live_delta_routing_tests {
             "session-1",
             &payload,
             |_, _| {
+                calls.borrow_mut().push("snapshot");
+                Ok(())
+            },
+            |_, _| {
                 calls.borrow_mut().push("scalar");
                 Err(anyhow::anyhow!("scalar failed"))
             },
@@ -1621,6 +1638,42 @@ mod live_delta_routing_tests {
         .unwrap_err();
         assert_eq!(*calls.borrow(), ["scalar"]);
         assert!(error.to_string().contains("scalar failed"));
+    }
+
+    #[test]
+    fn terminal_replacement_routes_as_one_atomic_snapshot() {
+        let mut payload = payload_with_scalar_session_and_runtime();
+        payload.replace_latest_fields = true;
+        payload.latest_fields = Some(Default::default());
+        let calls = RefCell::new(Vec::new());
+
+        sync_current_live_delta_with(
+            "session-1",
+            &payload,
+            |_, _| {
+                calls.borrow_mut().push("snapshot");
+                Ok(())
+            },
+            |_, _| {
+                calls.borrow_mut().push("scalar");
+                Ok(())
+            },
+            |_, _| {
+                calls.borrow_mut().push("session");
+                Ok(())
+            },
+            |_, _| {
+                calls.borrow_mut().push("runtime");
+                Ok(())
+            },
+            |_, _| {
+                calls.borrow_mut().push("field");
+                Ok(())
+            },
+        )
+        .unwrap();
+
+        assert_eq!(*calls.borrow(), ["snapshot"]);
     }
 }
 

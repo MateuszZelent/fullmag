@@ -7,7 +7,7 @@ pub mod handlers;
 pub mod middleware;
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;
 
 use axum::{
     extract::{Path, Query, State},

@@ -622,6 +622,10 @@ impl StepUpdateView {
                     .unwrap_or(3),
                 values: mag.clone(),
                 active_mask: None,
+                provenance: None,
+                spatial_kind: None,
+                quantity_domain: None,
+                layout: None,
             });
         }
 
@@ -692,6 +696,10 @@ pub(crate) struct SessionStateResponse {
     /// Per-quantity revisions used by data/fields freshness validators.
     #[serde(skip, default)]
     pub field_quantity_revisions: BTreeMap<String, u64>,
+    /// Last accepted complete terminal field generation from the internal
+    /// runner bridge. It is internal state, not a browser resource payload.
+    #[serde(skip, default)]
+    pub accepted_terminal_field_generation: Option<CurrentLiveFieldGeneration>,
     /// Revision for simulation stage execution state.
     #[serde(skip)]
     pub stage_execution_revision: u64,
@@ -1040,6 +1048,8 @@ pub(crate) struct CurrentLiveSnapshotRequest {
     #[serde(default)]
     pub replace_latest_fields: bool,
     #[serde(default)]
+    pub field_generation: Option<CurrentLiveFieldGeneration>,
+    #[serde(default)]
     pub preview_fields: Option<Vec<LivePreviewField>>,
     #[serde(default)]
     pub clear_preview_cache: bool,
@@ -1102,9 +1112,17 @@ pub(crate) struct CurrentLiveFieldFrameRequest {
     #[serde(default)]
     pub replace_latest_fields: bool,
     #[serde(default)]
+    pub field_generation: Option<CurrentLiveFieldGeneration>,
+    #[serde(default)]
     pub preview_fields: Option<Vec<LivePreviewField>>,
     #[serde(default)]
     pub clear_preview_cache: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub(crate) struct CurrentLiveFieldGeneration {
+    pub run_id: String,
+    pub sequence: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -1613,6 +1631,7 @@ mod tests {
             field_catalog_revision: 0,
             field_samples_revision: 0,
             field_quantity_revisions: BTreeMap::new(),
+            accepted_terminal_field_generation: None,
             stage_execution_revision: 0,
             simulation_preparation_revision: 0,
             region_realization_revisions: fullmag_authoring::RegionRealizationRevisions::default(),

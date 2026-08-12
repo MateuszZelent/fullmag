@@ -632,7 +632,7 @@ fn sample_scoped_mesh_statistics() -> serde_json::Value {
 }
 
 /// Minimal `AppState` with no active live session.
-fn test_app_state() -> Arc<AppState> {
+pub(crate) fn test_app_state() -> Arc<AppState> {
     let (control_events_tx, _rx) = watch::channel(0u64);
 
     Arc::new(AppState {
@@ -739,6 +739,7 @@ async fn test_app_state_with_live_session() -> Arc<AppState> {
         field_catalog_revision: 0,
         field_samples_revision: 0,
         field_quantity_revisions: BTreeMap::new(),
+        accepted_terminal_field_generation: None,
         stage_execution_revision: 0,
         simulation_preparation_revision: 0,
         region_realization_revisions: fullmag_authoring::RegionRealizationRevisions::default(),
@@ -1702,6 +1703,7 @@ async fn test_router_with_session_state_and_artifact_dir() -> (axum::Router, Arc
         field_catalog_revision: 0,
         field_samples_revision: 0,
         field_quantity_revisions: BTreeMap::new(),
+        accepted_terminal_field_generation: None,
         stage_execution_revision: 0,
         simulation_preparation_revision: 0,
         region_realization_revisions: fullmag_authoring::RegionRealizationRevisions::default(),
@@ -1861,6 +1863,7 @@ async fn test_router_with_session_store_state() -> (axum::Router, Arc<AppState>,
         field_catalog_revision: 0,
         field_samples_revision: 0,
         field_quantity_revisions: BTreeMap::new(),
+        accepted_terminal_field_generation: None,
         stage_execution_revision: 0,
         simulation_preparation_revision: 0,
         region_realization_revisions: fullmag_authoring::RegionRealizationRevisions::default(),
@@ -4359,6 +4362,7 @@ async fn field_meta_and_vector_resolve_active_live_preview_field_after_snapshot_
                 latest_scalar_row: None,
                 latest_fields: None,
                 replace_latest_fields: false,
+                field_generation: None,
                 preview_fields: None,
                 clear_preview_cache: false,
                 engine_log: None,
@@ -4429,8 +4433,12 @@ async fn terminal_field_frame_removes_absent_quantity_from_field_api() {
                     .expect("terminal H_eff field"),
                 ),
                 replace_latest_fields: true,
+                field_generation: Some(crate::types::CurrentLiveFieldGeneration {
+                    run_id: "test-run".to_string(),
+                    sequence: 1,
+                }),
                 preview_fields: None,
-                clear_preview_cache: false,
+                clear_preview_cache: true,
             },
         )
         .expect("terminal field frame should replace the old generation");
@@ -4536,6 +4544,7 @@ async fn field_frame_terminal_cache_wins_equal_generation_in_vector_route_body()
                 session_id,
                 latest_fields: None,
                 replace_latest_fields: false,
+                field_generation: None,
                 preview_fields: Some(vec![terminal_preview]),
                 clear_preview_cache: false,
             },
@@ -8811,6 +8820,7 @@ async fn mesh_build_snapshot_for_current_scene_clears_mesh_dirty_tags() {
                 latest_scalar_row: None,
                 latest_fields: None,
                 replace_latest_fields: false,
+                field_generation: None,
                 preview_fields: None,
                 clear_preview_cache: false,
                 engine_log: None,
@@ -8859,6 +8869,7 @@ async fn fem_mesh_snapshot_for_current_scene_clears_mesh_dirty_tags() {
                 latest_scalar_row: None,
                 latest_fields: None,
                 replace_latest_fields: false,
+                field_generation: None,
                 preview_fields: None,
                 clear_preview_cache: false,
                 engine_log: None,
@@ -8914,6 +8925,7 @@ async fn unchanged_fem_mesh_snapshot_keeps_later_dirty_scene_dirty() {
                 latest_scalar_row: None,
                 latest_fields: None,
                 replace_latest_fields: false,
+                field_generation: None,
                 preview_fields: None,
                 clear_preview_cache: false,
                 engine_log: None,
@@ -8949,6 +8961,7 @@ async fn unchanged_fem_mesh_snapshot_keeps_later_dirty_scene_dirty() {
                 latest_scalar_row: None,
                 latest_fields: None,
                 replace_latest_fields: false,
+                field_generation: None,
                 preview_fields: None,
                 clear_preview_cache: false,
                 engine_log: None,
@@ -28446,6 +28459,7 @@ async fn v2_magnetization_meta_vector_revision_and_etag_follow_provenance_field_
                 session_id,
                 latest_fields: Some(latest_fields),
                 replace_latest_fields: false,
+                field_generation: None,
                 preview_fields: None,
                 clear_preview_cache: false,
             },
@@ -28547,6 +28561,7 @@ async fn v2_magnetization_meta_vector_revision_and_etag_follow_provenance_field_
                 session_id,
                 latest_fields: Some(latest_fields),
                 replace_latest_fields: false,
+                field_generation: None,
                 preview_fields: None,
                 clear_preview_cache: false,
             },
@@ -33876,8 +33891,7 @@ async fn current_transport_api_preserves_typed_closed_geometry_source_cuts() {
     assert_eq!(status, StatusCode::OK, "{committed}");
     assert_eq!(committed["resource"], resource);
     assert_eq!(
-        committed["committed_scene"]["current_transports"][0]
-            ["structured_current_closure"],
+        committed["committed_scene"]["current_transports"][0]["structured_current_closure"],
         resource["structured_current_closure"]
     );
 }
