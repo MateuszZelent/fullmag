@@ -12,6 +12,16 @@ This file is a strict GPU-focused projection of
 archived under `old/` and must not be used as current status when it conflicts
 with the readiness matrix.
 
+### C1 source-state refresh (2026-08-11)
+
+The dirty recovery snapshot now contains the public physical
+`BiasFieldSweep`, ABI v18 native MFEM `A_qq` ownership and a source-level GPU
+two-pass window certificate. None is fresh managed GPU execution. The active
+bundle does not match the dirty ABI-v18 snapshot, so both periodic-airbox GPU
+cells remain `source_visible / unvalidated` with null `executable_scope` and
+`validated_scope`. The 2026-08-03 section below is historical evidence only;
+its device and parity numbers must not be used as current revalidation.
+
 ## Current GPU status
 
 All non-null `validated_scope` and `executable_scope` references use the
@@ -28,7 +38,7 @@ scope_catalog_path = docs/plans/active/fd_sovler_masterplan/25_frequency_domain_
 | `modal_gpu_k0_none_macrospin_larmor` | `executable` | `physics_validated` | `modal_gpu_k0_none_macrospin_larmor.validation` | K0-1 no-demag macrospin/Larmor field sweep using `gpu_dense_k0_macrospin_modal_eigen`; precision=`double`. | Real narrow GPU modal slice exists through the current emitted GPU modal validation lane. |
 | `modal_gpu_k0_none_general_modal` | `source_visible` | `unvalidated` | `null` | Source evidence only. | The macrospin slice does not promote a general GPU modal eigensolver. |
 | `modal_gpu_k0_periodic_airbox_dense_probe` | `source_visible` | `unvalidated` | `null` | Bounded shared-domain lane: `k0_poisson_airbox_gpu_petsc_slepc`; the legacy `gpu_dense_contract_eigensolver` is validation-only. | Matrix status remains unvalidated; see the historical bounded evidence below. |
-| `modal_gpu_k0_periodic_airbox_scalable` | `source_visible` | `unvalidated` | `null` | Source and bounded managed GPU evidence only. | Matrix status remains unvalidated because matrix-free convergence, large-problem scaling, and the full DOD-01..DOD-14 release record remain open. |
+| `modal_gpu_k0_periodic_airbox_scalable` | `source_visible` | `unvalidated` | `null` | Source-visible PETSc/SLEPc CUDA and two-pass window contracts; historical managed evidence is stale for the current snapshot. | Matrix status remains unvalidated because ABI-matched managed execution, persistence/residency, matrix-free convergence, large-problem scaling, and the full DOD-01..DOD-14 release record remain open. |
 | `modal_gpu_nonzero_k_none` | `absent` | `unvalidated` | `null` | None. | Nonzero-k Floquet GPU modal remains unavailable. |
 | `modal_gpu_nonzero_k_floquet_airbox` | `absent` | `unvalidated` | `null` | None. | Dynamic demag-k GPU modal remains unavailable. |
 | `driven_gpu_k0_none` | `executable` | `unvalidated` | `null` | Executable scope `driven_gpu_k0_none.executable`: bounded gamma/free-boundary and k0 static-periodic GPU operator-host Krylov slices; not `gpu_device_krylov`. | This is driven response, not modal eigensolve; no full device-resident Krylov loop is proven. |

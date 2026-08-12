@@ -2,7 +2,7 @@
 
 - Status: szkic resetu backends-first
 - Właściciele: Fullmag core
-- Ostatnia aktualizacja: 2026-08-09
+- Ostatnia aktualizacja: 2026-08-11
 - Zakres: własność backendów solverów, natywna implementacja kompilowana,
   orkiestracja Rust runnera, bramki walidacyjne i kolejność migracji po
   resecie układu źródeł z 2026-06-03.
@@ -358,9 +358,25 @@ Wymagana docelowa realizacja CPU użyje MFEM z PETSc/SLEPc: pełny descriptor
 albo certyfikowany Schur `MatShell` i Krylov-Schur/Arnoldi. Shifted systems
 będą należeć do PETSc/hypre. Wymagana docelowa realizacja GPU użyje tych samych
 kontraktów przez PETSc CUDA vectors, device-capable `MatShell`/`MatNest`, hypre
-device i SLEPc na urządzeniu. Aktualna K0 Poisson-airbox modal path pozostaje
-`contract_only` i `unqualified`; powyższe zdania są wymaganiami architektury,
-nie opisem działającej produkcyjnej realizacji.
+device i SLEPc na urządzeniu.
+
+Aktualny snapshot K0 Poisson-airbox ma publiczny physics-owned
+`BiasFieldSweep` w Python/`ProblemIR`/plannerze/runnerze, ABI v18 oraz
+natywnego właściciela MFEM `A_qq`:
+`backends/fem/cpu/frequency_domain/operators/poisson_airbox_shared_domain.cpp::
+assemble_native_magnetic_a_qq`. Descriptor ABI celowo nie przenosi
+preassembled `A_qq`. Natywny producent obejmuje P1 `tet4|prism6`, jednorodne
+skalarne `A_ex` i równoległy static-field restoring block; anisotropy/DMI są
+`unavailable`, a dynamiczny demag pozostaje w blokach mieszanych/Schur.
+CPU i GPU window certificates są widoczne w źródle, ale oba lane'y produkcyjne
+pozostają `source_visible / unvalidated` z null `executable_scope` i
+`validated_scope`. Stary managed bundle nie odpowiada dirty ABI-v18 snapshotowi,
+więc nie dowodzi wykonania, residency ani fizyki. To stan implementacji
+źródłowej, nie produkcyjna kwalifikacja.
+
+ADR 0023 zamraża `BiasFieldSweep` jako physical input, Kittel/FMR jako
+postsolve analysis oraz Results jako widok nad artefaktami `modal_eigen` i
+`driven_response`, nigdy jako trzeci solver.
 
 Runner przekazuje deskryptor okna i pojedynczy wybrany engine, odbiera wyniki,
 mapuje progress oraz publikuje artefakty i proweniencję. Nie może wybierać

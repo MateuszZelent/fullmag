@@ -627,9 +627,9 @@ Current source and canonical physics/status documents identify blockers that
 prevent broad FEM frequency-domain production qualification, including:
 
 - real shared-domain Poisson-airbox modal assembly is not yet qualified;
-- the current Kittel path allows expected frequency and validation `M_eff` to
-  influence assembly, targeting, selection or solver certification as detailed
-  in chapter 15;
+- source now separates physical `BiasFieldSweepIR` from postsolve Kittel
+  metadata and fails closed on oracle influence, but fresh managed
+  negative-control and K0-3 convergence evidence is still missing;
 - real-PETSc imaginary-axis target representation is not yet broadly
   qualified;
 - general GPU modal device Krylov and device-resident driven Krylov are not
