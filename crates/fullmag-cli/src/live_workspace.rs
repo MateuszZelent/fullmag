@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{mpsc, Arc, Mutex, OnceLock};
 use std::time::Instant;
@@ -1293,19 +1293,24 @@ pub(crate) struct CurrentLivePublisher {
 #[derive(Debug, Default)]
 struct PendingScalarRows {
     rows: VecDeque<PendingScalarRow>,
-    latest_sequence: Option<ScalarSequenceKey>,
-    latest_seen_step: Option<u64>,
-    latest_terminal_step: Option<u64>,
+    latest_by_sequence: HashMap<ScalarSequenceKey, ScalarSequenceCursor>,
     next_row_id: u64,
 }
 
 #[derive(Debug)]
 struct PendingScalarRow {
     id: u64,
+    sequence: ScalarSequenceKey,
     row: CurrentLiveScalarRow,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Default)]
+struct ScalarSequenceCursor {
+    latest_seen_step: Option<u64>,
+    latest_terminal_step: Option<u64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct ScalarSequenceKey {
     run_id: String,
     stage_index: Option<usize>,
@@ -1320,29 +1325,26 @@ impl PendingScalarRows {
         finished: bool,
         gate: &mut LiveTelemetryPublishGate,
     ) {
-        if self.latest_sequence.as_ref() != Some(&sequence) {
-            self.latest_sequence = Some(sequence);
-            self.latest_seen_step = None;
-            self.latest_terminal_step = None;
-        }
-        let same_step = self.latest_seen_step == Some(row.step);
-        if self.latest_seen_step.is_some_and(|step| row.step < step)
-            || (same_step && (!finished || self.latest_terminal_step == Some(row.step)))
         {
-            return;
-        }
-        self.latest_seen_step = Some(row.step);
-        if finished {
-            self.latest_terminal_step = Some(row.step);
+            let cursor = self.latest_by_sequence.entry(sequence.clone()).or_default();
+            let same_step = cursor.latest_seen_step == Some(row.step);
+            if cursor.latest_seen_step.is_some_and(|step| row.step < step)
+                || (same_step && (!finished || cursor.latest_terminal_step == Some(row.step)))
+            {
+                return;
+            }
+            cursor.latest_seen_step = Some(row.step);
+            if finished {
+                cursor.latest_terminal_step = Some(row.step);
+            }
         }
         if gate.should_publish_scalar(row.step, finished) {
             gate.last_scalar_publish_at = Some(Instant::now());
             if finished {
-                if let Some(pending) = self
-                    .rows
-                    .iter_mut()
-                    .rev()
-                    .find(|pending| pending.row.step == row.step)
+                if let Some(pending) =
+                    self.rows.iter_mut().rev().find(|pending| {
+                        pending.sequence == sequence && pending.row.step == row.step
+                    })
                 {
                     pending.id = self.next_row_id;
                     self.next_row_id = self.next_row_id.wrapping_add(1);
@@ -1352,7 +1354,7 @@ impl PendingScalarRows {
             }
             let id = self.next_row_id;
             self.next_row_id = self.next_row_id.wrapping_add(1);
-            self.rows.push_back(PendingScalarRow { id, row });
+            self.rows.push_back(PendingScalarRow { id, sequence, row });
         }
     }
 }
@@ -2297,6 +2299,99 @@ mod tests {
             pending.rows.len(),
             1,
             "stale and terminal retry do not duplicate"
+        );
+    }
+
+    #[test]
+    fn pending_terminal_rows_keep_same_local_step_from_distinct_sequences() {
+        let mut pending = PendingScalarRows::default();
+        let mut gate = LiveTelemetryPublishGate::default();
+        let first_stage = ScalarSequenceKey {
+            run_id: "run-1".to_string(),
+            stage_index: Some(0),
+            stage_id: Some("relax".to_string()),
+        };
+        let second_stage = ScalarSequenceKey {
+            run_id: "run-1".to_string(),
+            stage_index: Some(1),
+            stage_id: Some("evolve".to_string()),
+        };
+        let mut first = scalar_row(4);
+        first.time = 4.0e-13;
+        let mut second = scalar_row(4);
+        second.time = 8.0e-13;
+
+        pending.enqueue_if_new(first_stage.clone(), first, true, &mut gate);
+        pending.enqueue_if_new(second_stage.clone(), second, true, &mut gate);
+
+        assert_eq!(pending.rows.len(), 2);
+        assert_eq!(pending.rows[0].sequence, first_stage);
+        assert_eq!(pending.rows[1].sequence, second_stage);
+        assert_eq!(
+            pending
+                .rows
+                .iter()
+                .map(|entry| entry.row.time)
+                .collect::<Vec<_>>(),
+            vec![4.0e-13, 8.0e-13],
+        );
+    }
+
+    #[test]
+    fn in_flight_stage_one_publish_cannot_remove_same_step_from_stage_two() {
+        let pending_rows = Arc::new(Mutex::new(PendingScalarRows::default()));
+        let gate = Arc::new(Mutex::new(LiveTelemetryPublishGate::default()));
+        let stage_one = ScalarSequenceKey {
+            run_id: "run-1".to_string(),
+            stage_index: Some(0),
+            stage_id: Some("relax".to_string()),
+        };
+        let stage_two = ScalarSequenceKey {
+            run_id: "run-1".to_string(),
+            stage_index: Some(1),
+            stage_id: Some("evolve".to_string()),
+        };
+        let mut first = scalar_row(4);
+        first.time = 4.0e-13;
+        pending_rows.lock().unwrap().enqueue_if_new(
+            stage_one,
+            first,
+            true,
+            &mut gate.lock().unwrap(),
+        );
+
+        let pending_for_sink = Arc::clone(&pending_rows);
+        let gate_for_sink = Arc::clone(&gate);
+        let stage_two_for_sink = stage_two.clone();
+        let inserted = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let inserted_for_sink = Arc::clone(&inserted);
+        let sink: LivePublishSink = Arc::new(move |_, payload| {
+            let row = payload.latest_scalar_row.as_ref().expect("scalar row");
+            if !inserted_for_sink.swap(true, std::sync::atomic::Ordering::AcqRel) {
+                let mut second = scalar_row(4);
+                second.time = 8.0e-13;
+                pending_for_sink.lock().unwrap().enqueue_if_new(
+                    stage_two_for_sink.clone(),
+                    second,
+                    true,
+                    &mut gate_for_sink.lock().unwrap(),
+                );
+                return Ok(());
+            }
+            assert_eq!(row.time, 8.0e-13);
+            Err(anyhow::anyhow!("leave stage two row queued for retry"))
+        });
+
+        assert!(publish_pending_scalar_rows("run-1", &pending_rows, &sink).is_err());
+        let pending = pending_rows.lock().unwrap();
+        assert_eq!(pending.rows.len(), 1);
+        assert_eq!(
+            pending.rows.front().map(|entry| &entry.sequence),
+            Some(&stage_two)
+        );
+        assert_eq!(
+            pending.rows.front().map(|entry| entry.row.time),
+            Some(8.0e-13)
         );
     }
 
