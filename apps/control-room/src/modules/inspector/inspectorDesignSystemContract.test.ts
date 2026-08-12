@@ -43,6 +43,14 @@ describe("Inspector design-system reference contract", () => {
     );
   });
 
+  it("contains wide scientific content inside the Inspector shell", () => {
+    const inspector = read("src/design/styles/inspector.css");
+
+    expect(inspector).toMatch(
+      /\.fm-inspector\s*\{[\s\S]*?min-width: 0;[\s\S]*?overflow: hidden;/,
+    );
+  });
+
   it("keeps the reference overview free of nested card sections", () => {
     const overview = read(
       "src/modules/inspector/panels/ObjectVisualizationOverview.tsx",

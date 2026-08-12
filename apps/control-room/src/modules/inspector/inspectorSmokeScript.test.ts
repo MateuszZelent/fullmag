@@ -20,9 +20,15 @@ describe("explorer Inspector browser smoke script", () => {
       "model:object:film:visualization:mode-visualization",
     );
     expect(smokeScript).toContain("data-inspector-owner");
+    expect(smokeScript).toContain("results:run:inspector-run");
+    expect(smokeScript).toContain("result_manifest");
+    expect(smokeScript).not.toContain('expandInspectorNode(page, "results:frequency-domain"');
     expect(smokeScript).toContain("ArrowRight");
-    expect(smokeScript).toContain("Inspect response point 7");
-    expect(smokeScript).toContain("Open sample 0 mode 2");
+    expect(smokeScript).toContain("Plot this response field with phase-rotated real display");
+    expect(smokeScript).toContain("response-fields");
+    expect(smokeScript).toContain("Mode visualization Plot 3D action is disabled");
+    expect(smokeScript).toContain("physics-first-frequency-points-416.png");
+    expect(smokeScript).toContain("physics-first-response-fields-416.png");
     expect(smokeScript).toContain('press("Space")');
     expect(smokeScript).toContain('press("Enter")');
     expect(smokeScript).toContain("isContextLost");

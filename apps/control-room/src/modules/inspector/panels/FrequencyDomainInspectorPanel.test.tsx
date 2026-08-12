@@ -4761,4 +4761,52 @@ describe("FrequencyDomainInspectorPanel", () => {
       expect(detail.visualization).not.toContain("unknown node kind");
     },
   );
+
+  it.each([
+    ["results.dynamics.root", "Dynamics Results"],
+    ["results.resonance.root", "Resonance & FMR"],
+    ["results.resonance.modal.spectrum", "Eigenfrequency Spectrum"],
+    ["results.resonance.modal.coupling", "RF Coupling / FMR Activity"],
+    ["results.resonance.driven.spectrum", "Driven Response Spectrum"],
+    ["results.resonance.driven.frequency_points", "Response Frequency Points"],
+    ["results.resonance.driven.fields", "Response Fields"],
+    ["results.dispersion.root", "Dispersion & k-resolved Response"],
+    ["results.dispersion.modal.relation", "Dispersion Relation"],
+    ["results.dispersion.driven.response_map", "Spectral Response Map · A(k,f)"],
+    ["results.analysis_views.definition", "Analysis View"],
+    ["results.derived_values.definition", "Derived Value"],
+    ["results.tables.definition", "Table Definition"],
+    ["results.exports.definition", "Export Definition"],
+  ] as const)("names physics-first result %s as %s", (kind, title) => {
+    expect(resolveFrequencyDomainNodeDetail({
+      kind,
+      label: null,
+      moduleSource: "explorer",
+      nodeId: `test:${kind}`,
+      objectId: null,
+      ref: { kind, nodeId: `test:${kind}`, type: "frequency-domain" },
+    }).title).toBe(title);
+  });
+
+  it("shows field resources rather than the frequency-point table for Response Fields", () => {
+    const html = renderToStaticMarkup(
+      <FrequencyDomainInspectorPanel
+        selection={{
+          kind: "results.resonance.driven.fields",
+          label: "Response Fields",
+          moduleSource: "explorer",
+          nodeId: "results:test:response-fields",
+          objectId: null,
+          ref: {
+            kind: "results.resonance.driven.fields",
+            nodeId: "results:test:response-fields",
+            type: "frequency-domain",
+          },
+        }}
+      />,
+    );
+
+    expect(html).toContain("Response Field Resources");
+    expect(html).not.toContain("Response Frequency Points Table");
+  });
 });

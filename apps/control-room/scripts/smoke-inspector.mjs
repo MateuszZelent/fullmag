@@ -68,8 +68,9 @@ try {
       `Inspector did not mount. Fixture requests: ${JSON.stringify(fixture.requests.slice(-40))}. Browser errors: ${JSON.stringify(consoleErrors)}. Body text: ${JSON.stringify(bodyText?.slice(0, 3000))}. ${error}`,
     );
   }
+  const screenshotFiles = [];
   await qualifyExplorerKeyboardNavigation(page);
-  await qualifyInspectorRoutingMatrix(page, inspector);
+  await qualifyInspectorRoutingMatrix(page, inspector, screenshotFiles);
 
   const visualizationNode = page
     .locator('[role="treeitem"]')
@@ -188,7 +189,6 @@ try {
     (await page.getByRole("dialog", { name: "Airbox visualization diagnostic" }).count()) === 0,
     "Visible must not open the removed Airbox diagnostic dialog.",
   );
-  const screenshotFiles = [];
   for (const width of [360, 416, 560]) {
     const handleBox = await resizeHandle.boundingBox();
     const panelBox = await panel.boundingBox();
@@ -534,7 +534,7 @@ try {
   await browser.close();
 }
 
-async function qualifyInspectorRoutingMatrix(page, inspector) {
+async function qualifyInspectorRoutingMatrix(page, inspector, screenshotFiles) {
   await selectInspectorNode(page, inspector, "model:airbox:visualization", {
     owner: "airbox-visualization",
     label: "Airbox",
@@ -552,54 +552,66 @@ async function qualifyInspectorRoutingMatrix(page, inspector) {
     .locator(".fm-explorer .fm-tabs-trigger")
     .filter({ hasText: /^Results$/ });
   await resultsTab.click();
-  await expandInspectorNode(page, "results:root");
-  await expandInspectorNode(page, "results:frequency-domain");
-  await expandInspectorNode(page, "results:frequency-domain:fmr");
+  const resultRootId = "results:run:inspector-run";
+  const resonanceRootId = `${resultRootId}:resonance`;
+  const drivenStageId = `${resonanceRootId}:stage:frequency-response:driven_response`;
+  await expandInspectorNode(page, resultRootId);
+  await expandInspectorNode(page, resonanceRootId);
+  await expandInspectorNode(page, drivenStageId);
 
   const responseSweepNode = page.locator(
-    '[data-node-id="results:frequency-domain:fmr:response-sweep"]',
+    `[data-node-id="${drivenStageId}:frequency-points"]`,
   );
   await responseSweepNode.waitFor({ state: "visible", timeout: 60_000 });
   await responseSweepNode.click();
-  const responseOwner = await inspector.getAttribute("data-inspector-owner");
-  const inspectResponseButton = inspector.getByRole("button", {
-    name: "Inspect response point 7",
-  });
-  await inspectResponseButton.focus();
-  await inspectResponseButton.press("Space");
   await page.waitForFunction(
-    (previousOwner) =>
-      document.querySelector(".fm-inspector")?.getAttribute("data-inspector-owner") !== previousOwner,
-    responseOwner,
+    () =>
+      document.querySelector(".fm-inspector")?.getAttribute("data-inspector-owner") ===
+      "frequency-domain-results-resonance-driven-frequency_points",
     { timeout: 60_000 },
   );
-
-  await expandInspectorNode(page, "results:eigen");
-  await expandInspectorNode(page, "results:eigen:branches");
-  const branchNode = page.locator(
-    '[data-node-id="results:eigen:branches:branch:branch-0"]',
-  );
-  await branchNode.waitFor({ state: "visible", timeout: 60_000 });
-  await branchNode.click();
-  const branchOwner = await inspector.getAttribute("data-inspector-owner");
-  const openBranchModeButton = inspector.getByRole("button", {
-    name: "Open sample 0 mode 2",
+  await inspector
+    .getByRole("heading", { exact: true, level: 2, name: "Response Frequency Points" })
+    .waitFor();
+  const frequencyPointsScreenshot = "physics-first-frequency-points-416.png";
+  await inspector.screenshot({ path: resolve(outputDir, frequencyPointsScreenshot) });
+  screenshotFiles.push(frequencyPointsScreenshot);
+  const responsePointPlotButton = inspector.getByRole("button", {
+    name: /Plot this response field with phase-rotated real display at 12\.5 GHz/,
   });
-  await openBranchModeButton.focus();
-  await openBranchModeButton.press("Enter");
+  await responsePointPlotButton.focus();
+  await responsePointPlotButton.press("Space");
+  const inspectorViewport = inspector.locator(".fm-scroll-area__viewport");
+  await inspectorViewport.evaluate((element) => element.scrollTo({ top: element.scrollHeight }));
+  assert(
+    await inspectorViewport.evaluate((element) => element.scrollTop > 0),
+    "Inspector fixture did not create a non-zero scroll position.",
+  );
+
+  const responseFieldsNode = page.locator(
+    `[data-node-id="${drivenStageId}:response-fields"]`,
+  );
+  await responseFieldsNode.waitFor({ state: "visible", timeout: 60_000 });
+  await responseFieldsNode.click();
   await page.waitForFunction(
-    (previousOwner) =>
-      document.querySelector(".fm-inspector")?.getAttribute("data-inspector-owner") !== previousOwner,
-    branchOwner,
+    () =>
+      document.querySelector(".fm-inspector")?.getAttribute("data-inspector-owner") ===
+      "frequency-domain-results-resonance-driven-fields",
     { timeout: 60_000 },
   );
-
-  const modalSpectrumNode = page.locator(
-    '[data-node-id="results:frequency-domain:fmr:modal-spectrum"]',
+  await inspector
+    .getByRole("heading", { exact: true, level: 2, name: "Response Fields" })
+    .waitFor();
+  assert(
+    await inspectorViewport.evaluate((element) => element.scrollTop === 0),
+    "Inspector did not reset scroll position after selecting a new physics result.",
   );
-  await modalSpectrumNode.waitFor({ state: "visible", timeout: 60_000 });
-  await modalSpectrumNode.click();
-  const plotButton = inspector.getByRole("button", { name: /Plot .*3D/ }).first();
+  const responseFieldsScreenshot = "physics-first-response-fields-416.png";
+  await inspector.screenshot({ path: resolve(outputDir, responseFieldsScreenshot) });
+  screenshotFiles.push(responseFieldsScreenshot);
+  const plotButton = inspector.getByRole("button", {
+    name: /Plot this response field with phase-rotated real display at 12\.5 GHz/,
+  });
   await plotButton.waitFor({ state: "visible", timeout: 60_000 });
   assert(await plotButton.isEnabled(), "Mode visualization Plot 3D action is disabled.");
   await plotButton.focus();
@@ -913,7 +925,19 @@ async function installInspectorFixtureApi(page, fixture) {
     if (path === "/v2/sessions/current/simulation/stages/execution") return fulfillJson(route, { stages: [], stage_statuses: [], total_stages: 0, revision: fixture.revision });
     if (path === "/v2/sessions/current/simulation/solver/status") return fulfillJson(route, { can_accept_commands: true, is_busy: false, runtime_state: "idle", revision: fixture.revision });
     if (path === "/v2/sessions/current/simulation/commands") return fulfillJson(route, { commands: [], latest_completed: null, revision: fixture.revision });
-    if (path === "/v2/sessions/current/simulation/runs/current") return fulfillJson(route, { status: "idle", revision: fixture.revision });
+    if (path === "/v2/sessions/current/simulation/runs/current") return fulfillJson(route, {
+      artifact_dir: "/tmp/inspector-run",
+      requested_backend: "fem",
+      requested_device: "cpu",
+      requested_mode: "frequency-domain",
+      requested_precision: "double",
+      revision: fixture.revision,
+      run_id: "inspector-run",
+      session_id: "inspector-session",
+      started_at: "2026-08-11T12:00:00Z",
+      status: "completed",
+      total_steps: 1,
+    });
     if (path === "/v2/sessions/current/simulation/objects/film/metrics") return fulfillJson(route, inspectorObjectMetrics());
     if (path === "/v2/sessions/current/analysis/frequency-domain/manifest.v1") return fulfillJson(route, inspectorFrequencyManifest());
     if (path === "/v2/sessions/current/analysis/frequency-domain/eigen/spectrum.v2") return fulfillJson(route, inspectorFrequencySpectrum());
@@ -1188,6 +1212,22 @@ function inspectorFrequencyManifest() {
     },
     eigenmodes: { modal_solver_available: true, reason: "", status: "ok", study_kind: "eigenmodes" },
     response: { driven_response_available: true, reason: "", status: "ok", study_kind: "frequency_response" },
+    result_manifest: {
+      artifact_path: "result-manifest.json",
+      missing_reason: null,
+      payload: {
+        equilibrium_identity: "equilibrium-1",
+        observables: [{ identity: "absorbed-power", kind: "absorbed_power", unit: "W" }],
+        requested_execution: { boundary_context: "finite_open", calculation_mode: "fmr_response" },
+        revision: "result-7",
+        stage_id: "frequency-response",
+        stage_label: "Frequency Response",
+        study_product: "driven_response",
+      },
+      resource_key: "/v2/sessions/current/analysis/frequency-domain/manifest.v1",
+      schema_version: "frequency_domain_result_manifest.v1",
+      status: "ready",
+    },
     requested_execution: { calculation_mode: "fmr_response" },
     response_cancel_requested: null,
     response_progress: null,

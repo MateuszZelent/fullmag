@@ -12,6 +12,7 @@ import {
 } from "@/kernel/api/apiPaths";
 
 import type { InspectorPanelProps } from "../inspectorTypes";
+import { physicsFirstResultInspectorModel } from "./physics-first/physicsFirstResultInspectorModel";
 
 export interface FrequencyDomainNodeDetail {
   artifact: string;
@@ -646,6 +647,16 @@ export function resolveFrequencyDomainNodeDetail(
       artifact: ref?.artifactPath ?? resultNodeDetail.artifact,
       focus: selection.label ?? resultNodeDetail.focus,
       resource: ref?.resourceRef ?? resultNodeDetail.resource,
+    };
+  }
+  const physicsFirstDetail = physicsFirstResultInspectorModel(kind);
+  if (physicsFirstDetail) {
+    return {
+      artifact: ref?.artifactPath ?? "result manifest",
+      focus: selection.label ?? physicsFirstDetail.physicalLabel,
+      resource: ref?.resourceRef ?? "result-owned resource",
+      title: physicsFirstDetail.title,
+      visualization: physicsFirstDetail.description,
     };
   }
   const resourceNodeDetail = FREQUENCY_DOMAIN_RESOURCE_NODE_DETAILS[kind];

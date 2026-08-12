@@ -696,6 +696,45 @@ describe("inspectorRegistry", () => {
     expect(components.every((component) => component !== undefined)).toBe(true);
   });
 
+  it("gives every physics-first Results kind its own inspector component owner", () => {
+    const kinds = [
+      "results.dynamics.root",
+      "results.resonance.root",
+      "results.resonance.modal.stage",
+      "results.resonance.driven.stage",
+      "results.resonance.modal.spectrum",
+      "results.resonance.modal.modes",
+      "results.resonance.modal.coupling",
+      "results.resonance.driven.spectrum",
+      "results.resonance.driven.peaks",
+      "results.resonance.driven.frequency_points",
+      "results.resonance.driven.fields",
+      "results.dispersion.root",
+      "results.dispersion.modal.stage",
+      "results.dispersion.driven.stage",
+      "results.dispersion.k_sampling",
+      "results.dispersion.modal.relation",
+      "results.dispersion.modal.branches",
+      "results.dispersion.modal.modes_at_k",
+      "results.dispersion.driven.response_map",
+      "results.hysteresis.root",
+      "results.analysis_views.root",
+      "results.analysis_views.definition",
+      "results.derived_values.root",
+      "results.derived_values.definition",
+      "results.tables.root",
+      "results.tables.definition",
+      "results.exports.root",
+      "results.exports.definition",
+    ] as const;
+    const components = kinds.map(
+      (kind) => resolveInspectorPanel({ kind })?.component,
+    );
+
+    expect(components.every((component) => component !== undefined)).toBe(true);
+    expect(new Set(components).size).toBe(kinds.length);
+  });
+
   it("routes frequency-domain job nodes to dedicated inspector components", () => {
     expect(
       resolveInspectorPanel({ kind: "jobs.frequency_domain.root" })?.component,

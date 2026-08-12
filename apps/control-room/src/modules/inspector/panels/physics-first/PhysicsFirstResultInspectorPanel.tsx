@@ -25,6 +25,9 @@ export function PhysicsFirstResultInspectorPanel({ selection }: InspectorPanelPr
       properties={[
         { label: "Product", value: ref?.studyProduct ?? "Not applicable" },
         { label: "k context", value: ref?.kContextKind ?? "Not applicable" },
+        ...(ref?.resourceRef
+          ? [{ label: "Dataset / resource", mono: true, value: ref.resourceRef }]
+          : []),
         { label: "Meaning", value: model.description },
       ]}
       provenance={[

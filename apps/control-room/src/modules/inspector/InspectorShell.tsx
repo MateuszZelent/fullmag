@@ -13,7 +13,7 @@ import {
   Layers3,
   Play,
 } from "lucide-react";
-import { useId, useLayoutEffect, type ReactNode } from "react";
+import { useId, useLayoutEffect, useRef, type ReactNode } from "react";
 
 import { Badge } from "@/shared/ui/Badge";
 import { Button } from "@/shared/ui/Button";
@@ -37,6 +37,7 @@ import {
   useInspectorEditSession,
 } from "./InspectorEditSession";
 import type { InspectorDescriptor } from "./inspectorDescriptor";
+import { resetInspectorScroll } from "./inspectorScroll";
 import {
   configureInspectorTabs,
   setInspectorActiveTab,
@@ -82,10 +83,12 @@ export function InspectorShell({
   const resetReasonId = useId();
   const applyReasonId = useId();
   const activeTab = useInspectorActiveTab();
+  const contentRef = useRef<HTMLDivElement>(null);
   const nodeId = descriptor.metadata.find((item) => item.label === "Node")?.value;
   const descriptorKey = `${nodeId ?? descriptor.title}:${descriptor.tabs.map((tab) => tab.id).join(",")}`;
   useLayoutEffect(() => {
     configureInspectorTabs(descriptorKey, descriptor.tabs.map((tab) => tab.id));
+    resetInspectorScroll(contentRef.current);
   }, [descriptor.tabs, descriptorKey]);
 
   return (
@@ -183,7 +186,7 @@ export function InspectorShell({
         </Tabs>
       ) : null}
 
-      <ScrollArea className="fm-inspector__content">
+      <ScrollArea className="fm-inspector__content" ref={contentRef}>
         <div className="fm-inspector__body">{children}</div>
       </ScrollArea>
 

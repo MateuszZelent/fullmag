@@ -596,6 +596,7 @@ function useFrequencyDomainInspectorPanelView({ selection }: InspectorPanelProps
   const isEigenmodesAuthoringNode = kind.startsWith("study.stage.eigenmodes");
   const showResponseFields = isFrequencyDomainKind(
     kind,
+    "results.resonance.driven.fields",
     "resources.analysis.frequency_response.field",
     "results.frequency_response.frequency_points",
     "results.frequency_response.frequency_point",
