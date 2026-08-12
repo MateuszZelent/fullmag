@@ -31,10 +31,67 @@ from fullmag.runtime.scene_document import build_builder_from_scene_document
 from fullmag.runtime.scene_document import builder_overrides_from_scene_document
 from fullmag.runtime.script_builder import export_builder_draft, rewrite_loaded_problem_script
 from fullmag.meshing.gmsh_bridge import MeshData
-from fullmag.model.problem import build_geometry_assets_for_request
+from fullmag.model.problem import (
+    _fem_mesh_cache_key,
+    _geometry_asset_cache_key,
+    build_geometry_assets_for_request,
+)
 
 
 class ProblemApiTests(unittest.TestCase):
+    def test_fem_mesh_cache_key_changes_when_imported_source_content_changes_with_same_stat(self) -> None:
+        with TemporaryDirectory() as tmp_dir:
+            source = Path(tmp_dir) / "shape.stl"
+            source.write_bytes(b"mesh-v1")
+            geometry = fm.ImportedGeometry(source=str(source), name="shape")
+            hints = fm.FEM(order=1, hmax=1e-9)
+            initial_stat = source.stat()
+            initial_key = _fem_mesh_cache_key(geometry, hints)
+
+            source.write_bytes(b"mesh-v2")
+            os.utime(source, ns=(initial_stat.st_atime_ns, initial_stat.st_mtime_ns))
+
+            replacement_stat = source.stat()
+            self.assertEqual(replacement_stat.st_size, initial_stat.st_size)
+            self.assertEqual(replacement_stat.st_mtime_ns, initial_stat.st_mtime_ns)
+            self.assertNotEqual(_fem_mesh_cache_key(geometry, hints), initial_key)
+
+    def test_geometry_asset_cache_key_changes_when_imported_source_content_changes_with_same_stat(self) -> None:
+        with TemporaryDirectory() as tmp_dir:
+            source = Path(tmp_dir) / "shape.stl"
+            source.write_bytes(b"mesh-v1")
+            geometry = fm.ImportedGeometry(source=str(source), name="shape")
+            discretization = fm.DiscretizationHints(fem=fm.FEM(order=1, hmax=1e-9))
+            initial_stat = source.stat()
+            initial_key = _geometry_asset_cache_key(
+                requested_backend=fm.BackendTarget.FEM,
+                geometries=[geometry],
+                discretization=discretization,
+                study_universe=None,
+                mesh_workflow=None,
+                object_regions=None,
+                fdm_only=False,
+            )
+
+            source.write_bytes(b"mesh-v2")
+            os.utime(source, ns=(initial_stat.st_atime_ns, initial_stat.st_mtime_ns))
+
+            replacement_stat = source.stat()
+            self.assertEqual(replacement_stat.st_size, initial_stat.st_size)
+            self.assertEqual(replacement_stat.st_mtime_ns, initial_stat.st_mtime_ns)
+            self.assertNotEqual(
+                _geometry_asset_cache_key(
+                    requested_backend=fm.BackendTarget.FEM,
+                    geometries=[geometry],
+                    discretization=discretization,
+                    study_universe=None,
+                    mesh_workflow=None,
+                    object_regions=None,
+                    fdm_only=False,
+                ),
+                initial_key,
+            )
+
     def test_geometry_asset_cache_copies_by_default_and_can_be_borrowed_internally(self) -> None:
         cached_assets = {"fem_domain_mesh_asset": {"mesh": {"nodes": [[0.0, 0.0, 0.0]]}}}
         cache = {"cached": cached_assets}
@@ -1231,7 +1288,7 @@ class ProblemApiTests(unittest.TestCase):
         problem = replace(
             self._build_problem(),
             pbc=fm.FdmPbc(
-                axes=(True, False, False),
+                axes=(True, True, False),
                 demag="periodic_airbox_k0",
             ),
         )
@@ -4987,7 +5044,10 @@ class ProblemApiTests(unittest.TestCase):
                 bc="periodic",
                 magnetostatic_bc="periodic_airbox_k0",
                 bias_field_sweep=fm.BiasFieldSweep(
-                    samples_a_per_m=[(12_500.0, 0.0, 0.0), (25_000.0, 0.0, 0.0)],
+                    samples_a_per_m=[
+                        (12_500.123456789122, 0.0, 0.0),
+                        (25_000.0, 0.0, 0.0),
+                    ],
                     equilibrium_policy="relax_each",
                     continuation_seed="initial_state",
                 ),
@@ -5000,7 +5060,7 @@ class ProblemApiTests(unittest.TestCase):
 
             study_ir = loaded.stages[0].problem.to_ir()["study"]
             self.assertEqual(study_ir["bias_field_sweep"]["samples_a_per_m"], [
-                [12_500.0, 0.0, 0.0],
+                [12_500.123456789122, 0.0, 0.0],
                 [25_000.0, 0.0, 0.0],
             ])
             self.assertEqual(
@@ -5008,9 +5068,22 @@ class ProblemApiTests(unittest.TestCase):
                 ["runtime_selection"]["device"],
                 device,
             )
-            self.assertIn(
-                "BiasFieldSweep(",
-                rewrite_loaded_problem_script(loaded)["rendered_source"],
+            rendered = rewrite_loaded_problem_script(loaded)["rendered_source"]
+            self.assertIn("bias_field_sweep=fm.BiasFieldSweep(", rendered)
+
+            with TemporaryDirectory() as tmp_dir:
+                rewritten_path = Path(tmp_dir) / f"bias_field_sweep_{device}_rewritten.py"
+                rewritten_path.write_text(rendered, encoding="utf-8")
+                reloaded = fm.load_problem_from_script(
+                    rewritten_path, lightweight_assets=True
+                )
+
+            reloaded_ir = reloaded.stages[0].problem.to_ir()
+            reloaded_study_ir = reloaded_ir["study"]
+            self.assertEqual(reloaded_study_ir, study_ir)
+            self.assertEqual(
+                reloaded_ir["problem_meta"]["runtime_metadata"]["runtime_selection"]["device"],
+                device,
             )
 
     def test_study_builder_eigenmodes_forwards_operator(self) -> None:

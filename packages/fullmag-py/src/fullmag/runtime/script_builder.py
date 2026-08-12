@@ -5225,6 +5225,14 @@ def _render_stages(
                 k_sampling_expr = _render_k_sampling_expr(study.k_sampling)
                 if k_sampling_expr is not None:
                     call_parts.append(f"k_sampling={k_sampling_expr}")
+            if study.bias_field_sweep is not None:
+                sweep = study.bias_field_sweep
+                call_parts.append(
+                    "bias_field_sweep=fm.BiasFieldSweep("
+                    f"samples_a_per_m={_py_bias_field_sweep_samples_literal(sweep.samples_a_per_m)}, "
+                    f"equilibrium_policy={_py_repr(sweep.equilibrium_policy)}, "
+                    f"continuation_seed={_py_repr(sweep.continuation_seed)})"
+                )
             if is_study_surface:
                 lines.append(f"study.stages.add_eigenmodes({', '.join(call_parts)})")
             else:
@@ -7775,6 +7783,13 @@ def _py_repr(value: str) -> str:
 
 def _py_number(value: float) -> str:
     return format(float(value), ".12g")
+
+
+def _py_bias_field_sweep_samples_literal(samples: Sequence[Sequence[float]]) -> str:
+    return "[" + ", ".join(
+        "(" + ", ".join(repr(float(component)) for component in sample) + ")"
+        for sample in samples
+    ) + "]"
 
 
 def _py_sampling_period(value: SamplingPeriod) -> str:

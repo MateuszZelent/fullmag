@@ -281,6 +281,14 @@ def _fem_mesh_cache_dir() -> Path | None:
     return path
 
 
+def _file_content_sha256(path: Path) -> str:
+    digest = sha256()
+    with path.open("rb") as source:
+        while chunk := source.read(1024 * 1024):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
 def _geometry_cache_fingerprint(geometry: object) -> dict[str, object]:
     from fullmag.model.geometry import ImportedGeometry
 
@@ -296,6 +304,7 @@ def _geometry_cache_fingerprint(geometry: object) -> dict[str, object]:
                 "size": stat.st_size,
                 "mtime_ns": stat.st_mtime_ns,
             }
+            fingerprint["source_sha256"] = _file_content_sha256(source_path)
     return fingerprint
 
 
@@ -714,7 +723,7 @@ def _geometry_asset_cache_key(
     """
     payload: dict[str, object] = {
         "requested_backend": requested_backend.value,
-        "geometries": [geometry.to_ir() for geometry in geometries],
+        "geometries": [_geometry_cache_fingerprint(geometry) for geometry in geometries],
         "discretization": discretization.to_ir(),
         "study_universe": study_universe,
     }
