@@ -33738,6 +33738,16 @@ fn openapi_contains_planar_field_data_paths() {
     ] {
         assert_eq!(meta["properties"][revision]["type"], "string", "{revision}");
     }
+    for resource in ["meta", "scalar", "vectors", "empty-mask", "mesh-overlay"] {
+        let response = &paths[&format!(
+            "/v2/sessions/current/data/fields/{{quantity_id}}/planar-monitors/{{monitor_id}}/{resource}"
+        )]["get"]["responses"]["304"];
+        assert_eq!(response["description"], "Not modified", "{resource}");
+        assert!(
+            response.get("content").is_none(),
+            "{resource} 304 has a body"
+        );
+    }
     let scalar_parameters = paths
         ["/v2/sessions/current/data/fields/{quantity_id}/planar-monitors/{monitor_id}/scalar"]
         ["get"]["parameters"]

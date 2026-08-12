@@ -12263,6 +12263,13 @@ export interface operations {
                     "application/json": components["schemas"]["PlanarFieldMetaResource"];
                 };
             };
+            /** @description Not modified */
+            304: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
             /** @description Invalid planar query */
             400: {
                 headers: {

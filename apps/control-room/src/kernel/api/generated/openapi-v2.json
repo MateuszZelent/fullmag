@@ -30490,6 +30490,9 @@
             },
             "description": ""
           },
+          "304": {
+            "description": "Not modified"
+          },
           "400": {
             "content": {
               "application/json": {
@@ -39856,8 +39859,8 @@
     }
   ],
   "x-fullmag-build-identity": {
-    "built_at_utc": "2026-08-12T21:55:25Z",
-    "git_commit": "5bf32e3aa3d3d2e73cc99cc36fa48b6df203ebc7",
+    "built_at_utc": "2026-08-12T22:43:18Z",
+    "git_commit": "ab973377ab90ec99a9633c6635c40e8f9faa4a2f",
     "source_snapshot_sha256": "unknown",
     "worktree_state": "dirty"
   },

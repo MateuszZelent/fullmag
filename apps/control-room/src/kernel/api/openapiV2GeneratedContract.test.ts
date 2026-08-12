@@ -119,6 +119,25 @@ describe("generated OpenAPI v2 transport", () => {
     }
   });
 
+  it("declares metadata and binary not-modified responses without bodies", () => {
+    const document = JSON.parse(
+      readFileSync(new URL("./generated/openapi-v2.json", import.meta.url), "utf8"),
+    );
+    for (const resource of [
+      "meta",
+      "scalar",
+      "vectors",
+      "empty-mask",
+      "mesh-overlay",
+    ]) {
+      const response = document.paths[
+        `/v2/sessions/current/data/fields/{quantity_id}/planar-monitors/{monitor_id}/${resource}`
+      ].get.responses["304"];
+      expect(response?.description, resource).toBe("Not modified");
+      expect(response?.content, resource).toBeUndefined();
+    }
+  });
+
   it("exposes an openapi-fetch transport wrapper", async () => {
     const calls: string[] = [];
     const transport = createOpenApiV2Transport({

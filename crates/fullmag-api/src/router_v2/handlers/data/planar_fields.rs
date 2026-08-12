@@ -72,6 +72,7 @@ struct BuiltPlanarField {
     params(("quantity_id" = String, Path), ("monitor_id" = String, Path), PlanarFieldQuery),
     responses(
         (status = 200, body = PlanarFieldMetaResource),
+        (status = 304, description = "Not modified"),
         (status = 400, description = "Invalid planar query", body = crate::schemas::common::ApiErrorResponse),
         (status = 404, description = "Field or monitor missing", body = crate::schemas::common::ApiErrorResponse),
         (status = 409, description = "Stale source", body = crate::schemas::common::ApiErrorResponse),
