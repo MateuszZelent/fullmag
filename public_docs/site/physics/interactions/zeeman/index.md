@@ -34,7 +34,7 @@ contribute to the effective field and energy, but they are not hidden parameters
 
 | Solver | Device | Status | What this means |
 |---|---|---|---|
-| FDM | CPU | reference | Double-precision reference implementation with explicit active-cell masking and cell-volume energy reduction. |
+| FDM | CPU | reference | Double-precision reference implementation with active-cell LLG/energy masking; a separate uniform `H_ext` observable is full-domain on the structured grid. |
 | FDM | GPU | implemented | CUDA field and energy paths consume the resolved uniform field; current-device qualification must be reported separately from source availability. |
 | FEM | CPU | implemented | MFEM/native FEM nodal field with lumped-mass or saturation-weighted quadrature energy. |
 | FEM | GPU | implemented | Device-resident RK accumulation and CUDA block/reduction energy path; executed-device parity remains a qualification gate. |
@@ -278,13 +278,17 @@ E_Z^{\mathrm{FDM}}
 M_{s,i}\,\mathbf m_i\cdot\mathbf H_{\mathrm{ext},i}\,V_i,
 \qquad
 \mathbf H_{\mathrm{ext},i}=\frac{\mathbf B_{\mathrm{ext}}}{\mu_0}
-\quad\text{for active cells}.
+\quad\text{for }i\in\Omega_m.
 ```
 
-The field contribution is added componentwise to `H_eff` only for active cells. The energy
-routine evaluates the same external field and multiplies each density by the Cartesian cell
-volume. A per-node or Oersted field may be added by a different field source; it is not a new
-parameter of `Zeeman(B)`.
+The field contribution is added componentwise to the LLG `H_eff`, and the energy routine
+integrates it, only on active cells. That active-cell mask governs dynamics and energy; it does
+not define the spatial scope of the separately published uniform-field observable. The FDM CPU
+observable expands uniform `H_ext` to every cell of the structured grid, including inactive cells,
+so it is a **full-domain observable**. It may be used by the Airbox aggregate only when its
+metadata records `full_domain` coverage for the same grid, state generation, step, and time. A
+nonuniform or material-only field cannot inherit that legality from `Zeeman(B)`. A per-node or
+Oersted field may be added by a different field source; it is not a new parameter of `Zeeman(B)`.
 
 ### FDM GPU
 
@@ -419,6 +423,7 @@ device lane executed or that CPU/GPU parity was demonstrated.
 | `crates/fullmag-plan/src/validate.rs` | `validate_executable_outputs` | Fail-closed materialization checks for external-field outputs. |
 | `crates/fullmag-engine/src/fdm/cpu/fields.rs` | `external_field_add_into_soa` | Active-cell FDM CPU effective-field addition. |
 | `crates/fullmag-engine/src/fdm/cpu/fields.rs` | `external_energy_from_fields` | FDM CPU Zeeman energy integration. |
+| `crates/fullmag-runner/src/fdm/cpu/reference.rs` | `observe_state_with_antenna_field` | Builds the full-domain uniform `H_ext` observable separately from active-cell LLG and energy masking. |
 | `backends/fem/cpu/mfem/interactions/zeeman.cpp` | `initialize_zeeman_plan_fields` | Import of resolved FEM plan fields. |
 | `backends/fem/cpu/mfem/interactions/zeeman_uniform_field.cpp` | `initialize_uniform_zeeman_field` | Nodal uniform-field buffer initialization. |
 | `backends/fem/cpu/mfem/interactions/zeeman_field.cpp` | `add_zeeman_field` | FEM CPU additive effective-field composition. |

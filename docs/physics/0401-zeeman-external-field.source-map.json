@@ -1,0 +1,148 @@
+{
+  "document": {
+    "path": "docs/physics/0401-zeeman-external-field.md"
+  },
+  "backend_matrix": [
+    {
+      "solver": "FDM",
+      "device": "CPU",
+      "status": "implemented",
+      "scope": "Active-cell LLG/energy behavior and separate CPU full-domain uniform observable.",
+      "qualification": "source and focused contract evidence; atomic terminal batch remains planned / in implementation",
+      "evidence": "CPU source owners and focused regression contracts"
+    },
+    {
+      "solver": "FDM",
+      "device": "GPU",
+      "status": "implemented",
+      "scope": "Resolved Zeeman field and energy device path.",
+      "qualification": "not production-qualified",
+      "evidence": "source presence does not prove executed-device terminal observable behavior"
+    },
+    {
+      "solver": "FEM",
+      "device": "CPU",
+      "status": "implemented",
+      "scope": "Native FEM Zeeman realization documented on the public interaction page.",
+      "qualification": "lane-specific",
+      "evidence": "separate native FEM sources and qualification gates"
+    },
+    {
+      "solver": "FEM",
+      "device": "GPU",
+      "status": "implemented",
+      "scope": "Native CUDA FEM Zeeman realization documented on the public interaction page.",
+      "qualification": "not production-qualified",
+      "evidence": "executed-device and parity evidence remain required"
+    }
+  ],
+  "sources": [
+    {
+      "id": "python-zeeman",
+      "path": "packages/fullmag-py/src/fullmag/model/energy.py",
+      "symbol": "class Zeeman",
+      "responsibility": "public Zeeman authoring and lowering"
+    },
+    {
+      "id": "planner-fdm",
+      "path": "crates/fullmag-plan/src/fdm.rs",
+      "symbol": "plan_fdm",
+      "responsibility": "resolves the requested B vector and validates FDM execution"
+    },
+    {
+      "id": "fdm-active-field",
+      "path": "crates/fullmag-engine/src/fdm/cpu/fields.rs",
+      "symbol": "external_field_add_into_soa",
+      "responsibility": "adds the resolved field to active-cell FDM effective-field assembly"
+    },
+    {
+      "id": "fdm-active-energy",
+      "path": "crates/fullmag-engine/src/fdm/cpu/fields.rs",
+      "symbol": "external_energy_from_fields",
+      "responsibility": "reduces Zeeman energy over active FDM cells"
+    },
+    {
+      "id": "fdm-full-domain-observable",
+      "path": "crates/fullmag-runner/src/fdm/cpu/reference.rs",
+      "symbol": "observe_state_with_antenna_field",
+      "responsibility": "builds the separate full-domain uniform H_ext observable; not proof of CUDA or an atomic terminal batch"
+    }
+  ],
+  "symbols": [
+    {
+      "id": "Bext",
+      "latex": "$\\mathbf B_{\\mathrm{ext}}$",
+      "meaning": "prescribed uniform flux density requested by `Zeeman(B)`",
+      "si_unit": "$\\mathrm{T}$"
+    },
+    {
+      "id": "Hext",
+      "latex": "$\\mathbf H_{\\mathrm{ext}}$",
+      "meaning": "resolved uniform external field",
+      "si_unit": "$\\mathrm{A\\,m^{-1}}$"
+    },
+    {
+      "id": "Hz",
+      "latex": "$\\mathbf H_Z$",
+      "meaning": "Zeeman contribution to the effective field",
+      "si_unit": "$\\mathrm{A\\,m^{-1}}$"
+    },
+    {
+      "id": "m",
+      "latex": "$\\mathbf m$",
+      "meaning": "reduced magnetization",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "Ms",
+      "latex": "$M_s$",
+      "meaning": "saturation magnetization",
+      "si_unit": "$\\mathrm{A\\,m^{-1}}$"
+    },
+    {
+      "id": "mu0",
+      "latex": "$\\mu_0$",
+      "meaning": "vacuum permeability",
+      "si_unit": "$\\mathrm{N\\,A^{-2}}$"
+    },
+    {
+      "id": "Omega",
+      "latex": "$\\Omega_m$",
+      "meaning": "active magnetic integration domain",
+      "si_unit": "$\\mathrm{m^3}$"
+    },
+    {
+      "id": "Ez",
+      "latex": "$E_Z$",
+      "meaning": "Zeeman energy",
+      "si_unit": "$\\mathrm{J}$"
+    }
+  ],
+  "equations": [
+    {
+      "id": "eq-zeeman-internal-energy",
+      "symbols": ["Ez", "mu0", "Omega", "Ms", "m", "Hext", "Bext"],
+      "sources": ["fdm-active-energy", "python-zeeman"]
+    },
+    {
+      "id": "eq-zeeman-internal-field",
+      "symbols": ["Hz", "Ez", "mu0", "Ms", "m", "Hext", "Bext"],
+      "sources": ["fdm-active-field", "planner-fdm"]
+    }
+  ],
+  "public_api": {
+    "constructors": ["fullmag.Zeeman"],
+    "parameters": [
+      {
+        "python": "`fm.Zeeman(B=(Bx, By, Bz))`",
+        "type": "`Zeeman`",
+        "default": "required",
+        "si_unit": "$\\mathrm{T}$",
+        "validation": "exactly three finite components",
+        "meaning": "uniform external flux-density request",
+        "backend_support": "FDM/FEM CPU/GPU, lane qualification applies",
+        "problem_ir": "`energy_terms[].kind=zeeman` with `B`"
+      }
+    ]
+  }
+}
