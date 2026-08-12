@@ -184,6 +184,10 @@ pub(crate) fn build_full_grid_materialized_fields(
     (!fields.is_empty()).then_some(fields)
 }
 
+pub(crate) fn should_materialize_terminal_fdm_fields(status: RunStatus) -> bool {
+    status == RunStatus::Completed
+}
+
 fn build_cached_mesh_preview_fields(
     display_state: &DisplaySelectionState,
     observables: &StateObservables,
@@ -246,7 +250,8 @@ mod tests {
     use super::{
         attach_fem_crossover_decision_to_provenance, attach_resolved_fallback_to_provenance,
         build_full_grid_materialized_fields, cached_display_refresh_due, cpu_execution_provenance,
-        display_refresh_due, normalize_runtime_context_signature, InteractiveFdmPreviewRuntime,
+        display_refresh_due, normalize_runtime_context_signature,
+        should_materialize_terminal_fdm_fields, InteractiveFdmPreviewRuntime,
         InteractiveFdmPreviewRuntimeInner,
     };
     use crate::dispatch::FdmEngine;
@@ -782,6 +787,114 @@ mod tests {
     }
 
     #[test]
+    fn completed_cpu_interactive_runtime_materializes_final_active_fields() {
+        let plan = make_soa_fdm_plan();
+        let mut runtime =
+            InteractiveFdmPreviewRuntime::from_fdm_plan(&plan, FdmEngine::CpuReference, None)
+                .expect("CPU interactive runtime should build");
+        let display_selection = || {
+            let mut state = DisplaySelectionState::default();
+            state.selection.quantity = "E_total".to_string();
+            state.selection.kind = DisplayKind::GlobalScalar;
+            state
+        };
+        let mut updates = Vec::new();
+
+        let result = runtime
+            .execute_with_live_preview_streaming(
+                &plan,
+                2e-14,
+                &[],
+                plan.grid.cells,
+                u64::MAX,
+                &display_selection,
+                None,
+                None,
+                &mut |update| {
+                    updates.push(update);
+                    StepAction::Continue
+                },
+            )
+            .expect("CPU interactive runtime should execute");
+
+        assert_eq!(result.result.status, crate::RunStatus::Completed);
+        let terminal_field_batches = updates
+            .iter()
+            .filter_map(|update| {
+                update
+                    .cached_preview_fields
+                    .as_ref()
+                    .filter(|fields| fields.iter().any(|field| field.quantity == "eden_total"))
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            terminal_field_batches.len(),
+            1,
+            "completed runtime should publish exactly one terminal materialized field batch"
+        );
+        let final_fields = terminal_field_batches[0];
+        let active = crate::quantities::field_materialization_quantity_ids();
+        let expected = crate::quantities::active_fdm_preview_quantities(
+            FdmEngine::CpuReference,
+            &plan,
+            &active,
+        );
+        assert_eq!(
+            final_fields
+                .iter()
+                .map(|field| field.quantity.as_str())
+                .collect::<Vec<_>>(),
+            expected
+        );
+        let final_m = final_fields
+            .iter()
+            .find(|field| field.quantity == "m")
+            .expect("terminal materialization should include m");
+        assert_eq!(
+            final_m.vector_field_values,
+            result
+                .result
+                .final_magnetization
+                .iter()
+                .flat_map(|value| value.iter().copied())
+                .collect::<Vec<_>>()
+        );
+        let field_values = |quantity: &str| {
+            &final_fields
+                .iter()
+                .find(|field| field.quantity == quantity)
+                .unwrap_or_else(|| panic!("terminal materialization should include {quantity}"))
+                .vector_field_values
+        };
+        let active_field_components = final_fields
+            .iter()
+            .filter(|field| field.quantity.starts_with("H_") && field.quantity != "H_eff")
+            .map(|field| field.vector_field_values.as_slice())
+            .collect::<Vec<_>>();
+        for (index, effective) in field_values("H_eff").iter().enumerate() {
+            let expected = active_field_components
+                .iter()
+                .map(|field| field[index])
+                .sum::<f64>();
+            assert!((effective - expected).abs() <= 1e-9);
+        }
+    }
+
+    #[test]
+    fn terminal_fdm_field_materialization_rejects_non_success_statuses() {
+        assert!(should_materialize_terminal_fdm_fields(
+            crate::RunStatus::Completed
+        ));
+        for status in [
+            crate::RunStatus::Failed,
+            crate::RunStatus::Cancelled,
+            crate::RunStatus::Paused,
+        ] {
+            assert!(!should_materialize_terminal_fdm_fields(status));
+        }
+    }
+
+    #[test]
     fn cpu_interactive_snapshot_preview_m_uses_direct_state_without_reobserving_state() {
         let plan = make_soa_fdm_plan();
         let mut runtime =
@@ -1249,7 +1362,7 @@ impl InteractiveFdmPreviewRuntime {
         artifact_writer: Option<ArtifactPipelineSender>,
         on_step: &mut dyn FnMut(StepUpdate) -> StepAction,
     ) -> Result<ExecutedRun, RunError> {
-        match &mut self.inner {
+        let result = match &mut self.inner {
             InteractiveFdmPreviewRuntimeInner::Cpu(runtime) => runtime
                 .execute_with_live_preview_streaming(
                     plan,
@@ -1275,7 +1388,45 @@ impl InteractiveFdmPreviewRuntime {
                     artifact_writer,
                     on_step,
                 ),
+        }?;
+
+        if should_materialize_terminal_fdm_fields(result.result.status) {
+            let display_state = display_selection();
+            let request = LivePreviewRequest {
+                revision: display_state.revision,
+                quantity: "m".to_string(),
+                component: "3D".to_string(),
+                layer: 0,
+                all_layers: true,
+                every_n: 1,
+                x_chosen_size: 0,
+                y_chosen_size: 0,
+                auto_scale_enabled: false,
+                max_points: 0,
+            };
+            let quantities = crate::quantities::field_materialization_quantity_ids();
+            let cached_preview_fields = self.snapshot_vector_fields(&quantities, &request)?;
+            if let Some(stats) = result.result.steps.last().cloned() {
+                let _ = on_step(StepUpdate {
+                    coupled_checkpoint: None,
+                    stats,
+                    grid,
+                    fem_mesh_generation_id: None,
+                    magnetization: None,
+                    preview_field: None,
+                    cached_preview_fields: Some(cached_preview_fields),
+                    hysteresis_field_m_t: None,
+                    hysteresis_point_index: None,
+                    hysteresis_settle_step_index: None,
+                    hysteresis_settle_step_kind: None,
+                    hysteresis_settle_step_method: None,
+                    scalar_row_due: false,
+                    finished: false,
+                });
+            }
         }
+
+        Ok(result)
     }
 }
 
