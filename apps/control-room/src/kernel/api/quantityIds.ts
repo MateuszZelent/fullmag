@@ -47,7 +47,6 @@ const MAGNETIC_ONLY_QUANTITY_IDS = new Set([
   "H_dmi",
   "H_mel",
   "H_ani_cubic",
-  "H_ant",
   "H_drive",
   "B_drive",
   "H_dmi_bulk",

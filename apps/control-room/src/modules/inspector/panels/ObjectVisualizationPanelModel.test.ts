@@ -985,6 +985,32 @@ describe("ObjectVisualizationPanelModel", () => {
     ]);
   });
 
+  it("offers only catalog-available full-domain quantities for an Airbox", () => {
+    const catalog = {
+      domain_generation_id: "fdm-generation-1",
+      quantities: [
+        { available: true, quantity_id: "m", label: "Magnetization" },
+        { available: true, quantity_id: "H_ex", label: "Exchange field" },
+        { available: true, quantity_id: "H_demag", label: "Demag field" },
+        { available: true, quantity_id: "H_ext", label: "External field" },
+        { available: true, quantity_id: "H_eff", label: "Effective field" },
+        { available: true, quantity_id: "H_ant", label: "Antenna field" },
+        { available: true, quantity_id: "H_oe", label: "Oersted field" },
+        { available: true, quantity_id: "eden_demag", label: "Demag energy" },
+        { available: false, quantity_id: "H_drive", label: "Drive field" },
+      ],
+      revision: 3,
+    } as FieldCatalogResource;
+
+    expect(
+      visualizationQuantityItems("H_demag", "airbox", catalog).map(
+        (item) => item.value,
+      ),
+    ).toEqual(["H_demag", "H_ext", "H_eff", "H_ant", "H_oe"]);
+    expect(fieldCatalogQuantityAvailable(catalog, "H_ant")).toBe(true);
+    expect(fieldCatalogQuantityAvailable(catalog, "H_drive")).toBe(false);
+  });
+
   it("filters quantity options by the realized field catalog", () => {
     const catalog = {
       domain_generation_id: "fdm-generation-1",

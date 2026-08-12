@@ -3,7 +3,7 @@ import { createRoot } from "react-dom/client";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { ControlRoomApi } from "@/kernel/api/ControlRoomApi";
-import { SIMULATION_COMMANDS_PATH } from "@/kernel/api/apiPaths";
+import { DATA_FIELDS_PATH, SIMULATION_COMMANDS_PATH } from "@/kernel/api/apiPaths";
 import { EventBus } from "@/kernel/events/EventBus";
 import type { KernelEventMap } from "@/kernel/events/eventTypes";
 import { KernelContext } from "@/kernel/KernelContext";
@@ -13,6 +13,7 @@ import {
 } from "@/kernel/realtime/communicationPolicy";
 import { RealtimeInvalidationBridge } from "@/kernel/realtime/RealtimeInvalidationBridge";
 import { ResourceInvalidationController } from "@/kernel/resources/ResourceInvalidationController";
+import { useFieldMetaResource } from "@/kernel/resources/studyRuntimeResources";
 import type { KernelApi } from "@/kernel/types";
 
 import {
@@ -27,6 +28,11 @@ const query = {
   scope_kind: "part" as const,
 };
 const resourceKey = resolveViewport3DFieldVectorResourceKey("H_demag", query);
+
+type FieldMetaProbeObservation = {
+  edenDemag: ReturnType<typeof useFieldMetaResource>;
+  hDemag: ReturnType<typeof useFieldMetaResource>;
+};
 
 afterEach(() => updateRealtimeCommunicationPolicy({}));
 
@@ -116,6 +122,85 @@ describe("viewport 3D field revision refetch", () => {
       dom.restore();
     }
   });
+
+  it("refetches object-scoped vector and scalar Inspector metadata after batch field samples change", async () => {
+    const requests = new Map<string, number>();
+    const api = new ControlRoomApi({
+      baseUrl: "http://127.0.0.1:8765",
+      fetchImpl: async (url) => {
+        const requestUrl = String(url);
+        const quantityId = ["H_demag", "eden_demag"].find((candidate) =>
+          requestUrl.includes(`/data/fields/${candidate}/meta`),
+        );
+        if (!quantityId) throw new Error(`Unexpected request ${requestUrl}`);
+        const requestCount = (requests.get(quantityId) ?? 0) + 1;
+        requests.set(quantityId, requestCount);
+        return jsonResponse({ field_revision: requestCount, state: "ready" });
+      },
+    });
+    const bus = new EventBus<KernelEventMap>();
+    const resources = new ResourceInvalidationController(bus);
+    const bridge = new RealtimeInvalidationBridge(resources, {
+      scheduleFlush: (flush) => {
+        flush();
+        return () => undefined;
+      },
+    });
+    const kernel = {
+      api,
+      bus,
+      diagnosticRecorder: new DiagnosticRecorderController({
+        config: { enabled: false },
+      }),
+      resources,
+    } as unknown as KernelApi;
+    const observations: FieldMetaProbeObservation[] = [];
+    const dom = installTestDom();
+    const root = createRoot(dom.document.createElement("div") as unknown as Element);
+
+    try {
+      await act(async () => {
+        root.render(
+          <KernelContext.Provider value={kernel}>
+            <FieldMetaProbe observations={observations} />
+          </KernelContext.Provider>,
+        );
+      });
+      await waitFor(
+        () =>
+          requests.get("H_demag") === 1 && requests.get("eden_demag") === 1,
+        "initial object-scoped Inspector metadata requests did not complete",
+      );
+
+      await act(async () => {
+        bridge.handleEvent({
+          payload: {
+            changes: [
+              {
+                recommended_fetch: DATA_FIELDS_PATH,
+                quantity_ids: ["H_demag", "eden_demag"],
+                resource: "fields",
+                resource_id: "samples",
+                revision: 2,
+              },
+            ],
+          },
+          type: "resource.batch_changed",
+        });
+      });
+      await waitFor(
+        () =>
+          requests.get("H_demag") === 2 && requests.get("eden_demag") === 2,
+        "field batch revision did not refetch object-scoped Inspector metadata",
+      );
+
+      expect(observations.at(-1)?.hDemag.data?.field_revision).toBe(2);
+      expect(observations.at(-1)?.edenDemag.data?.field_revision).toBe(2);
+    } finally {
+      await act(async () => root.unmount());
+      dom.restore();
+    }
+  });
 });
 
 function Probe({
@@ -131,6 +216,27 @@ function Probe({
       requestId: "revision-refetch-test",
     }),
   );
+  return null;
+}
+
+function FieldMetaProbe({
+  observations,
+}: {
+  observations: FieldMetaProbeObservation[];
+}) {
+  const hDemag = useFieldMetaResource({
+    component: "magnitude",
+    quantityId: "H_demag",
+    scope_id: "film",
+    scope_kind: "object",
+  });
+  const edenDemag = useFieldMetaResource({
+    component: "full",
+    quantityId: "eden_demag",
+    scope_id: "film",
+    scope_kind: "object",
+  });
+  observations.push({ edenDemag, hDemag });
   return null;
 }
 

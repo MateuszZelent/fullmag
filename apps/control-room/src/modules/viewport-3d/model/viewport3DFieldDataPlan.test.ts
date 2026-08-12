@@ -165,6 +165,34 @@ describe("viewport3DFieldDataPlan", () => {
     });
   });
 
+  it("keeps vector components and scalar colormaps on distinct viewport requests", () => {
+    const vectorRequests = planViewport3DFieldResourceRequests(
+      buildViewport3DPassDemands(
+        objectPlan("object:demag", {
+          activeQuantityId: "H_demag",
+          surfaceColorSource: "component_x",
+          vectorsVisible: false,
+        }),
+      ),
+    );
+    const scalarRequests = planViewport3DFieldResourceRequests(
+      buildViewport3DPassDemands(
+        objectPlan("object:energy", {
+          activeQuantityId: "eden_demag",
+          surfaceColorSource: "colormap",
+          vectorsVisible: false,
+        }),
+      ),
+    );
+
+    expect(vectorRequests).toMatchObject([
+      { quantityId: "H_demag", query: { component: "x" } },
+    ]);
+    expect(scalarRequests).toMatchObject([
+      { quantityId: "eden_demag", query: { component: "full" } },
+    ]);
+  });
+
   it("upgrades component surfaces with vectors to one complete full-vector request", () => {
     const plan = objectPlan("object:mx-vectors", {
       surfaceColorSource: "component_x",
@@ -798,6 +826,52 @@ describe("viewport3DFieldDataPlan", () => {
 
     expect(plan.demands).toEqual([]);
     expect(plan.requests).toEqual(new Map());
+  });
+
+  it("requests only catalog-available full-domain quantities for FDM Airbox vectors", () => {
+    const catalogAvailableQuantityIds = new Set([
+      "m",
+      "H_ex",
+      "H_demag",
+      "H_ext",
+      "H_eff",
+      "H_ant",
+      "H_oe",
+      "eden_demag",
+    ]);
+
+    for (const quantityId of ["H_demag", "H_ext", "H_eff", "H_ant", "H_oe"]) {
+      const plan = resolveViewport3DAirboxFieldVectorDemandPlan({
+        airboxParts: [{ id: "part:__air__" }],
+        availableQuantityIds: catalogAvailableQuantityIds,
+        quantityId,
+        vectorBudget: 64,
+        vectorsVisible: true,
+      });
+
+      expect(plan.requests.get("part:__air__")).toMatchObject({
+        quantityId,
+        query: {
+          component: "full",
+          max_samples: 64,
+          scope_id: "part:__air__",
+          scope_kind: "airbox",
+        },
+      });
+    }
+
+    for (const magneticOnlyQuantityId of ["m", "H_ex", "eden_demag"]) {
+      const plan = resolveViewport3DAirboxFieldVectorDemandPlan({
+        airboxParts: [{ id: "part:__air__" }],
+        availableQuantityIds: catalogAvailableQuantityIds,
+        quantityId: magneticOnlyQuantityId,
+        vectorBudget: 64,
+        vectorsVisible: true,
+      });
+
+      expect(plan.demands).toEqual([]);
+      expect(plan.requests).toEqual(new Map());
+    }
   });
 
   it("does not request unavailable quantities for FDM target views", () => {
