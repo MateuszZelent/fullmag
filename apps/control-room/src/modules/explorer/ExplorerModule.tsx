@@ -472,7 +472,7 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
 
   useEffect(() => () => runtimeExplorerDetailStore.clear(), []);
 
-  const nodes = useMemo(() => {
+  const baseNodes = useMemo(() => {
     let domainPresentation = null as ReturnType<typeof buildDomainPresentation> | null;
     let domainPresentationStatus = domainMeta.status;
     if (domainMeta.data) {
@@ -630,13 +630,11 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
               tableCatalog: runtimeSnapshot.source.tableCatalog,
               currentRun: currentRun.data,
           }, runtimeSnapshot);
-    return filterExplorerNodes(baseNodes, filterText, selectedNodeId);
+    return baseNodes;
   }, [
     activeBuild.data,
     latestSuccessfulBuild.data,
     activeTab,
-    filterText,
-    selectedNodeId,
     crossSections,
     currentTransports.data,
     manifest.data,
@@ -678,6 +676,11 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
     runtimeSnapshot,
     sessionStatusData,
   ]);
+
+  const nodes = useMemo(
+    () => filterExplorerNodes(baseNodes, filterText, selectedNodeId),
+    [baseNodes, filterText, selectedNodeId],
+  );
 
   useEffect(() => {
     previousCurrentRunId.current = currentRunId;
@@ -724,12 +727,18 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
       nodes,
       selectedNodeId,
       selectedRef,
+      baseNodes,
     );
-    if (!currentNode) return;
+    if (!currentNode) {
+      if (selectedRef?.type === "postprocessing") {
+        kernel.selection.clear("explorer");
+      }
+      return;
+    }
     const currentRef = selectionRefFromNode(currentNode);
     if (selectionRefEquals(selectedRef, currentRef)) return;
     selectExplorerNode(kernel, currentNode, "explorer");
-  }, [activeTab, kernel, nodes, selectedNodeId, selectedRef]);
+  }, [activeTab, baseNodes, kernel, nodes, selectedNodeId, selectedRef]);
 
   useEffect(() => {
     const unsubscribe = subscribeExplorerTextureLoadNodeRequested(

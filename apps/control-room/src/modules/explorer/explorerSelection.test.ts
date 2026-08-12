@@ -6,6 +6,7 @@ import { ControlRoomApi } from "@/kernel/api/ControlRoomApi";
 import type {
   DomainMetaResource,
   FdmRegionMembershipResource,
+  TableResource,
 } from "@/kernel/api/apiTypes";
 import {
   ANALYSIS_FREQUENCY_DOMAIN_EIGEN_SPECTRUM_V2_PATH,
@@ -41,7 +42,13 @@ import { VisualizationRegistrySyncController } from "@/kernel/visualization/Visu
 import { viewportSelectionForFdmTarget } from "@/modules/viewport-3d/viewport3dSelection";
 import { buildDomainPresentation } from "@/shared/domain/mesh/domainPresentation";
 
-import { buildModelTree, flattenExplorerNodes } from "./builders/buildModelTree";
+import {
+  buildExplorerTree,
+  buildModelTree,
+  filterExplorerNodes,
+  flattenExplorerNodes,
+} from "./builders/buildModelTree";
+import { buildPhysicsFirstResultsTree } from "./builders/resultsExplorerNodes";
 import { buildPhysicsGraphTree } from "./builders/physicsGraphTree";
 import {
   resolveCurrentExplorerSelectionNode,
@@ -89,6 +96,29 @@ function makeKernel(): KernelApi {
       resources,
     }),
   };
+}
+
+function tableCatalog(revision: number, tables: readonly TableResource[]) {
+  return {
+    data: { revision, tables: [...tables] },
+    error: null,
+    missing: false,
+    revision,
+    status: "ready" as const,
+  };
+}
+
+function resultsTreeWithTables(
+  revision: number,
+  tables: readonly TableResource[],
+) {
+  return buildPhysicsFirstResultsTree({
+    entries: [],
+    postprocessing: {
+      tableCatalog: tableCatalog(revision, tables),
+    },
+    resultContextRunId: "run-7",
+  });
 }
 
 describe("selectExplorerNode", () => {
@@ -1549,5 +1579,125 @@ describe("selectExplorerNode", () => {
         type: "postprocessing",
       } as never,
     )).toBe(root);
+  });
+
+  it("fails closed to an unavailable Results root when currentRun disappears", () => {
+    const kernel = makeKernel();
+    const selectedNode = {
+      id: "results:run:run-7:tables:table-energy",
+      kind: "results.tables.definition" as const,
+      label: "energy",
+      parentId: "results:run:run-7:tables",
+      postprocessingCatalogRevision: 12,
+      postprocessingDefinitionKind: "table" as const,
+      postprocessingFreshness: "fresh" as const,
+      postprocessingOwnerId: "energy",
+      postprocessingOwnerKind: "table" as const,
+      postprocessingOwnerReadiness: "available-ready" as const,
+      postprocessingResourceRevision: 8,
+      postprocessingSchemaRevision: 3,
+      resourceRef: "table:energy",
+    };
+    selectExplorerNode(kernel, selectedNode, "explorer");
+
+    const currentTree = buildExplorerTree("results", { currentRun: null });
+    const currentNode = resolveCurrentExplorerSelectionNode(
+      currentTree,
+      kernel.selection.get().nodeId,
+      kernel.selection.get().ref,
+    );
+
+    expect(currentNode).toMatchObject({
+      availability: "unavailable",
+      id: "results:root",
+      kind: "results.root",
+    });
+    if (!currentNode) return;
+    selectExplorerNode(kernel, currentNode, "explorer");
+    expect(kernel.selection.get()).toMatchObject({
+      kind: "results.root",
+      nodeId: "results:root",
+      ref: null,
+    });
+  });
+
+  it("moves a removed catalog owner to the current family root revision", () => {
+    const table: TableResource = {
+      binary_rows_href: "/tables/energy/rows.bin",
+      columns: [],
+      columns_href: "/tables/energy/columns",
+      revision: 8,
+      rows_href: "/tables/energy/rows",
+      schema_revision: 3,
+      table_id: "energy",
+      total_rows: 42,
+    };
+    const kernel = makeKernel();
+    const previousTree = resultsTreeWithTables(12, [table]);
+    const selectedNode = flattenExplorerNodes(previousTree).find(
+      (node) => node.label === "energy",
+    );
+    if (!selectedNode) throw new Error("Missing selected table node");
+    selectExplorerNode(kernel, selectedNode, "explorer");
+
+    const currentTree = resultsTreeWithTables(13, []);
+    const currentNode = resolveCurrentExplorerSelectionNode(
+      currentTree,
+      kernel.selection.get().nodeId,
+      kernel.selection.get().ref,
+    );
+
+    expect(currentNode).toMatchObject({
+      id: "results:run:run-7:tables",
+      kind: "results.tables.root",
+      postprocessingCatalogRevision: 13,
+    });
+    if (!currentNode) return;
+    selectExplorerNode(kernel, currentNode, "explorer");
+    expect(kernel.selection.get().ref).toMatchObject({
+      catalogRevision: 13,
+      nodeId: currentNode.id,
+      ownerId: null,
+      resourceRef: null,
+      scope: "root",
+      type: "postprocessing",
+    });
+  });
+
+  it("reconciles a remounted filtered Results tree against its unfiltered build", () => {
+    const table: TableResource = {
+      binary_rows_href: "/tables/energy/rows.bin",
+      columns: [],
+      columns_href: "/tables/energy/columns",
+      revision: 8,
+      rows_href: "/tables/energy/rows",
+      schema_revision: 3,
+      table_id: "energy",
+      total_rows: 42,
+    };
+    const kernel = makeKernel();
+    const previousTree = resultsTreeWithTables(12, [table]);
+    const selectedNode = flattenExplorerNodes(previousTree).find(
+      (node) => node.label === "energy",
+    );
+    if (!selectedNode) throw new Error("Missing selected table node");
+    selectExplorerNode(kernel, selectedNode, "explorer");
+
+    const currentTree = resultsTreeWithTables(13, []);
+    const filteredTree = filterExplorerNodes(currentTree, "energy", selectedNode.id);
+    expect(flattenExplorerNodes(filteredTree)).toHaveLength(0);
+
+    const currentNode = resolveCurrentExplorerSelectionNode(
+      filteredTree,
+      kernel.selection.get().nodeId,
+      kernel.selection.get().ref,
+      currentTree,
+    );
+
+    expect(currentNode).toMatchObject({
+      availability: "available",
+      id: "results:run:run-7:tables",
+      kind: "results.tables.root",
+    });
   });
 });

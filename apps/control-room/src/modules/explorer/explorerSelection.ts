@@ -691,12 +691,16 @@ export function resolveCurrentExplorerSelectionNode(
   nodes: readonly ExplorerNode[],
   selectedNodeId: string | null,
   ref: SelectionRef | null,
+  currentTree: readonly ExplorerNode[] = nodes,
 ): ExplorerNode | null {
   const selected = findExplorerNode(nodes, selectedNodeId);
   if (selected) return selected;
   if (ref?.type !== "postprocessing") return null;
   const rootKind = postprocessingRootKind(ref.definitionKind);
-  return findExplorerNodeByKind(nodes, rootKind);
+  const familyRoot = findExplorerNodeByKind(currentTree, rootKind);
+  if (familyRoot) return familyRoot;
+  const resultsRoot = findExplorerNodeByKind(currentTree, "results.root");
+  return resultsRoot?.availability === "unavailable" ? resultsRoot : null;
 }
 
 function isFrequencyDomainSelectionNode(node: ExplorerNode): boolean {
