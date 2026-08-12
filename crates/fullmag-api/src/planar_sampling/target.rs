@@ -312,15 +312,13 @@ fn build_fdm_target(
     }
     let target_bounds = fdm_bounds(cells, origin, spacing, &selected)?;
     let universe = vec![true; selected.len()];
-    let magnetic = membership
-        .map(|membership| {
-            membership
-                .cell_membership
-                .iter()
-                .map(|id| *id != u32::MAX)
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_else(|| universe.clone());
+    let magnetic = membership.map(|membership| {
+        membership
+            .cell_membership
+            .iter()
+            .map(|id| *id != u32::MAX)
+            .collect::<Vec<_>>()
+    });
     let source = FdmPlanarField::new(
         resolved.component_count,
         cells,
@@ -333,7 +331,11 @@ fn build_fdm_target(
         field: TargetField::Fdm(source),
         selected_entity_ids: selected_entity_ids.clone(),
         target_bounds_world_m: target_bounds,
-        magnetic_bounds_world_m: optional_fdm_bounds(cells, origin, spacing, &magnetic)?,
+        magnetic_bounds_world_m: magnetic
+            .as_deref()
+            .map(|magnetic| optional_fdm_bounds(cells, origin, spacing, magnetic))
+            .transpose()?
+            .flatten(),
         universe_bounds_world_m: fdm_bounds(cells, origin, spacing, &universe)?,
         fingerprint: target_fingerprint(
             carrier_fingerprint,
@@ -434,23 +436,22 @@ fn build_fem_target(
             "unsupported_fem_element_order_or_carrier: tet4 P1 nodal carrier required: {error}"
         ))
     })?;
-    let mut selected = select_fem_monitor_target(mesh, &elements, target);
-    match scope {
-        ResolvedSpatialScope::MonitorTarget => {}
+    let runtime_scope = match scope {
+        ResolvedSpatialScope::MonitorTarget => vec![true; elements.len()],
         ResolvedSpatialScope::MeshPart { scope_id } => {
-            let runtime = select_fem_parts(mesh, elements.len(), |part| part.id == *scope_id);
-            intersect_masks(&mut selected, &runtime);
+            select_fem_parts(mesh, elements.len(), |part| part.id == *scope_id)
         }
         ResolvedSpatialScope::Airbox { scope_id } => {
             if scope_id.as_deref().is_some_and(|id| id != "airbox") {
                 return Err(ApiError::not_found("FEM Airbox scope not found"));
             }
-            let runtime = select_fem_parts(mesh, elements.len(), |part| {
+            select_fem_parts(mesh, elements.len(), |part| {
                 part.role.contains("air") || part.id.contains("airbox")
-            });
-            intersect_masks(&mut selected, &runtime);
+            })
         }
-    }
+    };
+    let mut selected = select_fem_monitor_target(mesh, &elements, target);
+    intersect_masks(&mut selected, &runtime_scope);
     let selected_entity_ids = selected
         .iter()
         .enumerate()
@@ -469,12 +470,13 @@ fn build_fem_target(
         selected.iter().map(|value| u32::from(*value)).collect(),
         values,
     )?;
-    let magnetic = mesh
+    let mut magnetic = mesh
         .element_markers
         .iter()
         .map(|marker| *marker != 0)
         .collect::<Vec<_>>();
-    let universe = vec![true; elements.len()];
+    intersect_masks(&mut magnetic, &runtime_scope);
+    let universe = runtime_scope;
     Ok(ResolvedSpatialTarget {
         field: TargetField::Fem(source),
         selected_entity_ids: selected_entity_ids.clone(),
@@ -542,6 +544,21 @@ fn expand_fem_values(
     elements: &[[u32; 4]],
     selected: &[bool],
 ) -> Result<Vec<f64>, ApiError> {
+    let required_nodes = elements
+        .iter()
+        .zip(selected)
+        .filter(|(_, selected)| **selected)
+        .flat_map(|(element, _)| element)
+        .map(|node| *node as usize)
+        .collect::<BTreeSet<_>>();
+    if let Some(node) = required_nodes
+        .iter()
+        .find(|node| **node >= global_node_count)
+    {
+        return Err(ApiError::conflict(format!(
+            "invalid_fem_connectivity: selected Tet4 node {node} is out of range for {global_node_count} nodes"
+        )));
+    }
     let mut values = vec![f64::NAN; global_node_count.saturating_mul(resolved.component_count)];
     match mapping {
         EntityMapping::Identity { entity_count } => {
@@ -562,13 +579,6 @@ fn expand_fem_values(
             }
         }
     }
-    let required_nodes = elements
-        .iter()
-        .zip(selected)
-        .filter(|(_, selected)| **selected)
-        .flat_map(|(element, _)| element)
-        .map(|node| *node as usize)
-        .collect::<BTreeSet<_>>();
     if required_nodes.iter().any(|node| {
         values[*node * resolved.component_count..(*node + 1) * resolved.component_count]
             .iter()

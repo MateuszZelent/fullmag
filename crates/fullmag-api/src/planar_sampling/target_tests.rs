@@ -124,7 +124,15 @@ fn fem_mesh() -> FemMeshPayload {
 }
 
 fn fem_field(mapping: EntityMapping, values: Vec<f64>) -> ResolvedSpatialField<'static> {
-    let mesh = Box::leak(Box::new(fem_mesh()));
+    fem_field_with_mesh(fem_mesh(), mapping, values)
+}
+
+fn fem_field_with_mesh(
+    mesh: FemMeshPayload,
+    mapping: EntityMapping,
+    values: Vec<f64>,
+) -> ResolvedSpatialField<'static> {
+    let mesh = Box::leak(Box::new(mesh));
     let spec = quantity_spec("m").unwrap();
     ResolvedSpatialField {
         quantity_id: "m".to_string(),
@@ -149,6 +157,60 @@ fn fem_field(mapping: EntityMapping, values: Vec<f64>) -> ResolvedSpatialField<'
             mapping,
         },
     }
+}
+
+fn scalar_fem_field(mesh: FemMeshPayload, values: Vec<f64>) -> ResolvedSpatialField<'static> {
+    let mesh = Box::leak(Box::new(mesh));
+    let entity_count = mesh.nodes.len();
+    let spec = quantity_spec("demag_phi").unwrap();
+    ResolvedSpatialField {
+        quantity_id: "demag_phi".to_string(),
+        quantity_kind: spec.shape,
+        canonical_unit: spec.unit.to_string(),
+        component_count: 1,
+        default_component: spec.default_component,
+        source_kind: SpatialFieldSourceKind::Materialized,
+        provenance: SpatialFieldProvenance {
+            backend: Some("fem".to_string()),
+            device: Some("cpu".to_string()),
+            precision: Some("double".to_string()),
+        },
+        field_generation: Some("run-analytic:1".to_string()),
+        quantity_revision: 13,
+        mesh_or_grid_revision: 17,
+        source_grid: None,
+        values,
+        carrier: SpatialFieldCarrier::FemNodes {
+            topology: mesh,
+            topology_fingerprint: "analytic-skew-tet4".to_string(),
+            mapping: EntityMapping::Identity { entity_count },
+        },
+    }
+}
+
+fn dynamic_frame(extent: PlanarExtentIR) -> PlanarFrameIR {
+    PlanarFrameIR {
+        origin_m: [0.0, 0.0, 0.0],
+        u_axis: [1.0, 0.0, 0.0],
+        v_axis: [0.0, 1.0, 0.0],
+        normal: [0.0, 0.0, 1.0],
+        preset: None,
+        normalization_version: fullmag_ir::PLANAR_FRAME_NORMALIZATION_VERSION.to_string(),
+        extent,
+    }
+}
+
+fn assert_frame_bounds(frame: &PlanarFrameIR, expected: [f64; 4]) {
+    let PlanarExtentIR::Explicit {
+        u_min_m,
+        u_max_m,
+        v_min_m,
+        v_max_m,
+    } = frame.extent
+    else {
+        panic!("dynamic extent was not resolved");
+    };
+    assert_eq!([u_min_m, u_max_m, v_min_m, v_max_m], expected);
 }
 
 fn scalar_fdm_field(
@@ -182,6 +244,22 @@ fn scalar_fdm_field(
             multilayer_scope: None,
         },
     }
+}
+
+fn scalar_fdm_field_without_membership() -> ResolvedSpatialField<'static> {
+    let mut field = scalar_fdm_field(
+        FdmCellMembership {
+            object_ids: Vec::new(),
+            region_legend: Vec::new(),
+            cell_membership: vec![u32::MAX; 2],
+        },
+        vec![4.0, 9.0],
+    );
+    let SpatialFieldCarrier::FdmCells { membership, .. } = &mut field.carrier else {
+        unreachable!("fixture uses FDM cells");
+    };
+    *membership = None;
+    field
 }
 
 fn multi_object_membership(cells: Vec<u32>) -> FdmCellMembership {
@@ -222,6 +300,63 @@ fn fem_dynamic_bounds_use_only_selected_target_elements() {
 
     assert_eq!(target.selected_entity_ids(), &[0]);
     assert_eq!(target.bounds_world_m(), [[0.0, 0.0, 0.0], [1.0, 1.0, 1.0]]);
+}
+
+#[test]
+fn fem_mesh_part_scope_limits_target_magnetic_and_universe_extents() {
+    let field = fem_field(EntityMapping::Identity { entity_count: 8 }, vec![1.0; 24]);
+    let target = resolve_spatial_target(
+        &field,
+        &MonitorTargetIR::Domain,
+        ResolvedSpatialScope::MeshPart {
+            scope_id: "left-part".to_string(),
+        },
+        &PlanarOperatorIR::PlaneSample,
+    )
+    .unwrap();
+
+    for extent in [
+        PlanarExtentIR::TargetBounds { padding_m: 0.0 },
+        PlanarExtentIR::MagneticDomain { padding_m: 0.0 },
+        PlanarExtentIR::Universe { padding_m: 0.0 },
+    ] {
+        let mut frame = dynamic_frame(extent);
+        target.resolve_dynamic_extent(&mut frame).unwrap();
+        assert_frame_bounds(&frame, [0.0, 1.0, 0.0, 1.0]);
+    }
+}
+
+#[test]
+fn fem_airbox_scope_limits_target_and_universe_and_has_no_magnetic_extent() {
+    let mut mesh = fem_mesh();
+    mesh.element_markers = vec![1, 0];
+    mesh.mesh_parts[1].id = "airbox".to_string();
+    mesh.mesh_parts[1].role = "far_air".to_string();
+    mesh.mesh_parts[1].object_id = None;
+    let field = fem_field_with_mesh(
+        mesh,
+        EntityMapping::Identity { entity_count: 8 },
+        vec![1.0; 24],
+    );
+    let target = resolve_spatial_target(
+        &field,
+        &MonitorTargetIR::Domain,
+        ResolvedSpatialScope::Airbox { scope_id: None },
+        &PlanarOperatorIR::PlaneSample,
+    )
+    .unwrap();
+
+    for extent in [
+        PlanarExtentIR::TargetBounds { padding_m: 0.0 },
+        PlanarExtentIR::Universe { padding_m: 0.0 },
+    ] {
+        let mut frame = dynamic_frame(extent);
+        target.resolve_dynamic_extent(&mut frame).unwrap();
+        assert_frame_bounds(&frame, [10.0, 11.0, 0.0, 1.0]);
+    }
+    let mut magnetic = dynamic_frame(PlanarExtentIR::MagneticDomain { padding_m: 0.0 });
+    let error = target.resolve_dynamic_extent(&mut magnetic).unwrap_err();
+    assert!(error.message.contains("planar_extent_empty"));
 }
 
 #[test]
@@ -344,6 +479,54 @@ fn airbox_scope_requires_exact_legal_airbox_carrier_quantity() {
 }
 
 #[test]
+fn fdm_domain_without_membership_has_no_magnetic_extent() {
+    let field = scalar_fdm_field_without_membership();
+    let target = resolve_spatial_target(
+        &field,
+        &MonitorTargetIR::Domain,
+        ResolvedSpatialScope::MonitorTarget,
+        &PlanarOperatorIR::PlaneSample,
+    )
+    .unwrap();
+    let mut frame = dynamic_frame(PlanarExtentIR::MagneticDomain { padding_m: 0.0 });
+    let error = target.resolve_dynamic_extent(&mut frame).unwrap_err();
+    assert!(
+        error.message.contains("planar_extent_empty")
+            || error.message.contains("missing_fdm_membership")
+    );
+}
+
+#[test]
+fn fdm_airbox_carrier_has_no_implicit_magnetic_extent() {
+    let field = ResolvedSpatialField::from_airbox(
+        "H_demag",
+        "H_demag",
+        "A/m",
+        3,
+        vec![1.0, 2.0, 3.0],
+        [1, 1, 1],
+        [0.0, 0.0, 0.0],
+        [1.0, 1.0, 1.0],
+        "airbox-carrier".to_string(),
+        17,
+        19,
+        23,
+        SpatialFieldSourceKind::Persisted,
+    )
+    .unwrap();
+    let target = resolve_spatial_target(
+        &field,
+        &MonitorTargetIR::Domain,
+        ResolvedSpatialScope::Airbox { scope_id: None },
+        &PlanarOperatorIR::PlaneSample,
+    )
+    .unwrap();
+    let mut frame = dynamic_frame(PlanarExtentIR::MagneticDomain { padding_m: 0.0 });
+    let error = target.resolve_dynamic_extent(&mut frame).unwrap_err();
+    assert!(error.message.contains("planar_extent_empty"));
+}
+
+#[test]
 fn constant_field_is_invariant_under_frame_rotation_and_resolution() {
     let field = scalar_fdm_field(
         FdmCellMembership {
@@ -403,45 +586,57 @@ fn constant_field_is_invariant_under_frame_rotation_and_resolution() {
 
 #[test]
 fn slab_mean_is_refinement_invariant_with_explicit_tolerance() {
-    let vector = [3.5, 3.5, 3.5];
-    let coarse = fem_field(
-        EntityMapping::Identity { entity_count: 8 },
-        vector.repeat(8),
-    );
+    let mut mesh = fem_mesh();
+    mesh.nodes = vec![
+        [0.0, 0.0, 0.0],
+        [2.0, 0.0, 0.0],
+        [0.0, 1.5, 0.0],
+        [0.2, 0.1, 1.2],
+    ];
+    mesh.cells = FemConnectivityIR::from_tet4(vec![[0, 1, 2, 3]]);
+    mesh.element_markers = vec![1];
+    mesh.mesh_parts.truncate(1);
+    mesh.mesh_parts[0].element_start = 0;
+    mesh.mesh_parts[0].element_count = 1;
+    mesh.mesh_parts[0].node_indices = vec![0, 1, 2, 3];
+    let value = |point: [f64; 3]| 5.0 + point[0] + 2.0 * point[1] + 3.0 * point[2];
+    let nodal_values = mesh.nodes.iter().copied().map(value).collect::<Vec<_>>();
+    let analytic_mean = nodal_values.iter().sum::<f64>() / 4.0;
+    let coarse = scalar_fem_field(mesh, nodal_values);
     let target = resolve_spatial_target(
         &coarse,
-        &MonitorTargetIR::Object {
-            object_id: "left".to_string(),
-        },
+        &MonitorTargetIR::Domain,
         ResolvedSpatialScope::MonitorTarget,
-        &PlanarOperatorIR::SlabAverage { thickness_m: 0.8 },
+        &PlanarOperatorIR::SlabAverage { thickness_m: 2.0 },
     )
     .unwrap();
     let refined = target.refine_uniform_p1_for_test();
     let req = request(
         explicit_frame(
-            [0.0, 0.0, 0.4],
+            [0.0, 0.0, 0.6],
             [1.0, 0.0, 0.0],
             [0.0, 1.0, 0.0],
             [0.0, 0.0, 1.0],
-            [0.0, 0.8, 0.0, 0.8],
+            [0.0, 2.0, 0.0, 1.5],
         ),
-        PlanarOperatorIR::SlabAverage { thickness_m: 0.8 },
-        [3, 3],
+        PlanarOperatorIR::SlabAverage { thickness_m: 2.0 },
+        [1, 1],
     );
-    let req = ResolvedPlanarSampleRequest {
-        component: PlanarComponent::Magnitude,
-        ..req
-    };
     let coarse_sample = sample_resolved_target(&target, &req).unwrap();
     let refined_sample = sample_resolved_target(&refined, &req).unwrap();
-    for (coarse, refined) in coarse_sample
+    let pairs = coarse_sample
         .scalar_values
         .iter()
         .zip(refined_sample.scalar_values.iter())
         .filter(|(coarse, refined)| coarse.is_finite() && refined.is_finite())
-    {
+        .collect::<Vec<_>>();
+    assert_eq!(pairs.len(), 1, "slab must produce a non-empty sample pair");
+    assert_ne!(coarse_sample.occupancy[0], super::Occupancy::Empty);
+    assert_ne!(refined_sample.occupancy[0], super::Occupancy::Empty);
+    for (coarse, refined) in pairs {
         assert!((coarse - refined).abs() <= 1.0e-10);
+        assert!((coarse - analytic_mean).abs() <= 1.0e-10);
+        assert!((refined - analytic_mean).abs() <= 1.0e-10);
     }
 }
 
@@ -567,6 +762,27 @@ fn unsupported_fem_cell_carrier_fails_instead_of_falling_back_to_p1_tet4() {
     )
     .unwrap_err();
     assert!(error.message.contains("tet4") || error.message.contains("order"));
+}
+
+#[test]
+fn out_of_range_selected_tet4_node_fails_without_panicking() {
+    let mut mesh = fem_mesh();
+    mesh.cells = FemConnectivityIR::from_tet4(vec![[0, 1, 2, 99], [4, 5, 6, 7]]);
+    let field = fem_field_with_mesh(
+        mesh,
+        EntityMapping::Identity { entity_count: 8 },
+        vec![1.0; 24],
+    );
+    let error = resolve_spatial_target(
+        &field,
+        &MonitorTargetIR::Object {
+            object_id: "left".to_string(),
+        },
+        ResolvedSpatialScope::MonitorTarget,
+        &PlanarOperatorIR::PlaneSample,
+    )
+    .unwrap_err();
+    assert!(error.message.contains("node") && error.message.contains("range"));
 }
 
 #[test]
