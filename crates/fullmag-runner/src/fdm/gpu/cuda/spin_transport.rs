@@ -3,12 +3,20 @@ use fullmag_fdm_sys::gpu_transport_abi_v1::{
     fullmag_fdm_gpu_charge_snapshot_handle_v1, fullmag_fdm_gpu_charge_snapshot_info_v1,
     fullmag_fdm_gpu_charge_solve_request_v1, fullmag_fdm_gpu_charge_solve_result_v1,
     fullmag_fdm_gpu_steady_spin_solve_request_v1, fullmag_fdm_gpu_steady_spin_solve_result_v1,
-    fullmag_fdm_gpu_transport_buffer_view_v1, fullmag_fdm_gpu_transport_context_create_request_v1,
+    fullmag_fdm_gpu_transport_buffer_view_v1,
+    fullmag_fdm_gpu_transport_checkpoint_export_request_v1,
+    fullmag_fdm_gpu_transport_checkpoint_export_result_v1,
+    fullmag_fdm_gpu_transport_checkpoint_import_request_v1,
+    fullmag_fdm_gpu_transport_checkpoint_restore_result_v1,
+    fullmag_fdm_gpu_transport_checkpoint_size_request_v1,
+    fullmag_fdm_gpu_transport_checkpoint_size_result_v1,
+    fullmag_fdm_gpu_transport_context_create_request_v1,
     fullmag_fdm_gpu_transport_context_create_result_v1,
     fullmag_fdm_gpu_transport_context_handle_v1, fullmag_fdm_gpu_transport_static_descriptor_v1,
     gpu_prefix_v1, FULLMAG_FDM_GPU_TRANSPORT_ABI_V1,
     FULLMAG_FDM_GPU_TRANSPORT_CONVERGENCE_CONVERGED,
 };
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 use std::fmt;
@@ -16,6 +24,11 @@ use std::mem::size_of;
 
 const BASE_STATIC_DESCRIPTOR_FEATURES: u64 = ffi::FULLMAG_FDM_GPU_TRANSPORT_FEATURE_M1_CHARGE
     | ffi::FULLMAG_FDM_GPU_TRANSPORT_FEATURE_STEADY_SPIN;
+const BASE_CHECKPOINT_FEATURES: u64 =
+    BASE_STATIC_DESCRIPTOR_FEATURES | ffi::FULLMAG_FDM_GPU_TRANSPORT_FEATURE_CHECKPOINT_V1;
+
+const CHECKPOINT_HOST_BYTES_PER_CELL_LIMIT: u64 = 4096;
+const CHECKPOINT_HOST_FIXED_BYTES_LIMIT: u64 = 1 << 20;
 
 fn static_descriptor_features(
     interfaces: &[ffi::fullmag_fdm_gpu_transport_spin_interface_v1],
@@ -1055,6 +1068,29 @@ pub(crate) struct AcceptedGpuM1Publication {
     pub(crate) spin_deterministic_compute_digest: [u8; 32],
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct TransportStageCheckpointV1 {
+    pub(crate) schema: String,
+    pub(crate) accepted_step: u64,
+    pub(crate) charge_sequence: u64,
+    pub(crate) spin_accepted_sequence: u64,
+    pub(crate) source_revision: u64,
+    pub(crate) charge_operator_revision: u64,
+    pub(crate) spin_operator_revision: u64,
+    pub(crate) static_descriptor_revision: u64,
+    pub(crate) device_uuid: [u8; 16],
+    pub(crate) device_ordinal: i32,
+    pub(crate) build_digest: [u8; 32],
+    pub(crate) static_descriptor_digest: [u8; 32],
+    pub(crate) payload_sha256: [u8; 32],
+    pub(crate) snapshot_digest: [u8; 32],
+    pub(crate) spin_digest: [u8; 32],
+    pub(crate) warm_start_digest: [u8; 32],
+    pub(crate) snapshot_lineage_id: [u8; 16],
+    pub(crate) operation_audit_digest: [u8; 32],
+    pub(crate) payload: Vec<u8>,
+}
+
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum GpuM1TransportError {
     InvalidDescriptor(String),
@@ -1071,6 +1107,7 @@ pub(crate) enum GpuM1TransportError {
         reason: u32,
     },
     ChargeSnapshotRequired,
+    SpinSnapshotRequired,
     ChargeSnapshotAlreadyAccepted,
     SnapshotIdentityMismatch {
         expected_device: DeviceIdentity,
@@ -1123,6 +1160,21 @@ pub(crate) trait GpuM1TransportAbi {
         &self,
         request: &fullmag_fdm_gpu_steady_spin_solve_request_v1,
     ) -> Result<fullmag_fdm_gpu_steady_spin_solve_result_v1, u32>;
+
+    fn checkpoint_query_size(
+        &self,
+        request: &fullmag_fdm_gpu_transport_checkpoint_size_request_v1,
+    ) -> Result<fullmag_fdm_gpu_transport_checkpoint_size_result_v1, u32>;
+
+    fn checkpoint_export(
+        &self,
+        request: &fullmag_fdm_gpu_transport_checkpoint_export_request_v1,
+    ) -> Result<fullmag_fdm_gpu_transport_checkpoint_export_result_v1, u32>;
+
+    fn checkpoint_import(
+        &self,
+        request: &fullmag_fdm_gpu_transport_checkpoint_import_request_v1,
+    ) -> Result<fullmag_fdm_gpu_transport_checkpoint_restore_result_v1, u32>;
 
     fn destroy_snapshot(
         &self,
@@ -1193,6 +1245,7 @@ pub(crate) struct GpuM1TransportSession<A: GpuM1TransportAbi> {
     static_descriptor_revision: u64,
     charge_operator_revision: u64,
     spin_operator_revision: u64,
+    static_descriptor_digest: [u8; 32],
     charge_solver_policy: u32,
     charge_gauge_policy: u32,
     charge_relative_tolerance: f64,
@@ -1202,6 +1255,7 @@ pub(crate) struct GpuM1TransportSession<A: GpuM1TransportAbi> {
     spin_max_iterations: u64,
     cell_count: u64,
     accepted_snapshot: Option<AcceptedChargeSnapshot>,
+    accepted_spin_sequence: Option<u64>,
 }
 
 impl<A: GpuM1TransportAbi> GpuM1TransportSession<A> {
@@ -1210,7 +1264,8 @@ impl<A: GpuM1TransportAbi> GpuM1TransportSession<A> {
         mut prepared: PreparedGpuM1Descriptor,
     ) -> Result<Self, GpuM1TransportError> {
         let static_features = static_descriptor_features(&prepared.interfaces);
-        prepared.context_request.requested_device_features |= static_features;
+        prepared.context_request.requested_device_features |=
+            static_features | ffi::FULLMAG_FDM_GPU_TRANSPORT_FEATURE_CHECKPOINT_V1;
         let required_features = prepared.context_request.requested_device_features;
         let charge_solver_policy = prepared.charge_solver_policy;
         let charge_gauge_policy = prepared.charge_gauge_policy;
@@ -1279,6 +1334,7 @@ impl<A: GpuM1TransportAbi> GpuM1TransportSession<A> {
             static_descriptor_revision: prepared.static_descriptor.descriptor_revision,
             charge_operator_revision: prepared.charge_operator_revision,
             spin_operator_revision: prepared.spin_operator_revision,
+            static_descriptor_digest: prepared.static_descriptor.descriptor_digest,
             charge_solver_policy,
             charge_gauge_policy,
             charge_relative_tolerance,
@@ -1288,6 +1344,7 @@ impl<A: GpuM1TransportAbi> GpuM1TransportSession<A> {
             spin_max_iterations,
             cell_count,
             accepted_snapshot: None,
+            accepted_spin_sequence: None,
         })
     }
 
@@ -1454,14 +1511,242 @@ impl<A: GpuM1TransportAbi> GpuM1TransportSession<A> {
         if spin.snapshot_content_digest != snapshot.content_digest {
             return Err(GpuM1TransportError::SpinSnapshotDigestMismatch);
         }
-        Ok(AcceptedSpinSnapshot {
+        let accepted_spin = AcceptedSpinSnapshot {
             accepted_sequence: snapshot.accepted_sequence,
             source_revision: snapshot.source_revision,
             operator_revision: self.spin_operator_revision,
             snapshot_content_digest: spin.snapshot_content_digest,
             deterministic_compute_digest: spin.deterministic_compute_digest,
             device_identity: self.device_identity,
+        };
+        self.accepted_spin_sequence = Some(snapshot.accepted_sequence);
+        Ok(accepted_spin)
+    }
+
+    pub(crate) fn export_stage_checkpoint(
+        &self,
+        accepted_step: u64,
+    ) -> Result<TransportStageCheckpointV1, GpuM1TransportError> {
+        let snapshot = self
+            .accepted_snapshot
+            .as_ref()
+            .ok_or(GpuM1TransportError::ChargeSnapshotRequired)?;
+        let spin_accepted_sequence = self
+            .accepted_spin_sequence
+            .filter(|sequence| *sequence == snapshot.accepted_sequence)
+            .ok_or(GpuM1TransportError::SpinSnapshotRequired)?;
+        let size_request = fullmag_fdm_gpu_transport_checkpoint_size_request_v1 {
+            prefix: prefix_with_features::<fullmag_fdm_gpu_transport_checkpoint_size_request_v1>(
+                BASE_CHECKPOINT_FEATURES,
+            ),
+            context_handle: self.context_handle(),
+            snapshot_handle: snapshot.handle,
+            accepted_sequence: snapshot.accepted_sequence,
+            schema_version: ffi::FULLMAG_FDM_GPU_TRANSPORT_CHECKPOINT_SCHEMA_V1,
+            inclusion_mask: ffi::FULLMAG_FDM_GPU_TRANSPORT_CHECKPOINT_INCLUDE_ALL_V1,
+            static_descriptor_digest: self.static_descriptor_digest,
+        };
+        let size = self
+            .abi
+            .checkpoint_query_size(&size_request)
+            .map_err(|status| GpuM1TransportError::AbiFailure {
+                operation: "checkpoint_query_size",
+                status,
+            })?;
+        if size.schema_version != ffi::FULLMAG_FDM_GPU_TRANSPORT_CHECKPOINT_SCHEMA_V1
+            || size.inclusion_mask != ffi::FULLMAG_FDM_GPU_TRANSPORT_CHECKPOINT_INCLUDE_ALL_V1
+            || size.snapshot_content_digest != snapshot.content_digest
+            || size.section_count != 20
+            || size.alignment != 64
+            || size.required_bytes == 0
+        {
+            return Err(GpuM1TransportError::SnapshotRevisionMismatch);
+        }
+        let maximum_checkpoint_bytes = self
+            .cell_count
+            .checked_mul(CHECKPOINT_HOST_BYTES_PER_CELL_LIMIT)
+            .and_then(|bytes| bytes.checked_add(CHECKPOINT_HOST_FIXED_BYTES_LIMIT))
+            .ok_or_else(|| invalid("GPU M1 checkpoint capacity calculation overflowed"))?;
+        if size.required_bytes > maximum_checkpoint_bytes {
+            return Err(invalid(format!(
+                "GPU M1 checkpoint requires {} bytes but the descriptor-derived limit is {} bytes",
+                size.required_bytes, maximum_checkpoint_bytes
+            )));
+        }
+        let payload_len = usize::try_from(size.required_bytes)
+            .map_err(|_| invalid("GPU M1 checkpoint size exceeds host address space"))?;
+        let mut payload = Vec::new();
+        payload
+            .try_reserve_exact(payload_len)
+            .map_err(|_| invalid("GPU M1 checkpoint allocation failed"))?;
+        payload.resize(payload_len, 0);
+        let destination = fullmag_fdm_gpu_transport_buffer_view_v1 {
+            prefix: prefix::<fullmag_fdm_gpu_transport_buffer_view_v1>(),
+            address: payload.as_mut_ptr() as u64,
+            element_count: size.required_bytes,
+            byte_stride: 1,
+            byte_length: size.required_bytes,
+            element_type: ffi::FULLMAG_FDM_GPU_TRANSPORT_ELEMENT_TYPE_RAW_BYTES,
+            pointer_space: ffi::FULLMAG_FDM_GPU_TRANSPORT_POINTER_SPACE_HOST_WRITE_ONLY,
+            component_order: ffi::FULLMAG_FDM_GPU_TRANSPORT_COMPONENT_ORDER_SCALAR,
+            reserved1: 0,
+        };
+        let request = fullmag_fdm_gpu_transport_checkpoint_export_request_v1 {
+            prefix: prefix_with_features::<fullmag_fdm_gpu_transport_checkpoint_export_request_v1>(
+                BASE_CHECKPOINT_FEATURES,
+            ),
+            context_handle: self.context_handle(),
+            snapshot_handle: snapshot.handle,
+            accepted_sequence: snapshot.accepted_sequence,
+            cadence_id: accepted_step,
+            destination_view_ptr: (&destination as *const _) as u64,
+            exact_capacity: size.required_bytes,
+            expected_size: size.required_bytes,
+            inclusion_mask: ffi::FULLMAG_FDM_GPU_TRANSPORT_CHECKPOINT_INCLUDE_ALL_V1,
+            reserved1: 0,
+        };
+        let exported = self.abi.checkpoint_export(&request).map_err(|status| {
+            GpuM1TransportError::AbiFailure {
+                operation: "checkpoint_export",
+                status,
+            }
+        })?;
+        if exported.committed_bytes != size.required_bytes
+            || exported.accepted_sequence != snapshot.accepted_sequence
+            || exported.snapshot_digest != snapshot.content_digest
+            || Sha256::digest(&payload).as_slice() != exported.payload_sha256
+        {
+            return Err(GpuM1TransportError::SnapshotRevisionMismatch);
+        }
+        Ok(TransportStageCheckpointV1 {
+            schema: "fullmag.fdm.transport_stage_checkpoint.v1".into(),
+            accepted_step,
+            charge_sequence: snapshot.accepted_sequence,
+            spin_accepted_sequence,
+            source_revision: self.source_revision,
+            charge_operator_revision: self.charge_operator_revision,
+            spin_operator_revision: self.spin_operator_revision,
+            static_descriptor_revision: self.static_descriptor_revision,
+            device_uuid: self.device_identity.uuid,
+            device_ordinal: self.device_identity.ordinal,
+            build_digest: self.device_identity.build_digest,
+            static_descriptor_digest: self.static_descriptor_digest,
+            payload_sha256: exported.payload_sha256,
+            snapshot_digest: exported.snapshot_digest,
+            spin_digest: exported.spin_digest,
+            warm_start_digest: exported.warm_start_digest,
+            snapshot_lineage_id: exported.snapshot_lineage_id,
+            operation_audit_digest: exported.operation_audit_digest,
+            payload,
         })
+    }
+
+    pub(crate) fn restore_stage_checkpoint(
+        &mut self,
+        checkpoint: &TransportStageCheckpointV1,
+    ) -> Result<AcceptedChargeSnapshot, GpuM1TransportError> {
+        if self.accepted_snapshot.is_some() {
+            return Err(GpuM1TransportError::ChargeSnapshotAlreadyAccepted);
+        }
+        let maximum_checkpoint_bytes = self
+            .cell_count
+            .checked_mul(CHECKPOINT_HOST_BYTES_PER_CELL_LIMIT)
+            .and_then(|bytes| bytes.checked_add(CHECKPOINT_HOST_FIXED_BYTES_LIMIT))
+            .ok_or_else(|| invalid("GPU M1 checkpoint capacity calculation overflowed"))?;
+        let payload_bytes = u64::try_from(checkpoint.payload.len())
+            .map_err(|_| invalid("GPU M1 checkpoint payload exceeds u64"))?;
+        let payload_digest: [u8; 32] = Sha256::digest(&checkpoint.payload).into();
+        if checkpoint.schema != "fullmag.fdm.transport_stage_checkpoint.v1"
+            || checkpoint.charge_sequence == 0
+            || checkpoint.charge_sequence != checkpoint.spin_accepted_sequence
+            || checkpoint.source_revision != self.source_revision
+            || checkpoint.charge_operator_revision != self.charge_operator_revision
+            || checkpoint.spin_operator_revision != self.spin_operator_revision
+            || checkpoint.static_descriptor_revision != self.static_descriptor_revision
+            || checkpoint.device_uuid != self.device_identity.uuid
+            || checkpoint.device_ordinal != self.device_identity.ordinal
+            || checkpoint.build_digest != self.device_identity.build_digest
+            || checkpoint.static_descriptor_digest != self.static_descriptor_digest
+            || payload_bytes == 0
+            || payload_bytes > maximum_checkpoint_bytes
+            || payload_digest != checkpoint.payload_sha256
+        {
+            return Err(GpuM1TransportError::SnapshotRevisionMismatch);
+        }
+        let source = fullmag_fdm_gpu_transport_buffer_view_v1 {
+            prefix: prefix::<fullmag_fdm_gpu_transport_buffer_view_v1>(),
+            address: checkpoint.payload.as_ptr() as u64,
+            element_count: payload_bytes,
+            byte_stride: 1,
+            byte_length: payload_bytes,
+            element_type: ffi::FULLMAG_FDM_GPU_TRANSPORT_ELEMENT_TYPE_RAW_BYTES,
+            pointer_space: ffi::FULLMAG_FDM_GPU_TRANSPORT_POINTER_SPACE_HOST_READ_ONLY,
+            component_order: ffi::FULLMAG_FDM_GPU_TRANSPORT_COMPONENT_ORDER_SCALAR,
+            reserved1: 0,
+        };
+        let request = fullmag_fdm_gpu_transport_checkpoint_import_request_v1 {
+            prefix: prefix_with_features::<fullmag_fdm_gpu_transport_checkpoint_import_request_v1>(
+                BASE_CHECKPOINT_FEATURES,
+            ),
+            context_handle: self.context_handle(),
+            source_view_ptr: (&source as *const _) as u64,
+            expected_payload_sha256: checkpoint.payload_sha256,
+            device_uuid: checkpoint.device_uuid,
+            build_digest: checkpoint.build_digest,
+            static_descriptor_digest: checkpoint.static_descriptor_digest,
+            restore_policy:
+                ffi::FULLMAG_FDM_GPU_TRANSPORT_CHECKPOINT_RESTORE_POLICY_EXACT_SAME_DEVICE_BUILD,
+            reserved1: 0,
+            expected_bytes: payload_bytes,
+            audit_parent_digest: checkpoint.operation_audit_digest,
+        };
+        let restored = self.abi.checkpoint_import(&request).map_err(|status| {
+            GpuM1TransportError::AbiFailure {
+                operation: "checkpoint_import",
+                status,
+            }
+        })?;
+        let validation_error = if snapshot_handle_is_null(restored.snapshot_handle) {
+            Some(GpuM1TransportError::InvalidContextIdentity)
+        } else if restored.restored_state
+            != ffi::FULLMAG_FDM_GPU_TRANSPORT_CHECKPOINT_RESTORED_STATE_SPIN_ACCEPTED
+            || restored.accepted_sequence != checkpoint.charge_sequence
+            || restored.snapshot_lineage_id != checkpoint.snapshot_lineage_id
+            || restored.snapshot_content_digest != checkpoint.snapshot_digest
+            || restored.spin_digest != checkpoint.spin_digest
+            || restored.warm_start_digest != checkpoint.warm_start_digest
+        {
+            Some(GpuM1TransportError::SnapshotRevisionMismatch)
+        } else {
+            None
+        };
+        if let Some(error) = validation_error {
+            if snapshot_handle_is_null(restored.snapshot_handle) {
+                return Err(error);
+            }
+            return match self.abi.destroy_snapshot(restored.snapshot_handle) {
+                Ok(()) => Err(error),
+                Err(status) => Err(GpuM1TransportError::OperationAndCleanup {
+                    operation: Box::new(error),
+                    cleanup: Box::new(GpuM1TransportError::CleanupFailures(vec![(
+                        "destroy_snapshot",
+                        status,
+                    )])),
+                }),
+            };
+        }
+        let snapshot = AcceptedChargeSnapshot {
+            handle: restored.snapshot_handle,
+            context_handle: self.context_handle(),
+            accepted_sequence: restored.accepted_sequence,
+            source_revision: self.source_revision,
+            operator_revision: self.charge_operator_revision,
+            content_digest: restored.snapshot_content_digest,
+            device_identity: self.device_identity,
+        };
+        self.accepted_snapshot = Some(snapshot.clone());
+        self.accepted_spin_sequence = Some(restored.accepted_sequence);
+        Ok(snapshot)
     }
 
     fn destroy_accepted_snapshot(&mut self) -> Result<(), GpuM1TransportError> {
@@ -1471,6 +1756,7 @@ impl<A: GpuM1TransportAbi> GpuM1TransportSession<A> {
         match self.abi.destroy_snapshot(snapshot.handle) {
             Ok(()) => {
                 self.accepted_snapshot = None;
+                self.accepted_spin_sequence = None;
                 Ok(())
             }
             Err(status) => Err(GpuM1TransportError::CleanupFailures(vec![(
@@ -1643,6 +1929,52 @@ impl GpuM1TransportAbi for NativeGpuM1TransportAbi {
                 &mut result,
             )
         };
+        (status == 0).then_some(result).ok_or(status)
+    }
+
+    fn checkpoint_query_size(
+        &self,
+        request: &fullmag_fdm_gpu_transport_checkpoint_size_request_v1,
+    ) -> Result<fullmag_fdm_gpu_transport_checkpoint_size_result_v1, u32> {
+        let mut result = fullmag_fdm_gpu_transport_checkpoint_size_result_v1 {
+            prefix: prefix_with_features::<fullmag_fdm_gpu_transport_checkpoint_size_result_v1>(
+                ffi::FULLMAG_FDM_GPU_TRANSPORT_FEATURE_CHECKPOINT_V1,
+            ),
+            ..Default::default()
+        };
+        let status = unsafe {
+            ffi::fullmag_fdm_gpu_transport_checkpoint_query_size_v1(request, &mut result)
+        };
+        (status == 0).then_some(result).ok_or(status)
+    }
+
+    fn checkpoint_export(
+        &self,
+        request: &fullmag_fdm_gpu_transport_checkpoint_export_request_v1,
+    ) -> Result<fullmag_fdm_gpu_transport_checkpoint_export_result_v1, u32> {
+        let mut result = fullmag_fdm_gpu_transport_checkpoint_export_result_v1 {
+            prefix: prefix_with_features::<fullmag_fdm_gpu_transport_checkpoint_export_result_v1>(
+                ffi::FULLMAG_FDM_GPU_TRANSPORT_FEATURE_CHECKPOINT_V1,
+            ),
+            ..Default::default()
+        };
+        let status =
+            unsafe { ffi::fullmag_fdm_gpu_transport_checkpoint_export_v1(request, &mut result) };
+        (status == 0).then_some(result).ok_or(status)
+    }
+
+    fn checkpoint_import(
+        &self,
+        request: &fullmag_fdm_gpu_transport_checkpoint_import_request_v1,
+    ) -> Result<fullmag_fdm_gpu_transport_checkpoint_restore_result_v1, u32> {
+        let mut result = fullmag_fdm_gpu_transport_checkpoint_restore_result_v1 {
+            prefix: prefix_with_features::<fullmag_fdm_gpu_transport_checkpoint_restore_result_v1>(
+                ffi::FULLMAG_FDM_GPU_TRANSPORT_FEATURE_CHECKPOINT_V1,
+            ),
+            ..Default::default()
+        };
+        let status =
+            unsafe { ffi::fullmag_fdm_gpu_transport_checkpoint_import_v1(request, &mut result) };
         (status == 0).then_some(result).ok_or(status)
     }
 

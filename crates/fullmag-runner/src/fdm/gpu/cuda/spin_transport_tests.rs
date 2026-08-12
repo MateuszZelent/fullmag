@@ -16,6 +16,7 @@ use fullmag_ir::{
     BackendPlanIR, BackendTarget, ExecutionDevice, ExecutionMode, ExecutionPrecision, ProblemIR,
 };
 use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
 use std::mem::size_of;
 use std::sync::{Arc, Mutex};
 
@@ -51,6 +52,7 @@ struct FakeState {
     fail_steady_spin: Option<u32>,
     supported_features: Option<u64>,
     corrupt_accepted_source_revision: bool,
+    checkpoint_size_override: Option<ffi::fullmag_fdm_gpu_transport_checkpoint_size_result_v1>,
 }
 
 #[derive(Clone, Default)]
@@ -97,6 +99,16 @@ impl FakeAbi {
             .lock()
             .expect("fake ABI state")
             .corrupt_accepted_source_revision = true;
+    }
+
+    fn override_checkpoint_size(
+        &self,
+        result: ffi::fullmag_fdm_gpu_transport_checkpoint_size_result_v1,
+    ) {
+        self.state
+            .lock()
+            .expect("fake ABI state")
+            .checkpoint_size_override = Some(result);
     }
 
     fn create_request(&self) -> fullmag_fdm_gpu_transport_context_create_request_v1 {
@@ -341,6 +353,116 @@ impl GpuM1TransportAbi for FakeAbi {
             deterministic_compute_digest: [9; 32],
             ..Default::default()
         })
+    }
+
+    fn checkpoint_query_size(
+        &self,
+        request: &ffi::fullmag_fdm_gpu_transport_checkpoint_size_request_v1,
+    ) -> Result<ffi::fullmag_fdm_gpu_transport_checkpoint_size_result_v1, u32> {
+        self.record("checkpoint_size");
+        assert_eq!(
+            request.prefix.required_features,
+            ffi::FULLMAG_FDM_GPU_TRANSPORT_FEATURE_M1_CHARGE
+                | ffi::FULLMAG_FDM_GPU_TRANSPORT_FEATURE_STEADY_SPIN
+                | ffi::FULLMAG_FDM_GPU_TRANSPORT_FEATURE_CHECKPOINT_V1
+        );
+        if let Some(result) = self
+            .state
+            .lock()
+            .expect("fake ABI state")
+            .checkpoint_size_override
+        {
+            return Ok(result);
+        }
+        Ok(ffi::fullmag_fdm_gpu_transport_checkpoint_size_result_v1 {
+            required_bytes: 4,
+            section_count: 20,
+            alignment: 64,
+            schema_version: ffi::FULLMAG_FDM_GPU_TRANSPORT_CHECKPOINT_SCHEMA_V1,
+            inclusion_mask: ffi::FULLMAG_FDM_GPU_TRANSPORT_CHECKPOINT_INCLUDE_ALL_V1,
+            snapshot_content_digest: [8; 32],
+            ..Default::default()
+        })
+    }
+
+    fn checkpoint_export(
+        &self,
+        request: &ffi::fullmag_fdm_gpu_transport_checkpoint_export_request_v1,
+    ) -> Result<ffi::fullmag_fdm_gpu_transport_checkpoint_export_result_v1, u32> {
+        self.record("checkpoint_export");
+        assert_eq!(
+            request.prefix.required_features,
+            ffi::FULLMAG_FDM_GPU_TRANSPORT_FEATURE_M1_CHARGE
+                | ffi::FULLMAG_FDM_GPU_TRANSPORT_FEATURE_STEADY_SPIN
+                | ffi::FULLMAG_FDM_GPU_TRANSPORT_FEATURE_CHECKPOINT_V1
+        );
+        let destination = unsafe {
+            &*(request.destination_view_ptr as *const ffi::fullmag_fdm_gpu_transport_buffer_view_v1)
+        };
+        let bytes = unsafe { std::slice::from_raw_parts_mut(destination.address as *mut u8, 4) };
+        bytes.copy_from_slice(&[1, 2, 3, 4]);
+        let payload_sha256: [u8; 32] = Sha256::digest(bytes).into();
+        Ok(ffi::fullmag_fdm_gpu_transport_checkpoint_export_result_v1 {
+            committed_bytes: 4,
+            payload_sha256,
+            snapshot_digest: [8; 32],
+            spin_digest: [11; 32],
+            warm_start_digest: [12; 32],
+            snapshot_lineage_id: [10; 16],
+            accepted_sequence: 13,
+            operation_audit_digest: [14; 32],
+            ..Default::default()
+        })
+    }
+
+    fn checkpoint_import(
+        &self,
+        request: &ffi::fullmag_fdm_gpu_transport_checkpoint_import_request_v1,
+    ) -> Result<ffi::fullmag_fdm_gpu_transport_checkpoint_restore_result_v1, u32> {
+        self.record("checkpoint_import");
+        assert_eq!(
+            request.prefix.required_features,
+            ffi::FULLMAG_FDM_GPU_TRANSPORT_FEATURE_M1_CHARGE
+                | ffi::FULLMAG_FDM_GPU_TRANSPORT_FEATURE_STEADY_SPIN
+                | ffi::FULLMAG_FDM_GPU_TRANSPORT_FEATURE_CHECKPOINT_V1
+        );
+        assert_eq!(
+            request.expected_payload_sha256,
+            Sha256::digest([1, 2, 3, 4]).as_slice()
+        );
+        assert_eq!(request.device_uuid, [5; 16]);
+        assert_eq!(request.build_digest, [6; 32]);
+        assert_eq!(
+            request.restore_policy,
+            ffi::FULLMAG_FDM_GPU_TRANSPORT_CHECKPOINT_RESTORE_POLICY_EXACT_SAME_DEVICE_BUILD
+        );
+        assert_eq!(request.expected_bytes, 4);
+        assert_eq!(request.audit_parent_digest, [14; 32]);
+        let source = unsafe {
+            &*(request.source_view_ptr as *const ffi::fullmag_fdm_gpu_transport_buffer_view_v1)
+        };
+        assert_eq!(
+            source.pointer_space,
+            ffi::FULLMAG_FDM_GPU_TRANSPORT_POINTER_SPACE_HOST_READ_ONLY
+        );
+        let payload = unsafe {
+            std::slice::from_raw_parts(source.address as *const u8, source.byte_length as usize)
+        };
+        assert_eq!(payload, [1, 2, 3, 4]);
+        Ok(
+            ffi::fullmag_fdm_gpu_transport_checkpoint_restore_result_v1 {
+                snapshot_handle: snapshot_handle(18),
+                snapshot_lineage_id: [10; 16],
+                accepted_sequence: 13,
+                snapshot_content_digest: [8; 32],
+                spin_digest: [11; 32],
+                warm_start_digest: [12; 32],
+                restored_state:
+                    ffi::FULLMAG_FDM_GPU_TRANSPORT_CHECKPOINT_RESTORED_STATE_SPIN_ACCEPTED,
+                operation_audit_digest: [15; 32],
+                ..Default::default()
+            },
+        )
     }
 
     fn destroy_snapshot(
@@ -1211,4 +1333,175 @@ fn lifecycle_helper_combines_spin_and_cleanup_failures() {
         "destroy_snapshot",
         "destroy_context"
     ]));
+}
+
+#[test]
+fn stage_checkpoint_wraps_exact_native_spin_payload_and_revision_identity() {
+    let abi = FakeAbi::default();
+    let mut session = GpuM1TransportSession::create(abi.clone(), raw_descriptor(2)).unwrap();
+    let charge = session.solve_charge(1, 2).unwrap();
+    session
+        .solve_spin_static(Some(&charge), views(session.device_identity(), 1), 1, 2)
+        .unwrap();
+    let checkpoint = session.export_stage_checkpoint(7).unwrap();
+
+    assert_eq!(
+        checkpoint.schema,
+        "fullmag.fdm.transport_stage_checkpoint.v1"
+    );
+    assert_eq!(checkpoint.accepted_step, 7);
+    assert_eq!(checkpoint.charge_sequence, 13);
+    assert_eq!(checkpoint.spin_accepted_sequence, 13);
+    assert_eq!(checkpoint.source_revision, 101);
+    assert_eq!(checkpoint.charge_operator_revision, 202);
+    assert_eq!(checkpoint.static_descriptor_revision, 303);
+    assert_eq!(checkpoint.spin_operator_revision, 404);
+    assert_eq!(checkpoint.device_uuid, [5; 16]);
+    assert_eq!(checkpoint.device_ordinal, 2);
+    assert_eq!(checkpoint.build_digest, [6; 32]);
+    assert_eq!(
+        checkpoint.payload_sha256,
+        Sha256::digest([1, 2, 3, 4]).as_slice()
+    );
+    assert_eq!(checkpoint.snapshot_digest, [8; 32]);
+    assert_eq!(checkpoint.spin_digest, [11; 32]);
+    assert_eq!(checkpoint.warm_start_digest, [12; 32]);
+    assert_eq!(checkpoint.snapshot_lineage_id, [10; 16]);
+    assert_eq!(checkpoint.operation_audit_digest, [14; 32]);
+    assert_eq!(checkpoint.payload, [1, 2, 3, 4]);
+    assert!(abi
+        .calls()
+        .ends_with(&["checkpoint_size", "checkpoint_export"]));
+}
+
+#[test]
+fn stage_checkpoint_requires_an_accepted_spin_solve_not_only_charge() {
+    let abi = FakeAbi::default();
+    let mut session = GpuM1TransportSession::create(abi.clone(), raw_descriptor(2)).unwrap();
+    session.solve_charge(1, 2).unwrap();
+
+    assert_eq!(
+        session.export_stage_checkpoint(7),
+        Err(GpuM1TransportError::SpinSnapshotRequired)
+    );
+    assert!(!abi.calls().contains(&"checkpoint_size"));
+}
+
+#[test]
+fn stage_checkpoint_rejects_untrusted_size_identity_before_allocation() {
+    for mutation in [
+        "zero",
+        "oversized",
+        "schema",
+        "mask",
+        "digest",
+        "sections",
+        "alignment",
+    ] {
+        let abi = FakeAbi::default();
+        let mut result = ffi::fullmag_fdm_gpu_transport_checkpoint_size_result_v1 {
+            required_bytes: 4,
+            section_count: 20,
+            alignment: 64,
+            schema_version: ffi::FULLMAG_FDM_GPU_TRANSPORT_CHECKPOINT_SCHEMA_V1,
+            inclusion_mask: ffi::FULLMAG_FDM_GPU_TRANSPORT_CHECKPOINT_INCLUDE_ALL_V1,
+            snapshot_content_digest: [8; 32],
+            ..Default::default()
+        };
+        match mutation {
+            "zero" => result.required_bytes = 0,
+            "oversized" => result.required_bytes = (1 << 20) + 2 * 4096 + 1,
+            "schema" => result.schema_version = 2,
+            "mask" => result.inclusion_mask = 0x33,
+            "digest" => result.snapshot_content_digest[0] ^= 1,
+            "sections" => result.section_count = 19,
+            "alignment" => result.alignment = 32,
+            _ => unreachable!(),
+        }
+        abi.override_checkpoint_size(result);
+        let mut session = GpuM1TransportSession::create(abi.clone(), raw_descriptor(2)).unwrap();
+        let charge = session.solve_charge(1, 2).unwrap();
+        session
+            .solve_spin_static(Some(&charge), views(session.device_identity(), 1), 1, 2)
+            .unwrap();
+        let error = session
+            .export_stage_checkpoint(7)
+            .expect_err("untrusted checkpoint size identity must fail closed");
+        if mutation == "oversized" {
+            assert!(matches!(error, GpuM1TransportError::InvalidDescriptor(_)));
+        } else {
+            assert_eq!(error, GpuM1TransportError::SnapshotRevisionMismatch);
+        }
+        assert!(!abi.calls().contains(&"checkpoint_export"));
+    }
+}
+
+#[test]
+fn checkpoint_feature_is_required_during_context_negotiation() {
+    let abi = FakeAbi::default();
+    abi.support_only(u64::MAX ^ ffi::FULLMAG_FDM_GPU_TRANSPORT_FEATURE_CHECKPOINT_V1);
+    let error = GpuM1TransportSession::create(abi.clone(), raw_descriptor(2))
+        .err()
+        .expect("missing checkpoint capability must reject session creation");
+    assert!(matches!(
+        error,
+        GpuM1TransportError::MissingDeviceFeatures { .. }
+    ));
+    assert_eq!(abi.calls(), ["create", "destroy_context"]);
+}
+
+#[test]
+fn stage_checkpoint_restores_exact_accepted_spin_snapshot_into_fresh_session() {
+    let source_abi = FakeAbi::default();
+    let mut source = GpuM1TransportSession::create(source_abi, raw_descriptor(2)).unwrap();
+    let charge = source.solve_charge(1, 2).unwrap();
+    source
+        .solve_spin_static(Some(&charge), views(source.device_identity(), 1), 1, 2)
+        .unwrap();
+    let checkpoint = source.export_stage_checkpoint(7).unwrap();
+
+    let restored_abi = FakeAbi::default();
+    let mut restored =
+        GpuM1TransportSession::create(restored_abi.clone(), raw_descriptor(2)).unwrap();
+    let snapshot = restored.restore_stage_checkpoint(&checkpoint).unwrap();
+
+    assert_eq!(snapshot.accepted_sequence, checkpoint.charge_sequence);
+    assert_eq!(snapshot.source_revision, checkpoint.source_revision);
+    assert_eq!(
+        snapshot.operator_revision,
+        checkpoint.charge_operator_revision
+    );
+    assert_eq!(snapshot.device_identity, restored.device_identity());
+    assert!(restored_abi.calls().ends_with(&["checkpoint_import"]));
+}
+
+#[test]
+fn stage_checkpoint_rejects_foreign_identity_before_native_import() {
+    for mutation in ["schema", "device", "build", "descriptor", "payload"] {
+        let source_abi = FakeAbi::default();
+        let mut source = GpuM1TransportSession::create(source_abi, raw_descriptor(2)).unwrap();
+        let charge = source.solve_charge(1, 2).unwrap();
+        source
+            .solve_spin_static(Some(&charge), views(source.device_identity(), 1), 1, 2)
+            .unwrap();
+        let mut checkpoint = source.export_stage_checkpoint(7).unwrap();
+        match mutation {
+            "schema" => checkpoint.schema.push_str(".foreign"),
+            "device" => checkpoint.device_uuid[0] ^= 1,
+            "build" => checkpoint.build_digest[0] ^= 1,
+            "descriptor" => checkpoint.static_descriptor_digest[0] ^= 1,
+            "payload" => checkpoint.payload[0] ^= 1,
+            _ => unreachable!(),
+        }
+
+        let restored_abi = FakeAbi::default();
+        let mut restored =
+            GpuM1TransportSession::create(restored_abi.clone(), raw_descriptor(2)).unwrap();
+        assert!(matches!(
+            restored.restore_stage_checkpoint(&checkpoint),
+            Err(GpuM1TransportError::SnapshotRevisionMismatch)
+                | Err(GpuM1TransportError::InvalidDescriptor(_))
+        ));
+        assert!(!restored_abi.calls().contains(&"checkpoint_import"));
+    }
 }
