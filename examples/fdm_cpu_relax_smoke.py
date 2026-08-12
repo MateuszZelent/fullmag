@@ -38,5 +38,5 @@ study.stages.add_relax(
     max_steps=4,
 ).tableautosave(
     every_steps=1,
-    quantities=["step", "mx", "my", "mz", "E_total"],
+    quantities=["step", "t", "dt", "mx", "my", "mz", "E_total"],
 )
