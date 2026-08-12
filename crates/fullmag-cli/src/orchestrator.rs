@@ -10360,7 +10360,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                         &final_update,
                     );
                     state.live_state = live_state_manifest_from_update(final_update.clone());
-                    set_latest_scalar_row_if_due(state, &final_update);
+                    set_latest_scalar_row_for_terminal_update(state, &final_update);
                 });
             }
 
@@ -10810,7 +10810,8 @@ mod tests {
         resolved_shared_domain_object_region_markers, run_active_preparation_operation,
         run_owned_preparation_stage, run_script_preparation_preflight, run_solver_initialization,
         run_solver_initialization_safety_check, scripted_stage_execution_state,
-        scripted_stage_execution_state_with_completion, shared_domain_object_region_mesh_specs,
+        scripted_stage_execution_state_with_completion, set_latest_scalar_row_for_terminal_update,
+        set_latest_scalar_row_if_due, shared_domain_object_region_mesh_specs,
         stage_allows_sampled_continuation_initial_state,
         step_update_has_frequency_response_progress, user_cancelled_stage_completion,
         validate_periodic_remesh_candidate, wait_for_failed_preparation_close,
@@ -13048,6 +13049,33 @@ mod tests {
         let delta = state.publish_delta();
         assert_eq!(delta.preview_fields.as_ref().map(Vec::len), Some(2));
         assert_eq!(state.preview_fields.to_vec().len(), 2);
+    }
+
+    #[test]
+    fn terminal_interactive_update_bypasses_table_autosave_period() {
+        let mut state = test_workspace_state();
+        state.metadata = Some(serde_json::json!({
+            "table_autosave": { "sample_period_s": 1.0 }
+        }));
+        let mut previous = test_step_update(4);
+        previous.stats.time = 0.25;
+        previous.stats.mx = 1.0;
+        set_latest_scalar_row_if_due(&mut state, &previous);
+
+        let mut terminal = test_step_update(5);
+        terminal.stats.time = 0.5;
+        terminal.stats.mx = 0.0;
+        terminal.stats.my = 1.0;
+        terminal.stats.e_total = 7.0;
+        terminal.finished = false;
+
+        set_latest_scalar_row_for_terminal_update(&mut state, &terminal);
+
+        let row = state.latest_scalar_row.expect("terminal scalar row");
+        assert_eq!(row.step, 5);
+        assert_eq!(row.time, 0.5);
+        assert_eq!([row.mx, row.my, row.mz], [0.0, 1.0, 0.0]);
+        assert_eq!(row.e_total, 7.0);
     }
 
     #[test]

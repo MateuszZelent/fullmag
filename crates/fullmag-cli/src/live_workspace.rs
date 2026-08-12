@@ -4193,16 +4193,33 @@ pub(crate) fn set_latest_scalar_row_if_due(
     state: &mut LocalLiveWorkspaceState,
     update: &fullmag_runner::StepUpdate,
 ) {
+    set_latest_scalar_row(state, update, false);
+}
+
+pub(crate) fn set_latest_scalar_row_for_terminal_update(
+    state: &mut LocalLiveWorkspaceState,
+    update: &fullmag_runner::StepUpdate,
+) {
+    set_latest_scalar_row(state, update, true);
+}
+
+fn set_latest_scalar_row(
+    state: &mut LocalLiveWorkspaceState,
+    update: &fullmag_runner::StepUpdate,
+    force: bool,
+) {
     // Skip scalar row accumulation if charts are disabled (benchmark mode)
     if feature_flags().disable_charts {
         return;
     }
-    if !table_autosave_sample_due(
-        state.metadata.as_ref(),
-        state.latest_scalar_row.as_ref(),
-        &update.stats,
-        update.finished,
-    ) {
+    if !force
+        && !table_autosave_sample_due(
+            state.metadata.as_ref(),
+            state.latest_scalar_row.as_ref(),
+            &update.stats,
+            update.finished,
+        )
+    {
         return;
     }
     let previous_runtime_s = state
