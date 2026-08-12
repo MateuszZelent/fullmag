@@ -92,7 +92,11 @@ export function quantityItemsForVisualizationTarget(
   const baseItems =
     targetKind === "airbox"
       ? QUANTITY_ITEMS.filter((item) =>
-          fieldCatalogQuantitySupportsAirbox(fieldCatalog, item.value),
+          fieldCatalogQuantitySupportsAirbox(fieldCatalog, item.value) &&
+          fieldCatalog?.quantities.some(
+            (quantity) =>
+              quantity.available && quantity.quantity_id === item.value,
+          ),
         )
       : QUANTITY_ITEMS;
   if (targetKind === "airbox" && !fieldCatalog) return baseItems;

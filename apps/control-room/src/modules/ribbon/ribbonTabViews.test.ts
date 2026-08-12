@@ -11,6 +11,7 @@ describe("quantityItemsForVisualizationTarget", () => {
       quantities: [
         { available: true, domain: "full_domain", quantity_id: "H_demag" },
         { available: true, domain: "full_domain", quantity_id: "H_ant" },
+        { available: false, domain: "full_domain", quantity_id: "H_eff" },
         { available: true, domain: "magnetic_only", quantity_id: "m" },
         { available: true, domain: "magnetic_only", quantity_id: "H_ex" },
       ],
