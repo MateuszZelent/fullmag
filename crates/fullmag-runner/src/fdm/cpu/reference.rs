@@ -23,9 +23,7 @@ use super::spin_transport::{
 use crate::artifact_pipeline::{ArtifactPipelineSender, ArtifactRecorder};
 use crate::derived_fields::{compute_torque_field, max_torque_residual_apm_from_field};
 use crate::fdm::{artifacts::select_state_observable_field, validate_single_grid_budget};
-use crate::interactive_runtime::{
-    display_is_global_scalar, display_refresh_due,
-};
+use crate::interactive_runtime::{display_is_global_scalar, display_refresh_due};
 use crate::preview::{
     build_grid_preview_field, build_grid_scalar_preview_field, flatten_vectors, select_observables,
 };
@@ -1695,7 +1693,7 @@ pub(crate) fn execute_reference_fdm_with_coupled_checkpoint(
                     state.time_seconds,
                     &antenna_field,
                 );
-                let cached_preview_fields = snapshot_vector_fields_from_state(
+                let mut cached_preview_fields = snapshot_vector_fields_from_state(
                     &problem,
                     &state,
                     &materialization_quantities,
@@ -1716,6 +1714,16 @@ pub(crate) fn execute_reference_fdm_with_coupled_checkpoint(
                     Some(&oersted_field),
                     Some(&antenna_field),
                 )?;
+                let materialized_at_unix_ms = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_millis() as u64;
+                for field in &mut cached_preview_fields {
+                    field.source_step = final_stats.step;
+                    field.source_time_seconds = Some(final_stats.time);
+                    field.source_revision = final_stats.step;
+                    field.materialized_at_unix_ms = materialized_at_unix_ms;
+                }
                 let preview_field = if let Some(selection) = display_selection.as_ref() {
                     let preview_field = if !display_is_global_scalar(selection) {
                         let request = selection.preview_request();
@@ -4076,7 +4084,16 @@ mod tests {
                 .find(|field| field.quantity == quantity)
                 .unwrap_or_else(|| panic!("terminal cache must contain {quantity}"));
             assert_eq!(field.unit, "J/m³");
-            assert_eq!(field.vector_field_values.len(), plan.initial_magnetization.len());
+            assert_eq!(
+                field.vector_field_values.len(),
+                plan.initial_magnetization.len()
+            );
+        }
+        for field in update.cached_preview_fields.as_ref().unwrap() {
+            assert_eq!(field.source_step, update.stats.step);
+            assert_eq!(field.source_time_seconds, Some(update.stats.time));
+            assert_eq!(field.source_revision, update.stats.step);
+            assert!(field.materialized_at_unix_ms > 0);
         }
     }
 
