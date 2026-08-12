@@ -1,6 +1,5 @@
 import type { CommandId } from "@/kernel/commands/commandTypes";
 import type { ResourceStatus } from "@/kernel/resources/resourceTypes";
-import type { RuntimeExplorerDetail } from "@/kernel/resources/runtimeExplorerTypes";
 import type {
   DomainMetaResource,
   FdmMultilayerLayoutResource,
@@ -214,38 +213,10 @@ export type ExplorerNodeKind =
   | "results.quick_chart"
   | "resources.root"
   | "resources.runtime"
-  | "resources.analysis.frequency_domain"
-  | "resources.analysis.frequency_domain.manifest"
-  | "resources.analysis.frequency_domain.calculation_modes"
-  | "resources.analysis.frequency_domain.fmr"
-  | "resources.analysis.frequency_domain.dispersion"
-  | "resources.analysis.frequency_domain.response_map"
-  | "resources.mesh.periodic_pairs"
-  | "resources.analysis.eigen.spectrum"
-  | "resources.analysis.eigen.branches"
-  | "resources.analysis.eigen.dispersion"
-  | "resources.analysis.eigen.diagnostics"
-  | "resources.analysis.eigen.mode_metadata"
-  | "resources.analysis.eigen.mode_field"
-  | "resources.analysis.frequency_response.sweep"
-  | "resources.analysis.frequency_response.progress"
-  | "resources.analysis.frequency_response.cancel_requested"
-  | "resources.analysis.frequency_response.frequency_point"
-  | "resources.analysis.frequency_response.field"
-  | "resources.analysis.frequency_response.observables"
-  | "resources.analysis.frequency_response.diagnostics"
-  | "resources.field"
-  | "resources.mesh"
   | "jobs.root"
   | "jobs.run"
   | "jobs.stage"
   | "jobs.command"
-  | "jobs.frequency_domain.root"
-  | "jobs.frequency_domain.stage_run"
-  | "jobs.frequency_domain.eigen_sample"
-  | "jobs.frequency_domain.response_frequency"
-  | "jobs.frequency_domain.response_progress"
-  | "jobs.frequency_domain.artifact_export"
   | "diagnostics.root"
   | "diagnostics.problem"
   | "diagnostics.health"
@@ -254,15 +225,6 @@ export type ExplorerNodeKind =
   | "diagnostics.mesh"
   | "diagnostics.frequency-domain"
   | "diagnostics.performance"
-  | "diagnostics.frequency_domain.root"
-  | "diagnostics.frequency_domain.capabilities"
-  | "diagnostics.frequency_domain.equilibrium"
-  | "diagnostics.frequency_domain.operator"
-  | "diagnostics.frequency_domain.solver"
-  | "diagnostics.frequency_domain.artifacts"
-  | "diagnostics.frequency_domain.api_resources"
-  | "diagnostics.frequency_domain.visualization"
-  | "diagnostics.frequency_domain.periodic_floquet"
   | "diagnostics.resource";
 
 type FrequencyDomainCalculationMode =
@@ -409,7 +371,8 @@ export interface ExplorerNode {
   physicsDependencyIds?: readonly string[];
   regionId?: string;
   resourceRef?: string;
-  runtimeDetail?: RuntimeExplorerDetail;
+  runtimeDescriptorId?: string;
+  runtimeResourceKey?: string;
   displayUnits?: Record<string, string>;
   range?: { fromSI: number; toSI: number } | null;
   /** Grouping rows stay focusable/expandable but do not create a Selection. */

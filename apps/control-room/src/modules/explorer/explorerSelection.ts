@@ -128,11 +128,12 @@ function modeVisualizationSourceFromNode(
 }
 
 function selectionRefFromNode(node: ExplorerNode): SelectionRef | null {
-  if (node.runtimeDetail) {
+  if (node.runtimeDescriptorId && node.runtimeResourceKey) {
     return {
-      detail: node.runtimeDetail,
+      descriptorId: node.runtimeDescriptorId,
       kind: node.kind,
       nodeId: node.id,
+      resourceKey: node.runtimeResourceKey,
       type: "runtime-explorer",
     };
   }
@@ -631,13 +632,7 @@ function isFrequencyDomainSelectionNode(node: ExplorerNode): boolean {
     node.kind.startsWith("results.exports") ||
     node.kind.startsWith("results.frequency_domain") ||
     node.kind.startsWith("results.eigen") ||
-    node.kind.startsWith("results.frequency_response") ||
-    node.kind.startsWith("resources.analysis.frequency_domain") ||
-    node.kind.startsWith("resources.analysis.eigen") ||
-    node.kind.startsWith("resources.analysis.frequency_response") ||
-    node.kind === "resources.mesh.periodic_pairs" ||
-    node.kind.startsWith("jobs.frequency_domain") ||
-    node.kind.startsWith("diagnostics.frequency_domain")
+    node.kind.startsWith("results.frequency_response")
   );
 }
 

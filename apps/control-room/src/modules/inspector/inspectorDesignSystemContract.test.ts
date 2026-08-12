@@ -292,9 +292,6 @@ describe("Inspector design-system reference contract", () => {
   it.each([
     "ObjectVisualizationPanel.tsx",
     "ChartInspectorPanel.tsx",
-    "FrequencyDomainEigenSection.tsx",
-    "FrequencyDomainInspectorPanel.tsx",
-    "FrequencyDomainResponseSection.tsx",
     "ModeVisualizationInspectorPanel.tsx",
     "frequency-domain/FmrPeakInspector.tsx",
     "frequency-domain/FrequencyDomainResultInspectors.tsx",

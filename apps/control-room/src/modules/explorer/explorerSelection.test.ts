@@ -14,7 +14,6 @@ import {
   ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_CANCEL_REQUESTED_V1_PATH,
   ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_MAGNETIC_SWEEP_PATH,
   DATA_FIELD_VECTOR_PATH,
-  MESHING_PERIODIC_PAIRS_PATH,
 } from "@/kernel/api/apiPaths";
 import { RequestDiagnosticsController } from "@/kernel/api/RequestDiagnosticsController";
 import { CommandDiagnosticsController } from "@/kernel/commands/CommandDiagnosticsController";
@@ -104,38 +103,23 @@ describe("selectExplorerNode", () => {
     expect(kernel.selection.get().nodeId).toBeNull();
   });
 
-  it("preserves typed runtime detail in the Explorer selection ref", () => {
+  it("preserves only stable runtime resource identity in the Explorer selection ref", () => {
     const kernel = makeKernel();
-    const runtimeDetail = {
-      cache: null,
-      category: "resource" as const,
-      contractGap: false,
-      facts: [],
-      generation: null,
-      key: PLATFORM_HEALTH_PATH,
-      location: PLATFORM_HEALTH_PATH,
-      message: null,
-      owner: "platform",
-      requestedExecution: null,
-      resolvedExecution: null,
-      revision: 8,
-      schema: null,
-      sizeBytes: null,
-      sourceStatus: "ready" as const,
-    };
 
     selectExplorerNode(kernel, {
       id: "resources:platform:health",
       kind: "resources.runtime",
       label: "Health",
       parentId: "resources:platform",
-      runtimeDetail,
+      runtimeDescriptorId: "resources:platform:health",
+      runtimeResourceKey: PLATFORM_HEALTH_PATH,
     }, "explorer");
 
     expect(kernel.selection.get().ref).toEqual({
-      detail: runtimeDetail,
+      descriptorId: "resources:platform:health",
       kind: "resources.runtime",
       nodeId: "resources:platform:health",
+      resourceKey: PLATFORM_HEALTH_PATH,
       type: "runtime-explorer",
     });
   });
@@ -967,30 +951,6 @@ describe("selectExplorerNode", () => {
     });
   });
 
-  it("preserves periodic-pair resource metadata for frequency-domain PBC inspectors", () => {
-    const kernel = makeKernel();
-    const node: ExplorerNode = {
-      id: "resources:mesh:periodic-pairs",
-      kind: "resources.mesh.periodic_pairs",
-      label: "Periodic Pairs",
-      parentId: "resources:analysis:frequency-domain",
-      resourceRef: MESHING_PERIODIC_PAIRS_PATH,
-    };
-
-    selectExplorerNode(kernel, node, "explorer");
-
-    expect(kernel.selection.get()).toMatchObject({
-      kind: "resources.mesh.periodic_pairs",
-      nodeId: "resources:mesh:periodic-pairs",
-      ref: {
-        kind: "resources.mesh.periodic_pairs",
-        nodeId: "resources:mesh:periodic-pairs",
-        resourceRef: MESHING_PERIODIC_PAIRS_PATH,
-        type: "frequency-domain",
-      },
-    });
-  });
-
   it.each([
     "study.stage.eigenmodes.boundary",
     "study.stage.eigenmodes.periodic_pairs",
@@ -1024,47 +984,31 @@ describe("selectExplorerNode", () => {
     });
   });
 
-  it.each([
-    [
-      "results.frequency_domain.dispersion",
-      "results:frequency-domain:dispersion",
-      ANALYSIS_FREQUENCY_DOMAIN_EIGEN_DISPERSION_PATH,
-      "eigen/dispersion.csv",
-    ],
-    [
-      "diagnostics.frequency_domain.periodic_floquet",
-      "diagnostics:frequency-domain:periodic-floquet",
-      MESHING_PERIODIC_PAIRS_PATH,
-      "frequency_domain/periodic_floquet_diagnostics.v1.json",
-    ],
-  ] as const)(
-    "preserves %s resource and artifact metadata for frequency-domain inspectors",
-    (kind, nodeId, resourceRef, artifactPath) => {
-      const kernel = makeKernel();
-      const node: ExplorerNode = {
-        artifactPath,
-        id: nodeId,
-        kind,
-        label: kind,
-        parentId: "results:frequency-domain",
-        resourceRef,
-      };
+  it("preserves dispersion resource metadata for the active frequency-domain inspector", () => {
+    const kernel = makeKernel();
+    const node: ExplorerNode = {
+      artifactPath: "eigen/dispersion.csv",
+      id: "results:frequency-domain:dispersion",
+      kind: "results.frequency_domain.dispersion",
+      label: "Dispersion",
+      parentId: "results:frequency-domain",
+      resourceRef: ANALYSIS_FREQUENCY_DOMAIN_EIGEN_DISPERSION_PATH,
+    };
 
-      selectExplorerNode(kernel, node, "explorer");
+    selectExplorerNode(kernel, node, "explorer");
 
-      expect(kernel.selection.get()).toMatchObject({
-        kind,
-        nodeId,
-        ref: {
-          artifactPath,
-          kind,
-          nodeId,
-          resourceRef,
-          type: "frequency-domain",
-        },
-      });
-    },
-  );
+    expect(kernel.selection.get()).toMatchObject({
+      kind: "results.frequency_domain.dispersion",
+      nodeId: "results:frequency-domain:dispersion",
+      ref: {
+        artifactPath: "eigen/dispersion.csv",
+        kind: "results.frequency_domain.dispersion",
+        nodeId: "results:frequency-domain:dispersion",
+        resourceRef: ANALYSIS_FREQUENCY_DOMAIN_EIGEN_DISPERSION_PATH,
+        type: "frequency-domain",
+      },
+    });
+  });
 
   it("selects object authoring child groups as scene-object selections", () => {
     const kernel = makeKernel();

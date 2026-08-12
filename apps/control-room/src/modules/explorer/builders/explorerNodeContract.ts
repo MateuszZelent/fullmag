@@ -1,15 +1,31 @@
 import type {
+  CurrentRunResource,
   CurrentTransportListResource,
+  FrequencyDomainJsonArtifactResource,
+  FrequencyDomainManifestResource,
+  FrequencyDomainSweepProgressResource,
+  FrequencyDomainTextArtifactResource,
   PlanarMonitorCollectionResource,
 } from "@/kernel/api/apiTypes";
 import type { AnalysisFieldOverlayState } from "@/kernel/visualization/AnalysisFieldOverlayController";
 import type { PlanarMonitorDraft } from "@/kernel/workspace/crossSectionWorkspace";
+import type { PinnedQuickChart } from "@/kernel/workspace/quickChartWorkspace";
 
 import type { ExplorerNode, ExplorerNodeStatus } from "../explorerTypes";
-import type { ExplorerTreeResources } from "./frequencyDomainExplorerNodes";
+export interface ExplorerTreeResources {
+  activeAnalysisFieldOverlay?: AnalysisFieldOverlayState | null;
+  currentRun?: CurrentRunResource | null;
+  frequencyDomainBranches?: FrequencyDomainJsonArtifactResource | null;
+  frequencyDomainCancelRequested?: FrequencyDomainSweepProgressResource | null;
+  frequencyDomainDispersion?: FrequencyDomainTextArtifactResource | null;
+  frequencyDomainManifest?: FrequencyDomainManifestResource | null;
+  frequencyDomainResponseProgress?: FrequencyDomainSweepProgressResource | null;
+  frequencyDomainResponseSweep?: FrequencyDomainJsonArtifactResource | null;
+  frequencyDomainSpectrum?: FrequencyDomainJsonArtifactResource | null;
+  pinnedQuickChart?: PinnedQuickChart | null;
+}
 
 export type ModelTreeResources = ExplorerTreeResources & {
-  activeAnalysisFieldOverlay?: AnalysisFieldOverlayState | null;
   currentTransports?: CurrentTransportListResource | null;
   planarMonitorDraft?: PlanarMonitorDraft | null;
   planarMonitors?: PlanarMonitorCollectionResource | null;

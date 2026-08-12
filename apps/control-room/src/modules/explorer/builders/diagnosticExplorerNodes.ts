@@ -23,12 +23,11 @@ export function buildRuntimeDiagnosticTree(
     label: descriptor.label,
     parentId: "diagnostics:root",
     resourceRef: descriptor.detail.key,
-    runtimeDetail: descriptor.detail,
+    runtimeDescriptorId: descriptor.id,
+    runtimeResourceKey: descriptor.detail.key,
   }));
   return [{
-    availability: children.some((node) => node.availability === "available")
-      ? children.every((node) => node.availability === "available") ? "available" : "partial"
-      : "unavailable",
+    availability: aggregateAvailability(descriptors),
     children,
     executionState: "not_started",
     icon: "folder",
@@ -39,7 +38,25 @@ export function buildRuntimeDiagnosticTree(
     resourceState: aggregateResourceState(descriptors),
     selectable: false,
     status: aggregateStatus(descriptors),
-  }];
+}];
+}
+
+function aggregateAvailability(
+  descriptors: readonly RuntimeDiagnosticDescriptor[],
+): ExplorerNode["availability"] {
+  if (descriptors.length === 0) return "unavailable";
+  if (descriptors.every((descriptor) => descriptor.state.availability === "unsupported")) {
+    return "unsupported";
+  }
+  if (descriptors.some((descriptor) => descriptor.state.availability === "available")) {
+    return descriptors.every((descriptor) => descriptor.state.availability === "available")
+      ? "available"
+      : "partial";
+  }
+  if (descriptors.some((descriptor) => descriptor.state.availability === "partial")) {
+    return "partial";
+  }
+  return "unavailable";
 }
 
 function aggregateResourceState(descriptors: readonly RuntimeDiagnosticDescriptor[]): ExplorerNode["resourceState"] {
@@ -52,7 +69,14 @@ function aggregateResourceState(descriptors: readonly RuntimeDiagnosticDescripto
 
 function aggregateStatus(descriptors: readonly RuntimeDiagnosticDescriptor[]): ExplorerNode["status"] {
   if (descriptors.some((descriptor) => descriptor.state.status === "failed")) return "failed";
+  if (descriptors.some((descriptor) => descriptor.state.status === "unsupported")) return "unsupported";
+  if (descriptors.some((descriptor) => descriptor.state.status === "degraded")) return "degraded";
+  if (descriptors.some((descriptor) => descriptor.state.status === "warning")) return "warning";
   if (descriptors.some((descriptor) => descriptor.state.status === "stale")) return "stale";
-  if (descriptors.some((descriptor) => descriptor.state.status === "ready")) return "ready";
+  if (descriptors.some((descriptor) => descriptor.state.status === "ready")) {
+    return descriptors.every((descriptor) => descriptor.state.status === "ready")
+      ? "ready"
+      : "warning";
+  }
   return "unavailable";
 }

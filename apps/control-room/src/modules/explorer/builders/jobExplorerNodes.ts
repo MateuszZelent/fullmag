@@ -19,7 +19,9 @@ export function buildRuntimeJobTree(
     label: descriptor.label,
     parentId: "jobs:root",
     resourceRef: descriptor.detail.key,
-    runtimeDetail: descriptor.detail,
+    runtimeDescriptorId: descriptor.id,
+    runtimeResourceKey: descriptor.detail.key,
+    selectable: descriptor.selectable,
   }));
   const executionState = aggregateExecution(descriptors);
   const resourceState = aggregateResourceState(descriptors);

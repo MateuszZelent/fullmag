@@ -14,6 +14,7 @@ import type {
   PlatformCapabilitiesResource,
 } from "../api/apiTypes";
 import { useKernel } from "../KernelContext";
+import type { RuntimeCommandDetailEntry } from "./runtimeExplorerTypes";
 
 import { useResource } from "./useResource";
 
@@ -65,22 +66,57 @@ export function useRuntimeCommandDetailsResource(
   const identity = stableCommandIds.map(encodeURIComponent).join(",");
   const load = useCallback(
     async ({ signal }: { signal: AbortSignal }) => {
-      const details = await Promise.all(
-        stableCommandIds.map((commandId) =>
-          api.commands.detail(commandId, { signal }).catch((error: unknown) => {
-            if (error instanceof ControlRoomApiError && error.status === 404) return null;
-            throw error;
-          }),
-        ),
+      return loadRuntimeCommandDetailEntries(
+        stableCommandIds,
+        (commandId) => api.commands.detail(commandId, { signal }),
       );
-      return details.filter((detail): detail is CommandDetailResource => detail !== null);
     },
     [api, stableCommandIds],
   );
-  return useResource<CommandDetailResource[]>({
+  return useResource<RuntimeCommandDetailEntry[]>({
     enabled: enabled && stableCommandIds.length > 0,
     load,
-    resolveRevision: (details) => details.map((detail) => detail.seq).join(","),
+    resolveRevision: (details) => details
+      .map((detail) => `${detail.commandId}:${detail.revision ?? detail.status}:${detail.error ?? ""}`)
+      .join(","),
     resourceKey: `${SIMULATION_COMMANDS_PATH}:details:${identity || "none"}`,
   });
+}
+
+export async function loadRuntimeCommandDetailEntries(
+  commandIds: readonly string[],
+  load: (commandId: string) => Promise<CommandDetailResource>,
+): Promise<RuntimeCommandDetailEntry[]> {
+  return Promise.all(commandIds.map(async (commandId) => {
+    try {
+      const data = await load(commandId);
+      return {
+        commandId,
+        data,
+        error: null,
+        missing: false,
+        revision: data.seq,
+        status: "ready" as const,
+      };
+    } catch (error: unknown) {
+      if (error instanceof ControlRoomApiError && error.status === 404) {
+        return {
+          commandId,
+          data: null,
+          error: error.message,
+          missing: true,
+          revision: null,
+          status: "unavailable" as const,
+        };
+      }
+      return {
+        commandId,
+        data: null,
+        error: error instanceof Error ? error.message : "Command detail request failed.",
+        missing: false,
+        revision: null,
+        status: "error" as const,
+      };
+    }
+  }));
 }

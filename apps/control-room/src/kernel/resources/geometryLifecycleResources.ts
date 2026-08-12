@@ -580,7 +580,7 @@ export function useGeometryValidationResource(
   return useResource<GeometryValidationResource>({
     enabled: options.enabled,
     load,
-    resolveRevision: resolveJsonResourceRevision,
+    resolveRevision: resolveSceneResourceRevision,
     resourceKey: GEOMETRY_VALIDATION_RESOURCE_KEY,
   });
 }

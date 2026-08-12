@@ -4,6 +4,7 @@ import type { RuntimeResourceDescriptor } from "./runtimeExplorerSnapshot";
 
 const FAMILY_LABELS: Record<RuntimeResourceDescriptor["family"], string> = {
   analysis: "Analysis",
+  data: "Data",
   diagnostics: "Diagnostics",
   meshing: "Meshing",
   platform: "Platform",
@@ -15,6 +16,7 @@ const FAMILY_ORDER: readonly RuntimeResourceDescriptor["family"][] = [
   "platform",
   "session",
   "simulation",
+  "data",
   "meshing",
   "analysis",
   "diagnostics",
@@ -37,7 +39,8 @@ export function buildRuntimeResourceTree(
         label: descriptor.label,
         parentId,
         resourceRef: descriptor.detail.key,
-        runtimeDetail: descriptor.detail,
+        runtimeDescriptorId: descriptor.id,
+        runtimeResourceKey: descriptor.detail.key,
       })),
       executionState: "not_started" as const,
       icon: "folder" as const,
@@ -68,10 +71,17 @@ export function buildRuntimeResourceTree(
 function aggregateAvailability(
   descriptors: readonly RuntimeResourceDescriptor[],
 ): ExplorerNode["availability"] {
+  if (descriptors.length === 0) return "unavailable";
+  if (descriptors.every((descriptor) => descriptor.state.availability === "unsupported")) {
+    return "unsupported";
+  }
   if (descriptors.some((descriptor) => descriptor.state.availability === "available")) {
     return descriptors.every((descriptor) => descriptor.state.availability === "available")
       ? "available"
       : "partial";
+  }
+  if (descriptors.some((descriptor) => descriptor.state.availability === "partial")) {
+    return "partial";
   }
   return "unavailable";
 }
@@ -90,7 +100,14 @@ function aggregateStatus(
   descriptors: readonly RuntimeResourceDescriptor[],
 ): ExplorerNode["status"] {
   if (descriptors.some((descriptor) => descriptor.state.status === "failed")) return "failed";
+  if (descriptors.some((descriptor) => descriptor.state.status === "unsupported")) return "unsupported";
+  if (descriptors.some((descriptor) => descriptor.state.status === "degraded")) return "degraded";
+  if (descriptors.some((descriptor) => descriptor.state.status === "warning")) return "warning";
   if (descriptors.some((descriptor) => descriptor.state.status === "stale")) return "stale";
-  if (descriptors.some((descriptor) => descriptor.state.status === "ready")) return "ready";
+  if (descriptors.some((descriptor) => descriptor.state.status === "ready")) {
+    return descriptors.every((descriptor) => descriptor.state.status === "ready")
+      ? "ready"
+      : "warning";
+  }
   return "unavailable";
 }

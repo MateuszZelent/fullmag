@@ -47,10 +47,11 @@ import {
   useFrequencyDomainEigenDispersionResource,
   useFrequencyDomainEigenSpectrumResource,
   useFrequencyDomainManifestResource,
-  useFrequencyDomainResponseCancelRequestedResource,
-  useFrequencyDomainResponseProgressResource,
   useFrequencyDomainResponseSweepResource,
   useHysteresisExecutionTreeResource,
+  useArtifactsResource,
+  useFieldCatalogResource,
+  useTableListResource,
   useStageExecutionResource,
   useCurrentRunResource,
   useCommandQueueResource,
@@ -66,6 +67,7 @@ import {
   usePlatformHealthResource,
   useRuntimeCommandDetailsResource,
 } from "@/kernel/resources/runtimeExplorerResources";
+import { runtimeExplorerDetailStore } from "@/kernel/resources/runtimeExplorerDetailStore";
 import { useSelectionSelector } from "@/kernel/selection/useSelection";
 import { isVisualizationAirboxIdentity } from "@/kernel/selection/selectionTypes";
 import {
@@ -357,6 +359,9 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
     enabled: frequencyDomainTabActive || Boolean(activeAnalysisFieldOverlay),
   });
   const commandQueue = useCommandQueueResource({ enabled: runtimeTabActive });
+  const artifacts = useArtifactsResource({ enabled: runtimeTabActive });
+  const fieldCatalog = useFieldCatalogResource({ enabled: runtimeTabActive });
+  const tableCatalog = useTableListResource({ enabled: runtimeTabActive });
   const runtimeCommandIds = useMemo(
     () => (commandQueue.data?.commands ?? []).map((command) => command.command_id),
     [commandQueue.data?.commands],
@@ -408,25 +413,13 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
   const frequencyDomainResponseSweep = useFrequencyDomainResponseSweepResource({
     enabled: activeTab === "results" || modeVisualizationResourceActive,
   });
-  const frequencyDomainResponseProgress =
-    useFrequencyDomainResponseProgressResource({
-      enabled: frequencyDomainTabActive,
-    });
-  const frequencyDomainCancelRequestedAvailable = Boolean(
-    frequencyDomainManifest.data?.response_cancel_requested
-      ?.partial_artifacts_available,
-  );
-  const frequencyDomainCancelRequested =
-    useFrequencyDomainResponseCancelRequestedResource({
-      enabled:
-        frequencyDomainTabActive && frequencyDomainCancelRequestedAvailable,
-    });
-
   const runtimeSnapshot = useMemo(
     () => runtimeExplorerSnapshotFromResources({
+      artifacts: runtimeResourceSnapshot(artifacts),
       commandDetails: runtimeResourceSnapshot(commandDetails),
       commandQueue: runtimeResourceSnapshot(commandQueue),
       currentRun: runtimeResourceSnapshot(currentRun),
+      fieldCatalog: runtimeResourceSnapshot(fieldCatalog),
       frequencyDomainManifest: runtimeResourceSnapshot(frequencyDomainManifest),
       geometryValidation: runtimeResourceSnapshot(geometryValidation),
       meshManifest: runtimeResourceSnapshot(manifest),
@@ -439,11 +432,14 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
       }),
       solverStatus: runtimeResourceSnapshot(solverStatus),
       stageExecution: runtimeResourceSnapshot(stageExecution),
+      tableCatalog: runtimeResourceSnapshot(tableCatalog),
     }),
     [
+      artifacts,
       commandDetails,
       commandQueue,
       currentRun,
+      fieldCatalog,
       frequencyDomainManifest,
       geometryValidation,
       manifest,
@@ -453,8 +449,19 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
       solverProfile,
       solverStatus,
       stageExecution,
+      tableCatalog,
     ],
   );
+
+  useEffect(() => {
+    runtimeExplorerDetailStore.publish([
+      ...runtimeSnapshot.resources,
+      ...runtimeSnapshot.jobs,
+      ...runtimeSnapshot.diagnostics,
+    ]);
+  }, [runtimeSnapshot]);
+
+  useEffect(() => () => runtimeExplorerDetailStore.clear(), []);
 
   const nodes = useMemo(() => {
     let domainPresentation = null as ReturnType<typeof buildDomainPresentation> | null;
@@ -605,10 +612,8 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
         : buildExplorerTree(activeTab, {
             activeAnalysisFieldOverlay,
             frequencyDomainBranches: frequencyDomainBranches.data,
-            frequencyDomainCancelRequested: frequencyDomainCancelRequested.data,
             frequencyDomainDispersion: frequencyDomainDispersion.data,
             frequencyDomainManifest: frequencyDomainManifest.data,
-            frequencyDomainResponseProgress: frequencyDomainResponseProgress.data,
             frequencyDomainResponseSweep: frequencyDomainResponseSweep.data,
             frequencyDomainSpectrum: frequencyDomainSpectrum.data,
             pinnedQuickChart,
@@ -655,10 +660,8 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
     qualityGates.data,
     realizedSizeFields.data,
     frequencyDomainBranches.data,
-    frequencyDomainCancelRequested.data,
     frequencyDomainDispersion.data,
     frequencyDomainManifest.data,
-    frequencyDomainResponseProgress.data,
     frequencyDomainResponseSweep.data,
     frequencyDomainSpectrum.data,
     pinnedQuickChart,

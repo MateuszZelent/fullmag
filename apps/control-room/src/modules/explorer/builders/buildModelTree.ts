@@ -8,9 +8,6 @@ import { isVisualizationAirboxIdentity } from "@/kernel/selection/selectionTypes
 import { isFdmDomain } from "@/shared/domain/mesh/domainPresentation";
 
 import { buildCrossSectionNodes } from "./crossSectionExplorerNodes";
-import {
-  type ExplorerTreeResources,
-} from "./frequencyDomainExplorerNodes";
 import type { RuntimeExplorerSnapshot } from "./runtimeExplorerSnapshot";
 import { buildRuntimeDiagnosticTree } from "./diagnosticExplorerNodes";
 import { buildRuntimeJobTree } from "./jobExplorerNodes";
@@ -24,6 +21,7 @@ import {
 } from "./airboxExplorerNodes";
 import {
   compactExplorerNodes,
+  type ExplorerTreeResources,
   type ModelTreeResources,
 } from "./explorerNodeContract";
 import {
