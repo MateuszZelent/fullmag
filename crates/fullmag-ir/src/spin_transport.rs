@@ -468,6 +468,8 @@ pub struct ResolvedSpinTransportPlanIR {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fdm_cpu_double: Option<ResolvedFdmSpinTransportIR>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fdm_gpu_double: Option<ResolvedFdmSpinTransportIR>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fdm_cpu_double_reciprocal: Option<ResolvedFdmCoupledSpinTransportIR>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fdm_cpu_double_transient: Option<ResolvedFdmTransientSpinTransportIR>,

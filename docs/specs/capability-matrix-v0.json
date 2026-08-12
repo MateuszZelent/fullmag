@@ -1,6 +1,6 @@
 {
   "schema_version": "capability_matrix.v0",
-  "updated_at": "2026-08-11",
+  "updated_at": "2026-08-12",
   "status_vocabulary": {
     "unsupported": "The current lane has no legal executable realization for this feature.",
     "source_visible": "Source or planner scaffolding exists, but the lane is not a legal public executable path.",
@@ -331,6 +331,22 @@
     {
       "id":"transport.charge.ohmic.fdm_gpu_bounded_m1.v1", "capability_id":"transport.charge.ohmic", "formula_version":"current_transport.fullmag.v1", "operator_versions":["fv_charge_harmonic_v1"],
       "lanes":{"fdm_cpu_reference":"semantic_only","fdm_gpu_production":"partial_production_executable","fem_cpu_public":"semantic_only","fem_gpu_public":"semantic_only"}, "precision_scope":["double"], "execution_mode_scope":["strict"], "workload_scope":"Bounded public Python -> ProblemIR -> planner -> runner -> CUDA FP64 2x1x1 full rectangular FDM conductor with either two voltage electrodes or two opposite balanced outward-normal current-density electrodes, plus four insulating faces. Before ABI, the full-grid public profile proves one numerically connected component by requiring finite strictly positive g_a=[2/(1/sigma_i+1/sigma_j)]A_a/h_a on every internal face; otherwise charge_domain=not_single_numerically_connected_component.", "implementation_state":"partial", "validation_state":"unvalidated", "validated_workloads":[], "notes":"Managed actual-device E2E passes the analytic V/J oracle, provenance and no-fallback checks on RTX 4080 SUPER for the explicitly documented voltage and pure-Neumann zero-mean profiles. The lane is executable only for these bounded workloads; partial masks, non-rectangular domains, multi-component public profiles, scaling, compute-sanitizer, mesh convergence, CPU/GPU parity, spin/SHE/STT/SOT, FEM/cross-backend parity and production qualification remain open."
+    },
+    {
+      "id":"transport.spin.steady_drift_diffusion.fdm_gpu_bounded_m1.v1", "capability_id":"transport.spin.steady_drift_diffusion", "formula_version":"transport_constitutive.one_way.fullmag.v1", "operator_versions":["fv_spin_upwind_v1"],
+      "lanes":{"fdm_cpu_reference":"unsupported","fdm_gpu_production":"implemented","fem_cpu_public":"unsupported","fem_gpu_public":"unsupported"}, "precision_scope":["double"], "execution_mode_scope":["strict"], "workload_scope":"Exact explicit FDM/GPU/double/strict steady one-way M1 plan with native_m1_v1, one CUDA device, open transport boundaries, no thermal noise or Oersted coupling, complete transport/magnetic/torque masks, and exactly one mixing-conductance interface family.", "implementation_state":"implemented", "validation_state":"unvalidated", "validated_workloads":[], "notes":"ProblemIR and the public planner now materialize fdm_gpu_double without CPU, auto, FP32, extended, M2/iSHE, M3, PBC, thermal, Oersted, missing-mixing, or solver fallback. The CUDA spin operator exists, but the public runner session and LLG-stage coupling are Tasks 4-5; therefore this row is implemented but not production_executable or validated."
+    },
+    {
+      "id":"transport.spin.direct_she.fdm_gpu_bounded_m1.v1", "capability_id":"transport.spin.direct_she", "formula_version":"transport_constitutive.one_way.fullmag.v1", "operator_versions":["fv_spin_upwind_v1"],
+      "lanes":{"fdm_cpu_reference":"unsupported","fdm_gpu_production":"implemented","fem_cpu_public":"unsupported","fem_gpu_public":"unsupported"}, "precision_scope":["double"], "execution_mode_scope":["strict"], "workload_scope":"Direct-SHE source inside the exact bounded FDM/GPU/double/strict steady M1 descriptor; reciprocal iSHE and M2 are forbidden.", "implementation_state":"implemented", "validation_state":"unvalidated", "validated_workloads":[], "notes":"The planner preserves the direct-SHE constitutive and operator identity in fdm_gpu_double and fails closed for reciprocal coupling. Public runner execution, signed analytic/CPU/CUDA parity, convergence, and production qualification remain open."
+    },
+    {
+      "id":"transport.spin.mixing_conductance.fdm_gpu_bounded_m1.v1", "capability_id":"transport.spin.mixing_conductance", "formula_version":"magnetoelectronic.fullmag.v2", "operator_versions":["fv_spin_upwind_v1"],
+      "lanes":{"fdm_cpu_reference":"unsupported","fdm_gpu_production":"implemented","fem_cpu_public":"unsupported","fem_gpu_public":"unsupported"}, "precision_scope":["double"], "execution_mode_scope":["strict"], "workload_scope":"Exactly one oriented mixing-conductance interface family in the bounded FDM/GPU/double/strict steady M1 descriptor, with SML reservoir excluded.", "implementation_state":"implemented", "validation_state":"unvalidated", "validated_workloads":[], "notes":"The public planner requires and materializes the interface family without transparent or CPU degradation. The public GPU runner bridge, finite-G limits, balance oracle, convergence, and production qualification remain open."
+    },
+    {
+      "id":"coupling.transport_llg.one_way.fdm_gpu_bounded_m1.v1", "capability_id":"coupling.transport_llg.one_way", "formula_version":"transport_torque_angular_momentum.fullmag.v1", "operator_versions":["fv_spin_upwind_v1"],
+      "lanes":{"fdm_cpu_reference":"unsupported","fdm_gpu_production":"implemented","fem_cpu_public":"unsupported","fem_gpu_public":"unsupported"}, "precision_scope":["double"], "execution_mode_scope":["strict"], "workload_scope":"Resolved transport/magnetic/torque target masks for the exact bounded FDM/GPU/double/strict one-way M1 plan.", "implementation_state":"implemented", "validation_state":"unvalidated", "validated_workloads":[], "notes":"The planner preserves the transport-torque target and exact GPU tuple without fallback. Device-resident torque evaluation at every LLG RHS stage is Task 5 and is not claimed by this row; executable trajectory, rollback, restart, Hall-angle, and production qualification remain open."
     },
     {
       "id":"transport.charge.magnetoresistive.fullmag.v1", "capability_id":"transport.charge.magnetoresistive", "formula_version":"transport_constitutive.reciprocal.fullmag.v1",

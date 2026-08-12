@@ -190,6 +190,15 @@ pub(crate) fn resolve_spin_transport_with_active_graph(
         }
         let transient = module.mode == fullmag_ir::SpinTransportModeIR::Transient;
         let native_m1 = module.solver.engine == "native_m1_v1";
+        let requested = &module.requested_execution;
+        let public_gpu_m1_candidate = requested.device == ExecutionDevice::Gpu
+            || problem
+                .problem_meta
+                .runtime_metadata
+                .get("runtime_selection")
+                .and_then(|selection| selection.get("device"))
+                .and_then(serde_json::Value::as_str)
+                .is_some_and(|device| matches!(device, "gpu" | "cuda"));
         if !matches!(
             module.solver.engine.as_str(),
             "auto" | "gmres" | "native_m1_v1"
@@ -199,7 +208,6 @@ pub(crate) fn resolve_spin_transport_with_active_graph(
                 module.id, module.solver.engine
             ));
         }
-        let requested = &module.requested_execution;
         if transient
             && (problem.validation_profile.execution_mode != fullmag_ir::ExecutionMode::Strict
                 || requested.execution_mode != fullmag_ir::ExecutionMode::Strict)
@@ -226,10 +234,12 @@ pub(crate) fn resolve_spin_transport_with_active_graph(
                 )
             });
         }
-        if !matches!(
-            requested.device,
-            ExecutionDevice::Cpu | ExecutionDevice::Auto
-        ) {
+        if !public_gpu_m1_candidate
+            && !matches!(
+                requested.device,
+                ExecutionDevice::Cpu | ExecutionDevice::Auto
+            )
+        {
             errors.push(if transient {
                 format!(
                     "spin transport '{}' requested GPU, but transient M3 reference execution supports CPU double only and cannot fall back silently",
@@ -288,6 +298,30 @@ pub(crate) fn resolve_spin_transport_with_active_graph(
             continue;
         };
         let reciprocal = coupling == fullmag_ir::TransportCouplingIR::Bidirectional;
+        if public_gpu_m1_candidate {
+            let scope_reasons = bounded_public_fdm_gpu_m1_scope_reasons(
+                problem,
+                module,
+                resolved_backend,
+                source_model,
+                coupling,
+                charge_definition,
+            );
+            if !scope_reasons.is_empty() {
+                let unavailable_scope = if transient {
+                    "transient M3 reference execution supports CPU double only"
+                } else {
+                    "steady M1/M2 GPU transport cannot fall back silently"
+                };
+                errors.push(format!(
+                    "fdm_gpu_m1_scope_rejected: module='{}'; {}; {}; fallback=none",
+                    module.id,
+                    unavailable_scope,
+                    scope_reasons.join("; ")
+                ));
+                continue;
+            }
+        }
         if native_m1 {
             if transient || reciprocal {
                 errors.push(format!(
@@ -295,10 +329,11 @@ pub(crate) fn resolve_spin_transport_with_active_graph(
                     module.id
                 ));
             }
-            if requested.discretization != BackendTarget::Fdm
-                || requested.device != ExecutionDevice::Cpu
-                || requested.precision != ExecutionPrecision::Double
-                || requested.execution_mode != fullmag_ir::ExecutionMode::Strict
+            if !public_gpu_m1_candidate
+                && (requested.discretization != BackendTarget::Fdm
+                    || requested.device != ExecutionDevice::Cpu
+                    || requested.precision != ExecutionPrecision::Double
+                    || requested.execution_mode != fullmag_ir::ExecutionMode::Strict)
             {
                 errors.push(format!(
                     "spin transport '{}' native_m1_v1 requires explicit FDM/CPU/double/strict execution",
@@ -386,46 +421,52 @@ pub(crate) fn resolve_spin_transport_with_active_graph(
             time_envelope,
             active_graph,
         );
-        let (fdm_cpu_double, fdm_cpu_double_reciprocal, fdm_cpu_double_transient) = match descriptor
-        {
-            Ok(_descriptor) if transient && reciprocal => {
-                errors.push(format!(
+        let (fdm_cpu_double, fdm_gpu_double, fdm_cpu_double_reciprocal, fdm_cpu_double_transient) =
+            match descriptor {
+                Ok(descriptor) if public_gpu_m1_candidate => (None, Some(descriptor), None, None),
+                Ok(_descriptor) if transient && reciprocal => {
+                    errors.push(format!(
                     "spin transport '{}' transient reciprocal M3 is not available in the FDM CPU v1 realization; fallback is forbidden",
                     module.id
                 ));
-                (None, None, None)
-            }
-            Ok(descriptor) if transient => {
-                match materialize_transient_descriptor(module, context, descriptor) {
-                    Ok(transient) => (None, None, Some(transient)),
-                    Err(mut reasons) => {
-                        errors.append(&mut reasons);
-                        (None, None, None)
+                    (None, None, None, None)
+                }
+                Ok(descriptor) if transient => {
+                    match materialize_transient_descriptor(module, context, descriptor) {
+                        Ok(transient) => (None, None, None, Some(transient)),
+                        Err(mut reasons) => {
+                            errors.append(&mut reasons);
+                            (None, None, None, None)
+                        }
                     }
                 }
-            }
-            Ok(descriptor) if reciprocal => {
-                match materialize_m2_descriptor(module, charge_definition, context, descriptor) {
-                    Ok(coupled) => (None, Some(coupled), None),
-                    Err(mut reasons) => {
-                        errors.append(&mut reasons);
-                        (None, None, None)
+                Ok(descriptor) if reciprocal => {
+                    match materialize_m2_descriptor(module, charge_definition, context, descriptor)
+                    {
+                        Ok(coupled) => (None, None, Some(coupled), None),
+                        Err(mut reasons) => {
+                            errors.append(&mut reasons);
+                            (None, None, None, None)
+                        }
                     }
                 }
-            }
-            Ok(descriptor) => (Some(descriptor), None, None),
-            Err(mut reasons) => {
-                errors.append(&mut reasons);
-                (None, None, None)
-            }
-        };
+                Ok(descriptor) => (Some(descriptor), None, None, None),
+                Err(mut reasons) => {
+                    errors.append(&mut reasons);
+                    (None, None, None, None)
+                }
+            };
         plans.push(ResolvedSpinTransportPlanIR {
             module_id: module.id.clone(),
             current_source_id: module.current_source_id.clone(),
             resolved_coupling: coupling,
             requested_execution: requested.clone(),
             resolved_discretization: BackendTarget::Fdm,
-            resolved_device: ExecutionDevice::Cpu,
+            resolved_device: if public_gpu_m1_candidate {
+                ExecutionDevice::Gpu
+            } else {
+                ExecutionDevice::Cpu
+            },
             resolved_precision: ExecutionPrecision::Double,
             constitutive_version: module.constitutive_version.clone(),
             operator_version: module.solver.operator_version.clone(),
@@ -466,6 +507,7 @@ pub(crate) fn resolve_spin_transport_with_active_graph(
                 Vec::new()
             },
             fdm_cpu_double,
+            fdm_gpu_double,
             fdm_cpu_double_reciprocal,
             fdm_cpu_double_transient,
             fem_cpu_double: None,
@@ -476,6 +518,127 @@ pub(crate) fn resolve_spin_transport_with_active_graph(
     } else {
         Err(PlanError { reasons: errors })
     }
+}
+
+fn bounded_public_fdm_gpu_m1_scope_reasons(
+    problem: &ProblemIR,
+    module: &fullmag_ir::SpinTransportModuleIR,
+    resolved_backend: BackendTarget,
+    source_model: fullmag_ir::CurrentTransportModelIR,
+    coupling: fullmag_ir::TransportCouplingIR,
+    charge_definition: Option<&fullmag_ir::ChargeTransportDefinitionIR>,
+) -> Vec<String> {
+    let mut reasons = Vec::new();
+    let requested = &module.requested_execution;
+    if problem.backend_policy.requested_backend != BackendTarget::Fdm
+        || resolved_backend != BackendTarget::Fdm
+        || requested.discretization != BackendTarget::Fdm
+    {
+        reasons.push("execution.discretization=not_explicit_fdm".into());
+    }
+    if requested.device != ExecutionDevice::Gpu {
+        reasons.push("execution.device=not_explicit_gpu".into());
+    }
+    if problem.backend_policy.execution_precision != ExecutionPrecision::Double
+        || requested.precision != ExecutionPrecision::Double
+    {
+        reasons.push("execution.precision=not_double".into());
+    }
+    if problem.validation_profile.execution_mode != fullmag_ir::ExecutionMode::Strict
+        || requested.execution_mode != fullmag_ir::ExecutionMode::Strict
+    {
+        reasons.push("execution.mode=not_strict".into());
+    }
+
+    let runtime_selection = problem
+        .problem_meta
+        .runtime_metadata
+        .get("runtime_selection")
+        .and_then(serde_json::Value::as_object);
+    if runtime_selection
+        .and_then(|selection| selection.get("backend"))
+        .and_then(serde_json::Value::as_str)
+        != Some("fdm")
+    {
+        reasons.push("runtime_selection.backend=not_explicit_fdm".into());
+    }
+    if !runtime_selection
+        .and_then(|selection| selection.get("device"))
+        .and_then(serde_json::Value::as_str)
+        .is_some_and(|device| matches!(device, "gpu" | "cuda"))
+    {
+        reasons.push("runtime_selection.device=not_explicit_gpu".into());
+    }
+    if runtime_selection
+        .and_then(|selection| selection.get("execution_precision"))
+        .and_then(serde_json::Value::as_str)
+        != Some("double")
+    {
+        reasons.push("runtime_selection.precision=not_double".into());
+    }
+    if runtime_selection
+        .and_then(|selection| selection.get("execution_mode"))
+        .and_then(serde_json::Value::as_str)
+        != Some("strict")
+    {
+        reasons.push("runtime_selection.mode=not_strict".into());
+    }
+    if runtime_selection
+        .and_then(|selection| selection.get("gpu_count"))
+        .and_then(serde_json::Value::as_u64)
+        != Some(1)
+    {
+        reasons.push("runtime_selection.gpu_count=not_one".into());
+    }
+
+    if module.mode != fullmag_ir::SpinTransportModeIR::Steady
+        || coupling != fullmag_ir::TransportCouplingIR::OneWay
+        || source_model != fullmag_ir::CurrentTransportModelIR::OhmicPoisson
+    {
+        reasons.push("physics=not_steady_one_way_m1".into());
+    }
+    if module.solver.engine != "native_m1_v1" {
+        reasons.push("spin_solver=not_native_m1_v1".into());
+    }
+    if charge_definition.is_none_or(|charge| charge.solver.engine != "cg") {
+        reasons.push("charge_solver=not_cg".into());
+    }
+    if module
+        .interfaces
+        .iter()
+        .filter(|interface| matches!(interface, SpinInterfaceIR::MixingConductance { .. }))
+        .count()
+        != 1
+    {
+        reasons.push("mixing_interface=requires_exactly_one_family".into());
+    }
+    if problem
+        .pbc
+        .as_ref()
+        .is_some_and(|periodicity| periodicity.has_any_periodic())
+    {
+        reasons.push("periodic_transport=unsupported".into());
+    }
+    if problem
+        .temperature
+        .is_some_and(|temperature| temperature > 0.0)
+        || problem
+            .energy_terms
+            .iter()
+            .any(|term| matches!(term, fullmag_ir::EnergyTermIR::ThermalNoise { .. }))
+    {
+        reasons.push("thermal_noise=unsupported".into());
+    }
+    if problem.energy_terms.iter().any(|term| {
+        matches!(
+            term,
+            fullmag_ir::EnergyTermIR::OerstedCylinder { .. }
+                | fullmag_ir::EnergyTermIR::OerstedField { .. }
+        )
+    }) {
+        reasons.push("oersted_coupling=unsupported".into());
+    }
+    reasons
 }
 
 fn materialize_transient_descriptor(
@@ -865,6 +1028,7 @@ pub(crate) fn resolve_m1_fem_spin_transport(
                 },
                 inserted_default_boundaries: inserted_fem_default_boundaries(charge, module),
                 fdm_cpu_double: None,
+                fdm_gpu_double: None,
                 fdm_cpu_double_reciprocal: None,
                 fdm_cpu_double_transient: None,
                 fem_cpu_double: Some(descriptor),
