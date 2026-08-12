@@ -68,6 +68,11 @@
       "sources": ["source-oracle-guard"]
     },
     {
+      "id": "eq-poisson-airbox-user-owned-equilibrium-acceptance",
+      "symbols": ["magnetization", "equilibrium_effective_field", "relax_stop_metric", "relax_stop_threshold", "relative_torque_diagnostic", "norm_operators", "schedule_operators"],
+      "sources": ["source-python-relax-stop", "source-relax-handoff", "source-equilibrium-materialization"]
+    },
+    {
       "id": "eq-poisson-airbox-window-refinement-schedule",
       "symbols": ["window_frequencies", "schedule_operators"],
       "sources": ["source-cpu-schur", "source-gpu-petsc"]
@@ -120,7 +125,11 @@
     {"id": "window_frequencies", "latex": "$\\Delta f$, $f_{\\min}$, $f_{\\max}$, $f_a$, $f_b$", "meaning": "window width, bounds and candidate frequencies", "si_unit": "$\\mathrm{Hz}$"},
     {"id": "cluster_bases", "latex": "$U$, $V$, $u_i$, $v_j$", "meaning": "orthonormal cluster bases and vectors", "si_unit": "$1$"},
     {"id": "cluster_indices", "latex": "$i$, $j$, $r$", "meaning": "cluster-basis indices and paired cluster rank", "si_unit": "$1$"},
-    {"id": "cluster_overlap", "latex": "$u_i^\\ast v_j$, $s(U,V)$", "meaning": "Hermitian overlap and normalized invariant-subspace overlap", "si_unit": "$1$"}
+    {"id": "cluster_overlap", "latex": "$u_i^\\ast v_j$, $s(U,V)$", "meaning": "Hermitian overlap and normalized invariant-subspace overlap", "si_unit": "$1$"},
+    {"id": "equilibrium_effective_field", "latex": "$\\mathbf H_{\\mathrm{eff},0}$", "meaning": "effective field evaluated at the accepted equilibrium", "si_unit": "$\\mathrm{A\\,m^{-1}}$"},
+    {"id": "relax_stop_metric", "latex": "$g_{\\mathrm{stop}}$", "meaning": "user-authored relaxation stop metric", "si_unit": "metric-dependent: $\\mathrm{A\\,m^{-1}}$ or $\\mathrm{J}$"},
+    {"id": "relax_stop_threshold", "latex": "$\\tau_{\\mathrm{stop}}$", "meaning": "user-authored relaxation stop threshold", "si_unit": "same as $g_{\\mathrm{stop}}$"},
+    {"id": "relative_torque_diagnostic", "latex": "$\\rho_\\tau$", "meaning": "relative torque diagnostic, never an eigensolve acceptance threshold", "si_unit": "$1$"}
   ],
   "sources": [
     {
@@ -134,6 +143,24 @@
       "path": "packages/fullmag-py/src/fullmag/world.py",
       "symbol": "eigenmodes_stage",
       "responsibility": "Lower stage-first modal authoring to the public Eigenmodes constructor."
+    },
+    {
+      "id": "source-python-relax-stop",
+      "path": "packages/fullmag-py/src/fullmag/world.py",
+      "symbol": "_resolve_flat_relax_stop",
+      "responsibility": "Normalize authored tolA, tolT and energy tolerance into the canonical relaxation stop contract."
+    },
+    {
+      "id": "source-relax-handoff",
+      "path": "crates/fullmag-runner/src/fem_eigen.rs",
+      "symbol": "from_completed_relax",
+      "responsibility": "Validate and bind a completed user-authored relaxation criterion to the immutable stage handoff."
+    },
+    {
+      "id": "source-equilibrium-materialization",
+      "path": "crates/fullmag-runner/src/fem_eigen.rs",
+      "symbol": "build_shared_domain_linearization_state",
+      "responsibility": "Materialize the accepted equilibrium and preserve relative torque as diagnostics rather than a second physical gate."
     },
     {
       "id": "source-runner-sweep",
@@ -241,6 +268,9 @@
       {"python": "study.device(spec, precision=...)", "type": "str", "default": "required, optional", "si_unit": "$1$", "validation": "requires explicit", "meaning": "requested execution intent", "backend_support": "FEM CPU/GPU source contract", "problem_ir": "backend_policy"},
       {"python": "study.mode(\"strict\")", "type": "str", "default": "required by this scope", "si_unit": "$1$", "validation": "rejects non-strict", "meaning": "fail-closed capability policy", "backend_support": "FEM CPU/GPU source contract", "problem_ir": "validation_profile.execution_mode"},
       {"python": "study.pbc(x, y, z, demag)", "type": "bool, bool, bool, str", "default": "False, False, False, \"open\"", "si_unit": "$1$", "validation": "requires x/y", "meaning": "problem periodicity and static demag policy", "backend_support": "FEM CPU/GPU source contract", "problem_ir": "pbc.axes"},
+      {"python": "relax.tolA", "type": "float or None", "default": "public relaxation default when omitted", "si_unit": "$\\mathrm{A\\,m^{-1}}$", "validation": "finite and positive; mutually exclusive with tolT", "meaning": "authored torque stop threshold", "backend_support": "FEM CPU/GPU relaxation contract", "problem_ir": "StudyIR::Relaxation.stop.torque_tolerance_apm"},
+      {"python": "relax.tolT", "type": "float or None", "default": "public relaxation default when omitted", "si_unit": "$\\mathrm{T}$", "validation": "finite and positive; mutually exclusive with tolA", "meaning": "authored torque stop threshold normalized through mu0", "backend_support": "FEM CPU/GPU relaxation contract", "problem_ir": "StudyIR::Relaxation.stop.torque_tolerance_apm"},
+      {"python": "relax.energy_tolerance", "type": "float or None", "default": "None", "si_unit": "$\\mathrm{J}$", "validation": "finite and non-negative", "meaning": "authored energy stop threshold that can independently certify relaxation", "backend_support": "FEM CPU/GPU relaxation contract", "problem_ir": "StudyIR::Relaxation.stop.energy_tolerance_j"},
       {"python": "eigenmodes.count", "type": "int", "default": "10", "si_unit": "$1$", "validation": "count > 0", "meaning": "selected mode count", "backend_support": "FEM CPU/GPU source contract", "problem_ir": "study.count"},
       {"python": "eigenmodes.target", "type": "str", "default": "\"lowest\"", "si_unit": "$1$", "validation": "lowest", "meaning": "spectral selection strategy", "backend_support": "FEM CPU/GPU source contract", "problem_ir": "study.target"},
       {"python": "eigenmodes.target_frequency", "type": "float or None", "default": "None", "si_unit": "$\\mathrm{Hz}$", "validation": "finite and positive", "meaning": "nearest target frequency", "backend_support": "FEM CPU/GPU source contract", "problem_ir": "study.target.frequency_hz"},

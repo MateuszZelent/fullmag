@@ -5,7 +5,7 @@
   implemented at source level, but no current-snapshot managed CPU/GPU
   qualification is available
 - Owners: Fullmag FEM frequency-domain backend
-- Last updated: 2026-08-11
+- Last updated: 2026-08-12
 - Related physics notes:
   - `0700-frequency-domain-linearized-llg.md`
   - `0800-fem-static-pbc-demag.md`
@@ -14,6 +14,8 @@
   - `0520-fem-robin-airbox-demag-bootstrap-reference.md`
 - Related implementation plan:
   - `docs/plans/active/fd_sovler_masterplan/20_dynamic_solver_audit_revalidation_and_remediation.md`
+- Related equilibrium-acceptance design:
+  - `docs/superpowers/specs/2026-08-12-user-owned-relaxation-acceptance-for-eigensolve-design.md`
 
 (problem-statement)=
 ## 1. Physical domain and problem statement
@@ -163,6 +165,27 @@ assembly, equilibrium, target or acceptance input:
 f_{\mathrm{Kittel}}=\frac{\omega_{\mathrm{Kittel}}}{2\pi}.
 ```
 
+The relaxation stage, not eigensolve, owns physical equilibrium acceptance:
+
+```{math}
+:label: eq-poisson-airbox-user-owned-equilibrium-acceptance
+g_{\mathrm{stop}}(\mathbf m_0)\leq\tau_{\mathrm{stop}},
+\qquad
+g_{\mathrm{stop}}\in
+\left\{\max_{\Omega_m}|\mathbf m_0\times\mathbf H_{\mathrm{eff},0}|,
+\Delta E\right\},
+\qquad
+\rho_\tau=
+\frac{\max_{\Omega_m}|\mathbf m_0\times\mathbf H_{\mathrm{eff},0}|}
+{\max\!\left(\max_{\Omega_m}|\mathbf H_{\mathrm{eff},0}|,
+1\,\mathrm{A\,m^{-1}}\right)}.
+```
+
+The recorded criterion may therefore be torque or energy. The relative torque
+$\rho_\tau$ is retained for diagnosis only; it has no default acceptance
+threshold and cannot reverse a completed relaxation stage. An imported state
+must carry an equivalent immutable acceptance certificate.
+
 (symbols-and-si-units)=
 ### 2.2 Symbols and SI units
 
@@ -210,12 +233,23 @@ f_{\mathrm{Kittel}}=\frac{\omega_{\mathrm{Kittel}}}{2\pi}.
 | $U$, $V$, $u_i$, $v_j$ | orthonormal cluster bases and vectors | $1$ |
 | $i$, $j$, $r$ | cluster-basis indices and paired cluster rank | $1$ |
 | $u_i^\ast v_j$, $s(U,V)$ | Hermitian overlap and normalized invariant-subspace overlap | $1$ |
+| $\mathbf H_{\mathrm{eff},0}$ | effective field evaluated at the accepted equilibrium | $\mathrm{A\,m^{-1}}$ |
+| $g_{\mathrm{stop}}$ | user-authored relaxation stop metric | metric-dependent: $\mathrm{A\,m^{-1}}$ or $\mathrm{J}$ |
+| $\tau_{\mathrm{stop}}$ | user-authored relaxation stop threshold | same as $g_{\mathrm{stop}}$ |
+| $\rho_\tau$ | relative torque diagnostic, never an eigensolve acceptance threshold | $1$ |
 
 (assumptions-and-validity)=
 ### 2.3 Assumptions and validity limits
 
-- $\mathbf m_0$ originates in an accepted equilibrium artifact with matching mesh,
-  material, physics and boundary signatures.
+- $\mathbf m_0$ originates in an accepted relaxation handoff or certified
+  equilibrium artifact with matching mesh, material, physics and boundary
+  signatures. Acceptance is owned by the user's completed relaxation stop
+  contract; eigensolve does not impose an additional relative-torque limit.
+- A completed relaxation is accepted when its recorded torque or energy metric
+  satisfies the corresponding authored threshold. `max_steps`, time limits,
+  cancellation and backend failure do not establish equilibrium.
+- Relative torque remains a diagnostic observable and cannot override a
+  completed, converged relaxation stage.
 - The source-level native magnetic producer supports P1 `tet4` and `prism6`
   magnetic elements, one homogeneous scalar $A_{\mathrm{ex}}$, accepted
   tangent frames, positive $M_s$, a static restoring field parallel to
@@ -466,6 +500,10 @@ not claimed GREEN by this documentation update.
 | `study.device(spec, precision=...)` | `str`, `str` | required, optional | $1$ | this scope requires explicit `cpu` or `cuda` and `double` | requested execution intent | FEM CPU/GPU source contract; no hidden fallback | `backend_policy` and runtime metadata |
 | `study.mode("strict")` | `str` | required by this scope | $1$ | sweep rejects non-strict execution | fail-closed capability policy | FEM CPU/GPU source contract | `validation_profile.execution_mode` |
 | `study.pbc(x, y, z, demag)` | `bool, bool, bool, str` | `False, False, False, "open"` | $1$ | sweep requires x/y `True`, z `False` and `periodic_airbox_k0` | problem periodicity and static demag policy | FEM CPU/GPU source contract | `pbc.axes`, `pbc.demag` |
+| `relax.tolA` | `float or None` | public relaxation default when omitted | $\mathrm{A\,m^{-1}}$ | finite and positive; mutually exclusive with tolT | authored torque stop threshold | FEM CPU/GPU relaxation contract | `StudyIR::Relaxation.stop.torque_tolerance_apm` |
+| `relax.tolT` | `float or None` | public relaxation default when omitted | $\mathrm{T}$ | finite and positive; mutually exclusive with tolA | authored torque stop threshold normalized through mu0 | FEM CPU/GPU relaxation contract | `StudyIR::Relaxation.stop.torque_tolerance_apm` |
+| `relax.energy_tolerance` | `float or None` | `None` | $\mathrm{J}$ | finite and non-negative | authored energy stop threshold that can independently certify relaxation | FEM CPU/GPU relaxation contract | `StudyIR::Relaxation.stop.energy_tolerance_j` |
+| relaxation completion | stage result | generated | metric-dependent | `completed`, `converged`, finite metric and `metric_value <= threshold`; max steps/time/cancel/error reject | sole physical acceptance input for following eigensolve | FEM CPU/GPU shared runtime contract | `StageCompletionIR`, immutable handoff provenance |
 | `eigenmodes.count` | `int` | `10` | $1$ | `count > 0` | selected mode count | FEM CPU/GPU source contract | `study.count` |
 | `eigenmodes.target` | `str` | `"lowest"` | $1$ | `lowest`, `nearest`, or `frequency_window` | spectral selection strategy | FEM CPU/GPU source contract | `study.target` |
 | `eigenmodes.target_frequency` | `float or None` | `None` | $\mathrm{Hz}$ | finite and positive for `nearest` | nearest target frequency | FEM CPU/GPU source contract | `study.target.frequency_hz` |
@@ -785,6 +823,9 @@ the primary identity when line numbers move.
 |---|---|---|---|---|---|---|
 | Physical sweep API | common | `packages/fullmag-py/src/fullmag/model/eigen.py` + `class BiasFieldSweep` | Validate SI samples and lower declared ordering/policies | `test_eigenmodes_bias_field_sweep_serializes_declared_si_samples` | source tested | [blob](https://github.com/MateuszZelent/fullmag/blob/fe73ad661c55cc490faf076eb88f9ba387a9ac01/packages/fullmag-py/src/fullmag/model/eigen.py) |
 | Stage-first modal authoring | common | `packages/fullmag-py/src/fullmag/world.py` + `eigenmodes_stage` | Lower the stage builder to public `Eigenmodes` | `test_study_stage_builder_bias_field_sweep_roundtrips_cpu_and_gpu_intent` | source tested | [blob](https://github.com/MateuszZelent/fullmag/blob/fe73ad661c55cc490faf076eb88f9ba387a9ac01/packages/fullmag-py/src/fullmag/world.py) |
+| User-authored relaxation stop | common | `packages/fullmag-py/src/fullmag/world.py` + `_resolve_flat_relax_stop` | Normalize authored `tolA`, `tolT` and energy tolerance into the canonical relaxation stop contract | focused Python relaxation serialization tests | source tested | [blob](https://github.com/MateuszZelent/fullmag/blob/fe73ad661c55cc490faf076eb88f9ba387a9ac01/packages/fullmag-py/src/fullmag/world.py) |
+| Accepted relaxation handoff | common | `crates/fullmag-runner/src/fem_eigen.rs` + `from_completed_relax` | Validate and bind a completed user-authored relaxation criterion to the immutable stage handoff | runner handoff acceptance tests | design approved; implementation pending | [blob](https://github.com/MateuszZelent/fullmag/blob/fe73ad661c55cc490faf076eb88f9ba387a9ac01/crates/fullmag-runner/src/fem_eigen.rs) |
+| Equilibrium materialization | common | `crates/fullmag-runner/src/fem_eigen.rs` + `build_shared_domain_linearization_state` | Materialize the accepted equilibrium and retain relative torque as diagnostics | runner equilibrium materialization tests | design approved; implementation pending | [blob](https://github.com/MateuszZelent/fullmag/blob/fe73ad661c55cc490faf076eb88f9ba387a9ac01/crates/fullmag-runner/src/fem_eigen.rs) |
 | Sweep `ProblemIR` | common | `crates/fullmag-ir/src/study.rs` + `BiasFieldSweepIR` | Canonical physical request | `eigenmodes_bias_field_sweep_deserializes_and_rejects_invalid_physical_samples` | source tested | [blob](https://github.com/MateuszZelent/fullmag/blob/fe73ad661c55cc490faf076eb88f9ba387a9ac01/crates/fullmag-ir/src/study.rs) |
 | Sweep lifecycle and oracle isolation | common | `crates/fullmag-runner/src/fem_eigen.rs` + `execute_bias_field_sweep`, `validate_bias_field_sweep_oracle_contract` | Execute declared samples; keep Kittel postsolve-only | runner bias-sweep lifecycle and fail-closed oracle tests | source tested | [blob](https://github.com/MateuszZelent/fullmag/blob/fe73ad661c55cc490faf076eb88f9ba387a9ac01/crates/fullmag-runner/src/fem_eigen.rs) |
 | {eq}`eq-poisson-airbox-weak-form` and native `A_qq` | FEM CPU/common assembly | `backends/fem/cpu/frequency_domain/operators/poisson_airbox_shared_domain.cpp` + `assemble_native_magnetic_a_qq`, `assemble_poisson_airbox_shared_domain_payload`, `assemble_poisson_airbox_shared_domain` | MFEM P1 magnetic, scalar and mixed assembly | `poisson_airbox_shared_domain_test.cpp` | source tested; runtime unvalidated | [blob](https://github.com/MateuszZelent/fullmag/blob/fe73ad661c55cc490faf076eb88f9ba387a9ac01/backends/fem/cpu/frequency_domain/operators/poisson_airbox_shared_domain.cpp) |
