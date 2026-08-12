@@ -348,6 +348,42 @@ pub(crate) fn resolved_antenna_zeeman_field_for_count(
     )
 }
 
+pub(crate) fn resolved_oersted_visual_field_for_count(
+    problem: &ExchangeLlgProblem,
+    plan: &FdmPlanIR,
+    sample_count: usize,
+    time_seconds: f64,
+    antenna_field: &[Vector3],
+) -> Vec<Vector3> {
+    // The engine's Oersted accessor starts from the aggregate per-node field,
+    // which also carries antenna Zeeman values. Separate the sources again for
+    // publication, while retaining explicit Oersted samples in Airbox cells.
+    let mut field = problem.oersted_field_at_time(time_seconds);
+    field.resize(sample_count, [0.0, 0.0, 0.0]);
+    field.truncate(sample_count);
+    let explicit_oersted = plan.oersted_field_xyz.as_deref().unwrap_or(&[]);
+
+    for (index, value) in field.iter_mut().enumerate() {
+        if plan
+            .active_mask
+            .as_ref()
+            .is_some_and(|mask| !mask.get(index).copied().unwrap_or(false))
+        {
+            *value = explicit_oersted
+                .get(index)
+                .copied()
+                .unwrap_or([0.0, 0.0, 0.0]);
+            continue;
+        }
+        if let Some(antenna) = antenna_field.get(index) {
+            value[0] -= antenna[0];
+            value[1] -= antenna[1];
+            value[2] -= antenna[2];
+        }
+    }
+    field
+}
+
 pub(crate) fn resolved_regional_field_drives(
     plan: &FdmPlanIR,
     stage_start_time_s: f64,
@@ -417,6 +453,14 @@ pub(crate) fn snapshot_vector_fields(
     resolve_cpu_fft_backend_name_for_demag(plan.enable_demag)?;
     let (mut problem, state) = build_snapshot_problem_and_state(plan)?;
     problem.terms.per_node_field = resolved_per_node_external_field(plan, state.time_seconds);
+    let antenna_field = resolved_antenna_zeeman_field(plan, state.time_seconds);
+    let oersted_field = resolved_oersted_visual_field_for_count(
+        &problem,
+        plan,
+        state.magnetization().len(),
+        state.time_seconds,
+        &antenna_field,
+    );
     snapshot_vector_fields_from_state(
         &problem,
         &state,
@@ -424,7 +468,8 @@ pub(crate) fn snapshot_vector_fields(
         request,
         plan.grid.cells,
         plan.active_mask.as_deref(),
-        Some(&resolved_antenna_zeeman_field(plan, state.time_seconds)),
+        Some(&oersted_field),
+        Some(&antenna_field),
     )
 }
 
@@ -435,10 +480,15 @@ pub(crate) fn snapshot_vector_fields_from_state(
     request: &LivePreviewRequest,
     grid: [u32; 3],
     active_mask: Option<&[bool]>,
+    oersted_field: Option<&[Vector3]>,
     antenna_field: Option<&[Vector3]>,
 ) -> Result<Vec<crate::LivePreviewField>, RunError> {
-    let mut direct_fields =
-        DirectFieldSnapshotCache::new_with_antenna_field(problem, state, antenna_field);
+    let mut direct_fields = DirectFieldSnapshotCache::new_with_source_fields(
+        problem,
+        state,
+        oersted_field,
+        antenna_field,
+    );
     let mut observables = None;
     let mut cached = Vec::new();
     let mut seen = std::collections::HashSet::new();
@@ -2338,7 +2388,15 @@ fn direct_field_values_available(name: &str) -> bool {
     };
     matches!(
         base,
-        "m" | "H_ex" | "H_demag" | "H_ext" | "H_ani" | "H_dmi" | "H_OE" | "H_eff" | "torque"
+        "m" | "H_ex"
+            | "H_demag"
+            | "H_ext"
+            | "H_ani"
+            | "H_dmi"
+            | "H_oe"
+            | "H_OE"
+            | "H_eff"
+            | "torque"
     ) && component.map_or(true, |component| matches!(component, "x" | "y" | "z"))
 }
 
@@ -2369,17 +2427,19 @@ struct DirectFieldSnapshotCache<'a> {
     oersted_field: Option<Vec<Vector3>>,
     effective_field: Option<Vec<Vector3>>,
     torque_field: Option<Vec<Vector3>>,
+    oersted_field_override: Option<&'a [Vector3]>,
     antenna_field: Option<&'a [Vector3]>,
 }
 
 impl<'a> DirectFieldSnapshotCache<'a> {
     fn new(problem: &'a ExchangeLlgProblem, state: &'a ExchangeLlgState) -> Self {
-        Self::new_with_antenna_field(problem, state, None)
+        Self::new_with_source_fields(problem, state, None, None)
     }
 
-    fn new_with_antenna_field(
+    fn new_with_source_fields(
         problem: &'a ExchangeLlgProblem,
         state: &'a ExchangeLlgState,
+        oersted_field_override: Option<&'a [Vector3]>,
         antenna_field: Option<&'a [Vector3]>,
     ) -> Self {
         Self {
@@ -2394,6 +2454,7 @@ impl<'a> DirectFieldSnapshotCache<'a> {
             oersted_field: None,
             effective_field: None,
             torque_field: None,
+            oersted_field_override,
             antenna_field,
         }
     }
@@ -2548,10 +2609,15 @@ impl<'a> DirectFieldSnapshotCache<'a> {
                 }
                 Ok(self.dmi_field.as_deref().expect("cached DMI field"))
             }
-            "H_OE" => {
+            "H_oe" | "H_OE" => {
                 if self.oersted_field.is_none() {
-                    self.oersted_field =
-                        Some(self.problem.oersted_field_at_time(self.state.time_seconds));
+                    self.oersted_field = Some(
+                        self.oersted_field_override
+                            .map(<[_]>::to_vec)
+                            .unwrap_or_else(|| {
+                                self.problem.oersted_field_at_time(self.state.time_seconds)
+                            }),
+                    );
                 }
                 Ok(self.oersted_field.as_deref().expect("cached Oersted field"))
             }
@@ -2576,7 +2642,7 @@ impl<'a> DirectFieldSnapshotCache<'a> {
             if let Some(active_mask) = self.problem.active_mask.as_deref() {
                 let demag_field = self.base_values("H_demag", name)?.to_vec();
                 let external_field = self.base_values("H_ext", name)?.to_vec();
-                let oersted_field = self.base_values("H_OE", name)?.to_vec();
+                let oersted_field = self.base_values("H_oe", name)?.to_vec();
                 reconstruct_inactive_fdm_visual_effective_field(
                     &mut effective_field,
                     &demag_field,

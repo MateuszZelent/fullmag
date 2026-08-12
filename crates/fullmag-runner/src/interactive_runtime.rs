@@ -260,7 +260,9 @@ mod tests {
         reset_direct_field_assembly_calls, reset_observe_state_calls,
     };
     use crate::interactive::display::{DisplayKind, DisplaySelectionState};
-    use crate::interactive::runtime::build_atomic_terminal_update;
+    use crate::interactive::runtime::{
+        build_atomic_terminal_update, publish_atomic_terminal_update,
+    };
     use crate::types::{
         ExecutedRun, ExecutionProvenance, LivePreviewRequest, RunResult, StateObservables,
         StepAction, StepStats,
@@ -796,6 +798,7 @@ mod tests {
         let mut plan = make_soa_fdm_plan();
         plan.active_mask = Some(vec![true, true, true, true, false, false, false, false]);
         plan.external_field = Some([10.0, 20.0, 30.0]);
+        plan.oersted_field_xyz = Some(vec![[40.0, -20.0, 10.0]; 8]);
         plan.antenna_zeeman_masks = vec![ResolvedAntennaZeemanMaskIR {
             source: "antenna".to_string(),
             object: "free".to_string(),
@@ -860,7 +863,8 @@ mod tests {
         execution_plan.backend_plan = BackendPlanIR::Fdm(plan.clone());
         let terminal_update =
             build_atomic_terminal_update(&mut runtime, &execution_plan, 17, &result)
-                .expect("completed runtime should build atomic terminal update");
+                .expect("completed runtime should build atomic terminal update")
+                .expect("completed runtime should publish a terminal update");
         assert!(terminal_update.finished);
         assert_eq!(
             updates.iter().filter(|update| update.finished).count()
@@ -937,6 +941,8 @@ mod tests {
         let h_demag = field_values("H_demag");
         let h_ext = field_values("H_ext");
         let h_ant = field_values("H_ant");
+        let h_oe = field_values("H_oe");
+        assert!(h_oe.iter().any(|value| value.abs() > 0.0));
         assert!(active_mask.iter().enumerate().any(|(cell, active)| {
             !active
                 && h_demag[cell * 3..cell * 3 + 3]
@@ -952,12 +958,16 @@ mod tests {
                         .map(|field| field[index])
                         .sum::<f64>()
                 } else {
-                    h_demag[index] + h_ext[index] + h_ant[index]
+                    h_demag[index] + h_ext[index] + h_ant[index] + h_oe[index]
                 };
                 assert!(
                     (h_eff[index] - expected).abs() <= 1e-9,
-                    "H_eff mismatch at cell {cell}, component {component}: effective={} expected={expected}",
-                    h_eff[index]
+                    "H_eff mismatch at cell {cell}, component {component}: effective={} expected={expected}; components={:?}",
+                    h_eff[index],
+                    active_field_components
+                        .iter()
+                        .map(|field| field[index])
+                        .collect::<Vec<_>>()
                 );
             }
         }
@@ -999,10 +1009,19 @@ mod tests {
                 auxiliary_artifacts: Vec::new(),
                 provenance: ExecutionProvenance::default(),
             };
-            let update = build_atomic_terminal_update(&mut runtime, &execution_plan, 0, &executed)
-                .expect("non-success terminal update should not snapshot fields");
-            assert!(update.finished);
-            assert!(update.cached_preview_fields.is_none());
+            let mut terminal_callbacks = Vec::new();
+            publish_atomic_terminal_update(
+                &mut runtime,
+                &execution_plan,
+                0,
+                &executed,
+                &mut |update| {
+                    terminal_callbacks.push(update);
+                    StepAction::Continue
+                },
+            )
+            .expect("non-success terminal status should not snapshot fields");
+            assert!(terminal_callbacks.is_empty());
         }
     }
 
@@ -1047,7 +1066,8 @@ mod tests {
             fullmag_plan::plan(&ProblemIR::bootstrap_example()).expect("bootstrap execution plan");
         execution_plan.backend_plan = BackendPlanIR::Fdm(plan.clone());
         let terminal = build_atomic_terminal_update(&mut runtime, &execution_plan, 23, &executed)
-            .expect("CUDA terminal update should materialize");
+            .expect("CUDA terminal update should materialize")
+            .expect("completed CUDA runtime should publish a terminal update");
         assert!(terminal.finished);
         let fields = terminal
             .cached_preview_fields
@@ -1983,6 +2003,13 @@ impl CpuInteractiveFdmPreviewRuntime {
             sample_count,
             self.state.time_seconds,
         );
+        let oersted_field = cpu_reference::resolved_oersted_visual_field_for_count(
+            &self.problem,
+            &self.plan_signature,
+            sample_count,
+            self.state.time_seconds,
+            &antenna_field,
+        );
         cpu_reference::snapshot_vector_fields_from_state(
             &self.problem,
             &self.state,
@@ -1990,6 +2017,7 @@ impl CpuInteractiveFdmPreviewRuntime {
             request,
             self.original_grid,
             self.plan_signature.active_mask.as_deref(),
+            Some(&oersted_field),
             Some(&antenna_field),
         )
     }

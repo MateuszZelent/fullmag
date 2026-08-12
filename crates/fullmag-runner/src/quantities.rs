@@ -113,6 +113,7 @@ fn fdm_quantity_is_active(engine: FdmEngine, plan: &FdmPlanIR, id: QuantityId) -
                 | QuantityId::HAni
                 | QuantityId::HDmi
                 | QuantityId::HEff
+                | QuantityId::HOe
                 | QuantityId::EdenEx
                 | QuantityId::EdenDemag
                 | QuantityId::EdenExt
@@ -498,7 +499,7 @@ mod tests {
         );
         assert_eq!(
             active_fdm_preview_quantities(FdmEngine::CpuReference, &plan, &quantities),
-            vec!["m", "H_ex", "H_demag", "H_ext", "torque", "H_ani", "H_dmi", "H_eff"]
+            vec!["m", "H_ex", "H_demag", "H_ext", "torque", "H_ani", "H_dmi", "H_eff", "H_oe"]
         );
     }
 

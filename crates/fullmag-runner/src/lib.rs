@@ -3384,13 +3384,13 @@ pub fn run_problem_with_interactive_fdm_runtime_live_preview_interruptible(
         });
     }
 
-    let terminal_update = interactive::runtime::build_atomic_terminal_update(
+    interactive::runtime::publish_atomic_terminal_update(
         runtime,
         &plan,
         display_selection().revision,
         &executed,
+        &mut on_step,
     )?;
-    on_step(terminal_update);
 
     Ok(executed.result)
 }
@@ -7505,6 +7505,138 @@ mod tests {
         assert_eq!(metadata["scalar_rows"].as_u64(), Some(2));
 
         fs::remove_dir_all(&output_dir).expect("temporary artifact directory should be removable");
+    }
+
+    #[test]
+    fn public_interactive_runtime_publishes_one_completed_update_last() {
+        let mut problem = fullmag_ir::ProblemIR::bootstrap_example();
+        problem
+            .problem_meta
+            .runtime_metadata
+            .insert("runtime_selection".to_string(), json!({"device": "cpu"}));
+        let plan = fullmag_plan::plan(&problem).expect("CPU FDM fixture should plan");
+        let mut runtime = create_planned_interactive_runtime(&problem, &plan, None)
+            .expect("CPU interactive runtime should build");
+        let unique_suffix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock drift")
+            .as_nanos();
+        let output_dir = std::env::temp_dir().join(format!(
+            "fullmag-runner-public-terminal-{}-{}",
+            std::process::id(),
+            unique_suffix
+        ));
+        let display_selection = || {
+            let mut state = DisplaySelectionState::default();
+            state.selection.quantity = "E_total".to_string();
+            state.selection.kind = DisplayKind::GlobalScalar;
+            state
+        };
+        let mut updates = Vec::new();
+
+        let result = run_planned_problem_with_interactive_runtime_live_preview_interruptible(
+            &mut runtime,
+            &problem,
+            &plan,
+            2e-13,
+            &output_dir,
+            u64::MAX,
+            &display_selection,
+            None,
+            |update| {
+                updates.push(update);
+                StepAction::Continue
+            },
+        )
+        .expect("public interactive runtime should complete");
+
+        assert_eq!(result.status, RunStatus::Completed);
+        assert_eq!(updates.iter().filter(|update| update.finished).count(), 1);
+        let terminal = updates.last().expect("runtime should publish updates");
+        assert!(terminal.finished, "completed update must be published last");
+        let final_stats = result
+            .steps
+            .last()
+            .expect("completed run should report stats");
+        assert_eq!(terminal.stats.step, final_stats.step);
+        assert_eq!(terminal.stats.time, final_stats.time);
+        assert_eq!(
+            terminal.magnetization.as_deref(),
+            Some(
+                result
+                    .final_magnetization
+                    .iter()
+                    .flat_map(|value| value.iter().copied())
+                    .collect::<Vec<_>>()
+                    .as_slice()
+            )
+        );
+        assert!(terminal
+            .cached_preview_fields
+            .as_ref()
+            .is_some_and(|fields| fields.iter().any(|field| field.quantity == "eden_total")));
+
+        fs::remove_dir_all(&output_dir).expect("temporary artifact directory should be removable");
+    }
+
+    #[test]
+    fn public_interactive_runtime_does_not_publish_terminal_update_after_pause_or_cancel() {
+        for (action, expected_status, label) in [
+            (StepAction::Pause, RunStatus::Paused, "paused"),
+            (StepAction::Stop, RunStatus::Cancelled, "cancelled"),
+        ] {
+            let mut problem = fullmag_ir::ProblemIR::bootstrap_example();
+            problem
+                .problem_meta
+                .runtime_metadata
+                .insert("runtime_selection".to_string(), json!({"device": "cpu"}));
+            let plan = fullmag_plan::plan(&problem).expect("CPU FDM fixture should plan");
+            let mut runtime = create_planned_interactive_runtime(&problem, &plan, None)
+                .expect("CPU interactive runtime should build");
+            let unique_suffix = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("clock drift")
+                .as_nanos();
+            let output_dir = std::env::temp_dir().join(format!(
+                "fullmag-runner-public-{label}-{}-{}",
+                std::process::id(),
+                unique_suffix
+            ));
+            let display_selection = || {
+                let mut state = DisplaySelectionState::default();
+                state.selection.quantity = "E_total".to_string();
+                state.selection.kind = DisplayKind::GlobalScalar;
+                state
+            };
+            let mut updates = Vec::new();
+
+            let result = run_planned_problem_with_interactive_runtime_live_preview_interruptible(
+                &mut runtime,
+                &problem,
+                &plan,
+                2e-13,
+                &output_dir,
+                u64::MAX,
+                &display_selection,
+                None,
+                |update| {
+                    updates.push(update);
+                    action
+                },
+            )
+            .expect("public interactive runtime should stop cleanly");
+
+            assert_eq!(result.status, expected_status);
+            assert_eq!(
+                updates.len(),
+                1,
+                "{label} must not append a terminal callback"
+            );
+            assert!(!updates[0].finished);
+
+            fs::remove_dir_all(&output_dir)
+                .expect("temporary artifact directory should be removable");
+        }
     }
 
     #[cfg(not(feature = "cuda"))]

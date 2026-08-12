@@ -18,7 +18,10 @@ pub(crate) fn build_atomic_terminal_update(
     plan: &ExecutionPlanIR,
     display_revision: u64,
     executed: &ExecutedRun,
-) -> Result<StepUpdate, RunError> {
+) -> Result<Option<StepUpdate>, RunError> {
+    if !crate::interactive_runtime::should_materialize_terminal_fdm_fields(executed.result.status) {
+        return Ok(None);
+    }
     let final_stats = executed.result.steps.last().cloned().unwrap_or_default();
     let final_m = executed
         .result
@@ -30,10 +33,7 @@ pub(crate) fn build_atomic_terminal_update(
         BackendGeometry::Fdm { grid } => (grid, None),
         BackendGeometry::Fem { mesh } => ([0u32, 0, 0], mesh.generation_id),
     };
-    let should_materialize =
-        crate::interactive_runtime::should_materialize_terminal_fdm_fields(executed.result.status)
-            && matches!(plan.backend_plan, BackendPlanIR::Fdm(_));
-    let cached_preview_fields = if should_materialize {
+    let cached_preview_fields = if matches!(plan.backend_plan, BackendPlanIR::Fdm(_)) {
         let request = LivePreviewRequest {
             revision: display_revision,
             quantity: "m".to_string(),
@@ -69,7 +69,7 @@ pub(crate) fn build_atomic_terminal_update(
         None
     };
 
-    Ok(StepUpdate {
+    Ok(Some(StepUpdate {
         coupled_checkpoint: None,
         stats: final_stats,
         grid,
@@ -84,7 +84,22 @@ pub(crate) fn build_atomic_terminal_update(
         hysteresis_settle_step_method: None,
         scalar_row_due: true,
         finished: true,
-    })
+    }))
+}
+
+pub(crate) fn publish_atomic_terminal_update(
+    backend: &mut dyn InteractiveBackend,
+    plan: &ExecutionPlanIR,
+    display_revision: u64,
+    executed: &ExecutedRun,
+    on_step: &mut dyn FnMut(StepUpdate) -> StepAction,
+) -> Result<(), RunError> {
+    if let Some(terminal_update) =
+        build_atomic_terminal_update(backend, plan, display_revision, executed)?
+    {
+        on_step(terminal_update);
+    }
+    Ok(())
 }
 
 /// Unified interactive runtime facade.
@@ -373,12 +388,123 @@ impl InteractiveRuntime {
         // The backend is still alive here. Build and publish one atomic
         // terminal update after every required finalization step succeeded.
         let display_revision = display_selection().revision;
-        let terminal_update =
-            build_atomic_terminal_update(self.backend.as_mut(), plan, display_revision, &executed)?;
-        on_step(terminal_update);
+        publish_atomic_terminal_update(
+            self.backend.as_mut(),
+            plan,
+            display_revision,
+            &executed,
+            &mut on_step,
+        )?;
 
         self.state_revision += 1;
         self.display_cache.invalidate();
         Ok(executed.result)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::artifact_pipeline::ArtifactPipelineSender;
+    use crate::types::{ExecutionProvenance, RunStatus};
+
+    struct SnapshotFailureBackend {
+        snapshot_attempts: usize,
+    }
+
+    impl InteractiveBackend for SnapshotFailureBackend {
+        fn upload_magnetization(&mut self, _magnetization: &[[f64; 3]]) -> Result<(), RunError> {
+            Ok(())
+        }
+
+        fn snapshot_preview(
+            &mut self,
+            _request: &LivePreviewRequest,
+        ) -> Result<LivePreviewField, RunError> {
+            unreachable!("terminal finalization snapshots the field batch")
+        }
+
+        fn snapshot_vector_fields(
+            &mut self,
+            _quantities: &[&str],
+            _request: &LivePreviewRequest,
+        ) -> Result<Vec<LivePreviewField>, RunError> {
+            self.snapshot_attempts += 1;
+            Err(RunError {
+                message: "injected snapshot failure".to_string(),
+            })
+        }
+
+        fn snapshot_step_stats(&mut self) -> Result<StepStats, RunError> {
+            Ok(StepStats::default())
+        }
+
+        fn execution_provenance(&self) -> ExecutionProvenance {
+            ExecutionProvenance::default()
+        }
+
+        fn matches_problem(&self, _problem: &ProblemIR) -> Result<bool, RunError> {
+            Ok(true)
+        }
+
+        fn matches_plan(&self, _plan: &ExecutionPlanIR) -> Result<bool, RunError> {
+            Ok(true)
+        }
+
+        fn can_continue_with_plan(&self, _plan: &ExecutionPlanIR) -> Result<bool, RunError> {
+            Ok(true)
+        }
+
+        fn geometry(&self) -> BackendGeometry {
+            BackendGeometry::Fdm { grid: [1, 1, 1] }
+        }
+
+        fn execute_streaming(
+            &mut self,
+            _problem: &ProblemIR,
+            _plan: &ExecutionPlanIR,
+            _until_seconds: f64,
+            _field_every_n: u64,
+            _display_selection: &(dyn Fn() -> DisplaySelectionState + Send + Sync),
+            _interrupt_requested: Option<&AtomicBool>,
+            _artifact_writer: Option<ArtifactPipelineSender>,
+            _on_step: &mut dyn FnMut(StepUpdate) -> StepAction,
+        ) -> Result<ExecutedRun, RunError> {
+            unreachable!("terminal finalization test does not execute the backend")
+        }
+    }
+
+    #[test]
+    fn terminal_snapshot_failure_is_fail_closed_before_callback() {
+        let plan = fullmag_plan::plan(&ProblemIR::bootstrap_example())
+            .expect("bootstrap FDM problem should plan");
+        let executed = ExecutedRun {
+            result: RunResult {
+                status: RunStatus::Completed,
+                steps: vec![StepStats::default()],
+                final_magnetization: vec![[1.0, 0.0, 0.0]],
+                completion: None,
+            },
+            initial_magnetization: vec![[1.0, 0.0, 0.0]],
+            field_snapshots: Vec::new(),
+            field_snapshot_count: 0,
+            auxiliary_artifacts: Vec::new(),
+            provenance: ExecutionProvenance::default(),
+        };
+        let mut backend = SnapshotFailureBackend {
+            snapshot_attempts: 0,
+        };
+        let mut callback_count = 0;
+
+        let error = publish_atomic_terminal_update(&mut backend, &plan, 9, &executed, &mut |_| {
+            callback_count += 1;
+            StepAction::Continue
+        })
+        .expect_err("injected terminal snapshot failure must propagate");
+
+        assert!(error.message.contains("injected snapshot failure"));
+        assert_eq!(backend.snapshot_attempts, 1);
+        assert_eq!(callback_count, 0, "partial terminal update must not escape");
+        assert_eq!(backend.snapshot_step_stats().unwrap().step, 0);
     }
 }
