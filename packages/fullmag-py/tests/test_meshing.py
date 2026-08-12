@@ -1677,6 +1677,7 @@ class MeshScaffoldTests(unittest.TestCase):
         self.assertEqual(specs[0]["pair_id"], "x_faces")
         self.assertEqual(specs[0]["master_tag"], 1)
         self.assertEqual(specs[0]["slave_tag"], 2)
+        self.assertEqual(specs[0]["axis_hint"], "x")
         self.assertEqual(gmsh.model.mesh.calls[0][0], [2])
         self.assertEqual(gmsh.model.mesh.calls[0][1], [1])
 
@@ -4648,6 +4649,7 @@ class MeshScaffoldTests(unittest.TestCase):
                     "pair_id": "x_faces",
                     "marker_a": 10,
                     "marker_b": 11,
+                    "axis_hint": "x",
                     "translation": [2.0, 0.0, 0.0],
                     "tolerance_m": 2.0e-6,
                 },
@@ -4655,6 +4657,7 @@ class MeshScaffoldTests(unittest.TestCase):
                     "pair_id": "y_faces",
                     "marker_a": 10,
                     "marker_b": 11,
+                    "axis_hint": "y",
                     "translation": [0.0, 1.0, 0.0],
                     "tolerance_m": 2.0e-6,
                 },
@@ -4662,6 +4665,7 @@ class MeshScaffoldTests(unittest.TestCase):
                     "pair_id": "z_faces",
                     "marker_a": 10,
                     "marker_b": 11,
+                    "axis_hint": "z",
                     "translation": [0.0, 0.0, 1.0],
                     "tolerance_m": 2.0e-6,
                 },
