@@ -908,6 +908,23 @@ pub(crate) fn solve_native_driven_frequency_response(
 pub(crate) fn solve_native_modal_eigen(
     request: NativeModalEigenRequest<'_>,
 ) -> Result<NativeFrequencyDomainContractResult, String> {
+    let production_shared_domain_required = matches!(
+        request.execution_target,
+        NativeModalExecutionTarget::ProductionCpu | NativeModalExecutionTarget::ProductionGpu
+    ) && request.include_demag
+        && request.spin_wave_bc_kind == "periodic"
+        && request
+            .k_vector_rad_m
+            .is_none_or(|values| values.iter().all(|value| value.abs() <= f64::EPSILON));
+    validate_native_modal_request_payload_ownership(
+        request.execution_target,
+        production_shared_domain_required,
+        request.shared_domain_problem.is_some(),
+        request.mfem_operator_problem.is_some(),
+        request.mfem_sparse_operator_problem.is_some(),
+        request.poisson_airbox_block_problem.is_some(),
+        request.tiny_validation_problem.is_some(),
+    )?;
     #[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
     super::configure_managed_openmpi_environment();
     // The native GPU adapter owns a process-local PETSc/SLEPc context and
@@ -917,6 +934,39 @@ pub(crate) fn solve_native_modal_eigen(
     // finalizer remains available to controlled shutdowns and native contract
     // tests; normal runner requests must preserve context reuse/invalidation.
     solve_native_modal_eigen_impl(request)
+}
+
+fn validate_native_modal_request_payload_ownership(
+    execution_target: NativeModalExecutionTarget,
+    production_shared_domain_required: bool,
+    has_shared_domain_problem: bool,
+    has_mfem_operator_problem: bool,
+    has_mfem_sparse_operator_problem: bool,
+    has_poisson_airbox_block_problem: bool,
+    has_tiny_validation_problem: bool,
+) -> Result<(), String> {
+    let production = matches!(
+        execution_target,
+        NativeModalExecutionTarget::ProductionCpu | NativeModalExecutionTarget::ProductionGpu
+    );
+    if production_shared_domain_required && production && !has_shared_domain_problem {
+        return Err(
+            "native FEM production K0 demag requires a certified shared-domain payload".to_string(),
+        );
+    }
+    if production
+        && has_shared_domain_problem
+        && (has_mfem_operator_problem
+            || has_mfem_sparse_operator_problem
+            || has_poisson_airbox_block_problem
+            || has_tiny_validation_problem)
+    {
+        return Err(
+            "native FEM shared-domain production must not transport a runner-assembled operator or validation pencil"
+                .to_string(),
+        );
+    }
+    Ok(())
 }
 
 #[allow(dead_code)]
@@ -2884,6 +2934,61 @@ mod tests {
         assert_eq!(envelope.term_presence_mask, 0b1_0011);
         assert!(envelope.exchange_material_view_present);
         assert!(envelope.demag_provider_bound_to_operator_input);
+    }
+
+    #[test]
+    fn production_shared_domain_request_accepts_only_the_certified_payload() {
+        validate_native_modal_request_payload_ownership(
+            NativeModalExecutionTarget::ProductionCpu,
+            true,
+            true,
+            false,
+            false,
+            false,
+            false,
+        )
+        .expect("certified shared-domain payload without a runner pencil must be accepted");
+
+        let error = validate_native_modal_request_payload_ownership(
+            NativeModalExecutionTarget::ProductionCpu,
+            true,
+            true,
+            true,
+            false,
+            false,
+            false,
+        )
+        .expect_err("shared-domain production must reject the runner MFEM pencil");
+        assert!(error.contains("must not transport a runner-assembled operator"));
+    }
+
+    #[test]
+    fn production_demag_request_without_shared_domain_payload_fails_closed() {
+        let error = validate_native_modal_request_payload_ownership(
+            NativeModalExecutionTarget::ProductionGpu,
+            true,
+            false,
+            false,
+            false,
+            false,
+            false,
+        )
+        .expect_err("production demag without the certified shared-domain payload must fail");
+        assert!(error.contains("requires a certified shared-domain payload"));
+    }
+
+    #[test]
+    fn validation_oracle_may_keep_its_explicit_runner_pencil() {
+        validate_native_modal_request_payload_ownership(
+            NativeModalExecutionTarget::Auto,
+            false,
+            true,
+            true,
+            false,
+            false,
+            true,
+        )
+        .expect("the validation-only oracle remains separate from production ownership rules");
     }
 
     #[test]
