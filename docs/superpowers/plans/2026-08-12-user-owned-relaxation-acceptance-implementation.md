@@ -21,13 +21,63 @@
 
 ---
 
+### Task 0: Kanoniczna publikacja semantyki torque OR energy
+
+**Files:**
+- Modify: `docs/physics/0580-canonical-relaxation-equilibrium-contract.md`
+- Modify: `docs/physics/0580-canonical-relaxation-equilibrium-contract.source-map.json`
+- Modify: `docs/physics/0830-fem-poisson-airbox-modal-eigen.md`
+- Test: `.agents/skills/scientific-documentation-contract/scripts/validate_scientific_docs.py`
+
+**Interfaces:**
+- Consumes: zatwierdzoną decyzję, że jawne kryterium torque albo energy może samodzielnie zakończyć relaksację.
+- Produces: jeden nadrzędny kontrakt dla FDM/FEM i wszystkich dalszych tasków.
+
+- [ ] **Step 1: Zaktualizować równanie i tabelę stop policy**
+
+Nota 0580 definiuje alternatywę logiczną kryteriów włączonych przez użytkownika,
+deterministyczny priorytet raportowania `torque` przed `energy`, gdy oba spełniają
+się w tej samej próbce, oraz zakaz certyfikowania przez `max_steps`, timeout,
+anulowanie, stagnację lub błąd. Usunąć twierdzenia, że energy jest wyłącznie
+dodatkowym warunkiem torque.
+
+- [ ] **Step 2: Ujednolicić mapę źródeł i notę K0**
+
+Source-map 0580 wiąże równanie z Rust `relaxation_stop_criteria_satisfied`,
+natywnym `update_stage_completion_from_stats` i mapperem FFI
+`stage_completion_from_ffi`. Nota 0830 odsyła do tego samego kontraktu bez
+lokalnego redefiniowania relaksacji.
+
+- [ ] **Step 3: Uruchomić walidację dokumentacji**
+
+Run:
+
+```bash
+python3 .agents/skills/scientific-documentation-contract/scripts/validate_scientific_docs.py docs/physics/0580-canonical-relaxation-equilibrium-contract.source-map.json --repo-root .
+python3 .agents/skills/scientific-documentation-contract/scripts/validate_scientific_docs.py docs/physics/0830-fem-poisson-airbox-modal-eigen.source-map.json --repo-root .
+python3 -m unittest discover -s .agents/skills/scientific-documentation-contract/scripts -p 'test_*.py'
+```
+
+Expected: oba source-map validators PASS i 21 testów kontraktu PASS.
+
+- [ ] **Step 4: Commit**
+
+```bash
+git add docs/physics/0580-canonical-relaxation-equilibrium-contract.md docs/physics/0580-canonical-relaxation-equilibrium-contract.source-map.json docs/physics/0830-fem-poisson-airbox-modal-eigen.md
+git commit -m "docs(physics): define independent relaxation criteria"
+```
+
+---
+
 ### Task 1: Kanoniczny certyfikat ukończenia i handoff v2
 
 **Files:**
 - Modify: `crates/fullmag-runner/src/relaxation/convergence.rs`
 - Modify: `crates/fullmag-runner/src/fem_eigen.rs`
+- Modify: `backends/fem/cpu/mfem/runtime/stage_completion.cpp`
 - Test: `crates/fullmag-runner/src/relaxation/convergence.rs` (moduł `tests`)
 - Test: `crates/fullmag-runner/src/fem_eigen.rs` (moduł `tests`)
+- Test: `backends/fem/tests/stage_completion_contract.cpp`
 
 **Interfaces:**
 - Consumes: `fullmag_ir::StageCompletionIR`, `StageStopReason::{Torque,Energy}`, `StageMetricKind::{MaxTorqueApm,TotalEnergyPlateauRangeJ}`.
@@ -85,6 +135,11 @@ energia. `from_completed_relax` konstruuje certyfikat wyłącznie z zaakceptowan
 `StageCompletionIR`; handoff zachowuje również sklonowany completion i włącza
 oba do length-prefixed SHA-256 v2. Nie dodawać nowej tolerancji.
 
+Natywne `update_stage_completion_from_stats` stosuje identyczne OR i emituje
+`FULLMAG_FEM_STAGE_STOP_REASON_ENERGY` z metryką
+`total_energy_plateau_range_J`, jeżeli torque nie jest potwierdzone, a energy
+plateau spełnia próg.
+
 - [ ] **Step 4: Uruchomić testy GREEN**
 
 Run:
@@ -92,6 +147,7 @@ Run:
 ```bash
 cargo test -p fullmag-runner --quiet relaxation
 cargo test -p fullmag-runner --quiet fem_eigen
+just verify-fem-time-domain-native-contract
 ```
 
 Expected: PASS, w tym torque, energy oraz terminacje odrzucone.
@@ -99,7 +155,7 @@ Expected: PASS, w tym torque, energy oraz terminacje odrzucone.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add crates/fullmag-runner/src/relaxation/convergence.rs crates/fullmag-runner/src/fem_eigen.rs
+git add crates/fullmag-runner/src/relaxation/convergence.rs crates/fullmag-runner/src/fem_eigen.rs backends/fem/cpu/mfem/runtime/stage_completion.cpp backends/fem/tests/stage_completion_contract.cpp
 git commit -m "fix(runner): preserve authored equilibrium criterion"
 ```
 
