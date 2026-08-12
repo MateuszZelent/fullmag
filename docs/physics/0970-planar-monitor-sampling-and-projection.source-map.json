@@ -1,0 +1,399 @@
+{
+  "document": {
+    "path": "docs/physics/0970-planar-monitor-sampling-and-projection.md",
+    "audited_source_revision": "5138078f7fd7b65dfc231faa4aa11c02d8ebf52d"
+  },
+  "backend_matrix": [
+    {
+      "solver": "FDM",
+      "device": "CPU",
+      "status": "science-gate-passed-browser-runtime-unqualified",
+      "reason": "Managed Task 0 science gates passed at the audited source, but the same recipe exited 1 after a 180000 ms visible-canvas timeout."
+    },
+    {
+      "solver": "FDM",
+      "device": "GPU",
+      "status": "source-compatible-unqualified",
+      "reason": "Published GPU fields may enter the CPU sampler, but no fresh GPU source/device proof exists and native GPU sampling is absent."
+    },
+    {
+      "solver": "FEM",
+      "device": "CPU",
+      "status": "focused-tests-only-unqualified",
+      "reason": "P1 numerical and API tests exist, but Task 1 has no fresh managed FEM or browser qualification."
+    },
+    {
+      "solver": "FEM",
+      "device": "GPU",
+      "status": "source-compatible-unqualified",
+      "reason": "Published GPU fields may enter the CPU sampler, but no fresh GPU source/device proof exists and native GPU sampling is absent."
+    }
+  ],
+  "equations": [
+    {
+      "id": "eq-planar-frame",
+      "symbols": ["x", "o", "eu", "ev", "n", "uvs"],
+      "sources": ["python-monitor", "frame-resolver"]
+    },
+    {
+      "id": "eq-planar-pixel",
+      "symbols": ["Pij", "bounds", "NuNv", "ij", "duv"],
+      "sources": ["frame-resolver", "api-build"]
+    },
+    {
+      "id": "eq-planar-plane-support",
+      "symbols": ["Splane", "x", "Pij", "OmegaT"],
+      "sources": ["fdm-sample", "fem-sample"]
+    },
+    {
+      "id": "eq-planar-slab-support",
+      "symbols": ["Sslab", "x", "OmegaT", "Pij", "t"],
+      "sources": ["fdm-sample", "fem-sample", "clipped-tetra"]
+    },
+    {
+      "id": "eq-planar-depth-support",
+      "symbols": ["Sdepth", "x", "OmegaT", "Pij"],
+      "sources": ["fdm-sample", "fem-sample", "clipped-tetra"]
+    },
+    {
+      "id": "eq-planar-surface-support",
+      "symbols": ["Ssurface", "GammaT", "x", "o", "eu", "ev", "Pij"],
+      "sources": ["fem-surface"]
+    },
+    {
+      "id": "eq-planar-volume-mean",
+      "symbols": ["Mij", "Sij", "q", "qbar", "dV"],
+      "sources": ["weighted-reduction", "fdm-sample", "fem-sample"]
+    },
+    {
+      "id": "eq-planar-thickness-integral",
+      "symbols": ["Iij", "duv", "Sdepth", "q", "dV"],
+      "sources": ["weighted-reduction"]
+    },
+    {
+      "id": "eq-planar-rms",
+      "symbols": ["qrms", "Mij", "Sdepth", "q", "dV"],
+      "sources": ["weighted-reduction"]
+    },
+    {
+      "id": "eq-planar-vector-mean",
+      "symbols": ["qvecbar", "Mij", "Sij", "qvec", "dmu"],
+      "sources": ["weighted-reduction", "component-projection"]
+    },
+    {
+      "id": "eq-planar-components",
+      "symbols": ["quvn", "qparallel", "qvecbar", "eu", "ev", "n"],
+      "sources": ["component-projection"]
+    },
+    {
+      "id": "eq-planar-fdm-discrete",
+      "symbols": ["qbar", "qc", "Vcij", "c"],
+      "sources": ["fdm-sample", "clipped-tetra", "weighted-reduction"]
+    },
+    {
+      "id": "eq-planar-fem-p1",
+      "symbols": ["q", "Na", "qa", "a"],
+      "sources": ["fem-sample", "clipped-tetra"]
+    },
+    {
+      "id": "eq-planar-node-average",
+      "symbols": ["qnodes", "N", "qa", "a"],
+      "sources": ["fem-sample", "sampling-tests"]
+    }
+  ],
+  "symbols": [
+    {"id": "F", "latex": "\\mathcal F", "meaning": "Oriented monitor frame", "si_unit": "1"},
+    {"id": "x", "latex": "\\mathbf x", "meaning": "World-space position", "si_unit": "\\mathrm{m}"},
+    {"id": "o", "latex": "\\mathbf o", "meaning": "Monitor origin", "si_unit": "\\mathrm{m}"},
+    {"id": "eu", "latex": "\\mathbf e_u", "meaning": "First in-plane unit vector", "si_unit": "1"},
+    {"id": "ev", "latex": "\\mathbf e_v", "meaning": "Second in-plane unit vector", "si_unit": "1"},
+    {"id": "n", "latex": "\\mathbf n", "meaning": "Monitor normal unit vector", "si_unit": "1"},
+    {"id": "uvs", "latex": "u,v,s", "meaning": "Coordinates in the monitor frame", "si_unit": "\\mathrm{m}"},
+    {"id": "bounds", "latex": "u_0,u_1,v_0,v_1", "meaning": "Resolved planar bounds", "si_unit": "\\mathrm{m}"},
+    {"id": "NuNv", "latex": "N_u,N_v", "meaning": "Raster dimensions", "si_unit": "1"},
+    {"id": "ij", "latex": "i,j", "meaning": "Raster indices", "si_unit": "1"},
+    {"id": "Pij", "latex": "P_{ij}", "meaning": "Physical pixel footprint in the monitor plane", "si_unit": "\\mathrm{m^2}"},
+    {"id": "duv", "latex": "\\Delta u,\\Delta v", "meaning": "Physical pixel side lengths", "si_unit": "\\mathrm{m}"},
+    {"id": "OmegaT", "latex": "\\Omega_T", "meaning": "Resolved target volume", "si_unit": "\\mathrm{m^3}"},
+    {"id": "GammaT", "latex": "\\Gamma_T", "meaning": "Selected target boundary", "si_unit": "\\mathrm{m^2}"},
+    {"id": "Sij", "latex": "S_{ij}", "meaning": "Operator-specific occupied support", "si_unit": "\\mathrm{m^3}\\ \\text{or}\\ \\mathrm{m^2}"},
+    {"id": "Splane", "latex": "S^{\\mathrm{plane}}_{ij}", "meaning": "Point support for plane sampling", "si_unit": "1"},
+    {"id": "Sslab", "latex": "S^{\\mathrm{slab}}_{ij}", "meaning": "Finite-thickness pixel-prism support", "si_unit": "\\mathrm{m^3}"},
+    {"id": "Sdepth", "latex": "S^{\\mathrm{depth}}_{ij}", "meaning": "Full-depth pixel-prism support", "si_unit": "\\mathrm{m^3}"},
+    {"id": "Ssurface", "latex": "S^{\\mathrm{surface}}_{ij}", "meaning": "Selected boundary support projected into a pixel", "si_unit": "\\mathrm{m^2}"},
+    {"id": "t", "latex": "t", "meaning": "Full slab thickness", "si_unit": "\\mathrm{m}"},
+    {"id": "Mij", "latex": "M_{ij}", "meaning": "Occupied volume or area", "si_unit": "\\mathrm{m^3}\\ \\text{or}\\ \\mathrm{m^2}"},
+    {"id": "q", "latex": "q", "meaning": "Scalar source quantity", "si_unit": "[q]"},
+    {"id": "qvec", "latex": "\\mathbf q", "meaning": "Vector source quantity", "si_unit": "[q]"},
+    {"id": "qbar", "latex": "\\bar q_{ij}", "meaning": "Occupied-measure scalar mean", "si_unit": "[q]"},
+    {"id": "qvecbar", "latex": "\\bar{\\mathbf q}_{ij}", "meaning": "Occupied-measure vector mean", "si_unit": "[q]"},
+    {"id": "Iij", "latex": "I_{ij}", "meaning": "Thickness integral per projected area", "si_unit": "[q]\\,\\mathrm{m}"},
+    {"id": "qrms", "latex": "q_{\\mathrm{rms},ij}", "meaning": "Occupied-measure RMS", "si_unit": "[q]"},
+    {"id": "dV", "latex": "dV", "meaning": "Physical volume element", "si_unit": "\\mathrm{m^3}"},
+    {"id": "dA", "latex": "dA", "meaning": "Physical surface element", "si_unit": "\\mathrm{m^2}"},
+    {"id": "dmu", "latex": "d\\mu", "meaning": "Operator-selected physical measure", "si_unit": "\\mathrm{m^3}\\ \\text{or}\\ \\mathrm{m^2}"},
+    {"id": "quvn", "latex": "q_u,q_v,q_n", "meaning": "Components in the resolved monitor frame", "si_unit": "[q]"},
+    {"id": "qparallel", "latex": "q_{\\parallel}", "meaning": "In-plane vector magnitude", "si_unit": "[q]"},
+    {"id": "c", "latex": "c", "meaning": "FDM cell index", "si_unit": "1"},
+    {"id": "qc", "latex": "q_c", "meaning": "Cell-constant FDM value", "si_unit": "[q]"},
+    {"id": "Vcij", "latex": "V_{c,ij}", "meaning": "Cell/pixel-support intersection volume", "si_unit": "\\mathrm{m^3}"},
+    {"id": "a", "latex": "a", "meaning": "Local FEM node index", "si_unit": "1"},
+    {"id": "Na", "latex": "N_a", "meaning": "P1 barycentric basis function", "si_unit": "1"},
+    {"id": "qa", "latex": "q_a", "meaning": "Nodal P1 value", "si_unit": "[q]"},
+    {"id": "N", "latex": "N", "meaning": "Number of nodes in an arithmetic average", "si_unit": "1"},
+    {"id": "qnodes", "latex": "q_{\\mathrm{nodes}}", "meaning": "Illegal unweighted nodal mean", "si_unit": "[q]"},
+    {"id": "pi", "latex": "\\pi", "meaning": "Circle constant", "si_unit": "1"}
+  ],
+  "sources": [
+    {
+      "id": "python-monitor",
+      "path": "packages/fullmag-py/src/fullmag/model/planar_monitor.py",
+      "symbol": "class PlanarMonitor",
+      "responsibility": "Public monitor authoring object and canonical lowering."
+    },
+    {
+      "id": "python-export",
+      "path": "packages/fullmag-py/src/fullmag/runtime/script_builder.py",
+      "symbol": "_render_planar_monitors",
+      "responsibility": "Render canonical stage-first Python monitor calls."
+    },
+    {
+      "id": "ir-validation",
+      "path": "crates/fullmag-ir/src/validation.rs",
+      "symbol": "validate_planar_monitors",
+      "responsibility": "Validate monitor identity, targets, frames, extents, and operators."
+    },
+    {
+      "id": "frame-resolver",
+      "path": "crates/fullmag-api/src/planar_sampling/frame.rs",
+      "symbol": "try_from_ir",
+      "responsibility": "Validate and resolve the oriented sampling frame."
+    },
+    {
+      "id": "sampler-entry",
+      "path": "crates/fullmag-api/src/planar_sampling/contract.rs",
+      "symbol": "sample_fdm",
+      "responsibility": "Validate an FDM sampling request and apply its component."
+    },
+    {
+      "id": "component-projection",
+      "path": "crates/fullmag-api/src/planar_sampling/contract.rs",
+      "symbol": "apply_component",
+      "responsibility": "Derive world and monitor-frame scalar components after reduction."
+    },
+    {
+      "id": "fdm-sample",
+      "path": "crates/fullmag-api/src/planar_sampling/fdm.rs",
+      "symbol": "sample",
+      "responsibility": "Dispatch FDM plane, slab, and depth sampling and reject surface projection."
+    },
+    {
+      "id": "clipped-tetra",
+      "path": "crates/fullmag-api/src/planar_sampling/geometry.rs",
+      "symbol": "integrate_clipped_tetra",
+      "responsibility": "Clip a tetrahedron to a pixel prism and integrate its linear payload."
+    },
+    {
+      "id": "weighted-reduction",
+      "path": "crates/fullmag-api/src/planar_sampling/reduction.rs",
+      "symbol": "finish",
+      "responsibility": "Finalize measure-weighted mean, integral, RMS, extrema, and empty results."
+    },
+    {
+      "id": "fem-sample",
+      "path": "crates/fullmag-api/src/planar_sampling/fem.rs",
+      "symbol": "sample",
+      "responsibility": "Dispatch FEM P1 plane, slab, depth, and supported surface sampling."
+    },
+    {
+      "id": "fem-surface",
+      "path": "crates/fullmag-api/src/planar_sampling/surface.rs",
+      "symbol": "sample_boundary",
+      "responsibility": "Integrate physical FEM boundary faces and apply visibility policy."
+    },
+    {
+      "id": "api-build",
+      "path": "crates/fullmag-api/src/router_v2/handlers/data/planar_fields.rs",
+      "symbol": "resolve_dynamic_extent",
+      "responsibility": "Resolve authored dynamic extent policies from the selected FDM or FEM field support."
+    },
+    {
+      "id": "ui-plan",
+      "path": "apps/control-room/src/modules/field-map/model/fieldMapDataPlan.ts",
+      "symbol": "buildFieldMapDataPlan",
+      "responsibility": "Build bounded resource queries and reject unsupported FDM runtime scopes."
+    },
+    {
+      "id": "ui-resource",
+      "path": "apps/control-room/src/kernel/resources/planarFieldResources.ts",
+      "symbol": "usePlanarFieldMetaResource",
+      "responsibility": "Load revision-keyed planar metadata through the typed API facade."
+    },
+    {
+      "id": "ui-renderer",
+      "path": "apps/control-room/src/modules/field-map/renderer/PlanarSurface.tsx",
+      "symbol": "PlanarSurface",
+      "responsibility": "Render the scalar raster and overlays on Canvas 2D."
+    },
+    {
+      "id": "sampling-tests",
+      "path": "crates/fullmag-api/src/planar_sampling/tests.rs",
+      "symbol": "planar_sampling_fem_volume_mean_is_not_node_count_average_and_is_refinement_invariant",
+      "responsibility": "Prove focused refinement invariance for the manufactured P1 fixture."
+    }
+  ],
+  "public_api": {
+    "parameters": [
+      {
+        "python": "fm.StudyMonitorRegistry.add_planar.name",
+        "type": "str",
+        "default": "required",
+        "si_unit": "1",
+        "validation": "non-empty and unique in the study",
+        "meaning": "Authored monitor name",
+        "backend_support": "FDM/FEM CPU/GPU authoring",
+        "problem_ir": "planar_monitors[].name"
+      },
+      {
+        "python": "fm.StudyMonitorRegistry.add_planar.monitor_id",
+        "type": "str | None",
+        "default": "None",
+        "si_unit": "1",
+        "validation": "non-empty and unique when supplied; generated otherwise",
+        "meaning": "Stable monitor identity",
+        "backend_support": "FDM/FEM CPU/GPU authoring",
+        "problem_ir": "planar_monitors[].id"
+      },
+      {
+        "python": "fm.StudyMonitorRegistry.add_planar.target",
+        "type": "MonitorTarget",
+        "default": "required",
+        "si_unit": "1",
+        "validation": "physical target object required",
+        "meaning": "Physical support owner",
+        "backend_support": "FDM/FEM CPU/GPU authoring",
+        "problem_ir": "planar_monitors[].target"
+      },
+      {
+        "python": "fm.StudyMonitorRegistry.add_planar.frame",
+        "type": "PlanarFrame",
+        "default": "required",
+        "si_unit": "1",
+        "validation": "finite right-handed orthonormal frame",
+        "meaning": "Plane orientation and extent policy",
+        "backend_support": "FDM/FEM CPU/GPU authoring",
+        "problem_ir": "planar_monitors[].frame"
+      },
+      {
+        "python": "fm.StudyMonitorRegistry.add_planar.operator",
+        "type": "PlanarOperator",
+        "default": "required",
+        "si_unit": "1",
+        "validation": "one supported tagged operator object",
+        "meaning": "Support and reduction semantics",
+        "backend_support": "lane-dependent sampling",
+        "problem_ir": "planar_monitors[].operator"
+      },
+      {
+        "python": "fm.PlanarFrame.origin",
+        "type": "Sequence[float]",
+        "default": "required",
+        "si_unit": "\\mathrm{m}",
+        "validation": "exactly three finite values",
+        "meaning": "Frame origin",
+        "backend_support": "FDM/FEM CPU/GPU",
+        "problem_ir": "planar_monitors[].frame.origin_m"
+      },
+      {
+        "python": "fm.PlanarFrame.normal",
+        "type": "Sequence[float]",
+        "default": "required",
+        "si_unit": "1",
+        "validation": "finite non-zero vector",
+        "meaning": "Normal, normalized during lowering",
+        "backend_support": "FDM/FEM CPU/GPU",
+        "problem_ir": "planar_monitors[].frame.normal"
+      },
+      {
+        "python": "fm.PlanarFrame.u_axis",
+        "type": "Sequence[float]",
+        "default": "required",
+        "si_unit": "1",
+        "validation": "finite and not collinear with normal",
+        "meaning": "First axis, Gram-Schmidt normalized",
+        "backend_support": "FDM/FEM CPU/GPU",
+        "problem_ir": "planar_monitors[].frame.u_axis"
+      },
+      {
+        "python": "fm.PlanarExtent.explicit.u",
+        "type": "Sequence[float]",
+        "default": "required",
+        "si_unit": "\\mathrm{m}",
+        "validation": "exactly two finite values with minimum less than maximum",
+        "meaning": "Explicit horizontal bounds",
+        "backend_support": "FDM/FEM CPU/GPU",
+        "problem_ir": "planar_monitors[].frame.extent.u_min_m/u_max_m"
+      },
+      {
+        "python": "fm.PlanarExtent.explicit.v",
+        "type": "Sequence[float]",
+        "default": "required",
+        "si_unit": "\\mathrm{m}",
+        "validation": "exactly two finite values with minimum less than maximum",
+        "meaning": "Explicit vertical bounds",
+        "backend_support": "FDM/FEM CPU/GPU",
+        "problem_ir": "planar_monitors[].frame.extent.v_min_m/v_max_m"
+      },
+      {
+        "python": "fm.SlabAverage.thickness",
+        "type": "float",
+        "default": "required",
+        "si_unit": "\\mathrm{m}",
+        "validation": "finite and strictly positive",
+        "meaning": "Full slab thickness",
+        "backend_support": "FDM/FEM CPU sampler; GPU-source legal",
+        "problem_ir": "planar_monitors[].operator.thickness_m"
+      },
+      {
+        "python": "fm.DepthProjection.reduction",
+        "type": "PlanarReduction",
+        "default": "\"mean_occupied\"",
+        "si_unit": "1",
+        "validation": "mean_occupied, thickness_integral, rms, min, max, or abs_max",
+        "meaning": "Depth reduction",
+        "backend_support": "FDM/FEM CPU sampler; GPU-source legal",
+        "problem_ir": "planar_monitors[].operator.reduction"
+      },
+      {
+        "python": "fm.DepthProjection.empty_policy",
+        "type": "EmptyPolicy",
+        "default": "\"exclude_empty\"",
+        "si_unit": "1",
+        "validation": "exclude_empty or include_air_as_zero; latter only with mean_occupied",
+        "meaning": "Empty-bin semantics",
+        "backend_support": "FDM/FEM CPU sampler; GPU-source legal",
+        "problem_ir": "planar_monitors[].operator.empty_policy"
+      },
+      {
+        "python": "fm.SurfaceProjection.boundary",
+        "type": "SurfaceBoundary",
+        "default": "required",
+        "si_unit": "1",
+        "validation": "boundary object required",
+        "meaning": "Surface support selector",
+        "backend_support": "FEM P1 object boundary only",
+        "problem_ir": "planar_monitors[].operator.boundary"
+      },
+      {
+        "python": "fm.SurfaceProjection.visibility_policy",
+        "type": "SurfaceVisibilityPolicy",
+        "default": "\"frontmost\"",
+        "si_unit": "1",
+        "validation": "frontmost, backmost, nearest_to_origin, or area_weighted_overlap",
+        "meaning": "Fold/overlap selection",
+        "backend_support": "FEM P1 object boundary only",
+        "problem_ir": "planar_monitors[].operator.visibility_policy"
+      }
+    ]
+  }
+}

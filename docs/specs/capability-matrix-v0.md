@@ -389,27 +389,38 @@ field-solve lanes fail; they do not silently choose another device.
 
 Planar sampling is postprocessing of a published spatial field. Solver
 execution device and sampling execution are separate capability dimensions.
-The first production sampler runs on CPU, including when `source_device=gpu`;
-that does not claim native GPU sampling.
+The implemented sampler runs on CPU with binary64 accumulation. A GPU-produced
+field transported into that sampler is a GPU-source/CPU-sampling path; it does
+not claim native GPU sampling. Current planar metadata does not expose source
+backend/device/precision, so source/device qualification requires external
+managed-run provenance.
 
-| Capability | FDM | FEM P1 | FEM high-order | Failure/degraded rule |
+| Source lane | Current legality | Sampling execution | Current qualification |
+|---|---|---|---|
+| FDM CPU | plane, slab, depth; authored monitor target scope | CPU | managed Task 0 science artifact passed at exact source `5138078f7fd7b65dfc231faa4aa11c02d8ebf52d`; end-to-end runtime/browser/production unqualified because the same recipe exited 1 after 180000 ms waiting for a visible canvas |
+| FDM GPU | plane, slab, depth after a compatible published field is transported | CPU | source-compatible by code path only; no fresh GPU source/device evidence and no native GPU sampler |
+| FEM CPU | P1 plane, slab, depth, and `object_boundary` surface; mesh-part/airbox only for published intersecting topology | CPU | focused numerical/API tests only; no fresh managed FEM or browser evidence in the current gate |
+| FEM GPU | same P1 operators after a compatible published field is transported | CPU | source-compatible by code path only; no fresh GPU source/device evidence and no native GPU sampler |
+
+| Capability | FDM source | FEM P1 source | FEM high-order | Failure/degraded rule |
 |---|---|---|---|---|
-| `planar_monitor_authoring` | implemented | implemented | gated | invalid authored frame/target rejects before execution |
-| `planar_plane_sample` axis frame | scientifically validated | scientifically validated | gated | no hidden basis-order fallback |
-| `planar_plane_sample` arbitrary frame | scientifically validated | scientifically validated | gated | invalid/unsupported frame returns stable reason |
-| `planar_slab_average` | cell-volume weighted, validated | conservative tetra measure, validated | gated | node-count averaging forbidden |
-| `planar_depth_projection` | cell-volume weighted, validated | conservative tetra measure, validated | gated | unsupported reduction rejects |
-| `planar_surface_projection` planar boundary | boundary measure | boundary triangle measure, validated | gated | folded/non-injective surfaces are diagnostic |
-| `planar_vector_sampling` | browser-verified | browser-verified nodal vectors | gated | unavailable component returns stable reason |
-| `planar_mesh_overlay` | optional grid outline | exact section topology, browser-verified | topology-gated | absence does not alter sampled values |
-| `planar_airbox_sampling` | full-domain quantities only | full-domain quantities and air mesh | gated | magnetic-only quantities do not become airbox fields |
+| `planar_monitor_authoring` | implemented | implemented | authoring implemented | invalid authored frame/target rejects before execution |
+| `planar_plane_sample` axis frame | implemented, CPU sampler | implemented, CPU sampler | unsupported | no hidden basis-order fallback |
+| `planar_plane_sample` arbitrary frame | implemented, CPU sampler | implemented, CPU sampler | unsupported | invalid/unsupported frame returns stable reason |
+| `planar_slab_average` | cell-volume weighted, CPU sampler | conservative tetra measure, CPU sampler | unsupported | node-count averaging forbidden |
+| `planar_depth_projection` | cell-volume weighted, CPU sampler | conservative tetra measure, CPU sampler | unsupported | unsupported reduction rejects |
+| `planar_surface_projection` `object_boundary` | unsupported: boundary topology absent | boundary-triangle measure, CPU sampler | unsupported | region/named FEM surfaces reject; folded/non-injective surfaces are diagnostic |
+| `planar_vector_sampling` | implemented, browser unqualified | implemented for P1 nodal vectors, browser unqualified | unsupported | unavailable component returns stable reason |
+| `planar_mesh_overlay` | no sampler overlay | exact P1 section topology, browser unqualified | unsupported | absence does not alter sampled values |
+| `planar_airbox_sampling` | unsupported runtime scope | legal only for a published intersecting FEM airbox scope and compatible full-domain quantity | unsupported | magnetic-only quantities do not become airbox fields |
 
-`contract target` and `production target` are not current validation claims.
-Promotion to `public-executable`, `browser-verified`, scientifically
-`validated`, or `production-ready` requires the current artifacts specified by
-`docs/physics/0970-planar-monitor-sampling-and-projection.md`. Strict and
+These entries separate legality from qualification. `implemented` is not a
+`browser-verified`, scientifically `validated`, `runtime-qualified`, or
+`production-ready` claim. Promotion requires the current artifacts specified
+by `docs/physics/0970-planar-monitor-sampling-and-projection.md`. Strict and
 extended modes preserve the same monitor intent; no mode silently substitutes
-another operator. Hybrid sampling remains planned.
+another operator. Hybrid sampling remains planned and must be requested
+explicitly.
 
 Stable capability reasons are:
 
