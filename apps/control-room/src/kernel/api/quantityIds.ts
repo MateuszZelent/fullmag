@@ -1,3 +1,5 @@
+import type { FieldCatalogResource } from "./apiTypes";
+
 const CANONICAL_QUANTITY_IDS: Record<string, string> = {
   M: "m",
   B_drive: "B_drive",
@@ -38,42 +40,6 @@ const CANONICAL_QUANTITY_IDS: Record<string, string> = {
   mat_ms: "mat_ms",
   torque: "torque",
 };
-
-const MAGNETIC_ONLY_QUANTITY_IDS = new Set([
-  "m",
-  "H_ex",
-  "torque",
-  "H_ani",
-  "H_dmi",
-  "H_mel",
-  "H_ani_cubic",
-  "H_drive",
-  "B_drive",
-  "H_dmi_bulk",
-  "H_therm",
-  "E_ex",
-  "E_demag",
-  "E_ani",
-  "E_dmi",
-  "mode_amplitude",
-  "mode_real",
-  "mode_imag",
-  "mode_phase",
-  "eden_ex",
-  "eden_demag",
-  "eden_ext",
-  "eden_ani",
-  "eden_dmi",
-  "eden_total",
-  "mat_ms",
-  "mat_aex",
-  "mat_alpha",
-  "mat_dind",
-  "mat_dbulk",
-  "dm_dt",
-  "torque_stt",
-  "torque_sot",
-]);
 
 const SCALAR_SPATIAL_QUANTITY_IDS = new Set([
   "eden_ani",
@@ -159,8 +125,16 @@ export function sameQuantityId(
   return normalizeQuantityIdOrDefault(left) === normalizeQuantityIdOrDefault(right);
 }
 
-export function isMagneticOnlyQuantityId(quantityId: string): boolean {
-  return MAGNETIC_ONLY_QUANTITY_IDS.has(resolveCanonicalQuantityId(quantityId));
+export function fieldCatalogQuantitySupportsAirbox(
+  fieldCatalog: FieldCatalogResource | null | undefined,
+  quantityId: string,
+): boolean {
+  const canonicalQuantityId = resolveCanonicalQuantityId(quantityId);
+  return fieldCatalog?.quantities.some(
+    (quantity) =>
+      quantity.domain === "full_domain" &&
+      resolveCanonicalQuantityId(quantity.quantity_id) === canonicalQuantityId,
+  ) ?? false;
 }
 
 export function isScalarSpatialQuantityId(quantityId: string): boolean {

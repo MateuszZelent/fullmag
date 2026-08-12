@@ -3,7 +3,6 @@ import type {
   VisualizationStateResource,
 } from "../api/apiTypes";
 import {
-  isMagneticOnlyQuantityId,
   isScalarSpatialQuantityId,
   normalizeQuantityIdOrDefault,
   resolveCanonicalQuantityId,
@@ -448,7 +447,7 @@ function normalizeFdmUniverseOutsideSupportVisualizationSettings(
   const pointsVisible = settings.pointsVisible;
   return normalizeVisualizationSettings({
     ...DEFAULT_FDM_UNIVERSE_OUTSIDE_SUPPORT_VISUALIZATION,
-    activeQuantityId: resolveAirboxCompatibleQuantityId(settings.activeQuantityId),
+    activeQuantityId: settings.activeQuantityId,
     boundsOpacityPercent: settings.boundsOpacityPercent,
     boundsVisible: settings.boundsVisible,
     pointColor: settings.pointColor,
@@ -550,10 +549,6 @@ export const DEFAULT_AIRBOX_VISUALIZATION: VisualizationTargetSettings = {
   wireframeOpacityPercent: 100,
   wireframeVisible: false,
 };
-
-function resolveAirboxCompatibleQuantityId(quantityId: string): string {
-  return isMagneticOnlyQuantityId(quantityId) ? "H_demag" : quantityId;
-}
 
 const DEFAULT_PART_VISUALIZATION: VisualizationTargetSettings = {
   ...DEFAULT_OBJECT_VISUALIZATION,
@@ -888,7 +883,7 @@ function normalizeAirboxVisualizationSettings(
   return normalizeVisualizationSettings({
     ...DEFAULT_AIRBOX_VISUALIZATION,
     ...settings,
-    activeQuantityId: resolveAirboxCompatibleQuantityId(settings.activeQuantityId),
+    activeQuantityId: settings.activeQuantityId,
     pointsVisible,
     renderMode: pointsVisible ? "points" : wireframeVisible ? "wireframe" : "off",
     shaderVisible: false,
@@ -977,9 +972,7 @@ export function resolveTargetVisualization({
     target.kind === "airbox"
       ? {
           ...resolvedBaseSettings,
-          activeQuantityId: resolveAirboxCompatibleQuantityId(
-            resolvedBaseSettings.activeQuantityId,
-          ),
+          activeQuantityId: resolvedBaseSettings.activeQuantityId,
         }
       : resolvedBaseSettings;
   const targetKey = visualizationTargetKey(target);
@@ -1838,7 +1831,7 @@ export function resolveAirboxVisualizationSettingsFromState(
 
   return normalizeAirboxVisualizationSettings({
     ...baseSettings,
-    activeQuantityId: resolveAirboxCompatibleQuantityId(activeQuantityId),
+    activeQuantityId,
     boundsVisible:
       airbox?.bounds?.visible ?? baseSettings.boundsVisible,
     boundsOpacityPercent: layerOpacityToPercent(

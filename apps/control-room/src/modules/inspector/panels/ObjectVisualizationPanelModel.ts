@@ -19,7 +19,7 @@ import { resolveVisualizationTargetForMeshPart } from "@/kernel/selection/visual
 import type { VisualizationDebugSnapshot } from "@/kernel/visualization/visualizationDebugTypes";
 import {
   isAnalysisFieldQuantityId,
-  isMagneticOnlyQuantityId,
+  fieldCatalogQuantitySupportsAirbox,
   isScalarSpatialQuantityId,
   resolveCanonicalQuantityId,
 } from "@/kernel/api/quantityIds";
@@ -1244,11 +1244,14 @@ export function visualizationQuantityItems(
             value: quantity.quantity_id,
           };
         })
-    : VISUALIZATION_QUANTITY_ITEMS;
+    : targetKind === "airbox"
+      ? []
+      : VISUALIZATION_QUANTITY_ITEMS;
   if (targetKind === "airbox") {
-    baseItems = baseItems.filter(
-      (item) => !isMagneticOnlyQuantityId(item.value),
+    baseItems = baseItems.filter((item) =>
+      fieldCatalogQuantitySupportsAirbox(fieldCatalog, item.value),
     );
+    if (!fieldCatalog) return baseItems;
   }
 
   if (
@@ -1765,7 +1768,6 @@ export function buildAirboxVectorDiagnostic({
   vectorDomain: string;
 }): AirboxVectorDiagnostic {
   const quantityId = resolveCanonicalQuantityId(settings.activeQuantityId);
-  const quantityCompatible = !isMagneticOnlyQuantityId(quantityId);
   const blockedVectorDomain =
     vectorDomain === "magnetic_only" ||
     vectorDomain === "object" ||
@@ -1776,6 +1778,10 @@ export function buildAirboxVectorDiagnostic({
       : null;
   const quantity = fieldCatalog?.quantities.find(
     (entry) => resolveCanonicalQuantityId(entry.quantity_id) === quantityId,
+  );
+  const quantityCompatible = fieldCatalogQuantitySupportsAirbox(
+    fieldCatalog,
+    quantityId,
   );
   const expectedResourceKey = buildAirboxFieldVectorResourceKey({
     quantityId,
@@ -1823,15 +1829,15 @@ export function buildAirboxVectorDiagnostic({
               ? "Resolved vector visibility is off."
               : blockedVectorDomain
                 ? `Global vector domain '${vectorDomain}' excludes airbox vectors.`
-                : !quantityCompatible
-                  ? `Quantity '${quantityId}' is magnetic-only and cannot render on the airbox.`
-                  : settings.vectorBudget <= 0
+                : fieldCatalog && !quantity
+                  ? `Quantity '${quantityId}' is missing from the field catalog.`
+                  : fieldCatalog && !quantityCompatible
+                    ? `Quantity '${quantityId}' is magnetic-only and cannot render on the airbox.`
+                    : settings.vectorBudget <= 0
                     ? "Vector budget is zero."
                     : quantity && !quantity.available
                       ? `Quantity '${quantityId}' is present in the field catalog but unavailable.`
-                      : fieldCatalog && !quantity
-                        ? `Quantity '${quantityId}' is missing from the field catalog.`
-                        : null;
+                      : null;
 
   if (blockedReason) {
     return {

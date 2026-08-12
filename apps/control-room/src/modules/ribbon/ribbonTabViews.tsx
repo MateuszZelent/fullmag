@@ -37,12 +37,11 @@ import {
   menu,
 } from "./ribbonCommon";
 
-import {
-  isMagneticOnlyQuantityId,
-} from "@/kernel/api/quantityIds";
+import { fieldCatalogQuantitySupportsAirbox } from "@/kernel/api/quantityIds";
 import { RIBBON_CROSS_SECTION_BEGIN_DRAFT_COMMAND } from "./ribbonCommands";
 
 import type {
+  FieldCatalogResource,
   VisualizationStatePatch,
 } from "@/kernel/api/apiTypes";
 
@@ -88,10 +87,13 @@ export const QUANTITY_ITEMS = [
 export function quantityItemsForVisualizationTarget(
   activeQuantityId: string,
   targetKind?: VisualizationTargetKind,
+  fieldCatalog?: FieldCatalogResource | null,
 ): Array<{ label: string; value: string }> {
   const baseItems =
     targetKind === "airbox"
-      ? QUANTITY_ITEMS.filter((item) => !isMagneticOnlyQuantityId(item.value))
+      ? QUANTITY_ITEMS.filter((item) =>
+          fieldCatalogQuantitySupportsAirbox(fieldCatalog, item.value),
+        )
       : QUANTITY_ITEMS;
   return baseItems.some((item) => item.value === activeQuantityId)
     ? baseItems

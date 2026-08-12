@@ -12,10 +12,7 @@ import {
   MODEL_SCENE_PATH,
   MODEL_UNIVERSE_PATH,
 } from "@/kernel/api/apiPaths";
-import {
-  isMagneticOnlyQuantityId,
-  resolveCanonicalQuantityId,
-} from "@/kernel/api/quantityIds";
+import { resolveCanonicalQuantityId } from "@/kernel/api/quantityIds";
 import {
   canonicalFieldVectorQuery,
   serializeCanonicalFieldVectorResourceKey,
@@ -539,9 +536,6 @@ export function resolveViewport3DAirboxFieldVectorResourceRequests(
   airboxParts: readonly { id: string }[],
   fieldQuery: FieldVectorQuery = FULL_FIELD_VECTOR_QUERY,
 ): Map<string, Viewport3DAirboxFieldVectorRequest> {
-  if (isMagneticOnlyQuantityId(quantityId)) {
-    return new Map();
-  }
   const canonicalQuantityId = resolveCanonicalQuantityId(quantityId);
   return new Map(
     airboxParts.map((part) => {

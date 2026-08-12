@@ -4437,6 +4437,7 @@ export interface components {
             available: boolean;
             /** Format: int32 */
             components: number;
+            domain: string;
             domain_generation_id: string;
             /** Format: int64 */
             field_revision: number;

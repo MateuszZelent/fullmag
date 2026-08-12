@@ -23,6 +23,7 @@ pub enum FieldMaterializationState {
 pub struct FieldDescriptor {
     pub quantity_id: String,
     pub label: String,
+    pub domain: String,
     pub kind: String,
     pub components: u8,
     pub location: String,

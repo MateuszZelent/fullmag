@@ -1944,6 +1944,9 @@ fn push_field_descriptor(
         label: spec
             .map(|s| s.label.to_string())
             .unwrap_or_else(|| quantity_id.to_string()),
+        domain: spec
+            .map(|s| s.domain.as_str().to_string())
+            .unwrap_or_else(|| "magnetic_only".to_string()),
         kind: spec
             .map(|s| s.shape.as_api_kind().to_string())
             .unwrap_or_else(|| "vector_field".into()),

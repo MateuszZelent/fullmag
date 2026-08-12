@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 
+import type { FieldCatalogResource } from "@/kernel/api/apiTypes";
 import {
   DEFAULT_FDM_UNIVERSE_OUTSIDE_SUPPORT_VISUALIZATION,
   DEFAULT_OBJECT_VISUALIZATION,
@@ -839,11 +840,25 @@ describe("viewport3DFieldDataPlan", () => {
       "H_oe",
       "eden_demag",
     ]);
+    const fieldCatalog = {
+      domain_generation_id: "fdm-generation-1",
+      quantities: Array.from(catalogAvailableQuantityIds, (quantity_id) => ({
+        available: true,
+        domain: ["H_demag", "H_ext", "H_eff", "H_ant", "H_oe"].includes(
+          quantity_id,
+        )
+          ? "full_domain"
+          : "magnetic_only",
+        quantity_id,
+      })),
+      revision: 3,
+    } as FieldCatalogResource;
 
     for (const quantityId of ["H_demag", "H_ext", "H_eff", "H_ant", "H_oe"]) {
       const plan = resolveViewport3DAirboxFieldVectorDemandPlan({
         airboxParts: [{ id: "part:__air__" }],
         availableQuantityIds: catalogAvailableQuantityIds,
+        fieldCatalog,
         quantityId,
         vectorBudget: 64,
         vectorsVisible: true,
@@ -864,6 +879,7 @@ describe("viewport3DFieldDataPlan", () => {
       const plan = resolveViewport3DAirboxFieldVectorDemandPlan({
         airboxParts: [{ id: "part:__air__" }],
         availableQuantityIds: catalogAvailableQuantityIds,
+        fieldCatalog,
         quantityId: magneticOnlyQuantityId,
         vectorBudget: 64,
         vectorsVisible: true,

@@ -31,7 +31,7 @@ import { ControlRoomApiError } from "@/kernel/api/ControlRoomApi";
 import type { MeshSizeHistogramHighlight } from "@/kernel/events/eventTypes";
 import {
   isAnalysisFieldQuantityId,
-  isMagneticOnlyQuantityId,
+  fieldCatalogQuantitySupportsAirbox,
   isScalarSpatialQuantityId,
   resolveCanonicalQuantityId,
   sameQuantityId,
@@ -3455,7 +3455,10 @@ export function useViewport3DSceneModel({
     [objectVisualizationSnapshot, renderingState],
   );
   const airboxQuantityCompatible =
-    !isMagneticOnlyQuantityId(airboxSettings.activeQuantityId) &&
+    fieldCatalogQuantitySupportsAirbox(
+      fieldCatalog.data,
+      airboxSettings.activeQuantityId,
+    ) &&
     viewport3DFieldQuantityAvailable(
       airboxSettings.activeQuantityId,
       availableQuantityIdsForPlanning,
@@ -3576,6 +3579,7 @@ export function useViewport3DSceneModel({
       resolveViewport3DAirboxFieldVectorDemandPlan({
         airboxParts: airboxFieldVectorParts,
         availableQuantityIds: availableQuantityIdsForPlanning,
+        fieldCatalog: fieldCatalog.data,
         fieldQuery: airboxFieldQuery,
         quantityId: airboxSettings.activeQuantityId,
         replayQuery: selectedSnapshotQuery,
@@ -3593,6 +3597,7 @@ export function useViewport3DSceneModel({
       airboxSettings.vectorBudget,
       airboxVectorsVisible,
       availableQuantityIdsForPlanning,
+      fieldCatalog.data,
       selectedSnapshotQuery,
     ],
   );
@@ -3640,6 +3645,7 @@ export function useViewport3DSceneModel({
       primaryFieldQuantityId,
       selectedSnapshotQuery,
       availableQuantityIds: availableQuantityIdsForPlanning,
+      fieldCatalog: fieldCatalog.data,
     });
   }, [
     fdmDomain,
@@ -3653,6 +3659,7 @@ export function useViewport3DSceneModel({
     primaryFieldQuantityId,
     selectedSnapshotQuery,
     availableQuantityIdsForPlanning,
+    fieldCatalog.data,
   ]);
   const targetQuantityFieldRequests = targetQuantityFieldDemandPlan.requests;
   const fieldUpdateHoldActive = useViewport3DFieldUpdateHoldActive();

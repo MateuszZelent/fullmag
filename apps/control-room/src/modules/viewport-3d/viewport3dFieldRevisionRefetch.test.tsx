@@ -125,6 +125,7 @@ describe("viewport 3D field revision refetch", () => {
 
   it("refetches object-scoped vector and scalar Inspector metadata after batch field samples change", async () => {
     const requests = new Map<string, number>();
+    const urls = new Map<string, string[]>();
     const api = new ControlRoomApi({
       baseUrl: "http://127.0.0.1:8765",
       fetchImpl: async (url) => {
@@ -135,6 +136,7 @@ describe("viewport 3D field revision refetch", () => {
         if (!quantityId) throw new Error(`Unexpected request ${requestUrl}`);
         const requestCount = (requests.get(quantityId) ?? 0) + 1;
         requests.set(quantityId, requestCount);
+        urls.set(quantityId, [...(urls.get(quantityId) ?? []), requestUrl]);
         return jsonResponse({ field_revision: requestCount, state: "ready" });
       },
     });
@@ -196,6 +198,14 @@ describe("viewport 3D field revision refetch", () => {
 
       expect(observations.at(-1)?.hDemag.data?.field_revision).toBe(2);
       expect(observations.at(-1)?.edenDemag.data?.field_revision).toBe(2);
+      expect(urls.get("H_demag")).toEqual([
+        "http://127.0.0.1:8765/v2/sessions/current/data/fields/H_demag/meta?component=magnitude&scope_id=film&scope_kind=object",
+        "http://127.0.0.1:8765/v2/sessions/current/data/fields/H_demag/meta?component=magnitude&scope_id=film&scope_kind=object",
+      ]);
+      expect(urls.get("eden_demag")).toEqual([
+        "http://127.0.0.1:8765/v2/sessions/current/data/fields/eden_demag/meta?component=full&scope_id=film&scope_kind=object",
+        "http://127.0.0.1:8765/v2/sessions/current/data/fields/eden_demag/meta?component=full&scope_id=film&scope_kind=object",
+      ]);
     } finally {
       await act(async () => root.unmount());
       dom.restore();

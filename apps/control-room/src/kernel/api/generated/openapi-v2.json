@@ -4633,6 +4633,9 @@
             "minimum": 0,
             "type": "integer"
           },
+          "domain": {
+            "type": "string"
+          },
           "domain_generation_id": {
             "type": "string"
           },
@@ -4694,6 +4697,7 @@
         "required": [
           "quantity_id",
           "label",
+          "domain",
           "kind",
           "components",
           "location",
