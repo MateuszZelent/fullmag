@@ -13155,7 +13155,15 @@ mod tests {
         h_eff.preview_grid = [2, 1, 1];
         h_eff.original_grid = [2, 1, 1];
         h_eff.vector_field_values = vec![0.0, 0.0, 2.0, 0.0, 0.0, 2.0];
-        terminal.cached_preview_fields = Some(vec![m, h_eff]);
+        let mut eden_demag = test_preview_field("eden_demag", 12, 3.0);
+        eden_demag.unit = "J/m³".to_string();
+        eden_demag.spatial_kind = "grid".to_string();
+        eden_demag.quantity_domain = "magnetic_only".to_string();
+        eden_demag.preview_grid = [2, 1, 1];
+        eden_demag.original_grid = [2, 1, 1];
+        eden_demag.vector_field_values = vec![3.0, 4.0];
+        terminal.stats.time = 1.2e-12;
+        terminal.cached_preview_fields = Some(vec![m, h_eff, eden_demag]);
 
         let _ = apply_live_step_update_to_workspace_state(
             &mut state,
@@ -13171,12 +13179,24 @@ mod tests {
             state.latest_fields.0["m"]["layout"]["spatial_kind"],
             serde_json::json!("grid")
         );
+        assert_eq!(
+            state.latest_fields.0["eden_demag"]["source_step"],
+            serde_json::json!(12)
+        );
+        assert_eq!(
+            state.latest_fields.0["eden_demag"]["source_time_seconds"],
+            serde_json::json!(1.2e-12)
+        );
+        assert_eq!(
+            state.latest_fields.0["eden_demag"]["unit"],
+            serde_json::json!("J/m³")
+        );
         let payload =
             serde_json::to_value(state.publish_delta()).expect("terminal payload serializes");
         assert_eq!(payload["replace_latest_fields"], serde_json::json!(true));
         assert_eq!(
             payload["field_generation"]["run_id"],
-            serde_json::json!("test-run")
+            serde_json::json!("run-test")
         );
         assert!(payload["field_generation"]["sequence"]
             .as_u64()

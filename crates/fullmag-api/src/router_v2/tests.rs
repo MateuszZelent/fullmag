@@ -30826,6 +30826,78 @@ async fn v2_h_demag_resource_prefers_newer_preview_cache_over_stale_latest_field
 }
 
 #[tokio::test]
+async fn v2_terminal_eden_demag_metadata_keeps_final_solver_provenance() {
+    let state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.latest_fields = serde_json::from_value(serde_json::json!({
+            "eden_demag": {
+                "quantity": "eden_demag",
+                "unit": "J/m³",
+                "values": [1.25, 2.5],
+                "source_step": 52,
+                "source_time_seconds": 5.2e-12,
+                "source_revision": 52,
+                "layout": {
+                    "grid_cells": [2, 1, 1],
+                    "original_grid_cells": [2, 1, 1],
+                    "spatial_kind": "grid",
+                    "quantity_domain": "magnetic_only"
+                }
+            }
+        }))
+        .expect("terminal energy-density latest field should deserialize");
+        snapshot.live_state = Some(LiveState {
+            status: "awaiting_command".into(),
+            updated_at_unix_ms: 1_700_000_000_789,
+            latest_step: StepUpdateView {
+                step: 52,
+                time: 5.2e-12,
+                dt: 1.0e-13,
+                pseudo_time_s: None,
+                e_ex: 0.0,
+                e_demag: 0.0,
+                e_ext: 0.0,
+                e_ani: 0.0,
+                e_dmi: 0.0,
+                e_total: 0.0,
+                max_dm_dt: 0.0,
+                max_h_eff: 0.0,
+                max_h_demag: 0.0,
+                max_torque_Apm: 0.0,
+                max_torque_T: 0.0,
+                wall_time_ns: 100,
+                grid: [2, 1, 1],
+                fem_mesh_generation_id: None,
+                fem_mesh: None,
+                magnetization: None,
+                per_object_scalars: Default::default(),
+                field_materialization_states: Vec::new(),
+                preview_field: None,
+                finished: false,
+            },
+        });
+    }
+    let app = build_v2_router().with_state(state);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/fields/eden_demag/meta?component=full")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let meta = body_json(response).await;
+    assert_eq!(meta["state"], "complete");
+    assert_eq!(meta["source_step"], 52);
+    assert_eq!(meta["source_time_seconds"], 5.2e-12);
+    assert_eq!(meta["unit"], "J/m³");
+}
+
+#[tokio::test]
 async fn v2_optional_field_materialization_pending_and_error_preserve_solver_and_last_good_data() {
     use fullmag_runner::{LiveFieldMaterializationState, LiveFieldMaterializationStatus};
 
