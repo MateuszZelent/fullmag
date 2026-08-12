@@ -307,6 +307,18 @@ struct SharedDomainLinearizationState {
 ///
 /// This is intentionally distinct from [`AcceptedFemEigenEquilibriumHandoff`],
 /// which carries a post-linearization state between samples of one k path.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+struct AcceptedEquilibriumCriterion {
+    criterion: String,
+    metric_kind: fullmag_ir::StageMetricKind,
+    metric_value: f64,
+    threshold: f64,
+    unit: String,
+    status: String,
+    converged: bool,
+    stop_reason: fullmag_ir::StageStopReason,
+}
+
 #[derive(Debug, Clone)]
 pub struct AcceptedFemRelaxStageHandoff {
     source_run_id: String,
@@ -318,6 +330,8 @@ pub struct AcceptedFemRelaxStageHandoff {
     indexing_sha256: String,
     part_registry_sha256: String,
     completion_sha256: String,
+    completion: fullmag_ir::StageCompletionIR,
+    acceptance: AcceptedEquilibriumCriterion,
     equilibrium_content_sha256: String,
     equilibrium_magnetization: Vec<Vector3>,
     content_sha256: String,
@@ -343,34 +357,57 @@ impl AcceptedFemRelaxStageHandoff {
                     .to_string(),
             });
         }
-        let coherent_metric = matches!(
-            (completion.reason, completion.metric),
+        let accepted_metric = match (completion.reason, completion.metric) {
             (
                 Some(fullmag_ir::StageStopReason::Torque),
-                Some(fullmag_ir::StageMetricKind::MaxTorqueApm)
-            ) | (
+                Some(fullmag_ir::StageMetricKind::MaxTorqueApm),
+            ) => Some(("torque", fullmag_ir::StageMetricKind::MaxTorqueApm)),
+            (
                 Some(fullmag_ir::StageStopReason::Energy),
-                Some(fullmag_ir::StageMetricKind::TotalEnergyPlateauRangeJ)
-            )
-        );
-        let threshold_satisfied = matches!(
-            (completion.metric_value, completion.threshold),
+                Some(fullmag_ir::StageMetricKind::TotalEnergyPlateauRangeJ),
+            ) => Some((
+                "energy",
+                fullmag_ir::StageMetricKind::TotalEnergyPlateauRangeJ,
+            )),
+            _ => None,
+        };
+        let accepted_values = match (completion.metric_value, completion.threshold) {
             (Some(value), Some(threshold))
                 if value.is_finite()
                     && threshold.is_finite()
                     && threshold >= 0.0
-                    && value <= threshold
-        );
-        if completion.status != "completed"
-            || !completion.converged
-            || !coherent_metric
-            || !threshold_satisfied
-        {
+                    && value <= threshold =>
+            {
+                Some((value, threshold))
+            }
+            _ => None,
+        };
+        let (Some((criterion, metric_kind)), Some((metric_value, threshold))) =
+            (accepted_metric, accepted_values)
+        else {
+            return Err(RunError {
+                message: "relax_stage_handoff_completion_not_accepted: completion must be completed, converged, use a coherent equilibrium metric, and satisfy its threshold"
+                    .to_string(),
+            });
+        };
+        if completion.status != "completed" || !completion.converged {
             return Err(RunError {
                 message: "relax_stage_handoff_completion_not_accepted: completion must be completed, converged, use a coherent equilibrium metric, and satisfy its threshold"
                     .to_string(),
             });
         }
+        let acceptance = AcceptedEquilibriumCriterion {
+            criterion: criterion.to_string(),
+            metric_kind,
+            metric_value,
+            threshold,
+            unit: metric_kind.unit().to_string(),
+            status: completion.status.clone(),
+            converged: completion.converged,
+            stop_reason: completion
+                .reason
+                .expect("accepted completion has a stop reason"),
+        };
         if equilibrium_magnetization.len() != source_mesh.nodes.len()
             || equilibrium_magnetization
                 .iter()
@@ -440,6 +477,8 @@ impl AcceptedFemRelaxStageHandoff {
             &indexing_sha256,
             &part_registry_sha256,
             &completion_sha256,
+            completion,
+            &acceptance,
             &equilibrium_content_sha256,
         )?;
         Ok(Self {
@@ -452,6 +491,8 @@ impl AcceptedFemRelaxStageHandoff {
             indexing_sha256,
             part_registry_sha256,
             completion_sha256,
+            completion: completion.clone(),
+            acceptance,
             equilibrium_content_sha256,
             equilibrium_magnetization,
             content_sha256,
@@ -524,6 +565,8 @@ impl AcceptedFemRelaxStageHandoff {
             &self.indexing_sha256,
             &self.part_registry_sha256,
             &self.completion_sha256,
+            &self.completion,
+            &self.acceptance,
             &self.equilibrium_content_sha256,
         )?;
         if recomputed != self.content_sha256 {
@@ -542,9 +585,14 @@ impl AcceptedFemRelaxStageHandoff {
         &self.equilibrium_content_sha256
     }
 
+    fn acceptance_json(&self) -> serde_json::Value {
+        serde_json::to_value(&self.acceptance)
+            .expect("accepted equilibrium criterion must serialize")
+    }
+
     fn provenance_json(&self) -> serde_json::Value {
         serde_json::json!({
-            "schema_version": "AcceptedFemRelaxStageHandoff.v1",
+            "schema_version": "AcceptedFemRelaxStageHandoff.v2",
             "source_run_id": self.source_run_id,
             "source_stage_id": self.source_stage_id,
             "source_stage_kind": self.source_stage_kind,
@@ -554,6 +602,8 @@ impl AcceptedFemRelaxStageHandoff {
             "indexing_sha256": self.indexing_sha256,
             "part_registry_sha256": self.part_registry_sha256,
             "completion_sha256": self.completion_sha256,
+            "completion": self.completion,
+            "acceptance": self.acceptance_json(),
             "equilibrium_content_sha256": self.equilibrium_content_sha256,
             "content_sha256": self.content_sha256,
         })
@@ -583,24 +633,37 @@ fn relax_stage_handoff_content_sha256(
     indexing_sha256: &str,
     part_registry_sha256: &str,
     completion_sha256: &str,
+    completion: &fullmag_ir::StageCompletionIR,
+    acceptance: &AcceptedEquilibriumCriterion,
     equilibrium_content_sha256: &str,
 ) -> Result<String, RunError> {
-    shared_domain_content_digest(
-        "accepted_fem_relax_stage_handoff",
-        &serde_json::json!({
-            "schema_version": "AcceptedFemRelaxStageHandoff.v1",
-            "source_run_id": source_run_id,
-            "source_stage_id": source_stage_id,
-            "source_stage_kind": source_stage_kind,
-            "stage_fem_mesh_generation_id": generation_id,
-            "source_mesh_topology_sha256": topology_sha256,
-            "node_count": node_count,
-            "indexing_sha256": indexing_sha256,
-            "part_registry_sha256": part_registry_sha256,
-            "completion_sha256": completion_sha256,
-            "equilibrium_content_sha256": equilibrium_content_sha256,
-        }),
-    )
+    let completion_json = serde_json::to_vec(completion).map_err(|error| RunError {
+        message: format!("relax_stage_handoff_completion_serialization_failed: {error}"),
+    })?;
+    let acceptance_json = serde_json::to_vec(acceptance).map_err(|error| RunError {
+        message: format!("relax_stage_handoff_acceptance_serialization_failed: {error}"),
+    })?;
+    let node_count = (node_count as u64).to_le_bytes();
+    let mut hash = Sha256::new();
+    hash.update(b"AcceptedFemRelaxStageHandoff.v2\0");
+    for field in [
+        source_run_id.as_bytes(),
+        source_stage_id.as_bytes(),
+        source_stage_kind.as_bytes(),
+        generation_id.as_bytes(),
+        topology_sha256.as_bytes(),
+        node_count.as_slice(),
+        indexing_sha256.as_bytes(),
+        part_registry_sha256.as_bytes(),
+        completion_sha256.as_bytes(),
+        completion_json.as_slice(),
+        acceptance_json.as_slice(),
+        equilibrium_content_sha256.as_bytes(),
+    ] {
+        hash.update((field.len() as u64).to_le_bytes());
+        hash.update(field);
+    }
+    Ok(format!("sha256:{:x}", hash.finalize()))
 }
 
 fn prepare_single_k_stage_continuation(
@@ -14226,6 +14289,119 @@ mod tests {
             metric_name: Some("max_torque_apm".to_string()),
             metric_value: Some(5.0e-5),
             threshold: Some(1.0e-4),
+        }
+    }
+
+    fn accepted_energy_relax_completion() -> fullmag_ir::StageCompletionIR {
+        fullmag_ir::StageCompletionIR {
+            status: "completed".to_string(),
+            converged: true,
+            reason: Some(fullmag_ir::StageStopReason::Energy),
+            metric: Some(fullmag_ir::StageMetricKind::TotalEnergyPlateauRangeJ),
+            metric_name: Some("total_energy_plateau_range_J".to_string()),
+            metric_value: Some(2.5e-19),
+            threshold: Some(1.0e-18),
+        }
+    }
+
+    fn relax_handoff_from_completion(
+        plan: &FemEigenPlanIR,
+        completion: &fullmag_ir::StageCompletionIR,
+    ) -> Result<AcceptedFemRelaxStageHandoff, RunError> {
+        AcceptedFemRelaxStageHandoff::from_completed_relax(
+            "run-relax",
+            "stage-000",
+            "flat_relax",
+            true,
+            &crate::types::FemMeshPayload::from(plan),
+            completion,
+            plan.equilibrium_magnetization.clone(),
+        )
+    }
+
+    #[test]
+    fn accepted_relax_stage_handoff_v2_preserves_torque_and_energy_certificates() {
+        let plan = minimal_native_modal_plan();
+        let torque_completion = accepted_relax_completion();
+        let torque_handoff = relax_handoff_from_completion(&plan, &torque_completion)
+            .expect("torque completion should create a typed handoff");
+        assert_eq!(torque_handoff.acceptance_json()["criterion"], "torque");
+        assert_eq!(
+            torque_handoff.acceptance_json()["metric_kind"],
+            "max_torque_apm"
+        );
+        assert_eq!(torque_handoff.acceptance_json()["unit"], "A/m");
+
+        let energy_completion = accepted_energy_relax_completion();
+        let energy_handoff = relax_handoff_from_completion(&plan, &energy_completion)
+            .expect("energy completion should create a typed handoff");
+        assert_eq!(energy_handoff.acceptance_json()["criterion"], "energy");
+        assert_eq!(
+            energy_handoff.acceptance_json()["metric_kind"],
+            "total_energy_plateau_range_j"
+        );
+        assert_eq!(energy_handoff.acceptance_json()["unit"], "J");
+        assert_eq!(
+            energy_handoff.provenance_json()["schema_version"],
+            "AcceptedFemRelaxStageHandoff.v2"
+        );
+        assert_eq!(
+            energy_handoff.provenance_json()["completion"],
+            serde_json::to_value(&energy_completion).unwrap()
+        );
+        assert_eq!(
+            energy_handoff.provenance_json()["acceptance"],
+            energy_handoff.acceptance_json()
+        );
+
+        let mut completion_snapshot_drift = energy_completion;
+        completion_snapshot_drift.metric_name = Some("energy_plateau_range_j".to_string());
+        let drifted_handoff = relax_handoff_from_completion(&plan, &completion_snapshot_drift)
+            .expect("a valid completion snapshot should create a typed handoff");
+        assert_eq!(
+            drifted_handoff.acceptance_json(),
+            energy_handoff.acceptance_json()
+        );
+        assert_ne!(
+            drifted_handoff.content_sha256(),
+            energy_handoff.content_sha256(),
+            "the v2 digest must include the full completion snapshot"
+        );
+    }
+
+    #[test]
+    fn accepted_relax_stage_handoff_rejects_nonconvergent_and_incoherent_completions() {
+        let plan = minimal_native_modal_plan();
+        let rejected = [
+            fullmag_ir::StageCompletionIR {
+                status: "completed".to_string(),
+                converged: false,
+                reason: Some(fullmag_ir::StageStopReason::MaxSteps),
+                metric: Some(fullmag_ir::StageMetricKind::Steps),
+                metric_name: Some("steps".to_string()),
+                metric_value: Some(50_000.0),
+                threshold: Some(50_000.0),
+            },
+            fullmag_ir::StageCompletionIR {
+                status: "cancelled".to_string(),
+                converged: false,
+                reason: Some(fullmag_ir::StageStopReason::UserCancelled),
+                metric: None,
+                metric_name: None,
+                metric_value: None,
+                threshold: None,
+            },
+            fullmag_ir::StageCompletionIR {
+                reason: Some(fullmag_ir::StageStopReason::Torque),
+                metric: Some(fullmag_ir::StageMetricKind::TotalEnergyPlateauRangeJ),
+                ..accepted_energy_relax_completion()
+            },
+        ];
+
+        for completion in rejected {
+            let error = relax_handoff_from_completion(&plan, &completion)
+                .expect_err("nonconvergent or incoherent completion must fail closed");
+            assert!(error.message.contains("completion_not_accepted"));
         }
     }
 
