@@ -45,11 +45,23 @@ export function FrequencyDomainSpectrumChart({
   );
   const frequencyUnit = frequencySeries?.unit ?? "Hz";
   const data = model.points.map((point, rowIndex) => {
-    const frequencyValue =
-      frequencySeries?.points.find((seriesPoint) => seriesPoint.rowIndex === rowIndex)
-        ?.x ?? point.frequencyHz;
+    const frequencySeriesPoint = frequencySeries?.points.find(
+      (seriesPoint) => seriesPoint.rowIndex === rowIndex,
+    );
+    const frequencyValue = frequencySeriesPoint?.y ?? point.frequencyHz;
+    const frequencyScale =
+      point.frequencyHz !== 0 && frequencySeriesPoint?.y != null
+        ? frequencySeriesPoint.y / point.frequencyHz
+        : 1;
     return {
-      dampingRateHz: point.dampingRateHz,
+      dampingRateHz:
+        point.dampingRateHz == null
+          ? null
+          : point.dampingRateHz * frequencyScale,
+      dampingRateLabel:
+        point.dampingRateHz == null
+          ? null
+          : formatFrequencyHz(point.dampingRateHz),
       frequencyLabel: `${formatNumber(frequencyValue)} ${frequencyUnit}`,
       frequencyValue,
       hasField: Boolean(point.modeFieldId),
@@ -100,7 +112,7 @@ export function FrequencyDomainSpectrumChart({
               ? ` | residual ${formatNumber(point.residualNorm)}`
               : ""}
             {point.dampingRateHz != null
-              ? ` | damping ${formatNumber(point.dampingRateHz)} Hz`
+              ? ` | damping ${point.dampingRateLabel}`
               : ""}
             {point.leakage != null
               ? ` | leakage ${formatNumber(point.leakage)}`

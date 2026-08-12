@@ -1236,7 +1236,7 @@ describe("AnalysisPlotsView", () => {
   it("renders frequency-domain series as a dedicated analysis subchart", () => {
     const html = renderToStaticMarkup(
       <AnalysisPlotsView
-        activeSurface="frequency-response"
+        activeSurface="resonance-fmr"
         kernel={mockKernel}
         frequencyDomainSeries={[
           {
@@ -1278,7 +1278,7 @@ describe("AnalysisPlotsView", () => {
   it("keeps an explicit empty artifact selection empty instead of falling back to table selection", () => {
     const html = renderToStaticMarkup(
       <AnalysisPlotsView
-        activeSurface="frequency-response"
+        activeSurface="resonance-fmr"
         kernel={mockKernel}
         frequencyDomainSeries={[{
           id: "analysis.frequency-domain:response:amplitude",
@@ -1304,7 +1304,7 @@ describe("AnalysisPlotsView", () => {
   it("renders FMR workflow context for modal spectrum charts", () => {
     const html = renderToStaticMarkup(
       <AnalysisPlotsView
-        activeSurface="eigenmodes"
+        activeSurface="resonance-fmr"
         kernel={mockKernel}
         frequencyDomainSeries={[
           {
@@ -1322,6 +1322,7 @@ describe("AnalysisPlotsView", () => {
             xUnit: "mode index",
           },
         ]}
+        frequencyDomainCalculationMode="fmr_modal"
         frequencyDomainStatus="ready"
         frequencyDomainTitle="FMR modal spectrum"
         onPointSelect={() => undefined}
@@ -1352,7 +1353,7 @@ describe("AnalysisPlotsView", () => {
   it("renders FMR workflow context for driven response charts", () => {
     const html = renderToStaticMarkup(
       <AnalysisPlotsView
-        activeSurface="frequency-response"
+        activeSurface="resonance-fmr"
         kernel={mockKernel}
         frequencyDomainSeries={[
           {
@@ -1370,6 +1371,7 @@ describe("AnalysisPlotsView", () => {
             xUnit: "GHz",
           },
         ]}
+        frequencyDomainCalculationMode="fmr_response"
         frequencyDomainStatus="ready"
         frequencyDomainTitle="FMR response sweep"
         onPointSelect={() => undefined}
@@ -1398,7 +1400,7 @@ describe("AnalysisPlotsView", () => {
   it("renders selected frequency-domain point context for inspector follow-up", () => {
     const html = renderToStaticMarkup(
       <AnalysisPlotsView
-        activeSurface="frequency-response"
+        activeSurface="resonance-fmr"
         kernel={mockKernel}
         frequencyDomainSeries={[
           {
@@ -1454,7 +1456,7 @@ describe("AnalysisPlotsView", () => {
   it("renders selected FMR modal point context as a 3D overlay workflow", () => {
     const html = renderToStaticMarkup(
       <AnalysisPlotsView
-        activeSurface="eigenmodes"
+        activeSurface="resonance-fmr"
         kernel={mockKernel}
         frequencyDomainSeries={[
           {
@@ -1472,6 +1474,7 @@ describe("AnalysisPlotsView", () => {
             xUnit: "mode index",
           },
         ]}
+        frequencyDomainCalculationMode="fmr_modal"
         frequencyDomainStatus="ready"
         frequencyDomainTitle="FMR modal spectrum"
         onPointSelect={() => undefined}
@@ -1506,24 +1509,7 @@ describe("AnalysisPlotsView", () => {
       <AnalysisPlotsView
         activeSurface="dispersion"
         kernel={mockKernel}
-        frequencyDomainSeries={[
-          {
-            id: "analysis.frequency-domain:eigen:dispersion:acoustic",
-            label: "Branch acoustic",
-            points: [
-              { label: "G", linewidthHz: 2.8e6, rowIndex: 0, x: 0, y: 9.5 },
-            ],
-            quantity: "frequency",
-            source: {
-              kind: "analysis.frequency_domain",
-              resourceKey: ANALYSIS_FREQUENCY_DOMAIN_EIGEN_DISPERSION_PATH,
-              tableId: "frequency-domain:eigen-dispersion",
-            },
-            status: "ready",
-            unit: "GHz",
-            xUnit: "rad/m",
-          },
-        ]}
+        frequencyDomainSeries={[]}
         frequencyDomainStatus="ready"
         frequencyDomainTitle="Frequency-domain dispersion"
         onPointSelect={() => undefined}
@@ -1562,7 +1548,7 @@ describe("AnalysisPlotsView", () => {
   it("renders selected FMR response point context as a response-field overlay workflow", () => {
     const html = renderToStaticMarkup(
       <AnalysisPlotsView
-        activeSurface="frequency-response"
+        activeSurface="resonance-fmr"
         kernel={mockKernel}
         frequencyDomainSeries={[
           {
@@ -1580,6 +1566,7 @@ describe("AnalysisPlotsView", () => {
             xUnit: "GHz",
           },
         ]}
+        frequencyDomainCalculationMode="fmr_response"
         frequencyDomainStatus="ready"
         frequencyDomainTitle="FMR response sweep"
         onPointSelect={() => undefined}
@@ -1614,7 +1601,7 @@ describe("AnalysisPlotsView", () => {
   it("shows the explicit unavailable artifact state for an uncomputed frequency response", () => {
     const html = renderToStaticMarkup(
       <AnalysisPlotsView
-        activeSurface="frequency-response"
+        activeSurface="resonance-fmr"
         kernel={mockKernel}
         frequencyDomainSeries={[]}
         frequencyDomainStatus="stale"
@@ -1639,7 +1626,7 @@ describe("AnalysisPlotsView", () => {
   it("renders frequency-domain loading state while artifact resources resolve", () => {
     const html = renderToStaticMarkup(
       <AnalysisPlotsView
-        activeSurface="frequency-response"
+        activeSurface="resonance-fmr"
         kernel={mockKernel}
         frequencyDomainSeries={[]}
         frequencyDomainStatus="loading"
@@ -1662,7 +1649,7 @@ describe("AnalysisPlotsView", () => {
   it("renders explicit response-map unavailable state when the mode is selected", () => {
     const html = renderToStaticMarkup(
       <AnalysisPlotsView
-        activeSurface="frequency-response"
+        activeSurface="resonance-fmr"
         kernel={mockKernel}
         frequencyDomainSeries={[]}
         frequencyDomainStatus="error"

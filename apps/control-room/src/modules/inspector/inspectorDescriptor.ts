@@ -1,5 +1,7 @@
 import type { Selection } from "@/kernel/selection/selectionTypes";
 
+import { resolveInspectorRoute } from "./inspectorRouteCatalog";
+
 export type InspectorStatusTone =
   | "neutral"
   | "info"
@@ -23,9 +25,21 @@ export interface InspectorTabDescriptor {
   label: string;
 }
 
+export type InspectorDescriptorIcon =
+  | "airbox"
+  | "analysis"
+  | "diagnostics"
+  | "mesh"
+  | "mode"
+  | "object"
+  | "study"
+  | "visualization";
+
 export interface InspectorDescriptor {
   breadcrumbs: InspectorBreadcrumb[];
+  icon: InspectorDescriptorIcon;
   metadata: InspectorMetadataItem[];
+  ownerId: string;
   status: {
     label: string;
     tone: InspectorStatusTone;
@@ -69,6 +83,39 @@ function titleCase(value: string): string {
 }
 
 function resolveFamily(kind: string): FamilyDescriptor {
+  if (kind === "airbox.visualization") {
+    return { tabs: [], typeLabel: "Airbox display" };
+  }
+  if (kind === "object.visualization") {
+    return { tabs: [], typeLabel: "Object display" };
+  }
+  if (kind === "mesh-part-airbox") {
+    return { tabs: [], typeLabel: "Airbox display" };
+  }
+  if (kind === "mesh-part") {
+    return { tabs: [], typeLabel: "Mesh-part display" };
+  }
+  if (kind === "object.mode_visualization") {
+    return { tabs: [], typeLabel: "Mode visualization overview" };
+  }
+  if (kind === "object.mode_visualization.group") {
+    return { tabs: [], typeLabel: "Mode visualization fields" };
+  }
+  if (kind === "object.mode_visualization.field") {
+    return { tabs: [], typeLabel: "Mode visualization field" };
+  }
+  if (kind === "object.mode_visualization.view") {
+    return { tabs: [], typeLabel: "Mode visualization view" };
+  }
+  if (kind === "airbox.visualization.debug") {
+    return { tabs: [], typeLabel: "Airbox visualization debug" };
+  }
+  if (kind === "object.visualization.debug") {
+    return { tabs: [], typeLabel: "Object visualization debug" };
+  }
+  if (kind === "object.region.visualization.debug") {
+    return { tabs: [], typeLabel: "Region visualization debug" };
+  }
   if (kind === "airbox.multilayer.target") {
     return { tabs: [], typeLabel: "Multilayer Airbox target" };
   }
@@ -103,6 +150,35 @@ function resolveFamily(kind: string): FamilyDescriptor {
       typeLabel: titleCase(kind.split(".").at(-1) ?? "Selection"),
     }
   );
+}
+
+function inspectorIconForKind(kind: string): InspectorDescriptorIcon {
+  if (
+    kind === "airbox.root" ||
+    kind.startsWith("airbox.") ||
+    kind === "mesh-part-airbox"
+  ) {
+    return "airbox";
+  }
+  if (kind === "fdm.cell" || kind.startsWith("mesh.") || kind.startsWith("mesh-part")) {
+    return "mesh";
+  }
+  if (kind.startsWith("object.mode_visualization")) return "mode";
+  if (kind.includes("visualization")) return "visualization";
+  if (kind.startsWith("diagnostics.")) return "diagnostics";
+  if (kind.startsWith("results.") || kind.startsWith("resources.")) return "analysis";
+  if (kind.startsWith("study.") || kind.startsWith("jobs.")) return "study";
+  return "object";
+}
+
+function inspectorIdentity(kind: string): {
+  icon: InspectorDescriptorIcon;
+  ownerId: string;
+} {
+  return {
+    icon: inspectorIconForKind(kind),
+    ownerId: resolveInspectorRoute(kind)?.id ?? kind,
+  };
 }
 
 function resolveBreadcrumbs(
@@ -158,7 +234,9 @@ export function resolveInspectorDescriptor(
   if (!selection.kind) {
     return {
       breadcrumbs: [],
+      icon: "object",
       metadata: [],
+      ownerId: "empty-selection",
       status: null,
       tabs: [],
       title: "Nothing selected",
@@ -167,6 +245,7 @@ export function resolveInspectorDescriptor(
   }
 
   const family = resolveFamily(selection.kind);
+  const identity = inspectorIdentity(selection.kind);
   const title = selection.label ?? selection.objectId ?? family.typeLabel;
   const metadata: InspectorMetadataItem[] = [
     { label: "Kind", value: selection.kind },
@@ -176,6 +255,7 @@ export function resolveInspectorDescriptor(
   if (fdmCellRef) {
     return {
       breadcrumbs: resolveBreadcrumbs(selection, family.typeLabel),
+      icon: identity.icon,
       metadata: [
         { label: "Selected IJK snapshot", value: `[${fdmCellRef.ijk.join(", ")}]` },
         { label: "Selected mask snapshot", value: fdmCellRef.maskState },
@@ -185,6 +265,7 @@ export function resolveInspectorDescriptor(
           value: fdmCellRef.membershipRevision,
         },
       ],
+      ownerId: identity.ownerId,
       status: null,
       tabs: family.tabs.slice(0, 4),
       title,
@@ -215,7 +296,9 @@ export function resolveInspectorDescriptor(
 
   return {
     breadcrumbs: resolveBreadcrumbs(selection, family.typeLabel),
+    icon: identity.icon,
     metadata: metadata.slice(0, 4),
+    ownerId: identity.ownerId,
     status: null,
     tabs: family.tabs.slice(0, 4),
     title,

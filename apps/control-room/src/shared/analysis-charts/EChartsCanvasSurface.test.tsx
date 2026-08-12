@@ -16,6 +16,8 @@ const echarts = vi.hoisted(() => ({
     dispatchAction: vi.fn(),
     dispose: vi.fn(),
     getDataURL: vi.fn(() => "data:image/png;base64,"),
+    off: vi.fn(),
+    on: vi.fn(),
     resize: vi.fn(),
     setOption: vi.fn(),
   })),
@@ -57,7 +59,7 @@ describe("EChartsCanvasSurface", () => {
 
   it("renders surface container with aria-label and model key", () => {
     const html = renderToStaticMarkup(<EChartsCanvasSurface model={dummyModel} />);
-    expect(html).toContain('aria-label="Test chart"');
+    expect(html).toContain('aria-label="Test chart. X axis x [s]. Y axes y [m]."');
     expect(html).toContain('data-chart-model-key="test-key-123"');
   });
 
@@ -143,11 +145,24 @@ describe("EChartsCanvasSurface", () => {
     dom.restore();
   });
 
-  it("disposes its ECharts owner and ResizeObserver when the active footer content unmounts", async () => {
+  it("releases its renderer, observers, listeners, and pending resize frame on unmount", async () => {
     const dom = installSimulationPreparationTestDom();
+    const cancelAnimationFrame = vi.fn();
     const disconnect = vi.fn();
+    const disconnectThemeObserver = vi.fn();
+    let resizeCallback: ResizeObserverCallback = () => undefined;
+    globalThis.cancelAnimationFrame = cancelAnimationFrame;
+    globalThis.requestAnimationFrame = vi.fn(() => 73);
+    globalThis.MutationObserver = class {
+      disconnect = disconnectThemeObserver;
+      observe() {}
+      takeRecords() { return []; }
+    } as unknown as typeof MutationObserver;
     globalThis.ResizeObserver = class {
       disconnect = disconnect;
+      constructor(callback: ResizeObserverCallback) {
+        resizeCallback = callback;
+      }
       observe() {}
       unobserve() {}
     } as unknown as typeof ResizeObserver;
@@ -166,11 +181,18 @@ describe("EChartsCanvasSurface", () => {
     });
     const instance = echarts.init.mock.results.at(-1)?.value;
     expect(instance).toBeDefined();
+    expect(instance?.on).toHaveBeenCalledTimes(3);
+
+    resizeCallback([], {} as ResizeObserver);
+    expect(globalThis.requestAnimationFrame).toHaveBeenCalledTimes(1);
 
     await act(async () => root.unmount());
 
+    expect(instance?.off).toHaveBeenCalledTimes(3);
     expect(instance?.dispose).toHaveBeenCalledTimes(1);
     expect(disconnect).toHaveBeenCalledTimes(1);
+    expect(disconnectThemeObserver).toHaveBeenCalledTimes(1);
+    expect(cancelAnimationFrame).toHaveBeenCalledWith(73);
     dom.restore();
   });
 

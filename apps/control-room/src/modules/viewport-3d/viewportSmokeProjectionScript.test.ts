@@ -32,6 +32,10 @@ const profileSwitchScriptUrl = new URL(
   import.meta.url,
 );
 const justfileUrl = new URL("../../../../../justfile", import.meta.url);
+const fdmCpuRelaxSmokeUrl = new URL(
+  "../../../../../examples/fdm_cpu_relax_smoke.py",
+  import.meta.url,
+);
 
 function endpointFamilyLiteral(path: string, suffix: string): string {
   const suffixStart = path.lastIndexOf(suffix);
@@ -69,6 +73,16 @@ describe("viewport smoke projection round-trip", () => {
     expect(justfile).toContain("CONTROL_ROOM_SMOKE_DISPOSABLE_FIXTURE_TOKEN");
   });
 
+  it("uses an explicit timestep policy in the disposable FDM smoke fixture", () => {
+    const fixture = readFileSync(fdmCpuRelaxSmokeUrl, "utf8");
+
+    expect(fixture).toContain('algorithm="llg_overdamped"');
+    expect(fixture).toContain("dt=1e-13");
+    expect(fixture).toContain(".tableautosave(");
+    expect(fixture).toContain("every_steps=1");
+    expect(fixture).not.toContain("study.tableautosave(");
+  });
+
   it("toggles relative to the initial projection state", () => {
     const smokeScript = readFileSync(smokeScriptUrl, "utf8");
 
@@ -103,6 +117,16 @@ describe("viewport smoke projection round-trip", () => {
     expect(smokeScript).toContain("3D viewport final drawing buffer is empty after");
     expect(smokeScript).toContain("finalWebGL");
   });
+
+  it("reports browser evidence when startup fails before the canvas appears", () => {
+    const smokeScript = readFileSync(smokeScriptUrl, "utf8");
+
+    expect(smokeScript).toContain("collectViewportStartupFailureEvidence");
+    expect(smokeScript).toContain("Viewport 3D startup failure evidence:");
+    expect(smokeScript).toContain("document.body?.innerText");
+    expect(smokeScript).toContain("errors: [...browserErrors]");
+  });
+
   it("passes the compute metrics label into the browser evaluation context", () => {
     const smokeScript = readFileSync(smokeScriptUrl, "utf8");
 
@@ -145,9 +169,17 @@ describe("viewport smoke projection round-trip", () => {
     expect(smokeScript).toContain('"long-animation-frame"');
     expect(smokeScript).toContain('"startup-to-canvas"');
     expect(smokeScript).not.toContain('"viewport-focus"');
-    expect(smokeScript).toContain('"camera-orbit-rotate"');
-    expect(smokeScript).toContain('"camera-wheel-zoom"');
-    expect(smokeScript).toContain('"camera-right-pan"');
+    expect(smokeScript).toContain('"camera-orbit-continuity"');
+    expect(smokeScript).toContain('"camera-wheel-perspective"');
+    expect(smokeScript).toContain('"camera-wheel-orthographic"');
+    expect(smokeScript).toContain('"camera-pan-continuity"');
+    expect(smokeScript).toContain("__FULLMAG_VIEWPORT3D_CAMERA_AUDIT__");
+    expect(smokeScript).toContain("assertCameraTrajectory");
+    expect(smokeScript).toContain("maximumBackwardStep > 0.15");
+    expect(smokeScript).toContain("committedVersions.size !== 1");
+    expect(smokeScript).toContain("step <= 18");
+    expect(smokeScript).toContain("assertSettledCameraSnapshotsAgree");
+    expect(smokeScript).toContain("cameraSnapshotTolerance");
     expect(smokeScript).toContain("assertSmoothCameraWheelZoomPhase");
     expect(smokeScript).toContain("viewportFrameDelta < 2");
     expect(smokeScript).toContain("assertResponsiveCameraRightPanPhase");
@@ -307,7 +339,7 @@ describe("viewport smoke projection round-trip", () => {
     const smokeScript = readFileSync(smokeScriptUrl, "utf8");
 
     expect(smokeScript).toContain(
-      "for (let step = 1; step <= 12; step += 1)",
+      "for (let step = 1; step <= 18; step += 1)",
     );
     expect(smokeScript).toContain("await page.waitForTimeout(120);");
   });

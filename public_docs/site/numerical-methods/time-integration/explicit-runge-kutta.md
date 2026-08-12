@@ -101,7 +101,7 @@ study = fm.study("rk_time_integration")
 study.engine("fdm")
 study.device("cpu", precision="double")
 study.mode("strict")
-study.cell(2 * nm, 2 * nm, 5 * nm)
+study.objects.mesh.defaults(cell_size=(2 * nm, 2 * nm, 5 * nm))
 
 # %% Physical domain and interaction request
 body = study.geometry(fm.Box(100 * nm, 20 * nm, 5 * nm), name="film")

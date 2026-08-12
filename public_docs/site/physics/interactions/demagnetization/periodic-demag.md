@@ -86,7 +86,7 @@ study.pbc(
     demag="truncated_images",
     images=(4, 4, 0),
 )
-study.fdm(default_cell=(3 * nm, 3 * nm, 4 * nm))
+study.objects.mesh.defaults(cell_size=(3 * nm, 3 * nm, 4 * nm))
 
 # %% Geometry, material, initial state, and interactions
 film = study.geometry(

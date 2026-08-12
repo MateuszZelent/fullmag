@@ -47,18 +47,18 @@ export function useAnalysisPlotsController(kernel: KernelApi) {
   useEffect(() => {
     analysisWorkspaceStore.setComparisonXAxisId(comparisonXAxisId);
   }, [comparisonXAxisId]);
-  const frequency = useAnalysisFrequencyData(activeSurface === "frequency-response" || activeSurface === "eigenmodes" ? activeSurface : "idle");
-  const frequencyChartId = (activeSurface === "frequency-response" || activeSurface === "eigenmodes") && frequency.frequencyDomainSeries[0]
+  const frequency = useAnalysisFrequencyData(activeSurface === "resonance-fmr" || activeSurface === "dispersion" ? activeSurface : "idle");
+  const frequencyChartId = (activeSurface === "resonance-fmr" || activeSurface === "dispersion") && frequency.frequencyDomainSeries[0]
     ? `${activeSurface}:${frequency.frequencyDomainSeries[0].source.resourceKey}`
     : null;
   useEffect(() => {
-    if (activeSurface === "frequency-response" || activeSurface === "eigenmodes") {
+    if (activeSurface === "resonance-fmr" || activeSurface === "dispersion") {
       analysisWorkspaceStore.setFocusedChartId(frequencyChartId);
       return;
     }
     analysisWorkspaceStore.setFocusedChartId(sourceChartId);
   }, [activeSurface, frequencyChartId, sourceChartId]);
-  const gamma = useSpinWaveGammaResource(activeSurface === "spectrum");
+  const gamma = useSpinWaveGammaResource(activeSurface === "dynamics");
   const dynamicStructureFactor = useDynamicStructureFactorResource(activeSurface === "dispersion");
   const selectedStageId = useSelectionSelector(selectedHysteresisStageIdFromSelection);
   const [selectedPoint, setSelectedPoint] = useState<AnalysisChartCursorPoint | null>(null);
@@ -68,7 +68,7 @@ export function useAnalysisPlotsController(kernel: KernelApi) {
   );
   const descriptor = preferences.preferences.descriptorPreferences[descriptorId];
   const frequencyDescriptorId = frequencyChartId
-    ? analysisDescriptorId({ kind: "artifact", surface: activeSurface === "eigenmodes" ? "eigenmodes" : "frequency-response", resourceKey: frequency.frequencyDomainSeries[0]!.source.resourceKey })
+    ? analysisDescriptorId({ kind: "artifact", surface: activeSurface === "dispersion" ? "dispersion" : "resonance-fmr", resourceKey: frequency.frequencyDomainSeries[0]!.source.resourceKey })
     : null;
   const frequencyDescriptor = frequencyDescriptorId
     ? preferences.preferences.descriptorPreferences[frequencyDescriptorId]
@@ -138,6 +138,8 @@ export function useAnalysisPlotsController(kernel: KernelApi) {
     dynamicStructureFactorStatus: dynamicStructureFactor.status,
     frequencyDomainSeries: frequency.frequencyDomainSeries,
     frequencyDomainStatus: frequency.frequencyDomainStatus,
+    frequencyDomainPresentation: frequency.frequencyDomainPresentation,
+    frequencyDomainCalculationMode: frequency.frequencyDomainRoute.mode,
     frequencyDomainTitle: frequency.frequencyDomainTitle,
     frequencyDomainUnavailableReason: frequency.frequencyDomainUnavailableReason,
     frequencyDomainProvenance: frequency.frequencyDomainSeries[0] ? `${frequency.frequencyDomainSeries[0].source.resourceKey} · revision ${frequency.frequencyDomainSeries[0].dataRevision}` : null,
@@ -157,7 +159,7 @@ export function useAnalysisPlotsController(kernel: KernelApi) {
     surfaceProvenance: {
       dispersion: dynamicStructureFactor.data ? `${dynamicStructureFactor.data.artifact_ref} · revision ${dynamicStructureFactor.data.schema_version}` : undefined,
       hysteresis: selectedStageId ? `hysteresis · ${selectedStageId}` : undefined,
-      spectrum: gamma.data ? `spin-wave-gamma · revision ${gamma.data.schema_version}` : undefined,
+      dynamics: gamma.data ? `spin-wave-gamma · revision ${gamma.data.schema_version}` : undefined,
     },
     selectedPoint,
     selectedSeriesIds: effectiveSelectedSeriesIds,
@@ -190,7 +192,7 @@ export function useAnalysisPlotsController(kernel: KernelApi) {
         ? `comparison:${comparisonDatasetRef}`
         : frequencyChartId ?? sourceChartId ?? descriptorId;
       analysisWorkspaceStore.setFocusedChartId(chartId);
-      if (activeSurface === "frequency-response" || activeSurface === "eigenmodes") {
+      if (activeSurface === "resonance-fmr" || activeSurface === "dispersion") {
         const mapped = frequencyDomainSelectionFromPoint({
           dispersionModel: frequency.frequencyDomainDispersionModel,
           point,

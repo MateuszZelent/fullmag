@@ -18,15 +18,21 @@ export type AnalysisFieldOverlaySource = "eigen-mode" | "frequency-response";
 interface AnalysisFieldOverlayAnimationState {
   animatePhase: boolean;
   animationRateHz: number;
+  direction?: -1 | 1;
 }
 
 export interface AnalysisFieldOverlayAppearanceState {
+  colorRangeMax?: number;
+  colorRangeMin?: number;
+  colorRangeMode?: "auto" | "manual" | "symmetric";
+  displayGain?: number;
   geometryScope?: VisualizationGeometryScope;
   scalarColorPalette?: string;
   shaderMonoColor?: string;
   shaderVisible?: boolean;
   surfaceColorSource?: SurfaceColorSource;
   vectorBudget?: number;
+  vectorScale?: number;
   vectorsVisible?: boolean;
 }
 
@@ -42,6 +48,14 @@ export interface AnalysisFieldOverlayState {
   cellOrigin?: [number, number, number];
   floquetSpatialConvention?: FloquetSpatialConvention;
   phasorConvention?: PhasorConvention;
+  provenance?: {
+    artifactRevision?: number | string;
+    equilibriumId?: string;
+    kContextKind?: string;
+    normalization?: string;
+    runId?: string;
+    stageId?: string;
+  };
 }
 
 type AnalysisFieldOverlayListener = () => void;
@@ -62,6 +76,7 @@ export class AnalysisFieldOverlayController {
       ...next,
       ...(next.appearance ? { appearance: { ...next.appearance } } : {}),
       ...(next.animation ? { animation: { ...next.animation } } : {}),
+      ...(next.provenance ? { provenance: { ...next.provenance } } : {}),
       query: { ...next.query },
     };
     this.notify();
@@ -84,6 +99,11 @@ export class AnalysisFieldOverlayController {
           ? { animation: { ...this.snapshot.animation } }
           : {}
         : { animation: { ...next.animation } }),
+      ...(next.provenance === undefined
+        ? this.snapshot.provenance
+          ? { provenance: { ...this.snapshot.provenance } }
+          : {}
+        : { provenance: { ...next.provenance } }),
       query: next.query ? { ...next.query } : { ...this.snapshot.query },
     });
   }
@@ -94,6 +114,11 @@ export class AnalysisFieldOverlayController {
     }
     this.snapshot = null;
     this.notify();
+  }
+
+  belongsToResultContext(runId: string | null | undefined): boolean {
+    const ownerRunId = this.snapshot?.provenance?.runId;
+    return !this.snapshot || !ownerRunId || ownerRunId === runId;
   }
 
   subscribe(listener: AnalysisFieldOverlayListener): () => void {
@@ -135,8 +160,25 @@ function analysisFieldOverlayStateEquals(
     fieldVectorQueryEquals(left.query, right.query) &&
     numberArrayEquals(left.wavevectorKf, right.wavevectorKf) &&
     numberArrayEquals(left.cellOrigin, right.cellOrigin) &&
+    analysisFieldOverlayProvenanceEquals(left.provenance, right.provenance) &&
     left.floquetSpatialConvention === right.floquetSpatialConvention &&
     left.phasorConvention === right.phasorConvention
+  );
+}
+
+function analysisFieldOverlayProvenanceEquals(
+  left: AnalysisFieldOverlayState["provenance"],
+  right: AnalysisFieldOverlayState["provenance"],
+): boolean {
+  if (left === right) return true;
+  if (!left || !right) return false;
+  return (
+    (left.artifactRevision ?? null) === (right.artifactRevision ?? null) &&
+    (left.equilibriumId ?? null) === (right.equilibriumId ?? null) &&
+    (left.kContextKind ?? null) === (right.kContextKind ?? null) &&
+    (left.normalization ?? null) === (right.normalization ?? null) &&
+    (left.runId ?? null) === (right.runId ?? null) &&
+    (left.stageId ?? null) === (right.stageId ?? null)
   );
 }
 
@@ -148,11 +190,16 @@ function analysisFieldOverlayAppearanceEquals(
   if (!left || !right) return false;
   return (
     (left.geometryScope ?? null) === (right.geometryScope ?? null) &&
+    (left.colorRangeMax ?? null) === (right.colorRangeMax ?? null) &&
+    (left.colorRangeMin ?? null) === (right.colorRangeMin ?? null) &&
+    (left.colorRangeMode ?? null) === (right.colorRangeMode ?? null) &&
+    (left.displayGain ?? null) === (right.displayGain ?? null) &&
     (left.scalarColorPalette ?? null) === (right.scalarColorPalette ?? null) &&
     (left.shaderMonoColor ?? null) === (right.shaderMonoColor ?? null) &&
     (left.shaderVisible ?? null) === (right.shaderVisible ?? null) &&
     (left.surfaceColorSource ?? null) === (right.surfaceColorSource ?? null) &&
     (left.vectorBudget ?? null) === (right.vectorBudget ?? null) &&
+    (left.vectorScale ?? null) === (right.vectorScale ?? null) &&
     (left.vectorsVisible ?? null) === (right.vectorsVisible ?? null)
   );
 }
@@ -165,7 +212,8 @@ function analysisFieldOverlayAnimationEquals(
   if (!left || !right) return false;
   return (
     left.animatePhase === right.animatePhase &&
-    left.animationRateHz === right.animationRateHz
+    left.animationRateHz === right.animationRateHz &&
+    (left.direction ?? 1) === (right.direction ?? 1)
   );
 }
 

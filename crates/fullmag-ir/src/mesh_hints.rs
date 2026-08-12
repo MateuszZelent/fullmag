@@ -63,6 +63,8 @@ pub struct FdmDemagHintsIR {
     pub common_cells: Option<[u32; 3]>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub common_cells_xy: Option<[u32; 2]>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub common_cell_size: Option<[f64; 3]>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -74,6 +76,8 @@ struct FdmDemagHintsWireIR {
     common_cells: Option<[u32; 3]>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     common_cells_xy: Option<[u32; 2]>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    common_cell_size: Option<[f64; 3]>,
 }
 
 impl<'de> Deserialize<'de> for FdmDemagHintsIR {
@@ -87,6 +91,7 @@ impl<'de> Deserialize<'de> for FdmDemagHintsIR {
             mode: wire.mode,
             common_cells: wire.common_cells,
             common_cells_xy: wire.common_cells_xy,
+            common_cell_size: wire.common_cell_size,
         };
         hints
             .validate()
@@ -118,6 +123,31 @@ impl FdmDemagHintsIR {
             errors.push(
                 "fdm.demag.common_cells and common_cells_xy are mutually exclusive".to_string(),
             );
+        }
+        if self.common_cell_size.is_some()
+            && (self.common_cells.is_some() || self.common_cells_xy.is_some())
+        {
+            errors.push(
+                "fdm.demag.common_cell_size is mutually exclusive with common_cells and common_cells_xy"
+                    .to_string(),
+            );
+        }
+        if let Some(cell_size) = self.common_cell_size {
+            if cell_size
+                .iter()
+                .any(|component| !component.is_finite() || *component <= 0.0)
+            {
+                errors.push(
+                    "fdm.demag.common_cell_size components must be finite and positive"
+                        .to_string(),
+                );
+            }
+            if self.mode == "two_d_stack" {
+                errors.push(
+                    "fdm.demag.common_cell_size is incompatible with explicit mode='two_d_stack'"
+                        .to_string(),
+                );
+            }
         }
         if let Some(cells) = self.common_cells {
             if cells.contains(&0) {
@@ -162,6 +192,9 @@ impl FdmDemagHintsIR {
         if self.common_cells.is_some() {
             return Ok("three_d".to_string());
         }
+        if self.common_cell_size.is_some() {
+            return Ok("three_d".to_string());
+        }
         if self.common_cells_xy.is_some() {
             return Ok("two_d_stack".to_string());
         }
@@ -183,6 +216,10 @@ pub struct FdmMultilayerPlanIR {
     /// validates equality so the legacy field cannot diverge.
     pub mode: String,
     pub common_cells: [u32; 3],
+    /// Physics-first common convolution-grid resolution requested by the
+    /// author. The resolved grid remains authoritative for execution.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub requested_common_cell_size: Option<[f64; 3]>,
     /// Validated certificate for the resolved common convolution grid.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub grid_certificate: Option<crate::plan::FdmGridCertificateIR>,
@@ -449,6 +486,8 @@ struct FdmMultilayerPlanWireIR {
     mode: String,
     common_cells: [u32; 3],
     #[serde(default)]
+    requested_common_cell_size: Option<[f64; 3]>,
+    #[serde(default)]
     grid_certificate: Option<crate::plan::FdmGridCertificateIR>,
     layers: Vec<FdmLayerPlanIR>,
     enable_exchange: bool,
@@ -642,6 +681,7 @@ impl<'de> Deserialize<'de> for FdmMultilayerPlanIR {
         let plan = Self {
             mode: wire.mode,
             common_cells: wire.common_cells,
+            requested_common_cell_size: wire.requested_common_cell_size,
             grid_certificate: wire.grid_certificate,
             layers: wire.layers,
             enable_exchange: wire.enable_exchange,
@@ -667,12 +707,25 @@ impl<'de> Deserialize<'de> for FdmMultilayerPlanIR {
 }
 
 impl FdmMultilayerPlanIR {
+    fn validate_requested_common_cell_size(&self, errors: &mut Vec<String>) {
+        if let Some(cell_size) = self.requested_common_cell_size {
+            for (axis, value) in ["x", "y", "z"].into_iter().zip(cell_size) {
+                if !value.is_finite() || value <= 0.0 {
+                    errors.push(format!(
+                        "fdm multilayer requested common cell size on {axis} must be finite and positive"
+                    ));
+                }
+            }
+        }
+    }
+
     /// Validate the resolved multilayer wire contract before a runner can use
     /// it.  Authored intent belongs to `planner_summary.requested_*`; runtime
     /// consumers must only observe the canonical resolved mode and transfer
     /// vocabulary here.
     pub fn validate(&self) -> Result<(), Vec<String>> {
         let mut errors = Vec::new();
+        self.validate_requested_common_cell_size(&mut errors);
         if !matches!(self.mode.as_str(), "two_d_stack" | "three_d") {
             errors.push(format!(
                 "fdm multilayer resolved mode '{}' is unsupported",
@@ -815,6 +868,7 @@ mod multilayer_contract_tests {
             // migration derives the resolved mode from the actual geometry.
             mode: "multilayer_convolution".to_string(),
             common_cells: [2, 1, 2],
+            requested_common_cell_size: None,
             grid_certificate: Some(grid_certificate),
             layers,
             enable_exchange: false,

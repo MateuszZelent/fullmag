@@ -105,6 +105,7 @@ film = study.geometry(
     fm.Box(size=(100 * nm, 20 * nm, 5 * nm), name="film"),
     name="film",
 )
+film.mesh(cell_size=(2 * nm, 2 * nm, 5 * nm))
 film.Ms = 8.0e5
 film.Aex = 1.3e-11
 film.alpha = 0.02
@@ -125,16 +126,16 @@ study.stages.add_relax(
 
 | Python parameter | Type | Default | SI unit | Validation | Meaning | Backend support | ProblemIR |
 |---|---|---|---|---|---|---|---|
-| `FDM.default_cell` | `tuple[float,float,float] \| None` | `None` | $\mathrm{m}$ | three finite positive values | default Cartesian cell | FDM CPU/GPU authoring; execution is lane-gated | `backend_policy.discretization_hints.fdm.cell` and `.default_cell` |
-| `FDM.per_magnet` | `dict[str,FDMGrid] \| None` | `None` | $1$ | every grid has three positive sizes | per-magnet grid overrides | FDM CPU/GPU authoring; execution is lane-gated | `backend_policy.discretization_hints.fdm.per_magnet` |
-| `FDMDemag.strategy` | `str` | `auto` | $1$ | `auto`, `single_grid`, `multilayer_convolution` | common-grid or multilayer topology | FDM CPU/GPU authoring; execution is lane-gated | `backend_policy.discretization_hints.fdm.demag.strategy` |
-| `FDMDemag.mode` | `str` | `auto` | $1$ | `auto`, `two_d_stack`, `three_d` | thin-film or full-3D mode | FDM CPU/GPU authoring; execution is lane-gated | `backend_policy.discretization_hints.fdm.demag.mode` |
-| `FDMDemag.common_cells` | `tuple[int,int,int] \| None` | `None` | $1$ | exactly three positive integers | explicit common convolution grid | FDM CPU/GPU authoring; execution is lane-gated | `backend_policy.discretization_hints.fdm.demag.common_cells` |
-| `FDMDemag.common_cells_xy` | `tuple[int,int] \| None` | `None` | $1$ | exactly two positive integers | in-plane stack grid | FDM CPU/GPU authoring; execution is lane-gated | `backend_policy.discretization_hints.fdm.demag.common_cells_xy` |
-| `FDM.boundary_correction` | `str \| None` | `None` | $1$ | `none`, `volume`, or `full` | partial-cell correction family | lane-dependent | `backend_policy.discretization_hints.fdm.boundary_correction` |
+| `body.mesh(cell_size=...)` | `Sequence[float]` | required unless a default exists | $\mathrm{m}$ | exactly three finite positive values; object extents must divide exactly | native Cartesian cell size of one magnetic object | FDM CPU/GPU authoring; execution is lane-gated | `backend_policy.discretization_hints.fdm.per_magnet.<object>.cell` |
+| `study.objects.mesh.defaults(cell_size=...)` | `Sequence[float]` | `None` | $\mathrm{m}$ | exactly three finite positive values | default native cell size for objects without overrides | FDM CPU/GPU authoring | `backend_policy.discretization_hints.fdm.default_cell` |
+| `study.universe.mesh(cell_size=...)` | `Sequence[float]` | planner-selected | $\mathrm{m}$ | exactly three finite positive values; common extents must divide exactly | requested non-physical common convolution-grid resolution | FDM multilayer CPU/GPU authoring; execution is lane-gated | `backend_policy.discretization_hints.fdm.demag.common_cell_size` |
+| `study.demag()` | interaction request | disabled until called | $1$ | one demagnetizing interaction per study | requests demagnetization without exposing its numerical storage layout | FDM and FEM | `energy_terms[kind=demag]` |
+| `study.mode("strict")` | execution policy | backend default | $1$ | supported mode literal | forbids rounding, fallback, or silent replacement of an invalid requested discretization | all backends | `runtime_selection.mode` |
 
-`FDMDemag.allow_single_grid_fallback` is a removed compatibility switch: any non-`None` value is
-rejected. `explain` is an authoring-only plan summary and is not physical IR.
+The older `study.fdm(...)`, `FDMGrid`, and `FDMDemag` forms are migration adapters, not the
+canonical authoring surface. For heterogeneous layers, common-XY versus full-3D behavior, and the
+complete 2 nm / 5 nm / 10 nm example, see
+{doc}`../../physics/interactions/demagnetization/multilayer-convolution`.
 
 (numerical-methods-demag-fdm-problem-ir)=
 ## ProblemIR and provenance
@@ -148,8 +149,10 @@ The physical request remains `Demag`; the FDM policy is nested under
   "backend_policy": {
     "discretization_hints": {
       "fdm": {
-        "cell": [2e-9, 2e-9, 5e-9],
         "default_cell": [2e-9, 2e-9, 5e-9],
+        "per_magnet": {
+          "film": {"cell": [2e-9, 2e-9, 5e-9]}
+        },
         "demag": {"strategy": "auto", "mode": "auto"}
       }
     }
@@ -164,9 +167,9 @@ inferred from `auto` after the run.
 (numerical-methods-demag-fdm-round-trip-and-failure-semantics)=
 ## Round-trip and failure semantics
 
-Script export preserves the stage-first study and discretization policy. Validation errors include
-invalid cell sizes, malformed common grids, unsupported boundary-correction values, and the removed
-fallback switch. Unsupported combinations are explicit: FEM requests, periodic axes without the
+Script export preserves the stage-first study and object-owned discretization policy. The round
+trip reports validation errors for invalid cell sizes and malformed common grids. The unsupported combinations
+are explicit: FEM requests, periodic axes without the
 periodic demag policy, and unavailable GPU precision lanes are rejected or reported by the planner;
 they do not silently become an open single-grid CPU run. A successful Python/ProblemIR GPU request
 is authoring evidence only; it becomes a GPU execution claim only with an executed-device receipt.

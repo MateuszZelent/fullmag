@@ -110,7 +110,7 @@ class MixedPrismAirboxRuntimeVerifierTest(unittest.TestCase):
             root = Path(directory)
             source = root / "scenario.py"
             output = root / "bounded.py"
-            original = "study.stages.add_relax(\n    max_steps=50_000,\n)\n"
+            original = "study.stages.add_relax(\n    max_steps=100_000,\n)\n"
             source.write_text(original, encoding="utf-8")
 
             evidence = prepare_bounded_scenario(source, output)
@@ -118,7 +118,7 @@ class MixedPrismAirboxRuntimeVerifierTest(unittest.TestCase):
             self.assertEqual(source.read_text(encoding="utf-8"), original)
             self.assertEqual(
                 output.read_text(encoding="utf-8"),
-                original.replace("max_steps=50_000", "max_steps=1"),
+                original.replace("max_steps=100_000", "max_steps=1"),
             )
             self.assertEqual(evidence["replacement_count"], 1)
             self.assertEqual(evidence["bounded_max_steps"], 1)
@@ -128,7 +128,7 @@ class MixedPrismAirboxRuntimeVerifierTest(unittest.TestCase):
             root = Path(directory)
             for name, source_text in (
                 ("zero", "max_steps=32\n"),
-                ("multiple", "max_steps=50_000\nmax_steps=50_000\n"),
+                ("multiple", "max_steps=100_000\nmax_steps=100_000\n"),
             ):
                 source = root / f"{name}.py"
                 output = root / f"{name}.bounded.py"
@@ -150,7 +150,7 @@ class MixedPrismAirboxRuntimeVerifierTest(unittest.TestCase):
             evidence = prepare_bounded_scenario(source, bounded)
 
             expected = source.read_text(encoding="utf-8").replace(
-                "max_steps=50_000", "max_steps=1", 1
+                "max_steps=100_000", "max_steps=1", 1
             )
             self.assertEqual(bounded.read_text(encoding="utf-8"), expected)
             self.assertEqual(evidence["replacement_count"], 1)
@@ -333,7 +333,7 @@ class MixedPrismAirboxRuntimeVerifierTest(unittest.TestCase):
         bounded = root / "bounded.py"
         artifacts = root / f"{device}-artifacts"
         artifacts.mkdir()
-        source.write_text("max_steps=50_000\n", encoding="utf-8")
+        source.write_text("max_steps=100_000\n", encoding="utf-8")
         bounded_text = "max_steps=1\n"
         bounded.write_text(bounded_text, encoding="utf-8")
         topology_fingerprint = "sha256:" + "a" * 64

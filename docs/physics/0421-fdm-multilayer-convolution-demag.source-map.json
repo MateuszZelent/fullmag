@@ -9,7 +9,7 @@
       "status": "implemented",
       "scope": "common-grid CPU reference with active kernel catalog/workspace; exact 2D corner tensor, mode/transfer/heterogeneous production gates remain open",
       "qualification": "not production-qualified",
-      "evidence": "54 backend tests, managed CPU FP64 runtime and target-only Airbox carrier; independent full parity remains open"
+      "evidence": "Rust descriptor/kernel/engine/planner tests and source-bound authoring/runtime fixtures; no immutable managed production receipt"
     },
     {
       "solver": "FDM",
@@ -209,71 +209,101 @@
     }
   ],
   "symbols": [
-    {"id":"H_d","latex":"\\mathbf H_d","meaning":"pole demagnetyzujące celu","si_unit":"\\mathrm{A\\,m^{-1}}"},
-    {"id":"Hprime_kl","latex":"\\mathbf H'_{k,l}","meaning":"dyskretne pole celu k,l","si_unit":"\\mathrm{A\\,m^{-1}}"},
-    {"id":"M_s","latex":"\\mathbf M_s","meaning":"magnetyzacja źródła","si_unit":"\\mathrm{A\\,m^{-1}}"},
-    {"id":"M","latex":"\\mathbf M","meaning":"magnetyzacja komórkowa","si_unit":"\\mathrm{A\\,m^{-1}}"},
-    {"id":"N","latex":"\\mathsf N_{d\\leftarrow s}","meaning":"dyskretny tensor demagnetyzujący","si_unit":"1"},
-    {"id":"Ncal","latex":"\\mathcal N","meaning":"ciągłe jądro magnetostatyczne","si_unit":"\\mathrm{m^{-3}}"},
-    {"id":"Ncal_ds","latex":"\\mathcal N_{d\\leftarrow s}","meaning":"ciągłe jądro kierunkowane od źródła s do celu d","si_unit":"\\mathrm{m^{-3}}"},
-    {"id":"rd","latex":"\\mathbf r_d","meaning":"środek komórki celu","si_unit":"\\mathrm m"},
-    {"id":"rs","latex":"\\mathbf r_s","meaning":"środek komórki źródła","si_unit":"\\mathrm m"},
-    {"id":"r","latex":"\\mathbf r","meaning":"wektor przesunięcia w reciprocity","si_unit":"\\mathrm m"},
-    {"id":"rprime_kl","latex":"\\mathbf r'_{k,l}","meaning":"pozycja komórki celu w Eq. (3)","si_unit":"\\mathrm m"},
-    {"id":"rij","latex":"\\mathbf r_{i,j}","meaning":"pozycja komórki źródła w Eq. (3)","si_unit":"\\mathrm m"},
-    {"id":"Vi","latex":"V_i","meaning":"objętość domeny źródłowej i","si_unit":"\\mathrm{m^3}"},
-    {"id":"Vd","latex":"V_d","meaning":"objętość komórki celu","si_unit":"\\mathrm{m^3}"},
-    {"id":"Vs","latex":"V_s","meaning":"objętość komórki źródła","si_unit":"\\mathrm{m^3}"},
-    {"id":"Vc","latex":"V_c","meaning":"objętość aktywnej komórki","si_unit":"\\mathrm{m^3}"},
-    {"id":"dV","latex":"\\mathrm dV'","meaning":"element objętości źródła","si_unit":"\\mathrm{m^3}"},
-    {"id":"dVs","latex":"\\mathrm dV_s","meaning":"element objętości źródła s","si_unit":"\\mathrm{m^3}"},
-    {"id":"hk","latex":"\\mathbf h_k","meaning":"rozmiar komórki celu Eq. (3)","si_unit":"\\mathrm m"},
-    {"id":"hi","latex":"\\mathbf h_i","meaning":"rozmiar komórki źródła Eq. (3)","si_unit":"\\mathrm m"},
-    {"id":"hs","latex":"\\mathbf h_s","meaning":"rozmiar komórki źródła Appendix A","si_unit":"\\mathrm m"},
-    {"id":"hd","latex":"\\mathbf h_d","meaning":"rozmiar komórki celu Appendix A","si_unit":"\\mathrm m"},
-    {"id":"hprime","latex":"\\mathbf h'","meaning":"cell size transferu","si_unit":"\\mathrm m"},
-    {"id":"h","latex":"\\mathbf h","meaning":"cell size wejściowej siatki transferu","si_unit":"\\mathrm m"},
-    {"id":"hx","latex":"h_x","meaning":"rozmiar komórki w osi x Appendix A","si_unit":"\\mathrm m"},
-    {"id":"hy","latex":"h_y","meaning":"rozmiar komórki w osi y Appendix A","si_unit":"\\mathrm m"},
-    {"id":"hsz","latex":"h_{s,z}","meaning":"grubość komórki źródła","si_unit":"\\mathrm m"},
-    {"id":"hdz","latex":"h_{d,z}","meaning":"grubość komórki celu","si_unit":"\\mathrm m"},
-    {"id":"ri","latex":"\\mathbf r_i","meaning":"środek komórki transferu","si_unit":"\\mathrm m"},
-    {"id":"rprime","latex":"\\mathbf r'","meaning":"punkt transferu","si_unit":"\\mathrm m"},
-    {"id":"P","latex":"P","meaning":"transfer native do scratch","si_unit":"1"},
-    {"id":"Pstar","latex":"P^*","meaning":"adjoint transferu scratch do native","si_unit":"1"},
-    {"id":"wi","latex":"w_i","meaning":"waga transferu","si_unit":"1"},
-    {"id":"delta_i","latex":"\\delta_i","meaning":"wskaźnik nakładania komórki","si_unit":"1"},
-    {"id":"dtilde_i","latex":"\\widetilde d_i","meaning":"odległość ważona transferu","si_unit":"\\mathrm m"},
-    {"id":"dtilde_T","latex":"\\widetilde d_T","meaning":"suma odległości ważonych","si_unit":"\\mathrm m"},
-    {"id":"L","latex":"L","meaning":"operator ośmiu narożników Newella","si_unit":"1"},
-    {"id":"f","latex":"f","meaning":"funkcja bazowa Newella diagonalna","si_unit":"\\mathrm{m^3}"},
-    {"id":"g","latex":"g","meaning":"funkcja bazowa Newella off-diagonal","si_unit":"\\mathrm{m^3}"},
-    {"id":"s","latex":"\\mathbf s=(x,y,z)","meaning":"wektor argumentu Appendix A","si_unit":"\\mathrm m"},
-    {"id":"x","latex":"x","meaning":"współrzędna x Appendix A","si_unit":"\\mathrm m"},
-    {"id":"y","latex":"y","meaning":"współrzędna y Appendix A","si_unit":"\\mathrm m"},
-    {"id":"z","latex":"z","meaning":"współrzędna z Appendix A","si_unit":"\\mathrm m"},
+    {"id":"H_d","latex":"\\mathbf H_d","meaning":"target demagnetizing field","si_unit":"\\mathrm{A\\,m^{-1}}"},
+    {"id":"Hprime_kl","latex":"\\mathbf H'_{k,l}","meaning":"discrete field at target cell $(k,l)$","si_unit":"\\mathrm{A\\,m^{-1}}"},
+    {"id":"M_s","latex":"\\mathbf M_s","meaning":"source magnetization","si_unit":"\\mathrm{A\\,m^{-1}}"},
+    {"id":"M","latex":"\\mathbf M","meaning":"cell magnetization","si_unit":"\\mathrm{A\\,m^{-1}}"},
+    {"id":"N","latex":"\\mathsf N_{d\\leftarrow s}","meaning":"discrete demagnetizing tensor","si_unit":"1"},
+    {"id":"Ncal","latex":"\\mathcal N","meaning":"continuous magnetostatic kernel","si_unit":"\\mathrm{m^{-3}}"},
+    {"id":"Ncal_ds","latex":"\\mathcal N_{d\\leftarrow s}","meaning":"continuous kernel directed from source $s$ to target $d$","si_unit":"\\mathrm{m^{-3}}"},
+    {"id":"rd","latex":"\\mathbf r_d","meaning":"target-cell center","si_unit":"\\mathrm m"},
+    {"id":"rs","latex":"\\mathbf r_s","meaning":"source-cell center","si_unit":"\\mathrm m"},
+    {"id":"r","latex":"\\mathbf r","meaning":"displacement vector in reciprocity","si_unit":"\\mathrm m"},
+    {"id":"rprime_kl","latex":"\\mathbf r'_{k,l}","meaning":"target-cell position in Eq. (3)","si_unit":"\\mathrm m"},
+    {"id":"rij","latex":"\\mathbf r_{i,j}","meaning":"source-cell position in Eq. (3)","si_unit":"\\mathrm m"},
+    {"id":"Vi","latex":"V_i","meaning":"volume of source domain $i$","si_unit":"\\mathrm{m^3}"},
+    {"id":"Vd","latex":"V_d","meaning":"target-cell volume","si_unit":"\\mathrm{m^3}"},
+    {"id":"Vs","latex":"V_s","meaning":"source-cell volume","si_unit":"\\mathrm{m^3}"},
+    {"id":"Vc","latex":"V_c","meaning":"active-cell volume","si_unit":"\\mathrm{m^3}"},
+    {"id":"dV","latex":"\\mathrm dV'","meaning":"source volume element","si_unit":"\\mathrm{m^3}"},
+    {"id":"dVs","latex":"\\mathrm dV_s","meaning":"volume element in source $s$","si_unit":"\\mathrm{m^3}"},
+    {"id":"hk","latex":"\\mathbf h_k","meaning":"target-cell size in Eq. (3)","si_unit":"\\mathrm m"},
+    {"id":"hi","latex":"\\mathbf h_i","meaning":"source-cell size in Eq. (3)","si_unit":"\\mathrm m"},
+    {"id":"hs","latex":"\\mathbf h_s","meaning":"source-cell size in Appendix A","si_unit":"\\mathrm m"},
+    {"id":"hd","latex":"\\mathbf h_d","meaning":"target-cell size in Appendix A","si_unit":"\\mathrm m"},
+    {"id":"hprime","latex":"\\mathbf h'","meaning":"transfer-cell size","si_unit":"\\mathrm m"},
+    {"id":"h","latex":"\\mathbf h","meaning":"input transfer-grid cell size","si_unit":"\\mathrm m"},
+    {"id":"hx","latex":"h_x","meaning":"cell size along x in Appendix A","si_unit":"\\mathrm m"},
+    {"id":"hy","latex":"h_y","meaning":"cell size along y in Appendix A","si_unit":"\\mathrm m"},
+    {"id":"hsz","latex":"h_{s,z}","meaning":"source-cell thickness","si_unit":"\\mathrm m"},
+    {"id":"hdz","latex":"h_{d,z}","meaning":"target-cell thickness","si_unit":"\\mathrm m"},
+    {"id":"ri","latex":"\\mathbf r_i","meaning":"transfer-cell center","si_unit":"\\mathrm m"},
+    {"id":"rprime","latex":"\\mathbf r'","meaning":"transfer point","si_unit":"\\mathrm m"},
+    {"id":"P","latex":"P","meaning":"native-to-scratch transfer","si_unit":"1"},
+    {"id":"Pstar","latex":"P^*","meaning":"scratch-to-native adjoint transfer","si_unit":"1"},
+    {"id":"wi","latex":"w_i","meaning":"transfer weight","si_unit":"1"},
+    {"id":"delta_i","latex":"\\delta_i","meaning":"cell-overlap indicator","si_unit":"1"},
+    {"id":"dtilde_i","latex":"\\widetilde d_i","meaning":"weighted transfer distance","si_unit":"\\mathrm m"},
+    {"id":"dtilde_T","latex":"\\widetilde d_T","meaning":"sum of weighted distances","si_unit":"\\mathrm m"},
+    {"id":"L","latex":"L","meaning":"Newell eight-corner operator","si_unit":"1"},
+    {"id":"f","latex":"f","meaning":"diagonal Newell basis function","si_unit":"\\mathrm{m^3}"},
+    {"id":"g","latex":"g","meaning":"off-diagonal Newell basis function","si_unit":"\\mathrm{m^3}"},
+    {"id":"s","latex":"\\mathbf s=(x,y,z)","meaning":"Appendix A argument vector","si_unit":"\\mathrm m"},
+    {"id":"x","latex":"x","meaning":"x coordinate in Appendix A","si_unit":"\\mathrm m"},
+    {"id":"y","latex":"y","meaning":"y coordinate in Appendix A","si_unit":"\\mathrm m"},
+    {"id":"z","latex":"z","meaning":"z coordinate in Appendix A","si_unit":"\\mathrm m"},
     {"id":"R","latex":"R","meaning":"\\sqrt{x^2+y^2+z^2}","si_unit":"\\mathrm m"},
-    {"id":"tau","latex":"\\tau","meaning":"normalizacja stencila","si_unit":"\\mathrm{m^3}"},
-    {"id":"Delta","latex":"\\Delta","meaning":"różnica grubości źródła i celu","si_unit":"\\mathrm m"},
-    {"id":"eps1","latex":"\\epsilon_1","meaning":"indeks narożnika x/y","si_unit":"1"},
-    {"id":"eps2","latex":"\\epsilon_2","meaning":"indeks narożnika x/y","si_unit":"1"},
-    {"id":"Nxx","latex":"N_{xx}","meaning":"składowa diagonalna xx","si_unit":"1"},
-    {"id":"Nxy","latex":"N_{xy}","meaning":"składowa off-diagonal xy","si_unit":"1"},
-    {"id":"E_d","latex":"E_d","meaning":"energia demagnetyzacyjna celu","si_unit":"\\mathrm J"},
-    {"id":"mu0","latex":"\\mu_0","meaning":"przenikalność magnetyczna próżni","si_unit":"\\mathrm{N\\,A^{-2}}"},
-    {"id":"A","latex":"\\mathcal A_d","meaning":"aktywne komórki celu","si_unit":"1"},
-    {"id":"w","latex":"w","meaning":"funkcja bazowa Newella w Appendix A","si_unit":"\\mathrm{m^3}"},
-    {"id":"indices_domains","latex":"k,l,i,j,V_i","meaning":"indeksy komórek celu i źródła oraz domena źródłowa Eq. (3)","si_unit":"1"},
-    {"id":"M_dc","latex":"\\mathbf M_{d,c}","meaning":"magnetyzacja aktywnej komórki celu c","si_unit":"\\mathrm{A\\,m^{-1}}"},
-    {"id":"H_dc","latex":"\\mathbf H_{d,c}","meaning":"pole demagnetyzujące aktywnej komórki celu c","si_unit":"\\mathrm{A\\,m^{-1}}"},
-    {"id":"Hc","latex":"\\mathbf H_c","meaning":"pole na siatce konwolucyjnej","si_unit":"\\mathrm{A\\,m^{-1}}"},
-    {"id":"Vn","latex":"V_n","meaning":"objętość komórki siatki native","si_unit":"\\mathrm{m^3}"},
-    {"id":"N_generic","latex":"\\mathsf N","meaning":"tensor demagnetyzujący pary komórek Eq. (3)","si_unit":"1"},
-    {"id":"Ndd","latex":"N_{dd}","meaning":"składowa diagonalna celu w Table I","si_unit":"1"},
-    {"id":"Nxz","latex":"N_{xz}","meaning":"składowa off-diagonal xz w Table I","si_unit":"1"},
-    {"id":"Nyz","latex":"N_{yz}","meaning":"składowa off-diagonal yz w Table I","si_unit":"1"}
+    {"id":"tau","latex":"\\tau","meaning":"stencil normalization","si_unit":"\\mathrm{m^3}"},
+    {"id":"Delta","latex":"\\Delta","meaning":"source/target thickness difference","si_unit":"\\mathrm m"},
+    {"id":"eps1","latex":"\\epsilon_1","meaning":"x/y corner index","si_unit":"1"},
+    {"id":"eps2","latex":"\\epsilon_2","meaning":"x/y corner index","si_unit":"1"},
+    {"id":"Nxx","latex":"N_{xx}","meaning":"diagonal xx component","si_unit":"1"},
+    {"id":"Nxy","latex":"N_{xy}","meaning":"off-diagonal xy component","si_unit":"1"},
+    {"id":"E_d","latex":"E_d","meaning":"target demagnetizing energy","si_unit":"\\mathrm J"},
+    {"id":"mu0","latex":"\\mu_0","meaning":"vacuum permeability","si_unit":"\\mathrm{N\\,A^{-2}}"},
+    {"id":"A","latex":"\\mathcal A_d","meaning":"active target cells","si_unit":"1"},
+    {"id":"w","latex":"w","meaning":"Newell basis function in Appendix A","si_unit":"\\mathrm{m^3}"},
+    {"id":"indices_domains","latex":"k,l,i,j,V_i","meaning":"target/source cell indices and source domain in Eq. (3)","si_unit":"1"},
+    {"id":"M_dc","latex":"\\mathbf M_{d,c}","meaning":"magnetization of active target cell $c$","si_unit":"\\mathrm{A\\,m^{-1}}"},
+    {"id":"H_dc","latex":"\\mathbf H_{d,c}","meaning":"demagnetizing field at active target cell $c$","si_unit":"\\mathrm{A\\,m^{-1}}"},
+    {"id":"Hc","latex":"\\mathbf H_c","meaning":"field on the convolution grid","si_unit":"\\mathrm{A\\,m^{-1}}"},
+    {"id":"Vn","latex":"V_n","meaning":"native-grid cell volume","si_unit":"\\mathrm{m^3}"},
+    {"id":"N_generic","latex":"\\mathsf N","meaning":"pair-cell demagnetizing tensor from Eq. (3)","si_unit":"1"},
+    {"id":"Ndd","latex":"N_{dd}","meaning":"target diagonal component in Table I","si_unit":"1"},
+    {"id":"Nxz","latex":"N_{xz}","meaning":"off-diagonal xz component in Table I","si_unit":"1"},
+    {"id":"Nyz","latex":"N_{yz}","meaning":"off-diagonal yz component in Table I","si_unit":"1"}
   ],
   "sources": [
+    {
+      "id": "geometry-mesh-authoring",
+      "path": "packages/fullmag-py/src/fullmag/world.py",
+      "symbol": "class GeometryMeshHandle",
+      "responsibility": "Validates and lowers canonical per-object FDM cell_size authoring."
+    },
+    {
+      "id": "universe-mesh-authoring",
+      "path": "packages/fullmag-py/src/fullmag/world.py",
+      "symbol": "class StudyUniverseHandle",
+      "responsibility": "Owns unchanged FEM airbox controls and validates canonical FDM common-domain cell_size authoring."
+    },
+    {
+      "id": "requested-common-cell-plan",
+      "path": "crates/fullmag-ir/src/mesh_hints.rs",
+      "symbol": "validate_requested_common_cell_size",
+      "responsibility": "Preserves the authored common cell size independently of resolved grid counts.",
+      "test_path": "crates/fullmag-plan/src/tests.rs",
+      "test_symbol": "fdm_common_cell_size_resolves_heterogeneous_native_grids_without_rounding",
+      "evidence_status": "executable requested/resolved planner contract"
+    },
+    {
+      "id": "multilayer-layout-resource",
+      "path": "crates/fullmag-api/src/router_v2/handlers/data/domain.rs",
+      "symbol": "fdm_multilayer_layout_resource",
+      "responsibility": "Publishes requested common cell size separately from the resolved FFT transform layout.",
+      "test_path": "crates/fullmag-api/src/router_v2/tests.rs",
+      "test_symbol": "fdm_multilayer_layout_exposes_common_and_native_layer_metadata",
+      "evidence_status": "executable HTTP v2 resource contract"
+    },
     {
       "id": "continuousTheory",
       "path": "crates/fullmag-fdm-demag/src/newell.rs",
@@ -351,6 +381,19 @@
       "responsibility": "full public FDM wrapper"
     },
     {
+      "id": "multilayerPlanner",
+      "path": "crates/fullmag-plan/src/fdm.rs",
+      "symbol": "plan_fdm_multilayer",
+      "responsibility": "validates that multilayer boundary intent is exactly neutral before constructing layer plans",
+      "test_path": "crates/fullmag-plan/src/tests.rs",
+      "test_symbol": "multilayer_planner_rejects_every_non_neutral_boundary_intent",
+      "evidence_status": "source-tested fail-closed planner contract only; no runtime or device proof",
+      "immutable_url": "https://github.com/MateuszZelent/fullmag/blob/3fcf40d6d8e2c2f106031ae99481539832014349/crates/fullmag-plan/src/fdm.rs",
+      "test_immutable_url": "https://github.com/MateuszZelent/fullmag/blob/3fcf40d6d8e2c2f106031ae99481539832014349/crates/fullmag-plan/src/tests.rs",
+      "source_anchor_status": "immutable_commit",
+      "test_anchor_status": "immutable_commit"
+    },
+    {
       "id": "cpuCatalog",
       "path": "crates/fullmag-engine/src/multilayer.rs",
       "symbol": "build_kernel_catalog",
@@ -361,10 +404,130 @@
       "path": "crates/fullmag-engine/src/multilayer.rs",
       "symbol": "compute_demag_fields_checked",
       "responsibility": "checked CPU refresh using catalog and reusable workspace"
+    },
+    {
+      "id": "descriptorLayoutTests",
+      "path": "crates/fullmag-fdm-demag/tests/descriptors.rs",
+      "symbol": "common_layout_is_computational_and_preserves_linear_extent",
+      "responsibility": "tests linear convolution extent, insertion/crop and the non-physical supercell contract",
+      "evidence_status": "executable descriptor contract"
+    },
+    {
+      "id": "irregularKernelTests",
+      "path": "crates/fullmag-fdm-demag/tests/irregular_shifted_kernel.rs",
+      "symbol": "unequal_2d_layer_thickness_matches_cubature_for_both_signed_z_offsets",
+      "responsibility": "compares unequal-Z pair kernels with independent GL8 cubature for asymmetric XY lags at a fixed Z offset",
+      "evidence_status": "scoped CPU oracle; not production-qualified"
+    },
+    {
+      "id": "signedZParityTests",
+      "path": "crates/fullmag-fdm-demag/tests/irregular_shifted_kernel.rs",
+      "symbol": "unequal_2d_pair_keeps_xy_parity_for_positive_and_negative_z_offsets",
+      "responsibility": "checks component parity for positive and negative Z offsets",
+      "evidence_status": "scoped orientation contract; not production-qualified"
+    },
+    {
+      "id": "inverseFftTests",
+      "path": "crates/fullmag-fdm-demag/tests/irregular_shifted_kernel.rs",
+      "symbol": "fft_pair_inverse_matches_independent_cubature_for_unequal_2d_pair",
+      "responsibility": "checks inverse FFT, crop and normalization for an unequal-Z pair",
+      "evidence_status": "scoped CPU oracle; not production-qualified"
+    },
+    {
+      "id": "engineMultilayerTests",
+      "path": "crates/fullmag-engine/src/multilayer.rs",
+      "symbol": "regular_stack_materializes_five_unique_kernels_for_nine_ordered_pairs",
+      "responsibility": "checks full-key kernel reuse and ordered pair bindings in the CPU catalog",
+      "evidence_status": "runtime contract test; no CUDA residency proof"
+    },
+    {
+      "id": "plannerMultilayerTests",
+      "path": "crates/fullmag-plan/src/tests.rs",
+      "symbol": "multilayer_planner_materializes_xy_offset_in_common_scratch_transfer",
+      "responsibility": "checks planner materialization of distinct XY extents/centers and push/pull transfer",
+      "evidence_status": "executable planner contract"
+    },
+    {
+      "id": "pythonScenarioTests",
+      "path": "tests/standard_problems/mumag/sp4/fdm/multilayer_convolution/test_runtime.py",
+      "symbol": "test_l3_identity_three_d_scenario_preserves_common_identity_grid",
+      "responsibility": "checks stage-first L=3 three-dimensional identity scenario and canonical ProblemIR lowering",
+      "evidence_status": "authoring/lowering contract; not a physical runtime receipt"
+    },
+    {
+      "id": "pythonValidationTests",
+      "path": "packages/fullmag-py/tests/test_fdm_multilayer_contract.py",
+      "symbol": "test_demag_rejects_incompatible_common_grid_combinations",
+      "responsibility": "checks fail-closed common-grid and mode validation in the public Python API",
+      "evidence_status": "executable authoring contract"
+    },
+    {
+      "id": "transferMomentTests",
+      "path": "crates/fullmag-fdm-demag/src/transfer.rs",
+      "symbol": "volume_weighted_transfer_preserves_2d_moment_through_z_average",
+      "responsibility": "checks the volume-weighted Z moment contract for native-to-scratch transfer",
+      "evidence_status": "scoped transfer contract"
+    },
+    {
+      "id": "transferAdjointTests",
+      "path": "crates/fullmag-fdm-demag/src/transfer.rs",
+      "symbol": "volume_weighted_transfer_is_adjoint_with_active_mask",
+      "responsibility": "checks volume adjointness and inactive-mask zeroing for scratch-to-native transfer",
+      "evidence_status": "scoped transfer contract"
     }
   ],
   "public_api": {
     "parameters": [
+      {
+        "python": "body.mesh.cell_size",
+        "type": "Sequence[float] | None",
+        "default": "None",
+        "si_unit": "\\mathrm m",
+        "validation": "exactly three finite positive values; mutually exclusive with FEM element-size and Gmsh controls",
+        "meaning": "exact Cartesian native-cell size $(h_x,h_y,h_z)$ for one magnetic object",
+        "backend_support": "FDM CPU/GPU authoring; runtime lane gated",
+        "problem_ir": "backend_policy.discretization_hints.fdm.per_magnet.<object>.cell"
+      },
+      {
+        "python": "study.objects.mesh.defaults.cell_size",
+        "type": "Sequence[float] | None",
+        "default": "None",
+        "si_unit": "\\mathrm m",
+        "validation": "exactly three finite positive values; an object value overrides it",
+        "meaning": "default native-cell size for FDM objects",
+        "backend_support": "FDM CPU/GPU authoring; runtime lane gated",
+        "problem_ir": "backend_policy.discretization_hints.fdm.default_cell"
+      },
+      {
+        "python": "study.universe.mesh.cell_size",
+        "type": "Sequence[float] | None",
+        "default": "None",
+        "si_unit": "\\mathrm m",
+        "validation": "exactly three finite positive values; each common-domain extent must be an integer multiple; required for unequal native grids",
+        "meaning": "cell size of the non-physical common convolution domain",
+        "backend_support": "FDM multilayer CPU/GPU authoring; runtime lane gated",
+        "problem_ir": "backend_policy.discretization_hints.fdm.demag.common_cell_size"
+      },
+      {
+        "python": "study.universe.mesh.minimum_element_size",
+        "type": "float | None",
+        "default": "None",
+        "si_unit": "\\mathrm m",
+        "validation": "finite positive and no greater than the maximum; mutually exclusive with `cell_size`",
+        "meaning": "lower element-size target for the FEM airbox mesh",
+        "backend_support": "FEM CPU/GPU",
+        "problem_ir": "problem_meta.runtime_metadata.study_universe.airbox_hmin"
+      },
+      {
+        "python": "study.universe.mesh.maximum_element_size",
+        "type": "float | None",
+        "default": "None",
+        "si_unit": "\\mathrm m",
+        "validation": "finite positive and no smaller than the minimum; mutually exclusive with `cell_size`",
+        "meaning": "upper element-size target for the FEM airbox mesh",
+        "backend_support": "FEM CPU/GPU",
+        "problem_ir": "problem_meta.runtime_metadata.study_universe.airbox_hmax"
+      },
       {
         "python": "FDM.cell",
         "type": "Sequence[float] or None",
@@ -404,6 +567,36 @@
         "meaning": "demagnetization policy wrapper",
         "backend_support": "FDM CPU/GPU authoring; runtime lane gated",
         "problem_ir": "backend_policy.discretization_hints.fdm.demag"
+      },
+      {
+        "python": "FDM.boundary_correction",
+        "type": "str or None",
+        "default": "None",
+        "si_unit": "1",
+        "validation": "Python accepts none, volume, full; multilayer accepts exactly None or none and rejects volume/full before layer construction",
+        "meaning": "sub-cell boundary-correction tier",
+        "backend_support": "FDM single-grid authoring; multilayer neutral intent only",
+        "problem_ir": "backend_policy.discretization_hints.fdm.boundary_correction"
+      },
+      {
+        "python": "FDM.boundary_phi_floor",
+        "type": "float or None",
+        "default": "None",
+        "si_unit": "1",
+        "validation": "Python requires $0<\\phi_{\\min}<1$; multilayer requires None and rejects every explicit value, including direct-IR 0.0",
+        "meaning": "minimum volume fraction for boundary correction",
+        "backend_support": "FDM single-grid authoring; unsupported for multilayer",
+        "problem_ir": "backend_policy.discretization_hints.fdm.boundary_phi_floor"
+      },
+      {
+        "python": "FDM.boundary_delta_min",
+        "type": "float or None",
+        "default": "None",
+        "si_unit": "\\mathrm m",
+        "validation": "Python requires $\\delta_{\\min}\\geq0$; multilayer requires None and rejects every explicit value, including 0.0",
+        "meaning": "minimum intersection distance for T1 stability",
+        "backend_support": "FDM single-grid authoring; unsupported for multilayer",
+        "problem_ir": "backend_policy.discretization_hints.fdm.boundary_delta_min"
       },
       {
         "python": "FDMGrid.cell",
@@ -476,10 +669,6 @@
         "problem_ir": "not serialized"
       }
     ],
-    "excluded_parameters": [
-      "FDM.boundary_correction",
-      "FDM.boundary_phi_floor",
-      "FDM.boundary_delta_min"
-    ]
+    "excluded_parameters": []
   }
 }

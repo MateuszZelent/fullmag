@@ -266,6 +266,75 @@ describe("CameraRegistryController", () => {
     expect(controller.getSnapshot().persistedShadow?.position).toEqual([9, 8, 7]);
   });
 
+  it("keeps the final local pose when a newer remote revision arrives during the gesture", () => {
+    const { controller } = createController();
+    const remoteA = camera({ position: [0, 0, 1] });
+    const localD = camera({ position: [4, 5, 6], target: [1, 1, 1] });
+    controller.observeRemoteState(visualizationState(1, remoteA));
+
+    controller.beginInteraction(7);
+    controller.observeRemoteState(visualizationState(2, remoteA));
+    expect(controller.patchCamera(localD, 6)).toBe(false);
+    expect(controller.patchCamera(localD, 7)).toBe(true);
+    controller.observeRemoteState(visualizationState(3, remoteA));
+    controller.endInteraction(7);
+
+    expect(controller.getSnapshot().camera).toEqual(localD);
+    expect(controller.getSnapshot().persistedShadow).toEqual(remoteA);
+    expect(controller.getSnapshot().dirty).toBe(true);
+  });
+
+  it("does not let a stale end callback close a newer interaction", async () => {
+    vi.useFakeTimers();
+    try {
+      const { controller, patchSpy } = createController({ idleFlushMs: 10 });
+      controller.start();
+      controller.beginInteraction(3);
+      controller.beginInteraction(4);
+      controller.patchCamera({ position: [4, 5, 6] }, 4);
+
+      controller.endInteraction(3);
+      await vi.advanceTimersByTimeAsync(100);
+      expect(patchSpy).not.toHaveBeenCalled();
+
+      controller.endInteraction(4);
+      await vi.advanceTimersByTimeAsync(10);
+      expect(patchSpy).toHaveBeenCalledTimes(1);
+      controller.stop();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("never restores persisted shadow merely because an unchanged interaction ended", () => {
+    const { controller } = createController();
+    const initial = camera({ position: [0, 0, 1] });
+    const remoteDuringGesture = camera({ position: [9, 8, 7] });
+    controller.observeRemoteState(visualizationState(1, initial));
+
+    controller.beginInteraction(12);
+    controller.observeRemoteState(visualizationState(2, remoteDuringGesture));
+    controller.endInteraction(12);
+
+    expect(controller.getSnapshot().camera).toEqual(initial);
+    expect(controller.getSnapshot().persistedShadow).toEqual(
+      remoteDuringGesture,
+    );
+  });
+
+  it("lets an explicit programmatic command supersede an active gesture epoch", () => {
+    const { controller } = createController();
+    controller.beginInteraction(21);
+    expect(controller.patchCamera({ position: [3, 2, 1] }, 21)).toBe(true);
+
+    expect(controller.patchCamera({ projection: "orthographic" })).toBe(true);
+    expect(controller.patchCamera({ position: [9, 9, 9] }, 21)).toBe(false);
+    controller.endInteraction(21);
+
+    expect(controller.getSnapshot().camera.projection).toBe("orthographic");
+    expect(controller.getSnapshot().camera.position).toEqual([3, 2, 1]);
+  });
+
   it("uses a stable camera signature so sub-epsilon jitter does not become dirty", async () => {
     const { controller, patchSpy } = createController();
     const remote = camera({ position: [1, 2, 3] });

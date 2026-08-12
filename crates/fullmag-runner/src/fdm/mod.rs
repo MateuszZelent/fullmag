@@ -5,7 +5,6 @@ pub(crate) mod multilayer;
 pub(crate) mod schedules;
 
 use crate::types::RunError;
-use std::collections::BTreeSet;
 
 #[cfg(any(feature = "cuda", test))]
 pub(crate) fn next_fdm_attempt_dt(
@@ -497,36 +496,16 @@ pub(crate) fn validate_multilayer_grid_budget(
             });
         }
     }
-    let computed_unique_kernels = if let Some(first_layer) = plan.layers.first() {
-        let cell_z = first_layer.convolution_cell_size[2];
-        if !cell_z.is_finite() || cell_z <= 0.0 {
-            return Err(RunError {
-                message: "FDM multilayer convolution cell size must be finite and positive"
-                    .to_string(),
-            });
-        }
-        let mut shifts = BTreeSet::new();
-        for dst in &plan.layers {
-            for src in &plan.layers {
-                shifts.insert(
-                    ((dst.native_origin[2] - src.native_origin[2]) / cell_z).round() as i64,
-                );
-            }
-        }
-        shifts.len() as u64
+    let computed_kernel_bytes = if plan.enable_demag {
+        fullmag_plan::checked_multilayer_pair_kernel_footprint(plan.common_cells, plan.layers.len())
+            .map_err(|error| RunError {
+                message: format!(
+                    "FDM multilayer kernel footprint rejected before allocation: {error}"
+                ),
+            })?
     } else {
         0
     };
-    let padded_cells = plan.common_cells.iter().try_fold(1u64, |acc, cells| {
-        acc.checked_mul((*cells as u64).checked_mul(2)?)
-    });
-    let computed_kernel_bytes = padded_cells
-        .and_then(|cells| cells.checked_mul(6))
-        .and_then(|bytes| bytes.checked_mul(16))
-        .and_then(|bytes| bytes.checked_mul(computed_unique_kernels));
-    let computed_kernel_bytes = computed_kernel_bytes.ok_or_else(|| RunError {
-        message: "FDM multilayer kernel memory overflow before allocation".to_string(),
-    })?;
     if plan.planner_summary.estimated_kernel_bytes != computed_kernel_bytes {
         return Err(RunError {
             message: format!(
@@ -582,8 +561,140 @@ fn validate_resolved_periodic_workspace(
 
 #[cfg(test)]
 mod tests {
-    use super::validate_single_grid_budget;
-    use fullmag_ir::FdmPlanIR;
+    use super::{validate_multilayer_grid_budget, validate_single_grid_budget};
+    use fullmag_ir::{
+        ExchangeBoundaryCondition, ExecutionPrecision, FdmLayerPlanIR, FdmMaterialIR,
+        FdmMultilayerPlanIR, FdmMultilayerSummaryIR, FdmPlanIR, IntegratorChoice,
+    };
+
+    fn valid_multilayer_plan() -> FdmMultilayerPlanIR {
+        let layer = |name: &str, origin_z: f64, magnetization: [f64; 3]| FdmLayerPlanIR {
+            magnet_name: name.to_string(),
+            layer_id: format!("layer:{name}"),
+            object_id: name.to_string(),
+            native_grid: [1, 1, 1],
+            native_cell_size: [1.0, 1.0, 1.0],
+            native_origin: [0.0, 0.0, origin_z],
+            native_active_mask: None,
+            initial_magnetization: vec![magnetization],
+            material: FdmMaterialIR {
+                name: "Py".to_string(),
+                saturation_magnetisation: 800e3,
+                exchange_stiffness: 13e-12,
+                damping: 0.1,
+                ..Default::default()
+            },
+            convolution_grid: [1, 1, 1],
+            convolution_cell_size: [1.0, 1.0, 1.0],
+            convolution_origin: [0.0, 0.0, origin_z],
+            transfer_kind: "identity".to_string(),
+        };
+        let mut plan = FdmMultilayerPlanIR {
+            mode: "three_d".to_string(),
+            common_cells: [1, 1, 1],
+            requested_common_cell_size: None,
+            grid_certificate: None,
+            layers: vec![
+                layer("free", 0.0, [1.0, 0.0, 0.0]),
+                layer("ref", 2.0, [0.0, 1.0, 0.0]),
+            ],
+            enable_exchange: true,
+            enable_demag: true,
+            external_field: None,
+            interfacial_dmi: None,
+            bulk_dmi: None,
+            gyromagnetic_ratio: 2.211e5,
+            precision: ExecutionPrecision::Double,
+            exchange_bc: ExchangeBoundaryCondition::Neumann,
+            periodicity: None,
+            resolved_periodic_images: None,
+            integrator: IntegratorChoice::Heun,
+            fixed_timestep: Some(1e-13),
+            field_refresh: None,
+            relaxation: None,
+            planner_summary: FdmMultilayerSummaryIR {
+                requested_strategy: "multilayer_convolution".to_string(),
+                selected_strategy: "multilayer_convolution".to_string(),
+                requested_mode: "three_d".to_string(),
+                resolved_mode: "three_d".to_string(),
+                eligibility: "eligible".to_string(),
+                estimated_pair_kernels: 4,
+                estimated_unique_kernels: 3,
+                estimated_kernel_bytes: 2_304,
+                warnings: Vec::new(),
+            },
+        };
+        let topology_tokens = fullmag_ir::fdm_multilayer_topology_tokens(&plan.mode, &plan.layers);
+        plan.grid_certificate = Some(
+            fullmag_ir::FdmGridCertificateIR::new_with_topology_tokens(
+                [0.0, 0.0, 0.0],
+                [1, 1, 1],
+                [1.0, 1.0, 1.0],
+                1,
+                fullmag_plan::FDM_GRID_ESTIMATED_BYTES_PER_CELL,
+                None,
+                &topology_tokens,
+            )
+            .expect("test certificate should bind the multilayer topology"),
+        );
+        plan
+    }
+
+    #[test]
+    fn stale_multilayer_kernel_summary_is_rejected_before_allocation() {
+        let error = validate_multilayer_grid_budget(&valid_multilayer_plan())
+            .expect_err("shift-only summary must fail before a multilayer kernel is built");
+        assert!(
+            error.message.contains("kernel estimate mismatch"),
+            "unexpected preflight error: {}",
+            error.message
+        );
+        assert!(
+            error.message.contains("summary=2304"),
+            "unexpected preflight error: {}",
+            error.message
+        );
+        assert!(
+            error.message.contains("recomputed=3072"),
+            "unexpected preflight error: {}",
+            error.message
+        );
+    }
+
+    #[test]
+    fn inactive_demag_accepts_zero_kernel_summary_without_payload_admission() {
+        let mut plan = valid_multilayer_plan();
+        plan.enable_demag = false;
+        plan.planner_summary.estimated_kernel_bytes = 0;
+
+        validate_multilayer_grid_budget(&plan)
+            .expect("inactive demag must not admit a pair-kernel payload");
+    }
+
+    #[test]
+    fn inactive_demag_rejects_stale_nonzero_kernel_summary() {
+        let mut plan = valid_multilayer_plan();
+        plan.enable_demag = false;
+        plan.planner_summary.estimated_kernel_bytes = 3_072;
+
+        let error = validate_multilayer_grid_budget(&plan)
+            .expect_err("inactive demag must reject stale nonzero kernel telemetry");
+        assert!(
+            error.message.contains("kernel estimate mismatch"),
+            "unexpected preflight error: {}",
+            error.message
+        );
+        assert!(
+            error.message.contains("summary=3072"),
+            "unexpected preflight error: {}",
+            error.message
+        );
+        assert!(
+            error.message.contains("recomputed=0"),
+            "unexpected preflight error: {}",
+            error.message
+        );
+    }
 
     fn valid_prescribed_sot_plan() -> FdmPlanIR {
         let mut plan = FdmPlanIR::default();

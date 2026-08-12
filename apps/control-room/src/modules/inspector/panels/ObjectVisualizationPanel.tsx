@@ -730,14 +730,43 @@ type ResolvedObjectVisualizationPanelState = Omit<
   target: VisualizationTargetRef;
 };
 
-export function ObjectVisualizationPanel({ selection }: InspectorPanelProps) {
+export interface VisualizationInspectorOwner {
+  actionSummary: string;
+  capabilityDescription: string;
+  id: string;
+  targetLabel: string;
+  title: string;
+}
+
+const OBJECT_VISUALIZATION_OWNER: VisualizationInspectorOwner = {
+  actionSummary: "Display passes, quantity, vectors, wireframe, and target overrides",
+  capabilityDescription:
+    "Uses the canonical object visualization target and its resolved FDM or FEM capabilities.",
+  id: "object.visualization",
+  targetLabel: "Magnetic object",
+  title: "Object visualization",
+};
+
+export function VisualizationTargetInspectorPanel({
+  owner,
+  selection,
+}: InspectorPanelProps & { owner: VisualizationInspectorOwner }) {
   const panel = useObjectVisualizationPanelState(selection);
   const { displaySettings, settings, target } = panel;
   const visualizationViewContext = useVisualizationViewContext();
 
+  const ownerIdentity = (
+    <InspectorGroup title={owner.title}>
+      <FieldRow label="Target scope" value={owner.targetLabel} />
+      <FieldRow label="Capabilities" value={owner.capabilityDescription} />
+      <FieldRow label="Actions" value={owner.actionSummary} />
+    </InspectorGroup>
+  );
+
   if (!target || !settings || !displaySettings) {
     return (
-      <div className="fm-inspector-panel">
+      <div className="fm-inspector-panel" data-inspector-owner={owner.id}>
+        {ownerIdentity}
         <InspectorGroup title="Visualization">
           <FieldRow label="Target" value="No visualization target" />
         </InspectorGroup>
@@ -747,7 +776,8 @@ export function ObjectVisualizationPanel({ selection }: InspectorPanelProps) {
 
   if (visualizationViewContext === "planar") {
     return (
-      <div className="fm-inspector-panel">
+      <div className="fm-inspector-panel" data-inspector-owner={owner.id}>
+        {ownerIdentity}
         <InspectorGroup title="View">
           <VisualizationContextSwitch />
         </InspectorGroup>
@@ -757,7 +787,8 @@ export function ObjectVisualizationPanel({ selection }: InspectorPanelProps) {
   }
 
   return (
-    <>
+    <div className="fm-inspector-panel" data-inspector-owner={owner.id}>
+      {ownerIdentity}
       <InspectorGroup title="View">
         <VisualizationContextSwitch />
       </InspectorGroup>
@@ -765,7 +796,16 @@ export function ObjectVisualizationPanel({ selection }: InspectorPanelProps) {
         key={visualizationTargetKey(target)}
         panel={{ ...panel, displaySettings, settings, target }}
       />
-    </>
+    </div>
+  );
+}
+
+export function ObjectVisualizationPanel({ selection }: InspectorPanelProps) {
+  return (
+    <VisualizationTargetInspectorPanel
+      owner={OBJECT_VISUALIZATION_OWNER}
+      selection={selection}
+    />
   );
 }
 

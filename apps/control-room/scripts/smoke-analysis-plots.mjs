@@ -113,6 +113,8 @@ async function main() {
     await verifyAnalysisInspectorSummary(page, selectedDatasetRef);
     await verifyLocalSeriesSelection(page, rowsBinRequests);
     await verifyLocalRangeSelection(page, rowsBinRequests);
+    await verifyReducedMotionAndKeyboardControls(page);
+    await verifyResponsiveAnalysisFixtures(page);
     const explicitDatasetRequestBaseline = analysisPlotRequests.length;
     await verifyNoImplicitLiveRefresh(
       page,
@@ -240,6 +242,94 @@ async function captureAnalysisAcceptanceScreenshots(page, errors) {
   screenshots.push(reducedTarget);
   await page.emulateMedia({ reducedMotion: "no-preference" });
   return screenshots;
+}
+
+async function verifyResponsiveAnalysisFixtures(page) {
+  const widths = [360, 640, 900, 1280];
+  for (const width of widths) {
+    await page.setViewportSize({ height: 1000, width });
+    await page.waitForTimeout(150);
+    const fixture = await page.evaluate(() => {
+      const root = document.querySelector(".fm-analysis-plots");
+      const required = [
+        root?.querySelector(".fm-chart-section__title"),
+        root?.querySelector('[aria-label="Analysis dataset"]'),
+        root?.querySelector(".fm-chart-legend__item"),
+        root?.querySelector('.fm-analysis-chart-surface[role="img"]'),
+        root?.querySelector(".fm-analysis-chart-surface canvas"),
+        root?.querySelector(".fm-analysis-plots__range-cursor"),
+        root?.querySelector(".fm-chart-section__footer"),
+        root?.querySelector(".fm-analysis-chart-export button"),
+      ];
+      const rootRect = root?.getBoundingClientRect();
+      const visible = required.every((node) => {
+        if (!(node instanceof HTMLElement) || !rootRect) return false;
+        const rect = node.getBoundingClientRect();
+        return rect.width > 0 && rect.height > 0 && rect.left >= rootRect.left && rect.right <= rootRect.right + 1;
+      });
+      const controls = root?.querySelector(".fm-analysis-chart-export");
+      const chartOwner = root?.querySelector('.fm-analysis-chart-surface[role="img"]');
+      return {
+        axisDescription: chartOwner?.getAttribute("aria-label") ?? "",
+        controlsDirection: controls ? getComputedStyle(controls).flexDirection : null,
+        documentFitsViewport: document.documentElement.scrollWidth <= window.innerWidth + 1,
+        rootFitsViewport: Boolean(
+          rootRect && rootRect.left >= -1 && rootRect.right <= window.innerWidth + 1,
+        ),
+        visible,
+      };
+    });
+    if (!fixture.visible || !fixture.rootFitsViewport || !fixture.documentFitsViewport) {
+      throw new Error(`Analysis responsive fixture clips a required scientific control at ${width}px.`);
+    }
+    if (!/X axis .+\[.+\]\. Y axes .+\[.+\]\./.test(fixture.axisDescription)) {
+      throw new Error(`Analysis chart does not expose axis labels and units at ${width}px: ${fixture.axisDescription}`);
+    }
+    if (width === 360 && fixture.controlsDirection !== "column") {
+      throw new Error(`Analysis controls did not stack at 360px: ${fixture.controlsDirection}.`);
+    }
+  }
+  await page.setViewportSize({ height: 1000, width: 1440 });
+}
+
+async function verifyReducedMotionAndKeyboardControls(page) {
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  const legendItem = page.locator(".fm-chart-legend__item").first();
+  const initialPressed = await legendItem.getAttribute("aria-pressed");
+  await legendItem.focus();
+  await legendItem.press("Space");
+  await page.waitForFunction(
+    (previous) => document.querySelector(".fm-chart-legend__item")?.getAttribute("aria-pressed") !== previous,
+    initialPressed,
+    { timeout: timeoutMs },
+  );
+  await legendItem.press("Enter");
+  await page.waitForFunction(
+    (expected) => document.querySelector(".fm-chart-legend__item")?.getAttribute("aria-pressed") === expected,
+    initialPressed,
+    { timeout: timeoutMs },
+  );
+
+  const dataTable = page.getByRole("button", { name: "Data Table" });
+  await dataTable.focus();
+  await dataTable.press("Enter");
+  const dialog = page.locator(".fm-points-table-dialog");
+  await dialog.waitFor({ state: "visible", timeout: timeoutMs });
+  const cursor = page.locator(".fm-analysis-plots__range-cursor").first();
+  const cursorBefore = await cursor.innerText();
+  const pointActions = dialog.getByRole("button", { name: /^Select .+ row \d+$/ });
+  await pointActions.first().waitFor({ state: "visible", timeout: timeoutMs });
+  const pointAction = pointActions.nth(Math.min(1, (await pointActions.count()) - 1));
+  await pointAction.focus();
+  await pointAction.press("Enter");
+  await page.waitForFunction(
+    (previous) => document.querySelector(".fm-analysis-plots__range-cursor")?.textContent?.trim() !== previous,
+    cursorBefore.trim(),
+    { timeout: timeoutMs },
+  );
+  await page.keyboard.press("Escape");
+  await dialog.waitFor({ state: "hidden", timeout: timeoutMs });
+  await page.emulateMedia({ reducedMotion: "no-preference" });
 }
 
 function countResourceFamilies(requests) {
@@ -555,6 +645,7 @@ async function collectAnalysisPlotProof(page) {
       legend,
       pointSummary,
       provenance,
+      retainedRefresh: root?.querySelector(".fm-analysis-chart-surface")?.getAttribute("data-status") === "refreshing",
       rootRect: rootRect ? { height: rootRect.height, width: rootRect.width } : null,
       selectedDatasetRef,
       surfaceLabels,

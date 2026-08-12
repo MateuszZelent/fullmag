@@ -28,7 +28,7 @@ afterEach(() => {
 describe("ChartInspectorPanel active descriptor selection", () => {
   it.each([
     ["dynamics", "dynamics:v-table-a", "data.table:table-a:step:mx"],
-    ["frequency-response", "artifact:frequency-response:v-response", "frequency:artifact://response"],
+    ["resonance-fmr", "artifact:frequency-response:v-response", "frequency:artifact://response"],
     ["comparison", "comparison:v-table-a:v-table-b", "energy|J"],
   ] as const)("renders and clears the effective %s descriptor selection", async (surface, descriptorId, effectiveSelection) => {
     const dom = installSimulationPreparationTestDom();

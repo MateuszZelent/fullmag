@@ -10,7 +10,7 @@ import {
 } from "./analysisViewPreferences";
 
 describe("analysis view preferences", () => {
-  it("keeps the seven declared analysis surfaces and an explicit dataset reference", () => {
+  it("keeps the five physics-first analysis surfaces and migrates old IDs", () => {
     const preferences = createDefaultAnalysisViewPreferences();
 
     expect(ANALYSIS_VIEW_PREFERENCES_STORAGE_KEY).toBe("fm:analysis-view-preferences:v2");
@@ -18,10 +18,13 @@ describe("analysis view preferences", () => {
     expect(preferences.selectedDatasetRef).toBeNull();
 
     for (const activeSurface of [
-      "dynamics", "spectrum", "frequency-response", "eigenmodes", "dispersion", "hysteresis", "comparison",
+      "dynamics", "resonance-fmr", "dispersion", "hysteresis", "comparison",
     ]) {
       expect(parseAnalysisViewPreferences({ schemaVersion: 2, activeSurface, selectedDatasetRef: "table:run-7:stage-2:table-4", descriptorPreferences: {} }).activeSurface).toBe(activeSurface);
     }
+    expect(parseAnalysisViewPreferences({ schemaVersion: 2, activeSurface: "frequency-response", selectedDatasetRef: null, descriptorPreferences: {} }).activeSurface).toBe("resonance-fmr");
+    expect(parseAnalysisViewPreferences({ schemaVersion: 2, activeSurface: "eigenmodes", selectedDatasetRef: null, descriptorPreferences: {} }).activeSurface).toBe("resonance-fmr");
+    expect(parseAnalysisViewPreferences({ schemaVersion: 2, activeSurface: "spectrum", selectedDatasetRef: null, descriptorPreferences: {} }).activeSurface).toBe("dynamics");
   });
 
   it("bounds complete descriptor preferences and drops malformed descriptors", () => {

@@ -85,7 +85,7 @@ study = fm.study("adaptive_rk45")
 study.engine("fdm")
 study.device("gpu", precision="double")
 study.mode("strict")
-study.cell(2 * nm, 2 * nm, 5 * nm)
+study.objects.mesh.defaults(cell_size=(2 * nm, 2 * nm, 5 * nm))
 body = study.geometry(fm.Box(80 * nm, 20 * nm, 5 * nm), name="film")
 body.Ms = 800.0e3
 body.Aex = 13.0e-12

@@ -204,7 +204,7 @@ import fullmag as fm
 nm = 1.0e-9
 study = fm.study("stt-stage-boundary")
 study.engine("fdm")
-study.cell(2 * nm, 2 * nm, 2 * nm)
+study.objects.mesh.defaults(cell_size=(2 * nm, 2 * nm, 2 * nm))
 body = study.geometry(fm.Box(100 * nm, 40 * nm, 4 * nm), name="free_layer")
 body.Ms = 8.0e5
 body.Aex = 13.0e-12

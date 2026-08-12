@@ -1671,15 +1671,18 @@ describe("Viewport3DModule scene wiring", () => {
       "kernel.cameraRegistry.patchCamera(patch);",
     );
     expect(patchCameraStateSource).not.toContain("visualizationSync.queuePatch");
-    expect(saveCameraStateSource).toContain("viewport3dStore.setCamera(nextCamera);");
+    expect(saveCameraStateSource).toContain("const accepted =");
+    expect(saveCameraStateSource).toContain("if (accepted) {");
+    expect(saveCameraStateSource).toContain("viewport3dStore.setCameraView(");
+    expect(saveCameraStateSource).toContain("kernel.cameraRegistry.patchCamera(");
     expect(saveCameraStateSource).toContain(
-      "kernel.cameraRegistry.patchCamera(buildViewport3DCameraRegistryPatch(camera));",
+      "buildViewport3DCameraRegistryPatch(camera),",
     );
-    expect(saveCameraStateSource).toContain("orthographicScale");
+    expect(saveCameraStateSource).toContain("epoch,");
     expect(saveCameraStateSource).not.toContain("visualizationSync.queuePatch");
     expect(saveCameraStateSource).not.toContain("queuePatch({ camera: nextCamera })");
-    expect(source).toContain("kernel.cameraRegistry.beginInteraction();");
-    expect(source).toContain("kernel.cameraRegistry.endInteraction();");
+    expect(source).toContain("kernel.cameraRegistry.beginInteraction(epoch);");
+    expect(source).toContain("kernel.cameraRegistry.endInteraction(epoch);");
     expect(source).toContain(
       "onCameraInteractionStart={beginCameraInteraction}",
     );

@@ -47,6 +47,7 @@ import {
   useFrequencyDomainResponseSweepResource,
   useHysteresisExecutionTreeResource,
   useStageExecutionResource,
+  useCurrentRunResource,
 } from "@/kernel/resources/studyRuntimeResources";
 import { WorkspaceRenderProfiler } from "@/kernel/performance/reactRenderProfiler";
 import { usePhysicsGraphResource } from "@/kernel/resources/physicsGraphResources";
@@ -107,6 +108,7 @@ import {
 } from "./explorerStore";
 import type { ModelTreeMeshSnapshot } from "./explorerTypes";
 import { ExplorerTreeView } from "./ExplorerTreeView";
+import { ResultContextSelector } from "./ResultContextSelector";
 
 type TextureLoadNodeRequestedEvent =
   KernelEventMap["explorer:texture-load-node-requested"];
@@ -309,6 +311,9 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
   const frequencyDomainManifest = useFrequencyDomainManifestResource({
     enabled: frequencyDomainTabActive || modeVisualizationResourceActive,
   });
+  const currentRun = useCurrentRunResource({
+    enabled: frequencyDomainTabActive,
+  });
   const frequencyDomainSpectrum = useFrequencyDomainEigenSpectrumResource({
     enabled: activeTab === "results" || modeVisualizationResourceActive,
   });
@@ -491,6 +496,7 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
             frequencyDomainResponseSweep: frequencyDomainResponseSweep.data,
             frequencyDomainSpectrum: frequencyDomainSpectrum.data,
             pinnedQuickChart,
+            currentRun: currentRun.data,
           });
     return filterExplorerNodes(baseNodes, filterText, selectedNodeId);
   }, [
@@ -540,6 +546,7 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
     frequencyDomainResponseSweep.data,
     frequencyDomainSpectrum.data,
     pinnedQuickChart,
+    currentRun.data,
   ]);
 
   useEffect(() => {
@@ -610,6 +617,14 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
           activeTab={activeTab}
           onTabChange={setExplorerActiveTab}
         />
+        {activeTab === "results" ? (
+          <ResultContextSelector
+            currentRunId={currentRun.data?.run_id ?? null}
+            knownRunIds={[]}
+            onChange={() => undefined}
+            selectedRunId={currentRun.data?.run_id ?? null}
+          />
+        ) : null}
         <label className="fm-explorer-filter">
           <Search size={13} aria-hidden="true" className="fm-explorer-filter__search-icon" />
           <input

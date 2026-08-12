@@ -333,6 +333,7 @@ fn fdm_multilayer_layout_resource(
             strategy: None,
             requested_mode: None,
             resolved_mode: None,
+            requested_common_cell_size: None,
             common_transform_layout: None,
             layers: Vec::new(),
             airbox: unavailable_fdm_multilayer_airbox_resource("not_fdm_multilayer"),
@@ -367,6 +368,9 @@ fn fdm_multilayer_layout_resource(
                 .and_then(Value::as_str)
         })
         .map(str::to_owned);
+    let requested_common_cell_size = backend_plan
+        .and_then(|value| value.get("requested_common_cell_size"))
+        .and_then(value_array3_f64);
 
     let certificate = backend_plan.and_then(|value| value.get("grid_certificate"));
     let common_shape = backend_plan
@@ -462,6 +466,7 @@ fn fdm_multilayer_layout_resource(
         strategy,
         requested_mode,
         resolved_mode,
+        requested_common_cell_size,
         common_transform_layout: common_layout,
         layers,
         airbox: fdm_multilayer_airbox_resource(snapshot, revisions.1),

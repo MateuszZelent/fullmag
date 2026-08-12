@@ -15,7 +15,7 @@ import sys
 from typing import Any
 
 
-CANONICAL_MAX_STEPS = "max_steps=50_000"
+CANONICAL_MAX_STEPS = "max_steps=100_000"
 BOUNDED_MAX_STEPS = "max_steps=1"
 EXPECTED_PROBLEM_NAME = "mumag_sp4_fem_relax_projected_gradient_bb"
 EXPECTED_ALGORITHM = "projected_gradient_bb"
@@ -156,7 +156,7 @@ def prepare_bounded_scenario(source: Path, output: Path) -> dict[str, object]:
         "canonical_source": str(source),
         "canonical_source_sha256": _sha256_bytes(source_bytes),
         "bounded_source_sha256": _sha256_bytes(bounded_bytes),
-        "canonical_max_steps": 50_000,
+        "canonical_max_steps": 100_000,
         "bounded_max_steps": 1,
         "replacement_count": replacement_count,
     }
@@ -170,7 +170,7 @@ def _validate_source_identity(source: Path, bounded_source: Path) -> dict[str, o
     except (OSError, UnicodeDecodeError) as error:
         raise ContractError(f"cannot read runtime source identity: {error}") from error
     if canonical_text.count(CANONICAL_MAX_STEPS) != 1:
-        raise ContractError("canonical source no longer has exactly one authored max_steps=50_000")
+        raise ContractError("canonical source no longer has exactly one authored max_steps=100_000")
     expected = canonical_text.replace(CANONICAL_MAX_STEPS, BOUNDED_MAX_STEPS, 1).encode(
         "utf-8"
     )

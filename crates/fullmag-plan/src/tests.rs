@@ -5,6 +5,53 @@ use crate::geometry::{
 };
 use std::collections::BTreeMap;
 
+#[test]
+fn multilayer_pair_kernel_footprint_counts_every_abi_v2_pair_payload() {
+    assert_eq!(
+        checked_multilayer_pair_kernel_footprint([4, 5, 6], 3)
+            .expect("small ABI v2 tensor footprint should be representable"),
+        829_440
+    );
+}
+
+#[test]
+fn multilayer_pair_kernel_footprint_exposes_l_squared_cost_beyond_shift_telemetry() {
+    let abi_v2_bytes = checked_multilayer_pair_kernel_footprint([262_144, 1, 1], 8)
+        .expect("ABI v2 tensor footprint should be representable");
+    let shift_only_bytes = 2_097_152_u64 * 6 * 16 * 15;
+
+    assert_eq!(abi_v2_bytes, 12 * 1024 * 1024 * 1024);
+    assert!(shift_only_bytes < FDM_GRID_MAX_BYTES);
+    assert!(abi_v2_bytes > FDM_GRID_MAX_BYTES);
+}
+
+#[test]
+fn multilayer_pair_kernel_footprint_rejects_pair_count_above_abi_v2_u32_limit() {
+    let error = checked_multilayer_pair_kernel_footprint([1, 1, 1], 65_536)
+        .expect_err("ABI v2 must reject L squared above its u32 pair-count limit");
+    assert!(error
+        .reasons
+        .iter()
+        .any(|reason| reason.contains("u32 limit")));
+}
+
+#[test]
+fn multilayer_pair_kernel_footprint_rejects_padded_and_byte_overflow() {
+    let padded_error = checked_multilayer_pair_kernel_footprint([u32::MAX, u32::MAX, 1], 1)
+        .expect_err("padded cell product must not wrap");
+    assert!(padded_error
+        .reasons
+        .iter()
+        .any(|reason| reason.contains("padded cell count overflow")));
+
+    let bytes_error = checked_multilayer_pair_kernel_footprint([u32::MAX, 1, 1], 65_535)
+        .expect_err("ABI v2 byte product must not wrap");
+    assert!(bytes_error
+        .reasons
+        .iter()
+        .any(|reason| reason.contains("payload byte overflow")));
+}
+
 fn resolved_stage_autosave(
     stage_id: &str,
     format: AutosaveFormatIR,
@@ -6468,6 +6515,7 @@ fn multilayer_single_precision_is_rejected_without_cuda_device_request() {
                 mode: "two_d_stack".to_string(),
                 common_cells: None,
                 common_cells_xy: None,
+                common_cell_size: None,
             }),
             boundary_correction: None,
             boundary_phi_floor: None,
@@ -6556,6 +6604,7 @@ fn multilayer_single_precision_is_accepted_when_cuda_device_requested() {
                 mode: "two_d_stack".to_string(),
                 common_cells: None,
                 common_cells_xy: None,
+                common_cell_size: None,
             }),
             boundary_correction: None,
             boundary_phi_floor: None,
@@ -6644,6 +6693,7 @@ fn stacked_two_body_multilayer_problem() -> ProblemIR {
                 mode: "two_d_stack".to_string(),
                 common_cells: None,
                 common_cells_xy: None,
+                common_cell_size: None,
             }),
             boundary_correction: None,
             boundary_phi_floor: None,
@@ -6653,6 +6703,139 @@ fn stacked_two_body_multilayer_problem() -> ProblemIR {
         hybrid: None,
     });
     ir
+}
+
+#[test]
+fn fdm_common_cell_size_resolves_heterogeneous_native_grids_without_rounding() {
+    let mut ir = stacked_two_body_multilayer_problem();
+    for (entry, z) in ir.geometry.entries.iter_mut().zip([0.0, 20e-9]) {
+        let GeometryEntryIR::Translate { base, by, .. } = entry else {
+            panic!("fixture geometry must be translated boxes");
+        };
+        let GeometryEntryIR::Box { size, .. } = base.as_mut() else {
+            panic!("fixture geometry base must be a box");
+        };
+        *size = [100e-9, 50e-9, 10e-9];
+        *by = [0.0, 0.0, z];
+    }
+    let fdm = ir
+        .backend_policy
+        .discretization_hints
+        .as_mut()
+        .and_then(|hints| hints.fdm.as_mut())
+        .expect("fixture must provide FDM hints");
+    fdm.cell = [0.0; 3];
+    fdm.default_cell = None;
+    fdm.per_magnet = Some(std::collections::BTreeMap::from([
+        (
+            "free".to_string(),
+            fullmag_ir::FdmGridHintsIR {
+                cell: [2e-9, 2e-9, 10e-9],
+            },
+        ),
+        (
+            "ref".to_string(),
+            fullmag_ir::FdmGridHintsIR {
+                cell: [5e-9, 5e-9, 10e-9],
+            },
+        ),
+    ]));
+    fdm.demag = Some(fullmag_ir::FdmDemagHintsIR {
+        strategy: "auto".to_string(),
+        mode: "auto".to_string(),
+        common_cells: None,
+        common_cells_xy: None,
+        common_cell_size: Some([2e-9, 2e-9, 2.5e-9]),
+    });
+
+    let planned = plan(&ir).expect("requested common cell size should plan");
+    let BackendPlanIR::FdmMultilayer(multilayer) = planned.backend_plan else {
+        panic!("heterogeneous magnetic objects must use multilayer convolution");
+    };
+
+    assert_eq!(multilayer.common_cells, [50, 25, 4]);
+    assert_eq!(
+        multilayer.requested_common_cell_size,
+        Some([2e-9, 2e-9, 2.5e-9])
+    );
+    assert_eq!(multilayer.mode, "three_d");
+    assert!(multilayer.layers.iter().all(|layer| {
+        layer.convolution_cell_size == [2e-9, 2e-9, 2.5e-9]
+    }));
+    assert!(multilayer
+        .layers
+        .iter()
+        .any(|layer| layer.transfer_kind == "push_pull"));
+}
+
+fn eight_layer_multilayer_problem_for_kernel_budget() -> ProblemIR {
+    let mut ir = stacked_two_body_multilayer_problem();
+    for index in 2..8 {
+        let name = format!("layer_{index}");
+        let geometry_name = format!("{name}_geom");
+        let region_name = format!("{name}_region");
+        ir.geometry.entries.push(GeometryEntryIR::Translate {
+            name: geometry_name.clone(),
+            base: std::boxed::Box::new(GeometryEntryIR::Box {
+                name: format!("{name}_base"),
+                size: [40e-9, 20e-9, 2e-9],
+            }),
+            by: [0.0, 0.0, index as f64 * 4e-9],
+        });
+        ir.regions.push(fullmag_ir::RegionIR {
+            name: region_name.clone(),
+            geometry: geometry_name,
+        });
+        ir.magnets.push(fullmag_ir::MagnetIR {
+            name,
+            region: region_name,
+            material: "Py".to_string(),
+            initial_magnetization: Some(InitialMagnetizationIR::Uniform {
+                value: [1.0, 0.0, 0.0],
+            }),
+            absorbing_boundary: None,
+        });
+    }
+    let fdm = ir
+        .backend_policy
+        .discretization_hints
+        .as_mut()
+        .and_then(|hints| hints.fdm.as_mut())
+        .expect("stacked fixture must provide FDM hints");
+    fdm.demag = Some(fullmag_ir::FdmDemagHintsIR {
+        strategy: "multilayer_convolution".to_string(),
+        mode: "three_d".to_string(),
+        common_cells: Some([262_144, 1, 1]),
+        common_cells_xy: None,
+        common_cell_size: None,
+    });
+    ir
+}
+
+#[test]
+fn multilayer_planner_rejects_abi_v2_pair_payload_above_memory_budget() {
+    let error = plan(&eight_layer_multilayer_problem_for_kernel_budget())
+        .expect_err("full ABI v2 pair payload must fail planner admission before allocation");
+    assert!(error
+        .reasons
+        .iter()
+        .any(|reason| reason.contains("kernel memory budget exceeded")
+            && reason.contains("estimated_bytes=12884901888")));
+}
+
+#[test]
+fn multilayer_planner_skips_inactive_demag_kernel_payload_admission() {
+    let mut ir = eight_layer_multilayer_problem_for_kernel_budget();
+    ir.energy_terms
+        .retain(|term| !matches!(term, fullmag_ir::EnergyTermIR::Demag { .. }));
+
+    let planned =
+        plan(&ir).expect("inactive demag must not admit the potential ABI v2 pair-kernel payload");
+    let BackendPlanIR::FdmMultilayer(multilayer) = planned.backend_plan else {
+        panic!("eight-layer fixture must produce a multilayer plan");
+    };
+    assert!(!multilayer.enable_demag);
+    assert_eq!(multilayer.planner_summary.estimated_kernel_bytes, 0);
 }
 
 fn stacked_two_body_multilayer_problem_with_dmi() -> ProblemIR {
@@ -6670,6 +6853,241 @@ fn stacked_two_body_multilayer_problem_with_dmi() -> ProblemIR {
     ir
 }
 
+fn cuda_three_d_identity_multilayer_problem() -> ProblemIR {
+    let mut ir = stacked_two_body_multilayer_problem();
+    ir.problem_meta.runtime_metadata.insert(
+        "runtime_selection".to_string(),
+        serde_json::json!({"device": "cuda", "device_index": 0}),
+    );
+    let fdm = ir
+        .backend_policy
+        .discretization_hints
+        .as_mut()
+        .and_then(|hints| hints.fdm.as_mut())
+        .expect("stacked fixture must provide FDM hints");
+    fdm.demag = Some(fullmag_ir::FdmDemagHintsIR {
+        strategy: "multilayer_convolution".to_string(),
+        mode: "three_d".to_string(),
+        common_cells: Some([20, 10, 1]),
+        common_cells_xy: None,
+        common_cell_size: None,
+    });
+    ir
+}
+
+fn assert_cuda_multilayer_rejects_reason(ir: &ProblemIR, reason_code: &str) {
+    let error = plan(ir).expect_err("unqualified CUDA multilayer operator must fail closed");
+    assert!(
+        error
+            .reasons
+            .iter()
+            .any(|reason| reason.contains(reason_code)),
+        "missing reason code {reason_code}: {:?}",
+        error.reasons
+    );
+}
+
+fn cuda_unqualified_multilayer_operator_cases() -> Vec<(ProblemIR, &'static str)> {
+    let mut cases = Vec::new();
+
+    let mut two_d_stack = cuda_three_d_identity_multilayer_problem();
+    two_d_stack
+        .backend_policy
+        .discretization_hints
+        .as_mut()
+        .and_then(|hints| hints.fdm.as_mut())
+        .and_then(|fdm| fdm.demag.as_mut())
+        .expect("CUDA fixture must provide demag hints")
+        .mode = "two_d_stack".to_string();
+    let demag = two_d_stack
+        .backend_policy
+        .discretization_hints
+        .as_mut()
+        .and_then(|hints| hints.fdm.as_mut())
+        .and_then(|fdm| fdm.demag.as_mut())
+        .expect("CUDA fixture must provide demag hints");
+    demag.common_cells = None;
+    demag.common_cells_xy = Some([20, 10]);
+    cases.push((two_d_stack, "fdm_cuda_multilayer_two_d_stack_unqualified"));
+
+    let mut push_pull = cuda_three_d_identity_multilayer_problem();
+    let GeometryEntryIR::Translate { base, .. } = &mut push_pull.geometry.entries[1] else {
+        panic!("stacked fixture reference geometry must be translated");
+    };
+    let GeometryEntryIR::Box { size, .. } = base.as_mut() else {
+        panic!("stacked fixture reference geometry must be a box");
+    };
+    size[0] = 20e-9;
+    cases.push((push_pull, "fdm_cuda_multilayer_push_pull_unqualified"));
+
+    let mut heterogeneous_hz = cuda_three_d_identity_multilayer_problem();
+    let fdm = heterogeneous_hz
+        .backend_policy
+        .discretization_hints
+        .as_mut()
+        .and_then(|hints| hints.fdm.as_mut())
+        .expect("CUDA fixture must provide FDM hints");
+    fdm.per_magnet = Some(BTreeMap::from([
+        (
+            "free".to_string(),
+            fullmag_ir::FdmGridHintsIR {
+                cell: [2e-9, 2e-9, 2e-9],
+            },
+        ),
+        (
+            "ref".to_string(),
+            fullmag_ir::FdmGridHintsIR {
+                cell: [2e-9, 2e-9, 1e-9],
+            },
+        ),
+    ]));
+    cases.push((
+        heterogeneous_hz,
+        "fdm_cuda_multilayer_heterogeneous_native_hz_unqualified",
+    ));
+
+    let mut xy_offset = cuda_three_d_identity_multilayer_problem();
+    let GeometryEntryIR::Translate { by, .. } = &mut xy_offset.geometry.entries[1] else {
+        panic!("stacked fixture reference geometry must be translated");
+    };
+    by[0] = 10e-9;
+    cases.push((xy_offset, "fdm_cuda_multilayer_xy_offset_unqualified"));
+
+    cases
+}
+
+#[test]
+fn cuda_multilayer_containment_rejects_each_unqualified_operator_class() {
+    for (ir, reason_code) in cuda_unqualified_multilayer_operator_cases() {
+        assert_cuda_multilayer_rejects_reason(&ir, reason_code);
+    }
+}
+
+#[test]
+fn forced_cuda_multilayer_without_demag_allows_unqualified_demag_operator_classes() {
+    for (mut ir, reason_code) in cuda_unqualified_multilayer_operator_cases() {
+        ir.energy_terms
+            .retain(|term| !matches!(term, fullmag_ir::EnergyTermIR::Demag { .. }));
+        let planned = plan(&ir).unwrap_or_else(|error| {
+            panic!(
+                "inactive demag must not reject CUDA multilayer class {reason_code}: {:?}",
+                error.reasons
+            )
+        });
+        let BackendPlanIR::FdmMultilayer(multilayer) = planned.backend_plan else {
+            panic!("forced CUDA multi-body fixture must remain a multilayer plan");
+        };
+        assert!(!multilayer.enable_demag);
+    }
+}
+
+#[test]
+fn cuda_multilayer_containment_reason_codes_have_stable_order_when_classes_overlap() {
+    let planned = plan(&cuda_three_d_identity_multilayer_problem())
+        .expect("qualified CUDA fixture must produce multilayer layers");
+    let BackendPlanIR::FdmMultilayer(mut multilayer) = planned.backend_plan else {
+        panic!("qualified CUDA fixture must produce a multilayer plan");
+    };
+    multilayer.layers[0].transfer_kind = "push_pull".to_string();
+    multilayer.layers[1].native_cell_size[2] = 1e-9;
+    multilayer.layers[1].native_origin[0] += 2e-9;
+
+    assert_eq!(
+        fdm_multilayer_cuda_containment_reason_codes(true, "two_d_stack", &multilayer.layers),
+        vec![
+            FDM_CUDA_MULTILAYER_TWO_D_STACK_UNQUALIFIED,
+            FDM_CUDA_MULTILAYER_PUSH_PULL_UNQUALIFIED,
+            FDM_CUDA_MULTILAYER_HETEROGENEOUS_NATIVE_HZ_UNQUALIFIED,
+            FDM_CUDA_MULTILAYER_XY_OFFSET_UNQUALIFIED,
+        ]
+    );
+}
+
+#[test]
+fn cuda_multilayer_containment_exact_center_accepts_canonical_centered_extents() {
+    let mut ir = cuda_three_d_identity_multilayer_problem();
+    ir.problem_meta.runtime_metadata.remove("runtime_selection");
+    let GeometryEntryIR::Translate { base, .. } = &mut ir.geometry.entries[1] else {
+        panic!("stacked fixture reference geometry must be translated");
+    };
+    let GeometryEntryIR::Box { size, .. } = base.as_mut() else {
+        panic!("stacked fixture reference geometry must be a box");
+    };
+    size[0] = 20e-9;
+
+    let planned = plan(&ir).expect("CPU fixture must expose planner-resolved layer descriptors");
+    let BackendPlanIR::FdmMultilayer(multilayer) = planned.backend_plan else {
+        panic!("multi-body fixture must produce a multilayer plan");
+    };
+    assert_eq!(
+        fdm_multilayer_cuda_containment_reason_codes(true, "three_d", &multilayer.layers),
+        vec![FDM_CUDA_MULTILAYER_PUSH_PULL_UNQUALIFIED]
+    );
+}
+
+#[test]
+fn cpu_multilayer_preserves_two_d_push_pull_heterogeneous_hz_and_xy_offset() {
+    let mut cases = Vec::new();
+
+    let mut two_d_stack = cuda_three_d_identity_multilayer_problem();
+    let demag = two_d_stack
+        .backend_policy
+        .discretization_hints
+        .as_mut()
+        .and_then(|hints| hints.fdm.as_mut())
+        .and_then(|fdm| fdm.demag.as_mut())
+        .expect("CUDA fixture must provide demag hints");
+    demag.mode = "two_d_stack".to_string();
+    demag.common_cells = None;
+    demag.common_cells_xy = Some([20, 10]);
+    cases.push(two_d_stack);
+
+    let mut push_pull = cuda_three_d_identity_multilayer_problem();
+    let GeometryEntryIR::Translate { base, .. } = &mut push_pull.geometry.entries[1] else {
+        panic!("stacked fixture reference geometry must be translated");
+    };
+    let GeometryEntryIR::Box { size, .. } = base.as_mut() else {
+        panic!("stacked fixture reference geometry must be a box");
+    };
+    size[0] = 20e-9;
+    cases.push(push_pull);
+
+    let mut heterogeneous_hz = cuda_three_d_identity_multilayer_problem();
+    heterogeneous_hz
+        .backend_policy
+        .discretization_hints
+        .as_mut()
+        .and_then(|hints| hints.fdm.as_mut())
+        .expect("CUDA fixture must provide FDM hints")
+        .per_magnet = Some(BTreeMap::from([
+        (
+            "free".to_string(),
+            fullmag_ir::FdmGridHintsIR {
+                cell: [2e-9, 2e-9, 2e-9],
+            },
+        ),
+        (
+            "ref".to_string(),
+            fullmag_ir::FdmGridHintsIR {
+                cell: [2e-9, 2e-9, 1e-9],
+            },
+        ),
+    ]));
+    cases.push(heterogeneous_hz);
+
+    let mut xy_offset = cuda_three_d_identity_multilayer_problem();
+    let GeometryEntryIR::Translate { by, .. } = &mut xy_offset.geometry.entries[1] else {
+        panic!("stacked fixture reference geometry must be translated");
+    };
+    by[0] = 10e-9;
+    cases.push(xy_offset);
+
+    for mut ir in cases {
+        ir.problem_meta.runtime_metadata.remove("runtime_selection");
+        plan(&ir).expect("CPU multilayer containment scope must remain executable");
+    }
+}
+
 #[test]
 fn explicit_single_layer_multilayer_strategy_uses_multilayer_plan() {
     let mut ir = ProblemIR::bootstrap_example();
@@ -6684,6 +7102,7 @@ fn explicit_single_layer_multilayer_strategy_uses_multilayer_plan() {
         mode: "auto".to_string(),
         common_cells: None,
         common_cells_xy: None,
+        common_cell_size: None,
     });
 
     let planned = plan(&ir).expect("explicit multilayer strategy must be executable for L=1");
@@ -6695,6 +7114,79 @@ fn explicit_single_layer_multilayer_strategy_uses_multilayer_plan() {
         multilayer.planner_summary.requested_strategy,
         "multilayer_convolution"
     );
+}
+
+#[test]
+fn multilayer_planner_accepts_exactly_neutral_boundary_intent() {
+    for boundary_correction in [None, Some("none".to_string())] {
+        let mut ir = stacked_two_body_multilayer_problem();
+        let fdm = ir
+            .backend_policy
+            .discretization_hints
+            .as_mut()
+            .and_then(|hints| hints.fdm.as_mut())
+            .expect("stacked fixture must provide FDM hints");
+        fdm.boundary_correction = boundary_correction;
+        fdm.boundary_phi_floor = None;
+        fdm.boundary_delta_min = None;
+
+        plan(&ir).expect("neutral boundary intent must remain executable for multilayer FDM");
+    }
+}
+
+#[test]
+fn multilayer_planner_rejects_every_non_neutral_boundary_intent() {
+    let cases = [
+        ("boundary_correction=volume", Some("volume"), None, None),
+        ("boundary_correction=full", Some("full"), None, None),
+        ("boundary_phi_floor=0", None, Some(0.0), None),
+        ("boundary_phi_floor=positive", None, Some(0.1), None),
+        ("boundary_delta_min=0", None, None, Some(0.0)),
+        ("boundary_delta_min=positive", None, None, Some(1.0e-12)),
+    ];
+
+    for (case_name, boundary_correction, boundary_phi_floor, boundary_delta_min) in cases {
+        for explicit_single_layer in [false, true] {
+            let mut ir = if explicit_single_layer {
+                let mut ir = ProblemIR::bootstrap_example();
+                ir.backend_policy
+                    .discretization_hints
+                    .as_mut()
+                    .and_then(|hints| hints.fdm.as_mut())
+                    .expect("bootstrap example must provide FDM hints")
+                    .demag = Some(fullmag_ir::FdmDemagHintsIR {
+                    strategy: "multilayer_convolution".to_string(),
+                    mode: "auto".to_string(),
+                    common_cells: None,
+                    common_cells_xy: None,
+                    common_cell_size: None,
+                });
+                ir
+            } else {
+                stacked_two_body_multilayer_problem()
+            };
+            let fdm = ir
+                .backend_policy
+                .discretization_hints
+                .as_mut()
+                .and_then(|hints| hints.fdm.as_mut())
+                .expect("multilayer fixture must provide FDM hints");
+            fdm.boundary_correction = boundary_correction.map(str::to_string);
+            fdm.boundary_phi_floor = boundary_phi_floor;
+            fdm.boundary_delta_min = boundary_delta_min;
+
+            let error = plan(&ir).expect_err(
+                "multilayer FDM must reject boundary intent that its plan cannot preserve",
+            );
+            assert!(
+                error.reasons.iter().any(|reason| {
+                    reason.contains("boundary intent") && reason.contains("FdmMultilayerPlanIR")
+                }),
+                "case={case_name} explicit_single_layer={explicit_single_layer} errors={:?}",
+                error.reasons
+            );
+        }
+    }
 }
 
 #[test]
@@ -6711,6 +7203,7 @@ fn multilayer_planner_resolves_common_grid_modes_without_overriding_explicit_mod
         mode: "auto".to_string(),
         common_cells: Some([20, 10, 1]),
         common_cells_xy: None,
+        common_cell_size: None,
     });
     let planned = plan(&common_cells_auto).expect("common_cells auto mode should resolve");
     let BackendPlanIR::FdmMultilayer(multilayer) = planned.backend_plan else {
@@ -6732,6 +7225,7 @@ fn multilayer_planner_resolves_common_grid_modes_without_overriding_explicit_mod
         mode: "auto".to_string(),
         common_cells: None,
         common_cells_xy: Some([20, 10]),
+        common_cell_size: None,
     });
     let planned = plan(&common_cells_xy_auto).expect("common_cells_xy auto mode should resolve");
     let BackendPlanIR::FdmMultilayer(multilayer) = planned.backend_plan else {
@@ -6753,6 +7247,7 @@ fn multilayer_planner_resolves_common_grid_modes_without_overriding_explicit_mod
         mode: "two_d_stack".to_string(),
         common_cells: Some([20, 10, 1]),
         common_cells_xy: None,
+        common_cell_size: None,
     });
     let error = plan(&conflict).expect_err("common_cells must reject explicit two_d_stack");
     assert!(error
@@ -6798,6 +7293,7 @@ fn two_d_stack_fails_closed_for_native_thickness_without_moment_preserving_avera
         mode: "two_d_stack".to_string(),
         common_cells: None,
         common_cells_xy: Some([20, 10]),
+        common_cell_size: None,
     });
     let error = plan(&ir).expect_err("2D mode must not copy a native z slice");
     assert!(error
@@ -7069,19 +7565,14 @@ fn fem_adaptive_modes_and_geometry_guards_reach_native_plan_controls() {
 }
 
 #[test]
-fn native_cuda_multilayer_keeps_supported_non_heun_integrators() {
-    let mut ir = stacked_two_body_multilayer_problem();
+fn native_cuda_three_d_identity_multilayer_keeps_supported_non_heun_integrators() {
+    let mut ir = cuda_three_d_identity_multilayer_problem();
     let fullmag_ir::StudyIR::TimeEvolution { dynamics, .. } = &mut ir.study else {
         panic!("bootstrap study should be time evolution");
     };
     let fullmag_ir::DynamicsIR::Llg { integrator, .. } = dynamics;
     *integrator = "rk4".to_string();
-    ir.problem_meta.runtime_metadata.insert(
-        "runtime_selection".to_string(),
-        serde_json::json!({"device": "cuda"}),
-    );
-
-    let planned = plan(&ir).expect("native single-grid-compatible CUDA supports RK4");
+    let planned = plan(&ir).expect("native CUDA multilayer v2 supports three_d identity RK4");
     let BackendPlanIR::FdmMultilayer(plan) = planned.backend_plan else {
         panic!("expected multilayer plan");
     };
@@ -7237,6 +7728,19 @@ fn stacked_two_body_problem_lowers_to_multilayer_plan() {
         "runtime_selection".to_string(),
         serde_json::json!({"device": "cuda"}),
     );
+    let fdm = ir
+        .backend_policy
+        .discretization_hints
+        .as_mut()
+        .and_then(|hints| hints.fdm.as_mut())
+        .expect("stacked fixture must provide FDM hints");
+    fdm.demag = Some(fullmag_ir::FdmDemagHintsIR {
+        strategy: "multilayer_convolution".to_string(),
+        mode: "three_d".to_string(),
+        common_cells: Some([20, 10, 1]),
+        common_cells_xy: None,
+        common_cell_size: None,
+    });
     if let fullmag_ir::StudyIR::TimeEvolution {
         dynamics:
             fullmag_ir::DynamicsIR::Llg {
@@ -7295,13 +7799,34 @@ fn stacked_two_body_problem_lowers_to_multilayer_plan() {
         *integrator = "rk45".to_string();
         *fixed_timestep = Some(1e-13);
     }
-    let cuda_plan = plan(&ir).expect("native-stacked CUDA multilayer RK45 should lower");
-    match cuda_plan.backend_plan {
-        BackendPlanIR::FdmMultilayer(multilayer) => {
-            assert_eq!(multilayer.integrator, fullmag_ir::IntegratorChoice::Rk45);
-        }
-        other => panic!("expected FDM multilayer plan, got {other:?}"),
-    }
+    let explicit_error = plan(&ir).expect_err(
+        "explicit multilayer_convolution must not use the native single-grid fast path",
+    );
+    assert!(explicit_error
+        .reasons
+        .iter()
+        .any(|reason| { reason.contains("staged CUDA") && reason.contains("rk45") }));
+
+    ir.backend_policy
+        .discretization_hints
+        .as_mut()
+        .and_then(|hints| hints.fdm.as_mut())
+        .and_then(|fdm| fdm.demag.as_mut())
+        .expect("stacked fixture must provide demag hints")
+        .strategy = "auto".to_string();
+    let auto_plan = plan(&ir).expect("auto strategy preserves the legal native CUDA fast path");
+    let BackendPlanIR::FdmMultilayer(multilayer) = auto_plan.backend_plan else {
+        panic!("expected FDM multilayer plan");
+    };
+    assert_eq!(multilayer.integrator, fullmag_ir::IntegratorChoice::Rk45);
+
+    ir.backend_policy
+        .discretization_hints
+        .as_mut()
+        .and_then(|hints| hints.fdm.as_mut())
+        .and_then(|fdm| fdm.demag.as_mut())
+        .expect("stacked fixture must provide demag hints")
+        .strategy = "multilayer_convolution".to_string();
 
     ir.materials.push(fullmag_ir::MaterialIR {
         name: "CoFeB".to_string(),
@@ -7324,7 +7849,7 @@ fn stacked_two_body_problem_lowers_to_multilayer_plan() {
         *integrator = "rk23".to_string();
         *fixed_timestep = Some(1e-13);
     }
-    let staged = plan(&ir).expect("heterogeneous staged CUDA multilayer RK23 should lower");
+    let staged = plan(&ir).expect("heterogeneous-material CUDA multilayer RK23 should lower");
     match staged.backend_plan {
         BackendPlanIR::FdmMultilayer(multilayer) => {
             assert_eq!(multilayer.integrator, fullmag_ir::IntegratorChoice::Rk23);

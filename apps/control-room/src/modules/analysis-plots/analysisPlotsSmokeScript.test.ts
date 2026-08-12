@@ -8,6 +8,10 @@ const smokeScriptUrl = new URL(
   "../../../scripts/smoke-analysis-plots.mjs",
   import.meta.url,
 );
+const viewportSmokeScriptUrl = new URL(
+  "../../../scripts/smoke-viewport-3d-explorer-inspector-targets.mjs",
+  import.meta.url,
+);
 
 describe("analysis plots smoke script", () => {
   it("is registered and verifies the rendered chart surface", () => {
@@ -41,6 +45,16 @@ describe("analysis plots smoke script", () => {
     expect(smokeScript).toContain("verifyAnalysisInspectorSummary");
     expect(smokeScript).toContain("verifyLocalSeriesSelection");
     expect(smokeScript).toContain("verifyLocalRangeSelection");
+    expect(smokeScript).toContain("verifyResponsiveAnalysisFixtures");
+    expect(smokeScript).toContain("verifyReducedMotionAndKeyboardControls");
+    expect(smokeScript).toContain("[360, 640, 900, 1280]");
+    expect(smokeScript).toContain("document.documentElement.scrollWidth <= window.innerWidth + 1");
+    expect(smokeScript).toContain("X axis");
+    expect(smokeScript).toContain("Y axes");
+    expect(smokeScript).toContain("Select .+ row \\d+");
+    expect(smokeScript).toContain('data-status") === "refreshing"');
+    expect(smokeScript).toContain("Enter");
+    expect(smokeScript).toContain("Space");
     expect(smokeScript).toContain("verifyNoImplicitLiveRefresh");
     expect(smokeScript).toContain('.getByText(/^Dataset provenance:/)');
     expect(smokeScript).not.toContain('.locator(".fm-analysis-plots__header span")');
@@ -76,5 +90,18 @@ describe("analysis plots smoke script", () => {
     expect(smokeScript).not.toContain("Chart range");
     expect(smokeScript).not.toContain("Last 160 points");
     expect(smokeScript).not.toContain("setInterval");
+
+    const viewportSmokeScript = readFileSync(viewportSmokeScriptUrl, "utf8");
+    expect(viewportSmokeScript).toContain("verifyAnalysisViewportHandoff");
+    expect(viewportSmokeScript).toContain('targetSmokePhase === "analysis-handoff"');
+    expect(viewportSmokeScript).toContain("Frequency Response");
+    expect(viewportSmokeScript).toContain("Eigenmodes");
+    expect(viewportSmokeScript).toContain("Dispersion");
+    expect(viewportSmokeScript).toContain('getAttribute("data-state") === "active"');
+    expect(viewportSmokeScript).toContain(".fm-chart-section, .fm-analysis-plots__empty, [role='status']");
+    expect(viewportSmokeScript).toContain("assertHealthyCanvas");
+    expect(viewportSmokeScript).toContain("isContextLost()");
+    expect(viewportSmokeScript).toContain("drawingBufferWidth");
+    expect(viewportSmokeScript).toContain("drawingBufferHeight");
   });
 });

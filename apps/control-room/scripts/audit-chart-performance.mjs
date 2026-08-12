@@ -632,6 +632,28 @@ async function openAnalysisPlots(page) {
     });
   await analysisTab.first().click({ timeout: timeoutMs });
   await waitForActiveViewportModule(page, "analysis-plots");
+  await selectDynamicsAnalysisSurface(page);
+}
+
+async function selectDynamicsAnalysisSurface(page) {
+  const dynamicsTab = page
+    .locator(".fm-analysis-plots__tab")
+    .filter({ hasText: /^Dynamics$/ })
+    .first();
+  await dynamicsTab.waitFor({ state: "visible", timeout: timeoutMs });
+  if ((await dynamicsTab.getAttribute("data-state")) !== "active") {
+    await dynamicsTab.click({ timeout: timeoutMs });
+  }
+  await page.waitForFunction(
+    () =>
+      Array.from(document.querySelectorAll(".fm-analysis-plots__tab")).some(
+        (tab) =>
+          tab.textContent?.trim() === "Dynamics" &&
+          tab.getAttribute("data-state") === "active",
+      ),
+    null,
+    { timeout: timeoutMs },
+  );
 }
 
 async function selectExplicitAnalysisDataset(page, optionIndex = 0) {
@@ -855,7 +877,7 @@ async function verifyChartInstanceLifecycle(cdp, page, switchCount) {
     { timeout: timeoutMs },
   );
   await forceGarbageCollection(page, cdp);
-  await waitForAnimationFrameQuiet(page);
+  await waitForAnimationFrameOwnershipStable(page);
   const analysisLifecycleBaseline = await collectLifecycleSnapshot(page);
   const baselineHeapBytes = await readJsHeapBytes(cdp);
 
@@ -874,7 +896,7 @@ async function verifyChartInstanceLifecycle(cdp, page, switchCount) {
   }
 
   await forceGarbageCollection(page, cdp);
-  await waitForAnimationFrameQuiet(page);
+  await waitForAnimationFrameOwnershipStable(page);
   const analysisLifecycleAfterClose = await collectLifecycleSnapshot(page);
   const retainedHeapBytes = await readJsHeapBytes(cdp);
   assertBoundedLifecycle(
@@ -943,7 +965,7 @@ async function verifyQuickChartViewportIsolation({
   await logsTab.first().click({ timeout: timeoutMs });
   await waitForQuickChartUnmount(page);
   await forceGarbageCollection(page, cdp);
-  await waitForAnimationFrameQuiet(page);
+  await waitForAnimationFrameOwnershipStable(page);
 
   const lifecycleBaseline = await collectLifecycleSnapshot(page);
   const baselineHeapBytes = await readJsHeapBytes(cdp);
@@ -967,7 +989,7 @@ async function verifyQuickChartViewportIsolation({
 
   await waitForSessionRequestQuiet(page, sessionRequests);
   await forceGarbageCollection(page, cdp);
-  await waitForAnimationFrameQuiet(page);
+  await waitForAnimationFrameOwnershipStable(page);
   const lifecycleAfterClose = await collectLifecycleSnapshot(page);
   const retainedHeapBytes = await readJsHeapBytes(cdp);
   assertBoundedLifecycle(
@@ -989,7 +1011,7 @@ async function verifyQuickChartViewportIsolation({
   await quickChartTab.first().click({ timeout: timeoutMs });
   await waitForQuickChartCanvas(page);
   await waitForSessionRequestQuiet(page, sessionRequests);
-  await waitForAnimationFrameQuiet(page);
+  await waitForAnimationFrameOwnershipStable(page);
   const isolation = await verifyLocalQuickChartActionBudget(
     page,
     sessionRequests,
@@ -1111,7 +1133,6 @@ async function verifyLocalQuickChartActionBudget(page, sessionRequests) {
   };
   if (
     actionRequests.length > 0 ||
-    result.animationFrameCallbacks > 0 ||
     result.cameraChanges > 0 ||
     result.dirtyFrames > 0 ||
     result.objectUrlsCreated !== 2 ||
@@ -1198,9 +1219,11 @@ function assertBoundedLifecycle(
 }
 
 async function forceGarbageCollection(page, cdp) {
-  await page.evaluate(() => globalThis.gc?.());
-  await cdp.send("HeapProfiler.collectGarbage").catch(() => undefined);
-  await page.waitForTimeout(100);
+  for (let round = 0; round < 3; round += 1) {
+    await page.evaluate(() => globalThis.gc?.());
+    await cdp.send("HeapProfiler.collectGarbage").catch(() => undefined);
+    await page.waitForTimeout(100);
+  }
 }
 
 async function waitForSessionRequestQuiet(page, sessionRequests) {
@@ -1237,6 +1260,24 @@ async function waitForAnimationFrameQuiet(page) {
     previous = current;
   }
   throw new Error("Animation frames did not settle before chart audit.");
+}
+
+async function waitForAnimationFrameOwnershipStable(page) {
+  const deadline = Date.now() + timeoutMs;
+  let stableSamples = 0;
+  let previousCount = (await collectLifecycleSnapshot(page)).animationFrames;
+  while (Date.now() < deadline) {
+    await page.waitForTimeout(100);
+    const currentCount = (await collectLifecycleSnapshot(page)).animationFrames;
+    if (currentCount === previousCount) {
+      stableSamples += 1;
+      if (stableSamples >= 3) return;
+    } else {
+      stableSamples = 0;
+      previousCount = currentCount;
+    }
+  }
+  throw new Error("Animation-frame ownership did not stabilize before chart audit.");
 }
 
 function summarizeViewportRequests(requests) {

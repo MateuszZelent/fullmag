@@ -80,7 +80,7 @@ study = fm.study("interfacial_dmi_uniform_zero_test")
 study.engine("fdm")
 study.device("cpu", precision="double")
 study.mode("strict")
-study.fdm(default_cell=(2 * nm, 2 * nm, 2 * nm))
+study.objects.mesh.defaults(cell_size=(2 * nm, 2 * nm, 2 * nm))
 
 # %% Geometry, material, uniform state, and isolated DMI term
 film = study.geometry(

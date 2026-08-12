@@ -4,7 +4,103 @@
 **Repozytorium:** `/home/kkingstoun/git/fullmag/fullmag`  
 **Audytowany commit:** `15ab7482b0b6f5735684fb3bf7a51f155c778860`  
 **Zakres:** frontend Control Room, R3F/Drei/Three.js, obrót, panorama, zoom, tłumienie, auto-fit, projekcja, synchronizacja lokalna i zdalna, demand rendering oraz testy wydajnościowe.  
-**Status:** przyczyna architektoniczna zidentyfikowana; regresja wheel zoom potwierdzona w repozytoryjnym smoke; ręczna kwalifikacja interaktywna zablokowana przez most przeglądarki. Nie wdrażano poprawki.
+**Status:** zamknięty. Wszystkie P0/P1/P2 z tego audytu są naprawione, automatyczne bramki przechodzą, a użytkownik potwierdził ręcznie brak cofania kamery podczas orbitowania, panoramy i zoomu.
+
+## 0. Reaudyt po wdrożeniu naprawy
+
+### 0.1. Zakres i wynik
+
+Reaudyt wykonano na gałęzi `fix/viewport-camera-ownership` po commicie
+`defc02fef` (`fix: synchronize settled camera snapshots`). Historyczne ustalenia
+poniżej pozostają opisem stanu z commitu `15ab7482b0b6f5735684fb3bf7a51f155c778860`;
+nie należy ich interpretować jako opis bieżącej implementacji.
+
+Wynik implementacyjny: **wszystkie osiem problemów P0/P1/P2 zostało
+naprawionych**. Kamera Three.js i Drei `OrbitControls` jest jedynym właścicielem
+pozycji w trakcie gestu, każdy gest ma epokę `latest-wins`, zdalny snapshot i
+zmiana bounds nie mogą nadpisać aktywnego ruchu, a po settle wykonywany jest
+jeden zaakceptowany commit. Store otrzymuje wyłącznie końcowy kanoniczny
+snapshot przyjęty przez registry; nie steruje trajektorią pośrednią.
+
+### 0.2. Zamknięcie ustaleń priorytetowych
+
+| Ustalenie | Status | Wdrożone rozwiązanie | Dowód |
+|---|---|---|---|
+| P0-1: OrbitControls poza lifecycle registry | zamknięte | orbit, pan i wheel otwierają tę samą epokę gestu w lokalnym guardzie i `CameraRegistryController`; starsze callbacki nie mogą zakończyć nowszego gestu | `a6ab27e8d`, `b6d58b8bd`, testy `viewport3DCameraGesture` i `CameraRegistryController` |
+| P0-2: pętla registry → store → R3F | zamknięte | renderer czyta kanoniczną kamerę registry; usunięto bezwarunkowy mirror; store jest aktualizowany raz dopiero po zaakceptowaniu końcowego patcha registry | `b6d58b8bd`, `defc02fef`, browser gate live/registry/store |
+| P0-3: auto-fit w środku gestu | zamknięte | asynchroniczna zmiana bounds jest ignorowana podczas aktywnego gestu; jawny Fit/Reset najpierw anuluje bieżącą epokę | `6706999da`, testy guardu bounds oraz Fit/Reset |
+| P1-1: dwa lifecycle wheel | zamknięte | usunięto własne capture listenery i timeout 150 ms; wheel/dolly należy wyłącznie do Drei `OrbitControls` | `bb09aadd2`, browser smoke perspective i orthographic |
+| P1-2: timer bez bariery wersji | zamknięte | każdy delayed settle/commit przenosi epokę; callback starszej epoki jest odrzucany | `a6ab27e8d`, test „stale gesture” |
+| P1-3: snap-back do persisted shadow | zamknięte | `endInteraction()` nie przywraca opóźnionego `persistedShadow`; finalna lokalna pozycja wygrywa z remote revision przyjętą w trakcie gestu | `b6d58b8bd`, test „keeps the final local pose when a newer remote revision arrives during the gesture” |
+| P2-1: absolutne, niespójne tolerancje | zamknięte | porównania pozycji i targetu używają tolerancji zależnej od odległości camera-target/skali sceny; próg minimalny chroni sceny nanometrowe | `4d9d72209`, testy `viewport3DCameraState` |
+| P2-2: brak pomiaru trajektorii | zamknięte | dodano ograniczony do trybu audit probe klatkowy: epoch, aktywność, live camera/target, registry, store, persisted shadow i wersje; browser gate odrzuca krok wstecz >15% i więcej niż jeden commit | `3cae5b7e2`, `c48da33d4`, `defc02fef` |
+
+### 0.3. Macierz kryteriów zamknięcia
+
+| # | Kryterium z sekcji 11 | Wynik | Dowód bieżącego stanu |
+|---:|---|---|---|
+| 1 | orbit ≥2 s bez cofnięcia i auto-fit | PASS automatyczny, dowód warstwowy | smoke utrzymuje pointer przez 18 × 120 ms = 2,16 s; trajektoria nie może wykazać kroku wstecz >15%; field hold obejmuje cały gest, a osobne testy wymuszają remote revision i zmianę bounds |
+| 2 | right-pan z monotonicznym target i position | PASS automatyczny | browser smoke: faza pan przeszła, `viewportFrameDelta=3`, trajectory gate bez odwrócenia kierunku |
+| 3 | perspective i orthographic wheel: ruch wieloklatkowy, jeden commit | PASS automatyczny | perspective `viewportFrameDelta=7`; projekcja ortograficzna przeszła ten sam gate; dla każdej epoki wymagany dokładnie jeden `committedVersion` |
+| 4 | deterministyczne projection/Fit/Reset/ViewCube | PASS kontraktowy i runtime projection | projection round-trip PASS; testy wymagają anulowania aktywnej epoki przez komendy i wyłączenia OrbitControls przed pointer-down HUD |
+| 5 | zero requestów data/model/meshing/visualization podczas gestu | PASS runtime | smoke: `visualization_state_patches=0`, `background_resource_requests=0`; audyt bezczynności także wymaga pustej listy requestów |
+| 6 | zgodność live camera, target, store i registry po settle | PASS runtime | `assertSettledCameraSnapshotsAgree()` porównuje position/target/up przy wspólnej tolerancji skalowej i przerywa smoke przy rozbieżności |
+| 7 | zero klatek po wyciszeniu | PASS runtime | `audit:viewport-3d-memory-churn`: 5 s idle, wymagane `frames +0`, `drawCalls +0`, zero resource requests; przebieg PASS |
+| 8 | widoczny canvas, zdrowy WebGL i niezerowy drawing buffer | PASS runtime | smoke: `contextLost=false`, drawing buffer `617×478`; canvas przeszedł kontrolę niepustego obrazu |
+| 9 | remote revision i bounds update w środku gestu | PASS automatyczny, dowód warstwowy | registry zachowuje finalną lokalną pozycję mimo nowszej remote revision; osobny test efektu auto-fit wymaga guardu aktywnego gestu i braku zapisu store/registry; oba przypadki współdzielą tę samą epokę/guard |
+| 10 | ręczna próba bez cofnięcia | PASS operatorski | użytkownik potwierdził 2026-08-11, że orbitowanie, panorama i zoom działają bez cofania kamery |
+
+Wszystkie kryteria 1–10 są spełnione: 1–9 mają dowód automatyczny, a kryterium 10
+ma niezależne potwierdzenie operatorskie na docelowym stanowisku i urządzeniu
+wejściowym.
+
+### 0.4. Świeże dowody wykonawcze
+
+Końcowy zestaw regresyjny:
+
+```text
+Pełny Control Room:
+Test Files  516 passed (516)
+Tests       4974 passed (4974)
+
+Zawężona regresja kamery:
+Test Files  10 passed (10)
+Tests       318 passed (318)
+```
+
+Przechodzą również:
+
+- `pnpm --dir apps/control-room typecheck`;
+- `pnpm --dir apps/control-room audit:idle-performance`;
+- `pnpm --dir apps/control-room audit:viewport-3d-memory-churn` — 120
+  przełączeń pól, liczba geometrii `2 -> 2`, pięć sekund bezczynności bez klatek,
+  draw calli i requestów;
+- `pnpm --dir apps/control-room audit:viewport-3d-fem-topology-uploads` — 12
+  konfiguracji FEM: 1/10/100 części × surface/wireframe/points/all;
+- repozytoryjny smoke FDM/Chromium — orbit, pan, perspective wheel,
+  orthographic wheel, projection round-trip, nieutracony WebGL i niezerowy
+  drawing buffer;
+- React Doctor: `90/100`, 21 zmienionych plików, brak zgłoszonych problemów.
+
+Pełny disposable smoke doszedł poza fazy kamery i projekcji, a następnie zatrzymał
+się w niezależnym przepływie Geometry na odpowiedzi `400 model/transactions`.
+Nie jest to regresja kamery i nie osłabia przechodzących bramek viewportu, ale nie
+jest też przedstawiane jako zielony test całego Control Room.
+
+### 0.5. Commity naprawy
+
+```text
+4d9d72209 fix: scale viewport camera comparisons
+a6ab27e8d fix: make camera gestures epoch based
+b6d58b8bd fix: prevent stale camera registry commits
+bb09aadd2 fix: unify orbit controls camera lifecycle
+6706999da fix: cancel stale camera gestures on commands
+3cae5b7e2 test: expose bounded camera trajectory audit
+c48da33d4 test: gate viewport camera trajectory
+5b0c0df9f test: repair viewport runtime qualification
+3f389ab7b test: align viewport fixture autosave
+defc02fef fix: synchronize settled camera snapshots
+```
 
 ## 1. Werdykt
 

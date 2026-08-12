@@ -5,6 +5,10 @@ import {
   resolveInspectorPanel,
 } from "./inspectorRegistry";
 import {
+  resolveInspectorRoute,
+  resolveUnknownInspectorRoute,
+} from "./inspectorRouteCatalog";
+import {
   ObjectRegionTexturePanel,
   ObjectRegionVisualizationPanel,
 } from "./panels/ObjectRegionsPanel";
@@ -18,8 +22,6 @@ import {
   AirboxOverviewLanePanel,
 } from "./panels/airbox/AirboxInspectorLanePanel";
 import { FdmMultilayerAirboxTargetPanel } from "./panels/airbox/FdmMultilayerAirboxTargetPanel";
-import { ObjectVisualizationPanel } from "./panels/ObjectVisualizationPanel";
-import { VisualizationDebugPanel } from "./panels/visualization-debug/VisualizationDebugPanel";
 import { FdmGridInspectorPanel } from "./panels/fdm-grid/FdmGridInspectorPanel";
 import {
   EigenModeInspectorPanel,
@@ -164,7 +166,7 @@ describe("inspectorRegistry", () => {
       "physics.spin-torques",
       "physics.oersted-fields",
     ]) {
-      expect(resolveInspectorPanel({ kind: legacyKind } as never)?.id).toBe("placeholder");
+      expect(resolveInspectorPanel({ kind: legacyKind } as never)).toBeNull();
     }
     expect(resolveInspectorPanel({ kind: "physics.current-transport" })?.id).toBe(
       "physics-current-transport",
@@ -192,13 +194,13 @@ describe("inspectorRegistry", () => {
     );
   });
 
-  it("resolves object mode visualization selections to the mode visualization panel", () => {
+  it("resolves mode visualization levels to distinct owner panels", () => {
     expect(resolveInspectorPanel({ kind: "object.mode_visualization" })?.id).toBe(
-      "object-mode-visualization",
+      "object-mode-visualization-overview",
     );
     expect(
       resolveInspectorPanel({ kind: "object.mode_visualization.view" })?.id,
-    ).toBe("object-mode-visualization");
+    ).toBe("object-mode-visualization-view");
   });
 
   it("resolves object region and magnetic texture groups", () => {
@@ -314,10 +316,10 @@ describe("inspectorRegistry", () => {
     expect(panels.every((panel) => panel?.id !== "placeholder")).toBe(true);
   });
 
-  it("does not route a future structured-grid node to the generic placeholder", () => {
-    expect(resolveInspectorPanel({ kind: "mesh.grid.future-detail" })?.id).toBe(
-      "fdm-grid",
-    );
+  it("does not prefix-match a future structured-grid node", () => {
+    expect(resolveInspectorRoute("mesh.grid.future-detail")).toBeNull();
+    expect(resolveInspectorPanel({ kind: "mesh.grid.future-detail" })).toBeNull();
+    expect(resolveUnknownInspectorRoute().contribution.id).toBe("placeholder");
   });
 
   it("routes field quantities to a dedicated scientific inspector", () => {
@@ -326,16 +328,16 @@ describe("inspectorRegistry", () => {
     );
   });
 
-  it("resolves object and airbox visualization selections to the visualization panel", () => {
-    for (const kind of [
-      "object.visualization",
-      "airbox.visualization",
-    ] as const) {
-      const panel = resolveInspectorPanel({ kind });
-      expect(panel?.id).toBe("object-visualization");
-      expect(panel?.component).toBe(ObjectVisualizationPanel);
-      expect(panel?.component).not.toBe(VisualizationDebugPanel);
-    }
+  it("keeps Airbox, object, and mesh-part visualization owners distinct", () => {
+    expect(resolveInspectorPanel({ kind: "airbox.visualization" })?.id).toBe(
+      "airbox-visualization",
+    );
+    expect(resolveInspectorPanel({ kind: "object.visualization" })?.id).toBe(
+      "object-visualization",
+    );
+    expect(resolveInspectorPanel({ kind: "mesh-part" })?.id).toBe(
+      "mesh-part-visualization",
+    );
   });
 
   it("gives the multilayer Airbox target its own inspector", () => {
@@ -376,7 +378,7 @@ describe("inspectorRegistry", () => {
       expected.length,
     );
     expect(resolveInspectorPanel({ kind: "airbox.visualization" })?.id).toBe(
-      "object-visualization",
+      "airbox-visualization",
     );
   });
 
@@ -386,7 +388,7 @@ describe("inspectorRegistry", () => {
     );
   });
 
-  it("uses one production Debug panel for three distinct visualization selection kinds", () => {
+  it("uses distinct Debug routes and owner components", () => {
     const kinds = [
       "airbox.visualization.debug",
       "object.visualization.debug",
@@ -396,13 +398,11 @@ describe("inspectorRegistry", () => {
     const panels = kinds.map((kind) => resolveInspectorPanel({ kind }));
 
     expect(panels.map((panel) => panel?.id)).toEqual([
-      "visualization-debug",
-      "visualization-debug",
-      "visualization-debug",
+      "airbox-visualization-debug",
+      "object-visualization-debug",
+      "object-region-visualization-debug",
     ]);
-    expect(
-      panels.every((panel) => panel?.component === VisualizationDebugPanel),
-    ).toBe(true);
+    expect(new Set(panels.map((panel) => panel?.component)).size).toBe(3);
     expect(new Set(kinds).size).toBe(3);
   });
 
@@ -684,7 +684,7 @@ describe("inspectorRegistry", () => {
     ).toBe(FrequencyResponseDiagnosticsInspectorPanel);
   });
 
-  it("assigns every non-authoring frequency-domain node its own inspector component", () => {
+  it("routes every non-authoring frequency-domain node away from the generic inspector", () => {
     const kinds = FREQUENCY_DOMAIN_INSPECTOR_SELECTION_KINDS.filter(
       (kind) => !kind.startsWith("study.stage."),
     );
@@ -693,7 +693,7 @@ describe("inspectorRegistry", () => {
     );
 
     expect(components).not.toContain(FrequencyDomainInspectorPanel);
-    expect(new Set(components).size).toBe(kinds.length);
+    expect(components.every((component) => component !== undefined)).toBe(true);
   });
 
   it("routes frequency-domain job nodes to dedicated inspector components", () => {

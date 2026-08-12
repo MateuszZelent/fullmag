@@ -79,7 +79,7 @@ study = fm.study("fdm_continuation_target")
 study.engine("fdm")
 study.device("cpu", precision="double")
 study.mode("strict")
-study.fdm(default_cell=(2 * nm, 2 * nm, 5 * nm))
+study.objects.mesh.defaults(cell_size=(2 * nm, 2 * nm, 5 * nm))
 film = study.geometry(fm.Box(size=(100 * nm, 20 * nm, 5 * nm), name="film"), name="film")
 film.Ms = 8.0e5
 film.Aex = 1.3e-11

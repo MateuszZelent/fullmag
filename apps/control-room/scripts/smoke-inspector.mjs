@@ -6,6 +6,7 @@ const outputDir = resolve(
   process.cwd(),
   process.env.CONTROL_ROOM_INSPECTOR_REPORT_DIR ?? ".fullmag/reports/inspector-2-browser",
 );
+const fixture = createInspectorFixture();
 
 async function loadPlaywright() {
   try {
@@ -46,10 +47,29 @@ page.on("request", (request) => {
   }
 });
 
+await page.addInitScript((baseUrl) => {
+  window.__FULLMAG_CONFIG__ = {
+    ...(window.__FULLMAG_CONFIG__ ?? {}),
+    allowMissingSessionSmoke: true,
+    controlRoomApiBase: baseUrl,
+    disableRealtime: true,
+  };
+}, new URL(workspaceUrl).origin);
+await installInspectorFixtureApi(page, fixture);
+
 try {
-  await page.goto(workspaceUrl, { waitUntil: "networkidle", timeout: 60_000 });
+  await page.goto(workspaceUrl, { waitUntil: "domcontentloaded", timeout: 60_000 });
   const inspector = page.locator(".fm-inspector");
-  await inspector.waitFor({ state: "visible" });
+  try {
+    await inspector.waitFor({ state: "visible", timeout: 30_000 });
+  } catch (error) {
+    const bodyText = await page.locator("body").textContent();
+    throw new Error(
+      `Inspector did not mount. Fixture requests: ${JSON.stringify(fixture.requests.slice(-40))}. Browser errors: ${JSON.stringify(consoleErrors)}. Body text: ${JSON.stringify(bodyText?.slice(0, 3000))}. ${error}`,
+    );
+  }
+  await qualifyExplorerKeyboardNavigation(page);
+  await qualifyInspectorRoutingMatrix(page, inspector);
 
   const visualizationNode = page
     .locator('[role="treeitem"]')
@@ -90,6 +110,7 @@ try {
   );
 
   const geometry = await overview.evaluate((element) => {
+    const frame = element.querySelector('[data-slot="inspector-overview-frame"]') ?? element;
     const labels = Array.from(
       element.querySelectorAll('[data-slot="inspector-property-label"]'),
     );
@@ -105,11 +126,11 @@ try {
     const segmentedItems = Array.from(
       element.querySelectorAll('[data-slot="segmented-control-item"]'),
     );
-    const overviewRect = element.getBoundingClientRect();
+    const overviewRect = frame.getBoundingClientRect();
     const segmentedRect = segmented?.getBoundingClientRect();
     return {
       groupShadows: groups.map((group) => getComputedStyle(group).boxShadow),
-      groupSpacing: Number.parseFloat(getComputedStyle(element).rowGap),
+      groupSpacing: Number.parseFloat(getComputedStyle(frame).rowGap),
       labelSizes: labels.map((label) => Number.parseFloat(getComputedStyle(label).fontSize)),
       controlHeights: controls.map((control) => ({
         className: control.className,
@@ -153,7 +174,10 @@ try {
 
   const panel = page.getByTestId("panel-right");
   const resizeHandle = page.getByRole("separator", { name: /Inspector/ }).last();
-  const visibleToggle = overview.getByRole("button", { name: "Visible", exact: true });
+  const visibleToggle = overview.getByRole("button", {
+    name: "Toggle target visibility",
+    exact: true,
+  });
   const resetButton = panel.getByRole("button", { name: "Reset", exact: true });
   const initialVisible = (await visibleToggle.getAttribute("aria-pressed")) === "true";
   if (!initialVisible) {
@@ -213,11 +237,12 @@ try {
   await page.waitForTimeout(100);
   const controlsGeometry = await overview.evaluate((element) => {
     const segmented = element.querySelector('[data-slot="segmented-control"]');
-    const quantity = element.querySelector('select[aria-label="Quantity source"]');
+    const quantity = element.querySelector('select[aria-label="Quantity Source"]');
+    const renderMode = element.querySelector('[role="radiogroup"][aria-label="Render mode"]');
     return {
       overview: element.getBoundingClientRect().toJSON(),
       quantity: quantity?.getBoundingClientRect().toJSON() ?? null,
-      segmented: segmented?.getBoundingClientRect().toJSON() ?? null,
+      segmented: (renderMode ?? segmented)?.getBoundingClientRect().toJSON() ?? null,
     };
   });
   assert(
@@ -244,9 +269,10 @@ try {
   screenshotFiles.push(surfaceFile);
   await surfaceDisclosure.click();
 
-  const vectorsToggle = overview
-    .locator(".fm-visualization-toggle")
-    .filter({ hasText: /^Vectors$/ });
+  const vectorsToggle = overview.getByRole("button", {
+    name: "Toggle vector field arrows",
+    exact: true,
+  });
   if ((await vectorsToggle.getAttribute("aria-pressed")) !== "true") {
     await vectorsToggle.click();
     await page.waitForTimeout(150);
@@ -308,24 +334,22 @@ try {
     document.documentElement.dataset.theme = "light";
   });
   const renderModeControl = overview.locator(
-    '[data-slot="segmented-control"][aria-label="Display mode"]',
+    '[role="radiogroup"][aria-label="Render mode"]',
   );
   const initialRenderMode = await renderModeControl
-    .locator('[data-slot="segmented-control-item"][data-state="checked"]')
-    .getAttribute("data-value");
+    .locator('[role="radio"][aria-checked="true"]')
+    .getAttribute("aria-label");
   assert(
     (await overview.getByRole("button", { name: /^(Surface|Wireframe|Points)$/ }).count()) === 0,
     "Drawable passes must not have duplicate toggle buttons beside Display mode.",
   );
   const vectorsBeforeOff = await vectorsToggle.getAttribute("aria-pressed");
-  await renderModeControl
-    .locator('[data-slot="segmented-control-item"][data-value="off"]')
-    .click();
+  await renderModeControl.getByRole("radio", { name: "Off", exact: true }).click();
   await page.waitForTimeout(500);
   assert(
     (await renderModeControl
-      .locator('[data-slot="segmented-control-item"][data-state="checked"]')
-      .getAttribute("data-value")) === "off",
+      .locator('[role="radio"][aria-checked="true"]')
+      .getAttribute("aria-label")) === "Off",
     "Display mode did not remain Off after the resource update settled.",
   );
   assert(
@@ -333,9 +357,7 @@ try {
     "Display mode Off changed the independent Vectors overlay.",
   );
   if (initialRenderMode && initialRenderMode !== "off") {
-    await renderModeControl
-      .locator(`[data-slot="segmented-control-item"][data-value="${initialRenderMode}"]`)
-      .click();
+    await renderModeControl.getByRole("radio", { name: initialRenderMode, exact: true }).click();
     await page.waitForTimeout(200);
   }
   if ((await visibleToggle.getAttribute("aria-pressed")) === "true") {
@@ -355,13 +377,15 @@ try {
   const disabledFile = "visualization-overview-light-disabled-416.png";
   await panel.screenshot({ path: resolve(outputDir, disabledFile) });
   screenshotFiles.push(disabledFile);
-  await resetButton.click();
+  if (!(await resetButton.isDisabled())) {
+    await resetButton.click();
+  }
   await page.waitForTimeout(150);
   assert(await resetButton.isDisabled(), "Visualization Reset did not restore the applied baseline.");
   assert(
     (await renderModeControl
-      .locator('[data-slot="segmented-control-item"][data-state="checked"]')
-      .getAttribute("data-value")) === initialRenderMode,
+      .locator('[role="radio"][aria-checked="true"]')
+      .getAttribute("aria-label")) === initialRenderMode,
     "Visualization Reset changed the initial render mode.",
   );
 
@@ -378,19 +402,19 @@ try {
   screenshotFiles.push(degradedFile);
 
   const segmentedItem = renderModeControl
-    .locator('[data-slot="segmented-control-item"][data-state="checked"]')
+    .locator('[role="radio"][aria-checked="true"]')
     .first();
-  const initialFocusedMode = await segmentedItem.getAttribute("data-value");
+  const initialFocusedMode = await segmentedItem.getAttribute("aria-label");
   await segmentedItem.focus();
-  await segmentedItem.press("ArrowRight");
+  await segmentedItem.press("Tab");
   await page.waitForTimeout(200);
   assert(
-    (await page.evaluate(() =>
-      document.activeElement?.getAttribute("data-value"),
-    )) !== initialFocusedMode,
-    "Render Mode focus did not respond to keyboard navigation.",
+    await page.evaluate(() => document.activeElement?.getAttribute("aria-label")) !== initialFocusedMode,
+    "Render Mode controls did not respond to keyboard focus navigation.",
   );
-  await resetButton.click();
+  if (!(await resetButton.isDisabled())) {
+    await resetButton.click();
+  }
 
   const headerTop = await inspector.locator(".fm-inspector__header").boundingBox();
   const actionsTop = await inspector.locator(".fm-inspector__action-bar").boundingBox();
@@ -411,7 +435,7 @@ try {
   assert(stableHeader?.y === headerTop?.y, "Inspector header moved with content scroll.");
   assert(stableActions?.y === actionsTop?.y, "Inspector action bar moved with content scroll.");
 
-  await page.reload({ waitUntil: "networkidle", timeout: 60_000 });
+  await page.reload({ waitUntil: "domcontentloaded", timeout: 60_000 });
   await inspector.waitFor({ state: "visible" });
   const objectNode = page
     .locator('[role="treeitem"]')
@@ -508,4 +532,773 @@ try {
   );
 } finally {
   await browser.close();
+}
+
+async function qualifyInspectorRoutingMatrix(page, inspector) {
+  await selectInspectorNode(page, inspector, "model:airbox:visualization", {
+    owner: "airbox-visualization",
+    label: "Airbox",
+  });
+  await selectInspectorNode(page, inspector, "model:object:film:visualization", {
+    owner: "object-visualization",
+    label: "Film",
+  });
+  await selectInspectorNode(page, inspector, "model:mesh:unassigned:orphan-part", {
+    owner: "mesh-part-visualization",
+    label: "Orphan Mesh Part",
+  });
+
+  const resultsTab = page
+    .locator(".fm-explorer .fm-tabs-trigger")
+    .filter({ hasText: /^Results$/ });
+  await resultsTab.click();
+  await expandInspectorNode(page, "results:root");
+  await expandInspectorNode(page, "results:frequency-domain");
+  await expandInspectorNode(page, "results:frequency-domain:fmr");
+
+  const responseSweepNode = page.locator(
+    '[data-node-id="results:frequency-domain:fmr:response-sweep"]',
+  );
+  await responseSweepNode.waitFor({ state: "visible", timeout: 60_000 });
+  await responseSweepNode.click();
+  const responseOwner = await inspector.getAttribute("data-inspector-owner");
+  const inspectResponseButton = inspector.getByRole("button", {
+    name: "Inspect response point 7",
+  });
+  await inspectResponseButton.focus();
+  await inspectResponseButton.press("Space");
+  await page.waitForFunction(
+    (previousOwner) =>
+      document.querySelector(".fm-inspector")?.getAttribute("data-inspector-owner") !== previousOwner,
+    responseOwner,
+    { timeout: 60_000 },
+  );
+
+  await expandInspectorNode(page, "results:eigen");
+  await expandInspectorNode(page, "results:eigen:branches");
+  const branchNode = page.locator(
+    '[data-node-id="results:eigen:branches:branch:branch-0"]',
+  );
+  await branchNode.waitFor({ state: "visible", timeout: 60_000 });
+  await branchNode.click();
+  const branchOwner = await inspector.getAttribute("data-inspector-owner");
+  const openBranchModeButton = inspector.getByRole("button", {
+    name: "Open sample 0 mode 2",
+  });
+  await openBranchModeButton.focus();
+  await openBranchModeButton.press("Enter");
+  await page.waitForFunction(
+    (previousOwner) =>
+      document.querySelector(".fm-inspector")?.getAttribute("data-inspector-owner") !== previousOwner,
+    branchOwner,
+    { timeout: 60_000 },
+  );
+
+  const modalSpectrumNode = page.locator(
+    '[data-node-id="results:frequency-domain:fmr:modal-spectrum"]',
+  );
+  await modalSpectrumNode.waitFor({ state: "visible", timeout: 60_000 });
+  await modalSpectrumNode.click();
+  const plotButton = inspector.getByRole("button", { name: /Plot .*3D/ }).first();
+  await plotButton.waitFor({ state: "visible", timeout: 60_000 });
+  assert(await plotButton.isEnabled(), "Mode visualization Plot 3D action is disabled.");
+  await plotButton.focus();
+  await plotButton.press("Enter");
+
+  const modelTab = page
+    .locator(".fm-explorer .fm-tabs-trigger")
+    .filter({ hasText: /^Model$/ });
+  await modelTab.click();
+  await expandInspectorNode(page, "model:objects");
+  await expandInspectorNode(page, "model:object:film");
+  await expandInspectorNode(page, "model:object:film:visualization");
+  await selectInspectorNode(page, inspector, "model:object:film:visualization:mode-visualization", {
+    owner: "object-mode-visualization-overview",
+    label: "Film",
+  });
+  await assertHealthyViewportCanvas(page, "mode visualization");
+
+  await selectInspectorNode(page, inspector, "model:object:film:visualization", {
+    owner: "object-visualization",
+    label: "Film after mode return",
+  });
+  await assertHealthyViewportCanvas(page, "return to object viewport");
+}
+
+async function qualifyExplorerKeyboardNavigation(page) {
+  const tree = page.locator('[role="tree"][aria-label="Explorer tree"]').first();
+  const session = tree.locator('[data-node-id="model:session"]');
+  await session.waitFor({ state: "visible", timeout: 60_000 });
+  await session.focus();
+  await page.keyboard.press("ArrowRight");
+  await page.keyboard.press("ArrowDown");
+  await page.keyboard.press("Enter");
+  assert(
+    await tree.locator('[role="treeitem"]:focus').count() === 1,
+    "Explorer tree keyboard navigation did not retain a focused tree row.",
+  );
+}
+
+async function selectInspectorNode(page, inspector, nodeId, { owner, label }) {
+  await ensureModelNodeVisible(page, nodeId);
+  const node = page.locator(`[data-node-id="${nodeId}"]`);
+  await node.click();
+  await page.waitForFunction(
+    (id) => document.querySelector(`[data-node-id="${id}"]`)?.getAttribute("aria-selected") === "true",
+    nodeId,
+    { timeout: 60_000 },
+  );
+  await inspector.waitFor({ state: "visible", timeout: 60_000 });
+  const title = (await inspector.locator(".fm-inspector__title").textContent())?.trim() ?? "";
+  const breadcrumbs = await inspector
+    .locator('[aria-label="Selection path"]')
+    .allTextContents();
+  const identityText = [title, ...breadcrumbs].join(" ");
+  assert(
+    inspector.getAttribute("data-inspector-owner")
+      ? (await inspector.getAttribute("data-inspector-owner")) === owner
+      : false,
+    `${label} selection resolved to the wrong Inspector owner: ${await inspector.getAttribute("data-inspector-owner") ?? "none"}.`,
+  );
+  assert(title.length > 0, `${label} selection has no Inspector title.`);
+  assert(
+    !/^(?:Selection|Placeholder|Nothing selected)$/i.test(title) &&
+      !/placeholder/i.test(identityText),
+    `No placeholder Inspector may own ${label} selection: ${identityText}`,
+  );
+  assert(breadcrumbs.length > 0, `${label} selection has no breadcrumb identity.`);
+  const focus = inspector.getByRole("button", { name: "Focus", exact: true });
+  assert(await focus.isVisible(), `${label} selection has no visible primary Inspector action.`);
+}
+
+async function ensureModelNodeVisible(page, nodeId) {
+  if (nodeId.startsWith("results:")) return;
+  const modelTab = page
+    .locator(".fm-explorer .fm-tabs-trigger")
+    .filter({ hasText: /^Model$/ });
+  if (await modelTab.count() && await modelTab.getAttribute("aria-selected") !== "true") {
+    await modelTab.click();
+  }
+  const parentIds = nodeId.startsWith("model:airbox:")
+    ? ["model:universe", "model:airbox"]
+    : nodeId.startsWith("model:object:film:")
+      ? ["model:objects", "model:object:film"]
+      : nodeId.startsWith("model:mesh:unassigned:")
+        ? ["model:mesh", "model:mesh:unassigned"]
+        : [];
+  for (const parentId of parentIds) {
+    if (parentId === nodeId) continue;
+    await expandInspectorNode(page, parentId);
+  }
+  const node = page.locator(`[data-node-id="${nodeId}"]`);
+  await node.waitFor({ state: "visible", timeout: 60_000 });
+  await node.scrollIntoViewIfNeeded();
+}
+
+async function expandInspectorNode(page, nodeId) {
+  const node = page.locator(`[data-node-id="${nodeId}"]`);
+  await node.waitFor({ state: "visible", timeout: 60_000 });
+  if ((await node.getAttribute("aria-expanded")) !== "false") return;
+  const branch = node.locator(".fm-explorer-tree-row__branch");
+  if (await branch.count()) {
+    await branch.click();
+  } else {
+    await node.dblclick();
+  }
+  await page.waitForFunction(
+    (id) => document.querySelector(`[data-node-id="${id}"]`)?.getAttribute("aria-expanded") === "true",
+    nodeId,
+    { timeout: 60_000 },
+  );
+}
+
+async function assertHealthyViewportCanvas(page, label) {
+  const canvas = page.locator(".fm-viewport-3d canvas").first();
+  await canvas.waitFor({ state: "visible", timeout: 60_000 });
+  const state = await canvas.evaluate((node) => {
+    const gl = node.getContext("webgl2") ?? node.getContext("webgl");
+    return {
+      drawingBufferHeight: gl?.drawingBufferHeight ?? 0,
+      drawingBufferWidth: gl?.drawingBufferWidth ?? 0,
+      isContextLost: gl?.isContextLost() ?? true,
+    };
+  });
+  assert(
+    !state.isContextLost && state.drawingBufferWidth > 0 && state.drawingBufferHeight > 0,
+    `${label}: viewport WebGL failed: ${JSON.stringify(state)}`,
+  );
+}
+
+function createInspectorFixture() {
+  const revision = 12;
+  const scene = {
+    metadata: {
+      authoring_schema: "scene-document.v1",
+      id: "inspector-routing-smoke",
+      name: "Inspector routing smoke",
+      source_of_truth: "fixture",
+    },
+    revision,
+    current_modules: { excitation_analysis: null, modules: [] },
+    editor: {},
+    magnetization_assets: [],
+    materials: [],
+    objects: [
+      {
+        geometry: {
+          geometry_kind: "Box",
+          geometry_params: { size: [200e-9, 80e-9, 5e-9] },
+        },
+        id: "film",
+        material_ref: null,
+        name: "Film",
+        region_name: "film",
+        regions: [],
+        role: "magnet",
+        tags: ["mesh:ready"],
+        transform: {
+          pivot: [0, 0, 0],
+          rotation_quat: [0, 0, 0, 1],
+          scale: [1, 1, 1],
+          translation: [0, 0, 0],
+        },
+      },
+    ],
+    outputs: { items: [] },
+    study: {
+      requested_backend: "fem",
+      requested_device: "cpu",
+      requested_mode: "strict",
+      requested_precision: "double",
+      stages: [],
+    },
+    universe: {
+      id: "universe",
+      name: "Universe",
+      size: [1e-6, 1e-6, 1e-6],
+    },
+  };
+  return {
+    manifest: {
+      generation_id: "1",
+      mesh_name: "Inspector fixture mesh",
+      mesh_parts: [
+        inspectorMeshPart("airbox", "airbox", null, 0),
+        inspectorMeshPart("film-part", "magnetic", "film", 1),
+        inspectorMeshPart("orphan-part", "volume", null, 2),
+      ],
+      object_segments: [
+        {
+          element_count: 1,
+          element_start: 1,
+          id: "film-segment",
+          node_count: 4,
+          node_start: 4,
+          object_id: "film",
+          region_ids: [],
+        },
+      ],
+      regions: [],
+      revision: 7,
+      source_scene_revision: revision,
+      topology_fingerprint: "inspector-routing-topology",
+    },
+    requests: [],
+    revision,
+    scene,
+    topology: inspectorTopologyBuffer(),
+    visualization: inspectorVisualizationState(),
+  };
+}
+
+function inspectorMeshPart(id, role, objectId, ordinal) {
+  return {
+    boundary_face_count: 4,
+    boundary_face_indices: [0, 1, 2, 3].map((index) => index + ordinal * 4),
+    boundary_face_start: ordinal * 4,
+    bounds_max: [1 + ordinal, 1 + ordinal, 1 + ordinal],
+    bounds_min: [-1 + ordinal, -1 + ordinal, -1 + ordinal],
+    element_count: 1,
+    element_start: ordinal,
+    id,
+    node_count: 4,
+    node_indices: [0, 1, 2, 3].map((index) => index + ordinal * 4),
+    node_start: ordinal * 4,
+    object_id: objectId,
+    role,
+    surface_faces: [[0, 2, 1], [0, 1, 3], [1, 2, 3], [2, 0, 3]],
+    topology: "tet4",
+  };
+}
+
+function inspectorVisualizationState() {
+  return {
+    active_quantity_id: "m",
+    auto_contrast: true,
+    camera: {
+      fov_degrees: 45,
+      orthographic_scale: null,
+      position: [0, 0, 1],
+      projection: "perspective",
+      target: [0, 0, 0],
+      up: [0, 1, 0],
+    },
+    clip: { axis: "x", enabled: false, flipped: false, position_percent: 50 },
+    colormap: "viridis",
+    contrast_max: null,
+    contrast_min: null,
+    diagnostics: { degraded_reasons: [], warnings: [] },
+    domains: { active_scope: { object_id: null, part_id: null, scope: "full" }, topology_mode: "auto" },
+    field_component: "magnitude",
+    layers: {
+      airbox: { render_mode: "wireframe", show_airbox: true, show_airbox_vectors: false },
+      bounds: { visible: false },
+      points: { visible: false },
+      primitives: { visible: true },
+      quantity: { visible: true },
+      surface: { opacity: 1, visible: true },
+      vectors: { density: 50, domain: "auto", visible: false },
+      wireframe: { visible: false },
+    },
+    max_points: 16_384,
+    overrides: [],
+    quantity: {
+      active_quantity_id: "m",
+      auto_contrast: true,
+      colormap: "viridis",
+      component: "magnitude",
+      contrast_max: null,
+      contrast_min: null,
+      field_component: "magnitude",
+    },
+    revision: 1,
+    sampling: { max_glyphs: 16_384, max_points: 16_384, profile: "balanced", progressive: true },
+    schema_version: 5,
+  };
+}
+
+async function installInspectorFixtureApi(page, fixture) {
+  await page.route("**/v2/**", async (route) => {
+    const request = route.request();
+    const url = new URL(request.url());
+    const path = url.pathname;
+    fixture.requests.push(`${request.method()} ${path}${url.search}`);
+    if (request.method() === "OPTIONS") return fulfillEmpty(route, 204);
+    if (path === "/v2/sessions/current/visualization/state" && request.method() === "PATCH") {
+      const patch = request.postDataJSON() ?? {};
+      fixture.visualization = mergeInspectorVisualizationState(fixture.visualization, patch);
+      fixture.visualization.revision += 1;
+      return fulfillJson(route, fixture.visualization);
+    }
+    if (request.method() !== "GET") return fulfillJson(route, { revision: fixture.revision, ok: true });
+    if (path === "/v2/sessions/current/status") return fulfillJson(route, inspectorSessionStatus(fixture));
+    if (path === "/v2/sessions/current/model/scene") return fulfillJson(route, fixture.scene);
+    if (path === "/v2/sessions/current/model/regions") return fulfillJson(route, { regions: [], revision: fixture.revision });
+    if (path === "/v2/sessions/current/model/material-fields") return fulfillJson(route, { fields: [], revision: fixture.revision });
+    if (path === "/v2/sessions/current/model/couplings") return fulfillJson(route, { couplings: [], revision: fixture.revision });
+    if (path === "/v2/sessions/current/model/physics-graph") return fulfillJson(route, { interactions: [], revision: fixture.revision });
+    if (path === "/v2/sessions/current/model/geometry/validation") return fulfillJson(route, { diagnostics: [], revision: fixture.revision, valid: true });
+    if (path === "/v2/sessions/current/simulation/preparation") return fulfillJson(route, inspectorPreparationResource());
+    if (path === "/v2/sessions/current/data/domain/meta") return fulfillJson(route, inspectorDomainMeta());
+    if (path === "/v2/sessions/current/data/fields") return fulfillJson(route, inspectorFieldCatalog());
+    if (path === "/v2/sessions/current/visualization/state") return fulfillJson(route, fixture.visualization);
+    if (path === "/v2/sessions/current/meshing/meshes/shared-domain/manifest") return fulfillJson(route, fixture.manifest);
+    if (path === "/v2/sessions/current/meshing/policies/universe") return fulfillJson(route, { config: { hmax: 1e-8 }, revision: 7 });
+    if (path === "/v2/sessions/current/meshing/summary") return fulfillJson(route, { effective_airbox_target: { hmax: 1e-8 }, revision: 7 });
+    if (path === "/v2/sessions/current/meshing/quality-gates") return fulfillJson(route, { gates: { status: "pass", checks: [] }, revision: 7 });
+    if (path === "/v2/sessions/current/meshing/size-fields") return fulfillJson(route, { realized_size_fields: { fields: [] }, revision: 7 });
+    if (path === "/v2/sessions/current/meshing/builds/current") return fulfillJson(route, { active_build: null, mesh_pipeline_status: "ready", revision: 7 });
+    if (path === "/v2/sessions/current/meshing/builds/latest-successful") return fulfillJson(route, { provenance: { scene_revision: fixture.revision }, revision: 7, status: "completed" });
+    if (path === "/v2/sessions/current/meshing/region-memberships") return fulfillJson(route, { memberships: [], revision: 7 });
+    if (path === "/v2/sessions/current/simulation/stages/execution") return fulfillJson(route, { stages: [], stage_statuses: [], total_stages: 0, revision: fixture.revision });
+    if (path === "/v2/sessions/current/simulation/solver/status") return fulfillJson(route, { can_accept_commands: true, is_busy: false, runtime_state: "idle", revision: fixture.revision });
+    if (path === "/v2/sessions/current/simulation/commands") return fulfillJson(route, { commands: [], latest_completed: null, revision: fixture.revision });
+    if (path === "/v2/sessions/current/simulation/runs/current") return fulfillJson(route, { status: "idle", revision: fixture.revision });
+    if (path === "/v2/sessions/current/simulation/objects/film/metrics") return fulfillJson(route, inspectorObjectMetrics());
+    if (path === "/v2/sessions/current/analysis/frequency-domain/manifest.v1") return fulfillJson(route, inspectorFrequencyManifest());
+    if (path === "/v2/sessions/current/analysis/frequency-domain/eigen/spectrum.v2") return fulfillJson(route, inspectorFrequencySpectrum());
+    if (path === "/v2/sessions/current/analysis/frequency-domain/eigen/branches.v2") return fulfillJson(route, inspectorFrequencyBranches());
+    if (path === "/v2/sessions/current/analysis/frequency-domain/eigen/dispersion") return fulfillJson(route, inspectorFrequencyDispersion());
+    if (path === "/v2/sessions/current/analysis/frequency-domain/eigen/diagnostics.v2") return fulfillJson(route, inspectorFrequencyDiagnostics());
+    if (path === "/v2/sessions/current/analysis/frequency-domain/response/magnetic-sweep") return fulfillJson(route, inspectorFrequencyResponseSweep());
+    if (path.includes("/data/fields/") && path.endsWith("/meta")) return fulfillJson(route, inspectorFieldMeta(path));
+    if (path.includes("/data/fields/") && path.endsWith("/samples/vector")) return fulfillBinary(route, inspectorFieldVector(path));
+    if (path === "/v2/sessions/current/data/domain/topology") return fulfillTopology(route, fixture.topology);
+    return fulfillJson(route, { revision: fixture.revision });
+  });
+}
+
+function mergeInspectorVisualizationState(state, patch) {
+  return {
+    ...state,
+    ...patch,
+    layers: { ...state.layers, ...(patch.layers ?? {}) },
+    quantity: { ...state.quantity, ...(patch.quantity ?? {}) },
+    revision: state.revision,
+  };
+}
+
+function inspectorSessionStatus(fixture) {
+  return {
+    api_contract_version: "1.0.0",
+    capabilities: {
+      algorithms_available: ["llg_overdamped", "projected_gradient_bb"],
+      binary_fields: true,
+      cell_fields: true,
+      eigen_modes: true,
+      explicit_topology: true,
+      gpu_telemetry: false,
+      node_fields: true,
+      preview_2d: true,
+      preview_3d: true,
+      scalar_history: true,
+      structured_grid: false,
+    },
+    display: { active_quantity_id: "m", field_component: "magnitude", view_mode: "3d", vector_glyphs: true },
+    domain: { cell_count: 3, discretization: "fem", generation_id: 1 },
+    energies: {},
+    metrics: { steps_per_second: null, total: { steps: 0, time_seconds: 0 }, total_steps: 0, uptime_seconds: 0 },
+    resources: {
+      artifact_revision: 0,
+      artifacts_revision: 0,
+      command_completion_revision: 0,
+      commands_revision: fixture.revision,
+      display_revision: fixture.visualization.revision,
+      domain_generation_id: 1,
+      engine_log_revision: 0,
+      field_catalog_revision: 1,
+      field_revision: 1,
+      fields_revision: 1,
+      mesh_build_revision: 7,
+      mesh_revision: 7,
+      scalars_revision: 0,
+      scene_revision: fixture.revision,
+      simulation_preparation_revision: 1,
+      solver_profile_revision: 0,
+      stages_revision: fixture.revision,
+      topology_revision: 7,
+      visualization_state_revision: fixture.visualization.revision,
+      workspace_revision: 1,
+    },
+    run: null,
+    runtime_bundle_version: "inspector-routing-smoke",
+    session: { created_at: "2026-08-11T00:00:00.000Z", name: "Inspector routing smoke", session_id: "inspector-routing-smoke", workspace_root: "/tmp/fullmag-inspector-routing-smoke" },
+    solver: { state: "idle" },
+  };
+}
+
+function inspectorPreparationResource() {
+  return {
+    active_stage_id: null,
+    completed_at_unix_ms: 1,
+    failure: null,
+    log_tail: [],
+    preparation_id: "inspector-routing-preparation",
+    requested_execution: null,
+    resolved_execution: null,
+    revision: 1,
+    started_at_unix_ms: 0,
+    stages: [],
+    status: "ready",
+  };
+}
+
+function inspectorObjectMetrics() {
+  return {
+    energies: {
+      anisotropy: 0,
+      demag: 0,
+      dmi: 0,
+      exchange: 0,
+      total: 0,
+      zeeman: 0,
+    },
+    has_solver_sample: false,
+    magnetization_average: { mx: 1, my: 0, mz: 0 },
+    object_id: "film",
+    revision: 1,
+    source: "fixture",
+    step: 0,
+    time_seconds: 0,
+  };
+}
+
+function inspectorDomainMeta() {
+  return {
+    bounds: { max: [5e-7, 5e-7, 5e-7], min: [-5e-7, -5e-7, -5e-7] },
+    counts: { cells: 3, nodes: 12 },
+    discretization: "fem",
+    domain_id: "inspector-routing-domain",
+    generation_id: 1,
+    units: "m",
+  };
+}
+
+function inspectorFieldCatalog() {
+  return {
+    domain_generation_id: 1,
+    quantities: ["m", "H_eff", "H_demag", "H_ext"].map((quantity_id) => ({
+      available: true,
+      components: 3,
+      domain_generation_id: 1,
+      field_revision: 1,
+      kind: "vector",
+      label: quantity_id,
+      location: "nodes",
+      quantity_id,
+      state: "complete",
+      unit: quantity_id === "m" ? "1" : "A/m",
+    })),
+    revision: 1,
+  };
+}
+
+function inspectorFieldMeta(path) {
+  const encoded = path.split("/data/fields/")[1]?.split("/")[0] ?? "m";
+  const quantityId = decodeURIComponent(encoded);
+  return {
+    components: ["x", "y", "z"],
+    quantity_id: quantityId,
+    stats: { max: 1, min: 0 },
+    unit: quantityId === "m" ? "1" : "A/m",
+  };
+}
+
+function inspectorFieldVector(path) {
+  const encoded = path.split("/data/fields/")[1]?.split("/")[0] ?? "m";
+  const quantityId = decodeURIComponent(encoded);
+  const grid = [8, 4, 1];
+  const valueCount = grid[0] * grid[1] * grid[2] * 3;
+  const buffer = new ArrayBuffer(48 + valueCount * Float64Array.BYTES_PER_ELEMENT);
+  const view = new DataView(buffer);
+  for (const [index, code] of [..."FMVP"].entries()) view.setUint8(index, code.charCodeAt(0));
+  view.setUint8(4, 2);
+  view.setUint8(5, 1);
+  view.setUint8(6, 3);
+  view.setUint32(12, valueCount, true);
+  view.setUint32(16, grid[0], true);
+  view.setUint32(20, grid[1], true);
+  view.setUint32(24, grid[2], true);
+  new TextEncoder().encodeInto(quantityId, new Uint8Array(buffer, 28, 16));
+  const values = new Float64Array(buffer, 48);
+  for (let index = 0; index < valueCount; index += 3) {
+    values[index] = 1;
+    values[index + 1] = 0.2;
+    values[index + 2] = 0.1;
+  }
+  return buffer;
+}
+
+async function fulfillJson(route, body, status = 200) {
+  await route.fulfill({
+    body: JSON.stringify(body),
+    contentType: "application/json",
+    headers: { "access-control-allow-origin": "*", "x-api-contract-version": "1.0.0" },
+    status,
+  });
+}
+
+async function fulfillBinary(route, body, status = 200) {
+  await route.fulfill({
+    body: Buffer.from(body),
+    contentType: "application/octet-stream",
+    headers: { "access-control-allow-origin": "*", "x-api-contract-version": "1.0.0" },
+    status,
+  });
+}
+
+async function fulfillEmpty(route, status) {
+  await route.fulfill({ body: "", headers: { "access-control-allow-origin": "*" }, status });
+}
+
+async function fulfillTopology(route, topology) {
+  const range = route.request().headers().range;
+  if (!range) return fulfillBinary(route, topology);
+  const match = /^bytes=(\d+)-(\d+)$/.exec(range);
+  if (!match) return fulfillEmpty(route, 416);
+  const start = Number(match[1]);
+  const end = Math.min(Number(match[2]), topology.byteLength - 1);
+  return route.fulfill({
+    body: Buffer.from(topology.slice(start, end + 1)),
+    contentType: "application/octet-stream",
+    headers: {
+      "access-control-allow-origin": "*",
+      "accept-ranges": "bytes",
+      "content-range": `bytes ${start}-${end}/${topology.byteLength}`,
+      "x-api-contract-version": "1.0.0",
+    },
+    status: 206,
+  });
+}
+
+function inspectorTopologyBuffer() {
+  const nodeCount = 12;
+  const elementCount = 3;
+  const boundaryFaceCount = 12;
+  const buffer = new ArrayBuffer(
+    32 + nodeCount * 3 * 8 + elementCount * 4 * 4 + boundaryFaceCount * 3 * 4 + elementCount * 4 * 2,
+  );
+  const view = new DataView(buffer);
+  for (const [index, code] of [..."FMMT"].entries()) view.setUint8(index, code.charCodeAt(0));
+  view.setUint8(4, 1);
+  view.setUint8(5, 1);
+  view.setUint32(8, nodeCount, true);
+  view.setUint32(12, elementCount, true);
+  view.setUint32(16, boundaryFaceCount, true);
+  view.setUint32(20, elementCount, true);
+  view.setUint32(24, elementCount, true);
+  let offset = 32;
+  new Float64Array(buffer, offset, nodeCount * 3).set([
+    0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1,
+    -1, -1, -1, 2, -1, -1, -1, 2, -1, -1, -1, 2,
+    0, 0, 1, 1, 0, 1, 0, 1, 1, 0, 0, 2,
+  ]);
+  offset += nodeCount * 3 * Float64Array.BYTES_PER_ELEMENT;
+  new Uint32Array(buffer, offset, elementCount * 4).set([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);
+  offset += elementCount * 4 * Uint32Array.BYTES_PER_ELEMENT;
+  new Uint32Array(buffer, offset, boundaryFaceCount * 3).set([
+    0, 1, 2, 0, 1, 3, 0, 2, 3, 1, 2, 3,
+    4, 5, 6, 4, 5, 7, 4, 6, 7, 5, 6, 7,
+    8, 9, 10, 8, 9, 11, 8, 10, 11,
+  ]);
+  offset += boundaryFaceCount * 3 * Uint32Array.BYTES_PER_ELEMENT;
+  new Uint32Array(buffer, offset, elementCount).set([1, 0, 2]);
+  offset += elementCount * Uint32Array.BYTES_PER_ELEMENT;
+  new Uint32Array(buffer, offset, elementCount).set([1, 0, 2]);
+  return buffer;
+}
+
+function inspectorFrequencyCapability(status) {
+  return { reason: "", status };
+}
+
+function inspectorFrequencyManifest() {
+  return {
+    capabilities: {
+      modal: {
+        mode_field_payload: inspectorFrequencyCapability("reference_executable"),
+        mode_tracking: inspectorFrequencyCapability("reference_executable"),
+      },
+      response: { frequency_sweep: inspectorFrequencyCapability("reference_executable") },
+      visualization: {
+        mode_3d_overlay: inspectorFrequencyCapability("reference_executable"),
+        modal_spectrum_chart: inspectorFrequencyCapability("reference_executable"),
+        mode_table: inspectorFrequencyCapability("reference_executable"),
+      },
+    },
+    eigenmodes: { modal_solver_available: true, reason: "", status: "ok", study_kind: "eigenmodes" },
+    response: { driven_response_available: true, reason: "", status: "ok", study_kind: "frequency_response" },
+    requested_execution: { calculation_mode: "fmr_response" },
+    response_cancel_requested: null,
+    response_progress: null,
+    resources: { response_field_resources: [] },
+    artifacts: {
+      branches_v2_path: "eigen/branches.v2.json",
+      dispersion_csv_path: "eigen/dispersion.csv",
+      eigen_diagnostics_v2_path: "eigen/diagnostics.v2.json",
+      response_sweep_v2_path: "response/magnetic_response_sweep.v2.json",
+      spectrum_v2_path: "eigen/spectrum.v2.json",
+    },
+    schema_version: "frequency_domain_manifest.v1",
+  };
+}
+
+function inspectorFrequencySpectrum() {
+  return {
+    artifact_path: "eigen/spectrum.v2.json",
+    missing_reason: null,
+    payload: {
+      modes: [{
+        branch_id: "branch-0",
+        damping_rate_hz: 12e6,
+        frequency_hz: 12.5e9,
+        mode_field_id: "analysis:eigen:sample-0000:mode-0002",
+        mode_field_resource_key: "/v2/sessions/current/data/fields/analysis%3Aeigen%3Asample-0000%3Amode-0002/samples/vector?view=phase_rotated_real&phase_rad=0",
+        raw_mode_index: 2,
+        residual_norm: 1e-8,
+        sample_index: 0,
+        tangent_leakage_max: 2e-9,
+      }],
+      schema_version: "eigen_spectrum.v2",
+    },
+    resource_key: "/v2/sessions/current/analysis/frequency-domain/eigen/spectrum.v2",
+    schema_version: "frequency_domain_eigen_spectrum.v2",
+    status: "ready",
+  };
+}
+
+function inspectorFrequencyBranches() {
+  return {
+    artifact_path: "eigen/branches.v2.json",
+    missing_reason: null,
+    payload: {
+      branches: [{
+        branch_id: "branch-0",
+        label: "Acoustic branch",
+        points: [{
+          frequency_imag_hz: -12e6,
+          frequency_real_hz: 12.5e9,
+          mode_field_id: "analysis:eigen:sample-0000:mode-0002",
+          mode_field_resource_key: "/v2/sessions/current/data/fields/analysis%3Aeigen%3Asample-0000%3Amode-0002/samples/vector?view=phase_rotated_real&phase_rad=0",
+          overlap_prev: 0.99,
+          raw_mode_index: 2,
+          residual_norm: 1e-8,
+          sample_index: 0,
+          tracking_confidence: 0.995,
+        }],
+      }],
+      schema_version: "eigen_branches.v2",
+      solver_model: "linearized_llg_reference",
+    },
+    resource_key: "/v2/sessions/current/analysis/frequency-domain/eigen/branches.v2",
+    schema_version: "frequency_domain_eigen_branches.v2",
+    status: "ready",
+  };
+}
+
+function inspectorFrequencyDispersion() {
+  return {
+    artifact_path: "eigen/dispersion.csv",
+    content_type: "text/csv",
+    missing_reason: null,
+    resource_key: "/v2/sessions/current/analysis/frequency-domain/eigen/dispersion",
+    schema_version: "frequency_domain_eigen_dispersion.csv",
+    status: "ready",
+    text: "sample_index,raw_mode_index,branch_id,path_s_rad_per_m,frequency_hz\n0,2,branch-0,0,12.5e9",
+  };
+}
+
+function inspectorFrequencyDiagnostics() {
+  return {
+    artifact_path: "eigen/diagnostics.v2.json",
+    missing_reason: null,
+    payload: { schema_version: "eigen_diagnostics.v2" },
+    resource_key: "/v2/sessions/current/analysis/frequency-domain/eigen/diagnostics.v2",
+    schema_version: "frequency_domain_eigen_diagnostics.v2",
+    status: "ready",
+  };
+}
+
+function inspectorFrequencyResponseSweep() {
+  return {
+    artifact_path: "response/magnetic_response_sweep.v2.json",
+    missing_reason: null,
+    payload: {
+      points: [{
+        absorbed_power_density: 4.5,
+        amplitude: 0.75,
+        field_id: "response-field-7",
+        frequency_hz: 12.5e9,
+        frequency_index: 7,
+        observable_id: "mx",
+        phase_rad: 1.25,
+        residual_norm: 1e-5,
+        susceptibility_tensor: [[1, 2], [3, 4]],
+      }],
+      schema_version: "magnetic_response_sweep.v2",
+    },
+    resource_key: "/v2/sessions/current/analysis/frequency-domain/response/magnetic-sweep",
+    schema_version: "frequency_domain_response_sweep.v2",
+    status: "ready",
+  };
 }

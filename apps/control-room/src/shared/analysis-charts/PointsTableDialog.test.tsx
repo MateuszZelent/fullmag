@@ -1,5 +1,12 @@
+import { act } from "react";
+import { createRoot } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+
+import {
+  findElement,
+  installSimulationPreparationTestDom,
+} from "@/kernel/layout/simulationPreparationTestDom.test-support";
 
 import type { ChartRenderModel } from "./chartRenderer";
 import { PointsTableDialog } from "./PointsTableDialog";
@@ -89,6 +96,62 @@ describe("PointsTableDialog", () => {
     // row index 0 and 1 should be present
     expect(html).toContain(">0<");
     expect(html).toContain(">1<");
+  });
+
+  it("exposes each chart point as a keyboard-accessible selection action", () => {
+    const html = renderToStaticMarkup(
+      <PointsTableDialog
+        model={model}
+        onClose={() => undefined}
+        onPointSelected={() => undefined}
+        open
+      />,
+    );
+
+    expect(html).toContain('aria-label="Select Total row 0"');
+    expect(html).toContain('aria-label="Select Total row 1"');
+    expect(html).toContain('class="fm-points-table-dialog__select-point"');
+  });
+
+  it("routes a table point action through the canonical chart selection callback", async () => {
+    const dom = installSimulationPreparationTestDom();
+    Object.assign(globalThis.HTMLElement.prototype, {
+      close(this: HTMLDialogElement) {
+        this.open = false;
+      },
+      showModal(this: HTMLDialogElement) {
+        this.open = true;
+      },
+    });
+    const container = dom.document.createElement("div");
+    dom.document.body.appendChild(container);
+    const root = createRoot(container as unknown as Element);
+    const onPointSelected = vi.fn();
+
+    try {
+      await act(async () => {
+        root.render(
+          <PointsTableDialog
+            model={model}
+            onClose={() => undefined}
+            onPointSelected={onPointSelected}
+            open
+          />,
+        );
+      });
+      const selectPoint = findElement(
+        container,
+        (element) => element.getAttribute("aria-label") === "Select Total row 1",
+        "point selection action",
+      );
+
+      await act(async () => selectPoint.click());
+
+      expect(onPointSelected).toHaveBeenCalledWith("e_total", 1);
+    } finally {
+      await act(async () => root.unmount());
+      dom.restore();
+    }
   });
 
   it("keeps dimensionless table values and headers free of SI prefixes", () => {

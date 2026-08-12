@@ -558,6 +558,7 @@ mod tests {
         FdmMultilayerPlanIR {
             mode: "three_d".to_string(),
             common_cells: [2, 2, 1],
+            requested_common_cell_size: None,
             grid_certificate: None,
             layers: vec![layer],
             enable_exchange: true,

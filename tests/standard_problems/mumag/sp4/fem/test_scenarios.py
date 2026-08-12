@@ -331,6 +331,9 @@ def test_relaxation_scenario_exports_only_its_physically_applicable_policy(
     assert _active_stage_id(stage) == "relax"
     ir = stage["ir"]
     relaxation = ir["study"]
+    assert ir["current_modules"] == []
+    assert ir["spin_transport_modules"] == []
+    assert ir.get("spin_torques", []) == []
     algorithm, integrator, timestep_policy, dt = RELAXATION_POLICIES[scenario]
     assert relaxation["kind"] == "relaxation"
     assert relaxation["algorithm"] == algorithm

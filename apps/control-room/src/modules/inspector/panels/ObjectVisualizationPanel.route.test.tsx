@@ -153,7 +153,18 @@ vi.mock("../primitives/FieldRow", () => ({
 }));
 vi.mock("../primitives/FeedbackBanner", () => ({ FeedbackBanner: () => null }));
 vi.mock("../primitives/InspectorGroup", () => ({
-  InspectorGroup: ({ children }: { children?: React.ReactNode }) => <>{children}</>,
+  InspectorGroup: ({
+    children,
+    title,
+  }: {
+    children?: React.ReactNode;
+    title?: React.ReactNode;
+  }) => (
+    <section>
+      <h2>{title}</h2>
+      {children}
+    </section>
+  ),
 }));
 vi.mock("./ObjectVisualizationOverview", () => ({
   ObjectVisualizationOverview: () => null,
@@ -184,6 +195,7 @@ vi.mock("./ObjectVisualizationTargetSection", () => {
 });
 
 import type { Selection } from "@/kernel/selection/selectionTypes";
+import { resolveInspectorPanel } from "../inspectorRegistry";
 import { ObjectVisualizationPanel } from "./ObjectVisualizationPanel";
 
 const selection: Selection = {
@@ -201,7 +213,183 @@ const selection: Selection = {
   },
 };
 
+const airboxSelection: Selection = {
+  kind: "airbox.visualization",
+  label: "Airbox visualization",
+  moduleSource: "inspector",
+  nodeId: "model:universe:airbox:visualization",
+  objectId: null,
+  ref: {
+    kind: "airbox.visualization",
+    nodeId: "model:universe:airbox:visualization",
+    type: "airbox",
+    visualizationTargetId: "airbox",
+  },
+};
+
+const airboxDebugSelection: Selection = {
+  kind: "airbox.visualization.debug",
+  label: "Airbox visualization debug",
+  moduleSource: "inspector",
+  nodeId: "model:airbox:visualization:debug",
+  objectId: null,
+  ref: {
+    kind: "airbox.visualization.debug",
+    nodeId: "model:airbox:visualization:debug",
+    type: "airbox",
+    visualizationTargetId: "airbox",
+  },
+};
+
+const objectDebugSelection: Selection = {
+  kind: "object.visualization.debug",
+  label: "Film visualization debug",
+  moduleSource: "inspector",
+  nodeId: "model:object:film:visualization:debug",
+  objectId: "film",
+  ref: {
+    kind: "object.visualization.debug",
+    nodeId: "model:object:film:visualization:debug",
+    objectId: "film",
+    type: "scene-object",
+    visualizationTargetId: "object:film",
+  },
+};
+
+const objectRegionDebugSelection: Selection = {
+  kind: "object.region.visualization.debug",
+  label: "Film core visualization debug",
+  moduleSource: "inspector",
+  nodeId: "model:object:film:regions:core:visualization:debug",
+  objectId: "film",
+  ref: {
+    kind: "object.region.visualization.debug",
+    nodeId: "model:object:film:regions:core:visualization:debug",
+    objectId: "film",
+    regionId: "core",
+    type: "scene-object",
+    visualizationTargetId: "region:film:core",
+  },
+};
+
+const meshPartSelection: Selection = {
+  kind: "mesh-part",
+  label: "Film volume",
+  moduleSource: "inspector",
+  nodeId: "resources:mesh:part:film-volume",
+  objectId: "film",
+  ref: {
+    carrierPartId: "film-volume",
+    kind: "mesh-part",
+    nodeId: "resources:mesh:part:film-volume",
+    objectId: "film",
+    type: "mesh-part",
+    visualizationTargetId: "part:film-volume",
+  },
+};
+
+function renderResolvedInspector(selectionValue: Selection): string {
+  const contribution = resolveInspectorPanel({ kind: selectionValue.kind });
+  if (!contribution) throw new Error(`Missing route for ${selectionValue.kind}`);
+  const Component = contribution.component;
+  return renderToStaticMarkup(<Component selection={selectionValue} />);
+}
+
 describe("ObjectVisualizationPanel lane routing", () => {
+  it("gives object, Airbox, and mesh-part routes distinct owner identities", () => {
+    testState.discretization = "fdm";
+
+    const object = renderResolvedInspector(selection);
+    expect(object).toContain('data-inspector-owner="object.visualization"');
+    expect(object).toContain("Object visualization");
+    expect(object).toContain("Target scope:Magnetic object");
+    expect(object).toContain("Target ID:object:film");
+    expect(object).toContain("canonical object visualization target");
+    expect(object).toContain("Display passes, quantity, vectors, wireframe");
+
+    const airbox = renderResolvedInspector(airboxSelection);
+    expect(airbox).toContain('data-inspector-owner="airbox.visualization"');
+    expect(airbox).toContain("Airbox visualization");
+    expect(airbox).toContain("Target scope:Airbox");
+    expect(airbox).toContain("Target ID:fdm-domain");
+    expect(airbox).toContain("Airbox-specific bounds and field support");
+    expect(airbox).toContain("Airbox extent, display passes, field quantity");
+
+    const meshPart = renderResolvedInspector(meshPartSelection);
+    expect(meshPart).toContain('data-inspector-owner="mesh-part.visualization"');
+    expect(meshPart).toContain("Mesh-part visualization");
+    expect(meshPart).toContain("Target scope:Mesh part");
+    expect(meshPart).toContain("Target ID:part:film-volume");
+    expect(meshPart).toContain("canonical mesh-part target");
+    expect(meshPart).toContain("Part visibility, render mode, vectors, wireframe");
+  });
+
+  it("gives every visualization debug route its own owner component", () => {
+    const debugKinds = [
+      "airbox.visualization.debug",
+      "object.visualization.debug",
+      "object.region.visualization.debug",
+    ] as const;
+    const owners = debugKinds.map((kind) => resolveInspectorPanel({ kind }));
+
+    expect(new Set(owners.map((owner) => owner?.component)).size).toBe(
+      debugKinds.length,
+    );
+    expect(owners.map((owner) => owner?.title)).toEqual([
+      "Airbox Visualization Debug",
+      "Object Visualization Debug",
+      "Region Visualization Debug",
+    ]);
+  });
+
+  it("renders route-specific debug owner contracts around the shared diagnostic body", () => {
+    testState.discretization = "fdm";
+
+    const routes = [
+      {
+        action: "Inspect Airbox render adoption and export bounded evidence",
+        capability:
+          "Airbox FEM viewport snapshots, field carriers, and exact transport metadata",
+        owner: "airbox.visualization.debug",
+        selection: airboxDebugSelection,
+        target: "Airbox target (airbox)",
+        title: "Airbox Visualization Debug",
+      },
+      {
+        action: "Inspect object render adoption and export bounded evidence",
+        capability:
+          "Object-scoped FEM viewport snapshots, field carriers, and exact transport metadata",
+        owner: "object.visualization.debug",
+        selection: objectDebugSelection,
+        target: "Magnetic object target (object:film)",
+        title: "Object Visualization Debug",
+      },
+      {
+        action: "Inspect region overlay adoption and export bounded evidence",
+        capability:
+          "Region overlay snapshots with part-scoped carriers and exact transport metadata",
+        owner: "object.region.visualization.debug",
+        selection: objectRegionDebugSelection,
+        target: "Object region target (region:film:core)",
+        title: "Region Visualization Debug",
+      },
+    ] as const;
+
+    for (const route of routes) {
+      const html = renderResolvedInspector(route.selection);
+
+      expect(html).toContain(`data-inspector-owner="${route.owner}"`);
+      expect(html).toContain(`<h2>${route.title}</h2>`);
+      expect(html).toContain(`Owner:${route.owner}`);
+      expect(html).toContain(`Target:${route.target}`);
+      expect(html).toContain(`Capabilities:${route.capability}`);
+      expect(html).toContain(`Actions:${route.action}`);
+      expect(html).toContain(
+        "Visualization debug is not applicable for the FDM structured-grid lane.",
+      );
+    }
+  });
+
   it("keeps a normal explicit-FDM object visualization route on the object target", () => {
     testState.discretization = "fdm";
     testState.resourceCalls.length = 0;

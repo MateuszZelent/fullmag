@@ -32,6 +32,69 @@ use crate::validate::{
     planned_study_controls, validate_executable_outputs, validate_grid_asset_cell_size,
 };
 
+/// Calculate the full host tensor payload required by the multilayer ABI v2.
+///
+/// ABI v2 materializes one six-component `complex<f64>` tensor for every
+/// ordered layer pair. `estimated_unique_kernels` remains reuse telemetry and
+/// must not be used as an allocation estimate.
+pub fn checked_multilayer_pair_kernel_footprint(
+    common_cells: [u32; 3],
+    layer_count: usize,
+) -> Result<u64, PlanError> {
+    let requested_counts = format!(
+        "[{},{},{}]",
+        common_cells[0], common_cells[1], common_cells[2]
+    );
+    let padded_cells = common_cells.into_iter().try_fold(1_u64, |acc, cells| {
+        let cells = u64::try_from(cells).map_err(|_| PlanError {
+            reasons: vec![format!(
+                "multilayer_convolution padded cell conversion failed: requested_counts={requested_counts}"
+            )],
+        })?;
+        let padded_axis = cells.checked_mul(2).ok_or_else(|| PlanError {
+            reasons: vec![format!(
+                "multilayer_convolution padded cell count overflow: requested_counts={requested_counts}"
+            )],
+        })?;
+        acc.checked_mul(padded_axis).ok_or_else(|| PlanError {
+            reasons: vec![format!(
+                "multilayer_convolution padded cell count overflow: requested_counts={requested_counts}"
+            )],
+        })
+    })?;
+    let layer_count_u64 = u64::try_from(layer_count).map_err(|_| PlanError {
+        reasons: vec![format!(
+            "multilayer_convolution layer count conversion failed: layer_count={layer_count}"
+        )],
+    })?;
+    let pair_kernel_count = layer_count_u64
+        .checked_mul(layer_count_u64)
+        .ok_or_else(|| PlanError {
+            reasons: vec![format!(
+                "multilayer_convolution pair kernel count overflow: layer_count={layer_count}"
+            )],
+        })?;
+    let abi_v2_pair_limit = u64::try_from(u32::MAX).map_err(|_| PlanError {
+        reasons: vec!["multilayer_convolution ABI v2 pair limit conversion failed".to_string()],
+    })?;
+    if pair_kernel_count > abi_v2_pair_limit {
+        return Err(PlanError {
+            reasons: vec![format!(
+                "multilayer_convolution pair kernel count exceeds ABI v2 u32 limit: layer_count={layer_count} pair_kernel_count={pair_kernel_count} max_pair_kernel_count={abi_v2_pair_limit}"
+            )],
+        });
+    }
+    padded_cells
+        .checked_mul(6)
+        .and_then(|bytes| bytes.checked_mul(16))
+        .and_then(|bytes| bytes.checked_mul(pair_kernel_count))
+        .ok_or_else(|| PlanError {
+            reasons: vec![format!(
+                "multilayer_convolution kernel payload byte overflow: requested_counts={requested_counts} layer_count={layer_count}"
+            )],
+        })
+}
+
 fn grid_sample_points(
     grid_cells: [u32; 3],
     cell_size: [f64; 3],
@@ -2415,6 +2478,65 @@ fn fdm_supports_interfacial_dmi_normal(normal: [f64; 3]) -> bool {
         && (normal[2] * inv_norm - 1.0).abs() <= 1e-12
 }
 
+pub const FDM_CUDA_MULTILAYER_TWO_D_STACK_UNQUALIFIED: &str =
+    "fdm_cuda_multilayer_two_d_stack_unqualified";
+pub const FDM_CUDA_MULTILAYER_PUSH_PULL_UNQUALIFIED: &str =
+    "fdm_cuda_multilayer_push_pull_unqualified";
+pub const FDM_CUDA_MULTILAYER_HETEROGENEOUS_NATIVE_HZ_UNQUALIFIED: &str =
+    "fdm_cuda_multilayer_heterogeneous_native_hz_unqualified";
+pub const FDM_CUDA_MULTILAYER_XY_OFFSET_UNQUALIFIED: &str =
+    "fdm_cuda_multilayer_xy_offset_unqualified";
+
+/// Return stable reason codes for multilayer operator classes which the
+/// current CUDA runner cannot execute with the canonical CPU semantics.
+pub fn fdm_multilayer_cuda_containment_reason_codes(
+    enable_demag: bool,
+    mode: &str,
+    layers: &[FdmLayerPlanIR],
+) -> Vec<&'static str> {
+    if !enable_demag {
+        return Vec::new();
+    }
+    let mut reasons = Vec::new();
+    if mode == "two_d_stack" {
+        reasons.push(FDM_CUDA_MULTILAYER_TWO_D_STACK_UNQUALIFIED);
+    }
+    if layers
+        .iter()
+        .any(|layer| layer.transfer_kind == "push_pull")
+    {
+        reasons.push(FDM_CUDA_MULTILAYER_PUSH_PULL_UNQUALIFIED);
+    }
+    if let Some(reference_hz) = layers.first().map(|layer| layer.native_cell_size[2]) {
+        if layers
+            .iter()
+            .any(|layer| layer.native_cell_size[2] != reference_hz)
+        {
+            reasons.push(FDM_CUDA_MULTILAYER_HETEROGENEOUS_NATIVE_HZ_UNQUALIFIED);
+        }
+    }
+    if let Some(reference_center) = layers.first().map(fdm_layer_xy_center) {
+        if layers
+            .iter()
+            .map(fdm_layer_xy_center)
+            .any(|center| center != reference_center)
+        {
+            reasons.push(FDM_CUDA_MULTILAYER_XY_OFFSET_UNQUALIFIED);
+        }
+    }
+    reasons
+}
+
+fn fdm_layer_xy_center(layer: &FdmLayerPlanIR) -> [f64; 2] {
+    // Exact equality is intentional for fail-closed runtime validation of
+    // planner-resolved or deserialized grid descriptors. Introducing a
+    // tolerance here could silently admit a real physical XY displacement.
+    [
+        layer.native_origin[0] + 0.5 * layer.native_grid[0] as f64 * layer.native_cell_size[0],
+        layer.native_origin[1] + 0.5 * layer.native_grid[1] as f64 * layer.native_cell_size[1],
+    ]
+}
+
 fn fdm_multilayer_cuda_native_single_grid_eligible(layers: &[FdmLayerPlanIR]) -> bool {
     let Some(first_layer) = layers.first() else {
         return false;
@@ -2546,6 +2668,19 @@ pub(crate) fn plan_fdm_multilayer(
             })
         }
     };
+    if !matches!(
+        fdm_hints.boundary_correction.as_deref(),
+        None | Some("none")
+    ) || fdm_hints.boundary_phi_floor.is_some()
+        || fdm_hints.boundary_delta_min.is_some()
+    {
+        return Err(PlanError {
+            reasons: vec![
+                "multilayer FDM boundary intent is not representable by FdmMultilayerPlanIR; use boundary_correction='none' or omit it, and omit boundary_phi_floor and boundary_delta_min"
+                    .to_string(),
+            ],
+        });
+    }
     let demag_hints = fdm_hints.demag.as_ref();
     if let Some(policy) = demag_hints {
         if let Err(reasons) = policy.validate() {
@@ -3037,6 +3172,27 @@ pub(crate) fn plan_fdm_multilayer(
             cells
         } else if let Some(cells_xy) = policy.common_cells_xy {
             [cells_xy[0], cells_xy[1], 1]
+        } else if let Some(cell_size) = policy.common_cell_size {
+            let extents = [common_xy_extent[0], common_xy_extent[1], max_native_z_size];
+            let mut cells = [1_u32; 3];
+            for axis in 0..3 {
+                let ratio = extents[axis] / cell_size[axis];
+                let rounded = ratio.round();
+                if !ratio.is_finite()
+                    || rounded < 1.0
+                    || rounded > u32::MAX as f64
+                    || (ratio - rounded).abs() > GRID_TOLERANCE * ratio.abs().max(1.0)
+                {
+                    let axis_name = ["x", "y", "z"][axis];
+                    errors.push(format!(
+                        "fdm.demag.common_cell_size[{axis_name}]={:.6e} m does not divide the common convolution extent {:.6e} m; strict mode does not round the grid",
+                        cell_size[axis], extents[axis]
+                    ));
+                } else {
+                    cells[axis] = rounded as u32;
+                }
+            }
+            cells
         } else {
             match fdm_default_cell(fdm_hints) {
                 Ok(base_cell) => [
@@ -3087,11 +3243,13 @@ pub(crate) fn plan_fdm_multilayer(
             }
         }
     };
-    let convolution_cell_size = [
-        common_xy_extent[0] / common_cells[0] as f64,
-        common_xy_extent[1] / common_cells[1] as f64,
-        max_native_z_size / common_cells[2] as f64,
-    ];
+    let convolution_cell_size = demag_hints
+        .and_then(|policy| policy.common_cell_size)
+        .unwrap_or([
+            common_xy_extent[0] / common_cells[0] as f64,
+            common_xy_extent[1] / common_cells[1] as f64,
+            max_native_z_size / common_cells[2] as f64,
+        ]);
 
     // Record the native-to-scratch placement that a descriptor-aware runtime
     // must use.  The current CPU/CUDA runners accept only a common scratch
@@ -3128,24 +3286,49 @@ pub(crate) fn plan_fdm_multilayer(
         }
     }
 
-    let estimated_unique_kernels = unique_shifts.len() as u32;
-    let estimated_pair_kernels = (lowered_bodies.len() * lowered_bodies.len()) as u32;
-    let padded_len = common_cells.iter().try_fold(1u64, |acc, cells| {
-        acc.checked_mul((*cells as u64).checked_mul(2)?)
-    });
-    let estimated_kernel_bytes = padded_len
-        .and_then(|cells| cells.checked_mul(6))
-        .and_then(|bytes| bytes.checked_mul(16))
-        .and_then(|bytes| bytes.checked_mul(estimated_unique_kernels as u64));
-    let estimated_kernel_bytes = match (padded_len, estimated_kernel_bytes) {
-        (Some(_padded_len), Some(estimated_kernel_bytes)) => estimated_kernel_bytes,
-        _ => {
-            errors.push(
-                "multilayer_convolution kernel size overflow: resolved common_cells or kernel count exceeds u64"
-                    .to_string(),
-            );
+    let estimated_unique_kernels = match u32::try_from(unique_shifts.len()) {
+        Ok(count) => count,
+        Err(_) => {
+            errors.push(format!(
+                "multilayer_convolution unique shift telemetry exceeds u32: unique_shifts={}",
+                unique_shifts.len()
+            ));
             0
         }
+    };
+    let estimated_pair_kernels = match u64::try_from(lowered_bodies.len())
+        .ok()
+        .and_then(|count| count.checked_mul(count))
+        .and_then(|count| u32::try_from(count).ok())
+    {
+        Some(count) => count,
+        None => {
+            errors.push(format!(
+                "multilayer_convolution pair kernel telemetry exceeds ABI v2 u32 limit: layer_count={}",
+                lowered_bodies.len()
+            ));
+            0
+        }
+    };
+    let estimated_kernel_bytes = if enable_demag {
+        match checked_multilayer_pair_kernel_footprint(common_cells, lowered_bodies.len()) {
+            Ok(estimated_kernel_bytes) if estimated_kernel_bytes <= crate::FDM_GRID_MAX_BYTES => {
+                estimated_kernel_bytes
+            }
+            Ok(estimated_kernel_bytes) => {
+                errors.push(format!(
+                    "multilayer_convolution kernel memory budget exceeded: estimated_bytes={estimated_kernel_bytes} max_bytes={}",
+                    crate::FDM_GRID_MAX_BYTES
+                ));
+                0
+            }
+            Err(error) => {
+                errors.extend(error.reasons);
+                0
+            }
+        }
+    } else {
+        0
     };
     let common_grid_cost = checked_fdm_grid_cost(common_cells, FDM_GRID_ESTIMATED_BYTES_PER_CELL)?;
 
@@ -3241,8 +3424,20 @@ pub(crate) fn plan_fdm_multilayer(
         .collect::<Vec<_>>();
     let multilayer_topology_tokens =
         fullmag_ir::fdm_multilayer_topology_tokens(&selected_mode, &layers);
-    let native_cuda_lane =
-        runtime_requests_cuda(problem) && fdm_multilayer_cuda_native_single_grid_eligible(&layers);
+    if runtime_requests_cuda(problem) {
+        errors.extend(
+            fdm_multilayer_cuda_containment_reason_codes(enable_demag, &selected_mode, &layers)
+                .into_iter()
+                .map(|reason_code| {
+                    format!(
+                        "{reason_code}: forced CUDA multilayer execution is not qualified for this operator class; use device='cpu'"
+                    )
+                }),
+        );
+    }
+    let native_cuda_lane = runtime_requests_cuda(problem)
+        && requested_strategy == "auto"
+        && fdm_multilayer_cuda_native_single_grid_eligible(&layers);
     let requested_auto_integrator = problem.study.optional_dynamics().is_some_and(|dynamics| {
         let fullmag_ir::DynamicsIR::Llg { integrator, .. } = dynamics;
         integrator == "auto"
@@ -3293,6 +3488,7 @@ pub(crate) fn plan_fdm_multilayer(
     let plan = FdmMultilayerPlanIR {
         mode: selected_mode.clone(),
         common_cells,
+        requested_common_cell_size: demag_hints.and_then(|hints| hints.common_cell_size),
         grid_certificate: Some(grid_certificate),
         layers,
         enable_exchange,

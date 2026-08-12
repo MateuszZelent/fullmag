@@ -287,6 +287,6 @@ def test_runner_harness_build_is_managed_cli_only_and_candidate_immutable() -> N
     assert "capture_source_snapshot_identity.py" in ensure_recipe
     assert '--require-source-snapshot-sha256 "$source_snapshot"' in ensure_recipe
     assert "runtime_source_change_policy.py" in ensure_recipe
-    assert "FULLMAG_FEM_RUNTIME_REUSE_BUILD=1 just rebuild-fem-runtime" in ensure_recipe
+    assert "FULLMAG_FEM_RUNTIME_REUSE_BUILD=0 just rebuild-fem-runtime" in ensure_recipe
     assert "-newer" not in ensure_recipe
     assert "if [ ! -L .fullmag/runtimes/fem-gpu-host ]" not in ensure_recipe
