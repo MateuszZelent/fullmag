@@ -26,31 +26,3 @@ export interface ChartSeries {
   unit: string;
   xUnit: string;
 }
-
-export type ChartSeriesObservableIdentity = Pick<
-  ChartSeries,
-  "component" | "dimension" | "quantity" | "reduction" | "scope" | "unit"
->;
-
-export function chartSeriesObservableIdentityKey(
-  series: Partial<ChartSeriesObservableIdentity> & Pick<ChartSeries, "quantity" | "unit">,
-): string | null {
-  if (
-    !series.quantity ||
-    !series.unit ||
-    series.component === undefined ||
-    !series.dimension ||
-    series.reduction === undefined ||
-    !series.scope
-  ) {
-    return null;
-  }
-  return JSON.stringify([
-    series.quantity,
-    series.component,
-    series.reduction,
-    series.scope,
-    series.dimension,
-    series.unit,
-  ]);
-}
