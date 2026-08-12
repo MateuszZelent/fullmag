@@ -5,6 +5,7 @@ import test from "node:test";
 import {
   assertCompletedTerminalFieldContract,
   assertCompletedTerminalTelemetry,
+  assertInteractiveTerminalRun,
   terminalFieldRequestPath,
 } from "./fdm-terminal-field-contract.mjs";
 
@@ -55,6 +56,31 @@ test("terminal FDM contract requires one completed generation for object and air
   assert.equal(proof.generation.sequence, 7);
   assert.equal(proof.final_step, finalStep);
   assert.equal(proof.final_time, finalTime);
+});
+
+test("interactive terminal run requires completed-stage provenance before awaiting_command", () => {
+  assert.deepEqual(
+    assertInteractiveTerminalRun({
+      run: { status: "awaiting_command", total_steps: finalStep, solver_time_seconds: finalTime },
+      sessionStatus: { solver: { state: "awaiting_command" } },
+      stageExecution: {
+        runtime_state: "completed",
+        active_stage_index: null,
+        completed_stage_indexes: [0],
+        stages: [{ index: 0, status: "completed" }],
+      },
+    }),
+    { final_step: finalStep, final_time: finalTime },
+  );
+
+  assert.throws(
+    () => assertInteractiveTerminalRun({
+      run: { status: "awaiting_command", total_steps: finalStep, solver_time_seconds: finalTime },
+      sessionStatus: { solver: { state: "awaiting_command" } },
+      stageExecution: { runtime_state: "completed", active_stage_index: null, completed_stage_indexes: [], stages: [] },
+    }),
+    /completed terminal stage/,
+  );
 });
 
 test("terminal FDM contract rejects a stale or cross-generation field", () => {

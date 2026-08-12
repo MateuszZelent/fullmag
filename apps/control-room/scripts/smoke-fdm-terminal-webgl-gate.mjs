@@ -5,6 +5,7 @@ import { dirname } from "node:path";
 import {
   assertCompletedTerminalFieldContract,
   assertCompletedTerminalTelemetry,
+  assertInteractiveTerminalRun,
   terminalFieldRequestPath,
 } from "./fdm-terminal-field-contract.mjs";
 
@@ -13,23 +14,41 @@ const workspaceUrl = process.env.CONTROL_ROOM_URL ?? "http://127.0.0.1:3197/work
 const artifactDir = process.env.CONTROL_ROOM_FDM_TERMINAL_WEBGL_ARTIFACT_DIR ?? ".fullmag/reports/fdm-terminal-webgl-gate";
 const evidencePath = process.env.CONTROL_ROOM_FDM_TERMINAL_WEBGL_EVIDENCE ?? `${artifactDir}/fdm-terminal-webgl-gate.json`;
 const timeoutMs = Number(process.env.CONTROL_ROOM_FDM_TERMINAL_WEBGL_TIMEOUT_MS ?? 180_000);
+const apiPhaseTimeoutMs = Math.min(timeoutMs, 30_000);
+const browserPhaseTimeoutMs = Math.min(timeoutMs, 60_000);
 const objectId = process.env.CONTROL_ROOM_FDM_TERMINAL_OBJECT_ID ?? "smoke_box";
 const canvasSelector = ".fm-viewport-3d canvas";
+let activePhase = "initialization";
+
+function setPhase(next) {
+  activePhase = next;
+  console.log(`[fdm-terminal-webgl] phase=${activePhase}`);
+}
 
 async function main() {
   const playwright = await loadPlaywright();
   if (!playwright?.chromium) throw new Error("FDM terminal WebGL smoke requires Playwright Chromium.");
   await mkdir(artifactDir, { recursive: true });
+  setPhase("completed-stage");
   const stageExecution = await poll("completed FDM stage", async () => {
     const value = await getJson("/v2/sessions/current/simulation/stages/execution");
-    return String(value?.runtime_state ?? "").toLowerCase() === "completed" ? value : null;
-  });
-  const run = await poll("completed FDM run", async () => {
-    const value = await getJson("/v2/sessions/current/simulation/runs/current");
-    return value?.status === "completed" && Number.isInteger(value?.total_steps) && Number.isFinite(value?.solver_time_seconds) ? value : null;
-  });
-  const finalStep = run.total_steps;
-  const finalTime = run.solver_time_seconds;
+    return Array.isArray(value?.stages) && value.stages.some((stage) => stage?.status === "completed") ? value : null;
+  }, apiPhaseTimeoutMs);
+  setPhase("interactive-terminal-run");
+  const terminalRun = await poll("interactive terminal FDM run", async () => {
+    const [run, sessionStatus] = await Promise.all([
+      getJson("/v2/sessions/current/simulation/runs/current"),
+      getJson("/v2/sessions/current/status"),
+    ]);
+    try {
+      const coordinates = assertInteractiveTerminalRun({ run, sessionStatus, stageExecution });
+      return { ...coordinates, run, sessionStatus };
+    } catch {
+      return null;
+    }
+  }, apiPhaseTimeoutMs);
+  const { final_step: finalStep, final_time: finalTime, run, sessionStatus } = terminalRun;
+  setPhase("terminal-field-catalog");
   const catalog = await getJson("/v2/sessions/current/data/fields");
   const scopes = { airbox: { scopeId: "airbox", scopeKind: "airbox" }, object: { scopeId: objectId, scopeKind: "object" } };
   const fieldEntries = [
@@ -42,10 +61,12 @@ async function main() {
     await getJson(terminalFieldRequestPath(quantityId, scopes[scope])),
   ])));
   const terminal = assertCompletedTerminalFieldContract({ catalog, fields, finalStep, finalTime, stageExecution });
+  setPhase("terminal-telemetry");
   const objectMetrics = await getJson(`/v2/sessions/current/simulation/objects/${encodeURIComponent(objectId)}/metrics`);
   const tableRows = await getJson("/v2/sessions/current/data/tables/default/rows?columns=t,dt,mx,my,mz");
   const telemetry = assertCompletedTerminalTelemetry({ finalStep, finalTime, objectMetrics, tableRows });
 
+  setPhase("browser-launch");
   const browser = await playwright.chromium.launch();
   const page = await browser.newPage({ viewport: { height: 900, width: 1440 } });
   const requests = [];
@@ -57,9 +78,10 @@ async function main() {
   });
   try {
     await page.addInitScript((baseUrl) => { window.__FULLMAG_CONFIG__ = { ...(window.__FULLMAG_CONFIG__ ?? {}), controlRoomApiBase: baseUrl }; }, apiBase);
-    await page.goto(workspaceUrl, { waitUntil: "domcontentloaded", timeout: timeoutMs });
+    setPhase("workspace-load");
+    await page.goto(workspaceUrl, { waitUntil: "domcontentloaded", timeout: browserPhaseTimeoutMs });
     const canvas = page.locator(canvasSelector);
-    await canvas.waitFor({ state: "visible", timeout: timeoutMs });
+    await canvas.waitFor({ state: "visible", timeout: browserPhaseTimeoutMs });
     const canvasHealth = await canvas.evaluate((node) => {
       const gl = node.getContext("webgl2") ?? node.getContext("webgl");
       const rect = node.getBoundingClientRect();
@@ -67,18 +89,22 @@ async function main() {
     });
     if (!canvasHealth.visible || canvasHealth.is_context_lost || canvasHealth.drawing_buffer.some((value) => value <= 0)) throw new Error(`WebGL canvas unhealthy: ${JSON.stringify(canvasHealth)}`);
     const switches = [];
+    setPhase("object-quantity-switches");
     switches.push(await switchInspectorQuantity({ page, quantityId: "H_demag", requests, scope: "object", scopes }));
     switches.push(await switchRibbonQuantity({ page, quantityId: "H_eff", requests, scope: "object", scopes }));
     switches.push(await switchInspectorQuantity({ page, quantityId: "H_ext", requests, scope: "object", scopes }));
     switches.push(await switchInspectorQuantity({ page, quantityId: "eden_demag", requests, scope: "object", scopes }));
+    setPhase("airbox-quantity-gate");
     const airboxMagnetization = await assertAirboxMagnetizationUnavailable({ page, scopes });
+    setPhase("airbox-field-switches");
     for (const [scope, quantityId] of [["airbox", "H_demag"], ["airbox", "H_eff"]]) {
       switches.push(await switchInspectorQuantity({ page, quantityId, requests, scope, scopes }));
     }
+    setPhase("screenshot");
     const screenshotPath = `${artifactDir}/fdm-terminal-webgl.png`;
     const screenshot = await canvas.screenshot({ path: screenshotPath });
     if (errors.length > 0) throw new Error(`Browser errors: ${errors.join("\\n")}`);
-    const evidence = { schema_version: "fdm_terminal_webgl_gate.v1", qualification_status: "passed_cpu_fdm_terminal", terminal, telemetry, run, catalog, fields, airbox_magnetization: airboxMagnetization, canvas: { ...canvasHealth, screenshot: { path: screenshotPath, sha256: createHash("sha256").update(screenshot).digest("hex") } }, field_requests: requests, quantity_switches: switches, no_manual_compute_fields: true, workspace_url: workspaceUrl };
+    const evidence = { schema_version: "fdm_terminal_webgl_gate.v1", qualification_status: "passed_cpu_fdm_terminal", terminal, telemetry, run, session_status: sessionStatus, stage_execution: stageExecution, catalog, fields, airbox_magnetization: airboxMagnetization, canvas: { ...canvasHealth, screenshot: { path: screenshotPath, sha256: createHash("sha256").update(screenshot).digest("hex") } }, field_requests: requests, quantity_switches: switches, no_manual_compute_fields: true, workspace_url: workspaceUrl };
     await writeEvidenceAtomically(evidencePath, evidence);
     console.log(`FDM terminal WebGL gate passed: ${evidencePath}`);
   } finally { await browser.close(); }
@@ -144,7 +170,7 @@ async function waitForScopedFieldRequest({ requests, quantityId, scope, start = 
 
 async function getJson(path) { const response = await fetch(`${apiBase}${path}`); if (!response.ok) throw new Error(`${path}: ${response.status} ${await response.text()}`); return response.json(); }
 async function patchJson(path, body) { const response = await fetch(`${apiBase}${path}`, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify(body) }); if (!response.ok) throw new Error(`${path}: ${response.status} ${await response.text()}`); return response.json(); }
-async function poll(label, test) { const deadline = Date.now() + timeoutMs; let lastError = null; while (Date.now() < deadline) { try { const value = await test(); if (value) return value; } catch (error) { lastError = error; } await new Promise((resolve) => setTimeout(resolve, 250)); } throw new Error(`${label} timed out${lastError ? `: ${lastError.message}` : ""}`); }
+async function poll(label, test, limitMs = timeoutMs) { const deadline = Date.now() + limitMs; let lastError = null; while (Date.now() < deadline) { try { const value = await test(); if (value) return value; } catch (error) { lastError = error; } await new Promise((resolve) => setTimeout(resolve, 250)); } throw new Error(`${label} timed out in phase=${activePhase} after ${limitMs}ms${lastError ? `: ${lastError.message}` : ""}`); }
 async function loadPlaywright() { try { return await import("playwright"); } catch { try { return await import("@playwright/test"); } catch { return null; } } }
 async function writeEvidenceAtomically(path, value) { await mkdir(dirname(path), { recursive: true }); const temporaryPath = `${path}.tmp-${process.pid}`; await writeFile(temporaryPath, `${JSON.stringify(value, null, 2)}\n`, { encoding: "utf8" }); await rename(temporaryPath, path); }
 

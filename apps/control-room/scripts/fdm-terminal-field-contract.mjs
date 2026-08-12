@@ -16,6 +16,28 @@ export function terminalFieldRequestPath(quantityId, { scopeId, scopeKind }) {
   return `/v2/sessions/current/data/fields/${encodeURIComponent(quantityId)}/meta?${query}`;
 }
 
+export function assertInteractiveTerminalRun({ run, sessionStatus, stageExecution }) {
+  if (!hasCompletedTerminalStage(stageExecution)) {
+    throw new Error("Interactive terminal FDM smoke requires a completed terminal stage execution.");
+  }
+  if (String(stageExecution?.runtime_state ?? "").toLowerCase() !== "completed") {
+    throw new Error(`Interactive terminal stage execution must remain completed, got ${stageExecution?.runtime_state}.`);
+  }
+  if (stageExecution?.active_stage_index != null) {
+    throw new Error("Completed terminal stage execution must not retain an active stage.");
+  }
+  if (String(run?.status ?? "").toLowerCase() !== "awaiting_command") {
+    throw new Error(`Interactive terminal run must be awaiting_command, got ${run?.status}.`);
+  }
+  if (String(sessionStatus?.solver?.state ?? "").toLowerCase() !== "awaiting_command") {
+    throw new Error(`Interactive terminal session must be awaiting_command, got ${sessionStatus?.solver?.state}.`);
+  }
+  if (!Number.isInteger(run?.total_steps) || run.total_steps < 0 || !Number.isFinite(run?.solver_time_seconds) || run.solver_time_seconds <= 0) {
+    throw new Error(`Invalid interactive terminal source coordinates: step=${run?.total_steps} time=${run?.solver_time_seconds}.`);
+  }
+  return { final_step: run.total_steps, final_time: run.solver_time_seconds };
+}
+
 export function assertCompletedTerminalFieldContract({
   catalog,
   fields,
@@ -91,6 +113,13 @@ function hasCompletedStage(value) {
   return Object.values(value).some((entry) =>
     Array.isArray(entry) ? entry.some(hasCompletedStage) : hasCompletedStage(entry),
   );
+}
+
+function hasCompletedTerminalStage(value) {
+  return Array.isArray(value?.stages)
+    && value.stages.some((stage) => String(stage?.status ?? "").toLowerCase() === "completed")
+    && Array.isArray(value?.completed_stage_indexes)
+    && value.completed_stage_indexes.length > 0;
 }
 
 function sameTime(left, right) {
