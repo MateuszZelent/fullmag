@@ -6,7 +6,6 @@ import type {
   FdmMultilayerLayoutResource,
   FdmRegionMembershipResource,
   FrequencyDomainManifestResource,
-  FrequencyDomainSweepProgressResource,
   HysteresisExecutionTreeResource,
   SceneResource,
 } from "@/kernel/api/apiTypes";
@@ -283,44 +282,6 @@ const FREQUENCY_DOMAIN_RESPONSE_SWEEP = {
   schema_version: "frequency_domain_response_sweep_resource.v1",
   status: "ready",
 } as const;
-
-const FREQUENCY_DOMAIN_RESPONSE_PROGRESS: FrequencyDomainSweepProgressResource = {
-  complete: false,
-  completed_frequency_points: 3,
-  current_frequency_hz: 10.5e9,
-  demag_mode: "periodic_airbox_k0",
-  frequency_max_hz: 12.0e9,
-  frequency_min_hz: 8.0e9,
-  latest_artifact_manifest_path: "frequency_domain/manifest.partial.v1.json",
-  missing_reason: null,
-  partial_artifacts_available: true,
-  progress_json:
-    '{"schema_version":"frequency_domain_sweep_progress.v1","state":"running"}',
-  schema_version: "frequency_domain_sweep_progress.v1",
-  state: "running",
-  status: "ok",
-  total_frequency_points: 10,
-  written_frequency_point_artifacts: 3,
-};
-
-const FREQUENCY_DOMAIN_RESPONSE_CANCEL_REQUESTED: FrequencyDomainSweepProgressResource = {
-  complete: false,
-  completed_frequency_points: 4,
-  current_frequency_hz: 10.0e9,
-  demag_mode: "periodic_airbox_k0",
-  frequency_max_hz: 12.0e9,
-  frequency_min_hz: 8.0e9,
-  latest_artifact_manifest_path: "frequency_domain/manifest.cancelled.v1.json",
-  missing_reason: null,
-  partial_artifacts_available: true,
-  progress_json:
-    '{"schema_version":"frequency_domain_sweep_progress.v1","state":"cancel_requested"}',
-  schema_version: "frequency_domain_sweep_progress.v1",
-  state: "cancel_requested",
-  status: "ok",
-  total_frequency_points: 10,
-  written_frequency_point_artifacts: 4,
-};
 
 describe("buildModelTree", () => {
   it("keeps Visualization available for a primitive-only scene object", () => {
@@ -2134,9 +2095,7 @@ describe("buildModelTree", () => {
     const jobs = flattenExplorerNodes(
       buildExplorerTree("jobs", {
         currentRun: currentRun("run-fd-1", 7),
-        frequencyDomainCancelRequested: FREQUENCY_DOMAIN_RESPONSE_CANCEL_REQUESTED,
         frequencyDomainManifest: FREQUENCY_DOMAIN_MANIFEST,
-        frequencyDomainResponseProgress: FREQUENCY_DOMAIN_RESPONSE_PROGRESS,
         frequencyDomainResponseSweep: FREQUENCY_DOMAIN_RESPONSE_SWEEP,
         frequencyDomainSpectrum: FREQUENCY_DOMAIN_SPECTRUM,
       }),

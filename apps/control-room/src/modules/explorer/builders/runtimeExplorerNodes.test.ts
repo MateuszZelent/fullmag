@@ -271,6 +271,11 @@ describe("runtime-backed Explorer tabs", () => {
         requestedExecution: { backend: "fdm", device: "gpu" },
         resolvedExecution: { backend: "fdm-cuda", device: "cuda:0" },
       });
+    expect(snapshot().jobs.find((job) => job.id === "jobs:stage:run%3Arun-12:relax-0")?.detail)
+      .toMatchObject({
+        requestedExecution: { backend: "fdm", device: "gpu" },
+        resolvedExecution: { backend: "fdm-cuda", device: "cuda:0" },
+      });
   });
 
   it("never borrows owner identity from the current run", () => {
@@ -300,10 +305,36 @@ describe("runtime-backed Explorer tabs", () => {
     expect(runtime.resources.find((resource) => resource.id === "resources:analysis:frequency-domain:manifest")?.detail.owner)
       .toBeNull();
     expect(runtime.jobs.find((job) => job.kind === "stage")).toMatchObject({
-      id: "jobs:stage:unverified:7:0:relax-0",
       selectable: false,
     });
+    expect(runtime.jobs.find((job) => job.kind === "stage")?.id)
+      .toContain(encodeURIComponent("command-1"));
     expect(runtime.jobs.find((job) => job.kind === "stage")?.detail.owner).toBeNull();
+  });
+
+  it("uses all stable identity in deterministic unowned stage fallback ids", () => {
+    const similarStages: StageExecutionResource = {
+      ...stageExecution,
+      stages: [
+        { ...stageExecution.stages[0]!, command_id: "command-a" },
+        { ...stageExecution.stages[0]!, command_id: "command-b" },
+      ],
+    };
+    const source = {
+      ...snapshot().source,
+      commandDetails: unavailable<RuntimeCommandDetailEntry[]>(),
+      stageExecution: ready(similarStages, 7),
+    };
+
+    const firstIds = runtimeExplorerSnapshotFromResources(source).jobs
+      .filter((job) => job.kind === "stage")
+      .map((job) => job.id);
+    const secondIds = runtimeExplorerSnapshotFromResources(source).jobs
+      .filter((job) => job.kind === "stage")
+      .map((job) => job.id);
+
+    expect(firstIds).toEqual(secondIds);
+    expect(new Set(firstIds).size).toBe(2);
   });
 
   it("does not render a queue when no command owner resource exists", () => {
@@ -463,10 +494,10 @@ describe("runtime-backed Explorer tabs", () => {
       status: "stale",
     });
     expect(stage).toMatchObject({
-      id: "jobs:stage:unverified:7:0:relax-0",
       detail: { owner: null },
       selectable: false,
     });
+    expect(stage?.id).toContain(encodeURIComponent("command-1"));
   });
 
   it("keeps run and stage identities collision-safe across run changes", () => {

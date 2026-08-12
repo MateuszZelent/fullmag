@@ -334,12 +334,14 @@ function jobDescriptors(source: RuntimeExplorerSourceSnapshot): RuntimeJobDescri
         ],
         key: SIMULATION_STAGES_EXECUTION_PATH,
         owner,
+        requestedExecution: executionDetail(verifiedStageCommand?.requested_execution),
+        resolvedExecution: executionDetail(verifiedStageCommand?.resolved_execution),
         revision: source.stageExecution.revision,
         source: source.stageExecution,
       }),
       id: owner
         ? `jobs:stage:${encodeId(owner)}:${encodeId(stage.stage_id)}`
-        : `jobs:stage:unverified:${encodeId(String(source.stageExecution.revision ?? "unknown"))}:${stage.index}:${encodeId(stage.stage_id)}`,
+        : unverifiedStageDescriptorId(stage, source.stageExecution.revision),
       kind: "stage",
       label: stage.label ?? `Stage ${stage.index + 1}`,
       selectable: owner !== null,
@@ -628,6 +630,22 @@ function executionNodeState(status: string, source: RuntimeResourceSnapshot<unkn
 
 function encodeId(value: string): string {
   return encodeURIComponent(value);
+}
+
+function unverifiedStageDescriptorId(
+  stage: StageExecutionResource["stages"][number],
+  revision: ResourceRevision | null,
+): string {
+  const identity = JSON.stringify({
+    action: stage.action ?? null,
+    command_id: stage.command_id ?? null,
+    index: stage.index,
+    kind: stage.kind ?? null,
+    label: stage.label ?? null,
+    revision,
+    stage_id: stage.stage_id,
+  });
+  return `jobs:stage:unverified:${encodeId(identity)}`;
 }
 
 function commandDetailResourceKey(commandId: string): string {

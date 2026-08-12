@@ -151,19 +151,3 @@ export function buildFrequencyDomainCalculationModeRows(
     },
   ];
 }
-
-export function frequencyDomainResourceGroupLabel(kind: string): string {
-  if (kind === "resources.analysis.frequency_domain.calculation_modes") {
-    return "Calculation mode resources";
-  }
-  if (kind === "resources.analysis.frequency_domain.fmr") {
-    return "FMR resource group";
-  }
-  if (kind === "resources.analysis.frequency_domain.dispersion") {
-    return "Dispersion resource group";
-  }
-  if (kind === "resources.analysis.frequency_domain.response_map") {
-    return "Response-map resource group";
-  }
-  return "frequency-domain resources";
-}

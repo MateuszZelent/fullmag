@@ -3,7 +3,6 @@ import type {
   CurrentTransportListResource,
   FrequencyDomainJsonArtifactResource,
   FrequencyDomainManifestResource,
-  FrequencyDomainSweepProgressResource,
   FrequencyDomainTextArtifactResource,
   PlanarMonitorCollectionResource,
 } from "@/kernel/api/apiTypes";
@@ -16,10 +15,8 @@ export interface ExplorerTreeResources {
   activeAnalysisFieldOverlay?: AnalysisFieldOverlayState | null;
   currentRun?: CurrentRunResource | null;
   frequencyDomainBranches?: FrequencyDomainJsonArtifactResource | null;
-  frequencyDomainCancelRequested?: FrequencyDomainSweepProgressResource | null;
   frequencyDomainDispersion?: FrequencyDomainTextArtifactResource | null;
   frequencyDomainManifest?: FrequencyDomainManifestResource | null;
-  frequencyDomainResponseProgress?: FrequencyDomainSweepProgressResource | null;
   frequencyDomainResponseSweep?: FrequencyDomainJsonArtifactResource | null;
   frequencyDomainSpectrum?: FrequencyDomainJsonArtifactResource | null;
   pinnedQuickChart?: PinnedQuickChart | null;

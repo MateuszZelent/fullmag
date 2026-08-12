@@ -259,14 +259,12 @@ function sourceFromSelectionRef(
   }
   if (
     ref.kind.startsWith("results.eigen") ||
-    ref.kind.startsWith("resources.analysis.eigen") ||
     ref.fieldId?.startsWith("analysis:eigen:")
   ) {
     return "eigen-mode";
   }
   if (
     ref.kind.startsWith("results.frequency_response") ||
-    ref.kind.startsWith("resources.analysis.frequency_response") ||
     ref.fieldId?.startsWith("analysis:frequency-response:")
   ) {
     return "frequency-response";

@@ -33,7 +33,7 @@ import { resolveInspectorDescriptor } from "./inspectorDescriptor";
 import { resolveInspectorPanel } from "./inspectorRegistry";
 import { resolveInspectorRoute } from "./inspectorRouteCatalog";
 
-const frequencyDomainResponseProgress: FrequencyDomainSweepProgressResource = {
+const canonicalResponseProgress: FrequencyDomainSweepProgressResource = {
   complete: false,
   completed_frequency_points: 3,
   current_frequency_hz: 10.5e9,
@@ -52,8 +52,8 @@ const frequencyDomainResponseProgress: FrequencyDomainSweepProgressResource = {
   written_frequency_point_artifacts: 3,
 };
 
-const frequencyDomainCancelRequested: FrequencyDomainSweepProgressResource = {
-  ...frequencyDomainResponseProgress,
+const canonicalCancelRequested: FrequencyDomainSweepProgressResource = {
+  ...canonicalResponseProgress,
   completed_frequency_points: 4,
   current_frequency_hz: 10.0e9,
   latest_artifact_manifest_path: "frequency_domain/manifest.cancelled.v1.json",
@@ -101,8 +101,8 @@ const frequencyDomainManifest = {
     status: "ok",
     study_kind: "frequency_response",
   },
-  response_cancel_requested: frequencyDomainCancelRequested,
-  response_progress: frequencyDomainResponseProgress,
+  response_cancel_requested: canonicalCancelRequested,
+  response_progress: canonicalResponseProgress,
   result_manifest: {
     artifact_path: "frequency_domain/manifest.v1.json",
     missing_reason: null,
@@ -353,10 +353,8 @@ const modelSnapshot = (() => {
 const resources = {
   currentRun: { revision: 1, run_id: "run-fixture" } as never,
   frequencyDomainBranches,
-  frequencyDomainCancelRequested,
   frequencyDomainDispersion,
   frequencyDomainManifest,
-  frequencyDomainResponseProgress,
   frequencyDomainResponseSweep,
   frequencyDomainSpectrum,
 };
@@ -592,6 +590,30 @@ describe("inspector route coverage", () => {
       new URL("../explorer/ExplorerModule.tsx", import.meta.url),
       "utf8",
     );
+    const explorerNodeContract = readFileSync(
+      new URL("../explorer/builders/explorerNodeContract.ts", import.meta.url),
+      "utf8",
+    );
+    const frequencyDomainNodeDetails = readFileSync(
+      new URL("./panels/frequencyDomainNodeDetails.ts", import.meta.url),
+      "utf8",
+    );
+    const frequencyDomainHelpers = readFileSync(
+      new URL("./panels/frequency-domain/FrequencyDomainHelpers.ts", import.meta.url),
+      "utf8",
+    );
+    const frequencyDomainInspectorModel = readFileSync(
+      new URL("./panels/frequencyDomainInspectorModel.ts", import.meta.url),
+      "utf8",
+    );
+    const analysisOverlayCommands = readFileSync(
+      new URL("../../kernel/visualization/analysisFieldOverlayCommandContributions.ts", import.meta.url),
+      "utf8",
+    );
+    const pbcInspectorModel = readFileSync(
+      new URL("./panels/pbcInspectorModel.ts", import.meta.url),
+      "utf8",
+    );
 
     for (const legacyPrefix of [
       "resources.analysis.frequency_domain",
@@ -602,7 +624,15 @@ describe("inspector route coverage", () => {
     ]) {
       expect(explorerTypes).not.toContain(legacyPrefix);
       expect(routes).not.toContain(legacyPrefix);
+      expect(explorerNodeContract).not.toContain(legacyPrefix);
+      expect(frequencyDomainNodeDetails).not.toContain(legacyPrefix);
+      expect(frequencyDomainHelpers).not.toContain(legacyPrefix);
+      expect(frequencyDomainInspectorModel).not.toContain(legacyPrefix);
+      expect(analysisOverlayCommands).not.toContain(legacyPrefix);
+      expect(pbcInspectorModel).not.toContain(legacyPrefix);
     }
+    expect(explorerNodeContract).not.toContain("frequencyDomainCancelRequested");
+    expect(explorerNodeContract).not.toContain("frequencyDomainResponseProgress");
     expect(explorer).not.toContain("useFrequencyDomainResponseProgressResource");
     expect(explorer).not.toContain("useFrequencyDomainResponseCancelRequestedResource");
     for (const legacyFile of [

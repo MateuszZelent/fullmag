@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest";
 
 import {
   buildFrequencyDomainCalculationModeRows,
-  frequencyDomainResourceGroupLabel,
   periodicStatusView,
 } from "./frequencyDomainInspectorModel";
 
@@ -70,27 +69,6 @@ describe("frequencyDomainInspectorModel", () => {
     ).toBe(
       "reference_cpu: reference_executable; production_cpu: partial_production_executable; production_cpu_gamma_k_path: partial_production_executable; production_gpu: unsupported; k_path: reference_executable",
     );
-  });
-
-  it("labels frequency-domain resource-group nodes for inspectors", () => {
-    expect(
-      frequencyDomainResourceGroupLabel(
-        "resources.analysis.frequency_domain.calculation_modes",
-      ),
-    ).toBe("Calculation mode resources");
-    expect(
-      frequencyDomainResourceGroupLabel("resources.analysis.frequency_domain.fmr"),
-    ).toBe("FMR resource group");
-    expect(
-      frequencyDomainResourceGroupLabel(
-        "resources.analysis.frequency_domain.dispersion",
-      ),
-    ).toBe("Dispersion resource group");
-    expect(
-      frequencyDomainResourceGroupLabel(
-        "resources.analysis.frequency_domain.response_map",
-      ),
-    ).toBe("Response-map resource group");
   });
 
   it.each([
