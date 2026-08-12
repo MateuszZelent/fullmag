@@ -7,23 +7,27 @@ use axum::{
     response::IntoResponse,
     Json,
 };
-use fullmag_ir::{MonitorTargetIR, PlanarExtentIR, PlanarMonitorIR, PlanarOperatorIR};
+use fullmag_ir::{PlanarMonitorIR, PlanarOperatorIR};
 use sha2::{Digest, Sha256};
 
-use super::fdm_region_membership::load_resolved_fdm_membership;
-use super::field_resolution::{extract_fdm_field, extract_fem_field};
 use crate::{
     error::ApiError,
     field_render_png::{encode_scalar_png, AutoScaleMode},
     field_store::serialize_field_vector_binary_v2,
     planar_sampling::{
-        FdmPlanarField, FemPlanarField, Occupancy, PlanarComponent, PlanarSampleResult,
-        PlanarSamplingEngine, ResolvedPlanarSampleRequest, MAX_PLANAR_SAMPLE_POINTS,
+        resolve_spatial_target, sample_resolved_target, Occupancy, PlanarComponent,
+        PlanarSampleIdentity, PlanarSampleResult, ResolvedPlanarSampleRequest,
+        ResolvedSpatialScope, MAX_PLANAR_SAMPLE_POINTS,
     },
     preview::quantity_unit,
     router_v2::handlers::{
         data::fields::{
-            persisted_hysteresis_magnetization_values, validate_hysteresis_snapshot_stage_scope,
+            load_fdm_multilayer_airbox_carrier, persisted_hysteresis_magnetization_values,
+            resolved_fdm_multilayer_airbox_field, validate_hysteresis_snapshot_stage_scope,
+        },
+        data::resolved_spatial_field::{
+            resolve_current_spatial_field, resolve_spatial_field_from_values,
+            SpatialFieldProvenance, SpatialFieldSourceKind,
         },
         sessions::status::{domain_generation_id, field_quantity_revision},
     },
@@ -337,10 +341,9 @@ async fn build_planar_field(
     let spec = fullmag_quantities::quantity_spec(quantity_id)
         .ok_or_else(|| ApiError::not_found(format!("quantity not found: {quantity_id}")))?;
     let n_comp = spec.n_comp as usize;
-    let field_revision = field_quantity_revision(snapshot, quantity_id);
+    let current_field_revision = field_quantity_revision(snapshot, quantity_id);
     let generation_id = domain_generation_id(snapshot);
     let mesh_revision = snapshot.mesh_revision;
-    validate_expected_revisions(query, scene.revision, mesh_revision, field_revision)?;
     validate_scope(snapshot, query)?;
 
     let snapshot_values = if let Some(snapshot_id) = query.snapshot_id.as_deref() {
@@ -360,26 +363,76 @@ async fn build_planar_field(
     } else {
         None
     };
-    let mut fdm = if let Some((values, grid)) = snapshot_values {
-        Some(crate::field_slice::FdmField {
+    let resolved_field = if let Some((values, grid)) = snapshot_values {
+        resolve_spatial_field_from_values(
+            snapshot,
+            quantity_id,
             n_comp,
-            grid,
             values,
-            origin: None,
-            spacing: None,
-            active_mask: None,
-        })
+            Some(grid),
+            SpatialFieldSourceKind::Persisted,
+            current_field_revision.max(1),
+            query.snapshot_id.clone(),
+            SpatialFieldProvenance {
+                backend: snapshot.session.resolved_backend.clone(),
+                device: snapshot.session.resolved_device.clone(),
+                precision: snapshot.session.resolved_precision.clone(),
+            },
+        )?
+    } else if query.scope_kind.as_deref() == Some("airbox") {
+        match load_fdm_multilayer_airbox_carrier(snapshot).map_err(|reason| {
+            ApiError::not_found(format!(
+                "multilayer FDM Airbox carrier unavailable: {reason}"
+            ))
+        })? {
+            Some(carrier) => {
+                resolved_fdm_multilayer_airbox_field(snapshot, quantity_id, n_comp, &carrier)?
+            }
+            None => {
+                resolve_current_spatial_field(snapshot, quantity_id, n_comp)?.ok_or_else(|| {
+                    ApiError::not_found(format!(
+                        "quantity_not_materialized: field '{quantity_id}' is not published"
+                    ))
+                })?
+            }
+        }
     } else {
-        extract_fdm_field(snapshot, quantity_id, n_comp)
+        resolve_current_spatial_field(snapshot, quantity_id, n_comp)?.ok_or_else(|| {
+            ApiError::not_found(format!(
+                "quantity_not_materialized: field '{quantity_id}' is not published"
+            ))
+        })?
     };
-    let mut fem = if query.snapshot_id.is_none() {
-        extract_fem_field(snapshot, quantity_id, n_comp)
-    } else {
-        None
+    let field_revision = resolved_field.quantity_revision;
+    validate_expected_revisions(query, scene.revision, mesh_revision, field_revision)?;
+    let scope = match query.scope_kind.as_deref().unwrap_or("monitor_target") {
+        "monitor_target" => ResolvedSpatialScope::MonitorTarget,
+        "mesh_part" => ResolvedSpatialScope::MeshPart {
+            scope_id: query.scope_id.clone().expect("validated mesh-part scope"),
+        },
+        "airbox" => ResolvedSpatialScope::Airbox {
+            scope_id: query.scope_id.clone(),
+        },
+        _ => unreachable!("scope validated before target resolution"),
     };
-    apply_resolved_scope(snapshot, &monitor.target, query, &mut fdm, &mut fem)?;
-    resolve_dynamic_extent(&mut monitor, fdm.as_ref(), fem.as_ref())?;
+    let target =
+        resolve_spatial_target(&resolved_field, &monitor.target, scope, &monitor.operator)?;
+    target.resolve_dynamic_extent(&mut monitor.frame)?;
     let scene_revision = scene.revision;
+    let session_id = snapshot.session.session_id.clone();
+    let target_fingerprint = target.fingerprint().to_string();
+    let target_kind = target.target_kind().to_string();
+    let target_id = target.target_id().map(str::to_string);
+    let target_entity_count = target.selected_entity_ids().len();
+    let source_entity_kind = target.source_entity_kind();
+    let carrier_revision = resolved_field.mesh_or_grid_revision;
+    let field_generation = resolved_field.field_generation.clone();
+    let field_content_fingerprint = (field_revision == 0 && field_generation.is_none())
+        .then(|| spatial_field_content_fingerprint(&resolved_field.values));
+    let source_kind = spatial_source_kind_label(resolved_field.source_kind).to_string();
+    let source_backend = resolved_field.provenance.backend.clone();
+    let source_device = resolved_field.provenance.device.clone();
+    let source_precision = resolved_field.provenance.precision.clone();
     let field_source = query
         .snapshot_id
         .as_ref()
@@ -397,7 +450,6 @@ async fn build_planar_field(
         resolution,
         component,
     };
-    let source_entity_kind = if fem.is_some() { "element" } else { "cell" };
     let scope_kind = query
         .scope_kind
         .clone()
@@ -409,58 +461,43 @@ async fn build_planar_field(
             "magnitude".to_string()
         }
     });
-    let sample_cache_identity = serde_json::json!({
-        "schema": "planar-sample-cache-v1",
-        "monitor_hash": monitor_hash,
-        "quantity_id": quantity_id,
-        "component": component_label,
-        "resolution": resolution,
-        "field_revision": field_revision,
-        "mesh_revision": mesh_revision,
-        "generation_id": generation_id,
-        "field_source": field_source,
-        "scope_kind": scope_kind,
-        "scope_id": query.scope_id,
-    });
-    let sample_cache_key = format!(
-        "planar-sample:{:x}",
-        Sha256::digest(sample_cache_identity.to_string().as_bytes())
-    );
-    let mut sample_cache = state.quantity_data_plane.planar_sample_cache.lock().await;
-    let result = if let Some(cached) = sample_cache.get(&sample_cache_key) {
-        cached
-    } else {
-        let sampled = if let Some(fem) = fem {
-            let source = FemPlanarField::new(
-                fem.n_comp,
-                fem.nodes,
-                fem.elements,
-                fem.element_markers,
-                fem.values,
-            )?;
-            PlanarSamplingEngine::sample_fem(&source, &request)?
-        } else if let Some(fdm) = fdm {
-            let mut source = FdmPlanarField::new(
-                fdm.n_comp,
-                fdm.grid,
-                fdm.origin.unwrap_or([-0.5; 3]),
-                fdm.spacing.unwrap_or([1.0; 3]),
-                fdm.values,
-            )?;
-            if let Some(active_mask) = fdm.active_mask {
-                source = source.with_membership_mask(active_mask)?;
-            }
-            PlanarSamplingEngine::sample_fdm(&source, &request)?
-        } else {
-            return Err(ApiError::not_found(format!(
-                "quantity_not_materialized: field '{quantity_id}' is not published"
-            )));
-        };
-        let sampled = Arc::new(sampled);
-        sample_cache.insert(sample_cache_key, Arc::clone(&sampled));
-        sampled
-    };
-    drop(sample_cache);
+    let sample_cache_key = PlanarSampleIdentity {
+        session_id,
+        monitor_id: monitor.id.clone(),
+        monitor_revision: scene_revision,
+        monitor_hash: monitor_hash.clone(),
+        scene_revision,
+        target_fingerprint,
+        target_kind,
+        target_id,
+        target_entity_count,
+        scope_kind: scope_kind.clone(),
+        scope_id: query.scope_id.clone(),
+        quantity_id: quantity_id.to_string(),
+        component: component_label.clone(),
+        quantity_revision: field_revision,
+        field_generation,
+        field_content_fingerprint,
+        carrier_revision,
+        source_kind,
+        source_backend,
+        source_device,
+        source_precision,
+        frame: monitor.frame.clone(),
+        operator: monitor.operator.clone(),
+        resolution,
+        quality: query
+            .quality
+            .clone()
+            .unwrap_or_else(|| "interactive".to_string()),
+    }
+    .cache_key();
+    let result = state
+        .quantity_data_plane
+        .get_or_sample_planar(&sample_cache_key, || async move {
+            Ok(Arc::new(sample_resolved_target(&target, &request)?))
+        })
+        .await?;
     let etag_identity = serde_json::json!({
         "schema": "planar-field-cache-v1",
         "monitor_hash": monitor_hash,
@@ -597,241 +634,6 @@ fn validate_scope(
     Ok(())
 }
 
-fn apply_resolved_scope(
-    snapshot: &crate::types::SessionStateResponse,
-    target: &MonitorTargetIR,
-    query: &PlanarFieldQuery,
-    fdm: &mut Option<crate::field_slice::FdmField>,
-    fem: &mut Option<crate::field_slice::FemField>,
-) -> Result<(), ApiError> {
-    let scope_kind = query.scope_kind.as_deref().unwrap_or("monitor_target");
-    if fem.is_none() {
-        if scope_kind != "monitor_target" {
-            return Err(ApiError::unprocessable(
-                "planar_scope_unsupported: structured-grid runtime does not publish mesh-part or airbox membership",
-            ));
-        }
-        if matches!(target, MonitorTargetIR::Domain) {
-            return Ok(());
-        }
-        let field = fdm
-            .as_mut()
-            .ok_or_else(|| ApiError::not_found("quantity_not_materialized"))?;
-        let membership = load_resolved_fdm_membership(snapshot)?;
-        if membership.counts != field.grid
-            || membership.cell_membership.len()
-                != field
-                    .grid
-                    .iter()
-                    .map(|count| *count as usize)
-                    .product::<usize>()
-        {
-            return Err(ApiError::conflict(
-                "stale_fdm_membership: membership grid does not match the published field",
-            ));
-        }
-        let selected = match target {
-            MonitorTargetIR::MagneticDomain => membership
-                .cell_membership
-                .iter()
-                .map(|value| *value != u32::MAX)
-                .collect::<Vec<_>>(),
-            MonitorTargetIR::Object { object_id } => {
-                if !membership.object_ids.iter().any(|id| id == object_id) {
-                    return Err(ApiError::conflict(format!(
-                        "stale_fdm_membership: object '{object_id}' is absent from the realized grid"
-                    )));
-                }
-                membership
-                    .cell_membership
-                    .iter()
-                    .map(|value| *value != u32::MAX)
-                    .collect::<Vec<_>>()
-            }
-            MonitorTargetIR::Region {
-                object_id,
-                region_id,
-            } => {
-                let numeric_id = membership
-                    .region_legend
-                    .iter()
-                    .find(|entry| {
-                        entry.object_id == *object_id && entry.region_id == *region_id
-                    })
-                    .map(|entry| entry.numeric_id)
-                    .ok_or_else(|| {
-                        ApiError::conflict(format!(
-                            "stale_fdm_membership: region '{object_id}/{region_id}' is absent from the realized grid"
-                        ))
-                    })?;
-                membership
-                    .cell_membership
-                    .iter()
-                    .map(|value| *value == numeric_id)
-                    .collect::<Vec<_>>()
-            }
-            MonitorTargetIR::Domain => unreachable!("domain target returned above"),
-        };
-        if !selected.iter().any(|selected| *selected) {
-            return Err(ApiError::unprocessable(
-                "planar_scope_empty: resolved FDM monitor target has no active cells",
-            ));
-        }
-        field.origin = Some(membership.origin_m);
-        field.spacing = Some(membership.cell_m);
-        field.active_mask = Some(selected);
-        return Ok(());
-    }
-
-    let mesh = snapshot
-        .fem_mesh
-        .as_ref()
-        .ok_or_else(|| ApiError::conflict("stale_mesh_scope: FEM field has no current mesh"))?;
-    let field = fem.as_mut().expect("checked FEM field");
-    let mut selected = vec![false; field.elements.len()];
-    match target {
-        MonitorTargetIR::MagneticDomain => {
-            for (index, marker) in field.element_markers.iter().enumerate() {
-                selected[index] = *marker != 0;
-            }
-        }
-        MonitorTargetIR::Domain => selected.fill(true),
-        MonitorTargetIR::Object { object_id } => {
-            select_mesh_parts(mesh, &mut selected, |part| {
-                part.object_id.as_deref() == Some(object_id.as_str())
-            });
-        }
-        MonitorTargetIR::Region {
-            object_id,
-            region_id,
-        } => {
-            select_mesh_parts(mesh, &mut selected, |part| {
-                part.object_id.as_deref() == Some(object_id.as_str())
-                    && (part.id == *region_id
-                        || part.geometry_id.as_deref() == Some(region_id.as_str()))
-            });
-        }
-    }
-
-    match scope_kind {
-        "monitor_target" => {}
-        "mesh_part" => {
-            let scope_id = query.scope_id.as_deref().expect("validated mesh-part id");
-            let mut runtime_scope = vec![false; selected.len()];
-            select_mesh_parts(mesh, &mut runtime_scope, |part| part.id == scope_id);
-            for (selected, runtime) in selected.iter_mut().zip(runtime_scope) {
-                *selected &= runtime;
-            }
-        }
-        "airbox" => {
-            let mut runtime_scope = vec![false; selected.len()];
-            select_mesh_parts(mesh, &mut runtime_scope, |part| {
-                part.role.contains("air") || part.id.contains("airbox")
-            });
-            for (selected, runtime) in selected.iter_mut().zip(runtime_scope) {
-                *selected &= runtime;
-            }
-        }
-        _ => unreachable!("scope validated before resolution"),
-    }
-    if !selected.iter().any(|selected| *selected) {
-        return Err(ApiError::unprocessable(
-            "planar_scope_empty: resolved monitor target and runtime scope do not overlap",
-        ));
-    }
-    field.element_markers = selected.into_iter().map(u32::from).collect();
-    *fdm = None;
-    Ok(())
-}
-
-fn select_mesh_parts(
-    mesh: &fullmag_runner::FemMeshPayload,
-    selected: &mut [bool],
-    predicate: impl Fn(&fullmag_runner::FemMeshPartPayload) -> bool,
-) {
-    let selected_len = selected.len();
-    for part in mesh.mesh_parts.iter().filter(|part| predicate(part)) {
-        let start = part.element_start as usize;
-        let end = start
-            .saturating_add(part.element_count as usize)
-            .min(selected_len);
-        selected[start.min(selected_len)..end].fill(true);
-    }
-}
-
-fn resolve_dynamic_extent(
-    monitor: &mut PlanarMonitorIR,
-    fdm: Option<&crate::field_slice::FdmField>,
-    fem: Option<&crate::field_slice::FemField>,
-) -> Result<(), ApiError> {
-    let padding = match monitor.frame.extent {
-        PlanarExtentIR::Explicit { .. } => return Ok(()),
-        PlanarExtentIR::TargetBounds { padding_m }
-        | PlanarExtentIR::MagneticDomain { padding_m }
-        | PlanarExtentIR::Universe { padding_m } => padding_m,
-    };
-    let points = if let Some(fem) = fem {
-        fem.nodes.clone()
-    } else if let Some(fdm) = fdm {
-        let origin = fdm.origin.unwrap_or([-0.5; 3]);
-        let spacing = fdm.spacing.unwrap_or([1.0; 3]);
-        let mut low_cell = [0u32; 3];
-        let mut high_cell = fdm.grid;
-        if let Some(active_mask) = fdm.active_mask.as_ref() {
-            low_cell = fdm.grid;
-            high_cell = [0; 3];
-            for (cell, selected) in active_mask.iter().enumerate() {
-                if !selected {
-                    continue;
-                }
-                let x = cell as u32 % fdm.grid[0];
-                let yz = cell as u32 / fdm.grid[0];
-                let y = yz % fdm.grid[1];
-                let z = yz / fdm.grid[1];
-                for (axis, coordinate) in [x, y, z].into_iter().enumerate() {
-                    low_cell[axis] = low_cell[axis].min(coordinate);
-                    high_cell[axis] = high_cell[axis].max(coordinate + 1);
-                }
-            }
-        }
-        let low = [0, 1, 2].map(|axis| origin[axis] + spacing[axis] * low_cell[axis] as f64);
-        let high = [0, 1, 2].map(|axis| origin[axis] + spacing[axis] * high_cell[axis] as f64);
-        let mut corners = Vec::with_capacity(8);
-        for z in [low[2], high[2]] {
-            for y in [low[1], high[1]] {
-                for x in [low[0], high[0]] {
-                    corners.push([x, y, z]);
-                }
-            }
-        }
-        corners
-    } else {
-        return Err(ApiError::not_found("quantity_not_materialized"));
-    };
-    let mut bounds = [
-        f64::INFINITY,
-        f64::NEG_INFINITY,
-        f64::INFINITY,
-        f64::NEG_INFINITY,
-    ];
-    for point in points {
-        let delta = [0, 1, 2].map(|axis| point[axis] - monitor.frame.origin_m[axis]);
-        let u = dot(delta, monitor.frame.u_axis);
-        let v = dot(delta, monitor.frame.v_axis);
-        bounds[0] = bounds[0].min(u);
-        bounds[1] = bounds[1].max(u);
-        bounds[2] = bounds[2].min(v);
-        bounds[3] = bounds[3].max(v);
-    }
-    monitor.frame.extent = PlanarExtentIR::Explicit {
-        u_min_m: bounds[0] - padding,
-        u_max_m: bounds[1] + padding,
-        v_min_m: bounds[2] - padding,
-        v_max_m: bounds[3] + padding,
-    };
-    Ok(())
-}
-
 fn resolve_component(component: Option<&str>, n_comp: usize) -> Result<PlanarComponent, ApiError> {
     if n_comp == 1 {
         return match component.unwrap_or("scalar") {
@@ -855,6 +657,23 @@ fn resolve_component(component: Option<&str>, n_comp: usize) -> Result<PlanarCom
             "invalid_planar_component: '{other}'"
         ))),
     }
+}
+
+fn spatial_source_kind_label(source: SpatialFieldSourceKind) -> &'static str {
+    match source {
+        SpatialFieldSourceKind::Live => "live",
+        SpatialFieldSourceKind::Materialized => "materialized",
+        SpatialFieldSourceKind::Preview => "preview",
+        SpatialFieldSourceKind::Persisted => "persisted",
+    }
+}
+
+fn spatial_field_content_fingerprint(values: &[f64]) -> String {
+    let mut hasher = Sha256::new();
+    for value in values {
+        hasher.update(value.to_le_bytes());
+    }
+    format!("sha256:{:x}", hasher.finalize())
 }
 
 fn meta_resource(built: &BuiltPlanarField) -> PlanarFieldMetaResource {
@@ -940,10 +759,6 @@ fn monitor_hash(monitor: &PlanarMonitorIR) -> Result<String, ApiError> {
     let json = serde_json::to_vec(monitor)
         .map_err(|error| ApiError::internal(format!("monitor serialization failed: {error}")))?;
     Ok(format!("sha256:{:x}", Sha256::digest(json)))
-}
-
-fn dot(a: [f64; 3], b: [f64; 3]) -> f64 {
-    a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
 }
 
 fn finite_payload(values: &[f64]) -> Vec<f64> {

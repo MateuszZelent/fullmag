@@ -394,7 +394,6 @@ pub(super) fn extract_fdm_field(
             values,
             origin: None,
             spacing: None,
-            active_mask: None,
         },
     ))
 }

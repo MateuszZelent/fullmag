@@ -13317,6 +13317,14 @@ async fn planar_field_resources_publish_meta_binary_probe_png_and_etag() {
     if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
         snapshot.scene_document = Some(scene);
         snapshot.session.script_path.clear();
+        snapshot.metadata = Some(serde_json::json!({
+            "artifact_layout": {
+                "backend": "fdm",
+                "grid_cells": [2, 2, 1],
+                "origin_m": [-0.5, -0.5, -0.5],
+                "cell_size": [1.0, 1.0, 1.0]
+            }
+        }));
         snapshot.latest_fields = serde_json::from_value(serde_json::json!({
             "m": {
                 "values": [
@@ -13481,6 +13489,64 @@ async fn planar_field_resources_publish_meta_binary_probe_png_and_etag() {
     assert_eq!(snapshot_without_stage.status(), StatusCode::BAD_REQUEST);
     let snapshot_without_stage = body_json(snapshot_without_stage).await;
     assert_eq!(snapshot_without_stage["code"], "snapshot_requires_stage");
+}
+
+#[tokio::test]
+async fn planar_field_rejects_grid_values_without_a_truthful_spatial_carrier() {
+    let state = test_app_state_with_live_session().await;
+    let mut scene = sample_scene_document();
+    scene.monitors.planar.push(
+        serde_json::from_value(serde_json::json!({
+            "id": "unresolved-carrier-plane",
+            "name": "Unresolved carrier plane",
+            "target": {"kind": "domain"},
+            "frame": {
+                "origin_m": [0.0, 0.0, 0.0],
+                "u_axis": [1.0, 0.0, 0.0],
+                "v_axis": [0.0, 1.0, 0.0],
+                "normal": [0.0, 0.0, 1.0],
+                "preset": "xy",
+                "normalization_version": "planar_frame_v1",
+                "extent": {
+                    "kind": "explicit",
+                    "u_min_m": 0.0,
+                    "u_max_m": 1.0,
+                    "v_min_m": 0.0,
+                    "v_max_m": 1.0
+                }
+            },
+            "operator": {"kind": "plane_sample"}
+        }))
+        .expect("planar monitor should deserialize"),
+    );
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.scene_document = Some(scene);
+        snapshot.session.script_path.clear();
+        snapshot.metadata = None;
+        snapshot.fem_mesh = None;
+        snapshot.latest_fields = serde_json::from_value(serde_json::json!({
+            "m": {
+                "values": [[1.0, 0.0, 0.0]],
+                "layout": {"grid_cells": [1, 1, 1]}
+            }
+        }))
+        .expect("mock field should deserialize");
+    }
+    let response = build_v2_router()
+        .with_state(state)
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/fields/m/planar-monitors/unresolved-carrier-plane/meta?resolution_x=16&resolution_y=16")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+    let body = body_json(response).await;
+    assert!(body["message"]
+        .as_str()
+        .is_some_and(|message| message.contains("carrier")));
 }
 
 #[tokio::test]
@@ -13795,6 +13861,14 @@ async fn planar_field_snapshot_is_stage_scoped_and_uses_persisted_values() {
         );
         snapshot.scene_document = Some(scene);
         snapshot.session.script_path.clear();
+        snapshot.metadata = Some(serde_json::json!({
+            "artifact_layout": {
+                "backend": "fdm",
+                "grid_cells": [2, 1, 1],
+                "origin_m": [-0.5, -0.5, -0.5],
+                "cell_size": [1.0, 1.0, 1.0]
+            }
+        }));
     }
     let base = "/v2/sessions/current/data/fields/m/planar-monitors/snapshot_xy/meta";
     let valid = app

@@ -568,7 +568,7 @@ fn requested_fdm_multilayer_airbox_carrier(
     Ok(Some(carrier))
 }
 
-fn resolved_fdm_multilayer_airbox_field(
+pub(crate) fn resolved_fdm_multilayer_airbox_field(
     _snapshot: &SessionStateResponse,
     quantity_id: &str,
     component_count: usize,
