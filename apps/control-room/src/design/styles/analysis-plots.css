@@ -12,6 +12,19 @@
   padding: var(--fm-space-3);
 }
 
+.fm-analysis-plots__navigation {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: var(--fm-space-2);
+  min-width: 0;
+}
+
+.fm-analysis-plots__tabs-scroll {
+  min-width: 0;
+  overflow-x: auto;
+}
+
 .fm-analysis-plots__tabs {
   display: flex;
   flex-shrink: 0;
@@ -19,8 +32,12 @@
   gap: var(--fm-space-1);
   min-width: 0;
   min-height: var(--fm-control-height-compact);
-  overflow-x: auto;
   padding-bottom: var(--fm-space-1);
+}
+
+.fm-analysis-plots__subview {
+  flex: 0 0 min(190px, 42%);
+  width: min(190px, 42%);
 }
 
 .fm-analysis-plots__tab {
@@ -72,6 +89,34 @@
   padding: var(--fm-space-2) var(--fm-space-3);
   border-bottom: 1px solid var(--fm-border-subtle);
   background: var(--fm-bg-panel);
+}
+
+.fm-analysis-plots__physical-context {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: var(--fm-space-1) var(--fm-space-3);
+  min-width: 0;
+  padding: var(--fm-space-2) var(--fm-space-3);
+  border-bottom: 1px solid var(--fm-border-subtle);
+  color: var(--fm-text-muted);
+  font-size: var(--fm-font-size-xs);
+}
+
+.fm-analysis-plots__physical-context > * {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.fm-analysis-plots__compatibility {
+  display: grid;
+  gap: var(--fm-space-2);
+  padding: var(--fm-space-3);
+  color: var(--fm-text-muted);
+}
+
+.fm-analysis-plots__compatibility ul {
+  margin: 0;
+  padding-inline-start: var(--fm-space-5);
 }
 
 .fm-analysis-plots__sampling-warning {
@@ -742,8 +787,20 @@
 }
 
 @media (max-width: 620px) {
+  .fm-analysis-plots__navigation {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .fm-analysis-plots__tabs-scroll,
   .fm-analysis-plots__tabs {
+    width: 100%;
     padding-inline: 0;
+  }
+
+  .fm-analysis-plots__subview {
+    width: 100%;
+    max-width: none;
   }
 
   .fm-chart-control-bar__range-select,

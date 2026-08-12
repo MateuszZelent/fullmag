@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   ANALYSIS_VIEW_PREFERENCES_STORAGE_KEY,
+  ANALYSIS_SUBVIEWS,
   analysisDescriptorId,
   createDefaultAnalysisViewPreferences,
   parseAnalysisViewPreferences,
@@ -16,6 +17,13 @@ describe("analysis view preferences", () => {
     expect(ANALYSIS_VIEW_PREFERENCES_STORAGE_KEY).toBe("fm:analysis-view-preferences:v2");
     expect(preferences.activeSurface).toBe("dynamics");
     expect(preferences.selectedDatasetRef).toBeNull();
+    expect(preferences.activeSubviews).toEqual({
+      comparison: "comparison.sources",
+      dispersion: "dispersion.modal",
+      dynamics: "dynamics.time-traces",
+      hysteresis: "hysteresis.loop",
+      "resonance-fmr": "resonance.eigenmodes",
+    });
 
     for (const activeSurface of [
       "dynamics", "resonance-fmr", "dispersion", "hysteresis", "comparison",
@@ -25,6 +33,40 @@ describe("analysis view preferences", () => {
     expect(parseAnalysisViewPreferences({ schemaVersion: 2, activeSurface: "frequency-response", selectedDatasetRef: null, descriptorPreferences: {} }).activeSurface).toBe("resonance-fmr");
     expect(parseAnalysisViewPreferences({ schemaVersion: 2, activeSurface: "eigenmodes", selectedDatasetRef: null, descriptorPreferences: {} }).activeSurface).toBe("resonance-fmr");
     expect(parseAnalysisViewPreferences({ schemaVersion: 2, activeSurface: "spectrum", selectedDatasetRef: null, descriptorPreferences: {} }).activeSurface).toBe("dynamics");
+  });
+
+  it("uses one canonical surface/subview vocabulary and migrates legacy IDs once", () => {
+    expect(ANALYSIS_SUBVIEWS).toEqual({
+      comparison: ["comparison.sources"],
+      dispersion: ["dispersion.modal", "dispersion.driven-map", "dispersion.branches"],
+      dynamics: ["dynamics.time-traces", "dynamics.temporal-fft", "dynamics.s-k-f"],
+      hysteresis: ["hysteresis.loop", "hysteresis.branches"],
+      "resonance-fmr": ["resonance.eigenmodes", "resonance.frequency-response", "resonance.modal-driven"],
+    });
+
+    const migrated = parseAnalysisViewPreferences({
+      schemaVersion: 2,
+      activeSurface: "frequency-response",
+      activeSubviews: {
+        dynamics: "time-traces",
+        "frequency-response": "frequency-response",
+        dispersion: "response-map",
+        hysteresis: "branch",
+        comparison: "comparison",
+      },
+      descriptorPreferences: {},
+      selectedDatasetRef: null,
+    });
+
+    expect(migrated.activeSurface).toBe("resonance-fmr");
+    expect(migrated.activeSubviews).toEqual({
+      comparison: "comparison.sources",
+      dispersion: "dispersion.driven-map",
+      dynamics: "dynamics.time-traces",
+      hysteresis: "hysteresis.branches",
+      "resonance-fmr": "resonance.frequency-response",
+    });
+    expect(serializeAnalysisViewPreferences(migrated)).not.toMatch(/:"(?:time-traces|response-map|frequency-response)"/);
   });
 
   it("bounds complete descriptor preferences and drops malformed descriptors", () => {

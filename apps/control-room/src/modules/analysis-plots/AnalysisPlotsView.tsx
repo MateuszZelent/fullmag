@@ -3,7 +3,7 @@
 import { useMemo } from "react";
 
 import type { KernelApi } from "@/kernel/types";
-import type { AnalysisSurface } from "@/kernel/workspace/analysisViewPreferences";
+import type { AnalysisSubview, AnalysisSurface } from "@/kernel/workspace/analysisViewPreferences";
 import { HysteresisChart } from "@/shared/domain/study/HysteresisChart";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/shared/ui/Select";
 import { Button } from "@/shared/ui/Button";
@@ -18,7 +18,7 @@ import { formatXAxisLabel, tableRowsLike, tableWindowTableId } from "./analysisW
 import type { ChartSeries } from "./chartTableModel";
 import type { ChartTableWindow } from "@/shared/domain/analysis/chartDataPlan";
 import type { AnalysisChartCursorPoint } from "@/shared/domain/analysis/chartCursorPoint";
-import type { ChartDataPresentationState } from "@/shared/analysis-charts/chartPresentationState";
+import type { AnalysisFrequencyPresentationState } from "./hooks/useAnalysisFrequencyData";
 import type { ChartValueRange } from "./chartTableModel";
 import { descriptorForSurface } from "@/shared/domain/analysis/analysisSurfaceDescriptor";
 
@@ -33,7 +33,9 @@ type AnalysisPlotsViewInput = {
   frequencyDomainCalculationMode?: string;
   descriptorId?: string | null;
   comparisonPrimaryDisplayUnits?: Readonly<Record<string, string>>;
+  comparisonPrimaryIdentity?: AnalysisComparisonIdentity | null;
   comparisonSecondaryDisplayUnits?: Readonly<Record<string, string>>;
+  comparisonSecondaryIdentity?: AnalysisComparisonIdentity | null;
   displayUnits?: Readonly<Record<string, string>>;
   datasetRefs?: readonly string[];
   dynamicStructureFactor?: Parameters<typeof DynamicStructureFactorView>[0]["resource"];
@@ -43,7 +45,7 @@ type AnalysisPlotsViewInput = {
   frequencyDomainTitle?: string;
   frequencyDomainUnavailableReason?: string | null;
   frequencyDomainProvenance?: string | null;
-  frequencyDomainPresentation?: ChartDataPresentationState;
+  frequencyDomainPresentation?: AnalysisFrequencyPresentationState;
   kernel: KernelApi;
   onDatasetRefChange?: (datasetRef: string | null) => void;
   onDisplayUnitsChange?: (patch: Record<string, string>) => void;
@@ -71,6 +73,21 @@ type AnalysisPlotsViewInput = {
   xAxisId?: string | null;
 };
 
+export interface AnalysisComparisonIdentity {
+  boundaryContext: string | null;
+  equilibriumId: string | null;
+  geometryId: string | null;
+  kContext: string | null;
+  meshId: string | null;
+  observableId: string | null;
+  runId: string | null;
+  stageId: string | null;
+}
+
+export type AnalysisComparisonVerdict =
+  | { reasons: []; status: "compatible" }
+  | { reasons: string[]; status: "cannot-compare" };
+
 const EMPTY_DISPLAY_UNITS: Readonly<Record<string, string>> = Object.freeze({});
 const EMPTY_STRING_LIST: readonly string[] = Object.freeze([]);
 const EMPTY_CHART_SERIES: readonly ChartSeries[] = Object.freeze([]);
@@ -78,7 +95,7 @@ const EMPTY_SURFACE_PROVENANCE: Partial<Record<AnalysisSurface, string>> =
   Object.freeze({});
 
 export function AnalysisPlotsView(props: AnalysisPlotsViewInput) {
-  const { activeSurface, comparisonDatasetRef = null, comparisonPrimaryDisplayUnits = EMPTY_DISPLAY_UNITS, comparisonSecondaryDisplayUnits = EMPTY_DISPLAY_UNITS, comparisonSelectedSeriesKeys = EMPTY_STRING_LIST, comparisonTable = null, comparisonTableStatus = "idle", comparisonTableUnsupportedReason = null, comparisonVisibleRevision = null, datasetRefs = EMPTY_STRING_LIST, descriptorId = null, displayUnits = EMPTY_DISPLAY_UNITS, dynamicStructureFactor = null, dynamicStructureFactorStatus = "idle", frequencyDomainCalculationMode, frequencyDomainProvenance = null, frequencyDomainSeries = EMPTY_CHART_SERIES, frequencyDomainStatus = "idle", frequencyDomainTitle = "Frequency domain", frequencyDomainUnavailableReason = null, hasComparisonSelection = false, kernel, onDatasetRefChange = () => undefined, onComparisonDatasetRefChange = () => undefined, onComparisonPrimaryDisplayUnitsChange = () => undefined, onComparisonSelectedSeriesKeysChange = () => undefined, onComparisonSecondaryDisplayUnitsChange = () => undefined, onSurfaceChange = () => undefined, range = null, selectedDatasetRef = null, selectedPoint = null, selectedSeriesIds = EMPTY_STRING_LIST, selectedStageId = null, spinWaveGamma = null, spinWaveGammaStatus = "idle", surfaceProvenance = EMPTY_SURFACE_PROVENANCE, table = null, tableStatus = "idle", tableUnsupportedReason = null, xAxisId: selectedXAxisId = null } = props;
+  const { activeSurface, comparisonDatasetRef = null, comparisonPrimaryDisplayUnits = EMPTY_DISPLAY_UNITS, comparisonPrimaryIdentity = null, comparisonSecondaryDisplayUnits = EMPTY_DISPLAY_UNITS, comparisonSecondaryIdentity = null, comparisonSelectedSeriesKeys = EMPTY_STRING_LIST, comparisonTable = null, comparisonTableStatus = "idle", comparisonTableUnsupportedReason = null, comparisonVisibleRevision = null, datasetRefs = EMPTY_STRING_LIST, descriptorId = null, displayUnits = EMPTY_DISPLAY_UNITS, dynamicStructureFactor = null, dynamicStructureFactorStatus = "idle", frequencyDomainCalculationMode, frequencyDomainProvenance = null, frequencyDomainSeries = EMPTY_CHART_SERIES, frequencyDomainStatus = "idle", frequencyDomainTitle = "Frequency domain", frequencyDomainUnavailableReason = null, hasComparisonSelection = false, kernel, onDatasetRefChange = () => undefined, onComparisonDatasetRefChange = () => undefined, onComparisonPrimaryDisplayUnitsChange = () => undefined, onComparisonSelectedSeriesKeysChange = () => undefined, onComparisonSecondaryDisplayUnitsChange = () => undefined, onSurfaceChange = () => undefined, range = null, selectedDatasetRef = null, selectedPoint = null, selectedSeriesIds = EMPTY_STRING_LIST, selectedStageId = null, spinWaveGamma = null, spinWaveGammaStatus = "idle", surfaceProvenance = EMPTY_SURFACE_PROVENANCE, table = null, tableStatus = "idle", tableUnsupportedReason = null, xAxisId: selectedXAxisId = null } = props;
   const onPointSelect = props.onPointSelect ?? ignorePointSelection;
   const onDisplayUnitsChange = props.onDisplayUnitsChange ?? ignoreDisplayUnitsChange;
   const onRangeChange = props.onRangeChange ?? ignoreRangeSelection;
@@ -110,6 +127,15 @@ export function AnalysisPlotsView(props: AnalysisPlotsViewInput) {
     }) : [];
   }, [comparisonTable]);
   const compatibleSeries = chartSeries.filter((left) => comparisonSeries.some((right) => comparisonSeriesKey(right) === comparisonSeriesKey(left)));
+  const comparisonVerdict = analysisComparisonVerdict(
+    comparisonPrimaryIdentity,
+    comparisonSecondaryIdentity,
+    {
+      hasCompatibleSeries: compatibleSeries.length > 0,
+      primaryXAxis: resolvedTable?.columns[0] ?? null,
+      secondaryXAxis: comparisonTable?.columns[0] ?? null,
+    },
+  );
   const availableComparisonSeriesKeys = compatibleSeries.map(comparisonSeriesKey);
   const selectedComparisonSeriesKeys = hasComparisonSelection
     ? comparisonSelectedSeriesKeys
@@ -127,9 +153,10 @@ export function AnalysisPlotsView(props: AnalysisPlotsViewInput) {
   const datasetPrompt = !resolvedDatasetRef
     ? <div className="fm-analysis-plots__empty" role="status">Select a dataset or artifact</div>
     : null;
+  const activeSubview = analysisSubviewForSurface(surface, frequencyDomainCalculationMode);
 
   return <div className="fm-analysis-plots">
-    <AnalysisSurfaceTabs active={surface} onChange={onSurfaceChange} />
+    <AnalysisSurfaceTabs active={surface} activeSubview={activeSubview} onChange={onSurfaceChange} subviews={[activeSubview]} />
     <section
       className="fm-analysis-plots__panel fm-analysis-plots__panel--primary"
       data-analysis-surface={surfaceDescriptor.surface}
@@ -142,7 +169,7 @@ export function AnalysisPlotsView(props: AnalysisPlotsViewInput) {
         </Select>
       </header>
       {surface === "dynamics" ? (resolvedDatasetRef ? <AnalysisTableSurface chartId={chartId} chartSeries={chartSeries} descriptorId={descriptorId ?? undefined} displayUnits={displayUnits} kernel={kernel} onDisplayUnitsChange={onDisplayUnitsChange} onPointSelect={onPointSelect} onRangeChange={onRangeChange} onSelectedSeriesIdsChange={onSelectedSeriesIdsChange} range={range} selectedPoint={selectedPoint} selectedSeriesIds={selectedSeriesIds} status={tableUnsupportedReason ? "unsupported" : resolvedTableStatus} table={resolvedTable} unsupportedReason={tableUnsupportedReason} xAxisId={xAxisId} xAxisLabel={formatXAxisLabel(chartSeries, xAxisId)} /> : spinWaveGamma ? <SpinWaveGammaView resource={spinWaveGamma} status={spinWaveGammaStatus} /> : datasetPrompt) : null}
-      {surface === "dispersion" ? (frequencyDomainSeries.length > 0 ? <AnalysisFrequencySurface calculationMode={frequencyDomainCalculationMode} chartId={chartId} descriptorId={descriptorId ?? undefined} displayUnits={displayUnits} kernel={kernel} onDisplayUnitsChange={onDisplayUnitsChange} onPointSelect={onPointSelect} onRangeChange={onRangeChange} onSelectedSeriesIdsChange={onSelectedSeriesIdsChange} presentation={props.frequencyDomainPresentation} range={range} selectedPoint={selectedPoint} selectedSeriesIds={selectedSeriesIds} series={frequencyDomainSeries} status={frequencyDomainStatus} title={frequencyDomainTitle} unavailableReason={frequencyDomainUnavailableReason} /> : <DynamicStructureFactorView resource={dynamicStructureFactor} status={dynamicStructureFactorStatus} />) : null}
+      {surface === "dispersion" ? (frequencyDomainCalculationMode ? <AnalysisFrequencySurface calculationMode={frequencyDomainCalculationMode} chartId={chartId} descriptorId={descriptorId ?? undefined} displayUnits={displayUnits} kernel={kernel} onDisplayUnitsChange={onDisplayUnitsChange} onPointSelect={onPointSelect} onRangeChange={onRangeChange} onSelectedSeriesIdsChange={onSelectedSeriesIdsChange} presentation={props.frequencyDomainPresentation} range={range} selectedPoint={selectedPoint} selectedSeriesIds={selectedSeriesIds} series={frequencyDomainSeries} status={frequencyDomainStatus} title={frequencyDomainTitle} unavailableReason={frequencyDomainUnavailableReason} /> : <DynamicStructureFactorView resource={dynamicStructureFactor} status={dynamicStructureFactorStatus} />) : null}
       {surface === "resonance-fmr" ? <AnalysisFrequencySurface calculationMode={frequencyDomainCalculationMode} chartId={chartId} descriptorId={descriptorId ?? undefined} displayUnits={displayUnits} kernel={kernel} onDisplayUnitsChange={onDisplayUnitsChange} onPointSelect={onPointSelect} onRangeChange={onRangeChange} onSelectedSeriesIdsChange={onSelectedSeriesIdsChange} presentation={props.frequencyDomainPresentation} range={range} selectedPoint={selectedPoint} selectedSeriesIds={selectedSeriesIds} series={frequencyDomainSeries} status={frequencyDomainStatus} title={frequencyDomainTitle} unavailableReason={frequencyDomainUnavailableReason} /> : null}
       {surface === "hysteresis" ? (selectedStageId ? <HysteresisChart kernel={kernel} stageId={selectedStageId} /> : <div className="fm-analysis-plots__empty" role="status">Select a hysteresis stage</div>) : null}
       {surface === "comparison" ? <div className="fm-analysis-plots__comparison">
@@ -153,7 +180,7 @@ export function AnalysisPlotsView(props: AnalysisPlotsViewInput) {
           </Select>
           <Button aria-label="Clear comparison dataset" disabled={!comparisonDatasetRef} onClick={() => onComparisonDatasetRefChange(null)} type="button">Clear comparison</Button>
         </div>
-        {!resolvedDatasetRef ? <div className="fm-analysis-plots__empty" role="status">Select a published dataset before comparison.</div> : !comparisonDatasetRef ? <div className="fm-analysis-plots__empty" role="status">Select a second published dataset compatible with {resolvedDatasetRef} to compare series.</div> : <><strong>Compatible series</strong><span>{resolvedDatasetRef} · revision {resolvedTable?.revision ?? "unknown"}</span><span>{comparisonDatasetRef} · revision {comparisonVisibleRevision ?? comparisonTable?.revision ?? "unknown"}</span>{comparisonTableStatus !== "ready" || comparisonTableUnsupportedReason ? <AnalysisTableSurface chartId={`comparison:${comparisonDatasetRef}`} chartSeries={[]} descriptorId={descriptorId ?? undefined} displayUnits={comparisonSecondaryDisplayUnits} kernel={kernel} onDisplayUnitsChange={onComparisonSecondaryDisplayUnitsChange} onPointSelect={onPointSelect} onRangeChange={onRangeChange} onSelectedSeriesIdsChange={onComparisonSelectedSeriesKeysChange} range={range} selectedPoint={selectedPoint} selectedSeriesIds={[]} status={comparisonTableUnsupportedReason ? "unsupported" : comparisonTableStatus} table={comparisonTable} unsupportedReason={comparisonTableUnsupportedReason} xAxisId={comparisonTable?.columns[0]?.column_id ?? "x"} xAxisLabel={formatXAxisLabel(comparisonSeries, comparisonTable?.columns[0]?.column_id ?? "x")} /> : compatibleSeries.length === 0 ? <div role="status">No compatible quantity and unit series are published by both datasets.</div> : <div className="fm-analysis-plots__comparison-panes"><AnalysisTableSurface chartId={chartId} chartSeries={compatibleSeries} descriptorId={descriptorId ?? undefined} displayUnits={comparisonPrimaryDisplayUnits} kernel={kernel} onDisplayUnitsChange={onComparisonPrimaryDisplayUnitsChange} onPointSelect={onPointSelect} onRangeChange={onRangeChange} onSelectedSeriesIdsChange={(ids) => onComparisonSelectedSeriesKeysChange(comparisonKeysForSeriesIds(ids, compatibleSeries))} range={range} selectedPoint={selectedPoint} selectedSeriesIds={selectedPrimaryComparisonSeries.map((series) => series.id)} status={resolvedTableStatus} table={resolvedTable} xAxisId={xAxisId} xAxisLabel={formatXAxisLabel(compatibleSeries, xAxisId)} /><AnalysisTableSurface chartId={`comparison:${comparisonDatasetRef}`} chartSeries={comparisonSeries.filter((series) => availableComparisonSeriesKeys.includes(comparisonSeriesKey(series)))} descriptorId={descriptorId ?? undefined} displayUnits={comparisonSecondaryDisplayUnits} kernel={kernel} onDisplayUnitsChange={onComparisonSecondaryDisplayUnitsChange} onPointSelect={onPointSelect} onRangeChange={onRangeChange} onSelectedSeriesIdsChange={(ids) => onComparisonSelectedSeriesKeysChange(comparisonKeysForSeriesIds(ids, comparisonSeries))} range={range} selectedPoint={selectedPoint} selectedSeriesIds={selectedSecondaryComparisonSeries.map((series) => series.id)} status={comparisonTableStatus} table={comparisonTable} unsupportedReason={comparisonTableUnsupportedReason} xAxisId={comparisonTable?.columns[0]?.column_id ?? "x"} xAxisLabel={formatXAxisLabel(comparisonSeries, comparisonTable?.columns[0]?.column_id ?? "x")} /></div>}</>}</div> : null}
+        {!resolvedDatasetRef ? <div className="fm-analysis-plots__empty" role="status">Select a published dataset before comparison.</div> : !comparisonDatasetRef ? <div className="fm-analysis-plots__empty" role="status">Select a second published dataset compatible with {resolvedDatasetRef} to compare series.</div> : <><strong>Compatibility verdict: {comparisonVerdict.status === "compatible" ? "Compatible" : "Cannot compare"}</strong><span>{resolvedDatasetRef} · revision {resolvedTable?.revision ?? "unknown"}</span><span>{comparisonDatasetRef} · revision {comparisonVisibleRevision ?? comparisonTable?.revision ?? "unknown"}</span>{comparisonTableStatus !== "ready" || comparisonTableUnsupportedReason ? <AnalysisTableSurface chartId={`comparison:${comparisonDatasetRef}`} chartSeries={[]} descriptorId={descriptorId ?? undefined} displayUnits={comparisonSecondaryDisplayUnits} kernel={kernel} onDisplayUnitsChange={onComparisonSecondaryDisplayUnitsChange} onPointSelect={onPointSelect} onRangeChange={onRangeChange} onSelectedSeriesIdsChange={onComparisonSelectedSeriesKeysChange} range={range} selectedPoint={selectedPoint} selectedSeriesIds={[]} status={comparisonTableUnsupportedReason ? "unsupported" : comparisonTableStatus} table={comparisonTable} unsupportedReason={comparisonTableUnsupportedReason} xAxisId={comparisonTable?.columns[0]?.column_id ?? "x"} xAxisLabel={formatXAxisLabel(comparisonSeries, comparisonTable?.columns[0]?.column_id ?? "x")} /> : comparisonVerdict.status === "cannot-compare" ? <div className="fm-analysis-plots__compatibility" role="status"><span>These datasets cannot be overlaid safely.</span><ul>{comparisonVerdict.reasons.map((reason) => <li key={reason}>{reason}</li>)}</ul></div> : <><ComparisonIdentitySummary displayUnits={comparisonPrimaryDisplayUnits} identity={comparisonPrimaryIdentity} label="Source A" series={compatibleSeries} table={resolvedTable} /><ComparisonIdentitySummary displayUnits={comparisonSecondaryDisplayUnits} identity={comparisonSecondaryIdentity} label="Source B" series={comparisonSeries.filter((series) => availableComparisonSeriesKeys.includes(comparisonSeriesKey(series)))} table={comparisonTable} /><div className="fm-analysis-plots__comparison-panes"><AnalysisTableSurface chartId={chartId} chartSeries={compatibleSeries} descriptorId={descriptorId ?? undefined} displayUnits={comparisonPrimaryDisplayUnits} kernel={kernel} onDisplayUnitsChange={onComparisonPrimaryDisplayUnitsChange} onPointSelect={onPointSelect} onRangeChange={onRangeChange} onSelectedSeriesIdsChange={(ids) => onComparisonSelectedSeriesKeysChange(comparisonKeysForSeriesIds(ids, compatibleSeries))} range={range} selectedPoint={selectedPoint} selectedSeriesIds={selectedPrimaryComparisonSeries.map((series) => series.id)} status={resolvedTableStatus} table={resolvedTable} xAxisId={xAxisId} xAxisLabel={formatXAxisLabel(compatibleSeries, xAxisId)} /><AnalysisTableSurface chartId={`comparison:${comparisonDatasetRef}`} chartSeries={comparisonSeries.filter((series) => availableComparisonSeriesKeys.includes(comparisonSeriesKey(series)))} descriptorId={descriptorId ?? undefined} displayUnits={comparisonSecondaryDisplayUnits} kernel={kernel} onDisplayUnitsChange={onComparisonSecondaryDisplayUnitsChange} onPointSelect={onPointSelect} onRangeChange={onRangeChange} onSelectedSeriesIdsChange={(ids) => onComparisonSelectedSeriesKeysChange(comparisonKeysForSeriesIds(ids, comparisonSeries))} range={range} selectedPoint={selectedPoint} selectedSeriesIds={selectedSecondaryComparisonSeries.map((series) => series.id)} status={comparisonTableStatus} table={comparisonTable} unsupportedReason={comparisonTableUnsupportedReason} xAxisId={comparisonTable?.columns[0]?.column_id ?? "x"} xAxisLabel={formatXAxisLabel(comparisonSeries, comparisonTable?.columns[0]?.column_id ?? "x")} /></div></>}</>}</div> : null}
     </section>
   </div>;
 }
@@ -165,4 +192,91 @@ function ignoreDisplayUnitsChange(): void {}
 
 export function comparisonSeriesKey(series: Pick<ChartSeries, "quantity" | "unit">): string {
   return `${encodeURIComponent(series.quantity)}|${encodeURIComponent(series.unit)}`;
+}
+
+const COMPARISON_IDENTITY_FIELDS = [
+  ["runId", "run"],
+  ["stageId", "stage"],
+  ["equilibriumId", "equilibrium"],
+  ["geometryId", "geometry"],
+  ["meshId", "mesh"],
+  ["boundaryContext", "boundary context"],
+  ["kContext", "k context"],
+  ["observableId", "observable"],
+] as const;
+
+export function analysisComparisonVerdict(
+  primary: AnalysisComparisonIdentity | null | undefined,
+  secondary: AnalysisComparisonIdentity | null | undefined,
+  seriesContext?: {
+    hasCompatibleSeries: boolean;
+    primaryXAxis: { column_id: string; unit: string } | null;
+    secondaryXAxis: { column_id: string; unit: string } | null;
+  },
+): AnalysisComparisonVerdict {
+  const reasons: string[] = [];
+  for (const [field, label] of COMPARISON_IDENTITY_FIELDS) {
+    const left = primary?.[field];
+    const right = secondary?.[field];
+    if (!left || !right) reasons.push(`${label} identity unavailable`);
+    else if (left !== right) reasons.push(`${label} mismatch: ${left} ≠ ${right}`);
+  }
+  if (seriesContext) {
+    const leftAxis = seriesContext.primaryXAxis;
+    const rightAxis = seriesContext.secondaryXAxis;
+    if (!leftAxis || !rightAxis) reasons.push("axis identity and SI unit unavailable");
+    else if (leftAxis.column_id !== rightAxis.column_id || leftAxis.unit !== rightAxis.unit) {
+      reasons.push(`axis mismatch: ${leftAxis.column_id} [${leftAxis.unit}] ≠ ${rightAxis.column_id} [${rightAxis.unit}]`);
+    }
+    if (!seriesContext.hasCompatibleSeries) {
+      reasons.push("observable quantity and SI unit mismatch or unavailable");
+    }
+  }
+  return reasons.length > 0
+    ? { reasons: [...new Set(reasons)], status: "cannot-compare" }
+    : { reasons: [], status: "compatible" };
+}
+
+function analysisSubviewForSurface(
+  surface: AnalysisSurface,
+  calculationMode: string | undefined,
+): AnalysisSubview {
+  if (surface === "comparison") return "comparison.sources";
+  if (surface === "hysteresis") return "hysteresis.loop";
+  if (surface === "dynamics") return "dynamics.time-traces";
+  if (surface === "dispersion") {
+    return calculationMode === "response_map" ? "dispersion.driven-map" : "dispersion.modal";
+  }
+  return calculationMode === "fmr_response" || calculationMode === "frequency_response"
+    ? "resonance.frequency-response"
+    : "resonance.eigenmodes";
+}
+
+function ComparisonIdentitySummary({
+  displayUnits,
+  identity,
+  label,
+  series,
+  table,
+}: {
+  displayUnits: Readonly<Record<string, string>>;
+  identity: AnalysisComparisonIdentity | null;
+  label: string;
+  series: readonly ChartSeries[];
+  table: ChartTableWindow | null;
+}) {
+  const xAxis = table?.columns[0];
+  const yAxes = series.map((entry) => `${entry.quantity} [${entry.unit}]`).join(", ");
+  const units = Object.entries(displayUnits).length > 0
+    ? Object.entries(displayUnits).map(([quantity, unit]) => `${quantity} [${unit}]`).join(", ")
+    : "automatic SI scaling";
+  return <div aria-label={`${label} comparison identity`} className="fm-analysis-plots__physical-context">
+    <strong>{label}</strong>
+    <span>Run: {identity?.runId}</span><span>Stage: {identity?.stageId}</span>
+    <span>Equilibrium: {identity?.equilibriumId}</span><span>Geometry: {identity?.geometryId}</span>
+    <span>Mesh: {identity?.meshId}</span><span>Boundary: {identity?.boundaryContext}</span>
+    <span>k: {identity?.kContext}</span><span>Observable: {identity?.observableId}</span>
+    <span>Axes: {xAxis ? `${xAxis.column_id} [${xAxis.unit}]` : "unavailable"} → {yAxes || "unavailable"}</span>
+    <span>Display units: {units}</span>
+  </div>;
 }

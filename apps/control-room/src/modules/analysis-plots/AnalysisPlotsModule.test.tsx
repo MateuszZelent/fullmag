@@ -59,7 +59,9 @@ import {
   buildEigenDispersionChartModel,
   buildEigenSpectrumChartModel,
   buildFrequencyResponseChartModel,
+  frequencyDomainResultContextFromManifest,
 } from "@/shared/domain/analysis/frequencyDomainChartModels";
+import { classifyFrequencyDomainResult } from "@/shared/domain/analysis/frequencyDomainResultClassification";
 
 function tableRowsResourceKey(tableId: string): string {
   return DATA_TABLE_ROWS_PATH.replace("{table_id}", encodeURIComponent(tableId));
@@ -86,6 +88,28 @@ const mockKernel = {
   resources: {},
   visualizationDebug: new VisualizationDebugController(),
 } as unknown as KernelApi;
+
+const qualifiedModalContext = frequencyDomainResultContextFromManifest({
+  equilibrium_identity: "eq-1",
+  geometry_identity: "geometry-1",
+  mesh_identity: "mesh-1",
+  observables: [{ identity: "rf-coupling", kind: "rf_coupling", unit: "1" }],
+  requested_execution: { boundary_context: "finite_open" },
+  run_id: "run-1",
+  stage_id: "stage-modal",
+  study_product: "modal_eigen",
+});
+const qualifiedDrivenContext = frequencyDomainResultContextFromManifest({
+  drive: { identity: "rf-1", kind: "magnetic_rf" },
+  equilibrium_identity: "eq-1",
+  geometry_identity: "geometry-1",
+  mesh_identity: "mesh-1",
+  observables: [{ identity: "chi", kind: "susceptibility", unit: "1" }],
+  requested_execution: { boundary_context: "finite_open" },
+  run_id: "run-1",
+  stage_id: "stage-response",
+  study_product: "driven_response",
+});
 
 const table = {
   columns: [
@@ -1268,7 +1292,8 @@ describe("AnalysisPlotsView", () => {
       />,
     );
 
-    expect(html).toContain("Frequency-domain response sweep");
+    expect(html).toContain("Harmonic Response Spectrum");
+    expect(html).not.toContain("FMR response sweep");
     expect(html).toContain("Frequency-domain series");
     expect(html).toContain("Amplitude");
     expect(html).toContain(ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_MAGNETIC_SWEEP_PATH);
@@ -1323,6 +1348,7 @@ describe("AnalysisPlotsView", () => {
           },
         ]}
         frequencyDomainCalculationMode="fmr_modal"
+        frequencyDomainPresentation={{ kind: "ready", physicalContext: qualifiedModalContext, revision: "1" }}
         frequencyDomainStatus="ready"
         frequencyDomainTitle="FMR modal spectrum"
         onPointSelect={() => undefined}
@@ -1372,6 +1398,7 @@ describe("AnalysisPlotsView", () => {
           },
         ]}
         frequencyDomainCalculationMode="fmr_response"
+        frequencyDomainPresentation={{ kind: "ready", physicalContext: qualifiedDrivenContext, revision: "1" }}
         frequencyDomainStatus="ready"
         frequencyDomainTitle="FMR response sweep"
         onPointSelect={() => undefined}
@@ -1475,6 +1502,7 @@ describe("AnalysisPlotsView", () => {
           },
         ]}
         frequencyDomainCalculationMode="fmr_modal"
+        frequencyDomainPresentation={{ kind: "ready", physicalContext: qualifiedModalContext, revision: "1" }}
         frequencyDomainStatus="ready"
         frequencyDomainTitle="FMR modal spectrum"
         onPointSelect={() => undefined}
@@ -1567,6 +1595,7 @@ describe("AnalysisPlotsView", () => {
           },
         ]}
         frequencyDomainCalculationMode="fmr_response"
+        frequencyDomainPresentation={{ kind: "ready", physicalContext: qualifiedDrivenContext, revision: "1" }}
         frequencyDomainStatus="ready"
         frequencyDomainTitle="FMR response sweep"
         onPointSelect={() => undefined}
@@ -1649,12 +1678,13 @@ describe("AnalysisPlotsView", () => {
   it("renders explicit response-map unavailable state when the mode is selected", () => {
     const html = renderToStaticMarkup(
       <AnalysisPlotsView
-        activeSurface="resonance-fmr"
+        activeSurface="dispersion"
+        frequencyDomainCalculationMode="response_map"
         kernel={mockKernel}
         frequencyDomainSeries={[]}
         frequencyDomainStatus="error"
-        frequencyDomainTitle="Frequency-domain response map"
-        frequencyDomainUnavailableReason="response-map chart adapter is not available yet"
+        frequencyDomainTitle="Spectral Response Map · A(k,f)"
+        frequencyDomainUnavailableReason="Typed response-map resource is not available in the current Analysis contract."
         onPointSelect={() => undefined}
         onRangeChange={() => undefined}
         range={null}
@@ -1666,8 +1696,8 @@ describe("AnalysisPlotsView", () => {
       />,
     );
 
-    expect(html).toContain("Frequency-domain response map");
-    expect(html).toContain("response-map chart adapter is not available yet");
+    expect(html).toContain("Spectral Response Map · A(k,f)");
+    expect(html).toContain("Typed response-map resource is not available in the current Analysis contract.");
     expect(html).not.toContain("Frequency-domain series legend");
   });
 
@@ -1680,6 +1710,7 @@ describe("AnalysisPlotsView", () => {
         nodeId: "results:frequency-domain:response-map",
         objectId: null,
         ref: {
+          calculationMode: "response_map",
           kind: "results.frequency_domain.response_map",
           nodeId: "results:frequency-domain:response-map",
           type: "frequency-domain",
@@ -1694,6 +1725,7 @@ describe("AnalysisPlotsView", () => {
         nodeId: "model:study:stages:stage:freq-1:k-grid",
         objectId: null,
         ref: {
+          calculationMode: "response_map",
           kind: "study.stage.frequency_response.k_grid",
           nodeId: "model:study:stages:stage:freq-1:k-grid",
           type: "frequency-domain",
@@ -1897,6 +1929,7 @@ describe("AnalysisPlotsView", () => {
         nodeId: "results:frequency-domain:fmr:modal-spectrum",
         objectId: null,
         ref: {
+          calculationMode: "fmr_modal",
           kind: "results.frequency_domain.fmr_modal_spectrum",
           nodeId: "results:frequency-domain:fmr:modal-spectrum",
           type: "frequency-domain",
@@ -1911,6 +1944,7 @@ describe("AnalysisPlotsView", () => {
         nodeId: "results:eigen:spectrum",
         objectId: null,
         ref: {
+          calculationMode: "free_modes",
           kind: "results.eigen.spectrum",
           nodeId: "results:eigen:spectrum",
           type: "frequency-domain",
@@ -1925,6 +1959,7 @@ describe("AnalysisPlotsView", () => {
         nodeId: "results:eigen:dispersion",
         objectId: null,
         ref: {
+          calculationMode: "dispersion_modal",
           kind: "results.eigen.dispersion",
           nodeId: "results:eigen:dispersion",
           type: "frequency-domain",
@@ -1939,26 +1974,36 @@ describe("AnalysisPlotsView", () => {
         nodeId: "results:frequency-response:sweep",
         objectId: null,
         ref: {
+          calculationMode: "frequency_response",
           kind: "results.frequency_response.sweep",
           nodeId: "results:frequency-response:sweep",
           type: "frequency-domain",
         },
       }),
-    ).toEqual({ mode: "fmr_response", primaryChart: "response-sweep" });
+    ).toEqual({ mode: "frequency_response", primaryChart: "response-sweep" });
   });
 
-  it("labels frequency-domain chart surfaces by calculation mode", () => {
-    expect(frequencyDomainChartTitle("modal-spectrum", "fmr_modal")).toBe(
-      "FMR modal spectrum",
+  it("labels frequency-domain chart surfaces from typed physical evidence", () => {
+    const fmrResponse = classifyFrequencyDomainResult({
+      boundaryContext: "finite_open",
+      drive: { identity: "rf-1", kind: "magnetic_rf" },
+      equilibriumId: "eq-1",
+      observables: [{ identity: "chi", kind: "susceptibility", unit: "1" }],
+      runId: "run-1",
+      stageId: "stage-1",
+      studyProduct: "driven_response",
+    });
+    expect(frequencyDomainChartTitle("modal-spectrum", null)).toBe(
+      "Eigenfrequency Spectrum",
     );
-    expect(frequencyDomainChartTitle("modal-spectrum", "free_modes")).toBe(
-      "Frequency-domain modal spectrum",
+    expect(frequencyDomainChartTitle("response-sweep", fmrResponse)).toBe(
+      "FMR Response Spectrum",
     );
-    expect(frequencyDomainChartTitle("response-sweep", "fmr_response")).toBe(
-      "FMR response sweep",
+    expect(frequencyDomainChartTitle("response-sweep", null)).toBe(
+      "Harmonic Response Spectrum",
     );
-    expect(frequencyDomainChartTitle("dispersion", "dispersion_modal")).toBe(
-      "Frequency-domain dispersion",
+    expect(frequencyDomainChartTitle("dispersion", null)).toBe(
+      "Dispersion Relation · fₙ(k)",
     );
   });
 

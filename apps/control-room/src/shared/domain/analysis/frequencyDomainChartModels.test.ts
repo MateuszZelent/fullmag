@@ -19,6 +19,8 @@ import {
   buildFrequencyResponsePointSelectionRef,
   buildFrequencyResponseChartModel,
   buildFmrPeakTableModel,
+  frequencyDomainChartRouteOverrideFromSelection,
+  frequencyDomainResultContextFromManifest,
   routeFrequencyDomainCalculationMode,
   type FrequencyDomainJsonArtifactLike,
   type FrequencyDomainTextArtifactLike,
@@ -796,7 +798,7 @@ describe("frequencyDomainChartModels", () => {
     })).toEqual({
       analysisRunId: "run-response",
       artifactPath: "response/magnetic_response_sweep.v2.json",
-      calculationMode: "fmr_response",
+      calculationMode: "frequency_response",
       fieldId: "response-field-7",
       frequencyIndex: 7,
       kind: "results.frequency_response.frequency_point",
@@ -1084,6 +1086,85 @@ describe("frequencyDomainChartModels", () => {
     expect(route.supportingCharts).toContain("response-field-overlay");
   });
 
+  it("classifies driven response only from typed physical evidence", () => {
+    const neutral = frequencyDomainResultContextFromManifest({
+      equilibrium_identity: "eq-1",
+      geometry_identity: "geometry-1",
+      mesh_identity: "mesh-1",
+      run_id: "run-1",
+      stage_id: "response-1",
+      study_product: "driven_response",
+      requested_execution: { boundary_context: "finite_open" },
+      drive: { identity: "rf-1", kind: "magnetic_rf" },
+      observables: [{ identity: "amplitude", kind: "response_amplitude", unit: "1" }],
+    });
+    expect(neutral.contractGaps).toEqual([]);
+    expect(neutral.classification).toMatchObject({
+      fmrQualified: false,
+      resultLabel: "Harmonic Response Spectrum",
+    });
+
+    const qualified = frequencyDomainResultContextFromManifest({
+      equilibrium_identity: "eq-1",
+      run_id: "run-1",
+      stage_id: "response-1",
+      study_product: "driven_response",
+      requested_execution: { boundary_context: "finite_open" },
+      drive: { identity: "rf-1", kind: "magnetic_rf" },
+      observables: [{ identity: "chi-xx", kind: "susceptibility", unit: "1" }],
+    });
+    expect(qualified.classification).toMatchObject({
+      fmrQualified: true,
+      resultLabel: "FMR Response Spectrum",
+    });
+  });
+
+  it("fails physical classification closed without owner and boundary evidence", () => {
+    const context = frequencyDomainResultContextFromManifest({
+      requested_execution: { calculation_mode: "fmr_response" },
+      stage_kind: "frequency_response",
+    });
+    expect(context.classification).toBeNull();
+    expect(context.contractGaps).toEqual([
+      "run identity unavailable",
+      "stage identity unavailable",
+      "equilibrium identity unavailable",
+      "study product unavailable",
+      "boundary context unavailable",
+      "geometry identity unavailable",
+      "mesh identity unavailable",
+    ]);
+  });
+
+  it("routes selections from typed calculation mode, never kind, label, or path prefixes", () => {
+    expect(frequencyDomainChartRouteOverrideFromSelection({
+      kind: "results.frequency_response.sweep",
+      ref: { kind: "results.frequency_response.sweep", type: "frequency-domain" },
+    })).toBeNull();
+    expect(frequencyDomainChartRouteOverrideFromSelection({
+      kind: "anything",
+      ref: {
+        calculationMode: "frequency_response",
+        kind: "anything",
+        type: "frequency-domain",
+      },
+    } as never)).toEqual({ mode: "frequency_response", primaryChart: "response-sweep" });
+  });
+
+  it("keeps a claimed response map unavailable without a typed map resource adapter", () => {
+    const route = routeFrequencyDomainCalculationMode({
+      artifacts: { response_map_v2_path: "response/map.v2.bin" },
+      requested_execution: { calculation_mode: "response_map" },
+      resources: { response_map_resource_key: "/v2/sessions/current/analysis/frequency-domain/response/map" },
+    });
+    expect(route).toMatchObject({
+      mode: "response_map",
+      primaryChart: "response-map",
+      status: "unavailable",
+      unavailableReason: "Typed response-map resource is not available in the current Analysis contract.",
+    });
+  });
+
   it("does not treat response sweep artifacts as computed response maps", () => {
     const route = routeFrequencyDomainCalculationMode({
       artifacts: {
@@ -1096,8 +1177,9 @@ describe("frequencyDomainChartModels", () => {
     expect(route).toEqual(
       expect.objectContaining({
         mode: "response_map",
-        primaryChart: "response-sweep",
-        status: "available",
+        primaryChart: "response-map",
+        status: "unavailable",
+        unavailableReason: "Typed response-map resource is not available in the current Analysis contract.",
       }),
     );
   });

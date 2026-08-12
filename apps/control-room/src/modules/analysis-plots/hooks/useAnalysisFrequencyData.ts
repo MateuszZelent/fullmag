@@ -37,7 +37,10 @@ import {
   buildEigenSpectrumChartModel,
   buildFrequencyResponseChartModel,
   type FrequencyDomainChartRoute,
+  type FrequencyDomainResultContext,
   frequencyDomainChartRouteOverrideFromSelection,
+  frequencyDomainResultTitle,
+  frequencyDomainResultContextFromManifest,
   routeFrequencyDomainCalculationMode,
 } from "@/shared/domain/analysis/frequencyDomainChartModels";
 
@@ -62,7 +65,7 @@ export interface AnalysisFrequencyDataResult {
   /** Non-null when data can't be shown — displayed as empty-state message */
   frequencyDomainUnavailableReason: string | null;
   /** Resource presentation state, separate from scientific trust. */
-  frequencyDomainPresentation: ChartDataPresentationState;
+  frequencyDomainPresentation: AnalysisFrequencyPresentationState;
   /** Resolved route (primaryChart, mode, status) */
   frequencyDomainRoute: Pick<FrequencyDomainChartRoute, "mode" | "primaryChart" | "status" | "unavailableReason">;
   /** Model detail for click-to-select in dispersion/spectrum/response charts */
@@ -70,6 +73,10 @@ export interface AnalysisFrequencyDataResult {
   frequencyDomainResponseModel: ReturnType<typeof buildFrequencyResponseChartModel>;
   frequencyDomainSpectrumModel: ReturnType<typeof buildEigenSpectrumChartModel>;
 }
+
+export type AnalysisFrequencyPresentationState = ChartDataPresentationState & {
+  physicalContext?: FrequencyDomainResultContext;
+};
 
 /**
  * Resource hook: frequency-domain data family.
@@ -86,14 +93,31 @@ export function useAnalysisFrequencyData(
   const frequencyDomainManifestRoute = routeFrequencyDomainCalculationMode(
     frequencyDomainManifest.data?.result_manifest?.payload,
   );
+  const frequencyDomainContext = useMemo(
+    () => frequencyDomainResultContextFromManifest(
+      frequencyDomainManifest.data?.result_manifest?.payload,
+    ),
+    [frequencyDomainManifest.data?.result_manifest?.payload],
+  );
   const frequencyDomainRouteOverride = useSelectionSelector(
     frequencyDomainChartRouteOverrideFromSelection,
   );
-  const frequencyDomainRoute = {
+  const selectedRoute = {
     ...frequencyDomainManifestRoute,
     ...frequencyDomainRouteOverride,
   };
+  const frequencyDomainRoute: FrequencyDomainChartRoute =
+    selectedRoute.primaryChart === "response-map"
+      ? {
+          ...selectedRoute,
+          status: "unavailable",
+          supportingCharts: [],
+          unavailableReason: "Typed response-map resource is not available in the current Analysis contract.",
+        }
+      : selectedRoute;
   const expectedChart = activeSurface === "dispersion" ? "dispersion" : null;
+  const dispersionChart = frequencyDomainRoute.primaryChart === "dispersion" ||
+    frequencyDomainRoute.primaryChart === "response-map";
   const resonanceChart =
     frequencyDomainRoute.primaryChart === "modal-spectrum" ||
     frequencyDomainRoute.primaryChart === "response-sweep";
@@ -101,7 +125,7 @@ export function useAnalysisFrequencyData(
     frequencyDomainRoute.status === "available";
   const surfaceMismatch = manifestReady && (
     expectedChart !== null
-      ? frequencyDomainRoute.primaryChart !== expectedChart
+      ? !dispersionChart
       : activeSurface === "resonance-fmr" && !resonanceChart
   );
   const loadMatchingArtifact = loadFrequency && manifestReady && !surfaceMismatch;
@@ -185,8 +209,6 @@ export function useAnalysisFrequencyData(
 
   const frequencyDomainStatus =
     surfaceMismatch ? "unsupported"
-      : frequencyDomainRoute.primaryChart === "response-map"
-      ? "error"
       : frequencyDomainRoute.status === "available"
         ? frequencyDomainResourceStatus
         : frequencyDomainManifest.status === "ready"
@@ -195,14 +217,12 @@ export function useAnalysisFrequencyData(
 
   const frequencyDomainTitle = frequencyDomainChartTitle(
     frequencyDomainRoute.primaryChart,
-    frequencyDomainRoute.mode,
+    frequencyDomainContext.classification,
   );
 
   const frequencyDomainUnavailableReason =
     surfaceMismatch
       ? `This artifact does not publish a result compatible with the ${activeSurface} surface.`
-      : frequencyDomainRoute.primaryChart === "response-map"
-      ? "response-map chart adapter is not available yet"
       : frequencyDomainRoute.unavailableReason ??
         firstFrequencyDomainDiagnostic([
           frequencyDomainDispersionModel.diagnostics,
@@ -218,13 +238,17 @@ export function useAnalysisFrequencyData(
         : frequencyDomainRoute.primaryChart === "modal-spectrum"
           ? frequencyDomainSpectrum
           : frequencyDomainManifest;
-  const frequencyDomainPresentation = useMemo(
-    () => deriveFrequencyDomainPresentationState(
-      frequencyDomainResource,
-      frequencyDomainStatus,
-      frequencyDomainUnavailableReason,
-    ),
+  const frequencyDomainPresentation = useMemo<AnalysisFrequencyPresentationState>(
+    () => ({
+      ...deriveFrequencyDomainPresentationState(
+        frequencyDomainResource,
+        frequencyDomainStatus,
+        frequencyDomainUnavailableReason,
+      ),
+      physicalContext: frequencyDomainContext,
+    }),
     [
+      frequencyDomainContext,
       frequencyDomainResource,
       frequencyDomainStatus,
       frequencyDomainUnavailableReason,
@@ -286,21 +310,11 @@ export function deriveFrequencyDomainPresentationState(
 
 export function frequencyDomainChartTitle(
   primaryChart: string,
-  mode: string,
+  classification: FrequencyDomainResultContext["classification"],
 ): string {
-  if (primaryChart === "dispersion") {
-    return mode === "dispersion_modal" ? "Frequency-domain dispersion" : "Spin-wave dispersion";
-  }
-  if (primaryChart === "modal-spectrum") {
-    return mode === "fmr_modal" ? "FMR modal spectrum" : "Frequency-domain modal spectrum";
-  }
-  if (primaryChart === "response-sweep") {
-    return "FMR response sweep";
-  }
-  if (primaryChart === "response-map") {
-    return "FMR Response Map (unavailable)";
-  }
-  return "Frequency Domain";
+  if (primaryChart !== "dispersion" && primaryChart !== "modal-spectrum" &&
+    primaryChart !== "response-map" && primaryChart !== "response-sweep") return "Frequency Domain";
+  return frequencyDomainResultTitle(primaryChart, classification);
 }
 
 function firstFrequencyDomainDiagnostic(
