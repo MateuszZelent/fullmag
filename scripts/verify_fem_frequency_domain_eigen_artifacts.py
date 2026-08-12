@@ -224,6 +224,131 @@ def require_sha256_token(value: object, name: str) -> str:
     return token
 
 
+def validate_equilibrium_artifact_v7(root: Path, manifest: dict) -> None:
+    declared_path = manifest.get("artifacts", {}).get(
+        "equilibrium_artifact_v7_path"
+    )
+    if declared_path is None:
+        return
+    relative_path, artifact_path = require_bundle_path(
+        root,
+        declared_path,
+        "manifest.artifacts.equilibrium_artifact_v7_path",
+    )
+    require_equal(
+        relative_path,
+        "eigen/metadata/equilibrium_artifact.v7.json",
+        "manifest.artifacts.equilibrium_artifact_v7_path",
+    )
+    artifact = load_json(artifact_path)
+    schema_version = artifact.get("schema_version")
+    if schema_version == "equilibrium_artifact.v6":
+        fail(
+            "equilibrium_artifact_v6_uncertified: rerun relaxation or migrate "
+            "with source completion evidence"
+        )
+    require_equal(
+        schema_version,
+        "equilibrium_artifact.v7",
+        "equilibrium_artifact.schema_version",
+    )
+    require_equal(
+        artifact.get("accepted_for_linearization"),
+        True,
+        "equilibrium_artifact.accepted_for_linearization",
+    )
+    certificate = artifact.get("acceptance_certificate")
+    if not isinstance(certificate, dict):
+        fail("equilibrium_artifact.acceptance_certificate must be an object")
+    criterion = certificate.get("criterion")
+    expected = {
+        "torque": ("max_torque_apm", "A/m", "torque"),
+        "energy": ("total_energy_plateau_range_j", "J", "energy"),
+    }.get(criterion)
+    if expected is None:
+        fail("equilibrium_artifact.acceptance_certificate.criterion is invalid")
+    metric_kind, unit, stop_reason = expected
+    require_equal(
+        certificate.get("metric_kind"),
+        metric_kind,
+        "equilibrium_artifact.acceptance_certificate.metric_kind",
+    )
+    require_equal(
+        certificate.get("unit"),
+        unit,
+        "equilibrium_artifact.acceptance_certificate.unit",
+    )
+    require_equal(
+        certificate.get("stop_reason"),
+        stop_reason,
+        "equilibrium_artifact.acceptance_certificate.stop_reason",
+    )
+    require_equal(
+        certificate.get("status"),
+        "completed",
+        "equilibrium_artifact.acceptance_certificate.status",
+    )
+    require_equal(
+        certificate.get("converged"),
+        True,
+        "equilibrium_artifact.acceptance_certificate.converged",
+    )
+    metric_value = require_finite_number(
+        certificate.get("metric_value"),
+        "equilibrium_artifact.acceptance_certificate.metric_value",
+    )
+    threshold = require_finite_number(
+        certificate.get("threshold"),
+        "equilibrium_artifact.acceptance_certificate.threshold",
+    )
+    if threshold < 0.0 or metric_value > threshold:
+        fail(
+            "equilibrium_artifact.acceptance_certificate.metric_value must "
+            "satisfy its non-negative threshold"
+        )
+    completion_sha256 = require_sha256_token(
+        certificate.get("completion_sha256"),
+        "equilibrium_artifact.acceptance_certificate.completion_sha256",
+    )
+    require_equal(
+        artifact.get("completion_sha256"),
+        completion_sha256,
+        "equilibrium_artifact.completion_sha256",
+    )
+    content_sha256 = require_sha256_token(
+        artifact.get("content_sha256"),
+        "equilibrium_artifact.content_sha256",
+    )
+    manifest_digest = manifest.get("diagnostics", {}).get(
+        "equilibrium_artifact_sha256"
+    )
+    require_equal(
+        manifest_digest,
+        content_sha256,
+        "manifest.diagnostics.equilibrium_artifact_sha256",
+    )
+    observables = artifact.get("observables")
+    if not isinstance(observables, dict):
+        fail("equilibrium_artifact.observables must be an object")
+    for field_name in ["max_torque_Apm", "max_torque_T", "max_torque_relative"]:
+        require_finite_number(
+            observables.get(field_name),
+            f"equilibrium_artifact.observables.{field_name}",
+        )
+    integrity = artifact.get("representation_integrity")
+    if not isinstance(integrity, dict):
+        fail("equilibrium_artifact.representation_integrity must be an object")
+    m0_norm_tolerance = require_finite_number(
+        integrity.get("m0_norm_tolerance"),
+        "equilibrium_artifact.representation_integrity.m0_norm_tolerance",
+    )
+    if m0_norm_tolerance < 0.0:
+        fail(
+            "equilibrium_artifact.representation_integrity.m0_norm_tolerance "
+            "must be non-negative"
+        )
+
+
 def validate_periodic_mesh_certificate(
     certificate: object,
     *,
@@ -4666,6 +4791,7 @@ def main(argv: list[str] | None = None) -> int:
         "manifest.schema_version",
     )
     require_equal(manifest.get("stage_kind"), "eigenmodes", "manifest.stage_kind")
+    validate_equilibrium_artifact_v7(root, manifest)
     validate_manifest_physics(manifest)
     require_equal(
         manifest.get("artifacts", {}).get("solver_diagnostics_path"),

@@ -4671,7 +4671,7 @@ fn remap_single_k_mode_artifact_path(
         return Some(relative_path.to_string());
     }
     for state_name in [
-        "equilibrium_artifact.v6.json",
+        "equilibrium_artifact.v7.json",
         "linearization_state.v6.json",
     ] {
         if relative_path == format!("eigen/metadata/{state_name}") {
@@ -4763,8 +4763,8 @@ fn build_eigen_path_frequency_domain_manifest(
     plan: &FemEigenPlanIR,
 ) -> serde_json::Value {
     let mode_metadata_paths = eigen_path_mode_metadata_paths(mode_artifacts);
-    let equilibrium_artifact_v6_paths =
-        eigen_path_state_metadata_paths(mode_artifacts, "equilibrium_artifact.v6.json");
+    let equilibrium_artifact_v7_paths =
+        eigen_path_state_metadata_paths(mode_artifacts, "equilibrium_artifact.v7.json");
     let linearization_state_v6_paths =
         eigen_path_state_metadata_paths(mode_artifacts, "linearization_state.v6.json");
     let mode_field_resources = mode_metadata_paths
@@ -5031,7 +5031,7 @@ fn build_eigen_path_frequency_domain_manifest(
             "mode_field_zarr_store_path": mode_field_zarr_store_path,
             "mode_field_storage_format": mode_field_storage_format,
             "mode_metadata_paths": mode_metadata_paths,
-            "equilibrium_artifact_v6_paths": equilibrium_artifact_v6_paths,
+            "equilibrium_artifact_v7_paths": equilibrium_artifact_v7_paths,
             "linearization_state_v6_paths": linearization_state_v6_paths,
             "frequency_point_paths": [],
         },
@@ -6959,11 +6959,11 @@ mod tests {
     }
 
     #[test]
-    fn k_path_remap_preserves_sample_scoped_v6_state_sidecars() {
+    fn k_path_remap_preserves_sample_scoped_v7_equilibrium_sidecars() {
         let artifacts = vec![
             AuxiliaryArtifact {
-                relative_path: "eigen/metadata/equilibrium_artifact.v6.json".to_string(),
-                bytes: br#"{"schema_version":"equilibrium_artifact.v6"}"#.to_vec(),
+                relative_path: "eigen/metadata/equilibrium_artifact.v7.json".to_string(),
+                bytes: br#"{"schema_version":"equilibrium_artifact.v7"}"#.to_vec(),
             },
             AuxiliaryArtifact {
                 relative_path: "eigen/metadata/linearization_state.v6.json".to_string(),
@@ -6980,13 +6980,13 @@ mod tests {
         assert_eq!(
             paths,
             vec![
-                "eigen/metadata/sample_0003/equilibrium_artifact.v6.json",
+                "eigen/metadata/sample_0003/equilibrium_artifact.v7.json",
                 "eigen/metadata/sample_0003/linearization_state.v6.json",
             ]
         );
         assert_eq!(
-            eigen_path_state_metadata_paths(&remapped, "equilibrium_artifact.v6.json"),
-            vec!["eigen/metadata/sample_0003/equilibrium_artifact.v6.json"]
+            eigen_path_state_metadata_paths(&remapped, "equilibrium_artifact.v7.json"),
+            vec!["eigen/metadata/sample_0003/equilibrium_artifact.v7.json"]
         );
     }
 

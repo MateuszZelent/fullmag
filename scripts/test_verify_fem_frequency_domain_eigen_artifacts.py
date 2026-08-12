@@ -11,6 +11,8 @@ import math
 import shutil
 import subprocess
 import sys
+import tempfile
+import unittest
 from pathlib import Path
 
 
@@ -666,6 +668,147 @@ def run_validator(root: Path, *args: str) -> subprocess.CompletedProcess[str]:
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
     )
+
+
+def attach_certified_equilibrium_v7(root: Path) -> dict[str, object]:
+    completion_sha256 = "sha256:" + "0123456789abcdef" * 4
+    artifact: dict[str, object] = {
+        "schema_version": "equilibrium_artifact.v7",
+        "accepted_for_linearization": True,
+        "acceptance_certificate": {
+            "criterion": "energy",
+            "metric_kind": "total_energy_plateau_range_j",
+            "metric_value": 8.0e-13,
+            "threshold": 1.0e-12,
+            "unit": "J",
+            "status": "completed",
+            "converged": True,
+            "stop_reason": "energy",
+            "completion_sha256": completion_sha256,
+        },
+        "completion_sha256": completion_sha256,
+        "content_sha256": "sha256:" + "b" * 64,
+        "equilibrium_id": "equilibrium_artifact.v7:test",
+        "producer_run_id": "run:test",
+        "mesh_signature": "sha256:" + "1" * 64,
+        "material_signature": "sha256:" + "2" * 64,
+        "physics_signature": "sha256:" + "3" * 64,
+        "boundary_signature": "sha256:" + "4" * 64,
+        "static_demag_signature": "sha256:" + "5" * 64,
+        "observables": {
+            "max_torque_Apm": 0.4,
+            "max_torque_T": 5.026548245743669e-7,
+            "max_torque_relative": 3.2e-5,
+        },
+        "representation_integrity": {"m0_norm_tolerance": 1.0e-10},
+        "m0": [[0.0, 0.0, 1.0]],
+        "h_eff0_a_per_m": [[0.0, 0.0, 1.0]],
+        "h_demag0_a_per_m": [[0.0, 0.0, 0.0]],
+        "phi0_a": [0.0],
+        "phi0_requirement": "required_for_restart_or_provenance",
+        "demag_model": "poisson_robin",
+        "periodic_mesh_certificate": {
+            "schema_version": "periodic_mesh_certificate.v6",
+            "certificate_id": "periodic_mesh_certificate.v6:cert",
+            "content_sha256": "sha256:cert",
+            "certificate": {"certificate_status": "accepted"},
+        },
+    }
+    artifact_path = root / "eigen" / "metadata" / "equilibrium_artifact.v7.json"
+    artifact_path.write_text(json.dumps(artifact))
+    manifest_path = root / "frequency_domain" / "manifest.v1.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest["artifacts"]["equilibrium_artifact_v7_path"] = (
+        "eigen/metadata/equilibrium_artifact.v7.json"
+    )
+    manifest["diagnostics"]["equilibrium_artifact_sha256"] = artifact[
+        "content_sha256"
+    ]
+    manifest_path.write_text(json.dumps(manifest))
+    return artifact
+
+
+class CertifiedEquilibriumArtifactV7Tests(unittest.TestCase):
+    def run_case(self, mutate=None) -> subprocess.CompletedProcess[str]:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            write_eigen_fixture(root)
+            artifact = attach_certified_equilibrium_v7(root)
+            if mutate is not None:
+                mutate(root, artifact)
+            return run_validator(root)
+
+    def test_validator_accepts_certified_equilibrium_v7(self) -> None:
+        result = self.run_case()
+        self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
+
+    def test_validator_rejects_uncertified_v6(self) -> None:
+        def mutate(root: Path, artifact: dict[str, object]) -> None:
+            artifact["schema_version"] = "equilibrium_artifact.v6"
+            (root / "eigen/metadata/equilibrium_artifact.v7.json").write_text(
+                json.dumps(artifact)
+            )
+
+        result = self.run_case(mutate)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn(
+            "equilibrium_artifact_v6_uncertified",
+            result.stderr + result.stdout,
+        )
+
+    def test_validator_rejects_missing_acceptance_certificate(self) -> None:
+        def mutate(root: Path, artifact: dict[str, object]) -> None:
+            artifact.pop("acceptance_certificate")
+            (root / "eigen/metadata/equilibrium_artifact.v7.json").write_text(
+                json.dumps(artifact)
+            )
+
+        result = self.run_case(mutate)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("acceptance_certificate", result.stderr + result.stdout)
+
+    def test_validator_rejects_incoherent_certificate_unit_and_metric(self) -> None:
+        def mutate(root: Path, artifact: dict[str, object]) -> None:
+            artifact["acceptance_certificate"]["unit"] = "A/m"  # type: ignore[index]
+            (root / "eigen/metadata/equilibrium_artifact.v7.json").write_text(
+                json.dumps(artifact)
+            )
+
+        result = self.run_case(mutate)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("acceptance_certificate.unit", result.stderr + result.stdout)
+
+    def test_validator_rejects_unsatisfied_certificate_threshold(self) -> None:
+        def mutate(root: Path, artifact: dict[str, object]) -> None:
+            artifact["acceptance_certificate"]["metric_value"] = 2.0e-12  # type: ignore[index]
+            (root / "eigen/metadata/equilibrium_artifact.v7.json").write_text(
+                json.dumps(artifact)
+            )
+
+        result = self.run_case(mutate)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("acceptance_certificate.metric_value", result.stderr + result.stdout)
+
+    def test_validator_rejects_mismatched_completion_digest(self) -> None:
+        def mutate(root: Path, artifact: dict[str, object]) -> None:
+            artifact["completion_sha256"] = "sha256:" + "c" * 64
+            (root / "eigen/metadata/equilibrium_artifact.v7.json").write_text(
+                json.dumps(artifact)
+            )
+
+        result = self.run_case(mutate)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("completion_sha256", result.stderr + result.stdout)
+
+    def test_validator_rejects_raw_vector_equilibrium_payload(self) -> None:
+        def mutate(root: Path, _artifact: dict[str, object]) -> None:
+            (root / "eigen/metadata/equilibrium_artifact.v7.json").write_text(
+                json.dumps([[0.0, 0.0, 1.0]])
+            )
+
+        result = self.run_case(mutate)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("must be an object", result.stderr + result.stdout)
 
 
 def sha256_file_token(path: Path) -> str:
