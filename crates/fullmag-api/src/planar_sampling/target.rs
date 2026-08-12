@@ -208,7 +208,7 @@ pub(crate) fn resolve_spatial_target(
             }
             if !matches!(scope, ResolvedSpatialScope::MonitorTarget) {
                 return Err(ApiError::unprocessable(
-                    "planar_scope_unsupported: FDM cell fields are not an airbox carrier and support monitor_target only",
+                    "target_unsupported: FDM cell fields are not an airbox carrier and support monitor_target only",
                 ));
             }
             let origin = origin_m.ok_or_else(|| {
@@ -246,12 +246,12 @@ pub(crate) fn resolve_spatial_target(
             }
             if !matches!(scope, ResolvedSpatialScope::Airbox { scope_id: None }) {
                 return Err(ApiError::unprocessable(
-                    "planar_scope_unsupported: Airbox carrier requires exact airbox scope",
+                    "target_unsupported: Airbox carrier requires exact airbox scope",
                 ));
             }
             if !matches!(target, MonitorTargetIR::Domain) {
                 return Err(ApiError::unprocessable(
-                    "planar_scope_empty: Airbox carrier is legal only for a domain monitor target",
+                    "empty_target: Airbox carrier is legal only for a domain monitor target",
                 ));
             }
             let selected = vec![true; cell_count(*cells)?];
@@ -280,7 +280,7 @@ pub(crate) fn resolve_spatial_target(
             operator,
         ),
         SpatialFieldCarrier::FemElements { .. } => Err(ApiError::unprocessable(
-            "unsupported_fem_carrier: planar sampling requires P1 nodal values",
+            "unsupported_element_order: planar sampling requires P1 nodal values",
         )),
         SpatialFieldCarrier::ArtifactLinear { .. } => Err(ApiError::unprocessable(
             "unsupported_artifact_carrier: linear artifacts have no exact spatial coordinates",
@@ -307,7 +307,7 @@ fn build_fdm_target(
         .collect::<Vec<_>>();
     if selected_entity_ids.is_empty() {
         return Err(ApiError::unprocessable(
-            "planar_scope_empty: resolved FDM target has no cells",
+            "empty_target: resolved FDM target has no cells",
         ));
     }
     let target_bounds = fdm_bounds(cells, origin, spacing, &selected)?;
@@ -385,7 +385,7 @@ fn select_fdm_target(
                 .collect::<BTreeSet<_>>();
             if numeric_ids.is_empty() {
                 return Err(ApiError::not_found(format!(
-                    "FDM region membership not found: {object_id}/{region_id}"
+                    "empty_target: FDM region membership not found: {object_id}/{region_id}"
                 )));
             }
             Ok(membership
@@ -433,7 +433,7 @@ fn build_fem_target(
     }
     let elements = mesh.require_tet4_elements().map_err(|error| {
         ApiError::unprocessable(format!(
-            "unsupported_fem_element_order_or_carrier: tet4 P1 nodal carrier required: {error}"
+            "unsupported_element_order: tet4 P1 nodal carrier required: {error}"
         ))
     })?;
     let runtime_scope = match scope {
@@ -443,7 +443,9 @@ fn build_fem_target(
         }
         ResolvedSpatialScope::Airbox { scope_id } => {
             if scope_id.as_deref().is_some_and(|id| id != "airbox") {
-                return Err(ApiError::not_found("FEM Airbox scope not found"));
+                return Err(ApiError::not_found(
+                    "empty_target: FEM Airbox scope not found",
+                ));
             }
             select_fem_parts(mesh, elements.len(), |part| {
                 part.role.contains("air") || part.id.contains("airbox")
@@ -459,7 +461,7 @@ fn build_fem_target(
         .collect::<Vec<_>>();
     if selected_entity_ids.is_empty() {
         return Err(ApiError::unprocessable(
-            "planar_scope_empty: resolved FEM target has no elements",
+            "empty_target: resolved FEM target has no elements",
         ));
     }
     let values = expand_fem_values(resolved, mapping, mesh.nodes.len(), &elements, &selected)?;
@@ -614,7 +616,7 @@ fn fdm_bounds(
     }
     if low.contains(&u32::MAX) {
         return Err(ApiError::unprocessable(
-            "planar_scope_empty: resolved FDM bounds are empty",
+            "empty_target: resolved FDM bounds are empty",
         ));
     }
     Ok([
@@ -637,7 +639,7 @@ fn fem_bounds(
         .collect::<BTreeSet<_>>();
     if node_ids.is_empty() {
         return Err(ApiError::unprocessable(
-            "planar_scope_empty: resolved FEM bounds are empty",
+            "empty_target: resolved FEM bounds are empty",
         ));
     }
     let mut bounds = [[f64::INFINITY; 3], [f64::NEG_INFINITY; 3]];

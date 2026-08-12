@@ -241,10 +241,13 @@ export function usePlanarProbeResource(
   const { api } = useKernel();
   const stableQuery = useMemo<PlanarFieldProbeQuery>(
     () => ({
+      sample_token: query.sample_token,
       component: query.component,
+      expected_carrier_revision: query.expected_carrier_revision,
       expected_field_revision: query.expected_field_revision,
       expected_mesh_revision: query.expected_mesh_revision,
       expected_monitor_revision: query.expected_monitor_revision,
+      expected_scene_revision: query.expected_scene_revision,
       resolution_x: query.resolution_x,
       resolution_y: query.resolution_y,
       scope_id: query.scope_id,
@@ -255,10 +258,13 @@ export function usePlanarProbeResource(
       v_m: query.v_m,
     }),
     [
+      query.sample_token,
       query.component,
+      query.expected_carrier_revision,
       query.expected_field_revision,
       query.expected_mesh_revision,
       query.expected_monitor_revision,
+      query.expected_scene_revision,
       query.resolution_x,
       query.resolution_y,
       query.scope_id,
@@ -270,10 +276,13 @@ export function usePlanarProbeResource(
     ],
   );
   const fieldQuery: PlanarFieldQuery = {
+    sample_token: stableQuery.sample_token,
     component: stableQuery.component,
+    expected_carrier_revision: stableQuery.expected_carrier_revision,
     expected_field_revision: stableQuery.expected_field_revision,
     expected_mesh_revision: stableQuery.expected_mesh_revision,
     expected_monitor_revision: stableQuery.expected_monitor_revision,
+    expected_scene_revision: stableQuery.expected_scene_revision,
     resolution_x: stableQuery.resolution_x,
     resolution_y: stableQuery.resolution_y,
     scope_id: stableQuery.scope_id,
@@ -361,10 +370,13 @@ function useStablePlanarFieldQuery(query: PlanarFieldQuery): PlanarFieldQuery {
   return useMemo(
     () =>
       normalizePlanarFieldQuery({
+        sample_token: query.sample_token,
         component: query.component,
+        expected_carrier_revision: query.expected_carrier_revision,
         expected_field_revision: query.expected_field_revision,
         expected_mesh_revision: query.expected_mesh_revision,
         expected_monitor_revision: query.expected_monitor_revision,
+        expected_scene_revision: query.expected_scene_revision,
         include_mesh: query.include_mesh,
         quality: query.quality,
         resolution_x: query.resolution_x,
@@ -376,10 +388,13 @@ function useStablePlanarFieldQuery(query: PlanarFieldQuery): PlanarFieldQuery {
         vector_budget: query.vector_budget,
       }),
     [
+      query.sample_token,
       query.component,
+      query.expected_carrier_revision,
       query.expected_field_revision,
       query.expected_mesh_revision,
       query.expected_monitor_revision,
+      query.expected_scene_revision,
       query.include_mesh,
       query.quality,
       query.resolution_x,

@@ -103,10 +103,13 @@ export type PlanarViewScopeState =
   components["schemas"]["PlanarViewScopeState"];
 export interface PlanarFieldQuery {
   [key: string]: boolean | number | string | undefined;
+  sample_token?: string;
   component?: string;
+  expected_carrier_revision?: number;
   expected_field_revision?: number;
   expected_mesh_revision?: number;
   expected_monitor_revision?: number;
+  expected_scene_revision?: number;
   include_mesh?: boolean;
   quality?: string;
   resolution_x?: number;
@@ -121,9 +124,12 @@ export interface PlanarFieldProbeQuery
   extends Pick<
     PlanarFieldQuery,
     | "component"
+    | "sample_token"
+    | "expected_carrier_revision"
     | "expected_field_revision"
     | "expected_mesh_revision"
     | "expected_monitor_revision"
+    | "expected_scene_revision"
     | "resolution_x"
     | "resolution_y"
     | "scope_id"

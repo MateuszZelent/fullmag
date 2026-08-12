@@ -208,10 +208,13 @@ export function parseCanonicalFieldVectorResourceKey(
 }
 
 const PLANAR_FIELD_QUERY_ORDER = [
+  "sample_token",
   "component",
+  "expected_carrier_revision",
   "expected_field_revision",
   "expected_mesh_revision",
   "expected_monitor_revision",
+  "expected_scene_revision",
   "include_mesh",
   "quality",
   "resolution_x",

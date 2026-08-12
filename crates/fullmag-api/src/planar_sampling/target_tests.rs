@@ -667,14 +667,14 @@ fn slab_average_is_measure_weighted_and_refinement_invariant() {
 }
 
 #[test]
-fn sample_identity_distinguishes_quantity_revision_quality_and_thickness() {
-    let identity = |quantity_revision, quality: &str, thickness_m| PlanarSampleIdentity {
+fn sample_identity_distinguishes_target_operator_resolution_quality_and_quantity_revision() {
+    let identity = |quantity_revision, target_fingerprint: &str, quality: &str, thickness_m, resolution| PlanarSampleIdentity {
         session_id: "session-1".to_string(),
         monitor_id: "monitor-1".to_string(),
         monitor_revision: 3,
         monitor_hash: "monitor-hash".to_string(),
         scene_revision: 5,
-        target_fingerprint: "target-fingerprint".to_string(),
+        target_fingerprint: target_fingerprint.to_string(),
         target_kind: "object".to_string(),
         target_id: Some("body".to_string()),
         target_entity_count: 4,
@@ -698,18 +698,29 @@ fn sample_identity_distinguishes_quantity_revision_quality_and_thickness() {
             [0.0, 1.0, 0.0, 1.0],
         ),
         operator: PlanarOperatorIR::SlabAverage { thickness_m },
-        resolution: [128, 128],
+        resolution,
         quality: quality.to_string(),
     };
-    let base = identity(11, "interactive", 0.25);
+    let base = identity(11, "target-fingerprint", "interactive", 0.25, [128, 128]);
     assert_ne!(
         base.cache_key(),
-        identity(12, "interactive", 0.25).cache_key()
+        identity(12, "target-fingerprint", "interactive", 0.25, [128, 128]).cache_key()
     );
-    assert_ne!(base.cache_key(), identity(11, "export", 0.25).cache_key());
     assert_ne!(
         base.cache_key(),
-        identity(11, "interactive", 0.5).cache_key()
+        identity(11, "other-target", "interactive", 0.25, [128, 128]).cache_key()
+    );
+    assert_ne!(
+        base.cache_key(),
+        identity(11, "target-fingerprint", "export", 0.25, [128, 128]).cache_key()
+    );
+    assert_ne!(
+        base.cache_key(),
+        identity(11, "target-fingerprint", "interactive", 0.5, [128, 128]).cache_key()
+    );
+    assert_ne!(
+        base.cache_key(),
+        identity(11, "target-fingerprint", "interactive", 0.25, [256, 128]).cache_key()
     );
 }
 
@@ -725,7 +736,7 @@ fn empty_target_fails_with_stable_diagnostic() {
         &PlanarOperatorIR::PlaneSample,
     )
     .unwrap_err();
-    assert!(error.message.contains("empty"));
+    assert!(error.message.starts_with("empty_target:"));
 }
 
 #[test]
@@ -740,7 +751,7 @@ fn ambiguous_fdm_membership_fails_closed() {
         &PlanarOperatorIR::PlaneSample,
     )
     .unwrap_err();
-    assert!(error.message.contains("ambiguous"));
+    assert!(error.message.starts_with("ambiguous_membership:"));
 }
 
 #[test]
@@ -787,7 +798,7 @@ fn unsupported_fem_cell_carrier_fails_instead_of_falling_back_to_p1_tet4() {
         &PlanarOperatorIR::PlaneSample,
     )
     .unwrap_err();
-    assert!(error.message.contains("tet4") || error.message.contains("order"));
+    assert!(error.message.starts_with("unsupported_element_order:"));
 }
 
 #[test]

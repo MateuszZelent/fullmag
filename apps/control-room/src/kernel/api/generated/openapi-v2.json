@@ -14841,6 +14841,11 @@
           "canonical_unit": {
             "type": "string"
           },
+          "carrier_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
           "component": {
             "type": "string"
           },
@@ -14922,6 +14927,9 @@
           "sample_support": {
             "type": "string"
           },
+          "sample_token": {
+            "type": "string"
+          },
           "sampler_version": {
             "type": "string"
           },
@@ -14945,6 +14953,11 @@
               "null"
             ]
           },
+          "scene_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
           "schema_version": {
             "type": "string"
           },
@@ -14960,6 +14973,8 @@
         },
         "required": [
           "schema_version",
+          "sample_token",
+          "scene_revision",
           "monitor_id",
           "monitor_revision",
           "monitor_hash",
@@ -14968,6 +14983,7 @@
           "component",
           "field_revision",
           "mesh_revision",
+          "carrier_revision",
           "generation_id",
           "field_source",
           "scope_kind",
@@ -29921,6 +29937,14 @@
           },
           {
             "in": "query",
+            "name": "sample_token",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
             "name": "component",
             "required": false,
             "schema": {
@@ -30007,6 +30031,16 @@
           },
           {
             "in": "query",
+            "name": "expected_scene_revision",
+            "required": false,
+            "schema": {
+              "format": "int64",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
             "name": "expected_monitor_revision",
             "required": false,
             "schema": {
@@ -30018,6 +30052,16 @@
           {
             "in": "query",
             "name": "expected_mesh_revision",
+            "required": false,
+            "schema": {
+              "format": "int64",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "expected_carrier_revision",
             "required": false,
             "schema": {
               "format": "int64",
@@ -30068,6 +30112,14 @@
           },
           {
             "in": "query",
+            "name": "sample_token",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
             "name": "component",
             "required": false,
             "schema": {
@@ -30154,6 +30206,16 @@
           },
           {
             "in": "query",
+            "name": "expected_scene_revision",
+            "required": false,
+            "schema": {
+              "format": "int64",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
             "name": "expected_monitor_revision",
             "required": false,
             "schema": {
@@ -30165,6 +30227,16 @@
           {
             "in": "query",
             "name": "expected_mesh_revision",
+            "required": false,
+            "schema": {
+              "format": "int64",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "expected_carrier_revision",
             "required": false,
             "schema": {
               "format": "int64",
@@ -30218,6 +30290,14 @@
           },
           {
             "in": "query",
+            "name": "sample_token",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
             "name": "component",
             "required": false,
             "schema": {
@@ -30304,6 +30384,16 @@
           },
           {
             "in": "query",
+            "name": "expected_scene_revision",
+            "required": false,
+            "schema": {
+              "format": "int64",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
             "name": "expected_monitor_revision",
             "required": false,
             "schema": {
@@ -30315,6 +30405,16 @@
           {
             "in": "query",
             "name": "expected_mesh_revision",
+            "required": false,
+            "schema": {
+              "format": "int64",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "expected_carrier_revision",
             "required": false,
             "schema": {
               "format": "int64",
@@ -30399,6 +30499,14 @@
           },
           {
             "in": "query",
+            "name": "sample_token",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
             "name": "component",
             "required": false,
             "schema": {
@@ -30459,6 +30567,16 @@
           },
           {
             "in": "query",
+            "name": "expected_scene_revision",
+            "required": false,
+            "schema": {
+              "format": "int64",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
             "name": "expected_monitor_revision",
             "required": false,
             "schema": {
@@ -30470,6 +30588,16 @@
           {
             "in": "query",
             "name": "expected_mesh_revision",
+            "required": false,
+            "schema": {
+              "format": "int64",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "expected_carrier_revision",
             "required": false,
             "schema": {
               "format": "int64",
@@ -30527,6 +30655,14 @@
           },
           {
             "in": "query",
+            "name": "sample_token",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
             "name": "component",
             "required": false,
             "schema": {
@@ -30613,6 +30749,16 @@
           },
           {
             "in": "query",
+            "name": "expected_scene_revision",
+            "required": false,
+            "schema": {
+              "format": "int64",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
             "name": "expected_monitor_revision",
             "required": false,
             "schema": {
@@ -30624,6 +30770,16 @@
           {
             "in": "query",
             "name": "expected_mesh_revision",
+            "required": false,
+            "schema": {
+              "format": "int64",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "expected_carrier_revision",
             "required": false,
             "schema": {
               "format": "int64",
@@ -30674,6 +30830,14 @@
           },
           {
             "in": "query",
+            "name": "sample_token",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
             "name": "component",
             "required": false,
             "schema": {
@@ -30760,6 +30924,16 @@
           },
           {
             "in": "query",
+            "name": "expected_scene_revision",
+            "required": false,
+            "schema": {
+              "format": "int64",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
             "name": "expected_monitor_revision",
             "required": false,
             "schema": {
@@ -30771,6 +30945,16 @@
           {
             "in": "query",
             "name": "expected_mesh_revision",
+            "required": false,
+            "schema": {
+              "format": "int64",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "expected_carrier_revision",
             "required": false,
             "schema": {
               "format": "int64",
@@ -30824,6 +31008,14 @@
           },
           {
             "in": "query",
+            "name": "sample_token",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
             "name": "component",
             "required": false,
             "schema": {
@@ -30910,6 +31102,16 @@
           },
           {
             "in": "query",
+            "name": "expected_scene_revision",
+            "required": false,
+            "schema": {
+              "format": "int64",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
             "name": "expected_monitor_revision",
             "required": false,
             "schema": {
@@ -30921,6 +31123,16 @@
           {
             "in": "query",
             "name": "expected_mesh_revision",
+            "required": false,
+            "schema": {
+              "format": "int64",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "expected_carrier_revision",
             "required": false,
             "schema": {
               "format": "int64",
@@ -39439,8 +39651,8 @@
     }
   ],
   "x-fullmag-build-identity": {
-    "built_at_utc": "2026-08-11T20:16:58Z",
-    "git_commit": "ac7510d2ea1ba94937c815b19196a81d1ea6ad56",
+    "built_at_utc": "2026-08-12T18:15:13Z",
+    "git_commit": "d19cfc96bafdc44eb6b62a3613a18ce4e7c444ea",
     "source_snapshot_sha256": "unknown",
     "worktree_state": "dirty"
   },

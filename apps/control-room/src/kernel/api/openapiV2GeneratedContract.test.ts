@@ -54,6 +54,30 @@ describe("generated OpenAPI v2 transport", () => {
     );
   });
 
+  it("publishes immutable planar sample tokens and separated stale revisions", () => {
+    const document = JSON.parse(
+      readFileSync(new URL("./generated/openapi-v2.json", import.meta.url), "utf8"),
+    );
+    const meta = document.components.schemas.PlanarFieldMetaResource;
+    expect(meta.required).toEqual(expect.arrayContaining([
+      "sample_token",
+      "scene_revision",
+      "monitor_revision",
+      "carrier_revision",
+      "field_revision",
+    ]));
+    const scalarParameters = document.paths[
+      "/v2/sessions/current/data/fields/{quantity_id}/planar-monitors/{monitor_id}/scalar"
+    ].get.parameters.map((parameter: { name: string }) => parameter.name);
+    expect(scalarParameters).toEqual(expect.arrayContaining([
+      "sample_token",
+      "expected_scene_revision",
+      "expected_monitor_revision",
+      "expected_carrier_revision",
+      "expected_field_revision",
+    ]));
+  });
+
   it("exposes an openapi-fetch transport wrapper", async () => {
     const calls: string[] = [];
     const transport = createOpenApiV2Transport({

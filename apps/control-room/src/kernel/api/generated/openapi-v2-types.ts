@@ -7052,6 +7052,8 @@ export interface components {
             /** Format: int32 */
             basis_order: number;
             canonical_unit: string;
+            /** Format: int64 */
+            carrier_revision: number;
             component: string;
             etag: string;
             /** Format: int64 */
@@ -7078,6 +7080,7 @@ export interface components {
             quantity_id: string;
             resolution: number[];
             sample_support: string;
+            sample_token: string;
             sampler_version: string;
             sampling_execution: string;
             sampling_method: string;
@@ -7085,6 +7088,8 @@ export interface components {
             scalar_max?: number | null;
             /** Format: double */
             scalar_min?: number | null;
+            /** Format: int64 */
+            scene_revision: number;
             schema_version: string;
             scope_id?: string | null;
             scope_kind: string;
@@ -12060,6 +12065,7 @@ export interface operations {
     data_get_sessions_current_data_fields_quantity_id_planar_monitors_monitor_id_empty_mask: {
         parameters: {
             query?: {
+                sample_token?: string;
                 component?: string;
                 scope_kind?: string;
                 scope_id?: string;
@@ -12070,8 +12076,10 @@ export interface operations {
                 quality?: string;
                 vector_budget?: number;
                 include_mesh?: boolean;
+                expected_scene_revision?: number;
                 expected_monitor_revision?: number;
                 expected_mesh_revision?: number;
+                expected_carrier_revision?: number;
                 expected_field_revision?: number;
             };
             header?: never;
@@ -12095,6 +12103,7 @@ export interface operations {
     data_get_sessions_current_data_fields_quantity_id_planar_monitors_monitor_id_mesh_overlay: {
         parameters: {
             query?: {
+                sample_token?: string;
                 component?: string;
                 scope_kind?: string;
                 scope_id?: string;
@@ -12105,8 +12114,10 @@ export interface operations {
                 quality?: string;
                 vector_budget?: number;
                 include_mesh?: boolean;
+                expected_scene_revision?: number;
                 expected_monitor_revision?: number;
                 expected_mesh_revision?: number;
+                expected_carrier_revision?: number;
                 expected_field_revision?: number;
             };
             header?: never;
@@ -12137,6 +12148,7 @@ export interface operations {
     data_get_sessions_current_data_fields_quantity_id_planar_monitors_monitor_id_meta: {
         parameters: {
             query?: {
+                sample_token?: string;
                 component?: string;
                 scope_kind?: string;
                 scope_id?: string;
@@ -12147,8 +12159,10 @@ export interface operations {
                 quality?: string;
                 vector_budget?: number;
                 include_mesh?: boolean;
+                expected_scene_revision?: number;
                 expected_monitor_revision?: number;
                 expected_mesh_revision?: number;
+                expected_carrier_revision?: number;
                 expected_field_revision?: number;
             };
             header?: never;
@@ -12196,6 +12210,7 @@ export interface operations {
             query: {
                 u_m: number;
                 v_m: number;
+                sample_token?: string;
                 component?: string;
                 resolution_x?: number;
                 resolution_y?: number;
@@ -12203,8 +12218,10 @@ export interface operations {
                 scope_id?: string;
                 stage_id?: string;
                 snapshot_id?: string;
+                expected_scene_revision?: number;
                 expected_monitor_revision?: number;
                 expected_mesh_revision?: number;
+                expected_carrier_revision?: number;
                 expected_field_revision?: number;
             };
             header?: never;
@@ -12229,6 +12246,7 @@ export interface operations {
     data_get_sessions_current_data_fields_quantity_id_planar_monitors_monitor_id_render_png: {
         parameters: {
             query?: {
+                sample_token?: string;
                 component?: string;
                 scope_kind?: string;
                 scope_id?: string;
@@ -12239,8 +12257,10 @@ export interface operations {
                 quality?: string;
                 vector_budget?: number;
                 include_mesh?: boolean;
+                expected_scene_revision?: number;
                 expected_monitor_revision?: number;
                 expected_mesh_revision?: number;
+                expected_carrier_revision?: number;
                 expected_field_revision?: number;
             };
             header?: never;
@@ -12264,6 +12284,7 @@ export interface operations {
     data_get_sessions_current_data_fields_quantity_id_planar_monitors_monitor_id_scalar: {
         parameters: {
             query?: {
+                sample_token?: string;
                 component?: string;
                 scope_kind?: string;
                 scope_id?: string;
@@ -12274,8 +12295,10 @@ export interface operations {
                 quality?: string;
                 vector_budget?: number;
                 include_mesh?: boolean;
+                expected_scene_revision?: number;
                 expected_monitor_revision?: number;
                 expected_mesh_revision?: number;
+                expected_carrier_revision?: number;
                 expected_field_revision?: number;
             };
             header?: never;
@@ -12306,6 +12329,7 @@ export interface operations {
     data_get_sessions_current_data_fields_quantity_id_planar_monitors_monitor_id_vectors: {
         parameters: {
             query?: {
+                sample_token?: string;
                 component?: string;
                 scope_kind?: string;
                 scope_id?: string;
@@ -12316,8 +12340,10 @@ export interface operations {
                 quality?: string;
                 vector_budget?: number;
                 include_mesh?: boolean;
+                expected_scene_revision?: number;
                 expected_monitor_revision?: number;
                 expected_mesh_revision?: number;
+                expected_carrier_revision?: number;
                 expected_field_revision?: number;
             };
             header?: never;

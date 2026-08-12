@@ -47,16 +47,23 @@ struct BuiltPlanarField {
     result: Arc<PlanarSampleResult>,
     monitor: PlanarMonitorIR,
     scene_revision: u64,
+    monitor_revision: u64,
     quantity_id: String,
     component: String,
     field_revision: u64,
     mesh_revision: u64,
+    carrier_revision: u64,
     generation_id: String,
     field_source: String,
+    quality: String,
+    stage_id: Option<String>,
+    snapshot_id: Option<String>,
+    include_mesh: bool,
     source_entity_kind: &'static str,
     scope_kind: String,
     scope_id: Option<String>,
     etag: String,
+    sample_token: String,
 }
 
 #[utoipa::path(
@@ -199,6 +206,7 @@ pub async fn get_planar_field_probe(
         ));
     }
     let query = PlanarFieldQuery {
+        sample_token: probe.sample_token,
         component: probe.component,
         scope_kind: probe.scope_kind,
         scope_id: probe.scope_id,
@@ -209,8 +217,10 @@ pub async fn get_planar_field_probe(
         quality: None,
         vector_budget: Some(0),
         include_mesh: Some(false),
+        expected_scene_revision: probe.expected_scene_revision,
         expected_monitor_revision: probe.expected_monitor_revision,
         expected_mesh_revision: probe.expected_mesh_revision,
+        expected_carrier_revision: probe.expected_carrier_revision,
         expected_field_revision: probe.expected_field_revision,
     };
     let built = build_planar_field(&state, &quantity_id, &monitor_id, &query).await?;
@@ -338,8 +348,11 @@ async fn build_planar_field(
         .find(|monitor| monitor.id == monitor_id)
         .cloned()
         .ok_or_else(|| ApiError::not_found(format!("planar monitor not found: {monitor_id}")))?;
-    let spec = fullmag_quantities::quantity_spec(quantity_id)
-        .ok_or_else(|| ApiError::not_found(format!("quantity not found: {quantity_id}")))?;
+    let spec = fullmag_quantities::quantity_spec(quantity_id).ok_or_else(|| {
+        ApiError::not_found(format!(
+            "quantity_unavailable: quantity '{quantity_id}' is unknown"
+        ))
+    })?;
     let n_comp = spec.n_comp as usize;
     let current_field_revision = field_quantity_revision(snapshot, quantity_id);
     let generation_id = domain_generation_id(snapshot);
@@ -404,7 +417,17 @@ async fn build_planar_field(
         })?
     };
     let field_revision = resolved_field.quantity_revision;
-    validate_expected_revisions(query, scene.revision, mesh_revision, field_revision)?;
+    let monitor_hash = monitor_hash(&monitor)?;
+    let monitor_revision = monitor_revision(&monitor_hash);
+    let carrier_revision = resolved_field.mesh_or_grid_revision;
+    validate_expected_revisions(
+        query,
+        scene.revision,
+        monitor_revision,
+        mesh_revision,
+        carrier_revision,
+        field_revision,
+    )?;
     let scope = match query.scope_kind.as_deref().unwrap_or("monitor_target") {
         "monitor_target" => ResolvedSpatialScope::MonitorTarget,
         "mesh_part" => ResolvedSpatialScope::MeshPart {
@@ -425,7 +448,6 @@ async fn build_planar_field(
     let target_id = target.target_id().map(str::to_string);
     let target_entity_count = target.selected_entity_ids().len();
     let source_entity_kind = target.source_entity_kind();
-    let carrier_revision = resolved_field.mesh_or_grid_revision;
     let field_generation = resolved_field.field_generation.clone();
     let field_content_fingerprint = (field_revision == 0 && field_generation.is_none())
         .then(|| spatial_field_content_fingerprint(&resolved_field.values));
@@ -440,7 +462,6 @@ async fn build_planar_field(
         .unwrap_or_else(|| "live".to_string());
     drop(guard);
 
-    let monitor_hash = monitor_hash(&monitor)?;
     let component = resolve_component(query.component.as_deref(), n_comp)?;
     let request = ResolvedPlanarSampleRequest {
         monitor_id: monitor.id.clone(),
@@ -461,10 +482,10 @@ async fn build_planar_field(
             "magnitude".to_string()
         }
     });
-    let sample_cache_key = PlanarSampleIdentity {
+    let sample_token = PlanarSampleIdentity {
         session_id,
         monitor_id: monitor.id.clone(),
-        monitor_revision: scene_revision,
+        monitor_revision,
         monitor_hash: monitor_hash.clone(),
         scene_revision,
         target_fingerprint,
@@ -492,48 +513,49 @@ async fn build_planar_field(
             .unwrap_or_else(|| "interactive".to_string()),
     }
     .cache_key();
+    if query
+        .sample_token
+        .as_deref()
+        .is_some_and(|expected| expected != sample_token)
+    {
+        return Err(ApiError::conflict(
+            "stale_sample_token: requested sample identity is no longer current",
+        ));
+    }
     let result = state
         .quantity_data_plane
-        .get_or_sample_planar(&sample_cache_key, || async move {
+        .get_or_sample_planar(&sample_token, || async move {
             Ok(Arc::new(sample_resolved_target(&target, &request)?))
         })
         .await?;
-    let etag_identity = serde_json::json!({
-        "schema": "planar-field-cache-v1",
-        "monitor_hash": monitor_hash,
-        "quantity_id": quantity_id,
-        "component": component_label,
-        "operator": monitor.operator,
-        "resolution": resolution,
-        "field_revision": field_revision,
-        "mesh_revision": mesh_revision,
-        "generation_id": generation_id,
-        "field_source": field_source,
-        "scope_kind": scope_kind,
-        "scope_id": query.scope_id,
-        "quality": query.quality,
-        "vector_budget": query.vector_budget,
-        "include_mesh": query.include_mesh,
-        "sampler_version": result.meta.sampler_version,
-    });
     let etag = format!(
         "\"fm-planar-sha256:{:x}\"",
-        Sha256::digest(etag_identity.to_string().as_bytes())
+        Sha256::digest(sample_token.as_bytes())
     );
     Ok(BuiltPlanarField {
         result,
         monitor,
         scene_revision,
+        monitor_revision,
         quantity_id: quantity_id.to_string(),
         component: component_label,
         field_revision,
         mesh_revision,
+        carrier_revision,
         generation_id,
         field_source,
+        quality: query
+            .quality
+            .clone()
+            .unwrap_or_else(|| "interactive".to_string()),
+        stage_id: query.stage_id.clone(),
+        snapshot_id: query.snapshot_id.clone(),
+        include_mesh: query.include_mesh.unwrap_or(false),
         source_entity_kind,
         scope_kind,
         scope_id: query.scope_id.clone(),
         etag,
+        sample_token,
     })
 }
 
@@ -573,20 +595,24 @@ fn validate_auxiliary_query(query: &PlanarFieldQuery) -> Result<(), ApiError> {
 
 fn validate_expected_revisions(
     query: &PlanarFieldQuery,
+    scene_revision: u64,
     monitor_revision: u64,
     mesh_revision: u64,
+    carrier_revision: u64,
     field_revision: u64,
 ) -> Result<(), ApiError> {
     for (kind, expected, current) in [
+        ("scene", query.expected_scene_revision, scene_revision),
         ("monitor", query.expected_monitor_revision, monitor_revision),
         ("mesh", query.expected_mesh_revision, mesh_revision),
+        ("carrier", query.expected_carrier_revision, carrier_revision),
         ("field", query.expected_field_revision, field_revision),
     ] {
         if expected.is_some_and(|expected| expected != current) {
             return Err(ApiError::conflict(format!(
                 "stale_{kind}_revision: expected {}, current {current}",
                 expected.expect("checked expected revision")
-            )));
+            )))
         }
     }
     Ok(())
@@ -628,7 +654,7 @@ fn validate_scope(
         other => {
             return Err(ApiError::bad_request(format!(
                 "invalid_planar_scope: unsupported scope_kind '{other}'"
-            )))
+            )));
         }
     }
     Ok(())
@@ -682,6 +708,7 @@ fn meta_resource(built: &BuiltPlanarField) -> PlanarFieldMetaResource {
         "/v2/sessions/current/data/fields/{}/planar-monitors/{}",
         built.quantity_id, built.monitor.id
     );
+    let query = canonical_sample_query(built);
     let (scalar_min, scalar_max) = built
         .result
         .scalar_values
@@ -694,15 +721,18 @@ fn meta_resource(built: &BuiltPlanarField) -> PlanarFieldMetaResource {
             )
         });
     PlanarFieldMetaResource {
-        schema_version: "planar_sample_meta.v1".to_string(),
+        schema_version: "planar_sample_meta.v2".to_string(),
+        sample_token: built.sample_token.clone(),
+        scene_revision: built.scene_revision,
         monitor_id: built.result.meta.monitor_id.clone(),
-        monitor_revision: built.scene_revision,
+        monitor_revision: built.monitor_revision,
         monitor_hash: built.result.meta.monitor_hash.clone(),
         quantity_id: built.quantity_id.clone(),
         canonical_unit: quantity_unit(&built.quantity_id).to_string(),
         component: built.component.clone(),
         field_revision: built.field_revision,
         mesh_revision: built.mesh_revision,
+        carrier_revision: built.carrier_revision,
         generation_id: built.generation_id.to_string(),
         field_source: built.field_source.clone(),
         scope_kind: built.scope_kind.clone(),
@@ -745,20 +775,78 @@ fn meta_resource(built: &BuiltPlanarField) -> PlanarFieldMetaResource {
         scalar_max,
         etag: built.etag.clone(),
         links: PlanarFieldLinksResource {
-            scalar: format!("{base}/scalar"),
-            vectors: format!("{base}/vectors"),
-            empty_mask: format!("{base}/empty-mask"),
-            mesh_overlay: format!("{base}/mesh-overlay"),
-            probe: format!("{base}/probe"),
-            render_png: format!("{base}/render.png"),
+            scalar: format!("{base}/scalar?{query}"),
+            vectors: format!("{base}/vectors?{query}"),
+            empty_mask: format!("{base}/empty-mask?{query}"),
+            mesh_overlay: format!("{base}/mesh-overlay?{query}"),
+            probe: format!("{base}/probe?{query}"),
+            render_png: format!("{base}/render.png?{query}"),
         },
     }
+}
+
+fn canonical_sample_query(built: &BuiltPlanarField) -> String {
+    let mut entries = vec![
+        ("sample_token", built.sample_token.clone()),
+        ("component", built.component.clone()),
+        ("expected_scene_revision", built.scene_revision.to_string()),
+        (
+            "expected_monitor_revision",
+            built.monitor_revision.to_string(),
+        ),
+        ("expected_mesh_revision", built.mesh_revision.to_string()),
+        (
+            "expected_carrier_revision",
+            built.carrier_revision.to_string(),
+        ),
+        ("expected_field_revision", built.field_revision.to_string()),
+        ("resolution_x", built.result.meta.resolution[0].to_string()),
+        ("resolution_y", built.result.meta.resolution[1].to_string()),
+        ("scope_kind", built.scope_kind.clone()),
+        ("quality", built.quality.clone()),
+        ("include_mesh", built.include_mesh.to_string()),
+    ];
+    if let Some(scope_id) = &built.scope_id {
+        entries.push(("scope_id", scope_id.clone()));
+    }
+    if let Some(stage_id) = &built.stage_id {
+        entries.push(("stage_id", stage_id.clone()));
+    }
+    if let Some(snapshot_id) = &built.snapshot_id {
+        entries.push(("snapshot_id", snapshot_id.clone()));
+    }
+    entries
+        .into_iter()
+        .map(|(name, value)| format!("{name}={}", encode_query_component(&value)))
+        .collect::<Vec<_>>()
+        .join("&")
+}
+
+fn encode_query_component(value: &str) -> String {
+    value
+        .bytes()
+        .map(|byte| match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' => {
+                (byte as char).to_string()
+            }
+            _ => format!("%{byte:02X}"),
+        })
+        .collect()
 }
 
 fn monitor_hash(monitor: &PlanarMonitorIR) -> Result<String, ApiError> {
     let json = serde_json::to_vec(monitor)
         .map_err(|error| ApiError::internal(format!("monitor serialization failed: {error}")))?;
     Ok(format!("sha256:{:x}", Sha256::digest(json)))
+}
+
+fn monitor_revision(monitor_hash: &str) -> u64 {
+    let digest = Sha256::digest(monitor_hash.as_bytes());
+    u64::from(u32::from_be_bytes(
+        digest[..4]
+            .try_into()
+            .expect("SHA-256 prefix is four bytes"),
+    ))
 }
 
 fn finite_payload(values: &[f64]) -> Vec<f64> {

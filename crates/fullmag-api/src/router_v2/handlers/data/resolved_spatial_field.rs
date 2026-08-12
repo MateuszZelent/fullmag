@@ -493,7 +493,7 @@ pub(crate) fn resolve_fdm_object_indices(
         .collect::<BTreeSet<_>>();
     if canonical_objects.len() > 1 && membership.cell_membership.contains(&0) {
         return Err(ApiError::conflict(format!(
-            "FDM default membership is ambiguous for object '{object_id}'"
+            "ambiguous_membership: FDM default membership is ambiguous for object '{object_id}'"
         )));
     }
     let selected = membership

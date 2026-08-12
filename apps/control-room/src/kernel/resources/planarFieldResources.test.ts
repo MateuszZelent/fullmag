@@ -43,6 +43,28 @@ describe("planar field resources", () => {
     ).toContain("#revision=%22etag%22");
   });
 
+  it("keeps immutable sample tokens and exact revisions in binary cache identity", () => {
+    const first = planarFieldResourceKey("m", "plane/a", {
+      expected_carrier_revision: 11,
+      expected_field_revision: 7,
+      expected_monitor_revision: 3,
+      expected_scene_revision: 21,
+      sample_token: "planar-sample-v2:first",
+    });
+    const second = planarFieldResourceKey("m", "plane/a", {
+      expected_carrier_revision: 11,
+      expected_field_revision: 7,
+      expected_monitor_revision: 3,
+      expected_scene_revision: 21,
+      sample_token: "planar-sample-v2:second",
+    });
+
+    expect(first).not.toBe(second);
+    expect(first).toContain("sample_token=planar-sample-v2%3Afirst");
+    expect(first).toContain("expected_scene_revision=21");
+    expect(first).toContain("expected_carrier_revision=11");
+  });
+
   it("rejects a 304 response when no matching cached payload exists", async () => {
     const cache = new ResourceCache<ArrayBuffer>({ maxBytes: 1024 });
     await expect(

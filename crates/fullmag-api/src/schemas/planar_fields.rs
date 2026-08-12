@@ -4,6 +4,7 @@ use utoipa::{IntoParams, ToSchema};
 #[derive(Debug, Clone, Deserialize, IntoParams)]
 #[into_params(parameter_in = Query)]
 pub struct PlanarFieldQuery {
+    pub sample_token: Option<String>,
     pub component: Option<String>,
     pub scope_kind: Option<String>,
     pub scope_id: Option<String>,
@@ -14,8 +15,10 @@ pub struct PlanarFieldQuery {
     pub quality: Option<String>,
     pub vector_budget: Option<u32>,
     pub include_mesh: Option<bool>,
+    pub expected_scene_revision: Option<u64>,
     pub expected_monitor_revision: Option<u64>,
     pub expected_mesh_revision: Option<u64>,
+    pub expected_carrier_revision: Option<u64>,
     pub expected_field_revision: Option<u64>,
 }
 
@@ -24,6 +27,7 @@ pub struct PlanarFieldQuery {
 pub struct PlanarFieldProbeQuery {
     pub u_m: f64,
     pub v_m: f64,
+    pub sample_token: Option<String>,
     pub component: Option<String>,
     pub resolution_x: Option<u32>,
     pub resolution_y: Option<u32>,
@@ -31,8 +35,10 @@ pub struct PlanarFieldProbeQuery {
     pub scope_id: Option<String>,
     pub stage_id: Option<String>,
     pub snapshot_id: Option<String>,
+    pub expected_scene_revision: Option<u64>,
     pub expected_monitor_revision: Option<u64>,
     pub expected_mesh_revision: Option<u64>,
+    pub expected_carrier_revision: Option<u64>,
     pub expected_field_revision: Option<u64>,
 }
 
@@ -66,6 +72,8 @@ pub struct PlanarFieldLinksResource {
 #[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct PlanarFieldMetaResource {
     pub schema_version: String,
+    pub sample_token: String,
+    pub scene_revision: u64,
     pub monitor_id: String,
     pub monitor_revision: u64,
     pub monitor_hash: String,
@@ -74,6 +82,7 @@ pub struct PlanarFieldMetaResource {
     pub component: String,
     pub field_revision: u64,
     pub mesh_revision: u64,
+    pub carrier_revision: u64,
     pub generation_id: String,
     pub field_source: String,
     pub scope_kind: String,
