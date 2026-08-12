@@ -16,6 +16,7 @@ using fullmag::fdm::Context;
 using fullmag::fdm::DeviceVectorField;
 
 static_assert(std::is_standard_layout_v<fullmag_fdm_gpu_transport_llg_binding_v1>);
+static_assert(std::is_standard_layout_v<fullmag_fdm_llg_checkpoint_info_v1>);
 static_assert(sizeof(fullmag_fdm_gpu_transport_llg_binding_v1) == 144);
 static_assert(offsetof(fullmag_fdm_gpu_transport_llg_binding_v1, transport_context) == 32);
 static_assert(offsetof(fullmag_fdm_gpu_transport_llg_binding_v1, charge_snapshot) == 64);
@@ -503,6 +504,90 @@ void verify_abm3_history_survives_full_step_rollback() {
     active_operator = nullptr;
 }
 
+void verify_checkpoint_restart_is_bitwise_continuous(
+    fullmag_fdm_integrator integrator)
+{
+    constexpr double dt = 1.0e-3;
+    constexpr int prefix_steps = 4;
+    constexpr int suffix_steps = 3;
+    fullmag_fdm_step_stats stats{};
+
+    fullmag_fdm_backend *continuous = create_backend(integrator, 0.0);
+    ControlledOperator continuous_op = create_controlled_operator();
+    continuous_op.stage_dependent_torque = true;
+    bind_controlled_operator(continuous, continuous_op);
+    for (int step = 0; step < prefix_steps; ++step) {
+        check(fullmag_fdm_backend_step(continuous, dt, &stats) == FULLMAG_FDM_OK,
+              "checkpoint prefix step failed");
+    }
+    auto *continuous_ctx = reinterpret_cast<Context *>(continuous);
+    const double checkpoint_time = continuous_ctx->current_time;
+    uint64_t checkpoint_bytes = 0;
+    check(fullmag_fdm_backend_llg_checkpoint_query_size_v1(
+              continuous, &checkpoint_bytes) == FULLMAG_FDM_OK &&
+              checkpoint_bytes > sizeof(fullmag_fdm_llg_checkpoint_info_v1),
+          "LLG checkpoint size query failed");
+    std::vector<std::byte> payload(checkpoint_bytes);
+    fullmag_fdm_llg_checkpoint_info_v1 info{};
+    check(fullmag_fdm_backend_llg_checkpoint_export_v1(
+              continuous, payload.data(), payload.size(), &info) == FULLMAG_FDM_OK,
+          "LLG checkpoint export failed");
+    check(info.schema_version == 1 && info.payload_bytes == checkpoint_bytes &&
+              info.step_count == prefix_steps && info.current_time == checkpoint_time,
+          "LLG checkpoint metadata does not describe the accepted state");
+    for (int step = 0; step < suffix_steps; ++step) {
+        check(fullmag_fdm_backend_step(continuous, dt, &stats) == FULLMAG_FDM_OK,
+              "continuous suffix step failed");
+    }
+    const std::vector<double> expected_m = read_m(continuous);
+    const uint64_t expected_attempt_generation =
+        continuous_ctx->gpu_transport_attempt_generation;
+
+    fullmag_fdm_backend *restored = create_backend(integrator, 0.0);
+    check(fullmag_fdm_backend_llg_checkpoint_import_v1(
+              restored, payload.data(), payload.size(), &info) == FULLMAG_FDM_OK,
+          "LLG checkpoint import into a fresh matching context failed");
+    ControlledOperator restored_op = create_controlled_operator();
+    restored_op.stage_dependent_torque = true;
+    bind_controlled_operator(restored, restored_op);
+    for (int step = 0; step < suffix_steps; ++step) {
+        check(fullmag_fdm_backend_step(restored, dt, &stats) == FULLMAG_FDM_OK,
+              "restored suffix step failed");
+    }
+    auto *restored_ctx = reinterpret_cast<Context *>(restored);
+    check(read_m(restored) == expected_m,
+          "checkpoint restart diverged bitwise from continuous execution");
+    check(restored_ctx->step_count == continuous_ctx->step_count &&
+              restored_ctx->current_time == continuous_ctx->current_time &&
+              restored_ctx->current_dt == continuous_ctx->current_dt &&
+              restored_ctx->gpu_transport_attempt_generation ==
+                  expected_attempt_generation,
+          "checkpoint restart did not preserve accepted scalar state");
+
+    fullmag_fdm_backend *nonfresh = create_backend(integrator, 0.0);
+    check(fullmag_fdm_backend_step(nonfresh, dt, &stats) == FULLMAG_FDM_OK,
+          "non-fresh import setup step failed");
+    check(fullmag_fdm_backend_llg_checkpoint_import_v1(
+              nonfresh, payload.data(), payload.size(), &info) ==
+              FULLMAG_FDM_ERR_INVALID,
+          "checkpoint import into a non-fresh context did not fail closed");
+    std::vector<std::byte> corrupt = payload;
+    corrupt.front() ^= std::byte{0x1};
+    fullmag_fdm_backend *corrupt_target = create_backend(integrator, 0.0);
+    check(fullmag_fdm_backend_llg_checkpoint_import_v1(
+              corrupt_target, corrupt.data(), corrupt.size(), &info) ==
+              FULLMAG_FDM_ERR_INVALID,
+          "corrupt LLG checkpoint did not fail closed");
+
+    check_cuda(cudaFree(continuous_op.torque), "free continuous checkpoint torque");
+    check_cuda(cudaFree(restored_op.torque), "free restored checkpoint torque");
+    fullmag_fdm_backend_destroy(continuous);
+    fullmag_fdm_backend_destroy(restored);
+    fullmag_fdm_backend_destroy(nonfresh);
+    fullmag_fdm_backend_destroy(corrupt_target);
+    active_operator = nullptr;
+}
+
 } // namespace
 
 int main() {
@@ -531,6 +616,9 @@ int main() {
     verify_adaptive_retry_gets_fresh_transport_attempt(
         FULLMAG_FDM_INTEGRATOR_DP45);
     verify_abm3_history_survives_full_step_rollback();
+    verify_checkpoint_restart_is_bitwise_continuous(FULLMAG_FDM_INTEGRATOR_RK23);
+    verify_checkpoint_restart_is_bitwise_continuous(FULLMAG_FDM_INTEGRATOR_DP45);
+    verify_checkpoint_restart_is_bitwise_continuous(FULLMAG_FDM_INTEGRATOR_ABM3);
     verify_no_binding_preserves_rhs();
     std::puts("PASS: GPU M1 transport LLG stage contract");
     return 0;

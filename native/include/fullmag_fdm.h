@@ -139,6 +139,27 @@ typedef enum {
     FULLMAG_FDM_STATS_NONE = 1,  /* step returns only step/time/dt metadata */
 } fullmag_fdm_stats_mode;
 
+#define FULLMAG_FDM_LLG_CHECKPOINT_SCHEMA_V1 UINT32_C(1)
+
+typedef struct {
+    uint32_t schema_version;
+    uint32_t integrator;
+    uint32_t precision;
+    uint32_t array_mask;
+    uint64_t cell_count;
+    uint64_t payload_bytes;
+    uint64_t step_count;
+    double current_time;
+    double current_dt;
+    uint64_t transport_attempt_generation;
+    uint32_t fsal_valid;
+    uint32_t abm_startup;
+    double abm_last_dt;
+    uint32_t adaptive_has_previous_error;
+    uint32_t reserved0;
+    double adaptive_previous_error;
+} fullmag_fdm_llg_checkpoint_info_v1;
+
 typedef int (*fullmag_fdm_interrupt_poll_fn)(void *user_data);
 
 /* ── Plan descriptor ── */
@@ -795,6 +816,30 @@ int fullmag_fdm_backend_upload_magnetization_f32(
     fullmag_fdm_backend   *handle,
     const float           *m_xyz,
     uint64_t               len);
+
+/**
+ * Query/export/import an exact FP64 single-grid LLG continuation checkpoint.
+ *
+ * These calls are explicit checkpoint boundaries and may perform synchronous
+ * device/host transfers. Import is accepted only by a fresh, matching context.
+ * The opaque payload includes the accepted magnetization and all integrator
+ * history needed for bitwise continuation.
+ */
+int fullmag_fdm_backend_llg_checkpoint_query_size_v1(
+    fullmag_fdm_backend *handle,
+    uint64_t *out_required_bytes);
+
+int fullmag_fdm_backend_llg_checkpoint_export_v1(
+    fullmag_fdm_backend *handle,
+    void *destination,
+    uint64_t exact_capacity,
+    fullmag_fdm_llg_checkpoint_info_v1 *out_info);
+
+int fullmag_fdm_backend_llg_checkpoint_import_v1(
+    fullmag_fdm_backend *handle,
+    const void *source,
+    uint64_t exact_bytes,
+    const fullmag_fdm_llg_checkpoint_info_v1 *expected_info);
 
 /**
  * Replace one v2 multilayer layer magnetization from host-side f64 AoS storage.

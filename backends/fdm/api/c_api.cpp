@@ -1662,6 +1662,54 @@ int fullmag_fdm_backend_upload_magnetization_f32(
 #endif
 }
 
+int fullmag_fdm_backend_llg_checkpoint_query_size_v1(
+    fullmag_fdm_backend *handle,
+    uint64_t *out_required_bytes)
+{
+#if FULLMAG_HAS_CUDA
+    if (!handle || !out_required_bytes) return FULLMAG_FDM_ERR_INVALID;
+    auto *ctx = reinterpret_cast<Context *>(handle);
+    return context_llg_checkpoint_query_size_v1(*ctx, *out_required_bytes);
+#else
+    (void)handle; (void)out_required_bytes;
+    return FULLMAG_FDM_ERR_CUDA;
+#endif
+}
+
+int fullmag_fdm_backend_llg_checkpoint_export_v1(
+    fullmag_fdm_backend *handle,
+    void *destination,
+    uint64_t exact_capacity,
+    fullmag_fdm_llg_checkpoint_info_v1 *out_info)
+{
+#if FULLMAG_HAS_CUDA
+    if (!handle || !destination || !out_info) return FULLMAG_FDM_ERR_INVALID;
+    auto *ctx = reinterpret_cast<Context *>(handle);
+    return context_llg_checkpoint_export_v1(
+        *ctx, destination, exact_capacity, *out_info);
+#else
+    (void)handle; (void)destination; (void)exact_capacity; (void)out_info;
+    return FULLMAG_FDM_ERR_CUDA;
+#endif
+}
+
+int fullmag_fdm_backend_llg_checkpoint_import_v1(
+    fullmag_fdm_backend *handle,
+    const void *source,
+    uint64_t exact_bytes,
+    const fullmag_fdm_llg_checkpoint_info_v1 *expected_info)
+{
+#if FULLMAG_HAS_CUDA
+    if (!handle || !source || !expected_info) return FULLMAG_FDM_ERR_INVALID;
+    auto *ctx = reinterpret_cast<Context *>(handle);
+    return context_llg_checkpoint_import_v1(
+        *ctx, source, exact_bytes, *expected_info);
+#else
+    (void)handle; (void)source; (void)exact_bytes; (void)expected_info;
+    return FULLMAG_FDM_ERR_CUDA;
+#endif
+}
+
 int fullmag_fdm_backend_upload_layer_magnetization_f64(
     fullmag_fdm_backend   *handle,
     uint32_t               layer_index,

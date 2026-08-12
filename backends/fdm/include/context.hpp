@@ -445,6 +445,18 @@ bool context_test_copy_f64_on_compute_stream(
 bool context_capture_gpu_transport_pre_step_m(Context &ctx);
 bool context_restore_gpu_transport_pre_step_m(Context &ctx);
 void context_invalidate_gpu_transport_pre_step_m(Context &ctx);
+int context_llg_checkpoint_query_size_v1(
+    Context &ctx, uint64_t &out_required_bytes);
+int context_llg_checkpoint_export_v1(
+    Context &ctx,
+    void *destination,
+    uint64_t exact_capacity,
+    fullmag_fdm_llg_checkpoint_info_v1 &out_info);
+int context_llg_checkpoint_import_v1(
+    Context &ctx,
+    const void *source,
+    uint64_t exact_bytes,
+    const fullmag_fdm_llg_checkpoint_info_v1 &expected_info);
 
 bool context_bind_gpu_transport_rhs(
     Context &ctx,

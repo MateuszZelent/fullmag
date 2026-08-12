@@ -24,6 +24,7 @@ if(FULLMAG_ENABLE_CUDA)
         gpu/cuda/transport/spin/device_solver.cu
         gpu/cuda/transport/spin/sparse_solver.cu
         gpu/cuda/runtime/context.cu
+        gpu/cuda/runtime/llg_checkpoint.cpp
         gpu/cuda/runtime/telemetry.cu
         gpu/cuda/runtime/device_info.cpp
         gpu/cuda/runtime/streams.cu
