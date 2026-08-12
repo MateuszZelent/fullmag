@@ -1271,6 +1271,11 @@ pub(crate) fn execute_gpu_fem_eigen_with_progress_and_stage_handoff(
     handoff: &AcceptedFemRelaxStageHandoff,
 ) -> Result<ExecutedRun, RunError> {
     let prepared = prepare_single_k_stage_continuation(plan, handoff)?;
+    if !native_gpu_shared_domain_modal_supported(&prepared) {
+        return Err(RunError {
+            message: "relax_to_eigen_handoff_requires_shared_domain_modal_execution".to_string(),
+        });
+    }
     let mut run = execute_fem_eigen_inner(
         &prepared,
         outputs,
@@ -10534,6 +10539,32 @@ fn load_equilibrium_artifact_v7(
     ] {
         required_string(name)?;
     }
+    let declared_content_sha256 = required_string("content_sha256")?.to_string();
+    let declared_equilibrium_id = required_string("equilibrium_id")?.to_string();
+    let mut digest_payload = value.clone();
+    let digest_object = digest_payload
+        .as_object_mut()
+        .expect("the equilibrium artifact object was validated above");
+    digest_object.remove("content_sha256");
+    digest_object.remove("equilibrium_id");
+    let recomputed_content_sha256 =
+        shared_domain_content_digest("equilibrium_artifact_v7", &digest_payload)?;
+    let expected_equilibrium_id = format!(
+        "equilibrium_artifact.v7:{}",
+        recomputed_content_sha256
+            .strip_prefix("sha256:")
+            .unwrap_or(&recomputed_content_sha256)
+    );
+    if declared_content_sha256 != recomputed_content_sha256
+        || declared_equilibrium_id != expected_equilibrium_id
+    {
+        return Err(RunError {
+            message: format!(
+                "equilibrium artifact '{}' has mismatched content_sha256 or equilibrium_id",
+                path
+            ),
+        });
+    }
     let acceptance_object = object
         .get("acceptance_certificate")
         .and_then(serde_json::Value::as_object)
@@ -14559,6 +14590,41 @@ mod tests {
         assert_eq!(prepared.equilibrium, EquilibriumSourceIR::Provided);
         assert_eq!(consumed_m0, accepted_m0);
         assert_eq!(relaxation_steps, 0);
+    }
+
+    #[test]
+    fn gpu_stage_handoff_rejects_plan_outside_native_shared_domain_lane_before_progress() {
+        let mut plan = minimal_native_modal_plan();
+        add_minimal_shared_domain_periodic_airbox(&mut plan);
+        plan.operator.kind = fullmag_ir::EigenOperatorIR::Full2x2;
+        plan.operator.include_demag = true;
+        plan.enable_demag = true;
+        plan.damping_policy = EigenDampingPolicyIR::Ignore;
+        plan.target = fullmag_ir::EigenTargetIR::Nearest {
+            frequency_hz: 2.0e9,
+        };
+        plan.count = 33;
+        let handoff = relax_handoff_from_completion(&plan, &accepted_relax_completion())
+            .expect("accepted completion should create a typed handoff");
+        let mut progress_event_count = 0usize;
+        let mut progress = |_event: FemEigenProgress| {
+            progress_event_count += 1;
+            StepAction::Stop
+        };
+
+        let error = execute_gpu_fem_eigen_with_progress_and_stage_handoff(
+            &plan,
+            &[],
+            Some(&mut progress),
+            &handoff,
+        )
+        .expect_err("an unsupported prepared GPU plan must fail before solver execution");
+
+        assert_eq!(
+            error.message,
+            "relax_to_eigen_handoff_requires_shared_domain_modal_execution"
+        );
+        assert_eq!(progress_event_count, 0);
     }
 
     #[test]
@@ -19757,7 +19823,7 @@ mod tests {
         ));
         let completion_sha256 =
             "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
-        let artifact = serde_json::json!({
+        let mut artifact = serde_json::json!({
             "schema_version": "equilibrium_artifact.v7",
             "accepted_for_linearization": true,
             "acceptance_certificate": {
@@ -19772,8 +19838,7 @@ mod tests {
                 "completion_sha256": completion_sha256,
             },
             "completion_sha256": completion_sha256,
-            "producer_run_id": "run:eq", "content_sha256": format!("sha256:{}", "a".repeat(64)),
-            "equilibrium_id": "eq:1", "mesh_signature": format!("sha256:{}", "1".repeat(64)),
+            "producer_run_id": "run:eq", "mesh_signature": format!("sha256:{}", "1".repeat(64)),
             "material_signature": format!("sha256:{}", "2".repeat(64)), "physics_signature": format!("sha256:{}", "3".repeat(64)),
             "boundary_signature": format!("sha256:{}", "4".repeat(64)), "static_demag_signature": format!("sha256:{}", "5".repeat(64)),
             "m0": [[0.0, 0.0, 1.0]], "h_eff0_a_per_m": [[0.0, 0.0, 1.0]],
@@ -19783,6 +19848,13 @@ mod tests {
             "representation_integrity": {"m0_norm_tolerance": 1e-10},
             "periodic_mesh_certificate": {"schema_version": "periodic_mesh_certificate.v6", "certificate_id": "periodic_mesh_certificate.v6:cert", "content_sha256": "sha256:cert", "certificate": {"certificate_status": "accepted"}}
         });
+        let content_sha256 =
+            shared_domain_content_digest("equilibrium_artifact_v7", &artifact).unwrap();
+        artifact["content_sha256"] = serde_json::json!(content_sha256);
+        artifact["equilibrium_id"] = serde_json::json!(format!(
+            "equilibrium_artifact.v7:{}",
+            content_sha256.strip_prefix("sha256:").unwrap()
+        ));
         std::fs::write(&path, artifact.to_string()).unwrap();
         assert_eq!(
             load_equilibrium_artifact_v7(path.to_str().unwrap(), 1)
@@ -19823,6 +19895,87 @@ mod tests {
         assert!(error.message.contains(
             "equilibrium_artifact_v6_uncertified: rerun relaxation or migrate with source completion evidence"
         ));
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn equilibrium_artifact_v7_loader_rejects_payload_tamper() {
+        let path = std::env::temp_dir().join(format!(
+            "fullmag-eigen-equilibrium-v7-tamper-{}.json",
+            std::process::id()
+        ));
+        let completion_sha256 = format!("sha256:{}", "0".repeat(64));
+        let mut artifact = serde_json::json!({
+            "schema_version": "equilibrium_artifact.v7",
+            "accepted_for_linearization": true,
+            "acceptance_certificate": {
+                "criterion": "torque", "metric_kind": "max_torque_apm",
+                "metric_value": 0.4, "threshold": 0.5, "unit": "A/m",
+                "status": "completed", "converged": true, "stop_reason": "torque",
+                "completion_sha256": completion_sha256,
+            },
+            "completion_sha256": completion_sha256,
+            "producer_run_id": "run:eq", "mesh_signature": format!("sha256:{}", "1".repeat(64)),
+            "material_signature": format!("sha256:{}", "2".repeat(64)), "physics_signature": format!("sha256:{}", "3".repeat(64)),
+            "boundary_signature": format!("sha256:{}", "4".repeat(64)), "static_demag_signature": format!("sha256:{}", "5".repeat(64)),
+            "m0": [[0.0, 0.0, 1.0]], "h_eff0_a_per_m": [[0.0, 0.0, 1.0]],
+            "h_demag0_a_per_m": [[0.0, 0.0, 0.0]], "phi0_a": [0.0],
+            "phi0_requirement": "required_for_restart_or_provenance",
+            "observables": {"max_torque_Apm": 0.4, "max_torque_T": 5.026548245743669e-7, "max_torque_relative": 3.2e-5},
+            "representation_integrity": {"m0_norm_tolerance": 1e-10},
+            "periodic_mesh_certificate": {"schema_version": "periodic_mesh_certificate.v6", "certificate_id": "periodic_mesh_certificate.v6:cert", "content_sha256": "sha256:cert", "certificate": {"certificate_status": "accepted"}}
+        });
+        let content_sha256 =
+            shared_domain_content_digest("equilibrium_artifact_v7", &artifact).unwrap();
+        artifact["content_sha256"] = serde_json::json!(content_sha256);
+        artifact["equilibrium_id"] = serde_json::json!(format!(
+            "equilibrium_artifact.v7:{}",
+            content_sha256.strip_prefix("sha256:").unwrap()
+        ));
+
+        artifact["m0"] = serde_json::json!([[0.0, 1.0, 0.0]]);
+        std::fs::write(&path, artifact.to_string()).unwrap();
+        let error = load_equilibrium_artifact_v7(path.to_str().unwrap(), 1)
+            .expect_err("tampering after digest creation must fail closed");
+        assert!(error.message.contains("content_sha256"));
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn equilibrium_artifact_v7_loader_rejects_arbitrary_declared_hash_and_id() {
+        let path = std::env::temp_dir().join(format!(
+            "fullmag-eigen-equilibrium-v7-forged-{}.json",
+            std::process::id()
+        ));
+        let completion_sha256 = format!("sha256:{}", "0".repeat(64));
+        let forged_sha256 = format!("sha256:{}", "f".repeat(64));
+        let artifact = serde_json::json!({
+            "schema_version": "equilibrium_artifact.v7",
+            "accepted_for_linearization": true,
+            "acceptance_certificate": {
+                "criterion": "torque", "metric_kind": "max_torque_apm",
+                "metric_value": 0.4, "threshold": 0.5, "unit": "A/m",
+                "status": "completed", "converged": true, "stop_reason": "torque",
+                "completion_sha256": completion_sha256,
+            },
+            "completion_sha256": completion_sha256,
+            "producer_run_id": "run:eq", "content_sha256": forged_sha256,
+            "equilibrium_id": format!("equilibrium_artifact.v7:{}", "f".repeat(64)),
+            "mesh_signature": format!("sha256:{}", "1".repeat(64)),
+            "material_signature": format!("sha256:{}", "2".repeat(64)), "physics_signature": format!("sha256:{}", "3".repeat(64)),
+            "boundary_signature": format!("sha256:{}", "4".repeat(64)), "static_demag_signature": format!("sha256:{}", "5".repeat(64)),
+            "m0": [[0.0, 0.0, 1.0]], "h_eff0_a_per_m": [[0.0, 0.0, 1.0]],
+            "h_demag0_a_per_m": [[0.0, 0.0, 0.0]], "phi0_a": [0.0],
+            "phi0_requirement": "required_for_restart_or_provenance",
+            "observables": {"max_torque_Apm": 0.4, "max_torque_T": 5.026548245743669e-7, "max_torque_relative": 3.2e-5},
+            "representation_integrity": {"m0_norm_tolerance": 1e-10},
+            "periodic_mesh_certificate": {"schema_version": "periodic_mesh_certificate.v6", "certificate_id": "periodic_mesh_certificate.v6:cert", "content_sha256": "sha256:cert", "certificate": {"certificate_status": "accepted"}}
+        });
+
+        std::fs::write(&path, artifact.to_string()).unwrap();
+        let error = load_equilibrium_artifact_v7(path.to_str().unwrap(), 1)
+            .expect_err("a self-consistent but arbitrary declared hash/id must fail closed");
+        assert!(error.message.contains("content_sha256"));
         std::fs::remove_file(path).unwrap();
     }
 }

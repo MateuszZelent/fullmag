@@ -670,6 +670,52 @@ def run_validator(root: Path, *args: str) -> subprocess.CompletedProcess[str]:
     )
 
 
+def equilibrium_artifact_v7_digest(artifact: dict[str, object]) -> str:
+    preimage = dict(artifact)
+    preimage.pop("content_sha256", None)
+    preimage.pop("equilibrium_id", None)
+
+    def encode(value: object) -> str:
+        if value is None:
+            return "null"
+        if value is True:
+            return "true"
+        if value is False:
+            return "false"
+        if isinstance(value, int):
+            return str(value)
+        if isinstance(value, float):
+            if not math.isfinite(value):
+                raise ValueError("non-finite equilibrium artifact digest input")
+            rendered = repr(value)
+            if "e" in rendered:
+                mantissa, exponent = rendered.split("e", 1)
+                sign = ""
+                if exponent[0] in "+-":
+                    sign, exponent = exponent[0], exponent[1:]
+                exponent_value = int(f"{sign}{exponent}")
+                if -5 <= exponent_value < 0:
+                    digits = mantissa.replace(".", "").lstrip("-")
+                    prefix = "-" if mantissa.startswith("-") else ""
+                    rendered = f"{prefix}0.{('0' * (-exponent_value - 1))}{digits}"
+                else:
+                    rendered = f"{mantissa}e{sign}{int(exponent)}"
+            return rendered
+        if isinstance(value, str):
+            return json.dumps(value, ensure_ascii=False)
+        if isinstance(value, list):
+            return "[" + ",".join(encode(entry) for entry in value) + "]"
+        if isinstance(value, dict):
+            return "{" + ",".join(
+                f"{json.dumps(key, ensure_ascii=False)}:{encode(value[key])}"
+                for key in sorted(value)
+            ) + "}"
+        raise TypeError("non-JSON equilibrium artifact digest input")
+
+    encoded = encode(preimage).encode("utf-8")
+    return "sha256:" + hashlib.sha256(encoded).hexdigest()
+
+
 def attach_certified_equilibrium_v7(root: Path) -> dict[str, object]:
     completion_sha256 = "sha256:" + "0123456789abcdef" * 4
     artifact: dict[str, object] = {
@@ -687,8 +733,6 @@ def attach_certified_equilibrium_v7(root: Path) -> dict[str, object]:
             "completion_sha256": completion_sha256,
         },
         "completion_sha256": completion_sha256,
-        "content_sha256": "sha256:" + "b" * 64,
-        "equilibrium_id": "equilibrium_artifact.v7:test",
         "producer_run_id": "run:test",
         "mesh_signature": "sha256:" + "1" * 64,
         "material_signature": "sha256:" + "2" * 64,
@@ -714,6 +758,11 @@ def attach_certified_equilibrium_v7(root: Path) -> dict[str, object]:
             "certificate": {"certificate_status": "accepted"},
         },
     }
+    content_sha256 = equilibrium_artifact_v7_digest(artifact)
+    artifact["content_sha256"] = content_sha256
+    artifact["equilibrium_id"] = (
+        "equilibrium_artifact.v7:" + content_sha256.removeprefix("sha256:")
+    )
     artifact_path = root / "eigen" / "metadata" / "equilibrium_artifact.v7.json"
     artifact_path.write_text(json.dumps(artifact))
     manifest_path = root / "frequency_domain" / "manifest.v1.json"
@@ -809,6 +858,34 @@ class CertifiedEquilibriumArtifactV7Tests(unittest.TestCase):
         result = self.run_case(mutate)
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("must be an object", result.stderr + result.stdout)
+
+    def test_validator_rejects_equilibrium_payload_tamper(self) -> None:
+        def mutate(root: Path, artifact: dict[str, object]) -> None:
+            artifact["m0"] = [[0.0, 1.0, 0.0]]
+            (root / "eigen/metadata/equilibrium_artifact.v7.json").write_text(
+                json.dumps(artifact)
+            )
+
+        result = self.run_case(mutate)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("content_sha256", result.stderr + result.stdout)
+
+    def test_validator_rejects_arbitrary_declared_equilibrium_hash_and_id(self) -> None:
+        def mutate(root: Path, artifact: dict[str, object]) -> None:
+            forged_sha256 = "sha256:" + "f" * 64
+            artifact["content_sha256"] = forged_sha256
+            artifact["equilibrium_id"] = "equilibrium_artifact.v7:" + "f" * 64
+            (root / "eigen/metadata/equilibrium_artifact.v7.json").write_text(
+                json.dumps(artifact)
+            )
+            manifest_path = root / "frequency_domain/manifest.v1.json"
+            manifest = json.loads(manifest_path.read_text())
+            manifest["diagnostics"]["equilibrium_artifact_sha256"] = forged_sha256
+            manifest_path.write_text(json.dumps(manifest))
+
+        result = self.run_case(mutate)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("content_sha256", result.stderr + result.stdout)
 
 
 def sha256_file_token(path: Path) -> str:

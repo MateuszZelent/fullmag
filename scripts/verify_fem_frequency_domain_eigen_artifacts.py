@@ -149,7 +149,14 @@ def serde_json_compact_bytes(value: object) -> bytes:
                 sign = ""
                 if exponent[0] in "+-":
                     sign, exponent = exponent[0], exponent[1:]
-                rendered = f"{mantissa}e{sign}{int(exponent)}"
+                exponent_value = int(f"{sign}{exponent}")
+                if -5 <= exponent_value < 0:
+                    digits = mantissa.replace(".", "").lstrip("-")
+                    prefix = "-" if mantissa.startswith("-") else ""
+                    zero_count = -exponent_value - 1
+                    rendered = f"{prefix}0.{('0' * zero_count)}{digits}"
+                else:
+                    rendered = f"{mantissa}e{sign}{int(exponent)}"
             return rendered
         if isinstance(item, str):
             return json.dumps(item, ensure_ascii=False)
@@ -222,6 +229,20 @@ def require_sha256_token(value: object, name: str) -> str:
     if any(char not in "0123456789abcdef" for char in suffix):
         fail(f"{name} must use lowercase hex sha256 encoding")
     return token
+
+
+def equilibrium_artifact_v7_digest(artifact: dict) -> str:
+    preimage = dict(artifact)
+    preimage.pop("content_sha256", None)
+    preimage.pop("equilibrium_id", None)
+    try:
+        canonical_bytes = serde_json_compact_bytes(preimage)
+    except (TypeError, ValueError) as error:
+        fail(
+            "equilibrium_artifact cannot be canonically serialized for "
+            f"content_sha256 validation: {error}"
+        )
+    return "sha256:" + hashlib.sha256(canonical_bytes).hexdigest()
 
 
 def validate_equilibrium_artifact_v7(root: Path, manifest: dict) -> None:
@@ -318,6 +339,16 @@ def validate_equilibrium_artifact_v7(root: Path, manifest: dict) -> None:
     content_sha256 = require_sha256_token(
         artifact.get("content_sha256"),
         "equilibrium_artifact.content_sha256",
+    )
+    require_equal(
+        content_sha256,
+        equilibrium_artifact_v7_digest(artifact),
+        "equilibrium_artifact.content_sha256",
+    )
+    require_equal(
+        artifact.get("equilibrium_id"),
+        "equilibrium_artifact.v7:" + content_sha256.removeprefix("sha256:"),
+        "equilibrium_artifact.equilibrium_id",
     )
     manifest_digest = manifest.get("diagnostics", {}).get(
         "equilibrium_artifact_sha256"
