@@ -1584,6 +1584,14 @@ pub(crate) fn apply_current_live_snapshot(
                 .map(|(quantity, _)| quantity.clone()),
         );
     }
+    if req.replace_latest_fields {
+        affected_field_quantities.extend(
+            current
+                .latest_fields
+                .entries()
+                .map(|(quantity, _)| quantity.clone()),
+        );
+    }
     if req.clear_preview_cache {
         affected_field_quantities.extend(
             current
@@ -1673,7 +1681,11 @@ pub(crate) fn apply_current_live_snapshot(
         }
     }
     if let Some(latest_fields) = req.latest_fields {
-        merge_latest_fields(&mut current.latest_fields, latest_fields);
+        if req.replace_latest_fields {
+            current.latest_fields = latest_fields;
+        } else {
+            merge_latest_fields(&mut current.latest_fields, latest_fields);
+        }
     }
     if req.clear_preview_cache {
         current.preview_cache = CachedPreviewFields::default();
@@ -1892,6 +1904,14 @@ pub(crate) fn apply_current_live_field_frame(
                 .map(|(quantity, _)| quantity.clone()),
         );
     }
+    if frame.replace_latest_fields {
+        affected_field_quantities.extend(
+            current
+                .latest_fields
+                .entries()
+                .map(|(quantity, _)| quantity.clone()),
+        );
+    }
     if frame.clear_preview_cache {
         affected_field_quantities.extend(
             current
@@ -1908,7 +1928,11 @@ pub(crate) fn apply_current_live_field_frame(
     let has_latest_fields = frame.latest_fields.is_some();
     let has_preview_fields = frame.preview_fields.is_some();
     if let Some(latest_fields) = frame.latest_fields {
-        merge_latest_fields(&mut current.latest_fields, latest_fields);
+        if frame.replace_latest_fields {
+            current.latest_fields = latest_fields;
+        } else {
+            merge_latest_fields(&mut current.latest_fields, latest_fields);
+        }
     }
     if frame.clear_preview_cache {
         current.preview_cache = CachedPreviewFields::default();
@@ -2162,6 +2186,7 @@ mod tests {
             coupled_checkpoint: None,
             latest_scalar_row: None,
             latest_fields: None,
+            replace_latest_fields: false,
             preview_fields: None,
             clear_preview_cache: false,
             engine_log: None,
@@ -2344,6 +2369,7 @@ mod tests {
             live_state: None,
             latest_scalar_row: None,
             latest_fields: None,
+            replace_latest_fields: false,
             preview_fields: None,
             clear_preview_cache: false,
             engine_log: None,
@@ -2396,6 +2422,7 @@ mod tests {
             live_state: None,
             latest_scalar_row: None,
             latest_fields: None,
+            replace_latest_fields: false,
             preview_fields: None,
             clear_preview_cache: false,
             engine_log: None,
@@ -2629,6 +2656,7 @@ mod tests {
             live_state: None,
             latest_scalar_row: None,
             latest_fields: None,
+            replace_latest_fields: false,
             preview_fields: None,
             clear_preview_cache: false,
             engine_log: None,
@@ -2706,6 +2734,7 @@ mod tests {
                 )),
                 latest_scalar_row: None,
                 latest_fields: Some(stale_latest_fields),
+                replace_latest_fields: false,
                 preview_fields: None,
                 clear_preview_cache: false,
                 engine_log: None,
@@ -2739,6 +2768,7 @@ mod tests {
                 )),
                 latest_scalar_row: None,
                 latest_fields: None,
+                replace_latest_fields: false,
                 preview_fields: None,
                 clear_preview_cache: false,
                 engine_log: None,
@@ -2773,6 +2803,7 @@ mod tests {
             live_state: None,
             latest_scalar_row: None,
             latest_fields: None,
+            replace_latest_fields: false,
             preview_fields: None,
             clear_preview_cache: false,
             engine_log: None,
@@ -3221,6 +3252,7 @@ mod tests {
             live_state: None,
             latest_scalar_row: None,
             latest_fields: None,
+            replace_latest_fields: false,
             preview_fields: None,
             clear_preview_cache: false,
             engine_log: None,
@@ -3492,6 +3524,7 @@ mod tests {
             live_state: None,
             latest_scalar_row: None,
             latest_fields: None,
+            replace_latest_fields: false,
             preview_fields: None,
             clear_preview_cache: false,
             engine_log: None,
@@ -3713,6 +3746,7 @@ mod tests {
                 }),
                 latest_scalar_row: None,
                 latest_fields: None,
+                replace_latest_fields: false,
                 preview_fields: None,
                 clear_preview_cache: false,
                 engine_log: None,
@@ -3903,6 +3937,7 @@ mod tests {
             }),
             latest_scalar_row: None,
             latest_fields: None,
+            replace_latest_fields: false,
             preview_fields: None,
             clear_preview_cache: false,
             engine_log: None,
@@ -4032,6 +4067,7 @@ mod tests {
             coupled_checkpoint: None,
             latest_scalar_row: None,
             latest_fields: None,
+            replace_latest_fields: false,
             preview_fields: Some(vec![terminal.clone()]),
             clear_preview_cache: false,
             engine_log: None,
@@ -4075,6 +4111,7 @@ mod tests {
             CurrentLiveFieldFrameRequest {
                 session_id: "test-session".to_string(),
                 latest_fields: None,
+                replace_latest_fields: false,
                 preview_fields: Some(vec![terminal.clone()]),
                 clear_preview_cache: false,
             },
@@ -4097,6 +4134,7 @@ mod tests {
             CurrentLiveFieldFrameRequest {
                 session_id: "test-session".to_string(),
                 latest_fields: None,
+                replace_latest_fields: false,
                 preview_fields: Some(vec![older]),
                 clear_preview_cache: false,
             },
@@ -4141,6 +4179,7 @@ mod tests {
             CurrentLiveFieldFrameRequest {
                 session_id: "test-session".to_string(),
                 latest_fields: None,
+                replace_latest_fields: false,
                 preview_fields: Some(vec![terminal.clone()]),
                 clear_preview_cache: false,
             },
@@ -4160,6 +4199,7 @@ mod tests {
             CurrentLiveFieldFrameRequest {
                 session_id: "test-session".to_string(),
                 latest_fields: None,
+                replace_latest_fields: false,
                 preview_fields: Some(vec![terminal]),
                 clear_preview_cache: false,
             },
@@ -4185,6 +4225,7 @@ mod tests {
             CurrentLiveFieldFrameRequest {
                 session_id: "test-session".to_string(),
                 latest_fields: Some(genuinely_newer_latest),
+                replace_latest_fields: false,
                 preview_fields: None,
                 clear_preview_cache: false,
             },
@@ -4220,6 +4261,7 @@ mod tests {
                 CurrentLiveFieldFrameRequest {
                     session_id: "test-session".to_string(),
                     latest_fields: Some(latest_fields),
+                    replace_latest_fields: false,
                     preview_fields: None,
                     clear_preview_cache: false,
                 },
@@ -4246,6 +4288,96 @@ mod tests {
             current.field_quantity_revisions["H_demag"], changed_revision,
             "an exact duplicate payload and provenance must not create revision churn"
         );
+    }
+
+    #[test]
+    fn terminal_authoritative_field_frame_replaces_stale_fields_without_replay_churn() {
+        let mut current = test_current_snapshot();
+        current.latest_fields = serde_json::from_value(json!({
+            "H_dmi": {
+                "values": [[1.0, 0.0, 0.0]],
+                "source_step": 10,
+                "source_revision": 10,
+                "materialized_at_unix_ms": 100_u64,
+                "layout": { "grid_cells": [1, 1, 1] }
+            }
+        }))
+        .expect("previous-run H_dmi field");
+
+        let terminal_frame = || {
+            serde_json::from_value(json!({
+                "session_id": "test-session",
+                "replace_latest_fields": true,
+                "latest_fields": {
+                    "H_eff": {
+                        "values": [[0.0, 1.0, 0.0]],
+                        "source_step": 11,
+                        "source_revision": 11,
+                        "materialized_at_unix_ms": 110_u64,
+                        "layout": { "grid_cells": [1, 1, 1] }
+                    }
+                }
+            }))
+            .expect("terminal field frame")
+        };
+
+        apply_current_live_field_frame(&mut current, terminal_frame())
+            .expect("terminal field frame should apply");
+        assert!(
+            current.latest_fields.get("H_dmi").is_none(),
+            "a terminal authoritative frame must remove a quantity absent from the next run"
+        );
+        assert!(current.latest_fields.get("H_eff").is_some());
+        let catalog_revision = current.field_catalog_revision;
+        let sample_revision = current.field_samples_revision;
+        let h_dmi_revision = current.field_quantity_revisions["H_dmi"];
+        assert!(catalog_revision > 0);
+        assert!(sample_revision > 0);
+        assert!(h_dmi_revision > 0);
+
+        apply_current_live_field_frame(&mut current, terminal_frame())
+            .expect("identical terminal replay should apply");
+        assert_eq!(current.field_catalog_revision, catalog_revision);
+        assert_eq!(current.field_samples_revision, sample_revision);
+        assert_eq!(current.field_quantity_revisions["H_dmi"], h_dmi_revision);
+    }
+
+    #[test]
+    fn empty_authoritative_field_frame_clears_the_latest_set() {
+        let mut current = test_current_snapshot();
+        current.latest_fields = serde_json::from_value(json!({
+            "H_dmi": { "values": [[1.0, 0.0, 0.0]], "layout": { "grid_cells": [1, 1, 1] } }
+        }))
+        .expect("previous field");
+        let frame = serde_json::from_value(json!({
+            "session_id": "test-session",
+            "replace_latest_fields": true,
+            "latest_fields": {}
+        }))
+        .expect("empty terminal field frame");
+
+        apply_current_live_field_frame(&mut current, frame).expect("empty frame should apply");
+        assert_eq!(current.latest_fields.len(), 0);
+    }
+
+    #[test]
+    fn ordinary_live_field_frame_keeps_incremental_merge_semantics() {
+        let mut current = test_current_snapshot();
+        let first = serde_json::from_value(json!({
+            "session_id": "test-session",
+            "latest_fields": { "H_dmi": { "values": [[1.0, 0.0, 0.0]], "layout": { "grid_cells": [1, 1, 1] } } }
+        }))
+        .expect("first incremental frame");
+        let second = serde_json::from_value(json!({
+            "session_id": "test-session",
+            "latest_fields": { "H_eff": { "values": [[0.0, 1.0, 0.0]], "layout": { "grid_cells": [1, 1, 1] } } }
+        }))
+        .expect("second incremental frame");
+
+        apply_current_live_field_frame(&mut current, first).expect("first frame should apply");
+        apply_current_live_field_frame(&mut current, second).expect("second frame should apply");
+        assert!(current.latest_fields.get("H_dmi").is_some());
+        assert!(current.latest_fields.get("H_eff").is_some());
     }
 
     #[test]
@@ -4303,6 +4435,7 @@ mod tests {
             live_state: None,
             latest_scalar_row: None,
             latest_fields: None,
+            replace_latest_fields: false,
             preview_fields: None,
             clear_preview_cache: true,
             engine_log: None,

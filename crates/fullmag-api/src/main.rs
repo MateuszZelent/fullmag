@@ -2244,6 +2244,7 @@ where
                 coupled_checkpoint: None,
                 latest_scalar_row: None,
                 latest_fields: None,
+                replace_latest_fields: false,
                 preview_fields: None,
                 clear_preview_cache: false,
                 engine_log: None,

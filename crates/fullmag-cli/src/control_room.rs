@@ -1350,6 +1350,7 @@ pub(crate) fn sync_current_live_snapshot(
             live_state: payload.live_state.as_ref(),
             latest_scalar_row: payload.latest_scalar_row.as_ref(),
             latest_fields: payload.latest_fields.as_ref(),
+            replace_latest_fields: payload.replace_latest_fields,
             preview_fields: payload.preview_fields.as_deref(),
             clear_preview_cache: payload.clear_preview_cache,
             engine_log: payload.engine_log.as_deref(),
@@ -1432,6 +1433,7 @@ fn sync_current_live_field_frame(
         .json(&CurrentLiveFieldFrameRequest {
             session_id,
             latest_fields: payload.latest_fields.as_ref(),
+            replace_latest_fields: payload.replace_latest_fields,
             preview_fields: payload.preview_fields.as_deref(),
             clear_preview_cache: payload.clear_preview_cache,
         })
@@ -1483,6 +1485,7 @@ where
     }
 
     if payload.latest_fields.is_some()
+        || payload.replace_latest_fields
         || payload.preview_fields.is_some()
         || payload.clear_preview_cache
     {

@@ -50,6 +50,7 @@ pub(crate) struct LocalLiveWorkspaceState {
     pub simulation_preparation: Option<SimulationPreparationState>,
     pub latest_scalar_row: Option<CurrentLiveScalarRow>,
     pub latest_fields: CurrentLiveLatestFields,
+    pub replace_latest_fields: bool,
     pub preview_fields: CurrentLivePreviewFieldCache,
     pub pending_preview_fields: CurrentLivePreviewFieldCache,
     pub superseded_pending_preview_fields: Vec<fullmag_runner::LivePreviewField>,
@@ -114,6 +115,7 @@ impl LocalLiveWorkspaceState {
             mesh_workspace: self.mesh_workspace.clone(),
             latest_scalar_row: self.latest_scalar_row.clone(),
             latest_fields: (!self.latest_fields.is_empty()).then_some(self.latest_fields.clone()),
+            replace_latest_fields: self.replace_latest_fields,
             preview_fields,
             clear_preview_cache,
             engine_log: Some(self.engine_log.clone()),
@@ -143,7 +145,8 @@ impl LocalLiveWorkspaceState {
         let next_mesh_generation_id = self.fem_mesh.as_ref().map(fem_mesh_generation_key);
         let include_mesh = next_mesh_generation_id.is_some()
             && next_mesh_generation_id != self.published_fem_mesh_generation_id;
-        let payload = self.build_publish_payload(include_mesh, None, clear_preview_cache);
+        let mut payload = self.build_publish_payload(include_mesh, None, clear_preview_cache);
+        payload.replace_latest_fields = std::mem::take(&mut self.replace_latest_fields);
         if let Some(generation_id) = next_mesh_generation_id.filter(|_| include_mesh) {
             self.published_fem_mesh_generation_id = Some(generation_id);
         }
@@ -1059,6 +1062,8 @@ fn merge_pending_publish_payload(
             .is_some_and(|fields| fields.iter().any(|field| field.quantity == "m"));
     let clear_preview_cache =
         (should_merge_pending && slot.clear_preview_cache) || incoming.clear_preview_cache;
+    let replace_latest_fields =
+        (should_merge_pending && slot.replace_latest_fields) || incoming.replace_latest_fields;
 
     // Always carry forward heavy payload fields (magnetization, fem_mesh)
     // from the slot even when `should_merge_pending` is false.  The CLI
@@ -1100,6 +1105,7 @@ fn merge_pending_publish_payload(
     *slot = incoming;
     slot.preview_fields = merged_preview_fields;
     slot.clear_preview_cache = clear_preview_cache;
+    slot.replace_latest_fields = replace_latest_fields;
 }
 
 fn canonicalize_carried_active_preview(
@@ -1849,6 +1855,21 @@ mod tests {
     }
 
     #[test]
+    fn disabled_preview_still_accepts_terminal_authoritative_fields() {
+        let mut terminal = preview_update(preview_field("H_eff", 1, 2.0));
+        terminal.finished = true;
+        terminal.cached_preview_fields = Some(vec![preview_field("H_eff", 1, 2.0)]);
+
+        assert!(super::should_ingest_preview_fields_from_update(
+            true, &terminal
+        ));
+        terminal.finished = false;
+        assert!(!super::should_ingest_preview_fields_from_update(
+            true, &terminal
+        ));
+    }
+
+    #[test]
     fn downscaled_preview_does_not_overwrite_full_latest_field() {
         let workspace = workspace_with_domain_mesh();
         workspace.update(|state| {
@@ -1950,6 +1971,7 @@ mod tests {
                 simulation_preparation: None,
                 latest_scalar_row: None,
                 latest_fields: Default::default(),
+                replace_latest_fields: false,
                 preview_fields: Default::default(),
                 pending_preview_fields: Default::default(),
                 superseded_pending_preview_fields: Vec::new(),
@@ -4432,7 +4454,8 @@ pub(crate) fn ingest_preview_fields_from_update(
     state: &mut LocalLiveWorkspaceState,
     update: &mut fullmag_runner::StepUpdate,
 ) {
-    if feature_flags().disable_preview_3d {
+    let terminal_authoritative = terminal_authoritative_field_update(update);
+    if !should_ingest_preview_fields_from_update(feature_flags().disable_preview_3d, update) {
         update.cached_preview_fields = None;
         update.preview_field = None;
         return;
@@ -4441,6 +4464,13 @@ pub(crate) fn ingest_preview_fields_from_update(
     let preview_field = update.preview_field.take();
     if cached_preview_fields.is_some() || preview_field.is_some() {
         state.advance_preview_cache_revision();
+    }
+    if terminal_authoritative {
+        state.latest_fields = CurrentLiveLatestFields::default();
+        state.preview_fields.clear();
+        state.pending_preview_fields.clear();
+        state.replace_latest_fields = true;
+        state.clear_preview_cache = true;
     }
     let source_step = update.stats.step;
     if let Some(fields) = cached_preview_fields {
@@ -4465,6 +4495,21 @@ pub(crate) fn ingest_preview_fields_from_update(
             state.superseded_pending_preview_fields.push(previous);
         }
     }
+}
+
+fn terminal_authoritative_field_update(update: &fullmag_runner::StepUpdate) -> bool {
+    update.finished
+        && update
+            .cached_preview_fields
+            .as_ref()
+            .is_some_and(|fields| !fields.is_empty())
+}
+
+fn should_ingest_preview_fields_from_update(
+    preview_3d_disabled: bool,
+    update: &fullmag_runner::StepUpdate,
+) -> bool {
+    !preview_3d_disabled || terminal_authoritative_field_update(update)
 }
 
 fn mesh_build_stage_status(

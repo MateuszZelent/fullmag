@@ -6541,6 +6541,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
             simulation_preparation: Some(simulation_preparation),
             latest_scalar_row: None,
             latest_fields: CurrentLiveLatestFields::default(),
+            replace_latest_fields: false,
             preview_fields: CurrentLivePreviewFieldCache::default(),
             pending_preview_fields: CurrentLivePreviewFieldCache::default(),
             superseded_pending_preview_fields: Vec::new(),
@@ -6849,6 +6850,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                 simulation_preparation: failed_snapshot.simulation_preparation,
                 latest_scalar_row: None,
                 latest_fields: CurrentLiveLatestFields::default(),
+                replace_latest_fields: false,
                 preview_fields: CurrentLivePreviewFieldCache::default(),
                 pending_preview_fields: CurrentLivePreviewFieldCache::default(),
                 superseded_pending_preview_fields: Vec::new(),
@@ -7090,6 +7092,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
         simulation_preparation: previous_workspace.simulation_preparation,
         latest_scalar_row: None,
         latest_fields: CurrentLiveLatestFields::default(),
+        replace_latest_fields: false,
         preview_fields: CurrentLivePreviewFieldCache::default(),
         pending_preview_fields: CurrentLivePreviewFieldCache::default(),
         superseded_pending_preview_fields: Vec::new(),
@@ -10754,6 +10757,7 @@ pub(crate) fn prepare_live_workspace_for_ui(
             simulation_preparation: Some(simulation_preparation),
             latest_scalar_row: None,
             latest_fields: CurrentLiveLatestFields::default(),
+            replace_latest_fields: false,
             preview_fields: CurrentLivePreviewFieldCache::default(),
             pending_preview_fields: CurrentLivePreviewFieldCache::default(),
             superseded_pending_preview_fields: Vec::new(),
@@ -11365,6 +11369,7 @@ mod tests {
             simulation_preparation: None,
             latest_scalar_row: None,
             latest_fields: CurrentLiveLatestFields::default(),
+            replace_latest_fields: false,
             preview_fields: CurrentLivePreviewFieldCache::default(),
             pending_preview_fields: CurrentLivePreviewFieldCache::default(),
             superseded_pending_preview_fields: Vec::new(),
@@ -13116,6 +13121,55 @@ mod tests {
             serde_json::json!([128, 32, 1])
         );
         assert_eq!(field["values"], serde_json::json!([0.0, 1.0, 0.0]));
+    }
+
+    #[test]
+    fn terminal_fdm_fields_replace_the_previous_generation_and_preserve_grid_m() {
+        let mut state = test_workspace_state();
+        state.latest_fields.insert(
+            "H_dmi".to_string(),
+            serde_json::json!({
+                "quantity": "H_dmi",
+                "values": [[1.0, 0.0, 0.0]],
+                "layout": { "grid_cells": [2, 1, 1], "spatial_kind": "grid" }
+            }),
+        );
+        let mut terminal = test_step_update(12);
+        terminal.grid = [2, 1, 1];
+        terminal.finished = true;
+        terminal.magnetization = Some(vec![0.0, 0.0, 1.0, 0.0, 1.0, 0.0]);
+        let mut m = test_preview_field("m", 12, 1.0);
+        m.spatial_kind = "grid".to_string();
+        m.preview_grid = [2, 1, 1];
+        m.original_grid = [2, 1, 1];
+        m.vector_field_values = vec![0.0, 0.0, 1.0, 0.0, 1.0, 0.0];
+        let mut h_eff = test_preview_field("H_eff", 12, 2.0);
+        h_eff.spatial_kind = "grid".to_string();
+        h_eff.preview_grid = [2, 1, 1];
+        h_eff.original_grid = [2, 1, 1];
+        h_eff.vector_field_values = vec![0.0, 0.0, 2.0, 0.0, 0.0, 2.0];
+        terminal.cached_preview_fields = Some(vec![m, h_eff]);
+
+        let _ = apply_live_step_update_to_workspace_state(
+            &mut state,
+            "run-test",
+            "session-test",
+            PathBuf::from("/tmp/artifacts").as_path(),
+            terminal,
+            true,
+        );
+
+        assert!(state.latest_fields.0.get("H_dmi").is_none());
+        assert_eq!(
+            state.latest_fields.0["m"]["layout"]["spatial_kind"],
+            serde_json::json!("grid")
+        );
+        let payload = state.publish_delta();
+        assert_eq!(
+            serde_json::to_value(payload).expect("terminal payload serializes")
+                ["replace_latest_fields"],
+            serde_json::json!(true)
+        );
     }
 
     #[test]

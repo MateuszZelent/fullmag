@@ -1028,6 +1028,7 @@ mod tests {
             simulation_preparation: None,
             latest_scalar_row: None,
             latest_fields: CurrentLiveLatestFields::default(),
+            replace_latest_fields: false,
             preview_fields: CurrentLivePreviewFieldCache::default(),
             pending_preview_fields: CurrentLivePreviewFieldCache::default(),
             superseded_pending_preview_fields: Vec::new(),

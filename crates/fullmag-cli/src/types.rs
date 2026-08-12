@@ -893,6 +893,9 @@ pub(crate) struct CurrentLiveSnapshotPayload {
     pub coupled_checkpoint: Option<serde_json::Value>,
     pub latest_scalar_row: Option<CurrentLiveScalarRow>,
     pub latest_fields: Option<CurrentLiveLatestFields>,
+    /// Terminal field materialization replaces the complete latest-field set
+    /// for its generation instead of merging into a prior run.
+    pub replace_latest_fields: bool,
     pub preview_fields: Option<Vec<fullmag_runner::LivePreviewField>>,
     pub clear_preview_cache: bool,
     pub engine_log: Option<Vec<EngineLogEntry>>,
@@ -993,6 +996,7 @@ pub(crate) struct CurrentLiveSnapshotRequest<'a> {
     pub latest_scalar_row: Option<&'a CurrentLiveScalarRow>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub latest_fields: Option<&'a CurrentLiveLatestFields>,
+    pub replace_latest_fields: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub preview_fields: Option<&'a [fullmag_runner::LivePreviewField]>,
     pub clear_preview_cache: bool,
@@ -1054,6 +1058,7 @@ pub(crate) struct CurrentLiveFieldFrameRequest<'a> {
     pub session_id: &'a str,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub latest_fields: Option<&'a CurrentLiveLatestFields>,
+    pub replace_latest_fields: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub preview_fields: Option<&'a [fullmag_runner::LivePreviewField]>,
     pub clear_preview_cache: bool,

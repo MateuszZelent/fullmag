@@ -1038,6 +1038,8 @@ pub(crate) struct CurrentLiveSnapshotRequest {
     #[serde(default)]
     pub latest_fields: Option<LatestFields>,
     #[serde(default)]
+    pub replace_latest_fields: bool,
+    #[serde(default)]
     pub preview_fields: Option<Vec<LivePreviewField>>,
     #[serde(default)]
     pub clear_preview_cache: bool,
@@ -1097,6 +1099,8 @@ pub(crate) struct CurrentLiveFieldFrameRequest {
     pub session_id: String,
     #[serde(default)]
     pub latest_fields: Option<LatestFields>,
+    #[serde(default)]
+    pub replace_latest_fields: bool,
     #[serde(default)]
     pub preview_fields: Option<Vec<LivePreviewField>>,
     #[serde(default)]

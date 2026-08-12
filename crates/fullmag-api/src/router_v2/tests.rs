@@ -4358,6 +4358,7 @@ async fn field_meta_and_vector_resolve_active_live_preview_field_after_snapshot_
                 }),
                 latest_scalar_row: None,
                 latest_fields: None,
+                replace_latest_fields: false,
                 preview_fields: None,
                 clear_preview_cache: false,
                 engine_log: None,
@@ -4398,6 +4399,55 @@ async fn field_meta_and_vector_resolve_active_live_preview_field_after_snapshot_
     assert_eq!(vector.status(), StatusCode::OK);
     let vector_bytes = body_bytes(vector).await;
     assert_eq!(&vector_bytes[..4], b"FMVP");
+}
+
+#[tokio::test]
+async fn terminal_field_frame_removes_absent_quantity_from_field_api() {
+    let state = test_app_state_with_live_session().await;
+    {
+        let mut guard = state.current_live_state.write().await;
+        let snapshot = guard.as_mut().expect("live session exists");
+        snapshot.latest_fields = serde_json::from_value(serde_json::json!({
+            "H_dmi": {
+                "values": [[1.0, 0.0, 0.0]],
+                "layout": { "grid_cells": [1, 1, 1] }
+            }
+        }))
+        .expect("previous-run H_dmi field");
+        let session_id = snapshot.session.session_id.clone();
+        crate::session::apply_current_live_field_frame(
+            snapshot,
+            CurrentLiveFieldFrameRequest {
+                session_id,
+                latest_fields: Some(
+                    serde_json::from_value(serde_json::json!({
+                        "H_eff": {
+                            "values": [[0.0, 1.0, 0.0]],
+                            "layout": { "grid_cells": [1, 1, 1] }
+                        }
+                    }))
+                    .expect("terminal H_eff field"),
+                ),
+                replace_latest_fields: true,
+                preview_fields: None,
+                clear_preview_cache: false,
+            },
+        )
+        .expect("terminal field frame should replace the old generation");
+    }
+
+    let response = build_v2_router()
+        .with_state(state)
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/fields/H_dmi/samples/vector")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::NO_CONTENT);
 }
 
 #[tokio::test]
@@ -4485,6 +4535,7 @@ async fn field_frame_terminal_cache_wins_equal_generation_in_vector_route_body()
             CurrentLiveFieldFrameRequest {
                 session_id,
                 latest_fields: None,
+                replace_latest_fields: false,
                 preview_fields: Some(vec![terminal_preview]),
                 clear_preview_cache: false,
             },
@@ -8759,6 +8810,7 @@ async fn mesh_build_snapshot_for_current_scene_clears_mesh_dirty_tags() {
                 live_state: None,
                 latest_scalar_row: None,
                 latest_fields: None,
+                replace_latest_fields: false,
                 preview_fields: None,
                 clear_preview_cache: false,
                 engine_log: None,
@@ -8806,6 +8858,7 @@ async fn fem_mesh_snapshot_for_current_scene_clears_mesh_dirty_tags() {
                 live_state: None,
                 latest_scalar_row: None,
                 latest_fields: None,
+                replace_latest_fields: false,
                 preview_fields: None,
                 clear_preview_cache: false,
                 engine_log: None,
@@ -8860,6 +8913,7 @@ async fn unchanged_fem_mesh_snapshot_keeps_later_dirty_scene_dirty() {
                 live_state: None,
                 latest_scalar_row: None,
                 latest_fields: None,
+                replace_latest_fields: false,
                 preview_fields: None,
                 clear_preview_cache: false,
                 engine_log: None,
@@ -8894,6 +8948,7 @@ async fn unchanged_fem_mesh_snapshot_keeps_later_dirty_scene_dirty() {
                 live_state: None,
                 latest_scalar_row: None,
                 latest_fields: None,
+                replace_latest_fields: false,
                 preview_fields: None,
                 clear_preview_cache: false,
                 engine_log: None,
@@ -28390,6 +28445,7 @@ async fn v2_magnetization_meta_vector_revision_and_etag_follow_provenance_field_
             CurrentLiveFieldFrameRequest {
                 session_id,
                 latest_fields: Some(latest_fields),
+                replace_latest_fields: false,
                 preview_fields: None,
                 clear_preview_cache: false,
             },
@@ -28490,6 +28546,7 @@ async fn v2_magnetization_meta_vector_revision_and_etag_follow_provenance_field_
             CurrentLiveFieldFrameRequest {
                 session_id,
                 latest_fields: Some(latest_fields),
+                replace_latest_fields: false,
                 preview_fields: None,
                 clear_preview_cache: false,
             },
