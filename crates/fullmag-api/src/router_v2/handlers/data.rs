@@ -8,6 +8,7 @@ pub mod mesh_region_membership;
 pub(crate) mod multilayer_identity;
 pub mod planar_fields;
 pub mod quantities;
+pub(crate) mod resolved_spatial_field;
 pub(crate) mod resolved_vector_field;
 pub mod scalars;
 pub mod tables;

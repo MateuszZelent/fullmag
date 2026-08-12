@@ -1,7 +1,7 @@
 //! Field endpoints — catalog, meta, binary vector (P1 component), and 2D slice (P2).
 
 use std::borrow::Cow;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 use std::io::{BufRead, BufReader, Read};
 use std::sync::Arc;
 
@@ -14,11 +14,15 @@ use sha2::{Digest, Sha256};
 
 use super::fdm_region_membership::load_resolved_fdm_membership;
 use super::field_resolution::{
-    extract_fdm_field, extract_fem_field, fem_magnetic_node_indices,
-    field_values_match_current_domain, flatten_json_field_values, is_fdm_snapshot, json_field_grid,
-    live_magnetization_available, strict_flat_json_field_values,
+    extract_fdm_field, extract_fem_field, field_values_match_current_domain,
+    flatten_json_field_values, is_fdm_snapshot, json_field_grid, live_magnetization_available,
+    strict_flat_json_field_values,
 };
 use super::multilayer_identity::correlate_multilayer_layers;
+use super::resolved_spatial_field::{
+    resolve_current_spatial_field, resolve_fdm_object_indices, resolve_fem_node_mapping,
+    FdmCellMembership, ResolvedSpatialField, SpatialFieldCarrier, SpatialFieldSourceKind,
+};
 use crate::artifacts::{read_json_artifact_value, try_resolve_artifact_path};
 use crate::error::ApiError;
 use crate::fem_slice::{fem_tetra_linear_slice, fem_tetra_slab_slice, SlabAggregation};
@@ -95,6 +99,8 @@ const STEADY_TRANSPORT_FIELDS: [&str; 5] = [
 
 #[derive(Debug, Clone)]
 pub(crate) struct FdmMultilayerAirboxCarrier {
+    pub quantity_id: String,
+    pub unit: String,
     pub cells: [u32; 3],
     pub origin_m: [f64; 3],
     pub cell_size_m: [f64; 3],
@@ -401,6 +407,8 @@ pub(crate) fn load_fdm_multilayer_airbox_carrier(
         );
     }
     Ok(Some(FdmMultilayerAirboxCarrier {
+        quantity_id: "H_demag".to_string(),
+        unit: "A/m".to_string(),
         cells,
         origin_m,
         cell_size_m,
@@ -451,6 +459,33 @@ fn requested_fdm_multilayer_airbox_carrier(
         )));
     }
     Ok(Some(carrier))
+}
+
+fn resolved_fdm_multilayer_airbox_field(
+    snapshot: &SessionStateResponse,
+    quantity_id: &str,
+    component_count: usize,
+    carrier: &FdmMultilayerAirboxCarrier,
+) -> Result<ResolvedSpatialField<'static>, ApiError> {
+    let mut field = ResolvedSpatialField::from_airbox(
+        quantity_id,
+        &carrier.quantity_id,
+        &carrier.unit,
+        component_count,
+        carrier.values.clone(),
+        carrier.cells,
+        carrier.origin_m,
+        carrier.cell_size_m,
+        carrier.carrier_fingerprint.clone(),
+        field_quantity_revision(snapshot, quantity_id),
+        domain_generation_revision(snapshot),
+        SpatialFieldSourceKind::Persisted,
+    )?;
+    field.provenance.backend = snapshot.session.resolved_backend.clone();
+    field.provenance.device = snapshot.session.resolved_device.clone();
+    field.provenance.precision = snapshot.session.resolved_precision.clone();
+    field.field_generation = Some(domain_generation_id(snapshot));
+    Ok(field)
 }
 
 fn fdm_multilayer_airbox_scope(carrier: &FdmMultilayerAirboxCarrier) -> ResolvedFieldScope {
@@ -1246,54 +1281,34 @@ fn resolved_current_field_values(
     quantity_id: &str,
     n_comp: usize,
 ) -> Option<(Vec<f64>, [u32; 3], FieldFreshness)> {
-    match resolved_current_field_source(snapshot, quantity_id, n_comp)? {
-        ResolvedCurrentFieldSource::Latest(raw) => {
-            let values = flatten_json_field_values(raw);
-            let element_count = if n_comp > 0 {
-                values.len() / n_comp
-            } else {
-                values.len()
-            };
-            let grid = resolved_current_field_grid(snapshot, json_field_grid(raw), element_count);
-            let freshness = latest_json_field_freshness(snapshot, raw, quantity_id);
-            Some((values, grid, freshness))
+    let field = resolve_current_spatial_field(snapshot, quantity_id, n_comp)
+        .ok()
+        .flatten()?;
+    let point_count = field.values.len() / n_comp.max(1);
+    let grid = resolved_current_field_grid(snapshot, field.source_grid, point_count);
+    let freshness = match field.source_kind {
+        SpatialFieldSourceKind::Materialized => latest_json_field_freshness(
+            snapshot,
+            snapshot.latest_fields.get(quantity_id)?,
+            quantity_id,
+        ),
+        SpatialFieldSourceKind::Preview => {
+            preview_field_freshness(snapshot, snapshot.preview_cache.get(quantity_id)?)
         }
-        ResolvedCurrentFieldSource::Preview(field) => {
-            let freshness = preview_field_freshness(snapshot, field);
-            let point_count = if n_comp > 0 {
-                field.vector_field_values.len() / n_comp
-            } else {
-                field.vector_field_values.len()
-            };
-            Some((
-                field.vector_field_values.clone(),
-                resolved_current_field_grid(snapshot, Some(field.preview_grid), point_count),
-                freshness,
-            ))
-        }
-        ResolvedCurrentFieldSource::LegacyLiveMagnetization { values, grid } => {
-            let point_count = if n_comp > 0 {
-                values.len() / n_comp
-            } else {
-                values.len()
-            };
-            Some((
-                values.to_vec(),
-                resolved_current_field_grid(snapshot, Some(grid), point_count),
-                completed_field_freshness(
-                    current_source_step(snapshot),
-                    current_source_step(snapshot),
-                    field_quantity_revision(snapshot, quantity_id),
-                    snapshot
-                        .live_state
-                        .as_ref()
-                        .map(|state| state.updated_at_unix_ms.min(u64::MAX as u128) as u64)
-                        .unwrap_or(0),
-                    0,
-                ),
-            ))
-        }
-    }
+        SpatialFieldSourceKind::Live => completed_field_freshness(
+            current_source_step(snapshot),
+            current_source_step(snapshot),
+            field.quantity_revision,
+            snapshot
+                .live_state
+                .as_ref()
+                .map(|state| state.updated_at_unix_ms.min(u64::MAX as u128) as u64)
+                .unwrap_or(0),
+            0,
+        ),
+        SpatialFieldSourceKind::Persisted => return None,
+    };
+    Some((field.values, grid, freshness))
 }
 
 fn materializer_request_freshness(
@@ -1459,23 +1474,26 @@ pub async fn get_field_catalog(
     // cardinality and is advertised only after its manifest and payload agree.
     if !quantities.iter().any(|q| q.quantity_id == "H_demag") {
         if let Ok(Some(carrier)) = load_fdm_multilayer_airbox_carrier(snapshot) {
-            let revision = snapshot.field_samples_revision;
-            push_field_descriptor(
-                &mut quantities,
-                "H_demag",
-                quantity_unit("H_demag"),
-                Some("airbox_only"),
-                revision,
-                &gen_id,
-                completed_field_freshness(
-                    current_source_step(snapshot),
-                    current_source_step(snapshot),
-                    revision,
-                    0,
-                    0,
-                ),
-                carrier.sample_count > 0,
-            );
+            if let Ok(field) =
+                resolved_fdm_multilayer_airbox_field(snapshot, "H_demag", 3, &carrier)
+            {
+                push_field_descriptor(
+                    &mut quantities,
+                    &field.quantity_id,
+                    &field.canonical_unit,
+                    Some("airbox_only"),
+                    field.quantity_revision,
+                    &gen_id,
+                    completed_field_freshness(
+                        current_source_step(snapshot),
+                        current_source_step(snapshot),
+                        field.quantity_revision,
+                        0,
+                        0,
+                    ),
+                    carrier.sample_count > 0,
+                );
+            }
         }
     }
 
@@ -1684,6 +1702,12 @@ pub async fn get_field_meta(
         },
         quantity_id,
     )?;
+    let airbox_field = airbox_carrier
+        .as_ref()
+        .map(|carrier| {
+            resolved_fdm_multilayer_airbox_field(snapshot, quantity_id, n_comp as usize, carrier)
+        })
+        .transpose()?;
     let transport_artifact = canonical_transport_field_artifact(snapshot, quantity_id)?;
     let transport_artifact_revision =
         canonical_transport_field_artifact_revision(transport_artifact.as_ref());
@@ -1716,16 +1740,21 @@ pub async fn get_field_meta(
             ))
         })
     };
-    let raw_values_opt: Option<(Vec<f64>, [u32; 3], FieldFreshness)> = if let Some(carrier) =
-        airbox_carrier.as_ref()
+    let raw_values_opt: Option<(Vec<f64>, [u32; 3], FieldFreshness)> = if let Some(field) =
+        airbox_field.as_ref()
     {
+        let SpatialFieldCarrier::FdmAirboxCells { cells, .. } = &field.carrier else {
+            return Err(ApiError::internal(
+                "resolved multilayer Airbox field has a non-Airbox carrier",
+            ));
+        };
         Some((
-            carrier.values.clone(),
-            carrier.cells,
+            field.values.clone(),
+            *cells,
             completed_field_freshness(
                 current_source_step(snapshot),
                 current_source_step(snapshot),
-                snapshot.field_samples_revision,
+                field.quantity_revision,
                 0,
                 0,
             ),
@@ -1861,8 +1890,8 @@ pub async fn get_field_meta(
         components: n_comp,
         location,
         unit,
-        field_revision: if airbox_carrier.is_some() {
-            snapshot.field_samples_revision
+        field_revision: if let Some(field) = airbox_field.as_ref() {
+            field.quantity_revision
         } else if transport_artifact.is_some() {
             transport_artifact_revision
         } else {
@@ -2119,35 +2148,17 @@ fn resolve_field_scope(
         .into_iter()
         .filter(|index| *index < mesh.nodes.len())
         .collect::<Vec<_>>();
-    let value_indices = if raw_point_count == mesh.nodes.len() {
-        node_indices.clone()
-    } else if quantity_spatial_domain(quantity_id) == "magnetic_only" {
-        let magnetic_node_indices = fem_magnetic_node_indices(mesh).ok_or_else(|| {
-            ApiError::conflict(format!(
-                "compact field '{quantity_id}' has no resolvable magnetic-node mapping"
-            ))
-        })?;
-        if magnetic_node_indices.len() != raw_point_count {
-            return Err(ApiError::conflict(format!(
-                "compact field '{quantity_id}' length does not match the FEM magnetic-node mapping"
-            )));
-        }
-        let compact_index_by_node = magnetic_node_indices
-            .into_iter()
-            .enumerate()
-            .map(|(compact_index, node_index)| (node_index as usize, compact_index))
-            .collect::<BTreeMap<_, _>>();
-        node_indices
-            .iter()
-            .filter_map(|node_index| compact_index_by_node.get(node_index).copied())
-            .collect()
-    } else {
-        node_indices
-            .iter()
-            .copied()
-            .filter(|index| *index < raw_point_count)
-            .collect()
-    };
+    let value_indices =
+        if quantity_spec(quantity_id).is_some_and(|spec| spec.location.as_str() == "cell") {
+            node_indices
+                .iter()
+                .copied()
+                .filter(|index| *index < raw_point_count)
+                .collect()
+        } else {
+            resolve_fem_node_mapping(mesh, quantity_id, raw_point_count)?
+                .value_indices_for_global_entities(&node_indices)
+        };
     Ok(Some(ResolvedFieldScope {
         node_indices,
         value_indices,
@@ -2180,50 +2191,7 @@ fn resolve_fdm_field_scope(
     };
     let mut canonical_scope_id = scope_id.to_string();
     let mut selected = match scope_kind {
-        "object" => {
-            if !membership
-                .object_ids
-                .iter()
-                .any(|id| object_ids_match(id, scope_id))
-            {
-                return Err(ApiError::not_found(format!(
-                    "FDM object membership not found: {scope_id}"
-                )));
-            }
-            let numeric_ids = membership
-                .region_legend
-                .iter()
-                .filter(|entry| object_ids_match(&entry.object_id, scope_id))
-                .map(|entry| entry.numeric_id)
-                .collect::<BTreeSet<_>>();
-            // When the region legend is empty (single-object, uniform grid)
-            // all active cells (numeric_id==0) belong to the only canonical
-            // object.  The raw object_ids may carry geometry aliases (e.g.
-            // "film_geom") alongside the magnet name, so we must compare
-            // canonical (suffix-stripped) unique count, not raw length.
-            let canonical_object_count = {
-                let mut seen = std::collections::HashSet::new();
-                for id in &membership.object_ids {
-                    let canonical = id
-                        .strip_suffix("_geom")
-                        .or_else(|| id.strip_suffix("_geometry"))
-                        .or_else(|| id.strip_suffix("-geometry"))
-                        .unwrap_or(id);
-                    seen.insert(canonical);
-                }
-                seen.len()
-            };
-            membership
-                .cell_membership
-                .iter()
-                .enumerate()
-                .filter_map(|(index, numeric_id)| {
-                    (numeric_ids.contains(numeric_id)
-                        || (*numeric_id == 0 && canonical_object_count == 1))
-                        .then_some(index)
-                })
-                .collect::<Vec<_>>()
-        }
+        "object" => resolve_fdm_object_indices(&FdmCellMembership::from(&membership), scope_id)?,
         "region" => {
             let requested_owner_object_id = query.owner_object_id.as_deref();
             let mut entries = membership.region_legend.iter().filter(|entry| {
@@ -2977,13 +2945,17 @@ pub async fn get_field_vector(
 
     let component = parse_component(query.component.as_deref(), n_comp)?;
     let airbox_carrier = requested_fdm_multilayer_airbox_carrier(snapshot, &query, quantity_id)?;
+    let airbox_field = airbox_carrier
+        .as_ref()
+        .map(|carrier| resolved_fdm_multilayer_airbox_field(snapshot, quantity_id, n_comp, carrier))
+        .transpose()?;
 
     let session_id = snapshot.session.session_id.clone();
     let transport_artifact = canonical_transport_field_artifact(snapshot, quantity_id)?;
     let transport_artifact_revision =
         canonical_transport_field_artifact_revision(transport_artifact.as_ref());
-    let field_revision = if airbox_carrier.is_some() {
-        snapshot.field_samples_revision
+    let field_revision = if let Some(field) = airbox_field.as_ref() {
+        field.quantity_revision
     } else if transport_artifact.is_some() {
         transport_artifact_revision
     } else {
@@ -3009,10 +2981,13 @@ pub async fn get_field_vector(
             Some((values, grid))
         })
     };
-    let raw_values_opt: Option<(Vec<f64>, [u32; 3])> = if let Some(carrier) =
-        airbox_carrier.as_ref()
-    {
-        Some((carrier.values.clone(), carrier.cells))
+    let raw_values_opt: Option<(Vec<f64>, [u32; 3])> = if let Some(field) = airbox_field.as_ref() {
+        let SpatialFieldCarrier::FdmAirboxCells { cells, .. } = &field.carrier else {
+            return Err(ApiError::internal(
+                "resolved multilayer Airbox field has a non-Airbox carrier",
+            ));
+        };
+        Some((field.values.clone(), *cells))
     } else if let Some(snapshot_id) = requested_snapshot_id {
         if quantity_id != "m" {
             return Err(ApiError::bad_request(format!(
@@ -3090,7 +3065,9 @@ pub async fn get_field_vector(
         .as_deref()
         .map(mesh_topology_hash_bytes)
         .transpose()?;
-    let topology_revision = if is_fdm_snapshot(snapshot) {
+    let topology_revision = if let Some(field) = airbox_field.as_ref() {
+        field.mesh_or_grid_revision
+    } else if is_fdm_snapshot(snapshot) {
         gen_revision
     } else {
         snapshot.mesh_revision

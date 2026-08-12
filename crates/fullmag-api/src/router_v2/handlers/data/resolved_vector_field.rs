@@ -8,11 +8,14 @@ use std::sync::Arc;
 
 use crate::error::ApiError;
 use crate::router_v2::handlers::data::field_resolution::{
-    fem_magnetic_node_indices, field_values_match_current_domain, flatten_json_field_values,
-    is_fdm_snapshot, json_field_grid, live_magnetization_values,
+    field_values_match_current_domain, flatten_json_field_values, is_fdm_snapshot, json_field_grid,
+    live_magnetization_values,
 };
 use crate::router_v2::handlers::data::fields::{
     persisted_hysteresis_magnetization_values, validate_hysteresis_snapshot_stage_scope,
+};
+use crate::router_v2::handlers::data::resolved_spatial_field::{
+    resolve_fem_node_mapping, EntityMapping,
 };
 use crate::router_v2::handlers::sessions::status::field_quantity_revision;
 use crate::types::{AppState, SessionStateResponse};
@@ -77,7 +80,15 @@ pub(crate) async fn resolve_topological_charge_magnetization(
         .chunks_exact(3)
         .map(|sample| [sample[0], sample[1], sample[2]])
         .collect::<Vec<_>>();
-    let global_node_ids = resolve_global_node_ids(snapshot, values.len())?;
+    let global_node_ids = if is_fdm_snapshot(snapshot) {
+        None
+    } else if let Some(mesh) = snapshot.fem_mesh.as_ref() {
+        resolve_fem_node_mapping(mesh, "m", values.len())?
+            .global_entity_ids()
+            .map(<[u32]>::to_vec)
+    } else {
+        None
+    };
     Ok(Some(ResolvedObjectVectorField {
         values,
         grid: Some(grid),
@@ -98,30 +109,6 @@ pub(crate) async fn resolve_topological_charge_magnetization(
     }))
 }
 
-fn resolve_global_node_ids(
-    snapshot: &SessionStateResponse,
-    point_count: usize,
-) -> Result<Option<Vec<u32>>, ApiError> {
-    if is_fdm_snapshot(snapshot) {
-        return Ok(None);
-    }
-    let Some(mesh) = snapshot.fem_mesh.as_ref() else {
-        return Ok(None);
-    };
-    if point_count == mesh.nodes.len() {
-        return Ok(None);
-    }
-    let magnetic_nodes = fem_magnetic_node_indices(mesh).ok_or_else(|| {
-        ApiError::conflict("compact magnetization field has no resolvable magnetic-node mapping")
-    })?;
-    if point_count != magnetic_nodes.len() {
-        return Err(ApiError::conflict(
-            "magnetization field length does not match the FEM node layout",
-        ));
-    }
-    Ok(Some(magnetic_nodes))
-}
-
 /// Expand compact magnetic-node values into the global FEM node order used by
 /// the P1 slice adapter.  Unmapped (air) nodes are deliberately zero because
 /// object-scoped support construction never includes them.
@@ -130,11 +117,16 @@ pub(crate) fn expand_compact_fem_node_values(
     global_node_ids: &[u32],
     global_node_count: usize,
 ) -> Result<Vec<[f64; 3]>, &'static str> {
+    let mapping = EntityMapping::ExplicitLocalToGlobal(global_node_ids.to_vec());
     if values.len() != global_node_ids.len() {
         return Err("compact FEM value count does not match global-node mapping");
     }
     let mut expanded = vec![[0.0; 3]; global_node_count];
-    for (value, node_id) in values.iter().zip(global_node_ids) {
+    for (value, node_id) in values.iter().zip(
+        mapping
+            .global_entity_ids()
+            .expect("explicit mapping always has global entity ids"),
+    ) {
         let target = expanded
             .get_mut(*node_id as usize)
             .ok_or("compact FEM node mapping contains an out-of-range node")?;

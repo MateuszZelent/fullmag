@@ -1,5 +1,7 @@
 use crate::field_slice::{FdmField, FemField};
-use crate::preview::quantity_spatial_domain;
+use crate::router_v2::handlers::data::resolved_spatial_field::{
+    resolve_fem_node_mapping, EntityMapping,
+};
 use crate::router_v2::handlers::sessions::status::{fdm_grid_geometry, fdm_grid_shape};
 use crate::session::{resolved_current_field_source, ResolvedCurrentFieldSource};
 use crate::types::SessionStateResponse;
@@ -58,11 +60,7 @@ pub(super) fn field_point_count_matches_current_domain(
     if point_count == 0 || mesh.nodes.is_empty() || mesh.cells.is_empty() {
         return false;
     }
-    if point_count == mesh.nodes.len() {
-        return true;
-    }
-    quantity_spatial_domain(quantity_id) == "magnetic_only"
-        && fem_magnetic_node_count(mesh).is_some_and(|count| point_count == count)
+    resolve_fem_node_mapping(mesh, quantity_id, point_count).is_ok()
 }
 
 fn multilayer_native_point_count(snapshot: &SessionStateResponse) -> Option<usize> {
@@ -274,10 +272,6 @@ pub(crate) fn fem_magnetic_node_indices(mesh: &FemMeshPayload) -> Option<Vec<u32
     None
 }
 
-fn fem_magnetic_node_count(mesh: &FemMeshPayload) -> Option<usize> {
-    fem_magnetic_node_indices(mesh).map(|indices| indices.len())
-}
-
 fn mark_magnetic_mesh_parts(mesh: &FemMeshPayload, active: &mut [bool]) -> bool {
     let mut saw_magnetic_part = false;
     for part in &mesh.mesh_parts {
@@ -447,7 +441,12 @@ pub(super) fn extract_fem_field(
         return None;
     }
     let values = extract_raw_field_values(snapshot, quantity_id, n_comp)?;
-    if n_comp == 0 || values.len() / n_comp != mesh.nodes.len() {
+    if n_comp == 0
+        || !matches!(
+            resolve_fem_node_mapping(mesh, quantity_id, values.len() / n_comp).ok()?,
+            EntityMapping::Identity { .. }
+        )
+    {
         return None;
     }
     let elements = mesh.require_tet4_elements().ok()?;
