@@ -395,12 +395,12 @@ not claim native GPU sampling. Current planar metadata does not expose source
 backend/device/precision, so source/device qualification requires external
 managed-run provenance.
 
-| Source lane | Current legality | Sampling execution | Current qualification |
-|---|---|---|---|
-| FDM CPU | plane, slab, depth; authored monitor target scope | CPU | managed Task 0 science artifact passed at exact source `5138078f7fd7b65dfc231faa4aa11c02d8ebf52d`; end-to-end runtime/browser/production unqualified because the same recipe exited 1 after 180000 ms waiting for a visible canvas |
-| FDM GPU | plane, slab, depth after a compatible published field is transported | CPU | source-compatible by code path only; no fresh GPU source/device evidence and no native GPU sampler |
-| FEM CPU | P1 plane, slab, depth, and `object_boundary` surface; mesh-part/airbox only for published intersecting topology | CPU | focused numerical/API tests only; no fresh managed FEM or browser evidence in the current gate |
-| FEM GPU | same P1 operators after a compatible published field is transported | CPU | source-compatible by code path only; no fresh GPU source/device evidence and no native GPU sampler |
+| Source lane | Target/scope legality | Required source carrier | Current operators | Sampling execution | Current qualification |
+|---|---|---|---|---|---|
+| FDM CPU | `domain`: full rectangular carrier; `magnetic_domain`: all active cells; `region`: exact numeric membership; `object`: conditionally correct only when all active cells belong to the requested object and incorrect for a general multi-object grid; `mesh_part`/`airbox`: unsupported | Cell-centred structured-grid field; matching membership required for non-domain targets | plane, slab, depth; surface unsupported | CPU | managed Task 0 science artifact passed only for its fixture at exact source `5138078f7fd7b65dfc231faa4aa11c02d8ebf52d`; multi-object object targeting and end-to-end runtime/browser/production remain unqualified because the same recipe exited 1 after 180000 ms waiting for a visible canvas |
+| FDM GPU | Same target/scope restrictions as FDM CPU after compatible transport | Transported cell-centred structured-grid field; planar metadata does not identify source device/precision | plane, slab, depth; surface unsupported | CPU | source-compatible by code path only; no fresh GPU source/device or multi-object object-target evidence and no native GPU sampler |
+| FEM CPU | Target plus optional intersecting `mesh_part`/`airbox` element scope; every dynamic extent kind uses all mesh nodes and is incorrect for scoped bounds | Complete Tet4/P1 nodal field with one value tuple for every published mesh node; selected-part-only, discontinuous, cell-centred, and higher-order carriers unsupported | plane, slab, depth, `object_boundary` surface; explicit extent required for faithful scoped bounds | CPU | focused numerical/API tests only; scoped dynamic extents and fresh managed FEM/browser/runtime/production evidence remain unqualified |
+| FEM GPU | Same target/scope and dynamic-extent restrictions as FEM CPU after compatible transport | Complete transported Tet4/P1 nodal field over all published mesh nodes; planar metadata does not identify source device/precision | same P1 operators as FEM CPU; explicit extent required for faithful scoped bounds | CPU | source-compatible by code path only; no fresh GPU source/device or scoped dynamic-extent evidence and no native GPU sampler |
 
 | Capability | FDM source | FEM P1 source | FEM high-order | Failure/degraded rule |
 |---|---|---|---|---|
@@ -412,7 +412,13 @@ managed-run provenance.
 | `planar_surface_projection` `object_boundary` | unsupported: boundary topology absent | boundary-triangle measure, CPU sampler | unsupported | region/named FEM surfaces reject; folded/non-injective surfaces are diagnostic |
 | `planar_vector_sampling` | implemented, browser unqualified | implemented for P1 nodal vectors, browser unqualified | unsupported | unavailable component returns stable reason |
 | `planar_mesh_overlay` | no sampler overlay | exact P1 section topology, browser unqualified | unsupported | absence does not alter sampled values |
-| `planar_airbox_sampling` | unsupported runtime scope | legal only for a published intersecting FEM airbox scope and compatible full-domain quantity | unsupported | magnetic-only quantities do not become airbox fields |
+| `planar_target.domain` | full rectangular carrier | all Tet4 elements after full-nodal carrier load | unsupported | carrier semantics are not magnetic-target semantics |
+| `planar_target.magnetic_domain` | all active cells | all elements with non-zero marker after full-nodal carrier load | unsupported | missing/stale membership or topology rejects |
+| `planar_target.object` | conditional only: current mask selects all active cells after checking object existence; incorrect for general multi-object grids | mesh-part element selection after full-nodal carrier load | unsupported | FDM multi-object qualification is RED; no all-active substitution may be claimed |
+| `planar_target.region` | exact numeric region membership | object/region mesh-part selection after full-nodal carrier load | unsupported | missing region legend/part rejects |
+| `planar_airbox_sampling` | unsupported runtime scope | element scope only after a compatible full-mesh nodal field loads; no scoped carrier support | unsupported | magnetic-only quantities do not become airbox fields; empty intersection rejects |
+| `planar_dynamic_extent` | resolved from selected FDM active mask, subject to the object-target defect above | all three dynamic tags currently use global FEM mesh nodes and are incorrect for scoped bounds | unsupported | use explicit FEM extent until target/scope-aware bounds pass |
+| `planar_empty_extrema` | terminal contract excludes `empty` occupancy, but `include_air_as_zero` currently inserts finite zero into metadata extrema | same terminal contract; current metadata reduction is not occupancy-aware | unsupported | `include_air_as_zero` extrema/ranges remain unqualified until the empty mask gates min/max |
 
 These entries separate legality from qualification. `implemented` is not a
 `browser-verified`, scientifically `validated`, `runtime-qualified`, or

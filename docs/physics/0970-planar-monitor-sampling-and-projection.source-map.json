@@ -8,25 +8,48 @@
       "solver": "FDM",
       "device": "CPU",
       "status": "science-gate-passed-browser-runtime-unqualified",
-      "reason": "Managed Task 0 science gates passed at the audited source, but the same recipe exited 1 after a 180000 ms visible-canvas timeout."
+      "reason": "Managed Task 0 science gates passed for their fixture at the audited source, but general multi-object object targeting is incorrect because it selects all active cells, include_air_as_zero pollutes metadata extrema, and the same recipe exited 1 after a 180000 ms visible-canvas timeout."
     },
     {
       "solver": "FDM",
       "device": "GPU",
       "status": "source-compatible-unqualified",
-      "reason": "Published GPU fields may enter the CPU sampler, but no fresh GPU source/device proof exists and native GPU sampling is absent."
+      "reason": "Compatible transported GPU fields may enter the CPU sampler with the same FDM target defects, but no fresh GPU source/device proof exists and native GPU sampling is absent."
     },
     {
       "solver": "FEM",
       "device": "CPU",
       "status": "focused-tests-only-unqualified",
-      "reason": "P1 numerical and API tests exist, but Task 1 has no fresh managed FEM or browser qualification."
+      "reason": "Only a complete Tet4/P1 nodal field over all published mesh nodes is accepted; scoped carriers are unsupported and all dynamic extent tags use global mesh nodes. Focused tests exist, but scoped extents and managed/browser/runtime/production execution are unqualified."
     },
     {
       "solver": "FEM",
       "device": "GPU",
       "status": "source-compatible-unqualified",
-      "reason": "Published GPU fields may enter the CPU sampler, but no fresh GPU source/device proof exists and native GPU sampling is absent."
+      "reason": "Only a complete transported Tet4/P1 nodal field over all mesh nodes may enter the CPU sampler; scoped carriers and scoped dynamic extents are unqualified, no fresh GPU source/device proof exists, and native GPU sampling is absent."
+    }
+  ],
+  "contract_types": [
+    {
+      "path": "crates/fullmag-ir/src/planar_monitor.rs",
+      "symbols": [
+        "PlanarMonitorIR",
+        "MonitorTargetIR",
+        "PlanarFrameIR",
+        "PlanarExtentIR",
+        "PlanarOperatorIR"
+      ],
+      "responsibility": "Canonical monitor, target, frame, extent, and operator ProblemIR types."
+    },
+    {
+      "path": "crates/fullmag-api/src/schemas/planar_monitors.rs",
+      "symbols": ["PlanarMonitorSchema"],
+      "responsibility": "OpenAPI authoring schema for the canonical planar monitor resource."
+    },
+    {
+      "path": "crates/fullmag-api/src/schemas/planar_fields.rs",
+      "symbols": ["PlanarFieldQuery", "PlanarFieldMetaResource"],
+      "responsibility": "OpenAPI query and metadata schemas for sampled planar fields."
     }
   ],
   "equations": [
@@ -158,6 +181,19 @@
       "responsibility": "Render canonical stage-first Python monitor calls."
     },
     {
+      "id": "ir-monitor-contract",
+      "path": "crates/fullmag-ir/src/planar_monitor.rs",
+      "symbol": "axis_preset",
+      "contract_symbols": [
+        "PlanarMonitorIR",
+        "MonitorTargetIR",
+        "PlanarFrameIR",
+        "PlanarExtentIR",
+        "PlanarOperatorIR"
+      ],
+      "responsibility": "Own the canonical monitor IR types and preset-frame construction."
+    },
+    {
       "id": "ir-validation",
       "path": "crates/fullmag-ir/src/validation.rs",
       "symbol": "validate_planar_monitors",
@@ -215,7 +251,19 @@
       "id": "api-build",
       "path": "crates/fullmag-api/src/router_v2/handlers/data/planar_fields.rs",
       "symbol": "resolve_dynamic_extent",
-      "responsibility": "Resolve authored dynamic extent policies from the selected FDM or FEM field support."
+      "responsibility": "Resolve FDM bounds from the selected mask but currently resolve every FEM dynamic extent from all mesh nodes."
+    },
+    {
+      "id": "fem-field-carrier",
+      "path": "crates/fullmag-api/src/router_v2/handlers/data/field_resolution.rs",
+      "symbol": "extract_fem_field",
+      "responsibility": "Admit only complete Tet4/P1 nodal fields whose flattened value count matches all published mesh nodes."
+    },
+    {
+      "id": "api-planar-meta",
+      "path": "crates/fullmag-api/src/router_v2/handlers/data/planar_fields.rs",
+      "symbol": "meta_resource",
+      "responsibility": "Build planar metadata; current finite-only extrema include serialized empty-air zeros."
     },
     {
       "id": "ui-plan",
@@ -295,6 +343,36 @@
         "problem_ir": "planar_monitors[].operator"
       },
       {
+        "python": "fm.MonitorTarget.object.object_id",
+        "type": "str",
+        "default": "required",
+        "si_unit": "1",
+        "validation": "non-empty; must resolve to a magnet in IR validation",
+        "meaning": "Select one object",
+        "backend_support": "FDM/FEM CPU/GPU authoring",
+        "problem_ir": "planar_monitors[].target.object_id"
+      },
+      {
+        "python": "fm.MonitorTarget.region.object_id",
+        "type": "str",
+        "default": "required",
+        "si_unit": "1",
+        "validation": "non-empty; owner-region pair must exist",
+        "meaning": "Region owner",
+        "backend_support": "FDM/FEM CPU/GPU authoring",
+        "problem_ir": "planar_monitors[].target.object_id"
+      },
+      {
+        "python": "fm.MonitorTarget.region.region_id",
+        "type": "str",
+        "default": "required",
+        "si_unit": "1",
+        "validation": "non-empty; owner-region pair must exist",
+        "meaning": "Region identity",
+        "backend_support": "FDM/FEM CPU/GPU authoring",
+        "problem_ir": "planar_monitors[].target.region_id"
+      },
+      {
         "python": "fm.PlanarFrame.origin",
         "type": "Sequence[float]",
         "default": "required",
@@ -325,6 +403,36 @@
         "problem_ir": "planar_monitors[].frame.u_axis"
       },
       {
+        "python": "fm.PlanarFrame.extent",
+        "type": "PlanarExtent",
+        "default": "required",
+        "si_unit": "1",
+        "validation": "valid extent object",
+        "meaning": "Authored extent policy",
+        "backend_support": "FDM/FEM CPU/GPU",
+        "problem_ir": "planar_monitors[].frame.extent"
+      },
+      {
+        "python": "fm.PlanarFrame.xy/xz/yz.position",
+        "type": "float",
+        "default": "required",
+        "si_unit": "\\mathrm{m}",
+        "validation": "finite",
+        "meaning": "Axis-preset plane position",
+        "backend_support": "FDM/FEM CPU/GPU",
+        "problem_ir": "planar_monitors[].frame.origin_m"
+      },
+      {
+        "python": "fm.PlanarFrame.xy/xz/yz.extent",
+        "type": "PlanarExtent",
+        "default": "required",
+        "si_unit": "1",
+        "validation": "valid extent object",
+        "meaning": "Extent attached to preset frame",
+        "backend_support": "FDM/FEM CPU/GPU",
+        "problem_ir": "planar_monitors[].frame.extent"
+      },
+      {
         "python": "fm.PlanarExtent.explicit.u",
         "type": "Sequence[float]",
         "default": "required",
@@ -343,6 +451,36 @@
         "meaning": "Explicit vertical bounds",
         "backend_support": "FDM/FEM CPU/GPU",
         "problem_ir": "planar_monitors[].frame.extent.v_min_m/v_max_m"
+      },
+      {
+        "python": "fm.PlanarExtent.target_bounds.padding",
+        "type": "float",
+        "default": "0.0",
+        "si_unit": "\\mathrm{m}",
+        "validation": "finite and non-negative",
+        "meaning": "Padding around resolved target bounds",
+        "backend_support": "FDM/FEM CPU/GPU",
+        "problem_ir": "planar_monitors[].frame.extent.padding_m"
+      },
+      {
+        "python": "fm.PlanarExtent.magnetic_domain.padding",
+        "type": "float",
+        "default": "0.0",
+        "si_unit": "\\mathrm{m}",
+        "validation": "finite and non-negative",
+        "meaning": "Padding around magnetic-domain bounds",
+        "backend_support": "FDM/FEM CPU/GPU",
+        "problem_ir": "planar_monitors[].frame.extent.padding_m"
+      },
+      {
+        "python": "fm.PlanarExtent.universe.padding",
+        "type": "float",
+        "default": "0.0",
+        "si_unit": "\\mathrm{m}",
+        "validation": "finite and non-negative",
+        "meaning": "Padding around universe bounds",
+        "backend_support": "FDM/FEM CPU/GPU",
+        "problem_ir": "planar_monitors[].frame.extent.padding_m"
       },
       {
         "python": "fm.SlabAverage.thickness",
@@ -373,6 +511,26 @@
         "meaning": "Empty-bin semantics",
         "backend_support": "FDM/FEM CPU sampler; GPU-source legal",
         "problem_ir": "planar_monitors[].operator.empty_policy"
+      },
+      {
+        "python": "fm.SurfaceBoundary.region_boundary.region_id",
+        "type": "str",
+        "default": "required",
+        "si_unit": "1",
+        "validation": "non-empty; sampling currently rejects unpublished topology",
+        "meaning": "Region boundary selector",
+        "backend_support": "authoring only; sampling unsupported",
+        "problem_ir": "planar_monitors[].operator.boundary.region_id"
+      },
+      {
+        "python": "fm.SurfaceBoundary.named.surface_id",
+        "type": "str",
+        "default": "required",
+        "si_unit": "1",
+        "validation": "non-empty; sampling currently rejects unpublished topology",
+        "meaning": "Named boundary selector",
+        "backend_support": "authoring only; sampling unsupported",
+        "problem_ir": "planar_monitors[].operator.boundary.surface_id"
       },
       {
         "python": "fm.SurfaceProjection.boundary",

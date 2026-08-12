@@ -154,9 +154,17 @@ an extremum of vector magnitude.
 With `exclude_empty`, $M_{ij}=0$ produces an `empty` sample with a non-finite
 scalar payload. With `include_air_as_zero`, which is legal only with
 `mean_occupied`, the empty scalar payload is zero but occupancy remains
-`empty`. Empty samples never enter extrema or automatic display ranges.
-A finite slab pixel is `partial` when its occupied volume is less than the
-full pixel-prism volume, using the implemented relative comparison.
+`empty`. The terminal contract excludes every `empty` sample from scientific
+extrema and automatic display ranges, independently of its serialized scalar
+payload. The current FDM implementation writes `0.0` for
+`include_air_as_zero`, while `meta_resource` computes `scalar_min` and
+`scalar_max` by filtering only non-finite values. That implementation therefore
+includes empty-air zero in metadata extrema and diverges from the terminal
+contract. Until an occupancy-aware extrema gate passes,
+`include_air_as_zero` extrema and automatic ranges are unqualified; consumers
+must apply the empty mask or request `exclude_empty`. A finite slab pixel is
+`partial` when its occupied volume is less than the full pixel-prism volume,
+using the implemented relative comparison.
 
 ### Vector reduction and components
 
@@ -189,47 +197,47 @@ exceed $10^{-12}$ times the maximum raster vector norm receive
 
 | LaTeX token | Meaning | SI unit |
 |---|---|---|
-| `\mathcal F` | Oriented monitor frame | `1` |
-| `\mathbf x` | World-space position | `\mathrm{m}` |
-| `\mathbf o` | Monitor origin | `\mathrm{m}` |
-| `\mathbf e_u` | First in-plane unit vector | `1` |
-| `\mathbf e_v` | Second in-plane unit vector | `1` |
-| `\mathbf n` | Monitor normal unit vector | `1` |
-| `u,v,s` | Coordinates in the monitor frame | `\mathrm{m}` |
-| `u_0,u_1,v_0,v_1` | Resolved planar bounds | `\mathrm{m}` |
-| `N_u,N_v` | Raster dimensions | `1` |
-| `i,j` | Raster indices | `1` |
-| `P_{ij}` | Physical pixel footprint in the monitor plane | `\mathrm{m^2}` |
-| `\Delta u,\Delta v` | Physical pixel side lengths | `\mathrm{m}` |
-| `\Omega_T` | Resolved target volume | `\mathrm{m^3}` |
-| `\Gamma_T` | Selected target boundary | `\mathrm{m^2}` |
-| `S_{ij}` | Operator-specific occupied support | `\mathrm{m^3}\ \text{or}\ \mathrm{m^2}` |
-| `S^{\mathrm{plane}}_{ij}` | Point support for plane sampling | `1` |
-| `S^{\mathrm{slab}}_{ij}` | Finite-thickness pixel-prism support | `\mathrm{m^3}` |
-| `S^{\mathrm{depth}}_{ij}` | Full-depth pixel-prism support | `\mathrm{m^3}` |
-| `S^{\mathrm{surface}}_{ij}` | Selected boundary support projected into a pixel | `\mathrm{m^2}` |
-| `t` | Full slab thickness | `\mathrm{m}` |
-| `M_{ij}` | Occupied volume or area | `\mathrm{m^3}\ \text{or}\ \mathrm{m^2}` |
-| `q` | Scalar source quantity | `[q]` |
-| `\mathbf q` | Vector source quantity | `[q]` |
-| `\bar q_{ij}` | Occupied-measure scalar mean | `[q]` |
-| `\bar{\mathbf q}_{ij}` | Occupied-measure vector mean | `[q]` |
-| `I_{ij}` | Thickness integral per projected area | `[q]\,\mathrm{m}` |
-| `q_{\mathrm{rms},ij}` | Occupied-measure RMS | `[q]` |
-| `dV` | Physical volume element | `\mathrm{m^3}` |
-| `dA` | Physical surface element | `\mathrm{m^2}` |
-| `d\mu` | Operator-selected physical measure | `\mathrm{m^3}\ \text{or}\ \mathrm{m^2}` |
-| `q_u,q_v,q_n` | Components in the resolved monitor frame | `[q]` |
-| `q_{\parallel}` | In-plane vector magnitude | `[q]` |
-| `c` | FDM cell index | `1` |
-| `q_c` | Cell-constant FDM value | `[q]` |
-| `V_{c,ij}` | Cell/pixel-support intersection volume | `\mathrm{m^3}` |
-| `a` | Local FEM node index | `1` |
-| `N_a` | P1 barycentric basis function | `1` |
-| `q_a` | Nodal P1 value | `[q]` |
-| `N` | Number of nodes in an arithmetic average | `1` |
-| `q_{\mathrm{nodes}}` | Illegal unweighted nodal mean | `[q]` |
-| `\pi` | Circle constant | `1` |
+| $\mathcal F$ | Oriented monitor frame | $1$ |
+| $\mathbf x$ | World-space position | $\mathrm{m}$ |
+| $\mathbf o$ | Monitor origin | $\mathrm{m}$ |
+| $\mathbf e_u$ | First in-plane unit vector | $1$ |
+| $\mathbf e_v$ | Second in-plane unit vector | $1$ |
+| $\mathbf n$ | Monitor normal unit vector | $1$ |
+| $u,v,s$ | Coordinates in the monitor frame | $\mathrm{m}$ |
+| $u_0,u_1,v_0,v_1$ | Resolved planar bounds | $\mathrm{m}$ |
+| $N_u,N_v$ | Raster dimensions | $1$ |
+| $i,j$ | Raster indices | $1$ |
+| $P_{ij}$ | Physical pixel footprint in the monitor plane | $\mathrm{m^2}$ |
+| $\Delta u,\Delta v$ | Physical pixel side lengths | $\mathrm{m}$ |
+| $\Omega_T$ | Resolved target volume | $\mathrm{m^3}$ |
+| $\Gamma_T$ | Selected target boundary | $\mathrm{m^2}$ |
+| $S_{ij}$ | Operator-specific occupied support | $\mathrm{m^3}\ \text{or}\ \mathrm{m^2}$ |
+| $S^{\mathrm{plane}}_{ij}$ | Point support for plane sampling | $1$ |
+| $S^{\mathrm{slab}}_{ij}$ | Finite-thickness pixel-prism support | $\mathrm{m^3}$ |
+| $S^{\mathrm{depth}}_{ij}$ | Full-depth pixel-prism support | $\mathrm{m^3}$ |
+| $S^{\mathrm{surface}}_{ij}$ | Selected boundary support projected into a pixel | $\mathrm{m^2}$ |
+| $t$ | Full slab thickness | $\mathrm{m}$ |
+| $M_{ij}$ | Occupied volume or area | $\mathrm{m^3}\ \text{or}\ \mathrm{m^2}$ |
+| $q$ | Scalar source quantity | $[q]$ |
+| $\mathbf q$ | Vector source quantity | $[q]$ |
+| $\bar q_{ij}$ | Occupied-measure scalar mean | $[q]$ |
+| $\bar{\mathbf q}_{ij}$ | Occupied-measure vector mean | $[q]$ |
+| $I_{ij}$ | Thickness integral per projected area | $[q]\,\mathrm{m}$ |
+| $q_{\mathrm{rms},ij}$ | Occupied-measure RMS | $[q]$ |
+| $dV$ | Physical volume element | $\mathrm{m^3}$ |
+| $dA$ | Physical surface element | $\mathrm{m^2}$ |
+| $d\mu$ | Operator-selected physical measure | $\mathrm{m^3}\ \text{or}\ \mathrm{m^2}$ |
+| $q_u,q_v,q_n$ | Components in the resolved monitor frame | $[q]$ |
+| $q_{\parallel}$ | In-plane vector magnitude | $[q]$ |
+| $c$ | FDM cell index | $1$ |
+| $q_c$ | Cell-constant FDM value | $[q]$ |
+| $V_{c,ij}$ | Cell/pixel-support intersection volume | $\mathrm{m^3}$ |
+| $a$ | Local FEM node index | $1$ |
+| $N_a$ | P1 barycentric basis function | $1$ |
+| $q_a$ | Nodal P1 value | $[q]$ |
+| $N$ | Number of nodes in an arithmetic average | $1$ |
+| $q_{\mathrm{nodes}}$ | Illegal unweighted nodal mean | $[q]$ |
+| $\pi$ | Circle constant | $1$ |
 
 `[q]` denotes the canonical SI unit of the selected source quantity. Unit
 conversion is presentation-only and never mutates the monitor or source
@@ -239,8 +247,11 @@ buffer.
 ## Assumptions and validity
 
 - FDM fields are cell-centred and reconstructed as cell-constant.
-- FEM sampling is valid only for published tetrahedral P1 nodal fields.
-  Higher-order basis evaluation is unsupported; no P1 fallback is legal.
+- FEM sampling accepts only a full-carrier tetrahedral P1 nodal payload: after
+  component flattening, the value count must equal the complete published mesh
+  node count. Element scoping is applied only after that carrier is loaded.
+  Element-local, selected-part-only, discontinuous, cell-centred, and
+  higher-order FEM payloads are unsupported; no P1 fallback is legal.
 - FDM volume reduction decomposes each hexahedral cell into six tetrahedra.
 - FEM volume reduction clips tetrahedra against pixel prisms and integrates
   the P1 field over the clipped polyhedron.
@@ -248,9 +259,21 @@ buffer.
   `region_boundary` and `named_surface` are authorable but reject during
   sampling because their topology is not published.
 - FDM surface projection rejects because boundary topology is not published.
-- FDM runtime scopes `mesh_part` and `airbox` reject. FEM permits them only
-  when the current mesh publishes the matching part and the intersection with
-  the authored target is non-empty.
+- FDM runtime scopes `mesh_part` and `airbox` reject. `domain` selects the
+  rectangular field carrier, `magnetic_domain` selects all active cells, and
+  `region` selects the matching numeric membership. `object` is correct only
+  for a single-object/all-active-cells-equivalent grid: the current code checks
+  that the requested object ID exists but then selects every active cell, so
+  multi-object FDM object targeting is semantically incorrect and unqualified.
+- FEM target and runtime scopes select elements from mesh-part ranges, but only
+  after the full-nodal P1 carrier has loaded. `mesh_part` and `airbox` therefore
+  require a published intersecting part and a compatible full-mesh nodal
+  quantity; they do not authorize a scoped carrier.
+- FEM `target_bounds`, `magnetic_domain`, and `universe` dynamic extents all
+  currently project every published mesh node. They do not distinguish the
+  selected target or runtime scope, despite being resolved after element
+  selection. Scoped FEM dynamic extents are therefore semantically incorrect
+  and unqualified; use an explicit extent for a faithful scoped result.
 - The sampler accumulates in binary64. The current planar metadata publishes
   `sampling_execution="cpu"` but does not publish source backend, source
   device, or source precision. Consequently it cannot by itself prove a GPU
@@ -428,12 +451,12 @@ and must preserve both requested intent and resolved execution in provenance.
 The source lane names the solver that produced the published field. All
 currently implemented sampling kernels execute on CPU.
 
-| Source lane | Legal current sampling | Sampler | Qualification at audited source |
-|---|---|---|---|
-| FDM CPU | plane, slab, depth; monitor target scope | CPU binary64 | managed science artifact passed; end-to-end runtime/browser/production unqualified because the same recipe ended RED in the browser |
-| FDM GPU | plane, slab, depth only after a compatible field is published and transported | CPU binary64 | source-compatible by code path only; no fresh GPU-source/device proof and no native GPU sampling |
-| FEM CPU | P1 plane, slab, depth, object-boundary surface; FEM mesh-part/airbox only with published intersecting topology | CPU binary64 | focused numerical/API tests exist; no fresh managed FEM or browser qualification for this task |
-| FEM GPU | same P1 operators only after a compatible field is published and transported | CPU binary64 | source-compatible by code path only; no fresh GPU-source/device proof and no native GPU sampling |
+| Source lane | Target and runtime-scope legality | Required source carrier | Legal current operators | Sampler | Qualification at audited source |
+|---|---|---|---|---|---|
+| FDM CPU | `domain`: full rectangular carrier; `magnetic_domain`: all active cells; `region`: exact numeric membership; `object`: only conditionally correct for single-object/all-active-equivalent grids and incorrect for general multi-object grids; `mesh_part`/`airbox`: unsupported | Published cell-centred structured-grid field plus matching membership for non-domain targets | plane, slab, depth; surface unsupported | CPU binary64 | managed science artifact passed only for its fixture; object targeting on multi-object grids and end-to-end runtime/browser/production remain unqualified because the same recipe ended RED in the browser |
+| FDM GPU | Same target restrictions as FDM CPU after compatible field transport | Compatible transported cell-centred structured-grid field; source device/precision is absent from planar metadata | plane, slab, depth; surface unsupported | CPU binary64 | source-compatible by code path only; no fresh GPU-source/device proof, no multi-object object-target proof, and no native GPU sampling |
+| FEM CPU | Authored target plus optional intersecting `mesh_part`/`airbox` element scope; scoped dynamic extents are incorrect because all dynamic kinds use global mesh nodes | Complete published tetrahedral P1 nodal field over all mesh nodes; scoped/local and higher-order carriers unsupported | plane, slab, depth, `object_boundary` surface; use explicit extent for scoped correctness | CPU binary64 | focused numerical/API tests exist; dynamic scoped extents, fresh managed FEM, browser, runtime, and production are unqualified |
+| FEM GPU | Same target, scope, dynamic-extent, and surface restrictions as FEM CPU after compatible field transport | Complete transported tetrahedral P1 nodal field over all mesh nodes; source device/precision is absent from planar metadata | same P1 operators as FEM CPU; use explicit extent for scoped correctness | CPU binary64 | source-compatible by code path only; no fresh GPU-source/device proof, no scoped dynamic-extent proof, and no native GPU sampling |
 
 ### FDM realization
 
@@ -450,10 +473,13 @@ intersection volume:
 
 The resolved FDM membership artifact supplies grid origin, cell size, active
 support, object identities, numeric region membership, and legend. Missing or
-incompatible membership rejects; the sampler must not silently use the full
-rectangular storage grid. Current object targeting selects active cells for the
-object after verifying that the object identity exists; the published
-membership does not yet distinguish multiple object IDs cell-by-cell.
+incompatible membership rejects for non-domain targets; the sampler must not
+silently use the full rectangular storage grid. Region targeting compares the
+per-cell numeric membership with the requested object/region legend entry.
+Object targeting does not: after verifying that the object identity exists, it
+selects every active cell. It is therefore correct only when those active cells
+are exactly the requested object's cells and is incorrect for a general
+multi-object grid.
 
 ### FEM P1 realization
 
@@ -472,6 +498,15 @@ extracts exterior tetrahedral faces, clips them in $(u,v)$, integrates the P1
 trace with physical triangle area, and applies the requested visibility
 policy. Spatial lookup is currently a direct element traversal, not the
 previously planned revision-keyed spatial index.
+
+The API admits this realization only when the flattened field has exactly
+$n_{\mathrm{comp}}$ values for every node of the complete published mesh and
+the mesh is Tet4. Target and runtime scope alter element markers after loading;
+they do not narrow the field carrier. Moreover, all three FEM dynamic extent
+tags currently derive bounds from the complete `fem.nodes` array. Thus
+`target_bounds`, `magnetic_domain`, and `universe` resolve to the same global
+projected mesh bounds (apart from padding), even for a scoped element subset.
+That behavior is executable but not a correct scoped-extent realization.
 
 ### Why node-count averaging is illegal
 
@@ -514,13 +549,14 @@ source qualification.
 | PM-N02 | linear/layered FDM | analytic volume-weighted mean/RMS and occupied support |
 | PM-N03 | arbitrary plane through skew P1 tetrahedron | barycentric value within declared tolerance |
 | PM-N04 | P1 slab/depth on skew tetrahedra | analytic integral and refinement invariance |
-| PM-N05 | partial and empty support | correct occupancy; empty excluded from extrema |
+| PM-N05 | partial and empty support under both empty policies | occupancy remains `empty`; metadata extrema and automatic ranges exclude empty bins even when the serialized payload is zero; current `include_air_as_zero` metadata path fails this gate |
 | PM-N06 | zero and non-zero vector raster | correct `u/v/normal` components and undefined orientation |
 | PM-N07 | planar FEM boundary | analytic physical-area weighted value |
 | PM-N08 | overlapping/folded FEM surface | explicit ambiguity and fold diagnostics |
 | PM-N09 | unsupported surface selector | stable rejection; no object-boundary substitution |
-| PM-N10 | FDM membership target | inactive/non-selected cells remain empty |
+| PM-N10 | FDM target membership on a multi-object grid | `object` selects only the requested object's cells; current all-active-cell object mask fails this gate |
 | PM-N11 | geometry scale sweep | unchanged dimensionless result with scale-aware tolerances |
+| PM-N12 | FEM target/scope dynamic extents | each dynamic extent follows its named target/scope rather than all mesh nodes; current global-node resolution fails this gate |
 
 ### Task 0 evidence boundary
 
@@ -556,8 +592,15 @@ Structural validation does not prove scientific correctness.
 
 - Native GPU sampling is absent.
 - FDM surface topology and FDM mesh-part/airbox scopes are absent.
+- General multi-object FDM `object` targeting is incorrect because all active
+  cells are selected after object-existence validation.
 - FEM region-boundary and named-surface topology are absent.
-- FEM higher-order basis evaluation is absent.
+- FEM carriers must be complete full-mesh nodal Tet4/P1 fields; scoped/local,
+  discontinuous, cell-centred, and higher-order carriers are absent.
+- FEM dynamic extents ignore target/scope markers and use all mesh nodes, so
+  scoped dynamic extents are incorrect and unqualified.
+- `include_air_as_zero` currently contributes empty-bin zeros to API metadata
+  extrema; this diverges from the occupancy-aware terminal range contract.
 - Source backend/device/precision are missing from planar resource metadata.
 - Scale-aware clipping tolerances and a spatial index remain required for
   production performance and scale invariance.
@@ -592,7 +635,10 @@ stable symbols, not line-number claims.
 |---|---|---|---|---|---|---|---|
 | Python monitor authoring and normalization | `packages/fullmag-py/src/fullmag/model/planar_monitor.py` | `class PlanarMonitor` | Public monitor object and lowering | all authoring lanes | `packages/fullmag-py/tests/test_planar_monitor.py::PlanarMonitorContractTests` | source + focused tests | [source](https://github.com/MateuszZelent/fullmag/blob/5138078f7fd7b65dfc231faa4aa11c02d8ebf52d/packages/fullmag-py/src/fullmag/model/planar_monitor.py) |
 | Canonical Python export | `packages/fullmag-py/src/fullmag/runtime/script_builder.py` | `_render_planar_monitors` | `SceneDocument`/IR to stage-first Python | all authoring lanes | `test_planar_monitors_roundtrip_through_scene_and_canonical_python` | source + focused tests | [source](https://github.com/MateuszZelent/fullmag/blob/5138078f7fd7b65dfc231faa4aa11c02d8ebf52d/packages/fullmag-py/src/fullmag/runtime/script_builder.py) |
+| Canonical monitor IR | `crates/fullmag-ir/src/planar_monitor.rs` | `PlanarMonitorIR`, `MonitorTargetIR`, `PlanarFrameIR`, `PlanarExtentIR`, `PlanarOperatorIR`; `axis_preset` | Own canonical monitor, target, frame, extent, and operator serialization plus preset-frame construction | all authoring lanes | `crates/fullmag-ir/tests/ir_tests.rs::planar_monitor_validation_rejects_invalid_values_and_duplicates` | source + focused tests | [source](https://github.com/MateuszZelent/fullmag/blob/5138078f7fd7b65dfc231faa4aa11c02d8ebf52d/crates/fullmag-ir/src/planar_monitor.rs) |
 | IR validation | `crates/fullmag-ir/src/validation.rs` | `validate_planar_monitors` | Identity, target, frame, extent, and operator validation | all authoring lanes | `crates/fullmag-ir/tests/ir_tests.rs::planar_monitor_validation_rejects_invalid_values_and_duplicates` | source + focused tests | [source](https://github.com/MateuszZelent/fullmag/blob/5138078f7fd7b65dfc231faa4aa11c02d8ebf52d/crates/fullmag-ir/src/validation.rs) |
+| OpenAPI monitor schema | `crates/fullmag-api/src/schemas/planar_monitors.rs` | `PlanarMonitorSchema` | Publish the canonical planar-monitor authoring schema | API authoring | OpenAPI planar monitor contract tests | source + focused tests | [source](https://github.com/MateuszZelent/fullmag/blob/5138078f7fd7b65dfc231faa4aa11c02d8ebf52d/crates/fullmag-api/src/schemas/planar_monitors.rs) |
+| OpenAPI planar field schemas | `crates/fullmag-api/src/schemas/planar_fields.rs` | `PlanarFieldQuery`, `PlanarFieldMetaResource` | Define bounded resource queries and revisioned sampling metadata | API data plane | planar field resource/OpenAPI tests | source + focused tests | [source](https://github.com/MateuszZelent/fullmag/blob/5138078f7fd7b65dfc231faa4aa11c02d8ebf52d/crates/fullmag-api/src/schemas/planar_fields.rs) |
 | Frame equations | `crates/fullmag-api/src/planar_sampling/frame.rs` | `try_from_ir` | Resolve and validate physical frame | all sampling lanes | `planar_sampling_fem_p1_linear_arbitrary_plane_is_barycentric` | source + focused tests | [source](https://github.com/MateuszZelent/fullmag/blob/5138078f7fd7b65dfc231faa4aa11c02d8ebf52d/crates/fullmag-api/src/planar_sampling/frame.rs) |
 | Backend-neutral sampler entry | `crates/fullmag-api/src/planar_sampling/contract.rs` | `sample_fdm` | Validate request and apply requested component | FDM source | `planar_sampling_fdm_constant_scalar_and_vector_basis_are_exact` | source + focused tests | [source](https://github.com/MateuszZelent/fullmag/blob/5138078f7fd7b65dfc231faa4aa11c02d8ebf52d/crates/fullmag-api/src/planar_sampling/contract.rs) |
 | Vector component semantics | `crates/fullmag-api/src/planar_sampling/contract.rs` | `apply_component` | Derive world/monitor components after reduction | FDM/FEM source | `planar_sampling_orientation_uses_monitor_basis_and_masks_zero_vectors` | source + focused tests | [source](https://github.com/MateuszZelent/fullmag/blob/5138078f7fd7b65dfc231faa4aa11c02d8ebf52d/crates/fullmag-api/src/planar_sampling/contract.rs) |
@@ -601,7 +647,9 @@ stable symbols, not line-number claims.
 | Measure-weighted reductions | `crates/fullmag-api/src/planar_sampling/reduction.rs` | `finish` | Mean, integral, RMS, extrema, and empty result semantics | FDM/FEM CPU sampler | `planar_sampling_fdm_linear_depth_is_measure_weighted_and_masks_empty_pixels` | focused tests; managed FDM CPU science pass | [source](https://github.com/MateuszZelent/fullmag/blob/5138078f7fd7b65dfc231faa4aa11c02d8ebf52d/crates/fullmag-api/src/planar_sampling/reduction.rs) |
 | FEM P1 point and volume operators | `crates/fullmag-api/src/planar_sampling/fem.rs` | `sample` | Dispatch P1 plane/slab/depth/surface | FEM CPU sampler | `planar_sampling_fem_p1_linear_arbitrary_plane_is_barycentric` | focused tests; managed/browser open | [source](https://github.com/MateuszZelent/fullmag/blob/5138078f7fd7b65dfc231faa4aa11c02d8ebf52d/crates/fullmag-api/src/planar_sampling/fem.rs) |
 | FEM physical boundary projection | `crates/fullmag-api/src/planar_sampling/surface.rs` | `sample_boundary` | Clip boundary faces and apply visibility | FEM CPU sampler | `planar_sampling_surface_clips_boundary_faces_across_pixel_footprints` | focused tests; managed/browser open | [source](https://github.com/MateuszZelent/fullmag/blob/5138078f7fd7b65dfc231faa4aa11c02d8ebf52d/crates/fullmag-api/src/planar_sampling/surface.rs) |
-| Resource extent resolution | `crates/fullmag-api/src/router_v2/handlers/data/planar_fields.rs` | `resolve_dynamic_extent` | Resolve authored dynamic bounds from FDM/FEM field support | FDM/FEM source | `planar_field_resources_publish_meta_binary_probe_png_and_etag` | focused API tests; browser RED | [source](https://github.com/MateuszZelent/fullmag/blob/5138078f7fd7b65dfc231faa4aa11c02d8ebf52d/crates/fullmag-api/src/router_v2/handlers/data/planar_fields.rs) |
+| Resource extent resolution | `crates/fullmag-api/src/router_v2/handlers/data/planar_fields.rs` | `resolve_dynamic_extent` | Resolve FDM bounds from the selected mask; currently resolve every FEM dynamic extent from all mesh nodes | FDM/FEM source | `planar_field_resources_publish_meta_binary_probe_png_and_etag` | focused API tests; scoped FEM dynamic extent RED | [source](https://github.com/MateuszZelent/fullmag/blob/5138078f7fd7b65dfc231faa4aa11c02d8ebf52d/crates/fullmag-api/src/router_v2/handlers/data/planar_fields.rs) |
+| FEM carrier admission | `crates/fullmag-api/src/router_v2/handlers/data/field_resolution.rs` | `extract_fem_field` | Require a complete nodal value tuple for every node and Tet4 connectivity before element scoping | FEM source | focused planar API tests | source + focused tests; scoped carriers unsupported | [source](https://github.com/MateuszZelent/fullmag/blob/5138078f7fd7b65dfc231faa4aa11c02d8ebf52d/crates/fullmag-api/src/router_v2/handlers/data/field_resolution.rs) |
+| Metadata extrema | `crates/fullmag-api/src/router_v2/handlers/data/planar_fields.rs` | `meta_resource` | Compute finite-value metadata extrema without consulting occupancy; currently includes serialized empty-air zero | FDM/FEM source | PM-N05 terminal gate required | known contract divergence for `include_air_as_zero` | [source](https://github.com/MateuszZelent/fullmag/blob/5138078f7fd7b65dfc231faa4aa11c02d8ebf52d/crates/fullmag-api/src/router_v2/handlers/data/planar_fields.rs) |
 | Frontend request plan | `apps/control-room/src/modules/field-map/model/fieldMapDataPlan.ts` | `buildFieldMapDataPlan` | Bound resource requests and reject illegal FDM scopes | browser | `fieldMapDataPlan.test.ts` | component tests; browser RED | [source](https://github.com/MateuszZelent/fullmag/blob/5138078f7fd7b65dfc231faa4aa11c02d8ebf52d/apps/control-room/src/modules/field-map/model/fieldMapDataPlan.ts) |
 | Revisioned frontend resources | `apps/control-room/src/kernel/resources/planarFieldResources.ts` | `usePlanarFieldMetaResource` | Typed resource hook and revision identity | browser | `planarFieldResources.test.ts` | component tests; browser RED | [source](https://github.com/MateuszZelent/fullmag/blob/5138078f7fd7b65dfc231faa4aa11c02d8ebf52d/apps/control-room/src/kernel/resources/planarFieldResources.ts) |
 | Canvas renderer | `apps/control-room/src/modules/field-map/renderer/PlanarSurface.tsx` | `PlanarSurface` | Render sampled raster and overlays | browser | `PlanarSurface.test.tsx`; Task 0 visible-canvas timeout | browser RED | [source](https://github.com/MateuszZelent/fullmag/blob/5138078f7fd7b65dfc231faa4aa11c02d8ebf52d/apps/control-room/src/modules/field-map/renderer/PlanarSurface.tsx) |
