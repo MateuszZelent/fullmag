@@ -323,12 +323,13 @@ for a lane, that lane rejects Oersted during relaxation.
 | `mu0` | vacuum permeability | `N/A^2` |
 | `gamma` | gyromagnetic ratio used with `H` | `m/(A s)` |
 | `alpha` | Gilbert damping | `1` |
-| `E` | total conservative energy | `J` |
+| $E$ | total conservative energy | $\mathrm{J}$ |
 | `g` | tangent field gradient | `A/m` |
 | `p` | direct-minimizer search direction | `A/m` |
 | `lambda` | direct-minimizer line-search step | `m/A` |
 | `V_i` | nodal/cell integration weight | `m^3` |
 | `max_torque_Apm` | maximum field equilibrium residual | `A/m` |
+| $T_{\max}^{A/m}$ | maximum field equilibrium residual used by the torque stop criterion | $\mathrm{A\,m^{-1}}$ |
 | `max_torque_T` | `mu0` times field residual | `T` |
 | `max_rhs_norm_per_s` | maximum total dynamic RHS norm | `1/s` |
 | `relaxation_time_s` | LLG-relaxation stage-local clock | `s` |
@@ -441,6 +442,7 @@ Only criteria explicitly enabled by the user participate in the disjunction. Thu
 | `max_steps`, timeout, cancellation, numerical stagnation, unsupported path, or backend error | corresponding non-convergence reason | `false` |
 
 `torque` has deterministic reporting priority when both criteria first hold in the same accepted sample. This priority changes only the reported reason, not the physical acceptance result.
+
 - a candidate LLG relaxation step whose fresh total energy exceeds the last
   accepted energy by more than the configured absolute-plus-relative numerical
   budget is rejected and rolled back before it can affect completion metrics;
@@ -460,9 +462,9 @@ Direct-minimizer line-search step sums are not time and are not exposed as
 units.
 
 Every terminal stage has exactly one typed stop reason. `energy` is a current
-convergence reason, not a compatibility-only decode value. `gradient` is
-converged only when a user-enabled torque or energy criterion has already
-completed; otherwise a degenerate direction is `numerical_stagnation`.
+convergence reason, not a compatibility-only decode value. `gradient` is never
+a convergence reason: a degenerate direction before a user-enabled torque or
+energy criterion completes is `numerical_stagnation`, with `converged=false`.
 Budgets, cancellation, unsupported paths, and backend failures never set
 `converged=true`.
 
@@ -550,6 +552,11 @@ fm.Relaxation(
 )
 ```
 
+| Python parameter | Type | Default | SI unit | Validation | Meaning | Backend support | ProblemIR destination |
+|---|---|---|---|---|---|---|---|
+| `fm.RelaxStop.torque_tolerance_apm` | `float or None` | `0.7957747154594767` | $\mathrm{A\,m^{-1}}$ | finite and positive when provided | Optional torque equilibrium threshold; `None` disables this criterion without disabling an enabled energy criterion. | FEM/FDM CPU/GPU | `StudyIR::Relaxation.stop.torque_tolerance_apm` |
+| `fm.RelaxStop.energy_tolerance_j` | `float or None` | `None` | $\mathrm{J}$ | finite and positive when provided | Optional 50-accepted-state energy-plateau threshold; `None` disables this criterion without disabling an enabled torque criterion. | FEM/FDM CPU/GPU | `StudyIR::Relaxation.stop.energy_tolerance_j` |
+
 The parity benchmark is authored through the same stage-first public surface:
 
 ```python
@@ -578,8 +585,9 @@ energy-increase budget, tightening by `1/sqrt(2)`, and an explicit controller
 floor. Requested physical criteria and the resolved controller policy are both
 recorded in provenance. Validation rejects NaN and infinity as well as values
 outside their documented domains. An explicit `None` survives every facade and
-disables an optional diagnostic criterion; the mandatory convergence torque
-criterion cannot be disabled for a run that claims equilibrium.
+disables only its corresponding physical criterion. A run may claim equilibrium
+when its enabled torque or energy criterion completes; at least one stop
+criterion, physical or budget, remains required by `RelaxStop` validation.
 
 Adaptive timestep authoring is also part of the canonical contract. The
 `AdaptiveTimestep` constructor records whether `dt_min` was explicitly
@@ -830,6 +838,7 @@ from the current runs.
 | `scripts/validate_fem_relaxation_equilibrium_parity.py` | `compare_equilibrium_states` | Compares converged CPU/GPU states without requiring equal step counts. |
 | `scripts/analysis/fem_gpu_benchmark.py` | `equilibrium_parity_summary` | Produces the versioned parity summary from benchmark rows. |
 | `examples/bench_fem_gpu_long.py` | `solver_time_to_tolerance_evidence` | Computes native accepted-step time to the first torque-qualified state. |
+| `packages/fullmag-py/src/fullmag/model/study.py` | `class RelaxStop` | Validates optional public torque and energy thresholds and lowers present values into canonical stop fields. |
 | `crates/fullmag-runner/src/relaxation/convergence.rs` | `relaxation_stop_criteria_satisfied` | Rust implementation owner that must be aligned with the canonical user-enabled torque-or-energy predicate. |
 | `backends/fem/cpu/mfem/runtime/stage_completion.hpp` | `update_stage_completion_from_stats` | Declares the FEM completion owner that must implement deterministic reason selection for the canonical predicate. |
 | `crates/fullmag-runner/src/native_fem/runtime_info.rs` | `stage_completion_from_ffi` | Maps the native typed completion reason and metric into public runner completion provenance. |

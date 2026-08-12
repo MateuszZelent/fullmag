@@ -11,7 +11,7 @@
   "equations": [
     {
       "id": "eq-relaxation-any-enabled-stop",
-      "symbols": ["C_T", "C_E", "C_stop", "tau_T", "epsilon_E"],
+      "symbols": ["C_T", "C_E", "C_stop", "T_max_Apm", "E", "tau_T", "epsilon_E"],
       "sources": ["relaxation-stop-criteria", "native-stage-completion", "ffi-stage-completion"]
     }
   ],
@@ -35,6 +35,18 @@
       "si_unit": "1"
     },
     {
+      "id": "T_max_Apm",
+      "latex": "T_{\\max}^{A/m}",
+      "meaning": "maximum field equilibrium residual used by the torque stop criterion",
+      "si_unit": "\\mathrm{A\\,m^{-1}}"
+    },
+    {
+      "id": "E",
+      "latex": "E",
+      "meaning": "total conservative energy",
+      "si_unit": "\\mathrm{J}"
+    },
+    {
       "id": "tau_T",
       "latex": "\\tau_{\\mathrm T}",
       "meaning": "user-authored torque tolerance",
@@ -53,6 +65,12 @@
       "path": "packages/fullmag-py/src/fullmag/model/dynamics.py",
       "symbol": "class AdaptiveTimestep",
       "responsibility": "Preserve explicit dt_min authoring so advanced adaptive policies cannot be satisfied by an omitted sentinel."
+    },
+    {
+      "id": "relax-stop-authoring",
+      "path": "packages/fullmag-py/src/fullmag/model/study.py",
+      "symbol": "class RelaxStop",
+      "responsibility": "Validate optional public torque and energy thresholds and lower present values into canonical stop fields."
     },
     {
       "id": "chunked-relax-authoring",
@@ -98,6 +116,27 @@
     }
   ],
   "public_api": {
-    "parameters": []
+    "parameters": [
+      {
+        "python": "fm.RelaxStop.torque_tolerance_apm",
+        "type": "float or None",
+        "default": "0.7957747154594767",
+        "si_unit": "\\mathrm{A\\,m^{-1}}",
+        "validation": "finite and positive when provided",
+        "meaning": "Optional torque equilibrium threshold; `None` disables this criterion without disabling an enabled energy criterion.",
+        "backend_support": "FEM/FDM CPU/GPU",
+        "problem_ir": "StudyIR::Relaxation.stop.torque_tolerance_apm"
+      },
+      {
+        "python": "fm.RelaxStop.energy_tolerance_j",
+        "type": "float or None",
+        "default": "None",
+        "si_unit": "\\mathrm{J}",
+        "validation": "finite and positive when provided",
+        "meaning": "Optional 50-accepted-state energy-plateau threshold; `None` disables this criterion without disabling an enabled torque criterion.",
+        "backend_support": "FEM/FDM CPU/GPU",
+        "problem_ir": "StudyIR::Relaxation.stop.energy_tolerance_j"
+      }
+    ]
   }
 }
