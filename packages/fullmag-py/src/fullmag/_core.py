@@ -50,9 +50,9 @@ def resample_fem_to_fdm_grid(
 ) -> dict[str, Any] | None:
     """Resample FEM node-based magnetization to FDM grid cell centers.
 
-    Returns dict with 'values', 'n_located', 'n_outside', 'n_total' if the
-    next stage is FDM. Returns None if no resampling is needed (next stage is
-    not FDM) or if native core is unavailable.
+    Returns dict with values, transfer counts, and the canonical target-grid
+    identity if the next stage is FDM. Returns None if no resampling is needed
+    (next stage is not FDM) or if native core is unavailable.
     """
     if _native_core is None:
         return None
