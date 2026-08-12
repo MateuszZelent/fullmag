@@ -22,14 +22,17 @@ use std::time::{Duration, Instant};
 use crate::native_fem;
 use crate::relaxation::{RelaxationEnergyPlateauWindow, RelaxationTorqueConfirmation};
 use crate::types::{
-    AuxiliaryArtifact, ExecutedRun, RunError, RunResult, RunStatus, StepAction, StepStats,
+    AuxiliaryArtifact, ExecutedRun, RunError, RunResult, RunStatus, StageFemMeshIdentity,
+    StepAction, StepStats,
 };
 use crate::ExecutionProvenance;
 
 /// Internal relaxation timestep for equilibrium preparation in eigen analysis.
-/// This is NOT the user's simulation dt — it is a fixed internal parameter
-/// used only for pre-eigen relaxation (small enough for safe LLG convergence).
-const RELAX_DT: f64 = 1e-13;
+/// This is NOT the user's simulation dt.  It is deliberately larger than the
+/// time-domain example default: the modal path must reach an accepted static
+/// state within its bounded pre-eigen budget, while the overdamped RHS remains
+/// stable for the FEM fields used here.
+const RELAX_DT: f64 = 1e-11;
 const RELAX_MAX_STEPS: u64 = 4_000;
 
 /// DOF threshold above which LOBPCG sparse eigensolver is used instead of
@@ -299,6 +302,607 @@ struct SharedDomainLinearizationState {
     periodic_mesh_certificate_map_binding_digest: String,
 }
 
+/// Immutable execution input produced by an accepted FEM relaxation stage and
+/// consumed by one following single-k eigen stage.
+///
+/// This is intentionally distinct from [`AcceptedFemEigenEquilibriumHandoff`],
+/// which carries a post-linearization state between samples of one k path.
+#[derive(Debug, Clone)]
+pub struct AcceptedFemRelaxStageHandoff {
+    source_run_id: String,
+    source_stage_id: String,
+    source_stage_kind: String,
+    stage_fem_mesh_generation_id: String,
+    source_mesh_topology_sha256: String,
+    node_count: usize,
+    indexing_sha256: String,
+    part_registry_sha256: String,
+    completion_sha256: String,
+    equilibrium_content_sha256: String,
+    equilibrium_magnetization: Vec<Vector3>,
+    content_sha256: String,
+}
+
+impl AcceptedFemRelaxStageHandoff {
+    pub fn from_completed_relax(
+        source_run_id: &str,
+        source_stage_id: &str,
+        source_stage_kind: &str,
+        source_stage_is_relaxation: bool,
+        source_mesh: &crate::types::FemMeshPayload,
+        completion: &fullmag_ir::StageCompletionIR,
+        equilibrium_magnetization: Vec<Vector3>,
+    ) -> Result<Self, RunError> {
+        if source_run_id.trim().is_empty()
+            || source_stage_id.trim().is_empty()
+            || source_stage_kind.trim().is_empty()
+            || !source_stage_is_relaxation
+        {
+            return Err(RunError {
+                message: "relax_stage_handoff_invalid_source_stage: source run/stage identity must name an executed relaxation stage"
+                    .to_string(),
+            });
+        }
+        let coherent_metric = matches!(
+            (completion.reason, completion.metric),
+            (
+                Some(fullmag_ir::StageStopReason::Torque),
+                Some(fullmag_ir::StageMetricKind::MaxTorqueApm)
+            ) | (
+                Some(fullmag_ir::StageStopReason::Energy),
+                Some(fullmag_ir::StageMetricKind::TotalEnergyPlateauRangeJ)
+            )
+        );
+        let threshold_satisfied = matches!(
+            (completion.metric_value, completion.threshold),
+            (Some(value), Some(threshold))
+                if value.is_finite()
+                    && threshold.is_finite()
+                    && threshold >= 0.0
+                    && value <= threshold
+        );
+        if completion.status != "completed"
+            || !completion.converged
+            || !coherent_metric
+            || !threshold_satisfied
+        {
+            return Err(RunError {
+                message: "relax_stage_handoff_completion_not_accepted: completion must be completed, converged, use a coherent equilibrium metric, and satisfy its threshold"
+                    .to_string(),
+            });
+        }
+        if equilibrium_magnetization.len() != source_mesh.nodes.len()
+            || equilibrium_magnetization
+                .iter()
+                .flatten()
+                .any(|value| !value.is_finite())
+        {
+            return Err(RunError {
+                message: format!(
+                    "relax_stage_handoff_invalid_equilibrium: expected {} finite vectors, got {}",
+                    source_mesh.nodes.len(),
+                    equilibrium_magnetization.len()
+                ),
+            });
+        }
+
+        let source_mesh_topology_sha256 = crate::types::fem_mesh_topology_fingerprint(source_mesh);
+        let stage_fem_mesh_generation_id = source_mesh
+            .generation_id
+            .as_deref()
+            .ok_or_else(|| RunError {
+                message: "relax_stage_handoff_missing_mesh_generation_id".to_string(),
+            })?
+            .to_string();
+        if stage_fem_mesh_generation_id != source_mesh_topology_sha256
+            || !is_sha256_digest(&stage_fem_mesh_generation_id)
+        {
+            return Err(RunError {
+                message: "relax_stage_handoff_mesh_generation_not_full_topology_sha256".to_string(),
+            });
+        }
+
+        let indexing_sha256 = shared_domain_content_digest(
+            "relax_stage_mesh_indexing",
+            &serde_json::json!({
+                "cells": source_mesh.cells,
+                "element_markers": source_mesh.element_markers,
+                "facets": source_mesh.facets,
+                "boundary_markers": source_mesh.boundary_markers,
+                "periodic_boundary_pairs": source_mesh.periodic_boundary_pairs,
+                "periodic_node_pairs": source_mesh.periodic_node_pairs,
+            }),
+        )?;
+        let part_registry_sha256 = shared_domain_content_digest(
+            "relax_stage_mesh_part_registry",
+            &serde_json::json!({
+                "object_segments": source_mesh.object_segments,
+                "mesh_parts": source_mesh.mesh_parts,
+                "domain_mesh_mode": source_mesh.domain_mesh_mode,
+                "domain_frame": source_mesh.domain_frame,
+            }),
+        )?;
+        let completion_sha256 = shared_domain_content_digest(
+            "relax_stage_completion",
+            &serde_json::to_value(completion).map_err(|error| RunError {
+                message: format!("relax_stage_handoff_completion_serialization_failed: {error}"),
+            })?,
+        )?;
+        let equilibrium_content_sha256 = vector_field_content_sha256(&equilibrium_magnetization);
+        let node_count = source_mesh.nodes.len();
+        let content_sha256 = relax_stage_handoff_content_sha256(
+            source_run_id,
+            source_stage_id,
+            source_stage_kind,
+            &stage_fem_mesh_generation_id,
+            &source_mesh_topology_sha256,
+            node_count,
+            &indexing_sha256,
+            &part_registry_sha256,
+            &completion_sha256,
+            &equilibrium_content_sha256,
+        )?;
+        Ok(Self {
+            source_run_id: source_run_id.to_string(),
+            source_stage_id: source_stage_id.to_string(),
+            source_stage_kind: source_stage_kind.to_string(),
+            stage_fem_mesh_generation_id,
+            source_mesh_topology_sha256,
+            node_count,
+            indexing_sha256,
+            part_registry_sha256,
+            completion_sha256,
+            equilibrium_content_sha256,
+            equilibrium_magnetization,
+            content_sha256,
+        })
+    }
+
+    fn validate_target_plan(&self, plan: &FemEigenPlanIR) -> Result<(), RunError> {
+        if !matches!(plan.equilibrium, EquilibriumSourceIR::RelaxedInitialState) {
+            return Err(RunError {
+                message: "relax_stage_handoff_requires_relaxed_initial_state_target".to_string(),
+            });
+        }
+        if matches!(plan.k_sampling, Some(KSamplingIR::Path { .. }))
+            || !plan.bias_field_samples.is_empty()
+        {
+            return Err(RunError {
+                message: "relax_stage_handoff_requires_single_k_target".to_string(),
+            });
+        }
+        let target_mesh = crate::types::FemMeshPayload::from(plan);
+        let target_topology = crate::types::fem_mesh_topology_fingerprint(&target_mesh);
+        let target_generation = target_mesh.generation_id.as_deref().unwrap_or_default();
+        let target_indexing = shared_domain_content_digest(
+            "relax_stage_mesh_indexing",
+            &serde_json::json!({
+                "cells": target_mesh.cells,
+                "element_markers": target_mesh.element_markers,
+                "facets": target_mesh.facets,
+                "boundary_markers": target_mesh.boundary_markers,
+                "periodic_boundary_pairs": target_mesh.periodic_boundary_pairs,
+                "periodic_node_pairs": target_mesh.periodic_node_pairs,
+            }),
+        )?;
+        let target_parts = shared_domain_content_digest(
+            "relax_stage_mesh_part_registry",
+            &serde_json::json!({
+                "object_segments": target_mesh.object_segments,
+                "mesh_parts": target_mesh.mesh_parts,
+                "domain_mesh_mode": target_mesh.domain_mesh_mode,
+                "domain_frame": target_mesh.domain_frame,
+            }),
+        )?;
+        if target_generation != self.stage_fem_mesh_generation_id
+            || target_topology != self.source_mesh_topology_sha256
+            || target_mesh.nodes.len() != self.node_count
+            || target_indexing != self.indexing_sha256
+            || target_parts != self.part_registry_sha256
+        {
+            return Err(RunError {
+                message: "relax_stage_handoff_mesh_identity_mismatch: generation/topology/node indexing/part registry must match exactly"
+                    .to_string(),
+            });
+        }
+        let target_equilibrium_sha256 =
+            vector_field_content_sha256(&plan.equilibrium_magnetization);
+        if target_equilibrium_sha256 != self.equilibrium_content_sha256
+            || plan.equilibrium_magnetization != self.equilibrium_magnetization
+        {
+            return Err(RunError {
+                message: "relax_stage_handoff_equilibrium_content_mismatch".to_string(),
+            });
+        }
+        let recomputed = relax_stage_handoff_content_sha256(
+            &self.source_run_id,
+            &self.source_stage_id,
+            &self.source_stage_kind,
+            &self.stage_fem_mesh_generation_id,
+            &self.source_mesh_topology_sha256,
+            self.node_count,
+            &self.indexing_sha256,
+            &self.part_registry_sha256,
+            &self.completion_sha256,
+            &self.equilibrium_content_sha256,
+        )?;
+        if recomputed != self.content_sha256 {
+            return Err(RunError {
+                message: "relax_stage_handoff_content_sha256_mismatch".to_string(),
+            });
+        }
+        Ok(())
+    }
+
+    pub fn content_sha256(&self) -> &str {
+        &self.content_sha256
+    }
+
+    pub fn equilibrium_content_sha256(&self) -> &str {
+        &self.equilibrium_content_sha256
+    }
+
+    fn provenance_json(&self) -> serde_json::Value {
+        serde_json::json!({
+            "schema_version": "AcceptedFemRelaxStageHandoff.v1",
+            "source_run_id": self.source_run_id,
+            "source_stage_id": self.source_stage_id,
+            "source_stage_kind": self.source_stage_kind,
+            "stage_fem_mesh_generation_id": self.stage_fem_mesh_generation_id,
+            "source_mesh_topology_sha256": self.source_mesh_topology_sha256,
+            "node_count": self.node_count,
+            "indexing_sha256": self.indexing_sha256,
+            "part_registry_sha256": self.part_registry_sha256,
+            "completion_sha256": self.completion_sha256,
+            "equilibrium_content_sha256": self.equilibrium_content_sha256,
+            "content_sha256": self.content_sha256,
+        })
+    }
+}
+
+fn vector_field_content_sha256(values: &[Vector3]) -> String {
+    let mut hash = Sha256::new();
+    hash.update(b"AcceptedFemRelaxStageHandoff.m0.v1\0");
+    hash.update((values.len() as u64).to_le_bytes());
+    for vector in values {
+        for value in vector {
+            hash.update(value.to_bits().to_le_bytes());
+        }
+    }
+    format!("sha256:{:x}", hash.finalize())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn relax_stage_handoff_content_sha256(
+    source_run_id: &str,
+    source_stage_id: &str,
+    source_stage_kind: &str,
+    generation_id: &str,
+    topology_sha256: &str,
+    node_count: usize,
+    indexing_sha256: &str,
+    part_registry_sha256: &str,
+    completion_sha256: &str,
+    equilibrium_content_sha256: &str,
+) -> Result<String, RunError> {
+    shared_domain_content_digest(
+        "accepted_fem_relax_stage_handoff",
+        &serde_json::json!({
+            "schema_version": "AcceptedFemRelaxStageHandoff.v1",
+            "source_run_id": source_run_id,
+            "source_stage_id": source_stage_id,
+            "source_stage_kind": source_stage_kind,
+            "stage_fem_mesh_generation_id": generation_id,
+            "source_mesh_topology_sha256": topology_sha256,
+            "node_count": node_count,
+            "indexing_sha256": indexing_sha256,
+            "part_registry_sha256": part_registry_sha256,
+            "completion_sha256": completion_sha256,
+            "equilibrium_content_sha256": equilibrium_content_sha256,
+        }),
+    )
+}
+
+fn prepare_single_k_stage_continuation(
+    plan: &FemEigenPlanIR,
+    handoff: &AcceptedFemRelaxStageHandoff,
+) -> Result<FemEigenPlanIR, RunError> {
+    handoff.validate_target_plan(plan)?;
+    let mut prepared = plan.clone();
+    prepared.equilibrium = EquilibriumSourceIR::Provided;
+    prepared.equilibrium_magnetization = handoff.equilibrium_magnetization.clone();
+    Ok(prepared)
+}
+
+fn bind_stage_continuation_artifacts(
+    run: &mut ExecutedRun,
+    handoff: &AcceptedFemRelaxStageHandoff,
+) -> Result<(), RunError> {
+    if run.initial_magnetization != handoff.equilibrium_magnetization
+        || run.result.final_magnetization != handoff.equilibrium_magnetization
+    {
+        return Err(RunError {
+            message: "relax_stage_handoff_consumed_equilibrium_mismatch".to_string(),
+        });
+    }
+    let equilibrium_source = serde_json::json!({
+        "kind": "relaxed_initial_state",
+        "handoff": "stage_continuation",
+        "content_sha256": handoff.content_sha256,
+        "equilibrium_content_sha256": handoff.equilibrium_content_sha256,
+    });
+    let mut bound_summary = false;
+    for artifact in &mut run.auxiliary_artifacts {
+        let is_summary = artifact.relative_path == "eigen/metadata/eigen_summary.json";
+        let is_spectrum = artifact.relative_path == "eigen/spectrum.json";
+        let is_source = artifact.relative_path == "eigen/metadata/equilibrium_source.json";
+        let is_mode = artifact.relative_path.starts_with("eigen/modes/")
+            && artifact.relative_path.ends_with(".json");
+        if !(is_summary || is_spectrum || is_source || is_mode) {
+            continue;
+        }
+        let mut value: serde_json::Value =
+            serde_json::from_slice(&artifact.bytes).map_err(|error| RunError {
+                message: format!(
+                    "relax_stage_handoff_invalid_json_artifact '{}': {error}",
+                    artifact.relative_path
+                ),
+            })?;
+        let relaxation_steps = value
+            .get("relaxation_steps")
+            .and_then(serde_json::Value::as_u64);
+        if is_source {
+            value = equilibrium_source.clone();
+        } else if let Some(object) = value.as_object_mut() {
+            if is_summary || is_spectrum {
+                if relaxation_steps != Some(0) {
+                    return Err(RunError {
+                        message: "relax_stage_handoff_second_relaxation_detected".to_string(),
+                    });
+                }
+                object.insert("equilibrium_source".to_string(), equilibrium_source.clone());
+                let diagnostics = object
+                    .entry("solver_diagnostics")
+                    .or_insert_with(|| serde_json::json!({}));
+                let diagnostics = diagnostics.as_object_mut().ok_or_else(|| RunError {
+                    message: "relax_stage_handoff_solver_diagnostics_not_object".to_string(),
+                })?;
+                diagnostics.insert(
+                    "relax_to_eigen_handoff_sha256".to_string(),
+                    serde_json::json!(handoff.content_sha256),
+                );
+                diagnostics.insert(
+                    "relax_to_eigen_handoff".to_string(),
+                    handoff.provenance_json(),
+                );
+                bound_summary |= is_summary;
+            } else if is_mode {
+                object.insert(
+                    "relax_to_eigen_handoff_sha256".to_string(),
+                    serde_json::json!(handoff.content_sha256),
+                );
+                object.insert(
+                    "equilibrium_content_sha256".to_string(),
+                    serde_json::json!(handoff.equilibrium_content_sha256),
+                );
+            }
+        }
+        artifact.bytes = serde_json::to_vec_pretty(&value).map_err(|error| RunError {
+            message: format!(
+                "relax_stage_handoff_artifact_serialization_failed '{}': {error}",
+                artifact.relative_path
+            ),
+        })?;
+    }
+    if !bound_summary {
+        return Err(RunError {
+            message: "relax_stage_handoff_missing_eigen_summary".to_string(),
+        });
+    }
+    Ok(())
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct AcceptedFemEigenEquilibriumHandoff {
+    stage_mesh_identity: StageFemMeshIdentity,
+    source_mesh_topology_sha256: String,
+    equilibrium_magnetization: Vec<Vector3>,
+    equilibrium_artifact_sha256: String,
+    linearization_state_sha256: String,
+    content_sha256: String,
+}
+
+impl AcceptedFemEigenEquilibriumHandoff {
+    pub(crate) fn from_accepted_linearization(
+        plan: &FemEigenPlanIR,
+        equilibrium_magnetization: Vec<Vector3>,
+        equilibrium_artifact_sha256: String,
+        linearization_state_sha256: String,
+    ) -> Result<Self, RunError> {
+        if equilibrium_magnetization.len() != plan.mesh.nodes.len()
+            || equilibrium_magnetization
+                .iter()
+                .flatten()
+                .any(|value| !value.is_finite())
+        {
+            return Err(RunError {
+                message: format!(
+                    "relax_to_eigen_handoff_invalid_equilibrium: expected {} finite vectors, got {}",
+                    plan.mesh.nodes.len(),
+                    equilibrium_magnetization.len()
+                ),
+            });
+        }
+        if !is_sha256_digest(&equilibrium_artifact_sha256)
+            || !is_sha256_digest(&linearization_state_sha256)
+        {
+            return Err(RunError {
+                message: "relax_to_eigen_handoff_invalid_digest: equilibrium and linearization identities must be sha256 digests"
+                    .to_string(),
+            });
+        }
+        let stage_mesh_identity = StageFemMeshIdentity::from_fem_eigen_plan(plan);
+        let source_mesh_topology_sha256 = plan.mesh.topology_fingerprint_v6();
+        if stage_mesh_identity.generation_id() != source_mesh_topology_sha256 {
+            return Err(RunError {
+                message: "relax_to_eigen_stage_mesh_identity_not_full_topology_sha256".to_string(),
+            });
+        }
+        let payload = serde_json::json!({
+            "schema_version": "AcceptedFemEigenEquilibriumHandoff.v1",
+            "stage_fem_mesh_generation_id": stage_mesh_identity.generation_id(),
+            "source_mesh_topology_sha256": &source_mesh_topology_sha256,
+            "equilibrium_artifact_sha256": &equilibrium_artifact_sha256,
+            "linearization_state_sha256": &linearization_state_sha256,
+        });
+        let content_sha256 = shared_domain_content_digest("relax_to_eigen_handoff", &payload)?;
+        Ok(Self {
+            stage_mesh_identity,
+            source_mesh_topology_sha256,
+            equilibrium_magnetization,
+            equilibrium_artifact_sha256,
+            linearization_state_sha256,
+            content_sha256,
+        })
+    }
+
+    pub(crate) fn validate_target_plan(&self, plan: &FemEigenPlanIR) -> Result<(), RunError> {
+        let target_identity = StageFemMeshIdentity::from_fem_eigen_plan(plan);
+        let target_topology_sha256 = plan.mesh.topology_fingerprint_v6();
+        if target_identity != self.stage_mesh_identity
+            || target_identity.generation_id() != target_topology_sha256
+            || target_topology_sha256 != self.source_mesh_topology_sha256
+        {
+            return Err(RunError {
+                message: format!(
+                    "relax_to_eigen_mesh_identity_mismatch: source generation/topology='{}'/'{}', target generation/topology='{}'/'{}'",
+                    self.stage_mesh_identity.generation_id(),
+                    self.source_mesh_topology_sha256,
+                    target_identity.generation_id(),
+                    target_topology_sha256,
+                ),
+            });
+        }
+        Ok(())
+    }
+
+    fn validate_consumed_linearization(
+        &self,
+        plan: &FemEigenPlanIR,
+        equilibrium: &[Vector3],
+        state: &SharedDomainLinearizationState,
+    ) -> Result<(), RunError> {
+        self.validate_target_plan(plan)?;
+        if equilibrium != self.equilibrium_magnetization {
+            return Err(RunError {
+                message:
+                    "relax_to_eigen_equilibrium_mismatch: provided state differs from accepted relax state"
+                        .to_string(),
+            });
+        }
+        if state.equilibrium_artifact_digest != self.equilibrium_artifact_sha256
+            || state.linearization_state_digest != self.linearization_state_sha256
+        {
+            return Err(RunError {
+                message: format!(
+                    "relax_to_eigen_linearization_mismatch: accepted equilibrium/linearization='{}/{}', consumed='{}/{}'",
+                    self.equilibrium_artifact_sha256,
+                    self.linearization_state_sha256,
+                    state.equilibrium_artifact_digest,
+                    state.linearization_state_digest,
+                ),
+            });
+        }
+        Ok(())
+    }
+
+    pub(crate) fn equilibrium_magnetization(&self) -> &[Vector3] {
+        &self.equilibrium_magnetization
+    }
+
+    pub(crate) fn content_sha256(&self) -> &str {
+        &self.content_sha256
+    }
+
+    pub(crate) fn source_mesh_topology_sha256(&self) -> &str {
+        &self.source_mesh_topology_sha256
+    }
+
+    fn provenance_json(&self) -> serde_json::Value {
+        serde_json::json!({
+            "schema_version": "AcceptedFemEigenEquilibriumHandoff.v1",
+            "stage_fem_mesh_generation_id": self.stage_mesh_identity.generation_id(),
+            "source_mesh_topology_sha256": self.source_mesh_topology_sha256,
+            "equilibrium_artifact_sha256": self.equilibrium_artifact_sha256,
+            "linearization_state_sha256": self.linearization_state_sha256,
+            "content_sha256": self.content_sha256,
+        })
+    }
+}
+
+pub(crate) fn accepted_relax_to_eigen_handoff_from_run(
+    plan: &FemEigenPlanIR,
+    run: &ExecutedRun,
+) -> Result<AcceptedFemEigenEquilibriumHandoff, RunError> {
+    let summary = run
+        .auxiliary_artifacts
+        .iter()
+        .find(|artifact| artifact.relative_path == "eigen/metadata/eigen_summary.json")
+        .ok_or_else(|| RunError {
+            message: "missing_relax_to_eigen_handoff_summary".to_string(),
+        })
+        .and_then(|artifact| {
+            serde_json::from_slice::<serde_json::Value>(&artifact.bytes).map_err(|error| RunError {
+                message: format!("invalid_relax_to_eigen_handoff_summary: {error}"),
+            })
+        })?;
+    let diagnostics = summary
+        .get("solver_diagnostics")
+        .and_then(serde_json::Value::as_object)
+        .ok_or_else(|| RunError {
+            message: "missing_relax_to_eigen_handoff_diagnostics".to_string(),
+        })?;
+    let handoff_json = diagnostics
+        .get("relax_to_eigen_handoff")
+        .and_then(serde_json::Value::as_object)
+        .ok_or_else(|| RunError {
+            message: "missing_relax_to_eigen_handoff_binding".to_string(),
+        })?;
+    let required = |field: &str| -> Result<String, RunError> {
+        handoff_json
+            .get(field)
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_string)
+            .ok_or_else(|| RunError {
+                message: format!("missing_relax_to_eigen_handoff_field: {field}"),
+            })
+    };
+    let source_topology = required("source_mesh_topology_sha256")?;
+    let equilibrium_artifact = required("equilibrium_artifact_sha256")?;
+    let linearization_state = required("linearization_state_sha256")?;
+    let declared_content = required("content_sha256")?;
+    let handoff = AcceptedFemEigenEquilibriumHandoff::from_accepted_linearization(
+        plan,
+        run.result.final_magnetization.clone(),
+        equilibrium_artifact.clone(),
+        linearization_state.clone(),
+    )?;
+    let diagnostic_string =
+        |field: &str| diagnostics.get(field).and_then(serde_json::Value::as_str);
+    if source_topology != handoff.source_mesh_topology_sha256()
+        || declared_content != handoff.content_sha256()
+        || diagnostic_string("source_mesh_topology_sha256") != Some(source_topology.as_str())
+        || diagnostic_string("relax_to_eigen_handoff_sha256") != Some(declared_content.as_str())
+        || diagnostic_string("equilibrium_artifact_sha256") != Some(equilibrium_artifact.as_str())
+        || diagnostic_string("linearization_state_sha256") != Some(linearization_state.as_str())
+    {
+        return Err(RunError {
+            message: "relax_to_eigen_handoff_summary_identity_mismatch".to_string(),
+        });
+    }
+    Ok(handoff)
+}
+
 #[derive(Debug, Clone)]
 struct LoadedEquilibriumArtifactV6 {
     value: serde_json::Value,
@@ -386,7 +990,7 @@ pub(crate) fn execute_baseline_fem_eigen(
     plan: &FemEigenPlanIR,
     outputs: &[OutputIR],
 ) -> Result<ExecutedRun, RunError> {
-    execute_fem_eigen_inner(plan, outputs, false, false, None, 0, None)
+    execute_fem_eigen_inner(plan, outputs, false, false, None, 0, None, None)
 }
 
 #[allow(dead_code)]
@@ -395,17 +999,30 @@ pub(crate) fn execute_baseline_fem_eigen_with_progress(
     outputs: &[OutputIR],
     progress: &mut FemEigenProgressCallback<'_>,
 ) -> Result<ExecutedRun, RunError> {
-    execute_fem_eigen_inner(plan, outputs, false, false, Some(progress), 0, None)
+    execute_fem_eigen_inner(plan, outputs, false, false, Some(progress), 0, None, None)
 }
 
 pub(crate) fn execute_cpu_fem_eigen(
     plan: &FemEigenPlanIR,
     outputs: &[OutputIR],
 ) -> Result<ExecutedRun, RunError> {
+    execute_cpu_fem_eigen_with_handoff(plan, outputs, None)
+}
+
+pub(crate) fn execute_cpu_fem_eigen_with_handoff(
+    plan: &FemEigenPlanIR,
+    outputs: &[OutputIR],
+    handoff: Option<&AcceptedFemEigenEquilibriumHandoff>,
+) -> Result<ExecutedRun, RunError> {
     if shared_domain_k0_modal_requested(plan)
         && !native_shared_domain_magnetic_assembly_available(plan)
     {
-        return Err(shared_domain_k0_runtime_unavailable_error());
+        let mut error = shared_domain_k0_runtime_unavailable_error();
+        if let Some(detail) = native_shared_domain_magnetic_assembly_error(plan) {
+            error.message.push_str("; producer validation: ");
+            error.message.push_str(&detail);
+        }
+        return Err(error);
     }
     if bias_field_sweep_requested(plan) {
         return execute_bias_field_sweep(plan, outputs, false, None);
@@ -418,6 +1035,7 @@ pub(crate) fn execute_cpu_fem_eigen(
         None,
         0,
         None,
+        handoff,
     )
 }
 
@@ -429,7 +1047,12 @@ pub(crate) fn execute_cpu_fem_eigen_with_progress(
     if shared_domain_k0_modal_requested(plan)
         && !native_shared_domain_magnetic_assembly_available(plan)
     {
-        return Err(shared_domain_k0_runtime_unavailable_error());
+        let mut error = shared_domain_k0_runtime_unavailable_error();
+        if let Some(detail) = native_shared_domain_magnetic_assembly_error(plan) {
+            error.message.push_str("; producer validation: ");
+            error.message.push_str(&detail);
+        }
+        return Err(error);
     }
     if bias_field_sweep_requested(plan) {
         return execute_bias_field_sweep(plan, outputs, false, Some(progress));
@@ -442,7 +1065,29 @@ pub(crate) fn execute_cpu_fem_eigen_with_progress(
         Some(progress),
         0,
         None,
+        None,
     )
+}
+
+pub(crate) fn execute_cpu_fem_eigen_with_progress_and_stage_handoff(
+    plan: &FemEigenPlanIR,
+    outputs: &[OutputIR],
+    progress: &mut FemEigenProgressCallback<'_>,
+    handoff: &AcceptedFemRelaxStageHandoff,
+) -> Result<ExecutedRun, RunError> {
+    let prepared = prepare_single_k_stage_continuation(plan, handoff)?;
+    let mut run = execute_fem_eigen_inner(
+        &prepared,
+        outputs,
+        false,
+        native_cpu_modal_window_enabled(&prepared),
+        Some(progress),
+        0,
+        None,
+        None,
+    )?;
+    bind_stage_continuation_artifacts(&mut run, handoff)?;
+    Ok(run)
 }
 
 /// GPU-accelerated FEM eigensolver.
@@ -458,10 +1103,24 @@ pub(crate) fn execute_gpu_fem_eigen(
     outputs: &[OutputIR],
     progress: Option<&mut FemEigenProgressCallback<'_>>,
 ) -> Result<ExecutedRun, RunError> {
+    execute_gpu_fem_eigen_with_handoff(plan, outputs, progress, None)
+}
+
+pub(crate) fn execute_gpu_fem_eigen_with_handoff(
+    plan: &FemEigenPlanIR,
+    outputs: &[OutputIR],
+    progress: Option<&mut FemEigenProgressCallback<'_>>,
+    handoff: Option<&AcceptedFemEigenEquilibriumHandoff>,
+) -> Result<ExecutedRun, RunError> {
     if shared_domain_k0_modal_requested(plan)
         && !native_shared_domain_magnetic_assembly_available(plan)
     {
-        return Err(shared_domain_k0_runtime_unavailable_error());
+        let mut error = shared_domain_k0_runtime_unavailable_error();
+        if let Some(detail) = native_shared_domain_magnetic_assembly_error(plan) {
+            error.message.push_str("; producer validation: ");
+            error.message.push_str(&detail);
+        }
+        return Err(error);
     }
     if bias_field_sweep_requested(plan) {
         return execute_bias_field_sweep(plan, outputs, true, progress);
@@ -471,7 +1130,13 @@ pub(crate) fn execute_gpu_fem_eigen(
     }
 
     if native_gpu_shared_domain_modal_supported(plan) {
-        return execute_fem_eigen_inner(plan, outputs, true, true, progress, 0, None);
+        return execute_fem_eigen_inner(plan, outputs, true, true, progress, 0, None, handoff);
+    }
+
+    if handoff.is_some() {
+        return Err(RunError {
+            message: "relax_to_eigen_handoff_requires_shared_domain_modal_execution".to_string(),
+        });
     }
 
     let native_result = native_fem::solve_native_modal_eigen(native_fem::NativeModalEigenRequest {
@@ -517,6 +1182,18 @@ pub(crate) fn execute_gpu_fem_eigen(
             native_result.error_message, native_result.diagnostics_json
         ),
     })
+}
+
+pub(crate) fn execute_gpu_fem_eigen_with_progress_and_stage_handoff(
+    plan: &FemEigenPlanIR,
+    outputs: &[OutputIR],
+    progress: Option<&mut FemEigenProgressCallback<'_>>,
+    handoff: &AcceptedFemRelaxStageHandoff,
+) -> Result<ExecutedRun, RunError> {
+    let prepared = prepare_single_k_stage_continuation(plan, handoff)?;
+    let mut run = execute_gpu_fem_eigen(&prepared, outputs, progress)?;
+    bind_stage_continuation_artifacts(&mut run, handoff)?;
+    Ok(run)
 }
 
 fn native_gpu_shared_domain_modal_supported(plan: &FemEigenPlanIR) -> bool {
@@ -651,6 +1328,7 @@ fn execute_native_gpu_k0_kittel_modal(
         node_mass_weights_from_tangent_mass(&mass, active_nodes).as_deref(),
         solver_diagnostics,
         relaxation_steps,
+        None,
         None,
         0,
     )?;
@@ -1252,6 +1930,27 @@ fn execute_bias_field_sweep(
     try_gpu: bool,
     mut progress: Option<&mut FemEigenProgressCallback<'_>>,
 ) -> Result<ExecutedRun, RunError> {
+    execute_bias_field_sweep_with_executor(plan, |sample_plan, sample_position| {
+        execute_fem_eigen_inner(
+            sample_plan,
+            outputs,
+            try_gpu,
+            true,
+            progress.as_deref_mut(),
+            sample_position,
+            Some(&sample_plan.equilibrium_magnetization),
+            None,
+        )
+    })
+}
+
+fn execute_bias_field_sweep_with_executor<F>(
+    plan: &FemEigenPlanIR,
+    mut execute_sample: F,
+) -> Result<ExecutedRun, RunError>
+where
+    F: FnMut(&FemEigenPlanIR, usize) -> Result<ExecutedRun, RunError>,
+{
     validate_bias_field_sweep_oracle_contract(plan)?;
     let samples = validate_bias_field_samples(plan)?;
     let base_initial_magnetization = plan.equilibrium_magnetization.clone();
@@ -1265,21 +1964,24 @@ fn execute_bias_field_sweep(
             &base_initial_magnetization,
             previous_accepted_magnetization.as_deref(),
         )?;
-        let run = execute_fem_eigen_inner(
-            &sample_plan,
-            outputs,
-            try_gpu,
-            true,
-            progress.as_deref_mut(),
-            sample_position,
-            Some(&sample_plan.equilibrium_magnetization),
-        )?;
+        let run = match execute_sample(&sample_plan, sample_position) {
+            Ok(run) => run,
+            Err(error) if runs.is_empty() => return Err(error),
+            Err(error) => {
+                return finalize_failed_bias_field_sweep(
+                    runs,
+                    samples.len(),
+                    sample.equilibrium_policy,
+                    sample.continuation_seed,
+                    error,
+                );
+            }
+        };
         if !bias_field_sample_is_complete(run.result.status) {
-            return preserve_interrupted_bias_field_sweep_run(
-                run,
+            runs.push(run);
+            return merge_bias_field_sweep_runs(
+                runs,
                 samples.len(),
-                runs.len(),
-                sample.sample_index,
                 sample.equilibrium_policy,
                 sample.continuation_seed,
             );
@@ -1292,12 +1994,22 @@ fn execute_bias_field_sweep(
                 .flatten()
                 .any(|component| !component.is_finite())
         {
-            return Err(RunError {
+            let error = RunError {
                 message: format!(
                     "FEM bias-field sweep sample {} did not produce a finite accepted equilibrium",
                     sample.sample_index
                 ),
-            });
+            };
+            if runs.is_empty() {
+                return Err(error);
+            }
+            return finalize_failed_bias_field_sweep(
+                runs,
+                samples.len(),
+                sample.equilibrium_policy,
+                sample.continuation_seed,
+                error,
+            );
         }
         previous_accepted_magnetization = Some(run.result.final_magnetization.clone());
         runs.push(run);
@@ -1313,11 +2025,367 @@ fn execute_bias_field_sweep(
     )
 }
 
+fn native_field_sweep_status(status: RunStatus) -> &'static str {
+    match status {
+        RunStatus::Completed => "complete",
+        RunStatus::Cancelled | RunStatus::Paused => "interrupted",
+        RunStatus::Failed => "corrupt",
+    }
+}
+
+fn native_field_sweep_stop_reason(status: RunStatus) -> Option<&'static str> {
+    match status {
+        RunStatus::Completed => None,
+        RunStatus::Cancelled => Some("cancel_requested"),
+        RunStatus::Paused => Some("pause_requested"),
+        RunStatus::Failed => Some("failed"),
+    }
+}
+
+fn required_string_from_json(
+    value: &serde_json::Value,
+    key: &str,
+    context: &str,
+) -> Result<String, RunError> {
+    value
+        .get(key)
+        .and_then(serde_json::Value::as_str)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+        .ok_or_else(|| RunError {
+            message: format!("native field sweep requires {context}.{key}"),
+        })
+}
+
+fn required_sha256_from_json(
+    value: &serde_json::Value,
+    key: &str,
+    context: &str,
+) -> Result<String, RunError> {
+    let digest = required_string_from_json(value, key, context)?;
+    if !is_sha256_digest(&digest) {
+        return Err(RunError {
+            message: format!("native field sweep requires {context}.{key} as sha256:<hex>"),
+        });
+    }
+    Ok(digest)
+}
+
+fn native_field_sweep_execution(diagnostics: &serde_json::Value, key: &str) -> serde_json::Value {
+    diagnostics.get(key).cloned().unwrap_or_else(|| {
+        serde_json::json!({
+            "backend": "fem",
+            "device": "not_provided",
+            "precision": "not_provided",
+            "execution_mode": "modal",
+            "engine": "not_provided",
+            "implementation_id": null,
+            "status": "source_artifact",
+            "fallback_used": null,
+            "fallback_reason": null,
+        })
+    })
+}
+
+fn native_field_sweep_content_digest(artifact: &serde_json::Value) -> Result<String, RunError> {
+    let mut normalized = artifact.clone();
+    let object = normalized.as_object_mut().ok_or_else(|| RunError {
+        message: "native field sweep artifact must be a JSON object".to_string(),
+    })?;
+    object.insert(
+        "revision".to_string(),
+        serde_json::Value::String(String::new()),
+    );
+    object.insert(
+        "content_sha256".to_string(),
+        serde_json::Value::String(String::new()),
+    );
+    let bytes = serde_json::to_vec(&normalized).map_err(|error| RunError {
+        message: format!("failed to serialize native field sweep digest envelope: {error}"),
+    })?;
+    Ok(format!("sha256:{:x}", Sha256::digest(bytes)))
+}
+
+fn build_native_field_sweep_artifact(
+    spectrum: &serde_json::Value,
+    branches: &serde_json::Value,
+    diagnostics: &serde_json::Value,
+    artifacts: &[AuxiliaryArtifact],
+    requested_sample_count: usize,
+    sweep_status: RunStatus,
+    sweep_stop_reason: Option<&str>,
+) -> Result<serde_json::Value, RunError> {
+    let spectrum_revision = published_artifact_sha256(artifacts, "eigen/spectrum.v2.json")?;
+    let branches_revision = published_artifact_sha256(artifacts, "eigen/branches.v2.json")?;
+    let samples = spectrum
+        .get("samples")
+        .and_then(serde_json::Value::as_array)
+        .ok_or_else(|| RunError {
+            message: "native field sweep requires spectrum.samples".to_string(),
+        })?;
+    let mut branch_ids_by_mode = BTreeMap::<(u64, u64), u64>::new();
+    for branch in branches
+        .get("branches")
+        .and_then(serde_json::Value::as_array)
+        .ok_or_else(|| RunError {
+            message: "native field sweep requires branches.branches".to_string(),
+        })?
+    {
+        let branch_id = branch
+            .get("branch_id")
+            .and_then(serde_json::Value::as_u64)
+            .ok_or_else(|| RunError {
+                message: "native field sweep requires integer branch_id".to_string(),
+            })?;
+        for point in branch
+            .get("points")
+            .and_then(serde_json::Value::as_array)
+            .ok_or_else(|| RunError {
+                message: "native field sweep requires branch points".to_string(),
+            })?
+        {
+            let sample_index = point
+                .get("sample_index")
+                .and_then(serde_json::Value::as_u64)
+                .ok_or_else(|| RunError {
+                    message: "native field sweep requires branch point sample_index".to_string(),
+                })?;
+            let raw_mode_index = point
+                .get("raw_mode_index")
+                .and_then(serde_json::Value::as_u64)
+                .ok_or_else(|| RunError {
+                    message: "native field sweep requires branch point raw_mode_index".to_string(),
+                })?;
+            if branch_ids_by_mode
+                .insert((sample_index, raw_mode_index), branch_id)
+                .is_some()
+            {
+                return Err(RunError {
+                    message: "native field sweep rejects duplicate branch point mapping"
+                        .to_string(),
+                });
+            }
+        }
+    }
+    let status = native_field_sweep_status(sweep_status);
+    let mut output_samples = Vec::with_capacity(samples.len());
+    for sample in samples {
+        let sample_index = sample
+            .get("sample_index")
+            .and_then(serde_json::Value::as_u64)
+            .ok_or_else(|| RunError {
+                message: "native field sweep requires spectrum sample_index".to_string(),
+            })?;
+        let field = sample
+            .get("external_field_a_per_m")
+            .and_then(serde_json::Value::as_array)
+            .filter(|values| values.len() == 3)
+            .ok_or_else(|| RunError {
+                message: format!("native field sweep sample {sample_index} has no physical external_field_a_per_m"),
+            })?;
+        let mut bias_field_a_per_m = [0.0; 3];
+        for (component_index, value) in field.iter().enumerate() {
+            bias_field_a_per_m[component_index] = value.as_f64().filter(|value| value.is_finite()).ok_or_else(|| RunError {
+                message: format!("native field sweep sample {sample_index} has non-finite external_field_a_per_m"),
+            })?;
+        }
+        let topology = serde_json::json!({
+            "mesh_id": required_string_from_json(sample, "mesh_id", "spectrum sample")?,
+            "topology_revision": required_string_from_json(sample, "topology_revision", "spectrum sample")?,
+            "indexing": "sample_index_then_raw_mode_index",
+            "sample_axis": "sample_id",
+            "mode_axis": "mode_id",
+            "node_count": serde_json::Value::Null,
+        });
+        let sample_id = format!("bias-field-sample-{sample_index:04}");
+        let sample_status = sample
+            .get("status")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("complete");
+        let sample_stop_reason =
+            sample
+                .get("stop_reason")
+                .cloned()
+                .unwrap_or(if sample_status == "complete" {
+                    serde_json::Value::Null
+                } else {
+                    serde_json::json!(sweep_stop_reason.unwrap_or("incomplete"))
+                });
+        let modes = sample
+            .get("modes")
+            .and_then(serde_json::Value::as_array)
+            .ok_or_else(|| RunError {
+                message: format!("native field sweep sample {sample_index} requires modes"),
+            })?;
+        let mut output_modes = Vec::new();
+        let mut branch_ids = Vec::new();
+        for mode in modes {
+            let raw_mode_index = mode
+                .get("raw_mode_index")
+                .or_else(|| mode.get("index"))
+                .and_then(serde_json::Value::as_u64)
+                .ok_or_else(|| RunError {
+                    message: format!(
+                        "native field sweep sample {sample_index} requires raw_mode_index"
+                    ),
+                })?;
+            let Some(mode_field_id) = mode
+                .get("mode_field_id")
+                .and_then(serde_json::Value::as_str)
+            else {
+                continue;
+            };
+            let mode_field_resource_key =
+                required_string_from_json(mode, "mode_field_resource_key", "spectrum mode")?;
+            let branch_id = branch_ids_by_mode
+                .get(&(sample_index, raw_mode_index))
+                .copied()
+                .ok_or_else(|| RunError {
+                    message: format!("native field sweep sample {sample_index} mode {raw_mode_index} has no branch mapping"),
+                })?;
+            if !branch_ids.contains(&branch_id) {
+                branch_ids.push(branch_id);
+            }
+            output_modes.push(serde_json::json!({
+                "sample_id": sample_id,
+                "mode_id": format!("sample-{sample_index:04}/mode-{raw_mode_index:04}"),
+                "raw_mode_index": raw_mode_index,
+                "branch_id": branch_id,
+                "frequency_hz": mode.get("frequency_hz").cloned().unwrap_or(serde_json::Value::Null),
+                "angular_frequency_rad_per_s": mode.get("angular_frequency_rad_per_s").cloned().unwrap_or(serde_json::Value::Null),
+                "mode_artifact_path": mode_metadata_path(sample_index as usize, raw_mode_index),
+                "mode_field_id": mode_field_id,
+                "mode_field_resource_key": mode_field_resource_key,
+                "residual_relative_l2": mode.get("residual_relative_l2").cloned().unwrap_or(serde_json::Value::Null),
+                "source_revision": spectrum_revision,
+                "status": sample_status,
+            }));
+        }
+        let first_mode = modes.first().ok_or_else(|| RunError {
+            message: format!("native field sweep sample {sample_index} has no modes"),
+        })?;
+        output_samples.push(serde_json::json!({
+            "sample_id": sample_id,
+            "sample_index": sample_index,
+            "scan_axis": {
+                "kind": "bias_field",
+                "coordinate": "external_field_a_per_m",
+                "unit": "A/m",
+                "display_conversions": [{"name": "mu0_h", "unit": "T", "scale": MU0}],
+            },
+            "bias_field_a_per_m": bias_field_a_per_m,
+            "bias_field_mu0_t": bias_field_a_per_m.map(|value| value * MU0),
+            "equilibrium_artifact_sha256": required_sha256_from_json(first_mode, "equilibrium_artifact_sha256", "spectrum mode")?,
+            "linearization_state_sha256": required_sha256_from_json(first_mode, "linearization_state_sha256", "spectrum mode")?,
+            "operator_input_signature_sha256": required_sha256_from_json(first_mode, "operator_input_signature_sha256", "spectrum mode")?,
+            "topology": topology,
+            "branch_ids": branch_ids,
+            "modes": output_modes,
+            "status": sample_status,
+            "stop_reason": sample_stop_reason,
+        }));
+    }
+    let topology = output_samples
+        .first()
+        .and_then(|sample| sample.get("topology"))
+        .cloned()
+        .unwrap_or_else(|| {
+            serde_json::json!({
+                "mesh_id": "topology:not_provided",
+                "topology_revision": "topology:not_provided",
+                "indexing": "sample_index_then_raw_mode_index",
+                "sample_axis": "sample_id",
+                "mode_axis": "mode_id",
+                "node_count": null,
+            })
+        });
+    let completed_sample_count = output_samples
+        .iter()
+        .filter(|sample| sample.get("status") == Some(&serde_json::json!("complete")))
+        .count();
+    let complete = sweep_status == RunStatus::Completed
+        && completed_sample_count == requested_sample_count
+        && output_samples.len() == requested_sample_count;
+    let mut artifact = serde_json::json!({
+        "schema_version": "eigen/field_sweep.v1",
+        "artifact_id": "analysis:eigen:field-sweep",
+        "source": {"kind": "modal_eigensolve", "artifact": "eigen/spectrum.v2.json", "revision": spectrum_revision},
+        "source_revision": spectrum_revision,
+        "run_id": "run:current",
+        "stage_id": "stage:eigenmodes",
+        "scope_id": "scope:bias-field",
+        "runtime_id": "runtime:native-fem",
+        "revision": "",
+        "content_sha256": "",
+        "status": status,
+        "complete": complete,
+        "interrupted": status == "interrupted",
+        "stop_reason": if complete { serde_json::Value::Null } else { serde_json::json!(sweep_stop_reason.unwrap_or("incomplete")) },
+        "requested_sample_count": requested_sample_count,
+        "completed_sample_count": completed_sample_count,
+        "scan_axis": {"kind": "bias_field", "coordinate": "external_field_a_per_m", "unit": "A/m", "display_conversions": [{"name": "mu0_h", "unit": "T", "scale": MU0}]},
+        "units": {"frequency": "Hz", "angular_frequency": "rad/s", "bias_field": "A/m", "bias_field_display": "mu0 H (T)", "response_amplitude": null, "linewidth": null, "q_factor": null, "covariance": null},
+        "topology": topology,
+        "requested_execution": native_field_sweep_execution(diagnostics, "requested_execution"),
+        "resolved_execution": native_field_sweep_execution(diagnostics, "resolved_execution"),
+        "samples": output_samples,
+        "cross_artifact_refs": [
+            {"relation": "source_spectrum", "artifact": "eigen/spectrum.v2.json", "revision": spectrum_revision},
+            {"relation": "source_branches", "artifact": "eigen/branches.v2.json", "revision": branches_revision},
+        ],
+    });
+    let content_digest = native_field_sweep_content_digest(&artifact)?;
+    let object = artifact.as_object_mut().ok_or_else(|| RunError {
+        message: "native field sweep artifact must be a JSON object".to_string(),
+    })?;
+    object.insert("revision".to_string(), serde_json::json!(content_digest));
+    object.insert(
+        "content_sha256".to_string(),
+        serde_json::json!(content_digest),
+    );
+    Ok(artifact)
+}
+
 fn merge_bias_field_sweep_runs(
     runs: Vec<ExecutedRun>,
     sample_count: usize,
     equilibrium_policy: fullmag_ir::BiasFieldSweepEquilibriumPolicyIR,
     continuation_seed: fullmag_ir::BiasFieldSweepContinuationSeedIR,
+) -> Result<ExecutedRun, RunError> {
+    merge_bias_field_sweep_runs_with_terminal(
+        runs,
+        sample_count,
+        equilibrium_policy,
+        continuation_seed,
+        None,
+    )
+}
+
+fn finalize_failed_bias_field_sweep(
+    runs: Vec<ExecutedRun>,
+    sample_count: usize,
+    equilibrium_policy: fullmag_ir::BiasFieldSweepEquilibriumPolicyIR,
+    continuation_seed: fullmag_ir::BiasFieldSweepContinuationSeedIR,
+    error: RunError,
+) -> Result<ExecutedRun, RunError> {
+    if error.message.trim().is_empty() {
+        return Err(error);
+    }
+    merge_bias_field_sweep_runs_with_terminal(
+        runs,
+        sample_count,
+        equilibrium_policy,
+        continuation_seed,
+        Some((RunStatus::Failed, error.message)),
+    )
+}
+
+fn merge_bias_field_sweep_runs_with_terminal(
+    runs: Vec<ExecutedRun>,
+    sample_count: usize,
+    equilibrium_policy: fullmag_ir::BiasFieldSweepEquilibriumPolicyIR,
+    continuation_seed: fullmag_ir::BiasFieldSweepContinuationSeedIR,
+    terminal: Option<(RunStatus, String)>,
 ) -> Result<ExecutedRun, RunError> {
     let mut runs = runs.into_iter();
     let first_run = runs.next().ok_or_else(|| RunError {
@@ -1326,15 +2394,28 @@ fn merge_bias_field_sweep_runs(
     let mut all_runs = Vec::with_capacity(sample_count.max(1));
     all_runs.push(first_run);
     all_runs.extend(runs);
-    let sweep_status = all_runs
+    let inferred_sweep_status = all_runs
         .iter()
         .find_map(|run| (run.result.status != RunStatus::Completed).then_some(run.result.status))
         .unwrap_or(RunStatus::Completed);
+    let sweep_status = terminal
+        .as_ref()
+        .map(|(status, _)| *status)
+        .unwrap_or(inferred_sweep_status);
     let sweep_complete = sweep_status == RunStatus::Completed
         && all_runs
             .iter()
             .all(|run| run.result.status == RunStatus::Completed);
     let sweep_status_label = run_status_label(sweep_status);
+    let artifact_status_label = native_field_sweep_status(sweep_status);
+    let sweep_stop_reason = terminal
+        .as_ref()
+        .map(|(_, stop_reason)| stop_reason.as_str())
+        .or_else(|| native_field_sweep_stop_reason(sweep_status));
+    let completed_sample_count = all_runs
+        .iter()
+        .filter(|run| run.result.status == RunStatus::Completed)
+        .count();
 
     let mut spectrum_samples = Vec::new();
     let mut branch_points = BTreeMap::<u64, Vec<serde_json::Value>>::new();
@@ -1348,30 +2429,47 @@ fn merge_bias_field_sweep_runs(
     let mut artifact_paths = std::collections::BTreeSet::new();
 
     for run in &all_runs {
+        let include_completed_sample = run.result.status == RunStatus::Completed;
         for artifact in &run.auxiliary_artifacts {
             match artifact.relative_path.as_str() {
                 "eigen/spectrum.v2.json" => {
                     let spectrum = parse_sweep_artifact(artifact, "eigen/spectrum.v2.json")?;
-                    if let Some(samples) = spectrum.get("samples").and_then(|v| v.as_array()) {
-                        spectrum_samples.extend(samples.iter().cloned());
+                    if include_completed_sample {
+                        if let Some(samples) = spectrum.get("samples").and_then(|v| v.as_array()) {
+                            spectrum_samples.extend(samples.iter().cloned().map(|mut sample| {
+                                if let Some(object) = sample.as_object_mut() {
+                                    object.insert(
+                                        "status".to_string(),
+                                        serde_json::json!("complete"),
+                                    );
+                                    object
+                                        .insert("stop_reason".to_string(), serde_json::Value::Null);
+                                }
+                                sample
+                            }));
+                        }
                     }
                 }
                 "eigen/branches.v2.json" => {
                     let branches = parse_sweep_artifact(artifact, "eigen/branches.v2.json")?;
-                    if let Some(entries) = branches.get("branches").and_then(|v| v.as_array()) {
-                        for branch in entries {
-                            let branch_id = branch
-                                .get("branch_id")
-                                .and_then(serde_json::Value::as_u64)
-                                .unwrap_or(0);
-                            branch_templates
-                                .entry(branch_id)
-                                .or_insert_with(|| branch.clone());
-                            if let Some(points) = branch.get("points").and_then(|v| v.as_array()) {
-                                branch_points
+                    if include_completed_sample {
+                        if let Some(entries) = branches.get("branches").and_then(|v| v.as_array()) {
+                            for branch in entries {
+                                let branch_id = branch
+                                    .get("branch_id")
+                                    .and_then(serde_json::Value::as_u64)
+                                    .unwrap_or(0);
+                                branch_templates
                                     .entry(branch_id)
-                                    .or_default()
-                                    .extend(points.iter().cloned());
+                                    .or_insert_with(|| branch.clone());
+                                if let Some(points) =
+                                    branch.get("points").and_then(|v| v.as_array())
+                                {
+                                    branch_points
+                                        .entry(branch_id)
+                                        .or_default()
+                                        .extend(points.iter().cloned());
+                                }
                             }
                         }
                     }
@@ -1382,8 +2480,10 @@ fn merge_bias_field_sweep_runs(
                     if summary_template.is_none() {
                         summary_template = Some(summary.clone());
                     }
-                    if let Some(modes) = summary.get("modes").and_then(|v| v.as_array()) {
-                        summary_modes.extend(modes.iter().cloned());
+                    if include_completed_sample {
+                        if let Some(modes) = summary.get("modes").and_then(|v| v.as_array()) {
+                            summary_modes.extend(modes.iter().cloned());
+                        }
                     }
                     if let Some(diagnostics) = summary.get("solver_diagnostics") {
                         sample_solver_diagnostics.push(serde_json::json!({
@@ -1412,6 +2512,12 @@ fn merge_bias_field_sweep_runs(
                 | "eigen/dispersion.csv"
                 | "eigen/dispersion/branch_table.csv" => {}
                 _ => {
+                    if !include_completed_sample
+                        && (artifact.relative_path.starts_with("eigen/modes/")
+                            || artifact.relative_path.starts_with("eigen/mode_fields"))
+                    {
+                        continue;
+                    }
                     if artifact_paths.insert(artifact.relative_path.clone()) {
                         artifacts.push(artifact.clone());
                     }
@@ -1494,13 +2600,22 @@ fn merge_bias_field_sweep_runs(
                 "source": "bias_field_samples",
                 "postsolve_oracle": "none",
                 "sample_count": sample_count,
+                "requested_sample_count": sample_count,
+                "completed_sample_count": completed_sample_count,
+                "status": artifact_status_label,
+                "run_status": sweep_status_label,
+                "stop_reason": sweep_stop_reason,
+                "complete": sweep_complete,
                 "independent_solves": true,
                 "equilibrium_policy": bias_field_equilibrium_policy_label(equilibrium_policy),
                 "continuation_seed": bias_field_continuation_seed_label(continuation_seed),
                 "continuation_seed_scope": "first_sample_bootstrap",
             }),
         );
-        object.insert("status".to_string(), serde_json::json!(sweep_status_label));
+        object.insert(
+            "status".to_string(),
+            serde_json::json!(artifact_status_label),
+        );
         object.insert("complete".to_string(), serde_json::json!(sweep_complete));
     }
     if let Some(object) = summary.as_object_mut() {
@@ -1511,7 +2626,10 @@ fn merge_bias_field_sweep_runs(
         object.insert("modes".to_string(), serde_json::Value::Array(summary_modes));
         object.insert("solver_diagnostics".to_string(), diagnostics.clone());
         object.insert("sample_count".to_string(), serde_json::json!(sample_count));
-        object.insert("status".to_string(), serde_json::json!(sweep_status_label));
+        object.insert(
+            "status".to_string(),
+            serde_json::json!(artifact_status_label),
+        );
         object.insert("complete".to_string(), serde_json::json!(sweep_complete));
     }
 
@@ -1525,24 +2643,32 @@ fn merge_bias_field_sweep_runs(
         "eigen/diagnostics/solver.v1.json",
         &diagnostics,
     )?);
-    artifacts.push(json_artifact(
-        "eigen/branches.v2.json",
-        &serde_json::json!({
-            "schema_version": "eigen_branches.v2",
-            "solver_model": summary["solver_kind"],
+    let branches_payload = serde_json::json!({
+        "schema_version": "eigen_branches.v2",
+        "solver_model": summary["solver_kind"],
+        "tracking_score_source": "seed_only",
+        "modal_overlap_available": false,
+        "branches": branches,
+        "diagnostics": {
             "tracking_score_source": "seed_only",
             "modal_overlap_available": false,
-            "branches": branches,
-            "diagnostics": {
-                "tracking_score_source": "seed_only",
-                "modal_overlap_available": false,
-                "status": sweep_status_label,
-                "complete": sweep_complete,
-            },
-        }),
-    )?);
+            "status": sweep_status_label,
+            "complete": sweep_complete,
+        },
+    });
+    artifacts.push(json_artifact("eigen/branches.v2.json", &branches_payload)?);
+    let field_sweep = build_native_field_sweep_artifact(
+        &spectrum,
+        &branches_payload,
+        &diagnostics,
+        &artifacts,
+        sample_count,
+        sweep_status,
+        sweep_stop_reason,
+    )?;
+    artifacts.push(json_artifact("eigen/field_sweep.v1.json", &field_sweep)?);
 
-    let manifest = update_sweep_manifest(
+    let mut manifest = update_sweep_manifest(
         manifest_template.ok_or_else(|| RunError {
             message: "bias-field sweep is missing frequency-domain manifest".to_string(),
         })?,
@@ -1550,6 +2676,26 @@ fn merge_bias_field_sweep_runs(
         &diagnostics,
         sample_count,
     )?;
+    if let Some(artifact_index) = manifest
+        .get_mut("artifacts")
+        .and_then(serde_json::Value::as_object_mut)
+    {
+        artifact_index.insert(
+            "field_sweep_v1_path".to_string(),
+            serde_json::json!("eigen/field_sweep.v1.json"),
+        );
+    }
+    if let Some(resources) = manifest
+        .get_mut("resources")
+        .and_then(serde_json::Value::as_object_mut)
+    {
+        resources.insert(
+            "field_sweep_resource_key".to_string(),
+            serde_json::json!(
+                "/v2/sessions/current/analysis/frequency-domain/eigen/field-sweep.v1"
+            ),
+        );
+    }
     artifacts.push(json_artifact(
         "frequency_domain/manifest.v1.json",
         &manifest,
@@ -1907,6 +3053,62 @@ fn pa_e4b_airbox_size_m(plan: &FemEigenPlanIR) -> Result<f64, RunError> {
         });
     }
     Ok(max_extent * factor)
+}
+
+/// Resolve the physical Robin coefficient used by both the native static
+/// FEM demag path and the shared-domain modal operator.  The coefficient is
+/// based on the open-axis extent of the actual mesh; the public airbox
+/// `factor` controls domain construction/metadata and is not an additional
+/// multiplier for the boundary condition.
+fn shared_domain_robin_beta_m(plan: &FemEigenPlanIR) -> Result<Option<f64>, RunError> {
+    let Some(config) = plan.air_box_config.as_ref() else {
+        return Ok(None);
+    };
+    if matches!(
+        config.bc_kind.as_deref(),
+        Some("dirichlet") | Some("pure_neumann")
+    ) {
+        return Ok(None);
+    }
+    let coefficient_factor = config.robin_beta_factor.unwrap_or(2.0);
+    if !coefficient_factor.is_finite() || coefficient_factor <= 0.0 {
+        return Err(RunError {
+            message: "shared-domain Robin beta factor must be positive".to_string(),
+        });
+    }
+    let mut min_corner = [f64::INFINITY; 3];
+    let mut max_corner = [f64::NEG_INFINITY; 3];
+    for node in &plan.mesh.nodes {
+        for axis in 0..3 {
+            min_corner[axis] = min_corner[axis].min(node[axis]);
+            max_corner[axis] = max_corner[axis].max(node[axis]);
+        }
+    }
+    let mut periodic_axis = [false; 3];
+    for pair in &plan.mesh.periodic_boundary_pairs {
+        if let Some(translation) = pair.translation {
+            for axis in 0..3 {
+                periodic_axis[axis] |= translation[axis].abs() > 1.0e-15;
+            }
+        }
+    }
+    let reference_extent = (0..3)
+        .filter(|axis| !periodic_axis[*axis])
+        .map(|axis| max_corner[axis] - min_corner[axis])
+        .filter(|extent| extent.is_finite() && *extent > 0.0)
+        .fold(0.0_f64, f64::max)
+        .max(
+            (0..3)
+                .map(|axis| max_corner[axis] - min_corner[axis])
+                .filter(|extent| extent.is_finite() && *extent > 0.0)
+                .fold(0.0_f64, f64::max),
+        );
+    if !(reference_extent.is_finite() && reference_extent > 0.0) {
+        return Err(RunError {
+            message: "shared-domain Robin beta requires a positive mesh extent".to_string(),
+        });
+    }
+    Ok(Some(coefficient_factor / (reference_extent * 0.5)))
 }
 
 #[derive(Debug, Clone)]
@@ -4201,15 +5403,10 @@ fn build_native_shared_domain_modal_problem<'a>(
             });
         }
     };
-    let airbox_size = pa_e4b_airbox_size_m(plan)?;
     let robin_beta = if boundary_kind == "robin" {
-        let factor = config.robin_beta_factor.unwrap_or(2.0);
-        if !factor.is_finite() || factor <= 0.0 {
-            return Err(RunError {
-                message: "shared-domain modal Robin beta factor must be positive".to_string(),
-            });
-        }
-        factor / airbox_size
+        shared_domain_robin_beta_m(plan)?.ok_or_else(|| RunError {
+            message: "shared-domain modal Robin beta is unavailable".to_string(),
+        })?
     } else {
         0.0
     };
@@ -4470,12 +5667,9 @@ fn validate_native_shared_domain_certificate_producer(
         Some(_) => return Err(modal_v6_error("airbox_boundary_kind_unsupported")),
     };
     let robin_beta = if boundary_kind == "robin" {
-        let factor = config.robin_beta_factor.unwrap_or(2.0);
-        let airbox_size = pa_e4b_airbox_size_m(plan)?;
-        if !factor.is_finite() || factor <= 0.0 || !airbox_size.is_finite() || airbox_size <= 0.0 {
-            return Err(modal_v6_error("airbox_robin_gauge_invalid"));
-        }
-        factor / airbox_size
+        shared_domain_robin_beta_m(plan)
+            .map_err(|_| modal_v6_error("airbox_robin_gauge_invalid"))?
+            .ok_or_else(|| modal_v6_error("airbox_robin_gauge_invalid"))?
     } else {
         0.0
     };
@@ -4504,6 +5698,12 @@ fn validate_native_shared_domain_certificate_producer(
 // accepted v6 certificate binding that will cross the FFI boundary.
 pub(crate) fn native_shared_domain_magnetic_assembly_available(plan: &FemEigenPlanIR) -> bool {
     validate_native_shared_domain_certificate_producer(plan).is_ok()
+}
+
+fn native_shared_domain_magnetic_assembly_error(plan: &FemEigenPlanIR) -> Option<String> {
+    validate_native_shared_domain_certificate_producer(plan)
+        .err()
+        .map(|error| error.message)
 }
 
 fn shared_domain_k0_runtime_unavailable_error() -> RunError {
@@ -4563,23 +5763,7 @@ fn validate_shared_domain_modal_scope(
             ),
         });
     }
-    let reference_node = topology
-        .magnetic_node_volumes
-        .iter()
-        .position(|volume| *volume > 0.0)
-        .ok_or_else(|| RunError {
-            message: "shared-domain modal linearization requires at least one magnetic node"
-                .to_string(),
-        })?;
-    let reference = equilibrium[reference_node];
-    let reference_norm = vector_norm(reference);
-    if !reference_norm.is_finite() || reference_norm <= 0.0 {
-        return Err(RunError {
-            message:
-                "shared-domain modal linearization equilibrium contains a zero magnetic vector"
-                    .to_string(),
-        });
-    }
+    let mut magnetic_node_count = 0usize;
     for (node, (volume, magnetization)) in topology
         .magnetic_node_volumes
         .iter()
@@ -4589,20 +5773,40 @@ fn validate_shared_domain_modal_scope(
         if *volume <= 0.0 {
             continue;
         }
+        magnetic_node_count += 1;
         let norm_error = (vector_norm(*magnetization) - 1.0).abs();
-        let deviation = vector_norm([
-            magnetization[0] - reference[0],
-            magnetization[1] - reference[1],
-            magnetization[2] - reference[2],
-        ]);
-        if !norm_error.is_finite()
-            || norm_error > 1.0e-8
-            || !deviation.is_finite()
-            || deviation > 1.0e-8
-        {
+        if !norm_error.is_finite() || norm_error > 1.0e-8 {
             return Err(RunError {
                 message: format!(
-                    "shared-domain modal production scope requires a uniform normalized equilibrium (node {node} differs from the reference texture)"
+                    "shared-domain modal production scope requires normalized equilibrium (node {node} has norm error {norm_error:.3e})"
+                ),
+            });
+        }
+    }
+    if magnetic_node_count == 0 {
+        return Err(RunError {
+            message: "shared-domain modal linearization requires at least one magnetic node"
+                .to_string(),
+        });
+    }
+    // A k=0 periodic reduction identifies paired magnetic nodes.  The static
+    // equilibrium may be textured inside the unit cell (for example around an
+    // antidot), but it must be periodic across every identified pair.
+    for (pair_id, node_a, node_b) in &topology.periodic_node_pairs {
+        let node_a = *node_a as usize;
+        let node_b = *node_b as usize;
+        if topology.magnetic_node_volumes[node_a] <= 0.0
+            || topology.magnetic_node_volumes[node_b] <= 0.0
+        {
+            continue;
+        }
+        let a = equilibrium[node_a];
+        let b = equilibrium[node_b];
+        let mismatch = vector_norm([a[0] - b[0], a[1] - b[1], a[2] - b[2]]);
+        if !mismatch.is_finite() || mismatch > 1.0e-8 {
+            return Err(RunError {
+                message: format!(
+                    "shared-domain modal production scope requires periodic equilibrium across pair '{pair_id}' (nodes {node_a}/{node_b}, mismatch {mismatch:.3e})"
                 ),
             });
         }
@@ -4909,7 +6113,16 @@ fn execute_fem_eigen_inner(
     mut progress: Option<&mut FemEigenProgressCallback<'_>>,
     artifact_sample_index: usize,
     initial_magnetization_override: Option<&[Vector3]>,
+    expected_handoff: Option<&AcceptedFemEigenEquilibriumHandoff>,
 ) -> Result<ExecutedRun, RunError> {
+    if let Some(handoff) = expected_handoff {
+        if !matches!(plan.equilibrium, fullmag_ir::EquilibriumSourceIR::Provided) {
+            return Err(RunError {
+                message: "relax_to_eigen_handoff_requires_provided_equilibrium_target".to_string(),
+            });
+        }
+        handoff.validate_target_plan(plan)?;
+    }
     if plan.precision != fullmag_ir::ExecutionPrecision::Double {
         return Err(RunError {
             message: if try_gpu {
@@ -4924,7 +6137,12 @@ fn execute_fem_eigen_inner(
         && shared_domain_k0_modal_requested(plan)
         && !native_shared_domain_magnetic_assembly_available(plan)
     {
-        return Err(shared_domain_k0_runtime_unavailable_error());
+        let mut error = shared_domain_k0_runtime_unavailable_error();
+        if let Some(detail) = native_shared_domain_magnetic_assembly_error(plan) {
+            error.message.push_str("; producer validation: ");
+            error.message.push_str(&detail);
+        }
+        return Err(error);
     }
     reject_unsupported_floquet_dynamic_demag(&plan.spin_wave_bc, plan.operator.include_demag)?;
     let num_modes = plan.count as usize;
@@ -5020,16 +6238,8 @@ fn execute_fem_eigen_inner(
     let real_eigenpairs = if complex_reduction {
         Vec::new()
     } else if is_full_2x2 {
-        let (stiffness, mass) = assemble_full_2x2_operator_real(
-            plan,
-            topology,
-            &reduction,
-            &observables,
-            &equilibrium,
-            &bases,
-        );
-        if use_native_modal_production {
-            return execute_native_modal_window_from_full_2x2(
+        if use_native_modal_production && shared_domain_k0_modal_requested(plan) {
+            return execute_native_modal_window(
                 plan,
                 outputs,
                 initial_magnetization,
@@ -5041,8 +6251,7 @@ fn execute_fem_eigen_inner(
                 topology,
                 &reduction,
                 &bases,
-                &stiffness,
-                &mass,
+                None,
                 progress,
                 active_n,
                 effective_dof,
@@ -5052,6 +6261,41 @@ fn execute_fem_eigen_inner(
                 } else {
                     native_fem::NativeModalExecutionTarget::ProductionCpu
                 },
+                expected_handoff,
+            );
+        }
+        let (stiffness, mass) = assemble_full_2x2_operator_real(
+            plan,
+            topology,
+            &reduction,
+            &observables,
+            &equilibrium,
+            &bases,
+        );
+        if use_native_modal_production {
+            return execute_native_modal_window(
+                plan,
+                outputs,
+                initial_magnetization,
+                equilibrium,
+                observables,
+                relaxation_steps,
+                &problem,
+                source_artifact.as_ref(),
+                topology,
+                &reduction,
+                &bases,
+                Some((&stiffness, &mass)),
+                progress,
+                active_n,
+                effective_dof,
+                artifact_sample_index,
+                if try_gpu {
+                    native_fem::NativeModalExecutionTarget::ProductionGpu
+                } else {
+                    native_fem::NativeModalExecutionTarget::ProductionCpu
+                },
+                expected_handoff,
             );
         }
         if use_sparse {
@@ -5593,6 +6837,11 @@ fn execute_fem_eigen_inner(
     )?);
 
     if wants_dispersion {
+        let visualizable_mode_indices = requested_modes
+            .iter()
+            .copied()
+            .map(u64::from)
+            .collect::<BTreeSet<_>>();
         let k_vector = k_vector_json(plan.k_sampling.as_ref());
         auxiliary_artifacts.push(json_artifact(
             "eigen/dispersion/path.json",
@@ -5607,8 +6856,12 @@ fn execute_fem_eigen_inner(
         });
         auxiliary_artifacts.push(AuxiliaryArtifact {
             relative_path: "eigen/dispersion.csv".to_string(),
-            bytes: dispersion_v2_csv(plan.k_sampling.as_ref(), &summary_payload["modes"])
-                .into_bytes(),
+            bytes: dispersion_v2_csv(
+                plan.k_sampling.as_ref(),
+                &summary_payload["modes"],
+                &visualizable_mode_indices,
+            )
+            .into_bytes(),
         });
     }
     write_eigen_v2_bundle(
@@ -5672,7 +6925,7 @@ fn execute_fem_eigen_inner(
     })
 }
 
-fn execute_native_modal_window_from_full_2x2(
+fn execute_native_modal_window(
     plan: &FemEigenPlanIR,
     outputs: &[OutputIR],
     initial_magnetization: Vec<Vector3>,
@@ -5684,13 +6937,13 @@ fn execute_native_modal_window_from_full_2x2(
     topology: &MeshTopology,
     reduction: &ReductionMap,
     bases: &[(Vector3, Vector3)],
-    stiffness_field: &DMatrix<f64>,
-    mass: &DMatrix<f64>,
+    runner_operator: Option<(&DMatrix<f64>, &DMatrix<f64>)>,
     mut progress: Option<&mut FemEigenProgressCallback<'_>>,
     active_nodes: usize,
     effective_dof: usize,
     artifact_sample_index: usize,
     execution_target: native_fem::NativeModalExecutionTarget,
+    expected_handoff: Option<&AcceptedFemEigenEquilibriumHandoff>,
 ) -> Result<ExecutedRun, RunError> {
     let solver_kind = match execution_target {
         native_fem::NativeModalExecutionTarget::ProductionGpu => {
@@ -5718,26 +6971,7 @@ fn execute_native_modal_window_from_full_2x2(
         },
     )?;
 
-    let stiffness_omega = stiffness_field * plan.gyromagnetic_ratio;
-    let stiffness_row_major = dmatrix_to_row_major(&stiffness_omega);
-    let gyrotropic_row_major = gyrotropic_matrix_row_major_from_tangent_mass(mass, active_nodes)?;
-    let tangent_mass_row_major = dmatrix_to_row_major(mass);
-    let operator_diagnostics_json =
-        full_2x2_native_operator_diagnostics_json(plan, stiffness_field, mass, active_nodes)
-            .to_string();
-    let native_modal_topology = MeshTopology::from_ir(&plan.mesh).map_err(|error| RunError {
-        message: format!("failed to build native modal Floquet pair topology: {error}"),
-    })?;
-    let native_floquet_periodic_pairs =
-        native_modal_floquet_periodic_pairs(plan, &native_modal_topology)?;
-    let magnetic_pencil = native_modal_magnetic_pencil_payload(
-        plan,
-        &stiffness_row_major,
-        &gyrotropic_row_major,
-        &tangent_mass_row_major,
-        &native_floquet_periodic_pairs,
-    );
-    let shared_domain_linearization_state = if plan.enable_demag && plan.operator.include_demag {
+    let shared_domain_linearization_state = if shared_domain_k0_modal_requested(plan) {
         Some(build_shared_domain_linearization_state(
             plan,
             topology,
@@ -5749,7 +6983,35 @@ fn execute_native_modal_window_from_full_2x2(
     } else {
         None
     };
-    let shared_domain_problem = if plan.enable_demag && plan.operator.include_demag {
+    let relax_to_eigen_handoff =
+        match (expected_handoff, shared_domain_linearization_state.as_ref()) {
+            (Some(handoff), Some(state)) => {
+                handoff.validate_consumed_linearization(plan, &equilibrium, state)?;
+                Some(handoff.clone())
+            }
+            (Some(_), None) => {
+                return Err(RunError {
+                    message: "relax_to_eigen_handoff_requires_linearization_state".to_string(),
+                });
+            }
+            (None, Some(state))
+                if matches!(
+                    plan.equilibrium,
+                    fullmag_ir::EquilibriumSourceIR::RelaxedInitialState
+                ) =>
+            {
+                Some(
+                    AcceptedFemEigenEquilibriumHandoff::from_accepted_linearization(
+                        plan,
+                        equilibrium.clone(),
+                        state.equilibrium_artifact_digest.clone(),
+                        state.linearization_state_digest.clone(),
+                    )?,
+                )
+            }
+            (None, _) => None,
+        };
+    let shared_domain_problem = if shared_domain_k0_modal_requested(plan) {
         Some(build_native_shared_domain_modal_problem(
             plan,
             topology,
@@ -5760,6 +7022,30 @@ fn execute_native_modal_window_from_full_2x2(
         )?)
     } else {
         None
+    };
+    if shared_domain_problem.is_some() && runner_operator.is_some() {
+        return Err(RunError {
+            message: "native shared-domain modal production must not assemble or transport a runner operator"
+                .to_string(),
+        });
+    }
+    if shared_domain_problem.is_none() && runner_operator.is_none() {
+        return Err(RunError {
+            message: "native non-shared-domain modal production requires the explicit runner operator payload"
+                .to_string(),
+        });
+    }
+    let operator_diagnostics_json = if let Some((stiffness_field, mass)) = runner_operator {
+        full_2x2_native_operator_diagnostics_json(plan, stiffness_field, mass, active_nodes)
+            .to_string()
+    } else {
+        serde_json::json!({
+            "schema_version": "frequency_domain_operator_diagnostics.v1",
+            "payload_kind": "certified_shared_domain",
+            "assembly_owner": "native_mfem",
+            "runner_operator_transport": "disabled",
+        })
+        .to_string()
     };
     let shared_domain_identity = shared_domain_problem
         .as_ref()
@@ -5890,6 +7176,54 @@ fn execute_native_modal_window_from_full_2x2(
             }
         }
     };
+    let runner_stiffness_omega =
+        runner_operator.map(|(stiffness_field, _)| stiffness_field * plan.gyromagnetic_ratio);
+    let runner_stiffness_row_major = runner_stiffness_omega
+        .as_ref()
+        .map(dmatrix_to_row_major)
+        .unwrap_or_default();
+    let runner_gyrotropic_row_major = runner_operator
+        .map(|(_, mass)| gyrotropic_matrix_row_major_from_tangent_mass(mass, active_nodes))
+        .transpose()?
+        .unwrap_or_default();
+    let runner_tangent_mass_row_major = runner_operator
+        .map(|(_, mass)| dmatrix_to_row_major(mass))
+        .unwrap_or_default();
+    let runner_native_modal_topology = runner_operator
+        .map(|_| {
+            MeshTopology::from_ir(&plan.mesh).map_err(|error| RunError {
+                message: format!("failed to build native modal Floquet pair topology: {error}"),
+            })
+        })
+        .transpose()?;
+    let runner_floquet_periodic_pairs = runner_native_modal_topology
+        .as_ref()
+        .map(|topology| native_modal_floquet_periodic_pairs(plan, topology))
+        .transpose()?
+        .unwrap_or_default();
+    let runner_magnetic_pencil = runner_operator.map(|_| {
+        native_modal_magnetic_pencil_payload(
+            plan,
+            &runner_stiffness_row_major,
+            &runner_gyrotropic_row_major,
+            &runner_tangent_mass_row_major,
+            &runner_floquet_periodic_pairs,
+        )
+    });
+    let runner_mfem_operator_problem = runner_stiffness_omega
+        .as_ref()
+        .zip(runner_magnetic_pencil.as_ref())
+        .map(|(stiffness_omega, magnetic_pencil)| {
+            native_modal_mfem_operator_problem(
+                stiffness_omega.nrows() as u64,
+                &runner_stiffness_row_major,
+                &runner_gyrotropic_row_major,
+                &runner_tangent_mass_row_major,
+                magnetic_pencil,
+                &runner_floquet_periodic_pairs,
+            )
+        });
+    let shared_domain_mode = shared_domain_problem.is_some();
     let native_result = native_fem::solve_native_modal_eigen(native_fem::NativeModalEigenRequest {
         mesh_asset_id: &plan.mesh_name,
         equilibrium_source_kind: native_modal_equilibrium_source_kind(&plan.equilibrium),
@@ -5923,14 +7257,7 @@ fn execute_native_modal_window_from_full_2x2(
         cancel_requested: Some(&cancel_callback),
         progress_callback: Some(&progress_callback),
         tiny_validation_problem: None,
-        mfem_operator_problem: Some(native_modal_mfem_operator_problem(
-            stiffness_omega.nrows() as u64,
-            &stiffness_row_major,
-            &gyrotropic_row_major,
-            &tangent_mass_row_major,
-            &magnetic_pencil,
-            &native_floquet_periodic_pairs,
-        )),
+        mfem_operator_problem: runner_mfem_operator_problem,
         mfem_sparse_operator_problem: None,
         poisson_airbox_block_problem: None,
         shared_domain_problem,
@@ -5985,22 +7312,11 @@ fn execute_native_modal_window_from_full_2x2(
             );
         }
     }
-    let shared_domain_full_reduction = (plan.enable_demag && plan.operator.include_demag)
-        .then(|| full_physical_magnetic_reduction_map(topology));
-    let shared_domain_full_mass =
-        if let Some(full_reduction) = shared_domain_full_reduction.as_ref() {
-            let (_, full_mass) = assemble_full_2x2_operator_real(
-                plan,
-                topology,
-                full_reduction,
-                &observables,
-                &equilibrium,
-                bases,
-            );
-            Some(full_mass)
-        } else {
-            None
-        };
+    let shared_domain_full_reduction =
+        shared_domain_mode.then(|| full_physical_magnetic_reduction_map(topology));
+    let shared_domain_full_mass = shared_domain_full_reduction
+        .as_ref()
+        .map(|full_reduction| assemble_tangent_mass_matrix(topology, full_reduction));
     let shared_mode_context_data = if let Some(full_mass) = shared_domain_full_mass.as_ref() {
         Some(reduced_shared_domain_tangent_mass(topology, full_mass)?)
     } else {
@@ -6028,9 +7344,15 @@ fn execute_native_modal_window_from_full_2x2(
         native_modal_modes_from_result_json(
             plan,
             &native_result.result_json,
-            &stiffness_omega,
-            &gyrotropic_row_major,
-            mass,
+            runner_stiffness_omega.as_ref().and_then(|stiffness_omega| {
+                runner_operator.map(|(_, mass)| {
+                    (
+                        stiffness_omega,
+                        runner_gyrotropic_row_major.as_slice(),
+                        mass,
+                    )
+                })
+            }),
             shared_mode_context.as_ref(),
         )?
     } else if interrupted {
@@ -6086,7 +7408,10 @@ fn execute_native_modal_window_from_full_2x2(
                     )
                 })
         })
-        .or_else(|| node_mass_weights_from_tangent_mass(mass, active_nodes));
+        .or_else(|| {
+            runner_operator
+                .and_then(|(_, mass)| node_mass_weights_from_tangent_mass(mass, active_nodes))
+        });
     let mut auxiliary_artifacts = native_modal_artifacts(
         plan,
         outputs,
@@ -6098,6 +7423,7 @@ fn execute_native_modal_window_from_full_2x2(
         solver_diagnostics,
         relaxation_steps,
         shared_domain_linearization_state.as_ref(),
+        relax_to_eigen_handoff.as_ref(),
         artifact_sample_index,
     )?;
     if interrupted {
@@ -6340,6 +7666,7 @@ fn execute_native_cpu_modal_window_from_bloch_floquet_complex(
         None,
         solver_diagnostics,
         relaxation_steps,
+        None,
         None,
         0,
     )?;
@@ -7579,9 +8906,7 @@ pub(crate) fn native_poisson_airbox_k0_metrics_from_result_json(
 fn native_modal_modes_from_result_json(
     plan: &FemEigenPlanIR,
     raw: &str,
-    stiffness_omega: &DMatrix<f64>,
-    gyrotropic_row_major: &[f64],
-    tangent_mass: &DMatrix<f64>,
+    runner_operator: Option<(&DMatrix<f64>, &[f64], &DMatrix<f64>)>,
     shared_domain_context: Option<&SharedDomainModeContext<'_>>,
 ) -> Result<Vec<NativeModalEigenpair>, RunError> {
     let result = serde_json::from_str::<serde_json::Value>(raw).map_err(|error| RunError {
@@ -7601,15 +8926,25 @@ fn native_modal_modes_from_result_json(
         .iter()
         .map(|mode| {
             if poisson_airbox {
+                let tangent_mass = shared_domain_context
+                    .map(|context| context.reduced_tangent_mass)
+                    .or_else(|| runner_operator.map(|(_, _, tangent_mass)| tangent_mass))
+                    .ok_or_else(|| RunError {
+                        message: "native Poisson-airbox modal result is missing its native shared-domain mass context"
+                            .to_string(),
+                    })?;
                 native_poisson_airbox_mode_from_json(
                     plan,
                     mode,
-                    shared_domain_context
-                        .map(|context| context.reduced_tangent_mass)
-                        .unwrap_or(tangent_mass),
+                    tangent_mass,
                     shared_domain_context,
                 )
             } else {
+                let (stiffness_omega, gyrotropic_row_major, tangent_mass) =
+                    runner_operator.ok_or_else(|| RunError {
+                        message: "native non-shared modal result is missing its explicit runner operator context"
+                            .to_string(),
+                    })?;
                 native_modal_mode_from_json(
                     plan,
                     mode,
@@ -8132,6 +9467,7 @@ fn native_modal_artifacts(
     solver_diagnostics: serde_json::Value,
     relaxation_steps: u64,
     linearization_state: Option<&SharedDomainLinearizationState>,
+    relax_to_eigen_handoff: Option<&AcceptedFemEigenEquilibriumHandoff>,
     sample_index: usize,
 ) -> Result<Vec<AuxiliaryArtifact>, RunError> {
     let requested_modes = requested_mode_indices(outputs);
@@ -8181,6 +9517,22 @@ fn native_modal_artifacts(
             );
         }
     }
+    if let Some(handoff) = relax_to_eigen_handoff {
+        if let Some(object) = solver_diagnostics.as_object_mut() {
+            object.insert(
+                "relax_to_eigen_handoff_sha256".to_string(),
+                serde_json::json!(handoff.content_sha256()),
+            );
+            object.insert(
+                "source_mesh_topology_sha256".to_string(),
+                serde_json::json!(handoff.source_mesh_topology_sha256()),
+            );
+            object.insert(
+                "relax_to_eigen_handoff".to_string(),
+                handoff.provenance_json(),
+            );
+        }
+    }
     let sample_diagnostics = solver_diagnostics.clone();
     if let Some(object) = solver_diagnostics.as_object_mut() {
         if !object.contains_key("sample_solver_diagnostics") {
@@ -8227,6 +9579,35 @@ fn native_modal_artifacts(
                     nested.insert(
                         "periodic_mesh_certificate_sha256".to_string(),
                         serde_json::json!(state.periodic_mesh_certificate_digest),
+                    );
+                }
+            }
+        }
+    }
+    if let Some(handoff) = relax_to_eigen_handoff {
+        if let Some(samples) = solver_diagnostics
+            .get_mut("sample_solver_diagnostics")
+            .and_then(serde_json::Value::as_array_mut)
+        {
+            for sample in samples {
+                let matches_sample = sample
+                    .get("sample_index")
+                    .and_then(serde_json::Value::as_u64)
+                    .is_some_and(|index| index == sample_index as u64);
+                if !matches_sample {
+                    continue;
+                }
+                if let Some(nested) = sample
+                    .get_mut("diagnostics")
+                    .and_then(serde_json::Value::as_object_mut)
+                {
+                    nested.insert(
+                        "relax_to_eigen_handoff_sha256".to_string(),
+                        serde_json::json!(handoff.content_sha256()),
+                    );
+                    nested.insert(
+                        "source_mesh_topology_sha256".to_string(),
+                        serde_json::json!(handoff.source_mesh_topology_sha256()),
                     );
                 }
             }
@@ -8392,6 +9773,8 @@ fn native_modal_artifacts(
     let mode_equilibrium_artifact = mode_provenance_value("equilibrium_artifact_sha256");
     let mode_linearization_state = mode_provenance_value("linearization_state_sha256");
     let mode_periodic_certificate = mode_provenance_value("periodic_mesh_certificate_sha256");
+    let mode_relax_to_eigen_handoff = mode_provenance_value("relax_to_eigen_handoff_sha256");
+    let mode_source_mesh_topology = mode_provenance_value("source_mesh_topology_sha256");
     let mode_assembly_kind = mode_provenance_value("assembly_kind");
 
     for (mode_index, mode) in modes.iter().enumerate() {
@@ -8487,6 +9870,8 @@ fn native_modal_artifacts(
             "equilibrium_artifact_sha256": mode_equilibrium_artifact.clone(),
             "linearization_state_sha256": mode_linearization_state.clone(),
             "periodic_mesh_certificate_sha256": mode_periodic_certificate.clone(),
+            "relax_to_eigen_handoff_sha256": mode_relax_to_eigen_handoff.clone(),
+            "source_mesh_topology_sha256": mode_source_mesh_topology.clone(),
         });
         modes_summary.push(mode_summary.clone());
 
@@ -8550,6 +9935,8 @@ fn native_modal_artifacts(
                 "equilibrium_artifact_sha256": mode_equilibrium_artifact,
                 "linearization_state_sha256": mode_linearization_state,
                 "periodic_mesh_certificate_sha256": mode_periodic_certificate,
+                "relax_to_eigen_handoff_sha256": mode_relax_to_eigen_handoff,
+                "source_mesh_topology_sha256": mode_source_mesh_topology,
                 "node_mass_weights": node_mass_weights,
                 "real": real,
                 "imag": imag,
@@ -8627,6 +10014,11 @@ fn native_modal_artifacts(
     }
 
     if wants_dispersion {
+        let visualizable_mode_indices = requested_modes
+            .iter()
+            .copied()
+            .map(u64::from)
+            .collect::<BTreeSet<_>>();
         let k_vector = k_vector_json(plan.k_sampling.as_ref());
         auxiliary_artifacts.push(json_artifact(
             "eigen/dispersion/path.json",
@@ -8641,8 +10033,12 @@ fn native_modal_artifacts(
         });
         auxiliary_artifacts.push(AuxiliaryArtifact {
             relative_path: "eigen/dispersion.csv".to_string(),
-            bytes: dispersion_v2_csv(plan.k_sampling.as_ref(), &summary_payload["modes"])
-                .into_bytes(),
+            bytes: dispersion_v2_csv(
+                plan.k_sampling.as_ref(),
+                &summary_payload["modes"],
+                &visualizable_mode_indices,
+            )
+            .into_bytes(),
         });
     }
     write_eigen_v2_bundle(
@@ -8839,10 +10235,23 @@ fn materialize_equilibrium(
         oersted_cylinder: None,
     };
     let resolved_demag = resolved_demag_realization(plan);
+    let robin_beta_factor = if matches!(
+        resolved_demag,
+        Some(fullmag_ir::ResolvedFemDemagIR::PoissonRobin)
+    ) {
+        shared_domain_robin_beta_m(plan)?.map(|beta| beta / topology.robin_beta)
+    } else {
+        None
+    };
     let mut problem = match resolved_demag {
         Some(fullmag_ir::ResolvedFemDemagIR::PoissonRobin) => {
             FemLlgProblem::with_terms_and_demag_airbox(
-                topology, material, dynamics, terms, false, None,
+                topology,
+                material,
+                dynamics,
+                terms,
+                false,
+                robin_beta_factor,
             )
         }
         Some(fullmag_ir::ResolvedFemDemagIR::PoissonDirichlet) => {
@@ -8900,6 +10309,8 @@ fn materialize_equilibrium(
                 max_dm_dt: report.max_rhs_amplitude,
                 max_h_eff: report.max_effective_field_amplitude,
                 max_h_demag: report.max_demag_field_amplitude,
+                max_torque_Apm: report.max_torque_Apm,
+                max_torque_T: report.max_torque_Apm * MU0,
                 ..StepStats::default()
             };
             let energy_plateau_range = energy_plateau.record(report.total_energy_joules);
@@ -8919,6 +10330,34 @@ fn materialize_equilibrium(
     let observables = problem.observe(&state).map_err(|error| RunError {
         message: format!("FEM eigen observables: {}", error),
     })?;
+    if std::env::var_os("FULLMAG_TRACE_CONTINUATION").is_some() {
+        let max_exchange = observables
+            .exchange_field
+            .iter()
+            .map(|field| vector_norm(*field))
+            .fold(0.0_f64, f64::max);
+        let max_demag = observables
+            .demag_field
+            .iter()
+            .map(|field| vector_norm(*field))
+            .fold(0.0_f64, f64::max);
+        let max_external = observables
+            .external_field
+            .iter()
+            .map(|field| vector_norm(*field))
+            .fold(0.0_f64, f64::max);
+        eprintln!(
+            "[fullmag-trace] materialize-equilibrium: max_torque_apm={:.6e} max_h_eff_apm={:.6e} max_torque_relative={:.6e} max_exchange={:.6e} max_demag={:.6e} max_external={:.6e} steps={}",
+            observables.max_torque_Apm,
+            observables.max_effective_field_amplitude,
+            observables.max_torque_Apm
+                / observables.max_effective_field_amplitude.max(1.0),
+            max_exchange,
+            max_demag,
+            max_external,
+            steps_taken,
+        );
+    }
     Ok((
         problem,
         state.magnetization().to_vec(),
@@ -9702,6 +11141,35 @@ fn assemble_projected_scalar_operator_real(
 /// projects the per-node effective field into the tangent basis, producing
 /// diagonal parallel-field shifts on K_11/K_22 AND off-diagonal couplings on
 /// K_12/K_21 from the perpendicular field components.
+fn assemble_tangent_mass_matrix(topology: &MeshTopology, reduction: &ReductionMap) -> DMatrix<f64> {
+    let n = reduction.active_nodes.len();
+    let mut mass = DMatrix::<f64>::zeros(2 * n, 2 * n);
+    for (element_index, element) in topology.elements.iter().enumerate() {
+        if !topology.magnetic_element_mask[element_index] {
+            continue;
+        }
+        let volume = topology.element_volumes[element_index];
+        for i in 0..4 {
+            let Some(row) = reduction.node_map[element[i] as usize] else {
+                continue;
+            };
+            for j in 0..4 {
+                let Some(col) = reduction.node_map[element[j] as usize] else {
+                    continue;
+                };
+                let value = if i == j {
+                    2.0 * volume / 20.0
+                } else {
+                    volume / 20.0
+                };
+                mass[(row, col)] += value;
+                mass[(row + n, col + n)] += value;
+            }
+        }
+    }
+    mass
+}
+
 fn assemble_full_2x2_operator_real(
     plan: &FemEigenPlanIR,
     topology: &MeshTopology,
@@ -9713,7 +11181,7 @@ fn assemble_full_2x2_operator_real(
     let n = reduction.active_nodes.len();
     let dim = 2 * n;
     let mut stiffness = DMatrix::<f64>::zeros(dim, dim);
-    let mut mass = DMatrix::<f64>::zeros(dim, dim);
+    let mass = assemble_tangent_mass_matrix(topology, reduction);
     let exchange_coeff = exchange_field_coefficient(plan);
 
     // Compute local effective-field tangent-plane projection at each node.
@@ -9811,10 +11279,6 @@ fn assemble_full_2x2_operator_real(
                 let m_ij = local_mass[i][j];
                 let fb_i = &field_blocks[node_i];
                 let fb_j = &field_blocks[node_j];
-
-                // Block mass matrix: M_block = diag(M, M)
-                mass[(row, col)] += m_ij;
-                mass[(row + n, col + n)] += m_ij;
 
                 // Exchange stiffness: isotropic → K_11 and K_22 only
                 if plan.enable_exchange {
@@ -11352,6 +12816,21 @@ fn binary_artifact(path: impl Into<String>, bytes: Vec<u8>) -> AuxiliaryArtifact
     }
 }
 
+fn published_artifact_sha256(
+    artifacts: &[AuxiliaryArtifact],
+    relative_path: &str,
+) -> Result<String, RunError> {
+    let artifact = artifacts
+        .iter()
+        .find(|artifact| artifact.relative_path == relative_path)
+        .ok_or_else(|| RunError {
+            message: format!(
+                "missing published artifact required for content digest: {relative_path}"
+            ),
+        })?;
+    Ok(format!("sha256:{:x}", Sha256::digest(&artifact.bytes)))
+}
+
 fn mode_field_id(sample_index: usize, raw_mode_index: u64) -> String {
     format!("analysis:eigen:sample-{sample_index:04}:mode-{raw_mode_index:04}")
 }
@@ -11403,47 +12882,76 @@ fn mode_zarr_chunk_path(sample_index: usize, raw_mode_index: u64) -> String {
     )
 }
 
-fn mode_vector_entries(value: &serde_json::Value, field: &str) -> Vec<[f64; 3]> {
-    value
+fn mode_vector_entries(value: &serde_json::Value, field: &str) -> Result<Vec<[f64; 3]>, RunError> {
+    let entries = value
         .get(field)
-        .and_then(|field_value| field_value.as_array())
-        .map(|entries| {
-            entries
-                .iter()
-                .filter_map(|entry| {
-                    let components = entry.as_array()?;
-                    Some([
-                        components
-                            .first()
-                            .and_then(|value| value.as_f64())
-                            .unwrap_or(0.0),
-                        components
-                            .get(1)
-                            .and_then(|value| value.as_f64())
-                            .unwrap_or(0.0),
-                        components
-                            .get(2)
-                            .and_then(|value| value.as_f64())
-                            .unwrap_or(0.0),
-                    ])
-                })
-                .collect()
+        .and_then(serde_json::Value::as_array)
+        .ok_or_else(|| RunError {
+            message: format!("requested mode field payload is missing {field}"),
+        })?;
+    if entries.is_empty() {
+        return Err(RunError {
+            message: format!("requested mode field payload {field} must not be empty"),
+        });
+    }
+    entries
+        .iter()
+        .enumerate()
+        .map(|(entry_index, entry)| {
+            let components = entry.as_array().ok_or_else(|| RunError {
+                message: format!(
+                    "requested mode field payload {field}[{entry_index}] must be a Cartesian XYZ array"
+                ),
+            })?;
+            if components.len() != 3 {
+                return Err(RunError {
+                    message: format!(
+                        "requested mode field payload {field}[{entry_index}] must contain exactly three Cartesian components"
+                    ),
+                });
+            }
+            let mut vector = [0.0; 3];
+            for (component_index, component) in components.iter().enumerate() {
+                let numeric = component.as_f64().filter(|numeric| numeric.is_finite()).ok_or_else(|| {
+                    RunError {
+                        message: format!(
+                            "requested mode field payload {field}[{entry_index}][{component_index}] must be finite"
+                        ),
+                    }
+                })?;
+                vector[component_index] = numeric;
+            }
+            Ok(vector)
         })
-        .unwrap_or_default()
+        .collect()
 }
 
-fn mode_payload_bytes(real: &[[f64; 3]], imag: &[[f64; 3]]) -> Vec<u8> {
-    let sample_count = real.len().max(imag.len());
+fn mode_payload_bytes(real: &[[f64; 3]], imag: &[[f64; 3]]) -> Result<Vec<u8>, RunError> {
+    if real.is_empty() || imag.is_empty() || real.len() != imag.len() {
+        return Err(RunError {
+            message: format!(
+                "requested mode field payload requires equal non-empty real/imag XYZ samples: real={}, imag={}",
+                real.len(),
+                imag.len()
+            ),
+        });
+    }
+    let sample_count = real.len();
     let mut bytes = Vec::with_capacity(sample_count * 6 * std::mem::size_of::<f64>());
-    for index in 0..sample_count {
-        let real_sample = real.get(index).copied().unwrap_or([0.0, 0.0, 0.0]);
-        let imag_sample = imag.get(index).copied().unwrap_or([0.0, 0.0, 0.0]);
+    for (index, (real_sample, imag_sample)) in real.iter().zip(imag.iter()).enumerate() {
         for component in 0..3 {
+            if !real_sample[component].is_finite() || !imag_sample[component].is_finite() {
+                return Err(RunError {
+                    message: format!(
+                        "requested mode field payload contains non-finite Cartesian component at sample {index}, component {component}"
+                    ),
+                });
+            }
             bytes.extend_from_slice(&real_sample[component].to_le_bytes());
             bytes.extend_from_slice(&imag_sample[component].to_le_bytes());
         }
     }
-    bytes
+    Ok(bytes)
 }
 
 fn mode_amplitude_summary(amplitude: &serde_json::Value, sample_count: usize) -> serde_json::Value {
@@ -11580,6 +13088,45 @@ fn write_eigen_v2_bundle(
         .and_then(|value| value.as_str())
         .unwrap_or("exp_minus_i_omega_t");
 
+    // A mode selected for field export is only visualizable after the complete
+    // global Cartesian complex payload has been validated.  Modes not selected
+    // by the author remain legitimate spectrum-only observations and never
+    // receive a dangling field identifier.
+    let mut visualizable_mode_indices = BTreeSet::new();
+    for raw_mode_index in requested_modes.iter().copied().map(u64::from) {
+        let legacy_path = format!("eigen/modes/mode_{raw_mode_index:04}.json");
+        let legacy_mode = auxiliary_artifacts
+            .iter()
+            .find(|artifact| artifact.relative_path == legacy_path)
+            .ok_or_else(|| RunError {
+                message: format!(
+                    "requested mode {raw_mode_index} has no legacy payload artifact for Cartesian field export"
+                ),
+            })
+            .and_then(|artifact| {
+                serde_json::from_slice::<serde_json::Value>(&artifact.bytes).map_err(|error| {
+                    RunError {
+                        message: format!(
+                            "requested mode {raw_mode_index} legacy payload is invalid JSON: {error}"
+                        ),
+                    }
+                })
+            })?;
+        let real = mode_vector_entries(&legacy_mode, "real").map_err(|mut error| {
+            error.message = format!("requested mode {raw_mode_index}: {}", error.message);
+            error
+        })?;
+        let imag = mode_vector_entries(&legacy_mode, "imag").map_err(|mut error| {
+            error.message = format!("requested mode {raw_mode_index}: {}", error.message);
+            error
+        })?;
+        let _ = mode_payload_bytes(&real, &imag).map_err(|mut error| {
+            error.message = format!("requested mode {raw_mode_index}: {}", error.message);
+            error
+        })?;
+        visualizable_mode_indices.insert(raw_mode_index);
+    }
+
     let spectrum_modes: Vec<serde_json::Value> = modes
         .iter()
         .map(|mode| {
@@ -11594,14 +13141,16 @@ fn write_eigen_v2_bundle(
                     serde_json::json!(raw_mode_index),
                 );
                 object.insert("branch_id".to_string(), serde_json::json!(raw_mode_index));
-                object.insert(
-                    "mode_field_id".to_string(),
-                    serde_json::json!(mode_field_id(sample_index, raw_mode_index)),
-                );
-                object.insert(
-                    "mode_field_resource_key".to_string(),
-                    serde_json::json!(mode_field_resource_key(sample_index, raw_mode_index)),
-                );
+                if visualizable_mode_indices.contains(&raw_mode_index) {
+                    object.insert(
+                        "mode_field_id".to_string(),
+                        serde_json::json!(mode_field_id(sample_index, raw_mode_index)),
+                    );
+                    object.insert(
+                        "mode_field_resource_key".to_string(),
+                        serde_json::json!(mode_field_resource_key(sample_index, raw_mode_index)),
+                    );
+                }
             }
             mode
         })
@@ -11618,6 +13167,9 @@ fn write_eigen_v2_bundle(
             "path_s": 0.0,
             "segment_index": 0,
             "t_in_segment": 0.0,
+            "external_field_a_per_m": plan.external_field,
+            "mesh_id": plan.mesh_name,
+            "topology_revision": plan.mesh.topology_fingerprint_v6(),
             "modes": spectrum_modes,
         }],
     });
@@ -11630,7 +13182,7 @@ fn write_eigen_v2_bundle(
                 .get("index")
                 .and_then(|value| value.as_u64())
                 .unwrap_or(0);
-            serde_json::json!({
+            let mut point = serde_json::json!({
                 "branch_id": raw_mode_index,
                 "cluster_id": mode["cluster_id"],
                 "multiplicity": mode["multiplicity"],
@@ -11645,11 +13197,23 @@ fn write_eigen_v2_bundle(
                     "tracking_confidence": 1.0,
                     "tracking_score_source": "seed",
                     "modal_overlap_available": false,
-                    "mode_field_id": mode_field_id(sample_index, raw_mode_index),
-                    "mode_field_resource_key": mode_field_resource_key(sample_index, raw_mode_index),
                     "overlap_prev": null,
                 }],
-            })
+            });
+            if visualizable_mode_indices.contains(&raw_mode_index) {
+                let point_object = point["points"][0]
+                    .as_object_mut()
+                    .expect("branch point must remain an object");
+                point_object.insert(
+                    "mode_field_id".to_string(),
+                    serde_json::json!(mode_field_id(sample_index, raw_mode_index)),
+                );
+                point_object.insert(
+                    "mode_field_resource_key".to_string(),
+                    serde_json::json!(mode_field_resource_key(sample_index, raw_mode_index)),
+                );
+            }
+            point
         })
         .collect();
     auxiliary_artifacts.push(json_artifact(
@@ -11672,8 +13236,12 @@ fn write_eigen_v2_bundle(
     {
         auxiliary_artifacts.push(AuxiliaryArtifact {
             relative_path: "eigen/dispersion.csv".to_string(),
-            bytes: dispersion_v2_csv(plan.k_sampling.as_ref(), &summary_payload["modes"])
-                .into_bytes(),
+            bytes: dispersion_v2_csv(
+                plan.k_sampling.as_ref(),
+                &summary_payload["modes"],
+                &visualizable_mode_indices,
+            )
+            .into_bytes(),
         });
     }
 
@@ -11685,19 +13253,37 @@ fn write_eigen_v2_bundle(
         let legacy_mode = auxiliary_artifacts
             .iter()
             .find(|artifact| artifact.relative_path == legacy_path)
-            .and_then(|artifact| serde_json::from_slice::<serde_json::Value>(&artifact.bytes).ok());
-        let Some(legacy_mode) = legacy_mode else {
-            continue;
-        };
-        let real = mode_vector_entries(&legacy_mode, "real");
-        let imag = mode_vector_entries(&legacy_mode, "imag");
-        let sample_count = real.len().max(imag.len());
+            .ok_or_else(|| RunError {
+                message: format!("requested mode {raw_mode_index} disappeared before publication"),
+            })
+            .and_then(|artifact| {
+                serde_json::from_slice::<serde_json::Value>(&artifact.bytes).map_err(|error| {
+                    RunError {
+                        message: format!(
+                            "requested mode {raw_mode_index} legacy payload is invalid JSON: {error}"
+                        ),
+                    }
+                })
+            })?;
+        let real = mode_vector_entries(&legacy_mode, "real")?;
+        let imag = mode_vector_entries(&legacy_mode, "imag")?;
+        let sample_count = real.len();
+        let source_node_count = plan.mesh.nodes.len();
+        if sample_count != source_node_count {
+            return Err(RunError {
+                message: format!(
+                    "requested mode {raw_mode_index} payload node count {sample_count} does not match source mesh node count {source_node_count}"
+                ),
+            });
+        }
         let metadata_path = mode_metadata_path(sample_index, raw_mode_index);
         let payload_path = mode_payload_path(sample_index, raw_mode_index);
         let zarr_array_path = mode_zarr_array_path(sample_index, raw_mode_index);
         let zarr_chunk_path = mode_zarr_chunk_path(sample_index, raw_mode_index);
         let field_id = mode_field_id(sample_index, raw_mode_index);
         let field_resource = mode_field_resource_key(sample_index, raw_mode_index);
+        let payload_bytes = mode_payload_bytes(&real, &imag)?;
+        let payload_sha256 = format!("sha256:{:x}", Sha256::digest(&payload_bytes));
         let mut metadata = serde_json::json!({
             "schema_version": "eigen_mode.v2",
             "solver_model": summary_payload["solver_kind"],
@@ -11712,6 +13298,13 @@ fn write_eigen_v2_bundle(
             "eigenvalue_imag": legacy_mode["eigenvalue_imag"],
             "normalization": legacy_mode["normalization"],
             "damping_policy": legacy_mode["damping_policy"],
+            "source_mesh_identity": {
+                "mesh_id": plan.mesh_name,
+                "topology_fingerprint": plan.mesh.topology_fingerprint_v6(),
+                "indexing": "full_domain_node_order",
+                "node_count": source_node_count,
+            },
+            "payload_sha256": payload_sha256,
         });
         if let Some(object) = metadata.as_object_mut() {
             object.insert("mode_field_id".to_string(), serde_json::json!(field_id));
@@ -11754,6 +13347,8 @@ fn write_eigen_v2_bundle(
                 "equilibrium_artifact_sha256",
                 "linearization_state_sha256",
                 "periodic_mesh_certificate_sha256",
+                "relax_to_eigen_handoff_sha256",
+                "source_mesh_topology_sha256",
             ] {
                 if legacy_mode.get(key).is_some() {
                     object.insert(key.to_string(), legacy_mode[key].clone());
@@ -11893,7 +13488,6 @@ fn write_eigen_v2_bundle(
             );
         }
         auxiliary_artifacts.push(json_artifact(metadata_path.clone(), &metadata)?);
-        let payload_bytes = mode_payload_bytes(&real, &imag);
         if !wrote_mode_zarr_store {
             auxiliary_artifacts.push(zarr_group_artifact(mode_zarr_store_path())?);
             auxiliary_artifacts.push(mode_zarr_store_attrs_artifact()?);
@@ -11927,6 +13521,11 @@ fn write_eigen_v2_bundle(
         &modal_solver_diagnostics_json(plan, solver_model, modes.len()),
     )?);
 
+    let has_mode_fields = !mode_metadata_paths.is_empty();
+    let spectrum_revision =
+        published_artifact_sha256(auxiliary_artifacts, "eigen/spectrum.v2.json")?;
+    let branches_revision =
+        published_artifact_sha256(auxiliary_artifacts, "eigen/branches.v2.json")?;
     let mut manifest = serde_json::json!({
         "schema_version": "frequency_domain_manifest.v1",
         "analysis_family": "magnetic_frequency_domain",
@@ -11946,8 +13545,12 @@ fn write_eigen_v2_bundle(
             "branches_v2_path": "eigen/branches.v2.json",
             "dispersion_csv_path": "eigen/dispersion.csv",
             "solver_diagnostics_path": "eigen/diagnostics/solver.v1.json",
-            "mode_field_zarr_store_path": mode_zarr_store_path(),
-            "mode_field_storage_format": "zarr",
+            "mode_field_zarr_store_path": if has_mode_fields {
+                serde_json::json!(mode_zarr_store_path())
+            } else {
+                serde_json::Value::Null
+            },
+            "mode_field_storage_format": if has_mode_fields { "zarr" } else { "none" },
             "mode_metadata_paths": mode_metadata_paths,
         },
         "resources": {
@@ -11960,6 +13563,18 @@ fn write_eigen_v2_bundle(
             "tracking_score_source": "seed_only",
             "modal_overlap_available": false,
         },
+        "cross_artifact_refs": [
+            {
+                "relation": "source_spectrum",
+                "artifact": "eigen/spectrum.v2.json",
+                "revision": spectrum_revision,
+            },
+            {
+                "relation": "source_branches",
+                "artifact": "eigen/branches.v2.json",
+                "revision": branches_revision,
+            },
+        ],
     });
     if summary_payload
         .get("solver_diagnostics")
@@ -11998,6 +13613,8 @@ fn write_eigen_v2_bundle(
             "equilibrium_artifact_sha256",
             "linearization_state_sha256",
             "periodic_mesh_certificate_sha256",
+            "relax_to_eigen_handoff_sha256",
+            "source_mesh_topology_sha256",
             "boundary_gauge",
             "spectral",
             "block_residuals",
@@ -12458,7 +14075,11 @@ fn dispersion_csv(k_sampling: Option<&KSamplingIR>, modes: &serde_json::Value) -
     csv
 }
 
-fn dispersion_v2_csv(k_sampling: Option<&KSamplingIR>, modes: &serde_json::Value) -> String {
+fn dispersion_v2_csv(
+    k_sampling: Option<&KSamplingIR>,
+    modes: &serde_json::Value,
+    visualizable_mode_indices: &BTreeSet<u64>,
+) -> String {
     let k_vector = match k_sampling {
         Some(KSamplingIR::Single { k_vector }) => *k_vector,
         Some(KSamplingIR::Path { .. }) => [0.0, 0.0, 0.0],
@@ -12475,6 +14096,15 @@ fn dispersion_v2_csv(k_sampling: Option<&KSamplingIR>, modes: &serde_json::Value
     if let Some(entries) = modes.as_array() {
         for entry in entries {
             let raw_mode_index = entry["index"].as_u64().unwrap_or(0);
+            let (field_id, field_resource_key) =
+                if visualizable_mode_indices.contains(&raw_mode_index) {
+                    (
+                        mode_field_id(0, raw_mode_index),
+                        mode_field_resource_key(0, raw_mode_index),
+                    )
+                } else {
+                    (String::new(), String::new())
+                };
             let residual_norm = entry["residual_norm"]
                 .as_f64()
                 .map(|value| format!("{value:.16e}"))
@@ -12498,8 +14128,8 @@ fn dispersion_v2_csv(k_sampling: Option<&KSamplingIR>, modes: &serde_json::Value
                 line_width_hz,
                 residual_norm,
                 "",
-                mode_field_id(0, raw_mode_index),
-                mode_field_resource_key(0, raw_mode_index),
+                field_id,
+                field_resource_key,
             ));
         }
     }
@@ -12586,6 +14216,236 @@ fn classify_polarization(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn accepted_relax_completion() -> fullmag_ir::StageCompletionIR {
+        fullmag_ir::StageCompletionIR {
+            status: "completed".to_string(),
+            converged: true,
+            reason: Some(fullmag_ir::StageStopReason::Torque),
+            metric: Some(fullmag_ir::StageMetricKind::MaxTorqueApm),
+            metric_name: Some("max_torque_apm".to_string()),
+            metric_value: Some(5.0e-5),
+            threshold: Some(1.0e-4),
+        }
+    }
+
+    #[test]
+    fn accepted_relax_stage_handoff_prepares_single_k_without_second_relaxation() {
+        let mut plan = minimal_native_modal_plan();
+        plan.equilibrium = EquilibriumSourceIR::RelaxedInitialState;
+        plan.k_sampling = Some(KSamplingIR::Single {
+            k_vector: [0.0, 0.0, 0.0],
+        });
+        let accepted_m0 = vec![[0.0, 1.0, 0.0]; plan.mesh.nodes.len()];
+        plan.equilibrium_magnetization = accepted_m0.clone();
+        let source_mesh = crate::types::FemMeshPayload::from(&plan);
+        let handoff = AcceptedFemRelaxStageHandoff::from_completed_relax(
+            "run-relax",
+            "stage-000",
+            "flat_relax",
+            true,
+            &source_mesh,
+            &accepted_relax_completion(),
+            accepted_m0.clone(),
+        )
+        .expect("accepted relax completion should create a typed handoff");
+
+        let prepared = prepare_single_k_stage_continuation(&plan, &handoff)
+            .expect("same-mesh single-k target should accept the handoff");
+        let (_problem, consumed_m0, relaxation_steps, _observables, _source) =
+            materialize_equilibrium(&prepared, &prepared.equilibrium_magnetization)
+                .expect("provided equilibrium should materialize without relaxation");
+
+        assert_eq!(prepared.equilibrium, EquilibriumSourceIR::Provided);
+        assert_eq!(consumed_m0, accepted_m0);
+        assert_eq!(relaxation_steps, 0);
+    }
+
+    #[test]
+    fn accepted_relax_stage_handoff_is_fail_closed_for_completion_mesh_and_m0_drift() {
+        let mut plan = minimal_native_modal_plan();
+        plan.equilibrium = EquilibriumSourceIR::RelaxedInitialState;
+        plan.k_sampling = Some(KSamplingIR::Single {
+            k_vector: [0.0, 0.0, 0.0],
+        });
+        let accepted_m0 = plan.equilibrium_magnetization.clone();
+        let source_mesh = crate::types::FemMeshPayload::from(&plan);
+
+        let error = AcceptedFemRelaxStageHandoff::from_completed_relax(
+            "run-relax",
+            "stage-000",
+            "flat_run",
+            false,
+            &source_mesh,
+            &accepted_relax_completion(),
+            accepted_m0.clone(),
+        )
+        .expect_err("a non-relaxation source stage must not create a handoff");
+        assert!(error.message.contains("invalid_source_stage"));
+
+        let mut rejected_completion = accepted_relax_completion();
+        rejected_completion.converged = false;
+        let error = AcceptedFemRelaxStageHandoff::from_completed_relax(
+            "run-relax",
+            "stage-000",
+            "flat_relax",
+            true,
+            &source_mesh,
+            &rejected_completion,
+            accepted_m0.clone(),
+        )
+        .expect_err("unaccepted completion must not create a handoff");
+        assert!(error.message.contains("completion_not_accepted"));
+
+        let handoff = AcceptedFemRelaxStageHandoff::from_completed_relax(
+            "run-relax",
+            "stage-000",
+            "flat_relax",
+            true,
+            &source_mesh,
+            &accepted_relax_completion(),
+            accepted_m0.clone(),
+        )
+        .expect("accepted completion should create a handoff");
+
+        let mut topology_drift = plan.clone();
+        topology_drift.mesh.set_tet4_cells(vec![[0, 2, 1, 3]]);
+        let error = prepare_single_k_stage_continuation(&topology_drift, &handoff)
+            .expect_err("same node count with changed indexing must fail");
+        assert!(error.message.contains("mesh_identity_mismatch"));
+
+        let mut m0_drift = plan.clone();
+        m0_drift.equilibrium_magnetization[0] = [0.0, 0.0, 1.0];
+        let error = prepare_single_k_stage_continuation(&m0_drift, &handoff)
+            .expect_err("changed equilibrium content must fail");
+        assert!(error.message.contains("equilibrium_content_mismatch"));
+    }
+
+    #[test]
+    fn accepted_relax_stage_handoff_binds_summary_and_mode_provenance() {
+        let mut plan = minimal_native_modal_plan();
+        plan.equilibrium = EquilibriumSourceIR::RelaxedInitialState;
+        plan.k_sampling = Some(KSamplingIR::Single {
+            k_vector: [0.0, 0.0, 0.0],
+        });
+        let source_mesh = crate::types::FemMeshPayload::from(&plan);
+        let handoff = AcceptedFemRelaxStageHandoff::from_completed_relax(
+            "run-relax",
+            "stage-000",
+            "flat_relax",
+            true,
+            &source_mesh,
+            &accepted_relax_completion(),
+            plan.equilibrium_magnetization.clone(),
+        )
+        .expect("accepted completion should create a handoff");
+        let mut run = ExecutedRun {
+            result: RunResult {
+                status: RunStatus::Completed,
+                steps: Vec::new(),
+                final_magnetization: plan.equilibrium_magnetization.clone(),
+                completion: None,
+            },
+            initial_magnetization: plan.equilibrium_magnetization.clone(),
+            field_snapshots: Vec::new(),
+            field_snapshot_count: 0,
+            auxiliary_artifacts: vec![
+                json_artifact(
+                    "eigen/metadata/eigen_summary.json",
+                    &serde_json::json!({
+                        "equilibrium_source": "provided",
+                        "relaxation_steps": 0,
+                        "solver_diagnostics": {},
+                    }),
+                )
+                .unwrap(),
+                json_artifact(
+                    "eigen/modes/mode_0000.json",
+                    &serde_json::json!({"index": 0}),
+                )
+                .unwrap(),
+            ],
+            provenance: ExecutionProvenance::default(),
+        };
+
+        bind_stage_continuation_artifacts(&mut run, &handoff)
+            .expect("accepted handoff should bind artifacts");
+        let summary: serde_json::Value =
+            serde_json::from_slice(&run.auxiliary_artifacts[0].bytes).unwrap();
+        let mode: serde_json::Value =
+            serde_json::from_slice(&run.auxiliary_artifacts[1].bytes).unwrap();
+
+        assert_eq!(
+            summary["equilibrium_source"]["handoff"],
+            "stage_continuation"
+        );
+        assert_eq!(
+            summary["equilibrium_source"]["content_sha256"],
+            handoff.content_sha256()
+        );
+        assert_eq!(
+            mode["relax_to_eigen_handoff_sha256"],
+            handoff.content_sha256()
+        );
+        assert_eq!(
+            summary["solver_diagnostics"]["relax_to_eigen_handoff"]["source_run_id"],
+            "run-relax"
+        );
+        assert_eq!(
+            summary["solver_diagnostics"]["relax_to_eigen_handoff"]["source_stage_id"],
+            "stage-000"
+        );
+        assert_eq!(
+            summary["solver_diagnostics"]["relax_to_eigen_handoff"]["source_stage_kind"],
+            "flat_relax"
+        );
+    }
+
+    #[test]
+    fn accepted_relax_handoff_round_trips_through_summary_provenance() {
+        let plan = minimal_native_modal_plan();
+        let equilibrium = plan.equilibrium_magnetization.clone();
+        let expected = AcceptedFemEigenEquilibriumHandoff::from_accepted_linearization(
+            &plan,
+            equilibrium.clone(),
+            format!("sha256:{}", "a".repeat(64)),
+            format!("sha256:{}", "b".repeat(64)),
+        )
+        .expect("accepted linearization should produce a handoff");
+        let diagnostics = serde_json::json!({
+            "source_mesh_topology_sha256": expected.source_mesh_topology_sha256(),
+            "relax_to_eigen_handoff_sha256": expected.content_sha256(),
+            "equilibrium_artifact_sha256": expected.equilibrium_artifact_sha256,
+            "linearization_state_sha256": expected.linearization_state_sha256,
+            "relax_to_eigen_handoff": expected.provenance_json(),
+        });
+        let run = ExecutedRun {
+            result: RunResult {
+                status: RunStatus::Completed,
+                steps: Vec::new(),
+                final_magnetization: equilibrium,
+                completion: None,
+            },
+            initial_magnetization: Vec::new(),
+            field_snapshots: Vec::new(),
+            field_snapshot_count: 0,
+            auxiliary_artifacts: vec![json_artifact(
+                "eigen/metadata/eigen_summary.json",
+                &serde_json::json!({"solver_diagnostics": diagnostics}),
+            )
+            .expect("summary fixture should serialize")],
+            provenance: ExecutionProvenance::default(),
+        };
+
+        let restored = accepted_relax_to_eigen_handoff_from_run(&plan, &run)
+            .expect("summary provenance should restore the exact handoff");
+
+        assert_eq!(restored.content_sha256(), expected.content_sha256());
+        assert_eq!(
+            restored.source_mesh_topology_sha256(),
+            expected.source_mesh_topology_sha256()
+        );
+    }
 
     #[test]
     fn native_modal_progress_json_maps_to_runtime_progress() {
@@ -12779,6 +14639,340 @@ mod tests {
         assert_eq!(spectrum["status"], "interrupted");
         assert_eq!(spectrum["complete"], false);
         assert_eq!(preserved.result.status, RunStatus::Cancelled);
+    }
+
+    fn bias_field_sweep_run_fixture(sample_index: usize, status: RunStatus) -> ExecutedRun {
+        let mode_field_id = format!("analysis:eigen:sample-{sample_index:04}:mode-0000");
+        let mode_field_resource_key =
+            format!("/v2/sessions/current/data/fields/{mode_field_id}/samples/vector");
+        let spectrum_mode = serde_json::json!({
+            "raw_mode_index": 0,
+            "frequency_hz": 1.0e9 + sample_index as f64,
+            "angular_frequency_rad_per_s": std::f64::consts::TAU * (1.0e9 + sample_index as f64),
+            "mode_field_id": mode_field_id,
+            "mode_field_resource_key": mode_field_resource_key,
+            "residual_relative_l2": 1.0e-10,
+            "equilibrium_artifact_sha256": format!("sha256:{}", "a".repeat(64)),
+            "linearization_state_sha256": format!("sha256:{}", "b".repeat(64)),
+            "operator_input_signature_sha256": format!("sha256:{}", "c".repeat(64)),
+        });
+        let spectrum = serde_json::json!({
+            "schema_version": "eigen_spectrum.v2",
+            "samples": [{
+                "sample_index": sample_index,
+                "external_field_a_per_m": [20_000.0 * (sample_index + 1) as f64, 0.0, 0.0],
+                "mesh_id": "mesh:test",
+                "topology_revision": "mesh-rev:test",
+                "modes": [spectrum_mode.clone()],
+            }],
+        });
+        let branches = serde_json::json!({
+            "schema_version": "eigen_branches.v2",
+            "branches": [{
+                "branch_id": 0,
+                "points": [{"sample_index": sample_index, "raw_mode_index": 0}],
+            }],
+        });
+        let diagnostics = serde_json::json!({
+            "schema_version": "frequency_domain_modal_solver_diagnostics.v1",
+            "study_product": "modal_eigen",
+            "requested_execution": {"backend": "fem", "device": "cpu"},
+            "resolved_execution": {"backend": "fem", "device": "cpu"},
+        });
+        let summary = serde_json::json!({
+            "solver_kind": "k0_poisson_airbox_cpu_schur_slepc",
+            "modes": [spectrum_mode],
+            "solver_diagnostics": diagnostics,
+        });
+        let manifest = serde_json::json!({
+            "schema_version": "frequency_domain_manifest.v1",
+            "artifacts": {},
+            "resources": {},
+        });
+        let mut auxiliary_artifacts = vec![
+            json_artifact("eigen/spectrum.v2.json", &spectrum).unwrap(),
+            json_artifact("eigen/branches.v2.json", &branches).unwrap(),
+            json_artifact("eigen/metadata/eigen_summary.json", &summary).unwrap(),
+            json_artifact("eigen/diagnostics/solver.v1.json", &diagnostics).unwrap(),
+            json_artifact("frequency_domain/manifest.v1.json", &manifest).unwrap(),
+            json_artifact(
+                format!("eigen/modes/sample_{sample_index:04}/mode_0000.json"),
+                &serde_json::json!({
+                    "mode_field_id": mode_field_id,
+                    "mode_field_resource_key": mode_field_resource_key,
+                }),
+            )
+            .unwrap(),
+            AuxiliaryArtifact {
+                relative_path: format!(
+                    "eigen/mode_fields.zarr/sample_{sample_index:04}/mode_0000/real.bin"
+                ),
+                bytes: vec![0, 1, 2, 3],
+            },
+        ];
+        if status != RunStatus::Completed {
+            auxiliary_artifacts.push(
+                json_artifact(
+                    "eigen/partial.v1.json",
+                    &serde_json::json!({"status": run_status_label(status), "complete": false}),
+                )
+                .unwrap(),
+            );
+        }
+        ExecutedRun {
+            result: RunResult {
+                status,
+                steps: Vec::new(),
+                final_magnetization: Vec::new(),
+                completion: None,
+            },
+            initial_magnetization: Vec::new(),
+            field_snapshots: Vec::new(),
+            field_snapshot_count: 0,
+            auxiliary_artifacts,
+            provenance: ExecutionProvenance::default(),
+        }
+    }
+
+    #[test]
+    fn terminal_bias_field_sweep_publishes_only_completed_prefix_with_exact_lifecycle() {
+        for (terminal_status, artifact_status, stop_reason, interrupted) in [
+            (
+                RunStatus::Cancelled,
+                "interrupted",
+                "cancel_requested",
+                true,
+            ),
+            (RunStatus::Paused, "interrupted", "pause_requested", true),
+            (RunStatus::Failed, "corrupt", "failed", false),
+        ] {
+            let merged = merge_bias_field_sweep_runs(
+                vec![
+                    bias_field_sweep_run_fixture(0, RunStatus::Completed),
+                    bias_field_sweep_run_fixture(1, terminal_status),
+                ],
+                3,
+                fullmag_ir::BiasFieldSweepEquilibriumPolicyIR::Continuation,
+                fullmag_ir::BiasFieldSweepContinuationSeedIR::PreviousAcceptedEquilibrium,
+            )
+            .expect("terminal sweep should publish a typed partial result");
+            let typed = merged
+                .auxiliary_artifacts
+                .iter()
+                .find(|artifact| artifact.relative_path == "eigen/field_sweep.v1.json")
+                .and_then(|artifact| {
+                    serde_json::from_slice::<serde_json::Value>(&artifact.bytes).ok()
+                })
+                .expect("typed field sweep must always be discoverable");
+            assert_eq!(typed["status"], artifact_status);
+            assert_eq!(typed["complete"], false);
+            assert_eq!(typed["interrupted"], interrupted);
+            assert_eq!(typed["stop_reason"], stop_reason);
+            assert_eq!(typed["requested_sample_count"], 3);
+            assert_eq!(typed["completed_sample_count"], 1);
+            assert_eq!(typed["samples"].as_array().map(Vec::len), Some(1));
+            assert_eq!(typed["samples"][0]["status"], "complete");
+            assert_eq!(typed["samples"][0]["modes"][0]["status"], "complete");
+            assert!(typed.get("promotion").is_none());
+            assert!(typed.get("promotion_binding").is_none());
+            assert!(!merged.auxiliary_artifacts.iter().any(|artifact| {
+                artifact
+                    .relative_path
+                    .starts_with("eigen/modes/sample_0001/")
+            }));
+            assert!(!merged.auxiliary_artifacts.iter().any(|artifact| {
+                artifact
+                    .relative_path
+                    .starts_with("eigen/mode_fields.zarr/sample_0001/")
+            }));
+            let manifest = merged
+                .auxiliary_artifacts
+                .iter()
+                .find(|artifact| artifact.relative_path == "frequency_domain/manifest.v1.json")
+                .and_then(|artifact| {
+                    serde_json::from_slice::<serde_json::Value>(&artifact.bytes).ok()
+                })
+                .expect("typed field sweep discovery manifest must be valid");
+            assert_eq!(
+                manifest["artifacts"]["field_sweep_v1_path"],
+                "eigen/field_sweep.v1.json"
+            );
+            assert_eq!(
+                manifest["resources"]["field_sweep_resource_key"],
+                "/v2/sessions/current/analysis/frequency-domain/eigen/field-sweep.v1"
+            );
+        }
+    }
+
+    #[test]
+    fn failed_bias_field_sweep_finalizer_publishes_completed_prefix_without_terminal_sample() {
+        let failure_reason =
+            "native FEM modal_eigen production CPU solve failed: injected sample failure";
+        let finalized = finalize_failed_bias_field_sweep(
+            vec![bias_field_sweep_run_fixture(0, RunStatus::Completed)],
+            3,
+            fullmag_ir::BiasFieldSweepEquilibriumPolicyIR::Continuation,
+            fullmag_ir::BiasFieldSweepContinuationSeedIR::PreviousAcceptedEquilibrium,
+            RunError {
+                message: failure_reason.to_string(),
+            },
+        )
+        .expect("a failed later sample should publish the completed prefix");
+
+        assert_eq!(finalized.result.status, RunStatus::Failed);
+        let completion = finalized
+            .result
+            .completion
+            .as_ref()
+            .expect("failed sweep must expose terminal stage lifecycle");
+        assert_eq!(completion.status, "failed");
+        assert_eq!(
+            completion.reason,
+            Some(fullmag_ir::StageStopReason::BackendError)
+        );
+        let typed = finalized
+            .auxiliary_artifacts
+            .iter()
+            .find(|artifact| artifact.relative_path == "eigen/field_sweep.v1.json")
+            .and_then(|artifact| serde_json::from_slice::<serde_json::Value>(&artifact.bytes).ok())
+            .expect("failed sweep must publish a typed field-sweep artifact");
+        assert_eq!(typed["status"], "corrupt");
+        assert_eq!(typed["complete"], false);
+        assert_eq!(typed["interrupted"], false);
+        assert_eq!(typed["stop_reason"], failure_reason);
+        assert_eq!(typed["requested_sample_count"], 3);
+        assert_eq!(typed["completed_sample_count"], 1);
+        assert_eq!(typed["samples"].as_array().map(Vec::len), Some(1));
+        assert_eq!(typed["samples"][0]["sample_index"], 0);
+        assert!(!finalized.auxiliary_artifacts.iter().any(|artifact| {
+            artifact
+                .relative_path
+                .starts_with("eigen/modes/sample_0001/")
+        }));
+
+        let diagnostics = finalized
+            .auxiliary_artifacts
+            .iter()
+            .find(|artifact| artifact.relative_path == "eigen/diagnostics/solver.v1.json")
+            .and_then(|artifact| serde_json::from_slice::<serde_json::Value>(&artifact.bytes).ok())
+            .expect("failed sweep must preserve typed solver diagnostics");
+        assert_eq!(diagnostics["status"], "corrupt");
+        assert_eq!(diagnostics["field_sweep"]["run_status"], "failed");
+        assert_eq!(diagnostics["field_sweep"]["stop_reason"], failure_reason);
+    }
+
+    #[test]
+    fn bias_field_sweep_executor_error_finalizes_completed_prefix_without_terminal_sample() {
+        let mut plan = minimal_native_modal_plan();
+        plan.bias_field_samples = (0..3)
+            .map(|sample_index| {
+                bias_field_sample(
+                    sample_index,
+                    [20_000.0 * f64::from(sample_index + 1), 0.0, 0.0],
+                    fullmag_ir::BiasFieldSweepEquilibriumPolicyIR::Continuation,
+                    fullmag_ir::BiasFieldSweepContinuationSeedIR::PreviousAcceptedEquilibrium,
+                )
+            })
+            .collect();
+        let failure_reason =
+            "native FEM modal_eigen production CPU solve failed: injected sample failure";
+        let mut executor_entry_count = 0;
+        let finalized =
+            execute_bias_field_sweep_with_executor(&plan, |sample_plan, sample_position| {
+                executor_entry_count += 1;
+                assert_eq!(
+                    sample_plan.external_field,
+                    Some(plan.bias_field_samples[sample_position].field_a_per_m)
+                );
+                if sample_position == 0 {
+                    let mut completed = bias_field_sweep_run_fixture(0, RunStatus::Completed);
+                    completed.initial_magnetization = sample_plan.equilibrium_magnetization.clone();
+                    completed.result.final_magnetization =
+                        sample_plan.equilibrium_magnetization.clone();
+                    return Ok(completed);
+                }
+                assert_eq!(
+                    sample_position, 1,
+                    "no sample may execute after the failure"
+                );
+                Err(RunError {
+                    message: failure_reason.to_string(),
+                })
+            })
+            .expect("a later executor error should publish the completed prefix");
+
+        assert_eq!(executor_entry_count, 2);
+        assert_eq!(finalized.result.status, RunStatus::Failed);
+        let completion = finalized
+            .result
+            .completion
+            .as_ref()
+            .expect("failed sweep must expose terminal stage lifecycle");
+        assert_eq!(completion.status, "failed");
+        assert_eq!(
+            completion.reason,
+            Some(fullmag_ir::StageStopReason::BackendError)
+        );
+
+        let typed = finalized
+            .auxiliary_artifacts
+            .iter()
+            .find(|artifact| artifact.relative_path == "eigen/field_sweep.v1.json")
+            .and_then(|artifact| serde_json::from_slice::<serde_json::Value>(&artifact.bytes).ok())
+            .expect("failed sweep must publish a typed field-sweep artifact");
+        assert_eq!(typed["status"], "corrupt");
+        assert_eq!(typed["complete"], false);
+        assert_eq!(typed["interrupted"], false);
+        assert_eq!(typed["stop_reason"], failure_reason);
+        assert_eq!(typed["requested_sample_count"], 3);
+        assert_eq!(typed["completed_sample_count"], 1);
+        assert_eq!(typed["samples"].as_array().map(Vec::len), Some(1));
+        assert_eq!(typed["samples"][0]["sample_index"], 0);
+        assert_eq!(typed["samples"][0]["status"], "complete");
+        assert_eq!(typed["samples"][0]["modes"][0]["status"], "complete");
+        assert_eq!(typed["revision"], typed["content_sha256"]);
+        assert_eq!(
+            native_field_sweep_content_digest(&typed)
+                .expect("typed field sweep self-digest must be reproducible"),
+            typed["content_sha256"]
+                .as_str()
+                .expect("typed field sweep digest must be a string")
+        );
+        assert!(!finalized.auxiliary_artifacts.iter().any(|artifact| {
+            artifact
+                .relative_path
+                .starts_with("eigen/modes/sample_0001/")
+        }));
+        assert!(!finalized.auxiliary_artifacts.iter().any(|artifact| {
+            artifact
+                .relative_path
+                .starts_with("eigen/mode_fields.zarr/sample_0001/")
+        }));
+
+        let diagnostics = finalized
+            .auxiliary_artifacts
+            .iter()
+            .find(|artifact| artifact.relative_path == "eigen/diagnostics/solver.v1.json")
+            .and_then(|artifact| serde_json::from_slice::<serde_json::Value>(&artifact.bytes).ok())
+            .expect("failed sweep must preserve typed solver diagnostics");
+        assert_eq!(diagnostics["status"], "corrupt");
+        assert_eq!(diagnostics["field_sweep"]["run_status"], "failed");
+        assert_eq!(diagnostics["field_sweep"]["stop_reason"], failure_reason);
+
+        let manifest = finalized
+            .auxiliary_artifacts
+            .iter()
+            .find(|artifact| artifact.relative_path == "frequency_domain/manifest.v1.json")
+            .and_then(|artifact| serde_json::from_slice::<serde_json::Value>(&artifact.bytes).ok())
+            .expect("typed field sweep discovery manifest must be valid");
+        assert_eq!(
+            manifest["artifacts"]["field_sweep_v1_path"],
+            "eigen/field_sweep.v1.json"
+        );
+        assert_eq!(
+            manifest["resources"]["field_sweep_resource_key"],
+            "/v2/sessions/current/analysis/frequency-domain/eigen/field-sweep.v1"
+        );
     }
 
     #[test]
@@ -14220,6 +16414,8 @@ mod tests {
             "phase_constraint_sha256": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
             "equilibrium_artifact_sha256": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
             "linearization_state_sha256": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+            "relax_to_eigen_handoff_sha256": "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+            "source_mesh_topology_sha256": plan.mesh.topology_fingerprint_v6(),
             "periodic_mesh_certificate_sha256": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
         });
         let mut legacy_mode = serde_json::json!({
@@ -14247,9 +16443,9 @@ mod tests {
             "mu0_T_m_per_A": MU0,
             "dominant_polarization": "uniform",
             "k_vector": [0.0, 0.0, 0.0],
-            "real": [[1.0, 0.0, 0.0]],
-            "imag": [[0.0, 1.0, 0.0]],
-            "amplitude": [1.0],
+            "real": [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0], [1.0, 1.0, 0.0]],
+            "imag": [[0.0, 1.0, 0.0], [0.0, 0.0, 1.0], [1.0, 0.0, 0.0], [0.0, 1.0, 1.0]],
+            "amplitude": [1.0, 1.0, 1.0, 1.0],
         });
         for (key, value) in provenance.as_object().expect("provenance object") {
             legacy_mode[key] = value.clone();
@@ -14277,6 +16473,153 @@ mod tests {
         for key in provenance.as_object().expect("provenance object").keys() {
             assert_eq!(nested[key], provenance[key], "nested mode lost {key}");
         }
+        assert_eq!(
+            nested["source_mesh_identity"],
+            serde_json::json!({
+                "mesh_id": plan.mesh_name,
+                "topology_fingerprint": plan.mesh.topology_fingerprint_v6(),
+                "indexing": "full_domain_node_order",
+                "node_count": plan.mesh.nodes.len(),
+            })
+        );
+        let chunk = artifacts
+            .iter()
+            .find(|artifact| {
+                artifact.relative_path
+                    == "eigen/mode_fields.zarr/sample_0000/mode_0000/vector_xyz_complex/0.0.0"
+            })
+            .expect("canonical Zarr v2 mode chunk should be emitted");
+        assert_eq!(
+            nested["payload_sha256"],
+            format!("sha256:{:x}", Sha256::digest(&chunk.bytes))
+        );
+    }
+
+    #[test]
+    fn native_eigen_v2_rejects_requested_mode_without_cartesian_complex_payload() {
+        let plan = minimal_native_modal_plan();
+        let summary = serde_json::json!({
+            "solver_kind": "k0_poisson_airbox_cpu_petsc_slepc",
+            "modes": [{"index": 0}],
+        });
+        let mut artifacts = Vec::new();
+
+        let error = write_eigen_v2_bundle(
+            &plan,
+            &summary,
+            &std::collections::BTreeSet::from([0_u32]),
+            &mut artifacts,
+            0,
+        )
+        .expect_err("a requested field export without payload must fail closed");
+
+        assert!(error.message.contains("requested mode 0"));
+    }
+
+    #[test]
+    fn native_eigen_v2_rejects_malformed_or_asymmetric_complex_xyz_payload() {
+        let plan = minimal_native_modal_plan();
+        let summary = serde_json::json!({
+            "solver_kind": "k0_poisson_airbox_cpu_petsc_slepc",
+            "modes": [{"index": 0}],
+        });
+        let malformed = serde_json::json!({
+            "real": [[1.0, 0.0]],
+            "imag": [[0.0, 1.0, 0.0]],
+        });
+        let mut artifacts = vec![json_artifact("eigen/modes/mode_0000.json", &malformed)
+            .expect("fixture should serialize")];
+
+        let error = write_eigen_v2_bundle(
+            &plan,
+            &summary,
+            &std::collections::BTreeSet::from([0_u32]),
+            &mut artifacts,
+            0,
+        )
+        .expect_err("a malformed Cartesian component must fail closed");
+
+        assert!(error.message.contains("real[0]"));
+    }
+
+    #[test]
+    fn native_field_sweep_binds_published_sources_and_has_own_content_digest() {
+        let spectrum = serde_json::json!({
+            "samples": [{
+                "sample_index": 7,
+                "external_field_a_per_m": [40_000.0, 0.0, 0.0],
+                "mesh_id": "mesh:periodic-airbox",
+                "topology_revision": "sha256:mesh-revision",
+                "modes": [{
+                    "raw_mode_index": 2,
+                    "frequency_hz": 6.1e9,
+                    "angular_frequency_rad_per_s": std::f64::consts::TAU * 6.1e9,
+                    "mode_field_id": "analysis:eigen:sample-0007:mode-0002",
+                    "mode_field_resource_key": "/v2/sessions/current/data/fields/analysis:eigen:sample-0007:mode-0002/samples/vector",
+                    "residual_relative_l2": 1.0e-10,
+                    "equilibrium_artifact_sha256": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                    "linearization_state_sha256": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+                    "operator_input_signature_sha256": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+                }]
+            }]
+        });
+        let branches = serde_json::json!({
+            "branches": [{
+                "branch_id": 3,
+                "points": [{"sample_index": 7, "raw_mode_index": 2}]
+            }]
+        });
+        let diagnostics = serde_json::json!({
+            "requested_execution": {"backend": "fem", "device": "cpu"},
+            "resolved_execution": {"backend": "fem", "device": "cpu"}
+        });
+        let artifacts = vec![
+            json_artifact("eigen/spectrum.v2.json", &spectrum)
+                .expect("spectrum fixture should serialize"),
+            json_artifact("eigen/branches.v2.json", &branches)
+                .expect("branches fixture should serialize"),
+        ];
+
+        let artifact = build_native_field_sweep_artifact(
+            &spectrum,
+            &branches,
+            &diagnostics,
+            &artifacts,
+            1,
+            RunStatus::Completed,
+            None,
+        )
+        .expect("complete native field sweep should be serializable");
+        let spectrum_revision = published_artifact_sha256(&artifacts, "eigen/spectrum.v2.json")
+            .expect("published spectrum digest should resolve");
+        let branches_revision = published_artifact_sha256(&artifacts, "eigen/branches.v2.json")
+            .expect("published branches digest should resolve");
+
+        assert_eq!(artifact["source"]["revision"], spectrum_revision);
+        assert_eq!(artifact["source_revision"], spectrum_revision);
+        assert_eq!(artifact["revision"], artifact["content_sha256"]);
+        let mut normalized_envelope = artifact.clone();
+        normalized_envelope["revision"] = serde_json::Value::String(String::new());
+        normalized_envelope["content_sha256"] = serde_json::Value::String(String::new());
+        let expected_content_digest = format!(
+            "sha256:{:x}",
+            Sha256::digest(
+                serde_json::to_vec(&normalized_envelope)
+                    .expect("normalized field-sweep envelope should serialize")
+            )
+        );
+        assert_eq!(artifact["revision"], expected_content_digest);
+        assert_ne!(
+            artifact["revision"], artifact["source_revision"],
+            "the field-sweep envelope must not reuse the spectrum source digest"
+        );
+        assert_eq!(
+            artifact["cross_artifact_refs"],
+            serde_json::json!([
+                {"relation": "source_spectrum", "artifact": "eigen/spectrum.v2.json", "revision": spectrum_revision},
+                {"relation": "source_branches", "artifact": "eigen/branches.v2.json", "revision": branches_revision},
+            ])
+        );
     }
 
     fn scope_observables(node_count: usize, max_torque_apm: f64) -> EffectiveFieldObservables {
@@ -14519,7 +16862,7 @@ mod tests {
             }
         ]);
 
-        let csv = dispersion_v2_csv(None, &modes);
+        let csv = dispersion_v2_csv(None, &modes, &BTreeSet::from([3_u64]));
         let header = csv
             .lines()
             .next()
@@ -15065,9 +17408,13 @@ mod tests {
         let mass = DMatrix::<f64>::identity(4, 4);
         let gyrotropic = vec![0.0; 16];
 
-        let error =
-            native_modal_modes_from_result_json(&plan, &raw, &stiffness, &gyrotropic, &mass, None)
-                .expect_err("PA-E2 scalar result must not fabricate a modal vector");
+        let error = native_modal_modes_from_result_json(
+            &plan,
+            &raw,
+            Some((&stiffness, &gyrotropic, &mass)),
+            None,
+        )
+        .expect_err("PA-E2 scalar result must not fabricate a modal vector");
         assert!(error.message.contains("missing complete modes[]"));
     }
 
@@ -15098,9 +17445,13 @@ mod tests {
         let mass = DMatrix::<f64>::identity(4, 4);
         let gyrotropic = vec![0.0; 16];
 
-        let modes =
-            native_modal_modes_from_result_json(&plan, &raw, &stiffness, &gyrotropic, &mass, None)
-                .expect("complete PA-E2 q mode payload should be accepted");
+        let modes = native_modal_modes_from_result_json(
+            &plan,
+            &raw,
+            Some((&stiffness, &gyrotropic, &mass)),
+            None,
+        )
+        .expect("complete PA-E2 q mode payload should be accepted");
         assert_eq!(modes.len(), 1);
         assert_eq!(modes[0].vector.len(), 4);
         assert_eq!(modes[0].frequency_hz, 4.0e9);

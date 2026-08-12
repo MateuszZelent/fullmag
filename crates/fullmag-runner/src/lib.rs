@@ -457,6 +457,7 @@ pub use types::{
     StageFemMeshIdentity, StepAction, StepStats, StepUpdate, TimestepBackend, TimestepDevice,
     TimestepExecutionIdentity, TimestepPolicyProvenance, TimestepValidationState,
 };
+pub use fem_eigen::AcceptedFemRelaxStageHandoff;
 
 use crate::capabilities::{
     capabilities_for_fdm_engine, capabilities_for_fem_eigen_engine, capabilities_for_fem_engine,
@@ -2528,6 +2529,28 @@ pub fn run_planned_problem_with_callback_and_fem_mesh_identity(
     until_seconds: f64,
     output_dir: &Path,
     field_every_n: u64,
+    on_step: impl FnMut(StepUpdate) -> StepAction + Send,
+) -> Result<RunResult, RunError> {
+    run_planned_problem_with_callback_and_fem_mesh_identity_and_relax_handoff(
+        problem,
+        plan,
+        fem_mesh_identity,
+        until_seconds,
+        output_dir,
+        field_every_n,
+        None,
+        on_step,
+    )
+}
+
+pub fn run_planned_problem_with_callback_and_fem_mesh_identity_and_relax_handoff(
+    problem: &ProblemIR,
+    plan: &fullmag_ir::ExecutionPlanIR,
+    fem_mesh_identity: Option<&StageFemMeshIdentity>,
+    until_seconds: f64,
+    output_dir: &Path,
+    field_every_n: u64,
+    relax_handoff: Option<&AcceptedFemRelaxStageHandoff>,
     mut on_step: impl FnMut(StepUpdate) -> StepAction + Send,
 ) -> Result<RunResult, RunError> {
     require_resolved_runtime_sampling(problem, plan)?;
@@ -2654,12 +2677,21 @@ pub fn run_planned_problem_with_callback_and_fem_mesh_identity(
                         .and_then(|context| context.generation_id()),
                 ))
             };
-            dispatch::execute_fem_eigen_with_progress(
-                engine,
-                fem,
-                &runtime_outputs,
-                &mut progress_callback,
-            )
+            match relax_handoff {
+                Some(handoff) => dispatch::execute_fem_eigen_with_progress_and_stage_handoff(
+                    engine,
+                    fem,
+                    &runtime_outputs,
+                    &mut progress_callback,
+                    handoff,
+                ),
+                None => dispatch::execute_fem_eigen_with_progress(
+                    engine,
+                    fem,
+                    &runtime_outputs,
+                    &mut progress_callback,
+                ),
+            }
         }
         BackendPlanIR::FemFrequencyResponse(response) => {
             frequency_response::execute_fem_frequency_response_validation_with_context(
@@ -2798,6 +2830,48 @@ pub fn run_planned_problem_with_callback_and_hysteresis_stage_id(
         until_seconds,
         output_dir,
         field_every_n,
+        on_step,
+    )
+}
+
+pub fn run_planned_problem_with_callback_and_hysteresis_stage_id_and_relax_handoff(
+    problem: &ProblemIR,
+    plan: &fullmag_ir::ExecutionPlanIR,
+    until_seconds: f64,
+    output_dir: &Path,
+    field_every_n: u64,
+    hysteresis_stage_id: Option<&str>,
+    relax_handoff: Option<&AcceptedFemRelaxStageHandoff>,
+    mut on_step: impl FnMut(StepUpdate) -> StepAction + Send,
+) -> Result<RunResult, RunError> {
+    require_resolved_runtime_sampling(problem, plan)?;
+    require_physics_graph_runtime_provenance(problem, plan)?;
+    if let fullmag_ir::StudyIR::Hysteresis { .. } = &problem.study {
+        if relax_handoff.is_some() {
+            return Err(RunError {
+                message: "relax_stage_handoff_requires_single_k_target".to_string(),
+            });
+        }
+        return hysteresis::run_planned_hysteresis_with_callback(
+            problem,
+            plan,
+            until_seconds,
+            output_dir,
+            field_every_n,
+            hysteresis_stage_id,
+            None,
+            &mut on_step,
+        );
+    }
+    let stage_asset = StageFemMeshAsset::build_from_backend_plan(&plan.backend_plan);
+    run_planned_problem_with_callback_and_fem_mesh_identity_and_relax_handoff(
+        problem,
+        plan,
+        stage_asset.as_ref().map(|asset| &asset.identity),
+        until_seconds,
+        output_dir,
+        field_every_n,
+        relax_handoff,
         on_step,
     )
 }

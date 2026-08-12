@@ -2479,6 +2479,35 @@ pub(crate) fn execute_fem_eigen_with_progress(
     }
 }
 
+pub(crate) fn execute_fem_eigen_with_progress_and_stage_handoff(
+    engine: FemEngine,
+    plan: &FemEigenPlanIR,
+    outputs: &[OutputIR],
+    progress: &mut fem_eigen::FemEigenProgressCallback<'_>,
+    handoff: &fem_eigen::AcceptedFemRelaxStageHandoff,
+) -> Result<ExecutedRun, RunError> {
+    if matches!(plan.k_sampling, Some(fullmag_ir::KSamplingIR::Path { .. })) {
+        return Err(RunError {
+            message: "relax_stage_handoff_requires_single_k_target".to_string(),
+        });
+    }
+    match engine {
+        FemEngine::CpuNative => {
+            fem_eigen::execute_cpu_fem_eigen_with_progress_and_stage_handoff(
+                plan, outputs, progress, handoff,
+            )
+        }
+        FemEngine::NativeGpu => {
+            fem_eigen::execute_gpu_fem_eigen_with_progress_and_stage_handoff(
+                plan,
+                outputs,
+                Some(progress),
+                handoff,
+            )
+        }
+    }
+}
+
 /// Multi-k orchestrator path: iterate over samples in a `KSamplingIR::Path`,
 /// solve each point with the existing single-k solver, track branches, and
 /// produce V2 path/branch/mode artifacts alongside legacy-compatible ones.
@@ -2509,6 +2538,7 @@ fn execute_fem_eigen_path(
         engine: FemEngine,
         mode_artifacts: RefCell<Vec<AuxiliaryArtifact>>,
         mode_artifact_indices: BTreeSet<u32>,
+        relax_handoff: RefCell<Option<fem_eigen::AcceptedFemEigenEquilibriumHandoff>>,
         periodic_airbox_k0_metrics:
             RefCell<Option<crate::eigen::K0KittelPeriodicAirboxDemagMetrics>>,
     }
@@ -2528,14 +2558,38 @@ fn execute_fem_eigen_path(
                 return solve_k0_kittel_synthetic_demag_factor_single_k(plan, sample);
             }
 
-            let point_plan = eigen_path_single_k_point_plan(plan, sample)?;
+            let existing_handoff = self.relax_handoff.borrow().clone();
+            let point_plan = eigen_path_single_k_point_plan(
+                plan,
+                sample,
+                existing_handoff.is_some(),
+                existing_handoff.as_ref(),
+            )?;
 
             let executed = match self.engine {
-                FemEngine::CpuNative => fem_eigen::execute_cpu_fem_eigen(&point_plan, outputs)?,
-                FemEngine::NativeGpu => {
-                    fem_eigen::execute_gpu_fem_eigen(&point_plan, outputs, None)?
-                }
+                FemEngine::CpuNative => fem_eigen::execute_cpu_fem_eigen_with_handoff(
+                    &point_plan,
+                    outputs,
+                    existing_handoff.as_ref(),
+                )?,
+                FemEngine::NativeGpu => fem_eigen::execute_gpu_fem_eigen_with_handoff(
+                    &point_plan,
+                    outputs,
+                    None,
+                    existing_handoff.as_ref(),
+                )?,
             };
+            if existing_handoff.is_none()
+                && !bias_field_sweep_requested(plan)
+                && matches!(
+                    plan.equilibrium,
+                    fullmag_ir::EquilibriumSourceIR::RelaxedInitialState
+                )
+            {
+                let accepted =
+                    fem_eigen::accepted_relax_to_eigen_handoff_from_run(&point_plan, &executed)?;
+                *self.relax_handoff.borrow_mut() = Some(accepted);
+            }
             if let Some(metrics) = eigen_path_periodic_airbox_k0_metrics_from_single_k_artifacts(
                 plan,
                 &executed.auxiliary_artifacts,
@@ -2638,6 +2692,7 @@ fn execute_fem_eigen_path(
         engine,
         mode_artifacts: RefCell::new(Vec::new()),
         mode_artifact_indices,
+        relax_handoff: RefCell::new(None),
         periodic_airbox_k0_metrics: RefCell::new(None),
     };
     let mut path_result = run_path_or_single(
@@ -3175,6 +3230,8 @@ fn periodic_airbox_k0_physical_plan(plan: &FemEigenPlanIR) -> bool {
 fn eigen_path_single_k_point_plan(
     plan: &FemEigenPlanIR,
     sample: &crate::eigen::KSampleDescriptor,
+    reuse_relaxed_equilibrium: bool,
+    handoff: Option<&fem_eigen::AcceptedFemEigenEquilibriumHandoff>,
 ) -> Result<FemEigenPlanIR, RunError> {
     let mut point_plan = plan.clone();
     point_plan.k_sampling = Some(fullmag_ir::KSamplingIR::Single {
@@ -3219,9 +3276,14 @@ fn eigen_path_single_k_point_plan(
         point_plan.equilibrium,
         fullmag_ir::EquilibriumSourceIR::RelaxedInitialState
     ) {
-        // Ordinary k-path samples share the already accepted equilibrium and
-        // must not repeat relaxation for every wavevector.
-        point_plan.equilibrium = fullmag_ir::EquilibriumSourceIR::Provided;
+        if reuse_relaxed_equilibrium {
+            let handoff = handoff.ok_or_else(|| RunError {
+                message: "missing_relax_to_eigen_handoff".to_string(),
+            })?;
+            handoff.validate_target_plan(&point_plan)?;
+            point_plan.equilibrium = fullmag_ir::EquilibriumSourceIR::Provided;
+            point_plan.equilibrium_magnetization = handoff.equilibrium_magnetization().to_vec();
+        }
     }
     point_plan.k0_kittel_validation = None;
     Ok(point_plan)
@@ -4550,15 +4612,9 @@ fn eigen_path_solver_counter(diagnostics: &serde_json::Value, key: &str) -> u64 
 
 fn eigen_path_equilibrium_source_json(
     plan: &FemEigenPlanIR,
-    relaxation_steps: u64,
+    _relaxation_steps: u64,
 ) -> serde_json::Value {
     match &plan.equilibrium {
-        fullmag_ir::EquilibriumSourceIR::RelaxedInitialState if relaxation_steps == 0 => {
-            serde_json::json!({
-                "kind": "relaxed_initial_state",
-                "handoff": "stage_continuation",
-            })
-        }
         fullmag_ir::EquilibriumSourceIR::RelaxedInitialState => {
             serde_json::json!({ "kind": "relaxed_initial_state" })
         }
@@ -9932,7 +9988,7 @@ mod tests {
     }
 
     #[test]
-    fn k_path_single_k_plan_uses_relaxed_handoff_without_repeating_relaxation() {
+    fn k_path_first_single_k_plan_performs_requested_relaxation() {
         let mut plan = tiny_fem_eigen_plan(Some(fullmag_ir::KSamplingIR::Path {
             points: vec![fullmag_ir::KPointIR {
                 label: Some("G".to_string()),
@@ -9951,12 +10007,12 @@ mod tests {
             k_vector: [0.0, 0.0, 0.0],
         };
 
-        let point_plan = eigen_path_single_k_point_plan(&plan, &sample)
+        let point_plan = eigen_path_single_k_point_plan(&plan, &sample, false, None)
             .expect("ordinary k-path point plan should be valid");
 
         assert_eq!(
             point_plan.equilibrium,
-            fullmag_ir::EquilibriumSourceIR::Provided
+            fullmag_ir::EquilibriumSourceIR::RelaxedInitialState
         );
         assert_eq!(
             point_plan.k_sampling,
@@ -9964,6 +10020,126 @@ mod tests {
                 k_vector: [0.0, 0.0, 0.0]
             })
         );
+    }
+
+    #[test]
+    fn k_path_rejects_provided_relaxed_equilibrium_without_handoff_binding() {
+        let mut plan = tiny_fem_eigen_plan(Some(fullmag_ir::KSamplingIR::Path {
+            points: vec![fullmag_ir::KPointIR {
+                label: Some("G".to_string()),
+                k_vector: [0.0, 0.0, 0.0],
+            }],
+            samples_per_segment: Vec::new(),
+            closed: false,
+        }));
+        plan.equilibrium = fullmag_ir::EquilibriumSourceIR::RelaxedInitialState;
+        let sample = crate::eigen::KSampleDescriptor {
+            sample_index: 1,
+            label: Some("G".to_string()),
+            segment_index: Some(0),
+            path_s: 0.0,
+            t_in_segment: 0.0,
+            k_vector: [0.0, 0.0, 0.0],
+        };
+
+        let error = eigen_path_single_k_point_plan(&plan, &sample, true, None)
+            .expect_err("relaxed equilibrium reuse must require an immutable handoff binding");
+
+        assert!(error.message.contains("missing_relax_to_eigen_handoff"));
+    }
+
+    #[test]
+    fn zero_relaxation_steps_do_not_fabricate_stage_continuation() {
+        let mut plan = tiny_fem_eigen_plan(None);
+        plan.equilibrium = fullmag_ir::EquilibriumSourceIR::RelaxedInitialState;
+
+        let source = eigen_path_equilibrium_source_json(&plan, 0);
+
+        assert_eq!(
+            source,
+            serde_json::json!({"kind": "relaxed_initial_state"}),
+            "stage_continuation requires a validated typed handoff, not steps == 0"
+        );
+    }
+
+    #[test]
+    fn k_path_rejects_same_node_count_with_different_topology_handoff() {
+        let mut source_plan = tiny_fem_eigen_plan(Some(fullmag_ir::KSamplingIR::Path {
+            points: vec![fullmag_ir::KPointIR {
+                label: Some("G".to_string()),
+                k_vector: [0.0, 0.0, 0.0],
+            }],
+            samples_per_segment: Vec::new(),
+            closed: false,
+        }));
+        source_plan.equilibrium = fullmag_ir::EquilibriumSourceIR::RelaxedInitialState;
+        let handoff = fem_eigen::AcceptedFemEigenEquilibriumHandoff::from_accepted_linearization(
+            &source_plan,
+            source_plan.equilibrium_magnetization.clone(),
+            format!("sha256:{}", "a".repeat(64)),
+            format!("sha256:{}", "b".repeat(64)),
+        )
+        .expect("source handoff should be valid");
+        let mut target_plan = source_plan.clone();
+        target_plan.mesh.set_tet4_cells(vec![[0, 2, 1, 3]]);
+        assert_eq!(
+            target_plan.mesh.nodes.len(),
+            source_plan.mesh.nodes.len(),
+            "fixture must preserve node count"
+        );
+        let sample = crate::eigen::KSampleDescriptor {
+            sample_index: 1,
+            label: Some("G".to_string()),
+            segment_index: Some(0),
+            path_s: 0.0,
+            t_in_segment: 0.0,
+            k_vector: [0.0, 0.0, 0.0],
+        };
+
+        let error = eigen_path_single_k_point_plan(&target_plan, &sample, true, Some(&handoff))
+            .expect_err("equal node count must not bypass full topology identity");
+
+        assert!(error
+            .message
+            .contains("relax_to_eigen_mesh_identity_mismatch"));
+    }
+
+    #[test]
+    fn k_path_accepts_same_mesh_handoff_and_uses_bound_equilibrium() {
+        let mut plan = tiny_fem_eigen_plan(Some(fullmag_ir::KSamplingIR::Path {
+            points: vec![fullmag_ir::KPointIR {
+                label: Some("G".to_string()),
+                k_vector: [0.0, 0.0, 0.0],
+            }],
+            samples_per_segment: Vec::new(),
+            closed: false,
+        }));
+        plan.equilibrium = fullmag_ir::EquilibriumSourceIR::RelaxedInitialState;
+        let accepted_m0 = vec![[0.0, 1.0, 0.0]; plan.mesh.nodes.len()];
+        let handoff = fem_eigen::AcceptedFemEigenEquilibriumHandoff::from_accepted_linearization(
+            &plan,
+            accepted_m0.clone(),
+            format!("sha256:{}", "a".repeat(64)),
+            format!("sha256:{}", "b".repeat(64)),
+        )
+        .expect("same-mesh handoff should be valid");
+        let sample = crate::eigen::KSampleDescriptor {
+            sample_index: 1,
+            label: Some("G".to_string()),
+            segment_index: Some(0),
+            path_s: 0.0,
+            t_in_segment: 0.0,
+            k_vector: [0.0, 0.0, 0.0],
+        };
+
+        let point_plan = eigen_path_single_k_point_plan(&plan, &sample, true, Some(&handoff))
+            .expect("same full topology handoff should pass");
+
+        assert_eq!(
+            point_plan.equilibrium,
+            fullmag_ir::EquilibriumSourceIR::Provided
+        );
+        assert_eq!(point_plan.equilibrium_magnetization, accepted_m0);
     }
 
     #[test]
@@ -10070,7 +10246,7 @@ mod tests {
             t_in_segment: 1.0,
             k_vector: [0.0, 0.0, 0.0],
         };
-        let point_plan = eigen_path_single_k_point_plan(&plan, &sample)
+        let point_plan = eigen_path_single_k_point_plan(&plan, &sample, false, None)
             .expect("physical K0 field-sweep point plan should be valid");
 
         assert_eq!(point_plan.external_field, Some([80_000.0, 0.0, 0.0]));
@@ -10125,7 +10301,7 @@ mod tests {
             k_vector: [0.0, 0.0, 0.0],
         };
 
-        let error = eigen_path_single_k_point_plan(&plan, &sample)
+        let error = eigen_path_single_k_point_plan(&plan, &sample, false, None)
             .expect_err("Kittel metadata cannot substitute for a physical bias sweep");
         assert!(
             error.message.contains("bias_field_samples"),
@@ -10324,7 +10500,7 @@ mod tests {
             t_in_segment: 0.5,
             k_vector: [0.0, 0.0, 0.0],
         };
-        let with_oracle = eigen_path_single_k_point_plan(&plan, &sample)
+        let with_oracle = eigen_path_single_k_point_plan(&plan, &sample, false, None)
             .expect("reference K0 point plan should be valid");
 
         let mut changed_oracle = plan.clone();
@@ -10334,12 +10510,13 @@ mod tests {
             .expect("test plan should carry an oracle")
             .samples[1]
             .bias_field = [160_000.0, 0.0, 0.0];
-        let with_changed_oracle = eigen_path_single_k_point_plan(&changed_oracle, &sample)
-            .expect("changed reference K0 point plan should be valid");
+        let with_changed_oracle =
+            eigen_path_single_k_point_plan(&changed_oracle, &sample, false, None)
+                .expect("changed reference K0 point plan should be valid");
 
         let mut without_oracle = plan.clone();
         without_oracle.k0_kittel_validation = None;
-        let without_oracle = eigen_path_single_k_point_plan(&without_oracle, &sample)
+        let without_oracle = eigen_path_single_k_point_plan(&without_oracle, &sample, false, None)
             .expect("point plan without reference oracle should be valid");
 
         assert_eq!(with_oracle, with_changed_oracle);
