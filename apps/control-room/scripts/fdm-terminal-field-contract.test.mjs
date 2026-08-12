@@ -8,6 +8,7 @@ import {
   assertInteractiveTerminalRun,
   terminalFieldRequestPath,
 } from "./fdm-terminal-field-contract.mjs";
+import { awaitTerminalFieldGeneration } from "./smoke-fdm-terminal-webgl-gate.mjs";
 
 const smokeSource = await readFile(
   new URL("./smoke-fdm-terminal-webgl-gate.mjs", import.meta.url),
@@ -154,6 +155,64 @@ test("terminal field paths keep object and airbox scopes explicit", () => {
   );
 });
 
+test("terminal FDM smoke retries a transient stale generation until coherent", async () => {
+  const fields = Object.fromEntries([
+    ["object:H_demag", terminalMetadata("H_demag", "full_domain")],
+    ["object:H_eff", terminalMetadata("H_eff", "full_domain")],
+    ["object:H_ext", terminalMetadata("H_ext", "full_domain")],
+    ["object:eden_demag", terminalMetadata("eden_demag", "magnetic_only")],
+    ["airbox:H_demag", terminalMetadata("H_demag", "full_domain")],
+    ["airbox:H_eff", terminalMetadata("H_eff", "full_domain")],
+  ]);
+  let attempt = 0;
+  const result = await awaitTerminalFieldGeneration({
+    fieldEntries: Object.keys(fields).map((key) => key.split(":")),
+    finalStep,
+    finalTime,
+    getJson: async (path) => {
+      if (path.endsWith("/data/fields")) return { quantities: [
+        { available: true, domain: "full_domain", quantity_id: "H_demag" },
+        { available: true, domain: "full_domain", quantity_id: "H_eff" },
+        { available: true, domain: "full_domain", quantity_id: "H_ext" },
+        { available: true, domain: "magnetic_only", quantity_id: "eden_demag" },
+      ] };
+      if (attempt++ === 0) throw new Error("/meta: 404");
+      const scope = new URL(path, "http://localhost").searchParams.get("scope_kind");
+      const quantityId = path.match(/fields\/([^/]+)\/meta/)?.[1];
+      return fields[`${scope === "airbox" ? "airbox" : "object"}:${quantityId}`];
+    },
+    poll: async (_label, probe) => {
+      for (let index = 0; index < 3; index += 1) {
+        const result = await probe();
+        if (result) return result;
+      }
+      throw new Error("timed out");
+    },
+    scopes: { object: { scopeKind: "object", scopeId: "smoke_box" }, airbox: { scopeKind: "airbox", scopeId: "airbox" } },
+    stageExecution: { stages: [{ status: "completed" }] },
+    timeoutMs: 60_000,
+  });
+  assert.equal(result.terminal.final_time, finalTime);
+});
+
+test("terminal FDM smoke reports the last incoherent snapshot after timeout", async () => {
+  await assert.rejects(
+    awaitTerminalFieldGeneration({
+      fieldEntries: [["object", "H_demag"]],
+      finalStep,
+      finalTime,
+      getJson: async (path) => path.endsWith("/data/fields")
+        ? { quantities: [] }
+        : { source_step: 0, source_time_seconds: 0, state: "stale" },
+      poll: async (_label, probe) => { await probe(); throw new Error("timed out"); },
+      scopes: { object: { scopeKind: "object", scopeId: "smoke_box" } },
+      stageExecution: { stages: [{ status: "completed" }] },
+      timeoutMs: 60_000,
+    }),
+    /last incoherent snapshot|Terminal FDM field generation did not converge/,
+  );
+});
+
 test("terminal telemetry requires final step/time, a positive dt, and nonzero average magnetization", () => {
   const telemetry = {
     objectMetrics: { has_solver_sample: true, step: finalStep, time_seconds: finalTime, magnetization_average: { mx: 0, my: 1, mz: 0 } },
@@ -170,6 +229,7 @@ test("browser smoke forbids manual compute_fields and records screenshots", () =
   assert.doesNotMatch(smokeSource, /kind\s*:\s*["']compute_fields["']/);
   assert.match(smokeSource, /screenshot\(/);
   assert.match(smokeSource, /assertCompletedTerminalFieldContract/);
+  assert.match(smokeSource, /terminal FDM field generation/);
   assert.match(smokeSource, /switchRibbonQuantity/);
   assert.match(smokeSource, /switchInspectorQuantity/);
   assert.match(smokeSource, /assertAirboxMagnetizationUnavailable/);

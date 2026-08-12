@@ -49,18 +49,22 @@ async function main() {
   }, apiPhaseTimeoutMs);
   const { final_step: finalStep, final_time: finalTime, run, sessionStatus } = terminalRun;
   setPhase("terminal-field-catalog");
-  const catalog = await getJson("/v2/sessions/current/data/fields");
   const scopes = { airbox: { scopeId: "airbox", scopeKind: "airbox" }, object: { scopeId: objectId, scopeKind: "object" } };
   const fieldEntries = [
     ["object", "H_demag"], ["object", "H_eff"], ["object", "eden_demag"],
     ["object", "H_ext"],
     ["airbox", "H_demag"], ["airbox", "H_eff"],
   ];
-  const fields = Object.fromEntries(await Promise.all(fieldEntries.map(async ([scope, quantityId]) => [
-    `${scope}:${quantityId}`,
-    await getJson(terminalFieldRequestPath(quantityId, scopes[scope])),
-  ])));
-  const terminal = assertCompletedTerminalFieldContract({ catalog, fields, finalStep, finalTime, stageExecution });
+  const { catalog, fields, terminal } = await awaitTerminalFieldGeneration({
+    fieldEntries,
+    finalStep,
+    finalTime,
+    getJson,
+    poll,
+    scopes,
+    stageExecution,
+    timeoutMs: apiPhaseTimeoutMs,
+  });
   setPhase("terminal-telemetry");
   const objectMetrics = await getJson(`/v2/sessions/current/simulation/objects/${encodeURIComponent(objectId)}/metrics`);
   const tableRows = await getJson("/v2/sessions/current/data/tables/default/rows?columns=t,dt,mx,my,mz");
@@ -108,6 +112,44 @@ async function main() {
     await writeEvidenceAtomically(evidencePath, evidence);
     console.log(`FDM terminal WebGL gate passed: ${evidencePath}`);
   } finally { await browser.close(); }
+}
+
+export async function awaitTerminalFieldGeneration({
+  fieldEntries,
+  finalStep,
+  finalTime,
+  getJson,
+  poll,
+  scopes,
+  stageExecution,
+  timeoutMs,
+}) {
+  let lastSnapshot = null;
+  try {
+    return await poll("terminal FDM field generation", async () => {
+      try {
+        const catalog = await getJson("/v2/sessions/current/data/fields");
+        const fields = Object.fromEntries(await Promise.all(fieldEntries.map(async ([scope, quantityId]) => [
+          `${scope}:${quantityId}`,
+          await getJson(terminalFieldRequestPath(quantityId, scopes[scope])),
+        ])));
+        lastSnapshot = { catalog, fields };
+        return {
+          catalog,
+          fields,
+          terminal: assertCompletedTerminalFieldContract({ catalog, fields, finalStep, finalTime, stageExecution }),
+        };
+      } catch (error) {
+        lastSnapshot = { ...lastSnapshot, error: error.message };
+        return null;
+      }
+    }, timeoutMs);
+  } catch (error) {
+    throw new Error(
+      `Terminal FDM field generation did not converge: ${JSON.stringify(lastSnapshot)}`,
+      { cause: error },
+    );
+  }
 }
 
 async function switchRibbonQuantity({ page, quantityId, requests, scope, scopes }) {
