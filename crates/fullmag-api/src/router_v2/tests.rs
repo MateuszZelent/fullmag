@@ -1964,6 +1964,13 @@ fn decode_fmvp_metadata_scope(bytes: &[u8]) -> (String, String) {
     )
 }
 
+fn decode_fmvp_topology_revision(bytes: &[u8]) -> u64 {
+    assert_eq!(&bytes[..4], b"FMVP");
+    assert_eq!(bytes[4], 3, "topology revision requires FMVP v3 metadata");
+    assert_eq!(&bytes[48..52], b"FMMI");
+    u64::from_le_bytes(bytes[64..72].try_into().unwrap())
+}
+
 /// Read and parse the response body as JSON.
 async fn body_json(response: axum::response::Response) -> serde_json::Value {
     let bytes = body_bytes(response).await;
@@ -23427,6 +23434,10 @@ fn write_test_fdm_multilayer_airbox_carrier(artifact_dir: &std::path::Path) -> P
             "problem_source_hash": "test-problem-source-hash",
             "run_status": "completed"
         },
+        "quantity_revision": 17,
+        "field_generation": "airbox-run-7:field-H_demag-3",
+        "grid_revision": 0,
+        "carrier_revision": 0,
         "field_artifact": "H_demag.samples.v1.json",
         "field_artifact_sha256": field_hash,
         "sample_count": 4,
@@ -23453,6 +23464,21 @@ fn write_test_fdm_multilayer_airbox_carrier(artifact_dir: &std::path::Path) -> P
                 .expect("test Airbox fingerprint seed should serialize")
         )
     ));
+    let grid_digest = Sha256::digest(
+        serde_json::to_vec(&manifest["grid"]).expect("test Airbox grid should serialize"),
+    );
+    manifest["grid_revision"] = serde_json::json!(u64::from_be_bytes(
+        grid_digest[..8].try_into().expect("sha256 prefix")
+    )
+    .max(1));
+    manifest["carrier_revision"] = serde_json::json!(u64::from_str_radix(
+        &manifest["carrier_fingerprint"]
+            .as_str()
+            .expect("carrier fingerprint")[..16],
+        16,
+    )
+    .expect("carrier revision")
+    .max(1));
     fs::write(
         carrier_dir.join("manifest.json"),
         serde_json::to_vec_pretty(&manifest).expect("test Airbox manifest should serialize"),
@@ -23551,7 +23577,27 @@ async fn fdm_multilayer_airbox_field_catalog_meta_and_vector_use_target_carrier(
     let (app, state, artifact_dir) = test_router_with_session_state_and_artifact_dir().await;
     let carrier_dir = write_test_fdm_multilayer_airbox_carrier(&artifact_dir);
     let fingerprint = test_fdm_multilayer_airbox_fingerprint(&carrier_dir);
+    let carrier_revision = u64::from_str_radix(&fingerprint[..16], 16)
+        .expect("test carrier fingerprint revision")
+        .max(1);
     set_test_fdm_multilayer_layout(&state, [4, 1, 1]).await;
+    {
+        let mut guard = state.current_live_state.write().await;
+        let snapshot = guard.as_mut().expect("live session exists");
+        snapshot.field_samples_revision = 99;
+        snapshot
+            .field_quantity_revisions
+            .insert("H_demag".to_string(), 88);
+        snapshot.session.resolved_backend = Some("stale-current-backend".to_string());
+        snapshot.session.resolved_device = Some("stale-current-device".to_string());
+        snapshot.session.resolved_precision = Some("single".to_string());
+    }
+    let expected_domain_generation = {
+        let guard = state.current_live_state.read().await;
+        crate::router_v2::handlers::sessions::status::domain_generation_id(
+            guard.as_ref().expect("live session exists"),
+        )
+    };
 
     let catalog = app
         .clone()
@@ -23565,11 +23611,19 @@ async fn fdm_multilayer_airbox_field_catalog_meta_and_vector_use_target_carrier(
         .unwrap();
     assert_eq!(catalog.status(), StatusCode::OK);
     let catalog_json = body_json(catalog).await;
-    assert!(catalog_json["quantities"]
+    let catalog_entry = catalog_json["quantities"]
         .as_array()
-        .is_some_and(|entries| entries
-            .iter()
-            .any(|entry| entry["quantity_id"] == "H_demag")));
+        .and_then(|entries| {
+            entries
+                .iter()
+                .find(|entry| entry["quantity_id"] == "H_demag")
+        })
+        .expect("H_demag Airbox catalog entry");
+    assert_eq!(catalog_entry["field_revision"], 17);
+    assert_eq!(
+        catalog_entry["domain_generation_id"],
+        expected_domain_generation
+    );
 
     let meta = app
         .clone()
@@ -23585,6 +23639,11 @@ async fn fdm_multilayer_airbox_field_catalog_meta_and_vector_use_target_carrier(
     let meta_json = body_json(meta).await;
     assert_eq!(meta_status, StatusCode::OK, "{meta_json}");
     assert_eq!(meta_json["stats"]["max"], 6.0);
+    assert_eq!(meta_json["field_revision"], 17);
+    assert_eq!(
+        meta_json["domain_generation_id"],
+        expected_domain_generation
+    );
 
     let vector = app
         .clone()
@@ -23609,6 +23668,12 @@ async fn fdm_multilayer_airbox_field_catalog_meta_and_vector_use_target_carrier(
         "explicit_node_indices"
     );
     assert_eq!(vector.headers()["x-fullmag-point-count"], "4");
+    assert_eq!(vector.headers()["x-fullmag-field-revision"], "17");
+    assert_eq!(
+        vector.headers()["x-fullmag-domain-generation-id"],
+        expected_domain_generation
+    );
+    let vector_etag = vector.headers()["etag"].clone();
     let bytes = body_bytes(vector).await;
     assert_eq!(
         [
@@ -23622,11 +23687,33 @@ async fn fdm_multilayer_airbox_field_catalog_meta_and_vector_use_target_carrier(
         decode_fmvp_metadata_scope(&bytes),
         ("airbox".into(), "airbox".into())
     );
+    assert_eq!(decode_fmvp_topology_revision(&bytes), carrier_revision);
     assert_eq!(decode_fmvp_node_indices(&bytes), vec![0, 1, 2, 3]);
     assert_eq!(
         decode_fmvp_payload_f64(&bytes),
         vec![1.0, 0.0, 0.0, 0.0, 2.0, 0.0, 0.0, 0.0, 3.0, 4.0, 5.0, 6.0]
     );
+
+    {
+        let mut guard = state.current_live_state.write().await;
+        let snapshot = guard.as_mut().expect("live session exists");
+        snapshot.field_samples_revision = 100;
+        snapshot
+            .field_quantity_revisions
+            .insert("H_demag".to_string(), 89);
+    }
+    let unchanged_carrier = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/fields/H_demag/samples/vector?scope_kind=airbox&scope_id=airbox&max_samples=1")
+                .header("if-none-match", vector_etag)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(unchanged_carrier.status(), StatusCode::NOT_MODIFIED);
 
     let h_eff = app
         .oneshot(
@@ -23643,6 +23730,40 @@ async fn fdm_multilayer_airbox_field_catalog_meta_and_vector_use_target_carrier(
         .as_str()
         .is_some_and(|message| message.contains("fdm_multilayer_airbox_h_eff_unavailable.v1")));
     let _ = fs::remove_dir_all(&artifact_dir);
+}
+
+#[tokio::test]
+async fn resolved_current_spatial_field_accepts_fem_element_cardinality() {
+    let state = test_app_state_with_live_session().await;
+    let guard = state.current_live_state.read().await;
+    drop(guard);
+    {
+        let mut guard = state.current_live_state.write().await;
+        let snapshot = guard.as_mut().expect("live session exists");
+        snapshot.session.requested_backend = "fem".to_string();
+        snapshot.session.resolved_backend = Some("fem_cpu_native".to_string());
+        snapshot.fem_mesh = Some(sample_fem_mesh_payload());
+        snapshot.latest_fields = serde_json::from_value(serde_json::json!({
+            "eps": {
+                "values": [[1.0, 2.0, 3.0, 4.0, 5.0, 6.0]]
+            }
+        }))
+        .expect("FEM element field fixture should deserialize");
+    }
+
+    let guard = state.current_live_state.read().await;
+    let snapshot = guard.as_ref().expect("live session exists");
+    let field =
+        crate::router_v2::handlers::data::resolved_spatial_field::resolve_current_spatial_field(
+            snapshot, "eps", 6,
+        )
+        .expect("element field resolution should not conflict")
+        .expect("element field should resolve");
+    assert!(matches!(
+        field.carrier,
+        crate::router_v2::handlers::data::resolved_spatial_field::SpatialFieldCarrier::FemElements { .. }
+    ));
+    assert_eq!(field.values.len(), 6);
 }
 
 #[tokio::test]
@@ -24126,6 +24247,72 @@ async fn fdm_field_vector_object_scope_uses_membership_cell_ordinals() {
     let bytes = body_bytes(region).await;
     assert_eq!(decode_fmvp_node_indices(&bytes), vec![0]);
     assert_eq!(decode_fmvp_payload_f64(&bytes), vec![1.0, 0.0, 0.0]);
+    let _ = fs::remove_dir_all(&artifact_dir);
+}
+
+#[tokio::test]
+async fn fdm_field_vector_object_scope_rejects_mixed_default_numeric_membership() {
+    let (app, state, artifact_dir) = test_router_with_session_state_and_artifact_dir().await;
+    let mesh_dir = artifact_dir.join("mesh");
+    fs::create_dir_all(&mesh_dir).expect("failed to create mesh artifact dir");
+    fs::write(
+        mesh_dir.join("fdm_region_membership.v2.json"),
+        serde_json::to_vec(&serde_json::json!({
+            "schema_version": "fdm_region_membership.v2",
+            "binary_path": "mesh/fdm_region_membership.v2.bin",
+            "grid_fingerprint": "00".repeat(32),
+            "origin_m": [0.0, 0.0, 0.0],
+            "counts": [2, 1, 1],
+            "cell_m": [1.0, 1.0, 1.0],
+            "cell_count": 2,
+            "object_ids": ["left", "right"],
+            "region_legend": [
+                { "numeric_id": 1, "object_id": "left", "region_id": "left:core", "priority": 0 },
+                { "numeric_id": 2, "object_id": "right", "region_id": "right:core", "priority": 0 }
+            ],
+            "encoding": "FMRM:u32_membership_le"
+        }))
+        .unwrap(),
+    )
+    .expect("failed to write FDM membership descriptor");
+    fs::write(
+        mesh_dir.join("fdm_region_membership.v2.bin"),
+        fdm_v2_membership_binary([2, 1, 1], &[0, 1]),
+    )
+    .expect("failed to write FDM membership binary");
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.metadata = Some(serde_json::json!({
+            "artifact_layout": {
+                "backend": "fdm",
+                "grid_cells": [2, 1, 1],
+                "origin_m": [0.0, 0.0, 0.0],
+                "cell_size": [1.0, 1.0, 1.0]
+            }
+        }));
+        snapshot.latest_fields = serde_json::from_value(serde_json::json!({
+            "m": {
+                "values": [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]],
+                "layout": { "grid_cells": [2, 1, 1] }
+            }
+        }))
+        .expect("FDM field fixture should deserialize");
+    }
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/fields/m/samples/vector?scope_kind=object&scope_id=left")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+    let error = body_json(response).await;
+    assert!(error["message"]
+        .as_str()
+        .is_some_and(|message| message.contains("ambiguous")));
     let _ = fs::remove_dir_all(&artifact_dir);
 }
 
@@ -29556,6 +29743,31 @@ async fn assert_v2_field_data_plane_reads_canonical_transport_field_artifacts() 
         }
     }
     let app = build_v2_router().with_state(state);
+
+    let catalog = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/fields")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(catalog.status(), StatusCode::OK);
+    let catalog = body_json(catalog).await;
+    for (quantity, _, revision, _) in &fixtures {
+        let descriptor = catalog["quantities"]
+            .as_array()
+            .and_then(|entries| {
+                entries
+                    .iter()
+                    .find(|entry| entry["quantity_id"] == *quantity)
+            })
+            .unwrap_or_else(|| panic!("transport catalog descriptor: {quantity}"));
+        assert_eq!(descriptor["field_revision"], *revision, "{quantity}");
+        assert_eq!(descriptor["available"], true, "{quantity}");
+    }
 
     for (quantity, components, revision, expected) in fixtures {
         let expected_components = components.to_string();

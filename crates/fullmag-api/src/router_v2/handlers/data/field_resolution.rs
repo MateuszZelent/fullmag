@@ -5,6 +5,7 @@ use crate::router_v2::handlers::data::resolved_spatial_field::{
 use crate::router_v2::handlers::sessions::status::{fdm_grid_geometry, fdm_grid_shape};
 use crate::session::{resolved_current_field_source, ResolvedCurrentFieldSource};
 use crate::types::SessionStateResponse;
+use fullmag_quantities::{quantity_spec, QuantityLocation};
 use fullmag_runner::FemMeshPayload;
 
 pub(crate) fn live_magnetization_available(snapshot: &SessionStateResponse) -> bool {
@@ -60,7 +61,13 @@ pub(super) fn field_point_count_matches_current_domain(
     if point_count == 0 || mesh.nodes.is_empty() || mesh.cells.is_empty() {
         return false;
     }
-    resolve_fem_node_mapping(mesh, quantity_id, point_count).is_ok()
+    match quantity_spec(quantity_id).map(|spec| spec.location) {
+        Some(QuantityLocation::Node) => {
+            resolve_fem_node_mapping(mesh, quantity_id, point_count).is_ok()
+        }
+        Some(QuantityLocation::Cell) => point_count == mesh.cell_count(),
+        Some(QuantityLocation::Global) | None => false,
+    }
 }
 
 fn multilayer_native_point_count(snapshot: &SessionStateResponse) -> Option<usize> {
