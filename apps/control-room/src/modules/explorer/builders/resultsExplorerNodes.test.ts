@@ -5,6 +5,7 @@ import type { KernelEventMap } from "@/kernel/events/eventTypes";
 import { fieldVectorResourceKey } from "@/kernel/api/fieldQueryIdentity";
 import { SelectionController } from "@/kernel/selection/SelectionController";
 import type { KernelApi } from "@/kernel/types";
+import type { ArtifactResource, TableResource } from "@/kernel/api/apiTypes";
 
 import { flattenExplorerNodes } from "./buildModelTree";
 import {
@@ -154,9 +155,189 @@ describe("buildPhysicsFirstResultsTree", () => {
 
     expect(labels).not.toContain("Linear eigenmodes · Modal");
   });
+
+  it("publishes only existing table and artifact owners as postprocessing definitions", () => {
+    const table: TableResource = {
+      binary_rows_href: "/rows.bin",
+      columns: [],
+      columns_href: "/columns",
+      revision: 4,
+      rows_href: "/rows",
+      schema_revision: 2,
+      table_id: "energy",
+      total_rows: 3,
+    };
+    const artifact: ArtifactResource = { kind: "csv", path: "run-7/energy.csv" };
+    const tree = buildPhysicsFirstResultsTree({
+      entries: [],
+      postprocessing: {
+        artifacts: [artifact],
+        tables: [table],
+      },
+      resultContextRunId: "run-7",
+    });
+    const nodes = flattenExplorerNodes(tree);
+
+    expect(nodes.map((node) => node.label)).toEqual(expect.arrayContaining([
+      "Analysis Views unavailable",
+      "Derived Values unavailable",
+      "Tables",
+      "Exports",
+      "energy",
+      "energy.csv",
+    ]));
+
+    const tableNode = nodes.find((node) => node.label === "energy");
+    const artifactNode = nodes.find((node) => node.label === "energy.csv");
+    expect(tableNode).toMatchObject({
+      availability: "available",
+      resourceRef: "table:energy",
+      resourceState: "ready",
+      status: "ready",
+    });
+    expect(artifactNode).toMatchObject({
+      availability: "available",
+      resourceRef: "artifact:run-7/energy.csv",
+      resourceState: "ready",
+      status: "ready",
+    });
+    if (!tableNode) throw new Error("Missing table postprocessing node");
+    const selection = new SelectionController(new EventBus<KernelEventMap>());
+    selectExplorerNode({ selection } as KernelApi, tableNode, "explorer");
+    expect(selection.get().ref).toMatchObject({
+      artifactRevision: 4,
+      resourceRef: "table:energy",
+      type: "frequency-domain",
+    });
+    expect(selection.get().ref).not.toHaveProperty("columns");
+    expect(selection.get().ref).not.toHaveProperty("rows_href");
+  });
+
+  it("emits explicit contract gaps for ownerless definition families", () => {
+    const tree = buildPhysicsFirstResultsTree({
+      entries: [],
+      postprocessing: {
+        analysisViews: [{ id: "view-1", kind: "analysis_view", label: "Energy view" }],
+        derivedValues: [{ id: "value-1", kind: "derived_value", label: "Mean energy" }],
+      },
+      resultContextRunId: "run-7",
+    });
+    const nodes = flattenExplorerNodes(tree);
+    const analysisView = nodes.find((node) => node.label === "Energy view");
+    const derivedValue = nodes.find((node) => node.label === "Mean energy");
+
+    expect(analysisView).toMatchObject({
+      availability: "unavailable",
+      badge: "contract gap",
+      resourceState: "error",
+      status: "unavailable",
+    });
+    expect(analysisView).not.toHaveProperty("resourceRef");
+    expect(derivedValue).toMatchObject({
+      availability: "unavailable",
+      badge: "contract gap",
+      resourceState: "error",
+      status: "unavailable",
+    });
+    expect(derivedValue).not.toHaveProperty("resourceRef");
+    expect(analysisView?.contextCommands).toBeUndefined();
+    expect(derivedValue?.contextCommands).toBeUndefined();
+  });
+
+  it("keeps postprocessing node order and ids stable when owners arrive in a different order", () => {
+    const first = buildPhysicsFirstResultsTree({
+      entries: [],
+      postprocessing: {
+        artifacts: [
+          { kind: "csv", path: "run-7/z.csv" },
+          { kind: "csv", path: "run-7/a.csv" },
+        ],
+        tables: [
+          { binary_rows_href: "/b.bin", columns: [], columns_href: "/b-columns", revision: 1, rows_href: "/b-rows", schema_revision: 1, table_id: "z", total_rows: 1 },
+          { binary_rows_href: "/a.bin", columns: [], columns_href: "/a-columns", revision: 1, rows_href: "/a-rows", schema_revision: 1, table_id: "a", total_rows: 1 },
+        ],
+      },
+      resultContextRunId: "run-7",
+    });
+    const second = buildPhysicsFirstResultsTree({
+      entries: [],
+      postprocessing: {
+        artifacts: [
+          { kind: "csv", path: "run-7/a.csv" },
+          { kind: "csv", path: "run-7/z.csv" },
+        ],
+        tables: [
+          { binary_rows_href: "/a.bin", columns: [], columns_href: "/a-columns", revision: 1, rows_href: "/a-rows", schema_revision: 1, table_id: "a", total_rows: 1 },
+          { binary_rows_href: "/b.bin", columns: [], columns_href: "/b-columns", revision: 1, rows_href: "/b-rows", schema_revision: 1, table_id: "z", total_rows: 1 },
+        ],
+      },
+      resultContextRunId: "run-7",
+    });
+
+    expect(flattenExplorerNodes(second).map((node) => node.id)).toEqual(
+      flattenExplorerNodes(first).map((node) => node.id),
+    );
+    expect(flattenExplorerNodes(first).map((node) => node.label)).toEqual(
+      expect.arrayContaining(["a", "z", "a.csv", "z.csv"]),
+    );
+  });
 });
 
 describe("physicsFirstResultsSnapshotFromResources", () => {
+  it("projects existing TableResource and ArtifactResource owners without payload copies", () => {
+    const table: TableResource = {
+      binary_rows_href: "/tables/energy/rows.bin",
+      columns: [{
+        column_id: "time",
+        dimension: "time",
+        label: "Time",
+        quantity_id: "time",
+        scope: "global",
+        unit: "s",
+        value_type: "float64",
+      }],
+      columns_href: "/tables/energy/columns",
+      revision: 8,
+      rows_href: "/tables/energy/rows",
+      schema_revision: 3,
+      table_id: "energy",
+      total_rows: 42,
+    };
+    const artifact: ArtifactResource = { kind: "csv", path: "run-17/energy.csv" };
+    const adapted = physicsFirstResultsSnapshotFromResources({
+      artifacts: [artifact],
+      currentRun: { revision: 17, run_id: "run-17" },
+      manifest: {
+        result_manifest: {
+          payload: {
+            equilibrium_identity: "eq-17",
+            requested_execution: { boundary_context: "finite_open" },
+            stage_id: "stage-17",
+            study_product: "modal_eigen",
+          },
+          status: "ready",
+        },
+      },
+      spectrum: { status: "ready" },
+      tableCatalog: { revision: 8, tables: [table] },
+    });
+
+    expect(adapted.snapshot.postprocessing).toEqual({
+      artifacts: [artifact],
+      tables: [table],
+    });
+    const nodes = flattenExplorerNodes(buildPhysicsFirstResultsTree(adapted.snapshot));
+    expect(nodes.find((node) => node.label === "energy")).toMatchObject({
+      resourceRef: "table:energy",
+      status: "ready",
+    });
+    expect(nodes.find((node) => node.label === "energy.csv")).toMatchObject({
+      resourceRef: "artifact:run-17/energy.csv",
+      status: "ready",
+    });
+    expect(nodes.find((node) => node.label === "energy")).not.toHaveProperty("columns");
+  });
+
   it("publishes a concrete canonical modal field target with complete provenance", () => {
     const adapted = physicsFirstResultsSnapshotFromResources({
       currentRun: { revision: 17, run_id: "runtime-run-17" },

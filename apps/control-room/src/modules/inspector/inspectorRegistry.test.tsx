@@ -665,6 +665,19 @@ describe("inspectorRegistry", () => {
     expect(components.every((component) => component !== undefined)).toBe(true);
   });
 
+  it("routes each postprocessing definition family to a distinct dedicated Inspector", () => {
+    const kinds = [
+      "results.analysis_views.definition",
+      "results.derived_values.definition",
+      "results.tables.definition",
+      "results.exports.definition",
+    ];
+    const components = kinds.map((kind) => resolveInspectorPanel({ kind })?.component);
+
+    expect(components.every((component) => component !== undefined)).toBe(true);
+    expect(new Set(components).size).toBe(kinds.length);
+  });
+
   it("gives every physics-first Results kind its own inspector component owner", () => {
     const kinds = [
       "results.dynamics.root",

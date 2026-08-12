@@ -11,9 +11,20 @@ import {
   type FrequencyDomainTextArtifactLike,
 } from "@/shared/domain/analysis/frequencyDomainChartModels";
 import { fieldVectorResourceKey } from "@/kernel/api/fieldQueryIdentity";
+import type {
+  ArtifactResource,
+  TableListResource,
+  TableResource,
+} from "@/kernel/api/apiTypes";
+import {
+  definePostprocessing,
+  postprocessingDefinitionFromArtifact,
+  postprocessingDefinitionFromTable,
+  type PostprocessingDefinition,
+  type PostprocessingDefinitionInput,
+} from "@/shared/domain/analysis/postprocessingDefinitions";
 
 import type { ExplorerNode, ExplorerNodeKind } from "../explorerTypes";
-import type { PostprocessingDefinition } from "@/shared/domain/analysis/postprocessingDefinitions";
 
 export interface PhysicsFirstResultProducts {
   coupling?: boolean;
@@ -52,9 +63,20 @@ export interface PhysicsFirstAnalysisFieldTarget {
 
 export interface PhysicsFirstResultsSnapshot {
   entries: readonly PhysicsFirstResultEntry[];
-  postprocessing?: readonly PostprocessingDefinition[];
+  postprocessing?: PhysicsFirstPostprocessingSnapshot;
   resultContextRunId: string;
 }
+
+export interface PhysicsFirstPostprocessingSnapshot {
+  analysisViews?: readonly PostprocessingFamilyDefinition<"analysis_view">[];
+  artifacts?: readonly ArtifactResource[];
+  derivedValues?: readonly PostprocessingFamilyDefinition<"derived_value">[];
+  tables?: readonly TableResource[];
+}
+
+type PostprocessingFamilyDefinition<
+  Kind extends "analysis_view" | "derived_value",
+> = Omit<PostprocessingDefinitionInput, "kind"> & { kind: Kind };
 
 interface ResultResourceLike {
   status?: string;
@@ -65,12 +87,14 @@ interface ResultManifestLike extends ResultResourceLike {
 }
 
 export interface PhysicsFirstResultResourceInput {
+  artifacts?: readonly ArtifactResource[];
   branches?: ResultResourceLike | null;
   currentRun?: { revision: number | string; run_id: string } | null;
   dispersion?: (ResultResourceLike & { path_metadata?: unknown; text?: string | null }) | null;
   manifest?: { result_manifest?: ResultManifestLike | null } | null;
   responseSweep?: (ResultResourceLike & { payload?: unknown }) | null;
   spectrum?: (ResultResourceLike & { payload?: unknown }) | null;
+  tableCatalog?: TableListResource | null;
 }
 
 export interface PhysicsFirstResultAdaptation {
@@ -362,7 +386,14 @@ export function physicsFirstResultsSnapshotFromResources(
 
   return {
     contractGaps,
-    snapshot: { entries: [entry], resultContextRunId: runId },
+    snapshot: {
+      entries: [entry],
+      postprocessing: {
+        ...(input.artifacts ? { artifacts: input.artifacts } : {}),
+        ...(input.tableCatalog ? { tables: input.tableCatalog.tables } : {}),
+      },
+      resultContextRunId: runId,
+    },
   };
 }
 
@@ -646,12 +677,76 @@ function postprocessingChildren(
   definitions: readonly PostprocessingDefinition[],
 ): ExplorerNode[] {
   const nodeKind = `results.${kind === "analysis_view" ? "analysis_views" : kind === "derived_value" ? "derived_values" : kind === "table" ? "tables" : "exports"}.definition` as ExplorerNodeKind;
-  return definitions.filter((definition) => definition.kind === kind).map((definition) =>
-    node(`${parentId}:${key(definition.id)}`, nodeKind, definition.label, parentId, {
-      badge: definition.persistentOwner ? "saved" : "session only",
-      resourceRef: definition.datasetRef,
-    }),
-  );
+  return definitions
+    .filter((definition) => definition.kind === kind)
+    .sort((left, right) => left.id.localeCompare(right.id))
+    .map((definition) => {
+      const available =
+        definition.availability === "available" && definition.owner !== null;
+      return node(
+        `${parentId}:${key(definition.id)}`,
+        nodeKind,
+        definition.label,
+        parentId,
+        {
+          ...(available && definition.resourceRevision !== undefined
+            ? { artifactRevision: definition.resourceRevision }
+            : {}),
+          availability: available ? "available" : "unavailable",
+          badge: available ? "published" : "contract gap",
+          executionState: available ? "completed" : "not_started",
+          ...(available && definition.datasetRef
+            ? { resourceRef: definition.datasetRef }
+            : {}),
+          resourceState: available ? "ready" : "error",
+          status: available ? "ready" : "unavailable",
+        },
+      );
+    });
+}
+
+function unavailableDefinition(
+  kind: PostprocessingDefinition["kind"],
+): PostprocessingDefinition {
+  const labels: Record<PostprocessingDefinition["kind"], string> = {
+    analysis_view: "Analysis Views unavailable",
+    derived_value: "Derived Values unavailable",
+    export: "Exports unavailable",
+    table: "Tables unavailable",
+  };
+  return definePostprocessing({
+    id: `${kind}:contract-gap`,
+    kind,
+    label: labels[kind],
+  });
+}
+
+function postprocessingDefinitions(
+  snapshot: PhysicsFirstPostprocessingSnapshot | undefined,
+): PostprocessingDefinition[] {
+  const definitions = [
+    ...(snapshot?.tables ?? []).map(postprocessingDefinitionFromTable),
+    ...(snapshot?.artifacts ?? []).map(postprocessingDefinitionFromArtifact),
+    ...(snapshot?.analysisViews ?? []).map((definition) =>
+      definePostprocessing(definition),
+    ),
+    ...(snapshot?.derivedValues ?? []).map((definition) =>
+      definePostprocessing(definition),
+    ),
+  ];
+  if (!snapshot?.analysisViews?.length) {
+    definitions.push(unavailableDefinition("analysis_view"));
+  }
+  if (!snapshot?.derivedValues?.length) {
+    definitions.push(unavailableDefinition("derived_value"));
+  }
+  if (snapshot?.tables === undefined) {
+    definitions.push(unavailableDefinition("table"));
+  }
+  if (snapshot?.artifacts === undefined) {
+    definitions.push(unavailableDefinition("export"));
+  }
+  return definitions;
 }
 
 export function buildPhysicsFirstResultsTree(snapshot: PhysicsFirstResultsSnapshot): ExplorerNode[] {
@@ -669,7 +764,7 @@ export function buildPhysicsFirstResultsTree(snapshot: PhysicsFirstResultsSnapsh
   const dispersionId = `${resultsId}:k-resolved`;
   const resonanceStages = snapshot.entries.map((entry) => resonanceStage(resonanceId, entry));
   const dispersionStages = snapshot.entries.map((entry) => kResolvedStage(dispersionId, entry));
-  const definitions = snapshot.postprocessing ?? [];
+  const definitions = postprocessingDefinitions(snapshot.postprocessing);
 
   return [
     node(resultsId, "results.root", "Results", null, {
