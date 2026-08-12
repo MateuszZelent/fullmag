@@ -57,6 +57,7 @@ import {
   VISUALIZATION_STATE_PATH,
 } from "@/kernel/api/apiPaths";
 import type {
+  FieldCatalogResource,
   LiveStatusResource,
   MeshActiveBuildResource,
   MeshCapabilitiesResource,
@@ -748,6 +749,7 @@ type RibbonSessionStatus = {
 export interface RibbonBuildContext {
   api?: { visualization: RibbonVisualizationApi };
   commandContext?: CommandContext;
+  fieldCatalog?: FieldCatalogResource | null;
   commands?: CommandRegistry;
   meshBuildCurrent?: MeshActiveBuildResource | null;
   meshBuildLatest?: MeshLastSuccessfulBuildResource | null;
@@ -3330,6 +3332,7 @@ function buildSelectedVisualizationGroup(
   const selectedQuantityItems = quantityItemsForVisualizationTarget(
     selectedQuantityId,
     target?.kind,
+    context.fieldCatalog,
   );
   const targetQuantityPatch = (value: string): VisualizationTargetPatch => {
     const activeQuantityId = normalizeQuantityIdOrDefault(value);

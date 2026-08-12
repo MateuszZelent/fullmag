@@ -9,7 +9,7 @@ import {
 } from "@/kernel/api/apiPaths";
 import { EventBus } from "@/kernel/events/EventBus";
 import type { KernelEventMap } from "@/kernel/events/eventTypes";
-import type { FieldVectorResponseMetadata } from "@/kernel/api/apiTypes";
+import type { FieldCatalogResource, FieldVectorResponseMetadata } from "@/kernel/api/apiTypes";
 import type { DecodedFieldVector } from "@/kernel/api/codecs";
 import { ResourceCache } from "@/kernel/resources/ResourceCache";
 import { ResourceInvalidationController } from "@/kernel/resources/ResourceInvalidationController";
@@ -36,6 +36,17 @@ const viewport3dResourcesSourceUrl = new URL(
   "./viewport3dResources.ts",
   import.meta.url,
 );
+
+const airboxFieldCatalog = {
+  domain_generation_id: "fdm-generation-1",
+  quantities: [
+    { available: true, domain: "full_domain", quantity_id: "H_demag" },
+    { available: true, domain: "full_domain", quantity_id: "H_eff" },
+    { available: true, domain: "magnetic_only", quantity_id: "m" },
+    { available: true, domain: "magnetic_only", quantity_id: "H_ex" },
+  ],
+  revision: 3,
+} as FieldCatalogResource;
 
 function fieldResponseMetadata(
   overrides: Partial<FieldVectorResponseMetadata> = {},
@@ -449,7 +460,7 @@ describe("viewport3dResources", () => {
         component: "full",
         max_samples: 384,
         scope_kind: "full",
-      }),
+      }, airboxFieldCatalog),
     ).toEqual(
       new Map([
         [
@@ -493,7 +504,7 @@ describe("viewport3dResources", () => {
     expect(
       resolveViewport3DAirboxFieldVectorResourceKeys("h_eff", [
         { id: "airbox" },
-      ]),
+      ], undefined, airboxFieldCatalog),
     ).toEqual(
       new Map([
         [
@@ -513,7 +524,7 @@ describe("viewport3dResources", () => {
         component: "full",
         max_samples: 384,
         scope_kind: "full",
-      }),
+      }, airboxFieldCatalog),
     ).toEqual(
       new Map([
         [

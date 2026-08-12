@@ -20,10 +20,12 @@ import {
 import { ControlRoomApiError } from "@/kernel/api/ControlRoomApi";
 import type {
   BinaryResourceResult,
+  FieldCatalogResource,
   FieldVectorResponseMetadata,
   FieldVectorQuery,
   ResourceRevision,
 } from "@/kernel/api/apiTypes";
+import { fieldCatalogQuantitySupportsAirbox } from "@/kernel/api/quantityIds";
 import type {
   DecodedFieldVector,
   DecodedMeshQualityData,
@@ -518,6 +520,7 @@ export function resolveViewport3DAirboxFieldVectorResourceKeys(
   quantityId: string,
   airboxParts: readonly { id: string }[],
   fieldQuery: FieldVectorQuery = FULL_FIELD_VECTOR_QUERY,
+  fieldCatalog?: FieldCatalogResource | null,
 ): Map<string, string> {
   return new Map(
     Array.from(
@@ -525,6 +528,7 @@ export function resolveViewport3DAirboxFieldVectorResourceKeys(
         quantityId,
         airboxParts,
         fieldQuery,
+        fieldCatalog,
       ),
       ([partId, request]) => [partId, request.key],
     ),
@@ -535,7 +539,11 @@ export function resolveViewport3DAirboxFieldVectorResourceRequests(
   quantityId: string,
   airboxParts: readonly { id: string }[],
   fieldQuery: FieldVectorQuery = FULL_FIELD_VECTOR_QUERY,
+  fieldCatalog?: FieldCatalogResource | null,
 ): Map<string, Viewport3DAirboxFieldVectorRequest> {
+  if (!fieldCatalogQuantitySupportsAirbox(fieldCatalog, quantityId)) {
+    return new Map();
+  }
   const canonicalQuantityId = resolveCanonicalQuantityId(quantityId);
   return new Map(
     airboxParts.map((part) => {
@@ -855,6 +863,7 @@ export function useViewport3DAirboxFieldVectors(
     | ReadonlyMap<string, Viewport3DAirboxFieldVectorSourceRequest> =
     FULL_FIELD_VECTOR_QUERY,
   options: { pauseLoad?: boolean } = {},
+  fieldCatalog?: FieldCatalogResource | null,
 ) {
   const { api, resources } = useKernel();
   const requests = useMemo(
@@ -871,9 +880,10 @@ export function useViewport3DAirboxFieldVectors(
         quantityId,
         airboxParts,
         fieldSource,
+        fieldCatalog,
       );
     },
-    [airboxParts, fieldSource, quantityId],
+    [airboxParts, fieldCatalog, fieldSource, quantityId],
   );
   const resourceKey = useMemo(() => {
     return resolveViewport3DFieldVectorCollectionResourceKey(

@@ -3695,6 +3695,7 @@ export function useViewport3DSceneModel({
     airboxFieldVectorEnabled && airboxFieldVectorParts.length > 0,
     airboxFieldVectorRequests,
     { pauseLoad: fieldUpdateHoldActive },
+    fieldCatalog.data,
   );
   const rawFieldRenderOptions = useViewport3DFieldRenderOptions({
     airboxSettings,

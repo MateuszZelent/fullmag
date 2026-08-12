@@ -927,4 +927,32 @@ describe("viewport3DFieldDataPlan", () => {
     expect(plan.demands).toEqual([]);
     expect(plan.requests).toEqual(new Map());
   });
+
+  it("does not request a magnetic-only catalog quantity for FDM Airbox settings", () => {
+    const plan = resolveViewport3DTargetQuantityFieldDemandPlan({
+      availableQuantityIds: new Set(["m"]),
+      fieldCatalog: {
+        domain_generation_id: "fdm-generation-1",
+        quantities: [
+          { available: true, domain: "magnetic_only", quantity_id: "m" },
+        ],
+        revision: 3,
+      } as FieldCatalogResource,
+      fdmAirboxSettings: {
+        ...DEFAULT_FDM_UNIVERSE_OUTSIDE_SUPPORT_VISUALIZATION,
+        activeQuantityId: "m",
+        vectorsVisible: true,
+        visible: true,
+      },
+      fdmSettings: null,
+      getPartSettings: () => DEFAULT_OBJECT_VISUALIZATION,
+      magneticPartScopedFieldIds: new Set(),
+      magneticParts: [],
+      maxVectorGlyphs: 1200,
+      primaryFieldQuantityId: "H_demag",
+    });
+
+    expect(plan.demands).toEqual([]);
+    expect(plan.requests).toEqual(new Map());
+  });
 });

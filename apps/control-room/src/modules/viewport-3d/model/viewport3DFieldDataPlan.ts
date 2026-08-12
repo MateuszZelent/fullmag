@@ -903,7 +903,12 @@ export function resolveViewport3DTargetQuantityFieldDemandPlan({
       continue;
     }
     const quantityId = resolveCanonicalQuantityId(target.settings.activeQuantityId);
-    if (!isViewport3DQuantityAvailable(quantityId, availableQuantityIds)) {
+    if (
+      !isViewport3DQuantityAvailable(quantityId, availableQuantityIds) ||
+      (target.targetId === "fdm-universe-outside-support" &&
+        fieldCatalog &&
+        !fieldCatalogQuantitySupportsAirbox(fieldCatalog, quantityId))
+    ) {
       continue;
     }
     demands.push(

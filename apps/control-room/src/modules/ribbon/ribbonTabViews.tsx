@@ -95,6 +95,7 @@ export function quantityItemsForVisualizationTarget(
           fieldCatalogQuantitySupportsAirbox(fieldCatalog, item.value),
         )
       : QUANTITY_ITEMS;
+  if (targetKind === "airbox" && !fieldCatalog) return baseItems;
   return baseItems.some((item) => item.value === activeQuantityId)
     ? baseItems
     : [{ value: activeQuantityId, label: activeQuantityId }, ...baseItems];

@@ -6281,14 +6281,52 @@ mod tests {
         analysis_complex_vector_view_values, analysis_frequency_response_view_values,
         apply_field_scope, decode_complex_f64_pairs_little_endian, is_fem_runtime,
         parse_analysis_eigen_mode_field_id, parse_analysis_frequency_response_field_id,
-        parse_component, preview_cache_is_fresher, project_values, resolve_field_scope,
-        serialize_analysis_field_vector_binary, FieldVectorQuery, ResolvedFieldScopeDomain,
+        parse_component, preview_cache_is_fresher, project_values, push_field_descriptor,
+        resolve_field_scope, serialize_analysis_field_vector_binary, FieldFreshness,
+        FieldMaterializationState, FieldVectorQuery, ResolvedFieldScopeDomain,
     };
     use crate::session::default_current_live_state;
     use crate::types::CurrentLiveSnapshotRequest;
     use fullmag_runner::{
         BackendCapabilities, FemMeshPartPayload, FemMeshPayload, LivePreviewField, RuntimeEngineId,
     };
+
+    #[test]
+    fn field_catalog_descriptors_transport_canonical_quantity_domains() {
+        let freshness = FieldFreshness {
+            source_step: 0,
+            source_revision: 0,
+            materialized_at_unix_ms: 0,
+            stale_by_steps: 0,
+            materialization_wall_time_ns: 0,
+            state: FieldMaterializationState::Complete,
+            materialization_error: None,
+        };
+        let mut quantities = Vec::new();
+        push_field_descriptor(
+            &mut quantities,
+            "H_ant",
+            "A/m",
+            None,
+            1,
+            "generation-1",
+            freshness.clone(),
+            true,
+        );
+        push_field_descriptor(
+            &mut quantities,
+            "m",
+            "1",
+            None,
+            1,
+            "generation-1",
+            freshness,
+            true,
+        );
+
+        assert_eq!(quantities[0].domain, "full_domain");
+        assert_eq!(quantities[1].domain, "magnetic_only");
+    }
 
     #[test]
     fn downscaled_preview_does_not_hide_full_latest_field() {
