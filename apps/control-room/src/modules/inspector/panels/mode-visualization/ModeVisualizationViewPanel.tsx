@@ -18,6 +18,30 @@ import {
   modeVisualizationSelectionRef,
 } from "./ModeVisualizationOverviewPanel";
 
+const PHASE_MIN_RAD = 0;
+const PHASE_MAX_RAD = Math.PI * 2;
+
+function finiteNumber(value: unknown): number | null {
+  if (typeof value === "number") {
+    return Number.isFinite(value) ? value : null;
+  }
+  if (typeof value === "string" && value.trim().length > 0) {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+  return null;
+}
+
+function clampPhaseRad(value: number): number {
+  return Math.min(PHASE_MAX_RAD, Math.max(PHASE_MIN_RAD, value));
+}
+
+function normalizedPhaseValue(value: string): string | null {
+  const phaseRad = finiteNumber(value);
+  if (phaseRad === null) return null;
+  return String(clampPhaseRad(phaseRad));
+}
+
 interface ModeVisualizationPhaseControlProps {
   animate?: boolean;
   animationDirection?: -1 | 1;
@@ -46,7 +70,13 @@ export function ModeVisualizationPhaseControl({
 }: ModeVisualizationPhaseControlProps) {
   const [phaseDraft, setPhaseDraft] = useState(phaseRad);
   const [isPhaseEditing, setIsPhaseEditing] = useState(false);
-  const numericPhaseValue = isPhaseEditing ? phaseDraft : phaseRad;
+  const committedPhaseValue = normalizedPhaseValue(phaseRad) ?? String(PHASE_MIN_RAD);
+  const numericPhaseValue = isPhaseEditing ? phaseDraft : committedPhaseValue;
+  const commitPhase = (draft: string) => {
+    const normalized = normalizedPhaseValue(draft);
+    if (normalized !== null) onSetPhase(normalized);
+    setIsPhaseEditing(false);
+  };
 
   return (
     <div className="fm-mode-phase-control">
@@ -59,14 +89,13 @@ export function ModeVisualizationPhaseControl({
               aria-label="Mode visualization phase slider"
               className="fm-mode-phase-control__slider"
               disabled={disabled}
-              max={Math.PI * 2}
-              min="0"
+              max={PHASE_MAX_RAD}
+              min={PHASE_MIN_RAD}
               step="0.01"
               type="range"
-              value={phaseRad}
+              value={committedPhaseValue}
               onChange={(event) => {
-                const value = event.currentTarget.value;
-                onSetPhase(value);
+                commitPhase(event.currentTarget.value);
               }}
             />
           <input
@@ -74,6 +103,8 @@ export function ModeVisualizationPhaseControl({
             className="fm-inspector-input"
             disabled={disabled}
             inputMode="decimal"
+            max={PHASE_MAX_RAD}
+            min={PHASE_MIN_RAD}
             step="any"
             type="number"
             value={numericPhaseValue}
@@ -92,8 +123,7 @@ export function ModeVisualizationPhaseControl({
             size="sm"
             type="button"
             onClick={() => {
-              onSetPhase(numericPhaseValue);
-              setIsPhaseEditing(false);
+              commitPhase(phaseDraft);
             }}
           >
             Set phase
@@ -135,7 +165,12 @@ export function ModeVisualizationPhaseControl({
           <option value="2">2 Hz</option>
         </select>
         <Button
-          aria-label="Reverse mode phase animation"
+          aria-label={
+            animationDirection === 1
+              ? "Reverse mode phase animation"
+              : "Set mode phase animation forward"
+          }
+          aria-pressed={animationDirection === -1}
           disabled={disabled}
           size="sm"
           type="button"
@@ -184,17 +219,6 @@ export function ModeVisualizationPhaseControl({
   );
 }
 
-function finiteNumber(value: unknown): number | null {
-  if (typeof value === "number") {
-    return Number.isFinite(value) ? value : null;
-  }
-  if (typeof value === "string" && value.trim().length > 0) {
-    const parsed = Number(value);
-    return Number.isFinite(parsed) ? parsed : null;
-  }
-  return null;
-}
-
 export function ModeVisualizationViewPanel({ selection }: InspectorPanelProps) {
   const target = modeVisualizationSelectionRef(selection);
   const kernel = useKernel();
@@ -206,9 +230,11 @@ export function ModeVisualizationViewPanel({ selection }: InspectorPanelProps) {
       ? activeOverlay
       : null;
   const overlayPhaseRad =
-    finiteNumber(activeTargetOverlay?.visualizationPhaseRad) ??
-    finiteNumber(activeTargetOverlay?.query.phase_rad) ??
-    0;
+    clampPhaseRad(
+      finiteNumber(activeTargetOverlay?.visualizationPhaseRad) ??
+        finiteNumber(activeTargetOverlay?.query.phase_rad) ??
+        PHASE_MIN_RAD,
+    );
   const setPhase = (draft: string) => {
     const phaseRad = finiteNumber(draft);
     if (!target || !activeTargetOverlay || phaseRad == null) return;
@@ -216,7 +242,7 @@ export function ModeVisualizationViewPanel({ selection }: InspectorPanelProps) {
       kernel,
       sourceDetail: selection.kind ?? "mode-visualization.view",
       target,
-      phaseRad,
+      phaseRad: clampPhaseRad(phaseRad),
     });
   };
 

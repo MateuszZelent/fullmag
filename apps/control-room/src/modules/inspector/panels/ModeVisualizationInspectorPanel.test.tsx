@@ -28,6 +28,24 @@ const metadataCalls = vi.hoisted(() => ({ eigen: 0, response: 0 }));
 const executeMock = vi.fn(() => Promise.resolve({ status: "success" }));
 const queuePatchMock = vi.fn();
 
+function changeControlledInput(
+  input: TestElement & { value: string },
+  value: string,
+): void {
+  input.value = value;
+  const props = Object.getOwnPropertyNames(input)
+    .map((key) => Reflect.get(input, key))
+    .find(
+      (candidate): candidate is {
+        onChange?: (event: { currentTarget: typeof input }) => void;
+      } => typeof candidate === "object" && candidate !== null && "onChange" in candidate,
+    );
+  if (!props?.onChange) {
+    throw new Error("React input change handler was not mounted.");
+  }
+  props.onChange({ currentTarget: input });
+}
+
 const mockKernel = {
   commands: {
     execute: executeMock,
@@ -340,11 +358,173 @@ describe("ModeVisualizationInspectorPanel", () => {
       await act(async () => {
         setPhaseButton.dispatchEvent(new TestEvent("click", { bubbles: true }));
       });
-      expect(onSetPhase).toHaveBeenLastCalledWith("2");
+      expect(onSetPhase).toHaveBeenLastCalledWith("1");
     } finally {
       await act(async () => root.unmount());
       dom.restore();
     }
+  });
+
+  it("commits the numeric draft after blur from clicking Set phase, then resumes the external phase", async () => {
+    const dom = installSimulationPreparationTestDom();
+    const createElement = dom.document.createElement.bind(dom.document);
+    dom.document.createElement = ((tagName: string) => {
+      const element = createElement(tagName);
+      if (tagName === "select") Object.assign(element, { options: [] });
+      return element;
+    }) as typeof dom.document.createElement;
+    const container = dom.document.createElement("div");
+    const root = createRoot(container as unknown as Element);
+    const onSetPhase = vi.fn();
+    const renderPhaseControl = async (phaseRad: string) => {
+      await act(async () => {
+        root.render(
+          <ModeVisualizationPhaseControl
+            disabled={false}
+            onSetPhase={onSetPhase}
+            phaseRad={phaseRad}
+          />,
+        );
+      });
+    };
+
+    try {
+      await renderPhaseControl("1");
+      const phaseInput = findElement(
+        container,
+        (element) =>
+          element.getAttribute("aria-label") === "Mode visualization phase",
+        "Mode visualization phase input",
+      ) as TestElement & { value: string };
+      Object.assign(phaseInput, {
+        attachEvent: () => undefined,
+        detachEvent: () => undefined,
+      });
+      const setPhaseButton = findElement(
+        container,
+        (element) =>
+          element.tagName === "BUTTON" && element.textContent === "Set phase",
+        "Set phase button",
+      );
+
+      await act(async () => {
+        phaseInput.dispatchEvent(new TestEvent("focusin", { bubbles: true }));
+      });
+      await act(async () => {
+        changeControlledInput(phaseInput, "2.5");
+      });
+      await act(async () => {
+        phaseInput.dispatchEvent(new TestEvent("focusout", { bubbles: true }));
+      });
+      await act(async () => {
+        setPhaseButton.dispatchEvent(new TestEvent("click", { bubbles: true }));
+      });
+
+      expect(onSetPhase).toHaveBeenCalledExactlyOnceWith("2.5");
+
+      await renderPhaseControl("3");
+      expect(phaseInput.value).toBe("3");
+    } finally {
+      await act(async () => root.unmount());
+      dom.restore();
+    }
+  });
+
+  it("clamps numeric phase commits to the slider domain and rejects non-finite drafts", async () => {
+    const dom = installSimulationPreparationTestDom();
+    const createElement = dom.document.createElement.bind(dom.document);
+    dom.document.createElement = ((tagName: string) => {
+      const element = createElement(tagName);
+      if (tagName === "select") Object.assign(element, { options: [] });
+      return element;
+    }) as typeof dom.document.createElement;
+    const container = dom.document.createElement("div");
+    const root = createRoot(container as unknown as Element);
+    const onSetPhase = vi.fn();
+
+    try {
+      await act(async () => {
+        root.render(
+          <ModeVisualizationPhaseControl
+            disabled={false}
+            onSetPhase={onSetPhase}
+            phaseRad="1"
+          />,
+        );
+      });
+      const phaseInput = findElement(
+        container,
+        (element) =>
+          element.getAttribute("aria-label") === "Mode visualization phase",
+        "Mode visualization phase input",
+      ) as TestElement & { value: string };
+      Object.assign(phaseInput, {
+        attachEvent: () => undefined,
+        detachEvent: () => undefined,
+      });
+      const phaseSlider = findElement(
+        container,
+        (element) =>
+          element.getAttribute("aria-label") === "Mode visualization phase slider",
+        "Mode visualization phase slider",
+      );
+      const setPhaseButton = findElement(
+        container,
+        (element) =>
+          element.tagName === "BUTTON" && element.textContent === "Set phase",
+        "Set phase button",
+      );
+
+      expect(phaseInput.getAttribute("min")).toBe("0");
+      expect(phaseInput.getAttribute("max")).toBe(String(Math.PI * 2));
+      expect(phaseSlider.getAttribute("min")).toBe("0");
+      expect(phaseSlider.getAttribute("max")).toBe(String(Math.PI * 2));
+
+      for (const [draft, expected] of [
+        ["-1", "0"],
+        ["7", String(Math.PI * 2)],
+      ]) {
+        await act(async () => {
+          phaseInput.dispatchEvent(new TestEvent("focusin", { bubbles: true }));
+        });
+        await act(async () => {
+          changeControlledInput(phaseInput, draft);
+        });
+        await act(async () => {
+          setPhaseButton.dispatchEvent(new TestEvent("click", { bubbles: true }));
+        });
+        expect(onSetPhase).toHaveBeenLastCalledWith(expected);
+      }
+
+      const callCountBeforeInvalidDraft = onSetPhase.mock.calls.length;
+      await act(async () => {
+        phaseInput.dispatchEvent(new TestEvent("focusin", { bubbles: true }));
+      });
+      await act(async () => {
+        changeControlledInput(phaseInput, "Infinity");
+      });
+      await act(async () => {
+        setPhaseButton.dispatchEvent(new TestEvent("click", { bubbles: true }));
+      });
+      expect(onSetPhase).toHaveBeenCalledTimes(callCountBeforeInvalidDraft);
+    } finally {
+      await act(async () => root.unmount());
+      dom.restore();
+    }
+  });
+
+  it("exposes the current reverse direction and the action to return forward", () => {
+    const html = renderToStaticMarkup(
+      <ModeVisualizationPhaseControl
+        animationDirection={-1}
+        disabled={false}
+        onSetPhase={() => undefined}
+        phaseRad="1"
+      />,
+    );
+
+    expect(html).toContain('aria-label="Set mode phase animation forward"');
+    expect(html).toContain('aria-pressed="true"');
   });
 
   it("exposes presentation-only color, amplitude, and glyph scaling", () => {
