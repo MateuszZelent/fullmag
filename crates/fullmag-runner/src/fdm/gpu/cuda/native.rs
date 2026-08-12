@@ -31,6 +31,8 @@ use crate::types::{FdmMultilayerStageTelemetry, RunError};
 use crate::types::StepStats;
 #[cfg(feature = "cuda")]
 use crate::types::{LivePreviewField, LivePreviewRequest};
+#[cfg(feature = "cuda")]
+use sha2::{Digest, Sha256};
 
 #[cfg(feature = "cuda")]
 use std::ffi::c_void;
@@ -376,6 +378,14 @@ pub(crate) struct NativeFdmBackend {
     precision: fullmag_ir::ExecutionPrecision,
     damping: f64,
     precession_enabled: bool,
+}
+
+#[cfg(feature = "cuda")]
+#[derive(Debug, Clone)]
+pub(crate) struct NativeLlgCheckpointV1 {
+    pub info: ffi::fullmag_fdm_llg_checkpoint_info_v1,
+    pub payload_sha256: [u8; 32],
+    pub payload: Vec<u8>,
 }
 
 #[cfg(feature = "cuda")]
@@ -1381,6 +1391,101 @@ impl NativeFdmBackend {
     pub fn step(&mut self, dt: f64) -> Result<StepStats, RunError> {
         self.step_interruptible(dt, None)?
             .ok_or_else(|| self.last_error_or("step interrupted without an interrupt signal"))
+    }
+
+    pub(crate) fn export_llg_checkpoint(&self) -> Result<NativeLlgCheckpointV1, RunError> {
+        let mut required_bytes = 0u64;
+        let rc = unsafe {
+            ffi::fullmag_fdm_backend_llg_checkpoint_query_size_v1(
+                self.handle,
+                &mut required_bytes,
+            )
+        };
+        if rc != ffi::FULLMAG_FDM_OK {
+            return Err(self.last_error_or("LLG checkpoint size query failed"));
+        }
+        let payload_len = usize::try_from(required_bytes).map_err(|_| RunError {
+            message: "LLG checkpoint size exceeds host address space".to_string(),
+        })?;
+        let mut payload = Vec::new();
+        payload.try_reserve_exact(payload_len).map_err(|_| RunError {
+            message: format!("failed to allocate {required_bytes} bytes for LLG checkpoint"),
+        })?;
+        payload.resize(payload_len, 0);
+        let mut info = ffi::fullmag_fdm_llg_checkpoint_info_v1 {
+            schema_version: 0,
+            integrator: 0,
+            precision: 0,
+            array_mask: 0,
+            cell_count: 0,
+            payload_bytes: 0,
+            step_count: 0,
+            current_time: 0.0,
+            current_dt: 0.0,
+            transport_attempt_generation: 0,
+            fsal_valid: 0,
+            abm_startup: 0,
+            abm_last_dt: 0.0,
+            adaptive_has_previous_error: 0,
+            reserved0: 0,
+            adaptive_previous_error: 0.0,
+        };
+        let rc = unsafe {
+            ffi::fullmag_fdm_backend_llg_checkpoint_export_v1(
+                self.handle,
+                payload.as_mut_ptr().cast(),
+                required_bytes,
+                &mut info,
+            )
+        };
+        if rc != ffi::FULLMAG_FDM_OK {
+            return Err(self.last_error_or("LLG checkpoint export failed"));
+        }
+        if info.schema_version != ffi::FULLMAG_FDM_LLG_CHECKPOINT_SCHEMA_V1
+            || info.payload_bytes != required_bytes
+            || info.cell_count != self.cell_count as u64
+        {
+            return Err(RunError {
+                message: "native LLG checkpoint metadata does not match the backend".to_string(),
+            });
+        }
+        Ok(NativeLlgCheckpointV1 {
+            info,
+            payload_sha256: Sha256::digest(&payload).into(),
+            payload,
+        })
+    }
+
+    pub(crate) fn restore_llg_checkpoint(
+        &mut self,
+        checkpoint: &NativeLlgCheckpointV1,
+    ) -> Result<(), RunError> {
+        let payload_bytes = u64::try_from(checkpoint.payload.len()).map_err(|_| RunError {
+            message: "LLG checkpoint payload exceeds u64".to_string(),
+        })?;
+        let payload_sha256: [u8; 32] = Sha256::digest(&checkpoint.payload).into();
+        if checkpoint.info.schema_version != ffi::FULLMAG_FDM_LLG_CHECKPOINT_SCHEMA_V1
+            || checkpoint.info.payload_bytes != payload_bytes
+            || checkpoint.info.cell_count != self.cell_count as u64
+            || checkpoint.info.reserved0 != 0
+            || checkpoint.payload_sha256 != payload_sha256
+        {
+            return Err(RunError {
+                message: "LLG checkpoint identity or SHA-256 mismatch".to_string(),
+            });
+        }
+        let rc = unsafe {
+            ffi::fullmag_fdm_backend_llg_checkpoint_import_v1(
+                self.handle,
+                checkpoint.payload.as_ptr().cast(),
+                payload_bytes,
+                &checkpoint.info,
+            )
+        };
+        if rc != ffi::FULLMAG_FDM_OK {
+            return Err(self.last_error_or("LLG checkpoint restore failed"));
+        }
+        Ok(())
     }
 
     pub fn stage_completion(&self) -> Result<Option<fullmag_ir::StageCompletionIR>, RunError> {
@@ -2555,6 +2660,50 @@ mod tests {
         let err = build_region_exchange_pairs(&plan, true)
             .expect_err("invalid explicit exchange must be rejected before FFI");
         assert!(err.message.contains("must be finite and >= 0"));
+    }
+
+    #[test]
+    fn llg_checkpoint_wrapper_restores_bitwise_and_rejects_corruption() {
+        let mut plan = make_masked_test_plan(false, ExecutionPrecision::Double);
+        plan.enable_exchange = false;
+        plan.fixed_timestep = Some(1.0e-15);
+        let dt = plan.fixed_timestep.expect("fixed timestep");
+
+        let mut continuous = NativeFdmBackend::create(&plan).expect("continuous backend");
+        for _ in 0..4 {
+            continuous.step(dt).expect("checkpoint prefix step");
+        }
+        let checkpoint = continuous
+            .export_llg_checkpoint()
+            .expect("export LLG checkpoint");
+        for _ in 0..3 {
+            continuous.step(dt).expect("continuous suffix step");
+        }
+        let expected = continuous
+            .copy_m(plan.initial_magnetization.len())
+            .expect("continuous magnetization");
+
+        let mut restored = NativeFdmBackend::create(&plan).expect("restored backend");
+        restored
+            .restore_llg_checkpoint(&checkpoint)
+            .expect("restore LLG checkpoint");
+        for _ in 0..3 {
+            restored.step(dt).expect("restored suffix step");
+        }
+        assert_eq!(
+            restored
+                .copy_m(plan.initial_magnetization.len())
+                .expect("restored magnetization"),
+            expected
+        );
+
+        let mut corrupt = checkpoint.clone();
+        corrupt.payload[0] ^= 1;
+        let mut corrupt_target = NativeFdmBackend::create(&plan).expect("corrupt target");
+        let error = corrupt_target
+            .restore_llg_checkpoint(&corrupt)
+            .expect_err("corrupt checkpoint must fail closed");
+        assert!(error.message.contains("SHA-256 mismatch"));
     }
 
     fn make_masked_test_plan(enable_demag: bool, precision: ExecutionPrecision) -> FdmPlanIR {
