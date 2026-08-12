@@ -4150,6 +4150,32 @@ run-viewport-3d-smoke-disposable fixture="examples/fdm_cpu_relax_smoke.py" backe
       CONTROL_ROOM_SMOKE_DISPOSABLE_FIXTURE_TOKEN="$token" \
       $PNPM_CMD --dir apps/control-room smoke:viewport-3d'
 
+# Final single-grid FDM field gate: completed terminal fields only. The browser
+# smoke never submits compute_fields; the disposable fixture owns its session.
+run-fdm-terminal-webgl-gate-cpu web_port="" api_port="":
+    bash -euo pipefail -c '\
+      report_parent="${FULLMAG_FDM_TERMINAL_WEBGL_REPORT_ROOT:-.fullmag/reports/fdm-terminal-webgl-gate}"; mkdir -p "$report_parent"; \
+      run_root="$(mktemp -d "$report_parent/cpu.run.XXXXXXXX")"; \
+      test -x "{{local_bin}}/fullmag" || { echo "managed Fullmag executable is unavailable: {{local_bin}}/fullmag" >&2; exit 2; }; \
+      shared_python="$(dirname "$(git rev-parse --path-format=absolute --git-common-dir)")/.fullmag/local/python/bin/python"; test -x "$shared_python" || { echo "shared managed Fullmag Python is unavailable: $shared_python" >&2; exit 2; }; \
+      fixture="$(realpath examples/fdm_cpu_relax_smoke.py)"; \
+      smoke_dir="$(mktemp -d)"; smoke_script="$smoke_dir/fdm_cpu_relax_smoke.py"; \
+      token="$(python3 -c "import uuid; print(uuid.uuid4())")"; cp "$fixture" "$smoke_script"; printf "%s\\n" "$token" > "$smoke_dir/.fullmag-smoke-disposable"; \
+      choose_port() { python3 -c "import socket; s=socket.socket(); s.bind((\"127.0.0.1\",0)); print(s.getsockname()[1]); s.close()"; }; \
+      web_port="{{web_port}}"; api_port="{{api_port}}"; \
+      case "$web_port" in web_port=*) web_port="${web_port#web_port=}" ;; esac; case "$api_port" in api_port=*) api_port="${api_port#api_port=}" ;; esac; \
+      [ -n "$web_port" ] || web_port="$(choose_port)"; [ -n "$api_port" ] || api_port="$(choose_port)"; \
+      while [ "$web_port" = "$api_port" ]; do api_port="$(choose_port)"; done; \
+      sim_pid=""; cleanup() { status=$?; trap - EXIT INT TERM; if [ -n "$sim_pid" ] && kill -0 "$sim_pid" 2>/dev/null; then kill "$sim_pid" 2>/dev/null || true; wait "$sim_pid" 2>/dev/null || true; fi; rm -rf "$smoke_dir"; exit "$status"; }; trap cleanup EXIT INT TERM; \
+      PATH="{{local_bin}}:$PATH" FULLMAG_PYTHON="$shared_python" FULLMAG_API_PORT="$api_port" FULLMAG_FDM_EXECUTION=cpu FULLMAG_FEM_EXECUTION=cpu \
+      fullmag --dev --backend fdm --mode strict --precision double --web-port "$web_port" -i "$smoke_script" > "$run_root/fullmag.log" 2>&1 & sim_pid=$!; \
+      api_url="http://127.0.0.1:$api_port"; web_url="http://127.0.0.1:$web_port/workspace"; \
+      for _ in $(seq 1 600); do if curl -fsS "$api_url/v2/sessions/current/simulation/stages/execution" >/dev/null 2>&1 && curl -fsS "$web_url" >/dev/null 2>&1; then break; fi; if ! kill -0 "$sim_pid" 2>/dev/null; then tail -n 160 "$run_root/fullmag.log" >&2 || true; exit 1; fi; sleep 0.5; done; \
+      CONTROL_ROOM_API_BASE_URL="$api_url" CONTROL_ROOM_URL="$web_url" CONTROL_ROOM_FDM_TERMINAL_WEBGL_ARTIFACT_DIR="$run_root/screenshots" CONTROL_ROOM_FDM_TERMINAL_WEBGL_EVIDENCE="$run_root/fdm-terminal-webgl-gate.json" \
+      pnpm --dir apps/control-room smoke:fdm-terminal-webgl-gate; \
+      python3 -c '"'"'import json,sys; value=json.load(open(sys.argv[1])); assert value["qualification_status"] == "passed_cpu_fdm_terminal"; assert value["no_manual_compute_fields"] is True'"'"' "$run_root/fdm-terminal-webgl-gate.json"; \
+      printf "FDM terminal WebGL evidence: %s\\n" "$run_root/fdm-terminal-webgl-gate.json"'
+
 run-fdm-multilayer-webgl-matrix-cpu web_port="" api_port="":
     bash -euo pipefail -c '\
       report_parent="${FULLMAG_FDM_MULTILAYER_REPORT_ROOT:-.fullmag/reports/fdm-multilayer}"; \

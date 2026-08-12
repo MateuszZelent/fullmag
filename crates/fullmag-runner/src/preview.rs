@@ -310,6 +310,7 @@ pub(crate) fn build_grid_preview_field_from_flat_plan(
     LivePreviewField {
         config_revision: request.revision,
         source_step: 0,
+        source_time_seconds: None,
         source_revision: request.revision,
         materialized_at_unix_ms: 0,
         materialization_wall_time_ns: 0,
@@ -374,6 +375,7 @@ pub(crate) fn build_mesh_preview_field_with_active_mask(
     LivePreviewField {
         config_revision: request.revision,
         source_step: 0,
+        source_time_seconds: None,
         source_revision: request.revision,
         materialized_at_unix_ms: 0,
         materialization_wall_time_ns: 0,
@@ -404,6 +406,7 @@ pub(crate) fn build_mesh_scalar_preview_field_with_active_mask(
     LivePreviewField {
         config_revision: request.revision,
         source_step: 0,
+        source_time_seconds: None,
         source_revision: request.revision,
         materialized_at_unix_ms: 0,
         materialization_wall_time_ns: 0,

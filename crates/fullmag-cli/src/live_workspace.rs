@@ -1292,9 +1292,17 @@ pub(crate) struct CurrentLivePublisher {
 
 #[derive(Debug, Default)]
 struct PendingScalarRows {
-    rows: VecDeque<CurrentLiveScalarRow>,
+    rows: VecDeque<PendingScalarRow>,
     latest_sequence: Option<ScalarSequenceKey>,
     latest_seen_step: Option<u64>,
+    latest_terminal_step: Option<u64>,
+    next_row_id: u64,
+}
+
+#[derive(Debug)]
+struct PendingScalarRow {
+    id: u64,
+    row: CurrentLiveScalarRow,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1315,14 +1323,36 @@ impl PendingScalarRows {
         if self.latest_sequence.as_ref() != Some(&sequence) {
             self.latest_sequence = Some(sequence);
             self.latest_seen_step = None;
+            self.latest_terminal_step = None;
         }
-        if self.latest_seen_step.is_some_and(|step| row.step <= step) {
+        let same_step = self.latest_seen_step == Some(row.step);
+        if self.latest_seen_step.is_some_and(|step| row.step < step)
+            || (same_step && (!finished || self.latest_terminal_step == Some(row.step)))
+        {
             return;
         }
         self.latest_seen_step = Some(row.step);
+        if finished {
+            self.latest_terminal_step = Some(row.step);
+        }
         if gate.should_publish_scalar(row.step, finished) {
             gate.last_scalar_publish_at = Some(Instant::now());
-            self.rows.push_back(row);
+            if finished {
+                if let Some(pending) = self
+                    .rows
+                    .iter_mut()
+                    .rev()
+                    .find(|pending| pending.row.step == row.step)
+                {
+                    pending.id = self.next_row_id;
+                    self.next_row_id = self.next_row_id.wrapping_add(1);
+                    pending.row = row;
+                    return;
+                }
+            }
+            let id = self.next_row_id;
+            self.next_row_id = self.next_row_id.wrapping_add(1);
+            self.rows.push_back(PendingScalarRow { id, row });
         }
     }
 }
@@ -1615,16 +1645,17 @@ fn live_api_publish_enabled(port: u16) -> bool {
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
+    use std::sync::{Arc, Mutex};
     use std::time::Instant;
 
     use super::{
         apply_python_progress_event, bootstrap_live_state, clear_cached_preview_fields,
         fem_mesh_payload_clone_count, ingest_preview_fields_from_update, live_api_publish_enabled,
-        merge_detailed_mesh_workspace, merge_pending_publish_payload,
+        merge_detailed_mesh_workspace, merge_pending_publish_payload, publish_pending_scalar_rows,
         replace_cached_preview_fields, reset_fem_mesh_payload_clone_count,
         scalar_candidate_from_workspace_state, table_autosave_sample_due,
         upsert_cached_preview_field, CurrentLivePublisher, CurrentLiveScalarRow,
-        CurrentLiveSnapshotPayload, LiveTelemetryPublishGate, LocalLiveWorkspace,
+        CurrentLiveSnapshotPayload, LivePublishSink, LiveTelemetryPublishGate, LocalLiveWorkspace,
         LocalLiveWorkspaceState, PendingScalarRows, ScalarSequenceKey,
     };
     use crate::simulation_preparation::{
@@ -1647,6 +1678,7 @@ mod tests {
         fullmag_runner::LivePreviewField {
             config_revision: revision,
             source_step: 0,
+            source_time_seconds: None,
             source_revision: revision,
             materialized_at_unix_ms: 0,
             materialization_wall_time_ns: 0,
@@ -1838,16 +1870,18 @@ mod tests {
     }
 
     #[test]
-    fn incoming_preview_fields_inherit_step_provenance() {
+    fn incoming_preview_fields_inherit_solver_coordinates() {
         let mut state = workspace_with_domain_mesh().snapshot();
         let mut update = preview_update(preview_field("h_eff", 1, 1.0));
         update.stats.step = 27;
+        update.stats.time = 3.5e-12;
 
         ingest_preview_fields_from_update(&mut state, &mut update);
 
         let pending = state.pending_preview_fields.to_vec();
         assert_eq!(pending.len(), 1);
         assert_eq!(pending[0].source_step, 27);
+        assert_eq!(pending[0].source_time_seconds, Some(3.5e-12));
         assert!(update.preview_field.is_none());
     }
 
@@ -1864,6 +1898,7 @@ mod tests {
         let mut update = preview_update(field.clone());
         update.grid = [2, 1, 1];
         update.stats.step = 42;
+        update.stats.time = 4.2e-12;
         update.preview_field = None;
         update.cached_preview_fields = Some(vec![field]);
 
@@ -1873,6 +1908,10 @@ mod tests {
         assert_eq!(
             state.latest_fields.0["H_demag"]["source_step"],
             serde_json::json!(42)
+        );
+        assert_eq!(
+            state.latest_fields.0["H_demag"]["source_time_seconds"],
+            serde_json::json!(4.2e-12)
         );
         assert_eq!(
             state.latest_fields.0["H_demag"]["layout"]["grid_cells"],
@@ -2208,8 +2247,138 @@ mod tests {
         pending.enqueue_if_new(second_stage, scalar_row(0), false, &mut gate);
 
         assert_eq!(
-            pending.rows.iter().map(|row| row.step).collect::<Vec<_>>(),
+            pending
+                .rows
+                .iter()
+                .map(|pending| pending.row.step)
+                .collect::<Vec<_>>(),
             vec![1, 0]
+        );
+    }
+
+    #[test]
+    fn pending_scalar_rows_publish_terminal_sample_after_same_step_was_throttled() {
+        let mut pending = PendingScalarRows::default();
+        let mut gate = LiveTelemetryPublishGate {
+            last_scalar_publish_at: Some(Instant::now()),
+        };
+        let sequence = ScalarSequenceKey {
+            run_id: "run-1".to_string(),
+            stage_index: Some(0),
+            stage_id: Some("relax".to_string()),
+        };
+
+        pending.enqueue_if_new(sequence.clone(), scalar_row(8), false, &mut gate);
+        assert!(
+            pending.rows.is_empty(),
+            "nonterminal step is cadence-throttled"
+        );
+
+        let mut terminal = scalar_row(8);
+        terminal.time = 8.0;
+        terminal.solver_dt = 0.25;
+        terminal.mx = 0.5;
+        terminal.per_object_scalars.insert(
+            "smoke_box".to_string(),
+            HashMap::from([("mx".to_string(), 0.5)]),
+        );
+        pending.enqueue_if_new(sequence.clone(), terminal.clone(), true, &mut gate);
+
+        let queued = &pending.rows.front().expect("terminal row is queued").row;
+        assert_eq!(queued.step, terminal.step);
+        assert_eq!(queued.time, terminal.time);
+        assert_eq!(queued.solver_dt, terminal.solver_dt);
+        assert_eq!(queued.mx, terminal.mx);
+        assert_eq!(queued.per_object_scalars, terminal.per_object_scalars);
+
+        pending.enqueue_if_new(sequence.clone(), scalar_row(7), true, &mut gate);
+        pending.enqueue_if_new(sequence, terminal, true, &mut gate);
+        assert_eq!(
+            pending.rows.len(),
+            1,
+            "stale and terminal retry do not duplicate"
+        );
+    }
+
+    #[test]
+    fn pending_terminal_scalar_row_survives_a_failed_publish_retry() {
+        let pending_rows = Arc::new(Mutex::new(PendingScalarRows::default()));
+        let mut gate = LiveTelemetryPublishGate {
+            last_scalar_publish_at: Some(Instant::now()),
+        };
+        let sequence = ScalarSequenceKey {
+            run_id: "run-1".to_string(),
+            stage_index: Some(0),
+            stage_id: Some("relax".to_string()),
+        };
+        let terminal = scalar_row(8);
+        pending_rows
+            .lock()
+            .unwrap()
+            .enqueue_if_new(sequence, terminal.clone(), true, &mut gate);
+
+        let failures = Arc::new(std::sync::atomic::AtomicU64::new(0));
+        let failed_once = Arc::clone(&failures);
+        let flaky_sink: LivePublishSink = Arc::new(move |_, _| {
+            if failed_once.fetch_add(1, std::sync::atomic::Ordering::AcqRel) == 0 {
+                Err(anyhow::anyhow!("transient terminal scalar failure"))
+            } else {
+                Ok(())
+            }
+        });
+        assert!(publish_pending_scalar_rows("run-1", &pending_rows, &flaky_sink).is_err());
+        assert_eq!(
+            pending_rows
+                .lock()
+                .unwrap()
+                .rows
+                .front()
+                .map(|pending| pending.row.step),
+            Some(terminal.step)
+        );
+        assert!(publish_pending_scalar_rows("run-1", &pending_rows, &flaky_sink).is_ok());
+        assert!(pending_rows.lock().unwrap().rows.is_empty());
+    }
+
+    #[test]
+    fn pending_terminal_stage_row_survives_transition_until_next_stage_has_a_real_sample() {
+        let mut pending = PendingScalarRows::default();
+        let mut gate = LiveTelemetryPublishGate::default();
+        let stage_one = ScalarSequenceKey {
+            run_id: "run-1".to_string(),
+            stage_index: Some(0),
+            stage_id: Some("relax".to_string()),
+        };
+        let stage_two = ScalarSequenceKey {
+            run_id: "run-1".to_string(),
+            stage_index: Some(1),
+            stage_id: Some("evolve".to_string()),
+        };
+        let mut terminal = scalar_row(10);
+        terminal.time = 1.0e-12;
+        terminal.solver_dt = 1.0e-13;
+        terminal.mx = 0.25;
+        pending.enqueue_if_new(stage_one, terminal, true, &mut gate);
+
+        // Entering stage two without a row must not replace the completed stage one state.
+        assert_eq!(pending.rows.len(), 1);
+        assert_eq!(
+            pending.rows.front().map(|pending| pending.row.time),
+            Some(1.0e-12)
+        );
+
+        let mut next_stage = scalar_row(0);
+        next_stage.time = 1.1e-12;
+        next_stage.solver_dt = 1.0e-13;
+        next_stage.my = 0.5;
+        pending.enqueue_if_new(stage_two, next_stage, false, &mut gate);
+        assert_eq!(
+            pending
+                .rows
+                .iter()
+                .map(|pending| pending.row.time)
+                .collect::<Vec<_>>(),
+            vec![1.0e-12, 1.1e-12],
         );
     }
 
@@ -4177,14 +4346,15 @@ fn publish_pending_scalar_rows(
     delta_sink: &LivePublishSink,
 ) -> Result<()> {
     loop {
-        let row = pending_scalar_rows
-            .lock()
-            .ok()
-            .and_then(|pending| pending.rows.front().cloned());
-        let Some(row) = row else {
+        let pending = pending_scalar_rows.lock().ok().and_then(|pending| {
+            pending
+                .rows
+                .front()
+                .map(|pending| (pending.id, pending.row.clone()))
+        });
+        let Some((row_id, row)) = pending else {
             return Ok(());
         };
-        let step = row.step;
         delta_sink(
             session_id,
             &CurrentLiveSnapshotPayload {
@@ -4193,7 +4363,11 @@ fn publish_pending_scalar_rows(
             },
         )?;
         if let Ok(mut pending) = pending_scalar_rows.lock() {
-            if pending.rows.front().is_some_and(|row| row.step == step) {
+            if pending
+                .rows
+                .front()
+                .is_some_and(|queued| queued.id == row_id)
+            {
                 pending.rows.pop_front();
             }
         }
@@ -4468,7 +4642,7 @@ pub(crate) fn replace_cached_preview_fields(
             .into_iter()
             .chain(state.pending_preview_fields.to_vec())
             .chain(fields.into_iter().map(|mut field| {
-                align_preview_field_source_step(&mut field, source_step);
+                align_preview_field_source_coordinates(&mut field, source_step, None);
                 field
             })),
     );
@@ -4483,9 +4657,17 @@ pub(crate) fn replace_cached_preview_fields(
     state.clear_preview_cache = true;
 }
 
-fn align_preview_field_source_step(field: &mut fullmag_runner::LivePreviewField, source_step: u64) {
+fn align_preview_field_source_coordinates(
+    field: &mut fullmag_runner::LivePreviewField,
+    source_step: u64,
+    source_time_seconds: Option<f64>,
+) {
     if field.source_step == 0 && source_step > 0 {
         field.source_step = source_step;
+    }
+    if field.source_time_seconds.is_none() {
+        field.source_time_seconds =
+            source_time_seconds.filter(|time| time.is_finite() && *time >= 0.0);
     }
     if field.source_revision == 0 && field.source_step > 0 {
         field.source_revision = field.source_step;
@@ -4543,6 +4725,7 @@ fn promote_preview_field_to_latest_fields(
             "unit": field.unit,
             "values": field.vector_field_values,
             "source_step": field.source_step,
+            "source_time_seconds": field.source_time_seconds,
             "source_revision": field.source_revision,
             "materialized_at_unix_ms": field.materialized_at_unix_ms,
             "materialization_wall_time_ns": field.materialization_wall_time_ns,
@@ -4565,7 +4748,7 @@ pub(crate) fn upsert_cached_preview_field(
         return;
     }
     let mut incoming = field.clone();
-    align_preview_field_source_step(&mut incoming, state.live_state.latest_step.step);
+    align_preview_field_source_coordinates(&mut incoming, state.live_state.latest_step.step, None);
     let quantity = incoming.quantity.clone();
     let newest = newest_preview_fields(
         state
@@ -4602,6 +4785,7 @@ pub(crate) fn ingest_preview_fields_from_update(
         state.advance_preview_cache_revision();
     }
     let source_step = update.stats.step;
+    let source_time_seconds = Some(update.stats.time);
     if terminal_authoritative {
         state.latest_fields = CurrentLiveLatestFields::default();
         state.preview_fields.clear();
@@ -4615,7 +4799,7 @@ pub(crate) fn ingest_preview_fields_from_update(
     }
     if let Some(fields) = cached_preview_fields {
         for mut field in fields {
-            align_preview_field_source_step(&mut field, source_step);
+            align_preview_field_source_coordinates(&mut field, source_step, source_time_seconds);
             if is_full_grid_materialized_field(&field, update.grid) {
                 promote_preview_field_to_latest_fields(&mut state.latest_fields, &field);
                 continue;
@@ -4626,7 +4810,7 @@ pub(crate) fn ingest_preview_fields_from_update(
         }
     }
     if let Some(mut field) = preview_field {
-        align_preview_field_source_step(&mut field, source_step);
+        align_preview_field_source_coordinates(&mut field, source_step, source_time_seconds);
         if is_full_grid_materialized_field(&field, update.grid) {
             promote_preview_field_to_latest_fields(&mut state.latest_fields, &field);
             return;

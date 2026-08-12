@@ -37,7 +37,10 @@ import {
   menu,
 } from "./ribbonCommon";
 
-import { fieldCatalogQuantitySupportsAirbox } from "@/kernel/api/quantityIds";
+import {
+  fieldCatalogQuantitySupportsAirbox,
+  fieldCatalogQuantitySupportsSpatialVisualization,
+} from "@/kernel/api/quantityIds";
 import { RIBBON_CROSS_SECTION_BEGIN_DRAFT_COMMAND } from "./ribbonCommands";
 
 import type {
@@ -89,27 +92,35 @@ export function quantityItemsForVisualizationTarget(
   targetKind?: VisualizationTargetKind,
   fieldCatalog?: FieldCatalogResource | null,
 ): Array<{ disabled?: boolean; label: string; value: string }> {
-  const baseItems =
-    targetKind === "airbox"
-      ? QUANTITY_ITEMS.filter((item) =>
-          fieldCatalogQuantitySupportsAirbox(fieldCatalog, item.value) &&
-          fieldCatalog?.quantities.some(
-            (quantity) =>
-              quantity.available && quantity.quantity_id === item.value,
-          ),
+  const baseItems = fieldCatalog
+    ? fieldCatalog.quantities
+        .filter(fieldCatalogQuantitySupportsSpatialVisualization)
+        .filter(
+          (quantity) =>
+            targetKind !== "airbox" ||
+            fieldCatalogQuantitySupportsAirbox(fieldCatalog, quantity.quantity_id),
         )
+        .map((quantity) => ({
+          value: quantity.quantity_id,
+          // The static list is only a pre-load label fallback; the catalog
+          // remains the source of selectable identifiers and availability.
+          label: quantity.unit
+            ? `${quantity.label || QUANTITY_ITEMS.find((item) => item.value === quantity.quantity_id)?.label || quantity.quantity_id} / ${quantity.unit}`
+            : quantity.label || QUANTITY_ITEMS.find((item) => item.value === quantity.quantity_id)?.label || quantity.quantity_id,
+        }))
+    : targetKind === "airbox"
+      ? []
       : QUANTITY_ITEMS;
   if (targetKind === "airbox" && !fieldCatalog) return baseItems;
   return baseItems.some((item) => item.value === activeQuantityId)
     ? baseItems
     : [
         {
-          disabled: targetKind === "airbox",
+          disabled: Boolean(fieldCatalog),
           value: activeQuantityId,
-          label:
-            targetKind === "airbox"
-              ? `Unavailable / ${activeQuantityId}`
-              : activeQuantityId,
+          label: fieldCatalog
+            ? `Unavailable / ${activeQuantityId}`
+            : activeQuantityId,
         },
         ...baseItems,
       ];

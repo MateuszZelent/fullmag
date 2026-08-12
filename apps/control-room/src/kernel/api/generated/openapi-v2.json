@@ -4682,6 +4682,18 @@
             "minimum": 0,
             "type": "integer"
           },
+          "source_time_seconds": {
+            "description": "Solver time in seconds for the state that produced this field, when known.",
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "spatial": {
+            "description": "Whether this descriptor can be rendered as a spatial viewport field.",
+            "type": "boolean"
+          },
           "stale_by_steps": {
             "format": "int64",
             "minimum": 0,
@@ -4690,6 +4702,10 @@
           "state": {
             "$ref": "#/components/schemas/FieldMaterializationState"
           },
+          "ui_exposed": {
+            "description": "Whether this canonical quantity is intended for interactive UI selection.",
+            "type": "boolean"
+          },
           "unit": {
             "type": "string"
           }
@@ -4697,6 +4713,8 @@
         "required": [
           "quantity_id",
           "label",
+          "ui_exposed",
+          "spatial",
           "domain",
           "kind",
           "components",
@@ -5088,6 +5106,14 @@
             "format": "int64",
             "minimum": 0,
             "type": "integer"
+          },
+          "source_time_seconds": {
+            "description": "Solver time in seconds for the state that produced this field, when known.",
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
           },
           "stale_by_steps": {
             "format": "int64",
@@ -39905,8 +39931,8 @@
     }
   ],
   "x-fullmag-build-identity": {
-    "built_at_utc": "2026-08-13T03:28:43Z",
-    "git_commit": "d4a0d2517535955cf81a4b705c3bfebfe5d29de5",
+    "built_at_utc": "2026-08-13T05:15:22Z",
+    "git_commit": "1eff3234c6200f11c47ef2010d085252332224c6",
     "source_snapshot_sha256": "unknown",
     "worktree_state": "dirty"
   },

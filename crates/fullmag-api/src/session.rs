@@ -3529,6 +3529,7 @@ mod tests {
             auto_downscaled: false,
             config_revision: 1,
             source_step: 0,
+            source_time_seconds: None,
             source_revision: 1,
             materialized_at_unix_ms: 0,
             materialization_wall_time_ns: 0,

@@ -1552,6 +1552,7 @@ fn live_quantity_frame_from_preview(
         provenance: Some(fullmag_quantities::LiveQuantityFrameProvenance {
             config_revision: field.config_revision,
             source_step: field.source_step,
+            source_time_seconds: field.source_time_seconds,
             source_revision: field.source_revision,
             materialized_at_unix_ms: field.materialized_at_unix_ms,
             materialization_wall_time_ns: field.materialization_wall_time_ns,
@@ -1614,6 +1615,11 @@ pub struct LivePreviewField {
     /// Solver step whose state was captured for this completed field.
     #[serde(default)]
     pub source_step: u64,
+    /// Solver time in seconds whose state was captured for this field.
+    ///
+    /// This is optional while older live-frame producers are still accepted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_time_seconds: Option<f64>,
     /// Display/materialization request revision used for this field.
     #[serde(default)]
     pub source_revision: u64,
@@ -3783,6 +3789,7 @@ mod tests {
             preview_field: Some(LivePreviewField {
                 config_revision: 1,
                 source_step: 0,
+                source_time_seconds: None,
                 source_revision: 1,
                 materialized_at_unix_ms: 0,
                 materialization_wall_time_ns: 0,
@@ -3840,6 +3847,7 @@ mod tests {
             cached_preview_fields: Some(vec![LivePreviewField {
                 config_revision: 7,
                 source_step: 41,
+                source_time_seconds: Some(2.5e-12),
                 source_revision: 13,
                 materialized_at_unix_ms: 1234,
                 materialization_wall_time_ns: 55,

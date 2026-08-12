@@ -3331,7 +3331,7 @@ function buildSelectedVisualizationGroup(
   );
   const selectedQuantityItems = quantityItemsForVisualizationTarget(
     selectedQuantityId,
-    target?.kind,
+    isAirboxLikeTarget ? "airbox" : target?.kind,
     context.fieldCatalog,
   );
   const targetQuantityPatch = (value: string): VisualizationTargetPatch => {

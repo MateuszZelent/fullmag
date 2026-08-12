@@ -8,10 +8,12 @@ use serde::{Deserialize, Serialize};
 
 /// Provenance retained when a materialized preview field is promoted to the
 /// canonical live-quantity transport.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct LiveQuantityFrameProvenance {
     pub config_revision: u64,
     pub source_step: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_time_seconds: Option<f64>,
     pub source_revision: u64,
     pub materialized_at_unix_ms: u64,
     pub materialization_wall_time_ns: u64,

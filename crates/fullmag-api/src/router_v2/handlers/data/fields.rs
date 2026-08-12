@@ -1325,6 +1325,7 @@ fn field_vector_binary_header_counts(binary: &[u8]) -> (u8, usize, usize) {
 #[derive(Debug, Clone)]
 struct FieldFreshness {
     source_step: u64,
+    source_time_seconds: Option<f64>,
     source_revision: u64,
     materialized_at_unix_ms: u64,
     stale_by_steps: u64,
@@ -1343,6 +1344,7 @@ fn completed_field_freshness(
     let stale_by_steps = current_step.saturating_sub(source_step);
     FieldFreshness {
         source_step,
+        source_time_seconds: None,
         source_revision,
         materialized_at_unix_ms,
         stale_by_steps,
@@ -1371,7 +1373,7 @@ fn latest_json_field_freshness(
 ) -> FieldFreshness {
     let precedence = latest_field_source_precedence(snapshot, value);
     let current_step = current_source_step(snapshot);
-    completed_field_freshness(
+    let mut freshness = completed_field_freshness(
         current_step,
         precedence.source_step,
         precedence.source_revision,
@@ -1380,7 +1382,12 @@ fn latest_json_field_freshness(
             .get("materialization_wall_time_ns")
             .and_then(serde_json::Value::as_u64)
             .unwrap_or(0),
-    )
+    );
+    freshness.source_time_seconds = value
+        .get("source_time_seconds")
+        .and_then(serde_json::Value::as_f64)
+        .filter(|time| time.is_finite() && *time >= 0.0);
+    freshness
 }
 
 fn preview_field_freshness(
@@ -1388,13 +1395,17 @@ fn preview_field_freshness(
     field: &fullmag_runner::LivePreviewField,
 ) -> FieldFreshness {
     let precedence = preview_field_source_precedence(field);
-    completed_field_freshness(
+    let mut freshness = completed_field_freshness(
         current_source_step(snapshot),
         precedence.source_step,
         precedence.source_revision,
         precedence.materialized_at_unix_ms,
         field.materialization_wall_time_ns,
-    )
+    );
+    freshness.source_time_seconds = field
+        .source_time_seconds
+        .filter(|time| time.is_finite() && *time >= 0.0);
+    freshness
 }
 
 fn preview_cache_is_fresher(snapshot: &SessionStateResponse, quantity_id: &str) -> bool {
@@ -1512,6 +1523,7 @@ fn materializer_request_freshness(
     };
     FieldFreshness {
         source_step: status.source_step,
+        source_time_seconds: None,
         source_revision: status.request_revision,
         materialized_at_unix_ms: 0,
         stale_by_steps: current_source_step(snapshot).saturating_sub(status.source_step),
@@ -1556,6 +1568,7 @@ fn materializer_status<'a>(
 fn legacy_pending_field_freshness(snapshot: &SessionStateResponse) -> FieldFreshness {
     FieldFreshness {
         source_step: current_source_step(snapshot),
+        source_time_seconds: None,
         source_revision: snapshot.display_selection.revision,
         materialized_at_unix_ms: 0,
         stale_by_steps: 0,
@@ -2005,6 +2018,7 @@ pub async fn get_field_meta(
                 domain_generation_id: gen_id.clone(),
                 stats: None,
                 source_step: freshness.source_step,
+                source_time_seconds: freshness.source_time_seconds,
                 source_revision: freshness.source_revision,
                 materialized_at_unix_ms: freshness.materialized_at_unix_ms,
                 stale_by_steps: freshness.stale_by_steps,
@@ -2036,6 +2050,7 @@ pub async fn get_field_meta(
                 domain_generation_id: gen_id.clone(),
                 stats: None,
                 source_step: freshness.source_step,
+                source_time_seconds: freshness.source_time_seconds,
                 source_revision: freshness.source_revision,
                 materialized_at_unix_ms: freshness.materialized_at_unix_ms,
                 stale_by_steps: freshness.stale_by_steps,
@@ -2096,6 +2111,7 @@ pub async fn get_field_meta(
         domain_generation_id: gen_id,
         stats: projected_field_stats(&raw_values, n_comp as usize, &component)?,
         source_step: freshness.source_step,
+        source_time_seconds: freshness.source_time_seconds,
         source_revision: freshness.source_revision,
         materialized_at_unix_ms: freshness.materialized_at_unix_ms,
         stale_by_steps: freshness.stale_by_steps,
@@ -2169,6 +2185,8 @@ fn push_field_descriptor(
         label: spec
             .map(|s| s.label.to_string())
             .unwrap_or_else(|| quantity_id.to_string()),
+        ui_exposed: spec.is_some_and(|s| s.ui_exposed),
+        spatial: spec.is_some_and(|s| s.supports_preview_3d),
         domain: spec
             .map(|s| s.domain.as_str().to_string())
             .unwrap_or_else(|| "magnetic_only".to_string()),
@@ -2184,6 +2202,7 @@ fn push_field_descriptor(
         domain_generation_id: domain_generation_id.to_string(),
         available,
         source_step: freshness.source_step,
+        source_time_seconds: freshness.source_time_seconds,
         source_revision: freshness.source_revision,
         materialized_at_unix_ms: freshness.materialized_at_unix_ms,
         stale_by_steps: freshness.stale_by_steps,
@@ -6681,6 +6700,7 @@ mod tests {
     fn field_catalog_descriptors_transport_canonical_quantity_domains() {
         let freshness = FieldFreshness {
             source_step: 0,
+            source_time_seconds: Some(2.5e-12),
             source_revision: 0,
             materialized_at_unix_ms: 0,
             stale_by_steps: 0,
@@ -6712,6 +6732,7 @@ mod tests {
 
         assert_eq!(quantities[0].domain, "full_domain");
         assert_eq!(quantities[1].domain, "magnetic_only");
+        assert_eq!(quantities[0].source_time_seconds, Some(2.5e-12));
     }
 
     #[test]
@@ -6939,6 +6960,7 @@ mod tests {
         snapshot.preview_cache.insert(LivePreviewField {
             config_revision: 13,
             source_step: 13,
+            source_time_seconds: None,
             source_revision: 13,
             materialized_at_unix_ms: 1,
             materialization_wall_time_ns: 0,

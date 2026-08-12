@@ -4347,6 +4347,7 @@ async fn field_meta_and_vector_resolve_active_live_preview_field_after_snapshot_
                         preview_field: Some(LivePreviewField {
                             config_revision: 4,
                             source_step: 0,
+                            source_time_seconds: None,
                             source_revision: 4,
                             materialized_at_unix_ms: 0,
                             materialization_wall_time_ns: 0,
@@ -4478,6 +4479,7 @@ async fn field_frame_terminal_cache_wins_equal_generation_in_vector_route_body()
         let runtime_preview = LivePreviewField {
             config_revision: 7,
             source_step: 52,
+            source_time_seconds: None,
             source_revision: 7,
             materialized_at_unix_ms: 1_700_000_000_200,
             materialization_wall_time_ns: 100,
@@ -30389,6 +30391,7 @@ async fn v2_field_vector_prefers_fresh_m_preview_cache_over_stale_latest_field()
         snapshot.preview_cache.insert(LivePreviewField {
             config_revision: 4,
             source_step: 4,
+            source_time_seconds: None,
             source_revision: 4,
             materialized_at_unix_ms: 1_700_000_000_456,
             materialization_wall_time_ns: 80_000_000,
@@ -30511,6 +30514,7 @@ async fn v2_fdm_vector_ignores_max_samples_when_preview_would_be_downscaled() {
         snapshot.preview_cache.insert(LivePreviewField {
             config_revision: 8,
             source_step: 8,
+            source_time_seconds: None,
             source_revision: 8,
             materialized_at_unix_ms: 1_700_000_000_456,
             materialization_wall_time_ns: 80_000_000,
@@ -30708,6 +30712,7 @@ async fn v2_h_demag_resource_prefers_newer_preview_cache_over_stale_latest_field
         snapshot.preview_cache.insert(LivePreviewField {
             config_revision: 4,
             source_step: 52,
+            source_time_seconds: None,
             source_revision: 4,
             materialized_at_unix_ms: 1_700_000_000_456,
             materialization_wall_time_ns: 80_000_000,
@@ -30829,6 +30834,7 @@ async fn v2_optional_field_materialization_pending_and_error_preserve_solver_and
         snapshot.preview_cache.insert(LivePreviewField {
             config_revision: 3,
             source_step: 4,
+            source_time_seconds: None,
             source_revision: 7,
             materialized_at_unix_ms: 1_700_000_000_456,
             materialization_wall_time_ns: 80_000_000,
@@ -31043,6 +31049,7 @@ async fn v2_energy_density_meta_exposes_fem_nodal_projection_location() {
         snapshot.preview_cache.insert(LivePreviewField {
             config_revision: 3,
             source_step: 4,
+            source_time_seconds: None,
             source_revision: 7,
             materialized_at_unix_ms: 1_700_000_000_456,
             materialization_wall_time_ns: 80_000,

@@ -11297,6 +11297,7 @@ mod tests {
         LivePreviewField {
             config_revision: revision,
             source_step: 0,
+            source_time_seconds: None,
             source_revision: revision,
             materialized_at_unix_ms: 0,
             materialization_wall_time_ns: 0,
@@ -12970,6 +12971,7 @@ mod tests {
         heavy.preview_field = Some(LivePreviewField {
             config_revision: 1,
             source_step: 0,
+            source_time_seconds: None,
             source_revision: 1,
             materialized_at_unix_ms: 0,
             materialization_wall_time_ns: 0,
