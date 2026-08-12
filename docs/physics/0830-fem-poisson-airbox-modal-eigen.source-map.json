@@ -68,9 +68,9 @@
       "sources": ["source-oracle-guard"]
     },
     {
-      "id": "eq-poisson-airbox-user-owned-equilibrium-acceptance",
-      "symbols": ["magnetization", "equilibrium_effective_field", "relax_stop_metric", "relax_stop_threshold", "relative_torque_diagnostic", "norm_operators", "schedule_operators"],
-      "sources": ["source-python-relax-stop", "source-relax-handoff", "source-equilibrium-materialization"]
+      "id": "eq-poisson-airbox-relative-torque-diagnostic",
+      "symbols": ["magnetization", "equilibrium_effective_field", "relative_torque_diagnostic", "norm_operators", "schedule_operators"],
+      "sources": ["source-relax-handoff", "source-equilibrium-materialization"]
     },
     {
       "id": "eq-poisson-airbox-window-refinement-schedule",
@@ -127,8 +127,6 @@
     {"id": "cluster_indices", "latex": "$i$, $j$, $r$", "meaning": "cluster-basis indices and paired cluster rank", "si_unit": "$1$"},
     {"id": "cluster_overlap", "latex": "$u_i^\\ast v_j$, $s(U,V)$", "meaning": "Hermitian overlap and normalized invariant-subspace overlap", "si_unit": "$1$"},
     {"id": "equilibrium_effective_field", "latex": "$\\mathbf H_{\\mathrm{eff},0}$", "meaning": "effective field evaluated at the accepted equilibrium", "si_unit": "$\\mathrm{A\\,m^{-1}}$"},
-    {"id": "relax_stop_metric", "latex": "$g_{\\mathrm{stop}}$", "meaning": "user-authored relaxation stop metric", "si_unit": "metric-dependent: $\\mathrm{A\\,m^{-1}}$ or $\\mathrm{J}$"},
-    {"id": "relax_stop_threshold", "latex": "$\\tau_{\\mathrm{stop}}$", "meaning": "user-authored relaxation stop threshold", "si_unit": "same as $g_{\\mathrm{stop}}$"},
     {"id": "relative_torque_diagnostic", "latex": "$\\rho_\\tau$", "meaning": "relative torque diagnostic, never an eigensolve acceptance threshold", "si_unit": "$1$"}
   ],
   "sources": [

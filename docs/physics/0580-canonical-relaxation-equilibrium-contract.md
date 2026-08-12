@@ -2,7 +2,7 @@
 
 - Status: approved contract; implementation incomplete
 - Owners: Fullmag physics, planner, backend, API, and Control Room maintainers
-- Last updated: 2026-08-02
+- Last updated: 2026-08-12
 - Related ADRs: `docs/adr/0011-resource-first-api.md`
 - Related specs: `docs/specs/capability-matrix-v0.md`,
   `docs/specs/resource-first-control-room-api-v2.md`,
@@ -332,6 +332,11 @@ for a lane, that lane rejects Oersted during relaxation.
 | `max_torque_T` | `mu0` times field residual | `T` |
 | `max_rhs_norm_per_s` | maximum total dynamic RHS norm | `1/s` |
 | `relaxation_time_s` | LLG-relaxation stage-local clock | `s` |
+| $\mathcal C_{\mathrm T}$ | satisfied configured torque stop criterion, including its required fresh accepted-state confirmation samples | $1$ |
+| $\mathcal C_{\mathrm E}$ | satisfied configured energy-plateau stop criterion | $1$ |
+| $\mathcal C_{\mathrm{stop}}$ | satisfied user-enabled convergence condition | $1$ |
+| $\tau_{\mathrm T}$ | user-authored torque tolerance | $\mathrm{A\,m^{-1}}$ |
+| $\varepsilon_{\mathrm E}$ | user-authored energy-plateau tolerance | $\mathrm{J}$ |
 
 (assumptions-and-validity)=
 ### 2.6 Assumptions and validity limits
@@ -406,25 +411,43 @@ No new relaxation physics belongs in a monolithic bridge or cross-cutting
 Hybrid relaxation is unsupported. `backend=hybrid` rejects rather than
 splitting one equilibrium solve across unqualified FDM/FEM or CPU/GPU methods.
 
+(relaxation-stop-semantics)=
 ### 3.4 Stop semantics
 
-Canonical convergence criteria are:
+For every fresh accepted state, the canonical stop predicate is
 
-- torque: `max_torque_Apm <= torque_tolerance_apm`;
-- energy plateau: range `max(E)-min(E)` over the last 50 accepted states is at
-  most `energy_tolerance_j`; a plateau is a controller signal and never proves
-  equilibrium by itself;
-- `converged=true` requires a configured, finite torque tolerance and at least
-  three consecutive fresh accepted-state torque samples at or below it;
-- when energy tolerance is configured, its plateau condition must also hold,
-  but it cannot replace the torque condition;
+```{math}
+:label: eq-relaxation-any-enabled-stop
+\mathcal C_{\mathrm{stop}}
+=\mathcal C_{\mathrm T}\lor\mathcal C_{\mathrm E},
+\qquad
+\mathcal C_{\mathrm T}
+=\left(T_{\max}^{A/m}\leq\tau_{\mathrm T}\right)
+\text{ for three consecutive fresh accepted-state samples},
+\qquad
+\mathcal C_{\mathrm E}
+=\left(\max(E)-\min(E)\leq\varepsilon_{\mathrm E}\right)_{50\ \mathrm{accepted\ states}}.
+```
+
+Only criteria explicitly enabled by the user participate in the disjunction. Thus an enabled finite torque criterion or an enabled energy-plateau criterion can independently emit `converged=true`; an absent criterion is not a hidden gate. The energy window must contain 50 accepted states, and a nonfinite, stale, or unavailable torque/energy input is an error rather than a satisfied criterion.
+
+| Enabled criteria and observed result | Typed stop reason | Converged |
+|---|---|---|
+| Torque only; $\mathcal C_{\mathrm T}$ | `torque` | `true` |
+| Energy only; $\mathcal C_{\mathrm E}$ | `energy` | `true` |
+| Torque and energy; both conditions hold in the same accepted sample | `torque` | `true` |
+| Torque and energy; only $\mathcal C_{\mathrm E}$ holds | `energy` | `true` |
+| No enabled physical criterion is satisfied | no convergence reason | `false` |
+| `max_steps`, timeout, cancellation, numerical stagnation, unsupported path, or backend error | corresponding non-convergence reason | `false` |
+
+`torque` has deterministic reporting priority when both criteria first hold in the same accepted sample. This priority changes only the reported reason, not the physical acceptance result.
 - a candidate LLG relaxation step whose fresh total energy exceeds the last
   accepted energy by more than the configured absolute-plus-relative numerical
   budget is rejected and rolled back before it can affect completion metrics;
-- an energy plateau above the torque threshold tightens adaptive error control
+- an energy plateau that does not satisfy an enabled energy criterion tightens adaptive error control
   or the fixed time step by `sqrt(2)` down to its configured floor; it does not
   terminate the stage;
-- a complete plateau window above the torque threshold after the controller has
+- a complete plateau window that satisfies no enabled physical criterion after the controller has
   reached its floor terminates as `numerical_stagnation`, with
   `converged=false`;
 - `max_steps` is a terminal budget, not proof of convergence;
@@ -436,12 +459,11 @@ Direct-minimizer line-search step sums are not time and are not exposed as
 `line_search_backtracks`, `rhs_evaluations`, and `accepted_steps` with explicit
 units.
 
-Every terminal stage has exactly one typed stop reason. `torque` is the only
-equilibrium convergence reason. `energy` is retained only as a compatibility
-decode value for historical artifacts and must not be emitted for new runs.
-`gradient` is converged only when the canonical torque criterion also passes;
-otherwise a degenerate direction is `numerical_stagnation`. Budgets,
-cancellation, unsupported paths, and backend failures never set
+Every terminal stage has exactly one typed stop reason. `energy` is a current
+convergence reason, not a compatibility-only decode value. `gradient` is
+converged only when a user-enabled torque or energy criterion has already
+completed; otherwise a degenerate direction is `numerical_stagnation`.
+Budgets, cancellation, unsupported paths, and backend failures never set
 `converged=true`.
 
 Completion is emitted from the state that owned the stop decision. It is not
@@ -808,6 +830,9 @@ from the current runs.
 | `scripts/validate_fem_relaxation_equilibrium_parity.py` | `compare_equilibrium_states` | Compares converged CPU/GPU states without requiring equal step counts. |
 | `scripts/analysis/fem_gpu_benchmark.py` | `equilibrium_parity_summary` | Produces the versioned parity summary from benchmark rows. |
 | `examples/bench_fem_gpu_long.py` | `solver_time_to_tolerance_evidence` | Computes native accepted-step time to the first torque-qualified state. |
+| `crates/fullmag-runner/src/relaxation/convergence.rs` | `relaxation_stop_criteria_satisfied` | Rust implementation owner that must be aligned with the canonical user-enabled torque-or-energy predicate. |
+| `backends/fem/cpu/mfem/runtime/stage_completion.hpp` | `update_stage_completion_from_stats` | Declares the FEM completion owner that must implement deterministic reason selection for the canonical predicate. |
+| `crates/fullmag-runner/src/native_fem/runtime_info.rs` | `stage_completion_from_ffi` | Maps the native typed completion reason and metric into public runner completion provenance. |
 
 (scientific-bibliography)=
 ## 8. References

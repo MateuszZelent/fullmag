@@ -8,8 +8,45 @@
     {"solver": "FDM", "device": "CPU", "status": "documented"},
     {"solver": "FDM", "device": "GPU", "status": "documented"}
   ],
-  "equations": [],
-  "symbols": [],
+  "equations": [
+    {
+      "id": "eq-relaxation-any-enabled-stop",
+      "symbols": ["C_T", "C_E", "C_stop", "tau_T", "epsilon_E"],
+      "sources": ["relaxation-stop-criteria", "native-stage-completion", "ffi-stage-completion"]
+    }
+  ],
+  "symbols": [
+    {
+      "id": "C_T",
+      "latex": "\\mathcal C_{\\mathrm T}",
+      "meaning": "satisfied configured torque stop criterion, including its required fresh accepted-state confirmation samples",
+      "si_unit": "1"
+    },
+    {
+      "id": "C_E",
+      "latex": "\\mathcal C_{\\mathrm E}",
+      "meaning": "satisfied configured energy-plateau stop criterion",
+      "si_unit": "1"
+    },
+    {
+      "id": "C_stop",
+      "latex": "\\mathcal C_{\\mathrm{stop}}",
+      "meaning": "satisfied user-enabled convergence condition",
+      "si_unit": "1"
+    },
+    {
+      "id": "tau_T",
+      "latex": "\\tau_{\\mathrm T}",
+      "meaning": "user-authored torque tolerance",
+      "si_unit": "\\mathrm{A\\,m^{-1}}"
+    },
+    {
+      "id": "epsilon_E",
+      "latex": "\\varepsilon_{\\mathrm E}",
+      "meaning": "user-authored energy-plateau tolerance",
+      "si_unit": "\\mathrm{J}"
+    }
+  ],
   "sources": [
     {
       "id": "adaptive-timestep-authoring",
@@ -40,6 +77,24 @@
       "path": "examples/bench_fem_gpu_long.py",
       "symbol": "solver_time_to_tolerance_evidence",
       "responsibility": "Measure native accepted-step time to the first torque-qualified state."
+    },
+    {
+      "id": "relaxation-stop-criteria",
+      "path": "crates/fullmag-runner/src/relaxation/convergence.rs",
+      "symbol": "relaxation_stop_criteria_satisfied",
+      "responsibility": "Rust implementation owner that must be aligned with the canonical user-enabled torque-or-energy predicate."
+    },
+    {
+      "id": "native-stage-completion",
+      "path": "backends/fem/cpu/mfem/runtime/stage_completion.hpp",
+      "symbol": "update_stage_completion_from_stats",
+      "responsibility": "Declare the FEM completion owner that must implement deterministic reason selection for the canonical predicate."
+    },
+    {
+      "id": "ffi-stage-completion",
+      "path": "crates/fullmag-runner/src/native_fem/runtime_info.rs",
+      "symbol": "stage_completion_from_ffi",
+      "responsibility": "Map the native typed completion reason and metric into public runner completion provenance."
     }
   ],
   "public_api": {

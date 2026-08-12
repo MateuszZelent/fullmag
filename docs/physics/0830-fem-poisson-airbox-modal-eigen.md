@@ -165,16 +165,14 @@ assembly, equilibrium, target or acceptance input:
 f_{\mathrm{Kittel}}=\frac{\omega_{\mathrm{Kittel}}}{2\pi}.
 ```
 
-The relaxation stage, not eigensolve, owns physical equilibrium acceptance:
+The relaxation stage, not eigensolve, owns physical equilibrium acceptance.
+Its user-enabled torque-or-energy predicate, tie-breaker, and non-convergence
+terminal reasons are defined only by {ref}`relaxation-stop-semantics`; this
+note consumes the immutable completed-stage certificate and does not redefine
+relaxation:
 
 ```{math}
-:label: eq-poisson-airbox-user-owned-equilibrium-acceptance
-g_{\mathrm{stop}}(\mathbf m_0)\leq\tau_{\mathrm{stop}},
-\qquad
-g_{\mathrm{stop}}\in
-\left\{\max_{\Omega_m}|\mathbf m_0\times\mathbf H_{\mathrm{eff},0}|,
-\Delta E\right\},
-\qquad
+:label: eq-poisson-airbox-relative-torque-diagnostic
 \rho_\tau=
 \frac{\max_{\Omega_m}|\mathbf m_0\times\mathbf H_{\mathrm{eff},0}|}
 {\max\!\left(\max_{\Omega_m}|\mathbf H_{\mathrm{eff},0}|,
@@ -234,8 +232,6 @@ must carry an equivalent immutable acceptance certificate.
 | $i$, $j$, $r$ | cluster-basis indices and paired cluster rank | $1$ |
 | $u_i^\ast v_j$, $s(U,V)$ | Hermitian overlap and normalized invariant-subspace overlap | $1$ |
 | $\mathbf H_{\mathrm{eff},0}$ | effective field evaluated at the accepted equilibrium | $\mathrm{A\,m^{-1}}$ |
-| $g_{\mathrm{stop}}$ | user-authored relaxation stop metric | metric-dependent: $\mathrm{A\,m^{-1}}$ or $\mathrm{J}$ |
-| $\tau_{\mathrm{stop}}$ | user-authored relaxation stop threshold | same as $g_{\mathrm{stop}}$ |
 | $\rho_\tau$ | relative torque diagnostic, never an eigensolve acceptance threshold | $1$ |
 
 (assumptions-and-validity)=
@@ -245,9 +241,9 @@ must carry an equivalent immutable acceptance certificate.
   equilibrium artifact with matching mesh, material, physics and boundary
   signatures. Acceptance is owned by the user's completed relaxation stop
   contract; eigensolve does not impose an additional relative-torque limit.
-- A completed relaxation is accepted when its recorded torque or energy metric
-  satisfies the corresponding authored threshold. `max_steps`, time limits,
-  cancellation and backend failure do not establish equilibrium.
+- A completed relaxation is accepted only according to the canonical contract
+  in {ref}`relaxation-stop-semantics`. `max_steps`, time limits, cancellation,
+  numerical stagnation, and backend failure do not establish equilibrium.
 - Relative torque remains a diagnostic observable and cannot override a
   completed, converged relaxation stage.
 - The source-level native magnetic producer supports P1 `tet4` and `prism6`
