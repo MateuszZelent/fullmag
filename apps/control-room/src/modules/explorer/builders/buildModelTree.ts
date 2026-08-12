@@ -11,6 +11,7 @@ import { buildCrossSectionNodes } from "./crossSectionExplorerNodes";
 import {
   type ExplorerTreeResources,
 } from "./frequencyDomainExplorerNodes";
+import type { RuntimeExplorerSnapshot } from "./runtimeExplorerSnapshot";
 import { buildRuntimeDiagnosticTree } from "./diagnosticExplorerNodes";
 import { buildRuntimeJobTree } from "./jobExplorerNodes";
 import { buildRuntimeResourceTree } from "./resourceExplorerNodes";
@@ -168,9 +169,10 @@ function branch(id: string, label: string, kind: ExplorerNode["kind"], status: E
 export function buildExplorerTree(
   tabId: ExplorerTabId,
   resources: ExplorerTreeResources = {},
+  runtime: RuntimeExplorerSnapshot | null = null,
 ): ExplorerNode[] {
   if (tabId === "model") return buildModelTree(null, resources);
-  if (tabId === "resources") return buildRuntimeResourceTree(resources);
+  if (tabId === "resources") return buildRuntimeResourceTree(runtime?.resources);
   if (tabId === "results") {
     if (!resources.currentRun) {
       return [{
@@ -190,9 +192,9 @@ export function buildExplorerTree(
     });
     return buildPhysicsFirstResultsTree(adapted.snapshot);
   }
-  if (tabId === "jobs") return buildRuntimeJobTree(resources);
+  if (tabId === "jobs") return buildRuntimeJobTree(runtime?.jobs);
 
-  return buildRuntimeDiagnosticTree(resources);
+  return buildRuntimeDiagnosticTree(runtime?.diagnostics);
 }
 
 export function flattenExplorerNodes(nodes: readonly ExplorerNode[]): ExplorerNode[] {

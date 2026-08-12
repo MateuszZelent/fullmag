@@ -5,6 +5,10 @@ import type {
   AnalysisFieldOverlayRepresentation,
   AnalysisFieldOverlaySource,
 } from "../visualization/AnalysisFieldOverlayController";
+import type {
+  RuntimeExecutionDetail,
+  RuntimeExplorerDetail,
+} from "../resources/runtimeExplorerTypes";
 
 type ObjectSelectionKind =
   | "object.root"
@@ -259,6 +263,12 @@ export type FdmDomainSelectionScope =
 export type SelectionRef =
   | LiveChartSelectionRef
   | LiveChartPointSelectionRef
+  | {
+      detail: RuntimeExplorerDetail;
+      kind: string;
+      nodeId: string;
+      type: "runtime-explorer";
+    }
   | {
       kind: "model.planar.monitor";
       monitorId: string;
@@ -676,6 +686,46 @@ function recordEquals(
     entries.every(([key, value]) => right[key] === value);
 }
 
+function runtimeExecutionDetailEquals(
+  left: RuntimeExecutionDetail | null,
+  right: RuntimeExecutionDetail | null,
+): boolean {
+  if (left === right) return true;
+  if (!left || !right) return false;
+  return left.backend === right.backend &&
+    left.device === right.device &&
+    left.engineId === right.engineId &&
+    left.mode === right.mode &&
+    left.precision === right.precision &&
+    left.runtimeFamily === right.runtimeFamily &&
+    left.worker === right.worker;
+}
+
+function runtimeExplorerDetailEquals(
+  left: RuntimeExplorerDetail,
+  right: RuntimeExplorerDetail,
+): boolean {
+  return left.cache === right.cache &&
+    left.category === right.category &&
+    left.contractGap === right.contractGap &&
+    left.facts.length === right.facts.length &&
+    left.facts.every((fact, index) =>
+      fact.label === right.facts[index]?.label &&
+      fact.value === right.facts[index]?.value
+    ) &&
+    left.generation === right.generation &&
+    left.key === right.key &&
+    left.location === right.location &&
+    left.message === right.message &&
+    left.owner === right.owner &&
+    runtimeExecutionDetailEquals(left.requestedExecution, right.requestedExecution) &&
+    runtimeExecutionDetailEquals(left.resolvedExecution, right.resolvedExecution) &&
+    left.revision === right.revision &&
+    left.schema === right.schema &&
+    left.sizeBytes === right.sizeBytes &&
+    left.sourceStatus === right.sourceStatus;
+}
+
 export function selectionRefEquals(
   left: Selection["ref"],
   right: Selection["ref"],
@@ -685,6 +735,13 @@ export function selectionRefEquals(
   if (left.type !== right.type) return false;
 
   switch (left.type) {
+    case "runtime-explorer":
+      return (
+        right.type === "runtime-explorer" &&
+        left.kind === right.kind &&
+        left.nodeId === right.nodeId &&
+        runtimeExplorerDetailEquals(left.detail, right.detail)
+      );
     case "live-chart":
       return (
         right.type === "live-chart" &&

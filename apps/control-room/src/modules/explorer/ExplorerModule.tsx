@@ -9,13 +9,17 @@ import {
   SlidersHorizontal,
 } from "lucide-react";
 
-import type { LiveStatusResource } from "@/kernel/api/apiTypes";
+import type {
+  LiveStatusResource,
+  SolverProfileResource,
+} from "@/kernel/api/apiTypes";
 import { createCommandContext } from "@/kernel/commands/commandContext";
 import type { KernelEventMap } from "@/kernel/events/eventTypes";
 import type { EventBus } from "@/kernel/events/EventBus";
 import {
   useMeshBuildCurrent,
   useMeshBuildLatestSuccessful,
+  useGeometryValidationResource,
   useMeshRegionMembershipsResource,
   useMeshSharedDomainManifestResource,
   useMeshSharedDomainQualityGatesResource,
@@ -49,11 +53,19 @@ import {
   useHysteresisExecutionTreeResource,
   useStageExecutionResource,
   useCurrentRunResource,
+  useCommandQueueResource,
+  useSolverProfileResource,
+  useSolverStatusResource,
 } from "@/kernel/resources/studyRuntimeResources";
 import { WorkspaceRenderProfiler } from "@/kernel/performance/reactRenderProfiler";
 import { usePhysicsGraphResource } from "@/kernel/resources/physicsGraphResources";
 import { useCurrentTransportsResource } from "@/kernel/resources/spinAuthoringResources";
 import { useSessionStatusSelector } from "@/kernel/resources/useSessionStatus";
+import {
+  usePlatformCapabilitiesResource,
+  usePlatformHealthResource,
+  useRuntimeCommandDetailsResource,
+} from "@/kernel/resources/runtimeExplorerResources";
 import { useSelectionSelector } from "@/kernel/selection/useSelection";
 import { isVisualizationAirboxIdentity } from "@/kernel/selection/selectionTypes";
 import {
@@ -86,6 +98,11 @@ import {
   filterExplorerNodes,
   findExplorerNodePath,
 } from "./builders/buildModelTree";
+import {
+  runtimeExplorerSnapshotFromResources,
+  runtimeResourceSnapshot,
+  runtimeResourceSnapshotEquals,
+} from "./builders/runtimeExplorerSnapshot";
 import {
   modelTreeSnapshotFromScene,
   modelTreeSnapshotWithHysteresisExecutionTree,
@@ -249,6 +266,17 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
     activeTab === "resources" ||
     activeTab === "jobs" ||
     activeTab === "diagnostics";
+  const runtimeTabActive =
+    activeTab === "resources" ||
+    activeTab === "jobs" ||
+    activeTab === "diagnostics";
+  const runtimeSessionStatus = useSessionStatusSelector(
+    runtimeResourceSnapshot,
+    {
+      enabled: runtimeTabActive,
+      isEqual: runtimeResourceSnapshotEquals,
+    },
+  );
   const sessionStatusData = useSessionStatusSelector(
     selectExplorerModelRuntimeStatus,
     { enabled: modelTabActive, isEqual: explorerModelRuntimeStatusEquals },
@@ -293,7 +321,10 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
     enabled: shouldLoadRuntimeMeshBuild(modelTabActive, sessionStatusData),
   });
   const manifest = useMeshSharedDomainManifestResource({
-    enabled: shouldLoadRuntimeMeshManifest(modelTabActive, sessionStatusData),
+    enabled: shouldLoadRuntimeMeshManifest(
+      modelTabActive || runtimeTabActive,
+      modelTabActive ? sessionStatusData : runtimeSessionStatus.data,
+    ),
   });
   const qualityGates = useMeshSharedDomainQualityGatesResource({
     enabled: shouldLoadRuntimeMeshManifest(modelTabActive, sessionStatusData),
@@ -303,8 +334,8 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
   });
   const stageExecution = useStageExecutionResource({
     enabled: shouldLoadRuntimeStageExecution(
-      modelTabActive,
-      sessionStatusData,
+      modelTabActive || runtimeTabActive,
+      modelTabActive ? sessionStatusData : runtimeSessionStatus.data,
     ),
   });
   const activeHysteresisStageId = useMemo(
@@ -325,6 +356,23 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
   const currentRun = useCurrentRunResource({
     enabled: frequencyDomainTabActive || Boolean(activeAnalysisFieldOverlay),
   });
+  const commandQueue = useCommandQueueResource({ enabled: runtimeTabActive });
+  const runtimeCommandIds = useMemo(
+    () => (commandQueue.data?.commands ?? []).map((command) => command.command_id),
+    [commandQueue.data?.commands],
+  );
+  const commandDetails = useRuntimeCommandDetailsResource(runtimeCommandIds, {
+    enabled: runtimeTabActive,
+  });
+  const geometryValidation = useGeometryValidationResource({
+    enabled: runtimeTabActive,
+  });
+  const platformCapabilities = usePlatformCapabilitiesResource({
+    enabled: runtimeTabActive,
+  });
+  const platformHealth = usePlatformHealthResource({ enabled: runtimeTabActive });
+  const solverProfile = useSolverProfileResource({ enabled: runtimeTabActive });
+  const solverStatus = useSolverStatusResource({ enabled: runtimeTabActive });
   const currentRunId = currentRun.data?.run_id ?? null;
   const selectedResultRunId =
     selectedRef?.type === "frequency-domain" ? selectedRef.analysisRunId ?? null : null;
@@ -373,6 +421,40 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
       enabled:
         frequencyDomainTabActive && frequencyDomainCancelRequestedAvailable,
     });
+
+  const runtimeSnapshot = useMemo(
+    () => runtimeExplorerSnapshotFromResources({
+      commandDetails: runtimeResourceSnapshot(commandDetails),
+      commandQueue: runtimeResourceSnapshot(commandQueue),
+      currentRun: runtimeResourceSnapshot(currentRun),
+      frequencyDomainManifest: runtimeResourceSnapshot(frequencyDomainManifest),
+      geometryValidation: runtimeResourceSnapshot(geometryValidation),
+      meshManifest: runtimeResourceSnapshot(manifest),
+      platformCapabilities: runtimeResourceSnapshot(platformCapabilities),
+      platformHealth: runtimeResourceSnapshot(platformHealth),
+      sessionStatus: runtimeSessionStatus,
+      solverProfile: runtimeResourceSnapshot<SolverProfileResource>({
+        ...solverProfile,
+        data: solverProfile.data ?? null,
+      }),
+      solverStatus: runtimeResourceSnapshot(solverStatus),
+      stageExecution: runtimeResourceSnapshot(stageExecution),
+    }),
+    [
+      commandDetails,
+      commandQueue,
+      currentRun,
+      frequencyDomainManifest,
+      geometryValidation,
+      manifest,
+      platformCapabilities,
+      platformHealth,
+      runtimeSessionStatus,
+      solverProfile,
+      solverStatus,
+      stageExecution,
+    ],
+  );
 
   const nodes = useMemo(() => {
     let domainPresentation = null as ReturnType<typeof buildDomainPresentation> | null;
@@ -531,7 +613,7 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
             frequencyDomainSpectrum: frequencyDomainSpectrum.data,
             pinnedQuickChart,
             currentRun: currentRun.data,
-          });
+          }, runtimeSnapshot);
     return filterExplorerNodes(baseNodes, filterText, selectedNodeId);
   }, [
     activeBuild.data,
@@ -581,6 +663,7 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
     frequencyDomainSpectrum.data,
     pinnedQuickChart,
     currentRun.data,
+    runtimeSnapshot,
   ]);
 
   useEffect(() => {

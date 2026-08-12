@@ -128,6 +128,15 @@ function modeVisualizationSourceFromNode(
 }
 
 function selectionRefFromNode(node: ExplorerNode): SelectionRef | null {
+  if (node.runtimeDetail) {
+    return {
+      detail: node.runtimeDetail,
+      kind: node.kind,
+      nodeId: node.id,
+      type: "runtime-explorer",
+    };
+  }
+
   if (node.kind === "results.quick_chart") {
     const descriptor = parsePinnedQuickChart(node);
     if (!descriptor) return null;

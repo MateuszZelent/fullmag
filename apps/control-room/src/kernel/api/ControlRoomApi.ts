@@ -146,6 +146,8 @@ import {
   PERSISTENCE_FIELD_STATE_IMPORTS_PATH,
   PERSISTENCE_IMPORT_INSPECTIONS_PATH,
   PERSISTENCE_IMPORTS_PATH,
+  PLATFORM_CAPABILITIES_PATH,
+  PLATFORM_HEALTH_PATH,
   SESSION_EVENTS_COMMUNICATION_POLICY_PATH,
   SESSION_STATUS_PATH,
   SIMULATION_COMMAND_DETAIL_PATH,
@@ -235,8 +237,10 @@ import type {
   GeometryRealizationResource,
   GeometryValidationResource,
   GpuTelemetryResource,
+  HealthResource,
   ImportSessionAssetRequest,
   LiveStatusResource,
+  PlatformCapabilitiesResource,
   MagnetizationAssetPatchRequest,
   MagnetizationAssetResource,
   MagneticResponseSweepResource,
@@ -662,6 +666,16 @@ export class ControlRoomApi {
       status: (options?: RequestOptions) =>
         this.requestJson<LiveStatusResource>(SESSION_STATUS_PATH, options),
     },
+  };
+
+  readonly platform = {
+    capabilities: (options?: RequestOptions) =>
+      this.requestJson<PlatformCapabilitiesResource>(
+        PLATFORM_CAPABILITIES_PATH,
+        options,
+      ),
+    health: (options?: RequestOptions) =>
+      this.requestJson<HealthResource>(PLATFORM_HEALTH_PATH, options),
   };
 
   readonly events = {

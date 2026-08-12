@@ -15,9 +15,7 @@ import type { FdmDomainPresentation } from "@/shared/domain/mesh/domainPresentat
 import {
   ANALYSIS_FREQUENCY_DOMAIN_EIGEN_DISPERSION_PATH,
   ANALYSIS_FREQUENCY_DOMAIN_EIGEN_SPECTRUM_V2_PATH,
-  ANALYSIS_FREQUENCY_DOMAIN_MANIFEST_V1_PATH,
   ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_MAGNETIC_SWEEP_PATH,
-  ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_PROGRESS_V1_PATH,
   ANALYSIS_HYSTERESIS_POINT_PATH,
   ANALYSIS_HYSTERESIS_SETTLE_TRACE_PATH,
   DATA_FIELD_VECTOR_PATH,
@@ -2093,7 +2091,7 @@ describe("buildModelTree", () => {
       ),
     ).toBe(false);
   });
-  it("marks the active frequency-domain resource from the visualization field", () => {
+  it("does not derive resource fields from an untyped manifest payload", () => {
     const activeResources = flattenExplorerNodes(
       buildExplorerTree("resources", {
         activeAnalysisFieldOverlay: {
@@ -2126,16 +2124,13 @@ describe("buildModelTree", () => {
       }),
     );
 
-    expect(
-      activeResources.find(
-        (node) => node.id === "resources:analysis:frequency-response:field",
-      ),
-    ).toMatchObject({
-      activeAnalysisField: true,
-      kind: "resources.analysis.frequency_response.field",
+    expect(activeResources).toHaveLength(1);
+    expect(activeResources[0]).toMatchObject({
+      id: "resources:root",
+      status: "unavailable",
     });
   });
-  it("builds frequency-domain jobs from live progress resources", () => {
+  it("does not infer jobs from frequency-domain artifacts or progress", () => {
     const jobs = flattenExplorerNodes(
       buildExplorerTree("jobs", {
         currentRun: currentRun("run-fd-1", 7),
@@ -2147,50 +2142,8 @@ describe("buildModelTree", () => {
       }),
     );
 
-    expect(
-      jobs.find((node) => node.id === "jobs:frequency-domain"),
-    ).toMatchObject({
-      badge: "3/10 running @ 10.5 GHz periodic_airbox_k0",
-      kind: "jobs.frequency_domain.root",
-      status: "cancelled",
-    });
-    expect(
-      jobs.find((node) => node.id === "jobs:frequency-domain:stage-run"),
-    ).toMatchObject({
-      badge: "frequency_domain_manifest.v1",
-      resourceRef: ANALYSIS_FREQUENCY_DOMAIN_MANIFEST_V1_PATH,
-      status: "cancelled",
-    });
-    expect(
-      jobs.find((node) => node.id === "jobs:frequency-domain:eigen-sample"),
-    ).toMatchObject({
-      badge: "2 mode(s)",
-      resourceRef: ANALYSIS_FREQUENCY_DOMAIN_EIGEN_SPECTRUM_V2_PATH,
-      status: "completed",
-    });
-    expect(
-      jobs.find(
-        (node) => node.id === "jobs:frequency-domain:response-frequency",
-      ),
-    ).toMatchObject({
-      badge: "8 GHz-12 GHz",
-      resourceRef: ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_PROGRESS_V1_PATH,
-      status: "cancelled",
-    });
-    expect(
-      jobs.find((node) => node.id === "jobs:frequency-domain:response-progress"),
-    ).toMatchObject({
-      badge: "3/10 running @ 10.5 GHz periodic_airbox_k0",
-      resourceRef: ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_PROGRESS_V1_PATH,
-      status: "cancelled",
-    });
-    expect(
-      jobs.find((node) => node.id === "jobs:frequency-domain:artifact-export"),
-    ).toMatchObject({
-      badge: "frequency_domain/manifest.partial.v1.json",
-      resourceRef: ANALYSIS_FREQUENCY_DOMAIN_MANIFEST_V1_PATH,
-      status: "ready",
-    });
+    expect(jobs).toHaveLength(1);
+    expect(jobs[0]).toMatchObject({ id: "jobs:root", status: "unavailable" });
   });
 
   it("does not project unowned legacy response points into Results", () => {
@@ -3201,24 +3154,8 @@ describe("buildModelTree", () => {
         frequencyDomainManifest: manifest,
       }),
     );
-    expect(
-      resources.find(
-        (node) =>
-          node.kind === "resources.analysis.frequency_domain.dispersion",
-      ),
-    ).toMatchObject({
-      badge: "demag-k rejected",
-      status: "unsupported",
-    });
-    expect(
-      resources.find(
-        (node) =>
-          node.kind === "resources.analysis.frequency_domain.response_map",
-      ),
-    ).toMatchObject({
-      badge: "available",
-      status: "ready",
-    });
+    expect(resources).toHaveLength(1);
+    expect(resources[0]).toMatchObject({ id: "resources:root", status: "unavailable" });
   });
 
   it("does not fabricate a driven response map from k metadata and a response sweep", () => {

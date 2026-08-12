@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 
+import { PLATFORM_HEALTH_PATH } from "@/kernel/api/apiPaths";
+
 import { ControlRoomApi } from "@/kernel/api/ControlRoomApi";
 import type {
   DomainMetaResource,
@@ -100,6 +102,42 @@ describe("selectExplorerNode", () => {
     }, "explorer");
 
     expect(kernel.selection.get().nodeId).toBeNull();
+  });
+
+  it("preserves typed runtime detail in the Explorer selection ref", () => {
+    const kernel = makeKernel();
+    const runtimeDetail = {
+      cache: null,
+      category: "resource" as const,
+      contractGap: false,
+      facts: [],
+      generation: null,
+      key: PLATFORM_HEALTH_PATH,
+      location: PLATFORM_HEALTH_PATH,
+      message: null,
+      owner: "platform",
+      requestedExecution: null,
+      resolvedExecution: null,
+      revision: 8,
+      schema: null,
+      sizeBytes: null,
+      sourceStatus: "ready" as const,
+    };
+
+    selectExplorerNode(kernel, {
+      id: "resources:platform:health",
+      kind: "resources.runtime",
+      label: "Health",
+      parentId: "resources:platform",
+      runtimeDetail,
+    }, "explorer");
+
+    expect(kernel.selection.get().ref).toEqual({
+      detail: runtimeDetail,
+      kind: "resources.runtime",
+      nodeId: "resources:platform:health",
+      type: "runtime-explorer",
+    });
   });
 
   it("writes only selectedSeriesIds for a pinned Quick Chart selection", () => {

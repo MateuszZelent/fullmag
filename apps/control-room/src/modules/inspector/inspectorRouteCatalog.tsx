@@ -159,6 +159,19 @@ import {
   TablesOverviewInspector,
 } from "./panels/physics-first/PhysicsFirstResultInspectors";
 import { RegionsListPanel } from "./panels/RegionsListPanel";
+import {
+  RuntimeCapabilityDiagnosticInspectorPanel,
+  RuntimeCommandJobInspectorPanel,
+  RuntimeFrequencyDiagnosticInspectorPanel,
+  RuntimeHealthDiagnosticInspectorPanel,
+  RuntimeMeshDiagnosticInspectorPanel,
+  RuntimePerformanceDiagnosticInspectorPanel,
+  RuntimeProblemDiagnosticInspectorPanel,
+  RuntimeResourceInspectorPanel,
+  RuntimeRunJobInspectorPanel,
+  RuntimeSolverDiagnosticInspectorPanel,
+  RuntimeStageJobInspectorPanel,
+} from "./panels/RuntimeExplorerInspectorPanels";
 import { StudyInspectorPanel } from "./panels/StudyInspectorPanel";
 import { FieldRow } from "./primitives/FieldRow";
 import { InspectorGroup } from "./primitives/InspectorGroup";
@@ -710,7 +723,7 @@ const INSPECTOR_ROUTE_CONTRIBUTIONS: InspectorPanelContribution[] = [
   {
     id: "jobs-overview",
     title: "Jobs",
-    selectionKinds: ["jobs.root", "jobs.command"],
+    selectionKinds: ["jobs.root"],
     component: StudyInspectorPanel,
   },
   {
@@ -718,6 +731,72 @@ const INSPECTOR_ROUTE_CONTRIBUTIONS: InspectorPanelContribution[] = [
     title: "Diagnostics",
     selectionKinds: ["diagnostics.root", "diagnostics.resource"],
     component: VisualizationDebugPanel,
+  },
+  {
+    id: "runtime-resource",
+    title: "Runtime Resource",
+    selectionKinds: ["resources.runtime"],
+    component: RuntimeResourceInspectorPanel,
+  },
+  {
+    id: "runtime-run-job",
+    title: "Runtime Run",
+    selectionKinds: ["jobs.run"],
+    component: RuntimeRunJobInspectorPanel,
+  },
+  {
+    id: "runtime-stage-job",
+    title: "Runtime Stage",
+    selectionKinds: ["jobs.stage"],
+    component: RuntimeStageJobInspectorPanel,
+  },
+  {
+    id: "runtime-command-job",
+    title: "Runtime Command",
+    selectionKinds: ["jobs.command"],
+    component: RuntimeCommandJobInspectorPanel,
+  },
+  {
+    id: "runtime-problem-diagnostic",
+    title: "Problem Diagnostic",
+    selectionKinds: ["diagnostics.problem"],
+    component: RuntimeProblemDiagnosticInspectorPanel,
+  },
+  {
+    id: "runtime-health-diagnostic",
+    title: "Health Diagnostic",
+    selectionKinds: ["diagnostics.health"],
+    component: RuntimeHealthDiagnosticInspectorPanel,
+  },
+  {
+    id: "runtime-capability-diagnostic",
+    title: "Capability Diagnostic",
+    selectionKinds: ["diagnostics.capability"],
+    component: RuntimeCapabilityDiagnosticInspectorPanel,
+  },
+  {
+    id: "runtime-solver-diagnostic",
+    title: "Solver Diagnostic",
+    selectionKinds: ["diagnostics.solver"],
+    component: RuntimeSolverDiagnosticInspectorPanel,
+  },
+  {
+    id: "runtime-mesh-diagnostic",
+    title: "Mesh Diagnostic",
+    selectionKinds: ["diagnostics.mesh"],
+    component: RuntimeMeshDiagnosticInspectorPanel,
+  },
+  {
+    id: "runtime-frequency-diagnostic",
+    title: "Frequency-domain Diagnostic",
+    selectionKinds: ["diagnostics.frequency-domain"],
+    component: RuntimeFrequencyDiagnosticInspectorPanel,
+  },
+  {
+    id: "runtime-performance-diagnostic",
+    title: "Performance Diagnostic",
+    selectionKinds: ["diagnostics.performance"],
+    component: RuntimePerformanceDiagnosticInspectorPanel,
   },
   {
     id: "object-general",

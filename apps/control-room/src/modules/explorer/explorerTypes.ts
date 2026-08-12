@@ -1,5 +1,6 @@
 import type { CommandId } from "@/kernel/commands/commandTypes";
 import type { ResourceStatus } from "@/kernel/resources/resourceTypes";
+import type { RuntimeExplorerDetail } from "@/kernel/resources/runtimeExplorerTypes";
 import type {
   DomainMetaResource,
   FdmMultilayerLayoutResource,
@@ -212,6 +213,7 @@ export type ExplorerNodeKind =
   | "results.field_quantity"
   | "results.quick_chart"
   | "resources.root"
+  | "resources.runtime"
   | "resources.analysis.frequency_domain"
   | "resources.analysis.frequency_domain.manifest"
   | "resources.analysis.frequency_domain.calculation_modes"
@@ -235,14 +237,23 @@ export type ExplorerNodeKind =
   | "resources.field"
   | "resources.mesh"
   | "jobs.root"
+  | "jobs.run"
+  | "jobs.stage"
+  | "jobs.command"
   | "jobs.frequency_domain.root"
   | "jobs.frequency_domain.stage_run"
   | "jobs.frequency_domain.eigen_sample"
   | "jobs.frequency_domain.response_frequency"
   | "jobs.frequency_domain.response_progress"
   | "jobs.frequency_domain.artifact_export"
-  | "jobs.command"
   | "diagnostics.root"
+  | "diagnostics.problem"
+  | "diagnostics.health"
+  | "diagnostics.capability"
+  | "diagnostics.solver"
+  | "diagnostics.mesh"
+  | "diagnostics.frequency-domain"
+  | "diagnostics.performance"
   | "diagnostics.frequency_domain.root"
   | "diagnostics.frequency_domain.capabilities"
   | "diagnostics.frequency_domain.equilibrium"
@@ -300,6 +311,12 @@ export interface ExplorerNodeStateFacets {
   executionState: ExplorerExecutionState;
   resourceState: ExplorerResourceState;
 }
+
+export type {
+  RuntimeExecutionDetail,
+  RuntimeExplorerDetail,
+  RuntimeExplorerFact,
+} from "@/kernel/resources/runtimeExplorerTypes";
 
 export type ExplorerIconToken =
   | "activity"
@@ -392,6 +409,7 @@ export interface ExplorerNode {
   physicsDependencyIds?: readonly string[];
   regionId?: string;
   resourceRef?: string;
+  runtimeDetail?: RuntimeExplorerDetail;
   displayUnits?: Record<string, string>;
   range?: { fromSI: number; toSI: number } | null;
   /** Grouping rows stay focusable/expandable but do not create a Selection. */

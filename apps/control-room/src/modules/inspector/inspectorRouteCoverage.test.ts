@@ -368,15 +368,31 @@ const tabIds = [
 
 function nodesForTab(tabId: (typeof tabIds)[number]) {
   const resourceTree = buildExplorerTree(tabId, resources);
-  // buildExplorerTree currently has no snapshot parameter; preserve its public
-  // resource contract for every tab and inject the complete model fixture at
-  // the existing buildModelTree seam for the model tab.
   return tabId === "model"
     ? flattenExplorerNodes(buildModelTree(modelSnapshot, resources))
     : flattenExplorerNodes(resourceTree);
 }
 
 describe("inspector route coverage", () => {
+  it("routes every runtime Explorer leaf to dedicated Inspector content", () => {
+    const kinds = [
+      "resources.runtime",
+      "jobs.run",
+      "jobs.stage",
+      "jobs.command",
+      "diagnostics.problem",
+      "diagnostics.health",
+      "diagnostics.capability",
+      "diagnostics.solver",
+      "diagnostics.mesh",
+      "diagnostics.frequency-domain",
+      "diagnostics.performance",
+    ];
+    const routes = kinds.map((kind) => resolveInspectorRoute(kind));
+
+    expect(routes.every(Boolean)).toBe(true);
+    expect(new Set(routes.map((route) => route?.component)).size).toBe(kinds.length);
+  });
   it("covers the complete model and conditional resource trees before routing every selectable node", () => {
     const nodesByTab = new Map(tabIds.map((tabId) => [tabId, nodesForTab(tabId)]));
     const kindsByTab = (tabId: (typeof tabIds)[number]) =>
@@ -397,12 +413,7 @@ describe("inspector route coverage", () => {
       ]),
     );
     expect(kindsByTab("resources")).toEqual(
-      expect.arrayContaining([
-        "resources.analysis.frequency_domain",
-        "resources.analysis.eigen.spectrum",
-        "resources.analysis.frequency_response.sweep",
-        "resources.analysis.frequency_response.field",
-      ]),
+      ["resources.root"],
     );
     expect(kindsByTab("results")).toEqual(
       expect.arrayContaining([
@@ -418,21 +429,10 @@ describe("inspector route coverage", () => {
       ]),
     );
     expect(kindsByTab("jobs")).toEqual(
-      expect.arrayContaining([
-        "jobs.frequency_domain.root",
-        "jobs.frequency_domain.stage_run",
-        "jobs.frequency_domain.eigen_sample",
-        "jobs.frequency_domain.response_progress",
-        "jobs.frequency_domain.artifact_export",
-      ]),
+      ["jobs.root"],
     );
     expect(kindsByTab("diagnostics")).toEqual(
-      expect.arrayContaining([
-        "diagnostics.frequency_domain.root",
-        "diagnostics.frequency_domain.capabilities",
-        "diagnostics.frequency_domain.operator",
-        "diagnostics.frequency_domain.periodic_floquet",
-      ]),
+      ["diagnostics.root"],
     );
 
     const selectableNodes = tabIds.flatMap((tabId) =>
