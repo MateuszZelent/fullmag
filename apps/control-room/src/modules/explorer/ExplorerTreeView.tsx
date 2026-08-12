@@ -365,6 +365,10 @@ const ExplorerTreeRow = memo(function ExplorerTreeRow({
     }
   }
 
+  const tooltipParts: string[] = [node.label];
+  if (node.status && node.status !== "ready") tooltipParts.push(`[${node.status}]`);
+  if (node.badge) tooltipParts.push(`— ${node.badge}`);
+
   const row = (
     <div
       className={cn(
@@ -378,6 +382,7 @@ const ExplorerTreeRow = memo(function ExplorerTreeRow({
       data-status={statusLabel(node.status)}
       role="treeitem"
       tabIndex={focusable ? 0 : -1}
+      title={tooltipParts.length > 1 ? tooltipParts.join(" ") : undefined}
       aria-expanded={hasChildren ? expanded : undefined}
       aria-selected={selectable ? active : undefined}
       onClick={selectable ? handleSelect : undefined}
@@ -421,9 +426,6 @@ const ExplorerTreeRow = memo(function ExplorerTreeRow({
       ) : null}
       {node.activeAnalysisField ? (
         <span className="fm-explorer-tree-row__active-field">active</span>
-      ) : null}
-      {node.badge ? (
-        <span className="fm-explorer-tree-row__badge">{node.badge}</span>
       ) : null}
     </div>
   );

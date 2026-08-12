@@ -421,20 +421,7 @@ export function buildFooterTelemetryModel(
         subdetail: `${formatInteger(totalSteps)} steps`,
         value: formatFixed(stepsPerSecond, 1, "0.0"),
       },
-      ...(status?.run
-        ? [
-            {
-              detail: status.run.selection_reason,
-              icon: <Gauge size={14} aria-hidden="true" />,
-              id: "fem-device-selection",
-              label: "Device",
-              subdetail: status.run.calibration_id
-                ? `${status.run.calibration_id} · confidence ${formatFixed(status.run.selection_confidence, 2, "n/a")}`
-                : "Availability-first / uncalibrated",
-              value: `${status.run.requested_device} → ${status.run.resolved_device}`,
-            },
-          ]
-        : []),
+
       {
         detail: "Latest step",
         icon: <Hash size={14} aria-hidden="true" />,

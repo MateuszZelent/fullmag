@@ -173,13 +173,7 @@ describe("FooterTelemetry", () => {
     expect(byId.step?.value).toBe("99");
     expect(byId.rate?.label).toBe("End-to-end rate");
     expect(byId.rate?.detail).toBe("Closed profiler span");
-    expect(byId["fem-device-selection"]?.value).toBe("auto → gpu");
-    expect(byId["fem-device-selection"]?.detail).toBe(
-      "calibrated_above_upper_bound",
-    );
-    expect(byId["fem-device-selection"]?.subdetail).toContain(
-      "rtx4080-qualified-v1",
-    );
+
   });
 
   it("uses detailed runtime state for the visible compute status", () => {

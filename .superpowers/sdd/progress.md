@@ -182,6 +182,28 @@ bramka Quick Chart + 3D: `/v2/sessions/current/data/fields` jest odpytywane co
 około 110 ms, dlatego session requests nie osiągają idle. Progu ani liczby
 cykli nie obniżono.
 
+## Plan: refaktoryzacja widoku 2D i monitorów planarnych (2026-08-12)
+
+- Branch/worktree: `/home/kkingstoun/git/fullmag/fullmag`, `master` (jawnie wskazane przez użytkownika)
+- Base: `ac56e75f410354285fc49dc0459b6c116d187719`
+- Plan: `docs/plans/active/viewport-2d-refactor-2026-08-12/viewport-2d-refactor-audit-and-implementation-plan.md`
+- Niezależne zmiany użytkownika do zachowania: `ribbon.css`, `FooterTelemetry.tsx`, `ribbonCommon.tsx`, `external_solvers/3`.
+
+| Task | Status | Commit(s) | Review |
+|---:|---|---|---|
+| 0 | complete | `42eede461`, `5138078f7` | spec compliant; quality approved; managed science pass + browser RED baseline (`canvas` timeout) |
+| 1 | pending | pending | pending |
+| 2 | pending | pending | pending |
+| 3 | pending | pending | pending |
+| 4 | pending | pending | pending |
+| 5 | pending | pending | pending |
+| 6 | pending | pending | pending |
+| 7 | pending | pending | pending |
+| 8 | pending | pending | pending |
+| 9 | pending | pending | pending |
+| 10 | pending | pending | pending |
+| 11 | pending | pending | pending |
+
 FDM multilayer directed/symmetrized pair-energy: complete (commits
 `5feda8498..fd2c8bac1`, task and final reviews clean; CPU FP64 only, no API v2/CUDA
 capability promotion). Pair ledger, atomic snapshot publication, independent
