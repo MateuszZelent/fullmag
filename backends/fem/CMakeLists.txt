@@ -885,6 +885,10 @@ add_fem_source_facade_contract(
     fem_poisson_airbox_shared_domain_contract
     tests/frequency_domain/poisson_airbox_shared_domain_test.cpp
 )
+add_fem_source_facade_contract(
+    fem_mesh_symmetry_certificate_v6_contract
+    tests/frequency_domain/mesh_symmetry_certificate_v6_test.cpp
+)
 if(FULLMAG_USE_MFEM_STACK)
     if(TARGET MFEM::mfem)
         target_link_libraries(fem_poisson_airbox_shared_domain_contract PRIVATE MFEM::mfem)

@@ -1130,7 +1130,8 @@ verify-fem-frequency-domain-floquet-bloch-scalar:
 verify-fem-frequency-domain-native-contract:
     just ensure-managed-fem-runtime
     docker compose --profile fem-gpu run --rm \
-      fem-gpu bash -lc 'cd /workspace && cmake -S native -B native/build -DCMAKE_CUDA_ARCHITECTURES="${FULLMAG_CUDA_ARCHITECTURES:-native}" -DFULLMAG_ENABLE_CUDA=ON -DFULLMAG_ENABLE_FEM_GPU=ON -DFULLMAG_USE_MFEM_STACK=ON -DFULLMAG_FEM_WITH_SLEPC=ON && cmake --build native/build --target fem_frequency_domain_contract && cmake --build native/build --target fem_frequency_domain_checked_extent_contract && cmake --build native/build --target fem_poisson_airbox_shared_domain_contract && cmake --build native/build --target fem_mode_kinematics_contract && cmake --build native/build --target fem_linearized_dynamic_pencil_contract && cmake --build native/build --target fem_operator_contract && cmake --build native/build --target fem_modal_eigen_contract && cmake --build native/build --target fem_driven_response_contract && cmake --build native/build --target fem_window_partition_contract && cmake --build native/build --target fem_mode_deduplication_contract && cmake --build native/build --target fem_contour_interval_solver_contract && LD_LIBRARY_PATH=/workspace/native/build/backends/fem:${LD_LIBRARY_PATH:-} native/build/backends/fem/fem_frequency_domain_contract && LD_LIBRARY_PATH=/workspace/native/build/backends/fem:${LD_LIBRARY_PATH:-} native/build/backends/fem/fem_frequency_domain_checked_extent_contract && LD_LIBRARY_PATH=/workspace/native/build/backends/fem:${LD_LIBRARY_PATH:-} native/build/backends/fem/fem_poisson_airbox_shared_domain_contract && LD_LIBRARY_PATH=/workspace/native/build/backends/fem:${LD_LIBRARY_PATH:-} native/build/backends/fem/fem_mode_kinematics_contract && LD_LIBRARY_PATH=/workspace/native/build/backends/fem:${LD_LIBRARY_PATH:-} native/build/backends/fem/fem_linearized_dynamic_pencil_contract && LD_LIBRARY_PATH=/workspace/native/build/backends/fem:${LD_LIBRARY_PATH:-} native/build/backends/fem/fem_operator_contract && LD_LIBRARY_PATH=/workspace/native/build/backends/fem:${LD_LIBRARY_PATH:-} native/build/backends/fem/fem_modal_eigen_contract && LD_LIBRARY_PATH=/workspace/native/build/backends/fem:${LD_LIBRARY_PATH:-} native/build/backends/fem/fem_driven_response_contract && LD_LIBRARY_PATH=/workspace/native/build/backends/fem:${LD_LIBRARY_PATH:-} native/build/backends/fem/fem_window_partition_contract && LD_LIBRARY_PATH=/workspace/native/build/backends/fem:${LD_LIBRARY_PATH:-} native/build/backends/fem/fem_mode_deduplication_contract && LD_LIBRARY_PATH=/workspace/native/build/backends/fem:${LD_LIBRARY_PATH:-} native/build/backends/fem/fem_contour_interval_solver_contract'
+      -v /mnt/fullmag-zfn2-native:/mnt/fullmag-zfn2-native \
+      fem-gpu bash -lc 'set -euo pipefail; cd /workspace; build_dir=/mnt/fullmag-zfn2-native/fem-frequency-domain-native-contract; mkdir -p "$build_dir"; cmake -S native -B "$build_dir" -DCMAKE_CUDA_ARCHITECTURES="${FULLMAG_CUDA_ARCHITECTURES:-native}" -DFULLMAG_ENABLE_CUDA=ON -DFULLMAG_ENABLE_FEM_GPU=ON -DFULLMAG_USE_MFEM_STACK=ON -DFULLMAG_FEM_WITH_SLEPC=ON && cmake --build "$build_dir" --target fem_frequency_domain_contract && cmake --build "$build_dir" --target fem_frequency_domain_checked_extent_contract && cmake --build "$build_dir" --target fem_poisson_airbox_shared_domain_contract && cmake --build "$build_dir" --target fem_mesh_symmetry_certificate_v6_contract && cmake --build "$build_dir" --target fem_mode_kinematics_contract && cmake --build "$build_dir" --target fem_linearized_dynamic_pencil_contract && cmake --build "$build_dir" --target fem_operator_contract && cmake --build "$build_dir" --target fem_modal_eigen_contract && cmake --build "$build_dir" --target fem_driven_response_contract && cmake --build "$build_dir" --target fem_window_partition_contract && cmake --build "$build_dir" --target fem_mode_deduplication_contract && cmake --build "$build_dir" --target fem_contour_interval_solver_contract && LD_LIBRARY_PATH="$build_dir/backends/fem${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" "$build_dir/backends/fem/fem_frequency_domain_contract" && LD_LIBRARY_PATH="$build_dir/backends/fem${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" "$build_dir/backends/fem/fem_frequency_domain_checked_extent_contract" && LD_LIBRARY_PATH="$build_dir/backends/fem${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" "$build_dir/backends/fem/fem_poisson_airbox_shared_domain_contract" && LD_LIBRARY_PATH="$build_dir/backends/fem${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" "$build_dir/backends/fem/fem_mesh_symmetry_certificate_v6_contract" && LD_LIBRARY_PATH="$build_dir/backends/fem${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" "$build_dir/backends/fem/fem_mode_kinematics_contract" && LD_LIBRARY_PATH="$build_dir/backends/fem${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" "$build_dir/backends/fem/fem_linearized_dynamic_pencil_contract" && LD_LIBRARY_PATH="$build_dir/backends/fem${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" "$build_dir/backends/fem/fem_operator_contract" && LD_LIBRARY_PATH="$build_dir/backends/fem${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" "$build_dir/backends/fem/fem_modal_eigen_contract" && LD_LIBRARY_PATH="$build_dir/backends/fem${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" "$build_dir/backends/fem/fem_driven_response_contract" && LD_LIBRARY_PATH="$build_dir/backends/fem${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" "$build_dir/backends/fem/fem_window_partition_contract" && LD_LIBRARY_PATH="$build_dir/backends/fem${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" "$build_dir/backends/fem/fem_mode_deduplication_contract" && LD_LIBRARY_PATH="$build_dir/backends/fem${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" "$build_dir/backends/fem/fem_contour_interval_solver_contract"'
 
 verify-fem-frequency-domain-eigen-k0-poisson-airbox-dense-oracle:
     just ensure-managed-fem-runtime
@@ -1681,6 +1682,57 @@ verify-fem-frequency-domain-eigen-k0-kittel-periodic-airbox-gpu:
         python3 scripts/verify_fem_frequency_domain_eigen_artifacts.py \
           --require-gpu-modal-k0-periodic-airbox-provenance \
           .fullmag/reports/frequency-domain-eigen-k0-kittel-periodic-airbox-gpu/artifacts'
+
+verify-fem-periodic-antidot-relax-eigenmodes-runtime device="cpu":
+    just ensure-managed-fem-runtime
+    mode="{{device}}"; \
+    case "$mode" in cpu|gpu) ;; \
+      *) echo "device must be cpu or gpu" >&2; exit 2 ;; \
+    esac; \
+    if [ "$mode" = cpu ]; then \
+      profile=fem-modal-cpu; service=fem-modal-cpu; verifier_flag=--require-k0-periodic-airbox-production; \
+    else \
+      profile=fem-gpu; service=fem-gpu; verifier_flag=--require-gpu-modal-k0-periodic-airbox-production; \
+    fi; \
+    root=".fullmag/reports/fem-periodic-antidot-relax-eigenmodes/$mode"; \
+    runtime_root="$(readlink -f .fullmag/runtimes/fem-gpu-host)"; \
+    test -x "$runtime_root/bin/fullmag-fem-gpu"; \
+    docker compose --profile "$profile" run --rm \
+      -v "$runtime_root:/workspace/.fullmag/runtimes/fem-gpu-host:ro" \
+      -e PYTHONPATH=/workspace/packages/fullmag-py/src \
+      -e FULLMAG_PYTHON=/usr/bin/python3 \
+      -e FULLMAG_FDM_EXECUTION=cpu \
+      -e FULLMAG_FEM_EXECUTION=cpu \
+      -e FULLMAG_RELAX_DEVICE=cpu \
+      -e FULLMAG_PERIODIC_ANTIDOT_EIGEN_DEVICE="$mode" \
+      -e FULLMAG_ANTIDOT_E2E_REPORT_ROOT="$root" \
+      -e FULLMAG_ANTIDOT_E2E_VERIFIER_FLAG="$verifier_flag" \
+      -e FULLMAG_CPU_THREADS="${FULLMAG_CPU_THREADS:-auto}" \
+      -e FULLMAG_GMSH_THREADS="${FULLMAG_PBC_RELAX_GMSH_THREADS:-1}" \
+      -e FULLMAG_HOST_UID="$(id -u)" \
+      -e FULLMAG_HOST_GID="$(id -g)" \
+      "$service" bash -lc 'set -euo pipefail; cd /workspace; \
+        root="$FULLMAG_ANTIDOT_E2E_REPORT_ROOT"; \
+        trap '\''chown -R "$FULLMAG_HOST_UID:$FULLMAG_HOST_GID" "$root" 2>/dev/null || true'\'' EXIT; \
+        rm -rf "$root"; \
+        mkdir -p "$root"; \
+        TIMEFORMAT='\''real_seconds=%R user_seconds=%U system_seconds=%S'\''; \
+        { time .fullmag/runtimes/fem-gpu-host/bin/fullmag-fem-gpu \
+            examples/fem_periodic_antidot_relax_eigenmodes.py \
+            --backend fem \
+            --mode strict \
+            --precision double \
+            --headless \
+            --json \
+            --workspace-root "$root/workspace-history" \
+            --output-dir "$root/artifacts" \
+          2>&1 | tee "$root/runtime.log"; } 2> "$root/time.txt"; \
+        python3 scripts/verify_fem_frequency_domain_eigen_artifacts.py \
+          "$FULLMAG_ANTIDOT_E2E_VERIFIER_FLAG" \
+          "$root/artifacts"; \
+        python3 scripts/validate_fem_periodic_antidot_relax_eigenmodes_runtime.py \
+          "$root" \
+          --device "$FULLMAG_PERIODIC_ANTIDOT_EIGEN_DEVICE"'
 
 verify-fem-frequency-domain-eigen-k0-poisson-airbox-production-cpu:
     test -n "${FULLMAG_FEM_K0_CPU_SCOPE_JSON:-}" || { echo "production CPU gate is blocked: FULLMAG_FEM_K0_CPU_SCOPE_JSON is required" >&2; exit 1; }
