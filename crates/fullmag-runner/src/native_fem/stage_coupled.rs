@@ -268,7 +268,18 @@ fn source_state_digest(
 
 #[cfg(test)]
 mod tests {
-    use super::{source_state_digest, StageM2Key};
+    use super::{source_state_digest, StageM2CoupledProvider, StageM2Key};
+
+    #[test]
+    fn empty_gpu_transport_plan_does_not_materialize_a_coupled_provider() {
+        let mut plan = crate::dispatch::test_tiny_fem_plan();
+        plan.mfem_device_string = Some("cuda".into());
+
+        let provider = StageM2CoupledProvider::from_plan(&plan)
+            .expect("an empty transport plan must not enter CPU-only transport preflight");
+
+        assert!(provider.is_none());
+    }
 
     #[test]
     fn source_identity_changes_when_stage_inputs_change() {
