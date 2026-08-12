@@ -40,7 +40,8 @@ describe("analysis plots performance audit", () => {
     expect(auditScript).toContain('path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..")');
     expect(auditScript).toContain("useAnalysisDatasetData.ts");
     expect(auditScript).toContain("analysis plots dataset resource owner");
-    expect(auditScript).toContain('activeSurface === "dynamics" || activeSurface === "comparison"');
+    expect(auditScript).toContain('enabled: activeSurface === "dynamics"');
+    expect(auditScript).not.toContain('activeSurface === "dynamics" || activeSurface === "comparison"');
     expect(auditScript).toContain('activeSurface === "resonance-fmr" || activeSurface === "dispersion"');
     expect(auditScript).toContain('useSpinWaveGammaResource(activeSurface === "dynamics")');
     expect(auditScript).toContain('useDynamicStructureFactorResource(activeSurface === "dispersion")');

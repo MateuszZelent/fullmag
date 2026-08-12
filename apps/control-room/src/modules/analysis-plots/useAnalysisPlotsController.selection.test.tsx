@@ -10,7 +10,7 @@ import type { KernelApi } from "@/kernel/types";
 import { analysisWorkspaceStore, resetAnalysisWorkspaceForTests } from "@/kernel/workspace/analysisWorkspace";
 
 let activeSurface = "resonance-fmr";
-let frequencyRouteMode: "fmr_response" | "free_modes" = "free_modes";
+let frequencyRouteMode: "fmr_response" | "frequency_response" | "free_modes" = "free_modes";
 let selectedDatasetRef: string | null = null;
 let descriptorPreferences: Record<string, { displayUnits: Record<string, string>; range: null; selectedSeriesIds: string[] }> = {};
 const setDescriptorPreference = vi.fn();
@@ -33,7 +33,7 @@ function Probe({ kernel }: { kernel: TestKernel }) {
   useEffect(() => {
     if (didSelect.current) return;
     didSelect.current = true;
-    controller.onPointSelect({ label: "Mode", point: { rowIndex: 0, x: frequencyRouteMode === "fmr_response" ? 12.5 : 1, y: 9 }, quantity: "frequency", seriesId: "eigen", source: { kind: "analysis.frequency_domain", resourceKey: "artifact://spectrum", tableId: "eigen" }, unit: "GHz", xUnit: "index" });
+    controller.onPointSelect({ label: "Mode", point: { rowIndex: 0, x: frequencyRouteMode === "free_modes" ? 1 : 12.5, y: 9 }, quantity: "frequency", seriesId: "eigen", source: { kind: "analysis.frequency_domain", resourceKey: "artifact://spectrum", tableId: "eigen" }, unit: "GHz", xUnit: "index" });
   }, [controller]);
   return null;
 }
@@ -91,6 +91,13 @@ describe("Analysis controller frequency selection", () => {
     const dom = installSimulationPreparationTestDom(); const root = createRoot(dom.document.createElement("div") as unknown as Element); const selection = new SelectionController(new EventBus<KernelEventMap>());
     selectedDatasetRef = "unrelated-table";
     try { await act(async () => root.render(<Probe kernel={{ selection }} />)); expect(selection.get().ref).toMatchObject({ chartId: "resonance-fmr:artifact://spectrum", fieldId: "response-field-7", frequencyIndex: 7, observableId: "mx", type: "frequency-domain" }); }
+    finally { activeSurface = "resonance-fmr"; frequencyRouteMode = "free_modes"; selectedDatasetRef = null; await act(async () => root.unmount()); dom.restore(); }
+  });
+  it("mounts neutral frequency-response selections as driven response points", async () => {
+    activeSurface = "resonance-fmr";
+    frequencyRouteMode = "frequency_response";
+    const dom = installSimulationPreparationTestDom(); const root = createRoot(dom.document.createElement("div") as unknown as Element); const selection = new SelectionController(new EventBus<KernelEventMap>());
+    try { await act(async () => root.render(<Probe kernel={{ selection }} />)); expect(selection.get()).toMatchObject({ kind: "results.frequency_response.frequency_point", ref: { calculationMode: "frequency_response", chartId: "resonance-fmr:artifact://spectrum", fieldId: "response-field-7", frequencyIndex: 7, observableId: "mx", type: "frequency-domain" } }); }
     finally { activeSurface = "resonance-fmr"; frequencyRouteMode = "free_modes"; selectedDatasetRef = null; await act(async () => root.unmount()); dom.restore(); }
   });
   it("exposes an honest controller-level Comparison contract gap", async () => {

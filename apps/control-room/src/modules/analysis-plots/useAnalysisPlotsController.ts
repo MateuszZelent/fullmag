@@ -243,7 +243,7 @@ export function frequencyDomainSelectionFromPoint(input: {
 }) {
   const point = input.point;
   const nodeId = `analysis:charts:${point.source.tableId}:point:${point.seriesId}:${point.point.rowIndex}`;
-  if (input.routeMode === "fmr_response") {
+  if (input.routeMode === "fmr_response" || input.routeMode === "frequency_response") {
     const match = input.responseModel.points.find((entry) =>
       entry.frequencyIndex === point.point.rowIndex ||
       entry.frequencyHz / 1e9 === point.point.x

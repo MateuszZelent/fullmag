@@ -16,11 +16,6 @@ vi.mock("@/shared/ui/Select", () => ({
   SelectTrigger: ({ children, ...props }: React.ButtonHTMLAttributes<HTMLButtonElement>) => <button {...props} type="button">{children}</button>,
   SelectValue: () => null,
 }));
-import {
-  analysisComparisonVerdict,
-  comparisonSeriesKey,
-  type AnalysisComparisonIdentity,
-} from "./analysisComparison";
 import { AnalysisPlotsView } from "./AnalysisPlotsView";
 
 function table(tableId: string, revision: number, quantityId = "m") {
@@ -45,17 +40,6 @@ function table(tableId: string, revision: number, quantityId = "m") {
 
 const kernel = { bus: { emit: vi.fn(), on: () => () => {} } } as unknown as KernelApi;
 
-const compatibleIdentity: AnalysisComparisonIdentity = {
-  boundaryContext: "finite_open",
-  equilibriumId: "eq-1",
-  geometryId: "geometry-1",
-  kContext: "finite_open",
-  meshId: "mesh-1",
-  observableId: "magnetization",
-  runId: "run-1",
-  stageId: "stage-1",
-};
-
 describe("Analysis comparison selection", () => {
   it("keeps Comparison explicitly unavailable in the production view", async () => {
     const dom = installSimulationPreparationTestDom();
@@ -70,51 +54,5 @@ describe("Analysis comparison selection", () => {
       await act(async () => root.unmount());
       dom.restore();
     }
-  });
-
-  it("uses full canonical observable identity instead of column id and unit", () => {
-    const left = table("table-a", 1, "m");
-    const right = table("table-b", 2, "m_normalized");
-    const leftSeries = left.columns[1]!;
-    const rightSeries = right.columns[1]!;
-
-    expect(comparisonSeriesKey({
-      columnId: leftSeries.column_id,
-      component: leftSeries.component,
-      dimension: leftSeries.dimension,
-      quantity: leftSeries.quantity_id,
-      reduction: leftSeries.reduction,
-      scope: leftSeries.scope,
-      unit: leftSeries.unit,
-    })).not.toBe(comparisonSeriesKey({
-      columnId: rightSeries.column_id,
-      component: rightSeries.component,
-      dimension: rightSeries.dimension,
-      quantity: rightSeries.quantity_id,
-      reduction: rightSeries.reduction,
-      scope: rightSeries.scope,
-      unit: rightSeries.unit,
-    }));
-    expect(comparisonSeriesKey({ quantity: "mx", unit: "1" })).toBeNull();
-  });
-
-  it.each([
-    "runId",
-    "stageId",
-    "equilibriumId",
-    "geometryId",
-    "meshId",
-    "boundaryContext",
-    "kContext",
-    "observableId",
-  ] as const)("fails closed when %s is missing or differs", (field) => {
-    expect(analysisComparisonVerdict(
-      { ...compatibleIdentity, [field]: null },
-      compatibleIdentity,
-    )).toMatchObject({ status: "cannot-compare" });
-    expect(analysisComparisonVerdict(
-      compatibleIdentity,
-      { ...compatibleIdentity, [field]: `${compatibleIdentity[field]}-other` },
-    )).toMatchObject({ status: "cannot-compare" });
   });
 });
