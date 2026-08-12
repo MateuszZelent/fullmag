@@ -21,13 +21,24 @@
     {"id": "cuda32", "path": "backends/fdm/gpu/cuda/interactions/demag_fp32.cu", "symbol": "launch_demag_field_fp32", "responsibility": "CUDA FP32 field dispatch."},
     {"id": "energy64", "path": "backends/fdm/gpu/cuda/runtime/reductions_fp64.cu", "symbol": "reduce_demag_energy_fp64", "responsibility": "CUDA FP64 demagnetization-energy reduction."},
     {"id": "cuda-upload", "path": "backends/fdm/gpu/cuda/runtime/context.cu", "symbol": "context_upload_demag_kernel_spectra", "responsibility": "Device tensor-spectrum upload and validation."},
-    {"id": "cuda-observable", "path": "backends/fdm/gpu/cuda/runtime/context.cu", "symbol": "context_refresh_demag_observable", "responsibility": "Device demagnetizing-field observable refresh."}
+    {"id": "cuda-observable", "path": "backends/fdm/gpu/cuda/runtime/context.cu", "symbol": "context_refresh_demag_observable", "responsibility": "Device demagnetizing-field observable refresh."},
+    {"id": "airbox-reconstruction", "path": "crates/fullmag-runner/src/fdm/cpu/reference.rs", "symbol": "reconstruct_inactive_fdm_visual_effective_field", "responsibility": "Reconstructs the defined airbox aggregate from same-state source fields."},
+    {"id": "field-materialization", "path": "crates/fullmag-runner/src/interactive_runtime.rs", "symbol": "build_full_grid_materialized_fields", "responsibility": "Builds full-grid materialized fields from one observable state."},
+    {"id": "terminal-outcome", "path": "crates/fullmag-runner/src/fdm/cpu/reference.rs", "symbol": "execute_reference_fdm", "responsibility": "Returns the CPU terminal run outcome and scheduled outputs."},
+    {"id": "preview-flag", "path": "crates/fullmag-cli/src/live_workspace.rs", "symbol": "feature_flags", "responsibility": "Reads preview-disable benchmark/display configuration."}
   ],
   "symbols": [
     {"id": "M", "latex": "$\\mathbf M$", "meaning": "magnetization field", "si_unit": "$\\mathrm{A\\,m^{-1}}$"},
     {"id": "Ms", "latex": "$M_s$", "meaning": "saturation magnetization", "si_unit": "$\\mathrm{A\\,m^{-1}}$"},
     {"id": "m", "latex": "$\\mathbf m$", "meaning": "reduced magnetization", "si_unit": "$1$"},
     {"id": "Hd", "latex": "$\\mathbf H_{\\mathrm d}$", "meaning": "demagnetizing field", "si_unit": "$\\mathrm{A\\,m^{-1}}$"},
+    {"id": "Heffm", "latex": "$\\mathbf H_{\\mathrm{eff},m}$", "meaning": "full active effective-field sum on magnetic support", "si_unit": "$\\mathrm{A\\,m^{-1}}$"},
+    {"id": "Heffair", "latex": "$\\mathbf H_{\\mathrm{eff},\\mathrm{air}}$", "meaning": "airbox effective-field observable", "si_unit": "$\\mathrm{A\\,m^{-1}}$"},
+    {"id": "Hext", "latex": "$\\mathbf H_{\\mathrm{ext}}$", "meaning": "external (Zeeman) field", "si_unit": "$\\mathrm{A\\,m^{-1}}$"},
+    {"id": "Hoe", "latex": "$\\mathbf H_{\\mathrm{oe}}$", "meaning": "Oersted field", "si_unit": "$\\mathrm{A\\,m^{-1}}$"},
+    {"id": "Hant", "latex": "$\\mathbf H_{\\mathrm{ant}}$", "meaning": "antenna field", "si_unit": "$\\mathrm{A\\,m^{-1}}$"},
+    {"id": "Omega_m", "latex": "$\\Omega_m$", "meaning": "active magnetic support", "si_unit": "$\\mathrm{m^3}$"},
+    {"id": "Omega_air", "latex": "$\\Omega_{\\mathrm{air}}$", "meaning": "inactive cells of the same FDM structured grid", "si_unit": "$\\mathrm{m^3}$"},
     {"id": "N", "latex": "$N^{\\mathrm{cell}}_{pq,ij}$", "meaning": "cell-averaged demagnetization tensor", "si_unit": "$1$"},
     {"id": "Nxx", "latex": "$N_{xx}$", "meaning": "diagonal tensor component in the Newell stencil", "si_unit": "$1$"},
     {"id": "Hpi", "latex": "$H_{\\mathrm d,p,i}$", "meaning": "component $i$ of the field in destination cell $p$", "si_unit": "$\\mathrm{A\\,m^{-1}}$"},
@@ -52,7 +63,9 @@
     {"id": "eq-fdm-demag-field", "symbols": ["Hpi", "N", "Mqj", "pq", "ij"], "sources": ["multiply", "cpu-field"]},
     {"id": "eq-fdm-demag-energy", "symbols": ["Ed", "mu0", "V", "M", "Hd"], "sources": ["cpu-field", "energy64"]},
     {"id": "eq-fdm-demag-newell-stencil", "symbols": ["Nxx", "h", "f"], "sources": ["newell"]},
-    {"id": "eq-fdm-demag-fft", "symbols": ["Hhat", "Nhat", "Mhat", "F", "k"], "sources": ["multiply", "cpu-spectrum", "cpu-field"]}
+    {"id": "eq-fdm-demag-fft", "symbols": ["Hhat", "Nhat", "Mhat", "F", "k"], "sources": ["multiply", "cpu-spectrum", "cpu-field"]},
+    {"id": "eq-fdm-final-active-effective-field", "symbols": ["Heffm", "Hd", "Hext", "Hoe", "Hant", "Omega_m"], "sources": ["airbox-reconstruction", "cpu-field"]},
+    {"id": "eq-fdm-final-airbox-effective-field", "symbols": ["Heffair", "Hd", "Hext", "Hoe", "Hant", "Omega_air"], "sources": ["airbox-reconstruction", "field-materialization"]}
   ],
   "public_api": {
     "constructors": ["fullmag.FDMDemag", "fullmag.FDMGrid", "fullmag.FDM"],

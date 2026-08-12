@@ -111,6 +111,13 @@ embedding and are not the same policy.
 | $M_s$ | saturation magnetization | $\mathrm{A\,m^{-1}}$ |
 | $\mathbf m$ | reduced magnetization | $1$ |
 | $\mathbf H_{\mathrm d}$ | demagnetizing field | $\mathrm{A\,m^{-1}}$ |
+| $\mathbf H_{\mathrm{eff},m}$ | full active effective-field sum on magnetic support | $\mathrm{A\,m^{-1}}$ |
+| $\mathbf H_{\mathrm{eff},\mathrm{air}}$ | airbox effective-field observable | $\mathrm{A\,m^{-1}}$ |
+| $\mathbf H_{\mathrm{ext}}$ | external (Zeeman) field | $\mathrm{A\,m^{-1}}$ |
+| $\mathbf H_{\mathrm{oe}}$ | Oersted field | $\mathrm{A\,m^{-1}}$ |
+| $\mathbf H_{\mathrm{ant}}$ | antenna field | $\mathrm{A\,m^{-1}}$ |
+| $\Omega_m$ | active magnetic support | $\mathrm{m^3}$ |
+| $\Omega_{\mathrm{air}}$ | inactive cells of the same FDM structured grid | $\mathrm{m^3}$ |
 | $N^{\mathrm{cell}}_{pq,ij}$ | cell-averaged demagnetization tensor | $1$ |
 | $N_{xx}$ | diagonal tensor component in the Newell stencil | $1$ |
 | $H_{\mathrm d,p,i}$ | component $i$ of the field in destination cell $p$ | $\mathrm{A\,m^{-1}}$ |
@@ -266,6 +273,58 @@ The FP32 path uses float magnetization/field and complex spectra. It has distinc
 reduction behavior from FP64. A source-level or compile-only check cannot establish FP32/FP64 parity;
 the same grid, tensor, magnetization, padding, and executed device must be used in a comparison.
 
+### Terminal single-grid fields and airbox — planned / in implementation
+
+This section specifies a terminal runtime contract; it does not add a Python DSL parameter,
+`ProblemIR` property, or a new demagnetization API. The contract is **planned / in
+implementation** until fresh completed-runtime evidence exists. In particular, source-level code,
+unit contracts, or CPU execution do not qualify a CUDA device path.
+
+On active magnetic support, `H_eff` is the full sum of every resolved active contribution:
+
+```{math}
+:label: eq-fdm-final-active-effective-field
+
+\mathbf H_{\mathrm{eff},m}
+=
+\sum_{\ell\in\mathcal A_m}\mathbf H_\ell,
+\qquad \mathbf x\in\Omega_m.
+```
+
+The airbox is an observable domain, not magnetic solver support. When all source fields below are
+defined and materialized from the same state, it exposes only:
+
+```{math}
+:label: eq-fdm-final-airbox-effective-field
+
+\mathbf H_{\mathrm{eff},\mathrm{air}}
+=
+\mathbf H_{\mathrm d}
++ \mathbf H_{\mathrm{ext}}
++ \mathbf H_{\mathrm{oe}}
++ \mathbf H_{\mathrm{ant}},
+\qquad \mathbf x\in\Omega_{\mathrm{air}}.
+```
+
+If a source is absent in the resolved plan its contribution is zero. If a required source is not
+materialized, the airbox aggregate is unavailable; it must not combine values from different
+steps. Material-only fields (exchange, anisotropy, DMI, magnetoelastic, thermal and torque) are
+zero or unavailable in the airbox with explicit metadata. `H_demag` itself remains a full-domain
+structured-grid observable, including inactive cells.
+
+For `Completed`, the target publication is one atomic replacement batch: final `m` and every
+requested field carry exactly the same terminal step and time. A newer complete batch replaces the
+previous terminal batch as a whole; consumers must not merge old and new quantities. This is
+session-memory retention only, not disk persistence or a restart guarantee. Durable field output
+still requires an explicit output/artifact schedule. `Failed` and `Cancelled` runs do not publish a
+completed terminal batch; any retained earlier batch keeps its own status, step, and time.
+
+`disable_preview_3d` controls intermediate 3-D preview work for benchmark/display use. It neither
+requests omission of terminal scientific-field finalization nor proves that a field has been
+persisted. The CPU single-grid target is host materialization and atomic replacement. The CUDA
+single-grid target must publish the same complete batch with executed-device evidence, or reject an
+unsupported requested terminal quantity explicitly; it may not silently substitute CPU data.
+
 ### Multilayer convolution
 
 `single_grid` makes the planner construct one common grid. `multilayer_convolution` preserves
@@ -287,6 +346,9 @@ layout cannot be represented.
 | CUDA FP32 field | `launch_demag_field_fp32` | FDM GPU FP32 |
 | CUDA FP64 energy | `reduce_demag_energy_fp64` | FDM GPU FP64 |
 | GPU resource/FFT setup | `context_upload_demag_kernel_spectra` and `context_refresh_demag_observable` | FDM GPU |
+| Active and airbox effective-field reconstruction | `reconstruct_inactive_fdm_visual_effective_field` | FDM CPU, source-level owner; terminal contract not runtime-qualified |
+| Full-grid materialization | `build_full_grid_materialized_fields` | FDM CPU, source-level owner; terminal contract not runtime-qualified |
+| CPU terminal outcome | `execute_reference_fdm` | FDM CPU source-level owner; atomic final-field contract not runtime-qualified |
 
 (demag-fdm-validation)=
 ## 10. Validation and qualification
@@ -334,3 +396,7 @@ not expose those parameters as if they controlled FFT accuracy.
 | `backends/fdm/gpu/cuda/runtime/reductions_fp64.cu` | `reduce_demag_energy_fp64` | CUDA FP64 energy reduction. | FDM GPU FP64 |
 | `backends/fdm/gpu/cuda/runtime/context.cu` | `context_upload_demag_kernel_spectra` | Device tensor-spectrum upload and validation. | FDM GPU |
 | `backends/fdm/gpu/cuda/runtime/context.cu` | `context_refresh_demag_observable` | Device demag observable refresh. | FDM GPU |
+| `crates/fullmag-runner/src/fdm/cpu/reference.rs` | `reconstruct_inactive_fdm_visual_effective_field` | Reconstructs the defined airbox aggregate from demag, external, Oersted and antenna fields. | FDM CPU, source-level only |
+| `crates/fullmag-runner/src/interactive_runtime.rs` | `build_full_grid_materialized_fields` | Builds full-grid materialized fields from one observable state. | FDM CPU, source-level only |
+| `crates/fullmag-runner/src/fdm/cpu/reference.rs` | `execute_reference_fdm` | Returns the CPU terminal run outcome and scheduled outputs. | FDM CPU, source-level only |
+| `crates/fullmag-cli/src/live_workspace.rs` | `feature_flags` | Reads preview-disable benchmark/display configuration. | CLI control plane |

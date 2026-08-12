@@ -34,17 +34,29 @@
   ],
   "equations": [
     {
-      "id": "fdm-airbox-effective-field",
-      "symbols": ["Hvisual", "Hdemag", "Hext", "Hoe", "Hant"],
+      "id": "fdm-active-effective-field",
+      "symbols": ["Heffm", "Hdemag", "Hext", "Hoe", "Hant", "Omega_m"],
       "sources": ["airbox_reconstruction", "fdm_fields"],
-      "publication_anchor": "Full-domain visualization field reconstruction outside magnetic support"
+      "publication_anchor": "Active-support effective-field sum for the FDM state"
+    },
+    {
+      "id": "fdm-airbox-effective-field",
+      "symbols": ["Heffair", "Hdemag", "Hext", "Hoe", "Hant", "Omega_air"],
+      "sources": ["airbox_reconstruction", "field_materialization"],
+      "publication_anchor": "Airbox observable built only from same-state materialized source fields"
     }
   ],
   "symbols": [
     {
-      "id": "Hvisual",
-      "latex": "\\mathbf{H}^{\\mathrm{visual}}_{\\mathrm{eff}}",
-      "meaning": "full-domain visualization effective field",
+      "id": "Heffm",
+      "latex": "\\mathbf{H}_{\\mathrm{eff},m}",
+      "meaning": "effective field on active magnetic support",
+      "si_unit": "A/m"
+    },
+    {
+      "id": "Heffair",
+      "latex": "\\mathbf{H}_{\\mathrm{eff},\\mathrm{air}}",
+      "meaning": "observable effective field in the FDM airbox",
       "si_unit": "A/m"
     },
     {
@@ -70,6 +82,18 @@
       "latex": "\\mathbf{H}_{\\mathrm{ant}}",
       "meaning": "antenna field contribution",
       "si_unit": "A/m"
+    },
+    {
+      "id": "Omega_m",
+      "latex": "\\Omega_m",
+      "meaning": "active magnetic support",
+      "si_unit": "m^3"
+    },
+    {
+      "id": "Omega_air",
+      "latex": "\\Omega_{\\mathrm{air}}",
+      "meaning": "inactive FDM cells in the same structured grid",
+      "si_unit": "m^3"
     }
   ],
   "sources": [
@@ -102,6 +126,24 @@
       "path": "crates/fullmag-runner/src/fdm/cpu/reference.rs",
       "symbol": "reconstruct_inactive_fdm_visual_effective_field",
       "responsibility": "full-domain visualization field outside magnetic support"
+    },
+    {
+      "id": "field_materialization",
+      "path": "crates/fullmag-runner/src/interactive_runtime.rs",
+      "symbol": "build_full_grid_materialized_fields",
+      "responsibility": "constructs full-grid live materializations from one observable state"
+    },
+    {
+      "id": "terminal_outcome",
+      "path": "crates/fullmag-runner/src/fdm/cpu/reference.rs",
+      "symbol": "execute_reference_fdm",
+      "responsibility": "CPU reference execution returns the terminal run result and scheduled outputs"
+    },
+    {
+      "id": "preview_flag",
+      "path": "crates/fullmag-cli/src/live_workspace.rs",
+      "symbol": "feature_flags",
+      "responsibility": "declares benchmark preview-disable switches separately from solver output semantics"
     }
   ],
   "public_api": {
