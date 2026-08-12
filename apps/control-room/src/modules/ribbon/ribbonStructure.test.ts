@@ -664,12 +664,26 @@ describe("ribbon structure", () => {
     expect(
       crossSectionWorkspaceStore.getSnapshot().planarMonitorDraft,
     ).toEqual({
-      frameExtent: "universe",
-      id: "draft",
-      name: "Midplane",
-      plane: "xy",
-      positionPercent: 62.5,
-      rotationDegrees: 0,
+      monitor: {
+        frame: {
+          extent: { kind: "universe", padding_m: 0 },
+          normal: [0, 0, 1],
+          normalization_version: "planar_frame_v1",
+          origin_m: [0, 0, 0],
+          preset: "xy",
+          u_axis: [1, 0, 0],
+          v_axis: [0, 1, 0],
+        },
+        id: "planar_monitor_1",
+        name: "Midplane",
+        operator: { kind: "plane_sample" },
+        target: { kind: "domain" },
+      },
+      ui: {
+        displayLengthUnit: "nm",
+        previewPositionPercent: 62.5,
+        previewRotationDegrees: 0,
+      },
     });
     expect(crossSectionWorkspaceStore.getSnapshot().draft).toBeNull();
     expect(selectionSet).toHaveBeenCalledWith(

@@ -72,7 +72,7 @@ describe("field-map commands", () => {
       status: "completed",
     });
     expect(crossSectionWorkspaceStore.getSnapshot().planarMonitorDraft).toMatchObject({
-      name: "Midplane",
+      monitor: { name: "Midplane" },
     });
     expect(selectionSet).toHaveBeenCalledWith(
       expect.objectContaining({ kind: "model.planar.monitor.draft" }),

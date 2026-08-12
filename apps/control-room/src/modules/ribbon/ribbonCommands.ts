@@ -445,7 +445,7 @@ function beginCrossSectionDraftFromCommand(
 ): CommandResult {
   const draft = beginPlanarMonitorDraft(visualizationStateFromContext(context));
   const nodeId = "model:definitions:planar-monitors:draft";
-  selectPlanarMonitorDraft(context, draft.name, nodeId);
+  selectPlanarMonitorDraft(context, draft.monitor.name, nodeId);
   context.layout?.setPanelVisible("left", true);
   context.layout?.setPanelVisible("right", true);
   context.layout?.setFocusedSlot("viewport-main");

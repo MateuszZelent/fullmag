@@ -1,11 +1,45 @@
+import { act } from "react";
+import { createRoot } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+import {
+  installSimulationPreparationTestDom,
+  TestElement,
+  TestNode,
+} from "@/kernel/layout/simulationPreparationTestDom.test-support";
 
 import { PlanarMonitorInspectorPanel } from "./PlanarMonitorInspectorPanel";
 
+const mocks = vi.hoisted(() => ({
+  duplicate: vi.fn(),
+  execute: vi.fn(),
+  invalidate: vi.fn(),
+  patch: vi.fn(),
+  refetch: vi.fn(),
+}));
+
+const monitorFixture = {
+  frame: {
+    extent: { kind: "target_bounds", padding_m: 0 },
+    normal: [0, 0, 1],
+    normalization_version: "planar_frame_v1",
+    origin_m: [0, 0, 0],
+    preset: "xy",
+    u_axis: [1, 0, 0],
+    v_axis: [0, 1, 0],
+  },
+  id: "plane-1",
+  name: "Mid-plane",
+  operator: { kind: "plane_sample" },
+  target: { kind: "magnetic_domain" },
+} as const;
+
 vi.mock("@/kernel/KernelContext", () => ({
   useKernel: () => ({
-    commands: { execute: vi.fn() },
+    api: { model: { planarMonitors: { duplicate: mocks.duplicate, patch: mocks.patch } } },
+    commands: { execute: mocks.execute },
+    resources: { invalidate: mocks.invalidate },
   }),
 }));
 
@@ -13,22 +47,33 @@ vi.mock("@/kernel/resources/planarMonitorResources", () => ({
   usePlanarMonitorResource: () => ({
     data: {
       monitor: {
-        frame: {
-          extent: { kind: "target_bounds" },
-          normal: [0, 0, 1],
-          origin_m: [0, 0, 0],
-          preset: "xy",
-          u_axis: [1, 0, 0],
-        },
-        id: "plane-1",
-        name: "Mid-plane",
-        operator: { kind: "plane_sample" },
-        target: { kind: "magnetic_domain" },
+        ...monitorFixture,
       },
       scene_revision: 7,
     },
-    refetch: vi.fn(),
+    refetch: mocks.refetch,
   }),
+}));
+
+vi.mock("./PlanarMonitorDefinitionEditor", () => ({
+  planarMonitorDefinitionAvailabilityErrors: () => [],
+  PlanarMonitorDefinitionEditor: ({ draft, onChange }: {
+    draft: { monitor: typeof monitorFixture };
+    onChange: (draft: unknown) => void;
+  }) => (
+    <>
+      <input aria-label="Name" readOnly value={draft.monitor.name} />
+      <button
+        type="button"
+        onClick={() => onChange({
+          ...draft,
+          monitor: { ...draft.monitor, name: "Edited monitor" },
+        })}
+      >
+        Edit monitor
+      </button>
+    </>
+  ),
 }));
 
 vi.mock("../visualization/VisualizationContextSwitch", () => ({
@@ -40,6 +85,18 @@ vi.mock("../visualization/PlanarVisualizationSection", () => ({
 }));
 
 describe("PlanarMonitorInspectorPanel", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.patch.mockResolvedValue({
+      monitor: { ...monitorFixture, name: "Edited" },
+      scene_revision: 8,
+    });
+    mocks.duplicate.mockResolvedValue({
+      monitor: { id: "plane-1_copy", name: "Mid-plane copy" },
+      scene_revision: 8,
+    });
+  });
+
   it("server-renders canonical identity, editable rename and monitor actions", () => {
     const html = renderToStaticMarkup(
       <PlanarMonitorInspectorPanel
@@ -61,9 +118,103 @@ describe("PlanarMonitorInspectorPanel", () => {
     );
 
     expect(html).toContain('value="Mid-plane"');
-    expect(html).toContain("Apply name");
+    expect(html).toContain("Apply");
+    expect(html).toContain("Discard");
     expect(html).toContain("Show frame in 3D");
     expect(html).toContain("Open in 2D");
     expect(html).toContain("SceneDocument / ProblemIR");
   });
+
+  it("keeps edits local until Apply and Discard restores the resource", async () => {
+    const dom = installSimulationPreparationTestDom();
+    const container = dom.document.createElement("div");
+    const root = createRoot(container as unknown as Element);
+    try {
+      await act(async () => root.render(<PlanarMonitorInspectorPanel selection={selection()} />));
+      await act(async () => findButton(container, "Edit monitor").click());
+      expect(mocks.patch).not.toHaveBeenCalled();
+
+      await act(async () => findButton(container, "Discard").click());
+      expect(controlValue(findControl(container, "Name"))).toBe("Mid-plane");
+      expect(mocks.patch).not.toHaveBeenCalled();
+
+      await act(async () => findButton(container, "Edit monitor").click());
+      await act(async () => findButton(container, "Apply").click());
+      expect(mocks.patch).toHaveBeenCalledWith("plane-1", {
+        expected_scene_revision: 7,
+        monitor: { ...monitorFixture, name: "Edited monitor" },
+      });
+    } finally {
+      await act(async () => root.unmount());
+      dom.restore();
+    }
+  });
+
+  it("keeps the edited draft on 409 and duplicates through the typed facade with explicit identity", async () => {
+    mocks.patch.mockRejectedValueOnce({ status: 409 });
+    const dom = installSimulationPreparationTestDom();
+    const container = dom.document.createElement("div");
+    const root = createRoot(container as unknown as Element);
+    try {
+      await act(async () => root.render(<PlanarMonitorInspectorPanel selection={selection()} />));
+      await act(async () => findButton(container, "Edit monitor").click());
+      await act(async () => findButton(container, "Apply").click());
+      expect(controlValue(findControl(container, "Name"))).toBe("Edited monitor");
+      expect(container.textContent).toContain("scene changed");
+
+      await act(async () => findButton(container, "Duplicate").click());
+      expect(mocks.duplicate).toHaveBeenCalledWith("plane-1", {
+        expected_scene_revision: 7,
+        new_id: "plane-1_copy",
+        new_name: "Mid-plane copy",
+      });
+    } finally {
+      await act(async () => root.unmount());
+      dom.restore();
+    }
+  });
 });
+
+function selection(): Parameters<typeof PlanarMonitorInspectorPanel>[0]["selection"] {
+  return {
+    kind: "model.planar.monitor",
+    label: "Mid-plane",
+    moduleSource: "inspector",
+    nodeId: "model:definitions:planar-monitors:plane-1",
+    objectId: null,
+    ref: {
+      kind: "model.planar.monitor",
+      monitorId: "plane-1",
+      nodeId: "model:definitions:planar-monitors:plane-1",
+      type: "planar-monitor",
+      visualizationTargetId: "planar-monitor:plane-1",
+    },
+  };
+}
+
+function findControl(root: TestNode, label: string): TestElement {
+  const control = findElements(root, (element) => element.getAttribute("aria-label") === label)[0];
+  if (!control) throw new Error(`Missing control ${label}`);
+  return control;
+}
+
+function controlValue(control: TestElement): string {
+  return (control as TestElement & { value: string }).value;
+}
+
+function findButton(root: TestNode, text: string): TestElement {
+  const button = findElements(root, (element) =>
+    element.tagName === "BUTTON" && element.textContent === text)[0];
+  if (!button) throw new Error(`Missing button ${text}`);
+  return button;
+}
+
+function findElements(root: TestNode, predicate: (element: TestElement) => boolean): TestElement[] {
+  const found: TestElement[] = [];
+  const visit = (node: TestNode) => {
+    if (node instanceof TestElement && predicate(node)) found.push(node);
+    node.childNodes.forEach(visit);
+  };
+  visit(root);
+  return found;
+}

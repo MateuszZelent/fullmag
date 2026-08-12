@@ -717,6 +717,73 @@ class ScriptBuilderRegionalDriveRoundTripTests(unittest.TestCase):
         self.assertNotIn('"quantity"', rendered)
         self.assertNotIn('"resolution"', rendered)
 
+    def test_ui_planar_monitor_create_and_patch_roundtrip_to_canonical_python(self) -> None:
+        script = """
+        import fullmag as fm
+
+        study = fm.study("ui-planar-roundtrip")
+        film = study.geometry(fm.Box(100e-9, 40e-9, 5e-9), name="film")
+        film.Ms = 800e3
+        film.Aex = 13e-12
+        film.alpha = 0.01
+        study.stages.add_run(stage_id="run", until=1e-12)
+        """
+        ui_created = {
+            "id": "ui_monitor",
+            "name": "UI monitor",
+            "target": {"kind": "object", "object_id": "film"},
+            "frame": {
+                "origin_m": [0.0, 0.0, 1e-9],
+                "u_axis": [1.0, 0.0, 0.0],
+                "v_axis": [0.0, 1.0, 0.0],
+                "normal": [0.0, 0.0, 1.0],
+                "preset": "xy",
+                "normalization_version": "planar_frame_v1",
+                "extent": {"kind": "target_bounds", "padding_m": 2e-9},
+            },
+            "operator": {"kind": "slab_average", "thickness_m": 5e-9},
+        }
+        ui_patched = {
+            **ui_created,
+            "name": "UI monitor patched",
+            "target": {
+                "kind": "region",
+                "object_id": "film",
+                "region_id": "film",
+            },
+            "operator": {
+                "kind": "depth_projection",
+                "reduction": "rms",
+                "empty_policy": "exclude_empty",
+            },
+        }
+        with TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            loaded = _load_text(script, root, "source.py")
+            scene = build_scene_document_from_builder(export_builder_draft(loaded))
+            scene["monitors"]["planar"] = [ui_created]
+            created_source = rewrite_loaded_problem_script(
+                loaded,
+                overrides=build_builder_from_scene_document(scene),
+            )["rendered_source"]
+            created = _load_text(str(created_source), root, "created.py")
+
+            patched_scene = build_scene_document_from_builder(export_builder_draft(created))
+            patched_scene["monitors"]["planar"] = [ui_patched]
+            patched_source = rewrite_loaded_problem_script(
+                created,
+                overrides=build_builder_from_scene_document(patched_scene),
+            )["rendered_source"]
+            patched = _load_text(str(patched_source), root, "patched.py")
+
+        created_ir = created.stages[-1].problem.to_ir(include_geometry_assets=False)
+        patched_ir = patched.stages[-1].problem.to_ir(include_geometry_assets=False)
+        self.assertEqual(created_ir["planar_monitors"], [ui_created])
+        self.assertEqual(patched_ir["planar_monitors"], [ui_patched])
+        self.assertIn("study.monitors.add_planar(", created_source)
+        self.assertIn('monitor_id="ui_monitor"', patched_source)
+        self.assertIn('reduction="rms"', patched_source)
+
     def test_add_field_drive_roundtrip_preserves_pipeline_order_without_global_leakage(self) -> None:
         script = """
         import fullmag as fm

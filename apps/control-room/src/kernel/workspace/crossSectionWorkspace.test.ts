@@ -14,11 +14,43 @@ import {
   discardPlanarMonitorDraft,
   isPlanarMonitorRevisionConflict,
   planarMonitorCreateRequestFromDraft,
+  planarMonitorDraftFromMonitor,
+  planarMonitorDuplicateRequest,
+  planarMonitorValidationErrors,
+  convertLength,
   resetCrossSectionWorkspaceForTests,
   updatePlanarMonitorDraft,
   updateCrossSectionDraft,
   updateCrossSectionPlot,
 } from "./crossSectionWorkspace";
+
+type Monitor = Parameters<typeof planarMonitorDraftFromMonitor>[0];
+
+const fullMonitor: Monitor = {
+  id: "monitor-1",
+  name: "Full monitor",
+  target: { kind: "region", object_id: "film", region_id: "edge" },
+  frame: {
+    origin_m: [1e-9, 2e-9, 3e-9],
+    u_axis: [1, 0, 0],
+    v_axis: [0, 1, 0],
+    normal: [0, 0, 1],
+    preset: null,
+    normalization_version: "planar_frame_v1",
+    extent: {
+      kind: "explicit",
+      u_min_m: -4e-9,
+      u_max_m: 4e-9,
+      v_min_m: -5e-9,
+      v_max_m: 5e-9,
+    },
+  },
+  operator: {
+    kind: "surface_projection",
+    boundary: { kind: "named_surface", surface_id: "top" },
+    visibility_policy: "nearest_to_origin",
+  },
+};
 
 const visualizationState = {
   clip: {
@@ -53,13 +85,22 @@ describe("crossSectionWorkspace", () => {
 
     const draft = beginPlanarMonitorDraft(visualizationState);
 
-    expect(draft).toEqual({
-      frameExtent: "universe",
-      id: "draft",
+    expect(draft.monitor).toMatchObject({
+      id: "planar_monitor_1",
       name: "Midplane",
-      plane: "xy",
-      positionPercent: 62.5,
-      rotationDegrees: 0,
+      target: { kind: "domain" },
+      frame: {
+        origin_m: [0, 0, 0],
+        preset: "xy",
+        normalization_version: "planar_frame_v1",
+        extent: { kind: "universe", padding_m: 0 },
+      },
+      operator: { kind: "plane_sample" },
+    });
+    expect(draft.ui).toEqual({
+      displayLengthUnit: "nm",
+      previewPositionPercent: 62.5,
+      previewRotationDegrees: 0,
     });
     expect(draft).not.toHaveProperty("colorScale");
     expect(draft).not.toHaveProperty("metric");
@@ -75,19 +116,22 @@ describe("crossSectionWorkspace", () => {
     beginPlanarMonitorDraft(visualizationState);
 
     const updated = updatePlanarMonitorDraft({
-      name: "Oblique view",
-      plane: "yz",
-      positionPercent: 125,
-      rotationDegrees: -270,
+      monitor: {
+        ...fullMonitor,
+        name: "Oblique view",
+      },
+      ui: {
+        displayLengthUnit: "um",
+        previewPositionPercent: 125,
+        previewRotationDegrees: -270,
+      },
     });
 
-    expect(updated).toEqual({
-      frameExtent: "universe",
-      id: "draft",
-      name: "Oblique view",
-      plane: "yz",
-      positionPercent: 100,
-      rotationDegrees: -180,
+    expect(updated?.monitor).toEqual({ ...fullMonitor, name: "Oblique view" });
+    expect(updated?.ui).toEqual({
+      displayLengthUnit: "um",
+      previewPositionPercent: 100,
+      previewRotationDegrees: -180,
     });
     expect(crossSectionWorkspaceStore.getSnapshot().draft).toBeNull();
     expect(crossSectionWorkspaceStore.getSnapshot().plots).toEqual([]);
@@ -102,10 +146,24 @@ describe("crossSectionWorkspace", () => {
   it("uses the planar monitor draft as the lightweight 3D frame preview", () => {
     resetCrossSectionWorkspaceForTests();
     beginPlanarMonitorDraft(visualizationState);
+    const current = crossSectionWorkspaceStore.getSnapshot().planarMonitorDraft;
+    if (!current) throw new Error("Expected monitor draft");
     updatePlanarMonitorDraft({
-      plane: "yz",
-      positionPercent: 12.5,
-      rotationDegrees: 30,
+      monitor: {
+        ...current.monitor,
+        frame: {
+          ...current.monitor.frame,
+          normal: [1, 0, 0],
+          preset: "yz",
+          u_axis: [0, 1, 0],
+          v_axis: [0, 0, 1],
+        },
+      },
+      ui: {
+        ...current.ui,
+        previewPositionPercent: 12.5,
+        previewRotationDegrees: 30,
+      },
     });
 
     expect(
@@ -336,10 +394,22 @@ describe("crossSectionWorkspace", () => {
     });
     if (!updated) throw new Error("Expected an editable planar monitor draft");
 
-    const request = planarMonitorCreateRequestFromDraft(updated, 7, {
-      min: [-2, -4, -6],
-      max: [2, 4, 6],
+    const monitorDraft = planarMonitorDraftFromMonitor({
+      ...fullMonitor,
+      id: "mid_plane_8",
+      name: "Mid plane",
+      target: { kind: "domain" },
+      frame: {
+        ...fullMonitor.frame,
+        normal: [0, -1, 0],
+        origin_m: [0, -2, 0],
+        preset: "xz",
+        u_axis: [0, 0, 1],
+        v_axis: [-1, 0, 0],
+      },
+      operator: { kind: "plane_sample" },
     });
+    const request = planarMonitorCreateRequestFromDraft(monitorDraft, 7);
 
     expect(request.expected_scene_revision).toBe(7);
     expect(request.monitor).toMatchObject({
@@ -363,6 +433,76 @@ describe("crossSectionWorkspace", () => {
       0,
       expect.closeTo(0, 12),
     ]);
+  });
+
+  it.each([
+    { kind: "domain" } as const,
+    { kind: "magnetic_domain" } as const,
+    { kind: "object", object_id: "film" } as const,
+    { kind: "region", object_id: "film", region_id: "edge" } as const,
+  ])("round-trips authored target $kind without a second form model", (target) => {
+    const draft = planarMonitorDraftFromMonitor({ ...fullMonitor, target });
+    expect(planarMonitorCreateRequestFromDraft(draft, 9).monitor.target).toEqual(target);
+  });
+
+  it("round-trips arbitrary frame, every extent and every operator discriminant", () => {
+    const extents: Monitor["frame"]["extent"][] = [
+      fullMonitor.frame.extent,
+      { kind: "target_bounds", padding_m: 1e-9 },
+      { kind: "magnetic_domain", padding_m: 2e-9 },
+      { kind: "universe", padding_m: 3e-9 },
+    ];
+    const operators: Monitor["operator"][] = [
+      { kind: "plane_sample" },
+      { kind: "slab_average", thickness_m: 6e-9 },
+      { kind: "depth_projection", reduction: "rms", empty_policy: "exclude_empty" },
+      fullMonitor.operator,
+    ];
+    for (const extent of extents) {
+      for (const operator of operators) {
+        const monitor = {
+          ...fullMonitor,
+          frame: { ...fullMonitor.frame, extent },
+          operator,
+        };
+        expect(
+          planarMonitorCreateRequestFromDraft(planarMonitorDraftFromMonitor(monitor), 3).monitor,
+        ).toEqual(monitor);
+      }
+    }
+  });
+
+  it("converts display lengths to canonical SI and back within tolerance", () => {
+    for (const unit of ["m", "mm", "um", "nm"] as const) {
+      const displayed = convertLength(7.25e-9, "m", unit);
+      expect(convertLength(displayed, unit, "m")).toBeCloseTo(7.25e-9, 18);
+    }
+  });
+
+  it("validates arbitrary basis, operator parameters and required selectors", () => {
+    expect(planarMonitorValidationErrors(fullMonitor)).toEqual([]);
+    expect(
+      planarMonitorValidationErrors({
+        ...fullMonitor,
+        frame: { ...fullMonitor.frame, normal: [0, 0, 0] },
+        operator: { kind: "slab_average", thickness_m: 0 },
+        target: { kind: "object", object_id: "" },
+      }),
+    ).toEqual(expect.arrayContaining([
+      "Object target requires an object ID.",
+      "Frame normal must be a finite unit vector.",
+      "Slab thickness must be finite and greater than zero.",
+    ]));
+  });
+
+  it("builds an explicit typed duplicate request without mutating the source", () => {
+    const source = structuredClone(fullMonitor);
+    expect(planarMonitorDuplicateRequest(source, 12)).toEqual({
+      expected_scene_revision: 12,
+      new_id: "monitor-1_copy",
+      new_name: "Full monitor copy",
+    });
+    expect(fullMonitor).toEqual(source);
   });
 
   it("recognizes a revision conflict without treating other failures as conflicts", () => {

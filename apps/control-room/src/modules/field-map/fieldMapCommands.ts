@@ -50,7 +50,7 @@ export const fieldMapCommands: CommandContribution[] = Object.entries(
           context.selection?.set(
             {
               kind: "model.planar.monitor.draft",
-              label: draft.name,
+              label: draft.monitor.name,
               nodeId,
               objectId: null,
               ref: {

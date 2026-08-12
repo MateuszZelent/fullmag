@@ -63,13 +63,14 @@ export function buildPlanarMonitorNodes(
       };
     });
   if (draft) {
+    const preset = draft.monitor.frame.preset?.toUpperCase() ?? "ARBITRARY";
     monitors.unshift({
-      badge: `${draft.plane.toUpperCase()} ${draft.positionPercent}%`,
+      badge: `${preset} ${draft.ui.previewPositionPercent}%`,
       contextCommands: ["workspace.focus-selection"],
       icon: "layers",
       id: "model:definitions:planar-monitors:draft",
       kind: "model.planar.monitor.draft",
-      label: draft.name,
+      label: draft.monitor.name,
       parentId: "model:definitions:planar-monitors",
       status: "queued",
     });
