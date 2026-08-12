@@ -1,5 +1,11 @@
 import type { ModuleId } from "../types";
-import type { CrossSectionQualityMetric } from "../api/apiTypes";
+import type { CrossSectionQualityMetric, ResourceRevision } from "../api/apiTypes";
+import type {
+  PostprocessingDefinitionKind,
+  PostprocessingFreshness,
+  PostprocessingOwnerKind,
+  PostprocessingOwnerReadiness,
+} from "@/shared/domain/analysis/postprocessingTypes";
 import type {
   AnalysisFieldOverlayKContextKind,
   AnalysisFieldOverlayRepresentation,
@@ -265,6 +271,23 @@ export type SelectionRef =
       nodeId: string;
       resourceKey: string;
       type: "runtime-explorer";
+    }
+  | {
+      artifactKind: string | null;
+      catalogRevision: ResourceRevision | null;
+      contractGap: string | null;
+      definitionKind: PostprocessingDefinitionKind;
+      freshness: PostprocessingFreshness;
+      kind: string;
+      nodeId: string;
+      ownerId: string | null;
+      ownerKind: PostprocessingOwnerKind | null;
+      ownerReadiness: PostprocessingOwnerReadiness;
+      ownerResourceRevision: ResourceRevision | null;
+      ownerSchemaRevision: number | null;
+      resourceRef: string | null;
+      scope: "definition" | "root";
+      type: "postprocessing";
     }
   | {
       kind: "model.planar.monitor";
@@ -699,6 +722,24 @@ export function selectionRefEquals(
         left.kind === right.kind &&
         left.nodeId === right.nodeId &&
         left.resourceKey === right.resourceKey
+      );
+    case "postprocessing":
+      return (
+        right.type === "postprocessing" &&
+        left.artifactKind === right.artifactKind &&
+        left.catalogRevision === right.catalogRevision &&
+        nullableStringEquals(left.contractGap, right.contractGap) &&
+        left.definitionKind === right.definitionKind &&
+        left.freshness === right.freshness &&
+        left.kind === right.kind &&
+        left.nodeId === right.nodeId &&
+        nullableStringEquals(left.ownerId, right.ownerId) &&
+        left.ownerKind === right.ownerKind &&
+        left.ownerReadiness === right.ownerReadiness &&
+        left.ownerResourceRevision === right.ownerResourceRevision &&
+        left.ownerSchemaRevision === right.ownerSchemaRevision &&
+        nullableStringEquals(left.resourceRef, right.resourceRef) &&
+        left.scope === right.scope
       );
     case "live-chart":
       return (

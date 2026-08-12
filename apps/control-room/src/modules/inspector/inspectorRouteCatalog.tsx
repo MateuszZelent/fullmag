@@ -89,7 +89,6 @@ import {
 import { OerstedFieldInspectorPanel, SpinTorqueInspectorPanel } from "./panels/SpinAuthoringInspector";
 import { SpinInterfaceInspectorPanel } from "./panels/SpinInterfaceInspector";
 import { PlaceholderPanel } from "./panels/PlaceholderPanel";
-import { ScientificInspectorTemplate } from "./components/ScientificInspectorTemplate";
 import {
   DispersionBranchesResultInspector,
   DispersionDrivenStageResultInspector,
@@ -116,6 +115,16 @@ import {
   ResonanceResponseFieldsResultInspector,
   ResonanceResponseFieldResultInspector,
 } from "./panels/physics-first/PhysicsFirstResultInspectors";
+import {
+  AnalysisViewDefinitionInspector,
+  AnalysisViewsOverviewInspector,
+  DerivedValueDefinitionInspector,
+  DerivedValuesOverviewInspector,
+  ExportDefinitionInspector,
+  ExportsOverviewInspector,
+  TableDefinitionInspector,
+  TablesOverviewInspector,
+} from "./panels/physics-first/PostprocessingResultInspectors";
 import { RegionsListPanel } from "./panels/RegionsListPanel";
 import {
   RuntimeCapabilityDiagnosticInspectorPanel,
@@ -162,10 +171,6 @@ import {
   StudyStageInspectorRouter,
 } from "./panels/StudyStageInspectorRouter";
 import { resolveFrequencyDomainNodeDetail } from "./panels/frequencyDomainNodeDetails";
-import {
-  POSTPROCESSING_OWNER_CONTRACT_GAP,
-  type PostprocessingDefinitionKind,
-} from "@/shared/domain/analysis/postprocessingDefinitions";
 import type {
   InspectorPanelContribution,
   InspectorPanelProps,
@@ -454,135 +459,6 @@ const frequencyDomainPanels: InspectorPanelContribution[] =
     selectionKinds: [kind],
     component: FREQUENCY_DOMAIN_DEDICATED_PANELS[kind] ?? requireFrequencyDomainNamedPanel(kind),
   }));
-
-type PostprocessingInspectorKind = Extract<
-  PostprocessingDefinitionKind,
-  "analysis_view" | "derived_value" | "export" | "table"
->;
-
-const POSTPROCESSING_KIND_LABELS: Record<
-  PostprocessingInspectorKind,
-  string
-> = {
-  analysis_view: "Analysis View",
-  derived_value: "Derived Value",
-  export: "Export",
-  table: "Table",
-};
-
-function postprocessingResourceRef(
-  selection: InspectorPanelProps["selection"],
-): string | null {
-  const ref = selection.ref;
-  if (!ref || !("resourceRef" in ref)) return null;
-  return typeof ref.resourceRef === "string" ? ref.resourceRef : null;
-}
-
-function postprocessingOwnerIsAvailable(
-  kind: PostprocessingInspectorKind,
-  resourceRef: string | null,
-): boolean {
-  return (
-    (kind === "table" && resourceRef !== null && resourceRef.startsWith("table:")) ||
-    (kind === "export" && resourceRef !== null && resourceRef.startsWith("artifact:"))
-  );
-}
-
-function PostprocessingDefinitionInspector({
-  kind,
-  selection,
-}: InspectorPanelProps & { kind: PostprocessingInspectorKind }) {
-  const resourceRef = postprocessingResourceRef(selection);
-  const available = postprocessingOwnerIsAvailable(kind, resourceRef);
-  const title = selection.label || POSTPROCESSING_KIND_LABELS[kind];
-  return (
-    <ScientificInspectorTemplate
-      breadcrumbs={["Results", POSTPROCESSING_KIND_LABELS[kind]]}
-      diagnostics={available ? [] : [POSTPROCESSING_OWNER_CONTRACT_GAP]}
-      methodLabel={available ? "Owned resource" : "Contract gap"}
-      physicalLabel="Postprocessing"
-      properties={[
-        { label: "Definition", value: POSTPROCESSING_KIND_LABELS[kind] },
-        {
-          label: "Dataset / resource",
-          mono: true,
-          value: resourceRef ?? "Unavailable",
-        },
-      ]}
-      provenance={[
-        { label: "Selection", mono: true, value: selection.nodeId ?? "Unavailable" },
-      ]}
-      status={{
-        availability: available ? "available" : "unavailable",
-        execution: available ? "completed" : "not started",
-        resource: available ? "ready" : "error",
-      }}
-      title={title}
-    />
-  );
-}
-
-function PostprocessingRootInspector({
-  kind,
-  selection,
-}: InspectorPanelProps & { kind: PostprocessingInspectorKind }) {
-  const hasOwnerCatalog = kind === "table" || kind === "export";
-  return (
-    <ScientificInspectorTemplate
-      breadcrumbs={["Results", POSTPROCESSING_KIND_LABELS[kind]]}
-      diagnostics={hasOwnerCatalog ? [] : [POSTPROCESSING_OWNER_CONTRACT_GAP]}
-      methodLabel={hasOwnerCatalog ? "Resource catalog" : "Contract gap"}
-      physicalLabel="Postprocessing"
-      properties={[
-        {
-          label: "Owner",
-          value: hasOwnerCatalog
-            ? "Existing resource catalog"
-            : "No persistent definition owner",
-        },
-        { label: "Selection", mono: true, value: selection.nodeId ?? "Unavailable" },
-      ]}
-      status={{
-        availability: hasOwnerCatalog ? "partial" : "unavailable",
-        execution: "not started",
-        resource: hasOwnerCatalog ? "idle" : "error",
-      }}
-      title={POSTPROCESSING_KIND_LABELS[kind]}
-    />
-  );
-}
-
-function AnalysisViewsOverviewInspector(props: InspectorPanelProps) {
-  return <PostprocessingRootInspector kind="analysis_view" {...props} />;
-}
-
-function AnalysisViewDefinitionInspector(props: InspectorPanelProps) {
-  return <PostprocessingDefinitionInspector kind="analysis_view" {...props} />;
-}
-
-function DerivedValuesOverviewInspector(props: InspectorPanelProps) {
-  return <PostprocessingRootInspector kind="derived_value" {...props} />;
-}
-
-function DerivedValueDefinitionInspector(props: InspectorPanelProps) {
-  return <PostprocessingDefinitionInspector kind="derived_value" {...props} />;
-}
-
-function TablesOverviewInspector(props: InspectorPanelProps) {
-  return <PostprocessingRootInspector kind="table" {...props} />;
-}
-
-function TableDefinitionInspector(props: InspectorPanelProps) {
-  return <PostprocessingDefinitionInspector kind="table" {...props} />;
-}
-
-function ExportsOverviewInspector(props: InspectorPanelProps) {
-  return <PostprocessingRootInspector kind="export" {...props} />;
-}
-
-function ExportDefinitionInspector(props: InspectorPanelProps) {
-  return <PostprocessingDefinitionInspector kind="export" {...props} />;
-}
 
 interface VisualizationDebugInspectorOwner {
   actionSummary: string;

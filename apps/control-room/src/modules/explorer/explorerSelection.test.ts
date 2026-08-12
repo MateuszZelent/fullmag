@@ -43,7 +43,10 @@ import { buildDomainPresentation } from "@/shared/domain/mesh/domainPresentation
 
 import { buildModelTree, flattenExplorerNodes } from "./builders/buildModelTree";
 import { buildPhysicsGraphTree } from "./builders/physicsGraphTree";
-import { selectExplorerNode } from "./explorerSelection";
+import {
+  resolveCurrentExplorerSelectionNode,
+  selectExplorerNode,
+} from "./explorerSelection";
 import type { ExplorerNode } from "./explorerTypes";
 
 function snapshotVectorResourceKey(snapshotId: string): string {
@@ -1482,5 +1485,69 @@ describe("selectExplorerNode", () => {
       studyProduct: "modal_eigen",
       type: "frequency-domain",
     });
+  });
+
+  it("selects postprocessing identity and freshness without copying catalog payload", () => {
+    const kernel = makeKernel();
+    selectExplorerNode(kernel, {
+      id: "results:run:run-7:tables:table-energy",
+      kind: "results.tables.definition",
+      label: "energy",
+      parentId: "results:run:run-7:tables",
+      postprocessingCatalogRevision: 12,
+      postprocessingContractGap: null,
+      postprocessingDefinitionKind: "table",
+      postprocessingFreshness: "fresh",
+      postprocessingOwnerId: "energy",
+      postprocessingOwnerKind: "table",
+      postprocessingOwnerReadiness: "available-ready",
+      postprocessingResourceRevision: 8,
+      postprocessingSchemaRevision: 3,
+      resourceRef: "table:energy",
+      tableId: "energy",
+    }, "explorer");
+
+    expect(kernel.selection.get().ref).toMatchObject({
+      catalogRevision: 12,
+      definitionKind: "table",
+      freshness: "fresh",
+      ownerId: "energy",
+      ownerKind: "table",
+      ownerReadiness: "available-ready",
+      ownerResourceRevision: 8,
+      ownerSchemaRevision: 3,
+      resourceRef: "table:energy",
+      type: "postprocessing",
+    });
+    expect(kernel.selection.get().ref).not.toHaveProperty("columns");
+    expect(kernel.selection.get().ref).not.toHaveProperty("rows_href");
+  });
+
+  it("resolves a removed postprocessing definition to the current family root", () => {
+    const root: ExplorerNode = {
+      id: "results:run:run-8:tables",
+      kind: "results.tables.root",
+      label: "Tables",
+      parentId: "results:run:run-8",
+      postprocessingCatalogRevision: 13,
+      postprocessingContractGap: null,
+      postprocessingDefinitionKind: "table",
+      postprocessingFreshness: "fresh",
+      postprocessingOwnerReadiness: "available-ready",
+      resourceState: "ready",
+      status: "ready",
+    };
+
+    expect(resolveCurrentExplorerSelectionNode(
+      [root],
+      "results:run:run-7:tables:table-energy",
+      {
+        definitionKind: "table",
+        kind: "results.tables.definition",
+        nodeId: "results:run:run-7:tables:table-energy",
+        ownerReadiness: "available-ready",
+        type: "postprocessing",
+      } as never,
+    )).toBe(root);
   });
 });

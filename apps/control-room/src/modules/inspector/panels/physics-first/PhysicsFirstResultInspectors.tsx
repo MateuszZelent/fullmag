@@ -119,35 +119,3 @@ export function DispersionResponseFieldAtKResultInspector(props: InspectorPanelP
 export function HysteresisResultInspector(props: InspectorPanelProps) {
   return render(PhysicsFirstResultInspectorPanel, props);
 }
-
-export function AnalysisViewsOverviewInspector(props: InspectorPanelProps) {
-  return render(PhysicsFirstResultInspectorPanel, props);
-}
-
-export function AnalysisViewDefinitionInspector(props: InspectorPanelProps) {
-  return render(PhysicsFirstResultInspectorPanel, props);
-}
-
-export function DerivedValuesOverviewInspector(props: InspectorPanelProps) {
-  return render(PhysicsFirstResultInspectorPanel, props);
-}
-
-export function DerivedValueDefinitionInspector(props: InspectorPanelProps) {
-  return render(PhysicsFirstResultInspectorPanel, props);
-}
-
-export function TablesOverviewInspector(props: InspectorPanelProps) {
-  return render(PhysicsFirstResultInspectorPanel, props);
-}
-
-export function TableDefinitionInspector(props: InspectorPanelProps) {
-  return render(PhysicsFirstResultInspectorPanel, props);
-}
-
-export function ExportsOverviewInspector(props: InspectorPanelProps) {
-  return render(PhysicsFirstResultInspectorPanel, props);
-}
-
-export function ExportDefinitionInspector(props: InspectorPanelProps) {
-  return render(PhysicsFirstResultInspectorPanel, props);
-}

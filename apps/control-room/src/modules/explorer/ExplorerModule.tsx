@@ -69,7 +69,10 @@ import {
 } from "@/kernel/resources/runtimeExplorerResources";
 import { runtimeExplorerDetailStore } from "@/kernel/resources/runtimeExplorerDetailStore";
 import { useSelectionSelector } from "@/kernel/selection/useSelection";
-import { isVisualizationAirboxIdentity } from "@/kernel/selection/selectionTypes";
+import {
+  isVisualizationAirboxIdentity,
+  selectionRefEquals,
+} from "@/kernel/selection/selectionTypes";
 import {
   buildSemanticRenderTargetCatalog,
   isUniverseOuterBoundaryCarrier,
@@ -100,6 +103,11 @@ import {
   filterExplorerNodes,
   findExplorerNodePath,
 } from "./builders/buildModelTree";
+import {
+  resolveCurrentExplorerSelectionNode,
+  selectionRefFromNode,
+  selectExplorerNode,
+} from "./explorerSelection";
 import {
   runtimeExplorerSnapshotFromResources,
   runtimeResourceSnapshot,
@@ -272,6 +280,7 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
     activeTab === "resources" ||
     activeTab === "jobs" ||
     activeTab === "diagnostics";
+  const resultsResourceActive = runtimeTabActive || activeTab === "results";
   const runtimeSessionStatus = useSessionStatusSelector(
     runtimeResourceSnapshot,
     {
@@ -359,9 +368,9 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
     enabled: frequencyDomainTabActive || Boolean(activeAnalysisFieldOverlay),
   });
   const commandQueue = useCommandQueueResource({ enabled: runtimeTabActive });
-  const artifacts = useArtifactsResource({ enabled: runtimeTabActive });
+  const artifacts = useArtifactsResource({ enabled: resultsResourceActive });
   const fieldCatalog = useFieldCatalogResource({ enabled: runtimeTabActive });
-  const tableCatalog = useTableListResource({ enabled: runtimeTabActive });
+  const tableCatalog = useTableListResource({ enabled: resultsResourceActive });
   const runtimeCommandIds = useMemo(
     () => (commandQueue.data?.commands ?? []).map((command) => command.command_id),
     [commandQueue.data?.commands],
@@ -610,14 +619,16 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
             },
           )
         : buildExplorerTree(activeTab, {
-            activeAnalysisFieldOverlay,
-            frequencyDomainBranches: frequencyDomainBranches.data,
+              activeAnalysisFieldOverlay,
+              artifacts: runtimeSnapshot.source.artifacts,
+              frequencyDomainBranches: frequencyDomainBranches.data,
             frequencyDomainDispersion: frequencyDomainDispersion.data,
             frequencyDomainManifest: frequencyDomainManifest.data,
             frequencyDomainResponseSweep: frequencyDomainResponseSweep.data,
-            frequencyDomainSpectrum: frequencyDomainSpectrum.data,
-            pinnedQuickChart,
-            currentRun: currentRun.data,
+              frequencyDomainSpectrum: frequencyDomainSpectrum.data,
+              pinnedQuickChart,
+              tableCatalog: runtimeSnapshot.source.tableCatalog,
+              currentRun: currentRun.data,
           }, runtimeSnapshot);
     return filterExplorerNodes(baseNodes, filterText, selectedNodeId);
   }, [
@@ -640,8 +651,6 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
     fdmMultilayerLayout.status,
     universeMeshPolicy.data,
     universeMeshPolicy.status,
-    sessionStatusData?.domain.discretization,
-    sessionStatusData?.resources.mesh_revision,
     fdmRegionMembership.data,
     fdmRegionMembership.status,
     modelCouplings.data,
@@ -667,6 +676,7 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
     pinnedQuickChart,
     currentRun.data,
     runtimeSnapshot,
+    sessionStatusData,
   ]);
 
   useEffect(() => {
@@ -707,6 +717,19 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
     if (!path) return;
     revealExplorerNode(activeTab, selectedNodeId, path.slice(0, -1));
   }, [activeTab, nodes, selectedNodeId]);
+
+  useEffect(() => {
+    if (activeTab !== "results") return;
+    const currentNode = resolveCurrentExplorerSelectionNode(
+      nodes,
+      selectedNodeId,
+      selectedRef,
+    );
+    if (!currentNode) return;
+    const currentRef = selectionRefFromNode(currentNode);
+    if (selectionRefEquals(selectedRef, currentRef)) return;
+    selectExplorerNode(kernel, currentNode, "explorer");
+  }, [activeTab, kernel, nodes, selectedNodeId, selectedRef]);
 
   useEffect(() => {
     const unsubscribe = subscribeExplorerTextureLoadNodeRequested(

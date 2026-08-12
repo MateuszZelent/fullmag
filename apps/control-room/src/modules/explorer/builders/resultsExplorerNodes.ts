@@ -14,15 +14,21 @@ import { fieldVectorResourceKey } from "@/kernel/api/fieldQueryIdentity";
 import type {
   ArtifactResource,
   TableListResource,
-  TableResource,
 } from "@/kernel/api/apiTypes";
 import {
   definePostprocessing,
+  postprocessingCatalogState,
   postprocessingDefinitionFromArtifact,
   postprocessingDefinitionFromTable,
+  POSTPROCESSING_OWNER_CONTRACT_GAP,
   type PostprocessingDefinition,
   type PostprocessingDefinitionInput,
+  type PostprocessingCatalogSnapshot,
 } from "@/shared/domain/analysis/postprocessingDefinitions";
+import type {
+  PostprocessingDefinitionKind,
+  PostprocessingOwnerReadiness,
+} from "@/shared/domain/analysis/postprocessingTypes";
 
 import type { ExplorerNode, ExplorerNodeKind } from "../explorerTypes";
 
@@ -69,9 +75,9 @@ export interface PhysicsFirstResultsSnapshot {
 
 export interface PhysicsFirstPostprocessingSnapshot {
   analysisViews?: readonly PostprocessingFamilyDefinition<"analysis_view">[];
-  artifacts?: readonly ArtifactResource[];
+  artifactCatalog?: PostprocessingCatalogSnapshot<readonly ArtifactResource[]>;
   derivedValues?: readonly PostprocessingFamilyDefinition<"derived_value">[];
-  tables?: readonly TableResource[];
+  tableCatalog?: PostprocessingCatalogSnapshot<TableListResource>;
 }
 
 type PostprocessingFamilyDefinition<
@@ -87,14 +93,14 @@ interface ResultManifestLike extends ResultResourceLike {
 }
 
 export interface PhysicsFirstResultResourceInput {
-  artifacts?: readonly ArtifactResource[];
+  artifacts?: PostprocessingCatalogSnapshot<readonly ArtifactResource[]>;
   branches?: ResultResourceLike | null;
   currentRun?: { revision: number | string; run_id: string } | null;
   dispersion?: (ResultResourceLike & { path_metadata?: unknown; text?: string | null }) | null;
   manifest?: { result_manifest?: ResultManifestLike | null } | null;
   responseSweep?: (ResultResourceLike & { payload?: unknown }) | null;
   spectrum?: (ResultResourceLike & { payload?: unknown }) | null;
-  tableCatalog?: TableListResource | null;
+  tableCatalog?: PostprocessingCatalogSnapshot<TableListResource>;
 }
 
 export interface PhysicsFirstResultAdaptation {
@@ -319,8 +325,16 @@ export function physicsFirstResultsSnapshotFromResources(
   const resultManifest = input.manifest?.result_manifest;
   const payload = ready(resultManifest) ? record(resultManifest?.payload) : null;
   const contractGaps: string[] = [];
+  const postprocessing =
+    input.artifacts || input.tableCatalog
+      ? {
+          ...(input.artifacts ? { artifactCatalog: input.artifacts } : {}),
+          ...(input.tableCatalog ? { tableCatalog: input.tableCatalog } : {}),
+        }
+      : undefined;
   const emptySnapshot: PhysicsFirstResultsSnapshot = {
     entries: [],
+    ...(postprocessing ? { postprocessing } : {}),
     resultContextRunId: runId,
   };
   if (!runId || !payload) return { contractGaps, snapshot: emptySnapshot };
@@ -388,10 +402,7 @@ export function physicsFirstResultsSnapshotFromResources(
     contractGaps,
     snapshot: {
       entries: [entry],
-      postprocessing: {
-        ...(input.artifacts ? { artifacts: input.artifacts } : {}),
-        ...(input.tableCatalog ? { tables: input.tableCatalog.tables } : {}),
-      },
+      ...(postprocessing ? { postprocessing } : {}),
       resultContextRunId: runId,
     },
   };
@@ -681,25 +692,45 @@ function postprocessingChildren(
     .filter((definition) => definition.kind === kind)
     .sort((left, right) => left.id.localeCompare(right.id))
     .map((definition) => {
-      const available =
-        definition.availability === "available" && definition.owner !== null;
+      const available = definition.ownerReadiness === "available-ready" &&
+        definition.availability === "available" &&
+        definition.owner !== null;
+      const owner = definition.owner;
+      const status = postprocessingNodeStatus(definition.ownerReadiness);
       return node(
         `${parentId}:${key(definition.id)}`,
         nodeKind,
         definition.label,
         parentId,
         {
-          ...(available && definition.resourceRevision !== undefined
-            ? { artifactRevision: definition.resourceRevision }
-            : {}),
+          artifactPath: owner?.kind === "artifact" ? owner.path : undefined,
           availability: available ? "available" : "unavailable",
-          badge: available ? "published" : "contract gap",
+          badge: available ? "published" : postprocessingReadinessBadge(definition.ownerReadiness),
           executionState: available ? "completed" : "not_started",
-          ...(available && definition.datasetRef
+          postprocessingCatalogRevision: definition.catalogRevision,
+          postprocessingContractGap: definition.contractGap,
+          postprocessingDefinitionKind: definition.kind,
+          postprocessingFreshness: definition.freshness,
+          postprocessingOwnerId:
+            owner?.kind === "table"
+              ? owner.tableId
+              : owner?.kind === "artifact"
+                ? owner.path
+                : null,
+          postprocessingOwnerKind: owner?.kind ?? null,
+          postprocessingOwnerReadiness: definition.ownerReadiness,
+          postprocessingResourceRevision: definition.resourceRevision ?? null,
+          postprocessingSchemaRevision:
+            owner?.kind === "table" ? owner.schemaRevision : null,
+          ...(owner?.kind === "table" ? { tableId: owner.tableId } : {}),
+          ...(owner?.kind === "artifact"
+            ? { postprocessingArtifactKind: owner.artifactKind }
+            : {}),
+          ...(definition.datasetRef
             ? { resourceRef: definition.datasetRef }
             : {}),
-          resourceState: available ? "ready" : "error",
-          status: available ? "ready" : "unavailable",
+          resourceState: definition.resourceStatus,
+          status,
         },
       );
     });
@@ -707,6 +738,7 @@ function postprocessingChildren(
 
 function unavailableDefinition(
   kind: PostprocessingDefinition["kind"],
+  state?: ReturnType<typeof postprocessingCatalogState>,
 ): PostprocessingDefinition {
   const labels: Record<PostprocessingDefinition["kind"], string> = {
     analysis_view: "Analysis Views unavailable",
@@ -718,15 +750,82 @@ function unavailableDefinition(
     id: `${kind}:contract-gap`,
     kind,
     label: labels[kind],
+    ...(state ? { contractGap: state.reason, ownerState: state } : {}),
+  });
+}
+
+function postprocessingNodeStatus(
+  readiness: PostprocessingOwnerReadiness,
+): ExplorerNode["status"] {
+  if (readiness === "available-ready") return "ready";
+  if (readiness === "loading") return "warning";
+  if (readiness === "stale") return "stale";
+  if (readiness === "error") return "failed";
+  return "unavailable";
+}
+
+function postprocessingReadinessBadge(
+  readiness: PostprocessingOwnerReadiness,
+): string {
+  if (readiness === "loading") return "loading";
+  if (readiness === "stale") return "stale";
+  if (readiness === "error") return "error";
+  return "contract gap";
+}
+
+function postprocessingRootState(
+  kind: PostprocessingDefinitionKind,
+  catalog: PostprocessingCatalogSnapshot<unknown> | null | undefined,
+) {
+  if (kind === "analysis_view" || kind === "derived_value") {
+    return {
+      freshness: "unknown" as const,
+      readiness: "unavailable" as const,
+      reason: POSTPROCESSING_OWNER_CONTRACT_GAP,
+      revision: null,
+      status: "error" as const,
+    };
+  }
+  return postprocessingCatalogState(catalog, kind === "table" ? "Table" : "Artifact");
+}
+
+function postprocessingRootWithChildren(
+  id: string,
+  explorerKind: ExplorerNodeKind,
+  label: string,
+  parentId: string,
+  kind: PostprocessingDefinitionKind,
+  catalog: PostprocessingCatalogSnapshot<unknown> | null | undefined,
+  children: readonly ExplorerNode[],
+): ExplorerNode {
+  const state = postprocessingRootState(kind, catalog);
+  const available = state.readiness === "available-ready";
+  return node(id, explorerKind, label, parentId, {
+    availability: available ? "available" : "unavailable",
+    children: [...children],
+    executionState: available ? "completed" : "not_started",
+    postprocessingCatalogRevision: state.revision,
+    postprocessingContractGap: state.reason,
+    postprocessingDefinitionKind: kind,
+    postprocessingFreshness: state.freshness,
+    postprocessingOwnerReadiness: state.readiness,
+    resourceState: state.status,
+    status: postprocessingNodeStatus(state.readiness),
   });
 }
 
 function postprocessingDefinitions(
   snapshot: PhysicsFirstPostprocessingSnapshot | undefined,
 ): PostprocessingDefinition[] {
+  const tableCatalog = snapshot?.tableCatalog;
+  const artifactCatalog = snapshot?.artifactCatalog;
   const definitions = [
-    ...(snapshot?.tables ?? []).map(postprocessingDefinitionFromTable),
-    ...(snapshot?.artifacts ?? []).map(postprocessingDefinitionFromArtifact),
+    ...(tableCatalog?.data?.tables ?? []).map((table) =>
+      postprocessingDefinitionFromTable(table, tableCatalog),
+    ),
+    ...(artifactCatalog?.data ?? []).map((artifact) =>
+      postprocessingDefinitionFromArtifact(artifact, artifactCatalog),
+    ),
     ...(snapshot?.analysisViews ?? []).map((definition) =>
       definePostprocessing(definition),
     ),
@@ -740,11 +839,25 @@ function postprocessingDefinitions(
   if (!snapshot?.derivedValues?.length) {
     definitions.push(unavailableDefinition("derived_value"));
   }
-  if (snapshot?.tables === undefined) {
+  if (tableCatalog === undefined) {
     definitions.push(unavailableDefinition("table"));
+  } else if (tableCatalog.data === null || tableCatalog.status !== "ready") {
+    definitions.push(
+      unavailableDefinition(
+        "table",
+        postprocessingCatalogState(tableCatalog, "Table"),
+      ),
+    );
   }
-  if (snapshot?.artifacts === undefined) {
+  if (artifactCatalog === undefined) {
     definitions.push(unavailableDefinition("export"));
+  } else if (artifactCatalog.data === null || artifactCatalog.status !== "ready") {
+    definitions.push(
+      unavailableDefinition(
+        "export",
+        postprocessingCatalogState(artifactCatalog, "Artifact"),
+      ),
+    );
   }
   return definitions;
 }
@@ -780,10 +893,42 @@ export function buildPhysicsFirstResultsTree(snapshot: PhysicsFirstResultsSnapsh
           dispersionStages,
         ),
         rootWithChildren(`${resultsId}:hysteresis`, "results.hysteresis.root", "Hysteresis", resultsId, []),
-        rootWithChildren(`${resultsId}:analysis-views`, "results.analysis_views.root", "Analysis Views", resultsId, postprocessingChildren(`${resultsId}:analysis-views`, "analysis_view", definitions)),
-        rootWithChildren(`${resultsId}:derived-values`, "results.derived_values.root", "Derived Values", resultsId, postprocessingChildren(`${resultsId}:derived-values`, "derived_value", definitions)),
-        rootWithChildren(`${resultsId}:tables`, "results.tables.root", "Tables", resultsId, postprocessingChildren(`${resultsId}:tables`, "table", definitions)),
-        rootWithChildren(`${resultsId}:exports`, "results.exports.root", "Exports", resultsId, postprocessingChildren(`${resultsId}:exports`, "export", definitions)),
+        postprocessingRootWithChildren(
+          `${resultsId}:analysis-views`,
+          "results.analysis_views.root",
+          "Analysis Views",
+          resultsId,
+          "analysis_view",
+          undefined,
+          postprocessingChildren(`${resultsId}:analysis-views`, "analysis_view", definitions),
+        ),
+        postprocessingRootWithChildren(
+          `${resultsId}:derived-values`,
+          "results.derived_values.root",
+          "Derived Values",
+          resultsId,
+          "derived_value",
+          undefined,
+          postprocessingChildren(`${resultsId}:derived-values`, "derived_value", definitions),
+        ),
+        postprocessingRootWithChildren(
+          `${resultsId}:tables`,
+          "results.tables.root",
+          "Tables",
+          resultsId,
+          "table",
+          snapshot.postprocessing?.tableCatalog,
+          postprocessingChildren(`${resultsId}:tables`, "table", definitions),
+        ),
+        postprocessingRootWithChildren(
+          `${resultsId}:exports`,
+          "results.exports.root",
+          "Exports",
+          resultsId,
+          "export",
+          snapshot.postprocessing?.artifactCatalog,
+          postprocessingChildren(`${resultsId}:exports`, "export", definitions),
+        ),
       ],
     }),
   ];

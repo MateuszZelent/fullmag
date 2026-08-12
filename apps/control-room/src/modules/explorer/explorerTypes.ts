@@ -4,8 +4,15 @@ import type {
   DomainMetaResource,
   FdmMultilayerLayoutResource,
   HysteresisExecutionTreeResource,
+  ResourceRevision,
 } from "@/kernel/api/apiTypes";
 import type { DomainPresentation } from "@/shared/domain/mesh/domainPresentation";
+import type {
+  PostprocessingDefinitionKind,
+  PostprocessingFreshness,
+  PostprocessingOwnerKind,
+  PostprocessingOwnerReadiness,
+} from "@/shared/domain/analysis/postprocessingTypes";
 import type {
   CrossSectionFrameExtent,
   CrossSectionPlot,
@@ -313,6 +320,16 @@ export interface ExplorerNode {
   analysisRunId?: string;
   analysisStageId?: string;
   artifactRevision?: number | string;
+  postprocessingCatalogRevision?: ResourceRevision | null;
+  postprocessingContractGap?: string | null;
+  postprocessingDefinitionKind?: PostprocessingDefinitionKind;
+  postprocessingFreshness?: PostprocessingFreshness;
+  postprocessingArtifactKind?: string | null;
+  postprocessingOwnerId?: string | null;
+  postprocessingOwnerKind?: PostprocessingOwnerKind | null;
+  postprocessingOwnerReadiness?: PostprocessingOwnerReadiness;
+  postprocessingResourceRevision?: ResourceRevision | null;
+  postprocessingSchemaRevision?: number | null;
   equilibriumId?: string;
   kContextKind?: "finite_open" | "fixed_k" | "gamma" | "k_grid" | "k_path";
   kPathCoordinateRadPerM?: number;

@@ -475,7 +475,17 @@ const runtime = runtimeExplorerSnapshotFromResources({
 });
 
 function nodesForTab(tabId: (typeof tabIds)[number]) {
-  const resourceTree = buildExplorerTree(tabId, resources, runtime);
+  const resourceTree = buildExplorerTree(
+    tabId,
+    tabId === "results"
+      ? {
+          ...resources,
+          artifacts: runtime.source.artifacts,
+          tableCatalog: runtime.source.tableCatalog,
+        }
+      : resources,
+    runtime,
+  );
   return tabId === "model"
     ? flattenExplorerNodes(buildModelTree(modelSnapshot, resources))
     : flattenExplorerNodes(resourceTree);

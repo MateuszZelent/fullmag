@@ -9,6 +9,7 @@ import {
   visualizationTargetIdForSceneObject,
 } from "@/kernel/selection/selectionTypes";
 import type { KernelApi, ModuleId } from "@/kernel/types";
+import type { PostprocessingDefinitionKind } from "@/shared/domain/analysis/postprocessingTypes";
 import { targetForFdmNativeLayer } from "@/kernel/visualization/ObjectVisualizationController";
 import { selectCrossSectionPlot } from "@/kernel/workspace/crossSectionWorkspace";
 import { parsePinnedQuickChart } from "@/kernel/workspace/quickChartWorkspace";
@@ -127,7 +128,26 @@ function modeVisualizationSourceFromNode(
   return null;
 }
 
-function selectionRefFromNode(node: ExplorerNode): SelectionRef | null {
+function postprocessingDefinitionKindFromNode(
+  node: ExplorerNode,
+): PostprocessingDefinitionKind | null {
+  if (node.kind.startsWith("results.analysis_views")) return "analysis_view";
+  if (node.kind.startsWith("results.derived_values")) return "derived_value";
+  if (node.kind.startsWith("results.tables")) return "table";
+  if (node.kind.startsWith("results.exports")) return "export";
+  return null;
+}
+
+function postprocessingRootKind(
+  definitionKind: PostprocessingDefinitionKind,
+): ExplorerNode["kind"] {
+  if (definitionKind === "analysis_view") return "results.analysis_views.root";
+  if (definitionKind === "derived_value") return "results.derived_values.root";
+  if (definitionKind === "table") return "results.tables.root";
+  return "results.exports.root";
+}
+
+export function selectionRefFromNode(node: ExplorerNode): SelectionRef | null {
   if (node.runtimeDescriptorId && node.runtimeResourceKey) {
     return {
       descriptorId: node.runtimeDescriptorId,
@@ -151,6 +171,27 @@ function selectionRefFromNode(node: ExplorerNode): SelectionRef | null {
       tableId: descriptor.tableId,
       type: "quick-chart",
       xAxisId: descriptor.xAxisId,
+    };
+  }
+
+  const postprocessingKind = postprocessingDefinitionKindFromNode(node);
+  if (postprocessingKind) {
+    return {
+      artifactKind: node.postprocessingArtifactKind ?? null,
+      catalogRevision: node.postprocessingCatalogRevision ?? null,
+      contractGap: node.postprocessingContractGap ?? null,
+      definitionKind: postprocessingKind,
+      freshness: node.postprocessingFreshness ?? "unknown",
+      kind: node.kind,
+      nodeId: node.id,
+      ownerId: node.postprocessingOwnerId ?? null,
+      ownerKind: node.postprocessingOwnerKind ?? null,
+      ownerReadiness: node.postprocessingOwnerReadiness ?? "unavailable",
+      ownerResourceRevision: node.postprocessingResourceRevision ?? null,
+      ownerSchemaRevision: node.postprocessingSchemaRevision ?? null,
+      resourceRef: node.resourceRef ?? null,
+      scope: node.kind.endsWith(".root") ? "root" : "definition",
+      type: "postprocessing",
     };
   }
 
@@ -619,6 +660,43 @@ function selectionRefFromNode(node: ExplorerNode): SelectionRef | null {
   }
 
   return null;
+}
+
+function findExplorerNode(
+  nodes: readonly ExplorerNode[],
+  nodeId: string | null,
+): ExplorerNode | null {
+  if (!nodeId) return null;
+  for (const node of nodes) {
+    if (node.id === nodeId) return node;
+    const child = findExplorerNode(node.children ?? [], nodeId);
+    if (child) return child;
+  }
+  return null;
+}
+
+function findExplorerNodeByKind(
+  nodes: readonly ExplorerNode[],
+  kind: ExplorerNode["kind"],
+): ExplorerNode | null {
+  for (const node of nodes) {
+    if (node.kind === kind) return node;
+    const child = findExplorerNodeByKind(node.children ?? [], kind);
+    if (child) return child;
+  }
+  return null;
+}
+
+export function resolveCurrentExplorerSelectionNode(
+  nodes: readonly ExplorerNode[],
+  selectedNodeId: string | null,
+  ref: SelectionRef | null,
+): ExplorerNode | null {
+  const selected = findExplorerNode(nodes, selectedNodeId);
+  if (selected) return selected;
+  if (ref?.type !== "postprocessing") return null;
+  const rootKind = postprocessingRootKind(ref.definitionKind);
+  return findExplorerNodeByKind(nodes, rootKind);
 }
 
 function isFrequencyDomainSelectionNode(node: ExplorerNode): boolean {

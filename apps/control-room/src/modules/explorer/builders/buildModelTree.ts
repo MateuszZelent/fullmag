@@ -187,6 +187,8 @@ export function buildExplorerTree(
       manifest: resources.frequencyDomainManifest,
       responseSweep: resources.frequencyDomainResponseSweep,
       spectrum: resources.frequencyDomainSpectrum,
+      artifacts: resources.artifacts,
+      tableCatalog: resources.tableCatalog,
     });
     return buildPhysicsFirstResultsTree(adapted.snapshot);
   }

@@ -7,7 +7,7 @@ import { SelectionController } from "@/kernel/selection/SelectionController";
 import type { KernelApi } from "@/kernel/types";
 import type { ArtifactResource, TableResource } from "@/kernel/api/apiTypes";
 
-import { flattenExplorerNodes } from "./buildModelTree";
+import { buildExplorerTree, flattenExplorerNodes } from "./buildModelTree";
 import {
   buildPhysicsFirstResultsTree,
   physicsFirstResultsSnapshotFromResources,
@@ -171,8 +171,20 @@ describe("buildPhysicsFirstResultsTree", () => {
     const tree = buildPhysicsFirstResultsTree({
       entries: [],
       postprocessing: {
-        artifacts: [artifact],
-        tables: [table],
+        artifactCatalog: {
+          data: [artifact],
+          error: null,
+          missing: false,
+          revision: "artifacts:7",
+          status: "ready",
+        },
+        tableCatalog: {
+          data: { revision: 4, tables: [table] },
+          error: null,
+          missing: false,
+          revision: 4,
+          status: "ready",
+        },
       },
       resultContextRunId: "run-7",
     });
@@ -191,6 +203,13 @@ describe("buildPhysicsFirstResultsTree", () => {
     const artifactNode = nodes.find((node) => node.label === "energy.csv");
     expect(tableNode).toMatchObject({
       availability: "available",
+      postprocessingCatalogRevision: 4,
+      postprocessingFreshness: "fresh",
+      postprocessingOwnerId: "energy",
+      postprocessingOwnerKind: "table",
+      postprocessingOwnerReadiness: "available-ready",
+      postprocessingResourceRevision: 4,
+      postprocessingSchemaRevision: 2,
       resourceRef: "table:energy",
       resourceState: "ready",
       status: "ready",
@@ -205,9 +224,17 @@ describe("buildPhysicsFirstResultsTree", () => {
     const selection = new SelectionController(new EventBus<KernelEventMap>());
     selectExplorerNode({ selection } as KernelApi, tableNode, "explorer");
     expect(selection.get().ref).toMatchObject({
-      artifactRevision: 4,
+      catalogRevision: 4,
+      definitionKind: "table",
+      freshness: "fresh",
+      ownerId: "energy",
+      ownerKind: "table",
+      ownerReadiness: "available-ready",
+      ownerResourceRevision: 4,
+      ownerSchemaRevision: 2,
       resourceRef: "table:energy",
-      type: "frequency-domain",
+      scope: "definition",
+      type: "postprocessing",
     });
     expect(selection.get().ref).not.toHaveProperty("columns");
     expect(selection.get().ref).not.toHaveProperty("rows_href");
@@ -248,28 +275,58 @@ describe("buildPhysicsFirstResultsTree", () => {
     const first = buildPhysicsFirstResultsTree({
       entries: [],
       postprocessing: {
-        artifacts: [
-          { kind: "csv", path: "run-7/z.csv" },
-          { kind: "csv", path: "run-7/a.csv" },
-        ],
-        tables: [
-          { binary_rows_href: "/b.bin", columns: [], columns_href: "/b-columns", revision: 1, rows_href: "/b-rows", schema_revision: 1, table_id: "z", total_rows: 1 },
-          { binary_rows_href: "/a.bin", columns: [], columns_href: "/a-columns", revision: 1, rows_href: "/a-rows", schema_revision: 1, table_id: "a", total_rows: 1 },
-        ],
+        artifactCatalog: {
+          data: [
+            { kind: "csv", path: "run-7/z.csv" },
+            { kind: "csv", path: "run-7/a.csv" },
+          ],
+          error: null,
+          missing: false,
+          revision: "artifacts:7",
+          status: "ready",
+        },
+        tableCatalog: {
+          data: {
+            revision: 1,
+            tables: [
+              { binary_rows_href: "/b.bin", columns: [], columns_href: "/b-columns", revision: 1, rows_href: "/b-rows", schema_revision: 1, table_id: "z", total_rows: 1 },
+              { binary_rows_href: "/a.bin", columns: [], columns_href: "/a-columns", revision: 1, rows_href: "/a-rows", schema_revision: 1, table_id: "a", total_rows: 1 },
+            ],
+          },
+          error: null,
+          missing: false,
+          revision: 1,
+          status: "ready",
+        },
       },
       resultContextRunId: "run-7",
     });
     const second = buildPhysicsFirstResultsTree({
       entries: [],
       postprocessing: {
-        artifacts: [
-          { kind: "csv", path: "run-7/a.csv" },
-          { kind: "csv", path: "run-7/z.csv" },
-        ],
-        tables: [
-          { binary_rows_href: "/a.bin", columns: [], columns_href: "/a-columns", revision: 1, rows_href: "/a-rows", schema_revision: 1, table_id: "a", total_rows: 1 },
-          { binary_rows_href: "/b.bin", columns: [], columns_href: "/b-columns", revision: 1, rows_href: "/b-rows", schema_revision: 1, table_id: "z", total_rows: 1 },
-        ],
+        artifactCatalog: {
+          data: [
+            { kind: "csv", path: "run-7/a.csv" },
+            { kind: "csv", path: "run-7/z.csv" },
+          ],
+          error: null,
+          missing: false,
+          revision: "artifacts:7",
+          status: "ready",
+        },
+        tableCatalog: {
+          data: {
+            revision: 1,
+            tables: [
+              { binary_rows_href: "/a.bin", columns: [], columns_href: "/a-columns", revision: 1, rows_href: "/a-rows", schema_revision: 1, table_id: "a", total_rows: 1 },
+              { binary_rows_href: "/b.bin", columns: [], columns_href: "/b-columns", revision: 1, rows_href: "/b-rows", schema_revision: 1, table_id: "z", total_rows: 1 },
+            ],
+          },
+          error: null,
+          missing: false,
+          revision: 1,
+          status: "ready",
+        },
       },
       resultContextRunId: "run-7",
     });
@@ -280,6 +337,78 @@ describe("buildPhysicsFirstResultsTree", () => {
     expect(flattenExplorerNodes(first).map((node) => node.label)).toEqual(
       expect.arrayContaining(["a", "z", "a.csv", "z.csv"]),
     );
+  });
+
+  it("wires typed Table and Artifact catalogs through the production Results callsite", () => {
+    const table: TableResource = {
+      binary_rows_href: "/tables/energy/rows.bin",
+      columns: [],
+      columns_href: "/tables/energy/columns",
+      revision: 8,
+      rows_href: "/tables/energy/rows",
+      schema_revision: 3,
+      table_id: "energy",
+      total_rows: 42,
+    };
+    const artifact: ArtifactResource = {
+      kind: "csv",
+      path: "run-17/energy.csv",
+    };
+    const nodes = flattenExplorerNodes(
+      buildExplorerTree("results", {
+        artifacts: {
+          data: [artifact],
+          error: null,
+          missing: false,
+          revision: "artifacts:17",
+          status: "ready",
+        },
+        currentRun: { revision: 17, run_id: "run-17" },
+        frequencyDomainManifest: {
+          result_manifest: {
+            payload: {
+              equilibrium_identity: "eq-17",
+              requested_execution: { boundary_context: "finite_open" },
+              revision: "result-17",
+              stage_id: "stage-17",
+              stage_label: "Eigenmodes",
+              study_product: "modal_eigen",
+            },
+            status: "ready",
+          },
+        },
+        frequencyDomainSpectrum: { status: "ready" },
+        tableCatalog: {
+          data: { revision: 12, tables: [table] },
+          error: null,
+          missing: false,
+          revision: 12,
+          status: "ready",
+        },
+      } as never),
+    );
+
+    const tableNode = nodes.find((node) => node.label === "energy");
+    const artifactNode = nodes.find((node) => node.label === "energy.csv");
+    expect(tableNode).toMatchObject({
+      postprocessingCatalogRevision: 12,
+      postprocessingOwnerKind: "table",
+      postprocessingOwnerReadiness: "available-ready",
+      postprocessingResourceRevision: 8,
+      postprocessingSchemaRevision: 3,
+      resourceRef: "table:energy",
+      resourceState: "ready",
+      status: "ready",
+    });
+    expect(artifactNode).toMatchObject({
+      postprocessingCatalogRevision: "artifacts:17",
+      postprocessingOwnerKind: "artifact",
+      postprocessingOwnerReadiness: "available-ready",
+      postprocessingResourceRevision: "artifacts:17",
+      resourceRef: "artifact:run-17/energy.csv",
+      resourceState: "ready",
+      status: "ready",
+    });
   });
 });
 
@@ -305,7 +434,13 @@ describe("physicsFirstResultsSnapshotFromResources", () => {
     };
     const artifact: ArtifactResource = { kind: "csv", path: "run-17/energy.csv" };
     const adapted = physicsFirstResultsSnapshotFromResources({
-      artifacts: [artifact],
+      artifacts: {
+        data: [artifact],
+        error: null,
+        missing: false,
+        revision: "artifacts:17",
+        status: "ready",
+      },
       currentRun: { revision: 17, run_id: "run-17" },
       manifest: {
         result_manifest: {
@@ -319,12 +454,30 @@ describe("physicsFirstResultsSnapshotFromResources", () => {
         },
       },
       spectrum: { status: "ready" },
-      tableCatalog: { revision: 8, tables: [table] },
+      tableCatalog: {
+        data: { revision: 8, tables: [table] },
+        error: null,
+        missing: false,
+        revision: 8,
+        status: "ready",
+      },
     });
 
     expect(adapted.snapshot.postprocessing).toEqual({
-      artifacts: [artifact],
-      tables: [table],
+      artifactCatalog: {
+        data: [artifact],
+        error: null,
+        missing: false,
+        revision: "artifacts:17",
+        status: "ready",
+      },
+      tableCatalog: {
+        data: { revision: 8, tables: [table] },
+        error: null,
+        missing: false,
+        revision: 8,
+        status: "ready",
+      },
     });
     const nodes = flattenExplorerNodes(buildPhysicsFirstResultsTree(adapted.snapshot));
     expect(nodes.find((node) => node.label === "energy")).toMatchObject({
