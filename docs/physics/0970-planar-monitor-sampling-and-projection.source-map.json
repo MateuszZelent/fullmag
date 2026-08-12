@@ -369,52 +369,52 @@
   "public_api": {
     "parameters": [
       {
-        "python": "fm.StudyMonitorRegistry.add_planar.name",
+        "python": "fullmag.model.StudyMonitorRegistry.add_planar.name",
         "type": "str",
         "default": "required",
         "si_unit": "1",
         "validation": "non-empty and unique in the study",
-        "meaning": "Authored monitor name",
+        "meaning": "Authored monitor name; normally called as `study.monitors.add_planar(name=...)`",
         "backend_support": "FDM/FEM CPU/GPU authoring",
         "problem_ir": "planar_monitors[].name"
       },
       {
-        "python": "fm.StudyMonitorRegistry.add_planar.monitor_id",
+        "python": "fullmag.model.StudyMonitorRegistry.add_planar.monitor_id",
         "type": "str | None",
         "default": "None",
         "si_unit": "1",
         "validation": "non-empty and unique when supplied; generated otherwise",
-        "meaning": "Stable monitor identity",
+        "meaning": "Stable monitor identity; normally called as `study.monitors.add_planar(monitor_id=...)`",
         "backend_support": "FDM/FEM CPU/GPU authoring",
         "problem_ir": "planar_monitors[].id"
       },
       {
-        "python": "fm.StudyMonitorRegistry.add_planar.target",
+        "python": "fullmag.model.StudyMonitorRegistry.add_planar.target",
         "type": "MonitorTarget",
         "default": "required",
         "si_unit": "1",
         "validation": "physical target object required",
-        "meaning": "Physical support owner",
+        "meaning": "Physical support owner; normally called as `study.monitors.add_planar(target=...)`",
         "backend_support": "FDM/FEM CPU/GPU authoring",
         "problem_ir": "planar_monitors[].target"
       },
       {
-        "python": "fm.StudyMonitorRegistry.add_planar.frame",
+        "python": "fullmag.model.StudyMonitorRegistry.add_planar.frame",
         "type": "PlanarFrame",
         "default": "required",
         "si_unit": "1",
         "validation": "finite right-handed orthonormal frame",
-        "meaning": "Plane orientation and extent policy",
+        "meaning": "Plane orientation and extent policy; normally called as `study.monitors.add_planar(frame=...)`",
         "backend_support": "FDM/FEM CPU/GPU authoring",
         "problem_ir": "planar_monitors[].frame"
       },
       {
-        "python": "fm.StudyMonitorRegistry.add_planar.operator",
+        "python": "fullmag.model.StudyMonitorRegistry.add_planar.operator",
         "type": "PlanarOperator",
         "default": "required",
         "si_unit": "1",
         "validation": "one supported tagged operator object",
-        "meaning": "Support and reduction semantics",
+        "meaning": "Support and reduction semantics; normally called as `study.monitors.add_planar(operator=...)`",
         "backend_support": "lane-dependent sampling",
         "problem_ir": "planar_monitors[].operator"
       },
@@ -580,30 +580,30 @@
       },
       {
         "python": "fm.PlanarFrame.origin",
-        "type": "Sequence[float]",
+        "type": "Vector3 = tuple[float, float, float]",
         "default": "required",
         "si_unit": "\\mathrm{m}",
-        "validation": "exactly three finite values",
+        "validation": "runtime accepts any length-3 finite sequence and normalizes storage to the declared tuple alias",
         "meaning": "Frame origin",
         "backend_support": "FDM/FEM CPU/GPU",
         "problem_ir": "planar_monitors[].frame.origin_m"
       },
       {
         "python": "fm.PlanarFrame.normal",
-        "type": "Sequence[float]",
+        "type": "Vector3 = tuple[float, float, float]",
         "default": "required",
         "si_unit": "1",
-        "validation": "finite non-zero vector",
+        "validation": "runtime accepts any finite, non-zero length-3 sequence and normalizes storage to the declared tuple alias",
         "meaning": "Normal, normalized during lowering",
         "backend_support": "FDM/FEM CPU/GPU",
         "problem_ir": "planar_monitors[].frame.normal"
       },
       {
         "python": "fm.PlanarFrame.u_axis",
-        "type": "Sequence[float]",
+        "type": "Vector3 = tuple[float, float, float]",
         "default": "required",
         "si_unit": "1",
-        "validation": "finite and not collinear with normal",
+        "validation": "runtime accepts any finite length-3 sequence not collinear with normal and normalizes storage to the declared tuple alias",
         "meaning": "First axis, Gram-Schmidt normalized",
         "backend_support": "FDM/FEM CPU/GPU",
         "problem_ir": "planar_monitors[].frame.u_axis"
