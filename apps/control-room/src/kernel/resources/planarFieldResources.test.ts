@@ -11,6 +11,7 @@ import { planarFieldResourceKey } from "../api/fieldQueryIdentity";
 import { ResourceCache } from "./ResourceCache";
 import {
   loadCachedPlanarBinary,
+  loadCachedPlanarScalar,
   resolvePlanarFieldResourceKey,
 } from "./planarFieldResources";
 
@@ -69,6 +70,23 @@ describe("planar field resources", () => {
       payload,
     );
     expect(request).toHaveBeenCalledWith('"field-etag"');
+  });
+
+  it("returns the scalar response etag with the cached binary payload", async () => {
+    const cache = new ResourceCache<ArrayBuffer>({ maxBytes: 1024 });
+    const payload = new Uint8Array([1, 2, 3]).buffer;
+    cache.set("field", {
+      byteLength: payload.byteLength,
+      data: payload,
+      etag: '"scalar-current"',
+    });
+
+    await expect(
+      loadCachedPlanarScalar(cache, "field", async () => ({
+        etag: '"scalar-current"',
+        status: "not-modified",
+      })),
+    ).resolves.toEqual({ data: payload, etag: '"scalar-current"' });
   });
 
   it("delegates inactive resources to the shared no-load hook policy", () => {

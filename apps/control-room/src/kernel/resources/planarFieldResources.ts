@@ -33,6 +33,11 @@ interface ResourceHookOptions {
 
 type BinaryKind = "emptyMask" | "meshOverlay" | "renderPng" | "scalar" | "vectors";
 
+export interface PlanarScalarResource {
+  data: ArrayBuffer;
+  etag: string | null;
+}
+
 const binaryCaches: Record<BinaryKind, ResourceCache<ArrayBuffer>> = {
   emptyMask: new ResourceCache({ maxBytes: 32 * 1024 * 1024 }),
   meshOverlay: new ResourceCache({ maxBytes: 96 * 1024 * 1024 }),
@@ -133,13 +138,38 @@ export function usePlanarScalarResource(
   query: PlanarFieldQuery = {},
   options: ResourceHookOptions = {},
 ) {
-  return usePlanarFieldBinaryResource(
-    "scalar",
+  const { api } = useKernel();
+  const stableQuery = useStablePlanarFieldQuery(query);
+  const path = binaryPaths.scalar;
+  const baseKey = planarFieldResourceKey(quantityId, monitorId, stableQuery, path);
+  const revision = useResourceRevision(baseKey);
+  const resourceKey = resolvePlanarFieldResourceKey(
     quantityId,
     monitorId,
-    query,
-    options,
+    stableQuery,
+    revision,
+    path,
   );
+  const load = useCallback(
+    ({ signal }: { signal: AbortSignal }) =>
+      loadCachedPlanarScalar(binaryCaches.scalar, resourceKey, (etag) =>
+        api.data.fields.planar.scalar(quantityId, monitorId, stableQuery, {
+          etag,
+          signal,
+        }),
+      ),
+    [api, monitorId, quantityId, resourceKey, stableQuery],
+  );
+  const resolveRevision = useCallback(
+    () => binaryCaches.scalar.peek(resourceKey)?.etag ?? null,
+    [resourceKey],
+  );
+  return useResource<PlanarScalarResource | null>({
+    enabled: options.enabled,
+    load,
+    resolveRevision,
+    resourceKey,
+  });
 }
 
 export function usePlanarVectorResource(
@@ -287,6 +317,31 @@ export async function loadCachedPlanarBinary(
     etag: result.etag,
   });
   return result.data;
+}
+
+export async function loadCachedPlanarScalar(
+  cache: ResourceCache<ArrayBuffer>,
+  key: string,
+  request: (etag?: string | null) => Promise<BinaryResourceResult<ArrayBuffer>>,
+): Promise<PlanarScalarResource | null> {
+  const cached = cache.get(key);
+  const result = await request(cached?.etag);
+  if (result.status === "not-modified") {
+    if (!cached) {
+      throw new Error(`Binary resource ${key} returned 304 without cache entry`);
+    }
+    return { data: cached.data, etag: cached.etag ?? null };
+  }
+  if (result.status === "not-applicable") {
+    cache.delete(key);
+    return null;
+  }
+  cache.set(key, {
+    byteLength: result.byteLength,
+    data: result.data,
+    etag: result.etag,
+  });
+  return { data: result.data, etag: result.etag };
 }
 
 function useResourceRevision(resourceKey: string): ResourceRevision | null {

@@ -23,9 +23,13 @@ export interface PlanarEvidenceInput extends Omit<PlanarRenderEvidence, "sampleI
   component: string;
   fieldRevision: number | null;
   monitorId: string;
+  monitorHash: string | null;
+  monitorRevision: number | null;
   operatorKind: string | null;
+  operatorRevision: number | null;
   quantityId: string;
-  sampleIdentity: string | null;
+  metaIdentity: string | null;
+  scalarIdentity: string | null;
   status: PlanarEvidenceStatus;
 }
 
@@ -35,7 +39,10 @@ export interface PlanarEvidenceExpectation {
   monitorId: string;
   operatorKind: string;
   quantityId: string;
-  sampleIdentity: string;
+  metaIdentity: string;
+  monitorHash: string;
+  monitorRevision: number;
+  scalarIdentity: string;
 }
 
 export interface PlanarEvidence extends Omit<Readonly<PlanarEvidenceInput>, "overlayCounts" | "raster"> {
@@ -70,9 +77,14 @@ export function assertPlanarEvidenceReady(
   if (evidence.component !== expected.component) {
     throw new Error(`Planar evidence component mismatch: ${evidence.component}`);
   }
-  if (evidence.sampleIdentity !== expected.sampleIdentity) {
+  if (evidence.metaIdentity !== expected.metaIdentity) {
     throw new Error(
-      `Planar evidence sample identity mismatch: ${evidence.sampleIdentity}`,
+      `Planar evidence meta identity mismatch: ${evidence.metaIdentity}`,
+    );
+  }
+  if (evidence.scalarIdentity !== expected.scalarIdentity) {
+    throw new Error(
+      `Planar evidence scalar identity mismatch: ${evidence.scalarIdentity}`,
     );
   }
   if (evidence.fieldRevision !== expected.fieldRevision) {
@@ -80,10 +92,44 @@ export function assertPlanarEvidenceReady(
       `Planar evidence field revision mismatch: ${evidence.fieldRevision}`,
     );
   }
+  if (evidence.monitorRevision !== expected.monitorRevision) {
+    throw new Error(`Planar evidence monitor revision mismatch: ${evidence.monitorRevision}`);
+  }
+  if (evidence.monitorHash !== expected.monitorHash) {
+    throw new Error(`Planar evidence monitor hash mismatch: ${evidence.monitorHash}`);
+  }
+  if (evidence.operatorRevision !== evidence.monitorRevision) {
+    throw new Error(`Planar evidence operator revision mismatch: ${evidence.operatorRevision}`);
+  }
   if (!evidence.raster || evidence.raster.sampleCount <= 0) {
     throw new Error("Planar evidence raster is missing");
   }
   return evidence;
+}
+
+export function resolvePlanarEvidenceStatus({
+  metaIdentity,
+  metaStatus,
+  renderEvidence,
+  scalarIdentity,
+  scalarStatus,
+}: {
+  metaIdentity: string | null | undefined;
+  metaStatus: "error" | "idle" | "loading" | "ready" | "stale";
+  renderEvidence: PlanarRenderEvidence | null;
+  scalarIdentity: string | null | undefined;
+  scalarStatus: "error" | "idle" | "loading" | "ready" | "stale";
+}): PlanarEvidenceStatus {
+  if (metaStatus === "error" || scalarStatus === "error") return "error";
+  return metaStatus === "ready" &&
+      scalarStatus === "ready" &&
+      metaIdentity !== null &&
+      scalarIdentity !== null &&
+      renderEvidence?.raster !== null &&
+      renderEvidence?.sampleIdentity === scalarIdentity &&
+      scalarIdentity === metaIdentity
+    ? "ready"
+    : "loading";
 }
 
 export function planarRasterChecksum(pixels: Uint8ClampedArray): string {

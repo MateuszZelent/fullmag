@@ -10,6 +10,7 @@ import {
 } from "@/kernel/layout/simulationPreparationTestDom.test-support";
 
 import { PLANAR_OCCUPANCY } from "../model/planarOccupancy";
+import { resolvePlanarEvidenceStatus } from "../model/fieldMapEvidence";
 import type {
   PlanarColorizeRequest,
   PlanarColorizeResponse,
@@ -196,6 +197,25 @@ describe("PlanarSurface lifecycle", () => {
         },
         sampleIdentity: "\"fm-planar-sha256:current\"",
       });
+      const renderedEvidence = onRenderEvidence.mock.lastCall?.[0];
+      expect(
+        resolvePlanarEvidenceStatus({
+          metaIdentity: '"fm-planar-sha256:new"',
+          metaStatus: "ready",
+          renderEvidence: renderedEvidence,
+          scalarIdentity: '"fm-planar-sha256:current"',
+          scalarStatus: "loading",
+        }),
+      ).toBe("loading");
+      expect(
+        resolvePlanarEvidenceStatus({
+          metaIdentity: '"fm-planar-sha256:current"',
+          metaStatus: "ready",
+          renderEvidence: renderedEvidence,
+          scalarIdentity: '"fm-planar-sha256:stale"',
+          scalarStatus: "ready",
+        }),
+      ).toBe("loading");
 
       const occupiedPointerMove = new TestEvent("pointermove", { bubbles: true });
       Object.assign(occupiedPointerMove, { clientX: 150, clientY: 50 });

@@ -31,6 +31,7 @@ import {
 } from "./model/fieldMapRenderModel";
 import {
   createPlanarEvidence,
+  resolvePlanarEvidenceStatus,
   type PlanarEvidenceStatus,
   type PlanarRenderEvidence,
 } from "./model/fieldMapEvidence";
@@ -171,28 +172,30 @@ export default function FieldMapModule() {
     [],
   );
 
-  const evidenceStatus: PlanarEvidenceStatus =
-    meta.status === "error" || scalar.status === "error"
-      ? "error"
-      : meta.status === "ready" &&
-          scalar.status === "ready" &&
-          renderEvidence?.raster &&
-          renderEvidence.sampleIdentity === meta.data?.etag
-        ? "ready"
-        : "loading";
+  const evidenceStatus: PlanarEvidenceStatus = resolvePlanarEvidenceStatus({
+    metaIdentity: meta.data?.etag,
+    metaStatus: meta.status,
+    renderEvidence,
+    scalarIdentity: scalar.data?.etag,
+    scalarStatus: scalar.status,
+  });
   const evidence = createPlanarEvidence({
     component,
     fieldRevision: meta.data?.field_revision ?? null,
     glyphCount: renderEvidence?.glyphCount ?? 0,
+    metaIdentity: meta.data?.etag ?? null,
+    monitorHash: meta.data?.monitor_hash ?? null,
     monitorId: activeMonitorId ?? "",
+    monitorRevision: meta.data?.monitor_revision ?? null,
     operatorKind: monitor.data?.monitor.operator.kind ?? null,
+    operatorRevision: monitor.data?.scene_revision ?? null,
     overlayCounts: renderEvidence?.overlayCounts ?? {
       contours: 0,
       meshSegments: 0,
     },
     quantityId,
     raster: renderEvidence?.raster ?? null,
-    sampleIdentity: meta.data?.etag ?? null,
+    scalarIdentity: renderEvidence?.sampleIdentity ?? null,
     status: evidenceStatus,
   });
 
@@ -236,7 +239,11 @@ export default function FieldMapModule() {
         data-planar-raster-checksum={evidence.raster?.checksum ?? ""}
         data-planar-raster-max={String(evidence.raster?.max ?? "")}
         data-planar-raster-min={String(evidence.raster?.min ?? "")}
-        data-planar-sample-identity={evidence.sampleIdentity ?? ""}
+        data-planar-meta-identity={evidence.metaIdentity ?? ""}
+        data-planar-monitor-hash={evidence.monitorHash ?? ""}
+        data-planar-monitor-revision={String(evidence.monitorRevision ?? "")}
+        data-planar-operator-revision={String(evidence.operatorRevision ?? "")}
+        data-planar-scalar-identity={evidence.scalarIdentity ?? ""}
         data-planar-status={evidence.status}
         data-planar-contour-count={String(evidence.overlayCounts.contours)}
         data-planar-mesh-segment-count={String(evidence.overlayCounts.meshSegments)}
@@ -263,8 +270,8 @@ export default function FieldMapModule() {
           meshOverlay={meshOverlay.data}
           onPin={(u, v) => setPinned([u, v])}
           onRenderEvidence={onRenderEvidence}
-          sampleIdentity={meta.data.etag}
-          scalar={scalar.data}
+          sampleIdentity={scalar.data.etag ?? ""}
+          scalar={scalar.data.data}
           vectors={vectors.data}
           width={width ?? 1}
         />

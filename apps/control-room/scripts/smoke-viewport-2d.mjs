@@ -1,6 +1,8 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 
+import { assertPlanarEvidenceReady } from "./lib/planar-field-evidence.mjs";
+
 const workspaceUrl =
   process.env.CONTROL_ROOM_URL ?? "http://localhost:3194/workspace";
 const apiBase = (
@@ -86,6 +88,7 @@ async function main() {
       expectedPlanarEvidence(initialMonitor),
       observedPlanarMeta,
     );
+    const smokeEvidence = [initialEvidence];
     const initialOpenMs = performance.now() - initialOpenStarted;
     if (initialOpenMs > 10_000) {
       throw new Error(`initial 2D open exceeded 10 s: ${initialOpenMs}`);
@@ -94,13 +97,19 @@ async function main() {
     await open3d.click();
     await page.keyboard.press("2");
     await assertFieldMapCanvas(page);
+    smokeEvidence.push(
+      await assertPlanarEvidence(
+        page,
+        expectedPlanarEvidence(initialMonitor),
+        observedPlanarMeta,
+      ),
+    );
     await page.screenshot({
       fullPage: true,
       path: path.join(outputDir, "scalar-plane.png"),
     });
 
     const performanceMetrics = { initial_open_ms: initialOpenMs };
-    const smokeEvidence = [initialEvidence];
     const smallSwitch = await timedMonitorSwitch(
       page,
       monitorById(monitors, "xy-slab"),
@@ -141,6 +150,7 @@ async function main() {
     await capturePlanarFramePreview(
       page,
       initialMonitor,
+      observedPlanarMeta,
     );
     smokeEvidence.push(
       await assertPlanarEvidence(
@@ -205,10 +215,15 @@ async function main() {
   }
 }
 
-async function capturePlanarFramePreview(page, monitor) {
+async function capturePlanarFramePreview(page, monitor, observedPlanarMeta) {
   if (!monitor?.name) {
     throw new Error("Cannot verify 3D frame preview without a monitor name");
   }
+  await assertPlanarEvidence(
+    page,
+    expectedPlanarEvidence(monitor),
+    observedPlanarMeta,
+  );
   const monitorNode = page.getByText(monitor.name, { exact: true }).first();
   await monitorNode.scrollIntoViewIfNeeded();
   await monitorNode.click();
@@ -340,31 +355,8 @@ async function assertPlanarEvidence(page, expected, observedPlanarMeta) {
     { timeout: timeoutMs },
   );
   const value = await evidence.jsonValue();
-  if (value.status !== "ready") {
-    throw new Error(`Planar evidence entered ${value.status}: ${JSON.stringify(value)}`);
-  }
-  if (!value.raster?.checksum || !Number.isFinite(value.raster.min) || !Number.isFinite(value.raster.max)) {
-    throw new Error(`Planar evidence has no raster proof: ${JSON.stringify(value)}`);
-  }
-  if (value.raster.min > value.raster.max) {
-    throw new Error(`Planar evidence has an inverted raster range: ${JSON.stringify(value)}`);
-  }
-  if (!Number.isInteger(value.glyphCount) || value.glyphCount < 0) {
-    throw new Error(`Planar evidence has an invalid glyph count: ${JSON.stringify(value)}`);
-  }
-  for (const [name, count] of Object.entries(value.overlayCounts ?? {})) {
-    if (!Number.isInteger(count) || count < 0) {
-      throw new Error(`Planar evidence has invalid ${name}: ${JSON.stringify(value)}`);
-    }
-  }
   const matchingMeta = await waitForObservedPlanarMeta(observedPlanarMeta, value, expected);
-  if (matchingMeta.field_revision !== value.fieldRevision) {
-    throw new Error(`Planar field revision mismatch: ${JSON.stringify({ evidence: value, meta: matchingMeta })}`);
-  }
-  if (matchingMeta.etag !== value.sampleIdentity) {
-    throw new Error(`Planar sample identity mismatch: ${JSON.stringify({ evidence: value, meta: matchingMeta })}`);
-  }
-  return value;
+  return assertPlanarEvidenceReady(value, expected, matchingMeta);
 }
 
 async function waitForObservedPlanarMeta(observedPlanarMeta, evidence, expected) {
@@ -374,7 +366,7 @@ async function waitForObservedPlanarMeta(observedPlanarMeta, evidence, expected)
       (entry) =>
         entry.monitorId === expected.monitorId &&
         entry.quantityId === expected.quantityId &&
-        entry.payload?.etag === evidence.sampleIdentity,
+        entry.payload?.etag === evidence.metaIdentity,
     );
     if (match) return match.payload;
     await new Promise((resolve) => setTimeout(resolve, 25));
