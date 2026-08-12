@@ -14842,9 +14842,7 @@
             "type": "string"
           },
           "carrier_revision": {
-            "format": "int64",
-            "minimum": 0,
-            "type": "integer"
+            "type": "string"
           },
           "component": {
             "type": "string"
@@ -14853,9 +14851,7 @@
             "type": "string"
           },
           "field_revision": {
-            "format": "int64",
-            "minimum": 0,
-            "type": "integer"
+            "type": "string"
           },
           "field_source": {
             "type": "string"
@@ -14880,9 +14876,7 @@
             "$ref": "#/components/schemas/PlanarFieldLinksResource"
           },
           "mesh_revision": {
-            "format": "int64",
-            "minimum": 0,
-            "type": "integer"
+            "type": "string"
           },
           "monitor_hash": {
             "type": "string"
@@ -14891,9 +14885,7 @@
             "type": "string"
           },
           "monitor_revision": {
-            "format": "int64",
-            "minimum": 0,
-            "type": "integer"
+            "type": "string"
           },
           "non_injective": {
             "type": "boolean"
@@ -14954,9 +14946,7 @@
             ]
           },
           "scene_revision": {
-            "format": "int64",
-            "minimum": 0,
-            "type": "integer"
+            "type": "string"
           },
           "schema_version": {
             "type": "string"
@@ -30034,9 +30024,7 @@
             "name": "expected_scene_revision",
             "required": false,
             "schema": {
-              "format": "int64",
-              "minimum": 0,
-              "type": "integer"
+              "type": "string"
             }
           },
           {
@@ -30044,9 +30032,7 @@
             "name": "expected_monitor_revision",
             "required": false,
             "schema": {
-              "format": "int64",
-              "minimum": 0,
-              "type": "integer"
+              "type": "string"
             }
           },
           {
@@ -30054,9 +30040,7 @@
             "name": "expected_mesh_revision",
             "required": false,
             "schema": {
-              "format": "int64",
-              "minimum": 0,
-              "type": "integer"
+              "type": "string"
             }
           },
           {
@@ -30064,9 +30048,7 @@
             "name": "expected_carrier_revision",
             "required": false,
             "schema": {
-              "format": "int64",
-              "minimum": 0,
-              "type": "integer"
+              "type": "string"
             }
           },
           {
@@ -30074,15 +30056,56 @@
             "name": "expected_field_revision",
             "required": false,
             "schema": {
-              "format": "int64",
-              "minimum": 0,
-              "type": "integer"
+              "type": "string"
             }
           }
         ],
         "responses": {
           "200": {
             "description": "One occupancy byte per pixel"
+          },
+          "304": {
+            "description": "Not modified"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Invalid planar query"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Field or monitor missing"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Stale source"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Unsupported planar sampling"
           }
         },
         "tags": [
@@ -30209,9 +30232,7 @@
             "name": "expected_scene_revision",
             "required": false,
             "schema": {
-              "format": "int64",
-              "minimum": 0,
-              "type": "integer"
+              "type": "string"
             }
           },
           {
@@ -30219,9 +30240,7 @@
             "name": "expected_monitor_revision",
             "required": false,
             "schema": {
-              "format": "int64",
-              "minimum": 0,
-              "type": "integer"
+              "type": "string"
             }
           },
           {
@@ -30229,9 +30248,7 @@
             "name": "expected_mesh_revision",
             "required": false,
             "schema": {
-              "format": "int64",
-              "minimum": 0,
-              "type": "integer"
+              "type": "string"
             }
           },
           {
@@ -30239,9 +30256,7 @@
             "name": "expected_carrier_revision",
             "required": false,
             "schema": {
-              "format": "int64",
-              "minimum": 0,
-              "type": "integer"
+              "type": "string"
             }
           },
           {
@@ -30249,9 +30264,7 @@
             "name": "expected_field_revision",
             "required": false,
             "schema": {
-              "format": "int64",
-              "minimum": 0,
-              "type": "integer"
+              "type": "string"
             }
           }
         ],
@@ -30261,6 +30274,49 @@
           },
           "204": {
             "description": "Structured grid has no FEM overlay"
+          },
+          "304": {
+            "description": "Not modified"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Invalid planar query"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Field or monitor missing"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Stale source"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Unsupported planar sampling"
           }
         },
         "tags": [
@@ -30387,9 +30443,7 @@
             "name": "expected_scene_revision",
             "required": false,
             "schema": {
-              "format": "int64",
-              "minimum": 0,
-              "type": "integer"
+              "type": "string"
             }
           },
           {
@@ -30397,9 +30451,7 @@
             "name": "expected_monitor_revision",
             "required": false,
             "schema": {
-              "format": "int64",
-              "minimum": 0,
-              "type": "integer"
+              "type": "string"
             }
           },
           {
@@ -30407,9 +30459,7 @@
             "name": "expected_mesh_revision",
             "required": false,
             "schema": {
-              "format": "int64",
-              "minimum": 0,
-              "type": "integer"
+              "type": "string"
             }
           },
           {
@@ -30417,9 +30467,7 @@
             "name": "expected_carrier_revision",
             "required": false,
             "schema": {
-              "format": "int64",
-              "minimum": 0,
-              "type": "integer"
+              "type": "string"
             }
           },
           {
@@ -30427,9 +30475,7 @@
             "name": "expected_field_revision",
             "required": false,
             "schema": {
-              "format": "int64",
-              "minimum": 0,
-              "type": "integer"
+              "type": "string"
             }
           }
         ],
@@ -30444,13 +30490,44 @@
             },
             "description": ""
           },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Invalid planar query"
+          },
           "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
             "description": "Field or monitor missing"
           },
           "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
             "description": "Stale source"
           },
           "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
             "description": "Unsupported planar sampling"
           }
         },
@@ -30535,6 +30612,14 @@
           },
           {
             "in": "query",
+            "name": "quality",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
             "name": "scope_kind",
             "required": false,
             "schema": {
@@ -30570,9 +30655,7 @@
             "name": "expected_scene_revision",
             "required": false,
             "schema": {
-              "format": "int64",
-              "minimum": 0,
-              "type": "integer"
+              "type": "string"
             }
           },
           {
@@ -30580,9 +30663,7 @@
             "name": "expected_monitor_revision",
             "required": false,
             "schema": {
-              "format": "int64",
-              "minimum": 0,
-              "type": "integer"
+              "type": "string"
             }
           },
           {
@@ -30590,9 +30671,7 @@
             "name": "expected_mesh_revision",
             "required": false,
             "schema": {
-              "format": "int64",
-              "minimum": 0,
-              "type": "integer"
+              "type": "string"
             }
           },
           {
@@ -30600,9 +30679,7 @@
             "name": "expected_carrier_revision",
             "required": false,
             "schema": {
-              "format": "int64",
-              "minimum": 0,
-              "type": "integer"
+              "type": "string"
             }
           },
           {
@@ -30610,9 +30687,7 @@
             "name": "expected_field_revision",
             "required": false,
             "schema": {
-              "format": "int64",
-              "minimum": 0,
-              "type": "integer"
+              "type": "string"
             }
           }
         ],
@@ -30626,6 +30701,46 @@
               }
             },
             "description": ""
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Invalid planar query or probe coordinates"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Field or monitor missing"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Stale source"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Unsupported planar sampling"
           }
         },
         "tags": [
@@ -30752,9 +30867,7 @@
             "name": "expected_scene_revision",
             "required": false,
             "schema": {
-              "format": "int64",
-              "minimum": 0,
-              "type": "integer"
+              "type": "string"
             }
           },
           {
@@ -30762,9 +30875,7 @@
             "name": "expected_monitor_revision",
             "required": false,
             "schema": {
-              "format": "int64",
-              "minimum": 0,
-              "type": "integer"
+              "type": "string"
             }
           },
           {
@@ -30772,9 +30883,7 @@
             "name": "expected_mesh_revision",
             "required": false,
             "schema": {
-              "format": "int64",
-              "minimum": 0,
-              "type": "integer"
+              "type": "string"
             }
           },
           {
@@ -30782,9 +30891,7 @@
             "name": "expected_carrier_revision",
             "required": false,
             "schema": {
-              "format": "int64",
-              "minimum": 0,
-              "type": "integer"
+              "type": "string"
             }
           },
           {
@@ -30792,15 +30899,53 @@
             "name": "expected_field_revision",
             "required": false,
             "schema": {
-              "format": "int64",
-              "minimum": 0,
-              "type": "integer"
+              "type": "string"
             }
           }
         ],
         "responses": {
           "200": {
             "description": "PNG export"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Invalid planar query"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Field or monitor missing"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Stale source"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Unsupported planar sampling"
           }
         },
         "tags": [
@@ -30927,9 +31072,7 @@
             "name": "expected_scene_revision",
             "required": false,
             "schema": {
-              "format": "int64",
-              "minimum": 0,
-              "type": "integer"
+              "type": "string"
             }
           },
           {
@@ -30937,9 +31080,7 @@
             "name": "expected_monitor_revision",
             "required": false,
             "schema": {
-              "format": "int64",
-              "minimum": 0,
-              "type": "integer"
+              "type": "string"
             }
           },
           {
@@ -30947,9 +31088,7 @@
             "name": "expected_mesh_revision",
             "required": false,
             "schema": {
-              "format": "int64",
-              "minimum": 0,
-              "type": "integer"
+              "type": "string"
             }
           },
           {
@@ -30957,9 +31096,7 @@
             "name": "expected_carrier_revision",
             "required": false,
             "schema": {
-              "format": "int64",
-              "minimum": 0,
-              "type": "integer"
+              "type": "string"
             }
           },
           {
@@ -30967,9 +31104,7 @@
             "name": "expected_field_revision",
             "required": false,
             "schema": {
-              "format": "int64",
-              "minimum": 0,
-              "type": "integer"
+              "type": "string"
             }
           }
         ],
@@ -30979,6 +31114,46 @@
           },
           "304": {
             "description": "Not modified"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Invalid planar query"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Field or monitor missing"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Stale source"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Unsupported planar sampling"
           }
         },
         "tags": [
@@ -31105,9 +31280,7 @@
             "name": "expected_scene_revision",
             "required": false,
             "schema": {
-              "format": "int64",
-              "minimum": 0,
-              "type": "integer"
+              "type": "string"
             }
           },
           {
@@ -31115,9 +31288,7 @@
             "name": "expected_monitor_revision",
             "required": false,
             "schema": {
-              "format": "int64",
-              "minimum": 0,
-              "type": "integer"
+              "type": "string"
             }
           },
           {
@@ -31125,9 +31296,7 @@
             "name": "expected_mesh_revision",
             "required": false,
             "schema": {
-              "format": "int64",
-              "minimum": 0,
-              "type": "integer"
+              "type": "string"
             }
           },
           {
@@ -31135,9 +31304,7 @@
             "name": "expected_carrier_revision",
             "required": false,
             "schema": {
-              "format": "int64",
-              "minimum": 0,
-              "type": "integer"
+              "type": "string"
             }
           },
           {
@@ -31145,9 +31312,7 @@
             "name": "expected_field_revision",
             "required": false,
             "schema": {
-              "format": "int64",
-              "minimum": 0,
-              "type": "integer"
+              "type": "string"
             }
           }
         ],
@@ -31155,8 +31320,48 @@
           "200": {
             "description": "FMVP v2 vector raster"
           },
+          "304": {
+            "description": "Not modified"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Invalid planar query"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Field or monitor missing"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Stale source"
+          },
           "422": {
-            "description": "Quantity is not vector-valued"
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Quantity or sampling mode unsupported"
           }
         },
         "tags": [
@@ -39651,8 +39856,8 @@
     }
   ],
   "x-fullmag-build-identity": {
-    "built_at_utc": "2026-08-12T18:15:13Z",
-    "git_commit": "d19cfc96bafdc44eb6b62a3613a18ce4e7c444ea",
+    "built_at_utc": "2026-08-12T21:55:25Z",
+    "git_commit": "5bf32e3aa3d3d2e73cc99cc36fa48b6df203ebc7",
     "source_snapshot_sha256": "unknown",
     "worktree_state": "dirty"
   },

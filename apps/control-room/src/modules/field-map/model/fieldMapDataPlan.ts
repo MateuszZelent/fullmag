@@ -20,9 +20,9 @@ export interface FieldMapDataPlanInput {
   active: boolean;
   component: string;
   discretization?: string | null;
-  expectedFieldRevision?: number | null;
-  expectedMeshRevision?: number | null;
-  expectedMonitorRevision?: number | null;
+  expectedFieldRevision?: number | string | null;
+  expectedMeshRevision?: number | string | null;
+  expectedMonitorRevision?: number | string | null;
   includeMesh: boolean;
   monitorId: string | null;
   quantityId: string;
@@ -70,9 +70,18 @@ export function buildFieldMapDataPlan(
     quantityId: input.quantityId,
     query: {
       component: input.component,
-      expected_field_revision: input.expectedFieldRevision ?? undefined,
-      expected_mesh_revision: input.expectedMeshRevision ?? undefined,
-      expected_monitor_revision: input.expectedMonitorRevision ?? undefined,
+      expected_field_revision:
+        input.expectedFieldRevision == null
+          ? undefined
+          : String(input.expectedFieldRevision),
+      expected_mesh_revision:
+        input.expectedMeshRevision == null
+          ? undefined
+          : String(input.expectedMeshRevision),
+      expected_monitor_revision:
+        input.expectedMonitorRevision == null
+          ? undefined
+          : String(input.expectedMonitorRevision),
       include_mesh: input.includeMesh,
       quality: "interactive",
       resolution_x: input.resolution[0],

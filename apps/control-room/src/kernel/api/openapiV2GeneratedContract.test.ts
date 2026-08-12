@@ -66,6 +66,15 @@ describe("generated OpenAPI v2 transport", () => {
       "carrier_revision",
       "field_revision",
     ]));
+    for (const revision of [
+      "scene_revision",
+      "monitor_revision",
+      "mesh_revision",
+      "carrier_revision",
+      "field_revision",
+    ]) {
+      expect(meta.properties[revision].type, revision).toBe("string");
+    }
     const scalarParameters = document.paths[
       "/v2/sessions/current/data/fields/{quantity_id}/planar-monitors/{monitor_id}/scalar"
     ].get.parameters.map((parameter: { name: string }) => parameter.name);
@@ -76,6 +85,38 @@ describe("generated OpenAPI v2 transport", () => {
       "expected_carrier_revision",
       "expected_field_revision",
     ]));
+    for (const parameter of document.paths[
+      "/v2/sessions/current/data/fields/{quantity_id}/planar-monitors/{monitor_id}/scalar"
+    ].get.parameters) {
+      if (parameter.name.startsWith("expected_")) {
+        expect(parameter.schema.type, parameter.name).toBe("string");
+      }
+    }
+  });
+
+  it("declares structured planar data-plane error responses", () => {
+    const document = JSON.parse(
+      readFileSync(new URL("./generated/openapi-v2.json", import.meta.url), "utf8"),
+    );
+    for (const resource of [
+      "meta",
+      "scalar",
+      "vectors",
+      "empty-mask",
+      "mesh-overlay",
+      "probe",
+      "render.png",
+    ]) {
+      const responses = document.paths[
+        `/v2/sessions/current/data/fields/{quantity_id}/planar-monitors/{monitor_id}/${resource}`
+      ].get.responses;
+      for (const status of ["404", "409", "422"]) {
+        expect(
+          responses[status].content["application/json"].schema.$ref,
+          `${resource} ${status}`,
+        ).toBe("#/components/schemas/ApiErrorResponse");
+      }
+    }
   });
 
   it("exposes an openapi-fetch transport wrapper", async () => {

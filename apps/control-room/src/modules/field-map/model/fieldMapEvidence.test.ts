@@ -9,12 +9,12 @@ import {
 describe("field-map evidence", () => {
   const requested = {
     component: "magnitude",
-    fieldRevision: 18,
+    fieldRevision: "9007199254741001",
     monitorId: "xy-slab",
     monitorHash: "sha256:monitor-current",
-    monitorRevision: 27,
+    monitorRevision: "9007199254741002",
     operatorKind: "slab_average",
-    operatorRevision: 27,
+    operatorRevision: "9007199254741002",
     quantityId: "m",
     metaIdentity: "\"fm-planar-sha256:current\"",
     scalarIdentity: "\"fm-planar-sha256:current\"",

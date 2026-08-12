@@ -15,10 +15,20 @@ pub struct PlanarFieldQuery {
     pub quality: Option<String>,
     pub vector_budget: Option<u32>,
     pub include_mesh: Option<bool>,
+    #[serde(default, with = "crate::schemas::decimal_u64::optional")]
+    #[param(value_type = String)]
     pub expected_scene_revision: Option<u64>,
+    #[serde(default, with = "crate::schemas::decimal_u64::optional")]
+    #[param(value_type = String)]
     pub expected_monitor_revision: Option<u64>,
+    #[serde(default, with = "crate::schemas::decimal_u64::optional")]
+    #[param(value_type = String)]
     pub expected_mesh_revision: Option<u64>,
+    #[serde(default, with = "crate::schemas::decimal_u64::optional")]
+    #[param(value_type = String)]
     pub expected_carrier_revision: Option<u64>,
+    #[serde(default, with = "crate::schemas::decimal_u64::optional")]
+    #[param(value_type = String)]
     pub expected_field_revision: Option<u64>,
 }
 
@@ -31,14 +41,25 @@ pub struct PlanarFieldProbeQuery {
     pub component: Option<String>,
     pub resolution_x: Option<u32>,
     pub resolution_y: Option<u32>,
+    pub quality: Option<String>,
     pub scope_kind: Option<String>,
     pub scope_id: Option<String>,
     pub stage_id: Option<String>,
     pub snapshot_id: Option<String>,
+    #[serde(default, with = "crate::schemas::decimal_u64::optional")]
+    #[param(value_type = String)]
     pub expected_scene_revision: Option<u64>,
+    #[serde(default, with = "crate::schemas::decimal_u64::optional")]
+    #[param(value_type = String)]
     pub expected_monitor_revision: Option<u64>,
+    #[serde(default, with = "crate::schemas::decimal_u64::optional")]
+    #[param(value_type = String)]
     pub expected_mesh_revision: Option<u64>,
+    #[serde(default, with = "crate::schemas::decimal_u64::optional")]
+    #[param(value_type = String)]
     pub expected_carrier_revision: Option<u64>,
+    #[serde(default, with = "crate::schemas::decimal_u64::optional")]
+    #[param(value_type = String)]
     pub expected_field_revision: Option<u64>,
 }
 
@@ -73,15 +94,25 @@ pub struct PlanarFieldLinksResource {
 pub struct PlanarFieldMetaResource {
     pub schema_version: String,
     pub sample_token: String,
+    #[serde(with = "crate::schemas::decimal_u64")]
+    #[schema(value_type = String)]
     pub scene_revision: u64,
     pub monitor_id: String,
+    #[serde(with = "crate::schemas::decimal_u64")]
+    #[schema(value_type = String)]
     pub monitor_revision: u64,
     pub monitor_hash: String,
     pub quantity_id: String,
     pub canonical_unit: String,
     pub component: String,
+    #[serde(with = "crate::schemas::decimal_u64")]
+    #[schema(value_type = String)]
     pub field_revision: u64,
+    #[serde(with = "crate::schemas::decimal_u64")]
+    #[schema(value_type = String)]
     pub mesh_revision: u64,
+    #[serde(with = "crate::schemas::decimal_u64")]
+    #[schema(value_type = String)]
     pub carrier_revision: u64,
     pub generation_id: String,
     pub field_source: String,

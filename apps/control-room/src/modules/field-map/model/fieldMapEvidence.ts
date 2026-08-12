@@ -21,12 +21,12 @@ export interface PlanarRenderEvidence {
 
 export interface PlanarEvidenceInput extends Omit<PlanarRenderEvidence, "sampleIdentity"> {
   component: string;
-  fieldRevision: number | null;
+  fieldRevision: number | string | null;
   monitorId: string;
   monitorHash: string | null;
-  monitorRevision: number | null;
+  monitorRevision: number | string | null;
   operatorKind: string | null;
-  operatorRevision: number | null;
+  operatorRevision: number | string | null;
   quantityId: string;
   metaIdentity: string | null;
   scalarIdentity: string | null;
@@ -35,13 +35,13 @@ export interface PlanarEvidenceInput extends Omit<PlanarRenderEvidence, "sampleI
 
 export interface PlanarEvidenceExpectation {
   component: string;
-  fieldRevision: number;
+  fieldRevision: number | string;
   monitorId: string;
   operatorKind: string;
   quantityId: string;
   metaIdentity: string;
   monitorHash: string;
-  monitorRevision: number;
+  monitorRevision: number | string;
   scalarIdentity: string;
 }
 

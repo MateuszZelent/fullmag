@@ -13293,12 +13293,16 @@ async fn planar_monitor_crud_enforces_revision_and_target_validation() {
 
 #[tokio::test]
 async fn planar_field_resources_publish_meta_binary_probe_png_and_etag() {
+    const SCENE_REVISION: u64 = 9_007_199_254_741_001;
+    const MESH_REVISION: u64 = 9_007_199_254_741_002;
+    const FIELD_REVISION: u64 = 9_007_199_254_741_003;
     let state = test_app_state_with_live_session().await;
     let mut scene = sample_scene_document();
-    scene.revision = 21;
+    scene.revision = SCENE_REVISION;
+    let monitor_id = "monitor /% żółć";
     scene.monitors.planar.push(
         serde_json::from_value(serde_json::json!({
-            "id": "monitor_xy",
+            "id": monitor_id,
             "name": "XY monitor",
             "target": {"kind": "domain"},
             "frame": {
@@ -13316,6 +13320,7 @@ async fn planar_field_resources_publish_meta_binary_probe_png_and_etag() {
     );
     if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
         snapshot.scene_document = Some(scene);
+        snapshot.mesh_revision = MESH_REVISION;
         snapshot.session.script_path.clear();
         if let Some(live_state) = snapshot.live_state.as_mut() {
             live_state.latest_step.grid = [2, 2, 1];
@@ -13346,7 +13351,7 @@ async fn planar_field_resources_publish_meta_binary_probe_png_and_etag() {
                     [2.0, 0.0, 0.0],
                     [2.0, 0.0, 0.0]
                 ],
-                "field_revision": 99,
+                "field_revision": FIELD_REVISION,
                 "layout": {"grid_cells": [2, 2, 1]}
             }
         }))
@@ -13354,11 +13359,11 @@ async fn planar_field_resources_publish_meta_binary_probe_png_and_etag() {
         snapshot.field_quantity_revisions.insert("m".to_string(), 7);
         snapshot
             .field_quantity_revisions
-            .insert("H_eff".to_string(), 99);
+            .insert("H_eff".to_string(), FIELD_REVISION);
     }
     let app = build_v2_router().with_state(state);
-    let base = "/v2/sessions/current/data/fields/H_eff/planar-monitors/monitor_xy";
-    let query = "?component=magnitude&resolution_x=16&resolution_y=16";
+    let base = "/v2/sessions/current/data/fields/H_eff/planar-monitors/monitor%20%2F%25%20%C5%BC%C3%B3%C5%82%C4%87";
+    let query = "?component=magnitude&resolution_x=16&resolution_y=16&quality=export";
 
     let meta = app
         .clone()
@@ -13379,13 +13384,14 @@ async fn planar_field_resources_publish_meta_binary_probe_png_and_etag() {
     let meta_json = body_json(meta).await;
     assert_eq!(status, StatusCode::OK, "{meta_json:#}");
     let etag = etag.expect("successful meta response must have ETag");
-    assert_eq!(meta_json["monitor_id"], "monitor_xy");
+    assert_eq!(meta_json["monitor_id"], monitor_id);
     assert_eq!(meta_json["resolution"], serde_json::json!([16, 16]));
     assert_eq!(meta_json["sampling_execution"], "cpu");
-    assert_eq!(meta_json["scene_revision"], 21);
-    assert_eq!(meta_json["field_revision"], 99);
-    let monitor_revision = meta_json["monitor_revision"].as_u64().unwrap();
-    let carrier_revision = meta_json["carrier_revision"].as_u64().unwrap();
+    assert_eq!(meta_json["scene_revision"], SCENE_REVISION.to_string());
+    assert_eq!(meta_json["mesh_revision"], MESH_REVISION.to_string());
+    assert_eq!(meta_json["field_revision"], FIELD_REVISION.to_string());
+    let monitor_revision = meta_json["monitor_revision"].as_str().unwrap();
+    let carrier_revision = meta_json["carrier_revision"].as_str().unwrap();
     let sample_token = meta_json["sample_token"].as_str().unwrap();
     assert!(sample_token.starts_with("planar-sample-v2:"));
     for link_name in [
@@ -13405,7 +13411,7 @@ async fn planar_field_resources_publish_meta_binary_probe_png_and_etag() {
             "{link_name}: {link}"
         );
         assert!(
-            link.contains("expected_scene_revision=21"),
+            link.contains(&format!("expected_scene_revision={SCENE_REVISION}")),
             "{link_name}: {link}"
         );
         assert!(
@@ -13417,7 +13423,7 @@ async fn planar_field_resources_publish_meta_binary_probe_png_and_etag() {
             "{link_name}: {link}"
         );
         assert!(
-            link.contains("expected_field_revision=99"),
+            link.contains(&format!("expected_field_revision={FIELD_REVISION}")),
             "{link_name}: {link}"
         );
     }
@@ -13469,7 +13475,7 @@ async fn planar_field_resources_publish_meta_binary_probe_png_and_etag() {
         .unwrap();
     assert_eq!(probe.status(), StatusCode::OK);
     let probe = body_json(probe).await;
-    assert_eq!(probe["monitor_id"], "monitor_xy");
+    assert_eq!(probe["monitor_id"], monitor_id);
     assert!(probe["cell_id"].is_number());
     assert!(probe["element_id"].is_null());
 
@@ -13516,12 +13522,12 @@ async fn planar_field_resources_publish_meta_binary_probe_png_and_etag() {
         ("expected_scene_revision", 999, "stale_scene_revision"),
         (
             "expected_monitor_revision",
-            monitor_revision.saturating_add(1),
+            monitor_revision.parse::<u64>().unwrap().saturating_add(1),
             "stale_monitor_revision",
         ),
         (
             "expected_carrier_revision",
-            carrier_revision.saturating_add(1),
+            carrier_revision.parse::<u64>().unwrap().saturating_add(1),
             "stale_carrier_revision",
         ),
         ("expected_field_revision", 7, "stale_field_revision"),
@@ -13616,7 +13622,8 @@ async fn planar_field_resources_publish_meta_binary_probe_png_and_etag() {
             .oneshot(
                 Request::builder()
                     .uri(format!(
-                        "/v2/sessions/current/data/fields/{quantity_id}/planar-monitors/monitor_xy/meta"
+                        "{}/meta",
+                        base.replace("/fields/H_eff/", &format!("/fields/{quantity_id}/"))
                     ))
                     .body(Body::empty())
                     .unwrap(),
@@ -33695,6 +33702,14 @@ fn openapi_contains_planar_field_data_paths() {
             "/v2/sessions/current/data/fields/{{quantity_id}}/planar-monitors/{{monitor_id}}/{resource}"
         );
         assert!(paths.contains_key(&path), "OpenAPI missing {path}");
+        let responses = &paths[&path]["get"]["responses"];
+        for status in ["404", "409", "422"] {
+            assert_eq!(
+                responses[status]["content"]["application/json"]["schema"]["$ref"],
+                "#/components/schemas/ApiErrorResponse",
+                "{resource} must declare the {status} API error schema"
+            );
+        }
     }
     let schemas = openapi["components"]["schemas"].as_object().unwrap();
     let meta = &schemas["PlanarFieldMetaResource"];
@@ -33714,11 +33729,20 @@ fn openapi_contains_planar_field_data_paths() {
             "PlanarFieldMetaResource must require {required}"
         );
     }
-    let scalar_parameters =
-        paths["/v2/sessions/current/data/fields/{quantity_id}/planar-monitors/{monitor_id}/scalar"]
-            ["get"]["parameters"]
-            .as_array()
-            .unwrap();
+    for revision in [
+        "scene_revision",
+        "monitor_revision",
+        "mesh_revision",
+        "carrier_revision",
+        "field_revision",
+    ] {
+        assert_eq!(meta["properties"][revision]["type"], "string", "{revision}");
+    }
+    let scalar_parameters = paths
+        ["/v2/sessions/current/data/fields/{quantity_id}/planar-monitors/{monitor_id}/scalar"]
+        ["get"]["parameters"]
+        .as_array()
+        .unwrap();
     for parameter in [
         "sample_token",
         "expected_scene_revision",
@@ -33732,6 +33756,14 @@ fn openapi_contains_planar_field_data_paths() {
                 .any(|entry| entry["name"] == parameter),
             "scalar resource must expose {parameter}"
         );
+        let schema = scalar_parameters
+            .iter()
+            .find(|entry| entry["name"] == parameter)
+            .and_then(|entry| entry.get("schema"))
+            .expect("revision parameter schema");
+        if parameter.starts_with("expected_") {
+            assert_eq!(schema["type"], "string", "{parameter}");
+        }
     }
 }
 

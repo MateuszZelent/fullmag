@@ -70,7 +70,13 @@ struct BuiltPlanarField {
     get,
     path = "/v2/sessions/current/data/fields/{quantity_id}/planar-monitors/{monitor_id}/meta",
     params(("quantity_id" = String, Path), ("monitor_id" = String, Path), PlanarFieldQuery),
-    responses((status = 200, body = PlanarFieldMetaResource), (status = 404, description = "Field or monitor missing"), (status = 409, description = "Stale source"), (status = 422, description = "Unsupported planar sampling")),
+    responses(
+        (status = 200, body = PlanarFieldMetaResource),
+        (status = 400, description = "Invalid planar query", body = crate::schemas::common::ApiErrorResponse),
+        (status = 404, description = "Field or monitor missing", body = crate::schemas::common::ApiErrorResponse),
+        (status = 409, description = "Stale source", body = crate::schemas::common::ApiErrorResponse),
+        (status = 422, description = "Unsupported planar sampling", body = crate::schemas::common::ApiErrorResponse)
+    ),
     tag = "data"
 )]
 pub async fn get_planar_field_meta(
@@ -91,7 +97,14 @@ pub async fn get_planar_field_meta(
     get,
     path = "/v2/sessions/current/data/fields/{quantity_id}/planar-monitors/{monitor_id}/scalar",
     params(("quantity_id" = String, Path), ("monitor_id" = String, Path), PlanarFieldQuery),
-    responses((status = 200, description = "FMVP v2 scalar raster"), (status = 304, description = "Not modified")),
+    responses(
+        (status = 200, description = "FMVP v2 scalar raster"),
+        (status = 304, description = "Not modified"),
+        (status = 400, description = "Invalid planar query", body = crate::schemas::common::ApiErrorResponse),
+        (status = 404, description = "Field or monitor missing", body = crate::schemas::common::ApiErrorResponse),
+        (status = 409, description = "Stale source", body = crate::schemas::common::ApiErrorResponse),
+        (status = 422, description = "Unsupported planar sampling", body = crate::schemas::common::ApiErrorResponse)
+    ),
     tag = "data"
 )]
 pub async fn get_planar_field_scalar(
@@ -123,7 +136,14 @@ pub async fn get_planar_field_scalar(
     get,
     path = "/v2/sessions/current/data/fields/{quantity_id}/planar-monitors/{monitor_id}/vectors",
     params(("quantity_id" = String, Path), ("monitor_id" = String, Path), PlanarFieldQuery),
-    responses((status = 200, description = "FMVP v2 vector raster"), (status = 422, description = "Quantity is not vector-valued")),
+    responses(
+        (status = 200, description = "FMVP v2 vector raster"),
+        (status = 304, description = "Not modified"),
+        (status = 400, description = "Invalid planar query", body = crate::schemas::common::ApiErrorResponse),
+        (status = 404, description = "Field or monitor missing", body = crate::schemas::common::ApiErrorResponse),
+        (status = 409, description = "Stale source", body = crate::schemas::common::ApiErrorResponse),
+        (status = 422, description = "Quantity or sampling mode unsupported", body = crate::schemas::common::ApiErrorResponse)
+    ),
     tag = "data"
 )]
 pub async fn get_planar_field_vectors(
@@ -166,7 +186,14 @@ pub async fn get_planar_field_vectors(
     get,
     path = "/v2/sessions/current/data/fields/{quantity_id}/planar-monitors/{monitor_id}/empty-mask",
     params(("quantity_id" = String, Path), ("monitor_id" = String, Path), PlanarFieldQuery),
-    responses((status = 200, description = "One occupancy byte per pixel")),
+    responses(
+        (status = 200, description = "One occupancy byte per pixel"),
+        (status = 304, description = "Not modified"),
+        (status = 400, description = "Invalid planar query", body = crate::schemas::common::ApiErrorResponse),
+        (status = 404, description = "Field or monitor missing", body = crate::schemas::common::ApiErrorResponse),
+        (status = 409, description = "Stale source", body = crate::schemas::common::ApiErrorResponse),
+        (status = 422, description = "Unsupported planar sampling", body = crate::schemas::common::ApiErrorResponse)
+    ),
     tag = "data"
 )]
 pub async fn get_planar_field_empty_mask(
@@ -192,7 +219,13 @@ pub async fn get_planar_field_empty_mask(
     get,
     path = "/v2/sessions/current/data/fields/{quantity_id}/planar-monitors/{monitor_id}/probe",
     params(("quantity_id" = String, Path), ("monitor_id" = String, Path), PlanarFieldProbeQuery),
-    responses((status = 200, body = PlanarFieldProbeResource)),
+    responses(
+        (status = 200, body = PlanarFieldProbeResource),
+        (status = 400, description = "Invalid planar query or probe coordinates", body = crate::schemas::common::ApiErrorResponse),
+        (status = 404, description = "Field or monitor missing", body = crate::schemas::common::ApiErrorResponse),
+        (status = 409, description = "Stale source", body = crate::schemas::common::ApiErrorResponse),
+        (status = 422, description = "Unsupported planar sampling", body = crate::schemas::common::ApiErrorResponse)
+    ),
     tag = "data"
 )]
 pub async fn get_planar_field_probe(
@@ -214,7 +247,7 @@ pub async fn get_planar_field_probe(
         snapshot_id: probe.snapshot_id,
         resolution_x: probe.resolution_x,
         resolution_y: probe.resolution_y,
-        quality: None,
+        quality: probe.quality,
         vector_budget: Some(0),
         include_mesh: Some(false),
         expected_scene_revision: probe.expected_scene_revision,
@@ -272,7 +305,13 @@ pub async fn get_planar_field_probe(
     get,
     path = "/v2/sessions/current/data/fields/{quantity_id}/planar-monitors/{monitor_id}/render.png",
     params(("quantity_id" = String, Path), ("monitor_id" = String, Path), PlanarFieldQuery),
-    responses((status = 200, description = "PNG export")),
+    responses(
+        (status = 200, description = "PNG export"),
+        (status = 400, description = "Invalid planar query", body = crate::schemas::common::ApiErrorResponse),
+        (status = 404, description = "Field or monitor missing", body = crate::schemas::common::ApiErrorResponse),
+        (status = 409, description = "Stale source", body = crate::schemas::common::ApiErrorResponse),
+        (status = 422, description = "Unsupported planar sampling", body = crate::schemas::common::ApiErrorResponse)
+    ),
     tag = "data"
 )]
 pub async fn get_planar_field_render_png(
@@ -305,7 +344,15 @@ pub async fn get_planar_field_render_png(
     get,
     path = "/v2/sessions/current/data/fields/{quantity_id}/planar-monitors/{monitor_id}/mesh-overlay",
     params(("quantity_id" = String, Path), ("monitor_id" = String, Path), PlanarFieldQuery),
-    responses((status = 200, description = "FMCS v3 planar mesh overlay"), (status = 204, description = "Structured grid has no FEM overlay")),
+    responses(
+        (status = 200, description = "FMCS v3 planar mesh overlay"),
+        (status = 204, description = "Structured grid has no FEM overlay"),
+        (status = 304, description = "Not modified"),
+        (status = 400, description = "Invalid planar query", body = crate::schemas::common::ApiErrorResponse),
+        (status = 404, description = "Field or monitor missing", body = crate::schemas::common::ApiErrorResponse),
+        (status = 409, description = "Stale source", body = crate::schemas::common::ApiErrorResponse),
+        (status = 422, description = "Unsupported planar sampling", body = crate::schemas::common::ApiErrorResponse)
+    ),
     tag = "data"
 )]
 pub async fn get_planar_field_mesh_overlay(
@@ -612,7 +659,7 @@ fn validate_expected_revisions(
             return Err(ApiError::conflict(format!(
                 "stale_{kind}_revision: expected {}, current {current}",
                 expected.expect("checked expected revision")
-            )))
+            )));
         }
     }
     Ok(())
@@ -706,7 +753,8 @@ fn meta_resource(built: &BuiltPlanarField) -> PlanarFieldMetaResource {
     let bounds = built.result.meta.bounds_uv_m;
     let base = format!(
         "/v2/sessions/current/data/fields/{}/planar-monitors/{}",
-        built.quantity_id, built.monitor.id
+        encode_query_component(&built.quantity_id),
+        encode_query_component(&built.monitor.id)
     );
     let query = canonical_sample_query(built);
     let (scalar_min, scalar_max) = built

@@ -105,11 +105,11 @@ export interface PlanarFieldQuery {
   [key: string]: boolean | number | string | undefined;
   sample_token?: string;
   component?: string;
-  expected_carrier_revision?: number;
-  expected_field_revision?: number;
-  expected_mesh_revision?: number;
-  expected_monitor_revision?: number;
-  expected_scene_revision?: number;
+  expected_carrier_revision?: string;
+  expected_field_revision?: string;
+  expected_mesh_revision?: string;
+  expected_monitor_revision?: string;
+  expected_scene_revision?: string;
   include_mesh?: boolean;
   quality?: string;
   resolution_x?: number;
@@ -130,6 +130,7 @@ export interface PlanarFieldProbeQuery
     | "expected_mesh_revision"
     | "expected_monitor_revision"
     | "expected_scene_revision"
+    | "quality"
     | "resolution_x"
     | "resolution_y"
     | "scope_id"

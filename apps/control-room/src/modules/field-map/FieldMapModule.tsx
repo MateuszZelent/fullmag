@@ -188,7 +188,7 @@ export default function FieldMapModule() {
     monitorId: activeMonitorId ?? "",
     monitorRevision: meta.data?.monitor_revision ?? null,
     operatorKind: monitor.data?.monitor.operator.kind ?? null,
-    operatorRevision: monitor.data?.scene_revision ?? null,
+    operatorRevision: meta.data?.monitor_revision ?? null,
     overlayCounts: renderEvidence?.overlayCounts ?? {
       contours: 0,
       meshSegments: 0,

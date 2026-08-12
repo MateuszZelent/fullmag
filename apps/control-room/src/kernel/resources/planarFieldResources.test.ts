@@ -17,12 +17,12 @@ import {
 
 describe("planar field resources", () => {
   it("normalizes query order into one resource identity", () => {
-    const first = planarFieldResourceKey("m", "plane/a", {
+    const first = planarFieldResourceKey("m /% żółć", "plane/a", {
       resolution_y: 64,
       component: "z",
       resolution_x: 128,
     });
-    const second = planarFieldResourceKey("m", "plane/a", {
+    const second = planarFieldResourceKey("m /% żółć", "plane/a", {
       resolution_x: 128,
       resolution_y: 64,
       component: "z",
@@ -30,7 +30,7 @@ describe("planar field resources", () => {
 
     expect(first).toBe(second);
     expect(first).toBe(
-      `${DATA_PLANAR_FIELD_META_PATH.replace("{quantity_id}", "m").replace("{monitor_id}", "plane%2Fa")}?component=z&include_mesh=false&quality=interactive&resolution_x=128&resolution_y=64&scope_kind=monitor_target&vector_budget=0`,
+      `${DATA_PLANAR_FIELD_META_PATH.replace("{quantity_id}", "m%20%2F%25%20%C5%BC%C3%B3%C5%82%C4%87").replace("{monitor_id}", "plane%2Fa")}?component=z&include_mesh=false&quality=interactive&resolution_x=128&resolution_y=64&scope_kind=monitor_target&vector_budget=0`,
     );
     expect(
       resolvePlanarFieldResourceKey(
@@ -44,25 +44,27 @@ describe("planar field resources", () => {
   });
 
   it("keeps immutable sample tokens and exact revisions in binary cache identity", () => {
+    const revisions = {
+      expected_carrier_revision: "9007199254741001",
+      expected_field_revision: "9007199254741002",
+      expected_mesh_revision: "9007199254741003",
+      expected_monitor_revision: "9007199254741004",
+      expected_scene_revision: "9007199254741005",
+    } as const;
     const first = planarFieldResourceKey("m", "plane/a", {
-      expected_carrier_revision: 11,
-      expected_field_revision: 7,
-      expected_monitor_revision: 3,
-      expected_scene_revision: 21,
+      ...revisions,
       sample_token: "planar-sample-v2:first",
     });
     const second = planarFieldResourceKey("m", "plane/a", {
-      expected_carrier_revision: 11,
-      expected_field_revision: 7,
-      expected_monitor_revision: 3,
-      expected_scene_revision: 21,
+      ...revisions,
       sample_token: "planar-sample-v2:second",
     });
 
     expect(first).not.toBe(second);
     expect(first).toContain("sample_token=planar-sample-v2%3Afirst");
-    expect(first).toContain("expected_scene_revision=21");
-    expect(first).toContain("expected_carrier_revision=11");
+    for (const [name, revision] of Object.entries(revisions)) {
+      expect(first).toContain(`${name}=${revision}`);
+    }
   });
 
   it("rejects a 304 response when no matching cached payload exists", async () => {

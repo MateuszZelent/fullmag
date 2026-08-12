@@ -54,9 +54,9 @@ describe("field-map data plan", () => {
     const plan = buildFieldMapDataPlan({
       active: true,
       component: "normal",
-      expectedFieldRevision: 17,
-      expectedMeshRevision: 8,
-      expectedMonitorRevision: 5,
+      expectedFieldRevision: "9007199254741001",
+      expectedMeshRevision: "9007199254741002",
+      expectedMonitorRevision: "9007199254741003",
       includeMesh: true,
       monitorId: "plane-1",
       quantityId: "m",
@@ -68,9 +68,9 @@ describe("field-map data plan", () => {
     });
 
     expect(plan.query).toMatchObject({
-      expected_field_revision: 17,
-      expected_mesh_revision: 8,
-      expected_monitor_revision: 5,
+      expected_field_revision: "9007199254741001",
+      expected_mesh_revision: "9007199254741002",
+      expected_monitor_revision: "9007199254741003",
       scope_id: "part-7",
       scope_kind: "mesh_part",
       snapshot_id: "snapshot-4",
@@ -130,9 +130,9 @@ describe("field-map data plan", () => {
   it("adds probe coordinates without dropping raster identity", () => {
     const query = {
       component: "normal",
-      expected_field_revision: 17,
-      expected_mesh_revision: 8,
-      expected_monitor_revision: 5,
+      expected_field_revision: "9007199254741001",
+      expected_mesh_revision: "9007199254741002",
+      expected_monitor_revision: "9007199254741003",
       include_mesh: true,
       quality: "interactive",
       resolution_x: 128,
