@@ -36,14 +36,26 @@ export function planarMonitorDefinitionAvailabilityErrors(
   const surfaceBoundary = monitor.operator.kind === "surface_projection"
     ? availability.surfaceBoundaries?.[monitor.operator.boundary.kind]
     : undefined;
-  const concreteTargetErrors = monitor.target.kind === "object" && availability.objectIds &&
-      !availability.objectIds.includes(monitor.target.object_id)
-    ? [`Object target "${monitor.target.object_id}" is not executable in the current session.`]
-    : monitor.target.kind === "region" && availability.regionRefs &&
-        !availability.regionRefs.some((entry) =>
-          entry.objectId === monitor.target.object_id && entry.regionId === monitor.target.region_id)
-      ? [`Region target "${monitor.target.object_id}/${monitor.target.region_id}" is not executable in the current session.`]
-      : [];
+  const monitorTarget = monitor.target;
+  let concreteTargetErrors: string[] = [];
+  if (
+    monitorTarget.kind === "object" &&
+    availability.objectIds &&
+    !availability.objectIds.includes(monitorTarget.object_id)
+  ) {
+    concreteTargetErrors = [
+      `Object target "${monitorTarget.object_id}" is not executable in the current session.`,
+    ];
+  } else if (
+    monitorTarget.kind === "region" &&
+    availability.regionRefs &&
+    !availability.regionRefs.some((entry) =>
+      entry.objectId === monitorTarget.object_id && entry.regionId === monitorTarget.region_id)
+  ) {
+    concreteTargetErrors = [
+      `Region target "${monitorTarget.object_id}/${monitorTarget.region_id}" is not executable in the current session.`,
+    ];
+  }
   return [
     ...(target?.available === false ? [target.reason] : []),
     ...concreteTargetErrors,

@@ -42,7 +42,7 @@ export function usePlanarMonitorDefinitionAvailability(): PlanarMonitorDefinitio
           : [])
         : null,
       sceneObjectIds: scene.status === "ready" && scene.data
-        ? scene.data.objects.map((entry) => entry.id)
+        ? (scene.data.objects ?? []).map((entry) => entry.id)
         : null,
     }),
     [
