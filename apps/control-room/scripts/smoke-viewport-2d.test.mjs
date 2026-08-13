@@ -102,13 +102,13 @@ test("2D smoke captures each legal layer and a terminal 3D lifecycle proof", () 
 
 test("2D smoke reports unsupported points without relabelling another layer", () => {
   assert.match(source, /points.*unsupported/s);
-  assert.match(source, /case_id: "layer-points"[\s\S]*required: false/);
+  assert.match(source, /case_id: "layer-points"[\s\S]*required: true/);
   assert.match(source, /unsupported_required_layers/);
   assert.doesNotMatch(source, /points:\s*"mesh"/);
 });
 
 test("2D smoke keeps unsupported bounds as a required blocker separate from 3D frame proof", () => {
-  assert.match(source, /case_id: "layer-bounds"[\s\S]*required: false/);
+  assert.match(source, /case_id: "layer-bounds"[\s\S]*required: true/);
   assert.match(source, /bounds is not a selectable layer/);
   assert.match(source, /unsupportedRequiredLayers\.pass === true/);
   assert.doesNotMatch(source, /case_id: "layer-bounds"[\s\S]{0,160}passed: true/);

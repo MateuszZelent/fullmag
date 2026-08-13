@@ -22,6 +22,7 @@ from scripts.analysis.validate_planar_monitor_sampling import (
     run_execution,
     synchronize_cross_backend_reports,
     validate_qualification_report,
+    verify_compact_full_contract_log,
     wait_for_fresh_monitor_report,
     update_qualification_case,
     write_json,
@@ -546,6 +547,26 @@ class PlanarMonitorSamplingValidationTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 write_json(Path(directory) / "report.json", {"metric": math.inf})
 
+    def test_compact_full_attestation_requires_exact_external_test_log(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            output = root / "report.json"
+            bad_log = root / "bad.log"
+            bad_log.write_text("test result: ok. 1 passed\n")
+            bad = verify_compact_full_contract_log(bad_log, output)
+            self.assertFalse(bad["pass"])
+
+            good_log = root / "good.log"
+            good_log.write_text(
+                "test planar_sampling::target_tests::"
+                "compact_fem_plane_and_slab_match_equivalent_full_carrier ... ok\n"
+                "test result: ok. 1 passed; 0 failed\n"
+            )
+            good = verify_compact_full_contract_log(good_log, output)
+            self.assertTrue(good["pass"])
+            self.assertEqual(good["exit_status"], 0)
+            self.assertEqual(len(good["log_sha256"]), 64)
+
     def test_samplewise_comparison_does_not_overflow_json_metrics(self) -> None:
         def report(value: float) -> dict[str, object]:
             return {
@@ -653,6 +674,61 @@ class PlanarMonitorSamplingValidationTests(unittest.TestCase):
         self.assertIn("--aggregate-report-root", recipe)
         self.assertIn("expected_field_revision=fresh_m_revision", validator)
         self.assertIn('fresh_fields["H_demag"]["field_revision"]', validator)
+        self.assertIn('if args.qualification_profile == "mesh-refined"', validator)
+        self.assertNotIn("--record-compact-full-contract", recipe)
+
+    def test_fdm_cross_backend_case_requires_both_fem_lanes(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+
+            def lane_report(backend: str, device: str, values: list[float]) -> dict[str, object]:
+                return {
+                    "backend": backend,
+                    "device": device,
+                    "gates": {"local": True},
+                    "head": "deadbeef",
+                    "linear_material_monitors": {"xy-plane": {
+                        "exact_sample_identity": True,
+                        "frame": {"preset": "xy"},
+                        "linear_validation": {
+                            "raster_values_A_per_m": values,
+                            "rms_error_A_per_m": 0.0,
+                        },
+                        "monitor_hash": "shared",
+                        "operator": {"kind": "plane_sample"},
+                        "quantity_id": "mat_ms",
+                        "stats": {"count": len(values)},
+                        "target": {"kind": "object", "object_id": "film"},
+                    }},
+                    "metrics": {},
+                    "qualification_cases": [{
+                        "case_id": "cross-backend-parity",
+                        "passed": False,
+                        "required": True,
+                    }],
+                    "runtime_bundle_identity": {"runtime_bundle_version": "same"},
+                }
+
+            reports = {
+                "fdm-cpu": lane_report("fdm", "cpu", [1.0, 2.0]),
+                "fem-cpu": lane_report("fem", "cpu", [1.0, 2.0]),
+                "fem-gpu": lane_report("fem", "gpu", [1.0, None]),
+            }
+            for lane, report in reports.items():
+                path = root / lane / "science-report.json"
+                path.parent.mkdir(parents=True)
+                write_json(path, report)
+
+            synchronize_cross_backend_reports(root / "fem-gpu" / "science-report.json")
+
+            fdm = json.loads((root / "fdm-cpu" / "science-report.json").read_text())
+            case = next(
+                item for item in fdm["qualification_cases"]
+                if item["case_id"] == "cross-backend-parity"
+            )
+            self.assertTrue(fdm["gates"]["cross_backend_linear_scalar_fem_cpu"])
+            self.assertFalse(fdm["gates"]["cross_backend_linear_scalar_fem_gpu"])
+            self.assertFalse(case["passed"])
 
 
 if __name__ == "__main__":

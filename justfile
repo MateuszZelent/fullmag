@@ -5220,9 +5220,9 @@ run-viewport-2d-planar-monitor-refinement-peer backend="fdm" device="cpu" web_po
     just run-viewport-2d-planar-monitor-smoke "{{backend}}" "{{device}}" "{{web_port}}" "{{api_port}}" mesh-refined
 
 verify-viewport-2d-planar-compact-full-contract:
-    docker compose --profile fem-gpu run --rm fem-gpu bash -lc 'cd /workspace && cargo test -p fullmag-api planar_sampling::target_tests::compact_fem_plane_and_slab_match_equivalent_full_carrier -- --exact'
     mkdir -p .fullmag/reports/viewport-2d-planar-monitor-smoke
-    "{{repo_python}}" scripts/analysis/validate_planar_monitor_sampling.py --record-compact-full-contract .fullmag/reports/viewport-2d-planar-monitor-smoke/compact-full-contract-report.json
+    set -o pipefail; docker compose --profile fem-gpu run --rm fem-gpu bash -lc 'cd /workspace && cargo test -p fullmag-api planar_sampling::target_tests::compact_fem_plane_and_slab_match_equivalent_full_carrier -- --exact' 2>&1 | tee .fullmag/reports/viewport-2d-planar-monitor-smoke/compact-full-contract.log
+    "{{repo_python}}" scripts/analysis/validate_planar_monitor_sampling.py --verify-compact-full-contract-log .fullmag/reports/viewport-2d-planar-monitor-smoke/compact-full-contract.log --compact-full-contract-output .fullmag/reports/viewport-2d-planar-monitor-smoke/compact-full-contract-report.json
 
 aggregate-viewport-2d-planar-monitor-qualification:
     "{{repo_python}}" scripts/analysis/validate_planar_monitor_sampling.py --aggregate-report-root .fullmag/reports/viewport-2d-planar-monitor-smoke

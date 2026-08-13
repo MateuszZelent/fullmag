@@ -390,20 +390,20 @@ async function captureLayerCases(page, monitor, observedPlanarMeta) {
     });
   }
   cases.push({
-    applicable: false,
+    applicable: true,
     case_id: "layer-bounds",
     blocker: "bounds is not a selectable layer in the canonical planar layer schema",
     passed: false,
-    required: false,
-    status: "not_applicable",
+    required: true,
+    status: "unsupported",
   });
   cases.push({
-    applicable: false,
+    applicable: true,
     case_id: "layer-points",
     blocker: "points is unsupported by the canonical planar layer schema",
     passed: false,
-    required: false,
-    status: "not_applicable",
+    required: true,
+    status: "unsupported",
   });
   return cases;
 }

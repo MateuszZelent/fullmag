@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import math
 import subprocess
@@ -208,6 +209,29 @@ def write_json(path: Path, payload: dict[str, Any]) -> None:
     path.write_text(
         json.dumps(payload, indent=2, sort_keys=True, allow_nan=False) + "\n"
     )
+
+
+def verify_compact_full_contract_log(log_path: Path, output: Path) -> dict[str, Any]:
+    log_bytes = log_path.read_bytes()
+    log = log_bytes.decode("utf-8", errors="replace")
+    exact_test = (
+        "test planar_sampling::target_tests::"
+        "compact_fem_plane_and_slab_match_equivalent_full_carrier ... ok"
+    )
+    passed = exact_test in log and "test result: ok." in log
+    report = {
+        "contract": COMPACT_FULL_CONTRACT,
+        "executor": "container-backed cargo test -p fullmag-api",
+        "exit_status": 0 if passed else None,
+        "head": git_head(),
+        "log_path": str(log_path),
+        "log_sha256": hashlib.sha256(log_bytes).hexdigest(),
+        "lane_scope": "backend-neutral-sampler-contract",
+        "pass": passed,
+        "schema_version": "viewport-2d-compact-full-contract-v1",
+    }
+    write_json(output, report)
+    return report
 
 
 def wait_json(base: str, path: str, timeout_s: float = 180.0) -> dict[str, Any]:
@@ -920,16 +944,17 @@ def synchronize_cross_backend_reports(current_output: Path) -> None:
                 "comparison_method": "shared_manufactured_field_error",
             }
             gate_id = f"cross_backend_linear_scalar_{fem_lane.replace('-', '_')}"
-            for path, report in ((fdm_path, fdm), (fem_path, fem)):
+            for report in (fdm, fem):
                 report.setdefault("gates", {})[gate_id] = False
                 report.setdefault("metrics", {})[gate_id] = metric
-                update_qualification_case(
-                    report,
-                    "cross-backend-parity",
-                    passed=False,
-                    blocker=metric["blocker"],
-                )
-                write_json(path, report)
+            update_qualification_case(
+                fem,
+                "cross-backend-parity",
+                passed=False,
+                blocker=metric["blocker"],
+            )
+            write_json(fdm_path, fdm)
+            write_json(fem_path, fem)
             comparison_path = report_root / f"cross-backend-fdm-cpu-{fem_lane}.json"
             write_json(
                 comparison_path,
@@ -1021,16 +1046,17 @@ def synchronize_cross_backend_reports(current_output: Path) -> None:
         if identity_errors:
             metric["blocker"] = "; ".join(identity_errors)
         gate_id = f"cross_backend_linear_scalar_{fem_lane.replace('-', '_')}"
-        for path, report in ((fdm_path, fdm), (fem_path, fem)):
+        for report in (fdm, fem):
             report["gates"][gate_id] = passed
             report["metrics"][gate_id] = metric
-            update_qualification_case(
-                report,
-                "cross-backend-parity",
-                passed=passed,
-                blocker=None if passed else metric.get("blocker", "samplewise parity failed"),
-            )
-            write_json(path, report)
+        update_qualification_case(
+            fem,
+            "cross-backend-parity",
+            passed=passed,
+            blocker=None if passed else metric.get("blocker", "samplewise parity failed"),
+        )
+        write_json(fdm_path, fdm)
+        write_json(fem_path, fem)
         comparison_path = report_root / f"cross-backend-fdm-cpu-{fem_lane}.json"
         write_json(
             comparison_path,
@@ -1043,6 +1069,27 @@ def synchronize_cross_backend_reports(current_output: Path) -> None:
                     "schema_version": "viewport-2d-cross-backend-report-v2",
             },
         )
+    if fdm_path.exists():
+        fdm = json.loads(fdm_path.read_text())
+        gate_ids = (
+            "cross_backend_linear_scalar_fem_cpu",
+            "cross_backend_linear_scalar_fem_gpu",
+        )
+        missing = [gate_id for gate_id in gate_ids if gate_id not in fdm.get("gates", {})]
+        passed = not missing and all(fdm["gates"].get(gate_id) is True for gate_id in gate_ids)
+        blockers = [
+            fdm.get("metrics", {}).get(gate_id, {}).get("blocker", f"{gate_id} failed")
+            for gate_id in gate_ids
+            if fdm.get("gates", {}).get(gate_id) is not True
+        ]
+        blockers.extend(f"missing {gate_id} report" for gate_id in missing)
+        update_qualification_case(
+            fdm,
+            "cross-backend-parity",
+            passed=passed,
+            blocker=None if passed else "; ".join(dict.fromkeys(blockers)),
+        )
+        write_json(fdm_path, fdm)
 
 
 def update_qualification_case(
@@ -1204,13 +1251,18 @@ def aggregate_qualification_reports(report_root: Path) -> dict[str, Any]:
                     and contract.get("exit_status") == 0
                     and contract.get("pass") is True
                     and contract.get("head") == science.get("head")
+                    and contract.get("lane_scope")
+                    == "backend-neutral-sampler-contract"
                 )
                 compact_full = {
-                    "blocker": None if contract_matches else (
+                    "blocker": (
+                        "backend-neutral compact/full sampler contract passed, but no "
+                        f"managed {lane} runtime carrier binding report exists"
+                    ) if contract_matches else (
                         "paired-carrier contract identity, executor status, or HEAD does not match"
                     ),
                     "contract_report": str(contract_path),
-                    "pass": contract_matches,
+                    "pass": False,
                 }
             else:
                 compact_full = {
@@ -1305,7 +1357,8 @@ def aggregate_qualification_reports(report_root: Path) -> dict[str, Any]:
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--aggregate-report-root", type=Path)
-    parser.add_argument("--record-compact-full-contract", type=Path)
+    parser.add_argument("--verify-compact-full-contract-log", type=Path)
+    parser.add_argument("--compact-full-contract-output", type=Path)
     parser.add_argument("--api-base")
     parser.add_argument("--backend", choices=("fdm", "fem"))
     parser.add_argument("--device", choices=("cpu", "gpu"))
@@ -1316,18 +1369,18 @@ def main() -> None:
         default="base",
     )
     args = parser.parse_args()
-    if args.record_compact_full_contract is not None:
-        write_json(
-            args.record_compact_full_contract,
-            {
-                "contract": COMPACT_FULL_CONTRACT,
-                "executor": "container-backed cargo test -p fullmag-api",
-                "exit_status": 0,
-                "head": git_head(),
-                "pass": True,
-                "schema_version": "viewport-2d-compact-full-contract-v1",
-            },
+    if args.verify_compact_full_contract_log is not None:
+        if args.compact_full_contract_output is None:
+            parser.error(
+                "--compact-full-contract-output is required with "
+                "--verify-compact-full-contract-log"
+            )
+        contract = verify_compact_full_contract_log(
+            args.verify_compact_full_contract_log,
+            args.compact_full_contract_output,
         )
+        if not contract["pass"]:
+            raise SystemExit("compact/full contract log did not contain an exact passing test")
         return
     if args.aggregate_report_root is not None:
         aggregate = aggregate_qualification_reports(args.aggregate_report_root)
@@ -1821,6 +1874,14 @@ def main() -> None:
     write_json(no_go_path, build_fdm_gpu_no_go(head))
     synchronize_cross_backend_reports(args.output)
     report = json.loads(args.output.read_text())
+    if args.qualification_profile == "mesh-refined":
+        if (
+            report.get("qualification_profile") != "mesh-refined"
+            or not report.get("linear_material_monitors", {}).get("xy-slab")
+        ):
+            raise SystemExit(f"invalid mesh-refined peer report: {args.output}")
+        print(f"Planar mesh-refinement peer report captured: {args.output}")
+        return
     if not report["pass"]:
         raise SystemExit(
             f"planar science qualification {report['qualification_status']}: "
