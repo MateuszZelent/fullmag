@@ -382,7 +382,7 @@ function BrowserAuditConnector({ kernel }: { kernel: KernelApi }) {
         setGlobalQuantity: (quantityId: string) => Promise<void>;
         queueGlobalQuantity: (quantityId: string) => void;
         flushVisualization: () => Promise<void>;
-        setActiveViewportModule: (moduleId: "viewport-2d" | "viewport-3d") => void;
+        setActiveViewportModule: (moduleId: "field-map" | "viewport-3d") => void;
         patchVisualization: (patch: VisualizationStatePatch) => Promise<void>;
         patchFdmVisualization: (patch: VisualizationTargetPatch) => void;
         readFdmVisualizationSettings: () => ReturnType<
@@ -482,7 +482,7 @@ function BrowserAuditConnector({ kernel }: { kernel: KernelApi }) {
         });
       },
       flushVisualization: () => kernel.visualizationSync.flushNow(),
-      setActiveViewportModule: (moduleId: "viewport-2d" | "viewport-3d") => {
+      setActiveViewportModule: (moduleId: "field-map" | "viewport-3d") => {
         kernel.layout.setActiveViewportMainModule(moduleId);
         kernel.layout.setFocusedSlot("viewport-main");
       },

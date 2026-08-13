@@ -5,6 +5,7 @@ import { useState } from "react";
 import { MODEL_PLANAR_MONITORS_PATH } from "@/kernel/api/apiPaths";
 import { useKernel } from "@/kernel/KernelContext";
 import { usePlanarMonitorsResource } from "@/kernel/resources/planarMonitorResources";
+import { useVisualizationStateResource } from "@/kernel/visualization/useVisualizationStateResource";
 import {
   discardPlanarMonitorDraft,
   isPlanarMonitorRevisionConflict,
@@ -14,7 +15,6 @@ import {
   updatePlanarMonitorDraft,
 } from "@/kernel/workspace/crossSectionWorkspace";
 import { useCrossSectionWorkspaceSelector } from "@/kernel/workspace/useCrossSectionWorkspace";
-import { fieldMapStore } from "@/modules/field-map/public";
 import { Button } from "@/shared/ui/Button";
 
 import { MeshResourceEmpty } from "./MeshResourceView";
@@ -28,6 +28,7 @@ export function PlanarMonitorDraftInspectorPanel() {
   const kernel = useKernel();
   const definitionAvailability = usePlanarMonitorDefinitionAvailability();
   const monitors = usePlanarMonitorsResource();
+  const visualizationState = useVisualizationStateResource();
   const draft = useCrossSectionWorkspaceSelector(
     (state) => state.planarMonitorDraft,
   );
@@ -44,6 +45,10 @@ export function PlanarMonitorDraftInspectorPanel() {
   ];
 
   const commitDraft = async () => {
+    if (!visualizationState.data?.planar) {
+      setFeedback("Planar visualization state is unavailable.");
+      return;
+    }
     setPending(true);
     setFeedback(null);
     setConflict(false);
@@ -62,7 +67,9 @@ export function PlanarMonitorDraftInspectorPanel() {
       const created = await kernel.api.model.planarMonitors.create(request);
       const monitor = created.monitor;
       discardPlanarMonitorDraft();
-      fieldMapStore.set({ activeMonitorId: monitor.id });
+      kernel.visualizationSync.queuePatch({
+        planar: { active_monitor_id: monitor.id },
+      });
       kernel.resources.invalidate(
         MODEL_PLANAR_MONITORS_PATH,
         created.scene_revision,
@@ -121,7 +128,7 @@ export function PlanarMonitorDraftInspectorPanel() {
           Discard
         </Button>
         <Button
-          disabled={pending || !monitors.data || validationErrors.length > 0}
+          disabled={pending || !monitors.data || !visualizationState.data?.planar || validationErrors.length > 0}
           size="sm"
           type="button"
           variant="primary"

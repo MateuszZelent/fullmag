@@ -40,6 +40,8 @@ import {
   useCommandDetailResource,
   useRuntimeCommandControlResourceData,
 } from "@/kernel/resources/studyRuntimeResources";
+import { VISUALIZATION_STATE_PATH } from "@/kernel/api/apiPaths";
+import { useVisualizationStateResource } from "@/kernel/visualization/useVisualizationStateResource";
 import type { KernelApi, ModuleId } from "@/kernel/types";
 import { CommandDetailDialog } from "@/shared/runtime/CommandDetailDialog";
 import {
@@ -509,6 +511,14 @@ export function ExplorerTreeView({
     includeSharedDomainReadiness: false,
     includeStageExecution: false,
   });
+  const visualizationState = useVisualizationStateResource();
+  const commandResourceData = useMemo(
+    () => ({
+      ...runtimeResourceData,
+      [VISUALIZATION_STATE_PATH]: visualizationState.data,
+    }),
+    [runtimeResourceData, visualizationState.data],
+  );
   const rows = useMemo(
     () => flattenVisibleExplorerRows(nodes, expandedIds),
     [expandedIds, nodes],
@@ -617,7 +627,7 @@ export function ExplorerTreeView({
           kernel={kernel}
           moduleId={moduleId}
           node={node}
-          resourceData={runtimeResourceData}
+          resourceData={commandResourceData}
           rowIds={visibleRowIds}
           tabId={tabId}
         />

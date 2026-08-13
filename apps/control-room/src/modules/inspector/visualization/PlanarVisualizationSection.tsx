@@ -36,18 +36,20 @@ export function PlanarVisualizationSection({
   const monitors = usePlanarMonitorsResource({ enabled: coverage.supported });
   const fieldCatalog = useFieldCatalogResource({ enabled: coverage.supported });
   const monitorId = planar?.active_monitor_id ?? "";
-  const quantityId = planar?.quantity_id ?? "m";
+  const quantityId = planar?.quantity_id ?? "";
   const meta = usePlanarFieldMetaResource(
     quantityId,
     monitorId,
-    {
-      component: planar?.component ?? "magnitude",
-      resolution_x: planar?.resolution.width ?? 512,
-      resolution_y: planar?.resolution.height ?? 512,
-      scope_id: viewScope.kind === "mesh_part" ? viewScope.scope_id : undefined,
-      scope_kind: viewScope.kind,
-    },
-    { enabled: coverage.supported && monitorId.length > 0 },
+    planar
+      ? {
+          component: planar.component,
+          resolution_x: planar.resolution.width,
+          resolution_y: planar.resolution.height,
+          scope_id: planar.view_scope.kind === "mesh_part" ? planar.view_scope.scope_id : undefined,
+          scope_kind: planar.view_scope.kind,
+        }
+      : {},
+    { enabled: coverage.supported && planar !== undefined && monitorId.length > 0 },
   );
   const patch = (
     next: NonNullable<
@@ -80,6 +82,17 @@ export function PlanarVisualizationSection({
       <InspectorGroup title="2D visualization">
         <FieldRow label="Availability" value="Not a spatial target" />
         <FieldRow label="Reason" value="quantity_or_target_not_spatial" />
+      </InspectorGroup>
+    );
+  }
+
+  if (!planar) {
+    return (
+      <InspectorGroup title="2D visualization">
+        <FieldRow
+          label="Availability"
+          value={visualization.status === "error" ? "Unavailable" : "Loading planar visualization state"}
+        />
       </InspectorGroup>
     );
   }
@@ -126,7 +139,7 @@ export function PlanarVisualizationSection({
       <FormField
         label="Component"
         type="select"
-        value={planar?.component ?? "magnitude"}
+        value={planar.component}
         onChange={(event) =>
           patch({
             component: event.currentTarget.value as NonNullable<
@@ -144,7 +157,7 @@ export function PlanarVisualizationSection({
       <FormField
         label="Color map"
         type="select"
-        value={planar?.colormap ?? "viridis"}
+        value={planar.colormap}
         onChange={(event) => patch({ colormap: event.currentTarget.value })}
       >
         {SCALAR_COLOR_PALETTE_ITEMS.map((palette) => (
@@ -157,7 +170,7 @@ export function PlanarVisualizationSection({
         <FormField
           label="Display unit"
           type="select"
-          value={planar?.display_unit ?? displayUnitItems[0]?.value ?? ""}
+          value={planar.display_unit ?? displayUnitItems[0]?.value ?? ""}
           onChange={(event) =>
             patch({ display_unit: event.currentTarget.value || null })
           }
@@ -174,7 +187,7 @@ export function PlanarVisualizationSection({
       <InspectorPropertyRow label="Automatic range">
         <Switch
           aria-label="Automatic planar color range"
-          checked={planar?.auto_contrast ?? true}
+          checked={planar.auto_contrast}
           onCheckedChange={(checked) =>
             patch({
               auto_contrast: checked,
@@ -185,7 +198,7 @@ export function PlanarVisualizationSection({
           }
         />
       </InspectorPropertyRow>
-      {planar && !planar.auto_contrast ? (
+      {!planar.auto_contrast ? (
         <>
           <FormField
             label="Range minimum"
@@ -237,9 +250,7 @@ export function PlanarVisualizationSection({
       <FieldRow
         label="Resolution"
         value={
-          planar
-            ? `${planar.resolution.width} × ${planar.resolution.height}`
-            : "512 × 512"
+          `${planar.resolution.width} × ${planar.resolution.height}`
         }
       />
       <div className="fm-inspector-toolbar">
@@ -261,12 +272,12 @@ export function PlanarVisualizationSection({
           onClick={() =>
             patch({
               layers: {
-                boundaries: planar?.layers.boundaries ?? true,
-                contours: !(planar?.layers.contours ?? false),
-                mesh: planar?.layers.mesh ?? true,
-                probes: planar?.layers.probes ?? true,
-                raster: planar?.layers.raster ?? true,
-                vectors: planar?.layers.vectors ?? false,
+                boundaries: planar.layers.boundaries,
+                contours: !planar.layers.contours,
+                mesh: planar.layers.mesh,
+                probes: planar.layers.probes,
+                raster: planar.layers.raster,
+                vectors: planar.layers.vectors,
               },
             })
           }

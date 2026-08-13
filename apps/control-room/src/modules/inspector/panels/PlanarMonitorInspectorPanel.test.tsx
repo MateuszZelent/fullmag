@@ -59,6 +59,12 @@ vi.mock("@/kernel/resources/planarMonitorResources", () => ({
   }),
 }));
 
+vi.mock("@/kernel/visualization/useVisualizationStateResource", () => ({
+  useVisualizationStateResource: () => ({
+    data: { planar: { active_monitor_id: "plane-1" } },
+  }),
+}));
+
 vi.mock("./usePlanarMonitorDefinitionAvailability", () => ({
   usePlanarMonitorDefinitionAvailability: () => ({}),
 }));
@@ -79,6 +85,7 @@ describe("PlanarMonitorInspectorPanel", () => {
       monitor: { ...monitorFixture, name: "Edited" },
       scene_revision: 8,
     });
+    mocks.execute.mockResolvedValue({ status: "completed" });
     mocks.duplicate.mockResolvedValue({
       monitor: { id: "plane-1_copy", name: "Mid-plane copy" },
       scene_revision: 8,
@@ -138,7 +145,7 @@ describe("PlanarMonitorInspectorPanel", () => {
     }
   });
 
-  it("keeps the edited draft on 409 and sends repeated-safe duplicate identity explicitly", async () => {
+  it("keeps the edited draft on 409 and delegates duplicate selection to the command owner", async () => {
     mocks.collection.monitors = [
       monitorFixture,
       { ...monitorFixture, id: "plane-1_copy", name: "Mid-plane copy" },
@@ -156,11 +163,12 @@ describe("PlanarMonitorInspectorPanel", () => {
       expect(container.textContent).toContain("scene changed");
 
       await act(async () => findButton(container, "Duplicate").click());
-      expect(mocks.duplicate).toHaveBeenCalledWith("plane-1", {
-        expected_scene_revision: 7,
-        new_id: "plane-1_copy_3",
-        new_name: "Mid-plane copy 3",
-      });
+      expect(mocks.execute).toHaveBeenCalledWith(
+        "planar-monitor.duplicate",
+        expect.anything(),
+        { monitorId: "plane-1" },
+      );
+      expect(mocks.duplicate).not.toHaveBeenCalled();
     } finally {
       await act(async () => root.unmount());
       dom.restore();

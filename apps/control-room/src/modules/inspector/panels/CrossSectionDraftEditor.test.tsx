@@ -34,6 +34,12 @@ vi.mock("@/kernel/KernelContext", () => ({
   }),
 }));
 
+vi.mock("@/kernel/visualization/useVisualizationStateResource", () => ({
+  useVisualizationStateResource: () => ({
+    data: { planar: { active_monitor_id: null } },
+  }),
+}));
+
 const draft: CrossSectionDraft = {
   colorScale: "viridis",
   edgeWidth: 1.5,
@@ -70,11 +76,12 @@ describe("CrossSectionDraftEditor", () => {
     expect(html).toContain("Apply monitor");
   });
 
-  it("keeps draft frame edits local instead of patching canonical visualization clip state", () => {
+  it("keeps draft frame edits local and selects a committed monitor through planar state", () => {
     const source = readFileSync(crossSectionDraftEditorSourceUrl, "utf8");
 
     expect(source).toContain("updateCrossSectionDraft(patch);");
-    expect(source).not.toContain("visualizationSync.queuePatch");
+    expect(source).toContain("planar: { active_monitor_id: monitor.id }");
+    expect(source).not.toContain("fieldMapStore");
     expect(source).not.toContain("crossSectionVisualizationPatchFromDraft");
   });
 });

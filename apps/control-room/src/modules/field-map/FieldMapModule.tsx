@@ -21,7 +21,6 @@ import { useSessionStatusSelector } from "@/kernel/resources/useSessionStatus";
 import { useSelectionSelector } from "@/kernel/selection/useSelection";
 import { useVisualizationStateResource } from "@/kernel/visualization/useVisualizationStateResource";
 
-import { fieldMapStore, useFieldMapState } from "./fieldMapStore";
 import {
   buildFieldMapDataPlan,
   buildFieldMapProbeQuery,
@@ -39,15 +38,14 @@ import {
 import { PlanarSurface } from "./renderer/PlanarSurface";
 
 export default function FieldMapModule() {
-  const { layout } = useKernel();
-  const state = useFieldMapState();
+  const { layout, visualizationSync } = useKernel();
   const [pinned, setPinned] = useState<readonly [number, number] | null>(null);
   const [renderEvidence, setRenderEvidence] =
     useState<PlanarRenderEvidence | null>(null);
   const active = layout.get().activeViewportMainModuleId === "field-map";
   const visualization = useVisualizationStateResource({ enabled: active });
   const planar = visualization.data?.planar;
-  const activeMonitorId = planar?.active_monitor_id ?? state.activeMonitorId;
+  const activeMonitorId = planar?.active_monitor_id ?? null;
   const monitors = usePlanarMonitorsResource({ enabled: active });
   const monitor = usePlanarMonitorResource(activeMonitorId ?? "", {
     enabled: active && activeMonitorId !== null,
@@ -73,29 +71,31 @@ export default function FieldMapModule() {
   });
 
   useEffect(() => {
-    if (activeMonitorId || !monitors.data?.monitors.length) return;
+    if (!planar || activeMonitorId || !monitors.data?.monitors.length) return;
     const first = monitors.data.monitors[0] as { id?: unknown };
     if (typeof first?.id === "string") {
-      fieldMapStore.set({ activeMonitorId: first.id });
+      visualizationSync.queuePatch({
+        planar: { active_monitor_id: first.id },
+      });
     }
-  }, [activeMonitorId, monitors.data]);
+  }, [activeMonitorId, monitors.data, planar, visualizationSync]);
 
   const plan = buildFieldMapDataPlan({
-    active,
-    component: planar?.component ?? state.component,
+    active: active && planar !== undefined,
+    component: planar?.component ?? "",
     discretization:
       domain.data?.discretization ?? runtime ?? null,
-    includeMesh: planar?.layers.mesh ?? true,
+    includeMesh: planar?.layers.mesh ?? false,
     monitorId: activeMonitorId,
-    quantityId: planar?.quantity_id ?? state.quantityId,
+    quantityId: planar?.quantity_id ?? "",
     resolution: [
-      planar?.resolution.width ?? 512,
-      planar?.resolution.height ?? 512,
+      planar?.resolution.width ?? 0,
+      planar?.resolution.height ?? 0,
     ],
     showVectors: planar?.layers.vectors ?? false,
     snapshotId: selectedFieldSnapshot.snapshotId,
     stageId: selectedFieldSnapshot.stageId,
-    viewScope: planar?.view_scope ?? { kind: "monitor_target" },
+    viewScope: planar?.view_scope,
   });
   const meta = usePlanarFieldMetaResource(
     plan.quantityId,
@@ -161,8 +161,8 @@ export default function FieldMapModule() {
         : null,
     [meta.data],
   );
-  const component = planar?.component ?? state.component;
-  const quantityId = planar?.quantity_id ?? state.quantityId;
+  const component = planar?.component ?? "";
+  const quantityId = planar?.quantity_id ?? "";
   const onRenderEvidence = useCallback(
     (next: PlanarRenderEvidence) => setRenderEvidence(next),
     [],
@@ -195,6 +195,18 @@ export default function FieldMapModule() {
     status: evidenceStatus,
   });
 
+  if (visualization.status === "error") {
+    return (
+      <FieldMapStatus
+        kind="error"
+        message={visualization.error?.message ?? "Planar visualization state is unavailable."}
+        planarStatus="error"
+      />
+    );
+  }
+  if (!planar) {
+    return <FieldMapStatus message="Loading planar visualization state…" planarStatus="loading" />;
+  }
   if (!activeMonitorId) {
     return <FieldMapStatus message="Select a planar monitor to open the 2D view." />;
   }
@@ -257,7 +269,7 @@ export default function FieldMapModule() {
       />
       <header className="fm-field-map__toolbar">
         <strong>{plan.quantityId}</strong>
-        <span>{planar?.component ?? state.component}</span>
+        <span>{planar.component}</span>
         <span>{meta.data.canonical_unit}</span>
         {surfaceProjectionStatus(meta.data) === "ambiguous" ? (
           <span className="fm-field-map__diagnostic" role="status">

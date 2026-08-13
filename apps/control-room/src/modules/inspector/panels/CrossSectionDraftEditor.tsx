@@ -5,6 +5,7 @@ import { useState } from "react";
 import { useKernel } from "@/kernel/KernelContext";
 import { MODEL_PLANAR_MONITORS_PATH } from "@/kernel/api/apiPaths";
 import { usePlanarMonitorsResource } from "@/kernel/resources/planarMonitorResources";
+import { useVisualizationStateResource } from "@/kernel/visualization/useVisualizationStateResource";
 import {
   discardCrossSectionDraft,
   isPlanarMonitorRevisionConflict,
@@ -13,7 +14,6 @@ import {
   type CrossSectionDraft,
 } from "@/kernel/workspace/crossSectionWorkspace";
 import { Button } from "@/shared/ui/Button";
-import { fieldMapStore } from "@/modules/field-map/public";
 
 import { MeshResourceEmpty } from "./MeshResourceView";
 import { CrossSectionSettingsEditor } from "./CrossSectionSettingsEditor";
@@ -29,6 +29,7 @@ export function CrossSectionDraftEditor({
 }) {
   const kernel = useKernel();
   const monitors = usePlanarMonitorsResource();
+  const visualizationState = useVisualizationStateResource();
   const [feedback, setFeedback] = useState<string | null>(null);
   const [conflict, setConflict] = useState(false);
   const [pending, setPending] = useState(false);
@@ -38,6 +39,10 @@ export function CrossSectionDraftEditor({
   }
 
   const commitDraft = async () => {
+    if (!visualizationState.data?.planar) {
+      setFeedback("Planar visualization state is unavailable.");
+      return;
+    }
     setPending(true);
     setFeedback(null);
     setConflict(false);
@@ -54,7 +59,9 @@ export function CrossSectionDraftEditor({
       const created = await kernel.api.model.planarMonitors.create(request);
       const monitor = created.monitor;
       discardCrossSectionDraft();
-      fieldMapStore.set({ activeMonitorId: monitor.id });
+      kernel.visualizationSync.queuePatch({
+        planar: { active_monitor_id: monitor.id },
+      });
       kernel.resources.invalidate(
         MODEL_PLANAR_MONITORS_PATH,
         created.scene_revision,
@@ -111,7 +118,7 @@ export function CrossSectionDraftEditor({
               Discard
             </Button>
             <Button
-              disabled={pending || !monitors.data}
+              disabled={pending || !monitors.data || !visualizationState.data?.planar}
               size="sm"
               type="button"
               variant="primary"

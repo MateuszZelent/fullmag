@@ -3,17 +3,13 @@
 import { useSyncExternalStore } from "react";
 
 export interface FieldMapState {
-  activeMonitorId: string | null;
-  component: string;
-  quantityId: string;
+  hoverUv: readonly [number, number] | null;
 }
 
 type Listener = () => void;
 
 const INITIAL_STATE: FieldMapState = {
-  activeMonitorId: null,
-  component: "magnitude",
-  quantityId: "m",
+  hoverUv: null,
 };
 
 let state = INITIAL_STATE;
@@ -25,9 +21,8 @@ export const fieldMapStore = {
   set: (patch: Partial<FieldMapState>) => {
     const next = { ...state, ...patch };
     if (
-      next.activeMonitorId === state.activeMonitorId &&
-      next.component === state.component &&
-      next.quantityId === state.quantityId
+      next.hoverUv?.[0] === state.hoverUv?.[0] &&
+      next.hoverUv?.[1] === state.hoverUv?.[1]
     ) {
       return;
     }

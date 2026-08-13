@@ -1,8 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { fieldMapCommands } from "./fieldMapCommands";
-import { fieldMapStore } from "./fieldMapStore";
 import { MODEL_PLANAR_MONITORS_PATH } from "@/kernel/api/apiPaths";
+import { VISUALIZATION_STATE_PATH } from "@/kernel/api/apiPaths";
 import { planarMonitorFramePreviewStore } from "@/kernel/workspace/planarMonitorFramePreview";
 import {
   crossSectionWorkspaceStore,
@@ -11,7 +11,6 @@ import {
 
 describe("field-map commands", () => {
   afterEach(() => {
-    fieldMapStore.reset();
     planarMonitorFramePreviewStore.clear();
     discardPlanarMonitorDraft();
   });
@@ -22,9 +21,10 @@ describe("field-map commands", () => {
     ).toMatchObject({ shortcut: "2" });
   });
 
-  it("opens the shared center surface and selects a monitor through one command", async () => {
+  it("opens the shared center surface and selects a monitor through one typed planar patch", async () => {
     const setActiveViewportMainModule = vi.fn();
     const setFocusedSlot = vi.fn();
+    const queuePatch = vi.fn();
     const command = fieldMapCommands.find(
       (entry) => entry.id === "field-map.select-monitor",
     );
@@ -36,9 +36,16 @@ describe("field-map commands", () => {
         setFocusedSlot,
       } as never,
       source: "test",
+      resourceData: {
+        [VISUALIZATION_STATE_PATH]: { planar: { active_monitor_id: null } },
+      },
+      visualizationSync: { queuePatch } as never,
     });
 
-    expect(fieldMapStore.get().activeMonitorId).toBe("plane-1");
+    expect(queuePatch).toHaveBeenCalledTimes(1);
+    expect(queuePatch).toHaveBeenCalledWith({
+      planar: { active_monitor_id: "plane-1" },
+    });
     expect(setActiveViewportMainModule).toHaveBeenCalledWith("field-map");
     expect(setFocusedSlot).toHaveBeenCalledWith("viewport-main");
   });
@@ -93,6 +100,7 @@ describe("field-map commands", () => {
         v_axis: [0, 1, 0],
       },
     });
+    const queuePatch = vi.fn();
     const command = fieldMapCommands.find(
       (entry) => entry.id === "planar-monitor.show-frame-3d",
     );
@@ -117,6 +125,7 @@ describe("field-map commands", () => {
         setFocusedSlot,
       } as never,
       source: "test",
+      visualizationSync: { queuePatch } as never,
     });
 
     expect(result).toEqual({ status: "completed" });
@@ -129,6 +138,9 @@ describe("field-map commands", () => {
       boundsUvM: [-2, 2, -1, 1],
       monitorId: "plane-1",
       originM: [0, 0, 3],
+    });
+    expect(queuePatch).toHaveBeenCalledWith({
+      planar: { active_monitor_id: "plane-1" },
     });
     expect(setActiveViewportMainModule).toHaveBeenCalledWith("viewport-3d");
   });

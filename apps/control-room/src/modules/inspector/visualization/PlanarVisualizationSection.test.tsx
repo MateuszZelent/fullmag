@@ -80,6 +80,7 @@ vi.mock("@/kernel/visualization/useVisualizationStateResource", () => ({
         },
         quantity_id: "h_eff",
         resolution: { height: 256, vector_budget: 512, width: 512 },
+        view_scope: { kind: "target" },
       },
     },
   }),

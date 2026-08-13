@@ -144,4 +144,11 @@ describe("KernelProvider performance contracts", () => {
       "<Viewport3DResourceLifecycleConnector kernel={kernel} />",
     );
   });
+
+  it("exposes field-map, not the removed viewport-2d alias, to controlled audits", () => {
+    expect(kernelProviderSource).toContain(
+      'setActiveViewportModule: (moduleId: "field-map" | "viewport-3d")',
+    );
+    expect(kernelProviderSource).not.toContain('"viewport-2d" | "viewport-3d"');
+  });
 });

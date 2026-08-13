@@ -25,6 +25,7 @@ const mocks = vi.hoisted(() => ({
   setFocusedSlot: vi.fn(),
   setPanelVisible: vi.fn(),
   setSelection: vi.fn(),
+  queuePatch: vi.fn(),
   refetch: vi.fn(),
   collection: { monitors: [] as unknown[], scene_revision: 7 },
 }));
@@ -39,6 +40,7 @@ vi.mock("@/kernel/KernelContext", () => ({
     },
     resources: { invalidate: mocks.invalidate },
     selection: { set: mocks.setSelection },
+    visualizationSync: { queuePatch: mocks.queuePatch },
   }),
 }));
 
@@ -46,6 +48,12 @@ vi.mock("@/kernel/resources/planarMonitorResources", () => ({
   usePlanarMonitorsResource: () => ({
     data: mocks.collection,
     refetch: mocks.refetch,
+  }),
+}));
+
+vi.mock("@/kernel/visualization/useVisualizationStateResource", () => ({
+  useVisualizationStateResource: () => ({
+    data: { planar: { active_monitor_id: null } },
   }),
 }));
 
@@ -116,6 +124,9 @@ describe("PlanarMonitorDraftInspectorPanel", () => {
       });
       expect(crossSectionWorkspaceStore.getSnapshot().planarMonitorDraft).toBeNull();
       expect(mocks.invalidate).toHaveBeenCalledWith(expect.any(String), 8);
+      expect(mocks.queuePatch).toHaveBeenCalledWith({
+        planar: { active_monitor_id: "planar_monitor_1" },
+      });
     } finally {
       await act(async () => root.unmount());
       dom.restore();
