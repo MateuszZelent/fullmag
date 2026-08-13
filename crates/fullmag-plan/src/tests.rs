@@ -7711,6 +7711,68 @@ fn multilayer_planner_materializes_region_membership_and_linear_ms_per_layer() {
 }
 
 #[test]
+fn forced_cuda_multilayer_rejects_cellwise_material_fields_with_layer_identity() {
+    for (parameter, field_name, base, gradient, unit) in [
+        (
+            fullmag_ir::MaterialParameterNameIR::Ms,
+            "ms_field",
+            800e3,
+            1e12,
+            "A/m",
+        ),
+        (
+            fullmag_ir::MaterialParameterNameIR::Aex,
+            "a_field",
+            13e-12,
+            1e-4,
+            "J/m",
+        ),
+        (
+            fullmag_ir::MaterialParameterNameIR::Alpha,
+            "alpha_field",
+            0.1,
+            1e-5,
+            "1",
+        ),
+    ] {
+        let mut ir = stacked_two_body_multilayer_problem();
+        ir.problem_meta.runtime_metadata.insert(
+            "runtime_selection".to_string(),
+            serde_json::json!({"device": "cuda"}),
+        );
+        ir.material_parameter_fields
+            .push(fullmag_ir::MaterialParameterAssignmentIR {
+                assignment_id: format!("free_linear_{field_name}"),
+                owner_object: "free".to_string(),
+                region_id: None,
+                parameter,
+                value: fullmag_ir::MaterialParameterFieldIR::Linear {
+                    base,
+                    gradient: [gradient, 0.0, 0.0],
+                    frame: fullmag_ir::RegionFrameIR::Object,
+                    unit: Some(unit.to_string()),
+                },
+                priority: 10,
+                conflict_policy: fullmag_ir::RegionConflictPolicyIR::Error,
+            });
+
+        let error = plan(&ir).expect_err("forced CUDA must reject cellwise material fields");
+        let diagnostic = error.reasons.join("\n");
+        for expected in [
+            "fdm_cuda_multilayer_material_field_unqualified",
+            field_name,
+            "layer:free",
+            "free",
+        ] {
+            assert!(
+                diagnostic.contains(expected),
+                "missing {expected:?} in planner diagnostic: {diagnostic}"
+            );
+        }
+    }
+}
+
+#[test]
 fn multilayer_planner_materializes_translated_object_frame_region_membership() {
     let mut ir = stacked_two_body_multilayer_problem();
     let GeometryEntryIR::Translate { by, .. } = &mut ir.geometry.entries[0] else {

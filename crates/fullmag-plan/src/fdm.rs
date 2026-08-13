@@ -2179,6 +2179,34 @@ pub const FDM_CUDA_MULTILAYER_HETEROGENEOUS_NATIVE_HZ_UNQUALIFIED: &str =
     "fdm_cuda_multilayer_heterogeneous_native_hz_unqualified";
 pub const FDM_CUDA_MULTILAYER_XY_OFFSET_UNQUALIFIED: &str =
     "fdm_cuda_multilayer_xy_offset_unqualified";
+pub const FDM_CUDA_MULTILAYER_MATERIAL_FIELD_UNQUALIFIED: &str =
+    "fdm_cuda_multilayer_material_field_unqualified";
+
+/// Return fail-closed diagnostics for cellwise material payloads that the
+/// current CUDA multilayer realizations would otherwise reduce to scalars.
+pub fn fdm_multilayer_cuda_material_field_errors(layers: &[FdmLayerPlanIR]) -> Vec<String> {
+    layers
+        .iter()
+        .filter_map(|layer| {
+            let fields = [
+                ("ms_field", layer.material.ms_field.is_some()),
+                ("a_field", layer.material.a_field.is_some()),
+                ("alpha_field", layer.material.alpha_field.is_some()),
+            ]
+            .into_iter()
+            .filter_map(|(field, present)| present.then_some(field))
+            .collect::<Vec<_>>();
+            (!fields.is_empty()).then(|| {
+                format!(
+                    "{FDM_CUDA_MULTILAYER_MATERIAL_FIELD_UNQUALIFIED}: forced CUDA multilayer execution cannot consume cellwise material field(s) [{}] for layer '{}' object '{}'; use device='cpu'",
+                    fields.join(", "),
+                    layer.layer_id,
+                    layer.object_id
+                )
+            })
+        })
+        .collect()
+}
 
 /// Return stable reason codes for multilayer operator classes which the
 /// current CUDA runner cannot execute with the canonical CPU semantics.

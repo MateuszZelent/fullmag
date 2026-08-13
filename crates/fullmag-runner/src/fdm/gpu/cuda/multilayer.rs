@@ -329,6 +329,12 @@ fn resolve_cuda_multilayer_execution_shape(
 /// device probing, allocation, or FFI.
 fn validate_cuda_multilayer_execution_contract(plan: &FdmMultilayerPlanIR) -> Result<(), RunError> {
     reject_cuda_multilayer_containment(plan.enable_demag, &plan.mode, &plan.layers)?;
+    if let Some(message) = fullmag_plan::fdm_multilayer_cuda_material_field_errors(&plan.layers)
+        .into_iter()
+        .next()
+    {
+        return Err(RunError { message });
+    }
     if plan.enable_demag
         && (plan.mode != "three_d" || plan.planner_summary.resolved_mode != "three_d")
     {
@@ -3523,6 +3529,22 @@ mod tests {
         plan
     }
 
+    fn certify_plan(plan: &mut FdmMultilayerPlanIR) {
+        let topology_tokens = fullmag_ir::fdm_multilayer_topology_tokens(&plan.mode, &plan.layers);
+        plan.grid_certificate = Some(
+            FdmGridCertificateIR::new_with_topology_tokens(
+                [0.0, 0.0, 0.0],
+                plan.common_cells,
+                [2e-9, 2e-9, 1e-9],
+                16,
+                1024,
+                None,
+                &topology_tokens,
+            )
+            .expect("test grid certificate"),
+        );
+    }
+
     #[test]
     fn cuda_assisted_entry_rejects_adaptive_before_cuda_probe() {
         let mut plan = make_assisted_plan(false, ExecutionPrecision::Double);
@@ -3578,6 +3600,48 @@ mod tests {
             assert!(
                 !error.message.contains("CUDA backend is not available"),
                 "containment must run before CUDA availability probing"
+            );
+        }
+    }
+
+    #[test]
+    fn forced_cuda_multilayer_rejects_cellwise_material_fields_before_cuda_probe() {
+        for field_name in ["ms_field", "a_field", "alpha_field"] {
+            let mut plan = make_plan(false, ExecutionPrecision::Double);
+            let cell_count = plan.layers[0].initial_magnetization.len();
+            let values = vec![1.0, 2.0]
+                .into_iter()
+                .cycle()
+                .take(cell_count)
+                .collect::<Vec<_>>();
+            let material = &mut plan.layers[0].material;
+            match field_name {
+                "ms_field" => material.ms_field = Some(values),
+                "a_field" => material.a_field = Some(values),
+                "alpha_field" => material.alpha_field = Some(values),
+                _ => unreachable!(),
+            }
+            certify_plan(&mut plan);
+
+            let error = validate_cuda_multilayer_execution_contract(&plan)
+                .expect_err("forced CUDA must reject cellwise material fields before probing CUDA");
+            assert!(
+                error
+                    .message
+                    .contains("fdm_cuda_multilayer_material_field_unqualified"),
+                "missing stable reason code for {field_name}: {}",
+                error.message
+            );
+            for expected in [field_name, "layer:free", "free"] {
+                assert!(
+                    error.message.contains(expected),
+                    "missing {expected:?} in CUDA rejection: {}",
+                    error.message
+                );
+            }
+            assert!(
+                !error.message.contains("CUDA backend is not available"),
+                "material-field containment must run before CUDA probing"
             );
         }
     }

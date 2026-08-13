@@ -167,10 +167,58 @@ pub(crate) fn validate_region_owned_planning(
                 })
         });
         if has_cuda_region_fields {
-            errors.push(
-                "fdm_cuda_region_material_fields_unsupported: CUDA native does not yet support cellwise material fields (Ms/Aex/alpha); use FDM CPU reference or disable region material overrides"
-                    .to_string(),
-            );
+            if problem.magnets.len() > 1 {
+                for assignment in problem
+                    .material_parameter_fields
+                    .iter()
+                    .filter(|assignment| {
+                        assignment.region_id.as_deref().is_none_or(|region_id| {
+                            problem
+                                .object_regions
+                                .iter()
+                                .any(|region| region.enabled && region.region_id == region_id)
+                        })
+                    })
+                {
+                    let field = match assignment.parameter {
+                        fullmag_ir::MaterialParameterNameIR::Ms => Some("ms_field"),
+                        fullmag_ir::MaterialParameterNameIR::Aex => Some("a_field"),
+                        fullmag_ir::MaterialParameterNameIR::Alpha => Some("alpha_field"),
+                        _ => None,
+                    };
+                    if let Some(field) = field {
+                        errors.push(format!(
+                            "fdm_cuda_region_material_fields_unsupported: fdm_cuda_multilayer_material_field_unqualified: forced CUDA multilayer execution cannot consume {field} for layer 'layer:{}' object '{}'; use device='cpu'",
+                            assignment.owner_object, assignment.owner_object
+                        ));
+                    }
+                }
+                for region in problem
+                    .object_regions
+                    .iter()
+                    .filter(|region| region.enabled)
+                {
+                    for override_ in &region.material_overrides {
+                        let field = match override_.parameter {
+                            fullmag_ir::MaterialParameterNameIR::Ms => Some("ms_field"),
+                            fullmag_ir::MaterialParameterNameIR::Aex => Some("a_field"),
+                            fullmag_ir::MaterialParameterNameIR::Alpha => Some("alpha_field"),
+                            _ => None,
+                        };
+                        if let Some(field) = field {
+                            errors.push(format!(
+                                "fdm_cuda_region_material_fields_unsupported: fdm_cuda_multilayer_material_field_unqualified: forced CUDA multilayer execution cannot consume {field} for layer 'layer:{}' object '{}'; use device='cpu'",
+                                region.owner_object, region.owner_object
+                            ));
+                        }
+                    }
+                }
+            } else {
+                errors.push(
+                    "fdm_cuda_region_material_fields_unsupported: CUDA native does not yet support cellwise material fields (Ms/Aex/alpha); use FDM CPU reference or disable region material overrides"
+                        .to_string(),
+                );
+            }
         }
     }
     if resolved_backend != BackendTarget::Fdm
