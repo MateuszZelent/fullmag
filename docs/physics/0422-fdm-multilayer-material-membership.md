@@ -1,8 +1,10 @@
 # FDM multilayer: pola materiałowe i przynależność obiektów
 
-- Status: planner/IR oraz referencyjny runner FDM CPU są zaimplementowane w kodzie;
-  brak managed runtime i walidacji naukowej, a artefakty/API/monitor pozostają odroczone.
-- Właściciel: Fullmag FDM planner/IR i referencyjny runner CPU.
+- Status: planner/IR, referencyjny runner FDM CPU, artefakty per-layer oraz
+  natywny carrier API/planar są zaimplementowane i zreviewowane na poziomie
+  źródeł/testów; brak managed runtime, walidacji naukowej i browser/WebGL proof.
+- Właściciel: Fullmag FDM planner/IR, referencyjny runner CPU, artefakty i
+  resource-first API.
 - Zakres: warstwy FDM z rozdzielnymi siatkami natywnymi, polami `Ms/Aex/alpha`
   oraz maskami obiektów/regionów wymaganymi przez docelowy monitor planarny.
 - Powiązane noty: `docs/physics/0104-material-regions-parameter-fields-and-interface-couplings.md`,
@@ -18,7 +20,8 @@ Wspólna konwolucyjna siatka FFT jest wyłącznie siatką obliczeniową; nie mo�
 zastępować natywnej geometrii, maski aktywnej ani tożsamości obiektu. Docelowy
 monitor planarny musi wybierać obiekt lub region przez jawny identyfikator
 warstwy i maskę, a nie przez pozycję w konkatenowanym wektorze pól. Bieżący
-carrier artefaktów/API nie publikuje jeszcze tej przynależności.
+carrier publikuje przynależność per natywna warstwa, zachowując jej tożsamość,
+geometrię, legendę oraz fingerprint topologii.
 
 (governing-equations)=
 ## 2. Równania
@@ -65,8 +68,10 @@ q_{T,b}=\frac{\sum_{(k,i)\in T\cap b}w_{k,i}q_{k,i}}
 ```
 
 gdzie kontrakt wymaga, aby $T$ był rozstrzygany przez `object_id`/`region_id`,
-a nie przez kolejność warstw w artefakcie. Materializacja takiego targetu w
-monitorze pozostaje pracą Task 10C.
+a nie przez kolejność warstw w artefakcie. Natywny carrier warstwy i resolver
+targetu realizują ten kontrakt w źródłach API dla `scope_kind=layer`; brak
+kwalifikacji managed/browser oznacza, że nie jest to jeszcze twierdzenie o
+produkcyjnej wizualizacji.
 
 (symbols-and-si-units)=
 ## 3. Symbole i jednostki SI
@@ -143,7 +148,7 @@ artefaktu.
 | Python | Typ | Domyślna wartość | Jednostka | Walidacja | Znaczenie | Obsługa | ProblemIR |
 |---|---|---|---|---|---|---|---|
 | `Ferromagnet.set_material_field("Ms", field)` | `MaterialParameterField` | `none` | $\mathrm{A\,m^{-1}}$ | finite positive resolved Ms | przestrzenna wartość $M_s$ | FDM CPU reference: implemented, unqualified; GPU heterogeneous: unsupported | `material_parameter_fields[]` |
-| `Ferromagnet.add_region(..., region_id=...)` | `ObjectRegion` | `none` | $1$ | supported shape and `frame="object"` | selector obiektu/regionu | planner/IR: implemented; runtime/API membership: deferred; GPU heterogeneous: unsupported | `object_regions[]` |
+| `Ferromagnet.add_region(..., region_id=...)` | `ObjectRegion` | `none` | $1$ | supported shape and `frame="object"` | selector obiektu/regionu | planner/IR oraz artifacts/API/planar carrier: implemented, source-tested, runtime/browser unqualified; GPU heterogeneous: unsupported | `object_regions[]` |
 
 (problem-ir)=
 ## 6. ProblemIR i plan wykonawczy
@@ -196,28 +201,42 @@ Planner kolejno: (1) buduje natywną geometrię i maskę aktywną,
 referencyjnego runnera CPU: `Aex` zasila wymianę, `alpha` lokalny RHS i torque,
 a `Ms` źródło demag, energię oraz wagę momentu. Jest to dowód kodu wykonywalnego
 i testów jednostkowych, nie dowód świeżego managed runtime ani kwalifikacji
-naukowej. `native_region_mask` i legenda nie są jeszcze carrierem artefaktów,
-resource-first API ani filtra monitora; ta część pozostaje w Task 10C.
+naukowej.
+
+Task 10C zapisuje pola materiałowe, maskę i pełną legendę jako artefakty
+`per_layer_native_grid`. Resource-first API rozwiązuje statyczny carrier
+plan-first z `execution_plan` podczas aktywnej sesji, a dla wyniku persisted
+czyta artefakty i porównuje obie reprezentacje, jeśli występują równocześnie.
+Rozbieżność tożsamości warstwy, siatki, legendy, hasha, generation ID lub
+revision kończy się `409`; pusty target kończy się `422`. Binary membership
+`FMRM v2` pozostaje związany z deskryptorem JSON, ETag i fingerprintem
+topologii. Planar sampler wymaga dokładnego `scope_kind=layer`, po czym wybiera
+`object_id`/`region_id` z membership tej warstwy. Nie ma flatteningu do wspólnej
+siatki ani zastąpienia pola skalarem.
 
 (implementation-mapping)=
 ## 9. Mapa implementacji
 
 | Kontrakt | Źródło i symbol | Stan |
 |---|---|---|
-| Warstwa i tożsamość | `crates/fullmag-ir/src/mesh_hints.rs::struct FdmLayerPlanIR` | istnieje, rozszerzany o membership |
+| Warstwa i tożsamość | `crates/fullmag-ir/src/mesh_hints.rs::struct FdmLayerPlanIR` | natywna siatka, obiekt, maska, legenda i materiał zaimplementowane |
 | Topologia warstw | `crates/fullmag-ir/src/mesh_hints.rs::fdm_multilayer_topology_tokens` | fingerprint layoutu warstw |
 | Rozwiązywanie pól | `crates/fullmag-plan/src/material.rs::resolve_spatial_parameter` | istnieje dla siatki natywnej |
 | Maska regionu | `crates/fullmag-plan/src/fdm.rs::materialize_object_region_mask` | materializowana per warstwa |
 | Runner CPU: materiał | `crates/fullmag-runner/src/fdm/cpu/multilayer_reference.rs::build_contexts_and_states`, `llg_rhs_multilayer`, `observe_multilayer` | `Ms/Aex/alpha` podłączone w Task 10B; source/unit-test evidence, bez managed qualification |
 | Źródło demag CPU | `crates/fullmag-engine/src/multilayer.rs::compute_demag_fields_checked` | natywne `Ms` użyte przed maską i transferem FFT; source/unit-test evidence |
-| Artefakty / resource-first API / monitor | poza zatwierdzonym Task 10B | membership carrier odroczony do Task 10C; brak twierdzenia o filtrowaniu monitora |
+| Artefakty per-layer | `crates/fullmag-runner/src/artifacts.rs::write_fdm_multilayer_material_field_artifacts` | `mat_ms/mat_aex/mat_alpha`, maska i legenda zapisane bez wspólnej siatki ani scalar fallbacku; source/unit-test evidence |
+| Carrier pól i membership | `crates/fullmag-api/src/router_v2/handlers/data/resolved_spatial_field.rs::resolve_fdm_multilayer_native_layer_field`, `load_fdm_multilayer_native_layer_membership` | plan-first i persisted, cross-check fail-closed; source/API-test evidence |
+| Deskryptor i payload membership | `crates/fullmag-api/src/router_v2/handlers/data/domain.rs::get_fdm_multilayer_layer_region_memberships`, `get_fdm_multilayer_layer_region_membership` | pełna legenda JSON, binary `FMRM v2`, ETag i rewizje; source/API-test evidence |
+| Filtrowanie monitora | `crates/fullmag-api/src/planar_sampling/target.rs::resolve_spatial_target`, `select_fdm_target` | dokładny native-layer scope oraz target object/region; source/API-test evidence, browser unqualified |
+| Klient browsera | `apps/control-room/src/kernel/api/ControlRoomApi.ts::data.domain.fdmMultilayerLayerRegionMemberships`, `apps/control-room/src/kernel/api/codecs/fdmRegionMembershipCodec.ts::validateFdmNativeLayerRegionMembershipContract` | centralny facade i fail-closed codec zaimplementowane/testowane; brak browser/WebGL proof |
 
 (validation)=
 ## 10. Walidacja i kwalifikacja
 
 | Solver | CPU | GPU | Wymagany dowód |
 |---|---|---|---|
-| FDM | planner/IR i referencyjne podłączenie CPU zaimplementowane; bez managed/scientific qualification | heterogeniczne pola pozostają no-go | managed CPU runtime i walidacja naukowa, potem Task 10C artifacts/API oraz monitor object/region isolation |
+| FDM | planner/IR, referencyjne podłączenie CPU, artifacts/API i native-layer planar carrier zaimplementowane i zreviewowane; bez managed/scientific/browser qualification | heterogeniczne pola pozostają no-go | managed CPU runtime, walidacja naukowa i browser/WebGL object/region isolation |
 | FEM | nie dotyczy tego layoutu | nie dotyczy tego layoutu | wspólny `ResolvedSpatialField` ma osobną macierzę FEM |
 
 Testy planner/IR obejmują: dwa rozłączne obiekty coplanar, liniowe
@@ -226,15 +245,25 @@ stabilną tożsamość legacy i klasyfikację overlap. Testy CPU Task 10B obejmu
 zachowanie pól w kontekście, lokalne `alpha`, ważenie energii i momentu przez
 `Ms` oraz heterogeniczne źródło demag przed transferem. Te testy nie zastępują
 managed runtime, walidacji naukowej ani późniejszego browser/WebGL proof.
+Testy Task 10C obejmują dwa niezależne native-layer carriers z powtórzonym
+`region_id`, pełną legendę, plan-first bez artefaktów końcowych, kontrolę
+plan-versus-persisted, ETag/304, stale revision/token, `409` dla uszkodzonych
+deklarowanych payloadów oraz `422` dla pustego targetu. Testy klienta sprawdzają
+wiązanie deskryptora, payloadu `FMRM v2`, warstwy, siatki, legendy, generation
+ID, revision i hashy. Jest to walidacja kontraktu źródłowego/API, nie wykonany
+managed scenario ani dowód obrazu WebGL.
 
 (limitations)=
 ## 11. Ograniczenia i prace odroczone
 
-Odroczone są: membership carrier w artefaktach i resource-first API oraz jego
-użycie przez monitor; FDM GPU dla heterogenicznych warstw; managed i naukowa
-kwalifikacja podłączenia CPU; PBC z transferem; sprzężenia między obiektami; regiony CSG;
-pola anizotropii/DMI w multilayer; produkcyjny parytet FDM/FEM. Do czasu
-osobnych dowodów planner ma odrzucać nieobsługiwane kombinacje jawnie.
+Odroczone są: managed i naukowa kwalifikacja podłączenia CPU oraz carrierów,
+browser/WebGL proof monitora, FDM GPU dla heterogenicznych warstw, PBC z
+transferem, sprzężenia między obiektami, regiony CSG, pola anizotropii/DMI w
+multilayer oraz produkcyjny parytet FDM/FEM. Bieżący carrier publikuje statyczne
+pola materiałowe i membership; nie promuje dynamicznych pól `m/H` do live
+multilayer, jeśli nie opublikował ich właściwy field store. Do czasu osobnych
+dowodów planner i API mają odrzucać nieobsługiwane albo niespójne kombinacje
+jawnie.
 
 (scientific-bibliography)=
 ## 12. Bibliografia
@@ -256,3 +285,7 @@ osobnych dowodów planner ma odrzucać nieobsługiwane kombinacje jawnie.
 | maska i legenda regionów | `crates/fullmag-plan/src/fdm.rs::materialize_object_region_mask`, `build_fdm_region_legend` | FDM region-mask planner tests |
 | podłączenie `Ms/Aex/alpha` do referencyjnego CPU | `crates/fullmag-runner/src/fdm/cpu/multilayer_reference.rs::build_contexts_and_states`, `llg_rhs_multilayer`, `observe_multilayer` | `multilayer_contexts_preserve_spatial_material_fields`, `multilayer_rhs_uses_cellwise_alpha`, `multilayer_observables_weight_demag_external_energy_and_moment_by_ms` |
 | heterogeniczne źródło demag CPU | `crates/fullmag-engine/src/multilayer.rs::compute_demag_fields_checked` | `demag_source_uses_native_ms_field_and_rejects_invalid_fields`, `push_pull_demag_uses_native_ms_field_before_transfer` |
+| artefakty natywnej warstwy | `crates/fullmag-runner/src/artifacts.rs::write_fdm_multilayer_material_field_artifacts` | `fdm_multilayer_writes_per_layer_material_and_membership_artifacts`, `fdm_multilayer_material_artifacts_do_not_expand_scalar_fallbacks`, `fdm_multilayer_native_grid_fingerprint_binds_active_mask_and_raw_membership` |
+| API pól i membership natywnej warstwy | `crates/fullmag-api/src/router_v2/handlers/data/resolved_spatial_field.rs::resolve_fdm_multilayer_native_layer_field`, `load_fdm_multilayer_native_layer_membership` | `fdm_multilayer_planar_layer_scope_uses_native_grid_and_local_region_membership` |
+| layout, deskryptor/binary membership i filtrowanie targetu | `crates/fullmag-api/src/router_v2/handlers/data/domain.rs::fdm_multilayer_layout_resource`, `get_fdm_multilayer_layer_region_memberships`, `get_fdm_multilayer_layer_region_membership`; `crates/fullmag-api/src/planar_sampling/target.rs::resolve_spatial_target` | dwa native layers, pełna legenda, region isolation, ETag/304, stale/mismatch `409`, empty target `422` w `fdm_multilayer_planar_layer_scope_uses_native_grid_and_local_region_membership` |
+| kontrakt klienta membership | `apps/control-room/src/kernel/api/codecs/fdmRegionMembershipCodec.ts::validateFdmNativeLayerRegionMembershipContract` | `apps/control-room/src/kernel/api/codecs/fdmRegionMembershipCodec.test.ts`; source/client tests, browser/WebGL proof odroczony |

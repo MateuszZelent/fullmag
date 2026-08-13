@@ -148,7 +148,7 @@
         "fem_gpu_public": "unsupported"
       },
       "validated_workloads": [],
-      "notes": "Planner/ProblemIR materialize native-region masks and legends plus per-cell Ms/Aex/alpha. Task 10B wires the coefficient arrays into CPU exchange, RHS, demag source, energy and moment with source/unit-test evidence only; no managed runtime or scientific qualification is claimed. Artifacts, resource-first API and planar membership consumption remain deferred to Task 10C. Heterogeneous FDM CUDA is scalar-only and fails closed without CPU fallback. FEM uses a separate shared-domain coefficient contract.",
+      "notes": "Planner/ProblemIR materialize native-region masks and legends plus per-cell Ms/Aex/alpha. Task 10B wires the coefficient arrays into CPU exchange, RHS, demag source, energy and moment. Task 10C publishes per-layer native-grid material and membership artifacts, plan-first and persisted resource-first API carriers, JSON/FMRM membership resources, central client/codec, and exact layer-scoped planar object/region filtering. Plan and persisted identities, grids, legends, hashes, generations and revisions are cross-checked fail-closed; no common-grid, scalar or all-active fallback is legal. Evidence is source/unit/API/client-test only: no managed runtime, scientific or browser/WebGL qualification is claimed. Heterogeneous FDM CUDA is scalar-only and fails closed without CPU fallback. Dynamic m/H still require a published field-store carrier. FEM uses a separate shared-domain coefficient contract.",
       "validation_state": "unvalidated"
     },
     {
