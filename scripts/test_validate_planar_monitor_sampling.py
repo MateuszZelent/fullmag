@@ -11,6 +11,7 @@ from scripts.analysis.validate_planar_monitor_sampling import (
     asymmetric_slab_validation,
     build_fdm_gpu_no_go,
     build_qualification_cases,
+    browser_evidence_is_complete,
     compare_samplewise_reports,
     attempted_monitor_report,
     exact_sample_identity_matches,
@@ -19,6 +20,7 @@ from scripts.analysis.validate_planar_monitor_sampling import (
     is_transitional_stop_conflict,
     occupied_probe_coordinates,
     linear_ms_validation,
+    mesh_refined_peer_is_valid,
     run_execution,
     synchronize_cross_backend_reports,
     validate_qualification_report,
@@ -567,6 +569,39 @@ class PlanarMonitorSamplingValidationTests(unittest.TestCase):
             self.assertEqual(good["exit_status"], 0)
             self.assertEqual(len(good["log_sha256"]), 64)
 
+    def test_browser_aggregate_rejects_vacuous_and_incomplete_evidence(self) -> None:
+        self.assertFalse(
+            browser_evidence_is_complete(
+                {"evidence": [], "qualification_cases": []}
+            )
+        )
+        complete = {
+            "evidence": [{"status": "ready"}],
+            "final_webgl": {"drawingBufferHeight": 480, "drawingBufferWidth": 640},
+            "memory_after_bytes": 2,
+            "memory_before_bytes": 1,
+            "performance": {"small_switch_ms": 1.0},
+            "qualification_cases": [
+                {"case_id": f"layer-{layer}"}
+                for layer in (
+                    "raster",
+                    "contours",
+                    "mesh",
+                    "boundaries",
+                    "vectors",
+                    "probes",
+                    "points",
+                    "bounds",
+                )
+            ],
+            "switch_count": 100,
+            "worker_after": {"active": 0, "created": 2, "terminated": 2},
+            "worker_baseline": {"active": 0, "created": 0, "terminated": 0},
+        }
+        self.assertTrue(browser_evidence_is_complete(complete))
+        complete["qualification_cases"].pop()
+        self.assertFalse(browser_evidence_is_complete(complete))
+
     def test_samplewise_comparison_does_not_overflow_json_metrics(self) -> None:
         def report(value: float) -> dict[str, object]:
             return {
@@ -574,9 +609,11 @@ class PlanarMonitorSamplingValidationTests(unittest.TestCase):
                 "device": "cpu",
                 "head": "deadbeef",
                 "monitors": {"xy-plane": {
+                    "exact_sample_identity": True,
                     "frame": {"preset": "xy"},
                     "operator": {"kind": "plane_sample"},
                     "quantity_id": "m",
+                    "mask_exact_sample_identity": True,
                     "scalar_values": [value],
                     "target": {"kind": "object", "object_id": "film"},
                 }},
@@ -629,15 +666,20 @@ class PlanarMonitorSamplingValidationTests(unittest.TestCase):
             self.assertIn("missing explicit compact/full", aggregate["lanes"]["fem-cpu"]["compact_full"]["blocker"])
 
     def test_refinement_executor_requires_a_distinct_mesh_and_samplewise_match(self) -> None:
-        def report(mesh_revision: int, values: list[float]) -> dict[str, object]:
+        def report(
+            generation_id: str, mesh_revision: int, values: list[float]
+        ) -> dict[str, object]:
             return {
                 "backend": "fdm",
                 "device": "cpu",
                 "head": "deadbeef",
                 "linear_material_monitors": {"xy-slab": {
+                    "exact_sample_identity": True,
                     "frame": {"preset": "xy"},
                     "linear_validation": {"raster_values_A_per_m": values},
+                    "generation_id": generation_id,
                     "mesh_revision": mesh_revision,
+                    "mask_exact_sample_identity": True,
                     "operator": {"kind": "slab_average", "thickness_m": 3e-8},
                     "quantity_id": "mat_ms",
                     "target": {"kind": "object", "object_id": "film"},
@@ -646,21 +688,45 @@ class PlanarMonitorSamplingValidationTests(unittest.TestCase):
             }
 
         matching = compare_samplewise_reports(
-            report(1, [799_000.0, 801_000.0]),
-            report(2, [799_001.0, 800_999.0]),
+            report("mesh:coarse", 1, [799_000.0, 801_000.0]),
+            report("mesh:fine", 2, [799_001.0, 800_999.0]),
             monitor_path=("linear_material_monitors", "xy-slab"),
             require_distinct_mesh=True,
         )
         same_mesh = compare_samplewise_reports(
-            report(1, [799_000.0]),
-            report(1, [799_000.0]),
+            report("mesh:same", 1, [799_000.0]),
+            report("mesh:same", 1, [799_000.0]),
             monitor_path=("linear_material_monitors", "xy-slab"),
             require_distinct_mesh=True,
         )
 
         self.assertTrue(matching["pass"])
         self.assertFalse(same_mesh["pass"])
-        self.assertIn("distinct mesh revision", same_mesh["blocker"])
+        self.assertIn("distinct mesh generation identity", same_mesh["blocker"])
+
+    def test_mesh_refined_peer_requires_exact_identity_and_lane_provenance(self) -> None:
+        report = {
+            "backend": "fem",
+            "device": "gpu",
+            "execution": {
+                "requested_backend": "fem",
+                "resolved_backend": "fem",
+                "resolved_device": "gpu",
+            },
+            "linear_material_monitors": {"xy-slab": {
+                "exact_sample_identity": True,
+                "generation_id": "mesh:fine",
+                "linear_validation": {"raster_values_A_per_m": [800_000.0]},
+                "mask_exact_sample_identity": True,
+                "mesh_revision": 2,
+            }},
+            "qualification_profile": "mesh-refined",
+            "runtime_bundle_identity": {"runtime_bundle_version": "bundle:fem-gpu"},
+        }
+
+        self.assertTrue(mesh_refined_peer_is_valid(report))
+        report["linear_material_monitors"]["xy-slab"]["exact_sample_identity"] = False
+        self.assertFalse(mesh_refined_peer_is_valid(report))
 
     def test_recipe_runs_final_aggregator_and_propagates_fresh_revisions(self) -> None:
         root = Path(__file__).resolve().parents[1]
@@ -675,6 +741,10 @@ class PlanarMonitorSamplingValidationTests(unittest.TestCase):
         self.assertIn("expected_field_revision=fresh_m_revision", validator)
         self.assertIn('fresh_fields["H_demag"]["field_revision"]', validator)
         self.assertIn('if args.qualification_profile == "mesh-refined"', validator)
+        self.assertIn(
+            'if [ "$qualification_profile" = "mesh-refined" ]; then aggregate_status=0; fi',
+            recipe,
+        )
         self.assertNotIn("--record-compact-full-contract", recipe)
 
     def test_fdm_cross_backend_case_requires_both_fem_lanes(self) -> None:

@@ -1141,10 +1141,21 @@ def compare_samplewise_reports(
     for field in ("frame", "operator", "quantity_id", "target"):
         if left_monitor.get(field) != right_monitor.get(field):
             errors.append(f"monitor {field} differs")
-    if require_distinct_mesh and left_monitor.get("mesh_revision") == right_monitor.get(
-        "mesh_revision"
+    if not left_monitor.get("exact_sample_identity") or not right_monitor.get(
+        "exact_sample_identity"
     ):
-        errors.append("paired executor did not produce a distinct mesh revision")
+        errors.append("paired scalar sample identity is not exact")
+    if not left_monitor.get("mask_exact_sample_identity") or not right_monitor.get(
+        "mask_exact_sample_identity"
+    ):
+        errors.append("paired mask sample identity is not exact")
+    if require_distinct_mesh:
+        if left_monitor.get("generation_id") == right_monitor.get("generation_id"):
+            errors.append(
+                "paired executor did not produce a distinct mesh generation identity"
+            )
+        if left_monitor.get("mesh_revision") == right_monitor.get("mesh_revision"):
+            errors.append("paired executor did not produce a distinct mesh revision")
     left_values = (
         left_monitor.get("linear_validation", {}).get("raster_values_A_per_m")
         if monitor_path[0] == "linear_material_monitors"
@@ -1193,6 +1204,63 @@ def compare_samplewise_reports(
     }
 
 
+def browser_evidence_is_complete(browser: dict[str, Any]) -> bool:
+    required_case_ids = {
+        "layer-raster",
+        "layer-contours",
+        "layer-mesh",
+        "layer-boundaries",
+        "layer-vectors",
+        "layer-probes",
+        "layer-points",
+        "layer-bounds",
+    }
+    cases = browser.get("qualification_cases")
+    evidence = browser.get("evidence")
+    case_ids = (
+        {case.get("case_id") for case in cases if isinstance(case, dict)}
+        if isinstance(cases, list)
+        else set()
+    )
+    worker_after = browser.get("worker_after")
+    worker_baseline = browser.get("worker_baseline")
+    return bool(
+        isinstance(evidence, list)
+        and evidence
+        and browser.get("switch_count") == 100
+        and isinstance(browser.get("final_webgl"), dict)
+        and browser["final_webgl"].get("drawingBufferWidth", 0) > 0
+        and browser["final_webgl"].get("drawingBufferHeight", 0) > 0
+        and browser.get("memory_before_bytes") is not None
+        and browser.get("memory_after_bytes") is not None
+        and isinstance(browser.get("performance"), dict)
+        and isinstance(worker_after, dict)
+        and isinstance(worker_baseline, dict)
+        and worker_after.get("active") == worker_baseline.get("active")
+        and worker_after.get("created", 0) > worker_baseline.get("created", 0)
+        and worker_after.get("created", 0) - worker_baseline.get("created", 0)
+        == worker_after.get("terminated", 0) - worker_baseline.get("terminated", 0)
+        and required_case_ids.issubset(case_ids)
+    )
+
+
+def mesh_refined_peer_is_valid(report: dict[str, Any]) -> bool:
+    monitor = report.get("linear_material_monitors", {}).get("xy-slab", {})
+    execution = report.get("execution", {})
+    return bool(
+        report.get("qualification_profile") == "mesh-refined"
+        and monitor.get("exact_sample_identity") is True
+        and monitor.get("mask_exact_sample_identity") is True
+        and monitor.get("generation_id")
+        and monitor.get("mesh_revision") is not None
+        and monitor.get("linear_validation", {}).get("raster_values_A_per_m")
+        and execution.get("requested_backend") == report.get("backend")
+        and execution.get("resolved_backend") == report.get("backend")
+        and execution.get("resolved_device") == report.get("device")
+        and report.get("runtime_bundle_identity", {}).get("runtime_bundle_version")
+    )
+
+
 def aggregate_qualification_reports(report_root: Path) -> dict[str, Any]:
     """Re-run all cross-lane and paired-executor gates after every lane report."""
     anchor = report_root / "fdm-cpu" / "science-report.json"
@@ -1212,9 +1280,12 @@ def aggregate_qualification_reports(report_root: Path) -> dict[str, Any]:
         refinement_path = lane_dir / "refinement-peer-science-report.json"
         if refinement_path.exists():
             refinement_peer = json.loads(refinement_path.read_text())
-            if refinement_peer.get("qualification_profile") != "mesh-refined":
+            if not mesh_refined_peer_is_valid(refinement_peer):
                 refinement = {
-                    "blocker": "refinement peer report has no mesh-refined qualification profile",
+                    "blocker": (
+                        "refinement peer lacks mesh-refined profile, exact sample identity, "
+                        "mesh identity, or matching managed execution provenance"
+                    ),
                     "pass": False,
                 }
             else:
@@ -1291,6 +1362,9 @@ def aggregate_qualification_reports(report_root: Path) -> dict[str, Any]:
             browser_runtime = browser.get("runtime_bundle_identity", {})
             science_runtime = science.get("runtime_bundle_identity", {})
             science_execution = science.get("execution", {})
+            browser_cases = browser.get("qualification_cases")
+            browser_evidence = browser.get("evidence")
+            browser_evidence_complete = browser_evidence_is_complete(browser)
             runtime_matches = bool(
                 browser.get("git_head") == science.get("head")
                 and browser.get("backend") == science.get("backend")
@@ -1321,14 +1395,15 @@ def aggregate_qualification_reports(report_root: Path) -> dict[str, Any]:
             browser["pass"] = bool(
                 science.get("pass") is True
                 and runtime_matches
+                and browser_evidence_complete
                 and layer_gate.get("pass") is True
                 and all(
                     not case.get("required", True) or case.get("passed") is True
-                    for case in browser.get("qualification_cases", [])
+                    for case in browser_cases
                 )
                 and all(
                     evidence.get("status") == "ready"
-                    for evidence in browser.get("evidence", [])
+                    for evidence in browser_evidence
                 )
             )
             write_json(browser_path, browser)
@@ -1875,10 +1950,7 @@ def main() -> None:
     synchronize_cross_backend_reports(args.output)
     report = json.loads(args.output.read_text())
     if args.qualification_profile == "mesh-refined":
-        if (
-            report.get("qualification_profile") != "mesh-refined"
-            or not report.get("linear_material_monitors", {}).get("xy-slab")
-        ):
+        if not mesh_refined_peer_is_valid(report):
             raise SystemExit(f"invalid mesh-refined peer report: {args.output}")
         print(f"Planar mesh-refinement peer report captured: {args.output}")
         return
