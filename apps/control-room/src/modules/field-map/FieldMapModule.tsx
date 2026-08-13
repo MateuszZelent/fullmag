@@ -21,6 +21,8 @@ import { useDomainMetaResource } from "@/kernel/resources/geometryLifecycleResou
 import { useSessionStatusSelector } from "@/kernel/resources/useSessionStatus";
 import { useSelectionSelector } from "@/kernel/selection/useSelection";
 import { useVisualizationStateResource } from "@/kernel/visualization/useVisualizationStateResource";
+import { projectPlanarPresentationState } from "@/kernel/visualization/planarPresentationProjection";
+
 
 import {
   buildFieldMapDataPlan,
@@ -48,7 +50,13 @@ export default function FieldMapModule() {
     useState<PlanarRenderEvidence | null>(null);
   const active = layout.get().activeViewportMainModuleId === "field-map";
   const visualization = useVisualizationStateResource({ enabled: active });
-  const planar = visualization.data?.planar;
+  const planar = useMemo(
+    () => projectPlanarPresentationState(
+      visualization.data,
+      visualization.optimisticData,
+    ),
+    [visualization.data, visualization.optimisticData],
+  );
   const activePinned = planar?.layers.probes ? pinned : null;
   const activeRenderEvidence = planar?.layers.raster ? renderEvidence : null;
   const activeMonitorId = planar?.active_monitor_id ?? null;
@@ -86,23 +94,38 @@ export default function FieldMapModule() {
     }
   }, [activeMonitorId, monitors.data, planar, visualizationSync]);
 
-  const plan = buildFieldMapDataPlan({
-    active: active && planar !== undefined,
-    component: planar?.component ?? "",
-    discretization:
-      domain.data?.discretization ?? runtime ?? null,
-    includeMesh: (planar?.layers.mesh ?? false) || (planar?.layers.boundaries ?? false),
-    monitorId: activeMonitorId,
-    quantityId: planar?.quantity_id ?? "",
-    resolution: [
-      planar?.resolution.width ?? 0,
-      planar?.resolution.height ?? 0,
+  const plan = useMemo(
+    () => buildFieldMapDataPlan({
+      active: active && planar !== undefined,
+      component: planar?.component ?? "",
+      discretization:
+        domain.data?.discretization ?? runtime ?? null,
+      includeMesh: (planar?.layers.mesh ?? false) || (planar?.layers.boundaries ?? false),
+      monitorId: activeMonitorId,
+      quality: planar?.quality ?? "interactive",
+      quantityId: planar?.quantity_id ?? "",
+      resolution: [
+        planar?.resolution.width ?? 0,
+        planar?.resolution.height ?? 0,
+      ],
+      showVectors: planar?.layers.vectors ?? false,
+      snapshotId: selectedFieldSnapshot.snapshotId,
+      stageId: selectedFieldSnapshot.stageId,
+      viewScope: planar?.view_scope,
+      vectorBudget: planar?.resolution.vector_budget ?? 0,
+    }),
+    [
+      active,
+      activeMonitorId,
+      domain.data?.discretization,
+      planar,
+      runtime,
+      selectedFieldSnapshot.snapshotId,
+      selectedFieldSnapshot.stageId,
     ],
-    showVectors: planar?.layers.vectors ?? false,
-    snapshotId: selectedFieldSnapshot.snapshotId,
-    stageId: selectedFieldSnapshot.stageId,
-    viewScope: planar?.view_scope,
-  });
+  );
+  const planMonitorId = plan.monitorId;
+  const planQuantityId = plan.quantityId;
   const meta = usePlanarFieldMetaResource(
     plan.quantityId,
     plan.monitorId,
@@ -113,12 +136,12 @@ export default function FieldMapModule() {
     () =>
       meta.status === "ready" && meta.data
         ? planarFieldQueryFromMeta(
-            plan.quantityId,
-            plan.monitorId,
+            planQuantityId,
+            planMonitorId,
             meta.data,
           )
         : null,
-    [meta.data, meta.status, plan.monitorId, plan.quantityId],
+    [meta.data, meta.status, planMonitorId, planQuantityId],
   );
   const canonicalQuery =
     canonicalSample?.ok ? canonicalSample.query : null;

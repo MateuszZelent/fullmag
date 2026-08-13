@@ -15,9 +15,11 @@ describe("field-map data plan", () => {
         component: "normal",
         includeMesh: true,
         monitorId: "plane-1",
+        quality: "interactive",
         quantityId: "m",
         resolution: [512, 256],
         showVectors: true,
+        vectorBudget: 2_000,
       }),
     ).toMatchObject({
       enabled: false,
@@ -34,9 +36,11 @@ describe("field-map data plan", () => {
       component: "normal",
       includeMesh: false,
       monitorId: "plane-1",
+      quality: "export",
       quantityId: "m",
       resolution: [512, 256],
       showVectors: true,
+      vectorBudget: 768,
     });
     expect(plan).toMatchObject({
       enabled: true,
@@ -44,10 +48,10 @@ describe("field-map data plan", () => {
       requestScalar: true,
       requestVectors: true,
       query: {
-        quality: "interactive",
+        quality: "export",
         resolution_x: 512,
         resolution_y: 256,
-        vector_budget: 2_000,
+        vector_budget: 768,
       },
     });
   });
@@ -68,12 +72,14 @@ describe("field-map data plan", () => {
       },
       includeMesh: true,
       monitorId: "plane-1",
+      quality: "interactive",
       quantityId: "m",
       resolution: [128, 64],
       showVectors: true,
       snapshotId: "snapshot-4",
       stageId: "stage-2",
       viewScope: { kind: "mesh_part", scope_id: "part-7" },
+      vectorBudget: 2_000,
     });
 
     expect(plan.query).toMatchObject({
@@ -116,9 +122,11 @@ describe("field-map data plan", () => {
       component: "magnitude",
       includeMesh: false,
       monitorId: "plane-1",
+      quality: "interactive",
       quantityId: "m",
       resolution: [32, 32],
       showVectors: false,
+      vectorBudget: 2_000,
       viewScope,
     });
 
@@ -137,10 +145,12 @@ describe("field-map data plan", () => {
         discretization: "fdm",
         includeMesh: true,
         monitorId: "plane-1",
+        quality: "interactive",
         quantityId: "m",
         resolution: [32, 32],
         showVectors: true,
         viewScope,
+        vectorBudget: 2_000,
       });
 
       expect(plan).toMatchObject({

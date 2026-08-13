@@ -49,6 +49,28 @@ export function planarVectorStyleFromThreeDimensional(
   };
 }
 
+/**
+ * Transfers only quiver semantics which both contexts own. The planar
+ * resolution remains authoritative except for the explicit shared budget.
+ */
+export function planarPresentationPatchFromThreeDimensional(
+  settings: Pick<
+    VisualizationTargetSettings,
+    "vectorBudget" | "vectorColorMode" | "vectorLengthScale"
+  >,
+  resolution: Planar["resolution"],
+): {
+  resolution: Planar["resolution"];
+  vector_style: Planar["vector_style"];
+} | null {
+  const vectorStyle = planarVectorStyleFromThreeDimensional(settings);
+  if (!vectorStyle) return null;
+  return {
+    resolution: { ...resolution, vector_budget: settings.vectorBudget },
+    vector_style: vectorStyle,
+  };
+}
+
 export function planarRangeForMode(
   mode: PlanarRange["mode"],
   current: PlanarRange,

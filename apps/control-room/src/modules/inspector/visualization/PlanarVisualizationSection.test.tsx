@@ -1,7 +1,7 @@
 import { act } from "react";
 import { createRoot, hydrateRoot } from "react-dom/client";
 import { renderToString, renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { Selection } from "@/kernel/selection/selectionTypes";
 
@@ -73,6 +73,11 @@ vi.mock("@/kernel/resources/studyRuntimeResources", () => ({
   }),
 }));
 
+vi.mock("@/kernel/resources/useSessionStatus", () => ({
+  useSessionStatusSelector: (selector: (status: unknown) => unknown) =>
+    selector({ data: { domain: { discretization: "fem" } } }),
+}));
+
 vi.mock("@/kernel/visualization/useVisualizationStateResource", () => ({
   useVisualizationStateResource: () => ({
     data: {
@@ -99,6 +104,7 @@ vi.mock("@/kernel/visualization/useVisualizationStateResource", () => ({
         view_scope: { kind: "target" },
       },
     },
+    optimisticData: null,
   }),
 }));
 
@@ -112,6 +118,13 @@ const selection: Selection = {
 };
 
 describe("PlanarVisualizationSection", () => {
+  beforeEach(() => {
+    mocks.queuePatch.mockClear();
+    mocks.overlay.available = true;
+    mocks.overlay.boundary_classification = "exact";
+    mocks.overlay.codec = "fmcs.v4";
+  });
+
   it("server-renders shared quantity, component, unit, range and scope controls", () => {
     const html = renderToStaticMarkup(
       <PlanarVisualizationSection selection={selection} />,
@@ -158,17 +171,37 @@ describe("PlanarVisualizationSection", () => {
     expect(html).not.toContain("Wireframe opacity");
   });
 
-  it("patches the exact canonical planar resource fields for every presentation family", async () => {
+  it("patches every planar presentation control through the canonical resource", async () => {
     const dom = installSimulationPreparationTestDom();
     const container = dom.document.createElement("div");
     const root = createRoot(container as unknown as Element);
     try {
       await act(async () => root.render(<PlanarVisualizationSection selection={selection} />));
+      await act(async () => change(findControl(container, "Color map"), "inferno"));
+      await act(async () => change(findControl(container, "Display unit"), "kA/m"));
       await act(async () => change(findControl(container, "Range mode"), "symmetric"));
+      await act(async () => toggle(findControl(container, "Layer raster")));
+      await act(async () => toggle(findControl(container, "Layer contours")));
+      await act(async () => toggle(findControl(container, "Layer mesh")));
+      await act(async () => toggle(findControl(container, "Layer boundaries")));
+      await act(async () => toggle(findControl(container, "Layer vectors")));
+      await act(async () => toggle(findControl(container, "Layer probes")));
       await act(async () => change(findControl(container, "Render quality"), "export"));
+      await act(async () => change(findControl(container, "Vector length mode"), "magnitude"));
+      await act(async () => change(findControl(container, "Vector color mode"), "monochrome"));
 
+      expect(mocks.queuePatch).toHaveBeenCalledWith({ planar: { colormap: "inferno" } });
+      expect(mocks.queuePatch).toHaveBeenCalledWith({ planar: { display_unit: "kA/m" } });
       expect(mocks.queuePatch).toHaveBeenCalledWith({ planar: { range: { mode: "symmetric", min: null, max: null } } });
+      expect(mocks.queuePatch).toHaveBeenCalledWith({ planar: { layers: { boundaries: true, contours: false, mesh: true, probes: true, raster: false, vectors: false } } });
+      expect(mocks.queuePatch).toHaveBeenCalledWith({ planar: { layers: { boundaries: true, contours: true, mesh: true, probes: true, raster: true, vectors: false } } });
+      expect(mocks.queuePatch).toHaveBeenCalledWith({ planar: { layers: { boundaries: true, contours: false, mesh: false, probes: true, raster: true, vectors: false } } });
+      expect(mocks.queuePatch).toHaveBeenCalledWith({ planar: { layers: { boundaries: false, contours: false, mesh: true, probes: true, raster: true, vectors: false } } });
+      expect(mocks.queuePatch).toHaveBeenCalledWith({ planar: { layers: { boundaries: true, contours: false, mesh: true, probes: true, raster: true, vectors: true } } });
+      expect(mocks.queuePatch).toHaveBeenCalledWith({ planar: { layers: { boundaries: true, contours: false, mesh: true, probes: false, raster: true, vectors: false } } });
       expect(mocks.queuePatch).toHaveBeenCalledWith({ planar: { quality: "export" } });
+      expect(mocks.queuePatch).toHaveBeenCalledWith({ planar: { vector_style: { color_mode: "orientation", length_mode: "magnitude", scale: 1 } } });
+      expect(mocks.queuePatch).toHaveBeenCalledWith({ planar: { vector_style: { color_mode: "monochrome", length_mode: "uniform", scale: 1 } } });
     } finally {
       await act(async () => root.unmount());
       dom.restore();
@@ -180,17 +213,20 @@ describe("PlanarVisualizationSection", () => {
     const dom = installSimulationPreparationTestDom();
     const container = dom.document.createElement("div");
     (container as unknown as { innerHTML: string }).innerHTML = serverHtml;
-    const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const recoverableErrors: Error[] = [];
     let root: ReturnType<typeof hydrateRoot>;
     try {
       await act(async () => {
-        root = hydrateRoot(container as unknown as Element, <PlanarVisualizationSection selection={selection} />);
+        root = hydrateRoot(container as unknown as Element, <PlanarVisualizationSection selection={selection} />, {
+          onRecoverableError: (error) => recoverableErrors.push(
+            error instanceof Error ? error : new Error(String(error)),
+          ),
+        });
         await Promise.resolve();
       });
-      expect(consoleError.mock.calls.flat().join(" ")).not.toContain("hydration");
+      expect(recoverableErrors).toEqual([]);
     } finally {
       await act(async () => root!.unmount());
-      consoleError.mockRestore();
       dom.restore();
     }
   });
@@ -223,7 +259,16 @@ function findControl(root: TestNode, label: string): TestElement {
 
 function change(element: TestElement, value: string): void {
   element.value = value;
-  element.dispatchEvent(new TestEvent("change", { bubbles: true }));
+  element.dispatchEvent(new TestEvent(
+    element.tagName === "INPUT" ? "input" : "change",
+    { bubbles: true },
+  ));
+}
+
+function toggle(element: TestElement): void {
+  const control = element as TestElement & { checked?: boolean };
+  control.checked = !control.checked;
+  element.dispatchEvent(new TestEvent("click", { bubbles: true }));
 }
 
 

@@ -14,6 +14,7 @@ const mocks = vi.hoisted(() => ({
     data: null as Record<string, unknown> | null,
     error: null as Error | null,
     status: "loading" as "error" | "loading" | "ready",
+    optimisticData: null as Record<string, unknown> | null,
   },
 }));
 
@@ -68,6 +69,7 @@ describe("FieldMapModule planar state ownership", () => {
     mocks.visualization.data = null;
     mocks.visualization.error = null;
     mocks.visualization.status = "loading";
+    mocks.visualization.optimisticData = null;
   });
 
   it("does not invent a quantity or component while the server profile is loading", () => {
@@ -114,6 +116,7 @@ describe("FieldMapModule planar state ownership", () => {
       },
     };
     mocks.visualization.status = "ready";
+    mocks.visualization.optimisticData = null;
     const dom = installSimulationPreparationTestDom();
     const container = dom.document.createElement("div");
     const root = createRoot(container as unknown as Element);
@@ -131,5 +134,40 @@ describe("FieldMapModule planar state ownership", () => {
       await act(async () => root.unmount());
       dom.restore();
     }
+  });
+
+  it("uses the shared optimistic presentation projection while preserving authoritative data identity", () => {
+    const planar = {
+      active_monitor_id: "plane-authoritative",
+      colormap: "viridis",
+      component: "magnitude",
+      interaction: { pan_u_m: 0, pan_v_m: 0, zoom: 1 },
+      layers: { boundaries: false, contours: false, mesh: true, probes: false, raster: true, vectors: true },
+      quality: "interactive",
+      quantity_id: "h_eff",
+      resolution: { height: 128, vector_budget: 512, width: 256 },
+      vector_style: { color_mode: "orientation", length_mode: "uniform", scale: 1 },
+      view_scope: { kind: "monitor_target" },
+    };
+    mocks.visualization.data = { planar };
+    mocks.visualization.optimisticData = {
+      planar: {
+        ...planar,
+        active_monitor_id: "plane-pending",
+        component: "normal",
+        layers: { ...planar.layers, mesh: false, vectors: false },
+        quantity_id: "m",
+      },
+    };
+    mocks.visualization.status = "ready";
+
+    renderToStaticMarkup(<FieldMapModule />);
+
+    expect(mocks.meta).toHaveBeenCalledWith(
+      "h_eff",
+      "plane-authoritative",
+      expect.objectContaining({ include_mesh: false, vector_budget: 0 }),
+      { enabled: true },
+    );
   });
 });

@@ -41,10 +41,25 @@ vi.mock("@/kernel/resources/studyRuntimeResources", () => ({
 }));
 
 vi.mock("@/kernel/visualization/useVisualizationStateResource", () => ({
-  useVisualizationStateResource: ({ enabled }: { enabled: boolean }) => {
+  useVisualizationStateResource: ({ enabled = true }: { enabled?: boolean } = {}) => {
     resourceCall("visualization-state", enabled);
     return {
-      data: enabled ? { overrides: [], revision: 1 } : null,
+      data: enabled ? {
+        overrides: [],
+        planar: {
+          active_monitor_id: "plane-1",
+          component: "magnitude",
+          layers: { boundaries: false, contours: false, mesh: false, probes: false, raster: true, vectors: true },
+          quality: "interactive",
+          quantity_id: "m",
+          resolution: { height: 256, vector_budget: 512, width: 512 },
+          vector_style: { color_mode: "orientation", length_mode: "uniform", scale: 1 },
+          interaction: { pan_u_m: 0, pan_v_m: 0, zoom: 1 },
+          colormap: "viridis",
+          view_scope: { kind: "monitor_target" },
+        },
+        revision: 1,
+      } : null,
       error: null,
       rawData: null,
       revision: 1,
@@ -426,6 +441,11 @@ describe("ObjectVisualizationPanel lane routing", () => {
 
     expect(testState.queuePatch).toHaveBeenCalledWith({
       planar: {
+        resolution: {
+          height: 256,
+          vector_budget: 1200,
+          width: 512,
+        },
         vector_style: {
           color_mode: "orientation",
           length_mode: "uniform",
@@ -435,6 +455,7 @@ describe("ObjectVisualizationPanel lane routing", () => {
     });
     expect(JSON.stringify(testState.queuePatch.mock.calls)).not.toContain("vectorThickness");
     expect(JSON.stringify(testState.queuePatch.mock.calls)).not.toContain("vectorSurfaceOffset");
+    expect(testState.queuePatch).toHaveBeenCalledTimes(1);
   });
 
   it("uses FEM resources only after the status resolves to FEM", () => {

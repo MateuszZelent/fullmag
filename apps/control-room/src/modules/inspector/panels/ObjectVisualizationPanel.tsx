@@ -102,7 +102,7 @@ import {
   VisualizationContextSwitchControl,
   useVisualizationViewContext,
 } from "../visualization/VisualizationContextSwitch";
-import { planarVectorStyleFromThreeDimensional } from "../visualization/presentationSemantics";
+import { planarPresentationPatchFromThreeDimensional } from "../visualization/presentationSemantics";
 
 interface ObjectVisualizationAppliedBaseline {
   overrides: VisualizationStateResource["overrides"];
@@ -756,13 +756,17 @@ export function VisualizationTargetInspectorPanel({
   const { displaySettings, settings, target } = panel;
   const visualizationViewContext = useVisualizationViewContext();
   const { visualizationSync } = useKernel();
+  const planarResource = useVisualizationStateResource();
   const syncSharedQuiverIntent = useCallback(() => {
-    const vectorStyle = planarVectorStyleFromThreeDimensional({
+    const planar = planarResource.data?.planar;
+    if (!planar) return;
+    const presentationPatch = planarPresentationPatchFromThreeDimensional({
+      vectorBudget: settings?.vectorBudget ?? planar.resolution.vector_budget,
       vectorColorMode: settings?.vectorColorMode ?? "orientation",
       vectorLengthScale: settings?.vectorLengthScale ?? 1,
-    });
-    if (vectorStyle) visualizationSync.queuePatch({ planar: { vector_style: vectorStyle } });
-  }, [settings?.vectorColorMode, settings?.vectorLengthScale, visualizationSync]);
+    }, planar.resolution);
+    if (presentationPatch) visualizationSync.queuePatch({ planar: presentationPatch });
+  }, [planarResource.data?.planar, settings?.vectorBudget, settings?.vectorColorMode, settings?.vectorLengthScale, visualizationSync]);
 
   const ownerIdentity = (
     <InspectorGroup title={owner.title}>

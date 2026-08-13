@@ -3,9 +3,9 @@ import { describe, expect, it } from "vitest";
 import {
   planarInteractionPatch,
   planarLayerPatch,
+  planarPresentationPatchFromThreeDimensional,
   planarRangeForMode,
   planarResolutionPatch,
-  planarVectorStyleFromThreeDimensional,
   planarVectorStylePatch,
 } from "./presentationSemantics";
 
@@ -47,12 +47,15 @@ describe("planar presentation semantics", () => {
     });
   });
 
-  it("maps only shared quiver intent from 3D and omits geometry-only settings", () => {
-    expect(planarVectorStyleFromThreeDimensional({ vectorColorMode: "magnitude", vectorLengthScale: 1.25 })).toEqual({
-      color_mode: "magnitude",
-      length_mode: "uniform",
-      scale: 1.25,
+  it("maps shared 3D quiver style and preserves the nondefault vector budget", () => {
+    expect(planarPresentationPatchFromThreeDimensional({ vectorBudget: 768, vectorColorMode: "magnitude", vectorLengthScale: 1.25 }, { height: 256, vector_budget: 512, width: 512 })).toEqual({
+      resolution: { height: 256, vector_budget: 768, width: 512 },
+      vector_style: {
+        color_mode: "magnitude",
+        length_mode: "uniform",
+        scale: 1.25,
+      },
     });
-    expect(planarVectorStyleFromThreeDimensional({ vectorColorMode: "x", vectorLengthScale: 1.25 })).toBeNull();
+    expect(planarPresentationPatchFromThreeDimensional({ vectorBudget: 768, vectorColorMode: "x", vectorLengthScale: 1.25 }, { height: 256, vector_budget: 512, width: 512 })).toBeNull();
   });
 });
