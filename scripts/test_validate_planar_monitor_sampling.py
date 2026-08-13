@@ -5,10 +5,13 @@ from pathlib import Path
 from unittest.mock import patch
 
 from scripts.analysis.validate_planar_monitor_sampling import (
+    SLAB_ORACLE,
+    asymmetric_slab_validation,
     build_fdm_gpu_no_go,
     build_qualification_cases,
     attempted_monitor_report,
     exact_sample_identity_matches,
+    canonical_sample_links_match,
     is_terminal_stop_conflict,
     is_transitional_stop_conflict,
     occupied_probe_coordinates,
@@ -16,6 +19,7 @@ from scripts.analysis.validate_planar_monitor_sampling import (
     run_execution,
     synchronize_cross_backend_reports,
     validate_qualification_report,
+    update_qualification_case,
 )
 
 
@@ -30,12 +34,52 @@ class PlanarMonitorSamplingValidationTests(unittest.TestCase):
         self.assertIn('if not report["pass"]:', source)
         self.assertNotIn('if not all(report["gates"].values()):', source)
 
+    def test_recipe_collects_science_and_browser_reports_before_final_failure(self) -> None:
+        recipe = (Path(__file__).resolve().parents[1] / "justfile").read_text()
+        start = recipe.index("run-viewport-2d-planar-monitor-smoke")
+        end = recipe.index("\nrun-permalloy-skyrmion-relax", start)
+        recipe = recipe[start:end]
+
+        self.assertIn("science_status=0", recipe)
+        self.assertIn("|| science_status=$?", recipe)
+        self.assertIn("browser_status=0", recipe)
+        self.assertIn("|| browser_status=$?", recipe)
+        self.assertLess(recipe.index("|| science_status=$?"), recipe.index("smoke:viewport-2d"))
+        self.assertLess(recipe.index("smoke:viewport-2d"), recipe.index("qualification blocked"))
+
     def test_exact_sample_identity_requires_meta_token_and_matching_scalar_etag(self) -> None:
         meta = {"etag": '"sample:1"', "sample_token": "token:1"}
 
         self.assertTrue(exact_sample_identity_matches(meta, {"etag": '"sample:1"'}))
         self.assertFalse(exact_sample_identity_matches(meta, {"etag": '"sample:old"'}))
-        self.assertFalse(exact_sample_identity_matches({"etag": '"sample:1"'}, {"etag": '"sample:1"'}))
+        self.assertFalse(
+            exact_sample_identity_matches(
+                {"etag": '"sample:1"'}, {"etag": '"sample:1"'}
+            )
+        )
+
+    def test_canonical_sample_links_bind_token_and_every_expected_revision(self) -> None:
+        meta = {
+            "carrier_revision": 4,
+            "field_revision": 5,
+            "mesh_revision": 6,
+            "monitor_revision": 3,
+            "sample_token": "sample:1",
+            "scene_revision": 2,
+        }
+        query = (
+            "sample_token=sample%3A1&expected_scene_revision=2&"
+            "expected_monitor_revision=3&expected_mesh_revision=6&"
+            "expected_carrier_revision=4&expected_field_revision=5"
+        )
+        meta["links"] = {
+            name: f"/planar/{name}?{query}"
+            for name in ("scalar", "vectors", "empty_mask")
+        }
+
+        self.assertTrue(canonical_sample_links_match(meta))
+        meta["links"]["empty_mask"] = "/planar/empty-mask?sample_token=stale"
+        self.assertFalse(canonical_sample_links_match(meta))
 
     def test_attempted_monitor_case_retains_exact_runtime_error(self) -> None:
         monitor = {
@@ -86,7 +130,9 @@ class PlanarMonitorSamplingValidationTests(unittest.TestCase):
 
     def test_fdm_surface_is_not_applicable_but_fem_surface_remains_required(self) -> None:
         fdm_cases = build_qualification_cases(
-            backend="fdm", device="cpu", executed_case_ids=set()
+            backend="fdm",
+            device="cpu",
+            executed_case_ids={"live-m-surface"},
         )
         fem_cases = build_qualification_cases(
             backend="fem", device="cpu", executed_case_ids=set()
@@ -101,7 +147,7 @@ class PlanarMonitorSamplingValidationTests(unittest.TestCase):
         self.assertFalse(fdm_surface["required"])
         self.assertFalse(fdm_surface["passed"])
         self.assertEqual(fdm_surface["status"], "not_applicable")
-        self.assertIsNone(fdm_surface["blocker"])
+        self.assertIn("not legal", fdm_surface["blocker"])
         self.assertTrue(fem_surface["required"])
         self.assertEqual(fem_surface["status"], "blocked")
 
@@ -136,6 +182,8 @@ class PlanarMonitorSamplingValidationTests(unittest.TestCase):
             "frame": {"normal": [0.0, 0.0, 1.0]},
             "generation_id": "generation:1",
             "mesh_revision": 6,
+            "mask_exact_sample_identity": True,
+            "mask_identity": '"sample:1"',
             "monitor_hash": "sha256:monitor",
             "monitor_id": "xy-plane",
             "monitor_revision": 3,
@@ -171,6 +219,35 @@ class PlanarMonitorSamplingValidationTests(unittest.TestCase):
         del report["monitors"]["xy-plane"]["sample_token"]
         with self.assertRaisesRegex(ValueError, "sample_token"):
             validate_qualification_report(report)
+
+    def test_asymmetric_slab_oracle_rejects_center_sample_bias(self) -> None:
+        report = {
+            "frame": {"origin_m": [0.0, 0.0, SLAB_ORACLE["frame_position_z_m"]]},
+            "linear_validation": {"max_abs_error_A_per_m": 0.0},
+            "operator": {"thickness_m": SLAB_ORACLE["thickness_m"]},
+        }
+
+        result = asymmetric_slab_validation(report)
+
+        self.assertTrue(result["pass"])
+        self.assertAlmostEqual(result["support_mean_z_m"], 0.0, delta=1e-24)
+        self.assertAlmostEqual(result["center_sample_bias_A_per_m"], 10_000.0)
+
+    def test_cross_backend_case_updates_ledger_and_completion(self) -> None:
+        report = {
+            "gates": {"local": True},
+            "qualification_cases": [
+                {"case_id": "local", "passed": True, "required": True},
+                {"case_id": "cross-backend-parity", "passed": False, "required": True},
+            ],
+        }
+
+        update_qualification_case(
+            report, "cross-backend-parity", passed=True, blocker=None
+        )
+
+        self.assertTrue(report["qualification_complete"])
+        self.assertTrue(report["pass"])
 
     def test_run_execution_requires_expected_backend_and_device(self) -> None:
         execution, matches = run_execution(

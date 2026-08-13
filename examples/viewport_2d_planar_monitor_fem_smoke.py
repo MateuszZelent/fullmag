@@ -26,7 +26,7 @@ film.m = fm.texture.uniform(1.0, 0.0, 0.0)
 film.mesh(minimum_element_size=5 * NM, maximum_element_size=20 * NM, order=1)
 film.set_material_field(
     "Ms",
-    fm.fields.linear(base=800e3, gradient=(1e12, 0.0, 0.0), unit="A/m"),
+    fm.fields.linear(base=800e3, gradient=(1e12, 0.0, 2e12), unit="A/m"),
     assignment_id="planar_linear_ms",
 )
 qualification_core = film.add_region(
@@ -49,8 +49,8 @@ study.monitors.add_planar(
     name="XY slab",
     monitor_id="xy-slab",
     target=target,
-    frame=fm.PlanarFrame.xy(position=0.0, extent=extent),
-    operator=fm.SlabAverage(thickness=10 * NM),
+    frame=fm.PlanarFrame.xy(position=5 * NM, extent=extent),
+    operator=fm.SlabAverage(thickness=30 * NM),
 )
 study.monitors.add_planar(
     name="XZ plane",
@@ -103,6 +103,18 @@ study.monitors.add_planar(
         boundary=fm.SurfaceBoundary.object_boundary(),
         visibility_policy="frontmost",
     ),
+)
+study.monitors.add_planar(
+    name="Oblique plane",
+    monitor_id="oblique-plane",
+    target=target,
+    frame=fm.PlanarFrame(
+        origin=(0.0, 0.0, 0.0),
+        normal=(1.0, 1.0, 1.0),
+        u_axis=(1.0, -1.0, 0.0),
+        extent=fm.PlanarExtent.explicit(u=(-45 * NM, 45 * NM), v=(-45 * NM, 45 * NM)),
+    ),
+    operator=fm.PlaneSample(),
 )
 
 study.exchange()

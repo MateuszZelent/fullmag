@@ -44,6 +44,25 @@ QUALIFICATION_REQUIREMENTS = (
     ("airbox-carrier-provenance", "airbox source-carrier provenance"),
     ("fem-compact-full-parity", "compact/full FEM field parity"),
 )
+NOT_APPLICABLE_CASES = {
+    "fdm": {"live-m-surface", "fem-compact-full-parity"},
+    "fem": {
+        "fdm-object-isolation",
+        "airbox-carrier-provenance",
+    },
+}
+NOT_APPLICABLE_REASONS = {
+    ("fdm", "live-m-surface"): "surface_projection is not legal for the FDM planar sampler",
+    ("fdm", "fem-compact-full-parity"): "FEM carrier layout parity does not apply to FDM",
+    ("fem", "fdm-object-isolation"): "FDM grid object isolation does not apply to FEM",
+    ("fem", "airbox-carrier-provenance"): "the FDM airbox carrier does not apply to FEM mesh-part scope",
+}
+SLAB_ORACLE = {
+    "field_gradient_z_A_per_m2": 2e12,
+    "film_z_bounds_m": [-10e-9, 10e-9],
+    "frame_position_z_m": 5e-9,
+    "thickness_m": 30e-9,
+}
 REPORT_MONITOR_FIELDS = {
     "carrier_revision",
     "exact_sample_identity",
@@ -61,6 +80,8 @@ REPORT_MONITOR_FIELDS = {
     "sample_token",
     "scene_revision",
     "target",
+    "mask_exact_sample_identity",
+    "mask_identity",
     "vector_exact_sample_identity",
     "vector_constant_max_error",
     "vector_identity",
@@ -69,7 +90,13 @@ REPORT_MONITOR_FIELDS = {
 
 
 def validate_qualification_report(report: dict[str, Any]) -> None:
-    for field in ("execution", "head", "monitors", "qualification_cases", "runtime_bundle_identity"):
+    for field in (
+        "execution",
+        "head",
+        "monitors",
+        "qualification_cases",
+        "runtime_bundle_identity",
+    ):
         if not report.get(field):
             raise ValueError(f"qualification report is missing {field}")
     execution = report["execution"]
@@ -108,8 +135,8 @@ def build_qualification_cases(
 ) -> list[dict[str, Any]]:
     cases = []
     for case_id, requirement in QUALIFICATION_REQUIREMENTS:
-        required = not (backend == "fdm" and case_id == "live-m-surface")
-        passed = case_id in executed_case_ids
+        required = case_id not in NOT_APPLICABLE_CASES[backend]
+        passed = required and case_id in executed_case_ids
         status = (
             "not_applicable"
             if not required
@@ -121,7 +148,9 @@ def build_qualification_cases(
             {
                 "backend": backend,
                 "blocker": None
-                if passed or not required
+                if passed
+                else NOT_APPLICABLE_REASONS[(backend, case_id)]
+                if not required
                 else "this managed lane run did not execute this required case",
                 "case_id": case_id,
                 "device": device,
@@ -241,6 +270,26 @@ def exact_sample_identity_matches(
     )
 
 
+def canonical_sample_links_match(meta: dict[str, Any]) -> bool:
+    expected = {
+        "sample_token": str(meta.get("sample_token")),
+        "expected_scene_revision": str(meta.get("scene_revision")),
+        "expected_monitor_revision": str(meta.get("monitor_revision")),
+        "expected_mesh_revision": str(meta.get("mesh_revision")),
+        "expected_carrier_revision": str(meta.get("carrier_revision")),
+        "expected_field_revision": str(meta.get("field_revision")),
+    }
+    links = meta.get("links") or {}
+    for name in ("scalar", "vectors", "empty_mask"):
+        link = links.get(name)
+        if not isinstance(link, str):
+            return False
+        query = urllib.parse.parse_qs(urllib.parse.urlsplit(link).query)
+        if any(query.get(key) != [value] for key, value in expected.items()):
+            return False
+    return True
+
+
 def occupied_probe_coordinates(
     meta: dict[str, Any], values: list[float], occupancy: bytes
 ) -> tuple[float, float]:
@@ -275,27 +324,33 @@ def monitor_report(
     snapshot_id: str | None = None,
     validate_linear_ms: bool = False,
     wait_timeout_s: float = 180.0,
+    resolution: int = 32,
+    scope_kind: str | None = None,
 ) -> dict[str, Any]:
     query_parameters = {
         "component": component,
         "include_mesh": "true",
         "quality": "export",
-        "resolution_x": 32,
-        "resolution_y": 32,
+        "resolution_x": resolution,
+        "resolution_y": resolution,
         "vector_budget": 128,
     }
     if stage_id is not None:
         query_parameters["stage_id"] = stage_id
     if snapshot_id is not None:
         query_parameters["snapshot_id"] = snapshot_id
+    if scope_kind is not None:
+        query_parameters["scope_kind"] = scope_kind
     query = urllib.parse.urlencode(query_parameters)
     prefix = (
         f"/v2/sessions/current/data/fields/{urllib.parse.quote(quantity_id, safe='')}/planar-monitors/"
         f"{urllib.parse.quote(monitor_id, safe='')}"
     )
     meta = wait_json(base, f"{prefix}/meta?{query}", timeout_s=wait_timeout_s)
+    if not canonical_sample_links_match(meta):
+        raise RuntimeError("planar metadata links do not bind the canonical sample revisions")
     scalar_payload, scalar_headers = request_bytes_with_headers(
-        base, f"{prefix}/scalar?{query}"
+        base, meta["links"]["scalar"]
     )
     scalar = decode_fmvp_scalar(scalar_payload)
     vector_identity = None
@@ -303,7 +358,7 @@ def monitor_report(
     vector_exact_sample_identity = False
     if quantity_id == "m":
         vector_payload, vector_headers = request_bytes_with_headers(
-            base, f"{prefix}/vectors?{query}"
+            base, meta["links"]["vectors"]
         )
         vector_values = decode_fmvp(vector_payload, expected_components=3)
         vector_value_count = len(vector_values)
@@ -311,7 +366,9 @@ def monitor_report(
         vector_exact_sample_identity = exact_sample_identity_matches(
             meta, vector_headers
         )
-    occupancy = request_bytes(base, f"{prefix}/empty-mask?{query}")
+    occupancy, mask_headers = request_bytes_with_headers(
+        base, meta["links"]["empty_mask"]
+    )
     if len(scalar) != len(occupancy):
         raise ValueError(
             f"scalar/mask length mismatch: {len(scalar)} != {len(occupancy)}"
@@ -343,21 +400,15 @@ def monitor_report(
             f"{error}: monitor_id={monitor_id!r}, occupancy_codes={occupancy_counts}, "
             f"meta_occupancy={meta.get('occupancy')!r}"
         ) from error
+    probe_link = urllib.parse.urlsplit(meta["links"]["probe"])
     probe_query = {
-        "component": component,
-        "resolution_x": meta["resolution"][0],
-        "resolution_y": meta["resolution"][1],
-        "sample_token": meta["sample_token"],
-        "u_m": u_m,
-        "v_m": v_m,
+        key: values[-1]
+        for key, values in urllib.parse.parse_qs(probe_link.query).items()
     }
-    if stage_id is not None:
-        probe_query["stage_id"] = stage_id
-    if snapshot_id is not None:
-        probe_query["snapshot_id"] = snapshot_id
+    probe_query.update({"u_m": u_m, "v_m": v_m})
     probe = wait_json(
         base,
-        f"{prefix}/probe?" + urllib.parse.urlencode(probe_query),
+        probe_link.path + "?" + urllib.parse.urlencode(probe_query),
         timeout_s=wait_timeout_s,
     )
     if probe.get("scalar") is None:
@@ -372,6 +423,7 @@ def monitor_report(
     stats = finite_stats(scalar, reference=1.0 if quantity_id == "m" else None)
     scalar_identity = scalar_headers.get("etag")
     exact_sample_identity = exact_sample_identity_matches(meta, scalar_headers)
+    mask_exact_sample_identity = exact_sample_identity_matches(meta, mask_headers)
     report = {
         "basis_order": meta["basis_order"],
         "carrier_revision": meta["carrier_revision"],
@@ -381,6 +433,8 @@ def monitor_report(
         "frame": meta["frame"],
         "generation_id": meta["generation_id"],
         "mesh_revision": meta["mesh_revision"],
+        "mask_exact_sample_identity": mask_exact_sample_identity,
+        "mask_identity": mask_headers.get("etag"),
         "monitor_revision": meta["monitor_revision"],
         "monitor_hash": meta["monitor_hash"],
         "occupancy": meta["occupancy"],
@@ -404,6 +458,8 @@ def monitor_report(
         "sample_token": meta["sample_token"],
         "scalar_identity": scalar_identity,
         "scene_revision": meta["scene_revision"],
+        "scope_id": meta.get("scope_id"),
+        "scope_kind": meta["scope_kind"],
         "stats": stats,
         "stage_id": stage_id,
         "snapshot_id": snapshot_id,
@@ -442,7 +498,21 @@ def linear_ms_validation(
         u_m = bounds[0] + (x_index + 0.5) * (bounds[1] - bounds[0]) / width
         v_m = bounds[2] + (y_index + 0.5) * (bounds[3] - bounds[2]) / height
         x_m = origin[0] + u_m * u_axis[0] + v_m * v_axis[0]
-        expected = 800e3 + 1e12 * x_m
+        z_m = origin[2] + u_m * u_axis[2] + v_m * v_axis[2]
+        if (
+            meta.get("sample_support") == "pixel_prism"
+            and abs(origin[2] - SLAB_ORACLE["frame_position_z_m"]) <= 1e-15
+        ):
+            clipped_min = max(
+                SLAB_ORACLE["film_z_bounds_m"][0],
+                origin[2] - 0.5 * SLAB_ORACLE["thickness_m"],
+            )
+            clipped_max = min(
+                SLAB_ORACLE["film_z_bounds_m"][1],
+                origin[2] + 0.5 * SLAB_ORACLE["thickness_m"],
+            )
+            z_m = 0.5 * (clipped_min + clipped_max)
+        expected = 800e3 + 1e12 * x_m + 2e12 * z_m
         comparisons.append((observed, expected))
         serialized_values.append(observed)
     if not comparisons:
@@ -451,14 +521,60 @@ def linear_ms_validation(
     rms_error = math.sqrt(sum(error * error for error in errors) / len(errors))
     max_error = max(abs(error) for error in errors)
     probe_world = probe.get("world_m") or [0.0, 0.0, 0.0]
-    probe_expected = 800e3 + 1e12 * float(probe_world[0])
+    probe_z_m = float(probe_world[2])
+    if (
+        meta.get("sample_support") == "pixel_prism"
+        and abs(origin[2] - SLAB_ORACLE["frame_position_z_m"]) <= 1e-15
+    ):
+        clipped_min = max(
+            SLAB_ORACLE["film_z_bounds_m"][0],
+            origin[2] - 0.5 * SLAB_ORACLE["thickness_m"],
+        )
+        clipped_max = min(
+            SLAB_ORACLE["film_z_bounds_m"][1],
+            origin[2] + 0.5 * SLAB_ORACLE["thickness_m"],
+        )
+        probe_z_m = 0.5 * (clipped_min + clipped_max)
+    probe_expected = (
+        800e3
+        + 1e12 * float(probe_world[0])
+        + 2e12 * probe_z_m
+    )
     probe_observed = float(probe["scalar"])
     return {
-        "analytic": "Ms(x)=800000 A/m + (1e12 A/m^2)*x",
+        "analytic": "Ms(x,z)=800000 A/m + (1e12 A/m^2)*x + (2e12 A/m^2)*z",
         "max_abs_error_A_per_m": max_error,
         "probe_abs_error_A_per_m": abs(probe_observed - probe_expected),
         "raster_values_A_per_m": serialized_values,
         "rms_error_A_per_m": rms_error,
+    }
+
+
+def asymmetric_slab_validation(report: dict[str, Any]) -> dict[str, Any]:
+    validation = report["linear_validation"]
+    frame = report["frame"]
+    origin_z = float(frame["origin_m"][2])
+    thickness = float(report["operator"]["thickness_m"])
+    clipped_min = max(
+        SLAB_ORACLE["film_z_bounds_m"][0], origin_z - 0.5 * thickness
+    )
+    clipped_max = min(
+        SLAB_ORACLE["film_z_bounds_m"][1], origin_z + 0.5 * thickness
+    )
+    if clipped_max <= clipped_min:
+        raise ValueError("slab has no clipped support inside the fixture film")
+    support_mean_z = 0.5 * (clipped_min + clipped_max)
+    center_bias = abs(
+        SLAB_ORACLE["field_gradient_z_A_per_m2"] * (origin_z - support_mean_z)
+    )
+    max_error = float(validation["max_abs_error_A_per_m"])
+    return {
+        "center_sample_bias_A_per_m": center_bias,
+        "clipped_support_z_m": [clipped_min, clipped_max],
+        "max_abs_error_A_per_m": max_error,
+        "pass": max_error <= 3_000.0 and center_bias > 3_000.0,
+        "oracle": SLAB_ORACLE,
+        "support_mean_z_m": support_mean_z,
     }
 
 
@@ -525,9 +641,12 @@ def attempted_monitor_report(
             quantity_id,
             component,
         )
-        if not result["exact_sample_identity"]:
+        if (
+            not result["exact_sample_identity"]
+            or not result["mask_exact_sample_identity"]
+        ):
             return {
-                "blocker": "scalar payload ETag does not match the metadata sample identity",
+                "blocker": "scalar or mask payload ETag does not match the metadata sample identity",
                 "passed": False,
                 "result": result,
                 "status": "blocked",
@@ -556,7 +675,11 @@ def matrix_case_passes(
     if not case.get("passed") or not isinstance(case.get("result"), dict):
         return False
     result = case["result"]
-    if not result.get("exact_sample_identity") or int(result["stats"]["count"]) <= 0:
+    if (
+        not result.get("exact_sample_identity")
+        or not result.get("mask_exact_sample_identity")
+        or int(result["stats"]["count"]) <= 0
+    ):
         return False
     if expected_frame_preset is not None:
         frame = result.get("frame") or {}
@@ -779,9 +902,12 @@ def synchronize_cross_backend_reports(current_output: Path) -> None:
             for path, report in ((fdm_path, fdm), (fem_path, fem)):
                 report.setdefault("gates", {})[gate_id] = False
                 report.setdefault("metrics", {})[gate_id] = metric
-                report["pass"] = False
-                report["qualification_complete"] = False
-                report["qualification_status"] = "blocked"
+                update_qualification_case(
+                    report,
+                    "cross-backend-parity",
+                    passed=False,
+                    blocker=metric["blocker"],
+                )
                 path.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n")
             comparison_path = report_root / f"cross-backend-fdm-cpu-{fem_lane}.json"
             comparison_path.write_text(
@@ -839,8 +965,8 @@ def synchronize_cross_backend_reports(current_output: Path) -> None:
                 "comparison_method": "samplewise_shared_geometry_raster",
             }
             passed = False
-            combined_rms = math.inf
-            scale = 1.0
+            combined_rms = None
+            relative_rms = None
         else:
             combined_rms = math.sqrt(
                 sum((left - right) ** 2 for left, right in paired) / len(paired)
@@ -851,7 +977,7 @@ def synchronize_cross_backend_reports(current_output: Path) -> None:
                 / len(paired),
             )
             passed = combined_rms / scale <= 5e-3
-        relative_rms = combined_rms / scale
+            relative_rms = combined_rms / scale
         metric = {
             "comparison_method": "samplewise_shared_geometry_raster",
             "fdm_finite_sample_count": int(fdm_monitor["stats"]["count"]),
@@ -867,8 +993,11 @@ def synchronize_cross_backend_reports(current_output: Path) -> None:
         for path, report in ((fdm_path, fdm), (fem_path, fem)):
             report["gates"][gate_id] = passed
             report["metrics"][gate_id] = metric
-            report["pass"] = bool(report.get("qualification_complete")) and all(
-                report["gates"].values()
+            update_qualification_case(
+                report,
+                "cross-backend-parity",
+                passed=passed,
+                blocker=None if passed else metric.get("blocker", "samplewise parity failed"),
             )
             path.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n")
         comparison_path = report_root / f"cross-backend-fdm-cpu-{fem_lane}.json"
@@ -889,6 +1018,33 @@ def synchronize_cross_backend_reports(current_output: Path) -> None:
         )
 
 
+def update_qualification_case(
+    report: dict[str, Any], case_id: str, *, passed: bool, blocker: str | None
+) -> None:
+    cases = report.get("qualification_cases")
+    if not isinstance(cases, list):
+        report["qualification_complete"] = False
+        report["qualification_status"] = "blocked"
+        report["pass"] = False
+        return
+    for case in cases:
+        if case.get("case_id") != case_id or not case.get("required", True):
+            continue
+        case["passed"] = passed
+        case["status"] = "passed" if passed else "blocked"
+        case["blocker"] = None if passed else blocker
+        break
+    report["qualification_complete"] = all(
+        not case.get("required", True) or case.get("passed") is True for case in cases
+    )
+    report["qualification_status"] = (
+        "qualified" if report["qualification_complete"] else "blocked"
+    )
+    report["pass"] = report["qualification_complete"] and all(
+        report.get("gates", {}).values()
+    )
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--api-base", required=True)
@@ -905,7 +1061,13 @@ def main() -> None:
     oracle_monitor_ids = (
         {"xy-plane", "xy-slab", "depth-mean", "oblique-plane"}
         if args.backend == "fdm"
-        else {"xy-plane", "xy-slab", "depth-mean", "object-surface"}
+        else {
+            "xy-plane",
+            "xy-slab",
+            "depth-mean",
+            "object-surface",
+            "oblique-plane",
+        }
     )
     matrix_monitor_ids = {
         "domain-plane",
@@ -915,10 +1077,13 @@ def main() -> None:
         "yz-plane",
     }
     required = oracle_monitor_ids | matrix_monitor_ids
+    if args.backend == "fdm":
+        required.add("isolation-neighbor-plane")
     missing = sorted(required.difference(monitor_ids))
     if missing:
         raise RuntimeError(f"fixture did not publish required monitors: {missing}")
 
+    linear_monitor_ids = {"xy-plane", "xy-slab"}
     linear_monitors = {
         monitor_id: attach_monitor_contract(
             monitor_report(
@@ -932,8 +1097,29 @@ def main() -> None:
             "mat_ms",
             "scalar",
         )
-        for monitor_id in sorted(oracle_monitor_ids)
+        for monitor_id in sorted(linear_monitor_ids)
     }
+    refinement_report = attach_monitor_contract(
+        monitor_report(
+            args.api_base,
+            "xy-slab",
+            component="scalar",
+            quantity_id="mat_ms",
+            validate_linear_ms=True,
+            resolution=64,
+        ),
+        monitor_by_id["xy-slab"],
+        "mat_ms",
+        "scalar",
+    )
+    isolation_case = None
+    if args.backend == "fdm":
+        isolation_case = attempted_monitor_report(
+            args.api_base,
+            monitor_by_id["isolation-neighbor-plane"],
+            component="scalar",
+            quantity_id="mat_ms",
+        )
 
     pre_solve_m = monitor_report(
         args.api_base, "xy-plane", component="magnitude", quantity_id="m"
@@ -983,11 +1169,42 @@ def main() -> None:
             for quantity_id in ("H_eff", "H_demag")
         }
         try:
+            airbox_result = attach_monitor_contract(
+                    monitor_report(
+                        args.api_base,
+                        "domain-plane",
+                        component="magnitude",
+                        quantity_id="H_demag",
+                        scope_kind="airbox",
+                    ),
+                    monitor_by_id["domain-plane"],
+                    "H_demag",
+                    "magnitude",
+                )
+            airbox_passed = (
+                    airbox_result["exact_sample_identity"]
+                    and airbox_result["mask_exact_sample_identity"]
+                    and airbox_result["scope_kind"] == "airbox"
+                    and airbox_result["field_source"] == "live"
+                    and airbox_result["carrier_revision"] is not None
+            )
+            airbox_case = {
+                "blocker": None
+                if airbox_passed
+                else "airbox sample did not retain carrier scope and provenance",
+                "passed": airbox_passed,
+                "result": airbox_result,
+                "status": "passed" if airbox_passed else "blocked",
+            }
+        except Exception as error:  # noqa: BLE001 - exact carrier blocker belongs in report
+            airbox_case = {
+                "blocker": f"{type(error).__name__}: {error}",
+                "passed": False,
+                "status": "blocked",
+            }
+        try:
             snapshot_id = wait_for_persisted_snapshot(args.api_base)
-            persisted_snapshot_case = {
-                "passed": True,
-                "status": "passed",
-                "result": attach_monitor_contract(
+            persisted_result = attach_monitor_contract(
                     monitor_report(
                         args.api_base,
                         "xy-plane",
@@ -999,7 +1216,21 @@ def main() -> None:
                     monitor_by_id["xy-plane"],
                     "m",
                     "magnitude",
-                ),
+                )
+            persisted_passed = (
+                persisted_result["snapshot_id"] == snapshot_id
+                and persisted_result["stage_id"] == "stage-000"
+                and persisted_result["field_source"] == f"stage_snapshot:{snapshot_id}"
+                and persisted_result["exact_sample_identity"]
+                and persisted_result["mask_exact_sample_identity"]
+            )
+            persisted_snapshot_case = {
+                "blocker": None
+                if persisted_passed
+                else "persisted planar sample did not resolve the requested fresh stage snapshot",
+                "passed": persisted_passed,
+                "status": "passed" if persisted_passed else "blocked",
+                "result": persisted_result,
             }
         except Exception as error:  # noqa: BLE001 - retain the exact persisted-source blocker
             persisted_snapshot_case = {
@@ -1007,9 +1238,7 @@ def main() -> None:
                 "passed": False,
                 "status": "blocked",
             }
-        rotated_components = {}
-        if "oblique-plane" in oracle_monitor_ids:
-            rotated_components = {
+        rotated_components = {
                 component: attach_monitor_contract(
                     monitor_report(
                         args.api_base,
@@ -1022,7 +1251,7 @@ def main() -> None:
                     component,
                 )
                 for component in ("u", "v", "normal")
-            }
+        }
     finally:
         stop_fixture_solver(args.api_base, solve_command_id)
     max_error = max(
@@ -1037,6 +1266,37 @@ def main() -> None:
         float(result["linear_validation"]["probe_abs_error_A_per_m"])
         for result in linear_monitors.values()
     )
+    slab_validation = asymmetric_slab_validation(linear_monitors["xy-slab"])
+    refinement_mean_error = abs(
+        float(linear_monitors["xy-slab"]["stats"]["mean"])
+        - float(refinement_report["stats"]["mean"])
+    )
+    refinement_validation = {
+        "blocker": "this lane run has one mesh/grid; raster resolution is not a mesh refinement oracle",
+        "coarse_resolution": 32,
+        "fine_resolution": 64,
+        "mean_error_A_per_m": refinement_mean_error,
+        "pass": False,
+    }
+    isolation_validation = None
+    if isolation_case is not None:
+        isolation_mean_error = (
+            abs(float(isolation_case["result"]["stats"]["mean"]) - 400e3)
+            if isolation_case["passed"]
+            else None
+        )
+        isolation_validation = {
+            "blocker": isolation_case.get("blocker"),
+            "expected_neighbor_Ms_A_per_m": 400e3,
+            "mean_error_A_per_m": isolation_mean_error,
+            "pass": (
+                isolation_case["passed"]
+                and isolation_mean_error is not None
+                and isolation_mean_error <= 1e-6
+                and float(linear_monitors["xy-plane"]["stats"]["mean"]) > 700e3
+            ),
+            "result": isolation_case.get("result"),
+        }
     occupancy_ok = all(
         result["occupancy"]["occupied"] + result["occupancy"]["partial"] > 0
         for result in monitors.values()
@@ -1078,6 +1338,7 @@ def main() -> None:
                 monitor_by_id["xy-slab"]["operator"].get("thickness_m", 0.0)
             )
             > 0.0
+            and slab_validation["pass"]
         ),
         "depth_operator": "depth-mean" in monitors,
         "axis_or_operator_parity": parity_error <= 1e-6,
@@ -1086,7 +1347,8 @@ def main() -> None:
             result["sampling_execution"] == "cpu" for result in monitors.values()
         ),
         "exact_sample_identity": all(
-            result["exact_sample_identity"] for result in monitors.values()
+            result["exact_sample_identity"] and result["mask_exact_sample_identity"]
+            for result in monitors.values()
         ),
         "exact_vector_sample_identity": all(
             result["vector_exact_sample_identity"] for result in monitors.values()
@@ -1109,7 +1371,8 @@ def main() -> None:
     head = git_head()
     passed_case_ids = set()
     exact_oracle_identity = all(
-        result["exact_sample_identity"] for result in monitors.values()
+        result["exact_sample_identity"] and result["mask_exact_sample_identity"]
+        for result in monitors.values()
     )
     if exact_oracle_identity:
         passed_case_ids.update(
@@ -1123,6 +1386,12 @@ def main() -> None:
         )
     if gates["exact_vector_sample_identity"]:
         passed_case_ids.add("live-m-vector-payload")
+    if isolation_validation and isolation_validation["pass"]:
+        passed_case_ids.add("fdm-object-isolation")
+    if airbox_case["passed"]:
+        passed_case_ids.add("target-airbox")
+        if args.backend == "fdm":
+            passed_case_ids.add("airbox-carrier-provenance")
     if (
         gates["constant_vector_field"]
         and gates["constant_scalar_bins"]
@@ -1177,7 +1446,7 @@ def main() -> None:
         and persisted_snapshot_case["result"]["exact_sample_identity"]
     ):
         passed_case_ids.add("persisted-m-xy-plane")
-    if args.backend == "fdm" and rotated_validation and rotated_validation["pass"]:
+    if rotated_validation and rotated_validation["pass"]:
         if all(
             result["exact_sample_identity"]
             for result in rotated_components.values()
@@ -1200,6 +1469,7 @@ def main() -> None:
     )
     report = {
         "backend": args.backend,
+        "airbox_case": airbox_case,
         "device": args.device,
         "execution": execution,
         "gates": gates,
@@ -1213,13 +1483,18 @@ def main() -> None:
             "max_rms_error_from_unit_magnitude": max_error,
             "max_linear_probe_error_A_per_m": max_linear_probe_error,
             "max_linear_rms_error_A_per_m": max_linear_rms_error,
+            "asymmetric_slab": slab_validation,
         },
         "monitor_collection_revision": collection["scene_revision"],
         "linear_material_monitors": linear_monitors,
         "field_quantity_cases": field_quantity_cases,
+        "fixture_oracle": {"asymmetric_slab": SLAB_ORACLE},
+        "isolation_validation": isolation_validation,
         "matrix_monitors": matrix_monitors,
         "monitors": monitors,
         "persisted_snapshot_case": persisted_snapshot_case,
+        "refinement_report": refinement_report,
+        "refinement_validation": refinement_validation,
         "qualification_cases": qualification_cases,
         "qualification_complete": qualification_complete,
         "qualification_status": "qualified" if qualification_complete else "blocked",

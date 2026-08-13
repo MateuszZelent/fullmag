@@ -5186,17 +5186,25 @@ run-viewport-2d-planar-monitor-smoke backend="fdm" device="cpu" web_port="3194" 
         sleep 0.5; \
       done; \
       curl -fsS "$api_url/v2/sessions/current/model/planar-monitors" >/dev/null || { echo "planar API did not become ready; see $runtime_log" >&2; exit 1; }; \
+      science_status=0; \
       "{{repo_python}}" scripts/analysis/validate_planar_monitor_sampling.py \
-        --api-base "$api_url" --backend "$backend" --device "$device" --output "$science_report"; \
+        --api-base "$api_url" --backend "$backend" --device "$device" --output "$science_report" \
+        || science_status=$?; \
+      browser_status=0; \
       CONTROL_ROOM_API_BASE_URL="$api_url" \
       CONTROL_ROOM_URL="$web_url" \
       CONTROL_ROOM_PLANAR_BACKEND="$backend" \
       CONTROL_ROOM_PLANAR_OUTPUT_DIR="$browser_dir" \
-      $PNPM_CMD --dir apps/control-room smoke:viewport-2d | tee "$browser_log"; \
+      $PNPM_CMD --dir apps/control-room smoke:viewport-2d | tee "$browser_log" \
+        || browser_status=$?; \
       printf "\nViewport 2D planar-monitor reports:\n"; \
       printf "  runtime: %s\n" "$runtime_log"; \
       printf "  browser: %s\n" "$browser_log"; \
-      printf "  science: %s\n" "$science_report"'
+      printf "  science: %s\n" "$science_report"; \
+      if [ "$science_status" -ne 0 ] || [ "$browser_status" -ne 0 ]; then \
+        echo "viewport 2D qualification blocked: science=$science_status browser=$browser_status" >&2; \
+        exit 1; \
+      fi'
 
 run-permalloy-skyrmion-relax fem_execution="gpu":
     just run-permalloy-skyrmion-relax-interactive "{{fem_execution}}"

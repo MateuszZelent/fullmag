@@ -15,7 +15,7 @@ study.engine("fdm")
 study.device(os.environ.get("FULLMAG_PLANAR_DEVICE", "cpu"), precision="double")
 study.interactive(True)
 study.wait_for_solve(True)
-study.universe(mode="manual", size=SIZE, center=(0.0, 0.0, 0.0), padding=(0.0, 0.0, 0.0))
+study.universe(mode="manual", size=(140 * NM, 60 * NM, 20 * NM), center=(12.5 * NM, 0.0, 0.0), padding=(0.0, 0.0, 0.0))
 study.cell(5 * NM, 5 * NM, 5 * NM)
 
 film = study.geometry(fm.Box(size=SIZE, name="planar_film"), name="planar_film")
@@ -25,9 +25,19 @@ film.alpha = 0.1
 film.m = fm.texture.uniform(1.0, 0.0, 0.0)
 film.set_material_field(
     "Ms",
-    fm.fields.linear(base=800e3, gradient=(1e12, 0.0, 0.0), unit="A/m"),
+    fm.fields.linear(base=800e3, gradient=(1e12, 0.0, 2e12), unit="A/m"),
     assignment_id="planar_linear_ms",
 )
+isolation_neighbor = study.geometry(
+    fm.Box(size=(20 * NM, 60 * NM, 20 * NM), name="isolation_neighbor").translate(
+        (55 * NM, 0.0, 0.0)
+    ),
+    name="isolation_neighbor",
+)
+isolation_neighbor.Ms = 400e3
+isolation_neighbor.Aex = 13e-12
+isolation_neighbor.alpha = 0.1
+isolation_neighbor.m = fm.texture.uniform(0.0, 1.0, 0.0)
 qualification_core = film.add_region(
     "Qualification core",
     fm.Box(size=(40 * NM, 30 * NM, 20 * NM)),
@@ -48,8 +58,15 @@ study.monitors.add_planar(
     name="XY slab",
     monitor_id="xy-slab",
     target=target,
-    frame=fm.PlanarFrame.xy(position=0.0, extent=extent),
-    operator=fm.SlabAverage(thickness=10 * NM),
+    frame=fm.PlanarFrame.xy(position=5 * NM, extent=extent),
+    operator=fm.SlabAverage(thickness=30 * NM),
+)
+study.monitors.add_planar(
+    name="Isolation neighbor plane",
+    monitor_id="isolation-neighbor-plane",
+    target=fm.MonitorTarget.object("isolation_neighbor"),
+    frame=fm.PlanarFrame.xy(position=0.0, extent=fm.PlanarExtent.target_bounds()),
+    operator=fm.PlaneSample(),
 )
 study.monitors.add_planar(
     name="XZ plane",
