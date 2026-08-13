@@ -334,6 +334,17 @@ impl LocalLiveWorkspace {
         self.publisher.request_publish();
     }
 
+    pub fn force_publish_latest_scalar_row(&self) {
+        let candidate = self
+            .state
+            .lock()
+            .ok()
+            .and_then(|state| scalar_candidate_from_workspace_state(&state))
+            .map(|(sequence, row, _)| (sequence, row, true));
+        self.publisher.enqueue_scalar_candidate(candidate);
+        self.publisher.request_publish();
+    }
+
     pub fn update_profiled<F>(&self, mutate: F) -> LiveWorkspaceUpdateTimings
     where
         F: FnOnce(&mut LocalLiveWorkspaceState),
@@ -2622,6 +2633,51 @@ mod tests {
         let diagnostics = publisher.diagnostics_snapshot();
         assert!(diagnostics.delta_build_wall_time_ns > 0);
         assert!(diagnostics.state_lock_wall_time_ns > 0);
+    }
+
+    #[test]
+    fn interactive_terminal_scalar_bypasses_gate_while_session_stays_open() {
+        let (scalar_tx, scalar_rx) = std::sync::mpsc::channel();
+        let (publisher, start_barrier) = CurrentLivePublisher::spawn_with_blocked_test_sink(
+            "interactive-terminal-scalar-test",
+            move |_, payload| {
+                if let Some(row) = payload.latest_scalar_row.as_ref() {
+                    scalar_tx.send(row.clone()).expect("record scalar row");
+                }
+                Ok(())
+            },
+        );
+        publisher.scalar_gate.lock().unwrap().last_scalar_publish_at = Some(Instant::now());
+        let workspace = LocalLiveWorkspace::new(workspace_with_domain_mesh().snapshot(), publisher);
+
+        workspace.update(|state| {
+            state.live_state.latest_step.step = 8;
+            state.latest_scalar_row = Some(scalar_row(8));
+        });
+        workspace.update(|state| {
+            let mut terminal = scalar_row(8);
+            terminal.mx = 0.625;
+            terminal.my = 0.25;
+            terminal.mz = 0.0;
+            state.latest_scalar_row = Some(terminal);
+        });
+        workspace.force_publish_latest_scalar_row();
+
+        let snapshot = workspace.snapshot();
+        assert_eq!(snapshot.session.status, "running");
+        assert_eq!(snapshot.run.status, "running");
+        assert_eq!(snapshot.live_state.status, "running");
+        assert!(!snapshot.live_state.latest_step.finished);
+
+        start_barrier.wait();
+        let row = scalar_rx
+            .recv_timeout(std::time::Duration::from_secs(2))
+            .expect("forced terminal scalar row");
+        assert_eq!([row.mx, row.my, row.mz], [0.625, 0.25, 0.0]);
+        assert!(
+            scalar_rx.try_recv().is_err(),
+            "terminal row is published once"
+        );
     }
 
     #[test]

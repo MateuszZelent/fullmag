@@ -558,7 +558,7 @@ export interface ObjectMetricsResource {
     mx: number;
     my: number;
     mz: number;
-  };
+  } | null;
   object_id: string;
   revision: number;
   source: string;
@@ -603,6 +603,7 @@ export interface ScalarWindowQuery {
   columns?: readonly string[];
   limit?: number;
   sinceRevision?: number;
+  tail?: boolean;
 }
 export type TableRowsResource = components["schemas"]["TableRowsResource"];
 export type TableColumnMeta = components["schemas"]["TableColumnMeta"];

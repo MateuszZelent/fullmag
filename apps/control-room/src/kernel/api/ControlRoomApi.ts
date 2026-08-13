@@ -3306,6 +3306,7 @@ function scalarWindowQueryParams(query: ScalarWindowQuery): QueryParams {
         : undefined,
     limit: query.limit,
     since_revision: query.sinceRevision,
+    tail: query.tail,
   };
 }
 

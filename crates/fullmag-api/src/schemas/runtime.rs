@@ -257,7 +257,7 @@ pub struct ObjectMetricsResource {
     pub has_solver_sample: bool,
     pub step: u64,
     pub time_seconds: f64,
-    pub magnetization_average: ObjectMagnetizationAverage,
+    pub magnetization_average: Option<ObjectMagnetizationAverage>,
     pub energies: ObjectEnergySummary,
 }
 

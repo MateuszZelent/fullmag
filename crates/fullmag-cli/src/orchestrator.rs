@@ -10368,6 +10368,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                     state.live_state = live_state_manifest_from_update(final_update.clone());
                     set_latest_scalar_row_for_terminal_update(state, &final_update);
                 });
+                live_workspace.force_publish_latest_scalar_row();
             }
 
             let offset_steps = offset_step_stats(&stage_result.steps, step_offset, time_offset);

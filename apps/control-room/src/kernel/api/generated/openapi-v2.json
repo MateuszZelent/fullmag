@@ -14134,7 +14134,14 @@
             "type": "boolean"
           },
           "magnetization_average": {
-            "$ref": "#/components/schemas/ObjectMagnetizationAverage"
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ObjectMagnetizationAverage"
+              }
+            ]
           },
           "object_id": {
             "type": "string"
@@ -14164,7 +14171,6 @@
           "has_solver_sample",
           "step",
           "time_seconds",
-          "magnetization_average",
           "energies"
         ],
         "type": "object"
@@ -33778,6 +33784,15 @@
             }
           },
           {
+            "description": "Return the newest rows instead of the oldest rows in the selected window",
+            "in": "query",
+            "name": "tail",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
             "description": "Comma-separated scalar columns to return, e.g. step,time,e_total",
             "in": "query",
             "name": "columns",
@@ -39931,8 +39946,8 @@
     }
   ],
   "x-fullmag-build-identity": {
-    "built_at_utc": "2026-08-13T05:15:22Z",
-    "git_commit": "1eff3234c6200f11c47ef2010d085252332224c6",
+    "built_at_utc": "2026-08-13T10:02:54Z",
+    "git_commit": "09453245111be4dde7d95d9e67671168413ca6fd",
     "source_snapshot_sha256": "unknown",
     "worktree_state": "dirty"
   },

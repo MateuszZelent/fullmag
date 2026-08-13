@@ -5944,6 +5944,37 @@ async fn scalar_history_returns_windowed_columnar_rows() {
 }
 
 #[tokio::test]
+async fn scalar_history_tail_returns_latest_row_after_same_step_replacement() {
+    let state = test_app_state_with_live_session().await;
+    {
+        let mut guard = state.current_live_state.write().await;
+        let snapshot = guard
+            .as_mut()
+            .expect("test live session should be initialized");
+        let mut latest = sample_scalar_row(8, 8e-12, 9.5);
+        latest.mx = 0.625;
+        snapshot.scalar_rows = vec![latest];
+        snapshot.scalar_revision = 2;
+    }
+    let app = build_v2_router().with_state(state);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/scalars?tail=true&limit=1&columns=time,mx")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    let json = body_json(response).await;
+    assert_eq!(json["revision"], 2);
+    assert_eq!(json["returned_rows"], 1);
+    assert_eq!(json["rows"], serde_json::json!([[8.0, 8e-12, 0.625]]));
+}
+
+#[tokio::test]
 async fn table_rows_resource_returns_cursor_window_and_column_metadata() {
     let state = test_app_state_with_live_session().await;
     {
@@ -21634,6 +21665,65 @@ async fn object_metrics_endpoint_prefers_per_object_solver_scalars() {
 }
 
 #[tokio::test]
+async fn object_metrics_keep_step_and_energy_without_inventing_magnetization() {
+    let state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.scene_document = Some(sample_scene_document());
+        snapshot.scalar_rows.clear();
+        snapshot.scalar_revision = 7;
+        snapshot.live_state = Some(LiveState {
+            status: "running".into(),
+            updated_at_unix_ms: 1_700_000_000_123,
+            latest_step: StepUpdateView {
+                step: 9,
+                time: 5.0e-12,
+                dt: 1.0e-13,
+                pseudo_time_s: None,
+                e_ex: 1.0,
+                e_demag: 2.0,
+                e_ext: 3.0,
+                e_ani: 4.0,
+                e_dmi: 5.0,
+                e_total: 23.0,
+                max_dm_dt: 0.0,
+                max_h_eff: 0.0,
+                max_h_demag: 0.0,
+                max_torque_Apm: 0.0,
+                max_torque_T: 0.0,
+                wall_time_ns: 0,
+                grid: [1, 1, 1],
+                fem_mesh_generation_id: None,
+                fem_mesh: None,
+                per_object_scalars: HashMap::new(),
+                magnetization: None,
+                field_materialization_states: Vec::new(),
+                preview_field: None,
+                finished: false,
+            },
+        });
+    }
+    let app = build_v2_router().with_state(state);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/v2/sessions/current/simulation/objects/body/metrics")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let json = body_json(response).await;
+    assert_eq!(json["step"], 9);
+    assert_eq!(json["time_seconds"], 5.0e-12);
+    assert_eq!(json["energies"]["total"], 23.0);
+    assert_eq!(json["magnetization_average"], serde_json::Value::Null);
+}
+
+#[tokio::test]
 async fn object_metrics_endpoint_uses_mesh_part_node_indices_for_shared_fem_nodes() {
     let state = test_app_state_with_live_session().await;
     if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
@@ -21743,7 +21833,7 @@ async fn object_metrics_endpoint_uses_mesh_part_node_indices_for_shared_fem_node
 
     assert_eq!(response.status(), StatusCode::OK);
     let json = body_json(response).await;
-    assert_eq!(json["source"], "solver_global");
+    assert_eq!(json["source"], "solver_spatial_object");
     assert_eq!(json["magnetization_average"]["mx"], 3.0);
 }
 

@@ -1768,36 +1768,39 @@ pub async fn get_object_metrics(
     let canonical_object_id = object.id.clone();
     let initial_m = initial_magnetization_for_object(scene, object);
     let object_scalars = latest_object_scalars(snapshot, &canonical_object_id, &object.name);
-    let latest_row = latest_solver_sample(snapshot);
-    let has_solver_sample = object_scalars.is_some() || latest_row.is_some();
+    let latest_energy_row = latest_energy_row(snapshot);
+    let scoped_magnetization = if let Some(values) = object_scalars {
+        Some([
+            number_from_metric(values, "mx").unwrap_or(initial_m[0]),
+            number_from_metric(values, "my").unwrap_or(initial_m[1]),
+            number_from_metric(values, "mz").unwrap_or(initial_m[2]),
+        ])
+    } else {
+        latest_magnetization_average(snapshot, &canonical_object_id, initial_m)
+    };
+    let has_solver_sample = object_scalars.is_some() || latest_energy_row.is_some();
     let source = if object_scalars.is_some() {
         "solver_per_object"
-    } else if latest_row.is_some() {
-        "solver_global"
+    } else if scoped_magnetization.is_some() {
+        "solver_spatial_object"
+    } else if latest_energy_row.is_some() {
+        "solver_energy_only"
     } else {
         "initial_state"
     };
     let step = object_scalars
         .and_then(|values| number_from_metric(values, "step").map(|value| value as u64))
-        .or_else(|| latest_row.as_ref().map(|row| row.step))
+        .or_else(|| latest_energy_row.as_ref().map(|row| row.step))
         .unwrap_or(0);
     let time_seconds = object_scalars
         .and_then(|values| number_from_metric(values, "time"))
-        .or_else(|| latest_row.as_ref().map(|row| row.time))
+        .or_else(|| latest_energy_row.as_ref().map(|row| row.time))
         .unwrap_or(0.0);
 
-    let magnetization_average = if let Some(values) = object_scalars {
-        [
-            number_from_metric(values, "mx").unwrap_or(initial_m[0]),
-            number_from_metric(values, "my").unwrap_or(initial_m[1]),
-            number_from_metric(values, "mz").unwrap_or(initial_m[2]),
-        ]
-    } else if has_solver_sample {
-        latest_magnetization_average(snapshot, &canonical_object_id, initial_m)
-            .or_else(|| latest_row.as_ref().map(|row| [row.mx, row.my, row.mz]))
-            .unwrap_or(initial_m)
+    let magnetization_average = if has_solver_sample {
+        scoped_magnetization
     } else {
-        initial_m
+        Some(initial_m)
     };
 
     let zero_energies = ObjectEnergySummary {
@@ -1818,7 +1821,7 @@ pub async fn get_object_metrics(
             total: number_from_metric(values, "e_total").unwrap_or(0.0),
         })
         .or_else(|| {
-            latest_row.as_ref().map(|row| ObjectEnergySummary {
+            latest_energy_row.as_ref().map(|row| ObjectEnergySummary {
                 exchange: row.e_ex,
                 demag: row.e_demag,
                 zeeman: row.e_ext,
@@ -1840,11 +1843,11 @@ pub async fn get_object_metrics(
         has_solver_sample,
         step,
         time_seconds,
-        magnetization_average: ObjectMagnetizationAverage {
-            mx: magnetization_average[0],
-            my: magnetization_average[1],
-            mz: magnetization_average[2],
-        },
+        magnetization_average: magnetization_average.map(|values| ObjectMagnetizationAverage {
+            mx: values[0],
+            my: values[1],
+            mz: values[2],
+        }),
         energies,
     }))
 }
@@ -2196,42 +2199,6 @@ fn latest_energy_row(snapshot: &SessionStateResponse) -> Option<ScalarRow> {
     })
 }
 
-fn latest_solver_sample(snapshot: &SessionStateResponse) -> Option<ScalarRow> {
-    snapshot.scalar_rows.last().cloned().or_else(|| {
-        let live_state = snapshot.live_state.as_ref()?;
-        if snapshot.scalar_revision == 0 && live_state.latest_step.step == 0 {
-            return None;
-        }
-        Some(ScalarRow {
-            step: live_state.latest_step.step,
-            time: live_state.latest_step.time,
-            solver_dt: live_state.latest_step.dt,
-            error_estimate: None,
-            max_error: None,
-            dt_suggested: None,
-            rejected_attempts: 0,
-            pseudo_time_s: live_state.latest_step.pseudo_time_s,
-            active_runtime_s: Some(live_state.latest_step.wall_time_ns as f64 * 1.0e-9),
-            mx: 0.0,
-            my: 0.0,
-            mz: 0.0,
-            e_ex: live_state.latest_step.e_ex,
-            e_demag: live_state.latest_step.e_demag,
-            e_ext: live_state.latest_step.e_ext,
-            e_ani: live_state.latest_step.e_ani,
-            e_dmi: live_state.latest_step.e_dmi,
-            e_total: live_state.latest_step.e_total,
-            max_dm_dt: live_state.latest_step.max_dm_dt,
-            max_h_eff: live_state.latest_step.max_h_eff,
-            max_h_demag: live_state.latest_step.max_h_demag,
-            max_torque_Apm: live_state.latest_step.max_torque_Apm,
-            max_torque_T: live_state.latest_step.max_torque_T,
-            per_object_scalars: live_state.latest_step.per_object_scalars.clone(),
-            table_expressions: Vec::new(),
-        })
-    })
-}
-
 fn latest_object_scalars<'a>(
     snapshot: &'a SessionStateResponse,
     object_id: &str,
@@ -2352,7 +2319,15 @@ fn latest_magnetization_average(
             .or(Some(fallback));
         }
     }
-    average_flat_magnetization(values, 0, values.len() / 3).or(Some(fallback))
+    let single_object_scene = snapshot
+        .scene_document
+        .as_ref()
+        .is_some_and(|scene| scene.objects.len() == 1);
+    if single_object_scene {
+        average_flat_magnetization(values, 0, values.len() / 3).or(Some(fallback))
+    } else {
+        None
+    }
 }
 
 fn mesh_part_matches_object(part: &fullmag_runner::FemMeshPartPayload, object_id: &str) -> bool {

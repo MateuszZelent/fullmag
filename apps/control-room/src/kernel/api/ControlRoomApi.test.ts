@@ -2014,11 +2014,12 @@ describe("ControlRoomApi", () => {
       columns: ["time", "e_total"],
       limit: 50,
       sinceRevision: 10,
+      tail: true,
     });
 
     expect(window.revision).toBe(12);
     expect(observedUrl).toBe(
-      "http://127.0.0.1:8765/v2/sessions/current/data/scalars?columns=time%2Ce_total&limit=50&since_revision=10",
+      "http://127.0.0.1:8765/v2/sessions/current/data/scalars?columns=time%2Ce_total&limit=50&since_revision=10&tail=true",
     );
   });
 
