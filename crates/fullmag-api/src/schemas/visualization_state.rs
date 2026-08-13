@@ -202,15 +202,17 @@ pub struct QuantityVisualizationPatch {
 }
 
 #[derive(Debug, Serialize, Deserialize, ToSchema, Clone, PartialEq)]
+#[serde(deny_unknown_fields)]
 pub struct PlanarVisualizationState {
     pub active_monitor_id: Option<String>,
     pub view_scope: PlanarViewScopeState,
     pub quantity_id: String,
     pub component: PlanarFieldComponent,
     pub colormap: String,
-    pub auto_contrast: bool,
-    pub contrast_min: Option<f64>,
-    pub contrast_max: Option<f64>,
+    #[serde(default = "default_planar_color_range_state")]
+    pub range: PlanarColorRangeState,
+    #[serde(default = "default_planar_raster_opacity")]
+    pub raster_opacity: f64,
     pub display_unit: Option<String>,
     pub resolution: PlanarResolutionPolicy,
     pub quality: PlanarRenderQuality,
@@ -220,6 +222,7 @@ pub struct PlanarVisualizationState {
 }
 
 #[derive(Debug, Serialize, Deserialize, ToSchema, Default)]
+#[serde(deny_unknown_fields)]
 pub struct PlanarVisualizationPatch {
     #[serde(default, deserialize_with = "deserialize_double_option")]
     pub active_monitor_id: Option<Option<String>>,
@@ -227,11 +230,8 @@ pub struct PlanarVisualizationPatch {
     pub quantity_id: Option<String>,
     pub component: Option<PlanarFieldComponent>,
     pub colormap: Option<String>,
-    pub auto_contrast: Option<bool>,
-    #[serde(default, deserialize_with = "deserialize_double_option")]
-    pub contrast_min: Option<Option<f64>>,
-    #[serde(default, deserialize_with = "deserialize_double_option")]
-    pub contrast_max: Option<Option<f64>>,
+    pub range: Option<PlanarColorRangeState>,
+    pub raster_opacity: Option<f64>,
     #[serde(default, deserialize_with = "deserialize_double_option")]
     pub display_unit: Option<Option<String>>,
     pub resolution: Option<PlanarResolutionPolicy>,
@@ -239,6 +239,33 @@ pub struct PlanarVisualizationPatch {
     pub layers: Option<PlanarLayerState>,
     pub vector_style: Option<PlanarVectorStyleState>,
     pub interaction: Option<PlanarInteractionState>,
+}
+
+#[derive(Debug, Serialize, Deserialize, ToSchema, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum PlanarColorRangeMode {
+    Auto,
+    Manual,
+    Symmetric,
+}
+
+#[derive(Debug, Serialize, Deserialize, ToSchema, Clone, PartialEq)]
+pub struct PlanarColorRangeState {
+    pub mode: PlanarColorRangeMode,
+    pub min: Option<f64>,
+    pub max: Option<f64>,
+}
+
+pub(crate) fn default_planar_color_range_state() -> PlanarColorRangeState {
+    PlanarColorRangeState {
+        mode: PlanarColorRangeMode::Auto,
+        min: None,
+        max: None,
+    }
+}
+
+fn default_planar_raster_opacity() -> f64 {
+    1.0
 }
 
 fn deserialize_double_option<'de, D, T>(deserializer: D) -> Result<Option<Option<T>>, D::Error>
@@ -316,9 +343,8 @@ pub(crate) fn default_planar_visualization_state() -> PlanarVisualizationState {
         quantity_id: "m".to_string(),
         component: PlanarFieldComponent::Magnitude,
         colormap: "viridis".to_string(),
-        auto_contrast: true,
-        contrast_min: None,
-        contrast_max: None,
+        range: default_planar_color_range_state(),
+        raster_opacity: default_planar_raster_opacity(),
         display_unit: None,
         resolution: PlanarResolutionPolicy {
             width: 512,

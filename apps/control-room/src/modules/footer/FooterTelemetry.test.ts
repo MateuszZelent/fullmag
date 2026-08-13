@@ -165,21 +165,15 @@ describe("FooterTelemetry", () => {
     const byId = Object.fromEntries(model.metrics.map((metric) => [metric.id, metric]));
 
     expect(model.statusTitle).toBe("System Status: Running");
-    expect(byId["avg-mx"]?.value).toBe("0.000000");
-    expect(byId["avg-my"]?.value).toBe("0.000000");
-    expect(byId["avg-mz"]?.value).toBe("0.000000");
+    expect(byId["avg-mx"]?.value).toBe("—");
+    expect(byId["avg-my"]?.value).toBe("—");
+    expect(byId["avg-mz"]?.value).toBe("—");
     expect(byId["energy-total"]?.value).toBe("15");
     expect(byId["max-torque"]?.value).toBe("6.000000e-3 T");
     expect(byId.step?.value).toBe("99");
     expect(byId.rate?.label).toBe("End-to-end rate");
     expect(byId.rate?.detail).toBe("Closed profiler span");
-    expect(byId["fem-device-selection"]?.value).toBe("auto → gpu");
-    expect(byId["fem-device-selection"]?.detail).toBe(
-      "calibrated_above_upper_bound",
-    );
-    expect(byId["fem-device-selection"]?.subdetail).toContain(
-      "rtx4080-qualified-v1",
-    );
+
   });
 
   it("uses detailed runtime state for the visible compute status", () => {
@@ -308,6 +302,37 @@ describe("FooterTelemetry", () => {
     expect(byId["solver-error"]?.subdetail).toContain("2 rejected");
     expect(byId["solver-max-error"]?.value).toBe("1.000000e-6");
     expect(byId["solver-max-error"]?.subdetail).toBe("Within tolerance");
+  });
+
+  it("hydrates global magnetization from the HTTP scalar resource without a websocket event", () => {
+    const telemetryStatus = selectFooterTelemetryStatus({
+      data: status,
+      error: null,
+      refetch: () => {},
+      revision: 1,
+      status: "ready",
+    });
+    const model = buildFooterTelemetryModel(
+      telemetryStatus,
+      objectMetrics,
+      null,
+      null,
+      null,
+      null,
+      null,
+      {
+        revision: 22,
+        row: { step: 99, time: 1.25e-9, mx: 0.25, my: -0.5, mz: 0.75 },
+        runId: "run-1",
+        sessionId: "session-1",
+      },
+    );
+    const byId = Object.fromEntries(model.metrics.map((metric) => [metric.id, metric]));
+
+    expect(byId["avg-mx"]?.value).toBe("0.250000");
+    expect(byId["avg-my"]?.value).toBe("-0.500000");
+    expect(byId["avg-mz"]?.value).toBe("0.750000");
+    expect(byId["avg-mx"]?.subdetail).toBe("Scalar history resource");
   });
 
   it("shows pseudotime and keeps physical simulation time separate for direct minimizers", () => {

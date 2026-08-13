@@ -1267,7 +1267,7 @@ export default function Viewport3DModule({
     resourceCounts,
     selection,
   });
-  const { onSelectDomain, onSelectFdmCell, onSelectFdmTarget, onSelectFdmUniverseOutsideSupport, onSelectObject, onSelectPart, onSelectRegion } =
+  const { onSelectDomain, onSelectFdmCell, onSelectFdmTarget, onSelectFdmUniverseOutsideSupport, onSelectObject, onSelectPart, onSelectPlanarMonitor, onSelectRegion } =
     useViewport3DSelectionHandlers({
       domainId,
       fdmDomain: sceneModel.fdmDomain,
@@ -1436,6 +1436,7 @@ export default function Viewport3DModule({
       onSelectFdmTarget={onSelectFdmTarget}
       onSelectFdmUniverseOutsideSupport={onSelectFdmUniverseOutsideSupport}
       onSelectObject={onSelectObject}
+      onSelectPlanarMonitor={onSelectPlanarMonitor}
       onSelectPart={onSelectPart}
       onSelectRegion={onSelectRegion}
       onCameraChange={saveCameraState}
@@ -1580,6 +1581,22 @@ function useViewport3DSelectionHandlers({
     },
     [select],
   );
+  const onSelectPlanarMonitor = useCallback(
+    (monitorId: string, isDraft: boolean) => {
+      select({
+        kind: isDraft ? "model.planar.monitor.draft" : "model.planar.monitor",
+        label: isDraft ? "Planar monitor draft" : monitorId,
+        nodeId: isDraft ? "model:definitions:planar-monitors:draft" : `model:definitions:planar-monitors:${monitorId}`,
+        objectId: null,
+        ref: {
+          ...(isDraft
+            ? { draftId: "draft", kind: "model.planar.monitor.draft" as const, nodeId: "model:definitions:planar-monitors:draft", type: "planar-monitor-draft" as const, visualizationTargetId: "planar-monitor:draft" }
+            : { kind: "model.planar.monitor" as const, monitorId, nodeId: `model:definitions:planar-monitors:${monitorId}`, type: "planar-monitor" as const, visualizationTargetId: `planar-monitor:${monitorId}` as `planar-monitor:${string}` }),
+        },
+      });
+    },
+    [select],
+  );
   const onSelectRegion = useCallback(
     (region: RegionOverlaySelection) => {
       select(viewportSelectionForRegion(region));
@@ -1593,6 +1610,7 @@ function useViewport3DSelectionHandlers({
     onSelectFdmUniverseOutsideSupport,
     onSelectFdmTarget,
     onSelectObject,
+    onSelectPlanarMonitor,
     onSelectPart,
     onSelectRegion,
   };

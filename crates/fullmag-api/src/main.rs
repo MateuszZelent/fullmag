@@ -1062,6 +1062,107 @@ mod realtime_change_tests {
 }
 
 #[cfg(test)]
+mod terminal_snapshot_route_tests {
+    use super::*;
+    use axum::{body::Body, http::Request};
+    use tower::ServiceExt;
+
+    #[tokio::test]
+    async fn terminal_snapshot_route_publishes_one_coherent_field_invalidation() {
+        let state = crate::router_v2::tests::test_app_state();
+        let mut events = state.current_live_realtime_events.subscribe();
+        let app = Router::new()
+            .route("/snapshot", post(sync_current_live_snapshot))
+            .with_state(state.clone());
+        let body = json!({
+            "session_id": "terminal-session",
+            "live_state": {
+                "status": "completed",
+                "updated_at_unix_ms": 1234,
+                "latest_step": {
+                    "step": 41,
+                    "time": 2.5e-12,
+                    "dt": 1.0e-15,
+                    "e_ex": 0.0,
+                    "e_demag": 0.0,
+                    "e_ext": 0.0,
+                    "e_ani": 0.0,
+                    "e_dmi": 0.0,
+                    "e_total": 0.0,
+                    "max_dm_dt": 0.0,
+                    "max_h_eff": 0.0,
+                    "max_h_demag": 0.0,
+                    "max_torque_Apm": 0.0,
+                    "max_torque_T": 0.0,
+                    "wall_time_ns": 0,
+                    "grid": [1, 1, 1],
+                    "magnetization": [0.0, 0.0, 1.0],
+                    "finished": true
+                }
+            },
+            "replace_latest_fields": true,
+            "field_generation": { "run_id": "terminal-run", "sequence": 9 },
+            "clear_preview_cache": true,
+            "latest_fields": {
+                "m": { "values": [[0.0, 0.0, 1.0]], "layout": { "grid_cells": [1, 1, 1] } },
+                "H_eff": { "values": [[0.0, 1.0, 0.0]], "layout": { "grid_cells": [1, 1, 1] } }
+            }
+        });
+
+        let response = app
+            .oneshot(
+                Request::post("/snapshot")
+                    .header(CONTENT_TYPE, "application/json")
+                    .body(Body::from(serde_json::to_vec(&body).expect("request JSON")))
+                    .expect("request"),
+            )
+            .await
+            .expect("snapshot response");
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let snapshot = state
+            .current_live_state
+            .read()
+            .await
+            .clone()
+            .expect("published session state");
+        assert_eq!(
+            snapshot
+                .live_state
+                .as_ref()
+                .map(|live| live.status.as_str()),
+            Some("completed")
+        );
+        assert!(snapshot
+            .live_state
+            .as_ref()
+            .is_some_and(|live| live.latest_step.finished));
+        assert!(snapshot.latest_fields.get("m").is_some());
+        assert!(snapshot.latest_fields.get("H_eff").is_some());
+
+        let event = tokio::time::timeout(Duration::from_secs(2), events.recv())
+            .await
+            .expect("terminal invalidation timeout")
+            .expect("terminal invalidation");
+        let event: LiveRealtimeServerEvent =
+            serde_json::from_str(&event.json).expect("realtime event JSON");
+        let LiveRealtimeServerEvent::ResourceBatchChanged { payload, .. } = event else {
+            panic!("expected resource batch invalidation");
+        };
+        assert!(payload.changes.iter().any(|change| {
+            matches!(change.resource, RealtimeResourceName::Fields)
+                && change.resource_id.as_deref() == Some("samples")
+                && change.quantity_ids.iter().any(|id| id == "m")
+                && change.quantity_ids.iter().any(|id| id == "H_eff")
+        }));
+        assert!(
+            events.try_recv().is_err(),
+            "terminal publication must emit one batch"
+        );
+    }
+}
+
+#[cfg(test)]
 fn current_live_realtime_event_coalesce_window_ms(event: &LiveRealtimeServerEvent) -> Option<u32> {
     if let LiveRealtimeServerEvent::ResourceBatchChanged { payload, .. } = event {
         if payload.changes.iter().any(|change| {
@@ -2064,6 +2165,7 @@ async fn sync_current_live_snapshot(
     let allow_previous_preview_fallback = !req.clear_preview_cache;
     let preview_fields = req.preview_fields.clone();
     let clear_preview_cache = req.clear_preview_cache;
+    let atomic_terminal_field_publish = req.replace_latest_fields;
     let session_id = req.session_id.clone();
     sync_current_live_frame_update(
         &state,
@@ -2075,6 +2177,7 @@ async fn sync_current_live_snapshot(
         has_latest_fields_update,
         preview_fields,
         clear_preview_cache,
+        atomic_terminal_field_publish,
         move |next| apply_current_live_snapshot(next, req),
     )
     .await
@@ -2094,6 +2197,7 @@ async fn sync_current_live_session_frame(
         false,
         false,
         None,
+        false,
         false,
         move |next| apply_current_live_session_frame(next, frame),
     )
@@ -2115,6 +2219,7 @@ async fn sync_current_live_runtime_frame(
         false,
         None,
         false,
+        false,
         move |next| apply_current_live_runtime_frame(next, frame),
     )
     .await
@@ -2134,6 +2239,7 @@ async fn sync_current_live_scalar_frame(
         true,
         false,
         None,
+        false,
         false,
         move |next| apply_current_live_scalar_frame(next, frame),
     )
@@ -2158,6 +2264,7 @@ async fn sync_current_live_field_frame(
         has_latest_fields_update,
         preview_fields,
         clear_preview_cache,
+        false,
         move |next| apply_current_live_field_frame(next, frame),
     )
     .await
@@ -2194,6 +2301,7 @@ async fn sync_current_live_frame_update<F>(
     has_latest_fields_update: bool,
     preview_fields: Option<Vec<LivePreviewField>>,
     clear_preview_cache: bool,
+    atomic_terminal_field_publish: bool,
     apply: F,
 ) -> Result<Json<serde_json::Value>, ApiError>
 where
@@ -2244,6 +2352,8 @@ where
                 coupled_checkpoint: None,
                 latest_scalar_row: None,
                 latest_fields: None,
+                replace_latest_fields: false,
+                field_generation: None,
                 preview_fields: None,
                 clear_preview_cache: false,
                 engine_log: None,
@@ -2263,7 +2373,10 @@ where
         None => None,
     };
     let apply_start = std::time::Instant::now();
-    apply(&mut next)?;
+    if let Err(error) = apply(&mut next) {
+        *current = Some(next);
+        return Err(error);
+    }
     let apply_ms = apply_start.elapsed().as_micros();
     next.display_selection = display_selection.clone();
     next.preview_config = preview_config.clone();
@@ -2383,14 +2496,26 @@ where
             .await?;
     }
 
-    publish_current_live_realtime_batch_changed_since(
-        &state,
-        &realtime_state,
-        previous_revisions.as_ref(),
-        true,
-        CURRENT_LIVE_REALTIME_COALESCE_WINDOW_MS,
-    )
-    .await?;
+    if atomic_terminal_field_publish {
+        publish_current_live_realtime_resource_changes_unsplit(
+            state.as_ref(),
+            realtime_state.session_id.clone(),
+            realtime_state.run_id.clone(),
+            current_live_realtime_changes_since(&realtime_state, previous_revisions.as_ref()),
+            false,
+            0,
+        )
+        .await?;
+    } else {
+        publish_current_live_realtime_batch_changed_since(
+            &state,
+            &realtime_state,
+            previous_revisions.as_ref(),
+            true,
+            CURRENT_LIVE_REALTIME_COALESCE_WINDOW_MS,
+        )
+        .await?;
+    }
     let sync_elapsed_us = sync_start.elapsed().as_micros();
     if sync_elapsed_us > 50_000 {
         eprintln!(

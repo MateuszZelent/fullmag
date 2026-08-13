@@ -1,8 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { fieldMapCommands } from "./fieldMapCommands";
-import { fieldMapStore } from "./fieldMapStore";
 import { MODEL_PLANAR_MONITORS_PATH } from "@/kernel/api/apiPaths";
+import { VISUALIZATION_STATE_PATH } from "@/kernel/api/apiPaths";
 import { planarMonitorFramePreviewStore } from "@/kernel/workspace/planarMonitorFramePreview";
 import {
   crossSectionWorkspaceStore,
@@ -11,7 +11,6 @@ import {
 
 describe("field-map commands", () => {
   afterEach(() => {
-    fieldMapStore.reset();
     planarMonitorFramePreviewStore.clear();
     discardPlanarMonitorDraft();
   });
@@ -22,9 +21,10 @@ describe("field-map commands", () => {
     ).toMatchObject({ shortcut: "2" });
   });
 
-  it("opens the shared center surface and selects a monitor through one command", async () => {
+  it("opens the shared center surface and selects a monitor through one typed planar patch", async () => {
     const setActiveViewportMainModule = vi.fn();
     const setFocusedSlot = vi.fn();
+    const queuePatch = vi.fn();
     const command = fieldMapCommands.find(
       (entry) => entry.id === "field-map.select-monitor",
     );
@@ -36,9 +36,16 @@ describe("field-map commands", () => {
         setFocusedSlot,
       } as never,
       source: "test",
+      resourceData: {
+        [VISUALIZATION_STATE_PATH]: { planar: { active_monitor_id: null } },
+      },
+      visualizationSync: { queuePatch } as never,
     });
 
-    expect(fieldMapStore.get().activeMonitorId).toBe("plane-1");
+    expect(queuePatch).toHaveBeenCalledTimes(1);
+    expect(queuePatch).toHaveBeenCalledWith({
+      planar: { active_monitor_id: "plane-1" },
+    });
     expect(setActiveViewportMainModule).toHaveBeenCalledWith("field-map");
     expect(setFocusedSlot).toHaveBeenCalledWith("viewport-main");
   });
@@ -52,10 +59,21 @@ describe("field-map commands", () => {
 
     const result = await command?.run({
       api: {
+        data: {
+          domain: {
+            meta: vi.fn().mockResolvedValue({ bounds: { min: [-4, -6, -8], max: [4, 6, 8] } }),
+          },
+        },
         model: {
           planarMonitors: {
             list: vi.fn().mockResolvedValue({ monitors: [], scene_revision: 4 }),
           },
+        },
+        visualization: {
+          state: vi.fn().mockResolvedValue({
+            clip: { axis: "z", enabled: false, flipped: false, position_percent: 50 },
+            slice: { axis: "z", position_percent: 50 },
+          }),
         },
       } as never,
       layout: {
@@ -72,13 +90,84 @@ describe("field-map commands", () => {
       status: "completed",
     });
     expect(crossSectionWorkspaceStore.getSnapshot().planarMonitorDraft).toMatchObject({
-      name: "Midplane",
+      monitor: { name: "Midplane" },
     });
     expect(selectionSet).toHaveBeenCalledWith(
       expect.objectContaining({ kind: "model.planar.monitor.draft" }),
       "test",
     );
     expect(setPanelVisible).toHaveBeenCalledWith("right", true);
+  });
+
+  it("creates every user entrypoint draft through the canonical monitor factory before opening the Inspector", async () => {
+    const setFocusedSlot = vi.fn();
+    const setPanelVisible = vi.fn();
+    const selectionSet = vi.fn();
+    const command = fieldMapCommands.find((entry) => entry.id === "planar-monitor.create");
+
+    const result = await command?.run({
+      api: {
+        data: {
+          domain: {
+            meta: vi.fn().mockResolvedValue({
+              bounds: { min: [-4, -6, -8], max: [4, 6, 8] },
+            }),
+          },
+        },
+      } as never,
+      input: { intent: { source: "palette" } },
+      layout: { setFocusedSlot, setPanelVisible } as never,
+      selection: { set: selectionSet } as never,
+      source: "palette",
+    });
+
+    expect(result).toEqual({ status: "completed" });
+    expect(crossSectionWorkspaceStore.getSnapshot().planarMonitorDraft).toMatchObject({
+      monitor: {
+        target: { kind: "domain" },
+        operator: { kind: "plane_sample" },
+        frame: { normalization_version: "planar_frame_v1" },
+      },
+    });
+    expect(selectionSet).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: "model.planar.monitor.draft" }),
+      "palette",
+    );
+    expect(setPanelVisible).toHaveBeenCalledWith("right", true);
+  });
+
+  it("fails closed for an Explorer target whose active-session capability is unavailable", () => {
+    const command = fieldMapCommands.find((entry) => entry.id === "planar-monitor.create");
+    const context = {
+      api: {} as never,
+      input: {
+        capability: { enabled: false, reason: "FDM target membership is not materialized." },
+        intent: { source: "explorer", target: { kind: "object", object_id: "film" } },
+      },
+      source: "explorer" as const,
+    };
+
+    expect(command?.isEnabled?.(context)).toBe(false);
+    expect(command?.disabledReason?.(context)).toBe("FDM target membership is not materialized.");
+  });
+
+  it("fails closed rather than substituting slice state when clip creation is requested while clipping is off", () => {
+    const command = fieldMapCommands.find((entry) => entry.id === "planar-monitor.create");
+    const context = {
+      api: {} as never,
+      input: { intent: { source: "clip" } },
+      resourceData: {
+        [VISUALIZATION_STATE_PATH]: {
+          clip: { axis: "x", enabled: false, flipped: true, position_percent: 25 },
+          slice: { axis: "z", position_percent: 75 },
+        },
+      },
+      source: "ribbon" as const,
+    };
+    expect(command?.isEnabled?.(context)).toBe(false);
+    expect(command?.disabledReason?.(context)).toBe(
+      "Enable the clip plane before creating a planar monitor from it.",
+    );
   });
 
   it("loads the resolved monitor frame before opening its outline in 3D", async () => {
@@ -93,6 +182,7 @@ describe("field-map commands", () => {
         v_axis: [0, 1, 0],
       },
     });
+    const queuePatch = vi.fn();
     const command = fieldMapCommands.find(
       (entry) => entry.id === "planar-monitor.show-frame-3d",
     );
@@ -117,6 +207,7 @@ describe("field-map commands", () => {
         setFocusedSlot,
       } as never,
       source: "test",
+      visualizationSync: { queuePatch } as never,
     });
 
     expect(result).toEqual({ status: "completed" });
@@ -129,6 +220,9 @@ describe("field-map commands", () => {
       boundsUvM: [-2, 2, -1, 1],
       monitorId: "plane-1",
       originM: [0, 0, 3],
+    });
+    expect(queuePatch).toHaveBeenCalledWith({
+      planar: { active_monitor_id: "plane-1" },
     });
     expect(setActiveViewportMainModule).toHaveBeenCalledWith("viewport-3d");
   });

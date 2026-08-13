@@ -31,11 +31,9 @@ function field(scopeKind: DecodedFieldVector["scopeKind"] = "airbox", scopeId: s
 function carrier(overrides: Partial<Viewport3DVisualizationDebugCarrierInput> = {}): Viewport3DVisualizationDebugCarrierInput {
   const decoded = field();
   return {
-    adoptedFieldBufferId: "buffer-1",
-    adoptedScalarBufferKey: "scalar-1",
-    adoptedVectorBuildKey: "vector-1",
     cache: {
       byteLength: 240,
+      dataIdentityMatches: true,
       entryState: "ready",
       etag: "etag-1",
       key: "resource-1",
@@ -64,6 +62,7 @@ function carrier(overrides: Partial<Viewport3DVisualizationDebugCarrierInput> = 
     expectedDomainGenerationId: "domain-1",
     expectedTopologyHash: "topology-hash",
     fieldBufferId: "buffer-1",
+    fieldBufferRevision: "etag-1",
     fieldBufferState: "target-buffer",
     fieldRevision: "field-1",
     plannerRequestId: "request-1",
@@ -93,11 +92,18 @@ function carrier(overrides: Partial<Viewport3DVisualizationDebugCarrierInput> = 
     surfaceProjectionMode: "magnitude",
     surfaceAdoptedFieldBufferId: "buffer-1",
     surfaceAdoptedResourceKey: "resource-1",
+    surfaceAdoptedScalarBufferKey: "scalar-1",
+    surfaceAdoptedAtMs: 1,
+    surfaceAdoptionSequence: 1,
     topologyByteLength: 900,
     vectorBuildKey: "vector-1",
     vectorDegradation: null,
+    vectorAdoptedAtMs: 2,
+    vectorAdoptedBuildKey: "vector-1",
     vectorAdoptedFieldBufferId: "buffer-1",
+    vectorAdoptedItemCount: 2,
     vectorAdoptedResourceKey: "resource-1",
+    vectorAdoptionSequence: 2,
     vectorSegmentByteLength: 48,
     vectorSegmentCount: 2,
     ...overrides,
@@ -130,6 +136,25 @@ describe("buildViewport3DVisualizationDebugSnapshot", () => {
     expect(JSON.stringify(result).length).toBeLessThan(64 * 1024);
   });
 
+  it("exports the exact response topology hash when FMVP stores raw hash bytes", () => {
+    const base = carrier();
+    const result = snapshot([
+      carrier({
+        cache: {
+          ...base.cache!,
+          responseMetadata: {
+            ...base.cache!.responseMetadata!,
+            meshTopologyHash: "sha256:topology-hash",
+          },
+        },
+      }),
+    ]);
+
+    expect(result.carriers[0]?.revisions.meshTopologyHash).toBe(
+      "sha256:topology-hash",
+    );
+  });
+
   it.each([
     ["actual field revision", { fieldRevision: null }],
     ["current domain generation", { expectedDomainGenerationId: null }],
@@ -139,6 +164,7 @@ describe("buildViewport3DVisualizationDebugSnapshot", () => {
       {
         cache: {
           byteLength: 240,
+          dataIdentityMatches: true,
           entryState: "ready" as const,
           etag: "etag-1",
           key: "resource-1",
@@ -152,11 +178,30 @@ describe("buildViewport3DVisualizationDebugSnapshot", () => {
     expect(result.disposition).toBe("unknown");
   });
 
+  it.each([
+    [
+      "different cache entry",
+      { cache: { ...carrier().cache!, dataIdentityMatches: false } },
+    ],
+    ["different cached ETag", { fieldBufferRevision: "etag-2" }],
+  ] as const)(
+    "does not report ready for a field buffer backed by a %s",
+    (_label, overrides) => {
+      const result = snapshot([carrier(overrides)]);
+
+      expect(result.disposition).toBe("degraded");
+      expect(result.issues).toContainEqual(
+        expect.objectContaining({ code: "field-revision-stale" }),
+      );
+    },
+  );
+
   it("keeps an all-null FMVP v3 response-metadata shell unknown", () => {
     const result = snapshot([
       carrier({
         cache: {
           byteLength: 240,
+          dataIdentityMatches: true,
           entryState: "ready",
           etag: "etag-1",
           key: "resource-1",
@@ -395,6 +440,63 @@ describe("buildViewport3DVisualizationDebugSnapshot", () => {
     );
   });
 
+  it("reports a trusted response generation for a legacy FMVP v2 payload", () => {
+    const legacyField: DecodedFieldVector = {
+      domainGenerationId: null,
+      dtype: "float64",
+      formatVersion: 2,
+      grid: [1, 1, 1],
+      indexing: "legacy_count_only",
+      meshTopologyHash: null,
+      meshTopologyRevision: null,
+      nComp: 3,
+      nodeIndices: null,
+      pointCount: 1,
+      quantityId: "H_demag",
+      scopeId: null,
+      scopeKind: null,
+      valueCount: 3,
+      values: new Float64Array([1, 0, 0]),
+    };
+    const result = snapshot([
+      carrier({
+        cache: {
+          ...carrier().cache!,
+          responseMetadata: {
+            ...carrier().cache!.responseMetadata!,
+            domainGenerationId: "fdm-generation-7",
+            encoding: "FMVP;version=2",
+            identityIssues: [
+              {
+                field: "domainGenerationId",
+                headerValue: "fdm-generation-7",
+                payloadValue: null,
+              },
+            ],
+          },
+        },
+        decoded: legacyField,
+        expectedDomainGenerationId: "fdm-generation-7",
+        expectedTopologyHash: null,
+        requestedQuantityId: "H_demag",
+        requestedScopeId: null,
+        requestedScopeKind: "full",
+      }),
+    ]);
+
+    expect(result.carriers[0]?.payload).toMatchObject({
+      formatVersion: 2,
+      scopeId: null,
+      scopeKind: null,
+    });
+    expect(result.carriers[0]?.revisions.domainGenerationId).toBe(
+      "fdm-generation-7",
+    );
+    expect(result.issues).not.toContainEqual(
+      expect.objectContaining({ code: "response-metadata-mismatch" }),
+    );
+  });
+
   it("evaluates a known decoded scope id independently of an unknown scope kind", () => {
     const mismatching = snapshot([
       carrier({
@@ -424,9 +526,8 @@ describe("buildViewport3DVisualizationDebugSnapshot", () => {
   it("requires separate matching adoption evidence for every requested render pass", () => {
     const missing = snapshot([
       carrier({
-        adoptedFieldBufferId: null,
-        adoptedScalarBufferKey: null,
-        adoptedVectorBuildKey: null,
+        surfaceAdoptedScalarBufferKey: null,
+        vectorAdoptedBuildKey: null,
         surfaceAdoptedFieldBufferId: null,
         surfaceAdoptedResourceKey: null,
         vectorAdoptedFieldBufferId: null,
@@ -435,25 +536,25 @@ describe("buildViewport3DVisualizationDebugSnapshot", () => {
     ]);
     const surfaceOnly = snapshot([
       carrier({
-        adoptedVectorBuildKey: null,
+        vectorAdoptedBuildKey: null,
         vectorAdoptedFieldBufferId: null,
         vectorAdoptedResourceKey: null,
       }),
     ]);
     const vectorOnly = snapshot([
       carrier({
-        adoptedScalarBufferKey: null,
+        surfaceAdoptedScalarBufferKey: null,
         surfaceAdoptedFieldBufferId: null,
         surfaceAdoptedResourceKey: null,
       }),
     ]);
     const matching = snapshot([carrier()]);
     const mismatching = snapshot([
-      carrier({ adoptedVectorBuildKey: "other-vector" }),
+      carrier({ vectorAdoptedBuildKey: "other-vector" }),
     ]);
     const partialKnownMismatch = snapshot([
       carrier({
-        adoptedScalarBufferKey: null,
+        surfaceAdoptedScalarBufferKey: null,
         surfaceAdoptedFieldBufferId: null,
         surfaceAdoptedResourceKey: null,
         vectorAdoptedFieldBufferId: "other-buffer",
@@ -481,7 +582,7 @@ describe("buildViewport3DVisualizationDebugSnapshot", () => {
     [
       "surface field",
       {
-        adoptedScalarBufferKey: null,
+        surfaceAdoptedScalarBufferKey: null,
         requestedPasses: ["surface"],
         surfaceAdoptedFieldBufferId: "other-buffer",
       },
@@ -489,7 +590,7 @@ describe("buildViewport3DVisualizationDebugSnapshot", () => {
     [
       "surface scalar key",
       {
-        adoptedScalarBufferKey: "other-scalar",
+        surfaceAdoptedScalarBufferKey: "other-scalar",
         requestedPasses: ["surface"],
         surfaceAdoptedFieldBufferId: null,
       },
@@ -497,7 +598,7 @@ describe("buildViewport3DVisualizationDebugSnapshot", () => {
     [
       "surface resource",
       {
-        adoptedScalarBufferKey: null,
+        surfaceAdoptedScalarBufferKey: null,
         requestedPasses: ["surface"],
         surfaceAdoptedFieldBufferId: null,
         surfaceAdoptedResourceKey: "other-resource",
@@ -506,7 +607,7 @@ describe("buildViewport3DVisualizationDebugSnapshot", () => {
     [
       "vector field",
       {
-        adoptedVectorBuildKey: null,
+        vectorAdoptedBuildKey: null,
         requestedPasses: ["vector-glyph"],
         vectorAdoptedFieldBufferId: "other-buffer",
       },
@@ -514,7 +615,7 @@ describe("buildViewport3DVisualizationDebugSnapshot", () => {
     [
       "vector build key",
       {
-        adoptedVectorBuildKey: "other-vector",
+        vectorAdoptedBuildKey: "other-vector",
         requestedPasses: ["vector-glyph"],
         vectorAdoptedFieldBufferId: null,
       },
@@ -522,7 +623,7 @@ describe("buildViewport3DVisualizationDebugSnapshot", () => {
     [
       "vector resource",
       {
-        adoptedVectorBuildKey: null,
+        vectorAdoptedBuildKey: null,
         requestedPasses: ["vector-glyph"],
         vectorAdoptedFieldBufferId: null,
         vectorAdoptedResourceKey: "other-resource",
@@ -542,7 +643,6 @@ describe("buildViewport3DVisualizationDebugSnapshot", () => {
   it("treats a synthetic render field buffer as present without calling it decoded FMVP", () => {
     const result = snapshot([
       carrier({
-        adoptedFieldBufferId: "synthetic:airbox:vectors",
         decoded: null,
         fieldBufferId: "synthetic:airbox:vectors",
         fieldBufferState: "synthetic",
@@ -630,7 +730,8 @@ describe("buildViewport3DVisualizationDebugSnapshot", () => {
 
   it("caps issues at 20 and bounds requested pass collections", () => {
     const broken = carrier({
-      adoptedFieldBufferId: "wrong",
+      surfaceAdoptedFieldBufferId: "wrong",
+      vectorAdoptedFieldBufferId: "wrong",
       decoded: field("part", "other"),
       fieldBufferId: null,
       requestedPasses: Array.from({ length: 100 }, (_, index) => index % 2 ? "surface" : "vector-glyph"),
@@ -675,9 +776,8 @@ describe("buildViewport3DVisualizationDebugSnapshot", () => {
 
   it("does not report a missing field when no field-dependent pass is requested", () => {
     const result = snapshot([carrier({
-      adoptedFieldBufferId: null,
-      adoptedScalarBufferKey: null,
-      adoptedVectorBuildKey: null,
+      surfaceAdoptedScalarBufferKey: null,
+      vectorAdoptedBuildKey: null,
       decoded: null,
       fieldBufferState: "missing",
       requestedPasses: [],

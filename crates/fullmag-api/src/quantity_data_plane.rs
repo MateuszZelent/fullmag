@@ -579,6 +579,27 @@ impl QuantityDataPlaneStore {
             )),
         }
     }
+
+    pub(crate) async fn get_or_sample_planar<F, Fut>(
+        &self,
+        key: &str,
+        sample: F,
+    ) -> Result<Arc<PlanarSampleResult>, crate::error::ApiError>
+    where
+        F: FnOnce() -> Fut,
+        Fut: std::future::Future<Output = Result<Arc<PlanarSampleResult>, crate::error::ApiError>>,
+    {
+        if let Some(cached) = self.planar_sample_cache.lock().await.get(key) {
+            return Ok(cached);
+        }
+        let sampled = sample().await?;
+        let mut cache = self.planar_sample_cache.lock().await;
+        if let Some(cached) = cache.get(key) {
+            return Ok(cached);
+        }
+        cache.insert(key.to_string(), Arc::clone(&sampled));
+        Ok(sampled)
+    }
 }
 
 impl Default for QuantityDataPlaneStore {
@@ -671,6 +692,35 @@ mod tests {
         );
         assert!(cache.get("second").is_some());
         assert!(cache.get("third").is_some());
+    }
+
+    #[tokio::test]
+    async fn planar_cache_mutex_is_not_held_during_expensive_sampling() {
+        let store = Arc::new(QuantityDataPlaneStore::new());
+        let started = Arc::new(tokio::sync::Notify::new());
+        let release = Arc::new(tokio::sync::Notify::new());
+        let worker_store = Arc::clone(&store);
+        let worker_started = Arc::clone(&started);
+        let worker_release = Arc::clone(&release);
+        let worker = tokio::spawn(async move {
+            worker_store
+                .get_or_sample_planar("slow-key", || async move {
+                    worker_started.notify_one();
+                    worker_release.notified().await;
+                    Ok::<_, crate::error::ApiError>(planar_sample(4))
+                })
+                .await
+        });
+        started.notified().await;
+
+        let _ = tokio::time::timeout(
+            std::time::Duration::from_millis(100),
+            store.planar_sample_cache.lock(),
+        )
+        .await
+        .expect("cache lock must remain available while sampling runs");
+        release.notify_one();
+        worker.await.unwrap().unwrap();
     }
 
     #[test]

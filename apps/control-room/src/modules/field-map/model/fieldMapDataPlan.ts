@@ -3,6 +3,8 @@ import type {
   PlanarFieldQuery,
 } from "@/kernel/api/apiTypes";
 
+import { planarScopeCapability } from "./fieldMapCapabilities";
+
 export type FieldMapViewScopeKind = "monitor_target" | "mesh_part" | "airbox";
 
 /** The planar profile is the source of truth for scope identity. */
@@ -20,16 +22,15 @@ export interface FieldMapDataPlanInput {
   active: boolean;
   component: string;
   discretization?: string | null;
-  expectedFieldRevision?: number | null;
-  expectedMeshRevision?: number | null;
-  expectedMonitorRevision?: number | null;
   includeMesh: boolean;
   monitorId: string | null;
+  quality: "interactive" | "export";
   quantityId: string;
   resolution: readonly [number, number];
   showVectors: boolean;
   snapshotId?: string | null;
   stageId?: string | null;
+  vectorBudget: number;
   viewScope?: FieldMapViewScope | null;
 }
 
@@ -50,15 +51,16 @@ export function buildFieldMapDataPlan(
   input: FieldMapDataPlanInput,
 ): FieldMapDataPlan {
   const viewScope = input.viewScope ?? { kind: "monitor_target" as const };
-  const fdm = input.discretization?.trim().toLowerCase() === "fdm";
-  const fdmUnsupportedScope =
-    fdm && (viewScope.kind === "mesh_part" || viewScope.kind === "airbox");
-  const unavailableReason = fdmUnsupportedScope
+  const scope = planarScopeCapability({
+    discretization: input.discretization,
+    scopeKind: viewScope.kind,
+  });
+  const unavailableReason = !scope.enabled
     ? "structured FDM grid planar sampling does not support mesh-part or airbox scopes."
     : null;
   const enabled =
-    input.active && input.monitorId !== null && !fdmUnsupportedScope;
-  const availability: FieldMapDataPlanAvailability = fdmUnsupportedScope
+    input.active && input.monitorId !== null && scope.enabled;
+  const availability: FieldMapDataPlanAvailability = !scope.enabled
     ? "not-applicable"
     : enabled
       ? "ready"
@@ -70,11 +72,8 @@ export function buildFieldMapDataPlan(
     quantityId: input.quantityId,
     query: {
       component: input.component,
-      expected_field_revision: input.expectedFieldRevision ?? undefined,
-      expected_mesh_revision: input.expectedMeshRevision ?? undefined,
-      expected_monitor_revision: input.expectedMonitorRevision ?? undefined,
       include_mesh: input.includeMesh,
-      quality: "interactive",
+      quality: input.quality,
       resolution_x: input.resolution[0],
       resolution_y: input.resolution[1],
       // The v2 contract only accepts an id for mesh_part. In particular,
@@ -84,7 +83,7 @@ export function buildFieldMapDataPlan(
       scope_kind: viewScope.kind,
       snapshot_id: input.snapshotId ?? undefined,
       stage_id: input.stageId ?? undefined,
-      vector_budget: input.showVectors ? 2_000 : 0,
+      vector_budget: input.showVectors ? input.vectorBudget : 0,
     },
     requestMask: enabled,
     requestMesh: enabled && input.includeMesh,

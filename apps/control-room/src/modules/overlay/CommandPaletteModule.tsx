@@ -15,11 +15,13 @@ import type {
   CommandId,
 } from "@/kernel/commands/commandTypes";
 import type { CommandRegistry } from "@/kernel/commands/CommandRegistry";
+import { VISUALIZATION_STATE_PATH } from "@/kernel/api/apiPaths";
 import {
   useCommandDetailResource,
   useStudyRuntimeCommandResourceData,
 } from "@/kernel/resources/studyRuntimeResources";
 import type { ModuleProps } from "@/kernel/types";
+import { useVisualizationStateResource } from "@/kernel/visualization/useVisualizationStateResource";
 import { CommandDetailDialog } from "@/shared/runtime/CommandDetailDialog";
 import {
   Command,
@@ -38,15 +40,16 @@ export function filterPaletteCommands(
   commands: readonly CommandContribution[],
   query: string,
 ): CommandContribution[] {
+  const paletteCommands = commands.filter((command) => !command.requiresInput);
   const terms = query
     .trim()
     .toLowerCase()
     .split(/\s+/)
     .filter(Boolean);
 
-  if (terms.length === 0) return [...commands];
+  if (terms.length === 0) return [...paletteCommands];
 
-  return commands.filter((command) => {
+  return paletteCommands.filter((command) => {
     const haystack = [
       command.id,
       command.title,
@@ -68,6 +71,16 @@ export function executePaletteCommand(
   context: CommandContext,
 ): Promise<unknown> {
   return commands.execute(commandId, context);
+}
+
+export function paletteCommandResourceData(
+  runtimeResourceData: Readonly<Record<string, unknown>>,
+  visualizationState: unknown,
+): Readonly<Record<string, unknown>> {
+  return {
+    ...runtimeResourceData,
+    [VISUALIZATION_STATE_PATH]: visualizationState,
+  };
 }
 
 function groupCommands(
@@ -270,15 +283,20 @@ function OpenCommandPalette({
   setQuery: (query: string) => void;
 }) {
   const runtimeResourceData = useStudyRuntimeCommandResourceData();
+  const visualizationState = useVisualizationStateResource();
   const [selectedCommandId, setSelectedCommandId] = useState<string | null>(null);
   const commandDetail = useCommandDetailResource(selectedCommandId);
+  const resourceData = useMemo(
+    () => paletteCommandResourceData(runtimeResourceData, visualizationState.data),
+    [runtimeResourceData, visualizationState.data],
+  );
   const commandContext = useMemo(
     () =>
       createCommandContext("palette", kernel, {
-        resourceData: runtimeResourceData,
+        resourceData,
         sourceDetail: "command-palette",
       }),
-    [kernel, runtimeResourceData],
+    [kernel, resourceData],
   );
 
   return (

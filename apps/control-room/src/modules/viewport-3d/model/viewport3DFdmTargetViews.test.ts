@@ -1,8 +1,12 @@
 import { describe, expect, it } from "vitest";
 
 import type { FdmRegionMembershipResource } from "@/kernel/api/apiTypes";
+import type { DecodedFieldVector } from "@/kernel/api/codecs";
+import { DEFAULT_OBJECT_VISUALIZATION } from "@/kernel/visualization/ObjectVisualizationController";
 
 import type { FdmCuboidInstanceModel } from "../layers/fdmCuboidBuildModel";
+import { buildViewport3DFdmInspectSample } from "../viewport3dInspect";
+import { buildViewport3DTargetFieldBuffer } from "./viewport3DTargetFieldBuffer";
 import {
   buildViewport3DFdmTargetSurfaceCellIndices,
   buildViewport3DFdmTargetViews,
@@ -52,6 +56,126 @@ function model(regionIds: number[]): FdmCuboidInstanceModel {
 }
 
 describe("buildViewport3DFdmTargetViews", () => {
+  it("fails closed every render and inspect consumer for an identity-incompatible object field", () => {
+    const [view] = buildViewport3DFdmTargetViews({
+      membership: membership({ object_ids: ["left"] }),
+      model: model([1, 1, 1, 1]),
+      realizedRegionIds: Uint32Array.from([1, 1, 1, 1]),
+    }).views;
+    expect(view).toBeDefined();
+    const fieldVector: DecodedFieldVector = {
+      dtype: "float64",
+      formatVersion: 2,
+      grid: [4, 1, 1],
+      indexing: "legacy_count_only",
+      nComp: 3,
+      pointCount: 4,
+      quantityId: "H_demag",
+      valueCount: 12,
+      values: Float64Array.from({ length: 12 }, (_, index) => index + 1),
+    };
+    const fieldBuffer = buildViewport3DTargetFieldBuffer({
+      domain: {
+        discretization: "fdm",
+        domainGenerationId: "generation-current",
+        gridShape: [4, 1, 1],
+        meshTopologyHash: null,
+        meshTopologyRevision: null,
+        pointCount: 4,
+      },
+      fieldRevision: "field-1",
+      fieldVector,
+      query: {
+        component: "full",
+        scope_id: "left",
+        scope_kind: "object",
+      },
+      responseDomainGenerationId: "generation-current",
+      responseMetadata: null,
+      resourceKey: "field:H_demag:object:left",
+      targetIds: ["object:left"],
+      topologyRevision: "topology-1",
+    });
+    expect(fieldBuffer.requestIdentityCompatible).toBe(false);
+
+    const rendered = memoizeViewport3DFdmTargetRenderView({
+      build: () => ({
+        ...view!,
+        fieldBuffer: {
+          ...fieldBuffer,
+          decodedFieldVector: fieldVector,
+        },
+        fieldVector,
+        settings: {
+          ...DEFAULT_OBJECT_VISUALIZATION,
+          activeQuantityId: "H_demag",
+          shaderVisible: true,
+          vectorsVisible: true,
+        },
+        surfaceColors: {
+          buildKey: "surface-colors",
+          colorMode: "magnitude",
+          colorPalette: "viridis",
+          colors: new Float32Array(12),
+          range: { max: 12, min: 1 },
+          sourceFieldBufferId: fieldBuffer.bufferId,
+          sourceResourceKey: fieldBuffer.resourceKey,
+        },
+        vectorColors: {
+          buildKey: "vector-colors",
+          colorMode: "magnitude",
+          colorPalette: "viridis",
+          colors: new Float32Array(12),
+          range: { max: 12, min: 1 },
+          sourceFieldBufferId: fieldBuffer.bufferId,
+          sourceResourceKey: fieldBuffer.resourceKey,
+        },
+        vectorGlyphColors: {
+          buildKey: "vector-glyph-colors",
+          colorMode: "magnitude",
+          colorPalette: "viridis",
+          colors: new Float32Array(12),
+          range: { max: 12, min: 1 },
+          sourceFieldBufferId: fieldBuffer.bufferId,
+          sourceResourceKey: fieldBuffer.resourceKey,
+        },
+        vectorBuildReference: {
+          buildKey: "vector-build",
+          fieldBufferId: fieldBuffer.bufferId,
+          fieldRevision: "field-1",
+          groupKey: "object:left",
+          resourceKey: fieldBuffer.resourceKey,
+          revisionSummary: "field-1",
+          targetRevision: "target-1",
+          topologyRevision: "topology-1",
+        },
+        vectorSegments: new Float32Array(7),
+      }),
+      fieldConsumersCompatible: false,
+      renderKey: "identity-incompatible",
+      view: view!,
+    });
+
+    expect(rendered).toMatchObject({
+      fieldBuffer: null,
+      fieldVector: null,
+      surfaceColors: null,
+      vectorBuildReference: null,
+      vectorColors: null,
+      vectorGlyphColors: null,
+      vectorSegments: null,
+    });
+    expect(
+      buildViewport3DFdmInspectSample({
+        fieldVector: rendered.fieldVector,
+        instanceId: 0,
+        model: rendered.sourceModel,
+        quantityId: "H_demag",
+        worldPosition: [0, 0, 0],
+      }),
+    ).toMatchObject({ status: "unavailable" });
+  });
+
   it("reuses surface colors across visibility changes and invalidates scalar range or palette", () => {
     const [view] = buildViewport3DFdmTargetViews({
       membership: membership(),
@@ -396,6 +520,7 @@ describe("buildViewport3DFdmTargetViews", () => {
       builds.set(view.target.id, (builds.get(view.target.id) ?? 0) + 1);
       return {
         ...view,
+        fieldBuffer: null,
         fieldVector: null,
         settings: {} as Viewport3DFdmTargetRenderView["settings"],
         surfaceColors: null,
@@ -410,6 +535,7 @@ describe("buildViewport3DFdmTargetViews", () => {
           view.target.id,
           memoizeViewport3DFdmTargetRenderView({
             build: () => build(view),
+            fieldConsumersCompatible: true,
             renderKey: keyByTarget.get(view.target.id) ?? "",
             view,
           }),

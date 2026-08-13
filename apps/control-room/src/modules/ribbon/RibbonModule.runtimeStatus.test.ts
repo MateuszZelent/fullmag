@@ -84,6 +84,12 @@ function select(status: LiveStatusResource) {
 }
 
 describe("RibbonModule runtime status selection", () => {
+  it("wires the runtime field catalog into ribbon tab construction", () => {
+    const source = readFileSync(new URL("./RibbonModule.tsx", import.meta.url), "utf8");
+
+    expect(source).toContain("useFieldCatalogResource({");
+    expect(source).toContain("fieldCatalog: fieldCatalog.data,");
+  });
   it("treats session identity changes as runtime command state changes", () => {
     const previous = select(statusWith({ sessionId: "session-old" }));
     const next = select(statusWith({ sessionId: "session-new" }));
@@ -125,3 +131,4 @@ describe("RibbonModule runtime status selection", () => {
     ).toBe(false);
   });
 });
+import { readFileSync } from "node:fs";

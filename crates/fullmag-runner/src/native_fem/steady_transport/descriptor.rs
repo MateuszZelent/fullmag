@@ -25,6 +25,9 @@ pub(crate) struct PreparedTransportPlan<'a> {
 pub(crate) fn preflight_transport_plans(
     plan: &FemPlanIR,
 ) -> Result<Vec<PreparedTransportPlan<'_>>, RunError> {
+    if plan.spin_transport_plans.is_empty() {
+        return Ok(Vec::new());
+    }
     if plan.spin_transport_plans.len() > 1 {
         return Err(RunError {
             message: "FEM M1 steady transport supports exactly one module because v2 field resource identity is quantity-scoped; refusing artifact overwrite".into(),
@@ -392,6 +395,31 @@ mod rt0_descriptor_tests {
         let mesh = mesh();
         validate_conservative_current_view_descriptor(&mesh, &valid_view(), "module")
             .expect("complete RT0 descriptor should pass planner preflight");
+    }
+
+    #[test]
+    fn empty_transport_plan_skips_cpu_only_device_preflight() {
+        let mut plan = crate::dispatch::test_tiny_fem_plan();
+        plan.mfem_device_string = Some("cuda".into());
+
+        let prepared = preflight_transport_plans(&plan)
+            .expect("a plan without transport must not enter transport device preflight");
+
+        assert!(prepared.is_empty());
+    }
+
+    #[test]
+    fn nonempty_transport_plan_still_rejects_non_cpu_device() {
+        let mut plan = crate::dispatch::test_tiny_fem_plan();
+        plan.mfem_device_string = Some("cuda".into());
+        plan.spin_transport_plans = vec![crate::native_fem::test_resolved_steady_transport_plan()];
+
+        let error = match preflight_transport_plans(&plan) {
+            Ok(_) => panic!("a real FEM transport plan must remain CPU-only"),
+            Err(error) => error,
+        };
+
+        assert!(error.message.contains("non-CPU MFEM device"), "{error:?}");
     }
 
     #[test]

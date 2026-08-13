@@ -1,6 +1,6 @@
-import type { FieldVectorQuery } from "@/kernel/api/apiTypes";
+import type { FieldCatalogResource, FieldVectorQuery } from "@/kernel/api/apiTypes";
 import {
-  isMagneticOnlyQuantityId,
+  fieldCatalogQuantitySupportsAirbox,
   isScalarSpatialQuantityId,
   resolveCanonicalQuantityId,
 } from "@/kernel/api/quantityIds";
@@ -150,6 +150,7 @@ export interface Viewport3DPlanPartModel {
 
 export interface Viewport3DTargetQuantityFieldRequestsOptions {
   availableQuantityIds?: ReadonlySet<string> | null;
+  fieldCatalog?: FieldCatalogResource | null;
   fdmAirboxSettings?: VisualizationTargetSettings | null;
   fdmSettings: VisualizationTargetSettings | null;
   fdmTargetSettings?: readonly Viewport3DFdmTargetSettingsForPlanning[];
@@ -593,6 +594,7 @@ export function resolveViewport3DPrimaryFieldDemandPlan({
 export function resolveViewport3DAirboxFieldVectorDemandPlan({
   airboxParts,
   availableQuantityIds,
+  fieldCatalog,
   fieldQuery = { component: "full", scope_kind: "full" },
   quantityId,
   replayQuery = null,
@@ -601,6 +603,7 @@ export function resolveViewport3DAirboxFieldVectorDemandPlan({
 }: {
   airboxParts: readonly { id: string; label?: string | null }[];
   availableQuantityIds?: ReadonlySet<string> | null;
+  fieldCatalog?: FieldCatalogResource | null;
   fieldQuery?: FieldVectorQuery;
   quantityId: string;
   replayQuery?: FieldVectorQuery | null;
@@ -610,7 +613,8 @@ export function resolveViewport3DAirboxFieldVectorDemandPlan({
   vectorsVisible?: boolean;
 }): Viewport3DAirboxFieldVectorDemandPlan {
   if (
-    isMagneticOnlyQuantityId(quantityId) ||
+    (fieldCatalog &&
+      !fieldCatalogQuantitySupportsAirbox(fieldCatalog, quantityId)) ||
     !isViewport3DQuantityAvailable(quantityId, availableQuantityIds)
   ) {
     return {
@@ -785,6 +789,7 @@ export function resolveViewport3DScopedPartVectorFieldDemandPlan({
 
 export function resolveViewport3DTargetQuantityFieldDemandPlan({
   availableQuantityIds,
+  fieldCatalog,
   fdmAirboxSettings,
   fdmSettings,
   fdmTargetSettings = [],
@@ -833,17 +838,23 @@ export function resolveViewport3DTargetQuantityFieldDemandPlan({
 
   for (const target of fdmTargetSettings) {
     if (
-      sameViewport3DQuantityIdForPlanning(
-        target.settings.activeQuantityId,
-        primaryFieldQuantityId,
-      ) ||
+      (target.targetId !== "fdm-universe-outside-support" &&
+        sameViewport3DQuantityIdForPlanning(
+          target.settings.activeQuantityId,
+          primaryFieldQuantityId,
+        )) ||
       !target.settings.visible ||
       (!target.settings.shaderVisible && !target.settings.vectorsVisible)
     ) {
       continue;
     }
     const quantityId = resolveCanonicalQuantityId(target.settings.activeQuantityId);
-    if (!isViewport3DQuantityAvailable(quantityId, availableQuantityIds)) {
+    if (
+      !isViewport3DQuantityAvailable(quantityId, availableQuantityIds) ||
+      (target.targetId === "fdm-universe-outside-support" &&
+        fieldCatalog &&
+        !fieldCatalogQuantitySupportsAirbox(fieldCatalog, quantityId))
+    ) {
       continue;
     }
     demands.push(
@@ -883,17 +894,23 @@ export function resolveViewport3DTargetQuantityFieldDemandPlan({
   ]) {
     if (
       !target ||
-      sameViewport3DQuantityIdForPlanning(
-        target.settings.activeQuantityId,
-        primaryFieldQuantityId,
-      ) ||
+      (target.targetId !== "fdm-universe-outside-support" &&
+        sameViewport3DQuantityIdForPlanning(
+          target.settings.activeQuantityId,
+          primaryFieldQuantityId,
+        )) ||
       !target.settings.visible ||
       (!target.settings.shaderVisible && !target.settings.vectorsVisible)
     ) {
       continue;
     }
     const quantityId = resolveCanonicalQuantityId(target.settings.activeQuantityId);
-    if (!isViewport3DQuantityAvailable(quantityId, availableQuantityIds)) {
+    if (
+      !isViewport3DQuantityAvailable(quantityId, availableQuantityIds) ||
+      (target.targetId === "fdm-universe-outside-support" &&
+        fieldCatalog &&
+        !fieldCatalogQuantitySupportsAirbox(fieldCatalog, quantityId))
+    ) {
       continue;
     }
     demands.push(
@@ -931,6 +948,7 @@ export function resolveViewport3DTargetQuantityFieldDemandPlan({
     requests: new Map(
       requests
         .filter((request) =>
+          request.query.scope_kind !== "full" ||
           !sameViewport3DQuantityIdForPlanning(
             request.quantityId,
             primaryFieldQuantityId,

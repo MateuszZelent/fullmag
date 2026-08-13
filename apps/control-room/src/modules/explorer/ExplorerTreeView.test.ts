@@ -264,7 +264,7 @@ describe("flattenVisibleExplorerRows", () => {
     );
     expect(explorerTreeViewSource).toContain("includeStageExecution: false");
     expect(explorerTreeViewSource).toContain(
-      "resourceData={runtimeResourceData}",
+      "resourceData={commandResourceData}",
     );
   });
 

@@ -63,6 +63,9 @@ pub(crate) struct DisplayPresentationState {
     pub visualization_vector_style: Option<VectorStyleVisualizationState>,
     #[serde(default)]
     pub visualization_overrides: Option<Vec<VisualizationOverrideState>>,
+    /// Bounded restore diagnostics for presentation-schema migrations.
+    #[serde(default)]
+    pub visualization_restore_warnings: Vec<String>,
 }
 
 impl Default for DisplayPresentationState {
@@ -83,6 +86,7 @@ impl Default for DisplayPresentationState {
             visualization_clip: None,
             visualization_vector_style: None,
             visualization_overrides: None,
+            visualization_restore_warnings: Vec::new(),
         }
     }
 }
@@ -622,6 +626,10 @@ impl StepUpdateView {
                     .unwrap_or(3),
                 values: mag.clone(),
                 active_mask: None,
+                provenance: None,
+                spatial_kind: None,
+                quantity_domain: None,
+                layout: None,
             });
         }
 
@@ -692,6 +700,15 @@ pub(crate) struct SessionStateResponse {
     /// Per-quantity revisions used by data/fields freshness validators.
     #[serde(skip, default)]
     pub field_quantity_revisions: BTreeMap<String, u64>,
+    /// Last accepted complete terminal field generation from the internal
+    /// runner bridge. It is internal state, not a browser resource payload.
+    #[serde(skip, default)]
+    pub accepted_terminal_field_generation: Option<CurrentLiveFieldGeneration>,
+    /// Highest accepted terminal generation per run. Retained durably so a
+    /// restarted bridge can begin a new run at sequence 1 without admitting a
+    /// delayed terminal frame from an earlier run.
+    #[serde(skip, default)]
+    pub terminal_field_generations: BTreeMap<String, u64>,
     /// Revision for simulation stage execution state.
     #[serde(skip)]
     pub stage_execution_revision: u64,
@@ -1038,6 +1055,10 @@ pub(crate) struct CurrentLiveSnapshotRequest {
     #[serde(default)]
     pub latest_fields: Option<LatestFields>,
     #[serde(default)]
+    pub replace_latest_fields: bool,
+    #[serde(default)]
+    pub field_generation: Option<CurrentLiveFieldGeneration>,
+    #[serde(default)]
     pub preview_fields: Option<Vec<LivePreviewField>>,
     #[serde(default)]
     pub clear_preview_cache: bool,
@@ -1098,9 +1119,19 @@ pub(crate) struct CurrentLiveFieldFrameRequest {
     #[serde(default)]
     pub latest_fields: Option<LatestFields>,
     #[serde(default)]
+    pub replace_latest_fields: bool,
+    #[serde(default)]
+    pub field_generation: Option<CurrentLiveFieldGeneration>,
+    #[serde(default)]
     pub preview_fields: Option<Vec<LivePreviewField>>,
     #[serde(default)]
     pub clear_preview_cache: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub(crate) struct CurrentLiveFieldGeneration {
+    pub run_id: String,
+    pub sequence: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -1609,6 +1640,8 @@ mod tests {
             field_catalog_revision: 0,
             field_samples_revision: 0,
             field_quantity_revisions: BTreeMap::new(),
+            accepted_terminal_field_generation: None,
+            terminal_field_generations: BTreeMap::new(),
             stage_execution_revision: 0,
             simulation_preparation_revision: 0,
             region_realization_revisions: fullmag_authoring::RegionRealizationRevisions::default(),

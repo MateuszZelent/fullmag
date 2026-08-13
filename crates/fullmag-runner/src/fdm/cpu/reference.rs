@@ -23,9 +23,7 @@ use super::spin_transport::{
 use crate::artifact_pipeline::{ArtifactPipelineSender, ArtifactRecorder};
 use crate::derived_fields::{compute_torque_field, max_torque_residual_apm_from_field};
 use crate::fdm::{artifacts::select_state_observable_field, validate_single_grid_budget};
-use crate::interactive_runtime::{
-    build_full_grid_materialized_fields, display_is_global_scalar, display_refresh_due,
-};
+use crate::interactive_runtime::{display_is_global_scalar, display_refresh_due};
 use crate::preview::{
     build_grid_preview_field, build_grid_scalar_preview_field, flatten_vectors, select_observables,
 };
@@ -298,13 +296,21 @@ fn build_oersted(plan: &FdmPlanIR) -> Option<OerstedCylinderConfig> {
 }
 
 fn resolved_per_node_external_field(plan: &FdmPlanIR, time_seconds: f64) -> Option<Vec<Vector3>> {
+    resolved_per_node_external_field_for_count(plan, plan.initial_magnetization.len(), time_seconds)
+}
+
+pub(crate) fn resolved_per_node_external_field_for_count(
+    plan: &FdmPlanIR,
+    sample_count: usize,
+    time_seconds: f64,
+) -> Option<Vec<Vector3>> {
     let antenna = if plan.antenna_zeeman_masks.is_empty() {
         None
     } else {
         Some(
             crate::antenna_fields::combined_antenna_zeeman_mask_field_at_time(
                 &plan.antenna_zeeman_masks,
-                plan.initial_magnetization.len(),
+                sample_count,
                 time_seconds,
             ),
         )
@@ -325,11 +331,55 @@ fn resolved_per_node_external_field(plan: &FdmPlanIR, time_seconds: f64) -> Opti
 }
 
 fn resolved_antenna_zeeman_field(plan: &FdmPlanIR, time_seconds: f64) -> Vec<Vector3> {
+    resolved_antenna_zeeman_field_for_count(plan, plan.initial_magnetization.len(), time_seconds)
+}
+
+pub(crate) fn resolved_antenna_zeeman_field_for_count(
+    plan: &FdmPlanIR,
+    sample_count: usize,
+    time_seconds: f64,
+) -> Vec<Vector3> {
     crate::antenna_fields::combined_antenna_zeeman_mask_field_at_time(
         &plan.antenna_zeeman_masks,
-        plan.initial_magnetization.len(),
+        sample_count,
         time_seconds,
     )
+}
+
+pub(crate) fn resolved_oersted_visual_field_for_count(
+    problem: &ExchangeLlgProblem,
+    plan: &FdmPlanIR,
+    sample_count: usize,
+    time_seconds: f64,
+    antenna_field: &[Vector3],
+) -> Vec<Vector3> {
+    // The engine's Oersted accessor starts from the aggregate per-node field,
+    // which also carries antenna Zeeman values. Separate the sources again for
+    // publication, while retaining explicit Oersted samples in Airbox cells.
+    let mut field = problem.oersted_field_at_time(time_seconds);
+    field.resize(sample_count, [0.0, 0.0, 0.0]);
+    field.truncate(sample_count);
+    let explicit_oersted = plan.oersted_field_xyz.as_deref().unwrap_or(&[]);
+
+    for (index, value) in field.iter_mut().enumerate() {
+        if plan
+            .active_mask
+            .as_ref()
+            .is_some_and(|mask| !mask.get(index).copied().unwrap_or(false))
+        {
+            *value = explicit_oersted
+                .get(index)
+                .copied()
+                .unwrap_or([0.0, 0.0, 0.0]);
+            continue;
+        }
+        if let Some(antenna) = antenna_field.get(index) {
+            value[0] -= antenna[0];
+            value[1] -= antenna[1];
+            value[2] -= antenna[2];
+        }
+    }
+    field
 }
 
 pub(crate) fn resolved_regional_field_drives(
@@ -399,7 +449,16 @@ pub(crate) fn snapshot_vector_fields(
     request: &LivePreviewRequest,
 ) -> Result<Vec<crate::LivePreviewField>, RunError> {
     resolve_cpu_fft_backend_name_for_demag(plan.enable_demag)?;
-    let (problem, state) = build_snapshot_problem_and_state(plan)?;
+    let (mut problem, state) = build_snapshot_problem_and_state(plan)?;
+    problem.terms.per_node_field = resolved_per_node_external_field(plan, state.time_seconds);
+    let antenna_field = resolved_antenna_zeeman_field(plan, state.time_seconds);
+    let oersted_field = resolved_oersted_visual_field_for_count(
+        &problem,
+        plan,
+        state.magnetization().len(),
+        state.time_seconds,
+        &antenna_field,
+    );
     snapshot_vector_fields_from_state(
         &problem,
         &state,
@@ -407,6 +466,8 @@ pub(crate) fn snapshot_vector_fields(
         request,
         plan.grid.cells,
         plan.active_mask.as_deref(),
+        Some(&oersted_field),
+        Some(&antenna_field),
     )
 }
 
@@ -417,8 +478,15 @@ pub(crate) fn snapshot_vector_fields_from_state(
     request: &LivePreviewRequest,
     grid: [u32; 3],
     active_mask: Option<&[bool]>,
+    oersted_field: Option<&[Vector3]>,
+    antenna_field: Option<&[Vector3]>,
 ) -> Result<Vec<crate::LivePreviewField>, RunError> {
-    let mut direct_fields = DirectFieldSnapshotCache::new(problem, state);
+    let mut direct_fields = DirectFieldSnapshotCache::new_with_source_fields(
+        problem,
+        state,
+        oersted_field,
+        antenna_field,
+    );
     let mut observables = None;
     let mut cached = Vec::new();
     let mut seen = std::collections::HashSet::new();
@@ -443,10 +511,25 @@ pub(crate) fn snapshot_vector_fields_from_state(
             });
         } else {
             if observables.is_none() {
-                observables = Some(observe_state(problem, state)?);
+                observables = Some(observe_state_with_antenna_field(
+                    problem,
+                    state,
+                    antenna_field.map(<[_]>::to_vec),
+                )?);
             }
             let values =
                 select_observables(observables.as_ref().expect("observables"), quantity)?.to_vec();
+            let expected_len = grid[0] as usize * grid[1] as usize * grid[2] as usize;
+            if values.len() != expected_len {
+                return Err(RunError {
+                    message: format!(
+                        "CPU FDM snapshot '{}': expected {} grid values, received {}",
+                        quantity,
+                        expected_len,
+                        values.len()
+                    ),
+                });
+            }
             cached.push(build_grid_preview_field(
                 &preview_request,
                 &values,
@@ -1592,11 +1675,6 @@ pub(crate) fn execute_reference_fdm_with_coupled_checkpoint(
         if let Some(live) = live.as_mut() {
             if let Some(final_stats) = steps.last().cloned() {
                 let display_selection = live.display_selection.map(|get| get());
-                let observables = observe_state_with_antenna_field(
-                    &problem,
-                    &state,
-                    Some(resolved_antenna_zeeman_field(plan, state.time_seconds)),
-                )?;
                 let materialization_quantities = field_materialization_quantity_ids();
                 let materialization_quantities = active_fdm_preview_quantities(
                     crate::dispatch::FdmEngine::CpuReference,
@@ -1607,13 +1685,45 @@ pub(crate) fn execute_reference_fdm_with_coupled_checkpoint(
                     .as_ref()
                     .map(|selection| selection.revision)
                     .unwrap_or(0);
-                let cached_preview_fields = build_full_grid_materialized_fields(
+                let antenna_field = resolved_antenna_zeeman_field(plan, state.time_seconds);
+                let oersted_field = resolved_oersted_visual_field_for_count(
+                    &problem,
+                    plan,
+                    state.magnetization().len(),
+                    state.time_seconds,
+                    &antenna_field,
+                );
+                let mut cached_preview_fields = snapshot_vector_fields_from_state(
+                    &problem,
+                    &state,
                     &materialization_quantities,
-                    &observables,
+                    &LivePreviewRequest {
+                        revision: config_revision,
+                        quantity: "m".to_string(),
+                        component: "3D".to_string(),
+                        layer: 0,
+                        all_layers: true,
+                        every_n: 1,
+                        x_chosen_size: 0,
+                        y_chosen_size: 0,
+                        auto_scale_enabled: false,
+                        max_points: 0,
+                    },
                     live.grid,
                     plan.active_mask.as_deref(),
-                    config_revision,
-                );
+                    Some(&oersted_field),
+                    Some(&antenna_field),
+                )?;
+                let materialized_at_unix_ms = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_millis() as u64;
+                for field in &mut cached_preview_fields {
+                    field.source_step = final_stats.step;
+                    field.source_time_seconds = Some(final_stats.time);
+                    field.source_revision = final_stats.step;
+                    field.materialized_at_unix_ms = materialized_at_unix_ms;
+                }
                 let preview_field = if let Some(selection) = display_selection.as_ref() {
                     let preview_field = if !display_is_global_scalar(selection) {
                         let request = selection.preview_request();
@@ -1626,6 +1736,11 @@ pub(crate) fn execute_reference_fdm_with_coupled_checkpoint(
                         )? {
                             Some(field)
                         } else {
+                            let observables = observe_state_with_antenna_field(
+                                &problem,
+                                &state,
+                                Some(antenna_field.clone()),
+                            )?;
                             Some(build_grid_preview_field(
                                 &request,
                                 select_observables(&observables, &request.quantity)?,
@@ -1648,7 +1763,7 @@ pub(crate) fn execute_reference_fdm_with_coupled_checkpoint(
                     fem_mesh_generation_id: None,
                     magnetization: Some(flatten_vectors(state.magnetization())),
                     preview_field,
-                    cached_preview_fields,
+                    cached_preview_fields: Some(cached_preview_fields),
                     hysteresis_field_m_t: None,
                     hysteresis_point_index: None,
                     hysteresis_settle_step_index: None,
@@ -2303,7 +2418,15 @@ fn direct_field_values_available(name: &str) -> bool {
     };
     matches!(
         base,
-        "m" | "H_ex" | "H_demag" | "H_ext" | "H_ani" | "H_dmi" | "H_OE" | "H_eff" | "torque"
+        "m" | "H_ex"
+            | "H_demag"
+            | "H_ext"
+            | "H_ani"
+            | "H_dmi"
+            | "H_oe"
+            | "H_OE"
+            | "H_eff"
+            | "torque"
     ) && component.map_or(true, |component| matches!(component, "x" | "y" | "z"))
 }
 
@@ -2334,10 +2457,21 @@ struct DirectFieldSnapshotCache<'a> {
     oersted_field: Option<Vec<Vector3>>,
     effective_field: Option<Vec<Vector3>>,
     torque_field: Option<Vec<Vector3>>,
+    oersted_field_override: Option<&'a [Vector3]>,
+    antenna_field: Option<&'a [Vector3]>,
 }
 
 impl<'a> DirectFieldSnapshotCache<'a> {
     fn new(problem: &'a ExchangeLlgProblem, state: &'a ExchangeLlgState) -> Self {
+        Self::new_with_source_fields(problem, state, None, None)
+    }
+
+    fn new_with_source_fields(
+        problem: &'a ExchangeLlgProblem,
+        state: &'a ExchangeLlgState,
+        oersted_field_override: Option<&'a [Vector3]>,
+        antenna_field: Option<&'a [Vector3]>,
+    ) -> Self {
         Self {
             problem,
             state,
@@ -2350,6 +2484,8 @@ impl<'a> DirectFieldSnapshotCache<'a> {
             oersted_field: None,
             effective_field: None,
             torque_field: None,
+            oersted_field_override,
+            antenna_field,
         }
     }
 
@@ -2503,10 +2639,15 @@ impl<'a> DirectFieldSnapshotCache<'a> {
                 }
                 Ok(self.dmi_field.as_deref().expect("cached DMI field"))
             }
-            "H_OE" => {
+            "H_oe" | "H_OE" => {
                 if self.oersted_field.is_none() {
-                    self.oersted_field =
-                        Some(self.problem.oersted_field_at_time(self.state.time_seconds));
+                    self.oersted_field = Some(
+                        self.oersted_field_override
+                            .map(<[_]>::to_vec)
+                            .unwrap_or_else(|| {
+                                self.problem.oersted_field_at_time(self.state.time_seconds)
+                            }),
+                    );
                 }
                 Ok(self.oersted_field.as_deref().expect("cached Oersted field"))
             }
@@ -2531,13 +2672,13 @@ impl<'a> DirectFieldSnapshotCache<'a> {
             if let Some(active_mask) = self.problem.active_mask.as_deref() {
                 let demag_field = self.base_values("H_demag", name)?.to_vec();
                 let external_field = self.base_values("H_ext", name)?.to_vec();
-                let oersted_field = self.base_values("H_OE", name)?.to_vec();
+                let oersted_field = self.base_values("H_oe", name)?.to_vec();
                 reconstruct_inactive_fdm_visual_effective_field(
                     &mut effective_field,
                     &demag_field,
                     &external_field,
                     &oersted_field,
-                    &[],
+                    self.antenna_field.unwrap_or(&[]),
                     active_mask,
                 );
             }
@@ -3889,6 +4030,7 @@ mod tests {
     fn llg_terminal_update_contains_final_state_and_cached_fields() {
         let plan = FdmPlanIR {
             enable_demag: true,
+            external_field: Some([0.0, 0.0, 1.0]),
             ..make_test_plan()
         };
         let display_selection = || {
@@ -3932,6 +4074,27 @@ mod tests {
             .collect::<Vec<_>>();
         assert!(cached_quantities.contains(&"H_demag"));
         assert!(cached_quantities.contains(&"H_eff"));
+        assert!(cached_quantities.contains(&"H_ext"));
+        for quantity in ["eden_ex", "eden_demag", "eden_ext", "eden_total"] {
+            let field = update
+                .cached_preview_fields
+                .as_ref()
+                .unwrap()
+                .iter()
+                .find(|field| field.quantity == quantity)
+                .unwrap_or_else(|| panic!("terminal cache must contain {quantity}"));
+            assert_eq!(field.unit, "J/m³");
+            assert_eq!(
+                field.vector_field_values.len(),
+                plan.initial_magnetization.len()
+            );
+        }
+        for field in update.cached_preview_fields.as_ref().unwrap() {
+            assert_eq!(field.source_step, update.stats.step);
+            assert_eq!(field.source_time_seconds, Some(update.stats.time));
+            assert_eq!(field.source_revision, update.stats.step);
+            assert!(field.materialized_at_unix_ms > 0);
+        }
     }
 
     #[test]

@@ -11,7 +11,10 @@ use super::{
     FemPlanarField, Occupancy, PlanarCompatibilityReduction, PlanarSampleResult,
     ResolvedPlanarSampleRequest,
 };
-use super::{PlanarMeshOverlay, PlanarOverlayPolygon, PlanarOverlaySegment};
+use super::{
+    PlanarMeshOverlay, PlanarOverlayPolygon, PlanarOverlaySegment, PlanarOverlaySegmentKind,
+};
+use std::collections::HashMap;
 
 pub(super) fn sample(
     field: &FemPlanarField,
@@ -78,6 +81,7 @@ pub(super) fn sample_compatibility_depth(
 
 pub(super) fn build_overlay(field: &FemPlanarField, frame: &ResolvedFrame) -> PlanarMeshOverlay {
     const EDGES: [(usize, usize); 6] = [(0, 1), (0, 2), (0, 3), (1, 2), (1, 3), (2, 3)];
+    let target_face_counts = selected_face_counts(field);
     let mut polygons = Vec::new();
     let mut segments = Vec::new();
     for (element_index, element) in field.elements().iter().enumerate() {
@@ -86,15 +90,27 @@ pub(super) fn build_overlay(field: &FemPlanarField, frame: &ResolvedFrame) -> Pl
         }
         let nodes = element.map(|index| field.nodes()[index as usize]);
         let projected = nodes.map(|point| frame.project(point));
-        let mut points = Vec::<([f64; 2], [f64; 3])>::new();
+        let mut points = Vec::<OverlayPoint>::new();
         for (a, b) in EDGES {
             let da = projected[a][2];
             let db = projected[b][2];
             if da.abs() <= 1.0e-12 {
-                push_overlay_point(&mut points, [projected[a][0], projected[a][1]], nodes[a]);
+                push_overlay_point(
+                    &mut points,
+                    [projected[a][0], projected[a][1]],
+                    nodes[a],
+                    [element[a], element[b]],
+                    true,
+                );
             }
             if db.abs() <= 1.0e-12 {
-                push_overlay_point(&mut points, [projected[b][0], projected[b][1]], nodes[b]);
+                push_overlay_point(
+                    &mut points,
+                    [projected[b][0], projected[b][1]],
+                    nodes[b],
+                    [element[a], element[b]],
+                    true,
+                );
             }
             if da.signum() == db.signum() || (da - db).abs() <= f64::EPSILON {
                 continue;
@@ -106,28 +122,33 @@ pub(super) fn build_overlay(field: &FemPlanarField, frame: &ResolvedFrame) -> Pl
                 projected[a][0] + t * (projected[b][0] - projected[a][0]),
                 projected[a][1] + t * (projected[b][1] - projected[a][1]),
             ];
-            push_overlay_point(&mut points, uv, world);
+            push_overlay_point(&mut points, uv, world, [element[a], element[b]], false);
         }
         if points.len() < 3 {
             continue;
         }
         let center = [
-            points.iter().map(|point| point.0[0]).sum::<f64>() / points.len() as f64,
-            points.iter().map(|point| point.0[1]).sum::<f64>() / points.len() as f64,
+            points.iter().map(|point| point.uv[0]).sum::<f64>() / points.len() as f64,
+            points.iter().map(|point| point.uv[1]).sum::<f64>() / points.len() as f64,
         ];
         points.sort_by(|a, b| {
-            (a.0[1] - center[1])
-                .atan2(a.0[0] - center[0])
-                .total_cmp(&(b.0[1] - center[1]).atan2(b.0[0] - center[0]))
+            (a.uv[1] - center[1])
+                .atan2(a.uv[0] - center[0])
+                .total_cmp(&(b.uv[1] - center[1]).atan2(b.uv[0] - center[0]))
         });
         for index in 0..points.len() {
             segments.push(PlanarOverlaySegment {
-                a_uv_m: points[index].0,
-                b_uv_m: points[(index + 1) % points.len()].0,
+                a_uv_m: points[index].uv,
+                b_uv_m: points[(index + 1) % points.len()].uv,
+                kind: classify_overlay_segment(
+                    &points[index],
+                    &points[(index + 1) % points.len()],
+                    &target_face_counts,
+                ),
             });
         }
         polygons.push(PlanarOverlayPolygon {
-            vertices_uv_m: points.iter().map(|point| point.0).collect(),
+            vertices_uv_m: points.iter().map(|point| point.uv).collect(),
             parent_element_id: element_index as u32,
         });
     }
@@ -142,14 +163,90 @@ pub(super) fn build_overlay(field: &FemPlanarField, frame: &ResolvedFrame) -> Pl
     }
 }
 
-fn push_overlay_point(points: &mut Vec<([f64; 2], [f64; 3])>, uv: [f64; 2], world: [f64; 3]) {
-    if points
-        .iter()
-        .any(|point| (point.0[0] - uv[0]).powi(2) + (point.0[1] - uv[1]).powi(2) <= 1.0e-24)
+#[derive(Clone)]
+struct OverlayPoint {
+    uv: [f64; 2],
+    edge_nodes: [u32; 2],
+    degenerate: bool,
+}
+
+fn push_overlay_point(
+    points: &mut Vec<OverlayPoint>,
+    uv: [f64; 2],
+    _world: [f64; 3],
+    edge_nodes: [u32; 2],
+    degenerate: bool,
+) {
+    if let Some(point) = points
+        .iter_mut()
+        .find(|point| (point.uv[0] - uv[0]).powi(2) + (point.uv[1] - uv[1]).powi(2) <= 1.0e-24)
     {
+        point.degenerate = true;
         return;
     }
-    points.push((uv, world));
+    points.push(OverlayPoint {
+        uv,
+        edge_nodes,
+        degenerate,
+    });
+}
+
+fn selected_face_counts(field: &FemPlanarField) -> HashMap<[u32; 3], u32> {
+    let mut counts = HashMap::new();
+    for (element_index, element) in field.elements().iter().enumerate() {
+        if field.markers().get(element_index).copied().unwrap_or(1) == 0 {
+            continue;
+        }
+        for omitted in 0..4 {
+            let mut face = [0; 3];
+            let mut cursor = 0;
+            for (index, node) in element.iter().enumerate() {
+                if index != omitted {
+                    face[cursor] = *node;
+                    cursor += 1;
+                }
+            }
+            face.sort_unstable();
+            *counts.entry(face).or_insert(0) += 1;
+        }
+    }
+    counts
+}
+
+fn classify_overlay_segment(
+    a: &OverlayPoint,
+    b: &OverlayPoint,
+    target_face_counts: &HashMap<[u32; 3], u32>,
+) -> PlanarOverlaySegmentKind {
+    if a.degenerate || b.degenerate {
+        return PlanarOverlaySegmentKind::UnclassifiedDegenerate;
+    }
+    let mut nodes = [
+        a.edge_nodes[0],
+        a.edge_nodes[1],
+        b.edge_nodes[0],
+        b.edge_nodes[1],
+    ];
+    nodes.sort_unstable();
+    let mut unique = [0; 3];
+    let mut count = 0;
+    for node in nodes {
+        if count == 0 || unique[count - 1] != node {
+            if count == 3 {
+                return PlanarOverlaySegmentKind::UnclassifiedDegenerate;
+            }
+            unique[count] = node;
+            count += 1;
+        }
+    }
+    if count != 3 {
+        return PlanarOverlaySegmentKind::UnclassifiedDegenerate;
+    }
+    match target_face_counts.get(&unique).copied() {
+        Some(1) => PlanarOverlaySegmentKind::TargetBoundary,
+        Some(_) => PlanarOverlaySegmentKind::MeshInterior,
+        None => PlanarOverlaySegmentKind::UnclassifiedDegenerate,
+    }
 }
 
 fn sample_plane(

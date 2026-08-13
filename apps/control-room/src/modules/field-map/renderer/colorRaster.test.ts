@@ -32,4 +32,20 @@ describe("scalar raster colorization", () => {
       255,
     ]);
   });
+
+  it("uses colormap and opacity as presentation-only color inputs", () => {
+    expect(
+      [...colorizeScalarRaster([0, 1], { max: 1, min: 0 }, undefined, {
+        colormap: "grayscale",
+        opacity: 0.5,
+      })],
+    ).toEqual([0, 0, 0, 128, 255, 255, 255, 128]);
+  });
+
+  it("uses the deterministic zero range for empty support and rejects invalid opacity", () => {
+    expect(finiteScalarRange([Number.NaN], [1])).toEqual({ min: 0, max: 0 });
+    expect(() => colorizeScalarRaster([1], { min: 0, max: 1 }, undefined, { opacity: 2 })).toThrow(
+      "Planar raster opacity must be finite and within [0, 1]",
+    );
+  });
 });

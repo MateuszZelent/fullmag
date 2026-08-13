@@ -3,7 +3,6 @@ import type {
   VisualizationStateResource,
 } from "../api/apiTypes";
 import {
-  isMagneticOnlyQuantityId,
   isScalarSpatialQuantityId,
   normalizeQuantityIdOrDefault,
   resolveCanonicalQuantityId,
@@ -399,6 +398,7 @@ export const DEFAULT_OBJECT_VISUALIZATION: VisualizationTargetSettings = {
 
 export const DEFAULT_FDM_UNIVERSE_OUTSIDE_SUPPORT_VISUALIZATION: VisualizationTargetSettings = {
   ...DEFAULT_OBJECT_VISUALIZATION,
+  activeQuantityId: "H_demag",
   boundsOpacityPercent: 55,
   boundsVisible: true,
   geometryScope: "full",
@@ -448,7 +448,7 @@ function normalizeFdmUniverseOutsideSupportVisualizationSettings(
   const pointsVisible = settings.pointsVisible;
   return normalizeVisualizationSettings({
     ...DEFAULT_FDM_UNIVERSE_OUTSIDE_SUPPORT_VISUALIZATION,
-    activeQuantityId: resolveAirboxCompatibleQuantityId(settings.activeQuantityId),
+    activeQuantityId: settings.activeQuantityId,
     boundsOpacityPercent: settings.boundsOpacityPercent,
     boundsVisible: settings.boundsVisible,
     pointColor: settings.pointColor,
@@ -551,10 +551,6 @@ export const DEFAULT_AIRBOX_VISUALIZATION: VisualizationTargetSettings = {
   wireframeVisible: false,
 };
 
-function resolveAirboxCompatibleQuantityId(quantityId: string): string {
-  return isMagneticOnlyQuantityId(quantityId) ? "H_demag" : quantityId;
-}
-
 const DEFAULT_PART_VISUALIZATION: VisualizationTargetSettings = {
   ...DEFAULT_OBJECT_VISUALIZATION,
   primitiveVisible: false,
@@ -637,6 +633,28 @@ export class ObjectVisualizationController {
       this.pendingOverrides.delete(key);
     }
     this.bump();
+  }
+
+  removeAllTargetOverrideFields(field: keyof VisualizationTargetPatch): void {
+    let changed = false;
+    for (const [key, override] of this.overrides) {
+      const next = removeStoredTargetPatchField(override, field);
+      if (samePatch(override, next ?? {})) continue;
+      changed = true;
+      if (next && Object.keys(next).length > 0) this.overrides.set(key, next);
+      else this.overrides.delete(key);
+    }
+    for (const [key, pending] of this.pendingOverrides) {
+      const next = removeStoredTargetPatchField(pending.patch, field);
+      if (samePatch(pending.patch, next ?? {})) continue;
+      changed = true;
+      if (next && Object.keys(next).length > 0) {
+        this.pendingOverrides.set(key, { ...pending, patch: next });
+      } else {
+        this.pendingOverrides.delete(key);
+      }
+    }
+    if (changed) this.bump();
   }
 
   getDefaultSettings(
@@ -888,7 +906,7 @@ function normalizeAirboxVisualizationSettings(
   return normalizeVisualizationSettings({
     ...DEFAULT_AIRBOX_VISUALIZATION,
     ...settings,
-    activeQuantityId: resolveAirboxCompatibleQuantityId(settings.activeQuantityId),
+    activeQuantityId: settings.activeQuantityId,
     pointsVisible,
     renderMode: pointsVisible ? "points" : wireframeVisible ? "wireframe" : "off",
     shaderVisible: false,
@@ -977,9 +995,7 @@ export function resolveTargetVisualization({
     target.kind === "airbox"
       ? {
           ...resolvedBaseSettings,
-          activeQuantityId: resolveAirboxCompatibleQuantityId(
-            resolvedBaseSettings.activeQuantityId,
-          ),
+          activeQuantityId: resolvedBaseSettings.activeQuantityId,
         }
       : resolvedBaseSettings;
   const targetKey = visualizationTargetKey(target);
@@ -1838,7 +1854,7 @@ export function resolveAirboxVisualizationSettingsFromState(
 
   return normalizeAirboxVisualizationSettings({
     ...baseSettings,
-    activeQuantityId: resolveAirboxCompatibleQuantityId(activeQuantityId),
+    activeQuantityId,
     boundsVisible:
       airbox?.bounds?.visible ?? baseSettings.boundsVisible,
     boundsOpacityPercent: layerOpacityToPercent(

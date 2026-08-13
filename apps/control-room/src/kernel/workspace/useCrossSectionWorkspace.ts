@@ -4,6 +4,7 @@ import { useCallback, useRef, useSyncExternalStore } from "react";
 
 import {
   crossSectionWorkspaceStore,
+  getCrossSectionWorkspaceServerSnapshot,
   type CrossSectionWorkspaceState,
 } from "./crossSectionWorkspace";
 
@@ -25,9 +26,14 @@ export function useCrossSectionWorkspaceSelector<T>(
     return selected;
   }, [isEqual, selector]);
 
+  const getSelectedServerSnapshot = useCallback(
+    () => selector(getCrossSectionWorkspaceServerSnapshot()),
+    [selector],
+  );
+
   return useSyncExternalStore(
     crossSectionWorkspaceStore.subscribe,
     getSelectedSnapshot,
-    getSelectedSnapshot,
+    getSelectedServerSnapshot,
   );
 }

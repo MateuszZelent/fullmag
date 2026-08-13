@@ -99,9 +99,10 @@ import {
 import { ObjectVisualizationOverview } from "./ObjectVisualizationOverview";
 import { PlanarVisualizationSection } from "../visualization/PlanarVisualizationSection";
 import {
-  VisualizationContextSwitch,
+  VisualizationContextSwitchControl,
   useVisualizationViewContext,
 } from "../visualization/VisualizationContextSwitch";
+import { planarPresentationPatchFromThreeDimensional } from "../visualization/presentationSemantics";
 
 interface ObjectVisualizationAppliedBaseline {
   overrides: VisualizationStateResource["overrides"];
@@ -754,6 +755,18 @@ export function VisualizationTargetInspectorPanel({
   const panel = useObjectVisualizationPanelState(selection);
   const { displaySettings, settings, target } = panel;
   const visualizationViewContext = useVisualizationViewContext();
+  const { visualizationSync } = useKernel();
+  const planarResource = useVisualizationStateResource();
+  const syncSharedQuiverIntent = useCallback(() => {
+    const planar = planarResource.data?.planar;
+    if (!planar) return;
+    const presentationPatch = planarPresentationPatchFromThreeDimensional({
+      vectorBudget: settings?.vectorBudget ?? planar.resolution.vector_budget,
+      vectorColorMode: settings?.vectorColorMode ?? "orientation",
+      vectorLengthScale: settings?.vectorLengthScale ?? 1,
+    }, planar.resolution);
+    if (presentationPatch) visualizationSync.queuePatch({ planar: presentationPatch });
+  }, [planarResource.data?.planar, settings?.vectorBudget, settings?.vectorColorMode, settings?.vectorLengthScale, visualizationSync]);
 
   const ownerIdentity = (
     <InspectorGroup title={owner.title}>
@@ -779,7 +792,7 @@ export function VisualizationTargetInspectorPanel({
       <div className="fm-inspector-panel" data-inspector-owner={owner.id}>
         {ownerIdentity}
         <InspectorGroup title="View">
-          <VisualizationContextSwitch />
+          <VisualizationContextSwitchControl onPlanarActivate={syncSharedQuiverIntent} />
         </InspectorGroup>
         <PlanarVisualizationSection selection={selection} />
       </div>
@@ -790,7 +803,7 @@ export function VisualizationTargetInspectorPanel({
     <div className="fm-inspector-panel" data-inspector-owner={owner.id}>
       {ownerIdentity}
       <InspectorGroup title="View">
-        <VisualizationContextSwitch />
+        <VisualizationContextSwitchControl onPlanarActivate={syncSharedQuiverIntent} />
       </InspectorGroup>
       <ObjectVisualizationPanelView
         key={visualizationTargetKey(target)}

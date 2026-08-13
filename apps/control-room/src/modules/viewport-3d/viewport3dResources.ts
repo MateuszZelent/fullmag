@@ -12,10 +12,7 @@ import {
   MODEL_SCENE_PATH,
   MODEL_UNIVERSE_PATH,
 } from "@/kernel/api/apiPaths";
-import {
-  isMagneticOnlyQuantityId,
-  resolveCanonicalQuantityId,
-} from "@/kernel/api/quantityIds";
+import { resolveCanonicalQuantityId } from "@/kernel/api/quantityIds";
 import {
   canonicalFieldVectorQuery,
   serializeCanonicalFieldVectorResourceKey,
@@ -23,10 +20,12 @@ import {
 import { ControlRoomApiError } from "@/kernel/api/ControlRoomApi";
 import type {
   BinaryResourceResult,
+  FieldCatalogResource,
   FieldVectorResponseMetadata,
   FieldVectorQuery,
   ResourceRevision,
 } from "@/kernel/api/apiTypes";
+import { fieldCatalogQuantitySupportsAirbox } from "@/kernel/api/quantityIds";
 import type {
   DecodedFieldVector,
   DecodedMeshQualityData,
@@ -245,6 +244,7 @@ export function getViewport3DCacheStats() {
 
 export interface Viewport3DFieldVectorCacheEntryDiagnostics
   extends ResourceCacheEntryDiagnostics {
+  dataIdentityMatches: boolean | null;
   responseMetadata: FieldVectorResponseMetadata | null;
 }
 
@@ -256,11 +256,13 @@ export interface Viewport3DFieldVectorCacheBudgetDiagnostics {
 
 export function getViewport3DFieldVectorCacheEntryDiagnostics(
   resourceKey: string,
+  expectedData?: DecodedFieldVector,
 ): Viewport3DFieldVectorCacheEntryDiagnostics {
   return inspectViewport3DFieldVectorCacheEntryDiagnostics(
     fieldVectorCache,
     resourceKey,
     binaryResourceInflight,
+    expectedData,
   );
 }
 
@@ -268,15 +270,20 @@ export function inspectViewport3DFieldVectorCacheEntryDiagnostics<TInflight>(
   cache: ResourceCache<DecodedFieldVector, FieldVectorResponseMetadata>,
   resourceKey: string,
   inflightRegistry: WeakMap<object, ReadonlyMap<string, TInflight>>,
+  expectedData?: DecodedFieldVector,
 ): Viewport3DFieldVectorCacheEntryDiagnostics {
   const diagnostics = cache.inspect(resourceKey);
+  const entry = cache.peek(resourceKey);
   const binaryInflight =
     inflightRegistry.get(cache)?.has(resourceKey) ?? false;
   const entryState =
     binaryInflight ? "inflight" : diagnostics.entryState;
-  const metadata = cache.peek(resourceKey)?.metadata;
+  const dataIdentityMatches =
+    expectedData === undefined || !entry ? null : entry.data === expectedData;
+  const metadata = dataIdentityMatches === false ? undefined : entry?.metadata;
   return {
     ...diagnostics,
+    dataIdentityMatches,
     entryState,
     responseMetadata: metadata
       ? boundFieldVectorResponseMetadata(metadata)
@@ -521,6 +528,7 @@ export function resolveViewport3DAirboxFieldVectorResourceKeys(
   quantityId: string,
   airboxParts: readonly { id: string }[],
   fieldQuery: FieldVectorQuery = FULL_FIELD_VECTOR_QUERY,
+  fieldCatalog?: FieldCatalogResource | null,
 ): Map<string, string> {
   return new Map(
     Array.from(
@@ -528,6 +536,7 @@ export function resolveViewport3DAirboxFieldVectorResourceKeys(
         quantityId,
         airboxParts,
         fieldQuery,
+        fieldCatalog,
       ),
       ([partId, request]) => [partId, request.key],
     ),
@@ -538,8 +547,9 @@ export function resolveViewport3DAirboxFieldVectorResourceRequests(
   quantityId: string,
   airboxParts: readonly { id: string }[],
   fieldQuery: FieldVectorQuery = FULL_FIELD_VECTOR_QUERY,
+  fieldCatalog?: FieldCatalogResource | null,
 ): Map<string, Viewport3DAirboxFieldVectorRequest> {
-  if (isMagneticOnlyQuantityId(quantityId)) {
+  if (!fieldCatalogQuantitySupportsAirbox(fieldCatalog, quantityId)) {
     return new Map();
   }
   const canonicalQuantityId = resolveCanonicalQuantityId(quantityId);
@@ -861,6 +871,7 @@ export function useViewport3DAirboxFieldVectors(
     | ReadonlyMap<string, Viewport3DAirboxFieldVectorSourceRequest> =
     FULL_FIELD_VECTOR_QUERY,
   options: { pauseLoad?: boolean } = {},
+  fieldCatalog?: FieldCatalogResource | null,
 ) {
   const { api, resources } = useKernel();
   const requests = useMemo(
@@ -877,9 +888,10 @@ export function useViewport3DAirboxFieldVectors(
         quantityId,
         airboxParts,
         fieldSource,
+        fieldCatalog,
       );
     },
-    [airboxParts, fieldSource, quantityId],
+    [airboxParts, fieldCatalog, fieldSource, quantityId],
   );
   const resourceKey = useMemo(() => {
     return resolveViewport3DFieldVectorCollectionResourceKey(

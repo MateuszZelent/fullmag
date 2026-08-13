@@ -353,17 +353,17 @@ verify-fdm-multilayer-cuda-runtime lane="cuda-fp64":
       lane="{{lane}}"; report_parent="${FULLMAG_FDM_MULTILAYER_REPORT_ROOT:-.fullmag/reports/fdm-multilayer}"; mkdir -p "$report_parent"; run_root="$(mktemp -d "$report_parent/$lane.run.XXXXXXXX")"; status_file="$run_root/status.json"; \
       write_status() { printf "{\"status\":\"not_qualified\",\"lane\":\"%s\",\"reason_code\":\"%s\"}\n" "$lane" "$1" > "$status_file"; }; finish() { status=$?; chmod -R a-w "$run_root" 2>/dev/null || true; exit "$status"; }; trap finish EXIT INT TERM; \
       case "$lane" in cuda-fp64|cuda-fp32) ;; *) write_status "unsupported_lane"; exit 2 ;; esac; \
-      scenario="tests/standard_problems/mumag/sp4/fdm/multilayer_convolution/scenario_l3_cuda_v2_small.py"; thresholds="tests/standard_problems/mumag/sp4/fdm/multilayer_convolution/thresholds.v1.json"; verifier="scripts/verify_fdm_multilayer_cuda_parity.py"; \
-      for required in "$scenario" "$thresholds" "$verifier"; do test -f "$required" || { write_status "input_missing"; exit 3; }; done; \
+      scenario="tests/standard_problems/mumag/sp4/fdm/multilayer_convolution/scenario_l3_cuda_v2_small.py"; thresholds="tests/standard_problems/mumag/sp4/fdm/multilayer_convolution/thresholds.v1.json"; verifier="scripts/verify_fdm_multilayer_cuda_parity.py"; precision_contract="scripts/fdm_multilayer_cuda_precision_contract.py"; \
+      for required in "$scenario" "$thresholds" "$verifier" "$precision_contract"; do test -f "$required" || { write_status "input_missing"; exit 3; }; done; \
       just ensure-managed-fem-runtime || { write_status "managed_runtime_unavailable"; exit 3; }; test -x "{{gpu_runtime_bin}}" && test -f "{{gpu_runtime_manifest}}" || { write_status "managed_runtime_missing"; exit 3; }; \
       runtime_root="$(readlink -f "{{repo_root}}/.fullmag/runtimes/fem-gpu-host")"; test -d "$runtime_root" || { write_status "managed_runtime_missing"; exit 3; }; \
       python3 scripts/capture_source_snapshot_identity.py --repo-root "{{repo_root}}" --ignore-non-runtime-dirty --output "$run_root/source-snapshot.v1.json"; cp "{{gpu_runtime_manifest}}" "$run_root/managed-runtime-manifest.json"; \
       captured_source_snapshot="$(jq -er ".source_snapshot_sha256" "$run_root/source-snapshot.v1.json")" || { write_status "source_snapshot_invalid"; exit 3; }; \
       runtime_source_snapshot="$(jq -er ".build_identity.source_snapshot_sha256" "$run_root/managed-runtime-manifest.json")" || { write_status "managed_runtime_source_snapshot_missing"; exit 3; }; \
       if [ "$runtime_source_snapshot" != "$captured_source_snapshot" ]; then write_status "managed_runtime_source_snapshot_mismatch"; exit 3; fi; \
-      hash_runtime_inputs() { sha256sum "{{gpu_runtime_bin}}" "{{gpu_runtime_manifest}}" > "$1"; }; hash_source_inputs() { sha256sum "$scenario" "$thresholds" "$verifier" justfile > "$1"; }; \
+      hash_runtime_inputs() { sha256sum "{{gpu_runtime_bin}}" "{{gpu_runtime_manifest}}" > "$1"; }; hash_source_inputs() { sha256sum "$scenario" "$thresholds" "$verifier" "$precision_contract" justfile > "$1"; }; \
       hash_runtime_inputs "$run_root/input-hashes.v1.txt"; hash_source_inputs "$run_root/source-hashes.v1.txt"; cp "$run_root/input-hashes.v1.txt" "$run_root/input-sha256.txt"; \
-      printf "%s\n" "just verify-fdm-multilayer-cuda-runtime $lane" > "$run_root/command.txt"; printf "%s\n" "d07_telemetry_not_qualified" "cpu_cuda_parity_not_qualified" "managed_runtime_source_snapshot_mismatch" "source_drift_after_runtime" "input_hash_drift_after_runtime" "source_hash_drift_after_runtime" > "$run_root/failure-reason-codes.txt"; \
+      printf "%s\n" "just verify-fdm-multilayer-cuda-runtime $lane" > "$run_root/command.txt"; printf "%s\n" "d07_telemetry_not_qualified" "reference_d07_telemetry_not_qualified" "cuda_assisted_multilayer_not_qualified" "cuda_native_multilayer_demag_v2_not_proven" "cuda_fallback_not_proven_absent" "reference_execution_engine_not_qualified" "reference_fallback_not_proven_absent" "reference_cuda_provenance_not_qualified" "cuda_fp64_reference_precision_not_double" "cuda_fp64_candidate_precision_not_double" "cuda_fp32_reference_precision_not_double" "cuda_fp32_candidate_precision_not_single" "cuda_identity_incomplete" "cuda_identity_invalid" "cuda_fp32_identity_mismatch" "cpu_cuda_parity_not_qualified" "managed_runtime_source_snapshot_mismatch" "source_drift_after_runtime" "input_hash_drift_after_runtime" "source_hash_drift_after_runtime" > "$run_root/failure-reason-codes.txt"; \
       docker compose --profile fem-gpu run --rm --no-deps fem-gpu nvidia-smi -L 2>&1 | tee "$run_root/device.log" || { write_status "cuda_device_unavailable"; exit 3; }; \
       run_case() { case_id="$1"; execution="$2"; precision="$3"; output="$run_root/$case_id/artifacts"; mkdir -p "$output"; docker compose --profile fem-gpu run --rm --no-deps -v "$runtime_root:/workspace/.fullmag/runtimes/fem-gpu-host:ro" -e PYTHONPATH=/workspace/packages/fullmag-py/src -e FULLMAG_PYTHON=/usr/bin/python3 -e FULLMAG_FDM_EXECUTION="$execution" -e FULLMAG_FEM_EXECUTION=cpu -e FULLMAG_FDM_MULTILAYER_SCENARIO_PRECISION="$precision" -e FULLMAG_DISABLE_PREVIEW_3D=1 -e FULLMAG_DISABLE_CHARTS=1 fem-gpu bash -lc "cd /workspace && FULLMAG_API_PORT=0 .fullmag/runtimes/fem-gpu-host/bin/fullmag-fem-gpu $scenario --backend fdm --headless --json --output-dir /workspace/$output --workspace-root /workspace/$output/workspace-history" 2>&1 | tee "$run_root/$case_id/runtime.log"; }; \
       if [ "$lane" = "cuda-fp64" ]; then run_case reference cpu double || { write_status "cpu_reference_runtime_failed"; exit 3; }; candidate_precision=double; else run_case reference cuda double || { write_status "cuda_fp64_reference_runtime_failed"; exit 3; }; candidate_precision=single; fi; \
@@ -4150,6 +4150,32 @@ run-viewport-3d-smoke-disposable fixture="examples/fdm_cpu_relax_smoke.py" backe
       CONTROL_ROOM_SMOKE_DISPOSABLE_FIXTURE_TOKEN="$token" \
       $PNPM_CMD --dir apps/control-room smoke:viewport-3d'
 
+# Final single-grid FDM field gate: completed terminal fields only. The browser
+# smoke never submits compute_fields; the disposable fixture owns its session.
+run-fdm-terminal-webgl-gate-cpu web_port="" api_port="":
+    bash -euo pipefail -c '\
+      report_parent="${FULLMAG_FDM_TERMINAL_WEBGL_REPORT_ROOT:-.fullmag/reports/fdm-terminal-webgl-gate}"; mkdir -p "$report_parent"; \
+      run_root="$(mktemp -d "$report_parent/cpu.run.XXXXXXXX")"; \
+      test -x "{{local_bin}}/fullmag" || { echo "managed Fullmag executable is unavailable: {{local_bin}}/fullmag" >&2; exit 2; }; \
+      shared_python="$(dirname "$(git rev-parse --path-format=absolute --git-common-dir)")/.fullmag/local/python/bin/python"; test -x "$shared_python" || { echo "shared managed Fullmag Python is unavailable: $shared_python" >&2; exit 2; }; \
+      fixture="$(realpath examples/fdm_cpu_relax_smoke.py)"; \
+      smoke_dir="$(mktemp -d)"; smoke_script="$smoke_dir/fdm_cpu_relax_smoke.py"; \
+      token="$(python3 -c "import uuid; print(uuid.uuid4())")"; cp "$fixture" "$smoke_script"; printf "%s\\n" "$token" > "$smoke_dir/.fullmag-smoke-disposable"; \
+      choose_port() { python3 -c "import socket; s=socket.socket(); s.bind((\"127.0.0.1\",0)); print(s.getsockname()[1]); s.close()"; }; \
+      web_port="{{web_port}}"; api_port="{{api_port}}"; \
+      case "$web_port" in web_port=*) web_port="${web_port#web_port=}" ;; esac; case "$api_port" in api_port=*) api_port="${api_port#api_port=}" ;; esac; \
+      [ -n "$web_port" ] || web_port="$(choose_port)"; [ -n "$api_port" ] || api_port="$(choose_port)"; \
+      while [ "$web_port" = "$api_port" ]; do api_port="$(choose_port)"; done; \
+      sim_pid=""; cleanup() { status=$?; trap - EXIT INT TERM; if [ -n "$sim_pid" ] && kill -0 "$sim_pid" 2>/dev/null; then kill "$sim_pid" 2>/dev/null || true; wait "$sim_pid" 2>/dev/null || true; fi; rm -rf "$smoke_dir"; exit "$status"; }; trap cleanup EXIT INT TERM; \
+      PATH="{{local_bin}}:$PATH" FULLMAG_PYTHON="$shared_python" FULLMAG_API_PORT="$api_port" FULLMAG_FDM_EXECUTION=cpu FULLMAG_FEM_EXECUTION=cpu \
+      fullmag --dev --backend fdm --mode strict --precision double --web-port "$web_port" -i "$smoke_script" > "$run_root/fullmag.log" 2>&1 & sim_pid=$!; \
+      api_url="http://127.0.0.1:$api_port"; web_url="http://127.0.0.1:$web_port/workspace"; \
+      for _ in $(seq 1 600); do if curl -fsS "$api_url/v2/sessions/current/simulation/stages/execution" >/dev/null 2>&1 && curl -fsS "$web_url" >/dev/null 2>&1; then break; fi; if ! kill -0 "$sim_pid" 2>/dev/null; then tail -n 160 "$run_root/fullmag.log" >&2 || true; exit 1; fi; sleep 0.5; done; \
+      CONTROL_ROOM_API_BASE_URL="$api_url" CONTROL_ROOM_URL="$web_url" CONTROL_ROOM_FDM_TERMINAL_WEBGL_ARTIFACT_DIR="$run_root/screenshots" CONTROL_ROOM_FDM_TERMINAL_WEBGL_EVIDENCE="$run_root/fdm-terminal-webgl-gate.json" \
+      pnpm --dir apps/control-room smoke:fdm-terminal-webgl-gate; \
+      python3 -c '"'"'import json,sys; value=json.load(open(sys.argv[1])); assert value["qualification_status"] == "passed_cpu_fdm_terminal"; assert value["no_manual_compute_fields"] is True'"'"' "$run_root/fdm-terminal-webgl-gate.json"; \
+      printf "FDM terminal WebGL evidence: %s\\n" "$run_root/fdm-terminal-webgl-gate.json"'
+
 run-fdm-multilayer-webgl-matrix-cpu web_port="" api_port="":
     bash -euo pipefail -c '\
       report_parent="${FULLMAG_FDM_MULTILAYER_REPORT_ROOT:-.fullmag/reports/fdm-multilayer}"; \
@@ -4801,7 +4827,7 @@ ensure-managed-fem-runtime:
               --runtime-root .fullmag/runtimes/fem-gpu-host; \
             runtime_reused_for_non_runtime_changes=1; \
           else \
-            FULLMAG_ALLOW_DIRTY_RUNTIME_EXPORT=1 FULLMAG_FEM_RUNTIME_REUSE_BUILD=1 just rebuild-fem-runtime; \
+            FULLMAG_ALLOW_DIRTY_RUNTIME_EXPORT=1 FULLMAG_FEM_RUNTIME_REUSE_BUILD=0 just rebuild-fem-runtime; \
             runtime_rebuilt=1; \
           fi; \
         fi; \

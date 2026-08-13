@@ -4437,6 +4437,7 @@ export interface components {
             available: boolean;
             /** Format: int32 */
             components: number;
+            domain: string;
             domain_generation_id: string;
             /** Format: int64 */
             field_revision: number;
@@ -4453,9 +4454,18 @@ export interface components {
             source_revision: number;
             /** Format: int64 */
             source_step: number;
+            /**
+             * Format: double
+             * @description Solver time in seconds for the state that produced this field, when known.
+             */
+            source_time_seconds?: number | null;
+            /** @description Whether this descriptor can be rendered as a spatial viewport field. */
+            spatial: boolean;
             /** Format: int64 */
             stale_by_steps: number;
             state: components["schemas"]["FieldMaterializationState"];
+            /** @description Whether this canonical quantity is intended for interactive UI selection. */
+            ui_exposed: boolean;
             unit: string;
         };
         FieldDriveCreateRequest: {
@@ -4552,6 +4562,11 @@ export interface components {
             source_revision: number;
             /** Format: int64 */
             source_step: number;
+            /**
+             * Format: double
+             * @description Solver time in seconds for the state that produced this field, when known.
+             */
+            source_time_seconds?: number | null;
             /** Format: int64 */
             stale_by_steps: number;
             state: components["schemas"]["FieldMaterializationState"];
@@ -6870,7 +6885,7 @@ export interface components {
         ObjectMetricsResource: {
             energies: components["schemas"]["ObjectEnergySummary"];
             has_solver_sample: boolean;
-            magnetization_average: components["schemas"]["ObjectMagnetizationAverage"];
+            magnetization_average?: null | components["schemas"]["ObjectMagnetizationAverage"];
             object_id: string;
             /** Format: int64 */
             revision: number;
@@ -7002,6 +7017,15 @@ export interface components {
             source_path: string;
         };
         /** @enum {string} */
+        PlanarColorRangeMode: "auto" | "manual" | "symmetric";
+        PlanarColorRangeState: {
+            /** Format: double */
+            max?: number | null;
+            /** Format: double */
+            min?: number | null;
+            mode: components["schemas"]["PlanarColorRangeMode"];
+        };
+        /** @enum {string} */
         PlanarEmptyPolicySchema: "exclude_empty" | "include_air_as_zero";
         PlanarExtentSchema: {
             /** @enum {string} */
@@ -7051,10 +7075,10 @@ export interface components {
             /** Format: int32 */
             basis_order: number;
             canonical_unit: string;
+            carrier_revision: string;
             component: string;
             etag: string;
-            /** Format: int64 */
-            field_revision: number;
+            field_revision: string;
             field_source: string;
             /** Format: int32 */
             fold_count: number;
@@ -7063,12 +7087,11 @@ export interface components {
             /** Format: int32 */
             integration_order: number;
             links: components["schemas"]["PlanarFieldLinksResource"];
-            /** Format: int64 */
-            mesh_revision: number;
+            mesh_overlay_descriptor: components["schemas"]["PlanarMeshOverlayDescriptor"];
+            mesh_revision: string;
             monitor_hash: string;
             monitor_id: string;
-            /** Format: int64 */
-            monitor_revision: number;
+            monitor_revision: string;
             non_injective: boolean;
             occupancy: components["schemas"]["PlanarFieldOccupancyResource"];
             /** Format: int32 */
@@ -7077,6 +7100,7 @@ export interface components {
             quantity_id: string;
             resolution: number[];
             sample_support: string;
+            sample_token: string;
             sampler_version: string;
             sampling_execution: string;
             sampling_method: string;
@@ -7084,6 +7108,7 @@ export interface components {
             scalar_max?: number | null;
             /** Format: double */
             scalar_min?: number | null;
+            scene_revision: string;
             schema_version: string;
             scope_id?: string | null;
             scope_kind: string;
@@ -7142,6 +7167,11 @@ export interface components {
             probes: boolean;
             raster: boolean;
             vectors: boolean;
+        };
+        PlanarMeshOverlayDescriptor: {
+            available: boolean;
+            boundary_classification: string;
+            codec?: string | null;
         };
         PlanarMonitorCollectionResource: {
             count: number;
@@ -7261,36 +7291,32 @@ export interface components {
         };
         PlanarVisualizationPatch: {
             active_monitor_id?: string | null;
-            auto_contrast?: boolean | null;
             colormap?: string | null;
             component?: null | components["schemas"]["PlanarFieldComponent"];
-            /** Format: double */
-            contrast_max?: number | null;
-            /** Format: double */
-            contrast_min?: number | null;
             display_unit?: string | null;
             interaction?: null | components["schemas"]["PlanarInteractionState"];
             layers?: null | components["schemas"]["PlanarLayerState"];
             quality?: null | components["schemas"]["PlanarRenderQuality"];
             quantity_id?: string | null;
+            range?: null | components["schemas"]["PlanarColorRangeState"];
+            /** Format: double */
+            raster_opacity?: number | null;
             resolution?: null | components["schemas"]["PlanarResolutionPolicy"];
             vector_style?: null | components["schemas"]["PlanarVectorStyleState"];
             view_scope?: null | components["schemas"]["PlanarViewScopeState"];
         };
         PlanarVisualizationState: {
             active_monitor_id?: string | null;
-            auto_contrast: boolean;
             colormap: string;
             component: components["schemas"]["PlanarFieldComponent"];
-            /** Format: double */
-            contrast_max?: number | null;
-            /** Format: double */
-            contrast_min?: number | null;
             display_unit?: string | null;
             interaction: components["schemas"]["PlanarInteractionState"];
             layers: components["schemas"]["PlanarLayerState"];
             quality: components["schemas"]["PlanarRenderQuality"];
             quantity_id: string;
+            range?: components["schemas"]["PlanarColorRangeState"];
+            /** Format: double */
+            raster_opacity?: number;
             resolution: components["schemas"]["PlanarResolutionPolicy"];
             vector_style: components["schemas"]["PlanarVectorStyleState"];
             view_scope: components["schemas"]["PlanarViewScopeState"];
@@ -12059,6 +12085,7 @@ export interface operations {
     data_get_sessions_current_data_fields_quantity_id_planar_monitors_monitor_id_empty_mask: {
         parameters: {
             query?: {
+                sample_token?: string;
                 component?: string;
                 scope_kind?: string;
                 scope_id?: string;
@@ -12069,9 +12096,11 @@ export interface operations {
                 quality?: string;
                 vector_budget?: number;
                 include_mesh?: boolean;
-                expected_monitor_revision?: number;
-                expected_mesh_revision?: number;
-                expected_field_revision?: number;
+                expected_scene_revision?: string;
+                expected_monitor_revision?: string;
+                expected_mesh_revision?: string;
+                expected_carrier_revision?: string;
+                expected_field_revision?: string;
             };
             header?: never;
             path: {
@@ -12089,11 +12118,55 @@ export interface operations {
                 };
                 content?: never;
             };
+            /** @description Not modified */
+            304: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Invalid planar query */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
+            /** @description Field or monitor missing */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
+            /** @description Stale source */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
+            /** @description Unsupported planar sampling */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
         };
     };
     data_get_sessions_current_data_fields_quantity_id_planar_monitors_monitor_id_mesh_overlay: {
         parameters: {
             query?: {
+                sample_token?: string;
                 component?: string;
                 scope_kind?: string;
                 scope_id?: string;
@@ -12104,9 +12177,11 @@ export interface operations {
                 quality?: string;
                 vector_budget?: number;
                 include_mesh?: boolean;
-                expected_monitor_revision?: number;
-                expected_mesh_revision?: number;
-                expected_field_revision?: number;
+                expected_scene_revision?: string;
+                expected_monitor_revision?: string;
+                expected_mesh_revision?: string;
+                expected_carrier_revision?: string;
+                expected_field_revision?: string;
             };
             header?: never;
             path: {
@@ -12117,7 +12192,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description FMCS v3 planar mesh overlay */
+            /** @description FMCS v4 planar mesh overlay with exact segment classes */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -12131,11 +12206,55 @@ export interface operations {
                 };
                 content?: never;
             };
+            /** @description Not modified */
+            304: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Invalid planar query */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
+            /** @description Field or monitor missing */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
+            /** @description Stale source */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
+            /** @description Unsupported planar sampling */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
         };
     };
     data_get_sessions_current_data_fields_quantity_id_planar_monitors_monitor_id_meta: {
         parameters: {
             query?: {
+                sample_token?: string;
                 component?: string;
                 scope_kind?: string;
                 scope_id?: string;
@@ -12146,9 +12265,11 @@ export interface operations {
                 quality?: string;
                 vector_budget?: number;
                 include_mesh?: boolean;
-                expected_monitor_revision?: number;
-                expected_mesh_revision?: number;
-                expected_field_revision?: number;
+                expected_scene_revision?: string;
+                expected_monitor_revision?: string;
+                expected_mesh_revision?: string;
+                expected_carrier_revision?: string;
+                expected_field_revision?: string;
             };
             header?: never;
             path: {
@@ -12167,26 +12288,48 @@ export interface operations {
                     "application/json": components["schemas"]["PlanarFieldMetaResource"];
                 };
             };
+            /** @description Not modified */
+            304: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Invalid planar query */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
             /** @description Field or monitor missing */
             404: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
             };
             /** @description Stale source */
             409: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
             };
             /** @description Unsupported planar sampling */
             422: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
             };
         };
     };
@@ -12195,16 +12338,20 @@ export interface operations {
             query: {
                 u_m: number;
                 v_m: number;
+                sample_token?: string;
                 component?: string;
                 resolution_x?: number;
                 resolution_y?: number;
+                quality?: string;
                 scope_kind?: string;
                 scope_id?: string;
                 stage_id?: string;
                 snapshot_id?: string;
-                expected_monitor_revision?: number;
-                expected_mesh_revision?: number;
-                expected_field_revision?: number;
+                expected_scene_revision?: string;
+                expected_monitor_revision?: string;
+                expected_mesh_revision?: string;
+                expected_carrier_revision?: string;
+                expected_field_revision?: string;
             };
             header?: never;
             path: {
@@ -12223,11 +12370,48 @@ export interface operations {
                     "application/json": components["schemas"]["PlanarFieldProbeResource"];
                 };
             };
+            /** @description Invalid planar query or probe coordinates */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
+            /** @description Field or monitor missing */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
+            /** @description Stale source */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
+            /** @description Unsupported planar sampling */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
         };
     };
     data_get_sessions_current_data_fields_quantity_id_planar_monitors_monitor_id_render_png: {
         parameters: {
             query?: {
+                sample_token?: string;
                 component?: string;
                 scope_kind?: string;
                 scope_id?: string;
@@ -12238,9 +12422,11 @@ export interface operations {
                 quality?: string;
                 vector_budget?: number;
                 include_mesh?: boolean;
-                expected_monitor_revision?: number;
-                expected_mesh_revision?: number;
-                expected_field_revision?: number;
+                expected_scene_revision?: string;
+                expected_monitor_revision?: string;
+                expected_mesh_revision?: string;
+                expected_carrier_revision?: string;
+                expected_field_revision?: string;
             };
             header?: never;
             path: {
@@ -12258,11 +12444,48 @@ export interface operations {
                 };
                 content?: never;
             };
+            /** @description Invalid planar query */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
+            /** @description Field or monitor missing */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
+            /** @description Stale source */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
+            /** @description Unsupported planar sampling */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
         };
     };
     data_get_sessions_current_data_fields_quantity_id_planar_monitors_monitor_id_scalar: {
         parameters: {
             query?: {
+                sample_token?: string;
                 component?: string;
                 scope_kind?: string;
                 scope_id?: string;
@@ -12273,9 +12496,11 @@ export interface operations {
                 quality?: string;
                 vector_budget?: number;
                 include_mesh?: boolean;
-                expected_monitor_revision?: number;
-                expected_mesh_revision?: number;
-                expected_field_revision?: number;
+                expected_scene_revision?: string;
+                expected_monitor_revision?: string;
+                expected_mesh_revision?: string;
+                expected_carrier_revision?: string;
+                expected_field_revision?: string;
             };
             header?: never;
             path: {
@@ -12300,11 +12525,48 @@ export interface operations {
                 };
                 content?: never;
             };
+            /** @description Invalid planar query */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
+            /** @description Field or monitor missing */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
+            /** @description Stale source */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
+            /** @description Unsupported planar sampling */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
         };
     };
     data_get_sessions_current_data_fields_quantity_id_planar_monitors_monitor_id_vectors: {
         parameters: {
             query?: {
+                sample_token?: string;
                 component?: string;
                 scope_kind?: string;
                 scope_id?: string;
@@ -12315,9 +12577,11 @@ export interface operations {
                 quality?: string;
                 vector_budget?: number;
                 include_mesh?: boolean;
-                expected_monitor_revision?: number;
-                expected_mesh_revision?: number;
-                expected_field_revision?: number;
+                expected_scene_revision?: string;
+                expected_monitor_revision?: string;
+                expected_mesh_revision?: string;
+                expected_carrier_revision?: string;
+                expected_field_revision?: string;
             };
             header?: never;
             path: {
@@ -12335,12 +12599,48 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description Quantity is not vector-valued */
-            422: {
+            /** @description Not modified */
+            304: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            /** @description Invalid planar query */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
+            /** @description Field or monitor missing */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
+            /** @description Stale source */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
+            /** @description Quantity or sampling mode unsupported */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
             };
         };
     };
@@ -13431,6 +13731,8 @@ export interface operations {
                 since_revision?: number;
                 /** @description Max rows to return */
                 limit?: number;
+                /** @description Return the newest rows instead of the oldest rows in the selected window */
+                tail?: boolean;
                 /** @description Comma-separated scalar columns to return, e.g. step,time,e_total */
                 columns?: string;
             };

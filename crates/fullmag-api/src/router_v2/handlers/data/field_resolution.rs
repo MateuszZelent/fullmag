@@ -1,8 +1,11 @@
 use crate::field_slice::{FdmField, FemField};
-use crate::preview::quantity_spatial_domain;
+use crate::router_v2::handlers::data::resolved_spatial_field::{
+    resolve_fem_node_mapping, EntityMapping,
+};
 use crate::router_v2::handlers::sessions::status::{fdm_grid_geometry, fdm_grid_shape};
 use crate::session::{resolved_current_field_source, ResolvedCurrentFieldSource};
 use crate::types::SessionStateResponse;
+use fullmag_quantities::{quantity_spec, QuantityLocation};
 use fullmag_runner::FemMeshPayload;
 
 pub(crate) fn live_magnetization_available(snapshot: &SessionStateResponse) -> bool {
@@ -29,6 +32,22 @@ pub(crate) fn field_value_count_matches_current_domain(
     }
     let point_count = value_count / n_comp;
     field_point_count_matches_current_domain(snapshot, quantity_id, point_count)
+}
+
+pub(crate) fn json_field_matches_current_domain(
+    snapshot: &SessionStateResponse,
+    quantity_id: &str,
+    n_comp: usize,
+    raw: &serde_json::Value,
+) -> bool {
+    let value_count = json_field_value_count(raw);
+    if !field_value_count_matches_current_domain(snapshot, quantity_id, n_comp, value_count) {
+        return false;
+    }
+    if !is_fdm_snapshot(snapshot) || n_comp == 0 {
+        return true;
+    }
+    true
 }
 
 /// Return whether a serialized backend label belongs to an executable FDM
@@ -58,11 +77,13 @@ pub(super) fn field_point_count_matches_current_domain(
     if point_count == 0 || mesh.nodes.is_empty() || mesh.cells.is_empty() {
         return false;
     }
-    if point_count == mesh.nodes.len() {
-        return true;
+    match quantity_spec(quantity_id).map(|spec| spec.location) {
+        Some(QuantityLocation::Node) => {
+            resolve_fem_node_mapping(mesh, quantity_id, point_count).is_ok()
+        }
+        Some(QuantityLocation::Cell) => point_count == mesh.cell_count(),
+        Some(QuantityLocation::Global) | None => false,
     }
-    quantity_spatial_domain(quantity_id) == "magnetic_only"
-        && fem_magnetic_node_count(mesh).is_some_and(|count| point_count == count)
 }
 
 fn multilayer_native_point_count(snapshot: &SessionStateResponse) -> Option<usize> {
@@ -274,10 +295,6 @@ pub(crate) fn fem_magnetic_node_indices(mesh: &FemMeshPayload) -> Option<Vec<u32
     None
 }
 
-fn fem_magnetic_node_count(mesh: &FemMeshPayload) -> Option<usize> {
-    fem_magnetic_node_indices(mesh).map(|indices| indices.len())
-}
-
 fn mark_magnetic_mesh_parts(mesh: &FemMeshPayload, active: &mut [bool]) -> bool {
     let mut saw_magnetic_part = false;
     for part in &mesh.mesh_parts {
@@ -393,7 +410,6 @@ pub(super) fn extract_fdm_field(
             values,
             origin: None,
             spacing: None,
-            active_mask: None,
         },
     ))
 }
@@ -447,7 +463,12 @@ pub(super) fn extract_fem_field(
         return None;
     }
     let values = extract_raw_field_values(snapshot, quantity_id, n_comp)?;
-    if n_comp == 0 || values.len() / n_comp != mesh.nodes.len() {
+    if n_comp == 0
+        || !matches!(
+            resolve_fem_node_mapping(mesh, quantity_id, values.len() / n_comp).ok()?,
+            EntityMapping::Identity { .. }
+        )
+    {
         return None;
     }
     let elements = mesh.require_tet4_elements().ok()?;

@@ -435,10 +435,12 @@ describe("ObjectVisualizationPanelModel", () => {
           requestedFieldBufferId: "field-buffer",
           vectors: { buildKey: "vector-build" },
           adoption: {
-            adoptedFieldBufferId: "field-buffer",
-            adoptedResourceKey: "field-key",
-            adoptedVectorBuildKey: "vector-build",
-            adoptedVectorItemCount: 10_586,
+            vector: {
+              adoptedFieldBufferId: "field-buffer",
+              adoptedResourceKey: "field-key",
+              adoptedVectorBuildKey: "vector-build",
+              adoptedVectorItemCount: 10_586,
+            },
           },
         },
       }],
@@ -466,10 +468,12 @@ describe("ObjectVisualizationPanelModel", () => {
           requestedFieldBufferId: "field-buffer",
           vectors: { buildKey: "vector-build" },
           adoption: {
-            adoptedFieldBufferId: "field-buffer",
-            adoptedResourceKey: "field-key",
-            adoptedVectorBuildKey: "vector-build",
-            adoptedVectorItemCount: 16_940,
+            vector: {
+              adoptedFieldBufferId: "field-buffer",
+              adoptedResourceKey: "field-key",
+              adoptedVectorBuildKey: "vector-build",
+              adoptedVectorItemCount: 16_940,
+            },
           },
         },
       }],
@@ -501,10 +505,12 @@ describe("ObjectVisualizationPanelModel", () => {
           requestedFieldBufferId: "field-buffer",
           vectors: { buildKey: "vector-build" },
           adoption: {
-            adoptedFieldBufferId: "field-buffer",
-            adoptedResourceKey: "field-key",
-            adoptedVectorBuildKey: "vector-build",
-            adoptedVectorItemCount: 10_586,
+            vector: {
+              adoptedFieldBufferId: "field-buffer",
+              adoptedResourceKey: "field-key",
+              adoptedVectorBuildKey: "vector-build",
+              adoptedVectorItemCount: 10_586,
+            },
           },
         },
       }],
@@ -552,10 +558,12 @@ describe("ObjectVisualizationPanelModel", () => {
           requestedFieldBufferId: "field-buffer",
           vectors: { buildKey: "vector-build" },
           adoption: {
-            adoptedFieldBufferId: "field-buffer",
-            adoptedResourceKey: "field-key",
-            adoptedVectorBuildKey: "vector-build",
-            adoptedVectorItemCount: 10_586,
+            vector: {
+              adoptedFieldBufferId: "field-buffer",
+              adoptedResourceKey: "field-key",
+              adoptedVectorBuildKey: "vector-build",
+              adoptedVectorItemCount: 10_586,
+            },
           },
         },
       }],
@@ -583,10 +591,12 @@ describe("ObjectVisualizationPanelModel", () => {
           requestedFieldBufferId: "field-buffer",
           vectors: { buildKey: "vector-build-current" },
           adoption: {
-            adoptedFieldBufferId: "field-buffer",
-            adoptedResourceKey: "field-key",
-            adoptedVectorBuildKey: "vector-build-old",
-            adoptedVectorItemCount: 10_586,
+            vector: {
+              adoptedFieldBufferId: "field-buffer",
+              adoptedResourceKey: "field-key",
+              adoptedVectorBuildKey: "vector-build-old",
+              adoptedVectorItemCount: 10_586,
+            },
           },
         },
       }],
@@ -968,21 +978,34 @@ describe("ObjectVisualizationPanelModel", () => {
     });
   });
 
-  it("filters out magnetization and material quantities for the airbox target kind", () => {
-    const airboxItems = visualizationQuantityItems("H_demag", "airbox");
-    expect(airboxItems.map((item) => item.value)).toEqual([
-      "H_eff",
-      "H_demag",
-      "H_ext",
-    ]);
+  it("waits for the realized field catalog before offering Airbox quantities", () => {
+    expect(visualizationQuantityItems("H_demag", "airbox")).toEqual([]);
   });
 
-  it("uses the same field-only quantity set for the dedicated FDM Airbox UI", () => {
-    expect(visualizationQuantityItems("H_demag", "airbox").map((item) => item.value)).toEqual([
-      "H_eff",
-      "H_demag",
-      "H_ext",
-    ]);
+  it("offers only catalog-available full-domain quantities for an Airbox", () => {
+    const catalog = {
+      domain_generation_id: "fdm-generation-1",
+      quantities: [
+        { available: true, domain: "magnetic_only", quantity_id: "m", label: "Magnetization" },
+        { available: true, domain: "magnetic_only", quantity_id: "H_ex", label: "Exchange field" },
+        { available: true, domain: "full_domain", quantity_id: "H_demag", label: "Demag field" },
+        { available: true, domain: "full_domain", quantity_id: "H_ext", label: "External field" },
+        { available: true, domain: "full_domain", quantity_id: "H_eff", label: "Effective field" },
+        { available: true, domain: "magnetic_only", quantity_id: "H_ant", label: "Antenna field" },
+        { available: true, domain: "full_domain", quantity_id: "H_oe", label: "Oersted field" },
+        { available: true, domain: "magnetic_only", quantity_id: "eden_demag", label: "Demag energy" },
+        { available: false, domain: "magnetic_only", quantity_id: "H_drive", label: "Drive field" },
+      ],
+      revision: 3,
+    } as FieldCatalogResource;
+
+    expect(
+      visualizationQuantityItems("H_demag", "airbox", catalog).map(
+        (item) => item.value,
+      ),
+    ).toEqual(["H_demag", "H_ext", "H_eff", "H_oe"]);
+    expect(fieldCatalogQuantityAvailable(catalog, "H_ant")).toBe(true);
+    expect(fieldCatalogQuantityAvailable(catalog, "H_drive")).toBe(false);
   });
 
   it("filters quantity options by the realized field catalog", () => {
@@ -1006,12 +1029,32 @@ describe("ObjectVisualizationPanelModel", () => {
     expect(
       visualizationQuantityItems("H_demag", "object", catalog),
     ).toEqual([
-      { label: "Unavailable / H_demag", value: "H_demag" },
+      { disabled: true, label: "Unavailable / H_demag", value: "H_demag" },
       { label: "Magnetization", value: "m" },
     ]);
     expect(fieldCatalogQuantityAvailable(catalog, "m")).toBe(true);
     expect(fieldCatalogQuantityAvailable(catalog, "H_demag")).toBe(false);
     expect(fieldCatalogQuantityAvailable(null, "H_demag")).toBe(true);
+  });
+
+  it("keeps object magnetization while exposing Airbox magnetization only as disabled", () => {
+    const catalog = {
+      domain_generation_id: "fdm-generation-1",
+      quantities: [
+        { available: true, ui_exposed: true, kind: "vector_field", location: "node", domain: "magnetic_only", quantity_id: "m", label: "Magnetization", unit: "1" },
+        { available: true, ui_exposed: true, kind: "vector_field", location: "node", domain: "full_domain", quantity_id: "H_demag", label: "Demag field", unit: "A/m" },
+      ],
+      revision: 3,
+    } as FieldCatalogResource;
+
+    expect(
+      visualizationQuantityItems("m", "object", catalog).map((item) => item.value),
+    ).toEqual(["m", "H_demag"]);
+    expect(visualizationQuantityItems("m", "airbox", catalog)[0]).toEqual({
+      disabled: true,
+      label: "Unavailable / m",
+      value: "m",
+    });
   });
 
   it("switches scalar material quantities to colormap surface coloring", () => {
@@ -2619,6 +2662,7 @@ describe("ObjectVisualizationPanelModel", () => {
         {
           available: true,
           components: 3,
+          domain: "full_domain",
           domain_generation_id: "1",
           field_revision: 3,
           kind: "vector",
@@ -2629,8 +2673,10 @@ describe("ObjectVisualizationPanelModel", () => {
           quantity_id: "H_eff",
           source_revision: 3,
           source_step: 0,
+          spatial: true,
           stale_by_steps: 0,
           state: "complete",
+          ui_exposed: true,
           unit: "A/m",
         },
       ],
@@ -2684,8 +2730,33 @@ describe("ObjectVisualizationPanelModel", () => {
         vectorsVisible: true,
         visible: true,
       },
-      fieldCatalog: null,
-      fieldCatalogStatus: "idle",
+      fieldCatalog: {
+        domain_generation_id: "1",
+        quantities: [
+          {
+            available: true,
+            components: 3,
+            domain: "magnetic_only",
+            domain_generation_id: "1",
+            field_revision: 3,
+            kind: "vector",
+            label: "Magnetization",
+            location: "magnetic_only",
+            materialization_wall_time_ns: 0,
+            materialized_at_unix_ms: 0,
+            quantity_id: "m",
+            source_revision: 3,
+            source_step: 0,
+            spatial: true,
+            stale_by_steps: 0,
+            state: "complete",
+            ui_exposed: true,
+            unit: "1",
+          },
+        ],
+        revision: 4,
+      },
+      fieldCatalogStatus: "ready",
       renderWarning: null,
       settings: {
         ...DEFAULT_AIRBOX_VISUALIZATION,

@@ -389,27 +389,45 @@ field-solve lanes fail; they do not silently choose another device.
 
 Planar sampling is postprocessing of a published spatial field. Solver
 execution device and sampling execution are separate capability dimensions.
-The first production sampler runs on CPU, including when `source_device=gpu`;
-that does not claim native GPU sampling.
+The implemented sampler runs on CPU with binary64 accumulation. A GPU-produced
+field transported into that sampler is a GPU-source/CPU-sampling path; it does
+not claim native GPU sampling. Current planar metadata does not expose source
+backend/device/precision, so source/device qualification requires external
+managed-run provenance.
 
-| Capability | FDM | FEM P1 | FEM high-order | Failure/degraded rule |
+| Source lane | Target/scope legality | Required source carrier | Current operators | Sampling execution | Current qualification |
+|---|---|---|---|---|---|
+| FDM CPU | `domain`: full rectangular carrier; `magnetic_domain`: all active cells; `region`: exact numeric membership; `object`: conditionally correct only when all active cells belong to the requested object and incorrect for a general multi-object grid; `mesh_part`/`airbox`: unsupported; all three dynamic extent tags reuse bounds from the post-target mask and are unqualified as distinct policies | Cell-centred structured-grid field; matching membership required for non-domain targets; explicit extent required | plane, slab, depth; surface unsupported | CPU | managed Task 0 science artifact passed only for its fixture at exact source `5138078f7fd7b65dfc231faa4aa11c02d8ebf52d`; dynamic extents, multi-object object targeting, and end-to-end runtime/browser/production remain unqualified because the same recipe exited 1 after 180000 ms waiting for a visible canvas |
+| FDM GPU | Same target/scope and dynamic-extent restrictions as FDM CPU after compatible transport | Transported cell-centred structured-grid field; planar metadata does not identify source device/precision; explicit extent required | plane, slab, depth; surface unsupported | CPU | source-compatible by code path only; no fresh GPU source/device, distinct dynamic-policy, or multi-object object-target evidence and no native GPU sampler |
+| FEM CPU | Target plus optional intersecting `mesh_part`/`airbox` element scope; every dynamic extent kind uses all mesh nodes and is incorrect for scoped bounds | Complete Tet4/P1 nodal field with one value tuple for every published mesh node; selected-part-only, discontinuous, cell-centred, and higher-order carriers unsupported | plane, slab, depth, `object_boundary` surface; explicit extent required for faithful scoped bounds | CPU | focused numerical/API tests only; scoped dynamic extents and fresh managed FEM/browser/runtime/production evidence remain unqualified |
+| FEM GPU | Same target/scope and dynamic-extent restrictions as FEM CPU after compatible transport | Complete transported Tet4/P1 nodal field over all published mesh nodes; planar metadata does not identify source device/precision | same P1 operators as FEM CPU; explicit extent required for faithful scoped bounds | CPU | source-compatible by code path only; no fresh GPU source/device or scoped dynamic-extent evidence and no native GPU sampler |
+
+| Capability | FDM source | FEM P1 source | FEM high-order | Failure/degraded rule |
 |---|---|---|---|---|
-| `planar_monitor_authoring` | implemented | implemented | gated | invalid authored frame/target rejects before execution |
-| `planar_plane_sample` axis frame | scientifically validated | scientifically validated | gated | no hidden basis-order fallback |
-| `planar_plane_sample` arbitrary frame | scientifically validated | scientifically validated | gated | invalid/unsupported frame returns stable reason |
-| `planar_slab_average` | cell-volume weighted, validated | conservative tetra measure, validated | gated | node-count averaging forbidden |
-| `planar_depth_projection` | cell-volume weighted, validated | conservative tetra measure, validated | gated | unsupported reduction rejects |
-| `planar_surface_projection` planar boundary | boundary measure | boundary triangle measure, validated | gated | folded/non-injective surfaces are diagnostic |
-| `planar_vector_sampling` | browser-verified | browser-verified nodal vectors | gated | unavailable component returns stable reason |
-| `planar_mesh_overlay` | optional grid outline | exact section topology, browser-verified | topology-gated | absence does not alter sampled values |
-| `planar_airbox_sampling` | full-domain quantities only | full-domain quantities and air mesh | gated | magnetic-only quantities do not become airbox fields |
+| `planar_monitor_authoring` | implemented | implemented | authoring implemented | invalid authored frame/target rejects before execution |
+| `planar_plane_sample` axis frame | implemented, CPU sampler | implemented, CPU sampler | unsupported | no hidden basis-order fallback |
+| `planar_plane_sample` arbitrary frame | implemented, CPU sampler | implemented, CPU sampler | unsupported | invalid/unsupported frame returns stable reason |
+| `planar_slab_average` | cell-volume weighted, CPU sampler | conservative tetra measure, CPU sampler | unsupported | node-count averaging forbidden |
+| `planar_depth_projection` | cell-volume weighted, CPU sampler | conservative tetra measure, CPU sampler | unsupported | unsupported reduction rejects |
+| `planar_surface_projection` `object_boundary` | unsupported: boundary topology absent | boundary-triangle measure, CPU sampler | unsupported | region/named FEM surfaces reject; folded/non-injective surfaces are diagnostic |
+| `planar_vector_sampling` | implemented, browser unqualified | implemented for P1 nodal vectors, browser unqualified | unsupported | unavailable component returns stable reason |
+| `planar_mesh_overlay` | no sampler overlay | exact P1 section topology, browser unqualified | unsupported | absence does not alter sampled values |
+| `planar_target.domain` | full rectangular carrier | all Tet4 elements after full-nodal carrier load | unsupported | carrier semantics are not magnetic-target semantics |
+| `planar_target.magnetic_domain` | all active cells | all elements with non-zero marker after full-nodal carrier load | unsupported | missing/stale membership or topology rejects |
+| `planar_target.object` | conditional only: current mask selects all active cells after checking object existence; incorrect for general multi-object grids | mesh-part element selection after full-nodal carrier load | unsupported | FDM multi-object qualification is RED; no all-active substitution may be claimed |
+| `planar_target.region` | exact numeric region membership | object/region mesh-part selection after full-nodal carrier load | unsupported | missing region legend/part rejects |
+| `planar_airbox_sampling` | unsupported runtime scope | element scope only after a compatible full-mesh nodal field loads; no scoped carrier support | unsupported | magnetic-only quantities do not become airbox fields; empty intersection rejects |
+| `planar_dynamic_extent` | all three tags use one post-target selected-mask resolver: `target_bounds + object` is wrong for multi-object grids; `magnetic_domain + domain` may include inactive cells; `magnetic_domain + region` is too narrow; a corrected object mask would make `magnetic_domain + object` too narrow; `universe + magnetic_domain/object/region` is too narrow | all three dynamic tags currently use global FEM mesh nodes and are incorrect for scoped bounds | unsupported | use explicit extent on both FDM and FEM until target/scope-aware, tag-specific bounds pass |
+| `planar_empty_extrema` | terminal contract excludes `empty` occupancy, but `include_air_as_zero` currently inserts finite zero into metadata extrema | same terminal contract; current metadata reduction is not occupancy-aware | unsupported | `include_air_as_zero` extrema/ranges remain unqualified until the empty mask gates min/max |
+| `planar_target_boundary_overlay` | unavailable: FDM topology is not published, return `204` | `FMCS v4` exact selected-target boundary after Tet4 codec/route tests; browser unqualified | unsupported | `FMCS v3` is degraded only; no float-dedup inference, material-interface substitution, or monitor-rectangle fallback |
 
-`contract target` and `production target` are not current validation claims.
-Promotion to `public-executable`, `browser-verified`, scientifically
-`validated`, or `production-ready` requires the current artifacts specified by
-`docs/physics/0970-planar-monitor-sampling-and-projection.md`. Strict and
+These entries separate legality from qualification. `implemented` is not a
+`browser-verified`, scientifically `validated`, `runtime-qualified`, or
+`production-ready` claim. Promotion requires the current artifacts specified
+by `docs/physics/0970-planar-monitor-sampling-and-projection.md`. Strict and
 extended modes preserve the same monitor intent; no mode silently substitutes
-another operator. Hybrid sampling remains planned.
+another operator. Hybrid sampling remains planned and must be requested
+explicitly.
 
 Stable capability reasons are:
 

@@ -664,12 +664,24 @@ describe("ribbon structure", () => {
     expect(
       crossSectionWorkspaceStore.getSnapshot().planarMonitorDraft,
     ).toEqual({
-      frameExtent: "universe",
-      id: "draft",
-      name: "Midplane",
-      plane: "xy",
-      positionPercent: 62.5,
-      rotationDegrees: 0,
+      monitor: {
+        frame: {
+          extent: { kind: "universe", padding_m: 0 },
+          normal: [0, 0, 1],
+          normalization_version: "planar_frame_v1",
+          origin_m: [0, 0, 1.9999999999999997e-9],
+          preset: "xy",
+          u_axis: [1, 0, 0],
+          v_axis: [0, 1, 0],
+        },
+        id: "planar_monitor_1",
+        name: "Midplane",
+        operator: { kind: "plane_sample" },
+        target: { kind: "domain" },
+      },
+      ui: {
+        displayLengthUnit: "nm",
+      },
     });
     expect(crossSectionWorkspaceStore.getSnapshot().draft).toBeNull();
     expect(selectionSet).toHaveBeenCalledWith(
@@ -2965,6 +2977,7 @@ describe("ribbon structure", () => {
       },
       {
         active_quantity_id: "H_demag",
+        overrides: [],
         quantity: { active_quantity_id: "H_demag" },
       },
     ]);
@@ -2975,6 +2988,55 @@ describe("ribbon structure", () => {
         [VISUALIZATION_STATE_PATH, 43],
       ]),
     );
+  });
+
+  it("replaces local and remote target quantities from Results shortcuts", async () => {
+    const target = { id: "object:film", kind: "object" as const, label: "film" };
+    const { context, patches } = createVisualizationRibbonContext({
+      active_quantity_id: "H_demag",
+      quantity: { active_quantity_id: "H_demag" },
+      overrides: [
+        {
+          scope: "object",
+          scope_id: "film",
+          display: { wireframe: { visible: true } },
+          quantity: { active_quantity_id: "H_demag" },
+        },
+      ],
+      revision: 7,
+    });
+    context.visualization.patchTarget(target, {
+      activeQuantityId: "H_demag",
+      wireframeVisible: true,
+    });
+    const content = buildRibbonTabContent("results", context);
+    const hEffAction = content?.groups
+      .find((group) => group.id === "quantity")
+      ?.actions.find((action) => action.id === "res-heff");
+    if (!hEffAction?.commandId) throw new Error("Expected H_eff Results shortcut");
+
+    await createRibbonCommandRegistry().execute(hEffAction.commandId, {
+      ...context.commandContext,
+      input: hEffAction.commandInput,
+      source: "ribbon",
+    } as CommandContext);
+
+    expect(context.visualization.getSnapshot().overrides[target.id]).toEqual({
+      wireframeVisible: true,
+    });
+    expect(patches).toEqual([
+      {
+        active_quantity_id: "H_eff",
+        overrides: [
+          {
+            scope: "object",
+            scope_id: "film",
+            display: { wireframe: { visible: true } },
+          },
+        ],
+        quantity: { active_quantity_id: "H_eff" },
+      },
+    ]);
   });
 
   it("flushes global Quantity changes immediately through visualization sync", async () => {
@@ -4817,6 +4879,11 @@ function createVisualizationRibbonContext(
   const patches: VisualizationStatePatch[] = [];
   const invalidations: Array<[string, number | string]> = [];
   const api = {
+    data: {
+      domain: {
+        meta: async () => ({ bounds: { min: [-4e-9, -6e-9, -8e-9], max: [4e-9, 6e-9, 8e-9] } }),
+      },
+    },
     visualization: {
       patch: async (patch: VisualizationStatePatch) => {
         patches.push(patch);

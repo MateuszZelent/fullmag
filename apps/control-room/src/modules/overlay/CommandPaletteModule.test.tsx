@@ -2,6 +2,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 
 import { CommandRegistry } from "@/kernel/commands/CommandRegistry";
+import { fieldMapCommands } from "@/modules/field-map/fieldMapCommands";
 
 import { commandPaletteStore } from "./commandPaletteStore";
 import {
@@ -121,6 +122,47 @@ describe("CommandPaletteModule", () => {
     });
 
     expect(run).toHaveBeenCalledWith({ source: "palette" });
+  });
+
+  it.each([
+    "field-map.select-monitor",
+    "planar-monitor.show-frame-3d",
+    "planar-monitor.delete",
+    "planar-monitor.duplicate",
+    "planar-monitor.rename",
+  ])("does not render monitor command %s that requires contextual input", (id) => {
+    const selectMonitor = fieldMapCommands.find((command) => command.id === id);
+    if (!selectMonitor) throw new Error(`Missing contextual monitor command ${id}.`);
+    const onExecute = vi.fn();
+    const commands = [
+      selectMonitor,
+      {
+        group: "workspace",
+        id: "workspace.safe-command",
+        run: () => ({ status: "completed" as const }),
+        scope: "workspace" as const,
+        title: "Safe command",
+      },
+    ];
+
+    expect(selectMonitor.requiresInput).toBe(true);
+    expect(filterPaletteCommands(commands, "").map((command) => command.id)).toEqual([
+      "workspace.safe-command",
+    ]);
+    const html = renderToStaticMarkup(
+      <CommandPaletteView
+        commands={commands}
+        isOpen
+        query=""
+        onClose={() => undefined}
+        onExecute={onExecute}
+        onQueryChange={() => undefined}
+      />,
+    );
+
+    expect(html).toContain("Safe command");
+    expect(html).not.toContain(selectMonitor.title);
+    expect(onExecute).not.toHaveBeenCalled();
   });
 
   it("resolves disabled command state for palette parity with other renderers", () => {

@@ -166,17 +166,18 @@ pub(crate) fn materialize_airbox_observation(
         "problem_source_hash": problem.problem_meta.source_hash,
         "run_status": executed.result.status,
     });
+    let target_grid = json!({
+        "cells": target.shape,
+        "origin_m": target.origin_m,
+        "cell_size_m": target.spacing_m,
+    });
     let field_payload = json!({
         "schema_version": OBSERVATION_FIELD_SCHEMA,
         "observable": "H_demag",
         "quantity_id": "H_demag",
         "unit": "A/m",
         "scope_kind": "airbox",
-        "grid": {
-            "cells": target.shape,
-            "origin_m": target.origin_m,
-            "cell_size_m": target.spacing_m,
-        },
+        "grid": target_grid,
         "values": field,
     });
     let field_bytes = serde_json::to_vec_pretty(&field_payload)
@@ -194,11 +195,7 @@ pub(crate) fn materialize_airbox_observation(
         "scope_kind": "airbox",
         "quantity_id": "H_demag",
         "source_policy": "target_only",
-        "grid": {
-            "cells": target.shape,
-            "origin_m": target.origin_m,
-            "cell_size_m": target.spacing_m,
-        },
+        "grid": target_grid,
         "source_grid_fingerprints": source_grid_fingerprints,
         "source_common_grid": source_common_grid,
         "source_runtime_identity": source_runtime_identity,
@@ -207,6 +204,16 @@ pub(crate) fn materialize_airbox_observation(
     let fingerprint_bytes = serde_json::to_vec(&fingerprint_seed)
         .map_err(|error| format!("Airbox fingerprint serialization failed: {error}"))?;
     let carrier_fingerprint = sha256_hex(&fingerprint_bytes);
+    // The carrier is one immutable per-quantity materialization inside this
+    // run artifact.  Its revision is therefore local to the carrier, while
+    // its generation identity is the exact content-addressed carrier source.
+    let quantity_revision = 1u64;
+    let field_generation = format!("airbox:sha256:{carrier_fingerprint}");
+    let grid_revision = content_revision(
+        &serde_json::to_vec(&target_grid)
+            .map_err(|error| format!("Airbox grid revision serialization failed: {error}"))?,
+    );
+    let carrier_revision = sha256_hex_revision(&carrier_fingerprint)?;
     let manifest = json!({
         "schema_version": OBSERVATION_SCHEMA,
         "scope_kind": "airbox",
@@ -214,16 +221,16 @@ pub(crate) fn materialize_airbox_observation(
         "unit": "A/m",
         "source_policy": "target_only",
         "target_only": true,
-        "grid": {
-            "cells": target.shape,
-            "origin_m": target.origin_m,
-            "cell_size_m": target.spacing_m,
-        },
+        "grid": target_grid,
         "padding_cells_above_below": target.padding_cells_above_below,
         "carrier_fingerprint": carrier_fingerprint,
         "source_grid_fingerprints": source_grid_fingerprints,
         "source_common_grid": source_common_grid,
         "source_runtime_identity": source_runtime_identity,
+        "quantity_revision": quantity_revision,
+        "grid_revision": grid_revision,
+        "carrier_revision": carrier_revision,
+        "field_generation": field_generation,
         "field_artifact": FIELD_ARTIFACT,
         "field_artifact_sha256": field_hash,
         "sample_count": field.len(),
@@ -438,6 +445,20 @@ fn sha256_hex(bytes: &[u8]) -> String {
     format!("{:x}", hasher.finalize())
 }
 
+fn content_revision(bytes: &[u8]) -> u64 {
+    let digest = Sha256::digest(bytes);
+    u64::from_be_bytes(digest[..8].try_into().expect("sha256 prefix")).max(1)
+}
+
+fn sha256_hex_revision(value: &str) -> Result<u64, String> {
+    if value.len() != 64 || !value.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return Err("carrier fingerprint is not canonical sha256 hex".to_string());
+    }
+    u64::from_str_radix(&value[..16], 16)
+        .map(|revision| revision.max(1))
+        .map_err(|error| format!("carrier revision parse failed: {error}"))
+}
+
 fn checked_cell_count(shape: [u32; 3]) -> Result<usize, String> {
     usize::try_from(u64::from(shape[0]) * u64::from(shape[1]) * u64::from(shape[2]))
         .map_err(|_| format!("grid {:?} is not addressable", shape))
@@ -526,7 +547,10 @@ fn parse_finite3(value: Option<&Value>, label: &str, positive: bool) -> Result<[
 
 #[cfg(test)]
 mod tests {
-    use super::{compute_target_field, materialize_airbox_observation, AirboxObservationTarget};
+    use super::{
+        compute_target_field, content_revision, materialize_airbox_observation, sha256_hex,
+        sha256_hex_revision, AirboxObservationTarget,
+    };
     use crate::types::{ExecutedRun, ExecutionProvenance, RunResult, RunStatus};
     use fullmag_ir::{
         ExchangeBoundaryCondition, ExecutionPrecision, FdmLayerPlanIR, FdmMaterialIR,
@@ -617,6 +641,30 @@ mod tests {
     }
 
     #[test]
+    fn content_revisions_change_with_grid_and_carrier_identity() {
+        let grid_a = json!({
+            "cells": [4, 4, 3],
+            "origin_m": [0.0, 0.0, 0.0],
+            "cell_size_m": [1.0, 1.0, 1.0],
+        });
+        let grid_b = json!({
+            "cells": [4, 4, 5],
+            "origin_m": [0.0, 0.0, -1.0],
+            "cell_size_m": [1.0, 1.0, 1.0],
+        });
+        let grid_revision_a = content_revision(&serde_json::to_vec(&grid_a).unwrap());
+        let grid_revision_b = content_revision(&serde_json::to_vec(&grid_b).unwrap());
+        let carrier_a = sha256_hex(b"carrier-a");
+        let carrier_b = sha256_hex(b"carrier-b");
+
+        assert_ne!(grid_revision_a, grid_revision_b);
+        assert_ne!(
+            sha256_hex_revision(&carrier_a).unwrap(),
+            sha256_hex_revision(&carrier_b).unwrap()
+        );
+    }
+
+    #[test]
     fn materializer_emits_runtime_origin_h_demag_manifest_and_samples() {
         let plan = tiny_plan();
         let mut problem = ProblemIR::bootstrap_example();
@@ -679,6 +727,27 @@ mod tests {
             json!([2, 2, 1])
         );
         assert_eq!(manifest_json["field_artifact"], "H_demag.samples.v1.json");
+        assert_eq!(manifest_json["quantity_revision"], 1);
+        assert_eq!(
+            manifest_json["grid_revision"].as_u64(),
+            Some(content_revision(
+                &serde_json::to_vec(&manifest_json["grid"]).unwrap()
+            ))
+        );
+        assert_eq!(
+            manifest_json["carrier_revision"].as_u64(),
+            Some(
+                sha256_hex_revision(manifest_json["carrier_fingerprint"].as_str().unwrap())
+                    .unwrap()
+            )
+        );
+        assert_eq!(
+            manifest_json["field_generation"],
+            format!(
+                "airbox:sha256:{}",
+                manifest_json["carrier_fingerprint"].as_str().unwrap()
+            )
+        );
         let field_json: serde_json::Value = serde_json::from_slice(&field.bytes).unwrap();
         assert_eq!(field_json["observable"], "H_demag");
         assert_eq!(field_json["unit"], "A/m");

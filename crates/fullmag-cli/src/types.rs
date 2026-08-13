@@ -893,6 +893,12 @@ pub(crate) struct CurrentLiveSnapshotPayload {
     pub coupled_checkpoint: Option<serde_json::Value>,
     pub latest_scalar_row: Option<CurrentLiveScalarRow>,
     pub latest_fields: Option<CurrentLiveLatestFields>,
+    /// Terminal field materialization replaces the complete latest-field set
+    /// for its generation instead of merging into a prior run.
+    pub replace_latest_fields: bool,
+    /// Identity used by the bridge to reject an out-of-order terminal field
+    /// generation without changing the current data-plane revisions.
+    pub field_generation: Option<CurrentLiveFieldGeneration>,
     pub preview_fields: Option<Vec<fullmag_runner::LivePreviewField>>,
     pub clear_preview_cache: bool,
     pub engine_log: Option<Vec<EngineLogEntry>>,
@@ -911,6 +917,12 @@ pub(crate) struct CurrentLiveSnapshotPayload {
     /// an independent event, not hidden inside `live_state.latest_step`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub fem_mesh: Option<fullmag_runner::FemMeshPayload>,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub(crate) struct CurrentLiveFieldGeneration {
+    pub run_id: String,
+    pub sequence: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Default)]
@@ -941,6 +953,10 @@ impl CurrentLivePreviewFieldCache {
 
     pub fn insert(&mut self, field: fullmag_runner::LivePreviewField) {
         self.0.insert(field.quantity.clone(), field);
+    }
+
+    pub fn get(&self, quantity: &str) -> Option<&fullmag_runner::LivePreviewField> {
+        self.0.get(quantity)
     }
 
     pub fn insert_replacing(
@@ -993,6 +1009,9 @@ pub(crate) struct CurrentLiveSnapshotRequest<'a> {
     pub latest_scalar_row: Option<&'a CurrentLiveScalarRow>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub latest_fields: Option<&'a CurrentLiveLatestFields>,
+    pub replace_latest_fields: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub field_generation: Option<&'a CurrentLiveFieldGeneration>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub preview_fields: Option<&'a [fullmag_runner::LivePreviewField]>,
     pub clear_preview_cache: bool,
@@ -1054,6 +1073,9 @@ pub(crate) struct CurrentLiveFieldFrameRequest<'a> {
     pub session_id: &'a str,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub latest_fields: Option<&'a CurrentLiveLatestFields>,
+    pub replace_latest_fields: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub field_generation: Option<&'a CurrentLiveFieldGeneration>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub preview_fields: Option<&'a [fullmag_runner::LivePreviewField]>,
     pub clear_preview_cache: bool,

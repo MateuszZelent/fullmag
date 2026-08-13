@@ -11,6 +11,9 @@ use utoipa::ToSchema;
 
 use crate::error::ApiError;
 use crate::router_v2::handlers::sessions::status::field_revision;
+use crate::schemas::visualization_state::{
+    default_planar_color_range_state, PlanarColorRangeMode, PlanarColorRangeState,
+};
 use crate::types::{AppState, DisplayPresentationState, RuntimeStatusView, SessionStateResponse};
 use crate::{
     current_live_realtime_state_from_snapshot, publish_current_live_realtime_batch_changed,
@@ -41,10 +44,18 @@ struct PersistedCurrentLiveSnapshot {
     quantities: Vec<crate::types::QuantityDescriptor>,
     fem_mesh: Option<fullmag_runner::FemMeshPayload>,
     latest_fields: crate::types::LatestFields,
+    #[serde(default)]
+    accepted_terminal_field_generation: Option<crate::types::CurrentLiveFieldGeneration>,
+    #[serde(default)]
+    terminal_field_generations: BTreeMap<String, u64>,
     artifacts: Vec<crate::types::ArtifactEntry>,
     display_selection: crate::types::CurrentDisplaySelection,
+    /// Schema version for the persistence-only display presentation payload.
+    /// Missing in historical snapshots means the frozen v6 shape.
     #[serde(default)]
-    display_presentation: DisplayPresentationState,
+    display_presentation_schema_version: Option<u32>,
+    #[serde(default)]
+    display_presentation: serde_json::Value,
     preview_config: crate::types::CurrentPreviewConfig,
     preview: Option<crate::types::PreviewState>,
     builder_adapter: Option<fullmag_authoring::ScriptBuilderState>,
@@ -73,22 +84,120 @@ impl From<&SessionStateResponse> for PersistedCurrentLiveSnapshot {
             quantities: value.quantities.clone(),
             fem_mesh: value.fem_mesh.clone(),
             latest_fields: value.latest_fields.clone(),
+            accepted_terminal_field_generation: value.accepted_terminal_field_generation.clone(),
+            terminal_field_generations: value.terminal_field_generations.clone(),
             artifacts: value.artifacts.clone(),
             display_selection: value.display_selection.clone(),
+            display_presentation_schema_version: None,
             preview_config: value.preview_config.clone(),
             preview: value.preview.clone(),
             builder_adapter: value.builder_adapter.clone(),
             mesh_revision: value.mesh_revision,
             mesh_build_revision: value.mesh_build_revision,
             region_realization_revisions: value.region_realization_revisions,
-            display_presentation: DisplayPresentationState::default(),
+            display_presentation: serde_json::Value::Null,
         }
     }
+}
+
+const DISPLAY_PRESENTATION_SCHEMA_VERSION: u32 = 7;
+
+fn persisted_display_presentation(
+    presentation: &DisplayPresentationState,
+) -> Result<serde_json::Value, serde_json::Error> {
+    serde_json::to_value(presentation)
+}
+
+fn restore_display_presentation(
+    schema_version: Option<u32>,
+    document: &serde_json::Value,
+) -> Result<DisplayPresentationState, String> {
+    match schema_version.unwrap_or(6) {
+        6 => migrate_display_presentation_v6(document.clone()),
+        DISPLAY_PRESENTATION_SCHEMA_VERSION => serde_json::from_value(document.clone())
+            .map_err(|error| format!("invalid v7 display presentation: {error}")),
+        other => Err(format!(
+            "unsupported display presentation schema_version {other}; current version is {DISPLAY_PRESENTATION_SCHEMA_VERSION}"
+        )),
+    }
+}
+
+fn migrate_display_presentation_v6(
+    mut state: serde_json::Value,
+) -> Result<DisplayPresentationState, String> {
+    let Some(planar_document) = state
+        .pointer_mut("/visualization_planar")
+        .and_then(serde_json::Value::as_object_mut)
+    else {
+        return serde_json::from_value(state)
+            .map_err(|error| format!("invalid v6 display presentation: {error}"));
+    };
+
+    let legacy_auto_contrast = planar_document
+        .get("auto_contrast")
+        .and_then(serde_json::Value::as_bool);
+    let legacy_min = planar_document
+        .get("contrast_min")
+        .and_then(serde_json::Value::as_f64);
+    let legacy_max = planar_document
+        .get("contrast_max")
+        .and_then(serde_json::Value::as_f64);
+
+    let (range, warning) = match (legacy_auto_contrast, legacy_min, legacy_max) {
+        (Some(true), _, _) | (None, _, _) => {
+            (default_planar_color_range_state(), None)
+        }
+        (Some(false), Some(min), Some(max)) if min.is_finite() && max.is_finite() && min < max => {
+            (
+                PlanarColorRangeState {
+                    mode: PlanarColorRangeMode::Manual,
+                    min: Some(min),
+                    max: Some(max),
+                },
+                None,
+            )
+        }
+        (Some(false), _, _) => {
+            (
+                default_planar_color_range_state(),
+                Some("Planarny zakres kontrastu z wersji v6 był niepoprawny; przywrócono bezpieczny zakres automatyczny.".to_string()),
+            )
+        }
+    };
+    planar_document.remove("auto_contrast");
+    planar_document.remove("contrast_min");
+    planar_document.remove("contrast_max");
+    planar_document.insert(
+        "range".to_string(),
+        serde_json::to_value(range).expect("planar range serializes"),
+    );
+    planar_document
+        .entry("raster_opacity")
+        .or_insert_with(|| serde_json::json!(1.0));
+    if let Some(warning) = warning {
+        state
+            .as_object_mut()
+            .expect("v6 display presentation remains an object")
+            .entry("visualization_restore_warnings")
+            .or_insert_with(|| serde_json::json!([]))
+            .as_array_mut()
+            .expect("restore warnings remain an array")
+            .push(serde_json::Value::String(warning));
+    }
+    serde_json::from_value(state)
+        .map_err(|error| format!("invalid migrated v6 display presentation: {error}"))
 }
 
 impl From<PersistedCurrentLiveSnapshot> for SessionStateResponse {
     fn from(value: PersistedCurrentLiveSnapshot) -> Self {
         let scalar_revision = value.scalar_rows.len() as u64;
+        let accepted_terminal_field_generation = value.accepted_terminal_field_generation;
+        let mut terminal_field_generations = value.terminal_field_generations;
+        if let Some(generation) = accepted_terminal_field_generation.as_ref() {
+            terminal_field_generations
+                .entry(generation.run_id.clone())
+                .or_insert(generation.sequence);
+        }
         SessionStateResponse {
             session_protocol_version: value.session_protocol_version,
             capability_profile_version: value.capability_profile_version,
@@ -122,6 +231,8 @@ impl From<PersistedCurrentLiveSnapshot> for SessionStateResponse {
             field_catalog_revision: 0,
             field_samples_revision: 0,
             field_quantity_revisions: BTreeMap::new(),
+            accepted_terminal_field_generation,
+            terminal_field_generations,
             stage_execution_revision: 0,
             simulation_preparation_revision: 0,
             region_realization_revisions: value.region_realization_revisions,
@@ -414,7 +525,9 @@ async fn collect_project_documents(
         let presentation = state.current_display_presentation.read().await.clone();
         let persisted = PersistedCurrentLiveSnapshot::from(snapshot);
         let persisted = PersistedCurrentLiveSnapshot {
-            display_presentation: presentation,
+            display_presentation_schema_version: Some(DISPLAY_PRESENTATION_SCHEMA_VERSION),
+            display_presentation: persisted_display_presentation(&presentation)
+                .expect("display presentation must serialize"),
             ..persisted
         };
         if let Ok(data) = serde_json::to_vec_pretty(&persisted) {
@@ -576,31 +689,43 @@ pub(crate) async fn import_session_commit(
         .read_document("project/current_live_snapshot.json")
         .map_err(|e| ApiError::internal(format!("reading snapshot document: {e}")))?
     {
-        if let Ok(persisted) =
-            serde_json::from_slice::<PersistedCurrentLiveSnapshot>(&snapshot_bytes)
+        if let Ok(snapshot_document) = serde_json::from_slice::<serde_json::Value>(&snapshot_bytes)
         {
-            let restored_display_presentation = persisted.display_presentation.clone();
-            let restored: SessionStateResponse = persisted.into();
-            // Refresh the in-memory active workspace.
+            if let Ok(persisted) =
+                serde_json::from_value::<PersistedCurrentLiveSnapshot>(snapshot_document.clone())
             {
-                let mut current = state.current_live_state.write().await;
-                *current = Some(restored.clone());
+                let restored_display_presentation = restore_display_presentation(
+                    persisted.display_presentation_schema_version,
+                    &persisted.display_presentation,
+                )
+                .map_err(|error| {
+                    ApiError::bad_request(format!(
+                        "unsupported or invalid persisted display presentation ({error}); session restore did not mutate the active workspace"
+                    ))
+                })?;
+                let restored: SessionStateResponse = persisted.into();
+                // Refresh the in-memory active workspace.
+                {
+                    let mut current = state.current_live_state.write().await;
+                    *current = Some(restored.clone());
+                }
+                {
+                    let mut selection = state.current_display_selection.write().await;
+                    *selection = restored.display_selection.clone();
+                }
+                {
+                    let mut presentation = state.current_display_presentation.write().await;
+                    *presentation = restored_display_presentation;
+                }
+                let realtime_state = current_live_realtime_state_from_snapshot(
+                    &state,
+                    &restored,
+                    restored.display_selection.revision,
+                )
+                .await;
+                publish_current_live_realtime_batch_changed(&state, &realtime_state, false, 0)
+                    .await?;
             }
-            {
-                let mut selection = state.current_display_selection.write().await;
-                *selection = restored.display_selection.clone();
-            }
-            {
-                let mut presentation = state.current_display_presentation.write().await;
-                *presentation = restored_display_presentation;
-            }
-            let realtime_state = current_live_realtime_state_from_snapshot(
-                &state,
-                &restored,
-                restored.display_selection.revision,
-            )
-            .await;
-            publish_current_live_realtime_batch_changed(&state, &realtime_state, false, 0).await?;
         }
     }
 
@@ -2280,5 +2405,133 @@ mod coupled_checkpoint_identity_tests {
                 "{value}"
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod terminal_field_generation_persistence_tests {
+    use super::*;
+    use crate::session::{apply_current_live_field_frame, default_current_live_state};
+    use crate::types::{CurrentLiveFieldFrameRequest, CurrentLiveSnapshotRequest};
+
+    fn terminal_frame(run_id: &str, sequence: u64) -> CurrentLiveFieldFrameRequest {
+        serde_json::from_value(serde_json::json!({
+            "session_id": "persisted-session",
+            "replace_latest_fields": true,
+            "clear_preview_cache": true,
+            "field_generation": { "run_id": run_id, "sequence": sequence },
+            "latest_fields": { "m": { "values": [[0.0, 0.0, 1.0]], "layout": { "grid_cells": [1, 1, 1] } } }
+        }))
+        .expect("terminal field frame")
+    }
+
+    #[test]
+    fn restored_terminal_generation_accepts_new_run_and_rejects_old_run() {
+        let request: CurrentLiveSnapshotRequest = serde_json::from_value(serde_json::json!({
+            "session_id": "persisted-session"
+        }))
+        .expect("bootstrap request");
+        let mut snapshot = default_current_live_state(&request);
+        apply_current_live_field_frame(&mut snapshot, terminal_frame("run-before-restart", 9))
+            .expect("first run terminal frame");
+
+        let persisted = PersistedCurrentLiveSnapshot::from(&snapshot);
+        let mut restored: crate::types::SessionStateResponse = persisted.into();
+        apply_current_live_field_frame(&mut restored, terminal_frame("run-after-restart", 1))
+            .expect("new run may restart its local sequence at one");
+
+        let error =
+            apply_current_live_field_frame(&mut restored, terminal_frame("run-before-restart", 10))
+                .expect_err("delayed frame from retired run must remain stale");
+        assert_eq!(error.status, axum::http::StatusCode::CONFLICT);
+    }
+}
+
+#[cfg(test)]
+mod planar_presentation_migration_tests {
+    use super::*;
+    use crate::schemas::visualization_state::default_planar_visualization_state;
+
+    fn persisted_document(
+        auto_contrast: bool,
+        min: serde_json::Value,
+        max: serde_json::Value,
+    ) -> serde_json::Value {
+        let mut state = serde_json::to_value(DisplayPresentationState {
+            visualization_planar: Some(default_planar_visualization_state()),
+            ..DisplayPresentationState::default()
+        })
+        .expect("serialize v6 state");
+        let planar = state
+            .pointer_mut("/visualization_planar")
+            .and_then(serde_json::Value::as_object_mut)
+            .expect("planar presentation");
+        planar.remove("range");
+        planar.remove("raster_opacity");
+        planar.insert(
+            "auto_contrast".to_string(),
+            serde_json::json!(auto_contrast),
+        );
+        planar.insert("contrast_min".to_string(), min);
+        planar.insert("contrast_max".to_string(), max);
+        state
+    }
+
+    #[test]
+    fn v6_manual_planar_range_migrates_without_changing_its_si_limits() {
+        let document = persisted_document(false, serde_json::json!(-2.0), serde_json::json!(4.0));
+        let restored = restore_display_presentation(None, &document).expect("migrate v6 snapshot");
+        let planar = restored
+            .visualization_planar
+            .expect("restored planar presentation");
+        assert_eq!(planar.range.mode, PlanarColorRangeMode::Manual);
+        assert_eq!(planar.range.min, Some(-2.0));
+        assert_eq!(planar.range.max, Some(4.0));
+    }
+
+    #[test]
+    fn invalid_v6_manual_range_resets_with_a_restore_diagnostic() {
+        let document = persisted_document(false, serde_json::json!(4.0), serde_json::json!(-2.0));
+        let restored = restore_display_presentation(None, &document).expect("migrate v6 snapshot");
+        let planar = restored
+            .visualization_planar
+            .expect("restored planar presentation");
+        assert_eq!(planar.range.mode, PlanarColorRangeMode::Auto);
+        assert!(restored
+            .visualization_restore_warnings
+            .iter()
+            .any(|warning| warning.contains("wersji v6")));
+    }
+
+    #[test]
+    fn v7_presentation_is_preserved_without_legacy_migration() {
+        let state = DisplayPresentationState {
+            visualization_planar: Some(
+                crate::schemas::visualization_state::PlanarVisualizationState {
+                    range: PlanarColorRangeState {
+                        mode: PlanarColorRangeMode::Symmetric,
+                        min: None,
+                        max: None,
+                    },
+                    raster_opacity: 0.4,
+                    ..default_planar_visualization_state()
+                },
+            ),
+            ..DisplayPresentationState::default()
+        };
+        let document = persisted_display_presentation(&state).expect("serialize v7 presentation");
+        assert_eq!(
+            restore_display_presentation(Some(DISPLAY_PRESENTATION_SCHEMA_VERSION), &document)
+                .unwrap(),
+            state
+        );
+    }
+
+    #[test]
+    fn unknown_presentation_version_is_rejected_without_migration() {
+        let document = serde_json::json!({});
+        assert!(restore_display_presentation(Some(8), &document)
+            .expect_err("future schema must not mutate state")
+            .contains("unsupported"));
     }
 }

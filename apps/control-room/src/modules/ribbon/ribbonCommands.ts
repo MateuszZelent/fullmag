@@ -307,6 +307,9 @@ async function applyGlobalQuantityFromCommand(
       }
     }
   }
+  if (input.clearTargetQuantities) {
+    context.visualization?.removeAllTargetOverrideFields("activeQuantityId");
+  }
 
   await patchVisualizationState(context, patch, { flush: true });
   return { status: "completed" };
@@ -440,12 +443,23 @@ function focusAirboxFromCommand(context: CommandContext): CommandResult {
   return { status: "completed" };
 }
 
-function beginCrossSectionDraftFromCommand(
+async function beginCrossSectionDraftFromCommand(
   context: CommandContext,
-): CommandResult {
-  const draft = beginPlanarMonitorDraft(visualizationStateFromContext(context));
+): Promise<CommandResult> {
+  if (!context.api) {
+    return { message: "Domain bounds are unavailable for planar monitor placement.", status: "failed" };
+  }
+  const domain = await context.api.data.domain.meta();
+  const draft = beginPlanarMonitorDraft(
+    visualizationStateFromContext(context),
+    {
+      min: domain.bounds.min as [number, number, number],
+      max: domain.bounds.max as [number, number, number],
+    },
+    { source: "ribbon" },
+  );
   const nodeId = "model:definitions:planar-monitors:draft";
-  selectPlanarMonitorDraft(context, draft.name, nodeId);
+  selectPlanarMonitorDraft(context, draft.monitor.name, nodeId);
   context.layout?.setPanelVisible("left", true);
   context.layout?.setPanelVisible("right", true);
   context.layout?.setFocusedSlot("viewport-main");

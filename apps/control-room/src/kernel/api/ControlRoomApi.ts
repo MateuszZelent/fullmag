@@ -429,24 +429,26 @@ export function collectFieldVectorIdentityIssues(
   compare("pointCount", metadata.pointCount, payload.pointCount);
   compare("valueCount", metadata.valueCount, payload.valueCount);
   compare("nComp", metadata.nComp, payload.nComp);
-  compare("scopeKind", metadata.scopeKind, payload.scopeKind ?? null);
-  compare("scopeId", metadata.scopeId, payload.scopeId ?? null);
-  compare(
-    "meshTopologyHash",
-    metadata.meshTopologyHash,
-    payload.meshTopologyHash ?? null,
-  );
-  compare("fieldIndexing", metadata.fieldIndexing, payload.indexing ?? null);
-  compare(
-    "nodeIndexCount",
-    metadata.nodeIndexCount,
-    payload.nodeIndices?.length ?? 0,
-  );
-  compare(
-    "domainGenerationId",
-    metadata.domainGenerationId,
-    payload.domainGenerationId ?? null,
-  );
+  if (payload.formatVersion === 3) {
+    compare("scopeKind", metadata.scopeKind, payload.scopeKind ?? null);
+    compare("scopeId", metadata.scopeId, payload.scopeId ?? null);
+    compare(
+      "meshTopologyHash",
+      metadata.meshTopologyHash,
+      payload.meshTopologyHash ?? null,
+    );
+    compare("fieldIndexing", metadata.fieldIndexing, payload.indexing ?? null);
+    compare(
+      "nodeIndexCount",
+      metadata.nodeIndexCount,
+      payload.nodeIndices?.length ?? 0,
+    );
+    compare(
+      "domainGenerationId",
+      metadata.domainGenerationId,
+      payload.domainGenerationId ?? null,
+    );
+  }
   return issues;
 }
 
@@ -3318,6 +3320,7 @@ function scalarWindowQueryParams(query: ScalarWindowQuery): QueryParams {
         : undefined,
     limit: query.limit,
     since_revision: query.sinceRevision,
+    tail: query.tail,
   };
 }
 

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { buildModelTree, buildPlanarMonitorNodes } from "./buildModelTree";
+import { buildObjectExplorerNode } from "./objectExplorerNodes";
 
 describe("planar monitor explorer nodes", () => {
   it("places committed monitors under Definitions / Planar Monitors", () => {
@@ -54,6 +55,32 @@ describe("planar monitor explorer nodes", () => {
     expect(root?.children?.[0]).toMatchObject({
       kind: "definitions.root",
       children: [{ kind: "model.planar.monitors", badge: "0" }],
+    });
+  });
+
+  it("routes Explorer object creation through one capability-gated canonical intent", () => {
+    const node = buildObjectExplorerNode(
+      {
+        id: "film",
+        label: "Film",
+      } as never,
+      {
+        planarMonitorTargetCapabilities: {
+          objects: {
+            film: { enabled: true, reason: "Published by current-session planar target resources." },
+          },
+          regions: {},
+        },
+      },
+    );
+
+    expect(node.contextCommands).toContain("planar-monitor.create");
+    expect(node.contextCommandInputs?.["planar-monitor.create"]).toEqual({
+      capability: { enabled: true, reason: "Published by current-session planar target resources." },
+      intent: {
+        source: "explorer",
+        target: { kind: "object", object_id: "film" },
+      },
     });
   });
 });

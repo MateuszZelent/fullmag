@@ -1,31 +1,76 @@
-import { renderToStaticMarkup } from "react-dom/server";
+import { act } from "react";
+import { createRoot, hydrateRoot } from "react-dom/client";
+import { renderToString, renderToStaticMarkup } from "react-dom/server";
+import { readFileSync } from "node:fs";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
+  installSimulationPreparationTestDom,
+  TestElement,
+  TestEvent,
+  TestNode,
+} from "@/kernel/layout/simulationPreparationTestDom.test-support";
+import {
   beginPlanarMonitorDraft,
+  crossSectionWorkspaceStore,
   resetCrossSectionWorkspaceForTests,
 } from "@/kernel/workspace/crossSectionWorkspace";
 
 import { PlanarMonitorDraftInspectorPanel } from "./PlanarMonitorDraftInspectorPanel";
 
+const mocks = vi.hoisted(() => ({
+  create: vi.fn(),
+  invalidate: vi.fn(),
+  setActiveViewportMainModule: vi.fn(),
+  setFocusedSlot: vi.fn(),
+  setPanelVisible: vi.fn(),
+  setSelection: vi.fn(),
+  queuePatch: vi.fn(),
+  refetch: vi.fn(),
+  collection: { monitors: [] as unknown[], scene_revision: 7 },
+}));
+
 vi.mock("@/kernel/KernelContext", () => ({
   useKernel: () => ({
-    api: {},
-    layout: {},
-    resources: {},
-    selection: {},
+    api: { model: { planarMonitors: { create: mocks.create } } },
+    layout: {
+      setActiveViewportMainModule: mocks.setActiveViewportMainModule,
+      setFocusedSlot: mocks.setFocusedSlot,
+      setPanelVisible: mocks.setPanelVisible,
+    },
+    resources: { invalidate: mocks.invalidate },
+    selection: { set: mocks.setSelection },
+    visualizationSync: { queuePatch: mocks.queuePatch },
   }),
 }));
 
 vi.mock("@/kernel/resources/planarMonitorResources", () => ({
   usePlanarMonitorsResource: () => ({
-    data: { monitors: [], scene_revision: 7 },
-    refetch: vi.fn(),
+    data: mocks.collection,
+    refetch: mocks.refetch,
   }),
+}));
+
+vi.mock("@/kernel/visualization/useVisualizationStateResource", () => ({
+  useVisualizationStateResource: () => ({
+    data: { planar: { active_monitor_id: null } },
+  }),
+}));
+
+vi.mock("./usePlanarMonitorDefinitionAvailability", () => ({
+  usePlanarMonitorDefinitionAvailability: () => ({}),
 }));
 
 describe("PlanarMonitorDraftInspectorPanel", () => {
   beforeEach(() => {
+    resetCrossSectionWorkspaceForTests();
+    vi.clearAllMocks();
+    mocks.collection.monitors = [];
+    mocks.collection.scene_revision = 7;
+    mocks.create.mockResolvedValue({
+      monitor: beginPlanarMonitorDraft().monitor,
+      scene_revision: 8,
+    });
     resetCrossSectionWorkspaceForTests();
   });
 
@@ -34,14 +79,144 @@ describe("PlanarMonitorDraftInspectorPanel", () => {
 
     const html = renderToStaticMarkup(<PlanarMonitorDraftInspectorPanel />);
 
-    expect(html).toContain("Monitor Frame");
-    expect(html).toContain('value="Midplane"');
-    expect(html).toContain("Magnetic domain");
-    expect(html).toContain('aria-label="Monitor plane axis"');
-    expect(html).toContain("Apply monitor");
-    expect(html).toContain("Discard");
-    expect(html).not.toContain("Quality metric");
-    expect(html).not.toContain("Color scale");
-    expect(html).not.toContain("Shrink");
+    expect(html).toContain("No editable planar monitor draft");
+  });
+
+  it("hydrates the server empty snapshot before observing the live draft", async () => {
+    const serverHtml = renderToString(<PlanarMonitorDraftInspectorPanel />);
+    beginPlanarMonitorDraft();
+    const dom = installSimulationPreparationTestDom();
+    const container = dom.document.createElement("div");
+    (container as unknown as { innerHTML: string }).innerHTML = serverHtml;
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    let root: ReturnType<typeof hydrateRoot>;
+    try {
+      await act(async () => {
+        root = hydrateRoot(container as unknown as Element, <PlanarMonitorDraftInspectorPanel />);
+        await Promise.resolve();
+      });
+      expect(serverHtml).toContain("No editable planar monitor draft");
+      expect(consoleError.mock.calls.flat().join(" ")).not.toContain("hydration");
+    } finally {
+      await act(async () => root!.unmount());
+      consoleError.mockRestore();
+      dom.restore();
+    }
+  });
+
+  it("creates the exact canonical draft with the resource scene revision", async () => {
+    beginPlanarMonitorDraft();
+    const dom = installSimulationPreparationTestDom();
+    const container = dom.document.createElement("div");
+    const root = createRoot(container as unknown as Element);
+    try {
+      await act(async () => root.render(<PlanarMonitorDraftInspectorPanel />));
+      await act(async () => change(findControl(container, "Target kind"), "magnetic_domain"));
+      await act(async () => findButton(container, "Apply monitor").click());
+
+      expect(mocks.create).toHaveBeenCalledWith({
+        expected_scene_revision: 7,
+        monitor: uiRoundtripFixture().create,
+      });
+      expect(crossSectionWorkspaceStore.getSnapshot().planarMonitorDraft).toBeNull();
+      expect(mocks.invalidate).toHaveBeenCalledWith(expect.any(String), 8);
+      expect(mocks.queuePatch).toHaveBeenCalledWith({
+        planar: { active_monitor_id: "planar_monitor_1" },
+      });
+    } finally {
+      await act(async () => root.unmount());
+      dom.restore();
+    }
+  });
+
+  it("allocates a unique identity when a second create collides with the collection", async () => {
+    const draft = beginPlanarMonitorDraft();
+    mocks.collection.monitors = [draft.monitor, { ...draft.monitor, id: "midplane_2", name: "Midplane 2" }];
+    const dom = installSimulationPreparationTestDom();
+    const container = dom.document.createElement("div");
+    const root = createRoot(container as unknown as Element);
+    try {
+      await act(async () => root.render(<PlanarMonitorDraftInspectorPanel />));
+      await act(async () => findButton(container, "Apply monitor").click());
+      expect(mocks.create).toHaveBeenCalledWith({
+        expected_scene_revision: 7,
+        monitor: { ...draft.monitor, id: "midplane_3", name: "Midplane 3" },
+      });
+    } finally {
+      await act(async () => root.unmount());
+      dom.restore();
+    }
+  });
+
+  it("keeps local changes and exposes reload after a 409 conflict", async () => {
+    const draft = beginPlanarMonitorDraft();
+    mocks.create.mockRejectedValueOnce({ status: 409, code: "scene_revision_conflict" });
+    const dom = installSimulationPreparationTestDom();
+    const container = dom.document.createElement("div");
+    const root = createRoot(container as unknown as Element);
+    try {
+      await act(async () => root.render(<PlanarMonitorDraftInspectorPanel />));
+      await act(async () => findButton(container, "Apply monitor").click());
+
+      expect(crossSectionWorkspaceStore.getSnapshot().planarMonitorDraft).toEqual(draft);
+      expect(container.textContent).toContain("scene changed");
+      await act(async () => findButton(container, "Reload current monitors").click());
+      expect(mocks.refetch).toHaveBeenCalledOnce();
+    } finally {
+      await act(async () => root.unmount());
+      dom.restore();
+    }
+  });
+
+  it("does not classify a non-revision 409 as a reload conflict", async () => {
+    beginPlanarMonitorDraft();
+    mocks.create.mockRejectedValueOnce({ status: 409, code: "duplicate_planar_monitor_id" });
+    const dom = installSimulationPreparationTestDom();
+    const container = dom.document.createElement("div");
+    const root = createRoot(container as unknown as Element);
+    try {
+      await act(async () => root.render(<PlanarMonitorDraftInspectorPanel />));
+      await act(async () => findButton(container, "Apply monitor").click());
+      expect(container.textContent).not.toContain("scene changed");
+      expect(container.textContent).not.toContain("Reload current monitors");
+    } finally {
+      await act(async () => root.unmount());
+      dom.restore();
+    }
   });
 });
+
+function findButton(root: TestNode, text: string): TestElement {
+  const button = findElements(root, (element) =>
+    element.tagName === "BUTTON" && element.textContent.includes(text))[0];
+  if (!button) throw new Error(`Missing button ${text}`);
+  return button;
+}
+
+function findControl(root: TestNode, label: string): TestElement {
+  const control = findElements(root, (element) => element.getAttribute("aria-label") === label)[0];
+  if (!control) throw new Error(`Missing control ${label}`);
+  return control;
+}
+
+function change(element: TestElement, value: string): void {
+  element.value = value;
+  element.dispatchEvent(new TestEvent("change", { bubbles: true }));
+}
+
+function findElements(root: TestNode, predicate: (element: TestElement) => boolean): TestElement[] {
+  const found: TestElement[] = [];
+  const visit = (node: TestNode) => {
+    if (node instanceof TestElement && predicate(node)) found.push(node);
+    node.childNodes.forEach(visit);
+  };
+  visit(root);
+  return found;
+}
+
+function uiRoundtripFixture(): { create: unknown; patch: unknown } {
+  return JSON.parse(readFileSync(
+    new URL("../../../../../../packages/fullmag-py/tests/fixtures/planar_monitor_ui_roundtrip.json", import.meta.url),
+    "utf8",
+  ));
+}

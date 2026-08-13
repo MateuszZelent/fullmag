@@ -117,6 +117,15 @@ pub(crate) struct PlanarOverlayPolygon {
 pub(crate) struct PlanarOverlaySegment {
     pub a_uv_m: [f64; 2],
     pub b_uv_m: [f64; 2],
+    pub kind: PlanarOverlaySegmentKind,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+pub(crate) enum PlanarOverlaySegmentKind {
+    MeshInterior = 0,
+    TargetBoundary = 1,
+    UnclassifiedDegenerate = 2,
 }
 
 #[derive(Debug, Clone)]

@@ -1,5 +1,5 @@
-use std::collections::{BTreeMap, VecDeque};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::collections::{BTreeMap, HashMap, VecDeque};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{mpsc, Arc, Mutex, OnceLock};
 use std::time::Instant;
 
@@ -28,6 +28,7 @@ use crate::types::*;
 /// Global feature flags resolved once at startup.
 /// Call `init_feature_flags()` early in `run_script_mode()` to populate.
 static FEATURE_FLAGS: OnceLock<FeatureFlags> = OnceLock::new();
+static NEXT_TERMINAL_FIELD_GENERATION_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 /// Initialize the global feature flags. Call once early in startup.
 pub(crate) fn init_feature_flags(flags: FeatureFlags) {
@@ -50,6 +51,8 @@ pub(crate) struct LocalLiveWorkspaceState {
     pub simulation_preparation: Option<SimulationPreparationState>,
     pub latest_scalar_row: Option<CurrentLiveScalarRow>,
     pub latest_fields: CurrentLiveLatestFields,
+    pub replace_latest_fields: bool,
+    pub field_generation: Option<CurrentLiveFieldGeneration>,
     pub preview_fields: CurrentLivePreviewFieldCache,
     pub pending_preview_fields: CurrentLivePreviewFieldCache,
     pub superseded_pending_preview_fields: Vec<fullmag_runner::LivePreviewField>,
@@ -113,7 +116,10 @@ impl LocalLiveWorkspaceState {
             live_state: Some(live_state),
             mesh_workspace: self.mesh_workspace.clone(),
             latest_scalar_row: self.latest_scalar_row.clone(),
-            latest_fields: (!self.latest_fields.is_empty()).then_some(self.latest_fields.clone()),
+            latest_fields: (self.replace_latest_fields || !self.latest_fields.is_empty())
+                .then_some(self.latest_fields.clone()),
+            replace_latest_fields: self.replace_latest_fields,
+            field_generation: self.field_generation.clone(),
             preview_fields,
             clear_preview_cache,
             engine_log: Some(self.engine_log.clone()),
@@ -143,7 +149,9 @@ impl LocalLiveWorkspaceState {
         let next_mesh_generation_id = self.fem_mesh.as_ref().map(fem_mesh_generation_key);
         let include_mesh = next_mesh_generation_id.is_some()
             && next_mesh_generation_id != self.published_fem_mesh_generation_id;
-        let payload = self.build_publish_payload(include_mesh, None, clear_preview_cache);
+        let mut payload = self.build_publish_payload(include_mesh, None, clear_preview_cache);
+        payload.replace_latest_fields = std::mem::take(&mut self.replace_latest_fields);
+        payload.field_generation = std::mem::take(&mut self.field_generation);
         if let Some(generation_id) = next_mesh_generation_id.filter(|_| include_mesh) {
             self.published_fem_mesh_generation_id = Some(generation_id);
         }
@@ -161,10 +169,54 @@ impl LocalLiveWorkspaceState {
         fields: Vec<fullmag_runner::LivePreviewField>,
     ) -> std::result::Result<(), Vec<fullmag_runner::LivePreviewField>> {
         if self.preview_cache_revision != expected_revision {
+            let mut recovered = false;
+            for field in &fields {
+                let preview_current = self.preview_fields.get(&field.quantity);
+                let pending_current = self.pending_preview_fields.get(&field.quantity);
+                let preview_contains_quantity = preview_current.is_some();
+                let pending_contains_quantity = pending_current.is_some();
+                let current =
+                    preview_current
+                        .into_iter()
+                        .chain(pending_current)
+                        .max_by(|left, right| {
+                            preview_field_source_precedence(left)
+                                .cmp(&preview_field_source_precedence(right))
+                        });
+                if current.is_some_and(|current| {
+                    preview_field_source_precedence(field)
+                        .cmp(&preview_field_source_precedence(current))
+                        .is_gt()
+                }) {
+                    if preview_contains_quantity {
+                        self.preview_fields.insert(field.clone());
+                    }
+                    if pending_contains_quantity {
+                        self.pending_preview_fields.insert(field.clone());
+                    }
+                    if should_promote_preview_field_to_latest(field) {
+                        promote_preview_field_to_latest_fields(&mut self.latest_fields, field);
+                    }
+                    recovered = true;
+                }
+            }
+            if recovered {
+                self.advance_preview_cache_revision();
+            }
             return Err(fields);
         }
         for field in fields {
-            self.preview_fields.insert(field);
+            let should_insert = self
+                .preview_fields
+                .get(&field.quantity)
+                .is_none_or(|current| {
+                    !preview_field_source_precedence(&field)
+                        .cmp(&preview_field_source_precedence(current))
+                        .is_lt()
+                });
+            if should_insert {
+                self.preview_fields.insert(field);
+            }
         }
         Ok(())
     }
@@ -279,6 +331,17 @@ impl LocalLiveWorkspace {
             scalar_candidate = scalar_candidate_from_workspace_state(&state);
         }
         self.publisher.enqueue_scalar_candidate(scalar_candidate);
+        self.publisher.request_publish();
+    }
+
+    pub fn force_publish_latest_scalar_row(&self) {
+        let candidate = self
+            .state
+            .lock()
+            .ok()
+            .and_then(|state| scalar_candidate_from_workspace_state(&state))
+            .map(|(sequence, row, _)| (sequence, row, true));
+        self.publisher.enqueue_scalar_candidate(candidate);
         self.publisher.request_publish();
     }
 
@@ -659,14 +722,13 @@ fn merge_preview_field_payloads(
     existing: Option<Vec<fullmag_runner::LivePreviewField>>,
     incoming: Option<Vec<fullmag_runner::LivePreviewField>>,
 ) -> Option<Vec<fullmag_runner::LivePreviewField>> {
-    let mut merged = BTreeMap::new();
-    for field in existing.into_iter().flatten() {
-        merged.insert(field.quantity.clone(), field);
-    }
-    for field in incoming.into_iter().flatten() {
-        merged.insert(field.quantity.clone(), field);
-    }
-    (!merged.is_empty()).then(|| merged.into_values().collect())
+    let merged = newest_preview_fields(
+        existing
+            .into_iter()
+            .flatten()
+            .chain(incoming.into_iter().flatten()),
+    );
+    (!merged.is_empty()).then_some(merged)
 }
 
 fn elapsed_ns(start: Instant) -> u64 {
@@ -1059,6 +1121,13 @@ fn merge_pending_publish_payload(
             .is_some_and(|fields| fields.iter().any(|field| field.quantity == "m"));
     let clear_preview_cache =
         (should_merge_pending && slot.clear_preview_cache) || incoming.clear_preview_cache;
+    let replace_latest_fields =
+        (should_merge_pending && slot.replace_latest_fields) || incoming.replace_latest_fields;
+    let field_generation = incoming.field_generation.clone().or_else(|| {
+        should_merge_pending
+            .then(|| slot.field_generation.clone())
+            .flatten()
+    });
 
     // Always carry forward heavy payload fields (magnetization, fem_mesh)
     // from the slot even when `should_merge_pending` is false.  The CLI
@@ -1100,6 +1169,23 @@ fn merge_pending_publish_payload(
     *slot = incoming;
     slot.preview_fields = merged_preview_fields;
     slot.clear_preview_cache = clear_preview_cache;
+    slot.replace_latest_fields = replace_latest_fields;
+    slot.field_generation = field_generation;
+}
+
+fn acknowledge_terminal_field_publish(
+    slot: &mut CurrentLiveSnapshotPayload,
+    published: &CurrentLiveSnapshotPayload,
+) {
+    if published.replace_latest_fields
+        && published.field_generation.is_some()
+        && slot.replace_latest_fields
+        && slot.field_generation == published.field_generation
+    {
+        slot.replace_latest_fields = false;
+        slot.field_generation = None;
+        slot.clear_preview_cache = false;
+    }
 }
 
 fn canonicalize_carried_active_preview(
@@ -1260,12 +1346,26 @@ pub(crate) struct CurrentLivePublisher {
 
 #[derive(Debug, Default)]
 struct PendingScalarRows {
-    rows: VecDeque<CurrentLiveScalarRow>,
-    latest_sequence: Option<ScalarSequenceKey>,
-    latest_seen_step: Option<u64>,
+    rows: VecDeque<PendingScalarRow>,
+    latest_by_sequence: HashMap<ScalarSequenceKey, ScalarSequenceCursor>,
+    active_sequence: Option<ScalarSequenceKey>,
+    next_row_id: u64,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug)]
+struct PendingScalarRow {
+    id: u64,
+    sequence: ScalarSequenceKey,
+    row: CurrentLiveScalarRow,
+}
+
+#[derive(Debug, Clone, Default)]
+struct ScalarSequenceCursor {
+    latest_seen_step: Option<u64>,
+    latest_terminal_step: Option<u64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct ScalarSequenceKey {
     run_id: String,
     stage_index: Option<usize>,
@@ -1280,18 +1380,49 @@ impl PendingScalarRows {
         finished: bool,
         gate: &mut LiveTelemetryPublishGate,
     ) {
-        if self.latest_sequence.as_ref() != Some(&sequence) {
-            self.latest_sequence = Some(sequence);
-            self.latest_seen_step = None;
+        {
+            let cursor = self.latest_by_sequence.entry(sequence.clone()).or_default();
+            let same_step = cursor.latest_seen_step == Some(row.step);
+            if cursor.latest_seen_step.is_some_and(|step| row.step < step)
+                || (same_step && (!finished || cursor.latest_terminal_step == Some(row.step)))
+            {
+                return;
+            }
+            cursor.latest_seen_step = Some(row.step);
+            if finished {
+                cursor.latest_terminal_step = Some(row.step);
+            }
         }
-        if self.latest_seen_step.is_some_and(|step| row.step <= step) {
-            return;
-        }
-        self.latest_seen_step = Some(row.step);
+        self.active_sequence = Some(sequence.clone());
+        self.prune_superseded_cursors();
         if gate.should_publish_scalar(row.step, finished) {
             gate.last_scalar_publish_at = Some(Instant::now());
-            self.rows.push_back(row);
+            if finished {
+                if let Some(pending) =
+                    self.rows.iter_mut().rev().find(|pending| {
+                        pending.sequence == sequence && pending.row.step == row.step
+                    })
+                {
+                    pending.id = self.next_row_id;
+                    self.next_row_id = self.next_row_id.wrapping_add(1);
+                    pending.row = row;
+                    return;
+                }
+            }
+            let id = self.next_row_id;
+            self.next_row_id = self.next_row_id.wrapping_add(1);
+            self.rows.push_back(PendingScalarRow { id, sequence, row });
         }
+    }
+
+    fn prune_superseded_cursors(&mut self) {
+        self.latest_by_sequence.retain(|sequence, _| {
+            self.active_sequence.as_ref() == Some(sequence)
+                || self
+                    .rows
+                    .iter()
+                    .any(|pending| &pending.sequence == sequence)
+        });
     }
 }
 
@@ -1583,17 +1714,19 @@ fn live_api_publish_enabled(port: u16) -> bool {
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
+    use std::sync::{Arc, Mutex};
     use std::time::Instant;
 
     use super::{
         apply_python_progress_event, bootstrap_live_state, clear_cached_preview_fields,
         fem_mesh_payload_clone_count, ingest_preview_fields_from_update, live_api_publish_enabled,
-        merge_detailed_mesh_workspace, merge_pending_publish_payload,
-        replace_cached_preview_fields, reset_fem_mesh_payload_clone_count,
-        scalar_candidate_from_workspace_state, table_autosave_sample_due,
-        upsert_cached_preview_field, CurrentLivePublisher, CurrentLiveScalarRow,
-        CurrentLiveSnapshotPayload, LiveTelemetryPublishGate, LocalLiveWorkspace,
-        LocalLiveWorkspaceState, PendingScalarRows, ScalarSequenceKey,
+        merge_detailed_mesh_workspace, merge_pending_publish_payload, merge_preview_field_payloads,
+        publish_pending_scalar_rows, replace_cached_preview_fields,
+        reset_fem_mesh_payload_clone_count, scalar_candidate_from_workspace_state,
+        table_autosave_sample_due, upsert_cached_preview_field, CurrentLivePublisher,
+        CurrentLiveScalarRow, CurrentLiveSnapshotPayload, LivePublishSink,
+        LiveTelemetryPublishGate, LocalLiveWorkspace, LocalLiveWorkspaceState, PendingScalarRows,
+        ScalarSequenceKey,
     };
     use crate::simulation_preparation::{
         PreparationStageId, PreparationStageStatus, SimulationPreparationState,
@@ -1615,6 +1748,7 @@ mod tests {
         fullmag_runner::LivePreviewField {
             config_revision: revision,
             source_step: 0,
+            source_time_seconds: None,
             source_revision: revision,
             materialized_at_unix_ms: 0,
             materialization_wall_time_ns: 0,
@@ -1806,16 +1940,18 @@ mod tests {
     }
 
     #[test]
-    fn incoming_preview_fields_inherit_step_provenance() {
+    fn incoming_preview_fields_inherit_solver_coordinates() {
         let mut state = workspace_with_domain_mesh().snapshot();
         let mut update = preview_update(preview_field("h_eff", 1, 1.0));
         update.stats.step = 27;
+        update.stats.time = 3.5e-12;
 
         ingest_preview_fields_from_update(&mut state, &mut update);
 
         let pending = state.pending_preview_fields.to_vec();
         assert_eq!(pending.len(), 1);
         assert_eq!(pending[0].source_step, 27);
+        assert_eq!(pending[0].source_time_seconds, Some(3.5e-12));
         assert!(update.preview_field.is_none());
     }
 
@@ -1832,6 +1968,7 @@ mod tests {
         let mut update = preview_update(field.clone());
         update.grid = [2, 1, 1];
         update.stats.step = 42;
+        update.stats.time = 4.2e-12;
         update.preview_field = None;
         update.cached_preview_fields = Some(vec![field]);
 
@@ -1843,9 +1980,28 @@ mod tests {
             serde_json::json!(42)
         );
         assert_eq!(
+            state.latest_fields.0["H_demag"]["source_time_seconds"],
+            serde_json::json!(4.2e-12)
+        );
+        assert_eq!(
             state.latest_fields.0["H_demag"]["layout"]["grid_cells"],
             serde_json::json!([2, 1, 1])
         );
+    }
+
+    #[test]
+    fn disabled_preview_still_accepts_terminal_authoritative_fields() {
+        let mut terminal = preview_update(preview_field("H_eff", 1, 2.0));
+        terminal.finished = true;
+        terminal.cached_preview_fields = Some(vec![preview_field("H_eff", 1, 2.0)]);
+
+        assert!(super::should_ingest_preview_fields_from_update(
+            true, &terminal
+        ));
+        terminal.finished = false;
+        assert!(!super::should_ingest_preview_fields_from_update(
+            true, &terminal
+        ));
     }
 
     #[test]
@@ -1950,6 +2106,8 @@ mod tests {
                 simulation_preparation: None,
                 latest_scalar_row: None,
                 latest_fields: Default::default(),
+                replace_latest_fields: false,
+                field_generation: None,
                 preview_fields: Default::default(),
                 pending_preview_fields: Default::default(),
                 superseded_pending_preview_fields: Vec::new(),
@@ -2159,8 +2317,260 @@ mod tests {
         pending.enqueue_if_new(second_stage, scalar_row(0), false, &mut gate);
 
         assert_eq!(
-            pending.rows.iter().map(|row| row.step).collect::<Vec<_>>(),
+            pending
+                .rows
+                .iter()
+                .map(|pending| pending.row.step)
+                .collect::<Vec<_>>(),
             vec![1, 0]
+        );
+    }
+
+    #[test]
+    fn pending_scalar_rows_publish_terminal_sample_after_same_step_was_throttled() {
+        let mut pending = PendingScalarRows::default();
+        let mut gate = LiveTelemetryPublishGate {
+            last_scalar_publish_at: Some(Instant::now()),
+        };
+        let sequence = ScalarSequenceKey {
+            run_id: "run-1".to_string(),
+            stage_index: Some(0),
+            stage_id: Some("relax".to_string()),
+        };
+
+        pending.enqueue_if_new(sequence.clone(), scalar_row(8), false, &mut gate);
+        assert!(
+            pending.rows.is_empty(),
+            "nonterminal step is cadence-throttled"
+        );
+
+        let mut terminal = scalar_row(8);
+        terminal.time = 8.0;
+        terminal.solver_dt = 0.25;
+        terminal.mx = 0.5;
+        terminal.per_object_scalars.insert(
+            "smoke_box".to_string(),
+            HashMap::from([("mx".to_string(), 0.5)]),
+        );
+        pending.enqueue_if_new(sequence.clone(), terminal.clone(), true, &mut gate);
+
+        let queued = &pending.rows.front().expect("terminal row is queued").row;
+        assert_eq!(queued.step, terminal.step);
+        assert_eq!(queued.time, terminal.time);
+        assert_eq!(queued.solver_dt, terminal.solver_dt);
+        assert_eq!(queued.mx, terminal.mx);
+        assert_eq!(queued.per_object_scalars, terminal.per_object_scalars);
+
+        pending.enqueue_if_new(sequence.clone(), scalar_row(7), true, &mut gate);
+        pending.enqueue_if_new(sequence, terminal, true, &mut gate);
+        assert_eq!(
+            pending.rows.len(),
+            1,
+            "stale and terminal retry do not duplicate"
+        );
+    }
+
+    #[test]
+    fn pending_terminal_rows_keep_same_local_step_from_distinct_sequences() {
+        let mut pending = PendingScalarRows::default();
+        let mut gate = LiveTelemetryPublishGate::default();
+        let first_stage = ScalarSequenceKey {
+            run_id: "run-1".to_string(),
+            stage_index: Some(0),
+            stage_id: Some("relax".to_string()),
+        };
+        let second_stage = ScalarSequenceKey {
+            run_id: "run-1".to_string(),
+            stage_index: Some(1),
+            stage_id: Some("evolve".to_string()),
+        };
+        let mut first = scalar_row(4);
+        first.time = 4.0e-13;
+        let mut second = scalar_row(4);
+        second.time = 8.0e-13;
+
+        pending.enqueue_if_new(first_stage.clone(), first, true, &mut gate);
+        pending.enqueue_if_new(second_stage.clone(), second, true, &mut gate);
+
+        assert_eq!(pending.rows.len(), 2);
+        assert_eq!(pending.rows[0].sequence, first_stage);
+        assert_eq!(pending.rows[1].sequence, second_stage);
+        assert_eq!(
+            pending
+                .rows
+                .iter()
+                .map(|entry| entry.row.time)
+                .collect::<Vec<_>>(),
+            vec![4.0e-13, 8.0e-13],
+        );
+    }
+
+    #[test]
+    fn in_flight_stage_one_publish_cannot_remove_same_step_from_stage_two() {
+        let pending_rows = Arc::new(Mutex::new(PendingScalarRows::default()));
+        let gate = Arc::new(Mutex::new(LiveTelemetryPublishGate::default()));
+        let stage_one = ScalarSequenceKey {
+            run_id: "run-1".to_string(),
+            stage_index: Some(0),
+            stage_id: Some("relax".to_string()),
+        };
+        let stage_two = ScalarSequenceKey {
+            run_id: "run-1".to_string(),
+            stage_index: Some(1),
+            stage_id: Some("evolve".to_string()),
+        };
+        let mut first = scalar_row(4);
+        first.time = 4.0e-13;
+        pending_rows.lock().unwrap().enqueue_if_new(
+            stage_one,
+            first,
+            true,
+            &mut gate.lock().unwrap(),
+        );
+
+        let pending_for_sink = Arc::clone(&pending_rows);
+        let gate_for_sink = Arc::clone(&gate);
+        let stage_two_for_sink = stage_two.clone();
+        let inserted = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let inserted_for_sink = Arc::clone(&inserted);
+        let sink: LivePublishSink = Arc::new(move |_, payload| {
+            let row = payload.latest_scalar_row.as_ref().expect("scalar row");
+            if !inserted_for_sink.swap(true, std::sync::atomic::Ordering::AcqRel) {
+                let mut second = scalar_row(4);
+                second.time = 8.0e-13;
+                pending_for_sink.lock().unwrap().enqueue_if_new(
+                    stage_two_for_sink.clone(),
+                    second,
+                    true,
+                    &mut gate_for_sink.lock().unwrap(),
+                );
+                return Ok(());
+            }
+            assert_eq!(row.time, 8.0e-13);
+            Err(anyhow::anyhow!("leave stage two row queued for retry"))
+        });
+
+        assert!(publish_pending_scalar_rows("run-1", &pending_rows, &sink).is_err());
+        let pending = pending_rows.lock().unwrap();
+        assert_eq!(pending.rows.len(), 1);
+        assert_eq!(
+            pending.rows.front().map(|entry| &entry.sequence),
+            Some(&stage_two)
+        );
+        assert_eq!(
+            pending.rows.front().map(|entry| entry.row.time),
+            Some(8.0e-13)
+        );
+    }
+
+    #[test]
+    fn superseded_scalar_sequence_cursors_are_bounded_after_publication() {
+        let mut pending = PendingScalarRows::default();
+        let mut gate = LiveTelemetryPublishGate::default();
+        let mut active = None;
+        for stage_index in 0..32 {
+            let sequence = ScalarSequenceKey {
+                run_id: "run-1".to_string(),
+                stage_index: Some(stage_index),
+                stage_id: Some(format!("stage-{stage_index}")),
+            };
+            pending.enqueue_if_new(sequence.clone(), scalar_row(6), true, &mut gate);
+            pending.rows.clear();
+            active = Some(sequence);
+        }
+
+        let active = active.expect("last sequence");
+        pending.enqueue_if_new(active.clone(), scalar_row(7), true, &mut gate);
+        pending.rows.clear();
+        pending.enqueue_if_new(active.clone(), scalar_row(6), true, &mut gate);
+
+        assert_eq!(pending.latest_by_sequence.len(), 1);
+        assert_eq!(
+            pending.latest_by_sequence[&active].latest_seen_step,
+            Some(7),
+            "the active sequence still rejects its stale row",
+        );
+    }
+
+    #[test]
+    fn pending_terminal_scalar_row_survives_a_failed_publish_retry() {
+        let pending_rows = Arc::new(Mutex::new(PendingScalarRows::default()));
+        let mut gate = LiveTelemetryPublishGate {
+            last_scalar_publish_at: Some(Instant::now()),
+        };
+        let sequence = ScalarSequenceKey {
+            run_id: "run-1".to_string(),
+            stage_index: Some(0),
+            stage_id: Some("relax".to_string()),
+        };
+        let terminal = scalar_row(8);
+        pending_rows
+            .lock()
+            .unwrap()
+            .enqueue_if_new(sequence, terminal.clone(), true, &mut gate);
+
+        let failures = Arc::new(std::sync::atomic::AtomicU64::new(0));
+        let failed_once = Arc::clone(&failures);
+        let flaky_sink: LivePublishSink = Arc::new(move |_, _| {
+            if failed_once.fetch_add(1, std::sync::atomic::Ordering::AcqRel) == 0 {
+                Err(anyhow::anyhow!("transient terminal scalar failure"))
+            } else {
+                Ok(())
+            }
+        });
+        assert!(publish_pending_scalar_rows("run-1", &pending_rows, &flaky_sink).is_err());
+        assert_eq!(
+            pending_rows
+                .lock()
+                .unwrap()
+                .rows
+                .front()
+                .map(|pending| pending.row.step),
+            Some(terminal.step)
+        );
+        assert!(publish_pending_scalar_rows("run-1", &pending_rows, &flaky_sink).is_ok());
+        assert!(pending_rows.lock().unwrap().rows.is_empty());
+    }
+
+    #[test]
+    fn pending_terminal_stage_row_survives_transition_until_next_stage_has_a_real_sample() {
+        let mut pending = PendingScalarRows::default();
+        let mut gate = LiveTelemetryPublishGate::default();
+        let stage_one = ScalarSequenceKey {
+            run_id: "run-1".to_string(),
+            stage_index: Some(0),
+            stage_id: Some("relax".to_string()),
+        };
+        let stage_two = ScalarSequenceKey {
+            run_id: "run-1".to_string(),
+            stage_index: Some(1),
+            stage_id: Some("evolve".to_string()),
+        };
+        let mut terminal = scalar_row(10);
+        terminal.time = 1.0e-12;
+        terminal.solver_dt = 1.0e-13;
+        terminal.mx = 0.25;
+        pending.enqueue_if_new(stage_one, terminal, true, &mut gate);
+
+        // Entering stage two without a row must not replace the completed stage one state.
+        assert_eq!(pending.rows.len(), 1);
+        assert_eq!(
+            pending.rows.front().map(|pending| pending.row.time),
+            Some(1.0e-12)
+        );
+
+        let mut next_stage = scalar_row(0);
+        next_stage.time = 1.1e-12;
+        next_stage.solver_dt = 1.0e-13;
+        next_stage.my = 0.5;
+        pending.enqueue_if_new(stage_two, next_stage, false, &mut gate);
+        assert_eq!(
+            pending
+                .rows
+                .iter()
+                .map(|pending| pending.row.time)
+                .collect::<Vec<_>>(),
+            vec![1.0e-12, 1.1e-12],
         );
     }
 
@@ -2223,6 +2633,51 @@ mod tests {
         let diagnostics = publisher.diagnostics_snapshot();
         assert!(diagnostics.delta_build_wall_time_ns > 0);
         assert!(diagnostics.state_lock_wall_time_ns > 0);
+    }
+
+    #[test]
+    fn interactive_terminal_scalar_bypasses_gate_while_session_stays_open() {
+        let (scalar_tx, scalar_rx) = std::sync::mpsc::channel();
+        let (publisher, start_barrier) = CurrentLivePublisher::spawn_with_blocked_test_sink(
+            "interactive-terminal-scalar-test",
+            move |_, payload| {
+                if let Some(row) = payload.latest_scalar_row.as_ref() {
+                    scalar_tx.send(row.clone()).expect("record scalar row");
+                }
+                Ok(())
+            },
+        );
+        publisher.scalar_gate.lock().unwrap().last_scalar_publish_at = Some(Instant::now());
+        let workspace = LocalLiveWorkspace::new(workspace_with_domain_mesh().snapshot(), publisher);
+
+        workspace.update(|state| {
+            state.live_state.latest_step.step = 8;
+            state.latest_scalar_row = Some(scalar_row(8));
+        });
+        workspace.update(|state| {
+            let mut terminal = scalar_row(8);
+            terminal.mx = 0.625;
+            terminal.my = 0.25;
+            terminal.mz = 0.0;
+            state.latest_scalar_row = Some(terminal);
+        });
+        workspace.force_publish_latest_scalar_row();
+
+        let snapshot = workspace.snapshot();
+        assert_eq!(snapshot.session.status, "running");
+        assert_eq!(snapshot.run.status, "running");
+        assert_eq!(snapshot.live_state.status, "running");
+        assert!(!snapshot.live_state.latest_step.finished);
+
+        start_barrier.wait();
+        let row = scalar_rx
+            .recv_timeout(std::time::Duration::from_secs(2))
+            .expect("forced terminal scalar row");
+        assert_eq!([row.mx, row.my, row.mz], [0.625, 0.25, 0.0]);
+        assert!(
+            scalar_rx.try_recv().is_err(),
+            "terminal row is published once"
+        );
     }
 
     #[test]
@@ -2510,6 +2965,105 @@ mod tests {
                 .first()
                 .map(|field| field.vector_field_values.len()),
             Some(3)
+        );
+    }
+
+    #[test]
+    fn successful_terminal_publish_does_not_poison_the_next_ordinary_update() {
+        let observed = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let sink_observed = std::sync::Arc::clone(&observed);
+        let publisher = CurrentLivePublisher::spawn_with_test_sink(
+            "terminal-ack-clears-pending-slot",
+            move |_, payload| {
+                sink_observed.lock().unwrap().push((
+                    payload.replace_latest_fields,
+                    payload.field_generation.clone(),
+                    payload
+                        .live_state
+                        .as_ref()
+                        .map(|state| state.latest_step.step),
+                ));
+                Ok(())
+            },
+        );
+        let mut terminal = workspace_with_domain_mesh()
+            .snapshot()
+            .build_publish_payload(false, None, true);
+        terminal.replace_latest_fields = true;
+        terminal.field_generation = Some(crate::types::CurrentLiveFieldGeneration {
+            run_id: "run-terminal".to_string(),
+            sequence: 7,
+        });
+        terminal.latest_fields = Some(Default::default());
+        publisher.replace(terminal);
+        wait_for_publish_count(&publisher, 1);
+
+        let mut ordinary = workspace_with_domain_mesh()
+            .snapshot()
+            .build_publish_payload(false, None, false);
+        ordinary.live_state.as_mut().unwrap().latest_step.step = 8;
+        publisher.replace(ordinary);
+        wait_for_publish_count(&publisher, 2);
+
+        let observed = observed.lock().unwrap();
+        assert_eq!(observed.len(), 2);
+        assert_eq!(
+            observed[0].1.as_ref().map(|generation| generation.sequence),
+            Some(7)
+        );
+        assert!(
+            !observed[1].0,
+            "ordinary update must not replay terminal replace"
+        );
+        assert!(
+            observed[1].1.is_none(),
+            "ordinary update must not replay generation"
+        );
+        assert_eq!(observed[1].2, Some(8));
+    }
+
+    #[test]
+    fn failed_terminal_publish_retains_generation_for_retry() {
+        let attempts = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
+        let retry_generation = std::sync::Arc::new(std::sync::Mutex::new(None));
+        let sink_attempts = std::sync::Arc::clone(&attempts);
+        let sink_generation = std::sync::Arc::clone(&retry_generation);
+        let publisher = CurrentLivePublisher::spawn_with_test_sink(
+            "terminal-failure-retains-pending-slot",
+            move |_, payload| {
+                let attempt = sink_attempts.fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+                if attempt == 0 {
+                    return Err(anyhow::anyhow!("injected terminal sink failure"));
+                }
+                *sink_generation.lock().unwrap() = payload.field_generation.clone();
+                assert!(payload.replace_latest_fields);
+                assert!(payload.clear_preview_cache);
+                Ok(())
+            },
+        );
+        let mut terminal = workspace_with_domain_mesh()
+            .snapshot()
+            .build_publish_payload(false, None, true);
+        terminal.replace_latest_fields = true;
+        terminal.field_generation = Some(crate::types::CurrentLiveFieldGeneration {
+            run_id: "run-terminal".to_string(),
+            sequence: 7,
+        });
+        terminal.latest_fields = Some(Default::default());
+        publisher.replace(terminal);
+
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while retry_generation.lock().unwrap().is_none() && std::time::Instant::now() < deadline {
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        assert_eq!(attempts.load(std::sync::atomic::Ordering::Acquire), 2);
+        assert_eq!(
+            retry_generation
+                .lock()
+                .unwrap()
+                .as_ref()
+                .map(|generation| generation.sequence),
+            Some(7)
         );
     }
 
@@ -3242,6 +3796,163 @@ mod tests {
         );
     }
 
+    #[test]
+    fn equal_generation_payload_merge_preserves_complete_source_time_in_both_orders() {
+        let mut complete = preview_field("H_demag", 7, 52.0);
+        complete.source_step = 52;
+        complete.source_revision = 52;
+        complete.source_time_seconds = Some(5.2e-12);
+        complete.materialized_at_unix_ms = 200;
+        let mut missing_time = complete.clone();
+        missing_time.source_time_seconds = None;
+        missing_time.vector_field_values = vec![0.0, 0.0, 0.0];
+
+        for (existing, incoming) in [
+            (complete.clone(), missing_time.clone()),
+            (missing_time.clone(), complete.clone()),
+        ] {
+            let merged = merge_preview_field_payloads(Some(vec![existing]), Some(vec![incoming]))
+                .expect("equal-generation field should remain merged");
+            assert_eq!(merged.len(), 1);
+            assert_eq!(merged[0].source_time_seconds, complete.source_time_seconds);
+            assert_eq!(merged[0].vector_field_values, complete.vector_field_values);
+        }
+    }
+
+    #[test]
+    fn equal_generation_payload_merge_prefers_later_scientific_time_in_both_orders() {
+        let mut earlier = preview_field("H_demag", 7, 52.0);
+        earlier.source_step = 52;
+        earlier.source_revision = 52;
+        earlier.source_time_seconds = Some(5.1e-12);
+        earlier.materialized_at_unix_ms = 300;
+        earlier.vector_field_values = vec![0.0, 0.0, 51.0];
+
+        let mut later = earlier.clone();
+        later.source_time_seconds = Some(5.2e-12);
+        later.materialized_at_unix_ms = 200;
+        later.vector_field_values = vec![0.0, 0.0, 52.0];
+
+        for (existing, incoming) in [
+            (earlier.clone(), later.clone()),
+            (later.clone(), earlier.clone()),
+        ] {
+            let merged = merge_preview_field_payloads(Some(vec![existing]), Some(vec![incoming]))
+                .expect("equal-generation field should remain merged");
+            assert_eq!(merged, vec![later.clone()]);
+        }
+    }
+
+    #[test]
+    fn equal_generation_payload_merge_rejects_incomplete_and_non_finite_source_times() {
+        let mut complete = preview_field("H_demag", 7, 52.0);
+        complete.source_step = 52;
+        complete.source_revision = 52;
+        complete.source_time_seconds = Some(5.2e-12);
+        complete.materialized_at_unix_ms = 100;
+        complete.vector_field_values = vec![0.0, 0.0, 52.0];
+
+        for invalid_time in [None, Some(f64::NAN), Some(f64::INFINITY), Some(-1.0)] {
+            let mut incomplete = complete.clone();
+            incomplete.source_time_seconds = invalid_time;
+            incomplete.materialized_at_unix_ms = 200;
+            incomplete.vector_field_values = vec![0.0, 0.0, 0.0];
+
+            for (existing, incoming) in [
+                (complete.clone(), incomplete.clone()),
+                (incomplete, complete.clone()),
+            ] {
+                let merged =
+                    merge_preview_field_payloads(Some(vec![existing]), Some(vec![incoming]))
+                        .expect("equal-generation field should remain merged");
+                assert_eq!(merged, vec![complete.clone()]);
+            }
+        }
+    }
+
+    #[test]
+    fn published_terminal_grid_field_survives_later_idle_refresh_without_source_time() {
+        let mut state = workspace_with_domain_mesh().snapshot();
+        let mut terminal = preview_field("H_demag", 7, 52.0);
+        terminal.spatial_kind = "grid".to_string();
+        terminal.quantity_domain = "full_domain".to_string();
+        terminal.preview_grid = [2, 1, 1];
+        terminal.original_grid = [2, 1, 1];
+        terminal.vector_field_values = vec![0.0, 0.0, 52.0, 0.0, 0.0, 53.0];
+        terminal.source_revision = 52;
+        terminal.materialized_at_unix_ms = 200;
+
+        let mut terminal_update = preview_update(terminal.clone());
+        terminal_update.grid = [2, 1, 1];
+        terminal_update.stats.step = 52;
+        terminal_update.stats.time = 5.2e-12;
+        terminal_update.preview_field = None;
+        terminal_update.cached_preview_fields = Some(vec![terminal.clone()]);
+        terminal_update.finished = true;
+        ingest_preview_fields_from_update(&mut state, &mut terminal_update);
+
+        let published = state.publish_delta();
+        let published_terminal = &published
+            .latest_fields
+            .as_ref()
+            .expect("terminal publication should include latest_fields")
+            .0["H_demag"];
+        assert_eq!(
+            published_terminal["values"],
+            serde_json::json!(terminal.vector_field_values)
+        );
+        assert_eq!(
+            published_terminal["source_time_seconds"],
+            serde_json::json!(5.2e-12)
+        );
+
+        let mut idle_refresh = terminal.clone();
+        idle_refresh.source_step = 52;
+        idle_refresh.source_time_seconds = None;
+        idle_refresh.materialized_at_unix_ms = terminal.materialized_at_unix_ms + 1;
+        idle_refresh.vector_field_values = vec![0.0; 6];
+        replace_cached_preview_fields(&mut state, vec![idle_refresh]);
+
+        assert_eq!(
+            state.latest_fields.0["H_demag"]["values"],
+            serde_json::json!(terminal.vector_field_values)
+        );
+        assert_eq!(
+            state.latest_fields.0["H_demag"]["source_time_seconds"],
+            serde_json::json!(5.2e-12)
+        );
+    }
+
+    #[test]
+    fn current_cache_commit_preserves_complete_time_over_pending_idle_refresh() {
+        let mut state = workspace_with_domain_mesh().snapshot();
+
+        let mut complete = preview_field("H_demag", 7, 52.0);
+        complete.source_step = 52;
+        complete.source_revision = 52;
+        complete.source_time_seconds = Some(5.2e-12);
+        complete.materialized_at_unix_ms = 200;
+        state.preview_fields.insert(complete.clone());
+
+        let mut pending = complete.clone();
+        pending.source_time_seconds = None;
+        pending.vector_field_values = vec![0.0, 0.0, 0.0];
+        state.pending_preview_fields.insert(pending);
+
+        let (_, taken, superseded, revision) = state.take_publish_delta_parts();
+        assert!(superseded.is_empty());
+        state
+            .commit_published_preview_cache_if_current(revision, taken)
+            .expect("unchanged cache revision should commit");
+
+        let cached = state
+            .preview_fields
+            .get("H_demag")
+            .expect("H_demag should remain cached");
+        assert_eq!(cached.source_time_seconds, complete.source_time_seconds);
+        assert_eq!(cached.vector_field_values, complete.vector_field_values);
+    }
+
     fn payload_with_live_step(
         step: u64,
         preview: Option<fullmag_runner::LivePreviewField>,
@@ -3915,6 +4626,11 @@ fn current_live_publisher_loop(
                     );
                 }
             }
+            if publish_result.succeeded() {
+                if let Ok(mut slot) = payload.lock() {
+                    acknowledge_terminal_field_publish(&mut slot, &snapshot);
+                }
+            }
             if let Some(error) = scalar_publish_error.as_ref() {
                 eprintln!("fullmag live scalar sync warning: {error:#}; retrying");
             }
@@ -4001,6 +4717,11 @@ fn current_live_publisher_loop(
                 }
             }
         }
+        if publish_result.primary.succeeded() {
+            if let Ok(mut slot) = payload.lock() {
+                acknowledge_terminal_field_publish(&mut slot, &snapshot);
+            }
+        }
         if let Some(error) = publish_result.authoritative_error {
             eprintln!(
                 "fullmag final live snapshot diagnostics sync warning: {:#}",
@@ -4019,14 +4740,15 @@ fn publish_pending_scalar_rows(
     delta_sink: &LivePublishSink,
 ) -> Result<()> {
     loop {
-        let row = pending_scalar_rows
-            .lock()
-            .ok()
-            .and_then(|pending| pending.rows.front().cloned());
-        let Some(row) = row else {
+        let pending = pending_scalar_rows.lock().ok().and_then(|pending| {
+            pending
+                .rows
+                .front()
+                .map(|pending| (pending.id, pending.row.clone()))
+        });
+        let Some((row_id, row)) = pending else {
             return Ok(());
         };
-        let step = row.step;
         delta_sink(
             session_id,
             &CurrentLiveSnapshotPayload {
@@ -4035,7 +4757,11 @@ fn publish_pending_scalar_rows(
             },
         )?;
         if let Ok(mut pending) = pending_scalar_rows.lock() {
-            if pending.rows.front().is_some_and(|row| row.step == step) {
+            if pending
+                .rows
+                .front()
+                .is_some_and(|queued| queued.id == row_id)
+            {
                 pending.rows.pop_front();
             }
         }
@@ -4193,16 +4919,33 @@ pub(crate) fn set_latest_scalar_row_if_due(
     state: &mut LocalLiveWorkspaceState,
     update: &fullmag_runner::StepUpdate,
 ) {
+    set_latest_scalar_row(state, update, false);
+}
+
+pub(crate) fn set_latest_scalar_row_for_terminal_update(
+    state: &mut LocalLiveWorkspaceState,
+    update: &fullmag_runner::StepUpdate,
+) {
+    set_latest_scalar_row(state, update, true);
+}
+
+fn set_latest_scalar_row(
+    state: &mut LocalLiveWorkspaceState,
+    update: &fullmag_runner::StepUpdate,
+    force: bool,
+) {
     // Skip scalar row accumulation if charts are disabled (benchmark mode)
     if feature_flags().disable_charts {
         return;
     }
-    if !table_autosave_sample_due(
-        state.metadata.as_ref(),
-        state.latest_scalar_row.as_ref(),
-        &update.stats,
-        update.finished,
-    ) {
+    if !force
+        && !table_autosave_sample_due(
+            state.metadata.as_ref(),
+            state.latest_scalar_row.as_ref(),
+            &update.stats,
+            update.finished,
+        )
+    {
         return;
     }
     let previous_runtime_s = state
@@ -4293,7 +5036,7 @@ pub(crate) fn replace_cached_preview_fields(
             .into_iter()
             .chain(state.pending_preview_fields.to_vec())
             .chain(fields.into_iter().map(|mut field| {
-                align_preview_field_source_step(&mut field, source_step);
+                align_preview_field_source_coordinates(&mut field, source_step, None);
                 field
             })),
     );
@@ -4308,9 +5051,17 @@ pub(crate) fn replace_cached_preview_fields(
     state.clear_preview_cache = true;
 }
 
-fn align_preview_field_source_step(field: &mut fullmag_runner::LivePreviewField, source_step: u64) {
+fn align_preview_field_source_coordinates(
+    field: &mut fullmag_runner::LivePreviewField,
+    source_step: u64,
+    source_time_seconds: Option<f64>,
+) {
     if field.source_step == 0 && source_step > 0 {
         field.source_step = source_step;
+    }
+    if field.source_time_seconds.is_none() {
+        field.source_time_seconds =
+            source_time_seconds.filter(|time| time.is_finite() && *time >= 0.0);
     }
     if field.source_revision == 0 && field.source_step > 0 {
         field.source_revision = field.source_step;
@@ -4334,12 +5085,50 @@ fn should_promote_preview_field_to_latest(field: &fullmag_runner::LivePreviewFie
         && (field.auto_downscaled || field.preview_grid != field.original_grid))
 }
 
-fn preview_field_source_key(field: &fullmag_runner::LivePreviewField) -> (u64, u64, u64) {
-    (
-        field.source_step,
-        field.source_revision,
-        field.materialized_at_unix_ms,
-    )
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct FieldSourcePrecedence {
+    source_step: u64,
+    source_revision: u64,
+    source_time_seconds: Option<f64>,
+    materialized_at_unix_ms: u64,
+}
+
+impl FieldSourcePrecedence {
+    fn scientific_cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.source_step
+            .cmp(&other.source_step)
+            .then_with(|| self.source_revision.cmp(&other.source_revision))
+            .then_with(
+                || match (self.source_time_seconds, other.source_time_seconds) {
+                    (Some(left), Some(right)) => left.total_cmp(&right),
+                    (Some(_), None) => std::cmp::Ordering::Greater,
+                    (None, Some(_)) => std::cmp::Ordering::Less,
+                    (None, None) => std::cmp::Ordering::Equal,
+                },
+            )
+    }
+
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.scientific_cmp(other).then_with(|| {
+            self.materialized_at_unix_ms
+                .cmp(&other.materialized_at_unix_ms)
+        })
+    }
+}
+
+fn valid_source_time(source_time_seconds: Option<f64>) -> Option<f64> {
+    source_time_seconds.filter(|time| time.is_finite() && *time >= 0.0)
+}
+
+fn preview_field_source_precedence(
+    field: &fullmag_runner::LivePreviewField,
+) -> FieldSourcePrecedence {
+    FieldSourcePrecedence {
+        source_step: field.source_step,
+        source_revision: field.source_revision,
+        source_time_seconds: valid_source_time(field.source_time_seconds),
+        materialized_at_unix_ms: field.materialized_at_unix_ms,
+    }
 }
 
 fn newest_preview_fields(
@@ -4348,7 +5137,9 @@ fn newest_preview_fields(
     let mut newest = BTreeMap::<String, fullmag_runner::LivePreviewField>::new();
     for field in fields {
         let should_insert = newest.get(&field.quantity).is_none_or(|current| {
-            preview_field_source_key(&field) >= preview_field_source_key(current)
+            !preview_field_source_precedence(&field)
+                .cmp(&preview_field_source_precedence(current))
+                .is_lt()
         });
         if should_insert {
             newest.insert(field.quantity.clone(), field);
@@ -4361,6 +5152,14 @@ fn promote_preview_field_to_latest_fields(
     latest_fields: &mut CurrentLiveLatestFields,
     field: &fullmag_runner::LivePreviewField,
 ) {
+    if latest_fields
+        .0
+        .get(&field.quantity)
+        .and_then(latest_field_source_precedence)
+        .is_some_and(|current| preview_field_source_precedence(field).cmp(&current).is_lt())
+    {
+        return;
+    }
     latest_fields.insert(
         field.quantity.clone(),
         serde_json::json!({
@@ -4368,6 +5167,7 @@ fn promote_preview_field_to_latest_fields(
             "unit": field.unit,
             "values": field.vector_field_values,
             "source_step": field.source_step,
+            "source_time_seconds": field.source_time_seconds,
             "source_revision": field.source_revision,
             "materialized_at_unix_ms": field.materialized_at_unix_ms,
             "materialization_wall_time_ns": field.materialization_wall_time_ns,
@@ -4381,6 +5181,19 @@ fn promote_preview_field_to_latest_fields(
     );
 }
 
+fn latest_field_source_precedence(value: &serde_json::Value) -> Option<FieldSourcePrecedence> {
+    Some(FieldSourcePrecedence {
+        source_step: value.get("source_step")?.as_u64()?,
+        source_revision: value.get("source_revision")?.as_u64()?,
+        source_time_seconds: valid_source_time(
+            value
+                .get("source_time_seconds")
+                .and_then(serde_json::Value::as_f64),
+        ),
+        materialized_at_unix_ms: value.get("materialized_at_unix_ms")?.as_u64()?,
+    })
+}
+
 pub(crate) fn upsert_cached_preview_field(
     state: &mut LocalLiveWorkspaceState,
     field: &fullmag_runner::LivePreviewField,
@@ -4390,7 +5203,7 @@ pub(crate) fn upsert_cached_preview_field(
         return;
     }
     let mut incoming = field.clone();
-    align_preview_field_source_step(&mut incoming, state.live_state.latest_step.step);
+    align_preview_field_source_coordinates(&mut incoming, state.live_state.latest_step.step, None);
     let quantity = incoming.quantity.clone();
     let newest = newest_preview_fields(
         state
@@ -4415,7 +5228,8 @@ pub(crate) fn ingest_preview_fields_from_update(
     state: &mut LocalLiveWorkspaceState,
     update: &mut fullmag_runner::StepUpdate,
 ) {
-    if feature_flags().disable_preview_3d {
+    let terminal_authoritative = terminal_authoritative_field_update(update);
+    if !should_ingest_preview_fields_from_update(feature_flags().disable_preview_3d, update) {
         update.cached_preview_fields = None;
         update.preview_field = None;
         return;
@@ -4426,9 +5240,21 @@ pub(crate) fn ingest_preview_fields_from_update(
         state.advance_preview_cache_revision();
     }
     let source_step = update.stats.step;
+    let source_time_seconds = Some(update.stats.time);
+    if terminal_authoritative {
+        state.latest_fields = CurrentLiveLatestFields::default();
+        state.preview_fields.clear();
+        state.pending_preview_fields.clear();
+        state.replace_latest_fields = true;
+        state.field_generation = Some(CurrentLiveFieldGeneration {
+            run_id: state.run.run_id.clone(),
+            sequence: NEXT_TERMINAL_FIELD_GENERATION_SEQUENCE.fetch_add(1, Ordering::Relaxed) + 1,
+        });
+        state.clear_preview_cache = true;
+    }
     if let Some(fields) = cached_preview_fields {
         for mut field in fields {
-            align_preview_field_source_step(&mut field, source_step);
+            align_preview_field_source_coordinates(&mut field, source_step, source_time_seconds);
             if is_full_grid_materialized_field(&field, update.grid) {
                 promote_preview_field_to_latest_fields(&mut state.latest_fields, &field);
                 continue;
@@ -4439,7 +5265,7 @@ pub(crate) fn ingest_preview_fields_from_update(
         }
     }
     if let Some(mut field) = preview_field {
-        align_preview_field_source_step(&mut field, source_step);
+        align_preview_field_source_coordinates(&mut field, source_step, source_time_seconds);
         if is_full_grid_materialized_field(&field, update.grid) {
             promote_preview_field_to_latest_fields(&mut state.latest_fields, &field);
             return;
@@ -4448,6 +5274,27 @@ pub(crate) fn ingest_preview_fields_from_update(
             state.superseded_pending_preview_fields.push(previous);
         }
     }
+}
+
+fn terminal_authoritative_field_update(update: &fullmag_runner::StepUpdate) -> bool {
+    let Some(fields) = update.cached_preview_fields.as_ref() else {
+        return false;
+    };
+    if fields.is_empty() {
+        return false;
+    }
+    // Interactive stages deliberately leave the session in awaiting_command,
+    // so orchestration clears `finished` before publishing the runner's final
+    // atomic field snapshot. That snapshot is distinguished from cadence
+    // previews by the finalizer's materialization timestamp.
+    update.finished || fields.iter().all(|field| field.materialized_at_unix_ms > 0)
+}
+
+fn should_ingest_preview_fields_from_update(
+    preview_3d_disabled: bool,
+    update: &fullmag_runner::StepUpdate,
+) -> bool {
+    !preview_3d_disabled || terminal_authoritative_field_update(update)
 }
 
 fn mesh_build_stage_status(

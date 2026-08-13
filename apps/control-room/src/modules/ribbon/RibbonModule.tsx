@@ -42,6 +42,7 @@ import {
   useCommandQueueResource,
   useCommandDetailResource,
   useCheckpointCatalogResource,
+  useFieldCatalogResource,
   useSolverStatusResource,
   useStageExecutionResource,
 } from "@/kernel/resources/studyRuntimeResources";
@@ -190,6 +191,9 @@ export default function RibbonModule({ kernel }: ModuleProps) {
     (activeTab === "view" && selection.ref?.type === "mesh-part");
   const needsVisualizationResources = activeTab === "view";
   const visualizationState = useVisualizationStateResource({
+    enabled: needsVisualizationResources,
+  });
+  const fieldCatalog = useFieldCatalogResource({
     enabled: needsVisualizationResources,
   });
   const geometryCapabilities = useGeometryCapabilitiesResource({
@@ -345,6 +349,7 @@ export default function RibbonModule({ kernel }: ModuleProps) {
         api: kernel.api,
         commandContext,
         commands: kernel.commands,
+        fieldCatalog: fieldCatalog.data,
         meshBuildCurrent: meshBuildCurrent.data,
         meshBuildLatest: meshBuildLatest.data,
         meshCapabilities: meshCapabilities.data,
@@ -364,6 +369,7 @@ export default function RibbonModule({ kernel }: ModuleProps) {
       activeTab,
       commandContext,
       commandVersion,
+      fieldCatalog.data,
       kernel.api,
       kernel.commands,
       kernel.resources,

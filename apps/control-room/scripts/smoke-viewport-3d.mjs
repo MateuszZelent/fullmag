@@ -30,6 +30,9 @@ const hysteresisReplayPointId = Number(
 );
 const skipCameraGestureSmoke =
   process.env.CONTROL_ROOM_SMOKE_SKIP_CAMERA_GESTURES === "1";
+const planarToggleCycles = Number(
+  process.env.CONTROL_ROOM_SMOKE_PLANAR_TOGGLE_CYCLES ?? 0,
+);
 const regionOnlyObjectId =
   process.env.CONTROL_ROOM_SMOKE_REGION_ONLY_OBJECT_ID ?? null;
 const keepGeometrySmokeObjects =
@@ -147,7 +150,7 @@ await page.addInitScript(
   {
     allowMissingSessionSmoke: allowMissingSession,
     baseUrl: apiBase,
-    enableAuditHooks: hysteresisReplaySmoke,
+    enableAuditHooks: hysteresisReplaySmoke || planarToggleCycles > 0,
   },
 );
 
@@ -271,6 +274,9 @@ try {
     await collectViewport3DPerformancePhase(page, "startup-to-canvas"),
   );
   await waitForInitialViewport3DResourceQuiet(page);
+  if (planarToggleCycles > 0) {
+    await verifyPlanarViewportToggleLifecycle(page, planarToggleCycles);
+  }
   if (hysteresisReplaySmoke) {
     await verifyHysteresisReplaySmoke(page);
     viewport3DPerformancePhases.push(
@@ -390,6 +396,65 @@ async function collectViewportStartupFailureEvidence(page, browserErrors) {
     ...pageState,
     errors: [...browserErrors],
   };
+}
+
+async function verifyPlanarViewportToggleLifecycle(page, cycles) {
+  if (!Number.isInteger(cycles) || cycles < 1) {
+    throw new Error(
+      `CONTROL_ROOM_SMOKE_PLANAR_TOGGLE_CYCLES must be a positive integer; received ${cycles}.`,
+    );
+  }
+  const canvasCountBefore = await page.locator(VIEWPORT_3D_CANVAS_SELECTOR).count();
+  if (canvasCountBefore !== 1) {
+    throw new Error(`Expected one initial 3D viewport canvas; got ${canvasCountBefore}.`);
+  }
+  const viewportTabs = page.locator('[data-slot-id="viewport-main"] [role="tab"]');
+  const planarTab = viewportTabs.filter({ hasText: "2D View" });
+  const threeDimensionalTab = viewportTabs.filter({ hasText: "3D Viewport" });
+  await page.waitForFunction(
+    () => typeof window.__FULLMAG_CONTROL_ROOM_AUDIT__?.seedPlanarMonitorFramePreview === "function",
+  );
+  await page.evaluate(() => window.__FULLMAG_CONTROL_ROOM_AUDIT__.seedPlanarMonitorFramePreview());
+  await page.waitForFunction(
+    () => window.__FULLMAG_PLANAR_MONITOR_PREVIEW_AUDIT__?.activeOverlayInstances === 1,
+  );
+  const workersBefore = await page.evaluate(
+    () => window.__FULLMAG_CONTROL_ROOM_AUDIT__.readViewportAuditRuntime().workers,
+  );
+  for (let index = 0; index < cycles; index += 1) {
+    await page.evaluate(() => window.__FULLMAG_CONTROL_ROOM_AUDIT__.setPlanarMonitorFrameVisible(false));
+    await page.waitForFunction(
+      () => window.__FULLMAG_PLANAR_MONITOR_PREVIEW_AUDIT__?.activeOverlayInstances === 0,
+    );
+    await page.evaluate(() => window.__FULLMAG_CONTROL_ROOM_AUDIT__.setPlanarMonitorFrameVisible(true));
+    await page.waitForFunction(
+      () => window.__FULLMAG_PLANAR_MONITOR_PREVIEW_AUDIT__?.activeOverlayInstances === 1,
+    );
+    await planarTab.click();
+    await page.locator('[data-slot-id="viewport-main"][data-active-module-id="field-map"]')
+      .waitFor({ state: "visible", timeout: 15_000 });
+    await threeDimensionalTab.click();
+    await page.locator('[data-slot-id="viewport-main"][data-active-module-id="viewport-3d"]')
+      .waitFor({ state: "visible", timeout: 15_000 });
+  }
+  const canvasCountAfter = await page.locator(VIEWPORT_3D_CANVAS_SELECTOR).count();
+  const audit = await page.evaluate(() => window.__FULLMAG_PLANAR_MONITOR_PREVIEW_AUDIT__);
+  const workersAfter = await page.evaluate(
+    () => window.__FULLMAG_CONTROL_ROOM_AUDIT__.readViewportAuditRuntime().workers,
+  );
+  if (audit.maxActiveOverlayInstances !== 1 || audit.maxHitListenerOwners !== 1 || audit.maxRaycastOwners !== 0) {
+    throw new Error(`Planar overlay ownership multiplied: ${JSON.stringify(audit)}.`);
+  }
+  if (JSON.stringify(workersBefore) !== JSON.stringify(workersAfter)) {
+    throw new Error("Viewport worker-runtime changed during planar visibility cycles.");
+  }
+  if (canvasCountAfter !== canvasCountBefore) {
+    throw new Error(
+      `3D viewport canvas count multiplied: before=${canvasCountBefore}, after=${canvasCountAfter}.`,
+    );
+  }
+  await assertFinalViewportWebGLState(page, "planar viewport toggle lifecycle");
+  console.log(`Planar viewport toggle lifecycle passed: cycles=${cycles} canvas_count=${canvasCountAfter} audit=${JSON.stringify(audit)}.`);
 }
 
 async function verifyCameraGesturesStayLocal({ page }) {

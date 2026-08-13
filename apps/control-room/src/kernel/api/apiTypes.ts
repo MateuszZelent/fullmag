@@ -103,10 +103,13 @@ export type PlanarViewScopeState =
   components["schemas"]["PlanarViewScopeState"];
 export interface PlanarFieldQuery {
   [key: string]: boolean | number | string | undefined;
+  sample_token?: string;
   component?: string;
-  expected_field_revision?: number;
-  expected_mesh_revision?: number;
-  expected_monitor_revision?: number;
+  expected_carrier_revision?: string;
+  expected_field_revision?: string;
+  expected_mesh_revision?: string;
+  expected_monitor_revision?: string;
+  expected_scene_revision?: string;
   include_mesh?: boolean;
   quality?: string;
   resolution_x?: number;
@@ -121,9 +124,13 @@ export interface PlanarFieldProbeQuery
   extends Pick<
     PlanarFieldQuery,
     | "component"
+    | "sample_token"
+    | "expected_carrier_revision"
     | "expected_field_revision"
     | "expected_mesh_revision"
     | "expected_monitor_revision"
+    | "expected_scene_revision"
+    | "quality"
     | "resolution_x"
     | "resolution_y"
     | "scope_id"
@@ -554,7 +561,7 @@ export interface ObjectMetricsResource {
     mx: number;
     my: number;
     mz: number;
-  };
+  } | null;
   object_id: string;
   revision: number;
   source: string;
@@ -599,6 +606,7 @@ export interface ScalarWindowQuery {
   columns?: readonly string[];
   limit?: number;
   sinceRevision?: number;
+  tail?: boolean;
 }
 export type TableRowsResource = components["schemas"]["TableRowsResource"];
 export type TableColumnMeta = components["schemas"]["TableColumnMeta"];

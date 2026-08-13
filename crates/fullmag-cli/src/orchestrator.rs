@@ -6541,6 +6541,8 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
             simulation_preparation: Some(simulation_preparation),
             latest_scalar_row: None,
             latest_fields: CurrentLiveLatestFields::default(),
+            replace_latest_fields: false,
+            field_generation: None,
             preview_fields: CurrentLivePreviewFieldCache::default(),
             pending_preview_fields: CurrentLivePreviewFieldCache::default(),
             superseded_pending_preview_fields: Vec::new(),
@@ -6849,6 +6851,8 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                 simulation_preparation: failed_snapshot.simulation_preparation,
                 latest_scalar_row: None,
                 latest_fields: CurrentLiveLatestFields::default(),
+                replace_latest_fields: false,
+                field_generation: None,
                 preview_fields: CurrentLivePreviewFieldCache::default(),
                 pending_preview_fields: CurrentLivePreviewFieldCache::default(),
                 superseded_pending_preview_fields: Vec::new(),
@@ -7090,6 +7094,8 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
         simulation_preparation: previous_workspace.simulation_preparation,
         latest_scalar_row: None,
         latest_fields: CurrentLiveLatestFields::default(),
+        replace_latest_fields: false,
+        field_generation: None,
         preview_fields: CurrentLivePreviewFieldCache::default(),
         pending_preview_fields: CurrentLivePreviewFieldCache::default(),
         superseded_pending_preview_fields: Vec::new(),
@@ -10360,8 +10366,9 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                         &final_update,
                     );
                     state.live_state = live_state_manifest_from_update(final_update.clone());
-                    set_latest_scalar_row_if_due(state, &final_update);
+                    set_latest_scalar_row_for_terminal_update(state, &final_update);
                 });
+                live_workspace.force_publish_latest_scalar_row();
             }
 
             let offset_steps = offset_step_stats(&stage_result.steps, step_offset, time_offset);
@@ -10754,6 +10761,8 @@ pub(crate) fn prepare_live_workspace_for_ui(
             simulation_preparation: Some(simulation_preparation),
             latest_scalar_row: None,
             latest_fields: CurrentLiveLatestFields::default(),
+            replace_latest_fields: false,
+            field_generation: None,
             preview_fields: CurrentLivePreviewFieldCache::default(),
             pending_preview_fields: CurrentLivePreviewFieldCache::default(),
             superseded_pending_preview_fields: Vec::new(),
@@ -10810,7 +10819,8 @@ mod tests {
         resolved_shared_domain_object_region_markers, run_active_preparation_operation,
         run_owned_preparation_stage, run_script_preparation_preflight, run_solver_initialization,
         run_solver_initialization_safety_check, scripted_stage_execution_state,
-        scripted_stage_execution_state_with_completion, shared_domain_object_region_mesh_specs,
+        scripted_stage_execution_state_with_completion, set_latest_scalar_row_for_terminal_update,
+        set_latest_scalar_row_if_due, shared_domain_object_region_mesh_specs,
         stage_allows_sampled_continuation_initial_state,
         step_update_has_frequency_response_progress, user_cancelled_stage_completion,
         validate_periodic_remesh_candidate, wait_for_failed_preparation_close,
@@ -11288,6 +11298,7 @@ mod tests {
         LivePreviewField {
             config_revision: revision,
             source_step: 0,
+            source_time_seconds: None,
             source_revision: revision,
             materialized_at_unix_ms: 0,
             materialization_wall_time_ns: 0,
@@ -11364,6 +11375,8 @@ mod tests {
             simulation_preparation: None,
             latest_scalar_row: None,
             latest_fields: CurrentLiveLatestFields::default(),
+            replace_latest_fields: false,
+            field_generation: None,
             preview_fields: CurrentLivePreviewFieldCache::default(),
             pending_preview_fields: CurrentLivePreviewFieldCache::default(),
             superseded_pending_preview_fields: Vec::new(),
@@ -12959,6 +12972,7 @@ mod tests {
         heavy.preview_field = Some(LivePreviewField {
             config_revision: 1,
             source_step: 0,
+            source_time_seconds: None,
             source_revision: 1,
             materialized_at_unix_ms: 0,
             materialization_wall_time_ns: 0,
@@ -13051,6 +13065,33 @@ mod tests {
     }
 
     #[test]
+    fn terminal_interactive_update_bypasses_table_autosave_period() {
+        let mut state = test_workspace_state();
+        state.metadata = Some(serde_json::json!({
+            "table_autosave": { "sample_period_s": 1.0 }
+        }));
+        let mut previous = test_step_update(4);
+        previous.stats.time = 0.25;
+        previous.stats.mx = 1.0;
+        set_latest_scalar_row_if_due(&mut state, &previous);
+
+        let mut terminal = test_step_update(5);
+        terminal.stats.time = 0.5;
+        terminal.stats.mx = 0.0;
+        terminal.stats.my = 1.0;
+        terminal.stats.e_total = 7.0;
+        terminal.finished = false;
+
+        set_latest_scalar_row_for_terminal_update(&mut state, &terminal);
+
+        let row = state.latest_scalar_row.expect("terminal scalar row");
+        assert_eq!(row.step, 5);
+        assert_eq!(row.time, 0.5);
+        assert_eq!([row.mx, row.my, row.mz], [0.0, 1.0, 0.0]);
+        assert_eq!(row.e_total, 7.0);
+    }
+
+    #[test]
     fn synthetic_final_magnetization_is_published_with_step_provenance() {
         let mut state = test_workspace_state();
         state.latest_fields.insert(
@@ -13088,6 +13129,177 @@ mod tests {
             serde_json::json!([128, 32, 1])
         );
         assert_eq!(field["values"], serde_json::json!([0.0, 1.0, 0.0]));
+    }
+
+    #[test]
+    fn terminal_fdm_fields_replace_the_previous_generation_and_preserve_grid_m() {
+        let mut state = test_workspace_state();
+        state.latest_fields.insert(
+            "H_dmi".to_string(),
+            serde_json::json!({
+                "quantity": "H_dmi",
+                "values": [[1.0, 0.0, 0.0]],
+                "layout": { "grid_cells": [2, 1, 1], "spatial_kind": "grid" }
+            }),
+        );
+        let mut terminal = test_step_update(12);
+        terminal.grid = [2, 1, 1];
+        terminal.finished = true;
+        terminal.magnetization = Some(vec![0.0, 0.0, 1.0, 0.0, 1.0, 0.0]);
+        let mut m = test_preview_field("m", 12, 1.0);
+        m.spatial_kind = "grid".to_string();
+        m.preview_grid = [2, 1, 1];
+        m.original_grid = [2, 1, 1];
+        m.vector_field_values = vec![0.0, 0.0, 1.0, 0.0, 1.0, 0.0];
+        let mut h_eff = test_preview_field("H_eff", 12, 2.0);
+        h_eff.spatial_kind = "grid".to_string();
+        h_eff.preview_grid = [2, 1, 1];
+        h_eff.original_grid = [2, 1, 1];
+        h_eff.vector_field_values = vec![0.0, 0.0, 2.0, 0.0, 0.0, 2.0];
+        let mut eden_demag = test_preview_field("eden_demag", 12, 3.0);
+        eden_demag.unit = "J/m³".to_string();
+        eden_demag.spatial_kind = "grid".to_string();
+        eden_demag.quantity_domain = "magnetic_only".to_string();
+        eden_demag.preview_grid = [2, 1, 1];
+        eden_demag.original_grid = [2, 1, 1];
+        eden_demag.vector_field_values = vec![3.0, 4.0];
+        terminal.stats.time = 1.2e-12;
+        terminal.cached_preview_fields = Some(vec![m, h_eff, eden_demag]);
+
+        let _ = apply_live_step_update_to_workspace_state(
+            &mut state,
+            "run-test",
+            "session-test",
+            PathBuf::from("/tmp/artifacts").as_path(),
+            terminal,
+            true,
+        );
+
+        assert!(state.latest_fields.0.get("H_dmi").is_none());
+        assert_eq!(
+            state.latest_fields.0["m"]["layout"]["spatial_kind"],
+            serde_json::json!("grid")
+        );
+        assert_eq!(
+            state.latest_fields.0["eden_demag"]["source_step"],
+            serde_json::json!(12)
+        );
+        assert_eq!(
+            state.latest_fields.0["eden_demag"]["source_time_seconds"],
+            serde_json::json!(1.2e-12)
+        );
+        assert_eq!(
+            state.latest_fields.0["eden_demag"]["unit"],
+            serde_json::json!("J/m³")
+        );
+        let payload =
+            serde_json::to_value(state.publish_delta()).expect("terminal payload serializes");
+        assert_eq!(payload["replace_latest_fields"], serde_json::json!(true));
+        assert_eq!(
+            payload["field_generation"]["run_id"],
+            serde_json::json!("run-test")
+        );
+        assert!(payload["field_generation"]["sequence"]
+            .as_u64()
+            .is_some_and(|sequence| sequence > 0));
+    }
+
+    #[test]
+    fn interactive_terminal_field_snapshot_keeps_generation_while_run_awaits_command() {
+        let mut state = test_workspace_state();
+        let mut terminal = test_step_update(12);
+        terminal.grid = [2, 1, 2];
+        terminal.finished = false;
+        let mut eden_demag = test_preview_field("eden_demag", 12, 3.0);
+        eden_demag.unit = "J/m³".to_string();
+        eden_demag.spatial_kind = "grid".to_string();
+        eden_demag.quantity_domain = "magnetic_only".to_string();
+        eden_demag.preview_grid = [2, 1, 2];
+        eden_demag.original_grid = [2, 1, 2];
+        eden_demag.vector_field_values = vec![3.0, 4.0, 30.0, 40.0];
+        eden_demag.materialized_at_unix_ms = 17;
+        let mut eden_total = eden_demag.clone();
+        eden_total.quantity = "eden_total".to_string();
+        eden_total.vector_field_values = vec![7.0, 8.0, 70.0, 80.0];
+        let mut mat_ms = eden_demag.clone();
+        mat_ms.quantity = "mat_ms".to_string();
+        mat_ms.unit = "A/m".to_string();
+        mat_ms.vector_field_values = vec![9.0, 10.0, 90.0, 100.0];
+        let mut e_total = eden_demag.clone();
+        e_total.quantity = "e_total".to_string();
+        e_total.unit = "J".to_string();
+        e_total.preview_grid = [1, 1, 1];
+        e_total.vector_field_values = vec![11.0];
+        terminal.stats.time = 2.5e-12;
+        terminal.cached_preview_fields = Some(vec![eden_demag, eden_total, mat_ms, e_total]);
+
+        let _ = apply_live_step_update_to_workspace_state(
+            &mut state,
+            "run-test",
+            "session-test",
+            PathBuf::from("/tmp/artifacts").as_path(),
+            terminal,
+            true,
+        );
+
+        assert_eq!(state.session.status, "running");
+        assert_eq!(
+            state.latest_fields.0["eden_demag"]["source_step"],
+            serde_json::json!(12)
+        );
+        assert_eq!(
+            state.latest_fields.0["eden_demag"]["source_time_seconds"],
+            serde_json::json!(2.5e-12)
+        );
+        assert_eq!(
+            state.latest_fields.0["eden_demag"]["layout"]["grid_cells"],
+            serde_json::json!([2, 1, 2])
+        );
+        assert_eq!(
+            state.latest_fields.0["eden_demag"]["values"],
+            serde_json::json!([3.0, 4.0, 30.0, 40.0])
+        );
+        assert_eq!(
+            state.latest_fields.0["eden_total"]["values"],
+            serde_json::json!([7.0, 8.0, 70.0, 80.0])
+        );
+        assert_eq!(
+            state.latest_fields.0["mat_ms"]["values"],
+            serde_json::json!([9.0, 10.0, 90.0, 100.0])
+        );
+        assert!(state.latest_fields.0.get("e_total").is_none());
+        assert!(state.field_generation.is_some());
+        assert!(state.replace_latest_fields);
+    }
+
+    #[test]
+    fn interactive_terminal_field_snapshot_does_not_promote_an_ambiguous_scalar_plane() {
+        let mut state = test_workspace_state();
+        let mut terminal = test_step_update(12);
+        terminal.grid = [2, 1, 2];
+        terminal.finished = false;
+        let mut eden_demag = test_preview_field("eden_demag", 12, 3.0);
+        eden_demag.unit = "J/m³".to_string();
+        eden_demag.spatial_kind = "grid".to_string();
+        eden_demag.quantity_domain = "magnetic_only".to_string();
+        eden_demag.preview_grid = [2, 1, 1];
+        eden_demag.original_grid = [2, 1, 2];
+        eden_demag.vector_field_values = vec![3.0, 4.0];
+        eden_demag.materialized_at_unix_ms = 17;
+        terminal.cached_preview_fields = Some(vec![eden_demag]);
+
+        let _ = apply_live_step_update_to_workspace_state(
+            &mut state,
+            "run-test",
+            "session-test",
+            PathBuf::from("/tmp/artifacts").as_path(),
+            terminal,
+            true,
+        );
+
+        assert!(state.latest_fields.0.get("eden_demag").is_none());
+        assert!(state.field_generation.is_some());
+        assert!(state.replace_latest_fields);
     }
 
     #[test]

@@ -80,6 +80,7 @@ describe("viewport smoke projection round-trip", () => {
     expect(fixture).toContain("dt=1e-13");
     expect(fixture).toContain(".tableautosave(");
     expect(fixture).toContain("every_steps=1");
+    expect(fixture).toContain('quantities=["step", "t", "dt", "mx", "my", "mz", "E_total"]');
     expect(fixture).not.toContain("study.tableautosave(");
   });
 
@@ -116,6 +117,25 @@ describe("viewport smoke projection round-trip", () => {
     expect(smokeScript).toContain("3D viewport WebGL context is lost after");
     expect(smokeScript).toContain("3D viewport final drawing buffer is empty after");
     expect(smokeScript).toContain("finalWebGL");
+  });
+
+  it("can exercise 100 3D-to-2D module switches and assert that the final 3D canvas is singular and live", () => {
+    const smokeScript = readFileSync(smokeScriptUrl, "utf8");
+
+    expect(smokeScript).toContain("CONTROL_ROOM_SMOKE_PLANAR_TOGGLE_CYCLES");
+    expect(smokeScript).toContain("verifyPlanarViewportToggleLifecycle");
+    expect(smokeScript).toContain("planar viewport toggle lifecycle");
+    expect(smokeScript).toContain("seedPlanarMonitorFramePreview");
+    expect(smokeScript).toContain("setPlanarMonitorFrameVisible(false)");
+    expect(smokeScript).toContain("setPlanarMonitorFrameVisible(true)");
+    expect(smokeScript).toContain("activeOverlayInstances === 0");
+    expect(smokeScript).toContain("activeOverlayInstances === 1");
+    expect(smokeScript).toContain("maxHitListenerOwners !== 1");
+    expect(smokeScript).toContain("Viewport worker-runtime changed during planar visibility cycles");
+    expect(smokeScript).toContain('filter({ hasText: "2D View" })');
+    expect(smokeScript).toContain('filter({ hasText: "3D Viewport" })');
+    expect(smokeScript).toContain("3D viewport canvas count multiplied");
+    expect(smokeScript).toContain("assertFinalViewportWebGLState");
   });
 
   it("reports browser evidence when startup fails before the canvas appears", () => {

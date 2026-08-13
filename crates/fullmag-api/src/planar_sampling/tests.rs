@@ -323,10 +323,74 @@ fn planar_sampling_fem_p1_linear_arbitrary_plane_is_barycentric() {
         .expect("FEM plane sampling publishes mesh overlay");
     assert_eq!(overlay.polygons.len(), 1);
     assert!(overlay.polygons[0].vertices_uv_m.len() >= 3);
-    let fmcs = crate::fem_cross_section::serialize_planar_overlay_fmcs_v3(&overlay);
+    assert!(overlay.segments.iter().all(|segment| matches!(
+        segment.kind,
+        crate::planar_sampling::PlanarOverlaySegmentKind::TargetBoundary
+    )));
+    let fmcs = crate::fem_cross_section::serialize_planar_overlay_fmcs_v4(&overlay);
     assert_eq!(&fmcs[0..4], b"FMCS");
-    assert_eq!(u32::from_le_bytes(fmcs[4..8].try_into().unwrap()), 3);
+    assert_eq!(u32::from_le_bytes(fmcs[4..8].try_into().unwrap()), 4);
     assert!(fmcs.len() >= 160);
+}
+
+#[test]
+fn planar_overlay_classifies_selected_topology_without_float_boundary_heuristics() {
+    let interior_field = FemPlanarField::new(
+        1,
+        vec![
+            [0.0, 0.0, -1.0],
+            [1.0, 0.0, 1.0],
+            [0.0, 1.0, 1.0],
+            [0.0, 0.0, 1.0],
+            [0.0, 0.0, -2.0],
+        ],
+        vec![[0, 1, 2, 3], [0, 1, 2, 4]],
+        vec![1, 1],
+        vec![1.0; 5],
+    )
+    .expect("two selected tetrahedra sharing one face");
+    let frame = explicit_frame([0.0; 3], [1.0, 0.0, 0.0], [0.0, 0.0, 1.0]);
+    let overlay = PlanarSamplingEngine::sample_fem(
+        &interior_field,
+        &request(frame, PlanarOperatorIR::PlaneSample, [1, 1]),
+    )
+    .expect("sample shared-face topology")
+    .overlay
+    .expect("FEM overlay");
+    assert!(overlay.segments.iter().any(|segment| matches!(
+        segment.kind,
+        crate::planar_sampling::PlanarOverlaySegmentKind::MeshInterior
+    )));
+    assert!(overlay.segments.iter().any(|segment| matches!(
+        segment.kind,
+        crate::planar_sampling::PlanarOverlaySegmentKind::TargetBoundary
+    )));
+
+    let degenerate_field = FemPlanarField::new(
+        1,
+        vec![
+            [0.0, 0.0, 0.0],
+            [1.0, 0.0, 1.0],
+            [0.0, 1.0, -1.0],
+            [0.0, 0.0, 1.0],
+        ],
+        vec![[0, 1, 2, 3]],
+        vec![1],
+        vec![1.0; 4],
+    )
+    .expect("one tetrahedron touching the plane at a vertex");
+    let frame = explicit_frame([0.0; 3], [1.0, 0.0, 0.0], [0.0, 0.0, 1.0]);
+    let overlay = PlanarSamplingEngine::sample_fem(
+        &degenerate_field,
+        &request(frame, PlanarOperatorIR::PlaneSample, [1, 1]),
+    )
+    .expect("sample degenerate topology")
+    .overlay
+    .expect("FEM overlay");
+    assert!(overlay.segments.iter().any(|segment| matches!(
+        segment.kind,
+        crate::planar_sampling::PlanarOverlaySegmentKind::UnclassifiedDegenerate
+    )));
 }
 
 #[test]

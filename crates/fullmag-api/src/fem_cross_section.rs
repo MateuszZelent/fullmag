@@ -9,7 +9,7 @@ pub(crate) const FMQS_HEADER_LEN: usize = 20;
 const FMCS_VERSION: u32 = 2;
 const FMCS_FLAG_INTERSECTION_METADATA: u32 = 0b1;
 const FMCS_FLAG_PLANAR_FRAME: u32 = 0b10;
-const FMCS_PLANAR_V3_HEADER_LEN: usize = 160;
+const FMCS_PLANAR_V4_HEADER_LEN: usize = 160;
 const FMMQ_HEADER_LEN: usize = 32;
 const FMMQ_KIND_F64: u8 = 1;
 const FMMQ_FLAG_SICN: u32 = 0b001;
@@ -137,7 +137,7 @@ pub(crate) fn serialize_cross_section_fmcs(
     bytes
 }
 
-pub(crate) fn serialize_planar_overlay_fmcs_v3(
+pub(crate) fn serialize_planar_overlay_fmcs_v4(
     overlay: &crate::planar_sampling::PlanarMeshOverlay,
 ) -> Vec<u8> {
     let polygon_count = overlay.polygons.len();
@@ -148,19 +148,20 @@ pub(crate) fn serialize_planar_overlay_fmcs_v3(
         .sum::<usize>();
     let segment_count = overlay.segments.len();
     let mut bytes = Vec::with_capacity(
-        FMCS_PLANAR_V3_HEADER_LEN
+        FMCS_PLANAR_V4_HEADER_LEN
             + vertex_count * 2 * std::mem::size_of::<f32>()
             + (polygon_count + 1) * std::mem::size_of::<u32>()
             + polygon_count * std::mem::size_of::<u32>()
-            + segment_count * 4 * std::mem::size_of::<f32>(),
+            + segment_count * 4 * std::mem::size_of::<f32>()
+            + segment_count * std::mem::size_of::<u8>(),
     );
     bytes.extend_from_slice(b"FMCS");
-    write_u32(&mut bytes, 3);
+    write_u32(&mut bytes, 4);
     write_u32(&mut bytes, polygon_count as u32);
     write_u32(&mut bytes, vertex_count as u32);
     write_u32(&mut bytes, segment_count as u32);
     write_u32(&mut bytes, polygon_count as u32);
-    write_u32(&mut bytes, 0);
+    write_u32(&mut bytes, segment_count as u32);
     write_u32(&mut bytes, FMCS_FLAG_PLANAR_FRAME);
     for value in overlay.bounds_uv_m {
         write_f64(&mut bytes, value);
@@ -175,7 +176,7 @@ pub(crate) fn serialize_planar_overlay_fmcs_v3(
             write_f64(&mut bytes, value);
         }
     }
-    debug_assert_eq!(bytes.len(), FMCS_PLANAR_V3_HEADER_LEN);
+    debug_assert_eq!(bytes.len(), FMCS_PLANAR_V4_HEADER_LEN);
 
     for polygon in &overlay.polygons {
         for vertex in &polygon.vertices_uv_m {
@@ -197,6 +198,9 @@ pub(crate) fn serialize_planar_overlay_fmcs_v3(
         write_f32(&mut bytes, segment.a_uv_m[1] as f32);
         write_f32(&mut bytes, segment.b_uv_m[0] as f32);
         write_f32(&mut bytes, segment.b_uv_m[1] as f32);
+    }
+    for segment in &overlay.segments {
+        bytes.push(segment.kind as u8);
     }
     bytes
 }

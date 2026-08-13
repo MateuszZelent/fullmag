@@ -2,7 +2,7 @@ import { createElement } from "react";
 import type { Play } from "lucide-react";
 import type { RibbonMenuNode } from "./ribbonTypes";
 
-export const I = 20; // icon size
+export const I = 18; // icon size
 
 export function icon(Icon: typeof Play, props?: Record<string, unknown>) {
   return createElement(Icon, { size: I, ...props });

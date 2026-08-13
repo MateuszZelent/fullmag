@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useRef, type ReactNode } from "react";
 
 import { SESSION_EVENTS_WS_PATH, VISUALIZATION_STATE_PATH } from "./api/apiPaths";
+import { planarMonitorFramePreviewStore } from "./workspace/planarMonitorFramePreview";
 import type {
   ResourceRevision,
   VisualizationStatePatch,
@@ -382,7 +383,7 @@ function BrowserAuditConnector({ kernel }: { kernel: KernelApi }) {
         setGlobalQuantity: (quantityId: string) => Promise<void>;
         queueGlobalQuantity: (quantityId: string) => void;
         flushVisualization: () => Promise<void>;
-        setActiveViewportModule: (moduleId: "viewport-2d" | "viewport-3d") => void;
+        setActiveViewportModule: (moduleId: "field-map" | "viewport-3d") => void;
         patchVisualization: (patch: VisualizationStatePatch) => Promise<void>;
         patchFdmVisualization: (patch: VisualizationTargetPatch) => void;
         readFdmVisualizationSettings: () => ReturnType<
@@ -397,6 +398,8 @@ function BrowserAuditConnector({ kernel }: { kernel: KernelApi }) {
           visualizationRevision: ResourceRevision | null;
           workers: ReturnType<typeof getViewport3DWorkerRuntimeSnapshot>;
         };
+        setPlanarMonitorFrameVisible: (visible: boolean) => void;
+        seedPlanarMonitorFramePreview: () => void;
         readViewportAuditResource: (resourceKey: string) => {
           data: unknown;
           error: string | null;
@@ -482,7 +485,7 @@ function BrowserAuditConnector({ kernel }: { kernel: KernelApi }) {
         });
       },
       flushVisualization: () => kernel.visualizationSync.flushNow(),
-      setActiveViewportModule: (moduleId: "viewport-2d" | "viewport-3d") => {
+      setActiveViewportModule: (moduleId: "field-map" | "viewport-3d") => {
         kernel.layout.setActiveViewportMainModule(moduleId);
         kernel.layout.setFocusedSlot("viewport-main");
       },
@@ -518,6 +521,22 @@ function BrowserAuditConnector({ kernel }: { kernel: KernelApi }) {
         ).revision,
         workers: getViewport3DWorkerRuntimeSnapshot(),
       }),
+      setPlanarMonitorFrameVisible: (visible: boolean) => {
+        planarMonitorFramePreviewStore.setVisible(visible);
+      },
+      seedPlanarMonitorFramePreview: () => {
+        planarMonitorFramePreviewStore.set({
+          boundsUvM: [-1e-9, 1e-9, -1e-9, 1e-9],
+          monitorId: "audit-planar-monitor",
+          normal: [0, 0, 1],
+          operator: { kind: "plane_sample" },
+          originM: [0, 0, 0],
+          selectable: true,
+          uAxis: [1, 0, 0],
+          vAxis: [0, 1, 0],
+          visible: true,
+        });
+      },
       readViewportAuditResource: (resourceKey: string) => {
         const snapshot = sharedResourceRuntimeStore.getSnapshot(resourceKey);
         return {

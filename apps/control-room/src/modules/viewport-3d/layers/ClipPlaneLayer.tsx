@@ -11,9 +11,11 @@ import {
   Vector3,
   type WebGLRenderer,
 } from "three";
+import type { ThreeEvent } from "@react-three/fiber";
 
 import type { VisualizationStateResource } from "@/kernel/api/apiTypes";
 import type { PlanarMonitorFramePreview } from "@/kernel/workspace/planarMonitorFramePreview";
+import { planarMonitorFramePreviewCanSelect } from "@/kernel/workspace/planarMonitorFramePreview";
 
 import type { Viewport3DResourceTracker } from "../viewport3dDiagnostics";
 import type { Viewport3DBounds } from "../viewport3dRenderModel";
@@ -149,10 +151,12 @@ export function ClipPlaneFramePreviewLayer({
 
 export function PlanarMonitorFramePreviewLayer({
   colors,
+  onSelect,
   preview,
   tracker,
 }: {
   colors: Viewport3DColors;
+  onSelect?: (monitorId: string, isDraft: boolean) => void;
   preview: PlanarMonitorFramePreview;
   tracker: Viewport3DResourceTracker;
 }) {
@@ -173,8 +177,17 @@ export function PlanarMonitorFramePreviewLayer({
     return () => geometry.dispose();
   }, [geometry, invalidate, tracker]);
 
+  const interaction = planarMonitorFramePreviewInteraction(preview, onSelect);
+  usePlanarMonitorFramePreviewAudit(interaction !== null, Boolean(interaction?.onClick), Boolean(interaction?.raycast));
+  if (!interaction) return null;
+
   return (
-    <lineSegments geometry={geometry} renderOrder={31}>
+    <lineSegments
+      geometry={geometry}
+      onClick={interaction.onClick}
+      raycast={interaction.raycast}
+      renderOrder={31}
+    >
       <lineBasicMaterial
         color={colors.accent}
         depthTest={false}
@@ -186,37 +199,97 @@ export function PlanarMonitorFramePreviewLayer({
   );
 }
 
+function usePlanarMonitorFramePreviewAudit(active: boolean, hitListener: boolean, raycastOwner: boolean): void {
+  useEffect(() => {
+    if (!active || !planarMonitorFramePreviewAuditEnabled()) return;
+    const audit = readPlanarMonitorFramePreviewAudit();
+    audit.activeOverlayInstances += 1;
+    audit.hitListenerOwners += hitListener ? 1 : 0;
+    audit.raycastOwners += raycastOwner ? 1 : 0;
+    audit.maxActiveOverlayInstances = Math.max(audit.maxActiveOverlayInstances, audit.activeOverlayInstances);
+    audit.maxHitListenerOwners = Math.max(audit.maxHitListenerOwners, audit.hitListenerOwners);
+    audit.maxRaycastOwners = Math.max(audit.maxRaycastOwners, audit.raycastOwners);
+    return () => {
+      audit.activeOverlayInstances -= 1;
+      audit.hitListenerOwners -= hitListener ? 1 : 0;
+      audit.raycastOwners -= raycastOwner ? 1 : 0;
+    };
+  }, [active, hitListener, raycastOwner]);
+}
+
+function planarMonitorFramePreviewAuditEnabled(): boolean {
+  return process.env.NEXT_PUBLIC_AUDIT_BUILD === "1" &&
+    (globalThis as typeof globalThis & { __FULLMAG_CONFIG__?: { enableAuditHooks?: unknown } }).__FULLMAG_CONFIG__?.enableAuditHooks === true;
+}
+
+function readPlanarMonitorFramePreviewAudit() {
+  const scope = globalThis as typeof globalThis & { __FULLMAG_PLANAR_MONITOR_PREVIEW_AUDIT__?: Record<string, number> };
+  return (scope.__FULLMAG_PLANAR_MONITOR_PREVIEW_AUDIT__ ??= {
+    activeOverlayInstances: 0, hitListenerOwners: 0, maxActiveOverlayInstances: 0,
+    maxHitListenerOwners: 0, maxRaycastOwners: 0, raycastOwners: 0,
+  });
+}
+
+export function planarMonitorFramePreviewInteraction(
+  preview: PlanarMonitorFramePreview,
+  onSelect?: (monitorId: string, isDraft: boolean) => void,
+): {
+  onClick?: (event: Pick<ThreeEvent<MouseEvent>, "stopPropagation">) => void;
+  raycast?: () => void;
+} | null {
+  if (preview.visible === false) return null;
+  if (!planarMonitorFramePreviewCanSelect(preview)) {
+    return { raycast: () => undefined };
+  }
+  return {
+    onClick: (event) => {
+      event.stopPropagation();
+      onSelect?.(preview.monitorId, preview.isDraft === true);
+    },
+  };
+}
+
 export function planarMonitorFrameSegments(
   preview: PlanarMonitorFramePreview,
 ): Float32Array {
   const [uMin, uMax, vMin, vMax] = preview.boundsUvM;
-  const point = (u: number, v: number) =>
+  const point = (u: number, v: number, normalOffset = 0) =>
     preview.originM.map(
       (origin, axis) =>
-        origin + u * preview.uAxis[axis] + v * preview.vAxis[axis],
+        origin +
+        u * preview.uAxis[axis] +
+        v * preview.vAxis[axis] +
+        normalOffset * preview.normal[axis],
     ) as [number, number, number];
-  const corners = [
-    point(uMin, vMin),
-    point(uMax, vMin),
-    point(uMax, vMax),
-    point(uMin, vMax),
-  ];
-  return new Float32Array(
-    [
-      corners[0],
-      corners[1],
-      corners[1],
-      corners[2],
-      corners[2],
-      corners[3],
-      corners[3],
-      corners[0],
-      point(uMin, 0),
-      point(uMax, 0),
-      point(0, vMin),
-      point(0, vMax),
-    ].flatMap((position) => position),
-  );
+  const slabThickness = preview.operator?.kind === "slab_average" &&
+    Number.isFinite(preview.operator.thickness_m) &&
+    preview.operator.thickness_m > 0
+    ? preview.operator.thickness_m
+    : null;
+  const offsets = slabThickness === null
+    ? [0]
+    : [-slabThickness / 2, slabThickness / 2];
+  const planes = offsets.flatMap((offset) => {
+    const corners = [
+      point(uMin, vMin, offset),
+      point(uMax, vMin, offset),
+      point(uMax, vMax, offset),
+      point(uMin, vMax, offset),
+    ];
+    return [
+      corners[0], corners[1], corners[1], corners[2],
+      corners[2], corners[3], corners[3], corners[0],
+      point(uMin, 0, offset), point(uMax, 0, offset),
+      point(0, vMin, offset), point(0, vMax, offset),
+    ];
+  });
+  const connectors = slabThickness === null
+    ? []
+    : [[uMin, vMin], [uMax, vMin], [uMax, vMax], [uMin, vMax]].flatMap(([u, v]) => [
+      point(u, v, offsets[0]),
+      point(u, v, offsets[1]),
+    ]);
+  return new Float32Array([...planes, ...connectors].flatMap((position) => position));
 }
 
 function resolveClipPlaneFrameQuaternion(frame: ClipPlaneFrame | null): Quaternion {

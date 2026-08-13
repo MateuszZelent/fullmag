@@ -2,7 +2,7 @@
 
 - Status: draft
 - Owners: Fullmag core
-- Last updated: 2026-08-07
+- Last updated: 2026-08-12
 - Related ADRs: `docs/adr/0001-physics-first-python-api.md`
 - Related specs:
   - `docs/specs/problem-ir-v0.md`
@@ -237,10 +237,15 @@ magnetization with a demagnetizing tensor kernel.
 | $V_i$ | cell volume | m$^3$ |
 | $S_f$ | face area | m$^2$ |
 | $d_f$ | distance between cell centers across face $f$ | m |
-| $\mathbf{H}^{\mathrm{visual}}_{\mathrm{eff}}$ | full-domain visualization effective field | A/m |
+| $\mathbf{H}_{\mathrm{eff},m}^{\mathrm{LLG}}$ | complete effective field used by the accepted active-support LLG evaluation | A/m |
+| $\mathcal{A}_{m,\mathrm{LLG}}$ | resolved contributions used by the accepted active-support LLG evaluation | $1$ |
+| $\mathcal{A}_{m,E}$ | energy-derived subset of active LLG contributions | $1$ |
+| $\mathcal{A}_{m,\mathrm{obs}}$ | contributions available in one same-state terminal observation | $1$ |
+| $\mathbf{H}_{\mathrm{eff},\mathrm{air}}$ | observable effective field in the FDM airbox | A/m |
 | $\mathbf{H}_{\mathrm{oe}}$ | Oersted field contribution | A/m |
 | $\mathbf{H}_{\mathrm{ant}}$ | antenna field contribution | A/m |
-| $\Omega_m$ | active magnetic support | 1 |
+| $\Omega_m$ | active magnetic support | $\mathrm{m^3}$ |
+| $\Omega_{\mathrm{air}}$ | inactive FDM cells in the same structured grid | $\mathrm{m^3}$ |
 
 (assumptions-and-validity)=
 ### 2.3 Assumptions and approximations
@@ -481,12 +486,47 @@ This means the demag operator is evaluated on the full padded grid. The magnetic
 and LLG stepping remain restricted to active cells, but that mask must not erase full-domain
 observables used to inspect the surrounding airbox.
 
-For visualization and field export, inactive FDM cells therefore obey
+The solver field on the active magnetic support is the full active contribution sum, not a
+visualization-only subset:
+
+```{math}
+:label: fdm-active-effective-field
+
+\mathbf{H}_{\mathrm{eff},m,i}^{\mathrm{LLG}}
+=
+\sum_{\ell\in\mathcal{A}_{m,\mathrm{LLG}}}
+\mathbf{H}_{\ell,i},
+\qquad i\in\Omega_m .
+```
+
+Here $\mathcal{A}_{m,\mathrm{LLG}}$ is the complete resolved set of contributions used by the
+accepted final LLG evaluation: energy-derived material terms, external and other direct drives,
+and any stochastic contribution sampled for that evaluation. It is not restricted to the three
+exchange/demag/Zeeman terms introduced earlier in this note. Let
+$\mathcal{A}_{m,E}\subseteq\mathcal{A}_{m,\mathrm{LLG}}$ denote the energy-derived terms;
+their scalar energies remain separately reduced. A direct or stochastic field may belong to
+$\mathcal{A}_{m,\mathrm{LLG}}\setminus\mathcal{A}_{m,E}$ and must still be included in the
+field used by LLG without acquiring a fictitious energy.
+
+The terminal materialized `H_eff` has the same physical meaning only if it is constructed from
+the same accepted state and the same contribution set,
+$\mathcal{A}_{m,\mathrm{obs}}=\mathcal{A}_{m,\mathrm{LLG}}$. In particular, a stochastic
+term requires the exact accepted sample/realization token; it must not be recomputed with a new
+random draw. If a direct, stochastic, or other active contribution cannot be materialized under
+that identity, terminal `H_eff` is unavailable rather than a partial sum. This is the full
+active-sum contract; energy reporting and terminal field materialization are distinct operations.
+
+The separate airbox observable is defined only when every listed source has been resolved and
+materialized for the same state. For each of `H_demag`, `H_ext`, `H_oe`, and `H_ant`, terminal
+legality additionally requires explicit `full_domain` coverage of this exact structured grid,
+step, time, and state generation. A vector length equal to the grid cell count is insufficient:
+the source may still be `magnetic_only`. This requirement applies to `H_ant` as well; its spatial
+support must never be inferred from its name or its participation in the sum.
 
 ```{math}
 :label: fdm-airbox-effective-field
 
-\mathbf{H}^{\mathrm{visual}}_{\mathrm{eff},i}
+\mathbf{H}_{\mathrm{eff},\mathrm{air},i}
 =
 \mathbf{H}_{\mathrm{demag},i}
 +
@@ -495,16 +535,58 @@ For visualization and field export, inactive FDM cells therefore obey
 \mathbf{H}_{\mathrm{oe},i}
 +
 \mathbf{H}_{\mathrm{ant},i},
-\qquad i \notin \Omega_m .
+\qquad i\in\Omega_{\mathrm{air}} .
 ```
 
-Magnetic-only contributions such as exchange, anisotropy, DMI, regional drive and thermal
-noise remain zero outside $\Omega_m$. A uniform Zeeman source is spatially present in the
-airbox even though its energy and torque are evaluated only on magnetic cells. Consequently
-`H_demag`, `H_ext` and the reconstructed visualization `H_eff` are full-domain quantities;
-the solver-owned masked `H_eff` remains the source used by LLG.
+An absent physical source contributes zero only when the resolved plan says that source is absent.
+If a required source is not `full_domain` or has not been materialized for the same state, the
+airbox observable is unavailable rather than a mixture of epochs or a reconstructed substitute.
+`H_demag` is `full_domain` by the FDM observable contract. `H_ext` is `full_domain` only when
+its own observable metadata says so. `H_oe` is `full_domain` only when its own observable metadata
+says so. `H_ant` is `full_domain` only when its own observable metadata says so. A uniform Zeeman
+source is one admissible `H_ext` case, but a material-only field is not silently promoted.
+Material-only quantities such as
+$\mathbf{H}_{\mathrm{ex}}$, anisotropy, DMI, magnetoelastic and thermal fields, and torque are
+zero or unavailable in $\Omega_{\mathrm{air}}$ with explicit quantity metadata; they are not
+airbox physics. A uniform Zeeman source can be spatially defined in the airbox, although its
+energy and torque remain restricted to magnetic cells. `H_demag` is always a full-domain
+observable on the FDM structured grid; this does not expand the active magnetic state or LLG
+support.
 
-#### 3.1.4 Zeeman field realization
+#### 3.1.4 Final single-grid field snapshot contract — planned / in implementation
+
+This is a terminal-output contract for one FDM structured grid and its airbox. It introduces no
+Python constructor, parameter, `ProblemIR` field, or planner capability. The source-level pieces
+exist, but there is no fresh completed CPU runtime proof and no executed CUDA-device proof for this
+contract; it is therefore **planned / in implementation**, not a production qualification claim.
+
+On a `Completed` run, the target is one atomic terminal batch containing the final magnetization
+$\mathbf{m}(t_f)$ and all requested materialized fields. Every member carries the same final step
+and time $t_f$ as `RunResult.final_magnetization`; a field captured from an earlier step cannot be
+labeled final. The batch replaces the prior terminal materialization as one generation. Consumers
+must not merge individual quantities from an older batch with quantities from the new one.
+
+The session field metadata exposes this coordinate as `source_step` and optional
+`source_time_seconds` (SI seconds). During `StepUpdate` ingestion, a finite non-negative
+`StepStats.time` is copied to each received field before terminal promotion. Older nonterminal
+live frames may omit `source_time_seconds` for wire compatibility, but a `Completed` terminal
+batch must expose it and it must equal the current run's `solver_time_seconds`; availability or a
+matching generation alone is insufficient terminal provenance.
+
+The batch is session-memory state, not a durable field artifact. It survives only while the
+interactive session remains resident; restart, reconnect, or process recovery requires an explicit
+scheduled artifact/output path and must not claim that this cache is disk persistence. `Failed` or
+`Cancelled` runs do not publish a `Completed` terminal batch. They may retain a previously complete
+nonterminal batch with its original step/time and status, but must not relabel it as final.
+
+`disable_preview_3d` is a benchmark/display switch for intermediate preview payloads. It is not a
+request to skip terminal scientific-field finalization, nor proof that a final field was persisted.
+The planned CPU single-grid lane is responsible for host materialization and atomic replacement;
+the CUDA single-grid lane must either publish the same complete contract with executed-device
+evidence or report the requested terminal quantity unsupported. Source visibility, compilation,
+or a CPU result cannot establish CUDA support.
+
+#### 3.1.5 Zeeman field realization
 
 The discrete Zeeman energy is
 
@@ -542,35 +624,36 @@ $$
 for vacuum units and record this conversion in provenance.
 A later API cleanup should prefer an explicit `H=` surface or an explicit unit-tagged field object.
 
-#### 3.1.5 Total field accumulation
+#### 3.1.6 Total field accumulation
 
-At each FDM evaluation point, the backend should accumulate
+At each FDM evaluation point, the backend must accumulate the complete resolved LLG set already
+defined in {eq}`fdm-active-effective-field`; this expands the earlier three-term instructional
+slice rather than contradicting it:
 
 $$
 \mathbf{H}_{\mathrm{eff},i}
 =
-\mathbf{H}_{\mathrm{ex},i}
-+
-\mathbf{H}_{\mathrm{demag},i}
-+
-\mathbf{H}_{\mathrm{ext},i}.
+\sum_{\ell\in\mathcal{A}_{m,\mathrm{LLG}}}\mathbf{H}_{\ell,i},
+\qquad i\in\Omega_m.
 $$
 
-The interaction energies remain separate and should back separate canonical scalar outputs:
+`H_ex + H_demag + H_ext` is only the minimum three-term case, not the definition of `H_eff`.
+The interaction energies remain separate and should back separate canonical scalar outputs only
+for $\mathcal{A}_{m,E}$:
 
 - `E_ex`,
 - `E_demag`,
 - `E_ext`,
-- later `E_total = E_ex + E_demag + E_ext + ...`.
+- later `E_total = \sum_{\ell\in\mathcal{A}_{m,E}} E_\ell`.
 
 The canonical field outputs should remain backend-independent:
 
 - `H_ex`,
 - `H_demag`,
 - `H_ext`,
-- later `H_eff`.
+- `H_eff`, subject to the same-state complete-sum condition for a terminal materialization.
 
-#### 3.1.6 CUDA production architecture
+#### 3.1.7 CUDA production architecture
 
 The intended production FDM architecture remains:
 
@@ -810,4 +893,11 @@ For this topic, `Exchange + Demag + Zeeman` are now executable in the public FDM
 | Demagnetization interaction | `packages/fullmag-py/src/fullmag/model/energy.py` | `class Demag` | Public demagnetization realization request. | Python/FDM/FEM | executable authoring contract |
 | Zeeman interaction | `packages/fullmag-py/src/fullmag/model/energy.py` | `class Zeeman` | Transitional external-field authoring contract. | Python/FDM/FEM | executable authoring contract; unit normalization gated |
 | FDM effective field | `crates/fullmag-engine/src/fdm/cpu/fields.rs` | `effective_field_from_vectors` | CPU reference assembly of the effective field. | FDM CPU | runtime implementation; qualification is lane-specific |
+| Runner observable assembly | `crates/fullmag-runner/src/fdm/cpu/reference.rs` | `observe_state_with_antenna_field` | Assembles same-state observables and reconstructs active/airbox effective fields. | FDM CPU | source-level owner; no terminal-batch qualification |
 | Airbox visualization field | `crates/fullmag-runner/src/fdm/cpu/reference.rs` | `reconstruct_inactive_fdm_visual_effective_field` | Reconstructs full-domain visualization fields outside magnetic support. | FDM CPU | target-only observation contract |
+| Full-grid materialization | `crates/fullmag-runner/src/interactive_runtime.rs` | `build_full_grid_materialized_fields` | Selectively builds live fields from one observable state. | FDM CPU | part of current path, not proof of an atomic terminal generation/batch |
+| CPU terminal outcome | `crates/fullmag-runner/src/fdm/cpu/reference.rs` | `execute_reference_fdm` | Returns CPU run outcome and scheduled fields. | FDM CPU | part of current path, not proof of an atomic terminal generation/batch |
+| Preview-disable switch | `crates/fullmag-cli/src/live_workspace.rs` | `feature_flags` | Reads the benchmark/display preview configuration. | CLI control plane | does not qualify or replace terminal field finalization |
+| Session field promotion | `crates/fullmag-cli/src/live_workspace.rs` | `ingest_preview_fields_from_update` | Promotes incoming fields individually into session state. | CLI control plane | part of current path, not proof of an atomic terminal generation/batch |
+| Field source-time transport | `crates/fullmag-runner/src/types.rs` | `LivePreviewField` | Carries the optional solver-time provenance for live and terminal fields. | Runner/API | source-level contract; terminal proof remains lane-gated |
+| Field metadata resource | `crates/fullmag-api/src/schemas/fields.rs` | `FieldMeta`, `FieldDescriptor` | Exposes `source_time_seconds` with SI-second semantics to resource consumers. | API | source-level contract; terminal proof remains lane-gated |

@@ -146,42 +146,8 @@ pub(crate) fn build_cached_grid_preview_fields(
     (!cached.is_empty()).then_some(cached)
 }
 
-pub(crate) fn build_full_grid_materialized_fields(
-    quantities: &[&str],
-    observables: &StateObservables,
-    grid: [u32; 3],
-    active_mask: Option<&[bool]>,
-    config_revision: u64,
-) -> Option<Vec<LivePreviewField>> {
-    let expected_len = grid[0] as usize * grid[1] as usize * grid[2] as usize;
-    let mut fields = Vec::new();
-    for quantity in quantities {
-        let Ok(values) = select_observables(observables, quantity) else {
-            continue;
-        };
-        if values.len() != expected_len {
-            continue;
-        }
-        let request = LivePreviewRequest {
-            revision: config_revision,
-            quantity: (*quantity).to_string(),
-            component: "3D".to_string(),
-            layer: 0,
-            all_layers: true,
-            every_n: 1,
-            x_chosen_size: 0,
-            y_chosen_size: 0,
-            auto_scale_enabled: false,
-            max_points: 0,
-        };
-        fields.push(build_grid_preview_field(
-            &request,
-            values,
-            grid,
-            active_mask,
-        ));
-    }
-    (!fields.is_empty()).then_some(fields)
+pub(crate) fn should_materialize_terminal_fdm_fields(status: RunStatus) -> bool {
+    status == RunStatus::Completed
 }
 
 fn build_cached_mesh_preview_fields(
@@ -245,9 +211,9 @@ fn attach_fem_crossover_decision_to_provenance(
 mod tests {
     use super::{
         attach_fem_crossover_decision_to_provenance, attach_resolved_fallback_to_provenance,
-        build_full_grid_materialized_fields, cached_display_refresh_due, cpu_execution_provenance,
-        display_refresh_due, normalize_runtime_context_signature, InteractiveFdmPreviewRuntime,
-        InteractiveFdmPreviewRuntimeInner,
+        cached_display_refresh_due, cpu_execution_provenance, display_refresh_due,
+        normalize_runtime_context_signature, should_materialize_terminal_fdm_fields,
+        InteractiveFdmPreviewRuntime, InteractiveFdmPreviewRuntimeInner,
     };
     use crate::dispatch::FdmEngine;
     use crate::fdm::cpu::reference::{
@@ -255,12 +221,17 @@ mod tests {
         reset_direct_field_assembly_calls, reset_observe_state_calls,
     };
     use crate::interactive::display::{DisplayKind, DisplaySelectionState};
-    use crate::types::{LivePreviewRequest, StateObservables, StepAction};
-    use fullmag_ir::{
-        ExchangeBoundaryCondition, ExecutionPrecision, FdmMaterialIR, FdmPlanIR, GridDimensions,
-        IntegratorChoice, RelaxationAlgorithmIR, RelaxationControlIR,
+    use crate::interactive::runtime::{
+        build_atomic_terminal_update, publish_atomic_terminal_update,
     };
-    use std::collections::HashMap;
+    use crate::types::{
+        ExecutedRun, ExecutionProvenance, LivePreviewRequest, RunResult, StepAction, StepStats,
+    };
+    use fullmag_ir::{
+        BackendPlanIR, ExchangeBoundaryCondition, ExecutionPrecision, FdmMaterialIR, FdmPlanIR,
+        GridDimensions, IntegratorChoice, ProblemIR, RelaxationAlgorithmIR, RelaxationControlIR,
+        ResolvedAntennaZeemanMaskIR, TimeDependenceIR,
+    };
 
     #[test]
     fn interactive_fem_runtime_reuses_runtime_owned_stage_context() {
@@ -327,66 +298,6 @@ mod tests {
             enable_exchange: true,
             enable_demag: true,
             ..Default::default()
-        }
-    }
-
-    #[test]
-    fn full_grid_materialization_does_not_downscale_solver_fields() {
-        let grid = [32, 32, 16];
-        let count = grid[0] as usize * grid[1] as usize * grid[2] as usize;
-        let vectors = || vec![[1.0, 2.0, 3.0]; count];
-        let observables = StateObservables {
-            magnetization: vectors(),
-            torque_field: vectors(),
-            exchange_field: vectors(),
-            demag_field: vectors(),
-            external_field: vectors(),
-            antenna_field: vectors(),
-            drive_field: vectors(),
-            effective_field: vectors(),
-            anisotropy_field: vectors(),
-            dmi_field: vectors(),
-            magnetoelastic_field: vectors(),
-            cubic_anisotropy_field: vectors(),
-            bulk_dmi_field: vectors(),
-            oersted_field: vectors(),
-            thermal_field: vectors(),
-            exchange_energy: 0.0,
-            demag_energy: 0.0,
-            external_energy: 0.0,
-            drive_energy: 0.0,
-            anisotropy_energy: 0.0,
-            dmi_energy: 0.0,
-            total_energy: 0.0,
-            max_dm_dt: 0.0,
-            max_h_eff: 0.0,
-            max_h_demag: 0.0,
-            max_torque_Apm: 0.0,
-            per_object_scalars: HashMap::new(),
-        };
-
-        let fields = build_full_grid_materialized_fields(
-            &["m", "H_demag", "H_eff"],
-            &observables,
-            grid,
-            None,
-            9,
-        )
-        .expect("full materialization should produce vector fields");
-
-        assert_eq!(
-            fields
-                .iter()
-                .map(|field| field.quantity.as_str())
-                .collect::<Vec<_>>(),
-            vec!["m", "H_demag", "H_eff"]
-        );
-        for field in fields {
-            assert_eq!(field.preview_grid, grid);
-            assert_eq!(field.original_grid, grid);
-            assert_eq!(field.vector_field_values.len(), count * 3);
-            assert!(!field.auto_downscaled);
-            assert_eq!(field.source_revision, 9);
         }
     }
 
@@ -779,6 +690,329 @@ mod tests {
             }
         };
         assert!(cpu.soa_fast_path_active());
+    }
+
+    #[test]
+    fn completed_cpu_interactive_runtime_materializes_final_active_fields() {
+        let mut plan = make_soa_fdm_plan();
+        plan.grid.cells = [4, 1, 2];
+        plan.active_mask = Some(vec![true, true, true, true, false, false, false, false]);
+        plan.external_field = Some([10.0, 20.0, 30.0]);
+        plan.oersted_field_xyz = Some(vec![[40.0, -20.0, 10.0]; 8]);
+        plan.antenna_zeeman_masks = vec![ResolvedAntennaZeemanMaskIR {
+            source: "antenna".to_string(),
+            object: "free".to_string(),
+            amplitude_b_t: 1e-3,
+            direction: [0.0, 1.0, 0.0],
+            spatial_profile: None,
+            waveform: Some(TimeDependenceIR::PiecewiseLinear {
+                points: vec![[0.0, 0.25], [2e-14, 1.0]],
+            }),
+            field_xyz: vec![[0.0, 250.0, -125.0]; plan.initial_magnetization.len()],
+        }];
+        let mut runtime =
+            InteractiveFdmPreviewRuntime::from_fdm_plan(&plan, FdmEngine::CpuReference, None)
+                .expect("CPU interactive runtime should build");
+        let display_selection = || {
+            let mut state = DisplaySelectionState::default();
+            state.selection.quantity = "E_total".to_string();
+            state.selection.kind = DisplayKind::GlobalScalar;
+            state
+        };
+        let mut updates = Vec::new();
+
+        let result = runtime
+            .execute_with_live_preview_streaming(
+                &plan,
+                2e-14,
+                &[],
+                plan.grid.cells,
+                u64::MAX,
+                &display_selection,
+                None,
+                None,
+                &mut |update| {
+                    updates.push(update);
+                    StepAction::Continue
+                },
+            )
+            .expect("CPU interactive runtime should execute");
+
+        assert_eq!(result.result.status, crate::RunStatus::Completed);
+        let backend_terminal_field_batches = updates
+            .iter()
+            .filter_map(|update| {
+                update
+                    .cached_preview_fields
+                    .as_ref()
+                    .filter(|fields| fields.iter().any(|field| field.quantity == "eden_total"))
+            })
+            .collect::<Vec<_>>();
+        assert!(
+            backend_terminal_field_batches.is_empty(),
+            "backend must defer terminal fields to the atomic runtime finalizer"
+        );
+        let final_stats = result
+            .result
+            .steps
+            .last()
+            .expect("completed runtime should report final step stats");
+        assert!((final_stats.time - 2e-14).abs() <= 1e-28);
+        let mut execution_plan =
+            fullmag_plan::plan(&ProblemIR::bootstrap_example()).expect("bootstrap execution plan");
+        execution_plan.backend_plan = BackendPlanIR::Fdm(plan.clone());
+        let terminal_update =
+            build_atomic_terminal_update(&mut runtime, &execution_plan, 17, &result)
+                .expect("completed runtime should build atomic terminal update")
+                .expect("completed runtime should publish a terminal update");
+        assert!(terminal_update.finished);
+        assert_eq!(
+            updates.iter().filter(|update| update.finished).count()
+                + usize::from(terminal_update.finished),
+            1,
+            "the full runtime path must expose exactly one terminal update"
+        );
+        assert_eq!(terminal_update.stats.step, final_stats.step);
+        assert_eq!(terminal_update.stats.time, final_stats.time);
+        let expected_final_m = result
+            .result
+            .final_magnetization
+            .iter()
+            .flat_map(|value| value.iter().copied())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            terminal_update.magnetization.as_deref(),
+            Some(expected_final_m.as_slice())
+        );
+        let final_fields = terminal_update
+            .cached_preview_fields
+            .as_ref()
+            .expect("atomic terminal update should carry final fields");
+        let active = crate::quantities::field_materialization_quantity_ids();
+        let expected = crate::quantities::active_fdm_preview_quantities(
+            FdmEngine::CpuReference,
+            &plan,
+            &active,
+        );
+        assert_eq!(
+            final_fields
+                .iter()
+                .map(|field| field.quantity.as_str())
+                .collect::<Vec<_>>(),
+            expected
+        );
+        assert!(final_fields.iter().all(|field| {
+            field.source_step == final_stats.step
+                && field.source_time_seconds == Some(final_stats.time)
+                && field.source_revision == final_stats.step
+                && field.materialized_at_unix_ms > 0
+        }));
+        let final_m = final_fields
+            .iter()
+            .find(|field| field.quantity == "m")
+            .expect("terminal materialization should include m");
+        assert_eq!(
+            final_m.vector_field_values,
+            result
+                .result
+                .final_magnetization
+                .iter()
+                .flat_map(|value| value.iter().copied())
+                .collect::<Vec<_>>()
+        );
+        let field_values = |quantity: &str| {
+            &final_fields
+                .iter()
+                .find(|field| field.quantity == quantity)
+                .unwrap_or_else(|| panic!("terminal materialization should include {quantity}"))
+                .vector_field_values
+        };
+        for antenna in field_values("H_ant").chunks_exact(3) {
+            assert!((antenna[0] - 0.0).abs() <= 1e-12);
+            assert!((antenna[1] - 250.0).abs() <= 1e-9);
+            assert!((antenna[2] + 125.0).abs() <= 1e-9);
+        }
+        let active_field_components = final_fields
+            .iter()
+            .filter(|field| field.quantity.starts_with("H_") && field.quantity != "H_eff")
+            .map(|field| field.vector_field_values.as_slice())
+            .collect::<Vec<_>>();
+        let active_mask = plan.active_mask.as_deref().expect("Airbox fixture mask");
+        let h_eff = field_values("H_eff");
+        let h_demag = field_values("H_demag");
+        let h_ext = field_values("H_ext");
+        let h_ant = field_values("H_ant");
+        let h_oe = field_values("H_oe");
+        assert!(h_oe.iter().any(|value| value.abs() > 0.0));
+        let eden_demag = final_fields
+            .iter()
+            .find(|field| field.quantity == "eden_demag")
+            .expect("terminal materialization should include eden_demag");
+        assert_eq!(eden_demag.preview_grid, [4, 1, 2]);
+        assert_eq!(eden_demag.original_grid, [4, 1, 2]);
+        assert_eq!(eden_demag.vector_field_values.len(), 8);
+        assert_ne!(
+            &eden_demag.vector_field_values[..4],
+            &eden_demag.vector_field_values[4..],
+            "terminal scalar field must preserve distinct solver layers"
+        );
+        assert!(active_mask.iter().enumerate().any(|(cell, active)| {
+            !active
+                && h_demag[cell * 3..cell * 3 + 3]
+                    .iter()
+                    .any(|value| value.abs() > 1e-12)
+        }));
+        for (cell, active) in active_mask.iter().copied().enumerate() {
+            for component in 0..3 {
+                let index = cell * 3 + component;
+                let expected = if active {
+                    active_field_components
+                        .iter()
+                        .map(|field| field[index])
+                        .sum::<f64>()
+                } else {
+                    h_demag[index] + h_ext[index] + h_ant[index] + h_oe[index]
+                };
+                assert!(
+                    (h_eff[index] - expected).abs() <= 1e-9,
+                    "H_eff mismatch at cell {cell}, component {component}: effective={} expected={expected}; components={:?}",
+                    h_eff[index],
+                    active_field_components
+                        .iter()
+                        .map(|field| field[index])
+                        .collect::<Vec<_>>()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn terminal_fdm_field_materialization_rejects_non_success_statuses() {
+        assert!(should_materialize_terminal_fdm_fields(
+            crate::RunStatus::Completed
+        ));
+        for status in [
+            crate::RunStatus::Failed,
+            crate::RunStatus::Cancelled,
+            crate::RunStatus::Paused,
+        ] {
+            assert!(!should_materialize_terminal_fdm_fields(status));
+
+            let plan = make_soa_fdm_plan();
+            let mut execution_plan = fullmag_plan::plan(&ProblemIR::bootstrap_example())
+                .expect("bootstrap execution plan");
+            execution_plan.backend_plan = BackendPlanIR::Fdm(plan.clone());
+            let mut runtime =
+                InteractiveFdmPreviewRuntime::from_fdm_plan(&plan, FdmEngine::CpuReference, None)
+                    .expect("CPU interactive runtime should build");
+            let executed = ExecutedRun {
+                result: RunResult {
+                    status,
+                    steps: vec![StepStats {
+                        step: 3,
+                        time: 2e-14,
+                        ..StepStats::default()
+                    }],
+                    final_magnetization: plan.initial_magnetization.clone(),
+                    completion: None,
+                },
+                initial_magnetization: plan.initial_magnetization.clone(),
+                field_snapshots: Vec::new(),
+                field_snapshot_count: 0,
+                auxiliary_artifacts: Vec::new(),
+                provenance: ExecutionProvenance::default(),
+            };
+            let mut terminal_callbacks = Vec::new();
+            publish_atomic_terminal_update(
+                &mut runtime,
+                &execution_plan,
+                0,
+                &executed,
+                &mut |update| {
+                    terminal_callbacks.push(update);
+                    StepAction::Continue
+                },
+            )
+            .expect("non-success terminal status should not snapshot fields");
+            assert!(terminal_callbacks.is_empty());
+        }
+    }
+
+    #[cfg(feature = "cuda")]
+    #[test]
+    fn completed_cuda_interactive_runtime_materializes_one_atomic_terminal_field_set_when_available(
+    ) {
+        if !crate::fdm::gpu::cuda::native::is_cuda_available() {
+            eprintln!("skipping terminal CUDA FDM field test: CUDA backend is unavailable");
+            return;
+        }
+
+        let plan = make_soa_fdm_plan();
+        let mut runtime =
+            InteractiveFdmPreviewRuntime::from_fdm_plan(&plan, FdmEngine::CudaFdm, None)
+                .expect("CUDA interactive runtime should build");
+        let display_selection = || DisplaySelectionState::default();
+        let mut backend_terminal_batches = 0;
+        let executed = runtime
+            .execute_with_live_preview_streaming(
+                &plan,
+                2e-14,
+                &[],
+                plan.grid.cells,
+                u64::MAX,
+                &display_selection,
+                None,
+                None,
+                &mut |update| {
+                    if update.cached_preview_fields.as_ref().is_some_and(|fields| {
+                        fields.iter().any(|field| field.quantity == "eden_total")
+                    }) {
+                        backend_terminal_batches += 1;
+                    }
+                    StepAction::Continue
+                },
+            )
+            .expect("CUDA interactive runtime should execute");
+        assert_eq!(backend_terminal_batches, 0);
+
+        let mut execution_plan =
+            fullmag_plan::plan(&ProblemIR::bootstrap_example()).expect("bootstrap execution plan");
+        execution_plan.backend_plan = BackendPlanIR::Fdm(plan.clone());
+        let terminal = build_atomic_terminal_update(&mut runtime, &execution_plan, 23, &executed)
+            .expect("CUDA terminal update should materialize")
+            .expect("completed CUDA runtime should publish a terminal update");
+        assert!(terminal.finished);
+        let fields = terminal
+            .cached_preview_fields
+            .expect("CUDA terminal update should carry fields");
+        assert_eq!(
+            fields
+                .iter()
+                .map(|field| field.quantity.as_str())
+                .collect::<Vec<_>>(),
+            crate::quantities::active_fdm_preview_quantities(
+                FdmEngine::CudaFdm,
+                &plan,
+                &crate::quantities::field_materialization_quantity_ids(),
+            )
+        );
+        let final_stats = executed.result.steps.last().expect("final CUDA stats");
+        assert!(fields.iter().all(|field| {
+            field.source_step == final_stats.step && field.source_revision == final_stats.step
+        }));
+        let m = fields
+            .iter()
+            .find(|field| field.quantity == "m")
+            .expect("CUDA terminal m");
+        assert_eq!(
+            m.vector_field_values,
+            executed
+                .result
+                .final_magnetization
+                .iter()
+                .flat_map(|value| value.iter().copied())
+                .collect::<Vec<_>>()
+        );
     }
 
     #[test]
@@ -1670,6 +1904,25 @@ impl CpuInteractiveFdmPreviewRuntime {
             &self.plan_signature,
             quantities,
         );
+        let sample_count = self.state.magnetization().len();
+        self.problem.terms.per_node_field =
+            cpu_reference::resolved_per_node_external_field_for_count(
+                &self.plan_signature,
+                sample_count,
+                self.state.time_seconds,
+            );
+        let antenna_field = cpu_reference::resolved_antenna_zeeman_field_for_count(
+            &self.plan_signature,
+            sample_count,
+            self.state.time_seconds,
+        );
+        let oersted_field = cpu_reference::resolved_oersted_visual_field_for_count(
+            &self.problem,
+            &self.plan_signature,
+            sample_count,
+            self.state.time_seconds,
+            &antenna_field,
+        );
         cpu_reference::snapshot_vector_fields_from_state(
             &self.problem,
             &self.state,
@@ -1677,6 +1930,8 @@ impl CpuInteractiveFdmPreviewRuntime {
             request,
             self.original_grid,
             self.plan_signature.active_mask.as_deref(),
+            Some(&oersted_field),
+            Some(&antenna_field),
         )
     }
 

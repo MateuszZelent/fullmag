@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+
 import { describe, expect, it } from "vitest";
 
 import {
@@ -13,9 +15,11 @@ describe("field-map data plan", () => {
         component: "normal",
         includeMesh: true,
         monitorId: "plane-1",
+        quality: "interactive",
         quantityId: "m",
         resolution: [512, 256],
         showVectors: true,
+        vectorBudget: 2_000,
       }),
     ).toMatchObject({
       enabled: false,
@@ -32,9 +36,11 @@ describe("field-map data plan", () => {
       component: "normal",
       includeMesh: false,
       monitorId: "plane-1",
+      quality: "export",
       quantityId: "m",
       resolution: [512, 256],
       showVectors: true,
+      vectorBudget: 768,
     });
     expect(plan).toMatchObject({
       enabled: true,
@@ -42,40 +48,68 @@ describe("field-map data plan", () => {
       requestScalar: true,
       requestVectors: true,
       query: {
-        quality: "interactive",
+        quality: "export",
         resolution_x: 512,
         resolution_y: 256,
-        vector_budget: 2_000,
+        vector_budget: 768,
       },
     });
   });
 
-  it("keeps the exact view scope and revision identity on the shared query", () => {
+  it("does not substitute scene or global field revisions for exact sample revisions", () => {
+    const sceneRevision = "101";
+    const monitorRevision = "202";
+    const globalFieldRevision = "303";
+    const quantityRevision = "404";
+    expect(sceneRevision).not.toBe(monitorRevision);
+    expect(globalFieldRevision).not.toBe(quantityRevision);
     const plan = buildFieldMapDataPlan({
       active: true,
       component: "normal",
-      expectedFieldRevision: 17,
-      expectedMeshRevision: 8,
-      expectedMonitorRevision: 5,
+      ...{
+        expectedFieldRevision: globalFieldRevision,
+        expectedMonitorRevision: sceneRevision,
+      },
       includeMesh: true,
       monitorId: "plane-1",
+      quality: "interactive",
       quantityId: "m",
       resolution: [128, 64],
       showVectors: true,
       snapshotId: "snapshot-4",
       stageId: "stage-2",
       viewScope: { kind: "mesh_part", scope_id: "part-7" },
+      vectorBudget: 2_000,
     });
 
     expect(plan.query).toMatchObject({
-      expected_field_revision: 17,
-      expected_mesh_revision: 8,
-      expected_monitor_revision: 5,
       scope_id: "part-7",
       scope_kind: "mesh_part",
       snapshot_id: "snapshot-4",
       stage_id: "stage-2",
     });
+    expect(plan.query).not.toHaveProperty("expected_field_revision");
+    expect(plan.query).not.toHaveProperty("expected_monitor_revision");
+  });
+
+  it("gates binary resources on the canonical metadata sample", () => {
+    const source = readFileSync(
+      new URL("../FieldMapModule.tsx", import.meta.url),
+      "utf8",
+    );
+
+    expect(source).not.toContain("status.data?.resources.field_revision");
+    expect(source).not.toContain("monitor.data?.scene_revision");
+    expect(source).toContain("planarFieldQueryFromMeta(");
+    expect(source).toContain("plan.quantityId");
+    expect(source).toContain("plan.monitorId");
+    expect(source).toContain("meta.data");
+    expect(source).toContain("canonicalSample?.ok ? canonicalSample.query : null");
+    expect(source).toContain("const canonicalSampleReady = canonicalQuery !== null");
+    expect(source).toContain("canonicalSampleError");
+    expect(source).toContain("canonicalSampleError !== null");
+    expect(source).toContain("canonicalSampleError?.message");
+    expect(source.match(/canonicalSampleReady/g)).toHaveLength(6);
   });
 
   it.each([
@@ -88,9 +122,11 @@ describe("field-map data plan", () => {
       component: "magnitude",
       includeMesh: false,
       monitorId: "plane-1",
+      quality: "interactive",
       quantityId: "m",
       resolution: [32, 32],
       showVectors: false,
+      vectorBudget: 2_000,
       viewScope,
     });
 
@@ -109,10 +145,12 @@ describe("field-map data plan", () => {
         discretization: "fdm",
         includeMesh: true,
         monitorId: "plane-1",
+        quality: "interactive",
         quantityId: "m",
         resolution: [32, 32],
         showVectors: true,
         viewScope,
+        vectorBudget: 2_000,
       });
 
       expect(plan).toMatchObject({
@@ -130,9 +168,9 @@ describe("field-map data plan", () => {
   it("adds probe coordinates without dropping raster identity", () => {
     const query = {
       component: "normal",
-      expected_field_revision: 17,
-      expected_mesh_revision: 8,
-      expected_monitor_revision: 5,
+      expected_field_revision: "9007199254741001",
+      expected_mesh_revision: "9007199254741002",
+      expected_monitor_revision: "9007199254741003",
       include_mesh: true,
       quality: "interactive",
       resolution_x: 128,

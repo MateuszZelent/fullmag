@@ -50,13 +50,13 @@ describe("VisualizationDebugPanel lane gate", () => {
     testState.omitDomain = false;
   });
 
-  it("does not mount the FEM evidence adapter for explicit FDM debug selections", () => {
+  it("mounts the existing evidence adapter for explicit FDM debug selections", () => {
     testState.discretization = "fdm";
 
     const html = renderToStaticMarkup(<VisualizationDebugPanel selection={selection} />);
 
-    expect(testState.adapterCalls).toBe(0);
-    expect(html).toContain("not applicable for the FDM structured-grid lane");
+    expect(testState.adapterCalls).toBe(1);
+    expect(html).toContain("debug adapter");
   });
 
   it("mounts the evidence adapter after the session resolves to FEM", () => {

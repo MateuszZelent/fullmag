@@ -314,8 +314,10 @@ function firstExactResourceKey(model: VisualizationDebugPanelModel): string | nu
       for (const observation of carrier.observations) {
         const requested = observation.carrier.request.resourceKey;
         if (requested) return requested;
-        const adopted = observation.carrier.render.adoption.adoptedResourceKey;
-        if (adopted) return adopted;
+        const adoptedSurface = observation.carrier.render.adoption.surface.adoptedResourceKey;
+        if (adoptedSurface) return adoptedSurface;
+        const adoptedVector = observation.carrier.render.adoption.vector.adoptedResourceKey;
+        if (adoptedVector) return adoptedVector;
       }
     }
   }

@@ -54,6 +54,90 @@ describe("generated OpenAPI v2 transport", () => {
     );
   });
 
+  it("publishes immutable planar sample tokens and separated stale revisions", () => {
+    const document = JSON.parse(
+      readFileSync(new URL("./generated/openapi-v2.json", import.meta.url), "utf8"),
+    );
+    const meta = document.components.schemas.PlanarFieldMetaResource;
+    expect(meta.required).toEqual(expect.arrayContaining([
+      "sample_token",
+      "scene_revision",
+      "monitor_revision",
+      "carrier_revision",
+      "field_revision",
+    ]));
+    for (const revision of [
+      "scene_revision",
+      "monitor_revision",
+      "mesh_revision",
+      "carrier_revision",
+      "field_revision",
+    ]) {
+      expect(meta.properties[revision].type, revision).toBe("string");
+    }
+    const scalarParameters = document.paths[
+      "/v2/sessions/current/data/fields/{quantity_id}/planar-monitors/{monitor_id}/scalar"
+    ].get.parameters.map((parameter: { name: string }) => parameter.name);
+    expect(scalarParameters).toEqual(expect.arrayContaining([
+      "sample_token",
+      "expected_scene_revision",
+      "expected_monitor_revision",
+      "expected_carrier_revision",
+      "expected_field_revision",
+    ]));
+    for (const parameter of document.paths[
+      "/v2/sessions/current/data/fields/{quantity_id}/planar-monitors/{monitor_id}/scalar"
+    ].get.parameters) {
+      if (parameter.name.startsWith("expected_")) {
+        expect(parameter.schema.type, parameter.name).toBe("string");
+      }
+    }
+  });
+
+  it("declares structured planar data-plane error responses", () => {
+    const document = JSON.parse(
+      readFileSync(new URL("./generated/openapi-v2.json", import.meta.url), "utf8"),
+    );
+    for (const resource of [
+      "meta",
+      "scalar",
+      "vectors",
+      "empty-mask",
+      "mesh-overlay",
+      "probe",
+      "render.png",
+    ]) {
+      const responses = document.paths[
+        `/v2/sessions/current/data/fields/{quantity_id}/planar-monitors/{monitor_id}/${resource}`
+      ].get.responses;
+      for (const status of ["404", "409", "422"]) {
+        expect(
+          responses[status].content["application/json"].schema.$ref,
+          `${resource} ${status}`,
+        ).toBe("#/components/schemas/ApiErrorResponse");
+      }
+    }
+  });
+
+  it("declares metadata and binary not-modified responses without bodies", () => {
+    const document = JSON.parse(
+      readFileSync(new URL("./generated/openapi-v2.json", import.meta.url), "utf8"),
+    );
+    for (const resource of [
+      "meta",
+      "scalar",
+      "vectors",
+      "empty-mask",
+      "mesh-overlay",
+    ]) {
+      const response = document.paths[
+        `/v2/sessions/current/data/fields/{quantity_id}/planar-monitors/{monitor_id}/${resource}`
+      ].get.responses["304"];
+      expect(response?.description, resource).toBe("Not modified");
+      expect(response?.content, resource).toBeUndefined();
+    }
+  });
+
   it("exposes an openapi-fetch transport wrapper", async () => {
     const calls: string[] = [];
     const transport = createOpenApiV2Transport({

@@ -1,6 +1,6 @@
 /* ── Ribbon container ── */
 .fm-ribbon {
-  --fm-ribbon-action-width: 60px;
+  --fm-ribbon-action-width: 64px;
   --fm-ribbon-group-accent: var(--fm-border-default);
   display: flex;
   height: var(--fm-ribbon-height);
@@ -72,15 +72,19 @@
   z-index: var(--fm-z-base);
 }
 
-/* ── Groups row ── */
+/* ── Groups row ──
+   flex: 1 → fills remaining height after tab strip.
+   min-height: 0 → allows overflow instead of stretching parent. */
 .fm-ribbon__groups {
   display: flex;
   flex: 1;
+  min-height: 0;
   align-items: stretch;
   gap: 0;
   overflow-x: auto;
   overflow-y: hidden;
   padding-inline: var(--fm-space-2);
+  scrollbar-width: none;
 }
 
 .fm-ribbon__groups::-webkit-scrollbar {
@@ -93,8 +97,7 @@
   display: flex;
   flex-direction: column;
   flex-shrink: 0;
-  padding-inline: calc(var(--fm-space-2) + 1px);
-  padding-bottom: 2px;
+  padding-inline: var(--fm-space-2);
   border-right: 1px solid color-mix(in srgb, var(--fm-ribbon-group-accent) 34%, var(--fm-border-subtle));
   transition: background-color var(--fm-transition-fast);
 }
@@ -103,16 +106,18 @@
   border-right: none;
 }
 
+/* Left accent bar — baseline hidden for neutral groups */
 .fm-ribbon-group::before {
   position: absolute;
-  top: var(--fm-space-2);
-  bottom: var(--fm-ribbon-tab-indicator-bottom);
+  top: var(--fm-space-1);
+  bottom: var(--fm-space-1);
   left: 0;
   width: 2px;
   border-radius: var(--fm-radius-xs);
   background: color-mix(in srgb, var(--fm-ribbon-group-accent) 72%, transparent);
   content: "";
-  opacity: 0.65;
+  opacity: 0;
+  transition: opacity var(--fm-transition-fast);
 }
 
 /* Tone tints — background only, no border conflicts */
@@ -120,6 +125,14 @@
 .fm-ribbon-group[data-tone="compose"] {
   --fm-ribbon-group-accent: var(--fm-success);
   background: color-mix(in srgb, var(--fm-success) 5%, transparent);
+}
+
+.fm-ribbon-group[data-tone="authoring"]::before,
+.fm-ribbon-group[data-tone="compose"]::before,
+.fm-ribbon-group[data-tone="compute"]::before,
+.fm-ribbon-group[data-tone="selection"]::before,
+.fm-ribbon-group[data-tone="sync"]::before {
+  opacity: 0.65;
 }
 
 .fm-ribbon-group[data-tone="compute"] {
@@ -137,17 +150,19 @@
   background: color-mix(in srgb, var(--fm-stale) 5%, transparent);
 }
 
+/* ── Group label (bottom) ── */
 .fm-ribbon-group__label {
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
+  flex-shrink: 0;
+  height: 18px;
   color: var(--fm-text-muted);
-  font-size: var(--fm-font-size-2xs);
-  font-weight: 500;
+  font-size: 9px;
+  font-weight: 600;
   letter-spacing: 0.06em;
   line-height: 1;
-  padding-block: 3px;
   text-transform: uppercase;
 }
 
@@ -162,7 +177,7 @@
   display: block;
   max-width: 100%;
   color: var(--fm-text-muted);
-  font-size: var(--fm-font-size-2xs);
+  font-size: 8px;
   font-weight: 500;
   letter-spacing: 0.02em;
   line-height: 1.1;
@@ -172,16 +187,22 @@
   white-space: nowrap;
 }
 
+/* ── Group actions row ──
+   flex: 1 + min-height: 0 → fills space between top padding and bottom label.
+   align-items: stretch → action buttons stretch to full available height. */
 .fm-ribbon-group__actions {
   display: flex;
   flex: 1;
-  align-items: center;
+  min-height: 0;
+  align-items: stretch;
   gap: 2px;
-  padding-block: var(--fm-space-1);
+  padding-block: 3px;
   padding-inline: 2px;
 }
 
-/* ── Ribbon action button ── */
+/* ── Ribbon action button ──
+   The shell ensures minimum sizing while allowing vertical stretch.
+   The action button fills the shell height and arranges icon + label vertically. */
 .fm-ribbon-action-shell {
   display: inline-flex;
   width: var(--fm-ribbon-action-width);
@@ -196,19 +217,18 @@
   display: flex;
   width: var(--fm-ribbon-action-width);
   min-width: var(--fm-ribbon-action-width);
-  height: var(--fm-inspector-icon-size);
   flex-shrink: 0;
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 2px;
+  gap: 1px;
   overflow: hidden;
   border: none;
   border-radius: var(--fm-radius-sm);
   background: transparent;
   color: var(--fm-text-secondary);
   cursor: pointer;
-  padding: 4px var(--fm-space-1) 6px;
+  padding: 3px var(--fm-space-1) 2px;
   transition:
     background-color var(--fm-transition-fast),
     box-shadow var(--fm-transition-fast),
@@ -281,13 +301,15 @@
   color: var(--fm-accent);
 }
 
+/* ── Action icon ── */
 .fm-ribbon-action__icon {
   position: relative;
   display: flex;
   width: var(--fm-space-6);
-  height: var(--fm-control-height-compact);
+  height: 22px;
   align-items: center;
   justify-content: center;
+  flex-shrink: 0;
   color: var(--fm-ribbon-icon-color);
   line-height: 1;
   transition:
@@ -299,11 +321,12 @@
   transform: translateY(-1px);
 }
 
+/* Left accent bar on icon — only visible when the action has a custom icon color */
 .fm-ribbon-action__icon::before {
   position: absolute;
-  top: 3px;
-  bottom: 3px;
-  left: -7px;
+  top: 2px;
+  bottom: 2px;
+  left: -5px;
   width: 2px;
   border-radius: var(--fm-radius-xs);
   background: color-mix(in srgb, var(--fm-ribbon-icon-color) 62%, transparent);
@@ -322,9 +345,12 @@
 
 .fm-ribbon-action__icon svg {
   width: var(--fm-ribbon-chevron-size);
-  height: var(--fm-control-height-compact);
+  height: 22px;
 }
 
+/* ── Action label ──
+   Compact two-line label beneath the icon. Uses -webkit-line-clamp for
+   cross-browser multi-line truncation. */
 .fm-ribbon-action__label {
   display: -webkit-box;
   width: 100%;
@@ -332,11 +358,12 @@
   overflow: hidden;
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 2;
+  line-clamp: 2;
   color: inherit;
-  font-size: var(--fm-font-size-2xs);
-  font-weight: 500;
+  font-size: 9px;
+  font-weight: 600;
   letter-spacing: 0;
-  line-height: 1.05;
+  line-height: 1.15;
   overflow-wrap: anywhere;
   text-align: center;
   text-overflow: ellipsis;
@@ -379,16 +406,18 @@
 /* ── Ribbon separator (thin vertical line between action subgroups) ── */
 .fm-ribbon-separator {
   width: 1px;
-  height: var(--fm-control-height-compact);
+  height: 22px;
   margin-inline: var(--fm-space-1);
   background: var(--fm-border-subtle);
   flex-shrink: 0;
   align-self: center;
 }
 
+/* ── Responsive: narrow viewport ──
+   Below 1400px: hide labels, shrink action buttons to icon-only mode. */
 @media (max-width: 1400px) {
   .fm-ribbon {
-    --fm-ribbon-action-width: var(--fm-control-height-regular);
+    --fm-ribbon-action-width: 36px;
   }
   .fm-ribbon-action-shell {
     width: var(--fm-ribbon-action-width);
@@ -403,7 +432,7 @@
     display: none;
   }
   .fm-ribbon-group__label {
-    font-size: var(--fm-font-size-2xs);
+    font-size: 8px;
   }
   .fm-ribbon-group__label small {
     display: none;

@@ -212,8 +212,7 @@ export function selectionRefFromNode(node: ExplorerNode): SelectionRef | null {
   // Keep the Explorer selection kind (`airbox.visualization`) so the common
   // visualization panel is used, while carrying the lane-specific ref.
   if (
-    (node.kind === "airbox.visualization" ||
-      node.kind === "airbox.visualization.debug") &&
+    node.kind === "airbox.visualization" &&
     node.visualizationTargetId === "fdm-universe-outside-support"
   ) {
     return {

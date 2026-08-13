@@ -4,9 +4,9 @@ use crate::artifacts::collect_artifacts;
 use crate::error::ApiError;
 use crate::quantities::{build_quantities, extract_fem_mesh_from_metadata};
 use crate::router_v2::handlers::data::field_resolution::{
-    field_value_count_matches_current_domain, field_values_hash, field_values_match_current_domain,
-    flatten_json_field_values, json_field_grid, json_field_payload_signature,
-    json_field_value_count, live_magnetization_values_ref,
+    field_values_hash, field_values_match_current_domain, flatten_json_field_values,
+    json_field_grid, json_field_matches_current_domain, json_field_payload_signature,
+    live_magnetization_values_ref,
 };
 use crate::types::*;
 use fullmag_runner::{LivePreviewField, RuntimeStatus};
@@ -536,11 +536,35 @@ fn field_payload_revision(value: &Value) -> Option<u64> {
         .or_else(|| value.get("revision").and_then(Value::as_u64))
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) struct FieldSourcePrecedence {
     pub(crate) source_step: u64,
     pub(crate) source_revision: u64,
+    pub(crate) source_time_seconds: Option<f64>,
     pub(crate) materialized_at_unix_ms: u64,
+}
+
+impl FieldSourcePrecedence {
+    fn scientific_cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.source_step
+            .cmp(&other.source_step)
+            .then_with(|| self.source_revision.cmp(&other.source_revision))
+            .then_with(
+                || match (self.source_time_seconds, other.source_time_seconds) {
+                    (Some(left), Some(right)) => left.total_cmp(&right),
+                    (Some(_), None) => std::cmp::Ordering::Greater,
+                    (None, Some(_)) => std::cmp::Ordering::Less,
+                    (None, None) => std::cmp::Ordering::Equal,
+                },
+            )
+    }
+
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.scientific_cmp(other).then_with(|| {
+            self.materialized_at_unix_ms
+                .cmp(&other.materialized_at_unix_ms)
+        })
+    }
 }
 
 pub(crate) fn latest_field_source_precedence(
@@ -557,6 +581,9 @@ pub(crate) fn latest_field_source_precedence(
             .and_then(Value::as_u64)
             .or_else(|| field_payload_revision(value))
             .unwrap_or(0),
+        source_time_seconds: valid_source_time(
+            value.get("source_time_seconds").and_then(Value::as_f64),
+        ),
         materialized_at_unix_ms: value
             .get("materialized_at_unix_ms")
             .and_then(Value::as_u64)
@@ -574,8 +601,13 @@ pub(crate) fn preview_field_source_precedence(field: &LivePreviewField) -> Field
     FieldSourcePrecedence {
         source_step: field.source_step,
         source_revision: field.source_revision,
+        source_time_seconds: valid_source_time(field.source_time_seconds),
         materialized_at_unix_ms: field.materialized_at_unix_ms,
     }
+}
+
+fn valid_source_time(source_time_seconds: Option<f64>) -> Option<f64> {
+    source_time_seconds.filter(|time| time.is_finite() && *time >= 0.0)
 }
 
 pub(crate) fn preview_cache_precedes_latest(
@@ -588,10 +620,17 @@ pub(crate) fn preview_cache_precedes_latest(
     let Some(latest) = snapshot.latest_fields.get(quantity) else {
         return true;
     };
-    // The preview cache is the explicit materialized-field channel. On equal
-    // provenance it is authoritative over the legacy latest_fields payload;
-    // genuinely newer latest_fields still wins by the ordered source tuple.
-    preview_field_source_precedence(preview) >= latest_field_source_precedence(snapshot, latest)
+    // The preview cache is the explicit materialized-field channel. A genuinely
+    // newer source generation wins first. Within one generation, complete
+    // scientific-time provenance precedes wall-clock materialization time.
+    // An exact tie keeps preview-cache authority.
+    match preview_field_source_precedence(preview)
+        .cmp(&latest_field_source_precedence(snapshot, latest))
+    {
+        std::cmp::Ordering::Greater => true,
+        std::cmp::Ordering::Less => false,
+        std::cmp::Ordering::Equal => true,
+    }
 }
 
 fn bump_field_sample_revision(
@@ -668,10 +707,10 @@ pub(crate) fn resolved_current_field_source<'a>(
     quantity: &str,
     n_comp: usize,
 ) -> Option<ResolvedCurrentFieldSource<'a>> {
-    let latest = snapshot.latest_fields.get(quantity).filter(|value| {
-        let value_count = json_field_value_count(value);
-        field_value_count_matches_current_domain(snapshot, quantity, n_comp, value_count)
-    });
+    let latest = snapshot
+        .latest_fields
+        .get(quantity)
+        .filter(|value| json_field_matches_current_domain(snapshot, quantity, n_comp, value));
     let preview = snapshot.preview_cache.get(quantity).filter(|field| {
         field_values_match_current_domain(snapshot, quantity, n_comp, &field.vector_field_values)
     });
@@ -1080,6 +1119,8 @@ pub(crate) fn default_current_live_state(req: &CurrentLiveSnapshotRequest) -> Se
         field_catalog_revision: 0,
         field_samples_revision: 0,
         field_quantity_revisions: BTreeMap::new(),
+        accepted_terminal_field_generation: None,
+        terminal_field_generations: BTreeMap::new(),
         stage_execution_revision: 0,
         simulation_preparation_revision,
         region_realization_revisions: fullmag_authoring::RegionRealizationRevisions::default(),
@@ -1571,15 +1612,83 @@ fn annotate_solver_profile_publisher_apply(
     }
 }
 
+enum TerminalFieldReplacementAdmission {
+    Apply,
+    Duplicate,
+}
+
+fn validate_terminal_field_replacement(
+    current: &SessionStateResponse,
+    replace_latest_fields: bool,
+    latest_fields: Option<&LatestFields>,
+    field_generation: Option<&CurrentLiveFieldGeneration>,
+    clear_preview_cache: bool,
+) -> Result<TerminalFieldReplacementAdmission, ApiError> {
+    if !replace_latest_fields {
+        return Ok(TerminalFieldReplacementAdmission::Apply);
+    }
+    if latest_fields.is_none() {
+        return Err(ApiError::bad_request(
+            "terminal_field_replace_requires_latest_fields",
+        ));
+    }
+    if !clear_preview_cache {
+        return Err(ApiError::bad_request(
+            "terminal_field_replace_requires_preview_cache_clear",
+        ));
+    }
+    let Some(incoming) = field_generation else {
+        return Err(ApiError::bad_request(
+            "terminal_field_replace_requires_generation",
+        ));
+    };
+    if let Some(accepted) = current.accepted_terminal_field_generation.as_ref() {
+        if accepted.run_id == incoming.run_id {
+            if incoming.sequence < accepted.sequence {
+                return Err(ApiError::conflict("stale_terminal_field_generation"));
+            }
+            if incoming.sequence == accepted.sequence {
+                return Ok(TerminalFieldReplacementAdmission::Duplicate);
+            }
+        } else if current
+            .terminal_field_generations
+            .contains_key(&incoming.run_id)
+        {
+            return Err(ApiError::conflict("stale_terminal_field_generation"));
+        }
+    }
+    Ok(TerminalFieldReplacementAdmission::Apply)
+}
+
 pub(crate) fn apply_current_live_snapshot(
     current: &mut SessionStateResponse,
     req: CurrentLiveSnapshotRequest,
 ) -> Result<(), ApiError> {
     let apply_start = std::time::Instant::now();
+    if matches!(
+        validate_terminal_field_replacement(
+            current,
+            req.replace_latest_fields,
+            req.latest_fields.as_ref(),
+            req.field_generation.as_ref(),
+            req.clear_preview_cache,
+        )?,
+        TerminalFieldReplacementAdmission::Duplicate
+    ) {
+        return Ok(());
+    }
     let mut affected_field_quantities = BTreeSet::new();
     if let Some(latest_fields) = req.latest_fields.as_ref() {
         affected_field_quantities.extend(
             latest_fields
+                .entries()
+                .map(|(quantity, _)| quantity.clone()),
+        );
+    }
+    if req.replace_latest_fields {
+        affected_field_quantities.extend(
+            current
+                .latest_fields
                 .entries()
                 .map(|(quantity, _)| quantity.clone()),
         );
@@ -1673,7 +1782,19 @@ pub(crate) fn apply_current_live_snapshot(
         }
     }
     if let Some(latest_fields) = req.latest_fields {
-        merge_latest_fields(&mut current.latest_fields, latest_fields);
+        if req.replace_latest_fields {
+            current.latest_fields = latest_fields;
+        } else {
+            merge_latest_fields(&mut current.latest_fields, latest_fields);
+        }
+    }
+    if req.replace_latest_fields {
+        if let Some(generation) = req.field_generation.as_ref() {
+            current
+                .terminal_field_generations
+                .insert(generation.run_id.clone(), generation.sequence);
+        }
+        current.accepted_terminal_field_generation = req.field_generation;
     }
     if req.clear_preview_cache {
         current.preview_cache = CachedPreviewFields::default();
@@ -1686,12 +1807,14 @@ pub(crate) fn apply_current_live_snapshot(
     // This runs after a cache clear but before the explicit preview-field
     // batch. The latter is the terminal/cache-authoritative channel and must
     // win an equal-generation conflict with a carried active field.
-    if let Some(preview_field) = current
-        .live_state
-        .as_ref()
-        .and_then(|ls| ls.latest_step.preview_field.clone())
-    {
-        merge_cached_preview_fields(&mut current.preview_cache, vec![preview_field]);
+    if !req.replace_latest_fields {
+        if let Some(preview_field) = current
+            .live_state
+            .as_ref()
+            .and_then(|ls| ls.latest_step.preview_field.clone())
+        {
+            merge_cached_preview_fields(&mut current.preview_cache, vec![preview_field]);
+        }
     }
     if let Some(preview_fields) = req.preview_fields {
         merge_authoritative_cached_preview_fields(&mut current.preview_cache, preview_fields);
@@ -1884,10 +2007,30 @@ pub(crate) fn apply_current_live_field_frame(
     current: &mut SessionStateResponse,
     frame: CurrentLiveFieldFrameRequest,
 ) -> Result<(), ApiError> {
+    if matches!(
+        validate_terminal_field_replacement(
+            current,
+            frame.replace_latest_fields,
+            frame.latest_fields.as_ref(),
+            frame.field_generation.as_ref(),
+            frame.clear_preview_cache,
+        )?,
+        TerminalFieldReplacementAdmission::Duplicate
+    ) {
+        return Ok(());
+    }
     let mut affected_field_quantities = BTreeSet::new();
     if let Some(latest_fields) = frame.latest_fields.as_ref() {
         affected_field_quantities.extend(
             latest_fields
+                .entries()
+                .map(|(quantity, _)| quantity.clone()),
+        );
+    }
+    if frame.replace_latest_fields {
+        affected_field_quantities.extend(
+            current
+                .latest_fields
                 .entries()
                 .map(|(quantity, _)| quantity.clone()),
         );
@@ -1908,7 +2051,19 @@ pub(crate) fn apply_current_live_field_frame(
     let has_latest_fields = frame.latest_fields.is_some();
     let has_preview_fields = frame.preview_fields.is_some();
     if let Some(latest_fields) = frame.latest_fields {
-        merge_latest_fields(&mut current.latest_fields, latest_fields);
+        if frame.replace_latest_fields {
+            current.latest_fields = latest_fields;
+        } else {
+            merge_latest_fields(&mut current.latest_fields, latest_fields);
+        }
+    }
+    if frame.replace_latest_fields {
+        if let Some(generation) = frame.field_generation.as_ref() {
+            current
+                .terminal_field_generations
+                .insert(generation.run_id.clone(), generation.sequence);
+        }
+        current.accepted_terminal_field_generation = frame.field_generation;
     }
     if frame.clear_preview_cache {
         current.preview_cache = CachedPreviewFields::default();
@@ -2012,15 +2167,16 @@ fn merge_cached_preview_fields_with_precedence(
     precedence: CachedPreviewMergePrecedence,
 ) {
     for field in incoming {
-        let source = (field.source_step, field.source_revision);
+        let incoming_precedence = preview_field_source_precedence(&field);
         let should_insert = current.get(&field.quantity).is_none_or(|cached| {
-            let cached_source = (cached.source_step, cached.source_revision);
-            source > cached_source
-                || (source == cached_source
-                    && matches!(
-                        precedence,
-                        CachedPreviewMergePrecedence::AuthoritativeEqualGeneration
-                    ))
+            match incoming_precedence.scientific_cmp(&preview_field_source_precedence(cached)) {
+                std::cmp::Ordering::Greater => true,
+                std::cmp::Ordering::Less => false,
+                std::cmp::Ordering::Equal => matches!(
+                    precedence,
+                    CachedPreviewMergePrecedence::AuthoritativeEqualGeneration
+                ),
+            }
         });
         if should_insert {
             current.insert(field);
@@ -2162,6 +2318,8 @@ mod tests {
             coupled_checkpoint: None,
             latest_scalar_row: None,
             latest_fields: None,
+            replace_latest_fields: false,
+            field_generation: None,
             preview_fields: None,
             clear_preview_cache: false,
             engine_log: None,
@@ -2344,6 +2502,8 @@ mod tests {
             live_state: None,
             latest_scalar_row: None,
             latest_fields: None,
+            replace_latest_fields: false,
+            field_generation: None,
             preview_fields: None,
             clear_preview_cache: false,
             engine_log: None,
@@ -2396,6 +2556,8 @@ mod tests {
             live_state: None,
             latest_scalar_row: None,
             latest_fields: None,
+            replace_latest_fields: false,
+            field_generation: None,
             preview_fields: None,
             clear_preview_cache: false,
             engine_log: None,
@@ -2629,6 +2791,8 @@ mod tests {
             live_state: None,
             latest_scalar_row: None,
             latest_fields: None,
+            replace_latest_fields: false,
+            field_generation: None,
             preview_fields: None,
             clear_preview_cache: false,
             engine_log: None,
@@ -2706,6 +2870,8 @@ mod tests {
                 )),
                 latest_scalar_row: None,
                 latest_fields: Some(stale_latest_fields),
+                replace_latest_fields: false,
+                field_generation: None,
                 preview_fields: None,
                 clear_preview_cache: false,
                 engine_log: None,
@@ -2739,6 +2905,8 @@ mod tests {
                 )),
                 latest_scalar_row: None,
                 latest_fields: None,
+                replace_latest_fields: false,
+                field_generation: None,
                 preview_fields: None,
                 clear_preview_cache: false,
                 engine_log: None,
@@ -2773,6 +2941,8 @@ mod tests {
             live_state: None,
             latest_scalar_row: None,
             latest_fields: None,
+            replace_latest_fields: false,
+            field_generation: None,
             preview_fields: None,
             clear_preview_cache: false,
             engine_log: None,
@@ -3221,6 +3391,8 @@ mod tests {
             live_state: None,
             latest_scalar_row: None,
             latest_fields: None,
+            replace_latest_fields: false,
+            field_generation: None,
             preview_fields: None,
             clear_preview_cache: false,
             engine_log: None,
@@ -3397,6 +3569,7 @@ mod tests {
             auto_downscaled: false,
             config_revision: 1,
             source_step: 0,
+            source_time_seconds: None,
             source_revision: 1,
             materialized_at_unix_ms: 0,
             materialization_wall_time_ns: 0,
@@ -3492,6 +3665,8 @@ mod tests {
             live_state: None,
             latest_scalar_row: None,
             latest_fields: None,
+            replace_latest_fields: false,
+            field_generation: None,
             preview_fields: None,
             clear_preview_cache: false,
             engine_log: None,
@@ -3713,6 +3888,8 @@ mod tests {
                 }),
                 latest_scalar_row: None,
                 latest_fields: None,
+                replace_latest_fields: false,
+                field_generation: None,
                 preview_fields: None,
                 clear_preview_cache: false,
                 engine_log: None,
@@ -3903,6 +4080,8 @@ mod tests {
             }),
             latest_scalar_row: None,
             latest_fields: None,
+            replace_latest_fields: false,
+            field_generation: None,
             preview_fields: None,
             clear_preview_cache: false,
             engine_log: None,
@@ -4032,6 +4211,8 @@ mod tests {
             coupled_checkpoint: None,
             latest_scalar_row: None,
             latest_fields: None,
+            replace_latest_fields: false,
+            field_generation: None,
             preview_fields: Some(vec![terminal.clone()]),
             clear_preview_cache: false,
             engine_log: None,
@@ -4075,6 +4256,8 @@ mod tests {
             CurrentLiveFieldFrameRequest {
                 session_id: "test-session".to_string(),
                 latest_fields: None,
+                replace_latest_fields: false,
+                field_generation: None,
                 preview_fields: Some(vec![terminal.clone()]),
                 clear_preview_cache: false,
             },
@@ -4097,6 +4280,8 @@ mod tests {
             CurrentLiveFieldFrameRequest {
                 session_id: "test-session".to_string(),
                 latest_fields: None,
+                replace_latest_fields: false,
+                field_generation: None,
                 preview_fields: Some(vec![older]),
                 clear_preview_cache: false,
             },
@@ -4141,6 +4326,8 @@ mod tests {
             CurrentLiveFieldFrameRequest {
                 session_id: "test-session".to_string(),
                 latest_fields: None,
+                replace_latest_fields: false,
+                field_generation: None,
                 preview_fields: Some(vec![terminal.clone()]),
                 clear_preview_cache: false,
             },
@@ -4160,6 +4347,8 @@ mod tests {
             CurrentLiveFieldFrameRequest {
                 session_id: "test-session".to_string(),
                 latest_fields: None,
+                replace_latest_fields: false,
+                field_generation: None,
                 preview_fields: Some(vec![terminal]),
                 clear_preview_cache: false,
             },
@@ -4185,6 +4374,8 @@ mod tests {
             CurrentLiveFieldFrameRequest {
                 session_id: "test-session".to_string(),
                 latest_fields: Some(genuinely_newer_latest),
+                replace_latest_fields: false,
+                field_generation: None,
                 preview_fields: None,
                 clear_preview_cache: false,
             },
@@ -4196,6 +4387,197 @@ mod tests {
             Some(EffectiveFieldSourceKind::Latest)
         );
         assert!(current.field_quantity_revisions["H_demag"] > terminal_revision);
+    }
+
+    #[test]
+    fn equal_generation_complete_latest_precedes_later_incomplete_preview() {
+        let mut current = test_current_snapshot();
+        current.latest_fields = serde_json::from_value(json!({
+            "H_demag": {
+                "values": [[4.0, 0.0, 0.0]],
+                "source_step": 4,
+                "source_revision": 4,
+                "materialized_at_unix_ms": 1_700_000_000_400_u64,
+                "source_time_seconds": 4.0e-13,
+                "layout": { "grid_cells": [1, 1, 1] }
+            }
+        }))
+        .expect("latest H_demag field");
+        let mut preview = preview_field("H_demag");
+        preview.source_step = 4;
+        preview.source_revision = 4;
+        preview.materialized_at_unix_ms = 1_700_000_000_500;
+        preview.source_time_seconds = None;
+        current.preview_cache.insert(preview);
+
+        assert!(
+            !preview_cache_precedes_latest(&current, "H_demag"),
+            "an equal-generation preview without source time must not hide a complete latest field"
+        );
+        assert!(matches!(
+            resolved_current_field_source(&current, "H_demag", 3),
+            Some(ResolvedCurrentFieldSource::Latest(value))
+                if value.get("source_time_seconds").and_then(Value::as_f64) == Some(4.0e-13)
+        ));
+    }
+
+    #[test]
+    fn equal_generation_complete_preview_precedes_later_incomplete_latest() {
+        let mut current = test_current_snapshot();
+        current.latest_fields = serde_json::from_value(json!({
+            "H_demag": {
+                "values": [[4.0, 0.0, 0.0]],
+                "source_step": 4,
+                "source_revision": 4,
+                "materialized_at_unix_ms": 1_700_000_000_500_u64,
+                "layout": { "grid_cells": [1, 1, 1] }
+            }
+        }))
+        .expect("latest H_demag field");
+        let mut preview = preview_field("H_demag");
+        preview.source_step = 4;
+        preview.source_revision = 4;
+        preview.materialized_at_unix_ms = 1_700_000_000_400;
+        preview.source_time_seconds = Some(4.0e-13);
+        current.preview_cache.insert(preview);
+
+        assert!(preview_cache_precedes_latest(&current, "H_demag"));
+        assert!(matches!(
+            resolved_current_field_source(&current, "H_demag", 3),
+            Some(ResolvedCurrentFieldSource::Preview(field))
+                if field.source_time_seconds == Some(4.0e-13)
+        ));
+    }
+
+    #[test]
+    fn equal_generation_with_equally_complete_provenance_keeps_preview_authority() {
+        let mut current = test_current_snapshot();
+        current.latest_fields = serde_json::from_value(json!({
+            "H_demag": {
+                "values": [[4.0, 0.0, 0.0]],
+                "source_step": 4,
+                "source_revision": 4,
+                "materialized_at_unix_ms": 1_700_000_000_400_u64,
+                "source_time_seconds": 4.0e-13,
+                "layout": { "grid_cells": [1, 1, 1] }
+            }
+        }))
+        .expect("latest H_demag field");
+        let mut preview = preview_field("H_demag");
+        preview.source_step = 4;
+        preview.source_revision = 4;
+        preview.materialized_at_unix_ms = 1_700_000_000_400;
+        preview.source_time_seconds = Some(4.0e-13);
+        current.preview_cache.insert(preview);
+
+        assert!(preview_cache_precedes_latest(&current, "H_demag"));
+        assert!(matches!(
+            resolved_current_field_source(&current, "H_demag", 3),
+            Some(ResolvedCurrentFieldSource::Preview(_))
+        ));
+    }
+
+    #[test]
+    fn equal_generation_later_scientific_time_precedes_wall_clock_in_both_directions() {
+        let mut current = test_current_snapshot();
+        current.latest_fields = serde_json::from_value(json!({
+            "H_demag": {
+                "values": [[4.0, 0.0, 0.0]],
+                "source_step": 4,
+                "source_revision": 4,
+                "source_time_seconds": 5.0e-13,
+                "materialized_at_unix_ms": 1_700_000_000_100_u64,
+                "layout": { "grid_cells": [1, 1, 1] }
+            }
+        }))
+        .expect("latest H_demag field");
+        let mut preview = preview_field("H_demag");
+        preview.source_step = 4;
+        preview.source_revision = 4;
+        preview.source_time_seconds = Some(4.0e-13);
+        preview.materialized_at_unix_ms = 1_700_000_000_900;
+        current.preview_cache.insert(preview);
+
+        assert!(
+            !preview_cache_precedes_latest(&current, "H_demag"),
+            "later latest scientific time must beat a later preview wall clock"
+        );
+
+        let mut latest = current
+            .latest_fields
+            .get("H_demag")
+            .cloned()
+            .expect("latest H_demag field");
+        latest["source_time_seconds"] = json!(4.0e-13);
+        latest["materialized_at_unix_ms"] = json!(1_700_000_000_900_u64);
+        current.latest_fields.insert("H_demag".to_string(), latest);
+        let mut preview = current
+            .preview_cache
+            .get("H_demag")
+            .cloned()
+            .expect("preview H_demag field");
+        preview.source_time_seconds = Some(5.0e-13);
+        preview.materialized_at_unix_ms = 1_700_000_000_100;
+        current.preview_cache.insert(preview);
+
+        assert!(
+            preview_cache_precedes_latest(&current, "H_demag"),
+            "later preview scientific time must beat a later latest wall clock"
+        );
+    }
+
+    #[test]
+    fn cached_preview_merge_uses_scientific_time_within_one_generation() {
+        let mut current = CachedPreviewFields::default();
+        let mut established = preview_field("H_demag");
+        established.source_step = 4;
+        established.source_revision = 4;
+        established.source_time_seconds = Some(5.0e-13);
+        established.materialized_at_unix_ms = 100;
+        established.vector_field_values = vec![5.0, 0.0, 0.0];
+        merge_cached_preview_fields(&mut current, vec![established.clone()]);
+
+        let mut older_time = established.clone();
+        older_time.source_time_seconds = Some(4.0e-13);
+        older_time.materialized_at_unix_ms = 900;
+        older_time.vector_field_values = vec![4.0, 0.0, 0.0];
+        merge_authoritative_cached_preview_fields(&mut current, vec![older_time]);
+        assert_eq!(current.get("H_demag"), Some(&established));
+
+        let mut newer_time = established.clone();
+        newer_time.source_time_seconds = Some(6.0e-13);
+        newer_time.materialized_at_unix_ms = 50;
+        newer_time.vector_field_values = vec![6.0, 0.0, 0.0];
+        merge_cached_preview_fields(&mut current, vec![newer_time.clone()]);
+        assert_eq!(current.get("H_demag"), Some(&newer_time));
+    }
+
+    #[test]
+    fn genuinely_newer_field_wins_before_source_time_completeness() {
+        let mut current = test_current_snapshot();
+        current.latest_fields = serde_json::from_value(json!({
+            "H_demag": {
+                "values": [[5.0, 0.0, 0.0]],
+                "source_step": 5,
+                "source_revision": 4,
+                "materialized_at_unix_ms": 1_700_000_000_400_u64,
+                "layout": { "grid_cells": [1, 1, 1] }
+            }
+        }))
+        .expect("newer latest H_demag field");
+        let mut preview = preview_field("H_demag");
+        preview.source_step = 4;
+        preview.source_revision = 4;
+        preview.materialized_at_unix_ms = 1_700_000_000_400;
+        preview.source_time_seconds = Some(4.0e-13);
+        current.preview_cache.insert(preview);
+
+        assert!(!preview_cache_precedes_latest(&current, "H_demag"));
+        assert!(matches!(
+            resolved_current_field_source(&current, "H_demag", 3),
+            Some(ResolvedCurrentFieldSource::Latest(value))
+                if value.get("source_step").and_then(Value::as_u64) == Some(5)
+        ));
     }
 
     #[test]
@@ -4220,6 +4602,8 @@ mod tests {
                 CurrentLiveFieldFrameRequest {
                     session_id: "test-session".to_string(),
                     latest_fields: Some(latest_fields),
+                    replace_latest_fields: false,
+                    field_generation: None,
                     preview_fields: None,
                     clear_preview_cache: false,
                 },
@@ -4246,6 +4630,213 @@ mod tests {
             current.field_quantity_revisions["H_demag"], changed_revision,
             "an exact duplicate payload and provenance must not create revision churn"
         );
+    }
+
+    #[test]
+    fn terminal_authoritative_field_frame_replaces_stale_fields_without_replay_churn() {
+        let mut current = test_current_snapshot();
+        current.latest_fields = serde_json::from_value(json!({
+            "H_dmi": {
+                "values": [[1.0, 0.0, 0.0]],
+                "source_step": 10,
+                "source_revision": 10,
+                "materialized_at_unix_ms": 100_u64,
+                "layout": { "grid_cells": [1, 1, 1] }
+            }
+        }))
+        .expect("previous-run H_dmi field");
+
+        let terminal_frame = || {
+            serde_json::from_value(json!({
+                "session_id": "test-session",
+                "replace_latest_fields": true,
+                "field_generation": { "run_id": "test-run", "sequence": 11 },
+                "clear_preview_cache": true,
+                "latest_fields": {
+                    "H_eff": {
+                        "values": [[0.0, 1.0, 0.0]],
+                        "source_step": 11,
+                        "source_revision": 11,
+                        "materialized_at_unix_ms": 110_u64,
+                        "layout": { "grid_cells": [1, 1, 1] }
+                    }
+                }
+            }))
+            .expect("terminal field frame")
+        };
+
+        apply_current_live_field_frame(&mut current, terminal_frame())
+            .expect("terminal field frame should apply");
+        assert!(
+            current.latest_fields.get("H_dmi").is_none(),
+            "a terminal authoritative frame must remove a quantity absent from the next run"
+        );
+        assert!(current.latest_fields.get("H_eff").is_some());
+        let catalog_revision = current.field_catalog_revision;
+        let sample_revision = current.field_samples_revision;
+        let h_dmi_revision = current.field_quantity_revisions["H_dmi"];
+        assert!(catalog_revision > 0);
+        assert!(sample_revision > 0);
+        assert!(h_dmi_revision > 0);
+
+        apply_current_live_field_frame(&mut current, terminal_frame())
+            .expect("identical terminal replay should apply");
+        assert_eq!(current.field_catalog_revision, catalog_revision);
+        assert_eq!(current.field_samples_revision, sample_revision);
+        assert_eq!(current.field_quantity_revisions["H_dmi"], h_dmi_revision);
+    }
+
+    #[test]
+    fn empty_authoritative_field_frame_clears_the_latest_set() {
+        let mut current = test_current_snapshot();
+        current.latest_fields = serde_json::from_value(json!({
+            "H_dmi": { "values": [[1.0, 0.0, 0.0]], "layout": { "grid_cells": [1, 1, 1] } }
+        }))
+        .expect("previous field");
+        let frame = serde_json::from_value(json!({
+            "session_id": "test-session",
+            "replace_latest_fields": true,
+            "field_generation": { "run_id": "test-run", "sequence": 11 },
+            "clear_preview_cache": true,
+            "latest_fields": {}
+        }))
+        .expect("empty terminal field frame");
+
+        apply_current_live_field_frame(&mut current, frame).expect("empty frame should apply");
+        assert_eq!(current.latest_fields.len(), 0);
+    }
+
+    #[test]
+    fn replacement_without_a_complete_field_snapshot_is_rejected() {
+        let mut current = test_current_snapshot();
+        let frame = CurrentLiveFieldFrameRequest {
+            session_id: "test-session".to_string(),
+            latest_fields: None,
+            replace_latest_fields: true,
+            field_generation: None,
+            preview_fields: None,
+            clear_preview_cache: false,
+        };
+
+        let error = apply_current_live_field_frame(&mut current, frame)
+            .expect_err("replace without fields and cache clear must be invalid");
+        assert_eq!(error.status, axum::http::StatusCode::BAD_REQUEST);
+    }
+
+    #[test]
+    fn replacement_requires_preview_cache_clear() {
+        let mut current = test_current_snapshot();
+        let frame = CurrentLiveFieldFrameRequest {
+            session_id: "test-session".to_string(),
+            latest_fields: Some(LatestFields::default()),
+            replace_latest_fields: true,
+            field_generation: None,
+            preview_fields: None,
+            clear_preview_cache: false,
+        };
+
+        let error = apply_current_live_field_frame(&mut current, frame)
+            .expect_err("replace without cache clear must be invalid");
+        assert_eq!(error.status, axum::http::StatusCode::BAD_REQUEST);
+    }
+
+    #[test]
+    fn stale_terminal_field_generation_is_rejected_without_revision_churn() {
+        let mut current = test_current_snapshot();
+        let terminal_frame = |sequence: u64, value: f64| {
+            serde_json::from_value(json!({
+                "session_id": "test-session",
+                "replace_latest_fields": true,
+                "clear_preview_cache": true,
+                "field_generation": { "run_id": "run-1", "sequence": sequence },
+                "latest_fields": {
+                    "H_eff": {
+                        "values": [[value, 0.0, 0.0]],
+                        "layout": { "grid_cells": [1, 1, 1] }
+                    }
+                }
+            }))
+            .expect("terminal field frame")
+        };
+
+        apply_current_live_field_frame(&mut current, terminal_frame(2, 2.0))
+            .expect("newer generation should apply");
+        let catalog_revision = current.field_catalog_revision;
+        let sample_revision = current.field_samples_revision;
+        let error = apply_current_live_field_frame(&mut current, terminal_frame(1, 1.0))
+            .expect_err("older generation must be rejected");
+
+        assert_eq!(error.status, axum::http::StatusCode::CONFLICT);
+        assert_eq!(current.field_catalog_revision, catalog_revision);
+        assert_eq!(current.field_samples_revision, sample_revision);
+        assert_eq!(
+            current.latest_fields.get("H_eff").expect("newer H_eff")["values"][0][0],
+            serde_json::json!(2.0)
+        );
+    }
+
+    #[test]
+    fn terminal_snapshot_exposes_completed_runtime_and_final_fields_together() {
+        let mut current = test_current_snapshot();
+        let mut completed = live_state_with_magnetization(9, vec![0.0, 0.0, 1.0]);
+        completed.status = "completed".to_string();
+        completed.latest_step.finished = true;
+        let request: CurrentLiveSnapshotRequest = serde_json::from_value(json!({
+            "session_id": "test-session",
+            "live_state": completed,
+            "replace_latest_fields": true,
+            "field_generation": { "run_id": "run-atomic", "sequence": 3 },
+            "clear_preview_cache": true,
+            "latest_fields": {
+                "m": {
+                    "values": [[0.0, 0.0, 1.0]],
+                    "layout": { "grid_cells": [1, 1, 1], "spatial_kind": "grid" }
+                },
+                "H_eff": {
+                    "values": [[0.0, 1.0, 0.0]],
+                    "layout": { "grid_cells": [1, 1, 1], "spatial_kind": "grid" }
+                }
+            }
+        }))
+        .expect("terminal snapshot");
+
+        apply_current_live_snapshot(&mut current, request)
+            .expect("terminal snapshot should apply atomically");
+
+        assert_eq!(
+            current
+                .live_state
+                .as_ref()
+                .map(|state| state.status.as_str()),
+            Some("completed")
+        );
+        assert!(current
+            .live_state
+            .as_ref()
+            .is_some_and(|state| state.latest_step.finished));
+        assert!(current.latest_fields.get("m").is_some());
+        assert!(current.latest_fields.get("H_eff").is_some());
+        assert_eq!(current.preview_cache.iter().count(), 0);
+    }
+
+    #[test]
+    fn ordinary_live_field_frame_keeps_incremental_merge_semantics() {
+        let mut current = test_current_snapshot();
+        let first = serde_json::from_value(json!({
+            "session_id": "test-session",
+            "latest_fields": { "H_dmi": { "values": [[1.0, 0.0, 0.0]], "layout": { "grid_cells": [1, 1, 1] } } }
+        }))
+        .expect("first incremental frame");
+        let second = serde_json::from_value(json!({
+            "session_id": "test-session",
+            "latest_fields": { "H_eff": { "values": [[0.0, 1.0, 0.0]], "layout": { "grid_cells": [1, 1, 1] } } }
+        }))
+        .expect("second incremental frame");
+
+        apply_current_live_field_frame(&mut current, first).expect("first frame should apply");
+        apply_current_live_field_frame(&mut current, second).expect("second frame should apply");
+        assert!(current.latest_fields.get("H_dmi").is_some());
+        assert!(current.latest_fields.get("H_eff").is_some());
     }
 
     #[test]
@@ -4303,6 +4894,8 @@ mod tests {
             live_state: None,
             latest_scalar_row: None,
             latest_fields: None,
+            replace_latest_fields: false,
+            field_generation: None,
             preview_fields: None,
             clear_preview_cache: true,
             engine_log: None,

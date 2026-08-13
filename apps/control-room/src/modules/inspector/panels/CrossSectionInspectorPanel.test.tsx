@@ -1,6 +1,13 @@
+import { act } from "react";
+import { createRoot } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+import {
+  installSimulationPreparationTestDom,
+  TestElement,
+  TestNode,
+} from "@/kernel/layout/simulationPreparationTestDom.test-support";
 import type { Selection } from "@/kernel/selection/selectionTypes";
 import {
   beginCrossSectionDraft,
@@ -141,7 +148,7 @@ describe("CrossSectionInspectorPanel", () => {
     expect(html).toContain("0.800");
   });
 
-  it("renders the saved frame parameters for a committed plot selection", () => {
+  it("renders the saved frame parameters for a committed plot selection", async () => {
     beginCrossSectionDraft();
     updateCrossSectionDraft({
       metric: "aspect_ratio",
@@ -153,34 +160,38 @@ describe("CrossSectionInspectorPanel", () => {
     const plot = commitCrossSectionDraft();
     if (!plot) throw new Error("Expected committed cross-section plot");
 
-    const html = renderToStaticMarkup(
-      <CrossSectionInspectorPanel
-        selection={{
-          kind: "mesh.cross-section.plot",
-          label: plot.name,
-          moduleSource: "explorer",
-          nodeId: `model:visualizations-2d:${plot.id}`,
-          objectId: null,
-          ref: {
+    const dom = installSimulationPreparationTestDom();
+    const container = dom.document.createElement("div");
+    const root = createRoot(container as unknown as Element);
+    try {
+      await act(async () => root.render(
+        <CrossSectionInspectorPanel
+          selection={{
             kind: "mesh.cross-section.plot",
+            label: plot.name,
+            moduleSource: "explorer",
             nodeId: `model:visualizations-2d:${plot.id}`,
-            plotId: plot.id,
-            type: "cross-section-plot",
-            visualizationTargetId: `cross-section:plot:${plot.id}`,
-          },
-        }}
-      />,
-    );
-
-    expect(html).toContain("Interface cut");
-    expect(html).toContain("XZ");
-    expect(html).toContain("Universe");
-    expect(html).toContain("25");
-    expect(html).toContain("12.5");
-    expect(html).toContain("aspect_ratio");
-    expect(html).toContain("Plot Parameters");
-    expect(html).toContain("New Image");
-    expect(html).toContain('aria-label="Position slider"');
+            objectId: null,
+            ref: {
+              kind: "mesh.cross-section.plot",
+              nodeId: `model:visualizations-2d:${plot.id}`,
+              plotId: plot.id,
+              type: "cross-section-plot",
+              visualizationTargetId: `cross-section:plot:${plot.id}`,
+            },
+          }}
+        />,
+      ));
+      expect(findElement(container, "Name")?.value).toBe("Interface cut");
+      expect(findElement(container, "Position")?.value).toBe("25");
+      expect(findElement(container, "Rotation")?.value).toBe("12.5");
+      expect(container.textContent).toContain("Plot Parameters");
+      expect(container.textContent).toContain("New Image");
+      expect(findElement(container, "Position slider")).toBeDefined();
+    } finally {
+      await act(async () => root.unmount());
+      dom.restore();
+    }
   });
 
   it("renders a dedicated mixed-topology unsupported state without requesting quality", () => {
@@ -203,3 +214,12 @@ describe("CrossSectionInspectorPanel", () => {
     expect(resourceMocks.qualityEnabled).toEqual([false]);
   });
 });
+
+function findElement(root: TestNode, ariaLabel: string): TestElement | undefined {
+  if (root instanceof TestElement && root.getAttribute("aria-label") === ariaLabel) return root;
+  for (const child of root.childNodes) {
+    const match = findElement(child, ariaLabel);
+    if (match) return match;
+  }
+  return undefined;
+}

@@ -9,6 +9,14 @@ import {
 } from "./VisualizationViewContext";
 
 export function VisualizationContextSwitch() {
+  return <VisualizationContextSwitchControl />;
+}
+
+export function VisualizationContextSwitchControl({
+  onPlanarActivate,
+}: {
+  onPlanarActivate?: () => void;
+} = {}) {
   const context = useVisualizationViewContext();
   const { setActiveViewportMainModule } = useLayoutActions();
 
@@ -22,11 +30,10 @@ export function VisualizationContextSwitch() {
         { label: "2D", value: "planar" },
       ]}
       value={context}
-      onValueChange={(next) =>
-        setActiveViewportMainModule(
-          next === "planar" ? "field-map" : "viewport-3d",
-        )
-      }
+      onValueChange={(next) => {
+        if (next === "planar") onPlanarActivate?.();
+        setActiveViewportMainModule(next === "planar" ? "field-map" : "viewport-3d");
+      }}
     />
   );
 }

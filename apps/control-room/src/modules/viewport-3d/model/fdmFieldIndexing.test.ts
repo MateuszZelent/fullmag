@@ -59,6 +59,30 @@ describe("buildFdmFieldIndexResolver", () => {
     });
   });
 
+  it("rejects an ambiguous scalar XY plane for a multi-layer FDM domain", () => {
+    const projectedScalar = {
+      ...fieldVector(4, "legacy_count_only"),
+      grid: [2, 2, 1] as [number, number, number],
+      nComp: 1,
+      valueCount: 4,
+      values: new Float64Array(4),
+    };
+    expect(
+      buildFdmFieldIndexResolver(projectedScalar, 8, [2, 2, 2]),
+    ).toMatchObject({ reason: "point-count-mismatch", status: "degraded" });
+  });
+
+  it("does not treat a vector XY plane as a projected scalar field", () => {
+    const projectedVector = {
+      ...fieldVector(4, "legacy_count_only"),
+      grid: [2, 2, 1] as [number, number, number],
+    };
+
+    expect(
+      buildFdmFieldIndexResolver(projectedVector, 8, [2, 2, 2]),
+    ).toMatchObject({ reason: "point-count-mismatch", status: "degraded" });
+  });
+
   it("maps explicit FDM cell indices instead of treating payload order as cell order", () => {
     const resolver = expectCompatible(
       buildFdmFieldIndexResolver(

@@ -1,355 +1,210 @@
-# Task 1 report: dimensionless chart scaling
+# Task 1 — bramka publikacji fizyki monitorów planarnych
 
-## Implementation
+## Status
 
-- Added `chartScalePolicy.ts`, the shared dimension-aware display boundary.
-  `resolveChartScalePolicy("1")` selects a dimensionless transform with factor
-  `1` and no display unit before any SI magnitude calculation. Physical units
-  retain their magnitude-derived SI display scale.
-- Routed renderer axes, ticks, ECharts tooltip values, rendered series names,
-  and exported PNG axis names through that transform. A normalized value of
-  `0.10317` remains `0.10317`; its axis is `magnetization`, not `m1`.
-- Retained CSV/TSV serialization unchanged: it uses raw point values and
-  canonical `xAxis.unit`/`series.unit` metadata.
-- Added descriptor coverage rejecting physical `M` (`A/m`) on a normalized
-  magnetization (`1`) axis.
+`DONE_WITH_CONCERNS`
 
-## Files
+Po review naprawiono cztery braki publikacyjne w osobnym fixupie: zapis
+MathJax tabeli symboli, dokładne target/carrier/extent capability, terminalny
+kontrakt empty-bin wraz z jawną rozbieżnością implementacji oraz kompletność
+source-map/public API. Między pierwotnym commitem Task 1 `c3ecccaa0` a fixupem
+pojawił się niezależny commit `e442b8971`; nie został zmieniony ani cofnięty.
+Fixup trzech ścieżek dokumentacji Task 1 ma hash
+`68780427fc4c867cf53d7431bca74bee2b1ced7a`.
 
-- `apps/control-room/src/shared/analysis-charts/chartScalePolicy.ts`
-- `apps/control-room/src/shared/analysis-charts/chartScalePolicy.test.ts`
-- `apps/control-room/src/shared/analysis-charts/chartRenderer.ts`
-- `apps/control-room/src/shared/analysis-charts/chartRenderer.test.ts`
-- `apps/control-room/src/shared/analysis-charts/scientificChartFormatting.ts`
-- `apps/control-room/src/shared/analysis-charts/scientificChartFormatting.test.ts`
-- `apps/control-room/src/shared/domain/analysis/chartUnits.test.ts`
-- `apps/control-room/src/shared/domain/analysis/chartContracts.test.ts`
+Drugi review wykazał trzy dalsze luki: wspólny post-target resolver wszystkich
+FDM dynamic extents, code spans w kolumnie SI tabeli parametrów oraz pominięte
+publiczne direct dataclass constructors. Poprawiono je w kolejnym osobnym
+fixupie bez zmiany runtime/API.
 
-`chartUnits.ts` itself did not need a behavior change: it already resolves
-`"1"` and `""` as canonical dimensionless units, which the new policy consumes.
+Trzeci review skorygował trzy precyzyjne błędy publikacyjne po commicie
+`4b7bedca4`: nieistniejący root export `fm.StudyMonitorRegistry`, typy
+deklarowane trzech pól `PlanarFrame` oraz zbyt słaby wiersz source index dla
+wspólnego resolvera extent. Użyto rzeczywistej publicznej ścieżki
+`fullmag.model.StudyMonitorRegistry.add_planar.*` z normalnym wywołaniem przez
+`study.monitors`, typów `Vector3` i statusu `PM-N12 + PM-N13 RED`.
 
-## RED
+Kontrakt naukowy, source-map i dokładny fragment macierzy możliwości zostały
+zaktualizowane. ADR 0020 pozostaje bez zmian: decyzja o jednym
+`PlanarMonitor`, jednym samplerze i oddzieleniu prezentacji nie zmieniła się;
+zmienił się wyłącznie udokumentowany stan implementacji i kwalifikacji.
 
-Command:
+## Zmienione pliki
 
-```sh
-env TMPDIR=/tmp corepack pnpm --dir apps/control-room exec vitest run src/shared/analysis-charts/chartScalePolicy.test.ts src/shared/analysis-charts/chartRenderer.test.ts src/shared/analysis-charts/scientificChartFormatting.test.ts src/shared/domain/analysis/chartUnits.test.ts src/shared/domain/analysis/chartContracts.test.ts
-```
+- `docs/physics/0970-planar-monitor-sampling-and-projection.md`
+- `docs/physics/0970-planar-monitor-sampling-and-projection.source-map.json`
+- `docs/specs/capability-matrix-v0.md`
+- `.superpowers/sdd/task-1-report.md`
 
-Output (exit 1):
+Nie zmodyfikowano `docs/adr/0020-planar-field-map-and-monitor.md`.
 
-```text
-RUN  v4.1.5 /home/kkingstoun/git/fullmag/fullmag/.worktrees/live-charts-analysis-separation/apps/control-room
+## Zakres kontraktu
 
-❯ src/shared/analysis-charts/chartScalePolicy.test.ts (0 test)
-❯ src/shared/analysis-charts/chartRenderer.test.ts (4 tests | 1 failed) 16ms
-     × keeps dimensionless axes unscaled, enables ECharts aria and removes the bottom slider 8ms
+- Dodano komplet wymaganych etykiet MyST terminalnej strony naukowej.
+- Formalnie rozdzielono support plane/slab/depth/surface, rekonstrukcję i
+  integrację oraz prezentację.
+- Zdefiniowano grubość pełnego slab, occupied measure, empty-bin policy,
+  składowe `u/v/normal`, kolejność redukcji wektora i jednostki SI.
+- Dodano kompletny przykład stage-first, mapowanie Python → `ProblemIR`,
+  walidację, round-trip, requested intent, resolved execution i błędy
+  unsupported combinations.
+- Dodano cztery osobne pasy źródłowe FDM CPU/GPU i FEM CPU/GPU, każdy z
+  legalnością, urządzeniem samplera i stanem kwalifikacji.
+- Skorygowano wcześniejsze nadmierne twierdzenia capability:
+  FDM surface jest unsupported, FEM surface obsługuje wyłącznie
+  `object_boundary`, FDM `mesh_part`/`airbox` są unsupported, a browser nie
+  jest zakwalifikowany.
+- Utrwalono granicę: GPU-source konsumowany przez sampler CPU nie jest GPU
+  samplingiem.
+- Tabela symboli i jednostek używa MyST inline MathJax `$...$`; nie używa
+  code spans do zapisu matematyki.
+- FDM `object` jest jawnie warunkowy: bieżąca maska wybiera wszystkie aktywne
+  komórki i jest błędna dla ogólnego multi-object grid.
+- FEM dopuszcza wyłącznie kompletny full-mesh Tet4/P1 nodal carrier; target i
+  runtime scope ograniczają elementy dopiero po załadowaniu całego pola.
+- Wszystkie dynamiczne FEM extent tags używają globalnego `fem.nodes`, więc
+  scoped extents są błędne i niezakwalifikowane; poprawnym obejściem jest
+  explicit extent.
+- Terminalny kontrakt wyklucza occupancy `empty` z extrema/range, lecz bieżące
+  `include_air_as_zero` zapisuje `0.0`, a `meta_resource` filtruje jedynie
+  wartości niefinitywne. Ten tor jest jawnie RED do czasu occupancy-aware gate.
+- Wszystkie FDM dynamic extent tags współdzielą bounds z post-target mask;
+  wypisano błędne kombinacje, dodano PM-N13 RED i wymóg explicit extent.
+- Wszystkie komórki SI obu tabel używają MathJax `$...$`.
+- Source-map i tabela obejmują 43/43 unikalne parametry: 26 parametrów
+  bezpośrednich konstruktorów eksportowanych klas oraz 17 factory/add params,
+  z dokładnymi defaultami i słabszą walidacją direct construction.
 
-FAIL  src/shared/analysis-charts/chartScalePolicy.test.ts
-Error: Cannot find module './chartScalePolicy' imported from /home/kkingstoun/git/fullmag/fullmag/.worktrees/live-charts-analysis-separation/apps/control-room/src/shared/analysis-charts/chartScalePolicy.test.ts
+## Zweryfikowane symbole źródłowe
 
-FAIL  src/shared/analysis-charts/chartRenderer.test.ts > chart renderer owner > keeps dimensionless axes unscaled, enables ECharts aria and removes the bottom slider
-AssertionError: expected axis name "magnetization"; received "magnetization [m1]"
+- Python:
+  - `packages/fullmag-py/src/fullmag/model/planar_monitor.py`:
+    `class PlanarMonitor` oraz publiczne target/frame/extent/operator registry;
+  - `packages/fullmag-py/src/fullmag/runtime/script_builder.py`:
+    `_render_planar_monitors`.
+- ProblemIR:
+  - `crates/fullmag-ir/src/planar_monitor.rs`:
+    `PlanarMonitorIR`, `MonitorTargetIR`, `PlanarFrameIR`,
+    `PlanarExtentIR` i `PlanarOperatorIR`;
+  - `crates/fullmag-ir/src/validation.rs`:
+    `validate_planar_monitors`.
+- Sampler:
+  - `crates/fullmag-api/src/planar_sampling/frame.rs`: `try_from_ir`;
+  - `contract.rs`: `sample_fdm`, `sample_fem` i `apply_component`;
+  - `fdm.rs`: `sample`;
+  - `fem.rs`: `sample`;
+  - `geometry.rs`: `integrate_clipped_tetra`;
+  - `reduction.rs`: `finish`;
+  - `surface.rs`: `sample_boundary`.
+- API:
+  - `crates/fullmag-api/src/router_v2/handlers/data/planar_fields.rs`:
+    `resolve_dynamic_extent`, `resolve_component` i `meta_resource`;
+  - schematy `PlanarMonitorSchema`, `PlanarFieldQuery` i
+    `PlanarFieldMetaResource`.
+- UI:
+  - `buildFieldMapDataPlan`;
+  - `usePlanarFieldMetaResource`;
+  - `PlanarSurface`.
 
-Test Files  2 failed | 3 passed (5)
-Tests  1 failed | 41 passed (42)
-Duration  493ms
-```
+Wszystkie symbole wpisane do source-map zostały ponownie rozpoznane przez
+validator path + stable symbol.
 
-This was expected: the required policy module had not been implemented, and
-the previous magnitude-only renderer applied the milli prefix to unit `1`.
+## Dowód Task 0
 
-## GREEN
+Zweryfikowano dokładne źródło
+`5138078f7fd7b65dfc231faa4aa11c02d8ebf52d`. Managed
+`just run-viewport-2d-planar-monitor-smoke fdm cpu` wygenerował science report
+z wszystkimi zapisanymi bramkami `true`. Ten sam przebieg zakończył się
+`exit 1` po 180000 ms oczekiwania na widoczny
+`.fm-field-map__canvas`. Stary `browser-report.json` z `pass: true` nie jest
+dowodem tego przebiegu.
 
-Command:
+Wniosek: akceptowany jest wąski managed FDM CPU science gate. Żaden pas nie ma
+bieżącej kwalifikacji browserowej, pełnej runtime ani produkcyjnej.
 
-```sh
-env TMPDIR=/tmp corepack pnpm --dir apps/control-room exec vitest run src/shared/analysis-charts/chartScalePolicy.test.ts src/shared/analysis-charts/chartRenderer.test.ts src/shared/analysis-charts/scientificChartFormatting.test.ts src/shared/domain/analysis/chartUnits.test.ts src/shared/domain/analysis/chartContracts.test.ts
-```
+## Walidacja
 
-Output (exit 0):
+- `python3 .agents/skills/scientific-documentation-contract/scripts/validate_scientific_docs.py docs/physics/0970-planar-monitor-sampling-and-projection.source-map.json --repo-root .`
+  — `exit 0`.
+- `python3 -m unittest discover -s .agents/skills/scientific-documentation-contract/scripts -p 'test_*.py'`
+  — 22 testy, `OK`.
+- `PYTHONPATH=packages/fullmag-py/src python3 -m unittest packages/fullmag-py/tests/test_planar_monitor.py packages/fullmag-py/tests/test_script_builder_roundtrip.py`
+  — 39 testów, `OK`.
+- `python3 scripts/check_public_doc_examples.py --root public_docs/site`
+  — public documentation Python examples passed.
+- `env TMPDIR=/tmp pnpm --dir apps/control-room exec vitest run src/kernel/resources/planarFieldResources.test.ts src/modules/field-map/model/fieldMapDataPlan.test.ts src/modules/field-map/model/fieldMapRenderModel.test.ts src/modules/field-map/renderer/PlanarSurface.test.tsx`
+  — 4 pliki, 20 testów, wszystkie przeszły.
+- `CARGO_TARGET_DIR=/tmp/fullmag-zfn2-build/cargo-targets/planar-doc-task1 CARGO_INCREMENTAL=0 cargo test -p fullmag-ir planar_monitor -- --nocapture`
+  — 5 testów planar monitor, wszystkie przeszły.
+- `CARGO_TARGET_DIR=/tmp/fullmag-zfn2-build/cargo-targets/planar-doc-task1 CARGO_INCREMENTAL=0 cargo test -p fullmag-api --bin fullmag-api planar_sampling -- --nocapture`
+  — 16 testów, wszystkie przeszły.
+- `CARGO_TARGET_DIR=/tmp/fullmag-zfn2-build/cargo-targets/planar-doc-task1 CARGO_INCREMENTAL=0 cargo test -p fullmag-api --bin fullmag-api planar_ -- --nocapture`
+  — 28 testów sampler/API/OpenAPI, wszystkie przeszły; istniejące ostrzeżenia
+  `unused_mut`/`dead_code` pozostają poza zakresem.
+- `python3 -m json.tool docs/physics/0970-planar-monitor-sampling-and-projection.source-map.json`
+  — `exit 0`.
+- `git diff --check` — `exit 0`.
 
-```text
-RUN  v4.1.5 /home/kkingstoun/git/fullmag/fullmag/.worktrees/live-charts-analysis-separation/apps/control-room
+Po review uruchomiono ponownie validator source-map, jego 22 testy,
+changed-page gate, kontrolę JSON, lokalne asercje kompletności MathJax,
+contract types i wszystkich 43 publicznych parametrów oraz `git diff --check`.
 
-Test Files  5 passed (5)
-Tests  49 passed (49)
-Start at  18:55:54
-Duration  591ms (transform 1.31s, setup 0ms, import 1.72s, tests 44ms, environment 1ms)
-```
+Po drugim review automatyczny signature-vs-manifest gate potwierdził 43/43
+parametry (w tym 26 direct-constructor), 41/41 symbol-unit oraz 43/43
+parameter-unit cells jako MathJax i 144 węzły matematyczne po parsowaniu MyST.
 
-The first green invocation completed all assertions but the sandbox wrapper
-then failed during mount cleanup. The exact same command was rerun outside that
-wrapper and exited 0 with the output above.
+Po trzecim review runtime-export gate potwierdził, że root `fullmag` nie
+eksportuje `StudyMonitorRegistry`, moduł `fullmag.model` go eksportuje, a
+`PlanarFrame` deklaruje `Vector3` dla `origin`, `normal` i `u_axis`. Dokładny
+export/signature-vs-manifest gate ponownie wymaga 43/43 parametrów.
 
-## Typecheck
+- `validate_changed_scientific_docs.py --base c3ecccaa0 --head HEAD --repo-root .`
+  — `exit 0` na fixupie `68780427f`.
+- `validate_changed_scientific_docs.py --base 5138078f7fd7b65dfc231faa4aa11c02d8ebf52d --head HEAD --repo-root .`
+  — `exit 0` dla całego zakresu Task 1, mimo niezależnego commitu
+  `e442b8971` pomiędzy commitami Task 1.
 
-Command:
+## Nieudane polecenia diagnostyczne
 
-```sh
-corepack pnpm --dir apps/control-room typecheck
-```
-
-Output (exit 0):
-
-```text
-> @fullmag/control-room@0.1.0 typecheck /home/kkingstoun/git/fullmag/fullmag/.worktrees/live-charts-analysis-separation/apps/control-room
-> node scripts/typecheck-control-room.mjs
-
-Generating route types...
-✓ Types generated successfully
-```
+- Pierwsze `cargo test -p fullmag-ir ...` użyło domyślnego `target/`, którego
+  właścicielem jest `nobody:nogroup`, i zakończyło się permission denied.
+  Poprawne powtórzenie użyło trwałego widoku
+  `/tmp/fullmag-zfn2-build/cargo-targets/planar-doc-task1`.
+- `cargo test -p fullmag-api planar_sampling --lib` zakończyło się
+  `no library targets found`. Poprawna bramka użyła
+  `--bin fullmag-api`.
 
 ## Self-review
 
-- Dimensionless policy is selected from the resolved unit dimension before
-  extrema are used, preventing all SI prefixes for unit `1`.
-- Physical `A/m` keeps SI magnitude scaling and a physical display unit.
-- Axis labels, tick formatters, tooltip values, series names, and PNG output
-  share the same axis transform.
-- CSV/TSV still serializes raw values and canonical units; no export change was
-  required.
-- `git diff --check` passed.
-
-## Concerns
-
-None. The only observed issue was the sandbox cleanup failure after the first
-otherwise-green test run; the rerun exited successfully.
-
-## Review-fix follow-up
-
-### Implementation
-
-- Preserved the unit carried by scalar values while still selecting SI prefixes
-  in canonical space. For example, raw `9.5` with source unit `GHz` now gets a
-  raw-space factor of `1` and display unit `GHz`, rather than being labelled as
-  `9.5 Hz`.
-- Added shared one-pass y-axis transforms and reused them in the renderer,
-  accessible points table, `AnalysisTableSurface` cursor and legend summaries,
-  and export provenance. Dimensionless values retain factor `1`, an empty
-  display unit, and unscaled canonical values.
-- Export provenance now supplies deterministic display units when no non-empty
-  caller override exists: `x` and one `y:<series-id>` entry per series. CSV and
-  TSV row values and canonical unit columns remain unchanged.
-- The plan-mandated `fixed` policy variant remains supported but intentionally
-  unselected by the current resolver. It is not removed merely to make the
-  union exhaustive; future explicit fixed-unit policy can select it.
-
-### Review-fix files
-
-- `apps/control-room/src/shared/analysis-charts/chartScalePolicy.ts`
-- `apps/control-room/src/shared/analysis-charts/chartRenderer.ts`
-- `apps/control-room/src/shared/analysis-charts/PointsTableDialog.tsx`
-- `apps/control-room/src/shared/analysis-charts/chartExport.ts`
-- `apps/control-room/src/modules/analysis-plots/components/AnalysisTableSurface.tsx`
-- `apps/control-room/src/shared/analysis-charts/frequencyRenderModels.test.ts`
-- `apps/control-room/src/shared/analysis-charts/PointsTableDialog.test.tsx`
-- `apps/control-room/src/shared/analysis-charts/chartExport.test.ts`
-- `apps/control-room/src/modules/analysis-plots/AnalysisPlotsModule.test.tsx`
-
-### Review-fix RED
-
-Command:
-
-```sh
-env TMPDIR=/tmp corepack pnpm --dir apps/control-room exec vitest run src/shared/analysis-charts/chartScalePolicy.test.ts src/shared/analysis-charts/chartRenderer.test.ts src/shared/analysis-charts/frequencyRenderModels.test.ts src/shared/analysis-charts/PointsTableDialog.test.tsx src/shared/analysis-charts/chartExport.test.ts src/modules/analysis-plots/AnalysisPlotsModule.test.tsx src/shared/analysis-charts/scientificChartFormatting.test.ts src/shared/domain/analysis/chartUnits.test.ts src/shared/domain/analysis/chartContracts.test.ts
-```
-
-Output (exit 1):
-
-```text
-RUN  v4.1.5 /home/kkingstoun/git/fullmag/fullmag/.worktrees/live-charts-analysis-separation/apps/control-room
-
-FAIL  src/modules/analysis-plots/AnalysisPlotsModule.test.tsx
-  keeps normalized legend readings dimensionless
-  Expected aria-label "mx, unit dimensionless, latest 4.447e-6"
-  Received aria-label "mx, unit 1, latest 4.447e-6"
-
-FAIL  src/shared/analysis-charts/PointsTableDialog.test.tsx
-  keeps dimensionless table values and headers free of SI prefixes
-  Expected "Normalized magnetization m"
-  Received "my [1]" and "4.447 µ"
-
-FAIL  src/shared/analysis-charts/chartExport.test.ts
-  records resolved display units while retaining canonical CSV values
-  Expected { x: "ns", "y:my": "" }
-  Received {}
-
-FAIL  src/shared/analysis-charts/frequencyRenderModels.test.ts
-  keeps supplied GHz values physically correct at the renderer boundary
-  Expected axis name "frequency [GHz]"
-  Received axis name "frequency [Hz]"
-
-Test Files  4 failed | 5 passed (9)
-Tests  4 failed | 121 passed (125)
-Start at  19:07:07
-Duration  1.59s
-```
-
-The failures are the requested reproductions: unit conversion was lost at the
-renderer boundary, and the three summary/export consumers had independent or
-absent display policy.
-
-### Review-fix GREEN
-
-Command:
-
-```sh
-env TMPDIR=/tmp corepack pnpm --dir apps/control-room exec vitest run src/shared/analysis-charts/chartScalePolicy.test.ts src/shared/analysis-charts/chartRenderer.test.ts src/shared/analysis-charts/frequencyRenderModels.test.ts src/shared/analysis-charts/PointsTableDialog.test.tsx src/shared/analysis-charts/chartExport.test.ts src/modules/analysis-plots/AnalysisPlotsModule.test.tsx src/shared/analysis-charts/scientificChartFormatting.test.ts src/shared/domain/analysis/chartUnits.test.ts src/shared/domain/analysis/chartContracts.test.ts
-```
-
-Output (exit 0):
-
-```text
-RUN  v4.1.5 /home/kkingstoun/git/fullmag/fullmag/.worktrees/live-charts-analysis-separation/apps/control-room
-
-Test Files  9 passed (9)
-Tests  125 passed (125)
-Start at  19:16:26
-Duration  1.69s (transform 2.23s, setup 0ms, import 3.11s, tests 309ms, environment 1ms)
-```
-
-### Review-fix typecheck
-
-Command:
-
-```sh
-corepack pnpm --dir apps/control-room typecheck
-```
-
-Output (exit 0):
-
-```text
-> @fullmag/control-room@0.1.0 typecheck /home/kkingstoun/git/fullmag/fullmag/.worktrees/live-charts-analysis-separation/apps/control-room
-> node scripts/typecheck-control-room.mjs
-
-Generating route types...
-✓ Types generated successfully
-```
-
-### Review-fix concern
-
-`npx -y react-doctor@latest . --verbose --diff` could not complete: the
-sandbox first returned npm DNS error `EAI_AGAIN`; the elevated retry downloaded
-the package but failed to load the optional native module
-`@oxc-parser/binding-linux-x64-gnu`. No project dependency files were changed.
-
-## Second re-review follow-up
-
-### Implementation
-
-- `m`, `mx`, `my`, and `mz` with unit `1` now use the exact y-axis label
-  `Normalized magnetization m` for both single- and multi-series charts.
-  Physical magnetization in `A/m` retains its physical quantity label.
-- The frequency and energy analysis surfaces now derive legend units and latest
-  readings from the shared chart display transforms. Frequency cursor and
-  workbench-range summaries use the same policy, including correct handling of
-  input data already expressed in a prefixed unit such as `GHz`.
-- Partial export display-unit overrides now merge over deterministic defaults,
-  retaining unspecified axis units in provenance.
-
-### Second re-review RED
-
-Command:
-
-```sh
-env TMPDIR=/tmp corepack pnpm --dir apps/control-room exec vitest run src/shared/analysis-charts/chartScalePolicy.test.ts src/shared/analysis-charts/chartRenderer.test.ts src/shared/analysis-charts/scientificChartFormatting.test.ts src/shared/domain/analysis/chartUnits.test.ts src/shared/domain/analysis/chartContracts.test.ts src/shared/analysis-charts/frequencyRenderModels.test.ts src/shared/analysis-charts/PointsTableDialog.test.tsx src/shared/analysis-charts/chartExport.test.ts src/modules/analysis-plots/AnalysisPlotsModule.test.tsx src/modules/analysis-plots/components/EChartsSurface.test.tsx src/modules/analysis-plots/components/AnalysisEnergySurface.test.tsx src/modules/analysis-plots/components/AnalysisFrequencySurface.test.tsx src/modules/analysis-plots/analysisWorkbenchModel.test.ts
-```
-
-Output (exit 1):
-
-```text
-Test Files  5 failed | 8 passed (13)
-Tests  5 failed | 135 passed (140)
-Start at  19:28:29
-Duration  1.74s
-```
-
-The failures captured the missing normalized-magnetization title, unscaled
-energy/frequency legends, raw `9500 GHz` frequency summaries instead of
-`9.5 THz`, and loss of default export units when a partial override was given.
-
-### Second re-review GREEN
-
-Command:
-
-```sh
-env TMPDIR=/tmp corepack pnpm --dir apps/control-room exec vitest run src/shared/analysis-charts/chartScalePolicy.test.ts src/shared/analysis-charts/chartRenderer.test.ts src/shared/analysis-charts/scientificChartFormatting.test.ts src/shared/domain/analysis/chartUnits.test.ts src/shared/domain/analysis/chartContracts.test.ts src/shared/analysis-charts/frequencyRenderModels.test.ts src/shared/analysis-charts/PointsTableDialog.test.tsx src/shared/analysis-charts/chartExport.test.ts src/modules/analysis-plots/AnalysisPlotsModule.test.tsx src/modules/analysis-plots/components/EChartsSurface.test.tsx src/modules/analysis-plots/components/AnalysisEnergySurface.test.tsx src/modules/analysis-plots/components/AnalysisFrequencySurface.test.tsx src/modules/analysis-plots/analysisWorkbenchModel.test.ts
-```
-
-Output (exit 0):
-
-```text
-RUN  v4.1.5 /home/kkingstoun/git/fullmag/fullmag/.worktrees/live-charts-analysis-separation/apps/control-room
-
-Test Files  13 passed (13)
-Tests  140 passed (140)
-Start at  19:30:53
-Duration  1.56s (transform 3.37s, setup 0ms, import 4.58s, tests 445ms, environment 2ms)
-```
-
-### Second re-review typecheck
-
-Command:
-
-```sh
-corepack pnpm --dir apps/control-room typecheck
-```
-
-Output (exit 0):
-
-```text
-> @fullmag/control-room@0.1.0 typecheck /home/kkingstoun/git/fullmag/fullmag/.worktrees/live-charts-analysis-separation/apps/control-room
-> node scripts/typecheck-control-room.mjs
-
-Generating route types...
-✓ Types generated successfully
-```
-
-### Second re-review concerns
-
-No new concerns. The prior React Doctor environment limitation remains recorded
-above and was not retried for this narrowly scoped follow-up.
-
-## Zero-inclusive frequency-range follow-up
-
-### RED
-
-Command:
-
-```sh
-env TMPDIR=/tmp corepack pnpm --dir apps/control-room exec vitest run src/modules/analysis-plots/analysisWorkbenchModel.test.ts
-```
-
-Output (exit 1):
-
-```text
-Test Files  1 failed (1)
-Tests  1 failed | 3 passed (4)
-Expected: "0 THz-9.5 THz"
-Received: "0 Hz-9.5000e+12 Hz"
-```
-
-The workbench range included zero in a hand-built minimum-magnitude extrema
-pair, which selected the `Hz` scale instead of the shared renderer scale.
-
-### GREEN
-
-`formatFrequencyDomainWorkbenchRange` now uses `chartValueExtrema([min, max])`.
-That policy ignores zero when finite nonzero frequency values are present, just
-as the renderer does.
-
-```text
-Test Files  1 passed (1)
-Tests  4 passed (4)
-Start at  19:39:33
-Duration  465ms
-```
-
-### Typecheck
-
-```sh
-corepack pnpm --dir apps/control-room typecheck
-```
-
-Output (exit 0): route types generated successfully.
+- Każda zmieniona linia poza raportem dotyczy kontraktu naukowego, jego mapy
+  źródeł albo dokładnego planar capability block.
+- Nie zmieniono Python, IR, API, samplera, UI, OpenAPI ani generated types.
+- Nie zmieniono ADR, ponieważ nie powstała nowa decyzja kontraktowa.
+- Nie naruszono niezależnych zmian w `progress.md`, CSS, Explorer,
+  FooterTelemetry, ribbon ani `external_solvers/3`.
+- Source-map obejmuje cztery pasy, wszystkie równania, symbole użyte przez
+  równania, publiczne parametry oraz stabilne path + symbol dla Python, IR,
+  FDM, FEM, API i UI.
+
+## Concerns i dalsze bramki
+
+- Kod klipowania używa absolutnych progów około `1e-13 m` i `1e-24 m²`.
+  Fixture nanometrowe przechodzą, ale niezależność od skali wymaga osobnego
+  sweepu i progów zależnych od skali.
+- `PlanarFieldMetaResource` nie publikuje source backend/device/precision,
+  dlatego sam planar response nie kwalifikuje GPU-source.
+- FDM object target w aktualnym membership sprawdza identity obiektu, ale
+  wybiera wszystkie aktywne komórki; generalny multi-object target jest błędny,
+  a nie tylko nieudowodniony. Rozdzielenie object IDs wymaga naprawy runtime i
+  osobnej bramki.
+- FDM `target_bounds`, `magnetic_domain` i `universe` nie mają niezależnych
+  resolverów: wszystkie dziedziczą target mask. Explicit extent jest wymagany
+  do czasu przejścia PM-N13.
+- FEM carrier jest wyłącznie full-mesh Tet4/P1 nodal; scoped/local carrier nie
+  jest wspierany. Dynamic FEM extents używają wszystkich węzłów niezależnie od
+  target/scope, więc wymagają naprawy przed kwalifikacją.
+- `include_air_as_zero` włącza puste zera do metadata min/max. Terminalny
+  kontrakt wymaga wykluczenia ich przez occupancy mask; ten gate jest RED.
+- Aktualny browser smoke pozostaje RED na visible canvas. Nie wolno promować
+  żadnej ścieżki do browser/runtime/production-qualified przed świeżym,
+  niezależnym dowodem każdego pasa.

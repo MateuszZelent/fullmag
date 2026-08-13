@@ -717,6 +717,49 @@ class ScriptBuilderRegionalDriveRoundTripTests(unittest.TestCase):
         self.assertNotIn('"quantity"', rendered)
         self.assertNotIn('"resolution"', rendered)
 
+    def test_ui_planar_monitor_create_and_patch_roundtrip_to_canonical_python(self) -> None:
+        script = """
+        import fullmag as fm
+
+        study = fm.study("ui-planar-roundtrip")
+        film = study.geometry(fm.Box(100e-9, 40e-9, 5e-9), name="film")
+        film.Ms = 800e3
+        film.Aex = 13e-12
+        film.alpha = 0.01
+        study.stages.add_run(stage_id="run", until=1e-12)
+        """
+        ui_fixture = json.loads(
+            (Path(__file__).parent / "fixtures" / "planar_monitor_ui_roundtrip.json").read_text()
+        )
+        ui_created = ui_fixture["create"]
+        ui_patched = ui_fixture["patch"]
+        with TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            loaded = _load_text(script, root, "source.py")
+            scene = build_scene_document_from_builder(export_builder_draft(loaded))
+            scene["monitors"]["planar"] = [ui_created]
+            created_source = rewrite_loaded_problem_script(
+                loaded,
+                overrides=build_builder_from_scene_document(scene),
+            )["rendered_source"]
+            created = _load_text(str(created_source), root, "created.py")
+
+            patched_scene = build_scene_document_from_builder(export_builder_draft(created))
+            patched_scene["monitors"]["planar"] = [ui_patched]
+            patched_source = rewrite_loaded_problem_script(
+                created,
+                overrides=build_builder_from_scene_document(patched_scene),
+            )["rendered_source"]
+            patched = _load_text(str(patched_source), root, "patched.py")
+
+        created_ir = created.stages[-1].problem.to_ir(include_geometry_assets=False)
+        patched_ir = patched.stages[-1].problem.to_ir(include_geometry_assets=False)
+        self.assertEqual(created_ir["planar_monitors"], [ui_created])
+        self.assertEqual(patched_ir["planar_monitors"], [ui_patched])
+        self.assertIn("study.monitors.add_planar(", created_source)
+        self.assertIn('monitor_id="plane-1"', patched_source)
+        self.assertIn("fm.PlaneSample()", patched_source)
+
     def test_add_field_drive_roundtrip_preserves_pipeline_order_without_global_leakage(self) -> None:
         script = """
         import fullmag as fm

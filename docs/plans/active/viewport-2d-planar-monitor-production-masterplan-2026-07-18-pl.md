@@ -76,6 +76,25 @@ Nie usuwa wartości istniejących formatów i zasobów:
 - `analysis-plots` nadal obsługuje historie czasowe, widma i wykresy analityczne;
 - `viewport-3d` nadal obsługuje jedyną interaktywną scenę WebGL.
 
+### 1.3.1 Baseline przeglądarkowy po audycie (2026-08-12)
+
+Historyczne raporty i screenshoty z lipca pod
+`.fullmag/reports/viewport-2d-planar-monitor-smoke/` nie są dowodem aktualnego
+`HEAD`. Od Task 0 browser smoke zapisuje wynik `pass: true` tylko wtedy, gdy
+każdy uchwycony raster ma stan `ready` i jego telemetryka jest zgodna z
+odpowiedzią `meta` zużytą przez przeglądarkę: monitor ID, operator kind,
+quantity/component, `meta.etag` jako tymczasowa sample identity, field revision,
+checksum/range rastra oraz liczby glyph/contour/mesh. Niepusty canvas z
+poprzedniego żądania nie jest dowodem nowego żądania. Canonical sample token
+pozostaje pracą Task 4; do tego czasu `meta.etag` jest wyłącznie jawnie oznaczoną
+tożsamością tymczasową.
+
+Nowe fixture baseline'u to
+`examples/viewport_2d_planar_monitor_fem_compact_smoke.py` i
+`examples/viewport_2d_planar_monitor_fdm_multi_object_smoke.py`. Ich obecność
+nie oznacza wykonanej kwalifikacji managed runtime; receptura `just` musi zostać
+osobno uruchomiona i zachować świeże artefakty.
+
 ### 1.4 Zakres produkcyjnego wydania
 
 W zakresie są:

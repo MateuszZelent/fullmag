@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 
+import type { FieldCatalogResource } from "@/kernel/api/apiTypes";
 import {
   DEFAULT_FDM_UNIVERSE_OUTSIDE_SUPPORT_VISUALIZATION,
   DEFAULT_OBJECT_VISUALIZATION,
@@ -163,6 +164,34 @@ describe("viewport3DFieldDataPlan", () => {
       },
       quantityId: "eden_total",
     });
+  });
+
+  it("keeps vector components and scalar colormaps on distinct viewport requests", () => {
+    const vectorRequests = planViewport3DFieldResourceRequests(
+      buildViewport3DPassDemands(
+        objectPlan("object:demag", {
+          activeQuantityId: "H_demag",
+          surfaceColorSource: "component_x",
+          vectorsVisible: false,
+        }),
+      ),
+    );
+    const scalarRequests = planViewport3DFieldResourceRequests(
+      buildViewport3DPassDemands(
+        objectPlan("object:energy", {
+          activeQuantityId: "eden_demag",
+          surfaceColorSource: "colormap",
+          vectorsVisible: false,
+        }),
+      ),
+    );
+
+    expect(vectorRequests).toMatchObject([
+      { quantityId: "H_demag", query: { component: "x" } },
+    ]);
+    expect(scalarRequests).toMatchObject([
+      { quantityId: "eden_demag", query: { component: "full" } },
+    ]);
   });
 
   it("upgrades component surfaces with vectors to one complete full-vector request", () => {
@@ -800,6 +829,117 @@ describe("viewport3DFieldDataPlan", () => {
     expect(plan.requests).toEqual(new Map());
   });
 
+  it("requests only catalog-available full-domain quantities for FDM Airbox vectors", () => {
+    const catalogAvailableQuantityIds = new Set([
+      "m",
+      "H_ex",
+      "H_demag",
+      "H_ext",
+      "H_eff",
+      "H_ant",
+      "H_oe",
+      "eden_demag",
+    ]);
+    const fieldCatalog = {
+      domain_generation_id: "fdm-generation-1",
+      quantities: Array.from(catalogAvailableQuantityIds, (quantity_id) => ({
+        available: true,
+        domain: ["H_demag", "H_ext", "H_eff", "H_ant", "H_oe"].includes(
+          quantity_id,
+        )
+          ? "full_domain"
+          : "magnetic_only",
+        quantity_id,
+      })),
+      revision: 3,
+    } as FieldCatalogResource;
+
+    for (const quantityId of ["H_demag", "H_ext", "H_eff", "H_ant", "H_oe"]) {
+      const plan = resolveViewport3DAirboxFieldVectorDemandPlan({
+        airboxParts: [{ id: "part:__air__" }],
+        availableQuantityIds: catalogAvailableQuantityIds,
+        fieldCatalog,
+        quantityId,
+        vectorBudget: 64,
+        vectorsVisible: true,
+      });
+
+      expect(plan.requests.get("part:__air__")).toMatchObject({
+        quantityId,
+        query: {
+          component: "full",
+          max_samples: 64,
+          scope_id: "part:__air__",
+          scope_kind: "airbox",
+        },
+      });
+    }
+
+    for (const magneticOnlyQuantityId of ["m", "H_ex", "eden_demag"]) {
+      const plan = resolveViewport3DAirboxFieldVectorDemandPlan({
+        airboxParts: [{ id: "part:__air__" }],
+        availableQuantityIds: catalogAvailableQuantityIds,
+        fieldCatalog,
+        quantityId: magneticOnlyQuantityId,
+        vectorBudget: 64,
+        vectorsVisible: true,
+      });
+
+      expect(plan.demands).toEqual([]);
+      expect(plan.requests).toEqual(new Map());
+    }
+  });
+
+  it("keeps an advertised FDM Airbox H_eff request scoped when H_eff is also primary", () => {
+    const fieldCatalog = {
+      domain_generation_id: "fdm-terminal-generation",
+      quantities: [
+        {
+          available: true,
+          domain: "full_domain",
+          quantity_id: "H_eff",
+        },
+      ],
+      revision: 7,
+    } as FieldCatalogResource;
+    const plan = resolveViewport3DTargetQuantityFieldDemandPlan({
+      availableQuantityIds: new Set(["H_eff"]),
+      fieldCatalog,
+      fdmAirboxSettings: {
+        ...DEFAULT_FDM_UNIVERSE_OUTSIDE_SUPPORT_VISUALIZATION,
+        activeQuantityId: "H_eff",
+        vectorBudget: 64,
+        vectorsVisible: true,
+        visible: true,
+      },
+      fdmSettings: null,
+      getPartSettings: () => DEFAULT_OBJECT_VISUALIZATION,
+      magneticPartScopedFieldIds: new Set(),
+      magneticParts: [],
+      maxVectorGlyphs: 256,
+      primaryFieldQuantityId: "H_eff",
+    });
+
+    expect(plan.demands).toEqual([
+      expect.objectContaining({
+        passId: "fdm-universe-outside-support:vector-glyph",
+        quantityId: "H_eff",
+        scopeKind: "airbox",
+        targetId: "fdm-universe-outside-support",
+      }),
+    ]);
+    expect([...plan.requests.values()]).toEqual([
+      expect.objectContaining({
+        quantityId: "H_eff",
+        query: expect.objectContaining({
+          component: "full",
+          max_samples: 64,
+          scope_kind: "airbox",
+        }),
+      }),
+    ]);
+  });
+
   it("does not request unavailable quantities for FDM target views", () => {
     const plan = resolveViewport3DTargetQuantityFieldDemandPlan({
       availableQuantityIds: new Set(["m"]),
@@ -832,6 +972,34 @@ describe("viewport3DFieldDataPlan", () => {
       magneticParts: [],
       maxVectorGlyphs: 1200,
       primaryFieldQuantityId: "m",
+    });
+
+    expect(plan.demands).toEqual([]);
+    expect(plan.requests).toEqual(new Map());
+  });
+
+  it("does not request a magnetic-only catalog quantity for FDM Airbox settings", () => {
+    const plan = resolveViewport3DTargetQuantityFieldDemandPlan({
+      availableQuantityIds: new Set(["m"]),
+      fieldCatalog: {
+        domain_generation_id: "fdm-generation-1",
+        quantities: [
+          { available: true, domain: "magnetic_only", quantity_id: "m" },
+        ],
+        revision: 3,
+      } as FieldCatalogResource,
+      fdmAirboxSettings: {
+        ...DEFAULT_FDM_UNIVERSE_OUTSIDE_SUPPORT_VISUALIZATION,
+        activeQuantityId: "m",
+        vectorsVisible: true,
+        visible: true,
+      },
+      fdmSettings: null,
+      getPartSettings: () => DEFAULT_OBJECT_VISUALIZATION,
+      magneticPartScopedFieldIds: new Set(),
+      magneticParts: [],
+      maxVectorGlyphs: 1200,
+      primaryFieldQuantityId: "H_demag",
     });
 
     expect(plan.demands).toEqual([]);

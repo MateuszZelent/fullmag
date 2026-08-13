@@ -34,17 +34,47 @@
   ],
   "equations": [
     {
+      "id": "fdm-active-effective-field",
+      "symbols": ["Heffm", "A_m_LLG", "A_m_E", "A_m_obs", "Hdemag", "Hext", "Hoe", "Hant", "Omega_m"],
+      "sources": ["state_observables", "fdm_fields"],
+      "publication_anchor": "Active-support effective-field sum for the FDM state"
+    },
+    {
       "id": "fdm-airbox-effective-field",
-      "symbols": ["Hvisual", "Hdemag", "Hext", "Hoe", "Hant"],
-      "sources": ["airbox_reconstruction", "fdm_fields"],
-      "publication_anchor": "Full-domain visualization field reconstruction outside magnetic support"
+      "symbols": ["Heffair", "Hdemag", "Hext", "Hoe", "Hant", "Omega_air"],
+      "sources": ["state_observables", "airbox_reconstruction", "field_materialization"],
+      "publication_anchor": "Airbox observable built only from same-state materialized source fields"
     }
   ],
   "symbols": [
     {
-      "id": "Hvisual",
-      "latex": "\\mathbf{H}^{\\mathrm{visual}}_{\\mathrm{eff}}",
-      "meaning": "full-domain visualization effective field",
+      "id": "Heffm",
+      "latex": "\\mathbf{H}_{\\mathrm{eff},m}^{\\mathrm{LLG}}",
+      "meaning": "complete effective field used by the accepted active-support LLG evaluation",
+      "si_unit": "A/m"
+    },
+    {
+      "id": "A_m_LLG",
+      "latex": "\\mathcal{A}_{m,\\mathrm{LLG}}",
+      "meaning": "resolved contributions used by the accepted active-support LLG evaluation",
+      "si_unit": "1"
+    },
+    {
+      "id": "A_m_E",
+      "latex": "\\mathcal{A}_{m,E}",
+      "meaning": "energy-derived subset of active LLG contributions",
+      "si_unit": "1"
+    },
+    {
+      "id": "A_m_obs",
+      "latex": "\\mathcal{A}_{m,\\mathrm{obs}}",
+      "meaning": "contributions available in one same-state terminal observation",
+      "si_unit": "1"
+    },
+    {
+      "id": "Heffair",
+      "latex": "\\mathbf{H}_{\\mathrm{eff},\\mathrm{air}}",
+      "meaning": "observable effective field in the FDM airbox",
       "si_unit": "A/m"
     },
     {
@@ -70,6 +100,18 @@
       "latex": "\\mathbf{H}_{\\mathrm{ant}}",
       "meaning": "antenna field contribution",
       "si_unit": "A/m"
+    },
+    {
+      "id": "Omega_m",
+      "latex": "\\Omega_m",
+      "meaning": "active magnetic support",
+      "si_unit": "m^3"
+    },
+    {
+      "id": "Omega_air",
+      "latex": "\\Omega_{\\mathrm{air}}",
+      "meaning": "inactive FDM cells in the same structured grid",
+      "si_unit": "m^3"
     }
   ],
   "sources": [
@@ -98,10 +140,52 @@
       "responsibility": "CPU FDM effective-field assembly"
     },
     {
+      "id": "state_observables",
+      "path": "crates/fullmag-runner/src/fdm/cpu/reference.rs",
+      "symbol": "observe_state_with_antenna_field",
+      "responsibility": "runner-level same-state observable assembly, including direct fields and active/airbox effective-field reconstruction"
+    },
+    {
       "id": "airbox_reconstruction",
       "path": "crates/fullmag-runner/src/fdm/cpu/reference.rs",
       "symbol": "reconstruct_inactive_fdm_visual_effective_field",
       "responsibility": "full-domain visualization field outside magnetic support"
+    },
+    {
+      "id": "field_materialization",
+      "path": "crates/fullmag-runner/src/interactive_runtime.rs",
+      "symbol": "build_full_grid_materialized_fields",
+      "responsibility": "selectively constructs full-grid live materializations from one observable state; not proof of an atomic terminal generation/batch"
+    },
+    {
+      "id": "terminal_outcome",
+      "path": "crates/fullmag-runner/src/fdm/cpu/reference.rs",
+      "symbol": "execute_reference_fdm",
+      "responsibility": "CPU reference execution returns the terminal run result and scheduled outputs; not proof of an atomic terminal generation/batch"
+    },
+    {
+      "id": "preview_flag",
+      "path": "crates/fullmag-cli/src/live_workspace.rs",
+      "symbol": "feature_flags",
+      "responsibility": "declares benchmark preview-disable switches separately from solver output semantics"
+    },
+    {
+      "id": "live_field_promotion",
+      "path": "crates/fullmag-cli/src/live_workspace.rs",
+      "symbol": "ingest_preview_fields_from_update",
+      "responsibility": "copies finite StepStats.time into incoming live fields and promotes them into session state; not proof of an atomic terminal generation/batch"
+    },
+    {
+      "id": "field_source_time",
+      "path": "crates/fullmag-runner/src/types.rs",
+      "symbol": "LivePreviewField",
+      "responsibility": "optional solver-time provenance carried by live and terminal field frames"
+    },
+    {
+      "id": "field_metadata_resource",
+      "path": "crates/fullmag-api/src/schemas/fields.rs",
+      "symbol": "FieldMeta",
+      "responsibility": "resource metadata transport for optional source_time_seconds in SI seconds"
     }
   ],
   "public_api": {

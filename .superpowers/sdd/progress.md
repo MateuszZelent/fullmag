@@ -181,3 +181,37 @@ listenerów, observerów, workerów, URL-i i aktywnych RAF. Pozostaje otwarta
 bramka Quick Chart + 3D: `/v2/sessions/current/data/fields` jest odpytywane co
 około 110 ms, dlatego session requests nie osiągają idle. Progu ani liczby
 cykli nie obniżono.
+
+## Plan: refaktoryzacja widoku 2D i monitorów planarnych (2026-08-12)
+
+- Branch/worktree: `/home/kkingstoun/git/fullmag/fullmag`, `master` (jawnie wskazane przez użytkownika)
+- Base: `ac56e75f410354285fc49dc0459b6c116d187719`
+- Plan: `docs/plans/active/viewport-2d-refactor-2026-08-12/viewport-2d-refactor-audit-and-implementation-plan.md`
+- Niezależne zmiany użytkownika do zachowania: `ribbon.css`, `FooterTelemetry.tsx`, `ribbonCommon.tsx`, `external_solvers/3`.
+
+| Task | Status | Commit(s) | Review |
+|---:|---|---|---|
+| 0 | complete | `42eede461`, `5138078f7` | spec compliant; quality approved; managed science pass + browser RED baseline (`canvas` timeout) |
+| 1 | complete | `c3ecccaa0`, `68780427f`, `4b7bedca4`, `c4a57f1b3` | spec compliant; quality approved; docs/source-map/capability gates pass; browser RED remains unqualified |
+| 2 | complete | `9ce555065`, `66e7579a4` | spec compliant; quality approved; carrier identity/provenance and public field resources verified |
+| 3 | complete | `935d8e681`, `216f603fa`, `d19cfc96b` | spec compliant; quality approved; exact targets, sampling and cache identity verified |
+| 4 | complete | `5bf32e3aa`, `ab973377a`, `ca3107991`, `1b5a2e090`, `618d9b997`, `eec5544d6`, `e48fbe821` | spec compliant; quality approved; public sample identity and exact revision contract verified |
+| 2 | pending | pending | pending |
+| 3 | pending | pending | pending |
+| 4 | pending | pending | pending |
+| 5 | pending | pending | pending |
+| 6 | pending | pending | pending |
+| 7 | pending | pending | pending |
+| 8 | pending | pending | pending |
+| 9 | pending | pending | pending |
+| 10 | pending | pending | pending |
+| 11 | pending | pending | pending |
+
+FDM multilayer directed/symmetrized pair-energy: complete (commits
+`5feda8498..fd2c8bac1`, task and final reviews clean; CPU FP64 only, no API v2/CUDA
+capability promotion). Pair ledger, atomic snapshot publication, independent
+runtime/source fingerprints, durable validated artifact, FFT/memory telemetry,
+canonical directed wire order, Scene/Python identity evidence, equal/unequal
+push-pull reciprocity, finite-difference and documentation gates passed in the
+task scope. Full runner integration still has separately proven baseline
+source-layout and FEM physics-validation failures.

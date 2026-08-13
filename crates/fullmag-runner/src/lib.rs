@@ -2971,10 +2971,17 @@ pub fn run_planned_problem_with_live_preview_interruptible_with_initial_snapshot
 
     let cpu_threads = configured_cpu_threads(problem);
     let live_display_selection = (field_every_n != u64::MAX).then_some(display_selection);
+    let mut terminal_fdm_fields = None;
     let executed_result = with_cpu_parallelism(cpu_threads, || match &plan.backend_plan {
         BackendPlanIR::Fdm(fdm) => {
             let grid = fdm.grid.cells;
             let resolution = dispatch::resolve_fdm_engine_for_plan_with_trail(problem, fdm)?;
+            let mut capture_terminal_fields = |update: StepUpdate| {
+                if let Some(fields) = update.cached_preview_fields.as_ref() {
+                    terminal_fdm_fields = Some(fields.clone());
+                }
+                on_step(update)
+            };
             let mut executed = dispatch::execute_fdm(
                 resolution.engine,
                 fdm,
@@ -2986,7 +2993,7 @@ pub fn run_planned_problem_with_live_preview_interruptible_with_initial_snapshot
                     initial_snapshot,
                     display_selection: live_display_selection,
                     interrupt_requested,
-                    on_step: &mut on_step,
+                    on_step: &mut capture_terminal_fields,
                 }),
                 artifact_writer.clone(),
             )?;
@@ -3165,6 +3172,25 @@ pub fn run_planned_problem_with_live_preview_interruptible_with_initial_snapshot
         | BackendPlanIR::FemEigen(_)
         | BackendPlanIR::FemFrequencyResponse(_) => None,
     };
+    let cached_preview_fields = if matches!(plan.backend_plan, BackendPlanIR::Fdm(_))
+        && interactive_runtime::should_materialize_terminal_fdm_fields(executed.result.status)
+    {
+        let materialized_at_unix_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as u64;
+        terminal_fdm_fields.map(|mut fields| {
+            for field in &mut fields {
+                field.source_step = final_stats.step;
+                field.source_time_seconds = Some(final_stats.time);
+                field.source_revision = final_stats.step;
+                field.materialized_at_unix_ms = materialized_at_unix_ms;
+            }
+            fields
+        })
+    } else {
+        None
+    };
     on_step(StepUpdate {
         coupled_checkpoint: None,
         stats: final_stats,
@@ -3174,7 +3200,7 @@ pub fn run_planned_problem_with_live_preview_interruptible_with_initial_snapshot
             .and_then(|context| context.generation_id()),
         magnetization: final_m,
         preview_field: None,
-        cached_preview_fields: None,
+        cached_preview_fields,
         hysteresis_field_m_t: None,
         hysteresis_point_index: None,
         hysteresis_settle_step_index: None,
@@ -3384,43 +3410,13 @@ pub fn run_problem_with_interactive_fdm_runtime_live_preview_interruptible(
         });
     }
 
-    let final_stats = executed.result.steps.last().cloned().unwrap_or(StepStats {
-        step: 0,
-        time: 0.0,
-        dt: 0.0,
-        e_ex: 0.0,
-        e_demag: 0.0,
-        e_ext: 0.0,
-        e_ani: 0.0,
-        e_total: 0.0,
-        max_dm_dt: 0.0,
-        max_h_eff: 0.0,
-        max_h_demag: 0.0,
-        wall_time_ns: 0,
-        ..StepStats::default()
-    });
-    let final_m: Vec<f64> = executed
-        .result
-        .final_magnetization
-        .iter()
-        .flat_map(|vector| vector.iter().copied())
-        .collect();
-    on_step(StepUpdate {
-        coupled_checkpoint: None,
-        stats: final_stats,
-        grid: fdm.grid.cells,
-        fem_mesh_generation_id: None,
-        magnetization: Some(final_m),
-        preview_field: None,
-        cached_preview_fields: None,
-        hysteresis_field_m_t: None,
-        hysteresis_point_index: None,
-        hysteresis_settle_step_index: None,
-        hysteresis_settle_step_kind: None,
-        hysteresis_settle_step_method: None,
-        scalar_row_due: true,
-        finished: true,
-    });
+    interactive::runtime::publish_atomic_terminal_update(
+        runtime,
+        &plan,
+        display_selection().revision,
+        &executed,
+        &mut on_step,
+    )?;
 
     Ok(executed.result)
 }
@@ -7535,6 +7531,211 @@ mod tests {
         assert_eq!(metadata["scalar_rows"].as_u64(), Some(2));
 
         fs::remove_dir_all(&output_dir).expect("temporary artifact directory should be removable");
+    }
+
+    #[test]
+    fn public_interactive_runtime_publishes_one_completed_update_last() {
+        let mut problem = fullmag_ir::ProblemIR::bootstrap_example();
+        problem
+            .problem_meta
+            .runtime_metadata
+            .insert("runtime_selection".to_string(), json!({"device": "cpu"}));
+        let plan = fullmag_plan::plan(&problem).expect("CPU FDM fixture should plan");
+        let mut runtime = create_planned_interactive_runtime(&problem, &plan, None)
+            .expect("CPU interactive runtime should build");
+        let unique_suffix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock drift")
+            .as_nanos();
+        let output_dir = std::env::temp_dir().join(format!(
+            "fullmag-runner-public-terminal-{}-{}",
+            std::process::id(),
+            unique_suffix
+        ));
+        let display_selection = || {
+            let mut state = DisplaySelectionState::default();
+            state.selection.quantity = "E_total".to_string();
+            state.selection.kind = DisplayKind::GlobalScalar;
+            state
+        };
+        let mut updates = Vec::new();
+
+        let result = run_planned_problem_with_interactive_runtime_live_preview_interruptible(
+            &mut runtime,
+            &problem,
+            &plan,
+            2e-13,
+            &output_dir,
+            u64::MAX,
+            &display_selection,
+            None,
+            |update| {
+                updates.push(update);
+                StepAction::Continue
+            },
+        )
+        .expect("public interactive runtime should complete");
+
+        assert_eq!(result.status, RunStatus::Completed);
+        assert_eq!(updates.iter().filter(|update| update.finished).count(), 1);
+        let terminal = updates.last().expect("runtime should publish updates");
+        assert!(terminal.finished, "completed update must be published last");
+        let final_stats = result
+            .steps
+            .last()
+            .expect("completed run should report stats");
+        assert_eq!(terminal.stats.step, final_stats.step);
+        assert_eq!(terminal.stats.time, final_stats.time);
+        assert_eq!(
+            terminal.magnetization.as_deref(),
+            Some(
+                result
+                    .final_magnetization
+                    .iter()
+                    .flat_map(|value| value.iter().copied())
+                    .collect::<Vec<_>>()
+                    .as_slice()
+            )
+        );
+        assert!(terminal
+            .cached_preview_fields
+            .as_ref()
+            .is_some_and(|fields| fields.iter().any(|field| field.quantity == "eden_total")));
+
+        fs::remove_dir_all(&output_dir).expect("temporary artifact directory should be removable");
+    }
+
+    #[test]
+    fn public_live_preview_wrapper_publishes_one_completed_terminal_field_batch() {
+        let mut problem = fullmag_ir::ProblemIR::bootstrap_example();
+        problem
+            .problem_meta
+            .runtime_metadata
+            .insert("runtime_selection".to_string(), json!({"device": "cpu"}));
+        problem.energy_terms.push(fullmag_ir::EnergyTermIR::Demag {
+            realization: fullmag_ir::RequestedFemDemagIR::Auto,
+        });
+        let plan = fullmag_plan::plan(&problem).expect("CPU FDM fixture should plan");
+        let unique_suffix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock drift")
+            .as_nanos();
+        let output_dir = std::env::temp_dir().join(format!(
+            "fullmag-runner-public-live-preview-terminal-{}-{}",
+            std::process::id(),
+            unique_suffix
+        ));
+        let display_selection = DisplaySelectionState::default;
+        let mut updates = Vec::new();
+
+        let result = run_planned_problem_with_live_preview_interruptible_with_initial_snapshot_and_fem_mesh_identity_and_autosave_root(
+            &problem,
+            &plan,
+            None,
+            2e-13,
+            &output_dir,
+            &output_dir,
+            1,
+            &display_selection,
+            None,
+            true,
+            |update| {
+                updates.push(update);
+                StepAction::Continue
+            },
+        )
+        .expect("public live-preview wrapper should complete");
+
+        assert_eq!(result.status, RunStatus::Completed);
+        assert_eq!(updates.iter().filter(|update| update.finished).count(), 1);
+        let terminal = updates.last().expect("completed run should publish a terminal update");
+        assert!(terminal.finished, "completed update must be published last");
+        let final_stats = result
+            .steps
+            .last()
+            .expect("completed run should report stats");
+        assert_eq!(terminal.stats.step, final_stats.step);
+        assert_eq!(terminal.stats.time, final_stats.time);
+        let fields = terminal
+            .cached_preview_fields
+            .as_ref()
+            .expect("completed terminal update should carry fields");
+        assert!(fields.iter().any(|field| field.quantity == "eden_demag"));
+        for field in fields {
+            assert_eq!(field.source_step, final_stats.step);
+            assert_eq!(field.source_time_seconds, Some(final_stats.time));
+            assert!(field.materialized_at_unix_ms > 0);
+        }
+        let materialized_m = fields
+            .iter()
+            .find(|field| field.quantity == "m")
+            .expect("terminal materialization should carry m");
+        assert_eq!(
+            terminal.magnetization.as_deref(),
+            Some(materialized_m.vector_field_values.as_slice())
+        );
+
+        fs::remove_dir_all(&output_dir).expect("temporary artifact directory should be removable");
+    }
+
+    #[test]
+    fn public_interactive_runtime_does_not_publish_terminal_update_after_pause_or_cancel() {
+        for (action, expected_status, label) in [
+            (StepAction::Pause, RunStatus::Paused, "paused"),
+            (StepAction::Stop, RunStatus::Cancelled, "cancelled"),
+        ] {
+            let mut problem = fullmag_ir::ProblemIR::bootstrap_example();
+            problem
+                .problem_meta
+                .runtime_metadata
+                .insert("runtime_selection".to_string(), json!({"device": "cpu"}));
+            let plan = fullmag_plan::plan(&problem).expect("CPU FDM fixture should plan");
+            let mut runtime = create_planned_interactive_runtime(&problem, &plan, None)
+                .expect("CPU interactive runtime should build");
+            let unique_suffix = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("clock drift")
+                .as_nanos();
+            let output_dir = std::env::temp_dir().join(format!(
+                "fullmag-runner-public-{label}-{}-{}",
+                std::process::id(),
+                unique_suffix
+            ));
+            let display_selection = || {
+                let mut state = DisplaySelectionState::default();
+                state.selection.quantity = "E_total".to_string();
+                state.selection.kind = DisplayKind::GlobalScalar;
+                state
+            };
+            let mut updates = Vec::new();
+
+            let result = run_planned_problem_with_interactive_runtime_live_preview_interruptible(
+                &mut runtime,
+                &problem,
+                &plan,
+                2e-13,
+                &output_dir,
+                u64::MAX,
+                &display_selection,
+                None,
+                |update| {
+                    updates.push(update);
+                    action
+                },
+            )
+            .expect("public interactive runtime should stop cleanly");
+
+            assert_eq!(result.status, expected_status);
+            assert_eq!(
+                updates.len(),
+                1,
+                "{label} must not append a terminal callback"
+            );
+            assert!(!updates[0].finished);
+
+            fs::remove_dir_all(&output_dir)
+                .expect("temporary artifact directory should be removable");
+        }
     }
 
     #[cfg(not(feature = "cuda"))]

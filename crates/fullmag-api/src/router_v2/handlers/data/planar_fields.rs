@@ -7,30 +7,34 @@ use axum::{
     response::IntoResponse,
     Json,
 };
-use fullmag_ir::{MonitorTargetIR, PlanarExtentIR, PlanarMonitorIR, PlanarOperatorIR};
+use fullmag_ir::{PlanarMonitorIR, PlanarOperatorIR};
 use sha2::{Digest, Sha256};
 
-use super::fdm_region_membership::load_resolved_fdm_membership;
-use super::field_resolution::{extract_fdm_field, extract_fem_field};
 use crate::{
     error::ApiError,
     field_render_png::{encode_scalar_png, AutoScaleMode},
     field_store::serialize_field_vector_binary_v2,
     planar_sampling::{
-        FdmPlanarField, FemPlanarField, Occupancy, PlanarComponent, PlanarSampleResult,
-        PlanarSamplingEngine, ResolvedPlanarSampleRequest, MAX_PLANAR_SAMPLE_POINTS,
+        resolve_spatial_target, sample_resolved_target, Occupancy, PlanarComponent,
+        PlanarSampleIdentity, PlanarSampleResult, ResolvedPlanarSampleRequest,
+        ResolvedSpatialScope, MAX_PLANAR_SAMPLE_POINTS,
     },
     preview::quantity_unit,
     router_v2::handlers::{
         data::fields::{
-            persisted_hysteresis_magnetization_values, validate_hysteresis_snapshot_stage_scope,
+            load_fdm_multilayer_airbox_carrier, persisted_hysteresis_magnetization_values,
+            resolved_fdm_multilayer_airbox_field, validate_hysteresis_snapshot_stage_scope,
+        },
+        data::resolved_spatial_field::{
+            resolve_current_spatial_field, resolve_spatial_field_from_values,
+            SpatialFieldProvenance, SpatialFieldSourceKind,
         },
         sessions::status::{domain_generation_id, field_quantity_revision},
     },
     schemas::{
         PlanarFieldFrameResource, PlanarFieldLinksResource, PlanarFieldMetaResource,
         PlanarFieldOccupancyResource, PlanarFieldProbeQuery, PlanarFieldProbeResource,
-        PlanarFieldQuery,
+        PlanarFieldQuery, PlanarMeshOverlayDescriptor,
     },
     types::AppState,
 };
@@ -43,23 +47,37 @@ struct BuiltPlanarField {
     result: Arc<PlanarSampleResult>,
     monitor: PlanarMonitorIR,
     scene_revision: u64,
+    monitor_revision: u64,
     quantity_id: String,
     component: String,
     field_revision: u64,
     mesh_revision: u64,
+    carrier_revision: u64,
     generation_id: String,
     field_source: String,
+    quality: String,
+    stage_id: Option<String>,
+    snapshot_id: Option<String>,
+    include_mesh: bool,
     source_entity_kind: &'static str,
     scope_kind: String,
     scope_id: Option<String>,
     etag: String,
+    sample_token: String,
 }
 
 #[utoipa::path(
     get,
     path = "/v2/sessions/current/data/fields/{quantity_id}/planar-monitors/{monitor_id}/meta",
     params(("quantity_id" = String, Path), ("monitor_id" = String, Path), PlanarFieldQuery),
-    responses((status = 200, body = PlanarFieldMetaResource), (status = 404, description = "Field or monitor missing"), (status = 409, description = "Stale source"), (status = 422, description = "Unsupported planar sampling")),
+    responses(
+        (status = 200, body = PlanarFieldMetaResource),
+        (status = 304, description = "Not modified"),
+        (status = 400, description = "Invalid planar query", body = crate::schemas::common::ApiErrorResponse),
+        (status = 404, description = "Field or monitor missing", body = crate::schemas::common::ApiErrorResponse),
+        (status = 409, description = "Stale source", body = crate::schemas::common::ApiErrorResponse),
+        (status = 422, description = "Unsupported planar sampling", body = crate::schemas::common::ApiErrorResponse)
+    ),
     tag = "data"
 )]
 pub async fn get_planar_field_meta(
@@ -80,7 +98,14 @@ pub async fn get_planar_field_meta(
     get,
     path = "/v2/sessions/current/data/fields/{quantity_id}/planar-monitors/{monitor_id}/scalar",
     params(("quantity_id" = String, Path), ("monitor_id" = String, Path), PlanarFieldQuery),
-    responses((status = 200, description = "FMVP v2 scalar raster"), (status = 304, description = "Not modified")),
+    responses(
+        (status = 200, description = "FMVP v2 scalar raster"),
+        (status = 304, description = "Not modified"),
+        (status = 400, description = "Invalid planar query", body = crate::schemas::common::ApiErrorResponse),
+        (status = 404, description = "Field or monitor missing", body = crate::schemas::common::ApiErrorResponse),
+        (status = 409, description = "Stale source", body = crate::schemas::common::ApiErrorResponse),
+        (status = 422, description = "Unsupported planar sampling", body = crate::schemas::common::ApiErrorResponse)
+    ),
     tag = "data"
 )]
 pub async fn get_planar_field_scalar(
@@ -112,7 +137,14 @@ pub async fn get_planar_field_scalar(
     get,
     path = "/v2/sessions/current/data/fields/{quantity_id}/planar-monitors/{monitor_id}/vectors",
     params(("quantity_id" = String, Path), ("monitor_id" = String, Path), PlanarFieldQuery),
-    responses((status = 200, description = "FMVP v2 vector raster"), (status = 422, description = "Quantity is not vector-valued")),
+    responses(
+        (status = 200, description = "FMVP v2 vector raster"),
+        (status = 304, description = "Not modified"),
+        (status = 400, description = "Invalid planar query", body = crate::schemas::common::ApiErrorResponse),
+        (status = 404, description = "Field or monitor missing", body = crate::schemas::common::ApiErrorResponse),
+        (status = 409, description = "Stale source", body = crate::schemas::common::ApiErrorResponse),
+        (status = 422, description = "Quantity or sampling mode unsupported", body = crate::schemas::common::ApiErrorResponse)
+    ),
     tag = "data"
 )]
 pub async fn get_planar_field_vectors(
@@ -155,7 +187,14 @@ pub async fn get_planar_field_vectors(
     get,
     path = "/v2/sessions/current/data/fields/{quantity_id}/planar-monitors/{monitor_id}/empty-mask",
     params(("quantity_id" = String, Path), ("monitor_id" = String, Path), PlanarFieldQuery),
-    responses((status = 200, description = "One occupancy byte per pixel")),
+    responses(
+        (status = 200, description = "One occupancy byte per pixel"),
+        (status = 304, description = "Not modified"),
+        (status = 400, description = "Invalid planar query", body = crate::schemas::common::ApiErrorResponse),
+        (status = 404, description = "Field or monitor missing", body = crate::schemas::common::ApiErrorResponse),
+        (status = 409, description = "Stale source", body = crate::schemas::common::ApiErrorResponse),
+        (status = 422, description = "Unsupported planar sampling", body = crate::schemas::common::ApiErrorResponse)
+    ),
     tag = "data"
 )]
 pub async fn get_planar_field_empty_mask(
@@ -181,7 +220,13 @@ pub async fn get_planar_field_empty_mask(
     get,
     path = "/v2/sessions/current/data/fields/{quantity_id}/planar-monitors/{monitor_id}/probe",
     params(("quantity_id" = String, Path), ("monitor_id" = String, Path), PlanarFieldProbeQuery),
-    responses((status = 200, body = PlanarFieldProbeResource)),
+    responses(
+        (status = 200, body = PlanarFieldProbeResource),
+        (status = 400, description = "Invalid planar query or probe coordinates", body = crate::schemas::common::ApiErrorResponse),
+        (status = 404, description = "Field or monitor missing", body = crate::schemas::common::ApiErrorResponse),
+        (status = 409, description = "Stale source", body = crate::schemas::common::ApiErrorResponse),
+        (status = 422, description = "Unsupported planar sampling", body = crate::schemas::common::ApiErrorResponse)
+    ),
     tag = "data"
 )]
 pub async fn get_planar_field_probe(
@@ -195,6 +240,7 @@ pub async fn get_planar_field_probe(
         ));
     }
     let query = PlanarFieldQuery {
+        sample_token: probe.sample_token,
         component: probe.component,
         scope_kind: probe.scope_kind,
         scope_id: probe.scope_id,
@@ -202,11 +248,13 @@ pub async fn get_planar_field_probe(
         snapshot_id: probe.snapshot_id,
         resolution_x: probe.resolution_x,
         resolution_y: probe.resolution_y,
-        quality: None,
+        quality: probe.quality,
         vector_budget: Some(0),
         include_mesh: Some(false),
+        expected_scene_revision: probe.expected_scene_revision,
         expected_monitor_revision: probe.expected_monitor_revision,
         expected_mesh_revision: probe.expected_mesh_revision,
+        expected_carrier_revision: probe.expected_carrier_revision,
         expected_field_revision: probe.expected_field_revision,
     };
     let built = build_planar_field(&state, &quantity_id, &monitor_id, &query).await?;
@@ -258,7 +306,13 @@ pub async fn get_planar_field_probe(
     get,
     path = "/v2/sessions/current/data/fields/{quantity_id}/planar-monitors/{monitor_id}/render.png",
     params(("quantity_id" = String, Path), ("monitor_id" = String, Path), PlanarFieldQuery),
-    responses((status = 200, description = "PNG export")),
+    responses(
+        (status = 200, description = "PNG export"),
+        (status = 400, description = "Invalid planar query", body = crate::schemas::common::ApiErrorResponse),
+        (status = 404, description = "Field or monitor missing", body = crate::schemas::common::ApiErrorResponse),
+        (status = 409, description = "Stale source", body = crate::schemas::common::ApiErrorResponse),
+        (status = 422, description = "Unsupported planar sampling", body = crate::schemas::common::ApiErrorResponse)
+    ),
     tag = "data"
 )]
 pub async fn get_planar_field_render_png(
@@ -291,7 +345,15 @@ pub async fn get_planar_field_render_png(
     get,
     path = "/v2/sessions/current/data/fields/{quantity_id}/planar-monitors/{monitor_id}/mesh-overlay",
     params(("quantity_id" = String, Path), ("monitor_id" = String, Path), PlanarFieldQuery),
-    responses((status = 200, description = "FMCS v3 planar mesh overlay"), (status = 204, description = "Structured grid has no FEM overlay")),
+    responses(
+        (status = 200, description = "FMCS v4 planar mesh overlay with exact segment classes"),
+        (status = 204, description = "Structured grid has no FEM overlay"),
+        (status = 304, description = "Not modified"),
+        (status = 400, description = "Invalid planar query", body = crate::schemas::common::ApiErrorResponse),
+        (status = 404, description = "Field or monitor missing", body = crate::schemas::common::ApiErrorResponse),
+        (status = 409, description = "Stale source", body = crate::schemas::common::ApiErrorResponse),
+        (status = 422, description = "Unsupported planar sampling", body = crate::schemas::common::ApiErrorResponse)
+    ),
     tag = "data"
 )]
 pub async fn get_planar_field_mesh_overlay(
@@ -304,11 +366,12 @@ pub async fn get_planar_field_mesh_overlay(
     let Some(overlay) = built.result.overlay.as_ref() else {
         return Ok(StatusCode::NO_CONTENT.into_response());
     };
-    if etag_matches(&headers, &built.etag) {
-        return not_modified(&built.etag);
+    let overlay_etag = planar_overlay_etag(&built.etag);
+    if etag_matches(&headers, &overlay_etag) {
+        return not_modified(&overlay_etag);
     }
-    let bytes = crate::fem_cross_section::serialize_planar_overlay_fmcs_v3(overlay);
-    binary_response(bytes, "application/octet-stream", &built.etag)
+    let bytes = crate::fem_cross_section::serialize_planar_overlay_fmcs_v4(overlay);
+    binary_response(bytes, "application/octet-stream", &overlay_etag)
 }
 
 async fn build_planar_field(
@@ -334,13 +397,15 @@ async fn build_planar_field(
         .find(|monitor| monitor.id == monitor_id)
         .cloned()
         .ok_or_else(|| ApiError::not_found(format!("planar monitor not found: {monitor_id}")))?;
-    let spec = fullmag_quantities::quantity_spec(quantity_id)
-        .ok_or_else(|| ApiError::not_found(format!("quantity not found: {quantity_id}")))?;
+    let spec = fullmag_quantities::quantity_spec(quantity_id).ok_or_else(|| {
+        ApiError::not_found(format!(
+            "quantity_unavailable: quantity '{quantity_id}' is unknown"
+        ))
+    })?;
     let n_comp = spec.n_comp as usize;
-    let field_revision = field_quantity_revision(snapshot, quantity_id);
+    let current_field_revision = field_quantity_revision(snapshot, quantity_id);
     let generation_id = domain_generation_id(snapshot);
     let mesh_revision = snapshot.mesh_revision;
-    validate_expected_revisions(query, scene.revision, mesh_revision, field_revision)?;
     validate_scope(snapshot, query)?;
 
     let snapshot_values = if let Some(snapshot_id) = query.snapshot_id.as_deref() {
@@ -360,26 +425,85 @@ async fn build_planar_field(
     } else {
         None
     };
-    let mut fdm = if let Some((values, grid)) = snapshot_values {
-        Some(crate::field_slice::FdmField {
+    let resolved_field = if let Some((values, grid)) = snapshot_values {
+        resolve_spatial_field_from_values(
+            snapshot,
+            quantity_id,
             n_comp,
-            grid,
             values,
-            origin: None,
-            spacing: None,
-            active_mask: None,
-        })
+            Some(grid),
+            SpatialFieldSourceKind::Persisted,
+            current_field_revision.max(1),
+            query.snapshot_id.clone(),
+            SpatialFieldProvenance {
+                backend: snapshot.session.resolved_backend.clone(),
+                device: snapshot.session.resolved_device.clone(),
+                precision: snapshot.session.resolved_precision.clone(),
+            },
+        )?
+    } else if query.scope_kind.as_deref() == Some("airbox") {
+        match load_fdm_multilayer_airbox_carrier(snapshot).map_err(|reason| {
+            ApiError::not_found(format!(
+                "multilayer FDM Airbox carrier unavailable: {reason}"
+            ))
+        })? {
+            Some(carrier) => {
+                resolved_fdm_multilayer_airbox_field(snapshot, quantity_id, n_comp, &carrier)?
+            }
+            None => {
+                resolve_current_spatial_field(snapshot, quantity_id, n_comp)?.ok_or_else(|| {
+                    ApiError::not_found(format!(
+                        "quantity_not_materialized: field '{quantity_id}' is not published"
+                    ))
+                })?
+            }
+        }
     } else {
-        extract_fdm_field(snapshot, quantity_id, n_comp)
+        resolve_current_spatial_field(snapshot, quantity_id, n_comp)?.ok_or_else(|| {
+            ApiError::not_found(format!(
+                "quantity_not_materialized: field '{quantity_id}' is not published"
+            ))
+        })?
     };
-    let mut fem = if query.snapshot_id.is_none() {
-        extract_fem_field(snapshot, quantity_id, n_comp)
-    } else {
-        None
+    let field_revision = resolved_field.quantity_revision;
+    let monitor_hash = monitor_hash(&monitor)?;
+    let monitor_revision = monitor_revision(&monitor_hash);
+    let carrier_revision = resolved_field.mesh_or_grid_revision;
+    validate_expected_revisions(
+        query,
+        scene.revision,
+        monitor_revision,
+        mesh_revision,
+        carrier_revision,
+        field_revision,
+    )?;
+    let scope = match query.scope_kind.as_deref().unwrap_or("monitor_target") {
+        "monitor_target" => ResolvedSpatialScope::MonitorTarget,
+        "mesh_part" => ResolvedSpatialScope::MeshPart {
+            scope_id: query.scope_id.clone().expect("validated mesh-part scope"),
+        },
+        "airbox" => ResolvedSpatialScope::Airbox {
+            scope_id: query.scope_id.clone(),
+        },
+        _ => unreachable!("scope validated before target resolution"),
     };
-    apply_resolved_scope(snapshot, &monitor.target, query, &mut fdm, &mut fem)?;
-    resolve_dynamic_extent(&mut monitor, fdm.as_ref(), fem.as_ref())?;
+    let target =
+        resolve_spatial_target(&resolved_field, &monitor.target, scope, &monitor.operator)?;
+    target.resolve_dynamic_extent(&mut monitor.frame)?;
     let scene_revision = scene.revision;
+    let session_id = snapshot.session.session_id.clone();
+    let target_fingerprint = target.fingerprint().to_string();
+    let target_kind = target.target_kind().to_string();
+    let target_id = target.target_id().map(str::to_string);
+    let target_entity_count = target.selected_entity_ids().len();
+    let source_entity_kind = target.source_entity_kind();
+    let field_generation = resolved_field.field_generation.clone();
+    let field_content_fingerprint = (field_revision == 0 && field_generation.is_none())
+        .then(|| spatial_field_content_fingerprint(&resolved_field.values));
+    let source_kind = spatial_source_kind_label(resolved_field.source_kind).to_string();
+    let source_backend = resolved_field.provenance.backend.clone();
+    let source_device = resolved_field.provenance.device.clone();
+    let source_precision = resolved_field.provenance.precision.clone();
     let field_source = query
         .snapshot_id
         .as_ref()
@@ -387,7 +511,6 @@ async fn build_planar_field(
         .unwrap_or_else(|| "live".to_string());
     drop(guard);
 
-    let monitor_hash = monitor_hash(&monitor)?;
     let component = resolve_component(query.component.as_deref(), n_comp)?;
     let request = ResolvedPlanarSampleRequest {
         monitor_id: monitor.id.clone(),
@@ -397,7 +520,6 @@ async fn build_planar_field(
         resolution,
         component,
     };
-    let source_entity_kind = if fem.is_some() { "element" } else { "cell" };
     let scope_kind = query
         .scope_kind
         .clone()
@@ -409,94 +531,80 @@ async fn build_planar_field(
             "magnitude".to_string()
         }
     });
-    let sample_cache_identity = serde_json::json!({
-        "schema": "planar-sample-cache-v1",
-        "monitor_hash": monitor_hash,
-        "quantity_id": quantity_id,
-        "component": component_label,
-        "resolution": resolution,
-        "field_revision": field_revision,
-        "mesh_revision": mesh_revision,
-        "generation_id": generation_id,
-        "field_source": field_source,
-        "scope_kind": scope_kind,
-        "scope_id": query.scope_id,
-    });
-    let sample_cache_key = format!(
-        "planar-sample:{:x}",
-        Sha256::digest(sample_cache_identity.to_string().as_bytes())
-    );
-    let mut sample_cache = state.quantity_data_plane.planar_sample_cache.lock().await;
-    let result = if let Some(cached) = sample_cache.get(&sample_cache_key) {
-        cached
-    } else {
-        let sampled = if let Some(fem) = fem {
-            let source = FemPlanarField::new(
-                fem.n_comp,
-                fem.nodes,
-                fem.elements,
-                fem.element_markers,
-                fem.values,
-            )?;
-            PlanarSamplingEngine::sample_fem(&source, &request)?
-        } else if let Some(fdm) = fdm {
-            let mut source = FdmPlanarField::new(
-                fdm.n_comp,
-                fdm.grid,
-                fdm.origin.unwrap_or([-0.5; 3]),
-                fdm.spacing.unwrap_or([1.0; 3]),
-                fdm.values,
-            )?;
-            if let Some(active_mask) = fdm.active_mask {
-                source = source.with_membership_mask(active_mask)?;
-            }
-            PlanarSamplingEngine::sample_fdm(&source, &request)?
-        } else {
-            return Err(ApiError::not_found(format!(
-                "quantity_not_materialized: field '{quantity_id}' is not published"
-            )));
-        };
-        let sampled = Arc::new(sampled);
-        sample_cache.insert(sample_cache_key, Arc::clone(&sampled));
-        sampled
-    };
-    drop(sample_cache);
-    let etag_identity = serde_json::json!({
-        "schema": "planar-field-cache-v1",
-        "monitor_hash": monitor_hash,
-        "quantity_id": quantity_id,
-        "component": component_label,
-        "operator": monitor.operator,
-        "resolution": resolution,
-        "field_revision": field_revision,
-        "mesh_revision": mesh_revision,
-        "generation_id": generation_id,
-        "field_source": field_source,
-        "scope_kind": scope_kind,
-        "scope_id": query.scope_id,
-        "quality": query.quality,
-        "vector_budget": query.vector_budget,
-        "include_mesh": query.include_mesh,
-        "sampler_version": result.meta.sampler_version,
-    });
+    let sample_token = PlanarSampleIdentity {
+        session_id,
+        monitor_id: monitor.id.clone(),
+        monitor_revision,
+        monitor_hash: monitor_hash.clone(),
+        scene_revision,
+        target_fingerprint,
+        target_kind,
+        target_id,
+        target_entity_count,
+        scope_kind: scope_kind.clone(),
+        scope_id: query.scope_id.clone(),
+        quantity_id: quantity_id.to_string(),
+        component: component_label.clone(),
+        quantity_revision: field_revision,
+        field_generation,
+        field_content_fingerprint,
+        carrier_revision,
+        source_kind,
+        source_backend,
+        source_device,
+        source_precision,
+        frame: monitor.frame.clone(),
+        operator: monitor.operator.clone(),
+        resolution,
+        quality: query
+            .quality
+            .clone()
+            .unwrap_or_else(|| "interactive".to_string()),
+    }
+    .cache_key();
+    if query
+        .sample_token
+        .as_deref()
+        .is_some_and(|expected| expected != sample_token)
+    {
+        return Err(ApiError::conflict(
+            "stale_sample_token: requested sample identity is no longer current",
+        ));
+    }
+    let result = state
+        .quantity_data_plane
+        .get_or_sample_planar(&sample_token, || async move {
+            Ok(Arc::new(sample_resolved_target(&target, &request)?))
+        })
+        .await?;
     let etag = format!(
         "\"fm-planar-sha256:{:x}\"",
-        Sha256::digest(etag_identity.to_string().as_bytes())
+        Sha256::digest(sample_token.as_bytes())
     );
     Ok(BuiltPlanarField {
         result,
         monitor,
         scene_revision,
+        monitor_revision,
         quantity_id: quantity_id.to_string(),
         component: component_label,
         field_revision,
         mesh_revision,
+        carrier_revision,
         generation_id,
         field_source,
+        quality: query
+            .quality
+            .clone()
+            .unwrap_or_else(|| "interactive".to_string()),
+        stage_id: query.stage_id.clone(),
+        snapshot_id: query.snapshot_id.clone(),
+        include_mesh: query.include_mesh.unwrap_or(false),
         source_entity_kind,
         scope_kind,
         scope_id: query.scope_id.clone(),
         etag,
+        sample_token,
     })
 }
 
@@ -536,13 +644,17 @@ fn validate_auxiliary_query(query: &PlanarFieldQuery) -> Result<(), ApiError> {
 
 fn validate_expected_revisions(
     query: &PlanarFieldQuery,
+    scene_revision: u64,
     monitor_revision: u64,
     mesh_revision: u64,
+    carrier_revision: u64,
     field_revision: u64,
 ) -> Result<(), ApiError> {
     for (kind, expected, current) in [
+        ("scene", query.expected_scene_revision, scene_revision),
         ("monitor", query.expected_monitor_revision, monitor_revision),
         ("mesh", query.expected_mesh_revision, mesh_revision),
+        ("carrier", query.expected_carrier_revision, carrier_revision),
         ("field", query.expected_field_revision, field_revision),
     ] {
         if expected.is_some_and(|expected| expected != current) {
@@ -591,244 +703,9 @@ fn validate_scope(
         other => {
             return Err(ApiError::bad_request(format!(
                 "invalid_planar_scope: unsupported scope_kind '{other}'"
-            )))
+            )));
         }
     }
-    Ok(())
-}
-
-fn apply_resolved_scope(
-    snapshot: &crate::types::SessionStateResponse,
-    target: &MonitorTargetIR,
-    query: &PlanarFieldQuery,
-    fdm: &mut Option<crate::field_slice::FdmField>,
-    fem: &mut Option<crate::field_slice::FemField>,
-) -> Result<(), ApiError> {
-    let scope_kind = query.scope_kind.as_deref().unwrap_or("monitor_target");
-    if fem.is_none() {
-        if scope_kind != "monitor_target" {
-            return Err(ApiError::unprocessable(
-                "planar_scope_unsupported: structured-grid runtime does not publish mesh-part or airbox membership",
-            ));
-        }
-        if matches!(target, MonitorTargetIR::Domain) {
-            return Ok(());
-        }
-        let field = fdm
-            .as_mut()
-            .ok_or_else(|| ApiError::not_found("quantity_not_materialized"))?;
-        let membership = load_resolved_fdm_membership(snapshot)?;
-        if membership.counts != field.grid
-            || membership.cell_membership.len()
-                != field
-                    .grid
-                    .iter()
-                    .map(|count| *count as usize)
-                    .product::<usize>()
-        {
-            return Err(ApiError::conflict(
-                "stale_fdm_membership: membership grid does not match the published field",
-            ));
-        }
-        let selected = match target {
-            MonitorTargetIR::MagneticDomain => membership
-                .cell_membership
-                .iter()
-                .map(|value| *value != u32::MAX)
-                .collect::<Vec<_>>(),
-            MonitorTargetIR::Object { object_id } => {
-                if !membership.object_ids.iter().any(|id| id == object_id) {
-                    return Err(ApiError::conflict(format!(
-                        "stale_fdm_membership: object '{object_id}' is absent from the realized grid"
-                    )));
-                }
-                membership
-                    .cell_membership
-                    .iter()
-                    .map(|value| *value != u32::MAX)
-                    .collect::<Vec<_>>()
-            }
-            MonitorTargetIR::Region {
-                object_id,
-                region_id,
-            } => {
-                let numeric_id = membership
-                    .region_legend
-                    .iter()
-                    .find(|entry| {
-                        entry.object_id == *object_id && entry.region_id == *region_id
-                    })
-                    .map(|entry| entry.numeric_id)
-                    .ok_or_else(|| {
-                        ApiError::conflict(format!(
-                            "stale_fdm_membership: region '{object_id}/{region_id}' is absent from the realized grid"
-                        ))
-                    })?;
-                membership
-                    .cell_membership
-                    .iter()
-                    .map(|value| *value == numeric_id)
-                    .collect::<Vec<_>>()
-            }
-            MonitorTargetIR::Domain => unreachable!("domain target returned above"),
-        };
-        if !selected.iter().any(|selected| *selected) {
-            return Err(ApiError::unprocessable(
-                "planar_scope_empty: resolved FDM monitor target has no active cells",
-            ));
-        }
-        field.origin = Some(membership.origin_m);
-        field.spacing = Some(membership.cell_m);
-        field.active_mask = Some(selected);
-        return Ok(());
-    }
-
-    let mesh = snapshot
-        .fem_mesh
-        .as_ref()
-        .ok_or_else(|| ApiError::conflict("stale_mesh_scope: FEM field has no current mesh"))?;
-    let field = fem.as_mut().expect("checked FEM field");
-    let mut selected = vec![false; field.elements.len()];
-    match target {
-        MonitorTargetIR::MagneticDomain => {
-            for (index, marker) in field.element_markers.iter().enumerate() {
-                selected[index] = *marker != 0;
-            }
-        }
-        MonitorTargetIR::Domain => selected.fill(true),
-        MonitorTargetIR::Object { object_id } => {
-            select_mesh_parts(mesh, &mut selected, |part| {
-                part.object_id.as_deref() == Some(object_id.as_str())
-            });
-        }
-        MonitorTargetIR::Region {
-            object_id,
-            region_id,
-        } => {
-            select_mesh_parts(mesh, &mut selected, |part| {
-                part.object_id.as_deref() == Some(object_id.as_str())
-                    && (part.id == *region_id
-                        || part.geometry_id.as_deref() == Some(region_id.as_str()))
-            });
-        }
-    }
-
-    match scope_kind {
-        "monitor_target" => {}
-        "mesh_part" => {
-            let scope_id = query.scope_id.as_deref().expect("validated mesh-part id");
-            let mut runtime_scope = vec![false; selected.len()];
-            select_mesh_parts(mesh, &mut runtime_scope, |part| part.id == scope_id);
-            for (selected, runtime) in selected.iter_mut().zip(runtime_scope) {
-                *selected &= runtime;
-            }
-        }
-        "airbox" => {
-            let mut runtime_scope = vec![false; selected.len()];
-            select_mesh_parts(mesh, &mut runtime_scope, |part| {
-                part.role.contains("air") || part.id.contains("airbox")
-            });
-            for (selected, runtime) in selected.iter_mut().zip(runtime_scope) {
-                *selected &= runtime;
-            }
-        }
-        _ => unreachable!("scope validated before resolution"),
-    }
-    if !selected.iter().any(|selected| *selected) {
-        return Err(ApiError::unprocessable(
-            "planar_scope_empty: resolved monitor target and runtime scope do not overlap",
-        ));
-    }
-    field.element_markers = selected.into_iter().map(u32::from).collect();
-    *fdm = None;
-    Ok(())
-}
-
-fn select_mesh_parts(
-    mesh: &fullmag_runner::FemMeshPayload,
-    selected: &mut [bool],
-    predicate: impl Fn(&fullmag_runner::FemMeshPartPayload) -> bool,
-) {
-    let selected_len = selected.len();
-    for part in mesh.mesh_parts.iter().filter(|part| predicate(part)) {
-        let start = part.element_start as usize;
-        let end = start
-            .saturating_add(part.element_count as usize)
-            .min(selected_len);
-        selected[start.min(selected_len)..end].fill(true);
-    }
-}
-
-fn resolve_dynamic_extent(
-    monitor: &mut PlanarMonitorIR,
-    fdm: Option<&crate::field_slice::FdmField>,
-    fem: Option<&crate::field_slice::FemField>,
-) -> Result<(), ApiError> {
-    let padding = match monitor.frame.extent {
-        PlanarExtentIR::Explicit { .. } => return Ok(()),
-        PlanarExtentIR::TargetBounds { padding_m }
-        | PlanarExtentIR::MagneticDomain { padding_m }
-        | PlanarExtentIR::Universe { padding_m } => padding_m,
-    };
-    let points = if let Some(fem) = fem {
-        fem.nodes.clone()
-    } else if let Some(fdm) = fdm {
-        let origin = fdm.origin.unwrap_or([-0.5; 3]);
-        let spacing = fdm.spacing.unwrap_or([1.0; 3]);
-        let mut low_cell = [0u32; 3];
-        let mut high_cell = fdm.grid;
-        if let Some(active_mask) = fdm.active_mask.as_ref() {
-            low_cell = fdm.grid;
-            high_cell = [0; 3];
-            for (cell, selected) in active_mask.iter().enumerate() {
-                if !selected {
-                    continue;
-                }
-                let x = cell as u32 % fdm.grid[0];
-                let yz = cell as u32 / fdm.grid[0];
-                let y = yz % fdm.grid[1];
-                let z = yz / fdm.grid[1];
-                for (axis, coordinate) in [x, y, z].into_iter().enumerate() {
-                    low_cell[axis] = low_cell[axis].min(coordinate);
-                    high_cell[axis] = high_cell[axis].max(coordinate + 1);
-                }
-            }
-        }
-        let low = [0, 1, 2].map(|axis| origin[axis] + spacing[axis] * low_cell[axis] as f64);
-        let high = [0, 1, 2].map(|axis| origin[axis] + spacing[axis] * high_cell[axis] as f64);
-        let mut corners = Vec::with_capacity(8);
-        for z in [low[2], high[2]] {
-            for y in [low[1], high[1]] {
-                for x in [low[0], high[0]] {
-                    corners.push([x, y, z]);
-                }
-            }
-        }
-        corners
-    } else {
-        return Err(ApiError::not_found("quantity_not_materialized"));
-    };
-    let mut bounds = [
-        f64::INFINITY,
-        f64::NEG_INFINITY,
-        f64::INFINITY,
-        f64::NEG_INFINITY,
-    ];
-    for point in points {
-        let delta = [0, 1, 2].map(|axis| point[axis] - monitor.frame.origin_m[axis]);
-        let u = dot(delta, monitor.frame.u_axis);
-        let v = dot(delta, monitor.frame.v_axis);
-        bounds[0] = bounds[0].min(u);
-        bounds[1] = bounds[1].max(u);
-        bounds[2] = bounds[2].min(v);
-        bounds[3] = bounds[3].max(v);
-    }
-    monitor.frame.extent = PlanarExtentIR::Explicit {
-        u_min_m: bounds[0] - padding,
-        u_max_m: bounds[1] + padding,
-        v_min_m: bounds[2] - padding,
-        v_max_m: bounds[3] + padding,
-    };
     Ok(())
 }
 
@@ -857,12 +734,31 @@ fn resolve_component(component: Option<&str>, n_comp: usize) -> Result<PlanarCom
     }
 }
 
+fn spatial_source_kind_label(source: SpatialFieldSourceKind) -> &'static str {
+    match source {
+        SpatialFieldSourceKind::Live => "live",
+        SpatialFieldSourceKind::Materialized => "materialized",
+        SpatialFieldSourceKind::Preview => "preview",
+        SpatialFieldSourceKind::Persisted => "persisted",
+    }
+}
+
+fn spatial_field_content_fingerprint(values: &[f64]) -> String {
+    let mut hasher = Sha256::new();
+    for value in values {
+        hasher.update(value.to_le_bytes());
+    }
+    format!("sha256:{:x}", hasher.finalize())
+}
+
 fn meta_resource(built: &BuiltPlanarField) -> PlanarFieldMetaResource {
     let bounds = built.result.meta.bounds_uv_m;
     let base = format!(
         "/v2/sessions/current/data/fields/{}/planar-monitors/{}",
-        built.quantity_id, built.monitor.id
+        encode_query_component(&built.quantity_id),
+        encode_query_component(&built.monitor.id)
     );
+    let query = canonical_sample_query(built);
     let (scalar_min, scalar_max) = built
         .result
         .scalar_values
@@ -875,15 +771,18 @@ fn meta_resource(built: &BuiltPlanarField) -> PlanarFieldMetaResource {
             )
         });
     PlanarFieldMetaResource {
-        schema_version: "planar_sample_meta.v1".to_string(),
+        schema_version: "planar_sample_meta.v2".to_string(),
+        sample_token: built.sample_token.clone(),
+        scene_revision: built.scene_revision,
         monitor_id: built.result.meta.monitor_id.clone(),
-        monitor_revision: built.scene_revision,
+        monitor_revision: built.monitor_revision,
         monitor_hash: built.result.meta.monitor_hash.clone(),
         quantity_id: built.quantity_id.clone(),
         canonical_unit: quantity_unit(&built.quantity_id).to_string(),
         component: built.component.clone(),
         field_revision: built.field_revision,
         mesh_revision: built.mesh_revision,
+        carrier_revision: built.carrier_revision,
         generation_id: built.generation_id.to_string(),
         field_source: built.field_source.clone(),
         scope_kind: built.scope_kind.clone(),
@@ -925,15 +824,84 @@ fn meta_resource(built: &BuiltPlanarField) -> PlanarFieldMetaResource {
         scalar_min,
         scalar_max,
         etag: built.etag.clone(),
+        mesh_overlay_descriptor: if built.result.overlay.is_some() {
+            PlanarMeshOverlayDescriptor {
+                available: true,
+                codec: Some("fmcs.v4".to_string()),
+                boundary_classification: "exact".to_string(),
+            }
+        } else {
+            PlanarMeshOverlayDescriptor {
+                available: false,
+                codec: None,
+                boundary_classification: "unavailable".to_string(),
+            }
+        },
         links: PlanarFieldLinksResource {
-            scalar: format!("{base}/scalar"),
-            vectors: format!("{base}/vectors"),
-            empty_mask: format!("{base}/empty-mask"),
-            mesh_overlay: format!("{base}/mesh-overlay"),
-            probe: format!("{base}/probe"),
-            render_png: format!("{base}/render.png"),
+            scalar: format!("{base}/scalar?{query}"),
+            vectors: format!("{base}/vectors?{query}"),
+            empty_mask: format!("{base}/empty-mask?{query}"),
+            mesh_overlay: format!("{base}/mesh-overlay?{query}"),
+            probe: format!("{base}/probe?{query}"),
+            render_png: format!("{base}/render.png?{query}"),
         },
     }
+}
+
+fn planar_overlay_etag(sample_etag: &str) -> String {
+    format!(
+        "\"fm-planar-overlay-fmcs-v4:{:x}\"",
+        Sha256::digest(sample_etag.as_bytes())
+    )
+}
+
+fn canonical_sample_query(built: &BuiltPlanarField) -> String {
+    let mut entries = vec![
+        ("sample_token", built.sample_token.clone()),
+        ("component", built.component.clone()),
+        ("expected_scene_revision", built.scene_revision.to_string()),
+        (
+            "expected_monitor_revision",
+            built.monitor_revision.to_string(),
+        ),
+        ("expected_mesh_revision", built.mesh_revision.to_string()),
+        (
+            "expected_carrier_revision",
+            built.carrier_revision.to_string(),
+        ),
+        ("expected_field_revision", built.field_revision.to_string()),
+        ("resolution_x", built.result.meta.resolution[0].to_string()),
+        ("resolution_y", built.result.meta.resolution[1].to_string()),
+        ("scope_kind", built.scope_kind.clone()),
+        ("quality", built.quality.clone()),
+        ("include_mesh", built.include_mesh.to_string()),
+    ];
+    if let Some(scope_id) = &built.scope_id {
+        entries.push(("scope_id", scope_id.clone()));
+    }
+    if let Some(stage_id) = &built.stage_id {
+        entries.push(("stage_id", stage_id.clone()));
+    }
+    if let Some(snapshot_id) = &built.snapshot_id {
+        entries.push(("snapshot_id", snapshot_id.clone()));
+    }
+    entries
+        .into_iter()
+        .map(|(name, value)| format!("{name}={}", encode_query_component(&value)))
+        .collect::<Vec<_>>()
+        .join("&")
+}
+
+fn encode_query_component(value: &str) -> String {
+    value
+        .bytes()
+        .map(|byte| match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' => {
+                (byte as char).to_string()
+            }
+            _ => format!("%{byte:02X}"),
+        })
+        .collect()
 }
 
 fn monitor_hash(monitor: &PlanarMonitorIR) -> Result<String, ApiError> {
@@ -942,8 +910,13 @@ fn monitor_hash(monitor: &PlanarMonitorIR) -> Result<String, ApiError> {
     Ok(format!("sha256:{:x}", Sha256::digest(json)))
 }
 
-fn dot(a: [f64; 3], b: [f64; 3]) -> f64 {
-    a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
+fn monitor_revision(monitor_hash: &str) -> u64 {
+    let digest = Sha256::digest(monitor_hash.as_bytes());
+    u64::from(u32::from_be_bytes(
+        digest[..4]
+            .try_into()
+            .expect("SHA-256 prefix is four bytes"),
+    ))
 }
 
 fn finite_payload(values: &[f64]) -> Vec<f64> {

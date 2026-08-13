@@ -147,7 +147,9 @@ export function decodeCrossSection(buffer: ArrayBuffer): DecodedCrossSection {
 }
 
 export interface PlanarMeshOverlay {
+  boundaryClassification: "degraded" | "exact";
   bounds: readonly number[];
+  codec: "fmcs.v3" | "fmcs.v4";
   frame: {
     normal: readonly number[];
     origin: readonly number[];
@@ -155,6 +157,7 @@ export interface PlanarMeshOverlay {
     vAxis: readonly number[];
   };
   segmentCount: number;
+  segmentKinds: Uint8Array;
   segments: Float32Array;
   truncated: boolean;
 }
@@ -164,13 +167,13 @@ export function decodePlanarMeshOverlay(
   segmentCap = 200_000,
 ): PlanarMeshOverlay {
   if (buffer.byteLength < FMCS_V3_HEADER_LEN) {
-    throw new Error("FMCS v3 planar overlay header is truncated");
+    throw new Error("FMCS planar overlay header is truncated");
   }
   const view = new DataView(buffer);
   const magic = readMagic(view);
   const version = view.getUint32(4, true);
-  if (magic !== MAGIC || version !== 3) {
-    throw new Error("Expected FMCS v3 planar overlay");
+  if (magic !== MAGIC || (version !== 3 && version !== 4)) {
+    throw new Error("Expected FMCS v3 or v4 planar overlay");
   }
   const polygonCount = view.getUint32(8, true);
   const vertexCount = view.getUint32(12, true);
@@ -180,16 +183,26 @@ export function decodePlanarMeshOverlay(
     vertexCount * 2 * Float32Array.BYTES_PER_ELEMENT +
     (polygonCount + 1) * Uint32Array.BYTES_PER_ELEMENT +
     polygonCount * Uint32Array.BYTES_PER_ELEMENT;
-  const expectedByteLength =
+  const kindsOffset =
     segmentsOffset + segmentCount * 4 * Float32Array.BYTES_PER_ELEMENT;
+  const expectedByteLength = kindsOffset + (version === 4 ? segmentCount : 0);
   if (buffer.byteLength !== expectedByteLength) {
     throw new Error(
       `FMCS v3 planar overlay size mismatch: expected ${expectedByteLength}, got ${buffer.byteLength}`,
     );
   }
   const retained = Math.min(segmentCount, Math.max(0, segmentCap));
+  const segmentKinds =
+    version === 4
+      ? new Uint8Array(buffer, kindsOffset, segmentCount)
+      : new Uint8Array(segmentCount).fill(2);
+  if ([...segmentKinds].some((kind) => kind > 2)) {
+    throw new Error("FMCS v4 planar overlay has an invalid segment kind");
+  }
   return {
+    boundaryClassification: version === 4 ? "exact" : "degraded",
     bounds: readFloat64Vector(view, 32, 4),
+    codec: version === 4 ? "fmcs.v4" : "fmcs.v3",
     frame: {
       normal: readFloat64Vector(view, 136, 3),
       origin: readFloat64Vector(view, 64, 3),
@@ -197,6 +210,7 @@ export function decodePlanarMeshOverlay(
       vAxis: readFloat64Vector(view, 112, 3),
     },
     segmentCount,
+    segmentKinds: segmentKinds.slice(0, retained),
     segments: new Float32Array(buffer, segmentsOffset, retained * 4),
     truncated: retained < segmentCount,
   };

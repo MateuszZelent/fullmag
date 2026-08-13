@@ -1,5 +1,9 @@
-import type { FieldVectorQuery } from "@/kernel/api/apiTypes";
+import type {
+  FieldVectorQuery,
+  FieldVectorResponseMetadata,
+} from "@/kernel/api/apiTypes";
 import type { DecodedFieldVector } from "@/kernel/api/codecs";
+import { fieldVectorComponentsSemanticallyEqual } from "@/kernel/api/fieldQueryIdentity";
 import { resolveCanonicalQuantityId } from "@/kernel/api/quantityIds";
 import type { SurfaceFieldProjectionMode } from "@/kernel/visualization/ObjectVisualizationController";
 
@@ -69,6 +73,8 @@ export function buildViewport3DTargetFieldBuffer({
   fieldRevision = null,
   fieldVector,
   query,
+  responseDomainGenerationId,
+  responseMetadata,
   resourceKey,
   synthetic = false,
   targetIds,
@@ -79,6 +85,8 @@ export function buildViewport3DTargetFieldBuffer({
   fieldRevision?: string | null;
   fieldVector: DecodedFieldVector;
   query: FieldVectorQuery;
+  responseDomainGenerationId?: string | null;
+  responseMetadata?: FieldVectorResponseMetadata | null;
   resourceKey: string | null;
   synthetic?: boolean;
   targetIds: readonly string[];
@@ -102,10 +110,32 @@ export function buildViewport3DTargetFieldBuffer({
   const scopeId = hasDecodedScopeIdentity
     ? canonicalTargetFieldBufferScopeId(scopeKind, fieldVector.scopeId ?? null)
     : requestedScopeId;
+  const scopeIdentityCompatible = hasDecodedScopeIdentity
+    ? responseScopeIdentityMatchesRequest(
+        scopeKind,
+        scopeId,
+        requestedScopeKind,
+        requestedScopeId,
+      )
+    : fieldVector.formatVersion !== 2 || requestedScopeKind === "full"
+      ? responseMetadata == null ||
+        !responseMetadata.scopeKind ||
+        responseMetadataScopeMatchesRequest(
+          responseMetadata,
+          requestedScopeKind,
+          requestedScopeId,
+        )
+      : responseMetadata != null &&
+        completeTrustedV2ScopedResponseMetadata(responseMetadata, fieldVector) &&
+        responseMetadataScopeMatchesRequest(
+          responseMetadata,
+          requestedScopeKind,
+          requestedScopeId,
+        );
   const requestIdentityCompatible = Boolean(
     synthetic ||
-      !hasDecodedScopeIdentity ||
-      (scopeKind === requestedScopeKind && scopeId === requestedScopeId),
+      (scopeIdentityCompatible &&
+        responseMetadataMatchesRequest(responseMetadata, fieldVector, query)),
   );
   const domainCompatibility = resolveViewport3DFieldDomainCompatibility({
     domain: domain ?? {
@@ -115,6 +145,7 @@ export function buildViewport3DTargetFieldBuffer({
       pointCount: 0,
     },
     field: fieldVector,
+    responseDomainGenerationId,
   });
   const capability = resolveTargetFieldBufferCapability({
     component,
@@ -164,6 +195,85 @@ export function buildViewport3DTargetFieldBuffer({
     values: fieldVector.values,
     vectorComponentCount: fieldVector.nComp,
   };
+}
+
+function responseMetadataScopeMatchesRequest(
+  metadata: FieldVectorResponseMetadata,
+  requestedScopeKind: Viewport3DFieldScopeKind,
+  requestedScopeId: string | null,
+): boolean {
+  if (!metadata.scopeKind) return false;
+  const responseScopeKind = resolveTargetFieldBufferScopeKind(metadata.scopeKind);
+  const responseScopeId = canonicalTargetFieldBufferScopeId(
+    responseScopeKind,
+    metadata.scopeId,
+  );
+  return responseScopeIdentityMatchesRequest(
+    responseScopeKind,
+    responseScopeId,
+    requestedScopeKind,
+    requestedScopeId,
+  );
+}
+
+function responseScopeIdentityMatchesRequest(
+  responseScopeKind: Viewport3DFieldScopeKind,
+  responseScopeId: string | null,
+  requestedScopeKind: Viewport3DFieldScopeKind,
+  requestedScopeId: string | null,
+): boolean {
+  if (responseScopeKind !== requestedScopeKind) return false;
+  if (requestedScopeKind === "airbox" && requestedScopeId === null) {
+    return responseScopeId === "airbox";
+  }
+  return responseScopeId === requestedScopeId;
+}
+
+function completeTrustedV2ScopedResponseMetadata(
+  metadata: FieldVectorResponseMetadata,
+  fieldVector: DecodedFieldVector,
+): boolean {
+  return (
+    metadata.encoding?.trim().toLowerCase() === "fmvp;version=2" &&
+    Boolean(metadata.domainGenerationId?.trim()) &&
+    Boolean(metadata.fieldRevision?.trim()) &&
+    metadata.nComp === fieldVector.nComp &&
+    metadata.pointCount === fieldVector.pointCount &&
+    metadata.valueCount === fieldVector.valueCount &&
+    metadata.quantityId !== null &&
+    resolveCanonicalQuantityId(metadata.quantityId) ===
+      resolveCanonicalQuantityId(fieldVector.quantityId)
+  );
+}
+
+function responseMetadataMatchesRequest(
+  metadata: FieldVectorResponseMetadata | null | undefined,
+  fieldVector: DecodedFieldVector,
+  query: FieldVectorQuery,
+): boolean {
+  if (!metadata) return true;
+  if (
+    metadata.quantityId !== null &&
+    resolveCanonicalQuantityId(metadata.quantityId) !==
+      resolveCanonicalQuantityId(fieldVector.quantityId)
+  ) {
+    return false;
+  }
+  if (
+    metadata.component === null ||
+    !fieldVectorComponentsSemanticallyEqual(
+      metadata.component,
+      query.component ?? "full",
+    )
+  ) {
+    return false;
+  }
+  if ((metadata.snapshotId ?? null) !== (query.snapshot_id ?? null)) {
+    return false;
+  }
+  return !metadata.identityIssues.some((issue) =>
+    ["nComp", "pointCount", "quantityId", "valueCount"].includes(issue.field),
+  );
 }
 
 export function resolveViewport3DTargetFieldInput({

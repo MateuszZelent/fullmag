@@ -9,7 +9,7 @@ import {
 } from "@/kernel/api/apiPaths";
 import { EventBus } from "@/kernel/events/EventBus";
 import type { KernelEventMap } from "@/kernel/events/eventTypes";
-import type { FieldVectorResponseMetadata } from "@/kernel/api/apiTypes";
+import type { FieldCatalogResource, FieldVectorResponseMetadata } from "@/kernel/api/apiTypes";
 import type { DecodedFieldVector } from "@/kernel/api/codecs";
 import { ResourceCache } from "@/kernel/resources/ResourceCache";
 import { ResourceInvalidationController } from "@/kernel/resources/ResourceInvalidationController";
@@ -36,6 +36,17 @@ const viewport3dResourcesSourceUrl = new URL(
   "./viewport3dResources.ts",
   import.meta.url,
 );
+
+const airboxFieldCatalog = {
+  domain_generation_id: "fdm-generation-1",
+  quantities: [
+    { available: true, domain: "full_domain", quantity_id: "H_demag" },
+    { available: true, domain: "full_domain", quantity_id: "H_eff" },
+    { available: true, domain: "magnetic_only", quantity_id: "m" },
+    { available: true, domain: "magnetic_only", quantity_id: "H_ex" },
+  ],
+  revision: 3,
+} as FieldCatalogResource;
 
 function fieldResponseMetadata(
   overrides: Partial<FieldVectorResponseMetadata> = {},
@@ -136,6 +147,7 @@ describe("viewport3dResources", () => {
     const diagnostics = getViewport3DFieldVectorCacheEntryDiagnostics(resourceKey);
     expect(diagnostics).toEqual({
       byteLength: null,
+      dataIdentityMatches: null,
       entryState: "missing",
       etag: null,
       key: resourceKey,
@@ -221,9 +233,11 @@ describe("viewport3dResources", () => {
       cache,
       resourceKey,
       inflightRegistry,
+      fieldVector,
     );
     expect(ready).toMatchObject({
       byteLength: 24,
+      dataIdentityMatches: true,
       entryState: "ready",
       etag: '"field-1"',
       key: resourceKey,
@@ -257,6 +271,59 @@ describe("viewport3dResources", () => {
         inflightRegistry,
       ).retainCount,
     ).toBe(0);
+  });
+
+  it("does not associate replacement response metadata with a retained decoded payload", () => {
+    const cache = new ResourceCache<
+      DecodedFieldVector,
+      FieldVectorResponseMetadata
+    >({ maxBytes: 1_024 });
+    const inflightRegistry = new WeakMap<object, ReadonlyMap<string, object>>();
+    const resourceKey = "field:H_demag:object:sample";
+    const retainedV2: DecodedFieldVector = {
+      dtype: "float64",
+      formatVersion: 2,
+      grid: [1, 1, 1],
+      indexing: "legacy_count_only",
+      nComp: 3,
+      pointCount: 1,
+      quantityId: "H_demag",
+      valueCount: 3,
+      values: new Float64Array([1, 2, 3]),
+    };
+    const replacementV3: DecodedFieldVector = {
+      ...retainedV2,
+      domainGenerationId: "v3",
+      formatVersion: 3,
+      indexing: "full_domain",
+      scopeId: "sample",
+      scopeKind: "object",
+    };
+    cache.set(resourceKey, {
+      byteLength: replacementV3.values.byteLength,
+      data: replacementV3,
+      etag: '"field:v3:full-domain"',
+      metadata: fieldResponseMetadata({
+        domainGenerationId: "v3",
+        encoding: "FMVP;version=3",
+        fieldIndexing: "full_domain",
+        scopeId: "sample",
+        scopeKind: "object",
+      }),
+    });
+
+    expect(
+      inspectViewport3DFieldVectorCacheEntryDiagnostics(
+        cache,
+        resourceKey,
+        inflightRegistry,
+        retainedV2,
+      ),
+    ).toMatchObject({
+      dataIdentityMatches: false,
+      etag: '"field:v3:full-domain"',
+      responseMetadata: null,
+    });
   });
 
   it("threads pauseLoad through field-vector resource hooks", () => {
@@ -449,7 +516,7 @@ describe("viewport3dResources", () => {
         component: "full",
         max_samples: 384,
         scope_kind: "full",
-      }),
+      }, airboxFieldCatalog),
     ).toEqual(
       new Map([
         [
@@ -493,7 +560,7 @@ describe("viewport3dResources", () => {
     expect(
       resolveViewport3DAirboxFieldVectorResourceKeys("h_eff", [
         { id: "airbox" },
-      ]),
+      ], undefined, airboxFieldCatalog),
     ).toEqual(
       new Map([
         [
@@ -513,7 +580,7 @@ describe("viewport3dResources", () => {
         component: "full",
         max_samples: 384,
         scope_kind: "full",
-      }),
+      }, airboxFieldCatalog),
     ).toEqual(
       new Map([
         [

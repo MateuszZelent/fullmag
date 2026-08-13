@@ -15,7 +15,7 @@ use crate::schemas::visualization_state::{
     default_planar_visualization_state, AirboxLayerPatch, AirboxLayerState, BasicLayerPatch,
     BasicLayerState, ClipAxis, ClipVisualizationState, DomainVisualizationState,
     FdmVisualizationState, FemTopologyMode, FemVisualizationState, FerromagnetVisibilityMode,
-    PlanarVisualizationPatch, PlanarVisualizationState, SamplingProfile,
+    PlanarColorRangeMode, PlanarVisualizationPatch, PlanarVisualizationState, SamplingProfile,
     SamplingVisualizationState, SliceAirboxRenderMode, SliceRenderMode, SliceVisualizationMode,
     SliceVisualizationState, SurfaceColorSource, SurfaceFieldProjectionMode,
     TrimAxisVisualizationAxes, TrimAxisVisualizationAxesPatch, TrimAxisVisualizationPatch,
@@ -168,6 +168,7 @@ pub async fn replace_visualization_state(
     Json(replacement): Json<VisualizationStateResource>,
 ) -> Result<Json<VisualizationStateResource>, ApiError> {
     validate_camera_state(&replacement.camera)?;
+    validate_planar_visualization_state(&replacement.planar)?;
     let display_replacement = visualization_state_to_display_selection(&replacement);
     apply_display_replace(state.clone(), display_replacement).await?;
     {
@@ -516,12 +517,28 @@ fn validate_planar_visualization_patch(patch: &PlanarVisualizationPatch) -> Resu
             ));
         }
     }
-    if matches!(
-        (&patch.contrast_min, &patch.contrast_max),
-        (Some(Some(min)), Some(Some(max))) if min >= max
-    ) {
+    if let Some(range) = &patch.range {
+        match range.mode {
+            PlanarColorRangeMode::Manual if !matches!((range.min, range.max), (Some(min), Some(max)) if min.is_finite() && max.is_finite() && min < max) =>
+            {
+                return Err(ApiError::bad_request(
+                    "planar.range manual mode requires finite min < max",
+                ));
+            }
+            PlanarColorRangeMode::Auto | PlanarColorRangeMode::Symmetric
+                if range.min.is_some() || range.max.is_some() =>
+            {
+                return Err(ApiError::bad_request(
+                    "planar.range auto and symmetric modes require null limits",
+                ));
+            }
+            _ => {}
+        }
+    }
+    if matches!(patch.raster_opacity, Some(value) if !value.is_finite() || !(0.0..=1.0).contains(&value))
+    {
         return Err(ApiError::bad_request(
-            "planar contrast_min must be less than contrast_max",
+            "planar.raster_opacity must be finite and between 0 and 1",
         ));
     }
     if matches!(
@@ -537,6 +554,14 @@ fn validate_planar_visualization_patch(patch: &PlanarVisualizationPatch) -> Resu
         ));
     }
     Ok(())
+}
+
+fn validate_planar_visualization_state(state: &PlanarVisualizationState) -> Result<(), ApiError> {
+    validate_planar_visualization_patch(&PlanarVisualizationPatch {
+        range: Some(state.range.clone()),
+        raster_opacity: Some(state.raster_opacity),
+        ..PlanarVisualizationPatch::default()
+    })
 }
 
 fn apply_planar_visualization_patch(
@@ -558,14 +583,11 @@ fn apply_planar_visualization_patch(
     if let Some(colormap) = &patch.colormap {
         state.colormap = colormap.clone();
     }
-    if let Some(auto_contrast) = patch.auto_contrast {
-        state.auto_contrast = auto_contrast;
+    if let Some(range) = &patch.range {
+        state.range = range.clone();
     }
-    if let Some(contrast_min) = patch.contrast_min {
-        state.contrast_min = contrast_min;
-    }
-    if let Some(contrast_max) = patch.contrast_max {
-        state.contrast_max = contrast_max;
+    if let Some(raster_opacity) = patch.raster_opacity {
+        state.raster_opacity = raster_opacity;
     }
     if let Some(display_unit) = &patch.display_unit {
         state.display_unit = display_unit.clone();
@@ -1285,7 +1307,7 @@ fn project_planar_patch_to_compatibility_slice(
     let has_shared_fields = patch.quantity_id.is_some()
         || patch.component.is_some()
         || patch.colormap.is_some()
-        || patch.auto_contrast.is_some()
+        || patch.range.is_some()
         || patch.resolution.is_some()
         || patch.layers.is_some();
     if !has_shared_fields {
@@ -1321,8 +1343,8 @@ fn project_planar_patch_to_compatibility_slice(
     if let Some(colormap) = &patch.colormap {
         slice.colormap = colormap.clone();
     }
-    if let Some(auto_contrast) = patch.auto_contrast {
-        slice.auto_contrast = auto_contrast;
+    if let Some(range) = &patch.range {
+        slice.auto_contrast = matches!(range.mode, PlanarColorRangeMode::Auto);
     }
     if let Some(resolution) = &patch.resolution {
         slice.projection_resolution = resolution.width.max(resolution.height).clamp(1, 512);
@@ -1790,7 +1812,7 @@ pub(crate) fn build_visualization_state_response(
 
     VisualizationStateResource {
         revision: selection.revision,
-        schema_version: 6,
+        schema_version: 7,
         quantity: crate::schemas::visualization_state::QuantityVisualizationState {
             active_quantity_id: quantity.active_quantity_id.clone(),
             field_component: quantity.field_component,
@@ -1816,7 +1838,7 @@ pub(crate) fn build_visualization_state_response(
         overrides,
         targets,
         diagnostics: VisualizationDiagnostics {
-            warnings: Vec::new(),
+            warnings: presentation.visualization_restore_warnings.clone(),
             degraded_reasons: Vec::new(),
         },
         active_quantity_id: quantity.active_quantity_id,

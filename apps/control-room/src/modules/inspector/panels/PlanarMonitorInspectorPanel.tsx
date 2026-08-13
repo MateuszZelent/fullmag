@@ -1,52 +1,148 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
+import {
+  MODEL_PLANAR_MONITORS_PATH,
+  VISUALIZATION_STATE_PATH,
+} from "@/kernel/api/apiPaths";
 import { createCommandContext } from "@/kernel/commands/commandContext";
 import { useKernel } from "@/kernel/KernelContext";
-import { usePlanarMonitorResource } from "@/kernel/resources/planarMonitorResources";
+import {
+  usePlanarMonitorResource,
+} from "@/kernel/resources/planarMonitorResources";
+import {
+  isPlanarMonitorRevisionConflict,
+  planarMonitorDraftFromMonitor,
+  planarMonitorValidationErrors,
+  type PlanarMonitor,
+  type PlanarMonitorDraft,
+} from "@/kernel/workspace/crossSectionWorkspace";
+import { planarMonitorFramePreviewStore } from "@/kernel/workspace/planarMonitorFramePreview";
 import { Button } from "@/shared/ui/Button";
 
 import type { InspectorPanelProps } from "../inspectorTypes";
 import { FieldRow } from "../primitives/FieldRow";
-import { FormField } from "../primitives/FormField";
 import { InspectorGroup } from "../primitives/InspectorGroup";
 import { VisualizationContextSwitch } from "../visualization/VisualizationContextSwitch";
 import { PlanarVisualizationSection } from "../visualization/PlanarVisualizationSection";
+import {
+  PlanarMonitorDefinitionEditor,
+  planarMonitorDefinitionAvailabilityErrors,
+} from "./PlanarMonitorDefinitionEditor";
+import { usePlanarMonitorDefinitionAvailability } from "./usePlanarMonitorDefinitionAvailability";
+import { useVisualizationStateResource } from "@/kernel/visualization/useVisualizationStateResource";
 
-export function PlanarMonitorInspectorPanel({
-  selection,
-}: InspectorPanelProps) {
-  const kernel = useKernel();
-  const monitorId =
-    selection.ref?.type === "planar-monitor"
-      ? selection.ref.monitorId
-      : "";
-  const resource = usePlanarMonitorResource(monitorId, {
-    enabled: monitorId.length > 0,
-  });
+export function PlanarMonitorInspectorPanel({ selection }: InspectorPanelProps) {
+  const definitionAvailability = usePlanarMonitorDefinitionAvailability();
+  const monitorId = selection.ref?.type === "planar-monitor" ? selection.ref.monitorId : "";
+  const resource = usePlanarMonitorResource(monitorId, { enabled: monitorId.length > 0 });
   const monitor = resource.data?.monitor;
-  const [nameOverride, setNameOverride] = useState<string | null>(null);
-  const [renamePending, setRenamePending] = useState(false);
-  const frame = monitor?.frame;
-  const nameDraft = nameOverride ?? monitor?.name ?? "";
+  const sceneRevision = resource.data?.scene_revision;
+
+  if (!monitor || sceneRevision === undefined) {
+    return (
+      <div className="fm-inspector-panel">
+        <InspectorGroup title="Planar Monitor">
+          <FieldRow label="Status" value={resource.status === "error" ? "Unavailable" : "Loading"} />
+        </InspectorGroup>
+      </div>
+    );
+  }
+
+  return (
+    <CommittedPlanarMonitorEditor
+      key={`${monitor.id}:${sceneRevision}`}
+      monitor={monitor}
+      sceneRevision={sceneRevision}
+      selection={selection}
+      refetch={resource.refetch}
+      definitionAvailability={definitionAvailability}
+    />
+  );
+}
+
+function CommittedPlanarMonitorEditor({
+  monitor,
+  sceneRevision,
+  selection,
+  refetch,
+  definitionAvailability,
+}: {
+  monitor: PlanarMonitor;
+  sceneRevision: number;
+  selection: InspectorPanelProps["selection"];
+  refetch: () => void;
+  definitionAvailability: ReturnType<typeof usePlanarMonitorDefinitionAvailability>;
+}) {
+  const kernel = useKernel();
+  const visualizationState = useVisualizationStateResource();
+  const [draft, setDraft] = useState<PlanarMonitorDraft>(() => planarMonitorDraftFromMonitor(monitor));
+  const [feedback, setFeedback] = useState<string | null>(null);
+  const [conflict, setConflict] = useState(false);
+  const [pending, setPending] = useState(false);
+  const errors = [
+    ...planarMonitorValidationErrors(draft.monitor),
+    ...(draft.monitor.id === monitor.id ? [] : ["Committed monitor ID must match the resource path ID."]),
+    ...planarMonitorDefinitionAvailabilityErrors(draft.monitor, definitionAvailability),
+  ];
+  const dirty = JSON.stringify(draft.monitor) !== JSON.stringify(monitor);
+  useEffect(() => {
+    planarMonitorFramePreviewStore.setDraft(dirty ? draft : null);
+    return () => planarMonitorFramePreviewStore.clearDraft();
+  }, [dirty, draft]);
   const run = (commandId: string, input?: Record<string, unknown>) =>
     kernel.commands.execute(
       commandId,
       createCommandContext("inspector", kernel, {
+        resourceData: {
+          [VISUALIZATION_STATE_PATH]: visualizationState.data,
+        },
         sourceDetail: "planar-monitor-inspector",
       }),
-      { monitorId, ...input },
+      { monitorId: monitor.id, ...input },
     );
-  const rename = async () => {
-    if (!nameDraft.trim() || nameDraft.trim() === monitor?.name) return;
-    setRenamePending(true);
+
+  const apply = async () => {
+    if (!dirty || errors.length > 0) return;
+    setPending(true);
+    setFeedback(null);
+    setConflict(false);
     try {
-      await run("planar-monitor.rename", { newName: nameDraft.trim() });
-      await resource.refetch();
-      setNameOverride(null);
+      const response = await kernel.api.model.planarMonitors.patch(monitor.id, {
+        expected_scene_revision: sceneRevision,
+        monitor: structuredClone(draft.monitor),
+      });
+      setDraft(planarMonitorDraftFromMonitor(response.monitor, draft.ui.displayLengthUnit));
+      kernel.resources.invalidate(MODEL_PLANAR_MONITORS_PATH, response.scene_revision);
+      refetch();
+    } catch (error) {
+      const revisionConflict = isPlanarMonitorRevisionConflict(error);
+      setConflict(revisionConflict);
+      setFeedback(
+        revisionConflict
+          ? "The scene changed while this monitor was being edited. Reload the current revision before applying again."
+          : error instanceof Error
+            ? error.message
+            : "Planar monitor update failed.",
+      );
     } finally {
-      setRenamePending(false);
+      setPending(false);
+    }
+  };
+
+  const duplicate = async () => {
+    setPending(true);
+    setFeedback(null);
+    try {
+      const result = await run("planar-monitor.duplicate");
+      if (result.status === "failed") {
+        setFeedback(result.message ?? "Planar monitor duplication failed.");
+      }
+    } catch (error) {
+      setFeedback(error instanceof Error ? error.message : "Planar monitor duplication failed.");
+    } finally {
+      setPending(false);
     }
   };
 
@@ -55,91 +151,66 @@ export function PlanarMonitorInspectorPanel({
       <InspectorGroup title="View">
         <VisualizationContextSwitch />
       </InspectorGroup>
-      <InspectorGroup title="Identity">
-        <FormField
-          disabled={!monitor || renamePending}
-          label="Name"
-          type="text"
-          value={nameDraft || monitor?.name || selection.label || ""}
-          onChange={(event) => setNameOverride(event.currentTarget.value)}
-        />
+      <PlanarMonitorDefinitionEditor availability={definitionAvailability} draft={draft} mode="committed" onChange={setDraft} />
+      <InspectorGroup title="Provenance">
+        <FieldRow label="Scene revision" value={sceneRevision} />
+        <FieldRow label="Source" value="SceneDocument / ProblemIR" />
+      </InspectorGroup>
+      <div className="fm-inspector-toolbar">
         <Button
-          disabled={
-            !monitor ||
-            renamePending ||
-            !nameDraft.trim() ||
-            nameDraft.trim() === monitor.name
-          }
+          disabled={pending || !dirty}
           size="sm"
           type="button"
           variant="ghost"
-          onClick={() => void rename()}
+          onClick={() => {
+            setDraft(planarMonitorDraftFromMonitor(monitor, draft.ui.displayLengthUnit));
+            setFeedback(null);
+            setConflict(false);
+          }}
         >
-          Apply name
+          Discard
         </Button>
-        <FieldRow label="ID" value={monitorId || "Unknown monitor"} />
-        <FieldRow
-          label="Scene revision"
-          value={resource.data?.scene_revision ?? "—"}
-        />
-        <FieldRow label="Source" value="SceneDocument / ProblemIR" />
-      </InspectorGroup>
-      <InspectorGroup title="Frame">
-        <FieldRow label="Preset" value={frame?.preset ?? "arbitrary"} />
-        <FieldRow label="Origin (m)" value={vectorLabel(frame?.origin_m)} />
-        <FieldRow label="Normal" value={vectorLabel(frame?.normal)} />
-        <FieldRow label="u axis" value={vectorLabel(frame?.u_axis)} />
-        <FieldRow label="Extent" value={frame?.extent.kind ?? "—"} />
-      </InspectorGroup>
-      <InspectorGroup title="Operator">
-        <FieldRow label="Kind" value={monitor?.operator.kind ?? "—"} />
-        <FieldRow label="Target" value={monitor?.target.kind ?? "—"} />
-      </InspectorGroup>
+        <Button
+          disabled={pending || !dirty || errors.length > 0}
+          size="sm"
+          type="button"
+          variant="primary"
+          onClick={() => void apply()}
+        >
+          Apply
+        </Button>
+      </div>
+      {errors.length > 0 ? (
+        <div className="fm-help-text" role="alert">
+          {errors.map((error) => <p key={error}>{error}</p>)}
+        </div>
+      ) : null}
+      {feedback ? <p role="alert">{feedback}</p> : null}
+      {conflict ? (
+        <Button size="sm" type="button" variant="secondary" onClick={refetch}>
+          Reload current monitor
+        </Button>
+      ) : null}
       <PlanarVisualizationSection selection={selection} />
       <InspectorGroup title="Actions">
         <div className="fm-inspector-toolbar">
-          <Button
-            disabled={!monitor}
-            size="sm"
-            type="button"
-            variant="secondary"
-            onClick={() => void run("field-map.select-monitor")}
-          >
+          <Button size="sm" type="button" variant="secondary" onClick={() => void run("field-map.select-monitor")}>
             Open in 2D
           </Button>
-          <Button
-            disabled={!monitor}
-            size="sm"
-            type="button"
-            variant="ghost"
-            onClick={() => void run("planar-monitor.show-frame-3d")}
-          >
+          <Button size="sm" type="button" variant="secondary" onClick={() => void run("planar-monitor.create", { intent: { source: "inspector" } })}>
+            Create preset
+          </Button>
+          <Button size="sm" type="button" variant="ghost" onClick={() => void run("planar-monitor.show-frame-3d")}>
             Show frame in 3D
           </Button>
-          <Button
-            disabled={!monitor}
-            size="sm"
-            type="button"
-            variant="ghost"
-            onClick={() => void run("planar-monitor.duplicate")}
-          >
+          <Button disabled={pending || !visualizationState.data?.planar} size="sm" type="button" variant="ghost" onClick={() => void duplicate()}>
             Duplicate
           </Button>
-          <Button
-            disabled={!monitor}
-            size="sm"
-            type="button"
-            variant="danger"
-            onClick={() => void run("planar-monitor.delete")}
-          >
+          <Button disabled={pending} size="sm" type="button" variant="danger" onClick={() => void run("planar-monitor.delete")}>
             Delete
           </Button>
         </div>
       </InspectorGroup>
     </div>
   );
-}
-
-function vectorLabel(value: number[] | undefined): string {
-  return value?.map((entry) => entry.toExponential(3)).join(", ") ?? "—";
 }

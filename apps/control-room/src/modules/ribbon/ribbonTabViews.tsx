@@ -38,11 +38,13 @@ import {
 } from "./ribbonCommon";
 
 import {
-  isMagneticOnlyQuantityId,
+  fieldCatalogQuantitySupportsAirbox,
+  fieldCatalogQuantitySupportsSpatialVisualization,
 } from "@/kernel/api/quantityIds";
 import { RIBBON_CROSS_SECTION_BEGIN_DRAFT_COMMAND } from "./ribbonCommands";
 
 import type {
+  FieldCatalogResource,
   VisualizationStatePatch,
 } from "@/kernel/api/apiTypes";
 
@@ -88,14 +90,40 @@ export const QUANTITY_ITEMS = [
 export function quantityItemsForVisualizationTarget(
   activeQuantityId: string,
   targetKind?: VisualizationTargetKind,
-): Array<{ label: string; value: string }> {
-  const baseItems =
-    targetKind === "airbox"
-      ? QUANTITY_ITEMS.filter((item) => !isMagneticOnlyQuantityId(item.value))
+  fieldCatalog?: FieldCatalogResource | null,
+): Array<{ disabled?: boolean; label: string; value: string }> {
+  const baseItems = fieldCatalog
+    ? fieldCatalog.quantities
+        .filter(fieldCatalogQuantitySupportsSpatialVisualization)
+        .filter(
+          (quantity) =>
+            targetKind !== "airbox" ||
+            fieldCatalogQuantitySupportsAirbox(fieldCatalog, quantity.quantity_id),
+        )
+        .map((quantity) => ({
+          value: quantity.quantity_id,
+          // The static list is only a pre-load label fallback; the catalog
+          // remains the source of selectable identifiers and availability.
+          label: quantity.unit
+            ? `${quantity.label || QUANTITY_ITEMS.find((item) => item.value === quantity.quantity_id)?.label || quantity.quantity_id} / ${quantity.unit}`
+            : quantity.label || QUANTITY_ITEMS.find((item) => item.value === quantity.quantity_id)?.label || quantity.quantity_id,
+        }))
+    : targetKind === "airbox"
+      ? []
       : QUANTITY_ITEMS;
+  if (targetKind === "airbox" && !fieldCatalog) return baseItems;
   return baseItems.some((item) => item.value === activeQuantityId)
     ? baseItems
-    : [{ value: activeQuantityId, label: activeQuantityId }, ...baseItems];
+    : [
+        {
+          disabled: Boolean(fieldCatalog),
+          value: activeQuantityId,
+          label: fieldCatalog
+            ? `Unavailable / ${activeQuantityId}`
+            : activeQuantityId,
+        },
+        ...baseItems,
+      ];
 }
 
 export const VECTOR_COLOR_ITEMS: Array<{

@@ -1,9 +1,15 @@
-import type { CommandContribution } from "@/kernel/commands/commandTypes";
-import { MODEL_PLANAR_MONITORS_PATH } from "@/kernel/api/apiPaths";
+import type { CommandContext, CommandContribution } from "@/kernel/commands/commandTypes";
+import {
+  MODEL_PLANAR_MONITORS_PATH,
+  VISUALIZATION_STATE_PATH,
+} from "@/kernel/api/apiPaths";
+import type { VisualizationStateResource } from "@/kernel/api/apiTypes";
 import { planarMonitorFramePreviewStore } from "@/kernel/workspace/planarMonitorFramePreview";
-import { beginPlanarMonitorDraft } from "@/kernel/workspace/crossSectionWorkspace";
+import {
+  beginPlanarMonitorDraft,
+  type PlanarMonitorCreateIntent,
+} from "@/kernel/workspace/crossSectionWorkspace";
 
-import { fieldMapStore } from "./fieldMapStore";
 import { downloadPlanarPng, planarExportFilename } from "./fieldMapExport";
 
 const commandTitles = {
@@ -16,11 +22,116 @@ const commandTitles = {
   "field-map.toggle-contours": "Toggle 2D Contours",
   "field-map.toggle-mesh": "Toggle 2D Mesh",
   "field-map.toggle-vectors": "Toggle 2D Vectors",
+  "planar-monitor.create": "Create Planar Monitor",
   "planar-monitor.delete": "Delete Planar Monitor",
   "planar-monitor.duplicate": "Duplicate Planar Monitor",
   "planar-monitor.rename": "Rename Planar Monitor",
   "planar-monitor.show-frame-3d": "Show Monitor Frame in 3D",
 } as const;
+
+function queuePlanarMonitorSelection(
+  context: CommandContext,
+  monitorId: string | null,
+  state: VisualizationStateResource | null = visualizationStateFromContext(context),
+): boolean {
+  if (!context.visualizationSync || !state?.planar) return false;
+  context.visualizationSync.queuePatch({
+    planar: { active_monitor_id: monitorId },
+  });
+  return true;
+}
+
+function visualizationStateFromContext(
+  context: CommandContext,
+): VisualizationStateResource | null {
+  const state = context.resourceData?.[VISUALIZATION_STATE_PATH];
+  return state && typeof state === "object"
+    ? (state as VisualizationStateResource)
+    : null;
+}
+
+type PlanarMonitorCreateCommandInput = {
+  capability?: { enabled: boolean; reason: string };
+  intent?: PlanarMonitorCreateIntent;
+};
+
+function planarMonitorCreateInput(
+  context: CommandContext,
+): PlanarMonitorCreateCommandInput {
+  const input = context.input;
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
+    return { intent: { source: sourceForPlanarMonitorCreate(context.source) } };
+  }
+  const record = input as Record<string, unknown>;
+  const intent = record.intent;
+  const capability = record.capability;
+  return {
+    ...(intent && typeof intent === "object" && !Array.isArray(intent)
+      ? { intent: intent as PlanarMonitorCreateIntent }
+      : { intent: { source: sourceForPlanarMonitorCreate(context.source) } }),
+    ...(capability && typeof capability === "object" && !Array.isArray(capability)
+      ? { capability: capability as PlanarMonitorCreateCommandInput["capability"] }
+      : {}),
+  };
+}
+
+function sourceForPlanarMonitorCreate(
+  source: CommandContext["source"],
+): PlanarMonitorCreateIntent["source"] {
+  if (source === "explorer") return "explorer";
+  if (source === "inspector") return "inspector";
+  if (source === "palette") return "palette";
+  return "ribbon";
+}
+
+function planarMonitorCreateDisabledReason(context: CommandContext): string | null {
+  if (!context.api) return "Domain bounds are unavailable for planar monitor placement.";
+  const input = planarMonitorCreateInput(context);
+  if (input.intent?.source === "clip" && !visualizationStateFromContext(context)?.clip.enabled) {
+    return "Enable the clip plane before creating a planar monitor from it.";
+  }
+  const capability = input.capability;
+  return capability && !capability.enabled ? capability.reason : null;
+}
+
+async function createPlanarMonitorDraftFromCommand(
+  context: CommandContext,
+): Promise<{ message?: string; status: "completed" | "failed" }> {
+  const disabledReason = planarMonitorCreateDisabledReason(context);
+  if (disabledReason || !context.api) {
+    return { message: disabledReason ?? "Planar monitor creation is unavailable.", status: "failed" };
+  }
+  const domain = await context.api.data.domain.meta();
+  const { intent } = planarMonitorCreateInput(context);
+  const draft = beginPlanarMonitorDraft(
+    visualizationStateFromContext(context),
+    {
+      min: domain.bounds.min as [number, number, number],
+      max: domain.bounds.max as [number, number, number],
+    },
+    intent,
+  );
+  context.selection?.set(
+    {
+      kind: "model.planar.monitor.draft",
+      label: draft.monitor.name,
+      nodeId: "model:definitions:planar-monitors:draft",
+      objectId: null,
+      ref: {
+        draftId: "draft",
+        kind: "model.planar.monitor.draft",
+        nodeId: "model:definitions:planar-monitors:draft",
+        type: "planar-monitor-draft",
+        visualizationTargetId: "planar-monitor:draft",
+      },
+    },
+    context.source,
+  );
+  context.layout?.setPanelVisible("left", true);
+  context.layout?.setPanelVisible("right", true);
+  context.layout?.setFocusedSlot("viewport-main");
+  return { status: "completed" };
+}
 
 export const fieldMapCommands: CommandContribution[] = Object.entries(
   commandTitles,
@@ -28,29 +139,57 @@ export const fieldMapCommands: CommandContribution[] = Object.entries(
   category: "Viewport",
   group: "field-map",
   id,
+  requiresInput:
+    id === "field-map.select-monitor" ||
+    id === "planar-monitor.show-frame-3d" ||
+    id === "planar-monitor.delete" ||
+    id === "planar-monitor.duplicate" ||
+    id === "planar-monitor.rename",
+  isEnabled: id === "planar-monitor.create"
+    ? (context) => planarMonitorCreateDisabledReason(context) === null
+    : undefined,
+  disabledReason: id === "planar-monitor.create"
+    ? planarMonitorCreateDisabledReason
+    : undefined,
   run: async (context) => {
     const input =
       context.input && typeof context.input === "object"
         ? (context.input as { monitorId?: unknown; newName?: unknown })
         : null;
+    if (id === "planar-monitor.create") {
+      return createPlanarMonitorDraftFromCommand(context);
+    }
     if (id === "field-map.open" || id === "field-map.select-monitor") {
-      if (
-        id === "field-map.select-monitor" &&
-        typeof input?.monitorId === "string"
-      ) {
-        fieldMapStore.set({ activeMonitorId: input.monitorId });
+      if (id === "field-map.select-monitor") {
+        if (typeof input?.monitorId !== "string") {
+          return {
+            message: "A planar monitor id is required.",
+            status: "failed",
+          };
+        }
+        if (!queuePlanarMonitorSelection(context, input.monitorId)) {
+          return {
+            message: "Planar visualization state is unavailable.",
+            status: "failed",
+          };
+        }
       }
       context.layout?.setActiveViewportMainModule("field-map");
       context.layout?.setFocusedSlot("viewport-main");
       if (id === "field-map.open" && context.api) {
         const collection = await context.api.model.planarMonitors.list();
         if (collection.monitors.length === 0) {
-          const draft = beginPlanarMonitorDraft();
+          const domain = await context.api.data.domain.meta();
+          const visualizationState = visualizationStateFromContext(context) ?? await context.api.visualization.state();
+          const draft = beginPlanarMonitorDraft(visualizationState, {
+            min: domain.bounds.min as [number, number, number],
+            max: domain.bounds.max as [number, number, number],
+          }, { source: sourceForPlanarMonitorCreate(context.source) });
           const nodeId = "model:definitions:planar-monitors:draft";
           context.selection?.set(
             {
               kind: "model.planar.monitor.draft",
-              label: draft.name,
+              label: draft.monitor.name,
               nodeId,
               objectId: null,
               ref: {
@@ -104,11 +243,17 @@ export const fieldMapCommands: CommandContribution[] = Object.entries(
         boundsUvM: meta.frame.bounds_uv_m as [number, number, number, number],
         monitorId: input.monitorId,
         normal: meta.frame.normal as [number, number, number],
+        operator: null,
         originM: meta.frame.origin_m as [number, number, number],
         uAxis: meta.frame.u_axis as [number, number, number],
         vAxis: meta.frame.v_axis as [number, number, number],
       });
-      fieldMapStore.set({ activeMonitorId: input.monitorId });
+      if (!queuePlanarMonitorSelection(context, input.monitorId, visualization)) {
+        return {
+          message: "Planar visualization state is unavailable.",
+          status: "failed",
+        };
+      }
       context.layout?.setActiveViewportMainModule("viewport-3d");
       context.layout?.setFocusedSlot("viewport-main");
     }
@@ -126,8 +271,7 @@ export const fieldMapCommands: CommandContribution[] = Object.entries(
       }
       const monitorId =
         (typeof input?.monitorId === "string" ? input.monitorId : null) ??
-        planar.active_monitor_id ??
-        fieldMapStore.get().activeMonitorId;
+        planar.active_monitor_id;
       if (!monitorId) {
         return { message: "Select a planar monitor first.", status: "failed" };
       }
@@ -187,21 +331,33 @@ export const fieldMapCommands: CommandContribution[] = Object.entries(
       const collection = await context.api.model.planarMonitors.list();
       let revision = collection.scene_revision;
       if (id === "planar-monitor.delete") {
+        const visualization = await context.api.visualization.state();
         const response = await context.api.model.planarMonitors.remove(
           input.monitorId,
           { expected_scene_revision: revision },
         );
         revision = response.scene_revision;
-        if (fieldMapStore.get().activeMonitorId === input.monitorId) {
-          fieldMapStore.set({ activeMonitorId: null });
+        if (visualization.planar?.active_monitor_id === input.monitorId) {
+          if (!queuePlanarMonitorSelection(context, null, visualization)) {
+            return {
+              message: "Planar visualization state is unavailable.",
+              status: "failed",
+            };
+          }
         }
       } else if (id === "planar-monitor.duplicate") {
+        const visualization = await context.api.visualization.state();
         const response = await context.api.model.planarMonitors.duplicate(
           input.monitorId,
           { expected_scene_revision: revision },
         );
         revision = response.scene_revision;
-        fieldMapStore.set({ activeMonitorId: response.monitor.id });
+        if (!queuePlanarMonitorSelection(context, response.monitor.id, visualization)) {
+          return {
+            message: "Planar visualization state is unavailable.",
+            status: "failed",
+          };
+        }
       } else {
         if (typeof input.newName !== "string" || !input.newName.trim()) {
           context.layout?.setPanelVisible("right", true);

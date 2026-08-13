@@ -57,6 +57,7 @@ import {
   VISUALIZATION_STATE_PATH,
 } from "@/kernel/api/apiPaths";
 import type {
+  FieldCatalogResource,
   LiveStatusResource,
   MeshActiveBuildResource,
   MeshCapabilitiesResource,
@@ -748,6 +749,7 @@ type RibbonSessionStatus = {
 export interface RibbonBuildContext {
   api?: { visualization: RibbonVisualizationApi };
   commandContext?: CommandContext;
+  fieldCatalog?: FieldCatalogResource | null;
   commands?: CommandRegistry;
   meshBuildCurrent?: MeshActiveBuildResource | null;
   meshBuildLatest?: MeshLastSuccessfulBuildResource | null;
@@ -871,7 +873,7 @@ export function resolveRibbonVisualizationTarget({
 }
 
 function resultsQuantityCommandInput(quantityId: string) {
-  return globalQuantityCommandInput(quantityId);
+  return globalQuantityCommandInput(quantityId, true);
 }
 
 function buildResultsQuantityGroup(
@@ -2829,6 +2831,19 @@ function buildClipAction(
           visualizationStateCommandInput({ clip: { enabled } }),
       },
       {
+        type: "item",
+        id: "selected-clip:create-planar-monitor",
+        label: "Create planar monitor from clip",
+        disabled: !context.api || !clip.enabled,
+        tooltip: !context.api
+          ? "Visualization API is unavailable."
+          : !clip.enabled
+            ? "Enable the clip plane before creating a planar monitor from it."
+            : undefined,
+        commandId: "planar-monitor.create",
+        commandInput: { intent: { source: "clip" } },
+      },
+      {
         type: "radio-group",
         id: "selected-clip:axis",
         label: "Plane",
@@ -3329,7 +3344,8 @@ function buildSelectedVisualizationGroup(
   );
   const selectedQuantityItems = quantityItemsForVisualizationTarget(
     selectedQuantityId,
-    target?.kind,
+    isAirboxLikeTarget ? "airbox" : target?.kind,
+    context.fieldCatalog,
   );
   const targetQuantityPatch = (value: string): VisualizationTargetPatch => {
     const activeQuantityId = normalizeQuantityIdOrDefault(value);

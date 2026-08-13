@@ -31,6 +31,10 @@ export type ModelTreeResources = ExplorerTreeResources & {
   currentTransports?: CurrentTransportListResource | null;
   planarMonitorDraft?: PlanarMonitorDraft | null;
   planarMonitors?: PlanarMonitorCollectionResource | null;
+  planarMonitorTargetCapabilities?: {
+    objects: Readonly<Record<string, { enabled: boolean; reason: string }>>;
+    regions: Readonly<Record<string, { enabled: boolean; reason: string }>>;
+  };
 };
 
 export function createExplorerNode(input: ExplorerNode): ExplorerNode {

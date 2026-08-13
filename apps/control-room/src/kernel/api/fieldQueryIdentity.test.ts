@@ -4,11 +4,27 @@ import {
   canonicalFieldVectorQuery,
   fieldVectorComponentsSemanticallyEqual,
   fieldVectorResourceKey,
+  isCanonicalU64Decimal,
   parseCanonicalFieldVectorResourceKey,
   serializeCanonicalFieldVectorResourceKey,
 } from "./fieldQueryIdentity";
 
 describe("fieldQueryIdentity", () => {
+  it.each([
+    ["0", true],
+    ["18446744073709551615", true],
+    ["18446744073709551616", false],
+    ["01", false],
+    ["+1", false],
+    ["-1", false],
+    [" 1", false],
+    ["1 ", false],
+    ["1a", false],
+    ["", false],
+  ])("validates canonical u64 decimal string %j", (value, expected) => {
+    expect(isCanonicalU64Decimal(value)).toBe(expected);
+  });
+
   it("builds a vector resource key through the canonical API path", () => {
     expect(
       fieldVectorResourceKey("m", {

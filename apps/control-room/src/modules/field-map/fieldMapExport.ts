@@ -15,7 +15,7 @@ export function planarExportFilename({
   quantityId,
   unit,
 }: {
-  fieldRevision: number;
+  fieldRevision: number | string;
   monitorName: string;
   quantityId: string;
   unit: string;

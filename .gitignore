@@ -111,3 +111,4 @@ tests/vlad/
 apps/control-room/.next*
 apps/control-room/.artifacts/
 public_docs/site/
+.worktrees_old/
