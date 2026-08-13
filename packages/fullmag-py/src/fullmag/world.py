@@ -4372,6 +4372,39 @@ class StudyStagesBuilder:
         )
         return self
 
+    def set_spin_torque_enabled(
+        self,
+        *,
+        module_id: str,
+        enabled: bool,
+        stage_id: str | None = None,
+    ) -> "StudyStagesBuilder":
+        """Enable or disable one existing spin-torque module for later stages."""
+        normalized_module_id = require_non_empty(module_id, "module_id")
+        if not isinstance(enabled, bool):
+            raise TypeError("enabled must be a bool")
+        matching = []
+        for module in _state._spin_torques:
+            payload = module.to_ir_module()
+            candidate_id = payload.get("id") or payload.get("name")
+            if candidate_id == normalized_module_id:
+                matching.append(module)
+        if len(matching) != 1:
+            raise ValueError(
+                f"spin torque module id '{normalized_module_id}' must identify exactly one module"
+            )
+        self._append_configuration_action(
+            problem=_build_problem(),
+            entrypoint_kind="flat_set_spin_torque_enabled",
+            stage_id=self._allocate_stage_id("set-spin-torque-enabled", stage_id),
+            action={
+                "kind": "set_spin_torque_enabled",
+                "module_id": normalized_module_id,
+                "enabled": enabled,
+            },
+        )
+        return self
+
     def change_device(self, device: str) -> "StudyStagesBuilder":
         normalized = _normalize_stage_device(device)
         _state._declared_stages.append(

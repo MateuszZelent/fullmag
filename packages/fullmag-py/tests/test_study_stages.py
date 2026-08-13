@@ -215,6 +215,52 @@ study.stages.add_run(stage_id="run-positive", until=1e-12)
         )
         self.assertEqual(reloaded.stages[1].action["sample_index"], -1)
 
+    def test_spin_torque_activation_is_an_explicit_stage_action(self) -> None:
+        loaded = _load(
+            _PREAMBLE
+            + """
+study.spin_torque(fm.ZhangLiSTT(
+    current_density=(0.0, 0.0, 0.0),
+    id="transport-torque",
+    target=fm.RegionRef("film"),
+    lande_g=2.0,
+    operator_version="zl_mumax3_central_v1",
+))
+study.stages.set_spin_torque_enabled(
+    module_id="transport-torque",
+    enabled=False,
+    stage_id="disable-transport-torque",
+)
+study.stages.add_relax(stage_id="relax-zero-current", dt=1e-13)
+study.stages.set_spin_torque_enabled(
+    module_id="transport-torque",
+    enabled=True,
+    stage_id="enable-transport-torque",
+)
+"""
+        )
+
+        disabled, relax, enabled = loaded.stages
+        self.assertEqual(
+            disabled.action,
+            {
+                "kind": "set_spin_torque_enabled",
+                "module_id": "transport-torque",
+                "enabled": False,
+            },
+        )
+        self.assertEqual(relax.stage_id, "relax-zero-current")
+        self.assertEqual(enabled.action["enabled"], True)
+        self.assertEqual(
+            [node["stage_kind"] for node in loaded.study_pipeline_document()["nodes"]],
+            ["set_spin_torque_enabled", "relax", "set_spin_torque_enabled"],
+        )
+        rendered = rewrite_loaded_problem_script(loaded)["rendered_source"]
+        reloaded = _load(rendered)
+        self.assertIn("study.stages.set_spin_torque_enabled(", rendered)
+        self.assertEqual(reloaded.stages[0].action, disabled.action)
+        self.assertEqual(reloaded.stages[2].action, enabled.action)
+
     def test_tableadd_serializes_object_magnetization_expression(self) -> None:
         loaded = _load(
             _PREAMBLE

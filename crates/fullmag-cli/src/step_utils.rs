@@ -1335,6 +1335,10 @@ fn materialize_pipeline_primitive(
             apply_pipeline_set_transport_current(current_ir, payload)?;
             Ok(None)
         }
+        "set_spin_torque_enabled" => {
+            apply_pipeline_set_spin_torque_enabled(current_ir, payload)?;
+            Ok(None)
+        }
         "save_state" => materialize_pipeline_save_state(current_ir, payload).map(Some),
         "load_state" => materialize_pipeline_load_state(current_ir, payload).map(Some),
         "export" => materialize_pipeline_export(current_ir, payload).map(Some),
@@ -3365,9 +3369,9 @@ fn apply_pipeline_set_transport_current(
         .iter()
         .enumerate()
         .filter_map(|(index, module)| match module {
-            fullmag_ir::CurrentModuleIR::CurrentTransport {
-                name, ..
-            } if name == &module_id => Some(index),
+            fullmag_ir::CurrentModuleIR::CurrentTransport { name, .. } if name == &module_id => {
+                Some(index)
+            }
             _ => None,
         })
         .collect();
@@ -3389,9 +3393,7 @@ fn apply_pipeline_set_transport_current(
         .boundaries
         .iter()
         .filter_map(|boundary| match boundary {
-            fullmag_ir::ChargeBoundaryIR::NormalCurrentElectrode { id, .. } => {
-                Some(id.as_str())
-            }
+            fullmag_ir::ChargeBoundaryIR::NormalCurrentElectrode { id, .. } => Some(id.as_str()),
             _ => None,
         })
         .collect();
@@ -3413,6 +3415,90 @@ fn apply_pipeline_set_transport_current(
         } = boundary
         {
             *outward_current_density_apm2 = values[id.as_str()];
+        }
+    }
+    Ok(())
+}
+
+fn apply_pipeline_set_spin_torque_enabled(
+    problem: &mut ProblemIR,
+    payload: &BTreeMap<String, Value>,
+) -> Result<()> {
+    let module_id = payload_string(payload, "module_id")
+        .filter(|value| !value.trim().is_empty())
+        .context("study pipeline set_spin_torque_enabled requires payload.module_id")?;
+    let enabled = payload
+        .get("enabled")
+        .and_then(Value::as_bool)
+        .context("study pipeline set_spin_torque_enabled requires boolean payload.enabled")?;
+
+    let typed_matches = problem
+        .spin_torque_modules
+        .iter()
+        .filter(|module| match module {
+            fullmag_ir::SpinTorqueModuleIR::Slonczewski { id, .. }
+            | fullmag_ir::SpinTorqueModuleIR::ZhangLi { id, .. } => {
+                id.as_deref() == Some(module_id.as_str())
+            }
+            fullmag_ir::SpinTorqueModuleIR::DriftDiffusionSpinTorque { id, .. }
+            | fullmag_ir::SpinTorqueModuleIR::PrescribedSot { id, .. } => id == &module_id,
+            fullmag_ir::SpinTorqueModuleIR::InterfaceCpp { .. }
+            | fullmag_ir::SpinTorqueModuleIR::DriftDiffusion { .. }
+            | fullmag_ir::SpinTorqueModuleIR::SpinOrbitTorque { .. } => false,
+        })
+        .count();
+    if typed_matches != 1 {
+        bail!(
+            "study pipeline set_spin_torque_enabled module_id '{}' must identify exactly one typed spin torque module",
+            module_id
+        );
+    }
+
+    let graph = problem
+        .physics_graph
+        .as_mut()
+        .and_then(Value::as_object_mut)
+        .context("study pipeline set_spin_torque_enabled requires physics_graph.v1")?;
+    if graph.get("schema_version").and_then(Value::as_str) != Some("physics_graph.v1") {
+        bail!("study pipeline set_spin_torque_enabled requires physics_graph.v1");
+    }
+    let modules = graph
+        .get_mut("modules")
+        .and_then(Value::as_array_mut)
+        .context("physics_graph.v1 modules must be an array")?;
+    let matching_graph_indices: Vec<_> = modules
+        .iter()
+        .enumerate()
+        .filter_map(|(index, module)| {
+            (module.get("id").and_then(Value::as_str) == Some(module_id.as_str())
+                && module.get("kind").and_then(Value::as_str) == Some("spin_torque"))
+            .then_some(index)
+        })
+        .collect();
+    let [module_index] = matching_graph_indices.as_slice() else {
+        bail!(
+            "study pipeline set_spin_torque_enabled module_id '{}' must identify exactly one physics_graph spin_torque module",
+            module_id
+        );
+    };
+    let activation = if enabled { "active" } else { "inactive" };
+    modules[*module_index]
+        .as_object_mut()
+        .expect("matching graph module must be an object")
+        .insert(
+            "activation".to_string(),
+            Value::String(activation.to_string()),
+        );
+
+    let edges = graph
+        .get_mut("edges")
+        .and_then(Value::as_array_mut)
+        .context("physics_graph.v1 edges must be an array")?;
+    for edge in edges {
+        if edge.get("target_id").and_then(Value::as_str) == Some(module_id.as_str()) {
+            edge.as_object_mut()
+                .expect("physics graph edge must be an object")
+                .insert("status".to_string(), Value::String(activation.to_string()));
         }
     }
     Ok(())
@@ -6020,6 +6106,85 @@ mod tests {
             })
             .collect();
         assert_eq!(values, vec![-1e12, 1e12]);
+    }
+
+    #[test]
+    fn materialize_script_stages_updates_spin_torque_graph_activation_and_edge() {
+        let fixture: Value = serde_json::from_str(include_str!(
+            "../../../tests/standard_problems/transport/racetrack_m1_v1/fixture.v1.json"
+        ))
+        .expect("racetrack fixture");
+        let lowering = fixture
+            .get("normalized_problem_ir_contract")
+            .and_then(|value| value.get("expected_lowering"))
+            .expect("fixture lowering");
+        let mut ir: ProblemIR =
+            serde_json::from_value(lowering.clone()).expect("typed racetrack lowering");
+        let torque_payload = serde_json::to_value(&ir.spin_torque_modules[0])
+            .expect("serialize typed torque payload");
+        ir.physics_graph = Some(json!({
+            "schema_version": "physics_graph.v1",
+            "scene_revision": 0,
+            "modules": [{
+                "id": "transport_torque",
+                "kind": "spin_torque",
+                "applies_to": [],
+                "solve_domain": [],
+                "depends_on": ["spin"],
+                "activation": "active",
+                "authored_state": "authored",
+                "capability": "semantic_only",
+                "source_path": "/spin_torque_modules/0",
+                "family_payload": torque_payload
+            }],
+            "edges": [{
+                "kind": "spin_transport_to_torque",
+                "source_id": "spin",
+                "target_id": "transport_torque",
+                "status": "active"
+            }]
+        }));
+        let config = ScriptExecutionConfig {
+            ir,
+            shared_geometry_assets: None,
+            default_until_seconds: Some(3e-12),
+            study_pipeline: Some(StudyPipelineDocument {
+                version: "study_pipeline.v1".to_string(),
+                nodes: vec![
+                    StudyPipelineNode::Primitive {
+                        id: "disable-torque".to_string(),
+                        label: "Disable transport torque".to_string(),
+                        enabled: true,
+                        notes: None,
+                        source: Some("script_imported".to_string()),
+                        stage_kind: "set_spin_torque_enabled".to_string(),
+                        payload: serde_json::from_value(json!({
+                            "module_id": "transport_torque",
+                            "enabled": false
+                        }))
+                        .expect("payload"),
+                    },
+                    StudyPipelineNode::Primitive {
+                        id: "run".to_string(),
+                        label: "Run".to_string(),
+                        enabled: true,
+                        notes: None,
+                        source: Some("script_imported".to_string()),
+                        stage_kind: "run".to_string(),
+                        payload: serde_json::from_value(json!({
+                            "until_seconds": "3e-12"
+                        }))
+                        .expect("payload"),
+                    },
+                ],
+            }),
+            stages: vec![],
+        };
+
+        let stages = materialize_script_stages(config).expect("pipeline should materialize");
+        let graph = stages[0].ir.physics_graph.as_ref().expect("physics graph");
+        assert_eq!(graph["modules"][0]["activation"], "inactive");
+        assert_eq!(graph["edges"][0]["status"], "inactive");
     }
 
     #[test]

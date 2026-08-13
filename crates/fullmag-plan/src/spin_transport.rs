@@ -2405,7 +2405,20 @@ fn materialize_fdm_descriptor(
             .interfaces
             .iter()
             .any(|interface| matches!(interface, SpinInterfaceIR::MixingConductance { .. }));
-    if has_magnetic_sink && torque_formula_version.is_none() {
+    let mut terminal_count = 0usize;
+    let all_terminal_currents_zero = charge.boundaries.iter().all(|boundary| {
+        if let ChargeBoundaryIR::NormalCurrentElectrode {
+            outward_current_density_apm2,
+            ..
+        } = boundary
+        {
+            terminal_count += 1;
+            *outward_current_density_apm2 == 0.0
+        } else {
+            true
+        }
+    }) && terminal_count > 0;
+    if has_magnetic_sink && torque_formula_version.is_none() && !all_terminal_currents_zero {
         return Err(vec![format!(
             "spin transport '{}' has magnetic spin sinks but no DriftDiffusionSpinTorque target",
             module.id

@@ -886,18 +886,95 @@ fn typed_torque_edge_status_must_match_module_activation() {
                 panic!("{activation} primary plan must remain executable: {error:?}")
             });
         } else {
-            let error = fullmag_plan::plan(&problem).expect_err(&format!(
-                "{activation} torque must not be executable through the primary plan"
-            ));
-            assert!(
-                error.reasons.iter().any(|reason| {
-                    reason.contains("spin transport 'spin'")
-                        && reason.contains("no DriftDiffusionSpinTorque target")
-                }),
-                "{activation} primary plan must fail because torque is non-executable: {error:?}"
-            );
+            fullmag_plan::plan(&problem).unwrap_or_else(|error| {
+                panic!(
+                    "{activation} torque must remain provenance-only for the zero-terminal fixture: {error:?}"
+                )
+            });
         }
     }
+}
+
+#[test]
+fn inactive_transport_torque_is_executable_only_for_exact_zero_terminal_drive() {
+    let torque = drift_diffusion_torque("torque", "spin");
+    let payload = serde_json::to_value(&torque).expect("serialize typed torque");
+    let mut problem =
+        typed_torque_graph_problem(torque, payload, "spin", "spin_transport_to_torque");
+    let fullmag_ir::CurrentModuleIR::CurrentTransport {
+        definition: Some(definition),
+        ..
+    } = &mut problem.current_modules[0]
+    else {
+        panic!("racetrack fixture must contain complete current transport");
+    };
+    for boundary in &mut definition.boundaries {
+        if let fullmag_ir::ChargeBoundaryIR::NormalCurrentElectrode {
+            outward_current_density_apm2,
+            ..
+        } = boundary
+        {
+            *outward_current_density_apm2 = 0.0;
+        }
+    }
+    let graph = problem
+        .physics_graph
+        .as_mut()
+        .and_then(serde_json::Value::as_object_mut)
+        .expect("typed graph");
+    graph["modules"]
+        .as_array_mut()
+        .expect("modules")
+        .iter_mut()
+        .find(|module| module.get("id").and_then(serde_json::Value::as_str) == Some("torque"))
+        .expect("torque module")["activation"] = serde_json::json!("inactive");
+    graph["edges"]
+        .as_array_mut()
+        .expect("edges")
+        .iter_mut()
+        .find(|edge| edge.get("target_id").and_then(serde_json::Value::as_str) == Some("torque"))
+        .expect("torque edge")["status"] = serde_json::json!("inactive");
+
+    let plan = fullmag_plan::plan(&problem)
+        .expect("zero-current relaxation may preserve sinks with inactive torque");
+    let fullmag_ir::BackendPlanIR::Fdm(fdm) = plan.backend_plan else {
+        panic!("expected FDM plan");
+    };
+    let descriptor = fdm.spin_transport_plans[0]
+        .fdm_cpu_double
+        .as_ref()
+        .expect("CPU transport descriptor");
+    assert!(descriptor.torque_target_masks.is_empty());
+    assert!(descriptor
+        .torque_target_cells
+        .iter()
+        .all(|selected| !selected));
+
+    let fullmag_ir::CurrentModuleIR::CurrentTransport {
+        definition: Some(definition),
+        ..
+    } = &mut problem.current_modules[0]
+    else {
+        unreachable!("complete transport already asserted");
+    };
+    let terminal = definition
+        .boundaries
+        .iter_mut()
+        .find_map(|boundary| match boundary {
+            fullmag_ir::ChargeBoundaryIR::NormalCurrentElectrode {
+                outward_current_density_apm2,
+                ..
+            } => Some(outward_current_density_apm2),
+            _ => None,
+        })
+        .expect("at least one terminal");
+    *terminal = 1.0;
+    let error = fullmag_plan::plan(&problem)
+        .expect_err("inactive torque with nonzero terminal drive must fail closed");
+    assert!(error.reasons.iter().any(|reason| {
+        reason.contains("spin transport 'spin'")
+            && reason.contains("no DriftDiffusionSpinTorque target")
+    }));
 }
 
 fn assert_typed_torque_status_rejected(field: &str, malformed: Option<serde_json::Value>) {

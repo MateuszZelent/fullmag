@@ -804,6 +804,25 @@ a każda materializacja runu musi zawierać konkretne istniejące cele
 `current_modules[0].boundaries[0|1].outward_current_density_Apm2`. Nie istnieje
 syntetyczny cel `boundaries[current_sweep]`.
 
+Stage-local `set_spin_torque_enabled(module_id, enabled)` zmienia wyłącznie
+stan istniejącego modułu `spin_torque` w `physics_graph.v1` oraz status jego
+wchodzącej krawędzi. Nie usuwa payloadu torque, spin transportu ani źródła
+ładunkowego. `enabled=False` mapuje się na `activation="inactive"`, a
+`enabled=True` na `activation="active"`; inne stany graphu nie są publiczną
+mutacją workflow. Wyłączenie torque przy zachowaniu magnetycznych sinków jest
+dozwolone tylko wtedy, gdy wszystkie terminale `normal_current_electrode`
+sprzężonego solve mają dokładnie `0 A/m^2`. Dla niezerowego napędu brak
+aktywnego `DriftDiffusionSpinTorque` nadal jest błędem fail-closed. Dzięki temu
+`relax_zero_current` zachowuje pełny, audytowalny graf transportu, ale nie
+wiąże torque do RHS LLG i nie otwiera ogólnej ścieżki utraty momentu pędu przy
+przepływie prądu.
+
+Normatywna sekwencja workloadu to:
+`set_transport_current(J_n=0) -> set_spin_torque_enabled(False) -> relax ->
+save_state("relaxed_zero_current") -> set_spin_torque_enabled(True)`, a każdy
+drive wykonuje następnie
+`set_transport_current -> load_state("relaxed_zero_current") -> run`.
+
 Sama obecność tych dwóch akcji nie kwalifikuje jeszcze workloadu. Osobna
 stage-local activation musi dowieść, że `relax_zero_current` zachowuje moduł
 transportu, ale nie wiąże transportowego torque do RHS; dopóki ta bramka oraz

@@ -657,6 +657,7 @@ def _infer_pipeline_stage_kind(stage_draft: dict[str, object]) -> str:
         "save_state",
         "load_state",
         "set_transport_current",
+        "set_spin_torque_enabled",
         "export",
         "change_device",
         "add_field_drive",
@@ -726,6 +727,19 @@ def _export_stage_draft(stage: LoadedStage) -> dict[str, object]:
                 "entrypoint_kind": stage.entrypoint_kind,
                 "module_id": module_id,
                 "terminal_outward_current_density_Apm2": copy.deepcopy(values),
+            }
+        if action_kind == "set_spin_torque_enabled":
+            module_id = _text_value(action.get("module_id"))
+            enabled = action.get("enabled")
+            if not module_id or not isinstance(enabled, bool):
+                raise TypeError(
+                    "set_spin_torque_enabled action requires module_id and bool enabled"
+                )
+            return {
+                "kind": "set_spin_torque_enabled",
+                "entrypoint_kind": stage.entrypoint_kind,
+                "module_id": module_id,
+                "enabled": enabled,
             }
         if action_kind == "export":
             return {
@@ -5144,6 +5158,27 @@ def _render_stages(
                     f"study.stages.set_transport_current({', '.join(call_parts)})"
                 )
                 continue
+            if action_kind == "set_spin_torque_enabled":
+                if not is_study_surface:
+                    raise ValueError(
+                        "set_spin_torque_enabled action requires the study API surface"
+                    )
+                module_id = _text_value(stage.action.get("module_id"))
+                enabled = stage.action.get("enabled")
+                if not module_id or not isinstance(enabled, bool):
+                    raise ValueError(
+                        "set_spin_torque_enabled action requires module_id and bool enabled"
+                    )
+                call_parts = [
+                    f"module_id={_py_repr(module_id)}",
+                    f"enabled={enabled!r}",
+                ]
+                if stage.stage_id is not None:
+                    call_parts.append(f"stage_id={_py_repr(stage.stage_id)}")
+                lines.append(
+                    f"study.stages.set_spin_torque_enabled({', '.join(call_parts)})"
+                )
+                continue
             if action_kind == "change_device":
                 action_device = _text_value(stage.action.get("device")) or "auto"
                 if is_study_surface:
@@ -5921,6 +5956,7 @@ def _stage_override_for(
             "save_state",
             "load_state",
             "set_transport_current",
+            "set_spin_torque_enabled",
             "export",
             "change_device",
             "add_field_drive",
