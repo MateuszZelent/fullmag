@@ -12,7 +12,7 @@ use crate::router_v2::handlers::data::resolved_spatial_field::{
 };
 
 use super::{
-    FdmPlanarField, FemPlanarField, PlanarSampleResult, PlanarSamplingEngine,
+    FdmPlanarField, FemPlanarField, PlanarMeshOverlay, PlanarSampleResult, PlanarSamplingEngine,
     ResolvedPlanarSampleRequest,
 };
 
@@ -66,6 +66,19 @@ impl ResolvedSpatialTarget {
 
     pub(crate) fn source_entity_kind(&self) -> &'static str {
         self.source_entity_kind
+    }
+
+    pub(crate) fn build_fdm_grid_overlay(
+        &self,
+        request: &ResolvedPlanarSampleRequest,
+    ) -> Result<Option<PlanarMeshOverlay>, ApiError> {
+        match &self.field {
+            TargetField::Fdm(field) => Ok(Some(crate::planar_sampling::fdm::build_grid_overlay(
+                field,
+                &crate::planar_sampling::frame::ResolvedFrame::try_from_ir(&request.frame)?,
+            )?)),
+            TargetField::Fem(_) => Ok(None),
+        }
     }
 
     pub(crate) fn resolve_dynamic_extent(&self, frame: &mut PlanarFrameIR) -> Result<(), ApiError> {

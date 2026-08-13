@@ -147,9 +147,9 @@ export function decodeCrossSection(buffer: ArrayBuffer): DecodedCrossSection {
 }
 
 export interface PlanarMeshOverlay {
-  boundaryClassification: "degraded" | "exact";
+  boundaryClassification: "degraded" | "exact" | "unavailable";
   bounds: readonly number[];
-  codec: "fmcs.v3" | "fmcs.v4";
+  codec: "fmcs.v3" | "fmcs.v4" | "fmfg.v1";
   frame: {
     normal: readonly number[];
     origin: readonly number[];

@@ -138,7 +138,7 @@ export function drawPlanarOverlays(
 }
 
 export function partitionPlanarMeshSegments(overlay: {
-  boundaryClassification: "degraded" | "exact";
+  boundaryClassification: "degraded" | "exact" | "unavailable";
   segmentKinds: Uint8Array;
   segments: Float32Array;
 }): { boundarySegments: Float32Array; meshSegments: Float32Array } {

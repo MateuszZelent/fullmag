@@ -77,6 +77,141 @@ fn planar_sampling_fdm_constant_scalar_and_vector_basis_are_exact() {
 }
 
 #[test]
+fn planar_fdm_grid_overlay_is_physical_deduplicated_and_fmfg_v1() {
+    let field =
+        FdmPlanarField::new(1, [2, 2, 1], [0.0, 0.0, 0.0], [1.0, 1.0, 1.0], vec![1.0; 4]).unwrap();
+    let frame =
+        crate::planar_sampling::frame::ResolvedFrame::try_from_ir(&fullmag_ir::PlanarFrameIR {
+            origin_m: [0.0, 0.0, 0.5],
+            u_axis: [1.0, 0.0, 0.0],
+            v_axis: [0.0, 1.0, 0.0],
+            normal: [0.0, 0.0, 1.0],
+            preset: Some(fullmag_ir::PlanarFramePresetIR::Xy),
+            normalization_version: "planar_frame_v1".to_string(),
+            extent: fullmag_ir::PlanarExtentIR::Explicit {
+                u_min_m: 0.0,
+                u_max_m: 2.0,
+                v_min_m: 0.0,
+                v_max_m: 2.0,
+            },
+        })
+        .unwrap();
+
+    let overlay = crate::planar_sampling::fdm::build_grid_overlay(&field, &frame).unwrap();
+    assert_eq!(
+        overlay.segments.len(),
+        12,
+        "shared cell edges must be deduplicated"
+    );
+    assert!(overlay.segments.iter().all(|segment| {
+        segment
+            .a_uv_m
+            .iter()
+            .chain(&segment.b_uv_m)
+            .all(|value| value.is_finite())
+    }));
+    let bytes = crate::fdm_planar_grid_overlay::serialize_fmfg_v1(&overlay).unwrap();
+    assert_eq!(&bytes[..4], b"FMFG");
+    assert_eq!(u32::from_le_bytes(bytes[4..8].try_into().unwrap()), 1);
+    assert_eq!(u32::from_le_bytes(bytes[8..12].try_into().unwrap()), 12);
+}
+
+#[test]
+fn planar_fdm_grid_overlay_honors_membership_mask() {
+    let field = FdmPlanarField::new(1, [2, 1, 1], [0.0, 0.0, 0.0], [1.0, 1.0, 1.0], vec![1.0; 2])
+        .unwrap()
+        .with_membership_mask(vec![true, false])
+        .unwrap();
+    let frame = crate::planar_sampling::frame::ResolvedFrame::try_from_ir(&PlanarFrameIR {
+        extent: PlanarExtentIR::Explicit {
+            u_min_m: 0.0,
+            u_max_m: 2.0,
+            v_min_m: 0.0,
+            v_max_m: 1.0,
+        },
+        ..explicit_frame([0.0, 0.0, 0.5], [1.0, 0.0, 0.0], [0.0, 0.0, 1.0])
+    })
+    .unwrap();
+
+    let overlay = crate::planar_sampling::fdm::build_grid_overlay(&field, &frame).unwrap();
+    assert_eq!(overlay.segments.len(), 4);
+    assert!(overlay
+        .segments
+        .iter()
+        .all(|segment| { segment.a_uv_m[0] <= 1.0 && segment.b_uv_m[0] <= 1.0 }));
+}
+
+#[test]
+fn planar_fdm_grid_overlay_deduplicates_plane_on_shared_cell_wall() {
+    let field =
+        FdmPlanarField::new(1, [2, 1, 1], [0.0, 0.0, 0.0], [1.0, 1.0, 1.0], vec![1.0; 2]).unwrap();
+    let frame = crate::planar_sampling::frame::ResolvedFrame::try_from_ir(&PlanarFrameIR {
+        extent: PlanarExtentIR::Explicit {
+            u_min_m: 0.0,
+            u_max_m: 1.0,
+            v_min_m: 0.0,
+            v_max_m: 1.0,
+        },
+        ..explicit_frame([1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [1.0, 0.0, 0.0])
+    })
+    .unwrap();
+
+    let overlay = crate::planar_sampling::fdm::build_grid_overlay(&field, &frame).unwrap();
+    assert_eq!(overlay.segments.len(), 4);
+}
+
+#[test]
+fn planar_fdm_grid_overlay_supports_arbitrary_normalized_frame() {
+    let field =
+        FdmPlanarField::new(1, [1, 1, 1], [0.0, 0.0, 0.0], [1.0, 1.0, 1.0], vec![1.0]).unwrap();
+    let inverse_sqrt_two = 1.0 / 2.0_f64.sqrt();
+    let inverse_sqrt_three = 1.0 / 3.0_f64.sqrt();
+    let frame = crate::planar_sampling::frame::ResolvedFrame::try_from_ir(&PlanarFrameIR {
+        extent: PlanarExtentIR::Explicit {
+            u_min_m: -1.0,
+            u_max_m: 1.0,
+            v_min_m: -1.0,
+            v_max_m: 1.0,
+        },
+        ..explicit_frame(
+            [0.5, 0.5, 0.5],
+            [inverse_sqrt_two, -inverse_sqrt_two, 0.0],
+            [inverse_sqrt_three; 3],
+        )
+    })
+    .unwrap();
+
+    let overlay = crate::planar_sampling::fdm::build_grid_overlay(&field, &frame).unwrap();
+    assert_eq!(overlay.segments.len(), 6);
+}
+
+#[test]
+fn planar_fdm_grid_overlay_fails_instead_of_truncating_segment_budget() {
+    let side = 317_u32;
+    let field = FdmPlanarField::new(
+        1,
+        [side, side, 1],
+        [0.0, 0.0, 0.0],
+        [1.0, 1.0, 1.0],
+        vec![1.0; (side * side) as usize],
+    )
+    .unwrap();
+    let frame = crate::planar_sampling::frame::ResolvedFrame::try_from_ir(&PlanarFrameIR {
+        extent: PlanarExtentIR::Explicit {
+            u_min_m: 0.0,
+            u_max_m: side as f64,
+            v_min_m: 0.0,
+            v_max_m: side as f64,
+        },
+        ..explicit_frame([0.0, 0.0, 0.5], [1.0, 0.0, 0.0], [0.0, 0.0, 1.0])
+    })
+    .unwrap();
+
+    let error = crate::planar_sampling::fdm::build_grid_overlay(&field, &frame).unwrap_err();
+    assert!(error.to_string().contains("planar_mesh_budget_exceeded"));
+}
+
+#[test]
 fn planar_sampling_fdm_plane_supports_large_production_raster() {
     let field = FdmPlanarField::new(
         1,

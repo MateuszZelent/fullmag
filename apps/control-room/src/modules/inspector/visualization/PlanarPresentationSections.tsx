@@ -40,7 +40,8 @@ export function PlanarGeometryLayersSection({
     if (capability.enabled) return undefined;
     switch (capability.reasonCode) {
       case "mesh_overlay_unavailable": return "Mesh overlay is unavailable for this sample.";
-      case "mesh_overlay_codec_unsupported": return "Mesh overlay requires the fmcs.v4 descriptor codec.";
+      case "mesh_overlay_codec_unsupported": return "Mesh overlay requires the fmcs.v4 or fmfg.v1 descriptor codec.";
+      case "target_boundaries_unavailable": return "FDM structured-grid overlays do not publish exact target boundaries.";
       case "occupancy_mask_unavailable": return "Sample points require the canonical occupancy mask.";
       case "planar_meta_unavailable": return "Planar sample metadata is not materialized.";
       case "boundaries_not_exact": return "Exact boundaries are unavailable for this overlay descriptor.";

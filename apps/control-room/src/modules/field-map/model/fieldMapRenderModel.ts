@@ -58,6 +58,7 @@ export interface FieldMapRenderModelInput {
     available: boolean;
     boundaryClassification: string;
     codec?: string | null;
+    geometrySource?: string | null;
   };
   meshOverlay?: ArrayBuffer | null;
   range: PlanarDisplayRange | null;
@@ -88,6 +89,7 @@ export interface FieldMapRenderModel {
   interaction: { panU: number; panV: number; zoom: number };
   layers: FieldMapRenderLayers;
   mask: Uint8Array | null;
+  meshOverlayDescriptor: FieldMapRenderModelInput["meshOverlayDescriptor"];
   meshOverlay: ArrayBuffer | null;
   rasterOpacity: number | null;
   range: { max: number; min: number } | null;
@@ -208,7 +210,9 @@ export function buildFieldMapRenderModel(
     input.meshOverlayDescriptor.boundaryClassification === "exact" &&
     input.meshOverlayDescriptor.codec === "fmcs.v4";
   if (input.layers.boundaries && !boundariesExact) {
-    diagnostics.push(input.meshOverlayDescriptor?.codec === "fmcs.v3"
+    diagnostics.push(input.meshOverlayDescriptor?.codec === "fmfg.v1"
+      ? "2D target boundaries are unavailable for an FDM structured-grid overlay."
+      : input.meshOverlayDescriptor?.codec === "fmcs.v3"
       ? "2D boundaries are unavailable: FMCS v3 has no exact target-boundary classes."
       : "2D boundaries are unavailable: mesh overlay classification is unavailable or degraded.");
   }
@@ -250,6 +254,7 @@ export function buildFieldMapRenderModel(
       raster: Boolean(input.layers.raster && rasterOpacityValid && range !== null),
     },
     mask: input.mask ?? null,
+    meshOverlayDescriptor: input.meshOverlayDescriptor,
     meshOverlay: input.meshOverlay ?? null,
     rasterOpacity: rasterOpacityValid ? rasterOpacity : null,
     range,

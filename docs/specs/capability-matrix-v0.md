@@ -411,7 +411,7 @@ managed-run provenance.
 | `planar_depth_projection` | cell-volume weighted, CPU sampler | conservative tetra measure, CPU sampler | unsupported | unsupported reduction rejects |
 | `planar_surface_projection` `object_boundary` | unsupported: boundary topology absent | boundary-triangle measure, CPU sampler | unsupported | region/named FEM surfaces reject; folded/non-injective surfaces are diagnostic |
 | `planar_vector_sampling` | implemented, browser unqualified | implemented for P1 nodal vectors, browser unqualified | unsupported | unavailable component returns stable reason |
-| `planar_mesh_overlay` | no sampler overlay | exact P1 section topology, browser unqualified | unsupported | absence does not alter sampled values |
+| `planar_mesh_overlay` | `monitor_target` plane/slab/depth: proceduralny przekrój structured grid (`FMFG v1`), boundaries niedostępne | exact P1 section topology (`FMCS v4`), browser unqualified | unsupported poza wskazanymi scope/operatorami | overlay nie zmienia sampled values ani sample token; FDM nie udaje target boundary |
 | `planar_target.domain` | full rectangular carrier | all Tet4 elements after full-nodal carrier load | unsupported | carrier semantics are not magnetic-target semantics |
 | `planar_target.magnetic_domain` | all active cells | all elements with non-zero marker after full-nodal carrier load | unsupported | missing/stale membership or topology rejects |
 | `planar_target.object` | conditional only: current mask selects all active cells after checking object existence; incorrect for general multi-object grids | mesh-part element selection after full-nodal carrier load | unsupported | FDM multi-object qualification is RED; no all-active substitution may be claimed |

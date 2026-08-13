@@ -66,7 +66,9 @@ function capabilityReason(capability: FieldMapCapability): string | undefined {
     case "planar_meta_unavailable":
       return "Planar sample metadata is not materialized.";
     case "mesh_overlay_codec_unsupported":
-      return "Mesh overlay requires the fmcs.v4 descriptor codec.";
+      return "Mesh overlay requires the fmcs.v4 or fmfg.v1 descriptor codec.";
+    case "target_boundaries_unavailable":
+      return "FDM structured-grid overlays do not publish exact target boundaries.";
     case "boundaries_not_exact":
       return "Exact boundaries are unavailable for this overlay descriptor.";
     case "quantity_not_vector":
@@ -148,6 +150,7 @@ export function PlanarVisualizationSection({ selection }: { selection: Selection
           available: meta.data.mesh_overlay_descriptor.available,
           boundaryClassification: meta.data.mesh_overlay_descriptor.boundary_classification,
           codec: meta.data.mesh_overlay_descriptor.codec,
+          geometrySource: meta.data.mesh_overlay_descriptor.geometry_source,
         }
       : null,
     discretization,

@@ -30,6 +30,7 @@ describe("planar inspector capabilities", () => {
     ["unavailable", { available: false, boundaryClassification: "exact", codec: "fmcs.v4" }, "fem", { kind: "monitor_target" as const }, false, false, true],
     ["wrong codec", { available: true, boundaryClassification: "exact", codec: "fmcs.v3" }, "fem", { kind: "monitor_target" as const }, false, false, true],
     ["FDM mesh part", { available: true, boundaryClassification: "exact", codec: "fmcs.v4" }, "fdm", { kind: "mesh_part" as const }, false, false, false],
+    ["FDM structured grid", { available: true, boundaryClassification: "unavailable", codec: "fmfg.v1", geometrySource: "fdm_structured_grid" }, "fdm", { kind: "monitor_target" as const }, true, false, true],
   ] as const)("fails closed for %s descriptors and scope", (_name, descriptor, discretization, scope, mesh, boundaries, raster) => {
     const result = resolvePlanarInspectorCapabilities({
       descriptor,

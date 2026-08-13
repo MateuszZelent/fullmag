@@ -13530,12 +13530,17 @@ async fn planar_field_resources_publish_meta_binary_probe_png_and_etag() {
     assert_eq!(meta_json["scene_revision"], SCENE_REVISION.to_string());
     assert_eq!(meta_json["mesh_revision"], MESH_REVISION.to_string());
     assert_eq!(meta_json["field_revision"], FIELD_REVISION.to_string());
-    assert_eq!(meta_json["mesh_overlay_descriptor"]["available"], false);
+    assert_eq!(meta_json["schema_version"], "planar_sample_meta.v3");
+    assert_eq!(meta_json["mesh_overlay_descriptor"]["available"], true);
     assert_eq!(
         meta_json["mesh_overlay_descriptor"]["boundary_classification"],
         "unavailable"
     );
-    assert!(meta_json["mesh_overlay_descriptor"]["codec"].is_null());
+    assert_eq!(meta_json["mesh_overlay_descriptor"]["codec"], "fmfg.v1");
+    assert_eq!(
+        meta_json["mesh_overlay_descriptor"]["geometry_source"],
+        "fdm_structured_grid"
+    );
     let monitor_revision = meta_json["monitor_revision"].as_str().unwrap();
     let carrier_revision = meta_json["carrier_revision"].as_str().unwrap();
     let sample_token = meta_json["sample_token"].as_str().unwrap();
@@ -13648,7 +13653,40 @@ async fn planar_field_resources_publish_meta_binary_probe_png_and_etag() {
         )
         .await
         .unwrap();
-    assert_eq!(overlay.status(), StatusCode::NO_CONTENT);
+    assert_eq!(overlay.status(), StatusCode::OK);
+    let overlay_etag = overlay.headers()["etag"].to_str().unwrap().to_string();
+    assert!(overlay_etag.contains("fmfg-v1"));
+    let overlay = body_bytes(overlay).await;
+    assert_eq!(&overlay[..4], b"FMFG");
+    assert_eq!(u32::from_le_bytes(overlay[4..8].try_into().unwrap()), 1);
+    assert!(u32::from_le_bytes(overlay[8..12].try_into().unwrap()) > 0);
+    let overlay_not_modified = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(meta_json["links"]["mesh_overlay"].as_str().unwrap())
+                .header("if-none-match", overlay_etag)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(overlay_not_modified.status(), StatusCode::NOT_MODIFIED);
+    let mesh_enabled_meta = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!("{base}/meta{query}&include_mesh=true"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(mesh_enabled_meta.status(), StatusCode::OK);
+    assert_eq!(
+        body_json(mesh_enabled_meta).await["sample_token"],
+        sample_token
+    );
 
     let stale_mesh = app
         .clone()
@@ -14013,6 +14051,10 @@ async fn planar_field_fem_overlay_is_fmcs_v4_and_mesh_part_scope_changes_samplin
     let meta = body_json(meta).await;
     assert_eq!(meta["mesh_overlay_descriptor"]["available"], true);
     assert_eq!(meta["mesh_overlay_descriptor"]["codec"], "fmcs.v4");
+    assert_eq!(
+        meta["mesh_overlay_descriptor"]["geometry_source"],
+        "fem_topology"
+    );
     assert_eq!(
         meta["mesh_overlay_descriptor"]["boundary_classification"],
         "exact"
@@ -34287,6 +34329,14 @@ fn openapi_contains_planar_field_data_paths() {
         overlay_descriptor["properties"]["boundary_classification"]["type"],
         "string"
     );
+    assert_eq!(
+        overlay_descriptor["properties"]["geometry_source"]["type"],
+        "string"
+    );
+    assert!(overlay_descriptor["required"]
+        .as_array()
+        .unwrap()
+        .contains(&serde_json::json!("geometry_source")));
     for resource in ["meta", "scalar", "vectors", "empty-mask", "mesh-overlay"] {
         let response = &paths[&format!(
             "/v2/sessions/current/data/fields/{{quantity_id}}/planar-monitors/{{monitor_id}}/{resource}"

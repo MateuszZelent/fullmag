@@ -17,7 +17,7 @@ use crate::{
     planar_sampling::{
         resolve_spatial_target, sample_resolved_target, Occupancy, PlanarComponent,
         PlanarSampleIdentity, PlanarSampleResult, ResolvedPlanarSampleRequest,
-        ResolvedSpatialScope, MAX_PLANAR_SAMPLE_POINTS,
+        ResolvedSpatialScope, ResolvedSpatialTarget, MAX_PLANAR_SAMPLE_POINTS,
     },
     preview::quantity_unit,
     router_v2::handlers::{
@@ -45,6 +45,8 @@ const MAX_RESOLUTION: u32 = 2048;
 
 struct BuiltPlanarField {
     result: Arc<PlanarSampleResult>,
+    target: Arc<ResolvedSpatialTarget>,
+    request: ResolvedPlanarSampleRequest,
     monitor: PlanarMonitorIR,
     scene_revision: u64,
     monitor_revision: u64,
@@ -346,8 +348,7 @@ pub async fn get_planar_field_render_png(
     path = "/v2/sessions/current/data/fields/{quantity_id}/planar-monitors/{monitor_id}/mesh-overlay",
     params(("quantity_id" = String, Path), ("monitor_id" = String, Path), PlanarFieldQuery),
     responses(
-        (status = 200, description = "FMCS v4 planar mesh overlay with exact segment classes"),
-        (status = 204, description = "Structured grid has no FEM overlay"),
+        (status = 200, description = "FMCS v4 FEM topology or FMFG v1 FDM structured-grid planar overlay"),
         (status = 304, description = "Not modified"),
         (status = 400, description = "Invalid planar query", body = crate::schemas::common::ApiErrorResponse),
         (status = 404, description = "Field or monitor missing", body = crate::schemas::common::ApiErrorResponse),
@@ -363,14 +364,31 @@ pub async fn get_planar_field_mesh_overlay(
     headers: HeaderMap,
 ) -> Result<Response<Body>, ApiError> {
     let built = build_planar_field(&state, &quantity_id, &monitor_id, &query).await?;
-    let Some(overlay) = built.result.overlay.as_ref() else {
-        return Ok(StatusCode::NO_CONTENT.into_response());
+    let codec = if fdm_grid_overlay_available(&built) {
+        "fmfg.v1"
+    } else {
+        "fmcs.v4"
     };
-    let overlay_etag = planar_overlay_etag(&built.etag);
+    let overlay_etag = planar_overlay_etag(&built.etag, codec);
     if etag_matches(&headers, &overlay_etag) {
         return not_modified(&overlay_etag);
     }
-    let bytes = crate::fem_cross_section::serialize_planar_overlay_fmcs_v4(overlay);
+    let bytes = if codec == "fmfg.v1" {
+        let overlay = built
+            .target
+            .build_fdm_grid_overlay(&built.request)?
+            .ok_or_else(|| {
+                ApiError::unprocessable(
+                    "planar_mesh_overlay_unavailable: FDM grid geometry is absent",
+                )
+            })?;
+        crate::fdm_planar_grid_overlay::serialize_fmfg_v1(&overlay)?
+    } else {
+        let Some(overlay) = built.result.overlay.as_ref() else {
+            return Ok(StatusCode::NO_CONTENT.into_response());
+        };
+        crate::fem_cross_section::serialize_planar_overlay_fmcs_v4(overlay)
+    };
     binary_response(bytes, "application/octet-stream", &overlay_etag)
 }
 
@@ -571,10 +589,16 @@ async fn build_planar_field(
             "stale_sample_token: requested sample identity is no longer current",
         ));
     }
+    let target = Arc::new(target);
+    let sampling_target = Arc::clone(&target);
+    let sampling_request = request.clone();
     let result = state
         .quantity_data_plane
         .get_or_sample_planar(&sample_token, || async move {
-            Ok(Arc::new(sample_resolved_target(&target, &request)?))
+            Ok(Arc::new(sample_resolved_target(
+                &sampling_target,
+                &sampling_request,
+            )?))
         })
         .await?;
     let etag = format!(
@@ -583,6 +607,8 @@ async fn build_planar_field(
     );
     Ok(BuiltPlanarField {
         result,
+        target,
+        request,
         monitor,
         scene_revision,
         monitor_revision,
@@ -771,7 +797,7 @@ fn meta_resource(built: &BuiltPlanarField) -> PlanarFieldMetaResource {
             )
         });
     PlanarFieldMetaResource {
-        schema_version: "planar_sample_meta.v2".to_string(),
+        schema_version: "planar_sample_meta.v3".to_string(),
         sample_token: built.sample_token.clone(),
         scene_revision: built.scene_revision,
         monitor_id: built.result.meta.monitor_id.clone(),
@@ -824,17 +850,26 @@ fn meta_resource(built: &BuiltPlanarField) -> PlanarFieldMetaResource {
         scalar_min,
         scalar_max,
         etag: built.etag.clone(),
-        mesh_overlay_descriptor: if built.result.overlay.is_some() {
+        mesh_overlay_descriptor: if fdm_grid_overlay_available(built) {
+            PlanarMeshOverlayDescriptor {
+                available: true,
+                codec: Some("fmfg.v1".to_string()),
+                boundary_classification: "unavailable".to_string(),
+                geometry_source: "fdm_structured_grid".to_string(),
+            }
+        } else if built.result.overlay.is_some() {
             PlanarMeshOverlayDescriptor {
                 available: true,
                 codec: Some("fmcs.v4".to_string()),
                 boundary_classification: "exact".to_string(),
+                geometry_source: "fem_topology".to_string(),
             }
         } else {
             PlanarMeshOverlayDescriptor {
                 available: false,
                 codec: None,
                 boundary_classification: "unavailable".to_string(),
+                geometry_source: "unavailable".to_string(),
             }
         },
         links: PlanarFieldLinksResource {
@@ -848,10 +883,20 @@ fn meta_resource(built: &BuiltPlanarField) -> PlanarFieldMetaResource {
     }
 }
 
-fn planar_overlay_etag(sample_etag: &str) -> String {
+fn fdm_grid_overlay_available(built: &BuiltPlanarField) -> bool {
+    built.source_entity_kind == "cell"
+        && built.scope_kind == "monitor_target"
+        && !matches!(
+            built.monitor.operator,
+            PlanarOperatorIR::SurfaceProjection { .. }
+        )
+}
+
+fn planar_overlay_etag(sample_etag: &str, codec: &str) -> String {
     format!(
-        "\"fm-planar-overlay-fmcs-v4:{:x}\"",
-        Sha256::digest(sample_etag.as_bytes())
+        "\"fm-planar-overlay-{}:{:x}\"",
+        codec.replace('.', "-"),
+        Sha256::digest(format!("{sample_etag}:{codec}").as_bytes())
     )
 }
 

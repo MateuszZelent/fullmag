@@ -15307,11 +15307,15 @@
               "string",
               "null"
             ]
+          },
+          "geometry_source": {
+            "type": "string"
           }
         },
         "required": [
           "available",
-          "boundary_classification"
+          "boundary_classification",
+          "geometry_source"
         ],
         "type": "object"
       },

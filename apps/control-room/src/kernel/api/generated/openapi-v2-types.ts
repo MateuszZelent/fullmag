@@ -7174,6 +7174,7 @@ export interface components {
             available: boolean;
             boundary_classification: string;
             codec?: string | null;
+            geometry_source: string;
         };
         PlanarMonitorCollectionResource: {
             count: number;

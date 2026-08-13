@@ -36,6 +36,7 @@ mod artifacts;
 mod assets;
 mod build_info;
 mod error;
+mod fdm_planar_grid_overlay;
 mod feature_flags;
 mod fem_cross_section;
 mod fem_cross_section_image;

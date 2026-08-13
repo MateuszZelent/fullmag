@@ -1,14 +1,211 @@
 use crate::error::ApiError;
 use fullmag_ir::{EmptyPolicyIR, PlanarOperatorIR, PlanarReductionIR};
+use std::collections::BTreeMap;
 
 use super::frame::ResolvedFrame;
 use super::geometry::{integrate_clipped_tetra, projected_pixel_bounds, LinearVertex};
 use super::provenance;
 use super::reduction::{AccumulatorReduction, WeightedAccumulator};
 use super::{
-    FdmPlanarField, Occupancy, PlanarCompatibilityReduction, PlanarSampleResult,
+    FdmPlanarField, Occupancy, PlanarCompatibilityReduction, PlanarMeshOverlay,
+    PlanarOverlaySegment, PlanarOverlaySegmentKind, PlanarSampleResult,
     ResolvedPlanarSampleRequest,
 };
+
+pub(crate) const MAX_FDM_PLANAR_GRID_SEGMENTS: usize = 200_000;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum GridIntersectionKey {
+    Vertex([u32; 3]),
+    Edge([u32; 3], [u32; 3]),
+}
+
+#[derive(Debug, Clone, Copy)]
+struct GridIntersectionPoint {
+    key: GridIntersectionKey,
+    uv: [f64; 2],
+}
+
+pub(super) fn build_grid_overlay(
+    field: &FdmPlanarField,
+    frame: &ResolvedFrame,
+) -> Result<PlanarMeshOverlay, ApiError> {
+    const CORNERS: [[u32; 3]; 8] = [
+        [0, 0, 0],
+        [1, 0, 0],
+        [0, 1, 0],
+        [1, 1, 0],
+        [0, 0, 1],
+        [1, 0, 1],
+        [0, 1, 1],
+        [1, 1, 1],
+    ];
+    const EDGES: [(usize, usize); 12] = [
+        (0, 1),
+        (0, 2),
+        (1, 3),
+        (2, 3),
+        (4, 5),
+        (4, 6),
+        (5, 7),
+        (6, 7),
+        (0, 4),
+        (1, 5),
+        (2, 6),
+        (3, 7),
+    ];
+    let grid = field.grid();
+    let origin = field.origin();
+    let spacing = field.spacing();
+    let tolerance = spacing.into_iter().fold(0.0_f64, f64::max) * 1.0e-12;
+    let mut unique =
+        BTreeMap::<(GridIntersectionKey, GridIntersectionKey), PlanarOverlaySegment>::new();
+
+    for z in 0..grid[2] {
+        for y in 0..grid[1] {
+            for x in 0..grid[0] {
+                let cell = ((z * grid[1] + y) * grid[0] + x) as usize;
+                if !field.contains_cell(cell) {
+                    continue;
+                }
+                let lattice = CORNERS.map(|offset| [x + offset[0], y + offset[1], z + offset[2]]);
+                let world = lattice.map(|point| {
+                    [
+                        origin[0] + point[0] as f64 * spacing[0],
+                        origin[1] + point[1] as f64 * spacing[1],
+                        origin[2] + point[2] as f64 * spacing[2],
+                    ]
+                });
+                let projected = world.map(|point| frame.project(point));
+                let mut points = BTreeMap::<GridIntersectionKey, [f64; 2]>::new();
+                for (a, b) in EDGES {
+                    let da = projected[a][2];
+                    let db = projected[b][2];
+                    if da.abs() <= tolerance {
+                        points.insert(
+                            GridIntersectionKey::Vertex(lattice[a]),
+                            [projected[a][0], projected[a][1]],
+                        );
+                    }
+                    if db.abs() <= tolerance {
+                        points.insert(
+                            GridIntersectionKey::Vertex(lattice[b]),
+                            [projected[b][0], projected[b][1]],
+                        );
+                    }
+                    if (da < -tolerance && db > tolerance) || (da > tolerance && db < -tolerance) {
+                        let (first, second) = if lattice[a] <= lattice[b] {
+                            (lattice[a], lattice[b])
+                        } else {
+                            (lattice[b], lattice[a])
+                        };
+                        let pa = if lattice[a] == first {
+                            projected[a]
+                        } else {
+                            projected[b]
+                        };
+                        let pb = if lattice[a] == first {
+                            projected[b]
+                        } else {
+                            projected[a]
+                        };
+                        let t = pa[2] / (pa[2] - pb[2]);
+                        points.insert(
+                            GridIntersectionKey::Edge(first, second),
+                            [pa[0] + t * (pb[0] - pa[0]), pa[1] + t * (pb[1] - pa[1])],
+                        );
+                    }
+                }
+                if points.len() < 3 {
+                    continue;
+                }
+                let center = [
+                    points.values().map(|point| point[0]).sum::<f64>() / points.len() as f64,
+                    points.values().map(|point| point[1]).sum::<f64>() / points.len() as f64,
+                ];
+                let mut ordered = points
+                    .into_iter()
+                    .map(|(key, uv)| GridIntersectionPoint { key, uv })
+                    .collect::<Vec<_>>();
+                ordered.sort_by(|left, right| {
+                    (left.uv[1] - center[1])
+                        .atan2(left.uv[0] - center[0])
+                        .total_cmp(&(right.uv[1] - center[1]).atan2(right.uv[0] - center[0]))
+                });
+                for index in 0..ordered.len() {
+                    let a = ordered[index];
+                    let b = ordered[(index + 1) % ordered.len()];
+                    let key = if a.key <= b.key {
+                        (a.key, b.key)
+                    } else {
+                        (b.key, a.key)
+                    };
+                    if let Some((a_uv_m, b_uv_m)) = clip_segment_to_bounds(a.uv, b.uv, frame.bounds)
+                    {
+                        unique.insert(
+                            key,
+                            PlanarOverlaySegment {
+                                a_uv_m,
+                                b_uv_m,
+                                kind: PlanarOverlaySegmentKind::UnclassifiedDegenerate,
+                            },
+                        );
+                    }
+                }
+                if unique.len() > MAX_FDM_PLANAR_GRID_SEGMENTS {
+                    return Err(ApiError::unprocessable(format!(
+                        "planar_mesh_budget_exceeded: FDM grid overlay exceeds {MAX_FDM_PLANAR_GRID_SEGMENTS} segments"
+                    )));
+                }
+            }
+        }
+    }
+    Ok(PlanarMeshOverlay {
+        frame_origin_m: frame.origin,
+        frame_u_axis: frame.u,
+        frame_v_axis: frame.v,
+        frame_normal: frame.normal,
+        bounds_uv_m: frame.bounds,
+        polygons: Vec::new(),
+        segments: unique.into_values().collect(),
+    })
+}
+
+fn clip_segment_to_bounds(
+    a: [f64; 2],
+    b: [f64; 2],
+    bounds: [f64; 4],
+) -> Option<([f64; 2], [f64; 2])> {
+    let delta = [b[0] - a[0], b[1] - a[1]];
+    let mut t0 = 0.0_f64;
+    let mut t1 = 1.0_f64;
+    for (p, q) in [
+        (-delta[0], a[0] - bounds[0]),
+        (delta[0], bounds[1] - a[0]),
+        (-delta[1], a[1] - bounds[2]),
+        (delta[1], bounds[3] - a[1]),
+    ] {
+        if p.abs() <= f64::EPSILON {
+            if q < 0.0 {
+                return None;
+            }
+            continue;
+        }
+        let ratio = q / p;
+        if p < 0.0 {
+            t0 = t0.max(ratio);
+        } else {
+            t1 = t1.min(ratio);
+        }
+        if t0 > t1 {
+            return None;
+        }
+    }
+    let start = [a[0] + t0 * delta[0], a[1] + t0 * delta[1]];
+    let end = [a[0] + t1 * delta[0], a[1] + t1 * delta[1]];
+    (start != end && start.iter().chain(&end).all(|value| value.is_finite()))
+        .then_some((start, end))
+}
 
 pub(super) fn sample(
     field: &FdmPlanarField,

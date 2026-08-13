@@ -260,6 +260,17 @@ buffer.
   `region_boundary` and `named_surface` are authorable but reject during
   sampling because their topology is not published.
 - FDM surface projection rejects because boundary topology is not published.
+- Dla legalnego FDM `monitor_target` operatorów `plane_sample`,
+  `slab_average` i `depth_projection` warstwa `mesh` przedstawia proceduralny
+  przekrój wybranych komórek structured grid przez centralną płaszczyznę
+  monitora $s=0$. Dla slab/depth jest to geometria nośnika w płaszczyźnie
+  środkowej, a nie obrys całej objętości całkowania. Reprezentacja `FMFG v1`
+  zachowuje fizyczne współrzędne $(u,v)$ i nie może zostać zastąpiona
+  prostokątem zasięgu monitora ani zrekonstruowana z rastra.
+- `FMFG v1` nie publikuje topologii granicy targetu. Warstwa `boundaries`
+  pozostaje dla FDM niedostępna z jawnym powodem
+  `target_boundaries_unavailable`; żaden segment siatki nie może być
+  przedstawiony jako dokładna granica obiektu lub regionu.
 - FDM runtime scopes `mesh_part` and `airbox` reject. `domain` selects the
   rectangular field carrier, `magnetic_domain` selects all active cells, and
   `region` selects the matching numeric membership. `object` is correct only
@@ -632,6 +643,7 @@ silent clamp. New HTTP and OpenAPI payloads expose only `range` and
 | PM-N11 | geometry scale sweep | unchanged dimensionless result with scale-aware tolerances |
 | PM-N12 | FEM target/scope dynamic extents | each dynamic extent follows its named target/scope rather than all mesh nodes; the current distinct-bounds source path requires fresh per-lane qualification |
 | PM-N13 | FDM target × dynamic-extent cross-product | `target_bounds`, `magnetic_domain`, and `universe` resolve independently of target masking for `domain`, `magnetic_domain`, `object`, and `region`; the current distinct-bounds source path requires fresh per-lane qualification |
+| PM-N14 | FDM procedural grid overlay | `FMFG v1` zawiera skończone, nieduplikowane segmenty przecięcia wybranych komórek z $s=0$, zachowuje sample identity i odrzuca przekroczenie budżetu zamiast zwracać uciętą geometrię |
 
 ### Task 0 evidence boundary
 
@@ -666,7 +678,8 @@ Structural validation does not prove scientific correctness.
 ## Limitations
 
 - Native GPU sampling is absent.
-- FDM surface topology and FDM mesh-part/airbox scopes are absent.
+- FDM target-boundary topology and FDM mesh-part/airbox scopes are absent;
+  proceduralny `FMFG v1` publikuje wyłącznie linie przekroju structured grid.
 - General multi-object FDM `object` targeting is incorrect because all active
   cells are selected after object-existence validation.
 - All FDM dynamic extent tags share bounds over the post-target mask instead of
@@ -724,6 +737,7 @@ symbols, not line-number claims.
 | Canonical planar presentation | `crates/fullmag-api/src/schemas/visualization_state.rs` | `PlanarVisualizationState`; `PlanarColorRangeState` | Public state owns range mode, SI limits, and raster opacity; legacy aliases are not public writable fields | API visualization | exact PUT/PATCH legacy-alias rejection | Task 7A focused API test; runtime/browser unqualified | [source](https://github.com/MateuszZelent/fullmag/blob/9c3a779571c2815dec8279dbd56d5604b09ab784/crates/fullmag-api/src/schemas/visualization_state.rs) |
 | Persistence-only planar presentation migration | `crates/fullmag-api/src/session_persistence.rs` | `restore_display_presentation` | Map unversioned v6 aliases privately, preserve v7, and reject unsupported versions before workspace mutation | API persistence | v6 manual/invalid migration, v7 preservation, unknown-version rejection | Task 7A focused persistence tests; runtime/browser unqualified | [source](https://github.com/MateuszZelent/fullmag/blob/9c3a779571c2815dec8279dbd56d5604b09ab784/crates/fullmag-api/src/session_persistence.rs) |
 | Exact target-boundary codec | `crates/fullmag-api/src/fem_cross_section.rs` | `serialize_planar_overlay_fmcs_v4` | Serialize parallel exact segment classes in representation-specific `FMCS v4` | FEM postprocessing | Tet4 interior/boundary/degenerate and route ETag tests | contract implementation pending Task 7A validation | [source](https://github.com/MateuszZelent/fullmag/blob/9c3a779571c2815dec8279dbd56d5604b09ab784/crates/fullmag-api/src/fem_cross_section.rs#L140) |
+| Procedural FDM grid overlay | `crates/fullmag-api/src/planar_sampling/fdm.rs`; `crates/fullmag-api/src/fdm_planar_grid_overlay.rs` | `build_grid_overlay`; `serialize_fmfg_v1` | Intersect selected structured-grid cells with $s=0$, deduplicate and serialize bounded `FMFG v1` segments | FDM postprocessing | `planar_fdm_grid_overlay_is_physical_deduplicated_and_fmfg_v1`; route and decoder tests | implementation branch; managed/browser unqualified | generated immutable link pending integration |
 | Target-boundary classifier | `crates/fullmag-api/src/planar_sampling/fem.rs` | `build_overlay` | Derive interior, target-boundary, and degenerate classes from selected-target topology | FEM postprocessing | scoped overlay tests | contract implementation pending Task 7A validation | [source](https://github.com/MateuszZelent/fullmag/blob/9c3a779571c2815dec8279dbd56d5604b09ab784/crates/fullmag-api/src/planar_sampling/fem.rs#L82) |
 | Frame equations | `crates/fullmag-api/src/planar_sampling/frame.rs` | `try_from_ir` | Resolve and validate physical frame | all sampling lanes | `planar_sampling_fem_p1_linear_arbitrary_plane_is_barycentric` | source + focused tests | [source](https://github.com/MateuszZelent/fullmag/blob/5138078f7fd7b65dfc231faa4aa11c02d8ebf52d/crates/fullmag-api/src/planar_sampling/frame.rs) |
 | Backend-neutral sampler entry | `crates/fullmag-api/src/planar_sampling/contract.rs` | `sample_fdm` | Validate request and apply requested component | FDM source | `planar_sampling_fdm_constant_scalar_and_vector_basis_are_exact` | source + focused tests | [source](https://github.com/MateuszZelent/fullmag/blob/5138078f7fd7b65dfc231faa4aa11c02d8ebf52d/crates/fullmag-api/src/planar_sampling/contract.rs) |

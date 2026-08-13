@@ -241,6 +241,7 @@ export default function FieldMapModule() {
         available: meta.data.mesh_overlay_descriptor.available,
         boundaryClassification: meta.data.mesh_overlay_descriptor.boundary_classification,
         codec: meta.data.mesh_overlay_descriptor.codec,
+        geometrySource: meta.data.mesh_overlay_descriptor.geometry_source,
       },
       meshOverlay: meshOverlay.data,
       range: normalizePlanarColorRange(presentationPlanar.range),

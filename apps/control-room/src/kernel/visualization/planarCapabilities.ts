@@ -7,6 +7,7 @@ export interface PlanarMeshOverlayDescriptor {
   available: boolean;
   boundaryClassification: string;
   codec: string | null | undefined;
+  geometrySource?: string | null;
 }
 
 export interface PlanarInspectorCapabilities {
@@ -85,7 +86,8 @@ export function resolvePlanarInspectorCapabilities(input: {
     spatial &&
     scope.enabled &&
     descriptor?.available === true &&
-    descriptor.codec === "fmcs.v4";
+    (descriptor.codec === "fmcs.v4" ||
+      (descriptor.codec === "fmfg.v1" && descriptor.geometrySource === "fdm_structured_grid"));
   const base = resolveFieldMapCapabilities({
     meshOverlayAvailable,
     spatial: spatial && scope.enabled,
@@ -125,9 +127,11 @@ export function resolvePlanarInspectorCapabilities(input: {
               ? "quantity_not_spatial"
               : !descriptor?.available
                 ? "mesh_overlay_unavailable"
-                : descriptor.codec !== "fmcs.v4"
-                  ? "mesh_overlay_codec_unsupported"
-                  : "boundaries_not_exact",
+                : descriptor.codec === "fmfg.v1"
+                  ? "target_boundaries_unavailable"
+                  : descriptor.codec !== "fmcs.v4"
+                    ? "mesh_overlay_codec_unsupported"
+                    : "boundaries_not_exact",
         };
 
   return {
