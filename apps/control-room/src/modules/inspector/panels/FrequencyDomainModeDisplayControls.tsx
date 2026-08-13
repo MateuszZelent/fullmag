@@ -26,6 +26,7 @@ import {
   surfaceSolidColorPatch,
 } from "./ObjectVisualizationPanelModel";
 import { FieldRow } from "../primitives/FieldRow";
+import type { ModeFieldComponentOption } from "./frequency-domain/FrequencyDomainHelpers";
 
 export const DEFAULT_ANALYSIS_FIELD_VIEW = "phase_rotated_real";
 export const ANALYSIS_FIELD_VIEW_OPTIONS = [
@@ -48,10 +49,7 @@ type ModeFieldComponent =
   | "component_x"
   | "component_y"
   | "component_z";
-const MODE_FIELD_COMPONENT_ITEMS: Array<{
-  label: string;
-  value: ModeFieldComponent;
-}> = [
+export const MODE_FIELD_COMPONENT_ITEMS: ModeFieldComponentOption[] = [
   { label: "|delta m|", value: "magnitude" },
   { label: "delta m_x", value: "component_x" },
   { label: "delta m_y", value: "component_y" },
@@ -376,6 +374,7 @@ export function useFrequencyDomainModeDisplaySettings({
 }
 
 interface FrequencyDomainModeDisplayControlsProps {
+  componentOptions?: readonly ModeFieldComponentOption[];
   disabled: boolean;
   labelPrefix: string;
   settings: FrequencyDomainModeDisplaySettings;
@@ -386,6 +385,7 @@ interface FrequencyDomainModeDisplayControlsProps {
 }
 
 export function FrequencyDomainModeDisplayControls({
+  componentOptions = MODE_FIELD_COMPONENT_ITEMS,
   disabled,
   labelPrefix,
   settings,
@@ -430,7 +430,7 @@ export function FrequencyDomainModeDisplayControls({
             value={settings.component}
             onChange={(event) => settings.setComponent(event.target.value)}
           >
-            {MODE_FIELD_COMPONENT_ITEMS.map((item) => (
+            {componentOptions.map((item) => (
               <option key={item.value} value={item.value}>
                 {item.label}
               </option>

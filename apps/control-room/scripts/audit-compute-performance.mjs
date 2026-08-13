@@ -1805,9 +1805,12 @@ function checkAnalysisPlotsStableResourceInputs() {
     "useFrequencyDomainManifestResource",
     "const manifestReady = frequencyDomainManifest.status === \"ready\"",
     "const loadMatchingArtifact = loadFrequency && manifestReady && !surfaceMismatch",
-    'enabled: loadMatchingArtifact && frequencyDomainRoute.primaryChart === "modal-spectrum"',
-    'enabled: loadMatchingArtifact && frequencyDomainRoute.primaryChart === "dispersion"',
-    'enabled: loadMatchingArtifact && frequencyDomainRoute.primaryChart === "response-sweep"',
+    "const resultContextMismatch = frequencyDomainManifest.status === \"ready\"",
+    "enabled: loadMatchingArtifact && !resultContextMismatch && (",
+    'frequencyDomainRoute.primaryChart === "modal-spectrum" ||',
+    'frequencyDomainRoute.primaryChart === "comparison"',
+    'enabled: loadMatchingArtifact && !resultContextMismatch && frequencyDomainRoute.primaryChart === "dispersion"',
+    'frequencyDomainRoute.primaryChart === "response-sweep" ||',
   ]);
   requireTokens(viewSource, "analysis plots stable resource inputs", [
     "const chartSeries = useMemo(() => {",

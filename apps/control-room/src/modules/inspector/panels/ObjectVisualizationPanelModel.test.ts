@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import type {
   FieldCatalogResource,
   MeshSharedDomainManifestResource,
+  VisualizationStateResource,
 } from "@/kernel/api/apiTypes";
 import { DATA_FIELD_VECTOR_PATH } from "@/kernel/api/apiPaths";
 import type { VisualizationDebugSnapshot } from "@/kernel/visualization/visualizationDebugTypes";
@@ -17,6 +18,7 @@ import {
 
 import {
   buildAirboxVectorDiagnostic,
+  canonicalVisualizationStateForBaseline,
   queuePartVectorVisibilityPatch,
   queueTargetVectorVisibilityPatch,
   buildAirboxVisibilityDiagnostic,
@@ -66,6 +68,7 @@ import {
   visualizationResetActionLabel,
   fdmGridCellCount,
   fdmVisualizationResourceNotice,
+  isVisualizationBaselineReady,
   isFdmVisualizationTarget,
   resolveObjectVisualizationLane,
   resolveObjectVisualizationResourceGates,
@@ -77,6 +80,48 @@ import { OBJECT_VISUALIZATION_TARGET_KINDS } from "./ObjectVisualizationHelpers"
 type MeshPart = NonNullable<MeshSharedDomainManifestResource["mesh_parts"]>[number];
 
 describe("ObjectVisualizationPanelModel", () => {
+  it("uses canonical visualization data for reset baselines", () => {
+    const canonical = {
+      overrides: [{ scope: "object", scope_id: "object:film" }],
+      targets: {},
+      version: 4,
+    } as unknown as VisualizationStateResource;
+    const optimistic = {
+      overrides: [{ scope: "object", scope_id: "object:film:pending" }],
+      targets: {},
+      version: 5,
+    } as unknown as VisualizationStateResource;
+
+    expect(canonicalVisualizationStateForBaseline(canonical, optimistic)).toBe(canonical);
+  });
+
+  it("waits for the FEM visualization resource before capturing an applied baseline", () => {
+    const target = { id: "object:film", kind: "object" } as const;
+    const state = {} as VisualizationStateResource;
+
+    expect(
+      isVisualizationBaselineReady({
+        femResourcesEnabled: true,
+        target,
+        visualizationState: null,
+      }),
+    ).toBe(false);
+    expect(
+      isVisualizationBaselineReady({
+        femResourcesEnabled: true,
+        target,
+        visualizationState: state,
+      }),
+    ).toBe(true);
+    expect(
+      isVisualizationBaselineReady({
+        femResourcesEnabled: false,
+        target,
+        visualizationState: null,
+      }),
+    ).toBe(true);
+  });
+
   it("keeps an FDM object visualization selection on the object target", () => {
     const selection = {
       kind: "object.visualization",

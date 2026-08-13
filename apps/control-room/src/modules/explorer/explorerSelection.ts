@@ -292,6 +292,7 @@ export function selectionRefFromNode(node: ExplorerNode): SelectionRef | null {
         : {}),
       ...(node.equilibriumId ? { equilibriumId: node.equilibriumId } : {}),
       ...(node.kContextKind ? { kContextKind: node.kContextKind } : {}),
+      ...(node.normalization ? { normalization: node.normalization } : {}),
       ...(node.artifactPath ? { artifactPath: node.artifactPath } : {}),
       ...(node.branchId ? { branchId: node.branchId } : {}),
       ...(node.calculationMode ? { calculationMode: node.calculationMode } : {}),
@@ -343,6 +344,7 @@ export function selectionRefFromNode(node: ExplorerNode): SelectionRef | null {
       ...(node.frequencyHz !== undefined ? { frequencyHz: node.frequencyHz } : {}),
       kind: node.kind,
       ...(node.kContextKind ? { kContextKind: node.kContextKind } : {}),
+      ...(node.normalization ? { normalization: node.normalization } : {}),
       ...(node.kPathCoordinateRadPerM !== undefined
         ? { kPathCoordinateRadPerM: node.kPathCoordinateRadPerM }
         : {}),

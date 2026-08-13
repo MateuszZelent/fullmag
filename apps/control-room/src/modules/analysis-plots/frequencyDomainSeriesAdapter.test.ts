@@ -13,6 +13,7 @@ import {
   frequencyDomainChartSeriesForAnalysisPlots,
   frequencyDomainPrimarySeries,
   frequencyDomainXAxisLabel,
+  MAX_FREQUENCY_DOMAIN_RENDER_POINTS,
 } from "./frequencyDomainSeriesAdapter";
 
 describe("frequencyDomainSeriesAdapter", () => {
@@ -107,6 +108,76 @@ describe("frequencyDomainSeriesAdapter", () => {
     expect(frequencyDomainChartSeriesForAnalysisPlots(model)[0]?.points).toEqual([
       { rowIndex: 0, x: 1, y: 2 },
     ]);
+  });
+
+  it("keeps large frequency-domain render series bounded while preserving endpoints", () => {
+    const points = Array.from({ length: MAX_FREQUENCY_DOMAIN_RENDER_POINTS + 1 }, (_, rowIndex) => ({
+      rowIndex,
+      x: rowIndex,
+      y: rowIndex * 2,
+    }));
+    const model: FrequencyDomainChartBuildResult<unknown> = {
+      dataSourceVersion: "unknown",
+      diagnostics: [],
+      droppedPointCount: 0,
+      points: [],
+      series: [{
+        id: "analysis.frequency-domain:test-bounded",
+        label: "Bounded test",
+        points,
+        quantity: "test",
+        source: {
+          kind: "analysis.frequency_domain",
+          resourceKey: "analysis/frequency-domain/test-bounded",
+          tableId: "frequency-domain:test-bounded",
+        },
+        status: "ready",
+        unit: "a.u.",
+        xUnit: "1",
+      }],
+    };
+
+    const bounded = frequencyDomainChartSeriesForAnalysisPlots(model)[0]?.points ?? [];
+    expect(bounded).toHaveLength(MAX_FREQUENCY_DOMAIN_RENDER_POINTS);
+    expect(bounded[0]).toEqual(points[0]);
+    expect(bounded.at(-1)).toEqual(points.at(-1));
+  });
+
+  it("preserves a narrow resonance when bounding a large render series", () => {
+    const pointCount = MAX_FREQUENCY_DOMAIN_RENDER_POINTS + 1;
+    const resonanceIndex = 4321;
+    const points = Array.from({ length: pointCount }, (_, rowIndex) => ({
+      rowIndex,
+      x: rowIndex,
+      y: rowIndex === resonanceIndex ? 100 : 0,
+    }));
+    const model: FrequencyDomainChartBuildResult<unknown> = {
+      dataSourceVersion: "unknown",
+      diagnostics: [],
+      droppedPointCount: 0,
+      points: [],
+      series: [{
+        id: "analysis.frequency-domain:test-resonance",
+        label: "Resonance test",
+        points,
+        quantity: "test",
+        source: {
+          kind: "analysis.frequency_domain",
+          resourceKey: "analysis/frequency-domain/test-resonance",
+          tableId: "frequency-domain:test-resonance",
+        },
+        status: "ready",
+        unit: "a.u.",
+        xUnit: "1",
+      }],
+    };
+
+    const bounded = frequencyDomainChartSeriesForAnalysisPlots(model)[0]?.points ?? [];
+
+    expect(bounded).toHaveLength(MAX_FREQUENCY_DOMAIN_RENDER_POINTS);
+    expect(bounded[0]).toEqual(points[0]);
+    expect(bounded.at(-1)).toEqual(points.at(-1));
+    expect(bounded).toContainEqual(points[resonanceIndex]);
   });
 
   it("returns the first renderable frequency-domain series for default chart focus", () => {

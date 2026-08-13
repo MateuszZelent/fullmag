@@ -26,7 +26,7 @@ const acceptanceDirectory =
   path.resolve(".fullmag/reports/live-charts-analysis-acceptance/latest");
 
 const ANALYSIS_SURFACES = [
-  "Dynamics", "Spectrum", "Frequency Response", "Eigenmodes", "Dispersion", "Hysteresis", "Comparison",
+  "Dynamics", "Resonance & FMR", "Dispersion", "Hysteresis", "Comparison",
 ];
 const ROWS_BIN_PATTERN =
   /^\/v2\/sessions\/current\/data\/tables\/[^/]+\/rows\.bin(?:\?|$)/;

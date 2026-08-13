@@ -81,10 +81,10 @@ try {
   await qualifyExplorerKeyboardNavigation(page);
   await qualifyInspectorRoutingMatrix(page, inspector, screenshotFiles, fixture);
 
-  const visualizationNode = page
-    .locator('[role="treeitem"]')
-    .filter({ hasText: /^Visualizationdisplay/ })
-    .first();
+  await ensureModelNodeVisible(page, "model:object:film:visualization");
+  const visualizationNode = page.locator(
+    '[data-node-id="model:object:film:visualization"]',
+  ).first();
   assert(await visualizationNode.count(), "Visualization Explorer node is required for the Inspector smoke.");
   await visualizationNode.click();
   await page.waitForTimeout(500);
@@ -389,8 +389,22 @@ try {
   if (!(await resetButton.isDisabled())) {
     await resetButton.click();
   }
-  await page.waitForTimeout(150);
-  assert(await resetButton.isDisabled(), "Visualization Reset did not restore the applied baseline.");
+  const resetDeadline = Date.now() + 3_000;
+  while (!(await resetButton.isDisabled()) && Date.now() < resetDeadline) {
+    await page.waitForTimeout(100);
+  }
+  const resetState = await resetButton.evaluate((button) => ({
+    ariaDisabled: button.getAttribute("aria-disabled"),
+    disabled: button.disabled,
+  }));
+  assert(
+    resetState.disabled,
+    `Visualization Reset did not restore the applied baseline: ${JSON.stringify({
+      requests: fixture.requests.slice(-8),
+      resetState,
+      visualizationRevision: await panel.getAttribute("data-visualization-revision"),
+    })}`,
+  );
   assert(
     (await renderModeControl
       .locator('[role="radio"][aria-checked="true"]')
@@ -661,7 +675,20 @@ async function qualifyInspectorRoutingMatrix(page, inspector, screenshotFiles, f
   });
   await playPhase.focus();
   await playPhase.press("Enter");
-  await inspector.getByRole("button", { name: "Pause mode phase animation" }).waitFor();
+  try {
+    await inspector.getByRole("button", { name: "Pause mode phase animation" }).waitFor();
+  } catch (error) {
+    const modeStatus = await inspector.locator('[role="status"]').allTextContents();
+    const phaseButtons = await inspector.locator('[aria-label*="mode phase"]').evaluateAll((elements) =>
+      elements.map((element) => ({
+        ariaLabel: element.getAttribute("aria-label"),
+        disabled: element.hasAttribute("disabled"),
+      })),
+    );
+    throw new Error(
+      `Mode phase animation did not activate. Status: ${JSON.stringify(modeStatus)}. Controls: ${JSON.stringify(phaseButtons)}. Metadata requests: ${JSON.stringify(fixture.requests.filter((entry) => entry.includes("/meta")))}. Recent fixture requests: ${JSON.stringify(fixture.requests.slice(-30))}. ${error}`,
+    );
+  }
   const loopPhase = inspector.getByRole("button", {
     name: "Loop mode phase animation",
   });
@@ -1164,6 +1191,13 @@ async function installInspectorFixtureApi(page, fixture) {
     if (path === "/v2/sessions/current/simulation/solver/status") return fulfillJson(route, { can_accept_commands: true, is_busy: false, runtime_state: "idle", revision: fixture.revision });
     if (path === "/v2/sessions/current/simulation/commands") return fulfillJson(route, { commands: [], latest_completed: null, revision: fixture.revision });
     if (path === "/v2/sessions/current/data/artifacts") return fulfillJson(route, []);
+    if (path === "/v2/sessions/current/data/scalars") return fulfillJson(route, {
+      columns: (url.searchParams.get("columns") ?? "").split(",").filter(Boolean),
+      returned_rows: 0,
+      revision: fixture.revision,
+      rows: [],
+      total_rows: 0,
+    });
     if (path === "/v2/sessions/current/data/tables") return fulfillJson(route, { revision: fixture.revision, tables: [] });
     if (path === "/v2/sessions/current/persistence/checkpoints") return fulfillJson(route, { checkpoints: [], revision: fixture.revision });
     if (path === "/v2/sessions/current/simulation/runs/current") return fulfillJson(route, {
@@ -1190,6 +1224,9 @@ async function installInspectorFixtureApi(page, fixture) {
       path === "/v2/sessions/current/analysis/frequency-domain/response/cancel-requested.v1" ||
       path === "/v2/sessions/current/analysis/frequency-domain/response/progress.v1"
     ) return fulfillEmpty(route, 204);
+    if (path.includes("/analysis/frequency-domain/") && path.endsWith("/meta")) {
+      return fulfillJson(route, inspectorFieldMeta(path));
+    }
     if (path.includes("/data/fields/") && path.endsWith("/meta")) return fulfillJson(route, inspectorFieldMeta(path));
     if (path.includes("/data/fields/") && path.endsWith("/samples/vector")) return fulfillBinary(route, inspectorFieldVector(path));
     if (path === "/v2/sessions/current/data/domain/topology") return fulfillTopology(route, fixture.topology);
@@ -1347,12 +1384,36 @@ function inspectorFieldCatalog() {
 
 function inspectorFieldMeta(path) {
   const encoded = path.split("/data/fields/")[1]?.split("/")[0] ?? "m";
-  const quantityId = decodeURIComponent(encoded);
+  const eigenMatch = /\/eigen\/mode-field\/(\d+)\/(\d+)\/meta$/.exec(path);
+  const responseMatch = /\/response\/field\/(\d+)\/meta$/.exec(path);
+  const fieldId = eigenMatch
+    ? `analysis:eigen:sample-${eigenMatch[1].padStart(4, "0")}:mode-${eigenMatch[2].padStart(4, "0")}`
+    : responseMatch
+      ? `analysis:frequency-response:frequency-${responseMatch[1].padStart(4, "0")}`
+      : decodeURIComponent(encoded);
+  const resourceKey = `/v2/sessions/current/data/fields/${encodeURIComponent(fieldId)}/samples/vector?view=phase_rotated_real&phase_rad=0`;
   return {
+    artifact_path: `${fieldId}.field.v2.bin`,
+    available_views: ["complex", "real", "imag", "abs", "phase_rotated_real"],
+    component_basis: "global_xyz",
+    component_count: 3,
     components: ["x", "y", "z"],
-    quantity_id: quantityId,
+    default_phase_rad: 0,
+    default_view: "phase_rotated_real",
+    field_id: fieldId,
+    missing_reason: null,
+    quantity: "delta_m",
+    resource_key: resourceKey,
+    schema_version: eigenMatch
+      ? "frequency_domain_eigen_mode_field.v1"
+      : "frequency_domain_response_field.v1",
+    source_family: eigenMatch
+      ? "analysis/eigen"
+      : "analysis/frequency-response",
     stats: { max: 1, min: 0 },
-    unit: quantityId === "m" ? "1" : "A/m",
+    status: "ready",
+    unit: "1",
+    value_kind: "complex_vector",
   };
 }
 

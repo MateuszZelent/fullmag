@@ -96,6 +96,33 @@ describe("AnalysisFrequencySurface", () => {
     expect(html).toContain("Select at least one signal");
   });
 
+  it("renders modal-driven readiness instead of a generic empty chart", () => {
+    const html = renderToStaticMarkup(
+      <AnalysisFrequencySurface
+        calculationMode="fmr_modal_driven"
+        comparisonModel={{
+          diagnostics: [],
+          nearestComparison: null,
+          pairs: [],
+          readiness: "modal-only",
+        }}
+        kernel={{} as KernelApi}
+        onPointSelect={() => undefined}
+        onSelectedSeriesIdsChange={() => undefined}
+        selectedPoint={null}
+        selectedSeriesIds={[]}
+        series={[]}
+        status="ready"
+        title="Modal–Driven Comparison"
+        unavailableReason={null}
+      />,
+    );
+
+    expect(html).toContain("Modal–Driven comparison");
+    expect(html).toContain("Readiness: modal-only");
+    expect(html).not.toContain("Frequency-domain data is not available");
+  });
+
   it("forwards restored and changed artifact ranges through the shared ECharts surface", () => {
     renderedRanges.length = 0;
     const onRangeChange = vi.fn();

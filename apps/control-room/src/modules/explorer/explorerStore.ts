@@ -153,16 +153,25 @@ export function reconcileResultContextRunId({
   currentRunId,
   previousCurrentRunId,
   selectedRunId,
+  selectedResultRunId,
 }: {
   currentRunId: string | null;
   previousCurrentRunId: string | null;
   selectedRunId: string | null;
+  selectedResultRunId?: string | null;
 }): string | null {
-  if (!currentRunId) return selectedRunId;
-  if (!selectedRunId || selectedRunId === previousCurrentRunId) {
+  if (!currentRunId) return selectedRunId ?? selectedResultRunId ?? null;
+  if (selectedRunId) {
+    if (selectedRunId === previousCurrentRunId && selectedRunId !== currentRunId) {
+      return currentRunId;
+    }
+    return selectedRunId;
+  }
+  if (selectedResultRunId) return selectedResultRunId;
+  if (!selectedRunId) {
     return currentRunId;
   }
-  return selectedRunId;
+  return currentRunId;
 }
 
 export function setExplorerKeyboardRow(keyboardRow: string | null): void {

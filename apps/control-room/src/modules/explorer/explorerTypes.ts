@@ -313,6 +313,7 @@ export interface ExplorerNode {
   parentId: string | null;
   activeAnalysisField?: boolean;
   analysisFieldRepresentation?: "complex-vector-xyz";
+  normalization?: string;
   badge?: string;
   children?: ExplorerNode[];
   contextCommands?: CommandId[];

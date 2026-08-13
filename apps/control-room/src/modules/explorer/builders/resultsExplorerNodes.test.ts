@@ -694,6 +694,33 @@ describe("physicsFirstResultsSnapshotFromResources", () => {
     });
   });
 
+  it("preserves magnetic drive evidence for an FMR response", () => {
+    const adapted = physicsFirstResultsSnapshotFromResources({
+      currentRun: { revision: 20, run_id: "run-fmr" },
+      manifest: {
+        result_manifest: {
+          payload: {
+            drive: { identity: "rf-drive-17", kind: "magnetic_rf" },
+            equilibrium_identity: "eq-fmr",
+            observables: [{ identity: "mx", kind: "susceptibility", unit: "1" }],
+            requested_execution: { boundary_context: "finite_open" },
+            stage_id: "response-fmr",
+            study_product: "driven_response",
+          },
+          status: "ready",
+        },
+      },
+      responseSweep: { status: "ready" },
+    });
+
+    expect(adapted.snapshot.entries[0]?.drive).toEqual({
+      identity: "rf-drive-17",
+      kind: "magnetic_rf",
+    });
+    expect(flattenExplorerNodes(buildPhysicsFirstResultsTree(adapted.snapshot)).map((node) => node.label))
+      .toContain("FMR Response Spectrum");
+  });
+
   it("does not fabricate a driven response map from modal path metadata and a response sweep", () => {
     const adapted = physicsFirstResultsSnapshotFromResources({
       currentRun: { revision: 21, run_id: "run-21" },
@@ -773,6 +800,24 @@ describe("physicsFirstResultsSnapshotFromResources", () => {
           studyProduct: "modal_eigen",
         },
       ],
+    });
+  });
+
+  it("preserves explicit result context gaps", () => {
+    const adapted = physicsFirstResultsSnapshotFromResources({
+      contractGaps: ["Selected run result resources are not published for this context."],
+      currentRun: { revision: 1, run_id: "run-history" },
+    });
+
+    expect(adapted.contractGaps).toEqual([
+      "Selected run result resources are not published for this context.",
+    ]);
+    expect(buildPhysicsFirstResultsTree(adapted.snapshot)[0]).toMatchObject({
+      analysisRunId: "run-history",
+      availability: "unavailable",
+      badge: "contract gap",
+      resourceState: "error",
+      status: "failed",
     });
   });
 

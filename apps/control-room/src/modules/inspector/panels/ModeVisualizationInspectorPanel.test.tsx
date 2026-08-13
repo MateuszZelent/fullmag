@@ -6,8 +6,18 @@ import type { KernelApi } from "@/kernel/types";
 import { AnalysisFieldOverlayController } from "@/kernel/visualization/AnalysisFieldOverlayController";
 import { VisualizationDebugController } from "@/kernel/visualization/VisualizationDebugController";
 
+vi.mock("@/kernel/resources/studyRuntimeResources", () => ({
+  useFrequencyDomainEigenModeFieldMetaResource: () => ({ data: null, status: "idle" }),
+  useFrequencyDomainResponseFieldMetaResource: () => ({ data: null, status: "idle" }),
+}));
+
 import { resolveInspectorPanel } from "../inspectorRegistry";
 import { executeModeVisualizationActivation } from "./ModeVisualizationInspectorPanel";
+import {
+  analysisFieldViewOptions,
+  modeFieldComponentOptions,
+  selectedField3DPlotStatus,
+} from "./frequency-domain/FrequencyDomainHelpers";
 import { buildModeVisualizationBreadcrumbs } from "./mode-visualization/ModeVisualizationBreadcrumbs";
 
 const executeMock = vi.fn(() => Promise.resolve({ status: "success" }));
@@ -134,6 +144,45 @@ describe("ModeVisualizationInspectorPanel", () => {
         view: "real",
       }),
     );
+  });
+
+  it("uses field metadata views as the canonical capability list", () => {
+    expect(analysisFieldViewOptions(
+      ["complex", "real", "imag", "phase_rotated_real", "real"],
+      "phase_rotated_real",
+    )).toEqual(["phase_rotated_real", "abs", "real", "imag"]);
+  });
+
+  it("derives mode components from ready field metadata", () => {
+    expect(modeFieldComponentOptions({
+      components: ["x", "z"],
+      component_count: 3,
+    })).toEqual([
+      { label: "|delta m|", value: "magnitude" },
+      { label: "delta m_x", value: "component_x" },
+      { label: "delta m_z", value: "component_z" },
+    ]);
+    expect(selectedField3DPlotStatus({
+      component_basis: "local_tangent_frame",
+      component_count: 2,
+      resource_key: "field-resource",
+      value_kind: "complex_tangent_vector",
+    })).toContain("reconstruction");
+  });
+
+  it("reports unavailable field metadata instead of implying 3D support", () => {
+    const contribution = resolveInspectorPanel({ kind: "object.mode_visualization" });
+    if (!contribution) throw new Error("Missing mode visualization route");
+    const Component = contribution.component;
+    const html = renderToStaticMarkup(
+      <KernelContext.Provider value={mockKernel}>
+        <Component selection={modeSelection()} />
+      </KernelContext.Provider>,
+    );
+
+    expect(html).toContain("Mode field metadata is not available");
+    expect(html).toContain('aria-label="Mode visualization 3D view"');
+    expect(html).toContain('disabled=""');
   });
 
   it("renders an empty state without a target ref", () => {
