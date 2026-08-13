@@ -16,9 +16,13 @@ from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 
-SCHEMA_VERSION = "racetrack_mumax_common_limit_v1"
-FULLMAG_INPUT_SCHEMA = "fullmag_racetrack_common_limit_input.v1"
-MUMAX_INPUT_SCHEMA = "mumax_racetrack_common_limit_input.v1"
+SCHEMA_VERSION = "racetrack_mumax_common_limit_v2"
+FULLMAG_INPUT_SCHEMA = "fullmag_racetrack_common_limit_input.v2"
+MUMAX_INPUT_SCHEMA = "mumax_racetrack_common_limit_input.v2"
+TORQUE_EXPORT_SCHEMA = "fullmag_transport_torque_mumax_export.v1"
+TORQUE_FORMULA = "transport_torque_angular_momentum.fullmag.v1"
+FIELD_FORMULA = "B_eq_equals_m_cross_T_tr_G_over_gamma_e.v1"
+GILBERT_CONVENTION = "gilbert_explicit_fullmag.v1"
 DEFAULT_THRESHOLDS = {
     "m_rms": 2.0e-3,
     "energy_relative": 5.0e-3,
@@ -67,6 +71,66 @@ def _trajectory(manifest: Mapping[str, Any], label: str) -> list[Mapping[str, An
     return [_mapping(sample, f"{label} trajectory[{index}]") for index, sample in enumerate(raw)]
 
 
+def _validate_sample_cadence(
+    trajectory: Sequence[Mapping[str, Any]], common_limit: Mapping[str, object], label: str
+) -> None:
+    sample_interval = _number(common_limit["sample_interval_s"], f"{label} sample_interval_s")
+    duration = _number(common_limit["duration_s"], f"{label} duration_s")
+    expected_samples = round(duration / sample_interval) + 1
+    if len(trajectory) != expected_samples:
+        raise ComparisonError(f"{label} sample count does not match the declared sample cadence")
+    for index, sample in enumerate(trajectory):
+        expected_time = index * sample_interval
+        actual_time = _number(sample.get("time_s"), f"{label} sample {index} time_s")
+        if not math.isclose(actual_time, expected_time, rel_tol=1.0e-12, abs_tol=0.0):
+            raise ComparisonError(f"{label} sample cadence mismatch at index {index}")
+
+
+def _integer_multiple(value: float, unit: float, label: str) -> int:
+    if value <= 0.0 or unit <= 0.0:
+        raise ComparisonError(f"{label} must be positive")
+    multiple = round(value / unit)
+    if multiple < 1 or not math.isclose(value, multiple * unit, rel_tol=1.0e-12, abs_tol=0.0):
+        raise ComparisonError(f"{label} must be an integer multiple of the fixed timestep")
+    return multiple
+
+
+def _validate_common_limit(value: Mapping[str, Any], label: str) -> dict[str, object]:
+    if _text(value.get("integrator"), f"{label} integrator") != "heun_fixed":
+        raise ComparisonError(f"{label} integrator must be heun_fixed")
+    timestep = _number(value.get("fixed_timestep_s"), f"{label} fixed_timestep_s")
+    sample_interval = _number(value.get("sample_interval_s"), f"{label} sample_interval_s")
+    duration = _number(value.get("duration_s"), f"{label} duration_s")
+    alpha = _number(value.get("alpha"), f"{label} alpha")
+    gamma = _number(value.get("gamma_rad_s_T"), f"{label} gamma_rad_s_T")
+    if alpha < 0.0:
+        raise ComparisonError(f"{label} alpha must be nonnegative")
+    if gamma <= 0.0:
+        raise ComparisonError(f"{label} gamma_rad_s_T must be positive")
+    _integer_multiple(sample_interval, timestep, f"{label} sample_interval_s")
+    _integer_multiple(duration, timestep, f"{label} duration_s")
+    _integer_multiple(duration, sample_interval, f"{label} duration_s/sample_interval_s")
+    demag_policy = _text(value.get("demag_policy"), f"{label} demag_policy")
+    return {
+        "integrator": "heun_fixed",
+        "fixed_timestep_s": timestep,
+        "sample_interval_s": sample_interval,
+        "duration_s": duration,
+        "alpha": alpha,
+        "gamma_rad_s_T": gamma,
+        "demag_policy": demag_policy,
+    }
+
+
+def _validate_frozen_torque(value: Mapping[str, Any], label: str) -> None:
+    if value.get("enabled") is not True:
+        raise ComparisonError(f"{label} frozen torque is not enabled")
+    if value.get("update_policy") != "frozen_from_accepted_fullmag_snapshot":
+        raise ComparisonError(f"{label} torque is not frozen from an accepted Fullmag snapshot")
+    if value.get("dynamic_transport_recomputation") is not False:
+        raise ComparisonError(f"{label} dynamically recomputes transport torque")
+
+
 def _validate_identity(fullmag: Mapping[str, Any], mumax: Mapping[str, Any]) -> dict[str, str]:
     if fullmag.get("schema_version") != FULLMAG_INPUT_SCHEMA:
         raise ComparisonError(f"unexpected Fullmag input schema: {fullmag.get('schema_version')!r}")
@@ -75,6 +139,7 @@ def _validate_identity(fullmag: Mapping[str, Any], mumax: Mapping[str, Any]) -> 
     mumax_info = _mapping(mumax.get("mumax"), "mumax")
     mumax_version = _text(mumax_info.get("version"), "MuMax version")
     mumax_digest = _text(mumax_info.get("binary_digest_sha256"), "MuMax binary digest")
+    table_digest = _text(mumax_info.get("table_digest_sha256"), "MuMax table digest")
     fullmag_grid = _mapping(fullmag.get("grid"), "Fullmag grid")
     mumax_grid = _mapping(mumax.get("grid"), "MuMax grid")
     if fullmag_grid.get("shape") != mumax_grid.get("shape"):
@@ -83,36 +148,68 @@ def _validate_identity(fullmag: Mapping[str, Any], mumax: Mapping[str, Any]) -> 
     if grid_digest != _text(mumax_grid.get("digest_sha256"), "MuMax grid digest"):
         raise ComparisonError("grid digest mismatch")
     torque_export = _mapping(fullmag.get("torque_export"), "Fullmag torque export")
-    torque_digest = _text(torque_export.get("field_digest_sha256"), "Fullmag torque digest")
-    formula_version = _text(torque_export.get("formula_version"), "Fullmag torque formula")
-    if formula_version != "transport_torque_angular_momentum.fullmag.v1":
-        raise ComparisonError("Fullmag torque formula is not the solved-current export")
-    if _text(torque_export.get("units"), "Fullmag torque units") != "s^-1":
-        raise ComparisonError("Fullmag torque units must be s^-1")
+    if torque_export.get("schema_version") != TORQUE_EXPORT_SCHEMA:
+        raise ComparisonError("Fullmag torque export schema is not versioned")
+    source_torque = _mapping(torque_export.get("source_torque"), "Fullmag source T_tr_G")
+    source_torque_digest = _text(source_torque.get("field_digest_sha256"), "Fullmag T_tr_G digest")
+    if source_torque.get("quantity") != "T_tr_G" or _text(source_torque.get("units"), "Fullmag T_tr_G units") != "s^-1":
+        raise ComparisonError("Fullmag source torque must be T_tr_G in s^-1")
+    if _text(source_torque.get("formula_version"), "Fullmag T_tr_G formula") != TORQUE_FORMULA:
+        raise ComparisonError("Fullmag source torque is not the solved-current export")
+    equivalent_field = _mapping(torque_export.get("equivalent_field"), "Fullmag B_eq export")
+    equivalent_field_digest = _text(equivalent_field.get("field_digest_sha256"), "Fullmag B_eq digest")
+    if equivalent_field.get("quantity") != "B_eq" or _text(equivalent_field.get("units"), "Fullmag B_eq units") != "T":
+        raise ComparisonError("Fullmag equivalent field must be B_eq in T")
+    if _text(equivalent_field.get("formula_version"), "Fullmag B_eq formula") != FIELD_FORMULA:
+        raise ComparisonError("Fullmag equivalent field does not use the documented Gilbert conversion")
+    if _text(equivalent_field.get("source_torque_digest_sha256"), "Fullmag B_eq source T_tr_G digest") != source_torque_digest:
+        raise ComparisonError("Fullmag B_eq source digest does not bind to T_tr_G")
+    llg = _mapping(torque_export.get("llg"), "Fullmag export LLG")
+    if llg.get("convention") != GILBERT_CONVENTION:
+        raise ComparisonError("Fullmag torque export does not declare the canonical Gilbert convention")
+    if _number(llg.get("alpha"), "Fullmag export alpha") < 0.0:
+        raise ComparisonError("Fullmag export alpha must be nonnegative")
+    if _number(llg.get("gamma_rad_s_T"), "Fullmag export gamma_rad_s_T") <= 0.0:
+        raise ComparisonError("Fullmag export gamma_rad_s_T must be positive")
+    _validate_frozen_torque(_mapping(torque_export.get("frozen_torque"), "Fullmag frozen torque"), "Fullmag")
     injected = _mapping(mumax.get("injected_torque"), "MuMax injected torque")
     if injected.get("identity_confirmed") is not True:
         raise ComparisonError("MuMax torque identity is not confirmed")
-    if _text(injected.get("formula_version"), "MuMax torque formula") != formula_version:
-        raise ComparisonError("MuMax torque formula does not match Fullmag torque formula")
-    if _text(injected.get("units"), "MuMax injected torque units") != "s^-1":
-        raise ComparisonError("MuMax torque units must be s^-1")
-    if torque_digest != _text(injected.get("source_field_digest_sha256"), "MuMax torque source digest"):
-        raise ComparisonError("MuMax torque identity digest does not match Fullmag export")
-    fullmag_common_limit = _mapping(fullmag.get("common_limit"), "Fullmag common_limit")
-    mumax_common_limit = _mapping(mumax.get("common_limit"), "MuMax common_limit")
-    for key in ("integrator", "fixed_timestep_s", "demag_policy"):
-        if fullmag_common_limit.get(key) != mumax_common_limit.get(key):
+    if injected.get("quantity") != "B_eq" or _text(injected.get("units"), "MuMax B_eq units") != "T":
+        raise ComparisonError("MuMax must inject B_eq in T")
+    if _text(injected.get("formula_version"), "MuMax B_eq formula") != FIELD_FORMULA:
+        raise ComparisonError("MuMax B_eq formula does not match Fullmag conversion")
+    if source_torque_digest != _text(injected.get("source_torque_digest_sha256"), "MuMax source T_tr_G digest"):
+        raise ComparisonError("MuMax source T_tr_G digest does not match Fullmag export")
+    if equivalent_field_digest != _text(injected.get("field_digest_sha256"), "MuMax injected B_eq digest"):
+        raise ComparisonError("MuMax injected B_eq digest does not match Fullmag export")
+    _validate_frozen_torque(_mapping(injected.get("frozen_torque"), "MuMax frozen torque"), "MuMax")
+    fullmag_common_limit = _validate_common_limit(_mapping(fullmag.get("common_limit"), "Fullmag common_limit"), "Fullmag common-limit")
+    mumax_common_limit = _validate_common_limit(_mapping(mumax.get("common_limit"), "MuMax common_limit"), "MuMax common-limit")
+    for key in ("integrator", "fixed_timestep_s", "sample_interval_s", "duration_s", "alpha", "gamma_rad_s_T", "demag_policy"):
+        if fullmag_common_limit[key] != mumax_common_limit[key]:
             raise ComparisonError(f"common-limit {key} mismatch")
-    if _text(fullmag_common_limit.get("integrator"), "common-limit integrator") != "heun_fixed":
-        raise ComparisonError("common-limit integrator must be heun_fixed")
-    if _number(fullmag_common_limit.get("fixed_timestep_s"), "common-limit fixed_timestep_s") <= 0.0:
-        raise ComparisonError("common-limit fixed_timestep_s must be positive")
+    if fullmag_common_limit["alpha"] != llg["alpha"] or fullmag_common_limit["gamma_rad_s_T"] != llg["gamma_rad_s_T"]:
+        raise ComparisonError("Fullmag common-limit alpha/gamma do not match the torque export")
+    trajectory_source = _mapping(mumax.get("trajectory_source"), "MuMax trajectory source")
+    if trajectory_source.get("kind") != "mumax_table_autosave_v1":
+        raise ComparisonError("MuMax trajectory source must be table plus field autosave")
+    if trajectory_source.get("initial_sample_recorded") is not True:
+        raise ComparisonError("MuMax trajectory must include the initial sample")
+    if _number(trajectory_source.get("table_autosave_interval_s"), "MuMax table autosave interval") != mumax_common_limit["sample_interval_s"]:
+        raise ComparisonError("MuMax table autosave interval does not match common-limit cadence")
+    if _number(trajectory_source.get("field_autosave_interval_s"), "MuMax field autosave interval") != mumax_common_limit["sample_interval_s"]:
+        raise ComparisonError("MuMax field autosave interval does not match common-limit cadence")
+    if _text(trajectory_source.get("table_digest_sha256"), "MuMax trajectory table digest") != table_digest:
+        raise ComparisonError("MuMax trajectory table digest does not match runtime identity")
     return {
         "mumax_version": mumax_version,
         "mumax_binary_digest_sha256": mumax_digest,
         "mumax_input_script_digest_sha256": _text(mumax_info.get("input_script_digest_sha256"), "MuMax input script digest"),
         "mumax_output_ovf_digest_sha256": _text(mumax_info.get("output_ovf_digest_sha256"), "MuMax output OVF digest"),
-        "torque_digest_sha256": torque_digest,
+        "mumax_table_digest_sha256": table_digest,
+        "source_torque_digest_sha256": source_torque_digest,
+        "equivalent_field_digest_sha256": equivalent_field_digest,
         "grid_digest_sha256": grid_digest,
     }
 
@@ -160,6 +257,9 @@ def compare_common_limit(
     identity = _validate_identity(fullmag, mumax)
     fullmag_samples = _trajectory(fullmag, "Fullmag")
     mumax_samples = _trajectory(mumax, "MuMax")
+    common_limit = _validate_common_limit(_mapping(fullmag.get("common_limit"), "Fullmag common_limit"), "Fullmag common-limit")
+    _validate_sample_cadence(fullmag_samples, common_limit, "Fullmag")
+    _validate_sample_cadence(mumax_samples, common_limit, "MuMax")
     if len(fullmag_samples) != len(mumax_samples):
         raise ComparisonError("sample count mismatch")
 

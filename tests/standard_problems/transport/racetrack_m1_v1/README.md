@@ -106,10 +106,34 @@ wersjonowanych manifestów wejściowych Fullmag i MuMax3; porównywarka odrzuca
 brak digestu binarium MuMax3, niezgodną siatkę, różny krok/integrator common
 limit albo brak identycznego digestu pola torque.
 
+Źródłem eksportu jest zaakceptowane `T_tr_G` Fullmag w `s^-1`, nie
+prescribed field. Dla kanonicznego jawnego równania Gilberta z
+`docs/physics/0970-spin-hall-drift-diffusion-transport.md`,
+
+```text
+(1 + alpha^2) dm/dt = -gamma_e [m x B + alpha m x (m x B)]
+                         + T_tr_G + alpha m x T_tr_G,
+```
+
+oraz tangentnego `T_tr_G`, exporter
+`scripts/export_fullmag_transport_torque_for_mumax.py` zapisuje pole
+`B_eq = (m x T_tr_G) / gamma_e` w teslach. Pole jest zamrożone na
+zaakceptowanym snapshocie: nie jest aktualizowane podczas ewolucji MuMax3 i
+nie wolno go po cichu projekować, jeśli `m · T_tr_G != 0`. Manifest v1
+eksportu oddziela digest źródłowego `T_tr_G` (`s^-1`) od digestu wstrzykniętego
+`B_eq` (`T`), zapisuje `alpha`, `gamma_rad_s_T`, konwencję Gilberta i digest
+OVF. `common_limit.mx3` ustawia identyczne `GammaLL`, używa fixed-step Heuna
+oraz `TableSave`, `TableAutoSave(5e-12)` i `AutoSave(m, 5e-12)` dla jawnej
+kadencji próbkowania. Comparator v2 odrzuca dynamiczną rekalkulację torque,
+brak jednego z digestów, różne jednostki, niecałkowitą relację
+`dt`/próbkowanie/czas przebiegu oraz inną literalną politykę demag. Receptura
+wiąże ponadto digest rzeczywiście wygenerowanego `table.txt` z manifestem
+MuMax3; sam deklarowany interwał nie wystarcza jako dowód kadencji runtime.
+
 Jednostkowe testy `scripts/test_compare_fdm_racetrack_mumax.py` używają tylko
 syntetycznych manifestów do weryfikacji parsera i bramek fail-closed. Nie są
 dowodem uruchomienia MuMax3 ani kwalifikacją dynamiki. Prawdziwy wynik jest
-manifestem `racetrack_mumax_common_limit_v1.json` pod trwałym katalogiem
+manifestem `racetrack_mumax_common_limit_v2.json` pod trwałym katalogiem
 raportów i zawiera osobno metryki `m_rms`, energii, $Q$, środka, prędkości oraz
 $\Theta_H$, wraz z literalną polityką demag.
 

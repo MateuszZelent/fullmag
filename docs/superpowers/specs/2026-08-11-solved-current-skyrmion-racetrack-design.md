@@ -180,16 +180,26 @@ podzielone na dwie jawne części:
 
 1. Fullmag transport jest walidowany przez rozwiązania analityczne,
    CPU-reference, bilanse i zbieżność dla `V`, `J_c`, `mu_s`, `Q` i torque.
-2. Wynikowy torque Fullmag jest eksportowany jako wersjonowane pole wejściowe
-   do wspólnego limitu dynamiki. Fullmag i MuMax3 otrzymują identyczną
-   geometrię magnetyczną, siatkę, stan początkowy, exchange, anisotropy, DMI,
-   demag policy, integrator, krok czasu oraz to samo pole torque.
+2. Zaakceptowany Gilbert-source torque `T_tr_G` Fullmag w `s^-1` jest
+   eksportowany jako wersjonowane pole wejściowe `B_eq` w `T`. Dla kanonicznego
+   jawnego równania Gilberta obowiązuje dokładnie
+   `B_eq = (m × T_tr_G) / gamma_e`; exporter odrzuca nietangentne `T_tr_G`, a
+   nie wykonuje ukrytej projekcji. Manifest rozdziela digest źródłowego
+   `T_tr_G` od digestu wstrzykniętego `B_eq`, zapisuje `alpha`,
+   `gamma_rad_s_T`, konwencję Gilberta oraz zasadę
+   `frozen_from_accepted_fullmag_snapshot`. Fullmag i MuMax3 otrzymują
+   identyczną geometrię magnetyczną, siatkę, stan początkowy, exchange,
+   anisotropy, DMI, demag policy, integrator, krok czasu oraz to samo,
+   zamrożone pole `B_eq`.
 
 Porównywane są pełne pola `m(t)`, energia, `Q(t)`, położenie, `v_parallel`,
 `v_perp` i `Theta_H`. Osobno raportuje się literalną konfigurację MuMax3 oraz
 zbieżniejszą konfigurację demag, aby błąd kernela referencyjnego nie był
-przypisany transportowi Fullmag. Zgodność tej bramki nie promuje MuMax3 do
-orakla transportu i nie pozwala zastąpić solved-current prescribed torque.
+przypisany transportowi Fullmag. Kadencja jest częścią tożsamości: fixed-step
+Heun, `dt`, czas trwania, `TableAutoSave`, `AutoSave(m)` i digest rzeczywistej
+tabeli MuMax3 muszą być zgodne z manifestem. Zgodność tej bramki nie promuje
+MuMax3 do orakla transportu i nie pozwala zastąpić solved-current prescribed
+torque.
 
 ### 4.11. Bramka 11 — pełny kontrakt produktu
 

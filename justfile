@@ -491,13 +491,31 @@ verify-fdm-gpu-racetrack-mumax-common-limit:
       mumax_input="${MUMAX_RACETRACK_COMMON_LIMIT_INPUT:-}"; \
       relaxed_ovf="${FULLMAG_RACETRACK_RELAXED_OVF:-}"; \
       torque_ovf="${FULLMAG_RACETRACK_TORQUE_EQUIVALENT_OVF:-}"; \
-      for required in "$fullmag_input" "$mumax_input" "$relaxed_ovf" "$torque_ovf"; do \
+      torque_snapshot="${FULLMAG_RACETRACK_TORQUE_SNAPSHOT:-}"; \
+      torque_export="${FULLMAG_RACETRACK_TORQUE_EXPORT_MANIFEST:-}"; \
+      for required in "$fullmag_input" "$mumax_input" "$relaxed_ovf"; do \
         if [ -z "$required" ] || [ ! -f "$required" ]; then echo "missing required common-limit input manifest or OVF" >&2; exit 2; fi; \
       done; \
-      if [ -e "$report_root/racetrack_mumax_common_limit_v1.json" ]; then echo "refusing to overwrite existing report: $report_root" >&2; exit 3; fi; \
+      if [ -e "$report_root/racetrack_mumax_common_limit_v2.json" ]; then echo "refusing to overwrite existing report: $report_root" >&2; exit 3; fi; \
       mkdir -p "$report_root" "$durable_build"; \
       work_dir="$(mktemp -d "$durable_build/run.XXXXXXXX")"; \
       cleanup() { rm -rf "$work_dir"; }; trap cleanup EXIT INT TERM; \
+      if [ -n "$torque_snapshot" ]; then \
+        if [ ! -f "$torque_snapshot" ]; then echo "Fullmag torque snapshot is missing" >&2; exit 2; fi; \
+        torque_ovf="$work_dir/fullmag_transport_torque_common_limit_field.ovf"; \
+        torque_export="$work_dir/fullmag_transport_torque_mumax_export.v1.json"; \
+        python3 scripts/export_fullmag_transport_torque_for_mumax.py --input "$torque_snapshot" --output-ovf "$torque_ovf" --output-manifest "$torque_export"; \
+      fi; \
+      if [ -z "$torque_ovf" ] || [ ! -f "$torque_ovf" ] || [ -z "$torque_export" ] || [ ! -f "$torque_export" ]; then \
+        echo "supply FULLMAG_RACETRACK_TORQUE_SNAPSHOT or both an exported B_eq OVF and its export manifest" >&2; exit 2; \
+      fi; \
+      expected_export_b="$(python3 -c "import json; print(json.load(open(\"$fullmag_input\"))[\"torque_export\"][\"equivalent_field\"][\"field_digest_sha256\"])" 2>/dev/null || true)"; \
+      actual_export_b="$(python3 -c "import json; print(json.load(open(\"$torque_export\"))[\"equivalent_field\"][\"field_digest_sha256\"])" 2>/dev/null || true)"; \
+      expected_export_ovf="$(python3 -c "import json; print(json.load(open(\"$torque_export\"))[\"equivalent_field\"][\"ovf_sha256\"])" 2>/dev/null || true)"; \
+      actual_export_ovf="$(sha256sum "$torque_ovf" | awk '\''{print $1}'\'')"; \
+      if [ -z "$expected_export_b" ] || [ "$expected_export_b" != "$actual_export_b" ] || [ -z "$expected_export_ovf" ] || [ "$expected_export_ovf" != "$actual_export_ovf" ]; then \
+        echo "Fullmag common-limit manifest, B_eq export manifest, and OVF digest do not form one identity" >&2; exit 4; \
+      fi; \
       cp tests/standard_problems/transport/racetrack_m1_v1/mumax/common_limit.mx3 "$work_dir/common_limit.mx3"; \
       cp "$relaxed_ovf" "$work_dir/relaxed_zero_current.ovf"; \
       cp "$torque_ovf" "$work_dir/fullmag_transport_torque_common_limit_field.ovf"; \
@@ -517,13 +535,19 @@ verify-fdm-gpu-racetrack-mumax-common-limit:
       expected_binary="$(python3 -c "import json; print(json.load(open(\"$mumax_input\"))[\"mumax\"][\"binary_digest_sha256\"])" 2>/dev/null || true)"; \
       actual_binary="$(tr -d "\\n" < "$work_dir/mumax3.sha256")"; \
       if [ -z "$expected_binary" ] || [ "$expected_binary" != "$actual_binary" ]; then echo "MuMax binary digest is missing or mismatched" >&2; exit 6; fi; \
-      result_ovf="$work_dir/common_limit.out/m000000.ovf"; \
-      if [ ! -f "$result_ovf" ]; then echo "MuMax did not produce the expected final magnetization OVF" >&2; exit 7; fi; \
+      result_ovf="$(find "$work_dir/common_limit.out" -maxdepth 1 -name 'm*.ovf' -type f -print | sort | tail -n 1)"; \
+      table_file="$work_dir/common_limit.out/table.txt"; \
+      if [ -z "$result_ovf" ] || [ ! -f "$result_ovf" ] || [ ! -f "$table_file" ]; then echo "MuMax did not produce the final magnetization OVF and autosaved table" >&2; exit 7; fi; \
+      expected_table="$(python3 -c "import json; print(json.load(open(\"$mumax_input\"))[\"mumax\"][\"table_digest_sha256\"])" 2>/dev/null || true)"; \
+      actual_table="$(sha256sum "$table_file" | awk '\''{print $1}'\'')"; \
+      if [ -z "$expected_table" ] || [ "$expected_table" != "$actual_table" ]; then echo "MuMax autosaved trajectory table digest is missing or mismatched" >&2; exit 8; fi; \
       expected_output="$(python3 -c "import json; print(json.load(open(\"$mumax_input\"))[\"mumax\"][\"output_ovf_digest_sha256\"])" 2>/dev/null || true)"; \
       actual_output="$(sha256sum "$result_ovf" | awk '\''{print $1}'\'')"; \
-      if [ -z "$expected_output" ] || [ "$expected_output" != "$actual_output" ]; then echo "MuMax output OVF digest is missing or mismatched" >&2; exit 8; fi; \
+      if [ -z "$expected_output" ] || [ "$expected_output" != "$actual_output" ]; then echo "MuMax output OVF digest is missing or mismatched" >&2; exit 9; fi; \
       cp "$result_ovf" "$report_root/m_final.ovf"; \
-      python3 scripts/compare_fdm_racetrack_mumax.py --fullmag "$report_root/fullmag-input.json" --mumax "$report_root/mumax-input.json" --output "$report_root/racetrack_mumax_common_limit_v1.json"; \
+      cp "$table_file" "$report_root/mumax-table.txt"; \
+      cp "$torque_export" "$report_root/fullmag_transport_torque_mumax_export.v1.json"; \
+      python3 scripts/compare_fdm_racetrack_mumax.py --fullmag "$report_root/fullmag-input.json" --mumax "$report_root/mumax-input.json" --output "$report_root/racetrack_mumax_common_limit_v2.json"; \
       sha256sum "$report_root"/* | tee "$report_root/SHA256SUMS.txt"'
 
 verify-fdm-slonczewski-native-contract:
