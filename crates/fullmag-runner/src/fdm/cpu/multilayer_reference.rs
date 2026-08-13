@@ -63,6 +63,18 @@ pub(crate) fn execute_reference_fdm_multilayer(
     artifact_writer: Option<ArtifactPipelineSender>,
 ) -> Result<ExecutedRun, RunError> {
     crate::fdm::reject_adaptive_multilayer_plan(plan)?;
+    if let Some(layer) = plan
+        .layers
+        .iter()
+        .find(|layer| layer.transfer_kind == "unsupported")
+    {
+        return Err(RunError {
+            message: format!(
+                "FDM multilayer runtime refuses unsupported transfer_kind='unsupported' for layer_id='{}' magnet_name='{}' before context or kernel allocation",
+                layer.layer_id, layer.magnet_name
+            ),
+        });
+    }
     crate::fdm::validate_multilayer_grid_budget(plan)?;
     if until_seconds <= 0.0 {
         return Err(RunError {
@@ -72,16 +84,6 @@ pub(crate) fn execute_reference_fdm_multilayer(
     if plan.precision != ExecutionPrecision::Double {
         return Err(RunError {
             message: "public multilayer FDM CPU runner supports only double precision".to_string(),
-        });
-    }
-    if plan
-        .layers
-        .iter()
-        .any(|layer| layer.transfer_kind == "unsupported")
-    {
-        return Err(RunError {
-            message: "FDM multilayer runtime refuses transfer_kind='unsupported' before context or kernel allocation"
-                .to_string(),
         });
     }
     let integrator = match plan.integrator {
@@ -625,14 +627,16 @@ fn build_multilayer_demag_runtime(
             message: "FDM multilayer runtime requires at least one layer".to_string(),
         });
     }
-    if plan
+    if let Some(layer) = plan
         .layers
         .iter()
-        .any(|layer| layer.transfer_kind == "unsupported")
+        .find(|layer| layer.transfer_kind == "unsupported")
     {
         return Err(RunError {
-            message: "FDM multilayer runtime refuses transfer_kind='unsupported' before kernel allocation"
-                .to_string(),
+            message: format!(
+                "FDM multilayer runtime refuses unsupported transfer_kind='unsupported' for layer_id='{}' magnet_name='{}' before kernel allocation",
+                layer.layer_id, layer.magnet_name
+            ),
         });
     }
     let mode = match plan.planner_summary.resolved_mode.as_str() {
@@ -935,17 +939,23 @@ fn observe_multilayer(
         ));
 
         let active_mask = context.problem.active_mask.as_deref();
-        let [mx, my, mz] = crate::scalar_metrics::average_magnetization_components_with_active_mask(
-            state.magnetization(),
-            active_mask,
-        );
-        let m_weight = state
+        let moment_weights = state
             .magnetization()
             .iter()
             .enumerate()
-            .filter(|(cell, _)| active_mask.map(|mask| mask[*cell]).unwrap_or(true))
-            .map(|(cell, _)| context.problem.ms_at(cell) * context.problem.cell_size.volume())
-            .sum::<f64>();
+            .map(|(cell, _)| {
+                if active_mask.map(|mask| mask[cell]).unwrap_or(true) {
+                    context.problem.ms_at(cell) * layer_cell_volume
+                } else {
+                    0.0
+                }
+            })
+            .collect::<Vec<_>>();
+        let [mx, my, mz] = crate::scalar_metrics::weighted_average_magnetization_components(
+            state.magnetization(),
+            &moment_weights,
+        );
+        let m_weight = moment_weights.iter().sum::<f64>();
         per_object_scalars.insert(
             context.magnet_name.clone(),
             std::collections::HashMap::from([
@@ -1529,6 +1539,45 @@ mod tests {
     }
 
     #[test]
+    fn multilayer_final_step_stats_use_ms_weighted_object_means() {
+        let mut plan = make_plan(false);
+        plan.enable_exchange = false;
+        plan.relaxation = None;
+        plan.layers[0].initial_magnetization = (0..16)
+            .map(|cell| {
+                if cell < 8 {
+                    [1.0, 0.0, 0.0]
+                } else {
+                    [0.0, 1.0, 0.0]
+                }
+            })
+            .collect();
+        plan.layers[0].material.ms_field = Some(
+            (0..16)
+                .map(|cell| if cell < 8 { 100e3 } else { 300e3 })
+                .collect(),
+        );
+        plan.layers[1].initial_magnetization = vec![[0.0, 0.0, 1.0]; 16];
+        plan.layers[1].material.ms_field = Some(vec![200e3; 16]);
+
+        let executed = execute_reference_fdm_multilayer(&plan, 1e-13, &[], None, None)
+            .expect("heterogeneous Ms multilayer run should execute");
+        let final_stats = executed
+            .result
+            .steps
+            .last()
+            .expect("final StepStats should be published");
+        let free = &final_stats.per_object_scalars["free"];
+
+        assert!((free["mx"] - 0.25).abs() < 1e-12);
+        assert!((free["my"] - 0.75).abs() < 1e-12);
+        assert!(free["mz"].abs() < 1e-12);
+        assert!((final_stats.mx - 0.125).abs() < 1e-12);
+        assert!((final_stats.my - 0.375).abs() < 1e-12);
+        assert!((final_stats.mz - 0.5).abs() < 1e-12);
+    }
+
+    #[test]
     fn direct_cpu_multilayer_entry_requires_fixed_timestep_for_every_integrator() {
         for integrator in [
             IntegratorChoice::Heun,
@@ -1716,6 +1765,23 @@ mod tests {
             "unexpected error: {}",
             error.message,
         );
+        assert!(error.message.contains("layer_id='layer:free'"));
+        assert!(error.message.contains("magnet_name='free'"));
+    }
+
+    #[test]
+    fn multilayer_demag_runtime_rejects_unsupported_transfer_with_layer_identity() {
+        let mut plan = make_plan(true);
+        plan.layers[1].transfer_kind = "unsupported".to_string();
+
+        let error = match build_multilayer_demag_runtime(&plan) {
+            Ok(_) => panic!("unsupported transfer must fail before kernel allocation"),
+            Err(error) => error,
+        };
+
+        assert!(error.message.contains("transfer_kind='unsupported'"));
+        assert!(error.message.contains("layer_id='layer:ref'"));
+        assert!(error.message.contains("magnet_name='ref'"));
     }
 
     #[test]
