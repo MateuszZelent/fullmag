@@ -447,10 +447,14 @@ async function beginCrossSectionDraftFromCommand(
     return { message: "Domain bounds are unavailable for planar monitor placement.", status: "failed" };
   }
   const domain = await context.api.data.domain.meta();
-  const draft = beginPlanarMonitorDraft(visualizationStateFromContext(context), {
-    min: domain.bounds.min as [number, number, number],
-    max: domain.bounds.max as [number, number, number],
-  });
+  const draft = beginPlanarMonitorDraft(
+    visualizationStateFromContext(context),
+    {
+      min: domain.bounds.min as [number, number, number],
+      max: domain.bounds.max as [number, number, number],
+    },
+    { source: "ribbon" },
+  );
   const nodeId = "model:definitions:planar-monitors:draft";
   selectPlanarMonitorDraft(context, draft.monitor.name, nodeId);
   context.layout?.setPanelVisible("left", true);

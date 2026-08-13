@@ -15,6 +15,37 @@ export interface PlanarMonitorFramePreview {
   originM: readonly [number, number, number];
   uAxis: readonly [number, number, number];
   vAxis: readonly [number, number, number];
+  /** Preview-only overlays may be hidden without retaining an interaction target. */
+  selectable?: boolean;
+  visible?: boolean;
+}
+
+export type PlanarMonitorPreviewSupport =
+  | { status: "ready" }
+  | { reason: string; status: "unavailable" };
+
+export function resolvePlanarMonitorPreviewSupport(
+  operator: PlanarMonitorOperator,
+): PlanarMonitorPreviewSupport {
+  if (operator.kind === "depth_projection") {
+    return {
+      reason: "Depth projection has no finite 3D support frame; edit its monitor frame in the Inspector.",
+      status: "unavailable",
+    };
+  }
+  if (operator.kind === "surface_projection") {
+    return {
+      reason: "Surface projection support is backend-resolved and has no published 3D boundary frame.",
+      status: "unavailable",
+    };
+  }
+  return { status: "ready" };
+}
+
+export function planarMonitorFramePreviewCanSelect(
+  preview: PlanarMonitorFramePreview,
+): boolean {
+  return preview.visible !== false && preview.selectable !== false;
 }
 
 interface PlanarMonitorPreviewBounds {
@@ -27,6 +58,9 @@ export function planarMonitorFramePreviewFromDraft(
   bounds: PlanarMonitorPreviewBounds | null,
 ): PlanarMonitorFramePreview | null {
   const { frame } = draft.monitor;
+  if (resolvePlanarMonitorPreviewSupport(draft.monitor.operator).status !== "ready") {
+    return null;
+  }
   const boundsUvM = frame.extent.kind === "explicit"
     ? [
       frame.extent.u_min_m,
@@ -44,12 +78,15 @@ export function planarMonitorFramePreviewFromDraft(
     originM: frame.origin_m as [number, number, number],
     uAxis: frame.u_axis as [number, number, number],
     vAxis: frame.v_axis as [number, number, number],
+    selectable: true,
+    visible: true,
   };
 }
 
 type Listener = () => void;
 
 let preview: PlanarMonitorFramePreview | null = null;
+let draftPreview: PlanarMonitorDraft | null = null;
 const listeners = new Set<Listener>();
 
 export const planarMonitorFramePreviewStore = {
@@ -58,11 +95,24 @@ export const planarMonitorFramePreviewStore = {
     preview = null;
     emit();
   },
+  clearDraft() {
+    if (!draftPreview) return;
+    draftPreview = null;
+    emit();
+  },
+  getDraftSnapshot() {
+    return draftPreview;
+  },
   getSnapshot() {
     return preview;
   },
   set(next: PlanarMonitorFramePreview) {
     preview = next;
+    emit();
+  },
+  setDraft(next: PlanarMonitorDraft | null) {
+    if (draftPreview === next) return;
+    draftPreview = next;
     emit();
   },
   subscribe(listener: Listener) {
@@ -76,6 +126,14 @@ export function usePlanarMonitorFramePreview(): PlanarMonitorFramePreview | null
     planarMonitorFramePreviewStore.subscribe,
     planarMonitorFramePreviewStore.getSnapshot,
     planarMonitorFramePreviewStore.getSnapshot,
+  );
+}
+
+export function usePlanarMonitorFramePreviewDraft(): PlanarMonitorDraft | null {
+  return useSyncExternalStore(
+    planarMonitorFramePreviewStore.subscribe,
+    planarMonitorFramePreviewStore.getDraftSnapshot,
+    planarMonitorFramePreviewStore.getDraftSnapshot,
   );
 }
 

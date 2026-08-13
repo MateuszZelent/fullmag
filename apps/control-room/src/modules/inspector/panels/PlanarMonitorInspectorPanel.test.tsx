@@ -1,5 +1,5 @@
 import { act } from "react";
-import { createRoot } from "react-dom/client";
+import { createRoot, hydrateRoot } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
 import { readFileSync } from "node:fs";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -10,6 +10,7 @@ import {
   TestEvent,
   TestNode,
 } from "@/kernel/layout/simulationPreparationTestDom.test-support";
+import { planarMonitorFramePreviewStore } from "@/kernel/workspace/planarMonitorFramePreview";
 
 import { PlanarMonitorInspectorPanel } from "./PlanarMonitorInspectorPanel";
 
@@ -80,6 +81,7 @@ vi.mock("../visualization/PlanarVisualizationSection", () => ({
 describe("PlanarMonitorInspectorPanel", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    planarMonitorFramePreviewStore.clearDraft();
     mocks.collection.monitors = [monitorFixture];
     mocks.patch.mockResolvedValue({
       monitor: { ...monitorFixture, name: "Edited" },
@@ -115,9 +117,35 @@ describe("PlanarMonitorInspectorPanel", () => {
     expect(html).toContain('value="Mid-plane"');
     expect(html).toContain("Apply");
     expect(html).toContain("Discard");
+    expect(html).toContain("Create preset");
     expect(html).toContain("Show frame in 3D");
     expect(html).toContain("Open in 2D");
     expect(html).toContain("SceneDocument / ProblemIR");
+  });
+
+  it("hydrates the Inspector create action without a client-only mismatch", async () => {
+    const dom = installSimulationPreparationTestDom();
+    const container = dom.document.createElement("div");
+    (container as unknown as { innerHTML: string }).innerHTML = renderToStaticMarkup(
+      <PlanarMonitorInspectorPanel selection={selection()} />,
+    );
+    const recoverableErrors: Error[] = [];
+    let root: ReturnType<typeof hydrateRoot>;
+    try {
+      await act(async () => {
+        root = hydrateRoot(container as unknown as Element, <PlanarMonitorInspectorPanel selection={selection()} />, {
+          onRecoverableError: (error) => recoverableErrors.push(
+            error instanceof Error ? error : new Error(String(error)),
+          ),
+        });
+        await Promise.resolve();
+      });
+      expect(recoverableErrors).toEqual([]);
+      expect(findButton(container, "Create preset")).toBeDefined();
+    } finally {
+      await act(async () => root!.unmount());
+      dom.restore();
+    }
   });
 
   it("keeps edits local until Apply and Discard restores the resource", async () => {
@@ -128,10 +156,14 @@ describe("PlanarMonitorInspectorPanel", () => {
       await act(async () => root.render(<PlanarMonitorInspectorPanel selection={selection()} />));
       await act(async () => change(findControl(container, "Target kind"), "domain"));
       expect(mocks.patch).not.toHaveBeenCalled();
+      expect(planarMonitorFramePreviewStore.getDraftSnapshot()).toMatchObject({
+        monitor: { id: "plane-1", target: { kind: "domain" } },
+      });
 
       await act(async () => findButton(container, "Discard").click());
       expect(findButton(container, "Apply").disabled).toBe(true);
       expect(mocks.patch).not.toHaveBeenCalled();
+      expect(planarMonitorFramePreviewStore.getDraftSnapshot()).toBeNull();
 
       await act(async () => change(findControl(container, "Target kind"), "domain"));
       await act(async () => findButton(container, "Apply").click());
@@ -141,6 +173,25 @@ describe("PlanarMonitorInspectorPanel", () => {
       });
     } finally {
       await act(async () => root.unmount());
+      dom.restore();
+    }
+  });
+
+  it("routes the Inspector preset action through the canonical create command", async () => {
+    const dom = installSimulationPreparationTestDom();
+    const container = dom.document.createElement("div");
+    const root = createRoot(container as unknown as Element);
+    try {
+      await act(async () => root.render(<PlanarMonitorInspectorPanel selection={selection()} />));
+      await act(async () => findButton(container, "Create preset").click());
+      expect(mocks.execute).toHaveBeenCalledWith(
+        "planar-monitor.create",
+        expect.anything(),
+        { intent: { source: "inspector" }, monitorId: "plane-1" },
+      );
+    } finally {
+      await act(async () => root.unmount());
+      expect(planarMonitorFramePreviewStore.getDraftSnapshot()).toBeNull();
       dom.restore();
     }
   });

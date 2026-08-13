@@ -215,6 +215,7 @@ interface Viewport3DSceneProps {
   onOrbitDebugAnglesChange?: (angles: Viewport3DOrbitDebugAngles) => void;
   onVisualizationFrameCommitted: (revision: number) => void;
   onSelectObject: (object: Viewport3DPrimitiveObject) => void;
+  onSelectPlanarMonitor: (monitorId: string) => void;
   onSelectRegion: (selection: RegionOverlaySelection) => void;
   onSelectDomain: () => void;
   onSelectFdmTarget: (target: VisualizationTargetRef) => void;
@@ -767,6 +768,7 @@ function Viewport3DOverlayLayerStack({
   onSelectDomain,
   onSelectFdmTarget,
   onSelectFdmUniverseOutsideSupport,
+  onSelectPlanarMonitor,
   scaleLabelsVisible,
   scaleUnitMode,
   selectionBounds,
@@ -794,6 +796,7 @@ function Viewport3DOverlayLayerStack({
   | "onSelectDomain"
   | "onSelectFdmTarget"
   | "onSelectFdmUniverseOutsideSupport"
+  | "onSelectPlanarMonitor"
   | "scaleLabelsVisible"
   | "scaleUnitMode"
   | "selectionBounds"
@@ -832,6 +835,7 @@ function Viewport3DOverlayLayerStack({
       !clip?.enabled ? (
         <PlanarMonitorFramePreviewLayer
           colors={colors}
+          onSelect={onSelectPlanarMonitor}
           preview={planarMonitorFramePreview}
           tracker={tracker}
         />
@@ -1515,6 +1519,7 @@ export function Viewport3DScene({
   onSelectDomain,
   onSelectFdmTarget,
   onSelectFdmUniverseOutsideSupport,
+  onSelectPlanarMonitor,
   onSelectFdmCell,
   onSelectPart,
   onSelectRegion,
@@ -1704,6 +1709,7 @@ export function Viewport3DScene({
         onSelectDomain={onSelectDomain}
         onSelectFdmTarget={onSelectFdmTarget}
         onSelectFdmUniverseOutsideSupport={onSelectFdmUniverseOutsideSupport}
+        onSelectPlanarMonitor={onSelectPlanarMonitor}
         scaleLabelsVisible={scaleLabelsVisible}
         scaleUnitMode={scaleUnitMode}
         selectionBounds={selectionBounds}

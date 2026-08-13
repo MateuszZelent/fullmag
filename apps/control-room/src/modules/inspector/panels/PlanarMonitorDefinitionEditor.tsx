@@ -8,7 +8,9 @@ import type {
   PlanarMonitorTarget,
 } from "@/kernel/workspace/crossSectionWorkspace";
 import { convertLength } from "@/kernel/workspace/crossSectionWorkspace";
+import { resolvePlanarMonitorPreviewSupport } from "@/kernel/workspace/planarMonitorFramePreview";
 
+import { FieldRow } from "../primitives/FieldRow";
 import { FormField } from "../primitives/FormField";
 import { InspectorGroup } from "../primitives/InspectorGroup";
 import { Vector3Field } from "../primitives/Vector3Field";
@@ -223,6 +225,7 @@ export function PlanarMonitorDefinitionEditor({ availability, draft, mode = "cre
     monitor.frame[key].map((value) =>
       String(length ? convertLength(value, "m", unit) : value),
     ) as [string, string, string];
+  const previewSupport = resolvePlanarMonitorPreviewSupport(monitor.operator);
 
   return (
     <div className="fm-planar-monitor-definition-editor">
@@ -393,6 +396,9 @@ export function PlanarMonitorDefinitionEditor({ availability, draft, mode = "cre
           ))}
         </FormField>
         <OperatorFields availability={availability} draft={draft} onChange={onChange} />
+        {previewSupport.status === "unavailable" ? (
+          <FieldRow label="3D preview" value={previewSupport.reason} />
+        ) : null}
         <AvailabilityReasons entries={availability.operators} kinds={OPERATORS} />
       </InspectorGroup>
     </div>

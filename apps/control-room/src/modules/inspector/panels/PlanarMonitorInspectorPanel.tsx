@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 import {
   MODEL_PLANAR_MONITORS_PATH,
@@ -18,6 +18,7 @@ import {
   type PlanarMonitor,
   type PlanarMonitorDraft,
 } from "@/kernel/workspace/crossSectionWorkspace";
+import { planarMonitorFramePreviewStore } from "@/kernel/workspace/planarMonitorFramePreview";
 import { Button } from "@/shared/ui/Button";
 
 import type { InspectorPanelProps } from "../inspectorTypes";
@@ -86,6 +87,10 @@ function CommittedPlanarMonitorEditor({
     ...planarMonitorDefinitionAvailabilityErrors(draft.monitor, definitionAvailability),
   ];
   const dirty = JSON.stringify(draft.monitor) !== JSON.stringify(monitor);
+  useEffect(() => {
+    planarMonitorFramePreviewStore.setDraft(dirty ? draft : null);
+    return () => planarMonitorFramePreviewStore.clearDraft();
+  }, [dirty, draft]);
   const run = (commandId: string, input?: Record<string, unknown>) =>
     kernel.commands.execute(
       commandId,
@@ -191,6 +196,9 @@ function CommittedPlanarMonitorEditor({
         <div className="fm-inspector-toolbar">
           <Button size="sm" type="button" variant="secondary" onClick={() => void run("field-map.select-monitor")}>
             Open in 2D
+          </Button>
+          <Button size="sm" type="button" variant="secondary" onClick={() => void run("planar-monitor.create", { intent: { source: "inspector" } })}>
+            Create preset
           </Button>
           <Button size="sm" type="button" variant="ghost" onClick={() => void run("planar-monitor.show-frame-3d")}>
             Show frame in 3D

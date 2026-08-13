@@ -118,6 +118,18 @@ describe("viewport smoke projection round-trip", () => {
     expect(smokeScript).toContain("finalWebGL");
   });
 
+  it("can exercise 100 3D-to-2D module switches and assert that the final 3D canvas is singular and live", () => {
+    const smokeScript = readFileSync(smokeScriptUrl, "utf8");
+
+    expect(smokeScript).toContain("CONTROL_ROOM_SMOKE_PLANAR_TOGGLE_CYCLES");
+    expect(smokeScript).toContain("verifyPlanarViewportToggleLifecycle");
+    expect(smokeScript).toContain("planar viewport toggle lifecycle");
+    expect(smokeScript).toContain('filter({ hasText: "2D View" })');
+    expect(smokeScript).toContain('filter({ hasText: "3D Viewport" })');
+    expect(smokeScript).toContain("3D viewport canvas count multiplied");
+    expect(smokeScript).toContain("assertFinalViewportWebGLState");
+  });
+
   it("reports browser evidence when startup fails before the canvas appears", () => {
     const smokeScript = readFileSync(smokeScriptUrl, "utf8");
 

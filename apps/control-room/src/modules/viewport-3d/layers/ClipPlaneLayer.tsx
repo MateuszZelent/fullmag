@@ -11,9 +11,11 @@ import {
   Vector3,
   type WebGLRenderer,
 } from "three";
+import type { ThreeEvent } from "@react-three/fiber";
 
 import type { VisualizationStateResource } from "@/kernel/api/apiTypes";
 import type { PlanarMonitorFramePreview } from "@/kernel/workspace/planarMonitorFramePreview";
+import { planarMonitorFramePreviewCanSelect } from "@/kernel/workspace/planarMonitorFramePreview";
 
 import type { Viewport3DResourceTracker } from "../viewport3dDiagnostics";
 import type { Viewport3DBounds } from "../viewport3dRenderModel";
@@ -149,10 +151,12 @@ export function ClipPlaneFramePreviewLayer({
 
 export function PlanarMonitorFramePreviewLayer({
   colors,
+  onSelect,
   preview,
   tracker,
 }: {
   colors: Viewport3DColors;
+  onSelect?: (monitorId: string) => void;
   preview: PlanarMonitorFramePreview;
   tracker: Viewport3DResourceTracker;
 }) {
@@ -173,8 +177,16 @@ export function PlanarMonitorFramePreviewLayer({
     return () => geometry.dispose();
   }, [geometry, invalidate, tracker]);
 
+  const interaction = planarMonitorFramePreviewInteraction(preview, onSelect);
+  if (!interaction) return null;
+
   return (
-    <lineSegments geometry={geometry} renderOrder={31}>
+    <lineSegments
+      geometry={geometry}
+      onClick={interaction.onClick}
+      raycast={interaction.raycast}
+      renderOrder={31}
+    >
       <lineBasicMaterial
         color={colors.accent}
         depthTest={false}
@@ -184,6 +196,25 @@ export function PlanarMonitorFramePreviewLayer({
       />
     </lineSegments>
   );
+}
+
+export function planarMonitorFramePreviewInteraction(
+  preview: PlanarMonitorFramePreview,
+  onSelect?: (monitorId: string) => void,
+): {
+  onClick?: (event: Pick<ThreeEvent<MouseEvent>, "stopPropagation">) => void;
+  raycast?: () => void;
+} | null {
+  if (preview.visible === false) return null;
+  if (!planarMonitorFramePreviewCanSelect(preview)) {
+    return { raycast: () => undefined };
+  }
+  return {
+    onClick: (event) => {
+      event.stopPropagation();
+      onSelect?.(preview.monitorId);
+    },
+  };
 }
 
 export function planarMonitorFrameSegments(

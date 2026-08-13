@@ -50,6 +50,22 @@ describe("PlanarMonitorDefinitionEditor", () => {
     expect(html).toContain('aria-label="Slab thickness"');
     expect(html).toContain('value="5"');
     expect(html).toContain('value="nm" selected=""');
+    expect(html).not.toContain("3D preview");
+  });
+
+  it("renders an explicit fail-closed Inspector diagnostic for operators without finite 3D support", () => {
+    const html = renderToStaticMarkup(
+      <PlanarMonitorDefinitionEditor
+        availability={{}}
+        draft={planarMonitorDraftFromMonitor({
+          ...monitor,
+          operator: { kind: "depth_projection", reduction: "mean_occupied", empty_policy: "exclude_empty" },
+        })}
+        onChange={vi.fn()}
+      />,
+    );
+    expect(html).toContain("3D preview");
+    expect(html).toContain("no finite 3D support frame");
   });
 
   it("does not render thickness or retain slab parameters for plane_sample", () => {

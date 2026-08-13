@@ -192,6 +192,72 @@ function explorerModelRuntimeStatusEquals(
   );
 }
 
+function planarMonitorTargetCapabilitiesFromResources({
+  discretization,
+  fdmMembership,
+  femTopologyReady,
+  regions,
+  scene,
+}: {
+  discretization: string | null | undefined;
+  fdmMembership: ReturnType<typeof useFdmRegionMembershipResource>;
+  femTopologyReady: boolean;
+  regions: ReturnType<typeof useModelRegionsResource>;
+  scene: ReturnType<typeof useSceneResource>;
+}) {
+  const objects: Record<string, { enabled: boolean; reason: string }> = {};
+  const regionCapabilities: Record<string, { enabled: boolean; reason: string }> = {};
+  const sceneObjectIds = (scene.data?.objects ?? []).map((entry) => entry.id);
+  const regionRefs = (regions.data?.regions ?? []).flatMap((entry) =>
+    entry.owner_object_id
+      ? [{ objectId: entry.owner_object_id, regionId: entry.region_id }]
+      : [],
+  );
+  const lane = discretization?.toLowerCase();
+  const fdmReady = lane === "fdm" && fdmMembership.availability.status === "ready";
+  const fdmObjectIds = new Set(fdmMembership.data?.object_ids ?? []);
+  const fdmRegionRefs = new Set(
+    (fdmMembership.data?.region_legend ?? []).map(
+      (entry) => `${entry.object_id}\u0000${entry.region_id}`,
+    ),
+  );
+  for (const objectId of sceneObjectIds) {
+    const enabled = lane === "fem"
+      ? femTopologyReady
+      : lane === "fdm"
+        ? fdmReady && fdmObjectIds.has(objectId)
+        : false;
+    objects[objectId] = {
+      enabled,
+      reason: enabled
+        ? "Published by current-session planar target resources."
+        : lane === "fdm"
+          ? "Current-session FDM object membership is not materialized."
+          : lane === "fem"
+            ? "Current-session FEM topology and object catalog are not materialized."
+            : "Active-session discretization capability is unavailable.",
+    };
+  }
+  for (const { objectId, regionId } of regionRefs) {
+    const enabled = lane === "fem"
+      ? femTopologyReady
+      : lane === "fdm"
+        ? fdmReady && fdmRegionRefs.has(`${objectId}\u0000${regionId}`)
+        : false;
+    regionCapabilities[`${objectId}\u0000${regionId}`] = {
+      enabled,
+      reason: enabled
+        ? "Published by current-session planar target resources."
+        : lane === "fdm"
+          ? "Current-session FDM region membership is not materialized."
+          : lane === "fem"
+            ? "Current-session FEM topology and region catalog are not materialized."
+            : "Active-session discretization capability is unavailable.",
+    };
+  }
+  return { objects, regions: regionCapabilities };
+}
+
 export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
   const activeTab = useExplorerStoreSelector((explorer) => explorer.activeTab);
   const filterText = useExplorerStoreSelector((explorer) => explorer.filterText);
@@ -339,6 +405,23 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
       enabled:
         frequencyDomainTabActive && frequencyDomainCancelRequestedAvailable,
     });
+  const planarMonitorTargetCapabilities = useMemo(
+    () => planarMonitorTargetCapabilitiesFromResources({
+      discretization: sessionStatusData?.domain.discretization,
+      fdmMembership: fdmRegionMembership,
+      femTopologyReady: manifest.status === "ready" && manifest.data !== null,
+      regions: modelRegions,
+      scene: modelResource,
+    }),
+    [
+      fdmRegionMembership,
+      manifest.data,
+      manifest.status,
+      modelRegions,
+      modelResource,
+      sessionStatusData?.domain.discretization,
+    ],
+  );
 
   const nodes = useMemo(() => {
     let domainPresentation = null as ReturnType<typeof buildDomainPresentation> | null;
@@ -484,6 +567,7 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
               frequencyDomainSpectrum: frequencyDomainSpectrum.data,
               planarMonitorDraft,
               planarMonitors: planarMonitors.data,
+              planarMonitorTargetCapabilities,
             },
           )
         : buildExplorerTree(activeTab, {
@@ -528,6 +612,7 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
     modelRegions.data,
     planarMonitorDraft,
     planarMonitors.data,
+    planarMonitorTargetCapabilities,
     physicsGraph.data,
     physicsGraph.status,
     regionMemberships.data,

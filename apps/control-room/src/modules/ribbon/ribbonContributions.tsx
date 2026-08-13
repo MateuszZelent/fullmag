@@ -2831,6 +2831,14 @@ function buildClipAction(
           visualizationStateCommandInput({ clip: { enabled } }),
       },
       {
+        type: "item",
+        id: "selected-clip:create-planar-monitor",
+        label: "Create planar monitor from clip",
+        disabled: !context.api,
+        commandId: "planar-monitor.create",
+        commandInput: { intent: { source: "clip" } },
+      },
+      {
         type: "radio-group",
         id: "selected-clip:axis",
         label: "Plane",

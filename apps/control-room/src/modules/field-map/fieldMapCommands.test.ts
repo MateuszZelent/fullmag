@@ -88,6 +88,58 @@ describe("field-map commands", () => {
     expect(setPanelVisible).toHaveBeenCalledWith("right", true);
   });
 
+  it("creates every user entrypoint draft through the canonical monitor factory before opening the Inspector", async () => {
+    const setFocusedSlot = vi.fn();
+    const setPanelVisible = vi.fn();
+    const selectionSet = vi.fn();
+    const command = fieldMapCommands.find((entry) => entry.id === "planar-monitor.create");
+
+    const result = await command?.run({
+      api: {
+        data: {
+          domain: {
+            meta: vi.fn().mockResolvedValue({
+              bounds: { min: [-4, -6, -8], max: [4, 6, 8] },
+            }),
+          },
+        },
+      } as never,
+      input: { intent: { source: "palette" } },
+      layout: { setFocusedSlot, setPanelVisible } as never,
+      selection: { set: selectionSet } as never,
+      source: "palette",
+    });
+
+    expect(result).toEqual({ status: "completed" });
+    expect(crossSectionWorkspaceStore.getSnapshot().planarMonitorDraft).toMatchObject({
+      monitor: {
+        target: { kind: "domain" },
+        operator: { kind: "plane_sample" },
+        frame: { normalization_version: "planar_frame_v1" },
+      },
+    });
+    expect(selectionSet).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: "model.planar.monitor.draft" }),
+      "palette",
+    );
+    expect(setPanelVisible).toHaveBeenCalledWith("right", true);
+  });
+
+  it("fails closed for an Explorer target whose active-session capability is unavailable", () => {
+    const command = fieldMapCommands.find((entry) => entry.id === "planar-monitor.create");
+    const context = {
+      api: {} as never,
+      input: {
+        capability: { enabled: false, reason: "FDM target membership is not materialized." },
+        intent: { source: "explorer", target: { kind: "object", object_id: "film" } },
+      },
+      source: "explorer" as const,
+    };
+
+    expect(command?.isEnabled?.(context)).toBe(false);
+    expect(command?.disabledReason?.(context)).toBe("FDM target membership is not materialized.");
+  });
+
   it("loads the resolved monitor frame before opening its outline in 3D", async () => {
     const setActiveViewportMainModule = vi.fn();
     const setFocusedSlot = vi.fn();

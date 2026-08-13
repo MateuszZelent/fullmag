@@ -1,6 +1,9 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
-import { planarMonitorFrameSegments } from "./ClipPlaneLayer";
+import {
+  planarMonitorFramePreviewInteraction,
+  planarMonitorFrameSegments,
+} from "./ClipPlaneLayer";
 
 describe("planar monitor 3D frame preview", () => {
   it("builds an outline in the monitor's arbitrary world-space basis", () => {
@@ -42,5 +45,28 @@ describe("planar monitor 3D frame preview", () => {
     expect([...segments].filter((_, index) => index % 3 === 2)).toEqual(
       expect.arrayContaining([Math.fround(-2), Math.fround(2)]),
     );
+  });
+
+  it("selects only a visible selectable frame and removes the hidden frame hit target", () => {
+    const preview = {
+      boundsUvM: [-1, 1, -1, 1] as const,
+      monitorId: "plane-1",
+      normal: [0, 0, 1] as const,
+      operator: { kind: "plane_sample" as const },
+      originM: [0, 0, 0] as const,
+      uAxis: [1, 0, 0] as const,
+      vAxis: [0, 1, 0] as const,
+    };
+    const onSelect = vi.fn();
+    const stopPropagation = vi.fn();
+    const visible = planarMonitorFramePreviewInteraction(preview, onSelect);
+    visible?.onClick?.({ stopPropagation } as never);
+    expect(stopPropagation).toHaveBeenCalledOnce();
+    expect(onSelect).toHaveBeenCalledWith("plane-1");
+
+    const nonSelectable = planarMonitorFramePreviewInteraction({ ...preview, selectable: false }, onSelect);
+    expect(nonSelectable?.onClick).toBeUndefined();
+    expect(nonSelectable?.raycast).toBeDefined();
+    expect(planarMonitorFramePreviewInteraction({ ...preview, visible: false }, onSelect)).toBeNull();
   });
 });

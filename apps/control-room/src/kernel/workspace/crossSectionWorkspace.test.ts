@@ -8,6 +8,7 @@ import {
   activeCrossSectionFrameRotationDegrees,
   activeCrossSectionFramePreview,
   beginPlanarMonitorDraft,
+  createPlanarMonitorDraft,
   beginCrossSectionDraft,
   beginCrossSectionDraftFromPlot,
   commitCrossSectionDraft,
@@ -518,7 +519,7 @@ describe("crossSectionWorkspace", () => {
     });
   });
 
-  it("routes only canonical frame and operator data through the planar preview adapter", () => {
+  it("does not invent a finite 3D frame for backend-resolved surface support", () => {
     resetCrossSectionWorkspaceForTests();
     const draft = planarMonitorDraftFromMonitor(fullMonitor);
     expect(draft.ui).toEqual({ displayLengthUnit: "nm" });
@@ -528,13 +529,7 @@ describe("crossSectionWorkspace", () => {
     expect(planarMonitorFramePreviewFromDraft(draft, {
       center: [0, 0, 0],
       size: [10e-9, 20e-9, 30e-9],
-    })).toMatchObject({
-      normal: [0, 0, 1],
-      operator: fullMonitor.operator,
-      originM: [1e-9, 2e-9, 3e-9],
-      uAxis: [1, 0, 0],
-      vAxis: [0, 1, 0],
-    });
+    })).toBeNull();
   });
 
   it("converts compatibility clip position to canonical SI before creating the draft", () => {
@@ -543,6 +538,36 @@ describe("crossSectionWorkspace", () => {
       max: [4e-9, 6e-9, 8e-9],
     });
     expect(draft.monitor.frame.origin_m[2]).toBeCloseTo(2e-9, 20);
+  });
+
+  it("normalizes every creation intent through one full canonical monitor draft", () => {
+    const bounds = {
+      min: [-4e-9, -6e-9, -8e-9] as const,
+      max: [4e-9, 6e-9, 8e-9] as const,
+    };
+    const intents = [
+      { source: "ribbon" as const },
+      { source: "palette" as const },
+      { source: "explorer" as const },
+      { source: "inspector" as const },
+      { source: "clip" as const },
+    ];
+
+    const drafts = intents.map((intent) =>
+      createPlanarMonitorDraft({
+        bounds,
+        intent,
+        visualizationState,
+      }),
+    );
+
+    expect(drafts).toHaveLength(5);
+    for (const draft of drafts) {
+      expect(draft.monitor).toEqual(drafts[0]?.monitor);
+      expect(draft.monitor).not.toHaveProperty("positionPercent");
+      expect(draft.monitor).not.toHaveProperty("rotationDegrees");
+    }
+    expect(drafts[4]?.monitor.frame.origin_m[2]).toBeCloseTo(2e-9, 20);
   });
 
   it("mirrors canonical IR basis tolerance and depth empty-policy restriction", () => {

@@ -1267,7 +1267,7 @@ export default function Viewport3DModule({
     resourceCounts,
     selection,
   });
-  const { onSelectDomain, onSelectFdmCell, onSelectFdmTarget, onSelectFdmUniverseOutsideSupport, onSelectObject, onSelectPart, onSelectRegion } =
+  const { onSelectDomain, onSelectFdmCell, onSelectFdmTarget, onSelectFdmUniverseOutsideSupport, onSelectObject, onSelectPart, onSelectPlanarMonitor, onSelectRegion } =
     useViewport3DSelectionHandlers({
       domainId,
       fdmDomain: sceneModel.fdmDomain,
@@ -1436,6 +1436,7 @@ export default function Viewport3DModule({
       onSelectFdmTarget={onSelectFdmTarget}
       onSelectFdmUniverseOutsideSupport={onSelectFdmUniverseOutsideSupport}
       onSelectObject={onSelectObject}
+      onSelectPlanarMonitor={onSelectPlanarMonitor}
       onSelectPart={onSelectPart}
       onSelectRegion={onSelectRegion}
       onCameraChange={saveCameraState}
@@ -1580,6 +1581,24 @@ function useViewport3DSelectionHandlers({
     },
     [select],
   );
+  const onSelectPlanarMonitor = useCallback(
+    (monitorId: string) => {
+      select({
+        kind: "model.planar.monitor",
+        label: monitorId,
+        nodeId: `model:definitions:planar-monitors:${monitorId}`,
+        objectId: null,
+        ref: {
+          kind: "model.planar.monitor",
+          monitorId,
+          nodeId: `model:definitions:planar-monitors:${monitorId}`,
+          type: "planar-monitor",
+          visualizationTargetId: `planar-monitor:${monitorId}`,
+        },
+      });
+    },
+    [select],
+  );
   const onSelectRegion = useCallback(
     (region: RegionOverlaySelection) => {
       select(viewportSelectionForRegion(region));
@@ -1593,6 +1612,7 @@ function useViewport3DSelectionHandlers({
     onSelectFdmUniverseOutsideSupport,
     onSelectFdmTarget,
     onSelectObject,
+    onSelectPlanarMonitor,
     onSelectPart,
     onSelectRegion,
   };

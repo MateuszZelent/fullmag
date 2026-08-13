@@ -38,6 +38,24 @@ export interface PlanarMonitorDraft {
   };
 }
 
+/**
+ * A user entrypoint may supply intent, but never a partial monitor payload.
+ * This keeps the ribbon, command palette, Explorer, Inspector and clip
+ * conversion on the same canonical authoring path.
+ */
+export interface PlanarMonitorCreateIntent {
+  operator?: PlanarMonitorOperator;
+  preset?: "xy" | "xz" | "yz";
+  source: "clip" | "explorer" | "inspector" | "palette" | "ribbon";
+  target?: PlanarMonitorTarget;
+}
+
+export interface PlanarMonitorDraftCreationOptions {
+  bounds?: { min: readonly [number, number, number]; max: readonly [number, number, number] };
+  intent?: PlanarMonitorCreateIntent;
+  visualizationState?: VisualizationStateResource | null;
+}
+
 export interface CrossSectionDraft {
   colorScale: SliceMeshColorScale;
   edgeWidth: number;
@@ -457,12 +475,27 @@ export const crossSectionWorkspaceStore = new CrossSectionWorkspaceStore();
 export function beginPlanarMonitorDraft(
   visualizationState?: VisualizationStateResource | null,
   bounds?: { min: readonly [number, number, number]; max: readonly [number, number, number] },
+  intent?: PlanarMonitorCreateIntent,
 ): PlanarMonitorDraft {
+  const draft = createPlanarMonitorDraft({ bounds, intent, visualizationState });
+  const state = crossSectionWorkspaceStore.getSnapshot();
+  crossSectionWorkspaceStore.setState({
+    ...state,
+    planarMonitorDraft: draft,
+  });
+  return draft;
+}
+
+export function createPlanarMonitorDraft({
+  bounds,
+  intent,
+  visualizationState,
+}: PlanarMonitorDraftCreationOptions = {}): PlanarMonitorDraft {
   const slice = visualizationState?.slice;
   const source = visualizationState?.clip.enabled
     ? visualizationState.clip
     : slice;
-  const preset = source ? PLANE_BY_AXIS[source.axis] : "xy";
+  const preset = intent?.preset ?? (source ? PLANE_BY_AXIS[source.axis] : "xy");
   const axis = crossSectionAxisFromPlane(preset);
   const axisIndex = axis === "x" ? 0 : axis === "y" ? 1 : 2;
   const positionPercent = source?.position_percent ?? 50;
@@ -470,18 +503,17 @@ export function beginPlanarMonitorDraft(
     ? bounds.min[axisIndex] + positionPercent / 100 * (bounds.max[axisIndex] - bounds.min[axisIndex])
     : 0;
   const frame = planarPresetFrame(preset, positionM, DEFAULT_PLANAR_MONITOR.frame.extent);
-  const draft: PlanarMonitorDraft = {
-    monitor: { ...structuredClone(DEFAULT_PLANAR_MONITOR), frame },
+  return {
+    monitor: {
+      ...structuredClone(DEFAULT_PLANAR_MONITOR),
+      frame,
+      ...(intent?.operator ? { operator: structuredClone(intent.operator) } : {}),
+      ...(intent?.target ? { target: structuredClone(intent.target) } : {}),
+    },
     ui: {
       displayLengthUnit: "nm",
     },
   };
-  const state = crossSectionWorkspaceStore.getSnapshot();
-  crossSectionWorkspaceStore.setState({
-    ...state,
-    planarMonitorDraft: draft,
-  });
-  return draft;
 }
 
 export function updatePlanarMonitorDraft(

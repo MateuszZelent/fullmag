@@ -29,6 +29,42 @@ const MODE_VISUALIZATION_VIEWS = [
   "phase",
 ] as const;
 
+function planarMonitorObjectCreationInput(
+  resources: ModelTreeResources,
+  objectId: string,
+) {
+  const capability = resources.planarMonitorTargetCapabilities?.objects[objectId] ?? {
+    enabled: false,
+    reason: "Current-session planar monitor target capability is unavailable.",
+  };
+  return {
+    capability,
+    intent: {
+      source: "explorer" as const,
+      target: { kind: "object" as const, object_id: objectId },
+    },
+  };
+}
+
+function planarMonitorRegionCreationInput(
+  resources: ModelTreeResources,
+  objectId: string,
+  regionId: string,
+) {
+  const key = `${objectId}\u0000${regionId}`;
+  const capability = resources.planarMonitorTargetCapabilities?.regions[key] ?? {
+    enabled: false,
+    reason: "Current-session planar monitor target capability is unavailable.",
+  };
+  return {
+    capability,
+    intent: {
+      source: "explorer" as const,
+      target: { kind: "region" as const, object_id: objectId, region_id: regionId },
+    },
+  };
+}
+
 interface ModeVisualizationFieldNode {
   badge: string;
   fieldId: string;
@@ -53,6 +89,7 @@ export function buildObjectExplorerNode(
   const objectId = object.id;
   const parentId = `model:object:${objectId}`;
   const meshStatus = object.meshStatus ?? "primitive-only";
+  const createObjectMonitorInput = planarMonitorObjectCreationInput(resources, objectId);
   if (object.objectRole === "antenna") {
     return {
       id: parentId,
@@ -64,12 +101,14 @@ export function buildObjectExplorerNode(
       objectId,
       status: "ready",
       contextCommands: [
+        "planar-monitor.create",
         "geometry.focus-primitive",
         "geometry.delete-object",
         "workspace.focus-selection",
         "explorer.expand-all",
         "explorer.collapse-all",
       ],
+      contextCommandInputs: { "planar-monitor.create": createObjectMonitorInput },
       children: [
         {
           id: `${parentId}:geometry`,
@@ -127,6 +166,7 @@ export function buildObjectExplorerNode(
     objectId,
     status: meshStatus,
     contextCommands: [
+      "planar-monitor.create",
       "geometry.focus-primitive",
       "geometry.delete-object",
       "mesh.build-selected",
@@ -134,6 +174,7 @@ export function buildObjectExplorerNode(
       "explorer.expand-all",
       "explorer.collapse-all",
     ],
+    contextCommandInputs: { "planar-monitor.create": createObjectMonitorInput },
     children: [
       {
         id: `${parentId}:geometry`,
@@ -146,7 +187,7 @@ export function buildObjectExplorerNode(
         status: "ready",
         contextCommands: ["workspace.focus-selection"],
       },
-      regionsNode(parentId, object),
+      regionsNode(parentId, object, resources),
       magneticParametersNode(parentId, object),
       {
         id: `${parentId}:magnetic-texture`,
@@ -493,6 +534,7 @@ function objectExtensionNodes(
 function regionsNode(
   parentId: string,
   object: ModelTreeObjectSnapshot,
+  resources: ModelTreeResources,
 ): ExplorerNode {
   const regions = object.regions ?? [];
   return {
@@ -506,7 +548,7 @@ function regionsNode(
     status: "ready",
     contextCommands: ["workspace.focus-selection", "mesh.open-regions"],
     children: regions.map((region) =>
-      authoredRegionNode(`${parentId}:regions`, object, region),
+      authoredRegionNode(`${parentId}:regions`, object, region, resources),
     ),
   };
 }
@@ -515,6 +557,7 @@ function authoredRegionNode(
   parentId: string,
   object: ModelTreeObjectSnapshot,
   region: NonNullable<ModelTreeObjectSnapshot["regions"]>[number],
+  resources: ModelTreeResources,
 ): ExplorerNode {
   const nodeId = `${parentId}:${region.id}`;
   const status = region.enabled ? "ready" : "degraded";
@@ -529,6 +572,7 @@ function authoredRegionNode(
     regionId: region.id,
     status,
     contextCommands: [
+      "planar-monitor.create",
       "regions.focus",
       "regions.duplicate",
       "regions.delete",
@@ -537,6 +581,9 @@ function authoredRegionNode(
       "mesh.open-region-report",
       "mesh.open-regions",
     ],
+    contextCommandInputs: {
+      "planar-monitor.create": planarMonitorRegionCreationInput(resources, object.id, region.id),
+    },
     children: [
       {
         id: `${nodeId}:geometry`,
