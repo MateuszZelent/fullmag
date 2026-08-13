@@ -36,6 +36,8 @@ git diff --check: exit 0
 
 Targeted ESLint dla zmienionego `useViewport3DSceneModel.ts` reprodukuje dokładnie dwa baseline warningi zarówno na `HEAD`, jak i w worktree: unused `viewport3dStore` oraz `_commandState`. Nie dodano nowego warningu; nie wykonano drive-by cleanupu poza Task 5. Nowy unused `kernel` z `PlanarMonitorInspectorPanel` usunięto.
 
+Po ostatniej mechanicznej poprawce quality usunięto nieużywane przypisanie `draft` bez zmiany zachowania testu. Świeże bramki dla tego finalnego diffu: `PlanarMonitorDraftInspectorPanel.test.tsx` 6/6, targeted ESLint tego pliku z `--max-warnings=0`, typecheck i `git diff --check` — wszystkie exit 0.
+
 ## Ograniczenia
 
 Nie wykonano browser smoke ani runtime/production qualification. Zmiana renderera ogranicza się do istniejącej lekkiej warstwy transient geometry/thickness preview 3D; nie implementuje Field Map ani Task 6.

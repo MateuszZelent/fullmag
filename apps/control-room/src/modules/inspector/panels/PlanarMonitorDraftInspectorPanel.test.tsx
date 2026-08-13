@@ -101,7 +101,7 @@ describe("PlanarMonitorDraftInspectorPanel", () => {
   });
 
   it("creates the exact canonical draft with the resource scene revision", async () => {
-    const draft = beginPlanarMonitorDraft();
+    beginPlanarMonitorDraft();
     const dom = installSimulationPreparationTestDom();
     const container = dom.document.createElement("div");
     const root = createRoot(container as unknown as Element);
