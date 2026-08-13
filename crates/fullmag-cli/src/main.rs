@@ -167,8 +167,21 @@ fn main() -> Result<()> {
             validate_ir(&ir)?;
             println!("IR validation passed for {}", path.display());
         }
-        Command::PlanJson { path, backend } => {
-            let ir = read_ir(&path)?;
+        Command::PlanJson {
+            path,
+            backend,
+            execution_plan,
+        } => {
+            let mut ir = read_ir(&path)?;
+            if execution_plan {
+                if let Some(backend) = backend {
+                    ir.backend_policy.requested_backend = BackendTarget::from(backend);
+                }
+                validate_ir(&ir)?;
+                let plan = fullmag_plan::plan(&ir).map_err(|error| anyhow!(error.to_string()))?;
+                println!("{}", serde_json::to_string_pretty(&plan)?);
+                return Ok(());
+            }
             validate_ir(&ir)?;
             let plan = ir
                 .plan_for(backend.map(BackendTarget::from))

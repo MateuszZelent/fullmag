@@ -5182,8 +5182,16 @@ run-viewport-2d-planar-monitor-smoke backend="fdm" device="cpu" web_port="3194" 
       browser_dir="$report_dir/browser"; \
       runtime_log="$report_dir/runtime.log"; \
       browser_log="$report_dir/browser.log"; \
+      preflight_report="$report_dir/preflight.json"; \
       if [ "$qualification_profile" = "base" ]; then science_report="$report_dir/science-report.json"; else science_report="$report_dir/refinement-peer-science-report.json"; fi; \
       mkdir -p "$browser_dir"; \
+      if [ "$backend" = "fdm" ]; then \
+        PYTHONPATH="{{repo_root}}/packages/fullmag-py/src:{{repo_root}}" \
+        "{{repo_python}}" scripts/analysis/validate_viewport_2d_fdm_preflight.py \
+          --fixture "$fixture" --fullmag-bin "{{gpu_runtime_bin}}" \
+          --qualification-profile "$qualification_profile" --device "$device" \
+          --output "$preflight_report"; \
+      fi; \
       sim_pid=""; \
       cleanup() { \
         if [ -n "$sim_pid" ] && kill -0 "$sim_pid" >/dev/null 2>&1; then \
@@ -5234,6 +5242,7 @@ run-viewport-2d-planar-monitor-smoke backend="fdm" device="cpu" web_port="3194" 
         || aggregate_status=$?; \
       printf "\nViewport 2D planar-monitor reports:\n"; \
       printf "  runtime: %s\n" "$runtime_log"; \
+      if [ "$backend" = "fdm" ]; then printf "  preflight: %s\n" "$preflight_report"; fi; \
       printf "  browser: %s\n" "$browser_log"; \
       printf "  science: %s\n" "$science_report"; \
       printf "  aggregate: %s\n" "$(dirname "$report_dir")/aggregate-report.json"; \
