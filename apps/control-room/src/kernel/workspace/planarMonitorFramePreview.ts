@@ -17,6 +17,7 @@ export interface PlanarMonitorFramePreview {
   vAxis: readonly [number, number, number];
   /** Preview-only overlays may be hidden without retaining an interaction target. */
   selectable?: boolean;
+  isDraft?: boolean;
   visible?: boolean;
 }
 
@@ -56,6 +57,7 @@ interface PlanarMonitorPreviewBounds {
 export function planarMonitorFramePreviewFromDraft(
   draft: PlanarMonitorDraft,
   bounds: PlanarMonitorPreviewBounds | null,
+  selectionKind: "committed" | "draft" = "draft",
 ): PlanarMonitorFramePreview | null {
   const { frame } = draft.monitor;
   if (resolvePlanarMonitorPreviewSupport(draft.monitor.operator).status !== "ready") {
@@ -79,6 +81,7 @@ export function planarMonitorFramePreviewFromDraft(
     uAxis: frame.u_axis as [number, number, number],
     vAxis: frame.v_axis as [number, number, number],
     selectable: true,
+    isDraft: selectionKind === "draft",
     visible: true,
   };
 }
@@ -108,6 +111,11 @@ export const planarMonitorFramePreviewStore = {
   },
   set(next: PlanarMonitorFramePreview) {
     preview = next;
+    emit();
+  },
+  setVisible(visible: boolean) {
+    if (!preview || preview.visible === visible) return;
+    preview = { ...preview, visible };
     emit();
   },
   setDraft(next: PlanarMonitorDraft | null) {

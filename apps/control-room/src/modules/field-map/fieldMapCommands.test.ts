@@ -59,10 +59,21 @@ describe("field-map commands", () => {
 
     const result = await command?.run({
       api: {
+        data: {
+          domain: {
+            meta: vi.fn().mockResolvedValue({ bounds: { min: [-4, -6, -8], max: [4, 6, 8] } }),
+          },
+        },
         model: {
           planarMonitors: {
             list: vi.fn().mockResolvedValue({ monitors: [], scene_revision: 4 }),
           },
+        },
+        visualization: {
+          state: vi.fn().mockResolvedValue({
+            clip: { axis: "z", enabled: false, flipped: false, position_percent: 50 },
+            slice: { axis: "z", position_percent: 50 },
+          }),
         },
       } as never,
       layout: {

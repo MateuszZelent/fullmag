@@ -62,7 +62,7 @@ describe("planar monitor 3D frame preview", () => {
     const visible = planarMonitorFramePreviewInteraction(preview, onSelect);
     visible?.onClick?.({ stopPropagation } as never);
     expect(stopPropagation).toHaveBeenCalledOnce();
-    expect(onSelect).toHaveBeenCalledWith("plane-1");
+    expect(onSelect).toHaveBeenCalledWith("plane-1", false);
 
     const nonSelectable = planarMonitorFramePreviewInteraction({ ...preview, selectable: false }, onSelect);
     expect(nonSelectable?.onClick).toBeUndefined();

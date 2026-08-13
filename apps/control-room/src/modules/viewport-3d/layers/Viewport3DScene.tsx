@@ -215,7 +215,7 @@ interface Viewport3DSceneProps {
   onOrbitDebugAnglesChange?: (angles: Viewport3DOrbitDebugAngles) => void;
   onVisualizationFrameCommitted: (revision: number) => void;
   onSelectObject: (object: Viewport3DPrimitiveObject) => void;
-  onSelectPlanarMonitor: (monitorId: string) => void;
+  onSelectPlanarMonitor: (monitorId: string, isDraft: boolean) => void;
   onSelectRegion: (selection: RegionOverlaySelection) => void;
   onSelectDomain: () => void;
   onSelectFdmTarget: (target: VisualizationTargetRef) => void;

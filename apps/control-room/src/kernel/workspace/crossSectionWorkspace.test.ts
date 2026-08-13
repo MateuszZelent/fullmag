@@ -540,6 +540,22 @@ describe("crossSectionWorkspace", () => {
     expect(draft.monitor.frame.origin_m[2]).toBeCloseTo(2e-9, 20);
   });
 
+  it.each([
+    ["x", "yz", [-1, 0, 0]],
+    ["y", "xz", [0, 1, 0]],
+    ["z", "xy", [0, 0, -1]],
+  ] as const)("preserves flipped %s clip orientation in the canonical %s monitor frame", (axis, preset, normal) => {
+    const draft = createPlanarMonitorDraft({
+      bounds: { min: [-4, -6, -8], max: [4, 6, 8] },
+      visualizationState: {
+        clip: { axis, enabled: true, flipped: true, position_percent: 25 },
+        slice: { axis, position_percent: 25 },
+      } as never,
+    });
+    expect(draft.monitor.frame).toMatchObject({ normal, preset });
+    expect(planarMonitorValidationErrors(draft.monitor)).toEqual([]);
+  });
+
   it("normalizes every creation intent through one full canonical monitor draft", () => {
     const bounds = {
       min: [-4e-9, -6e-9, -8e-9] as const,

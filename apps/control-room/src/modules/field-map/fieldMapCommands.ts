@@ -175,7 +175,12 @@ export const fieldMapCommands: CommandContribution[] = Object.entries(
       if (id === "field-map.open" && context.api) {
         const collection = await context.api.model.planarMonitors.list();
         if (collection.monitors.length === 0) {
-          const draft = beginPlanarMonitorDraft();
+          const domain = await context.api.data.domain.meta();
+          const visualizationState = visualizationStateFromContext(context) ?? await context.api.visualization.state();
+          const draft = beginPlanarMonitorDraft(visualizationState, {
+            min: domain.bounds.min as [number, number, number],
+            max: domain.bounds.max as [number, number, number],
+          }, { source: sourceForPlanarMonitorCreate(context.source) });
           const nodeId = "model:definitions:planar-monitors:draft";
           context.selection?.set(
             {

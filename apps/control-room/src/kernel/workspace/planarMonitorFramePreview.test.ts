@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 import type { PlanarMonitorDraft } from "./crossSectionWorkspace";
+import { planarMonitorFramePreviewFromDraft } from "./planarMonitorFramePreview";
 import {
   planarMonitorFramePreviewCanSelect,
   planarMonitorFramePreviewStore,
@@ -69,6 +70,15 @@ describe("planar monitor 3D frame preview store", () => {
 });
 
 describe("planar monitor preview support", () => {
+  it("keeps creation and committed-editor preview selection identities distinct", () => {
+    const draft: PlanarMonitorDraft = {
+      monitor: { id: "plane-1", name: "Plane", target: { kind: "magnetic_domain" }, operator: { kind: "plane_sample" }, frame: { origin_m: [0, 0, 0], u_axis: [1, 0, 0], v_axis: [0, 1, 0], normal: [0, 0, 1], preset: "xy", normalization_version: "planar_frame_v1", extent: { kind: "target_bounds", padding_m: 0 } } },
+      ui: { displayLengthUnit: "nm" },
+    };
+    const bounds = { center: [0, 0, 0] as const, size: [2, 2, 2] as const };
+    expect(planarMonitorFramePreviewFromDraft(draft, bounds, "draft")?.isDraft).toBe(true);
+    expect(planarMonitorFramePreviewFromDraft(draft, bounds, "committed")?.isDraft).toBe(false);
+  });
   it("fails closed with a diagnostic for depth and surface operators that have no published finite 3D support", () => {
     expect(resolvePlanarMonitorPreviewSupport({
       kind: "depth_projection",

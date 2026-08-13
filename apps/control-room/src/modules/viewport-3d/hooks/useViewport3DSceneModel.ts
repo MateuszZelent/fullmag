@@ -3149,11 +3149,10 @@ export function useViewport3DSceneModel({
     resourceBounds ??
     primitiveBounds;
   const planarMonitorFramePreview = useMemo(
-    () => (planarMonitorDraft ?? committedPlanarMonitorPreviewDraft)
-      ? planarMonitorFramePreviewFromDraft(
-        planarMonitorDraft ?? committedPlanarMonitorPreviewDraft!,
-        bounds,
-      )
+    () => planarMonitorDraft
+      ? planarMonitorFramePreviewFromDraft(planarMonitorDraft, bounds, "draft")
+      : committedPlanarMonitorPreviewDraft
+        ? planarMonitorFramePreviewFromDraft(committedPlanarMonitorPreviewDraft, bounds, "committed")
       : resolvedPlanarMonitorFramePreview,
     [bounds, committedPlanarMonitorPreviewDraft, planarMonitorDraft, resolvedPlanarMonitorFramePreview],
   );

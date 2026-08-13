@@ -156,7 +156,7 @@ export function PlanarMonitorFramePreviewLayer({
   tracker,
 }: {
   colors: Viewport3DColors;
-  onSelect?: (monitorId: string) => void;
+  onSelect?: (monitorId: string, isDraft: boolean) => void;
   preview: PlanarMonitorFramePreview;
   tracker: Viewport3DResourceTracker;
 }) {
@@ -178,6 +178,7 @@ export function PlanarMonitorFramePreviewLayer({
   }, [geometry, invalidate, tracker]);
 
   const interaction = planarMonitorFramePreviewInteraction(preview, onSelect);
+  usePlanarMonitorFramePreviewAudit(interaction !== null, Boolean(interaction?.onClick), Boolean(interaction?.raycast));
   if (!interaction) return null;
 
   return (
@@ -198,9 +199,40 @@ export function PlanarMonitorFramePreviewLayer({
   );
 }
 
+function usePlanarMonitorFramePreviewAudit(active: boolean, hitListener: boolean, raycastOwner: boolean): void {
+  useEffect(() => {
+    if (!active || !planarMonitorFramePreviewAuditEnabled()) return;
+    const audit = readPlanarMonitorFramePreviewAudit();
+    audit.activeOverlayInstances += 1;
+    audit.hitListenerOwners += hitListener ? 1 : 0;
+    audit.raycastOwners += raycastOwner ? 1 : 0;
+    audit.maxActiveOverlayInstances = Math.max(audit.maxActiveOverlayInstances, audit.activeOverlayInstances);
+    audit.maxHitListenerOwners = Math.max(audit.maxHitListenerOwners, audit.hitListenerOwners);
+    audit.maxRaycastOwners = Math.max(audit.maxRaycastOwners, audit.raycastOwners);
+    return () => {
+      audit.activeOverlayInstances -= 1;
+      audit.hitListenerOwners -= hitListener ? 1 : 0;
+      audit.raycastOwners -= raycastOwner ? 1 : 0;
+    };
+  }, [active, hitListener, raycastOwner]);
+}
+
+function planarMonitorFramePreviewAuditEnabled(): boolean {
+  return process.env.NEXT_PUBLIC_AUDIT_BUILD === "1" &&
+    (globalThis as typeof globalThis & { __FULLMAG_CONFIG__?: { enableAuditHooks?: unknown } }).__FULLMAG_CONFIG__?.enableAuditHooks === true;
+}
+
+function readPlanarMonitorFramePreviewAudit() {
+  const scope = globalThis as typeof globalThis & { __FULLMAG_PLANAR_MONITOR_PREVIEW_AUDIT__?: Record<string, number> };
+  return (scope.__FULLMAG_PLANAR_MONITOR_PREVIEW_AUDIT__ ??= {
+    activeOverlayInstances: 0, hitListenerOwners: 0, maxActiveOverlayInstances: 0,
+    maxHitListenerOwners: 0, maxRaycastOwners: 0, raycastOwners: 0,
+  });
+}
+
 export function planarMonitorFramePreviewInteraction(
   preview: PlanarMonitorFramePreview,
-  onSelect?: (monitorId: string) => void,
+  onSelect?: (monitorId: string, isDraft: boolean) => void,
 ): {
   onClick?: (event: Pick<ThreeEvent<MouseEvent>, "stopPropagation">) => void;
   raycast?: () => void;
@@ -212,7 +244,7 @@ export function planarMonitorFramePreviewInteraction(
   return {
     onClick: (event) => {
       event.stopPropagation();
-      onSelect?.(preview.monitorId);
+      onSelect?.(preview.monitorId, preview.isDraft === true);
     },
   };
 }

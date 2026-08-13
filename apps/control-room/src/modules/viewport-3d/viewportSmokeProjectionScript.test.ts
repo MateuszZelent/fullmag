@@ -124,6 +124,13 @@ describe("viewport smoke projection round-trip", () => {
     expect(smokeScript).toContain("CONTROL_ROOM_SMOKE_PLANAR_TOGGLE_CYCLES");
     expect(smokeScript).toContain("verifyPlanarViewportToggleLifecycle");
     expect(smokeScript).toContain("planar viewport toggle lifecycle");
+    expect(smokeScript).toContain("seedPlanarMonitorFramePreview");
+    expect(smokeScript).toContain("setPlanarMonitorFrameVisible(false)");
+    expect(smokeScript).toContain("setPlanarMonitorFrameVisible(true)");
+    expect(smokeScript).toContain("activeOverlayInstances === 0");
+    expect(smokeScript).toContain("activeOverlayInstances === 1");
+    expect(smokeScript).toContain("maxHitListenerOwners !== 1");
+    expect(smokeScript).toContain("Viewport worker-runtime changed during planar visibility cycles");
     expect(smokeScript).toContain('filter({ hasText: "2D View" })');
     expect(smokeScript).toContain('filter({ hasText: "3D Viewport" })');
     expect(smokeScript).toContain("3D viewport canvas count multiplied");

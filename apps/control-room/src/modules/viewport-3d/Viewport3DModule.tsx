@@ -1582,18 +1582,16 @@ function useViewport3DSelectionHandlers({
     [select],
   );
   const onSelectPlanarMonitor = useCallback(
-    (monitorId: string) => {
+    (monitorId: string, isDraft: boolean) => {
       select({
-        kind: "model.planar.monitor",
-        label: monitorId,
-        nodeId: `model:definitions:planar-monitors:${monitorId}`,
+        kind: isDraft ? "model.planar.monitor.draft" : "model.planar.monitor",
+        label: isDraft ? "Planar monitor draft" : monitorId,
+        nodeId: isDraft ? "model:definitions:planar-monitors:draft" : `model:definitions:planar-monitors:${monitorId}`,
         objectId: null,
         ref: {
-          kind: "model.planar.monitor",
-          monitorId,
-          nodeId: `model:definitions:planar-monitors:${monitorId}`,
-          type: "planar-monitor",
-          visualizationTargetId: `planar-monitor:${monitorId}`,
+          ...(isDraft
+            ? { draftId: "draft", kind: "model.planar.monitor.draft" as const, nodeId: "model:definitions:planar-monitors:draft", type: "planar-monitor-draft" as const, visualizationTargetId: "planar-monitor:draft" }
+            : { kind: "model.planar.monitor" as const, monitorId, nodeId: `model:definitions:planar-monitors:${monitorId}`, type: "planar-monitor" as const, visualizationTargetId: `planar-monitor:${monitorId}` as `planar-monitor:${string}` }),
         },
       });
     },

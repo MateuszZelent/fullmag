@@ -503,6 +503,10 @@ export function createPlanarMonitorDraft({
     ? bounds.min[axisIndex] + positionPercent / 100 * (bounds.max[axisIndex] - bounds.min[axisIndex])
     : 0;
   const frame = planarPresetFrame(preset, positionM, DEFAULT_PLANAR_MONITOR.frame.extent);
+  if (visualizationState?.clip.enabled && visualizationState.clip.flipped) {
+    frame.normal = frame.normal.map((value) => value === 0 ? 0 : -value) as typeof frame.normal;
+    frame.v_axis = frame.v_axis.map((value) => value === 0 ? 0 : -value) as typeof frame.v_axis;
+  }
   return {
     monitor: {
       ...structuredClone(DEFAULT_PLANAR_MONITOR),
