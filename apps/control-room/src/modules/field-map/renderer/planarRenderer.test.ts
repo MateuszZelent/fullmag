@@ -17,7 +17,7 @@ describe("planar renderer lifecycle", () => {
     const renderer = createPlanarRenderer(canvas);
 
     renderer.resize(100, 50, 3);
-    expect([canvas.width, canvas.height]).toEqual([200, 100]);
+    expect([canvas.width, canvas.height]).toEqual([300, 150]);
     renderer.dispose();
     expect([canvas.width, canvas.height]).toEqual([0, 0]);
     expect(context.clearRect).toHaveBeenCalled();
@@ -138,5 +138,21 @@ describe("planar renderer lifecycle", () => {
       if (originalImageData) Object.defineProperty(globalThis, "ImageData", originalImageData);
       else Reflect.deleteProperty(globalThis, "ImageData");
     }
+  });
+
+  it("maps backend row zero at v_min to the bottom consistently for raster contours glyphs and probe", () => {
+    const context = {
+      beginPath: vi.fn(), clearRect: vi.fn(), drawImage: vi.fn(), imageSmoothingEnabled: true,
+      lineTo: vi.fn(), lineWidth: 0, moveTo: vi.fn(), restore: vi.fn(), save: vi.fn(), stroke: vi.fn(), strokeStyle: "",
+    } as unknown as CanvasRenderingContext2D;
+    drawPlanarOverlays(context, 100, 100, {
+      contours: [[0, 0, 1, 1]],
+      glyphs: [{ index: 0, normal: 0, u: 0, v: 0.1 }],
+      gridHeight: 2,
+      gridWidth: 2,
+      layers: { contours: true, mesh: false, vectors: true },
+    });
+    expect(context.moveTo).toHaveBeenCalledWith(0, 100);
+    expect(context.moveTo).toHaveBeenCalledWith(25, 75);
   });
 });

@@ -26,6 +26,7 @@ export interface PlanarOverlayLayers {
   meshBounds?: readonly [number, number, number, number];
   meshSegments?: Float32Array;
   meshViewport?: readonly [number, number, number, number];
+  vectorColorMode?: string;
   viewport?: readonly [number, number, number, number];
 }
 
@@ -69,7 +70,7 @@ export function drawPlanarOverlays(
     const mapX = (value: number) =>
       ((value - viewport[0]) / Math.max(1e-12, viewport[1] - viewport[0])) * canvasWidth;
     const mapY = (value: number) =>
-      ((value - viewport[2]) / Math.max(1e-12, viewport[3] - viewport[2])) * canvasHeight;
+      canvasHeight - ((value - viewport[2]) / Math.max(1e-12, viewport[3] - viewport[2])) * canvasHeight;
     context.beginPath();
     for (const [x0, y0, x1, y1] of layers.contours) {
       context.moveTo(mapX(x0), mapY(y0));
@@ -79,8 +80,9 @@ export function drawPlanarOverlays(
   }
 
   if (layers.layers?.vectors !== false && layers.glyphs?.length) {
-    context.beginPath();
     for (const glyph of layers.glyphs) {
+      context.beginPath();
+      context.strokeStyle = vectorGlyphStrokeStyle(glyph, layers.vectorColorMode);
       const x = glyph.index % layers.gridWidth;
       const y = Math.floor(glyph.index / layers.gridWidth);
       const gridHeight = layers.gridHeight ?? layers.gridWidth;
@@ -88,21 +90,33 @@ export function drawPlanarOverlays(
       const scaleX = canvasWidth / Math.max(1e-12, viewport[1] - viewport[0]);
       const scaleY = canvasHeight / Math.max(1e-12, viewport[3] - viewport[2]);
       const originX = (x + 0.5 - viewport[0]) * scaleX;
-      const originY = (y + 0.5 - viewport[2]) * scaleY;
+      const originY = canvasHeight - (y + 0.5 - viewport[2]) * scaleY;
       context.moveTo(originX, originY);
       context.lineTo(
         (x + 0.5 + glyph.u - viewport[0]) * scaleX,
-        (y + 0.5 - glyph.v - viewport[2]) * scaleY,
+        canvasHeight - (y + 0.5 + glyph.v - viewport[2]) * scaleY,
       );
       if (Math.abs(glyph.normal) > 1e-15) {
         const normalDirection = glyph.normal < 0 ? -1 : 1;
         context.moveTo(originX, originY);
         context.lineTo(originX + normalDirection * 0.25 * scaleX, originY);
       }
+      context.stroke();
     }
-    context.stroke();
   }
   context.restore();
+}
+
+function vectorGlyphStrokeStyle(
+  glyph: { normal: number; u: number; v: number },
+  colorMode: string | undefined,
+): string {
+  if (colorMode === "orientation") {
+    const hue = Math.round(((Math.atan2(glyph.v, glyph.u) * 180) / Math.PI + 360) % 360);
+    return `hsl(${hue} 80% 60%)`;
+  }
+  if (colorMode === "normal") return glyph.normal < 0 ? "var(--fm-danger)" : "var(--fm-info)";
+  return "currentColor";
 }
 
 export function createPlanarRenderer(
@@ -137,9 +151,9 @@ export function createPlanarRenderer(
       sourceWidth,
       sourceHeight,
       0,
-      0,
-      canvas.width,
       canvas.height,
+      canvas.width,
+      -canvas.height,
     );
   };
   return {
@@ -177,8 +191,9 @@ export function createPlanarRenderer(
       paint();
     },
     resize(width, height, dpr) {
-      canvas.width = Math.max(1, Math.round(width * Math.min(dpr, 2)));
-      canvas.height = Math.max(1, Math.round(height * Math.min(dpr, 2)));
+      const pixelRatio = Number.isFinite(dpr) && dpr > 0 ? dpr : 1;
+      canvas.width = Math.max(1, Math.round(width * pixelRatio));
+      canvas.height = Math.max(1, Math.round(height * pixelRatio));
       paint();
     },
   };

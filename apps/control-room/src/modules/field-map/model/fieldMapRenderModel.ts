@@ -7,8 +7,10 @@ export interface PlanarFrame {
 }
 
 export interface FieldMapRenderLayers {
+  boundaries?: boolean;
   contours: boolean;
   mesh: boolean;
+  probes?: boolean;
   raster: boolean;
   vectors: boolean;
 }
@@ -30,7 +32,6 @@ export interface FieldMapRenderModelInput {
   layers: FieldMapRenderLayers;
   mask?: Uint8Array | null;
   meshOverlay?: ArrayBuffer | null;
-  opacity?: number;
   range: PlanarDisplayRange;
   resolution: readonly [number, number];
   sampleIdentity: string;
@@ -38,6 +39,7 @@ export interface FieldMapRenderModelInput {
   vectors?: Float32Array | Float64Array | null;
   vectorBudget?: number;
   vectorScale?: number;
+  vectorStyle?: { colorMode: string; lengthMode: string };
 }
 
 export interface FieldMapRenderModel {
@@ -46,6 +48,7 @@ export interface FieldMapRenderModel {
   canonicalUnit: string;
   colormap: string;
   component: string;
+  diagnostics: readonly string[];
   display: {
     axisUnit: "m";
     legendUnit: string;
@@ -56,7 +59,6 @@ export interface FieldMapRenderModel {
   layers: FieldMapRenderLayers;
   mask: Uint8Array | null;
   meshOverlay: ArrayBuffer | null;
-  opacity: number;
   range: { max: number; min: number } | null;
   resolution: readonly [number, number];
   sampleIdentity: string;
@@ -64,6 +66,7 @@ export interface FieldMapRenderModel {
   vectors: Float32Array | Float64Array | null;
   vectorBudget: number;
   vectorScale: number;
+  vectorStyle: { colorMode: string; lengthMode: string };
   viewport: readonly [number, number, number, number];
 }
 
@@ -83,11 +86,19 @@ function isRenderable(mask: number | undefined): boolean {
   return isRenderablePlanarOccupancy(mask);
 }
 
-function displayScale(canonicalUnit: string, displayUnit: string): number {
-  if (canonicalUnit === displayUnit) return 1;
-  if (canonicalUnit === "A/m" && displayUnit === "kA/m") return 1 / 1_000;
-  if (canonicalUnit === "T" && displayUnit === "mT") return 1_000;
-  return 1;
+export function resolvePlanarDisplayUnit(canonicalUnit: string, requested: string): {
+  compatible: boolean;
+  scale: number;
+  unit: string;
+} {
+  const units: Record<string, Record<string, number>> = {
+    "A/m": { "A/m": 1, "kA/m": 1 / 1_000, "MA/m": 1 / 1_000_000 },
+    T: { T: 1, mT: 1_000 },
+  };
+  const scale = units[canonicalUnit]?.[requested];
+  return scale === undefined
+    ? { compatible: false, scale: 1, unit: canonicalUnit }
+    : { compatible: true, scale, unit: requested };
 }
 
 export function resolvePlanarDisplayRange(
@@ -124,8 +135,24 @@ export function resolvePlanarDisplayRange(
 export function buildFieldMapRenderModel(
   input: FieldMapRenderModelInput,
 ): FieldMapRenderModel {
-  const displayUnit = input.displayUnit || input.canonicalUnit;
+  const requestedDisplayUnit = input.displayUnit || input.canonicalUnit;
+  const displayUnit = resolvePlanarDisplayUnit(input.canonicalUnit, requestedDisplayUnit);
   const interaction = input.interaction ?? { panU: 0, panV: 0, zoom: 1 };
+  const diagnostics: string[] = [
+    "Planar opacity is unavailable: the planar visualization contract has no opacity field.",
+  ];
+  if (!displayUnit.compatible) {
+    diagnostics.push(`Display unit '${requestedDisplayUnit}' is incompatible with canonical unit '${input.canonicalUnit}'.`);
+  }
+  if (input.layers.boundaries) {
+    diagnostics.push("2D boundaries are unavailable: the planar mesh payload has no boundary classification.");
+  }
+  const range = input.range.mode === "symmetric"
+    ? null
+    : resolvePlanarDisplayRange(input.scalar, input.mask ?? undefined, input.range);
+  if (input.range.mode === "symmetric") {
+    diagnostics.push("Symmetric range is unavailable: the planar visualization contract has no range mode.");
+  }
   return {
     bounds: input.bounds,
     boundsCenter: [
@@ -135,24 +162,29 @@ export function buildFieldMapRenderModel(
     canonicalUnit: input.canonicalUnit,
     colormap: input.colormap ?? "viridis",
     component: input.component,
+    diagnostics,
     display: {
       axisUnit: "m",
-      legendUnit: displayUnit,
-      probeScale: displayScale(input.canonicalUnit, displayUnit),
+      legendUnit: displayUnit.unit,
+      probeScale: displayUnit.scale,
     },
     frame: input.frame,
     interaction,
-    layers: input.layers,
+    layers: {
+      ...input.layers,
+      boundaries: input.layers.boundaries ?? false,
+      probes: input.layers.probes ?? true,
+    },
     mask: input.mask ?? null,
     meshOverlay: input.meshOverlay ?? null,
-    opacity: Math.max(0, Math.min(1, input.opacity ?? 1)),
-    range: resolvePlanarDisplayRange(input.scalar, input.mask ?? undefined, input.range),
+    range,
     resolution: input.resolution,
     sampleIdentity: input.sampleIdentity,
     scalar: input.scalar,
     vectors: input.vectors ?? null,
     vectorBudget: Math.max(0, Math.floor(input.vectorBudget ?? 2_000)),
     vectorScale: Math.max(0, input.vectorScale ?? 1),
+    vectorStyle: input.vectorStyle ?? { colorMode: "orientation", lengthMode: "uniform" },
     viewport: resolvePlanarViewport(input.bounds, interaction),
   };
 }

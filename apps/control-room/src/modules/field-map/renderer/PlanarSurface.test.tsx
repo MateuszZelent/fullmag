@@ -19,26 +19,6 @@ import type {
 import { colorizePlanarRendererRequest } from "./planarRendererTask";
 import { PlanarSurface } from "./PlanarSurface";
 
-function makeScalarBuffer(values: readonly number[]): ArrayBuffer {
-  const buffer = new ArrayBuffer(
-    48 + values.length * Float64Array.BYTES_PER_ELEMENT,
-  );
-  const view = new DataView(buffer);
-  for (const [index, code] of [..."FMVP"].entries()) {
-    view.setUint8(index, code.charCodeAt(0));
-  }
-  view.setUint8(4, 2);
-  view.setUint8(5, 1);
-  view.setUint8(6, 1);
-  view.setUint32(12, values.length, true);
-  view.setUint32(16, values.length, true);
-  view.setUint32(20, 1, true);
-  view.setUint32(24, 1, true);
-  new TextEncoder().encodeInto("m", new Uint8Array(buffer, 28, 16));
-  new Float64Array(buffer, 48).set(values);
-  return buffer;
-}
-
 function makeRenderModel(
   values: readonly number[],
   bounds: readonly [number, number, number, number],
@@ -330,6 +310,47 @@ describe("PlanarSurface lifecycle", () => {
       await act(async () => root.unmount());
       if (previousWorker) Object.defineProperty(globalThis, "Worker", previousWorker); else Reflect.deleteProperty(globalThis, "Worker");
       if (previousImageData) Object.defineProperty(globalThis, "ImageData", previousImageData); else Reflect.deleteProperty(globalThis, "ImageData");
+      dom.restore();
+    }
+  });
+
+  it("does no colorizer work and disables pinning when scalar layers and probes are off", async () => {
+    const dom = installSimulationPreparationTestDom();
+    const container = dom.document.createElement("div");
+    const root = createRoot(container as unknown as Element);
+    const context = {
+      beginPath: vi.fn(), clearRect: vi.fn(), drawImage: vi.fn(), imageSmoothingEnabled: true,
+      lineTo: vi.fn(), lineWidth: 0, moveTo: vi.fn(), restore: vi.fn(), save: vi.fn(), stroke: vi.fn(), strokeStyle: "",
+    } as unknown as CanvasRenderingContext2D;
+    const originalCreateElement = dom.document.createElement.bind(dom.document);
+    dom.document.createElement = ((tagName: string) => {
+      const element = originalCreateElement(tagName);
+      if (tagName.toLowerCase() === "canvas") Object.assign(element, { getContext: vi.fn(() => context), height: 0, width: 0 });
+      return element;
+    }) as typeof dom.document.createElement;
+    const previousWorker = Object.getOwnPropertyDescriptor(globalThis, "Worker");
+    Object.defineProperty(globalThis, "Worker", { configurable: true, value: class { constructor() { throw new Error("worker must not start"); } } });
+    const onPin = vi.fn();
+    const onRenderEvidence = vi.fn();
+    const model = buildFieldMapRenderModel({
+      bounds: [0, 1, 0, 1], canonicalUnit: "A/m", component: "normal",
+      frame: { normal: [0, 0, 1], uAxis: [1, 0, 0], vAxis: [0, 1, 0] },
+      layers: { boundaries: false, contours: false, mesh: false, probes: false, raster: false, vectors: false },
+      range: { mode: "auto" }, resolution: [1, 1], sampleIdentity: "no-scalar-layers", scalar: new Float64Array([1]),
+    });
+    try {
+      await act(async () => { root.render(<PlanarSurface model={model} onPin={onPin} onRenderEvidence={onRenderEvidence} />); });
+      const canvas = findElement(container, (element) => element.getAttribute("aria-label") === "Planar scalar field", "disabled probe canvas");
+      const move = new TestEvent("pointermove", { bubbles: true });
+      Object.assign(move, { clientX: 50, clientY: 50 });
+      await act(async () => { canvas.dispatchEvent(move); canvas.dispatchEvent(new TestEvent("click", { bubbles: true })); });
+      expect(onPin).not.toHaveBeenCalled();
+      expect(onRenderEvidence).not.toHaveBeenCalled();
+      expect(canvas.getAttribute("data-probes-enabled")).toBe("false");
+      expect(canvas.getAttribute("tabindex")).toBe("-1");
+    } finally {
+      await act(async () => root.unmount());
+      if (previousWorker) Object.defineProperty(globalThis, "Worker", previousWorker); else Reflect.deleteProperty(globalThis, "Worker");
       dom.restore();
     }
   });

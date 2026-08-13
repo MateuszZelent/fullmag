@@ -19,7 +19,7 @@ export function buildVectorGlyphs(
   vectors: ArrayLike<number>,
   budget: number,
   epsilon = 1e-15,
-  options: { maxLengthCells?: number } = {},
+  options: { lengthMode?: string; maxLengthCells?: number } = {},
 ): VectorGlyph[] {
   const available = Math.floor(vectors.length / 3);
   const count = Math.max(0, Math.min(available, Math.floor(budget)));
@@ -38,7 +38,9 @@ export function buildVectorGlyphs(
     const length = Math.hypot(u, v);
     if (Math.hypot(u, v, normal) <= epsilon) continue;
     const maximum = Math.max(0, options.maxLengthCells ?? 0.4);
-    const scale = length > maximum && length > 0 ? maximum / length : 1;
+    const scale = options.lengthMode === "magnitude"
+      ? length > maximum && length > 0 ? maximum / length : 1
+      : length > epsilon ? maximum / length : 1;
     glyphs.push({ index, normal, u: u * scale, v: v * scale });
   }
   return glyphs;

@@ -48,6 +48,8 @@ export default function FieldMapModule() {
   const active = layout.get().activeViewportMainModuleId === "field-map";
   const visualization = useVisualizationStateResource({ enabled: active });
   const planar = visualization.data?.planar;
+  const activePinned = planar?.layers.probes ? pinned : null;
+  const activeRenderEvidence = planar?.layers.raster ? renderEvidence : null;
   const activeMonitorId = planar?.active_monitor_id ?? null;
   const monitors = usePlanarMonitorsResource({ enabled: active });
   const monitor = usePlanarMonitorResource(activeMonitorId ?? "", {
@@ -150,8 +152,8 @@ export default function FieldMapModule() {
   const probe = usePlanarProbeResource(
     plan.quantityId,
     plan.monitorId,
-    buildFieldMapProbeQuery(dataQuery, pinned?.[0] ?? 0, pinned?.[1] ?? 0),
-    { enabled: plan.enabled && canonicalSampleReady && pinned !== null },
+    buildFieldMapProbeQuery(dataQuery, activePinned?.[0] ?? 0, activePinned?.[1] ?? 0),
+    { enabled: plan.enabled && canonicalSampleReady && activePinned !== null },
   );
   const frame = useMemo(
     () =>
@@ -170,6 +172,17 @@ export default function FieldMapModule() {
     (next: PlanarRenderEvidence) => setRenderEvidence(next),
     [],
   );
+  const onInteraction = useCallback((interaction: { panU: number; panV: number; zoom: number }) => {
+    visualizationSync.queuePatch({
+      planar: {
+        interaction: {
+          pan_u_m: interaction.panU,
+          pan_v_m: interaction.panV,
+          zoom: interaction.zoom,
+        },
+      },
+    });
+  }, [visualizationSync]);
   const renderModel = useMemo(() => {
     if (!meta.data || !scalar.data || !frame || !planar) return null;
     const scalarValues = decodeFieldVector(scalar.data.data).values;
@@ -189,8 +202,10 @@ export default function FieldMapModule() {
         zoom: planar.interaction.zoom,
       },
       layers: {
+        boundaries: planar.layers.boundaries,
         contours: planar.layers.contours,
         mesh: planar.layers.mesh,
+        probes: planar.layers.probes,
         raster: planar.layers.raster,
         vectors: planar.layers.vectors,
       },
@@ -208,6 +223,10 @@ export default function FieldMapModule() {
       scalar: scalarValues,
       vectorBudget: planar.resolution.vector_budget,
       vectorScale: planar.vector_style.scale,
+      vectorStyle: {
+        colorMode: planar.vector_style.color_mode,
+        lengthMode: planar.vector_style.length_mode,
+      },
       vectors: vectorValues,
     });
   }, [frame, mask.data, meshOverlay.data, meta.data, planar, scalar.data, vectors.data]);
@@ -215,27 +234,27 @@ export default function FieldMapModule() {
   const evidenceStatus: PlanarEvidenceStatus = resolvePlanarEvidenceStatus({
     metaIdentity: meta.data?.etag,
     metaStatus: meta.status,
-    renderEvidence,
+    renderEvidence: activeRenderEvidence,
     scalarIdentity: scalar.data?.etag,
     scalarStatus: scalar.status,
   });
   const evidence = createPlanarEvidence({
     component,
     fieldRevision: meta.data?.field_revision ?? null,
-    glyphCount: renderEvidence?.glyphCount ?? 0,
+    glyphCount: activeRenderEvidence?.glyphCount ?? 0,
     metaIdentity: meta.data?.etag ?? null,
     monitorHash: meta.data?.monitor_hash ?? null,
     monitorId: activeMonitorId ?? "",
     monitorRevision: meta.data?.monitor_revision ?? null,
     operatorKind: monitor.data?.monitor.operator.kind ?? null,
     operatorRevision: meta.data?.monitor_revision ?? null,
-    overlayCounts: renderEvidence?.overlayCounts ?? {
+    overlayCounts: activeRenderEvidence?.overlayCounts ?? {
       contours: 0,
       meshSegments: 0,
     },
     quantityId,
-    raster: renderEvidence?.raster ?? null,
-    scalarIdentity: renderEvidence?.sampleIdentity ?? null,
+    raster: activeRenderEvidence?.raster ?? null,
+    scalarIdentity: activeRenderEvidence?.sampleIdentity ?? null,
     status: evidenceStatus,
   });
 
@@ -324,6 +343,7 @@ export default function FieldMapModule() {
       <div className="fm-field-map__stage">
         <PlanarSurface
           model={renderModel}
+          onInteraction={onInteraction}
           onPin={(u, v) => setPinned([u, v])}
           onRenderEvidence={onRenderEvidence}
         />
@@ -334,6 +354,11 @@ export default function FieldMapModule() {
           <span>{renderModel.range ? renderModel.range.min * renderModel.display.probeScale : "auto"}</span>
         </div>
       </div>
+      {renderModel.diagnostics.length ? (
+        <div className="fm-field-map__diagnostics" role="status" aria-label="Planar presentation diagnostics">
+          {renderModel.diagnostics.map((message) => <p key={message}>{message}</p>)}
+        </div>
+      ) : null}
       <FieldMapAuxiliaryDiagnostics
         layers={[
           { label: "Occupancy mask", requested: plan.requestMask, resource: mask },
@@ -341,7 +366,7 @@ export default function FieldMapModule() {
           { label: "Mesh overlay", requested: plan.requestMesh, resource: meshOverlay },
         ]}
       />
-      {probe.data ? (
+      {planar.layers.probes && probe.data ? (
         <table className="fm-field-map__pinned-probe">
           <caption>Pinned planar probe</caption>
           <tbody>

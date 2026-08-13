@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   buildFieldMapRenderModel,
+  resolvePlanarDisplayUnit,
   resolveFieldMapAuxiliaryDiagnostics,
   resolvePlanarDisplayRange,
   resolvePlanarVectorComponents,
@@ -149,5 +150,46 @@ describe("field-map render model", () => {
       max: 5.5,
       min: 4.5,
     });
+  });
+
+  it("fails closed for an unsupported display unit while converting compatible field units", () => {
+    expect(resolvePlanarDisplayUnit("A/m", "MA/m")).toEqual({
+      compatible: true,
+      scale: 1 / 1_000_000,
+      unit: "MA/m",
+    });
+    expect(resolvePlanarDisplayUnit("T", "mT")).toEqual({
+      compatible: true,
+      scale: 1_000,
+      unit: "mT",
+    });
+    expect(resolvePlanarDisplayUnit("A/m", "mT")).toEqual({
+      compatible: false,
+      scale: 1,
+      unit: "A/m",
+    });
+  });
+
+  it("keeps unsupported planar presentation semantics visible as fail-closed diagnostics", () => {
+    const model = buildFieldMapRenderModel({
+      bounds: [0, 1, 0, 1],
+      canonicalUnit: "A/m",
+      component: "normal",
+      displayUnit: "mT",
+      frame: { normal: [0, 0, 1], uAxis: [1, 0, 0], vAxis: [0, 1, 0] },
+      layers: { boundaries: true, contours: false, mesh: false, probes: false, raster: false, vectors: false },
+      range: { mode: "symmetric" },
+      resolution: [1, 1],
+      sampleIdentity: "sample",
+      scalar: new Float64Array([1]),
+    });
+
+    expect(model.diagnostics).toEqual(expect.arrayContaining([
+      "2D boundaries are unavailable: the planar mesh payload has no boundary classification.",
+      "Display unit 'mT' is incompatible with canonical unit 'A/m'.",
+      "Symmetric range is unavailable: the planar visualization contract has no range mode.",
+      "Planar opacity is unavailable: the planar visualization contract has no opacity field.",
+    ]));
+    expect(model.range).toBeNull();
   });
 });

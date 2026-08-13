@@ -38,4 +38,12 @@ describe("vector glyph selection", () => {
     expect(normalComponentMarker(-2)).toEqual({ direction: "into-plane", magnitude: 2 });
     expect(normalComponentMarker(3)).toEqual({ direction: "out-of-plane", magnitude: 3 });
   });
+
+  it("applies server length mode while retaining a bounded geometry budget", () => {
+    const vectors = new Float64Array([0.1, 0, 0, 10, 0, 0]);
+    expect(buildVectorGlyphs(vectors, 2, 1e-15, { lengthMode: "uniform", maxLengthCells: 0.3 }))
+      .toMatchObject([{ u: 0.3 }, { u: 0.3 }]);
+    expect(buildVectorGlyphs(vectors, 2, 1e-15, { lengthMode: "magnitude", maxLengthCells: 0.3 }))
+      .toMatchObject([{ u: 0.1 }, { u: 0.3 }]);
+  });
 });
