@@ -14,7 +14,6 @@ use super::fdm_region_membership::{ResolvedFdmMembership, load_resolved_fdm_memb
 use super::field_resolution::{
     fem_magnetic_node_indices, flatten_json_field_values, is_fdm_snapshot, json_field_grid,
 };
-use super::multilayer_identity::correlate_multilayer_layers;
 use crate::artifacts::read_json_artifact_value;
 use crate::error::ApiError;
 use crate::router_v2::handlers::sessions::status::{
@@ -105,6 +104,7 @@ pub(crate) struct FdmNativeLayerMembershipCarrier {
     pub membership: FdmCellMembership,
     pub membership_revision: u64,
     pub membership_fingerprint: String,
+    pub legend_fingerprint: String,
 }
 
 impl From<&ResolvedFdmMembership> for FdmCellMembership {
@@ -470,6 +470,15 @@ pub(crate) fn resolve_fdm_multilayer_native_layer_field(
     let Some(metadata) = snapshot.metadata.as_ref() else {
         return Ok(None);
     };
+    if let Some(plan_layer) = planned_native_layer(metadata, requested_layer_id)? {
+        return resolve_planned_native_layer_field(
+            snapshot,
+            plan_layer,
+            quantity_id,
+            component_count,
+        )
+        .map(Some);
+    }
     let Some(layout) = metadata.get("artifact_layout").filter(|layout| {
         layout.get("backend").and_then(serde_json::Value::as_str) == Some("fdm_multilayer")
     }) else {
@@ -480,30 +489,20 @@ pub(crate) fn resolve_fdm_multilayer_native_layer_field(
         .and_then(serde_json::Value::as_array)
         .filter(|layers| !layers.is_empty())
         .ok_or_else(|| ApiError::conflict("multilayer FDM artifact layout has no native layers"))?;
-    let plan_layers = metadata
-        .get("execution_plan")
-        .and_then(|plan| plan.get("backend_plan"))
-        .and_then(|plan| plan.get("layers"))
-        .and_then(serde_json::Value::as_array)
-        .filter(|layers| !layers.is_empty())
-        .ok_or_else(|| ApiError::conflict("multilayer FDM execution plan has no native layers"))?;
-    let paired_layers = correlate_multilayer_layers(artifact_layers, plan_layers)?;
-    let matching = paired_layers
-        .into_iter()
-        .filter(|(artifact, plan)| {
-            [artifact, plan].into_iter().any(|layer| {
-                layer.get("layer_id").and_then(serde_json::Value::as_str)
-                    == Some(requested_layer_id)
-            })
+    let matching = artifact_layers
+        .iter()
+        .filter(|layer| {
+            layer.get("layer_id").and_then(serde_json::Value::as_str)
+                == Some(requested_layer_id)
         })
         .collect::<Vec<_>>();
-    let (artifact_layer, plan_layer) = match matching.as_slice() {
+    let artifact_layer = match matching.as_slice() {
         [] => {
             return Err(ApiError::not_found(format!(
                 "layer_not_found: multilayer FDM layer '{requested_layer_id}' was not found"
             )));
         }
-        [pair] => *pair,
+        [layer] => *layer,
         _ => {
             return Err(ApiError::conflict(format!(
                 "ambiguous_layer_identity: multilayer FDM layer '{requested_layer_id}' is ambiguous"
@@ -516,14 +515,9 @@ pub(crate) fn resolve_fdm_multilayer_native_layer_field(
             "multilayer FDM artifact and requested canonical layer identity disagree",
         ));
     }
-    let object_id =
-        required_agreeing_string(artifact_layer, plan_layer, "object_id", requested_layer_id)?;
-    let magnet_name = required_agreeing_string(
-        artifact_layer,
-        plan_layer,
-        "magnet_name",
-        requested_layer_id,
-    )?;
+    let object_id = required_string(artifact_layer, "object_id", "layer descriptor")?.to_string();
+    let magnet_name =
+        required_string(artifact_layer, "magnet_name", "layer descriptor")?.to_string();
     let cells = required_array3_u32(artifact_layer, "native_grid", requested_layer_id)?;
     let origin_m = required_array3_f64(artifact_layer, "native_origin", requested_layer_id, false)?;
     let cell_size_m =
@@ -567,13 +561,13 @@ pub(crate) fn resolve_fdm_multilayer_native_layer_field(
     let material_path =
         required_string(material_descriptor, "artifact_path", "material descriptor")?;
     let artifact_dir = current_artifact_dir(snapshot).ok_or_else(|| {
-        ApiError::not_found(format!(
-            "quantity_not_materialized: field '{quantity_id}' has no artifact root"
+        ApiError::conflict(format!(
+            "declared multilayer material field '{quantity_id}' has no artifact root"
         ))
     })?;
     let material_payload = read_json_artifact_value(&artifact_dir, material_path).map_err(|_| {
-        ApiError::not_found(format!(
-            "quantity_not_materialized: field '{quantity_id}' artifact is missing for layer '{requested_layer_id}'"
+        ApiError::conflict(format!(
+            "declared multilayer material field '{quantity_id}' artifact is missing or corrupt for layer '{requested_layer_id}'"
         ))
     })?;
     validate_layer_payload_identity(
@@ -816,6 +810,11 @@ pub(crate) fn load_fdm_multilayer_native_layer_membership(
     let Some(metadata) = snapshot.metadata.as_ref() else {
         return Ok(None);
     };
+    if let Some(plan_layer) = planned_native_layer(metadata, requested_layer_id)? {
+        let carrier = planned_native_layer_membership(snapshot, plan_layer)?;
+        cross_check_planned_membership(snapshot, &carrier)?;
+        return Ok(Some(carrier));
+    }
     let Some(layout) = metadata.get("artifact_layout").filter(|layout| {
         layout.get("backend").and_then(serde_json::Value::as_str) == Some("fdm_multilayer")
     }) else {
@@ -826,29 +825,20 @@ pub(crate) fn load_fdm_multilayer_native_layer_membership(
         .and_then(serde_json::Value::as_array)
         .filter(|layers| !layers.is_empty())
         .ok_or_else(|| ApiError::conflict("multilayer FDM artifact layout has no native layers"))?;
-    let plan_layers = metadata
-        .get("execution_plan")
-        .and_then(|plan| plan.get("backend_plan"))
-        .and_then(|plan| plan.get("layers"))
-        .and_then(serde_json::Value::as_array)
-        .filter(|layers| !layers.is_empty())
-        .ok_or_else(|| ApiError::conflict("multilayer FDM execution plan has no native layers"))?;
-    let matching = correlate_multilayer_layers(artifact_layers, plan_layers)?
-        .into_iter()
-        .filter(|(artifact, plan)| {
-            [artifact, plan].into_iter().any(|layer| {
-                layer.get("layer_id").and_then(serde_json::Value::as_str)
-                    == Some(requested_layer_id)
-            })
+    let matching = artifact_layers
+        .iter()
+        .filter(|layer| {
+            layer.get("layer_id").and_then(serde_json::Value::as_str)
+                == Some(requested_layer_id)
         })
         .collect::<Vec<_>>();
-    let (artifact_layer, plan_layer) = match matching.as_slice() {
+    let artifact_layer = match matching.as_slice() {
         [] => {
             return Err(ApiError::not_found(format!(
                 "layer_not_found: multilayer FDM layer '{requested_layer_id}' was not found"
             )));
         }
-        [pair] => *pair,
+        [layer] => *layer,
         _ => {
             return Err(ApiError::conflict(format!(
                 "ambiguous_layer_identity: multilayer FDM layer '{requested_layer_id}' is ambiguous"
@@ -856,14 +846,9 @@ pub(crate) fn load_fdm_multilayer_native_layer_membership(
         }
     };
     let layer_id = required_string(artifact_layer, "layer_id", "layer descriptor")?.to_string();
-    let object_id =
-        required_agreeing_string(artifact_layer, plan_layer, "object_id", requested_layer_id)?;
-    let magnet_name = required_agreeing_string(
-        artifact_layer,
-        plan_layer,
-        "magnet_name",
-        requested_layer_id,
-    )?;
+    let object_id = required_string(artifact_layer, "object_id", "layer descriptor")?.to_string();
+    let magnet_name =
+        required_string(artifact_layer, "magnet_name", "layer descriptor")?.to_string();
     let cells = required_array3_u32(artifact_layer, "native_grid", requested_layer_id)?;
     let origin_m = required_array3_f64(artifact_layer, "native_origin", requested_layer_id, false)?;
     let cell_size_m =
@@ -915,11 +900,11 @@ pub(crate) fn load_fdm_multilayer_native_layer_membership(
         ));
     }
     let artifact_dir = current_artifact_dir(snapshot).ok_or_else(|| {
-        ApiError::not_found("quantity_not_materialized: native membership has no artifact root")
+        ApiError::conflict("declared native multilayer membership has no artifact root")
     })?;
     let payload = read_json_artifact_value(&artifact_dir, membership_path).map_err(|_| {
-        ApiError::not_found(format!(
-            "quantity_not_materialized: native membership artifact is missing for layer '{requested_layer_id}'"
+        ApiError::conflict(format!(
+            "declared native membership artifact is missing or corrupt for layer '{requested_layer_id}'"
         ))
     })?;
     validate_layer_payload_identity(
@@ -1045,7 +1030,512 @@ pub(crate) fn load_fdm_multilayer_native_layer_membership(
         },
         membership_revision,
         membership_fingerprint,
+        legend_fingerprint: legend_hash,
     }))
+}
+
+fn planned_native_layer<'a>(
+    metadata: &'a serde_json::Value,
+    requested_layer_id: &str,
+) -> Result<Option<&'a serde_json::Value>, ApiError> {
+    let Some(backend_plan) = metadata
+        .get("execution_plan")
+        .and_then(|plan| plan.get("backend_plan"))
+        .filter(|plan| plan.get("kind").and_then(serde_json::Value::as_str) == Some("fdm_multilayer"))
+    else {
+        return Ok(None);
+    };
+    let layers = backend_plan
+        .get("layers")
+        .and_then(serde_json::Value::as_array)
+        .filter(|layers| !layers.is_empty())
+        .ok_or_else(|| ApiError::conflict("multilayer FDM execution plan has no native layers"))?;
+    let matching = layers
+        .iter()
+        .filter(|layer| {
+            layer.get("layer_id").and_then(serde_json::Value::as_str)
+                == Some(requested_layer_id)
+        })
+        .collect::<Vec<_>>();
+    match matching.as_slice() {
+        [] => Err(ApiError::not_found(format!(
+            "layer_not_found: multilayer FDM layer '{requested_layer_id}' was not found"
+        ))),
+        [layer] => Ok(Some(*layer)),
+        _ => Err(ApiError::conflict(format!(
+            "ambiguous_layer_identity: multilayer FDM layer '{requested_layer_id}' is ambiguous"
+        ))),
+    }
+}
+
+fn planned_native_layer_membership(
+    snapshot: &SessionStateResponse,
+    layer: &serde_json::Value,
+) -> Result<FdmNativeLayerMembershipCarrier, ApiError> {
+    let layer_id = required_string(layer, "layer_id", "execution-plan layer")?.to_string();
+    let object_id = required_string(layer, "object_id", "execution-plan layer")?.to_string();
+    let magnet_name = required_string(layer, "magnet_name", "execution-plan layer")?.to_string();
+    let cells = required_array3_u32(layer, "native_grid", &layer_id)?;
+    let origin_m = required_array3_f64(layer, "native_origin", &layer_id, false)?;
+    let cell_size_m = required_array3_f64(layer, "native_cell_size", &layer_id, true)?;
+    let cell_count = grid_cell_count(cells, &layer_id)?;
+    let raw_mask = strict_u32_values(layer, "native_region_mask", cell_count, &layer_id)?;
+    let active_mask = layer
+        .get("native_active_mask")
+        .and_then(serde_json::Value::as_array)
+        .map(|values| {
+            values
+                .iter()
+                .map(serde_json::Value::as_bool)
+                .collect::<Option<Vec<_>>>()
+                .filter(|mask| mask.len() == cell_count)
+                .ok_or_else(|| ApiError::conflict(format!(
+                    "layer '{layer_id}' native_active_mask is malformed"
+                )))
+        })
+        .transpose()?
+        .unwrap_or_else(|| vec![true; cell_count]);
+    if raw_mask
+        .iter()
+        .zip(&active_mask)
+        .any(|(region, active)| !active && *region != 0)
+    {
+        return Err(ApiError::conflict(format!(
+            "layer '{layer_id}' assigns native membership outside its active mask"
+        )));
+    }
+    let mask = raw_mask
+        .iter()
+        .zip(&active_mask)
+        .map(|(region, active)| if *active { *region } else { u32::MAX })
+        .collect::<Vec<_>>();
+    let legend_value = layer
+        .get("native_region_legend")
+        .and_then(serde_json::Value::as_array)
+        .ok_or_else(|| ApiError::conflict(format!(
+            "layer '{layer_id}' has no native region legend"
+        )))?;
+    let region_legend = serde_json::from_value::<Vec<FdmRegionLegendEntryResource>>(
+        serde_json::Value::Array(legend_value.clone()),
+    )
+    .map_err(|error| ApiError::conflict(format!(
+        "layer '{layer_id}' native region legend is malformed: {error}"
+    )))?;
+    validate_region_legend(&region_legend, &mask, &object_id, &layer_id)?;
+    let grid_fingerprint = format!(
+        "sha256:{}",
+        fullmag_ir::FdmGridCertificateIR::new_with_topology_tokens(
+            origin_m,
+            cells,
+            cell_size_m,
+            active_mask.iter().filter(|active| **active).count() as u64,
+            1,
+            Some(&active_mask),
+            &raw_mask,
+        )
+        .map_err(|error| ApiError::conflict(format!("invalid native layer grid: {error}")))?
+        .grid_fingerprint
+    );
+    let mask_hash = hash_u32_values(&mask);
+    let legend_fingerprint = format!(
+        "sha256:{:x}",
+        Sha256::digest(serde_json::to_vec(legend_value).map_err(|error| {
+            ApiError::conflict(format!("failed to canonicalize multilayer legend: {error}"))
+        })?)
+    );
+    let membership_revision = snapshot.region_realization_revisions.membership.max(1);
+    let membership_fingerprint = format!(
+        "sha256:{:x}",
+        Sha256::digest(
+            format!("{mask_hash}:{legend_fingerprint}:{membership_revision}").as_bytes()
+        )
+    );
+    Ok(FdmNativeLayerMembershipCarrier {
+        layer_id,
+        object_id: object_id.clone(),
+        magnet_name,
+        cells,
+        origin_m,
+        cell_size_m,
+        grid_fingerprint,
+        membership: FdmCellMembership {
+            object_ids: vec![object_id],
+            region_legend,
+            cell_membership: mask,
+        },
+        membership_revision,
+        membership_fingerprint,
+        legend_fingerprint,
+    })
+}
+
+fn persisted_native_layer<'a>(
+    snapshot: &'a SessionStateResponse,
+    layer_id: &str,
+) -> Result<Option<&'a serde_json::Value>, ApiError> {
+    let Some(layout) = snapshot
+        .metadata
+        .as_ref()
+        .and_then(|metadata| metadata.get("artifact_layout"))
+        .filter(|layout| {
+            layout.get("backend").and_then(serde_json::Value::as_str) == Some("fdm_multilayer")
+        })
+    else {
+        return Ok(None);
+    };
+    let layers = layout
+        .get("layers")
+        .and_then(serde_json::Value::as_array)
+        .filter(|layers| !layers.is_empty())
+        .ok_or_else(|| ApiError::conflict("multilayer FDM artifact layout has no native layers"))?;
+    let matching = layers
+        .iter()
+        .filter(|layer| {
+            layer.get("layer_id").and_then(serde_json::Value::as_str) == Some(layer_id)
+        })
+        .collect::<Vec<_>>();
+    match matching.as_slice() {
+        [layer] => Ok(Some(*layer)),
+        [] => Err(ApiError::conflict(format!(
+            "multilayer FDM artifact layout is missing planned layer '{layer_id}'"
+        ))),
+        _ => Err(ApiError::conflict(format!(
+            "multilayer FDM artifact layout has ambiguous layer '{layer_id}'"
+        ))),
+    }
+}
+
+fn cross_check_planned_layer_identity(
+    carrier: &FdmNativeLayerMembershipCarrier,
+    artifact_layer: &serde_json::Value,
+) -> Result<(), ApiError> {
+    let layer_id = carrier.layer_id.as_str();
+    let identity_matches = required_string(artifact_layer, "layer_id", "layer descriptor")?
+        == layer_id
+        && required_string(artifact_layer, "object_id", "layer descriptor")?
+            == carrier.object_id
+        && required_string(artifact_layer, "magnet_name", "layer descriptor")?
+            == carrier.magnet_name
+        && required_array3_u32(artifact_layer, "native_grid", layer_id)? == carrier.cells
+        && required_array3_f64(artifact_layer, "native_origin", layer_id, false)?
+            == carrier.origin_m
+        && required_array3_f64(artifact_layer, "native_cell_size", layer_id, true)?
+            == carrier.cell_size_m;
+    if !identity_matches {
+        return Err(ApiError::conflict(format!(
+            "multilayer FDM planned layer '{layer_id}' disagrees with its artifact layout"
+        )));
+    }
+    if let Some(fingerprint) = artifact_layer
+        .get("native_grid_fingerprint")
+        .and_then(serde_json::Value::as_str)
+    {
+        if fingerprint != carrier.grid_fingerprint {
+            return Err(ApiError::conflict(format!(
+                "multilayer FDM planned layer '{layer_id}' grid fingerprint disagrees with its artifact layout"
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn cross_check_planned_membership(
+    snapshot: &SessionStateResponse,
+    carrier: &FdmNativeLayerMembershipCarrier,
+) -> Result<(), ApiError> {
+    let Some(artifact_layer) = persisted_native_layer(snapshot, &carrier.layer_id)? else {
+        return Ok(());
+    };
+    cross_check_planned_layer_identity(carrier, artifact_layer)?;
+    let mask_descriptor = artifact_layer.get("native_region_mask").filter(|descriptor| {
+        descriptor
+            .get("available")
+            .and_then(serde_json::Value::as_bool)
+            == Some(true)
+    });
+    let legend_descriptor = artifact_layer.get("native_region_legend").filter(|descriptor| {
+        descriptor
+            .get("available")
+            .and_then(serde_json::Value::as_bool)
+            == Some(true)
+    });
+    let (Some(mask_descriptor), Some(legend_descriptor)) =
+        (mask_descriptor, legend_descriptor)
+    else {
+        if mask_descriptor.is_some() || legend_descriptor.is_some() {
+            return Err(ApiError::conflict(format!(
+                "multilayer FDM layer '{}' has incomplete persisted membership descriptors",
+                carrier.layer_id
+            )));
+        }
+        return Ok(());
+    };
+    let membership_path = required_string(
+        mask_descriptor,
+        "artifact_path",
+        "membership descriptor",
+    )?;
+    if required_string(legend_descriptor, "artifact_path", "legend descriptor")?
+        != membership_path
+    {
+        return Err(ApiError::conflict(
+            "multilayer FDM membership mask and legend refer to different artifacts",
+        ));
+    }
+    let artifact_dir = current_artifact_dir(snapshot).ok_or_else(|| {
+        ApiError::conflict("declared native multilayer membership has no artifact root")
+    })?;
+    let payload = read_json_artifact_value(&artifact_dir, membership_path).map_err(|_| {
+        ApiError::conflict(format!(
+            "declared native membership artifact is missing or corrupt for layer '{}'",
+            carrier.layer_id
+        ))
+    })?;
+    validate_layer_payload_identity(
+        &payload,
+        "fdm_multilayer_region_membership.v1",
+        &carrier.layer_id,
+        &carrier.object_id,
+        &carrier.magnet_name,
+        carrier.cells,
+        carrier.origin_m,
+        carrier.cell_size_m,
+        &carrier.grid_fingerprint,
+    )?;
+    let mask = strict_u32_values(
+        &payload,
+        "native_region_mask",
+        carrier.membership.cell_membership.len(),
+        &carrier.layer_id,
+    )?;
+    let mask_hash = hash_u32_values(&mask);
+    validate_content_descriptor(
+        mask_descriptor,
+        &payload,
+        mask.len(),
+        "value_sha256",
+        &mask_hash,
+        "membership mask",
+    )?;
+    let legend_value = payload
+        .get("native_region_legend")
+        .and_then(serde_json::Value::as_array)
+        .ok_or_else(|| ApiError::conflict("multilayer FDM membership legend is malformed"))?;
+    let legend = serde_json::from_value::<Vec<FdmRegionLegendEntryResource>>(
+        serde_json::Value::Array(legend_value.clone()),
+    )
+    .map_err(|error| ApiError::conflict(format!(
+        "multilayer FDM membership legend is malformed: {error}"
+    )))?;
+    let legend_hash = format!(
+        "sha256:{:x}",
+        Sha256::digest(serde_json::to_vec(legend_value).map_err(|error| {
+            ApiError::conflict(format!("failed to canonicalize multilayer legend: {error}"))
+        })?)
+    );
+    validate_hash_agreement(
+        legend_descriptor,
+        &payload,
+        "legend_sha256",
+        &legend_hash,
+        "membership legend",
+    )?;
+    let entry_count =
+        required_positive_or_zero_u64(legend_descriptor, "entry_count", "legend descriptor")?;
+    if legend_descriptor.get("entries") != Some(&serde_json::Value::Array(legend_value.clone()))
+        || mask != carrier.membership.cell_membership
+        || legend != carrier.membership.region_legend
+        || legend_hash != carrier.legend_fingerprint
+        || entry_count != legend.len() as u64
+    {
+        return Err(ApiError::conflict(format!(
+            "multilayer FDM planned membership disagrees with persisted carrier for layer '{}'",
+            carrier.layer_id
+        )));
+    }
+    Ok(())
+}
+
+fn cross_check_planned_material(
+    snapshot: &SessionStateResponse,
+    carrier: &FdmNativeLayerMembershipCarrier,
+    quantity_id: &str,
+    unit: &str,
+    planned_values: &[f64],
+) -> Result<(), ApiError> {
+    let Some(artifact_layer) = persisted_native_layer(snapshot, &carrier.layer_id)? else {
+        return Ok(());
+    };
+    let Some(descriptor) = artifact_layer
+        .get("material_fields")
+        .and_then(|fields| fields.get(quantity_id))
+        .filter(|descriptor| {
+            descriptor
+                .get("available")
+                .and_then(serde_json::Value::as_bool)
+                == Some(true)
+        })
+    else {
+        return Ok(());
+    };
+    let artifact_dir = current_artifact_dir(snapshot).ok_or_else(|| {
+        ApiError::conflict(format!(
+            "declared multilayer material field '{quantity_id}' has no artifact root"
+        ))
+    })?;
+    let material_path = required_string(descriptor, "artifact_path", "material descriptor")?;
+    let payload = read_json_artifact_value(&artifact_dir, material_path).map_err(|_| {
+        ApiError::conflict(format!(
+            "declared multilayer material field '{quantity_id}' artifact is missing or corrupt for layer '{}'",
+            carrier.layer_id
+        ))
+    })?;
+    validate_layer_payload_identity(
+        &payload,
+        "fdm_multilayer_material_field.v1",
+        &carrier.layer_id,
+        &carrier.object_id,
+        &carrier.magnet_name,
+        carrier.cells,
+        carrier.origin_m,
+        carrier.cell_size_m,
+        &carrier.grid_fingerprint,
+    )?;
+    if required_string(&payload, "field_id", "material payload")? != quantity_id
+        || required_string(descriptor, "unit", "material descriptor")? != unit
+        || required_string(&payload, "unit", "material payload")? != unit
+    {
+        return Err(ApiError::conflict(format!(
+            "multilayer material field '{quantity_id}' unit or identity is inconsistent"
+        )));
+    }
+    let values = strict_finite_values(
+        &payload,
+        "values",
+        planned_values.len(),
+        quantity_id,
+    )?;
+    let value_hash = hash_f64_values(&values);
+    validate_content_descriptor(
+        descriptor,
+        &payload,
+        values.len(),
+        "value_sha256",
+        &value_hash,
+        "material field",
+    )?;
+    if values != planned_values {
+        return Err(ApiError::conflict(format!(
+            "multilayer material field '{quantity_id}' plan and persisted payload disagree"
+        )));
+    }
+    Ok(())
+}
+
+fn resolve_planned_native_layer_field(
+    snapshot: &SessionStateResponse,
+    layer: &serde_json::Value,
+    quantity_id: &str,
+    component_count: usize,
+) -> Result<ResolvedSpatialField<'static>, ApiError> {
+    let membership = planned_native_layer_membership(snapshot, layer)?;
+    cross_check_planned_membership(snapshot, &membership)?;
+    let spec = quantity_spec(quantity_id).ok_or_else(|| ApiError::not_found(format!(
+        "quantity_unavailable: quantity '{quantity_id}' is unknown"
+    )))?;
+    if component_count != 1 || usize::from(spec.n_comp) != component_count {
+        return Err(ApiError::conflict(format!(
+            "multilayer material field '{quantity_id}' has an invalid component contract"
+        )));
+    }
+    let material_key = match quantity_id {
+        "mat_ms" => "ms_field",
+        "mat_aex" => "a_field",
+        "mat_alpha" => "alpha_field",
+        _ => return Err(ApiError::not_found(format!(
+            "quantity_not_materialized: field '{quantity_id}' has no native array for layer '{}'",
+            membership.layer_id
+        ))),
+    };
+    let material = layer.get("material").ok_or_else(|| ApiError::conflict(format!(
+        "layer '{}' has no material contract",
+        membership.layer_id
+    )))?;
+    if material.get(material_key).is_none() {
+        return Err(ApiError::not_found(format!(
+            "quantity_not_materialized: field '{quantity_id}' has no native array for layer '{}'",
+            membership.layer_id
+        )));
+    }
+    let values = strict_finite_values(
+        material,
+        material_key,
+        membership.membership.cell_membership.len(),
+        quantity_id,
+    )?;
+    cross_check_planned_material(snapshot, &membership, quantity_id, spec.unit, &values)?;
+    let value_hash = hash_f64_values(&values);
+    let field_generation = format!(
+        "sha256:{:x}",
+        Sha256::digest(format!(
+            "{}:{}:{}",
+            membership.layer_id, membership.grid_fingerprint, value_hash
+        ))
+    );
+    let quantity_revision = snapshot
+        .field_quantity_revisions
+        .get(quantity_id)
+        .copied()
+        .unwrap_or(snapshot.field_samples_revision)
+        .max(1);
+    let carrier_fingerprint = format!(
+        "sha256:{:x}",
+        Sha256::digest(format!(
+            "{}:{}:{}:{}:{}:{}:{}:{}",
+            membership.layer_id,
+            membership.object_id,
+            membership.magnet_name,
+            membership.grid_fingerprint,
+            membership.membership_fingerprint,
+            field_generation,
+            value_hash,
+            quantity_revision
+        ))
+    );
+    let carrier_revision = sha256_revision(&carrier_fingerprint)?;
+    let field = ResolvedSpatialField {
+        quantity_id: quantity_id.to_string(),
+        quantity_kind: spec.shape,
+        canonical_unit: spec.unit.to_string(),
+        component_count,
+        default_component: spec.default_component,
+        source_kind: SpatialFieldSourceKind::Materialized,
+        provenance: SpatialFieldProvenance {
+            backend: snapshot.session.resolved_backend.clone(),
+            device: snapshot.session.resolved_device.clone(),
+            precision: snapshot.session.resolved_precision.clone(),
+        },
+        field_generation: Some(field_generation),
+        quantity_revision,
+        mesh_or_grid_revision: carrier_revision,
+        source_grid: Some(membership.cells),
+        values,
+        carrier: SpatialFieldCarrier::FdmNativeLayerCells {
+            layer_id: membership.layer_id,
+            object_id: membership.object_id,
+            magnet_name: membership.magnet_name,
+            cells: membership.cells,
+            origin_m: membership.origin_m,
+            cell_size_m: membership.cell_size_m,
+            grid_fingerprint: membership.grid_fingerprint,
+            membership: membership.membership,
+            membership_revision: membership.membership_revision,
+            membership_fingerprint: membership.membership_fingerprint,
+            carrier_fingerprint,
+        },
+    };
+    field.validate_contract()?;
+    Ok(field)
 }
 
 fn validate_grid_count(
@@ -1074,22 +1564,6 @@ fn required_string<'a>(
         .and_then(serde_json::Value::as_str)
         .filter(|value| !value.is_empty())
         .ok_or_else(|| ApiError::conflict(format!("{context} has no valid {key}")))
-}
-
-fn required_agreeing_string(
-    artifact: &serde_json::Value,
-    plan: &serde_json::Value,
-    key: &str,
-    layer_id: &str,
-) -> Result<String, ApiError> {
-    let artifact_value = required_string(artifact, key, "layer descriptor")?;
-    let plan_value = required_string(plan, key, "execution-plan layer")?;
-    if artifact_value != plan_value {
-        return Err(ApiError::conflict(format!(
-            "multilayer FDM layer '{layer_id}' artifact and execution plan {key} disagree"
-        )));
-    }
-    Ok(artifact_value.to_string())
 }
 
 fn required_array3_u32(

@@ -36,6 +36,7 @@ import {
   DATA_DOMAIN_META_PATH,
   DATA_DOMAIN_FDM_MULTILAYER_LAYOUT_PATH,
   DATA_DOMAIN_FDM_MULTILAYER_LAYER_ACTIVE_MASK_PATH,
+  DATA_DOMAIN_FDM_MULTILAYER_LAYER_REGION_MEMBERSHIPS_PATH,
   DATA_DOMAIN_TOPOLOGY_PATH,
   DATA_FDM_REGION_MEMBERSHIP_BINARY_PATH,
   DATA_FDM_REGION_MEMBERSHIP_SCOPED_PATH,
@@ -207,6 +208,7 @@ import type {
   CurrentRunResource,
   DomainMetaResource,
   FdmMultilayerLayoutResource,
+  FdmNativeLayerRegionMembershipResource,
   EngineLogResource,
   FieldCatalogResource,
   FieldVectorIdentityIssue,
@@ -989,6 +991,15 @@ export class ControlRoomApi {
           DATA_DOMAIN_FDM_MULTILAYER_LAYER_ACTIVE_MASK_PATH,
           options,
           { layer_id: layerId },
+        ),
+      fdmMultilayerLayerRegionMemberships: (
+        layerId: string,
+        options?: RequestOptions,
+      ) =>
+        this.requestJson<FdmNativeLayerRegionMembershipResource>(
+          DATA_DOMAIN_FDM_MULTILAYER_LAYER_REGION_MEMBERSHIPS_PATH,
+          options,
+          { path: { layer_id: layerId } },
         ),
       topology: (options?: BinaryRequestOptions) =>
         this.requestTopology(DATA_DOMAIN_TOPOLOGY_PATH, options),

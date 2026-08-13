@@ -439,7 +439,7 @@ fn select_fdm_target(
                 .map(|entry| entry.numeric_id)
                 .collect::<BTreeSet<_>>();
             if numeric_ids.is_empty() {
-                return Err(ApiError::not_found(format!(
+                return Err(ApiError::unprocessable(format!(
                     "empty_target: FDM region membership not found: {object_id}/{region_id}"
                 )));
             }

@@ -4085,6 +4085,105 @@
         ],
         "type": "object"
       },
+      "FdmNativeLayerRegionMembershipResource": {
+        "description": "Thin control-plane descriptor for one native multilayer FDM membership.\nThe cell-aligned IDs remain on the companion FMRM binary resource.",
+        "properties": {
+          "binary_path": {
+            "type": "string"
+          },
+          "cell_count": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "cell_m": {
+            "items": {
+              "format": "double",
+              "type": "number"
+            },
+            "type": "array"
+          },
+          "counts": {
+            "items": {
+              "format": "int32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "type": "array"
+          },
+          "domain_generation_id": {
+            "type": "string"
+          },
+          "encoding": {
+            "type": "string"
+          },
+          "freshness": {
+            "type": "string"
+          },
+          "grid_fingerprint": {
+            "type": "string"
+          },
+          "layer_id": {
+            "type": "string"
+          },
+          "magnet_name": {
+            "type": "string"
+          },
+          "object_id": {
+            "type": "string"
+          },
+          "object_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "origin_m": {
+            "items": {
+              "format": "double",
+              "type": "number"
+            },
+            "type": "array"
+          },
+          "region_legend": {
+            "items": {
+              "$ref": "#/components/schemas/FdmRegionLegendEntryResource"
+            },
+            "type": "array"
+          },
+          "region_legend_fingerprint": {
+            "type": "string"
+          },
+          "region_membership_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "schema_version": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "schema_version",
+          "layer_id",
+          "object_id",
+          "magnet_name",
+          "region_membership_revision",
+          "freshness",
+          "binary_path",
+          "domain_generation_id",
+          "grid_fingerprint",
+          "region_legend_fingerprint",
+          "origin_m",
+          "counts",
+          "cell_m",
+          "cell_count",
+          "object_ids",
+          "region_legend",
+          "encoding"
+        ],
+        "type": "object"
+      },
       "FdmRegionLegendEntryResource": {
         "description": "Thin descriptor for realized FDM cell membership. The mask itself is kept\non the binary data plane under the companion FMRM resource.",
         "properties": {
@@ -29575,6 +29674,43 @@
           },
           "416": {
             "description": "Requested FMRM byte range is not satisfiable"
+          }
+        },
+        "tags": [
+          "data"
+        ]
+      }
+    },
+    "/v2/sessions/current/data/domain/fdm-multilayer-layers/{layer_id}/region-memberships": {
+      "get": {
+        "operationId": "data_get_sessions_current_data_domain_fdm_multilayer_layers_layer_id_region_memberships",
+        "parameters": [
+          {
+            "description": "Stable native multilayer layer identity",
+            "in": "path",
+            "name": "layer_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FdmNativeLayerRegionMembershipResource"
+                }
+              }
+            },
+            "description": "Thin descriptor and complete layer-local legend for native FMRM membership"
+          },
+          "404": {
+            "description": "Layer or native membership was not materialized"
+          },
+          "409": {
+            "description": "Declared native membership is stale, missing, corrupt, or disagrees with its layer layout"
           }
         },
         "tags": [

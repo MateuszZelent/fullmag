@@ -788,6 +788,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v2/sessions/current/data/domain/fdm-multilayer-layers/{layer_id}/region-memberships": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["data_get_sessions_current_data_domain_fdm_multilayer_layers_layer_id_region_memberships"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v2/sessions/current/data/domain/fdm-multilayer-layout": {
         parameters: {
             query?: never;
@@ -4307,6 +4323,31 @@ export interface components {
             schema_version: string;
             strategy?: string | null;
             unavailable_reason?: string | null;
+        };
+        /**
+         * @description Thin control-plane descriptor for one native multilayer FDM membership.
+         *     The cell-aligned IDs remain on the companion FMRM binary resource.
+         */
+        FdmNativeLayerRegionMembershipResource: {
+            binary_path: string;
+            /** Format: int64 */
+            cell_count: number;
+            cell_m: number[];
+            counts: number[];
+            domain_generation_id: string;
+            encoding: string;
+            freshness: string;
+            grid_fingerprint: string;
+            layer_id: string;
+            magnet_name: string;
+            object_id: string;
+            object_ids: string[];
+            origin_m: number[];
+            region_legend: components["schemas"]["FdmRegionLegendEntryResource"][];
+            region_legend_fingerprint: string;
+            /** Format: int64 */
+            region_membership_revision: number;
+            schema_version: string;
         };
         /**
          * @description Thin descriptor for realized FDM cell membership. The mask itself is kept
@@ -11712,6 +11753,43 @@ export interface operations {
             };
             /** @description Requested FMRM byte range is not satisfiable */
             416: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    data_get_sessions_current_data_domain_fdm_multilayer_layers_layer_id_region_memberships: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Stable native multilayer layer identity */
+                layer_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Thin descriptor and complete layer-local legend for native FMRM membership */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FdmNativeLayerRegionMembershipResource"];
+                };
+            };
+            /** @description Layer or native membership was not materialized */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Declared native membership is stale, missing, corrupt, or disagrees with its layer layout */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };

@@ -34,6 +34,8 @@ export type CurrentRunResource = components["schemas"]["CurrentRunResource"];
 export type DomainMetaResource = components["schemas"]["DomainMeta"];
 export type FdmMultilayerLayoutResource =
   components["schemas"]["FdmMultilayerLayoutResource"];
+export type FdmNativeLayerRegionMembershipResource =
+  components["schemas"]["FdmNativeLayerRegionMembershipResource"];
 export type EngineLogResource = components["schemas"]["EngineLogResource"];
 export type FieldCatalogResource = components["schemas"]["FieldCatalog"];
 export type FieldMetaResource = components["schemas"]["FieldMeta"];

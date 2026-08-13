@@ -510,6 +510,10 @@ pub fn build_v2_router() -> Router<Arc<AppState>> {
             get(handlers::data::get_fdm_multilayer_layer_region_membership),
         )
         .route(
+            "/v2/sessions/current/data/domain/fdm-multilayer-layers/:layer_id/region-memberships",
+            get(handlers::data::get_fdm_multilayer_layer_region_memberships),
+        )
+        .route(
             "/v2/sessions/current/data/domain/topology",
             get(handlers::data::get_domain_topology),
         )
