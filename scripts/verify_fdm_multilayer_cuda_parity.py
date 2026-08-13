@@ -84,6 +84,30 @@ def validate_d07_stage(provenance: dict, reason_prefix: str) -> dict:
     return stage
 
 
+def validate_transfer_telemetry(provenance: dict) -> dict:
+    telemetry = provenance.get("fdm_multilayer_transfer_telemetry")
+    code = "cuda_transfer_telemetry_not_qualified"
+    if not isinstance(telemetry, dict):
+        raise ValueError(code)
+    expected = {
+        "execution_shape": "cuda_native_multilayer_demag_v2",
+        "data_residency": "device_resident_per_refresh",
+    }
+    for key, value in expected.items():
+        if telemetry.get(key) != value:
+            raise ValueError(f"{code}:{key}")
+    for key in (
+        "h2d_transfer_count",
+        "d2h_transfer_count",
+        "h2d_bytes",
+        "d2h_bytes",
+    ):
+        value = telemetry.get(key)
+        if isinstance(value, bool) or not isinstance(value, int) or value != 0:
+            raise ValueError(f"{code}:{key}")
+    return telemetry
+
+
 def verify(cpu: Path, cuda: Path, thresholds: Path, lane: str) -> dict:
     reference_metadata = read_json(cpu / "metadata.json")
     candidate_metadata = read_json(cuda / "metadata.json")
@@ -135,6 +159,7 @@ def verify(cpu: Path, cuda: Path, thresholds: Path, lane: str) -> dict:
         raise ValueError("cuda_fallback_not_proven_absent")
     if provenance.get("fft_backend") != "cuFFT" or not provenance.get("device_name"):
         raise ValueError("CUDA device/cuFFT provenance is incomplete")
+    transfer_telemetry = validate_transfer_telemetry(provenance)
 
     limits = read_json(thresholds)
     max_reference = max(max(abs(value) for value in cpu_values), 1.0)
@@ -163,12 +188,10 @@ def verify(cpu: Path, cuda: Path, thresholds: Path, lane: str) -> dict:
         "schema_version": "fdm_multilayer_cuda_parity.v1",
         "status": "qualified",
         "lane": lane,
-        # The surrounding staged solver remains host-authoritative.  The
-        # D-07 stage telemetry is the narrower proof for device residency of
-        # the multilayer demag refresh itself.
-        "overall_execution_residency": "host_authoritative",
+        "overall_execution_residency": "device_resident_per_refresh",
         "precision_contract": precision_contract,
         "d07_stage": stage,
+        "transfer_telemetry": transfer_telemetry,
         "parity": metric,
     }
 
