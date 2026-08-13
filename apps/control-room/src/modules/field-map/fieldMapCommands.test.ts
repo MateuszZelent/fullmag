@@ -151,6 +151,25 @@ describe("field-map commands", () => {
     expect(command?.disabledReason?.(context)).toBe("FDM target membership is not materialized.");
   });
 
+  it("fails closed rather than substituting slice state when clip creation is requested while clipping is off", () => {
+    const command = fieldMapCommands.find((entry) => entry.id === "planar-monitor.create");
+    const context = {
+      api: {} as never,
+      input: { intent: { source: "clip" } },
+      resourceData: {
+        [VISUALIZATION_STATE_PATH]: {
+          clip: { axis: "x", enabled: false, flipped: true, position_percent: 25 },
+          slice: { axis: "z", position_percent: 75 },
+        },
+      },
+      source: "ribbon" as const,
+    };
+    expect(command?.isEnabled?.(context)).toBe(false);
+    expect(command?.disabledReason?.(context)).toBe(
+      "Enable the clip plane before creating a planar monitor from it.",
+    );
+  });
+
   it("loads the resolved monitor frame before opening its outline in 3D", async () => {
     const setActiveViewportMainModule = vi.fn();
     const setFocusedSlot = vi.fn();
