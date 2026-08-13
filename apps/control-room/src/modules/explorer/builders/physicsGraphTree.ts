@@ -499,12 +499,12 @@ function statusForActivation(
 
 function labelForKind(kind: string): string {
   const labels: Record<string, string> = {
-    current_transport: "Current Transport",
+    current_transport: "Charge transport",
     oersted_field: "Oersted Field",
     regional_field_drive: "Field Drive",
-    spin_interface: "Spin Interface",
-    spin_torque: "Spin Torque",
-    spin_transport: "Spin Transport",
+    spin_interface: "HM/FM interface",
+    spin_torque: "Transport torque",
+    spin_transport: "Spin transport",
   };
   return labels[kind] ?? kind.replaceAll("_", " ");
 }

@@ -64,6 +64,71 @@ function flatten(nodes: readonly ExplorerNode[]): ExplorerNode[] {
 }
 
 describe("buildPhysicsGraphTree", () => {
+  it("keeps the zero-current racetrack transport graph object-scoped with semantic labels", () => {
+    const nodes = flatten(buildPhysicsGraphTree({
+      graph: {
+        schema_version: "physics_graph.v1",
+        modules: [
+          {
+            activation: "inactive",
+            applies_to: [{ kind: "object", object_id: "racetrack" }],
+            capability: "semantic_only",
+            id: "charge:racetrack",
+            kind: "current_transport",
+          },
+          {
+            activation: "inactive",
+            applies_to: [{ kind: "object", object_id: "racetrack" }],
+            capability: "semantic_only",
+            depends_on: ["charge:racetrack"],
+            id: "spin:racetrack",
+            kind: "spin_transport",
+          },
+          {
+            activation: "inactive",
+            applies_to: [{ kind: "cross_object", object_ids: ["heavy-metal", "racetrack"] }],
+            capability: "semantic_only",
+            depends_on: ["spin:racetrack"],
+            id: "interface:hm-fm",
+            kind: "spin_interface",
+          },
+          {
+            activation: "inactive",
+            applies_to: [{ kind: "object", object_id: "racetrack" }],
+            capability: "semantic_only",
+            depends_on: ["spin:racetrack"],
+            id: "torque:racetrack",
+            kind: "spin_torque",
+          },
+        ],
+        edges: [],
+      },
+      objects: [
+        { id: "heavy-metal", label: "Heavy metal" },
+        { id: "racetrack", label: "Racetrack" },
+      ],
+    }));
+
+    expect(nodes.filter((node) => node.kind === "physics.scope.global")).toHaveLength(0);
+    expect(nodes.find((node) => node.physicsModuleId === "charge:racetrack")).toMatchObject({
+      label: "Charge transport · charge:racetrack",
+      parentId: "model:object:racetrack:physics",
+      status: "degraded",
+    });
+    expect(nodes.find((node) => node.physicsModuleId === "spin:racetrack")).toMatchObject({
+      label: "Spin transport · spin:racetrack",
+      parentId: "model:object:racetrack:physics",
+    });
+    expect(nodes.find((node) => node.physicsModuleId === "interface:hm-fm")).toMatchObject({
+      label: "HM/FM interface · interface:hm-fm",
+      parentId: "model:physics:cross-object",
+    });
+    expect(nodes.find((node) => node.physicsModuleId === "torque:racetrack")).toMatchObject({
+      label: "Transport torque · torque:racetrack",
+      parentId: "model:object:racetrack:physics",
+    });
+  });
+
   it("places object-local, global and cross-object modules under stable scope branches", () => {
     const nodes = flatten(
       buildPhysicsGraphTree({

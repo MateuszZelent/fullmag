@@ -797,7 +797,7 @@ const INSPECTOR_ROUTE_CONTRIBUTIONS: InspectorPanelContribution[] = [
   },
   {
     id: "physics-current-transport",
-    title: "Current Transport",
+    title: "Charge transport",
     selectionKinds: ["physics.current-transport"],
     component: CurrentTransportInspectorPanel,
   },
@@ -815,19 +815,19 @@ const INSPECTOR_ROUTE_CONTRIBUTIONS: InspectorPanelContribution[] = [
   },
   {
     id: "physics-spin-transport",
-    title: "Spin Transport",
+    title: "Spin transport",
     selectionKinds: ["physics.spin-transport"],
     component: SpinTransportInspectorPanel,
   },
   {
     id: "physics-spin-interface",
-    title: "Spin Interface",
+    title: "HM/FM interface",
     selectionKinds: ["physics.spin-interface"],
     component: SpinInterfaceInspectorPanel,
   },
   {
     id: "physics-spin-torque",
-    title: "Spin Torque",
+    title: "Transport torque",
     selectionKinds: ["physics.spin-torque"],
     component: SpinTorqueInspectorPanel,
   },
