@@ -78,7 +78,11 @@ def validate_d07_stage(provenance: dict, reason_prefix: str) -> dict:
         "pair_accumulation_count": 9,
     }
     for key, value in expected.items():
-        if stage.get(key) != value:
+        actual = stage.get(key)
+        if (
+            isinstance(value, int)
+            and (isinstance(actual, bool) or not isinstance(actual, int))
+        ) or actual != value:
             code = f"d07_telemetry_not_qualified:{key}"
             raise ValueError(f"{reason_prefix}_{code}" if reason_prefix else code)
     return stage

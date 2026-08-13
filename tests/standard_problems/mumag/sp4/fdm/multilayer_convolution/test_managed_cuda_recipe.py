@@ -64,6 +64,17 @@ def cuda_identity() -> dict[str, object]:
     }
 
 
+def transfer_telemetry() -> dict[str, object]:
+    return {
+        "execution_shape": "cuda_native_multilayer_demag_v2",
+        "data_residency": "device_resident_per_refresh",
+        "h2d_transfer_count": 0,
+        "d2h_transfer_count": 0,
+        "h2d_bytes": 0,
+        "d2h_bytes": 0,
+    }
+
+
 def native_candidate_provenance(precision: str) -> dict[str, object]:
     return {
         "precision": precision,
@@ -83,6 +94,7 @@ def native_candidate_provenance(precision: str) -> dict[str, object]:
             "inverse_fft_count": 3,
             "pair_accumulation_count": 9,
         },
+        "fdm_multilayer_transfer_telemetry": transfer_telemetry(),
     }
 
 

@@ -216,6 +216,24 @@ def test_rejects_missing_malformed_or_nonzero_transfer_telemetry(
             "d07_telemetry_not_qualified:forward_fft_count",
         ),
         (
+            lambda provenance: provenance["fdm_multilayer_stage_telemetry"].update(
+                {"forward_fft_count": 3.0}
+            ),
+            "d07_telemetry_not_qualified:forward_fft_count",
+        ),
+        (
+            lambda provenance: provenance["fdm_multilayer_stage_telemetry"].update(
+                {"refresh_count": True}
+            ),
+            "d07_telemetry_not_qualified:refresh_count",
+        ),
+        (
+            lambda provenance: provenance["fdm_multilayer_stage_telemetry"].update(
+                {"pair_accumulation_count": "9"}
+            ),
+            "d07_telemetry_not_qualified:pair_accumulation_count",
+        ),
+        (
             lambda provenance: provenance.update({"precision": "single"}),
             "cuda_fp64_candidate_precision_not_double",
         ),
