@@ -3,7 +3,6 @@ import { useMemo } from "react";
 import type { KernelApi } from "@/kernel/types";
 import type { AnalysisChartCursorPoint } from "@/shared/domain/analysis/chartCursorPoint";
 import { descriptorForFrequencyTable } from "@/shared/domain/analysis/analysisSurfaceDescriptor";
-import type { ChartDataPresentationState } from "@/shared/analysis-charts/chartPresentationState";
 import { ChartLegend, chartColorNameForIndex } from "@/shared/analysis-charts/ChartLegend";
 import { sanitizeSelectedSeriesIds } from "@/shared/analysis-charts/chartSeriesSelection";
 import { ChartSection } from "@/shared/analysis-charts/ChartSection";
@@ -24,10 +23,17 @@ import {
 } from "../analysisWorkbenchModel";
 import { frequencyDomainXAxisLabel } from "../frequencyDomainSeriesAdapter";
 import { EChartsSurface } from "./EChartsSurface";
+import {
+  frequencyDomainResultTitle,
+  type FrequencyDomainChartRoute,
+  type FrequencyDomainResultContext,
+} from "@/shared/domain/analysis/frequencyDomainChartModels";
+import type { AnalysisFrequencyPresentationState } from "../hooks/useAnalysisFrequencyData";
 
 export function AnalysisFrequencySurface({
   chartId,
   calculationMode,
+  context,
   displayUnits,
   descriptorId,
   kernel,
@@ -46,6 +52,7 @@ export function AnalysisFrequencySurface({
 }: {
   chartId?: string;
   calculationMode?: string;
+  context?: FrequencyDomainResultContext;
   displayUnits?: Readonly<Record<string, string>>;
   descriptorId?: string;
   kernel: KernelApi;
@@ -53,7 +60,7 @@ export function AnalysisFrequencySurface({
   onRangeChange?: (range: ChartValueRange) => void;
   onDisplayUnitsChange?: (patch: Record<string, string>) => void;
   onSelectedSeriesIdsChange: (selectedSeriesIds: string[]) => void;
-  presentation?: ChartDataPresentationState;
+  presentation?: AnalysisFrequencyPresentationState;
   selectedSeriesIds: readonly string[];
   selectedPoint: AnalysisChartCursorPoint | null;
   series: readonly ChartSeries[];
@@ -62,23 +69,40 @@ export function AnalysisFrequencySurface({
   title: string;
   unavailableReason: string | null;
 }) {
+  const physicalContext = context ?? presentation?.physicalContext;
+  const qualifiedCalculationMode = physicalContext?.classification?.fmrQualified
+    ? calculationMode
+    : calculationMode === "fmr_modal"
+      ? "free_modes"
+      : calculationMode === "fmr_response"
+        ? "frequency_response"
+        : calculationMode;
   const descriptor = useMemo(
     () => descriptorForFrequencyTable(series[0]?.source.tableId ?? "frequency-domain"),
     [series],
   );
-  const surfaceTitle = title || descriptor.title;
   const tableId = series[0]?.source.tableId ?? "frequency-domain";
+  const titleChart = frequencyTitleChart(tableId, calculationMode);
+  const surfaceTitle = titleChart
+    ? frequencyDomainResultTitle(titleChart, physicalContext?.classification ?? null)
+    : title || descriptor.title;
   const workflow = useMemo(
-    () => buildFrequencyDomainWorkflowSummary(tableId, calculationMode),
-    [calculationMode, tableId],
+    () => buildFrequencyDomainWorkflowSummary(tableId, qualifiedCalculationMode),
+    [qualifiedCalculationMode, tableId],
   );
   const workbench = useMemo(
-    () => buildFrequencyDomainWorkbenchSummary(series, calculationMode, status),
-    [calculationMode, series, status],
+    () => buildFrequencyDomainWorkbenchSummary(series, qualifiedCalculationMode, status),
+    [qualifiedCalculationMode, series, status],
   );
   const selectedPointSummary = useMemo(
-    () => buildFrequencyDomainCursorSummary(selectedPoint, calculationMode, series),
-    [calculationMode, selectedPoint, series],
+    () => buildFrequencyDomainCursorSummary(selectedPoint, qualifiedCalculationMode, series),
+    [qualifiedCalculationMode, selectedPoint, series],
+  );
+  const physicalMetadata = frequencyPhysicalMetadata(
+    physicalContext,
+    descriptor,
+    displayUnits ?? {},
+    series,
   );
 
   if (series.length === 0) {
@@ -87,6 +111,7 @@ export function AnalysisFrequencySurface({
         title={surfaceTitle}
         status={{ presentation, primary: status, trust: "unknown" }}
       >
+        {physicalMetadata}
         <div className="fm-analysis-plots__empty" role="status">
           {unavailableReason ?? formatFrequencyDomainEmptyState(status)}
         </div>
@@ -167,7 +192,7 @@ export function AnalysisFrequencySurface({
     </div>
   ) : undefined;
 
-  // Workflow summary (visible for FMR modal / FMR driven titles only)
+  // Workflow summary uses qualified physical evidence for any FMR wording.
   const workflowToolbar = workflow ? (
     <div
       aria-label="Frequency-domain workflow"
@@ -193,14 +218,15 @@ export function AnalysisFrequencySurface({
         presentation,
         primary: status === "ready" ? "Ready" : status,
         revision: series[0]?.dataRevision ?? null,
-        // The current frequency-domain resources do not carry qualification.
+        // Trust remains unknown until a dedicated validation resource is published.
         trust: "unknown",
         pointSummary: formatSeriesCount(series.length),
       }}
       subtitle={workbenchSubtitle}
-      title={title}
+      title={surfaceTitle}
       toolbar={toolbar}
     >
+      {physicalMetadata}
       {/* Workbench summary row (mirrors old Frequency-domain workbench pill row) */}
       <div
         data-analysis-handoff={descriptor.handoff}
@@ -239,4 +265,68 @@ export function AnalysisFrequencySurface({
       </div>
     </ChartSection>
   );
+}
+
+function frequencyTitleChart(
+  tableId: string,
+  calculationMode: string | undefined,
+): FrequencyDomainChartRoute["primaryChart"] | null {
+  if (tableId === "frequency-domain:eigen-dispersion") return "dispersion";
+  if (tableId === "frequency-domain:eigen-spectrum") return "modal-spectrum";
+  if (tableId === "frequency-domain:response-sweep") return "response-sweep";
+  if (calculationMode === "dispersion_modal") return "dispersion";
+  if (calculationMode === "response_map") return "response-map";
+  if (calculationMode === "fmr_response" || calculationMode === "frequency_response") {
+    return "response-sweep";
+  }
+  if (calculationMode === "fmr_modal" || calculationMode === "free_modes") {
+    return "modal-spectrum";
+  }
+  return null;
+}
+
+function frequencyPhysicalMetadata(
+  context: FrequencyDomainResultContext | undefined,
+  descriptor: ReturnType<typeof descriptorForFrequencyTable>,
+  displayUnits: Readonly<Record<string, string>>,
+  series: readonly ChartSeries[],
+) {
+  if (!context) return null;
+  const first = series[0];
+  const observable = context.observables.length
+    ? context.observables.map((entry) => `${entry.identity} (${entry.kind}, ${entry.unit})`).join(", ")
+    : "unavailable";
+  const yQuantities = series.length
+    ? series.map((entry) => `${entry.quantity} [${entry.unit || "1"}]`).join(", ")
+    : "unavailable";
+  const display = Object.entries(displayUnits).length
+    ? Object.entries(displayUnits).map(([quantity, unit]) => `${quantity} [${unit}]`).join(", ")
+    : "automatic SI scaling";
+  return (
+    <div aria-label="Frequency-domain physical context" className="fm-analysis-plots__physical-context">
+      <span>Run: {context.runId ?? "unavailable"}</span>
+      <span>Stage: {context.stageId ?? "unavailable"}</span>
+      <span>Equilibrium: {context.equilibriumId ?? "unavailable"}</span>
+      <span>Geometry: {context.geometryId ?? "unavailable"}</span>
+      <span>Mesh: {context.meshId ?? "unavailable"}</span>
+      <span>Boundary: {context.boundaryContext ?? "unavailable"}</span>
+      <span>k: {frequencyKContextLabel(context)}</span>
+      <span>Observable: {observable}</span>
+      <span>SI axes: {descriptor.xAxis.label} [{descriptor.xAxis.unit}] → {yQuantities}</span>
+      <span>Display units: {descriptor.xAxis.label} [{first?.xUnit ?? descriptor.xAxis.unit}]; {display}</span>
+      {context.contractGaps.length > 0
+        ? <span>Contract gap: {context.contractGaps.join("; ")}</span>
+        : null}
+    </div>
+  );
+}
+
+function frequencyKContextLabel(context: FrequencyDomainResultContext): string {
+  if (context.classification) return context.classification.kContext.label;
+  if (context.boundaryContext === "finite_open") return "Finite system · k n/a";
+  const sampling = context.kSampling;
+  if (!sampling) return "unavailable";
+  if (sampling.kind === "single") return `k = [${sampling.vectorRadPerM.join(", ")}] rad/m`;
+  if (sampling.kind === "path") return sampling.label ? `k path ${sampling.label}` : "k path";
+  return "k grid";
 }

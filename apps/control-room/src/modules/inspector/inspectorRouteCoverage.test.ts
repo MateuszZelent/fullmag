@@ -1,3 +1,5 @@
+import { existsSync, readFileSync } from "node:fs";
+
 import { describe, expect, it } from "vitest";
 
 import type {
@@ -26,11 +28,12 @@ import {
   flattenExplorerNodes,
 } from "../explorer/builders/buildModelTree";
 import { modelTreeSnapshotFromScene } from "../explorer/builders/sceneModelTreeAdapter";
+import { runtimeExplorerSnapshotFromResources } from "../explorer/builders/runtimeExplorerSnapshot";
 import { resolveInspectorDescriptor } from "./inspectorDescriptor";
 import { resolveInspectorPanel } from "./inspectorRegistry";
 import { resolveInspectorRoute } from "./inspectorRouteCatalog";
 
-const frequencyDomainResponseProgress: FrequencyDomainSweepProgressResource = {
+const canonicalResponseProgress: FrequencyDomainSweepProgressResource = {
   complete: false,
   completed_frequency_points: 3,
   current_frequency_hz: 10.5e9,
@@ -49,8 +52,8 @@ const frequencyDomainResponseProgress: FrequencyDomainSweepProgressResource = {
   written_frequency_point_artifacts: 3,
 };
 
-const frequencyDomainCancelRequested: FrequencyDomainSweepProgressResource = {
-  ...frequencyDomainResponseProgress,
+const canonicalCancelRequested: FrequencyDomainSweepProgressResource = {
+  ...canonicalResponseProgress,
   completed_frequency_points: 4,
   current_frequency_hz: 10.0e9,
   latest_artifact_manifest_path: "frequency_domain/manifest.cancelled.v1.json",
@@ -98,8 +101,8 @@ const frequencyDomainManifest = {
     status: "ok",
     study_kind: "frequency_response",
   },
-  response_cancel_requested: frequencyDomainCancelRequested,
-  response_progress: frequencyDomainResponseProgress,
+  response_cancel_requested: canonicalCancelRequested,
+  response_progress: canonicalResponseProgress,
   result_manifest: {
     artifact_path: "frequency_domain/manifest.v1.json",
     missing_reason: null,
@@ -350,10 +353,8 @@ const modelSnapshot = (() => {
 const resources = {
   currentRun: { revision: 1, run_id: "run-fixture" } as never,
   frequencyDomainBranches,
-  frequencyDomainCancelRequested,
   frequencyDomainDispersion,
   frequencyDomainManifest,
-  frequencyDomainResponseProgress,
   frequencyDomainResponseSweep,
   frequencyDomainSpectrum,
 };
@@ -366,17 +367,143 @@ const tabIds = [
   "diagnostics",
 ] as const;
 
+const unavailable = {
+  data: null,
+  error: null,
+  missing: false,
+  revision: null,
+  status: "ready" as const,
+};
+
+const runtime = runtimeExplorerSnapshotFromResources({
+  artifacts: { ...unavailable, data: [], revision: "artifacts:empty" },
+  commandDetails: {
+    ...unavailable,
+    data: [{
+      commandId: "command-fixture",
+      data: {
+        command_id: "command-fixture",
+        created_at_unix_ms: 1,
+        kind: "run",
+        run_id: "run-fixture",
+        seq: 1,
+        status: "running",
+      },
+      error: null,
+      missing: false,
+      revision: 1,
+      status: "ready",
+    }],
+    revision: "command:1",
+  },
+  commandQueue: {
+    ...unavailable,
+    data: {
+      accepted_count: 1,
+      can_accept_commands: true,
+      commands: [{
+        command_id: "command-fixture",
+        created_at_unix_ms: 1,
+        kind: "run",
+        seq: 1,
+        status: "running",
+      }],
+      completed_count: 0,
+      dispatched_count: 1,
+      failed_count: 0,
+      pending_count: 0,
+      rejected_count: 0,
+      revision: 1,
+      running_count: 1,
+      runtime_controls: [],
+    },
+    revision: 1,
+  },
+  currentRun: {
+    ...unavailable,
+    data: {
+      artifact_dir: "/runs/run-fixture",
+      requested_backend: "fdm",
+      requested_device: "gpu",
+      requested_mode: "gpu",
+      requested_precision: "double",
+      revision: 1,
+      run_id: "run-fixture",
+      session_id: "session-fixture",
+      started_at: "2026-08-12T00:00:00Z",
+      status: "running",
+      total_steps: 1,
+    },
+    revision: 1,
+  },
+  fieldCatalog: {
+    ...unavailable,
+    data: { domain_generation_id: "generation-1", quantities: [], revision: 1 },
+    revision: 1,
+  },
+  frequencyDomainManifest: { ...unavailable, data: frequencyDomainManifest, revision: 1 },
+  geometryValidation: unavailable,
+  meshManifest: unavailable,
+  platformCapabilities: unavailable,
+  platformHealth: unavailable,
+  sessionStatus: unavailable,
+  solverProfile: unavailable,
+  solverStatus: unavailable,
+  stageExecution: {
+    ...unavailable,
+    data: {
+      completed_stage_indexes: [],
+      revision: 1,
+      runtime_state: "running",
+      stage_statuses: ["running"],
+      stages: [{
+        command_id: "command-fixture",
+        converged: false,
+        index: 0,
+        stage_id: "stage-fixture",
+        status: "running",
+      }],
+      total_stages: 1,
+    },
+    revision: 1,
+  },
+  tableCatalog: {
+    ...unavailable,
+    data: { revision: 1, tables: [] },
+    revision: 1,
+  },
+});
+
 function nodesForTab(tabId: (typeof tabIds)[number]) {
-  const resourceTree = buildExplorerTree(tabId, resources);
-  // buildExplorerTree currently has no snapshot parameter; preserve its public
-  // resource contract for every tab and inject the complete model fixture at
-  // the existing buildModelTree seam for the model tab.
+  const resourceTree = buildExplorerTree(
+    tabId,
+    tabId === "results"
+      ? {
+          ...resources,
+          artifacts: runtime.source.artifacts,
+          tableCatalog: runtime.source.tableCatalog,
+        }
+      : resources,
+    runtime,
+  );
   return tabId === "model"
     ? flattenExplorerNodes(buildModelTree(modelSnapshot, resources))
     : flattenExplorerNodes(resourceTree);
 }
 
 describe("inspector route coverage", () => {
+  it("routes every runtime Explorer leaf to dedicated Inspector content", () => {
+    const kinds = [...new Set(
+      (["resources", "jobs", "diagnostics"] as const)
+        .flatMap((tabId) => nodesForTab(tabId))
+        .filter((node) => node.selectable !== false)
+        .map((node) => node.kind),
+    )];
+    const routes = kinds.map((kind) => resolveInspectorRoute(kind));
+
+    expect(routes.every(Boolean)).toBe(true);
+    expect(new Set(routes.map((route) => route?.component)).size).toBe(kinds.length);
+  });
   it("covers the complete model and conditional resource trees before routing every selectable node", () => {
     const nodesByTab = new Map(tabIds.map((tabId) => [tabId, nodesForTab(tabId)]));
     const kindsByTab = (tabId: (typeof tabIds)[number]) =>
@@ -396,43 +523,39 @@ describe("inspector route coverage", () => {
         "study.stage.run",
       ]),
     );
-    expect(kindsByTab("resources")).toEqual(
-      expect.arrayContaining([
-        "resources.analysis.frequency_domain",
-        "resources.analysis.eigen.spectrum",
-        "resources.analysis.frequency_response.sweep",
-        "resources.analysis.frequency_response.field",
-      ]),
-    );
+    expect(kindsByTab("resources")).toEqual(expect.arrayContaining([
+      "resources.root",
+      "resources.runtime",
+    ]));
     expect(kindsByTab("results")).toEqual(
       expect.arrayContaining([
         "results.resonance.root",
         "results.resonance.modal.stage",
         "results.resonance.modal.spectrum",
         "results.resonance.modal.modes",
+        "results.resonance.modal.mode",
         "results.analysis_views.root",
         "results.derived_values.root",
         "results.tables.root",
         "results.exports.root",
       ]),
     );
-    expect(kindsByTab("jobs")).toEqual(
-      expect.arrayContaining([
-        "jobs.frequency_domain.root",
-        "jobs.frequency_domain.stage_run",
-        "jobs.frequency_domain.eigen_sample",
-        "jobs.frequency_domain.response_progress",
-        "jobs.frequency_domain.artifact_export",
-      ]),
-    );
-    expect(kindsByTab("diagnostics")).toEqual(
-      expect.arrayContaining([
-        "diagnostics.frequency_domain.root",
-        "diagnostics.frequency_domain.capabilities",
-        "diagnostics.frequency_domain.operator",
-        "diagnostics.frequency_domain.periodic_floquet",
-      ]),
-    );
+    expect(kindsByTab("jobs")).toEqual(expect.arrayContaining([
+      "jobs.root",
+      "jobs.run",
+      "jobs.stage",
+      "jobs.command",
+    ]));
+    expect(kindsByTab("diagnostics")).toEqual(expect.arrayContaining([
+      "diagnostics.root",
+      "diagnostics.problem",
+      "diagnostics.health",
+      "diagnostics.capability",
+      "diagnostics.solver",
+      "diagnostics.mesh",
+      "diagnostics.frequency-domain",
+      "diagnostics.performance",
+    ]));
 
     const selectableNodes = tabIds.flatMap((tabId) =>
       nodesByTab.get(tabId)?.filter((node) => node.selectable !== false) ?? [],
@@ -461,6 +584,75 @@ describe("inspector route coverage", () => {
       });
       expect(descriptor.ownerId, `missing owner for ${node.id}`).toBe(route?.id);
       expect(descriptor.icon, `missing icon for ${node.id}`).toBeTruthy();
+    }
+  });
+
+  it("removes the orphan frequency resource, job, and diagnostic vocabulary atomically", () => {
+    const explorerTypes = readFileSync(
+      new URL("../explorer/explorerTypes.ts", import.meta.url),
+      "utf8",
+    );
+    const routes = readFileSync(
+      new URL("./inspectorRouteCatalog.tsx", import.meta.url),
+      "utf8",
+    );
+    const explorer = readFileSync(
+      new URL("../explorer/ExplorerModule.tsx", import.meta.url),
+      "utf8",
+    );
+    const explorerNodeContract = readFileSync(
+      new URL("../explorer/builders/explorerNodeContract.ts", import.meta.url),
+      "utf8",
+    );
+    const frequencyDomainNodeDetails = readFileSync(
+      new URL("./panels/frequencyDomainNodeDetails.ts", import.meta.url),
+      "utf8",
+    );
+    const frequencyDomainHelpers = readFileSync(
+      new URL("./panels/frequency-domain/FrequencyDomainHelpers.ts", import.meta.url),
+      "utf8",
+    );
+    const frequencyDomainInspectorModel = readFileSync(
+      new URL("./panels/frequencyDomainInspectorModel.ts", import.meta.url),
+      "utf8",
+    );
+    const analysisOverlayCommands = readFileSync(
+      new URL("../../kernel/visualization/analysisFieldOverlayCommandContributions.ts", import.meta.url),
+      "utf8",
+    );
+    const pbcInspectorModel = readFileSync(
+      new URL("./panels/pbcInspectorModel.ts", import.meta.url),
+      "utf8",
+    );
+
+    for (const legacyPrefix of [
+      "resources.analysis.frequency_domain",
+      "resources.analysis.eigen",
+      "resources.analysis.frequency_response",
+      "jobs.frequency_domain",
+      "diagnostics.frequency_domain.",
+    ]) {
+      expect(explorerTypes).not.toContain(legacyPrefix);
+      expect(routes).not.toContain(legacyPrefix);
+      expect(explorerNodeContract).not.toContain(legacyPrefix);
+      expect(frequencyDomainNodeDetails).not.toContain(legacyPrefix);
+      expect(frequencyDomainHelpers).not.toContain(legacyPrefix);
+      expect(frequencyDomainInspectorModel).not.toContain(legacyPrefix);
+      expect(analysisOverlayCommands).not.toContain(legacyPrefix);
+      expect(pbcInspectorModel).not.toContain(legacyPrefix);
+    }
+    expect(explorerNodeContract).not.toContain("frequencyDomainCancelRequested");
+    expect(explorerNodeContract).not.toContain("frequencyDomainResponseProgress");
+    expect(explorer).not.toContain("useFrequencyDomainResponseProgressResource");
+    expect(explorer).not.toContain("useFrequencyDomainResponseCancelRequestedResource");
+    for (const legacyFile of [
+      "../explorer/builders/frequencyDomainExplorerNodes.ts",
+      "./panels/FrequencyDomainInspectorPanel.tsx",
+      "./panels/FrequencyDomainInspectorPanel.test.tsx",
+      "./panels/FrequencyDomainEigenSection.tsx",
+      "./panels/FrequencyDomainResponseSection.tsx",
+    ]) {
+      expect(existsSync(new URL(legacyFile, import.meta.url))).toBe(false);
     }
   });
 });

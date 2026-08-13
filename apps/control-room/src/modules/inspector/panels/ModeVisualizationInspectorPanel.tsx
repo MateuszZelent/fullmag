@@ -1,14 +1,16 @@
 "use client";
 
-import { useEffect, useMemo, useRef } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import { createCommandContext } from "@/kernel/commands/commandContext";
-import type { FrequencyDomainFieldResource } from "@/kernel/api/apiTypes";
 import { useKernel } from "@/kernel/KernelContext";
 import type { SelectionRef } from "@/kernel/selection/selectionTypes";
 import type { KernelApi } from "@/kernel/types";
+import { useAnalysisFieldOverlay } from "@/kernel/visualization/AnalysisFieldOverlayController";
+import { Button } from "@/shared/ui/Button";
 
 import type { InspectorPanelProps } from "../inspectorTypes";
+import { FieldRow } from "../primitives/FieldRow";
 import { InspectorGroup } from "../primitives/InspectorGroup";
 import {
   VisualizationContextSwitch,
@@ -42,12 +44,234 @@ function modeVisualizationCommandId(
     : "analysis.frequency-response.plot-response-field-3d";
 }
 
-export function modeVisualizationPhaseCommandId(
+function modeVisualizationPhaseCommandId(
   target: Pick<ModeVisualizationSelectionRef, "source">,
 ): string {
   return target.source === "eigen-mode"
     ? "analysis.eigen.set-mode-3d-phase"
     : "analysis.frequency-domain.set-3d-phase";
+}
+
+const PHASE_MIN_RAD = 0;
+const PHASE_MAX_RAD = Math.PI * 2;
+
+function finiteNumber(value: unknown): number | null {
+  if (typeof value === "number") return Number.isFinite(value) ? value : null;
+  if (typeof value === "string" && value.trim().length > 0) {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+  return null;
+}
+
+function clampPhaseRad(value: number): number {
+  return Math.min(PHASE_MAX_RAD, Math.max(PHASE_MIN_RAD, value));
+}
+
+function normalizedPhaseValue(value: string): string | null {
+  const phaseRad = finiteNumber(value);
+  return phaseRad === null ? null : String(clampPhaseRad(phaseRad));
+}
+
+function isSetPhaseControl(target: EventTarget | null): boolean {
+  return (
+    typeof target === "object" &&
+    target !== null &&
+    "getAttribute" in target &&
+    typeof target.getAttribute === "function" &&
+    target.getAttribute("aria-label") === "Set mode visualization phase"
+  );
+}
+
+interface ModeVisualizationPhaseControlProps {
+  animate?: boolean;
+  animationDirection?: -1 | 1;
+  animationLoop?: boolean;
+  animationRateHz?: number;
+  disabled: boolean;
+  onSetPhase: (value: string) => void;
+  onAnimationChange?: (next: {
+    animatePhase: boolean;
+    animationRateHz: number;
+    direction: -1 | 1;
+    loop: boolean;
+  }) => void;
+  phaseRad: string;
+}
+
+export function ModeVisualizationPhaseControl({
+  animate = false,
+  animationDirection = 1,
+  animationLoop = true,
+  animationRateHz = 1,
+  disabled,
+  onSetPhase,
+  onAnimationChange,
+  phaseRad,
+}: ModeVisualizationPhaseControlProps) {
+  const [phaseDraft, setPhaseDraft] = useState(phaseRad);
+  const [isPhaseEditing, setIsPhaseEditing] = useState(false);
+  const committedPhaseValue =
+    normalizedPhaseValue(phaseRad) ?? String(PHASE_MIN_RAD);
+  const numericPhaseValue = isPhaseEditing ? phaseDraft : committedPhaseValue;
+  const commitPhase = (draft: string) => {
+    const normalized = normalizedPhaseValue(draft);
+    if (normalized !== null) onSetPhase(normalized);
+    setIsPhaseEditing(false);
+  };
+
+  return (
+    <div className="fm-mode-phase-control">
+      <FieldRow
+        label="Phase"
+        unit="rad"
+        value={
+          <div className="fm-mode-phase-control__value">
+            <input
+              aria-label="Mode visualization phase slider"
+              className="fm-mode-phase-control__slider"
+              disabled={disabled}
+              max={PHASE_MAX_RAD}
+              min={PHASE_MIN_RAD}
+              step="0.01"
+              type="range"
+              value={committedPhaseValue}
+              onChange={(event) => commitPhase(event.currentTarget.value)}
+            />
+            <input
+              aria-label="Mode visualization phase"
+              className="fm-inspector-input"
+              disabled={disabled}
+              inputMode="decimal"
+              max={PHASE_MAX_RAD}
+              min={PHASE_MIN_RAD}
+              step="any"
+              type="number"
+              value={numericPhaseValue}
+              onBlur={(event) => {
+                if (!isSetPhaseControl(event.relatedTarget)) {
+                  setPhaseDraft(committedPhaseValue);
+                }
+                setIsPhaseEditing(false);
+              }}
+              onChange={(event) => setPhaseDraft(event.currentTarget.value)}
+              onFocus={() => {
+                setPhaseDraft(phaseRad);
+                setIsPhaseEditing(true);
+              }}
+            />
+            <Button
+              aria-label="Set mode visualization phase"
+              disabled={disabled}
+              size="sm"
+              type="button"
+              onClick={() => commitPhase(phaseDraft)}
+            >
+              Set phase
+            </Button>
+          </div>
+        }
+      />
+      <div
+        aria-label="Mode phase animation"
+        className="fm-mode-phase-control__transport"
+        role="group"
+      >
+        <Button
+          aria-label={
+            animate ? "Pause mode phase animation" : "Play mode phase animation"
+          }
+          disabled={disabled}
+          size="sm"
+          type="button"
+          onClick={() =>
+            onAnimationChange?.({
+              animatePhase: !animate,
+              animationRateHz,
+              direction: animationDirection,
+              loop: animationLoop,
+            })
+          }
+        >
+          {animate ? "Pause" : "Play"}
+        </Button>
+        <select
+          aria-label="Mode phase animation speed"
+          className="fm-inspector-select"
+          disabled={disabled}
+          value={String(animationRateHz)}
+          onChange={(event) =>
+            onAnimationChange?.({
+              animatePhase: animate,
+              animationRateHz: Number(event.currentTarget.value),
+              direction: animationDirection,
+              loop: animationLoop,
+            })
+          }
+        >
+          <option value="0.1">0.1 Hz</option>
+          <option value="0.25">0.25 Hz</option>
+          <option value="0.5">0.5 Hz</option>
+          <option value="1">1 Hz</option>
+          <option value="2">2 Hz</option>
+        </select>
+        <Button
+          aria-label={
+            animationDirection === 1
+              ? "Reverse mode phase animation"
+              : "Set mode phase animation forward"
+          }
+          aria-pressed={animationDirection === -1}
+          disabled={disabled}
+          size="sm"
+          type="button"
+          variant="secondary"
+          onClick={() =>
+            onAnimationChange?.({
+              animatePhase: animate,
+              animationRateHz,
+              direction: animationDirection === 1 ? -1 : 1,
+              loop: animationLoop,
+            })
+          }
+        >
+          {animationDirection === 1 ? "Forward" : "Reverse"}
+        </Button>
+        <Button
+          aria-label="Loop mode phase animation"
+          aria-pressed={animationLoop}
+          disabled={disabled}
+          size="sm"
+          type="button"
+          variant={animationLoop ? "primary" : "secondary"}
+          onClick={() =>
+            onAnimationChange?.({
+              animatePhase: animate,
+              animationRateHz,
+              direction: animationDirection,
+              loop: !animationLoop,
+            })
+          }
+        >
+          Loop
+        </Button>
+        <Button
+          aria-label="Reset mode phase"
+          disabled={disabled}
+          size="sm"
+          type="button"
+          variant="secondary"
+          onClick={() => {
+            setPhaseDraft("0");
+            setIsPhaseEditing(false);
+            onSetPhase("0");
+          }}
+        >
+          Reset
+        </Button>
+      </div>
+    </div>
+  );
 }
 
 function modeVisualizationIndexLabel(target: ModeVisualizationSelectionRef): string {
@@ -58,143 +282,6 @@ function modeVisualizationIndexLabel(target: ModeVisualizationSelectionRef): str
     return `sample ${target.sampleIndex}, mode ${target.modeIndex}`;
   }
   return "field";
-}
-
-function record(value: unknown): Record<string, unknown> | null {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : null;
-}
-
-function finiteNumber(value: unknown): number | null {
-  return typeof value === "number" && Number.isFinite(value) ? value : null;
-}
-
-function integerLabel(value: unknown): string {
-  const number = finiteNumber(value);
-  return number == null ? "not published" : number.toLocaleString("en-US");
-}
-
-function listLabel(value: unknown): string {
-  return Array.isArray(value) && value.length > 0
-    ? value.map((entry) => String(entry)).join(", ")
-    : "not published";
-}
-
-function numberListLabel(value: unknown): string {
-  return Array.isArray(value) && value.length > 0
-    ? value.map((entry) => String(entry)).join(" x ")
-    : "not published";
-}
-
-function inferNodeCount(meta: FrequencyDomainFieldResource | null): number | null {
-  if (!meta) return null;
-  const componentCount = finiteNumber(meta.component_count);
-  if (!componentCount || componentCount <= 0) return null;
-  const complexPairCount = finiteNumber(meta.complex_pair_count);
-  if (complexPairCount != null) {
-    return Math.trunc(complexPairCount / componentCount);
-  }
-  const payloadValueCount = finiteNumber(meta.payload_value_count);
-  if (payloadValueCount != null) {
-    return Math.trunc(payloadValueCount / (2 * componentCount));
-  }
-  return null;
-}
-
-function statsRecord(meta: FrequencyDomainFieldResource | null) {
-  const metaRecord = record(meta);
-  return (
-    record(metaRecord?.stats) ??
-    record(metaRecord?.value_stats) ??
-    record(metaRecord?.scalar_stats) ??
-    record(metaRecord?.magnitude_stats)
-  );
-}
-
-function statLabel(meta: FrequencyDomainFieldResource | null, key: string): string {
-  const value = finiteNumber(statsRecord(meta)?.[key]);
-  return value == null ? "not published" : value.toExponential(6);
-}
-
-export interface ModeFieldDiagnosticRow {
-  label: string;
-  value: string;
-}
-
-export function buildModeFieldDiagnosticRows({
-  meta,
-  metaStatus,
-  target,
-}: {
-  meta: FrequencyDomainFieldResource | null;
-  metaStatus: string;
-  target: Pick<
-    ModeVisualizationSelectionRef,
-    "fieldId" | "source"
-  >;
-}): ModeFieldDiagnosticRow[] {
-  const nodeCount = inferNodeCount(meta);
-  return [
-    { label: "Meta status", value: metaStatus },
-    { label: "Requested field", value: target.fieldId },
-    { label: "Published field", value: meta?.field_id ?? "not published" },
-    { label: "Resource key", value: meta?.resource_key ?? "not published" },
-    { label: "Artifact path", value: meta?.artifact_path ?? "not published" },
-    { label: "Source family", value: meta?.source_family ?? target.source },
-    { label: "Quantity", value: meta?.quantity ?? "not published" },
-    { label: "Field status", value: meta?.status ?? "not published" },
-    { label: "Value kind", value: meta?.value_kind ?? "not published" },
-    { label: "Component basis", value: meta?.component_basis ?? "not published" },
-    { label: "Components", value: listLabel(meta?.components) },
-    { label: "Component count", value: integerLabel(meta?.component_count) },
-    {
-      label: "Inferred nodes",
-      value: nodeCount == null ? "not published" : nodeCount.toLocaleString("en-US"),
-    },
-    { label: "Complex pairs", value: integerLabel(meta?.complex_pair_count) },
-    { label: "Payload values", value: integerLabel(meta?.payload_value_count) },
-    { label: "Payload encoding", value: meta?.payload_encoding ?? "not published" },
-    { label: "Binary layout", value: meta?.binary_layout ?? "not published" },
-    { label: "Storage format", value: meta?.storage_format ?? "not published" },
-    { label: "Default view", value: meta?.default_view ?? "not published" },
-    {
-      label: "Default phase",
-      value:
-        finiteNumber(meta?.default_phase_rad) == null
-          ? "not published"
-          : `${finiteNumber(meta?.default_phase_rad)} rad`,
-    },
-    { label: "Available views", value: listLabel(meta?.available_views) },
-    { label: "Min", value: statLabel(meta, "min") },
-    { label: "Max", value: statLabel(meta, "max") },
-    { label: "Mean", value: statLabel(meta, "mean") },
-    { label: "RMS", value: statLabel(meta, "rms") },
-    { label: "Zarr store", value: meta?.zarr_store_path ?? "not published" },
-    { label: "Zarr array", value: meta?.zarr_array_path ?? "not published" },
-    { label: "Zarr dtype", value: meta?.zarr_dtype ?? "not published" },
-    { label: "Zarr shape", value: numberListLabel(meta?.zarr_shape) },
-    { label: "Zarr chunk", value: numberListLabel(meta?.zarr_chunk_shape) },
-    {
-      label: "Tangent payload",
-      value: meta?.tangent_field_payload_path ?? "not published",
-    },
-    {
-      label: "Tangent kind",
-      value: meta?.tangent_value_kind ?? "not published",
-    },
-    {
-      label: "Tangent basis",
-      value: meta?.tangent_component_basis ?? "not published",
-    },
-    {
-      label: "Tangent components",
-      value: listLabel(meta?.tangent_components),
-    },
-    { label: "Tangent count", value: integerLabel(meta?.tangent_component_count) },
-    { label: "Tangent pairs", value: integerLabel(meta?.tangent_complex_pair_count) },
-    { label: "Tangent values", value: integerLabel(meta?.tangent_payload_value_count) },
-  ];
 }
 
 export function executeModeVisualizationActivation({
@@ -223,7 +310,7 @@ export function executeModeVisualizationActivation({
   );
 }
 
-export function executeModeVisualizationPhase({
+function executeModeVisualizationPhase({
   kernel,
   sourceDetail,
   target,
@@ -245,6 +332,7 @@ export function ModeVisualizationViewControls({ selection }: InspectorPanelProps
   const visualizationViewContext = useVisualizationViewContext();
   const target = modeVisualizationRef(selection);
   const kernel = useKernel();
+  const activeOverlay = useAnalysisFieldOverlay(kernel.analysisFieldOverlay);
   const sourceDetail = useMemo(
     () =>
       target
@@ -270,6 +358,17 @@ export function ModeVisualizationViewControls({ selection }: InspectorPanelProps
     ? `${target.objectId}:${target.source}:${target.fieldId}:${requestedView}`
     : null;
   const lastActivationKey = useRef<string | null>(null);
+  const activeTargetOverlay =
+    target &&
+    activeOverlay?.fieldId === target.fieldId &&
+    activeOverlay.source === target.source
+      ? activeOverlay
+      : null;
+  const overlayPhaseRad = clampPhaseRad(
+    finiteNumber(activeTargetOverlay?.visualizationPhaseRad) ??
+      finiteNumber(activeTargetOverlay?.query.phase_rad) ??
+      PHASE_MIN_RAD,
+  );
 
   useEffect(() => {
     if (visualizationViewContext === "planar") return;
@@ -325,6 +424,30 @@ export function ModeVisualizationViewControls({ selection }: InspectorPanelProps
     <>
       <InspectorGroup title="View">
         <VisualizationContextSwitch />
+      </InspectorGroup>
+      <InspectorGroup title="Phase and animation">
+        <ModeVisualizationPhaseControl
+          key={`${target.fieldId}:${target.source}`}
+          animate={activeTargetOverlay?.animation?.animatePhase ?? false}
+          animationDirection={activeTargetOverlay?.animation?.direction ?? 1}
+          animationLoop={activeTargetOverlay?.animation?.loop ?? true}
+          animationRateHz={activeTargetOverlay?.animation?.animationRateHz ?? 1}
+          disabled={!activeTargetOverlay}
+          onAnimationChange={(animation) => {
+            kernel.analysisFieldOverlay.update({ animation });
+          }}
+          onSetPhase={(draft) => {
+            const phaseRad = finiteNumber(draft);
+            if (!activeTargetOverlay || phaseRad === null) return;
+            void executeModeVisualizationPhase({
+              kernel,
+              phaseRad: clampPhaseRad(phaseRad),
+              sourceDetail,
+              target,
+            });
+          }}
+          phaseRad={String(overlayPhaseRad)}
+        />
       </InspectorGroup>
       <InspectorGroup title="Render controls">
         <FrequencyDomainModeDisplayControls

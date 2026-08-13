@@ -1434,7 +1434,7 @@ describe("useViewport3DSceneModel", () => {
   it("uses frequency-domain analysis overlay fields as the primary 3D field source", () => {
     const source = readFileSync(sceneModelSourceUrl, "utf8");
 
-    expect(source).toContain("useAnalysisFieldOverlay");
+    expect(source).toContain("useRenderableAnalysisFieldOverlay");
     expect(source).toContain("startAnalysisFieldOverlayPhaseAnimation");
     expect(source).toContain("const primaryFieldQuantityId = analysisOverlay?.fieldId ?? quantityId;");
     expect(source).toContain("if (analysisOverlay) {");

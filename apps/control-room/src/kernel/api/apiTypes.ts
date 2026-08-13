@@ -182,6 +182,7 @@ export type GeometryRealizationResource =
   components["schemas"]["GeometryRealizationSnapshot"];
 export type GeometryValidationResource =
   components["schemas"]["GeometryValidationResource"];
+export type HealthResource = components["schemas"]["HealthResponse"];
 export type ImportSessionAssetRequest =
   components["schemas"]["ImportSessionAssetRequest"];
 export type SessionAssetImportResponse =
@@ -191,6 +192,8 @@ export type CpuTelemetryResource =
 export type GpuTelemetryResource =
   components["schemas"]["GpuTelemetryResponse"];
 export type LiveStatusResource = components["schemas"]["LiveStatus"];
+export type PlatformCapabilitiesResource =
+  components["schemas"]["RuntimeCapabilityMatrix"];
 export type MagneticResponseSweepResource = JsonObject & {
   schema_version: string;
 };

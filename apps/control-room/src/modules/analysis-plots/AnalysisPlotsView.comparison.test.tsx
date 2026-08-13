@@ -2,11 +2,13 @@ import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { describe, expect, it, vi } from "vitest";
 
-import { installSimulationPreparationTestDom } from "@/kernel/layout/simulationPreparationTestDom.test-support";
+import {
+  findElements,
+  installSimulationPreparationTestDom,
+} from "@/kernel/layout/simulationPreparationTestDom.test-support";
 import type { KernelApi } from "@/kernel/types";
 
-const chartStatuses: string[] = [];
-vi.mock("./components/EChartsSurface", () => ({ EChartsSurface: ({ dataStatus }: { dataStatus?: string }) => { chartStatuses.push(dataStatus ?? "idle"); return <div data-testid="chart" />; } }));
+vi.mock("./components/EChartsSurface", () => ({ EChartsSurface: () => <div data-testid="chart" /> }));
 vi.mock("@/shared/ui/Select", () => ({
   Select: ({ children, onValueChange }: { children: React.ReactNode; onValueChange: (value: string) => void }) => <div onClick={() => onValueChange("table-c")}>{children}</div>,
   SelectContent: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
@@ -14,19 +16,15 @@ vi.mock("@/shared/ui/Select", () => ({
   SelectTrigger: ({ children, ...props }: React.ButtonHTMLAttributes<HTMLButtonElement>) => <button {...props} type="button">{children}</button>,
   SelectValue: () => null,
 }));
-vi.mock("@/shared/ui/Button", () => ({
-  Button: ({ children, ...props }: React.ButtonHTMLAttributes<HTMLButtonElement>) => <button {...props}>{children}</button>,
-}));
+import { AnalysisPlotsView } from "./AnalysisPlotsView";
 
-import { AnalysisPlotsView, comparisonSeriesKey } from "./AnalysisPlotsView";
-
-function table(tableId: string, revision: number) {
+function table(tableId: string, revision: number, quantityId = "m") {
   return {
     columnCount: 3,
     columns: [
-      { column_id: "step", label: "step", unit: "1" },
-      { column_id: "mx", label: "mx", unit: "1" },
-      { column_id: "energy", label: "energy", unit: "J" },
+      { column_id: "step", component: null, dimension: "count", label: "step", quantity_id: "step", reduction: null, scope: "global", unit: "1" },
+      { column_id: "mx", component: "x", dimension: "magnetization", label: "mx", quantity_id: quantityId, reduction: "mean", scope: "magnetic_domain", unit: "1" },
+      { column_id: "energy", component: null, dimension: "energy", label: "energy", quantity_id: "e_total", reduction: "sum", scope: "magnetic_domain", unit: "J" },
     ],
     cursorEnd: 1,
     cursorStart: 0,
@@ -42,77 +40,16 @@ function table(tableId: string, revision: number) {
 
 const kernel = { bus: { emit: vi.fn(), on: () => () => {} } } as unknown as KernelApi;
 
-function nodesWithAttribute(root: { childNodes: readonly unknown[]; getAttribute?: (name: string) => string | null }, name: string, prefix: string): Array<{ click: () => void }> {
-  const matches: Array<{ click: () => void }> = [];
-  const visit = (node: typeof root) => {
-    if (node.getAttribute?.(name)?.startsWith(prefix)) matches.push(node as unknown as { click: () => void });
-    for (const child of node.childNodes as typeof root[]) visit(child);
-  };
-  visit(root);
-  return matches;
-}
-
 describe("Analysis comparison selection", () => {
-  it("keeps dataset B replaceable and clearable while toggling either pane updates both pane-specific IDs", async () => {
-    const dom = installSimulationPreparationTestDom();
-    const container = dom.document.createElement("div");
-    dom.document.body.appendChild(container);
-    const root = createRoot(container as unknown as Element);
-    const onComparisonSelectedSeriesKeysChange = vi.fn();
-    const onComparisonDatasetRefChange = vi.fn();
-    const commonKey = comparisonSeriesKey({ quantity: "mx", unit: "1" });
-    try {
-      await act(async () => root.render(<AnalysisPlotsView activeSurface="comparison" comparisonDatasetRef="table-b" comparisonTable={table("table-b", 2)} comparisonTableStatus="ready" datasetRefs={["table-a", "table-b", "table-c"]} kernel={kernel} onComparisonDatasetRefChange={onComparisonDatasetRefChange} onComparisonSelectedSeriesKeysChange={onComparisonSelectedSeriesKeysChange} selectedDatasetRef="table-a" table={table("table-a", 1)} tableStatus="ready" />));
-      expect(nodesWithAttribute(container, "data-testid", "chart")).toHaveLength(2);
-      await act(async () => nodesWithAttribute(container, "aria-label", "Comparison dataset").at(-1)!.click());
-      expect(onComparisonDatasetRefChange).toHaveBeenLastCalledWith("table-c");
-      await act(async () => nodesWithAttribute(container, "aria-label", "Clear comparison dataset")[0]!.click());
-      expect(onComparisonDatasetRefChange).toHaveBeenLastCalledWith(null);
-      const firstPaneToggle = nodesWithAttribute(container, "aria-label", "mx, unit dimensionless")[0]!;
-      await act(async () => firstPaneToggle.click());
-      expect(onComparisonSelectedSeriesKeysChange).toHaveBeenLastCalledWith([comparisonSeriesKey({ quantity: "energy", unit: "J" })]);
-
-      await act(async () => root.render(<AnalysisPlotsView activeSurface="comparison" comparisonDatasetRef="table-b" comparisonSelectedSeriesKeys={[]} comparisonTable={table("table-b", 2)} comparisonTableStatus="ready" datasetRefs={["table-a", "table-b"]} hasComparisonSelection kernel={kernel} onComparisonSelectedSeriesKeysChange={onComparisonSelectedSeriesKeysChange} selectedDatasetRef="table-a" table={table("table-a", 1)} tableStatus="ready" />));
-      expect(nodesWithAttribute(container, "data-testid", "chart")).toHaveLength(0);
-      const secondPaneToggle = nodesWithAttribute(container, "aria-label", "mx, unit dimensionless")[1]!;
-      await act(async () => secondPaneToggle.click());
-      expect(onComparisonSelectedSeriesKeysChange).toHaveBeenLastCalledWith([commonKey]);
-    } finally {
-      await act(async () => root.unmount());
-      dom.restore();
-    }
-  });
-
-  it("renders the secondary dataset's loading state instead of claiming incompatible ready data", async () => {
-    chartStatuses.length = 0;
+  it("keeps Comparison explicitly unavailable in the production view", async () => {
     const dom = installSimulationPreparationTestDom();
     const container = dom.document.createElement("div");
     const root = createRoot(container as unknown as Element);
     try {
-      await act(async () => root.render(<AnalysisPlotsView activeSurface="comparison" comparisonDatasetRef="table-b" comparisonTable={null} comparisonTableStatus="loading" datasetRefs={["table-a", "table-b"]} kernel={kernel} selectedDatasetRef="table-a" table={table("table-a", 1)} tableStatus="ready" />));
-      expect(chartStatuses).toEqual(["loading"]);
-      expect(container.textContent).not.toContain("No compatible quantity");
-    } finally {
-      await act(async () => root.unmount());
-      dom.restore();
-    }
-  });
-
-  it("routes each comparison-pane display-unit selector to its own persisted callback", async () => {
-    const dom = installSimulationPreparationTestDom();
-    const container = dom.document.createElement("div");
-    const root = createRoot(container as unknown as Element);
-    const onComparisonPrimaryDisplayUnitsChange = vi.fn();
-    const onComparisonSecondaryDisplayUnitsChange = vi.fn();
-    try {
-      await act(async () => root.render(<AnalysisPlotsView activeSurface="comparison" comparisonDatasetRef="table-b" comparisonPrimaryDisplayUnits={{}} comparisonSecondaryDisplayUnits={{}} comparisonTable={table("table-b", 2)} comparisonTableStatus="ready" datasetRefs={["table-a", "table-b"]} kernel={kernel} onComparisonPrimaryDisplayUnitsChange={onComparisonPrimaryDisplayUnitsChange} onComparisonSecondaryDisplayUnitsChange={onComparisonSecondaryDisplayUnitsChange} selectedDatasetRef="table-a" table={table("table-a", 1)} tableStatus="ready" />));
-      const controls = nodesWithAttribute(container, "aria-label", "Display unit for energy");
-      expect(controls).toHaveLength(2);
-      await act(async () => controls[0]!.click());
-      expect(onComparisonPrimaryDisplayUnitsChange).toHaveBeenCalledWith({ energy: "table-c" });
-      expect(onComparisonSecondaryDisplayUnitsChange).not.toHaveBeenCalled();
-      await act(async () => controls[1]!.click());
-      expect(onComparisonSecondaryDisplayUnitsChange).toHaveBeenCalledWith({ energy: "table-c" });
+      await act(async () => root.render(<AnalysisPlotsView activeSurface="comparison" datasetRefs={["table-a", "table-b"]} kernel={kernel} selectedDatasetRef="table-a" table={table("table-a", 1)} tableStatus="ready" />));
+      expect(container.textContent).toContain("Comparison unavailable");
+      expect(container.textContent).toContain("typed owner identities");
+      expect(findElements(container, (element) => element.getAttribute("data-testid") === "chart")).toHaveLength(0);
     } finally {
       await act(async () => root.unmount());
       dom.restore();

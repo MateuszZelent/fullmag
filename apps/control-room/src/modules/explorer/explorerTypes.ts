@@ -4,8 +4,15 @@ import type {
   DomainMetaResource,
   FdmMultilayerLayoutResource,
   HysteresisExecutionTreeResource,
+  ResourceRevision,
 } from "@/kernel/api/apiTypes";
 import type { DomainPresentation } from "@/shared/domain/mesh/domainPresentation";
+import type {
+  PostprocessingDefinitionKind,
+  PostprocessingFreshness,
+  PostprocessingOwnerKind,
+  PostprocessingOwnerReadiness,
+} from "@/shared/domain/analysis/postprocessingTypes";
 import type {
   CrossSectionFrameExtent,
   CrossSectionPlot,
@@ -55,9 +62,6 @@ export type ExplorerNodeKind =
   | "object.visualization"
   | "object.visualization.debug"
   | "object.mode_visualization"
-  | "object.mode_visualization.group"
-  | "object.mode_visualization.field"
-  | "object.mode_visualization.view"
   | "airbox.root"
   | "airbox.mesh"
   | "airbox.mesh.parameters"
@@ -150,11 +154,13 @@ export type ExplorerNodeKind =
   | "results.resonance.driven.stage"
   | "results.resonance.modal.spectrum"
   | "results.resonance.modal.modes"
+  | "results.resonance.modal.mode"
   | "results.resonance.modal.coupling"
   | "results.resonance.driven.spectrum"
   | "results.resonance.driven.peaks"
   | "results.resonance.driven.frequency_points"
   | "results.resonance.driven.fields"
+  | "results.resonance.driven.field"
   | "results.dispersion.root"
   | "results.dispersion.modal.stage"
   | "results.dispersion.driven.stage"
@@ -162,7 +168,9 @@ export type ExplorerNodeKind =
   | "results.dispersion.modal.relation"
   | "results.dispersion.modal.branches"
   | "results.dispersion.modal.modes_at_k"
+  | "results.dispersion.modal.mode_at_k"
   | "results.dispersion.driven.response_map"
+  | "results.dispersion.driven.field_at_k"
   | "results.hysteresis.root"
   | "results.analysis_views.root"
   | "results.analysis_views.definition"
@@ -211,46 +219,19 @@ export type ExplorerNodeKind =
   | "results.field_quantity"
   | "results.quick_chart"
   | "resources.root"
-  | "resources.analysis.frequency_domain"
-  | "resources.analysis.frequency_domain.manifest"
-  | "resources.analysis.frequency_domain.calculation_modes"
-  | "resources.analysis.frequency_domain.fmr"
-  | "resources.analysis.frequency_domain.dispersion"
-  | "resources.analysis.frequency_domain.response_map"
-  | "resources.mesh.periodic_pairs"
-  | "resources.analysis.eigen.spectrum"
-  | "resources.analysis.eigen.branches"
-  | "resources.analysis.eigen.dispersion"
-  | "resources.analysis.eigen.diagnostics"
-  | "resources.analysis.eigen.mode_metadata"
-  | "resources.analysis.eigen.mode_field"
-  | "resources.analysis.frequency_response.sweep"
-  | "resources.analysis.frequency_response.progress"
-  | "resources.analysis.frequency_response.cancel_requested"
-  | "resources.analysis.frequency_response.frequency_point"
-  | "resources.analysis.frequency_response.field"
-  | "resources.analysis.frequency_response.observables"
-  | "resources.analysis.frequency_response.diagnostics"
-  | "resources.field"
-  | "resources.mesh"
+  | "resources.runtime"
   | "jobs.root"
-  | "jobs.frequency_domain.root"
-  | "jobs.frequency_domain.stage_run"
-  | "jobs.frequency_domain.eigen_sample"
-  | "jobs.frequency_domain.response_frequency"
-  | "jobs.frequency_domain.response_progress"
-  | "jobs.frequency_domain.artifact_export"
+  | "jobs.run"
+  | "jobs.stage"
   | "jobs.command"
   | "diagnostics.root"
-  | "diagnostics.frequency_domain.root"
-  | "diagnostics.frequency_domain.capabilities"
-  | "diagnostics.frequency_domain.equilibrium"
-  | "diagnostics.frequency_domain.operator"
-  | "diagnostics.frequency_domain.solver"
-  | "diagnostics.frequency_domain.artifacts"
-  | "diagnostics.frequency_domain.api_resources"
-  | "diagnostics.frequency_domain.visualization"
-  | "diagnostics.frequency_domain.periodic_floquet"
+  | "diagnostics.problem"
+  | "diagnostics.health"
+  | "diagnostics.capability"
+  | "diagnostics.solver"
+  | "diagnostics.mesh"
+  | "diagnostics.frequency-domain"
+  | "diagnostics.performance"
   | "diagnostics.resource";
 
 type FrequencyDomainCalculationMode =
@@ -300,6 +281,12 @@ export interface ExplorerNodeStateFacets {
   resourceState: ExplorerResourceState;
 }
 
+export type {
+  RuntimeExecutionDetail,
+  RuntimeExplorerDetail,
+  RuntimeExplorerFact,
+} from "@/kernel/resources/runtimeExplorerTypes";
+
 export type ExplorerIconToken =
   | "activity"
   | "box"
@@ -325,6 +312,7 @@ export interface ExplorerNode {
   label: string;
   parentId: string | null;
   activeAnalysisField?: boolean;
+  analysisFieldRepresentation?: "complex-vector-xyz";
   badge?: string;
   children?: ExplorerNode[];
   contextCommands?: CommandId[];
@@ -332,8 +320,19 @@ export interface ExplorerNode {
   analysisRunId?: string;
   analysisStageId?: string;
   artifactRevision?: number | string;
+  postprocessingCatalogRevision?: ResourceRevision | null;
+  postprocessingContractGap?: string | null;
+  postprocessingDefinitionKind?: PostprocessingDefinitionKind;
+  postprocessingFreshness?: PostprocessingFreshness;
+  postprocessingArtifactKind?: string | null;
+  postprocessingOwnerId?: string | null;
+  postprocessingOwnerKind?: PostprocessingOwnerKind | null;
+  postprocessingOwnerReadiness?: PostprocessingOwnerReadiness;
+  postprocessingResourceRevision?: ResourceRevision | null;
+  postprocessingSchemaRevision?: number | null;
   equilibriumId?: string;
   kContextKind?: "finite_open" | "fixed_k" | "gamma" | "k_grid" | "k_path";
+  kPathCoordinateRadPerM?: number;
   studyProduct?: "driven_response" | "modal_eigen" | string;
   artifactPath?: string;
   branchId?: string;
@@ -342,7 +341,6 @@ export interface ExplorerNode {
   crossSectionDraftId?: "draft";
   crossSectionPlotId?: string;
   fieldId?: string;
-  fieldIds?: readonly string[];
   extensionId?: string;
   fieldOrientation?: string;
   fieldRevision?: number | string;
@@ -361,11 +359,10 @@ export interface ExplorerNode {
   inactiveCellCount?: number;
   membershipRevision?: string | null;
   fmrPeakIndex?: number;
+  frequencyHz?: number;
   frequencyIndex?: number;
   analysisFieldSource?: "eigen-mode" | "frequency-response";
   analysisFieldView?: string;
-  modeVisualizationRootFieldId?: string;
-  modeVisualizationRootSource?: "eigen-mode" | "frequency-response";
   icon?: ExplorerIconToken;
   hysteresisExecutionNodeId?: string;
   hysteresisExecutionNodeKind?: string;
@@ -391,6 +388,8 @@ export interface ExplorerNode {
   physicsDependencyIds?: readonly string[];
   regionId?: string;
   resourceRef?: string;
+  runtimeDescriptorId?: string;
+  runtimeResourceKey?: string;
   displayUnits?: Record<string, string>;
   range?: { fromSI: number; toSI: number } | null;
   /** Grouping rows stay focusable/expandable but do not create a Selection. */
@@ -406,6 +405,7 @@ export interface ExplorerNode {
    */
   yAxisIds?: readonly string[];
   sampleIndex?: number;
+  wavevectorKf?: readonly [number, number, number];
   stageId?: string;
   stageIndex?: number;
   availability?: ExplorerAvailability;

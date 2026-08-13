@@ -122,4 +122,64 @@ describe("useResource loader callback", () => {
     });
     dom.restore();
   });
+
+  it("does not restart a failed load when the revision resolver changes on a runtime notification", async () => {
+    vi.useFakeTimers();
+    const dom = installSimulationPreparationTestDom();
+    const container = dom.document.createElement("div");
+    dom.document.body.appendChild(container);
+    const bus = new EventBus<KernelEventMap>();
+    const resources = new ResourceInvalidationController(bus);
+    const kernel = {
+      api: {},
+      bus,
+      diagnosticRecorder: new DiagnosticRecorderController({ config: { enabled: false } }),
+      resources,
+    } as unknown as KernelApi;
+    const load = vi
+      .fn<() => Promise<{ source: string }>>()
+      .mockRejectedValueOnce(new Error("resource unavailable"))
+      .mockResolvedValue({ source: "latest" });
+    const resourceKey = "test:resolver-stability";
+    const root = createRoot(container as unknown as Element);
+
+    function Harness() {
+      const resource = useResource({
+        load,
+        resolveRevision: (data) => data.source,
+        resourceKey,
+      });
+      return <div>{`${resource.status}:${resource.data?.source ?? ""}`}</div>;
+    }
+
+    await act(async () => {
+      root.render(
+        <KernelContext.Provider value={kernel}>
+          <Harness />
+        </KernelContext.Provider>,
+      );
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+
+    expect(load).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(999);
+    });
+    expect(load).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      resources.invalidate(resourceKey, 1);
+      await vi.advanceTimersByTimeAsync(1_000);
+    });
+    expect(load).toHaveBeenCalledTimes(2);
+    expect(container.textContent).toContain("ready:latest");
+
+    await act(async () => {
+      root.unmount();
+    });
+    dom.restore();
+  });
 });

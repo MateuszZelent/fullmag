@@ -398,6 +398,7 @@ export const DEFAULT_OBJECT_VISUALIZATION: VisualizationTargetSettings = {
 
 export const DEFAULT_FDM_UNIVERSE_OUTSIDE_SUPPORT_VISUALIZATION: VisualizationTargetSettings = {
   ...DEFAULT_OBJECT_VISUALIZATION,
+  activeQuantityId: "H_demag",
   boundsOpacityPercent: 55,
   boundsVisible: true,
   geometryScope: "full",

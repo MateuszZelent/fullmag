@@ -20,62 +20,27 @@ import { CrossSectionInspectorPanel } from "./panels/CrossSectionInspectorPanel"
 import {
   EigenBranchesInspectorPanel,
   EigenDiagnosticsInspectorPanel,
-  FrequencyDomainApiResourcesDiagnosticInspectorPanel,
-  FrequencyDomainArtifactsDiagnosticInspectorPanel,
-  FrequencyDomainCapabilitiesDiagnosticInspectorPanel,
-  FrequencyDomainDiagnosticsOverviewInspectorPanel,
-  FrequencyDomainEquilibriumDiagnosticInspectorPanel,
-  FrequencyDomainResourceFamilyInspectorPanel,
-  FrequencyDomainManifestResourceInspectorPanel,
-  FrequencyDomainCalculationModesResourceInspectorPanel,
-  FrequencyDomainFmrResourceInspectorPanel,
-  FrequencyDomainDispersionResourceInspectorPanel,
-  FrequencyDomainResponseMapResourceInspectorPanel,
-  EigenSpectrumResourceInspectorPanel,
-  EigenBranchesResourceInspectorPanel,
-  EigenDispersionResourceInspectorPanel,
-  EigenDiagnosticsResourceInspectorPanel,
-  EigenModeMetadataResourceInspectorPanel,
-  EigenModeFieldResourceInspectorPanel,
-  FrequencyResponseSweepResourceInspectorPanel,
-  FrequencyResponseProgressResourceInspectorPanel,
-  FrequencyResponseCancelRequestedResourceInspectorPanel,
-  FrequencyResponseFrequencyPointResourceInspectorPanel,
-  FrequencyResponseFieldResourceInspectorPanel,
-  FrequencyResponseObservablesResourceInspectorPanel,
-  FrequencyResponseDiagnosticsResourceInspectorPanel,
-  FrequencyDomainOperatorDiagnosticInspectorPanel,
-  FrequencyDomainPeriodicFloquetDiagnosticInspectorPanel,
-  FrequencyDomainPeriodicPairsResourceInspectorPanel,
-  FrequencyDomainSolverDiagnosticInspectorPanel,
-  FrequencyDomainVisualizationDiagnosticInspectorPanel,
   EigenKPathInspectorPanel,
   EigenModesInspectorPanel,
   EigenModesVisualizationInspectorPanel,
   EigenOverviewInspectorPanel,
   EigenProvenanceInspectorPanel,
-  EigenSampleJobInspectorPanel,
   EigenSpectrumInspectorPanel,
   EigenStudyInspectorPanel,
-  FrequencyDomainArtifactExportJobInspectorPanel,
   FrequencyDomainCalculationModesInspectorPanel,
   FrequencyDomainDispersionInspectorPanel,
   FrequencyDomainExportsInspectorPanel,
-  FrequencyDomainJobsOverviewInspectorPanel,
   FrequencyDomainOverviewInspectorPanel,
   FrequencyDomainResponseMapInspectorPanel,
   FrequencyDomainRunInspectorPanel,
-  FrequencyDomainStageRunJobInspectorPanel,
   FrequencyResponseCancelRequestedInspectorPanel,
   FrequencyResponseDiagnosticsInspectorPanel,
-  FrequencyResponseFrequencyJobInspectorPanel,
   FrequencyResponseObservablesInspectorPanel,
   FrequencyResponseOverviewInspectorPanel,
   FrequencyResponseObservableInspectorPanel,
   FrequencyResponseFrequencyPointsInspectorPanel,
   FrequencyResponsePointInspectorPanel,
   FrequencyResponseProvenanceInspectorPanel,
-  FrequencyResponseProgressJobInspectorPanel,
   FrequencyResponseProgressInspectorPanel,
   FrequencyResponseStudyInspectorPanel,
   FrequencyResponseSweepInspectorPanel,
@@ -94,10 +59,7 @@ import { FieldQuantityInspectorPanel } from "./panels/FieldQuantityInspectorPane
 import { MeshDetailsPanel } from "./panels/MeshDetailsPanel";
 import { MeshPartVisualizationPanel } from "./panels/MeshPartVisualizationPanel";
 import { FdmGridInspectorPanel } from "./panels/fdm-grid/FdmGridInspectorPanel";
-import { ModeVisualizationFieldPanel } from "./panels/mode-visualization/ModeVisualizationFieldPanel";
-import { ModeVisualizationGroupPanel } from "./panels/mode-visualization/ModeVisualizationGroupPanel";
 import { ModeVisualizationOverviewPanel } from "./panels/mode-visualization/ModeVisualizationOverviewPanel";
-import { ModeVisualizationViewPanel } from "./panels/mode-visualization/ModeVisualizationViewPanel";
 import { ObjectGeneralPanel } from "./panels/ObjectGeneralPanel";
 import { ObjectMagneticTexturePanel } from "./panels/ObjectMagneticTexturePanel";
 import { ObjectMaterialPanel } from "./panels/ObjectMaterialPanel";
@@ -127,8 +89,56 @@ import {
 import { OerstedFieldInspectorPanel, SpinTorqueInspectorPanel } from "./panels/SpinAuthoringInspector";
 import { SpinInterfaceInspectorPanel } from "./panels/SpinInterfaceInspector";
 import { PlaceholderPanel } from "./panels/PlaceholderPanel";
-import { PhysicsFirstResultInspectorPanel } from "./panels/physics-first/PhysicsFirstResultInspectorPanel";
+import {
+  DispersionBranchesResultInspector,
+  DispersionDrivenStageResultInspector,
+  DispersionKSamplingResultInspector,
+  DispersionModalStageResultInspector,
+  DispersionModesAtKResultInspector,
+  DispersionModeAtKResultInspector,
+  DispersionOverviewResultInspector,
+  DispersionRelationResultInspector,
+  DispersionResponseMapResultInspector,
+  DispersionResponseFieldAtKResultInspector,
+  DynamicsResultInspector,
+  HysteresisResultInspector,
+  ResonanceDrivenPeaksResultInspector,
+  ResonanceDrivenSpectrumResultInspector,
+  ResonanceDrivenStageResultInspector,
+  ResonanceFrequencyPointsResultInspector,
+  ResonanceModalCouplingResultInspector,
+  ResonanceModalSpectrumResultInspector,
+  ResonanceModalModeResultInspector,
+  ResonanceModalStageResultInspector,
+  ResonanceModeShapesResultInspector,
+  ResonanceOverviewResultInspector,
+  ResonanceResponseFieldsResultInspector,
+  ResonanceResponseFieldResultInspector,
+} from "./panels/physics-first/PhysicsFirstResultInspectors";
+import {
+  AnalysisViewDefinitionInspector,
+  AnalysisViewsOverviewInspector,
+  DerivedValueDefinitionInspector,
+  DerivedValuesOverviewInspector,
+  ExportDefinitionInspector,
+  ExportsOverviewInspector,
+  TableDefinitionInspector,
+  TablesOverviewInspector,
+} from "./panels/physics-first/PostprocessingResultInspectors";
 import { RegionsListPanel } from "./panels/RegionsListPanel";
+import {
+  RuntimeCapabilityDiagnosticInspectorPanel,
+  RuntimeCommandJobInspectorPanel,
+  RuntimeFrequencyDiagnosticInspectorPanel,
+  RuntimeHealthDiagnosticInspectorPanel,
+  RuntimeMeshDiagnosticInspectorPanel,
+  RuntimePerformanceDiagnosticInspectorPanel,
+  RuntimeProblemDiagnosticInspectorPanel,
+  RuntimeResourceInspectorPanel,
+  RuntimeRunJobInspectorPanel,
+  RuntimeSolverDiagnosticInspectorPanel,
+  RuntimeStageJobInspectorPanel,
+} from "./panels/RuntimeExplorerInspectorPanels";
 import { StudyInspectorPanel } from "./panels/StudyInspectorPanel";
 import { FieldRow } from "./primitives/FieldRow";
 import { InspectorGroup } from "./primitives/InspectorGroup";
@@ -252,11 +262,13 @@ export const FREQUENCY_DOMAIN_INSPECTOR_SELECTION_KINDS = [
   "results.resonance.driven.stage",
   "results.resonance.modal.spectrum",
   "results.resonance.modal.modes",
+  "results.resonance.modal.mode",
   "results.resonance.modal.coupling",
   "results.resonance.driven.spectrum",
   "results.resonance.driven.peaks",
   "results.resonance.driven.frequency_points",
   "results.resonance.driven.fields",
+  "results.resonance.driven.field",
   "results.dispersion.root",
   "results.dispersion.modal.stage",
   "results.dispersion.driven.stage",
@@ -264,7 +276,9 @@ export const FREQUENCY_DOMAIN_INSPECTOR_SELECTION_KINDS = [
   "results.dispersion.modal.relation",
   "results.dispersion.modal.branches",
   "results.dispersion.modal.modes_at_k",
+  "results.dispersion.modal.mode_at_k",
   "results.dispersion.driven.response_map",
+  "results.dispersion.driven.field_at_k",
   "results.hysteresis.root",
   "results.analysis_views.root",
   "results.analysis_views.definition",
@@ -275,41 +289,6 @@ export const FREQUENCY_DOMAIN_INSPECTOR_SELECTION_KINDS = [
   "results.exports.root",
   "results.exports.definition",
   "results.frequency_domain.provenance",
-  "resources.analysis.frequency_domain",
-  "resources.analysis.frequency_domain.manifest",
-  "resources.analysis.frequency_domain.calculation_modes",
-  "resources.analysis.frequency_domain.fmr",
-  "resources.analysis.frequency_domain.dispersion",
-  "resources.analysis.frequency_domain.response_map",
-  "resources.mesh.periodic_pairs",
-  "resources.analysis.eigen.spectrum",
-  "resources.analysis.eigen.branches",
-  "resources.analysis.eigen.dispersion",
-  "resources.analysis.eigen.diagnostics",
-  "resources.analysis.eigen.mode_metadata",
-  "resources.analysis.eigen.mode_field",
-  "resources.analysis.frequency_response.sweep",
-  "resources.analysis.frequency_response.progress",
-  "resources.analysis.frequency_response.cancel_requested",
-  "resources.analysis.frequency_response.frequency_point",
-  "resources.analysis.frequency_response.field",
-  "resources.analysis.frequency_response.observables",
-  "resources.analysis.frequency_response.diagnostics",
-  "jobs.frequency_domain.root",
-  "jobs.frequency_domain.stage_run",
-  "jobs.frequency_domain.eigen_sample",
-  "jobs.frequency_domain.response_frequency",
-  "jobs.frequency_domain.response_progress",
-  "jobs.frequency_domain.artifact_export",
-  "diagnostics.frequency_domain.root",
-  "diagnostics.frequency_domain.capabilities",
-  "diagnostics.frequency_domain.equilibrium",
-  "diagnostics.frequency_domain.operator",
-  "diagnostics.frequency_domain.solver",
-  "diagnostics.frequency_domain.artifacts",
-  "diagnostics.frequency_domain.api_resources",
-  "diagnostics.frequency_domain.visualization",
-  "diagnostics.frequency_domain.periodic_floquet",
 ] as const;
 
 type FrequencyDomainInspectorKind =
@@ -403,96 +382,40 @@ const FREQUENCY_DOMAIN_NAMED_PANELS: Partial<
   "results.frequency_response.sweep": FrequencyResponseSweepInspectorPanel,
   "results.frequency_response.diagnostics":
     FrequencyResponseDiagnosticsInspectorPanel,
-  "results.dynamics.root": PhysicsFirstResultInspectorPanel,
-  "results.resonance.root": PhysicsFirstResultInspectorPanel,
-  "results.resonance.modal.stage": EigenStudyInspectorPanel,
-  "results.resonance.driven.stage": FrequencyResponseStudyInspectorPanel,
-  "results.resonance.modal.spectrum": EigenSpectrumInspectorPanel,
-  "results.resonance.modal.modes": EigenModesInspectorPanel,
-  "results.resonance.modal.coupling": PhysicsFirstResultInspectorPanel,
-  "results.resonance.driven.spectrum": PhysicsFirstResultInspectorPanel,
-  "results.resonance.driven.peaks": FmrPeaksInspectorPanel,
+  "results.dynamics.root": DynamicsResultInspector,
+  "results.resonance.root": ResonanceOverviewResultInspector,
+  "results.resonance.modal.stage": ResonanceModalStageResultInspector,
+  "results.resonance.driven.stage": ResonanceDrivenStageResultInspector,
+  "results.resonance.modal.spectrum": ResonanceModalSpectrumResultInspector,
+  "results.resonance.modal.modes": ResonanceModeShapesResultInspector,
+  "results.resonance.modal.mode": ResonanceModalModeResultInspector,
+  "results.resonance.modal.coupling": ResonanceModalCouplingResultInspector,
+  "results.resonance.driven.spectrum": ResonanceDrivenSpectrumResultInspector,
+  "results.resonance.driven.peaks": ResonanceDrivenPeaksResultInspector,
   "results.resonance.driven.frequency_points":
-    FrequencyResponseFrequencyPointsInspectorPanel,
-  "results.resonance.driven.fields": FrequencyResponseOverviewInspectorPanel,
-  "results.dispersion.root": PhysicsFirstResultInspectorPanel,
-  "results.dispersion.modal.stage": EigenStudyInspectorPanel,
-  "results.dispersion.driven.stage": FrequencyResponseStudyInspectorPanel,
-  "results.dispersion.k_sampling": EigenKPathInspectorPanel,
-  "results.dispersion.modal.relation": EigenDispersionInspectorPanel,
-  "results.dispersion.modal.branches": EigenBranchesInspectorPanel,
-  "results.dispersion.modal.modes_at_k": EigenModesInspectorPanel,
-  "results.dispersion.driven.response_map": PhysicsFirstResultInspectorPanel,
-  "results.hysteresis.root": PhysicsFirstResultInspectorPanel,
-  "results.analysis_views.root": PhysicsFirstResultInspectorPanel,
-  "results.analysis_views.definition": PhysicsFirstResultInspectorPanel,
-  "results.derived_values.root": PhysicsFirstResultInspectorPanel,
-  "results.derived_values.definition": PhysicsFirstResultInspectorPanel,
-  "results.tables.root": PhysicsFirstResultInspectorPanel,
-  "results.tables.definition": PhysicsFirstResultInspectorPanel,
-  "results.exports.root": PhysicsFirstResultInspectorPanel,
-  "results.exports.definition": PhysicsFirstResultInspectorPanel,
+    ResonanceFrequencyPointsResultInspector,
+  "results.resonance.driven.fields": ResonanceResponseFieldsResultInspector,
+  "results.resonance.driven.field": ResonanceResponseFieldResultInspector,
+  "results.dispersion.root": DispersionOverviewResultInspector,
+  "results.dispersion.modal.stage": DispersionModalStageResultInspector,
+  "results.dispersion.driven.stage": DispersionDrivenStageResultInspector,
+  "results.dispersion.k_sampling": DispersionKSamplingResultInspector,
+  "results.dispersion.modal.relation": DispersionRelationResultInspector,
+  "results.dispersion.modal.branches": DispersionBranchesResultInspector,
+  "results.dispersion.modal.modes_at_k": DispersionModesAtKResultInspector,
+  "results.dispersion.modal.mode_at_k": DispersionModeAtKResultInspector,
+  "results.dispersion.driven.response_map": DispersionResponseMapResultInspector,
+  "results.dispersion.driven.field_at_k": DispersionResponseFieldAtKResultInspector,
+  "results.hysteresis.root": HysteresisResultInspector,
+  "results.analysis_views.root": AnalysisViewsOverviewInspector,
+  "results.analysis_views.definition": AnalysisViewDefinitionInspector,
+  "results.derived_values.root": DerivedValuesOverviewInspector,
+  "results.derived_values.definition": DerivedValueDefinitionInspector,
+  "results.tables.root": TablesOverviewInspector,
+  "results.tables.definition": TableDefinitionInspector,
+  "results.exports.root": ExportsOverviewInspector,
+  "results.exports.definition": ExportDefinitionInspector,
   "results.frequency_domain.provenance": EigenProvenanceInspectorPanel,
-  "jobs.frequency_domain.root": FrequencyDomainJobsOverviewInspectorPanel,
-  "jobs.frequency_domain.stage_run": FrequencyDomainStageRunJobInspectorPanel,
-  "jobs.frequency_domain.eigen_sample": EigenSampleJobInspectorPanel,
-  "jobs.frequency_domain.response_frequency":
-    FrequencyResponseFrequencyJobInspectorPanel,
-  "jobs.frequency_domain.response_progress":
-    FrequencyResponseProgressJobInspectorPanel,
-  "jobs.frequency_domain.artifact_export":
-    FrequencyDomainArtifactExportJobInspectorPanel,
-  "diagnostics.frequency_domain.root":
-    FrequencyDomainDiagnosticsOverviewInspectorPanel,
-  "diagnostics.frequency_domain.capabilities":
-    FrequencyDomainCapabilitiesDiagnosticInspectorPanel,
-  "diagnostics.frequency_domain.equilibrium":
-    FrequencyDomainEquilibriumDiagnosticInspectorPanel,
-  "diagnostics.frequency_domain.operator":
-    FrequencyDomainOperatorDiagnosticInspectorPanel,
-  "diagnostics.frequency_domain.solver":
-    FrequencyDomainSolverDiagnosticInspectorPanel,
-  "diagnostics.frequency_domain.artifacts":
-    FrequencyDomainArtifactsDiagnosticInspectorPanel,
-  "diagnostics.frequency_domain.api_resources":
-    FrequencyDomainApiResourcesDiagnosticInspectorPanel,
-  "diagnostics.frequency_domain.visualization":
-    FrequencyDomainVisualizationDiagnosticInspectorPanel,
-  "diagnostics.frequency_domain.periodic_floquet":
-    FrequencyDomainPeriodicFloquetDiagnosticInspectorPanel,
-  "resources.analysis.frequency_domain": FrequencyDomainResourceFamilyInspectorPanel,
-  "resources.analysis.frequency_domain.manifest":
-    FrequencyDomainManifestResourceInspectorPanel,
-  "resources.analysis.frequency_domain.calculation_modes":
-    FrequencyDomainCalculationModesResourceInspectorPanel,
-  "resources.analysis.frequency_domain.fmr":
-    FrequencyDomainFmrResourceInspectorPanel,
-  "resources.analysis.frequency_domain.dispersion":
-    FrequencyDomainDispersionResourceInspectorPanel,
-  "resources.analysis.frequency_domain.response_map":
-    FrequencyDomainResponseMapResourceInspectorPanel,
-  "resources.mesh.periodic_pairs":
-    FrequencyDomainPeriodicPairsResourceInspectorPanel,
-  "resources.analysis.eigen.spectrum": EigenSpectrumResourceInspectorPanel,
-  "resources.analysis.eigen.branches": EigenBranchesResourceInspectorPanel,
-  "resources.analysis.eigen.dispersion": EigenDispersionResourceInspectorPanel,
-  "resources.analysis.eigen.diagnostics": EigenDiagnosticsResourceInspectorPanel,
-  "resources.analysis.eigen.mode_metadata": EigenModeMetadataResourceInspectorPanel,
-  "resources.analysis.eigen.mode_field": EigenModeFieldResourceInspectorPanel,
-  "resources.analysis.frequency_response.sweep":
-    FrequencyResponseSweepResourceInspectorPanel,
-  "resources.analysis.frequency_response.progress":
-    FrequencyResponseProgressResourceInspectorPanel,
-  "resources.analysis.frequency_response.cancel_requested":
-    FrequencyResponseCancelRequestedResourceInspectorPanel,
-  "resources.analysis.frequency_response.frequency_point":
-    FrequencyResponseFrequencyPointResourceInspectorPanel,
-  "resources.analysis.frequency_response.field":
-    FrequencyResponseFieldResourceInspectorPanel,
-  "resources.analysis.frequency_response.observables":
-    FrequencyResponseObservablesResourceInspectorPanel,
-  "resources.analysis.frequency_response.diagnostics":
-    FrequencyResponseDiagnosticsResourceInspectorPanel,
 };
 
 const FREQUENCY_DOMAIN_DEDICATED_PANELS = Object.fromEntries(
@@ -660,7 +583,7 @@ const INSPECTOR_ROUTE_CONTRIBUTIONS: InspectorPanelContribution[] = [
   {
     id: "resources-overview",
     title: "Resources",
-    selectionKinds: ["resources.root", "resources.field"],
+    selectionKinds: ["resources.root"],
     component: FieldQuantityInspectorPanel,
   },
   {
@@ -672,7 +595,7 @@ const INSPECTOR_ROUTE_CONTRIBUTIONS: InspectorPanelContribution[] = [
   {
     id: "jobs-overview",
     title: "Jobs",
-    selectionKinds: ["jobs.root", "jobs.command"],
+    selectionKinds: ["jobs.root"],
     component: StudyInspectorPanel,
   },
   {
@@ -680,6 +603,72 @@ const INSPECTOR_ROUTE_CONTRIBUTIONS: InspectorPanelContribution[] = [
     title: "Diagnostics",
     selectionKinds: ["diagnostics.root", "diagnostics.resource"],
     component: VisualizationDebugPanel,
+  },
+  {
+    id: "runtime-resource",
+    title: "Runtime Resource",
+    selectionKinds: ["resources.runtime"],
+    component: RuntimeResourceInspectorPanel,
+  },
+  {
+    id: "runtime-run-job",
+    title: "Runtime Run",
+    selectionKinds: ["jobs.run"],
+    component: RuntimeRunJobInspectorPanel,
+  },
+  {
+    id: "runtime-stage-job",
+    title: "Runtime Stage",
+    selectionKinds: ["jobs.stage"],
+    component: RuntimeStageJobInspectorPanel,
+  },
+  {
+    id: "runtime-command-job",
+    title: "Runtime Command",
+    selectionKinds: ["jobs.command"],
+    component: RuntimeCommandJobInspectorPanel,
+  },
+  {
+    id: "runtime-problem-diagnostic",
+    title: "Problem Diagnostic",
+    selectionKinds: ["diagnostics.problem"],
+    component: RuntimeProblemDiagnosticInspectorPanel,
+  },
+  {
+    id: "runtime-health-diagnostic",
+    title: "Health Diagnostic",
+    selectionKinds: ["diagnostics.health"],
+    component: RuntimeHealthDiagnosticInspectorPanel,
+  },
+  {
+    id: "runtime-capability-diagnostic",
+    title: "Capability Diagnostic",
+    selectionKinds: ["diagnostics.capability"],
+    component: RuntimeCapabilityDiagnosticInspectorPanel,
+  },
+  {
+    id: "runtime-solver-diagnostic",
+    title: "Solver Diagnostic",
+    selectionKinds: ["diagnostics.solver"],
+    component: RuntimeSolverDiagnosticInspectorPanel,
+  },
+  {
+    id: "runtime-mesh-diagnostic",
+    title: "Mesh Diagnostic",
+    selectionKinds: ["diagnostics.mesh"],
+    component: RuntimeMeshDiagnosticInspectorPanel,
+  },
+  {
+    id: "runtime-frequency-diagnostic",
+    title: "Frequency-domain Diagnostic",
+    selectionKinds: ["diagnostics.frequency-domain"],
+    component: RuntimeFrequencyDiagnosticInspectorPanel,
+  },
+  {
+    id: "runtime-performance-diagnostic",
+    title: "Performance Diagnostic",
+    selectionKinds: ["diagnostics.performance"],
+    component: RuntimePerformanceDiagnosticInspectorPanel,
   },
   {
     id: "object-general",
@@ -758,24 +747,6 @@ const INSPECTOR_ROUTE_CONTRIBUTIONS: InspectorPanelContribution[] = [
     title: "Mode Visualization Overview",
     selectionKinds: ["object.mode_visualization"],
     component: ModeVisualizationOverviewPanel,
-  },
-  {
-    id: "object-mode-visualization-group",
-    title: "Mode Visualization Group",
-    selectionKinds: ["object.mode_visualization.group"],
-    component: ModeVisualizationGroupPanel,
-  },
-  {
-    id: "object-mode-visualization-field",
-    title: "Mode Visualization Field",
-    selectionKinds: ["object.mode_visualization.field"],
-    component: ModeVisualizationFieldPanel,
-  },
-  {
-    id: "object-mode-visualization-view",
-    title: "Mode Visualization View",
-    selectionKinds: ["object.mode_visualization.view"],
-    component: ModeVisualizationViewPanel,
   },
   {
     id: "physics-interaction",
@@ -975,7 +946,6 @@ const INSPECTOR_ROUTE_CONTRIBUTIONS: InspectorPanelContribution[] = [
       "mesh.quality",
       "mesh.size-fields",
       "mesh.regions",
-      "resources.mesh",
     ],
     component: MeshDetailsPanel,
   },

@@ -98,15 +98,6 @@ function resolveFamily(kind: string): FamilyDescriptor {
   if (kind === "object.mode_visualization") {
     return { tabs: [], typeLabel: "Mode visualization overview" };
   }
-  if (kind === "object.mode_visualization.group") {
-    return { tabs: [], typeLabel: "Mode visualization fields" };
-  }
-  if (kind === "object.mode_visualization.field") {
-    return { tabs: [], typeLabel: "Mode visualization field" };
-  }
-  if (kind === "object.mode_visualization.view") {
-    return { tabs: [], typeLabel: "Mode visualization view" };
-  }
   if (kind === "airbox.visualization.debug") {
     return { tabs: [], typeLabel: "Airbox visualization debug" };
   }

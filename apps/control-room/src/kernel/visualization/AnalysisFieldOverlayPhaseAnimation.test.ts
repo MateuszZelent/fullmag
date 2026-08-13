@@ -44,6 +44,7 @@ function setResponseOverlay(controller: AnalysisFieldOverlayController): void {
 describe("AnalysisFieldOverlayPhaseAnimation", () => {
   afterEach(() => {
     vi.useRealTimers();
+    vi.unstubAllGlobals();
   });
 
   it("advances phase only while eigen mode animation is active", () => {
@@ -135,6 +136,57 @@ describe("AnalysisFieldOverlayPhaseAnimation", () => {
     handle.stop();
   });
 
+  it("stops at one full cycle when phase looping is disabled", () => {
+    vi.useFakeTimers();
+    const controller = new AnalysisFieldOverlayController();
+    setEigenOverlay(controller);
+    controller.update({
+      animation: {
+        animatePhase: true,
+        animationRateHz: 1,
+        direction: 1,
+        loop: false,
+      },
+      visualizationPhaseRad: 1.9 * Math.PI,
+    });
+
+    const handle = startAnalysisFieldOverlayPhaseAnimation(controller, {
+      intervalMs: 100,
+    });
+    vi.advanceTimersByTime(100);
+
+    expect(controller.getSnapshot()?.visualizationPhaseRad).toBeCloseTo(2 * Math.PI);
+    expect(controller.getSnapshot()?.animation).toMatchObject({
+      animatePhase: false,
+      loop: false,
+    });
+
+    handle.stop();
+  });
+
+  it("does not schedule phase motion when reduced motion is requested", () => {
+    vi.useFakeTimers();
+    vi.stubGlobal(
+      "matchMedia",
+      vi.fn(() => ({ matches: true })),
+    );
+    const requestFrame = vi.fn();
+    vi.stubGlobal("requestAnimationFrame", requestFrame);
+    vi.stubGlobal("cancelAnimationFrame", vi.fn());
+    const controller = new AnalysisFieldOverlayController();
+    setEigenOverlay(controller);
+
+    const handle = startAnalysisFieldOverlayPhaseAnimation(controller, {
+      intervalMs: 100,
+    });
+    vi.advanceTimersByTime(500);
+
+    expect(requestFrame).not.toHaveBeenCalled();
+    expect(controller.getSnapshot()?.visualizationPhaseRad).toBeUndefined();
+
+    handle.stop();
+  });
+
   it("uses frame timestamps for smooth browser animation and cancels the owned frame", () => {
     const callbacks: FrameRequestCallback[] = [];
     const requestFrame = vi.fn((callback: FrameRequestCallback) => {
@@ -158,6 +210,5 @@ describe("AnalysisFieldOverlayPhaseAnimation", () => {
 
     handle.stop();
     expect(cancelFrame).toHaveBeenCalled();
-    vi.unstubAllGlobals();
   });
 });

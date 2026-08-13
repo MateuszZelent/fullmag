@@ -446,12 +446,6 @@
   min-width: 76px;
 }
 
-.fm-frequency-domain-visualization-actions
-  .fm-frequency-domain-mode-data-preview-button {
-  flex: 0 0 auto;
-  min-height: var(--fm-control-height-regular);
-}
-
 .fm-frequency-domain-table-empty {
   display: grid;
   min-height: var(--fm-chart-height-xs);

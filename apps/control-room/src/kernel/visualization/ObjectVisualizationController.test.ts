@@ -74,7 +74,7 @@ describe("ObjectVisualizationController", () => {
     });
   });
 
-  it("does not expose a magnetic-only quantity as the Airbox field source", () => {
+  it("preserves a magnetic-only quantity for catalog gating", () => {
     const resolved = resolveTargetVisualization({
       snapshot: new ObjectVisualizationController().getSnapshot(),
       target: AIRBOX_VISUALIZATION_TARGET,
@@ -94,7 +94,7 @@ describe("ObjectVisualizationController", () => {
       } as never,
     });
 
-    expect(resolved.settings.activeQuantityId).toBe("H_demag");
+    expect(resolved.settings.activeQuantityId).toBe("m");
   });
 
   it("keeps region visualization hidden by default", () => {

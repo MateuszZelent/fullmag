@@ -20,6 +20,12 @@ function MountedPreferencesProbe() {
   return <span>{preferences.preferences.descriptorPreferences["artifact:frequency-response:artifact://response"]?.displayUnits.amplitude ?? "base"}</span>;
 }
 
+function MountedSubviewProbe() {
+  const preferences = useAnalysisViewPreferencesHydration();
+  useEffect(() => { mountedPreferences = preferences; }, [preferences]);
+  return <span>{preferences.preferences.activeSubviews["resonance-fmr"]}</span>;
+}
+
 describe("analysis preference hydration", () => {
   it("uses the stable server snapshot during SSR", () => {
     expect(renderToStaticMarkup(<PreferencesProbe />)).toContain("dynamics:false");
@@ -61,6 +67,25 @@ describe("analysis preference hydration", () => {
       });
       await act(async () => root.render(<MountedPreferencesProbe />));
       expect(mountedPreferences?.preferences.descriptorPreferences["artifact:frequency-response:partial"]).toBeUndefined();
+    } finally {
+      mountedPreferences = null;
+      await act(async () => root.unmount());
+      dom.restore();
+    }
+  });
+
+  it("persists a canonical contextual subview change", async () => {
+    const dom = installSimulationPreparationTestDom();
+    const values = new Map<string, string>();
+    Object.defineProperty(globalThis.window, "localStorage", { configurable: true, value: { getItem: (key: string) => values.get(key) ?? null, setItem: (key: string, value: string) => values.set(key, value) } });
+    const container = dom.document.createElement("div");
+    const root = createRoot(container as unknown as Element);
+    try {
+      await act(async () => root.render(<MountedSubviewProbe />));
+      await act(async () => mountedPreferences?.setActiveSubview("resonance-fmr", "resonance.modal-driven"));
+
+      expect(container.textContent).toBe("resonance.modal-driven");
+      expect(values.get(ANALYSIS_VIEW_PREFERENCES_STORAGE_KEY)).toContain('"resonance-fmr":"resonance.modal-driven"');
     } finally {
       mountedPreferences = null;
       await act(async () => root.unmount());

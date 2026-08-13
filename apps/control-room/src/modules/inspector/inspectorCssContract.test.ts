@@ -63,16 +63,6 @@ describe("Inspector visual contract", () => {
     expect(inspectorModule).toContain("InspectorEditSessionProvider");
   });
 
-  it("does not replace canonical frequency-response values with instructional prose", () => {
-    const responseSection = readFileSync(
-      join(inspectorRoot, "panels/FrequencyDomainResponseSection.tsx"),
-      "utf8",
-    );
-
-    expect(responseSection).not.toContain("finite A/m component");
-    expect(responseSection).not.toContain("generated unless an explicit list is set");
-  });
-
   it("routes regional field-drive drafts through the shared Inspector action bar", () => {
     const fieldDrivePanel = readFileSync(
       join(inspectorRoot, "panels/RegionalFieldDrivePanel.tsx"),

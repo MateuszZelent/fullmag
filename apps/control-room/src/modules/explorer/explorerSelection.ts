@@ -9,6 +9,7 @@ import {
   visualizationTargetIdForSceneObject,
 } from "@/kernel/selection/selectionTypes";
 import type { KernelApi, ModuleId } from "@/kernel/types";
+import type { PostprocessingDefinitionKind } from "@/shared/domain/analysis/postprocessingTypes";
 import { targetForFdmNativeLayer } from "@/kernel/visualization/ObjectVisualizationController";
 import { selectCrossSectionPlot } from "@/kernel/workspace/crossSectionWorkspace";
 import { parsePinnedQuickChart } from "@/kernel/workspace/quickChartWorkspace";
@@ -127,14 +128,36 @@ function modeVisualizationSourceFromNode(
   return null;
 }
 
-function modeVisualizationViewFromNode(node: ExplorerNode): string | undefined {
-  if (node.analysisFieldView) return node.analysisFieldView;
-  const marker = ":view:";
-  const markerIndex = node.id.lastIndexOf(marker);
-  return markerIndex >= 0 ? node.id.slice(markerIndex + marker.length) : undefined;
+function postprocessingDefinitionKindFromNode(
+  node: ExplorerNode,
+): PostprocessingDefinitionKind | null {
+  if (node.kind.startsWith("results.analysis_views")) return "analysis_view";
+  if (node.kind.startsWith("results.derived_values")) return "derived_value";
+  if (node.kind.startsWith("results.tables")) return "table";
+  if (node.kind.startsWith("results.exports")) return "export";
+  return null;
 }
 
-function selectionRefFromNode(node: ExplorerNode): SelectionRef | null {
+function postprocessingRootKind(
+  definitionKind: PostprocessingDefinitionKind,
+): ExplorerNode["kind"] {
+  if (definitionKind === "analysis_view") return "results.analysis_views.root";
+  if (definitionKind === "derived_value") return "results.derived_values.root";
+  if (definitionKind === "table") return "results.tables.root";
+  return "results.exports.root";
+}
+
+export function selectionRefFromNode(node: ExplorerNode): SelectionRef | null {
+  if (node.runtimeDescriptorId && node.runtimeResourceKey) {
+    return {
+      descriptorId: node.runtimeDescriptorId,
+      kind: node.kind,
+      nodeId: node.id,
+      resourceKey: node.runtimeResourceKey,
+      type: "runtime-explorer",
+    };
+  }
+
   if (node.kind === "results.quick_chart") {
     const descriptor = parsePinnedQuickChart(node);
     if (!descriptor) return null;
@@ -148,6 +171,27 @@ function selectionRefFromNode(node: ExplorerNode): SelectionRef | null {
       tableId: descriptor.tableId,
       type: "quick-chart",
       xAxisId: descriptor.xAxisId,
+    };
+  }
+
+  const postprocessingKind = postprocessingDefinitionKindFromNode(node);
+  if (postprocessingKind) {
+    return {
+      artifactKind: node.postprocessingArtifactKind ?? null,
+      catalogRevision: node.postprocessingCatalogRevision ?? null,
+      contractGap: node.postprocessingContractGap ?? null,
+      definitionKind: postprocessingKind,
+      freshness: node.postprocessingFreshness ?? "unknown",
+      kind: node.kind,
+      nodeId: node.id,
+      ownerId: node.postprocessingOwnerId ?? null,
+      ownerKind: node.postprocessingOwnerKind ?? null,
+      ownerReadiness: node.postprocessingOwnerReadiness ?? "unavailable",
+      ownerResourceRevision: node.postprocessingResourceRevision ?? null,
+      ownerSchemaRevision: node.postprocessingSchemaRevision ?? null,
+      resourceRef: node.resourceRef ?? null,
+      scope: node.kind.endsWith(".root") ? "root" : "definition",
+      type: "postprocessing",
     };
   }
 
@@ -258,54 +302,68 @@ function selectionRefFromNode(node: ExplorerNode): SelectionRef | null {
       ...(node.frequencyIndex !== undefined
         ? { frequencyIndex: node.frequencyIndex }
         : {}),
+      ...(node.frequencyHz !== undefined ? { frequencyHz: node.frequencyHz } : {}),
       kind: node.kind,
+      ...(node.kPathCoordinateRadPerM !== undefined
+        ? { kPathCoordinateRadPerM: node.kPathCoordinateRadPerM }
+        : {}),
       ...(node.modeIndex !== undefined ? { modeIndex: node.modeIndex } : {}),
       nodeId: node.id,
       ...(node.observableId ? { observableId: node.observableId } : {}),
       ...(node.resourceRef ? { resourceRef: node.resourceRef } : {}),
+      ...(node.analysisFieldRepresentation
+        ? { representation: node.analysisFieldRepresentation }
+        : {}),
       ...(node.sampleIndex !== undefined ? { sampleIndex: node.sampleIndex } : {}),
+      ...(node.analysisFieldSource ? { source: node.analysisFieldSource } : {}),
       ...(node.studyProduct ? { studyProduct: node.studyProduct } : {}),
       type: "frequency-domain",
+      ...(node.wavevectorKf ? { wavevectorKf: node.wavevectorKf } : {}),
     };
   }
 
   if (
     node.objectId &&
     node.fieldId &&
-    (node.kind === "object.mode_visualization" ||
-      node.kind === "object.mode_visualization.group" ||
-      node.kind === "object.mode_visualization.field" ||
-      node.kind === "object.mode_visualization.view")
+    node.kind === "object.mode_visualization"
   ) {
     const source = modeVisualizationSourceFromNode(node);
     if (!source) return null;
     return {
+      ...(node.analysisRunId ? { analysisRunId: node.analysisRunId } : {}),
+      ...(node.analysisStageId ? { analysisStageId: node.analysisStageId } : {}),
+      ...(node.artifactRevision !== undefined
+        ? { artifactRevision: node.artifactRevision }
+        : {}),
+      ...(node.equilibriumId ? { equilibriumId: node.equilibriumId } : {}),
       fieldId: node.fieldId,
-      ...(node.fieldIds ? { fieldIds: node.fieldIds } : {}),
       ...(node.frequencyIndex !== undefined
         ? { frequencyIndex: node.frequencyIndex }
         : {}),
+      ...(node.frequencyHz !== undefined ? { frequencyHz: node.frequencyHz } : {}),
       kind: node.kind,
+      ...(node.kContextKind ? { kContextKind: node.kContextKind } : {}),
+      ...(node.kPathCoordinateRadPerM !== undefined
+        ? { kPathCoordinateRadPerM: node.kPathCoordinateRadPerM }
+        : {}),
       ...(node.modeIndex !== undefined ? { modeIndex: node.modeIndex } : {}),
-      ...(node.modeVisualizationRootFieldId
-        ? { modeVisualizationRootFieldId: node.modeVisualizationRootFieldId }
-        : {}),
-      ...(node.modeVisualizationRootSource
-        ? { modeVisualizationRootSource: node.modeVisualizationRootSource }
-        : {}),
       nodeId: node.id,
       objectId: node.objectId,
+      ...(node.resourceRef ? { resourceRef: node.resourceRef } : {}),
+      ...(node.analysisFieldRepresentation
+        ? { representation: node.analysisFieldRepresentation }
+        : {}),
       ...(node.sampleIndex !== undefined ? { sampleIndex: node.sampleIndex } : {}),
       source,
+      ...(node.studyProduct ? { studyProduct: node.studyProduct } : {}),
       type: "mode-visualization",
-      ...(modeVisualizationViewFromNode(node)
-        ? { view: modeVisualizationViewFromNode(node) }
-        : {}),
+      ...(node.analysisFieldView ? { view: node.analysisFieldView } : {}),
       visualizationTargetId: modeVisualizationTargetId(
         node.objectId,
         source,
         node.fieldId,
       ),
+      ...(node.wavevectorKf ? { wavevectorKf: node.wavevectorKf } : {}),
     };
   }
 
@@ -603,6 +661,51 @@ function selectionRefFromNode(node: ExplorerNode): SelectionRef | null {
   return null;
 }
 
+function findExplorerNode(
+  nodes: readonly ExplorerNode[],
+  nodeId: string | null,
+): ExplorerNode | null {
+  if (!nodeId) return null;
+  for (const node of nodes) {
+    if (node.id === nodeId) return node;
+    const child = findExplorerNode(node.children ?? [], nodeId);
+    if (child) return child;
+  }
+  return null;
+}
+
+function findExplorerNodeByKind(
+  nodes: readonly ExplorerNode[],
+  kind: ExplorerNode["kind"],
+): ExplorerNode | null {
+  for (const node of nodes) {
+    if (node.kind === kind) return node;
+    const child = findExplorerNodeByKind(node.children ?? [], kind);
+    if (child) return child;
+  }
+  return null;
+}
+
+export function resolveCurrentExplorerSelectionNode(
+  nodes: readonly ExplorerNode[],
+  selectedNodeId: string | null,
+  ref: SelectionRef | null,
+  currentTree: readonly ExplorerNode[] = nodes,
+): ExplorerNode | null {
+  const selected = findExplorerNode(nodes, selectedNodeId);
+  if (selected) return selected;
+  if (ref?.type !== "postprocessing") return null;
+  // A definition selection is tied to an immutable owner identity. If that
+  // owner is no longer in the current snapshot, never silently retarget the
+  // selection to a family root with different semantics.
+  if (ref.scope === "definition") return null;
+  const rootKind = postprocessingRootKind(ref.definitionKind);
+  const familyRoot = findExplorerNodeByKind(currentTree, rootKind);
+  if (familyRoot) return familyRoot;
+  const resultsRoot = findExplorerNodeByKind(currentTree, "results.root");
+  return resultsRoot?.availability === "unavailable" ? resultsRoot : null;
+}
+
 function isFrequencyDomainSelectionNode(node: ExplorerNode): boolean {
   return (
     node.kind.startsWith("results.resonance") ||
@@ -614,13 +717,7 @@ function isFrequencyDomainSelectionNode(node: ExplorerNode): boolean {
     node.kind.startsWith("results.exports") ||
     node.kind.startsWith("results.frequency_domain") ||
     node.kind.startsWith("results.eigen") ||
-    node.kind.startsWith("results.frequency_response") ||
-    node.kind.startsWith("resources.analysis.frequency_domain") ||
-    node.kind.startsWith("resources.analysis.eigen") ||
-    node.kind.startsWith("resources.analysis.frequency_response") ||
-    node.kind === "resources.mesh.periodic_pairs" ||
-    node.kind.startsWith("jobs.frequency_domain") ||
-    node.kind.startsWith("diagnostics.frequency_domain")
+    node.kind.startsWith("results.frequency_response")
   );
 }
 

@@ -586,6 +586,8 @@
   grid-template-rows: auto 44px minmax(0, 1fr) 56px;
   height: 100%;
   min-height: 0;
+  min-width: 0;
+  overflow: hidden;
   background: var(--fm-bg-panel);
   container-type: inline-size;
 }

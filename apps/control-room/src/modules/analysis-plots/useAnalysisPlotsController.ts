@@ -7,11 +7,17 @@ import { useSelectionSelector } from "@/kernel/selection/useSelection";
 import type { Selection } from "@/kernel/selection/selectionTypes";
 import type { KernelApi } from "@/kernel/types";
 import { analysisWorkspaceStore } from "@/kernel/workspace/analysisWorkspace";
-import { analysisDescriptorId, type AnalysisDescriptorPreference } from "@/kernel/workspace/analysisViewPreferences";
+import {
+  ANALYSIS_SUBVIEWS,
+  analysisDescriptorId,
+  type AnalysisDescriptorPreference,
+  type AnalysisSubview,
+} from "@/kernel/workspace/analysisViewPreferences";
 import { useAnalysisViewPreferencesHydration } from "@/kernel/workspace/useAnalysisViewPreferencesHydration";
 import { useAnalysisWorkspaceSelector } from "@/kernel/workspace/useAnalysisWorkspace";
 
 import { useAnalysisDatasetData } from "./hooks/useAnalysisDatasetData";
+import { ANALYSIS_COMPARISON_UNAVAILABLE_REASON } from "./analysisComparison";
 import {
   useAnalysisFrequencyData,
   type AnalysisFrequencyDataResult,
@@ -25,10 +31,7 @@ export function useAnalysisPlotsController(kernel: KernelApi) {
   const activeSurface = useAnalysisWorkspaceSelector((state) => state.activeSurface);
   const selectedDatasetRef = useAnalysisWorkspaceSelector((state) => state.selectedDatasetRef);
   const sourceChartId = useAnalysisWorkspaceSelector((state) => state.sourceChartId);
-  const comparisonDatasetRef = useAnalysisWorkspaceSelector((state) => state.comparisonDatasetRef);
-  const comparisonSelectedSeriesKeys = useAnalysisWorkspaceSelector((state) => state.comparisonSelectedSeriesKeys);
   const hasChartState = useAnalysisWorkspaceSelector((state) => state.hasChartState);
-  const hasComparisonSelection = useAnalysisWorkspaceSelector((state) => state.hasComparisonSelection);
   const selectedSeriesIds = useAnalysisWorkspaceSelector((state) => state.selectedSeriesIds);
   const xAxisId = useAnalysisWorkspaceSelector((state) => state.xAxisId);
   const preferences = useAnalysisViewPreferencesHydration();
@@ -40,13 +43,10 @@ export function useAnalysisPlotsController(kernel: KernelApi) {
     analysisWorkspaceStore.setSelectedDatasetRef(preferences.preferences.selectedDatasetRef);
   }, [preferences.isHydrated, preferences.preferences.activeSurface, preferences.preferences.selectedDatasetRef]);
 
-  const dataset = useAnalysisDatasetData({ datasetRef: selectedDatasetRef, enabled: activeSurface === "dynamics" || activeSurface === "comparison" });
-  const comparisonDataset = useAnalysisDatasetData({ datasetRef: comparisonDatasetRef, enabled: activeSurface === "comparison" && comparisonDatasetRef !== null });
+  const activeSubview = preferences.preferences.activeSubviews?.[activeSurface] ?? ANALYSIS_SUBVIEWS[activeSurface][0];
+  const subviews = ANALYSIS_SUBVIEWS[activeSurface];
+  const dataset = useAnalysisDatasetData({ datasetRef: selectedDatasetRef, enabled: activeSurface === "dynamics" });
   useEffect(() => { analysisWorkspaceStore.setVisibleDatasetRevision(dataset.visibleRevision); }, [dataset.visibleRevision]);
-  const comparisonXAxisId = comparisonDataset.visibleTable?.columns[0]?.column_id ?? null;
-  useEffect(() => {
-    analysisWorkspaceStore.setComparisonXAxisId(comparisonXAxisId);
-  }, [comparisonXAxisId]);
   const frequency = useAnalysisFrequencyData(activeSurface === "resonance-fmr" || activeSurface === "dispersion" ? activeSurface : "idle");
   const frequencyChartId = (activeSurface === "resonance-fmr" || activeSurface === "dispersion") && frequency.frequencyDomainSeries[0]
     ? `${activeSurface}:${frequency.frequencyDomainSeries[0].source.resourceKey}`
@@ -54,6 +54,10 @@ export function useAnalysisPlotsController(kernel: KernelApi) {
   useEffect(() => {
     if (activeSurface === "resonance-fmr" || activeSurface === "dispersion") {
       analysisWorkspaceStore.setFocusedChartId(frequencyChartId);
+      return;
+    }
+    if (activeSurface === "comparison") {
+      analysisWorkspaceStore.setFocusedChartId(null);
       return;
     }
     analysisWorkspaceStore.setFocusedChartId(sourceChartId);
@@ -79,35 +83,15 @@ export function useAnalysisPlotsController(kernel: KernelApi) {
   const effectiveSelectedSeriesIds = frequencyChartId
     ? frequencyDescriptor?.selectedSeriesIds ?? frequency.frequencyDomainSeries.map((series) => series.id)
     : selectedSeriesIds;
-  const comparisonDescriptorId = useMemo(
-    () => analysisDescriptorId({ kind: "comparison", primaryDatasetRef: selectedDatasetRef, secondaryDatasetRef: comparisonDatasetRef }),
-    [comparisonDatasetRef, selectedDatasetRef],
-  );
-  const comparisonDescriptor = preferences.preferences.descriptorPreferences[comparisonDescriptorId];
-  const comparisonDefaultSeriesIds = useMemo(() => {
-    if (!comparisonDataset.visibleTable || !dataset.visibleTable) return [];
-    const secondary = new Set(comparisonDataset.visibleTable.columns.slice(1).map((column) => `${encodeURIComponent(column.column_id)}|${encodeURIComponent(column.unit)}`));
-    return dataset.visibleTable.columns.slice(1)
-      .map((column) => `${encodeURIComponent(column.column_id)}|${encodeURIComponent(column.unit)}`)
-      .filter((key) => secondary.has(key));
-  }, [comparisonDataset.visibleTable, dataset.visibleTable]);
-  const comparisonAxesCompatible = dataset.visibleTable?.columns[0]?.column_id === comparisonDataset.visibleTable?.columns[0]?.column_id &&
-    dataset.visibleTable?.columns[0]?.unit === comparisonDataset.visibleTable?.columns[0]?.unit;
   const effectiveDescriptor = frequencyDescriptorId
     ? frequencyDescriptor
-    : activeSurface === "comparison"
-      ? comparisonDescriptor
-      : descriptor;
+    : descriptor;
   const effectiveDescriptorSelection = frequencyDescriptorId
     ? effectiveSelectedSeriesIds
-    : activeSurface === "comparison"
-      ? comparisonDescriptor?.selectedSeriesIds ?? comparisonDefaultSeriesIds
-      : descriptor?.selectedSeriesIds ?? tableDefaultSeriesIds;
-  const activeDescriptorId = frequencyDescriptorId ?? (activeSurface === "comparison" ? comparisonDescriptorId : descriptorId);
+    : descriptor?.selectedSeriesIds ?? tableDefaultSeriesIds;
+  const activeDescriptorId = frequencyDescriptorId ?? descriptorId;
   const activeDescriptorDisplayUnits = effectiveDescriptor?.displayUnits ?? EMPTY_DISPLAY_UNITS;
-  const activeDescriptorRange = activeSurface === "comparison" && !comparisonAxesCompatible
-    ? null
-    : effectiveDescriptor?.range ?? null;
+  const activeDescriptorRange = effectiveDescriptor?.range ?? null;
   useEffect(() => {
     analysisWorkspaceStore.setActiveDescriptorId(activeDescriptorId);
     analysisWorkspaceStore.setActiveDescriptorView({
@@ -125,14 +109,10 @@ export function useAnalysisPlotsController(kernel: KernelApi) {
       descriptor?.selectedSeriesIds ?? tableDefaultSeriesIds,
     );
   }, [dataset.visibleTable, descriptor, hasChartState, selectedDatasetRef, tableDefaultSeriesIds]);
-  useEffect(() => {
-    if (!comparisonDataset.visibleTable || !dataset.visibleTable || hasComparisonSelection) return;
-    analysisWorkspaceStore.setComparisonSelection(
-      comparisonDescriptor?.selectedSeriesIds ?? comparisonDefaultSeriesIds,
-    );
-  }, [comparisonDataset.visibleTable, comparisonDefaultSeriesIds, comparisonDescriptor?.selectedSeriesIds, dataset.visibleTable, hasComparisonSelection]);
   return {
+    activeSubview,
     activeSurface,
+    comparisonUnavailableReason: ANALYSIS_COMPARISON_UNAVAILABLE_REASON,
     datasetRefs: dataset.tableList.data?.tables.map((table) => table.table_id) ?? [],
     dynamicStructureFactor: dynamicStructureFactor.data ?? null,
     dynamicStructureFactorStatus: dynamicStructureFactor.status,
@@ -145,16 +125,7 @@ export function useAnalysisPlotsController(kernel: KernelApi) {
     frequencyDomainProvenance: frequency.frequencyDomainSeries[0] ? `${frequency.frequencyDomainSeries[0].source.resourceKey} · revision ${frequency.frequencyDomainSeries[0].dataRevision}` : null,
     selectedDatasetRef,
     descriptorId: activeDescriptorId,
-    sourceChartId: frequencyChartId ?? sourceChartId,
-    comparisonDatasetRef,
-    comparisonSelectedSeriesKeys,
-    comparisonTable: comparisonDataset.visibleTable,
-    comparisonTableStatus: comparisonDataset.rows.status,
-    comparisonTableUnsupportedReason: comparisonDataset.unsupportedReason,
-    comparisonVisibleRevision: comparisonDataset.visibleRevision,
-    comparisonPrimaryDisplayUnits: comparisonDescriptor?.displayUnits ?? {},
-    comparisonSecondaryDisplayUnits: comparisonDescriptor?.displayUnits ?? {},
-    hasComparisonSelection,
+    sourceChartId: activeSurface === "comparison" ? null : frequencyChartId ?? sourceChartId,
     selectedStageId,
     surfaceProvenance: {
       dispersion: dynamicStructureFactor.data ? `${dynamicStructureFactor.data.artifact_ref} · revision ${dynamicStructureFactor.data.schema_version}` : undefined,
@@ -164,33 +135,19 @@ export function useAnalysisPlotsController(kernel: KernelApi) {
     selectedPoint,
     selectedSeriesIds: effectiveSelectedSeriesIds,
     displayUnits: effectiveDescriptor?.displayUnits ?? {},
-    range: comparisonAxesCompatible || activeSurface !== "comparison"
-      ? effectiveDescriptor?.range ? { fromValue: effectiveDescriptor.range.fromSI, toValue: effectiveDescriptor.range.toSI } : null
-      : null,
+    range: effectiveDescriptor?.range ? { fromValue: effectiveDescriptor.range.fromSI, toValue: effectiveDescriptor.range.toSI } : null,
     setActiveSurface: (surface: typeof activeSurface) => {
       preferences.setActiveSurface(surface);
       analysisWorkspaceStore.setActiveSurface(surface);
     },
+    onSubviewChange: (subview: AnalysisSubview) => preferences.setActiveSubview(activeSurface, subview),
     setSelectedDatasetRef: (datasetRef: string | null) => {
       preferences.setSelectedDatasetRef(datasetRef);
       analysisWorkspaceStore.setSelectedDatasetRef(datasetRef);
     },
-    setComparisonDatasetRef: (datasetRef: string | null) => analysisWorkspaceStore.setComparisonDatasetRef(datasetRef),
-    onComparisonSelectedSeriesKeysChange: (seriesKeys: string[]) => {
-      analysisWorkspaceStore.setComparisonSelection(seriesKeys);
-      preferences.setDescriptorPreference(comparisonDescriptorId, completeDescriptorPreference(comparisonDescriptor, comparisonDefaultSeriesIds, { selectedSeriesIds: seriesKeys }));
-    },
-    onComparisonPrimaryDisplayUnitsChange: (patch: Record<string, string>) => preferences.setDescriptorPreference(comparisonDescriptorId, completeDescriptorPreference(comparisonDescriptor, comparisonDefaultSeriesIds, {
-      displayUnits: { ...(comparisonDescriptor?.displayUnits ?? {}), ...patch },
-    })),
-    onComparisonSecondaryDisplayUnitsChange: (patch: Record<string, string>) => preferences.setDescriptorPreference(comparisonDescriptorId, completeDescriptorPreference(comparisonDescriptor, comparisonDefaultSeriesIds, {
-      displayUnits: { ...(comparisonDescriptor?.displayUnits ?? {}), ...patch },
-    })),
     onPointSelect: (point: AnalysisChartCursorPoint) => {
       setSelectedPoint(point);
-      const chartId = activeSurface === "comparison" && point.source.tableId === comparisonDatasetRef
-        ? `comparison:${comparisonDatasetRef}`
-        : frequencyChartId ?? sourceChartId ?? descriptorId;
+      const chartId = frequencyChartId ?? sourceChartId ?? descriptorId;
       analysisWorkspaceStore.setFocusedChartId(chartId);
       if (activeSurface === "resonance-fmr" || activeSurface === "dispersion") {
         const mapped = frequencyDomainSelectionFromPoint({
@@ -225,8 +182,7 @@ export function useAnalysisPlotsController(kernel: KernelApi) {
       }, "analysis-plots");
     },
     onRangeChange: (range: ChartValueRange) => {
-      if (activeSurface === "comparison" && !comparisonAxesCompatible) return;
-      const targetId = frequencyDescriptorId ?? (activeSurface === "comparison" ? comparisonDescriptorId : descriptorId);
+      const targetId = frequencyDescriptorId ?? descriptorId;
       preferences.setDescriptorPreference(targetId, completeDescriptorPreference(effectiveDescriptor, effectiveDescriptorSelection, { range: { fromSI: range.fromValue, toSI: range.toValue } }));
     },
     onSelectedSeriesIdsChange: (nextSelectedSeriesIds: string[]) => {
@@ -238,7 +194,7 @@ export function useAnalysisPlotsController(kernel: KernelApi) {
       analysisWorkspaceStore.setChartState(dataset.visibleTable?.columns[0]?.column_id ?? "x", nextSelectedSeriesIds);
     },
     onDisplayUnitsChange: (patch: Record<string, string>) => {
-      const targetId = frequencyDescriptorId ?? (activeSurface === "comparison" ? comparisonDescriptorId : descriptorId);
+      const targetId = frequencyDescriptorId ?? descriptorId;
       preferences.setDescriptorPreference(targetId, completeDescriptorPreference(effectiveDescriptor, effectiveDescriptorSelection, {
         displayUnits: { ...(effectiveDescriptor?.displayUnits ?? {}), ...patch },
       }));
@@ -248,6 +204,7 @@ export function useAnalysisPlotsController(kernel: KernelApi) {
     table: dataset.visibleTable,
     tableStatus: dataset.rows.status,
     tableUnsupportedReason: dataset.unsupportedReason,
+    subviews,
     visibleDatasetRevision: dataset.visibleRevision,
     xAxisId,
   };
@@ -286,7 +243,7 @@ export function frequencyDomainSelectionFromPoint(input: {
 }) {
   const point = input.point;
   const nodeId = `analysis:charts:${point.source.tableId}:point:${point.seriesId}:${point.point.rowIndex}`;
-  if (input.routeMode === "fmr_response") {
+  if (input.routeMode === "fmr_response" || input.routeMode === "frequency_response") {
     const match = input.responseModel.points.find((entry) =>
       entry.frequencyIndex === point.point.rowIndex ||
       entry.frequencyHz / 1e9 === point.point.x

@@ -27,32 +27,41 @@ describe("Analysis workbench", () => {
   it("renders each selected workbench surface", () => {
     for (const activeSurface of ["dynamics", "resonance-fmr", "dispersion", "hysteresis", "comparison"] as const) {
       const html = renderToStaticMarkup(<AnalysisPlotsView {...props} activeSurface={activeSurface} />);
-      expect(html).toContain('aria-label="Analysis dataset"');
+      if (activeSurface === "comparison") expect(html).not.toContain('aria-label="Analysis dataset"');
+      else expect(html).toContain('aria-label="Analysis dataset"');
     }
   });
 
-  it("requires a controlled second published source for Comparison", () => {
-    const html = renderToStaticMarkup(<AnalysisPlotsView {...props} activeSurface="comparison" selectedDatasetRef="table-a" />);
-    expect(html).toContain("Select a second published dataset compatible with table-a");
+  it("renders the controlled subview instead of deriving a decorative value from calculation mode", () => {
+    const html = renderToStaticMarkup(
+      <AnalysisPlotsView {...props} activeSurface="dynamics" activeSubview="dynamics.temporal-fft" />,
+    );
+
+    expect(html).toContain('data-analysis-subview="dynamics.temporal-fft"');
   });
 
-  it("renders paired compatible comparison sources with their frozen revisions", () => {
-    const html = renderToStaticMarkup(<AnalysisPlotsView {...props} activeSurface="comparison" comparisonDatasetRef="table-b" comparisonTable={tableFixture("table-b", 11)} selectedDatasetRef="table-a" table={tableFixture("table-a", 7)} />);
-    expect(html).toContain("table-a · revision 7");
-    expect(html).toContain("table-b · revision 11");
-    expect(html).toContain("Compatible series");
+  it("marks Comparison unavailable until both typed owner identities exist", () => {
+    const html = renderToStaticMarkup(<AnalysisPlotsView {...props} activeSurface="comparison" selectedDatasetRef="table-a" />);
+    expect(html).toContain("Comparison unavailable");
+    expect(html).toContain("typed owner identities");
+  });
+
+  it("does not expose a fake successful Comparison path for matching table columns", () => {
+    const html = renderToStaticMarkup(<AnalysisPlotsView {...props} activeSurface="comparison" selectedDatasetRef="table-a" table={tableFixture("table-a", 7)} />);
+    expect(html).toContain("Comparison unavailable");
+    expect(html).not.toContain("Compatibility verdict: Compatible");
   });
 
   it("renders surface-specific provenance for all five surfaces", () => {
     const expected: Record<string, string | null> = {
-      comparison: "table-a · revision 7", dynamics: "table-a · revision 7",
+      comparison: null, dynamics: "table-a · revision 7",
       dispersion: "dynamic-structure-factor",
       "resonance-fmr": "response/magnetic-sweep", hysteresis: "hysteresis",
     };
     for (const [surface, provenance] of Object.entries(expected)) {
       const html = renderToStaticMarkup(<AnalysisPlotsView {...props} activeSurface={surface as never} selectedDatasetRef="table-a" table={tableFixture("table-a", 7)} frequencyDomainProvenance={provenance} surfaceProvenance={{ dispersion: provenance!, hysteresis: provenance! }} /> as never);
-      expect(html).toContain(provenance!);
-      if (surface !== "dynamics" && surface !== "comparison") expect(html).not.toContain("Dataset provenance: table-a");
+      if (provenance) expect(html).toContain(provenance);
+      if (surface !== "dynamics") expect(html).not.toContain("Dataset provenance: table-a");
     }
   });
 });

@@ -5,10 +5,12 @@ import {
   expandExplorerNodes,
   ensureExplorerModelObjectDefaults,
   explorerStore,
+  reconcileResultContextRunId,
   revealExplorerNode,
   resetExplorerStoreForTests,
   setExplorerActiveTab,
   setExplorerFilterText,
+  setExplorerResultContextRunId,
   shouldAutoRevealModelTab,
   toggleExplorerNode,
 } from "./explorerStore";
@@ -65,6 +67,38 @@ describe("explorerStore", () => {
     collapseExplorerNodes("resources", ["resources:fields"]);
     expect(explorerStore.getSnapshot().expandedIds.resources.has("resources:fields")).toBe(false);
     expect(explorerStore.getSnapshot().expandedIds.resources.has("resources:mesh")).toBe(false);
+  });
+
+  it("keeps the selected Result context as an SSR-safe identifier", () => {
+    expect(explorerStore.getSnapshot().resultContextRunId).toBeNull();
+
+    setExplorerResultContextRunId("run-2");
+
+    expect(explorerStore.getSnapshot().resultContextRunId).toBe("run-2");
+  });
+
+  it("follows the current run until an explicit Result context is selected", () => {
+    expect(
+      reconcileResultContextRunId({
+        currentRunId: "run-1",
+        previousCurrentRunId: null,
+        selectedRunId: null,
+      }),
+    ).toBe("run-1");
+    expect(
+      reconcileResultContextRunId({
+        currentRunId: "run-2",
+        previousCurrentRunId: "run-1",
+        selectedRunId: "run-1",
+      }),
+    ).toBe("run-2");
+    expect(
+      reconcileResultContextRunId({
+        currentRunId: "run-2",
+        previousCurrentRunId: "run-1",
+        selectedRunId: "archived-run",
+      }),
+    ).toBe("archived-run");
   });
 
   it("reveals a viewport selection without clearing the user's filter", () => {

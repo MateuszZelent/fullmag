@@ -1,8 +1,9 @@
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { readFileSync } from "node:fs";
+import { readFileSync, realpathSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 
 import {
   assertChartPerformanceProof,
@@ -19,13 +20,13 @@ const apiBase = (
 const workspaceUrl =
   process.env.CONTROL_ROOM_URL ?? "http://localhost:3100/workspace";
 const timeoutMs = numericEnv("CONTROL_ROOM_CHART_PERFORMANCE_TIMEOUT_MS", 120_000);
-const idleObserveMs = numericEnv(
-  "CONTROL_ROOM_CHART_PERFORMANCE_IDLE_OBSERVE_MS",
+const idleObserveMs = Math.max(
   3_000,
+  numericEnv("CONTROL_ROOM_CHART_PERFORMANCE_IDLE_OBSERVE_MS", 3_000),
 );
-const tabSwitches = numericEnv(
-  "CONTROL_ROOM_CHART_PERFORMANCE_TAB_SWITCHES",
-  100,
+const tabSwitches = Math.max(
+  3,
+  numericEnv("CONTROL_ROOM_CHART_PERFORMANCE_TAB_SWITCHES", 100),
 );
 const maxRetainedHeapGrowthBytes = numericEnv(
   "CONTROL_ROOM_CHART_PERFORMANCE_MAX_RETAINED_HEAP_GROWTH_BYTES",
@@ -53,6 +54,23 @@ const VIEWPORT_UPLOAD_MEASURE_NAMES = [
   "fullmag.viewport3d.uploadVectorGlyphColors",
   "fullmag.viewport3d.uploadVectorGlyphMatrices",
 ];
+const CHART_AUDIT_SURFACE_PLAN = Object.freeze([
+  Object.freeze({ id: "dynamics", label: "Dynamics" }),
+  Object.freeze({ id: "resonance-fmr", label: "Resonance & FMR" }),
+  Object.freeze({ id: "dispersion", label: "Dispersion" }),
+  Object.freeze({ id: "comparison", label: "Comparison" }),
+]);
+
+export function buildChartAuditSurfacePlan() {
+  return CHART_AUDIT_SURFACE_PLAN.map((surface) => ({ ...surface }));
+}
+
+export function hasChartOwnedAnimationFrameWork({
+  activeFrames,
+  callbacks,
+}) {
+  return activeFrames > 0 || callbacks > 0;
+}
 
 async function main() {
   const playwright = await loadPlaywright();
@@ -106,6 +124,8 @@ async function main() {
     window.__FULLMAG_CHART_AUDIT_RUNTIME__ = {
       animationFrameCallbacks: 0,
       animationFrames: 0,
+      chartOwnedAnimationFrameCallbacks: 0,
+      chartOwnedAnimationFrames: 0,
       createdObjectUrls: 0,
       intervals: 0,
       listeners: 0,
@@ -302,22 +322,43 @@ async function main() {
     const nativeRequestAnimationFrame = window.requestAnimationFrame.bind(window);
     const nativeCancelAnimationFrame = window.cancelAnimationFrame.bind(window);
     const activeAnimationFrames = new Set();
+    const activeChartAnimationFrames = new Set();
+    const updateAnimationFrameCounts = () => {
+      runtime.animationFrames = activeAnimationFrames.size;
+      runtime.chartOwnedAnimationFrames = activeChartAnimationFrames.size;
+    };
     window.requestAnimationFrame = (callback) => {
       let handle = 0;
       handle = nativeRequestAnimationFrame((timestamp) => {
         activeAnimationFrames.delete(handle);
-        runtime.animationFrames = activeAnimationFrames.size;
+        updateAnimationFrameCounts();
         runtime.animationFrameCallbacks += 1;
         callback(timestamp);
       });
       activeAnimationFrames.add(handle);
-      runtime.animationFrames = activeAnimationFrames.size;
+      updateAnimationFrameCounts();
       return handle;
     };
     window.cancelAnimationFrame = (handle) => {
       activeAnimationFrames.delete(handle);
-      runtime.animationFrames = activeAnimationFrames.size;
+      activeChartAnimationFrames.delete(handle);
+      updateAnimationFrameCounts();
       return nativeCancelAnimationFrame(handle);
+    };
+    runtime.scheduleChartAnimationFrame = (callback) => {
+      let handle = 0;
+      handle = nativeRequestAnimationFrame((timestamp) => {
+        activeAnimationFrames.delete(handle);
+        activeChartAnimationFrames.delete(handle);
+        updateAnimationFrameCounts();
+        runtime.animationFrameCallbacks += 1;
+        runtime.chartOwnedAnimationFrameCallbacks += 1;
+        callback(timestamp);
+      });
+      activeAnimationFrames.add(handle);
+      activeChartAnimationFrames.add(handle);
+      updateAnimationFrameCounts();
+      return handle;
     };
     const intervalSchedulerKey = "set" + "Interval";
     const nativeIntervalScheduler = window[intervalSchedulerKey].bind(window);
@@ -430,6 +471,10 @@ async function main() {
     if (fixtureMode) {
       await selectExplicitAnalysisDataset(page);
     }
+    const analysisSurfaceProof = await verifyAnalysisSurfaceCycle(
+      page,
+      sessionRequests,
+    );
     await waitForAnalysisChart(page);
     await waitForStableChartDiagnostics(page);
     const coldDurationMs = performance.now() - coldStartedAt;
@@ -498,6 +543,12 @@ async function main() {
     }
     if (errors.length > 0) {
       failures.push("Browser console errors:\n" + errors.join("\n"));
+    }
+    if (fixtureRouteState.unexpectedMutationRequests.length > 0) {
+      failures.push(
+        "Unexpected fixture mutations: " +
+          JSON.stringify(fixtureRouteState.unexpectedMutationRequests),
+      );
     }
     if (failures.length > 0) {
       throw new Error("Chart performance audit failed:\n" + failures.join("\n"));
@@ -597,7 +648,11 @@ async function main() {
     );
     await writeFile(
       proofPath,
-      `${JSON.stringify({ lifecycleProof, proofs, quickChartProof }, null, 2)}\n`,
+      `${JSON.stringify(
+        { analysisSurfaceProof, lifecycleProof, proofs, quickChartProof },
+        null,
+        2,
+      )}\n`,
       "utf8",
     );
     console.log(
@@ -607,6 +662,7 @@ async function main() {
         ),
         failedResponseSummary,
         idleProofs,
+        analysisSurfaceProof,
         proofPath,
         proofs,
         quickChartProof,
@@ -636,24 +692,49 @@ async function openAnalysisPlots(page) {
 }
 
 async function selectDynamicsAnalysisSurface(page) {
-  const dynamicsTab = page
+  await selectAnalysisSurface(page, buildChartAuditSurfacePlan()[0]);
+}
+
+async function selectAnalysisSurface(page, surface) {
+  const tab = page
     .locator(".fm-analysis-plots__tab")
-    .filter({ hasText: /^Dynamics$/ })
+    .filter({ hasText: new RegExp(`^${escapeRegExp(surface.label)}$`) })
     .first();
-  await dynamicsTab.waitFor({ state: "visible", timeout: timeoutMs });
-  if ((await dynamicsTab.getAttribute("data-state")) !== "active") {
-    await dynamicsTab.click({ timeout: timeoutMs });
+  await tab.waitFor({ state: "visible", timeout: timeoutMs });
+  if ((await tab.getAttribute("data-state")) !== "active") {
+    await tab.click({ timeout: timeoutMs });
   }
   await page.waitForFunction(
-    () =>
+    (surfaceId) =>
       Array.from(document.querySelectorAll(".fm-analysis-plots__tab")).some(
         (tab) =>
-          tab.textContent?.trim() === "Dynamics" &&
+          tab.textContent?.trim() === surfaceId.label &&
           tab.getAttribute("data-state") === "active",
       ),
-    null,
+    surface,
     { timeout: timeoutMs },
   );
+  await page
+    .locator(`[data-analysis-surface="${surface.id}"]`)
+    .waitFor({ state: "attached", timeout: timeoutMs });
+}
+
+async function verifyAnalysisSurfaceCycle(page, sessionRequests) {
+  const proofs = [];
+  for (const surface of buildChartAuditSurfacePlan()) {
+    const requestStart = sessionRequests.length;
+    await selectAnalysisSurface(page, surface);
+    await waitForSessionRequestQuiet(page, sessionRequests);
+    const panel = page.locator(`[data-analysis-surface="${surface.id}"]`);
+    proofs.push({
+      id: surface.id,
+      label: surface.label,
+      requests: sessionRequests.length - requestStart,
+      hasEmptyState: (await panel.locator('[role="status"]').count()) > 0,
+    });
+  }
+  await selectDynamicsAnalysisSurface(page);
+  return proofs;
 }
 
 async function selectExplicitAnalysisDataset(page, optionIndex = 0) {
@@ -756,13 +837,20 @@ async function verifyIdleChartBudget(page, rowsBinRequests, sessionRequests) {
   const animationFrameCallbacks =
     afterLifecycle.animationFrameCallbacks -
     beforeLifecycle.animationFrameCallbacks;
+  const chartOwnedAnimationFrameCallbacks =
+    afterLifecycle.chartOwnedAnimationFrameCallbacks -
+    beforeLifecycle.chartOwnedAnimationFrameCallbacks;
+  const chartOwnedAnimationFrames = afterLifecycle.chartOwnedAnimationFrames;
   const activeIntervalGrowth = Math.max(
     0,
     afterLifecycle.intervals - beforeLifecycle.intervals,
   );
   if (
     idleRequests.length > 0 ||
-    animationFrameCallbacks > 0 ||
+    hasChartOwnedAnimationFrameWork({
+      activeFrames: chartOwnedAnimationFrames,
+      callbacks: chartOwnedAnimationFrameCallbacks,
+    }) ||
     afterLifecycle.animationFrames > 0 ||
     activeIntervalGrowth > 0
   ) {
@@ -773,6 +861,8 @@ async function verifyIdleChartBudget(page, rowsBinRequests, sessionRequests) {
           activeIntervalGrowth,
           activeIntervals: afterLifecycle.intervals,
           animationFrameCallbacks,
+          chartOwnedAnimationFrameCallbacks,
+          chartOwnedAnimationFrames,
           requests: idleRequests,
         }),
     );
@@ -780,6 +870,8 @@ async function verifyIdleChartBudget(page, rowsBinRequests, sessionRequests) {
   return {
     afterSnapshot,
     animationFrameCallbacks,
+    chartOwnedAnimationFrameCallbacks,
+    chartOwnedAnimationFrames,
     beforeSnapshot,
     liveRedraws: redraws,
     requests: idleRequests.length,
@@ -1001,7 +1093,11 @@ async function verifyQuickChartViewportIsolation({
 
   const cycleRequests = sessionRequests.slice(requestStart);
   const cycleIsolation = summarizeViewportRequests(cycleRequests);
-  if (cycleIsolation.fieldRequests > 0 || cycleIsolation.topologyRequests > 0) {
+  if (
+    cycleIsolation.fieldCatalogRequests > 0 ||
+    cycleIsolation.fieldRequests > 0 ||
+    cycleIsolation.topologyRequests > 0
+  ) {
     throw new Error(
       "Quick Chart + 3D isolation failed during open-close stress: " +
         JSON.stringify(cycleIsolation),
@@ -1024,9 +1120,11 @@ async function verifyQuickChartViewportIsolation({
       maxRetainedHeapGrowthBytes,
       retainedHeapBytes,
     },
-    isolation: {
-      ...isolation,
-      fieldRequests: isolation.fieldRequests + cycleIsolation.fieldRequests,
+      isolation: {
+        ...isolation,
+        fieldCatalogRequests:
+          isolation.fieldCatalogRequests + cycleIsolation.fieldCatalogRequests,
+        fieldRequests: isolation.fieldRequests + cycleIsolation.fieldRequests,
       topologyRequests:
         isolation.topologyRequests + cycleIsolation.topologyRequests,
     },
@@ -1110,6 +1208,10 @@ async function verifyLocalQuickChartActionBudget(page, sessionRequests) {
     animationFrameCallbacks:
       afterLifecycle.animationFrameCallbacks -
       beforeLifecycle.animationFrameCallbacks,
+    chartOwnedAnimationFrameCallbacks:
+      afterLifecycle.chartOwnedAnimationFrameCallbacks -
+      beforeLifecycle.chartOwnedAnimationFrameCallbacks,
+    chartOwnedAnimationFrames: afterLifecycle.chartOwnedAnimationFrames,
     cameraChanges:
       beforeViewport.cameraSignature === afterViewport.cameraSignature ? 0 : 1,
     contextLost: afterViewport.contextLost,
@@ -1135,6 +1237,10 @@ async function verifyLocalQuickChartActionBudget(page, sessionRequests) {
     actionRequests.length > 0 ||
     result.cameraChanges > 0 ||
     result.dirtyFrames > 0 ||
+    hasChartOwnedAnimationFrameWork({
+      activeFrames: result.chartOwnedAnimationFrames,
+      callbacks: result.chartOwnedAnimationFrameCallbacks,
+    }) ||
     result.objectUrlsCreated !== 2 ||
     result.objectUrlsRemaining !== 0 ||
     result.objectUrlsRevoked !== result.objectUrlsCreated ||
@@ -1160,6 +1266,9 @@ async function collectLifecycleSnapshot(page) {
     return {
       animationFrameCallbacks: runtime.animationFrameCallbacks ?? 0,
       animationFrames: runtime.animationFrames ?? 0,
+      chartOwnedAnimationFrameCallbacks:
+        runtime.chartOwnedAnimationFrameCallbacks ?? 0,
+      chartOwnedAnimationFrames: runtime.chartOwnedAnimationFrames ?? 0,
       createdObjectUrls: runtime.createdObjectUrls ?? 0,
       echartsCanvases: document.querySelectorAll(
         ".fm-analysis-chart-surface canvas",
@@ -1185,6 +1294,7 @@ function assertBoundedLifecycle(
 ) {
   const resourceKeys = [
     "animationFrames",
+    "chartOwnedAnimationFrames",
     "echartsCanvases",
     "intervals",
     "listeners",
@@ -1265,31 +1375,39 @@ async function waitForAnimationFrameQuiet(page) {
 async function waitForAnimationFrameOwnershipStable(page) {
   const deadline = Date.now() + timeoutMs;
   let stableSamples = 0;
-  let previousCount = (await collectLifecycleSnapshot(page)).animationFrames;
+  let previous = await collectLifecycleSnapshot(page);
   while (Date.now() < deadline) {
     await page.waitForTimeout(100);
-    const currentCount = (await collectLifecycleSnapshot(page)).animationFrames;
-    if (currentCount === previousCount) {
+    const current = await collectLifecycleSnapshot(page);
+    if (
+      current.animationFrames === previous.animationFrames &&
+      current.chartOwnedAnimationFrames === 0
+    ) {
       stableSamples += 1;
       if (stableSamples >= 3) return;
     } else {
       stableSamples = 0;
-      previousCount = currentCount;
+      previous = current;
     }
   }
   throw new Error("Animation-frame ownership did not stabilize before chart audit.");
 }
 
 function summarizeViewportRequests(requests) {
+  const requestPath = (path) => path.split("?", 1)[0];
+  const fieldCatalogRequests = requests.filter(
+    ({ path }) => requestPath(path) === "/v2/sessions/current/data/fields",
+  ).length;
   const fieldRequests = requests.filter(({ path }) =>
-    /^\/v2\/sessions\/current\/data\/fields\//.test(path),
+    /^\/v2\/sessions\/current\/data\/fields\//.test(requestPath(path)),
   ).length;
   const topologyRequests = requests.filter(({ path }) =>
     /^\/v2\/sessions\/current\/(?:data\/domain|meshing\/meshes\/|meshing\/summary)/.test(
-      path,
+      requestPath(path),
     ),
   ).length;
   return {
+    fieldCatalogRequests,
     fieldRequests,
     requests: requests.length,
     topologyRequests,
@@ -1320,6 +1438,7 @@ function createFixtureRouteState() {
     delayedStarted: null,
     resolveDelayedStarted: null,
     revision: 17,
+    unexpectedMutationRequests: [],
     valueGeneration: 0,
   };
 }
@@ -1356,8 +1475,43 @@ async function installChartPerformanceFixtureRoutes(page, totalRows, state) {
   await page.route("**/v2/sessions/current/**", async (route) => {
     const request = route.request();
     const requestUrl = new URL(request.url());
-    if (request.method() !== "GET") {
+    if (request.method() === "OPTIONS") {
       await route.fulfill({ body: "", headers: cors, status: 204 });
+      return;
+    }
+    if (request.method() !== "GET") {
+      if (
+        request.method() === "POST" &&
+        requestUrl.pathname === "/v2/sessions/current/visualization/client-acks"
+      ) {
+        const body = request.postDataJSON() ?? {};
+        await route.fulfill({
+          body: JSON.stringify({
+            client_id: body.client_id ?? "chart-performance-fixture",
+            revision: body.revision ?? state.revision,
+            status: body.status ?? "ready",
+          }),
+          contentType: "application/json",
+          headers: cors,
+          status: 200,
+        });
+        return;
+      }
+      state.unexpectedMutationRequests.push({
+        method: request.method(),
+        path: requestUrl.pathname,
+      });
+      await route.fulfill({
+        body: JSON.stringify({
+          error: {
+            code: "chart_performance_fixture_unknown_mutation",
+            path: requestUrl.pathname,
+          },
+        }),
+        contentType: "application/json",
+        headers: cors,
+        status: 405,
+      });
       return;
     }
     if (requestUrl.pathname === "/v2/sessions/current/status") {
@@ -1514,6 +1668,14 @@ function chartPerformanceAuxiliaryFixture(pathname) {
         units: { length: "m" },
       },
     ],
+    [
+      "/v2/sessions/current/data/domain/fdm-multilayer-layout",
+      chartPerformanceFdmLayoutFixture(),
+    ],
+    [
+      "/v2/sessions/current/data/fields",
+      { domain_generation_id: "1", quantities: [], revision: 0 },
+    ],
     ["/v2/sessions/current/data/domain/topology", null],
     ["/v2/sessions/current/data/fdm-region-memberships", null],
     [
@@ -1590,6 +1752,10 @@ function chartPerformanceAuxiliaryFixture(pathname) {
       },
     ],
     [
+      "/v2/sessions/current/meshing/policies/universe",
+      { config: null, effective_config: null, revision: 0 },
+    ],
+    [
       "/v2/sessions/current/meshing/semantics",
       {
         mesh_build_diagnostics: null,
@@ -1619,6 +1785,16 @@ function chartPerformanceAuxiliaryFixture(pathname) {
     [
       "/v2/sessions/current/model/material-fields",
       { fields: [], region_coefficients_revision: 0, scene_revision: 0 },
+    ],
+    [
+      "/v2/sessions/current/model/physics-graph",
+      {
+        edges: [],
+        modules: [],
+        provenance: { normalizer: "chart-performance-fixture" },
+        scene_revision: 0,
+        schema_version: "physics_graph.v1",
+      },
     ],
     ["/v2/sessions/current/model/oersted-fields", emptySceneList],
     [
@@ -1654,6 +1830,14 @@ function chartPerformanceAuxiliaryFixture(pathname) {
         study_universe_mesh: null,
         universe: null,
       },
+    ],
+    [
+      "/v2/sessions/current/analysis/spin-wave/gamma.v1",
+      chartPerformanceSpinWaveGammaFixture(),
+    ],
+    [
+      "/v2/sessions/current/analysis/spin-wave/dynamic-structure-factor.v1",
+      chartPerformanceDynamicStructureFactorFixture(),
     ],
     ["/v2/sessions/current/persistence/checkpoints", { checkpoints: [] }],
     [
@@ -1905,6 +2089,108 @@ function fixtureValue(column, row, generation = 0) {
   }
 }
 
+function chartPerformanceFdmLayoutFixture() {
+  return {
+    airbox: {
+      carrier_available: false,
+      h_demag_available: false,
+      h_eff_available: false,
+      h_eff_unavailable_reason: "Fixture does not publish an FDM multilayer carrier.",
+    },
+    available: false,
+    backend: "fdm",
+    common_transform_layout: null,
+    domain_generation_id: "1",
+    execution_revision: 0,
+    layers: [],
+    layout_fingerprint: null,
+    layout_revision: 0,
+    observation_revision: 0,
+    requested_common_cell_size: null,
+    requested_mode: null,
+    resolved_mode: null,
+    schema_version: "fdm_multilayer_layout.v1",
+    strategy: null,
+    unavailable_reason: "Fixture does not publish an FDM multilayer carrier.",
+  };
+}
+
+function chartPerformanceSpinWaveGammaFixture() {
+  return {
+    detrend: "none",
+    frequency_hz: [],
+    frequency_unit: "Hz",
+    normalization: "fixture-empty",
+    nyquist_hz: 0,
+    peaks: [],
+    primary_response_psd: [],
+    reference_m0: 1,
+    reference_m0_secondary: 1,
+    response_component: "m_x",
+    response_psd: [],
+    response_spectrum_imag: [],
+    response_spectrum_real: [],
+    response_trace: [],
+    schema_version: "spin_wave_gamma.v1",
+    secondary_response_psd: [],
+    secondary_response_spectrum_imag: [],
+    secondary_response_spectrum_real: [],
+    secondary_response_trace: [],
+    source_psd: [],
+    source_spectrum_imag: [],
+    source_spectrum_real: [],
+    source_trace: [],
+    source_unit: "1",
+    susceptibility_abs: [],
+    susceptibility_unit: "1",
+    time_s: [],
+    time_unit: "s",
+    trace_unit: "1",
+    transverse_components: ["x", "y"],
+    weighting: "none",
+    window: "none",
+    window_power_sum: 0,
+    window_values: [],
+  };
+}
+
+function chartPerformanceDynamicStructureFactorFixture() {
+  return {
+    artifact_ref: "fixture://dynamic-structure-factor/empty",
+    bounded: true,
+    component: "magnitude",
+    excluded_absorber_ranges_m: [],
+    frequency_count: 0,
+    frequency_hz: [],
+    frequency_unit: "Hz",
+    invalid_probe_mask: [],
+    k_rad_per_m: [],
+    mesh_probe_signature: "chart-performance-fixture",
+    normalization: "fixture-empty",
+    original_frequency_count: 0,
+    original_wavevector_count: 0,
+    phase_convention: "none",
+    power: [],
+    propagation_axis: "x",
+    schema_version: "dynamic_structure_factor.1d.v1",
+    source_observable: "m_x",
+    source_power: [],
+    source_spectrum_imag: [],
+    source_spectrum_real: [],
+    source_unit: "1",
+    spatial_window: [],
+    spatial_window_power_sum: 0,
+    spectrum_imag: [],
+    spectrum_real: [],
+    temporal_window: [],
+    temporal_window_power_sum: 0,
+    time_s: [],
+    wavevector_count: 0,
+    wavevector_unit: "rad/m",
+    x_m: [],
+  };
+}
+
 async function verifyPendingRequestAbort(page, state) {
   if (fixtureTotalRows <= 0) {
     throw new Error("Abort proof requires a deterministic rows fixture.");
@@ -2133,6 +2419,7 @@ function percentile(sorted, fraction) {
 async function collectChartAuditRuntime(page) {
   const snapshot = await collectLifecycleSnapshot(page);
   return {
+    chartOwnedAnimationFrames: snapshot.chartOwnedAnimationFrames,
     listeners: snapshot.listeners,
     observers: snapshot.observers,
     workers: snapshot.workers,
@@ -2307,7 +2594,16 @@ function safeArtifactName(value) {
   return value.toLowerCase().replace(/[^a-z0-9._-]+/g, "-");
 }
 
-main().catch((error) => {
-  console.error(`Chart performance audit failed: ${error.stack ?? error.message}`);
-  process.exit(1);
-});
+function escapeRegExp(value) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+if (
+  process.argv[1] &&
+  realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url))
+) {
+  main().catch((error) => {
+    console.error(`Chart performance audit failed: ${error.stack ?? error.message}`);
+    process.exit(1);
+  });
+}

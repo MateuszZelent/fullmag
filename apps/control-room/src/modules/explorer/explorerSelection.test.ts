@@ -1,9 +1,12 @@
 import { describe, expect, it } from "vitest";
 
+import { PLATFORM_HEALTH_PATH } from "@/kernel/api/apiPaths";
+
 import { ControlRoomApi } from "@/kernel/api/ControlRoomApi";
 import type {
   DomainMetaResource,
   FdmRegionMembershipResource,
+  TableResource,
 } from "@/kernel/api/apiTypes";
 import {
   ANALYSIS_FREQUENCY_DOMAIN_EIGEN_SPECTRUM_V2_PATH,
@@ -12,7 +15,6 @@ import {
   ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_CANCEL_REQUESTED_V1_PATH,
   ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_MAGNETIC_SWEEP_PATH,
   DATA_FIELD_VECTOR_PATH,
-  MESHING_PERIODIC_PAIRS_PATH,
 } from "@/kernel/api/apiPaths";
 import { RequestDiagnosticsController } from "@/kernel/api/RequestDiagnosticsController";
 import { CommandDiagnosticsController } from "@/kernel/commands/CommandDiagnosticsController";
@@ -26,7 +28,6 @@ import { RealtimeConnectionController } from "@/kernel/realtime/RealtimeConnecti
 import { RealtimeInvalidationBridge } from "@/kernel/realtime/RealtimeInvalidationBridge";
 import { ResourceInvalidationController } from "@/kernel/resources/ResourceInvalidationController";
 import { SelectionController } from "@/kernel/selection/SelectionController";
-import { selectionRefEquals } from "@/kernel/selection/selectionTypes";
 import type { KernelApi } from "@/kernel/types";
 import { AnalysisFieldOverlayController } from "@/kernel/visualization/AnalysisFieldOverlayController";
 import { ChartViewportHandoffController } from "@/kernel/visualization/ChartViewportHandoffController";
@@ -38,14 +39,22 @@ import {
 } from "@/kernel/visualization/ObjectVisualizationController";
 import { VisualizationDebugController } from "@/kernel/visualization/VisualizationDebugController";
 import { VisualizationRegistrySyncController } from "@/kernel/visualization/VisualizationRegistrySyncController";
-import { buildModeVisualizationBreadcrumbs } from "@/modules/inspector/panels/mode-visualization/ModeVisualizationBreadcrumbs";
 import { resolveVisualizationDebugTarget } from "@/modules/inspector/panels/visualization-debug/VisualizationDebugPanelModel";
 import { viewportSelectionForFdmTarget } from "@/modules/viewport-3d/viewport3dSelection";
 import { buildDomainPresentation } from "@/shared/domain/mesh/domainPresentation";
 
-import { buildModelTree, flattenExplorerNodes } from "./builders/buildModelTree";
+import {
+  buildExplorerTree,
+  buildModelTree,
+  filterExplorerNodes,
+  flattenExplorerNodes,
+} from "./builders/buildModelTree";
+import { buildPhysicsFirstResultsTree } from "./builders/resultsExplorerNodes";
 import { buildPhysicsGraphTree } from "./builders/physicsGraphTree";
-import { selectExplorerNode } from "./explorerSelection";
+import {
+  resolveCurrentExplorerSelectionNode,
+  selectExplorerNode,
+} from "./explorerSelection";
 import type { ExplorerNode } from "./explorerTypes";
 
 function snapshotVectorResourceKey(snapshotId: string): string {
@@ -90,6 +99,29 @@ function makeKernel(): KernelApi {
   };
 }
 
+function tableCatalog(revision: number, tables: readonly TableResource[]) {
+  return {
+    data: { revision, tables: [...tables] },
+    error: null,
+    missing: false,
+    revision,
+    status: "ready" as const,
+  };
+}
+
+function resultsTreeWithTables(
+  revision: number,
+  tables: readonly TableResource[],
+) {
+  return buildPhysicsFirstResultsTree({
+    entries: [],
+    postprocessing: {
+      tableCatalog: tableCatalog(revision, tables),
+    },
+    resultContextRunId: "run-7",
+  });
+}
+
 describe("selectExplorerNode", () => {
   it("does not select a semantic grouping root marked nonselectable", () => {
     const kernel = makeKernel();
@@ -103,6 +135,27 @@ describe("selectExplorerNode", () => {
     }, "explorer");
 
     expect(kernel.selection.get().nodeId).toBeNull();
+  });
+
+  it("preserves only stable runtime resource identity in the Explorer selection ref", () => {
+    const kernel = makeKernel();
+
+    selectExplorerNode(kernel, {
+      id: "resources:platform:health",
+      kind: "resources.runtime",
+      label: "Health",
+      parentId: "resources:platform",
+      runtimeDescriptorId: "resources:platform:health",
+      runtimeResourceKey: PLATFORM_HEALTH_PATH,
+    }, "explorer");
+
+    expect(kernel.selection.get().ref).toEqual({
+      descriptorId: "resources:platform:health",
+      kind: "resources.runtime",
+      nodeId: "resources:platform:health",
+      resourceKey: PLATFORM_HEALTH_PATH,
+      type: "runtime-explorer",
+    });
   });
 
   it("writes only selectedSeriesIds for a pinned Quick Chart selection", () => {
@@ -975,30 +1028,6 @@ describe("selectExplorerNode", () => {
     });
   });
 
-  it("preserves periodic-pair resource metadata for frequency-domain PBC inspectors", () => {
-    const kernel = makeKernel();
-    const node: ExplorerNode = {
-      id: "resources:mesh:periodic-pairs",
-      kind: "resources.mesh.periodic_pairs",
-      label: "Periodic Pairs",
-      parentId: "resources:analysis:frequency-domain",
-      resourceRef: MESHING_PERIODIC_PAIRS_PATH,
-    };
-
-    selectExplorerNode(kernel, node, "explorer");
-
-    expect(kernel.selection.get()).toMatchObject({
-      kind: "resources.mesh.periodic_pairs",
-      nodeId: "resources:mesh:periodic-pairs",
-      ref: {
-        kind: "resources.mesh.periodic_pairs",
-        nodeId: "resources:mesh:periodic-pairs",
-        resourceRef: MESHING_PERIODIC_PAIRS_PATH,
-        type: "frequency-domain",
-      },
-    });
-  });
-
   it.each([
     "study.stage.eigenmodes.boundary",
     "study.stage.eigenmodes.periodic_pairs",
@@ -1032,47 +1061,31 @@ describe("selectExplorerNode", () => {
     });
   });
 
-  it.each([
-    [
-      "results.frequency_domain.dispersion",
-      "results:frequency-domain:dispersion",
-      ANALYSIS_FREQUENCY_DOMAIN_EIGEN_DISPERSION_PATH,
-      "eigen/dispersion.csv",
-    ],
-    [
-      "diagnostics.frequency_domain.periodic_floquet",
-      "diagnostics:frequency-domain:periodic-floquet",
-      MESHING_PERIODIC_PAIRS_PATH,
-      "frequency_domain/periodic_floquet_diagnostics.v1.json",
-    ],
-  ] as const)(
-    "preserves %s resource and artifact metadata for frequency-domain inspectors",
-    (kind, nodeId, resourceRef, artifactPath) => {
-      const kernel = makeKernel();
-      const node: ExplorerNode = {
-        artifactPath,
-        id: nodeId,
-        kind,
-        label: kind,
-        parentId: "results:frequency-domain",
-        resourceRef,
-      };
+  it("preserves dispersion resource metadata for the active frequency-domain inspector", () => {
+    const kernel = makeKernel();
+    const node: ExplorerNode = {
+      artifactPath: "eigen/dispersion.csv",
+      id: "results:frequency-domain:dispersion",
+      kind: "results.frequency_domain.dispersion",
+      label: "Dispersion",
+      parentId: "results:frequency-domain",
+      resourceRef: ANALYSIS_FREQUENCY_DOMAIN_EIGEN_DISPERSION_PATH,
+    };
 
-      selectExplorerNode(kernel, node, "explorer");
+    selectExplorerNode(kernel, node, "explorer");
 
-      expect(kernel.selection.get()).toMatchObject({
-        kind,
-        nodeId,
-        ref: {
-          artifactPath,
-          kind,
-          nodeId,
-          resourceRef,
-          type: "frequency-domain",
-        },
-      });
-    },
-  );
+    expect(kernel.selection.get()).toMatchObject({
+      kind: "results.frequency_domain.dispersion",
+      nodeId: "results:frequency-domain:dispersion",
+      ref: {
+        artifactPath: "eigen/dispersion.csv",
+        kind: "results.frequency_domain.dispersion",
+        nodeId: "results:frequency-domain:dispersion",
+        resourceRef: ANALYSIS_FREQUENCY_DOMAIN_EIGEN_DISPERSION_PATH,
+        type: "frequency-domain",
+      },
+    });
+  });
 
   it("selects object authoring child groups as scene-object selections", () => {
     const kernel = makeKernel();
@@ -1124,130 +1137,6 @@ describe("selectExplorerNode", () => {
         type: "scene-object",
         visualizationTargetId: "object:permalloy_layer",
       },
-    });
-  });
-
-  it("selects object mode visualization view nodes as analysis overlay targets", () => {
-    const kernel = makeKernel();
-    const node: ExplorerNode = {
-      fieldId: "analysis:frequency-response:field-0001",
-      frequencyIndex: 1,
-      id: "model:object:film:visualization:mode-visualization:response:frequency:1:view:real",
-      kind: "object.mode_visualization.view" as ExplorerNode["kind"],
-      label: "Real",
-      objectId: "film",
-      parentId:
-        "model:object:film:visualization:mode-visualization:response:frequency:1",
-      status: "ready",
-    };
-
-    selectExplorerNode(kernel, node, "explorer");
-
-    expect(kernel.selection.get()).toMatchObject({
-      kind: "object.mode_visualization.view",
-      label: "Real",
-      nodeId:
-        "model:object:film:visualization:mode-visualization:response:frequency:1:view:real",
-      objectId: "film",
-      ref: {
-        fieldId: "analysis:frequency-response:field-0001",
-        frequencyIndex: 1,
-        kind: "object.mode_visualization.view",
-        nodeId:
-          "model:object:film:visualization:mode-visualization:response:frequency:1:view:real",
-        objectId: "film",
-        source: "frequency-response",
-        type: "mode-visualization",
-        view: "real",
-        visualizationTargetId:
-          "mode:film:frequency-response:analysis%3Afrequency-response%3Afield-0001",
-      },
-    });
-  });
-
-  it("keeps the mode visualization breadcrumb root equal to the Explorer root", () => {
-    const kernel = makeKernel();
-    const rootNode: ExplorerNode = {
-      analysisFieldSource: "eigen-mode",
-      fieldId: "analysis:eigen:sample-0000:mode-0002",
-      id: "model:object:film:visualization:mode-visualization",
-      kind: "object.mode_visualization",
-      label: "Mode visualization",
-      modeVisualizationRootFieldId: "analysis:eigen:sample-0000:mode-0002",
-      modeVisualizationRootSource: "eigen-mode",
-      objectId: "film",
-      parentId: "model:object:film:visualization",
-    };
-    const childNode: ExplorerNode = {
-      analysisFieldSource: "frequency-response",
-      fieldId: "analysis:frequency-response:field-0001",
-      fieldIds: [
-        "analysis:frequency-response:field-0000",
-        "analysis:frequency-response:field-0001",
-      ],
-      frequencyIndex: 1,
-      id: "model:object:film:visualization:mode-visualization:response:frequency:1",
-      kind: "object.mode_visualization.field",
-      label: "10.5 GHz",
-      modeVisualizationRootFieldId: "analysis:eigen:sample-0000:mode-0002",
-      modeVisualizationRootSource: "eigen-mode",
-      objectId: "film",
-      parentId: "model:object:film:visualization:mode-visualization:response",
-    };
-
-    selectExplorerNode(kernel, rootNode, "explorer");
-    const rootRef = kernel.selection.get().ref;
-    selectExplorerNode(kernel, childNode, "explorer");
-    const breadcrumbs = buildModeVisualizationBreadcrumbs(kernel.selection.get());
-    const breadcrumbRef = breadcrumbs[1]?.selection.ref ?? null;
-
-    if (!rootRef || !breadcrumbRef) {
-      throw new Error("Expected both Explorer and breadcrumb mode refs");
-    }
-    expect(selectionRefEquals(rootRef, breadcrumbRef)).toBe(true);
-  });
-
-  it("preserves every canonical field id in a mode visualization group selection", () => {
-    const kernel = makeKernel();
-    const node: ExplorerNode = {
-      children: [
-        {
-          fieldId: "analysis:eigen:sample-0000:mode-0002",
-          id: "mode-group:field-a",
-          kind: "object.mode_visualization.field" as ExplorerNode["kind"],
-          label: "Mode 2",
-          objectId: "film",
-          parentId: "mode-group",
-        },
-        {
-          fieldId: "analysis:eigen:sample-0000:mode-0003",
-          id: "mode-group:field-b",
-          kind: "object.mode_visualization.field" as ExplorerNode["kind"],
-          label: "Mode 3",
-          objectId: "film",
-          parentId: "mode-group",
-        },
-      ],
-      fieldId: "analysis:eigen:sample-0000:mode-0002",
-      fieldIds: [
-        "analysis:eigen:sample-0000:mode-0002",
-        "analysis:eigen:sample-0000:mode-0003",
-      ],
-      id: "mode-group",
-      kind: "object.mode_visualization.group" as ExplorerNode["kind"],
-      label: "Eigenmodes",
-      objectId: "film",
-      parentId: "model:object:film:visualization:mode-visualization",
-    };
-
-    selectExplorerNode(kernel, node, "explorer");
-
-    expect(kernel.selection.get().ref).toMatchObject({
-      fieldIds: [
-        "analysis:eigen:sample-0000:mode-0002",
-        "analysis:eigen:sample-0000:mode-0003",
-      ],
-      type: "mode-visualization",
     });
   });
 
@@ -1670,5 +1559,170 @@ describe("selectExplorerNode", () => {
       studyProduct: "modal_eigen",
       type: "frequency-domain",
     });
+  });
+
+  it("selects postprocessing identity and freshness without copying catalog payload", () => {
+    const kernel = makeKernel();
+    selectExplorerNode(kernel, {
+      id: "results:run:run-7:tables:table-energy",
+      kind: "results.tables.definition",
+      label: "energy",
+      parentId: "results:run:run-7:tables",
+      postprocessingCatalogRevision: 12,
+      postprocessingContractGap: null,
+      postprocessingDefinitionKind: "table",
+      postprocessingFreshness: "fresh",
+      postprocessingOwnerId: "energy",
+      postprocessingOwnerKind: "table",
+      postprocessingOwnerReadiness: "available-ready",
+      postprocessingResourceRevision: 8,
+      postprocessingSchemaRevision: 3,
+      resourceRef: "table:energy",
+      tableId: "energy",
+    }, "explorer");
+
+    expect(kernel.selection.get().ref).toMatchObject({
+      catalogRevision: 12,
+      definitionKind: "table",
+      freshness: "fresh",
+      ownerId: "energy",
+      ownerKind: "table",
+      ownerReadiness: "available-ready",
+      ownerResourceRevision: 8,
+      ownerSchemaRevision: 3,
+      resourceRef: "table:energy",
+      type: "postprocessing",
+    });
+    expect(kernel.selection.get().ref).not.toHaveProperty("columns");
+    expect(kernel.selection.get().ref).not.toHaveProperty("rows_href");
+  });
+
+  it("clears a removed postprocessing definition instead of retargeting to a root", () => {
+    const root: ExplorerNode = {
+      id: "results:run:run-8:tables",
+      kind: "results.tables.root",
+      label: "Tables",
+      parentId: "results:run:run-8",
+      postprocessingCatalogRevision: 13,
+      postprocessingContractGap: null,
+      postprocessingDefinitionKind: "table",
+      postprocessingFreshness: "fresh",
+      postprocessingOwnerReadiness: "available-ready",
+      resourceState: "ready",
+      status: "ready",
+    };
+
+    expect(resolveCurrentExplorerSelectionNode(
+      [root],
+      "results:run:run-7:tables:table-energy",
+      {
+        definitionKind: "table",
+        kind: "results.tables.definition",
+        nodeId: "results:run:run-7:tables:table-energy",
+        ownerReadiness: "available-ready",
+        scope: "definition",
+        type: "postprocessing",
+      } as never,
+    )).toBeNull();
+  });
+
+  it("fails closed to an unavailable Results root when currentRun disappears", () => {
+    const kernel = makeKernel();
+    const selectedNode = {
+      id: "results:run:run-7:tables:table-energy",
+      kind: "results.tables.definition" as const,
+      label: "energy",
+      parentId: "results:run:run-7:tables",
+      postprocessingCatalogRevision: 12,
+      postprocessingDefinitionKind: "table" as const,
+      postprocessingFreshness: "fresh" as const,
+      postprocessingOwnerId: "energy",
+      postprocessingOwnerKind: "table" as const,
+      postprocessingOwnerReadiness: "available-ready" as const,
+      postprocessingResourceRevision: 8,
+      postprocessingSchemaRevision: 3,
+      resourceRef: "table:energy",
+    };
+    selectExplorerNode(kernel, selectedNode, "explorer");
+
+    const currentTree = buildExplorerTree("results", { currentRun: null });
+    const currentNode = resolveCurrentExplorerSelectionNode(
+      currentTree,
+      kernel.selection.get().nodeId,
+      kernel.selection.get().ref,
+    );
+
+    expect(currentNode).toBeNull();
+    expect(kernel.selection.get().ref).toMatchObject({
+      ownerId: "energy",
+      type: "postprocessing",
+    });
+  });
+
+  it("clears a removed catalog owner after the catalog revision changes", () => {
+    const table: TableResource = {
+      binary_rows_href: "/tables/energy/rows.bin",
+      columns: [],
+      columns_href: "/tables/energy/columns",
+      revision: 8,
+      rows_href: "/tables/energy/rows",
+      schema_revision: 3,
+      table_id: "energy",
+      total_rows: 42,
+    };
+    const kernel = makeKernel();
+    const previousTree = resultsTreeWithTables(12, [table]);
+    const selectedNode = flattenExplorerNodes(previousTree).find(
+      (node) => node.label === "energy",
+    );
+    if (!selectedNode) throw new Error("Missing selected table node");
+    selectExplorerNode(kernel, selectedNode, "explorer");
+
+    const currentTree = resultsTreeWithTables(13, []);
+    const currentNode = resolveCurrentExplorerSelectionNode(
+      currentTree,
+      kernel.selection.get().nodeId,
+      kernel.selection.get().ref,
+    );
+
+    expect(currentNode).toBeNull();
+    expect(kernel.selection.get().ref).toMatchObject({
+      ownerId: "energy",
+      resourceRef: "table:energy",
+      type: "postprocessing",
+    });
+  });
+
+  it("reconciles a remounted filtered Results tree against its unfiltered build", () => {
+    const table: TableResource = {
+      binary_rows_href: "/tables/energy/rows.bin",
+      columns: [],
+      columns_href: "/tables/energy/columns",
+      revision: 8,
+      rows_href: "/tables/energy/rows",
+      schema_revision: 3,
+      table_id: "energy",
+      total_rows: 42,
+    };
+    const kernel = makeKernel();
+    const previousTree = resultsTreeWithTables(12, [table]);
+    const selectedNode = flattenExplorerNodes(previousTree).find(
+      (node) => node.label === "energy",
+    );
+    if (!selectedNode) throw new Error("Missing selected table node");
+    selectExplorerNode(kernel, selectedNode, "explorer");
+
+    const currentTree = resultsTreeWithTables(13, []);
+    const filteredTree = filterExplorerNodes(currentTree, "energy", selectedNode.id);
+    expect(flattenExplorerNodes(filteredTree)).toHaveLength(0);
+
+    const currentNode = resolveCurrentExplorerSelectionNode(
+      filteredTree,
+      kernel.selection.get().nodeId,
+      kernel.selection.get().ref,
+      currentTree,
+    );
+
+    expect(currentNode).toBeNull();
   });
 });
