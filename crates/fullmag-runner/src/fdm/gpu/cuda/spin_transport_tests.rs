@@ -7,6 +7,7 @@ use fullmag_fdm_sys::gpu_transport_abi_v1::{
     fullmag_fdm_gpu_charge_snapshot_handle_v1, fullmag_fdm_gpu_charge_snapshot_info_v1,
     fullmag_fdm_gpu_charge_solve_request_v1, fullmag_fdm_gpu_charge_solve_result_v1,
     fullmag_fdm_gpu_steady_spin_solve_request_v1, fullmag_fdm_gpu_steady_spin_solve_result_v1,
+    fullmag_fdm_gpu_transport_artifact_request_v1,
     fullmag_fdm_gpu_transport_buffer_view_v1, fullmag_fdm_gpu_transport_context_create_request_v1,
     fullmag_fdm_gpu_transport_context_create_result_v1,
     fullmag_fdm_gpu_transport_context_handle_v1, fullmag_fdm_gpu_transport_static_descriptor_v1,
@@ -46,6 +47,8 @@ struct FakeState {
     payload: Option<CapturedPayload>,
     charge_request: Option<fullmag_fdm_gpu_charge_solve_request_v1>,
     spin_request: Option<fullmag_fdm_gpu_steady_spin_solve_request_v1>,
+    artifact_requests: Vec<fullmag_fdm_gpu_transport_artifact_request_v1>,
+    artifact_component_orders: Vec<u32>,
     fail_destroy_snapshot: Option<u32>,
     fail_destroy_context: Option<u32>,
     fail_upload: Option<u32>,
@@ -150,6 +153,22 @@ impl FakeAbi {
             .expect("fake ABI state")
             .spin_request
             .expect("captured spin request")
+    }
+
+    fn artifact_requests(&self) -> Vec<fullmag_fdm_gpu_transport_artifact_request_v1> {
+        self.state
+            .lock()
+            .expect("fake ABI state")
+            .artifact_requests
+            .clone()
+    }
+
+    fn artifact_component_orders(&self) -> Vec<u32> {
+        self.state
+            .lock()
+            .expect("fake ABI state")
+            .artifact_component_orders
+            .clone()
     }
 }
 
@@ -353,6 +372,32 @@ impl GpuM1TransportAbi for FakeAbi {
             deterministic_compute_digest: [9; 32],
             ..Default::default()
         })
+    }
+
+    fn readback_artifact(
+        &self,
+        request: &fullmag_fdm_gpu_transport_artifact_request_v1,
+    ) -> Result<(), u32> {
+        self.record("readback");
+        let destination = unsafe {
+            &*(request.destination_view_ptr as *const fullmag_fdm_gpu_transport_buffer_view_v1)
+        };
+        let mut state = self.state.lock().expect("fake ABI state");
+        state.artifact_requests.push(*request);
+        state
+            .artifact_component_orders
+            .push(destination.component_order);
+        drop(state);
+        let values = unsafe {
+            std::slice::from_raw_parts_mut(
+                destination.address as *mut f64,
+                destination.element_count as usize,
+            )
+        };
+        for (index, value) in values.iter_mut().enumerate() {
+            *value = f64::from(request.field_id) * 100.0 + index as f64;
+        }
+        Ok(())
     }
 
     fn checkpoint_query_size(
@@ -629,6 +674,95 @@ fn accepted_charge_snapshot_materializes_the_exact_public_llg_binding() {
 }
 
 #[test]
+fn accepted_spin_snapshot_readback_publishes_one_typed_complete_transport_artifact_set() {
+    let abi = FakeAbi::default();
+    let mut session = GpuM1TransportSession::create(abi.clone(), raw_descriptor(2)).unwrap();
+    let charge = session.solve_charge(7, 11).unwrap();
+
+    assert_eq!(
+        session.readback_accepted_artifacts(),
+        Err(GpuM1TransportError::SpinSnapshotRequired)
+    );
+    assert!(abi.artifact_requests().is_empty());
+
+    session
+        .solve_spin_static(Some(&charge), views(session.device_identity(), 1), 7, 11)
+        .unwrap();
+    let artifacts = session.readback_accepted_artifacts().unwrap();
+
+    assert_eq!(artifacts.potential_v, vec![100.0]);
+    assert_eq!(
+        artifacts.charge_current_j_c,
+        [vec![200.0, 201.0], vec![202.0, 203.0], vec![204.0, 205.0]]
+    );
+    assert_eq!(
+        artifacts.spin_accumulation_mu_s,
+        [vec![300.0], vec![301.0], vec![302.0]]
+    );
+    assert_eq!(
+        artifacts.spin_current_q_ia,
+        [
+            [vec![400.0, 401.0], vec![402.0, 403.0], vec![404.0, 405.0]],
+            [vec![406.0, 407.0], vec![408.0, 409.0], vec![410.0, 411.0]],
+            [vec![412.0, 413.0], vec![414.0, 415.0], vec![416.0, 417.0]],
+        ]
+    );
+    assert_eq!(
+        artifacts.torque_stt,
+        [vec![500.0], vec![501.0], vec![502.0]]
+    );
+
+    let requests = abi.artifact_requests();
+    assert_eq!(requests.len(), 5);
+    assert_eq!(
+        requests
+            .iter()
+            .map(|request| request.field_id)
+            .collect::<Vec<_>>(),
+        vec![
+            ffi::FULLMAG_FDM_GPU_TRANSPORT_ARTIFACT_FIELD_V,
+            ffi::FULLMAG_FDM_GPU_TRANSPORT_ARTIFACT_FIELD_J_C,
+            ffi::FULLMAG_FDM_GPU_TRANSPORT_ARTIFACT_FIELD_MU_S,
+            ffi::FULLMAG_FDM_GPU_TRANSPORT_ARTIFACT_FIELD_Q_IA,
+            ffi::FULLMAG_FDM_GPU_TRANSPORT_ARTIFACT_FIELD_TORQUE_STT,
+        ]
+    );
+    assert_eq!(
+        requests
+            .iter()
+            .zip(abi.artifact_component_orders())
+            .map(|(_, component_order)| component_order)
+            .collect::<Vec<_>>(),
+        vec![
+            ffi::FULLMAG_FDM_GPU_TRANSPORT_COMPONENT_ORDER_SCALAR,
+            ffi::FULLMAG_FDM_GPU_TRANSPORT_COMPONENT_ORDER_ORIENTED_FACE_XYZ,
+            ffi::FULLMAG_FDM_GPU_TRANSPORT_COMPONENT_ORDER_SOA_XYZ,
+            ffi::FULLMAG_FDM_GPU_TRANSPORT_COMPONENT_ORDER_ORIENTED_FACE_XYZ,
+            ffi::FULLMAG_FDM_GPU_TRANSPORT_COMPONENT_ORDER_SOA_XYZ,
+        ]
+    );
+    assert_eq!(
+        requests
+            .iter()
+            .map(|request| request.range_count)
+            .collect::<Vec<_>>(),
+        vec![1, 6, 3, 18, 3]
+    );
+    for request in requests {
+        assert_eq!(
+            request.prefix.required_features,
+            ffi::FULLMAG_FDM_GPU_TRANSPORT_FEATURE_M1_CHARGE
+                | ffi::FULLMAG_FDM_GPU_TRANSPORT_FEATURE_ARTIFACT_READBACK
+        );
+        assert_eq!(
+            request.cadence,
+            ffi::FULLMAG_FDM_GPU_TRANSPORT_ARTIFACT_CADENCE_ACCEPTED_STEP
+        );
+        assert_eq!(request.accepted_sequence, charge.accepted_sequence);
+    }
+}
+
+#[test]
 fn from_plan_rejects_partial_transport_active_masks_before_abi() {
     let mut plan = planned_public_gpu_m1();
     let descriptor = plan.spin_transport_plans[0]
@@ -875,6 +1009,7 @@ fn from_plan_preserves_frozen_payload_features_and_solver_policies() {
             | ffi::FULLMAG_FDM_GPU_TRANSPORT_FEATURE_M1_CHARGE
             | ffi::FULLMAG_FDM_GPU_TRANSPORT_FEATURE_STEADY_SPIN
             | ffi::FULLMAG_FDM_GPU_TRANSPORT_FEATURE_MIXING_V2
+            | ffi::FULLMAG_FDM_GPU_TRANSPORT_FEATURE_ARTIFACT_READBACK
     );
 
     let [nx, ny, nz] = plan.grid.cells.map(u64::from);

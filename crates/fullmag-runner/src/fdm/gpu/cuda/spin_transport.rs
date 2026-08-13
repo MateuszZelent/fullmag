@@ -3,7 +3,7 @@ use fullmag_fdm_sys::gpu_transport_abi_v1::{
     fullmag_fdm_gpu_charge_snapshot_handle_v1, fullmag_fdm_gpu_charge_snapshot_info_v1,
     fullmag_fdm_gpu_charge_solve_request_v1, fullmag_fdm_gpu_charge_solve_result_v1,
     fullmag_fdm_gpu_steady_spin_solve_request_v1, fullmag_fdm_gpu_steady_spin_solve_result_v1,
-    fullmag_fdm_gpu_transport_buffer_view_v1,
+    fullmag_fdm_gpu_transport_artifact_request_v1, fullmag_fdm_gpu_transport_buffer_view_v1,
     fullmag_fdm_gpu_transport_checkpoint_export_request_v1,
     fullmag_fdm_gpu_transport_checkpoint_export_result_v1,
     fullmag_fdm_gpu_transport_checkpoint_import_request_v1,
@@ -78,6 +78,32 @@ fn host_record_view<T>(
         element_type: ffi::FULLMAG_FDM_GPU_TRANSPORT_ELEMENT_TYPE_RAW_BYTES,
         pointer_space: ffi::FULLMAG_FDM_GPU_TRANSPORT_POINTER_SPACE_HOST_READ_ONLY,
         component_order: ffi::FULLMAG_FDM_GPU_TRANSPORT_COMPONENT_ORDER_SCALAR,
+        reserved1: 0,
+    })
+}
+
+fn host_write_f64_view(
+    values: &mut [f64],
+    component_order: u32,
+) -> Result<ffi::fullmag_fdm_gpu_transport_buffer_view_v1, GpuM1TransportError> {
+    let byte_length = values
+        .len()
+        .checked_mul(size_of::<f64>())
+        .and_then(|bytes| u64::try_from(bytes).ok())
+        .ok_or_else(|| invalid("GPU M1 artifact readback byte length overflows u64"))?;
+    Ok(ffi::fullmag_fdm_gpu_transport_buffer_view_v1 {
+        prefix: prefix::<ffi::fullmag_fdm_gpu_transport_buffer_view_v1>(),
+        address: if values.is_empty() {
+            0
+        } else {
+            values.as_mut_ptr() as u64
+        },
+        element_count: values.len() as u64,
+        byte_stride: size_of::<f64>() as u64,
+        byte_length,
+        element_type: ffi::FULLMAG_FDM_GPU_TRANSPORT_ELEMENT_TYPE_F64,
+        pointer_space: ffi::FULLMAG_FDM_GPU_TRANSPORT_POINTER_SPACE_HOST_WRITE_ONLY,
+        component_order,
         reserved1: 0,
     })
 }
@@ -666,6 +692,38 @@ fn checked_cell_count(grid: [u64; 3]) -> Result<usize, GpuM1TransportError> {
         .ok_or_else(|| invalid("GPU M1 grid cell count overflows usize"))
 }
 
+fn face_component_counts(grid: [u64; 3]) -> Result<[usize; 3], GpuM1TransportError> {
+    let [nx, ny, nz] = grid;
+    let count = |a: u64, b: u64, c: u64| {
+        a.checked_mul(b)
+            .and_then(|product| product.checked_mul(c))
+            .and_then(|product| usize::try_from(product).ok())
+    };
+    Ok([
+        count(
+            nx.checked_add(1)
+                .ok_or_else(|| invalid("GPU M1 x-face count overflows u64"))?,
+            ny,
+            nz,
+        )
+        .ok_or_else(|| invalid("GPU M1 x-face count overflows usize"))?,
+        count(
+            nx,
+            ny.checked_add(1)
+                .ok_or_else(|| invalid("GPU M1 y-face count overflows u64"))?,
+            nz,
+        )
+        .ok_or_else(|| invalid("GPU M1 y-face count overflows usize"))?,
+        count(
+            nx,
+            ny,
+            nz.checked_add(1)
+                .ok_or_else(|| invalid("GPU M1 z-face count overflows u64"))?,
+        )
+        .ok_or_else(|| invalid("GPU M1 z-face count overflows usize"))?,
+    ])
+}
+
 fn boundary_geometry(
     face: fullmag_ir::StructuredBoundaryFaceIR,
     cell_size: [f64; 3],
@@ -1057,6 +1115,15 @@ pub(crate) struct AcceptedSpinSnapshot {
     pub(crate) device_identity: DeviceIdentity,
 }
 
+#[derive(Debug, PartialEq)]
+pub(crate) struct AcceptedGpuM1TransportArtifacts {
+    pub(crate) potential_v: Vec<f64>,
+    pub(crate) charge_current_j_c: [Vec<f64>; 3],
+    pub(crate) spin_accumulation_mu_s: [Vec<f64>; 3],
+    pub(crate) spin_current_q_ia: [[Vec<f64>; 3]; 3],
+    pub(crate) torque_stt: [Vec<f64>; 3],
+}
+
 pub(crate) struct AcceptedGpuM1Publication {
     pub(crate) accepted_sequence: u64,
     pub(crate) source_revision: u64,
@@ -1161,6 +1228,11 @@ pub(crate) trait GpuM1TransportAbi {
         request: &fullmag_fdm_gpu_steady_spin_solve_request_v1,
     ) -> Result<fullmag_fdm_gpu_steady_spin_solve_result_v1, u32>;
 
+    fn readback_artifact(
+        &self,
+        request: &fullmag_fdm_gpu_transport_artifact_request_v1,
+    ) -> Result<(), u32>;
+
     fn checkpoint_query_size(
         &self,
         request: &fullmag_fdm_gpu_transport_checkpoint_size_request_v1,
@@ -1254,6 +1326,7 @@ pub(crate) struct GpuM1TransportSession<A: GpuM1TransportAbi> {
     spin_relative_tolerance: f64,
     spin_max_iterations: u64,
     llg_binding_features: u64,
+    grid: [u64; 3],
     cell_count: u64,
     accepted_snapshot: Option<AcceptedChargeSnapshot>,
     accepted_spin_sequence: Option<u64>,
@@ -1265,8 +1338,9 @@ impl<A: GpuM1TransportAbi> GpuM1TransportSession<A> {
         mut prepared: PreparedGpuM1Descriptor,
     ) -> Result<Self, GpuM1TransportError> {
         let static_features = static_descriptor_features(&prepared.interfaces);
-        prepared.context_request.requested_device_features |=
-            static_features | ffi::FULLMAG_FDM_GPU_TRANSPORT_FEATURE_CHECKPOINT_V1;
+        prepared.context_request.requested_device_features |= static_features
+            | ffi::FULLMAG_FDM_GPU_TRANSPORT_FEATURE_CHECKPOINT_V1
+            | ffi::FULLMAG_FDM_GPU_TRANSPORT_FEATURE_ARTIFACT_READBACK;
         let required_features = prepared.context_request.requested_device_features;
         let charge_solver_policy = prepared.charge_solver_policy;
         let charge_gauge_policy = prepared.charge_gauge_policy;
@@ -1275,6 +1349,7 @@ impl<A: GpuM1TransportAbi> GpuM1TransportSession<A> {
         let spin_solver_policy = prepared.spin_solver_policy;
         let spin_relative_tolerance = prepared.spin_relative_tolerance;
         let spin_max_iterations = prepared.spin_max_iterations;
+        let grid = prepared.static_descriptor.grid;
         let cell_count = prepared.cell_count;
         prepared.context_request.prefix = prefix_with_features::<
             fullmag_fdm_gpu_transport_context_create_request_v1,
@@ -1344,6 +1419,7 @@ impl<A: GpuM1TransportAbi> GpuM1TransportSession<A> {
             spin_relative_tolerance,
             spin_max_iterations,
             llg_binding_features: static_features,
+            grid,
             cell_count,
             accepted_snapshot: None,
             accepted_spin_sequence: None,
@@ -1541,6 +1617,137 @@ impl<A: GpuM1TransportAbi> GpuM1TransportSession<A> {
         };
         self.accepted_spin_sequence = Some(snapshot.accepted_sequence);
         Ok(accepted_spin)
+    }
+
+    fn readback_accepted_field(
+        &self,
+        snapshot: &AcceptedChargeSnapshot,
+        field_id: u32,
+        component_order: u32,
+        values: &mut [f64],
+    ) -> Result<(), GpuM1TransportError> {
+        let destination = host_write_f64_view(values, component_order)?;
+        let request = fullmag_fdm_gpu_transport_artifact_request_v1 {
+            prefix: prefix_with_features::<fullmag_fdm_gpu_transport_artifact_request_v1>(
+                ffi::FULLMAG_FDM_GPU_TRANSPORT_FEATURE_M1_CHARGE
+                    | ffi::FULLMAG_FDM_GPU_TRANSPORT_FEATURE_ARTIFACT_READBACK,
+            ),
+            context_handle: self.context_handle(),
+            snapshot_handle: snapshot.handle,
+            field_id,
+            cadence: ffi::FULLMAG_FDM_GPU_TRANSPORT_ARTIFACT_CADENCE_ACCEPTED_STEP,
+            range_begin: 0,
+            range_count: values.len() as u64,
+            destination_view_ptr: (&destination as *const _) as u64,
+            expected_bytes: destination.byte_length,
+            accepted_sequence: snapshot.accepted_sequence,
+        };
+        self.abi
+            .readback_artifact(&request)
+            .map_err(|status| GpuM1TransportError::AbiFailure {
+                operation: "readback_artifact",
+                status,
+            })
+    }
+
+    pub(crate) fn readback_accepted_artifacts(
+        &self,
+    ) -> Result<AcceptedGpuM1TransportArtifacts, GpuM1TransportError> {
+        let snapshot = self
+            .accepted_snapshot
+            .as_ref()
+            .ok_or(GpuM1TransportError::ChargeSnapshotRequired)?;
+        self.accepted_spin_sequence
+            .filter(|sequence| *sequence == snapshot.accepted_sequence)
+            .ok_or(GpuM1TransportError::SpinSnapshotRequired)?;
+
+        let cell_count = usize::try_from(self.cell_count)
+            .map_err(|_| invalid("GPU M1 artifact cell count overflows usize"))?;
+        let face_counts = face_component_counts(self.grid)?;
+        let charge_count = face_counts.iter().try_fold(0_usize, |total, count| {
+            total
+                .checked_add(*count)
+                .ok_or_else(|| invalid("GPU M1 charge artifact count overflows usize"))
+        })?;
+        let spin_vector_count = cell_count
+            .checked_mul(3)
+            .ok_or_else(|| invalid("GPU M1 spin vector artifact count overflows usize"))?;
+        let q_count = charge_count
+            .checked_mul(3)
+            .ok_or_else(|| invalid("GPU M1 spin-current artifact count overflows usize"))?;
+
+        let mut potential_v = vec![0.0; cell_count];
+        let mut charge_current = vec![0.0; charge_count];
+        let mut spin_accumulation = vec![0.0; spin_vector_count];
+        let mut spin_current = vec![0.0; q_count];
+        let mut torque = vec![0.0; spin_vector_count];
+        self.readback_accepted_field(
+            snapshot,
+            ffi::FULLMAG_FDM_GPU_TRANSPORT_ARTIFACT_FIELD_V,
+            ffi::FULLMAG_FDM_GPU_TRANSPORT_COMPONENT_ORDER_SCALAR,
+            &mut potential_v,
+        )?;
+        self.readback_accepted_field(
+            snapshot,
+            ffi::FULLMAG_FDM_GPU_TRANSPORT_ARTIFACT_FIELD_J_C,
+            ffi::FULLMAG_FDM_GPU_TRANSPORT_COMPONENT_ORDER_ORIENTED_FACE_XYZ,
+            &mut charge_current,
+        )?;
+        self.readback_accepted_field(
+            snapshot,
+            ffi::FULLMAG_FDM_GPU_TRANSPORT_ARTIFACT_FIELD_MU_S,
+            ffi::FULLMAG_FDM_GPU_TRANSPORT_COMPONENT_ORDER_SOA_XYZ,
+            &mut spin_accumulation,
+        )?;
+        self.readback_accepted_field(
+            snapshot,
+            ffi::FULLMAG_FDM_GPU_TRANSPORT_ARTIFACT_FIELD_Q_IA,
+            ffi::FULLMAG_FDM_GPU_TRANSPORT_COMPONENT_ORDER_ORIENTED_FACE_XYZ,
+            &mut spin_current,
+        )?;
+        self.readback_accepted_field(
+            snapshot,
+            ffi::FULLMAG_FDM_GPU_TRANSPORT_ARTIFACT_FIELD_TORQUE_STT,
+            ffi::FULLMAG_FDM_GPU_TRANSPORT_COMPONENT_ORDER_SOA_XYZ,
+            &mut torque,
+        )?;
+
+        let [x_faces, y_faces, z_faces] = face_counts;
+        let charge_current_j_c = [
+            charge_current[..x_faces].to_vec(),
+            charge_current[x_faces..x_faces + y_faces].to_vec(),
+            charge_current[x_faces + y_faces..x_faces + y_faces + z_faces].to_vec(),
+        ];
+        let spin_accumulation_mu_s = [
+            spin_accumulation[..cell_count].to_vec(),
+            spin_accumulation[cell_count..2 * cell_count].to_vec(),
+            spin_accumulation[2 * cell_count..].to_vec(),
+        ];
+        let torque_stt = [
+            torque[..cell_count].to_vec(),
+            torque[cell_count..2 * cell_count].to_vec(),
+            torque[2 * cell_count..].to_vec(),
+        ];
+        let mut q_offset = 0;
+        let spin_current_q_ia = std::array::from_fn(|axis| {
+            let component_count = face_counts[axis];
+            let axis_end = q_offset + 3 * component_count;
+            let components = [
+                spin_current[q_offset..q_offset + component_count].to_vec(),
+                spin_current[q_offset + component_count..q_offset + 2 * component_count].to_vec(),
+                spin_current[q_offset + 2 * component_count..axis_end].to_vec(),
+            ];
+            q_offset = axis_end;
+            components
+        });
+
+        Ok(AcceptedGpuM1TransportArtifacts {
+            potential_v,
+            charge_current_j_c,
+            spin_accumulation_mu_s,
+            spin_current_q_ia,
+            torque_stt,
+        })
     }
 
     pub(crate) fn export_stage_checkpoint(
@@ -1950,6 +2157,14 @@ impl GpuM1TransportAbi for NativeGpuM1TransportAbi {
             )
         };
         (status == 0).then_some(result).ok_or(status)
+    }
+
+    fn readback_artifact(
+        &self,
+        request: &fullmag_fdm_gpu_transport_artifact_request_v1,
+    ) -> Result<(), u32> {
+        let status = unsafe { ffi::fullmag_fdm_gpu_transport_readback_artifact_v1(request) };
+        (status == 0).then_some(()).ok_or(status)
     }
 
     fn checkpoint_query_size(
