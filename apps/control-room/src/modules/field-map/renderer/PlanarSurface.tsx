@@ -222,6 +222,7 @@ export function PlanarSurface({
     }
     hoverFrameRef.current = null;
     hoverPointerRef.current = null;
+    resetHoverValue(setHoverValue);
   }, [model.layers.probes]);
 
   useEffect(() => {
@@ -377,4 +378,10 @@ function pointerUv(
     bounds[0] + tx * (bounds[1] - bounds[0]),
     bounds[3] - ty * (bounds[3] - bounds[2]),
   ];
+}
+
+function resetHoverValue(
+  setHoverValue: (value: number | null) => void,
+): void {
+  setHoverValue(null);
 }

@@ -461,11 +461,12 @@ describe("PlanarSurface lifecycle", () => {
       await act(async () => {
         root.render(<PlanarSurface model={{
           ...initialModel,
-          layers: { ...initialModel.layers, contours: true, probes: false, raster: false },
+          layers: { ...initialModel.layers, contours: true, probes: true, raster: false },
         }} onRenderEvidence={onRenderEvidence} />);
         await Promise.resolve();
       });
 
+      expect(probe.textContent).toBe("No sample");
       expect(workers).toHaveLength(2);
       expect(workers[1]?.terminate).not.toHaveBeenCalled();
       expect(requests).toHaveLength(2);
