@@ -9,6 +9,7 @@ pub mod mechanics;
 pub mod mesh_assets;
 pub mod mesh_hints;
 pub mod model;
+pub mod physics_object;
 pub mod plan;
 pub mod planar_monitor;
 pub mod quantities;
@@ -23,6 +24,7 @@ pub use mechanics::*;
 pub use mesh_assets::*;
 pub use mesh_hints::*;
 pub use model::*;
+pub use physics_object::*;
 pub use plan::*;
 pub use planar_monitor::*;
 pub use quantities::{

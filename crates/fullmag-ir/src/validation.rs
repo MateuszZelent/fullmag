@@ -2,8 +2,10 @@ use crate::{
     AntennaFieldSourceModelIR, AntennaSpatialProfileIR, CurrentModuleIR, CurrentTransportModelIR,
     DriveActivationIR, DynamicsIR, EmptyPolicyIR, EnergyTermIR, FieldEnvelopeIR,
     FieldSpatialProfileIR, FieldTargetIR, MechanicalLoadIR, MechanicsIR, MonitorTargetIR,
-    PlanarExtentIR, PlanarOperatorIR, ProblemIR, SpinTorqueModuleIR, StudyIR,
-    SurfaceBoundarySelectorIR, TimeDependenceIR, PLANAR_FRAME_NORMALIZATION_VERSION,
+    PlanarExtentIR, PlanarOperatorIR, ProblemIR, ProblemIRV04, SpinTorqueModuleIR, StudyIR,
+    SurfaceBoundarySelectorIR, TimeDependenceIR, MAGNETIZATION_MODULE_SCHEMA_VERSION,
+    OBJECT_MATERIAL_ASSIGNMENT_SCHEMA_VERSION, PHYSICS_INTERFACE_SCHEMA_VERSION,
+    PHYSICS_OBJECT_SCHEMA_VERSION, PLANAR_FRAME_NORMALIZATION_VERSION,
 };
 use std::collections::BTreeSet;
 
@@ -17,6 +19,251 @@ fn vector3_norm_sq(vector: &[f64; 3]) -> f64 {
 
 fn dot(a: &[f64; 3], b: &[f64; 3]) -> f64 {
     a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
+}
+
+pub(crate) fn validate_physics_object_problem(problem: &ProblemIRV04) -> Result<(), Vec<String>> {
+    let mut errors = Vec::new();
+    if problem.ir_version != crate::PROBLEM_IR_V04_VERSION {
+        errors.push(format!(
+            "ir_version must be '{}' for ProblemIRV04",
+            crate::PROBLEM_IR_V04_VERSION
+        ));
+    }
+    let geometry_ids: BTreeSet<&str> = problem
+        .geometry
+        .entries
+        .iter()
+        .map(crate::GeometryEntryIR::name)
+        .collect();
+    let material_ids: BTreeSet<&str> = problem
+        .materials
+        .iter()
+        .map(|material| material.name.as_str())
+        .collect();
+    let mut object_ids = BTreeSet::new();
+    let mut object_names = BTreeSet::new();
+    for (index, object) in problem.objects.iter().enumerate() {
+        if object.schema_version != PHYSICS_OBJECT_SCHEMA_VERSION {
+            errors.push(format!(
+                "objects[{index}].schema_version must be '{PHYSICS_OBJECT_SCHEMA_VERSION}'"
+            ));
+        }
+        if object.object_id.trim().is_empty() {
+            errors.push(format!("objects[{index}].object_id must not be empty"));
+        } else if !object_ids.insert(object.object_id.as_str()) {
+            errors.push(format!(
+                "objects[{index}] duplicate object_id '{}'",
+                object.object_id
+            ));
+        }
+        if object.name.trim().is_empty() {
+            errors.push(format!("objects[{index}].name must not be empty"));
+        } else if !object_names.insert(object.name.as_str()) {
+            errors.push(format!("objects[{index}] duplicate name '{}'", object.name));
+        }
+        if !geometry_ids.contains(object.geometry_id.as_str()) {
+            errors.push(format!(
+                "objects[{index}] geometry_id '{}' does not exist",
+                object.geometry_id
+            ));
+        }
+    }
+
+    let object_ids: BTreeSet<&str> = problem
+        .objects
+        .iter()
+        .map(|object| object.object_id.as_str())
+        .collect();
+    let object_region_ids: BTreeSet<(&str, &str)> = problem
+        .object_regions
+        .iter()
+        .map(|region| (region.owner_object.as_str(), region.region_id.as_str()))
+        .collect();
+    let mut assignment_ids = BTreeSet::new();
+    for (index, assignment) in problem.material_assignments.iter().enumerate() {
+        if assignment.schema_version != OBJECT_MATERIAL_ASSIGNMENT_SCHEMA_VERSION {
+            errors.push(format!(
+                "material_assignments[{index}].schema_version must be '{OBJECT_MATERIAL_ASSIGNMENT_SCHEMA_VERSION}'"
+            ));
+        }
+        if assignment.assignment_id.trim().is_empty() {
+            errors.push(format!(
+                "material_assignments[{index}].assignment_id must not be empty"
+            ));
+        } else if !assignment_ids.insert(assignment.assignment_id.as_str()) {
+            errors.push(format!(
+                "material_assignments[{index}] duplicate assignment_id '{}'",
+                assignment.assignment_id
+            ));
+        }
+        validate_object_region_reference(
+            &format!("material_assignments[{index}]"),
+            &assignment.target,
+            &object_ids,
+            &object_region_ids,
+            &mut errors,
+        );
+        if !material_ids.contains(assignment.material_id.as_str()) {
+            errors.push(format!(
+                "material_assignments[{index}] missing material '{}'",
+                assignment.material_id
+            ));
+        }
+    }
+
+    for (object_index, object) in problem.objects.iter().enumerate() {
+        let mut seen_assignment_ids = BTreeSet::new();
+        for assignment_id in &object.material_assignment_ids {
+            if !seen_assignment_ids.insert(assignment_id.as_str()) {
+                errors.push(format!(
+                    "objects[{object_index}] duplicate material_assignment_id '{assignment_id}'"
+                ));
+            }
+            match problem
+                .material_assignments
+                .iter()
+                .find(|assignment| assignment.assignment_id == *assignment_id)
+            {
+                None => errors.push(format!(
+                    "objects[{object_index}] material_assignment_id '{assignment_id}' does not exist"
+                )),
+                Some(assignment) if assignment.target.object_id != object.object_id => errors.push(
+                    format!(
+                        "objects[{object_index}] material_assignment_id '{assignment_id}' targets a different object"
+                    ),
+                ),
+                Some(_) => {}
+            }
+        }
+    }
+
+    let mut module_ids = BTreeSet::new();
+    for (index, module) in problem.magnetization_modules.iter().enumerate() {
+        if module.schema_version != MAGNETIZATION_MODULE_SCHEMA_VERSION {
+            errors.push(format!(
+                "magnetization_modules[{index}].schema_version must be '{MAGNETIZATION_MODULE_SCHEMA_VERSION}'"
+            ));
+        }
+        if module.module_id.trim().is_empty() || !module_ids.insert(module.module_id.as_str()) {
+            errors.push(format!(
+                "magnetization_modules[{index}].module_id must be non-empty and unique"
+            ));
+        }
+        validate_object_region_reference(
+            &format!("magnetization_modules[{index}]"),
+            &module.target,
+            &object_ids,
+            &object_region_ids,
+            &mut errors,
+        );
+        if !material_ids.contains(module.material_id.as_str()) {
+            errors.push(format!(
+                "magnetization_modules[{index}] missing material '{}'",
+                module.material_id
+            ));
+        }
+        if !problem.material_assignments.iter().any(|assignment| {
+            assignment.target == module.target && assignment.material_id == module.material_id
+        }) {
+            errors.push(format!(
+                "magnetization_modules[{index}] material '{}' is not assigned to its target",
+                module.material_id
+            ));
+        }
+    }
+
+    let mut interface_ids = BTreeSet::new();
+    for (index, interface) in problem.interfaces.iter().enumerate() {
+        if interface.schema_version != PHYSICS_INTERFACE_SCHEMA_VERSION {
+            errors.push(format!(
+                "interfaces[{index}].schema_version must be '{PHYSICS_INTERFACE_SCHEMA_VERSION}'"
+            ));
+        }
+        if interface.interface_id.trim().is_empty()
+            || !interface_ids.insert(interface.interface_id.as_str())
+        {
+            errors.push(format!(
+                "interfaces[{index}].interface_id must be non-empty and unique"
+            ));
+        }
+        if interface.name.trim().is_empty() {
+            errors.push(format!("interfaces[{index}].name must not be empty"));
+        }
+        validate_surface_reference(
+            &format!("interfaces[{index}].side_a"),
+            &interface.side_a,
+            &object_ids,
+            &mut errors,
+        );
+        validate_surface_reference(
+            &format!("interfaces[{index}].side_b"),
+            &interface.side_b,
+            &object_ids,
+            &mut errors,
+        );
+        if interface.side_a.object_id == interface.side_b.object_id {
+            errors.push(format!(
+                "interfaces[{index}] must reference two different object owners"
+            ));
+        }
+        if !vector3_is_finite(&interface.side_a_to_side_b)
+            || vector3_norm_sq(&interface.side_a_to_side_b) <= 1e-30
+        {
+            errors.push(format!(
+                "interfaces[{index}].side_a_to_side_b must be finite and non-zero"
+            ));
+        }
+    }
+
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(errors)
+    }
+}
+
+fn validate_object_region_reference(
+    label: &str,
+    target: &crate::RegionRefIR,
+    object_ids: &BTreeSet<&str>,
+    object_region_ids: &BTreeSet<(&str, &str)>,
+    errors: &mut Vec<String>,
+) {
+    if !object_ids.contains(target.object_id.as_str()) {
+        errors.push(format!(
+            "{label} missing target object '{}'",
+            target.object_id
+        ));
+        return;
+    }
+    if let Some(region_id) = target.region_id.as_deref() {
+        if !object_region_ids.contains(&(target.object_id.as_str(), region_id)) {
+            errors.push(format!(
+                "{label} missing target region '{}/{}'",
+                target.object_id, region_id
+            ));
+        }
+    }
+}
+
+fn validate_surface_reference(
+    label: &str,
+    surface: &crate::SurfaceRefIR,
+    object_ids: &BTreeSet<&str>,
+    errors: &mut Vec<String>,
+) {
+    if !object_ids.contains(surface.object_id.as_str()) {
+        errors.push(format!(
+            "{label} references missing surface owner '{}'",
+            surface.object_id
+        ));
+    }
+    if surface.surface_id.trim().is_empty() {
+        errors.push(format!("{label}.surface_id must not be empty"));
+    }
+    if !vector3_is_finite(&surface.orientation) || vector3_norm_sq(&surface.orientation) <= 1e-30 {
+        errors.push(format!("{label}.orientation must be finite and non-zero"));
+    }
 }
 
 pub(crate) fn validate_planar_monitors(problem: &ProblemIR, errors: &mut Vec<String>) {
