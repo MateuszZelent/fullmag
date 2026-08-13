@@ -5375,6 +5375,42 @@ async fn visualization_state_rejects_invalid_or_legacy_planar_ranges() {
             response.status()
         );
     }
+
+    let current = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/visualization/state")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let replacement = body_json(current).await;
+    assert!(replacement["planar"].get("auto_contrast").is_none());
+    assert!(replacement["planar"].get("contrast_min").is_none());
+    assert!(replacement["planar"].get("contrast_max").is_none());
+    for (field, value) in [
+        ("auto_contrast", serde_json::json!(true)),
+        ("contrast_min", serde_json::json!(-1.0)),
+        ("contrast_max", serde_json::json!(1.0)),
+    ] {
+        let mut replacement = replacement.clone();
+        replacement["planar"][field] = value;
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("PUT")
+                    .uri("/v2/sessions/current/visualization/state")
+                    .header("content-type", "application/json")
+                    .body(Body::from(replacement.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    }
 }
 
 #[tokio::test]

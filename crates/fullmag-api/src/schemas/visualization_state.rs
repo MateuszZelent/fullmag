@@ -202,6 +202,7 @@ pub struct QuantityVisualizationPatch {
 }
 
 #[derive(Debug, Serialize, Deserialize, ToSchema, Clone, PartialEq)]
+#[serde(deny_unknown_fields)]
 pub struct PlanarVisualizationState {
     pub active_monitor_id: Option<String>,
     pub view_scope: PlanarViewScopeState,
@@ -212,15 +213,6 @@ pub struct PlanarVisualizationState {
     pub range: PlanarColorRangeState,
     #[serde(default = "default_planar_raster_opacity")]
     pub raster_opacity: f64,
-    #[serde(skip_serializing, default)]
-    #[schema(ignore)]
-    pub auto_contrast: bool,
-    #[serde(skip_serializing, default)]
-    #[schema(ignore)]
-    pub contrast_min: Option<f64>,
-    #[serde(skip_serializing, default)]
-    #[schema(ignore)]
-    pub contrast_max: Option<f64>,
     pub display_unit: Option<String>,
     pub resolution: PlanarResolutionPolicy,
     pub quality: PlanarRenderQuality,
@@ -353,9 +345,6 @@ pub(crate) fn default_planar_visualization_state() -> PlanarVisualizationState {
         colormap: "viridis".to_string(),
         range: default_planar_color_range_state(),
         raster_opacity: default_planar_raster_opacity(),
-        auto_contrast: true,
-        contrast_min: None,
-        contrast_max: None,
         display_unit: None,
         resolution: PlanarResolutionPolicy {
             width: 512,
