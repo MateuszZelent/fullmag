@@ -178,7 +178,7 @@ export function tableInspectorModel(
   }
   return {
     ...model,
-    actionLabel: "Read-only table resource inspection; no mutation command is published.",
+    actionLabel: "Open this published table in Analysis from the Explorer context menu.",
     properties: [
       { label: "Table ID", mono: true, value: display(ref?.ownerId) },
       { label: "Schema revision", mono: true, value: display(ref?.ownerSchemaRevision) },

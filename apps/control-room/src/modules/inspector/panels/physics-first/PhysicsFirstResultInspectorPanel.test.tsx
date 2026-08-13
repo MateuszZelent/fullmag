@@ -48,7 +48,7 @@ describe("routed postprocessing Inspectors", () => {
     expect(html).toContain("Table ID");
     expect(html).toContain("Schema revision");
     expect(html).toContain("Freshness");
-    expect(html).toContain("Read-only table resource inspection");
+    expect(html).toContain("Open this published table in Analysis");
     expect(html).not.toContain("Dataset / resource");
   });
 

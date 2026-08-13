@@ -2,6 +2,34 @@ import type { ModuleManifest } from "@/kernel/types";
 import type { CommandContext } from "@/kernel/commands/commandTypes";
 import { analysisWorkspaceStore, type AnalysisWorkspaceState } from "@/kernel/workspace/analysisWorkspace";
 import { quickChartWorkspaceStore, type PinnedQuickChart } from "@/kernel/workspace/quickChartWorkspace";
+import type { AnalysisSurface } from "@/kernel/workspace/analysisViewPreferences";
+
+interface OpenAnalysisInput {
+  datasetRef: string;
+  surface: AnalysisSurface;
+  tableId: string;
+}
+
+function openAnalysisInput(context: CommandContext): OpenAnalysisInput | null {
+  const input = context.input;
+  if (!input || typeof input !== "object" || Array.isArray(input)) return null;
+  const candidate = input as Record<string, unknown>;
+  if (
+    typeof candidate.datasetRef !== "string" ||
+    candidate.datasetRef.length === 0 ||
+    typeof candidate.tableId !== "string" ||
+    candidate.tableId.length === 0 ||
+    candidate.surface !== "dynamics" ||
+    candidate.datasetRef !== `table:${candidate.tableId}`
+  ) {
+    return null;
+  }
+  return {
+    datasetRef: candidate.datasetRef,
+    surface: candidate.surface,
+    tableId: candidate.tableId,
+  };
+}
 
 export const analysisPlotsManifest: ModuleManifest = {
   id: "analysis-plots",
@@ -62,6 +90,20 @@ export const analysisPlotsManifest: ModuleManifest = {
         isActive: (context) =>
           context.layout?.get().activeViewportMainModuleId === "analysis-plots",
         run: (context) => {
+          if (context.input !== undefined && !openAnalysisInput(context)) {
+            return {
+              message: "Published table Analysis action is invalid.",
+              status: "failed",
+            };
+          }
+          const input = openAnalysisInput(context);
+          if (input) {
+            // The Results action carries both identities: tableId is the
+            // Analysis loader key, while datasetRef remains the resource
+            // identity used for provenance and action targeting.
+            analysisWorkspaceStore.setActiveSurface(input.surface);
+            analysisWorkspaceStore.setSelectedDatasetRef(input.tableId);
+          }
           context.layout?.setActiveViewportMainModule("analysis-plots");
           context.layout?.setFocusedSlot("viewport-main");
           return { status: "completed" };

@@ -696,6 +696,10 @@ export function resolveCurrentExplorerSelectionNode(
   const selected = findExplorerNode(nodes, selectedNodeId);
   if (selected) return selected;
   if (ref?.type !== "postprocessing") return null;
+  // A definition selection is tied to an immutable owner identity. If that
+  // owner is no longer in the current snapshot, never silently retarget the
+  // selection to a family root with different semantics.
+  if (ref.scope === "definition") return null;
   const rootKind = postprocessingRootKind(ref.definitionKind);
   const familyRoot = findExplorerNodeByKind(currentTree, rootKind);
   if (familyRoot) return familyRoot;

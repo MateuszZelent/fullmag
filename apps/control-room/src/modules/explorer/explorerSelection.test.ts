@@ -1553,7 +1553,7 @@ describe("selectExplorerNode", () => {
     expect(kernel.selection.get().ref).not.toHaveProperty("rows_href");
   });
 
-  it("resolves a removed postprocessing definition to the current family root", () => {
+  it("clears a removed postprocessing definition instead of retargeting to a root", () => {
     const root: ExplorerNode = {
       id: "results:run:run-8:tables",
       kind: "results.tables.root",
@@ -1576,9 +1576,10 @@ describe("selectExplorerNode", () => {
         kind: "results.tables.definition",
         nodeId: "results:run:run-7:tables:table-energy",
         ownerReadiness: "available-ready",
+        scope: "definition",
         type: "postprocessing",
       } as never,
-    )).toBe(root);
+    )).toBeNull();
   });
 
   it("fails closed to an unavailable Results root when currentRun disappears", () => {
@@ -1607,21 +1608,14 @@ describe("selectExplorerNode", () => {
       kernel.selection.get().ref,
     );
 
-    expect(currentNode).toMatchObject({
-      availability: "unavailable",
-      id: "results:root",
-      kind: "results.root",
-    });
-    if (!currentNode) return;
-    selectExplorerNode(kernel, currentNode, "explorer");
-    expect(kernel.selection.get()).toMatchObject({
-      kind: "results.root",
-      nodeId: "results:root",
-      ref: null,
+    expect(currentNode).toBeNull();
+    expect(kernel.selection.get().ref).toMatchObject({
+      ownerId: "energy",
+      type: "postprocessing",
     });
   });
 
-  it("moves a removed catalog owner to the current family root revision", () => {
+  it("clears a removed catalog owner after the catalog revision changes", () => {
     const table: TableResource = {
       binary_rows_href: "/tables/energy/rows.bin",
       columns: [],
@@ -1647,19 +1641,10 @@ describe("selectExplorerNode", () => {
       kernel.selection.get().ref,
     );
 
-    expect(currentNode).toMatchObject({
-      id: "results:run:run-7:tables",
-      kind: "results.tables.root",
-      postprocessingCatalogRevision: 13,
-    });
-    if (!currentNode) return;
-    selectExplorerNode(kernel, currentNode, "explorer");
+    expect(currentNode).toBeNull();
     expect(kernel.selection.get().ref).toMatchObject({
-      catalogRevision: 13,
-      nodeId: currentNode.id,
-      ownerId: null,
-      resourceRef: null,
-      scope: "root",
+      ownerId: "energy",
+      resourceRef: "table:energy",
       type: "postprocessing",
     });
   });
@@ -1694,10 +1679,6 @@ describe("selectExplorerNode", () => {
       currentTree,
     );
 
-    expect(currentNode).toMatchObject({
-      availability: "available",
-      id: "results:run:run-7:tables",
-      kind: "results.tables.root",
-    });
+    expect(currentNode).toBeNull();
   });
 });

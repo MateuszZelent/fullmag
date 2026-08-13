@@ -697,6 +697,18 @@ function postprocessingChildren(
         definition.owner !== null;
       const owner = definition.owner;
       const status = postprocessingNodeStatus(definition.ownerReadiness);
+      const tableAction = available && definition.kind === "table" && owner?.kind === "table"
+        ? {
+            contextCommands: ["analysis-plots.open" as const],
+            contextCommandInputs: {
+              "analysis-plots.open": {
+                datasetRef: definition.datasetRef,
+                surface: "dynamics" as const,
+                tableId: owner.tableId,
+              },
+            },
+          }
+        : {};
       return node(
         `${parentId}:${key(definition.id)}`,
         nodeKind,
@@ -731,6 +743,7 @@ function postprocessingChildren(
             : {}),
           resourceState: definition.resourceStatus,
           status,
+          ...tableAction,
         },
       );
     });

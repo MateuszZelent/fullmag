@@ -203,6 +203,14 @@ describe("buildPhysicsFirstResultsTree", () => {
     const artifactNode = nodes.find((node) => node.label === "energy.csv");
     expect(tableNode).toMatchObject({
       availability: "available",
+      contextCommands: ["analysis-plots.open"],
+      contextCommandInputs: {
+        "analysis-plots.open": {
+          datasetRef: "table:energy",
+          surface: "dynamics",
+          tableId: "energy",
+        },
+      },
       postprocessingCatalogRevision: 4,
       postprocessingFreshness: "fresh",
       postprocessingOwnerId: "energy",
@@ -220,6 +228,7 @@ describe("buildPhysicsFirstResultsTree", () => {
       resourceState: "ready",
       status: "ready",
     });
+    expect(artifactNode).not.toHaveProperty("contextCommands");
     if (!tableNode) throw new Error("Missing table postprocessing node");
     const selection = new SelectionController(new EventBus<KernelEventMap>());
     selectExplorerNode({ selection } as KernelApi, tableNode, "explorer");
