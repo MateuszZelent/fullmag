@@ -5,6 +5,10 @@ import {
   SESSION_STATUS_PATH,
   SIMULATION_PREPARATION_PATH,
 } from "@/kernel/api/apiPaths";
+import {
+  buildChartAuditSurfacePlan,
+  hasChartOwnedAnimationFrameWork,
+} from "../../../scripts/audit-chart-performance.mjs";
 
 const packageJsonUrl = new URL("../../../package.json", import.meta.url);
 const auditScriptUrl = new URL(
@@ -25,6 +29,27 @@ const chartDiagnosticsUrl = new URL(
 );
 
 describe("analysis plots performance audit", () => {
+  it("defines one deterministic stress plan for every physics-first Analysis surface", () => {
+    expect(buildChartAuditSurfacePlan()).toEqual([
+      { id: "dynamics", label: "Dynamics" },
+      { id: "resonance-fmr", label: "Resonance & FMR" },
+      { id: "dispersion", label: "Dispersion" },
+      { id: "comparison", label: "Comparison" },
+    ]);
+  });
+
+  it("fails the audit when chart-owned animation work is observed", () => {
+    expect(
+      hasChartOwnedAnimationFrameWork({ activeFrames: 0, callbacks: 0 }),
+    ).toBe(false);
+    expect(
+      hasChartOwnedAnimationFrameWork({ activeFrames: 1, callbacks: 0 }),
+    ).toBe(true);
+    expect(
+      hasChartOwnedAnimationFrameWork({ activeFrames: 0, callbacks: 1 }),
+    ).toBe(true);
+  });
+
   it("audits the dataset-driven Analysis resource ownership and bounded table projection", () => {
     const packageJson = JSON.parse(readFileSync(packageJsonUrl, "utf8")) as {
       scripts?: Record<string, string>;
@@ -105,7 +130,11 @@ describe("analysis plots performance audit", () => {
     expect(auditScript).toContain("verifyChartInstanceLifecycle");
     expect(auditScript).toContain("selectDynamicsAnalysisSurface");
     expect(auditScript).toContain("waitForAnimationFrameOwnershipStable");
-    expect(auditScript).not.toContain("result.animationFrameCallbacks > 0");
+    expect(auditScript).toContain("chartOwnedAnimationFrameCallbacks");
+    expect(auditScript).toContain("chartOwnedAnimationFrames");
+    expect(auditScript).toContain("hasChartOwnedAnimationFrameWork");
+    expect(auditScript).toContain("fieldCatalogRequests");
+    expect(auditScript).toContain("Math.max(\n  3,");
     expect(auditScript).toContain("round < 3");
     expect(auditScript).toContain("waitForQuietRowsBinRequests");
     expect(auditScript).toContain("waitForRowsTransportSizes");

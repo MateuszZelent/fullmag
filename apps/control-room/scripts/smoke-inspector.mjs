@@ -6,6 +6,15 @@ const outputDir = resolve(
   process.cwd(),
   process.env.CONTROL_ROOM_INSPECTOR_REPORT_DIR ?? ".fullmag/reports/inspector-2-browser",
 );
+const INSPECTOR_REQUEST_QUIET_MS = 500;
+const INSPECTOR_REQUEST_TIMEOUT_MS = 5_000;
+const INSPECTOR_MAX_REQUESTS_PER_PATH = 8;
+const INSPECTOR_REQUEST_LIMITS = new Map([
+  [
+    "POST /v2/sessions/current/visualization/client-acks",
+    32,
+  ],
+]);
 const fixture = createInspectorFixture();
 
 async function loadPlaywright() {
@@ -70,7 +79,7 @@ try {
   }
   const screenshotFiles = [];
   await qualifyExplorerKeyboardNavigation(page);
-  await qualifyInspectorRoutingMatrix(page, inspector, screenshotFiles);
+  await qualifyInspectorRoutingMatrix(page, inspector, screenshotFiles, fixture);
 
   const visualizationNode = page
     .locator('[role="treeitem"]')
@@ -496,6 +505,19 @@ try {
   }
 
   assert((await inspector.locator("img, canvas").count()) === 0, "Inspector rendered preview media.");
+  await waitForInspectorRequestQuiet(page, fixture);
+  assert(
+    fixture.requestBudgetViolation === null,
+    `Inspector request budget exceeded: ${JSON.stringify(fixture.requestBudgetViolation)}`,
+  );
+  assert(
+    fixture.unknownGetPaths.length === 0,
+    `Inspector fixture received unknown GET resources: ${JSON.stringify(fixture.unknownGetPaths)}`,
+  );
+  assert(
+    fixture.unknownMutationPaths.length === 0,
+    `Inspector fixture received unknown mutations: ${JSON.stringify(fixture.unknownMutationPaths)}`,
+  );
   assert(previewRequests.length === 0, `Inspector caused preview requests: ${previewRequests.join(", ")}`);
   assert(consoleErrors.length === 0, `Browser errors:\n${consoleErrors.join("\n")}`);
 
@@ -534,7 +556,7 @@ try {
   await browser.close();
 }
 
-async function qualifyInspectorRoutingMatrix(page, inspector, screenshotFiles) {
+async function qualifyInspectorRoutingMatrix(page, inspector, screenshotFiles, fixture) {
   await selectInspectorNode(page, inspector, "model:airbox:visualization", {
     owner: "airbox-visualization",
     label: "Airbox",
@@ -665,6 +687,90 @@ async function qualifyInspectorRoutingMatrix(page, inspector, screenshotFiles) {
     label: "Film after mode return",
   });
   await assertHealthyViewportCanvas(page, "return to object viewport");
+  await qualifyModalDispersionAndPostprocessing(page, inspector, screenshotFiles, fixture);
+}
+
+async function qualifyModalDispersionAndPostprocessing(page, inspector, screenshotFiles, fixture) {
+  fixture.analysisProduct = "modal_eigen";
+  await page.reload({ waitUntil: "domcontentloaded", timeout: 60_000 });
+  await inspector.waitFor({ state: "visible", timeout: 30_000 });
+
+  const resultsTab = page
+    .locator(".fm-explorer .fm-tabs-trigger")
+    .filter({ hasText: /^Results$/ });
+  await resultsTab.click();
+  const resultRootId = "results:run:inspector-run";
+  const dispersionRootId = `${resultRootId}:k-resolved`;
+  const modalStageId = `${dispersionRootId}:stage:eigen-dispersion:modal_eigen`;
+  await expandInspectorNode(page, resultRootId);
+  await expandInspectorNode(page, dispersionRootId);
+  await expandInspectorNode(page, modalStageId);
+
+  await selectResultInspectorNode(page, inspector, `${modalStageId}:dispersion`, {
+    owner: "frequency-domain-results-dispersion-modal-relation",
+    heading: "Dispersion Relation",
+    label: "Modal dispersion relation",
+  });
+  const dispersionScreenshot = "physics-first-dispersion-relation-416.png";
+  await inspector.screenshot({ path: resolve(outputDir, dispersionScreenshot) });
+  screenshotFiles.push(dispersionScreenshot);
+
+  await selectResultInspectorNode(page, inspector, `${modalStageId}:branches`, {
+    owner: "frequency-domain-results-dispersion-modal-branches",
+    heading: "Mode Branches",
+    label: "Modal mode branches",
+  });
+  const branchesScreenshot = "physics-first-mode-branches-416.png";
+  await inspector.screenshot({ path: resolve(outputDir, branchesScreenshot) });
+  screenshotFiles.push(branchesScreenshot);
+
+  for (const [suffix, heading, owner, label] of [
+    ["analysis-views", "Analysis Views", "frequency-domain-results-analysis_views-root", "Analysis Views"],
+    ["derived-values", "Derived Values", "frequency-domain-results-derived_values-root", "Derived Values"],
+    ["tables", "Tables", "frequency-domain-results-tables-root", "Tables"],
+    ["exports", "Exports", "frequency-domain-results-exports-root", "Exports"],
+  ]) {
+    await selectResultInspectorNode(page, inspector, `${resultRootId}:${suffix}`, {
+      owner,
+      heading,
+      label,
+    });
+  }
+
+  fixture.analysisProduct = "driven_response";
+  await page.reload({ waitUntil: "domcontentloaded", timeout: 60_000 });
+  await inspector.waitFor({ state: "visible", timeout: 30_000 });
+  const modelTab = page
+    .locator(".fm-explorer .fm-tabs-trigger")
+    .filter({ hasText: /^Model$/ });
+  await modelTab.click();
+  await expandInspectorNode(page, "model:objects");
+  await expandInspectorNode(page, "model:object:film");
+  await page.locator('[data-node-id="model:object:film:visualization"]').waitFor({
+    state: "visible",
+    timeout: 60_000,
+  });
+}
+
+async function selectResultInspectorNode(page, inspector, nodeId, { owner, heading, label }) {
+  await ensureModelNodeVisible(page, nodeId);
+  const node = page.locator(`[data-node-id="${nodeId}"]`);
+  await node.click();
+  await page.waitForFunction(
+    (id) => document.querySelector(`[data-node-id="${id}"]`)?.getAttribute("aria-selected") === "true",
+    nodeId,
+    { timeout: 60_000 },
+  );
+  await page.waitForFunction(
+    (expectedOwner) => document.querySelector(".fm-inspector")?.getAttribute("data-inspector-owner") === expectedOwner,
+    owner,
+    { timeout: 60_000 },
+  );
+  await inspector.getByRole("heading", { exact: true, level: 2, name: heading }).waitFor();
+  assert(
+    (await inspector.getAttribute("data-inspector-owner")) === owner,
+    `${label} resolved to the wrong Inspector owner: ${await inspector.getAttribute("data-inspector-owner") ?? "none"}.`,
+  );
 }
 
 async function qualifyExplorerKeyboardNavigation(page) {
@@ -739,7 +845,20 @@ async function ensureModelNodeVisible(page, nodeId) {
 
 async function expandInspectorNode(page, nodeId) {
   const node = page.locator(`[data-node-id="${nodeId}"]`);
-  await node.waitFor({ state: "visible", timeout: 60_000 });
+  try {
+    await node.waitFor({ state: "visible", timeout: 60_000 });
+  } catch (error) {
+    const treeState = await page.locator('[role="treeitem"]').evaluateAll((items) =>
+      items.slice(0, 80).map((item) => ({
+        id: item.getAttribute("data-node-id"),
+        label: item.textContent?.trim(),
+        selected: item.getAttribute("aria-selected"),
+      })),
+    );
+    throw new Error(
+      `Explorer node ${nodeId} did not become visible. Tree snapshot: ${JSON.stringify(treeState)}. ${error}`,
+    );
+  }
   if ((await node.getAttribute("aria-expanded")) !== "false") return;
   const branch = node.locator(".fm-explorer-tree-row__branch");
   if (await branch.count()) {
@@ -846,6 +965,11 @@ function createInspectorFixture() {
       topology_fingerprint: "inspector-routing-topology",
     },
     requests: [],
+    requestCounts: new Map(),
+    requestBudgetViolation: null,
+    analysisProduct: "driven_response",
+    unknownMutationPaths: [],
+    unknownGetPaths: [],
     revision,
     scene,
     topology: inspectorTopologyBuffer(),
@@ -925,6 +1049,25 @@ async function installInspectorFixtureApi(page, fixture) {
     const url = new URL(request.url());
     const path = url.pathname;
     fixture.requests.push(`${request.method()} ${path}${url.search}`);
+    const requestKey = `${request.method()} ${path}`;
+    const requestCount = (fixture.requestCounts.get(requestKey) ?? 0) + 1;
+    fixture.requestCounts.set(requestKey, requestCount);
+    const requestLimit =
+      INSPECTOR_REQUEST_LIMITS.get(requestKey) ??
+      INSPECTOR_MAX_REQUESTS_PER_PATH;
+    if (requestCount > requestLimit) {
+      fixture.requestBudgetViolation ??= {
+        count: requestCount,
+        key: requestKey,
+        limit: requestLimit,
+        recent: fixture.requests.slice(-20),
+      };
+      return fulfillJson(
+        route,
+        { error: { code: "inspector_fixture_request_budget_exceeded" } },
+        508,
+      );
+    }
     if (request.method() === "OPTIONS") return fulfillEmpty(route, 204);
     if (path === "/v2/sessions/current/visualization/state" && request.method() === "PATCH") {
       const patch = request.postDataJSON() ?? {};
@@ -932,29 +1075,97 @@ async function installInspectorFixtureApi(page, fixture) {
       fixture.visualization.revision += 1;
       return fulfillJson(route, fixture.visualization);
     }
-    if (request.method() !== "GET") return fulfillJson(route, { revision: fixture.revision, ok: true });
+    if (path === "/v2/sessions/current/visualization/client-acks" && request.method() === "POST") {
+      const body = request.postDataJSON() ?? {};
+      return fulfillJson(route, {
+        client_id: body.client_id ?? "fixture-client",
+        revision: body.revision ?? fixture.revision,
+        status: body.status ?? "ready",
+      });
+    }
+    if (request.method() !== "GET") {
+      fixture.unknownMutationPaths.push(`${request.method()} ${path}${url.search}`);
+      return fulfillJson(
+        route,
+        { error: { code: "inspector_fixture_unknown_mutation", path } },
+        405,
+      );
+    }
     if (path === "/v2/sessions/current/status") return fulfillJson(route, inspectorSessionStatus(fixture));
     if (path === "/v2/sessions/current/model/scene") return fulfillJson(route, fixture.scene);
     if (path === "/v2/sessions/current/model/regions") return fulfillJson(route, { regions: [], revision: fixture.revision });
     if (path === "/v2/sessions/current/model/material-fields") return fulfillJson(route, { fields: [], revision: fixture.revision });
     if (path === "/v2/sessions/current/model/couplings") return fulfillJson(route, { couplings: [], revision: fixture.revision });
     if (path === "/v2/sessions/current/model/physics-graph") return fulfillJson(route, { interactions: [], revision: fixture.revision });
+    if (path === "/v2/sessions/current/model/current-transports") return fulfillJson(route, { items: [], scene_revision: fixture.revision });
+    if (path === "/v2/sessions/current/model/geometry/capabilities") return fulfillJson(route, { csg_capabilities: [], primitive_capabilities: [], revision: fixture.revision });
     if (path === "/v2/sessions/current/model/geometry/validation") return fulfillJson(route, { diagnostics: [], revision: fixture.revision, valid: true });
+    if (path === "/v2/sessions/current/model/planar-monitors") return fulfillJson(route, { count: 0, monitors: [], scene_revision: fixture.revision });
+    if (path === "/v2/sessions/current/model/universe") return fulfillJson(route, {
+      mesh_dirty: false,
+      object_bounds_max: [16e-9, 8e-9, 2e-9],
+      object_bounds_min: [0, 0, 0],
+      scene_revision: fixture.revision,
+      study_universe_mesh: null,
+      universe: null,
+    });
     if (path === "/v2/sessions/current/simulation/preparation") return fulfillJson(route, inspectorPreparationResource());
     if (path === "/v2/sessions/current/data/domain/meta") return fulfillJson(route, inspectorDomainMeta());
     if (path === "/v2/sessions/current/data/fields") return fulfillJson(route, inspectorFieldCatalog());
     if (path === "/v2/sessions/current/visualization/state") return fulfillJson(route, fixture.visualization);
     if (path === "/v2/sessions/current/meshing/meshes/shared-domain/manifest") return fulfillJson(route, fixture.manifest);
+    if (path === "/v2/sessions/current/meshing/capabilities") return fulfillJson(route, { mesh_adaptivity_state: null, mesh_capabilities: null, revision: 7 });
+    if (path === "/v2/sessions/current/meshing/mesh/periodic_pairs.v1") return fulfillJson(route, {
+      pairs: [],
+      revision: 7,
+      schema_version: "periodic_pairs.v1",
+      status: "unavailable",
+      status_reasons: ["Fixture mesh has no periodic boundaries."],
+    });
     if (path === "/v2/sessions/current/meshing/policies/universe") return fulfillJson(route, { config: { hmax: 1e-8 }, revision: 7 });
+    if (path === "/v2/sessions/current/meshing/semantics") return fulfillJson(route, {
+      mesh_build_diagnostics: null,
+      object_configs: [],
+      render_only_controls_do_not_change_solver_domain: true,
+      revision: 7,
+      shared_domain_config: {},
+      solver_mesh: null,
+      universe_config: null,
+    });
     if (path === "/v2/sessions/current/meshing/summary") return fulfillJson(route, { effective_airbox_target: { hmax: 1e-8 }, revision: 7 });
     if (path === "/v2/sessions/current/meshing/quality-gates") return fulfillJson(route, { gates: { status: "pass", checks: [] }, revision: 7 });
     if (path === "/v2/sessions/current/meshing/size-fields") return fulfillJson(route, { realized_size_fields: { fields: [] }, revision: 7 });
+    if (path === "/v2/sessions/current/meshing/meshes/shared-domain/quality-gates") return fulfillJson(route, {
+      gates: null,
+      mixed_certificate: {
+        certificate_fingerprint: null,
+        certificate_schema_version: null,
+        certificate_status: null,
+        family_gates: [],
+        mesh_revision: 7,
+        reason: "Fixture mesh has no certified quality-gate certificate.",
+        status: "unavailable",
+        topology_fingerprint: null,
+      },
+      revision: 7,
+    });
+    if (path === "/v2/sessions/current/meshing/meshes/shared-domain/realized-size-fields") return fulfillJson(route, {
+      realized_size_fields: {
+        fields: [],
+        reason: "Fixture mesh has no realized size fields.",
+        source: "fixture",
+      },
+      revision: 7,
+    });
     if (path === "/v2/sessions/current/meshing/builds/current") return fulfillJson(route, { active_build: null, mesh_pipeline_status: "ready", revision: 7 });
     if (path === "/v2/sessions/current/meshing/builds/latest-successful") return fulfillJson(route, { provenance: { scene_revision: fixture.revision }, revision: 7, status: "completed" });
     if (path === "/v2/sessions/current/meshing/region-memberships") return fulfillJson(route, { memberships: [], revision: 7 });
     if (path === "/v2/sessions/current/simulation/stages/execution") return fulfillJson(route, { stages: [], stage_statuses: [], total_stages: 0, revision: fixture.revision });
     if (path === "/v2/sessions/current/simulation/solver/status") return fulfillJson(route, { can_accept_commands: true, is_busy: false, runtime_state: "idle", revision: fixture.revision });
     if (path === "/v2/sessions/current/simulation/commands") return fulfillJson(route, { commands: [], latest_completed: null, revision: fixture.revision });
+    if (path === "/v2/sessions/current/data/artifacts") return fulfillJson(route, []);
+    if (path === "/v2/sessions/current/data/tables") return fulfillJson(route, { revision: fixture.revision, tables: [] });
+    if (path === "/v2/sessions/current/persistence/checkpoints") return fulfillJson(route, { checkpoints: [], revision: fixture.revision });
     if (path === "/v2/sessions/current/simulation/runs/current") return fulfillJson(route, {
       artifact_dir: "/tmp/inspector-run",
       requested_backend: "fem",
@@ -969,17 +1180,44 @@ async function installInspectorFixtureApi(page, fixture) {
       total_steps: 1,
     });
     if (path === "/v2/sessions/current/simulation/objects/film/metrics") return fulfillJson(route, inspectorObjectMetrics());
-    if (path === "/v2/sessions/current/analysis/frequency-domain/manifest.v1") return fulfillJson(route, inspectorFrequencyManifest());
-    if (path === "/v2/sessions/current/analysis/frequency-domain/eigen/spectrum.v2") return fulfillJson(route, inspectorFrequencySpectrum());
-    if (path === "/v2/sessions/current/analysis/frequency-domain/eigen/branches.v2") return fulfillJson(route, inspectorFrequencyBranches());
-    if (path === "/v2/sessions/current/analysis/frequency-domain/eigen/dispersion") return fulfillJson(route, inspectorFrequencyDispersion());
+    if (path === "/v2/sessions/current/analysis/frequency-domain/manifest.v1") return fulfillJson(route, inspectorFrequencyManifest(fixture));
+    if (path === "/v2/sessions/current/analysis/frequency-domain/eigen/spectrum.v2") return fulfillJson(route, inspectorFrequencySpectrum(fixture));
+    if (path === "/v2/sessions/current/analysis/frequency-domain/eigen/branches.v2") return fulfillJson(route, inspectorFrequencyBranches(fixture));
+    if (path === "/v2/sessions/current/analysis/frequency-domain/eigen/dispersion") return fulfillJson(route, inspectorFrequencyDispersion(fixture));
     if (path === "/v2/sessions/current/analysis/frequency-domain/eigen/diagnostics.v2") return fulfillJson(route, inspectorFrequencyDiagnostics());
     if (path === "/v2/sessions/current/analysis/frequency-domain/response/magnetic-sweep") return fulfillJson(route, inspectorFrequencyResponseSweep());
+    if (
+      path === "/v2/sessions/current/analysis/frequency-domain/response/cancel-requested.v1" ||
+      path === "/v2/sessions/current/analysis/frequency-domain/response/progress.v1"
+    ) return fulfillEmpty(route, 204);
     if (path.includes("/data/fields/") && path.endsWith("/meta")) return fulfillJson(route, inspectorFieldMeta(path));
     if (path.includes("/data/fields/") && path.endsWith("/samples/vector")) return fulfillBinary(route, inspectorFieldVector(path));
     if (path === "/v2/sessions/current/data/domain/topology") return fulfillTopology(route, fixture.topology);
-    return fulfillJson(route, { revision: fixture.revision });
+    fixture.unknownGetPaths.push(`${request.method()} ${path}${url.search}`);
+    return fulfillJson(
+      route,
+      { error: { code: "inspector_fixture_unknown_resource", path } },
+      404,
+    );
   });
+}
+
+async function waitForInspectorRequestQuiet(page, fixture) {
+  const deadline = Date.now() + INSPECTOR_REQUEST_TIMEOUT_MS;
+  let previousCount = fixture.requests.length;
+  let quietSince = Date.now();
+  while (Date.now() < deadline) {
+    await page.waitForTimeout(100);
+    if (fixture.requests.length !== previousCount) {
+      previousCount = fixture.requests.length;
+      quietSince = Date.now();
+      continue;
+    }
+    if (Date.now() - quietSince >= INSPECTOR_REQUEST_QUIET_MS) return;
+  }
+  throw new Error(
+    `Inspector requests did not settle before smoke completion: ${JSON.stringify(fixture.requests.slice(-20))}`,
+  );
 }
 
 function mergeInspectorVisualizationState(state, patch) {
@@ -1226,7 +1464,31 @@ function inspectorFrequencyCapability(status) {
   return { reason: "", status };
 }
 
-function inspectorFrequencyManifest() {
+function inspectorFrequencyManifest(fixture = { analysisProduct: "driven_response" }) {
+  const modal = fixture.analysisProduct === "modal_eigen";
+  const resultPayload = modal
+    ? {
+        equilibrium_identity: "equilibrium-1",
+        observables: [],
+        requested_execution: {
+          boundary_context: "floquet_periodic",
+          calculation_mode: "eigenmodes",
+          k_sampling: { kind: "path" },
+        },
+        revision: "result-modal-7",
+        stage_id: "eigen-dispersion",
+        stage_label: "Dispersion Eigenmodes",
+        study_product: "modal_eigen",
+      }
+    : {
+        equilibrium_identity: "equilibrium-1",
+        observables: [{ identity: "absorbed-power", kind: "absorbed_power", unit: "W" }],
+        requested_execution: { boundary_context: "finite_open", calculation_mode: "fmr_response" },
+        revision: "result-7",
+        stage_id: "frequency-response",
+        stage_label: "Frequency Response",
+        study_product: "driven_response",
+      };
   return {
     capabilities: {
       modal: {
@@ -1245,20 +1507,12 @@ function inspectorFrequencyManifest() {
     result_manifest: {
       artifact_path: "result-manifest.json",
       missing_reason: null,
-      payload: {
-        equilibrium_identity: "equilibrium-1",
-        observables: [{ identity: "absorbed-power", kind: "absorbed_power", unit: "W" }],
-        requested_execution: { boundary_context: "finite_open", calculation_mode: "fmr_response" },
-        revision: "result-7",
-        stage_id: "frequency-response",
-        stage_label: "Frequency Response",
-        study_product: "driven_response",
-      },
+      payload: resultPayload,
       resource_key: "/v2/sessions/current/analysis/frequency-domain/manifest.v1",
       schema_version: "frequency_domain_result_manifest.v1",
       status: "ready",
     },
-    requested_execution: { calculation_mode: "fmr_response" },
+    requested_execution: resultPayload.requested_execution,
     response_cancel_requested: null,
     response_progress: null,
     resources: { response_field_resources: [] },
@@ -1326,15 +1580,30 @@ function inspectorFrequencyBranches() {
   };
 }
 
-function inspectorFrequencyDispersion() {
+function inspectorFrequencyDispersion(fixture = { analysisProduct: "driven_response" }) {
+  const modal = fixture.analysisProduct === "modal_eigen";
   return {
     artifact_path: "eigen/dispersion.csv",
     content_type: "text/csv",
     missing_reason: null,
+    path_metadata: modal
+      ? {
+          sampling: {
+            kind: "path",
+            points: [
+              { k_vector: [0, 0, 0], label: "Γ" },
+              { k_vector: [1e7, 0, 0], label: "X" },
+            ],
+            samples_per_segment: [1],
+          },
+        }
+      : undefined,
     resource_key: "/v2/sessions/current/analysis/frequency-domain/eigen/dispersion",
     schema_version: "frequency_domain_eigen_dispersion.csv",
     status: "ready",
-    text: "sample_index,raw_mode_index,branch_id,path_s_rad_per_m,frequency_hz\n0,2,branch-0,0,12.5e9",
+    text: modal
+      ? "sample_index,raw_mode_index,branch_id,path_s_rad_per_m,frequency_hz,mode_field_id,mode_field_resource_key\n0,2,branch-0,0,12.5e9,analysis:eigen:sample-0000:mode-0002,/v2/sessions/current/data/fields/analysis%3Aeigen%3Asample-0000%3Amode-0002/samples/vector?view=phase_rotated_real&phase_rad=0\n1,2,branch-0,1e7,13e9,analysis:eigen:sample-0001:mode-0002,/v2/sessions/current/data/fields/analysis%3Aeigen%3Asample-0001%3Amode-0002/samples/vector?view=phase_rotated_real&phase_rad=0"
+      : "sample_index,raw_mode_index,branch_id,path_s_rad_per_m,frequency_hz\n0,2,branch-0,0,12.5e9",
   };
 }
 

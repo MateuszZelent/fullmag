@@ -156,6 +156,34 @@ describe("buildPhysicsFirstResultsTree", () => {
     expect(labels).not.toContain("Linear eigenmodes · Modal");
   });
 
+  it("marks empty result families unavailable instead of presenting them as ready", () => {
+    const nodes = flattenExplorerNodes(
+      buildPhysicsFirstResultsTree({
+        entries: [],
+        resultContextRunId: "run:empty",
+      }),
+    );
+
+    for (const label of [
+      "Dynamics",
+      "Resonance & FMR",
+      "Dispersion & k-resolved response",
+      "Hysteresis",
+      "Analysis Views",
+      "Derived Values",
+      "Tables",
+      "Exports",
+    ]) {
+      const node = nodes.find((candidate) => candidate.label === label);
+      expect(node).toBeDefined();
+      expect(node).toMatchObject({
+        availability: "unavailable",
+        executionState: "not_started",
+      });
+      expect(node?.status).not.toBe("ready");
+    }
+  });
+
   it("publishes only existing table and artifact owners as postprocessing definitions", () => {
     const table: TableResource = {
       binary_rows_href: "/rows.bin",
@@ -765,5 +793,94 @@ describe("physicsFirstResultsSnapshotFromResources", () => {
       "Frequency-domain artifact does not publish equilibrium_identity",
       "Frequency-domain artifact does not publish boundary_context",
     ]);
+  });
+
+  it("fails closed instead of throwing when periodic k sampling is unsupported", () => {
+    const adapted = physicsFirstResultsSnapshotFromResources({
+      currentRun: { revision: 22, run_id: "run-periodic-gap" },
+      manifest: {
+        result_manifest: {
+          payload: {
+            equilibrium_identity: "eq-periodic-gap",
+            requested_execution: {
+              boundary_context: "floquet_periodic",
+              k_sampling: { kind: "grid" },
+            },
+            stage_id: "periodic-gap",
+            study_product: "modal_eigen",
+          },
+          status: "ready",
+        },
+      },
+      spectrum: { status: "ready" },
+    });
+
+    expect(adapted.contractGaps).toEqual([
+      "Periodic/Floquet artifact does not publish a supported k sampling resource",
+    ]);
+    expect(() => buildPhysicsFirstResultsTree(adapted.snapshot)).not.toThrow();
+    expect(buildPhysicsFirstResultsTree(adapted.snapshot)[0]).toMatchObject({
+      availability: "unavailable",
+      badge: "contract gap",
+      resourceState: "error",
+      status: "failed",
+    });
+  });
+
+  it("recognizes a normalized periodic k grid from requested execution", () => {
+    const adapted = physicsFirstResultsSnapshotFromResources({
+      currentRun: { revision: 23, run_id: "run-grid" },
+      manifest: {
+        result_manifest: {
+          payload: {
+            equilibrium_identity: "eq-grid",
+            requested_execution: {
+              boundary_context: "floquet_periodic",
+              k_sampling: { kind: "grid", sample_count: 9 },
+            },
+            stage_id: "grid-stage",
+            study_product: "modal_eigen",
+          },
+          status: "ready",
+        },
+      },
+      spectrum: { status: "ready" },
+    });
+
+    expect(adapted.snapshot.entries[0]?.kSampling).toEqual({
+      kind: "grid",
+      sampleCount: 9,
+    });
+    expect(flattenExplorerNodes(buildPhysicsFirstResultsTree(adapted.snapshot)).map((node) => node.kContextKind))
+      .toContain("k_grid");
+  });
+
+  it("recognizes canonical single-k payloads including Gamma", () => {
+    const adapted = physicsFirstResultsSnapshotFromResources({
+      currentRun: { revision: 24, run_id: "run-gamma" },
+      manifest: {
+        result_manifest: {
+          payload: {
+            equilibrium_identity: "eq-gamma",
+            requested_execution: {
+              boundary_context: "floquet_periodic",
+              k_sampling: { kind: "single", k_vector: [0, 0, 0] },
+            },
+            stage_id: "gamma-stage",
+            study_product: "modal_eigen",
+          },
+          status: "ready",
+        },
+      },
+      spectrum: { status: "ready" },
+    });
+
+    expect(adapted.contractGaps).toEqual([]);
+    expect(adapted.snapshot.entries[0]?.kSampling).toEqual({
+      kind: "single",
+      vectorRadPerM: [0, 0, 0],
+    });
+    expect(flattenExplorerNodes(buildPhysicsFirstResultsTree(adapted.snapshot)).map((node) => node.kContextKind))
+      .toContain("gamma");
   });
 });

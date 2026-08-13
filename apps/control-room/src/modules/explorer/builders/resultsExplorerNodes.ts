@@ -68,6 +68,7 @@ export interface PhysicsFirstAnalysisFieldTarget {
 }
 
 export interface PhysicsFirstResultsSnapshot {
+  contractGaps?: readonly string[];
   entries: readonly PhysicsFirstResultEntry[];
   postprocessing?: PhysicsFirstPostprocessingSnapshot;
   resultContextRunId: string;
@@ -151,9 +152,33 @@ function dispersionArtifact(
     : null;
 }
 
-function pathSamplingFromMetadata(value: unknown): FrequencyDomainResultEvidence["kSampling"] | null {
-  const sampling = record(record(value)?.sampling);
-  if (sampling?.kind !== "path") return null;
+function sampleCount(value: unknown): number | null {
+  const count = finiteNumber(value);
+  return count !== null && Number.isInteger(count) && count > 0 ? count : null;
+}
+
+function samplingFromRecord(
+  sampling: Record<string, unknown> | null,
+): FrequencyDomainResultEvidence["kSampling"] | null {
+  if (!sampling) return null;
+  const kind = nonEmptyString(sampling.kind) ??
+    (sampling.path !== undefined ? "path" : sampling.grid !== undefined ? "grid" : null);
+  if (kind === "single") {
+    const vector = vector3(
+      sampling.vector_rad_per_m ?? sampling.k_vector ?? sampling.vector,
+    );
+    return vector ? { kind: "single", vectorRadPerM: vector } : null;
+  }
+  if (kind === "grid") {
+    const count =
+      sampleCount(sampling.sample_count) ??
+      sampleCount(sampling.sampleCount) ??
+      sampleCount(sampling.count) ??
+      sampleCount(sampling.points) ??
+      (Array.isArray(sampling.points) ? sampleCount(sampling.points.length) : null);
+    return count ? { kind: "grid", sampleCount: count } : null;
+  }
+  if (kind !== "path") return null;
   const points = Array.isArray(sampling.points) ? sampling.points : [];
   const segmentSamples = Array.isArray(sampling.samples_per_segment)
     ? sampling.samples_per_segment.filter((sample): sample is number => typeof sample === "number")
@@ -161,21 +186,38 @@ function pathSamplingFromMetadata(value: unknown): FrequencyDomainResultEvidence
   const labels = points
     .map((point) => nonEmptyString(record(point)?.label))
     .filter((label): label is string => label !== null);
+  const count =
+    segmentSamples.length > 0
+      ? sampleCount(segmentSamples.reduce((sum, value) => sum + value, 1))
+      : sampleCount(sampling.sample_count) ??
+        sampleCount(sampling.sampleCount) ??
+        sampleCount(sampling.count) ??
+        sampleCount(sampling.points);
+  if (!count) return null;
   return {
     kind: "path",
     label: labels.length > 1 ? labels.join("–") : undefined,
-    sampleCount: segmentSamples.reduce((sum, count) => sum + count, 0) + 1,
+    sampleCount: count,
   };
 }
 
-function singleKSamplingFromRequestedExecution(
+function kSamplingFromMetadata(value: unknown): FrequencyDomainResultEvidence["kSampling"] | null {
+  return samplingFromRecord(record(record(value)?.sampling));
+}
+
+function kSamplingFromRequestedExecution(
   requested: Record<string, unknown> | null,
 ): FrequencyDomainResultEvidence["kSampling"] | null {
-  const sampling = record(requested?.k_sampling);
+  const requestedSampling = requested?.k_sampling;
+  const sampling = record(requestedSampling);
+  const structuredSampling = samplingFromRecord(sampling);
+  if (requestedSampling !== undefined) {
+    if (structuredSampling) return structuredSampling;
+    return null;
+  }
   const vector = vector3(
-    sampling?.vector_rad_per_m ??
-      sampling?.vector ??
-      requested?.k_vector_rad_per_m ??
+    requested?.k_vector_rad_per_m ??
+      requested?.k_vector ??
       requested?.wavevector_kf,
   );
   return vector ? { kind: "single", vectorRadPerM: vector } : null;
@@ -333,6 +375,7 @@ export function physicsFirstResultsSnapshotFromResources(
         }
       : undefined;
   const emptySnapshot: PhysicsFirstResultsSnapshot = {
+    contractGaps,
     entries: [],
     ...(postprocessing ? { postprocessing } : {}),
     resultContextRunId: runId,
@@ -360,8 +403,15 @@ export function physicsFirstResultsSnapshotFromResources(
   }
 
   const kSampling =
-    pathSamplingFromMetadata(input.dispersion?.path_metadata) ??
-    singleKSamplingFromRequestedExecution(requested);
+    kSamplingFromMetadata(input.dispersion?.path_metadata) ??
+    kSamplingFromRequestedExecution(requested);
+  if (boundaryContext === "floquet_periodic" && !kSampling) {
+    contractGaps.push("Periodic/Floquet artifact does not publish a supported k sampling resource");
+    return {
+      contractGaps,
+      snapshot: { ...emptySnapshot, contractGaps: [...contractGaps] },
+    };
+  }
   const artifactRevision =
     nonEmptyString(payload.revision) ?? input.currentRun?.revision ?? "unknown";
   const products: PhysicsFirstResultProducts =
@@ -401,6 +451,7 @@ export function physicsFirstResultsSnapshotFromResources(
   return {
     contractGaps,
     snapshot: {
+      contractGaps: [...contractGaps],
       entries: [entry],
       ...(postprocessing ? { postprocessing } : {}),
       resultContextRunId: runId,
@@ -679,7 +730,20 @@ function rootWithChildren(
   parentId: string,
   children: readonly (ExplorerNode | null)[],
 ): ExplorerNode {
-  return node(id, kind, label, parentId, { children: children.filter((child): child is ExplorerNode => child !== null) });
+  const materializedChildren = children.filter(
+    (child): child is ExplorerNode => child !== null,
+  );
+  return node(id, kind, label, parentId, {
+    children: materializedChildren,
+    ...(materializedChildren.length === 0
+      ? {
+          availability: "unavailable" as const,
+          executionState: "not_started" as const,
+          resourceState: "idle" as const,
+          status: "unavailable" as const,
+        }
+      : {}),
+  });
 }
 
 function postprocessingChildren(
@@ -891,10 +955,21 @@ export function buildPhysicsFirstResultsTree(snapshot: PhysicsFirstResultsSnapsh
   const resonanceStages = snapshot.entries.map((entry) => resonanceStage(resonanceId, entry));
   const dispersionStages = snapshot.entries.map((entry) => kResolvedStage(dispersionId, entry));
   const definitions = postprocessingDefinitions(snapshot.postprocessing);
+  const contractGap = snapshot.contractGaps?.filter(Boolean).join("; ") ?? "";
+  const resultHasPublishedProducts = snapshot.entries.length > 0;
 
   return [
     node(resultsId, "results.root", "Results", null, {
       analysisRunId: snapshot.resultContextRunId,
+      ...(contractGap ? { badge: "contract gap", postprocessingContractGap: contractGap } : {}),
+      ...(!resultHasPublishedProducts
+        ? {
+            availability: "unavailable" as const,
+            executionState: "not_started" as const,
+            resourceState: contractGap ? ("error" as const) : ("idle" as const),
+            status: contractGap ? ("failed" as const) : ("unavailable" as const),
+          }
+        : {}),
       children: [
         rootWithChildren(`${resultsId}:dynamics`, "results.dynamics.root", "Dynamics", resultsId, []),
         rootWithChildren(resonanceId, "results.resonance.root", "Resonance & FMR", resultsId, resonanceStages),
