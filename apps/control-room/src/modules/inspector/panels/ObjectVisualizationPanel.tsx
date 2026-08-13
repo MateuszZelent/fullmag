@@ -64,6 +64,7 @@ import { FeedbackBanner } from "../primitives/FeedbackBanner";
 import { InspectorGroup } from "../primitives/InspectorGroup";
 import {
   buildVisualizationPanelSections,
+  canonicalVisualizationStateForBaseline,
   resolveVisualizationVectorBudgetRange,
   resolveObjectVisualizationPanelTopologyFreshness,
   resolveObjectChildRegionVisualizationTargets,
@@ -74,6 +75,7 @@ import {
   restoreVisualizationAppliedBaseline,
   fdmGridCellCount,
   fdmVisualizationResourceNotice,
+  isVisualizationBaselineReady,
   resolveObjectVisualizationLane,
   resolveObjectVisualizationResourceGates,
   resolveObjectVisualizationTargetForLane,
@@ -153,6 +155,12 @@ function useObjectVisualizationPanelState(
   const visualizationState = useVisualizationStateResource({
     enabled: femResourcesEnabled,
   });
+  const displayVisualizationState =
+    visualizationState.optimisticData ?? visualizationState.data;
+  const baselineVisualizationState = canonicalVisualizationStateForBaseline(
+    visualizationState.data,
+    visualizationState.optimisticData,
+  );
   const [feedback, setFeedback] = useState<string | null>(null);
   const [patchChildRegions, setPatchChildRegions] = useState(false);
   const [fieldCatalogRequestedTargetKey, setFieldCatalogRequestedTargetKey] =
@@ -192,6 +200,9 @@ function useObjectVisualizationPanelState(
         : null,
     [manifest.data, selection.ref],
   );
+  /* The target resolver returns a scoped identity object; keep this memoized
+   * because downstream resource selectors use its identity as a cache key. */
+  /* eslint-disable react-hooks/preserve-manual-memoization */
   const resolvedTarget = useMemo(
     () =>
       resolveObjectVisualizationPanelSelectionTarget({
@@ -209,6 +220,7 @@ function useObjectVisualizationPanelState(
       visualizationState.data,
     ],
   );
+  /* eslint-enable react-hooks/preserve-manual-memoization */
   const regionTarget = useMemo(() => {
     if (resolvedTarget?.kind !== "region") return null;
     return parseRegionVisualizationTargetId(resolvedTarget.id);
@@ -252,7 +264,7 @@ function useObjectVisualizationPanelState(
         resolveObjectVisualizationPanelTarget({
           part,
           sceneObjectIds,
-          visualizationState: visualizationState.data,
+          visualizationState: displayVisualizationState,
         }),
       );
     }
@@ -269,7 +281,7 @@ function useObjectVisualizationPanelState(
     selection.label,
     selection.objectId,
     resolvedTarget,
-    visualizationState.data,
+    displayVisualizationState,
   ]);
   const selectPanelSnapshot = useCallback(
     (snapshot: ObjectVisualizationSnapshot) =>
@@ -288,7 +300,7 @@ function useObjectVisualizationPanelState(
             kind: "object",
             label: selection.label,
           },
-          visualizationState: visualizationState.data,
+          visualizationState: displayVisualizationState,
         }).settings
       : undefined;
   const targetVisualization = resolvedTarget
@@ -296,7 +308,7 @@ function useObjectVisualizationPanelState(
         inheritedSettings,
         snapshot,
         target: resolvedTarget,
-        visualizationState: visualizationState.data,
+        visualizationState: displayVisualizationState,
       })
     : null;
   const settings = targetVisualization?.settings ?? null;
@@ -306,7 +318,7 @@ function useObjectVisualizationPanelState(
     ? [resolvedTarget, ...childRegionTargets]
     : [];
   const appliedBaseline: ObjectVisualizationAppliedBaseline = {
-    overrides: (visualizationState.data?.overrides ?? []).filter((entry) =>
+    overrides: (baselineVisualizationState?.overrides ?? []).filter((entry) =>
       appliedBaselineTargets.some((baselineTarget) =>
         visualizationStateOverrideMatchesTarget(entry, baselineTarget),
       ),
@@ -315,7 +327,7 @@ function useObjectVisualizationPanelState(
       const baselineSettings = resolveTargetVisualization({
           snapshot,
           target: baselineTarget,
-          visualizationState: visualizationState.data,
+          visualizationState: baselineVisualizationState,
         }).settings;
       return {
         preferences: structuredClone(
@@ -328,8 +340,13 @@ function useObjectVisualizationPanelState(
       };
     }),
   };
+  const visualizationBaselineReady = isVisualizationBaselineReady({
+    femResourcesEnabled,
+    target: resolvedTarget,
+    visualizationState: visualizationState.data,
+  });
   const childRegionOverrideCount = resolveChildRegionOverrideTargetIds({
-    backendOverrides: visualizationState.data?.overrides ?? [],
+    backendOverrides: displayVisualizationState?.overrides ?? [],
     childTargets: childRegionTargets,
     objectId: selection.objectId ?? "",
     snapshot,
@@ -610,7 +627,7 @@ function useObjectVisualizationPanelState(
       meshParts: manifest.data?.mesh_parts,
       sceneObjectIds,
       target: resolvedTarget,
-      visualizationState: visualizationState.data,
+      visualizationState: displayVisualizationState,
     });
     if (scopedPartRows.length <= 1) return undefined;
     return scopedPartRows.map((part) => {
@@ -715,6 +732,7 @@ function useObjectVisualizationPanelState(
     vectorTopologyHash: fdmTarget
       ? fdmMembership.data?.grid_fingerprint ?? null
       : manifest.data?.topology_fingerprint ?? null,
+    visualizationBaselineReady,
     fdmNotice,
   } as const;
 }
@@ -753,7 +771,7 @@ export function VisualizationTargetInspectorPanel({
   selection,
 }: InspectorPanelProps & { owner: VisualizationInspectorOwner }) {
   const panel = useObjectVisualizationPanelState(selection);
-  const { displaySettings, settings, target } = panel;
+  const { displaySettings, settings, target, visualizationBaselineReady } = panel;
   const visualizationViewContext = useVisualizationViewContext();
   const { visualizationSync } = useKernel();
   const planarResource = useVisualizationStateResource();
@@ -782,6 +800,18 @@ export function VisualizationTargetInspectorPanel({
         {ownerIdentity}
         <InspectorGroup title="Visualization">
           <FieldRow label="Target" value="No visualization target" />
+        </InspectorGroup>
+      </div>
+    );
+  }
+
+  if (!visualizationBaselineReady) {
+    return (
+      <div className="fm-inspector-panel" data-inspector-owner={owner.id}>
+        {ownerIdentity}
+        <InspectorGroup title="View">
+          <FieldRow label="Target" value={displayLabelForVisualizationTarget(target)} />
+          <FieldRow label="State" value="Loading applied visualization state" />
         </InspectorGroup>
       </div>
     );

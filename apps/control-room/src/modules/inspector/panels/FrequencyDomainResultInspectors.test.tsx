@@ -7,6 +7,7 @@ import {
   ResonanceModalCouplingResultInspector,
   ResonanceModalSpectrumResultInspector,
 } from "./physics-first/PhysicsFirstResultInspectors";
+import { buildFrequencyResponsePlotCommandInput } from "./frequency-domain/FrequencyDomainResultInspectors";
 
 describe("physics-first frequency result inspectors", () => {
   it("routes modal spectrum as eigenfrequency rather than automatic FMR", () => {
@@ -21,5 +22,24 @@ describe("physics-first frequency result inspectors", () => {
       .toBe(ResonanceDrivenSpectrumResultInspector);
     expect(resolveInspectorPanel({ kind: "results.dispersion.modal.relation" })?.component)
       .toBe(DispersionRelationResultInspector);
+  });
+
+  it("keeps the response frequency identity in a 3D plot command", () => {
+    expect(
+      buildFrequencyResponsePlotCommandInput({
+        fieldId: "analysis:frequency-response:frequency-0003",
+        frequencyIndex: 3,
+        label: "response 1.5 GHz",
+        phaseRad: 0,
+        view: "phase_rotated_real",
+      }),
+    ).toEqual({
+      fieldId: "analysis:frequency-response:frequency-0003",
+      frequencyIndex: 3,
+      label: "response 1.5 GHz",
+      phaseRad: 0,
+      source: "frequency-response",
+      view: "phase_rotated_real",
+    });
   });
 });

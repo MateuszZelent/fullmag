@@ -459,6 +459,26 @@ export function resolveObjectVisualizationResourceGates({
   };
 }
 
+export function isVisualizationBaselineReady({
+  femResourcesEnabled,
+  target,
+  visualizationState,
+}: {
+  femResourcesEnabled: boolean;
+  target: VisualizationTargetRef | null | undefined;
+  visualizationState: VisualizationStateResource | null | undefined;
+}): boolean {
+  return Boolean(target) && (!femResourcesEnabled || visualizationState != null);
+}
+
+export function canonicalVisualizationStateForBaseline(
+  canonicalData: VisualizationStateResource | null | undefined,
+  optimisticData: VisualizationStateResource | null | undefined,
+): VisualizationStateResource | null | undefined {
+  void optimisticData;
+  return canonicalData;
+}
+
 export function fdmGridCellCount(
   domain: DomainMetaResource | null | undefined,
 ): number | null {

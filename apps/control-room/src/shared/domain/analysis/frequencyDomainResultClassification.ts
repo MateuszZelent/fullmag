@@ -30,6 +30,7 @@ export interface FrequencyDomainResultEvidence {
   drive?: FrequencyDriveEvidence;
   equilibriumId: string;
   kSampling?: FrequencyKSampling;
+  normalization?: string;
   observables: readonly FrequencyObservableEvidence[];
   runId: string;
   stageId: string;

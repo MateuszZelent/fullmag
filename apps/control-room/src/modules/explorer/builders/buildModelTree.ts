@@ -172,6 +172,13 @@ export function buildExplorerTree(
   if (tabId === "model") return buildModelTree(null, resources);
   if (tabId === "resources") return buildRuntimeResourceTree(runtime?.resources);
   if (tabId === "results") {
+    if (!resources.currentRun && resources.resultContextRunId) {
+      return buildPhysicsFirstResultsTree({
+        contractGaps: resources.resultContextContractGaps,
+        entries: [],
+        resultContextRunId: resources.resultContextRunId,
+      });
+    }
     if (!resources.currentRun) {
       return [{
         ...branch("results:root", "Results", "results.root", "unavailable"),
@@ -181,6 +188,7 @@ export function buildExplorerTree(
       }];
     }
     const adapted = physicsFirstResultsSnapshotFromResources({
+      contractGaps: resources.resultContextContractGaps,
       branches: resources.frequencyDomainBranches,
       currentRun: resources.currentRun,
       dispersion: resources.frequencyDomainDispersion,

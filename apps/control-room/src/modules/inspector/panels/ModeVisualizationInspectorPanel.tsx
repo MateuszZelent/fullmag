@@ -4,6 +4,10 @@ import { useEffect, useMemo, useRef, useState } from "react";
 
 import { createCommandContext } from "@/kernel/commands/commandContext";
 import { useKernel } from "@/kernel/KernelContext";
+import {
+  useFrequencyDomainEigenModeFieldMetaResource,
+  useFrequencyDomainResponseFieldMetaResource,
+} from "@/kernel/resources/studyRuntimeResources";
 import type { SelectionRef } from "@/kernel/selection/selectionTypes";
 import type { KernelApi } from "@/kernel/types";
 import { useAnalysisFieldOverlay } from "@/kernel/visualization/AnalysisFieldOverlayController";
@@ -18,7 +22,12 @@ import {
 } from "../visualization/VisualizationContextSwitch";
 import { PlanarVisualizationSection } from "../visualization/PlanarVisualizationSection";
 import {
-  ANALYSIS_FIELD_VIEW_OPTIONS,
+  analysisFieldViewOptions,
+  canPlotSelectedFieldIn3D,
+  modeFieldComponentOptions,
+  selectedField3DPlotStatus,
+} from "./frequency-domain/FrequencyDomainHelpers";
+import {
   DEFAULT_ANALYSIS_FIELD_VIEW,
   FrequencyDomainModeDisplayControls,
   normalizeAnalysisFieldView,
@@ -287,6 +296,7 @@ function modeVisualizationIndexLabel(target: ModeVisualizationSelectionRef): str
 export function executeModeVisualizationActivation({
   kernel,
   label,
+  phaseRad,
   sourceDetail,
   target,
   view,
@@ -295,6 +305,7 @@ export function executeModeVisualizationActivation({
   label: string;
   sourceDetail: string;
   target: Pick<ModeVisualizationSelectionRef, "fieldId" | "source">;
+  phaseRad?: number;
   view: string;
 }) {
   return kernel.commands.execute(
@@ -303,7 +314,7 @@ export function executeModeVisualizationActivation({
     {
       fieldId: target.fieldId,
       label,
-      phaseRad: 0,
+      phaseRad: phaseRad ?? 0,
       source: target.source,
       view,
     },
@@ -332,6 +343,51 @@ export function ModeVisualizationViewControls({ selection }: InspectorPanelProps
   const visualizationViewContext = useVisualizationViewContext();
   const target = modeVisualizationRef(selection);
   const kernel = useKernel();
+  const eigenFieldMeta = useFrequencyDomainEigenModeFieldMetaResource(
+    target?.source === "eigen-mode" ? target.sampleIndex ?? null : null,
+    target?.source === "eigen-mode" ? target.modeIndex ?? null : null,
+    { enabled: visualizationViewContext !== "planar" },
+  );
+  const responseFieldMeta = useFrequencyDomainResponseFieldMetaResource(
+    target?.source === "frequency-response" ? target.frequencyIndex ?? null : null,
+    { enabled: visualizationViewContext !== "planar" },
+  );
+  const fieldMeta =
+    target?.source === "eigen-mode" ? eigenFieldMeta : responseFieldMeta;
+  const modeViewOptions = useMemo(
+    () =>
+      fieldMeta.status === "ready"
+        ? analysisFieldViewOptions(
+            fieldMeta.data?.available_views,
+            fieldMeta.data?.default_view,
+          )
+        : [],
+    [
+      fieldMeta.data?.available_views,
+      fieldMeta.data?.default_view,
+      fieldMeta.status,
+    ],
+  );
+  const modeComponentOptions = useMemo(
+    () => fieldMeta.status === "ready"
+      ? modeFieldComponentOptions(fieldMeta.data)
+      : [],
+    [fieldMeta.data, fieldMeta.status],
+  );
+  const modeFieldReady = fieldMeta.status === "ready" &&
+    fieldMeta.data != null &&
+    canPlotSelectedFieldIn3D(fieldMeta.data);
+  const modeFieldStatus = fieldMeta.status === "ready"
+    ? selectedField3DPlotStatus(fieldMeta.data)
+    : fieldMeta.status === "loading"
+      ? "Loading mode field metadata"
+      : fieldMeta.status === "error"
+        ? "Mode field metadata could not be loaded"
+        : "Mode field metadata is not available";
+  const defaultPhaseRad =
+    fieldMeta.status === "ready"
+      ? finiteNumber(fieldMeta.data?.default_phase_rad) ?? 0
+      : 0;
   const activeOverlay = useAnalysisFieldOverlay(kernel.analysisFieldOverlay);
   const sourceDetail = useMemo(
     () =>
@@ -347,13 +403,17 @@ export function ModeVisualizationViewControls({ selection }: InspectorPanelProps
           fieldId: target.fieldId,
           label: selection.label ?? modeVisualizationIndexLabel(target),
           source: target.source,
+          defaultPhaseRad,
         }
       : undefined,
     sourceDetail,
   });
-  const requestedView = normalizeAnalysisFieldView(
+  const preferredView = normalizeAnalysisFieldView(
     target?.view ?? settings.activeAnalysisFieldOverlay?.query.view,
   );
+  const requestedView = modeViewOptions.some((option) => option === preferredView)
+    ? preferredView
+    : modeViewOptions[0] ?? DEFAULT_ANALYSIS_FIELD_VIEW;
   const activationKey = target
     ? `${target.objectId}:${target.source}:${target.fieldId}:${requestedView}`
     : null;
@@ -372,6 +432,7 @@ export function ModeVisualizationViewControls({ selection }: InspectorPanelProps
 
   useEffect(() => {
     if (visualizationViewContext === "planar") return;
+    if (!modeFieldReady) return;
     if (!target || !activationKey) return;
     const overlay = settings.activeAnalysisFieldOverlay;
     if (
@@ -388,11 +449,14 @@ export function ModeVisualizationViewControls({ selection }: InspectorPanelProps
       label: selection.label ?? modeVisualizationIndexLabel(target),
       sourceDetail,
       target,
+      phaseRad: defaultPhaseRad,
       view: requestedView,
     });
   }, [
     activationKey,
+    defaultPhaseRad,
     kernel,
+    modeFieldReady,
     target,
     requestedView,
     selection.label,
@@ -432,7 +496,7 @@ export function ModeVisualizationViewControls({ selection }: InspectorPanelProps
           animationDirection={activeTargetOverlay?.animation?.direction ?? 1}
           animationLoop={activeTargetOverlay?.animation?.loop ?? true}
           animationRateHz={activeTargetOverlay?.animation?.animationRateHz ?? 1}
-          disabled={!activeTargetOverlay}
+          disabled={!activeTargetOverlay || !modeFieldReady}
           onAnimationChange={(animation) => {
             kernel.analysisFieldOverlay.update({ animation });
           }}
@@ -449,13 +513,19 @@ export function ModeVisualizationViewControls({ selection }: InspectorPanelProps
           phaseRad={String(overlayPhaseRad)}
         />
       </InspectorGroup>
+      {!modeFieldReady ? (
+        <p className="fm-inspector-empty" role="status">
+          {modeFieldStatus}
+        </p>
+      ) : null}
       <InspectorGroup title="Render controls">
         <FrequencyDomainModeDisplayControls
-          disabled={false}
+          componentOptions={modeComponentOptions}
+          disabled={!modeFieldReady}
           labelPrefix="Mode visualization"
           settings={settings}
-          viewDefaultValue={target.view ?? DEFAULT_ANALYSIS_FIELD_VIEW}
-          viewOptions={ANALYSIS_FIELD_VIEW_OPTIONS}
+          viewDefaultValue={requestedView}
+          viewOptions={modeViewOptions}
         />
       </InspectorGroup>
     </>

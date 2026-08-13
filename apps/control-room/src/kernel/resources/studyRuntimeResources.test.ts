@@ -32,6 +32,7 @@ import {
   MODEL_SCENE_PATH,
   PERSISTENCE_CHECKPOINTS_PATH,
   SIMULATION_RUN_CURRENT_PATH,
+  SIMULATION_RUN_PATH,
   SIMULATION_STAGE_HYSTERESIS_EXECUTION_TREE_PATH,
   DATA_TABLE_ROWS_PATH,
   DATA_TABLES_PATH,
@@ -496,6 +497,18 @@ describe("study runtime command resource bundles", () => {
         SIMULATION_RUN_CURRENT_PATH,
       ]),
     );
+  });
+
+  it("loads an explicitly selected result context by run id", () => {
+    const source = readFileSync(studyRuntimeResourcesUrl, "utf8");
+    const hookSource = source.slice(
+      source.indexOf("export function useResultContextRunResource"),
+      source.indexOf("export function useStageExecutionResource"),
+    );
+
+    expect(SIMULATION_RUN_PATH).toBeTruthy();
+    expect(hookSource).toMatch(/api\.simulation\s*\.run\(runId/);
+    expect(hookSource).toContain("resourceKey");
   });
 
   it("exposes the magnetic response sweep artifact as an optional runtime resource", () => {

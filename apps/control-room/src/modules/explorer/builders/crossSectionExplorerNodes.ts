@@ -83,6 +83,7 @@ export function buildCrossSectionNodes(
     parentId: "model:session",
     badge: crossSectionRootBadge(plots.length, Boolean(draft)),
     icon: "layers",
+    selectable: false,
     status: "ready",
     contextCommands: ["explorer.expand-all", "explorer.collapse-all"],
     children,

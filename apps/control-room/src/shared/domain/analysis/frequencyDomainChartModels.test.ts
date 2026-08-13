@@ -20,6 +20,7 @@ import {
   buildFrequencyResponseChartModel,
   buildFmrPeakTableModel,
   frequencyDomainChartRouteOverrideFromSelection,
+  frequencyDomainChartRouteOverrideFromSubview,
   frequencyDomainResultContextFromManifest,
   routeFrequencyDomainCalculationMode,
   type FrequencyDomainJsonArtifactLike,
@@ -1109,10 +1110,13 @@ describe("frequencyDomainChartModels", () => {
       run_id: "run-1",
       stage_id: "response-1",
       study_product: "driven_response",
+      physics: { normalization: "unit_l2" },
       requested_execution: { boundary_context: "finite_open" },
       drive: { identity: "rf-1", kind: "magnetic_rf" },
       observables: [{ identity: "chi-xx", kind: "susceptibility", unit: "1" }],
     });
+    expect(qualified.normalization).toBe("unit_l2");
+    expect(qualified.evidence?.normalization).toBe("unit_l2");
     expect(qualified.classification).toMatchObject({
       fmrQualified: true,
       resultLabel: "FMR Response Spectrum",
@@ -1134,6 +1138,33 @@ describe("frequencyDomainChartModels", () => {
       "geometry identity unavailable",
       "mesh identity unavailable",
     ]);
+  });
+
+  it("maps physics-first analysis subviews to their canonical chart routes", () => {
+    expect(frequencyDomainChartRouteOverrideFromSubview("resonance.eigenmodes")).toEqual({
+      mode: "fmr_modal",
+      primaryChart: "modal-spectrum",
+    });
+    expect(frequencyDomainChartRouteOverrideFromSubview("resonance.frequency-response")).toEqual({
+      mode: "fmr_response",
+      primaryChart: "response-sweep",
+    });
+    expect(frequencyDomainChartRouteOverrideFromSubview("resonance.modal-driven")).toEqual({
+      mode: "fmr_modal_driven",
+      primaryChart: "comparison",
+    });
+    expect(frequencyDomainChartRouteOverrideFromSubview("dispersion.modal")).toEqual({
+      mode: "dispersion_modal",
+      primaryChart: "dispersion",
+    });
+    expect(frequencyDomainChartRouteOverrideFromSubview("dispersion.branches")).toEqual({
+      mode: "dispersion_modal",
+      primaryChart: "dispersion",
+    });
+    expect(frequencyDomainChartRouteOverrideFromSubview("dispersion.driven-map")).toEqual({
+      mode: "response_map",
+      primaryChart: "response-map",
+    });
   });
 
   it("routes selections from typed calculation mode, never kind, label, or path prefixes", () => {

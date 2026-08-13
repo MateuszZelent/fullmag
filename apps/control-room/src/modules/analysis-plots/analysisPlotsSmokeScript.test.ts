@@ -81,7 +81,7 @@ describe("analysis plots smoke script", () => {
     expect(smokeScript).toContain("rows.bin requests after local range selection");
     expect(smokeScript).toContain("rows.bin request budget exceeded");
     expect(smokeScript).toContain("CONTROL_ROOM_ANALYSIS_PLOTS_MAX_ROWS_BIN_REQUESTS");
-    expect(smokeScript).toContain('"Dynamics", "Spectrum", "Frequency Response", "Eigenmodes", "Dispersion", "Hysteresis", "Comparison"');
+    expect(smokeScript).toContain('"Dynamics", "Resonance & FMR", "Dispersion", "Hysteresis", "Comparison"');
     expect(smokeScript).not.toContain("verifyAxisControlInteraction");
     expect(smokeScript).not.toContain("verifyThirdUnitSelectionDisabled");
     expect(smokeScript).not.toContain("verifyAtLeastOneYAxisRemainsSelected");

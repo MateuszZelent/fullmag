@@ -125,6 +125,44 @@ export function analysisFieldViewOptions(
   return orderedOptions.length > 0 ? orderedOptions : [DEFAULT_ANALYSIS_FIELD_VIEW];
 }
 
+export interface ModeFieldComponentOption {
+  label: string;
+  value: "magnitude" | "component_x" | "component_y" | "component_z";
+}
+
+export function modeFieldComponentOptions(
+  meta: {
+    components?: readonly string[] | null;
+    component_count?: number | null;
+  } | null | undefined,
+): ModeFieldComponentOption[] {
+  const components = new Set(
+    (meta?.components ?? []).map((component) => component.toLowerCase()),
+  );
+  const componentCount = meta?.component_count == null
+    ? null
+    : Math.max(0, Math.trunc(meta.component_count));
+  const options: ModeFieldComponentOption[] = [
+    { label: "|delta m|", value: "magnitude" },
+  ];
+  for (const [componentIndex, component, label] of [
+    [0, "x", "delta m_x"],
+    [1, "y", "delta m_y"],
+    [2, "z", "delta m_z"],
+  ] as const) {
+    if (
+      (componentCount == null || componentIndex < componentCount) &&
+      (components.has(component) || components.has(`component_${component}`))
+    ) {
+      options.push({
+        label,
+        value: `component_${component}` as ModeFieldComponentOption["value"],
+      });
+    }
+  }
+  return options;
+}
+
 export function selectedField3DPlotStatus(
   meta: {
     component_basis?: string | null;

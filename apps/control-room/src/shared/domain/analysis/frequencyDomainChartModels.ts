@@ -8,6 +8,7 @@ import {
 } from "@/kernel/api/apiPaths";
 import type { FrequencyDomainKPathMetadataResource } from "@/kernel/api/apiTypes";
 import type { SelectionRef } from "@/kernel/selection/selectionTypes";
+import type { AnalysisSubview } from "@/kernel/workspace/analysisViewPreferences";
 import type { DecodedComplexFieldVector } from "@/kernel/api/codecs/types";
 import {
   classifyFrequencyDomainResult,
@@ -16,9 +17,10 @@ import {
 } from "./frequencyDomainResultClassification";
 
 type ResourceStatus = "idle" | "loading" | "ready" | "stale" | "error";
-type FrequencyDomainCalculationMode =
+export type FrequencyDomainCalculationMode =
   | "dispersion_modal"
   | "fmr_modal"
+  | "fmr_modal_driven"
   | "fmr_response"
   | "frequency_response"
   | "free_modes"
@@ -27,6 +29,7 @@ type FrequencyDomainCalculationMode =
 export interface FrequencyDomainChartRoute {
   mode: FrequencyDomainCalculationMode;
   primaryChart:
+    | "comparison"
     | "dispersion"
     | "modal-spectrum"
     | "response-map"
@@ -49,6 +52,9 @@ export function frequencyDomainResultTitle(
   if (primaryChart === "response-sweep") {
     return classification?.resultLabel ?? "Harmonic Response Spectrum";
   }
+  if (primaryChart === "comparison") {
+    return "Modal–Driven Comparison";
+  }
   return classification?.resultLabel ?? "Spectral Response Map · A(k,f)";
 }
 
@@ -68,8 +74,30 @@ export function frequencyDomainChartRouteOverrideFromSelection(
     case "fmr_response":
     case "frequency_response":
       return { mode: calculationMode, primaryChart: "response-sweep" };
+    case "fmr_modal_driven":
+      return { mode: calculationMode, primaryChart: "comparison" };
     case "response_map":
       return { mode: calculationMode, primaryChart: "response-map" };
+    default:
+      return null;
+  }
+}
+
+export function frequencyDomainChartRouteOverrideFromSubview(
+  subview: AnalysisSubview | null | undefined,
+): Pick<FrequencyDomainChartRoute, "mode" | "primaryChart"> | null {
+  switch (subview) {
+    case "resonance.eigenmodes":
+      return { mode: "fmr_modal", primaryChart: "modal-spectrum" };
+    case "resonance.frequency-response":
+      return { mode: "fmr_response", primaryChart: "response-sweep" };
+    case "resonance.modal-driven":
+      return { mode: "fmr_modal_driven", primaryChart: "comparison" };
+    case "dispersion.modal":
+    case "dispersion.branches":
+      return { mode: "dispersion_modal", primaryChart: "dispersion" };
+    case "dispersion.driven-map":
+      return { mode: "response_map", primaryChart: "response-map" };
     default:
       return null;
   }
@@ -84,6 +112,7 @@ export interface FrequencyDomainResultContext {
   geometryId: string | null;
   kSampling: FrequencyDomainResultEvidence["kSampling"] | null;
   meshId: string | null;
+  normalization?: string | null;
   observables: FrequencyDomainResultEvidence["observables"];
   runId: string | null;
   stageId: string | null;
@@ -108,6 +137,8 @@ export function frequencyDomainResultContextFromManifest(
       ? manifest.boundary_context
       : null;
   const geometryId = stringValue(manifest?.geometry_identity);
+  const physics = record(manifest?.physics);
+  const normalization = stringValue(physics?.normalization ?? manifest?.normalization);
   const meshId = stringValue(manifest?.mesh_identity);
   const observables = typedObservableEvidence(manifest?.observables);
   const kSampling = typedKSampling(manifest?.k_sampling ?? requested?.k_sampling);
@@ -129,6 +160,7 @@ export function frequencyDomainResultContextFromManifest(
       kSampling,
       meshId,
       observables,
+      normalization,
       runId,
       stageId,
       studyProduct,
@@ -141,6 +173,7 @@ export function frequencyDomainResultContextFromManifest(
     ...(drive ? { drive } : {}),
     equilibriumId,
     ...(kSampling ? { kSampling } : {}),
+    ...(normalization ? { normalization } : {}),
     observables,
     runId,
     stageId,
@@ -157,6 +190,7 @@ export function frequencyDomainResultContextFromManifest(
       kSampling,
       meshId,
       observables,
+      normalization,
       runId,
       stageId,
       studyProduct,
@@ -172,6 +206,7 @@ export function frequencyDomainResultContextFromManifest(
       kSampling,
       meshId,
       observables,
+      normalization,
       runId,
       stageId,
       studyProduct,
@@ -534,6 +569,21 @@ export function routeFrequencyDomainCalculationMode(
         hasSweep ? null : "response sweep artifact is missing",
     };
   }
+  if (mode === "fmr_modal_driven") {
+    const hasModalArtifact = stringValue(artifacts?.spectrum_v2_path) != null;
+    const hasDrivenArtifact =
+      stringValue(artifacts?.response_sweep_v2_path) != null ||
+      stringValue(artifacts?.response_sweep_v1_path) != null;
+    return {
+      mode,
+      primaryChart: "comparison",
+      supportingCharts: ["peak-table", "detuning-table"],
+      status: hasModalArtifact && hasDrivenArtifact ? "available" : "unavailable",
+      unavailableReason: hasModalArtifact && hasDrivenArtifact
+        ? null
+        : "modal and driven artifacts are required for comparison",
+    };
+  }
   return {
     mode,
     primaryChart: "modal-spectrum",
@@ -544,6 +594,31 @@ export function routeFrequencyDomainCalculationMode(
       ? null
       : `${physics?.analysis_family === "magnetic_frequency_domain" ? "modal" : "spectrum"} artifact is missing`,
   };
+}
+
+export function frequencyDomainManifestSupportsChartRoute(
+  manifestPayload: unknown,
+  requestedRoute: Pick<FrequencyDomainChartRoute, "mode" | "primaryChart">,
+): boolean {
+  const publishedRoute = routeFrequencyDomainCalculationMode(manifestPayload);
+  if (requestedRoute.primaryChart !== "comparison") {
+    return requestedRoute.primaryChart === publishedRoute.primaryChart;
+  }
+
+  const manifest = record(manifestPayload);
+  const artifacts = record(manifest?.artifacts);
+  const context = frequencyDomainResultContextFromManifest(manifestPayload);
+  const hasModalArtifact = stringValue(artifacts?.spectrum_v2_path) != null;
+  const hasDrivenArtifact =
+    stringValue(artifacts?.response_sweep_v2_path) != null ||
+    stringValue(artifacts?.response_sweep_v1_path) != null;
+
+  return (
+    requestedRoute.mode === "fmr_modal_driven" &&
+    hasModalArtifact &&
+    hasDrivenArtifact &&
+    context.contractGaps.length === 0
+  );
 }
 
 export function responseFieldResourcesFromManifest(
@@ -595,6 +670,8 @@ function normalizeCalculationMode(rawMode: string | null): FrequencyDomainCalcul
       return "frequency_response";
     case "fmr_response":
       return "fmr_response";
+    case "fmr_modal_driven":
+      return "fmr_modal_driven";
     case "response_map":
       return "response_map";
     case "free_modes":

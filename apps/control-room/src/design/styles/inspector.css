@@ -845,6 +845,37 @@
     padding-inline: var(--fm-space-2);
   }
 }
+@container (max-width: 390px) {
+  .fm-inspector-field-row,
+  .fm-inspector-form-field--inline {
+    grid-template-columns: minmax(0, 1fr);
+    align-items: stretch;
+    gap: var(--fm-space-1);
+    padding-block: var(--fm-space-1);
+  }
+
+  .fm-inspector-field-row__label,
+  .fm-inspector-form-field__label {
+    overflow: visible;
+    white-space: normal;
+  }
+
+  .fm-inspector-field-row__value,
+  .fm-inspector-form-field__control {
+    width: 100%;
+    justify-content: stretch;
+    overflow: visible;
+    white-space: normal;
+  }
+
+  .fm-inspector-field-row__value > .fm-inspector-input,
+  .fm-inspector-field-row__value > .fm-inspector-select,
+  .fm-inspector-form-field__control > .fm-inspector-input,
+  .fm-inspector-form-field__control > .fm-inspector-select {
+    width: 100%;
+  }
+}
+
 .fm-scientific-inspector {
   display: grid;
   min-width: 0;

@@ -54,6 +54,7 @@ import {
   useTableListResource,
   useStageExecutionResource,
   useCurrentRunResource,
+  useResultContextRunResource,
   useCommandQueueResource,
   useSolverProfileResource,
   useSolverStatusResource,
@@ -460,9 +461,27 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
     currentRunId,
     previousCurrentRunId: previousCurrentRunId.current,
     selectedRunId: resultContextRunId,
+    selectedResultRunId,
   });
-  const resolvedResultContextRunId =
-    selectedResultRunId ?? reconciledResultContextRunId;
+  const resolvedResultContextRunId = reconciledResultContextRunId;
+  const resultContextIsCurrent = resolvedResultContextRunId === currentRunId;
+  const resultContextRun = useResultContextRunResource(
+    resultContextIsCurrent ? null : resolvedResultContextRunId,
+    { enabled: resultsResourceActive },
+  );
+  const resultsRun = resultContextIsCurrent ? currentRun : resultContextRun;
+  const resultContextContractGaps = useMemo(
+    () => resultContextIsCurrent
+      ? []
+      : resultContextRun.status === "ready" && resultContextRun.data
+        ? [
+            "Selected run is not the current session run; run-scoped result resources are not published.",
+          ]
+        : resultContextRun.status === "error"
+          ? ["Selected result run could not be loaded."]
+          : ["Selected result run is loading."],
+    [resultContextIsCurrent, resultContextRun.data, resultContextRun.status],
+  );
   const knownResultContextRunIds = [
     resultContextRunId,
     selectedResultRunId,
@@ -704,15 +723,17 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
           )
         : buildExplorerTree(activeTab, {
               activeAnalysisFieldOverlay,
-              artifacts: runtimeSnapshot.source.artifacts,
-              frequencyDomainBranches: frequencyDomainBranches.data,
-            frequencyDomainDispersion: frequencyDomainDispersion.data,
-            frequencyDomainManifest: frequencyDomainManifest.data,
-            frequencyDomainResponseSweep: frequencyDomainResponseSweep.data,
-              frequencyDomainSpectrum: frequencyDomainSpectrum.data,
+    artifacts: resultContextIsCurrent ? runtimeSnapshot.source.artifacts : undefined,
+              resultContextContractGaps,
+              resultContextRunId: resolvedResultContextRunId,
+              frequencyDomainBranches: resultContextIsCurrent ? frequencyDomainBranches.data : null,
+              frequencyDomainDispersion: resultContextIsCurrent ? frequencyDomainDispersion.data : null,
+              frequencyDomainManifest: resultContextIsCurrent ? frequencyDomainManifest.data : null,
+              frequencyDomainResponseSweep: resultContextIsCurrent ? frequencyDomainResponseSweep.data : null,
+              frequencyDomainSpectrum: resultContextIsCurrent ? frequencyDomainSpectrum.data : null,
               pinnedQuickChart,
-              tableCatalog: runtimeSnapshot.source.tableCatalog,
-              currentRun: currentRun.data,
+    tableCatalog: resultContextIsCurrent ? runtimeSnapshot.source.tableCatalog : undefined,
+              currentRun: resultsRun.data,
           }, runtimeSnapshot);
     return baseNodes;
   }, [
@@ -758,7 +779,10 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
     frequencyDomainResponseSweep.data,
     frequencyDomainSpectrum.data,
     pinnedQuickChart,
-    currentRun.data,
+    resultContextContractGaps,
+    resultContextIsCurrent,
+    resolvedResultContextRunId,
+    resultsRun.data,
     runtimeSnapshot,
   ]);
 
