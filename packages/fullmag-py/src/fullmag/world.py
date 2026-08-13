@@ -61,6 +61,7 @@ from fullmag.model.current_transport import (
     ChargeSolverPolicy,
     ChargeTransportMaterialAssignment,
     ConservativeCurrentView,
+    NormalCurrentElectrode,
     StructuredCurrentClosure,
     CurrentTransport,
 )
@@ -4250,6 +4251,126 @@ class StudyStagesBuilder:
                 dataset=dataset,
             )
         )
+
+    def add_load_state(
+        self,
+        *,
+        artifact_name: str | None = None,
+        state_path: str | Path | None = None,
+        format: str | None = None,
+        dataset: str | None = None,
+        sample_index: int | None = None,
+        stage_id: str | None = None,
+    ) -> "StudyStagesBuilder":
+        """Restore magnetization from one named stage artifact or explicit path."""
+        if (artifact_name is None) == (state_path is None):
+            raise ValueError(
+                "add_load_state() requires exactly one of artifact_name or state_path"
+            )
+        normalized_artifact = (
+            require_non_empty(artifact_name, "artifact_name")
+            if artifact_name is not None
+            else None
+        )
+        normalized_path = str(state_path) if state_path is not None else None
+        if normalized_path is not None and not normalized_path.strip():
+            raise ValueError("state_path must be non-empty")
+        if sample_index is not None and (
+            isinstance(sample_index, bool) or not isinstance(sample_index, int)
+        ):
+            raise TypeError("sample_index must be an int or None")
+        self._append_configuration_action(
+            problem=_build_problem(),
+            entrypoint_kind="flat_load_state",
+            stage_id=self._allocate_stage_id("load-state", stage_id),
+            action={
+                "kind": "load_state",
+                "artifact_name": normalized_artifact,
+                "state_path": normalized_path,
+                "format": str(format) if format is not None else None,
+                "dataset": str(dataset) if dataset is not None else None,
+                "sample_index": sample_index,
+            },
+        )
+        return self
+
+    def set_transport_current(
+        self,
+        *,
+        module_id: str,
+        terminal_outward_current_density_Apm2: Mapping[str, float],
+        stage_id: str | None = None,
+    ) -> "StudyStagesBuilder":
+        """Set every normal-current electrode of one solved-current module."""
+        normalized_module_id = require_non_empty(module_id, "module_id")
+        if not isinstance(terminal_outward_current_density_Apm2, Mapping):
+            raise TypeError(
+                "terminal_outward_current_density_Apm2 must be a boundary-id mapping"
+            )
+        values: dict[str, float] = {}
+        for boundary_id, value in terminal_outward_current_density_Apm2.items():
+            if not isinstance(boundary_id, str) or not boundary_id.strip():
+                raise ValueError("transport-current boundary ids must be non-empty strings")
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                raise TypeError(
+                    "transport-current density values must be real numbers in A/m^2"
+                )
+            normalized_value = float(value)
+            if not math.isfinite(normalized_value):
+                raise ValueError("transport-current density values must be finite")
+            values[boundary_id] = normalized_value
+        if not values:
+            raise ValueError(
+                "terminal_outward_current_density_Apm2 must not be empty"
+            )
+
+        matching = [
+            (index, module)
+            for index, module in enumerate(_state._current_modules)
+            if isinstance(module, CurrentTransport) and module.name == normalized_module_id
+        ]
+        if len(matching) != 1:
+            raise ValueError(
+                f"transport module id '{normalized_module_id}' must identify exactly one CurrentTransport"
+            )
+        module_index, module = matching[0]
+        electrode_ids = {
+            boundary.id
+            for boundary in module.boundaries
+            if isinstance(boundary, NormalCurrentElectrode)
+        }
+        supplied_ids = set(values)
+        if supplied_ids != electrode_ids:
+            missing = sorted(electrode_ids - supplied_ids)
+            unexpected = sorted(supplied_ids - electrode_ids)
+            raise ValueError(
+                "terminal_outward_current_density_Apm2 must cover exactly the module's "
+                f"normal-current electrodes; missing={missing}, unexpected={unexpected}"
+            )
+
+        problem_before_action = _build_problem()
+        boundaries = tuple(
+            NormalCurrentElectrode(
+                boundary.id,
+                boundary.surfaces,
+                outward_current_density_Apm2=values[boundary.id],
+            )
+            if isinstance(boundary, NormalCurrentElectrode)
+            else boundary
+            for boundary in module.boundaries
+        )
+        _state._current_modules[module_index] = replace(module, boundaries=boundaries)
+        self._append_configuration_action(
+            problem=problem_before_action,
+            entrypoint_kind="flat_set_transport_current",
+            stage_id=self._allocate_stage_id("set-transport-current", stage_id),
+            action={
+                "kind": "set_transport_current",
+                "module_id": normalized_module_id,
+                "terminal_outward_current_density_Apm2": values,
+            },
+        )
+        return self
 
     def change_device(self, device: str) -> "StudyStagesBuilder":
         normalized = _normalize_stage_device(device)

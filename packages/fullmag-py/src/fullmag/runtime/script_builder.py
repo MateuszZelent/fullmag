@@ -656,6 +656,7 @@ def _infer_pipeline_stage_kind(stage_draft: dict[str, object]) -> str:
     if kind in {
         "save_state",
         "load_state",
+        "set_transport_current",
         "export",
         "change_device",
         "add_field_drive",
@@ -712,6 +713,19 @@ def _export_stage_draft(stage: LoadedStage) -> dict[str, object]:
                 "format": _text_value(action.get("format")),
                 "dataset": _text_value(action.get("dataset")),
                 "sample_index": _text_value(action.get("sample_index")),
+            }
+        if action_kind == "set_transport_current":
+            module_id = _text_value(action.get("module_id"))
+            values = action.get("terminal_outward_current_density_Apm2")
+            if not module_id or not isinstance(values, dict):
+                raise TypeError(
+                    "set_transport_current action requires module_id and terminal current mapping"
+                )
+            return {
+                "kind": "set_transport_current",
+                "entrypoint_kind": stage.entrypoint_kind,
+                "module_id": module_id,
+                "terminal_outward_current_density_Apm2": copy.deepcopy(values),
             }
         if action_kind == "export":
             return {
@@ -5088,6 +5102,48 @@ def _render_stages(
                 if is_study_surface:
                     lines.append(f"study.stages.add_save_state({', '.join(call_parts)})")
                 continue
+            if action_kind == "load_state":
+                if not is_study_surface:
+                    raise ValueError("load_state action requires the study API surface")
+                call_parts = []
+                artifact_name = _text_value(stage.action.get("artifact_name"))
+                state_path = _text_value(stage.action.get("state_path"))
+                if artifact_name:
+                    call_parts.append(f"artifact_name={_py_repr(artifact_name)}")
+                if state_path:
+                    call_parts.append(f"state_path={_py_repr(state_path)}")
+                for key in ("format", "dataset"):
+                    value = _text_value(stage.action.get(key))
+                    if value:
+                        call_parts.append(f"{key}={_py_repr(value)}")
+                sample_index = stage.action.get("sample_index")
+                if sample_index is not None:
+                    call_parts.append(f"sample_index={int(sample_index)}")
+                if stage.stage_id is not None:
+                    call_parts.append(f"stage_id={_py_repr(stage.stage_id)}")
+                lines.append(f"study.stages.add_load_state({', '.join(call_parts)})")
+                continue
+            if action_kind == "set_transport_current":
+                if not is_study_surface:
+                    raise ValueError(
+                        "set_transport_current action requires the study API surface"
+                    )
+                module_id = _text_value(stage.action.get("module_id"))
+                values = stage.action.get("terminal_outward_current_density_Apm2")
+                if not module_id or not isinstance(values, dict):
+                    raise ValueError(
+                        "set_transport_current action requires module_id and terminal current mapping"
+                    )
+                call_parts = [
+                    f"module_id={_py_repr(module_id)}",
+                    "terminal_outward_current_density_Apm2=" + _py_literal(values),
+                ]
+                if stage.stage_id is not None:
+                    call_parts.append(f"stage_id={_py_repr(stage.stage_id)}")
+                lines.append(
+                    f"study.stages.set_transport_current({', '.join(call_parts)})"
+                )
+                continue
             if action_kind == "change_device":
                 action_device = _text_value(stage.action.get("device")) or "auto"
                 if is_study_surface:
@@ -5864,6 +5920,7 @@ def _stage_override_for(
         if action_kind in {
             "save_state",
             "load_state",
+            "set_transport_current",
             "export",
             "change_device",
             "add_field_drive",

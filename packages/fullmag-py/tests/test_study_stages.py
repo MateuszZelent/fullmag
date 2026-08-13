@@ -8,6 +8,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 import fullmag as fm
+from fullmag.runtime.script_builder import rewrite_loaded_problem_script
 
 
 def _load(script_body: str):
@@ -30,6 +31,190 @@ body.m = fm.texture.uniform(1, 0, 0)
 
 
 class StudyStageIdTests(unittest.TestCase):
+    def test_transport_current_action_mutates_exact_electrodes_for_subsequent_run(self) -> None:
+        loaded = _load(
+            _PREAMBLE
+            + """
+region = fm.RegionRef("film")
+study.current_transport(
+    name="charge",
+    model="ohmic_poisson",
+    domain=[region],
+    materials=[fm.ChargeTransportMaterialAssignment(
+        region, fm.ChargeTransportMaterial(5e6)
+    )],
+    boundaries=[
+        fm.NormalCurrentElectrode(
+            "left", [fm.SurfaceRef("film", "x-", (-1, 0, 0))],
+            outward_current_density_Apm2=0.0,
+        ),
+        fm.NormalCurrentElectrode(
+            "right", [fm.SurfaceRef("film", "x+", (1, 0, 0))],
+            outward_current_density_Apm2=0.0,
+        ),
+    ],
+    gauge=fm.ChargePotentialGauge("zero_mean"),
+    solver=fm.ChargeSolverPolicy(),
+)
+study.stages.set_transport_current(
+    module_id="charge",
+    terminal_outward_current_density_Apm2={"left": -1e12, "right": 1e12},
+    stage_id="drive-positive",
+)
+study.stages.add_run(stage_id="run-positive", until=1e-12)
+"""
+        )
+
+        action, run = loaded.stages
+        self.assertEqual(
+            action.action,
+            {
+                "kind": "set_transport_current",
+                "module_id": "charge",
+                "terminal_outward_current_density_Apm2": {
+                    "left": -1e12,
+                    "right": 1e12,
+                },
+            },
+        )
+        self.assertEqual(
+            [
+                boundary.outward_current_density_Apm2
+                for boundary in run.problem.current_modules[0].boundaries
+            ],
+            [-1e12, 1e12],
+        )
+        node = loaded.study_pipeline_document()["nodes"][0]
+        self.assertEqual(node["stage_kind"], "set_transport_current")
+        self.assertEqual(node["payload"]["module_id"], "charge")
+
+    def test_transport_current_action_rejects_inexact_electrode_coverage(self) -> None:
+        transport = """
+region = fm.RegionRef("film")
+study.current_transport(
+    name="charge", model="ohmic_poisson", domain=[region],
+    materials=[fm.ChargeTransportMaterialAssignment(
+        region, fm.ChargeTransportMaterial(5e6)
+    )],
+    boundaries=[
+        fm.NormalCurrentElectrode(
+            "left", [fm.SurfaceRef("film", "x-", (-1, 0, 0))],
+            outward_current_density_Apm2=0.0,
+        ),
+        fm.NormalCurrentElectrode(
+            "right", [fm.SurfaceRef("film", "x+", (1, 0, 0))],
+            outward_current_density_Apm2=0.0,
+        ),
+    ],
+    gauge=fm.ChargePotentialGauge("zero_mean"),
+    solver=fm.ChargeSolverPolicy(),
+)
+"""
+        for values, message in (
+            ('{"left": -1e12}', "must cover exactly.*missing.*right"),
+            (
+                '{"left": -1e12, "right": 1e12, "ghost": 0.0}',
+                "must cover exactly.*unexpected.*ghost",
+            ),
+        ):
+            with self.subTest(values=values), self.assertRaisesRegex(ValueError, message):
+                _load(
+                    _PREAMBLE
+                    + transport
+                    + f"""
+study.stages.set_transport_current(
+    module_id="charge",
+    terminal_outward_current_density_Apm2={values},
+)
+"""
+                )
+
+    def test_load_state_action_is_public_and_names_the_restart_artifact(self) -> None:
+        loaded = _load(
+            _PREAMBLE
+            + """
+study.stages.add_load_state(
+    artifact_name="relaxed_zero_current",
+    dataset="m",
+    stage_id="restart-positive",
+)
+study.stages.add_run(stage_id="run-positive", until=1e-12)
+"""
+        )
+
+        restart = loaded.stages[0]
+        self.assertEqual(
+            restart.action,
+            {
+                "kind": "load_state",
+                "artifact_name": "relaxed_zero_current",
+                "state_path": None,
+                "format": None,
+                "dataset": "m",
+                "sample_index": None,
+            },
+        )
+        node = loaded.study_pipeline_document()["nodes"][0]
+        self.assertEqual(node["stage_kind"], "load_state")
+        self.assertEqual(node["payload"]["artifact_name"], "relaxed_zero_current")
+
+    def test_transport_current_and_restart_actions_survive_canonical_rewrite(self) -> None:
+        source = (
+            _PREAMBLE
+            + """
+region = fm.RegionRef("film")
+study.current_transport(
+    name="charge", model="ohmic_poisson", domain=[region],
+    materials=[fm.ChargeTransportMaterialAssignment(
+        region, fm.ChargeTransportMaterial(5e6)
+    )],
+    boundaries=[
+        fm.NormalCurrentElectrode(
+            "left", [fm.SurfaceRef("film", "x-", (-1, 0, 0))],
+            outward_current_density_Apm2=0.0,
+        ),
+        fm.NormalCurrentElectrode(
+            "right", [fm.SurfaceRef("film", "x+", (1, 0, 0))],
+            outward_current_density_Apm2=0.0,
+        ),
+    ],
+    gauge=fm.ChargePotentialGauge("zero_mean"),
+    solver=fm.ChargeSolverPolicy(),
+)
+study.stages.set_transport_current(
+    module_id="charge",
+    terminal_outward_current_density_Apm2={"left": -1e12, "right": 1e12},
+    stage_id="set-positive",
+)
+study.stages.add_load_state(
+    artifact_name="relaxed_zero_current",
+    dataset="m",
+    sample_index=-1,
+    stage_id="restart-positive",
+)
+study.stages.add_run(stage_id="run-positive", until=1e-12)
+"""
+        )
+        with TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            source_path = root / "source.py"
+            source_path.write_text(textwrap.dedent(source), encoding="utf-8")
+            loaded = fm.load_problem_from_script(source_path, lightweight_assets=True)
+            rendered = rewrite_loaded_problem_script(loaded)["rendered_source"]
+            rewritten_path = root / "rewritten.py"
+            rewritten_path.write_text(rendered, encoding="utf-8")
+            reloaded = fm.load_problem_from_script(
+                rewritten_path, lightweight_assets=True
+            )
+
+        self.assertIn("study.stages.set_transport_current(", rendered)
+        self.assertIn("study.stages.add_load_state(", rendered)
+        self.assertEqual(
+            [stage.stage_id for stage in reloaded.stages],
+            ["set-positive", "restart-positive", "run-positive"],
+        )
+        self.assertEqual(reloaded.stages[1].action["sample_index"], -1)
+
     def test_tableadd_serializes_object_magnetization_expression(self) -> None:
         loaded = _load(
             _PREAMBLE

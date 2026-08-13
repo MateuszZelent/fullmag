@@ -1331,6 +1331,10 @@ fn materialize_pipeline_primitive(
             apply_pipeline_set_current(current_ir, payload)?;
             Ok(None)
         }
+        "set_transport_current" => {
+            apply_pipeline_set_transport_current(current_ir, payload)?;
+            Ok(None)
+        }
         "save_state" => materialize_pipeline_save_state(current_ir, payload).map(Some),
         "load_state" => materialize_pipeline_load_state(current_ir, payload).map(Some),
         "export" => materialize_pipeline_export(current_ir, payload).map(Some),
@@ -3312,6 +3316,105 @@ fn apply_pipeline_set_current(
     let axis = payload_axis(payload, "direction", [1.0, 0.0, 0.0])?;
     let current_density = payload_f64(payload, "current_density")?.unwrap_or(1e10);
     problem.current_density = Some(scaled_axis(axis, current_density));
+    Ok(())
+}
+
+fn apply_pipeline_set_transport_current(
+    problem: &mut ProblemIR,
+    payload: &BTreeMap<String, Value>,
+) -> Result<()> {
+    let module_id = payload_string(payload, "module_id")
+        .filter(|value| !value.trim().is_empty())
+        .context("study pipeline set_transport_current requires payload.module_id")?;
+    let raw_values = payload
+        .get("terminal_outward_current_density_Apm2")
+        .and_then(Value::as_object)
+        .context(
+            "study pipeline set_transport_current requires payload.terminal_outward_current_density_Apm2 object",
+        )?;
+    if raw_values.is_empty() {
+        bail!("study pipeline set_transport_current terminal map must not be empty");
+    }
+    let mut values = BTreeMap::new();
+    for (boundary_id, raw_value) in raw_values {
+        if boundary_id.trim().is_empty() {
+            bail!("study pipeline set_transport_current boundary ids must be non-empty");
+        }
+        let value = match raw_value {
+            Value::Number(number) => number.as_f64(),
+            Value::String(text) => text.trim().parse::<f64>().ok(),
+            _ => None,
+        }
+        .with_context(|| {
+            format!(
+                "study pipeline set_transport_current boundary '{}' must carry a finite A/m^2 value",
+                boundary_id
+            )
+        })?;
+        if !value.is_finite() {
+            bail!(
+                "study pipeline set_transport_current boundary '{}' must carry a finite A/m^2 value",
+                boundary_id
+            );
+        }
+        values.insert(boundary_id.as_str(), value);
+    }
+
+    let matching: Vec<_> = problem
+        .current_modules
+        .iter()
+        .enumerate()
+        .filter_map(|(index, module)| match module {
+            fullmag_ir::CurrentModuleIR::CurrentTransport {
+                name, ..
+            } if name == &module_id => Some(index),
+            _ => None,
+        })
+        .collect();
+    let [module_index] = matching.as_slice() else {
+        bail!(
+            "study pipeline set_transport_current module_id '{}' must identify exactly one CurrentTransport",
+            module_id
+        );
+    };
+    let fullmag_ir::CurrentModuleIR::CurrentTransport { definition, .. } =
+        &mut problem.current_modules[*module_index]
+    else {
+        unreachable!("matching index must identify CurrentTransport");
+    };
+    let definition = definition
+        .as_mut()
+        .context("study pipeline set_transport_current requires a complete transport definition")?;
+    let electrode_ids: std::collections::BTreeSet<_> = definition
+        .boundaries
+        .iter()
+        .filter_map(|boundary| match boundary {
+            fullmag_ir::ChargeBoundaryIR::NormalCurrentElectrode { id, .. } => {
+                Some(id.as_str())
+            }
+            _ => None,
+        })
+        .collect();
+    let supplied_ids: std::collections::BTreeSet<_> = values.keys().copied().collect();
+    if supplied_ids != electrode_ids {
+        let missing: Vec<_> = electrode_ids.difference(&supplied_ids).copied().collect();
+        let unexpected: Vec<_> = supplied_ids.difference(&electrode_ids).copied().collect();
+        bail!(
+            "study pipeline set_transport_current must cover exactly the normal-current electrodes; missing={:?}, unexpected={:?}",
+            missing,
+            unexpected
+        );
+    }
+    for boundary in &mut definition.boundaries {
+        if let fullmag_ir::ChargeBoundaryIR::NormalCurrentElectrode {
+            id,
+            outward_current_density_apm2,
+            ..
+        } = boundary
+        {
+            *outward_current_density_apm2 = values[id.as_str()];
+        }
+    }
     Ok(())
 }
 
@@ -5809,6 +5912,114 @@ mod tests {
         assert_eq!(stages[0].entrypoint_kind, "pipeline_run_after_context");
         assert_eq!(zeeman_field(&stages[0].ir), Some([0.0, 0.0, 0.025]));
         assert_eq!(stages[0].ir.current_density, Some([0.0, 2.5e10, 0.0]));
+    }
+
+    #[test]
+    fn materialize_script_stages_sets_exact_solved_current_electrodes() {
+        let mut ir = sample_problem_ir();
+        ir.current_modules = serde_json::from_value(json!([{
+            "kind": "current_transport",
+            "name": "charge",
+            "model": "ohmic_poisson",
+            "coupling": "one_way",
+            "domain": [{"object_id": "track", "region_id": "track:transport"}],
+            "materials": [{
+                "region": {"object_id": "track", "region_id": "track:transport"},
+                "material": {"sigma_Spm": 5e6}
+            }],
+            "boundaries": [
+                {
+                    "kind": "normal_current_electrode",
+                    "id": "left",
+                    "surfaces": [{
+                        "object_id": "track", "surface_id": "x-",
+                        "orientation": [-1.0, 0.0, 0.0]
+                    }],
+                    "outward_current_density_Apm2": 0.0
+                },
+                {
+                    "kind": "normal_current_electrode",
+                    "id": "right",
+                    "surfaces": [{
+                        "object_id": "track", "surface_id": "x+",
+                        "orientation": [1.0, 0.0, 0.0]
+                    }],
+                    "outward_current_density_Apm2": 0.0
+                }
+            ],
+            "gauge": "zero_mean",
+            "solver": {
+                "engine": "cg",
+                "linear": {
+                    "relative_tolerance": 1e-10,
+                    "absolute_tolerance": 0.0,
+                    "max_iterations": 10000
+                },
+                "physical_residual_version": "charge_balance_integrated_l2.v1",
+                "operator_version": "fv_charge_harmonic_v1"
+            }
+        }]))
+        .expect("transport fixture should deserialize");
+        let config = ScriptExecutionConfig {
+            ir,
+            shared_geometry_assets: None,
+            default_until_seconds: Some(3e-12),
+            study_pipeline: Some(StudyPipelineDocument {
+                version: "study_pipeline.v1".to_string(),
+                nodes: vec![
+                    StudyPipelineNode::Primitive {
+                        id: "set-drive".to_string(),
+                        label: "Set transport current".to_string(),
+                        enabled: true,
+                        notes: None,
+                        source: Some("script_imported".to_string()),
+                        stage_kind: "set_transport_current".to_string(),
+                        payload: serde_json::from_value(json!({
+                            "module_id": "charge",
+                            "terminal_outward_current_density_Apm2": {
+                                "left": -1e12,
+                                "right": 1e12
+                            }
+                        }))
+                        .expect("payload"),
+                    },
+                    StudyPipelineNode::Primitive {
+                        id: "run".to_string(),
+                        label: "Run".to_string(),
+                        enabled: true,
+                        notes: None,
+                        source: Some("script_imported".to_string()),
+                        stage_kind: "run".to_string(),
+                        payload: serde_json::from_value(json!({
+                            "until_seconds": "3e-12"
+                        }))
+                        .expect("payload"),
+                    },
+                ],
+            }),
+            stages: vec![],
+        };
+
+        let stages = materialize_script_stages(config).expect("pipeline should materialize");
+        let fullmag_ir::CurrentModuleIR::CurrentTransport {
+            definition: Some(definition),
+            ..
+        } = &stages[0].ir.current_modules[0]
+        else {
+            panic!("expected complete current transport");
+        };
+        let values: Vec<_> = definition
+            .boundaries
+            .iter()
+            .filter_map(|boundary| match boundary {
+                fullmag_ir::ChargeBoundaryIR::NormalCurrentElectrode {
+                    outward_current_density_apm2,
+                    ..
+                } => Some(*outward_current_density_apm2),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(values, vec![-1e12, 1e12]);
     }
 
     #[test]

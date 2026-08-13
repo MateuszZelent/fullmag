@@ -782,15 +782,33 @@ porównuje całą projekcję z publicznym loweringiem i dereferencjonuje każdą
 normatywna: terminale mają indeksy `0` i `1`, a zewnętrzny
 charge-insulating boundary indeks `2`.
 
-Pełny workload nie jest jeszcze publicznie lowerowalny jako jeden `Problem`.
-Obiekt HM i jego charge/spin material assignments są reprezentowalne, ale
-brakuje mutacji wartości BC pomiędzy etapami oraz restartu każdego drive z
-nazwanego checkpointu. Dlatego maski i sześcioprzebiegowy harmonogram pozostają jawnym kontraktem
-workflow fixture, a nie fikcyjnymi polami `ProblemIR`. Każdy drive zapisuje
-konkretne istniejące cele `current_modules[0].boundaries[0|1].outward_current_density_Apm2`;
-nie istnieje cel `boundaries[current_sweep]`. Granica ta jest zamrożona w
-`public_lowering_boundary` i nie może zostać uznana za implementację ani
-kwalifikację `fdm/gpu/double/strict`.
+Publiczny `study_pipeline.v1` rozróżnia prescribed-current i solved-current.
+Istniejące `set_current(direction,current_density)` dotyczy wyłącznie
+`ProblemIR.current_density` i nie może mutować transportu elektrodowego. Akcja
+`set_transport_current(module_id, terminal_outward_current_density_Apm2)`
+wybiera dokładnie jeden `CurrentTransport`, wymaga niepustej mapy
+`boundary_id -> A/m^2`, pozwala zmieniać wyłącznie istniejące
+`normal_current_electrode` oraz odrzuca brakujące, nadmiarowe i niefinitywne
+wartości. Python i materializator pipeline sprawdzają dokładne pokrycie
+identyfikatorów elektrod; planner po rozwiązaniu geometrii sprawdza bilans
+powierzchniowy $\sum_k J_{n,k}A_k=0$. Nie wolno zastępować tego warunku sumą
+samych gęstości, ponieważ powierzchnie terminali mogą mieć różne pola. Mutacja
+jest kontekstowa: dotyczy wszystkich następnych węzłów pipeline i jest
+zachowana w provenance dokumentu.
+
+Akcja `load_state(artifact_name=..., dataset="m")` jest jawną granicą
+restartu. Dla racetracku występuje przed każdym z sześciu runów i wskazuje
+`relaxed_zero_current`; runtime nie może zastąpić jej kontynuacją z poprzedniego
+drive. Kolejność `set_transport_current -> load_state -> run` jest normatywna,
+a każda materializacja runu musi zawierać konkretne istniejące cele
+`current_modules[0].boundaries[0|1].outward_current_density_Apm2`. Nie istnieje
+syntetyczny cel `boundaries[current_sweep]`.
+
+Sama obecność tych dwóch akcji nie kwalifikuje jeszcze workloadu. Osobna
+stage-local activation musi dowieść, że `relax_zero_current` zachowuje moduł
+transportu, ale nie wiąże transportowego torque do RHS; dopóki ta bramka oraz
+pełne wykonanie sześciu restartów nie przejdą, `public_lowering_boundary`
+pozostaje otwarte i tuple `fdm/gpu/double/strict` pozostaje niezakwalifikowane.
 
 #### 2.9.4 Pełna tabela liczb fixture
 
