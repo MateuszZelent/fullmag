@@ -637,6 +637,21 @@ describe("Viewport3DScene scale helpers", () => {
       VIEWPORT_3D_MODEL_LAYER_FINAL_STAGE,
     );
   });
+
+  it("commits staged field layers without a transition that external-store updates can starve", () => {
+    const source = readFileSync(
+      new URL("./Viewport3DScene.tsx", import.meta.url),
+      "utf8",
+    );
+    const stageHook = source.slice(
+      source.indexOf("function useViewport3DModelLayerStage"),
+      source.indexOf("function Viewport3DProjectionStack"),
+    );
+
+    expect(stageHook).toContain("window.requestAnimationFrame");
+    expect(stageHook).toContain("setStageState((current) =>");
+    expect(stageHook).not.toContain("startTransition");
+  });
 });
 
 describe("Viewport3DScene region overlay visibility", () => {

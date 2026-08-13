@@ -32,7 +32,6 @@ import {
   useMemo,
   useRef,
   useState,
-  startTransition,
   type RefObject,
 } from "react";
 import {
@@ -662,15 +661,13 @@ function useViewport3DModelLayerStage({
     const frameId = window.requestAnimationFrame(() => {
       if (cancelled) return;
       tracker.recordDirtyFrame("model-layer-stage");
-      startTransition(() => {
-        setStageState((current) => {
-          const currentStage =
-            current.resetKey === resetKey ? current.stage : 0;
-          return {
-            resetKey,
-            stage: resolveNextViewport3DModelLayerStage(currentStage),
-          };
-        });
+      setStageState((current) => {
+        const currentStage =
+          current.resetKey === resetKey ? current.stage : 0;
+        return {
+          resetKey,
+          stage: resolveNextViewport3DModelLayerStage(currentStage),
+        };
       });
       invalidate();
     });
