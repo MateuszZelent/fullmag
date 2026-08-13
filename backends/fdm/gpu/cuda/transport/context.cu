@@ -3932,6 +3932,12 @@ fullmag_fdm_gpu_transport_test_accept_zero_charge_snapshot_v1(
     const uint64_t jx_count = (parent.grid[0] + 1) * parent.grid[1] * parent.grid[2];
     const uint64_t jy_count = parent.grid[0] * (parent.grid[1] + 1) * parent.grid[2];
     const uint64_t jz_count = parent.grid[0] * parent.grid[1] * (parent.grid[2] + 1);
+    fullmag::fdm::gpu::transport::charge::SolveInput static_input{};
+    static_input.grid = parent.grid;
+    static_input.cell_size = parent.cell_size;
+    static_input.payloads = parent.static_payload_device;
+    static_input.views = parent.static_views_host;
+    static_input.stream = parent.stream;
     for (size_t index = 0; index < slots.size(); ++index) {
         Slot &snapshot = slots[index];
         if (snapshot.active || snapshot.generation == UINT64_MAX) continue;
@@ -3946,9 +3952,8 @@ fullmag_fdm_gpu_transport_test_accept_zero_charge_snapshot_v1(
                 (cudaMalloc(pointer, bytes) == cudaSuccess &&
                  cudaMemsetAsync(*pointer, 0, bytes, parent.stream) == cudaSuccess);
         };
-        if (!allocate_zero_device(reinterpret_cast<void **>(&accepted.active), cells) ||
-            !allocate_zero_device(reinterpret_cast<void **>(&accepted.conductivity),
-                                  cells * sizeof(double)) ||
+        if (fullmag::fdm::gpu::transport::charge::materialize_static_state(
+                static_input, &accepted) != FULLMAG_FDM_GPU_TRANSPORT_ERROR_OK ||
             !allocate_zero_device(reinterpret_cast<void **>(&accepted.potential),
                                   cells * sizeof(double)) ||
             !allocate_zero_device(reinterpret_cast<void **>(&accepted.jx),

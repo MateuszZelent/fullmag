@@ -708,9 +708,11 @@ int main() {
     spin_request.accepted_sequence = imported.accepted_sequence;
     fullmag_fdm_gpu_steady_spin_solve_result_v1 continued{};
     require(solve_spin(106, &continued) == FULLMAG_FDM_GPU_TRANSPORT_ERROR_OK &&
+                digest_equal(continued.snapshot_content_digest,
+                             restored.snapshot_content_digest) &&
                 digest_equal(continued.deterministic_compute_digest,
                              restored.deterministic_compute_digest),
-            "checkpoint continuation changed deterministic spin digest");
+            "checkpoint continuation changed accepted charge or deterministic spin digest");
 
     std::array<fullmag_fdm_gpu_transport_telemetry_v1, 256> telemetry{};
     uint64_t telemetry_count = 0;
