@@ -1,6 +1,6 @@
 import { act } from "react";
 import { createRoot, hydrateRoot } from "react-dom/client";
-import { renderToStaticMarkup } from "react-dom/server";
+import { renderToString, renderToStaticMarkup } from "react-dom/server";
 import { readFileSync } from "node:fs";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -83,15 +83,11 @@ describe("PlanarMonitorDraftInspectorPanel", () => {
   });
 
   it("hydrates the server empty snapshot before observing the live draft", async () => {
-    const serverHtml = renderToStaticMarkup(<PlanarMonitorDraftInspectorPanel />);
+    const serverHtml = renderToString(<PlanarMonitorDraftInspectorPanel />);
     beginPlanarMonitorDraft();
     const dom = installSimulationPreparationTestDom();
     const container = dom.document.createElement("div");
-    const serverParagraph = dom.document.createElement("p");
-    serverParagraph.setAttribute("class", "fm-mesh-empty");
-    serverParagraph.setAttribute("role", "note");
-    serverParagraph.appendChild(dom.document.createTextNode("No editable planar monitor draft."));
-    container.appendChild(serverParagraph);
+    (container as unknown as { innerHTML: string }).innerHTML = serverHtml;
     const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
     let root: ReturnType<typeof hydrateRoot>;
     try {

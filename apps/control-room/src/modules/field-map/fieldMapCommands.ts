@@ -58,10 +58,13 @@ export const fieldMapCommands: CommandContribution[] = Object.entries(
         ? (context.input as { monitorId?: unknown; newName?: unknown })
         : null;
     if (id === "field-map.open" || id === "field-map.select-monitor") {
-      if (
-        id === "field-map.select-monitor" &&
-        typeof input?.monitorId === "string"
-      ) {
+      if (id === "field-map.select-monitor") {
+        if (typeof input?.monitorId !== "string") {
+          return {
+            message: "A planar monitor id is required.",
+            status: "failed",
+          };
+        }
         if (!queuePlanarMonitorSelection(context, input.monitorId)) {
           return {
             message: "Planar visualization state is unavailable.",

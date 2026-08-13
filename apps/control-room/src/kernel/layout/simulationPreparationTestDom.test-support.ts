@@ -166,6 +166,36 @@ export class TestElement extends TestNode {
   readonly tagName: string;
   value = "";
 
+  get innerHTML(): string {
+    return this.childNodes.map(serializeTestNode).join("");
+  }
+
+  set innerHTML(markup: string) {
+    for (const child of this.childNodes) child.parentNode = null;
+    this.childNodes.length = 0;
+    const stack: TestElement[] = [this];
+    for (const token of markup.match(/<!--[\s\S]*?-->|<[^>]+>|[^<]+/g) ?? []) {
+      if (token.startsWith("<!--")) {
+        stack.at(-1)?.appendChild(this.ownerDocument.createComment(token.slice(4, -3)));
+      } else if (token.startsWith("</")) {
+        if (stack.length > 1) stack.pop();
+      } else if (token.startsWith("<")) {
+        const match = /^<([\w:-]+)([^>]*)>$/.exec(token);
+        if (!match) continue;
+        const [, tagName, rawAttributes] = match;
+        const element = this.ownerDocument.createElement(tagName);
+        for (const attribute of rawAttributes.matchAll(/([^\s=/>]+)(?:=(?:"([^"]*)"|'([^']*)'|([^\s"'>]+)))?/g)) {
+          const [, name, doubleQuoted, singleQuoted, bare] = attribute;
+          if (name) element.setAttribute(name, decodeHtml(doubleQuoted ?? singleQuoted ?? bare ?? ""));
+        }
+        stack.at(-1)?.appendChild(element);
+        if (!token.endsWith("/>") && !isVoidHtmlElement(tagName)) stack.push(element);
+      } else {
+        stack.at(-1)?.appendChild(this.ownerDocument.createTextNode(decodeHtml(token)));
+      }
+    }
+  }
+
   get disabled(): boolean {
     return this.attributes.has("disabled");
   }
@@ -243,6 +273,32 @@ export class TestElement extends TestNode {
   setAttribute(name: string, value: string): void {
     this.attributes.set(name, String(value));
   }
+}
+
+const VOID_HTML_ELEMENTS = new Set(["area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "param", "source", "track", "wbr"]);
+
+function isVoidHtmlElement(tagName: string): boolean {
+  return VOID_HTML_ELEMENTS.has(tagName.toLowerCase());
+}
+
+function decodeHtml(value: string): string {
+  return value
+    .replaceAll("&quot;", '"')
+    .replaceAll("&#x27;", "'")
+    .replaceAll("&amp;", "&")
+    .replaceAll("&lt;", "<")
+    .replaceAll("&gt;", ">");
+}
+
+function serializeTestNode(node: TestNode): string {
+  if (node.nodeType === 3) return node.nodeValue ?? "";
+  if (node.nodeType === 8) return `<!--${node.nodeValue ?? ""}-->`;
+  if (!(node instanceof TestElement)) return "";
+  const attributes = Array.from(node.attributes.entries())
+    .map(([name, value]) => ` ${name}="${value}"`)
+    .join("");
+  if (isVoidHtmlElement(node.tagName)) return `<${node.tagName.toLowerCase()}${attributes}>`;
+  return `<${node.tagName.toLowerCase()}${attributes}>${node.childNodes.map(serializeTestNode).join("")}</${node.tagName.toLowerCase()}>`;
 }
 
 export class TestDocument extends TestNode {

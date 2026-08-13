@@ -2,12 +2,21 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 
 import { CommandRegistry } from "@/kernel/commands/CommandRegistry";
+import { VISUALIZATION_STATE_PATH } from "@/kernel/api/apiPaths";
+import type { VisualizationStatePatch } from "@/kernel/api/apiTypes";
+import type { CommandContext } from "@/kernel/commands/commandTypes";
+import { EventBus } from "@/kernel/events/EventBus";
+import type { KernelEventMap } from "@/kernel/events/eventTypes";
+import { LayoutController } from "@/kernel/layout/LayoutController";
+import { VisualizationRegistrySyncController } from "@/kernel/visualization/VisualizationRegistrySyncController";
+import { fieldMapCommands } from "@/modules/field-map/fieldMapCommands";
 
 import { commandPaletteStore } from "./commandPaletteStore";
 import {
   CommandPaletteView,
   executePaletteCommand,
   filterPaletteCommands,
+  paletteCommandResourceData,
   resolvePaletteCommandItems,
 } from "./CommandPaletteModule";
 import { overlayManifest } from "./manifest";
@@ -123,6 +132,51 @@ describe("CommandPaletteModule", () => {
     expect(run).toHaveBeenCalledWith({ source: "palette" });
   });
 
+  it("passes the authoritative visualization resource to planar monitor commands and rejects a palette selection without a monitor id", async () => {
+    const commands = new CommandRegistry();
+    const selectMonitor = fieldMapCommands.find(
+      (command) => command.id === "field-map.select-monitor",
+    );
+    if (!selectMonitor) throw new Error("Missing planar monitor selection command.");
+    commands.register(selectMonitor);
+    const queuePatch = vi.fn();
+    const context = palettePlanarMonitorContext(queuePatch);
+
+    expect(context.resourceData?.[VISUALIZATION_STATE_PATH]).toEqual({
+      planar: { active_monitor_id: "plane-1" },
+      revision: 7,
+    });
+    await expect(
+      executePaletteCommand(commands, "field-map.select-monitor", context),
+    ).resolves.toEqual({
+      message: "A planar monitor id is required.",
+      status: "failed",
+    });
+    expect(queuePatch).not.toHaveBeenCalled();
+  });
+
+  it("executes palette monitor selection through the shared typed patch when input identifies a monitor", async () => {
+    const commands = new CommandRegistry();
+    const selectMonitor = fieldMapCommands.find(
+      (command) => command.id === "field-map.select-monitor",
+    );
+    if (!selectMonitor) throw new Error("Missing planar monitor selection command.");
+    commands.register(selectMonitor);
+    const queuePatch = vi.fn();
+    const context = palettePlanarMonitorContext(queuePatch);
+
+    await executePaletteCommand(
+      commands,
+      "field-map.select-monitor",
+      context,
+      { monitorId: "plane-2" },
+    );
+
+    expect(queuePatch).toHaveBeenCalledWith({
+      planar: { active_monitor_id: "plane-2" },
+    });
+  });
+
   it("resolves disabled command state for palette parity with other renderers", () => {
     const items = resolvePaletteCommandItems(
       [
@@ -221,3 +275,21 @@ describe("CommandPaletteModule", () => {
     expect(commandPaletteStore.getSnapshot().isOpen).toBe(false);
   });
 });
+
+function palettePlanarMonitorContext(
+  queuePatch: (patch: VisualizationStatePatch) => void,
+): CommandContext {
+  const visualizationSync = new VisualizationRegistrySyncController({
+    api: { patch: vi.fn() },
+  });
+  vi.spyOn(visualizationSync, "queuePatch").mockImplementation(queuePatch);
+  return {
+    layout: new LayoutController(new EventBus<KernelEventMap>()),
+    resourceData: paletteCommandResourceData(
+      {},
+      { planar: { active_monitor_id: "plane-1" }, revision: 7 },
+    ),
+    source: "palette",
+    visualizationSync,
+  };
+}

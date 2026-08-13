@@ -1,6 +1,6 @@
 import { act } from "react";
 import { createRoot, hydrateRoot } from "react-dom/client";
-import { renderToStaticMarkup } from "react-dom/server";
+import { renderToStaticMarkup, renderToString } from "react-dom/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { installSimulationPreparationTestDom } from "@/kernel/layout/simulationPreparationTestDom.test-support";
@@ -81,15 +81,10 @@ describe("FieldMapModule planar state ownership", () => {
   });
 
   it("hydrates the same loading snapshot without reading client-only field-map identity", async () => {
-    const serverHtml = renderToStaticMarkup(<FieldMapModule />);
+    const serverHtml = renderToString(<FieldMapModule />);
     const dom = installSimulationPreparationTestDom();
     const container = dom.document.createElement("div");
-    const serverNode = dom.document.createElement("div");
-    serverNode.setAttribute("class", "fm-field-map fm-field-map--status");
-    serverNode.setAttribute("data-planar-status", "loading");
-    serverNode.setAttribute("role", "status");
-    serverNode.appendChild(dom.document.createTextNode("Loading planar visualization state…"));
-    container.appendChild(serverNode);
+    (container as unknown as { innerHTML: string }).innerHTML = serverHtml;
     const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
     let root: ReturnType<typeof hydrateRoot>;
     try {

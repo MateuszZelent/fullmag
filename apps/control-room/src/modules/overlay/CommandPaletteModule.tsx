@@ -15,11 +15,13 @@ import type {
   CommandId,
 } from "@/kernel/commands/commandTypes";
 import type { CommandRegistry } from "@/kernel/commands/CommandRegistry";
+import { VISUALIZATION_STATE_PATH } from "@/kernel/api/apiPaths";
 import {
   useCommandDetailResource,
   useStudyRuntimeCommandResourceData,
 } from "@/kernel/resources/studyRuntimeResources";
 import type { ModuleProps } from "@/kernel/types";
+import { useVisualizationStateResource } from "@/kernel/visualization/useVisualizationStateResource";
 import { CommandDetailDialog } from "@/shared/runtime/CommandDetailDialog";
 import {
   Command,
@@ -66,8 +68,19 @@ export function executePaletteCommand(
   commands: CommandRegistry,
   commandId: CommandId,
   context: CommandContext,
+  input?: unknown,
 ): Promise<unknown> {
-  return commands.execute(commandId, context);
+  return commands.execute(commandId, context, input);
+}
+
+export function paletteCommandResourceData(
+  runtimeResourceData: Readonly<Record<string, unknown>>,
+  visualizationState: unknown,
+): Readonly<Record<string, unknown>> {
+  return {
+    ...runtimeResourceData,
+    [VISUALIZATION_STATE_PATH]: visualizationState,
+  };
 }
 
 function groupCommands(
@@ -270,15 +283,20 @@ function OpenCommandPalette({
   setQuery: (query: string) => void;
 }) {
   const runtimeResourceData = useStudyRuntimeCommandResourceData();
+  const visualizationState = useVisualizationStateResource();
   const [selectedCommandId, setSelectedCommandId] = useState<string | null>(null);
   const commandDetail = useCommandDetailResource(selectedCommandId);
+  const resourceData = useMemo(
+    () => paletteCommandResourceData(runtimeResourceData, visualizationState.data),
+    [runtimeResourceData, visualizationState.data],
+  );
   const commandContext = useMemo(
     () =>
       createCommandContext("palette", kernel, {
-        resourceData: runtimeResourceData,
+        resourceData,
         sourceDetail: "command-palette",
       }),
-    [kernel, runtimeResourceData],
+    [kernel, resourceData],
   );
 
   return (
