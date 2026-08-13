@@ -522,7 +522,7 @@ def test_export_script_serializes_runtime_bundle_mutation_with_flock() -> None:
         'RUNTIME_LOCK="${RUNTIME_PARENT}/.fem-gpu-host.export.v2.lock"'
     )
     flock_index = script.find(
-        'flock -E 75 -w "${FULLMAG_RUNTIME_EXPORT_LOCK_TIMEOUT_SECONDS}" '
+        'setsid flock -E 75 -w "${FULLMAG_RUNTIME_EXPORT_LOCK_TIMEOUT_SECONDS}" '
         '--close "${RUNTIME_LOCK}"'
     )
     compose_index = script.find(
@@ -541,9 +541,10 @@ def test_export_lock_descriptor_is_not_inherited_by_child_processes() -> None:
 
     assert 'FULLMAG_RUNTIME_EXPORT_LOCK_HELD' in script
     assert (
-        'flock -E 75 -w "${FULLMAG_RUNTIME_EXPORT_LOCK_TIMEOUT_SECONDS}" '
+        'setsid flock -E 75 -w "${FULLMAG_RUNTIME_EXPORT_LOCK_TIMEOUT_SECONDS}" '
         '--close "${RUNTIME_LOCK}"'
     ) in script
+    assert 'lock_acquired_marker="${lock_state_dir}/acquired"' in script
     assert 'exec 9>"${RUNTIME_LOCK}"' not in script
     assert "flock -n 9" not in script
     assert "flock -u 9" not in script

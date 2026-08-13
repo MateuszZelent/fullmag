@@ -35,12 +35,66 @@ source_snapshot_owned=0
 mkdir -p "${RUNTIME_PARENT}"
 if [ "${FULLMAG_RUNTIME_EXPORT_LOCK_HELD:-0}" != "1" ]; then
   export FULLMAG_RUNTIME_EXPORT_LOCK_HELD=1
+  lock_state_dir="$(mktemp -d "${RUNTIME_PARENT}/.fem-gpu-host.export-lock-state.XXXXXX")"
+  lock_acquired_marker="${lock_state_dir}/acquired"
+  lock_wait_pid=""
+
+  cleanup_lock_state() {
+    rm -f -- "${lock_acquired_marker}"
+    rmdir -- "${lock_state_dir}"
+  }
+
+  stop_lock_wait_group() {
+    local attempts=0
+    if [ -z "${lock_wait_pid}" ]; then
+      return
+    fi
+    kill -TERM -- "-${lock_wait_pid}" 2>/dev/null || true
+    wait "${lock_wait_pid}" 2>/dev/null || true
+    while kill -0 -- "-${lock_wait_pid}" 2>/dev/null && [ "${attempts}" -lt 500 ]; do
+      sleep 0.01
+      attempts=$((attempts + 1))
+    done
+    if kill -0 -- "-${lock_wait_pid}" 2>/dev/null; then
+      kill -KILL -- "-${lock_wait_pid}" 2>/dev/null || true
+      while kill -0 -- "-${lock_wait_pid}" 2>/dev/null; do
+        sleep 0.01
+      done
+    fi
+  }
+
+  cancel_lock_wait() {
+    local status="$1"
+    trap - HUP INT TERM
+    stop_lock_wait_group
+    cleanup_lock_state
+    exit "${status}"
+  }
+
+  trap 'cancel_lock_wait 129' HUP
+  trap 'cancel_lock_wait 130' INT
+  trap 'cancel_lock_wait 143' TERM
   lock_status=0
-  flock -E 75 -w "${FULLMAG_RUNTIME_EXPORT_LOCK_TIMEOUT_SECONDS}" --close "${RUNTIME_LOCK}" bash "$0" "$@" || lock_status="$?"
+  setsid flock -E 75 -w "${FULLMAG_RUNTIME_EXPORT_LOCK_TIMEOUT_SECONDS}" --close "${RUNTIME_LOCK}" \
+    bash -c '
+      lock_acquired_marker="$1"
+      exporter="$2"
+      shift 2
+      : > "${lock_acquired_marker}"
+      exec bash "${exporter}" "$@"
+    ' bash "${lock_acquired_marker}" "$0" "$@" &
+  lock_wait_pid="$!"
+  wait "${lock_wait_pid}" || lock_status="$?"
+  trap - HUP INT TERM
+  lock_acquired=0
+  if [ -f "${lock_acquired_marker}" ]; then
+    lock_acquired=1
+  fi
+  cleanup_lock_state
   if [ "${lock_status}" -eq 0 ]; then
     exit 0
   fi
-  if [ "${lock_status}" -eq 75 ]; then
+  if [ "${lock_acquired}" -eq 0 ] && [ "${lock_status}" -eq 75 ]; then
     echo "[export_fem_gpu_runtime] timed out after ${FULLMAG_RUNTIME_EXPORT_LOCK_TIMEOUT_SECONDS} seconds waiting for managed runtime export lock: ${RUNTIME_LOCK}" >&2
     echo "[export_fem_gpu_runtime] retry after the current exporter completes or increase FULLMAG_RUNTIME_EXPORT_LOCK_TIMEOUT_SECONDS" >&2
   fi
