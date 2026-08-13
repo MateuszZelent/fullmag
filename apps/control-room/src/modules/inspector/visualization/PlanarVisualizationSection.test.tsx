@@ -64,11 +64,8 @@ vi.mock("@/kernel/visualization/useVisualizationStateResource", () => ({
     data: {
       planar: {
         active_monitor_id: "plane-1",
-        auto_contrast: true,
         colormap: "viridis",
         component: "magnitude",
-        contrast_max: null,
-        contrast_min: null,
         display_unit: "A/m",
         layers: {
           boundaries: true,
@@ -79,6 +76,8 @@ vi.mock("@/kernel/visualization/useVisualizationStateResource", () => ({
           vectors: false,
         },
         quantity_id: "h_eff",
+        range: { mode: "auto", min: null, max: null },
+        raster_opacity: 1,
         resolution: { height: 256, vector_budget: 512, width: 512 },
         view_scope: { kind: "target" },
       },

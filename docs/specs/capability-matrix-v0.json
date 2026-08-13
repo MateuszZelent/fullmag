@@ -1,6 +1,6 @@
 {
   "schema_version": "capability_matrix.v0",
-  "updated_at": "2026-08-11",
+  "updated_at": "2026-08-13",
   "status_vocabulary": {
     "unsupported": "The current lane has no legal executable realization for this feature.",
     "source_visible": "Source or planner scaffolding exists, but the lane is not a legal public executable path.",
@@ -776,6 +776,18 @@
         "GPU uniform-Ms bulk DMI"
       ],
       "notes": "Each bounded managed fixture compares the integrated node-aligned energy payload at source step 52 with the matching native scalar term and E_total. DG0 field-dot terms use fem_nodal_conservative_tetra_projection; uniform-Ms GPU terms use fem_nodal_visualization_projection. These fixtures qualify energy observation semantics only and do not promote GPU DG0, canonical FEM element/quadrature density output, or the broader interaction/runtime surface to validated."
+    },
+    {
+      "id": "planar_target_boundary_overlay",
+      "label": "Planar selected-target boundary overlay",
+      "lanes": {
+        "fdm_cpu_reference": "unsupported",
+        "fdm_gpu_production": "unsupported",
+        "fem_cpu_public": "implemented",
+        "fem_gpu_public": "implemented"
+      },
+      "validated_workloads": [],
+      "notes": "The postprocessing representation is independent of PlanarMonitor/ProblemIR and sampling identity. FDM returns unavailable (204) because topology is not published. FEM FMCS v4 publishes exact adjacency-derived mesh_interior, target_boundary, and unclassified_degenerate classes only after the codec and route test gates. Legacy FMCS v3 is degraded and must not be reclassified by geometric float deduplication. Browser/runtime qualification remains pending."
     }
   ]
 }

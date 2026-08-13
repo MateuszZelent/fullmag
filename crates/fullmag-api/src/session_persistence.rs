@@ -11,6 +11,9 @@ use utoipa::ToSchema;
 
 use crate::error::ApiError;
 use crate::router_v2::handlers::sessions::status::field_revision;
+use crate::schemas::visualization_state::{
+    default_planar_color_range_state, PlanarColorRangeMode, PlanarColorRangeState,
+};
 use crate::types::{AppState, DisplayPresentationState, RuntimeStatusView, SessionStateResponse};
 use crate::{
     current_live_realtime_state_from_snapshot, publish_current_live_realtime_batch_changed,
@@ -88,6 +91,53 @@ impl From<&SessionStateResponse> for PersistedCurrentLiveSnapshot {
             mesh_build_revision: value.mesh_build_revision,
             region_realization_revisions: value.region_realization_revisions,
             display_presentation: DisplayPresentationState::default(),
+        }
+    }
+}
+
+fn migrate_legacy_planar_presentation(
+    persisted: &mut PersistedCurrentLiveSnapshot,
+    snapshot_document: &serde_json::Value,
+) {
+    let Some(planar_document) =
+        snapshot_document.pointer("/display_presentation/visualization_planar")
+    else {
+        return;
+    };
+    if planar_document.get("range").is_some() {
+        return;
+    }
+    let Some(planar) = persisted.display_presentation.visualization_planar.as_mut() else {
+        return;
+    };
+
+    let legacy_auto_contrast = planar_document
+        .get("auto_contrast")
+        .and_then(serde_json::Value::as_bool);
+    let legacy_min = planar_document
+        .get("contrast_min")
+        .and_then(serde_json::Value::as_f64);
+    let legacy_max = planar_document
+        .get("contrast_max")
+        .and_then(serde_json::Value::as_f64);
+
+    match (legacy_auto_contrast, legacy_min, legacy_max) {
+        (Some(true), _, _) | (None, _, _) => {
+            planar.range = default_planar_color_range_state();
+        }
+        (Some(false), Some(min), Some(max)) if min.is_finite() && max.is_finite() && min < max => {
+            planar.range = PlanarColorRangeState {
+                mode: PlanarColorRangeMode::Manual,
+                min: Some(min),
+                max: Some(max),
+            };
+        }
+        (Some(false), _, _) => {
+            planar.range = default_planar_color_range_state();
+            persisted
+                .display_presentation
+                .visualization_restore_warnings
+                .push("Planarny zakres kontrastu z wersji v6 był niepoprawny; przywrócono bezpieczny zakres automatyczny.".to_string());
         }
     }
 }
@@ -591,31 +641,36 @@ pub(crate) async fn import_session_commit(
         .read_document("project/current_live_snapshot.json")
         .map_err(|e| ApiError::internal(format!("reading snapshot document: {e}")))?
     {
-        if let Ok(persisted) =
-            serde_json::from_slice::<PersistedCurrentLiveSnapshot>(&snapshot_bytes)
+        if let Ok(snapshot_document) = serde_json::from_slice::<serde_json::Value>(&snapshot_bytes)
         {
-            let restored_display_presentation = persisted.display_presentation.clone();
-            let restored: SessionStateResponse = persisted.into();
-            // Refresh the in-memory active workspace.
+            if let Ok(mut persisted) =
+                serde_json::from_value::<PersistedCurrentLiveSnapshot>(snapshot_document.clone())
             {
-                let mut current = state.current_live_state.write().await;
-                *current = Some(restored.clone());
+                migrate_legacy_planar_presentation(&mut persisted, &snapshot_document);
+                let restored_display_presentation = persisted.display_presentation.clone();
+                let restored: SessionStateResponse = persisted.into();
+                // Refresh the in-memory active workspace.
+                {
+                    let mut current = state.current_live_state.write().await;
+                    *current = Some(restored.clone());
+                }
+                {
+                    let mut selection = state.current_display_selection.write().await;
+                    *selection = restored.display_selection.clone();
+                }
+                {
+                    let mut presentation = state.current_display_presentation.write().await;
+                    *presentation = restored_display_presentation;
+                }
+                let realtime_state = current_live_realtime_state_from_snapshot(
+                    &state,
+                    &restored,
+                    restored.display_selection.revision,
+                )
+                .await;
+                publish_current_live_realtime_batch_changed(&state, &realtime_state, false, 0)
+                    .await?;
             }
-            {
-                let mut selection = state.current_display_selection.write().await;
-                *selection = restored.display_selection.clone();
-            }
-            {
-                let mut presentation = state.current_display_presentation.write().await;
-                *presentation = restored_display_presentation;
-            }
-            let realtime_state = current_live_realtime_state_from_snapshot(
-                &state,
-                &restored,
-                restored.display_selection.revision,
-            )
-            .await;
-            publish_current_live_realtime_batch_changed(&state, &realtime_state, false, 0).await?;
         }
     }
 
@@ -2334,5 +2389,75 @@ mod terminal_field_generation_persistence_tests {
             apply_current_live_field_frame(&mut restored, terminal_frame("run-before-restart", 10))
                 .expect_err("delayed frame from retired run must remain stale");
         assert_eq!(error.status, axum::http::StatusCode::CONFLICT);
+    }
+}
+
+#[cfg(test)]
+mod planar_presentation_migration_tests {
+    use super::*;
+    use crate::schemas::visualization_state::default_planar_visualization_state;
+    use crate::session::default_current_live_state;
+    use crate::types::CurrentLiveSnapshotRequest;
+
+    fn persisted_document(
+        auto_contrast: bool,
+        min: serde_json::Value,
+        max: serde_json::Value,
+    ) -> serde_json::Value {
+        let request: CurrentLiveSnapshotRequest = serde_json::from_value(serde_json::json!({
+            "session_id": "planar-v6-migration"
+        }))
+        .expect("bootstrap request");
+        let snapshot = default_current_live_state(&request);
+        let mut persisted = PersistedCurrentLiveSnapshot::from(&snapshot);
+        persisted.display_presentation.visualization_planar =
+            Some(default_planar_visualization_state());
+        let mut document = serde_json::to_value(persisted).expect("serialize snapshot");
+        let planar = document
+            .pointer_mut("/display_presentation/visualization_planar")
+            .and_then(serde_json::Value::as_object_mut)
+            .expect("planar presentation");
+        planar.remove("range");
+        planar.remove("raster_opacity");
+        planar.insert(
+            "auto_contrast".to_string(),
+            serde_json::json!(auto_contrast),
+        );
+        planar.insert("contrast_min".to_string(), min);
+        planar.insert("contrast_max".to_string(), max);
+        document
+    }
+
+    #[test]
+    fn v6_manual_planar_range_migrates_without_changing_its_si_limits() {
+        let document = persisted_document(false, serde_json::json!(-2.0), serde_json::json!(4.0));
+        let mut persisted: PersistedCurrentLiveSnapshot =
+            serde_json::from_value(document.clone()).expect("deserialize v6 snapshot");
+        migrate_legacy_planar_presentation(&mut persisted, &document);
+        let planar = persisted
+            .display_presentation
+            .visualization_planar
+            .expect("restored planar presentation");
+        assert_eq!(planar.range.mode, PlanarColorRangeMode::Manual);
+        assert_eq!(planar.range.min, Some(-2.0));
+        assert_eq!(planar.range.max, Some(4.0));
+    }
+
+    #[test]
+    fn invalid_v6_manual_range_resets_with_a_restore_diagnostic() {
+        let document = persisted_document(false, serde_json::json!(4.0), serde_json::json!(-2.0));
+        let mut persisted: PersistedCurrentLiveSnapshot =
+            serde_json::from_value(document.clone()).expect("deserialize v6 snapshot");
+        migrate_legacy_planar_presentation(&mut persisted, &document);
+        let planar = persisted
+            .display_presentation
+            .visualization_planar
+            .expect("restored planar presentation");
+        assert_eq!(planar.range.mode, PlanarColorRangeMode::Auto);
+        assert!(persisted
+            .display_presentation
+            .visualization_restore_warnings
+            .iter()
+            .any(|warning| warning.contains("wersji v6")));
     }
 }

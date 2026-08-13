@@ -22,7 +22,10 @@ heavy center surface. `viewport-3d` must remain the only WebGL/R3F surface.
 1. Introduce the canonical `PlanarMonitor` in Python, `ProblemIR`, and
    `SceneDocument`. It owns physical target, frame, extent, and operator.
 2. Keep quantity, component, unit, range, palette, raster resolution, quality,
-   and vector budget in a separate `PlanarViewProfile` and data request.
+   opacity, and vector budget in a separate `PlanarViewProfile` and data
+   request. The canonical planar range is `auto | manual | symmetric`, with
+   manual SI limits and a separate display-unit transform; the profile owns no
+   monitor/sampling identity.
 3. Make `PlanarSamplingEngine` the only implementation owner for FDM/FEM plane,
    slab, depth, and surface sampling. Existing slice/projection endpoints become
    compatibility adapters.
@@ -55,6 +58,8 @@ single-WebGL invariants.
   is not a legal fallback.
 - 3D and 2D range/palette state can differ without duplicating target identity
   or inspector registration.
+- A FEM overlay can distinguish exact selected-target boundary segments from
+  mesh interior; it must not infer that boundary from projected float segments.
 - The frontend gains a dedicated renderer lifecycle and byte-bounded resource
   caches, but no second GPU context.
 
@@ -70,6 +75,9 @@ single-WebGL invariants.
   `fetch()` directly.
 - Use stable capability/error codes for unsupported quantities, basis orders,
   stale revisions, and non-injective surface projections.
+- Version the planar overlay representation independently (`FMCS v4`), include
+  codec version in its ETag, and retain FDM `204` plus degraded legacy-v3
+  decoding instead of manufacturing a boundary overlay.
 - Validate FDM and FEM with manufactured fields, refinement invariance, and
   managed runtime reports.
 - Prove active-only mount, no idle redraw, worker/object cleanup, bounded memory,
@@ -84,6 +92,9 @@ single-WebGL invariants.
 5. Keep PNG as export/fallback and remove the competing top-level command.
 6. Retain legacy slice/projection endpoints until a separately approved removal
    after compatibility observation.
+7. Migrate persisted visualization schema 6 to schema 7 once, translating
+   legacy contrast state to canonical planar range state. New HTTP/OpenAPI
+   writes do not dual-write aliases.
 
 Rollback may hide `field-map` and restore the static PNG command. It must not
 delete authored monitors, change `ProblemIR`, or replace conservative FEM
@@ -100,4 +111,3 @@ integration with node averaging.
 - Managed FDM/FEM runtime reports and browser screenshots/smokes.
 - Full typecheck, zero-warning lint, tests, production build, API hygiene, and
   architecture hygiene.
-

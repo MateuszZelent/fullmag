@@ -50,6 +50,11 @@
       "path": "crates/fullmag-api/src/schemas/planar_fields.rs",
       "symbols": ["PlanarFieldQuery", "PlanarFieldMetaResource"],
       "responsibility": "OpenAPI query and metadata schemas for sampled planar fields."
+    },
+    {
+      "path": "crates/fullmag-api/src/schemas/visualization_state.rs",
+      "symbols": ["PlanarVisualizationState"],
+      "responsibility": "Session-scoped planar presentation range and raster opacity, outside ProblemIR."
     }
   ],
   "qualification_gates": [
@@ -326,8 +331,8 @@
     {
       "id": "api-build",
       "path": "crates/fullmag-api/src/router_v2/handlers/data/planar_fields.rs",
-      "symbol": "resolve_dynamic_extent",
-      "responsibility": "Currently collapse all dynamic tags into one padding-only branch: FDM bounds use the post-target selected mask and FEM bounds use all mesh nodes."
+      "symbol": "resolve_resolution",
+      "responsibility": "Validate bounded planar resource resolution before request construction; target/extent resolution remains an API request-build responsibility."
     },
     {
       "id": "fem-field-carrier",
@@ -340,6 +345,24 @@
       "path": "crates/fullmag-api/src/router_v2/handlers/data/planar_fields.rs",
       "symbol": "meta_resource",
       "responsibility": "Build planar metadata; current finite-only extrema include serialized empty-air zeros."
+    },
+    {
+      "id": "planar-presentation-state",
+      "path": "crates/fullmag-api/src/schemas/visualization_state.rs",
+      "symbol": "default_planar_visualization_state",
+      "responsibility": "Own canonical planar presentation state without changing monitor or sampler identity."
+    },
+    {
+      "id": "planar-overlay-codec",
+      "path": "crates/fullmag-api/src/fem_cross_section.rs",
+      "symbol": "serialize_planar_overlay_fmcs_v4",
+      "responsibility": "Own the exact FMCS v4 planar-overlay representation and its parallel segment classes."
+    },
+    {
+      "id": "planar-overlay-classifier",
+      "path": "crates/fullmag-api/src/planar_sampling/fem.rs",
+      "symbol": "build_overlay",
+      "responsibility": "Derive planar interior, target-boundary, and degenerate segment classes from FEM target topology."
     },
     {
       "id": "ui-plan",

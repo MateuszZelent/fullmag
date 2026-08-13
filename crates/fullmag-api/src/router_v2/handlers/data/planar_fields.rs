@@ -34,7 +34,7 @@ use crate::{
     schemas::{
         PlanarFieldFrameResource, PlanarFieldLinksResource, PlanarFieldMetaResource,
         PlanarFieldOccupancyResource, PlanarFieldProbeQuery, PlanarFieldProbeResource,
-        PlanarFieldQuery,
+        PlanarFieldQuery, PlanarMeshOverlayDescriptor,
     },
     types::AppState,
 };
@@ -346,7 +346,7 @@ pub async fn get_planar_field_render_png(
     path = "/v2/sessions/current/data/fields/{quantity_id}/planar-monitors/{monitor_id}/mesh-overlay",
     params(("quantity_id" = String, Path), ("monitor_id" = String, Path), PlanarFieldQuery),
     responses(
-        (status = 200, description = "FMCS v3 planar mesh overlay"),
+        (status = 200, description = "FMCS v4 planar mesh overlay with exact segment classes"),
         (status = 204, description = "Structured grid has no FEM overlay"),
         (status = 304, description = "Not modified"),
         (status = 400, description = "Invalid planar query", body = crate::schemas::common::ApiErrorResponse),
@@ -366,11 +366,12 @@ pub async fn get_planar_field_mesh_overlay(
     let Some(overlay) = built.result.overlay.as_ref() else {
         return Ok(StatusCode::NO_CONTENT.into_response());
     };
-    if etag_matches(&headers, &built.etag) {
-        return not_modified(&built.etag);
+    let overlay_etag = planar_overlay_etag(&built.etag);
+    if etag_matches(&headers, &overlay_etag) {
+        return not_modified(&overlay_etag);
     }
-    let bytes = crate::fem_cross_section::serialize_planar_overlay_fmcs_v3(overlay);
-    binary_response(bytes, "application/octet-stream", &built.etag)
+    let bytes = crate::fem_cross_section::serialize_planar_overlay_fmcs_v4(overlay);
+    binary_response(bytes, "application/octet-stream", &overlay_etag)
 }
 
 async fn build_planar_field(
@@ -823,6 +824,19 @@ fn meta_resource(built: &BuiltPlanarField) -> PlanarFieldMetaResource {
         scalar_min,
         scalar_max,
         etag: built.etag.clone(),
+        mesh_overlay_descriptor: if built.result.overlay.is_some() {
+            PlanarMeshOverlayDescriptor {
+                available: true,
+                codec: Some("fmcs.v4".to_string()),
+                boundary_classification: "exact".to_string(),
+            }
+        } else {
+            PlanarMeshOverlayDescriptor {
+                available: false,
+                codec: None,
+                boundary_classification: "unavailable".to_string(),
+            }
+        },
         links: PlanarFieldLinksResource {
             scalar: format!("{base}/scalar?{query}"),
             vectors: format!("{base}/vectors?{query}"),
@@ -832,6 +846,13 @@ fn meta_resource(built: &BuiltPlanarField) -> PlanarFieldMetaResource {
             render_png: format!("{base}/render.png?{query}"),
         },
     }
+}
+
+fn planar_overlay_etag(sample_etag: &str) -> String {
+    format!(
+        "\"fm-planar-overlay-fmcs-v4:{:x}\"",
+        Sha256::digest(sample_etag.as_bytes())
+    )
 }
 
 fn canonical_sample_query(built: &BuiltPlanarField) -> String {

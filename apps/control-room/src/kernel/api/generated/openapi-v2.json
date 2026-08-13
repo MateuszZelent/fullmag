@@ -14637,6 +14637,39 @@
           }
         ]
       },
+      "PlanarColorRangeMode": {
+        "enum": [
+          "auto",
+          "manual",
+          "symmetric"
+        ],
+        "type": "string"
+      },
+      "PlanarColorRangeState": {
+        "properties": {
+          "max": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "min": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "mode": {
+            "$ref": "#/components/schemas/PlanarColorRangeMode"
+          }
+        },
+        "required": [
+          "mode"
+        ],
+        "type": "object"
+      },
       "PlanarEmptyPolicySchema": {
         "enum": [
           "exclude_empty",
@@ -14875,6 +14908,9 @@
           "links": {
             "$ref": "#/components/schemas/PlanarFieldLinksResource"
           },
+          "mesh_overlay_descriptor": {
+            "$ref": "#/components/schemas/PlanarMeshOverlayDescriptor"
+          },
           "mesh_revision": {
             "type": "string"
           },
@@ -14991,6 +15027,7 @@
           "fold_count",
           "non_injective",
           "etag",
+          "mesh_overlay_descriptor",
           "links"
         ],
         "type": "object"
@@ -15214,6 +15251,27 @@
           "boundaries",
           "vectors",
           "probes"
+        ],
+        "type": "object"
+      },
+      "PlanarMeshOverlayDescriptor": {
+        "properties": {
+          "available": {
+            "type": "boolean"
+          },
+          "boundary_classification": {
+            "type": "string"
+          },
+          "codec": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "available",
+          "boundary_classification"
         ],
         "type": "object"
       },
@@ -15695,12 +15753,6 @@
               "null"
             ]
           },
-          "auto_contrast": {
-            "type": [
-              "boolean",
-              "null"
-            ]
-          },
           "colormap": {
             "type": [
               "string",
@@ -15715,20 +15767,6 @@
               {
                 "$ref": "#/components/schemas/PlanarFieldComponent"
               }
-            ]
-          },
-          "contrast_max": {
-            "format": "double",
-            "type": [
-              "number",
-              "null"
-            ]
-          },
-          "contrast_min": {
-            "format": "double",
-            "type": [
-              "number",
-              "null"
             ]
           },
           "display_unit": {
@@ -15773,6 +15811,23 @@
               "null"
             ]
           },
+          "range": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/PlanarColorRangeState"
+              }
+            ]
+          },
+          "raster_opacity": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
           "resolution": {
             "oneOf": [
               {
@@ -15814,28 +15869,11 @@
               "null"
             ]
           },
-          "auto_contrast": {
-            "type": "boolean"
-          },
           "colormap": {
             "type": "string"
           },
           "component": {
             "$ref": "#/components/schemas/PlanarFieldComponent"
-          },
-          "contrast_max": {
-            "format": "double",
-            "type": [
-              "number",
-              "null"
-            ]
-          },
-          "contrast_min": {
-            "format": "double",
-            "type": [
-              "number",
-              "null"
-            ]
           },
           "display_unit": {
             "type": [
@@ -15855,6 +15893,13 @@
           "quantity_id": {
             "type": "string"
           },
+          "range": {
+            "$ref": "#/components/schemas/PlanarColorRangeState"
+          },
+          "raster_opacity": {
+            "format": "double",
+            "type": "number"
+          },
           "resolution": {
             "$ref": "#/components/schemas/PlanarResolutionPolicy"
           },
@@ -15870,7 +15915,6 @@
           "quantity_id",
           "component",
           "colormap",
-          "auto_contrast",
           "resolution",
           "quality",
           "layers",
@@ -30270,7 +30314,7 @@
         ],
         "responses": {
           "200": {
-            "description": "FMCS v3 planar mesh overlay"
+            "description": "FMCS v4 planar mesh overlay with exact segment classes"
           },
           "204": {
             "description": "Structured grid has no FEM overlay"
@@ -39859,8 +39903,8 @@
     }
   ],
   "x-fullmag-build-identity": {
-    "built_at_utc": "2026-08-12T22:43:18Z",
-    "git_commit": "ab973377ab90ec99a9633c6635c40e8f9faa4a2f",
+    "built_at_utc": "2026-08-13T02:32:49Z",
+    "git_commit": "594939f57769b51d9ec601c1a1072846a837f204",
     "source_snapshot_sha256": "unknown",
     "worktree_state": "dirty"
   },

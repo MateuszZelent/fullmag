@@ -97,6 +97,17 @@ export function PlanarVisualizationSection({
     );
   }
 
+  const range = planar.range ?? { mode: "auto" as const, min: null, max: null };
+  const automaticRange = range.mode === "auto";
+  const rangeMin = range.min;
+  const rangeMax = range.max;
+  const manualRange =
+    range.mode === "manual" &&
+    typeof rangeMin === "number" &&
+    typeof rangeMax === "number"
+      ? { mode: "manual" as const, min: rangeMin, max: rangeMax }
+      : { mode: "manual" as const, min: -1, max: 1 };
+
   return (
     <InspectorGroup title="2D visualization">
       <FieldRow label="Target" value={coverage.targetKind} />
@@ -187,44 +198,39 @@ export function PlanarVisualizationSection({
       <InspectorPropertyRow label="Automatic range">
         <Switch
           aria-label="Automatic planar color range"
-          checked={planar.auto_contrast}
+          checked={automaticRange}
           onCheckedChange={(checked) =>
             patch({
-              auto_contrast: checked,
-              ...(checked
-                ? { contrast_max: null, contrast_min: null }
-                : undefined),
+              range: checked
+                ? { mode: "auto", min: null, max: null }
+                : manualRange,
             })
           }
         />
       </InspectorPropertyRow>
-      {!planar.auto_contrast ? (
+      {!automaticRange ? (
         <>
           <FormField
             label="Range minimum"
             type="number"
-            value={planar.contrast_min ?? ""}
-            onChange={(event) =>
-              patch({
-                contrast_min:
-                  event.currentTarget.value === ""
-                    ? null
-                    : event.currentTarget.valueAsNumber,
-              })
-            }
+            value={manualRange.min}
+            onChange={(event) => {
+              const min = event.currentTarget.valueAsNumber;
+              if (Number.isFinite(min) && min < manualRange.max) {
+                patch({ range: { mode: "manual", min, max: manualRange.max } });
+              }
+            }}
           />
           <FormField
             label="Range maximum"
             type="number"
-            value={planar.contrast_max ?? ""}
-            onChange={(event) =>
-              patch({
-                contrast_max:
-                  event.currentTarget.value === ""
-                    ? null
-                    : event.currentTarget.valueAsNumber,
-              })
-            }
+            value={manualRange.max}
+            onChange={(event) => {
+              const max = event.currentTarget.valueAsNumber;
+              if (Number.isFinite(max) && manualRange.min < max) {
+                patch({ range: { mode: "manual", min: manualRange.min, max } });
+              }
+            }}
           />
         </>
       ) : null}

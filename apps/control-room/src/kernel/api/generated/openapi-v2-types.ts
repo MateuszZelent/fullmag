@@ -7003,6 +7003,15 @@ export interface components {
             source_path: string;
         };
         /** @enum {string} */
+        PlanarColorRangeMode: "auto" | "manual" | "symmetric";
+        PlanarColorRangeState: {
+            /** Format: double */
+            max?: number | null;
+            /** Format: double */
+            min?: number | null;
+            mode: components["schemas"]["PlanarColorRangeMode"];
+        };
+        /** @enum {string} */
         PlanarEmptyPolicySchema: "exclude_empty" | "include_air_as_zero";
         PlanarExtentSchema: {
             /** @enum {string} */
@@ -7064,6 +7073,7 @@ export interface components {
             /** Format: int32 */
             integration_order: number;
             links: components["schemas"]["PlanarFieldLinksResource"];
+            mesh_overlay_descriptor: components["schemas"]["PlanarMeshOverlayDescriptor"];
             mesh_revision: string;
             monitor_hash: string;
             monitor_id: string;
@@ -7143,6 +7153,11 @@ export interface components {
             probes: boolean;
             raster: boolean;
             vectors: boolean;
+        };
+        PlanarMeshOverlayDescriptor: {
+            available: boolean;
+            boundary_classification: string;
+            codec?: string | null;
         };
         PlanarMonitorCollectionResource: {
             count: number;
@@ -7262,36 +7277,32 @@ export interface components {
         };
         PlanarVisualizationPatch: {
             active_monitor_id?: string | null;
-            auto_contrast?: boolean | null;
             colormap?: string | null;
             component?: null | components["schemas"]["PlanarFieldComponent"];
-            /** Format: double */
-            contrast_max?: number | null;
-            /** Format: double */
-            contrast_min?: number | null;
             display_unit?: string | null;
             interaction?: null | components["schemas"]["PlanarInteractionState"];
             layers?: null | components["schemas"]["PlanarLayerState"];
             quality?: null | components["schemas"]["PlanarRenderQuality"];
             quantity_id?: string | null;
+            range?: null | components["schemas"]["PlanarColorRangeState"];
+            /** Format: double */
+            raster_opacity?: number | null;
             resolution?: null | components["schemas"]["PlanarResolutionPolicy"];
             vector_style?: null | components["schemas"]["PlanarVectorStyleState"];
             view_scope?: null | components["schemas"]["PlanarViewScopeState"];
         };
         PlanarVisualizationState: {
             active_monitor_id?: string | null;
-            auto_contrast: boolean;
             colormap: string;
             component: components["schemas"]["PlanarFieldComponent"];
-            /** Format: double */
-            contrast_max?: number | null;
-            /** Format: double */
-            contrast_min?: number | null;
             display_unit?: string | null;
             interaction: components["schemas"]["PlanarInteractionState"];
             layers: components["schemas"]["PlanarLayerState"];
             quality: components["schemas"]["PlanarRenderQuality"];
             quantity_id: string;
+            range?: components["schemas"]["PlanarColorRangeState"];
+            /** Format: double */
+            raster_opacity?: number;
             resolution: components["schemas"]["PlanarResolutionPolicy"];
             vector_style: components["schemas"]["PlanarVectorStyleState"];
             view_scope: components["schemas"]["PlanarViewScopeState"];
@@ -12167,7 +12178,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description FMCS v3 planar mesh overlay */
+            /** @description FMCS v4 planar mesh overlay with exact segment classes */
             200: {
                 headers: {
                     [name: string]: unknown;

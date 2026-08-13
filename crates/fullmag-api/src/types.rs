@@ -63,6 +63,9 @@ pub(crate) struct DisplayPresentationState {
     pub visualization_vector_style: Option<VectorStyleVisualizationState>,
     #[serde(default)]
     pub visualization_overrides: Option<Vec<VisualizationOverrideState>>,
+    /// Bounded restore diagnostics for presentation-schema migrations.
+    #[serde(default)]
+    pub visualization_restore_warnings: Vec<String>,
 }
 
 impl Default for DisplayPresentationState {
@@ -83,6 +86,7 @@ impl Default for DisplayPresentationState {
             visualization_clip: None,
             visualization_vector_style: None,
             visualization_overrides: None,
+            visualization_restore_warnings: Vec::new(),
         }
     }
 }

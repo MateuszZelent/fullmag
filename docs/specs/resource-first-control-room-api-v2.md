@@ -377,6 +377,18 @@ Existing `/samples/slice` and `/projection` resources remain compatibility
 adapters to the same `PlanarSamplingEngine` until a separately approved removal.
 They are not a second numerical implementation.
 
+The session-scoped `visualization/state.planar` resource owns range and raster
+opacity. Its schema-7 range is `{ mode: auto|manual|symmetric, min, max }`;
+manual limits are finite ordered SI values and the other modes carry null
+limits. Display-unit conversion is a client presentation transform. Schema-6
+`auto_contrast` and `contrast_*` are persisted migration input only and never
+new browser/OpenAPI write aliases. `mesh-overlay` remains the existing data
+route: `FMCS v4` adds parallel segment-kind bytes (`mesh_interior`, exact
+`target_boundary`, or `unclassified_degenerate`) and a representation-specific
+ETag. `FMCS v3` has no boundary proof and is degraded; FDM returns `204` with
+an unavailable descriptor. The sample token and canonical query identity do
+not change.
+
 The `model` family owns canonical authoring state. Geometry object creation is a model transaction first and a mesh build only after the scene commit succeeds.
 
 The control-room Model explorer is object-first. Ferromagnetic objects own the primary navigation path for geometry, regions, magnetic parameters, magnetic texture, mesh, and visualization. Material and magnetization entries may remain reusable assets in `SceneDocument`, but browser modules focus them through the selected object instead of exposing standalone top-level Model branches.

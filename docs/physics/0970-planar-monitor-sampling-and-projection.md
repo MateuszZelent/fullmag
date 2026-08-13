@@ -575,6 +575,41 @@ resource links. It does not yet expose source backend/device/precision or a
 complete requested/resolved execution record. That provenance gap blocks GPU
 source qualification.
 
+### Presentation state and target-boundary overlay
+
+Presentation is a session-scoped visualization resource and is never lowered
+to Python, `ProblemIR`, the planner, monitor identity, or the sampling query.
+Its canonical planar range is `range: { mode, min, max }`, where `mode` is
+`auto`, `manual`, or `symmetric`. Limits are canonical SI values: the selected
+display unit transforms only labels, ticks, and colorbar values. `manual`
+requires finite `$\\min < \\max$`; `auto` and `symmetric` require null limits.
+`symmetric` computes `$[-a,a]$`, where `$a$` is the maximum absolute finite
+sample value after empty and masked samples have been excluded. When no such
+value exists it deterministically uses `$[0,0]$`; it must not borrow a previous
+range. `raster_opacity` is a finite presentation value in `$[0,1]$`, defaults
+to `$1$`, and is rejected outside that interval rather than silently clamped.
+
+The optional mesh-overlay resource is independent of `surface_projection`.
+For FEM it carries the topological boundary of the resolved selected target
+intersected by the monitor plane, not material interfaces and not the monitor
+rectangle. Each segment is classified before serialization as
+`mesh_interior`, `target_boundary`, or `unclassified_degenerate`; degenerate
+segments must never be labelled boundary. FDM has no published topology and
+therefore returns unavailable (`204`) rather than an inferred rectangle. The
+classification is exact only when the backend derives it from target
+topology/adjacency. A legacy `FMCS v3` payload has no segment classification
+and is degraded/unavailable for target-boundary rendering; the frontend must
+not float-deduplicate it heuristically. `FMCS v4` publishes the parallel
+classification bytes. Its representation-specific ETag includes the codec
+version while preserving the sample token and all sampling identities.
+
+Persisted visualization state migration from schema 6 is one-way: legacy
+`auto_contrast=true` or missing becomes `range.auto`; `false` with finite
+ordered legacy limits becomes `range.manual`; malformed legacy manual limits
+produce controlled restore diagnostics/reset (or restore rejection), never a
+silent clamp. New HTTP and OpenAPI payloads expose only `range` and
+`raster_opacity` for planar presentation.
+
 (planar-monitor-validation)=
 ## Validation
 
@@ -643,6 +678,9 @@ Structural validation does not prove scientific correctness.
 - `include_air_as_zero` currently contributes empty-bin zeros to API metadata
   extrema; this diverges from the occupancy-aware terminal range contract.
 - Source backend/device/precision are missing from planar resource metadata.
+- Planar target-boundary rendering is only contract-implemented after the
+  `FMCS v4` codec, route, and frontend decoder tests; it remains browser and
+  runtime unqualified until the requested backend/mode evidence is captured.
 - Scale-aware clipping tolerances and a spatial index remain required for
   production performance and scale invariance.
 - The failed current browser smoke blocks visible-canvas, lifecycle,
@@ -680,6 +718,9 @@ stable symbols, not line-number claims.
 | IR validation | `crates/fullmag-ir/src/validation.rs` | `validate_planar_monitors` | Identity, target, frame, extent, and operator validation | all authoring lanes | `crates/fullmag-ir/tests/ir_tests.rs::planar_monitor_validation_rejects_invalid_values_and_duplicates` | source + focused tests | [source](https://github.com/MateuszZelent/fullmag/blob/5138078f7fd7b65dfc231faa4aa11c02d8ebf52d/crates/fullmag-ir/src/validation.rs) |
 | OpenAPI monitor schema | `crates/fullmag-api/src/schemas/planar_monitors.rs` | `PlanarMonitorSchema` | Publish the canonical planar-monitor authoring schema | API authoring | OpenAPI planar monitor contract tests | source + focused tests | [source](https://github.com/MateuszZelent/fullmag/blob/5138078f7fd7b65dfc231faa4aa11c02d8ebf52d/crates/fullmag-api/src/schemas/planar_monitors.rs) |
 | OpenAPI planar field schemas | `crates/fullmag-api/src/schemas/planar_fields.rs` | `PlanarFieldQuery`, `PlanarFieldMetaResource` | Define bounded resource queries and revisioned sampling metadata | API data plane | planar field resource/OpenAPI tests | source + focused tests | [source](https://github.com/MateuszZelent/fullmag/blob/5138078f7fd7b65dfc231faa4aa11c02d8ebf52d/crates/fullmag-api/src/schemas/planar_fields.rs) |
+| Canonical planar presentation | `crates/fullmag-api/src/schemas/visualization_state.rs` | `PlanarVisualizationState`; `PlanarColorRangeState` | Own range mode, SI limits, and raster opacity without changing monitor semantics | API visualization | visualization-state migration and patch tests | contract implementation pending Task 7A validation | local source at current revision |
+| Exact target-boundary codec | `crates/fullmag-api/src/fem_cross_section.rs` | `serialize_planar_overlay_fmcs_v4` | Serialize parallel exact segment classes in representation-specific `FMCS v4` | FEM postprocessing | Tet4 interior/boundary/degenerate and route ETag tests | contract implementation pending Task 7A validation | local source at current revision |
+| Target-boundary classifier | `crates/fullmag-api/src/planar_sampling/fem.rs` | `build_overlay` | Derive interior, target-boundary, and degenerate classes from selected-target topology | FEM postprocessing | scoped overlay tests | contract implementation pending Task 7A validation | local source at current revision |
 | Frame equations | `crates/fullmag-api/src/planar_sampling/frame.rs` | `try_from_ir` | Resolve and validate physical frame | all sampling lanes | `planar_sampling_fem_p1_linear_arbitrary_plane_is_barycentric` | source + focused tests | [source](https://github.com/MateuszZelent/fullmag/blob/5138078f7fd7b65dfc231faa4aa11c02d8ebf52d/crates/fullmag-api/src/planar_sampling/frame.rs) |
 | Backend-neutral sampler entry | `crates/fullmag-api/src/planar_sampling/contract.rs` | `sample_fdm` | Validate request and apply requested component | FDM source | `planar_sampling_fdm_constant_scalar_and_vector_basis_are_exact` | source + focused tests | [source](https://github.com/MateuszZelent/fullmag/blob/5138078f7fd7b65dfc231faa4aa11c02d8ebf52d/crates/fullmag-api/src/planar_sampling/contract.rs) |
 | Vector component semantics | `crates/fullmag-api/src/planar_sampling/contract.rs` | `apply_component` | Derive world/monitor components after reduction | FDM/FEM source | `planar_sampling_orientation_uses_monitor_basis_and_masks_zero_vectors` | source + focused tests | [source](https://github.com/MateuszZelent/fullmag/blob/5138078f7fd7b65dfc231faa4aa11c02d8ebf52d/crates/fullmag-api/src/planar_sampling/contract.rs) |

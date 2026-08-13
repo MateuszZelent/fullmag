@@ -85,8 +85,10 @@ not inferred from a scalar magnitude image.
 The physical definition is a quantity- and resolution-independent
 `PlanarMonitor`: target, right-handed frame, extent policy, and one of
 `plane_sample`, `slab_average`, `depth_projection`, or `surface_projection`.
-Quantity/component/unit/range/palette and sampling resolution/quality belong to
-the planar visualization profile or data request. Runtime mesh-part and airbox
+Quantity/component/unit/range/palette/opacity and sampling resolution/quality belong to
+the planar visualization profile or data request. Range is explicit
+`auto | manual | symmetric`; manual limits are canonical SI and display units
+only transform presentation. Runtime mesh-part and airbox
 scopes narrow a monitor target but never enter canonical Python or `ProblemIR`.
 
 The backend performs physical sampling. FDM uses explicit cell reconstruction
@@ -122,10 +124,16 @@ pinned probe resolves exact backend world coordinate/value. Draft position or
 thickness interaction may use a bounded preview request and commits the target
 resolution after pointer release.
 
-Scalar auto-range ignores empty/non-finite samples. Vectors expose
+Scalar `auto` and `symmetric` range ignores empty/masked/non-finite samples;
+empty input produces deterministic zero range. `raster_opacity` is passed to
+the base raster only and has no implicit clamp. Vectors expose
 world/monitor components and an explicit normal indicator. Contours stop at
-masked cells. Mesh overlays use physical monitor coordinates. Surface folds or
-overlaps remain visible degraded diagnostics.
+masked cells. Mesh overlays use physical monitor coordinates. `FMCS v4`
+segment classes distinguish `mesh_interior`, exact `target_boundary`, and
+`unclassified_degenerate`; v3 has no exact-boundary interpretation and is
+rendered only as degraded geometry. FDM `204` means unavailable, never a
+guessed rectangular boundary. Surface folds or overlaps remain visible degraded
+diagnostics.
 
 ## 6. Tests
 
@@ -147,6 +155,9 @@ Required tests:
   PNG export resources, and no removed live 2D or static cross-section center module;
 - manufactured FDM/FEM tests prove plane, slab, depth, surface, vector-basis,
   occupancy, and refinement-invariant measure weighting;
+- range-state migration/validation, `FMCS v4` exact-boundary decoding, v3
+  degraded compatibility, FDM unavailable overlay, and representation ETag
+  invalidation are covered below renderer integration;
 - object/region/part/airbox/result/monitor inspector coverage uses one registry
   with independent 3D and planar profiles;
 - a 100-switch browser audit proves no increasing worker/listener/canvas count,

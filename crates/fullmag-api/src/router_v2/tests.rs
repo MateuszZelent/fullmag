@@ -4888,7 +4888,7 @@ async fn visualization_state_exposes_v2_layer_model_with_legacy_projection() {
     assert_eq!(response.status(), StatusCode::OK);
 
     let json = body_json(response).await;
-    assert_eq!(json["schema_version"], 6);
+    assert_eq!(json["schema_version"], 7);
     assert_eq!(
         json["quantity"]["active_quantity_id"],
         json["active_quantity_id"]
@@ -5150,7 +5150,7 @@ async fn visualization_state_patch_accepts_nested_v2_controls() {
     assert_eq!(response.status(), StatusCode::OK);
 
     let json = body_json(response).await;
-    assert_eq!(json["schema_version"], 6);
+    assert_eq!(json["schema_version"], 7);
     assert_eq!(json["active_quantity_id"], "h_eff");
     assert_eq!(json["quantity"]["active_quantity_id"], "h_eff");
     assert_eq!(json["field_component"], "magnitude");
@@ -5255,6 +5255,12 @@ async fn visualization_state_planar_profile_round_trips_without_mutating_three_d
                             "quantity_id": "h_demag",
                             "component": "normal",
                             "colormap": "coolwarm",
+                            "range": {
+                                "mode": "manual",
+                                "min": -2.0,
+                                "max": 4.0
+                            },
+                            "raster_opacity": 0.35,
                             "resolution": {
                                 "width": 640,
                                 "height": 320,
@@ -5281,6 +5287,10 @@ async fn visualization_state_planar_profile_round_trips_without_mutating_three_d
     assert_eq!(json["planar"]["active_monitor_id"], "plane-1");
     assert_eq!(json["planar"]["quantity_id"], "h_demag");
     assert_eq!(json["planar"]["component"], "normal");
+    assert_eq!(json["planar"]["range"]["mode"], "manual");
+    assert_eq!(json["planar"]["range"]["min"], -2.0);
+    assert_eq!(json["planar"]["range"]["max"], 4.0);
+    assert_eq!(json["planar"]["raster_opacity"], 0.35);
     assert_eq!(json["planar"]["resolution"]["width"], 640);
     assert_eq!(json["planar"]["layers"]["vectors"], true);
     assert_eq!(json["slice"]["quantity_id"], "h_demag");
@@ -5303,8 +5313,11 @@ async fn visualization_state_planar_profile_round_trips_without_mutating_three_d
                     serde_json::json!({
                         "planar": {
                             "active_monitor_id": null,
-                            "contrast_min": null,
-                            "contrast_max": null,
+                            "range": {
+                                "mode": "auto",
+                                "min": null,
+                                "max": null
+                            },
                             "display_unit": null
                         }
                     })
@@ -5320,9 +5333,48 @@ async fn visualization_state_planar_profile_round_trips_without_mutating_three_d
         cleared["planar"]["active_monitor_id"],
         serde_json::Value::Null
     );
-    assert_eq!(cleared["planar"]["contrast_min"], serde_json::Value::Null);
-    assert_eq!(cleared["planar"]["contrast_max"], serde_json::Value::Null);
+    assert_eq!(cleared["planar"]["range"]["mode"], "auto");
+    assert_eq!(cleared["planar"]["range"]["min"], serde_json::Value::Null);
+    assert_eq!(cleared["planar"]["range"]["max"], serde_json::Value::Null);
     assert_eq!(cleared["planar"]["display_unit"], serde_json::Value::Null);
+}
+
+#[tokio::test]
+async fn visualization_state_rejects_invalid_or_legacy_planar_ranges() {
+    let app = build_v2_router().with_state(test_app_state_with_live_session().await);
+    for planar in [
+        serde_json::json!({
+            "range": { "mode": "manual", "min": 2.0, "max": 2.0 }
+        }),
+        serde_json::json!({
+            "range": { "mode": "symmetric", "min": -2.0, "max": 2.0 }
+        }),
+        serde_json::json!({ "raster_opacity": 1.1 }),
+        serde_json::json!({ "auto_contrast": true }),
+    ] {
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("PATCH")
+                    .uri("/v2/sessions/current/visualization/state")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!({ "planar": planar }).to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert!(
+            matches!(
+                response.status(),
+                StatusCode::BAD_REQUEST | StatusCode::UNPROCESSABLE_ENTITY
+            ),
+            "invalid planar payload returned {}",
+            response.status()
+        );
+    }
 }
 
 #[tokio::test]
@@ -13390,6 +13442,12 @@ async fn planar_field_resources_publish_meta_binary_probe_png_and_etag() {
     assert_eq!(meta_json["scene_revision"], SCENE_REVISION.to_string());
     assert_eq!(meta_json["mesh_revision"], MESH_REVISION.to_string());
     assert_eq!(meta_json["field_revision"], FIELD_REVISION.to_string());
+    assert_eq!(meta_json["mesh_overlay_descriptor"]["available"], false);
+    assert_eq!(
+        meta_json["mesh_overlay_descriptor"]["boundary_classification"],
+        "unavailable"
+    );
+    assert!(meta_json["mesh_overlay_descriptor"]["codec"].is_null());
     let monitor_revision = meta_json["monitor_revision"].as_str().unwrap();
     let carrier_revision = meta_json["carrier_revision"].as_str().unwrap();
     let sample_token = meta_json["sample_token"].as_str().unwrap();
@@ -13797,7 +13855,7 @@ async fn planar_field_fdm_object_target_uses_published_membership_and_grid_geome
 }
 
 #[tokio::test]
-async fn planar_field_fem_overlay_is_fmcs_v3_and_mesh_part_scope_changes_sampling() {
+async fn planar_field_fem_overlay_is_fmcs_v4_and_mesh_part_scope_changes_sampling() {
     let state = test_app_state_with_live_session().await;
     let mut scene = sample_scene_document();
     scene.revision = 22;
@@ -13853,6 +13911,25 @@ async fn planar_field_fem_overlay_is_fmcs_v3_and_mesh_part_scope_changes_samplin
     let air_query =
         "?component=magnitude&resolution_x=16&resolution_y=16&scope_kind=mesh_part&scope_id=airbox";
 
+    let meta = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!("{base}/meta{body_query}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(meta.status(), StatusCode::OK);
+    let meta = body_json(meta).await;
+    assert_eq!(meta["mesh_overlay_descriptor"]["available"], true);
+    assert_eq!(meta["mesh_overlay_descriptor"]["codec"], "fmcs.v4");
+    assert_eq!(
+        meta["mesh_overlay_descriptor"]["boundary_classification"],
+        "exact"
+    );
+
     let overlay = app
         .clone()
         .oneshot(
@@ -13864,13 +13941,37 @@ async fn planar_field_fem_overlay_is_fmcs_v3_and_mesh_part_scope_changes_samplin
         .await
         .unwrap();
     assert_eq!(overlay.status(), StatusCode::OK);
+    let overlay_etag = overlay
+        .headers()
+        .get("etag")
+        .expect("FMCS v4 representation must have its own ETag")
+        .to_str()
+        .unwrap()
+        .to_string();
+    assert!(overlay_etag.contains("fmcs-v4"));
     let overlay = body_bytes(overlay).await;
     assert_eq!(&overlay[..4], b"FMCS");
-    assert_eq!(u32::from_le_bytes(overlay[4..8].try_into().unwrap()), 3);
+    assert_eq!(u32::from_le_bytes(overlay[4..8].try_into().unwrap()), 4);
     assert!(
         u32::from_le_bytes(overlay[8..12].try_into().unwrap()) > 0,
         "FEM overlay must contain at least one clipped element polygon"
     );
+    let segment_count = u32::from_le_bytes(overlay[16..20].try_into().unwrap()) as usize;
+    let segment_kinds = &overlay[overlay.len() - segment_count..];
+    assert!(segment_kinds.iter().all(|kind| *kind <= 2));
+
+    let not_modified = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!("{base}/mesh-overlay{body_query}"))
+                .header("if-none-match", &overlay_etag)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(not_modified.status(), StatusCode::NOT_MODIFIED);
 
     let body_mask = app
         .clone()
@@ -33719,6 +33820,7 @@ fn openapi_contains_planar_field_data_paths() {
         "monitor_revision",
         "carrier_revision",
         "field_revision",
+        "mesh_overlay_descriptor",
     ] {
         assert!(
             meta["required"]
@@ -33738,6 +33840,15 @@ fn openapi_contains_planar_field_data_paths() {
     ] {
         assert_eq!(meta["properties"][revision]["type"], "string", "{revision}");
     }
+    let overlay_descriptor = &schemas["PlanarMeshOverlayDescriptor"];
+    assert_eq!(
+        overlay_descriptor["properties"]["available"]["type"],
+        "boolean"
+    );
+    assert_eq!(
+        overlay_descriptor["properties"]["boundary_classification"]["type"],
+        "string"
+    );
     for resource in ["meta", "scalar", "vectors", "empty-mask", "mesh-overlay"] {
         let response = &paths[&format!(
             "/v2/sessions/current/data/fields/{{quantity_id}}/planar-monitors/{{monitor_id}}/{resource}"

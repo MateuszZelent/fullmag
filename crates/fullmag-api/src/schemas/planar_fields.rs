@@ -91,6 +91,13 @@ pub struct PlanarFieldLinksResource {
 }
 
 #[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct PlanarMeshOverlayDescriptor {
+    pub available: bool,
+    pub codec: Option<String>,
+    pub boundary_classification: String,
+}
+
+#[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct PlanarFieldMetaResource {
     pub schema_version: String,
     pub sample_token: String,
@@ -134,6 +141,7 @@ pub struct PlanarFieldMetaResource {
     pub scalar_min: Option<f64>,
     pub scalar_max: Option<f64>,
     pub etag: String,
+    pub mesh_overlay_descriptor: PlanarMeshOverlayDescriptor,
     pub links: PlanarFieldLinksResource,
 }
 
