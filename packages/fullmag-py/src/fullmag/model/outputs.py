@@ -98,6 +98,7 @@ _KNOWN_FIELDS = {
     "H_ani", "H_dmi", "H_mel", "H_ani_cubic", "H_dmi_bulk",
     "H_oe", "H_therm",
     "demag_phi",
+    "V_electric", "J_charge", "spin_potential", "spin_current_tensor",
     # Second wave (QB-17)
     "dm_dt", "torque_stt", "torque_sot",
     "eden_ex", "eden_demag", "eden_ext", "eden_drive", "eden_ani", "eden_dmi", "eden_total",
@@ -306,6 +307,7 @@ _KNOWN_QUANTITY_IDS = {
     "m", "H_ex", "H_demag", "H_ext", "H_ant", "H_eff",
     "H_ani", "H_dmi", "H_mel", "H_ani_cubic", "H_dmi_bulk", "H_oe", "H_therm",
     "demag_phi",
+    "V_electric", "J_charge", "spin_potential", "spin_current_tensor",
     "E_ex", "E_demag", "E_ext", "E_ani", "E_dmi", "E_total",
     "mode_amplitude", "mode_real", "mode_imag", "mode_phase",
     # Second wave (QB-17)
