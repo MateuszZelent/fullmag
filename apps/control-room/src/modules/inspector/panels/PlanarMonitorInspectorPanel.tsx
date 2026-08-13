@@ -24,14 +24,12 @@ import { PlanarVisualizationSection } from "../visualization/PlanarVisualization
 import {
   PlanarMonitorDefinitionEditor,
   planarMonitorDefinitionAvailabilityErrors,
-  type PlanarMonitorDefinitionAvailability,
 } from "./PlanarMonitorDefinitionEditor";
+import { usePlanarMonitorDefinitionAvailability } from "./usePlanarMonitorDefinitionAvailability";
 
-export function PlanarMonitorInspectorPanel({
-  selection,
-  definitionAvailability = {},
-}: InspectorPanelProps & { definitionAvailability?: PlanarMonitorDefinitionAvailability }) {
+export function PlanarMonitorInspectorPanel({ selection }: InspectorPanelProps) {
   const kernel = useKernel();
+  const definitionAvailability = usePlanarMonitorDefinitionAvailability();
   const monitorId = selection.ref?.type === "planar-monitor" ? selection.ref.monitorId : "";
   const resource = usePlanarMonitorResource(monitorId, { enabled: monitorId.length > 0 });
   const monitor = resource.data?.monitor;
@@ -70,7 +68,7 @@ function CommittedPlanarMonitorEditor({
   sceneRevision: number;
   selection: InspectorPanelProps["selection"];
   refetch: () => void;
-  definitionAvailability: PlanarMonitorDefinitionAvailability;
+  definitionAvailability: ReturnType<typeof usePlanarMonitorDefinitionAvailability>;
 }) {
   const kernel = useKernel();
   const [draft, setDraft] = useState<PlanarMonitorDraft>(() => planarMonitorDraftFromMonitor(monitor));
@@ -79,6 +77,7 @@ function CommittedPlanarMonitorEditor({
   const [pending, setPending] = useState(false);
   const errors = [
     ...planarMonitorValidationErrors(draft.monitor),
+    ...(draft.monitor.id === monitor.id ? [] : ["Committed monitor ID must match the resource path ID."]),
     ...planarMonitorDefinitionAvailabilityErrors(draft.monitor, definitionAvailability),
   ];
   const dirty = JSON.stringify(draft.monitor) !== JSON.stringify(monitor);
@@ -138,7 +137,7 @@ function CommittedPlanarMonitorEditor({
       <InspectorGroup title="View">
         <VisualizationContextSwitch />
       </InspectorGroup>
-      <PlanarMonitorDefinitionEditor availability={definitionAvailability} draft={draft} onChange={setDraft} />
+      <PlanarMonitorDefinitionEditor availability={definitionAvailability} draft={draft} mode="committed" onChange={setDraft} />
       <InspectorGroup title="Provenance">
         <FieldRow label="Scene revision" value={sceneRevision} />
         <FieldRow label="Source" value="SceneDocument / ProblemIR" />

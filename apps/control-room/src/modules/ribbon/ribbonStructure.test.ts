@@ -669,7 +669,7 @@ describe("ribbon structure", () => {
           extent: { kind: "universe", padding_m: 0 },
           normal: [0, 0, 1],
           normalization_version: "planar_frame_v1",
-          origin_m: [0, 0, 0],
+          origin_m: [0, 0, 1.9999999999999997e-9],
           preset: "xy",
           u_axis: [1, 0, 0],
           v_axis: [0, 1, 0],
@@ -681,8 +681,6 @@ describe("ribbon structure", () => {
       },
       ui: {
         displayLengthUnit: "nm",
-        previewPositionPercent: 62.5,
-        previewRotationDegrees: 0,
       },
     });
     expect(crossSectionWorkspaceStore.getSnapshot().draft).toBeNull();
@@ -4831,6 +4829,11 @@ function createVisualizationRibbonContext(
   const patches: VisualizationStatePatch[] = [];
   const invalidations: Array<[string, number | string]> = [];
   const api = {
+    data: {
+      domain: {
+        meta: async () => ({ bounds: { min: [-4e-9, -6e-9, -8e-9], max: [4e-9, 6e-9, 8e-9] } }),
+      },
+    },
     visualization: {
       patch: async (patch: VisualizationStatePatch) => {
         patches.push(patch);

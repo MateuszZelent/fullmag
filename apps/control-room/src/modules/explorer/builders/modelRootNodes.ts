@@ -65,7 +65,7 @@ export function buildPlanarMonitorNodes(
   if (draft) {
     const preset = draft.monitor.frame.preset?.toUpperCase() ?? "ARBITRARY";
     monitors.unshift({
-      badge: `${preset} ${draft.ui.previewPositionPercent}%`,
+      badge: preset,
       contextCommands: ["workspace.focus-selection"],
       icon: "layers",
       id: "model:definitions:planar-monitors:draft",

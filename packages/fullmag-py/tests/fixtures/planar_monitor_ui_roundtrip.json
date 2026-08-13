@@ -1,0 +1,32 @@
+{
+  "create": {
+    "id": "planar_monitor_1",
+    "name": "Midplane",
+    "target": { "kind": "magnetic_domain" },
+    "frame": {
+      "origin_m": [0, 0, 0],
+      "u_axis": [1, 0, 0],
+      "v_axis": [0, 1, 0],
+      "normal": [0, 0, 1],
+      "preset": "xy",
+      "normalization_version": "planar_frame_v1",
+      "extent": { "kind": "universe", "padding_m": 0 }
+    },
+    "operator": { "kind": "plane_sample" }
+  },
+  "patch": {
+    "id": "plane-1",
+    "name": "Mid-plane",
+    "target": { "kind": "domain" },
+    "frame": {
+      "origin_m": [0, 0, 0],
+      "u_axis": [1, 0, 0],
+      "v_axis": [0, 1, 0],
+      "normal": [0, 0, 1],
+      "preset": "xy",
+      "normalization_version": "planar_frame_v1",
+      "extent": { "kind": "target_bounds", "padding_m": 0 }
+    },
+    "operator": { "kind": "plane_sample" }
+  }
+}

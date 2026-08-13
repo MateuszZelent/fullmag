@@ -3425,8 +3425,6 @@ describe("buildModelTree", () => {
             },
             ui: {
               displayLengthUnit: "nm",
-              previewPositionPercent: 50,
-              previewRotationDegrees: 0,
             },
           },
           planarMonitors: null,

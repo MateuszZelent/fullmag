@@ -9,6 +9,7 @@ import {
   discardPlanarMonitorDraft,
   isPlanarMonitorRevisionConflict,
   planarMonitorCreateRequestFromDraft,
+  planarMonitorIdentityForCreate,
   planarMonitorValidationErrors,
   updatePlanarMonitorDraft,
 } from "@/kernel/workspace/crossSectionWorkspace";
@@ -20,13 +21,12 @@ import { MeshResourceEmpty } from "./MeshResourceView";
 import {
   PlanarMonitorDefinitionEditor,
   planarMonitorDefinitionAvailabilityErrors,
-  type PlanarMonitorDefinitionAvailability,
 } from "./PlanarMonitorDefinitionEditor";
+import { usePlanarMonitorDefinitionAvailability } from "./usePlanarMonitorDefinitionAvailability";
 
-export function PlanarMonitorDraftInspectorPanel({
-  definitionAvailability = {},
-}: { definitionAvailability?: PlanarMonitorDefinitionAvailability } = {}) {
+export function PlanarMonitorDraftInspectorPanel() {
   const kernel = useKernel();
+  const definitionAvailability = usePlanarMonitorDefinitionAvailability();
   const monitors = usePlanarMonitorsResource();
   const draft = useCrossSectionWorkspaceSelector(
     (state) => state.planarMonitorDraft,
@@ -48,8 +48,15 @@ export function PlanarMonitorDraftInspectorPanel({
     setFeedback(null);
     setConflict(false);
     try {
+      const existing = monitors.data?.monitors ?? [];
+      const hasIdentityCollision = existing.some(
+        (monitor) => monitor.id === draft.monitor.id || monitor.name === draft.monitor.name,
+      );
+      const identity = hasIdentityCollision
+        ? planarMonitorIdentityForCreate(draft.monitor.name, existing)
+        : { id: draft.monitor.id, name: draft.monitor.name };
       const request = planarMonitorCreateRequestFromDraft(
-        draft,
+        { ...draft, monitor: { ...draft.monitor, ...identity } },
         monitors.data?.scene_revision ?? 0,
       );
       const created = await kernel.api.model.planarMonitors.create(request);
@@ -100,6 +107,7 @@ export function PlanarMonitorDraftInspectorPanel({
       <PlanarMonitorDefinitionEditor
         availability={definitionAvailability}
         draft={draft}
+        mode="create"
         onChange={(next) => updatePlanarMonitorDraft(next)}
       />
       <div className="fm-inspector-toolbar">

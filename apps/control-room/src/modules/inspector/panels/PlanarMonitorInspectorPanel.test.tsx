@@ -1,11 +1,13 @@
 import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
+import { readFileSync } from "node:fs";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   installSimulationPreparationTestDom,
   TestElement,
+  TestEvent,
   TestNode,
 } from "@/kernel/layout/simulationPreparationTestDom.test-support";
 
@@ -55,25 +57,8 @@ vi.mock("@/kernel/resources/planarMonitorResources", () => ({
   }),
 }));
 
-vi.mock("./PlanarMonitorDefinitionEditor", () => ({
-  planarMonitorDefinitionAvailabilityErrors: () => [],
-  PlanarMonitorDefinitionEditor: ({ draft, onChange }: {
-    draft: { monitor: typeof monitorFixture };
-    onChange: (draft: unknown) => void;
-  }) => (
-    <>
-      <input aria-label="Name" readOnly value={draft.monitor.name} />
-      <button
-        type="button"
-        onClick={() => onChange({
-          ...draft,
-          monitor: { ...draft.monitor, name: "Edited monitor" },
-        })}
-      >
-        Edit monitor
-      </button>
-    </>
-  ),
+vi.mock("./usePlanarMonitorDefinitionAvailability", () => ({
+  usePlanarMonitorDefinitionAvailability: () => ({}),
 }));
 
 vi.mock("../visualization/VisualizationContextSwitch", () => ({
@@ -131,18 +116,18 @@ describe("PlanarMonitorInspectorPanel", () => {
     const root = createRoot(container as unknown as Element);
     try {
       await act(async () => root.render(<PlanarMonitorInspectorPanel selection={selection()} />));
-      await act(async () => findButton(container, "Edit monitor").click());
+      await act(async () => change(findControl(container, "Target kind"), "domain"));
       expect(mocks.patch).not.toHaveBeenCalled();
 
       await act(async () => findButton(container, "Discard").click());
-      expect(controlValue(findControl(container, "Name"))).toBe("Mid-plane");
+      expect(findButton(container, "Apply").disabled).toBe(true);
       expect(mocks.patch).not.toHaveBeenCalled();
 
-      await act(async () => findButton(container, "Edit monitor").click());
+      await act(async () => change(findControl(container, "Target kind"), "domain"));
       await act(async () => findButton(container, "Apply").click());
       expect(mocks.patch).toHaveBeenCalledWith("plane-1", {
         expected_scene_revision: 7,
-        monitor: { ...monitorFixture, name: "Edited monitor" },
+        monitor: uiRoundtripFixture().patch,
       });
     } finally {
       await act(async () => root.unmount());
@@ -150,23 +135,21 @@ describe("PlanarMonitorInspectorPanel", () => {
     }
   });
 
-  it("keeps the edited draft on 409 and duplicates through the typed facade with explicit identity", async () => {
-    mocks.patch.mockRejectedValueOnce({ status: 409 });
+  it("keeps the edited draft on 409 and delegates repeated-safe identity allocation to duplicate", async () => {
+    mocks.patch.mockRejectedValueOnce({ status: 409, code: "scene_revision_conflict" });
     const dom = installSimulationPreparationTestDom();
     const container = dom.document.createElement("div");
     const root = createRoot(container as unknown as Element);
     try {
       await act(async () => root.render(<PlanarMonitorInspectorPanel selection={selection()} />));
-      await act(async () => findButton(container, "Edit monitor").click());
+      await act(async () => change(findControl(container, "Target kind"), "domain"));
       await act(async () => findButton(container, "Apply").click());
-      expect(controlValue(findControl(container, "Name"))).toBe("Edited monitor");
+      expect(controlValue(findControl(container, "Target kind"))).toBe("domain");
       expect(container.textContent).toContain("scene changed");
 
       await act(async () => findButton(container, "Duplicate").click());
       expect(mocks.duplicate).toHaveBeenCalledWith("plane-1", {
         expected_scene_revision: 7,
-        new_id: "plane-1_copy",
-        new_name: "Mid-plane copy",
       });
     } finally {
       await act(async () => root.unmount());
@@ -202,6 +185,11 @@ function controlValue(control: TestElement): string {
   return (control as TestElement & { value: string }).value;
 }
 
+function change(element: TestElement, value: string): void {
+  element.value = value;
+  element.dispatchEvent(new TestEvent("change", { bubbles: true }));
+}
+
 function findButton(root: TestNode, text: string): TestElement {
   const button = findElements(root, (element) =>
     element.tagName === "BUTTON" && element.textContent === text)[0];
@@ -217,4 +205,11 @@ function findElements(root: TestNode, predicate: (element: TestElement) => boole
   };
   visit(root);
   return found;
+}
+
+function uiRoundtripFixture(): { create: unknown; patch: unknown } {
+  return JSON.parse(readFileSync(
+    new URL("../../../../../../packages/fullmag-py/tests/fixtures/planar_monitor_ui_roundtrip.json", import.meta.url),
+    "utf8",
+  ));
 }

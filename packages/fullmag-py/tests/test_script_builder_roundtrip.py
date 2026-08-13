@@ -728,35 +728,11 @@ class ScriptBuilderRegionalDriveRoundTripTests(unittest.TestCase):
         film.alpha = 0.01
         study.stages.add_run(stage_id="run", until=1e-12)
         """
-        ui_created = {
-            "id": "ui_monitor",
-            "name": "UI monitor",
-            "target": {"kind": "object", "object_id": "film"},
-            "frame": {
-                "origin_m": [0.0, 0.0, 1e-9],
-                "u_axis": [1.0, 0.0, 0.0],
-                "v_axis": [0.0, 1.0, 0.0],
-                "normal": [0.0, 0.0, 1.0],
-                "preset": "xy",
-                "normalization_version": "planar_frame_v1",
-                "extent": {"kind": "target_bounds", "padding_m": 2e-9},
-            },
-            "operator": {"kind": "slab_average", "thickness_m": 5e-9},
-        }
-        ui_patched = {
-            **ui_created,
-            "name": "UI monitor patched",
-            "target": {
-                "kind": "region",
-                "object_id": "film",
-                "region_id": "film",
-            },
-            "operator": {
-                "kind": "depth_projection",
-                "reduction": "rms",
-                "empty_policy": "exclude_empty",
-            },
-        }
+        ui_fixture = json.loads(
+            (Path(__file__).parent / "fixtures" / "planar_monitor_ui_roundtrip.json").read_text()
+        )
+        ui_created = ui_fixture["create"]
+        ui_patched = ui_fixture["patch"]
         with TemporaryDirectory() as tmp_dir:
             root = Path(tmp_dir)
             loaded = _load_text(script, root, "source.py")
@@ -781,8 +757,8 @@ class ScriptBuilderRegionalDriveRoundTripTests(unittest.TestCase):
         self.assertEqual(created_ir["planar_monitors"], [ui_created])
         self.assertEqual(patched_ir["planar_monitors"], [ui_patched])
         self.assertIn("study.monitors.add_planar(", created_source)
-        self.assertIn('monitor_id="ui_monitor"', patched_source)
-        self.assertIn('reduction="rms"', patched_source)
+        self.assertIn('monitor_id="plane-1"', patched_source)
+        self.assertIn("fm.PlaneSample()", patched_source)
 
     def test_add_field_drive_roundtrip_preserves_pipeline_order_without_global_leakage(self) -> None:
         script = """

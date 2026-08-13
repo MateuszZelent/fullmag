@@ -164,6 +164,17 @@ export class TestElement extends TestNode {
     setProperty: (name: string, value: string) => void;
   };
   readonly tagName: string;
+  value = "";
+
+  get disabled(): boolean {
+    return this.attributes.has("disabled");
+  }
+
+  get options(): TestElement[] {
+    return this.childNodes.filter(
+      (child): child is TestElement => child instanceof TestElement && child.tagName === "OPTION",
+    );
+  }
 
   constructor(ownerDocument: TestDocument, tagName: string) {
     super(ownerDocument, 1, tagName.toUpperCase());

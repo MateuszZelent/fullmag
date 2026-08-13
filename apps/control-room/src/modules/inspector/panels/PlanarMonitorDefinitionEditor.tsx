@@ -16,10 +16,14 @@ import { Vector3Field } from "../primitives/Vector3Field";
 type TargetKind = PlanarMonitorTarget["kind"];
 type OperatorKind = PlanarMonitorOperator["kind"];
 type ExtentKind = PlanarMonitor["frame"]["extent"]["kind"];
+type SurfaceBoundaryKind = "object_boundary" | "region_boundary" | "named_surface";
 type Availability = { available: boolean; reason: string };
 
 export interface PlanarMonitorDefinitionAvailability {
+  objectIds?: readonly string[];
   operators?: Partial<Record<OperatorKind, Availability>>;
+  regionRefs?: readonly { objectId: string; regionId: string }[];
+  surfaceBoundaries?: Partial<Record<SurfaceBoundaryKind, Availability>>;
   targets?: Partial<Record<TargetKind, Availability>>;
 }
 
@@ -29,15 +33,137 @@ export function planarMonitorDefinitionAvailabilityErrors(
 ): string[] {
   const target = availability.targets?.[monitor.target.kind];
   const operator = availability.operators?.[monitor.operator.kind];
+  const surfaceBoundary = monitor.operator.kind === "surface_projection"
+    ? availability.surfaceBoundaries?.[monitor.operator.boundary.kind]
+    : undefined;
+  const concreteTargetErrors = monitor.target.kind === "object" && availability.objectIds &&
+      !availability.objectIds.includes(monitor.target.object_id)
+    ? [`Object target "${monitor.target.object_id}" is not executable in the current session.`]
+    : monitor.target.kind === "region" && availability.regionRefs &&
+        !availability.regionRefs.some((entry) =>
+          entry.objectId === monitor.target.object_id && entry.regionId === monitor.target.region_id)
+      ? [`Region target "${monitor.target.object_id}/${monitor.target.region_id}" is not executable in the current session.`]
+      : [];
   return [
     ...(target?.available === false ? [target.reason] : []),
+    ...concreteTargetErrors,
     ...(operator?.available === false ? [operator.reason] : []),
+    ...(surfaceBoundary?.available === false ? [surfaceBoundary.reason] : []),
   ];
+}
+
+export function resolvePlanarMonitorDefinitionAvailability({
+  discretization,
+  fdmObjectIds,
+  fdmRegionRefs,
+  femTopologyReady,
+  modelRegionRefs,
+  sceneObjectIds,
+}: {
+  discretization: string | null;
+  fdmObjectIds: readonly string[] | null;
+  fdmRegionRefs: readonly { objectId: string; regionId: string }[] | null;
+  femTopologyReady: boolean;
+  modelRegionRefs: readonly { objectId: string; regionId: string }[] | null;
+  sceneObjectIds: readonly string[] | null;
+}): PlanarMonitorDefinitionAvailability {
+  if (discretization === "fdm") {
+    const reason = "FDM boundary surface topology is not published.";
+    const objectIds = intersectIds(sceneObjectIds, fdmObjectIds);
+    const regionRefs = intersectRegionRefs(modelRegionRefs, fdmRegionRefs);
+    return {
+      objectIds: objectIds ?? undefined,
+      operators: { surface_projection: { available: false, reason } },
+      regionRefs: regionRefs ?? undefined,
+      surfaceBoundaries: unavailableSurfaceBoundaries(reason),
+      targets: {
+        object: catalogAvailability(
+          objectIds,
+          "Current-session FDM object membership is not materialized.",
+          "No executable FDM object targets are published for the active session.",
+        ),
+        region: catalogAvailability(
+          regionRefs,
+          "Current-session FDM region membership is not materialized.",
+          "No executable FDM region targets are published for the active session.",
+        ),
+      },
+    };
+  }
+  if (discretization === "fem") {
+    const objectIds = femTopologyReady ? sceneObjectIds : null;
+    const regionRefs = femTopologyReady ? modelRegionRefs : null;
+    return {
+      objectIds: objectIds ?? undefined,
+      operators: {
+        surface_projection: { available: true, reason: "Surface projection is authorable for FEM." },
+      },
+      regionRefs: regionRefs ?? undefined,
+      surfaceBoundaries: {
+        object_boundary: {
+          available: false,
+          reason: femTopologyReady
+            ? "Current-session FEM P1 field and object-boundary readiness is not published."
+            : "Current-session FEM topology is not materialized.",
+        },
+        region_boundary: { available: false, reason: "FEM region-boundary topology is not published." },
+        named_surface: { available: false, reason: "FEM named-surface topology is not published." },
+      },
+      targets: {
+        object: catalogAvailability(
+          objectIds,
+          "Current-session FEM topology and object catalog are not materialized.",
+          "No executable FEM object targets are published for the active session.",
+        ),
+        region: catalogAvailability(
+          regionRefs,
+          "Current-session FEM topology and region catalog are not materialized.",
+          "No executable FEM region targets are published for the active session.",
+        ),
+      },
+    };
+  }
+  const reason = "Active-session discretization capability is unavailable.";
+  return {
+    operators: Object.fromEntries(OPERATORS.map((kind) => [kind, { available: false, reason }])),
+    targets: Object.fromEntries(TARGETS.map((kind) => [kind, { available: false, reason }])),
+    surfaceBoundaries: unavailableSurfaceBoundaries(reason),
+  };
+}
+
+function catalogAvailability<T>(
+  entries: readonly T[] | null,
+  unavailableReason: string,
+  emptyReason: string,
+): Availability {
+  if (entries === null) return { available: false, reason: unavailableReason };
+  return entries.length > 0
+    ? { available: true, reason: "Published by the current-session resource catalogs." }
+    : { available: false, reason: emptyReason };
+}
+
+function intersectIds(
+  authored: readonly string[] | null,
+  realized: readonly string[] | null,
+): readonly string[] | null {
+  if (authored === null || realized === null) return null;
+  const realizedSet = new Set(realized);
+  return authored.filter((id) => realizedSet.has(id));
+}
+
+function intersectRegionRefs(
+  authored: readonly { objectId: string; regionId: string }[] | null,
+  realized: readonly { objectId: string; regionId: string }[] | null,
+): readonly { objectId: string; regionId: string }[] | null {
+  if (authored === null || realized === null) return null;
+  const realizedSet = new Set(realized.map((entry) => `${entry.objectId}\u0000${entry.regionId}`));
+  return authored.filter((entry) => realizedSet.has(`${entry.objectId}\u0000${entry.regionId}`));
 }
 
 interface Props {
   availability: PlanarMonitorDefinitionAvailability;
   draft: PlanarMonitorDraft;
+  mode?: "create" | "committed";
   onChange: (draft: PlanarMonitorDraft) => void;
 }
 
@@ -61,7 +187,7 @@ const EXTENTS: readonly ExtentKind[] = [
 ];
 const LENGTH_UNITS: readonly PlanarLengthUnit[] = ["m", "mm", "um", "nm"];
 
-export function PlanarMonitorDefinitionEditor({ availability, draft, onChange }: Props) {
+export function PlanarMonitorDefinitionEditor({ availability, draft, mode = "create", onChange }: Props) {
   const { monitor, ui } = draft;
   const unit = ui.displayLengthUnit;
   const updateMonitor = (next: PlanarMonitor) => onChange({ ...draft, monitor: next });
@@ -76,7 +202,7 @@ export function PlanarMonitorDefinitionEditor({ availability, draft, onChange }:
     const vector = [...monitor.frame[key]] as [number, number, number];
     const numeric = Number(value);
     vector[index] = length ? convertLength(numeric, unit, "m") : numeric;
-    updateFrame({ ...monitor.frame, [key]: vector });
+    updateFrame({ ...monitor.frame, [key]: vector, preset: null });
   };
   const displayVector = (
     key: "normal" | "origin_m" | "u_axis" | "v_axis",
@@ -91,6 +217,7 @@ export function PlanarMonitorDefinitionEditor({ availability, draft, onChange }:
       <InspectorGroup title="Identity">
         <FormField
           label="Monitor ID"
+          readOnly={mode === "committed"}
           type="text"
           value={monitor.id}
           onChange={(event) => updateMonitor({ ...monitor, id: event.currentTarget.value })}
@@ -253,7 +380,7 @@ export function PlanarMonitorDefinitionEditor({ availability, draft, onChange }:
             </option>
           ))}
         </FormField>
-        <OperatorFields draft={draft} onChange={onChange} />
+        <OperatorFields availability={availability} draft={draft} onChange={onChange} />
         <AvailabilityReasons entries={availability.operators} kinds={OPERATORS} />
       </InspectorGroup>
     </div>
@@ -295,7 +422,7 @@ function ExtentFields({ draft, onChange }: Pick<Props, "draft" | "onChange">) {
   );
 }
 
-function OperatorFields({ draft, onChange }: Pick<Props, "draft" | "onChange">) {
+function OperatorFields({ availability, draft, onChange }: Pick<Props, "availability" | "draft" | "onChange">) {
   const { monitor, ui } = draft;
   const operator = monitor.operator;
   const update = (next: PlanarMonitorOperator) =>
@@ -342,9 +469,11 @@ function OperatorFields({ draft, onChange }: Pick<Props, "draft" | "onChange">) 
         ...operator,
         boundary: boundaryForKind(event.currentTarget.value as typeof boundary.kind),
       })}>
-        <option value="object_boundary">Object boundary</option>
-        <option value="region_boundary">Region boundary</option>
-        <option value="named_surface">Named surface</option>
+        {(["object_boundary", "region_boundary", "named_surface"] as const).map((kind) => (
+          <option key={kind} disabled={availability.surfaceBoundaries?.[kind]?.available === false} value={kind}>
+            {label(kind)}
+          </option>
+        ))}
       </FormField>
       {boundary.kind === "region_boundary" ? (
         <FormField label="Boundary region ID" type="text" value={boundary.region_id} onChange={(event) => update({
@@ -365,6 +494,10 @@ function OperatorFields({ draft, onChange }: Pick<Props, "draft" | "onChange">) 
         {(["frontmost", "backmost", "nearest_to_origin", "area_weighted_overlap"] as const)
           .map((entry) => <option key={entry} value={entry}>{label(entry)}</option>)}
       </FormField>
+      <AvailabilityReasons
+        entries={availability.surfaceBoundaries}
+        kinds={["object_boundary", "region_boundary", "named_surface"]}
+      />
     </>
   );
 }
@@ -408,6 +541,14 @@ function boundaryForKind(kind: "object_boundary" | "region_boundary" | "named_su
   if (kind === "region_boundary") return { kind, region_id: "" } as const;
   if (kind === "named_surface") return { kind, surface_id: "" } as const;
   return { kind } as const;
+}
+
+function unavailableSurfaceBoundaries(reason: string): Record<SurfaceBoundaryKind, Availability> {
+  return {
+    object_boundary: { available: false, reason },
+    region_boundary: { available: false, reason },
+    named_surface: { available: false, reason },
+  };
 }
 
 function frameForPreset(

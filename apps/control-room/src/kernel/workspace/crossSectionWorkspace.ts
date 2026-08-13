@@ -35,8 +35,6 @@ export interface PlanarMonitorDraft {
   monitor: PlanarMonitor;
   ui: {
     displayLengthUnit: PlanarLengthUnit;
-    previewPositionPercent: number;
-    previewRotationDegrees: number;
   };
 }
 
@@ -68,18 +66,25 @@ export interface CrossSectionPlot {
   rotationDegrees: number;
 }
 
-export interface CrossSectionFramePreview {
+export type CrossSectionFramePreview = {
+  normal: readonly [number, number, number];
+  originM: readonly [number, number, number];
+  uAxis: readonly [number, number, number];
+  vAxis: readonly [number, number, number];
+} | {
   axis: ClipAxis;
   positionPercent: number;
   rotationDegrees: number;
-}
+};
 
 export function isPlanarMonitorRevisionConflict(error: unknown): boolean {
   return (
     typeof error === "object" &&
     error !== null &&
     "status" in error &&
-    error.status === 409
+    error.status === 409 &&
+    "code" in error &&
+    error.code === "scene_revision_conflict"
   );
 }
 
@@ -135,20 +140,33 @@ export function planarMonitorDraftFromMonitor(
     monitor: structuredClone(monitor),
     ui: {
       displayLengthUnit,
-      previewPositionPercent: 50,
-      previewRotationDegrees: 0,
     },
   };
 }
 
+export function planarMonitorIdentityForCreate(
+  requestedName: string,
+  monitors: readonly PlanarMonitor[],
+): { id: string; name: string } {
+  const baseName = requestedName.trim() || "Planar monitor";
+  const baseId = baseName.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "") || "planar_monitor";
+  let suffix = 1;
+  let id = baseId;
+  let name = baseName;
+  while (monitors.some((monitor) => monitor.id === id || monitor.name === name)) {
+    suffix += 1;
+    id = `${baseId}_${suffix}`;
+    name = `${baseName} ${suffix}`;
+  }
+  return { id, name };
+}
+
 export function planarMonitorDuplicateRequest(
-  monitor: PlanarMonitor,
+  _monitor: PlanarMonitor,
   expectedSceneRevision: number,
 ): PlanarMonitorDuplicateRequest {
   return {
     expected_scene_revision: expectedSceneRevision,
-    new_id: `${monitor.id}_copy`,
-    new_name: `${monitor.name} copy`,
   };
 }
 
@@ -202,17 +220,17 @@ export function planarMonitorValidationErrors(
   ) {
     errors.push("Frame values must be finite.");
   }
-  if (Math.abs(dot(frame.normal, frame.u_axis)) > 1e-9) {
+  if (Math.abs(dot(frame.normal, frame.u_axis)) > 1e-12) {
     errors.push("Frame normal and u axis must be orthogonal.");
   }
-  if (Math.abs(dot(frame.normal, frame.v_axis)) > 1e-9) {
+  if (Math.abs(dot(frame.normal, frame.v_axis)) > 1e-12) {
     errors.push("Frame normal and v axis must be orthogonal.");
   }
-  if (Math.abs(dot(frame.u_axis, frame.v_axis)) > 1e-9) {
+  if (Math.abs(dot(frame.u_axis, frame.v_axis)) > 1e-12) {
     errors.push("Frame u and v axes must be orthogonal.");
   }
   const handed = cross(frame.u_axis, frame.v_axis);
-  if (distance(handed, frame.normal) > 1e-9) {
+  if (dot(handed, frame.normal) < 1 - 1e-12) {
     errors.push("Frame basis must be right-handed.");
   }
   if (frame.normalization_version !== "planar_frame_v1") {
@@ -247,6 +265,13 @@ export function planarMonitorValidationErrors(
   ) {
     errors.push("Slab thickness must be finite and greater than zero.");
   }
+  if (
+    monitor.operator.kind === "depth_projection" &&
+    monitor.operator.empty_policy === "include_air_as_zero" &&
+    monitor.operator.reduction !== "mean_occupied"
+  ) {
+    errors.push("include_air_as_zero is valid only for mean_occupied.");
+  }
   if (monitor.operator.kind === "surface_projection") {
     const boundary = monitor.operator.boundary;
     if (boundary.kind === "region_boundary" && !boundary.region_id.trim()) {
@@ -260,7 +285,7 @@ export function planarMonitorValidationErrors(
 }
 
 function isUnitVector(value: number[]): boolean {
-  return value.length === 3 && value.every(Number.isFinite) && Math.abs(dot(value, value) - 1) <= 1e-9;
+  return value.length === 3 && value.every(Number.isFinite) && Math.abs(Math.sqrt(dot(value, value)) - 1) <= 1e-12;
 }
 
 function dot(left: number[], right: number[]): number {
@@ -273,10 +298,6 @@ function cross(left: number[], right: number[]): number[] {
     left[2] * right[0] - left[0] * right[2],
     left[0] * right[1] - left[1] * right[0],
   ];
-}
-
-function distance(left: number[], right: number[]): number {
-  return Math.sqrt(left.reduce((sum, value, index) => sum + (value - (right[index] ?? 0)) ** 2, 0));
 }
 
 function planarFrameFromDraft(draft: CrossSectionDraft, positionM: number) {
@@ -427,19 +448,24 @@ export const crossSectionWorkspaceStore = new CrossSectionWorkspaceStore();
 
 export function beginPlanarMonitorDraft(
   visualizationState?: VisualizationStateResource | null,
+  bounds?: { min: readonly [number, number, number]; max: readonly [number, number, number] },
 ): PlanarMonitorDraft {
   const slice = visualizationState?.slice;
   const source = visualizationState?.clip.enabled
     ? visualizationState.clip
     : slice;
   const preset = source ? PLANE_BY_AXIS[source.axis] : "xy";
-  const frame = planarPresetFrame(preset, 0, DEFAULT_PLANAR_MONITOR.frame.extent);
+  const axis = crossSectionAxisFromPlane(preset);
+  const axisIndex = axis === "x" ? 0 : axis === "y" ? 1 : 2;
+  const positionPercent = source?.position_percent ?? 50;
+  const positionM = bounds
+    ? bounds.min[axisIndex] + positionPercent / 100 * (bounds.max[axisIndex] - bounds.min[axisIndex])
+    : 0;
+  const frame = planarPresetFrame(preset, positionM, DEFAULT_PLANAR_MONITOR.frame.extent);
   const draft: PlanarMonitorDraft = {
     monitor: { ...structuredClone(DEFAULT_PLANAR_MONITOR), frame },
     ui: {
       displayLengthUnit: "nm",
-      previewPositionPercent: source?.position_percent ?? 50,
-      previewRotationDegrees: 0,
     },
   };
   const state = crossSectionWorkspaceStore.getSnapshot();
@@ -591,9 +617,7 @@ export function activeCrossSectionPlot(
 export function activeCrossSectionFrameRotationDegrees(
   state: CrossSectionWorkspaceState,
 ): number {
-  if (state.planarMonitorDraft) {
-    return state.planarMonitorDraft.ui.previewRotationDegrees;
-  }
+  if (state.planarMonitorDraft) return 0;
   if (state.draft) return state.draft.rotationDegrees;
   return activeCrossSectionPlot(state)?.rotationDegrees ?? 0;
 }
@@ -605,12 +629,12 @@ export function activeCrossSectionFramePreview(
     state.planarMonitorDraft ?? state.draft ?? activeCrossSectionPlot(state);
   if (!source) return null;
   if ("monitor" in source) {
-    const preset = source.monitor.frame.preset;
-    if (!preset) return null;
+    const frame = source.monitor.frame;
     return {
-      axis: crossSectionAxisFromPlane(preset),
-      positionPercent: source.ui.previewPositionPercent,
-      rotationDegrees: source.ui.previewRotationDegrees,
+      normal: frame.normal as [number, number, number],
+      originM: frame.origin_m as [number, number, number],
+      uAxis: frame.u_axis as [number, number, number],
+      vAxis: frame.v_axis as [number, number, number],
     };
   }
   return {
@@ -626,17 +650,24 @@ export function crossSectionFramePreviewEquals(
 ): boolean {
   if (previous === next) return true;
   if (!previous || !next) return false;
+  if ("axis" in previous || "axis" in next) {
+    return "axis" in previous && "axis" in next &&
+      previous.axis === next.axis &&
+      previous.positionPercent === next.positionPercent &&
+      previous.rotationDegrees === next.rotationDegrees;
+  }
   return (
-    previous.axis === next.axis &&
-    previous.positionPercent === next.positionPercent &&
-    previous.rotationDegrees === next.rotationDegrees
+    previous.normal.every((value, index) => value === next.normal[index]) &&
+    previous.originM.every((value, index) => value === next.originM[index]) &&
+    previous.uAxis.every((value, index) => value === next.uAxis[index]) &&
+    previous.vAxis.every((value, index) => value === next.vAxis[index])
   );
 }
 
 export function crossSectionFramePreviewToClip(
   preview: CrossSectionFramePreview | null,
 ): VisualizationStateResource["clip"] | null {
-  if (!preview) return null;
+  if (!preview || !("axis" in preview)) return null;
   return {
     axis: preview.axis,
     enabled: true,
@@ -755,8 +786,6 @@ function sanitizePlanarMonitorDraft(
     monitor: structuredClone(draft.monitor),
     ui: {
       ...draft.ui,
-      previewPositionPercent: clamp(draft.ui.previewPositionPercent, 0, 100),
-      previewRotationDegrees: clamp(draft.ui.previewRotationDegrees, -180, 180),
     },
   };
 }

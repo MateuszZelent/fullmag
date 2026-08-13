@@ -16,6 +16,7 @@ import {
   planarMonitorCreateRequestFromDraft,
   planarMonitorDraftFromMonitor,
   planarMonitorDuplicateRequest,
+  planarMonitorIdentityForCreate,
   planarMonitorValidationErrors,
   convertLength,
   resetCrossSectionWorkspaceForTests,
@@ -99,8 +100,6 @@ describe("crossSectionWorkspace", () => {
     });
     expect(draft.ui).toEqual({
       displayLengthUnit: "nm",
-      previewPositionPercent: 62.5,
-      previewRotationDegrees: 0,
     });
     expect(draft).not.toHaveProperty("colorScale");
     expect(draft).not.toHaveProperty("metric");
@@ -122,16 +121,12 @@ describe("crossSectionWorkspace", () => {
       },
       ui: {
         displayLengthUnit: "um",
-        previewPositionPercent: 125,
-        previewRotationDegrees: -270,
       },
     });
 
     expect(updated?.monitor).toEqual({ ...fullMonitor, name: "Oblique view" });
     expect(updated?.ui).toEqual({
       displayLengthUnit: "um",
-      previewPositionPercent: 100,
-      previewRotationDegrees: -180,
     });
     expect(crossSectionWorkspaceStore.getSnapshot().draft).toBeNull();
     expect(crossSectionWorkspaceStore.getSnapshot().plots).toEqual([]);
@@ -161,8 +156,6 @@ describe("crossSectionWorkspace", () => {
       },
       ui: {
         ...current.ui,
-        previewPositionPercent: 12.5,
-        previewRotationDegrees: 30,
       },
     });
 
@@ -171,9 +164,10 @@ describe("crossSectionWorkspace", () => {
         crossSectionWorkspaceStore.getSnapshot(),
       ),
     ).toEqual({
-      axis: "x",
-      positionPercent: 12.5,
-      rotationDegrees: 30,
+      normal: [1, 0, 0],
+      originM: [0, 0, 0],
+      uAxis: [0, 1, 0],
+      vAxis: [0, 0, 1],
     });
   });
 
@@ -499,14 +493,59 @@ describe("crossSectionWorkspace", () => {
     const source = structuredClone(fullMonitor);
     expect(planarMonitorDuplicateRequest(source, 12)).toEqual({
       expected_scene_revision: 12,
-      new_id: "monitor-1_copy",
-      new_name: "Full monitor copy",
     });
     expect(fullMonitor).toEqual(source);
   });
 
+  it("derives a unique create identity and delegates duplicate identity allocation to the backend", () => {
+    expect(planarMonitorIdentityForCreate("Midplane", [
+      { ...fullMonitor, id: "midplane", name: "Midplane" },
+      { ...fullMonitor, id: "midplane_2", name: "Midplane 2" },
+    ])).toEqual({ id: "midplane_3", name: "Midplane 3" });
+    expect(planarMonitorDuplicateRequest(fullMonitor, 12)).toEqual({
+      expected_scene_revision: 12,
+    });
+  });
+
+  it("uses only canonical frame data for preset and arbitrary previews", () => {
+    const draft = planarMonitorDraftFromMonitor(fullMonitor);
+    expect(draft.ui).toEqual({ displayLengthUnit: "nm" });
+    beginPlanarMonitorDraft();
+    updatePlanarMonitorDraft(draft);
+    expect(activeCrossSectionFramePreview(crossSectionWorkspaceStore.getSnapshot())).toEqual({
+      normal: [0, 0, 1],
+      originM: [1e-9, 2e-9, 3e-9],
+      uAxis: [1, 0, 0],
+      vAxis: [0, 1, 0],
+    });
+  });
+
+  it("converts compatibility clip position to canonical SI before creating the draft", () => {
+    const draft = beginPlanarMonitorDraft(visualizationState, {
+      min: [-4e-9, -6e-9, -8e-9],
+      max: [4e-9, 6e-9, 8e-9],
+    });
+    expect(draft.monitor.frame.origin_m[2]).toBeCloseTo(2e-9, 20);
+  });
+
+  it("mirrors canonical IR basis tolerance and depth empty-policy restriction", () => {
+    expect(planarMonitorValidationErrors({
+      ...fullMonitor,
+      frame: { ...fullMonitor.frame, u_axis: [1 + 2e-12, 0, 0] },
+      operator: {
+        kind: "depth_projection",
+        reduction: "rms",
+        empty_policy: "include_air_as_zero",
+      },
+    })).toEqual(expect.arrayContaining([
+      "Frame u axis must be a finite unit vector.",
+      "include_air_as_zero is valid only for mean_occupied.",
+    ]));
+  });
+
   it("recognizes a revision conflict without treating other failures as conflicts", () => {
-    expect(isPlanarMonitorRevisionConflict({ status: 409 })).toBe(true);
+    expect(isPlanarMonitorRevisionConflict({ status: 409, code: "scene_revision_conflict" })).toBe(true);
+    expect(isPlanarMonitorRevisionConflict({ status: 409, code: "duplicate_planar_monitor_id" })).toBe(false);
     expect(isPlanarMonitorRevisionConflict({ status: 422 })).toBe(false);
     expect(isPlanarMonitorRevisionConflict(new Error("network"))).toBe(false);
   });

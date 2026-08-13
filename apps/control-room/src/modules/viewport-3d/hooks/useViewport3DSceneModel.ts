@@ -5523,7 +5523,9 @@ export function useViewport3DSceneModel({
     clipIntersectionMarkers,
     crossSectionFrameClip,
     crossSectionFrameRotationDegrees:
-      crossSectionFramePreview?.rotationDegrees ?? 0,
+      crossSectionFramePreview && "rotationDegrees" in crossSectionFramePreview
+        ? crossSectionFramePreview.rotationDegrees
+        : 0,
     planarMonitorFramePreview,
     diagnostics,
     domainId: domainMeta.data?.domain_id,
