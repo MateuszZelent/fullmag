@@ -11,7 +11,11 @@ import { localProbe } from "../model/fieldMapProbe";
 import type { ContourSegment } from "./marchingSquares";
 import { decodePlanarMeshOverlay } from "./meshOverlay";
 import { createPlanarColorizer } from "./planarColorizer";
-import { createPlanarRenderer, drawPlanarOverlays } from "./planarRenderer";
+import {
+  createPlanarRenderer,
+  drawPlanarOverlays,
+  partitionPlanarMeshSegments,
+} from "./planarRenderer";
 import {
   fitPlanarInteraction,
   panPlanarInteraction,
@@ -113,18 +117,20 @@ export function PlanarSurface({
           maxLengthCells: 0.4 * model.vectorScale,
         })
       : [];
-    mesh = model.layers.mesh && model.meshOverlay
+    mesh = (model.layers.mesh || model.layers.boundaries) && model.meshOverlay
       ? decodePlanarMeshOverlay(model.meshOverlay)
       : null;
+    const meshSegments = mesh ? partitionPlanarMeshSegments(mesh) : null;
     drawOverlay = (contours = []) =>
       drawPlanarOverlays(overlayContext, overlayCanvas.width, overlayCanvas.height, {
         contours,
+        boundarySegments: meshSegments?.boundarySegments,
         glyphs,
         gridHeight: model.resolution[1],
         gridWidth: model.resolution[0],
         layers: model.layers,
         meshBounds: mesh?.bounds as [number, number, number, number] | undefined,
-        meshSegments: mesh?.segments,
+        meshSegments: meshSegments?.meshSegments,
         meshViewport: model.viewport,
         vectorColorMode: model.vectorStyle.colorMode,
         viewport: [
@@ -140,9 +146,7 @@ export function PlanarSurface({
         contours: model.layers.contours,
         height: model.resolution[1],
         level: (model.range.min + model.range.max) / 2,
-        // The planar contract has no opacity field. Opaque is the only
-        // non-invented rendering baseline until that contract exists.
-        opacity: 1,
+        opacity: model.rasterOpacity,
         width: model.resolution[0],
       });
     } else {

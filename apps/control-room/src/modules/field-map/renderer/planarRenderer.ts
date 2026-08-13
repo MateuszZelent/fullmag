@@ -22,7 +22,8 @@ export interface PlanarOverlayLayers {
   }[];
   gridWidth: number;
   gridHeight?: number;
-  layers?: { contours: boolean; mesh: boolean; vectors: boolean };
+  boundarySegments?: Float32Array;
+  layers?: { boundaries?: boolean; contours: boolean; mesh: boolean; vectors: boolean };
   meshBounds?: readonly [number, number, number, number];
   meshSegments?: Float32Array;
   meshViewport?: readonly [number, number, number, number];
@@ -41,27 +42,28 @@ export function drawPlanarOverlays(
   context.strokeStyle = "currentColor";
   context.lineWidth = 1;
 
-  if (layers.layers?.mesh !== false && layers.meshSegments) {
-    const bounds = layers.meshViewport ?? layers.meshBounds ?? [0, canvasWidth, 0, canvasHeight];
-    const mapMesh = (u: number, v: number) => [
-      ((u - bounds[0]) / (bounds[1] - bounds[0])) * canvasWidth,
-      canvasHeight -
-        ((v - bounds[2]) / (bounds[3] - bounds[2])) * canvasHeight,
-    ];
+  const bounds = layers.meshViewport ?? layers.meshBounds ?? [0, canvasWidth, 0, canvasHeight];
+  const mapMesh = (u: number, v: number) => [
+    ((u - bounds[0]) / (bounds[1] - bounds[0])) * canvasWidth,
+    canvasHeight - ((v - bounds[2]) / (bounds[3] - bounds[2])) * canvasHeight,
+  ];
+  const drawMeshSegments = (segments: Float32Array, strokeStyle: string) => {
+    context.strokeStyle = strokeStyle;
     context.beginPath();
-    for (let index = 0; index < layers.meshSegments.length; index += 4) {
-      const start = mapMesh(
-        layers.meshSegments[index] ?? 0,
-        layers.meshSegments[index + 1] ?? 0,
-      );
-      const end = mapMesh(
-        layers.meshSegments[index + 2] ?? 0,
-        layers.meshSegments[index + 3] ?? 0,
-      );
+    for (let index = 0; index < segments.length; index += 4) {
+      const start = mapMesh(segments[index] ?? 0, segments[index + 1] ?? 0);
+      const end = mapMesh(segments[index + 2] ?? 0, segments[index + 3] ?? 0);
       context.moveTo(start[0]!, start[1]!);
       context.lineTo(end[0]!, end[1]!);
     }
     context.stroke();
+  };
+
+  if (layers.layers?.mesh !== false && layers.meshSegments) {
+    drawMeshSegments(layers.meshSegments, "currentColor");
+  }
+  if (layers.layers?.boundaries && layers.boundarySegments) {
+    drawMeshSegments(layers.boundarySegments, "var(--fm-accent)");
   }
 
   if (layers.layers?.contours !== false && layers.contours?.length) {
@@ -105,6 +107,27 @@ export function drawPlanarOverlays(
     }
   }
   context.restore();
+}
+
+export function partitionPlanarMeshSegments(overlay: {
+  boundaryClassification: "degraded" | "exact";
+  segmentKinds: Uint8Array;
+  segments: Float32Array;
+}): { boundarySegments: Float32Array; meshSegments: Float32Array } {
+  if (overlay.boundaryClassification !== "exact") {
+    return { boundarySegments: new Float32Array(), meshSegments: overlay.segments };
+  }
+  const boundary = new Float32Array(overlay.segmentKinds.reduce(
+    (count, kind) => count + (kind === 1 ? 4 : 0),
+    0,
+  ));
+  let offset = 0;
+  for (let index = 0; index < overlay.segmentKinds.length; index += 1) {
+    if (overlay.segmentKinds[index] !== 1) continue;
+    boundary.set(overlay.segments.subarray(index * 4, index * 4 + 4), offset);
+    offset += 4;
+  }
+  return { boundarySegments: boundary, meshSegments: overlay.segments };
 }
 
 function vectorGlyphStrokeStyle(

@@ -28,6 +28,7 @@ import {
 } from "./model/fieldMapDataPlan";
 import {
   buildFieldMapRenderModel,
+  normalizePlanarColorRange,
   projectPlanarVectors,
   resolveFieldMapAuxiliaryDiagnostics,
   surfaceProjectionStatus,
@@ -90,7 +91,7 @@ export default function FieldMapModule() {
     component: planar?.component ?? "",
     discretization:
       domain.data?.discretization ?? runtime ?? null,
-    includeMesh: planar?.layers.mesh ?? false,
+    includeMesh: (planar?.layers.mesh ?? false) || (planar?.layers.boundaries ?? false),
     monitorId: activeMonitorId,
     quantityId: planar?.quantity_id ?? "",
     resolution: [
@@ -210,14 +211,14 @@ export default function FieldMapModule() {
         vectors: planar.layers.vectors,
       },
       mask: mask.data ? new Uint8Array(mask.data) : null,
+      meshOverlayDescriptor: {
+        available: meta.data.mesh_overlay_descriptor.available,
+        boundaryClassification: meta.data.mesh_overlay_descriptor.boundary_classification,
+        codec: meta.data.mesh_overlay_descriptor.codec,
+      },
       meshOverlay: meshOverlay.data,
-      range: planar.auto_contrast
-        ? { mode: "auto" }
-        : {
-            mode: "manual",
-            max: planar.contrast_max ?? undefined,
-            min: planar.contrast_min ?? undefined,
-          },
+      range: normalizePlanarColorRange(planar.range),
+      rasterOpacity: planar.raster_opacity ?? 1,
       resolution: meta.data.resolution as [number, number],
       sampleIdentity: scalar.data.etag ?? "",
       scalar: scalarValues,

@@ -21,6 +21,25 @@ export interface PlanarDisplayRange {
   min?: number;
 }
 
+export function normalizePlanarColorRange(range: {
+  max?: number | null;
+  min?: number | null;
+  mode: string;
+} | null | undefined): PlanarDisplayRange | null {
+  if (range === undefined) return { mode: "auto" };
+  if (range === null) return null;
+  if (range.mode === "auto" || range.mode === "symmetric") return { mode: range.mode };
+  if (
+    range.mode === "manual" &&
+    Number.isFinite(range.min) &&
+    Number.isFinite(range.max) &&
+    range.max! >= range.min!
+  ) {
+    return { mode: "manual", max: range.max!, min: range.min! };
+  }
+  return null;
+}
+
 export interface FieldMapRenderModelInput {
   bounds: readonly [number, number, number, number];
   canonicalUnit: string;
@@ -31,8 +50,14 @@ export interface FieldMapRenderModelInput {
   interaction?: { panU: number; panV: number; zoom: number };
   layers: FieldMapRenderLayers;
   mask?: Uint8Array | null;
+  meshOverlayDescriptor?: {
+    available: boolean;
+    boundaryClassification: string;
+    codec?: string | null;
+  };
   meshOverlay?: ArrayBuffer | null;
-  range: PlanarDisplayRange;
+  range: PlanarDisplayRange | null;
+  rasterOpacity?: number;
   resolution: readonly [number, number];
   sampleIdentity: string;
   scalar: Float32Array | Float64Array;
@@ -59,6 +84,7 @@ export interface FieldMapRenderModel {
   layers: FieldMapRenderLayers;
   mask: Uint8Array | null;
   meshOverlay: ArrayBuffer | null;
+  rasterOpacity: number;
   range: { max: number; min: number } | null;
   resolution: readonly [number, number];
   sampleIdentity: string;
@@ -138,21 +164,22 @@ export function buildFieldMapRenderModel(
   const requestedDisplayUnit = input.displayUnit || input.canonicalUnit;
   const displayUnit = resolvePlanarDisplayUnit(input.canonicalUnit, requestedDisplayUnit);
   const interaction = input.interaction ?? { panU: 0, panV: 0, zoom: 1 };
-  const diagnostics: string[] = [
-    "Planar opacity is unavailable: the planar visualization contract has no opacity field.",
-  ];
+  const diagnostics: string[] = [];
   if (!displayUnit.compatible) {
     diagnostics.push(`Display unit '${requestedDisplayUnit}' is incompatible with canonical unit '${input.canonicalUnit}'.`);
   }
-  if (input.layers.boundaries) {
-    diagnostics.push("2D boundaries are unavailable: the planar mesh payload has no boundary classification.");
+  const boundariesExact = input.meshOverlayDescriptor?.available === true &&
+    input.meshOverlayDescriptor.boundaryClassification === "exact" &&
+    input.meshOverlayDescriptor.codec === "fmcs.v4";
+  if (input.layers.boundaries && !boundariesExact) {
+    diagnostics.push(input.meshOverlayDescriptor?.codec === "fmcs.v3"
+      ? "2D boundaries are unavailable: FMCS v3 has no exact target-boundary classes."
+      : "2D boundaries are unavailable: mesh overlay classification is unavailable or degraded.");
   }
-  const range = input.range.mode === "symmetric"
-    ? null
-    : resolvePlanarDisplayRange(input.scalar, input.mask ?? undefined, input.range);
-  if (input.range.mode === "symmetric") {
-    diagnostics.push("Symmetric range is unavailable: the planar visualization contract has no range mode.");
-  }
+  const range = input.range
+    ? resolvePlanarDisplayRange(input.scalar, input.mask ?? undefined, input.range)
+    : null;
+  if (!input.range) diagnostics.push("Planar color range is invalid and was not rendered.");
   return {
     bounds: input.bounds,
     boundsCenter: [
@@ -172,11 +199,12 @@ export function buildFieldMapRenderModel(
     interaction,
     layers: {
       ...input.layers,
-      boundaries: input.layers.boundaries ?? false,
+      boundaries: Boolean(input.layers.boundaries && boundariesExact),
       probes: input.layers.probes ?? true,
     },
     mask: input.mask ?? null,
     meshOverlay: input.meshOverlay ?? null,
+    rasterOpacity: input.rasterOpacity ?? 1,
     range,
     resolution: input.resolution,
     sampleIdentity: input.sampleIdentity,

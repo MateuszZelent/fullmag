@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   buildFieldMapRenderModel,
+  normalizePlanarColorRange,
   resolvePlanarDisplayUnit,
   resolveFieldMapAuxiliaryDiagnostics,
   resolvePlanarDisplayRange,
@@ -178,6 +179,11 @@ describe("field-map render model", () => {
       displayUnit: "mT",
       frame: { normal: [0, 0, 1], uAxis: [1, 0, 0], vAxis: [0, 1, 0] },
       layers: { boundaries: true, contours: false, mesh: false, probes: false, raster: false, vectors: false },
+      meshOverlayDescriptor: {
+        available: false,
+        boundaryClassification: "unavailable",
+        codec: null,
+      },
       range: { mode: "symmetric" },
       resolution: [1, 1],
       sampleIdentity: "sample",
@@ -185,11 +191,75 @@ describe("field-map render model", () => {
     });
 
     expect(model.diagnostics).toEqual(expect.arrayContaining([
-      "2D boundaries are unavailable: the planar mesh payload has no boundary classification.",
+      "2D boundaries are unavailable: mesh overlay classification is unavailable or degraded.",
       "Display unit 'mT' is incompatible with canonical unit 'A/m'.",
-      "Symmetric range is unavailable: the planar visualization contract has no range mode.",
-      "Planar opacity is unavailable: the planar visualization contract has no opacity field.",
     ]));
-    expect(model.range).toBeNull();
+    expect(model.range).toEqual({ min: -1, max: 1 });
+    expect(model.layers.boundaries).toBe(false);
+  });
+
+  it("uses canonical symmetric range and raster opacity without changing scalar samples", () => {
+    const scalar = new Float64Array([-4, 2]);
+    const model = buildFieldMapRenderModel({
+      bounds: [0, 1, 0, 1],
+      canonicalUnit: "A/m",
+      component: "normal",
+      frame: { normal: [0, 0, 1], uAxis: [1, 0, 0], vAxis: [0, 1, 0] },
+      layers: { contours: false, mesh: false, raster: true, vectors: false },
+      range: { mode: "symmetric" },
+      rasterOpacity: 0.37,
+      resolution: [2, 1],
+      sampleIdentity: "sample",
+      scalar,
+    });
+
+    expect(model.range).toEqual({ min: -4, max: 4 });
+    expect(model.rasterOpacity).toBe(0.37);
+    expect(model.scalar).toBe(scalar);
+  });
+
+  it("enables boundaries only for the exact FMCS v4 descriptor", () => {
+    const input = {
+      bounds: [0, 1, 0, 1] as const,
+      canonicalUnit: "A/m",
+      component: "normal",
+      frame: { normal: [0, 0, 1] as const, uAxis: [1, 0, 0] as const, vAxis: [0, 1, 0] as const },
+      layers: { boundaries: true, contours: false, mesh: false, raster: false, vectors: false },
+      range: { mode: "auto" as const },
+      resolution: [1, 1] as const,
+      sampleIdentity: "sample",
+      scalar: new Float64Array([1]),
+    };
+    expect(buildFieldMapRenderModel({
+      ...input,
+      meshOverlayDescriptor: { available: true, boundaryClassification: "exact", codec: "fmcs.v4" },
+    }).layers.boundaries).toBe(true);
+    const legacy = buildFieldMapRenderModel({
+      ...input,
+      meshOverlayDescriptor: { available: true, boundaryClassification: "degraded", codec: "fmcs.v3" },
+    });
+    expect(legacy.layers.boundaries).toBe(false);
+    expect(legacy.diagnostics).toContain("2D boundaries are unavailable: FMCS v3 has no exact target-boundary classes.");
+  });
+
+  it("fails closed for nullable manual limits and degraded boundary classifications", () => {
+    expect(normalizePlanarColorRange({ mode: "manual", min: null, max: 2 })).toBeNull();
+    const degraded = buildFieldMapRenderModel({
+      bounds: [0, 1, 0, 1],
+      canonicalUnit: "A/m",
+      component: "normal",
+      frame: { normal: [0, 0, 1], uAxis: [1, 0, 0], vAxis: [0, 1, 0] },
+      layers: { boundaries: true, contours: false, mesh: false, raster: false, vectors: false },
+      meshOverlayDescriptor: { available: true, boundaryClassification: "future", codec: "fmcs.v5" },
+      range: null,
+      resolution: [1, 1],
+      sampleIdentity: "sample",
+      scalar: new Float64Array([1]),
+    });
+    expect(degraded.layers.boundaries).toBe(false);
+    expect(degraded.diagnostics).toEqual(expect.arrayContaining([
+      "2D boundaries are unavailable: mesh overlay classification is unavailable or degraded.",
+      "Planar color range is invalid and was not rendered.",
+    ]));
   });
 });

@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { createPlanarRenderer, drawPlanarOverlays } from "./planarRenderer";
+import { createPlanarRenderer, drawPlanarOverlays, partitionPlanarMeshSegments } from "./planarRenderer";
 
 describe("planar renderer lifecycle", () => {
   it("resizes with a bounded DPR and releases its canvas", () => {
@@ -154,5 +154,26 @@ describe("planar renderer lifecycle", () => {
     });
     expect(context.moveTo).toHaveBeenCalledWith(0, 100);
     expect(context.moveTo).toHaveBeenCalledWith(25, 75);
+  });
+
+  it("draws exact target boundaries independently from the mesh layer", () => {
+    const partition = partitionPlanarMeshSegments({
+      boundaryClassification: "exact",
+      segmentKinds: new Uint8Array([0, 1, 2]),
+      segments: new Float32Array([0, 0, 1, 0, 1, 0, 1, 1, 0, 1, 1, 1]),
+    });
+    expect(partition.boundarySegments).toEqual(new Float32Array([1, 0, 1, 1]));
+    const context = {
+      beginPath: vi.fn(), clearRect: vi.fn(), lineTo: vi.fn(), lineWidth: 0,
+      moveTo: vi.fn(), restore: vi.fn(), save: vi.fn(), stroke: vi.fn(), strokeStyle: "",
+    } as unknown as CanvasRenderingContext2D;
+    drawPlanarOverlays(context, 100, 100, {
+      boundarySegments: partition.boundarySegments,
+      gridWidth: 1,
+      layers: { boundaries: true, contours: false, mesh: false, vectors: false },
+      meshViewport: [0, 1, 0, 1],
+    });
+    expect(context.stroke).toHaveBeenCalledTimes(1);
+    expect(context.moveTo).toHaveBeenCalledWith(100, 100);
   });
 });
