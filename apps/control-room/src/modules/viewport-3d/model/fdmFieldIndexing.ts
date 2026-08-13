@@ -23,8 +23,10 @@ export function buildFdmFieldIndexResolver(
   fieldVector: Pick<
     DecodedFieldVector,
     "indexing" | "nodeIndices" | "pointCount"
-  >,
+  > &
+    Partial<Pick<DecodedFieldVector, "grid" | "nComp">>,
   domainCellCount: number,
+  _domainGridShape?: readonly [number, number, number] | null,
 ): FdmFieldIndexingResult {
   const safeDomainCellCount = Math.max(0, Math.floor(domainCellCount));
   const indexing = fieldVector.indexing ?? DEFAULT_FDM_FIELD_INDEXING;

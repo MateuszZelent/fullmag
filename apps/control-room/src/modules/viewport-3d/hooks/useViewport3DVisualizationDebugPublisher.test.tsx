@@ -548,7 +548,7 @@ describe("viewport visualization debug publisher", () => {
     publisher.dispose();
   });
 
-  it("does not lose a pending adoption when the retained frame commits again with the same id", async () => {
+  it("publishes exact pending receipts when an invalidated frame commits with the retained revision id", async () => {
     const controller = new VisualizationDebugController();
     const registry = createViewport3DRenderAdoptionRegistry();
     const materializeByTarget = new Map<string, ReturnType<typeof vi.fn>>();
@@ -584,19 +584,33 @@ describe("viewport visualization debug publisher", () => {
       byteLength: 24,
       carrierId: "part:a",
       fieldBufferId: "field-a",
+      resourceKey: "resource-a",
       scalarBufferKey: "scalar-a",
     });
+    registry.recordVectorAdoption({
+      byteLength: 48,
+      carrierId: "part:a",
+      fieldBufferId: "field-a",
+      resourceKey: "resource-a",
+      vectorBuildKey: "vector-a",
+    });
+    const sequencesBeforeCommit = registry
+      .snapshot("object:a")
+      .map((receipt) => receipt.adoptionSequence);
     publisher.commitFrame({ commitId: "frame-retained" });
     await Promise.resolve();
 
-    expect(materializeByTarget.get("object:a")).not.toHaveBeenCalled();
-    expect(materializeByTarget.get("object:b")).not.toHaveBeenCalled();
-    publisher.commitFrame({ commitId: "frame-after-adoption" });
     expect(materializeByTarget.get("object:a")).toHaveBeenCalledTimes(1);
+    expect(materializeByTarget.get("object:b")).not.toHaveBeenCalled();
     expect(controller.getSnapshots("object:a")[0]).toMatchObject({
-      ownedByteLength: 1,
-      viewport: { frameCommitId: "frame-after-adoption" },
+      ownedByteLength: 2,
+      viewport: { frameCommitId: "frame-retained" },
     });
+    expect(
+      registry
+        .snapshot("object:a")
+        .map((receipt) => receipt.adoptionSequence),
+    ).toEqual(sequencesBeforeCommit);
 
     releaseA();
     releaseB();
@@ -782,6 +796,62 @@ describe("groupViewport3DVisualizationDebugCarriers", () => {
     });
 
     expect(grouped.get("object:sample")).toEqual(["fdm-domain"]);
+  });
+});
+
+describe("FDM exact target carrier resolution", () => {
+  it("materializes the exact FDM render carrier without a FEM field model", async () => {
+    const base = syntheticScanSource({ exactRange: true });
+    const pass = base.fieldModel!.targetPasses.get("part:__air__")!;
+    const targetId = "object:sample";
+    const source = {
+      ...base,
+      fieldModel: null,
+      fullFieldBufferIdentity: {
+        bufferId: "field-fdm",
+        currentDomainGenerationId: "fdm-generation",
+        resourceKey: "/v2/sessions/current/data/fields/H_demag/samples/vector?component=full&scope_kind=full",
+      },
+      fullFieldVector: {
+        domainGenerationId: "fdm-generation",
+        dtype: "float64" as const,
+        formatVersion: 3 as const,
+        grid: [2, 1, 1] as [number, number, number],
+        indexing: "dense_grid" as const,
+        meshTopologyHash: null,
+        meshTopologyRevision: null,
+        nComp: 3,
+        nodeIndices: null,
+        pointCount: 2,
+        quantityId: "H_demag",
+        scopeId: null,
+        scopeKind: "full" as const,
+        valueCount: 6,
+        values: new Float64Array([1, 2, 3, 4, 5, 6]),
+      },
+      targets: [
+        {
+          carrierIds: [targetId],
+          renderPass: { ...pass, fieldBuffer: null },
+          target: { id: targetId, kind: "object" as const, label: "Sample" },
+        },
+      ],
+    } as unknown as Viewport3DVisualizationDebugSource;
+    const candidate = await createViewport3DVisualizationDebugCandidateBuilder({
+      source,
+      viewportId: "viewport-main",
+    })({ signal: new AbortController().signal, targetId });
+
+    const snapshot = candidate.materialize({
+      frame: { commitId: "frame-fdm-exact", committedAtMs: 1 },
+      receipts: [],
+    });
+
+    expect(snapshot.target.carrierIds).toEqual([targetId]);
+    expect(snapshot.carriers[0]).toMatchObject({
+      carrierId: targetId,
+      request: { resourceKey: source.fullFieldBufferIdentity!.resourceKey },
+    });
   });
 });
 

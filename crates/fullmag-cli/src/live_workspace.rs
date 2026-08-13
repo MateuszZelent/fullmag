@@ -5024,19 +5024,6 @@ fn is_full_grid_materialized_field(
         .is_some_and(|spec| field.vector_field_values.len() == points * spec.n_comp as usize)
 }
 
-fn is_terminal_grid_materialized_field(field: &fullmag_runner::LivePreviewField) -> bool {
-    if field.spatial_kind != "grid" {
-        return false;
-    }
-    let points = field.preview_grid[0] as usize
-        * field.preview_grid[1] as usize
-        * field.preview_grid[2] as usize;
-    fullmag_runner::quantities::quantity_spec(&field.quantity).is_some_and(|spec| {
-        spec.shape != fullmag_runner::quantities::QuantityShape::GlobalScalar
-            && field.vector_field_values.len() == points * spec.n_comp as usize
-    })
-}
-
 fn should_promote_preview_field_to_latest(field: &fullmag_runner::LivePreviewField) -> bool {
     !(field.spatial_kind == "grid"
         && (field.auto_downscaled || field.preview_grid != field.original_grid))
@@ -5212,9 +5199,7 @@ pub(crate) fn ingest_preview_fields_from_update(
     if let Some(fields) = cached_preview_fields {
         for mut field in fields {
             align_preview_field_source_coordinates(&mut field, source_step, source_time_seconds);
-            if is_full_grid_materialized_field(&field, update.grid)
-                || (terminal_authoritative && is_terminal_grid_materialized_field(&field))
-            {
+            if is_full_grid_materialized_field(&field, update.grid) {
                 promote_preview_field_to_latest_fields(&mut state.latest_fields, &field);
                 continue;
             }

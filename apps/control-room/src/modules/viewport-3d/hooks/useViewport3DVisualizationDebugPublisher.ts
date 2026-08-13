@@ -61,6 +61,7 @@ export type Viewport3DVisualizationDebugCandidateBuilder = (input: {
 
 export interface Viewport3DVisualizationDebugTargetSource {
   carrierIds: readonly string[];
+  renderPass?: Viewport3DTargetRenderPassModel;
   target: Pick<VisualizationTargetRef, "id" | "kind" | "label">;
 }
 
@@ -232,12 +233,6 @@ export function createViewport3DVisualizationDebugPublisher({
       if (disposed) return;
       lastFrame = frame;
       for (const [targetId, state] of active) {
-        if (
-          pendingAdoptionTargetIds.has(targetId) &&
-          state.lastCommittedFrameId === frame.commitId
-        ) {
-          continue;
-        }
         if (pendingAdoptionTargetIds.delete(targetId)) {
           state.lastCommittedFrameId = null;
         }
@@ -533,6 +528,21 @@ function resolveCarrierSources(
     fullFieldBuffer: Viewport3DTargetFieldBufferSource | null;
     pass: Viewport3DTargetRenderPassModel;
   }> = [];
+  if (target.renderPass) {
+    for (const carrierId of target.carrierIds) {
+      result.push({
+        carrierId,
+        fullFieldBuffer: source.fullFieldVector
+          ? targetFieldBufferSourceFromDecoded(
+              source.fullFieldVector,
+              source.fullFieldBufferIdentity ?? null,
+            )
+          : null,
+        pass: target.renderPass,
+      });
+    }
+    return result;
+  }
   for (const carrierId of target.carrierIds) {
     const pass = source.fieldModel?.targetPasses.get(carrierId);
     if (pass) result.push({ carrierId, fullFieldBuffer: null, pass });

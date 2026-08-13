@@ -890,6 +890,56 @@ describe("viewport3DFieldDataPlan", () => {
     }
   });
 
+  it("keeps an advertised FDM Airbox H_eff request scoped when H_eff is also primary", () => {
+    const fieldCatalog = {
+      domain_generation_id: "fdm-terminal-generation",
+      quantities: [
+        {
+          available: true,
+          domain: "full_domain",
+          quantity_id: "H_eff",
+        },
+      ],
+      revision: 7,
+    } as FieldCatalogResource;
+    const plan = resolveViewport3DTargetQuantityFieldDemandPlan({
+      availableQuantityIds: new Set(["H_eff"]),
+      fieldCatalog,
+      fdmAirboxSettings: {
+        ...DEFAULT_FDM_UNIVERSE_OUTSIDE_SUPPORT_VISUALIZATION,
+        activeQuantityId: "H_eff",
+        vectorBudget: 64,
+        vectorsVisible: true,
+        visible: true,
+      },
+      fdmSettings: null,
+      getPartSettings: () => DEFAULT_OBJECT_VISUALIZATION,
+      magneticPartScopedFieldIds: new Set(),
+      magneticParts: [],
+      maxVectorGlyphs: 256,
+      primaryFieldQuantityId: "H_eff",
+    });
+
+    expect(plan.demands).toEqual([
+      expect.objectContaining({
+        passId: "fdm-universe-outside-support:vector-glyph",
+        quantityId: "H_eff",
+        scopeKind: "airbox",
+        targetId: "fdm-universe-outside-support",
+      }),
+    ]);
+    expect([...plan.requests.values()]).toEqual([
+      expect.objectContaining({
+        quantityId: "H_eff",
+        query: expect.objectContaining({
+          component: "full",
+          max_samples: 64,
+          scope_kind: "airbox",
+        }),
+      }),
+    ]);
+  });
+
   it("does not request unavailable quantities for FDM target views", () => {
     const plan = resolveViewport3DTargetQuantityFieldDemandPlan({
       availableQuantityIds: new Set(["m"]),

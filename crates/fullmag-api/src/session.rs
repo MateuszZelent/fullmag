@@ -4503,18 +4503,22 @@ mod tests {
             "later latest scientific time must beat a later preview wall clock"
         );
 
-        let latest = current
+        let mut latest = current
             .latest_fields
-            .get_mut("H_demag")
+            .get("H_demag")
+            .cloned()
             .expect("latest H_demag field");
         latest["source_time_seconds"] = json!(4.0e-13);
         latest["materialized_at_unix_ms"] = json!(1_700_000_000_900_u64);
-        let preview = current
+        current.latest_fields.insert("H_demag".to_string(), latest);
+        let mut preview = current
             .preview_cache
-            .get_mut("H_demag")
+            .get("H_demag")
+            .cloned()
             .expect("preview H_demag field");
         preview.source_time_seconds = Some(5.0e-13);
         preview.materialized_at_unix_ms = 1_700_000_000_100;
+        current.preview_cache.insert(preview);
 
         assert!(
             preview_cache_precedes_latest(&current, "H_demag"),

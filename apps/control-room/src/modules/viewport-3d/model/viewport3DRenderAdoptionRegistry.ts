@@ -379,6 +379,7 @@ export function createViewport3DRenderAdoptionRegistry({
     },
     subscribe(listener) {
       listeners.add(listener);
+      for (const targetId of receipts.keys()) listener(targetId);
       let subscribed = true;
       return () => {
         if (!subscribed) return;

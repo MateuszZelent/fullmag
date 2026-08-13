@@ -151,6 +151,7 @@ import type { Viewport3DRenderAdoptionRegistry } from "../model/viewport3DRender
 import type { FdmUniverseOutsideSupportOverlayModel } from "../model/fdmUniverseOverlay";
 import type { Viewport3DFdmTargetRenderView } from "../model/viewport3DFdmTargetViews";
 import type { FdmAirboxPassPlan } from "./fdmAirboxPassPlan";
+import type { Viewport3DVectorBuildReference } from "../viewport3dRenderModel";
 
 interface Viewport3DSceneProps {
   adoptionRegistry?: Viewport3DRenderAdoptionRegistry;
@@ -174,6 +175,7 @@ interface Viewport3DSceneProps {
   fdmAirboxPassPlan: FdmAirboxPassPlan;
   fdmAirboxFieldVector: DecodedFieldVector | null | undefined;
   fdmAirboxVectorGlyphColors: ScalarColorBuffer | null;
+  fdmAirboxVectorBuildReference: Viewport3DVectorBuildReference | null;
   fdmAirboxVectorSegments: Float32Array | null;
   fdmMultilayerAirboxView: FdmMultilayerAirboxRenderView | null;
   fdmUniverseOutsideSupport: FdmUniverseOutsideSupportOverlayModel | null;
@@ -915,6 +917,7 @@ function Viewport3DModelLayerStack({
   fdmAirboxFieldVector,
   fdmAirboxInstanceModel,
   fdmAirboxVectorGlyphColors,
+  fdmAirboxVectorBuildReference,
   fdmAirboxVectorSegments,
   fdmMultilayerAirboxView,
   fdmLaneActive,
@@ -966,6 +969,7 @@ function Viewport3DModelLayerStack({
   | "fdmAirboxFieldVector"
   | "fdmAirboxInstanceModel"
   | "fdmAirboxVectorGlyphColors"
+  | "fdmAirboxVectorBuildReference"
   | "fdmAirboxVectorSegments"
   | "fdmMultilayerAirboxView"
   | "fdmLaneActive"
@@ -1217,6 +1221,7 @@ function Viewport3DModelLayerStack({
               surfaceColors={view.surfaceColors}
               tracker={tracker}
               vectorColorMode={vectorColorMode}
+              vectorBuildReference={view.vectorBuildReference}
               vectorGlyphColors={view.vectorGlyphColors?.colors ?? null}
               vectorSegments={view.vectorSegments}
               vectorStyle={vectorStyle}
@@ -1243,6 +1248,7 @@ function Viewport3DModelLayerStack({
           surfaceColors={null}
           tracker={tracker}
           vectorColorMode={fdmAirboxMeshSettings.vectorColorMode}
+          vectorBuildReference={fdmAirboxVectorBuildReference}
           vectorSegments={fdmAirboxVectorSegments}
           vectorStyle={vectorStyle}
         />
@@ -1538,6 +1544,7 @@ export function Viewport3DScene({
   fdmUniverseOutsideSupport,
   fdmUniverseOutsideSupportSettings,
   fdmAirboxVectorGlyphColors,
+  fdmAirboxVectorBuildReference,
   fdmAirboxVectorSegments,
   fdmMultilayerAirboxView,
   fdmNativeLayerViews,
@@ -1776,6 +1783,7 @@ export function Viewport3DScene({
         fdmAirboxInstanceModel={fdmAirboxInstanceModel}
         fdmAirboxPassPlan={fdmAirboxPassPlan}
         fdmAirboxVectorGlyphColors={fdmAirboxVectorGlyphColors}
+        fdmAirboxVectorBuildReference={fdmAirboxVectorBuildReference}
         fdmAirboxVectorSegments={fdmAirboxVectorSegments}
         fdmMultilayerAirboxView={fdmMultilayerAirboxView}
         fdmNativeLayerViews={fdmNativeLayerViews}

@@ -873,7 +873,7 @@ export function resolveRibbonVisualizationTarget({
 }
 
 function resultsQuantityCommandInput(quantityId: string) {
-  return globalQuantityCommandInput(quantityId);
+  return globalQuantityCommandInput(quantityId, true);
 }
 
 function buildResultsQuantityGroup(

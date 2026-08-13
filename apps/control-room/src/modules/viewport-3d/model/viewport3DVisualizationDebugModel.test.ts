@@ -136,6 +136,25 @@ describe("buildViewport3DVisualizationDebugSnapshot", () => {
     expect(JSON.stringify(result).length).toBeLessThan(64 * 1024);
   });
 
+  it("exports the exact response topology hash when FMVP stores raw hash bytes", () => {
+    const base = carrier();
+    const result = snapshot([
+      carrier({
+        cache: {
+          ...base.cache!,
+          responseMetadata: {
+            ...base.cache!.responseMetadata!,
+            meshTopologyHash: "sha256:topology-hash",
+          },
+        },
+      }),
+    ]);
+
+    expect(result.carriers[0]?.revisions.meshTopologyHash).toBe(
+      "sha256:topology-hash",
+    );
+  });
+
   it.each([
     ["actual field revision", { fieldRevision: null }],
     ["current domain generation", { expectedDomainGenerationId: null }],
@@ -418,6 +437,63 @@ describe("buildViewport3DVisualizationDebugSnapshot", () => {
     expect(result.disposition).toBe("unknown");
     expect(result.issues).not.toContainEqual(
       expect.objectContaining({ code: "scope-kind-mismatch" }),
+    );
+  });
+
+  it("reports a trusted response generation for a legacy FMVP v2 payload", () => {
+    const legacyField: DecodedFieldVector = {
+      domainGenerationId: null,
+      dtype: "float64",
+      formatVersion: 2,
+      grid: [1, 1, 1],
+      indexing: "legacy_count_only",
+      meshTopologyHash: null,
+      meshTopologyRevision: null,
+      nComp: 3,
+      nodeIndices: null,
+      pointCount: 1,
+      quantityId: "H_demag",
+      scopeId: null,
+      scopeKind: null,
+      valueCount: 3,
+      values: new Float64Array([1, 0, 0]),
+    };
+    const result = snapshot([
+      carrier({
+        cache: {
+          ...carrier().cache!,
+          responseMetadata: {
+            ...carrier().cache!.responseMetadata!,
+            domainGenerationId: "fdm-generation-7",
+            encoding: "FMVP;version=2",
+            identityIssues: [
+              {
+                field: "domainGenerationId",
+                headerValue: "fdm-generation-7",
+                payloadValue: null,
+              },
+            ],
+          },
+        },
+        decoded: legacyField,
+        expectedDomainGenerationId: "fdm-generation-7",
+        expectedTopologyHash: null,
+        requestedQuantityId: "H_demag",
+        requestedScopeId: null,
+        requestedScopeKind: "full",
+      }),
+    ]);
+
+    expect(result.carriers[0]?.payload).toMatchObject({
+      formatVersion: 2,
+      scopeId: null,
+      scopeKind: null,
+    });
+    expect(result.carriers[0]?.revisions.domainGenerationId).toBe(
+      "fdm-generation-7",
+    );
+    expect(result.issues).not.toContainEqual(
+      expect.objectContaining({ code: "response-metadata-mismatch" }),
     );
   });
 

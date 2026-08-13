@@ -230,6 +230,26 @@ describe("field vector response metadata", () => {
         parseFieldVectorResponseMetadata(new Headers()),
       ),
     ).toEqual([]);
+
+    const trustedV2Metadata = parseFieldVectorResponseMetadata(
+      new Headers({
+        "x-fullmag-domain-generation-id": "fdm-7",
+        "x-fullmag-encoding": "FMVP;version=2",
+        "x-fullmag-field-revision": "12",
+        "x-fullmag-n-comp": "3",
+        "x-fullmag-point-count": "1",
+        "x-fullmag-quantity-id": "m",
+        "x-fullmag-scope-id": "airbox",
+        "x-fullmag-scope-kind": "airbox",
+        "x-fullmag-value-count": "3",
+      }),
+    );
+    expect(
+      collectFieldVectorIdentityIssues(
+        { ...decoded, formatVersion: 2, indexing: "legacy_count_only" },
+        trustedV2Metadata,
+      ),
+    ).toEqual([]);
   });
 });
 

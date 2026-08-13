@@ -838,10 +838,11 @@ export function resolveViewport3DTargetQuantityFieldDemandPlan({
 
   for (const target of fdmTargetSettings) {
     if (
-      sameViewport3DQuantityIdForPlanning(
-        target.settings.activeQuantityId,
-        primaryFieldQuantityId,
-      ) ||
+      (target.targetId !== "fdm-universe-outside-support" &&
+        sameViewport3DQuantityIdForPlanning(
+          target.settings.activeQuantityId,
+          primaryFieldQuantityId,
+        )) ||
       !target.settings.visible ||
       (!target.settings.shaderVisible && !target.settings.vectorsVisible)
     ) {
@@ -893,10 +894,11 @@ export function resolveViewport3DTargetQuantityFieldDemandPlan({
   ]) {
     if (
       !target ||
-      sameViewport3DQuantityIdForPlanning(
-        target.settings.activeQuantityId,
-        primaryFieldQuantityId,
-      ) ||
+      (target.targetId !== "fdm-universe-outside-support" &&
+        sameViewport3DQuantityIdForPlanning(
+          target.settings.activeQuantityId,
+          primaryFieldQuantityId,
+        )) ||
       !target.settings.visible ||
       (!target.settings.shaderVisible && !target.settings.vectorsVisible)
     ) {
@@ -946,6 +948,7 @@ export function resolveViewport3DTargetQuantityFieldDemandPlan({
     requests: new Map(
       requests
         .filter((request) =>
+          request.query.scope_kind !== "full" ||
           !sameViewport3DQuantityIdForPlanning(
             request.quantityId,
             primaryFieldQuantityId,

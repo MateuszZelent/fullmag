@@ -695,6 +695,7 @@ mod tests {
     #[test]
     fn completed_cpu_interactive_runtime_materializes_final_active_fields() {
         let mut plan = make_soa_fdm_plan();
+        plan.grid.cells = [4, 1, 2];
         plan.active_mask = Some(vec![true, true, true, true, false, false, false, false]);
         plan.external_field = Some([10.0, 20.0, 30.0]);
         plan.oersted_field_xyz = Some(vec![[40.0, -20.0, 10.0]; 8]);
@@ -843,6 +844,18 @@ mod tests {
         let h_ant = field_values("H_ant");
         let h_oe = field_values("H_oe");
         assert!(h_oe.iter().any(|value| value.abs() > 0.0));
+        let eden_demag = final_fields
+            .iter()
+            .find(|field| field.quantity == "eden_demag")
+            .expect("terminal materialization should include eden_demag");
+        assert_eq!(eden_demag.preview_grid, [4, 1, 2]);
+        assert_eq!(eden_demag.original_grid, [4, 1, 2]);
+        assert_eq!(eden_demag.vector_field_values.len(), 8);
+        assert_ne!(
+            &eden_demag.vector_field_values[..4],
+            &eden_demag.vector_field_values[4..],
+            "terminal scalar field must preserve distinct solver layers"
+        );
         assert!(active_mask.iter().enumerate().any(|(cell, active)| {
             !active
                 && h_demag[cell * 3..cell * 3 + 3]

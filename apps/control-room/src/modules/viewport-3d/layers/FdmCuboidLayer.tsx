@@ -67,6 +67,7 @@ import {
 } from "./VectorFieldLayer";
 import type { Viewport3DRenderAdoptionRegistry } from "../model/viewport3DRenderAdoptionRegistry";
 import type { Viewport3DRenderAdoptionIdentity } from "../model/viewport3DRenderAdoptionRegistry";
+import type { Viewport3DVectorBuildReference } from "../viewport3dRenderModel";
 import {
   eventIntersectsRegionOverlay,
   pickRegionOverlayFromRay,
@@ -1229,6 +1230,7 @@ export const FdmCuboidLayer = memo(function FdmCuboidLayer({
   fieldVector,
   geometryScopeInstanceOrdinals,
   vectorGlyphColors,
+  vectorBuildReference,
   instanceModel,
   instanceOrdinals,
   inspectEnabled,
@@ -1243,6 +1245,7 @@ export const FdmCuboidLayer = memo(function FdmCuboidLayer({
   fieldVector: DecodedFieldVector | null | undefined;
   geometryScopeInstanceOrdinals?: Uint32Array | null;
   vectorGlyphColors?: Float32Array | null;
+  vectorBuildReference?: Viewport3DVectorBuildReference | null;
   instanceModel?: FdmCuboidInstanceModel | null;
   instanceOrdinals?: Uint32Array | null;
   inspectEnabled: boolean;
@@ -1553,6 +1556,7 @@ export const FdmCuboidLayer = memo(function FdmCuboidLayer({
       passPlan.needsVectors ? (
         <VectorFieldLayer
           adoptionRegistry={adoptionRegistry}
+          buildReference={vectorBuildReference}
           carrierId={carrierId}
           colors={colors}
           colorMode={vectorColorModeFromSettings(renderSettings, vectorColorMode)}

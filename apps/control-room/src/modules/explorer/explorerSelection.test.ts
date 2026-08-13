@@ -39,6 +39,7 @@ import {
 import { VisualizationDebugController } from "@/kernel/visualization/VisualizationDebugController";
 import { VisualizationRegistrySyncController } from "@/kernel/visualization/VisualizationRegistrySyncController";
 import { buildModeVisualizationBreadcrumbs } from "@/modules/inspector/panels/mode-visualization/ModeVisualizationBreadcrumbs";
+import { resolveVisualizationDebugTarget } from "@/modules/inspector/panels/visualization-debug/VisualizationDebugPanelModel";
 import { viewportSelectionForFdmTarget } from "@/modules/viewport-3d/viewport3dSelection";
 import { buildDomainPresentation } from "@/shared/domain/mesh/domainPresentation";
 
@@ -267,6 +268,49 @@ describe("selectExplorerNode", () => {
         type: "fdm-domain",
         visualizationTargetId: "fdm-universe-outside-support",
       },
+    });
+  });
+
+  it("preserves the FDM Airbox lane and Debug support after object Results", () => {
+    const kernel = makeKernel();
+    selectExplorerNode(kernel, {
+      id: "model:object:smoke_box:visualization",
+      kind: "object.visualization",
+      label: "Results",
+      objectId: "smoke_box",
+      parentId: "model:object:smoke_box",
+    }, "explorer");
+    selectExplorerNode(kernel, {
+      id: "model:object:smoke_box:visualization:debug",
+      kind: "object.visualization.debug",
+      label: "Debug",
+      objectId: "smoke_box",
+      parentId: "model:object:smoke_box:visualization",
+    }, "explorer");
+    selectExplorerNode(kernel, {
+      id: "model:airbox:visualization",
+      kind: "airbox.visualization",
+      label: "Visualization",
+      parentId: "model:airbox",
+      visualizationTargetId: "fdm-universe-outside-support",
+    }, "explorer");
+    expect(kernel.selection.get().ref).toMatchObject({
+      kind: "mesh.grid.universe-outside-support",
+      type: "fdm-domain",
+      visualizationTargetId: "fdm-universe-outside-support",
+    });
+    selectExplorerNode(kernel, {
+      id: "model:airbox:visualization:debug",
+      kind: "airbox.visualization.debug",
+      label: "Debug",
+      parentId: "model:airbox:visualization",
+      visualizationTargetId: "fdm-universe-outside-support",
+    }, "explorer");
+
+    expect(resolveVisualizationDebugTarget(kernel.selection.get().ref)).toEqual({
+      id: "fdm-universe-outside-support",
+      kind: "airbox",
+      selectionKind: "airbox.visualization.debug",
     });
   });
 

@@ -12,6 +12,10 @@ import type { VisualizationTargetSettings } from "@/kernel/visualization/ObjectV
 
 import type { FdmCuboidInstanceModel } from "../layers/fdmCuboidBuildModel";
 import type { ScalarColorBuffer } from "../viewport3dFieldMapping";
+import type {
+  Viewport3DTargetFieldBufferSource,
+  Viewport3DVectorBuildReference,
+} from "../viewport3dRenderModel";
 
 export interface Viewport3DFdmTargetView {
   cellIndices: Uint32Array;
@@ -35,11 +39,13 @@ export interface Viewport3DFdmTargetDefinitionsResult {
 }
 
 export interface Viewport3DFdmTargetRenderView extends Viewport3DFdmTargetView {
+  fieldBuffer: Viewport3DTargetFieldBufferSource | null;
   fieldVector: DecodedFieldVector | null;
   settings: VisualizationTargetSettings;
   surfaceColors: ScalarColorBuffer | null;
   vectorColors: ScalarColorBuffer | null;
   vectorGlyphColors: ScalarColorBuffer | null;
+  vectorBuildReference?: Viewport3DVectorBuildReference | null;
   vectorSegments: Float32Array | null;
 }
 
@@ -62,6 +68,7 @@ export interface Viewport3DFdmTargetViewsResult {
 
 export interface Viewport3DFdmTargetRenderViewCacheEntry {
   baseView: Viewport3DFdmTargetView;
+  fieldConsumersCompatible: boolean;
   renderKey: string;
   view: Viewport3DFdmTargetRenderView;
 }
@@ -290,17 +297,41 @@ export function buildViewport3DFdmTargetViews({
 
 export function memoizeViewport3DFdmTargetRenderView({
   build,
+  fieldConsumersCompatible,
   renderKey,
   view,
 }: {
   build: () => Viewport3DFdmTargetRenderView;
+  fieldConsumersCompatible: boolean;
   renderKey: string;
   view: Viewport3DFdmTargetView;
 }): Viewport3DFdmTargetRenderView {
   const cached = renderViewCache.get(view);
-  if (cached?.renderKey === renderKey) return cached.view;
-  const rendered = build();
-  renderViewCache.set(view, { baseView: view, renderKey, view: rendered });
+  if (
+    cached?.renderKey === renderKey &&
+    cached.fieldConsumersCompatible === fieldConsumersCompatible
+  ) {
+    return cached.view;
+  }
+  const built = build();
+  const rendered = fieldConsumersCompatible
+    ? built
+    : {
+        ...built,
+        fieldBuffer: null,
+        fieldVector: null,
+        surfaceColors: null,
+        vectorColors: null,
+        vectorGlyphColors: null,
+        vectorBuildReference: null,
+        vectorSegments: null,
+      };
+  renderViewCache.set(view, {
+    baseView: view,
+    fieldConsumersCompatible,
+    renderKey,
+    view: rendered,
+  });
   return rendered;
 }
 

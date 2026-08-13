@@ -19,6 +19,7 @@ import type {
   Viewport3DFieldVectorCacheEntryDiagnostics,
 } from "../viewport3dResources";
 import { buildFieldVectorDebugSamples } from "./scanFieldVectorDebugStatistics";
+import { resolveTrustedViewport3DResponseDomainGenerationId } from "./viewport3DFieldDomainCompatibility";
 
 const MAX_DEBUG_CARRIERS = 8;
 const MAX_DEBUG_TEXT_LENGTH = 256;
@@ -204,6 +205,12 @@ function buildCarrier(
   const responseMetadataIssues = buildResponseMetadataIdentityIssues(carrier);
   const memory = buildMemory(carrier, state);
   const cache = carrier.cache;
+  const domainGenerationId = decoded
+    ? resolveTrustedViewport3DResponseDomainGenerationId(
+        decoded,
+        cache?.responseMetadata,
+      )
+    : null;
 
   return {
     disposition: health.disposition,
@@ -280,10 +287,12 @@ function buildCarrier(
       }),
       request: Object.freeze({ plannerRequestId: boundNullableText(carrier.plannerRequestId), resourceKey: boundNullableText(carrier.resourceKey) }),
       revisions: Object.freeze({
-        domainGenerationId: boundNullableText(decoded?.domainGenerationId),
+        domainGenerationId: boundNullableText(domainGenerationId),
         fieldBufferRevision: boundNullableText(carrier.fieldBufferRevision),
         fieldRevision: boundNullableText(carrier.fieldRevision),
-        meshTopologyHash: boundNullableText(decoded?.meshTopologyHash),
+        meshTopologyHash: boundNullableText(
+          cache?.responseMetadata?.meshTopologyHash ?? decoded?.meshTopologyHash,
+        ),
         topologyRevision: boundNullableText(decoded?.meshTopologyRevision),
         visualizationRevision: boundNullableText(input.visualizationRevision),
       }),
@@ -519,8 +528,18 @@ function compareResponseMetadata(
   const decoded = carrier.decoded;
   if (!metadata || !decoded) return null;
   const expectedEncoding = `FMVP;version=${decoded.formatVersion}`;
+  const hasContradictoryIdentityIssue = metadata.identityIssues.some(
+    (issue) =>
+      !(
+        decoded.formatVersion === 2 &&
+        issue.field === "domainGenerationId" &&
+        issue.payloadValue == null &&
+        typeof issue.headerValue === "string" &&
+        issue.headerValue.trim().length > 0
+      ),
+  );
   if (
-    metadata.identityIssues.length > 0 ||
+    hasContradictoryIdentityIssue ||
     (metadata.component !== null &&
       !fieldVectorComponentsSemanticallyEqual(
         metadata.component,

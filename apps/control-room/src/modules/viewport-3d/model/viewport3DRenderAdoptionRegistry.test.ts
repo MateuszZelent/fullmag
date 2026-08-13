@@ -97,6 +97,53 @@ describe("viewport3DRenderAdoptionRegistry", () => {
     unsubscribe();
   });
 
+  it("replays existing exact receipts to a listener that registers after adoption", () => {
+    const registry = createViewport3DRenderAdoptionRegistry();
+    registry.retainDemand("object:a");
+    registry.recordSurfaceAdoption({
+      byteLength: 24,
+      carrierId: "part:a",
+      fieldBufferId: "field-a",
+      resourceKey: "resource-a",
+      scalarBufferKey: "scalar-a",
+      targetId: "object:a",
+    });
+    registry.recordVectorAdoption({
+      byteLength: 48,
+      carrierId: "part:a",
+      fieldBufferId: "field-a",
+      resourceKey: "resource-a",
+      targetId: "object:a",
+      vectorBuildKey: "vector-a",
+    });
+    const sequencesBeforeSubscribe = registry
+      .snapshot("object:a")
+      .map((receipt) => receipt.adoptionSequence);
+    const listener = vi.fn();
+
+    registry.subscribe(listener);
+
+    expect(listener).toHaveBeenCalledOnce();
+    expect(listener).toHaveBeenCalledWith("object:a");
+    expect(registry.snapshot("object:a")).toEqual([
+      expect.objectContaining({
+        adoptionSequence: 1,
+        kind: "surface",
+        scalarBufferKey: "scalar-a",
+      }),
+      expect.objectContaining({
+        adoptionSequence: 2,
+        kind: "vector",
+        vectorBuildKey: "vector-a",
+      }),
+    ]);
+    expect(
+      registry
+        .snapshot("object:a")
+        .map((receipt) => receipt.adoptionSequence),
+    ).toEqual(sequencesBeforeSubscribe);
+  });
+
   it("advances adoption identity only for a newly adopted payload", () => {
     let adoptedAtMs = 1_000;
     const registry = createViewport3DRenderAdoptionRegistry({

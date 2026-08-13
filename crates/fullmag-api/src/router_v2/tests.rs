@@ -24674,7 +24674,7 @@ async fn fdm_field_vector_object_scope_rejects_mixed_default_numeric_membership(
 }
 
 #[tokio::test]
-async fn fdm_terminal_spatial_scalar_plane_preserves_meta_and_object_scope() {
+async fn fdm_terminal_spatial_scalar_full_grid_preserves_values_and_object_indices() {
     let (app, state, artifact_dir) = test_router_with_session_state_and_artifact_dir().await;
     write_test_fdm_membership_artifact(&artifact_dir, [2, 1, 2]);
     if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
@@ -24690,13 +24690,13 @@ async fn fdm_terminal_spatial_scalar_plane_preserves_meta_and_object_scope() {
             "eden_demag": {
                 "quantity": "eden_demag",
                 "unit": "J/m³",
-                "values": [3.0, 4.0],
+                "values": [3.0, 4.0, 30.0, 40.0],
                 "source_step": 52,
                 "source_time_seconds": 5.2e-12,
                 "source_revision": 52,
                 "materialized_at_unix_ms": 1700000000123_u64,
                 "layout": {
-                    "grid_cells": [2, 1, 1],
+                    "grid_cells": [2, 1, 2],
                     "original_grid_cells": [2, 1, 2],
                     "spatial_kind": "grid",
                     "quantity_domain": "magnetic_only"
@@ -24722,7 +24722,7 @@ async fn fdm_terminal_spatial_scalar_plane_preserves_meta_and_object_scope() {
     assert_eq!(meta["source_step"], 52);
     assert_eq!(meta["source_time_seconds"], 5.2e-12);
     assert_eq!(meta["stats"]["min"], 3.0);
-    assert_eq!(meta["stats"]["max"], 4.0);
+    assert_eq!(meta["stats"]["max"], 40.0);
 
     let vector = app
         .clone()
@@ -24737,12 +24737,12 @@ async fn fdm_terminal_spatial_scalar_plane_preserves_meta_and_object_scope() {
     assert_eq!(vector.status(), StatusCode::OK);
     assert_eq!(vector.headers()["x-fullmag-encoding"], "FMVP;version=3");
     assert_eq!(vector.headers()["x-fullmag-n-comp"], "1");
-    assert_eq!(vector.headers()["x-fullmag-point-count"], "2");
+    assert_eq!(vector.headers()["x-fullmag-point-count"], "4");
     let bytes = body_bytes(vector).await;
     assert_eq!(&bytes[..4], b"FMVP");
     assert_eq!(bytes[4], 3);
-    assert_eq!(decode_fmvp_node_indices(&bytes), vec![0, 1]);
-    assert_eq!(decode_fmvp_payload_f64(&bytes), vec![3.0, 4.0]);
+    assert_eq!(decode_fmvp_node_indices(&bytes), vec![0, 1, 2, 3]);
+    assert_eq!(decode_fmvp_payload_f64(&bytes), vec![3.0, 4.0, 30.0, 40.0]);
 
     let airbox = app
         .oneshot(
@@ -24754,6 +24754,48 @@ async fn fdm_terminal_spatial_scalar_plane_preserves_meta_and_object_scope() {
         .await
         .unwrap();
     assert_eq!(airbox.status(), StatusCode::NOT_FOUND);
+    let _ = fs::remove_dir_all(&artifact_dir);
+}
+
+#[tokio::test]
+async fn fdm_terminal_spatial_scalar_plane_is_not_a_current_3d_field() {
+    let (app, state, artifact_dir) = test_router_with_session_state_and_artifact_dir().await;
+    write_test_fdm_membership_artifact(&artifact_dir, [2, 1, 2]);
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.metadata = Some(serde_json::json!({
+            "artifact_layout": {
+                "backend": "fdm",
+                "grid_cells": [2, 1, 2],
+                "origin_m": [0.0, 0.0, 0.0],
+                "cell_size": [1.0, 1.0, 1.0]
+            }
+        }));
+        snapshot.latest_fields = serde_json::from_value(serde_json::json!({
+            "eden_demag": {
+                "quantity": "eden_demag",
+                "unit": "J/m³",
+                "values": [3.0, 4.0],
+                "layout": {
+                    "grid_cells": [2, 1, 1],
+                    "original_grid_cells": [2, 1, 2],
+                    "spatial_kind": "grid",
+                    "quantity_domain": "magnetic_only"
+                }
+            }
+        }))
+        .expect("terminal scalar plane fixture should deserialize");
+    }
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/fields/eden_demag/samples/vector?component=full&scope_kind=object&scope_id=body")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
     let _ = fs::remove_dir_all(&artifact_dir);
 }
 

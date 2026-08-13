@@ -278,11 +278,12 @@ export function inspectViewport3DFieldVectorCacheEntryDiagnostics<TInflight>(
     inflightRegistry.get(cache)?.has(resourceKey) ?? false;
   const entryState =
     binaryInflight ? "inflight" : diagnostics.entryState;
-  const metadata = cache.peek(resourceKey)?.metadata;
+  const dataIdentityMatches =
+    expectedData === undefined || !entry ? null : entry.data === expectedData;
+  const metadata = dataIdentityMatches === false ? undefined : entry?.metadata;
   return {
     ...diagnostics,
-    dataIdentityMatches:
-      expectedData === undefined || !entry ? null : entry.data === expectedData,
+    dataIdentityMatches,
     entryState,
     responseMetadata: metadata
       ? boundFieldVectorResponseMetadata(metadata)

@@ -7,6 +7,7 @@ import { DATA_FIELD_VECTOR_PATH } from "@/kernel/api/apiPaths";
 import {
   DEFAULT_OBJECT_VISUALIZATION,
   ObjectVisualizationController,
+  resolveGlobalObjectVisualizationSettings,
   resolveTargetVisualization,
 } from "@/kernel/visualization/ObjectVisualizationController";
 import type { DecodedFieldVector, DecodedTopology } from "@/kernel/api/codecs";
@@ -92,12 +93,249 @@ import {
   identifyVectorGlyphBuildResult,
   recordVectorFieldAdoption,
 } from "../layers/VectorFieldLayer";
+import { recordFdmCuboidSurfaceAdoption } from "../layers/FdmCuboidLayer";
 import { createViewport3DRenderAdoptionRegistry } from "../model/viewport3DRenderAdoptionRegistry";
+import { resolveViewport3DFieldVectorForDomain } from "../model/viewport3DFieldDomainCompatibility";
+import { buildFdmSampledScalarColors } from "../viewport3dFieldMapping";
 
 const sceneModelSourceUrl = new URL("./useViewport3DSceneModel.ts", import.meta.url);
 const planarPreviewSourceUrl = new URL("../../../kernel/workspace/planarMonitorFramePreview.ts", import.meta.url);
 
 describe("FDM Airbox mesh demand", () => {
+  it("adopts an exact terminal FDM scalar grid as the target surface buffer", () => {
+    const targetId = "object:sample";
+    const quantityId = "scalar_density";
+    const demandPlan = resolveViewport3DTargetQuantityFieldDemandPlan({
+      availableQuantityIds: new Set([quantityId]),
+      fdmSettings: null,
+      fdmTargetSettings: [{
+        label: "Sample",
+        settings: {
+          ...DEFAULT_OBJECT_VISUALIZATION,
+          activeQuantityId: quantityId,
+          shaderVisible: true,
+          surfaceColorSource: "colormap",
+          vectorsVisible: false,
+          visible: true,
+        },
+        targetId,
+      }],
+      getPartSettings: () => DEFAULT_OBJECT_VISUALIZATION,
+      magneticPartScopedFieldIds: new Set(),
+      magneticParts: [],
+      maxVectorGlyphs: 384,
+      primaryFieldQuantityId: "m",
+    });
+    const request = Array.from(demandPlan.requests.values())[0]!;
+    const resourceKey = resolveViewport3DFieldVectorResourceKey(
+      request.quantityId,
+      request.query,
+    );
+    const decoded = fieldVectorFixture({
+      formatVersion: 2,
+      grid: [2, 2, 2],
+      indexing: "legacy_count_only",
+      nComp: 1,
+      pointCount: 8,
+      quantityId,
+      valueCount: 8,
+      values: new Float64Array([1, 2, 3, 4, 10, 20, 30, 40]),
+    });
+    const domain = {
+      discretization: "fdm" as const,
+      domainGenerationId: "fdm-generation",
+      gridShape: [2, 2, 2] as const,
+      meshTopologyHash: null,
+      meshTopologyRevision: null,
+      pointCount: 8,
+    };
+    const accepted = resolveViewport3DFieldVectorForDomain({
+      domain,
+      fieldVector: decoded,
+      responseDomainGenerationId: "fdm-generation",
+    });
+    const resolved = resolveViewport3DFdmTargetFieldVectorForTarget({
+      primaryFieldQuantityId: "m",
+      primaryFieldVector: null,
+      quantityId,
+      targetFieldRequests: demandPlan.requests,
+      targetFieldVectors: new Map([[request.requestId, accepted!]]),
+      targetId,
+    });
+    const buffer = buildViewport3DTargetFieldBufferWithResourceKey({
+      consumers: request.consumers,
+      domain,
+      fieldRevision: "field-revision",
+      fieldVector: resolved!.fieldVector,
+      query: request.query,
+      responseDomainGenerationId: "fdm-generation",
+      resourceKey,
+      targetIds: [targetId],
+      topologyRevision: "topology-revision",
+    });
+    const scalarBuffer = buildFdmSampledScalarColors(
+      resolved!.fieldVector,
+      Uint32Array.from([0, 1, 2, 3, 4, 5, 6, 7]),
+      domain.pointCount,
+      "magnitude",
+      "viridis",
+      undefined,
+      domain.gridShape,
+    )!;
+    scalarBuffer.buildKey = "scalar-surface";
+    scalarBuffer.sourceFieldBufferId = buffer.bufferId;
+    scalarBuffer.sourceResourceKey = resourceKey;
+    const registry = createViewport3DRenderAdoptionRegistry();
+    registry.setCarrierTargets(new Map([[targetId, [targetId]]]));
+    registry.retainDemand(targetId);
+    recordFdmCuboidSurfaceAdoption({
+      carrierId: targetId,
+      fieldBufferId: buffer.bufferId,
+      registry,
+      scalarBuffer,
+    });
+
+    expect(accepted).toBe(decoded);
+    expect(request).toMatchObject({
+      consumers: [`${targetId}:surface`],
+      query: { component: "magnitude", scope_kind: "full" },
+      quantityId,
+    });
+    expect(buffer).toMatchObject({
+      capability: "scalar-complete",
+      domainCompatibility: { status: "compatible" },
+      quantityId,
+      resourceKey,
+      targetIds: [targetId],
+    });
+    expect(scalarBuffer.colors.byteLength).toBeGreaterThan(0);
+    expect(registry.snapshot(targetId)[0]).toMatchObject({
+      carrierId: targetId,
+      fieldBufferId: buffer.bufferId,
+      kind: "surface",
+      resourceKey,
+      scalarBufferKey: "scalar-surface",
+    });
+  });
+
+  it("requests and adopts an FDM object vector pass after global H_demag selection", () => {
+    const source = readFileSync(sceneModelSourceUrl, "utf8");
+    const settingsBlock = source.slice(
+      source.indexOf("const fdmTargetSettingsById = useMemo"),
+      source.indexOf("const fdmTargetSettings = useMemo"),
+    );
+    const visualization = new ObjectVisualizationController();
+    const target = { id: "object:film", kind: "object" as const, label: "film" };
+    visualization.patchTarget(target, {
+      activeQuantityId: "H_demag",
+      vectorsVisible: true,
+    });
+
+    const demagSettings = resolveViewport3DFdmTargetVisualization({
+      inheritedSettings: resolveGlobalObjectVisualizationSettings({
+        quantity: { active_quantity_id: "H_demag" },
+      } as never),
+      snapshot: visualization.getSnapshot(),
+      target,
+    }).effectiveSettings;
+    visualization.removeTargetOverrideField(target, "activeQuantityId");
+    const effectiveSettings = resolveViewport3DFdmTargetVisualization({
+      inheritedSettings: resolveGlobalObjectVisualizationSettings({
+        quantity: { active_quantity_id: "H_eff" },
+      } as never),
+      snapshot: visualization.getSnapshot(),
+      target,
+    }).effectiveSettings;
+    const request = Array.from(resolveViewport3DTargetQuantityFieldRequests({
+      fdmSettings: null,
+      getPartSettings: () => DEFAULT_OBJECT_VISUALIZATION,
+      magneticPartScopedFieldIds: new Set(),
+      magneticParts: [],
+      maxVectorGlyphs: 384,
+      primaryFieldQuantityId: "m",
+    }).values())[0];
+    const demagRequest = Array.from(resolveViewport3DTargetQuantityFieldDemandPlan({
+      fdmSettings: null,
+      fdmTargetSettings: [{ label: target.label, settings: demagSettings, targetId: target.id }],
+      getPartSettings: () => DEFAULT_OBJECT_VISUALIZATION,
+      magneticPartScopedFieldIds: new Set(),
+      magneticParts: [],
+      maxVectorGlyphs: 384,
+      primaryFieldQuantityId: "m",
+    }).requests.values())[0];
+    const effectiveRequest = Array.from(resolveViewport3DTargetQuantityFieldDemandPlan({
+      fdmSettings: null,
+      fdmTargetSettings: [{ label: target.label, settings: effectiveSettings, targetId: target.id }],
+      getPartSettings: () => DEFAULT_OBJECT_VISUALIZATION,
+      magneticPartScopedFieldIds: new Set(),
+      magneticParts: [],
+      maxVectorGlyphs: 384,
+      primaryFieldQuantityId: "m",
+    }).requests.values())[0];
+    const fieldVector = fieldVectorFixture({ quantityId: "H_eff" });
+    const resourceKey = resolveViewport3DFieldVectorResourceKey(
+      effectiveRequest!.quantityId,
+      effectiveRequest!.query,
+    );
+    const buffer = buildViewport3DTargetFieldBufferWithResourceKey({
+      consumers: effectiveRequest!.consumers,
+      fieldVector,
+      query: effectiveRequest!.query,
+      resourceKey,
+      targetIds: [target.id],
+    });
+    const demagField = fieldVectorFixture({ quantityId: "H_demag" });
+    const demagResourceKey = resolveViewport3DFieldVectorResourceKey(
+      demagRequest!.quantityId,
+      demagRequest!.query,
+    );
+    const demagBuffer = buildViewport3DTargetFieldBufferWithResourceKey({
+      consumers: demagRequest!.consumers,
+      fieldVector: demagField,
+      query: demagRequest!.query,
+      resourceKey: demagResourceKey,
+      targetIds: [target.id],
+    });
+    const registry = createViewport3DRenderAdoptionRegistry();
+    registry.setCarrierTargets(new Map([[target.id, [target.id]]]));
+    registry.retainDemand(target.id);
+    recordVectorFieldAdoption({
+      buildKey: "fdm-target-vector:H_demag",
+      byteLength: 96,
+      carrierId: target.id,
+      fieldBufferId: demagBuffer.bufferId,
+      glyphCount: 4,
+      resourceKey: demagResourceKey,
+      registry,
+    });
+
+    expect(demagSettings.activeQuantityId).toBe("H_demag");
+    expect(demagSettings.vectorsVisible).toBe(true);
+    expect(effectiveSettings.activeQuantityId).toBe("H_eff");
+    expect(request).toBeUndefined();
+    expect(demagRequest).toMatchObject({
+      consumers: expect.arrayContaining([`${target.id}:vector-glyph`]),
+      quantityId: "H_demag",
+    });
+    expect(registry.snapshot(target.id)[0]).toMatchObject({
+      fieldBufferId: demagBuffer.bufferId,
+      kind: "vector",
+      resourceKey: demagResourceKey,
+      vectorBuildKey: "fdm-target-vector:H_demag",
+    });
+    expect(effectiveRequest).toMatchObject({ quantityId: "H_eff" });
+    expect(resourceKey).toContain("/H_eff/samples/vector");
+    expect(buffer).toMatchObject({
+      quantityId: "H_eff",
+      resourceKey,
+      targetIds: ["object:film"],
+    });
+    expect(settingsBlock).toContain("inheritedSettings: globalObjectBaseSettings");
+    expect(settingsBlock).toContain("globalObjectBaseSettings,");
+    expect(source).toContain('id: "object-visualization"');
+    expect(source).toContain("revision: objectVisualizationSnapshot.version");
+  });
+
   it("maps the outside-support debug target to its exact render carrier", () => {
     const source = readFileSync(sceneModelSourceUrl, "utf8");
     const targetsBlock = source.slice(
@@ -112,6 +350,12 @@ describe("FDM Airbox mesh demand", () => {
       'target.id === "fdm-universe-outside-support"',
     );
     expect(targetsBlock).toContain("carrierIds.add(target.id)");
+    expect(targetsBlock).toContain(
+      'target.id === "fdm-universe-outside-support"\n            ? fdmAirboxDebugRenderPass',
+    );
+    expect(source).toContain(
+      "const fdmAirboxDebugRenderPass: Viewport3DTargetRenderPassModel",
+    );
   });
 
   it("builds the inactive-cell carrier for wireframe, points, or vectors", () => {
@@ -2254,6 +2498,43 @@ describe("useViewport3DSceneModel", () => {
         targetId: "object:left",
       }),
     ).toBeNull();
+  });
+
+  it("prefers an exact scoped Airbox response over an unscoped primary field of the same quantity", () => {
+    const request = {
+      consumers: ["fdm-universe-outside-support:vector-glyph"],
+      quantityId: "H_eff",
+      query: {
+        component: "full" as const,
+        max_samples: 64,
+        scope_kind: "airbox" as const,
+      },
+      requestId:
+        "component=full&max_samples=64&quantity=H_eff&scope_kind=airbox",
+    };
+    const primaryField = fieldVectorFixture({
+      quantityId: "H_eff",
+      scopeKind: "full",
+    });
+    const scopedField = fieldVectorFixture({
+      quantityId: "H_eff",
+      scopeKind: "airbox",
+    });
+
+    expect(
+      resolveViewport3DFdmTargetFieldVectorForTarget({
+        primaryFieldQuantityId: "H_eff",
+        primaryFieldVector: primaryField,
+        quantityId: "H_eff",
+        targetFieldRequests: new Map([[request.requestId, request]]),
+        targetFieldVectors: new Map([[request.requestId, scopedField]]),
+        targetId: "fdm-universe-outside-support",
+      }),
+    ).toMatchObject({
+      fieldVector: scopedField,
+      request,
+      requestId: request.requestId,
+    });
   });
 
   it("keeps stale field resources out of the render frame key when payload data is still visible", () => {
