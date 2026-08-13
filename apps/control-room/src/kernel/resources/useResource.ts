@@ -48,6 +48,7 @@ interface UseResourceSelectorOptions<TData, TSelected>
 }
 
 const NOOP_SUBSCRIBE = () => undefined;
+const NOOP_RESOLVE_REVISION = () => null;
 
 export function useResource<TData>({
   abortStaleInflight = false,
@@ -288,6 +289,9 @@ function useResourceLoader<TData>({
   setLoadedRefreshToken: (token: number) => void;
 }): void {
   const loadLatest = useEffectEvent(load);
+  const resolveRevisionLatest = useEffectEvent(
+    resolveRevision ?? NOOP_RESOLVE_REVISION,
+  );
 
   useEffect(() => {
     if (!enabled) return;
@@ -337,7 +341,7 @@ function useResourceLoader<TData>({
           force: hasManualRefresh,
           load: loadLatest,
           minRefetchIntervalMs,
-          resolveRevision,
+          resolveRevision: resolveRevisionLatest,
           resourceKey,
         })
         .then((snapshot) => {
@@ -410,7 +414,6 @@ function useResourceLoader<TData>({
     minRefetchIntervalMs,
     pauseLoad,
     refreshToken,
-    resolveRevision,
     resourceKey,
     runtimeStore,
     setLoadedRefreshToken,

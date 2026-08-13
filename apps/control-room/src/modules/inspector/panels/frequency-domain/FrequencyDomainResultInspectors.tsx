@@ -2515,6 +2515,21 @@ export function FrequencyResponseFrequencyPointsInspectorPanel(
   props: InspectorPanelProps,
 ) {
   void props;
+  return <FrequencyResponsePointCollection surface="frequency-points" />;
+}
+
+export function FrequencyResponseFieldsInspectorPanel(
+  props: InspectorPanelProps,
+) {
+  void props;
+  return <FrequencyResponsePointCollection surface="response-fields" />;
+}
+
+function FrequencyResponsePointCollection({
+  surface,
+}: {
+  surface: "frequency-points" | "response-fields";
+}) {
   const summary = useFrequencyResponseFrequencyPointsSummary();
   const kernel = useKernel();
   const plotPoint = (
@@ -2538,9 +2553,9 @@ export function FrequencyResponseFrequencyPointsInspectorPanel(
   };
 
   return (
-    <div data-inspector-surface="frequency-response-frequency-points">
+    <div data-inspector-surface={`frequency-response-${surface}`}>
       <InspectorGroup
-        title="Response Frequency Points Table"
+        title={surface === "response-fields" ? "Response Field Resources" : "Response Frequency Points Table"}
         badge={summary.badge}
       >
         <FieldRow
@@ -2558,7 +2573,7 @@ export function FrequencyResponseFrequencyPointsInspectorPanel(
         <FieldRow label="3D workflow" value={summary.workflow} />
       </InspectorGroup>
       <InspectorGroup
-        title="Response Frequency Point Table"
+        title={surface === "response-fields" ? "Available Response Fields" : "Response Frequency Point Table"}
         badge={summary.badge}
       >
         <FrequencyDomainResponsePointTable

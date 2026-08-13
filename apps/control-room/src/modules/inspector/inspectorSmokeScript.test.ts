@@ -20,9 +20,24 @@ describe("explorer Inspector browser smoke script", () => {
       "model:object:film:visualization:mode-visualization",
     );
     expect(smokeScript).toContain("data-inspector-owner");
+    expect(smokeScript).toContain("results:run:inspector-run");
+    expect(smokeScript).toContain("result_manifest");
+    expect(smokeScript).not.toContain('expandInspectorNode(page, "results:frequency-domain"');
     expect(smokeScript).toContain("ArrowRight");
-    expect(smokeScript).toContain("Inspect response point 7");
-    expect(smokeScript).toContain("Open sample 0 mode 2");
+    expect(smokeScript).toContain("Plot this response field with phase-rotated real display");
+    expect(smokeScript).toContain("response-fields");
+    expect(smokeScript).toContain("Mode visualization Plot 3D action is disabled");
+    expect(smokeScript).toContain("physics-first-frequency-points-416.png");
+    expect(smokeScript).toContain("physics-first-response-fields-416.png");
+    expect(smokeScript).toContain("physics-first-dispersion-relation-416.png");
+    expect(smokeScript).toContain("physics-first-mode-branches-416.png");
+    expect(smokeScript).toContain('fixture.analysisProduct = "modal_eigen"');
+    expect(smokeScript).toContain('"Analysis Views"');
+    expect(smokeScript).toContain('"Derived Values"');
+    expect(smokeScript).toContain('"Tables"');
+    expect(smokeScript).toContain('"Exports"');
+    expect(smokeScript).toContain("mode-visualization-phase-controls-416.png");
+    expect(smokeScript).toContain("Loop mode phase animation");
     expect(smokeScript).toContain('press("Space")');
     expect(smokeScript).toContain('press("Enter")');
     expect(smokeScript).toContain("isContextLost");
@@ -30,5 +45,13 @@ describe("explorer Inspector browser smoke script", () => {
     expect(smokeScript).toContain("drawingBufferHeight");
     expect(smokeScript).toContain("[360, 416, 560]");
     expect(smokeScript).toContain("No placeholder");
+    expect(smokeScript).toContain("INSPECTOR_REQUEST_LIMITS");
+    expect(smokeScript).toContain("unknownGetPaths");
+    expect(smokeScript).toContain("unknownMutationPaths");
+    expect(smokeScript).toContain("inspector_fixture_unknown_resource");
+    expect(smokeScript).toContain("inspector_fixture_unknown_mutation");
+    expect(smokeScript).not.toContain(
+      "return fulfillJson(route, { revision: fixture.revision });",
+    );
   });
 });

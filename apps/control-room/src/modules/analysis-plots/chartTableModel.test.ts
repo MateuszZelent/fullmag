@@ -171,6 +171,8 @@ describe("chartTableModel", () => {
 
     expect(series).toEqual([
       {
+        columnId: "mx",
+        dimension: "magnetization",
         id: "data.table:default:t:mx",
         label: "mx",
         points: [
@@ -188,6 +190,8 @@ describe("chartTableModel", () => {
         xUnit: "s",
       },
       {
+        columnId: "e",
+        dimension: "energy",
         id: "data.table:default:t:e",
         label: "Energy",
         points: [

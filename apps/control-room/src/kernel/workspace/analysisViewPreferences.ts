@@ -5,6 +5,30 @@ export type AnalysisSurface =
   | "hysteresis"
   | "comparison";
 
+export type AnalysisSubview =
+  | "comparison.sources"
+  | "dispersion.branches"
+  | "dispersion.driven-map"
+  | "dispersion.modal"
+  | "dynamics.s-k-f"
+  | "dynamics.temporal-fft"
+  | "dynamics.time-traces"
+  | "hysteresis.branches"
+  | "hysteresis.loop"
+  | "resonance.eigenmodes"
+  | "resonance.frequency-response"
+  | "resonance.modal-driven";
+
+export const ANALYSIS_SUBVIEWS = Object.freeze({
+  comparison: ["comparison.sources"],
+  dispersion: ["dispersion.modal", "dispersion.driven-map", "dispersion.branches"],
+  dynamics: ["dynamics.time-traces", "dynamics.temporal-fft", "dynamics.s-k-f"],
+  hysteresis: ["hysteresis.loop", "hysteresis.branches"],
+  "resonance-fmr": ["resonance.eigenmodes", "resonance.frequency-response", "resonance.modal-driven"],
+} as const satisfies Readonly<Record<AnalysisSurface, readonly AnalysisSubview[]>>);
+
+export type AnalysisActiveSubviews = Record<AnalysisSurface, AnalysisSubview>;
+
 export interface AnalysisDescriptorPreference {
   selectedSeriesIds: string[];
   displayUnits: Record<string, string>;
@@ -14,6 +38,7 @@ export interface AnalysisDescriptorPreference {
 export interface AnalysisViewPreferencesV2 {
   schemaVersion: 2;
   activeSurface: AnalysisSurface;
+  activeSubviews: AnalysisActiveSubviews;
   selectedDatasetRef: string | null;
   descriptorPreferences: Record<string, AnalysisDescriptorPreference>;
 }
@@ -37,7 +62,19 @@ export function analysisDescriptorId(identity:
 }
 
 export function createDefaultAnalysisViewPreferences(): AnalysisViewPreferencesV2 {
-  return { activeSurface: "dynamics", descriptorPreferences: {}, schemaVersion: 2, selectedDatasetRef: null };
+  return {
+    activeSurface: "dynamics",
+    activeSubviews: {
+      comparison: "comparison.sources",
+      dispersion: "dispersion.modal",
+      dynamics: "dynamics.time-traces",
+      hysteresis: "hysteresis.loop",
+      "resonance-fmr": "resonance.eigenmodes",
+    },
+    descriptorPreferences: {},
+    schemaVersion: 2,
+    selectedDatasetRef: null,
+  };
 }
 
 export function parseAnalysisViewPreferences(raw: unknown): AnalysisViewPreferencesV2 {
@@ -53,10 +90,58 @@ export function parseAnalysisViewPreferences(raw: unknown): AnalysisViewPreferen
   }
   return {
     activeSurface: migrateSurface(raw.activeSurface),
+    activeSubviews: parseActiveSubviews(raw.activeSubviews),
     descriptorPreferences,
     schemaVersion: 2,
     selectedDatasetRef: validRawIdentifier(raw.selectedDatasetRef) ? raw.selectedDatasetRef : null,
   };
+}
+
+function parseActiveSubviews(raw: unknown): AnalysisActiveSubviews {
+  const defaults = createDefaultAnalysisViewPreferences().activeSubviews;
+  const source = isRecord(raw) ? raw : {};
+  return {
+    comparison: migrateSubview("comparison", source.comparison) ?? defaults.comparison,
+    dispersion: migrateSubview("dispersion", source.dispersion) ?? defaults.dispersion,
+    dynamics: migrateSubview("dynamics", source.dynamics) ?? defaults.dynamics,
+    hysteresis: migrateSubview("hysteresis", source.hysteresis) ?? defaults.hysteresis,
+    "resonance-fmr": migrateSubview(
+      "resonance-fmr",
+      source["resonance-fmr"] ?? source["frequency-response"] ?? source.eigenmodes,
+    ) ?? defaults["resonance-fmr"],
+  };
+}
+
+function migrateSubview(surface: AnalysisSurface, value: unknown): AnalysisSubview | null {
+  if (typeof value !== "string") return null;
+  if ((ANALYSIS_SUBVIEWS[surface] as readonly string[]).includes(value)) {
+    return value as AnalysisSubview;
+  }
+  // Compatibility owner: Analysis subview preference parser.
+  // Legacy reader version: analysis-view-preferences:v2.
+  // Removal gate: remove legacy subview aliases when schema v3 ships after one
+  // released v2 writer has emitted only canonical IDs and migration tests prove
+  // no supported stored preference depends on the aliases.
+  const legacy: Partial<Record<AnalysisSurface, Readonly<Record<string, AnalysisSubview>>>> = {
+    comparison: { comparison: "comparison.sources" },
+    dispersion: {
+      branches: "dispersion.branches",
+      "modal-dispersion": "dispersion.modal",
+      "response-map": "dispersion.driven-map",
+    },
+    dynamics: {
+      "s-k-f": "dynamics.s-k-f",
+      "temporal-fft": "dynamics.temporal-fft",
+      "time-traces": "dynamics.time-traces",
+    },
+    hysteresis: { branch: "hysteresis.branches", loop: "hysteresis.loop" },
+    "resonance-fmr": {
+      eigenmodes: "resonance.eigenmodes",
+      "frequency-response": "resonance.frequency-response",
+      "modal-driven": "resonance.modal-driven",
+    },
+  };
+  return legacy[surface]?.[value] ?? null;
 }
 
 export function parseStoredAnalysisViewPreferences(serialized: string | null): AnalysisViewPreferencesV2 {

@@ -4,7 +4,12 @@ export interface AxisColumnUnit {
 }
 
 export interface AxisColumnDescriptor extends AxisColumnUnit {
+  component?: string | null;
+  dimension?: string;
   label: string;
+  quantity_id?: string;
+  reduction?: string | null;
+  scope?: string;
 }
 
 const MAX_Y_AXIS_UNIT_GROUPS = 2;

@@ -102,9 +102,7 @@ export function resolvePbcInspectorContext(
   if (
     kind.startsWith("study.stage.frequency_response") ||
     kind.startsWith("results.frequency_response") ||
-    kind.startsWith("results.frequency_domain") ||
-    kind.startsWith("resources.analysis.frequency") ||
-    kind.startsWith("diagnostics.frequency_domain")
+    kind.startsWith("results.frequency_domain")
   ) {
     return CONTEXT_MODELS["frequency-response"];
   }

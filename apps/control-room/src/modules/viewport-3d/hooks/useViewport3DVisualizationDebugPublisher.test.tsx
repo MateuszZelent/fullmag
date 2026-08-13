@@ -810,7 +810,12 @@ describe("FDM exact target carrier resolution", () => {
       fullFieldBufferIdentity: {
         bufferId: "field-fdm",
         currentDomainGenerationId: "fdm-generation",
-        resourceKey: "/v2/sessions/current/data/fields/H_demag/samples/vector?component=full&scope_kind=full",
+        resourceKey: serializeCanonicalFieldVectorResourceKey(
+          canonicalFieldVectorQuery("H_demag", {
+            component: "full",
+            scope_kind: "full",
+          }),
+        ),
       },
       fullFieldVector: {
         domainGenerationId: "fdm-generation",

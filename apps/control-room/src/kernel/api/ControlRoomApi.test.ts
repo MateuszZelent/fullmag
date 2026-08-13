@@ -2634,6 +2634,34 @@ describe("ControlRoomApi", () => {
     expect(fetchImpl).toHaveBeenCalledTimes(3);
   });
 
+  it("loads typed platform health and capabilities through generated v2 paths", async () => {
+    const fetchImpl = vi.fn(async (url: RequestInfo | URL) => {
+      const path = new URL(String(url)).pathname;
+      if (path === "/v2/platform/health") {
+        return jsonResponse({
+          active_session: true,
+          api_contract_version: "1.0.0",
+          status: "ok",
+          uptime_seconds: 12,
+        });
+      }
+      return jsonResponse({ engines: [], profile_version: "runtime-capabilities.v1" });
+    });
+    const api = new ControlRoomApi({
+      baseUrl: "http://127.0.0.1:8765",
+      fetchImpl,
+    });
+
+    await expect(api.platform.health()).resolves.toMatchObject({ status: "ok" });
+    await expect(api.platform.capabilities()).resolves.toMatchObject({
+      profile_version: "runtime-capabilities.v1",
+    });
+    expect(fetchImpl.mock.calls.map(([url]) => new URL(String(url)).pathname)).toEqual([
+      "/v2/platform/health",
+      "/v2/platform/capabilities",
+    ]);
+  });
+
   it("never retries a GET 404", async () => {
     const fetchImpl = vi.fn(async () =>
       jsonResponse({ error: "missing" }, { status: 404 }),

@@ -1,12 +1,23 @@
 import { describe, expect, it } from "vitest";
 
+import { classifyFrequencyDomainResult } from "@/shared/domain/analysis/frequencyDomainResultClassification";
 import { frequencyDomainChartTitle } from "./useAnalysisFrequencyData";
 
 describe("useAnalysisFrequencyData utilities", () => {
-  it("frequencyDomainChartTitle formats title strings by calculation mode", () => {
-    expect(frequencyDomainChartTitle("modal-spectrum", "fmr_modal")).toBe("FMR modal spectrum");
-    expect(frequencyDomainChartTitle("modal-spectrum", "free_modes")).toBe("Frequency-domain modal spectrum");
-    expect(frequencyDomainChartTitle("response-sweep", "fmr_response")).toBe("FMR response sweep");
-    expect(frequencyDomainChartTitle("dispersion", "dispersion_modal")).toBe("Frequency-domain dispersion");
+  it("uses neutral names until typed physical evidence qualifies FMR", () => {
+    expect(frequencyDomainChartTitle("modal-spectrum", null)).toBe("Eigenfrequency Spectrum");
+    expect(frequencyDomainChartTitle("response-sweep", null)).toBe("Harmonic Response Spectrum");
+    expect(frequencyDomainChartTitle("dispersion", null)).toBe("Dispersion Relation · fₙ(k)");
+
+    const qualified = classifyFrequencyDomainResult({
+      boundaryContext: "finite_open",
+      drive: { identity: "rf-1", kind: "magnetic_rf" },
+      equilibriumId: "eq-1",
+      observables: [{ identity: "chi-xx", kind: "susceptibility", unit: "1" }],
+      runId: "run-1",
+      stageId: "response-1",
+      studyProduct: "driven_response",
+    });
+    expect(frequencyDomainChartTitle("response-sweep", qualified)).toBe("FMR Response Spectrum");
   });
 });

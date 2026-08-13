@@ -5,13 +5,6 @@ import type {
   ModelTreePhysicsInteractionSnapshot,
 } from "../explorerTypes";
 import type { CurrentTransportListResource } from "@/kernel/api/apiTypes";
-import type { AnalysisFieldOverlayState } from "@/kernel/visualization/AnalysisFieldOverlayController";
-import {
-  buildEigenSpectrumChartModel,
-  buildFrequencyResponseChartModel,
-  frequencyDomainManifestPayload,
-} from "@/shared/domain/analysis/frequencyDomainChartModels";
-import { formatFrequencyHz } from "@/shared/domain/analysis/frequencyUnits";
 
 import { buildPhysicsGraphObjectNode } from "./physicsGraphTree";
 import {
@@ -20,14 +13,6 @@ import {
   type ModelTreeResources,
   visualizationDebugNode,
 } from "./explorerNodeContract";
-
-const MODE_VISUALIZATION_VIEWS = [
-  "phase_rotated_real",
-  "real",
-  "imag",
-  "abs",
-  "phase",
-] as const;
 
 function planarMonitorObjectCreationInput(
   resources: ModelTreeResources,
@@ -65,22 +50,6 @@ function planarMonitorRegionCreationInput(
   };
 }
 
-interface ModeVisualizationFieldNode {
-  badge: string;
-  fieldId: string;
-  frequencyIndex?: number;
-  frequencyHz?: number;
-  id: string;
-  label: string;
-  modeIndex?: number;
-  sampleIndex?: number;
-  source: "eigen-mode" | "frequency-response";
-}
-
-interface ModeVisualizationRootIdentity {
-  fieldId: string;
-  source: "eigen-mode" | "frequency-response";
-}
 export function buildObjectExplorerNode(
   object: ModelTreeObjectSnapshot,
   resources: ModelTreeResources = {},
@@ -261,256 +230,50 @@ function modeVisualizationNode(
   const activeOverlay = resources.activeAnalysisFieldOverlay ?? null;
   if (!activeOverlay) return null;
   const nodeId = `${parentId}:mode-visualization`;
-  const primaryField: ModeVisualizationFieldNode = {
-    badge: activeOverlay.query.view ?? "phase_rotated_real",
-    fieldId: activeOverlay.fieldId,
-    id: "active",
-    label: activeOverlay.label,
-    source: activeOverlay.source,
-  };
-  const rootIdentity: ModeVisualizationRootIdentity = {
-    fieldId: primaryField.fieldId,
-    source: primaryField.source,
-  };
+  const provenance = activeOverlay.provenance;
   return {
     id: nodeId,
     kind: "object.mode_visualization",
     label: "Active Analysis Overlay",
     parentId,
     badge: activeOverlay.source === "eigen-mode" ? "Modal" : "Driven",
-    analysisFieldSource: primaryField.source,
+    analysisFieldSource: activeOverlay.source,
+    ...(provenance?.representation
+      ? { analysisFieldRepresentation: provenance.representation }
+      : {}),
     ...(activeOverlay.query.view ? { analysisFieldView: activeOverlay.query.view } : {}),
-    fieldId: primaryField.fieldId,
-    modeVisualizationRootFieldId: rootIdentity.fieldId,
-    modeVisualizationRootSource: rootIdentity.source,
+    ...(provenance?.runId ? { analysisRunId: provenance.runId } : {}),
+    ...(provenance?.stageId ? { analysisStageId: provenance.stageId } : {}),
+    ...(provenance?.artifactRevision !== undefined
+      ? { artifactRevision: provenance.artifactRevision }
+      : {}),
+    ...(provenance?.equilibriumId ? { equilibriumId: provenance.equilibriumId } : {}),
+    fieldId: activeOverlay.fieldId,
+    ...(activeOverlay.frequencyIndex !== undefined
+      ? { frequencyIndex: activeOverlay.frequencyIndex }
+      : {}),
+    ...(activeOverlay.frequencyHz !== undefined
+      ? { frequencyHz: activeOverlay.frequencyHz }
+      : {}),
+    ...(provenance?.kContextKind
+      ? { kContextKind: provenance.kContextKind }
+      : {}),
+    ...(activeOverlay.kPathCoordinateRadPerM !== undefined
+      ? { kPathCoordinateRadPerM: activeOverlay.kPathCoordinateRadPerM }
+      : {}),
     icon: "wave",
+    ...(activeOverlay.modeIndex !== undefined
+      ? { modeIndex: activeOverlay.modeIndex }
+      : {}),
     objectId: object.id,
-    status: "ready",
-    children: [
-      modeVisualizationFieldNode(
-        nodeId,
-        object.id,
-        primaryField,
-        activeOverlay,
-        rootIdentity,
-      ),
-    ],
-  };
-}
-
-function modeVisualizationGroupNodes(
-  parentId: string,
-  objectId: string,
-  fields: readonly ModeVisualizationFieldNode[],
-  activeOverlay: AnalysisFieldOverlayState,
-  rootIdentity: ModeVisualizationRootIdentity,
-): ExplorerNode[] {
-  const eigenFields = fields.filter((field) => field.source === "eigen-mode");
-  const responseFields = fields.filter(
-    (field) => field.source === "frequency-response",
-  );
-  return compactExplorerNodes([
-    modeVisualizationGroupNode({
-      activeOverlay,
-      fields: responseFields,
-      id: `${parentId}:response`,
-      label: "Driven response",
-      objectId,
-      parentId,
-      rootIdentity,
-    }),
-    modeVisualizationGroupNode({
-      activeOverlay,
-      fields: eigenFields,
-      id: `${parentId}:eigen`,
-      label: "Eigenmodes",
-      objectId,
-      parentId,
-      rootIdentity,
-    }),
-  ]);
-}
-
-function modeVisualizationGroupNode({
-  activeOverlay,
-  fields,
-  id,
-  label,
-  objectId,
-  parentId,
-  rootIdentity,
-}: {
-  activeOverlay: AnalysisFieldOverlayState;
-  fields: readonly ModeVisualizationFieldNode[];
-  id: string;
-  label: string;
-  objectId: string;
-  parentId: string;
-  rootIdentity: ModeVisualizationRootIdentity;
-}): ExplorerNode | null {
-  if (fields.length === 0) return null;
-  const firstField = fields[0];
-  return {
-    id,
-    kind: "object.mode_visualization.group",
-    label,
-    parentId,
-    badge: `${fields.length}`,
-    analysisFieldSource: firstField.source,
-    fieldId: firstField.fieldId,
-    fieldIds: fields.map((field) => field.fieldId),
-    modeVisualizationRootFieldId: rootIdentity.fieldId,
-    modeVisualizationRootSource: rootIdentity.source,
-    icon: "folder",
-    objectId,
-    status: "ready",
-    children: fields.map((field) =>
-      modeVisualizationFieldNode(
-        id,
-        objectId,
-        field,
-        activeOverlay,
-        rootIdentity,
-      ),
-    ),
-  };
-}
-
-function modeVisualizationFieldNode(
-  parentId: string,
-  objectId: string,
-  field: ModeVisualizationFieldNode,
-  activeOverlay: AnalysisFieldOverlayState,
-  rootIdentity: ModeVisualizationRootIdentity,
-): ExplorerNode {
-  const active = activeOverlay.fieldId === field.fieldId &&
-    activeOverlay.source === field.source;
-  const id = `${parentId}:${field.id}`;
-  return {
-    id,
-    kind: "object.mode_visualization.field",
-    label: field.label,
-    parentId,
-    activeAnalysisField: active,
-    badge: field.badge,
-    analysisFieldSource: field.source,
-    fieldId: field.fieldId,
-    modeVisualizationRootFieldId: rootIdentity.fieldId,
-    modeVisualizationRootSource: rootIdentity.source,
-    ...(field.frequencyIndex !== undefined
-      ? { frequencyIndex: field.frequencyIndex }
+    ...(provenance?.resourceRef ? { resourceRef: provenance.resourceRef } : {}),
+    ...(activeOverlay.sampleIndex !== undefined
+      ? { sampleIndex: activeOverlay.sampleIndex }
       : {}),
-    icon: "wave",
-    ...(field.modeIndex !== undefined ? { modeIndex: field.modeIndex } : {}),
-    objectId,
-    ...(field.sampleIndex !== undefined ? { sampleIndex: field.sampleIndex } : {}),
     status: "ready",
-    children: MODE_VISUALIZATION_VIEWS.map((view) =>
-      modeVisualizationViewNode(
-        id,
-        objectId,
-        field,
-        view,
-        activeOverlay,
-        rootIdentity,
-      ),
-    ),
+    ...(provenance?.studyProduct ? { studyProduct: provenance.studyProduct } : {}),
+    ...(activeOverlay.wavevectorKf ? { wavevectorKf: activeOverlay.wavevectorKf } : {}),
   };
-}
-
-function modeVisualizationViewNode(
-  parentId: string,
-  objectId: string,
-  field: ModeVisualizationFieldNode,
-  view: string,
-  activeOverlay: AnalysisFieldOverlayState,
-  rootIdentity: ModeVisualizationRootIdentity,
-): ExplorerNode {
-  const active =
-    activeOverlay.fieldId === field.fieldId &&
-    activeOverlay.source === field.source &&
-    (activeOverlay.query.view ?? "phase_rotated_real") === view;
-  return {
-    id: `${parentId}:view:${view}`,
-    kind: "object.mode_visualization.view",
-    label: modeVisualizationViewLabel(view),
-    parentId,
-    activeAnalysisField: active,
-    analysisFieldSource: field.source,
-    analysisFieldView: view,
-    fieldId: field.fieldId,
-    modeVisualizationRootFieldId: rootIdentity.fieldId,
-    modeVisualizationRootSource: rootIdentity.source,
-    ...(field.frequencyIndex !== undefined
-      ? { frequencyIndex: field.frequencyIndex }
-      : {}),
-    icon: "wave",
-    ...(field.modeIndex !== undefined ? { modeIndex: field.modeIndex } : {}),
-    objectId,
-    ...(field.sampleIndex !== undefined ? { sampleIndex: field.sampleIndex } : {}),
-    status: "ready",
-  };
-}
-
-function modeVisualizationFields(
-  resources: ModelTreeResources,
-): ModeVisualizationFieldNode[] {
-  return [
-    ...modeVisualizationResponseFields(resources),
-    ...modeVisualizationEigenFields(resources),
-  ];
-}
-
-function modeVisualizationResponseFields(
-  resources: ModelTreeResources,
-): ModeVisualizationFieldNode[] {
-  const manifestPayload = frequencyDomainManifestPayload(
-    resources.frequencyDomainManifest,
-  );
-  const responseModel = buildFrequencyResponseChartModel(
-    resources.frequencyDomainResponseSweep,
-    manifestPayload,
-  );
-  const fields = new Map<string, ModeVisualizationFieldNode>();
-  for (const point of responseModel.points) {
-    if (!point.fieldId || point.frequencyIndex == null) continue;
-    if (fields.has(point.fieldId)) continue;
-    fields.set(point.fieldId, {
-      badge: formatFrequencyHz(point.frequencyHz),
-      fieldId: point.fieldId,
-      frequencyHz: point.frequencyHz,
-      frequencyIndex: point.frequencyIndex,
-      id: `frequency:${point.frequencyIndex}`,
-      label: formatFrequencyHz(point.frequencyHz),
-      source: "frequency-response",
-    });
-  }
-  return [...fields.values()];
-}
-
-function modeVisualizationEigenFields(
-  resources: ModelTreeResources,
-): ModeVisualizationFieldNode[] {
-  return buildEigenSpectrumChartModel(resources.frequencyDomainSpectrum)
-    .points.filter((point) => point.modeFieldId != null)
-    .map((point) => ({
-      badge: formatFrequencyHz(point.frequencyHz),
-      fieldId: point.modeFieldId as string,
-      frequencyHz: point.frequencyHz,
-      id: `sample:${point.sampleIndex}:mode:${point.rawModeIndex}`,
-      label: `Sample ${point.sampleIndex} Mode ${point.rawModeIndex}`,
-      modeIndex: point.rawModeIndex,
-      sampleIndex: point.sampleIndex,
-      source: "eigen-mode" as const,
-    }));
-}
-
-function modeVisualizationViewLabel(view: string): string {
-  if (view === "real") return "Real";
-  if (view === "imag") return "Imag";
-  if (view === "abs") return "Complex (abs)";
-  if (view === "phase") return "Phase";
-  return "Phase-rotated real";
 }
 
 function objectExtensionNodes(

@@ -7,6 +7,8 @@ import {
   parseAnalysisViewPreferences,
   parseStoredAnalysisViewPreferences,
   serializeAnalysisViewPreferences,
+  ANALYSIS_SUBVIEWS,
+  type AnalysisSubview,
   type AnalysisDescriptorPreference,
   type AnalysisSurface,
   type AnalysisViewPreferencesV2,
@@ -51,7 +53,12 @@ function update(mutator: (current: AnalysisViewPreferencesV2) => AnalysisViewPre
 export function useAnalysisViewPreferencesHydration() {
   const state = useSyncExternalStore(subscribe, () => snapshot, () => SERVER);
   const setActiveSurface = useCallback((activeSurface: AnalysisSurface) => update((preferences) => ({ ...preferences, activeSurface })), []);
+  const setActiveSubview = useCallback((surface: AnalysisSurface, activeSubview: AnalysisSubview) => update((preferences) => (
+    (ANALYSIS_SUBVIEWS[surface] as readonly AnalysisSubview[]).includes(activeSubview)
+      ? { ...preferences, activeSubviews: { ...preferences.activeSubviews, [surface]: activeSubview } }
+      : preferences
+  )), []);
   const setSelectedDatasetRef = useCallback((selectedDatasetRef: string | null) => update((preferences) => ({ ...preferences, selectedDatasetRef })), []);
   const setDescriptorPreference = useCallback((descriptorId: string, descriptor: AnalysisDescriptorPreference) => update((preferences) => ({ ...preferences, descriptorPreferences: { ...preferences.descriptorPreferences, [descriptorId]: descriptor } })), []);
-  return { ...state, setActiveSurface, setDescriptorPreference, setSelectedDatasetRef };
+  return { ...state, setActiveSubview, setActiveSurface, setDescriptorPreference, setSelectedDatasetRef };
 }

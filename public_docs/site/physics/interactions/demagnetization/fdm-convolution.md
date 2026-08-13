@@ -353,7 +353,7 @@ layout cannot be represented.
 | CUDA FP64 energy | `reduce_demag_energy_fp64` | FDM GPU FP64 |
 | GPU resource/FFT setup | `context_upload_demag_kernel_spectra` and `context_refresh_demag_observable` | FDM GPU |
 | Active and airbox effective-field reconstruction | `reconstruct_inactive_fdm_visual_effective_field` | FDM CPU, source-level owner; terminal contract not runtime-qualified |
-| Full-grid materialization | `build_full_grid_materialized_fields` | FDM CPU, selective current path; not proof of an atomic terminal generation/batch |
+| Atomic terminal field materialization | `build_atomic_terminal_update` | FDM CPU, publishes one terminal update with the final field set |
 | CPU terminal outcome | `execute_reference_fdm` | FDM CPU source-level current path; not proof of an atomic terminal generation/batch |
 | Session field promotion | `ingest_preview_fields_from_update` | CLI promotes fields individually; not proof of an atomic terminal generation/batch |
 
@@ -404,7 +404,7 @@ not expose those parameters as if they controlled FFT accuracy.
 | `backends/fdm/gpu/cuda/runtime/context.cu` | `context_upload_demag_kernel_spectra` | Device tensor-spectrum upload and validation. | FDM GPU |
 | `backends/fdm/gpu/cuda/runtime/context.cu` | `context_refresh_demag_observable` | Device demag observable refresh. | FDM GPU |
 | `crates/fullmag-runner/src/fdm/cpu/reference.rs` | `reconstruct_inactive_fdm_visual_effective_field` | Reconstructs the defined airbox aggregate from demag, external, Oersted and antenna fields. | FDM CPU, source-level only |
-| `crates/fullmag-runner/src/interactive_runtime.rs` | `build_full_grid_materialized_fields` | Selectively builds full-grid materialized fields from one observable state; it is not proof of an atomic terminal generation/batch. | FDM CPU, source-level only |
+| `crates/fullmag-runner/src/interactive/runtime.rs` | `build_atomic_terminal_update` | Builds one atomic terminal update and materializes the final FDM field set from the terminal backend state. | FDM CPU, source-level only |
 | `crates/fullmag-runner/src/fdm/cpu/reference.rs` | `execute_reference_fdm` | Returns the CPU terminal run outcome and scheduled outputs; it is not proof of an atomic terminal generation/batch. | FDM CPU, source-level only |
 | `crates/fullmag-cli/src/live_workspace.rs` | `ingest_preview_fields_from_update` | Promotes incoming fields individually into session state; it is not proof of an atomic terminal generation/batch. | CLI control plane |
 | `crates/fullmag-cli/src/live_workspace.rs` | `feature_flags` | Reads preview-disable benchmark/display configuration. | CLI control plane |

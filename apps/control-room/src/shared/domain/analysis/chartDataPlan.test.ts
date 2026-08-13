@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  analysisColumnDescriptorsForQuery,
   buildChartDataPlan,
   chartTableWindowFromBinary,
   chartTableWindowValue,
@@ -13,6 +14,32 @@ const columns = [
 ];
 
 describe("ChartDataPlan", () => {
+  it("preserves canonical observable identity in queried column descriptors", () => {
+    const selected = analysisColumnDescriptorsForQuery([
+      {
+        column_id: "mx",
+        component: "x",
+        dimension: "magnetization",
+        label: "m x",
+        quantity_id: "m",
+        reduction: "mean",
+        scope: "magnetic_domain",
+        unit: "1",
+      },
+    ], ["mx"]);
+
+    expect(selected).toEqual([{
+      column_id: "mx",
+      component: "x",
+      dimension: "magnetization",
+      label: "m x",
+      quantity_id: "m",
+      reduction: "mean",
+      scope: "magnetic_domain",
+      unit: "1",
+    }]);
+  });
+
   it("builds a stable bounded semantic query identity", () => {
     const first = buildChartDataPlan({
       columns: ["step", "mx"],

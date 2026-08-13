@@ -7,8 +7,12 @@ import type { ChartPoint, ChartSeries } from "./chartSeries";
 
 interface TableColumnMeta {
   column_id: string;
+  component?: string | null;
   dimension?: string;
   label: string;
+  quantity_id?: string;
+  reduction?: string | null;
+  scope?: string;
   unit: string;
 }
 
@@ -63,10 +67,15 @@ export function buildScalarTableSeries({
     const yColumnIndex = columnIds.indexOf(column.column_id);
     return [{
       ...(dataRevision == null ? {} : { dataRevision }),
+      columnId: column.column_id,
+      ...(column.component !== undefined ? { component: column.component } : {}),
+      ...(column.dimension !== undefined ? { dimension: column.dimension } : {}),
       id: tableChartSeriesId(tableId, resolvedXAxisId, column.column_id),
       label: column.label || column.column_id,
       points: chartPointsForColumns(table, xColumnIndex, yColumnIndex),
-      quantity: column.column_id,
+      quantity: column.quantity_id ?? column.column_id,
+      ...(column.reduction !== undefined ? { reduction: column.reduction } : {}),
+      ...(column.scope !== undefined ? { scope: column.scope } : {}),
       source,
       status,
       unit: column.unit,

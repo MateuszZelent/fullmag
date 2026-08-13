@@ -24,16 +24,8 @@ export function familyLabel(kind: string | null): string {
   if (kind.startsWith("results.frequency_response")) {
     return "Driven frequency response";
   }
-  if (kind.startsWith("resources.analysis.eigen")) return "Eigen resource";
-  if (kind.startsWith("resources.analysis.frequency_response")) {
-    return "Frequency-response resource";
-  }
   if (kind === "resources.mesh.periodic_pairs") {
     return "Periodic / Floquet mesh resource";
-  }
-  if (kind.startsWith("jobs.frequency_domain")) return "Frequency-domain job";
-  if (kind.startsWith("diagnostics.frequency_domain")) {
-    return "Frequency-domain diagnostics";
   }
   return "Frequency-domain";
 }

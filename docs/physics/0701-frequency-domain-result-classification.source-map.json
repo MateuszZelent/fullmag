@@ -1,0 +1,119 @@
+{
+  "document": {
+    "path": "docs/physics/0701-frequency-domain-result-classification.md"
+  },
+  "backend_matrix": [
+    {
+      "solver": "FEM",
+      "device": "CPU",
+      "status": "documented",
+      "reason": "The classifier consumes published artifacts without promoting numerical qualification beyond the FEM CPU frequency-domain contracts."
+    },
+    {
+      "solver": "FEM",
+      "device": "GPU",
+      "status": "semantic_only",
+      "reason": "Classification is legal for published evidence but does not promote unqualified GPU or nonzero-k execution."
+    },
+    {
+      "solver": "FDM",
+      "device": "CPU",
+      "status": "semantic_only",
+      "reason": "Classification is backend-neutral; this page does not claim an executable FDM frequency-domain lane."
+    },
+    {
+      "solver": "FDM",
+      "device": "GPU",
+      "status": "semantic_only",
+      "reason": "Classification is backend-neutral; this page does not claim FDM GPU availability or parity."
+    }
+  ],
+  "equations": [
+    {
+      "id": "eq-fd-classification-modal",
+      "symbols": ["L", "B_alpha", "q_n", "k", "omega_n", "f_n"],
+      "sources": ["modal-solver", "classifier"]
+    },
+    {
+      "id": "eq-fd-classification-driven",
+      "symbols": ["L", "B_alpha", "q", "k", "omega", "b_rf"],
+      "sources": ["driven-solver", "classifier"]
+    },
+    {
+      "id": "eq-fd-classification-response",
+      "symbols": ["A", "chi", "P_abs", "q", "k", "f", "O_A", "O_chi", "O_P"],
+      "sources": ["driven-solver", "classifier"]
+    },
+    {
+      "id": "eq-fd-classification-coupling",
+      "symbols": ["C_n", "b_rf", "q_n"],
+      "sources": ["classifier"]
+    }
+  ],
+  "symbols": [
+    {"id": "L", "latex": "\\mathcal{L}", "meaning": "zliniaryzowany operator pola efektywnego i momentów", "si_unit": "\\mathrm{s^{-1}}"},
+    {"id": "B_alpha", "latex": "\\mathcal{B}_{\\alpha}", "meaning": "operator masowy/żyroskopowy z konwencją tłumienia", "si_unit": "1"},
+    {"id": "q_n", "latex": "\\mathbf{q}_n", "meaning": "zespolone współrzędne styczne modu n", "si_unit": "zależna od normalizacji, jawna w artefakcie"},
+    {"id": "q", "latex": "\\mathbf{q}", "meaning": "zespolona odpowiedź styczna", "si_unit": "zależna od normalizacji, jawna w artefakcie"},
+    {"id": "k", "latex": "\\mathbf{k}", "meaning": "wektor Blocha/Floqueta", "si_unit": "\\mathrm{rad\\,m^{-1}}"},
+    {"id": "omega_n", "latex": "\\omega_n", "meaning": "częstotliwość kołowa wymuszenia lub modu", "si_unit": "\\mathrm{rad\\,s^{-1}}"},
+    {"id": "omega", "latex": "\\omega", "meaning": "częstotliwość kołowa wymuszenia lub modu", "si_unit": "\\mathrm{rad\\,s^{-1}}"},
+    {"id": "f_n", "latex": "f_n", "meaning": "częstotliwość liniowa wymuszenia lub modu", "si_unit": "\\mathrm{Hz}"},
+    {"id": "f", "latex": "f", "meaning": "częstotliwość liniowa wymuszenia lub modu", "si_unit": "\\mathrm{Hz}"},
+    {"id": "b_rf", "latex": "\\mathbf{b}_{\\mathrm{RF}}", "meaning": "zespolone wymuszenie magnetyczne RF w układzie stycznym", "si_unit": "\\mathrm{A\\,m^{-1}}"},
+    {"id": "A", "latex": "A", "meaning": "amplituda odpowiedzi określona przez opublikowane observable", "si_unit": "jednostka opublikowana przez observable"},
+    {"id": "chi", "latex": "\\chi", "meaning": "podatność określona przez opublikowany kontrakt", "si_unit": "jednostka opublikowana przez observable"},
+    {"id": "P_abs", "latex": "P_{\\mathrm{abs}}", "meaning": "moc absorbowana lub jawnie nazwana gęstość mocy", "si_unit": "\\mathrm{W}"},
+    {"id": "C_n", "latex": "C_n", "meaning": "miara sprzężenia RF z modem n", "si_unit": "jednostka opublikowana przez observable"},
+    {"id": "O_A", "latex": "\\mathcal{O}_{A}", "meaning": "jawnie zdefiniowane funkcjonały obserwabli", "si_unit": "zależna od observable"},
+    {"id": "O_chi", "latex": "\\mathcal{O}_{\\chi}", "meaning": "jawnie zdefiniowane funkcjonały obserwabli", "si_unit": "zależna od observable"},
+    {"id": "O_P", "latex": "\\mathcal{O}_{P}", "meaning": "jawnie zdefiniowane funkcjonały obserwabli", "si_unit": "zależna od observable"}
+  ],
+  "sources": [
+    {
+      "id": "modal-solver",
+      "path": "backends/fem/src/frequency_domain/modal_eigen_solver.cpp",
+      "symbol": "solve_modal_eigen_contract",
+      "responsibility": "Own the modal frequency-domain solve contract used to publish eigenfrequencies and modal artifacts."
+    },
+    {
+      "id": "driven-solver",
+      "path": "backends/fem/src/frequency_domain/modal_eigen_solver.cpp",
+      "symbol": "solve_driven_response_contract",
+      "responsibility": "Own the forced harmonic frequency-response solve contract used to publish response artifacts."
+    },
+    {
+      "id": "classifier",
+      "path": "apps/control-room/src/shared/domain/analysis/frequencyDomainResultClassification.ts",
+      "symbol": "classifyFrequencyDomainResult",
+      "responsibility": "Classify typed result evidence by physical family, product, k context and FMR qualification without parsing labels or paths."
+    },
+    {
+      "id": "classification-contract",
+      "path": "apps/control-room/src/shared/domain/analysis/frequencyDomainResultClassification.ts",
+      "symbol": "classifyFrequencyDomainResult",
+      "responsibility": "Define immutable run, stage, equilibrium, boundary, sampling, drive and observable evidence."
+    },
+    {
+      "id": "resource-adapter",
+      "path": "apps/control-room/src/modules/explorer/builders/resultsExplorerNodes.ts",
+      "symbol": "physicsFirstResultsSnapshotFromResources",
+      "responsibility": "Adapt revisioned resources into a fail-closed typed Results snapshot and report missing contract evidence."
+    },
+    {
+      "id": "results-builder",
+      "path": "apps/control-room/src/modules/explorer/builders/resultsExplorerNodes.ts",
+      "symbol": "buildPhysicsFirstResultsTree",
+      "responsibility": "Build deterministic run and stage scoped physics-first result nodes from classified evidence."
+    },
+    {
+      "id": "inspector-model",
+      "path": "apps/control-room/src/modules/inspector/panels/physics-first/physicsFirstResultInspectorModel.ts",
+      "symbol": "physicsFirstResultInspectorModel",
+      "responsibility": "Resolve exact semantic titles, physical labels and method labels for every physics-first result kind."
+    }
+  ],
+  "public_api": {
+    "parameters": []
+  }
+}

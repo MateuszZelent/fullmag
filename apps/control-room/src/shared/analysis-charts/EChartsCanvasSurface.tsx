@@ -24,6 +24,10 @@ import {
 import { parseLabelAndUnit } from "./scientificChartFormatting";
 import type { ChartDataPresentationState } from "./chartPresentationState";
 
+interface ChartAuditRuntime {
+  scheduleChartAnimationFrame?: (callback: FrameRequestCallback) => number;
+}
+
 export function EChartsCanvasSurface({
   children,
   className = "fm-analysis-plots__echarts",
@@ -137,7 +141,7 @@ export function EChartsCanvasSurface({
 
         observer = new ResizeObserver(() => {
           cancelAnimationFrame(frame);
-          frame = requestAnimationFrame(() => {
+          frame = scheduleChartAnimationFrame(() => {
             callbacksRef.current.diagnostics?.resized?.();
             owner.resize();
           });
@@ -222,6 +226,15 @@ export function EChartsCanvasSurface({
       {children}
     </div>
   );
+}
+
+function scheduleChartAnimationFrame(callback: FrameRequestCallback): number {
+  const runtime = (
+    globalThis as typeof globalThis & {
+      __FULLMAG_CHART_AUDIT_RUNTIME__?: ChartAuditRuntime;
+    }
+  ).__FULLMAG_CHART_AUDIT_RUNTIME__;
+  return runtime?.scheduleChartAnimationFrame?.(callback) ?? requestAnimationFrame(callback);
 }
 
 function accessibleAxisLabel(axis: { label: string; unit: string }): string {

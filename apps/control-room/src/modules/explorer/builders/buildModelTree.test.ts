@@ -6,7 +6,6 @@ import type {
   FdmMultilayerLayoutResource,
   FdmRegionMembershipResource,
   FrequencyDomainManifestResource,
-  FrequencyDomainSweepProgressResource,
   HysteresisExecutionTreeResource,
   SceneResource,
 } from "@/kernel/api/apiTypes";
@@ -15,9 +14,7 @@ import type { FdmDomainPresentation } from "@/shared/domain/mesh/domainPresentat
 import {
   ANALYSIS_FREQUENCY_DOMAIN_EIGEN_DISPERSION_PATH,
   ANALYSIS_FREQUENCY_DOMAIN_EIGEN_SPECTRUM_V2_PATH,
-  ANALYSIS_FREQUENCY_DOMAIN_MANIFEST_V1_PATH,
   ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_MAGNETIC_SWEEP_PATH,
-  ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_PROGRESS_V1_PATH,
   ANALYSIS_HYSTERESIS_POINT_PATH,
   ANALYSIS_HYSTERESIS_SETTLE_TRACE_PATH,
   DATA_FIELD_VECTOR_PATH,
@@ -285,44 +282,6 @@ const FREQUENCY_DOMAIN_RESPONSE_SWEEP = {
   schema_version: "frequency_domain_response_sweep_resource.v1",
   status: "ready",
 } as const;
-
-const FREQUENCY_DOMAIN_RESPONSE_PROGRESS: FrequencyDomainSweepProgressResource = {
-  complete: false,
-  completed_frequency_points: 3,
-  current_frequency_hz: 10.5e9,
-  demag_mode: "periodic_airbox_k0",
-  frequency_max_hz: 12.0e9,
-  frequency_min_hz: 8.0e9,
-  latest_artifact_manifest_path: "frequency_domain/manifest.partial.v1.json",
-  missing_reason: null,
-  partial_artifacts_available: true,
-  progress_json:
-    '{"schema_version":"frequency_domain_sweep_progress.v1","state":"running"}',
-  schema_version: "frequency_domain_sweep_progress.v1",
-  state: "running",
-  status: "ok",
-  total_frequency_points: 10,
-  written_frequency_point_artifacts: 3,
-};
-
-const FREQUENCY_DOMAIN_RESPONSE_CANCEL_REQUESTED: FrequencyDomainSweepProgressResource = {
-  complete: false,
-  completed_frequency_points: 4,
-  current_frequency_hz: 10.0e9,
-  demag_mode: "periodic_airbox_k0",
-  frequency_max_hz: 12.0e9,
-  frequency_min_hz: 8.0e9,
-  latest_artifact_manifest_path: "frequency_domain/manifest.cancelled.v1.json",
-  missing_reason: null,
-  partial_artifacts_available: true,
-  progress_json:
-    '{"schema_version":"frequency_domain_sweep_progress.v1","state":"cancel_requested"}',
-  schema_version: "frequency_domain_sweep_progress.v1",
-  state: "cancel_requested",
-  status: "ok",
-  total_frequency_points: 10,
-  written_frequency_point_artifacts: 4,
-};
 
 describe("buildModelTree", () => {
   it("keeps Visualization available for a primitive-only scene object", () => {
@@ -2037,7 +1996,17 @@ describe("buildModelTree", () => {
         {
           activeAnalysisFieldOverlay: {
             fieldId: "analysis:frequency-response:field-0001",
+            frequencyIndex: 1,
             label: "Response field 1",
+            provenance: {
+              artifactRevision: 9,
+              equilibriumId: "equilibrium-2",
+              kContextKind: "gamma",
+              resourceRef: "data/fields/analysis:frequency-response:field-0001",
+              runId: "run-response-2",
+              stageId: "response-stage",
+              studyProduct: "driven_response",
+            },
             query: {
               component: "full",
               phase_rad: 0,
@@ -2063,34 +2032,27 @@ describe("buildModelTree", () => {
       objectId: "film",
       parentId: "model:object:film:visualization",
       status: "ready",
+      analysisRunId: "run-response-2",
+      analysisStageId: "response-stage",
+      artifactRevision: 9,
+      equilibriumId: "equilibrium-2",
+      frequencyIndex: 1,
+      kContextKind: "gamma",
+      resourceRef: "data/fields/analysis:frequency-response:field-0001",
+      studyProduct: "driven_response",
     });
     expect(
-      flattened.find(
-        (node) =>
-          node.id === "model:object:film:visualization:mode-visualization:active",
-      ),
-    ).toMatchObject({
-      activeAnalysisField: true,
-      fieldId: "analysis:frequency-response:field-0001",
-      kind: "object.mode_visualization.field",
-      label: "Response field 1",
-      objectId: "film",
-    });
+      flattened.filter((node) => node.label === "Active Analysis Overlay"),
+    ).toHaveLength(1);
     expect(
-      flattened.find(
-        (node) =>
-          node.id ===
-          "model:object:film:visualization:mode-visualization:active:view:real",
+      flattened.some((node) =>
+        node.id.startsWith(
+          "model:object:film:visualization:mode-visualization:",
+        ),
       ),
-    ).toMatchObject({
-      activeAnalysisField: true,
-      analysisFieldView: "real",
-      fieldId: "analysis:frequency-response:field-0001",
-      kind: "object.mode_visualization.view",
-      label: "Real",
-    });
+    ).toBe(false);
   });
-  it("marks the active frequency-domain resource from the visualization field", () => {
+  it("does not derive resource fields from an untyped manifest payload", () => {
     const activeResources = flattenExplorerNodes(
       buildExplorerTree("resources", {
         activeAnalysisFieldOverlay: {
@@ -2123,71 +2085,24 @@ describe("buildModelTree", () => {
       }),
     );
 
-    expect(
-      activeResources.find(
-        (node) => node.id === "resources:analysis:frequency-response:field",
-      ),
-    ).toMatchObject({
-      activeAnalysisField: true,
-      kind: "resources.analysis.frequency_response.field",
+    expect(activeResources).toHaveLength(1);
+    expect(activeResources[0]).toMatchObject({
+      id: "resources:root",
+      status: "unavailable",
     });
   });
-  it("builds frequency-domain jobs from live progress resources", () => {
+  it("does not infer jobs from frequency-domain artifacts or progress", () => {
     const jobs = flattenExplorerNodes(
       buildExplorerTree("jobs", {
         currentRun: currentRun("run-fd-1", 7),
-        frequencyDomainCancelRequested: FREQUENCY_DOMAIN_RESPONSE_CANCEL_REQUESTED,
         frequencyDomainManifest: FREQUENCY_DOMAIN_MANIFEST,
-        frequencyDomainResponseProgress: FREQUENCY_DOMAIN_RESPONSE_PROGRESS,
         frequencyDomainResponseSweep: FREQUENCY_DOMAIN_RESPONSE_SWEEP,
         frequencyDomainSpectrum: FREQUENCY_DOMAIN_SPECTRUM,
       }),
     );
 
-    expect(
-      jobs.find((node) => node.id === "jobs:frequency-domain"),
-    ).toMatchObject({
-      badge: "3/10 running @ 10.5 GHz periodic_airbox_k0",
-      kind: "jobs.frequency_domain.root",
-      status: "cancelled",
-    });
-    expect(
-      jobs.find((node) => node.id === "jobs:frequency-domain:stage-run"),
-    ).toMatchObject({
-      badge: "frequency_domain_manifest.v1",
-      resourceRef: ANALYSIS_FREQUENCY_DOMAIN_MANIFEST_V1_PATH,
-      status: "cancelled",
-    });
-    expect(
-      jobs.find((node) => node.id === "jobs:frequency-domain:eigen-sample"),
-    ).toMatchObject({
-      badge: "2 mode(s)",
-      resourceRef: ANALYSIS_FREQUENCY_DOMAIN_EIGEN_SPECTRUM_V2_PATH,
-      status: "completed",
-    });
-    expect(
-      jobs.find(
-        (node) => node.id === "jobs:frequency-domain:response-frequency",
-      ),
-    ).toMatchObject({
-      badge: "8 GHz-12 GHz",
-      resourceRef: ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_PROGRESS_V1_PATH,
-      status: "cancelled",
-    });
-    expect(
-      jobs.find((node) => node.id === "jobs:frequency-domain:response-progress"),
-    ).toMatchObject({
-      badge: "3/10 running @ 10.5 GHz periodic_airbox_k0",
-      resourceRef: ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_PROGRESS_V1_PATH,
-      status: "cancelled",
-    });
-    expect(
-      jobs.find((node) => node.id === "jobs:frequency-domain:artifact-export"),
-    ).toMatchObject({
-      badge: "frequency_domain/manifest.partial.v1.json",
-      resourceRef: ANALYSIS_FREQUENCY_DOMAIN_MANIFEST_V1_PATH,
-      status: "ready",
-    });
+    expect(jobs).toHaveLength(1);
+    expect(jobs[0]).toMatchObject({ id: "jobs:root", status: "unavailable" });
   });
 
   it("does not project unowned legacy response points into Results", () => {
@@ -3198,27 +3113,11 @@ describe("buildModelTree", () => {
         frequencyDomainManifest: manifest,
       }),
     );
-    expect(
-      resources.find(
-        (node) =>
-          node.kind === "resources.analysis.frequency_domain.dispersion",
-      ),
-    ).toMatchObject({
-      badge: "demag-k rejected",
-      status: "unsupported",
-    });
-    expect(
-      resources.find(
-        (node) =>
-          node.kind === "resources.analysis.frequency_domain.response_map",
-      ),
-    ).toMatchObject({
-      badge: "available",
-      status: "ready",
-    });
+    expect(resources).toHaveLength(1);
+    expect(resources[0]).toMatchObject({ id: "resources:root", status: "unavailable" });
   });
 
-  it("shows a driven response map under k-resolved Results with explicit ownership", () => {
+  it("does not fabricate a driven response map from k metadata and a response sweep", () => {
     const results = flattenExplorerNodes(
       buildExplorerTree("results", {
         currentRun: currentRun("run-response-map", 8),
@@ -3253,21 +3152,7 @@ describe("buildModelTree", () => {
       }),
     );
 
-    expect(
-      results.find(
-        (node) =>
-          node.id ===
-          "results:run:run-response-map:k-resolved:stage:response-stage:driven_response:response-map",
-      ),
-    ).toMatchObject({
-      analysisRunId: "run-response-map",
-      analysisStageId: "response-stage",
-      artifactRevision: "response-map-r8",
-      equilibriumId: "equilibrium-r5",
-      kind: "results.dispersion.driven.response_map",
-      label: "Spectral Response Map · A(k,f)",
-      studyProduct: "driven_response",
-    });
+    expect(results.some((node) => node.kind === "results.dispersion.driven.response_map")).toBe(false);
   });
   it("exposes study runtime and recovery commands through explorer context menus", () => {
     const flattened = flattenExplorerNodes(

@@ -1774,15 +1774,14 @@ function checkAnalysisPlotsStableResourceInputs() {
     "useAnalysisPlotsController(kernel)",
     "AnalysisPlotsView",
     "{...controller}",
-    "onComparisonDatasetRefChange={controller.setComparisonDatasetRef}",
     "onDatasetRefChange={controller.setSelectedDatasetRef}",
     "onSurfaceChange={controller.setActiveSurface}",
   ]);
   requireTokens(controllerSource, "analysis plots stable resource inputs", [
     "useAnalysisDatasetData",
     "useAnalysisFrequencyData",
-    'activeSurface === "dynamics" || activeSurface === "comparison"',
-    'activeSurface === "comparison" && comparisonDatasetRef !== null',
+    'enabled: activeSurface === "dynamics"',
+    "comparisonUnavailableReason: ANALYSIS_COMPARISON_UNAVAILABLE_REASON",
     'activeSurface === "resonance-fmr" || activeSurface === "dispersion"',
     'useSpinWaveGammaResource(activeSurface === "dynamics")',
     'useDynamicStructureFactorResource(activeSurface === "dispersion")',
@@ -1813,9 +1812,13 @@ function checkAnalysisPlotsStableResourceInputs() {
   requireTokens(viewSource, "analysis plots stable resource inputs", [
     "const chartSeries = useMemo(() => {",
     "buildScalarChartSeries(rows,",
+    "Comparison unavailable",
+    "ANALYSIS_COMPARISON_UNAVAILABLE_REASON",
+    "subviews={subviews}",
+  ]);
+  forbidTokens(viewSource, "analysis plots unavailable Comparison contract", [
     "const comparisonSeries = useMemo(() => {",
-    "comparisonSeriesKey",
-    "onComparisonSelectedSeriesKeysChange",
+    "Compatibility verdict: Compatible",
   ]);
   requireTokens(tableSurfaceSource, "analysis plots stable resource inputs", [
     // allSeries={chartSeries} ensures the full series list is passed for stable axis labels

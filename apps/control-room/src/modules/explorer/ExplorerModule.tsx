@@ -9,12 +9,17 @@ import {
   SlidersHorizontal,
 } from "lucide-react";
 
-import type { LiveStatusResource } from "@/kernel/api/apiTypes";
+import type {
+  LiveStatusResource,
+  SolverProfileResource,
+} from "@/kernel/api/apiTypes";
+import { createCommandContext } from "@/kernel/commands/commandContext";
 import type { KernelEventMap } from "@/kernel/events/eventTypes";
 import type { EventBus } from "@/kernel/events/EventBus";
 import {
   useMeshBuildCurrent,
   useMeshBuildLatestSuccessful,
+  useGeometryValidationResource,
   useMeshRegionMembershipsResource,
   useMeshSharedDomainManifestResource,
   useMeshSharedDomainQualityGatesResource,
@@ -42,25 +47,39 @@ import {
   useFrequencyDomainEigenDispersionResource,
   useFrequencyDomainEigenSpectrumResource,
   useFrequencyDomainManifestResource,
-  useFrequencyDomainResponseCancelRequestedResource,
-  useFrequencyDomainResponseProgressResource,
   useFrequencyDomainResponseSweepResource,
   useHysteresisExecutionTreeResource,
+  useArtifactsResource,
+  useFieldCatalogResource,
+  useTableListResource,
   useStageExecutionResource,
   useCurrentRunResource,
+  useCommandQueueResource,
+  useSolverProfileResource,
+  useSolverStatusResource,
 } from "@/kernel/resources/studyRuntimeResources";
 import { WorkspaceRenderProfiler } from "@/kernel/performance/reactRenderProfiler";
 import { usePhysicsGraphResource } from "@/kernel/resources/physicsGraphResources";
 import { useCurrentTransportsResource } from "@/kernel/resources/spinAuthoringResources";
 import { useSessionStatusSelector } from "@/kernel/resources/useSessionStatus";
+import {
+  usePlatformCapabilitiesResource,
+  usePlatformHealthResource,
+  useRuntimeCommandDetailsResource,
+} from "@/kernel/resources/runtimeExplorerResources";
+import { runtimeExplorerDetailStore } from "@/kernel/resources/runtimeExplorerDetailStore";
 import { useSelectionSelector } from "@/kernel/selection/useSelection";
-import { isVisualizationAirboxIdentity } from "@/kernel/selection/selectionTypes";
+import {
+  isVisualizationAirboxIdentity,
+  selectionRefEquals,
+} from "@/kernel/selection/selectionTypes";
 import {
   buildSemanticRenderTargetCatalog,
   isUniverseOuterBoundaryCarrier,
   semanticRenderTargetCarriersFromManifest,
 } from "@/kernel/selection/semanticRenderTargetCatalog";
-import { useAnalysisFieldOverlay } from "@/kernel/visualization/AnalysisFieldOverlayController";
+import { useAnalysisFieldOverlayContext } from "@/kernel/visualization/AnalysisFieldOverlayController";
+import { AnalysisFieldOverlayContextNotice } from "@/kernel/visualization/AnalysisFieldOverlayContextNotice";
 import {
   resolveActiveObjectExtensionExplorerItems,
 } from "@/kernel/object-extensions/ObjectExtensionsSectionModel";
@@ -85,6 +104,16 @@ import {
   findExplorerNodePath,
 } from "./builders/buildModelTree";
 import {
+  resolveCurrentExplorerSelectionNode,
+  selectionRefFromNode,
+  selectExplorerNode,
+} from "./explorerSelection";
+import {
+  runtimeExplorerSnapshotFromResources,
+  runtimeResourceSnapshot,
+  runtimeResourceSnapshotEquals,
+} from "./builders/runtimeExplorerSnapshot";
+import {
   modelTreeSnapshotFromScene,
   modelTreeSnapshotWithHysteresisExecutionTree,
   modelTreeSnapshotWithStageExecution,
@@ -100,15 +129,18 @@ import {
   collapseExplorerNodes,
   expandExplorerNodes,
   ensureExplorerModelObjectDefaults,
+  reconcileResultContextRunId,
   revealExplorerNode,
   setExplorerActiveTab,
   setExplorerFilterText,
+  setExplorerResultContextRunId,
   shouldAutoRevealModelTab,
   useExplorerStoreSelector,
 } from "./explorerStore";
 import type { ModelTreeMeshSnapshot } from "./explorerTypes";
 import { ExplorerTreeView } from "./ExplorerTreeView";
 import { ResultContextSelector } from "./ResultContextSelector";
+import { useAnalysisFieldOverlayResultContext } from "./useAnalysisFieldOverlayResultContext";
 
 type TextureLoadNodeRequestedEvent =
   KernelEventMap["explorer:texture-load-node-requested"];
@@ -271,7 +303,12 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
   const objectExtensionActivation = useObjectExtensionActivationSnapshot();
   const pinnedQuickChart = useQuickChartWorkspaceSelector((state) => state.pinned);
   const selectedNodeId = useSelectionSelector((selection) => selection.nodeId);
+  const selectedRef = useSelectionSelector((selection) => selection.ref);
+  const resultContextRunId = useExplorerStoreSelector(
+    (explorer) => explorer.resultContextRunId,
+  );
   const previousSelectedNodeId = useRef<string | null>(null);
+  const previousCurrentRunId = useRef<string | null>(null);
   const crossSections = useCrossSectionWorkspaceSelector(
     selectExplorerCrossSections,
     { isEqual: explorerCrossSectionsEqual },
@@ -294,9 +331,10 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
   }, [crossSections]);
   const modelTabActive = activeTab === "model";
   const planarMonitors = usePlanarMonitorsResource({ enabled: modelTabActive });
-  const activeAnalysisFieldOverlay = useAnalysisFieldOverlay(
+  const analysisFieldOverlayContext = useAnalysisFieldOverlayContext(
     kernel.analysisFieldOverlay,
   );
+  const activeAnalysisFieldOverlay = analysisFieldOverlayContext.overlay;
   const modeVisualizationResourceActive =
     modelTabActive && Boolean(activeAnalysisFieldOverlay);
   const frequencyDomainTabActive =
@@ -304,6 +342,18 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
     activeTab === "resources" ||
     activeTab === "jobs" ||
     activeTab === "diagnostics";
+  const runtimeTabActive =
+    activeTab === "resources" ||
+    activeTab === "jobs" ||
+    activeTab === "diagnostics";
+  const resultsResourceActive = runtimeTabActive || activeTab === "results";
+  const runtimeSessionStatus = useSessionStatusSelector(
+    runtimeResourceSnapshot,
+    {
+      enabled: runtimeTabActive,
+      isEqual: runtimeResourceSnapshotEquals,
+    },
+  );
   const sessionStatusData = useSessionStatusSelector(
     selectExplorerModelRuntimeStatus,
     { enabled: modelTabActive, isEqual: explorerModelRuntimeStatusEquals },
@@ -348,7 +398,10 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
     enabled: shouldLoadRuntimeMeshBuild(modelTabActive, sessionStatusData),
   });
   const manifest = useMeshSharedDomainManifestResource({
-    enabled: shouldLoadRuntimeMeshManifest(modelTabActive, sessionStatusData),
+    enabled: shouldLoadRuntimeMeshManifest(
+      modelTabActive || runtimeTabActive,
+      modelTabActive ? sessionStatusData : runtimeSessionStatus.data,
+    ),
   });
   const qualityGates = useMeshSharedDomainQualityGatesResource({
     enabled: shouldLoadRuntimeMeshManifest(modelTabActive, sessionStatusData),
@@ -358,8 +411,8 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
   });
   const stageExecution = useStageExecutionResource({
     enabled: shouldLoadRuntimeStageExecution(
-      modelTabActive,
-      sessionStatusData,
+      modelTabActive || runtimeTabActive,
+      modelTabActive ? sessionStatusData : runtimeSessionStatus.data,
     ),
   });
   const activeHysteresisStageId = useMemo(
@@ -378,8 +431,51 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
     enabled: frequencyDomainTabActive || modeVisualizationResourceActive,
   });
   const currentRun = useCurrentRunResource({
-    enabled: frequencyDomainTabActive,
+    enabled: frequencyDomainTabActive || Boolean(activeAnalysisFieldOverlay),
   });
+  const commandQueue = useCommandQueueResource({ enabled: runtimeTabActive });
+  const artifacts = useArtifactsResource({ enabled: resultsResourceActive });
+  const fieldCatalog = useFieldCatalogResource({ enabled: runtimeTabActive });
+  const tableCatalog = useTableListResource({ enabled: resultsResourceActive });
+  const runtimeCommandIds = useMemo(
+    () => (commandQueue.data?.commands ?? []).map((command) => command.command_id),
+    [commandQueue.data?.commands],
+  );
+  const commandDetails = useRuntimeCommandDetailsResource(runtimeCommandIds, {
+    enabled: runtimeTabActive,
+  });
+  const geometryValidation = useGeometryValidationResource({
+    enabled: runtimeTabActive,
+  });
+  const platformCapabilities = usePlatformCapabilitiesResource({
+    enabled: runtimeTabActive,
+  });
+  const platformHealth = usePlatformHealthResource({ enabled: runtimeTabActive });
+  const solverProfile = useSolverProfileResource({ enabled: runtimeTabActive });
+  const solverStatus = useSolverStatusResource({ enabled: runtimeTabActive });
+  const currentRunId = currentRun.data?.run_id ?? null;
+  const selectedResultRunId =
+    selectedRef?.type === "frequency-domain" ? selectedRef.analysisRunId ?? null : null;
+  const reconciledResultContextRunId = reconcileResultContextRunId({
+    currentRunId,
+    previousCurrentRunId: previousCurrentRunId.current,
+    selectedRunId: resultContextRunId,
+  });
+  const resolvedResultContextRunId =
+    selectedResultRunId ?? reconciledResultContextRunId;
+  const knownResultContextRunIds = [
+    resultContextRunId,
+    selectedResultRunId,
+  ].filter((runId): runId is string => Boolean(runId));
+  const overlayCommandContext = createCommandContext("explorer", kernel, {
+    sourceDetail: "active-analysis-overlay-context",
+  });
+  const rebindCommand = kernel.commands.get(
+    "analysis.frequency-domain.rebind-3d-overlay",
+  );
+  const rebindDisabledReason = rebindCommand
+    ? rebindCommand.disabledReason?.(overlayCommandContext) ?? null
+    : "Analysis overlay rebind command is unavailable.";
   const frequencyDomainSpectrum = useFrequencyDomainEigenSpectrumResource({
     enabled: activeTab === "results" || modeVisualizationResourceActive,
   });
@@ -392,19 +488,45 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
   const frequencyDomainResponseSweep = useFrequencyDomainResponseSweepResource({
     enabled: activeTab === "results" || modeVisualizationResourceActive,
   });
-  const frequencyDomainResponseProgress =
-    useFrequencyDomainResponseProgressResource({
-      enabled: frequencyDomainTabActive,
-    });
-  const frequencyDomainCancelRequestedAvailable = Boolean(
-    frequencyDomainManifest.data?.response_cancel_requested
-      ?.partial_artifacts_available,
+  const runtimeSnapshot = useMemo(
+    () => runtimeExplorerSnapshotFromResources({
+      artifacts: runtimeResourceSnapshot(artifacts),
+      commandDetails: runtimeResourceSnapshot(commandDetails),
+      commandQueue: runtimeResourceSnapshot(commandQueue),
+      currentRun: runtimeResourceSnapshot(currentRun),
+      fieldCatalog: runtimeResourceSnapshot(fieldCatalog),
+      frequencyDomainManifest: runtimeResourceSnapshot(frequencyDomainManifest),
+      geometryValidation: runtimeResourceSnapshot(geometryValidation),
+      meshManifest: runtimeResourceSnapshot(manifest),
+      platformCapabilities: runtimeResourceSnapshot(platformCapabilities),
+      platformHealth: runtimeResourceSnapshot(platformHealth),
+      sessionStatus: runtimeSessionStatus,
+      solverProfile: runtimeResourceSnapshot<SolverProfileResource>({
+        ...solverProfile,
+        data: solverProfile.data ?? null,
+      }),
+      solverStatus: runtimeResourceSnapshot(solverStatus),
+      stageExecution: runtimeResourceSnapshot(stageExecution),
+      tableCatalog: runtimeResourceSnapshot(tableCatalog),
+    }),
+    [
+      artifacts,
+      commandDetails,
+      commandQueue,
+      currentRun,
+      fieldCatalog,
+      frequencyDomainManifest,
+      geometryValidation,
+      manifest,
+      platformCapabilities,
+      platformHealth,
+      runtimeSessionStatus,
+      solverProfile,
+      solverStatus,
+      stageExecution,
+      tableCatalog,
+    ],
   );
-  const frequencyDomainCancelRequested =
-    useFrequencyDomainResponseCancelRequestedResource({
-      enabled:
-        frequencyDomainTabActive && frequencyDomainCancelRequestedAvailable,
-    });
   const planarMonitorTargetCapabilities = useMemo(
     () => planarMonitorTargetCapabilitiesFromResources({
       discretization: sessionStatusData?.domain.discretization,
@@ -423,7 +545,17 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
     ],
   );
 
-  const nodes = useMemo(() => {
+  useEffect(() => {
+    runtimeExplorerDetailStore.publish([
+      ...runtimeSnapshot.resources,
+      ...runtimeSnapshot.jobs,
+      ...runtimeSnapshot.diagnostics,
+    ]);
+  }, [runtimeSnapshot]);
+
+  useEffect(() => () => runtimeExplorerDetailStore.clear(), []);
+
+  const baseNodes = useMemo(() => {
     let domainPresentation = null as ReturnType<typeof buildDomainPresentation> | null;
     let domainPresentationStatus = domainMeta.status;
     if (domainMeta.data) {
@@ -571,24 +703,22 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
             },
           )
         : buildExplorerTree(activeTab, {
-            activeAnalysisFieldOverlay,
-            frequencyDomainBranches: frequencyDomainBranches.data,
-            frequencyDomainCancelRequested: frequencyDomainCancelRequested.data,
+              activeAnalysisFieldOverlay,
+              artifacts: runtimeSnapshot.source.artifacts,
+              frequencyDomainBranches: frequencyDomainBranches.data,
             frequencyDomainDispersion: frequencyDomainDispersion.data,
             frequencyDomainManifest: frequencyDomainManifest.data,
-            frequencyDomainResponseProgress: frequencyDomainResponseProgress.data,
             frequencyDomainResponseSweep: frequencyDomainResponseSweep.data,
-            frequencyDomainSpectrum: frequencyDomainSpectrum.data,
-            pinnedQuickChart,
-            currentRun: currentRun.data,
-          });
-    return filterExplorerNodes(baseNodes, filterText, selectedNodeId);
+              frequencyDomainSpectrum: frequencyDomainSpectrum.data,
+              pinnedQuickChart,
+              tableCatalog: runtimeSnapshot.source.tableCatalog,
+              currentRun: currentRun.data,
+          }, runtimeSnapshot);
+    return baseNodes;
   }, [
     activeBuild.data,
     latestSuccessfulBuild.data,
     activeTab,
-    filterText,
-    selectedNodeId,
     crossSections,
     currentTransports.data,
     manifest.data,
@@ -623,15 +753,34 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
     qualityGates.data,
     realizedSizeFields.data,
     frequencyDomainBranches.data,
-    frequencyDomainCancelRequested.data,
     frequencyDomainDispersion.data,
     frequencyDomainManifest.data,
-    frequencyDomainResponseProgress.data,
     frequencyDomainResponseSweep.data,
     frequencyDomainSpectrum.data,
     pinnedQuickChart,
     currentRun.data,
+    runtimeSnapshot,
   ]);
+
+  const nodes = useMemo(
+    () => filterExplorerNodes(baseNodes, filterText, selectedNodeId),
+    [baseNodes, filterText, selectedNodeId],
+  );
+
+  useEffect(() => {
+    previousCurrentRunId.current = currentRunId;
+    if (
+      resolvedResultContextRunId &&
+      resultContextRunId !== resolvedResultContextRunId
+    ) {
+      setExplorerResultContextRunId(resolvedResultContextRunId);
+    }
+  }, [currentRunId, resolvedResultContextRunId, resultContextRunId]);
+
+  useAnalysisFieldOverlayResultContext(
+    kernel.analysisFieldOverlay,
+    resolvedResultContextRunId,
+  );
 
   useEffect(() => {
     if (activeTab !== "model") return;
@@ -656,6 +805,25 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
     if (!path) return;
     revealExplorerNode(activeTab, selectedNodeId, path.slice(0, -1));
   }, [activeTab, nodes, selectedNodeId]);
+
+  useEffect(() => {
+    if (activeTab !== "results") return;
+    const currentNode = resolveCurrentExplorerSelectionNode(
+      nodes,
+      selectedNodeId,
+      selectedRef,
+      baseNodes,
+    );
+    if (!currentNode) {
+      if (selectedRef?.type === "postprocessing") {
+        kernel.selection.clear("explorer");
+      }
+      return;
+    }
+    const currentRef = selectionRefFromNode(currentNode);
+    if (selectionRefEquals(selectedRef, currentRef)) return;
+    selectExplorerNode(kernel, currentNode, "explorer");
+  }, [activeTab, baseNodes, kernel, nodes, selectedNodeId, selectedRef]);
 
   useEffect(() => {
     const unsubscribe = subscribeExplorerTextureLoadNodeRequested(
@@ -703,12 +871,28 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
         />
         {activeTab === "results" ? (
           <ResultContextSelector
-            currentRunId={currentRun.data?.run_id ?? null}
-            knownRunIds={[]}
-            onChange={() => undefined}
-            selectedRunId={currentRun.data?.run_id ?? null}
+            currentRunId={currentRunId}
+            knownRunIds={knownResultContextRunIds}
+            onChange={setExplorerResultContextRunId}
+            selectedRunId={resolvedResultContextRunId}
           />
         ) : null}
+        <AnalysisFieldOverlayContextNotice
+          context={analysisFieldOverlayContext}
+          onClear={() => {
+            void kernel.commands.execute(
+              "analysis.frequency-domain.clear-3d-overlay",
+              overlayCommandContext,
+            );
+          }}
+          onRebind={() => {
+            void kernel.commands.execute(
+              "analysis.frequency-domain.rebind-3d-overlay",
+              overlayCommandContext,
+            );
+          }}
+          rebindDisabledReason={rebindDisabledReason}
+        />
         <label className="fm-explorer-filter">
           <Search size={13} aria-hidden="true" className="fm-explorer-filter__search-icon" />
           <input

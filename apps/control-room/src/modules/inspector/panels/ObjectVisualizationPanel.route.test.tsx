@@ -15,6 +15,10 @@ function resourceCall(name: string, enabled: boolean): void {
 
 vi.mock("@/kernel/KernelContext", () => ({
   useKernel: () => ({
+    resources: {
+      getRevision: () => null,
+      subscribe: () => () => undefined,
+    },
     visualizationSync: {
       queuePatch: testState.queuePatch,
     },
@@ -405,8 +409,9 @@ describe("ObjectVisualizationPanel lane routing", () => {
       expect(html).toContain(`Target:${route.target}`);
       expect(html).toContain(`Capabilities:${route.capability}`);
       expect(html).toContain(`Actions:${route.action}`);
+      expect(html).toContain("No active 3D viewport");
       expect(html).toContain(
-        "Visualization debug is not applicable for the FDM structured-grid lane.",
+        "Activate the 3D center surface to observe adopted render data.",
       );
     }
   });

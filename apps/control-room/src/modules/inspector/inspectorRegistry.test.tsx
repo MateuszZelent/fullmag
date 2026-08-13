@@ -28,35 +28,6 @@ import {
   EigenBranchInspectorPanel,
   EigenBranchesInspectorPanel,
   EigenDiagnosticsInspectorPanel,
-  FrequencyDomainApiResourcesDiagnosticInspectorPanel,
-  FrequencyDomainArtifactsDiagnosticInspectorPanel,
-  FrequencyDomainCapabilitiesDiagnosticInspectorPanel,
-  FrequencyDomainDiagnosticsOverviewInspectorPanel,
-  FrequencyDomainEquilibriumDiagnosticInspectorPanel,
-  FrequencyDomainPeriodicFloquetDiagnosticInspectorPanel,
-  FrequencyDomainPeriodicPairsResourceInspectorPanel,
-  FrequencyDomainResourceFamilyInspectorPanel,
-  FrequencyDomainManifestResourceInspectorPanel,
-  FrequencyDomainCalculationModesResourceInspectorPanel,
-  FrequencyDomainFmrResourceInspectorPanel,
-  FrequencyDomainDispersionResourceInspectorPanel,
-  FrequencyDomainResponseMapResourceInspectorPanel,
-  EigenSpectrumResourceInspectorPanel,
-  EigenBranchesResourceInspectorPanel,
-  EigenDispersionResourceInspectorPanel,
-  EigenDiagnosticsResourceInspectorPanel,
-  EigenModeMetadataResourceInspectorPanel,
-  EigenModeFieldResourceInspectorPanel,
-  FrequencyResponseSweepResourceInspectorPanel,
-  FrequencyResponseProgressResourceInspectorPanel,
-  FrequencyResponseCancelRequestedResourceInspectorPanel,
-  FrequencyResponseFrequencyPointResourceInspectorPanel,
-  FrequencyResponseFieldResourceInspectorPanel,
-  FrequencyResponseObservablesResourceInspectorPanel,
-  FrequencyResponseDiagnosticsResourceInspectorPanel,
-  FrequencyDomainOperatorDiagnosticInspectorPanel,
-  FrequencyDomainSolverDiagnosticInspectorPanel,
-  FrequencyDomainVisualizationDiagnosticInspectorPanel,
   EigenKPathInspectorPanel,
   EigenDispersionInspectorPanel,
   EigenModesInspectorPanel,
@@ -64,16 +35,12 @@ import {
   EigenProvenanceInspectorPanel,
   EigenSpectrumInspectorPanel,
   EigenStudyInspectorPanel,
-  EigenSampleJobInspectorPanel,
-  FrequencyDomainArtifactExportJobInspectorPanel,
   FrequencyDomainCalculationModesInspectorPanel,
   FrequencyDomainDispersionInspectorPanel,
   FrequencyDomainExportsInspectorPanel,
-  FrequencyDomainJobsOverviewInspectorPanel,
   FrequencyDomainOverviewInspectorPanel,
   FrequencyDomainResponseMapInspectorPanel,
   FrequencyDomainRunInspectorPanel,
-  FrequencyDomainStageRunJobInspectorPanel,
   FrequencyResponseOverviewInspectorPanel,
   FrequencyResponseCancelRequestedInspectorPanel,
   FrequencyResponseDiagnosticsInspectorPanel,
@@ -83,8 +50,6 @@ import {
   FrequencyResponsePointInspectorPanel,
   FrequencyResponseProvenanceInspectorPanel,
   FrequencyResponseProgressInspectorPanel,
-  FrequencyResponseProgressJobInspectorPanel,
-  FrequencyResponseFrequencyJobInspectorPanel,
   FrequencyResponseStudyInspectorPanel,
   FrequencyResponseSweepInspectorPanel,
   FmrComparisonInspectorPanel,
@@ -93,7 +58,6 @@ import {
   FmrPeakInspectorPanel,
   FmrPeaksInspectorPanel,
 } from "./panels/frequency-domain/FrequencyDomainResultInspectors";
-import { FrequencyDomainInspectorPanel } from "./panels/FrequencyDomainInspectorPanel";
 import {
   EigenmodesBoundaryStageInspectorPanel,
   EigenmodesCalculationModeStageInspectorPanel,
@@ -127,6 +91,15 @@ function frequencyDomainPanelId(kind: string): string {
 }
 
 describe("inspectorRegistry", () => {
+  it("does not retain orphan mode-visualization child routes", () => {
+    expect(resolveInspectorRoute("object.mode_visualization")?.id).toBe(
+      "object-mode-visualization-overview",
+    );
+    expect(resolveInspectorRoute("object.mode_visualization.group")).toBeNull();
+    expect(resolveInspectorRoute("object.mode_visualization.field")).toBeNull();
+    expect(resolveInspectorRoute("object.mode_visualization.view")).toBeNull();
+  });
+
   it("routes a pinned Quick Chart to its preview-only Inspector", () => {
     expect(resolveInspectorPanel({ kind: "results.quick_chart" })?.id).toBe(
       "quick-chart",
@@ -194,13 +167,10 @@ describe("inspectorRegistry", () => {
     );
   });
 
-  it("resolves mode visualization levels to distinct owner panels", () => {
+  it("resolves only the canonical mode visualization owner panel", () => {
     expect(resolveInspectorPanel({ kind: "object.mode_visualization" })?.id).toBe(
       "object-mode-visualization-overview",
     );
-    expect(
-      resolveInspectorPanel({ kind: "object.mode_visualization.view" })?.id,
-    ).toBe("object-mode-visualization-view");
   });
 
   it("resolves object region and magnetic texture groups", () => {
@@ -684,7 +654,7 @@ describe("inspectorRegistry", () => {
     ).toBe(FrequencyResponseDiagnosticsInspectorPanel);
   });
 
-  it("routes every non-authoring frequency-domain node away from the generic inspector", () => {
+  it("routes every non-authoring frequency-domain node to a dedicated inspector", () => {
     const kinds = FREQUENCY_DOMAIN_INSPECTOR_SELECTION_KINDS.filter(
       (kind) => !kind.startsWith("study.stage."),
     );
@@ -692,161 +662,63 @@ describe("inspectorRegistry", () => {
       (kind) => resolveInspectorPanel({ kind })?.component,
     );
 
-    expect(components).not.toContain(FrequencyDomainInspectorPanel);
     expect(components.every((component) => component !== undefined)).toBe(true);
   });
 
-  it("routes frequency-domain job nodes to dedicated inspector components", () => {
-    expect(
-      resolveInspectorPanel({ kind: "jobs.frequency_domain.root" })?.component,
-    ).toBe(FrequencyDomainJobsOverviewInspectorPanel);
-    expect(
-      resolveInspectorPanel({ kind: "jobs.frequency_domain.stage_run" })
-        ?.component,
-    ).toBe(FrequencyDomainStageRunJobInspectorPanel);
-    expect(
-      resolveInspectorPanel({ kind: "jobs.frequency_domain.eigen_sample" })
-        ?.component,
-    ).toBe(EigenSampleJobInspectorPanel);
-    expect(
-      resolveInspectorPanel({ kind: "jobs.frequency_domain.response_frequency" })
-        ?.component,
-    ).toBe(FrequencyResponseFrequencyJobInspectorPanel);
-    expect(
-      resolveInspectorPanel({ kind: "jobs.frequency_domain.response_progress" })
-        ?.component,
-    ).toBe(FrequencyResponseProgressJobInspectorPanel);
-    expect(
-      resolveInspectorPanel({ kind: "jobs.frequency_domain.artifact_export" })
-        ?.component,
-    ).toBe(FrequencyDomainArtifactExportJobInspectorPanel);
+  it("routes each postprocessing definition family to a distinct dedicated Inspector", () => {
+    const kinds = [
+      "results.analysis_views.definition",
+      "results.derived_values.definition",
+      "results.tables.definition",
+      "results.exports.definition",
+    ];
+    const components = kinds.map((kind) => resolveInspectorPanel({ kind })?.component);
+
+    expect(components.every((component) => component !== undefined)).toBe(true);
+    expect(new Set(components).size).toBe(kinds.length);
   });
 
-  it("routes frequency-domain diagnostic nodes to dedicated inspector components", () => {
-    expect(
-      resolveInspectorPanel({ kind: "diagnostics.frequency_domain.root" })
-        ?.component,
-    ).toBe(FrequencyDomainDiagnosticsOverviewInspectorPanel);
-    expect(
-      resolveInspectorPanel({ kind: "diagnostics.frequency_domain.capabilities" })
-        ?.component,
-    ).toBe(FrequencyDomainCapabilitiesDiagnosticInspectorPanel);
-    expect(
-      resolveInspectorPanel({ kind: "diagnostics.frequency_domain.equilibrium" })
-        ?.component,
-    ).toBe(FrequencyDomainEquilibriumDiagnosticInspectorPanel);
-    expect(
-      resolveInspectorPanel({ kind: "diagnostics.frequency_domain.operator" })
-        ?.component,
-    ).toBe(FrequencyDomainOperatorDiagnosticInspectorPanel);
-    expect(
-      resolveInspectorPanel({ kind: "diagnostics.frequency_domain.solver" })
-        ?.component,
-    ).toBe(FrequencyDomainSolverDiagnosticInspectorPanel);
-    expect(
-      resolveInspectorPanel({ kind: "diagnostics.frequency_domain.artifacts" })
-        ?.component,
-    ).toBe(FrequencyDomainArtifactsDiagnosticInspectorPanel);
-    expect(
-      resolveInspectorPanel({ kind: "diagnostics.frequency_domain.api_resources" })
-        ?.component,
-    ).toBe(FrequencyDomainApiResourcesDiagnosticInspectorPanel);
-    expect(
-      resolveInspectorPanel({ kind: "diagnostics.frequency_domain.visualization" })
-        ?.component,
-    ).toBe(FrequencyDomainVisualizationDiagnosticInspectorPanel);
-    expect(
-      resolveInspectorPanel({
-        kind: "diagnostics.frequency_domain.periodic_floquet",
-      })?.component,
-    ).toBe(FrequencyDomainPeriodicFloquetDiagnosticInspectorPanel);
-  });
+  it("gives every physics-first Results kind its own inspector component owner", () => {
+    const kinds = [
+      "results.dynamics.root",
+      "results.resonance.root",
+      "results.resonance.modal.stage",
+      "results.resonance.driven.stage",
+      "results.resonance.modal.spectrum",
+      "results.resonance.modal.modes",
+      "results.resonance.modal.mode",
+      "results.resonance.modal.coupling",
+      "results.resonance.driven.spectrum",
+      "results.resonance.driven.peaks",
+      "results.resonance.driven.frequency_points",
+      "results.resonance.driven.fields",
+      "results.resonance.driven.field",
+      "results.dispersion.root",
+      "results.dispersion.modal.stage",
+      "results.dispersion.driven.stage",
+      "results.dispersion.k_sampling",
+      "results.dispersion.modal.relation",
+      "results.dispersion.modal.branches",
+      "results.dispersion.modal.modes_at_k",
+      "results.dispersion.modal.mode_at_k",
+      "results.dispersion.driven.response_map",
+      "results.dispersion.driven.field_at_k",
+      "results.hysteresis.root",
+      "results.analysis_views.root",
+      "results.analysis_views.definition",
+      "results.derived_values.root",
+      "results.derived_values.definition",
+      "results.tables.root",
+      "results.tables.definition",
+      "results.exports.root",
+      "results.exports.definition",
+    ] as const;
+    const components = kinds.map(
+      (kind) => resolveInspectorPanel({ kind })?.component,
+    );
 
-  it("routes frequency-domain resource nodes to dedicated inspector components", () => {
-    expect(
-      resolveInspectorPanel({ kind: "resources.analysis.frequency_domain" })
-        ?.component,
-    ).toBe(FrequencyDomainResourceFamilyInspectorPanel);
-    expect(
-      resolveInspectorPanel({ kind: "resources.analysis.frequency_domain.manifest" })
-        ?.component,
-    ).toBe(FrequencyDomainManifestResourceInspectorPanel);
-    expect(
-      resolveInspectorPanel({
-        kind: "resources.analysis.frequency_domain.calculation_modes",
-      })?.component,
-    ).toBe(FrequencyDomainCalculationModesResourceInspectorPanel);
-    expect(
-      resolveInspectorPanel({ kind: "resources.analysis.frequency_domain.fmr" })
-        ?.component,
-    ).toBe(FrequencyDomainFmrResourceInspectorPanel);
-    expect(
-      resolveInspectorPanel({ kind: "resources.analysis.frequency_domain.dispersion" })
-        ?.component,
-    ).toBe(FrequencyDomainDispersionResourceInspectorPanel);
-    expect(
-      resolveInspectorPanel({ kind: "resources.analysis.frequency_domain.response_map" })
-        ?.component,
-    ).toBe(FrequencyDomainResponseMapResourceInspectorPanel);
-    expect(
-      resolveInspectorPanel({ kind: "resources.mesh.periodic_pairs" })?.component,
-    ).toBe(FrequencyDomainPeriodicPairsResourceInspectorPanel);
-    expect(
-      resolveInspectorPanel({ kind: "resources.analysis.eigen.spectrum" })
-        ?.component,
-    ).toBe(EigenSpectrumResourceInspectorPanel);
-    expect(
-      resolveInspectorPanel({ kind: "resources.analysis.eigen.branches" })
-        ?.component,
-    ).toBe(EigenBranchesResourceInspectorPanel);
-    expect(
-      resolveInspectorPanel({ kind: "resources.analysis.eigen.dispersion" })
-        ?.component,
-    ).toBe(EigenDispersionResourceInspectorPanel);
-    expect(
-      resolveInspectorPanel({ kind: "resources.analysis.eigen.diagnostics" })
-        ?.component,
-    ).toBe(EigenDiagnosticsResourceInspectorPanel);
-    expect(
-      resolveInspectorPanel({ kind: "resources.analysis.eigen.mode_metadata" })
-        ?.component,
-    ).toBe(EigenModeMetadataResourceInspectorPanel);
-    expect(
-      resolveInspectorPanel({ kind: "resources.analysis.eigen.mode_field" })
-        ?.component,
-    ).toBe(EigenModeFieldResourceInspectorPanel);
-    expect(
-      resolveInspectorPanel({ kind: "resources.analysis.frequency_response.sweep" })
-        ?.component,
-    ).toBe(FrequencyResponseSweepResourceInspectorPanel);
-    expect(
-      resolveInspectorPanel({ kind: "resources.analysis.frequency_response.progress" })
-        ?.component,
-    ).toBe(FrequencyResponseProgressResourceInspectorPanel);
-    expect(
-      resolveInspectorPanel({
-        kind: "resources.analysis.frequency_response.cancel_requested",
-      })?.component,
-    ).toBe(FrequencyResponseCancelRequestedResourceInspectorPanel);
-    expect(
-      resolveInspectorPanel({
-        kind: "resources.analysis.frequency_response.frequency_point",
-      })?.component,
-    ).toBe(FrequencyResponseFrequencyPointResourceInspectorPanel);
-    expect(
-      resolveInspectorPanel({ kind: "resources.analysis.frequency_response.field" })
-        ?.component,
-    ).toBe(FrequencyResponseFieldResourceInspectorPanel);
-    expect(
-      resolveInspectorPanel({
-        kind: "resources.analysis.frequency_response.observables",
-      })?.component,
-    ).toBe(FrequencyResponseObservablesResourceInspectorPanel);
-    expect(
-      resolveInspectorPanel({
-        kind: "resources.analysis.frequency_response.diagnostics",
-      })?.component,
-    ).toBe(FrequencyResponseDiagnosticsResourceInspectorPanel);
+    expect(components.every((component) => component !== undefined)).toBe(true);
+    expect(new Set(components).size).toBe(kinds.length);
   });
 
   it("returns null when there is no selection kind", () => {

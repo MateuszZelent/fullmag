@@ -2,9 +2,35 @@ import {
   classifyFrequencyDomainResult,
   type FrequencyDomainResultEvidence,
 } from "@/shared/domain/analysis/frequencyDomainResultClassification";
+import {
+  buildEigenDispersionChartModel,
+  buildEigenSpectrumChartModel,
+  buildFrequencyResponseChartModel,
+  responseFieldResourcesFromManifest,
+  type FrequencyDomainJsonArtifactLike,
+  type FrequencyDomainTextArtifactLike,
+} from "@/shared/domain/analysis/frequencyDomainChartModels";
+import { fieldVectorResourceKey } from "@/kernel/api/fieldQueryIdentity";
+import type {
+  ArtifactResource,
+  TableListResource,
+} from "@/kernel/api/apiTypes";
+import {
+  definePostprocessing,
+  postprocessingCatalogState,
+  postprocessingDefinitionFromArtifact,
+  postprocessingDefinitionFromTable,
+  POSTPROCESSING_OWNER_CONTRACT_GAP,
+  type PostprocessingDefinition,
+  type PostprocessingDefinitionInput,
+  type PostprocessingCatalogSnapshot,
+} from "@/shared/domain/analysis/postprocessingDefinitions";
+import type {
+  PostprocessingDefinitionKind,
+  PostprocessingOwnerReadiness,
+} from "@/shared/domain/analysis/postprocessingTypes";
 
 import type { ExplorerNode, ExplorerNodeKind } from "../explorerTypes";
-import type { PostprocessingDefinition } from "@/shared/domain/analysis/postprocessingDefinitions";
 
 export interface PhysicsFirstResultProducts {
   coupling?: boolean;
@@ -19,16 +45,45 @@ export interface PhysicsFirstResultProducts {
 }
 
 export interface PhysicsFirstResultEntry extends FrequencyDomainResultEvidence {
+  analysisFieldTargets?: readonly PhysicsFirstAnalysisFieldTarget[];
   artifactRevision: number | string;
   products: PhysicsFirstResultProducts;
   stageLabel: string;
 }
 
+export interface PhysicsFirstAnalysisFieldTarget {
+  fieldId: string;
+  frequencyHz: number;
+  frequencyIndex?: number;
+  kPathCoordinateRadPerM?: number;
+  label: string;
+  modeIndex?: number;
+  observableId?: string;
+  representation: "complex-vector-xyz";
+  resourceRef: string;
+  sampleIndex?: number;
+  source: "eigen-mode" | "frequency-response";
+  view: "phase_rotated_real";
+  wavevectorKf?: readonly [number, number, number];
+}
+
 export interface PhysicsFirstResultsSnapshot {
+  contractGaps?: readonly string[];
   entries: readonly PhysicsFirstResultEntry[];
-  postprocessing?: readonly PostprocessingDefinition[];
+  postprocessing?: PhysicsFirstPostprocessingSnapshot;
   resultContextRunId: string;
 }
+
+export interface PhysicsFirstPostprocessingSnapshot {
+  analysisViews?: readonly PostprocessingFamilyDefinition<"analysis_view">[];
+  artifactCatalog?: PostprocessingCatalogSnapshot<readonly ArtifactResource[]>;
+  derivedValues?: readonly PostprocessingFamilyDefinition<"derived_value">[];
+  tableCatalog?: PostprocessingCatalogSnapshot<TableListResource>;
+}
+
+type PostprocessingFamilyDefinition<
+  Kind extends "analysis_view" | "derived_value",
+> = Omit<PostprocessingDefinitionInput, "kind"> & { kind: Kind };
 
 interface ResultResourceLike {
   status?: string;
@@ -39,12 +94,14 @@ interface ResultManifestLike extends ResultResourceLike {
 }
 
 export interface PhysicsFirstResultResourceInput {
+  artifacts?: PostprocessingCatalogSnapshot<readonly ArtifactResource[]>;
   branches?: ResultResourceLike | null;
   currentRun?: { revision: number | string; run_id: string } | null;
-  dispersion?: (ResultResourceLike & { path_metadata?: unknown }) | null;
+  dispersion?: (ResultResourceLike & { path_metadata?: unknown; text?: string | null }) | null;
   manifest?: { result_manifest?: ResultManifestLike | null } | null;
-  responseSweep?: ResultResourceLike | null;
-  spectrum?: ResultResourceLike | null;
+  responseSweep?: (ResultResourceLike & { payload?: unknown }) | null;
+  spectrum?: (ResultResourceLike & { payload?: unknown }) | null;
+  tableCatalog?: PostprocessingCatalogSnapshot<TableListResource>;
 }
 
 export interface PhysicsFirstResultAdaptation {
@@ -62,13 +119,66 @@ function nonEmptyString(value: unknown): string | null {
   return typeof value === "string" && value.length > 0 ? value : null;
 }
 
+function finiteNumber(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function vector3(value: unknown): readonly [number, number, number] | null {
+  return Array.isArray(value) && value.length === 3 && value.every((item) => finiteNumber(item) !== null)
+    ? [value[0] as number, value[1] as number, value[2] as number]
+    : null;
+}
+
 function ready(resource: ResultResourceLike | null | undefined): boolean {
   return resource?.status === "ready";
 }
 
-function pathSamplingFromMetadata(value: unknown): FrequencyDomainResultEvidence["kSampling"] | null {
-  const sampling = record(record(value)?.sampling);
-  if (sampling?.kind !== "path") return null;
+function jsonArtifact(
+  resource: (ResultResourceLike & { payload?: unknown }) | null | undefined,
+): FrequencyDomainJsonArtifactLike | null {
+  return resource
+    ? { payload: resource.payload, status: resource.status ?? "idle" }
+    : null;
+}
+
+function dispersionArtifact(
+  resource:
+    | (ResultResourceLike & { path_metadata?: unknown; text?: string | null })
+    | null
+    | undefined,
+): FrequencyDomainTextArtifactLike | null {
+  return resource
+    ? { status: resource.status ?? "idle", text: resource.text }
+    : null;
+}
+
+function sampleCount(value: unknown): number | null {
+  const count = finiteNumber(value);
+  return count !== null && Number.isInteger(count) && count > 0 ? count : null;
+}
+
+function samplingFromRecord(
+  sampling: Record<string, unknown> | null,
+): FrequencyDomainResultEvidence["kSampling"] | null {
+  if (!sampling) return null;
+  const kind = nonEmptyString(sampling.kind) ??
+    (sampling.path !== undefined ? "path" : sampling.grid !== undefined ? "grid" : null);
+  if (kind === "single") {
+    const vector = vector3(
+      sampling.vector_rad_per_m ?? sampling.k_vector ?? sampling.vector,
+    );
+    return vector ? { kind: "single", vectorRadPerM: vector } : null;
+  }
+  if (kind === "grid") {
+    const count =
+      sampleCount(sampling.sample_count) ??
+      sampleCount(sampling.sampleCount) ??
+      sampleCount(sampling.count) ??
+      sampleCount(sampling.points) ??
+      (Array.isArray(sampling.points) ? sampleCount(sampling.points.length) : null);
+    return count ? { kind: "grid", sampleCount: count } : null;
+  }
+  if (kind !== "path") return null;
   const points = Array.isArray(sampling.points) ? sampling.points : [];
   const segmentSamples = Array.isArray(sampling.samples_per_segment)
     ? sampling.samples_per_segment.filter((sample): sample is number => typeof sample === "number")
@@ -76,11 +186,159 @@ function pathSamplingFromMetadata(value: unknown): FrequencyDomainResultEvidence
   const labels = points
     .map((point) => nonEmptyString(record(point)?.label))
     .filter((label): label is string => label !== null);
+  const count =
+    segmentSamples.length > 0
+      ? sampleCount(segmentSamples.reduce((sum, value) => sum + value, 1))
+      : sampleCount(sampling.sample_count) ??
+        sampleCount(sampling.sampleCount) ??
+        sampleCount(sampling.count) ??
+        sampleCount(sampling.points);
+  if (!count) return null;
   return {
     kind: "path",
     label: labels.length > 1 ? labels.join("–") : undefined,
-    sampleCount: segmentSamples.reduce((sum, count) => sum + count, 0) + 1,
+    sampleCount: count,
   };
+}
+
+function kSamplingFromMetadata(value: unknown): FrequencyDomainResultEvidence["kSampling"] | null {
+  return samplingFromRecord(record(record(value)?.sampling));
+}
+
+function kSamplingFromRequestedExecution(
+  requested: Record<string, unknown> | null,
+): FrequencyDomainResultEvidence["kSampling"] | null {
+  const requestedSampling = requested?.k_sampling;
+  const sampling = record(requestedSampling);
+  const structuredSampling = samplingFromRecord(sampling);
+  if (requestedSampling !== undefined) {
+    if (structuredSampling) return structuredSampling;
+    return null;
+  }
+  const vector = vector3(
+    requested?.k_vector_rad_per_m ??
+      requested?.k_vector ??
+      requested?.wavevector_kf,
+  );
+  return vector ? { kind: "single", vectorRadPerM: vector } : null;
+}
+
+function pathWavevectorAtSample(
+  value: unknown,
+  sampleIndex: number,
+): readonly [number, number, number] | null {
+  const sampling = record(record(value)?.sampling);
+  if (sampling?.kind !== "path" || !Number.isInteger(sampleIndex) || sampleIndex < 0) {
+    return null;
+  }
+  const points = Array.isArray(sampling.points)
+    ? sampling.points.map((point) => vector3(record(point)?.k_vector))
+    : [];
+  const counts = Array.isArray(sampling.samples_per_segment)
+    ? sampling.samples_per_segment.map(finiteNumber)
+    : [];
+  if (points.length < 2 || counts.some((count) => count === null || !Number.isInteger(count) || count <= 0)) {
+    return null;
+  }
+  let segmentStart = 0;
+  for (let segmentIndex = 0; segmentIndex < counts.length; segmentIndex += 1) {
+    const count = counts[segmentIndex]!;
+    if (sampleIndex > segmentStart + count) {
+      segmentStart += count;
+      continue;
+    }
+    const start = points[segmentIndex];
+    const end = points[segmentIndex + 1] ?? (sampling.closed === true ? points[0] : null);
+    if (!start || !end) return null;
+    const fraction = (sampleIndex - segmentStart) / count;
+    return [
+      start[0] + (end[0] - start[0]) * fraction,
+      start[1] + (end[1] - start[1]) * fraction,
+      start[2] + (end[2] - start[2]) * fraction,
+    ];
+  }
+  return null;
+}
+
+function modalFieldTargets({
+  dispersion,
+  kSampling,
+  spectrum,
+}: {
+  dispersion?: (ResultResourceLike & { path_metadata?: unknown; text?: string | null }) | null;
+  kSampling?: FrequencyDomainResultEvidence["kSampling"];
+  spectrum?: (ResultResourceLike & { payload?: unknown }) | null;
+}): PhysicsFirstAnalysisFieldTarget[] {
+  if (kSampling?.kind === "path") {
+    return buildEigenDispersionChartModel(dispersionArtifact(dispersion)).points.flatMap((point) => {
+      if (!point.modeFieldId) return [];
+      const wavevectorKf = pathWavevectorAtSample(dispersion?.path_metadata, point.sampleIndex);
+      if (!wavevectorKf || !Number.isFinite(point.pathS)) return [];
+      return [{
+        fieldId: point.modeFieldId,
+        frequencyHz: point.frequencyHz,
+        kPathCoordinateRadPerM: point.pathS,
+        label: `Sample ${point.sampleIndex} · Mode ${point.rawModeIndex}`,
+        modeIndex: point.rawModeIndex,
+        representation: "complex-vector-xyz" as const,
+        resourceRef: point.modeFieldResourceKey ?? fieldVectorResourceKey(point.modeFieldId),
+        sampleIndex: point.sampleIndex,
+        source: "eigen-mode" as const,
+        view: "phase_rotated_real" as const,
+        wavevectorKf,
+      }];
+    });
+  }
+  const fixedWavevector = kSampling?.kind === "single" ? kSampling.vectorRadPerM : undefined;
+  return buildEigenSpectrumChartModel(jsonArtifact(spectrum)).points.flatMap((point) =>
+    point.modeFieldId
+      ? [{
+          fieldId: point.modeFieldId,
+          frequencyHz: point.frequencyHz,
+          label: `Sample ${point.sampleIndex} · Mode ${point.rawModeIndex}`,
+          modeIndex: point.rawModeIndex,
+          representation: "complex-vector-xyz" as const,
+          resourceRef: point.modeFieldResourceKey ?? fieldVectorResourceKey(point.modeFieldId),
+          sampleIndex: point.sampleIndex,
+          source: "eigen-mode" as const,
+          view: "phase_rotated_real" as const,
+          ...(fixedWavevector ? { wavevectorKf: fixedWavevector } : {}),
+        }]
+      : [],
+  );
+}
+
+function responseFieldTargets(
+  manifestPayload: unknown,
+  responseSweep: (ResultResourceLike & { payload?: unknown }) | null | undefined,
+  kSampling: FrequencyDomainResultEvidence["kSampling"] | undefined,
+): PhysicsFirstAnalysisFieldTarget[] {
+  const fieldIds = new Map(
+    responseFieldResourcesFromManifest(manifestPayload).map((resource) => [
+      resource.frequencyIndex,
+      resource.fieldResourceId,
+    ]),
+  );
+  const fixedWavevector = kSampling?.kind === "single" ? kSampling.vectorRadPerM : undefined;
+  const seen = new Set<number>();
+  return buildFrequencyResponseChartModel(jsonArtifact(responseSweep)).points.flatMap((point) => {
+    if (point.frequencyIndex === null || seen.has(point.frequencyIndex)) return [];
+    const fieldId = point.fieldId ?? fieldIds.get(point.frequencyIndex);
+    if (!fieldId) return [];
+    seen.add(point.frequencyIndex);
+    return [{
+      fieldId,
+      frequencyHz: point.frequencyHz,
+      frequencyIndex: point.frequencyIndex,
+      label: `Frequency ${point.frequencyIndex}`,
+      observableId: point.observableId,
+      representation: "complex-vector-xyz" as const,
+      resourceRef: fieldVectorResourceKey(fieldId),
+      source: "frequency-response" as const,
+      view: "phase_rotated_real" as const,
+      ...(fixedWavevector ? { wavevectorKf: fixedWavevector } : {}),
+    }];
+  });
 }
 
 function observablesFromPayload(value: unknown): FrequencyDomainResultEvidence["observables"] {
@@ -109,8 +367,17 @@ export function physicsFirstResultsSnapshotFromResources(
   const resultManifest = input.manifest?.result_manifest;
   const payload = ready(resultManifest) ? record(resultManifest?.payload) : null;
   const contractGaps: string[] = [];
+  const postprocessing =
+    input.artifacts || input.tableCatalog
+      ? {
+          ...(input.artifacts ? { artifactCatalog: input.artifacts } : {}),
+          ...(input.tableCatalog ? { tableCatalog: input.tableCatalog } : {}),
+        }
+      : undefined;
   const emptySnapshot: PhysicsFirstResultsSnapshot = {
+    contractGaps,
     entries: [],
+    ...(postprocessing ? { postprocessing } : {}),
     resultContextRunId: runId,
   };
   if (!runId || !payload) return { contractGaps, snapshot: emptySnapshot };
@@ -135,7 +402,16 @@ export function physicsFirstResultsSnapshotFromResources(
     return { contractGaps, snapshot: emptySnapshot };
   }
 
-  const kSampling = pathSamplingFromMetadata(input.dispersion?.path_metadata);
+  const kSampling =
+    kSamplingFromMetadata(input.dispersion?.path_metadata) ??
+    kSamplingFromRequestedExecution(requested);
+  if (boundaryContext === "floquet_periodic" && !kSampling) {
+    contractGaps.push("Periodic/Floquet artifact does not publish a supported k sampling resource");
+    return {
+      contractGaps,
+      snapshot: { ...emptySnapshot, contractGaps: [...contractGaps] },
+    };
+  }
   const artifactRevision =
     nonEmptyString(payload.revision) ?? input.currentRun?.revision ?? "unknown";
   const products: PhysicsFirstResultProducts =
@@ -149,10 +425,17 @@ export function physicsFirstResultsSnapshotFromResources(
           frequencyPoints: ready(input.responseSweep),
           peaks: ready(input.responseSweep),
           responseFields: ready(input.responseSweep),
-          responseMap: Boolean(kSampling) && ready(input.responseSweep),
           responseSpectrum: ready(input.responseSweep),
         };
   const entry: PhysicsFirstResultEntry = {
+    analysisFieldTargets:
+      studyProduct === "modal_eigen"
+        ? modalFieldTargets({
+            dispersion: input.dispersion,
+            ...(kSampling ? { kSampling } : {}),
+            spectrum: input.spectrum,
+          })
+        : responseFieldTargets(payload, input.responseSweep, kSampling ?? undefined),
     artifactRevision,
     boundaryContext,
     equilibriumId,
@@ -167,7 +450,12 @@ export function physicsFirstResultsSnapshotFromResources(
 
   return {
     contractGaps,
-    snapshot: { entries: [entry], resultContextRunId: runId },
+    snapshot: {
+      contractGaps: [...contractGaps],
+      entries: [entry],
+      ...(postprocessing ? { postprocessing } : {}),
+      resultContextRunId: runId,
+    },
   };
 }
 
@@ -202,6 +490,7 @@ function leaf(
   kind: ExplorerNodeKind,
   label: string,
   entry: PhysicsFirstResultEntry,
+  overrides: Partial<ExplorerNode> = {},
 ): ExplorerNode {
   const classification = classifyFrequencyDomainResult(entry);
   return node(`${stageId}:${suffix}`, kind, label, stageId, {
@@ -213,7 +502,52 @@ function leaf(
     kContextKind: classification.kContext.kind,
     resourceRef: `artifact-revision:${entry.artifactRevision}`,
     studyProduct: entry.studyProduct,
+    ...overrides,
   });
+}
+
+function analysisFieldTargetNodes(
+  parentId: string,
+  entry: PhysicsFirstResultEntry,
+  kind:
+    | "results.dispersion.driven.field_at_k"
+    | "results.dispersion.modal.mode_at_k"
+    | "results.resonance.driven.field"
+    | "results.resonance.modal.mode",
+): ExplorerNode[] {
+  const classification = classifyFrequencyDomainResult(entry);
+  return (entry.analysisFieldTargets ?? []).map((target) =>
+    node(
+      `${parentId}:${target.source}:${key(target.fieldId)}`,
+      kind,
+      target.label,
+      parentId,
+      {
+        analysisFieldRepresentation: target.representation,
+        analysisFieldSource: target.source,
+        analysisFieldView: target.view,
+        analysisRunId: entry.runId,
+        analysisStageId: entry.stageId,
+        artifactRevision: entry.artifactRevision,
+        equilibriumId: entry.equilibriumId,
+        fieldId: target.fieldId,
+        frequencyHz: target.frequencyHz,
+        ...(target.frequencyIndex !== undefined
+          ? { frequencyIndex: target.frequencyIndex }
+          : {}),
+        kContextKind: classification.kContext.kind,
+        ...(target.kPathCoordinateRadPerM !== undefined
+          ? { kPathCoordinateRadPerM: target.kPathCoordinateRadPerM }
+          : {}),
+        ...(target.modeIndex !== undefined ? { modeIndex: target.modeIndex } : {}),
+        ...(target.observableId ? { observableId: target.observableId } : {}),
+        resourceRef: target.resourceRef,
+        ...(target.sampleIndex !== undefined ? { sampleIndex: target.sampleIndex } : {}),
+        studyProduct: entry.studyProduct,
+        ...(target.wavevectorKf ? { wavevectorKf: target.wavevectorKf } : {}),
+      },
+    ),
+  );
 }
 
 function hasPublishedProduct(products: PhysicsFirstResultProducts): boolean {
@@ -244,7 +578,14 @@ function resonanceStage(
       );
     }
     if (entry.products.modeShapes) {
-      children.push(leaf(stageId, "modes", "results.resonance.modal.modes", "Mode Shapes", entry));
+      const parentId = `${stageId}:modes`;
+      children.push(leaf(stageId, "modes", "results.resonance.modal.modes", "Mode Shapes", entry, {
+        children: analysisFieldTargetNodes(
+          parentId,
+          entry,
+          "results.resonance.modal.mode",
+        ),
+      }));
     }
     if (entry.products.coupling && classification.fmrQualified) {
       children.push(
@@ -278,8 +619,15 @@ function resonanceStage(
       );
     }
     if (entry.products.responseFields) {
+      const parentId = `${stageId}:response-fields`;
       children.push(
-        leaf(stageId, "response-fields", "results.resonance.driven.fields", "Response Fields", entry),
+        leaf(stageId, "response-fields", "results.resonance.driven.fields", "Response Fields", entry, {
+          children: analysisFieldTargetNodes(
+            parentId,
+            entry,
+            "results.resonance.driven.field",
+          ),
+        }),
       );
     }
   }
@@ -330,11 +678,25 @@ function kResolvedStage(
       children.push(leaf(stageId, "branches", "results.dispersion.modal.branches", "Mode Branches", entry));
     }
     if (entry.products.modeShapes) {
-      children.push(leaf(stageId, "modes-at-k", "results.dispersion.modal.modes_at_k", "Modes at k", entry));
+      const parentId = `${stageId}:modes-at-k`;
+      children.push(leaf(stageId, "modes-at-k", "results.dispersion.modal.modes_at_k", "Modes at k", entry, {
+        children: analysisFieldTargetNodes(
+          parentId,
+          entry,
+          "results.dispersion.modal.mode_at_k",
+        ),
+      }));
     }
   } else if (entry.products.responseMap) {
+    const parentId = `${stageId}:response-map`;
     children.push(
-      leaf(stageId, "response-map", "results.dispersion.driven.response_map", classification.resultLabel, entry),
+      leaf(stageId, "response-map", "results.dispersion.driven.response_map", classification.resultLabel, entry, {
+        children: analysisFieldTargetNodes(
+          parentId,
+          entry,
+          "results.dispersion.driven.field_at_k",
+        ),
+      }),
     );
   }
   children.push(
@@ -368,7 +730,20 @@ function rootWithChildren(
   parentId: string,
   children: readonly (ExplorerNode | null)[],
 ): ExplorerNode {
-  return node(id, kind, label, parentId, { children: children.filter((child): child is ExplorerNode => child !== null) });
+  const materializedChildren = children.filter(
+    (child): child is ExplorerNode => child !== null,
+  );
+  return node(id, kind, label, parentId, {
+    children: materializedChildren,
+    ...(materializedChildren.length === 0
+      ? {
+          availability: "unavailable" as const,
+          executionState: "not_started" as const,
+          resourceState: "idle" as const,
+          status: "unavailable" as const,
+        }
+      : {}),
+  });
 }
 
 function postprocessingChildren(
@@ -377,12 +752,191 @@ function postprocessingChildren(
   definitions: readonly PostprocessingDefinition[],
 ): ExplorerNode[] {
   const nodeKind = `results.${kind === "analysis_view" ? "analysis_views" : kind === "derived_value" ? "derived_values" : kind === "table" ? "tables" : "exports"}.definition` as ExplorerNodeKind;
-  return definitions.filter((definition) => definition.kind === kind).map((definition) =>
-    node(`${parentId}:${key(definition.id)}`, nodeKind, definition.label, parentId, {
-      badge: definition.persistentOwner ? "saved" : "session only",
-      resourceRef: definition.datasetRef,
-    }),
-  );
+  return definitions
+    .filter((definition) => definition.kind === kind)
+    .sort((left, right) => left.id.localeCompare(right.id))
+    .map((definition) => {
+      const available = definition.ownerReadiness === "available-ready" &&
+        definition.availability === "available" &&
+        definition.owner !== null;
+      const owner = definition.owner;
+      const status = postprocessingNodeStatus(definition.ownerReadiness);
+      const tableAction = available && definition.kind === "table" && owner?.kind === "table"
+        ? {
+            contextCommands: ["analysis-plots.open" as const],
+            contextCommandInputs: {
+              "analysis-plots.open": {
+                datasetRef: definition.datasetRef,
+                surface: "dynamics" as const,
+                tableId: owner.tableId,
+              },
+            },
+          }
+        : {};
+      return node(
+        `${parentId}:${key(definition.id)}`,
+        nodeKind,
+        definition.label,
+        parentId,
+        {
+          artifactPath: owner?.kind === "artifact" ? owner.path : undefined,
+          availability: available ? "available" : "unavailable",
+          badge: available ? "published" : postprocessingReadinessBadge(definition.ownerReadiness),
+          executionState: available ? "completed" : "not_started",
+          postprocessingCatalogRevision: definition.catalogRevision,
+          postprocessingContractGap: definition.contractGap,
+          postprocessingDefinitionKind: definition.kind,
+          postprocessingFreshness: definition.freshness,
+          postprocessingOwnerId:
+            owner?.kind === "table"
+              ? owner.tableId
+              : owner?.kind === "artifact"
+                ? owner.path
+                : null,
+          postprocessingOwnerKind: owner?.kind ?? null,
+          postprocessingOwnerReadiness: definition.ownerReadiness,
+          postprocessingResourceRevision: definition.resourceRevision ?? null,
+          postprocessingSchemaRevision:
+            owner?.kind === "table" ? owner.schemaRevision : null,
+          ...(owner?.kind === "table" ? { tableId: owner.tableId } : {}),
+          ...(owner?.kind === "artifact"
+            ? { postprocessingArtifactKind: owner.artifactKind }
+            : {}),
+          ...(definition.datasetRef
+            ? { resourceRef: definition.datasetRef }
+            : {}),
+          resourceState: definition.resourceStatus,
+          status,
+          ...tableAction,
+        },
+      );
+    });
+}
+
+function unavailableDefinition(
+  kind: PostprocessingDefinition["kind"],
+  state?: ReturnType<typeof postprocessingCatalogState>,
+): PostprocessingDefinition {
+  const labels: Record<PostprocessingDefinition["kind"], string> = {
+    analysis_view: "Analysis Views unavailable",
+    derived_value: "Derived Values unavailable",
+    export: "Exports unavailable",
+    table: "Tables unavailable",
+  };
+  return definePostprocessing({
+    id: `${kind}:contract-gap`,
+    kind,
+    label: labels[kind],
+    ...(state ? { contractGap: state.reason, ownerState: state } : {}),
+  });
+}
+
+function postprocessingNodeStatus(
+  readiness: PostprocessingOwnerReadiness,
+): ExplorerNode["status"] {
+  if (readiness === "available-ready") return "ready";
+  if (readiness === "loading") return "warning";
+  if (readiness === "stale") return "stale";
+  if (readiness === "error") return "failed";
+  return "unavailable";
+}
+
+function postprocessingReadinessBadge(
+  readiness: PostprocessingOwnerReadiness,
+): string {
+  if (readiness === "loading") return "loading";
+  if (readiness === "stale") return "stale";
+  if (readiness === "error") return "error";
+  return "contract gap";
+}
+
+function postprocessingRootState(
+  kind: PostprocessingDefinitionKind,
+  catalog: PostprocessingCatalogSnapshot<unknown> | null | undefined,
+) {
+  if (kind === "analysis_view" || kind === "derived_value") {
+    return {
+      freshness: "unknown" as const,
+      readiness: "unavailable" as const,
+      reason: POSTPROCESSING_OWNER_CONTRACT_GAP,
+      revision: null,
+      status: "error" as const,
+    };
+  }
+  return postprocessingCatalogState(catalog, kind === "table" ? "Table" : "Artifact");
+}
+
+function postprocessingRootWithChildren(
+  id: string,
+  explorerKind: ExplorerNodeKind,
+  label: string,
+  parentId: string,
+  kind: PostprocessingDefinitionKind,
+  catalog: PostprocessingCatalogSnapshot<unknown> | null | undefined,
+  children: readonly ExplorerNode[],
+): ExplorerNode {
+  const state = postprocessingRootState(kind, catalog);
+  const available = state.readiness === "available-ready";
+  return node(id, explorerKind, label, parentId, {
+    availability: available ? "available" : "unavailable",
+    children: [...children],
+    executionState: available ? "completed" : "not_started",
+    postprocessingCatalogRevision: state.revision,
+    postprocessingContractGap: state.reason,
+    postprocessingDefinitionKind: kind,
+    postprocessingFreshness: state.freshness,
+    postprocessingOwnerReadiness: state.readiness,
+    resourceState: state.status,
+    status: postprocessingNodeStatus(state.readiness),
+  });
+}
+
+function postprocessingDefinitions(
+  snapshot: PhysicsFirstPostprocessingSnapshot | undefined,
+): PostprocessingDefinition[] {
+  const tableCatalog = snapshot?.tableCatalog;
+  const artifactCatalog = snapshot?.artifactCatalog;
+  const definitions = [
+    ...(tableCatalog?.data?.tables ?? []).map((table) =>
+      postprocessingDefinitionFromTable(table, tableCatalog),
+    ),
+    ...(artifactCatalog?.data ?? []).map((artifact) =>
+      postprocessingDefinitionFromArtifact(artifact, artifactCatalog),
+    ),
+    ...(snapshot?.analysisViews ?? []).map((definition) =>
+      definePostprocessing(definition),
+    ),
+    ...(snapshot?.derivedValues ?? []).map((definition) =>
+      definePostprocessing(definition),
+    ),
+  ];
+  if (!snapshot?.analysisViews?.length) {
+    definitions.push(unavailableDefinition("analysis_view"));
+  }
+  if (!snapshot?.derivedValues?.length) {
+    definitions.push(unavailableDefinition("derived_value"));
+  }
+  if (tableCatalog === undefined) {
+    definitions.push(unavailableDefinition("table"));
+  } else if (tableCatalog.data === null || tableCatalog.status !== "ready") {
+    definitions.push(
+      unavailableDefinition(
+        "table",
+        postprocessingCatalogState(tableCatalog, "Table"),
+      ),
+    );
+  }
+  if (artifactCatalog === undefined) {
+    definitions.push(unavailableDefinition("export"));
+  } else if (artifactCatalog.data === null || artifactCatalog.status !== "ready") {
+    definitions.push(
+      unavailableDefinition(
+        "export",
+        postprocessingCatalogState(artifactCatalog, "Artifact"),
+      ),
+    );
+  }
+  return definitions;
 }
 
 export function buildPhysicsFirstResultsTree(snapshot: PhysicsFirstResultsSnapshot): ExplorerNode[] {
@@ -400,11 +954,22 @@ export function buildPhysicsFirstResultsTree(snapshot: PhysicsFirstResultsSnapsh
   const dispersionId = `${resultsId}:k-resolved`;
   const resonanceStages = snapshot.entries.map((entry) => resonanceStage(resonanceId, entry));
   const dispersionStages = snapshot.entries.map((entry) => kResolvedStage(dispersionId, entry));
-  const definitions = snapshot.postprocessing ?? [];
+  const definitions = postprocessingDefinitions(snapshot.postprocessing);
+  const contractGap = snapshot.contractGaps?.filter(Boolean).join("; ") ?? "";
+  const resultHasPublishedProducts = snapshot.entries.length > 0;
 
   return [
     node(resultsId, "results.root", "Results", null, {
       analysisRunId: snapshot.resultContextRunId,
+      ...(contractGap ? { badge: "contract gap", postprocessingContractGap: contractGap } : {}),
+      ...(!resultHasPublishedProducts
+        ? {
+            availability: "unavailable" as const,
+            executionState: "not_started" as const,
+            resourceState: contractGap ? ("error" as const) : ("idle" as const),
+            status: contractGap ? ("failed" as const) : ("unavailable" as const),
+          }
+        : {}),
       children: [
         rootWithChildren(`${resultsId}:dynamics`, "results.dynamics.root", "Dynamics", resultsId, []),
         rootWithChildren(resonanceId, "results.resonance.root", "Resonance & FMR", resultsId, resonanceStages),
@@ -416,10 +981,42 @@ export function buildPhysicsFirstResultsTree(snapshot: PhysicsFirstResultsSnapsh
           dispersionStages,
         ),
         rootWithChildren(`${resultsId}:hysteresis`, "results.hysteresis.root", "Hysteresis", resultsId, []),
-        rootWithChildren(`${resultsId}:analysis-views`, "results.analysis_views.root", "Analysis Views", resultsId, postprocessingChildren(`${resultsId}:analysis-views`, "analysis_view", definitions)),
-        rootWithChildren(`${resultsId}:derived-values`, "results.derived_values.root", "Derived Values", resultsId, postprocessingChildren(`${resultsId}:derived-values`, "derived_value", definitions)),
-        rootWithChildren(`${resultsId}:tables`, "results.tables.root", "Tables", resultsId, postprocessingChildren(`${resultsId}:tables`, "table", definitions)),
-        rootWithChildren(`${resultsId}:exports`, "results.exports.root", "Exports", resultsId, postprocessingChildren(`${resultsId}:exports`, "export", definitions)),
+        postprocessingRootWithChildren(
+          `${resultsId}:analysis-views`,
+          "results.analysis_views.root",
+          "Analysis Views",
+          resultsId,
+          "analysis_view",
+          undefined,
+          postprocessingChildren(`${resultsId}:analysis-views`, "analysis_view", definitions),
+        ),
+        postprocessingRootWithChildren(
+          `${resultsId}:derived-values`,
+          "results.derived_values.root",
+          "Derived Values",
+          resultsId,
+          "derived_value",
+          undefined,
+          postprocessingChildren(`${resultsId}:derived-values`, "derived_value", definitions),
+        ),
+        postprocessingRootWithChildren(
+          `${resultsId}:tables`,
+          "results.tables.root",
+          "Tables",
+          resultsId,
+          "table",
+          snapshot.postprocessing?.tableCatalog,
+          postprocessingChildren(`${resultsId}:tables`, "table", definitions),
+        ),
+        postprocessingRootWithChildren(
+          `${resultsId}:exports`,
+          "results.exports.root",
+          "Exports",
+          resultsId,
+          "export",
+          snapshot.postprocessing?.artifactCatalog,
+          postprocessingChildren(`${resultsId}:exports`, "export", definitions),
+        ),
       ],
     }),
   ];

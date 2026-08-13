@@ -9,12 +9,18 @@ import {
 import type { FrequencyDomainKPathMetadataResource } from "@/kernel/api/apiTypes";
 import type { SelectionRef } from "@/kernel/selection/selectionTypes";
 import type { DecodedComplexFieldVector } from "@/kernel/api/codecs/types";
+import {
+  classifyFrequencyDomainResult,
+  type FrequencyDomainResultClassification,
+  type FrequencyDomainResultEvidence,
+} from "./frequencyDomainResultClassification";
 
 type ResourceStatus = "idle" | "loading" | "ready" | "stale" | "error";
 type FrequencyDomainCalculationMode =
   | "dispersion_modal"
   | "fmr_modal"
   | "fmr_response"
+  | "frequency_response"
   | "free_modes"
   | "response_map";
 
@@ -30,47 +36,185 @@ export interface FrequencyDomainChartRoute {
   unavailableReason: string | null;
 }
 
+export function frequencyDomainResultTitle(
+  primaryChart: FrequencyDomainChartRoute["primaryChart"],
+  classification: FrequencyDomainResultClassification | null,
+): string {
+  if (primaryChart === "dispersion") {
+    return classification?.resultLabel ?? "Dispersion Relation · fₙ(k)";
+  }
+  if (primaryChart === "modal-spectrum") {
+    return classification?.resultLabel ?? "Eigenfrequency Spectrum";
+  }
+  if (primaryChart === "response-sweep") {
+    return classification?.resultLabel ?? "Harmonic Response Spectrum";
+  }
+  return classification?.resultLabel ?? "Spectral Response Map · A(k,f)";
+}
+
 export function frequencyDomainChartRouteOverrideFromSelection(
   state: import("@/kernel/selection/selectionTypes").Selection | { kind?: string | null; ref?: { kind?: string | null; type?: string | null } | null } | null | undefined,
 ): Pick<FrequencyDomainChartRoute, "mode" | "primaryChart"> | null {
   if (!state) return null;
   const ref = "ref" in state ? state.ref : undefined;
-  const kind = ref?.type === "frequency-domain"
-    ? ref.kind
-    : ("kind" in state ? state.kind : undefined);
-  if (!kind) return null;
-  if (kind === "results.frequency_domain.fmr_modal_spectrum") {
-    return { mode: "fmr_modal", primaryChart: "modal-spectrum" };
+  if (ref?.type !== "frequency-domain") return null;
+  const calculationMode = (ref as { calculationMode?: unknown }).calculationMode;
+  switch (calculationMode) {
+    case "dispersion_modal":
+      return { mode: calculationMode, primaryChart: "dispersion" };
+    case "fmr_modal":
+    case "free_modes":
+      return { mode: calculationMode, primaryChart: "modal-spectrum" };
+    case "fmr_response":
+    case "frequency_response":
+      return { mode: calculationMode, primaryChart: "response-sweep" };
+    case "response_map":
+      return { mode: calculationMode, primaryChart: "response-map" };
+    default:
+      return null;
   }
-  if (
-    kind.startsWith("results.frequency_response") ||
-    kind.startsWith("resources.analysis.frequency_response") ||
-    kind === "study.stage.frequency_response.sweep" ||
-    kind === "study.stage.frequency_response.outputs" ||
-    kind === "results.frequency_domain.fmr_response_sweep"
-  ) {
-    return { mode: "fmr_response", primaryChart: "response-sweep" };
+}
+
+export interface FrequencyDomainResultContext {
+  boundaryContext: FrequencyDomainResultEvidence["boundaryContext"] | null;
+  classification: FrequencyDomainResultClassification | null;
+  contractGaps: string[];
+  equilibriumId: string | null;
+  evidence: FrequencyDomainResultEvidence | null;
+  geometryId: string | null;
+  kSampling: FrequencyDomainResultEvidence["kSampling"] | null;
+  meshId: string | null;
+  observables: FrequencyDomainResultEvidence["observables"];
+  runId: string | null;
+  stageId: string | null;
+  studyProduct: FrequencyDomainResultEvidence["studyProduct"] | null;
+}
+
+export function frequencyDomainResultContextFromManifest(
+  manifestPayload: unknown,
+): FrequencyDomainResultContext {
+  const manifest = record(manifestPayload);
+  const requested = record(manifest?.requested_execution);
+  const contractGaps: string[] = [];
+  const runId = stringValue(manifest?.run_id);
+  const stageId = stringValue(manifest?.stage_id);
+  const equilibriumId = stringValue(manifest?.equilibrium_identity);
+  const studyProduct = manifest?.study_product === "modal_eigen" || manifest?.study_product === "driven_response"
+    ? manifest.study_product
+    : null;
+  const boundaryContext = requested?.boundary_context === "finite_open" || requested?.boundary_context === "floquet_periodic"
+    ? requested.boundary_context
+    : manifest?.boundary_context === "finite_open" || manifest?.boundary_context === "floquet_periodic"
+      ? manifest.boundary_context
+      : null;
+  const geometryId = stringValue(manifest?.geometry_identity);
+  const meshId = stringValue(manifest?.mesh_identity);
+  const observables = typedObservableEvidence(manifest?.observables);
+  const kSampling = typedKSampling(manifest?.k_sampling ?? requested?.k_sampling);
+  if (!runId) contractGaps.push("run identity unavailable");
+  if (!stageId) contractGaps.push("stage identity unavailable");
+  if (!equilibriumId) contractGaps.push("equilibrium identity unavailable");
+  if (!studyProduct) contractGaps.push("study product unavailable");
+  if (!boundaryContext) contractGaps.push("boundary context unavailable");
+  if (!geometryId) contractGaps.push("geometry identity unavailable");
+  if (!meshId) contractGaps.push("mesh identity unavailable");
+  if (!runId || !stageId || !equilibriumId || !studyProduct || !boundaryContext) {
+    return {
+      boundaryContext,
+      classification: null,
+      contractGaps,
+      equilibriumId,
+      evidence: null,
+      geometryId,
+      kSampling,
+      meshId,
+      observables,
+      runId,
+      stageId,
+      studyProduct,
+    };
   }
-  if (
-    kind === "results.frequency_domain.response_map" ||
-    kind === "resources.analysis.frequency_domain.response_map" ||
-    kind === "study.stage.frequency_response.k_grid"
-  ) {
-    return { mode: "response_map", primaryChart: "response-map" };
+
+  const drive = typedDriveEvidence(manifest?.drive);
+  const evidence: FrequencyDomainResultEvidence = {
+    boundaryContext,
+    ...(drive ? { drive } : {}),
+    equilibriumId,
+    ...(kSampling ? { kSampling } : {}),
+    observables,
+    runId,
+    stageId,
+    studyProduct,
+  };
+  try {
+    return {
+      boundaryContext,
+      classification: classifyFrequencyDomainResult(evidence),
+      contractGaps,
+      equilibriumId,
+      evidence,
+      geometryId,
+      kSampling,
+      meshId,
+      observables,
+      runId,
+      stageId,
+      studyProduct,
+    };
+  } catch {
+    return {
+      boundaryContext,
+      classification: null,
+      contractGaps: [...contractGaps, "k context unavailable"],
+      equilibriumId,
+      evidence,
+      geometryId,
+      kSampling,
+      meshId,
+      observables,
+      runId,
+      stageId,
+      studyProduct,
+    };
   }
-  if (
-    kind.includes("dispersion") ||
-    kind.includes("k_path") ||
-    kind === "study.stage.eigenmodes.k_path"
-  ) {
-    return { mode: "dispersion_modal", primaryChart: "dispersion" };
+}
+
+function typedDriveEvidence(value: unknown): FrequencyDomainResultEvidence["drive"] | null {
+  const drive = record(value);
+  const identity = stringValue(drive?.identity);
+  if (!identity || (drive?.kind !== "magnetic_rf" && drive?.kind !== "other")) return null;
+  return { identity, kind: drive.kind };
+}
+
+function typedObservableEvidence(value: unknown): FrequencyDomainResultEvidence["observables"] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((entry): FrequencyDomainResultEvidence["observables"] => {
+    const observable = record(entry);
+    const identity = stringValue(observable?.identity);
+    const unit = stringValue(observable?.unit);
+    const kind = observable?.kind;
+    if (!identity || !unit || ![
+      "absorbed_power",
+      "drive_projected_response",
+      "response_amplitude",
+      "rf_coupling",
+      "susceptibility",
+    ].includes(String(kind))) return [];
+    return [{ identity, kind: kind as FrequencyDomainResultEvidence["observables"][number]["kind"], unit }];
+  });
+}
+
+function typedKSampling(value: unknown): FrequencyDomainResultEvidence["kSampling"] | null {
+  const sampling = record(value);
+  if (sampling?.kind === "single" && Array.isArray(sampling.vector_rad_per_m) &&
+    sampling.vector_rad_per_m.length === 3 && sampling.vector_rad_per_m.every((item) => typeof item === "number" && Number.isFinite(item))) {
+    return { kind: "single", vectorRadPerM: sampling.vector_rad_per_m as [number, number, number] };
   }
-  if (
-    kind.startsWith("results.eigen") ||
-    kind.startsWith("resources.analysis.eigen") ||
-    kind === "study.stage.eigenmodes.outputs"
-  ) {
-    return { mode: "free_modes", primaryChart: "modal-spectrum" };
+  if ((sampling?.kind === "path" || sampling?.kind === "grid") &&
+    typeof sampling.sample_count === "number" && Number.isSafeInteger(sampling.sample_count) && sampling.sample_count > 0) {
+    if (sampling.kind === "grid") return { kind: "grid", sampleCount: sampling.sample_count };
+    const label = stringValue(sampling.label);
+    return { kind: "path", sampleCount: sampling.sample_count, ...(label ? { label } : {}) };
   }
   return null;
 }
@@ -368,31 +512,33 @@ export function routeFrequencyDomainCalculationMode(
         : "dispersion artifact is missing",
     };
   }
-  if (mode === "fmr_response" || mode === "response_map") {
+  if (mode === "fmr_response" || mode === "frequency_response" || mode === "response_map") {
+    if (mode === "response_map") {
+      return {
+        mode,
+        primaryChart: "response-map",
+        supportingCharts: [],
+        status: "unavailable",
+        unavailableReason: "Typed response-map resource is not available in the current Analysis contract.",
+      };
+    }
     const hasSweep =
       stringValue(artifacts?.response_sweep_v2_path) != null ||
       stringValue(artifacts?.response_sweep_v1_path) != null;
-    const hasResponseMap =
-      stringValue(artifacts?.response_map_v1_path) != null ||
-      stringValue(artifacts?.response_map_v2_path) != null;
     return {
       mode,
-      primaryChart: mode === "response_map" && hasResponseMap
-        ? "response-map"
-        : "response-sweep",
+      primaryChart: "response-sweep",
       supportingCharts: ["peak-table", "phase-chart", "response-field-overlay"],
-      status: hasResponseMap || hasSweep ? "available" : "unavailable",
+      status: hasSweep ? "available" : "unavailable",
       unavailableReason:
-        hasResponseMap || hasSweep ? null : "response sweep artifact is missing",
+        hasSweep ? null : "response sweep artifact is missing",
     };
   }
   return {
     mode,
     primaryChart: "modal-spectrum",
     supportingCharts:
-      mode === "fmr_modal"
-        ? ["mode-table", "fmr-validation", "selected-mode-overlay"]
-        : ["mode-table", "selected-mode-overlay"],
+      ["mode-table", "selected-mode-overlay"],
     status: stringValue(artifacts?.spectrum_v2_path) ? "available" : "unavailable",
     unavailableReason: stringValue(artifacts?.spectrum_v2_path)
       ? null
@@ -432,7 +578,7 @@ function artifactStatus(
 }
 
 function calculationModeFromStageKind(stageKind: string | null): string | null {
-  if (stageKind === "frequency_response") return "fmr_response";
+  if (stageKind === "frequency_response") return "frequency_response";
   if (stageKind === "eigenmodes") return "free_modes";
   return null;
 }
@@ -446,6 +592,7 @@ function normalizeCalculationMode(rawMode: string | null): FrequencyDomainCalcul
     case "fmr_modal":
       return "fmr_modal";
     case "frequency_response":
+      return "frequency_response";
     case "fmr_response":
       return "fmr_response";
     case "response_map":
@@ -955,7 +1102,7 @@ export function buildFrequencyResponsePointSelectionRef(
     analysisRunId: context.analysisRunId ?? undefined,
     analysisStageId: context.analysisStageId ?? undefined,
     artifactPath: context.artifactPath ?? undefined,
-    calculationMode: context.calculationMode ?? "fmr_response",
+    calculationMode: context.calculationMode ?? "frequency_response",
     fieldId: point.fieldId ?? undefined,
     frequencyIndex: point.frequencyIndex ?? undefined,
     kind: "results.frequency_response.frequency_point",

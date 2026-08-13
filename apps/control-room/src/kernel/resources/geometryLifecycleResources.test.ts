@@ -217,6 +217,18 @@ describe("geometry lifecycle resources", () => {
     expect(resolveVisualizationStateRevision({ revision: 15 } as never)).toBe(15);
   });
 
+  it("keys geometry validation by its typed scene revision", () => {
+    const source = readFileSync(
+      new URL("./geometryLifecycleResources.ts", import.meta.url),
+      "utf8",
+    );
+    const hookStart = source.indexOf("export function useGeometryValidationResource");
+    const hookSource = source.slice(hookStart, source.indexOf("\n}\n", hookStart) + 3);
+
+    expect(hookSource).toContain("resolveRevision: resolveSceneResourceRevision");
+    expect(hookSource).not.toContain("resolveRevision: resolveJsonResourceRevision");
+  });
+
   it("keys region-owned resources by independent realization revisions", () => {
     expect(
       resolveRegionRealizationRevision({
