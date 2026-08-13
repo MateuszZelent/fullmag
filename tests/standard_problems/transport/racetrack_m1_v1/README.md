@@ -95,6 +95,24 @@ Implementacja, wykonywalność, walidacja CPU↔CUDA i kwalifikacja produkcyjna 
 oddzielnymi bramkami Tasks 2–12. Dopiero świeży zarządzany manifest Task 12 może
 promować dokładny tuple `fdm/gpu/double/strict/racetrack_m1_v1`.
 
+## MuMax3: wyłącznie wspólny limit dynamiki
+
+`mumax/common_limit.mx3` nie implementuje solved-current transportu w MuMax3.
+Wymaga początkowego stanu po relaksacji oraz pola równoważnego torque
+wyeksportowanego z Fullmag. Nie wolno zastępować go terminem Slonczewskiego,
+Zhang–Li ani innym prescribed-current torque. Receptura
+`just verify-fdm-gpu-racetrack-mumax-common-limit` wymaga zewnętrznych,
+wersjonowanych manifestów wejściowych Fullmag i MuMax3; porównywarka odrzuca
+brak digestu binarium MuMax3, niezgodną siatkę, różny krok/integrator common
+limit albo brak identycznego digestu pola torque.
+
+Jednostkowe testy `scripts/test_compare_fdm_racetrack_mumax.py` używają tylko
+syntetycznych manifestów do weryfikacji parsera i bramek fail-closed. Nie są
+dowodem uruchomienia MuMax3 ani kwalifikacją dynamiki. Prawdziwy wynik jest
+manifestem `racetrack_mumax_common_limit_v1.json` pod trwałym katalogiem
+raportów i zawiera osobno metryki `m_rms`, energii, $Q$, środka, prędkości oraz
+$\Theta_H$, wraz z literalną polityką demag.
+
 ## Źródła skali
 
 1. J. Sampaio et al., *Nature Nanotechnology* 8, 839–844 (2013),

@@ -1,0 +1,35 @@
+// racetrack_mumax_common_limit_v1
+//
+// This is intentionally a common LLG limit, not a MuMax transport model.
+// `fullmag_transport_torque_common_limit_field.ovf` is emitted from Fullmag's
+// solved-current torque export after its documented LLG-equivalent-field
+// conversion. The companion manifests bind the OVF digest to the source
+// `transport_torque_angular_momentum.fullmag.v1` field. Do not replace it
+// with any built-in current-torque model.
+
+SetGridSize(256, 64, 1)
+SetCellSize(2e-9, 2e-9, 1e-9)
+
+Msat = 580e3
+Aex = 15e-12
+alpha = 0.3
+Ku1 = 0.8e6
+anisU = vector(0, 0, 1)
+Dind = 3e-3
+
+// Literal common-limit demagnetization policy. The managed recipe records
+// this separately from any later converged-demag sensitivity run.
+SetDemagAccuracy(6)
+SetSolver(2) // Heun
+FixDt = 1e-13
+
+// The relaxed state and torque-equivalent field are generated inputs. Both
+// are hashed in the fail-closed Fullmag/MuMax manifests before comparison.
+m = LoadFile("relaxed_zero_current.ovf")
+B_ext = LoadFile("fullmag_transport_torque_common_limit_field.ovf")
+
+TableAdd(E_total)
+TableAdd(ext_topologicalcharge)
+TableAdd(ext_bubblepos)
+Run(2e-9)
+Save(m)
