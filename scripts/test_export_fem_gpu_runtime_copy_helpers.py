@@ -521,7 +521,10 @@ def test_export_script_serializes_runtime_bundle_mutation_with_flock() -> None:
     lock_index = script.find(
         'RUNTIME_LOCK="${RUNTIME_PARENT}/.fem-gpu-host.export.v2.lock"'
     )
-    flock_index = script.find('flock --close "${RUNTIME_LOCK}"')
+    flock_index = script.find(
+        'flock -E 75 -w "${FULLMAG_RUNTIME_EXPORT_LOCK_TIMEOUT_SECONDS}" '
+        '--close "${RUNTIME_LOCK}"'
+    )
     compose_index = script.find(
         'build_managed_fem_image "${docker_build_ref}" "${docker_compatibility_ref}"'
     )
@@ -530,13 +533,17 @@ def test_export_script_serializes_runtime_bundle_mutation_with_flock() -> None:
     assert flock_index != -1
     assert compose_index != -1
     assert lock_index < flock_index < compose_index
+    assert ': "${FULLMAG_RUNTIME_EXPORT_LOCK_TIMEOUT_SECONDS:=1800}"' in script
 
 
 def test_export_lock_descriptor_is_not_inherited_by_child_processes() -> None:
     script = EXPORT_SCRIPT.read_text(encoding="utf-8")
 
     assert 'FULLMAG_RUNTIME_EXPORT_LOCK_HELD' in script
-    assert 'flock --close "${RUNTIME_LOCK}"' in script
+    assert (
+        'flock -E 75 -w "${FULLMAG_RUNTIME_EXPORT_LOCK_TIMEOUT_SECONDS}" '
+        '--close "${RUNTIME_LOCK}"'
+    ) in script
     assert 'exec 9>"${RUNTIME_LOCK}"' not in script
     assert "flock -n 9" not in script
     assert "flock -u 9" not in script
