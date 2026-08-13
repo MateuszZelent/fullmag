@@ -2,55 +2,32 @@
 
 import { useEffect, useRef, useState } from "react";
 
-import { decodeFieldVector } from "@/kernel/api/codecs";
-
 import {
   planarRasterChecksum,
   type PlanarRenderEvidence,
 } from "../model/fieldMapEvidence";
-import { resolvePlanarVectorComponents } from "../model/fieldMapRenderModel";
+import type { FieldMapRenderModel } from "../model/fieldMapRenderModel";
 import { localProbe } from "../model/fieldMapProbe";
-import { finiteScalarRange } from "./colorRaster";
-import { marchingSquares } from "./marchingSquares";
+import type { ContourSegment } from "./marchingSquares";
 import { decodePlanarMeshOverlay } from "./meshOverlay";
 import { createPlanarColorizer } from "./planarColorizer";
 import { createPlanarRenderer, drawPlanarOverlays } from "./planarRenderer";
 import { buildVectorGlyphs } from "./vectorGlyphs";
 
 interface PlanarSurfaceProps {
-  bounds: readonly [number, number, number, number];
-  frame: {
-    normal: readonly [number, number, number];
-    uAxis: readonly [number, number, number];
-    vAxis: readonly [number, number, number];
-  };
-  height: number;
-  mask?: ArrayBuffer | null;
-  meshOverlay?: ArrayBuffer | null;
+  model: FieldMapRenderModel;
   onPin?: (u: number, v: number) => void;
   onRenderEvidence?: (evidence: PlanarRenderEvidence) => void;
-  sampleIdentity: string;
-  scalar: ArrayBuffer;
-  vectors?: ArrayBuffer | null;
-  width: number;
 }
 
 export function PlanarSurface({
-  bounds,
-  frame,
-  height,
-  mask,
-  meshOverlay,
+  model,
   onPin,
   onRenderEvidence,
-  sampleIdentity,
-  scalar,
-  vectors,
-  width,
 }: PlanarSurfaceProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const overlayRef = useRef<HTMLCanvasElement>(null);
-  const valuesRef = useRef<Float64Array | null>(null);
+  const valuesRef = useRef<Float32Array | Float64Array | null>(null);
   const maskRef = useRef<Uint8Array | null>(null);
   const [hoverValue, setHoverValue] = useState<number | null>(null);
 
@@ -59,27 +36,42 @@ export function PlanarSurface({
     const overlayCanvas = overlayRef.current;
     if (!canvas || !overlayCanvas) return;
     const renderer = createPlanarRenderer(canvas);
+    renderer.setViewport(model.bounds, model.viewport);
     const overlayContext = overlayCanvas.getContext("2d");
     if (!overlayContext) return renderer.dispose();
     const worker = new Worker(
       new URL("./planarRendererWorker.ts", import.meta.url),
       { type: "module" },
     );
-    let renderEvidence: Omit<PlanarRenderEvidence, "raster"> | null = null;
     let rasterSummary: PlanarRenderEvidence["raster"] = null;
-    const colorizer = createPlanarColorizer(worker, (pixels) => {
-      renderer.draw(pixels, width, height);
-      if (!renderEvidence || !rasterSummary) return;
+    let glyphs: ReturnType<typeof buildVectorGlyphs> = [];
+    let mesh: ReturnType<typeof decodePlanarMeshOverlay> | null = null;
+    let drawOverlay: (contours?: readonly ContourSegment[]) => void = () => undefined;
+    const colorizer = createPlanarColorizer(worker, ({ contours, pixels }) => {
+      if (model.layers.raster) {
+        renderer.draw(pixels, model.resolution[0], model.resolution[1]);
+      } else {
+        renderer.draw(
+          new Uint8ClampedArray(model.resolution[0] * model.resolution[1] * 4),
+          model.resolution[0],
+          model.resolution[1],
+        );
+      }
+      drawOverlay(contours);
+      if (!rasterSummary) return;
       onRenderEvidence?.({
-        ...renderEvidence,
+        glyphCount: glyphs.length,
+        overlayCounts: {
+          contours: contours.length,
+          meshSegments: mesh?.segmentCount ?? 0,
+        },
         raster: {
           ...rasterSummary,
           checksum: planarRasterChecksum(pixels),
         },
-        sampleIdentity,
+        sampleIdentity: model.sampleIdentity,
       });
     });
-    let drawOverlay: () => void = () => undefined;
     const observer = new ResizeObserver(([entry]) => {
       if (!entry) return;
       renderer.resize(
@@ -93,57 +85,53 @@ export function PlanarSurface({
     });
     observer.observe(canvas);
 
-    const decoded = decodeFieldVector(scalar);
-    const values =
-      decoded.values instanceof Float64Array
-        ? new Float64Array(decoded.values)
-        : new Float32Array(decoded.values);
-    const emptyMask = mask ? new Uint8Array(mask.slice(0)) : undefined;
-    valuesRef.current = decoded.values;
-    maskRef.current = emptyMask ?? null;
-    const range = finiteScalarRange(values, emptyMask);
-    rasterSummary = range
+    valuesRef.current = model.scalar;
+    maskRef.current = model.mask;
+    rasterSummary = model.range
       ? {
           checksum: "",
-          max: range.max,
-          min: range.min,
-          sampleCount: values.length,
+          max: model.range.max,
+          min: model.range.min,
+          sampleCount: model.scalar.length,
         }
       : null;
-    if (range) colorizer.colorize(values, range, emptyMask);
-    const contours = range
-      ? marchingSquares(
-          values,
-          width,
-          height,
-          (range.min + range.max) / 2,
-          emptyMask,
-        )
+    glyphs = model.layers.vectors && model.vectors
+      ? buildVectorGlyphs(model.vectors, model.vectorBudget, 1e-15, {
+          maxLengthCells: 0.4 * model.vectorScale,
+        })
       : [];
-    const decodedVectors = vectors ? decodeFieldVector(vectors) : null;
-    const planarVectors = decodedVectors
-      ? projectVectors(decodedVectors.values, frame)
+    mesh = model.layers.mesh && model.meshOverlay
+      ? decodePlanarMeshOverlay(model.meshOverlay)
       : null;
-    const glyphs = planarVectors ? buildVectorGlyphs(planarVectors, 2_000) : [];
-    const mesh = meshOverlay ? decodePlanarMeshOverlay(meshOverlay) : null;
-    renderEvidence = {
-      glyphCount: glyphs.length,
-      overlayCounts: {
-        contours: contours.length,
-        meshSegments: mesh?.segmentCount ?? 0,
-      },
-      sampleIdentity,
-    };
-    drawOverlay = () =>
+    drawOverlay = (contours = []) =>
       drawPlanarOverlays(overlayContext, overlayCanvas.width, overlayCanvas.height, {
         contours,
         glyphs,
-        gridHeight: height,
-        gridWidth: width,
+        gridHeight: model.resolution[1],
+        gridWidth: model.resolution[0],
+        layers: model.layers,
         meshBounds: mesh?.bounds as [number, number, number, number] | undefined,
         meshSegments: mesh?.segments,
+        meshViewport: model.viewport,
+        viewport: [
+          ((model.viewport[0] - model.bounds[0]) / (model.bounds[1] - model.bounds[0])) * (model.resolution[0] - 1),
+          ((model.viewport[1] - model.bounds[0]) / (model.bounds[1] - model.bounds[0])) * (model.resolution[0] - 1),
+          ((model.bounds[3] - model.viewport[3]) / (model.bounds[3] - model.bounds[2])) * (model.resolution[1] - 1),
+          ((model.bounds[3] - model.viewport[2]) / (model.bounds[3] - model.bounds[2])) * (model.resolution[1] - 1),
+        ],
       });
-    drawOverlay();
+    if (model.range) {
+      colorizer.colorize(model.scalar, model.range, model.mask ?? undefined, {
+        colormap: model.colormap,
+        contours: model.layers.contours,
+        height: model.resolution[1],
+        level: (model.range.min + model.range.max) / 2,
+        opacity: model.opacity,
+        width: model.resolution[0],
+      });
+    } else {
+      drawOverlay();
+    }
 
     return () => {
       observer.disconnect();
@@ -153,15 +141,8 @@ export function PlanarSurface({
       maskRef.current = null;
     };
   }, [
-    frame,
-    height,
-    mask,
-    meshOverlay,
+    model,
     onRenderEvidence,
-    sampleIdentity,
-    scalar,
-    vectors,
-    width,
   ]);
 
   return (
@@ -169,7 +150,7 @@ export function PlanarSurface({
       className="fm-field-map__canvas-stack"
       style={{
         aspectRatio: String(
-          Math.abs((bounds[1] - bounds[0]) / (bounds[3] - bounds[2])) || 1,
+          Math.abs((model.bounds[1] - model.bounds[0]) / (model.bounds[3] - model.bounds[2])) || 1,
         ),
       }}
     >
@@ -180,21 +161,21 @@ export function PlanarSurface({
         role="img"
         tabIndex={0}
         onClick={(event) => {
-          const [u, v] = pointerUv(event.currentTarget, event.clientX, event.clientY, bounds);
+          const [u, v] = pointerUv(event.currentTarget, event.clientX, event.clientY, model.viewport);
           onPin?.(u, v);
         }}
         onKeyDown={(event) => {
           if (event.key === "Enter" || event.key === " ") {
             event.preventDefault();
-            onPin?.(0.5, 0.5);
+            onPin?.(model.boundsCenter[0], model.boundsCenter[1]);
           }
         }}
         onPointerMove={(event) => {
           const values = valuesRef.current;
           if (!values) return;
-          const [u, v] = pointerUv(event.currentTarget, event.clientX, event.clientY, bounds);
+          const [u, v] = pointerUv(event.currentTarget, event.clientX, event.clientY, model.viewport);
           setHoverValue(
-            localProbe(u, v, bounds, [width, height], values, maskRef.current ?? undefined)
+            localProbe(u, v, model.bounds, model.resolution, values, maskRef.current ?? undefined)
               .value,
           );
         }}
@@ -205,7 +186,7 @@ export function PlanarSurface({
         className="fm-field-map__canvas fm-field-map__canvas--overlay"
       />
       <output className="fm-field-map__probe" aria-live="polite">
-        {hoverValue === null ? "No sample" : hoverValue}
+        {hoverValue === null ? "No sample" : hoverValue * model.display.probeScale}
       </output>
     </div>
   );
@@ -224,21 +205,4 @@ function pointerUv(
     bounds[0] + tx * (bounds[1] - bounds[0]),
     bounds[3] - ty * (bounds[3] - bounds[2]),
   ];
-}
-
-function projectVectors(
-  values: Float64Array,
-  frame: PlanarSurfaceProps["frame"],
-): Float64Array {
-  const projected = new Float64Array(values.length);
-  for (let index = 0; index < values.length; index += 3) {
-    const components = resolvePlanarVectorComponents(
-      [values[index] ?? 0, values[index + 1] ?? 0, values[index + 2] ?? 0],
-      frame,
-    );
-    projected[index] = components.u;
-    projected[index + 1] = components.v;
-    projected[index + 2] = components.normal;
-  }
-  return projected;
 }

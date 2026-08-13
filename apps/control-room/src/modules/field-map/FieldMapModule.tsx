@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { useKernel } from "@/kernel/KernelContext";
+import { decodeFieldVector } from "@/kernel/api/codecs";
 import {
   planarFieldQueryFromMeta,
   usePlanarFieldMetaResource,
@@ -26,6 +27,8 @@ import {
   buildFieldMapProbeQuery,
 } from "./model/fieldMapDataPlan";
 import {
+  buildFieldMapRenderModel,
+  projectPlanarVectors,
   resolveFieldMapAuxiliaryDiagnostics,
   surfaceProjectionStatus,
 } from "./model/fieldMapRenderModel";
@@ -167,6 +170,47 @@ export default function FieldMapModule() {
     (next: PlanarRenderEvidence) => setRenderEvidence(next),
     [],
   );
+  const renderModel = useMemo(() => {
+    if (!meta.data || !scalar.data || !frame || !planar) return null;
+    const scalarValues = decodeFieldVector(scalar.data.data).values;
+    const vectorValues = vectors.data
+      ? projectPlanarVectors(decodeFieldVector(vectors.data).values, frame)
+      : null;
+    return buildFieldMapRenderModel({
+      bounds: meta.data.frame.bounds_uv_m as [number, number, number, number],
+      canonicalUnit: meta.data.canonical_unit,
+      colormap: planar.colormap,
+      component: planar.component,
+      displayUnit: planar.display_unit,
+      frame,
+      interaction: {
+        panU: planar.interaction.pan_u_m,
+        panV: planar.interaction.pan_v_m,
+        zoom: planar.interaction.zoom,
+      },
+      layers: {
+        contours: planar.layers.contours,
+        mesh: planar.layers.mesh,
+        raster: planar.layers.raster,
+        vectors: planar.layers.vectors,
+      },
+      mask: mask.data ? new Uint8Array(mask.data) : null,
+      meshOverlay: meshOverlay.data,
+      range: planar.auto_contrast
+        ? { mode: "auto" }
+        : {
+            mode: "manual",
+            max: planar.contrast_max ?? undefined,
+            min: planar.contrast_min ?? undefined,
+          },
+      resolution: meta.data.resolution as [number, number],
+      sampleIdentity: scalar.data.etag ?? "",
+      scalar: scalarValues,
+      vectorBudget: planar.resolution.vector_budget,
+      vectorScale: planar.vector_style.scale,
+      vectors: vectorValues,
+    });
+  }, [frame, mask.data, meshOverlay.data, meta.data, planar, scalar.data, vectors.data]);
 
   const evidenceStatus: PlanarEvidenceStatus = resolvePlanarEvidenceStatus({
     metaIdentity: meta.data?.etag,
@@ -238,11 +282,10 @@ export default function FieldMapModule() {
   if (meta.status === "ready" && (!meta.data || !scalar.data)) {
     return <FieldMapStatus message="No planar field is published for this revision." />;
   }
-  if (!meta.data || !scalar.data || !frame) {
+  if (!meta.data || !scalar.data || !frame || !renderModel) {
     return <FieldMapStatus message="Loading planar field…" planarStatus="loading" />;
   }
 
-  const [width, height] = meta.data.resolution;
   return (
     <section className="fm-field-map">
       <output
@@ -270,7 +313,7 @@ export default function FieldMapModule() {
       <header className="fm-field-map__toolbar">
         <strong>{plan.quantityId}</strong>
         <span>{planar.component}</span>
-        <span>{meta.data.canonical_unit}</span>
+        <span>{renderModel.display.legendUnit}</span>
         {surfaceProjectionStatus(meta.data) === "ambiguous" ? (
           <span className="fm-field-map__diagnostic" role="status">
             Ambiguous surface: {meta.data.overlap_count} overlaps,{" "}
@@ -280,23 +323,15 @@ export default function FieldMapModule() {
       </header>
       <div className="fm-field-map__stage">
         <PlanarSurface
-          bounds={meta.data.frame.bounds_uv_m as [number, number, number, number]}
-          frame={frame}
-          height={height ?? 1}
-          mask={mask.data}
-          meshOverlay={meshOverlay.data}
+          model={renderModel}
           onPin={(u, v) => setPinned([u, v])}
           onRenderEvidence={onRenderEvidence}
-          sampleIdentity={scalar.data.etag ?? ""}
-          scalar={scalar.data.data}
-          vectors={vectors.data}
-          width={width ?? 1}
         />
-        <div className="fm-field-map__axis fm-field-map__axis--u">u (m)</div>
-        <div className="fm-field-map__axis fm-field-map__axis--v">v (m)</div>
+        <div className="fm-field-map__axis fm-field-map__axis--u">u ({renderModel.display.axisUnit})</div>
+        <div className="fm-field-map__axis fm-field-map__axis--v">v ({renderModel.display.axisUnit})</div>
         <div className="fm-field-map__colorbar" aria-label="Scalar color range">
-          <span>{meta.data.scalar_max ?? "auto"}</span>
-          <span>{meta.data.scalar_min ?? "auto"}</span>
+          <span>{renderModel.range ? renderModel.range.max * renderModel.display.probeScale : "auto"}</span>
+          <span>{renderModel.range ? renderModel.range.min * renderModel.display.probeScale : "auto"}</span>
         </div>
       </div>
       <FieldMapAuxiliaryDiagnostics
@@ -312,7 +347,7 @@ export default function FieldMapModule() {
           <tbody>
             <tr><th scope="row">u</th><td>{probe.data.u_m} m</td></tr>
             <tr><th scope="row">v</th><td>{probe.data.v_m} m</td></tr>
-            <tr><th scope="row">Value</th><td>{probe.data.scalar ?? "undefined"} {meta.data.canonical_unit}</td></tr>
+            <tr><th scope="row">Value</th><td>{probe.data.scalar == null ? "undefined" : probe.data.scalar * renderModel.display.probeScale} {renderModel.display.legendUnit}</td></tr>
             <tr><th scope="row">Occupancy</th><td>{probe.data.occupancy}</td></tr>
           </tbody>
         </table>

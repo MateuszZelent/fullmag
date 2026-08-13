@@ -32,4 +32,13 @@ describe("scalar raster colorization", () => {
       255,
     ]);
   });
+
+  it("uses colormap and opacity as presentation-only color inputs", () => {
+    expect(
+      [...colorizeScalarRaster([0, 1], { max: 1, min: 0 }, undefined, {
+        colormap: "grayscale",
+        opacity: 0.5,
+      })],
+    ).toEqual([0, 0, 0, 128, 255, 255, 255, 128]);
+  });
 });
