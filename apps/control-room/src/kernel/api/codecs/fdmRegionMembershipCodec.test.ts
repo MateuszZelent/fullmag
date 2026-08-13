@@ -7,6 +7,7 @@ import {
   validateFdmNativeLayerRegionMembershipContract,
   validateFdmRegionMembershipContract,
 } from "./index";
+import { sha256HexBytes } from "./fdmRegionMembershipCodec";
 import type {
   DomainMetaResource,
   FdmMultilayerLayoutResource,
@@ -40,6 +41,23 @@ function makeBuffer(
     view.setUint32(FMRM_HEADER_LEN + index * 4, regionId, true);
   });
   return buffer;
+}
+
+async function sha256MembershipIds(regionIds: readonly number[]): Promise<string> {
+  const bytes = new Uint8Array(regionIds.length * Uint32Array.BYTES_PER_ELEMENT);
+  const view = new DataView(bytes.buffer);
+  regionIds.forEach((value, index) => {
+    view.setUint32(index * Uint32Array.BYTES_PER_ELEMENT, value, true);
+  });
+  return `sha256:${await sha256HexBytes(bytes)}`;
+}
+
+async function sha256Legend(
+  regionLegend: FdmNativeLayerRegionMembershipResource["region_legend"],
+): Promise<string> {
+  return `sha256:${await sha256HexBytes(
+    new TextEncoder().encode(JSON.stringify(regionLegend)),
+  )}`;
 }
 
 const domain: DomainMetaResource = {
@@ -205,6 +223,71 @@ describe("FMRM codec", () => {
         { ...nativeDescriptor, layer_id: "layer:top" },
         nativeLayout,
         nativeLayout.layers[0]!,
+      ),
+    ).resolves.toEqual({ reason: "layer-identity-mismatch", status: "incompatible" });
+  });
+
+  it("accepts arbitrary unique positive region IDs in a native-layer FMRM legend", async () => {
+    const regionIds = [7, FMRM_INACTIVE_REGION_ID, 11, 0];
+    const regionLegend = [
+      { ...descriptor.region_legend[0]!, numeric_id: 7 },
+      { ...descriptor.region_legend[1]!, numeric_id: 11 },
+    ];
+    const regionLegendHash = await sha256Legend(regionLegend);
+    const regionMaskHash = await sha256MembershipIds(regionIds);
+    const decoded = decodeFdmRegionMembership(makeBuffer(2, 2, regionIds));
+    const layer = {
+      ...nativeLayout.layers[0]!,
+      region_legend_hash: regionLegendHash,
+      region_mask_hash: regionMaskHash,
+    };
+
+    await expect(
+      validateFdmNativeLayerRegionMembershipContract(
+        decoded,
+        {
+          ...nativeDescriptor,
+          region_legend: regionLegend,
+          region_legend_fingerprint: regionLegendHash,
+        },
+        { ...nativeLayout, layers: [layer] },
+        layer,
+      ),
+    ).resolves.toMatchObject({ status: "ready" });
+  });
+
+  it("rejects native-layer object IDs and legend entries owned by another layer", async () => {
+    const regionIds = [1, FMRM_INACTIVE_REGION_ID, 2, 0];
+    const decoded = decodeFdmRegionMembership(makeBuffer(2, 2, regionIds));
+    const foreignLegend = [
+      descriptor.region_legend[0]!,
+      { ...descriptor.region_legend[1]!, object_id: "body:foreign" },
+    ];
+    const foreignLegendHash = await sha256Legend(foreignLegend);
+    const layer = {
+      ...nativeLayout.layers[0]!,
+      region_legend_hash: foreignLegendHash,
+    };
+
+    await expect(
+      validateFdmNativeLayerRegionMembershipContract(
+        decoded,
+        { ...nativeDescriptor, object_ids: ["body", "body:foreign"] },
+        nativeLayout,
+        nativeLayout.layers[0]!,
+      ),
+    ).resolves.toEqual({ reason: "layer-identity-mismatch", status: "incompatible" });
+    await expect(
+      validateFdmNativeLayerRegionMembershipContract(
+        decoded,
+        {
+          ...nativeDescriptor,
+          object_ids: ["body", "body:foreign"],
+          region_legend: foreignLegend,
+          region_legend_fingerprint: foreignLegendHash,
+        },
+        { ...nativeLayout, layers: [layer] },
+        layer,
       ),
     ).resolves.toEqual({ reason: "layer-identity-mismatch", status: "incompatible" });
   });

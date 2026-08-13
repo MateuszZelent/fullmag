@@ -374,8 +374,9 @@ export async function validateFdmNativeLayerRegionMembershipContract(
   if (legendReason) return { reason: legendReason, status: "incompatible" };
   const objectIds = new Set(descriptor.object_ids);
   if (
-    !objectIds.has(descriptor.object_id) ||
-    descriptor.region_legend.some((entry) => !objectIds.has(entry.object_id))
+    objectIds.size !== 1 ||
+    !objectIds.has(layer.object_id) ||
+    descriptor.region_legend.some((entry) => entry.object_id !== layer.object_id)
   ) {
     return { reason: "layer-identity-mismatch", status: "incompatible" };
   }
@@ -422,13 +423,16 @@ function validateLegendAndMembershipIds(
 ): FdmRegionMembershipIncompatibilityReason | null {
   const legendIds = new Set<number>();
   const legendIdentities = new Set<string>();
-  for (const [index, entry] of legend.entries()) {
-    if (entry.numeric_id === 0 || entry.numeric_id === FMRM_INACTIVE_REGION_ID) {
+  for (const entry of legend) {
+    if (
+      !Number.isSafeInteger(entry.numeric_id) ||
+      entry.numeric_id <= 0 ||
+      entry.numeric_id >= FMRM_INACTIVE_REGION_ID
+    ) {
       return "reserved-legend-id";
     }
     if (legendIds.has(entry.numeric_id)) return "duplicate-legend-id";
     legendIds.add(entry.numeric_id);
-    if (entry.numeric_id !== index + 1) return "noncontiguous-legend-id";
     if (entry.object_id.length === 0 || entry.region_id.length === 0) {
       return "invalid-legend-identity";
     }
