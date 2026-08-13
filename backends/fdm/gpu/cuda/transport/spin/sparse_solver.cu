@@ -1410,6 +1410,9 @@ uint32_t prepare(const Operator &input, cudaStream_t stream,
             release(hierarchy);
             return cuda_failure;
         }
+        ++metrics->control_transfer_count;
+        metrics->control_transfer_bytes += sizeof(host_strength);
+        ++metrics->control_host_sync_count;
         double maximum_strength = 0.0;
         double strengths[3]{};
         for (uint32_t axis = 0; axis < 3; ++axis) {
@@ -1601,6 +1604,9 @@ uint32_t solve(const Operator &input, cudaStream_t stream,
     std::memcpy(metrics->restart_residuals, host_result.restart_residuals,
                 sizeof(metrics->restart_residuals));
     metrics->forbidden_transfer_bytes = 0;
+    metrics->control_transfer_count = 1;
+    metrics->control_transfer_bytes = sizeof(host_result);
+    metrics->control_host_sync_count = 1;
     metrics->solve_milliseconds = milliseconds;
     // Timing is measured around the single persistent launch. Apply and
     // reductions are subsets, not separately synchronized host phases.

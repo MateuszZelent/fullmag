@@ -2430,6 +2430,8 @@ extern "C" uint32_t fullmag_fdm_gpu_transport_solve_steady_spin_v1(
     input.static_baseline_bytes = total_device_bytes - free_device_bytes;
     if (parent.spin_solve_active || parent.spin_solve_token == UINT64_MAX)
         return FULLMAG_FDM_GPU_TRANSPORT_ERROR_INVALID_STATE;
+    if (!reserve_telemetry_sequences(parent, 4))
+        return FULLMAG_FDM_GPU_TRANSPORT_ERROR_OUT_OF_RESOURCES;
     const uint64_t solve_token = ++parent.spin_solve_token;
     const uint64_t context_generation = parent.generation;
     const uint64_t snapshot_generation = snapshot.generation;
@@ -2485,6 +2487,41 @@ extern "C" uint32_t fullmag_fdm_gpu_transport_solve_steady_spin_v1(
             snapshot.candidate_digest.data());
         return status;
     }
+
+    const uint32_t stage_transfer_flags =
+        FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_EVENT_TRANSFER |
+        FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_EVENT_PROVISIONAL;
+    const uint32_t stage_sync_flags =
+        FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_EVENT_SYNCHRONIZATION |
+        FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_EVENT_PROVISIONAL;
+    append_charge_telemetry(
+        parent, FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_DIRECTION_H2D,
+        FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_REASON_CONTROL_STATE_H2D,
+        FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_STATUS_SUCCESS,
+        stage_transfer_flags, output.control_h2d_bytes,
+        output.control_h2d_count, request->attempt_id, request->stage_id,
+        output.iterations, snapshot.candidate_digest.data());
+    append_charge_telemetry(
+        parent, FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_DIRECTION_D2H,
+        FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_REASON_SCALAR_REDUCTION_D2H,
+        FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_STATUS_SUCCESS,
+        stage_transfer_flags, output.control_d2h_bytes,
+        output.control_d2h_count, request->attempt_id, request->stage_id,
+        output.iterations, snapshot.candidate_digest.data());
+    append_charge_telemetry(
+        parent, FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_DIRECTION_DEVICE_INTERNAL,
+        FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_REASON_STREAM_SYNCHRONIZE,
+        FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_STATUS_SUCCESS,
+        stage_sync_flags, 0, output.control_host_sync_count,
+        request->attempt_id, request->stage_id, output.iterations,
+        snapshot.candidate_digest.data());
+    append_charge_telemetry(
+        parent, FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_DIRECTION_D2D,
+        FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_REASON_SOLVE_STATE_D2D,
+        FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_STATUS_SUCCESS,
+        stage_transfer_flags, vector_values * sizeof(double), 1,
+        request->attempt_id, request->stage_id, output.iterations,
+        snapshot.candidate_digest.data());
 
     if (transactional) {
         release_spin_buffers(snapshot.spin_trial);

@@ -2022,6 +2022,10 @@ uint32_t solve_device(const SolveInput &input, SolveOutput *output) noexcept {
     sparse::SolveMetrics metrics{};
     status=sparse::solve(op,input.stream,state.hierarchy,state.workspace,input.relative_tolerance,input.max_iterations,&metrics);
     trace_phase("sparse_solve");
+    if (metrics.forbidden_transfer_bytes != 0) {
+        output->forbidden_transfer_bytes = metrics.forbidden_transfer_bytes;
+        return FULLMAG_FDM_GPU_TRANSPORT_ERROR_STRICT_GPU_RESIDENCY_VIOLATION;
+    }
     if(status!=0 || metrics.reason!=sparse::ConvergenceReason::converged) {
         output->iterations=metrics.iterations; output->reason=FULLMAG_FDM_GPU_TRANSPORT_CONVERGENCE_MAX_ITERATIONS;
         output->algebraic_residual=metrics.relative_residual;
@@ -2167,7 +2171,21 @@ uint32_t solve_device(const SolveInput &input, SolveOutput *output) noexcept {
     output->global_balance = diagnostics.global_balance;
     output->interface_balance = diagnostics.interface_balance;
     output->torque_balance = diagnostics.torque_balance;
-    output->transfer_count = 0; output->transfer_bytes = 0;
+    output->transfer_count = build.control_transfer_count +
+        metrics.control_transfer_count + 3;
+    output->transfer_bytes = build.control_transfer_bytes +
+        metrics.control_transfer_bytes + 2 * sizeof(DeviceDiagnostics) +
+        sizeof(result_words);
+    output->control_host_sync_count = build.control_host_sync_count +
+        metrics.control_host_sync_count + 4;
+    output->forbidden_transfer_bytes = metrics.forbidden_transfer_bytes;
+    output->control_h2d_count = 1;
+    output->control_h2d_bytes = sizeof(DeviceDiagnostics);
+    output->control_d2h_count = build.control_transfer_count +
+        metrics.control_transfer_count + 2;
+    output->control_d2h_bytes = build.control_transfer_bytes +
+        metrics.control_transfer_bytes + sizeof(DeviceDiagnostics) +
+        sizeof(result_words);
     output->peak_bytes = solve_peak_bytes > materialization_peak_bytes
         ? solve_peak_bytes : materialization_peak_bytes;
     output->amg_apply_count = metrics.amg_applications;

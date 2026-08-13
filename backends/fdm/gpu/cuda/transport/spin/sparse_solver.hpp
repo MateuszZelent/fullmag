@@ -112,6 +112,9 @@ struct BuildMetrics {
     uint32_t level_count = 0;
     uint64_t peak_device_bytes = 0;
     double setup_milliseconds = 0.0;
+    uint64_t control_transfer_count = 0;
+    uint64_t control_transfer_bytes = 0;
+    uint64_t control_host_sync_count = 0;
     ByteLedger bytes{};
 };
 
@@ -121,6 +124,9 @@ struct SolveMetrics {
     ConvergenceReason reason = ConvergenceReason::unset;
     double relative_residual = 0.0;
     uint64_t forbidden_transfer_bytes = 0;
+    uint64_t control_transfer_count = 0;
+    uint64_t control_transfer_bytes = 0;
+    uint64_t control_host_sync_count = 0;
     uint64_t peak_device_bytes = 0;
     double apply_milliseconds = 0.0;
     double solve_milliseconds = 0.0;
