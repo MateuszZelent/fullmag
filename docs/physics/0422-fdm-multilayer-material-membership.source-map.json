@@ -1,7 +1,7 @@
 {
   "document": {"path": "docs/physics/0422-fdm-multilayer-material-membership.md"},
   "backend_matrix": [
-    {"solver": "FDM", "device": "CPU", "status": "implemented", "qualification": "not managed or scientifically qualified", "scope": "planner membership plus Task 10B exchange, RHS, demag source, energy and moment material-field wiring"},
+    {"solver": "FDM", "device": "CPU", "status": "implemented", "qualification": "source/unit/API/client-test evidence only; no managed runtime, scientific, browser or WebGL qualification", "scope": "planner/IR membership; Task 10B exchange, RHS, demag source, energy and moment material-field wiring; Task 10C per-layer artifacts plus plan-first/persisted native API/planar carrier and exact object/region filtering"},
     {"solver": "FDM", "device": "GPU", "status": "unsupported", "reason": "heterogeneous multilayer material fields remain scalar-only and fail closed"},
     {"solver": "FEM", "device": "CPU", "status": "not-applicable", "reason": "FEM uses the shared-domain carrier and a separate coefficient realization"},
     {"solver": "FEM", "device": "GPU", "status": "not-applicable", "reason": "FEM uses the shared-domain carrier and a separate coefficient realization"}
