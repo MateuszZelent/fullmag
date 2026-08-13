@@ -2252,6 +2252,7 @@ fn compute_demag_fields(
             ],
             origin: context.origin,
             ms: context.problem.material.saturation_magnetisation,
+            ms_field: None,
             exchange_stiffness: context.problem.material.exchange_stiffness,
             damping: context.problem.material.damping,
             active_mask: context.problem.active_mask.clone(),
@@ -3430,6 +3431,8 @@ mod tests {
                     native_cell_size: [2e-9, 2e-9, 1e-9],
                     native_origin: [-4e-9, -4e-9, 0.0],
                     native_active_mask: None,
+                    native_region_mask: None,
+                    native_region_legend: None,
                     initial_magnetization: vec![[1.0, 0.0, 0.0]; 16],
                     material: FdmMaterialIR {
                         name: "Py".to_string(),
@@ -3451,6 +3454,8 @@ mod tests {
                     native_cell_size: [2e-9, 2e-9, 1e-9],
                     native_origin: [-4e-9, -4e-9, 3e-9],
                     native_active_mask: None,
+                    native_region_mask: None,
+                    native_region_legend: None,
                     initial_magnetization: vec![[0.0, 1.0, 0.0]; 16],
                     material: FdmMaterialIR {
                         name: "Py".to_string(),
@@ -3726,6 +3731,8 @@ mod tests {
                     native_cell_size: [2e-9, 2e-9, 2e-9],
                     native_origin: [0.0, 0.0, 0.0],
                     native_active_mask: None,
+                    native_region_mask: None,
+                    native_region_legend: None,
                     initial_magnetization: vec![[1.0, 0.0, 0.0]; 2],
                     material: FdmMaterialIR {
                         name: "Py".to_string(),
@@ -3747,6 +3754,8 @@ mod tests {
                     native_cell_size: [2e-9, 2e-9, 2e-9],
                     native_origin: [0.0, 0.0, 2e-9],
                     native_active_mask: None,
+                    native_region_mask: None,
+                    native_region_legend: None,
                     initial_magnetization: vec![[0.0, 1.0, 0.0]; 2],
                     material: FdmMaterialIR {
                         name: "Py".to_string(),

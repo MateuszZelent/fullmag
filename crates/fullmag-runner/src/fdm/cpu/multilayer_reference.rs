@@ -25,7 +25,6 @@ use fullmag_fdm_demag::{
 use fullmag_ir::{ExecutionPrecision, FdmMultilayerPlanIR, IntegratorChoice, OutputIR};
 
 use crate::artifact_pipeline::{ArtifactPipelineSender, ArtifactRecorder};
-use crate::derived_fields::compute_torque_field;
 use crate::derived_fields::max_torque_residual_apm_from_field;
 use crate::fdm::artifacts::select_state_observable_field;
 use crate::fdm::multilayer::make_multilayer_step_stats as make_step_stats;
@@ -73,6 +72,16 @@ pub(crate) fn execute_reference_fdm_multilayer(
     if plan.precision != ExecutionPrecision::Double {
         return Err(RunError {
             message: "public multilayer FDM CPU runner supports only double precision".to_string(),
+        });
+    }
+    if plan
+        .layers
+        .iter()
+        .any(|layer| layer.transfer_kind == "unsupported")
+    {
+        return Err(RunError {
+            message: "FDM multilayer runtime refuses transfer_kind='unsupported' before context or kernel allocation"
+                .to_string(),
         });
     }
     let integrator = match plan.integrator {
@@ -541,6 +550,18 @@ fn build_contexts_and_states(
                 layer.magnet_name, error
             ),
         })?;
+        problem = problem
+            .with_spatial_fields(
+                layer.material.ms_field.clone(),
+                layer.material.a_field.clone(),
+                layer.material.alpha_field.clone(),
+            )
+            .map_err(|error| RunError {
+                message: format!(
+                    "spatial material fields for layer '{}' magnet '{}': {}",
+                    layer.layer_id, layer.magnet_name, error
+                ),
+            })?;
         // Wire periodic boundary policy
         if let Some(ref pbc) = plan.periodicity {
             let map_axis = |a: &fullmag_ir::AxisBoundary| match a {
@@ -877,19 +898,24 @@ fn observe_multilayer(
         let rhs = llg_rhs_for_layer(context, state.magnetization(), &local_effective);
 
         let layer_cell_volume = context.problem.cell_size.volume();
-        let layer_ms = context.problem.material.saturation_magnetisation;
         let local_exchange_energy = local_observables.exchange_energy_joules;
         let local_demag_energy = state
             .magnetization()
             .iter()
             .zip(local_demag.iter())
-            .map(|(m, h)| -0.5 * MU0 * layer_ms * dot(*m, *h) * layer_cell_volume)
+            .enumerate()
+            .map(|(cell, (m, h))| {
+                -0.5 * MU0 * context.problem.ms_at(cell) * dot(*m, *h) * layer_cell_volume
+            })
             .sum::<f64>();
         let local_external_energy = state
             .magnetization()
             .iter()
             .zip(local_external.iter())
-            .map(|(m, h)| -MU0 * layer_ms * dot(*m, *h) * layer_cell_volume)
+            .enumerate()
+            .map(|(cell, (m, h))| {
+                -MU0 * context.problem.ms_at(cell) * dot(*m, *h) * layer_cell_volume
+            })
             .sum::<f64>();
         let local_anisotropy_energy = local_observables.anisotropy_energy_joules;
         let local_dmi_energy = local_observables.dmi_energy_joules;
@@ -901,10 +927,10 @@ fn observe_multilayer(
         max_dm_dt = max_dm_dt.max(max_norm(&rhs));
         max_h_eff = max_h_eff.max(max_norm(&local_effective));
         max_h_demag = max_h_demag.max(max_norm(&local_demag));
-        torque_field.extend(compute_torque_field(
+        torque_field.extend(compute_torque_field_for_layer(
             state.magnetization(),
             &local_effective,
-            context.problem.material.damping,
+            &context.problem,
             context.problem.dynamics.precession_enabled,
         ));
 
@@ -913,11 +939,13 @@ fn observe_multilayer(
             state.magnetization(),
             active_mask,
         );
-        let m_weight = active_mask
-            .map(|mask| mask.iter().filter(|active| **active).count())
-            .unwrap_or_else(|| state.magnetization().len()) as f64
-            * context.problem.cell_size.volume()
-            * context.problem.material.saturation_magnetisation;
+        let m_weight = state
+            .magnetization()
+            .iter()
+            .enumerate()
+            .filter(|(cell, _)| active_mask.map(|mask| mask[*cell]).unwrap_or(true))
+            .map(|(cell, _)| context.problem.ms_at(cell) * context.problem.cell_size.volume())
+            .sum::<f64>();
         per_object_scalars.insert(
             context.magnet_name.clone(),
             std::collections::HashMap::from([
@@ -1098,6 +1126,7 @@ fn compute_demag_fields(
             ],
             origin: context.origin,
             ms: context.problem.material.saturation_magnetisation,
+            ms_field: context.problem.ms_field.clone(),
             exchange_stiffness: context.problem.material.exchange_stiffness,
             damping: context.problem.material.damping,
             active_mask: context.problem.active_mask.clone(),
@@ -1170,14 +1199,42 @@ fn llg_rhs_for_layer(
     magnetization
         .iter()
         .zip(field.iter())
-        .map(|(m, h)| {
+        .enumerate()
+        .map(|(cell, (m, h))| {
             llg_rhs_from_field(
                 *m,
                 *h,
-                context.problem.material.damping,
+                context.problem.alpha_at(cell),
                 context.problem.dynamics.gyromagnetic_ratio,
                 context.problem.dynamics.precession_enabled,
             )
+        })
+        .collect()
+}
+
+fn compute_torque_field_for_layer(
+    magnetization: &[[f64; 3]],
+    effective_field: &[[f64; 3]],
+    problem: &ExchangeLlgProblem,
+    precession_enabled: bool,
+) -> Vec<[f64; 3]> {
+    magnetization
+        .iter()
+        .zip(effective_field.iter())
+        .enumerate()
+        .map(|(cell, (m, h))| {
+            let damping = problem.alpha_at(cell);
+            let b = [MU0 * h[0], MU0 * h[1], MU0 * h[2]];
+            let mx_b = cross(*m, b);
+            let mx_mx_b = cross(*m, mx_b);
+            if precession_enabled {
+                scale(
+                    add(mx_b, scale(mx_mx_b, damping)),
+                    -1.0 / (1.0 + damping * damping),
+                )
+            } else {
+                scale(mx_mx_b, -1.0)
+            }
         })
         .collect()
 }
@@ -1249,6 +1306,8 @@ mod tests {
                 native_cell_size: [2e-9, 2e-9, 1e-9],
                 native_origin: [-4e-9, -4e-9, 0.0],
                 native_active_mask: None,
+                native_region_mask: None,
+                native_region_legend: None,
                 initial_magnetization: vec![[1.0, 0.0, 0.0]; 16],
                 material: FdmMaterialIR {
                     name: "Py".to_string(),
@@ -1270,6 +1329,8 @@ mod tests {
                 native_cell_size: [2e-9, 2e-9, 1e-9],
                 native_origin: [-4e-9, -4e-9, 3e-9],
                 native_active_mask: None,
+                native_region_mask: None,
+                native_region_legend: None,
                 initial_magnetization: vec![[0.0, 1.0, 0.0]; 16],
                 material: FdmMaterialIR {
                     name: "Py".to_string(),
@@ -1343,6 +1404,128 @@ mod tests {
             .expect("test certificate should be valid"),
         );
         plan
+    }
+
+    #[test]
+    fn multilayer_contexts_preserve_spatial_material_fields() {
+        let mut plan = make_plan(false);
+        plan.layers[0].material.ms_field = Some((0..16).map(|i| 700e3 + i as f64 * 10e3).collect());
+        plan.layers[0].material.a_field = Some((0..16).map(|i| 11e-12 + i as f64 * 1e-12).collect());
+        plan.layers[0].material.alpha_field = Some((0..16).map(|i| 0.01 + i as f64 * 0.01).collect());
+        plan.layers[1].material.ms_field = Some((0..16).map(|i| 800e3 + i as f64 * 20e3).collect());
+        plan.layers[1].material.a_field = Some((0..16).map(|i| 13e-12 + i as f64 * 2e-12).collect());
+        plan.layers[1].material.alpha_field = Some((0..16).map(|i| 0.03 + i as f64 * 0.01).collect());
+
+        let (contexts, _) =
+            build_contexts_and_states(&plan, fullmag_engine::TimeIntegrator::Heun, false)
+                .expect("native per-layer material fields should construct contexts");
+
+        assert_eq!(contexts[0].problem.ms_at(0), 700e3);
+        assert_eq!(contexts[0].problem.ms_at(1), 710e3);
+        assert_eq!(contexts[0].problem.a_at(0), 11e-12);
+        assert_eq!(contexts[0].problem.a_at(1), 12e-12);
+        assert_eq!(contexts[0].problem.alpha_at(0), 0.01);
+        assert_eq!(contexts[0].problem.alpha_at(1), 0.02);
+        assert_eq!(contexts[1].problem.ms_at(0), 800e3);
+        assert_eq!(contexts[1].problem.ms_at(1), 820e3);
+        assert_eq!(contexts[1].problem.a_at(0), 13e-12);
+        assert_eq!(contexts[1].problem.a_at(1), 15e-12);
+        assert_eq!(contexts[1].problem.alpha_at(0), 0.03);
+        assert_eq!(contexts[1].problem.alpha_at(1), 0.04);
+    }
+
+    #[test]
+    fn multilayer_rhs_uses_cellwise_alpha() {
+        let mut plan = make_plan(false);
+        plan.layers[0].material.alpha_field = Some(
+            (0..16)
+                .map(|index| if index == 0 { 0.01 } else { 0.40 })
+                .collect(),
+        );
+        let (contexts, _) =
+            build_contexts_and_states(&plan, fullmag_engine::TimeIntegrator::Heun, false)
+                .expect("native alpha field should construct context");
+        let magnetization = vec![[1.0, 0.0, 0.0]; 16];
+        let field = vec![[0.0, 1.0, 0.0]; 16];
+
+        let rhs = llg_rhs_for_layer(&contexts[0], &magnetization, &field);
+
+        assert_eq!(
+            rhs[0],
+            llg_rhs_from_field(
+                magnetization[0],
+                field[0],
+                0.01,
+                contexts[0].problem.dynamics.gyromagnetic_ratio,
+                contexts[0].problem.dynamics.precession_enabled,
+            )
+        );
+        assert_eq!(
+            rhs[1],
+            llg_rhs_from_field(
+                magnetization[1],
+                field[1],
+                0.40,
+                contexts[0].problem.dynamics.gyromagnetic_ratio,
+                contexts[0].problem.dynamics.precession_enabled,
+            )
+        );
+        assert_ne!(rhs[0], rhs[1]);
+
+        let torque = compute_torque_field_for_layer(
+            &magnetization,
+            &field,
+            &contexts[0].problem,
+            contexts[0].problem.dynamics.precession_enabled,
+        );
+        assert_ne!(torque[0], torque[1]);
+    }
+
+    #[test]
+    fn multilayer_observables_weight_demag_external_energy_and_moment_by_ms() {
+        let mut plan = make_plan(true);
+        plan.external_field = Some([0.0, 2.0e4, 0.0]);
+        plan.layers[0].material.ms_field = Some(
+            (0..16)
+                .map(|cell| if cell % 2 == 0 { 500e3 } else { 1_000e3 })
+                .collect(),
+        );
+        let (contexts, states) =
+            build_contexts_and_states(&plan, fullmag_engine::TimeIntegrator::Heun, false)
+                .expect("native Ms field should construct contexts");
+        let runtime = build_multilayer_demag_runtime(&plan).expect("demag runtime should build");
+        let observables = observe_multilayer(&contexts, &states, Some(&runtime))
+            .expect("observables should use native Ms");
+        let first = &contexts[0];
+        let first_cells = first.problem.grid.cell_count();
+        let first_state = &states[0];
+        let cell_volume = first.problem.cell_size.volume();
+        let expected_demag = first_state
+            .magnetization()
+            .iter()
+            .zip(observables.demag_field[..first_cells].iter())
+            .enumerate()
+            .map(|(cell, (m, h))| -0.5 * MU0 * first.problem.ms_at(cell) * dot(*m, *h) * cell_volume)
+            .sum::<f64>();
+        let expected_external = first_state
+            .magnetization()
+            .iter()
+            .zip(observables.external_field[..first_cells].iter())
+            .enumerate()
+            .map(|(cell, (m, h))| -MU0 * first.problem.ms_at(cell) * dot(*m, *h) * cell_volume)
+            .sum::<f64>();
+        let expected_weight = (0..first_cells)
+            .map(|cell| first.problem.ms_at(cell) * cell_volume)
+            .sum::<f64>();
+        let scalars = &observables.per_object_scalars[&first.magnet_name];
+
+        assert!((scalars["e_demag"] - expected_demag).abs() < 1e-20);
+        assert!((scalars["e_ext"] - expected_external).abs() < 1e-20);
+        assert!((scalars["m_weight"] - expected_weight).abs() < 1e-30);
+        let scalar_average_weight = first_cells as f64
+            * cell_volume
+            * first.problem.material.saturation_magnetisation;
+        assert!((scalars["m_weight"] - scalar_average_weight).abs() > 1e-30);
     }
 
     #[test]
@@ -1513,10 +1696,25 @@ mod tests {
     fn multilayer_runtime_rejects_unsupported_transfer_before_allocation() {
         let mut plan = make_plan(true);
         plan.layers[0].transfer_kind = "unsupported".to_string();
+        let topology_tokens = fullmag_ir::fdm_multilayer_topology_tokens(&plan.mode, &plan.layers);
+        plan.grid_certificate = Some(
+            fullmag_ir::FdmGridCertificateIR::new_with_topology_tokens(
+                [-4e-9, -4e-9, 0.0],
+                [4, 4, 1],
+                [2e-9, 2e-9, 1e-9],
+                16,
+                16 * fullmag_plan::FDM_GRID_ESTIMATED_BYTES_PER_CELL,
+                None,
+                &topology_tokens,
+            )
+            .expect("mutated transfer topology certificate should be valid"),
+        );
         let error = execute_reference_fdm_multilayer(&plan, 1e-13, &[], None, None)
             .expect_err("unsupported transfer must fail closed");
         assert!(
-            error.message.contains("unsupported transfer") || error.message.contains("unsupported")
+            error.message.contains("unsupported transfer"),
+            "unexpected error: {}",
+            error.message,
         );
     }
 

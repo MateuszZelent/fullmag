@@ -39,6 +39,8 @@ pub struct FdmLayerRuntime {
     pub cell_size: [f64; 3], // (dx, dy, dz)
     pub origin: [f64; 3],    // global position after Translate
     pub ms: f64,             // saturation magnetisation
+    /// Native-layout saturation magnetisation, when the layer is heterogeneous.
+    pub ms_field: Option<Vec<f64>>,
     pub exchange_stiffness: f64,
     pub damping: f64,
     pub active_mask: Option<Vec<bool>>,
@@ -893,6 +895,21 @@ impl MultilayerDemagRuntime {
                     ));
                 }
             }
+            if let Some(ms_field) = layer.ms_field.as_deref() {
+                if ms_field.len() != native_cells {
+                    return Err(format!(
+                        "layer {index} magnet '{}' ms_field has {} entries, expected {native_cells}",
+                        layer.magnet_name,
+                        ms_field.len()
+                    ));
+                }
+                if ms_field.iter().any(|value| !value.is_finite() || *value <= 0.0) {
+                    return Err(format!(
+                        "layer {index} magnet '{}' ms_field contains non-finite or non-positive values",
+                        layer.magnet_name
+                    ));
+                }
+            }
             if layer.conv_grid != self.conv_grid || layer.conv_cell_size != self.conv_cell_size {
                 return Err(format!(
                     "layer {index} scratch grid does not match the runtime convolution grid"
@@ -1036,21 +1053,28 @@ impl MultilayerDemagRuntime {
                 .map(|descriptor| kernel_source_density_scale(descriptor, self.common_layout.mode))
                 .transpose()?
                 .unwrap_or(1.0);
-            // The transfer buffer stores moment density over the scratch
-            // volume. Pair kernels in two_d_stack retain the physical native
-            // thickness, so convert to the density represented by that kernel
-            // cell before FFT.
-            let ms_scale = layer.ms * kernel_density_scale;
+            // Apply native Ms before active-mask handling and push/pull
+            // transfer so FFT receives physical M_i = Ms_i * m_i.
+            let source_m = layer
+                .m
+                .iter()
+                .enumerate()
+                .map(|(cell, m)| {
+                    let ms = layer.ms_field.as_ref().map(|field| field[cell]).unwrap_or(layer.ms);
+                    [m[0] * ms, m[1] * ms, m[2] * ms]
+                })
+                .collect::<Vec<_>>();
+            let ms_scale = kernel_density_scale;
             let conv_m = &mut workspace.conv_m[layer_index];
             if let Some(transfer) = self
                 .transfer_stencils
                 .get(layer_index)
                 .and_then(|value| value.as_ref())
             {
-                transfer.push_m_into(&layer.m, layer.active_mask.as_deref(), conv_m)?;
+                transfer.push_m_into(&source_m, layer.active_mask.as_deref(), conv_m)?;
             } else if layer.needs_transfer {
                 let transferred = push_m_with_boundary_policy(
-                    &layer.m,
+                    &source_m,
                     layer.grid,
                     layer.cell_size,
                     layer.conv_grid,
@@ -1076,14 +1100,14 @@ impl MultilayerDemagRuntime {
                 }
                 conv_m.copy_from_slice(&transferred);
             } else {
-                if layer.m.len() != conv_m.len() {
+                if source_m.len() != conv_m.len() {
                     return Err(format!(
                         "layer {layer_index} identity transfer requires {} native cells to match {} scratch cells",
-                        layer.m.len(),
+                        source_m.len(),
                         conv_m.len()
                     ));
                 }
-                conv_m.copy_from_slice(&layer.m);
+                conv_m.copy_from_slice(&source_m);
                 if let Some(mask) = layer.active_mask.as_deref() {
                     if mask.len() != conv_m.len() {
                         return Err(format!(
@@ -1639,6 +1663,7 @@ mod tests {
                     cell_size: [1.0, 1.0, *thickness],
                     origin: [0.0, 0.0, index as f64 * 4.0],
                     ms: 1.0,
+                    ms_field: None,
                     exchange_stiffness: 0.0,
                     damping: 0.1,
                     active_mask,
@@ -1856,6 +1881,7 @@ mod tests {
             cell_size,
             origin: [0.0; 3],
             ms: 1.0,
+            ms_field: None,
             exchange_stiffness: 0.0,
             damping: 0.0,
             active_mask: None,
@@ -1907,6 +1933,7 @@ mod tests {
             cell_size,
             origin: [0.0, 0.0, 0.0],
             ms,
+            ms_field: None,
             exchange_stiffness: 13e-12,
             damping: 0.02,
             active_mask: None,
@@ -1947,6 +1974,125 @@ mod tests {
     }
 
     #[test]
+    fn demag_source_uses_native_ms_field_and_rejects_invalid_fields() {
+        let grid = [2, 1, 1];
+        let cell_size = [1.0, 1.0, 1.0];
+        let kernel = fullmag_fdm_demag::compute_exact_self_kernel(
+            grid[0], grid[1], grid[2], cell_size[0], cell_size[1], cell_size[2],
+        );
+        let runtime = MultilayerDemagRuntime::new(
+            vec![KernelPair {
+                src_layer: 0,
+                dst_layer: 0,
+                kernel,
+            }],
+            grid,
+            cell_size,
+        );
+        let layer = |ms_field| FdmLayerRuntime {
+            magnet_name: "heterogeneous".to_string(),
+            grid,
+            cell_size,
+            origin: [0.0; 3],
+            ms: 2.0,
+            ms_field,
+            exchange_stiffness: 0.0,
+            damping: 0.0,
+            active_mask: None,
+            m: vec![[1.0, 0.0, 0.0]; 2],
+            h_ex: vec![[0.0; 3]; 2],
+            h_demag: vec![[0.0; 3]; 2],
+            h_eff: vec![[0.0; 3]; 2],
+            conv_grid: grid,
+            conv_cell_size: cell_size,
+            needs_transfer: false,
+            transfer_boundary_policy: TransferBoundaryPolicy::OPEN,
+        };
+
+        let mut scalar = layer(None);
+        runtime
+            .compute_demag_fields_checked(std::slice::from_mut(&mut scalar))
+            .expect("scalar Ms must be valid");
+        let mut constant = layer(Some(vec![2.0; 2]));
+        runtime
+            .compute_demag_fields_checked(std::slice::from_mut(&mut constant))
+            .expect("constant native Ms must be valid");
+        assert_eq!(constant.h_demag, scalar.h_demag);
+
+        let mut heterogeneous = layer(Some(vec![1.0, 3.0]));
+        runtime
+            .compute_demag_fields_checked(std::slice::from_mut(&mut heterogeneous))
+            .expect("heterogeneous native Ms must be valid");
+        assert_ne!(heterogeneous.h_demag, scalar.h_demag);
+
+        for (ms_field, expected) in [
+            (Some(vec![2.0]), "has 1 entries, expected 2"),
+            (Some(vec![f64::NAN; 2]), "contains non-finite or non-positive values"),
+            (Some(vec![0.0; 2]), "contains non-finite or non-positive values"),
+        ] {
+            let mut invalid = layer(ms_field);
+            let error = runtime
+                .compute_demag_fields_checked(std::slice::from_mut(&mut invalid))
+                .expect_err("invalid native Ms must fail before FFT");
+            assert!(error.contains("magnet 'heterogeneous'"), "{error}");
+            assert!(error.contains(expected), "{error}");
+        }
+    }
+
+    #[test]
+    fn push_pull_demag_uses_native_ms_field_before_transfer() {
+        let native_grid = [2, 1, 2];
+        let scratch_grid = [2, 1, 1];
+        let scratch_cell = [1.0, 1.0, 1.0];
+        let runtime = MultilayerDemagRuntime::new(
+            vec![KernelPair {
+                src_layer: 0,
+                dst_layer: 0,
+                kernel: fullmag_fdm_demag::compute_exact_self_kernel(
+                    scratch_grid[0],
+                    scratch_grid[1],
+                    scratch_grid[2],
+                    scratch_cell[0],
+                    scratch_cell[1],
+                    scratch_cell[2],
+                ),
+            }],
+            scratch_grid,
+            scratch_cell,
+        );
+        let layer = |ms_field| FdmLayerRuntime {
+            magnet_name: "push-pull".to_string(),
+            grid: native_grid,
+            cell_size: [1.0, 1.0, 0.5],
+            origin: [0.0; 3],
+            ms: 2.0,
+            ms_field,
+            exchange_stiffness: 0.0,
+            damping: 0.0,
+            active_mask: Some(vec![true; 4]),
+            m: vec![[1.0, 0.0, 0.0]; 4],
+            h_ex: vec![[0.0; 3]; 4],
+            h_demag: vec![[0.0; 3]; 4],
+            h_eff: vec![[0.0; 3]; 4],
+            conv_grid: scratch_grid,
+            conv_cell_size: scratch_cell,
+            needs_transfer: true,
+            transfer_boundary_policy: TransferBoundaryPolicy::OPEN,
+        };
+
+        let mut scalar = layer(None);
+        runtime
+            .compute_demag_fields_checked(std::slice::from_mut(&mut scalar))
+            .expect("scalar push/pull source must be valid");
+        let mut heterogeneous = layer(Some(vec![1.0, 3.0, 1.0, 3.0]));
+        runtime
+            .compute_demag_fields_checked(std::slice::from_mut(&mut heterogeneous))
+            .expect("heterogeneous push/pull source must be valid");
+
+        assert_ne!(heterogeneous.h_demag, scalar.h_demag);
+    }
+
+    #[test]
     fn single_precision_multilayer_runtime_stays_close_to_double() {
         let grid = [4, 4, 1];
         let cell_size = [2e-9, 2e-9, 1e-9];
@@ -1976,6 +2122,7 @@ mod tests {
             cell_size,
             origin: [0.0, 0.0, 0.0],
             ms,
+            ms_field: None,
             exchange_stiffness: 13e-12,
             damping: 0.02,
             active_mask: None,
@@ -2084,6 +2231,7 @@ mod tests {
                 cell_size,
                 origin: [0.0; 3],
                 ms: 1.0,
+                ms_field: None,
                 exchange_stiffness: 0.0,
                 damping: 0.0,
                 active_mask: None,
@@ -2208,6 +2356,7 @@ mod tests {
                 cell_size,
                 origin,
                 ms: 1.0,
+                ms_field: None,
                 exchange_stiffness: 0.0,
                 damping: 0.0,
                 active_mask: None,
@@ -2355,6 +2504,7 @@ mod tests {
             cell_size,
             origin: [0.0; 3],
             ms,
+            ms_field: None,
             exchange_stiffness: 0.0,
             damping: 0.0,
             active_mask: None,
@@ -2481,6 +2631,7 @@ mod tests {
             cell_size,
             origin: [0.0; 3],
             ms: 1.0,
+            ms_field: None,
             exchange_stiffness: 0.0,
             damping: 0.0,
             active_mask: None,
@@ -2646,6 +2797,7 @@ mod tests {
             cell_size: [1.0, 1.0, 0.5],
             origin: [0.0; 3],
             ms: 1.0,
+            ms_field: None,
             exchange_stiffness: 0.0,
             damping: 0.1,
             active_mask: None,

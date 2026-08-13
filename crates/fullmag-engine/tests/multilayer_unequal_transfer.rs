@@ -196,6 +196,7 @@ fn layer(name: &str, origin_z: f64, thickness: f64, m: [f64; 3]) -> FdmLayerRunt
         cell_size: [1.0, 1.0, thickness],
         origin: [0.0, 0.0, origin_z],
         ms: 1.0,
+        ms_field: None,
         exchange_stiffness: 0.0,
         damping: 0.0,
         active_mask: None,
