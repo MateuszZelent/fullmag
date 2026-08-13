@@ -315,9 +315,11 @@ function visualizationDebugDiagnosticResourceKeys(
   for (const snapshot of snapshots) {
     for (const carrier of snapshot.carriers) {
       const requested = carrier.request.resourceKey;
-      const adopted = carrier.render.adoption.adoptedResourceKey;
+      const adoptedSurface = carrier.render.adoption.surface.adoptedResourceKey;
+      const adoptedVector = carrier.render.adoption.vector.adoptedResourceKey;
       if (requested) resourceKeys.add(requested);
-      if (adopted) resourceKeys.add(adopted);
+      if (adoptedSurface) resourceKeys.add(adoptedSurface);
+      if (adoptedVector) resourceKeys.add(adoptedVector);
     }
   }
   return resourceKeys;

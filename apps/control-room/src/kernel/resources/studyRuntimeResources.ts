@@ -1858,15 +1858,16 @@ export function useScalarWindowResource({
   enabled = true,
   limit = 200,
   sinceRevision,
+  tail,
 }: ScalarWindowQuery & { enabled?: boolean } = {}) {
   const { api } = useKernel();
-  const resourceKey = scalarWindowResourceKey({ columns, limit, sinceRevision });
+  const resourceKey = scalarWindowResourceKey({ columns, limit, sinceRevision, tail });
   const load = useCallback(
     ({ signal }: { signal: AbortSignal }) =>
       api.data.scalars
-        .window({ columns, limit, sinceRevision }, { signal })
+        .window({ columns, limit, sinceRevision, tail }, { signal })
         .catch(ignoreMissingResource<ScalarWindowResource>),
-    [api, columns, limit, sinceRevision],
+    [api, columns, limit, sinceRevision, tail],
   );
 
   return useResource<ScalarWindowResource | null>({
@@ -2411,6 +2412,7 @@ function scalarWindowResourceKey({
   columns,
   limit,
   sinceRevision,
+  tail,
 }: ScalarWindowQuery): string {
   const params = new URLSearchParams();
   if (limit !== undefined) {
@@ -2418,6 +2420,9 @@ function scalarWindowResourceKey({
   }
   if (sinceRevision !== undefined) {
     params.set("since_revision", String(sinceRevision));
+  }
+  if (tail !== undefined) {
+    params.set("tail", String(tail));
   }
   if (columns && columns.length > 0) {
     params.set("columns", columns.join(","));

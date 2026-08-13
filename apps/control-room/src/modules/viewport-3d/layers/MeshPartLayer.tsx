@@ -1,7 +1,7 @@
 "use client";
 
 import { type ThreeEvent } from "@react-three/fiber";
-import { useCallback, useEffect, useMemo, memo, useRef } from "react";
+import { useCallback, useEffect, useId, useMemo, memo, useRef } from "react";
 import {
   BufferAttribute,
   BufferGeometry,
@@ -79,7 +79,7 @@ import {
 } from "./viewport3DLayerPassInputs";
 import { VIEWPORT_3D_PICK_PRIORITY } from "./viewport3DPickPriority";
 import type {
-  Viewport3DRenderAdoptionReceipt,
+  Viewport3DRenderAdoptionIdentity,
   Viewport3DRenderAdoptionRegistry,
 } from "../model/viewport3DRenderAdoptionRegistry";
 import {
@@ -755,11 +755,13 @@ export const MeshPartLayer = memo(function MeshPartLayer({
     fieldModel,
     partId: part.id,
   }).fieldBufferId;
+  const adoptionOwnerId = `mesh-part-surface:${useId()}`;
   useEffect(() => {
     if (!adoptionRegistry || meshQualityColors || !adoptedScalarColors) return;
     let adoption = recordMeshPartSurfaceAdoption({
       carrierId: part.id,
       fieldBufferId: requestedFieldBufferId,
+      ownerId: adoptionOwnerId,
       registry: adoptionRegistry,
       scalarBuffer: adoptedScalarColors,
     });
@@ -767,6 +769,7 @@ export const MeshPartLayer = memo(function MeshPartLayer({
       adoption = recordMeshPartSurfaceAdoption({
         carrierId: part.id,
         fieldBufferId: requestedFieldBufferId,
+        ownerId: adoptionOwnerId,
         registry: adoptionRegistry,
         scalarBuffer: adoptedScalarColors,
       });
@@ -774,10 +777,11 @@ export const MeshPartLayer = memo(function MeshPartLayer({
     const unregister = adoptionRegistry.registerCarrierAdoptionReplay(part.id, replay);
     return () => {
       unregister();
-      adoptionRegistry.clearAdoption(adoption);
+      adoptionRegistry.clearAdoption(adoptionOwnerId, adoption);
     };
   }, [
     adoptedScalarColors,
+    adoptionOwnerId,
     adoptionRegistry,
     meshQualityColors,
     part.id,
@@ -993,14 +997,16 @@ export function resolveMeshPartPointNodeSelection(
 export function recordMeshPartSurfaceAdoption({
   carrierId,
   fieldBufferId,
+  ownerId,
   registry,
   scalarBuffer,
 }: {
   carrierId: string;
   fieldBufferId: string | null;
+  ownerId?: string;
   registry: Viewport3DRenderAdoptionRegistry;
   scalarBuffer: ScalarColorBuffer;
-}): Omit<Viewport3DRenderAdoptionReceipt, "byteLength" | "targetId"> {
+}): Viewport3DRenderAdoptionIdentity {
   const adoption = {
     carrierId,
     fieldBufferId: scalarBuffer.sourceFieldBufferId ?? fieldBufferId,
@@ -1013,6 +1019,7 @@ export function recordMeshPartSurfaceAdoption({
     byteLength:
       scalarBuffer.colors.byteLength +
       (scalarBuffer.scalarValues?.byteLength ?? 0),
+    ownerId,
     ...adoption,
   });
   return adoption;

@@ -10368,6 +10368,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                     state.live_state = live_state_manifest_from_update(final_update.clone());
                     set_latest_scalar_row_for_terminal_update(state, &final_update);
                 });
+                live_workspace.force_publish_latest_scalar_row();
             }
 
             let offset_steps = offset_step_stats(&stage_result.steps, step_offset, time_offset);
@@ -11297,6 +11298,7 @@ mod tests {
         LivePreviewField {
             config_revision: revision,
             source_step: 0,
+            source_time_seconds: None,
             source_revision: revision,
             materialized_at_unix_ms: 0,
             materialization_wall_time_ns: 0,
@@ -12970,6 +12972,7 @@ mod tests {
         heavy.preview_field = Some(LivePreviewField {
             config_revision: 1,
             source_step: 0,
+            source_time_seconds: None,
             source_revision: 1,
             materialized_at_unix_ms: 0,
             materialization_wall_time_ns: 0,
@@ -13153,7 +13156,15 @@ mod tests {
         h_eff.preview_grid = [2, 1, 1];
         h_eff.original_grid = [2, 1, 1];
         h_eff.vector_field_values = vec![0.0, 0.0, 2.0, 0.0, 0.0, 2.0];
-        terminal.cached_preview_fields = Some(vec![m, h_eff]);
+        let mut eden_demag = test_preview_field("eden_demag", 12, 3.0);
+        eden_demag.unit = "J/m³".to_string();
+        eden_demag.spatial_kind = "grid".to_string();
+        eden_demag.quantity_domain = "magnetic_only".to_string();
+        eden_demag.preview_grid = [2, 1, 1];
+        eden_demag.original_grid = [2, 1, 1];
+        eden_demag.vector_field_values = vec![3.0, 4.0];
+        terminal.stats.time = 1.2e-12;
+        terminal.cached_preview_fields = Some(vec![m, h_eff, eden_demag]);
 
         let _ = apply_live_step_update_to_workspace_state(
             &mut state,
@@ -13169,16 +13180,126 @@ mod tests {
             state.latest_fields.0["m"]["layout"]["spatial_kind"],
             serde_json::json!("grid")
         );
+        assert_eq!(
+            state.latest_fields.0["eden_demag"]["source_step"],
+            serde_json::json!(12)
+        );
+        assert_eq!(
+            state.latest_fields.0["eden_demag"]["source_time_seconds"],
+            serde_json::json!(1.2e-12)
+        );
+        assert_eq!(
+            state.latest_fields.0["eden_demag"]["unit"],
+            serde_json::json!("J/m³")
+        );
         let payload =
             serde_json::to_value(state.publish_delta()).expect("terminal payload serializes");
         assert_eq!(payload["replace_latest_fields"], serde_json::json!(true));
         assert_eq!(
             payload["field_generation"]["run_id"],
-            serde_json::json!("test-run")
+            serde_json::json!("run-test")
         );
         assert!(payload["field_generation"]["sequence"]
             .as_u64()
             .is_some_and(|sequence| sequence > 0));
+    }
+
+    #[test]
+    fn interactive_terminal_field_snapshot_keeps_generation_while_run_awaits_command() {
+        let mut state = test_workspace_state();
+        let mut terminal = test_step_update(12);
+        terminal.grid = [2, 1, 2];
+        terminal.finished = false;
+        let mut eden_demag = test_preview_field("eden_demag", 12, 3.0);
+        eden_demag.unit = "J/m³".to_string();
+        eden_demag.spatial_kind = "grid".to_string();
+        eden_demag.quantity_domain = "magnetic_only".to_string();
+        eden_demag.preview_grid = [2, 1, 2];
+        eden_demag.original_grid = [2, 1, 2];
+        eden_demag.vector_field_values = vec![3.0, 4.0, 30.0, 40.0];
+        eden_demag.materialized_at_unix_ms = 17;
+        let mut eden_total = eden_demag.clone();
+        eden_total.quantity = "eden_total".to_string();
+        eden_total.vector_field_values = vec![7.0, 8.0, 70.0, 80.0];
+        let mut mat_ms = eden_demag.clone();
+        mat_ms.quantity = "mat_ms".to_string();
+        mat_ms.unit = "A/m".to_string();
+        mat_ms.vector_field_values = vec![9.0, 10.0, 90.0, 100.0];
+        let mut e_total = eden_demag.clone();
+        e_total.quantity = "e_total".to_string();
+        e_total.unit = "J".to_string();
+        e_total.preview_grid = [1, 1, 1];
+        e_total.vector_field_values = vec![11.0];
+        terminal.stats.time = 2.5e-12;
+        terminal.cached_preview_fields = Some(vec![eden_demag, eden_total, mat_ms, e_total]);
+
+        let _ = apply_live_step_update_to_workspace_state(
+            &mut state,
+            "run-test",
+            "session-test",
+            PathBuf::from("/tmp/artifacts").as_path(),
+            terminal,
+            true,
+        );
+
+        assert_eq!(state.session.status, "running");
+        assert_eq!(
+            state.latest_fields.0["eden_demag"]["source_step"],
+            serde_json::json!(12)
+        );
+        assert_eq!(
+            state.latest_fields.0["eden_demag"]["source_time_seconds"],
+            serde_json::json!(2.5e-12)
+        );
+        assert_eq!(
+            state.latest_fields.0["eden_demag"]["layout"]["grid_cells"],
+            serde_json::json!([2, 1, 2])
+        );
+        assert_eq!(
+            state.latest_fields.0["eden_demag"]["values"],
+            serde_json::json!([3.0, 4.0, 30.0, 40.0])
+        );
+        assert_eq!(
+            state.latest_fields.0["eden_total"]["values"],
+            serde_json::json!([7.0, 8.0, 70.0, 80.0])
+        );
+        assert_eq!(
+            state.latest_fields.0["mat_ms"]["values"],
+            serde_json::json!([9.0, 10.0, 90.0, 100.0])
+        );
+        assert!(state.latest_fields.0.get("e_total").is_none());
+        assert!(state.field_generation.is_some());
+        assert!(state.replace_latest_fields);
+    }
+
+    #[test]
+    fn interactive_terminal_field_snapshot_does_not_promote_an_ambiguous_scalar_plane() {
+        let mut state = test_workspace_state();
+        let mut terminal = test_step_update(12);
+        terminal.grid = [2, 1, 2];
+        terminal.finished = false;
+        let mut eden_demag = test_preview_field("eden_demag", 12, 3.0);
+        eden_demag.unit = "J/m³".to_string();
+        eden_demag.spatial_kind = "grid".to_string();
+        eden_demag.quantity_domain = "magnetic_only".to_string();
+        eden_demag.preview_grid = [2, 1, 1];
+        eden_demag.original_grid = [2, 1, 2];
+        eden_demag.vector_field_values = vec![3.0, 4.0];
+        eden_demag.materialized_at_unix_ms = 17;
+        terminal.cached_preview_fields = Some(vec![eden_demag]);
+
+        let _ = apply_live_step_update_to_workspace_state(
+            &mut state,
+            "run-test",
+            "session-test",
+            PathBuf::from("/tmp/artifacts").as_path(),
+            terminal,
+            true,
+        );
+
+        assert!(state.latest_fields.0.get("eden_demag").is_none());
+        assert!(state.field_generation.is_some());
+        assert!(state.replace_latest_fields);
     }
 
     #[test]

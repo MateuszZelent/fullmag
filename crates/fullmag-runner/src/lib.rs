@@ -2971,10 +2971,17 @@ pub fn run_planned_problem_with_live_preview_interruptible_with_initial_snapshot
 
     let cpu_threads = configured_cpu_threads(problem);
     let live_display_selection = (field_every_n != u64::MAX).then_some(display_selection);
+    let mut terminal_fdm_fields = None;
     let executed_result = with_cpu_parallelism(cpu_threads, || match &plan.backend_plan {
         BackendPlanIR::Fdm(fdm) => {
             let grid = fdm.grid.cells;
             let resolution = dispatch::resolve_fdm_engine_for_plan_with_trail(problem, fdm)?;
+            let mut capture_terminal_fields = |update: StepUpdate| {
+                if let Some(fields) = update.cached_preview_fields.as_ref() {
+                    terminal_fdm_fields = Some(fields.clone());
+                }
+                on_step(update)
+            };
             let mut executed = dispatch::execute_fdm(
                 resolution.engine,
                 fdm,
@@ -2986,7 +2993,7 @@ pub fn run_planned_problem_with_live_preview_interruptible_with_initial_snapshot
                     initial_snapshot,
                     display_selection: live_display_selection,
                     interrupt_requested,
-                    on_step: &mut on_step,
+                    on_step: &mut capture_terminal_fields,
                 }),
                 artifact_writer.clone(),
             )?;
@@ -3165,6 +3172,25 @@ pub fn run_planned_problem_with_live_preview_interruptible_with_initial_snapshot
         | BackendPlanIR::FemEigen(_)
         | BackendPlanIR::FemFrequencyResponse(_) => None,
     };
+    let cached_preview_fields = if matches!(plan.backend_plan, BackendPlanIR::Fdm(_))
+        && interactive_runtime::should_materialize_terminal_fdm_fields(executed.result.status)
+    {
+        let materialized_at_unix_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as u64;
+        terminal_fdm_fields.map(|mut fields| {
+            for field in &mut fields {
+                field.source_step = final_stats.step;
+                field.source_time_seconds = Some(final_stats.time);
+                field.source_revision = final_stats.step;
+                field.materialized_at_unix_ms = materialized_at_unix_ms;
+            }
+            fields
+        })
+    } else {
+        None
+    };
     on_step(StepUpdate {
         coupled_checkpoint: None,
         stats: final_stats,
@@ -3174,7 +3200,7 @@ pub fn run_planned_problem_with_live_preview_interruptible_with_initial_snapshot
             .and_then(|context| context.generation_id()),
         magnetization: final_m,
         preview_field: None,
-        cached_preview_fields: None,
+        cached_preview_fields,
         hysteresis_field_m_t: None,
         hysteresis_point_index: None,
         hysteresis_settle_step_index: None,
@@ -7575,6 +7601,79 @@ mod tests {
             .cached_preview_fields
             .as_ref()
             .is_some_and(|fields| fields.iter().any(|field| field.quantity == "eden_total")));
+
+        fs::remove_dir_all(&output_dir).expect("temporary artifact directory should be removable");
+    }
+
+    #[test]
+    fn public_live_preview_wrapper_publishes_one_completed_terminal_field_batch() {
+        let mut problem = fullmag_ir::ProblemIR::bootstrap_example();
+        problem
+            .problem_meta
+            .runtime_metadata
+            .insert("runtime_selection".to_string(), json!({"device": "cpu"}));
+        problem.energy_terms.push(fullmag_ir::EnergyTermIR::Demag {
+            realization: fullmag_ir::RequestedFemDemagIR::Auto,
+        });
+        let plan = fullmag_plan::plan(&problem).expect("CPU FDM fixture should plan");
+        let unique_suffix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock drift")
+            .as_nanos();
+        let output_dir = std::env::temp_dir().join(format!(
+            "fullmag-runner-public-live-preview-terminal-{}-{}",
+            std::process::id(),
+            unique_suffix
+        ));
+        let display_selection = DisplaySelectionState::default;
+        let mut updates = Vec::new();
+
+        let result = run_planned_problem_with_live_preview_interruptible_with_initial_snapshot_and_fem_mesh_identity_and_autosave_root(
+            &problem,
+            &plan,
+            None,
+            2e-13,
+            &output_dir,
+            &output_dir,
+            1,
+            &display_selection,
+            None,
+            true,
+            |update| {
+                updates.push(update);
+                StepAction::Continue
+            },
+        )
+        .expect("public live-preview wrapper should complete");
+
+        assert_eq!(result.status, RunStatus::Completed);
+        assert_eq!(updates.iter().filter(|update| update.finished).count(), 1);
+        let terminal = updates.last().expect("completed run should publish a terminal update");
+        assert!(terminal.finished, "completed update must be published last");
+        let final_stats = result
+            .steps
+            .last()
+            .expect("completed run should report stats");
+        assert_eq!(terminal.stats.step, final_stats.step);
+        assert_eq!(terminal.stats.time, final_stats.time);
+        let fields = terminal
+            .cached_preview_fields
+            .as_ref()
+            .expect("completed terminal update should carry fields");
+        assert!(fields.iter().any(|field| field.quantity == "eden_demag"));
+        for field in fields {
+            assert_eq!(field.source_step, final_stats.step);
+            assert_eq!(field.source_time_seconds, Some(final_stats.time));
+            assert!(field.materialized_at_unix_ms > 0);
+        }
+        let materialized_m = fields
+            .iter()
+            .find(|field| field.quantity == "m")
+            .expect("terminal materialization should carry m");
+        assert_eq!(
+            terminal.magnetization.as_deref(),
+            Some(materialized_m.vector_field_values.as_slice())
+        );
 
         fs::remove_dir_all(&output_dir).expect("temporary artifact directory should be removable");
     }

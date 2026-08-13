@@ -227,6 +227,7 @@ export function buildFdmSampledScalarColors(
   colorMode = "magnitude",
   colorPalette = "viridis",
   scalarRange?: ScalarRange | null,
+  domainGridShape?: readonly [number, number, number] | null,
 ): ScalarColorBuffer | null {
   const resolvedColorMode = normalizeViewport3DVectorColorMode(
     colorMode,
@@ -243,7 +244,11 @@ export function buildFdmSampledScalarColors(
     return null;
   }
 
-  const indexing = buildFdmFieldIndexResolver(fieldVector, domainCellCount);
+  const indexing = buildFdmFieldIndexResolver(
+    fieldVector,
+    domainCellCount,
+    domainGridShape,
+  );
   if (indexing.status !== "compatible") return null;
   for (const cellOrdinal of cellOrdinals) {
     if (indexing.resolve(cellOrdinal) === null) return null;

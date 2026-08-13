@@ -4682,6 +4682,18 @@
             "minimum": 0,
             "type": "integer"
           },
+          "source_time_seconds": {
+            "description": "Solver time in seconds for the state that produced this field, when known.",
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "spatial": {
+            "description": "Whether this descriptor can be rendered as a spatial viewport field.",
+            "type": "boolean"
+          },
           "stale_by_steps": {
             "format": "int64",
             "minimum": 0,
@@ -4690,6 +4702,10 @@
           "state": {
             "$ref": "#/components/schemas/FieldMaterializationState"
           },
+          "ui_exposed": {
+            "description": "Whether this canonical quantity is intended for interactive UI selection.",
+            "type": "boolean"
+          },
           "unit": {
             "type": "string"
           }
@@ -4697,6 +4713,8 @@
         "required": [
           "quantity_id",
           "label",
+          "ui_exposed",
+          "spatial",
           "domain",
           "kind",
           "components",
@@ -5088,6 +5106,14 @@
             "format": "int64",
             "minimum": 0,
             "type": "integer"
+          },
+          "source_time_seconds": {
+            "description": "Solver time in seconds for the state that produced this field, when known.",
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
           },
           "stale_by_steps": {
             "format": "int64",
@@ -14108,7 +14134,14 @@
             "type": "boolean"
           },
           "magnetization_average": {
-            "$ref": "#/components/schemas/ObjectMagnetizationAverage"
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ObjectMagnetizationAverage"
+              }
+            ]
           },
           "object_id": {
             "type": "string"
@@ -14138,7 +14171,6 @@
           "has_solver_sample",
           "step",
           "time_seconds",
-          "magnetization_average",
           "energies"
         ],
         "type": "object"
@@ -33760,6 +33792,15 @@
             }
           },
           {
+            "description": "Return the newest rows instead of the oldest rows in the selected window",
+            "in": "query",
+            "name": "tail",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
             "description": "Comma-separated scalar columns to return, e.g. step,time,e_total",
             "in": "query",
             "name": "columns",
@@ -39913,8 +39954,8 @@
     }
   ],
   "x-fullmag-build-identity": {
-    "built_at_utc": "2026-08-13T03:28:43Z",
-    "git_commit": "d4a0d2517535955cf81a4b705c3bfebfe5d29de5",
+    "built_at_utc": "2026-08-13T10:02:54Z",
+    "git_commit": "09453245111be4dde7d95d9e67671168413ca6fd",
     "source_snapshot_sha256": "unknown",
     "worktree_state": "dirty"
   },

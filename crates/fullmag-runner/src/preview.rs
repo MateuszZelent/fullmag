@@ -267,12 +267,12 @@ pub(crate) fn build_grid_scalar_preview_field(
     original_grid: [u32; 3],
     active_mask: Option<&[bool]>,
 ) -> LivePreviewField {
+    let plan = plan_grid_preview(request, original_grid);
     let mut scalar_request = request.clone();
     if scalar_request.component == "3D" {
         scalar_request.component = "magnitude".to_string();
     }
     let quantity = normalized_quantity_name(&scalar_request.quantity).unwrap_or("m");
-    let plan = plan_grid_preview(&scalar_request, original_grid);
     let sampled = resample_grid_scalars(values, &plan);
     let resampled_mask = active_mask.map(|mask| resample_grid_mask(mask, &plan));
     build_grid_preview_field_from_flat_plan(
@@ -310,6 +310,7 @@ pub(crate) fn build_grid_preview_field_from_flat_plan(
     LivePreviewField {
         config_revision: request.revision,
         source_step: 0,
+        source_time_seconds: None,
         source_revision: request.revision,
         materialized_at_unix_ms: 0,
         materialization_wall_time_ns: 0,
@@ -374,6 +375,7 @@ pub(crate) fn build_mesh_preview_field_with_active_mask(
     LivePreviewField {
         config_revision: request.revision,
         source_step: 0,
+        source_time_seconds: None,
         source_revision: request.revision,
         materialized_at_unix_ms: 0,
         materialization_wall_time_ns: 0,
@@ -404,6 +406,7 @@ pub(crate) fn build_mesh_scalar_preview_field_with_active_mask(
     LivePreviewField {
         config_revision: request.revision,
         source_step: 0,
+        source_time_seconds: None,
         source_revision: request.revision,
         materialized_at_unix_ms: 0,
         materialization_wall_time_ns: 0,
@@ -546,7 +549,8 @@ fn choose_preview_size(requested: usize, possible: &[usize], full: usize) -> usi
 
 #[cfg(test)]
 mod tests {
-    use super::mesh_quantity_active_mask;
+    use super::{build_grid_scalar_preview_field, mesh_quantity_active_mask};
+    use crate::LivePreviewRequest;
     use fullmag_ir::MeshIR;
 
     fn test_mesh(element_markers: Vec<u32>) -> MeshIR {
@@ -594,5 +598,26 @@ mod tests {
             mesh_quantity_active_mask("m", &mesh),
             Some(vec![true, true, true, true, false]),
         );
+    }
+
+    #[test]
+    fn terminal_scalar_3d_request_preserves_every_grid_layer() {
+        let values = vec![1.0, 2.0, 3.0, 4.0, 10.0, 20.0, 30.0, 40.0];
+        let field = build_grid_scalar_preview_field(
+            &LivePreviewRequest {
+                quantity: "eden_demag".to_string(),
+                component: "3D".to_string(),
+                all_layers: true,
+                auto_scale_enabled: false,
+                ..Default::default()
+            },
+            &values,
+            [2, 2, 2],
+            None,
+        );
+
+        assert_eq!(field.preview_grid, [2, 2, 2]);
+        assert_eq!(field.original_grid, [2, 2, 2]);
+        assert_eq!(field.vector_field_values, values);
     }
 }

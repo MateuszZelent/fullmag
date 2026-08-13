@@ -955,6 +955,10 @@ impl CurrentLivePreviewFieldCache {
         self.0.insert(field.quantity.clone(), field);
     }
 
+    pub fn get(&self, quantity: &str) -> Option<&fullmag_runner::LivePreviewField> {
+        self.0.get(quantity)
+    }
+
     pub fn insert_replacing(
         &mut self,
         field: fullmag_runner::LivePreviewField,

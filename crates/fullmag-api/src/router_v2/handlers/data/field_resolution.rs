@@ -34,6 +34,22 @@ pub(crate) fn field_value_count_matches_current_domain(
     field_point_count_matches_current_domain(snapshot, quantity_id, point_count)
 }
 
+pub(crate) fn json_field_matches_current_domain(
+    snapshot: &SessionStateResponse,
+    quantity_id: &str,
+    n_comp: usize,
+    raw: &serde_json::Value,
+) -> bool {
+    let value_count = json_field_value_count(raw);
+    if !field_value_count_matches_current_domain(snapshot, quantity_id, n_comp, value_count) {
+        return false;
+    }
+    if !is_fdm_snapshot(snapshot) || n_comp == 0 {
+        return true;
+    }
+    true
+}
+
 /// Return whether a serialized backend label belongs to an executable FDM
 /// structured-grid lane.  The multilayer lane is still FDM for field/domain
 /// routing even when a stale FEM mesh is retained in the session snapshot.

@@ -3,6 +3,7 @@
 import {
   useCallback,
   useEffect,
+  useId,
   useMemo,
   useRef,
   useSyncExternalStore,
@@ -39,7 +40,7 @@ import type { Viewport3DMaterialProfile } from "./viewport3DMaterialProfile";
 import { RENDER_POLICIES } from "./viewport3DRenderPolicy";
 import { useVectorGlyphDerivedBufferCache } from "./vectorGlyphDerivedBufferRuntime";
 import type {
-  Viewport3DRenderAdoptionReceipt,
+  Viewport3DRenderAdoptionIdentity,
   Viewport3DRenderAdoptionRegistry,
 } from "../model/viewport3DRenderAdoptionRegistry";
 
@@ -1181,8 +1182,10 @@ export function VectorFieldLayer({
     byteLength: number;
     fieldBufferId: string | null;
     glyphCount: number;
+    ownerId: string;
     resourceKey: string | null;
   } | null>(null);
+  const adoptionOwnerId = `vector-field:${useId()}`;
   const recordAdoption = useCallback(
     (byteLength: number) => {
       const sourceVectorBuildKey = resolveVectorFieldAdoptionBuildKey(glyphBuild);
@@ -1193,6 +1196,7 @@ export function VectorFieldLayer({
         fieldBufferId:
           glyphBuild?.sourceFieldBufferId ?? fieldBufferId ?? null,
         glyphCount,
+        ownerId: adoptionOwnerId,
         resourceKey: glyphBuild?.sourceResourceKey ?? null,
       };
       recordVectorFieldAdoption({
@@ -1202,11 +1206,12 @@ export function VectorFieldLayer({
         fieldBufferId:
           glyphBuild?.sourceFieldBufferId ?? fieldBufferId ?? null,
         glyphCount,
+        ownerId: adoptionOwnerId,
         resourceKey: glyphBuild?.sourceResourceKey ?? null,
         registry: adoptionRegistry,
       });
     },
-    [adoptionRegistry, carrierId, fieldBufferId, glyphBuild, glyphCount],
+    [adoptionOwnerId, adoptionRegistry, carrierId, fieldBufferId, glyphBuild, glyphCount],
   );
   useEffect(() => {
     if (!adoptionRegistry || !carrierId) return;
@@ -1216,6 +1221,7 @@ export function VectorFieldLayer({
       recordVectorFieldAdoption({
         ...adoption,
         carrierId,
+        ownerId: adoptionOwnerId,
         registry: adoptionRegistry,
       });
     });
@@ -1224,20 +1230,21 @@ export function VectorFieldLayer({
       const adoption = lastAdoptionRef.current;
       if (!adoption) return;
       adoptionRegistry.clearAdoption(
+        adoptionOwnerId,
         vectorFieldAdoptionIdentity({ ...adoption, carrierId }),
       );
-      lastAdoptionRef.current = null;
     };
-  }, [adoptionRegistry, carrierId]);
+  }, [adoptionOwnerId, adoptionRegistry, carrierId]);
   useEffect(() => {
     if (glyphBuild || !adoptionRegistry || !carrierId) return;
     const adoption = lastAdoptionRef.current;
     if (!adoption) return;
     adoptionRegistry.clearAdoption(
+      adoptionOwnerId,
       vectorFieldAdoptionIdentity({ ...adoption, carrierId }),
     );
     lastAdoptionRef.current = null;
-  }, [adoptionRegistry, carrierId, glyphBuild]);
+  }, [adoptionOwnerId, adoptionRegistry, carrierId, glyphBuild]);
 
   useVectorGlyphMaterialSync({
     glyphPolicy,
@@ -1293,6 +1300,7 @@ export function recordVectorFieldAdoption({
   carrierId,
   fieldBufferId,
   glyphCount,
+  ownerId,
   resourceKey = null,
   registry,
 }: {
@@ -1301,12 +1309,10 @@ export function recordVectorFieldAdoption({
   carrierId: string;
   fieldBufferId: string | null;
   glyphCount: number;
+  ownerId?: string;
   resourceKey?: string | null;
   registry: Viewport3DRenderAdoptionRegistry;
-}): Omit<
-  Viewport3DRenderAdoptionReceipt,
-  "byteLength" | "itemCount" | "targetId"
-> {
+}): Viewport3DRenderAdoptionIdentity {
   const adoption = vectorFieldAdoptionIdentity({
     buildKey,
     carrierId,
@@ -1318,6 +1324,7 @@ export function recordVectorFieldAdoption({
     carrierId: adoption.carrierId,
     fieldBufferId: adoption.fieldBufferId,
     itemCount: glyphCount,
+    ownerId,
     resourceKey: adoption.resourceKey,
     vectorBuildKey: adoption.vectorBuildKey ?? buildKey,
   });
@@ -1334,7 +1341,7 @@ function vectorFieldAdoptionIdentity({
   carrierId: string;
   fieldBufferId: string | null;
   resourceKey: string | null;
-}): Omit<Viewport3DRenderAdoptionReceipt, "byteLength" | "targetId"> {
+}): Viewport3DRenderAdoptionIdentity {
   return {
     carrierId,
     fieldBufferId,

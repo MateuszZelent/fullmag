@@ -32,7 +32,6 @@ import {
   useMemo,
   useRef,
   useState,
-  startTransition,
   type RefObject,
 } from "react";
 import {
@@ -151,6 +150,7 @@ import type { Viewport3DRenderAdoptionRegistry } from "../model/viewport3DRender
 import type { FdmUniverseOutsideSupportOverlayModel } from "../model/fdmUniverseOverlay";
 import type { Viewport3DFdmTargetRenderView } from "../model/viewport3DFdmTargetViews";
 import type { FdmAirboxPassPlan } from "./fdmAirboxPassPlan";
+import type { Viewport3DVectorBuildReference } from "../viewport3dRenderModel";
 
 interface Viewport3DSceneProps {
   adoptionRegistry?: Viewport3DRenderAdoptionRegistry;
@@ -174,6 +174,7 @@ interface Viewport3DSceneProps {
   fdmAirboxPassPlan: FdmAirboxPassPlan;
   fdmAirboxFieldVector: DecodedFieldVector | null | undefined;
   fdmAirboxVectorGlyphColors: ScalarColorBuffer | null;
+  fdmAirboxVectorBuildReference: Viewport3DVectorBuildReference | null;
   fdmAirboxVectorSegments: Float32Array | null;
   fdmMultilayerAirboxView: FdmMultilayerAirboxRenderView | null;
   fdmUniverseOutsideSupport: FdmUniverseOutsideSupportOverlayModel | null;
@@ -661,15 +662,13 @@ function useViewport3DModelLayerStage({
     const frameId = window.requestAnimationFrame(() => {
       if (cancelled) return;
       tracker.recordDirtyFrame("model-layer-stage");
-      startTransition(() => {
-        setStageState((current) => {
-          const currentStage =
-            current.resetKey === resetKey ? current.stage : 0;
-          return {
-            resetKey,
-            stage: resolveNextViewport3DModelLayerStage(currentStage),
-          };
-        });
+      setStageState((current) => {
+        const currentStage =
+          current.resetKey === resetKey ? current.stage : 0;
+        return {
+          resetKey,
+          stage: resolveNextViewport3DModelLayerStage(currentStage),
+        };
       });
       invalidate();
     });
@@ -919,6 +918,7 @@ function Viewport3DModelLayerStack({
   fdmAirboxFieldVector,
   fdmAirboxInstanceModel,
   fdmAirboxVectorGlyphColors,
+  fdmAirboxVectorBuildReference,
   fdmAirboxVectorSegments,
   fdmMultilayerAirboxView,
   fdmLaneActive,
@@ -970,6 +970,7 @@ function Viewport3DModelLayerStack({
   | "fdmAirboxFieldVector"
   | "fdmAirboxInstanceModel"
   | "fdmAirboxVectorGlyphColors"
+  | "fdmAirboxVectorBuildReference"
   | "fdmAirboxVectorSegments"
   | "fdmMultilayerAirboxView"
   | "fdmLaneActive"
@@ -1221,6 +1222,7 @@ function Viewport3DModelLayerStack({
               surfaceColors={view.surfaceColors}
               tracker={tracker}
               vectorColorMode={vectorColorMode}
+              vectorBuildReference={view.vectorBuildReference}
               vectorGlyphColors={view.vectorGlyphColors?.colors ?? null}
               vectorSegments={view.vectorSegments}
               vectorStyle={vectorStyle}
@@ -1232,6 +1234,8 @@ function Viewport3DModelLayerStack({
       viewport3DFdmCuboidLayerEnabledFromBrowserConfig() &&
       fdmAirboxPassPlan.needsInactiveCellGeometry && fdmAirboxMeshSettings ? (
         <FdmCuboidLayer
+          adoptionRegistry={adoptionRegistry}
+          carrierId="fdm-universe-outside-support"
           colors={colors}
           fieldVector={fdmAirboxFieldVector}
           vectorGlyphColors={fdmAirboxVectorGlyphColors?.colors ?? null}
@@ -1245,6 +1249,7 @@ function Viewport3DModelLayerStack({
           surfaceColors={null}
           tracker={tracker}
           vectorColorMode={fdmAirboxMeshSettings.vectorColorMode}
+          vectorBuildReference={fdmAirboxVectorBuildReference}
           vectorSegments={fdmAirboxVectorSegments}
           vectorStyle={vectorStyle}
         />
@@ -1469,6 +1474,53 @@ function Viewport3DInteractionAndHudStack({
   );
 }
 
+function useViewport3DRenderAdoptionFrame({
+  adoptionRegistry,
+  invalidate,
+  onVisualizationFrameCommitted,
+  tracker,
+  visualizationRevision,
+}: {
+  adoptionRegistry?: Viewport3DRenderAdoptionRegistry;
+  invalidate: () => void;
+  onVisualizationFrameCommitted: (revision: number) => void;
+  tracker: Viewport3DResourceTracker;
+  visualizationRevision: number | null;
+}) {
+  useEffect(() => {
+    if (!adoptionRegistry) return;
+    let frameId: number | null = null;
+    const unsubscribe = adoptionRegistry.subscribe(() => {
+      tracker.recordDirtyFrame("render-adoption");
+      invalidate();
+      if (
+        frameId !== null ||
+        visualizationRevision === null ||
+        typeof window === "undefined"
+      ) {
+        return;
+      }
+      // idle-audit-allow-one-shot-raf: acknowledge adoption after its invalidated frame.
+      frameId = window.requestAnimationFrame(() => {
+        frameId = null;
+        onVisualizationFrameCommitted(visualizationRevision);
+      });
+    });
+    return () => {
+      unsubscribe();
+      if (frameId !== null && typeof window !== "undefined") {
+        window.cancelAnimationFrame(frameId);
+      }
+    };
+  }, [
+    adoptionRegistry,
+    invalidate,
+    onVisualizationFrameCommitted,
+    tracker,
+    visualizationRevision,
+  ]);
+}
+
 export function Viewport3DScene({
   adoptionRegistry,
   bounds,
@@ -1493,6 +1545,7 @@ export function Viewport3DScene({
   fdmUniverseOutsideSupport,
   fdmUniverseOutsideSupportSettings,
   fdmAirboxVectorGlyphColors,
+  fdmAirboxVectorBuildReference,
   fdmAirboxVectorSegments,
   fdmMultilayerAirboxView,
   fdmNativeLayerViews,
@@ -1589,6 +1642,14 @@ export function Viewport3DScene({
     () => resolveViewport3DMaterialProfile(visualProfile),
     [visualProfile],
   );
+
+  useViewport3DRenderAdoptionFrame({
+    adoptionRegistry,
+    invalidate,
+    onVisualizationFrameCommitted,
+    tracker,
+    visualizationRevision,
+  });
 
   useLayoutEffect(() => {
     if (cameraProjection === "orthographic") {
@@ -1725,6 +1786,7 @@ export function Viewport3DScene({
         fdmAirboxInstanceModel={fdmAirboxInstanceModel}
         fdmAirboxPassPlan={fdmAirboxPassPlan}
         fdmAirboxVectorGlyphColors={fdmAirboxVectorGlyphColors}
+        fdmAirboxVectorBuildReference={fdmAirboxVectorBuildReference}
         fdmAirboxVectorSegments={fdmAirboxVectorSegments}
         fdmMultilayerAirboxView={fdmMultilayerAirboxView}
         fdmNativeLayerViews={fdmNativeLayerViews}

@@ -440,10 +440,9 @@ function buildSnapshot({
     values,
   };
   const carrier: Viewport3DVisualizationDebugCarrierInput = {
-    adoptedFieldBufferId: `buffer:${revision}`,
-    adoptedResourceKey: resourceKey,
     cache: {
       byteLength: values.byteLength,
+      dataIdentityMatches: true,
       entryState: "ready",
       etag: `etag:${revision}`,
       key: resourceKey,
@@ -468,11 +467,18 @@ function buildSnapshot({
     scannedStats,
     surfaceDegradation: null,
     surfaceProjectionMode: null,
+    surfaceAdoptedAtMs: frame.committedAtMs ?? 0,
     surfaceAdoptedFieldBufferId: `buffer:${revision}`,
     surfaceAdoptedResourceKey: resourceKey,
+    surfaceAdoptedScalarBufferKey: null,
+    surfaceAdoptionSequence: Number(revision) || 0,
     vectorDegradation: null,
+    vectorAdoptedAtMs: frame.committedAtMs ?? 0,
+    vectorAdoptedBuildKey: null,
     vectorAdoptedFieldBufferId: `buffer:${revision}`,
+    vectorAdoptedItemCount: null,
     vectorAdoptedResourceKey: resourceKey,
+    vectorAdoptionSequence: Number(revision) || 0,
   };
   return buildViewport3DVisualizationDebugSnapshot({
     capturedAtMs: frame.committedAtMs ?? 0,

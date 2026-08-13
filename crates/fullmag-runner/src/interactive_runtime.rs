@@ -146,44 +146,6 @@ pub(crate) fn build_cached_grid_preview_fields(
     (!cached.is_empty()).then_some(cached)
 }
 
-pub(crate) fn build_full_grid_materialized_fields(
-    quantities: &[&str],
-    observables: &StateObservables,
-    grid: [u32; 3],
-    active_mask: Option<&[bool]>,
-    config_revision: u64,
-) -> Option<Vec<LivePreviewField>> {
-    let expected_len = grid[0] as usize * grid[1] as usize * grid[2] as usize;
-    let mut fields = Vec::new();
-    for quantity in quantities {
-        let Ok(values) = select_observables(observables, quantity) else {
-            continue;
-        };
-        if values.len() != expected_len {
-            continue;
-        }
-        let request = LivePreviewRequest {
-            revision: config_revision,
-            quantity: (*quantity).to_string(),
-            component: "3D".to_string(),
-            layer: 0,
-            all_layers: true,
-            every_n: 1,
-            x_chosen_size: 0,
-            y_chosen_size: 0,
-            auto_scale_enabled: false,
-            max_points: 0,
-        };
-        fields.push(build_grid_preview_field(
-            &request,
-            values,
-            grid,
-            active_mask,
-        ));
-    }
-    (!fields.is_empty()).then_some(fields)
-}
-
 pub(crate) fn should_materialize_terminal_fdm_fields(status: RunStatus) -> bool {
     status == RunStatus::Completed
 }
@@ -249,10 +211,9 @@ fn attach_fem_crossover_decision_to_provenance(
 mod tests {
     use super::{
         attach_fem_crossover_decision_to_provenance, attach_resolved_fallback_to_provenance,
-        build_full_grid_materialized_fields, cached_display_refresh_due, cpu_execution_provenance,
-        display_refresh_due, normalize_runtime_context_signature,
-        should_materialize_terminal_fdm_fields, InteractiveFdmPreviewRuntime,
-        InteractiveFdmPreviewRuntimeInner,
+        cached_display_refresh_due, cpu_execution_provenance, display_refresh_due,
+        normalize_runtime_context_signature, should_materialize_terminal_fdm_fields,
+        InteractiveFdmPreviewRuntime, InteractiveFdmPreviewRuntimeInner,
     };
     use crate::dispatch::FdmEngine;
     use crate::fdm::cpu::reference::{
@@ -264,15 +225,13 @@ mod tests {
         build_atomic_terminal_update, publish_atomic_terminal_update,
     };
     use crate::types::{
-        ExecutedRun, ExecutionProvenance, LivePreviewRequest, RunResult, StateObservables,
-        StepAction, StepStats,
+        ExecutedRun, ExecutionProvenance, LivePreviewRequest, RunResult, StepAction, StepStats,
     };
     use fullmag_ir::{
         BackendPlanIR, ExchangeBoundaryCondition, ExecutionPrecision, FdmMaterialIR, FdmPlanIR,
         GridDimensions, IntegratorChoice, ProblemIR, RelaxationAlgorithmIR, RelaxationControlIR,
         ResolvedAntennaZeemanMaskIR, TimeDependenceIR,
     };
-    use std::collections::HashMap;
 
     #[test]
     fn interactive_fem_runtime_reuses_runtime_owned_stage_context() {
@@ -339,66 +298,6 @@ mod tests {
             enable_exchange: true,
             enable_demag: true,
             ..Default::default()
-        }
-    }
-
-    #[test]
-    fn full_grid_materialization_does_not_downscale_solver_fields() {
-        let grid = [32, 32, 16];
-        let count = grid[0] as usize * grid[1] as usize * grid[2] as usize;
-        let vectors = || vec![[1.0, 2.0, 3.0]; count];
-        let observables = StateObservables {
-            magnetization: vectors(),
-            torque_field: vectors(),
-            exchange_field: vectors(),
-            demag_field: vectors(),
-            external_field: vectors(),
-            antenna_field: vectors(),
-            drive_field: vectors(),
-            effective_field: vectors(),
-            anisotropy_field: vectors(),
-            dmi_field: vectors(),
-            magnetoelastic_field: vectors(),
-            cubic_anisotropy_field: vectors(),
-            bulk_dmi_field: vectors(),
-            oersted_field: vectors(),
-            thermal_field: vectors(),
-            exchange_energy: 0.0,
-            demag_energy: 0.0,
-            external_energy: 0.0,
-            drive_energy: 0.0,
-            anisotropy_energy: 0.0,
-            dmi_energy: 0.0,
-            total_energy: 0.0,
-            max_dm_dt: 0.0,
-            max_h_eff: 0.0,
-            max_h_demag: 0.0,
-            max_torque_Apm: 0.0,
-            per_object_scalars: HashMap::new(),
-        };
-
-        let fields = build_full_grid_materialized_fields(
-            &["m", "H_demag", "H_eff"],
-            &observables,
-            grid,
-            None,
-            9,
-        )
-        .expect("full materialization should produce vector fields");
-
-        assert_eq!(
-            fields
-                .iter()
-                .map(|field| field.quantity.as_str())
-                .collect::<Vec<_>>(),
-            vec!["m", "H_demag", "H_eff"]
-        );
-        for field in fields {
-            assert_eq!(field.preview_grid, grid);
-            assert_eq!(field.original_grid, grid);
-            assert_eq!(field.vector_field_values.len(), count * 3);
-            assert!(!field.auto_downscaled);
-            assert_eq!(field.source_revision, 9);
         }
     }
 
@@ -796,6 +695,7 @@ mod tests {
     #[test]
     fn completed_cpu_interactive_runtime_materializes_final_active_fields() {
         let mut plan = make_soa_fdm_plan();
+        plan.grid.cells = [4, 1, 2];
         plan.active_mask = Some(vec![true, true, true, true, false, false, false, false]);
         plan.external_field = Some([10.0, 20.0, 30.0]);
         plan.oersted_field_xyz = Some(vec![[40.0, -20.0, 10.0]; 8]);
@@ -903,6 +803,7 @@ mod tests {
         );
         assert!(final_fields.iter().all(|field| {
             field.source_step == final_stats.step
+                && field.source_time_seconds == Some(final_stats.time)
                 && field.source_revision == final_stats.step
                 && field.materialized_at_unix_ms > 0
         }));
@@ -943,6 +844,18 @@ mod tests {
         let h_ant = field_values("H_ant");
         let h_oe = field_values("H_oe");
         assert!(h_oe.iter().any(|value| value.abs() > 0.0));
+        let eden_demag = final_fields
+            .iter()
+            .find(|field| field.quantity == "eden_demag")
+            .expect("terminal materialization should include eden_demag");
+        assert_eq!(eden_demag.preview_grid, [4, 1, 2]);
+        assert_eq!(eden_demag.original_grid, [4, 1, 2]);
+        assert_eq!(eden_demag.vector_field_values.len(), 8);
+        assert_ne!(
+            &eden_demag.vector_field_values[..4],
+            &eden_demag.vector_field_values[4..],
+            "terminal scalar field must preserve distinct solver layers"
+        );
         assert!(active_mask.iter().enumerate().any(|(cell, active)| {
             !active
                 && h_demag[cell * 3..cell * 3 + 3]

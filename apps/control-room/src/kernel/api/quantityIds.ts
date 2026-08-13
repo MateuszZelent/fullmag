@@ -1,5 +1,20 @@
 import type { FieldCatalogResource } from "./apiTypes";
 
+export type FieldCatalogQuantity = FieldCatalogResource["quantities"][number];
+
+/** Canonical catalog gate for quantities the spatial viewport may offer. */
+export function fieldCatalogQuantitySupportsSpatialVisualization(
+  quantity: FieldCatalogQuantity,
+): boolean {
+  return (
+    quantity.available &&
+    quantity.ui_exposed !== false &&
+    quantity.spatial !== false &&
+    quantity.location !== "global" &&
+    quantity.kind !== "global_scalar"
+  );
+}
+
 const CANONICAL_QUANTITY_IDS: Record<string, string> = {
   M: "m",
   B_drive: "B_drive",

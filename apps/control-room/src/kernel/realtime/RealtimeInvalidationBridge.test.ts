@@ -16,6 +16,7 @@ import {
   DATA_FIELD_VECTOR_PATH,
   DATA_MESH_REGION_MEMBERSHIPS_PATH,
   DATA_PLANAR_FIELD_META_PATH,
+  DATA_SCALARS_PATH,
   DATA_TABLE_ROWS_PATH,
   ANALYSIS_HYSTERESIS_BRANCHES_PATH,
   ANALYSIS_HYSTERESIS_ADAPTIVE_REFINEMENT_PATH,
@@ -713,8 +714,10 @@ describe("RealtimeInvalidationBridge", () => {
       "{object_id}",
       "film",
     );
+    const scalarWindowKey = `${DATA_SCALARS_PATH}?columns=step%2Ctime%2Cmx%2Cmy%2Cmz&limit=1&since_revision=9`;
 
     resources.subscribe(tableWindowKey, () => {});
+    resources.subscribe(scalarWindowKey, () => {});
     resources.subscribe(objectMetricsKey, () => {});
     resources.invalidate(objectMetricsKey, 99);
 
@@ -736,6 +739,7 @@ describe("RealtimeInvalidationBridge", () => {
     expect(resources.getRevision("session:status")).toBeNull();
     expect(resources.getRevision(tableRowsPath)).toBe(10);
     expect(resources.getRevision(tableWindowKey)).toBe(10);
+    expect(resources.getRevision(scalarWindowKey)).toBe(10);
     expect(resources.getRevision(objectMetricsKey)).toBe(
       dependentRevision(tableRowsPath, 10),
     );

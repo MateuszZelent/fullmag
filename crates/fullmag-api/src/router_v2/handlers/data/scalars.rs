@@ -17,6 +17,8 @@ pub struct ScalarsQuery {
     #[serde(default)]
     pub limit: Option<u64>,
     #[serde(default)]
+    pub tail: Option<bool>,
+    #[serde(default)]
     pub columns: Option<String>,
 }
 
@@ -26,6 +28,7 @@ pub struct ScalarsQuery {
     params(
         ("since_revision" = Option<u64>, Query, description = "Only rows after this revision"),
         ("limit" = Option<u64>, Query, description = "Max rows to return"),
+        ("tail" = Option<bool>, Query, description = "Return the newest rows instead of the oldest rows in the selected window"),
         ("columns" = Option<String>, Query, description = "Comma-separated scalar columns to return, e.g. step,time,e_total"),
     ),
     responses(
@@ -39,6 +42,7 @@ pub async fn get_scalars(
 ) -> Result<Json<ScalarWindow>, ApiError> {
     let guard = state.current_live_state.read().await;
     let all_rows = guard.as_ref().map(|s| &s.scalar_rows[..]).unwrap_or(&[]);
+    let revision = guard.as_ref().map(|s| s.scalar_revision).unwrap_or(0);
     let total = all_rows.len() as u64;
 
     let since = query.since_revision.unwrap_or(0) as usize;
@@ -47,7 +51,11 @@ pub async fn get_scalars(
     } else {
         &[]
     };
-    let window = if let Some(limit) = query.limit {
+    let window = if query.tail.unwrap_or(false) {
+        let limit = query.limit.unwrap_or(1) as usize;
+        let start = window.len().saturating_sub(limit);
+        &window[start..]
+    } else if let Some(limit) = query.limit {
         let limit = limit as usize;
         if window.len() > limit {
             &window[..limit]
@@ -129,7 +137,7 @@ pub async fn get_scalars(
     let returned = rows.len() as u64;
 
     Ok(Json(ScalarWindow {
-        revision: total,
+        revision,
         total_rows: total,
         returned_rows: returned,
         columns: columns.into_iter().map(str::to_string).collect(),

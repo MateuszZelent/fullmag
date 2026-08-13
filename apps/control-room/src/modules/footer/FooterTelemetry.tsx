@@ -15,6 +15,7 @@ import type {
   FrequencyDomainSweepProgressResource,
   LiveStatusResource,
   ObjectMetricsResource,
+  ScalarWindowResource,
   SceneResource,
   SolverStatusResource,
   StageExecutionResource,
@@ -27,6 +28,7 @@ import {
   useFrequencyDomainResponseProgressResource,
   useFrequencyDomainResponseSweepResource,
   useObjectMetricsResource,
+  useScalarWindowResource,
   useSolverStatusResource,
   useStageExecutionResource,
 } from "@/kernel/resources/studyRuntimeResources";
@@ -48,6 +50,21 @@ const COMPACT_DECIMAL_FORMAT = new Intl.NumberFormat("en-US", {
 });
 
 type FooterLiveScalarSample = KernelEventMap["telemetry:scalar-sample"];
+type FooterScalarResourceSample = {
+  revision: number;
+  row: Record<string, number>;
+  runId: string;
+  sessionId: string;
+};
+
+const FOOTER_SCALAR_COLUMNS = [
+  "step",
+  "time",
+  "mx",
+  "my",
+  "mz",
+  "e_total",
+] as const;
 
 export function FooterTelemetry({
   bus,
@@ -58,6 +75,16 @@ export function FooterTelemetry({
     isEqual: footerTelemetryStatusEquals,
   });
   const liveSample = useFooterLiveScalarSample(bus);
+  const scalarWindow = useScalarWindowResource({
+    columns: FOOTER_SCALAR_COLUMNS,
+    enabled: Boolean(status),
+    limit: 1,
+    tail: true,
+  });
+  const scalarResourceSample = useMemo(
+    () => resolveFooterScalarResourceSample(status, scalarWindow.data),
+    [scalarWindow.data, status],
+  );
   const scene = useSceneResource();
   const selectedObjectId = useSelectionSelector(
     (selection) => selection.objectId,
@@ -83,6 +110,7 @@ export function FooterTelemetry({
     stageExecution.data,
     responseProgress.data,
     responseSweep.data,
+    scalarResourceSample,
   );
 
   return (
@@ -161,6 +189,7 @@ type FooterTelemetryStatus = {
     | "solver_time"
   > | null;
   sessionId: string;
+  scalarsRevision: number;
   solver: Pick<
     LiveStatusResource["solver"],
     "converged" | "dt" | "max_torque_T" | "state"
@@ -201,6 +230,7 @@ export function selectFooterTelemetryStatus(
         }
       : null,
     sessionId: data.session.session_id,
+    scalarsRevision: data.resources.scalars_revision,
     solver: {
       converged: data.solver.converged ?? null,
       dt: data.solver.dt ?? null,
@@ -221,6 +251,7 @@ export function footerTelemetryStatusEquals(
     Object.is(previous.metrics.steps_per_second, next.metrics.steps_per_second) &&
     Object.is(previous.metrics.total_steps, next.metrics.total_steps) &&
     Object.is(previous.sessionId, next.sessionId) &&
+    Object.is(previous.scalarsRevision, next.scalarsRevision) &&
     Object.is(previous.run?.run_id ?? null, next.run?.run_id ?? null) &&
     Object.is(
       previous.run?.requested_device ?? null,
@@ -286,9 +317,14 @@ export function buildFooterTelemetryModel(
   stageExecution?: StageExecutionResource | null,
   responseProgress?: FrequencyDomainSweepProgressResource | null,
   responseSweep?: unknown,
+  scalarResourceSample?: FooterScalarResourceSample | null,
 ) {
   const liveSampleForStatus = resolveLiveSampleForStatus(status, liveSample);
-  const liveRow = liveSampleForStatus?.row ?? null;
+  const scalarSample = selectLatestFooterScalarSample(
+    liveSampleForStatus,
+    scalarResourceSample,
+  );
+  const liveRow = scalarSample?.row ?? null;
   const runtimeState =
     resolveEffectiveRuntimeState({
       detailedRuntimeState: solverStatus?.runtime_state,
@@ -355,7 +391,11 @@ export function buildFooterTelemetryModel(
   const statusTitle = `System Status: ${runtimeStateLabel}`;
   const active = isRuntimeStateActive(runtimeState);
   const waitingForCompute = isRuntimeStateWaitingForCompute(runtimeState);
-  const liveSampleSource = liveRow ? "Live scalar sample" : null;
+  const liveSampleSource = scalarSample
+    ? scalarSample === liveSampleForStatus
+      ? "Live scalar sample"
+      : "Scalar history resource"
+    : null;
   const magnetizationSource = liveSampleSource ?? "No global sample";
   const energySource = liveSampleSource
     ? liveSampleSource
@@ -363,7 +403,7 @@ export function buildFooterTelemetryModel(
       ? `Object: ${objectMetrics.object_id}`
       : "Session summary";
   const timeSource = liveRow
-    ? `Scalar rev ${String(liveSampleForStatus?.revision ?? "")}`
+    ? `Scalar rev ${String(scalarSample?.revision ?? "")}`
     : solverStatus
       ? "Last sync: solver status"
       : status
@@ -482,7 +522,7 @@ export function buildFooterTelemetryModel(
         id: "avg-mx",
         label: "avg mx",
         subdetail: magnetizationSource,
-        value: formatFixed(magnetization?.mx, 6, "0.000000"),
+        value: formatFixed(magnetization?.mx, 6, "—"),
       },
       {
         detail: "Average magnetization",
@@ -490,7 +530,7 @@ export function buildFooterTelemetryModel(
         id: "avg-my",
         label: "avg my",
         subdetail: magnetizationSource,
-        value: formatFixed(magnetization?.my, 6, "0.000000"),
+        value: formatFixed(magnetization?.my, 6, "—"),
       },
       {
         detail: "Average magnetization",
@@ -498,19 +538,15 @@ export function buildFooterTelemetryModel(
         id: "avg-mz",
         label: "avg mz",
         subdetail: magnetizationSource,
-        value: formatFixed(magnetization?.mz, 6, "0.000000"),
+        value: formatFixed(magnetization?.mz, 6, "—"),
       },
       {
         detail: "Average magnetization",
         icon: <Magnet size={14} aria-hidden="true" />,
         id: "avg-m",
         label: "|avg m|",
-        subdetail: liveRow
-          ? "Live scalar sample"
-          : objectMetrics?.has_solver_sample
-            ? "Solver sample"
-            : "Initial state",
-        value: formatFixed(magnetizationMagnitude, 6, "0.000000"),
+        subdetail: magnetizationSource,
+        value: formatFixed(magnetizationMagnitude, 6, "—"),
       },
       {
         detail: "Total",
@@ -1062,6 +1098,43 @@ function resolveLiveSampleForStatus(
   if (status?.sessionId && liveSample.sessionId !== status.sessionId) return null;
   const runId = status?.run?.run_id ?? null;
   if (runId && liveSample.runId !== runId) return null;
+  return liveSample;
+}
+
+export function resolveFooterScalarResourceSample(
+  status: FooterTelemetryStatus | null | undefined,
+  window: ScalarWindowResource | null | undefined,
+): FooterScalarResourceSample | null {
+  const values = window?.rows.at(-1);
+  if (!status?.run?.run_id || !window || !values) return null;
+  const row: Record<string, number> = {};
+  for (const [index, column] of window.columns.entries()) {
+    const value = values[index];
+    if (typeof value === "number" && Number.isFinite(value)) {
+      row[column] = value;
+    }
+  }
+  if (scalarSampleMagnetization(row) === null) return null;
+  return {
+    revision: window.revision,
+    row,
+    runId: status.run.run_id,
+    sessionId: status.sessionId,
+  };
+}
+
+function selectLatestFooterScalarSample(
+  liveSample: FooterLiveScalarSample | null,
+  resourceSample: FooterScalarResourceSample | null | undefined,
+): FooterLiveScalarSample | FooterScalarResourceSample | null {
+  if (!resourceSample) return liveSample;
+  if (
+    !liveSample ||
+    typeof liveSample.revision !== "number" ||
+    resourceSample.revision >= liveSample.revision
+  ) {
+    return resourceSample;
+  }
   return liveSample;
 }
 

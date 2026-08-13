@@ -424,6 +424,7 @@ fn build_multilayer_live_preview_fields(
         fields.push(LivePreviewField {
             config_revision: 0,
             source_step,
+            source_time_seconds: None,
             source_revision: source_step,
             materialized_at_unix_ms: 0,
             materialization_wall_time_ns: 0,
@@ -1400,8 +1401,7 @@ mod tests {
             layer.convolution_origin = [-5e-9, -5e-9, layer.native_origin[2]];
             layer.transfer_kind = "push_pull".to_string();
         }
-        let topology_tokens =
-            fullmag_ir::fdm_multilayer_topology_tokens(&plan.mode, &plan.layers);
+        let topology_tokens = fullmag_ir::fdm_multilayer_topology_tokens(&plan.mode, &plan.layers);
         plan.grid_certificate = Some(
             fullmag_ir::FdmGridCertificateIR::new_with_topology_tokens(
                 [-5e-9, -5e-9, 0.0],

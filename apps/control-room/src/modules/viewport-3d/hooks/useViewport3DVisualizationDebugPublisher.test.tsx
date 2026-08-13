@@ -425,7 +425,7 @@ describe("viewport visualization debug publisher", () => {
     publisher.dispose();
   });
 
-  it("re-materializes the latest frame when a late adoption receipt arrives", async () => {
+  it("publishes a late adoption only after a subsequent committed render frame", async () => {
     const controller = new VisualizationDebugController();
     const registry = createViewport3DRenderAdoptionRegistry();
     const publisher = createViewport3DVisualizationDebugPublisher({
@@ -460,8 +460,14 @@ describe("viewport visualization debug publisher", () => {
     await Promise.resolve();
 
     expect(controller.getSnapshots("airbox")[0]).toMatchObject({
-      ownedByteLength: 10_604,
+      ownedByteLength: 0,
       viewport: { frameCommitId: "frame-latest" },
+    });
+
+    publisher.commitFrame({ commitId: "frame-with-adoption" });
+    expect(controller.getSnapshots("airbox")[0]).toMatchObject({
+      ownedByteLength: 10_604,
+      viewport: { frameCommitId: "frame-with-adoption" },
     });
     release();
     publisher.dispose();
@@ -513,11 +519,13 @@ describe("viewport visualization debug publisher", () => {
     });
     await Promise.resolve();
 
-    expect(materializeByTarget.get("object:a")).toHaveBeenCalledTimes(1);
+    expect(materializeByTarget.get("object:a")).not.toHaveBeenCalled();
     expect(materializeByTarget.get("object:b")).not.toHaveBeenCalled();
+    publisher.commitFrame({ commitId: "frame-with-adoption" });
+    expect(materializeByTarget.get("object:a")).toHaveBeenCalledTimes(1);
     expect(controller.getSnapshots("object:a")[0]).toMatchObject({
       ownedByteLength: 2,
-      viewport: { frameCommitId: "frame-retained" },
+      viewport: { frameCommitId: "frame-with-adoption" },
     });
 
     registry.recordSurfaceAdoption({
@@ -540,7 +548,7 @@ describe("viewport visualization debug publisher", () => {
     publisher.dispose();
   });
 
-  it("does not lose a pending adoption when the retained frame commits again with the same id", async () => {
+  it("publishes exact pending receipts when an invalidated frame commits with the retained revision id", async () => {
     const controller = new VisualizationDebugController();
     const registry = createViewport3DRenderAdoptionRegistry();
     const materializeByTarget = new Map<string, ReturnType<typeof vi.fn>>();
@@ -576,17 +584,33 @@ describe("viewport visualization debug publisher", () => {
       byteLength: 24,
       carrierId: "part:a",
       fieldBufferId: "field-a",
+      resourceKey: "resource-a",
       scalarBufferKey: "scalar-a",
     });
+    registry.recordVectorAdoption({
+      byteLength: 48,
+      carrierId: "part:a",
+      fieldBufferId: "field-a",
+      resourceKey: "resource-a",
+      vectorBuildKey: "vector-a",
+    });
+    const sequencesBeforeCommit = registry
+      .snapshot("object:a")
+      .map((receipt) => receipt.adoptionSequence);
     publisher.commitFrame({ commitId: "frame-retained" });
     await Promise.resolve();
 
     expect(materializeByTarget.get("object:a")).toHaveBeenCalledTimes(1);
     expect(materializeByTarget.get("object:b")).not.toHaveBeenCalled();
     expect(controller.getSnapshots("object:a")[0]).toMatchObject({
-      ownedByteLength: 1,
+      ownedByteLength: 2,
       viewport: { frameCommitId: "frame-retained" },
     });
+    expect(
+      registry
+        .snapshot("object:a")
+        .map((receipt) => receipt.adoptionSequence),
+    ).toEqual(sequencesBeforeCommit);
 
     releaseA();
     releaseB();
@@ -775,6 +799,62 @@ describe("groupViewport3DVisualizationDebugCarriers", () => {
   });
 });
 
+describe("FDM exact target carrier resolution", () => {
+  it("materializes the exact FDM render carrier without a FEM field model", async () => {
+    const base = syntheticScanSource({ exactRange: true });
+    const pass = base.fieldModel!.targetPasses.get("part:__air__")!;
+    const targetId = "object:sample";
+    const source = {
+      ...base,
+      fieldModel: null,
+      fullFieldBufferIdentity: {
+        bufferId: "field-fdm",
+        currentDomainGenerationId: "fdm-generation",
+        resourceKey: "/v2/sessions/current/data/fields/H_demag/samples/vector?component=full&scope_kind=full",
+      },
+      fullFieldVector: {
+        domainGenerationId: "fdm-generation",
+        dtype: "float64" as const,
+        formatVersion: 3 as const,
+        grid: [2, 1, 1] as [number, number, number],
+        indexing: "dense_grid" as const,
+        meshTopologyHash: null,
+        meshTopologyRevision: null,
+        nComp: 3,
+        nodeIndices: null,
+        pointCount: 2,
+        quantityId: "H_demag",
+        scopeId: null,
+        scopeKind: "full" as const,
+        valueCount: 6,
+        values: new Float64Array([1, 2, 3, 4, 5, 6]),
+      },
+      targets: [
+        {
+          carrierIds: [targetId],
+          renderPass: { ...pass, fieldBuffer: null },
+          target: { id: targetId, kind: "object" as const, label: "Sample" },
+        },
+      ],
+    } as unknown as Viewport3DVisualizationDebugSource;
+    const candidate = await createViewport3DVisualizationDebugCandidateBuilder({
+      source,
+      viewportId: "viewport-main",
+    })({ signal: new AbortController().signal, targetId });
+
+    const snapshot = candidate.materialize({
+      frame: { commitId: "frame-fdm-exact", committedAtMs: 1 },
+      receipts: [],
+    });
+
+    expect(snapshot.target.carrierIds).toEqual([targetId]);
+    expect(snapshot.carriers[0]).toMatchObject({
+      carrierId: targetId,
+      request: { resourceKey: source.fullFieldBufferIdentity!.resourceKey },
+    });
+  });
+});
+
 describe("createViewport3DVisualizationDebugCandidateBuilder", () => {
   it("publishes cancelled once when an actual scan is aborted", async () => {
     let resolveScan!: (value: VisualizationDebugNumericStats) => void;
@@ -947,6 +1027,80 @@ describe("createViewport3DVisualizationDebugCandidateBuilder", () => {
     expect(result.carriers[0]?.render.surface.bufferKey).toBe(
       receipts[0]?.scalarBufferKey,
     );
+    expect(result.issues.map((issue) => issue.code)).not.toContain(
+      "adopted-source-mismatch",
+    );
+  });
+
+  it("binds outside-support FDM fallback evidence to its exact render carrier", async () => {
+    const source = syntheticScanSource({ exactRange: true });
+    const pass = source.fieldModel!.targetPasses.get("part:__air__")!;
+    const scalarColors = pass.surface.scalarColors!;
+    const targetId = "fdm-universe-outside-support";
+    const fdmSource: Viewport3DVisualizationDebugSource = {
+      ...source,
+      carrierRoles: new Map([[targetId, "fdm-domain"]]),
+      fieldModel: {
+        ...source.fieldModel!,
+        targetPasses: new Map([
+          [
+            "full",
+            {
+              ...pass,
+              fieldBuffer: null,
+              fieldBufferState: "derived-global" as const,
+            },
+          ],
+        ]),
+      },
+      fullFieldBufferIdentity: {
+        bufferId: "field-fdm-airbox",
+        currentDomainGenerationId: null,
+        resourceKey: null,
+      },
+      fullFieldVector: {
+        dtype: "float64",
+        grid: [2, 1, 1],
+        nComp: 3,
+        pointCount: 2,
+        quantityId: "H_demag",
+        valueCount: 6,
+        values: new Float64Array([1, 2, 3, 4, 5, 6]),
+      },
+      targets: [
+        {
+          carrierIds: [targetId],
+          target: { id: targetId, kind: "fdm-domain", label: "Airbox" },
+        },
+      ],
+    };
+    const candidate = await createViewport3DVisualizationDebugCandidateBuilder({
+      source: fdmSource,
+      viewportId: "viewport-main",
+    })({ signal: new AbortController().signal, targetId });
+    await settleCandidate(candidate);
+    const registry = createViewport3DRenderAdoptionRegistry();
+    registry.setCarrierTargets(new Map([[targetId, [targetId]]]));
+    registry.retainDemand(targetId);
+    recordFdmCuboidSurfaceAdoption({
+      carrierId: targetId,
+      fieldBufferId: "field-fdm-airbox",
+      registry,
+      scalarBuffer: scalarColors,
+    });
+
+    const result = candidate.materialize({
+      frame: { commitId: "frame-fdm-airbox", committedAtMs: 1 },
+      receipts: registry.snapshot(targetId),
+    });
+
+    expect(result.target.carrierIds).toEqual([targetId]);
+    expect(result.carriers[0]?.carrierId).toBe(targetId);
+    expect(result.carriers[0]?.render.adoption.surface).toMatchObject({
+      adoptedFieldBufferId: "field-fdm-airbox",
+      adoptedScalarBufferKey:
+        resolveViewport3DScalarColorBufferKey(scalarColors),
+    });
     expect(result.issues.map((issue) => issue.code)).not.toContain(
       "adopted-source-mismatch",
     );
@@ -1355,6 +1509,8 @@ describe("createViewport3DVisualizationDebugCandidateBuilder", () => {
     const result = candidate.materialize({
       frame: { commitId: "frame-1", committedAtMs: 1 },
       receipts: [{
+        adoptedAtMs: 1_000,
+        adoptionSequence: 1,
         byteLength: 12,
         carrierId: "part:a",
         fieldBufferId: "field-part:a",
@@ -1364,6 +1520,8 @@ describe("createViewport3DVisualizationDebugCandidateBuilder", () => {
         targetId: "object:a",
         vectorBuildKey: null,
       }, {
+        adoptedAtMs: 2_000,
+        adoptionSequence: 2,
         byteLength: 28,
         carrierId: "part:a",
         fieldBufferId: "field-vector-old",
@@ -1378,10 +1536,20 @@ describe("createViewport3DVisualizationDebugCandidateBuilder", () => {
 
     expect(result.carriers.map((carrier) => carrier.carrierId)).toEqual(["part:a", "part:b"]);
     expect(result.carriers[0]?.render.adoption).toMatchObject({
-      adoptedFieldBufferId: "field-part:a",
-      adoptedResourceKey: "resource-part:a",
-      adoptedScalarBufferKey: "scalar-part:a",
-      adoptedVectorBuildKey: "vector-part:a",
+      surface: {
+        adoptedAtMs: 1_000,
+        adoptedFieldBufferId: "field-part:a",
+        adoptedResourceKey: "resource-part:a",
+        adoptedScalarBufferKey: "scalar-part:a",
+        adoptionSequence: 1,
+      },
+      vector: {
+        adoptedAtMs: 2_000,
+        adoptedFieldBufferId: "field-vector-old",
+        adoptedResourceKey: "resource-vector-old",
+        adoptedVectorBuildKey: "vector-part:a",
+        adoptionSequence: 2,
+      },
     });
     expect(result.carriers[0]?.render).toMatchObject({
       requestedFieldBufferId: "field-part:a",
@@ -1403,7 +1571,7 @@ describe("createViewport3DVisualizationDebugCandidateBuilder", () => {
     );
     expect(result.issues.map((issue) => issue.code)).toContain("adopted-source-mismatch");
     expect(result.disposition).toBe("degraded");
-    expect(result.carriers[1]?.render.adoption.adoptedScalarBufferKey).toBeNull();
+    expect(result.carriers[1]?.render.adoption.surface.adoptedScalarBufferKey).toBeNull();
   });
 
   it("reports exact FMVP v3 payload identity instead of normalized request identity", async () => {

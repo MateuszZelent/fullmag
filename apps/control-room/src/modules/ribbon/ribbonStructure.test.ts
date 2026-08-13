@@ -2977,6 +2977,7 @@ describe("ribbon structure", () => {
       },
       {
         active_quantity_id: "H_demag",
+        overrides: [],
         quantity: { active_quantity_id: "H_demag" },
       },
     ]);
@@ -2987,6 +2988,55 @@ describe("ribbon structure", () => {
         [VISUALIZATION_STATE_PATH, 43],
       ]),
     );
+  });
+
+  it("replaces local and remote target quantities from Results shortcuts", async () => {
+    const target = { id: "object:film", kind: "object" as const, label: "film" };
+    const { context, patches } = createVisualizationRibbonContext({
+      active_quantity_id: "H_demag",
+      quantity: { active_quantity_id: "H_demag" },
+      overrides: [
+        {
+          scope: "object",
+          scope_id: "film",
+          display: { wireframe: { visible: true } },
+          quantity: { active_quantity_id: "H_demag" },
+        },
+      ],
+      revision: 7,
+    });
+    context.visualization.patchTarget(target, {
+      activeQuantityId: "H_demag",
+      wireframeVisible: true,
+    });
+    const content = buildRibbonTabContent("results", context);
+    const hEffAction = content?.groups
+      .find((group) => group.id === "quantity")
+      ?.actions.find((action) => action.id === "res-heff");
+    if (!hEffAction?.commandId) throw new Error("Expected H_eff Results shortcut");
+
+    await createRibbonCommandRegistry().execute(hEffAction.commandId, {
+      ...context.commandContext,
+      input: hEffAction.commandInput,
+      source: "ribbon",
+    } as CommandContext);
+
+    expect(context.visualization.getSnapshot().overrides[target.id]).toEqual({
+      wireframeVisible: true,
+    });
+    expect(patches).toEqual([
+      {
+        active_quantity_id: "H_eff",
+        overrides: [
+          {
+            scope: "object",
+            scope_id: "film",
+            display: { wireframe: { visible: true } },
+          },
+        ],
+        quantity: { active_quantity_id: "H_eff" },
+      },
+    ]);
   });
 
   it("flushes global Quantity changes immediately through visualization sync", async () => {

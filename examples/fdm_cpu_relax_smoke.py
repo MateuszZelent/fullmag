@@ -29,6 +29,7 @@ film.alpha = 0.1
 film.m = fm.texture.uniform(0.0, 1.0, 0.0)
 
 study.demag(realization="poisson_robin")
+study.b_ext(0.0, 0.0, 1e-3)
 study.solver(dt=1e-13, g=2.115)
 study.stages.add_relax(
     algorithm="llg_overdamped",
@@ -37,5 +38,5 @@ study.stages.add_relax(
     max_steps=4,
 ).tableautosave(
     every_steps=1,
-    quantities=["step", "mx", "my", "mz", "E_total"],
+    quantities=["step", "t", "dt", "mx", "my", "mz", "E_total"],
 )

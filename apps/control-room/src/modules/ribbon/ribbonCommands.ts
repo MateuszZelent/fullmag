@@ -307,6 +307,9 @@ async function applyGlobalQuantityFromCommand(
       }
     }
   }
+  if (input.clearTargetQuantities) {
+    context.visualization?.removeAllTargetOverrideFields("activeQuantityId");
+  }
 
   await patchVisualizationState(context, patch, { flush: true });
   return { status: "completed" };

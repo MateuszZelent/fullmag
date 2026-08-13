@@ -351,7 +351,7 @@ describe("MeshPartLayer", () => {
       "utf8",
     );
 
-    expect(source).toContain("adoptionRegistry.clearAdoption(adoption)");
+    expect(source).toContain("adoptionRegistry.clearAdoption(adoptionOwnerId, adoption)");
     expect(source).toContain("unregister();");
   });
   it("uses the scalar shader material when large scalar buffers skip CPU RGB colors", () => {

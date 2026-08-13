@@ -23,6 +23,7 @@ import {
   DATA_FDM_REGION_MEMBERSHIPS_PATH,
   DATA_FIELDS_PATH,
   DATA_PLANAR_FIELD_META_PATH,
+  DATA_SCALARS_PATH,
   MESHING_BUILDS_CURRENT_PATH,
   MESHING_BUILDS_LATEST_SUCCESSFUL_PATH,
   MESHING_SEMANTICS_PATH,
@@ -444,6 +445,7 @@ export class RealtimeInvalidationBridge {
         const scalarChange = change.resource === "scalars";
 
         if (scalarChange) {
+          this.queuePrefixInvalidation(DATA_SCALARS_PATH, change.revision);
           this.queuePrefixInvalidation(
             resourceFamilyPrefix(SIMULATION_OBJECT_METRICS_PATH),
             dependentResourceRevision(

@@ -1,7 +1,7 @@
 "use client";
 
 import type { ThreeEvent } from "@react-three/fiber";
-import { useCallback, useEffect, useMemo, memo } from "react";
+import { useCallback, useEffect, useId, useMemo, memo } from "react";
 import { BufferAttribute, BufferGeometry } from "three";
 import type { ColorRepresentation } from "three";
 import {
@@ -377,11 +377,13 @@ const AirboxMeshPartLayer = memo(function AirboxMeshPartLayer({
     fieldModel,
     partId: part.id,
   }).fieldBufferId;
+  const adoptionOwnerId = `airbox-mesh-surface:${useId()}`;
   useEffect(() => {
     if (!adoptionRegistry || !visibleScalarColors) return;
     let adoption = recordMeshPartSurfaceAdoption({
       carrierId: part.id,
       fieldBufferId: requestedFieldBufferId,
+      ownerId: adoptionOwnerId,
       registry: adoptionRegistry,
       scalarBuffer: visibleScalarColors,
     });
@@ -389,6 +391,7 @@ const AirboxMeshPartLayer = memo(function AirboxMeshPartLayer({
       adoption = recordMeshPartSurfaceAdoption({
         carrierId: part.id,
         fieldBufferId: requestedFieldBufferId,
+        ownerId: adoptionOwnerId,
         registry: adoptionRegistry,
         scalarBuffer: visibleScalarColors,
       });
@@ -396,9 +399,9 @@ const AirboxMeshPartLayer = memo(function AirboxMeshPartLayer({
     const unregister = adoptionRegistry.registerCarrierAdoptionReplay(part.id, replay);
     return () => {
       unregister();
-      adoptionRegistry.clearAdoption(adoption);
+      adoptionRegistry.clearAdoption(adoptionOwnerId, adoption);
     };
-  }, [adoptionRegistry, part.id, requestedFieldBufferId, visibleScalarColors]);
+  }, [adoptionOwnerId, adoptionRegistry, part.id, requestedFieldBufferId, visibleScalarColors]);
 
   const hasScalarColors =
     surfaceColorState.hasScalarColors &&

@@ -80,6 +80,7 @@ describe("viewport smoke projection round-trip", () => {
     expect(fixture).toContain("dt=1e-13");
     expect(fixture).toContain(".tableautosave(");
     expect(fixture).toContain("every_steps=1");
+    expect(fixture).toContain('quantities=["step", "t", "dt", "mx", "my", "mz", "E_total"]');
     expect(fixture).not.toContain("study.tableautosave(");
   });
 

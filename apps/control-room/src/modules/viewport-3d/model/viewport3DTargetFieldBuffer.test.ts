@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 
 import type { DecodedFieldVector } from "@/kernel/api/codecs";
+import type { FieldVectorResponseMetadata } from "@/kernel/api/apiTypes";
+import { collectFieldVectorIdentityIssues } from "@/kernel/api/ControlRoomApi";
 import {
   canonicalFieldVectorQuery,
   fieldVectorResourceKey,
@@ -13,6 +15,7 @@ import {
   viewport3DTargetFieldBufferCanServeSurface,
   viewport3DTargetFieldBufferCanServeVectors,
 } from "./viewport3DTargetFieldBuffer";
+import { resolveTrustedViewport3DResponseDomainGenerationId } from "./viewport3DFieldDomainCompatibility";
 
 type TargetFieldBufferOptions = Parameters<
   typeof buildViewport3DTargetFieldBufferWithResourceKey
@@ -48,7 +51,363 @@ function vectorFixture(overrides: Partial<DecodedFieldVector> = {}): DecodedFiel
   };
 }
 
+function responseMetadataFixture(
+  overrides: Partial<FieldVectorResponseMetadata> = {},
+): FieldVectorResponseMetadata {
+  return {
+    component: "full",
+    domainGenerationId: "fdm-1",
+    encoding: "FMVP;version=3",
+    fieldIndexing: "full_domain",
+    fieldRevision: "7",
+    identityIssues: [],
+    meshTopologyHash: null,
+    nComp: 3,
+    nodeIndexCount: 0,
+    pointCount: 4,
+    quantityId: "m",
+    scopeId: "sample",
+    scopeKind: "object",
+    snapshotId: "snapshot-1",
+    valueCount: 12,
+    ...overrides,
+  };
+}
+
 describe("viewport3DTargetFieldBuffer", () => {
+  it.each([
+    ["object", "sample", undefined, "object:sample"],
+    ["region", "shared", "sample", "region:sample:shared"],
+    ["airbox", "airbox", undefined, "fdm-universe-outside-support"],
+  ] as const)(
+    "fails closed for a nonsynthetic FMVP v2 %s response without trusted metadata",
+    (scopeKind, scopeId, ownerObjectId, targetId) => {
+      const buffer = buildViewport3DTargetFieldBuffer({
+        domain: {
+          discretization: "fdm",
+          domainGenerationId: "fdm-1",
+          gridShape: [4, 1, 1],
+          meshTopologyHash: null,
+          meshTopologyRevision: null,
+          pointCount: 4,
+        },
+        fieldVector: vectorFixture({
+          formatVersion: 2,
+          indexing: "legacy_count_only",
+        }),
+        query: {
+          component: "full",
+          owner_object_id: ownerObjectId,
+          scope_id: scopeId,
+          scope_kind: scopeKind,
+        },
+        responseDomainGenerationId: "fdm-1",
+        responseMetadata: null,
+        targetIds: [targetId],
+      });
+
+      expect(buffer.requestIdentityCompatible).toBe(false);
+      expect(
+        viewport3DTargetFieldBufferCanServeSurface(buffer, "orientation", "m"),
+      ).toBe(false);
+      expect(viewport3DTargetFieldBufferCanServeVectors(buffer, "m")).toBe(false);
+    },
+  );
+
+  it.each([
+    ["cross-scope", { scopeId: "other", scopeKind: "object" }],
+    ["cross-component", { component: "x" }],
+    ["cross-snapshot", { snapshotId: "snapshot-2" }],
+  ] as const)("fails closed for a v2 %s response identity", (_name, metadata) => {
+    const buffer = buildViewport3DTargetFieldBuffer({
+      domain: {
+        discretization: "fdm",
+        domainGenerationId: "fdm-1",
+        meshTopologyHash: "a".repeat(64),
+        meshTopologyRevision: null,
+        pointCount: 4,
+      },
+      fieldVector: vectorFixture({
+        formatVersion: 2,
+        indexing: "legacy_count_only",
+      }),
+      query: {
+        component: "full",
+        scope_id: "sample",
+        scope_kind: "object",
+        snapshot_id: "snapshot-1",
+      },
+      responseDomainGenerationId: "fdm-1",
+      responseMetadata: responseMetadataFixture({
+        encoding: "FMVP;version=2",
+        ...metadata,
+      }),
+      targetIds: ["object:sample"],
+    });
+
+    expect(buffer.requestIdentityCompatible).toBe(false);
+    expect(viewport3DTargetFieldBufferCanServeVectors(buffer, "m")).toBe(false);
+  });
+
+  it.each([
+    "component",
+    "domainGenerationId",
+    "encoding",
+    "fieldRevision",
+    "nComp",
+    "pointCount",
+    "quantityId",
+    "scopeId",
+    "scopeKind",
+    "valueCount",
+  ] as const)(
+    "fails closed for incomplete trusted FMVP v2 metadata without %s",
+    (missingField) => {
+      const buffer = buildViewport3DTargetFieldBuffer({
+        domain: {
+          discretization: "fdm",
+          domainGenerationId: "fdm-1",
+          gridShape: [4, 1, 1],
+          meshTopologyHash: null,
+          meshTopologyRevision: null,
+          pointCount: 4,
+        },
+        fieldVector: vectorFixture({
+          formatVersion: 2,
+          indexing: "legacy_count_only",
+        }),
+        query: {
+          component: "full",
+          scope_id: "sample",
+          scope_kind: "object",
+          snapshot_id: "snapshot-1",
+        },
+        responseDomainGenerationId: "fdm-1",
+        responseMetadata: responseMetadataFixture({ [missingField]: null }),
+        targetIds: ["object:sample"],
+      });
+
+      expect(buffer.requestIdentityCompatible).toBe(false);
+    },
+  );
+
+  it("uses decoded v3 scope identity and rejects a cross-scope response", () => {
+    const buffer = buildViewport3DTargetFieldBuffer({
+      domain: {
+        discretization: "fdm",
+        domainGenerationId: "fdm-1",
+        meshTopologyHash: null,
+        meshTopologyRevision: null,
+        pointCount: 2,
+      },
+      fieldVector: vectorFixture({
+        domainGenerationId: "fdm-1",
+        formatVersion: 3,
+        grid: [2, 1, 1],
+        indexing: "explicit_node_indices",
+        meshTopologyHash: "a".repeat(64),
+        nodeIndices: Uint32Array.from([0, 1]),
+        pointCount: 2,
+        scopeId: "airbox",
+        scopeKind: "airbox",
+        valueCount: 6,
+        values: new Float64Array(6),
+      }),
+      query: { component: "full", scope_id: "sample", scope_kind: "object" },
+      responseMetadata: responseMetadataFixture(),
+      targetIds: ["object:sample"],
+    });
+
+    expect(buffer.requestIdentityCompatible).toBe(false);
+  });
+
+  it.each([
+    ["object", "sample"],
+    ["airbox", "airbox"],
+  ] as const)("accepts an exact v3 %s identity", (scopeKind, scopeId) => {
+    const buffer = buildViewport3DTargetFieldBuffer({
+      domain: {
+        discretization: "fdm",
+        domainGenerationId: "fdm-1",
+        meshTopologyHash: "a".repeat(64),
+        meshTopologyRevision: null,
+        pointCount: 2,
+      },
+      fieldVector: vectorFixture({
+        domainGenerationId: "fdm-1",
+        formatVersion: 3,
+        grid: [2, 1, 1],
+        indexing: "explicit_node_indices",
+        meshTopologyHash: "a".repeat(64),
+        nodeIndices: Uint32Array.from([0, 1]),
+        pointCount: 2,
+        scopeId,
+        scopeKind,
+        valueCount: 6,
+        values: new Float64Array(6),
+      }),
+      query: {
+        component: "full",
+        scope_id: scopeId,
+        scope_kind: scopeKind,
+        snapshot_id: "snapshot-1",
+      },
+      responseMetadata: responseMetadataFixture({ scopeId, scopeKind }),
+      targetIds: [scopeKind === "object" ? `object:${scopeId}` : scopeId],
+    });
+
+    expect(buffer.requestIdentityCompatible).toBe(true);
+    expect(viewport3DTargetFieldBufferCanServeVectors(buffer, "m")).toBe(true);
+  });
+
+  it.each([
+    ["object", "sample", undefined, "sample"],
+    ["region", "shared", "sample", "region:sample:shared"],
+    ["airbox", "airbox", undefined, "airbox"],
+  ] as const)("accepts exact trusted v2 %s response metadata", (
+    scopeKind,
+    scopeId,
+    ownerObjectId,
+    responseScopeId,
+  ) => {
+    const fieldVector = vectorFixture({
+      formatVersion: 2,
+      indexing: "legacy_count_only",
+    });
+    const responseMetadata = responseMetadataFixture({
+      encoding: "FMVP;version=2",
+      scopeId: responseScopeId,
+      scopeKind,
+    });
+    responseMetadata.identityIssues = collectFieldVectorIdentityIssues(
+      fieldVector,
+      responseMetadata,
+    );
+    const buffer = buildViewport3DTargetFieldBuffer({
+      domain: {
+        discretization: "fdm",
+        domainGenerationId: "fdm-1",
+        meshTopologyHash: null,
+        meshTopologyRevision: null,
+        pointCount: 4,
+      },
+      fieldVector,
+      query: {
+        component: "full",
+        owner_object_id: ownerObjectId,
+        scope_id: scopeId,
+        scope_kind: scopeKind,
+        snapshot_id: "snapshot-1",
+      },
+      responseDomainGenerationId:
+        resolveTrustedViewport3DResponseDomainGenerationId(
+          fieldVector,
+          responseMetadata,
+        ),
+      responseMetadata,
+      targetIds: [
+        scopeKind === "object"
+          ? `object:${scopeId}`
+          : scopeKind === "region"
+            ? responseScopeId
+            : scopeId,
+      ],
+    });
+
+    expect(buffer.requestIdentityCompatible).toBe(true);
+    expect(viewport3DTargetFieldBufferCanServeVectors(buffer, "m")).toBe(true);
+  });
+
+  it("accepts a canonical FMVP v3 Airbox identity when scope_id was omitted", () => {
+    const meshTopologyHash = "a".repeat(64);
+    const buffer = buildViewport3DTargetFieldBuffer({
+      domain: {
+        discretization: "fdm",
+        domainGenerationId: "fdm-1",
+        gridShape: [4, 1, 1],
+        meshTopologyHash,
+        meshTopologyRevision: null,
+        pointCount: 4,
+      },
+      fieldVector: vectorFixture({
+        domainGenerationId: "fdm-1",
+        formatVersion: 3,
+        grid: [2, 1, 1],
+        indexing: "explicit_node_indices",
+        meshTopologyHash,
+        nodeIndices: Uint32Array.from([2, 3]),
+        pointCount: 2,
+        quantityId: "H_demag",
+        scopeId: "airbox",
+        scopeKind: "airbox",
+        valueCount: 6,
+        values: new Float64Array(6),
+      }),
+      query: {
+        component: "full",
+        max_samples: 1200,
+        scope_kind: "airbox",
+      },
+      responseDomainGenerationId: "fdm-1",
+      responseMetadata: responseMetadataFixture({
+        domainGenerationId: "fdm-1",
+        encoding: "FMVP;version=3",
+        fieldIndexing: "explicit_node_indices",
+        meshTopologyHash,
+        nComp: 3,
+        nodeIndexCount: 2,
+        pointCount: 2,
+        quantityId: "H_demag",
+        scopeId: "airbox",
+        scopeKind: "airbox",
+        snapshotId: null,
+        valueCount: 6,
+      }),
+      targetIds: ["fdm-universe-outside-support"],
+    });
+
+    expect(buffer.requestIdentityCompatible).toBe(true);
+    expect(buffer.scopeId).toBe("airbox");
+    expect(viewport3DTargetFieldBufferCanServeVectors(buffer, "H_demag")).toBe(
+      true,
+    );
+  });
+
+  it("rejects a noncanonical FMVP v3 Airbox identity when scope_id was omitted", () => {
+    const buffer = buildViewport3DTargetFieldBuffer({
+      fieldVector: vectorFixture({
+        domainGenerationId: "fdm-1",
+        formatVersion: 3,
+        indexing: "explicit_node_indices",
+        meshTopologyHash: "a".repeat(64),
+        nodeIndices: Uint32Array.from([2, 3]),
+        pointCount: 2,
+        quantityId: "H_demag",
+        scopeId: "other-airbox",
+        scopeKind: "airbox",
+        valueCount: 6,
+        values: new Float64Array(6),
+      }),
+      query: {
+        component: "full",
+        max_samples: 1200,
+        scope_kind: "airbox",
+      },
+      responseMetadata: responseMetadataFixture({
+        quantityId: "H_demag",
+        scopeId: "other-airbox",
+        scopeKind: "airbox",
+        snapshotId: null,
+      }),
+      targetIds: ["fdm-universe-outside-support"],
+    });
+
+    expect(buffer.requestIdentityCompatible).toBe(false);
+    expect(viewport3DTargetFieldBufferCanServeVectors(buffer, "H_demag")).toBe(
+      false,
+    );
+  });
+
   it("rejects a decoded FMVP v3 scope that does not match the request", () => {
     const buffer = buildViewport3DTargetFieldBuffer({
       fieldVector: vectorFixture({

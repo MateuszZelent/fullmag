@@ -873,7 +873,7 @@ export function resolveRibbonVisualizationTarget({
 }
 
 function resultsQuantityCommandInput(quantityId: string) {
-  return globalQuantityCommandInput(quantityId);
+  return globalQuantityCommandInput(quantityId, true);
 }
 
 function buildResultsQuantityGroup(
@@ -2834,7 +2834,12 @@ function buildClipAction(
         type: "item",
         id: "selected-clip:create-planar-monitor",
         label: "Create planar monitor from clip",
-        disabled: !context.api,
+        disabled: !context.api || !clip.enabled,
+        tooltip: !context.api
+          ? "Visualization API is unavailable."
+          : !clip.enabled
+            ? "Enable the clip plane before creating a planar monitor from it."
+            : undefined,
         commandId: "planar-monitor.create",
         commandInput: { intent: { source: "clip" } },
       },
@@ -3339,7 +3344,7 @@ function buildSelectedVisualizationGroup(
   );
   const selectedQuantityItems = quantityItemsForVisualizationTarget(
     selectedQuantityId,
-    target?.kind,
+    isAirboxLikeTarget ? "airbox" : target?.kind,
     context.fieldCatalog,
   );
   const targetQuantityPatch = (value: string): VisualizationTargetPatch => {

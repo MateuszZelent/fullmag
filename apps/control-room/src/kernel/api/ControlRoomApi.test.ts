@@ -32,7 +32,7 @@ describe("derived B_drive display quantity", () => {
     const catalog = withDerivedDriveFluxDensity({
       domain_generation_id: "domain-1",
       revision: 7,
-      quantities: [{ available: true, components: 3, domain: "magnetic_only", domain_generation_id: "domain-1", field_revision: 4, kind: "vector", label: "Drive field", location: "node", materialization_wall_time_ns: 0, materialized_at_unix_ms: 0, quantity_id: "H_drive", source_revision: 4, source_step: 0, stale_by_steps: 0, state: "complete", unit: "A/m" }],
+      quantities: [{ available: true, components: 3, domain: "magnetic_only", domain_generation_id: "domain-1", field_revision: 4, kind: "vector", label: "Drive field", location: "node", materialization_wall_time_ns: 0, materialized_at_unix_ms: 0, quantity_id: "H_drive", source_revision: 4, source_step: 0, spatial: true, stale_by_steps: 0, state: "complete", ui_exposed: true, unit: "A/m" }],
     });
     expect(catalog.quantities.at(-1)).toMatchObject({
       label: "Drive flux density",
@@ -228,6 +228,26 @@ describe("field vector response metadata", () => {
       collectFieldVectorIdentityIssues(
         { ...decoded, formatVersion: 2, indexing: "legacy_count_only" },
         parseFieldVectorResponseMetadata(new Headers()),
+      ),
+    ).toEqual([]);
+
+    const trustedV2Metadata = parseFieldVectorResponseMetadata(
+      new Headers({
+        "x-fullmag-domain-generation-id": "fdm-7",
+        "x-fullmag-encoding": "FMVP;version=2",
+        "x-fullmag-field-revision": "12",
+        "x-fullmag-n-comp": "3",
+        "x-fullmag-point-count": "1",
+        "x-fullmag-quantity-id": "m",
+        "x-fullmag-scope-id": "airbox",
+        "x-fullmag-scope-kind": "airbox",
+        "x-fullmag-value-count": "3",
+      }),
+    );
+    expect(
+      collectFieldVectorIdentityIssues(
+        { ...decoded, formatVersion: 2, indexing: "legacy_count_only" },
+        trustedV2Metadata,
       ),
     ).toEqual([]);
   });
@@ -1994,11 +2014,12 @@ describe("ControlRoomApi", () => {
       columns: ["time", "e_total"],
       limit: 50,
       sinceRevision: 10,
+      tail: true,
     });
 
     expect(window.revision).toBe(12);
     expect(observedUrl).toBe(
-      "http://127.0.0.1:8765/v2/sessions/current/data/scalars?columns=time%2Ce_total&limit=50&since_revision=10",
+      "http://127.0.0.1:8765/v2/sessions/current/data/scalars?columns=time%2Ce_total&limit=50&since_revision=10&tail=true",
     );
   });
 

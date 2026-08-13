@@ -1657,6 +1657,7 @@ mod tests {
         LivePreviewField {
             config_revision: 7,
             source_step,
+            source_time_seconds: None,
             source_revision: 7,
             materialized_at_unix_ms: 1,
             materialization_wall_time_ns: 1,

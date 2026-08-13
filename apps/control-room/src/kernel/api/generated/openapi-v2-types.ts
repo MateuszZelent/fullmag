@@ -4454,9 +4454,18 @@ export interface components {
             source_revision: number;
             /** Format: int64 */
             source_step: number;
+            /**
+             * Format: double
+             * @description Solver time in seconds for the state that produced this field, when known.
+             */
+            source_time_seconds?: number | null;
+            /** @description Whether this descriptor can be rendered as a spatial viewport field. */
+            spatial: boolean;
             /** Format: int64 */
             stale_by_steps: number;
             state: components["schemas"]["FieldMaterializationState"];
+            /** @description Whether this canonical quantity is intended for interactive UI selection. */
+            ui_exposed: boolean;
             unit: string;
         };
         FieldDriveCreateRequest: {
@@ -4553,6 +4562,11 @@ export interface components {
             source_revision: number;
             /** Format: int64 */
             source_step: number;
+            /**
+             * Format: double
+             * @description Solver time in seconds for the state that produced this field, when known.
+             */
+            source_time_seconds?: number | null;
             /** Format: int64 */
             stale_by_steps: number;
             state: components["schemas"]["FieldMaterializationState"];
@@ -6871,7 +6885,7 @@ export interface components {
         ObjectMetricsResource: {
             energies: components["schemas"]["ObjectEnergySummary"];
             has_solver_sample: boolean;
-            magnetization_average: components["schemas"]["ObjectMagnetizationAverage"];
+            magnetization_average?: null | components["schemas"]["ObjectMagnetizationAverage"];
             object_id: string;
             /** Format: int64 */
             revision: number;
@@ -13719,6 +13733,8 @@ export interface operations {
                 since_revision?: number;
                 /** @description Max rows to return */
                 limit?: number;
+                /** @description Return the newest rows instead of the oldest rows in the selected window */
+                tail?: boolean;
                 /** @description Comma-separated scalar columns to return, e.g. step,time,e_total */
                 columns?: string;
             };
