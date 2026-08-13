@@ -550,6 +550,27 @@ verify-fdm-gpu-racetrack-mumax-common-limit:
       python3 scripts/compare_fdm_racetrack_mumax.py --fullmag "$report_root/fullmag-input.json" --mumax "$report_root/mumax-input.json" --output "$report_root/racetrack_mumax_common_limit_v2.json"; \
       sha256sum "$report_root"/* | tee "$report_root/SHA256SUMS.txt"'
 
+# Build the Hall observable only from a persisted accepted FDM m.zarr series.
+# This is deliberately an explicit post-run step: it never invents a time
+# series when the runtime did not publish one and it keeps the provisional
+# uncertainty model visible in the artifact producer metadata.
+build-fdm-racetrack-hall-artifact stage_dir output="":
+    bash -euo pipefail -c '\
+      if [ -n "{{output}}" ]; then \
+        PYTHONPATH=. python3 scripts/build_skyrmion_hall_artifact.py "{{stage_dir}}" --output "{{output}}"; \
+      else \
+        PYTHONPATH=. python3 scripts/build_skyrmion_hall_artifact.py "{{stage_dir}}"; \
+      fi'
+
+verify-fdm-racetrack-hall-artifact stage_dir:
+    bash -euo pipefail -c '\
+      artifact="$(mktemp /dev/shm/fullmag-hall-artifact.XXXXXXXX.json)"; \
+      cleanup() { rm -f "$artifact"; }; \
+      trap cleanup EXIT INT TERM; \
+      PYTHONPATH=. python3 scripts/build_skyrmion_hall_artifact.py "{{stage_dir}}" --output "$artifact"; \
+      PYTHONPATH=. python3 scripts/validate_skyrmion_hall_angle.py "$artifact"; \
+      python3 -c "import json; a=json.load(open(\"$artifact\", encoding=\"utf-8\")); print(json.dumps(a[\"hall_angle\"], sort_keys=True))"'
+
 verify-fdm-slonczewski-native-contract:
     docker compose --profile fem-gpu run --rm \
       fem-gpu bash -lc 'cd /workspace && build_dir=/tmp/fullmag-fdm-slonczewski-build && cargo_target=/tmp/fullmag-fdm-slonczewski-cargo && cmake -S native -B "$build_dir" -DCMAKE_CUDA_ARCHITECTURES="${FULLMAG_CUDA_ARCHITECTURES:-native}" -DFULLMAG_ENABLE_CUDA=ON -DFULLMAG_ENABLE_FEM_GPU=OFF -DFULLMAG_USE_MFEM_STACK=OFF -DFULLMAG_FEM_WITH_SLEPC=OFF && CMAKE_BUILD_PARALLEL_LEVEL=1 cmake --build "$build_dir" --target fullmag_fdm && FULLMAG_FDM_LIB_DIR="$build_dir/backends/fdm" LD_LIBRARY_PATH="$build_dir/backends/fdm${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" CARGO_TARGET_DIR="$cargo_target" cargo +nightly test -p fullmag-runner --features cuda --lib native_fdm_canonical_slonczewski_ -- --nocapture'

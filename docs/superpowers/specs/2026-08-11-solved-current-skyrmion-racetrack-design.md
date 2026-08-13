@@ -196,8 +196,12 @@ Porównywane są pełne pola `m(t)`, energia, `Q(t)`, położenie, `v_parallel`,
 `v_perp` i `Theta_H`. Osobno raportuje się literalną konfigurację MuMax3 oraz
 zbieżniejszą konfigurację demag, aby błąd kernela referencyjnego nie był
 przypisany transportowi Fullmag. Kadencja jest częścią tożsamości: fixed-step
-Heun, `dt`, czas trwania, `TableAutoSave`, `AutoSave(m)` i digest rzeczywistej
-tabeli MuMax3 muszą być zgodne z manifestem. Zgodność tej bramki nie promuje
+Heun, `dt`, czas trwania, zapis początkowego stanu i digest rzeczywistej tabeli
+MuMax3 muszą być zgodne z manifestem. Czasowy `TableAutoSave`/`AutoSave(m)` jest
+akceptowalny tylko wtedy, gdy zapisane czasy przechodzą dokładny gate kadencji;
+checkout `external_solvers/3` może przekroczyć alarm o jeden krok, dlatego
+fixture produkcyjny używa jawnego `Steps(n)` + `TableSave()` + `Save(m)`.
+Zgodność tej bramki nie promuje
 MuMax3 do orakla transportu i nie pozwala zastąpić solved-current prescribed
 torque.
 

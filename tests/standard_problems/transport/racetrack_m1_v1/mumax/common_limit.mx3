@@ -34,8 +34,15 @@ B_ext = LoadFile("fullmag_transport_torque_common_limit_field.ovf")
 TableAdd(E_total)
 TableAdd(ext_topologicalcharge)
 TableAdd(ext_bubblepos)
+// MuMax's time-based autosave may overshoot a nominal cadence by one fixed
+// step due to accumulated floating-point time.  The comparator therefore uses
+// an explicit fixed-step schedule: 50 Heun steps = 5 ps, followed by matching
+// TableSave/Save calls.  The initial state is recorded exactly once.
 TableSave()
-TableAutoSave(5e-12)
-AutoSave(m, 5e-12)
-Run(2e-9)
+Save(m)
+for i := 0; i < 400; i++ {
+    Steps(50)
+    TableSave()
+    Save(m)
+}
 Save(m)

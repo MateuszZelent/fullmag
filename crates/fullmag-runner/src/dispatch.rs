@@ -5106,10 +5106,8 @@ fn execute_cuda_fdm(
         ArtifactRecorder::in_memory(provenance.clone())
     };
     let mut scalar_schedules = collect_scalar_schedules(outputs)?;
-    let field_schedules = collect_field_schedules(outputs)?;
-    let (mut transport_field_schedules, mut field_schedules): (Vec<_>, Vec<_>) = field_schedules
-        .into_iter()
-        .partition(|schedule| gpu_transport_field_name(&schedule.name));
+    let (mut transport_field_schedules, mut field_schedules) =
+        partition_cuda_field_schedules(outputs, !plan.spin_transport_plans.is_empty())?;
     let default_scalar_trace = scalar_schedules.is_empty();
     capture_initial_cuda_fields(&backend, cell_count, &mut field_schedules, &mut artifacts)?;
 
@@ -6228,6 +6226,25 @@ fn gpu_transport_field_name(name: &str) -> bool {
 }
 
 #[cfg(feature = "cuda")]
+fn partition_cuda_field_schedules(
+    outputs: &[OutputIR],
+    transport_active: bool,
+) -> Result<(Vec<OutputSchedule>, Vec<OutputSchedule>), RunError> {
+    let field_schedules = collect_field_schedules(outputs)?;
+    let (mut transport, field): (Vec<_>, Vec<_>) = field_schedules
+        .into_iter()
+        .partition(|schedule| gpu_transport_field_name(&schedule.name));
+    // Transport outputs are legal study-level declarations, but they have no
+    // physical value in a stage where the complete solved-current pipeline is
+    // inactive.  Never ask the CUDA recorder to synthesize them without an
+    // accepted M1 publication.
+    if !transport_active {
+        transport.clear();
+    }
+    Ok((transport, field))
+}
+
+#[cfg(feature = "cuda")]
 fn record_gpu_transport_due_outputs(
     session: Option<&GpuM1TransportSession<NativeGpuM1TransportAbi>>,
     module_id: Option<&str>,
@@ -6748,6 +6765,35 @@ mod tests {
                 && execution.contains("&final_magnetization,\n        latest_stats"),
             "native CUDA final scalar publication must share the final m snapshot"
         );
+    }
+
+    #[cfg(feature = "cuda")]
+    #[test]
+    fn inactive_cuda_transport_drops_transport_field_schedules() {
+        let outputs = vec![
+            OutputIR::Field {
+                name: "V_electric".into(),
+                every_seconds: 1.0,
+            },
+            OutputIR::Field {
+                name: "torque_stt".into(),
+                every_seconds: 1.0,
+            },
+            OutputIR::Field {
+                name: "m".into(),
+                every_seconds: 1.0,
+            },
+        ];
+        let (transport, magnetic) =
+            partition_cuda_field_schedules(&outputs, false).expect("schedules should parse");
+        assert!(transport.is_empty());
+        assert_eq!(magnetic.len(), 1);
+        assert_eq!(magnetic[0].name, "m");
+
+        let (transport, magnetic) =
+            partition_cuda_field_schedules(&outputs, true).expect("schedules should parse");
+        assert_eq!(transport.len(), 2);
+        assert_eq!(magnetic.len(), 1);
     }
 
     #[test]

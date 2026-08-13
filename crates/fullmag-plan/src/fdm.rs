@@ -1401,7 +1401,11 @@ pub(crate) fn plan_fdm(
             .any(|term| matches!(term, EnergyTermIR::ThermalNoise { .. })),
         has_prescribed_zeeman_mask_source(problem),
         !problem.field_drives.is_empty(),
-        !active_transport_graph.spin_module_ids.is_empty(),
+        // Transport field outputs are study-level declarations.  A stage may
+        // deliberately disable the complete charge->spin->torque pipeline
+        // (for example during zero-current relaxation), so validation must
+        // still accept the declarations for later active stages.
+        !problem.spin_transport_modules.is_empty(),
         &mut errors,
     );
     if problem.study.sampling().outputs.iter().any(|output| {
@@ -2844,7 +2848,10 @@ pub(crate) fn plan_fdm_multilayer(
         false,
         false,
         !problem.field_drives.is_empty(),
-        !active_transport_graph.spin_module_ids.is_empty(),
+        // Keep transport output declarations legal across stages whose
+        // pipeline is temporarily inactive; runtime scheduling filters those
+        // quantities until a resolved transport session exists.
+        !problem.spin_transport_modules.is_empty(),
         &mut errors,
     );
     if problem.backend_policy.execution_precision != ExecutionPrecision::Double

@@ -7,6 +7,8 @@ skyrmion, checkpoints it, and starts every signed drive from that checkpoint.
 
 from __future__ import annotations
 
+import os
+
 import fullmag as fm
 
 
@@ -15,9 +17,31 @@ TRACK_WIDTH = 128.0e-9
 HM_THICKNESS = 3.0e-9
 FM_THICKNESS = 1.0e-9
 CELL = (2.0e-9, 2.0e-9, 1.0e-9)
-DRIVE_DURATION = 2.0e-9
+DRIVE_DURATION = float(os.environ.get("FULLMAG_RACETRACK_DRIVE_DURATION", "2.0e-9"))
 FIXED_TIMESTEP = 1.0e-13
-OUTPUT_PERIOD = 5.0e-12
+OUTPUT_PERIOD = float(os.environ.get("FULLMAG_RACETRACK_OUTPUT_PERIOD", "5.0e-12"))
+RELAX_MAX_STEPS = int(os.environ.get("FULLMAG_RACETRACK_RELAX_MAX_STEPS", "50000"))
+RELAX_TOLT = float(os.environ.get("FULLMAG_RACETRACK_RELAX_TOLT", "1.0e-6"))
+if RELAX_MAX_STEPS < 1 or not RELAX_TOLT > 0.0:
+    raise ValueError("racetrack relaxation controls must be positive")
+
+
+def _drive_amplitudes() -> tuple[float, ...]:
+    raw = os.environ.get(
+        "FULLMAG_RACETRACK_AMPLITUDES",
+        "-1.5e12,-1.0e12,-0.5e12,0.5e12,1.0e12,1.5e12",
+    )
+    values = tuple(float(value.strip()) for value in raw.split(",") if value.strip())
+    if len(values) < 3:
+        raise ValueError("FULLMAG_RACETRACK_AMPLITUDES requires at least three values")
+    if any(not value == value or value in (float("inf"), float("-inf")) for value in values):
+        raise ValueError("FULLMAG_RACETRACK_AMPLITUDES must contain finite values")
+    if len(set(values)) != len(values):
+        raise ValueError("FULLMAG_RACETRACK_AMPLITUDES must not contain duplicate values")
+    return values
+
+
+DRIVE_AMPLITUDES = _drive_amplitudes()
 
 
 def surface(object_id: str, face: str, normal: tuple[float, float, float]) -> fm.SurfaceRef:
@@ -62,7 +86,7 @@ fm_layer.m = (
 hm_geometry = fm.Box(
     size=(TRACK_LENGTH, TRACK_WIDTH, HM_THICKNESS), name="hm_base"
 ).translate((TRACK_LENGTH / 2.0, TRACK_WIDTH / 2.0, HM_THICKNESS / 2.0))
-study.antenna_object(hm_geometry, name="hm")
+study.geometry_object(hm_geometry, name="hm", type="conductor")
 
 hm = fm.RegionRef("hm")
 ferromagnet = fm.RegionRef("fm")
@@ -202,8 +226,8 @@ study.stages.set_spin_torque_enabled(
 study.stages.add_relax(
     stage_id="relax_zero_current",
     algorithm="llg_overdamped",
-    tolT=1.0e-6,
-    max_steps=50_000,
+    tolT=RELAX_TOLT,
+    max_steps=RELAX_MAX_STEPS,
     dt=FIXED_TIMESTEP,
 )
 study.stages.add_save_state(artifact_name="relaxed_zero_current", dataset="m")
@@ -211,44 +235,18 @@ study.stages.set_spin_torque_enabled(
     module_id="transport_torque", enabled=True, stage_id="drive_solved_current"
 )
 
-study.stages.add_load_state(artifact_name="relaxed_zero_current", dataset="m")
-study.stages.set_transport_current(
-    module_id="charge",
-    terminal_outward_current_density_Apm2={"terminal_x_minus": 1.5e12, "terminal_x_plus": -1.5e12},
-)
-study.stages.add_run(DRIVE_DURATION, stage_id="drive_solved_current_minus_1_5")
-
-study.stages.add_load_state(artifact_name="relaxed_zero_current", dataset="m")
-study.stages.set_transport_current(
-    module_id="charge",
-    terminal_outward_current_density_Apm2={"terminal_x_minus": 1.0e12, "terminal_x_plus": -1.0e12},
-)
-study.stages.add_run(DRIVE_DURATION, stage_id="drive_solved_current_minus_1_0")
-
-study.stages.add_load_state(artifact_name="relaxed_zero_current", dataset="m")
-study.stages.set_transport_current(
-    module_id="charge",
-    terminal_outward_current_density_Apm2={"terminal_x_minus": 0.5e12, "terminal_x_plus": -0.5e12},
-)
-study.stages.add_run(DRIVE_DURATION, stage_id="drive_solved_current_minus_0_5")
-
-study.stages.add_load_state(artifact_name="relaxed_zero_current", dataset="m")
-study.stages.set_transport_current(
-    module_id="charge",
-    terminal_outward_current_density_Apm2={"terminal_x_minus": -0.5e12, "terminal_x_plus": 0.5e12},
-)
-study.stages.add_run(DRIVE_DURATION, stage_id="drive_solved_current_plus_0_5")
-
-study.stages.add_load_state(artifact_name="relaxed_zero_current", dataset="m")
-study.stages.set_transport_current(
-    module_id="charge",
-    terminal_outward_current_density_Apm2={"terminal_x_minus": -1.0e12, "terminal_x_plus": 1.0e12},
-)
-study.stages.add_run(DRIVE_DURATION, stage_id="drive_solved_current_plus_1_0")
-
-study.stages.add_load_state(artifact_name="relaxed_zero_current", dataset="m")
-study.stages.set_transport_current(
-    module_id="charge",
-    terminal_outward_current_density_Apm2={"terminal_x_minus": -1.5e12, "terminal_x_plus": 1.5e12},
-)
-study.stages.add_run(DRIVE_DURATION, stage_id="drive_solved_current_plus_1_5")
+for current_density in DRIVE_AMPLITUDES:
+    sign_label = "minus" if current_density < 0.0 else "plus"
+    magnitude_label = f"{abs(current_density) / 1.0e12:.1f}".replace(".", "_")
+    study.stages.add_load_state(artifact_name="relaxed_zero_current", dataset="m")
+    study.stages.set_transport_current(
+        module_id="charge",
+        terminal_outward_current_density_Apm2={
+            "terminal_x_minus": -current_density,
+            "terminal_x_plus": current_density,
+        },
+    )
+    study.stages.add_run(
+        DRIVE_DURATION,
+        stage_id=f"drive_solved_current_{sign_label}_{magnitude_label}",
+    )

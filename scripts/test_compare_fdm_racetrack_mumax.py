@@ -143,6 +143,22 @@ class CompareFdmRacetrackMumaxTests(unittest.TestCase):
         self.assertEqual(report["metrics"]["m_rms"], 0.0)
         self.assertEqual(report["metrics"]["theta_h_rad_error"], 0.0)
 
+    def test_explicit_steps_table_source_passes_with_fixed_step_identity(self) -> None:
+        module = load_module()
+        mumax = mumax_manifest()
+        mumax["trajectory_source"] = {
+            "kind": "mumax_table_save_steps_v1",
+            "initial_sample_recorded": True,
+            "table_save_interval_s": 1.0e-12,
+            "field_save_interval_s": 1.0e-12,
+            "steps_per_sample": 10,
+            "table_digest_sha256": "table-digest",
+        }
+        report = module.compare_common_limit(
+            fullmag_manifest(), mumax, thresholds=module.DEFAULT_THRESHOLDS
+        )
+        self.assertEqual(report["status"], "pass")
+
     def test_rejects_axis_sign_change(self) -> None:
         module = load_module()
         mumax = mumax_manifest()
