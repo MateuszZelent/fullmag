@@ -190,33 +190,43 @@ export function planarMonitorFrameSegments(
   preview: PlanarMonitorFramePreview,
 ): Float32Array {
   const [uMin, uMax, vMin, vMax] = preview.boundsUvM;
-  const point = (u: number, v: number) =>
+  const point = (u: number, v: number, normalOffset = 0) =>
     preview.originM.map(
       (origin, axis) =>
-        origin + u * preview.uAxis[axis] + v * preview.vAxis[axis],
+        origin +
+        u * preview.uAxis[axis] +
+        v * preview.vAxis[axis] +
+        normalOffset * preview.normal[axis],
     ) as [number, number, number];
-  const corners = [
-    point(uMin, vMin),
-    point(uMax, vMin),
-    point(uMax, vMax),
-    point(uMin, vMax),
-  ];
-  return new Float32Array(
-    [
-      corners[0],
-      corners[1],
-      corners[1],
-      corners[2],
-      corners[2],
-      corners[3],
-      corners[3],
-      corners[0],
-      point(uMin, 0),
-      point(uMax, 0),
-      point(0, vMin),
-      point(0, vMax),
-    ].flatMap((position) => position),
-  );
+  const slabThickness = preview.operator?.kind === "slab_average" &&
+    Number.isFinite(preview.operator.thickness_m) &&
+    preview.operator.thickness_m > 0
+    ? preview.operator.thickness_m
+    : null;
+  const offsets = slabThickness === null
+    ? [0]
+    : [-slabThickness / 2, slabThickness / 2];
+  const planes = offsets.flatMap((offset) => {
+    const corners = [
+      point(uMin, vMin, offset),
+      point(uMax, vMin, offset),
+      point(uMax, vMax, offset),
+      point(uMin, vMax, offset),
+    ];
+    return [
+      corners[0], corners[1], corners[1], corners[2],
+      corners[2], corners[3], corners[3], corners[0],
+      point(uMin, 0, offset), point(uMax, 0, offset),
+      point(0, vMin, offset), point(0, vMax, offset),
+    ];
+  });
+  const connectors = slabThickness === null
+    ? []
+    : [[uMin, vMin], [uMax, vMin], [uMax, vMax], [uMin, vMax]].flatMap(([u, v]) => [
+      point(u, v, offsets[0]),
+      point(u, v, offsets[1]),
+    ]);
+  return new Float32Array([...planes, ...connectors].flatMap((position) => position));
 }
 
 function resolveClipPlaneFrameQuaternion(frame: ClipPlaneFrame | null): Quaternion {

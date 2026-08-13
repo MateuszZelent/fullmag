@@ -8,6 +8,7 @@ describe("planar monitor 3D frame preview", () => {
       boundsUvM: [-1, 1, -2, 2],
       monitorId: "oblique",
       normal: [Math.SQRT1_2, 0, Math.SQRT1_2],
+      operator: { kind: "plane_sample" },
       originM: [10, 20, 30],
       uAxis: [Math.SQRT1_2, 0, -Math.SQRT1_2],
       vAxis: [0, 1, 0],
@@ -24,5 +25,22 @@ describe("planar monitor 3D frame preview", () => {
       18,
       Math.fround(30 - Math.SQRT1_2),
     ]);
+  });
+
+  it("renders both slab faces and their thickness connectors from the canonical operator", () => {
+    const segments = planarMonitorFrameSegments({
+      boundsUvM: [-1, 1, -1, 1],
+      monitorId: "slab",
+      normal: [0, 0, 1],
+      operator: { kind: "slab_average", thickness_m: 4 },
+      originM: [0, 0, 0],
+      uAxis: [1, 0, 0],
+      vAxis: [0, 1, 0],
+    });
+
+    expect(segments).toHaveLength(96);
+    expect([...segments].filter((_, index) => index % 3 === 2)).toEqual(
+      expect.arrayContaining([Math.fround(-2), Math.fround(2)]),
+    );
   });
 });

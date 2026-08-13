@@ -104,6 +104,7 @@ export const fieldMapCommands: CommandContribution[] = Object.entries(
         boundsUvM: meta.frame.bounds_uv_m as [number, number, number, number],
         monitorId: input.monitorId,
         normal: meta.frame.normal as [number, number, number],
+        operator: null,
         originM: meta.frame.origin_m as [number, number, number],
         uAxis: meta.frame.u_axis as [number, number, number],
         vAxis: meta.frame.v_axis as [number, number, number],

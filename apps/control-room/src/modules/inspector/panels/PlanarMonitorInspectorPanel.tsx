@@ -5,7 +5,10 @@ import { useState } from "react";
 import { MODEL_PLANAR_MONITORS_PATH } from "@/kernel/api/apiPaths";
 import { createCommandContext } from "@/kernel/commands/commandContext";
 import { useKernel } from "@/kernel/KernelContext";
-import { usePlanarMonitorResource } from "@/kernel/resources/planarMonitorResources";
+import {
+  usePlanarMonitorResource,
+  usePlanarMonitorsResource,
+} from "@/kernel/resources/planarMonitorResources";
 import {
   isPlanarMonitorRevisionConflict,
   planarMonitorDraftFromMonitor,
@@ -28,8 +31,8 @@ import {
 import { usePlanarMonitorDefinitionAvailability } from "./usePlanarMonitorDefinitionAvailability";
 
 export function PlanarMonitorInspectorPanel({ selection }: InspectorPanelProps) {
-  const kernel = useKernel();
   const definitionAvailability = usePlanarMonitorDefinitionAvailability();
+  const monitorCollection = usePlanarMonitorsResource();
   const monitorId = selection.ref?.type === "planar-monitor" ? selection.ref.monitorId : "";
   const resource = usePlanarMonitorResource(monitorId, { enabled: monitorId.length > 0 });
   const monitor = resource.data?.monitor;
@@ -49,6 +52,7 @@ export function PlanarMonitorInspectorPanel({ selection }: InspectorPanelProps) 
     <CommittedPlanarMonitorEditor
       key={`${monitor.id}:${sceneRevision}`}
       monitor={monitor}
+      monitors={monitorCollection.data?.monitors ?? null}
       sceneRevision={sceneRevision}
       selection={selection}
       refetch={resource.refetch}
@@ -59,12 +63,14 @@ export function PlanarMonitorInspectorPanel({ selection }: InspectorPanelProps) 
 
 function CommittedPlanarMonitorEditor({
   monitor,
+  monitors,
   sceneRevision,
   selection,
   refetch,
   definitionAvailability,
 }: {
   monitor: PlanarMonitor;
+  monitors: readonly PlanarMonitor[] | null;
   sceneRevision: number;
   selection: InspectorPanelProps["selection"];
   refetch: () => void;
@@ -117,12 +123,13 @@ function CommittedPlanarMonitorEditor({
   };
 
   const duplicate = async () => {
+    if (!monitors) return;
     setPending(true);
     setFeedback(null);
     try {
       const response = await kernel.api.model.planarMonitors.duplicate(
         monitor.id,
-        planarMonitorDuplicateRequest(monitor, sceneRevision),
+        planarMonitorDuplicateRequest(monitor, sceneRevision, monitors),
       );
       kernel.resources.invalidate(MODEL_PLANAR_MONITORS_PATH, response.scene_revision);
     } catch (error) {
@@ -186,7 +193,7 @@ function CommittedPlanarMonitorEditor({
           <Button size="sm" type="button" variant="ghost" onClick={() => void run("planar-monitor.show-frame-3d")}>
             Show frame in 3D
           </Button>
-          <Button disabled={pending} size="sm" type="button" variant="ghost" onClick={() => void duplicate()}>
+          <Button disabled={pending || !monitors} size="sm" type="button" variant="ghost" onClick={() => void duplicate()}>
             Duplicate
           </Button>
           <Button disabled={pending} size="sm" type="button" variant="danger" onClick={() => void run("planar-monitor.delete")}>

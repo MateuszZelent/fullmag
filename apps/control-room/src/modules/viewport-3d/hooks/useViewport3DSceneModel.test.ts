@@ -95,6 +95,7 @@ import {
 import { createViewport3DRenderAdoptionRegistry } from "../model/viewport3DRenderAdoptionRegistry";
 
 const sceneModelSourceUrl = new URL("./useViewport3DSceneModel.ts", import.meta.url);
+const planarPreviewSourceUrl = new URL("../../../kernel/workspace/planarMonitorFramePreview.ts", import.meta.url);
 
 describe("FDM Airbox mesh demand", () => {
   it("builds the inactive-cell carrier for wireframe, points, or vectors", () => {
@@ -4018,6 +4019,16 @@ describe("useViewport3DSceneModel", () => {
     expect(source).toContain("enabled: Boolean(renderingState?.clip?.enabled && topologyCurrent)");
     expect(source).toContain("crossSectionFrameClip");
     expect(source).toContain("clipFrameRotationDegrees: 0");
+  });
+
+  it("adapts the canonical planar monitor draft into the existing 3D frame renderer input", () => {
+    const source = readFileSync(sceneModelSourceUrl, "utf8");
+    const adapter = readFileSync(planarPreviewSourceUrl, "utf8");
+
+    expect(source).toContain("state.planarMonitorDraft");
+    expect(source).toContain("planarMonitorFramePreviewFromDraft");
+    expect(adapter).toContain("operator: draft.monitor.operator");
+    expect(source).toContain("planarMonitorFramePreview,");
   });
 
   it("uses the committed camera registry snapshot for live scene rendering", () => {

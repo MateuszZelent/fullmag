@@ -66,16 +66,11 @@ export interface CrossSectionPlot {
   rotationDegrees: number;
 }
 
-export type CrossSectionFramePreview = {
-  normal: readonly [number, number, number];
-  originM: readonly [number, number, number];
-  uAxis: readonly [number, number, number];
-  vAxis: readonly [number, number, number];
-} | {
+export interface CrossSectionFramePreview {
   axis: ClipAxis;
   positionPercent: number;
   rotationDegrees: number;
-};
+}
 
 export function isPlanarMonitorRevisionConflict(error: unknown): boolean {
   return (
@@ -162,11 +157,24 @@ export function planarMonitorIdentityForCreate(
 }
 
 export function planarMonitorDuplicateRequest(
-  _monitor: PlanarMonitor,
+  monitor: PlanarMonitor,
   expectedSceneRevision: number,
+  monitors: readonly PlanarMonitor[],
 ): PlanarMonitorDuplicateRequest {
+  const baseId = `${monitor.id}_copy`;
+  const baseName = `${monitor.name} copy`;
+  let suffix = 1;
+  let newId = baseId;
+  let newName = baseName;
+  while (monitors.some((entry) => entry.id === newId || entry.name === newName)) {
+    suffix += 1;
+    newId = `${baseId}_${suffix}`;
+    newName = `${baseName} ${suffix}`;
+  }
   return {
     expected_scene_revision: expectedSceneRevision,
+    new_id: newId,
+    new_name: newName,
   };
 }
 
@@ -625,18 +633,8 @@ export function activeCrossSectionFrameRotationDegrees(
 export function activeCrossSectionFramePreview(
   state: CrossSectionWorkspaceState,
 ): CrossSectionFramePreview | null {
-  const source =
-    state.planarMonitorDraft ?? state.draft ?? activeCrossSectionPlot(state);
+  const source = state.draft ?? activeCrossSectionPlot(state);
   if (!source) return null;
-  if ("monitor" in source) {
-    const frame = source.monitor.frame;
-    return {
-      normal: frame.normal as [number, number, number],
-      originM: frame.origin_m as [number, number, number],
-      uAxis: frame.u_axis as [number, number, number],
-      vAxis: frame.v_axis as [number, number, number],
-    };
-  }
   return {
     axis: crossSectionAxisFromPlane(source.plane),
     positionPercent: source.positionPercent,
@@ -650,24 +648,17 @@ export function crossSectionFramePreviewEquals(
 ): boolean {
   if (previous === next) return true;
   if (!previous || !next) return false;
-  if ("axis" in previous || "axis" in next) {
-    return "axis" in previous && "axis" in next &&
-      previous.axis === next.axis &&
-      previous.positionPercent === next.positionPercent &&
-      previous.rotationDegrees === next.rotationDegrees;
-  }
   return (
-    previous.normal.every((value, index) => value === next.normal[index]) &&
-    previous.originM.every((value, index) => value === next.originM[index]) &&
-    previous.uAxis.every((value, index) => value === next.uAxis[index]) &&
-    previous.vAxis.every((value, index) => value === next.vAxis[index])
+    previous.axis === next.axis &&
+    previous.positionPercent === next.positionPercent &&
+    previous.rotationDegrees === next.rotationDegrees
   );
 }
 
 export function crossSectionFramePreviewToClip(
   preview: CrossSectionFramePreview | null,
 ): VisualizationStateResource["clip"] | null {
-  if (!preview || !("axis" in preview)) return null;
+  if (!preview) return null;
   return {
     axis: preview.axis,
     enabled: true,

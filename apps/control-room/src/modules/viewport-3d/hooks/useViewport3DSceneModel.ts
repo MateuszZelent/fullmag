@@ -75,7 +75,10 @@ import {
   crossSectionFramePreviewToClip,
 } from "@/kernel/workspace/crossSectionWorkspace";
 import { useCrossSectionWorkspaceSelector } from "@/kernel/workspace/useCrossSectionWorkspace";
-import { usePlanarMonitorFramePreview } from "@/kernel/workspace/planarMonitorFramePreview";
+import {
+  planarMonitorFramePreviewFromDraft,
+  usePlanarMonitorFramePreview,
+} from "@/kernel/workspace/planarMonitorFramePreview";
 import {
   AIRBOX_VISUALIZATION_TARGET,
   resolveDefaultVisualizationSettings,
@@ -2555,11 +2558,14 @@ export function useViewport3DSceneModel({
     activeCrossSectionFramePreview,
     { isEqual: crossSectionFramePreviewEquals },
   );
+  const planarMonitorDraft = useCrossSectionWorkspaceSelector(
+    (state) => state.planarMonitorDraft,
+  );
   const crossSectionFrameClip = useMemo(
     () => crossSectionFramePreviewToClip(crossSectionFramePreview),
     [crossSectionFramePreview],
   );
-  const planarMonitorFramePreview = usePlanarMonitorFramePreview();
+  const resolvedPlanarMonitorFramePreview = usePlanarMonitorFramePreview();
   const cameraRegistryCamera = useCameraRegistryCamera();
   const visualProfile = getViewport3DVisualProfile(commandState.visualProfileId);
   const computeRunning = useSessionStatusSelector(selectViewport3DComputeRunning);
@@ -3140,6 +3146,12 @@ export function useViewport3DSceneModel({
     ) ??
     resourceBounds ??
     primitiveBounds;
+  const planarMonitorFramePreview = useMemo(
+    () => planarMonitorDraft
+      ? planarMonitorFramePreviewFromDraft(planarMonitorDraft, bounds)
+      : resolvedPlanarMonitorFramePreview,
+    [bounds, planarMonitorDraft, resolvedPlanarMonitorFramePreview],
+  );
   const vectorScale = Math.max(
     Math.max(...(bounds?.size ?? [1e-6, 1e-6, 1e-6])) *
       0.0105 *
@@ -5523,9 +5535,7 @@ export function useViewport3DSceneModel({
     clipIntersectionMarkers,
     crossSectionFrameClip,
     crossSectionFrameRotationDegrees:
-      crossSectionFramePreview && "rotationDegrees" in crossSectionFramePreview
-        ? crossSectionFramePreview.rotationDegrees
-        : 0,
+      crossSectionFramePreview?.rotationDegrees ?? 0,
     planarMonitorFramePreview,
     diagnostics,
     domainId: domainMeta.data?.domain_id,

@@ -17,21 +17,25 @@ Task 5 zaimplementowano na pełnym generated `PlanarMonitorSchema`. Wspólny kon
 - `useSyncExternalStore` otrzymał stały server snapshot, więc resource-local draft nie zmienia SSR/first-client snapshotu;
 - zachowano istniejące selection/layout i active-monitor flow; nie dodano ownership Task 6 ani zmian rendererów, OpenAPI i public wire.
 
-## Finalna weryfikacja po poprawce review
+## Finalna weryfikacja po poprawce rereview
 
-Przed poprawką dokładny typecheck reprodukował trzy błędy: dwa odczyty pól bez zawężenia unii `PlanarMonitorTarget` oraz opcjonalne `scene.objects`. Finalny diff zachowuje fail-closed semantics przez jawne zawężenie targetu i traktowanie brakującego katalogu obiektów jako pustego.
+Finalny przepływ transient preview ma jedno canonical źródło: aktywny `PlanarMonitorDraft.monitor`. Adapter projekcji extentu przekazuje frame i pełny operator do istniejącego wejścia `PlanarMonitorFramePreviewLayer`; `slab_average` renderuje obie płaszczyzny graniczne i łączniki grubości. Istniejący store pozostaje wyłącznie fallbackiem resolved preview committed monitora, gdy nie ma aktywnego draftu. Nie zmieniono Field Map/Task 6 ownership ani publicznego API.
+
+Duplicate wyprowadza jawne, collision-safe `new_id` i `new_name` z aktualnej revisioned collection i przekazuje je przez istniejący typed duplicate facade. Test obejmuje powtarzaną kolizję `_copy` i `_copy_2`.
 
 Bramki wykonane po finalnym diffie:
 
 ```text
-focused Vitest availability/editor: 2 suites, 7 passed
+focused Vitest workspace/store/command/inspector/scene/layer: 6 suites, 163 passed
 pnpm --dir apps/control-room typecheck: exit 0
-pnpm --dir apps/control-room lint: exit 0
+targeted ESLint pozostałe 10 changed files --max-warnings=0: exit 0
+check:api-hygiene: exit 0
+check:architecture-hygiene: exit 0
 git diff --check: exit 0
 ```
 
-Pythonowa regresja wykonuje UI-like create i patch przez `SceneDocument -> builder -> canonical Python -> ProblemIR` i porównuje pełne monitory bez dryfu.
+Targeted ESLint dla zmienionego `useViewport3DSceneModel.ts` reprodukuje dokładnie dwa baseline warningi zarówno na `HEAD`, jak i w worktree: unused `viewport3dStore` oraz `_commandState`. Nie dodano nowego warningu; nie wykonano drive-by cleanupu poza Task 5. Nowy unused `kernel` z `PlanarMonitorInspectorPanel` usunięto.
 
 ## Ograniczenia
 
-Nie wykonano browser smoke ani runtime/production qualification; Task 5 zmienia warstwę authoring/transactions i testy kontraktu, nie renderer.
+Nie wykonano browser smoke ani runtime/production qualification. Zmiana renderera ogranicza się do istniejącej lekkiej warstwy transient geometry/thickness preview 3D; nie implementuje Field Map ani Task 6.

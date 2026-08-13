@@ -14,6 +14,7 @@ import {
 import { PlanarMonitorInspectorPanel } from "./PlanarMonitorInspectorPanel";
 
 const mocks = vi.hoisted(() => ({
+  collection: { monitors: [] as unknown[], scene_revision: 7 },
   duplicate: vi.fn(),
   execute: vi.fn(),
   invalidate: vi.fn(),
@@ -46,6 +47,7 @@ vi.mock("@/kernel/KernelContext", () => ({
 }));
 
 vi.mock("@/kernel/resources/planarMonitorResources", () => ({
+  usePlanarMonitorsResource: () => ({ data: mocks.collection }),
   usePlanarMonitorResource: () => ({
     data: {
       monitor: {
@@ -72,6 +74,7 @@ vi.mock("../visualization/PlanarVisualizationSection", () => ({
 describe("PlanarMonitorInspectorPanel", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.collection.monitors = [monitorFixture];
     mocks.patch.mockResolvedValue({
       monitor: { ...monitorFixture, name: "Edited" },
       scene_revision: 8,
@@ -135,7 +138,12 @@ describe("PlanarMonitorInspectorPanel", () => {
     }
   });
 
-  it("keeps the edited draft on 409 and delegates repeated-safe identity allocation to duplicate", async () => {
+  it("keeps the edited draft on 409 and sends repeated-safe duplicate identity explicitly", async () => {
+    mocks.collection.monitors = [
+      monitorFixture,
+      { ...monitorFixture, id: "plane-1_copy", name: "Mid-plane copy" },
+      { ...monitorFixture, id: "plane-1_copy_2", name: "Mid-plane copy 2" },
+    ];
     mocks.patch.mockRejectedValueOnce({ status: 409, code: "scene_revision_conflict" });
     const dom = installSimulationPreparationTestDom();
     const container = dom.document.createElement("div");
@@ -150,6 +158,8 @@ describe("PlanarMonitorInspectorPanel", () => {
       await act(async () => findButton(container, "Duplicate").click());
       expect(mocks.duplicate).toHaveBeenCalledWith("plane-1", {
         expected_scene_revision: 7,
+        new_id: "plane-1_copy_3",
+        new_name: "Mid-plane copy 3",
       });
     } finally {
       await act(async () => root.unmount());

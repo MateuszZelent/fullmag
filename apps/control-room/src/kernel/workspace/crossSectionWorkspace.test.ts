@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 
 import type { VisualizationStateResource } from "@/kernel/api/apiTypes";
 
+import { planarMonitorFramePreviewFromDraft } from "./planarMonitorFramePreview";
+
 import {
   activeCrossSectionFrameRotationDegrees,
   activeCrossSectionFramePreview,
@@ -159,12 +161,13 @@ describe("crossSectionWorkspace", () => {
       },
     });
 
-    expect(
-      activeCrossSectionFramePreview(
-        crossSectionWorkspaceStore.getSnapshot(),
-      ),
-    ).toEqual({
+    expect(activeCrossSectionFramePreview(crossSectionWorkspaceStore.getSnapshot())).toBeNull();
+    expect(planarMonitorFramePreviewFromDraft(
+      crossSectionWorkspaceStore.getSnapshot().planarMonitorDraft!,
+      { center: [0, 0, 0], size: [4, 6, 8] },
+    )).toMatchObject({
       normal: [1, 0, 0],
+      operator: { kind: "plane_sample" },
       originM: [0, 0, 0],
       uAxis: [0, 1, 0],
       vAxis: [0, 0, 1],
@@ -489,31 +492,45 @@ describe("crossSectionWorkspace", () => {
     ]));
   });
 
-  it("builds an explicit typed duplicate request without mutating the source", () => {
+  it("builds an explicit collision-safe duplicate request without mutating the source", () => {
     const source = structuredClone(fullMonitor);
-    expect(planarMonitorDuplicateRequest(source, 12)).toEqual({
+    expect(planarMonitorDuplicateRequest(source, 12, [
+      source,
+      { ...source, id: `${source.id}_copy`, name: `${source.name} copy` },
+      { ...source, id: `${source.id}_copy_2`, name: `${source.name} copy 2` },
+    ])).toEqual({
       expected_scene_revision: 12,
+      new_id: `${source.id}_copy_3`,
+      new_name: `${source.name} copy 3`,
     });
     expect(fullMonitor).toEqual(source);
   });
 
-  it("derives a unique create identity and delegates duplicate identity allocation to the backend", () => {
+  it("derives unique create and duplicate identities from the current collection", () => {
     expect(planarMonitorIdentityForCreate("Midplane", [
       { ...fullMonitor, id: "midplane", name: "Midplane" },
       { ...fullMonitor, id: "midplane_2", name: "Midplane 2" },
     ])).toEqual({ id: "midplane_3", name: "Midplane 3" });
-    expect(planarMonitorDuplicateRequest(fullMonitor, 12)).toEqual({
+    expect(planarMonitorDuplicateRequest(fullMonitor, 12, [fullMonitor])).toEqual({
       expected_scene_revision: 12,
+      new_id: `${fullMonitor.id}_copy`,
+      new_name: `${fullMonitor.name} copy`,
     });
   });
 
-  it("uses only canonical frame data for preset and arbitrary previews", () => {
+  it("routes only canonical frame and operator data through the planar preview adapter", () => {
+    resetCrossSectionWorkspaceForTests();
     const draft = planarMonitorDraftFromMonitor(fullMonitor);
     expect(draft.ui).toEqual({ displayLengthUnit: "nm" });
     beginPlanarMonitorDraft();
     updatePlanarMonitorDraft(draft);
-    expect(activeCrossSectionFramePreview(crossSectionWorkspaceStore.getSnapshot())).toEqual({
+    expect(activeCrossSectionFramePreview(crossSectionWorkspaceStore.getSnapshot())).toBeNull();
+    expect(planarMonitorFramePreviewFromDraft(draft, {
+      center: [0, 0, 0],
+      size: [10e-9, 20e-9, 30e-9],
+    })).toMatchObject({
       normal: [0, 0, 1],
+      operator: fullMonitor.operator,
       originM: [1e-9, 2e-9, 3e-9],
       uAxis: [1, 0, 0],
       vAxis: [0, 1, 0],

@@ -10,6 +10,7 @@ describe("planar monitor 3D frame preview store", () => {
       boundsUvM: [-1, 1, -2, 2] as const,
       monitorId: "plane-1",
       normal: [0, 0, 1] as const,
+      operator: null,
       originM: [0, 0, 0] as const,
       uAxis: [1, 0, 0] as const,
       vAxis: [0, 1, 0] as const,
