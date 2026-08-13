@@ -1,11 +1,15 @@
 from __future__ import annotations
 
+import textwrap
+from pathlib import Path
+
 import pytest
 
 import fullmag as fm
 from fullmag import world as flat_world
 from fullmag.init.preset_eval import evaluate_preset_texture
 from fullmag.meshing import realize_fdm_grid_asset
+from fullmag.runtime.script_builder import rewrite_loaded_problem_script
 
 
 def test_mesh_cell_size_lowers_per_object_and_common_domain() -> None:
@@ -221,6 +225,178 @@ def test_fdm_rejects_invalid_per_magnet_entries(
 ) -> None:
     with pytest.raises((TypeError, ValueError), match=message):
         fm.FDM(per_magnet=per_magnet)  # type: ignore[arg-type]
+
+
+def test_stage_first_multilayer_material_intent_and_membership_round_trip(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "multilayer_material_intent.py"
+    source.write_text(
+        textwrap.dedent(
+            """
+            import fullmag as fm
+
+            study = fm.study("multilayer_material_intent")
+            study.engine("fdm")
+            study.mode("strict")
+
+            free = study.geometry(
+                fm.Box(size=(40e-9, 20e-9, 2e-9)).translate((0.0, 0.0, -2e-9)),
+                name="free",
+            )
+            reference = study.geometry(
+                fm.Box(size=(40e-9, 20e-9, 2e-9)).translate((0.0, 0.0, 2e-9)),
+                name="reference",
+            )
+            free.Ms = 800e3
+            free.Aex = 13e-12
+            free.alpha = 0.02
+            reference.Ms = 760e3
+            reference.Aex = 11e-12
+            reference.alpha = 0.04
+
+            free.mesh(cell_size=(2e-9, 2e-9, 2e-9))
+            reference.mesh(cell_size=(4e-9, 4e-9, 2e-9))
+            study.universe.mesh(cell_size=(2e-9, 2e-9, 2e-9))
+
+            free_core = free.add_region(
+                "core",
+                fm.Box(size=(20e-9, 10e-9, 2e-9)),
+                region_id="free:core",
+                priority=7,
+            )
+            reference_core = reference.add_region(
+                "core",
+                fm.Box(size=(20e-9, 10e-9, 2e-9)),
+                region_id="reference:core",
+                priority=9,
+            )
+            free.set_material_field(
+                "Ms",
+                fm.fields.linear(base=800e3, gradient=(1e12, 0.0, 0.0), unit="A/m"),
+                assignment_id="free_ms",
+            )
+            free.set_material_field(
+                "Aex",
+                fm.fields.constant(12e-12, unit="J/m"),
+                assignment_id="free_aex",
+                region=free_core,
+            )
+            free.set_material_field(
+                "alpha",
+                fm.fields.linear(base=0.02, gradient=(1e5, 0.0, 0.0), unit="1"),
+                assignment_id="free_alpha",
+                region=free_core,
+            )
+            reference.set_material_field(
+                "Ms",
+                fm.fields.linear(base=760e3, gradient=(-2e12, 0.0, 0.0), unit="A/m"),
+                assignment_id="reference_ms",
+            )
+            reference.set_material_field(
+                "Aex",
+                fm.fields.constant(10e-12, unit="J/m"),
+                assignment_id="reference_aex",
+                region=reference_core,
+            )
+            reference.set_material_field(
+                "alpha",
+                fm.fields.linear(base=0.04, gradient=(-1e5, 0.0, 0.0), unit="1"),
+                assignment_id="reference_alpha",
+                region=reference_core,
+            )
+
+            study.exchange()
+            study.demag()
+            study.stages.add_relax(
+                stage_id="relax",
+                algorithm="llg_overdamped",
+                max_steps=10,
+                dt=1e-13,
+            )
+            """
+        ).strip()
+        + "\n",
+        encoding="utf-8",
+    )
+
+    loaded = fm.load_problem_from_script(source, lightweight_assets=True)
+    original_ir = loaded.problem.to_ir(include_geometry_assets=False)
+    rendered = rewrite_loaded_problem_script(loaded)["rendered_source"]
+    assert isinstance(rendered, str)
+    exported = tmp_path / "multilayer_material_intent_exported.py"
+    exported.write_text(rendered, encoding="utf-8")
+    reloaded = fm.load_problem_from_script(exported, lightweight_assets=True)
+    reloaded_ir = reloaded.problem.to_ir(include_geometry_assets=False)
+
+    planner_keys = (
+        "backend_policy",
+        "materials",
+        "object_regions",
+        "material_parameter_fields",
+        "study",
+    )
+    assert {key: reloaded_ir[key] for key in planner_keys} == {
+        key: original_ir[key] for key in planner_keys
+    }
+    assert [
+        (magnet["name"], magnet["material"], magnet["region"])
+        for magnet in reloaded_ir["magnets"]
+    ] == [
+        (magnet["name"], magnet["material"], magnet["region"])
+        for magnet in original_ir["magnets"]
+    ]
+    assert set(
+        original_ir["backend_policy"]["discretization_hints"]["fdm"]["per_magnet"]
+    ) == {"free", "reference"}
+    assert {
+        (region["owner_object"], region["region_id"])
+        for region in original_ir["object_regions"]
+    } == {("free", "free:core"), ("reference", "reference:core")}
+
+    assignments = original_ir["material_parameter_fields"]
+    assert {
+        assignment["assignment_id"]: (
+            assignment["owner_object"],
+            assignment["parameter"],
+            assignment.get("region_id"),
+            assignment["value"]["kind"],
+            assignment["value"]["unit"],
+        )
+        for assignment in assignments
+    } == {
+        "free_ms": ("free", "ms", None, "linear", "A/m"),
+        "free_aex": ("free", "aex", "free:core", "constant", "J/m"),
+        "free_alpha": ("free", "alpha", "free:core", "linear", "1"),
+        "reference_ms": ("reference", "ms", None, "linear", "A/m"),
+        "reference_aex": (
+            "reference",
+            "aex",
+            "reference:core",
+            "constant",
+            "J/m",
+        ),
+        "reference_alpha": (
+            "reference",
+            "alpha",
+            "reference:core",
+            "linear",
+            "1",
+        ),
+    }
+    assert {assignment["value"]["kind"] for assignment in assignments} == {
+        "constant",
+        "linear",
+    }
+    assert all(
+        material[field] is None
+        for material in original_ir["materials"]
+        for field in ("ms_field", "a_field", "alpha_field")
+    )
+    assert 'free.set_material_field("Ms", fm.fields.linear' in rendered
+    assert 'reference.set_material_field("alpha", fm.fields.linear' in rendered
+    assert 'region_id="free:core"' in rendered
+    assert 'region_id="reference:core"' in rendered
 
 
 def test_translated_fdm_asset_preserves_cartesian_position_in_manual_airbox() -> None:
