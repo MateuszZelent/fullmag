@@ -99,9 +99,10 @@ import {
 import { ObjectVisualizationOverview } from "./ObjectVisualizationOverview";
 import { PlanarVisualizationSection } from "../visualization/PlanarVisualizationSection";
 import {
-  VisualizationContextSwitch,
+  VisualizationContextSwitchControl,
   useVisualizationViewContext,
 } from "../visualization/VisualizationContextSwitch";
+import { planarVectorStyleFromThreeDimensional } from "../visualization/presentationSemantics";
 
 interface ObjectVisualizationAppliedBaseline {
   overrides: VisualizationStateResource["overrides"];
@@ -754,6 +755,14 @@ export function VisualizationTargetInspectorPanel({
   const panel = useObjectVisualizationPanelState(selection);
   const { displaySettings, settings, target } = panel;
   const visualizationViewContext = useVisualizationViewContext();
+  const { visualizationSync } = useKernel();
+  const syncSharedQuiverIntent = useCallback(() => {
+    const vectorStyle = planarVectorStyleFromThreeDimensional({
+      vectorColorMode: settings?.vectorColorMode ?? "orientation",
+      vectorLengthScale: settings?.vectorLengthScale ?? 1,
+    });
+    if (vectorStyle) visualizationSync.queuePatch({ planar: { vector_style: vectorStyle } });
+  }, [settings?.vectorColorMode, settings?.vectorLengthScale, visualizationSync]);
 
   const ownerIdentity = (
     <InspectorGroup title={owner.title}>
@@ -779,7 +788,7 @@ export function VisualizationTargetInspectorPanel({
       <div className="fm-inspector-panel" data-inspector-owner={owner.id}>
         {ownerIdentity}
         <InspectorGroup title="View">
-          <VisualizationContextSwitch />
+          <VisualizationContextSwitchControl onPlanarActivate={syncSharedQuiverIntent} />
         </InspectorGroup>
         <PlanarVisualizationSection selection={selection} />
       </div>
@@ -790,7 +799,7 @@ export function VisualizationTargetInspectorPanel({
     <div className="fm-inspector-panel" data-inspector-owner={owner.id}>
       {ownerIdentity}
       <InspectorGroup title="View">
-        <VisualizationContextSwitch />
+        <VisualizationContextSwitchControl onPlanarActivate={syncSharedQuiverIntent} />
       </InspectorGroup>
       <ObjectVisualizationPanelView
         key={visualizationTargetKey(target)}

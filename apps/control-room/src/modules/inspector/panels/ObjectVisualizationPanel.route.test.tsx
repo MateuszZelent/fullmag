@@ -4,6 +4,8 @@ import { describe, expect, it, vi } from "vitest";
 
 const testState = vi.hoisted(() => ({
   discretization: "fdm",
+  planarActivate: null as (() => void) | null,
+  queuePatch: vi.fn(),
   resourceCalls: [] as Array<{ enabled: boolean; name: string }>,
 }));
 
@@ -14,7 +16,7 @@ function resourceCall(name: string, enabled: boolean): void {
 vi.mock("@/kernel/KernelContext", () => ({
   useKernel: () => ({
     visualizationSync: {
-      queuePatch: vi.fn(),
+      queuePatch: testState.queuePatch,
     },
   }),
 }));
@@ -174,6 +176,10 @@ vi.mock("../visualization/PlanarVisualizationSection", () => ({
 }));
 vi.mock("../visualization/VisualizationContextSwitch", () => ({
   VisualizationContextSwitch: () => null,
+  VisualizationContextSwitchControl: ({ onPlanarActivate }: { onPlanarActivate?: () => void }) => {
+    testState.planarActivate = onPlanarActivate ?? null;
+    return null;
+  },
   useVisualizationViewContext: () => "3d",
 }));
 vi.mock("./ObjectVisualizationTargetSection", () => {
@@ -406,6 +412,29 @@ describe("ObjectVisualizationPanel lane routing", () => {
         { name: "shared-domain-manifest", enabled: false },
       ]),
     );
+  });
+
+  it("maps shared 3D quiver intent through the 2D context activation without copying 3D geometry settings", () => {
+    testState.discretization = "fdm";
+    testState.queuePatch.mockClear();
+    testState.planarActivate = null;
+
+    renderToStaticMarkup(<ObjectVisualizationPanel selection={selection} />);
+    const activate = testState.planarActivate as (() => void) | null;
+    expect(activate).not.toBeNull();
+    activate?.();
+
+    expect(testState.queuePatch).toHaveBeenCalledWith({
+      planar: {
+        vector_style: {
+          color_mode: "orientation",
+          length_mode: "uniform",
+          scale: 1,
+        },
+      },
+    });
+    expect(JSON.stringify(testState.queuePatch.mock.calls)).not.toContain("vectorThickness");
+    expect(JSON.stringify(testState.queuePatch.mock.calls)).not.toContain("vectorSurfaceOffset");
   });
 
   it("uses FEM resources only after the status resolves to FEM", () => {

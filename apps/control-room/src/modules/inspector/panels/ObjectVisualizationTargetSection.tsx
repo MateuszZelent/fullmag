@@ -62,7 +62,6 @@ import {
   renderModeDisplayPatch,
   resolveVisualizationDisplayMode,
   type VisualizationDisplayMode,
-  VISUALIZATION_COLOR_MODE_ITEMS,
   type VisualizationVectorBudgetRange,
   type RegionVisualizationCarrier,
   visualizationQuantityItems,
@@ -70,6 +69,7 @@ import {
   colorPickerInputValue,
 } from "./ObjectVisualizationPanelModel";
 import { VisualizationVectorAccountingRows } from "./VisualizationVectorAccountingRows";
+import { SHARED_VECTOR_COLOR_MODE_ITEMS } from "../visualization/presentationSemantics";
 import {
   visualizationSectionDisabledDescription,
 } from "./ObjectVisualizationPanelAccessibility";
@@ -941,7 +941,12 @@ export function VisualizationVectorsSection({
           requiredPassEnabled: settings.vectorsVisible,
           targetVisible: settings.visible,
         })}
-        items={VISUALIZATION_COLOR_MODE_ITEMS}
+        items={[
+          ...SHARED_VECTOR_COLOR_MODE_ITEMS,
+          { label: "X component", value: "x" },
+          { label: "Y component", value: "y" },
+          { label: "Z component", value: "z" },
+        ]}
         label="Vector coloring"
         value={settings.vectorColorMode}
         onValueChange={(value) => void patch({ vectorColorMode: value })}
