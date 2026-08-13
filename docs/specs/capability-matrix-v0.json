@@ -139,6 +139,19 @@
       "notes": "Staged CPU and CUDA multilayer runners execute the requested fixed-step tableau. Adaptive stepping, staged RK45, and staged ABM3 reject explicitly; native single-grid-compatible CUDA stacks retain their separately qualified integrators."
     },
     {
+      "id": "fdm_multilayer_material_membership",
+      "label": "FDM multilayer material fields and object-region membership",
+      "lanes": {
+        "fdm_cpu_reference": "implemented",
+        "fdm_gpu_production": "unsupported",
+        "fem_cpu_public": "unsupported",
+        "fem_gpu_public": "unsupported"
+      },
+      "validated_workloads": [],
+      "notes": "Planner/ProblemIR materialize native-region masks and legends plus per-cell Ms/Aex/alpha. Task 10B wires the coefficient arrays into CPU exchange, RHS, demag source, energy and moment with source/unit-test evidence only; no managed runtime or scientific qualification is claimed. Artifacts, resource-first API and planar membership consumption remain deferred to Task 10C. Heterogeneous FDM CUDA is scalar-only and fails closed without CPU fallback. FEM uses a separate shared-domain coefficient contract.",
+      "validation_state": "unvalidated"
+    },
+    {
       "id": "relaxation_llg_overdamped",
       "label": "Relaxation(llg_overdamped)",
       "lanes": {

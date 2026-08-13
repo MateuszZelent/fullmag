@@ -1,15 +1,15 @@
 {
   "document": {"path": "docs/physics/0422-fdm-multilayer-material-membership.md"},
   "backend_matrix": [
-    {"solver": "FDM", "device": "CPU", "status": "implemented", "qualification": "not production-qualified", "scope": "per-layer material fields and membership contract"},
-    {"solver": "FDM", "device": "GPU", "status": "unsupported", "reason": "heterogeneous multilayer device parity is not qualified"},
+    {"solver": "FDM", "device": "CPU", "status": "implemented", "qualification": "not managed or scientifically qualified", "scope": "planner membership plus Task 10B exchange, RHS, demag source, energy and moment material-field wiring"},
+    {"solver": "FDM", "device": "GPU", "status": "unsupported", "reason": "heterogeneous multilayer material fields remain scalar-only and fail closed"},
     {"solver": "FEM", "device": "CPU", "status": "not-applicable", "reason": "FEM uses the shared-domain carrier and a separate coefficient realization"},
     {"solver": "FEM", "device": "GPU", "status": "not-applicable", "reason": "FEM uses the shared-domain carrier and a separate coefficient realization"}
   ],
   "equations": [
-    {"id": "eq-multilayer-material-magnetization", "symbols": ["M_k", "Ms_k", "m_k"], "sources": ["layerPlan", "materialResolution"]},
-    {"id": "eq-multilayer-material-exchange", "symbols": ["H_ex", "mu0", "Ms_k_i", "V_k_i", "A_k_ij", "S_k_ij", "d_k_ij"], "sources": ["materialResolution"]},
-    {"id": "eq-multilayer-material-demag-source", "symbols": ["H_d", "N_k_s", "Ms_s_j", "m_s_j", "V_s_j"], "sources": ["layerPlan"]},
+    {"id": "eq-multilayer-material-magnetization", "symbols": ["M_k", "Ms_k", "m_k"], "sources": ["layerPlan", "materialResolution", "cpuContext"]},
+    {"id": "eq-multilayer-material-exchange", "symbols": ["H_ex", "mu0", "Ms_k_i", "V_k_i", "A_k_ij", "S_k_ij", "d_k_ij"], "sources": ["materialResolution", "cpuContext"]},
+    {"id": "eq-multilayer-material-demag-source", "symbols": ["H_d", "N_k_s", "Ms_s_j", "m_s_j", "V_s_j"], "sources": ["layerPlan", "cpuDemag"]},
     {"id": "eq-multilayer-material-monitor-membership", "symbols": ["q_T_b", "w_k_i", "T"], "sources": ["membership"]}
   ],
   "symbols": [
@@ -36,12 +36,16 @@
   "sources": [
     {"id": "layerPlan", "path": "crates/fullmag-ir/src/mesh_hints.rs", "symbol": "fdm_multilayer_topology_tokens", "responsibility": "warstwa, identyfikator i fingerprint natywnej siatki"},
     {"id": "materialResolution", "path": "crates/fullmag-plan/src/material.rs", "symbol": "resolve_spatial_parameter", "responsibility": "plannerowe rozwiązywanie współczynników per-cell"},
-    {"id": "membership", "path": "crates/fullmag-plan/src/fdm.rs", "symbol": "materialize_object_region_mask", "responsibility": "plannerowa maska regionu w układzie obiektu"}
+    {"id": "membership", "path": "crates/fullmag-plan/src/fdm.rs", "symbol": "materialize_object_region_mask", "responsibility": "plannerowa maska regionu w układzie obiektu; runtime/API carrier pozostaje odroczony"},
+    {"id": "cpuContext", "path": "crates/fullmag-runner/src/fdm/cpu/multilayer_reference.rs", "symbol": "build_contexts_and_states", "responsibility": "Task 10B przekazuje per-layer Ms/Aex/alpha do referencyjnego problemu CPU"},
+    {"id": "cpuRhs", "path": "crates/fullmag-runner/src/fdm/cpu/multilayer_reference.rs", "symbol": "llg_rhs_multilayer", "responsibility": "Task 10B stosuje lokalne alpha w RHS"},
+    {"id": "cpuObservables", "path": "crates/fullmag-runner/src/fdm/cpu/multilayer_reference.rs", "symbol": "observe_multilayer", "responsibility": "Task 10B stosuje lokalne Ms w energii i wadze momentu"},
+    {"id": "cpuDemag", "path": "crates/fullmag-engine/src/multilayer.rs", "symbol": "compute_demag_fields_checked", "responsibility": "Task 10B stosuje natywne Ms przed maską i transferem FFT"}
   ],
   "public_api": {
     "parameters": [
-      {"python": "Ferromagnet.set_material_field(\"Ms\", field)", "type": "MaterialParameterField", "default": "none", "si_unit": "\\mathrm{A\\,m^{-1}}", "validation": "finite positive resolved Ms", "meaning": "przestrzenna wartość $M_s$", "backend_support": "FDM CPU reference; GPU unqualified", "problem_ir": "material_parameter_fields[]"},
-      {"python": "Ferromagnet.add_region(..., region_id=...)", "type": "ObjectRegion", "default": "none", "si_unit": "1", "validation": "supported shape and `frame=\"object\"`", "meaning": "selector obiektu/regionu", "backend_support": "FDM CPU reference; GPU unqualified", "problem_ir": "object_regions[]"}
+      {"python": "Ferromagnet.set_material_field(\"Ms\", field)", "type": "MaterialParameterField", "default": "none", "si_unit": "\\mathrm{A\\,m^{-1}}", "validation": "finite positive resolved Ms", "meaning": "przestrzenna wartość $M_s$", "backend_support": "FDM CPU reference: implemented, unqualified; GPU heterogeneous: unsupported", "problem_ir": "material_parameter_fields[]"},
+      {"python": "Ferromagnet.add_region(..., region_id=...)", "type": "ObjectRegion", "default": "none", "si_unit": "1", "validation": "supported shape and `frame=\"object\"`", "meaning": "selector obiektu/regionu", "backend_support": "planner/IR: implemented; runtime/API membership: deferred; GPU heterogeneous: unsupported", "problem_ir": "object_regions[]"}
     ]
   }
 }
