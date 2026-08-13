@@ -258,10 +258,27 @@ pub(crate) struct FdmSpinTransportWorkflow {
 pub(crate) fn fdm_transport_execution_provenance(
     plan: &FdmPlanIR,
 ) -> Vec<crate::types::TransportExecutionProvenance> {
+    fdm_transport_execution_provenance_for_lane(plan, false)
+}
+
+pub(crate) fn fdm_gpu_transport_execution_provenance(
+    plan: &FdmPlanIR,
+) -> Vec<crate::types::TransportExecutionProvenance> {
+    fdm_transport_execution_provenance_for_lane(plan, true)
+}
+
+fn fdm_transport_execution_provenance_for_lane(
+    plan: &FdmPlanIR,
+    gpu: bool,
+) -> Vec<crate::types::TransportExecutionProvenance> {
     plan.spin_transport_plans
         .iter()
         .filter_map(|resolved| {
-            let descriptor = resolved.fdm_cpu_double.as_ref()?;
+            let descriptor = if gpu {
+                resolved.fdm_gpu_double.as_ref()?
+            } else {
+                resolved.fdm_cpu_double.as_ref()?
+            };
             let native =
                 descriptor.realization == fullmag_ir::FdmCpuTransportRealizationIR::NativeM1V1;
             let transparent = descriptor.interfaces.iter().any(|interface| {
@@ -294,15 +311,19 @@ pub(crate) fn fdm_transport_execution_provenance(
                 )
                 .to_ascii_lowercase(),
                 resolved_discretization: "fdm".into(),
-                resolved_device: "cpu".into(),
+                resolved_device: if gpu { "gpu".into() } else { "cpu".into() },
                 resolved_precision: "double".into(),
                 resolved_execution_mode: "strict".into(),
-                runtime_family: if native {
+                runtime_family: if gpu {
+                    "fullmag_fdm_cuda_transport".into()
+                } else if native {
                     "fullmag_fdm_cpu_native_transport".into()
                 } else {
                     "fullmag_fdm_cpu_rust_transport".into()
                 },
-                runtime_id: if native {
+                runtime_id: if gpu {
+                    "fdm_cuda_transport_m1_v1".into()
+                } else if native {
                     "fdm_cpu_native_transport_m1_v1".into()
                 } else {
                     "fdm_cpu_rust_transport_reference_v1".into()
@@ -338,18 +359,20 @@ pub(crate) fn fdm_transport_execution_provenance(
                     (true, true) => "transparent+magnetoelectronic.fullmag.v2".into(),
                 },
                 stage_coupling: "one_way_stage_refresh".into(),
-                capability_status: if native {
+                capability_status: if gpu || native {
                     "semantic_only".into()
                 } else {
                     "reference_executable".into()
                 },
                 implementation_state: "executable".into(),
-                validation_state: if native {
+                validation_state: if gpu || native {
                     "unvalidated".into()
                 } else {
                     "algebra_validated".into()
                 },
-                validation_scope: if native {
+                validation_scope: if gpu {
+                    "fdm_gpu_double_native_m1_v1_runtime_contract_only".into()
+                } else if native {
                     "opt_in_fdm_cpu_double_native_m1_v1_contract_only".into()
                 } else {
                     "fdm_cpu_double_reference_transport".into()

@@ -689,7 +689,7 @@ verify-fdm-gpu-m1-transport-llg-native-contract:
 verify-fdm-gpu-m1-transport-llg-lifecycle-contract: verify-fdm-gpu-m1-transport-llg-native-contract
     docker compose -p fullmag --profile fem-gpu run --rm --no-deps \
       -v /mnt/fullmag-zfn2-native:/mnt/fullmag-zfn2-native \
-      fem-gpu bash -lc 'set -euo pipefail; cd /workspace; build_dir=/mnt/fullmag-zfn2-native/fdm-gpu-m1-transport-llg; FULLMAG_FDM_LIB_DIR="$build_dir/backends/fdm" LD_LIBRARY_PATH="$build_dir/backends/fdm${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" CARGO_HOME="$build_dir/cargo-home" CARGO_TARGET_DIR="$build_dir/cargo-target" CARGO_INCREMENTAL=0 cargo test -p fullmag-runner --features cuda checkpoint_ -- --nocapture'
+      fem-gpu bash -lc 'set -euo pipefail; cd /workspace; build_dir=/mnt/fullmag-zfn2-native/fdm-gpu-m1-transport-llg; export FULLMAG_FDM_LIB_DIR="$build_dir/backends/fdm" LD_LIBRARY_PATH="$build_dir/backends/fdm${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" CARGO_HOME="$build_dir/cargo-home" CARGO_TARGET_DIR="$build_dir/cargo-target" CARGO_INCREMENTAL=0; cargo test -p fullmag-runner --features cuda checkpoint_ -- --nocapture; cargo test -p fullmag-runner --features cuda accepted_charge_snapshot_materializes_the_exact_public_llg_binding -- --nocapture; cargo test -p fullmag-runner --features cuda public_gpu_m1_dispatch_ -- --nocapture; cargo test -p fullmag-runner --features cuda fdm::gpu::cuda::route::tests -- --nocapture'
 
 verify-fdm-gpu-m1-transport-llg-compute-sanitizer: verify-fdm-gpu-m1-transport-llg-lifecycle-contract
     docker compose -p fullmag --profile fem-gpu run --rm --no-deps \

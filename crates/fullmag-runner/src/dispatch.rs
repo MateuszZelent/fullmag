@@ -28,6 +28,10 @@ use crate::fdm::cpu::reference as cpu_reference;
 use crate::fdm::gpu::cuda::multilayer as multilayer_cuda;
 #[cfg(feature = "cuda")]
 use crate::fdm::gpu::cuda::native::NativeFdmBackend;
+#[cfg(feature = "cuda")]
+use crate::fdm::gpu::cuda::spin_transport::{
+    GpuM1TransportSession, NativeGpuM1TransportAbi, PreparedGpuM1Descriptor,
+};
 #[cfg(feature = "fem-gpu")]
 use crate::fem::relax::scalars::ensure_fem_object_scalars;
 use crate::fem_baseline;
@@ -2070,16 +2074,6 @@ pub(crate) fn execute_fdm<'a>(
         let _ = (until_seconds, outputs, live, artifact_writer);
         return Err(RunError {
             message: "public FDM GPU M1 spin plan resolved to a non-CUDA engine; hidden fallback is forbidden"
-                .to_string(),
-        });
-    }
-    if matches!(
-        transport_route,
-        PublicGpuTransportRoute::SpinRequiresDeviceBinding
-    ) {
-        let _ = (until_seconds, outputs, live, artifact_writer);
-        return Err(RunError {
-            message: "public FDM GPU M1 spin execution requires the native device-view binding owned by Task 5; execution stopped before charge solve and no partial result was published"
                 .to_string(),
         });
     }
@@ -5018,7 +5012,37 @@ fn execute_cuda_fdm(
         crate::schedules::OUTPUT_TIME_TOLERANCE,
     );
 
+    let device_ordinal = std::env::var("FULLMAG_FDM_GPU_INDEX")
+        .unwrap_or_else(|_| "0".to_string())
+        .parse::<i32>()
+        .ok()
+        .filter(|ordinal| *ordinal >= 0)
+        .ok_or_else(|| RunError {
+            message: "FULLMAG_FDM_GPU_INDEX must be a non-negative i32".to_string(),
+        })?;
+    let mut gpu_transport = if plan.spin_transport_plans.is_empty() {
+        None
+    } else {
+        let prepared =
+            PreparedGpuM1Descriptor::from_plan(plan, device_ordinal).map_err(|error| RunError {
+                message: format!("materializing public GPU M1 transport failed: {error}"),
+            })?;
+        let mut session = GpuM1TransportSession::create(NativeGpuM1TransportAbi, prepared)
+            .map_err(|error| RunError {
+                message: format!("creating public GPU M1 transport session failed: {error}"),
+            })?;
+        session.solve_charge(1, 0).map_err(|error| RunError {
+            message: format!("solving public GPU M1 charge snapshot failed: {error}"),
+        })?;
+        Some(session)
+    };
     let mut backend = NativeFdmBackend::create(plan)?;
+    if let Some(session) = gpu_transport.as_ref() {
+        let binding = session.llg_binding().map_err(|error| RunError {
+            message: format!("materializing public GPU M1 LLG binding failed: {error}"),
+        })?;
+        backend.bind_gpu_transport(&binding)?;
+    }
     let device_info = backend.device_info()?;
     let cell_count = (plan.grid.cells[0] as usize)
         * (plan.grid.cells[1] as usize)
@@ -5055,6 +5079,9 @@ fn execute_cuda_fdm(
         compute_capability: Some(device_info.compute_capability.clone()),
         cuda_driver_version: Some(device_info.driver_version),
         cuda_runtime_version: Some(device_info.runtime_version),
+        transport_modules: crate::fdm::cpu::spin_transport::fdm_gpu_transport_execution_provenance(
+            plan,
+        ),
         timestep_policy,
         executed_physics_kinds: if direct_minimizer_control(plan.relaxation.as_ref()).is_none()
             && (plan.zhang_li_formula_version.is_some()
@@ -5321,6 +5348,12 @@ fn execute_cuda_fdm(
     let completion_time_s = latest_stats.as_ref().map(|stats| stats.time);
     let completion_max_torque_apm = latest_stats.as_ref().map(|stats| stats.max_torque_Apm);
     let final_magnetization = backend.copy_m(cell_count)?;
+    if let Some(session) = gpu_transport.as_mut() {
+        backend.unbind_gpu_transport()?;
+        session.close().map_err(|error| RunError {
+            message: format!("closing public GPU M1 transport session failed: {error}"),
+        })?;
+    }
     record_cuda_final_outputs(
         &backend,
         cell_count,
@@ -6404,13 +6437,32 @@ mod tests {
     }
 
     #[test]
-    fn public_gpu_m1_dispatch_fails_before_partial_charge_until_device_binding_exists() {
+    fn public_gpu_m1_dispatch_executes_one_coupled_transport_llg_step() {
         let plan = public_gpu_m1_dispatch_plan();
-        let error = execute_fdm(FdmEngine::CudaFdm, &plan, 0.0, &[], None, None)
-            .expect_err("Task 4 must not publish charge-only output for a spin plan");
-        assert!(error.message.contains("device-view binding"));
-        assert!(error.message.contains("before charge solve"));
-        assert!(error.message.contains("no partial result"));
+        let expected_module_id = plan.spin_transport_plans[0].module_id.clone();
+        let expected_current_source_id = plan.spin_transport_plans[0].current_source_id.clone();
+        let executed = execute_fdm(FdmEngine::CudaFdm, &plan, 1.0e-13, &[], None, None)
+            .expect("public GPU M1 plan must execute solved charge/spin torque in LLG");
+        assert_eq!(executed.result.steps.len(), 1);
+        assert_eq!(executed.result.steps[0].step, 1);
+        assert_eq!(executed.provenance.execution_engine, "cuda_fdm");
+        assert_eq!(executed.provenance.transport_modules.len(), 1);
+        let transport = &executed.provenance.transport_modules[0];
+        assert_eq!(transport.module_id, expected_module_id);
+        assert_eq!(transport.current_source_id, expected_current_source_id);
+        assert_eq!(transport.requested_discretization, "fdm");
+        assert_eq!(transport.requested_device, "gpu");
+        assert_eq!(transport.requested_precision, "double");
+        assert_eq!(transport.requested_execution_mode, "strict");
+        assert_eq!(transport.resolved_discretization, "fdm");
+        assert_eq!(transport.resolved_device, "gpu");
+        assert_eq!(transport.resolved_precision, "double");
+        assert_eq!(transport.resolved_execution_mode, "strict");
+        assert_eq!(transport.runtime_family, "fullmag_fdm_cuda_transport");
+        assert_eq!(transport.runtime_id, "fdm_cuda_transport_m1_v1");
+        assert_eq!(transport.engine_id, "native_m1_v1");
+        assert_eq!(transport.stage_coupling, "one_way_stage_refresh");
+        assert_eq!(transport.implementation_state, "executable");
     }
 
     #[test]

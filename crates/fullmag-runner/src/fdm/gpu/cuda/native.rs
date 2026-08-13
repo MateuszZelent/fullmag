@@ -378,6 +378,7 @@ pub(crate) struct NativeFdmBackend {
     precision: fullmag_ir::ExecutionPrecision,
     damping: f64,
     precession_enabled: bool,
+    gpu_transport_bound: bool,
 }
 
 #[cfg(feature = "cuda")]
@@ -743,6 +744,7 @@ impl NativeFdmBackend {
             precision: plan.precision,
             damping: first_material.map_or(0.0, |material| material.damping),
             precession_enabled: !llg_overdamped_uses_pure_damping(plan.relaxation.as_ref()),
+            gpu_transport_bound: false,
         })
     }
 
@@ -1275,7 +1277,48 @@ impl NativeFdmBackend {
             precision: plan.precision,
             damping: plan.material.damping,
             precession_enabled: !llg_overdamped_uses_pure_damping(plan.relaxation.as_ref()),
+            gpu_transport_bound: false,
         })
+    }
+
+    pub(crate) fn bind_gpu_transport(
+        &mut self,
+        binding: &fullmag_fdm_sys::gpu_transport_abi_v1::fullmag_fdm_gpu_transport_llg_binding_v1,
+    ) -> Result<(), RunError> {
+        if self.gpu_transport_bound {
+            return Err(RunError {
+                message: "GPU transport is already bound to this FDM context".to_string(),
+            });
+        }
+        let status = unsafe {
+            fullmag_fdm_sys::gpu_transport_abi_v1::fullmag_fdm_context_bind_gpu_transport_v1(
+                self.handle,
+                binding,
+            )
+        };
+        if status != ffi::FULLMAG_FDM_OK {
+            return Err(self.last_error_or("binding GPU transport to the FDM LLG context failed"));
+        }
+        self.gpu_transport_bound = true;
+        Ok(())
+    }
+
+    pub(crate) fn unbind_gpu_transport(&mut self) -> Result<(), RunError> {
+        if !self.gpu_transport_bound {
+            return Ok(());
+        }
+        let status = unsafe {
+            fullmag_fdm_sys::gpu_transport_abi_v1::fullmag_fdm_context_unbind_gpu_transport_v1(
+                self.handle,
+            )
+        };
+        if status != ffi::FULLMAG_FDM_OK {
+            return Err(
+                self.last_error_or("unbinding GPU transport from the FDM LLG context failed")
+            );
+        }
+        self.gpu_transport_bound = false;
+        Ok(())
     }
 
     pub fn set_interrupt_signal(&mut self, signal: Option<&AtomicBool>) -> Result<(), RunError> {
@@ -2223,6 +2266,14 @@ impl NativeFdmBackend {
 impl Drop for NativeFdmBackend {
     fn drop(&mut self) {
         if !self.handle.is_null() {
+            if self.gpu_transport_bound {
+                let _ = unsafe {
+                    fullmag_fdm_sys::gpu_transport_abi_v1::fullmag_fdm_context_unbind_gpu_transport_v1(
+                        self.handle,
+                    )
+                };
+                self.gpu_transport_bound = false;
+            }
             unsafe { ffi::fullmag_fdm_backend_destroy(self.handle) };
             self.handle = std::ptr::null_mut();
         }

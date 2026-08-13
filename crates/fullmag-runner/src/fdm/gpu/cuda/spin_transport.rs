@@ -1253,6 +1253,7 @@ pub(crate) struct GpuM1TransportSession<A: GpuM1TransportAbi> {
     spin_solver_policy: u32,
     spin_relative_tolerance: f64,
     spin_max_iterations: u64,
+    llg_binding_features: u64,
     cell_count: u64,
     accepted_snapshot: Option<AcceptedChargeSnapshot>,
     accepted_spin_sequence: Option<u64>,
@@ -1342,6 +1343,7 @@ impl<A: GpuM1TransportAbi> GpuM1TransportSession<A> {
             spin_solver_policy,
             spin_relative_tolerance,
             spin_max_iterations,
+            llg_binding_features: static_features,
             cell_count,
             accepted_snapshot: None,
             accepted_spin_sequence: None,
@@ -1355,6 +1357,28 @@ impl<A: GpuM1TransportAbi> GpuM1TransportSession<A> {
 
     pub(crate) fn device_identity(&self) -> DeviceIdentity {
         self.device_identity
+    }
+
+    pub(crate) fn llg_binding(
+        &self,
+    ) -> Result<ffi::fullmag_fdm_gpu_transport_llg_binding_v1, GpuM1TransportError> {
+        let snapshot = self
+            .accepted_snapshot
+            .as_ref()
+            .ok_or(GpuM1TransportError::ChargeSnapshotRequired)?;
+        Ok(ffi::fullmag_fdm_gpu_transport_llg_binding_v1 {
+            prefix: prefix_with_features::<ffi::fullmag_fdm_gpu_transport_llg_binding_v1>(
+                self.llg_binding_features,
+            ),
+            transport_context: self.context_handle(),
+            charge_snapshot: snapshot.handle,
+            accepted_sequence: snapshot.accepted_sequence,
+            source_revision: self.source_revision,
+            operator_revision: self.spin_operator_revision,
+            relative_tolerance: self.spin_relative_tolerance,
+            max_iterations: self.spin_max_iterations,
+            reserved1: 0,
+        })
     }
 
     pub(crate) fn solve_charge(
@@ -1473,10 +1497,6 @@ impl<A: GpuM1TransportAbi> GpuM1TransportSession<A> {
             self.cell_count,
         )?;
         validate_disjoint_device_vector_views(&views.magnetization, &views.torque)?;
-        // This session helper remains unreachable from public dispatch until Task 5
-        // binds per-stage interface magnetization on device.  The current native
-        // mixing kernel still consumes the static interface record, so this Rust
-        // scaffold alone is not public execution evidence.
         views.magnetization.prefix = prefix::<fullmag_fdm_gpu_transport_buffer_view_v1>();
         views.torque.prefix = prefix::<fullmag_fdm_gpu_transport_buffer_view_v1>();
         let request = fullmag_fdm_gpu_steady_spin_solve_request_v1 {

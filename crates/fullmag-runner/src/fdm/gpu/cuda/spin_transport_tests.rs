@@ -605,6 +605,30 @@ fn from_plan_accepts_planner_embedded_charge_spin_descriptor() {
 }
 
 #[test]
+fn accepted_charge_snapshot_materializes_the_exact_public_llg_binding() {
+    let abi = FakeAbi::default();
+    let mut session = GpuM1TransportSession::create(abi, raw_descriptor(2)).unwrap();
+    let charge = session.solve_charge(7, 11).unwrap();
+
+    let binding = session.llg_binding().unwrap();
+
+    assert_eq!(binding.transport_context.slot, 7);
+    assert_eq!(binding.transport_context.generation, 1);
+    assert_eq!(binding.charge_snapshot.slot, charge.handle.slot);
+    assert_eq!(binding.charge_snapshot.generation, charge.handle.generation);
+    assert_eq!(binding.accepted_sequence, charge.accepted_sequence);
+    assert_eq!(binding.source_revision, charge.source_revision);
+    assert_eq!(binding.operator_revision, 404);
+    assert_eq!(binding.relative_tolerance, 1.0e-8);
+    assert_eq!(binding.max_iterations, 2_000);
+    assert_eq!(
+        binding.prefix.required_features,
+        ffi::FULLMAG_FDM_GPU_TRANSPORT_FEATURE_M1_CHARGE
+            | ffi::FULLMAG_FDM_GPU_TRANSPORT_FEATURE_STEADY_SPIN
+    );
+}
+
+#[test]
 fn from_plan_rejects_partial_transport_active_masks_before_abi() {
     let mut plan = planned_public_gpu_m1();
     let descriptor = plan.spin_transport_plans[0]

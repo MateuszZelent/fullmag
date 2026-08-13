@@ -4,7 +4,7 @@ pub(crate) enum PublicGpuTransportRoute {
     ChargeOnly,
     InvalidGpuSpinPlan,
     SpinOnNonCudaForbidden,
-    SpinRequiresDeviceBinding,
+    SpinCoupled,
 }
 
 fn route_from_shape(
@@ -20,7 +20,7 @@ fn route_from_shape(
         } else if !cuda_engine {
             PublicGpuTransportRoute::SpinOnNonCudaForbidden
         } else {
-            PublicGpuTransportRoute::SpinRequiresDeviceBinding
+            PublicGpuTransportRoute::SpinCoupled
         }
     } else if charge_only {
         PublicGpuTransportRoute::ChargeOnly
@@ -64,7 +64,7 @@ mod tests {
     fn spin_route_fails_closed_before_any_charge_only_return() {
         assert_eq!(
             route_from_shape(true, 1, 1, 1, true),
-            PublicGpuTransportRoute::SpinRequiresDeviceBinding
+            PublicGpuTransportRoute::SpinCoupled
         );
     }
 
