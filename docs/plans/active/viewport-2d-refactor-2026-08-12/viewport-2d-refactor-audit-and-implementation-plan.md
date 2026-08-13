@@ -1054,10 +1054,11 @@ Poniższy wpis aktualizuje stan wykonania planu; nie podnosi statusu żadnej lan
 | Source snapshot `.worktrees` | zintegrowane i przetestowane | commit `1497ffa20`, 25/25 testów capture/policy; materializacja i verify przechodzą, a managed preflight dociera do kolejnego etapu storage |
 | Managed native storage | blocker środowiskowy | `/mnt/fullmag-zfn2-native` jest zamontowane jako `ro`; po naprawie source identity `just ensure-managed-fem-runtime` zatrzymuje się na braku zapisu; nie wolno obchodzić receptur `just` hostowym buildem ani samodzielnym remountem |
 | Warstwy 2D `points` i `bounds` | zaimplementowane i zintegrowane | commit `b36fe10d7` w fast-forward `master` `7dd98795f`; canonical state/OpenAPI/migracja v7→v8/capability/render model/Inspector/evidence, focused Vitest 64/64 i typecheck PASS |
-| FDM wireframe/mesh | implementacja w toku | FDM nie może udawać FMCS v4; osobny proceduralny codec/grid z provenance i legalnością warstwy jest następną bramką |
+| FDM wireframe/mesh | zaimplementowane i zintegrowane kontraktowo | commit `dd8c4e697` (fast-forward z worktree `codex/fdm-planar-grid-overlay`); proceduralny `FMFG v1` dla strukturalnej siatki FDM, lazy endpoint, `geometry_source`, capability gating i overlay-only evidence; Rust 5/5, route FDM 1/1, FEM `FMCS v4` regression 1/1, OpenAPI 1/1, Vitest 19/19, typecheck i ESLint PASS; managed/browser qualification nadal nieprzeprowadzone |
 | Task 11 cutover | niewykonany | `fieldMapStore` jest orphanem, ale usunięcie wejść wymaga przejścia Task 10; compatibility `extract_*_field` i FEM slab nie są jeszcze orphanami |
 
-Status całego celu pozostaje częściowy. Integracja kontraktów i harnessu jest już na
-`masterze`, ale do zamknięcia nadal wymagane są: FDM wireframe, naprawa storage,
-trzy managed smoke FDM/FEM, browser/WebGL evidence, dowody naukowe każdej lane oraz
-dopiero potem cutover starych ścieżek.
+Status całego celu pozostaje częściowy. Integracja kontraktów, harnessu i FDM
+wireframe/grid jest już na `masterze` (`HEAD=dd8c4e697`, `origin/master=bab0254d7`),
+ale do zamknięcia nadal wymagane są: naprawa storage, trzy managed
+smoke FDM/FEM, browser/WebGL evidence, dowody naukowe każdej lane oraz dopiero
+potem cutover starych ścieżek.
