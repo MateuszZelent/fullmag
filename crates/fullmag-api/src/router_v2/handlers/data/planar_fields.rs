@@ -1,23 +1,23 @@
 use std::sync::Arc;
 
 use axum::{
+    Json,
     body::Body,
     extract::{Path, Query, State},
-    http::{header, HeaderMap, HeaderValue, Response, StatusCode},
+    http::{HeaderMap, HeaderValue, Response, StatusCode, header},
     response::IntoResponse,
-    Json,
 };
 use fullmag_ir::{PlanarMonitorIR, PlanarOperatorIR};
 use sha2::{Digest, Sha256};
 
 use crate::{
     error::ApiError,
-    field_render_png::{encode_scalar_png, AutoScaleMode},
+    field_render_png::{AutoScaleMode, encode_scalar_png},
     field_store::serialize_field_vector_binary_v2,
     planar_sampling::{
-        resolve_spatial_target, sample_resolved_target, Occupancy, PlanarComponent,
-        PlanarSampleIdentity, PlanarSampleResult, ResolvedPlanarSampleRequest,
-        ResolvedSpatialScope, ResolvedSpatialTarget, MAX_PLANAR_SAMPLE_POINTS,
+        MAX_PLANAR_SAMPLE_POINTS, Occupancy, PlanarComponent, PlanarSampleIdentity,
+        PlanarSampleResult, ResolvedPlanarSampleRequest, ResolvedSpatialScope,
+        ResolvedSpatialTarget, resolve_spatial_target, sample_resolved_target,
     },
     preview::quantity_unit,
     router_v2::handlers::{
@@ -26,8 +26,8 @@ use crate::{
             resolved_fdm_multilayer_airbox_field, validate_hysteresis_snapshot_stage_scope,
         },
         data::resolved_spatial_field::{
-            resolve_current_spatial_field, resolve_spatial_field_from_values,
-            SpatialFieldProvenance, SpatialFieldSourceKind,
+            SpatialFieldProvenance, SpatialFieldSourceKind, resolve_current_spatial_field,
+            resolve_fdm_multilayer_native_layer_field, resolve_spatial_field_from_values,
         },
         sessions::status::{domain_generation_id, field_quantity_revision},
     },
@@ -459,6 +459,14 @@ async fn build_planar_field(
                 precision: snapshot.session.resolved_precision.clone(),
             },
         )?
+    } else if query.scope_kind.as_deref() == Some("layer") {
+        let layer_id = query.scope_id.as_deref().expect("validated layer scope");
+        resolve_fdm_multilayer_native_layer_field(snapshot, quantity_id, n_comp, layer_id)?
+            .ok_or_else(|| {
+                ApiError::unprocessable(
+                    "target_unsupported: layer scope requires an FDM multilayer native carrier",
+                )
+            })?
     } else if query.scope_kind.as_deref() == Some("airbox") {
         match load_fdm_multilayer_airbox_carrier(snapshot).map_err(|reason| {
             ApiError::not_found(format!(
@@ -502,6 +510,9 @@ async fn build_planar_field(
         },
         "airbox" => ResolvedSpatialScope::Airbox {
             scope_id: query.scope_id.clone(),
+        },
+        "layer" => ResolvedSpatialScope::FdmNativeLayer {
+            layer_id: query.scope_id.clone().expect("validated layer scope"),
         },
         _ => unreachable!("scope validated before target resolution"),
     };
@@ -726,6 +737,27 @@ fn validate_scope(
                 ));
             }
         }
+        "layer" => {
+            let scope_id = query
+                .scope_id
+                .as_deref()
+                .filter(|id| !id.is_empty())
+                .ok_or_else(|| {
+                    ApiError::bad_request("invalid_planar_scope: layer requires scope_id")
+                })?;
+            let multilayer = snapshot.metadata.as_ref().is_some_and(|metadata| {
+                metadata
+                    .get("artifact_layout")
+                    .and_then(|layout| layout.get("backend"))
+                    .and_then(serde_json::Value::as_str)
+                    == Some("fdm_multilayer")
+            });
+            if !multilayer {
+                return Err(ApiError::unprocessable(format!(
+                    "target_unsupported: layer scope '{scope_id}' requires FDM multilayer"
+                )));
+            }
+        }
         other => {
             return Err(ApiError::bad_request(format!(
                 "invalid_planar_scope: unsupported scope_kind '{other}'"
@@ -885,7 +917,7 @@ fn meta_resource(built: &BuiltPlanarField) -> PlanarFieldMetaResource {
 
 fn fdm_grid_overlay_available(built: &BuiltPlanarField) -> bool {
     built.source_entity_kind == "cell"
-        && built.scope_kind == "monitor_target"
+        && matches!(built.scope_kind.as_str(), "monitor_target" | "layer")
         && !matches!(
             built.monitor.operator,
             PlanarOperatorIR::SurfaceProjection { .. }

@@ -112,6 +112,22 @@ pub struct FdmLayerLayoutResource {
     pub mask_ref: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub mask_provenance: Option<String>,
+    #[serde(default)]
+    pub region_membership_available: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub region_membership_revision: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub region_mask_hash: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub region_legend_hash: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub region_membership_generation_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub region_membership_ref: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub available_material_quantities: Vec<String>,
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub material_field_revisions: HashMap<String, u64>,
 }
 
 #[derive(Debug, Serialize, Deserialize, ToSchema)]

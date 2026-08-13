@@ -25591,6 +25591,293 @@ async fn fdm_multilayer_field_vector_region_scope_fails_closed_without_single_gr
 }
 
 #[tokio::test]
+async fn fdm_multilayer_planar_layer_scope_uses_native_grid_and_local_region_membership() {
+    let (app, state, artifact_dir) = test_router_with_session_state_and_artifact_dir().await;
+    let material_dir = artifact_dir.join("material-fields/fdm-multilayer");
+    fs::create_dir_all(material_dir.join("layer-bottom"))
+        .expect("failed to create multilayer material artifact directory");
+    let grid_fingerprint = format!(
+        "sha256:{}",
+        fullmag_ir::FdmGridCertificateIR::new_with_topology_tokens(
+            [0.0, 0.0, 2.0],
+            [2, 1, 1],
+            [1.0, 1.0, 1.0],
+            2,
+            1,
+            Some(&[true, true]),
+            &[1, 2],
+        )
+        .expect("native grid should form a certificate")
+        .grid_fingerprint
+    );
+    let values = [7.0_f64, 9.0];
+    let value_sha256 = format!(
+        "sha256:{:x}",
+        Sha256::digest(
+            values
+                .iter()
+                .flat_map(|value| value.to_le_bytes())
+                .collect::<Vec<_>>()
+        )
+    );
+    let region_mask = [1_u32, 2_u32];
+    let region_mask_sha256 = format!(
+        "sha256:{:x}",
+        Sha256::digest(
+            region_mask
+                .iter()
+                .flat_map(|value| value.to_le_bytes())
+                .collect::<Vec<_>>()
+        )
+    );
+    let region_legend = serde_json::json!([{
+        "numeric_id": 1,
+        "object_id": "object:bottom",
+        "region_id": "shared",
+        "priority": 0
+    }, {
+        "numeric_id": 2,
+        "object_id": "object:bottom",
+        "region_id": "rim",
+        "priority": 0
+    }]);
+    let legend_sha256 = format!(
+        "sha256:{:x}",
+        Sha256::digest(serde_json::to_vec(&region_legend).unwrap())
+    );
+    let material_path = "material-fields/fdm-multilayer/layer-bottom/mat_ms.json";
+    let membership_path =
+        "material-fields/fdm-multilayer/layer-bottom/native-region-membership.json";
+    fs::write(
+        artifact_dir.join(material_path),
+        serde_json::to_vec(&serde_json::json!({
+            "schema_version": "fdm_multilayer_material_field.v1",
+            "layer_id": "layer:bottom",
+            "object_id": "object:bottom",
+            "magnet_name": "bottom",
+            "native_grid": [2, 1, 1],
+            "native_origin": [0.0, 0.0, 2.0],
+            "native_cell_size": [1.0, 1.0, 1.0],
+            "native_grid_fingerprint": grid_fingerprint,
+            "field_id": "mat_ms",
+            "unit": "A/m",
+            "value_count": 2,
+            "revision": 17,
+            "generation_id": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+            "value_sha256": value_sha256,
+            "values": values
+        }))
+        .unwrap(),
+    )
+    .expect("failed to write multilayer material field artifact");
+    fs::write(
+        artifact_dir.join(membership_path),
+        serde_json::to_vec(&serde_json::json!({
+            "schema_version": "fdm_multilayer_region_membership.v1",
+            "layer_id": "layer:bottom",
+            "object_id": "object:bottom",
+            "magnet_name": "bottom",
+            "native_grid": [2, 1, 1],
+            "native_origin": [0.0, 0.0, 2.0],
+            "native_cell_size": [1.0, 1.0, 1.0],
+            "native_grid_fingerprint": grid_fingerprint,
+            "value_count": 2,
+            "revision": 23,
+            "generation_id": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+            "value_sha256": region_mask_sha256,
+            "legend_sha256": legend_sha256,
+            "native_region_mask": region_mask,
+            "native_region_legend": region_legend
+        }))
+        .unwrap(),
+    )
+    .expect("failed to write multilayer membership artifact");
+    let mut scene = sample_scene_document();
+    scene.monitors.planar.push(
+        serde_json::from_value(serde_json::json!({
+            "id": "bottom-shared-region",
+            "name": "Bottom shared region",
+            "target": {
+                "kind": "region",
+                "object_id": "object:bottom",
+                "region_id": "shared"
+            },
+            "frame": {
+                "origin_m": [0.0, 0.0, 2.5],
+                "u_axis": [1.0, 0.0, 0.0],
+                "v_axis": [0.0, 1.0, 0.0],
+                "normal": [0.0, 0.0, 1.0],
+                "preset": "xy",
+                "normalization_version": "planar_frame_v1",
+                "extent": {
+                    "kind": "explicit",
+                    "u_min_m": 0.0,
+                    "u_max_m": 2.0,
+                    "v_min_m": 0.0,
+                    "v_max_m": 1.0
+                }
+            },
+            "operator": {"kind": "plane_sample"}
+        }))
+        .expect("multilayer planar monitor should deserialize"),
+    );
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.scene_document = Some(scene);
+        snapshot.session.script_path.clear();
+        snapshot.metadata = Some(serde_json::json!({
+            "execution_plan": {"backend_plan": {"kind": "fdm_multilayer", "layers": [{
+                "layer_id": "layer:top",
+                "object_id": "object:top",
+                "magnet_name": "top",
+            }, {
+                "layer_id": "layer:bottom",
+                "object_id": "object:bottom",
+                "magnet_name": "bottom"
+            }]}},
+            "artifact_layout": {"backend": "fdm_multilayer", "layers": [{
+                "layer_id": "layer:top",
+                "object_id": "object:top",
+                "magnet_name": "top",
+                "native_grid": [2, 1, 1],
+                "native_origin": [0.0, 0.0, 0.0],
+                "native_cell_size": [1.0, 1.0, 1.0],
+                "value_offset": 0,
+                "value_count": 2
+            }, {
+                "layer_id": "layer:bottom",
+                "object_id": "object:bottom",
+                "magnet_name": "bottom",
+                "native_grid": [2, 1, 1],
+                "native_origin": [0.0, 0.0, 2.0],
+                "native_cell_size": [1.0, 1.0, 1.0],
+                "native_grid_fingerprint": grid_fingerprint,
+                "value_offset": 2,
+                "value_count": 2,
+                "native_region_mask": {
+                    "available": true,
+                    "value_count": 2,
+                    "value_sha256": region_mask_sha256,
+                    "generation_id": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+                    "revision": 23,
+                    "artifact_path": membership_path
+                },
+                "native_region_legend": {
+                    "available": true,
+                    "entry_count": 2,
+                    "legend_sha256": legend_sha256,
+                    "generation_id": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+                    "revision": 23,
+                    "artifact_path": membership_path,
+                    "entries": region_legend
+                },
+                "material_fields": {
+                    "mat_ms": {
+                        "available": true,
+                        "unit": "A/m",
+                        "value_count": 2,
+                        "revision": 17,
+                        "generation_id": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+                        "value_sha256": value_sha256,
+                        "artifact_path": material_path
+                    }
+                }
+            }]}
+        }));
+        snapshot.live_state = None;
+        snapshot.latest_fields = LatestFields::default();
+    }
+    let base = "/v2/sessions/current/data/fields/mat_ms/planar-monitors/bottom-shared-region/meta?component=scalar&resolution_x=16&resolution_y=16";
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!("{base}&scope_kind=layer&scope_id=layer%3Abottom"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = response.status();
+    let body = body_json(response).await;
+    assert_eq!(status, StatusCode::OK, "{body:#}");
+    assert_eq!(body["scope_kind"], "layer");
+    assert_eq!(body["scope_id"], "layer:bottom");
+    assert_eq!(body["scalar_min"], 7.0);
+    assert_eq!(body["scalar_max"], 7.0);
+
+    let membership = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/domain/fdm-multilayer-layers/layer%3Abottom/region-membership")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(membership.status(), StatusCode::OK);
+    assert_eq!(
+        membership.headers()["x-fullmag-region-membership-revision"],
+        "23"
+    );
+    let membership = body_bytes(membership).await;
+    assert_eq!(&membership[..4], b"FMRM");
+    assert_eq!(membership[4], 2);
+    assert_eq!(membership[5], 2);
+    let expected_grid_bytes = (0..64)
+        .step_by(2)
+        .map(|index| {
+            u8::from_str_radix(
+                &grid_fingerprint["sha256:".len() + index.."sha256:".len() + index + 2],
+                16,
+            )
+            .unwrap()
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(&membership[28..60], expected_grid_bytes.as_slice());
+    assert_eq!(
+        membership[64..]
+            .chunks_exact(4)
+            .map(|bytes| u32::from_le_bytes(bytes.try_into().unwrap()))
+            .collect::<Vec<_>>(),
+        vec![1, 2]
+    );
+
+    let missing = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!("{base}&scope_kind=layer&scope_id=layer%3Amissing"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(missing.status(), StatusCode::NOT_FOUND);
+
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.metadata.as_mut().unwrap()["artifact_layout"]["layers"][1]["material_fields"] =
+            serde_json::json!({});
+    }
+    let not_materialized = app
+        .oneshot(
+            Request::builder()
+                .uri(format!("{base}&scope_kind=layer&scope_id=layer%3Abottom"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(not_materialized.status(), StatusCode::NOT_FOUND);
+    assert_eq!(
+        body_json(not_materialized).await["code"],
+        "quantity_not_materialized"
+    );
+    let _ = fs::remove_dir_all(artifact_dir);
+}
+
+#[tokio::test]
 async fn fdm_region_membership_descriptor_exposes_exact_magnetic_support_summary() {
     let (app, state, artifact_dir) = test_router_with_session_state_and_artifact_dir().await;
     let mesh_dir = artifact_dir.join("mesh");

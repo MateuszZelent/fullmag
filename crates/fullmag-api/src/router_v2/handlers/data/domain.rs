@@ -3,20 +3,21 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use axum::Json;
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::http::{HeaderMap, HeaderName, HeaderValue};
 use axum::response::IntoResponse;
-use axum::Json;
 use serde::Deserialize;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 
-use super::fields::{load_fdm_multilayer_airbox_carrier, FdmMultilayerAirboxCarrier};
+use super::fields::{FdmMultilayerAirboxCarrier, load_fdm_multilayer_airbox_carrier};
 use super::multilayer_identity::correlate_multilayer_layers;
+use super::resolved_spatial_field::load_fdm_multilayer_native_layer_membership;
 use crate::error::ApiError;
-use crate::fem_slice_overlay::{collect_fem_slice_overlay, FemSliceOverlayInput};
-use crate::field_slice::{resolve_slice_query, FieldSliceQuery, SlicePlane};
+use crate::fem_slice_overlay::{FemSliceOverlayInput, collect_fem_slice_overlay};
+use crate::field_slice::{FieldSliceQuery, SlicePlane, resolve_slice_query};
 use crate::router_v2::handlers::data::field_resolution::is_fdm_snapshot;
 use crate::router_v2::handlers::sessions::status::{
     domain_generation_id, domain_generation_revision, fdm_grid_geometry, fdm_grid_shape,
@@ -293,6 +294,122 @@ pub async fn get_fdm_multilayer_layer_active_mask(
         &mut response,
         "x-fullmag-layout-revision",
         &layout.layout_revision.to_string(),
+    );
+    Ok(response)
+}
+
+#[utoipa::path(
+    get,
+    path = "/v2/sessions/current/data/domain/fdm-multilayer-layers/{layer_id}/region-membership",
+    params(
+        ("layer_id" = String, Path, description = "Stable native multilayer layer identity"),
+        ("If-None-Match" = Option<String>, Header, description = "Strong ETag from a previous FMRM response"),
+        ("Range" = Option<String>, Header, description = "Optional single byte range for the FMRM payload")
+    ),
+    responses(
+        (status = 200, description = "Native-layer realized region membership (FMRM v2)", content_type = "application/octet-stream", headers(
+            ("x-fullmag-grid-fingerprint" = String, description = "Exact native grid fingerprint"),
+            ("x-fullmag-region-membership-fingerprint" = String, description = "Native membership and legend identity"),
+            ("x-fullmag-region-membership-revision" = String, description = "Native membership revision")
+        )),
+        (status = 206, description = "Partial FMRM payload", content_type = "application/octet-stream"),
+        (status = 304, description = "FMRM payload not modified for the supplied ETag"),
+        (status = 404, description = "Layer or native region membership is not materialized"),
+        (status = 409, description = "Native membership disagrees with layer identity, grid, legend, or payload hash"),
+        (status = 416, description = "Requested FMRM byte range is not satisfiable")
+    ),
+    tag = "data"
+)]
+pub async fn get_fdm_multilayer_layer_region_membership(
+    State(state): State<Arc<AppState>>,
+    Path(layer_id): Path<String>,
+    headers: HeaderMap,
+) -> Result<axum::response::Response, ApiError> {
+    let guard = state.current_live_state.read().await;
+    let snapshot = guard
+        .as_ref()
+        .ok_or_else(|| ApiError::not_found("no active local live workspace"))?;
+    let layout = fdm_multilayer_layout_resource(snapshot)?;
+    let descriptor = layout
+        .layers
+        .iter()
+        .find(|layer| layer.layer_id == layer_id)
+        .ok_or_else(|| {
+            ApiError::not_found(format!(
+                "layer_not_found: multilayer FDM layer '{layer_id}' was not found"
+            ))
+        })?;
+    if !descriptor.region_membership_available {
+        return Err(ApiError::not_found(format!(
+            "quantity_not_materialized: multilayer FDM layer '{layer_id}' has no native region membership"
+        )));
+    }
+    let carrier = load_fdm_multilayer_native_layer_membership(snapshot, &layer_id)?
+        .ok_or_else(|| ApiError::not_found("native multilayer membership is not applicable"))?;
+    let super::resolved_spatial_field::FdmNativeLayerMembershipCarrier {
+        layer_id: carrier_layer_id,
+        object_id,
+        magnet_name,
+        cells,
+        origin_m,
+        cell_size_m,
+        grid_fingerprint,
+        membership,
+        membership_revision,
+        membership_fingerprint,
+    } = carrier;
+    if carrier_layer_id != descriptor.layer_id
+        || object_id != descriptor.object_id
+        || magnet_name != descriptor.magnet_name
+        || cells != descriptor.native_grid
+        || origin_m != descriptor.native_origin
+        || cell_size_m != descriptor.native_cell_size
+        || descriptor.native_grid_fingerprint.as_deref() != Some(grid_fingerprint.as_str())
+    {
+        return Err(ApiError::conflict(format!(
+            "multilayer FDM layer '{layer_id}' membership carrier does not match its layout descriptor"
+        )));
+    }
+    let cell_count = u32::try_from(membership.cell_membership.len())
+        .map_err(|_| ApiError::conflict("native membership exceeds FMRM u32"))?;
+    let legend_count = u32::try_from(membership.region_legend.len())
+        .map_err(|_| ApiError::conflict("native membership legend exceeds FMRM u32"))?;
+    let mut payload = vec![0u8; 64];
+    payload[..4].copy_from_slice(b"FMRM");
+    payload[4] = 2;
+    payload[5] = 2;
+    for (axis, count) in cells.into_iter().enumerate() {
+        let offset = 8 + axis * 4;
+        payload[offset..offset + 4].copy_from_slice(&count.to_le_bytes());
+    }
+    payload[20..24].copy_from_slice(&cell_count.to_le_bytes());
+    payload[24..28].copy_from_slice(&legend_count.to_le_bytes());
+    let grid_fingerprint_hex = canonical_sha256_hex(&grid_fingerprint)
+        .ok_or_else(|| ApiError::conflict("native grid fingerprint is not canonical SHA-256"))?;
+    payload[28..60].copy_from_slice(&decode_sha256_hex(&grid_fingerprint_hex)?);
+    payload.reserve(membership.cell_membership.len().saturating_mul(4));
+    for value in membership.cell_membership {
+        payload.extend_from_slice(&value.to_le_bytes());
+    }
+    let etag = crate::router_v2::handlers::shared::stable_strong_etag(&format!(
+        "fdm-multilayer-region-membership:{layer_id}:{grid_fingerprint}:{membership_fingerprint}:{membership_revision}"
+    ));
+    let mut response =
+        crate::router_v2::handlers::shared::conditional_binary_response(&headers, &etag, payload);
+    insert_response_header(
+        &mut response,
+        "x-fullmag-grid-fingerprint",
+        &grid_fingerprint,
+    );
+    insert_response_header(
+        &mut response,
+        "x-fullmag-region-membership-fingerprint",
+        &membership_fingerprint,
+    );
+    insert_response_header(
+        &mut response,
+        "x-fullmag-region-membership-revision",
+        &membership_revision.to_string(),
     );
     Ok(response)
 }
@@ -719,6 +836,15 @@ fn build_fdm_multilayer_layer_layout(
             .grid_fingerprint,
         ),
     };
+    let (
+        region_membership_available,
+        region_membership_revision,
+        region_mask_hash,
+        region_legend_hash,
+        region_membership_generation_id,
+    ) = native_region_membership_summary(artifact_layer, &layer_id)?;
+    let (available_material_quantities, material_field_revisions) =
+        native_material_field_summary(artifact_layer, &layer_id)?;
 
     Ok(FdmLayerLayoutResource {
         layer_id: layer_id.clone(),
@@ -748,7 +874,135 @@ fn build_fdm_multilayer_layer_layout(
         mask_provenance: active_mask
             .is_some()
             .then(|| "execution_plan.layers.native_active_mask".into()),
+        region_membership_available,
+        region_membership_revision,
+        region_mask_hash,
+        region_legend_hash,
+        region_membership_generation_id,
+        region_membership_ref: region_membership_available.then(|| {
+            format!(
+                "/v2/sessions/current/data/domain/fdm-multilayer-layers/{}/region-membership",
+                percent_encode_path_segment(&layer_id),
+            )
+        }),
+        available_material_quantities,
+        material_field_revisions,
     })
+}
+
+#[allow(clippy::type_complexity)]
+fn native_region_membership_summary(
+    artifact_layer: Option<&Value>,
+    layer_id: &str,
+) -> Result<
+    (
+        bool,
+        Option<u64>,
+        Option<String>,
+        Option<String>,
+        Option<String>,
+    ),
+    ApiError,
+> {
+    let mask = artifact_layer.and_then(|layer| layer.get("native_region_mask"));
+    let legend = artifact_layer.and_then(|layer| layer.get("native_region_legend"));
+    match (mask, legend) {
+        (None, None) => Ok((false, None, None, None, None)),
+        (Some(mask), Some(legend)) => {
+            if mask.get("available").and_then(Value::as_bool) != Some(true)
+                || legend.get("available").and_then(Value::as_bool) != Some(true)
+            {
+                return Err(ApiError::conflict(format!(
+                    "multilayer FDM layer '{layer_id}' has incomplete native region membership availability"
+                )));
+            }
+            let revision = mask
+                .get("revision")
+                .and_then(Value::as_u64)
+                .filter(|revision| *revision > 0)
+                .ok_or_else(|| {
+                    ApiError::conflict(format!(
+                        "multilayer FDM layer '{layer_id}' has invalid native membership revision"
+                    ))
+                })?;
+            if legend.get("revision").and_then(Value::as_u64) != Some(revision) {
+                return Err(ApiError::conflict(format!(
+                    "multilayer FDM layer '{layer_id}' mask and legend revisions disagree"
+                )));
+            }
+            let generation = value_string(mask, "generation_id").ok_or_else(|| {
+                ApiError::conflict(format!(
+                    "multilayer FDM layer '{layer_id}' has no native membership generation"
+                ))
+            })?;
+            if value_string(legend, "generation_id").as_deref() != Some(generation.as_str()) {
+                return Err(ApiError::conflict(format!(
+                    "multilayer FDM layer '{layer_id}' mask and legend generations disagree"
+                )));
+            }
+            let mask_hash = value_string(mask, "value_sha256")
+                .map(|value| validate_layer_fingerprint(value, layer_id))
+                .transpose()?
+                .ok_or_else(|| {
+                    ApiError::conflict(format!(
+                        "multilayer FDM layer '{layer_id}' has no native region mask hash"
+                    ))
+                })?;
+            let legend_hash = value_string(legend, "legend_sha256")
+                .map(|value| validate_layer_fingerprint(value, layer_id))
+                .transpose()?
+                .ok_or_else(|| {
+                    ApiError::conflict(format!(
+                        "multilayer FDM layer '{layer_id}' has no native region legend hash"
+                    ))
+                })?;
+            Ok((
+                true,
+                Some(revision),
+                Some(mask_hash),
+                Some(legend_hash),
+                Some(generation),
+            ))
+        }
+        _ => Err(ApiError::conflict(format!(
+            "multilayer FDM layer '{layer_id}' has only one half of native region membership"
+        ))),
+    }
+}
+
+fn native_material_field_summary(
+    artifact_layer: Option<&Value>,
+    layer_id: &str,
+) -> Result<(Vec<String>, HashMap<String, u64>), ApiError> {
+    let Some(fields) = artifact_layer
+        .and_then(|layer| layer.get("material_fields"))
+        .and_then(Value::as_object)
+    else {
+        return Ok((Vec::new(), HashMap::new()));
+    };
+    let mut quantities = Vec::new();
+    let mut revisions = HashMap::new();
+    for (quantity_id, descriptor) in fields {
+        if !matches!(quantity_id.as_str(), "mat_ms" | "mat_aex" | "mat_alpha") {
+            return Err(ApiError::conflict(format!(
+                "multilayer FDM layer '{layer_id}' publishes unsupported material quantity '{quantity_id}'"
+            )));
+        }
+        if descriptor.get("available").and_then(Value::as_bool) != Some(true) {
+            continue;
+        }
+        let revision = descriptor
+            .get("revision")
+            .and_then(Value::as_u64)
+            .filter(|revision| *revision > 0)
+            .ok_or_else(|| ApiError::conflict(format!(
+                "multilayer FDM layer '{layer_id}' material quantity '{quantity_id}' has invalid revision"
+            )))?;
+        quantities.push(quantity_id.clone());
+        revisions.insert(quantity_id.clone(), revision);
+    }
+    quantities.sort();
+    Ok((quantities, revisions))
 }
 
 fn resolve_required_layer_array3_u32(

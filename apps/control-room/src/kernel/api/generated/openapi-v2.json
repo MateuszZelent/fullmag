@@ -3668,6 +3668,12 @@
           "active_mask_present": {
             "type": "boolean"
           },
+          "available_material_quantities": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
           "convolution_cell_size": {
             "items": {
               "format": "double",
@@ -3706,6 +3712,17 @@
               "null"
             ]
           },
+          "material_field_revisions": {
+            "additionalProperties": {
+              "format": "int64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "propertyNames": {
+              "type": "string"
+            },
+            "type": "object"
+          },
           "native_cell_size": {
             "items": {
               "format": "double",
@@ -3736,6 +3753,41 @@
           },
           "object_id": {
             "type": "string"
+          },
+          "region_legend_hash": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "region_mask_hash": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "region_membership_available": {
+            "type": "boolean"
+          },
+          "region_membership_generation_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "region_membership_ref": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "region_membership_revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
           },
           "transfer_kind": {
             "type": "string"
@@ -15283,11 +15335,11 @@
           }
         },
         "required": [
+          "bounds",
           "raster",
           "contours",
           "mesh",
           "boundaries",
-          "bounds",
           "points",
           "vectors",
           "probes"
@@ -29441,6 +29493,95 @@
         ]
       }
     },
+    "/v2/sessions/current/data/domain/fdm-multilayer-layers/{layer_id}/region-membership": {
+      "get": {
+        "operationId": "data_get_sessions_current_data_domain_fdm_multilayer_layers_layer_id_region_membership",
+        "parameters": [
+          {
+            "description": "Stable native multilayer layer identity",
+            "in": "path",
+            "name": "layer_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Strong ETag from a previous FMRM response",
+            "in": "header",
+            "name": "If-None-Match",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "description": "Optional single byte range for the FMRM payload",
+            "in": "header",
+            "name": "Range",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/octet-stream": {}
+            },
+            "description": "Native-layer realized region membership (FMRM v2)",
+            "headers": {
+              "x-fullmag-grid-fingerprint": {
+                "description": "Exact native grid fingerprint",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "x-fullmag-region-membership-fingerprint": {
+                "description": "Native membership and legend identity",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "x-fullmag-region-membership-revision": {
+                "description": "Native membership revision",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "206": {
+            "content": {
+              "application/octet-stream": {}
+            },
+            "description": "Partial FMRM payload"
+          },
+          "304": {
+            "description": "FMRM payload not modified for the supplied ETag"
+          },
+          "404": {
+            "description": "Layer or native region membership is not materialized"
+          },
+          "409": {
+            "description": "Native membership disagrees with layer identity, grid, legend, or payload hash"
+          },
+          "416": {
+            "description": "Requested FMRM byte range is not satisfiable"
+          }
+        },
+        "tags": [
+          "data"
+        ]
+      }
+    },
     "/v2/sessions/current/data/domain/fdm-multilayer-layout": {
       "get": {
         "operationId": "data_get_sessions_current_data_domain_fdm_multilayer_layout",
@@ -30360,10 +30501,7 @@
         ],
         "responses": {
           "200": {
-            "description": "FMCS v4 planar mesh overlay with exact segment classes"
-          },
-          "204": {
-            "description": "Structured grid has no FEM overlay"
+            "description": "FMCS v4 FEM topology or FMFG v1 FDM structured-grid planar overlay"
           },
           "304": {
             "description": "Not modified"
@@ -39958,8 +40096,8 @@
     }
   ],
   "x-fullmag-build-identity": {
-    "built_at_utc": "2026-08-13T10:02:54Z",
-    "git_commit": "09453245111be4dde7d95d9e67671168413ca6fd",
+    "built_at_utc": "2026-08-13T17:02:56Z",
+    "git_commit": "f9ae55dbb38b2ee6de13ee7ae5d7a5647e200635",
     "source_snapshot_sha256": "unknown",
     "worktree_state": "dirty"
   },
