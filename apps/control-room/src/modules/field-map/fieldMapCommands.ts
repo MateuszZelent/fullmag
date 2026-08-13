@@ -87,7 +87,7 @@ function sourceForPlanarMonitorCreate(
 function planarMonitorCreateDisabledReason(context: CommandContext): string | null {
   if (!context.api) return "Domain bounds are unavailable for planar monitor placement.";
   const input = planarMonitorCreateInput(context);
-  if (input.intent.source === "clip" && !visualizationStateFromContext(context)?.clip.enabled) {
+  if (input.intent?.source === "clip" && !visualizationStateFromContext(context)?.clip.enabled) {
     return "Enable the clip plane before creating a planar monitor from it.";
   }
   const capability = input.capability;
