@@ -406,12 +406,22 @@ function debugSnapshot(): VisualizationDebugSnapshot {
         },
         render: {
           adoption: {
-            adoptedFieldBufferId: "field-buffer-42",
-            adoptedResourceKey: "/data/fields/m/samples/vector?scope_kind=object&scope_id=magnet",
-            adoptedScalarBufferKey: "scalar-42",
-            adoptedVectorBuildKey: "vectors-42",
-            adoptedVectorItemCount: 4,
             frameCommitId: "frame-42",
+            surface: {
+              adoptedAtMs: 42,
+              adoptedFieldBufferId: "field-buffer-42",
+              adoptedResourceKey: "/data/fields/m/samples/vector?scope_kind=object&scope_id=magnet",
+              adoptedScalarBufferKey: "scalar-42",
+              adoptionSequence: 42,
+            },
+            vector: {
+              adoptedAtMs: 42,
+              adoptedFieldBufferId: "field-buffer-42",
+              adoptedResourceKey: "/data/fields/m/samples/vector?scope_kind=object&scope_id=magnet",
+              adoptedVectorBuildKey: "vectors-42",
+              adoptedVectorItemCount: 4,
+              adoptionSequence: 43,
+            },
           },
           fieldBufferState: "ready",
           requestedFieldBufferId: "field-buffer-42",

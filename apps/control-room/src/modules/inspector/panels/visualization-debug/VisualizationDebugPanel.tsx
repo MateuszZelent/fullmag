@@ -57,15 +57,13 @@ export function VisualizationDebugPanel({
     (status) =>
       resolveVisualizationDebugLane(status.data?.domain?.discretization),
   );
-  if (lane !== "fem") {
+  if (lane === "unresolved") {
     return (
       <div
         className="fm-visualization-debug-panel"
-        data-state={lane === "fdm" ? "unsupported-target" : "unresolved-lane"}
+        data-state="unresolved-lane"
       >
-        {lane === "fdm"
-          ? "Visualization debug is not applicable for the FDM structured-grid lane."
-          : "Visualization debug is unavailable until the session discretization is explicit."}
+        Visualization debug is unavailable until the session discretization is explicit.
       </div>
     );
   }
@@ -274,8 +272,10 @@ export function VisualizationDebugPanelView({
           <div className="fm-visualization-debug-subsection" key={`render:${carrier.carrierId}:${index}`}>
             <h4>{carrier.carrierId}</h4>
             <FieldRow label="Requested source" value={carrier.request.resourceKey ?? "—"} />
-            <FieldRow label="Adopted source" value={carrier.render.adoption.adoptedResourceKey ?? "—"} />
-            <FieldRow label="Field buffer" value={`${carrier.render.fieldBufferState} · ${carrier.render.adoption.adoptedFieldBufferId ?? "not adopted"}`} />
+            <FieldRow label="Surface source" value={carrier.render.adoption.surface.adoptedResourceKey ?? "—"} />
+            <FieldRow label="Surface field buffer" value={`${carrier.render.fieldBufferState} · ${carrier.render.adoption.surface.adoptedFieldBufferId ?? "not adopted"}`} />
+            <FieldRow label="Vector source" value={carrier.render.adoption.vector.adoptedResourceKey ?? "—"} />
+            <FieldRow label="Vector field buffer" value={`${carrier.render.fieldBufferState} · ${carrier.render.adoption.vector.adoptedFieldBufferId ?? "not adopted"}`} />
             <FieldRow label="Surface" value={`${carrier.render.surface.projectionMode ?? "none"} · ${carrier.render.surface.degradation ?? "not degraded"}`} />
             <FieldRow label="Vectors" value={`${carrier.render.vectors.buildKey ?? "not built"} · ${carrier.render.vectors.segmentCount?.toLocaleString("en-US") ?? "0"} segments · ${carrier.render.vectors.degradation ?? "not degraded"}`} />
           </div>

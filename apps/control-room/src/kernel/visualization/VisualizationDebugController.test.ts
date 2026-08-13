@@ -49,11 +49,22 @@ function makeSnapshot({
         },
         render: {
           adoption: {
-            adoptedFieldBufferId: "field-buffer-1",
-            adoptedResourceKey: "field:m?component=full&scope_kind=object",
-            adoptedScalarBufferKey: null,
-            adoptedVectorBuildKey: "vectors-1",
             frameCommitId: "frame-1",
+            surface: {
+              adoptedAtMs: null,
+              adoptedFieldBufferId: null,
+              adoptedResourceKey: null,
+              adoptedScalarBufferKey: null,
+              adoptionSequence: null,
+            },
+            vector: {
+              adoptedAtMs: null,
+              adoptedFieldBufferId: "field-buffer-1",
+              adoptedResourceKey: "field:m?component=full&scope_kind=object",
+              adoptedVectorBuildKey: "vectors-1",
+              adoptedVectorItemCount: null,
+              adoptionSequence: null,
+            },
           },
           fieldBufferState: "ready",
           requestedFieldBufferId: "field-buffer-1",

@@ -212,9 +212,8 @@ mod tests {
     use super::{
         attach_fem_crossover_decision_to_provenance, attach_resolved_fallback_to_provenance,
         cached_display_refresh_due, cpu_execution_provenance, display_refresh_due,
-        normalize_runtime_context_signature,
-        should_materialize_terminal_fdm_fields, InteractiveFdmPreviewRuntime,
-        InteractiveFdmPreviewRuntimeInner,
+        normalize_runtime_context_signature, should_materialize_terminal_fdm_fields,
+        InteractiveFdmPreviewRuntime, InteractiveFdmPreviewRuntimeInner,
     };
     use crate::dispatch::FdmEngine;
     use crate::fdm::cpu::reference::{
@@ -803,6 +802,7 @@ mod tests {
         );
         assert!(final_fields.iter().all(|field| {
             field.source_step == final_stats.step
+                && field.source_time_seconds == Some(final_stats.time)
                 && field.source_revision == final_stats.step
                 && field.materialized_at_unix_ms > 0
         }));

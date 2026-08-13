@@ -7,6 +7,7 @@ import type { VisualizationTargetSettings } from "@/kernel/visualization/ObjectV
 import { type ThreeEvent, useThree } from "@react-three/fiber";
 import {
   useEffect,
+  useId,
   useCallback,
   useMemo,
   useRef,
@@ -65,7 +66,7 @@ import {
   type VectorFieldLayerVectorStyle,
 } from "./VectorFieldLayer";
 import type { Viewport3DRenderAdoptionRegistry } from "../model/viewport3DRenderAdoptionRegistry";
-import type { Viewport3DRenderAdoptionReceipt } from "../model/viewport3DRenderAdoptionRegistry";
+import type { Viewport3DRenderAdoptionIdentity } from "../model/viewport3DRenderAdoptionRegistry";
 import {
   eventIntersectsRegionOverlay,
   pickRegionOverlayFromRay,
@@ -921,16 +922,18 @@ const FdmCuboidSurfacePass = memo(function FdmCuboidSurfacePass({
     fieldBufferId: string | null;
     scalarBuffer: ScalarColorBuffer;
   } | null>(null);
+  const adoptionOwnerId = `fdm-cuboid-surface:${useId()}`;
   const recordSurfaceAdoption = useCallback(() => {
     if (!adoptionRegistry || !surfaceColors) return;
     lastAdoptedSurfaceRef.current = { fieldBufferId, scalarBuffer: surfaceColors };
     recordFdmCuboidSurfaceAdoption({
       carrierId,
       fieldBufferId,
+      ownerId: adoptionOwnerId,
       registry: adoptionRegistry,
       scalarBuffer: surfaceColors,
     });
-  }, [adoptionRegistry, carrierId, fieldBufferId, surfaceColors]);
+  }, [adoptionOwnerId, adoptionRegistry, carrierId, fieldBufferId, surfaceColors]);
   useEffect(() => {
     if (!adoptionRegistry) return;
     const unregister = adoptionRegistry.registerCarrierAdoptionReplay(carrierId, () => {
@@ -939,6 +942,7 @@ const FdmCuboidSurfacePass = memo(function FdmCuboidSurfacePass({
       recordFdmCuboidSurfaceAdoption({
         carrierId,
         fieldBufferId: adopted.fieldBufferId,
+        ownerId: adoptionOwnerId,
         registry: adoptionRegistry,
         scalarBuffer: adopted.scalarBuffer,
       });
@@ -948,20 +952,21 @@ const FdmCuboidSurfacePass = memo(function FdmCuboidSurfacePass({
       const adopted = lastAdoptedSurfaceRef.current;
       if (!adopted) return;
       adoptionRegistry.clearAdoption(
+        adoptionOwnerId,
         fdmCuboidSurfaceAdoptionIdentity({ ...adopted, carrierId }),
       );
-      lastAdoptedSurfaceRef.current = null;
     };
-  }, [adoptionRegistry, carrierId]);
+  }, [adoptionOwnerId, adoptionRegistry, carrierId]);
   useEffect(() => {
     if (usesInstanceColors || !adoptionRegistry) return;
     const adopted = lastAdoptedSurfaceRef.current;
     if (!adopted) return;
     adoptionRegistry.clearAdoption(
+      adoptionOwnerId,
       fdmCuboidSurfaceAdoptionIdentity({ ...adopted, carrierId }),
     );
     lastAdoptedSurfaceRef.current = null;
-  }, [adoptionRegistry, carrierId, usesInstanceColors]);
+  }, [adoptionOwnerId, adoptionRegistry, carrierId, usesInstanceColors]);
   const surfaceMaterialColor = surfaceMaterialColorFromSettings(
     renderSettings,
     colors.mesh,
@@ -1572,14 +1577,16 @@ export const FdmCuboidLayer = memo(function FdmCuboidLayer({
 export function recordFdmCuboidSurfaceAdoption({
   carrierId = "fdm-domain",
   fieldBufferId,
+  ownerId,
   registry,
   scalarBuffer,
 }: {
   carrierId?: string;
   fieldBufferId: string | null;
+  ownerId?: string;
   registry: Viewport3DRenderAdoptionRegistry;
   scalarBuffer: ScalarColorBuffer;
-}): Omit<Viewport3DRenderAdoptionReceipt, "byteLength" | "targetId"> {
+}): Viewport3DRenderAdoptionIdentity {
   const adoption = fdmCuboidSurfaceAdoptionIdentity({
     carrierId,
     fieldBufferId,
@@ -1591,6 +1598,7 @@ export function recordFdmCuboidSurfaceAdoption({
       (scalarBuffer.scalarValues?.byteLength ?? 0),
     carrierId: adoption.carrierId,
     fieldBufferId: adoption.fieldBufferId,
+    ownerId,
     resourceKey: adoption.resourceKey,
     scalarBufferKey: adoption.scalarBufferKey ?? "unknown",
   });
@@ -1605,7 +1613,7 @@ function fdmCuboidSurfaceAdoptionIdentity({
   carrierId?: string;
   fieldBufferId: string | null;
   scalarBuffer: ScalarColorBuffer;
-}): Omit<Viewport3DRenderAdoptionReceipt, "byteLength" | "targetId"> {
+}): Viewport3DRenderAdoptionIdentity {
   return {
     carrierId,
     fieldBufferId: scalarBuffer.sourceFieldBufferId ?? fieldBufferId,

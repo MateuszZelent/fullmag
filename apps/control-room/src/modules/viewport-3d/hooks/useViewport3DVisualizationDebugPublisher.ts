@@ -130,7 +130,6 @@ export function createViewport3DVisualizationDebugPublisher({
   const demandUnsubscribers = new Map<string, () => void>();
   const pendingAdoptionTargetIds = new Set<string>();
   const targetIds = new Set<string>();
-  let adoptionFlushQueued = false;
 
   const stopTarget = (targetId: string) => {
     const current = active.get(targetId);
@@ -156,12 +155,13 @@ export function createViewport3DVisualizationDebugPublisher({
     const state: ActiveTarget = {
       abortController,
       candidate: null,
-      releaseAdoptionDemand: adoptionRegistry.retainDemand(targetId),
+      releaseAdoptionDemand: () => undefined,
       releaseCandidateSubscription: () => undefined,
       revision,
       lastCommittedFrameId: null,
     };
     active.set(targetId, state);
+    state.releaseAdoptionDemand = adoptionRegistry.retainDemand(targetId);
     void buildCandidate({ signal: abortController.signal, targetId })
       .then((candidate) => {
         if (
@@ -179,7 +179,8 @@ export function createViewport3DVisualizationDebugPublisher({
               disposed ||
               abortController.signal.aborted ||
               active.get(targetId) !== state ||
-              !lastFrame
+              !lastFrame ||
+              pendingAdoptionTargetIds.has(targetId)
             ) {
               return;
             }
@@ -187,7 +188,9 @@ export function createViewport3DVisualizationDebugPublisher({
             commitTarget(targetId, state, lastFrame);
           }) ?? (() => undefined);
         state.lastCommittedFrameId = null;
-        if (lastFrame) commitTarget(targetId, state, lastFrame);
+        if (lastFrame && !pendingAdoptionTargetIds.has(targetId)) {
+          commitTarget(targetId, state, lastFrame);
+        }
       })
       .catch((error: unknown) => {
         if (abortController.signal.aborted || isAbortError(error)) return;
@@ -220,26 +223,8 @@ export function createViewport3DVisualizationDebugPublisher({
     state.candidate.start?.();
   };
   const unsubscribeAdoption = adoptionRegistry.subscribe((targetId) => {
-    if (disposed || !lastFrame || !active.has(targetId)) return;
+    if (disposed || !active.has(targetId)) return;
     pendingAdoptionTargetIds.add(targetId);
-    if (adoptionFlushQueued) return;
-    adoptionFlushQueued = true;
-    queueMicrotask(() => {
-      adoptionFlushQueued = false;
-      if (disposed || !lastFrame) {
-        pendingAdoptionTargetIds.clear();
-        return;
-      }
-      const frame = lastFrame;
-      const affectedTargetIds = [...pendingAdoptionTargetIds];
-      pendingAdoptionTargetIds.clear();
-      for (const affectedTargetId of affectedTargetIds) {
-        const state = active.get(affectedTargetId);
-        if (!state) continue;
-        state.lastCommittedFrameId = null;
-        commitTarget(affectedTargetId, state, frame);
-      }
-    });
   });
 
   return {
@@ -247,6 +232,12 @@ export function createViewport3DVisualizationDebugPublisher({
       if (disposed) return;
       lastFrame = frame;
       for (const [targetId, state] of active) {
+        if (
+          pendingAdoptionTargetIds.has(targetId) &&
+          state.lastCommittedFrameId === frame.commitId
+        ) {
+          continue;
+        }
         if (pendingAdoptionTargetIds.delete(targetId)) {
           state.lastCommittedFrameId = null;
         }
@@ -549,8 +540,11 @@ function resolveCarrierSources(
   if (result.length === 0 && source.fullFieldVector) {
     const fullPass = source.fieldModel?.targetPasses.get("full");
     if (fullPass) {
+      const carrierId = target.target.id === "fdm-universe-outside-support"
+        ? target.target.id
+        : "fdm-domain";
       result.push({
-        carrierId: "fdm-domain",
+        carrierId,
         fullFieldBuffer: targetFieldBufferSourceFromDecoded(
           source.fullFieldVector,
           source.fullFieldBufferIdentity ?? null,
@@ -620,35 +614,39 @@ function buildCarrierInput({
   vectorReceipt: Viewport3DRenderAdoptionReceipt | undefined;
 }): Viewport3DVisualizationDebugCarrierInput {
   const resourceKey = fieldBuffer?.resourceKey ?? null;
+  const decoded = fieldBuffer ? decodedFieldBuffer(fieldBuffer) : null;
   const requestedQuery = resourceKey
     ? parseCanonicalFieldVectorResourceKey(resourceKey)
     : null;
   const scalarColors = pass.surface.scalarColors;
   const cache = resourceKey
-    ? getViewport3DFieldVectorCacheEntryDiagnostics(resourceKey)
+    ? getViewport3DFieldVectorCacheEntryDiagnostics(
+        resourceKey,
+        decoded ?? undefined,
+      )
     : null;
   return {
-    adoptedFieldBufferId:
-      surfaceReceipt?.fieldBufferId ?? vectorReceipt?.fieldBufferId ?? null,
-    adoptedResourceKey:
-      surfaceReceipt?.resourceKey ?? vectorReceipt?.resourceKey ?? null,
-    adoptedScalarBufferKey: surfaceReceipt?.scalarBufferKey ?? null,
-    adoptedVectorBuildKey: vectorReceipt?.vectorBuildKey ?? null,
-    adoptedVectorItemCount: vectorReceipt?.itemCount ?? null,
     cache,
     carrierId,
     carrierRole:
       source.carrierRoles?.get(carrierId) ??
-      (carrierId === "fdm-domain" ? "fdm-domain" : "unknown"),
-    decoded: fieldBuffer ? decodedFieldBuffer(fieldBuffer) : null,
+      (carrierId === "fdm-domain" ||
+      carrierId === "fdm-universe-outside-support"
+        ? "fdm-domain"
+        : "unknown"),
+    decoded,
     expectedDomainGenerationId:
       fieldBuffer?.currentDomainGenerationId ?? null,
     expectedTopologyHash: fieldBuffer?.currentMeshTopologyHash ?? null,
     fieldBufferId: fieldBuffer?.bufferId ?? null,
+    fieldBufferRevision: fieldBuffer?.fieldRevision ?? null,
     fieldBufferState: pass.fieldBufferState,
     fieldRevision: cache?.responseMetadata?.fieldRevision ?? null,
     geometryMaskDescription:
-      carrierId === "fdm-domain" ? "logical target geometry mask" : null,
+      carrierId === "fdm-domain" ||
+      carrierId === "fdm-universe-outside-support"
+        ? "logical target geometry mask"
+        : null,
     plannerRequestId: fieldBuffer?.requestId ?? null,
     rangeDiagnostics: scalarColors?.rangeDiagnostics ?? null,
     rangeDiagnosticsComponent: scalarColors?.colorMode ?? null,
@@ -685,13 +683,20 @@ function buildCarrierInput({
     scannedStats,
     surfaceDegradation: pass.surface.degradation,
     surfaceProjectionMode: pass.surface.projectionMode ?? null,
+    surfaceAdoptedAtMs: surfaceReceipt?.adoptedAtMs ?? null,
     surfaceAdoptedFieldBufferId: surfaceReceipt?.fieldBufferId ?? null,
     surfaceAdoptedResourceKey: surfaceReceipt?.resourceKey ?? null,
+    surfaceAdoptedScalarBufferKey: surfaceReceipt?.scalarBufferKey ?? null,
+    surfaceAdoptionSequence: surfaceReceipt?.adoptionSequence ?? null,
     topologyByteLength: source.topologyByteLength,
     vectorBuildKey: pass.vectors.buildReference?.buildKey ?? null,
     vectorDegradation: pass.vectors.degradation,
+    vectorAdoptedAtMs: vectorReceipt?.adoptedAtMs ?? null,
+    vectorAdoptedBuildKey: vectorReceipt?.vectorBuildKey ?? null,
     vectorAdoptedFieldBufferId: vectorReceipt?.fieldBufferId ?? null,
+    vectorAdoptedItemCount: vectorReceipt?.itemCount ?? null,
     vectorAdoptedResourceKey: vectorReceipt?.resourceKey ?? null,
+    vectorAdoptionSequence: vectorReceipt?.adoptionSequence ?? null,
     vectorSegmentByteLength: pass.vectors.segments?.byteLength ?? null,
     vectorSegmentCount: pass.vectors.segments
       ? Math.floor(pass.vectors.segments.length / 7)

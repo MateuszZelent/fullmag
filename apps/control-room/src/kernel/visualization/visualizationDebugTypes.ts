@@ -51,6 +51,7 @@ export interface VisualizationDebugMemoryRow {
 export interface VisualizationDebugCarrierSnapshot {
   cache: {
     byteLength: number | null;
+    dataIdentityMatches?: boolean | null;
     entryState: "missing" | "inflight" | "ready";
     etag: string | null;
     fieldCacheByteLength: number;
@@ -78,12 +79,22 @@ export interface VisualizationDebugCarrierSnapshot {
   } | null;
   render: {
     adoption: {
-      adoptedFieldBufferId: string | null;
-      adoptedResourceKey: string | null;
-      adoptedScalarBufferKey: string | null;
-      adoptedVectorBuildKey: string | null;
-      adoptedVectorItemCount?: number | null;
       frameCommitId: string | null;
+      surface: {
+        adoptedAtMs: number | null;
+        adoptedFieldBufferId: string | null;
+        adoptedResourceKey: string | null;
+        adoptedScalarBufferKey: string | null;
+        adoptionSequence: number | null;
+      };
+      vector: {
+        adoptedAtMs: number | null;
+        adoptedFieldBufferId: string | null;
+        adoptedResourceKey: string | null;
+        adoptedVectorBuildKey: string | null;
+        adoptedVectorItemCount: number | null;
+        adoptionSequence: number | null;
+      };
     };
     fieldBufferState: string;
     requestedFieldBufferId: string | null;
@@ -108,6 +119,7 @@ export interface VisualizationDebugCarrierSnapshot {
   };
   revisions: {
     domainGenerationId: string | null;
+    fieldBufferRevision?: string | null;
     fieldRevision: string | null;
     meshTopologyHash: string | null;
     topologyRevision: string | null;

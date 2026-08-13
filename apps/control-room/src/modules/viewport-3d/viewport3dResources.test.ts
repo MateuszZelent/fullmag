@@ -147,6 +147,7 @@ describe("viewport3dResources", () => {
     const diagnostics = getViewport3DFieldVectorCacheEntryDiagnostics(resourceKey);
     expect(diagnostics).toEqual({
       byteLength: null,
+      dataIdentityMatches: null,
       entryState: "missing",
       etag: null,
       key: resourceKey,
@@ -232,9 +233,11 @@ describe("viewport3dResources", () => {
       cache,
       resourceKey,
       inflightRegistry,
+      fieldVector,
     );
     expect(ready).toMatchObject({
       byteLength: 24,
+      dataIdentityMatches: true,
       entryState: "ready",
       etag: '"field-1"',
       key: resourceKey,

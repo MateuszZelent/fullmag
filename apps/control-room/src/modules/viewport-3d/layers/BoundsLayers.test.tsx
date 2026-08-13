@@ -87,7 +87,7 @@ it("lets diagnostics bypass airbox field-color buffer application", () => {
 });
 
 it("clears the exact Airbox surface adoption when it is no longer visible", () => {
-  expect(boundsLayersSource).toContain("adoptionRegistry.clearAdoption(adoption)");
+  expect(boundsLayersSource).toContain("adoptionRegistry.clearAdoption(adoptionOwnerId, adoption)");
   expect(boundsLayersSource).toContain("unregister();");
 });
 

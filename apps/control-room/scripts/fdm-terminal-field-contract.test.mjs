@@ -8,7 +8,10 @@ import {
   assertInteractiveTerminalRun,
   terminalFieldRequestPath,
 } from "./fdm-terminal-field-contract.mjs";
-import { awaitTerminalFieldGeneration } from "./smoke-fdm-terminal-webgl-gate.mjs";
+import {
+  awaitTerminalFieldGeneration,
+  exactVisualizationAdoptionMatches,
+} from "./smoke-fdm-terminal-webgl-gate.mjs";
 
 const smokeSource = await readFile(
   new URL("./smoke-fdm-terminal-webgl-gate.mjs", import.meta.url),
@@ -241,5 +244,214 @@ test("browser smoke selects canonical Explorer visualization rows before using i
   assert.match(smokeSource, /aria-selected/);
   assert.match(smokeSource, /data-inspector-owner/);
   assert.match(smokeSource, /getByRole\("heading", \{ name: "Target", exact: true \}\)/);
+  assert.match(smokeSource, /locator\('xpath=ancestor::section\[@data-slot="inspector-group"\]\[1\]'\)/);
+  assert.doesNotMatch(smokeSource, /locator\('\[data-slot="inspector-group"\]', \{\s*has: inspector\.getByRole\("heading", \{ name: "Target", exact: true \}\)/s);
+  assert.match(smokeSource, /Explorer \$\{target\.nodeId\} Target group/);
+  assert.match(smokeSource, /Explorer \$\{target\.nodeId\} Target ID/);
+  assert.match(smokeSource, /headings=.*owner/);
   assert.doesNotMatch(smokeSource, /getByText\(scope === "airbox" \? "Airbox" : objectId, \{ exact: true \}\)\.first\(\)/);
+});
+
+test("browser smoke proves local FDM quantity selection consumes a fresh 2xx field response", () => {
+  const inspectorSwitchSource = smokeSource.slice(
+    smokeSource.indexOf("async function switchInspectorQuantity"),
+    smokeSource.indexOf("async function assertAirboxMagnetizationUnavailable"),
+  );
+
+  assert.doesNotMatch(inspectorSwitchSource, /\/visualization\/state/);
+  assert.match(inspectorSwitchSource, /quantity\.inputValue\(\)/);
+  assert.match(inspectorSwitchSource, /Toggle vector field arrows/);
+  assert.match(inspectorSwitchSource, /aria-pressed/);
+  assert.match(inspectorSwitchSource, /select\[aria-label="Color source"\]/);
+  assert.match(inspectorSwitchSource, /inputValue\(\) === "colormap"/);
+  assert.match(inspectorSwitchSource, /waitForScopedFieldResponse/);
+  assert.match(smokeSource, /page\.on\("response"/);
+  assert.match(smokeSource, /response\.status\(\)/);
+  assert.match(smokeSource, /status >= 200 && status < 300/);
+  assert.match(smokeSource, /scopeKind: scope === "object" \? "full" : "airbox"/);
+  assert.match(smokeSource, /scope\.scopeKind === "full"/);
+  assert.match(smokeSource, /url\.searchParams\.has\("scope_id"\)/);
+  assert.match(smokeSource, /samples\/vector/);
+});
+
+test("browser smoke proves the exact completed response was adopted by the requested render pass", () => {
+  assert.match(smokeSource, /await response\.finished\(\)/);
+  assert.match(smokeSource, /selectExplorerVisualizationDebugTarget/);
+  assert.match(smokeSource, /model:object:\$\{sceneObject\.id\}:visualization:debug/);
+  assert.match(smokeSource, /model:airbox:visualization:debug/);
+  assert.match(smokeSource, /waitForExactVisualizationDebugEvidence/);
+  assert.match(smokeSource, /Raw bounded JSON/);
+  assert.match(smokeSource, /requestedFieldBufferId/);
+  assert.match(smokeSource, /adoptedFieldBufferId/);
+  assert.match(smokeSource, /adoptedResourceKey/);
+  assert.match(smokeSource, /adoptedScalarBufferKey/);
+  assert.match(smokeSource, /adoptedVectorBuildKey/);
+  assert.match(smokeSource, /adoptedVectorItemCount/);
+  assert.match(smokeSource, /render\.vectors\.buildKey/);
+  assert.match(smokeSource, /render\.surface\.bufferKey/);
+});
+
+test("browser smoke rejects historical adoption for a repeated resource key", () => {
+  const ribbonSwitchSource = smokeSource.slice(
+    smokeSource.indexOf("async function switchRibbonQuantity"),
+    smokeSource.indexOf("async function switchInspectorQuantity"),
+  );
+  const inspectorSwitchSource = smokeSource.slice(
+    smokeSource.indexOf("async function switchInspectorQuantity"),
+    smokeSource.indexOf("async function assertAirboxMagnetizationUnavailable"),
+  );
+  const adoptionSource = smokeSource.slice(
+    smokeSource.indexOf("async function waitForExactVisualizationDebugEvidence"),
+    smokeSource.indexOf("function findExactVisualizationDebugObservation"),
+  );
+  const exactObservationSource = smokeSource.slice(
+    smokeSource.indexOf("function findExactVisualizationDebugObservation"),
+    smokeSource.indexOf("async function waitForScopedFieldResponse"),
+  );
+
+  assert.match(ribbonSwitchSource, /captureLatestExactVisualizationAdoption/);
+  assert.match(inspectorSwitchSource, /captureLatestExactVisualizationAdoption/);
+  assert.match(smokeSource, /Date\.now\(\)/);
+  assert.match(smokeSource, /response_started_at_ms/);
+  assert.match(smokeSource, /response_body_started_at_ms/);
+  assert.match(smokeSource, /response_finished_at_ms/);
+  assert.match(smokeSource, /pre_switch_adoption_sequence/);
+  assert.match(adoptionSource, /exactVisualizationAdoptionMatches/);
+  assert.match(smokeSource, /passAdoption\.adoptionSequence\s*<=\s*\(preSwitchAdoptionSequence \?\? 0\)/);
+  assert.match(smokeSource, /Math\.max\(switchStartedAtMs, response\.response_started_at_ms\)/);
+  assert.doesNotMatch(smokeSource, /adoptedAtMs\s*<\s*response\.response_finished_at_ms/);
+  assert.match(exactObservationSource, /passAdoption[\s\S]*latestPassAdoption/);
+  assert.match(exactObservationSource, /return latest/);
+});
+
+function exactAdoptionFixture() {
+  const resourceKey = "/v2/sessions/current/data/fields/H_demag/samples/vector?scope_kind=full";
+  return {
+    observation: {
+      carrier: {
+        cache: { dataIdentityMatches: true, etag: '"etag-8"' },
+        render: {
+          adoption: {
+            frameCommitId: "frame-new",
+            surface: {
+              adoptedAtMs: null,
+              adoptedFieldBufferId: null,
+              adoptedResourceKey: null,
+              adoptedScalarBufferKey: null,
+              adoptionSequence: null,
+            },
+            vector: {
+              adoptedAtMs: 2_025,
+              adoptedFieldBufferId: "buffer-8",
+              adoptedResourceKey: resourceKey,
+              adoptedVectorBuildKey: "vector-8",
+              adoptedVectorItemCount: 8,
+              adoptionSequence: 8,
+            },
+          },
+          requestedFieldBufferId: "buffer-8",
+          requestedPasses: ["vector-glyph"],
+          surface: { bufferKey: null },
+          vectors: { buildKey: "vector-8" },
+        },
+        request: { resourceKey },
+        revisions: {
+          domainGenerationId: "generation-8",
+          fieldRevision: "8",
+          meshTopologyHash: "mesh-8",
+        },
+      },
+      snapshot: { capturedAtMs: 9_999, viewport: { frameCommitId: "frame-new" } },
+    },
+    preSwitchAdoptionSequence: 7,
+    quantityId: "H_demag",
+    response: {
+      domain_generation_id: "generation-8",
+      etag: '"etag-8"',
+      field_revision: "8",
+      mesh_topology_hash: "mesh-8",
+      resource_key: resourceKey,
+      response_body_started_at_ms: 2_040,
+      response_finished_at_ms: 2_050,
+      response_started_at_ms: 2_010,
+    },
+    switchStartedAtMs: 2_000,
+  };
+}
+
+test("exact render evidence accepts a new adoption bound to response headers", () => {
+  assert.equal(exactVisualizationAdoptionMatches(exactAdoptionFixture()), true);
+});
+
+test("exact render evidence rejects cache data that does not match the adopted carrier", () => {
+  const fixture = exactAdoptionFixture();
+  fixture.observation.carrier.cache.dataIdentityMatches = false;
+  assert.equal(exactVisualizationAdoptionMatches(fixture), false);
+});
+
+test("exact render evidence accepts a fast valid adoption before body observation finishes", () => {
+  const fixture = exactAdoptionFixture();
+  fixture.observation.carrier.render.adoption.vector.adoptedAtMs = 2_015;
+  fixture.response.response_body_started_at_ms = 2_040;
+  fixture.response.response_finished_at_ms = 2_050;
+  assert.equal(exactVisualizationAdoptionMatches(fixture), true);
+});
+
+test("exact render evidence rejects an adoption from before the switch response", () => {
+  const fixture = exactAdoptionFixture();
+  fixture.observation.carrier.render.adoption.vector.adoptedAtMs = 2_005;
+  assert.equal(exactVisualizationAdoptionMatches(fixture), false);
+});
+
+test("exact render evidence rejects a historical adoption republished in a new frame", () => {
+  const fixture = exactAdoptionFixture();
+  fixture.observation.snapshot = {
+    capturedAtMs: 20_000,
+    viewport: { frameCommitId: "frame-even-newer" },
+  };
+  fixture.observation.carrier.render.adoption.vector.adoptionSequence = 7;
+  assert.equal(exactVisualizationAdoptionMatches(fixture), false);
+});
+
+test("exact surface evidence cannot borrow freshness from a newer vector pass", () => {
+  const fixture = exactAdoptionFixture();
+  fixture.quantityId = "eden_demag";
+  fixture.observation.carrier.render.requestedPasses = ["surface", "vector-glyph"];
+  fixture.observation.carrier.render.surface.bufferKey = "scalar-8";
+  fixture.observation.carrier.render.adoption.surface = {
+    adoptedAtMs: 1_900,
+    adoptedFieldBufferId: "buffer-8",
+    adoptedResourceKey: fixture.response.resource_key,
+    adoptedScalarBufferKey: "scalar-8",
+    adoptionSequence: 6,
+  };
+  assert.equal(exactVisualizationAdoptionMatches(fixture), false);
+});
+
+test("exact render evidence rejects mismatched response revision carriers", () => {
+  for (const [key, value] of [
+    ["etag", '"wrong"'],
+    ["field_revision", "9"],
+    ["domain_generation_id", "generation-9"],
+    ["mesh_topology_hash", "mesh-9"],
+  ]) {
+    const fixture = exactAdoptionFixture();
+    fixture.response[key] = value;
+    assert.equal(exactVisualizationAdoptionMatches(fixture), false, key);
+  }
+});
+
+test("browser smoke rechecks WebGL health after the last field response before evidence capture", () => {
+  const finalSwitch = smokeSource.indexOf('setPhase("airbox-field-switches")');
+  const postSwitchHealth = smokeSource.indexOf(
+    'assertCanvasHealth(canvas, "after final field response")',
+  );
+  const screenshotPhase = smokeSource.indexOf('setPhase("screenshot")');
+
+  assert.ok(finalSwitch >= 0, "final field switch phase must exist");
+  assert.ok(postSwitchHealth > finalSwitch, "WebGL health must be rechecked after final field switching");
+  assert.ok(screenshotPhase > postSwitchHealth, "WebGL health must be rechecked immediately before evidence capture");
+  assert.match(smokeSource, /!.*visible|visible.*is_context_lost/s);
+  assert.match(smokeSource, /is_context_lost/);
+  assert.match(smokeSource, /drawing_buffer.*value.*<= 0/s);
 });

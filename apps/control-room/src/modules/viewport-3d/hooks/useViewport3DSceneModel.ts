@@ -5246,6 +5246,9 @@ export function useViewport3DSceneModel({
         const carrierIds = new Set(
           semanticTargetCatalog.byTargetId.get(target.id)?.carrierIds ?? [],
         );
+        if (target.id === "fdm-universe-outside-support") {
+          carrierIds.add(target.id);
+        }
         for (const [carrierId, regionTarget] of regionTargetByPartId) {
           if (regionTarget.id === target.id) carrierIds.add(carrierId);
         }

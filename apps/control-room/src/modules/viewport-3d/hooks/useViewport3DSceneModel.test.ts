@@ -98,6 +98,22 @@ const sceneModelSourceUrl = new URL("./useViewport3DSceneModel.ts", import.meta.
 const planarPreviewSourceUrl = new URL("../../../kernel/workspace/planarMonitorFramePreview.ts", import.meta.url);
 
 describe("FDM Airbox mesh demand", () => {
+  it("maps the outside-support debug target to its exact render carrier", () => {
+    const source = readFileSync(sceneModelSourceUrl, "utf8");
+    const targetsBlock = source.slice(
+      source.indexOf("const visualizationDebugTargets = useMemo"),
+      source.indexOf(
+        "const visualizationDebugTopologyByteLength",
+        source.indexOf("const visualizationDebugTargets = useMemo"),
+      ),
+    );
+
+    expect(targetsBlock).toContain(
+      'target.id === "fdm-universe-outside-support"',
+    );
+    expect(targetsBlock).toContain("carrierIds.add(target.id)");
+  });
+
   it("builds the inactive-cell carrier for wireframe, points, or vectors", () => {
     const source = readFileSync(sceneModelSourceUrl, "utf8");
 

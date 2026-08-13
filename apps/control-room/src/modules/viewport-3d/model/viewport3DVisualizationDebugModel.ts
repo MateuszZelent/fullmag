@@ -28,11 +28,6 @@ const MAX_DEBUG_SNAPSHOT_BYTES = 64 * 1024;
 const textEncoder = new TextEncoder();
 
 export interface Viewport3DVisualizationDebugCarrierInput {
-  adoptedFieldBufferId?: string | null;
-  adoptedResourceKey?: string | null;
-  adoptedScalarBufferKey?: string | null;
-  adoptedVectorBuildKey?: string | null;
-  adoptedVectorItemCount?: number | null;
   cache: Viewport3DFieldVectorCacheEntryDiagnostics | null;
   carrierId: string;
   carrierRole: string;
@@ -40,6 +35,7 @@ export interface Viewport3DVisualizationDebugCarrierInput {
   expectedDomainGenerationId?: string | null;
   expectedTopologyHash?: string | null;
   fieldBufferId?: string | null;
+  fieldBufferRevision?: string | null;
   fieldBufferState: string;
   fieldRevision?: string | null;
   geometryMaskDescription?: string | null;
@@ -61,13 +57,20 @@ export interface Viewport3DVisualizationDebugCarrierInput {
   scannedStats?: VisualizationDebugNumericStats | null;
   surfaceDegradation: string | null;
   surfaceProjectionMode: string | null;
+  surfaceAdoptedAtMs: number | null;
   surfaceAdoptedFieldBufferId: string | null;
   surfaceAdoptedResourceKey: string | null;
+  surfaceAdoptedScalarBufferKey: string | null;
+  surfaceAdoptionSequence: number | null;
   topologyByteLength?: number | null;
   vectorBuildKey?: string | null;
   vectorDegradation: string | null;
+  vectorAdoptedAtMs: number | null;
+  vectorAdoptedBuildKey: string | null;
   vectorAdoptedFieldBufferId: string | null;
+  vectorAdoptedItemCount: number | null;
   vectorAdoptedResourceKey: string | null;
+  vectorAdoptionSequence: number | null;
   vectorSegmentByteLength?: number | null;
   vectorSegmentCount?: number | null;
   webglSharedByteLength?: number | null;
@@ -212,6 +215,10 @@ function buildCarrier(
     snapshot: Object.freeze({
       cache: Object.freeze({
         byteLength: safeNullableByteLength(cache?.byteLength),
+        dataIdentityMatches:
+          typeof cache?.dataIdentityMatches === "boolean"
+            ? cache.dataIdentityMatches
+            : null,
         entryState: safeCacheEntryState(cache?.entryState),
         etag: boundNullableText(cache?.etag),
         fieldCacheByteLength: safeByteLength(input.fieldCacheBudget.byteLength),
@@ -239,15 +246,31 @@ function buildCarrier(
       }) : null,
       render: Object.freeze({
         adoption: Object.freeze({
-          adoptedFieldBufferId: boundNullableText(carrier.adoptedFieldBufferId),
-          adoptedResourceKey: boundNullableText(carrier.adoptedResourceKey),
-          adoptedScalarBufferKey: boundNullableText(carrier.adoptedScalarBufferKey),
-          adoptedVectorBuildKey: boundNullableText(carrier.adoptedVectorBuildKey),
-          adoptedVectorItemCount:
-            carrier.adoptedVectorItemCount == null
-              ? null
-              : safeCount(carrier.adoptedVectorItemCount),
           frameCommitId: input.frame.commitId ? boundText(input.frame.commitId) : null,
+          surface: Object.freeze({
+            adoptedAtMs: safeNullableByteLength(carrier.surfaceAdoptedAtMs),
+            adoptedFieldBufferId: boundNullableText(carrier.surfaceAdoptedFieldBufferId),
+            adoptedResourceKey: boundNullableText(carrier.surfaceAdoptedResourceKey),
+            adoptedScalarBufferKey: boundNullableText(carrier.surfaceAdoptedScalarBufferKey),
+            adoptionSequence:
+              carrier.surfaceAdoptionSequence == null
+                ? null
+                : safeCount(carrier.surfaceAdoptionSequence),
+          }),
+          vector: Object.freeze({
+            adoptedAtMs: safeNullableByteLength(carrier.vectorAdoptedAtMs),
+            adoptedFieldBufferId: boundNullableText(carrier.vectorAdoptedFieldBufferId),
+            adoptedResourceKey: boundNullableText(carrier.vectorAdoptedResourceKey),
+            adoptedVectorBuildKey: boundNullableText(carrier.vectorAdoptedBuildKey),
+            adoptedVectorItemCount:
+              carrier.vectorAdoptedItemCount == null
+                ? null
+                : safeCount(carrier.vectorAdoptedItemCount),
+            adoptionSequence:
+              carrier.vectorAdoptionSequence == null
+                ? null
+                : safeCount(carrier.vectorAdoptionSequence),
+          }),
         }),
         fieldBufferState: boundText(carrier.fieldBufferState),
         requestedFieldBufferId: boundNullableText(carrier.fieldBufferId),
@@ -258,6 +281,7 @@ function buildCarrier(
       request: Object.freeze({ plannerRequestId: boundNullableText(carrier.plannerRequestId), resourceKey: boundNullableText(carrier.resourceKey) }),
       revisions: Object.freeze({
         domainGenerationId: boundNullableText(decoded?.domainGenerationId),
+        fieldBufferRevision: boundNullableText(carrier.fieldBufferRevision),
         fieldRevision: boundNullableText(carrier.fieldRevision),
         meshTopologyHash: boundNullableText(decoded?.meshTopologyHash),
         topologyRevision: boundNullableText(decoded?.meshTopologyRevision),
@@ -282,7 +306,19 @@ function buildHealthEvidence(
     decoded?.domainGenerationId,
     carrier.expectedDomainGenerationId,
   );
-  const fieldRevisionCurrent = carrier.fieldRevision == null ? null : true;
+  const fieldRevisionCurrent = !fieldRequired(carrier)
+    ? true
+    : carrier.cache?.dataIdentityMatches === false ||
+        (carrier.fieldBufferRevision != null &&
+          carrier.cache?.etag != null &&
+          carrier.fieldBufferRevision !== carrier.cache.etag)
+      ? false
+      : carrier.cache?.dataIdentityMatches === true &&
+          carrier.fieldBufferRevision != null &&
+          carrier.cache.etag != null &&
+          carrier.fieldRevision != null
+        ? true
+        : null;
   const responseMetadataMatches = compareResponseMetadata(carrier);
   const topologyHashMatches = compareWhenKnown(
     decoded?.meshTopologyHash,
@@ -294,13 +330,13 @@ function buildHealthEvidence(
     !surfaceAdoptionRequired ||
     (carrier.surfaceAdoptedFieldBufferId != null &&
       carrier.fieldBufferId != null &&
-      carrier.adoptedScalarBufferKey != null &&
+      carrier.surfaceAdoptedScalarBufferKey != null &&
       carrier.scalarBufferKey != null);
   const vectorAdoptionComplete =
     !vectorAdoptionRequired ||
     (carrier.vectorAdoptedFieldBufferId != null &&
       carrier.fieldBufferId != null &&
-      carrier.adoptedVectorBuildKey != null &&
+      carrier.vectorAdoptedBuildKey != null &&
       carrier.vectorBuildKey != null);
   const surfaceAdoptionMismatch =
     surfaceAdoptionRequired &&
@@ -309,7 +345,7 @@ function buildHealthEvidence(
       carrier.fieldBufferId,
     ) ||
       knownIdentityMismatch(
-        carrier.adoptedScalarBufferKey,
+        carrier.surfaceAdoptedScalarBufferKey,
         carrier.scalarBufferKey,
       ) ||
       knownIdentityMismatch(
@@ -323,7 +359,7 @@ function buildHealthEvidence(
       carrier.fieldBufferId,
     ) ||
       knownIdentityMismatch(
-        carrier.adoptedVectorBuildKey,
+        carrier.vectorAdoptedBuildKey,
         carrier.vectorBuildKey,
       ) ||
       knownIdentityMismatch(
@@ -611,7 +647,12 @@ function combineDisposition(left: VisualizationDebugSnapshot["disposition"], rig
 
 function fieldRequired(carrier: Viewport3DVisualizationDebugCarrierInput): boolean {
   return boundedRequestedPasses(carrier.requestedPasses).length > 0 ||
-    Boolean(carrier.adoptedFieldBufferId || carrier.adoptedScalarBufferKey || carrier.adoptedVectorBuildKey) ||
+    Boolean(
+      carrier.surfaceAdoptedFieldBufferId ||
+      carrier.surfaceAdoptedScalarBufferKey ||
+      carrier.vectorAdoptedFieldBufferId ||
+      carrier.vectorAdoptedBuildKey
+    ) ||
     carrier.fieldBufferState === "derived-global" || carrier.fieldBufferState === "target-buffer";
 }
 

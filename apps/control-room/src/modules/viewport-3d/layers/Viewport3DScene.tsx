@@ -1228,6 +1228,8 @@ function Viewport3DModelLayerStack({
       viewport3DFdmCuboidLayerEnabledFromBrowserConfig() &&
       fdmAirboxPassPlan.needsInactiveCellGeometry && fdmAirboxMeshSettings ? (
         <FdmCuboidLayer
+          adoptionRegistry={adoptionRegistry}
+          carrierId="fdm-universe-outside-support"
           colors={colors}
           fieldVector={fdmAirboxFieldVector}
           vectorGlyphColors={fdmAirboxVectorGlyphColors?.colors ?? null}
@@ -1465,6 +1467,53 @@ function Viewport3DInteractionAndHudStack({
   );
 }
 
+function useViewport3DRenderAdoptionFrame({
+  adoptionRegistry,
+  invalidate,
+  onVisualizationFrameCommitted,
+  tracker,
+  visualizationRevision,
+}: {
+  adoptionRegistry?: Viewport3DRenderAdoptionRegistry;
+  invalidate: () => void;
+  onVisualizationFrameCommitted: (revision: number) => void;
+  tracker: Viewport3DResourceTracker;
+  visualizationRevision: number | null;
+}) {
+  useEffect(() => {
+    if (!adoptionRegistry) return;
+    let frameId: number | null = null;
+    const unsubscribe = adoptionRegistry.subscribe(() => {
+      tracker.recordDirtyFrame("render-adoption");
+      invalidate();
+      if (
+        frameId !== null ||
+        visualizationRevision === null ||
+        typeof window === "undefined"
+      ) {
+        return;
+      }
+      // idle-audit-allow-one-shot-raf: acknowledge adoption after its invalidated frame.
+      frameId = window.requestAnimationFrame(() => {
+        frameId = null;
+        onVisualizationFrameCommitted(visualizationRevision);
+      });
+    });
+    return () => {
+      unsubscribe();
+      if (frameId !== null && typeof window !== "undefined") {
+        window.cancelAnimationFrame(frameId);
+      }
+    };
+  }, [
+    adoptionRegistry,
+    invalidate,
+    onVisualizationFrameCommitted,
+    tracker,
+    visualizationRevision,
+  ]);
+}
+
 export function Viewport3DScene({
   adoptionRegistry,
   bounds,
@@ -1584,6 +1633,14 @@ export function Viewport3DScene({
     () => resolveViewport3DMaterialProfile(visualProfile),
     [visualProfile],
   );
+
+  useViewport3DRenderAdoptionFrame({
+    adoptionRegistry,
+    invalidate,
+    onVisualizationFrameCommitted,
+    tracker,
+    visualizationRevision,
+  });
 
   useLayoutEffect(() => {
     if (cameraProjection === "orthographic") {

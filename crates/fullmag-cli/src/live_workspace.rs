@@ -169,10 +169,54 @@ impl LocalLiveWorkspaceState {
         fields: Vec<fullmag_runner::LivePreviewField>,
     ) -> std::result::Result<(), Vec<fullmag_runner::LivePreviewField>> {
         if self.preview_cache_revision != expected_revision {
+            let mut recovered = false;
+            for field in &fields {
+                let preview_current = self.preview_fields.get(&field.quantity);
+                let pending_current = self.pending_preview_fields.get(&field.quantity);
+                let preview_contains_quantity = preview_current.is_some();
+                let pending_contains_quantity = pending_current.is_some();
+                let current =
+                    preview_current
+                        .into_iter()
+                        .chain(pending_current)
+                        .max_by(|left, right| {
+                            preview_field_source_precedence(left)
+                                .cmp(&preview_field_source_precedence(right))
+                        });
+                if current.is_some_and(|current| {
+                    preview_field_source_precedence(field)
+                        .cmp(&preview_field_source_precedence(current))
+                        .is_gt()
+                }) {
+                    if preview_contains_quantity {
+                        self.preview_fields.insert(field.clone());
+                    }
+                    if pending_contains_quantity {
+                        self.pending_preview_fields.insert(field.clone());
+                    }
+                    if should_promote_preview_field_to_latest(field) {
+                        promote_preview_field_to_latest_fields(&mut self.latest_fields, field);
+                    }
+                    recovered = true;
+                }
+            }
+            if recovered {
+                self.advance_preview_cache_revision();
+            }
             return Err(fields);
         }
         for field in fields {
-            self.preview_fields.insert(field);
+            let should_insert = self
+                .preview_fields
+                .get(&field.quantity)
+                .is_none_or(|current| {
+                    !preview_field_source_precedence(&field)
+                        .cmp(&preview_field_source_precedence(current))
+                        .is_lt()
+                });
+            if should_insert {
+                self.preview_fields.insert(field);
+            }
         }
         Ok(())
     }
@@ -667,14 +711,13 @@ fn merge_preview_field_payloads(
     existing: Option<Vec<fullmag_runner::LivePreviewField>>,
     incoming: Option<Vec<fullmag_runner::LivePreviewField>>,
 ) -> Option<Vec<fullmag_runner::LivePreviewField>> {
-    let mut merged = BTreeMap::new();
-    for field in existing.into_iter().flatten() {
-        merged.insert(field.quantity.clone(), field);
-    }
-    for field in incoming.into_iter().flatten() {
-        merged.insert(field.quantity.clone(), field);
-    }
-    (!merged.is_empty()).then(|| merged.into_values().collect())
+    let merged = newest_preview_fields(
+        existing
+            .into_iter()
+            .flatten()
+            .chain(incoming.into_iter().flatten()),
+    );
+    (!merged.is_empty()).then_some(merged)
 }
 
 fn elapsed_ns(start: Instant) -> u64 {
@@ -1666,12 +1709,13 @@ mod tests {
     use super::{
         apply_python_progress_event, bootstrap_live_state, clear_cached_preview_fields,
         fem_mesh_payload_clone_count, ingest_preview_fields_from_update, live_api_publish_enabled,
-        merge_detailed_mesh_workspace, merge_pending_publish_payload, publish_pending_scalar_rows,
-        replace_cached_preview_fields, reset_fem_mesh_payload_clone_count,
-        scalar_candidate_from_workspace_state, table_autosave_sample_due,
-        upsert_cached_preview_field, CurrentLivePublisher, CurrentLiveScalarRow,
-        CurrentLiveSnapshotPayload, LivePublishSink, LiveTelemetryPublishGate, LocalLiveWorkspace,
-        LocalLiveWorkspaceState, PendingScalarRows, ScalarSequenceKey,
+        merge_detailed_mesh_workspace, merge_pending_publish_payload, merge_preview_field_payloads,
+        publish_pending_scalar_rows, replace_cached_preview_fields,
+        reset_fem_mesh_payload_clone_count, scalar_candidate_from_workspace_state,
+        table_autosave_sample_due, upsert_cached_preview_field, CurrentLivePublisher,
+        CurrentLiveScalarRow, CurrentLiveSnapshotPayload, LivePublishSink,
+        LiveTelemetryPublishGate, LocalLiveWorkspace, LocalLiveWorkspaceState, PendingScalarRows,
+        ScalarSequenceKey,
     };
     use crate::simulation_preparation::{
         PreparationStageId, PreparationStageStatus, SimulationPreparationState,
@@ -3696,6 +3740,163 @@ mod tests {
         );
     }
 
+    #[test]
+    fn equal_generation_payload_merge_preserves_complete_source_time_in_both_orders() {
+        let mut complete = preview_field("H_demag", 7, 52.0);
+        complete.source_step = 52;
+        complete.source_revision = 52;
+        complete.source_time_seconds = Some(5.2e-12);
+        complete.materialized_at_unix_ms = 200;
+        let mut missing_time = complete.clone();
+        missing_time.source_time_seconds = None;
+        missing_time.vector_field_values = vec![0.0, 0.0, 0.0];
+
+        for (existing, incoming) in [
+            (complete.clone(), missing_time.clone()),
+            (missing_time.clone(), complete.clone()),
+        ] {
+            let merged = merge_preview_field_payloads(Some(vec![existing]), Some(vec![incoming]))
+                .expect("equal-generation field should remain merged");
+            assert_eq!(merged.len(), 1);
+            assert_eq!(merged[0].source_time_seconds, complete.source_time_seconds);
+            assert_eq!(merged[0].vector_field_values, complete.vector_field_values);
+        }
+    }
+
+    #[test]
+    fn equal_generation_payload_merge_prefers_later_scientific_time_in_both_orders() {
+        let mut earlier = preview_field("H_demag", 7, 52.0);
+        earlier.source_step = 52;
+        earlier.source_revision = 52;
+        earlier.source_time_seconds = Some(5.1e-12);
+        earlier.materialized_at_unix_ms = 300;
+        earlier.vector_field_values = vec![0.0, 0.0, 51.0];
+
+        let mut later = earlier.clone();
+        later.source_time_seconds = Some(5.2e-12);
+        later.materialized_at_unix_ms = 200;
+        later.vector_field_values = vec![0.0, 0.0, 52.0];
+
+        for (existing, incoming) in [
+            (earlier.clone(), later.clone()),
+            (later.clone(), earlier.clone()),
+        ] {
+            let merged = merge_preview_field_payloads(Some(vec![existing]), Some(vec![incoming]))
+                .expect("equal-generation field should remain merged");
+            assert_eq!(merged, vec![later.clone()]);
+        }
+    }
+
+    #[test]
+    fn equal_generation_payload_merge_rejects_incomplete_and_non_finite_source_times() {
+        let mut complete = preview_field("H_demag", 7, 52.0);
+        complete.source_step = 52;
+        complete.source_revision = 52;
+        complete.source_time_seconds = Some(5.2e-12);
+        complete.materialized_at_unix_ms = 100;
+        complete.vector_field_values = vec![0.0, 0.0, 52.0];
+
+        for invalid_time in [None, Some(f64::NAN), Some(f64::INFINITY), Some(-1.0)] {
+            let mut incomplete = complete.clone();
+            incomplete.source_time_seconds = invalid_time;
+            incomplete.materialized_at_unix_ms = 200;
+            incomplete.vector_field_values = vec![0.0, 0.0, 0.0];
+
+            for (existing, incoming) in [
+                (complete.clone(), incomplete.clone()),
+                (incomplete, complete.clone()),
+            ] {
+                let merged =
+                    merge_preview_field_payloads(Some(vec![existing]), Some(vec![incoming]))
+                        .expect("equal-generation field should remain merged");
+                assert_eq!(merged, vec![complete.clone()]);
+            }
+        }
+    }
+
+    #[test]
+    fn published_terminal_grid_field_survives_later_idle_refresh_without_source_time() {
+        let mut state = workspace_with_domain_mesh().snapshot();
+        let mut terminal = preview_field("H_demag", 7, 52.0);
+        terminal.spatial_kind = "grid".to_string();
+        terminal.quantity_domain = "full_domain".to_string();
+        terminal.preview_grid = [2, 1, 1];
+        terminal.original_grid = [2, 1, 1];
+        terminal.vector_field_values = vec![0.0, 0.0, 52.0, 0.0, 0.0, 53.0];
+        terminal.source_revision = 52;
+        terminal.materialized_at_unix_ms = 200;
+
+        let mut terminal_update = preview_update(terminal.clone());
+        terminal_update.grid = [2, 1, 1];
+        terminal_update.stats.step = 52;
+        terminal_update.stats.time = 5.2e-12;
+        terminal_update.preview_field = None;
+        terminal_update.cached_preview_fields = Some(vec![terminal.clone()]);
+        terminal_update.finished = true;
+        ingest_preview_fields_from_update(&mut state, &mut terminal_update);
+
+        let published = state.publish_delta();
+        let published_terminal = &published
+            .latest_fields
+            .as_ref()
+            .expect("terminal publication should include latest_fields")
+            .0["H_demag"];
+        assert_eq!(
+            published_terminal["values"],
+            serde_json::json!(terminal.vector_field_values)
+        );
+        assert_eq!(
+            published_terminal["source_time_seconds"],
+            serde_json::json!(5.2e-12)
+        );
+
+        let mut idle_refresh = terminal.clone();
+        idle_refresh.source_step = 52;
+        idle_refresh.source_time_seconds = None;
+        idle_refresh.materialized_at_unix_ms = terminal.materialized_at_unix_ms + 1;
+        idle_refresh.vector_field_values = vec![0.0; 6];
+        replace_cached_preview_fields(&mut state, vec![idle_refresh]);
+
+        assert_eq!(
+            state.latest_fields.0["H_demag"]["values"],
+            serde_json::json!(terminal.vector_field_values)
+        );
+        assert_eq!(
+            state.latest_fields.0["H_demag"]["source_time_seconds"],
+            serde_json::json!(5.2e-12)
+        );
+    }
+
+    #[test]
+    fn current_cache_commit_preserves_complete_time_over_pending_idle_refresh() {
+        let mut state = workspace_with_domain_mesh().snapshot();
+
+        let mut complete = preview_field("H_demag", 7, 52.0);
+        complete.source_step = 52;
+        complete.source_revision = 52;
+        complete.source_time_seconds = Some(5.2e-12);
+        complete.materialized_at_unix_ms = 200;
+        state.preview_fields.insert(complete.clone());
+
+        let mut pending = complete.clone();
+        pending.source_time_seconds = None;
+        pending.vector_field_values = vec![0.0, 0.0, 0.0];
+        state.pending_preview_fields.insert(pending);
+
+        let (_, taken, superseded, revision) = state.take_publish_delta_parts();
+        assert!(superseded.is_empty());
+        state
+            .commit_published_preview_cache_if_current(revision, taken)
+            .expect("unchanged cache revision should commit");
+
+        let cached = state
+            .preview_fields
+            .get("H_demag")
+            .expect("H_demag should remain cached");
+        assert_eq!(cached.source_time_seconds, complete.source_time_seconds);
+        assert_eq!(cached.vector_field_values, complete.vector_field_values);
+    }
+
     fn payload_with_live_step(
         step: u64,
         preview: Option<fullmag_runner::LivePreviewField>,
@@ -4841,12 +5042,50 @@ fn should_promote_preview_field_to_latest(field: &fullmag_runner::LivePreviewFie
         && (field.auto_downscaled || field.preview_grid != field.original_grid))
 }
 
-fn preview_field_source_key(field: &fullmag_runner::LivePreviewField) -> (u64, u64, u64) {
-    (
-        field.source_step,
-        field.source_revision,
-        field.materialized_at_unix_ms,
-    )
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct FieldSourcePrecedence {
+    source_step: u64,
+    source_revision: u64,
+    source_time_seconds: Option<f64>,
+    materialized_at_unix_ms: u64,
+}
+
+impl FieldSourcePrecedence {
+    fn scientific_cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.source_step
+            .cmp(&other.source_step)
+            .then_with(|| self.source_revision.cmp(&other.source_revision))
+            .then_with(
+                || match (self.source_time_seconds, other.source_time_seconds) {
+                    (Some(left), Some(right)) => left.total_cmp(&right),
+                    (Some(_), None) => std::cmp::Ordering::Greater,
+                    (None, Some(_)) => std::cmp::Ordering::Less,
+                    (None, None) => std::cmp::Ordering::Equal,
+                },
+            )
+    }
+
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.scientific_cmp(other).then_with(|| {
+            self.materialized_at_unix_ms
+                .cmp(&other.materialized_at_unix_ms)
+        })
+    }
+}
+
+fn valid_source_time(source_time_seconds: Option<f64>) -> Option<f64> {
+    source_time_seconds.filter(|time| time.is_finite() && *time >= 0.0)
+}
+
+fn preview_field_source_precedence(
+    field: &fullmag_runner::LivePreviewField,
+) -> FieldSourcePrecedence {
+    FieldSourcePrecedence {
+        source_step: field.source_step,
+        source_revision: field.source_revision,
+        source_time_seconds: valid_source_time(field.source_time_seconds),
+        materialized_at_unix_ms: field.materialized_at_unix_ms,
+    }
 }
 
 fn newest_preview_fields(
@@ -4855,7 +5094,9 @@ fn newest_preview_fields(
     let mut newest = BTreeMap::<String, fullmag_runner::LivePreviewField>::new();
     for field in fields {
         let should_insert = newest.get(&field.quantity).is_none_or(|current| {
-            preview_field_source_key(&field) >= preview_field_source_key(current)
+            !preview_field_source_precedence(&field)
+                .cmp(&preview_field_source_precedence(current))
+                .is_lt()
         });
         if should_insert {
             newest.insert(field.quantity.clone(), field);
@@ -4868,6 +5109,14 @@ fn promote_preview_field_to_latest_fields(
     latest_fields: &mut CurrentLiveLatestFields,
     field: &fullmag_runner::LivePreviewField,
 ) {
+    if latest_fields
+        .0
+        .get(&field.quantity)
+        .and_then(latest_field_source_precedence)
+        .is_some_and(|current| preview_field_source_precedence(field).cmp(&current).is_lt())
+    {
+        return;
+    }
     latest_fields.insert(
         field.quantity.clone(),
         serde_json::json!({
@@ -4887,6 +5136,19 @@ fn promote_preview_field_to_latest_fields(
             }
         }),
     );
+}
+
+fn latest_field_source_precedence(value: &serde_json::Value) -> Option<FieldSourcePrecedence> {
+    Some(FieldSourcePrecedence {
+        source_step: value.get("source_step")?.as_u64()?,
+        source_revision: value.get("source_revision")?.as_u64()?,
+        source_time_seconds: valid_source_time(
+            value
+                .get("source_time_seconds")
+                .and_then(serde_json::Value::as_f64),
+        ),
+        materialized_at_unix_ms: value.get("materialized_at_unix_ms")?.as_u64()?,
+    })
 }
 
 pub(crate) fn upsert_cached_preview_field(

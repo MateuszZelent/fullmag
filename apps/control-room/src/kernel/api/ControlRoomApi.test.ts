@@ -32,7 +32,7 @@ describe("derived B_drive display quantity", () => {
     const catalog = withDerivedDriveFluxDensity({
       domain_generation_id: "domain-1",
       revision: 7,
-      quantities: [{ available: true, components: 3, domain: "magnetic_only", domain_generation_id: "domain-1", field_revision: 4, kind: "vector", label: "Drive field", location: "node", materialization_wall_time_ns: 0, materialized_at_unix_ms: 0, quantity_id: "H_drive", source_revision: 4, source_step: 0, stale_by_steps: 0, state: "complete", unit: "A/m" }],
+      quantities: [{ available: true, components: 3, domain: "magnetic_only", domain_generation_id: "domain-1", field_revision: 4, kind: "vector", label: "Drive field", location: "node", materialization_wall_time_ns: 0, materialized_at_unix_ms: 0, quantity_id: "H_drive", source_revision: 4, source_step: 0, spatial: true, stale_by_steps: 0, state: "complete", ui_exposed: true, unit: "A/m" }],
     });
     expect(catalog.quantities.at(-1)).toMatchObject({
       label: "Drive flux density",

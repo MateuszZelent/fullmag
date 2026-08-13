@@ -57,12 +57,16 @@ async function main() {
   }
   const explorerTargets = {
     airbox: {
+      debugInspectorOwner: "airbox.visualization.debug",
+      debugNodeId: "model:airbox:visualization:debug",
       nodeId: "model:airbox:visualization",
       parentNodeIds: ["model:airbox"],
       inspectorOwner: "airbox.visualization",
       targetId: "fdm-universe-outside-support",
     },
     object: {
+      debugInspectorOwner: "object.visualization.debug",
+      debugNodeId: `model:object:${sceneObject.id}:visualization:debug`,
       nodeId: `model:object:${sceneObject.id}:visualization`,
       parentNodeIds: ["model:objects", `model:object:${sceneObject.id}`],
       inspectorOwner: "object.visualization",
@@ -94,12 +98,26 @@ async function main() {
   setPhase("browser-launch");
   const browser = await playwright.chromium.launch();
   const page = await browser.newPage({ viewport: { height: 900, width: 1440 } });
-  const requests = [];
+  const responses = [];
   const errors = [];
   page.on("console", (message) => { if (message.type() === "error") errors.push(message.text()); });
   page.on("pageerror", (error) => errors.push(error.message));
-  page.on("request", (request) => {
-    if (request.method() === "GET" && request.url().includes("/data/fields/")) requests.push(request.url());
+  page.on("response", (response) => {
+    const status = response.status();
+    if (
+      response.request().method() === "GET"
+      && response.url().includes("/data/fields/")
+      && status >= 200 && status < 300
+    ) {
+      const url = response.url();
+      responses.push({
+        handle: response,
+        query: Object.fromEntries(new URL(url).searchParams),
+        response_started_at_ms: Date.now(),
+        status,
+        url,
+      });
+    }
   });
   try {
     await page.addInitScript((baseUrl) => { window.__FULLMAG_CONFIG__ = { ...(window.__FULLMAG_CONFIG__ ?? {}), controlRoomApiBase: baseUrl }; }, apiBase);
@@ -107,29 +125,25 @@ async function main() {
     await page.goto(workspaceUrl, { waitUntil: "domcontentloaded", timeout: browserPhaseTimeoutMs });
     const canvas = page.locator(canvasSelector);
     await canvas.waitFor({ state: "visible", timeout: browserPhaseTimeoutMs });
-    const canvasHealth = await canvas.evaluate((node) => {
-      const gl = node.getContext("webgl2") ?? node.getContext("webgl");
-      const rect = node.getBoundingClientRect();
-      return { drawing_buffer: [gl?.drawingBufferWidth ?? 0, gl?.drawingBufferHeight ?? 0], is_context_lost: gl?.isContextLost() ?? true, visible: rect.width > 0 && rect.height > 0 };
-    });
-    if (!canvasHealth.visible || canvasHealth.is_context_lost || canvasHealth.drawing_buffer.some((value) => value <= 0)) throw new Error(`WebGL canvas unhealthy: ${JSON.stringify(canvasHealth)}`);
+    await assertCanvasHealth(canvas, "after workspace load");
     const switches = [];
     setPhase("object-quantity-switches");
-    switches.push(await switchInspectorQuantity({ page, explorerTargets, quantityId: "H_demag", requests, scope: "object", scopes }));
-    switches.push(await switchRibbonQuantity({ page, quantityId: "H_eff", requests, scope: "object", scopes }));
-    switches.push(await switchInspectorQuantity({ page, explorerTargets, quantityId: "H_ext", requests, scope: "object", scopes }));
-    switches.push(await switchInspectorQuantity({ page, explorerTargets, quantityId: "eden_demag", requests, scope: "object", scopes }));
+    switches.push(await switchInspectorQuantity({ page, explorerTargets, quantityId: "H_demag", responses, scope: "object", scopes }));
+    switches.push(await switchRibbonQuantity({ page, explorerTargets, quantityId: "H_eff", responses, scope: "object" }));
+    switches.push(await switchInspectorQuantity({ page, explorerTargets, quantityId: "H_ext", responses, scope: "object", scopes }));
+    switches.push(await switchInspectorQuantity({ page, explorerTargets, quantityId: "eden_demag", responses, scope: "object", scopes }));
     setPhase("airbox-quantity-gate");
     const airboxMagnetization = await assertAirboxMagnetizationUnavailable({ page, explorerTargets, scopes });
     setPhase("airbox-field-switches");
     for (const [scope, quantityId] of [["airbox", "H_demag"], ["airbox", "H_eff"]]) {
-      switches.push(await switchInspectorQuantity({ page, explorerTargets, quantityId, requests, scope, scopes }));
+      switches.push(await switchInspectorQuantity({ page, explorerTargets, quantityId, responses, scope, scopes }));
     }
+    const finalCanvasHealth = await assertCanvasHealth(canvas, "after final field response");
     setPhase("screenshot");
     const screenshotPath = `${artifactDir}/fdm-terminal-webgl.png`;
     const screenshot = await canvas.screenshot({ path: screenshotPath });
     if (errors.length > 0) throw new Error(`Browser errors: ${errors.join("\\n")}`);
-    const evidence = { schema_version: "fdm_terminal_webgl_gate.v1", qualification_status: "passed_cpu_fdm_terminal", terminal, telemetry, run, session_status: sessionStatus, stage_execution: stageExecution, catalog, fields, airbox_magnetization: airboxMagnetization, canvas: { ...canvasHealth, screenshot: { path: screenshotPath, sha256: createHash("sha256").update(screenshot).digest("hex") } }, field_requests: requests, quantity_switches: switches, no_manual_compute_fields: true, workspace_url: workspaceUrl };
+    const evidence = { schema_version: "fdm_terminal_webgl_gate.v1", qualification_status: "passed_cpu_fdm_terminal", terminal, telemetry, run, session_status: sessionStatus, stage_execution: stageExecution, catalog, fields, airbox_magnetization: airboxMagnetization, canvas: { ...finalCanvasHealth, screenshot: { path: screenshotPath, sha256: createHash("sha256").update(screenshot).digest("hex") } }, field_responses: responses.map(summarizeFieldResponse), quantity_switches: switches, no_manual_compute_fields: true, workspace_url: workspaceUrl };
     await writeEvidenceAtomically(evidencePath, evidence);
     console.log(`FDM terminal WebGL gate passed: ${evidencePath}`);
   } finally { await browser.close(); }
@@ -173,23 +187,43 @@ export async function awaitTerminalFieldGeneration({
   }
 }
 
-async function switchRibbonQuantity({ page, quantityId, requests, scope, scopes }) {
+async function switchRibbonQuantity({ page, explorerTargets, quantityId, responses, scope }) {
+  const preSwitchAdoptions = await captureLatestExactVisualizationAdoption({
+    page,
+    target: explorerTargets[scope],
+  });
   const results = page.getByRole("tab", { name: "Results", exact: true }).first();
   await results.click({ timeout: timeoutMs });
   const action = page.getByRole("button", { name: quantityId, exact: true }).first();
-  const before = requests.length;
+  const before = responses.length;
+  const switchStartedAtMs = Date.now();
   await action.click({ timeout: timeoutMs });
   await poll(`Ribbon ${quantityId} visualization state`, async () => {
     const state = await getJson("/v2/sessions/current/visualization/state");
     return state?.quantity?.active_quantity_id === quantityId ? state : null;
   });
-  const request = await waitForScopedFieldRequest({ requests, quantityId, scope: scopes[scope], start: before });
-  return { quantity_id: quantityId, request, scope, surface: "ribbon" };
+  const response = await waitForScopedFieldResponse({
+    quantityId,
+    responses,
+    scope: { scopeId: null, scopeKind: "full" },
+    start: before,
+  });
+  const adoption = await waitForExactVisualizationDebugEvidence({
+    page,
+    preSwitchAdoptionSequence:
+      preSwitchAdoptions.get(response.resource_key)?.[adoptionPass(quantityId)] ?? null,
+    quantityId,
+    response,
+    switchStartedAtMs,
+    target: explorerTargets[scope],
+  });
+  return { adoption, quantity_id: quantityId, response, scope, surface: "ribbon" };
 }
 
-async function switchInspectorQuantity({ page, explorerTargets, quantityId, requests, scope, scopes }) {
-  await patchJson("/v2/sessions/current/visualization/state", {
-    domains: { active_scope_id: scopes[scope].scopeId, active_scope_kind: scopes[scope].scopeKind },
+async function switchInspectorQuantity({ page, explorerTargets, quantityId, responses, scope, scopes }) {
+  const preSwitchAdoptions = await captureLatestExactVisualizationAdoption({
+    page,
+    target: explorerTargets[scope],
   });
   const inspector = await selectExplorerVisualizationTarget(page, explorerTargets[scope]);
   const quantity = inspector.locator('select[aria-label="Quantity Source"]');
@@ -197,15 +231,50 @@ async function switchInspectorQuantity({ page, explorerTargets, quantityId, requ
     throw new Error(`Selected ${scope} visualization inspector must expose exactly one Quantity Source select; found ${await quantity.count()}.`);
   }
   await quantity.waitFor({ state: "visible", timeout: timeoutMs });
-  const before = requests.length;
+  const before = responses.length;
+  const switchStartedAtMs = Date.now();
   await quantity.selectOption(quantityId);
   await poll(`Inspector ${scope} ${quantityId} quantity`, async () => {
-    const state = await getJson("/v2/sessions/current/visualization/state");
-    const override = (state?.overrides ?? []).find((entry) => entry.scope === scopes[scope].scopeKind && entry.scope_id === scopes[scope].scopeId);
-    return override?.quantity?.active_quantity_id === quantityId ? state : null;
+    return await quantity.inputValue() === quantityId ? true : null;
   });
-  const request = await waitForScopedFieldRequest({ requests, quantityId, scope: scopes[scope], start: before });
-  return { scope, quantity_id: quantityId, request, request_count_delta: requests.length - before, surface: "inspector" };
+  if (quantityId === "eden_demag") {
+    const colorSource = inspector.locator('select[aria-label="Color source"]');
+    await poll(`Inspector ${scope} ${quantityId} colormap pass`, async () =>
+      await colorSource.inputValue() === "colormap" ? true : null,
+    );
+  } else {
+    const vectorToggle = inspector.getByRole("button", {
+      name: "Toggle vector field arrows",
+      exact: true,
+    });
+    await vectorToggle.waitFor({ state: "visible", timeout: timeoutMs });
+    if (await vectorToggle.getAttribute("aria-pressed") !== "true") {
+      await vectorToggle.click({ timeout: timeoutMs });
+    }
+    await poll(`Inspector ${scope} ${quantityId} vector pass`, async () =>
+      await vectorToggle.getAttribute("aria-pressed") === "true" ? true : null,
+    );
+  }
+  const responseScope = {
+    scopeId: scope === "object" ? null : scopes[scope].scopeId,
+    scopeKind: scope === "object" ? "full" : "airbox",
+  };
+  const response = await waitForScopedFieldResponse({
+    quantityId,
+    responses,
+    scope: responseScope,
+    start: before,
+  });
+  const adoption = await waitForExactVisualizationDebugEvidence({
+    page,
+    preSwitchAdoptionSequence:
+      preSwitchAdoptions.get(response.resource_key)?.[adoptionPass(quantityId)] ?? null,
+    quantityId,
+    response,
+    switchStartedAtMs,
+    target: explorerTargets[scope],
+  });
+  return { adoption, scope, quantity_id: quantityId, response, response_count_delta: responses.length - before, surface: "inspector" };
 }
 
 async function assertAirboxMagnetizationUnavailable({ page, explorerTargets, scopes }) {
@@ -246,42 +315,381 @@ async function selectExplorerVisualizationTarget(page, target) {
   );
   const inspector = page.locator(`.fm-inspector-panel[data-inspector-owner="${target.inspectorOwner}"]`);
   await inspector.waitFor({ state: "visible", timeout: timeoutMs });
-  const targetGroup = inspector.locator('[data-slot="inspector-group"]', {
-    has: inspector.getByRole("heading", { name: "Target", exact: true }),
-  });
-  if (await targetGroup.count() !== 1) {
-    throw new Error(`Selected ${target.inspectorOwner} inspector must expose exactly one Target group; found ${await targetGroup.count()}.`);
-  }
-  const trigger = targetGroup.locator('[data-slot="inspector-group-trigger"]');
-  if (await trigger.count() !== 1) {
-    throw new Error(`Selected ${target.inspectorOwner} Target group must expose exactly one disclosure trigger; found ${await trigger.count()}.`);
+  let targetGroup;
+  let trigger;
+  let targetGroupCount = 0;
+  let triggerCount = 0;
+  let headings = [];
+  try {
+    ({ targetGroup, trigger } = await poll(`Explorer ${target.nodeId} Target group`, async () => {
+      headings = await inspector.getByRole("heading").allTextContents();
+      const candidate = inspector
+        .getByRole("heading", { name: "Target", exact: true })
+        .locator('xpath=ancestor::section[@data-slot="inspector-group"][1]');
+      targetGroupCount = await candidate.count();
+      const candidateTrigger = candidate.locator('[data-slot="inspector-group-trigger"]');
+      triggerCount = await candidateTrigger.count();
+      return targetGroupCount === 1 && triggerCount === 1
+        ? { targetGroup: candidate, trigger: candidateTrigger }
+        : null;
+    }));
+  } catch (error) {
+    throw new Error(
+      `Explorer ${target.nodeId} Target group did not resolve; headings=${JSON.stringify(headings)}; owner=${target.inspectorOwner}; target_group_count=${targetGroupCount}; trigger_count=${triggerCount}.`,
+      { cause: error },
+    );
   }
   if (await trigger.getAttribute("aria-expanded") === "false") {
     await trigger.click({ timeout: timeoutMs });
   }
-  const targetId = await targetGroup.locator(".fm-inspector-field-row").evaluateAll((rows) => {
-    const row = rows.find((candidate) =>
-      candidate.querySelector(".fm-inspector-field-row__label")?.textContent?.trim() === "Target ID",
+  let targetId = null;
+  try {
+    await poll(`Explorer ${target.nodeId} Target ID`, async () => {
+      targetId = await targetGroup.locator(".fm-inspector-field-row").evaluateAll((rows) => {
+        const row = rows.find((candidate) =>
+          candidate.querySelector(".fm-inspector-field-row__label")?.textContent?.trim() === "Target ID",
+        );
+        return row?.querySelector(".fm-inspector-field-row__value")?.textContent?.trim() ?? null;
+      });
+      return targetId === target.targetId ? true : null;
+    });
+  } catch (error) {
+    headings = await inspector.getByRole("heading").allTextContents();
+    throw new Error(
+      `Explorer ${target.nodeId} Target ID did not resolve; expected=${target.targetId}; actual=${targetId ?? "none"}; headings=${JSON.stringify(headings)}; owner=${target.inspectorOwner}.`,
+      { cause: error },
     );
-    return row?.querySelector(".fm-inspector-field-row__value")?.textContent?.trim() ?? null;
-  });
-  if (targetId !== target.targetId) {
-    throw new Error(`Explorer ${target.nodeId} opened ${target.inspectorOwner} with Target ID ${targetId ?? "none"}; expected ${target.targetId}.`);
   }
   return inspector;
 }
 
-async function waitForScopedFieldRequest({ requests, quantityId, scope, start = 0 }) {
-  return poll(`${scope.scopeKind} ${quantityId} viewport field request`, () => {
-    const prefix = `/v2/sessions/current/data/fields/${encodeURIComponent(quantityId)}/`;
-    const request = requests.slice(start).find((value) => {
-      const url = new URL(value);
-      return url.pathname.startsWith(prefix)
-        && url.searchParams.get("scope_kind") === scope.scopeKind
-        && url.searchParams.get("scope_id") === scope.scopeId;
-    });
-    return request ?? null;
+async function selectExplorerVisualizationDebugTarget(page, target) {
+  await selectExplorerVisualizationTarget(page, target);
+  const parent = explorerTreeItem(page, target.nodeId);
+  if (await parent.getAttribute("aria-expanded") === "false") {
+    await parent.focus();
+    await page.keyboard.press("ArrowRight");
+  }
+  const row = explorerTreeItem(page, target.debugNodeId);
+  await row.waitFor({ state: "visible", timeout: timeoutMs });
+  await row.click({ timeout: timeoutMs });
+  await poll(`Explorer debug selection ${target.debugNodeId}`, async () =>
+    await row.getAttribute("aria-selected") === "true" ? true : null,
+  );
+  const inspector = page.locator(
+    `.fm-inspector-panel[data-inspector-owner="${target.debugInspectorOwner}"]`,
+  );
+  await inspector.waitFor({ state: "visible", timeout: timeoutMs });
+  await inspector.locator(".fm-visualization-debug-panel").waitFor({
+    state: "visible",
+    timeout: timeoutMs,
   });
+  return inspector;
+}
+
+async function waitForExactVisualizationDebugEvidence({
+  page,
+  preSwitchAdoptionSequence,
+  quantityId,
+  response,
+  switchStartedAtMs,
+  target,
+}) {
+  const inspector = await selectExplorerVisualizationDebugTarget(page, target);
+  const rawJson = inspector.getByRole("button", {
+    name: "Raw bounded JSON",
+    exact: true,
+  });
+  await rawJson.waitFor({ state: "visible", timeout: timeoutMs });
+  if (await rawJson.getAttribute("aria-expanded") === "false") {
+    await rawJson.click({ timeout: timeoutMs });
+  }
+  let lastSnapshot = null;
+  try {
+    return await poll(`exact ${target.targetId} ${quantityId} render adoption`, async () => {
+      const text = await inspector.locator(".fm-visualization-debug-json code").textContent();
+      if (!text) return null;
+      const document = JSON.parse(text);
+      const observation = findExactVisualizationDebugObservation(
+        document,
+        response.resource_key,
+        target.targetId,
+        adoptionPass(quantityId),
+      );
+      lastSnapshot = observation?.carrier ?? document?.model ?? null;
+      if (!observation) return null;
+      const { carrier, snapshot } = observation;
+      const { adoption } = carrier.render;
+      const passAdoption = quantityId === "eden_demag"
+        ? adoption.surface
+        : adoption.vector;
+      if (
+        !exactVisualizationAdoptionMatches({
+          observation,
+          preSwitchAdoptionSequence,
+          quantityId,
+          response,
+          switchStartedAtMs,
+        })
+        || !["ready", "derived-global", "target-buffer"].includes(carrier.render.fieldBufferState)
+        || !carrier.render.requestedFieldBufferId
+        || carrier.render.requestedFieldBufferId !== passAdoption.adoptedFieldBufferId
+        || passAdoption.adoptedResourceKey !== response.resource_key
+      ) {
+        return null;
+      }
+      if (quantityId === "eden_demag") {
+        if (
+          !carrier.render.requestedPasses.includes("surface")
+          || !carrier.render.surface.bufferKey
+          || carrier.render.surface.bufferKey !== passAdoption.adoptedScalarBufferKey
+          || !(carrier.render.surface.scalarByteLength > 0)
+        ) {
+          return null;
+        }
+        return {
+          adopted_field_buffer_id: passAdoption.adoptedFieldBufferId,
+          adopted_resource_key: passAdoption.adoptedResourceKey,
+          adopted_scalar_buffer_key: passAdoption.adoptedScalarBufferKey,
+          adopted_at_ms: passAdoption.adoptedAtMs,
+          adoption_sequence: passAdoption.adoptionSequence,
+          field_buffer_state: carrier.render.fieldBufferState,
+          render_pass: "surface",
+          requested_field_buffer_id: carrier.render.requestedFieldBufferId,
+          pre_switch_adoption_sequence: preSwitchAdoptionSequence,
+          response_started_at_ms: response.response_started_at_ms,
+          response_body_started_at_ms: response.response_body_started_at_ms,
+          response_finished_at_ms: response.response_finished_at_ms,
+          snapshot_captured_at_ms: snapshot.capturedAtMs,
+          snapshot_frame_commit_id: snapshot.viewport.frameCommitId,
+          switch_started_at_ms: switchStartedAtMs,
+        };
+      }
+      if (
+        !carrier.render.requestedPasses.includes("vector-glyph")
+        || !carrier.render.vectors.buildKey
+        || carrier.render.vectors.buildKey !== passAdoption.adoptedVectorBuildKey
+        || !(carrier.render.vectors.segmentCount > 0)
+        || !(passAdoption.adoptedVectorItemCount > 0)
+      ) {
+        return null;
+      }
+      return {
+        adopted_field_buffer_id: passAdoption.adoptedFieldBufferId,
+        adopted_resource_key: passAdoption.adoptedResourceKey,
+        adopted_vector_build_key: passAdoption.adoptedVectorBuildKey,
+        adopted_vector_item_count: passAdoption.adoptedVectorItemCount,
+        adopted_at_ms: passAdoption.adoptedAtMs,
+        adoption_sequence: passAdoption.adoptionSequence,
+        field_buffer_state: carrier.render.fieldBufferState,
+        render_pass: "vector-glyph",
+        requested_field_buffer_id: carrier.render.requestedFieldBufferId,
+        pre_switch_adoption_sequence: preSwitchAdoptionSequence,
+        response_started_at_ms: response.response_started_at_ms,
+        response_body_started_at_ms: response.response_body_started_at_ms,
+        response_finished_at_ms: response.response_finished_at_ms,
+        snapshot_captured_at_ms: snapshot.capturedAtMs,
+        snapshot_frame_commit_id: snapshot.viewport.frameCommitId,
+        switch_started_at_ms: switchStartedAtMs,
+        vector_build_key: carrier.render.vectors.buildKey,
+      };
+    }, browserPhaseTimeoutMs);
+  } catch (error) {
+    throw new Error(
+      `Visualization Debug did not prove exact ${target.targetId} ${quantityId} adoption for ${response.resource_key}; last_snapshot=${JSON.stringify(lastSnapshot)}.`,
+      { cause: error },
+    );
+  }
+}
+
+async function captureLatestExactVisualizationAdoption({ page, target }) {
+  const inspector = await selectExplorerVisualizationDebugTarget(page, target);
+  const document = await readVisualizationDebugDocument(inspector);
+  const adoptions = new Map();
+  for (const viewport of document?.model?.viewports ?? []) {
+    for (const carrierGroup of viewport?.carriers ?? []) {
+      for (const observation of carrierGroup?.observations ?? []) {
+        const resourceKey = observation?.carrier?.request?.resourceKey;
+        const adoption = observation?.carrier?.render?.adoption;
+        if (!resourceKey || !adoption) continue;
+        const current = adoptions.get(resourceKey) ?? { surface: null, vector: null };
+        for (const pass of ["surface", "vector"]) {
+          const sequence = adoption[pass]?.adoptionSequence;
+          if (
+            Number.isSafeInteger(sequence)
+            && (current[pass] === null || sequence > current[pass])
+          ) {
+            current[pass] = sequence;
+          }
+        }
+        adoptions.set(resourceKey, current);
+      }
+    }
+  }
+  return adoptions;
+}
+
+async function readVisualizationDebugDocument(inspector) {
+  const rawJson = inspector.getByRole("button", {
+    name: "Raw bounded JSON",
+    exact: true,
+  });
+  await rawJson.waitFor({ state: "visible", timeout: timeoutMs });
+  if (await rawJson.getAttribute("aria-expanded") === "false") {
+    await rawJson.click({ timeout: timeoutMs });
+  }
+  return poll("Visualization Debug raw JSON", async () => {
+    const text = await inspector.locator(".fm-visualization-debug-json code").textContent();
+    return text ? JSON.parse(text) : null;
+  });
+}
+
+function findExactVisualizationDebugObservation(document, resourceKey, targetId, pass) {
+  const model = document?.model;
+  if (model?.target?.id !== targetId || !Array.isArray(model?.viewports)) return null;
+  let latest = null;
+  for (const viewport of model.viewports) {
+    for (const carrierGroup of viewport?.carriers ?? []) {
+      for (const observation of carrierGroup?.observations ?? []) {
+        const passAdoption = observation?.carrier?.render?.adoption?.[pass];
+        const latestPassAdoption = latest?.carrier?.render?.adoption?.[pass];
+        if (
+          observation?.carrier?.request?.resourceKey === resourceKey
+          && Number.isSafeInteger(passAdoption?.adoptionSequence)
+          && Number.isFinite(observation?.snapshot?.capturedAtMs)
+          && (
+            latest === null
+            || passAdoption.adoptionSequence > latestPassAdoption.adoptionSequence
+            || (
+              passAdoption.adoptionSequence === latestPassAdoption.adoptionSequence
+              && observation.snapshot.capturedAtMs >= latest.snapshot.capturedAtMs
+            )
+          )
+        ) {
+          latest = observation;
+        }
+      }
+    }
+  }
+  return latest;
+}
+
+async function waitForScopedFieldResponse({ responses, quantityId, scope, start = 0 }) {
+  const entry = await poll(`${scope.scopeKind} ${quantityId} viewport field response`, () => {
+    const prefix = `/v2/sessions/current/data/fields/${encodeURIComponent(quantityId)}/`;
+    const response = responses.slice(start).find((value) => {
+      const url = new URL(value.url);
+      if (
+        value.status < 200 || value.status >= 300
+        || url.pathname !== `${prefix}samples/vector`
+        || url.searchParams.get("scope_kind") !== scope.scopeKind
+      ) {
+        return false;
+      }
+      if (scope.scopeKind === "full") {
+        return !url.searchParams.has("scope_id");
+      }
+      const responseScopeId = url.searchParams.get("scope_id");
+      return responseScopeId === null || responseScopeId === scope.scopeId;
+    });
+    return response ?? null;
+  });
+  const response = entry.handle;
+  const responseBodyStartedAtMs = Date.now();
+  const headers = await response.allHeaders();
+  const bodyError = await response.finished();
+  if (bodyError) {
+    throw new Error(`Field response body did not finish for ${entry.url}: ${bodyError.message}`);
+  }
+  return {
+    ...summarizeFieldResponse(entry),
+    domain_generation_id: normalizedHeader(headers, "x-fullmag-domain-generation-id"),
+    etag: normalizedHeader(headers, "etag"),
+    field_revision: normalizedHeader(headers, "x-fullmag-field-revision"),
+    mesh_topology_hash: normalizedHeader(headers, "x-fullmag-mesh-topology-hash"),
+    response_started_at_ms: entry.response_started_at_ms,
+    response_body_started_at_ms: responseBodyStartedAtMs,
+    response_finished_at_ms: Date.now(),
+  };
+}
+
+function normalizedHeader(headers, name) {
+  const value = headers[name];
+  return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+export function exactVisualizationAdoptionMatches({
+  observation,
+  preSwitchAdoptionSequence,
+  quantityId,
+  response,
+  switchStartedAtMs,
+}) {
+  const carrier = observation?.carrier;
+  const adoption = carrier?.render?.adoption;
+  const pass = adoptionPass(quantityId);
+  const passAdoption = adoption?.[pass];
+  if (
+    !passAdoption
+    || !Number.isSafeInteger(passAdoption.adoptionSequence)
+    || passAdoption.adoptionSequence <= (preSwitchAdoptionSequence ?? 0)
+    || !Number.isSafeInteger(passAdoption.adoptedAtMs)
+    || passAdoption.adoptedAtMs < Math.max(switchStartedAtMs, response.response_started_at_ms)
+    || carrier.request?.resourceKey !== response.resource_key
+    || passAdoption.adoptedResourceKey !== response.resource_key
+    || !carrier.render.requestedFieldBufferId
+    || carrier.render.requestedFieldBufferId !== passAdoption.adoptedFieldBufferId
+    || !response.etag
+    || carrier.cache?.etag !== response.etag
+    || carrier.cache?.dataIdentityMatches !== true
+    || !response.field_revision
+    || carrier.revisions?.fieldRevision !== response.field_revision
+    || !response.domain_generation_id
+    || carrier.revisions?.domainGenerationId !== response.domain_generation_id
+    || (
+      response.mesh_topology_hash != null
+      && carrier.revisions?.meshTopologyHash !== response.mesh_topology_hash
+    )
+  ) {
+    return false;
+  }
+  if (quantityId === "eden_demag") {
+    return carrier.render.requestedPasses?.includes("surface")
+      && carrier.render.surface?.bufferKey === passAdoption.adoptedScalarBufferKey;
+  }
+  return carrier.render.requestedPasses?.includes("vector-glyph")
+    && carrier.render.vectors?.buildKey === passAdoption.adoptedVectorBuildKey;
+}
+
+function adoptionPass(quantityId) {
+  return quantityId === "eden_demag" ? "surface" : "vector";
+}
+
+function summarizeFieldResponse(entry) {
+  const url = new URL(entry.url);
+  return {
+    query: entry.query,
+    response_started_at_ms: entry.response_started_at_ms,
+    resource_key: `${url.pathname}${url.search}`,
+    status: entry.status,
+    url: entry.url,
+  };
+}
+
+async function assertCanvasHealth(canvas, phase) {
+  const health = await canvas.evaluate((node) => {
+    const gl = node.getContext("webgl2") ?? node.getContext("webgl");
+    const rect = node.getBoundingClientRect();
+    return {
+      drawing_buffer: [gl?.drawingBufferWidth ?? 0, gl?.drawingBufferHeight ?? 0],
+      is_context_lost: gl?.isContextLost() ?? true,
+      visible: rect.width > 0 && rect.height > 0,
+    };
+  });
+  if (!health.visible || health.is_context_lost || health.drawing_buffer.some((value) => value <= 0)) {
+    throw new Error(`WebGL canvas unhealthy ${phase}: ${JSON.stringify(health)}`);
+  }
+  return health;
 }
 
 async function getJson(path) { const response = await fetch(`${apiBase}${path}`); if (!response.ok) throw new Error(`${path}: ${response.status} ${await response.text()}`); return response.json(); }

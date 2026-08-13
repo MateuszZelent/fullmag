@@ -244,6 +244,7 @@ export function getViewport3DCacheStats() {
 
 export interface Viewport3DFieldVectorCacheEntryDiagnostics
   extends ResourceCacheEntryDiagnostics {
+  dataIdentityMatches: boolean | null;
   responseMetadata: FieldVectorResponseMetadata | null;
 }
 
@@ -255,11 +256,13 @@ export interface Viewport3DFieldVectorCacheBudgetDiagnostics {
 
 export function getViewport3DFieldVectorCacheEntryDiagnostics(
   resourceKey: string,
+  expectedData?: DecodedFieldVector,
 ): Viewport3DFieldVectorCacheEntryDiagnostics {
   return inspectViewport3DFieldVectorCacheEntryDiagnostics(
     fieldVectorCache,
     resourceKey,
     binaryResourceInflight,
+    expectedData,
   );
 }
 
@@ -267,8 +270,10 @@ export function inspectViewport3DFieldVectorCacheEntryDiagnostics<TInflight>(
   cache: ResourceCache<DecodedFieldVector, FieldVectorResponseMetadata>,
   resourceKey: string,
   inflightRegistry: WeakMap<object, ReadonlyMap<string, TInflight>>,
+  expectedData?: DecodedFieldVector,
 ): Viewport3DFieldVectorCacheEntryDiagnostics {
   const diagnostics = cache.inspect(resourceKey);
+  const entry = cache.peek(resourceKey);
   const binaryInflight =
     inflightRegistry.get(cache)?.has(resourceKey) ?? false;
   const entryState =
@@ -276,6 +281,8 @@ export function inspectViewport3DFieldVectorCacheEntryDiagnostics<TInflight>(
   const metadata = cache.peek(resourceKey)?.metadata;
   return {
     ...diagnostics,
+    dataIdentityMatches:
+      expectedData === undefined || !entry ? null : entry.data === expectedData,
     entryState,
     responseMetadata: metadata
       ? boundFieldVectorResponseMetadata(metadata)

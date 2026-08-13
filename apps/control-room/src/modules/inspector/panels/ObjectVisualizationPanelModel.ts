@@ -927,7 +927,7 @@ export function resolveVisualizationVectorAccounting({
     if (!payload) decodedComplete = false;
     else decodedSampleCount += payload.pointCount;
 
-    const adoption = carrier.render.adoption;
+    const adoption = carrier.render.adoption.vector;
     const adoptionMatches = Boolean(
       topologyMatches &&
         adoption.adoptedVectorItemCount != null &&
