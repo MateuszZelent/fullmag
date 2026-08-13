@@ -758,7 +758,7 @@ export function VisualizationQuantitySection({
         targetKind,
         fieldCatalog,
       ).map((quantity) => (
-        <option key={quantity.value} value={quantity.value}>
+        <option disabled={quantity.disabled} key={quantity.value} value={quantity.value}>
           {quantity.label}
         </option>
       ))}

@@ -634,6 +634,28 @@ export class ObjectVisualizationController {
     this.bump();
   }
 
+  removeAllTargetOverrideFields(field: keyof VisualizationTargetPatch): void {
+    let changed = false;
+    for (const [key, override] of this.overrides) {
+      const next = removeStoredTargetPatchField(override, field);
+      if (samePatch(override, next ?? {})) continue;
+      changed = true;
+      if (next && Object.keys(next).length > 0) this.overrides.set(key, next);
+      else this.overrides.delete(key);
+    }
+    for (const [key, pending] of this.pendingOverrides) {
+      const next = removeStoredTargetPatchField(pending.patch, field);
+      if (samePatch(pending.patch, next ?? {})) continue;
+      changed = true;
+      if (next && Object.keys(next).length > 0) {
+        this.pendingOverrides.set(key, { ...pending, patch: next });
+      } else {
+        this.pendingOverrides.delete(key);
+      }
+    }
+    if (changed) this.bump();
+  }
+
   getDefaultSettings(
     kind: VisualizationTargetKind,
     baseSettings?: VisualizationTargetSettings,

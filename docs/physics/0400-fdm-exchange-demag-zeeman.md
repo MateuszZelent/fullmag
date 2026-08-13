@@ -566,6 +566,13 @@ and time $t_f$ as `RunResult.final_magnetization`; a field captured from an earl
 labeled final. The batch replaces the prior terminal materialization as one generation. Consumers
 must not merge individual quantities from an older batch with quantities from the new one.
 
+The session field metadata exposes this coordinate as `source_step` and optional
+`source_time_seconds` (SI seconds). During `StepUpdate` ingestion, a finite non-negative
+`StepStats.time` is copied to each received field before terminal promotion. Older nonterminal
+live frames may omit `source_time_seconds` for wire compatibility, but a `Completed` terminal
+batch must expose it and it must equal the current run's `solver_time_seconds`; availability or a
+matching generation alone is insufficient terminal provenance.
+
 The batch is session-memory state, not a durable field artifact. It survives only while the
 interactive session remains resident; restart, reconnect, or process recovery requires an explicit
 scheduled artifact/output path and must not claim that this cache is disk persistence. `Failed` or
@@ -892,3 +899,5 @@ For this topic, `Exchange + Demag + Zeeman` are now executable in the public FDM
 | CPU terminal outcome | `crates/fullmag-runner/src/fdm/cpu/reference.rs` | `execute_reference_fdm` | Returns CPU run outcome and scheduled fields. | FDM CPU | part of current path, not proof of an atomic terminal generation/batch |
 | Preview-disable switch | `crates/fullmag-cli/src/live_workspace.rs` | `feature_flags` | Reads the benchmark/display preview configuration. | CLI control plane | does not qualify or replace terminal field finalization |
 | Session field promotion | `crates/fullmag-cli/src/live_workspace.rs` | `ingest_preview_fields_from_update` | Promotes incoming fields individually into session state. | CLI control plane | part of current path, not proof of an atomic terminal generation/batch |
+| Field source-time transport | `crates/fullmag-runner/src/types.rs` | `LivePreviewField` | Carries the optional solver-time provenance for live and terminal fields. | Runner/API | source-level contract; terminal proof remains lane-gated |
+| Field metadata resource | `crates/fullmag-api/src/schemas/fields.rs` | `FieldMeta`, `FieldDescriptor` | Exposes `source_time_seconds` with SI-second semantics to resource consumers. | API | source-level contract; terminal proof remains lane-gated |

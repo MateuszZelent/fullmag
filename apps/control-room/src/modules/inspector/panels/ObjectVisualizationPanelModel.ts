@@ -20,6 +20,7 @@ import type { VisualizationDebugSnapshot } from "@/kernel/visualization/visualiz
 import {
   isAnalysisFieldQuantityId,
   fieldCatalogQuantitySupportsAirbox,
+  fieldCatalogQuantitySupportsSpatialVisualization,
   isScalarSpatialQuantityId,
   resolveCanonicalQuantityId,
 } from "@/kernel/api/quantityIds";
@@ -926,7 +927,7 @@ export function resolveVisualizationVectorAccounting({
     if (!payload) decodedComplete = false;
     else decodedSampleCount += payload.pointCount;
 
-    const adoption = carrier.render.adoption;
+    const adoption = carrier.render.adoption.vector;
     const adoptionMatches = Boolean(
       topologyMatches &&
         adoption.adoptedVectorItemCount != null &&
@@ -1224,7 +1225,7 @@ export function visualizationQuantityItems(
   activeQuantityId: string,
   targetKind?: VisualizationTargetKind,
   fieldCatalog?: FieldCatalogResource | null,
-): Array<{ label: string; value: string }> {
+): Array<{ disabled?: boolean; label: string; value: string }> {
   const staticItemsByQuantityId = new Map(
     VISUALIZATION_QUANTITY_ITEMS.map((item) => [
       resolveCanonicalQuantityId(item.value),
@@ -1233,7 +1234,7 @@ export function visualizationQuantityItems(
   );
   let baseItems = fieldCatalog
     ? fieldCatalog.quantities
-        .filter((quantity) => quantity.available)
+        .filter(fieldCatalogQuantitySupportsSpatialVisualization)
         .map((quantity) => {
           const canonicalQuantityId = resolveCanonicalQuantityId(
             quantity.quantity_id,
@@ -1271,6 +1272,7 @@ export function visualizationQuantityItems(
       label: fieldCatalog
         ? `Unavailable / ${activeQuantityId}`
         : activeQuantityId,
+      ...(fieldCatalog ? { disabled: true } : {}),
     },
     ...baseItems,
   ];

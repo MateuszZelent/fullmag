@@ -4347,6 +4347,7 @@ async fn field_meta_and_vector_resolve_active_live_preview_field_after_snapshot_
                         preview_field: Some(LivePreviewField {
                             config_revision: 4,
                             source_step: 0,
+                            source_time_seconds: None,
                             source_revision: 4,
                             materialized_at_unix_ms: 0,
                             materialization_wall_time_ns: 0,
@@ -4478,6 +4479,7 @@ async fn field_frame_terminal_cache_wins_equal_generation_in_vector_route_body()
         let runtime_preview = LivePreviewField {
             config_revision: 7,
             source_step: 52,
+            source_time_seconds: None,
             source_revision: 7,
             materialized_at_unix_ms: 1_700_000_000_200,
             materialization_wall_time_ns: 100,
@@ -24672,6 +24674,132 @@ async fn fdm_field_vector_object_scope_rejects_mixed_default_numeric_membership(
 }
 
 #[tokio::test]
+async fn fdm_terminal_spatial_scalar_full_grid_preserves_values_and_object_indices() {
+    let (app, state, artifact_dir) = test_router_with_session_state_and_artifact_dir().await;
+    write_test_fdm_membership_artifact(&artifact_dir, [2, 1, 2]);
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.metadata = Some(serde_json::json!({
+            "artifact_layout": {
+                "backend": "fdm",
+                "grid_cells": [2, 1, 2],
+                "origin_m": [0.0, 0.0, 0.0],
+                "cell_size": [1.0, 1.0, 1.0]
+            }
+        }));
+        snapshot.latest_fields = serde_json::from_value(serde_json::json!({
+            "eden_demag": {
+                "quantity": "eden_demag",
+                "unit": "J/m³",
+                "values": [3.0, 4.0, 30.0, 40.0],
+                "source_step": 52,
+                "source_time_seconds": 5.2e-12,
+                "source_revision": 52,
+                "materialized_at_unix_ms": 1700000000123_u64,
+                "layout": {
+                    "grid_cells": [2, 1, 2],
+                    "original_grid_cells": [2, 1, 2],
+                    "spatial_kind": "grid",
+                    "quantity_domain": "magnetic_only"
+                }
+            }
+        }))
+        .expect("terminal scalar field should deserialize");
+    }
+
+    let meta = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/fields/eden_demag/meta?component=full&scope_kind=object&scope_id=body")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(meta.status(), StatusCode::OK);
+    let meta = body_json(meta).await;
+    assert_eq!(meta["components"], 1);
+    assert_eq!(meta["source_step"], 52);
+    assert_eq!(meta["source_time_seconds"], 5.2e-12);
+    assert_eq!(meta["stats"]["min"], 3.0);
+    assert_eq!(meta["stats"]["max"], 40.0);
+
+    let vector = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/fields/eden_demag/samples/vector?component=full&scope_kind=object&scope_id=body")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(vector.status(), StatusCode::OK);
+    assert_eq!(vector.headers()["x-fullmag-encoding"], "FMVP;version=3");
+    assert_eq!(vector.headers()["x-fullmag-n-comp"], "1");
+    assert_eq!(vector.headers()["x-fullmag-point-count"], "4");
+    let bytes = body_bytes(vector).await;
+    assert_eq!(&bytes[..4], b"FMVP");
+    assert_eq!(bytes[4], 3);
+    assert_eq!(decode_fmvp_node_indices(&bytes), vec![0, 1, 2, 3]);
+    assert_eq!(decode_fmvp_payload_f64(&bytes), vec![3.0, 4.0, 30.0, 40.0]);
+
+    let airbox = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/fields/eden_demag/meta?scope_kind=airbox&scope_id=airbox")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(airbox.status(), StatusCode::NOT_FOUND);
+    let _ = fs::remove_dir_all(&artifact_dir);
+}
+
+#[tokio::test]
+async fn fdm_terminal_spatial_scalar_plane_is_not_a_current_3d_field() {
+    let (app, state, artifact_dir) = test_router_with_session_state_and_artifact_dir().await;
+    write_test_fdm_membership_artifact(&artifact_dir, [2, 1, 2]);
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.metadata = Some(serde_json::json!({
+            "artifact_layout": {
+                "backend": "fdm",
+                "grid_cells": [2, 1, 2],
+                "origin_m": [0.0, 0.0, 0.0],
+                "cell_size": [1.0, 1.0, 1.0]
+            }
+        }));
+        snapshot.latest_fields = serde_json::from_value(serde_json::json!({
+            "eden_demag": {
+                "quantity": "eden_demag",
+                "unit": "J/m³",
+                "values": [3.0, 4.0],
+                "layout": {
+                    "grid_cells": [2, 1, 1],
+                    "original_grid_cells": [2, 1, 2],
+                    "spatial_kind": "grid",
+                    "quantity_domain": "magnetic_only"
+                }
+            }
+        }))
+        .expect("terminal scalar plane fixture should deserialize");
+    }
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/fields/eden_demag/samples/vector?component=full&scope_kind=object&scope_id=body")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    let _ = fs::remove_dir_all(&artifact_dir);
+}
+
+#[tokio::test]
 async fn fdm_field_vector_airbox_surface_and_max_samples_use_cell_ordinals() {
     let (app, state, artifact_dir) = test_router_with_session_state_and_artifact_dir().await;
     let mesh_dir = artifact_dir.join("mesh");
@@ -30389,6 +30517,7 @@ async fn v2_field_vector_prefers_fresh_m_preview_cache_over_stale_latest_field()
         snapshot.preview_cache.insert(LivePreviewField {
             config_revision: 4,
             source_step: 4,
+            source_time_seconds: None,
             source_revision: 4,
             materialized_at_unix_ms: 1_700_000_000_456,
             materialization_wall_time_ns: 80_000_000,
@@ -30511,6 +30640,7 @@ async fn v2_fdm_vector_ignores_max_samples_when_preview_would_be_downscaled() {
         snapshot.preview_cache.insert(LivePreviewField {
             config_revision: 8,
             source_step: 8,
+            source_time_seconds: None,
             source_revision: 8,
             materialized_at_unix_ms: 1_700_000_000_456,
             materialization_wall_time_ns: 80_000_000,
@@ -30708,6 +30838,7 @@ async fn v2_h_demag_resource_prefers_newer_preview_cache_over_stale_latest_field
         snapshot.preview_cache.insert(LivePreviewField {
             config_revision: 4,
             source_step: 52,
+            source_time_seconds: None,
             source_revision: 4,
             materialized_at_unix_ms: 1_700_000_000_456,
             materialization_wall_time_ns: 80_000_000,
@@ -30821,6 +30952,166 @@ async fn v2_h_demag_resource_prefers_newer_preview_cache_over_stale_latest_field
 }
 
 #[tokio::test]
+async fn v2_h_demag_meta_prefers_equal_generation_latest_with_source_time() {
+    let state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.latest_fields = serde_json::from_value(serde_json::json!({
+            "H_demag": {
+                "values": [[4.0, 0.0, 0.0], [4.0, 0.0, 0.0]],
+                "source_step": 4,
+                "source_time_seconds": 4.0e-13,
+                "source_revision": 4,
+                "materialized_at_unix_ms": 1_700_000_000_400_u64,
+                "layout": { "grid_cells": [2, 1, 1] }
+            }
+        }))
+        .expect("complete latest H_demag field should deserialize");
+        snapshot.preview_cache.insert(LivePreviewField {
+            config_revision: 4,
+            source_step: 4,
+            source_time_seconds: None,
+            source_revision: 4,
+            materialized_at_unix_ms: 1_700_000_000_400,
+            materialization_wall_time_ns: 80_000_000,
+            quantity: "H_demag".to_string(),
+            unit: "A/m".to_string(),
+            spatial_kind: "grid".to_string(),
+            quantity_domain: "magnetic_only".to_string(),
+            preview_grid: [2, 1, 1],
+            original_grid: [2, 1, 1],
+            vector_field_values: vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
+            x_chosen_size: 2,
+            y_chosen_size: 1,
+            applied_x_chosen_size: 2,
+            applied_y_chosen_size: 1,
+            applied_layer_stride: 1,
+            auto_downscaled: false,
+            auto_downscale_message: None,
+            active_mask: None,
+        });
+        snapshot.live_state = Some(LiveState {
+            status: "completed".into(),
+            updated_at_unix_ms: 1_700_000_000_789,
+            latest_step: StepUpdateView {
+                step: 4,
+                time: 4.0e-13,
+                dt: 1.0e-13,
+                pseudo_time_s: None,
+                e_ex: 0.0,
+                e_demag: 0.0,
+                e_ext: 0.0,
+                e_ani: 0.0,
+                e_dmi: 0.0,
+                e_total: 0.0,
+                max_dm_dt: 0.0,
+                max_h_eff: 0.0,
+                max_h_demag: 0.0,
+                max_torque_Apm: 0.0,
+                max_torque_T: 0.0,
+                wall_time_ns: 100,
+                grid: [2, 1, 1],
+                fem_mesh_generation_id: None,
+                fem_mesh: None,
+                magnetization: None,
+                per_object_scalars: Default::default(),
+                field_materialization_states: Vec::new(),
+                preview_field: None,
+                finished: true,
+            },
+        });
+    }
+    let app = build_v2_router().with_state(state);
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/fields/H_demag/meta")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let meta = body_json(response).await;
+    assert_eq!(meta["source_step"], 4);
+    assert_eq!(meta["source_time_seconds"], 4.0e-13);
+}
+
+#[tokio::test]
+async fn v2_terminal_eden_demag_metadata_keeps_final_solver_provenance() {
+    let state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.latest_fields = serde_json::from_value(serde_json::json!({
+            "eden_demag": {
+                "quantity": "eden_demag",
+                "unit": "J/m³",
+                "values": [1.25, 2.5],
+                "source_step": 52,
+                "source_time_seconds": 5.2e-12,
+                "source_revision": 52,
+                "layout": {
+                    "grid_cells": [2, 1, 1],
+                    "original_grid_cells": [2, 1, 1],
+                    "spatial_kind": "grid",
+                    "quantity_domain": "magnetic_only"
+                }
+            }
+        }))
+        .expect("terminal energy-density latest field should deserialize");
+        snapshot.live_state = Some(LiveState {
+            status: "awaiting_command".into(),
+            updated_at_unix_ms: 1_700_000_000_789,
+            latest_step: StepUpdateView {
+                step: 52,
+                time: 5.2e-12,
+                dt: 1.0e-13,
+                pseudo_time_s: None,
+                e_ex: 0.0,
+                e_demag: 0.0,
+                e_ext: 0.0,
+                e_ani: 0.0,
+                e_dmi: 0.0,
+                e_total: 0.0,
+                max_dm_dt: 0.0,
+                max_h_eff: 0.0,
+                max_h_demag: 0.0,
+                max_torque_Apm: 0.0,
+                max_torque_T: 0.0,
+                wall_time_ns: 100,
+                grid: [2, 1, 1],
+                fem_mesh_generation_id: None,
+                fem_mesh: None,
+                magnetization: None,
+                per_object_scalars: Default::default(),
+                field_materialization_states: Vec::new(),
+                preview_field: None,
+                finished: false,
+            },
+        });
+    }
+    let app = build_v2_router().with_state(state);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/fields/eden_demag/meta?component=full")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let meta = body_json(response).await;
+    assert_eq!(meta["state"], "complete");
+    assert_eq!(meta["source_step"], 52);
+    assert_eq!(meta["source_time_seconds"], 5.2e-12);
+    assert_eq!(meta["unit"], "J/m³");
+}
+
+#[tokio::test]
 async fn v2_optional_field_materialization_pending_and_error_preserve_solver_and_last_good_data() {
     use fullmag_runner::{LiveFieldMaterializationState, LiveFieldMaterializationStatus};
 
@@ -30829,6 +31120,7 @@ async fn v2_optional_field_materialization_pending_and_error_preserve_solver_and
         snapshot.preview_cache.insert(LivePreviewField {
             config_revision: 3,
             source_step: 4,
+            source_time_seconds: None,
             source_revision: 7,
             materialized_at_unix_ms: 1_700_000_000_456,
             materialization_wall_time_ns: 80_000_000,
@@ -31043,6 +31335,7 @@ async fn v2_energy_density_meta_exposes_fem_nodal_projection_location() {
         snapshot.preview_cache.insert(LivePreviewField {
             config_revision: 3,
             source_step: 4,
+            source_time_seconds: None,
             source_revision: 7,
             materialized_at_unix_ms: 1_700_000_000_456,
             materialization_wall_time_ns: 80_000,

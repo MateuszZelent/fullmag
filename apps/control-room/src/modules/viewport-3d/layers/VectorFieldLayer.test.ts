@@ -133,6 +133,17 @@ describe("VectorFieldLayer performance contracts", () => {
       vectorBuildKey: "vector-adopted",
     });
   });
+  it("passes the stable layer owner on the first visible vector adoption", () => {
+    const recordStart = vectorFieldLayerSource.indexOf(
+      "const recordAdoption = useCallback",
+    );
+    const firstRecordBlock = vectorFieldLayerSource.slice(
+      recordStart,
+      vectorFieldLayerSource.indexOf("useEffect(() => {", recordStart),
+    );
+
+    expect(firstRecordBlock).toContain("ownerId: adoptionOwnerId");
+  });
   it("restores a partially uploaded glyph color lane after a later chunk fails", () => {
     const scheduled: Array<() => void> = [];
     const geometry = new BoxGeometry(1, 1, 1);

@@ -101,11 +101,22 @@ function carrier({
     },
     render: {
       adoption: {
-        adoptedFieldBufferId: "buffer-12",
-        adoptedResourceKey: resourceKey,
-        adoptedScalarBufferKey: "scalar-12",
-        adoptedVectorBuildKey: "vectors-12",
         frameCommitId: "frame-12",
+        surface: {
+          adoptedAtMs: 12,
+          adoptedFieldBufferId: "buffer-12",
+          adoptedResourceKey: resourceKey,
+          adoptedScalarBufferKey: "scalar-12",
+          adoptionSequence: 12,
+        },
+        vector: {
+          adoptedAtMs: 12,
+          adoptedFieldBufferId: "buffer-12",
+          adoptedResourceKey: resourceKey,
+          adoptedVectorBuildKey: "vectors-12",
+          adoptedVectorItemCount: 4,
+          adoptionSequence: 12,
+        },
       },
       fieldBufferState: "ready",
       requestedFieldBufferId: "buffer-12",
@@ -232,6 +243,18 @@ describe("VisualizationDebugPanelModel", () => {
   it("resolves only canonical Airbox, object and region targets from SelectionRef", () => {
     expect(resolveVisualizationDebugTarget(selection({ kind: "airbox" }))).toEqual({
       id: "airbox",
+      kind: "airbox",
+      selectionKind: "airbox.visualization.debug",
+    });
+    expect(
+      resolveVisualizationDebugTarget({
+        kind: "airbox.visualization.debug",
+        nodeId: "model:airbox:visualization:debug",
+        type: "airbox",
+        visualizationTargetId: "fdm-universe-outside-support",
+      }),
+    ).toEqual({
+      id: "fdm-universe-outside-support",
       kind: "airbox",
       selectionKind: "airbox.visualization.debug",
     });
@@ -1019,7 +1042,10 @@ describe("VisualizationDebugPanelModel", () => {
         ...vectorOnly.render,
         adoption: {
           ...vectorOnly.render.adoption,
-          adoptedVectorBuildKey: "vectors-other",
+          vector: {
+            ...vectorOnly.render.adoption.vector!,
+            adoptedVectorBuildKey: "vectors-other",
+          },
         },
       },
     };
@@ -1122,8 +1148,11 @@ describe("VisualizationDebugPanelModel", () => {
         ...exactCarrier.render,
         adoption: {
           ...exactCarrier.render.adoption,
-          adoptedFieldBufferId: null,
-          adoptedScalarBufferKey: null,
+          surface: {
+            ...exactCarrier.render.adoption.surface!,
+            adoptedFieldBufferId: null,
+            adoptedScalarBufferKey: null,
+          },
         },
         requestedFieldBufferId: null,
         surface: { ...exactCarrier.render.surface, bufferKey: null },
@@ -1148,7 +1177,10 @@ describe("VisualizationDebugPanelModel", () => {
         ...exactCarrier.render,
         adoption: {
           ...exactCarrier.render.adoption,
-          adoptedResourceKey: `${query.vectorResourceKey}:other`,
+          surface: {
+            ...exactCarrier.render.adoption.surface!,
+            adoptedResourceKey: `${query.vectorResourceKey}:other`,
+          },
         },
       },
     };
@@ -1340,7 +1372,10 @@ describe("VisualizationDebugPanelModel", () => {
             ...legacyCarrier.render,
             adoption: {
               ...legacyCarrier.render.adoption,
-              adoptedFieldBufferId: "other-buffer",
+              surface: {
+                ...legacyCarrier.render.adoption.surface!,
+                adoptedFieldBufferId: "other-buffer",
+              },
             },
           },
         },

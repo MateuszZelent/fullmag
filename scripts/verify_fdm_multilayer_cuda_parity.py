@@ -4,9 +4,39 @@
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import json
 import math
 from pathlib import Path
+
+
+PRECISION_CONTRACT_PATH = (
+    Path(__file__).resolve().parent / "fdm_multilayer_cuda_precision_contract.py"
+)
+
+
+def load_precision_contract_validator():
+    spec = importlib.util.spec_from_file_location(
+        "fdm_multilayer_cuda_precision_contract",
+        PRECISION_CONTRACT_PATH,
+    )
+    if spec is None or spec.loader is None:
+        raise RuntimeError("precision_contract_helper_unavailable")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module.validate_precision_contract
+
+
+def load_cuda_identity_validator():
+    spec = importlib.util.spec_from_file_location(
+        "fdm_multilayer_cuda_precision_contract",
+        PRECISION_CONTRACT_PATH,
+    )
+    if spec is None or spec.loader is None:
+        raise RuntimeError("precision_contract_helper_unavailable")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module.validate_cuda_identity
 
 
 def read_json(path: Path) -> dict:
@@ -32,18 +62,11 @@ def field_values(root: Path) -> list[float]:
     return values
 
 
-def verify(cpu: Path, cuda: Path, thresholds: Path, lane: str) -> dict:
-    cpu_values = field_values(cpu)
-    cuda_values = field_values(cuda)
-    if len(cpu_values) != len(cuda_values):
-        raise ValueError("CPU/CUDA H_demag payload lengths differ")
-    metadata = read_json(cuda / "metadata.json")
-    provenance = metadata.get("execution_provenance")
-    if not isinstance(provenance, dict):
-        raise ValueError("CUDA execution provenance is missing")
+def validate_d07_stage(provenance: dict, reason_prefix: str) -> dict:
     stage = provenance.get("fdm_multilayer_stage_telemetry")
     if not isinstance(stage, dict) or stage.get("status") != "recorded":
-        raise ValueError("d07_telemetry_not_qualified")
+        code = "d07_telemetry_not_qualified"
+        raise ValueError(f"{reason_prefix}_{code}" if reason_prefix else code)
     expected = {
         "execution_engine": "cuda_native_multilayer_demag_v2",
         "data_residency": "device_resident_per_refresh",
@@ -56,7 +79,51 @@ def verify(cpu: Path, cuda: Path, thresholds: Path, lane: str) -> dict:
     }
     for key, value in expected.items():
         if stage.get(key) != value:
-            raise ValueError(f"d07_telemetry_not_qualified:{key}")
+            code = f"d07_telemetry_not_qualified:{key}"
+            raise ValueError(f"{reason_prefix}_{code}" if reason_prefix else code)
+    return stage
+
+
+def verify(cpu: Path, cuda: Path, thresholds: Path, lane: str) -> dict:
+    reference_metadata = read_json(cpu / "metadata.json")
+    candidate_metadata = read_json(cuda / "metadata.json")
+    reference_provenance = reference_metadata.get("execution_provenance")
+    candidate_provenance = candidate_metadata.get("execution_provenance")
+    if not isinstance(reference_provenance, dict):
+        raise ValueError("reference execution provenance is missing")
+    if not isinstance(candidate_provenance, dict):
+        raise ValueError("candidate execution provenance is missing")
+    if reference_provenance.get("lossy_fallback_used") is not False:
+        raise ValueError("reference_fallback_not_proven_absent")
+    if reference_provenance.get("resolved_fallback") is not None:
+        raise ValueError("reference_fallback_not_proven_absent")
+    expected_reference_engine = (
+        "cpu_reference_multilayer"
+        if lane == "cuda-fp64"
+        else "cuda_native_multilayer_demag_v2"
+    )
+    if reference_provenance.get("execution_engine") != expected_reference_engine:
+        raise ValueError("reference_execution_engine_not_qualified")
+    if lane == "cuda-fp32":
+        validate_d07_stage(reference_provenance, "reference")
+        if reference_provenance.get("fft_backend") != "cuFFT":
+            raise ValueError("reference_cuda_provenance_not_qualified")
+        try:
+            load_cuda_identity_validator()(reference_provenance)
+        except ValueError as error:
+            raise ValueError(f"reference_cuda_provenance_not_qualified:{error}") from error
+    precision_contract = load_precision_contract_validator()(
+        reference_provenance,
+        candidate_provenance,
+        lane,
+    )
+
+    cpu_values = field_values(cpu)
+    cuda_values = field_values(cuda)
+    if len(cpu_values) != len(cuda_values):
+        raise ValueError("CPU/CUDA H_demag payload lengths differ")
+    provenance = candidate_provenance
+    stage = validate_d07_stage(provenance, "")
     execution_engine = provenance.get("execution_engine")
     if execution_engine == "cuda_assisted_multilayer":
         raise ValueError("cuda_assisted_multilayer_not_qualified")
@@ -96,7 +163,11 @@ def verify(cpu: Path, cuda: Path, thresholds: Path, lane: str) -> dict:
         "schema_version": "fdm_multilayer_cuda_parity.v1",
         "status": "qualified",
         "lane": lane,
-        "overall_execution_residency": "device_resident_per_refresh",
+        # The surrounding staged solver remains host-authoritative.  The
+        # D-07 stage telemetry is the narrower proof for device residency of
+        # the multilayer demag refresh itself.
+        "overall_execution_residency": "host_authoritative",
+        "precision_contract": precision_contract,
         "d07_stage": stage,
         "parity": metric,
     }

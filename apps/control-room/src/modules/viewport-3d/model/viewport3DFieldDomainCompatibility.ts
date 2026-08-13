@@ -11,6 +11,7 @@ type FieldResponseDomainIdentity = Pick<
 export interface Viewport3DFieldDomainIdentity {
   discretization?: "fdm" | "fem";
   domainGenerationId: string | null;
+  gridShape?: readonly [number, number, number] | null;
   meshTopologyHash: string | null;
   meshTopologyRevision: string | null;
   pointCount: number;
@@ -91,7 +92,8 @@ export function resolveViewport3DFieldDomainCompatibility({
     | "meshTopologyRevision"
     | "nodeIndices"
     | "pointCount"
-  >;
+  > &
+    Partial<Pick<DecodedFieldVector, "grid" | "nComp">>;
   responseDomainGenerationId?: string | null;
 }): Viewport3DFieldDomainCompatibility {
   if (field.formatVersion === 3) {
@@ -141,16 +143,19 @@ export function resolveViewport3DFieldDomainCompatibility({
     if (field.meshTopologyHash != null && domain.meshTopologyHash == null) {
       return { reason: "fdm-carrier-identity-unknown", status: "mismatch" };
     }
-    const fdmIndexing = buildFdmFieldIndexResolver(field, domain.pointCount);
+    const fdmIndexing = buildFdmFieldIndexResolver(
+      field,
+      domain.pointCount,
+      domain.gridShape,
+    );
     if (fdmIndexing.status === "degraded") {
       return { reason: fdmIndexing.reason, status: "mismatch" };
     }
   }
 
   if (
-    (field.indexing === "full_domain" ||
-      (domain.discretization === "fdm" &&
-        (field.indexing === "legacy_count_only" || field.indexing == null))) &&
+    domain.discretization !== "fdm" &&
+    field.indexing === "full_domain" &&
     field.pointCount > 0 &&
     domain.pointCount > 0 &&
     field.pointCount !== domain.pointCount

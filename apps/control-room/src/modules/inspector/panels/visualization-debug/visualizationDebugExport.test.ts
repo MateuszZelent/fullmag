@@ -240,7 +240,11 @@ function exportModel(resourceKey: string): VisualizationDebugPanelModel {
                   memory: [],
                   payload: null,
                   render: {
-                    adoption: { adoptedFieldBufferId: null, adoptedResourceKey: resourceKey, adoptedScalarBufferKey: null, adoptedVectorBuildKey: null, frameCommitId: "frame-1" },
+                    adoption: {
+                      frameCommitId: "frame-1",
+                      surface: { adoptedAtMs: null, adoptedFieldBufferId: null, adoptedResourceKey: resourceKey, adoptedScalarBufferKey: null, adoptionSequence: null },
+                      vector: { adoptedAtMs: null, adoptedFieldBufferId: null, adoptedResourceKey: null, adoptedVectorBuildKey: null, adoptedVectorItemCount: null, adoptionSequence: null },
+                    },
                     fieldBufferState: "ready",
                     requestedFieldBufferId: null,
                     requestedPasses: [],

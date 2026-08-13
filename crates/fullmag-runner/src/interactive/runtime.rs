@@ -61,6 +61,7 @@ pub(crate) fn build_atomic_terminal_update(
             .as_millis() as u64;
         for field in &mut fields {
             field.source_step = final_stats.step;
+            field.source_time_seconds = Some(final_stats.time);
             field.source_revision = final_stats.step;
             field.materialized_at_unix_ms = materialized_at_unix_ms;
         }

@@ -4454,9 +4454,18 @@ export interface components {
             source_revision: number;
             /** Format: int64 */
             source_step: number;
+            /**
+             * Format: double
+             * @description Solver time in seconds for the state that produced this field, when known.
+             */
+            source_time_seconds?: number | null;
+            /** @description Whether this descriptor can be rendered as a spatial viewport field. */
+            spatial: boolean;
             /** Format: int64 */
             stale_by_steps: number;
             state: components["schemas"]["FieldMaterializationState"];
+            /** @description Whether this canonical quantity is intended for interactive UI selection. */
+            ui_exposed: boolean;
             unit: string;
         };
         FieldDriveCreateRequest: {
@@ -4553,6 +4562,11 @@ export interface components {
             source_revision: number;
             /** Format: int64 */
             source_step: number;
+            /**
+             * Format: double
+             * @description Solver time in seconds for the state that produced this field, when known.
+             */
+            source_time_seconds?: number | null;
             /** Format: int64 */
             stale_by_steps: number;
             state: components["schemas"]["FieldMaterializationState"];

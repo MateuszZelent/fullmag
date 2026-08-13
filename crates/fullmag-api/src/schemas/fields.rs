@@ -23,6 +23,10 @@ pub enum FieldMaterializationState {
 pub struct FieldDescriptor {
     pub quantity_id: String,
     pub label: String,
+    /// Whether this canonical quantity is intended for interactive UI selection.
+    pub ui_exposed: bool,
+    /// Whether this descriptor can be rendered as a spatial viewport field.
+    pub spatial: bool,
     pub domain: String,
     pub kind: String,
     pub components: u8,
@@ -32,6 +36,9 @@ pub struct FieldDescriptor {
     pub domain_generation_id: String,
     pub available: bool,
     pub source_step: u64,
+    /// Solver time in seconds for the state that produced this field, when known.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_time_seconds: Option<f64>,
     pub source_revision: u64,
     pub materialized_at_unix_ms: u64,
     pub stale_by_steps: u64,
@@ -53,6 +60,9 @@ pub struct FieldMeta {
     pub domain_generation_id: String,
     pub stats: Option<FieldStats>,
     pub source_step: u64,
+    /// Solver time in seconds for the state that produced this field, when known.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_time_seconds: Option<f64>,
     pub source_revision: u64,
     pub materialized_at_unix_ms: u64,
     pub stale_by_steps: u64,

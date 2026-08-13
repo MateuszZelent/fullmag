@@ -60,6 +60,47 @@ describe("Viewport3DScene scale helpers", () => {
     expect(source).not.toContain("pointsVisible: false,\n        shaderVisible: false,\n        wireframeVisible: false,");
   });
 
+  it("routes outside-support FDM field adoption through its exact carrier", () => {
+    const source = readFileSync(
+      new URL("./Viewport3DScene.tsx", import.meta.url),
+      "utf8",
+    );
+    const airboxPass = source.slice(
+      source.indexOf("fdmAirboxPassPlan.needsInactiveCellGeometry"),
+      source.indexOf("!fdmLaneActive", source.indexOf("fdmAirboxPassPlan.needsInactiveCellGeometry")),
+    );
+
+    expect(airboxPass).toContain("adoptionRegistry={adoptionRegistry}");
+    expect(airboxPass).toContain(
+      'carrierId="fdm-universe-outside-support"',
+    );
+  });
+
+  it("invalidates demand rendering before acknowledging changed adoption evidence", () => {
+    const source = readFileSync(
+      new URL("./Viewport3DScene.tsx", import.meta.url),
+      "utf8",
+    );
+    const adoptionFrameHook = source.slice(
+      source.indexOf("function useViewport3DRenderAdoptionFrame"),
+      source.indexOf("export function Viewport3DScene"),
+    );
+
+    expect(adoptionFrameHook).toContain("adoptionRegistry.subscribe");
+    expect(adoptionFrameHook).toContain('tracker.recordDirtyFrame("render-adoption")');
+    const subscriberStart = adoptionFrameHook.indexOf(
+      "adoptionRegistry.subscribe",
+    );
+    expect(
+      adoptionFrameHook.indexOf("invalidate();", subscriberStart),
+    ).toBeLessThan(
+      adoptionFrameHook.indexOf(
+        "onVisualizationFrameCommitted(visualizationRevision)",
+        subscriberStart,
+      ),
+    );
+  });
+
   it("places the shared glyph-cache provider above the model stack that mounts VectorFieldLayer consumers", () => {
     const source = readFileSync(
       new URL("./Viewport3DScene.tsx", import.meta.url),
@@ -595,6 +636,21 @@ describe("Viewport3DScene scale helpers", () => {
     expect(resolveNextViewport3DModelLayerStage(999)).toBe(
       VIEWPORT_3D_MODEL_LAYER_FINAL_STAGE,
     );
+  });
+
+  it("commits staged field layers without a transition that external-store updates can starve", () => {
+    const source = readFileSync(
+      new URL("./Viewport3DScene.tsx", import.meta.url),
+      "utf8",
+    );
+    const stageHook = source.slice(
+      source.indexOf("function useViewport3DModelLayerStage"),
+      source.indexOf("function Viewport3DProjectionStack"),
+    );
+
+    expect(stageHook).toContain("window.requestAnimationFrame");
+    expect(stageHook).toContain("setStageState((current) =>");
+    expect(stageHook).not.toContain("startTransition");
   });
 });
 

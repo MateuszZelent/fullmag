@@ -718,11 +718,22 @@ function mountedSnapshot(
         },
         render: {
           adoption: {
-            adoptedFieldBufferId: "buffer-12",
-            adoptedResourceKey: resourceKey,
-            adoptedScalarBufferKey: "scalar-12",
-            adoptedVectorBuildKey: null,
             frameCommitId: "frame-12",
+            surface: {
+              adoptedAtMs: 12,
+              adoptedFieldBufferId: "buffer-12",
+              adoptedResourceKey: resourceKey,
+              adoptedScalarBufferKey: "scalar-12",
+              adoptionSequence: 12,
+            },
+            vector: {
+              adoptedAtMs: null,
+              adoptedFieldBufferId: null,
+              adoptedResourceKey: null,
+              adoptedVectorBuildKey: null,
+              adoptedVectorItemCount: null,
+              adoptionSequence: null,
+            },
           },
           fieldBufferState: "ready",
           requestedFieldBufferId: "buffer-12",

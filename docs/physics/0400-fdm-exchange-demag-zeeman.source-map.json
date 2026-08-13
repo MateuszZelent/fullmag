@@ -173,7 +173,19 @@
       "id": "live_field_promotion",
       "path": "crates/fullmag-cli/src/live_workspace.rs",
       "symbol": "ingest_preview_fields_from_update",
-      "responsibility": "promotes incoming fields individually into session state; not proof of an atomic terminal generation/batch"
+      "responsibility": "copies finite StepStats.time into incoming live fields and promotes them into session state; not proof of an atomic terminal generation/batch"
+    },
+    {
+      "id": "field_source_time",
+      "path": "crates/fullmag-runner/src/types.rs",
+      "symbol": "LivePreviewField",
+      "responsibility": "optional solver-time provenance carried by live and terminal field frames"
+    },
+    {
+      "id": "field_metadata_resource",
+      "path": "crates/fullmag-api/src/schemas/fields.rs",
+      "symbol": "FieldMeta",
+      "responsibility": "resource metadata transport for optional source_time_seconds in SI seconds"
     }
   ],
   "public_api": {

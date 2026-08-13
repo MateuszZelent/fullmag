@@ -23,9 +23,7 @@ use super::spin_transport::{
 use crate::artifact_pipeline::{ArtifactPipelineSender, ArtifactRecorder};
 use crate::derived_fields::{compute_torque_field, max_torque_residual_apm_from_field};
 use crate::fdm::{artifacts::select_state_observable_field, validate_single_grid_budget};
-use crate::interactive_runtime::{
-    build_full_grid_materialized_fields, display_is_global_scalar, display_refresh_due,
-};
+use crate::interactive_runtime::{display_is_global_scalar, display_refresh_due};
 use crate::preview::{
     build_grid_preview_field, build_grid_scalar_preview_field, flatten_vectors, select_observables,
 };
@@ -1677,11 +1675,6 @@ pub(crate) fn execute_reference_fdm_with_coupled_checkpoint(
         if let Some(live) = live.as_mut() {
             if let Some(final_stats) = steps.last().cloned() {
                 let display_selection = live.display_selection.map(|get| get());
-                let observables = observe_state_with_antenna_field(
-                    &problem,
-                    &state,
-                    Some(resolved_antenna_zeeman_field(plan, state.time_seconds)),
-                )?;
                 let materialization_quantities = field_materialization_quantity_ids();
                 let materialization_quantities = active_fdm_preview_quantities(
                     crate::dispatch::FdmEngine::CpuReference,
@@ -1692,13 +1685,45 @@ pub(crate) fn execute_reference_fdm_with_coupled_checkpoint(
                     .as_ref()
                     .map(|selection| selection.revision)
                     .unwrap_or(0);
-                let cached_preview_fields = build_full_grid_materialized_fields(
+                let antenna_field = resolved_antenna_zeeman_field(plan, state.time_seconds);
+                let oersted_field = resolved_oersted_visual_field_for_count(
+                    &problem,
+                    plan,
+                    state.magnetization().len(),
+                    state.time_seconds,
+                    &antenna_field,
+                );
+                let mut cached_preview_fields = snapshot_vector_fields_from_state(
+                    &problem,
+                    &state,
                     &materialization_quantities,
-                    &observables,
+                    &LivePreviewRequest {
+                        revision: config_revision,
+                        quantity: "m".to_string(),
+                        component: "3D".to_string(),
+                        layer: 0,
+                        all_layers: true,
+                        every_n: 1,
+                        x_chosen_size: 0,
+                        y_chosen_size: 0,
+                        auto_scale_enabled: false,
+                        max_points: 0,
+                    },
                     live.grid,
                     plan.active_mask.as_deref(),
-                    config_revision,
-                );
+                    Some(&oersted_field),
+                    Some(&antenna_field),
+                )?;
+                let materialized_at_unix_ms = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_millis() as u64;
+                for field in &mut cached_preview_fields {
+                    field.source_step = final_stats.step;
+                    field.source_time_seconds = Some(final_stats.time);
+                    field.source_revision = final_stats.step;
+                    field.materialized_at_unix_ms = materialized_at_unix_ms;
+                }
                 let preview_field = if let Some(selection) = display_selection.as_ref() {
                     let preview_field = if !display_is_global_scalar(selection) {
                         let request = selection.preview_request();
@@ -1711,6 +1736,11 @@ pub(crate) fn execute_reference_fdm_with_coupled_checkpoint(
                         )? {
                             Some(field)
                         } else {
+                            let observables = observe_state_with_antenna_field(
+                                &problem,
+                                &state,
+                                Some(antenna_field.clone()),
+                            )?;
                             Some(build_grid_preview_field(
                                 &request,
                                 select_observables(&observables, &request.quantity)?,
@@ -1733,7 +1763,7 @@ pub(crate) fn execute_reference_fdm_with_coupled_checkpoint(
                     fem_mesh_generation_id: None,
                     magnetization: Some(flatten_vectors(state.magnetization())),
                     preview_field,
-                    cached_preview_fields,
+                    cached_preview_fields: Some(cached_preview_fields),
                     hysteresis_field_m_t: None,
                     hysteresis_point_index: None,
                     hysteresis_settle_step_index: None,
@@ -4000,6 +4030,7 @@ mod tests {
     fn llg_terminal_update_contains_final_state_and_cached_fields() {
         let plan = FdmPlanIR {
             enable_demag: true,
+            external_field: Some([0.0, 0.0, 1.0]),
             ..make_test_plan()
         };
         let display_selection = || {
@@ -4043,6 +4074,27 @@ mod tests {
             .collect::<Vec<_>>();
         assert!(cached_quantities.contains(&"H_demag"));
         assert!(cached_quantities.contains(&"H_eff"));
+        assert!(cached_quantities.contains(&"H_ext"));
+        for quantity in ["eden_ex", "eden_demag", "eden_ext", "eden_total"] {
+            let field = update
+                .cached_preview_fields
+                .as_ref()
+                .unwrap()
+                .iter()
+                .find(|field| field.quantity == quantity)
+                .unwrap_or_else(|| panic!("terminal cache must contain {quantity}"));
+            assert_eq!(field.unit, "J/m³");
+            assert_eq!(
+                field.vector_field_values.len(),
+                plan.initial_magnetization.len()
+            );
+        }
+        for field in update.cached_preview_fields.as_ref().unwrap() {
+            assert_eq!(field.source_step, update.stats.step);
+            assert_eq!(field.source_time_seconds, Some(update.stats.time));
+            assert_eq!(field.source_revision, update.stats.step);
+            assert!(field.materialized_at_unix_ms > 0);
+        }
     }
 
     #[test]

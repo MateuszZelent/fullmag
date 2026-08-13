@@ -142,7 +142,10 @@ export function resolveVisualizationDebugTarget(
     return null;
   }
   const id = selection.visualizationTargetId;
-  if (selection.kind === "airbox.visualization.debug" && id === "airbox") {
+  if (
+    selection.kind === "airbox.visualization.debug" &&
+    (id === "airbox" || id === "fdm-universe-outside-support")
+  ) {
     return Object.freeze({ id, kind: "airbox", selectionKind: selection.kind });
   }
   if (
@@ -381,12 +384,12 @@ export function compareBackendAndRender({
   }
   const payload = carrier.payload;
   const requestedFieldBufferId = carrier.render.requestedFieldBufferId;
-  const adoptedFieldBufferId = carrier.render.adoption.adoptedFieldBufferId;
+  const surfaceAdoption = carrier.render.adoption.surface;
+  const vectorAdoption = carrier.render.adoption.vector;
   const renderedScalarBufferKey = carrier.render.surface.bufferKey;
-  const adoptedScalarBufferKey = carrier.render.adoption.adoptedScalarBufferKey;
+  const adoptedScalarBufferKey = surfaceAdoption.adoptedScalarBufferKey;
   const renderedVectorBuildKey = carrier.render.vectors.buildKey;
-  const adoptedVectorBuildKey = carrier.render.adoption.adoptedVectorBuildKey;
-  const adoptedResourceKey = carrier.render.adoption.adoptedResourceKey;
+  const adoptedVectorBuildKey = vectorAdoption.adoptedVectorBuildKey;
   const surfaceRequested = carrier.render.requestedPasses.includes("surface");
   const vectorRequested = carrier.render.requestedPasses.includes("vector-glyph");
   const surfaceComponentComparison = compareSurfaceComponentEvidence(
@@ -411,9 +414,14 @@ export function compareBackendAndRender({
       (payload.scopeKind !== null || payload.scopeId !== null) &&
       payload.scopeId !== query.scopeId) ||
     surfaceComponentComparison === "incompatible" ||
-    (requestedFieldBufferId !== null &&
-      adoptedFieldBufferId !== null &&
-      requestedFieldBufferId !== adoptedFieldBufferId) ||
+    (surfaceRequested &&
+      requestedFieldBufferId !== null &&
+      surfaceAdoption.adoptedFieldBufferId !== null &&
+      requestedFieldBufferId !== surfaceAdoption.adoptedFieldBufferId) ||
+    (vectorRequested &&
+      requestedFieldBufferId !== null &&
+      vectorAdoption.adoptedFieldBufferId !== null &&
+      requestedFieldBufferId !== vectorAdoption.adoptedFieldBufferId) ||
     (surfaceRequested &&
       renderedScalarBufferKey !== null &&
       adoptedScalarBufferKey !== null &&
@@ -422,8 +430,12 @@ export function compareBackendAndRender({
       renderedVectorBuildKey !== null &&
       adoptedVectorBuildKey !== null &&
       renderedVectorBuildKey !== adoptedVectorBuildKey) ||
-    (adoptedResourceKey !== null &&
-      adoptedResourceKey !== query.vectorResourceKey)
+    (surfaceRequested &&
+      surfaceAdoption.adoptedResourceKey !== null &&
+      surfaceAdoption.adoptedResourceKey !== query.vectorResourceKey) ||
+    (vectorRequested &&
+      vectorAdoption.adoptedResourceKey !== null &&
+      vectorAdoption.adoptedResourceKey !== query.vectorResourceKey)
   ) {
     return Object.freeze({ compatible: false, rangesMatch: null });
   }
@@ -437,14 +449,17 @@ export function compareBackendAndRender({
     fieldRevisionComparison !== "current" ||
     (!surfaceRequested && !vectorRequested) ||
     requestedFieldBufferId === null ||
-    adoptedFieldBufferId === null ||
-    adoptedResourceKey === null ||
     (surfaceRequested &&
       (surfaceComponentComparison === "missing" ||
+        surfaceAdoption.adoptedFieldBufferId === null ||
+        surfaceAdoption.adoptedResourceKey === null ||
         renderedScalarBufferKey === null ||
         adoptedScalarBufferKey === null)) ||
     (vectorRequested &&
-      (renderedVectorBuildKey === null || adoptedVectorBuildKey === null))
+      (vectorAdoption.adoptedFieldBufferId === null ||
+        vectorAdoption.adoptedResourceKey === null ||
+        renderedVectorBuildKey === null ||
+        adoptedVectorBuildKey === null))
   ) {
     return null;
   }
@@ -809,7 +824,14 @@ function addCarrierResourceKeys(
   carrier: VisualizationDebugCarrierSnapshot,
 ): void {
   if (carrier.request.resourceKey) resourceKeys.add(carrier.request.resourceKey);
-  if (carrier.render.adoption.adoptedResourceKey) {
-    resourceKeys.add(carrier.render.adoption.adoptedResourceKey);
+  const surfaceAdoptedResourceKey =
+    carrier.render.adoption.surface.adoptedResourceKey;
+  const vectorAdoptedResourceKey =
+    carrier.render.adoption.vector.adoptedResourceKey;
+  if (surfaceAdoptedResourceKey) {
+    resourceKeys.add(surfaceAdoptedResourceKey);
+  }
+  if (vectorAdoptedResourceKey) {
+    resourceKeys.add(vectorAdoptedResourceKey);
   }
 }
