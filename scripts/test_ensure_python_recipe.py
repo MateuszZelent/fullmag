@@ -25,7 +25,7 @@ class EnsurePythonRecipeTests(unittest.TestCase):
 
         self.assertRegex(
             recipe,
-            r'"\{\{repo_python\}\}" -m pip install[^\n]*\'pytest\'',
+            r'"\{\{repo_python\}\}" -m pip install[^\n]*\'pytest>=9,<10\'',
         )
 
     def test_existing_venv_without_pip_self_heals_or_fails_closed(self) -> None:
