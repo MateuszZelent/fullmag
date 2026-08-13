@@ -281,6 +281,37 @@ fn tensor_kernels_equal(left: &TensorDemagKernel, right: &TensorDemagKernel) -> 
         && left.k_yz == right.k_yz
 }
 
+fn represented_kernel_cell_size(
+    descriptor: &FdmLayerDescriptor,
+    mode: ConvolutionMode,
+) -> [f64; 3] {
+    if mode == ConvolutionMode::TwoDStack {
+        [
+            descriptor.scratch.spacing[0],
+            descriptor.scratch.spacing[1],
+            descriptor.native.thickness(),
+        ]
+    } else {
+        descriptor.scratch.spacing
+    }
+}
+
+fn kernel_source_density_scale(
+    descriptor: &FdmLayerDescriptor,
+    mode: ConvolutionMode,
+) -> Result<f64, String> {
+    let kernel_cell = represented_kernel_cell_size(descriptor, mode);
+    let kernel_volume = kernel_cell.into_iter().product::<f64>();
+    let scale = descriptor.scratch.volume() / kernel_volume;
+    if !scale.is_finite() || scale <= 0.0 {
+        return Err(format!(
+            "layer '{}' has invalid scratch-to-kernel density scale {scale}",
+            descriptor.layer_id
+        ));
+    }
+    Ok(scale)
+}
+
 fn kernel_key_for_pair(
     pair: &KernelPair,
     common_layout: &CommonTransformLayout,
@@ -308,24 +339,8 @@ fn kernel_key_for_pair(
             pair.dst_layer, pair.src_layer
         ));
     }
-    let source_cell = if common_layout.mode == ConvolutionMode::TwoDStack {
-        [
-            source.scratch.spacing[0],
-            source.scratch.spacing[1],
-            source.native.thickness(),
-        ]
-    } else {
-        source.scratch.spacing
-    };
-    let destination_cell = if common_layout.mode == ConvolutionMode::TwoDStack {
-        [
-            destination.scratch.spacing[0],
-            destination.scratch.spacing[1],
-            destination.native.thickness(),
-        ]
-    } else {
-        destination.scratch.spacing
-    };
+    let source_cell = represented_kernel_cell_size(source, common_layout.mode);
+    let destination_cell = represented_kernel_cell_size(destination, common_layout.mode);
     let relative_shift = [
         destination.scratch.origin[0] - source.scratch.origin[0]
             + 0.5 * (destination_cell[0] - source_cell[0]),
@@ -1015,6 +1030,17 @@ impl MultilayerDemagRuntime {
 
         // Step 1: Forward FFT all layers' magnetizations.
         for (layer_index, layer) in layers.iter().enumerate() {
+            let kernel_density_scale = self
+                .layer_descriptors
+                .get(layer_index)
+                .map(|descriptor| kernel_source_density_scale(descriptor, self.common_layout.mode))
+                .transpose()?
+                .unwrap_or(1.0);
+            // The transfer buffer stores moment density over the scratch
+            // volume. Pair kernels in two_d_stack retain the physical native
+            // thickness, so convert to the density represented by that kernel
+            // cell before FFT.
+            let ms_scale = layer.ms * kernel_density_scale;
             let conv_m = &mut workspace.conv_m[layer_index];
             if let Some(transfer) = self
                 .transfer_stencils
@@ -1097,9 +1123,9 @@ impl MultilayerDemagRuntime {
                             + layout.source_insert_offset[0]
                             + x;
                         let m = conv_m[src];
-                        buf.x[dst] = Complex::new(m[0] * layer.ms, 0.0);
-                        buf.y[dst] = Complex::new(m[1] * layer.ms, 0.0);
-                        buf.z[dst] = Complex::new(m[2] * layer.ms, 0.0);
+                        buf.x[dst] = Complex::new(m[0] * ms_scale, 0.0);
+                        buf.y[dst] = Complex::new(m[1] * ms_scale, 0.0);
+                        buf.z[dst] = Complex::new(m[2] * ms_scale, 0.0);
                     }
                 }
             }

@@ -328,9 +328,7 @@ impl ActiveMaskIdentity {
     }
 }
 
-/// Contract metadata for native↔scratch transfer.  `adjoint_required` is a
-/// requirement on a runtime implementation, not a claim that the current
-/// interpolation implementation has already satisfied it.
+/// Contract metadata for native↔scratch transfer.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TransferContractMetadata {
     pub adjoint_required: bool,
@@ -356,7 +354,7 @@ impl TransferContractMetadata {
             adjoint_required: true,
             inner_product: "volume_weighted".to_string(),
             preserves_volume_weighted_moment: true,
-            moment_policy: "volume_weighted_average".to_string(),
+            moment_policy: "full_scratch_volume_moment_density".to_string(),
             active_cell_policy: "preserve_active_mask".to_string(),
         }
     }

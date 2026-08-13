@@ -1,8 +1,7 @@
 //! Transfer operators between native and convolution grids.
 //!
-//! - `push_m`: native → convolution (volume-weighted cell average for coarsening,
-//!   piecewise-constant for refinement)
-//! - `pull_h`: convolution → native (trilinear interpolation)
+//! - `VolumeWeightedTransfer::push_m`: native → scratch moment density
+//! - `VolumeWeightedTransfer::pull_h_adjoint`: scratch → native volume adjoint
 //!
 //! V1 design: simple axis-aligned box grids only.
 
@@ -19,8 +18,8 @@ pub struct TransferBoundaryPolicy {
 /// Geometry-only overlap stencil for a native-to-scratch transfer.
 ///
 /// The stencil is independent of field values and can be built once per
-/// layer. `push_m` computes a volume-weighted average over active native
-/// cells; `pull_h_adjoint` is its exact transpose in the volume-weighted
+/// layer. `push_m` divides the represented active moment by the full scratch
+/// volume; `pull_h_adjoint` is its exact transpose in the volume-weighted
 /// inner product.
 #[derive(Debug, Clone)]
 pub struct VolumeWeightedTransfer {
@@ -126,12 +125,10 @@ impl VolumeWeightedTransfer {
                                     native_hi[2],
                                 );
                                 if overlap > 0.0 {
-                                    overlaps[scratch_index].push((
-                                        nz * native_cells[1] * native_cells[0]
-                                            + ny * native_cells[0]
-                                            + nx,
-                                        overlap,
-                                    ));
+                                    let native_index = nz * native_cells[1] * native_cells[0]
+                                        + ny * native_cells[0]
+                                        + nx;
+                                    overlaps[scratch_index].push((native_index, overlap));
                                 }
                             }
                         }
@@ -182,7 +179,7 @@ impl VolumeWeightedTransfer {
         self.boundary_policy
     }
 
-    /// Push native magnetization to scratch cells by active-volume average.
+    /// Push native magnetization as moment density over each full scratch cell.
     pub fn push_m(
         &self,
         native_m: &[[f64; 3]],
@@ -210,21 +207,17 @@ impl VolumeWeightedTransfer {
         }
         scratch_m.fill([0.0; 3]);
         for (scratch_index, overlaps) in self.overlaps.iter().enumerate() {
-            let mut covered_volume = 0.0;
             let mut moment = [0.0; 3];
             for &(native_index, overlap) in overlaps {
                 if active_mask.map(|mask| mask[native_index]).unwrap_or(true) {
                     let m = native_m[native_index];
-                    covered_volume += overlap;
                     for component in 0..3 {
                         moment[component] += overlap * m[component];
                     }
                 }
             }
-            if covered_volume > 0.0 {
-                for component in 0..3 {
-                    scratch_m[scratch_index][component] = moment[component] / covered_volume;
-                }
+            for component in 0..3 {
+                scratch_m[scratch_index][component] = moment[component] / self.scratch_volume;
             }
         }
         Ok(())
@@ -259,21 +252,10 @@ impl VolumeWeightedTransfer {
         }
         native_h.fill([0.0; 3]);
         for (scratch_index, overlaps) in self.overlaps.iter().enumerate() {
-            let covered_volume = overlaps
-                .iter()
-                .filter(|(native_index, _)| {
-                    active_mask.map(|mask| mask[*native_index]).unwrap_or(true)
-                })
-                .map(|(_, overlap)| *overlap)
-                .sum::<f64>();
-            if covered_volume <= 0.0 {
-                continue;
-            }
             let h = scratch_h[scratch_index];
             for &(native_index, overlap) in overlaps {
                 if active_mask.map(|mask| mask[native_index]).unwrap_or(true) {
-                    let coefficient =
-                        self.scratch_volume * overlap / (covered_volume * self.native_volume);
+                    let coefficient = overlap / self.native_volume;
                     for component in 0..3 {
                         native_h[native_index][component] += coefficient * h[component];
                     }
@@ -337,9 +319,8 @@ fn overlap_length_open(a_lo: f64, a_hi: f64, b_lo: f64, b_hi: f64) -> f64 {
     let raw = (a_hi.min(b_hi) - a_lo.max(b_lo)).max(0.0);
     // Grid origins are represented in SI floating point, so two geometrically
     // coincident faces can leave a sub-ulp positive sliver (for example when
-    // an Airbox is extended by one cell).  Treat that sliver as no overlap;
-    // otherwise the volume average normalizes it to a full magnetization and
-    // creates a spurious source plane at the boundary.
+    // an Airbox is extended by one cell). Treat that sliver as no overlap so
+    // it cannot create a spurious source plane at the boundary.
     let scale = (a_hi - a_lo).abs().max((b_hi - b_lo).abs());
     if raw <= 1.0e-12 * scale {
         0.0

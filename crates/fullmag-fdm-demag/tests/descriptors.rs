@@ -278,6 +278,7 @@ fn transfer_contract_is_explicitly_volume_weighted_and_mask_preserving() {
     let contract = TransferContractMetadata::volume_weighted_moment_preserving();
     assert!(contract.adjoint_required);
     assert!(contract.preserves_volume_weighted_moment);
+    assert_eq!(contract.moment_policy, "full_scratch_volume_moment_density");
     assert_eq!(contract.active_cell_policy, "preserve_active_mask");
 }
 
