@@ -22,6 +22,11 @@ import type { InspectorPanelProps } from "../../inspectorTypes";
 import { FieldRow } from "../../primitives/FieldRow";
 import { InspectorGroup } from "../../primitives/InspectorGroup";
 import {
+  canPlotSelectedFieldIn3D,
+  modeFieldComponentOptions,
+  selectedField3DPlotStatus,
+} from "./FrequencyDomainHelpers";
+import {
   FrequencyDomainModeDisplayControls,
   analysisFieldViewLabel,
   isActiveAnalysisFieldView,
@@ -117,7 +122,8 @@ export function EigenModeInspectorPanel({
           value="clip planes and shader opacity remain planned for internal-mode inspection"
         />
         <FrequencyDomainModeDisplayControls
-          disabled={!summary.fieldId}
+          componentOptions={summary.componentOptions}
+          disabled={!summary.field3DReady}
           labelPrefix="Eigen mode"
           settings={modeDisplaySettings}
           viewDefaultValue={summary.defaultView}
@@ -148,7 +154,7 @@ function EigenMode3DActions({
       | "phase"
       | "animate",
   ): void => {
-    if (!summary.fieldId) return;
+    if (!summary.field3DReady) return;
     const animate = view === "animate";
     void kernel.commands.execute(
       animate
@@ -169,7 +175,7 @@ function EigenMode3DActions({
     );
   };
   const stopAnimation = (): void => {
-    if (!summary.fieldId) return;
+    if (!summary.field3DReady) return;
     void kernel.commands.execute(
       "analysis.frequency-domain.stop-3d-animation",
       createCommandContext("inspector", kernel, {
@@ -177,7 +183,7 @@ function EigenMode3DActions({
       }),
     );
   };
-  const disabled = !summary.fieldId;
+  const disabled = !summary.field3DReady;
   const actions = [
     {
       icon: RotateCw,
@@ -246,7 +252,7 @@ function EigenMode3DActions({
             disabled={disabled}
             key={entry.view}
             size="sm"
-            title={disabled ? "Mode field payload is missing" : entry.title}
+            title={disabled ? summary.field3DStatus : entry.title}
             type="button"
             variant={isActive ? "primary" : entry.variant}
             onClick={() => plot(entry.view)}
@@ -262,9 +268,7 @@ function EigenMode3DActions({
         disabled={disabled}
         size="sm"
         title={
-          disabled
-            ? "Mode field payload is missing"
-            : "Stop selected eigen mode animation"
+          disabled ? summary.field3DStatus : "Stop selected eigen mode animation"
         }
         type="button"
         variant="secondary"
@@ -357,9 +361,19 @@ function useEigenModeSummary(selection: InspectorPanelProps["selection"]) {
     frequencyHz != null && linewidthFwhmHz && linewidthFwhmHz > 0
       ? frequencyHz / linewidthFwhmHz
       : null;
+  const field3DReady =
+    fieldMeta.status === "ready" && canPlotSelectedFieldIn3D(fieldMeta.data);
+  const field3DStatus =
+    fieldMeta.status === "ready"
+      ? selectedField3DPlotStatus(fieldMeta.data)
+      : fieldMeta.status === "loading"
+        ? "mode field metadata loading"
+        : fieldMeta.status === "error"
+          ? "mode field metadata unavailable"
+          : "mode field metadata not available";
 
   return {
-    actionBadge: fieldId ? "3D field ready" : "field missing",
+    actionBadge: field3DReady ? "3D field ready" : "3D unavailable",
     angularFrequency:
       angularFrequency == null
         ? "not available"
@@ -379,6 +393,10 @@ function useEigenModeSummary(selection: InspectorPanelProps["selection"]) {
           : eigenMode.status,
     componentBasis: stringValue(fieldMetaRecord?.component_basis),
     componentCount: finiteNumber(fieldMetaRecord?.component_count),
+    componentOptions:
+      fieldMeta.status === "ready"
+        ? modeFieldComponentOptions(fieldMeta.data)
+        : [],
     dominantPolarization: dominantPolarization ?? "not available",
     defaultView: normalizeAnalysisFieldView(defaultView),
     defaultViewLabel: defaultView
@@ -387,7 +405,15 @@ function useEigenModeSummary(selection: InspectorPanelProps["selection"]) {
     fieldId,
     fieldIdLabel: fieldId ?? "not available",
     fieldResource: fieldResource ?? "not available",
-    fieldStatus: fieldId ? `${fieldId}; field-ready` : "mode field missing",
+    field3DReady,
+    field3DStatus,
+    fieldStatus: fieldId
+      ? `${fieldId}; ${
+          fieldMeta.status === "ready"
+            ? selectedField3DPlotStatus(fieldMeta.data)
+            : "metadata unavailable"
+        }`
+      : "mode field missing",
     frequencyDisplay: formatFrequency(frequencyHz),
     imaginaryFrequency: formatFrequency(imaginaryFrequencyHz),
     decayRate:
@@ -404,9 +430,9 @@ function useEigenModeSummary(selection: InspectorPanelProps["selection"]) {
     tangentLeakageMax: formatNumberOrUnavailable(tangentLeakage),
     valueKind: stringValue(fieldMetaRecord?.value_kind),
     workflow:
-      fieldId && availableViews.length
+      field3DReady && availableViews.length
         ? `phasor reconstruction; ${realSamples ?? "?"} real samples, ${imagSamples ?? "?"} imag samples`
-        : "field payload required for 3D phasor field",
+        : field3DStatus,
   };
 }
 

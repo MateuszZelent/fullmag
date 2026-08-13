@@ -119,6 +119,52 @@ describe("buildPhysicsFirstResultsTree", () => {
     expect(labels).toContain("Spectral Response Map · A(k,f)");
   });
 
+  it("routes provenance to the physical product and wavevector family", () => {
+    const kPath = { kind: "path", label: "Γ–X", sampleCount: 8 } as const;
+    const nodes = flattenExplorerNodes(
+      buildPhysicsFirstResultsTree({
+        entries: [
+          modalFinite,
+          drivenGamma,
+          {
+            ...modalFinite,
+            boundaryContext: "floquet_periodic",
+            kSampling: kPath,
+            stageId: "dispersion-modal-stage",
+          },
+          {
+            ...drivenGamma,
+            kSampling: kPath,
+            products: { responseMap: true },
+            stageId: "dispersion-driven-stage",
+          },
+        ],
+        resultContextRunId: modalFinite.runId,
+      }),
+    );
+
+    expect(nodes).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: "results.resonance.modal.provenance",
+          label: "Modal Equilibrium & Provenance",
+        }),
+        expect.objectContaining({
+          kind: "results.resonance.driven.provenance",
+          label: "Driven Equilibrium & Provenance",
+        }),
+        expect.objectContaining({
+          kind: "results.dispersion.modal.provenance",
+          label: "Modal Dispersion Provenance",
+        }),
+        expect.objectContaining({
+          kind: "results.dispersion.driven.provenance",
+          label: "Driven Response-Map Provenance",
+        }),
+      ]),
+    );
+  });
+
   it("rejects entries from a different run instead of merging them", () => {
     expect(() =>
       buildPhysicsFirstResultsTree({
@@ -773,6 +819,8 @@ describe("physicsFirstResultsSnapshotFromResources", () => {
         result_manifest: {
           payload: {
             equilibrium_identity: "eq-relax-r4",
+            geometry_identity: "geometry-r4",
+            mesh_identity: "mesh-r4",
             requested_execution: {
               boundary_context: "floquet_periodic",
               k_sampling: "path",
@@ -818,6 +866,34 @@ describe("physicsFirstResultsSnapshotFromResources", () => {
       badge: "contract gap",
       resourceState: "error",
       status: "failed",
+    });
+  });
+
+  it("surfaces missing geometry and mesh provenance without dropping a valid result", () => {
+    const adapted = physicsFirstResultsSnapshotFromResources({
+      currentRun: { revision: 25, run_id: "run-provenance-gap" },
+      manifest: {
+        result_manifest: {
+          payload: {
+            equilibrium_identity: "eq-provenance-gap",
+            requested_execution: { boundary_context: "finite_open" },
+            stage_id: "stage-provenance-gap",
+            study_product: "modal_eigen",
+          },
+          status: "ready",
+        },
+      },
+      spectrum: { status: "ready" },
+    });
+
+    expect(adapted.contractGaps).toEqual([
+      "geometry identity unavailable",
+      "mesh identity unavailable",
+    ]);
+    expect(adapted.snapshot.entries).toHaveLength(1);
+    expect(buildPhysicsFirstResultsTree(adapted.snapshot)[0]).toMatchObject({
+      badge: "contract gap",
+      postprocessingContractGap: "geometry identity unavailable; mesh identity unavailable",
     });
   });
 
@@ -907,6 +983,8 @@ describe("physicsFirstResultsSnapshotFromResources", () => {
         result_manifest: {
           payload: {
             equilibrium_identity: "eq-gamma",
+            geometry_identity: "geometry-gamma",
+            mesh_identity: "mesh-gamma",
             requested_execution: {
               boundary_context: "floquet_periodic",
               k_sampling: { kind: "single", k_vector: [0, 0, 0] },

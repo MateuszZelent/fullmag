@@ -822,7 +822,7 @@
 .fm-inspector__action-btn--apply.fm-button--primary {
   background: var(--fm-accent) !important;
   border-color: var(--fm-accent) !important;
-  color: white !important;
+  color: var(--fm-text-inverse) !important;
   font-weight: 650;
 }
 

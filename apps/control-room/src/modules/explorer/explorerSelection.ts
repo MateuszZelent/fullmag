@@ -712,7 +712,6 @@ function isFrequencyDomainSelectionNode(node: ExplorerNode): boolean {
   return (
     node.kind.startsWith("results.resonance") ||
     node.kind.startsWith("results.dispersion") ||
-    node.kind === "results.frequency_domain.provenance" ||
     node.kind.startsWith("results.analysis_views") ||
     node.kind.startsWith("results.derived_values") ||
     node.kind.startsWith("results.tables") ||

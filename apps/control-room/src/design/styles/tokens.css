@@ -148,12 +148,12 @@
   --fm-z-toast: 200;        /* toast / notification — always on top */
 
   /* Duration scale — micro-animation timing */
-  --fm-duration-instant: var(--fm-duration-instant);   /* hover state, very fast toggle */
-  --fm-duration-fast: var(--fm-duration-fast);      /* snappy micro-interaction */
-  --fm-duration-normal: var(--fm-duration-normal);   /* standard small motion */
-  --fm-duration-moderate: var(--fm-duration-moderate); /* standard reveal / expand */
-  --fm-duration-slow: var(--fm-duration-slow);     /* entrance animation */
-  --fm-duration-loading: var(--fm-duration-loading);  /* progress / loading state */
+  --fm-duration-instant: 80ms;   /* hover state, very fast toggle */
+  --fm-duration-fast: 120ms;      /* snappy micro-interaction */
+  --fm-duration-normal: 180ms;   /* standard small motion */
+  --fm-duration-moderate: 240ms; /* standard reveal / expand */
+  --fm-duration-slow: 360ms;     /* entrance animation */
+  --fm-duration-loading: 1000ms;  /* progress / loading state */
 
   /* Pill border-radius — replaces magic 999px */
   --fm-radius-pill: 9999px;

@@ -234,6 +234,41 @@ try {
   const resetWidth = await panel.boundingBox();
   assert(resetWidth && Math.abs(resetWidth.width - 416) <= 3, "Double-click did not restore 416px.");
 
+  await page.setViewportSize({ height: 900, width: 800 });
+  await page.evaluate(() => {
+    document.body.style.zoom = "200%";
+  });
+  await page.waitForTimeout(150);
+  const zoomGeometry = await inspector.evaluate((element) => {
+    const bounds = element.getBoundingClientRect();
+    const visibleControls = Array.from(
+      element.querySelectorAll("button, input, select, [role=\"slider\"]"),
+    ).filter((control) => {
+      const rect = control.getBoundingClientRect();
+      return rect.width > 0 && rect.height > 0;
+    });
+    return {
+      controlsFit: visibleControls.every((control) => {
+        const rect = control.getBoundingClientRect();
+        return rect.left >= bounds.left - 1 && rect.right <= bounds.right + 1;
+      }),
+      inspectorFits: element.scrollWidth <= element.clientWidth,
+    };
+  });
+  assert(
+    zoomGeometry.inspectorFits && zoomGeometry.controlsFit,
+    `Inspector overflows at 200% zoom: ${JSON.stringify(zoomGeometry)}`,
+  );
+  await panel.screenshot({
+    path: resolve(outputDir, "visualization-overview-zoom-200.png"),
+  });
+  screenshotFiles.push("visualization-overview-zoom-200.png");
+  await page.evaluate(() => {
+    document.body.style.zoom = "";
+  });
+  await page.setViewportSize({ height: 900, width: 1600 });
+  await page.waitForTimeout(150);
+
   await page.evaluate(() => {
     document.documentElement.dataset.theme = "light";
   });

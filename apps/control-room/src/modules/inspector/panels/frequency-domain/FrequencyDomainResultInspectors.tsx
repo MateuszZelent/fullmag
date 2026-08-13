@@ -95,6 +95,11 @@ import {
   periodicStatusView,
   type FrequencyDomainCalculationModeRow,
 } from "../frequencyDomainInspectorModel";
+import {
+  canPlotSelectedFieldIn3D,
+  modeFieldComponentOptions,
+  selectedField3DPlotStatus,
+} from "./FrequencyDomainHelpers";
 import { EigenModeInspectorPanel } from "./EigenModeInspectorPanel";
 
 export { FmrModalSpectrumInspectorPanel } from "./FmrModalSpectrumInspectorPanel";
@@ -536,14 +541,27 @@ export function FrequencyDomainOverviewInspectorPanel(
   );
 }
 
-export function EigenProvenanceInspectorPanel(props: InspectorPanelProps) {
-  void props;
+interface ProvenancePanelCopy {
+  canonicalFamily?: string;
+  linksBadge?: string;
+  linksTitle?: string;
+  title?: string;
+}
+
+type ProvenancePanelProps = InspectorPanelProps & ProvenancePanelCopy;
+
+export function EigenProvenanceInspectorPanel({
+  canonicalFamily = "Eigenmodes modal lane",
+  linksBadge = "modal",
+  linksTitle = "Eigen Provenance Links",
+  title = "Eigen Provenance",
+}: ProvenancePanelProps) {
   const summary = useFrequencyDomainProvenanceSummary();
 
   return (
     <div data-inspector-surface="eigen-provenance">
-      <InspectorGroup title="Eigen Provenance" badge={summary.calculationMode}>
-        <FieldRow label="Canonical family" value="Eigenmodes modal lane" />
+      <InspectorGroup title={title} badge={summary.calculationMode}>
+        <FieldRow label="Canonical family" value={canonicalFamily} />
         <FieldRow label="Manifest resource" value={summary.manifestResource} />
         <FieldRow label="Manifest artifact" value={summary.manifestArtifact} />
         <FieldRow
@@ -560,7 +578,7 @@ export function EigenProvenanceInspectorPanel(props: InspectorPanelProps) {
         <FieldRow label="Mode field artifacts" value={summary.modeFieldArtifacts} />
         <FieldRow label="Physics contract" value={summary.physicsContract} />
       </InspectorGroup>
-      <InspectorGroup title="Eigen Provenance Links" badge="modal">
+      <InspectorGroup title={linksTitle} badge={linksBadge}>
         <ResultShortcutActions
           actions={[
             {
@@ -661,18 +679,19 @@ export function EigenStudyInspectorPanel(props: InspectorPanelProps) {
 }
 
 export function FrequencyResponseProvenanceInspectorPanel(
-  props: InspectorPanelProps,
+  {
+    canonicalFamily = "FrequencyResponse driven lane",
+    linksBadge = "driven",
+    linksTitle = "Response Provenance Links",
+    title = "Frequency Response Provenance",
+  }: ProvenancePanelProps,
 ) {
-  void props;
   const summary = useFrequencyDomainProvenanceSummary();
 
   return (
     <div data-inspector-surface="frequency-response-provenance">
-      <InspectorGroup
-        title="Frequency Response Provenance"
-        badge={summary.calculationMode}
-      >
-        <FieldRow label="Canonical family" value="FrequencyResponse driven lane" />
+      <InspectorGroup title={title} badge={summary.calculationMode}>
+        <FieldRow label="Canonical family" value={canonicalFamily} />
         <FieldRow label="Manifest resource" value={summary.manifestResource} />
         <FieldRow label="Manifest artifact" value={summary.manifestArtifact} />
         <FieldRow
@@ -697,7 +716,7 @@ export function FrequencyResponseProvenanceInspectorPanel(
         <FieldRow label="Cancel artifact" value={summary.cancelArtifact} />
         <FieldRow label="Physics contract" value={summary.physicsContract} />
       </InspectorGroup>
-      <InspectorGroup title="Response Provenance Links" badge="driven">
+      <InspectorGroup title={linksTitle} badge={linksBadge}>
         <ResultShortcutActions
           actions={[
             {
@@ -2382,7 +2401,8 @@ export function FrequencyResponsePointInspectorPanel(
           value="phasor response; view controls select real, imaginary, magnitude, phase, or phase-rotated real"
         />
         <FrequencyDomainModeDisplayControls
-          disabled={!summary.fieldId}
+          componentOptions={summary.componentOptions}
+          disabled={!summary.field3DReady}
           labelPrefix="Response point"
           settings={modeDisplaySettings}
           viewDefaultValue={summary.defaultView}
@@ -2414,7 +2434,7 @@ function FrequencyResponsePoint3DActions({
       | "phase"
       | "animate",
   ): void => {
-    if (!summary.fieldId) return;
+    if (!summary.field3DReady) return;
     const animate = view === "animate";
     void kernel.commands.execute(
       animate
@@ -2436,7 +2456,7 @@ function FrequencyResponsePoint3DActions({
     );
   };
   const stopAnimation = (): void => {
-    if (!summary.fieldId) return;
+    if (!summary.field3DReady) return;
     void kernel.commands.execute(
       "analysis.frequency-domain.stop-3d-animation",
       createCommandContext("inspector", kernel, {
@@ -2444,7 +2464,7 @@ function FrequencyResponsePoint3DActions({
       }),
     );
   };
-  const disabled = !summary.fieldId;
+  const disabled = !summary.field3DReady;
   const actions = [
     {
       icon: RotateCw,
@@ -2513,7 +2533,7 @@ function FrequencyResponsePoint3DActions({
             disabled={disabled}
             key={entry.view}
             size="sm"
-            title={disabled ? "Response field payload is missing" : entry.title}
+            title={disabled ? summary.field3DStatus : entry.title}
             type="button"
             variant={isActive ? "primary" : entry.variant}
             onClick={() => plot(entry.view)}
@@ -2528,7 +2548,7 @@ function FrequencyResponsePoint3DActions({
         className="fm-inspector-action-button"
         disabled={disabled}
         size="sm"
-        title={disabled ? "Response field payload is missing" : "Stop response field animation"}
+        title={disabled ? summary.field3DStatus : "Stop response field animation"}
         type="button"
         variant="secondary"
         onClick={stopAnimation}
@@ -4707,8 +4727,19 @@ function useFrequencyResponsePointSummary({ selection }: InspectorPanelProps) {
     .filter((item): item is string => item != null)
     .join("; ");
 
+  const field3DReady =
+    fieldMeta.status === "ready" && canPlotSelectedFieldIn3D(fieldMeta.data);
+  const field3DStatus =
+    fieldMeta.status === "ready"
+      ? selectedField3DPlotStatus(fieldMeta.data)
+      : fieldMeta.status === "loading"
+        ? "response field metadata loading"
+        : fieldMeta.status === "error"
+          ? "response field metadata unavailable"
+          : "response field metadata not available";
+
   return {
-    actionBadge: fieldId ? "3D field ready" : "field missing",
+    actionBadge: field3DReady ? "3D field ready" : "3D unavailable",
     absorbedPowerDensity:
       absorbedPowerDensity == null
         ? "not available"
@@ -4728,6 +4759,10 @@ function useFrequencyResponsePointSummary({ selection }: InspectorPanelProps) {
           : frequencyPoint.status,
     componentBasis: fieldMeta.data?.component_basis ?? null,
     componentCount: finiteNumber(fieldMeta.data?.component_count),
+    componentOptions:
+      fieldMeta.status === "ready"
+        ? modeFieldComponentOptions(fieldMeta.data)
+        : [],
     defaultPhaseLabel: `${formatNumber(defaultPhaseRad)} rad`,
     defaultPhaseRad,
     defaultView: normalizeAnalysisFieldView(defaultView),
@@ -4735,7 +4770,11 @@ function useFrequencyResponsePointSummary({ selection }: InspectorPanelProps) {
     fieldId,
     fieldIdLabel: fieldId ?? "not available",
     fieldResource: fieldResource ?? "not available",
-    fieldStatus: fieldId ? `${fieldId}; field-ready` : "field artifact missing",
+    field3DReady,
+    fieldStatus: fieldId
+      ? `${fieldId}; ${field3DStatus}`
+      : "field artifact missing",
+    field3DStatus,
     frequencyDisplay: formatFrequency(frequencyHz),
     frequencyIndex,
     observableRows: `${matchingPoints.length} sweep row(s)`,

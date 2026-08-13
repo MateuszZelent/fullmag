@@ -59,6 +59,12 @@ import {
   FmrPeaksInspectorPanel,
 } from "./panels/frequency-domain/FrequencyDomainResultInspectors";
 import {
+  DispersionDrivenProvenanceResultInspector,
+  DispersionModalProvenanceResultInspector,
+  ResonanceDrivenProvenanceResultInspector,
+  ResonanceModalProvenanceResultInspector,
+} from "./panels/physics-first/PhysicsFirstResultInspectors";
+import {
   EigenmodesBoundaryStageInspectorPanel,
   EigenmodesCalculationModeStageInspectorPanel,
   EigenmodesDiagnosticsStageInspectorPanel,
@@ -652,6 +658,25 @@ describe("inspectorRegistry", () => {
         kind: "results.frequency_response.diagnostics",
       })?.component,
     ).toBe(FrequencyResponseDiagnosticsInspectorPanel);
+  });
+
+  it("keeps physics-first provenance inspectors distinct by product family", () => {
+    expect(
+      resolveInspectorPanel({ kind: "results.resonance.modal.provenance" })
+        ?.component,
+    ).toBe(ResonanceModalProvenanceResultInspector);
+    expect(
+      resolveInspectorPanel({ kind: "results.resonance.driven.provenance" })
+        ?.component,
+    ).toBe(ResonanceDrivenProvenanceResultInspector);
+    expect(
+      resolveInspectorPanel({ kind: "results.dispersion.modal.provenance" })
+        ?.component,
+    ).toBe(DispersionModalProvenanceResultInspector);
+    expect(
+      resolveInspectorPanel({ kind: "results.dispersion.driven.provenance" })
+        ?.component,
+    ).toBe(DispersionDrivenProvenanceResultInspector);
   });
 
   it("routes every non-authoring frequency-domain node to a dedicated inspector", () => {

@@ -5,11 +5,13 @@ import {
   EigenBranchesInspectorPanel,
   EigenKPathInspectorPanel,
   EigenModesInspectorPanel,
+  EigenProvenanceInspectorPanel,
   EigenSpectrumInspectorPanel,
   EigenStudyInspectorPanel,
   FrequencyResponseFrequencyPointsInspectorPanel,
   FrequencyResponseFieldsInspectorPanel,
   FrequencyResponsePointInspectorPanel,
+  FrequencyResponseProvenanceInspectorPanel,
   FrequencyResponseStudyInspectorPanel,
   FmrPeaksInspectorPanel,
 } from "../frequency-domain/FrequencyDomainResultInspectors";
@@ -56,6 +58,17 @@ export function ResonanceModalCouplingResultInspector(props: InspectorPanelProps
   return render(PhysicsFirstResultInspectorPanel, props);
 }
 
+export function ResonanceModalProvenanceResultInspector(props: InspectorPanelProps) {
+  return (
+    <EigenProvenanceInspectorPanel
+      {...props}
+      canonicalFamily="FMR modal lane · k = 0"
+      linksTitle="FMR Modal Provenance Links"
+      title="FMR Modal Provenance"
+    />
+  );
+}
+
 export function ResonanceDrivenSpectrumResultInspector(props: InspectorPanelProps) {
   return render(PhysicsFirstResultInspectorPanel, props);
 }
@@ -74,6 +87,17 @@ export function ResonanceResponseFieldsResultInspector(props: InspectorPanelProp
 
 export function ResonanceResponseFieldResultInspector(props: InspectorPanelProps) {
   return render(FrequencyResponsePointInspectorPanel, props);
+}
+
+export function ResonanceDrivenProvenanceResultInspector(props: InspectorPanelProps) {
+  return (
+    <FrequencyResponseProvenanceInspectorPanel
+      {...props}
+      canonicalFamily="FMR driven lane · A(0,f)"
+      linksTitle="FMR Driven Provenance Links"
+      title="FMR Driven Provenance"
+    />
+  );
 }
 
 export function DispersionOverviewResultInspector(props: InspectorPanelProps) {
@@ -108,12 +132,34 @@ export function DispersionModeAtKResultInspector(props: InspectorPanelProps) {
   return render(EigenModeInspectorPanel, props);
 }
 
+export function DispersionModalProvenanceResultInspector(props: InspectorPanelProps) {
+  return (
+    <EigenProvenanceInspectorPanel
+      {...props}
+      canonicalFamily="Modal dispersion lane · fₙ(k)"
+      linksTitle="Modal Dispersion Provenance Links"
+      title="Modal Dispersion Provenance"
+    />
+  );
+}
+
 export function DispersionResponseMapResultInspector(props: InspectorPanelProps) {
   return render(PhysicsFirstResultInspectorPanel, props);
 }
 
 export function DispersionResponseFieldAtKResultInspector(props: InspectorPanelProps) {
   return render(FrequencyResponsePointInspectorPanel, props);
+}
+
+export function DispersionDrivenProvenanceResultInspector(props: InspectorPanelProps) {
+  return (
+    <FrequencyResponseProvenanceInspectorPanel
+      {...props}
+      canonicalFamily="Driven response-map lane · A(k,f)"
+      linksTitle="Driven Response-Map Provenance Links"
+      title="Driven Response-Map Provenance"
+    />
+  );
 }
 
 export function HysteresisResultInspector(props: InspectorPanelProps) {

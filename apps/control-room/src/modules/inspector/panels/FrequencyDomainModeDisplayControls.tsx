@@ -398,6 +398,11 @@ export function FrequencyDomainModeDisplayControls({
   const selectedView = viewOptions.includes(settings.view)
     ? settings.view
     : normalizeAnalysisFieldView(viewDefaultValue);
+  const selectedComponent = componentOptions.some(
+    (item) => item.value === settings.component,
+  )
+    ? settings.component
+    : componentOptions[0]?.value ?? settings.component;
   return (
     <>
       <FieldRow
@@ -427,7 +432,7 @@ export function FrequencyDomainModeDisplayControls({
             aria-label={`${labelPrefix} field component`}
             className="fm-inspector-select"
             disabled={disabled}
-            value={settings.component}
+            value={selectedComponent}
             onChange={(event) => settings.setComponent(event.target.value)}
           >
             {componentOptions.map((item) => (

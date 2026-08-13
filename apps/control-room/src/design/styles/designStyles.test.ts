@@ -73,6 +73,23 @@ describe("control-room design styles", () => {
     expect(themeCss).toContain("--fm-info: #04a5e5;");
   });
 
+  it("keeps motion tokens concrete and action text theme-aware", () => {
+    const tokensCss = readAppFile("src/design/styles/tokens.css");
+    const inspectorCss = readAppFile("src/design/styles/inspector.css");
+
+    expect(tokensCss).toContain("--fm-duration-instant: 80ms;");
+    expect(tokensCss).toContain("--fm-duration-fast: 120ms;");
+    expect(tokensCss).toContain("--fm-duration-normal: 180ms;");
+    expect(tokensCss).toContain("--fm-duration-moderate: 240ms;");
+    expect(tokensCss).toContain("--fm-duration-slow: 360ms;");
+    expect(tokensCss).toContain("--fm-duration-loading: 1000ms;");
+    expect(tokensCss).not.toMatch(
+      /(--fm-duration-(?:instant|fast|normal|moderate|slow|loading)):\s*var\(\1\)/,
+    );
+    expect(inspectorCss).toContain("color: var(--fm-text-inverse) !important;");
+    expect(inspectorCss).not.toContain("color: white !important;");
+  });
+
   it("keeps footer tab content inside the resizable dock height", () => {
     const footerCss = readAppFile("src/design/styles/footer.css");
     const footerModule = readAppFile("src/modules/footer/FooterModule.tsx");

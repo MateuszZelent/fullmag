@@ -262,6 +262,28 @@ function pathWavevectorAtSample(
   return null;
 }
 
+function kSamplingForFrequencyContext(
+  sampling: NonNullable<FrequencyDomainResultEvidence["kSampling"]>,
+): Record<string, unknown> {
+  if (sampling.kind === "single") {
+    return {
+      kind: "single",
+      vector_rad_per_m: sampling.vectorRadPerM,
+    };
+  }
+  if (sampling.kind === "grid") {
+    return {
+      kind: "grid",
+      sample_count: sampling.sampleCount,
+    };
+  }
+  return {
+    kind: "path",
+    sample_count: sampling.sampleCount,
+    ...(sampling.label ? { label: sampling.label } : {}),
+  };
+}
+
 function modalFieldTargets({
   dispersion,
   kSampling,
@@ -431,8 +453,12 @@ export function physicsFirstResultsSnapshotFromResources(
         };
   const frequencyContext = frequencyDomainResultContextFromManifest({
     ...payload,
+    ...(kSampling ? { k_sampling: kSamplingForFrequencyContext(kSampling) } : {}),
     run_id: runId,
   });
+  for (const gap of frequencyContext.contractGaps) {
+    if (!contractGaps.includes(gap)) contractGaps.push(gap);
+  }
   const drive = frequencyContext.evidence?.drive;
   const entry: PhysicsFirstResultEntry = {
     analysisFieldTargets:
@@ -561,6 +587,33 @@ function analysisFieldTargetNodes(
   );
 }
 
+function resultProvenanceNode(
+  family: "resonance" | "dispersion",
+  studyProduct: PhysicsFirstResultEntry["studyProduct"],
+): { kind: ExplorerNodeKind; label: string } {
+  if (family === "resonance") {
+    return studyProduct === "modal_eigen"
+      ? {
+          kind: "results.resonance.modal.provenance",
+          label: "Modal Equilibrium & Provenance",
+        }
+      : {
+          kind: "results.resonance.driven.provenance",
+          label: "Driven Equilibrium & Provenance",
+        };
+  }
+
+  return studyProduct === "modal_eigen"
+    ? {
+        kind: "results.dispersion.modal.provenance",
+        label: "Modal Dispersion Provenance",
+      }
+    : {
+        kind: "results.dispersion.driven.provenance",
+        label: "Driven Response-Map Provenance",
+      };
+}
+
 function hasPublishedProduct(products: PhysicsFirstResultProducts): boolean {
   return Object.values(products).some(Boolean);
 }
@@ -642,9 +695,8 @@ function resonanceStage(
       );
     }
   }
-  children.push(
-    leaf(stageId, "provenance", "results.frequency_domain.provenance", "Equilibrium & Provenance", entry),
-  );
+  const provenance = resultProvenanceNode("resonance", entry.studyProduct);
+  children.push(leaf(stageId, "provenance", provenance.kind, provenance.label, entry));
 
   return node(
     stageId,
@@ -710,9 +762,8 @@ function kResolvedStage(
       }),
     );
   }
-  children.push(
-    leaf(stageId, "provenance", "results.frequency_domain.provenance", "Equilibrium & Provenance", entry),
-  );
+  const provenance = resultProvenanceNode("dispersion", entry.studyProduct);
+  children.push(leaf(stageId, "provenance", provenance.kind, provenance.label, entry));
 
   return node(
     stageId,

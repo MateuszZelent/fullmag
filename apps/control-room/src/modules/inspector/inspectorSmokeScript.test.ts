@@ -44,6 +44,9 @@ describe("explorer Inspector browser smoke script", () => {
     expect(smokeScript).toContain("drawingBufferWidth");
     expect(smokeScript).toContain("drawingBufferHeight");
     expect(smokeScript).toContain("[360, 416, 560]");
+    expect(smokeScript).toContain('document.body.style.zoom = "200%"');
+    expect(smokeScript).toContain("visualization-overview-zoom-200.png");
+    expect(smokeScript).toContain("Inspector overflows at 200% zoom");
     expect(smokeScript).toContain("No placeholder");
     expect(smokeScript).toContain("INSPECTOR_REQUEST_LIMITS");
     expect(smokeScript).toContain("unknownGetPaths");

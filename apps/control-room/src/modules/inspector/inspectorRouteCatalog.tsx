@@ -94,10 +94,12 @@ import {
   DispersionDrivenStageResultInspector,
   DispersionKSamplingResultInspector,
   DispersionModalStageResultInspector,
+  DispersionModalProvenanceResultInspector,
   DispersionModesAtKResultInspector,
   DispersionModeAtKResultInspector,
   DispersionOverviewResultInspector,
   DispersionRelationResultInspector,
+  DispersionDrivenProvenanceResultInspector,
   DispersionResponseMapResultInspector,
   DispersionResponseFieldAtKResultInspector,
   DynamicsResultInspector,
@@ -109,11 +111,13 @@ import {
   ResonanceModalCouplingResultInspector,
   ResonanceModalSpectrumResultInspector,
   ResonanceModalModeResultInspector,
+  ResonanceModalProvenanceResultInspector,
   ResonanceModalStageResultInspector,
   ResonanceModeShapesResultInspector,
   ResonanceOverviewResultInspector,
   ResonanceResponseFieldsResultInspector,
   ResonanceResponseFieldResultInspector,
+  ResonanceDrivenProvenanceResultInspector,
 } from "./panels/physics-first/PhysicsFirstResultInspectors";
 import {
   AnalysisViewDefinitionInspector,
@@ -288,7 +292,10 @@ export const FREQUENCY_DOMAIN_INSPECTOR_SELECTION_KINDS = [
   "results.tables.definition",
   "results.exports.root",
   "results.exports.definition",
-  "results.frequency_domain.provenance",
+  "results.resonance.modal.provenance",
+  "results.resonance.driven.provenance",
+  "results.dispersion.modal.provenance",
+  "results.dispersion.driven.provenance",
 ] as const;
 
 type FrequencyDomainInspectorKind =
@@ -390,12 +397,14 @@ const FREQUENCY_DOMAIN_NAMED_PANELS: Partial<
   "results.resonance.modal.modes": ResonanceModeShapesResultInspector,
   "results.resonance.modal.mode": ResonanceModalModeResultInspector,
   "results.resonance.modal.coupling": ResonanceModalCouplingResultInspector,
+  "results.resonance.modal.provenance": ResonanceModalProvenanceResultInspector,
   "results.resonance.driven.spectrum": ResonanceDrivenSpectrumResultInspector,
   "results.resonance.driven.peaks": ResonanceDrivenPeaksResultInspector,
   "results.resonance.driven.frequency_points":
     ResonanceFrequencyPointsResultInspector,
   "results.resonance.driven.fields": ResonanceResponseFieldsResultInspector,
   "results.resonance.driven.field": ResonanceResponseFieldResultInspector,
+  "results.resonance.driven.provenance": ResonanceDrivenProvenanceResultInspector,
   "results.dispersion.root": DispersionOverviewResultInspector,
   "results.dispersion.modal.stage": DispersionModalStageResultInspector,
   "results.dispersion.driven.stage": DispersionDrivenStageResultInspector,
@@ -404,8 +413,10 @@ const FREQUENCY_DOMAIN_NAMED_PANELS: Partial<
   "results.dispersion.modal.branches": DispersionBranchesResultInspector,
   "results.dispersion.modal.modes_at_k": DispersionModesAtKResultInspector,
   "results.dispersion.modal.mode_at_k": DispersionModeAtKResultInspector,
+  "results.dispersion.modal.provenance": DispersionModalProvenanceResultInspector,
   "results.dispersion.driven.response_map": DispersionResponseMapResultInspector,
   "results.dispersion.driven.field_at_k": DispersionResponseFieldAtKResultInspector,
+  "results.dispersion.driven.provenance": DispersionDrivenProvenanceResultInspector,
   "results.hysteresis.root": HysteresisResultInspector,
   "results.analysis_views.root": AnalysisViewsOverviewInspector,
   "results.analysis_views.definition": AnalysisViewDefinitionInspector,
@@ -415,7 +426,6 @@ const FREQUENCY_DOMAIN_NAMED_PANELS: Partial<
   "results.tables.definition": TableDefinitionInspector,
   "results.exports.root": ExportsOverviewInspector,
   "results.exports.definition": ExportDefinitionInspector,
-  "results.frequency_domain.provenance": EigenProvenanceInspectorPanel,
 };
 
 const FREQUENCY_DOMAIN_DEDICATED_PANELS = Object.fromEntries(
