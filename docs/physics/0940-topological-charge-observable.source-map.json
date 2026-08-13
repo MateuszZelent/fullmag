@@ -7,7 +7,7 @@
       "solver": "FEM",
       "device": "CPU",
       "status": "reference_executable",
-      "reason": "The object-scoped P1 cut-plane charge resource has managed CPU evidence for the documented bounded contract; the planned trajectory and Hall-angle layer is not implemented or qualified."
+      "reason": "The object-scoped P1 cut-plane charge resource has managed CPU evidence for the documented bounded contract; the Hall-angle pure seam has source tests only and no runtime qualification."
     },
     {
       "solver": "FEM",
@@ -19,7 +19,7 @@
       "solver": "FDM",
       "device": "CPU",
       "status": "reference_executable",
-      "reason": "The object-scoped oriented-triangle charge resource has managed CPU evidence for the documented bounded contract; the planned trajectory and Hall-angle layer is not implemented or qualified."
+      "reason": "The object-scoped oriented-triangle charge resource has managed CPU evidence for the documented bounded contract; the Hall-angle pure seam has source tests only and no runtime qualification."
     },
     {
       "solver": "FDM",
@@ -72,44 +72,51 @@
     {
       "id": "skyrmion-signed-density-centre",
       "symbols": ["delta_Q_nk", "Omega_nk", "c_nk", "r_nk_l", "r_n", "Q_n", "x_n", "y_n"],
-      "sources": ["skyrmion-hall-contract"],
-      "evidence_status": "planned_contract",
-      "owner_task": "Task 1"
+      "sources": ["skyrmion-hall-seam"],
+      "evidence_status": "source_and_tests",
+      "owner_task": "Task 8"
     },
     {
       "id": "skyrmion-candidate-speed-statistics",
       "symbols": ["t_n", "r_n", "s_k", "s_bar", "c_v", "N_w"],
-      "sources": ["skyrmion-hall-window-thresholds-contract"],
-      "evidence_status": "planned_contract",
-      "owner_task": "Task 1"
+      "sources": ["skyrmion-hall-seam"],
+      "evidence_status": "source_and_tests",
+      "owner_task": "Task 8"
     },
     {
       "id": "skyrmion-hall-weighted-regression",
-      "symbols": ["t_n", "w_n", "x_n", "y_n", "v_x", "v_y", "b_x", "b_y", "W", "S_tt", "t_bar_w", "xy_bar_w"],
-      "sources": ["skyrmion-hall-equal-weight-wls-contract"],
-      "evidence_status": "planned_contract",
-      "owner_task": "Task 1"
+      "symbols": ["t_n", "x_n", "y_n", "v_x", "v_y", "b_x", "b_y", "C_n", "A_n", "N_gls", "beta_hat", "r_n"],
+      "sources": ["skyrmion-hall-seam"],
+      "evidence_status": "source_and_tests",
+      "owner_task": "Task 8"
     },
     {
       "id": "skyrmion-hall-weighted-covariance",
-      "symbols": ["w_n", "r_a_n", "a_b_index", "chi_ab", "velocity_covariance", "S_tt", "N_w"],
-      "sources": ["skyrmion-hall-equal-weight-wls-contract"],
-      "evidence_status": "planned_contract",
-      "owner_task": "Task 1"
+      "symbols": ["C_n", "A_n", "N_gls", "beta_hat", "r_n", "chi2_nu", "velocity_covariance", "N_w"],
+      "sources": ["skyrmion-hall-seam"],
+      "evidence_status": "source_and_tests",
+      "owner_task": "Task 8"
+    },
+    {
+      "id": "skyrmion-hall-directional-coherence",
+      "symbols": ["d_coh", "r_n", "v_x", "v_y"],
+      "sources": ["skyrmion-hall-seam"],
+      "evidence_status": "source_and_tests",
+      "owner_task": "Task 8"
     },
     {
       "id": "skyrmion-hall-angle",
       "symbols": ["v_x", "v_y", "Theta_H"],
-      "sources": ["skyrmion-hall-contract"],
-      "evidence_status": "planned_contract",
-      "owner_task": "Task 1"
+      "sources": ["skyrmion-hall-seam"],
+      "evidence_status": "source_and_tests",
+      "owner_task": "Task 8"
     },
     {
       "id": "skyrmion-hall-angle-variance",
       "symbols": ["v_x", "v_y", "velocity_covariance", "Theta_variance"],
-      "sources": ["skyrmion-hall-contract"],
-      "evidence_status": "planned_contract",
-      "owner_task": "Task 1"
+      "sources": ["skyrmion-hall-seam"],
+      "evidence_status": "source_and_tests",
+      "owner_task": "Task 8"
     },
     {
       "id": "belavin-polyakov-texture",
@@ -135,7 +142,10 @@
     {"id": "N", "latex": "N", "meaning": "number of uniformly weighted FEM profile cuts", "si_unit": "$1$"},
     {"id": "i", "latex": "i", "meaning": "deterministic layer or profile-cut index", "si_unit": "$1$"},
     {"id": "t_n", "latex": "t_n", "meaning": "accepted trajectory time sample", "si_unit": "\\mathrm{s}"},
-    {"id": "w_n", "latex": "w_n", "meaning": "deterministic equal sample weight, exactly one", "si_unit": "$1$"},
+    {"id": "C_n", "latex": "C_n", "meaning": "calibrated signed-density-centre covariance", "si_unit": "\\mathrm{m^2}"},
+    {"id": "A_n", "latex": "A_n", "meaning": "two-coordinate affine trajectory design matrix", "si_unit": "$1,\\mathrm{s}$ by column"},
+    {"id": "N_gls", "latex": "N", "meaning": "GLS normal matrix", "si_unit": "mixed by parameter block"},
+    {"id": "beta_hat", "latex": "\\hat\\beta", "meaning": "fitted intercept and velocity parameter vector", "si_unit": "mixed $\\mathrm{m},\\mathrm{m\\,s^{-1}}$"},
     {"id": "x_n", "latex": "x_n", "meaning": "signed-density centre coordinate along the track", "si_unit": "\\mathrm{m}"},
     {"id": "y_n", "latex": "y_n", "meaning": "signed-density centre coordinate along the transverse axis", "si_unit": "\\mathrm{m}"},
     {"id": "v_x", "latex": "v_x", "meaning": "fitted longitudinal velocity", "si_unit": "\\mathrm{m\\,s^{-1}}"},
@@ -152,15 +162,10 @@
     {"id": "s_bar", "latex": "\\bar s", "meaning": "arithmetic mean of adjacent secant speeds", "si_unit": "\\mathrm{m\\,s^{-1}}"},
     {"id": "c_v", "latex": "c_v", "meaning": "coefficient of variation of adjacent speeds", "si_unit": "$1$"},
     {"id": "N_w", "latex": "N_w", "meaning": "number of samples in a candidate Hall window", "si_unit": "$1$"},
-    {"id": "W", "latex": "W", "meaning": "sum of equal sample weights, exactly $N_w$", "si_unit": "$1$"},
-    {"id": "S_tt", "latex": "S_{tt}", "meaning": "centred equal-weight time normal-matrix entry", "si_unit": "\\mathrm{s^2}"},
-    {"id": "t_bar_w", "latex": "\\bar t_w", "meaning": "weighted mean trajectory time", "si_unit": "\\mathrm{s}"},
-    {"id": "xy_bar_w", "latex": "\\bar x_w,\\bar y_w", "meaning": "weighted mean centre coordinates", "si_unit": "\\mathrm{m}"},
     {"id": "b_x", "latex": "b_x", "meaning": "fitted longitudinal intercept", "si_unit": "\\mathrm{m}"},
     {"id": "b_y", "latex": "b_y", "meaning": "fitted transverse intercept", "si_unit": "\\mathrm{m}"},
-    {"id": "r_a_n", "latex": "r_{a,n}", "meaning": "coordinate-$a$ regression residual", "si_unit": "\\mathrm{m}"},
-    {"id": "a_b_index", "latex": "a,b", "meaning": "coordinate indices taking values $x$ or $y$", "si_unit": "$1$"},
-    {"id": "chi_ab", "latex": "\\chi_{ab}", "meaning": "equal-weight residual cross-covariance of centre coordinates", "si_unit": "\\mathrm{m^2}"},
+    {"id": "chi2_nu", "latex": "\\chi^2_\\nu", "meaning": "reduced Mahalanobis residual statistic", "si_unit": "$1$"},
+    {"id": "d_coh", "latex": "d_{\\mathrm{coh}}", "meaning": "directed-motion coherence with the fitted velocity", "si_unit": "$1$"},
     {"id": "velocity_covariance", "latex": "\\operatorname{Cov}(v_a,v_b)", "meaning": "fitted velocity covariance entry", "si_unit": "\\mathrm{m^2\\,s^{-2}}"},
     {"id": "Theta_variance", "latex": "\\operatorname{Var}(\\Theta_H)", "meaning": "delta-method Hall-angle variance", "si_unit": "\\mathrm{rad^2}"},
     {"id": "x_y", "latex": "x,y", "meaning": "Cartesian coordinates of the analytic validation texture", "si_unit": "\\mathrm{m}"},
@@ -233,9 +238,16 @@
       "id": "skyrmion-hall-contract",
       "path": "docs/physics/0940-topological-charge-observable.md",
       "symbol": "DOC-ANCHOR:skyrmion-hall-angle-v1-contract",
-      "responsibility": "Freeze signed-density centre, steady-window, weighted-regression, covariance, angle, and reason-code semantics without claiming implementation.",
+      "responsibility": "Own the source-backed pure trajectory/Hall seam semantics without claiming a v2 resource or runtime qualification.",
       "evidence_status": "planned_contract",
-      "owner_task": "Task 1"
+      "owner_task": "Task 8"
+    },
+    {
+      "id": "skyrmion-hall-seam",
+      "path": "crates/fullmag-api/src/analysis/skyrmion_trajectory.rs",
+      "symbol": "analyze_skyrmion_hall_angle_v1",
+      "responsibility": "Validate source/provenance and accepted signed-density samples, select the documented steady window, fit calibrated weighted GLS velocity covariance, and return one fail-closed reason when unavailable.",
+      "evidence_status": "source_and_tests"
     },
     {
       "id": "skyrmion-hall-window-thresholds-contract",
@@ -243,7 +255,7 @@
       "symbol": "DOC-ANCHOR:skyrmion-hall-steady-window-thresholds",
       "responsibility": "Freeze the exact sample-count, duration, charge, edge-distance, displacement, mean-speed, and speed-variation thresholds.",
       "evidence_status": "planned_contract",
-      "owner_task": "Task 1"
+      "owner_task": "Task 8"
     },
     {
       "id": "skyrmion-hall-window-selection-contract",
@@ -251,15 +263,15 @@
       "symbol": "DOC-ANCHOR:skyrmion-hall-candidate-window-selection",
       "responsibility": "Freeze exhaustive contiguous-window enumeration and the maximum-duration, minimum-start, minimum-end tie-break.",
       "evidence_status": "planned_contract",
-      "owner_task": "Task 1"
+      "owner_task": "Task 8"
     },
     {
-      "id": "skyrmion-hall-equal-weight-wls-contract",
+      "id": "skyrmion-hall-weighted-gls-contract",
       "path": "docs/physics/0940-topological-charge-observable.md",
-      "symbol": "DOC-ANCHOR:skyrmion-hall-equal-weight-wls",
-      "responsibility": "Freeze equal sample weights, the common-mask intercept fit, residual cross-covariance, and full velocity covariance.",
+      "symbol": "DOC-ANCHOR:skyrmion-hall-weighted-gls",
+      "responsibility": "Freeze calibrated per-sample covariance, GLS intercept fit, residual quality, directional coherence, and full velocity covariance.",
       "evidence_status": "planned_contract",
-      "owner_task": "Task 1"
+      "owner_task": "Task 8"
     },
     {
       "id": "skyrmion-hall-trajectory-provenance-contract",
@@ -267,7 +279,7 @@
       "symbol": "DOC-ANCHOR:skyrmion-hall-trajectory-provenance",
       "responsibility": "Freeze required numeric sample fields and one consistent revision, generation, snapshot, stage, and cache identity.",
       "evidence_status": "planned_contract",
-      "owner_task": "Task 1"
+      "owner_task": "Task 8"
     },
     {
       "id": "skyrmion-hall-reason-code-contract",
@@ -275,7 +287,7 @@
       "symbol": "DOC-ANCHOR:skyrmion-hall-reason-code-precedence",
       "responsibility": "Freeze the fail-closed reason-code precedence and the physical gate owned by each reason.",
       "evidence_status": "planned_contract",
-      "owner_task": "Task 1"
+      "owner_task": "Task 8"
     }
   ],
   "claims": [
@@ -317,52 +329,52 @@
     {
       "id": "skyrmion-hall-steady-window-thresholds",
       "sources": ["skyrmion-hall-window-thresholds-contract"],
-      "evidence_status": "planned_contract",
-      "owner_task": "Task 1"
+      "evidence_status": "source_and_tests",
+      "owner_task": "Task 8"
     },
     {
       "id": "skyrmion-hall-exhaustive-window-selection",
       "sources": ["skyrmion-hall-window-selection-contract"],
-      "evidence_status": "planned_contract",
-      "owner_task": "Task 1"
+      "evidence_status": "source_and_tests",
+      "owner_task": "Task 8"
     },
     {
-      "id": "skyrmion-hall-equal-weight-wls",
-      "sources": ["skyrmion-hall-equal-weight-wls-contract"],
-      "evidence_status": "planned_contract",
-      "owner_task": "Task 1"
+      "id": "skyrmion-hall-weighted-gls",
+      "sources": ["skyrmion-hall-weighted-gls-contract"],
+      "evidence_status": "source_and_tests",
+      "owner_task": "Task 8"
     },
     {
       "id": "skyrmion-hall-covariance",
-      "sources": ["skyrmion-hall-equal-weight-wls-contract"],
-      "evidence_status": "planned_contract",
-      "owner_task": "Task 1"
+      "sources": ["skyrmion-hall-weighted-gls-contract"],
+      "evidence_status": "source_and_tests",
+      "owner_task": "Task 8"
     },
     {
       "id": "skyrmion-hall-trajectory-provenance",
       "sources": ["skyrmion-hall-trajectory-provenance-contract"],
-      "evidence_status": "planned_contract",
-      "owner_task": "Task 1"
+      "evidence_status": "source_and_tests",
+      "owner_task": "Task 8"
     },
     {
       "id": "skyrmion-hall-reason-code-precedence",
       "sources": ["skyrmion-hall-reason-code-contract"],
-      "evidence_status": "planned_contract",
-      "owner_task": "Task 1"
+      "evidence_status": "source_and_tests",
+      "owner_task": "Task 8"
     }
   ],
   "planned_symbols": [
     {
       "path": "crates/fullmag-api/src/analysis/skyrmion_trajectory.rs",
       "symbol": "SkyrmionTrajectoryV1",
-      "status": "planned_not_implemented",
+      "status": "source_tested_no_runtime_resource",
       "owner_task": "Task 8",
       "evidence_gate": "managed racetrack trajectory and fail-closed reason-code tests"
     },
     {
       "path": "crates/fullmag-api/src/analysis/skyrmion_trajectory.rs",
       "symbol": "SkyrmionHallAngleV1",
-      "status": "planned_not_implemented",
+      "status": "source_tested_no_runtime_resource",
       "owner_task": "Task 8",
       "evidence_gate": "weighted-regression covariance and signed Hall-angle oracle"
     }

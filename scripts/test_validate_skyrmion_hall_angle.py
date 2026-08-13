@@ -24,12 +24,22 @@ def _artifact() -> dict[str, object]:
     provenance = _provenance()
     return {
         "schema_version": "skyrmion_hall_angle.v1",
+        "algorithm_version": "weighted_gls.v1",
         "trajectory": {
             "time_s": [0.0, 1.0e-10, 2.0e-10],
             "x_m": [0.0, 1.0e-8, 2.0e-8],
             "y_m": [0.0, 5.773502691896258e-9, 1.1547005383792516e-8],
             "q": [-1.0, -1.0, -1.0],
             "edge_distance_m": [40e-9, 40e-9, 40e-9],
+            "source": {
+                "magnetization_quantity_id": "m",
+                "magnetization_series_id": "accepted-m-series-1",
+                "object_id": "racetrack_fm",
+                "geometry_id": "racetrack-geometry-1",
+                "grid_or_mesh_id": "fdm-grid-1",
+                "support_id": "xy:midplane",
+                "topological_charge_method_version": "topological_charge.v1",
+            },
             "provenance": dict(provenance),
         },
         "hall_angle": {
@@ -41,6 +51,8 @@ def _artifact() -> dict[str, object]:
             "residuals_m": [[0.0, 0.0], [0.0, 0.0], [0.0, 0.0]],
             "velocity_covariance_m2_per_s2": [[1e-4, 0.0], [0.0, 1e-4]],
             "mean_signed_current_a_per_m2": 1.0e12,
+            "reduced_chi_square": 1.0,
+            "directional_coherence": 0.999,
             "provenance": provenance,
         },
     }
@@ -48,6 +60,27 @@ def _artifact() -> dict[str, object]:
 
 def test_accepts_complete_hall_artifact() -> None:
     validate_hall_artifact(_artifact())
+
+
+@pytest.mark.parametrize(
+    ("path", "value", "message"),
+    [
+        (("algorithm_version",), "equal_weight_v1", "algorithm_version"),
+        (("trajectory", "source", "grid_or_mesh_id"), "", "grid_or_mesh_id"),
+        (("hall_angle", "reduced_chi_square"), 4.1, "reduced_chi_square"),
+        (("hall_angle", "directional_coherence"), 0.94, "directional_coherence"),
+    ],
+)
+def test_rejects_artifact_without_current_weighted_algorithm_and_source_seam(
+    path: tuple[str, ...], value: object, message: str
+) -> None:
+    artifact = copy.deepcopy(_artifact())
+    target: object = artifact
+    for key in path[:-1]:
+        target = target[key]  # type: ignore[index]
+    target[path[-1]] = value  # type: ignore[index]
+    with pytest.raises(HallArtifactError, match=message):
+        validate_hall_artifact(artifact)
 
 
 @pytest.mark.parametrize(

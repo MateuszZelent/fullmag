@@ -439,9 +439,10 @@ different object, a different plane, or a fixed frame interval.
 (skyrmion-hall-angle-v1-contract)=
 ### 4.2.2 Planned trajectory and Hall-angle contract
 
-`skyrmion_hall_angle_v1` is a planned analysis over an accepted sequence of
-signed topological-density samples. It is not implemented or qualified by this
-note. Each sample first passes the existing support, topology, boundary,
+`skyrmion_hall_angle_v1` is a source-backed pure analysis over an accepted
+sequence of signed topological-density samples. It has focused source tests,
+but no HTTP v2 resource, managed-runtime, device, or production-workload
+qualification. Each sample first passes the existing support, topology, boundary,
 resolution, and provenance gates. On triangle $k$ at time $t_n$, the exact
 discrete density moment uses its signed solid-angle charge and the arithmetic
 centroid of its three physical support vertices:
@@ -492,46 +493,66 @@ index. Among passing candidates select maximum duration; an exact duration tie
 selects the minimum start index, then the minimum end index. This is the only
 candidate-window selection and tie-break rule.
 
-(skyrmion-hall-equal-weight-wls)=
-The v1 trajectory producer does not estimate centre-coordinate uncertainty:
-position variances are not produced by the signed triangle-density moment.
-Inventing $\sigma_{x,n}^2$ or $\sigma_{y,n}^2$ from grid spacing would attach
-an uncalibrated statistical meaning to a deterministic discretization error.
-Therefore `equal_weight_v1` is mandatory: every accepted sample has exactly
-$w_n=1$. This is the equal-weight special case of weighted least squares, with
-one common sample mask and an intercept:
+(skyrmion-hall-weighted-gls)=
+Every accepted centre sample now carries a calibrated symmetric positive-definite
+two-coordinate covariance $C_n$ in $mathrm{m^2}$. The trajectory producer
+must obtain it from the accepted signed-density-moment estimator; it must not
+invent a variance from the FDM cell size, FEM edge length, or viewport pixel
+spacing. A missing, nonfinite, non-symmetric, or non-positive-definite $C_n$
+rejects the complete artifact before a Hall angle is fitted.
+
+The v1 estimator is therefore genuine generalized weighted least squares (GLS),
+not equal-weight OLS labelled as WLS. With $\beta=(b_x,b_y,v_x,v_y)^T$ and
+$y_n=(x_n,y_n)^T$, it uses an intercept and the per-sample design matrix
 
 ```{math}
 :label: skyrmion-hall-weighted-regression
-w_n=1,\quad W=\sum_nw_n=N_w,\quad
-\bar t_w=\frac{\sum_nw_nt_n}{W},\quad
-\bar x_w=\frac{\sum_nw_nx_n}{W},\quad
-\bar y_w=\frac{\sum_nw_ny_n}{W},\quad
-S_{tt}=\sum_nw_n(t_n-\bar t_w)^2,
+A_n=\begin{pmatrix}1&0&t_n&0\\0&1&0&t_n\end{pmatrix},\qquad
+N=\sum_n A_n^T C_n^{-1} A_n,\qquad
+\hat\beta=N^{-1}\sum_n A_n^T C_n^{-1}y_n,
 \qquad
-v_x=\frac{\sum_nw_n(t_n-\bar t_w)(x_n-\bar x_w)}{S_{tt}},\quad
-v_y=\frac{\sum_nw_n(t_n-\bar t_w)(y_n-\bar y_w)}{S_{tt}},\quad
-b_x=\bar x_w-v_x\bar t_w,\quad b_y=\bar y_w-v_y\bar t_w.
+r_n=y_n-A_n\hat\beta.
 ```
 
-The fit is invalid when $S_{tt}\le0$ or $N_w-2\le0$. For $a,b\in\{x,y\}$,
-$r_{a,n}=a_n-(b_a+v_at_n)$ and the equal-weight residual cross-covariance
-uses exactly $N_w-2$ degrees of freedom. The complete reported two-coordinate
-velocity covariance is
+The fit is invalid when $N$ is singular or $N_w-2\le0$. The fitted parameter
+covariance is $N^{-1}$; its $(v_x,v_y)$ block is reported. The residual gate
+uses the calibrated Mahalanobis statistic and has exact threshold
+$\chi^2_\nu\le4$. It is a quality gate, not a rescaling of the declared
+measurement covariance:
 
 ```{math}
 :label: skyrmion-hall-weighted-covariance
-r_{a,n}=a_n-(b_a+v_at_n),\qquad
-\chi_{ab}=\frac{1}{N_w-2}\sum_nr_{a,n}r_{b,n},\qquad
-\operatorname{Cov}(v_a,v_b)=\frac{\chi_{ab}}{S_{tt}}.
+\operatorname{Cov}(\hat\beta)=N^{-1},\qquad
+\chi^2_\nu=\frac{1}{2(N_w-2)}\sum_n r_n^T C_n^{-1}r_n\le4.
 ```
+
+The fitted velocity direction also has to explain the accumulated directed
+motion. With $hat{\mathbf v}=\mathbf v/\lVert\mathbf v\rVert$ and
+$\Delta\mathbf r_k=\mathbf r_{k+1}-\mathbf r_k$, the deterministic
+coherence gate is
+
+```{math}
+:label: skyrmion-hall-directional-coherence
+d_{\mathrm{coh}}=
+\frac{\sum_k\Delta\mathbf r_k\cdot\hat{\mathbf v}}
+{\sum_k\lVert\Delta\mathbf r_k\rVert}\ge0.95.
+```
+
+It prevents a large net displacement assembled from reversals from being
+reported as a steady directed Hall drift. The existing adjacent-speed $c_v$
+gate remains independent of this regression-quality gate.
 
 (skyrmion-hall-trajectory-provenance)=
 Every trajectory sample must provide `accepted_sequence`, finite strictly
 increasing `time_s`, finite `topological_charge`, finite two-component
 `centre_m`, and finite nonnegative `minimum_edge_distance_m`. These fields
-supply every numeric input used by window selection and the fit. The accepted
-trajectory also preserves `scene_revision`, `field_revision`, `mesh_revision`,
+supply every numeric input used by window selection and the fit. It must also
+provide `centre_covariance_m2` and one source seam containing the accepted
+magnetization quantity and series identifiers, object, geometry, grid-or-mesh,
+support, and topological-charge method version. The serialized artifact uses
+`schema_version=skyrmion_hall_angle.v1` and
+`algorithm_version=weighted_gls.v1`. The accepted trajectory also preserves
+`scene_revision`, `field_revision`, `mesh_revision`,
 `mesh_generation_id`, `domain_generation_id`, `global_node_mapping_id`,
 `snapshot_id`, `stage_id`, and `cache_key_digest`; samples with mixed or
 missing provenance are rejected before regression.
@@ -558,7 +579,10 @@ off-diagonal term:
 | id | latex | meaning | si_unit |
 |---|---|---|---|
 | $t_n$ | $t_n$ | accepted trajectory time sample | $\mathrm{s}$ |
-| $w_n$ | $w_n$ | deterministic equal sample weight, exactly one | $1$ |
+| $C_n$ | $C_n$ | calibrated signed-density-centre covariance | $\mathrm{m^2}$ |
+| $A_n$ | $A_n$ | two-coordinate affine trajectory design matrix | $1,\mathrm{s}$ by column |
+| $N$ | $N$ | GLS normal matrix | mixed by parameter block |
+| $\hat\beta$ | $\hat\beta$ | fitted intercept and velocity parameter vector | mixed $\mathrm{m},\mathrm{m\,s^{-1}}$ |
 | $x_n$ | $x_n$ | signed-density centre coordinate along the track | $\mathrm{m}$ |
 | $y_n$ | $y_n$ | signed-density centre coordinate along the transverse axis | $\mathrm{m}$ |
 | $v_x$ | $v_x$ | fitted longitudinal velocity | $\mathrm{m\,s^{-1}}$ |
@@ -575,15 +599,12 @@ off-diagonal term:
 | $\bar s$ | $\bar s$ | arithmetic mean of adjacent secant speeds | $\mathrm{m\,s^{-1}}$ |
 | $c_v$ | $c_v$ | coefficient of variation of adjacent speeds | $1$ |
 | $N_w$ | $N_w$ | number of samples in a candidate Hall window | $1$ |
-| $W$ | $W$ | sum of equal sample weights, exactly $N_w$ | $1$ |
-| $S_{tt}$ | $S_{tt}$ | centred equal-weight time normal-matrix entry | $\mathrm{s^2}$ |
-| $\bar t_w$ | $\bar t_w$ | weighted mean trajectory time | $\mathrm{s}$ |
-| $\bar x_w,\bar y_w$ | $\bar x_w,\bar y_w$ | weighted mean centre coordinates | $\mathrm{m}$ |
 | $b_x$ | $b_x$ | fitted longitudinal intercept | $\mathrm{m}$ |
 | $b_y$ | $b_y$ | fitted transverse intercept | $\mathrm{m}$ |
 | $r_{a,n}$ | $r_{a,n}$ | coordinate-$a$ regression residual | $\mathrm{m}$ |
 | $a,b$ | $a,b$ | coordinate indices taking values $x$ or $y$ | $1$ |
-| $\chi_{ab}$ | $\chi_{ab}$ | equal-weight residual cross-covariance of centre coordinates | $\mathrm{m^2}$ |
+| $\chi^2_\nu$ | $\chi^2_\nu$ | reduced Mahalanobis residual statistic | $1$ |
+| $d_{\mathrm{coh}}$ | $d_{\mathrm{coh}}$ | directed-motion coherence with the fitted velocity | $1$ |
 | $\operatorname{Cov}(v_a,v_b)$ | $\operatorname{Cov}(v_a,v_b)$ | fitted velocity covariance entry | $\mathrm{m^2\,s^{-2}}$ |
 | $\operatorname{Var}(\Theta_H)$ | $\operatorname{Var}(\Theta_H)$ | delta-method Hall-angle variance | $\mathrm{rad^2}$ |
 
@@ -605,10 +626,11 @@ interval passes duration, charge-stability, and $c_v$ gates.
 trajectory.
 
 The current CPU topological-charge resource and its managed FDM/FEM checks are
-prerequisites only. They do not prove `SkyrmionTrajectoryV1`,
-`SkyrmionHallAngleV1`, GPU execution, uncertainty calibration, or the
-`racetrack_m1_v1` production workload. Those symbols remain planned and
-unqualified until their own managed evidence gates pass.
+prerequisites only. The pure `SkyrmionTrajectoryV1` and
+`SkyrmionHallAngleV1` seam has focused source tests, but that does not prove a
+v2 resource, GPU execution, uncertainty calibration, or the `racetrack_m1_v1`
+production workload. All of those remain unqualified until their own managed
+evidence gates pass.
 
 ### 4.3 Planner and capability impact
 
@@ -890,8 +912,8 @@ host-only build.
 ## 10. Source-code index
 
 Rows marked as current source identify implemented CPU/resource contracts.
-Documentation anchors own accepted or planned equations but are not executable
-evidence. The Hall-angle row remains planned and unqualified.
+Documentation anchors own accepted equations but are not executable evidence.
+The Hall-angle pure seam is source-tested only and remains unqualified.
 
 | Claim | Path | Symbol | Responsibility | Evidence |
 |---|---|---|---|---|
@@ -905,9 +927,10 @@ evidence. The Hall-angle row remains planned and unqualified.
 | Cache identity | crates/fullmag-api/src/quantity_data_plane.rs | topological_charge_cache_key | bind object, field, support, method, mesh, domain, and snapshot identity | router cache-key regression |
 | Managed evidence validator | scripts/validate_topological_charge_runtime.py | validate_evidence | reject incomplete FDM/FEM managed-runtime evidence | managed cross-backend recipes |
 | Belavin-Polyakov validation contract | docs/physics/0940-topological-charge-observable.md | DOC-ANCHOR:validation | own the independent continuum validation target | documentation contract; not production-kernel evidence |
-| Planned trajectory and Hall angle | docs/physics/0940-topological-charge-observable.md | DOC-ANCHOR:skyrmion-hall-angle-v1-contract | freeze signed-density centre, steady-window, regression, covariance, angle, and reason-code semantics | planned contract only; not implemented or qualified |
-| Hall steady-window thresholds | docs/physics/0940-topological-charge-observable.md | DOC-ANCHOR:skyrmion-hall-steady-window-thresholds | freeze all numeric candidate-window gates | planned contract only; Task 1 owner; not implemented or qualified |
-| Hall candidate-window selection | docs/physics/0940-topological-charge-observable.md | DOC-ANCHOR:skyrmion-hall-candidate-window-selection | freeze exhaustive enumeration and deterministic tie-break | planned contract only; Task 1 owner; not implemented or qualified |
-| Hall equal-weight WLS and covariance | docs/physics/0940-topological-charge-observable.md | DOC-ANCHOR:skyrmion-hall-equal-weight-wls | freeze equal weights, intercept fit, residual covariance, and velocity covariance | planned contract only; Task 1 owner; not implemented or qualified |
-| Hall trajectory provenance | docs/physics/0940-topological-charge-observable.md | DOC-ANCHOR:skyrmion-hall-trajectory-provenance | freeze required sample fields and common provenance identity | planned contract only; Task 1 owner; not implemented or qualified |
-| Hall reason-code precedence | docs/physics/0940-topological-charge-observable.md | DOC-ANCHOR:skyrmion-hall-reason-code-precedence | freeze fail-closed reason ordering and gate ownership | planned contract only; Task 1 owner; not implemented or qualified |
+| Hall semantic contract | docs/physics/0940-topological-charge-observable.md | DOC-ANCHOR:skyrmion-hall-angle-v1-contract | own signed-density centre, steady-window, regression, covariance, angle, and reason-code semantics | documentation contract; source seam is separately tested |
+| Trajectory and Hall-angle pure seam | crates/fullmag-api/src/analysis/skyrmion_trajectory.rs | analyze_skyrmion_hall_angle_v1 | consume accepted signed-density samples, select a steady interval, and produce fail-closed trajectory/Hall result | source and focused unit tests; no v2 resource, managed runtime, GPU, or production qualification |
+| Hall steady-window thresholds | docs/physics/0940-topological-charge-observable.md | DOC-ANCHOR:skyrmion-hall-steady-window-thresholds | freeze all numeric candidate-window gates | source and focused unit tests; no runtime qualification |
+| Hall candidate-window selection | docs/physics/0940-topological-charge-observable.md | DOC-ANCHOR:skyrmion-hall-candidate-window-selection | freeze exhaustive enumeration and deterministic tie-break | source and focused unit tests; no runtime qualification |
+| Hall weighted GLS and covariance | docs/physics/0940-topological-charge-observable.md | DOC-ANCHOR:skyrmion-hall-weighted-gls | freeze calibrated centre covariance, GLS fit, residual and directional gates, and velocity covariance | source and focused unit tests; no runtime qualification |
+| Hall trajectory provenance | docs/physics/0940-topological-charge-observable.md | DOC-ANCHOR:skyrmion-hall-trajectory-provenance | freeze required sample fields and common provenance identity | source and focused unit tests; no runtime qualification |
+| Hall reason-code precedence | docs/physics/0940-topological-charge-observable.md | DOC-ANCHOR:skyrmion-hall-reason-code-precedence | freeze fail-closed reason ordering and gate ownership | source and focused unit tests; no runtime qualification |

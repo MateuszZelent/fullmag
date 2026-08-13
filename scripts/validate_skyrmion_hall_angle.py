@@ -16,6 +16,7 @@ from typing import Any, Mapping
 
 
 SCHEMA_VERSION = "skyrmion_hall_angle.v1"
+ALGORITHM_VERSION = "weighted_gls.v1"
 REASONS = {
     "no_motion",
     "topology_lost",
@@ -66,9 +67,27 @@ def _provenance(value: Any, label: str) -> Mapping[str, Any]:
     return result
 
 
+def _source(value: Any, label: str) -> Mapping[str, Any]:
+    result = _obj(value, label)
+    for field in (
+        "magnetization_quantity_id",
+        "magnetization_series_id",
+        "object_id",
+        "geometry_id",
+        "grid_or_mesh_id",
+        "support_id",
+        "topological_charge_method_version",
+    ):
+        if not isinstance(result.get(field), str) or not result[field]:
+            raise HallArtifactError(f"{label}.{field} is required")
+    return result
+
+
 def validate_hall_artifact(artifact: Mapping[str, Any]) -> None:
     if artifact.get("schema_version") != SCHEMA_VERSION:
         raise HallArtifactError(f"schema_version must be {SCHEMA_VERSION!r}")
+    if artifact.get("algorithm_version") != ALGORITHM_VERSION:
+        raise HallArtifactError(f"algorithm_version must be {ALGORITHM_VERSION!r}")
     trajectory = _obj(artifact.get("trajectory"), "trajectory")
     arrays = {
         field: trajectory.get(field)
@@ -79,6 +98,7 @@ def validate_hall_artifact(artifact: Mapping[str, Any]) -> None:
     count = len(arrays["time_s"])
     if count < 2 or any(len(value) != count for value in arrays.values()):
         raise HallArtifactError("trajectory arrays must have the same length and at least two samples")
+    source = _source(trajectory.get("source"), "trajectory.source")
     provenance = _provenance(trajectory.get("provenance"), "trajectory.provenance")
     for index in range(count):
         time_s = _finite(arrays["time_s"][index], f"trajectory.time_s[{index}]")
@@ -134,9 +154,21 @@ def validate_hall_artifact(artifact: Mapping[str, Any]) -> None:
         raise HallArtifactError("velocity covariance must be symmetric")
     if matrix[0][0] < 0.0 or matrix[1][1] < 0.0 or matrix[0][0] * matrix[1][1] - matrix[0][1] ** 2 < -1e-30:
         raise HallArtifactError("velocity covariance must be positive semidefinite")
+    reduced_chi_square = _finite(hall.get("reduced_chi_square"), "hall_angle.reduced_chi_square")
+    if reduced_chi_square > 4.0:
+        raise HallArtifactError("hall_angle.reduced_chi_square exceeds the weighted GLS gate")
+    directional_coherence = _finite(
+        hall.get("directional_coherence"), "hall_angle.directional_coherence"
+    )
+    if not 0.95 <= directional_coherence <= 1.0 + 1e-12:
+        raise HallArtifactError("hall_angle.directional_coherence fails the directed-motion gate")
     _finite(hall.get("mean_signed_current_a_per_m2"), "hall_angle.mean_signed_current_a_per_m2")
     if _provenance(hall.get("provenance"), "hall_angle.provenance") != provenance:
         raise HallArtifactError("hall_angle.provenance does not match trajectory provenance")
+    # The source must be present even though the Hall payload duplicates only
+    # provenance: the trajectory owns the accepted $m(t)$ + geometry/grid seam.
+    if not source:
+        raise HallArtifactError("trajectory.source is required")
 
 
 def main(argv: list[str] | None = None) -> int:
