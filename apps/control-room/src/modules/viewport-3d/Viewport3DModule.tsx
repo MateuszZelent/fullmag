@@ -2124,6 +2124,19 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
       data-fdm-vector-segment-count={String(
         Math.floor((sceneProps.fdmVectorSegments?.length ?? 0) / 7),
       )}
+      data-fdm-airbox-target="fdm-universe-outside-support"
+      data-fdm-airbox-model-count={String(
+        sceneProps.fdmAirboxInstanceModel?.count ?? 0,
+      )}
+      data-fdm-airbox-vector-segment-count={String(
+        Math.floor((sceneProps.fdmAirboxVectorSegments?.length ?? 0) / 7),
+      )}
+      data-fdm-airbox-wireframe-visible={
+        sceneProps.fdmAirboxPassPlan.needsSurfaceInstances ? "true" : "false"
+      }
+      data-fdm-airbox-vectors-visible={
+        sceneProps.fdmAirboxPassPlan.needsVectorAnchors ? "true" : "false"
+      }
       data-inspect-enabled={sceneProps.inspectEnabled ? "true" : "false"}
       data-primitive-object-count={sceneProps.primitiveModel?.objects.length ?? 0}
       data-primitive-object-ids={primitiveObjectIds}

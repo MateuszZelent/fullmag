@@ -377,6 +377,25 @@ describe("FDM Airbox mesh demand", () => {
       'field=${fdmAirboxFieldVector ? "ready" : "pending"}',
     );
   });
+
+  it("creates the exact Airbox glyph identity before vector segments are adopted", () => {
+    const source = readFileSync(sceneModelSourceUrl, "utf8");
+    const referenceStart = source.indexOf(
+      "const fdmAirboxVectorBuildReference",
+    );
+    const debugPassStart = source.indexOf(
+      "const fdmAirboxDebugRenderPass",
+      referenceStart,
+    );
+    const referenceSource = source.slice(referenceStart, debugPassStart);
+
+    expect(referenceSource).toContain(
+      "fdmAirboxFieldBuffer && fdmAirboxBuildKey",
+    );
+    expect(referenceSource).not.toContain(
+      "fdmAirboxFieldBuffer && fdmAirboxVectorSegments",
+    );
+  });
 });
 const visualizationStateResourceSourceUrl = new URL(
   "../../../kernel/visualization/useVisualizationStateResource.ts",

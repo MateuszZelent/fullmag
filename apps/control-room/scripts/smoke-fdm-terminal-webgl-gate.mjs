@@ -134,16 +134,35 @@ async function main() {
     switches.push(await switchInspectorQuantity({ page, explorerTargets, quantityId: "eden_demag", responses, scope: "object", scopes }));
     setPhase("airbox-quantity-gate");
     const airboxMagnetization = await assertAirboxMagnetizationUnavailable({ page, explorerTargets, scopes });
+    setPhase("airbox-display-preflight");
+    const airboxDisplay = await ensureFdmAirboxWireframe({ page, explorerTargets });
     setPhase("airbox-field-switches");
     for (const [scope, quantityId] of [["airbox", "H_demag"], ["airbox", "H_eff"]]) {
       switches.push(await switchInspectorQuantity({ page, explorerTargets, quantityId, responses, scope, scopes }));
     }
+    const airboxRender = await assertFdmAirboxVectorRender({ page });
+    const airboxInspector = await selectExplorerVisualizationTarget(page, explorerTargets.airbox);
+    const focus = page.getByRole("button", { name: "Focus", exact: true }).last();
+    if (await focus.count() === 1) await focus.click({ timeout: timeoutMs });
+    const airboxVectorToggle = airboxInspector.getByRole("button", {
+      name: "Toggle vector field arrows",
+      exact: true,
+    });
+    await airboxVectorToggle.scrollIntoViewIfNeeded();
+    const airboxControls = {
+      target_id: explorerTargets.airbox.targetId,
+      wireframe_checked: await airboxInspector.getByRole("radio", { name: "Wireframe", exact: true }).getAttribute("aria-checked"),
+      vectors_pressed: await airboxVectorToggle.getAttribute("aria-pressed"),
+      focused: await focus.count() === 1,
+    };
     const finalCanvasHealth = await assertCanvasHealth(canvas, "after final field response");
     setPhase("screenshot");
     const screenshotPath = `${artifactDir}/fdm-terminal-webgl.png`;
     const screenshot = await canvas.screenshot({ path: screenshotPath });
+    const pageScreenshotPath = `${artifactDir}/fdm-terminal-webgl-airbox-controls.png`;
+    const pageScreenshot = await page.screenshot({ path: pageScreenshotPath });
     if (errors.length > 0) throw new Error(`Browser errors: ${errors.join("\\n")}`);
-    const evidence = { schema_version: "fdm_terminal_webgl_gate.v1", qualification_status: "passed_cpu_fdm_terminal", terminal, telemetry, run, session_status: sessionStatus, stage_execution: stageExecution, catalog, fields, airbox_magnetization: airboxMagnetization, canvas: { ...finalCanvasHealth, screenshot: { path: screenshotPath, sha256: createHash("sha256").update(screenshot).digest("hex") } }, field_responses: responses.map(summarizeFieldResponse), quantity_switches: switches, no_manual_compute_fields: true, workspace_url: workspaceUrl };
+    const evidence = { schema_version: "fdm_terminal_webgl_gate.v1", qualification_status: "passed_cpu_fdm_terminal", terminal, telemetry, run, session_status: sessionStatus, stage_execution: stageExecution, catalog, fields, airbox_magnetization: airboxMagnetization, airbox_display: airboxDisplay, airbox_render: airboxRender, airbox_controls: airboxControls, canvas: { ...finalCanvasHealth, screenshot: { path: screenshotPath, sha256: createHash("sha256").update(screenshot).digest("hex") }, page_screenshot: { path: pageScreenshotPath, sha256: createHash("sha256").update(pageScreenshot).digest("hex") } }, field_responses: responses.map(summarizeFieldResponse), quantity_switches: switches, no_manual_compute_fields: true, workspace_url: workspaceUrl };
     await writeEvidenceAtomically(evidencePath, evidence);
     console.log(`FDM terminal WebGL gate passed: ${evidencePath}`);
   } finally { await browser.close(); }
@@ -188,6 +207,7 @@ export async function awaitTerminalFieldGeneration({
 }
 
 async function switchRibbonQuantity({ page, explorerTargets, quantityId, responses, scope }) {
+  const renderPass = "surface";
   const preSwitchAdoptions = await captureLatestExactVisualizationAdoption({
     page,
     target: explorerTargets[scope],
@@ -211,8 +231,9 @@ async function switchRibbonQuantity({ page, explorerTargets, quantityId, respons
   const adoption = await waitForExactVisualizationDebugEvidence({
     page,
     preSwitchAdoptionSequence:
-      preSwitchAdoptions.get(response.resource_key)?.[adoptionPass(quantityId)] ?? null,
+      preSwitchAdoptions.get(response.resource_key)?.[renderPass] ?? null,
     quantityId,
+    renderPass,
     response,
     switchStartedAtMs,
     target: explorerTargets[scope],
@@ -221,6 +242,7 @@ async function switchRibbonQuantity({ page, explorerTargets, quantityId, respons
 }
 
 async function switchInspectorQuantity({ page, explorerTargets, quantityId, responses, scope, scopes }) {
+  const renderPass = quantityId === "eden_demag" ? "surface" : "vector-glyph";
   const preSwitchAdoptions = await captureLatestExactVisualizationAdoption({
     page,
     target: explorerTargets[scope],
@@ -268,8 +290,9 @@ async function switchInspectorQuantity({ page, explorerTargets, quantityId, resp
   const adoption = await waitForExactVisualizationDebugEvidence({
     page,
     preSwitchAdoptionSequence:
-      preSwitchAdoptions.get(response.resource_key)?.[adoptionPass(quantityId)] ?? null,
+      preSwitchAdoptions.get(response.resource_key)?.[adoptionKindForRenderPass(renderPass)] ?? null,
     quantityId,
+    renderPass,
     response,
     switchStartedAtMs,
     target: explorerTargets[scope],
@@ -287,6 +310,59 @@ async function assertAirboxMagnetizationUnavailable({ page, explorerTargets, sco
   const disabled = count === 0 ? null : await option.isDisabled();
   if (count > 0 && !disabled) throw new Error("Airbox exposes magnetic-only m as an enabled quantity.");
   return { option_count: count, disabled };
+}
+
+async function ensureFdmAirboxWireframe({ page, explorerTargets }) {
+  const inspector = await selectExplorerVisualizationTarget(page, explorerTargets.airbox);
+  const visibility = inspector.getByRole("button", {
+    name: "Toggle target visibility",
+    exact: true,
+  });
+  await visibility.waitFor({ state: "visible", timeout: timeoutMs });
+  if (await visibility.getAttribute("aria-pressed") !== "true") {
+    await visibility.click({ timeout: timeoutMs });
+  }
+  const wireframe = inspector.getByRole("radio", {
+    name: "Wireframe",
+    exact: true,
+  });
+  await wireframe.waitFor({ state: "visible", timeout: timeoutMs });
+  if (await wireframe.getAttribute("aria-checked") !== "true") {
+    await wireframe.click({ timeout: timeoutMs });
+  }
+  await poll("FDM Airbox wireframe target", async () => {
+    const [targetId, wireframeActive] = await page.locator(".fm-viewport-3d").evaluate((node) => [
+      node.getAttribute("data-fdm-airbox-target"),
+      node.getAttribute("data-fdm-airbox-wireframe-visible"),
+    ]);
+    return targetId === "fdm-universe-outside-support" && wireframeActive === "true"
+      ? { target_id: targetId, wireframe_visible: wireframeActive }
+      : null;
+  });
+  return {
+    target_id: "fdm-universe-outside-support",
+    visibility_pressed: await visibility.getAttribute("aria-pressed"),
+    wireframe_checked: await wireframe.getAttribute("aria-checked"),
+  };
+}
+
+async function assertFdmAirboxVectorRender({ page }) {
+  return poll("FDM Airbox wireframe and vector render adoption", async () => {
+    const values = await page.locator(".fm-viewport-3d").evaluate((node) => ({
+      target_id: node.getAttribute("data-fdm-airbox-target"),
+      model_count: Number(node.getAttribute("data-fdm-airbox-model-count") ?? 0),
+      vector_segment_count: Number(node.getAttribute("data-fdm-airbox-vector-segment-count") ?? 0),
+      wireframe_visible: node.getAttribute("data-fdm-airbox-wireframe-visible"),
+      vectors_visible: node.getAttribute("data-fdm-airbox-vectors-visible"),
+    }));
+    return values.target_id === "fdm-universe-outside-support"
+      && values.wireframe_visible === "true"
+      && values.vectors_visible === "true"
+      && values.model_count > 0
+      && values.vector_segment_count > 0
+      ? values
+      : null;
+  });
 }
 
 function explorerTreeItem(page, nodeId) {
@@ -391,6 +467,7 @@ async function waitForExactVisualizationDebugEvidence({
   page,
   preSwitchAdoptionSequence,
   quantityId,
+  renderPass = quantityId === "eden_demag" ? "surface" : "vector-glyph",
   response,
   switchStartedAtMs,
   target,
@@ -414,20 +491,19 @@ async function waitForExactVisualizationDebugEvidence({
         document,
         response.resource_key,
         target.targetId,
-        adoptionPass(quantityId),
+        adoptionKindForRenderPass(renderPass),
       );
       lastSnapshot = observation?.carrier ?? document?.model ?? null;
       if (!observation) return null;
       const { carrier, snapshot } = observation;
       const { adoption } = carrier.render;
-      const passAdoption = quantityId === "eden_demag"
-        ? adoption.surface
-        : adoption.vector;
+      const passAdoption = adoption[adoptionKindForRenderPass(renderPass)];
       if (
         !exactVisualizationAdoptionMatches({
           observation,
           preSwitchAdoptionSequence,
           quantityId,
+          renderPass,
           response,
           switchStartedAtMs,
         })
@@ -438,7 +514,7 @@ async function waitForExactVisualizationDebugEvidence({
       ) {
         return null;
       }
-      if (quantityId === "eden_demag") {
+      if (renderPass === "surface") {
         if (
           !carrier.render.requestedPasses.includes("surface")
           || !carrier.render.surface.bufferKey
@@ -454,7 +530,7 @@ async function waitForExactVisualizationDebugEvidence({
           adopted_at_ms: passAdoption.adoptedAtMs,
           adoption_sequence: passAdoption.adoptionSequence,
           field_buffer_state: carrier.render.fieldBufferState,
-          render_pass: "surface",
+          render_pass: renderPass,
           requested_field_buffer_id: carrier.render.requestedFieldBufferId,
           pre_switch_adoption_sequence: preSwitchAdoptionSequence,
           response_started_at_ms: response.response_started_at_ms,
@@ -482,7 +558,7 @@ async function waitForExactVisualizationDebugEvidence({
         adopted_at_ms: passAdoption.adoptedAtMs,
         adoption_sequence: passAdoption.adoptionSequence,
         field_buffer_state: carrier.render.fieldBufferState,
-        render_pass: "vector-glyph",
+        render_pass: renderPass,
         requested_field_buffer_id: carrier.render.requestedFieldBufferId,
         pre_switch_adoption_sequence: preSwitchAdoptionSequence,
         response_started_at_ms: response.response_started_at_ms,
@@ -622,12 +698,13 @@ export function exactVisualizationAdoptionMatches({
   observation,
   preSwitchAdoptionSequence,
   quantityId,
+  renderPass = quantityId === "eden_demag" ? "surface" : "vector-glyph",
   response,
   switchStartedAtMs,
 }) {
   const carrier = observation?.carrier;
   const adoption = carrier?.render?.adoption;
-  const pass = adoptionPass(quantityId);
+  const pass = adoptionKindForRenderPass(renderPass);
   const passAdoption = adoption?.[pass];
   if (
     !passAdoption
@@ -653,7 +730,7 @@ export function exactVisualizationAdoptionMatches({
   ) {
     return false;
   }
-  if (quantityId === "eden_demag") {
+  if (renderPass === "surface") {
     return carrier.render.requestedPasses?.includes("surface")
       && carrier.render.surface?.bufferKey === passAdoption.adoptedScalarBufferKey;
   }
@@ -661,8 +738,8 @@ export function exactVisualizationAdoptionMatches({
     && carrier.render.vectors?.buildKey === passAdoption.adoptedVectorBuildKey;
 }
 
-function adoptionPass(quantityId) {
-  return quantityId === "eden_demag" ? "surface" : "vector";
+function adoptionKindForRenderPass(renderPass) {
+  return renderPass === "surface" ? "surface" : "vector";
 }
 
 function summarizeFieldResponse(entry) {

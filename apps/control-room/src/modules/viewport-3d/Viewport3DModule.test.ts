@@ -1651,6 +1651,21 @@ describe("notifyMeshTopologyRendered", () => {
 });
 
 describe("Viewport3DModule scene wiring", () => {
+  it("publishes target-specific FDM Airbox render evidence", () => {
+    const source = readFileSync(
+      new URL("./Viewport3DModule.tsx", import.meta.url),
+      "utf8",
+    );
+
+    expect(source).toContain(
+      'data-fdm-airbox-target="fdm-universe-outside-support"',
+    );
+    expect(source).toContain("data-fdm-airbox-model-count");
+    expect(source).toContain("data-fdm-airbox-vector-segment-count");
+    expect(source).toContain("data-fdm-airbox-wireframe-visible");
+    expect(source).toContain("data-fdm-airbox-vectors-visible");
+  });
+
   it("keeps ordinary camera gestures local while committing the latest pose to the registry", () => {
     const source = readFileSync(
       new URL("./Viewport3DModule.tsx", import.meta.url),

@@ -5268,9 +5268,9 @@ export function useViewport3DSceneModel({
   ]);
   const fdmAirboxVectorBuildReference = useMemo<Viewport3DVectorBuildReference | null>(
     () =>
-      fdmAirboxFieldBuffer && fdmAirboxVectorSegments
+      fdmAirboxFieldBuffer && fdmAirboxBuildKey
         ? {
-            buildKey: `fdm-airbox-vector:${fdmAirboxBuildKey ?? "none"}`,
+            buildKey: `fdm-airbox-vector:${fdmAirboxBuildKey}`,
             fieldBufferId: fdmAirboxFieldBuffer.bufferId,
             fieldRevision: String(fdmAirboxFieldRevision ?? "none"),
             groupKey: "fdm-airbox-vector:fdm-universe-outside-support",
@@ -5286,7 +5286,6 @@ export function useViewport3DSceneModel({
       fdmAirboxFieldBuffer,
       fdmAirboxFieldResourceKey,
       fdmAirboxFieldRevision,
-      fdmAirboxVectorSegments,
       fdmBuildTopologyRevision,
     ],
   );

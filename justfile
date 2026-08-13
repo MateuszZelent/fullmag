@@ -4155,7 +4155,7 @@ run-viewport-3d-smoke-disposable fixture="examples/fdm_cpu_relax_smoke.py" backe
 run-fdm-terminal-webgl-gate-cpu web_port="" api_port="":
     bash -euo pipefail -c '\
       report_parent="${FULLMAG_FDM_TERMINAL_WEBGL_REPORT_ROOT:-.fullmag/reports/fdm-terminal-webgl-gate}"; mkdir -p "$report_parent"; \
-      run_root="$(mktemp -d "$report_parent/cpu.run.XXXXXXXX")"; \
+      run_root="$(realpath "$(mktemp -d "$report_parent/cpu.run.XXXXXXXX")")"; \
       test -x "{{local_bin}}/fullmag" || { echo "managed Fullmag executable is unavailable: {{local_bin}}/fullmag" >&2; exit 2; }; \
       shared_python="$(dirname "$(git rev-parse --path-format=absolute --git-common-dir)")/.fullmag/local/python/bin/python"; test -x "$shared_python" || { echo "shared managed Fullmag Python is unavailable: $shared_python" >&2; exit 2; }; \
       fixture="$(realpath examples/fdm_cpu_relax_smoke.py)"; \
