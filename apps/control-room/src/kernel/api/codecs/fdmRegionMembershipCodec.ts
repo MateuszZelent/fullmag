@@ -1,5 +1,7 @@
 import type {
   DomainMetaResource,
+  FdmMultilayerLayoutResource,
+  FdmNativeLayerRegionMembershipResource,
   FdmRegionMembershipResource,
 } from "../apiTypes";
 
@@ -52,6 +54,14 @@ export type FdmRegionMembershipIncompatibilityReason =
   | "stale-descriptor"
   | "unknown-region-id";
 
+export type FdmNativeLayerRegionMembershipIncompatibilityReason =
+  | FdmRegionMembershipIncompatibilityReason
+  | "layer-identity-mismatch"
+  | "membership-generation-invalid"
+  | "membership-not-declared"
+  | "membership-payload-hash-mismatch"
+  | "membership-revision-mismatch";
+
 export type FdmRegionMembershipContractResult =
   | {
       generationId: string;
@@ -61,6 +71,19 @@ export type FdmRegionMembershipContractResult =
     }
   | {
       reason: FdmRegionMembershipIncompatibilityReason;
+      status: "incompatible";
+    };
+
+export type FdmNativeLayerRegionMembershipContractResult =
+  | {
+      generationId: string;
+      gridFingerprint: string;
+      layerId: string;
+      legendFingerprint: string;
+      status: "ready";
+    }
+  | {
+      reason: FdmNativeLayerRegionMembershipIncompatibilityReason;
       status: "incompatible";
     };
 
@@ -260,6 +283,171 @@ export async function validateFdmRegionMembershipContract(
   };
 }
 
+export async function validateFdmNativeLayerRegionMembershipContract(
+  decoded: DecodedFdmRegionMembership,
+  descriptor: FdmNativeLayerRegionMembershipResource,
+  layout: FdmMultilayerLayoutResource,
+  layer: FdmMultilayerLayoutResource["layers"][number],
+): Promise<FdmNativeLayerRegionMembershipContractResult> {
+  if (decoded.semanticStatus !== "canonical") {
+    return { reason: "legacy-ambiguous", status: "incompatible" };
+  }
+  if (
+    descriptor.schema_version !== "fdm_multilayer_region_membership.v1" ||
+    descriptor.encoding !== "FMRM:u32_membership_le" ||
+    decoded.formatVersion !== VERSION ||
+    decoded.payloadKind !== KIND_U32
+  ) {
+    return { reason: "descriptor-encoding-mismatch", status: "incompatible" };
+  }
+  if (descriptor.freshness.trim().toLowerCase() !== "current") {
+    return { reason: "stale-descriptor", status: "incompatible" };
+  }
+  if (
+    layout.backend !== "fdm_multilayer" ||
+    !layout.available ||
+    !layer.region_membership_available ||
+    !layer.region_membership_ref ||
+    !layer.region_mask_hash ||
+    !layer.region_legend_hash ||
+    !layer.region_membership_generation_id ||
+    layer.region_membership_revision == null
+  ) {
+    return { reason: "membership-not-declared", status: "incompatible" };
+  }
+  if (
+    descriptor.layer_id !== layer.layer_id ||
+    descriptor.object_id !== layer.object_id ||
+    descriptor.magnet_name !== layer.magnet_name ||
+    descriptor.binary_path !== layer.region_membership_ref ||
+    descriptor.object_id.length === 0 ||
+    descriptor.layer_id.length === 0 ||
+    descriptor.magnet_name.length === 0
+  ) {
+    return { reason: "layer-identity-mismatch", status: "incompatible" };
+  }
+  if (
+    descriptor.domain_generation_id !== layout.domain_generation_id
+  ) {
+    return { reason: "generation-mismatch", status: "incompatible" };
+  }
+  if (
+    descriptor.region_membership_revision !== layer.region_membership_revision
+  ) {
+    return { reason: "membership-revision-mismatch", status: "incompatible" };
+  }
+  const descriptorGridFingerprint = normalizeSha256Fingerprint(
+    descriptor.grid_fingerprint,
+  );
+  if (
+    descriptorGridFingerprint === null ||
+    descriptorGridFingerprint !== normalizeSha256Fingerprint(layer.native_grid_fingerprint ?? "") ||
+    descriptorGridFingerprint !== decoded.gridFingerprint
+  ) {
+    return { reason: "grid-fingerprint-mismatch", status: "incompatible" };
+  }
+  if (
+    !sameNumberTuple(decoded.counts, descriptor.counts) ||
+    !sameNumberTuple(descriptor.counts, layer.native_grid)
+  ) {
+    return { reason: "grid-shape-mismatch", status: "incompatible" };
+  }
+  if (
+    decoded.cellCount !== descriptor.cell_count ||
+    decoded.cellCount !== layer.native_grid.reduce((total, count) => total * count, 1)
+  ) {
+    return { reason: "grid-cell-count-mismatch", status: "incompatible" };
+  }
+  if (
+    !sameNumberTuple(descriptor.origin_m, layer.native_origin) ||
+    !sameNumberTuple(descriptor.cell_m, layer.native_cell_size)
+  ) {
+    return { reason: "grid-geometry-mismatch", status: "incompatible" };
+  }
+  if (decoded.legendCount !== descriptor.region_legend.length) {
+    return { reason: "legend-count-mismatch", status: "incompatible" };
+  }
+  const legendReason = validateLegendAndMembershipIds(
+    descriptor.region_legend,
+    decoded.regionIds,
+  );
+  if (legendReason) return { reason: legendReason, status: "incompatible" };
+  const objectIds = new Set(descriptor.object_ids);
+  if (
+    !objectIds.has(descriptor.object_id) ||
+    descriptor.region_legend.some((entry) => !objectIds.has(entry.object_id))
+  ) {
+    return { reason: "layer-identity-mismatch", status: "incompatible" };
+  }
+  const legendFingerprint = normalizeSha256Fingerprint(
+    descriptor.region_legend_fingerprint,
+  );
+  if (legendFingerprint === null) {
+    return { reason: "legend-fingerprint-invalid", status: "incompatible" };
+  }
+  if (
+    legendFingerprint !== normalizeSha256Fingerprint(layer.region_legend_hash ?? "") ||
+    legendFingerprint !== await sha256HexBytes(canonicalLegendBytes(descriptor))
+  ) {
+    return { reason: "legend-fingerprint-mismatch", status: "incompatible" };
+  }
+  const maskBytes = new Uint8Array(decoded.cellCount * Uint32Array.BYTES_PER_ELEMENT);
+  const maskView = new DataView(maskBytes.buffer);
+  decoded.regionIds.forEach((value, index) => {
+    maskView.setUint32(index * Uint32Array.BYTES_PER_ELEMENT, value, true);
+  });
+  const expectedMaskHash = normalizeSha256Fingerprint(layer.region_mask_hash ?? "");
+  if (
+    expectedMaskHash === null ||
+    expectedMaskHash !== await sha256HexBytes(maskBytes)
+  ) {
+    return { reason: "membership-payload-hash-mismatch", status: "incompatible" };
+  }
+  const generationId = layer.region_membership_generation_id;
+  if (normalizeSha256Fingerprint(generationId) === null) {
+    return { reason: "membership-generation-invalid", status: "incompatible" };
+  }
+  return {
+    generationId,
+    gridFingerprint: descriptor.grid_fingerprint,
+    layerId: descriptor.layer_id,
+    legendFingerprint: descriptor.region_legend_fingerprint,
+    status: "ready",
+  };
+}
+
+function validateLegendAndMembershipIds(
+  legend: FdmRegionMembershipResource["region_legend"],
+  regionIds: Uint32Array,
+): FdmRegionMembershipIncompatibilityReason | null {
+  const legendIds = new Set<number>();
+  const legendIdentities = new Set<string>();
+  for (const [index, entry] of legend.entries()) {
+    if (entry.numeric_id === 0 || entry.numeric_id === FMRM_INACTIVE_REGION_ID) {
+      return "reserved-legend-id";
+    }
+    if (legendIds.has(entry.numeric_id)) return "duplicate-legend-id";
+    legendIds.add(entry.numeric_id);
+    if (entry.numeric_id !== index + 1) return "noncontiguous-legend-id";
+    if (entry.object_id.length === 0 || entry.region_id.length === 0) {
+      return "invalid-legend-identity";
+    }
+    const semanticIdentity = JSON.stringify([entry.object_id, entry.region_id]);
+    if (legendIdentities.has(semanticIdentity)) return "duplicate-legend-identity";
+    legendIdentities.add(semanticIdentity);
+  }
+  for (const regionId of regionIds) {
+    if (
+      regionId !== 0 &&
+      regionId !== FMRM_INACTIVE_REGION_ID &&
+      !legendIds.has(regionId)
+    ) {
+      return "unknown-region-id";
+    }
+  }
+  return null;
+}
+
 function sameNumberTuple(
   left: readonly number[],
   right: readonly number[],
@@ -268,7 +456,7 @@ function sameNumberTuple(
 }
 
 function canonicalLegendBytes(
-  descriptor: FdmRegionMembershipResource,
+  descriptor: Pick<FdmRegionMembershipResource, "region_legend">,
 ): Uint8Array {
   const canonicalLegend = descriptor.region_legend.map((entry) => ({
     numeric_id: entry.numeric_id,

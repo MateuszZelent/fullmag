@@ -749,10 +749,21 @@ pub(crate) fn resolve_fdm_multilayer_native_layer_field(
             "multilayer FDM layer '{requested_layer_id}' native grid fingerprint is stale"
         )));
     }
-    let membership_fingerprint = format!(
-        "sha256:{:x}",
-        Sha256::digest(format!("{mask_hash}:{legend_hash}:{membership_revision}").as_bytes())
-    );
+    let membership_fingerprint = native_layer_membership_generation_id(
+        &layer_id,
+        &object_id,
+        &grid_fingerprint,
+        membership_revision,
+        &mask_hash,
+        &legend_hash,
+    )?;
+    if required_string(&membership_payload, "generation_id", "membership payload")?
+        != membership_fingerprint.as_str()
+    {
+        return Err(ApiError::conflict(format!(
+            "multilayer FDM layer '{requested_layer_id}' membership generation is stale"
+        )));
+    }
     let carrier_fingerprint = format!(
         "sha256:{:x}",
         Sha256::digest(
@@ -1011,10 +1022,21 @@ pub(crate) fn load_fdm_multilayer_native_layer_membership(
             "multilayer FDM layer '{requested_layer_id}' native grid fingerprint is stale"
         )));
     }
-    let membership_fingerprint = format!(
-        "sha256:{:x}",
-        Sha256::digest(format!("{mask_hash}:{legend_hash}:{membership_revision}").as_bytes())
-    );
+    let membership_fingerprint = native_layer_membership_generation_id(
+        &layer_id,
+        &object_id,
+        &grid_fingerprint,
+        membership_revision,
+        &mask_hash,
+        &legend_hash,
+    )?;
+    if required_string(&payload, "generation_id", "membership payload")?
+        != membership_fingerprint.as_str()
+    {
+        return Err(ApiError::conflict(format!(
+            "multilayer FDM layer '{requested_layer_id}' membership generation is stale"
+        )));
+    }
     Ok(Some(FdmNativeLayerMembershipCarrier {
         layer_id: layer_id.to_string(),
         object_id: object_id.clone(),
@@ -1144,12 +1166,14 @@ fn planned_native_layer_membership(
         })?)
     );
     let membership_revision = snapshot.region_realization_revisions.membership.max(1);
-    let membership_fingerprint = format!(
-        "sha256:{:x}",
-        Sha256::digest(
-            format!("{mask_hash}:{legend_fingerprint}:{membership_revision}").as_bytes()
-        )
-    );
+    let membership_fingerprint = native_layer_membership_generation_id(
+        &layer_id,
+        &object_id,
+        &grid_fingerprint,
+        membership_revision,
+        &mask_hash,
+        &legend_fingerprint,
+    )?;
     Ok(FdmNativeLayerMembershipCarrier {
         layer_id,
         object_id: object_id.clone(),
@@ -1167,6 +1191,31 @@ fn planned_native_layer_membership(
         membership_fingerprint,
         legend_fingerprint,
     })
+}
+
+pub(crate) fn native_layer_membership_generation_id(
+    layer_id: &str,
+    object_id: &str,
+    grid_fingerprint: &str,
+    revision: u64,
+    mask_hash: &str,
+    legend_hash: &str,
+) -> Result<String, ApiError> {
+    let identity = serde_json::json!({
+        "schema_version": "fdm_multilayer_membership_generation.v1",
+        "layer_id": layer_id,
+        "object_id": object_id,
+        "native_grid_fingerprint": grid_fingerprint,
+        "revision": revision,
+        "value_sha256": mask_hash,
+        "legend_sha256": legend_hash,
+    });
+    let payload = serde_json::to_vec(&identity).map_err(|error| {
+        ApiError::conflict(format!(
+            "failed to canonicalize multilayer membership generation: {error}"
+        ))
+    })?;
+    Ok(format!("sha256:{:x}", Sha256::digest(payload)))
 }
 
 fn persisted_native_layer<'a>(

@@ -25243,11 +25243,15 @@ async fn fdm_multilayer_field_vector_layer_scope_uses_native_layer_layout() {
                     "layers": [{
                         "layer_id": "layer:top",
                         "object_id": "top",
-                        "magnet_name": "layer-a"
+                        "magnet_name": "layer-a",
+                        "native_active_mask": [true, true],
+                        "native_region_mask": [0, 0]
                     }, {
                         "layer_id": "layer:bottom",
                         "object_id": "bottom",
-                        "magnet_name": "layer-b"
+                        "magnet_name": "layer-b",
+                        "native_active_mask": [true],
+                        "native_region_mask": [0]
                     }]
                 }
             },
@@ -25304,9 +25308,17 @@ async fn fdm_multilayer_field_vector_layer_scope_uses_native_layer_layout() {
     assert_eq!(response.headers()["x-fullmag-point-count"], "1");
     let expected_carrier_hash = format!(
         "sha256:{}",
-        fullmag_ir::FdmGridCertificateIR::new([0.0, 0.0, 2.0], [1, 1, 1], [2.0, 1.0, 1.0], 1, 1,)
-            .expect("native layer grid must form a certificate")
-            .grid_fingerprint
+        fullmag_ir::FdmGridCertificateIR::new_with_topology_tokens(
+            [0.0, 0.0, 2.0],
+            [1, 1, 1],
+            [2.0, 1.0, 1.0],
+            1,
+            1,
+            Some(&[true]),
+            &[0],
+        )
+        .expect("native layer grid must form a topology-aware certificate")
+        .grid_fingerprint
     );
     assert_eq!(response.headers()["x-fullmag-encoding"], "FMVP;version=3");
     assert_eq!(
@@ -25610,6 +25622,20 @@ async fn fdm_multilayer_planar_layer_scope_uses_native_grid_and_local_region_mem
         .expect("native grid should form a certificate")
         .grid_fingerprint
     );
+    let top_grid_fingerprint = format!(
+        "sha256:{}",
+        fullmag_ir::FdmGridCertificateIR::new_with_topology_tokens(
+            [0.0, 0.0, 0.0],
+            [2, 1, 1],
+            [1.0, 1.0, 1.0],
+            1,
+            1,
+            Some(&[true, false]),
+            &[1, 0],
+        )
+        .expect("top native grid should form a certificate")
+        .grid_fingerprint
+    );
     let values = [7.0_f64, 9.0];
     let value_sha256 = format!(
         "sha256:{:x}",
@@ -25645,6 +25671,16 @@ async fn fdm_multilayer_planar_layer_scope_uses_native_grid_and_local_region_mem
         "sha256:{:x}",
         Sha256::digest(serde_json::to_vec(&region_legend).unwrap())
     );
+    let membership_generation_id =
+        crate::router_v2::handlers::data::resolved_spatial_field::native_layer_membership_generation_id(
+            "layer:bottom",
+            "object:bottom",
+            &grid_fingerprint,
+            23,
+            &region_mask_sha256,
+            &legend_sha256,
+        )
+        .expect("membership generation should be canonical");
     let material_path = "material-fields/fdm-multilayer/layer-bottom/mat_ms.json";
     let membership_path =
         "material-fields/fdm-multilayer/layer-bottom/native-region-membership.json";
@@ -25683,7 +25719,7 @@ async fn fdm_multilayer_planar_layer_scope_uses_native_grid_and_local_region_mem
             "native_grid_fingerprint": grid_fingerprint,
             "value_count": 2,
             "revision": 23,
-            "generation_id": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+            "generation_id": membership_generation_id.clone(),
             "value_sha256": region_mask_sha256,
             "legend_sha256": legend_sha256,
             "native_region_mask": region_mask,
@@ -25732,8 +25768,8 @@ async fn fdm_multilayer_planar_layer_scope_uses_native_grid_and_local_region_mem
                 "native_grid": [2, 1, 1],
                 "native_origin": [0.0, 0.0, 0.0],
                 "native_cell_size": [1.0, 1.0, 1.0],
-                "native_active_mask": [true, true],
-                "native_region_mask": [1, 1],
+                "native_active_mask": [true, false],
+                "native_region_mask": [1, 0],
                 "native_region_legend": [{
                     "numeric_id": 1,
                     "object_id": "object:top",
@@ -25782,7 +25818,7 @@ async fn fdm_multilayer_planar_layer_scope_uses_native_grid_and_local_region_mem
                     "available": true,
                     "value_count": 2,
                     "value_sha256": region_mask_sha256,
-                    "generation_id": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+                    "generation_id": membership_generation_id.clone(),
                     "revision": 23,
                     "artifact_path": membership_path
                 },
@@ -25790,7 +25826,7 @@ async fn fdm_multilayer_planar_layer_scope_uses_native_grid_and_local_region_mem
                     "available": true,
                     "entry_count": 2,
                     "legend_sha256": legend_sha256,
-                    "generation_id": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+                    "generation_id": membership_generation_id,
                     "revision": 23,
                     "artifact_path": membership_path,
                     "entries": region_legend
@@ -25849,7 +25885,105 @@ async fn fdm_multilayer_planar_layer_scope_uses_native_grid_and_local_region_mem
             }
             carrier => panic!("expected native multilayer carrier, got {carrier:?}"),
         }
+
+        let top =
+            crate::router_v2::handlers::data::resolved_spatial_field::resolve_fdm_multilayer_native_layer_field(
+                snapshot,
+                "mat_ms",
+                1,
+                "layer:top",
+            )
+            .expect("top planned native material carrier should resolve")
+            .expect("top multilayer carrier should be applicable");
+        assert_eq!(top.values, vec![11.0, 12.0]);
+        match top.carrier {
+            crate::router_v2::handlers::data::resolved_spatial_field::SpatialFieldCarrier::FdmNativeLayerCells {
+                layer_id,
+                object_id,
+                grid_fingerprint,
+                membership,
+                ..
+            } => {
+                assert_eq!(layer_id, "layer:top");
+                assert_eq!(object_id, "object:top");
+                assert_eq!(grid_fingerprint, top_grid_fingerprint);
+                assert_eq!(membership.cell_membership, vec![1, u32::MAX]);
+                assert_eq!(membership.region_legend.len(), 1);
+                assert_eq!(membership.region_legend[0].object_id, "object:top");
+                assert_eq!(membership.region_legend[0].region_id, "shared");
+            }
+            carrier => panic!("expected top native multilayer carrier, got {carrier:?}"),
+        }
     }
+
+    let layout = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/domain/fdm-multilayer-layout")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(layout.status(), StatusCode::OK);
+    let layout = body_json(layout).await;
+    let top_layout = layout["layers"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|layer| layer["layer_id"] == "layer:top")
+        .expect("top layout must remain independently addressable");
+
+    let top_descriptor = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/domain/fdm-multilayer-layers/layer%3Atop/region-memberships")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(top_descriptor.status(), StatusCode::OK);
+    let top_descriptor = body_json(top_descriptor).await;
+    assert_eq!(top_descriptor["layer_id"], "layer:top");
+    assert_eq!(top_descriptor["object_id"], "object:top");
+    assert_eq!(top_descriptor["region_legend"][0]["region_id"], "shared");
+
+    let top_membership = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/domain/fdm-multilayer-layers/layer%3Atop/region-membership")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(top_membership.status(), StatusCode::OK);
+    let top_membership_generation = top_membership.headers()
+        ["x-fullmag-region-membership-fingerprint"]
+        .to_str()
+        .unwrap()
+        .to_string();
+    let top_membership = body_bytes(top_membership).await;
+    let top_mask_bytes = &top_membership[64..];
+    assert_eq!(
+        top_mask_bytes
+            .chunks_exact(4)
+            .map(|bytes| u32::from_le_bytes(bytes.try_into().unwrap()))
+            .collect::<Vec<_>>(),
+        vec![1, u32::MAX]
+    );
+    assert_eq!(
+        top_layout["region_mask_hash"],
+        format!("sha256:{:x}", Sha256::digest(top_mask_bytes))
+    );
+    assert_eq!(
+        top_layout["region_membership_generation_id"],
+        top_membership_generation
+    );
     if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
         snapshot.metadata.as_mut().unwrap()["artifact_layout"]["layers"][1]
             ["material_fields"]["mat_ms"]["value_sha256"] =

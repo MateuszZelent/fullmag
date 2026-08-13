@@ -4,10 +4,13 @@ import {
   decodeFdmRegionMembership,
   FMRM_INACTIVE_REGION_ID,
   FMRM_HEADER_LEN,
+  validateFdmNativeLayerRegionMembershipContract,
   validateFdmRegionMembershipContract,
 } from "./index";
 import type {
   DomainMetaResource,
+  FdmMultilayerLayoutResource,
+  FdmNativeLayerRegionMembershipResource,
   FdmRegionMembershipResource,
 } from "../apiTypes";
 
@@ -72,6 +75,65 @@ const descriptor: FdmRegionMembershipResource = {
   schema_version: "fdm_region_membership.v2",
 };
 
+const nativeMaskHash =
+  "sha256:5fc6c8102806fb0edd20e2969414cbb77b43e88ff04c0396d0d3c7b331cb6b70";
+const nativeDescriptor: FdmNativeLayerRegionMembershipResource = {
+  binary_path:
+    "/v2/sessions/current/data/domain/fdm-multilayer-layers/layer%3Abottom/region-membership",
+  cell_count: 4,
+  cell_m: [1, 1, 1],
+  counts: [2, 2, 1],
+  domain_generation_id: "generation-7",
+  encoding: "FMRM:u32_membership_le",
+  freshness: "current",
+  grid_fingerprint: `sha256:${"0".repeat(64)}`,
+  layer_id: "layer:bottom",
+  magnet_name: "bottom",
+  object_id: "body",
+  object_ids: ["body"],
+  origin_m: [0, 0, 0],
+  region_legend: descriptor.region_legend,
+  region_legend_fingerprint: descriptor.region_legend_fingerprint!,
+  region_membership_revision: 9,
+  schema_version: "fdm_multilayer_region_membership.v1",
+};
+const nativeLayout = {
+  available: true,
+  backend: "fdm_multilayer",
+  domain_generation_id: "generation-7",
+  execution_revision: 4,
+  layout_revision: 17,
+  observation_revision: 9,
+  schema_version: "fdm-multilayer-layout.v1",
+  layers: [{
+    active_cell_count: 3,
+    active_mask_present: true,
+    available_material_quantities: ["mat_ms"],
+    convolution_cell_size: [1, 1, 1],
+    convolution_grid: [2, 2, 1],
+    inactive_cell_count: 1,
+    layer_id: "layer:bottom",
+    magnet_name: "bottom",
+    native_cell_size: [1, 1, 1],
+    native_grid: [2, 2, 1],
+    native_grid_fingerprint: `sha256:${"0".repeat(64)}`,
+    native_origin: [0, 0, 0],
+    object_id: "body",
+    region_legend_hash: descriptor.region_legend_fingerprint,
+    region_mask_hash: nativeMaskHash,
+    region_membership_available: true,
+    region_membership_generation_id: `sha256:${"8".repeat(64)}`,
+    region_membership_ref: nativeDescriptor.binary_path,
+    region_membership_revision: 9,
+    transfer_kind: "identity",
+  }],
+  airbox: {
+    carrier_available: false,
+    h_demag_available: false,
+    h_eff_available: false,
+  },
+} as FdmMultilayerLayoutResource;
+
 describe("FMRM codec", () => {
   it("decodes grid identity and numeric region IDs", () => {
     const decoded = decodeFdmRegionMembership(makeBuffer());
@@ -118,6 +180,33 @@ describe("FMRM codec", () => {
       legendFingerprint: descriptor.region_legend_fingerprint,
       status: "ready",
     });
+  });
+
+  it("validates native-layer FMRM against its layer-local descriptor and payload hash", async () => {
+    const decoded = decodeFdmRegionMembership(
+      makeBuffer(2, 2, [1, FMRM_INACTIVE_REGION_ID, 2, 0]),
+    );
+
+    await expect(
+      validateFdmNativeLayerRegionMembershipContract(
+        decoded,
+        nativeDescriptor,
+        nativeLayout,
+        nativeLayout.layers[0]!,
+      ),
+    ).resolves.toMatchObject({
+      generationId: nativeLayout.layers[0]!.region_membership_generation_id,
+      layerId: "layer:bottom",
+      status: "ready",
+    });
+    await expect(
+      validateFdmNativeLayerRegionMembershipContract(
+        decoded,
+        { ...nativeDescriptor, layer_id: "layer:top" },
+        nativeLayout,
+        nativeLayout.layers[0]!,
+      ),
+    ).resolves.toEqual({ reason: "layer-identity-mismatch", status: "incompatible" });
   });
 
   it("validates a canonical legend when the HTTP page has no WebCrypto subtle API", async () => {

@@ -14,7 +14,9 @@ use sha2::{Digest, Sha256};
 
 use super::fields::{FdmMultilayerAirboxCarrier, load_fdm_multilayer_airbox_carrier};
 use super::multilayer_identity::correlate_multilayer_layers;
-use super::resolved_spatial_field::load_fdm_multilayer_native_layer_membership;
+use super::resolved_spatial_field::{
+    load_fdm_multilayer_native_layer_membership, native_layer_membership_generation_id,
+};
 use crate::error::ApiError;
 use crate::fem_slice_overlay::{FemSliceOverlayInput, collect_fem_slice_overlay};
 use crate::field_slice::{FieldSliceQuery, SlicePlane, resolve_slice_query};
@@ -944,6 +946,9 @@ fn build_fdm_multilayer_layer_layout(
         artifact_layer,
         plan_layer,
         &layer_id,
+        &object_id,
+        &source_grid_fingerprint,
+        active_mask.as_deref(),
         membership_revision,
     )?;
     let (available_material_quantities, material_field_revisions) =
@@ -1004,6 +1009,9 @@ fn native_region_membership_summary(
     artifact_layer: Option<&Value>,
     plan_layer: Option<&Value>,
     layer_id: &str,
+    object_id: &str,
+    grid_fingerprint: &str,
+    active_mask: Option<&[bool]>,
     membership_revision: u64,
 ) -> Result<
     (
@@ -1025,26 +1033,59 @@ fn native_region_membership_summary(
             .ok_or_else(|| ApiError::conflict(format!(
                 "multilayer FDM layer '{layer_id}' native_region_mask requires native_region_legend"
             )))?;
-        let mask_values = mask
+        let raw_mask_values = mask
             .iter()
             .map(|value| value.as_u64().and_then(|value| u32::try_from(value).ok()))
             .collect::<Option<Vec<_>>>()
             .ok_or_else(|| ApiError::conflict(format!(
                 "multilayer FDM layer '{layer_id}' has malformed native_region_mask"
             )))?;
-        let mask_hash = format!("sha256:{:x}", Sha256::digest(
-            mask_values.iter().flat_map(|value| value.to_le_bytes()).collect::<Vec<_>>()
-        ));
-        let legend_hash = format!("sha256:{:x}", Sha256::digest(
-            serde_json::to_vec(legend).map_err(|error| ApiError::conflict(format!(
-                "failed to canonicalize multilayer legend: {error}"
-            )))?
-        ));
+        let mask_values = match active_mask {
+            Some(active_mask) if active_mask.len() == raw_mask_values.len() => raw_mask_values
+                .into_iter()
+                .zip(active_mask)
+                .map(|(region_id, active)| if *active { region_id } else { u32::MAX })
+                .collect(),
+            Some(_) => {
+                return Err(ApiError::conflict(format!(
+                    "multilayer FDM layer '{layer_id}' native active and region masks disagree"
+                )));
+            }
+            None => raw_mask_values,
+        };
+        let mask_hash = format!(
+            "sha256:{:x}",
+            Sha256::digest(
+                mask_values
+                    .iter()
+                    .flat_map(|value| value.to_le_bytes())
+                    .collect::<Vec<_>>()
+            )
+        );
+        let legend_hash = format!(
+            "sha256:{:x}",
+            Sha256::digest(
+                serde_json::to_vec(legend).map_err(|error| ApiError::conflict(format!(
+                    "failed to canonicalize multilayer legend: {error}"
+                )))?
+            )
+        );
         let revision = membership_revision;
-        let generation = format!("sha256:{:x}", Sha256::digest(format!(
-            "{layer_id}:{mask_hash}:{legend_hash}:{revision}"
-        ).as_bytes()));
-        return Ok((true, Some(revision), Some(mask_hash), Some(legend_hash), Some(generation)));
+        let generation = native_layer_membership_generation_id(
+            layer_id,
+            object_id,
+            grid_fingerprint,
+            revision,
+            &mask_hash,
+            &legend_hash,
+        )?;
+        return Ok((
+            true,
+            Some(revision),
+            Some(mask_hash),
+            Some(legend_hash),
+            Some(generation),
+        ));
     }
     let mask = artifact_layer.and_then(|layer| layer.get("native_region_mask"));
     let legend = artifact_layer.and_then(|layer| layer.get("native_region_legend"));
@@ -1098,6 +1139,19 @@ fn native_region_membership_summary(
                         "multilayer FDM layer '{layer_id}' has no native region legend hash"
                     ))
                 })?;
+            let expected_generation = native_layer_membership_generation_id(
+                layer_id,
+                object_id,
+                grid_fingerprint,
+                revision,
+                &mask_hash,
+                &legend_hash,
+            )?;
+            if generation != expected_generation {
+                return Err(ApiError::conflict(format!(
+                    "multilayer FDM layer '{layer_id}' membership generation is stale"
+                )));
+            }
             Ok((
                 true,
                 Some(revision),
