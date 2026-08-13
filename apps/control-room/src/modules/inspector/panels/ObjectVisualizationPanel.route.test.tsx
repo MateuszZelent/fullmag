@@ -320,6 +320,24 @@ function renderResolvedInspector(selectionValue: Selection): string {
   return renderToStaticMarkup(<Component selection={selectionValue} />);
 }
 
+function expectSharedVisualizationInspectorContract(
+  html: string,
+  owner: string,
+  title: string,
+): void {
+  expect(html).toContain('class="fm-scientific-inspector"');
+  expect(html).toContain(`<h3>${title}</h3>`);
+  expect(html).toContain("Display controls");
+  expect(html).toContain("Status");
+  expect(html).toContain("Resource");
+  expect(html).toContain("Execution");
+  expect(html).toContain("Availability");
+  expect(html).toContain("ready");
+  expect(html).toContain("available");
+  expect(html).toContain("interactive");
+  expect(html).toContain(`data-inspector-owner="${owner}"`);
+}
+
 describe("ObjectVisualizationPanel lane routing", () => {
   it("gives object, Airbox, and mesh-part routes distinct owner identities", () => {
     testState.discretization = "fdm";
@@ -331,6 +349,11 @@ describe("ObjectVisualizationPanel lane routing", () => {
     expect(object).toContain("Target ID:object:film");
     expect(object).toContain("canonical object visualization target");
     expect(object).toContain("Display passes, quantity, vectors, wireframe");
+    expectSharedVisualizationInspectorContract(
+      object,
+      "object.visualization",
+      "Object visualization",
+    );
 
     const airbox = renderResolvedInspector(airboxSelection);
     expect(airbox).toContain('data-inspector-owner="airbox.visualization"');
@@ -339,6 +362,11 @@ describe("ObjectVisualizationPanel lane routing", () => {
     expect(airbox).toContain("Target ID:fdm-domain");
     expect(airbox).toContain("Airbox-specific bounds and field support");
     expect(airbox).toContain("Airbox extent, display passes, field quantity");
+    expectSharedVisualizationInspectorContract(
+      airbox,
+      "airbox.visualization",
+      "Airbox visualization",
+    );
 
     const meshPart = renderResolvedInspector(meshPartSelection);
     expect(meshPart).toContain('data-inspector-owner="mesh-part.visualization"');
@@ -347,6 +375,11 @@ describe("ObjectVisualizationPanel lane routing", () => {
     expect(meshPart).toContain("Target ID:part:film-volume");
     expect(meshPart).toContain("canonical mesh-part target");
     expect(meshPart).toContain("Part visibility, render mode, vectors, wireframe");
+    expectSharedVisualizationInspectorContract(
+      meshPart,
+      "mesh-part.visualization",
+      "Mesh-part visualization",
+    );
   });
 
   it("gives every visualization debug route its own owner component", () => {

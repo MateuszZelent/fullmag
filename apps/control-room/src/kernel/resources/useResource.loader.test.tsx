@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { flushSync } from "react-dom";
+import { renderToString } from "react-dom/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { KernelContext } from "@/kernel/KernelContext";
@@ -18,6 +19,7 @@ import {
 } from "@/kernel/resources/ResourceInvalidationController";
 import {
   resetSharedResourceRuntimeStoreForTests,
+  sharedResourceRuntimeStore,
 } from "@/kernel/resources/ResourceRuntimeStore";
 import {
   useResource,
@@ -39,6 +41,59 @@ describe("useResource loader callback", () => {
   it("uses an effect event instead of a passive loader ref", () => {
     expect(useResourceSource).toContain("useEffectEvent");
     expect(useResourceSource).not.toContain("loadRef");
+  });
+
+  it("uses deterministic empty server snapshots for external resources", () => {
+    expect(useResourceSource).toContain("SERVER_RUNTIME_SNAPSHOT");
+    expect(useResourceSource).toContain("getServerRevision");
+    expect(useResourceSource).not.toContain(
+      "subscribeStable,\n    getSnapshot,\n    getSnapshot",
+    );
+    expect(useResourceSource).not.toContain(
+      "subscribeRuntime,\n    getRuntimeSnapshot,\n    getRuntimeSnapshot",
+    );
+  });
+
+  it("does not expose a live runtime resource during server rendering", () => {
+    const bus = new EventBus<KernelEventMap>();
+    const resources = new ResourceInvalidationController(bus);
+    const kernel = {
+      api: {},
+      bus,
+      diagnosticRecorder: new DiagnosticRecorderController({ config: { enabled: false } }),
+      resources,
+    } as unknown as KernelApi;
+    const resourceKey = "test:ssr-live-resource";
+    const selectorResourceKey = "test:ssr-live-selector";
+    sharedResourceRuntimeStore.updateData(resourceKey, { source: "live" }, 1);
+    sharedResourceRuntimeStore.updateData(selectorResourceKey, { source: "live" }, 1);
+
+    function Harness() {
+      const resource = useResource({
+        load: async () => ({ source: "network" }),
+        resourceKey,
+      });
+      return <div data-resource>{`${resource.status}:${resource.data?.source ?? ""}`}</div>;
+    }
+
+    function SelectorHarness() {
+      const status = useResourceSelector({
+        load: async () => ({ source: "network" }),
+        resourceKey: selectorResourceKey,
+        selector: (resource) => `${resource.status}:${resource.data?.source ?? ""}`,
+      });
+      return <div data-selector>{status}</div>;
+    }
+
+    const html = renderToString(
+      <KernelContext.Provider value={kernel}>
+        <Harness />
+        <SelectorHarness />
+      </KernelContext.Provider>,
+    );
+
+    expect(html).toContain('data-resource="true">loading:</div>');
+    expect(html).toContain('data-selector="true">loading:</div>');
   });
 
   it("uses the latest loader when a retry timer fires after a loader change", async () => {

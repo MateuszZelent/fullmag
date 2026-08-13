@@ -252,25 +252,30 @@ async function verifyResponsiveAnalysisFixtures(page) {
     const fixture = await page.evaluate(() => {
       const root = document.querySelector(".fm-analysis-plots");
       const required = [
-        root?.querySelector(".fm-chart-section__title"),
-        root?.querySelector('[aria-label="Analysis dataset"]'),
-        root?.querySelector(".fm-chart-legend__item"),
-        root?.querySelector('.fm-analysis-chart-surface[role="img"]'),
-        root?.querySelector(".fm-analysis-chart-surface canvas"),
-        root?.querySelector(".fm-analysis-plots__range-cursor"),
-        root?.querySelector(".fm-chart-section__footer"),
-        root?.querySelector(".fm-analysis-chart-export button"),
+        ["chart title", root?.querySelector(".fm-chart-section__title")],
+        ["dataset selector", root?.querySelector('[aria-label="Analysis dataset"]')],
+        ["legend item", root?.querySelector(".fm-chart-legend__item")],
+        ["chart surface", root?.querySelector('.fm-analysis-chart-surface[role="img"]')],
+        ["chart canvas", root?.querySelector(".fm-analysis-chart-surface canvas")],
+        ["range cursor", root?.querySelector(".fm-analysis-plots__range-cursor")],
+        ["chart footer", root?.querySelector(".fm-chart-section__footer")],
+        ["export button", root?.querySelector(".fm-analysis-chart-export button")],
       ];
       const rootRect = root?.getBoundingClientRect();
-      const visible = required.every((node) => {
+      const fits = ([, node]) => {
         if (!(node instanceof HTMLElement) || !rootRect) return false;
         const rect = node.getBoundingClientRect();
         return rect.width > 0 && rect.height > 0 && rect.left >= rootRect.left && rect.right <= rootRect.right + 1;
-      });
+      };
+      const visible = required.every(fits);
       const controls = root?.querySelector(".fm-analysis-chart-export");
       const chartOwner = root?.querySelector('.fm-analysis-chart-surface[role="img"]');
       return {
         axisDescription: chartOwner?.getAttribute("aria-label") ?? "",
+        clipped: required.filter(([name, node]) => !fits([name, node])).map(([name, node]) => ({
+          name,
+          rect: node instanceof HTMLElement ? node.getBoundingClientRect().toJSON() : null,
+        })),
         controlsDirection: controls ? getComputedStyle(controls).flexDirection : null,
         documentFitsViewport: document.documentElement.scrollWidth <= window.innerWidth + 1,
         rootFitsViewport: Boolean(

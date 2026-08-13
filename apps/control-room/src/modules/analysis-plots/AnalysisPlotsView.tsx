@@ -103,8 +103,12 @@ export function AnalysisPlotsView(props: AnalysisPlotsViewInput) {
   const datasetPrompt = !resolvedDatasetRef
     ? <div className="fm-analysis-plots__empty" role="status">Select a dataset or artifact</div>
     : null;
-  const subviews = props.subviews ?? ANALYSIS_SUBVIEWS[surface];
-  const activeSubview = requestedActiveSubview ?? subviews[0];
+  const canonicalSubviews = ANALYSIS_SUBVIEWS[surface];
+  const subviews = props.subviews ?? canonicalSubviews;
+  const activeSubview = resolveActiveSubview(surface, requestedActiveSubview, subviews);
+  const isDynamicStructureFactorSubview = activeSubview === "dynamics.s-k-f" || activeSubview === "dispersion.modal" && !frequencyDomainCalculationMode;
+  const isFrequencySubview = !isDynamicStructureFactorSubview && (activeSubview === "dispersion.modal" || activeSubview === "dispersion.driven-map" || activeSubview === "dispersion.branches" || activeSubview === "resonance.eigenmodes" || activeSubview === "resonance.frequency-response" || activeSubview === "resonance.modal-driven");
+  const isHysteresisSubview = activeSubview === "hysteresis.loop" || activeSubview === "hysteresis.branches";
 
   return <div className="fm-analysis-plots">
     <AnalysisSurfaceTabs active={surface} activeSubview={activeSubview} onChange={onSurfaceChange} onSubviewChange={onSubviewChange} subviews={subviews} />
@@ -119,11 +123,12 @@ export function AnalysisPlotsView(props: AnalysisPlotsViewInput) {
           <SelectContent>{datasetRefs.map((ref) => <SelectItem key={ref} value={ref}>{ref}</SelectItem>)}</SelectContent>
         </Select> : null}
       </header>
-      {surface === "dynamics" ? (resolvedDatasetRef ? <AnalysisTableSurface chartId={chartId} chartSeries={chartSeries} descriptorId={descriptorId ?? undefined} displayUnits={displayUnits} kernel={kernel} onDisplayUnitsChange={onDisplayUnitsChange} onPointSelect={onPointSelect} onRangeChange={onRangeChange} onSelectedSeriesIdsChange={onSelectedSeriesIdsChange} range={range} selectedPoint={selectedPoint} selectedSeriesIds={selectedSeriesIds} status={tableUnsupportedReason ? "unsupported" : resolvedTableStatus} table={resolvedTable} unsupportedReason={tableUnsupportedReason} xAxisId={xAxisId} xAxisLabel={formatXAxisLabel(chartSeries, xAxisId)} /> : spinWaveGamma ? <SpinWaveGammaView resource={spinWaveGamma} status={spinWaveGammaStatus} /> : datasetPrompt) : null}
-      {surface === "dispersion" ? (frequencyDomainCalculationMode ? <AnalysisFrequencySurface calculationMode={frequencyDomainCalculationMode} chartId={chartId} descriptorId={descriptorId ?? undefined} displayUnits={displayUnits} kernel={kernel} onDisplayUnitsChange={onDisplayUnitsChange} onPointSelect={onPointSelect} onRangeChange={onRangeChange} onSelectedSeriesIdsChange={onSelectedSeriesIdsChange} presentation={props.frequencyDomainPresentation} range={range} selectedPoint={selectedPoint} selectedSeriesIds={selectedSeriesIds} series={frequencyDomainSeries} status={frequencyDomainStatus} title={frequencyDomainTitle} unavailableReason={frequencyDomainUnavailableReason} /> : <DynamicStructureFactorView resource={dynamicStructureFactor} status={dynamicStructureFactorStatus} />) : null}
-      {surface === "resonance-fmr" ? <AnalysisFrequencySurface calculationMode={frequencyDomainCalculationMode} chartId={chartId} comparisonModel={frequencyDomainComparisonModel} descriptorId={descriptorId ?? undefined} displayUnits={displayUnits} kernel={kernel} onDisplayUnitsChange={onDisplayUnitsChange} onPointSelect={onPointSelect} onRangeChange={onRangeChange} onSelectedSeriesIdsChange={onSelectedSeriesIdsChange} presentation={props.frequencyDomainPresentation} range={range} selectedPoint={selectedPoint} selectedSeriesIds={selectedSeriesIds} series={frequencyDomainSeries} status={frequencyDomainStatus} title={frequencyDomainTitle} unavailableReason={frequencyDomainUnavailableReason} /> : null}
-      {surface === "hysteresis" ? (selectedStageId ? <HysteresisChart kernel={kernel} stageId={selectedStageId} /> : <div className="fm-analysis-plots__empty" role="status">Select a hysteresis stage</div>) : null}
-      {surface === "comparison" ? <div className="fm-analysis-plots__comparison fm-analysis-plots__empty" role="status">
+      {activeSubview === "dynamics.time-traces" ? (resolvedDatasetRef ? <AnalysisTableSurface chartId={chartId} chartSeries={chartSeries} descriptorId={descriptorId ?? undefined} displayUnits={displayUnits} kernel={kernel} onDisplayUnitsChange={onDisplayUnitsChange} onPointSelect={onPointSelect} onRangeChange={onRangeChange} onSelectedSeriesIdsChange={onSelectedSeriesIdsChange} range={range} selectedPoint={selectedPoint} selectedSeriesIds={selectedSeriesIds} status={tableUnsupportedReason ? "unsupported" : resolvedTableStatus} table={resolvedTable} unsupportedReason={tableUnsupportedReason} xAxisId={xAxisId} xAxisLabel={formatXAxisLabel(chartSeries, xAxisId)} /> : datasetPrompt) : null}
+      {activeSubview === "dynamics.temporal-fft" ? <SpinWaveGammaView resource={spinWaveGamma} status={spinWaveGammaStatus} /> : null}
+      {isDynamicStructureFactorSubview ? <DynamicStructureFactorView resource={dynamicStructureFactor} status={dynamicStructureFactorStatus} /> : null}
+      {isFrequencySubview ? <AnalysisFrequencySurface calculationMode={frequencyDomainCalculationMode} chartId={chartId} comparisonModel={activeSubview === "resonance.modal-driven" ? frequencyDomainComparisonModel : undefined} descriptorId={descriptorId ?? undefined} displayUnits={displayUnits} kernel={kernel} onDisplayUnitsChange={onDisplayUnitsChange} onPointSelect={onPointSelect} onRangeChange={onRangeChange} onSelectedSeriesIdsChange={onSelectedSeriesIdsChange} presentation={props.frequencyDomainPresentation} range={range} selectedPoint={selectedPoint} selectedSeriesIds={selectedSeriesIds} series={frequencyDomainSeries} status={frequencyDomainStatus} title={frequencyDomainTitle} unavailableReason={frequencyDomainUnavailableReason} /> : null}
+      {isHysteresisSubview ? (selectedStageId ? <HysteresisChart kernel={kernel} stageId={selectedStageId} /> : <div className="fm-analysis-plots__empty" role="status">Select a hysteresis stage</div>) : null}
+      {activeSubview === "comparison.sources" ? <div className="fm-analysis-plots__comparison fm-analysis-plots__empty" role="status">
         <strong>Comparison unavailable</strong>
         <span>{props.comparisonUnavailableReason ?? ANALYSIS_COMPARISON_UNAVAILABLE_REASON}</span>
       </div> : null}
@@ -135,3 +140,14 @@ function ignorePointSelection(): void {}
 function ignoreRangeSelection(): void {}
 function ignoreSeriesSelection(): void {}
 function ignoreDisplayUnitsChange(): void {}
+
+function resolveActiveSubview(
+  surface: AnalysisSurface,
+  requested: AnalysisSubview | undefined,
+  subviews: readonly AnalysisSubview[],
+): AnalysisSubview {
+  const canonicalSubviews = ANALYSIS_SUBVIEWS[surface] as readonly AnalysisSubview[];
+  return requested && canonicalSubviews.includes(requested) && subviews.includes(requested)
+    ? requested
+    : canonicalSubviews[0];
+}

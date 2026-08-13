@@ -175,6 +175,15 @@ describe("AnalysisFieldOverlayPhaseAnimation", () => {
     vi.stubGlobal("cancelAnimationFrame", vi.fn());
     const controller = new AnalysisFieldOverlayController();
     setEigenOverlay(controller);
+    controller.update({
+      animation: {
+        animatePhase: true,
+        animationRateHz: 1,
+        direction: -1,
+        loop: false,
+      },
+      visualizationPhaseRad: 1.25,
+    });
 
     const handle = startAnalysisFieldOverlayPhaseAnimation(controller, {
       intervalMs: 100,
@@ -182,9 +191,73 @@ describe("AnalysisFieldOverlayPhaseAnimation", () => {
     vi.advanceTimersByTime(500);
 
     expect(requestFrame).not.toHaveBeenCalled();
-    expect(controller.getSnapshot()?.visualizationPhaseRad).toBeUndefined();
+    expect(controller.getSnapshot()).toMatchObject({
+      animation: {
+        animatePhase: false,
+        animationRateHz: 1,
+        direction: -1,
+        loop: false,
+      },
+      query: { phase_rad: 0 },
+      visualizationPhaseRad: 1.25,
+    });
 
     handle.stop();
+  });
+
+  it("pauses and cancels local phase animation when the document becomes hidden", () => {
+    vi.useFakeTimers();
+    const clearIntervalSpy = vi.spyOn(globalThis, "clearInterval");
+    const visibilityListeners = new Set<() => void>();
+    const documentStub = {
+      visibilityState: "visible" as DocumentVisibilityState,
+      addEventListener: vi.fn((_type: string, listener: () => void) => {
+        visibilityListeners.add(listener);
+      }),
+      removeEventListener: vi.fn((_type: string, listener: () => void) => {
+        visibilityListeners.delete(listener);
+      }),
+    };
+    vi.stubGlobal("document", documentStub);
+    const controller = new AnalysisFieldOverlayController();
+    setEigenOverlay(controller);
+    controller.update({
+      animation: {
+        animatePhase: true,
+        animationRateHz: 1,
+        direction: -1,
+        loop: false,
+      },
+      visualizationPhaseRad: 0.75,
+    });
+
+    const handle = startAnalysisFieldOverlayPhaseAnimation(controller, {
+      intervalMs: 100,
+    });
+    documentStub.visibilityState = "hidden";
+    visibilityListeners.forEach((listener) => listener());
+    vi.advanceTimersByTime(500);
+
+    expect(clearIntervalSpy).toHaveBeenCalled();
+    expect(controller.getSnapshot()).toMatchObject({
+      animation: {
+        animatePhase: false,
+        animationRateHz: 1,
+        direction: -1,
+        loop: false,
+      },
+      query: { phase_rad: 0 },
+      visualizationPhaseRad: 0.75,
+    });
+
+    documentStub.visibilityState = "visible";
+    visibilityListeners.forEach((listener) => listener());
+    vi.advanceTimersByTime(500);
+    expect(controller.getSnapshot()?.animation?.animatePhase).toBe(false);
+    expect(controller.getSnapshot()?.visualizationPhaseRad).toBe(0.75);
+
+    handle.stop();
+    expect(documentStub.removeEventListener).toHaveBeenCalled();
   });
 
   it("uses frame timestamps for smooth browser animation and cancels the owned frame", () => {

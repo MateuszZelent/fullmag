@@ -59,6 +59,7 @@ import { manifestRenderableCarriers } from "@/modules/viewport-3d/public";
 
 import type { InspectorPanelProps } from "../inspectorTypes";
 import { useRegisterInspectorEditSession } from "../InspectorEditSession";
+import { ScientificInspectorTemplate } from "../components/ScientificInspectorTemplate";
 import { FieldRow } from "../primitives/FieldRow";
 import { FeedbackBanner } from "../primitives/FeedbackBanner";
 import { InspectorGroup } from "../primitives/InspectorGroup";
@@ -786,18 +787,45 @@ export function VisualizationTargetInspectorPanel({
     if (presentationPatch) visualizationSync.queuePatch({ planar: presentationPatch });
   }, [planarResource.data?.planar, settings?.vectorBudget, settings?.vectorColorMode, settings?.vectorLengthScale, visualizationSync]);
 
-  const ownerIdentity = (
-    <InspectorGroup title={owner.title}>
-      <FieldRow label="Target scope" value={owner.targetLabel} />
-      <FieldRow label="Capabilities" value={owner.capabilityDescription} />
-      <FieldRow label="Actions" value={owner.actionSummary} />
-    </InspectorGroup>
+  const targetId = target
+    ? target.kind === "airbox"
+      ? "airbox"
+      : target.id
+    : null;
+  const scientificInspector = (
+    <ScientificInspectorTemplate
+      methodLabel="Display controls"
+      physicalLabel={owner.targetLabel}
+      properties={[
+        { label: "Target scope", value: owner.targetLabel },
+        { label: "Capabilities", value: owner.capabilityDescription },
+        { label: "Actions", value: owner.actionSummary },
+      ]}
+      provenance={
+        target
+          ? [
+              { label: "Target ID", mono: true, value: targetId },
+              { label: "Target kind", value: target.kind },
+            ]
+          : []
+      }
+      status={{
+        availability: target ? "available" : "unavailable",
+        execution: "interactive",
+        resource: target
+          ? visualizationBaselineReady
+            ? "ready"
+            : "loading"
+          : "unavailable",
+      }}
+      title={owner.title}
+    />
   );
 
   if (!target || !settings || !displaySettings) {
     return (
       <div className="fm-inspector-panel" data-inspector-owner={owner.id}>
-        {ownerIdentity}
+        {scientificInspector}
         <InspectorGroup title="Visualization">
           <FieldRow label="Target" value="No visualization target" />
         </InspectorGroup>
@@ -808,7 +836,7 @@ export function VisualizationTargetInspectorPanel({
   if (!visualizationBaselineReady) {
     return (
       <div className="fm-inspector-panel" data-inspector-owner={owner.id}>
-        {ownerIdentity}
+        {scientificInspector}
         <InspectorGroup title="View">
           <FieldRow label="Target" value={displayLabelForVisualizationTarget(target)} />
           <FieldRow label="State" value="Loading applied visualization state" />
@@ -820,7 +848,7 @@ export function VisualizationTargetInspectorPanel({
   if (visualizationViewContext === "planar") {
     return (
       <div className="fm-inspector-panel" data-inspector-owner={owner.id}>
-        {ownerIdentity}
+        {scientificInspector}
         <InspectorGroup title="View">
           <VisualizationContextSwitchControl onPlanarActivate={syncSharedQuiverIntent} />
         </InspectorGroup>
@@ -831,7 +859,7 @@ export function VisualizationTargetInspectorPanel({
 
   return (
     <div className="fm-inspector-panel" data-inspector-owner={owner.id}>
-      {ownerIdentity}
+      {scientificInspector}
       <InspectorGroup title="View">
         <VisualizationContextSwitchControl onPlanarActivate={syncSharedQuiverIntent} />
       </InspectorGroup>

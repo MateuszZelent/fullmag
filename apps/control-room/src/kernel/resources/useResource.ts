@@ -4,6 +4,7 @@ import {
   useCallback,
   useEffect,
   useEffectEvent,
+  useMemo,
   useRef,
   useState,
   useSyncExternalStore,
@@ -48,7 +49,21 @@ interface UseResourceSelectorOptions<TData, TSelected>
 }
 
 const NOOP_SUBSCRIBE = () => undefined;
+const NOOP_REFETCH = () => undefined;
 const NOOP_RESOLVE_REVISION = () => null;
+const getServerRevision = (): ResourceRevision | null => null;
+const SERVER_RUNTIME_SNAPSHOT: ResourceRuntimeSnapshot<unknown> = {
+  data: null,
+  error: null,
+  revision: null,
+  settledExternalRevision: null,
+  settledResourceKey: null,
+  status: "loading",
+};
+
+function getServerRuntimeSnapshot<TData>(): ResourceRuntimeSnapshot<TData> {
+  return SERVER_RUNTIME_SNAPSHOT as ResourceRuntimeSnapshot<TData>;
+}
 
 export function useResource<TData>({
   abortStaleInflight = false,
@@ -79,7 +94,7 @@ export function useResource<TData>({
   const externalRevision = useSyncExternalStore(
     subscribeStable,
     getSnapshot,
-    getSnapshot,
+    getServerRevision,
   );
 
   const subscribeRuntime = useCallback(
@@ -90,13 +105,13 @@ export function useResource<TData>({
     [enabled, resourceKey, runtimeStore],
   );
   const getRuntimeSnapshot = useCallback(
-    () => runtimeStore.getSnapshot(resourceKey),
+    () => runtimeStore.getSnapshot<TData>(resourceKey),
     [resourceKey, runtimeStore],
   );
-  const state = useSyncExternalStore(
+  const state = useSyncExternalStore<ResourceRuntimeSnapshot<TData>>(
     subscribeRuntime,
     getRuntimeSnapshot,
-    getRuntimeSnapshot,
+    getServerRuntimeSnapshot,
   );
   const [refreshToken, setRefreshToken] = useState(0);
   const [loadedRefreshToken, setLoadedRefreshToken] = useState(refreshToken);
@@ -181,13 +196,24 @@ export function useResourceSelector<TData, TSelected>({
   const externalRevision = useSyncExternalStore(
     subscribeStable,
     getSnapshot,
-    getSnapshot,
+    getServerRevision,
   );
 
   const refetch = useCallback(() => {
     errorCountRef.current = 0;
     setRefreshToken((current) => current + 1);
   }, []);
+
+  const serverSelectedSnapshot = useMemo(
+    () => selector({
+      data: null,
+      error: null,
+      refetch: NOOP_REFETCH,
+      revision: null,
+      status: enabled && !pauseLoad ? "loading" : "idle",
+    }),
+    [enabled, pauseLoad, selector],
+  );
 
   const subscribeRuntime = useCallback(
     (onStoreChange: () => void) =>
@@ -231,7 +257,7 @@ export function useResourceSelector<TData, TSelected>({
   const selected = useSyncExternalStore(
     subscribeRuntime,
     getRuntimeSelectedSnapshot,
-    getRuntimeSelectedSnapshot,
+    () => serverSelectedSnapshot,
   );
 
   useResourceLoader({

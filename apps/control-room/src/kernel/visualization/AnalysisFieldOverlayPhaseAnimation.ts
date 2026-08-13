@@ -44,6 +44,17 @@ export function startAnalysisFieldOverlayPhaseAnimation(
     previousFrameTimeMs = null;
   };
 
+  const pauseAnimation = () => {
+    const snapshot = controller.getSnapshot();
+    if (!snapshot?.animation?.animatePhase) return;
+    controller.update({
+      animation: {
+        ...snapshot.animation,
+        animatePhase: false,
+      },
+    });
+  };
+
   const tick = () => {
     const snapshot = controller.getSnapshot();
     if (!isAnimatingAnalysisOverlay(snapshot)) {
@@ -103,6 +114,12 @@ export function startAnalysisFieldOverlayPhaseAnimation(
     ) {
       stopInterval();
       stopFrame();
+      if (
+        reducedMotion ||
+        (documentAvailable && globalThis.document.visibilityState === "hidden")
+      ) {
+        pauseAnimation();
+      }
       return;
     }
     if (browserFramesAvailable) {

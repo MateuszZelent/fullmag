@@ -1,14 +1,27 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 
+import type { DynamicStructureFactorResource, SpinWaveGammaResource } from "@/kernel/api/apiTypes";
 import type { KernelApi } from "@/kernel/types";
+import type { AnalysisSubview } from "@/kernel/workspace/analysisViewPreferences";
 import { chartTableWindowFromBinary } from "@/shared/domain/analysis/chartDataPlan";
+
+vi.mock("./DynamicStructureFactorView", () => ({
+  DynamicStructureFactorView: () => <div data-analysis-panel="dynamics.s-k-f">Dynamic structure factor controls</div>,
+}));
+vi.mock("./SpinWaveGammaView", () => ({
+  SpinWaveGammaView: () => <div data-analysis-panel="dynamics.temporal-fft">Response FFT sampling parameters</div>,
+}));
+
 import { AnalysisPlotsView } from "./AnalysisPlotsView";
 
 const props = {
   datasetRefs: [], dynamicStructureFactor: null, dynamicStructureFactorStatus: "idle", frequencyDomainSeries: [], frequencyDomainStatus: "idle", frequencyDomainTitle: "Frequency domain", frequencyDomainUnavailableReason: null,
   kernel: {} as KernelApi, onDatasetRefChange: vi.fn(), onSurfaceChange: vi.fn(), selectedDatasetRef: null, selectedStageId: null, spinWaveGamma: null, spinWaveGammaStatus: "idle", table: null, tableStatus: "idle", tableUnsupportedReason: null,
 };
+
+const dynamicStructureFactor = {} as DynamicStructureFactorResource;
+const spinWaveGamma = {} as SpinWaveGammaResource;
 
 function tableFixture(tableId: string, revision: number) {
   return chartTableWindowFromBinary({
@@ -38,6 +51,53 @@ describe("Analysis workbench", () => {
     );
 
     expect(html).toContain('data-analysis-subview="dynamics.temporal-fft"');
+  });
+
+  it("renders the panel selected by a legal dynamics subview", () => {
+    const html = renderToStaticMarkup(
+      <AnalysisPlotsView
+        {...props}
+        activeSurface="dynamics"
+        activeSubview="dynamics.temporal-fft"
+        selectedDatasetRef="table-a"
+        spinWaveGamma={spinWaveGamma}
+        table={tableFixture("table-a", 7)}
+      />,
+    );
+
+    expect(html).toContain('data-analysis-panel="dynamics.temporal-fft"');
+    expect(html).not.toContain('data-analysis-panel="dynamics.s-k-f"');
+  });
+
+  it("renders the S(k,f) controls for the legal dynamics subview", () => {
+    const html = renderToStaticMarkup(
+      <AnalysisPlotsView
+        {...props}
+        activeSurface="dynamics"
+        activeSubview="dynamics.s-k-f"
+        dynamicStructureFactor={dynamicStructureFactor}
+      />,
+    );
+
+    expect(html).toContain('data-analysis-panel="dynamics.s-k-f"');
+    expect(html).not.toContain('data-analysis-panel="dynamics.temporal-fft"');
+  });
+
+  it("fails closed to the canonical first subview for an illegal selection", () => {
+    const html = renderToStaticMarkup(
+      <AnalysisPlotsView
+        {...props}
+        activeSurface="dynamics"
+        activeSubview={"resonance.eigenmodes" as AnalysisSubview}
+        dynamicStructureFactor={dynamicStructureFactor}
+        spinWaveGamma={spinWaveGamma}
+      />,
+    );
+
+    expect(html).toContain('data-analysis-subview="dynamics.time-traces"');
+    expect(html).toContain("Select a dataset or artifact");
+    expect(html).not.toContain('data-analysis-panel="dynamics.temporal-fft"');
+    expect(html).not.toContain('data-analysis-panel="dynamics.s-k-f"');
   });
 
   it("marks Comparison unavailable until both typed owner identities exist", () => {
