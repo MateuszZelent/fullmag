@@ -1,4 +1,5 @@
 import json
+import math
 import tempfile
 import unittest
 from pathlib import Path
@@ -6,9 +7,11 @@ from unittest.mock import patch
 
 from scripts.analysis.validate_planar_monitor_sampling import (
     SLAB_ORACLE,
+    aggregate_qualification_reports,
     asymmetric_slab_validation,
     build_fdm_gpu_no_go,
     build_qualification_cases,
+    compare_samplewise_reports,
     attempted_monitor_report,
     exact_sample_identity_matches,
     canonical_sample_links_match,
@@ -19,7 +22,9 @@ from scripts.analysis.validate_planar_monitor_sampling import (
     run_execution,
     synchronize_cross_backend_reports,
     validate_qualification_report,
+    wait_for_fresh_monitor_report,
     update_qualification_case,
+    write_json,
 )
 
 
@@ -74,11 +79,33 @@ class PlanarMonitorSamplingValidationTests(unittest.TestCase):
         )
         meta["links"] = {
             name: f"/planar/{name}?{query}"
-            for name in ("scalar", "vectors", "empty_mask")
+            for name in ("scalar", "vectors", "empty_mask", "probe")
         }
 
         self.assertTrue(canonical_sample_links_match(meta))
         meta["links"]["empty_mask"] = "/planar/empty-mask?sample_token=stale"
+        self.assertFalse(canonical_sample_links_match(meta))
+
+    def test_canonical_sample_links_reject_a_stale_probe(self) -> None:
+        meta = {
+            "carrier_revision": 4,
+            "field_revision": 5,
+            "mesh_revision": 6,
+            "monitor_revision": 3,
+            "sample_token": "sample:1",
+            "scene_revision": 2,
+        }
+        query = (
+            "sample_token=sample%3A1&expected_scene_revision=2&"
+            "expected_monitor_revision=3&expected_mesh_revision=6&"
+            "expected_carrier_revision=4&expected_field_revision=5"
+        )
+        meta["links"] = {
+            name: f"/planar/{name}?{query}"
+            for name in ("scalar", "vectors", "empty_mask")
+        }
+        meta["links"]["probe"] = "/planar/probe?sample_token=stale"
+
         self.assertFalse(canonical_sample_links_match(meta))
 
     def test_attempted_monitor_case_retains_exact_runtime_error(self) -> None:
@@ -101,6 +128,25 @@ class PlanarMonitorSamplingValidationTests(unittest.TestCase):
         self.assertFalse(result["passed"])
         self.assertEqual(result["status"], "blocked")
         self.assertEqual(result["blocker"], "RuntimeError: airbox carrier unavailable")
+
+    def test_fresh_monitor_is_re_read_with_the_observed_field_revision(self) -> None:
+        with patch(
+            "scripts.analysis.validate_planar_monitor_sampling.monitor_report",
+            side_effect=[{"field_revision": 8}, {"field_revision": 8}],
+        ) as monitor_report_mock:
+            report = wait_for_fresh_monitor_report(
+                "http://127.0.0.1:1",
+                "xy-plane",
+                baseline_field_revision=7,
+                component="magnitude",
+                quantity_id="m",
+            )
+
+        self.assertEqual(report["field_revision"], 8)
+        self.assertEqual(
+            monitor_report_mock.call_args_list[1].kwargs["expected_field_revision"],
+            8,
+        )
 
     def test_runtime_fixtures_cover_all_frame_presets_region_and_demag(self) -> None:
         root = Path(__file__).resolve().parents[1]
@@ -452,6 +498,161 @@ class PlanarMonitorSamplingValidationTests(unittest.TestCase):
             self.assertFalse(comparison["pass"])
             self.assertEqual(comparison["status"], "blocked")
             self.assertIn("missing or blocked", comparison["metrics"]["blocker"])
+
+    def test_cross_backend_report_rejects_asymmetric_support(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for lane, values, count in (
+                ("fdm-cpu", [1.0, None], 1),
+                ("fem-cpu", [1.0, 2.0], 2),
+            ):
+                path = root / lane / "science-report.json"
+                path.parent.mkdir(parents=True)
+                path.write_text(json.dumps({
+                    "gates": {"local": True},
+                    "head": "deadbeef",
+                    "linear_material_monitors": {"xy-plane": {
+                        "exact_sample_identity": True,
+                        "frame": {"preset": "xy"},
+                        "linear_validation": {
+                            "raster_values_A_per_m": values,
+                            "rms_error_A_per_m": 0.0,
+                        },
+                        "monitor_hash": "shared",
+                        "operator": {"kind": "plane_sample"},
+                        "quantity_id": "mat_ms",
+                        "stats": {"count": count},
+                        "target": {"kind": "object", "object_id": "film"},
+                    }},
+                    "metrics": {},
+                    "qualification_cases": [{
+                        "case_id": "cross-backend-parity",
+                        "passed": False,
+                        "required": True,
+                    }],
+                    "runtime_bundle_identity": {"runtime_bundle_version": "same"},
+                }))
+
+            synchronize_cross_backend_reports(root / "fem-cpu" / "science-report.json")
+
+            comparison = json.loads(
+                (root / "cross-backend-fdm-cpu-fem-cpu.json").read_text()
+            )
+            self.assertFalse(comparison["pass"])
+            self.assertIn("support masks differ", comparison["metrics"]["blocker"])
+
+    def test_strict_json_writer_rejects_nonfinite_numbers(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            with self.assertRaises(ValueError):
+                write_json(Path(directory) / "report.json", {"metric": math.inf})
+
+    def test_samplewise_comparison_does_not_overflow_json_metrics(self) -> None:
+        def report(value: float) -> dict[str, object]:
+            return {
+                "backend": "fem",
+                "device": "cpu",
+                "head": "deadbeef",
+                "monitors": {"xy-plane": {
+                    "frame": {"preset": "xy"},
+                    "operator": {"kind": "plane_sample"},
+                    "quantity_id": "m",
+                    "scalar_values": [value],
+                    "target": {"kind": "object", "object_id": "film"},
+                }},
+                "runtime_bundle_identity": {"runtime_bundle_version": "same"},
+            }
+
+        result = compare_samplewise_reports(
+            report(1e308),
+            report(-1e308),
+            monitor_path=("monitors", "xy-plane"),
+            require_distinct_mesh=False,
+        )
+
+        self.assertTrue(math.isfinite(result["relative_rms"]))
+        json.dumps(result, allow_nan=False)
+
+    def test_aggregate_blocks_missing_refinement_and_compact_full_executors(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for lane, backend, device in (
+                ("fdm-cpu", "fdm", "cpu"),
+                ("fem-cpu", "fem", "cpu"),
+                ("fem-gpu", "fem", "gpu"),
+            ):
+                lane_dir = root / lane
+                (lane_dir / "browser").mkdir(parents=True)
+                cases = [
+                    {"case_id": "refinement-invariance", "passed": False, "required": True},
+                    {"case_id": "fem-compact-full-parity", "passed": False, "required": backend == "fem"},
+                ]
+                write_json(lane_dir / "science-report.json", {
+                    "backend": backend,
+                    "device": device,
+                    "gates": {"local": True},
+                    "head": "deadbeef",
+                    "qualification_cases": cases,
+                    "runtime_bundle_identity": {"runtime_bundle_version": "same"},
+                })
+                write_json(lane_dir / "browser" / "browser-report.json", {
+                    "evidence": [],
+                    "qualification_cases": [],
+                    "scientific_qualification": {},
+                    "unsupported_required_layers": {"pass": False},
+                })
+
+            aggregate = aggregate_qualification_reports(root)
+
+            self.assertFalse(aggregate["pass"])
+            self.assertIn("missing managed mesh-refinement executor report", aggregate["lanes"]["fdm-cpu"]["refinement"]["blocker"])
+            self.assertIn("missing explicit compact/full", aggregate["lanes"]["fem-cpu"]["compact_full"]["blocker"])
+
+    def test_refinement_executor_requires_a_distinct_mesh_and_samplewise_match(self) -> None:
+        def report(mesh_revision: int, values: list[float]) -> dict[str, object]:
+            return {
+                "backend": "fdm",
+                "device": "cpu",
+                "head": "deadbeef",
+                "linear_material_monitors": {"xy-slab": {
+                    "frame": {"preset": "xy"},
+                    "linear_validation": {"raster_values_A_per_m": values},
+                    "mesh_revision": mesh_revision,
+                    "operator": {"kind": "slab_average", "thickness_m": 3e-8},
+                    "quantity_id": "mat_ms",
+                    "target": {"kind": "object", "object_id": "film"},
+                }},
+                "runtime_bundle_identity": {"runtime_bundle_version": "same"},
+            }
+
+        matching = compare_samplewise_reports(
+            report(1, [799_000.0, 801_000.0]),
+            report(2, [799_001.0, 800_999.0]),
+            monitor_path=("linear_material_monitors", "xy-slab"),
+            require_distinct_mesh=True,
+        )
+        same_mesh = compare_samplewise_reports(
+            report(1, [799_000.0]),
+            report(1, [799_000.0]),
+            monitor_path=("linear_material_monitors", "xy-slab"),
+            require_distinct_mesh=True,
+        )
+
+        self.assertTrue(matching["pass"])
+        self.assertFalse(same_mesh["pass"])
+        self.assertIn("distinct mesh revision", same_mesh["blocker"])
+
+    def test_recipe_runs_final_aggregator_and_propagates_fresh_revisions(self) -> None:
+        root = Path(__file__).resolve().parents[1]
+        recipe = (root / "justfile").read_text()
+        validator = (
+            root / "scripts/analysis/validate_planar_monitor_sampling.py"
+        ).read_text()
+
+        self.assertIn("aggregate-viewport-2d-planar-monitor-qualification", recipe)
+        self.assertIn("verify-viewport-2d-planar-compact-full-contract", recipe)
+        self.assertIn("--aggregate-report-root", recipe)
+        self.assertIn("expected_field_revision=fresh_m_revision", validator)
+        self.assertIn('fresh_fields["H_demag"]["field_revision"]', validator)
 
 
 if __name__ == "__main__":

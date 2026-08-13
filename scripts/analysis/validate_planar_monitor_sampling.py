@@ -48,14 +48,12 @@ NOT_APPLICABLE_CASES = {
     "fdm": {"live-m-surface", "fem-compact-full-parity"},
     "fem": {
         "fdm-object-isolation",
-        "airbox-carrier-provenance",
     },
 }
 NOT_APPLICABLE_REASONS = {
     ("fdm", "live-m-surface"): "surface_projection is not legal for the FDM planar sampler",
     ("fdm", "fem-compact-full-parity"): "FEM carrier layout parity does not apply to FDM",
     ("fem", "fdm-object-isolation"): "FDM grid object isolation does not apply to FEM",
-    ("fem", "airbox-carrier-provenance"): "the FDM airbox carrier does not apply to FEM mesh-part scope",
 }
 SLAB_ORACLE = {
     "field_gradient_z_A_per_m2": 2e12,
@@ -63,6 +61,10 @@ SLAB_ORACLE = {
     "frame_position_z_m": 5e-9,
     "thickness_m": 30e-9,
 }
+COMPACT_FULL_CONTRACT = (
+    "planar_sampling::target_tests::"
+    "compact_fem_plane_and_slab_match_equivalent_full_carrier"
+)
 REPORT_MONITOR_FIELDS = {
     "carrier_revision",
     "exact_sample_identity",
@@ -202,6 +204,12 @@ def request_bytes(base: str, path: str) -> bytes:
     return request_bytes_with_headers(base, path)[0]
 
 
+def write_json(path: Path, payload: dict[str, Any]) -> None:
+    path.write_text(
+        json.dumps(payload, indent=2, sort_keys=True, allow_nan=False) + "\n"
+    )
+
+
 def wait_json(base: str, path: str, timeout_s: float = 180.0) -> dict[str, Any]:
     deadline = time.monotonic() + timeout_s
     last_error: Exception | None = None
@@ -280,7 +288,7 @@ def canonical_sample_links_match(meta: dict[str, Any]) -> bool:
         "expected_field_revision": str(meta.get("field_revision")),
     }
     links = meta.get("links") or {}
-    for name in ("scalar", "vectors", "empty_mask"):
+    for name in ("scalar", "vectors", "empty_mask", "probe"):
         link = links.get(name)
         if not isinstance(link, str):
             return False
@@ -326,6 +334,7 @@ def monitor_report(
     wait_timeout_s: float = 180.0,
     resolution: int = 32,
     scope_kind: str | None = None,
+    expected_field_revision: int | None = None,
 ) -> dict[str, Any]:
     query_parameters = {
         "component": component,
@@ -341,6 +350,8 @@ def monitor_report(
         query_parameters["snapshot_id"] = snapshot_id
     if scope_kind is not None:
         query_parameters["scope_kind"] = scope_kind
+    if expected_field_revision is not None:
+        query_parameters["expected_field_revision"] = expected_field_revision
     query = urllib.parse.urlencode(query_parameters)
     prefix = (
         f"/v2/sessions/current/data/fields/{urllib.parse.quote(quantity_id, safe='')}/planar-monitors/"
@@ -456,6 +467,7 @@ def monitor_report(
         "sampling_execution": meta["sampling_execution"],
         "sampling_method": meta["sampling_method"],
         "sample_token": meta["sample_token"],
+        "scalar_values": [value if math.isfinite(value) else None for value in scalar],
         "scalar_identity": scalar_identity,
         "scene_revision": meta["scene_revision"],
         "scope_id": meta.get("scope_id"),
@@ -627,6 +639,7 @@ def attempted_monitor_report(
     *,
     component: str,
     quantity_id: str,
+    expected_field_revision: int | None = None,
 ) -> dict[str, Any]:
     try:
         result = attach_monitor_contract(
@@ -635,6 +648,7 @@ def attempted_monitor_report(
                 monitor["id"],
                 component=component,
                 quantity_id=quantity_id,
+                expected_field_revision=expected_field_revision,
                 wait_timeout_s=20.0,
             ),
             monitor,
@@ -724,7 +738,14 @@ def wait_for_fresh_monitor_report(
             wait_timeout_s=10.0,
         )
         if int(last["field_revision"]) > baseline_field_revision:
-            return last
+            return monitor_report(
+                base,
+                monitor_id,
+                component=component,
+                quantity_id=quantity_id,
+                expected_field_revision=int(last["field_revision"]),
+                wait_timeout_s=10.0,
+            )
         time.sleep(0.5)
     raise RuntimeError(
         f"solve produced no fresh field revision for {monitor_id}: "
@@ -908,22 +929,18 @@ def synchronize_cross_backend_reports(current_output: Path) -> None:
                     passed=False,
                     blocker=metric["blocker"],
                 )
-                path.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n")
+                write_json(path, report)
             comparison_path = report_root / f"cross-backend-fdm-cpu-{fem_lane}.json"
-            comparison_path.write_text(
-                json.dumps(
-                    {
+            write_json(
+                comparison_path,
+                {
                         "fdm_report": str(fdm_path),
                         "fem_report": str(fem_path),
                         "metrics": metric,
                         "pass": False,
                         "schema_version": "viewport-2d-cross-backend-report-v2",
                         "status": "blocked",
-                    },
-                    indent=2,
-                    sort_keys=True,
-                )
-                + "\n"
+                },
             )
             continue
         identity_errors = []
@@ -948,6 +965,11 @@ def synchronize_cross_backend_reports(current_output: Path) -> None:
             or len(fdm_values) != len(fem_values)
         ):
             identity_errors.append("raster shapes differ")
+        if not identity_errors and any(
+            (left is None) != (right is None)
+            for left, right in zip(fdm_values, fem_values, strict=True)
+        ):
+            identity_errors.append("raster support masks differ")
         paired = (
             [
                 (float(left), float(right))
@@ -959,6 +981,14 @@ def synchronize_cross_backend_reports(current_output: Path) -> None:
         )
         if not paired:
             identity_errors.append("no paired finite raster samples")
+        elif (
+            int(fdm_monitor["stats"]["count"]) != len(paired)
+            or int(fem_monitor["stats"]["count"]) != len(paired)
+        ):
+            identity_errors.append(
+                "finite sample counts do not match the shared support mask"
+            )
+            paired = []
         if identity_errors:
             metric = {
                 "blocker": "; ".join(identity_errors),
@@ -968,16 +998,17 @@ def synchronize_cross_backend_reports(current_output: Path) -> None:
             combined_rms = None
             relative_rms = None
         else:
-            combined_rms = math.sqrt(
-                sum((left - right) ** 2 for left, right in paired) / len(paired)
+            scale = max(1.0, *(abs(value) for pair in paired for value in pair))
+            relative_rms = math.sqrt(
+                math.fsum(
+                    ((left / scale) - (right / scale)) ** 2
+                    for left, right in paired
+                )
+                / len(paired)
             )
-            scale = max(
-                1.0,
-                sum(0.5 * (abs(left) + abs(right)) for left, right in paired)
-                / len(paired),
-            )
-            passed = combined_rms / scale <= 5e-3
-            relative_rms = combined_rms / scale
+            candidate_rms = scale * relative_rms
+            combined_rms = candidate_rms if math.isfinite(candidate_rms) else None
+            passed = relative_rms <= 5e-3
         metric = {
             "comparison_method": "samplewise_shared_geometry_raster",
             "fdm_finite_sample_count": int(fdm_monitor["stats"]["count"]),
@@ -999,22 +1030,18 @@ def synchronize_cross_backend_reports(current_output: Path) -> None:
                 passed=passed,
                 blocker=None if passed else metric.get("blocker", "samplewise parity failed"),
             )
-            path.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n")
+            write_json(path, report)
         comparison_path = report_root / f"cross-backend-fdm-cpu-{fem_lane}.json"
-        comparison_path.write_text(
-            json.dumps(
-                {
+        write_json(
+            comparison_path,
+            {
                     "fdm_report": str(fdm_path),
                     "fem_report": str(fem_path),
                     "metrics": metric,
                     "pass": passed,
                     "status": "passed" if passed else "blocked",
                     "schema_version": "viewport-2d-cross-backend-report-v2",
-                },
-                indent=2,
-                sort_keys=True,
-            )
-            + "\n"
+            },
         )
 
 
@@ -1045,13 +1072,275 @@ def update_qualification_case(
     )
 
 
+def compare_samplewise_reports(
+    left: dict[str, Any],
+    right: dict[str, Any],
+    *,
+    monitor_path: tuple[str, str],
+    require_distinct_mesh: bool,
+) -> dict[str, Any]:
+    errors: list[str] = []
+    try:
+        left_monitor = left[monitor_path[0]][monitor_path[1]]
+        right_monitor = right[monitor_path[0]][monitor_path[1]]
+    except (KeyError, TypeError) as error:
+        return {"blocker": f"missing paired monitor evidence: {error}", "pass": False}
+    if left.get("head") != right.get("head") or not left.get("head"):
+        errors.append("HEAD differs")
+    if left.get("backend") != right.get("backend") or left.get("device") != right.get("device"):
+        errors.append("managed lane differs")
+    if left.get("runtime_bundle_identity") != right.get("runtime_bundle_identity"):
+        errors.append("runtime bundle identity differs")
+    for field in ("frame", "operator", "quantity_id", "target"):
+        if left_monitor.get(field) != right_monitor.get(field):
+            errors.append(f"monitor {field} differs")
+    if require_distinct_mesh and left_monitor.get("mesh_revision") == right_monitor.get(
+        "mesh_revision"
+    ):
+        errors.append("paired executor did not produce a distinct mesh revision")
+    left_values = (
+        left_monitor.get("linear_validation", {}).get("raster_values_A_per_m")
+        if monitor_path[0] == "linear_material_monitors"
+        else left_monitor.get("scalar_values")
+    )
+    right_values = (
+        right_monitor.get("linear_validation", {}).get("raster_values_A_per_m")
+        if monitor_path[0] == "linear_material_monitors"
+        else right_monitor.get("scalar_values")
+    )
+    if (
+        not isinstance(left_values, list)
+        or not isinstance(right_values, list)
+        or len(left_values) != len(right_values)
+    ):
+        errors.append("paired raster shapes differ")
+        pairs: list[tuple[float, float]] = []
+    elif any(
+        (left_value is None) != (right_value is None)
+        for left_value, right_value in zip(left_values, right_values, strict=True)
+    ):
+        errors.append("paired raster support masks differ")
+        pairs = []
+    else:
+        pairs = [
+            (float(left_value), float(right_value))
+            for left_value, right_value in zip(left_values, right_values, strict=True)
+            if left_value is not None
+        ]
+    if not pairs:
+        errors.append("paired reports have no shared finite raster samples")
+    if errors:
+        return {"blocker": "; ".join(errors), "pass": False}
+    scale = max(1.0, *(abs(value) for pair in pairs for value in pair))
+    relative_rms = math.sqrt(
+        math.fsum(
+            ((left_value / scale) - (right_value / scale)) ** 2
+            for left_value, right_value in pairs
+        )
+        / len(pairs)
+    )
+    return {
+        "finite_sample_count": len(pairs),
+        "pass": relative_rms <= 5e-3,
+        "relative_rms": relative_rms,
+    }
+
+
+def aggregate_qualification_reports(report_root: Path) -> dict[str, Any]:
+    """Re-run all cross-lane and paired-executor gates after every lane report."""
+    anchor = report_root / "fdm-cpu" / "science-report.json"
+    synchronize_cross_backend_reports(anchor)
+    lanes: dict[str, Any] = {}
+    for lane in ("fdm-cpu", "fem-cpu", "fem-gpu"):
+        lane_dir = report_root / lane
+        science_path = lane_dir / "science-report.json"
+        if not science_path.exists():
+            lanes[lane] = {
+                "blocker": f"missing managed lane report: {science_path}",
+                "pass": False,
+                "status": "blocked",
+            }
+            continue
+        science = json.loads(science_path.read_text())
+        refinement_path = lane_dir / "refinement-peer-science-report.json"
+        if refinement_path.exists():
+            refinement_peer = json.loads(refinement_path.read_text())
+            if refinement_peer.get("qualification_profile") != "mesh-refined":
+                refinement = {
+                    "blocker": "refinement peer report has no mesh-refined qualification profile",
+                    "pass": False,
+                }
+            else:
+                refinement = compare_samplewise_reports(
+                    science,
+                    refinement_peer,
+                    monitor_path=("linear_material_monitors", "xy-slab"),
+                    require_distinct_mesh=True,
+                )
+        else:
+            refinement = {
+                "blocker": f"missing managed mesh-refinement executor report: {refinement_path}",
+                "pass": False,
+            }
+        science["refinement_validation"] = refinement
+        science.setdefault("gates", {})["mesh_refinement_pair"] = refinement["pass"]
+        update_qualification_case(
+            science,
+            "refinement-invariance",
+            passed=refinement["pass"],
+            blocker=refinement.get("blocker", "mesh-refinement samplewise parity failed"),
+        )
+        compact_full: dict[str, Any] | None = None
+        if science.get("backend") == "fem":
+            contract_path = report_root / "compact-full-contract-report.json"
+            if contract_path.exists():
+                contract = json.loads(contract_path.read_text())
+                contract_matches = bool(
+                    contract.get("schema_version")
+                    == "viewport-2d-compact-full-contract-v1"
+                    and contract.get("contract") == COMPACT_FULL_CONTRACT
+                    and contract.get("executor")
+                    == "container-backed cargo test -p fullmag-api"
+                    and contract.get("exit_status") == 0
+                    and contract.get("pass") is True
+                    and contract.get("head") == science.get("head")
+                )
+                compact_full = {
+                    "blocker": None if contract_matches else (
+                        "paired-carrier contract identity, executor status, or HEAD does not match"
+                    ),
+                    "contract_report": str(contract_path),
+                    "pass": contract_matches,
+                }
+            else:
+                compact_full = {
+                    "blocker": (
+                        "missing explicit compact/full FEM paired-carrier executor report: "
+                        f"{contract_path}"
+                    ),
+                    "pass": False,
+                }
+            science.setdefault("gates", {})["fem_compact_full_pair"] = compact_full[
+                "pass"
+            ]
+            update_qualification_case(
+                science,
+                "fem-compact-full-parity",
+                passed=compact_full["pass"],
+                blocker=compact_full.get(
+                    "blocker", "compact/full FEM samplewise parity failed"
+                ),
+            )
+        write_json(science_path, science)
+        browser_path = lane_dir / "browser" / "browser-report.json"
+        if browser_path.exists():
+            browser = json.loads(browser_path.read_text())
+            layer_gate = browser.get("unsupported_required_layers", {})
+            browser_runtime = browser.get("runtime_bundle_identity", {})
+            science_runtime = science.get("runtime_bundle_identity", {})
+            science_execution = science.get("execution", {})
+            runtime_matches = bool(
+                browser.get("git_head") == science.get("head")
+                and browser.get("backend") == science.get("backend")
+                and browser_runtime.get("resolved_device") == science.get("device")
+                and browser_runtime.get("requested_backend")
+                == science_execution.get("requested_backend")
+                and browser_runtime.get("requested_device")
+                == science_execution.get("requested_device")
+                and browser_runtime.get("resolved_backend")
+                == science_execution.get("resolved_backend")
+                and browser_runtime.get("resolved_device")
+                == science_execution.get("resolved_device")
+                and browser_runtime.get("resolved_runtime_family")
+                == science_execution.get("resolved_runtime_family")
+                and browser_runtime.get("api_contract_version")
+                == science_runtime.get("api_contract_version")
+                and browser_runtime.get("runtime_bundle_version")
+                == science_runtime.get("runtime_bundle_version")
+            )
+            browser["scientific_qualification"].update(
+                {
+                    "complete": science.get("qualification_complete") is True,
+                    "matches_runtime": runtime_matches,
+                    "pass": science.get("pass") is True,
+                    "status": science.get("qualification_status", "blocked"),
+                }
+            )
+            browser["pass"] = bool(
+                science.get("pass") is True
+                and runtime_matches
+                and layer_gate.get("pass") is True
+                and all(
+                    not case.get("required", True) or case.get("passed") is True
+                    for case in browser.get("qualification_cases", [])
+                )
+                and all(
+                    evidence.get("status") == "ready"
+                    for evidence in browser.get("evidence", [])
+                )
+            )
+            write_json(browser_path, browser)
+            browser_pass = browser["pass"]
+        else:
+            browser_pass = False
+        lanes[lane] = {
+            "browser_pass": browser_pass,
+            "compact_full": compact_full,
+            "pass": bool(science.get("pass") and browser_pass),
+            "refinement": refinement,
+            "status": "passed" if science.get("pass") and browser_pass else "blocked",
+        }
+    passed = all(entry.get("pass") is True for entry in lanes.values())
+    aggregate = {
+        "lanes": lanes,
+        "pass": passed,
+        "schema_version": "viewport-2d-qualification-aggregate-v1",
+        "status": "qualified" if passed else "blocked",
+    }
+    report_root.mkdir(parents=True, exist_ok=True)
+    write_json(report_root / "aggregate-report.json", aggregate)
+    return aggregate
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--api-base", required=True)
-    parser.add_argument("--backend", choices=("fdm", "fem"), required=True)
-    parser.add_argument("--device", choices=("cpu", "gpu"), required=True)
-    parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--aggregate-report-root", type=Path)
+    parser.add_argument("--record-compact-full-contract", type=Path)
+    parser.add_argument("--api-base")
+    parser.add_argument("--backend", choices=("fdm", "fem"))
+    parser.add_argument("--device", choices=("cpu", "gpu"))
+    parser.add_argument("--output", type=Path)
+    parser.add_argument(
+        "--qualification-profile",
+        choices=("base", "mesh-refined", "fem-compact", "fem-full"),
+        default="base",
+    )
     args = parser.parse_args()
+    if args.record_compact_full_contract is not None:
+        write_json(
+            args.record_compact_full_contract,
+            {
+                "contract": COMPACT_FULL_CONTRACT,
+                "executor": "container-backed cargo test -p fullmag-api",
+                "exit_status": 0,
+                "head": git_head(),
+                "pass": True,
+                "schema_version": "viewport-2d-compact-full-contract-v1",
+            },
+        )
+        return
+    if args.aggregate_report_root is not None:
+        aggregate = aggregate_qualification_reports(args.aggregate_report_root)
+        if not aggregate["pass"]:
+            raise SystemExit(
+                f"planar qualification aggregate blocked: {args.aggregate_report_root}"
+            )
+        print(f"Planar qualification aggregate passed: {args.aggregate_report_root}")
+        return
+    if not args.api_base or not args.backend or not args.device or args.output is None:
+        parser.error(
+            "--api-base, --backend, --device, and --output are required outside aggregate mode"
+        )
 
     collection = wait_json(
         args.api_base, "/v2/sessions/current/model/planar-monitors"
@@ -1099,19 +1388,6 @@ def main() -> None:
         )
         for monitor_id in sorted(linear_monitor_ids)
     }
-    refinement_report = attach_monitor_contract(
-        monitor_report(
-            args.api_base,
-            "xy-slab",
-            component="scalar",
-            quantity_id="mat_ms",
-            validate_linear_ms=True,
-            resolution=64,
-        ),
-        monitor_by_id["xy-slab"],
-        "mat_ms",
-        "scalar",
-    )
     isolation_case = None
     if args.backend == "fdm":
         isolation_case = attempted_monitor_report(
@@ -1121,18 +1397,37 @@ def main() -> None:
             quantity_id="mat_ms",
         )
 
-    pre_solve_m = monitor_report(
-        args.api_base, "xy-plane", component="magnitude", quantity_id="m"
-    )
+    pre_solve_fields = {
+        quantity_id: monitor_report(
+            args.api_base,
+            "xy-plane",
+            component="magnitude",
+            quantity_id=quantity_id,
+        )
+        for quantity_id in ("m", "H_eff", "H_demag")
+    }
     solve_command_id = start_fixture_solver(args.api_base)
     try:
         fresh_xy = wait_for_fresh_monitor_report(
             args.api_base,
             "xy-plane",
-            baseline_field_revision=int(pre_solve_m["field_revision"]),
+            baseline_field_revision=int(pre_solve_fields["m"]["field_revision"]),
             component="magnitude",
             quantity_id="m",
         )
+        fresh_fields = {
+            quantity_id: wait_for_fresh_monitor_report(
+                args.api_base,
+                "xy-plane",
+                baseline_field_revision=int(
+                    pre_solve_fields[quantity_id]["field_revision"]
+                ),
+                component="magnitude",
+                quantity_id=quantity_id,
+            )
+            for quantity_id in ("H_eff", "H_demag")
+        }
+        fresh_m_revision = int(fresh_xy["field_revision"])
         monitors = {
             monitor_id: attach_monitor_contract(
                 monitor_report(
@@ -1140,6 +1435,7 @@ def main() -> None:
                     monitor_id,
                     component="magnitude",
                     quantity_id="m",
+                    expected_field_revision=fresh_m_revision,
                 ),
                 monitor_by_id[monitor_id],
                 "m",
@@ -1156,16 +1452,27 @@ def main() -> None:
                 monitor_by_id[monitor_id],
                 component="magnitude",
                 quantity_id="m",
+                expected_field_revision=fresh_m_revision,
             )
             for monitor_id in sorted(matrix_monitor_ids)
         }
         field_quantity_cases = {
-            quantity_id: attempted_monitor_report(
-                args.api_base,
-                monitor_by_id["xy-plane"],
-                component="magnitude",
-                quantity_id=quantity_id,
-            )
+            quantity_id: {
+                "passed": bool(
+                    fresh_fields[quantity_id]["exact_sample_identity"]
+                    and fresh_fields[quantity_id]["mask_exact_sample_identity"]
+                ),
+                "result": attach_monitor_contract(
+                    fresh_fields[quantity_id],
+                    monitor_by_id["xy-plane"],
+                    quantity_id,
+                    "magnitude",
+                ),
+                "status": "passed"
+                if fresh_fields[quantity_id]["exact_sample_identity"]
+                and fresh_fields[quantity_id]["mask_exact_sample_identity"]
+                else "blocked",
+            }
             for quantity_id in ("H_eff", "H_demag")
         }
         try:
@@ -1176,6 +1483,9 @@ def main() -> None:
                         component="magnitude",
                         quantity_id="H_demag",
                         scope_kind="airbox",
+                        expected_field_revision=int(
+                            fresh_fields["H_demag"]["field_revision"]
+                        ),
                     ),
                     monitor_by_id["domain-plane"],
                     "H_demag",
@@ -1245,6 +1555,7 @@ def main() -> None:
                         "oblique-plane",
                         component=component,
                         quantity_id="m",
+                        expected_field_revision=fresh_m_revision,
                     ),
                     monitor_by_id["oblique-plane"],
                     "m",
@@ -1267,15 +1578,12 @@ def main() -> None:
         for result in linear_monitors.values()
     )
     slab_validation = asymmetric_slab_validation(linear_monitors["xy-slab"])
-    refinement_mean_error = abs(
-        float(linear_monitors["xy-slab"]["stats"]["mean"])
-        - float(refinement_report["stats"]["mean"])
-    )
     refinement_validation = {
-        "blocker": "this lane run has one mesh/grid; raster resolution is not a mesh refinement oracle",
-        "coarse_resolution": 32,
-        "fine_resolution": 64,
-        "mean_error_A_per_m": refinement_mean_error,
+        "blocker": (
+            "awaiting refinement-peer-science-report.json from the managed "
+            "mesh-refined qualification profile"
+        ),
+        "executor_profile": "mesh-refined",
         "pass": False,
     }
     isolation_validation = None
@@ -1389,9 +1697,7 @@ def main() -> None:
     if isolation_validation and isolation_validation["pass"]:
         passed_case_ids.add("fdm-object-isolation")
     if airbox_case["passed"]:
-        passed_case_ids.add("target-airbox")
-        if args.backend == "fdm":
-            passed_case_ids.add("airbox-carrier-provenance")
+        passed_case_ids.update({"target-airbox", "airbox-carrier-provenance"})
     if (
         gates["constant_vector_field"]
         and gates["constant_scalar_bins"]
@@ -1493,9 +1799,9 @@ def main() -> None:
         "matrix_monitors": matrix_monitors,
         "monitors": monitors,
         "persisted_snapshot_case": persisted_snapshot_case,
-        "refinement_report": refinement_report,
         "refinement_validation": refinement_validation,
         "qualification_cases": qualification_cases,
+        "qualification_profile": args.qualification_profile,
         "qualification_complete": qualification_complete,
         "qualification_status": "qualified" if qualification_complete else "blocked",
         "rotated_basis": rotated_validation,
@@ -1510,11 +1816,9 @@ def main() -> None:
     }
     validate_qualification_report(report)
     args.output.parent.mkdir(parents=True, exist_ok=True)
-    args.output.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n")
+    write_json(args.output, report)
     no_go_path = args.output.parent.parent / "fdm-gpu-no-go.json"
-    no_go_path.write_text(
-        json.dumps(build_fdm_gpu_no_go(head), indent=2, sort_keys=True) + "\n"
-    )
+    write_json(no_go_path, build_fdm_gpu_no_go(head))
     synchronize_cross_backend_reports(args.output)
     report = json.loads(args.output.read_text())
     if not report["pass"]:

@@ -9,6 +9,7 @@ import fullmag as fm
 
 NM = 1e-9
 SIZE = (80 * NM, 60 * NM, 20 * NM)
+QUALIFICATION_PROFILE = os.environ.get("FULLMAG_PLANAR_QUALIFICATION_PROFILE", "base")
 
 study = fm.study("viewport_2d_planar_monitor_fem_smoke")
 study.engine("fem")
@@ -16,14 +17,22 @@ study.device(os.environ.get("FULLMAG_PLANAR_DEVICE", "gpu"), precision="double")
 study.interactive(True)
 study.wait_for_solve(True)
 study.universe(mode="auto", size=(140 * NM, 120 * NM, 80 * NM), center=(0.0, 0.0, 0.0), padding=(0.0, 0.0, 0.0))
-study.universe.mesh(minimum_element_size=5 * NM, maximum_element_size=40 * NM)
+mesh_scale = 0.5 if QUALIFICATION_PROFILE == "mesh-refined" else 1.0
+study.universe.mesh(
+    minimum_element_size=5 * NM * mesh_scale,
+    maximum_element_size=40 * NM * mesh_scale,
+)
 
 film = study.geometry(fm.Box(size=SIZE, name="planar_film"), name="planar_film")
 film.Ms = 800e3
 film.Aex = 13e-12
 film.alpha = 0.1
 film.m = fm.texture.uniform(1.0, 0.0, 0.0)
-film.mesh(minimum_element_size=5 * NM, maximum_element_size=20 * NM, order=1)
+film.mesh(
+    minimum_element_size=5 * NM * mesh_scale,
+    maximum_element_size=20 * NM * mesh_scale,
+    order=1,
+)
 film.set_material_field(
     "Ms",
     fm.fields.linear(base=800e3, gradient=(1e12, 0.0, 2e12), unit="A/m"),

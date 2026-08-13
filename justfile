@@ -5137,15 +5137,17 @@ run-viewport-3d-mixed-target-smoke fem_execution="gpu" cpu_threads="auto" web_po
 run-viewport-3d-mixed-topology-smoke fem_execution="gpu" cpu_threads="auto" web_port="3195" api_port="8196":
     just _run-viewport-3d-browser-smoke "examples/viewport_3d_mixed_topology_smoke.py" "smoke:viewport-3d-mixed-topology" "viewport-3d-mixed-topology-smoke" "mixed-topology-smoke.log" "Viewport 3D mixed-topology smoke" "FULLMAG_VIEWPORT3D_MIXED_TOPOLOGY_MAX_STEPS" "50" "CONTROL_ROOM_MIXED_TOPOLOGY_SMOKE_TIMEOUT_MS" "180000" "{{fem_execution}}" "{{cpu_threads}}" "{{web_port}}" "{{api_port}}"
 
-run-viewport-2d-planar-monitor-smoke backend="fdm" device="cpu" web_port="3194" api_port="8194":
+run-viewport-2d-planar-monitor-smoke backend="fdm" device="cpu" web_port="3194" api_port="8194" qualification_profile="base":
     just ensure-python
     just ensure-managed-fem-runtime
     bash -euo pipefail -c '\
       backend="{{backend}}"; \
       device="{{device}}"; \
+      qualification_profile="{{qualification_profile}}"; \
       case "$backend" in fdm|fem) ;; *) echo "unsupported backend: $backend (expected fdm or fem)" >&2; exit 2 ;; esac; \
       case "$device" in cpu|gpu) ;; *) echo "unsupported device: $device (expected cpu or gpu)" >&2; exit 2 ;; esac; \
       if [ "$backend" = "fdm" ] && [ "$device" != "cpu" ]; then echo "the managed FDM planar smoke currently qualifies cpu only" >&2; exit 2; fi; \
+      case "$qualification_profile" in base|mesh-refined) ;; *) echo "unsupported qualification profile: $qualification_profile" >&2; exit 2 ;; esac; \
       if command -v pnpm >/dev/null 2>&1; then PNPM_CMD=pnpm; \
       elif command -v corepack >/dev/null 2>&1; then PNPM_CMD="corepack pnpm"; \
       else echo "pnpm or corepack not found on PATH" >&2; exit 127; fi; \
@@ -5154,7 +5156,7 @@ run-viewport-2d-planar-monitor-smoke backend="fdm" device="cpu" web_port="3194" 
       browser_dir="$report_dir/browser"; \
       runtime_log="$report_dir/runtime.log"; \
       browser_log="$report_dir/browser.log"; \
-      science_report="$report_dir/science-report.json"; \
+      if [ "$qualification_profile" = "base" ]; then science_report="$report_dir/science-report.json"; else science_report="$report_dir/refinement-peer-science-report.json"; fi; \
       mkdir -p "$browser_dir"; \
       sim_pid=""; \
       cleanup() { \
@@ -5166,6 +5168,7 @@ run-viewport-2d-planar-monitor-smoke backend="fdm" device="cpu" web_port="3194" 
       trap cleanup EXIT INT TERM; \
       FULLMAG_PYTHON="{{repo_python}}" \
       FULLMAG_PLANAR_DEVICE="$device" \
+      FULLMAG_PLANAR_QUALIFICATION_PROFILE="$qualification_profile" \
       FULLMAG_FDM_EXECUTION="$device" \
       FULLMAG_FEM_EXECUTION="$device" \
       FULLMAG_RELAX_DEVICE="$device" \
@@ -5188,23 +5191,41 @@ run-viewport-2d-planar-monitor-smoke backend="fdm" device="cpu" web_port="3194" 
       curl -fsS "$api_url/v2/sessions/current/model/planar-monitors" >/dev/null || { echo "planar API did not become ready; see $runtime_log" >&2; exit 1; }; \
       science_status=0; \
       "{{repo_python}}" scripts/analysis/validate_planar_monitor_sampling.py \
-        --api-base "$api_url" --backend "$backend" --device "$device" --output "$science_report" \
+        --api-base "$api_url" --backend "$backend" --device "$device" --output "$science_report" --qualification-profile "$qualification_profile" \
         || science_status=$?; \
       browser_status=0; \
-      CONTROL_ROOM_API_BASE_URL="$api_url" \
-      CONTROL_ROOM_URL="$web_url" \
-      CONTROL_ROOM_PLANAR_BACKEND="$backend" \
-      CONTROL_ROOM_PLANAR_OUTPUT_DIR="$browser_dir" \
-      $PNPM_CMD --dir apps/control-room smoke:viewport-2d | tee "$browser_log" \
-        || browser_status=$?; \
+      if [ "$qualification_profile" = "base" ]; then \
+        CONTROL_ROOM_API_BASE_URL="$api_url" \
+        CONTROL_ROOM_URL="$web_url" \
+        CONTROL_ROOM_PLANAR_BACKEND="$backend" \
+        CONTROL_ROOM_PLANAR_OUTPUT_DIR="$browser_dir" \
+        $PNPM_CMD --dir apps/control-room smoke:viewport-2d | tee "$browser_log" \
+          || browser_status=$?; \
+      fi; \
+      aggregate_status=0; \
+      "{{repo_python}}" scripts/analysis/validate_planar_monitor_sampling.py \
+        --aggregate-report-root "$(dirname "$report_dir")" \
+        || aggregate_status=$?; \
       printf "\nViewport 2D planar-monitor reports:\n"; \
       printf "  runtime: %s\n" "$runtime_log"; \
       printf "  browser: %s\n" "$browser_log"; \
       printf "  science: %s\n" "$science_report"; \
-      if [ "$science_status" -ne 0 ] || [ "$browser_status" -ne 0 ]; then \
-        echo "viewport 2D qualification blocked: science=$science_status browser=$browser_status" >&2; \
+      printf "  aggregate: %s\n" "$(dirname "$report_dir")/aggregate-report.json"; \
+      if [ "$science_status" -ne 0 ] || [ "$browser_status" -ne 0 ] || [ "$aggregate_status" -ne 0 ]; then \
+        echo "viewport 2D qualification blocked: science=$science_status browser=$browser_status aggregate=$aggregate_status" >&2; \
         exit 1; \
       fi'
+
+run-viewport-2d-planar-monitor-refinement-peer backend="fdm" device="cpu" web_port="3194" api_port="8194":
+    just run-viewport-2d-planar-monitor-smoke "{{backend}}" "{{device}}" "{{web_port}}" "{{api_port}}" mesh-refined
+
+verify-viewport-2d-planar-compact-full-contract:
+    docker compose --profile fem-gpu run --rm fem-gpu bash -lc 'cd /workspace && cargo test -p fullmag-api planar_sampling::target_tests::compact_fem_plane_and_slab_match_equivalent_full_carrier -- --exact'
+    mkdir -p .fullmag/reports/viewport-2d-planar-monitor-smoke
+    "{{repo_python}}" scripts/analysis/validate_planar_monitor_sampling.py --record-compact-full-contract .fullmag/reports/viewport-2d-planar-monitor-smoke/compact-full-contract-report.json
+
+aggregate-viewport-2d-planar-monitor-qualification:
+    "{{repo_python}}" scripts/analysis/validate_planar_monitor_sampling.py --aggregate-report-root .fullmag/reports/viewport-2d-planar-monitor-smoke
 
 run-permalloy-skyrmion-relax fem_execution="gpu":
     just run-permalloy-skyrmion-relax-interactive "{{fem_execution}}"

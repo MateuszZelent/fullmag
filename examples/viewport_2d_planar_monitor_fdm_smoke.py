@@ -9,6 +9,7 @@ import fullmag as fm
 
 NM = 1e-9
 SIZE = (80 * NM, 60 * NM, 20 * NM)
+QUALIFICATION_PROFILE = os.environ.get("FULLMAG_PLANAR_QUALIFICATION_PROFILE", "base")
 
 study = fm.study("viewport_2d_planar_monitor_fdm_smoke")
 study.engine("fdm")
@@ -16,7 +17,8 @@ study.device(os.environ.get("FULLMAG_PLANAR_DEVICE", "cpu"), precision="double")
 study.interactive(True)
 study.wait_for_solve(True)
 study.universe(mode="manual", size=(140 * NM, 60 * NM, 20 * NM), center=(12.5 * NM, 0.0, 0.0), padding=(0.0, 0.0, 0.0))
-study.cell(5 * NM, 5 * NM, 5 * NM)
+cell_size = 2.5 * NM if QUALIFICATION_PROFILE == "mesh-refined" else 5 * NM
+study.cell(cell_size, cell_size, cell_size)
 
 film = study.geometry(fm.Box(size=SIZE, name="planar_film"), name="planar_film")
 film.Ms = 800e3

@@ -247,6 +247,16 @@ async function main() {
     const run = await getJson("/v2/sessions/current/simulation/runs/current");
     const scienceReport = await readScienceReport();
     const currentGitHead = await gitHead();
+    const unsupportedRequiredLayers = {
+      blocker:
+        "Task 10 requires points and bounds layers, but the canonical planar layer schema exposes neither capability",
+      capability_status: {
+        bounds: "not_in_canonical_schema",
+        points: "not_in_canonical_schema",
+      },
+      pass: false,
+      status: "blocked",
+    };
     const runtimeBundleIdentity = {
       api_contract_version: status.api_contract_version,
       requested_backend: run.requested_backend,
@@ -284,6 +294,7 @@ async function main() {
       pass:
         scienceMatchesRuntime &&
         scienceReport.qualification_complete === true &&
+        unsupportedRequiredLayers.pass === true &&
         smokeEvidence.every((evidence) => evidence.status === "ready") &&
         qualificationCases.filter((entry) => entry.required).every((entry) => entry.passed),
       performance: performanceMetrics,
@@ -300,6 +311,7 @@ async function main() {
       runtime_bundle_identity: runtimeBundleIdentity,
       schema_version: "viewport-2d-browser-smoke-v2",
       switch_count: switchCount,
+      unsupported_required_layers: unsupportedRequiredLayers,
       worker_after: workerAfter,
       worker_baseline: workerBaseline,
     };
@@ -378,18 +390,20 @@ async function captureLayerCases(page, monitor, observedPlanarMeta) {
     });
   }
   cases.push({
+    applicable: false,
     case_id: "layer-bounds",
     blocker: "bounds is not a selectable layer in the canonical planar layer schema",
     passed: false,
-    required: true,
-    status: "unsupported",
+    required: false,
+    status: "not_applicable",
   });
   cases.push({
+    applicable: false,
     case_id: "layer-points",
     blocker: "points is unsupported by the canonical planar layer schema",
     passed: false,
-    required: true,
-    status: "unsupported",
+    required: false,
+    status: "not_applicable",
   });
   return cases;
 }
