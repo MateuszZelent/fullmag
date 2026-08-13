@@ -1041,3 +1041,23 @@ oraz trzy receptury runtime z zadania 10. Dla zmian React uruchomić także Reac
 Najbezpieczniejszy kierunek to nie „dokończenie obecnego 2D” punktowymi łatami, tylko kontrolowana migracja do wspólnego nośnika danych i jednego stanu prezentacji. A‑MuMax jest dobrym wzorem natychmiastowej obsługi, lecz nie wzorem naukowego modelu. Fullmag powinien zachować tę płynność i dodać to, czego A‑MuMax nie ma: trwałe, dowolnie zorientowane monitory, miarowo poprawne operatory, FEM, wiele targetów, provenance, precyzyjne Inspectory i osobną kwalifikację każdej lane.
 
 Pierwszym wdrażanym commitem powinien być test wykazujący fałszywie dodatni smoke oraz fixture compact FEM/multi-object FDM. Pierwszym commitem produkcyjnym — wspólny `ResolvedSpatialField`. Dopiero po przejściu tych dwóch bramek ma sens rozbudowa UI, ponieważ inaczej Inspector będzie sterował zasobem, którego poprawności nadal nie potrafimy dowieść.
+
+## 19. Ledger wykonania — stan na 2026-08-13
+
+Poniższy wpis aktualizuje stan wykonania planu; nie podnosi statusu żadnej lane do
+`qualified` bez świeżego dowodu managed runtime i browser/WebGL.
+
+| Obszar | Stan | Dowód / następna bramka |
+|---|---|---|
+| Audyt i kontrakt refaktoryzacji 2D | wykonane | niniejszy plan, macierz Task 10 i przeglądy Task 7–9 |
+| Harness kwalifikacyjny Task 10 | zaimplementowany, zreviewowany | branch `codex/viewport-2d-task10`, commit `c437e4197`, 31/31 testów; kwalifikacja runtime nadal `NO-GO` |
+| Source snapshot `.worktrees` | zintegrowane i przetestowane | commit `1497ffa20`, 25/25 testów capture/policy; materializacja i verify przechodzą, a managed preflight dociera do kolejnego etapu storage |
+| Managed native storage | blocker środowiskowy | `/mnt/fullmag-zfn2-native` jest zamontowane jako `ro`; po naprawie source identity `just ensure-managed-fem-runtime` zatrzymuje się na braku zapisu; nie wolno obchodzić receptur `just` hostowym buildem ani samodzielnym remountem |
+| Warstwy 2D `points` i `bounds` | zaimplementowane i zintegrowane | commit `b36fe10d7` w fast-forward `master` `7dd98795f`; canonical state/OpenAPI/migracja v7→v8/capability/render model/Inspector/evidence, focused Vitest 64/64 i typecheck PASS |
+| FDM wireframe/mesh | implementacja w toku | FDM nie może udawać FMCS v4; osobny proceduralny codec/grid z provenance i legalnością warstwy jest następną bramką |
+| Task 11 cutover | niewykonany | `fieldMapStore` jest orphanem, ale usunięcie wejść wymaga przejścia Task 10; compatibility `extract_*_field` i FEM slab nie są jeszcze orphanami |
+
+Status całego celu pozostaje częściowy. Integracja kontraktów i harnessu jest już na
+`masterze`, ale do zamknięcia nadal wymagane są: FDM wireframe, naprawa storage,
+trzy managed smoke FDM/FEM, browser/WebGL evidence, dowody naukowe każdej lane oraz
+dopiero potem cutover starych ścieżek.
