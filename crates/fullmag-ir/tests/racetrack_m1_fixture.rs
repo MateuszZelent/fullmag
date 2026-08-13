@@ -59,8 +59,8 @@ fn racetrack_expected_lowering_parses_with_current_problem_ir_types() {
         serde_json::from_value(lowering["validation_profile"].clone())
             .expect("validation_profile must parse as current ValidationProfileIR");
 
-    let current_wire = serde_json::to_value(&problem.current_modules[0])
-        .expect("current must serialize");
+    let current_wire =
+        serde_json::to_value(&problem.current_modules[0]).expect("current must serialize");
     assert_eq!(current_wire["kind"], "current_transport");
     assert_eq!(current_wire["model"], "ohmic_poisson");
     assert_eq!(current_wire["coupling"], "one_way");
@@ -71,18 +71,34 @@ fn racetrack_expected_lowering_parses_with_current_problem_ir_types() {
     assert_eq!(current_wire["boundaries"][0]["id"], "terminal_x_minus");
     assert_eq!(current_wire["boundaries"][1]["id"], "terminal_x_plus");
 
-    let spin_wire = serde_json::to_value(&problem.spin_transport_modules[0])
-        .expect("spin must serialize");
+    let spin_wire =
+        serde_json::to_value(&problem.spin_transport_modules[0]).expect("spin must serialize");
     assert_eq!(spin_wire["current_source_id"], "charge");
     assert_eq!(spin_wire["mode"], "steady");
+    assert_eq!(
+        spin_wire["interfaces"][0]["normal_surface"],
+        serde_json::json!({
+            "object_id": "hm",
+            "surface_id": "z+",
+            "orientation": [0.0, 0.0, 1.0]
+        })
+    );
+    assert_eq!(
+        spin_wire["interfaces"][0]["ferromagnet_surface"],
+        serde_json::json!({
+            "object_id": "fm",
+            "surface_id": "z-",
+            "orientation": [0.0, 0.0, -1.0]
+        })
+    );
     assert_eq!(spin_wire["requested_execution"]["device"], "gpu");
     assert_eq!(
         spin_wire["constitutive_version"],
         "transport_constitutive.one_way.fullmag.v1"
     );
 
-    let torque_wire = serde_json::to_value(&problem.spin_torque_modules[0])
-        .expect("torque must serialize");
+    let torque_wire =
+        serde_json::to_value(&problem.spin_torque_modules[0]).expect("torque must serialize");
     assert_eq!(torque_wire["kind"], "drift_diffusion_spin_torque");
     assert_eq!(torque_wire["solve_id"], "spin");
     assert_eq!(torque_wire["target"]["object_id"], "fm");
@@ -124,6 +140,48 @@ fn racetrack_expected_lowering_parses_with_current_problem_ir_types() {
             "execution_mode": "strict",
             "execution_precision": "double"
         })
+    );
+}
+
+#[test]
+fn native_m1_racetrack_rejects_a_missing_explicit_interface_surface() {
+    let mut lowering = fixture()["normalized_problem_ir_contract"]["expected_lowering"].clone();
+    lowering["spin_transport_modules"][0]["interfaces"][0]
+        .as_object_mut()
+        .expect("mixing interface object")
+        .remove("ferromagnet_surface");
+    let problem: ProblemIR =
+        serde_json::from_value(lowering).expect("legacy wire remains readable");
+
+    let errors = problem
+        .validate()
+        .expect_err("native_m1_v1 must reject a partial oriented interface");
+
+    assert!(
+        errors.iter().any(|error| {
+            error.contains("normal_surface and ferromagnet_surface")
+                && error.contains("native_m1_v1")
+        }),
+        "{errors:?}"
+    );
+}
+
+#[test]
+fn native_m1_racetrack_rejects_a_surface_selector_that_disagrees_with_its_orientation() {
+    let mut lowering = fixture()["normalized_problem_ir_contract"]["expected_lowering"].clone();
+    lowering["spin_transport_modules"][0]["interfaces"][0]["normal_surface"]["surface_id"] =
+        serde_json::json!("z-");
+    let problem: ProblemIR = serde_json::from_value(lowering).expect("wire must deserialize");
+
+    let errors = problem
+        .validate()
+        .expect_err("native_m1_v1 must bind the selector to its oriented surface");
+
+    assert!(
+        errors
+            .iter()
+            .any(|error| error.contains("normal_surface.surface_id must be 'z+'")),
+        "{errors:?}"
     );
 }
 

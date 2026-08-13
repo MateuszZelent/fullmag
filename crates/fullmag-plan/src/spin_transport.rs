@@ -2325,14 +2325,9 @@ fn materialize_fdm_descriptor(
         context,
         module.solver.engine == "native_m1_v1",
     )?;
-    let structured_current_closure = materialize_structured_current_closure(
-        problem,
-        charge,
-        &charge_active_cells,
-        context,
-    )?;
-    let spin_boundaries =
-        resolve_spin_boundaries(&module.boundaries, &spin_active_cells, context)?;
+    let structured_current_closure =
+        materialize_structured_current_closure(problem, charge, &charge_active_cells, context)?;
+    let spin_boundaries = resolve_spin_boundaries(&module.boundaries, &spin_active_cells, context)?;
     let interfaces = resolve_interfaces(module, context)?;
 
     let mut matching_torques = Vec::new();
@@ -2511,7 +2506,11 @@ pub(crate) fn materialize_fdm_gpu_charge_descriptor(
         &charge.solver,
         context.region_mask,
     ))
-    .map_err(|error| vec![format!("failed to serialize FDM GPU charge descriptor: {error}")])?;
+    .map_err(|error| {
+        vec![format!(
+            "failed to serialize FDM GPU charge descriptor: {error}"
+        )]
+    })?;
     let descriptor_sha256 = format!("sha256:{:x}", Sha256::digest(descriptor_payload));
 
     Ok(ResolvedFdmGpuChargeTransportIR {
@@ -2555,7 +2554,11 @@ fn materialize_structured_current_closure(
     let Some(closure) = charge.structured_current_closure.as_ref() else {
         return Ok(None);
     };
-    if problem.pbc.as_ref().is_some_and(|pbc| pbc.has_any_periodic()) {
+    if problem
+        .pbc
+        .as_ref()
+        .is_some_and(|pbc| pbc.has_any_periodic())
+    {
         return Err(vec![
             "structured current closure v1 requires open boundary conditions on every FDM axis"
                 .to_string(),
@@ -2566,11 +2569,8 @@ fn materialize_structured_current_closure(
         closure_id,
         source_cuts,
     } = closure;
-    let component_labels = connected_component_labels(
-        charge_active_cells,
-        context.grid_cells,
-        &BTreeSet::new(),
-    );
+    let component_labels =
+        connected_component_labels(charge_active_cells, context.grid_cells, &BTreeSet::new());
     let mut resolved = Vec::with_capacity(source_cuts.len());
     let mut cuts_per_component = BTreeMap::<u32, usize>::new();
     let mut all_cut_faces = BTreeSet::new();
@@ -2650,11 +2650,8 @@ fn materialize_structured_current_closure(
         )]);
     }
 
-    let return_labels = connected_component_labels(
-        charge_active_cells,
-        context.grid_cells,
-        &all_cut_faces,
-    );
+    let return_labels =
+        connected_component_labels(charge_active_cells, context.grid_cells, &all_cut_faces);
     for cut in &resolved {
         if cut.faces.iter().any(|face| {
             let negative = return_labels[face.negative_cell as usize];
@@ -2763,38 +2760,38 @@ fn connected_component_labels(
     labels
 }
 
-fn cell_neighbors(
-    cell: usize,
-    grid: [u32; 3],
-) -> Vec<(usize, StructuredInternalFaceIR)> {
+fn cell_neighbors(cell: usize, grid: [u32; 3]) -> Vec<(usize, StructuredInternalFaceIR)> {
     let coordinates = cell_coordinates(cell, grid);
     let strides = [1_usize, grid[0] as usize, (grid[0] * grid[1]) as usize];
     let mut neighbors = Vec::with_capacity(6);
     for axis in 0..3 {
         if coordinates[axis] > 0 {
             let neighbor = cell - strides[axis];
-            neighbors.push((neighbor, StructuredInternalFaceIR {
-                axis: axis as u8,
-                negative_cell: neighbor as u64,
-                positive_cell: cell as u64,
-            }));
+            neighbors.push((
+                neighbor,
+                StructuredInternalFaceIR {
+                    axis: axis as u8,
+                    negative_cell: neighbor as u64,
+                    positive_cell: cell as u64,
+                },
+            ));
         }
         if coordinates[axis] + 1 < grid[axis] {
             let neighbor = cell + strides[axis];
-            neighbors.push((neighbor, StructuredInternalFaceIR {
-                axis: axis as u8,
-                negative_cell: cell as u64,
-                positive_cell: neighbor as u64,
-            }));
+            neighbors.push((
+                neighbor,
+                StructuredInternalFaceIR {
+                    axis: axis as u8,
+                    negative_cell: cell as u64,
+                    positive_cell: neighbor as u64,
+                },
+            ));
         }
     }
     neighbors
 }
 
-fn structured_face_component_count(
-    faces: &[StructuredInternalFaceIR],
-    grid: [u32; 3],
-) -> usize {
+fn structured_face_component_count(faces: &[StructuredInternalFaceIR], grid: [u32; 3]) -> usize {
     let face_set = faces.iter().copied().collect::<BTreeSet<_>>();
     let mut remaining = face_set.clone();
     let mut components = 0;
@@ -3969,13 +3966,11 @@ mod tests {
                     offset_m,
                     normal: StructuredCutNormalIR::PositiveAxis,
                 },
-                drive: StructuredCurrentDriveIR::ImpressedPotentialJump(
-                    ImpressedPotentialJumpIR {
-                        schema_version: "impressed_potential_jump.v1".into(),
-                        drive_id: "drive-1".into(),
-                        potential_jump_v: 0.05,
-                    },
-                ),
+                drive: StructuredCurrentDriveIR::ImpressedPotentialJump(ImpressedPotentialJumpIR {
+                    schema_version: "impressed_potential_jump.v1".into(),
+                    drive_id: "drive-1".into(),
+                    potential_jump_v: 0.05,
+                }),
             }],
         }
     }
@@ -4091,7 +4086,10 @@ mod tests {
                 &context,
             )
             .expect_err("invalid source region must fail");
-            assert!(errors.iter().any(|error| error.contains(expected)), "{errors:?}");
+            assert!(
+                errors.iter().any(|error| error.contains(expected)),
+                "{errors:?}"
+            );
         }
     }
 
@@ -4130,7 +4128,9 @@ mod tests {
             &multi_arm_context,
         )
         .expect_err("disconnected arms on one plane must fail");
-        assert!(errors.iter().any(|error| error.contains("multiple disconnected")));
+        assert!(errors
+            .iter()
+            .any(|error| error.contains("multiple disconnected")));
 
         let mut open_problem = problem(ExecutionDevice::Cpu);
         set_structured_closure(
@@ -4203,6 +4203,8 @@ mod tests {
         region_ids.insert("ferro".into(), 1);
         let mut problem = reciprocal_problem(ExecutionDevice::Cpu);
         problem.spin_transport_modules[0].interfaces = vec![SpinInterfaceIR::MixingConductance {
+            normal_surface: None,
+            ferromagnet_surface: None,
             id: "sml".into(),
             normal_to_ferromagnet: [1.0, 0.0, 0.0],
             normal_side: RegionRefIR {
@@ -5236,6 +5238,8 @@ mod tests {
 
         let mut mixing = fem_problem();
         mixing.spin_transport_modules[0].interfaces = vec![SpinInterfaceIR::MixingConductance {
+            normal_surface: None,
+            ferromagnet_surface: None,
             id: "mix".into(),
             normal_to_ferromagnet: [1.0, 0.0, 0.0],
             normal_side: RegionRefIR {
@@ -5628,6 +5632,8 @@ mod tests {
         let mut sml = problem(ExecutionDevice::Cpu);
         sml.spin_transport_modules[0].solver.engine = "native_m1_v1".into();
         sml.spin_transport_modules[0].interfaces = vec![SpinInterfaceIR::MixingConductance {
+            normal_surface: None,
+            ferromagnet_surface: None,
             id: "sml".into(),
             normal_to_ferromagnet: [1.0, 0.0, 0.0],
             normal_side: RegionRefIR {

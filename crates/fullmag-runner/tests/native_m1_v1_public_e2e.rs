@@ -176,6 +176,16 @@ fn public_transport_problem(transparent: bool, native: bool) -> ProblemIR {
                 normal_to_ferromagnet: [1.0, 0.0, 0.0],
                 normal_side: region("normal"),
                 ferromagnet_side: region("ferromagnet"),
+                normal_surface: Some(fullmag_ir::SurfaceRefIR {
+                    object_id: "strip".into(),
+                    surface_id: "x+".into(),
+                    orientation: [1.0, 0.0, 0.0],
+                }),
+                ferromagnet_surface: Some(fullmag_ir::SurfaceRefIR {
+                    object_id: "strip".into(),
+                    surface_id: "x-".into(),
+                    orientation: [-1.0, 0.0, 0.0],
+                }),
                 g_up_spm2: 7.0e14,
                 g_down_spm2: 3.0e14,
                 g_r_spm2: 2.0e14,
@@ -341,13 +351,11 @@ fn public_closed_loop_oersted_problem() -> ProblemIR {
                 offset_m: -0.5e-9,
                 normal: StructuredCutNormalIR::PositiveAxis,
             },
-            drive: StructuredCurrentDriveIR::ImpressedPotentialJump(
-                ImpressedPotentialJumpIR {
-                    schema_version: "impressed_potential_jump.v1".into(),
-                    drive_id: "loop-drive".into(),
-                    potential_jump_v: 1.0e-3,
-                },
-            ),
+            drive: StructuredCurrentDriveIR::ImpressedPotentialJump(ImpressedPotentialJumpIR {
+                schema_version: "impressed_potential_jump.v1".into(),
+                drive_id: "loop-drive".into(),
+                potential_jump_v: 1.0e-3,
+            }),
         }],
     });
     problem.spin_transport_modules[0].domain = vec![whole_loop.clone()];

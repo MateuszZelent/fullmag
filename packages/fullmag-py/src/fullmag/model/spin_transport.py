@@ -237,17 +237,23 @@ class MixingConductanceSpinInterface:
     normal_to_ferromagnet: tuple[float, float, float]
     normal_side: RegionRef
     ferromagnet_side: RegionRef
+    normal_surface: SurfaceRef | None
+    ferromagnet_surface: SurfaceRef | None
     g_up_Spm2: float
     g_down_Spm2: float
     g_r_Spm2: float
     g_i_Spm2: float
     spin_memory_loss: SpinMemoryLossReservoir | None = None
 
-    def __init__(self, *, id: str, normal_to_ferromagnet: Sequence[float], normal_side: RegionRef, ferromagnet_side: RegionRef, g_up_Spm2: float, g_down_Spm2: float, g_r_Spm2: float, g_i_Spm2: float, spin_memory_loss: SpinMemoryLossReservoir | None = None) -> None:
+    def __init__(self, *, id: str, normal_to_ferromagnet: Sequence[float], normal_side: RegionRef, ferromagnet_side: RegionRef, g_up_Spm2: float, g_down_Spm2: float, g_r_Spm2: float, g_i_Spm2: float, normal_surface: SurfaceRef | None = None, ferromagnet_surface: SurfaceRef | None = None, spin_memory_loss: SpinMemoryLossReservoir | None = None) -> None:
         object.__setattr__(self, "id", require_non_empty(id, "id"))
         object.__setattr__(self, "normal_to_ferromagnet", _unit_vector(normal_to_ferromagnet, "normal_to_ferromagnet"))
         object.__setattr__(self, "normal_side", normal_side)
         object.__setattr__(self, "ferromagnet_side", ferromagnet_side)
+        if (normal_surface is None) != (ferromagnet_surface is None):
+            raise ValueError("normal_surface and ferromagnet_surface must be provided together")
+        object.__setattr__(self, "normal_surface", normal_surface)
+        object.__setattr__(self, "ferromagnet_surface", ferromagnet_surface)
         for name, value in (("g_up_Spm2", g_up_Spm2), ("g_down_Spm2", g_down_Spm2), ("g_r_Spm2", g_r_Spm2)):
             finite = require_finite(value, name)
             if finite < 0.0:
@@ -267,6 +273,9 @@ class MixingConductanceSpinInterface:
         }
         if self.spin_memory_loss is not None:
             value["spin_memory_loss"] = self.spin_memory_loss.to_ir()
+        if self.normal_surface is not None and self.ferromagnet_surface is not None:
+            value["normal_surface"] = self.normal_surface.to_ir()
+            value["ferromagnet_surface"] = self.ferromagnet_surface.to_ir()
         return value
 
 

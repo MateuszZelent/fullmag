@@ -287,6 +287,8 @@ def _racetrack_public_lowering() -> dict[str, object]:
                 normal_to_ferromagnet=interface["normal_to_ferromagnet"],
                 normal_side=hm,
                 ferromagnet_side=ferromagnet,
+                normal_surface=surface(interface["normal_surface"]),
+                ferromagnet_surface=surface(interface["ferromagnet_surface"]),
                 g_up_Spm2=2.5e14,
                 g_down_Spm2=2.5e14,
                 g_r_Spm2=5.0e14,

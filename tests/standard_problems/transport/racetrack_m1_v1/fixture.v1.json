@@ -607,6 +607,8 @@
             "normal_to_ferromagnet": [0.0, 0.0, 1.0],
             "normal_side": {"object_id": "hm"},
             "ferromagnet_side": {"object_id": "fm"},
+            "normal_surface": {"object_id": "hm", "surface_id": "z+", "orientation": [0.0, 0.0, 1.0]},
+            "ferromagnet_surface": {"object_id": "fm", "surface_id": "z-", "orientation": [0.0, 0.0, -1.0]},
             "g_up_Spm2": 250000000000000.0,
             "g_down_Spm2": 250000000000000.0,
             "g_r_Spm2": 500000000000000.0,

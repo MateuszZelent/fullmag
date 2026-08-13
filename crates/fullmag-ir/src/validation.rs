@@ -2114,6 +2114,11 @@ pub(crate) fn validate_spin_transport_modules(problem: &ProblemIR, errors: &mut 
         }
         for (interface_index, interface) in module.interfaces.iter().enumerate() {
             if let crate::SpinInterfaceIR::MixingConductance {
+                normal_to_ferromagnet,
+                normal_side,
+                ferromagnet_side,
+                normal_surface,
+                ferromagnet_surface,
                 g_up_spm2,
                 g_down_spm2,
                 g_r_spm2,
@@ -2125,6 +2130,75 @@ pub(crate) fn validate_spin_transport_modules(problem: &ProblemIR, errors: &mut 
             } = interface
             {
                 let interface_prefix = format!("{prefix}.interfaces[{interface_index}]");
+                match (normal_surface, ferromagnet_surface) {
+                    (Some(normal_surface), Some(ferromagnet_surface)) => {
+                        if normal_surface.object_id != normal_side.object_id {
+                            errors.push(format!(
+                                "{interface_prefix}.normal_surface.object_id must match normal_side.object_id"
+                            ));
+                        }
+                        if ferromagnet_surface.object_id != ferromagnet_side.object_id {
+                            errors.push(format!(
+                                "{interface_prefix}.ferromagnet_surface.object_id must match ferromagnet_side.object_id"
+                            ));
+                        }
+                        let tolerance = 1.0e-12;
+                        if normal_surface
+                            .orientation
+                            .iter()
+                            .zip(normal_to_ferromagnet)
+                            .any(|(actual, expected)| (actual - expected).abs() > tolerance)
+                        {
+                            errors.push(format!(
+                                "{interface_prefix}.normal_surface.orientation must equal normal_to_ferromagnet"
+                            ));
+                        }
+                        if ferromagnet_surface
+                            .orientation
+                            .iter()
+                            .zip(normal_to_ferromagnet)
+                            .any(|(actual, expected)| (actual + expected).abs() > tolerance)
+                        {
+                            errors.push(format!(
+                                "{interface_prefix}.ferromagnet_surface.orientation must equal -normal_to_ferromagnet"
+                            ));
+                        }
+                        let oriented_surface_id = |orientation: [f64; 3]| {
+                            orientation.iter().enumerate().find_map(|(axis, component)| {
+                                ((component.abs() - 1.0).abs() <= tolerance
+                                    && orientation
+                                        .iter()
+                                        .enumerate()
+                                        .all(|(other, value)| other == axis || value.abs() <= tolerance))
+                                .then(|| {
+                                    format!(
+                                        "{}{}",
+                                        ["x", "y", "z"][axis],
+                                        if *component > 0.0 { "+" } else { "-" }
+                                    )
+                                })
+                            })
+                        };
+                        if let Some(expected) = oriented_surface_id(normal_surface.orientation) {
+                            if normal_surface.surface_id != expected {
+                                errors.push(format!(
+                                    "{interface_prefix}.normal_surface.surface_id must be '{expected}' for its orientation"
+                                ));
+                            }
+                        }
+                        if let Some(expected) = oriented_surface_id(ferromagnet_surface.orientation) {
+                            if ferromagnet_surface.surface_id != expected {
+                                errors.push(format!(
+                                    "{interface_prefix}.ferromagnet_surface.surface_id must be '{expected}' for its orientation"
+                                ));
+                            }
+                        }
+                    }
+                    (None, None) if module.solver.engine != "native_m1_v1" => {}
+                    _ => errors.push(format!(
+                        "{interface_prefix} native_m1_v1 requires normal_surface and ferromagnet_surface together"
+                    )),
+                }
                 if formula_version != "magnetoelectronic.fullmag.v2" {
                     errors.push(format!(
                         "{interface_prefix}.formula_version must be magnetoelectronic.fullmag.v2; v1 is read-only"

@@ -235,6 +235,8 @@ class SpinDriftDiffusionAuthoringTests(unittest.TestCase):
             normal_to_ferromagnet=(0, 0, 1),
             normal_side=self.nm,
             ferromagnet_side=self.fm,
+            normal_surface=fm.SurfaceRef("stack", "z+", (0, 0, 1)),
+            ferromagnet_surface=fm.SurfaceRef("stack", "z-", (0, 0, -1)),
             g_up_Spm2=1.0e15,
             g_down_Spm2=0.5e15,
             g_r_Spm2=2.0e15,
@@ -244,12 +246,34 @@ class SpinDriftDiffusionAuthoringTests(unittest.TestCase):
         ir = interface.to_ir()
         self.assertEqual(ir["formula_version"], "magnetoelectronic.fullmag.v2")
         self.assertEqual(ir["normal_to_ferromagnet"], [0.0, 0.0, 1.0])
+        self.assertEqual(
+            ir["normal_surface"],
+            {"object_id": "stack", "surface_id": "z+", "orientation": [0.0, 0.0, 1.0]},
+        )
+        self.assertEqual(
+            ir["ferromagnet_surface"],
+            {"object_id": "stack", "surface_id": "z-", "orientation": [0.0, 0.0, -1.0]},
+        )
         self.assertEqual(ir["absorption"], "full_absorption")
         self.assertEqual(
             ir["spin_memory_loss"]["formula_version"],
             "sml_reservoir.fullmag.v2",
         )
         self.assertEqual(ir["spin_memory_loss"]["g_lattice_Spm2"], 0.4e15)
+
+    def test_mixing_interface_rejects_only_one_explicit_surface(self) -> None:
+        with self.assertRaisesRegex(ValueError, "normal_surface and ferromagnet_surface"):
+            fm.MixingConductanceSpinInterface(
+                id="mix",
+                normal_to_ferromagnet=(0, 0, 1),
+                normal_side=self.nm,
+                ferromagnet_side=self.fm,
+                normal_surface=fm.SurfaceRef("stack", "z+", (0, 0, 1)),
+                g_up_Spm2=1.0,
+                g_down_Spm2=1.0,
+                g_r_Spm2=1.0,
+                g_i_Spm2=0.0,
+            )
 
     def test_sml_reservoir_requires_positive_lattice_conductance(self) -> None:
         with self.assertRaisesRegex(ValueError, "g_lattice_Spm2"):

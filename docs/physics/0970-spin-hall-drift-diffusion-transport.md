@@ -701,6 +701,15 @@ Interfejs `hm_fm` ma `kind=mixing_conductance`, `normal_side=hm`,
 orientacji $+z$ i stronę FM `fm:z-` o orientacji $-z$. Sam wektor normalny bez
 tej pary stron i powierzchni nie jest kompletnym deskryptorem.
 
+Publiczny `MixingConductanceSpinInterface` zapisuje tę parę jako wymagane dla
+`native_m1_v1` pola `normal_surface` i `ferromagnet_surface`. Obie wartości są
+`SurfaceRef`, muszą występować razem, należeć odpowiednio do obiektów
+`normal_side` i `ferromagnet_side`, wskazywać przeciwne strony tej samej osi
+oraz mieć orientacje zgodne z `normal_to_ferromagnet` i
+`-normal_to_ferromagnet`. Starszy zapis bez powierzchni pozostaje czytelny dla
+innych, historycznych modeli, ale planner `native_m1_v1` odrzuca go przed
+materializacją deskryptora; nie rekonstruuje powierzchni wyłącznie z masek.
+
 Trzy maski używają tego samego kształtu i porządku komórek:
 
 | Maska | Aktywny zakres $z$ | Liczba aktywnych komórek | Własność |
@@ -818,6 +827,8 @@ oznacza przypisania zestawu jednemu materiałowi.
 | `interface.G_down` | $G_\downarrow$ | $\mathrm{S\,m^{-2}}$ | `2.5e14` | finite, $\ge0$ | `spin_transport_modules[0].interfaces[0].g_down_Spm2` | symmetric longitudinal branch |
 | `interface.G_r` | $G_r$ | $\mathrm{S\,m^{-2}}$ | `5e14` | finite, $\ge0$ | `spin_transport_modules[0].interfaces[0].g_r_Spm2` | damping-like branch coverage |
 | `interface.G_i` | $G_i$ | $\mathrm{S\,m^{-2}}$ | `5e13` | finite, signed | `spin_transport_modules[0].interfaces[0].g_i_Spm2` | field-like branch coverage |
+| `interface.normal_surface` | $\Gamma_N$ | $1$ | `hm:z+`, orientation `+z` | required by `native_m1_v1`; object must match `normal_side`; orientation must equal $\mathbf n$ | `spin_transport_modules[0].interfaces[0].normal_surface` | explicit HM trace ownership |
+| `interface.ferromagnet_surface` | $\Gamma_F$ | $1$ | `fm:z-`, orientation `-z` | required by `native_m1_v1`; object must match `ferromagnet_side`; orientation must equal $-\mathbf n$ | `spin_transport_modules[0].interfaces[0].ferromagnet_surface` | explicit FM trace ownership |
 | `drive.J_minus_1_5` | $J_x^{(-1.5)}$ | $\mathrm{A\,m^{-2}}$ | `-1.5e12` | balanced signed terminals | `current_modules[0].boundaries[1].outward_current_density_Apm2` | symmetric sweep; paired x-minus override is explicit in `current_schedule` |
 | `drive.J_minus_1_0` | $J_x^{(-1.0)}$ | $\mathrm{A\,m^{-2}}$ | `-1.0e12` | balanced signed terminals | `current_modules[0].boundaries[1].outward_current_density_Apm2` | symmetric sweep |
 | `drive.J_minus_0_5` | $J_x^{(-0.5)}$ | $\mathrm{A\,m^{-2}}$ | `-0.5e12` | balanced signed terminals | `current_modules[0].boundaries[1].outward_current_density_Apm2` | symmetric sweep |

@@ -2408,6 +2408,15 @@ def _render_spin_interface_payload(payload: object) -> str:
         f"normal_side={_render_region_ref_payload(entry.get('normal_side'))}",
         f"ferromagnet_side={_render_region_ref_payload(entry.get('ferromagnet_side'))}",
     ]
+    normal_surface = entry.get("normal_surface")
+    ferromagnet_surface = entry.get("ferromagnet_surface")
+    if (normal_surface is None) != (ferromagnet_surface is None):
+        raise ValueError("mixing-conductance interface requires both explicit surfaces or neither")
+    if normal_surface is not None:
+        kwargs.append(f"normal_surface={_render_surface_ref_payload(normal_surface)}")
+        kwargs.append(
+            f"ferromagnet_surface={_render_surface_ref_payload(ferromagnet_surface)}"
+        )
     for key in ("g_up_Spm2", "g_down_Spm2", "g_r_Spm2", "g_i_Spm2"):
         value = _number_or_none(entry.get(key))
         if value is None:

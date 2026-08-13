@@ -141,9 +141,7 @@ impl StructuredCurrentClosureIR {
         let mut circuit_ids = BTreeSet::new();
         let mut drive_ids = BTreeSet::new();
         for (index, cut) in source_cuts.iter().enumerate() {
-            let cut_path = format!(
-                "{path}.structured_current_closure.source_cuts[{index}]"
-            );
+            let cut_path = format!("{path}.structured_current_closure.source_cuts[{index}]");
             if cut.source_cut_id.trim().is_empty() {
                 errors.push(format!("{cut_path}.source_cut_id must not be empty"));
             } else if !cut_ids.insert(cut.source_cut_id.as_str()) {
@@ -369,6 +367,10 @@ pub enum SpinInterfaceIR {
         normal_to_ferromagnet: [f64; 3],
         normal_side: RegionRefIR,
         ferromagnet_side: RegionRefIR,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        normal_surface: Option<SurfaceRefIR>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        ferromagnet_surface: Option<SurfaceRefIR>,
         #[serde(rename = "g_up_Spm2")]
         g_up_spm2: f64,
         #[serde(rename = "g_down_Spm2")]
