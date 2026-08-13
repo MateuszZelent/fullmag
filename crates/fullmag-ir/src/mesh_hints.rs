@@ -333,6 +333,23 @@ impl<'de> Deserialize<'de> for FdmLayerPlanIR {
 /// The payload is intentionally integer-encoded so the planner and runner can
 /// hash identical layer geometry/mask facts without floating-point formatting.
 pub fn fdm_multilayer_topology_tokens(mode: &str, layers: &[FdmLayerPlanIR]) -> Vec<u32> {
+    fdm_multilayer_topology_tokens_impl(mode, layers, true)
+}
+
+/// Topology encoding emitted before multilayer plans carried region membership.
+/// It is retained only to verify and migrate persisted certificates.
+pub fn fdm_multilayer_topology_tokens_without_membership(
+    mode: &str,
+    layers: &[FdmLayerPlanIR],
+) -> Vec<u32> {
+    fdm_multilayer_topology_tokens_impl(mode, layers, false)
+}
+
+fn fdm_multilayer_topology_tokens_impl(
+    mode: &str,
+    layers: &[FdmLayerPlanIR],
+    include_membership: bool,
+) -> Vec<u32> {
     fn push_f64(tokens: &mut Vec<u32>, value: f64) {
         let bits = value.to_bits();
         tokens.push((bits >> 32) as u32);
@@ -373,24 +390,26 @@ pub fn fdm_multilayer_topology_tokens(mode: &str, layers: &[FdmLayerPlanIR]) -> 
             }
             None => tokens.push(u32::MAX),
         }
-        match layer.native_region_mask.as_deref() {
-            Some(mask) => {
-                tokens.push(mask.len() as u32);
-                tokens.extend(mask);
-            }
-            None => tokens.push(u32::MAX),
-        }
-        match layer.native_region_legend.as_deref() {
-            Some(legend) => {
-                tokens.push(legend.len() as u32);
-                for entry in legend {
-                    tokens.push(entry.numeric_id);
-                    push_text(&mut tokens, &entry.object_id);
-                    push_text(&mut tokens, &entry.region_id);
-                    tokens.push(entry.priority as u32);
+        if include_membership {
+            match layer.native_region_mask.as_deref() {
+                Some(mask) => {
+                    tokens.push(mask.len() as u32);
+                    tokens.extend(mask);
                 }
+                None => tokens.push(u32::MAX),
             }
-            None => tokens.push(u32::MAX),
+            match layer.native_region_legend.as_deref() {
+                Some(legend) => {
+                    tokens.push(legend.len() as u32);
+                    for entry in legend {
+                        tokens.push(entry.numeric_id);
+                        push_text(&mut tokens, &entry.object_id);
+                        push_text(&mut tokens, &entry.region_id);
+                        tokens.push(entry.priority as u32);
+                    }
+                }
+                None => tokens.push(u32::MAX),
+            }
         }
         tokens.extend(layer.convolution_grid);
         for value in layer.convolution_cell_size {
@@ -605,6 +624,19 @@ fn migrate_legacy_multilayer_plan_value(value: &mut Value) -> Result<(), String>
         Some("two_d_stack" | "three_d")
     );
     let legacy_certificate = legacy_layer_identity || legacy_summary_mode || legacy_top_level_mode;
+    let legacy_membership = !legacy_certificate
+        && value
+            .get("layers")
+            .and_then(Value::as_array)
+            .is_some_and(|layers| {
+                !layers.is_empty()
+                    && layers.iter().all(|layer| {
+                        layer.as_object().is_some_and(|object| {
+                            !object.contains_key("native_region_mask")
+                                && !object.contains_key("native_region_legend")
+                        })
+                    })
+            });
     match value.get("mode").and_then(Value::as_str) {
         Some("two_d_stack" | "three_d") => {}
         Some("multilayer_convolution" | "auto") | None => {}
@@ -655,7 +687,7 @@ fn migrate_legacy_multilayer_plan_value(value: &mut Value) -> Result<(), String>
         .entry("resolved_mode")
         .or_insert_with(|| Value::String(inferred_mode));
 
-    if legacy_certificate {
+    if legacy_certificate || legacy_membership {
         // The old certificate fingerprint did not include layer/object IDs or
         // the resolved mode.  Rebind only its fingerprint to the canonical
         // post-migration token payload, preserving certificate metadata and
@@ -675,6 +707,16 @@ fn migrate_legacy_multilayer_plan_value(value: &mut Value) -> Result<(), String>
                 .get("mode")
                 .and_then(Value::as_str)
                 .unwrap_or("three_d");
+            let legacy_tokens = if legacy_certificate {
+                fdm_multilayer_topology_tokens_legacy(&layers)
+            } else {
+                fdm_multilayer_topology_tokens_without_membership(mode, &layers)
+            };
+            certificate
+                .validate_against_topology_tokens(None, &legacy_tokens)
+                .map_err(|error| {
+                    format!("legacy multilayer certificate fingerprint mismatch: {error}")
+                })?;
             let tokens = fdm_multilayer_topology_tokens(mode, &layers);
             let rebound = crate::plan::FdmGridCertificateIR::new_with_topology_tokens(
                 certificate.origin_m,
@@ -810,6 +852,27 @@ impl FdmMultilayerPlanIR {
         let mut layer_ids = BTreeSet::new();
         let mut object_ids = BTreeSet::new();
         for (index, layer) in self.layers.iter().enumerate() {
+            let native_cell_count = match (layer.native_grid[0] as u64)
+                .checked_mul(layer.native_grid[1] as u64)
+                .and_then(|count| count.checked_mul(layer.native_grid[2] as u64))
+            {
+                Some(count) if count > 0 => count,
+                _ => {
+                    errors.push(format!(
+                        "fdm multilayer layer[{index}] native_grid must have a positive, representable cell product"
+                    ));
+                    continue;
+                }
+            };
+            let native_cell_count = match usize::try_from(native_cell_count) {
+                Ok(count) => count,
+                Err(_) => {
+                    errors.push(format!(
+                        "fdm multilayer layer[{index}] native_grid cell product is not addressable"
+                    ));
+                    continue;
+                }
+            };
             if layer.layer_id.trim().is_empty() {
                 errors.push(format!(
                     "fdm multilayer layer[{index}] has an empty layer_id"
@@ -839,6 +902,84 @@ impl FdmMultilayerPlanIR {
                 errors.push(format!(
                     "fdm multilayer layer[{index}] transfer_kind '{}' is unsupported",
                     layer.transfer_kind
+                ));
+            }
+            if let Some(active_mask) = layer.native_active_mask.as_deref() {
+                if active_mask.len() != native_cell_count {
+                    errors.push(format!(
+                        "fdm multilayer layer[{index}] native_active_mask length {} does not match native grid cell count {native_cell_count}",
+                        active_mask.len()
+                    ));
+                }
+            }
+            if let Some(region_mask) = layer.native_region_mask.as_deref() {
+                if region_mask.len() != native_cell_count {
+                    errors.push(format!(
+                        "fdm multilayer layer[{index}] native_region_mask length {} does not match native grid cell count {native_cell_count}",
+                        region_mask.len()
+                    ));
+                }
+            }
+
+            let mut legend_ids = BTreeSet::new();
+            if let Some(legend) = layer.native_region_legend.as_deref() {
+                for entry in legend {
+                    if entry.numeric_id == 0 || entry.numeric_id > crate::MAX_FDM_REGION_IDS {
+                        errors.push(format!(
+                            "fdm multilayer layer[{index}] native_region_legend numeric_id {} is outside 1..={}",
+                            entry.numeric_id,
+                            crate::MAX_FDM_REGION_IDS
+                        ));
+                    }
+                    if !legend_ids.insert(entry.numeric_id) {
+                        errors.push(format!(
+                            "fdm multilayer layer[{index}] native_region_legend has duplicate numeric_id {}",
+                            entry.numeric_id
+                        ));
+                    }
+                    if entry.object_id.trim().is_empty() || entry.region_id.trim().is_empty() {
+                        errors.push(format!(
+                            "fdm multilayer layer[{index}] native_region_legend entry {} must include object_id and region_id",
+                            entry.numeric_id
+                        ));
+                    }
+                }
+            }
+            if let Some(region_mask) = layer.native_region_mask.as_deref() {
+                for region_id in region_mask.iter().copied().filter(|id| *id != 0) {
+                    if !legend_ids.contains(&region_id) {
+                        errors.push(format!(
+                            "fdm multilayer layer[{index}] native_region_mask numeric ID {region_id} has no legend entry"
+                        ));
+                    }
+                }
+                if let Some(active_mask) = layer.native_active_mask.as_deref() {
+                    if active_mask.len() == region_mask.len()
+                        && active_mask
+                            .iter()
+                            .zip(region_mask)
+                            .any(|(active, region_id)| !active && *region_id != 0)
+                    {
+                        errors.push(format!(
+                            "fdm multilayer layer[{index}] native_region_mask assigns a region to an inactive cell"
+                        ));
+                    }
+                }
+            } else if layer
+                .native_region_legend
+                .as_deref()
+                .is_some_and(|legend| !legend.is_empty())
+            {
+                errors.push(format!(
+                    "fdm multilayer layer[{index}] native_region_legend requires native_region_mask"
+                ));
+            }
+        }
+        if let Some(certificate) = self.grid_certificate.as_ref() {
+            let tokens = fdm_multilayer_topology_tokens(&self.mode, &self.layers);
+            if let Err(error) = certificate.validate_against_topology_tokens(None, &tokens) {
+                errors.push(format!(
+                    "fdm multilayer grid_certificate does not match resolved topology: {error}"
                 ));
             }
         }
@@ -1004,10 +1145,163 @@ mod multilayer_contract_tests {
     }
 
     #[test]
+    fn legacy_membership_absence_rebinds_a_pre_membership_fingerprint_without_changing_identity_or_mode(
+    ) {
+        let mut plan = legacy_plan_fixture();
+        plan.mode = "three_d".to_string();
+        plan.planner_summary.resolved_mode = "three_d".to_string();
+        plan.planner_summary.requested_mode = "three_d".to_string();
+        plan.layers[0].layer_id = "layer:authored-free".to_string();
+        plan.layers[0].object_id = "object:authored-free".to_string();
+        let legacy_tokens =
+            fdm_multilayer_topology_tokens_without_membership("three_d", &plan.layers);
+        plan.grid_certificate = Some(
+            FdmGridCertificateIR::new_with_topology_tokens(
+                [0.0, 0.0, 0.0],
+                [2, 1, 2],
+                [1.0, 1.0, 1.0],
+                4,
+                128,
+                None,
+                &legacy_tokens,
+            )
+            .expect("pre-membership certificate"),
+        );
+        let mut value = serde_json::to_value(plan).expect("plan serializes");
+        for layer in value["layers"].as_array_mut().expect("layers") {
+            let layer = layer.as_object_mut().expect("layer object");
+            layer.remove("native_region_mask");
+            layer.remove("native_region_legend");
+        }
+
+        let decoded: FdmMultilayerPlanIR =
+            serde_json::from_value(value).expect("pre-membership payload migrates");
+        let certificate = decoded.grid_certificate.expect("certificate");
+        let expected = FdmGridCertificateIR::new_with_topology_tokens(
+            certificate.origin_m,
+            certificate.counts,
+            certificate.cell_m,
+            certificate.active_cells,
+            certificate.estimated_bytes,
+            None,
+            &fdm_multilayer_topology_tokens("three_d", &decoded.layers),
+        )
+        .expect("current certificate");
+        assert_eq!(certificate.grid_fingerprint, expected.grid_fingerprint);
+        assert!(decoded.layers.iter().all(|layer| {
+            layer.native_region_mask.is_none() && layer.native_region_legend.is_none()
+        }));
+        assert_eq!(decoded.mode, "three_d");
+        assert_eq!(decoded.planner_summary.requested_mode, "three_d");
+        assert_eq!(decoded.planner_summary.resolved_mode, "three_d");
+        assert_eq!(decoded.layers[0].layer_id, "layer:authored-free");
+        assert_eq!(decoded.layers[0].object_id, "object:authored-free");
+    }
+
+    #[test]
+    fn plan_wire_rejects_membership_and_active_mask_contract_violations() {
+        let cases = [
+            (
+                "region_mask_length",
+                serde_json::json!({"native_region_mask": [0, 0, 0]}),
+                "native_region_mask length",
+            ),
+            (
+                "active_mask_length",
+                serde_json::json!({"native_active_mask": [true, true, true]}),
+                "native_active_mask length",
+            ),
+            (
+                "unknown_region_id",
+                serde_json::json!({
+                    "native_region_mask": [1, 0, 0, 0],
+                    "native_region_legend": [],
+                }),
+                "has no legend entry",
+            ),
+            (
+                "duplicate_legend_id",
+                serde_json::json!({
+                    "native_region_mask": [1, 0, 0, 0],
+                    "native_region_legend": [
+                        {"numeric_id": 1, "object_id": "free", "region_id": "free:a", "priority": 0},
+                        {"numeric_id": 1, "object_id": "free", "region_id": "free:b", "priority": 0},
+                    ],
+                }),
+                "duplicate numeric_id",
+            ),
+            (
+                "inactive_region_cell",
+                serde_json::json!({
+                    "native_active_mask": [false, true, true, true],
+                    "native_region_mask": [1, 0, 0, 0],
+                    "native_region_legend": [
+                        {"numeric_id": 1, "object_id": "free", "region_id": "free:core", "priority": 0}
+                    ],
+                }),
+                "assigns a region to an inactive cell",
+            ),
+        ];
+        for (name, replacement, expected) in cases {
+            let mut value =
+                serde_json::to_value(legacy_plan_fixture()).expect("fixture serializes");
+            value["mode"] = Value::String("three_d".to_string());
+            value["planner_summary"]["resolved_mode"] = Value::String("three_d".to_string());
+            value
+                .as_object_mut()
+                .expect("plan object")
+                .remove("grid_certificate");
+            let layer = value["layers"][0].as_object_mut().expect("layer object");
+            for (key, value) in replacement.as_object().expect("replacement object") {
+                layer.insert(key.clone(), value.clone());
+            }
+            let error = serde_json::from_value::<FdmMultilayerPlanIR>(value)
+                .expect_err("{name} must fail closed");
+            assert!(error.to_string().contains(expected), "{name}: {error}");
+        }
+
+        let mut value = serde_json::to_value(legacy_plan_fixture()).expect("fixture serializes");
+        value["mode"] = Value::String("three_d".to_string());
+        value["planner_summary"]["resolved_mode"] = Value::String("three_d".to_string());
+        value
+            .as_object_mut()
+            .expect("plan object")
+            .remove("grid_certificate");
+        let layer = value["layers"][0].as_object_mut().expect("layer object");
+        layer.remove("native_region_mask");
+        layer.insert(
+            "native_region_legend".to_string(),
+            serde_json::json!([
+                {"numeric_id": 1, "object_id": "free", "region_id": "free:core", "priority": 0}
+            ]),
+        );
+        let error = serde_json::from_value::<FdmMultilayerPlanIR>(value)
+            .expect_err("legend without a mask must fail closed");
+        assert!(error
+            .to_string()
+            .contains("native_region_legend requires native_region_mask"));
+    }
+
+    #[test]
+    fn plan_wire_rejects_current_payload_with_forged_topology_fingerprint() {
+        let mut value = serde_json::to_value(legacy_plan_fixture()).expect("fixture serializes");
+        value["mode"] = Value::String("three_d".to_string());
+        value["planner_summary"]["resolved_mode"] = Value::String("three_d".to_string());
+        value["grid_certificate"]["grid_fingerprint"] = Value::String("0".repeat(64));
+        let error = serde_json::from_value::<FdmMultilayerPlanIR>(value)
+            .expect_err("current payload fingerprint mismatch must fail closed");
+        assert!(error.to_string().contains("fingerprint mismatch"));
+    }
+
+    #[test]
     fn plan_wire_rejects_unknown_transfer_kind() {
         let mut value = serde_json::to_value(legacy_plan_fixture()).expect("fixture serializes");
         value["mode"] = Value::String("three_d".to_string());
         value["planner_summary"]["resolved_mode"] = Value::String("three_d".to_string());
+        value
+            .as_object_mut()
+            .expect("plan object")
+            .remove("grid_certificate");
         value["layers"][0]["transfer_kind"] = Value::String("nearest".to_string());
         let error = serde_json::from_value::<FdmMultilayerPlanIR>(value)
             .expect_err("unknown transfer kind must fail closed");
@@ -1021,6 +1315,10 @@ mod multilayer_contract_tests {
         value["common_cells"] = serde_json::json!([2, 1, 2]);
         value["planner_summary"]["requested_mode"] = Value::String("two_d_stack".to_string());
         value["planner_summary"]["resolved_mode"] = Value::String("two_d_stack".to_string());
+        value
+            .as_object_mut()
+            .expect("plan object")
+            .remove("grid_certificate");
         value["layers"][0]["native_grid"] = serde_json::json!([2, 1, 2]);
         let error = serde_json::from_value::<FdmMultilayerPlanIR>(value)
             .expect_err("forged two-dimensional thickness must fail closed");

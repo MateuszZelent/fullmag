@@ -1,0 +1,47 @@
+{
+  "document": {"path": "docs/physics/0422-fdm-multilayer-material-membership.md"},
+  "backend_matrix": [
+    {"solver": "FDM", "device": "CPU", "status": "implemented", "qualification": "not production-qualified", "scope": "per-layer material fields and membership contract"},
+    {"solver": "FDM", "device": "GPU", "status": "unsupported", "reason": "heterogeneous multilayer device parity is not qualified"},
+    {"solver": "FEM", "device": "CPU", "status": "not-applicable", "reason": "FEM uses the shared-domain carrier and a separate coefficient realization"},
+    {"solver": "FEM", "device": "GPU", "status": "not-applicable", "reason": "FEM uses the shared-domain carrier and a separate coefficient realization"}
+  ],
+  "equations": [
+    {"id": "eq-multilayer-material-magnetization", "symbols": ["M_k", "Ms_k", "m_k"], "sources": ["layerPlan", "materialResolution"]},
+    {"id": "eq-multilayer-material-exchange", "symbols": ["H_ex", "mu0", "Ms_k_i", "V_k_i", "A_k_ij", "S_k_ij", "d_k_ij"], "sources": ["materialResolution"]},
+    {"id": "eq-multilayer-material-demag-source", "symbols": ["H_d", "N_k_s", "Ms_s_j", "m_s_j", "V_s_j"], "sources": ["layerPlan"]},
+    {"id": "eq-multilayer-material-monitor-membership", "symbols": ["q_T_b", "w_k_i", "T"], "sources": ["membership"]}
+  ],
+  "symbols": [
+    {"id": "m_k", "latex": "\\mathbf m_k", "meaning": "zredukowana magnetyzacja warstwy", "si_unit": "1"},
+    {"id": "M_k", "latex": "\\mathbf M_k", "meaning": "fizyczna magnetyzacja warstwy", "si_unit": "\\mathrm{A\\,m^{-1}}"},
+    {"id": "Ms_k", "latex": "M_{s,k}(\\mathbf r)", "meaning": "nasycenie w punkcie $\\mathbf r$ warstwy $k$", "si_unit": "\\mathrm{A\\,m^{-1}}"},
+    {"id": "Ms_k_i", "latex": "M_{s,k,i}", "meaning": "nasycenie w komórce $i$ warstwy $k$", "si_unit": "\\mathrm{A\\,m^{-1}}"},
+    {"id": "H_ex", "latex": "\\mathbf H_{\\mathrm ex,k,i}", "meaning": "lokalne pole wymiany", "si_unit": "\\mathrm{A\\,m^{-1}}"},
+    {"id": "mu0", "latex": "\\mu_0", "meaning": "przenikalność magnetyczna próżni", "si_unit": "\\mathrm{N\\,A^{-2}}"},
+    {"id": "S_k_ij", "latex": "S_{k,ij}", "meaning": "pole ściany wymiany", "si_unit": "\\mathrm{m^2}"},
+    {"id": "d_k_ij", "latex": "d_{k,ij}", "meaning": "odległość środków komórek", "si_unit": "\\mathrm{m}"},
+    {"id": "A_k_ij", "latex": "A_{k,ij}", "meaning": "współczynnik wymiany na ścianie", "si_unit": "\\mathrm{J\\,m^{-1}}"},
+    {"id": "alpha_k", "latex": "\\alpha_{k,i}", "meaning": "tłumienie Gilberta", "si_unit": "1"},
+    {"id": "V_k_i", "latex": "V_{k,i}", "meaning": "objętość komórki", "si_unit": "\\mathrm{m^3}"},
+    {"id": "H_d", "latex": "\\mathbf H_{\\mathrm d,k,i}", "meaning": "lokalne pole demagnetyzacji", "si_unit": "\\mathrm{A\\,m^{-1}}"},
+    {"id": "N_k_s", "latex": "\\mathsf N_{k\\leftarrow s}", "meaning": "tensor demagnetyzacji pary warstw", "si_unit": "1"},
+    {"id": "Ms_s_j", "latex": "M_{s,s,j}", "meaning": "Ms komórki źródłowej", "si_unit": "\\mathrm{A\\,m^{-1}}"},
+    {"id": "m_s_j", "latex": "\\mathbf m_{s,j}", "meaning": "magnetyzacja zredukowana źródła", "si_unit": "1"},
+    {"id": "V_s_j", "latex": "V_{s,j}", "meaning": "objętość komórki źródłowej", "si_unit": "\\mathrm{m^3}"},
+    {"id": "q_T_b", "latex": "q_{T,b}", "meaning": "zredukowana wartość w binie monitora", "si_unit": "1"},
+    {"id": "w_k_i", "latex": "w_{k,i}", "meaning": "waga redukcji monitora", "si_unit": "1"},
+    {"id": "T", "latex": "T", "meaning": "wybrany target monitora", "si_unit": "1"}
+  ],
+  "sources": [
+    {"id": "layerPlan", "path": "crates/fullmag-ir/src/mesh_hints.rs", "symbol": "fdm_multilayer_topology_tokens", "responsibility": "warstwa, identyfikator i fingerprint natywnej siatki"},
+    {"id": "materialResolution", "path": "crates/fullmag-plan/src/material.rs", "symbol": "resolve_spatial_parameter", "responsibility": "plannerowe rozwiązywanie współczynników per-cell"},
+    {"id": "membership", "path": "crates/fullmag-plan/src/fdm.rs", "symbol": "materialize_object_region_mask", "responsibility": "plannerowa maska regionu w układzie obiektu"}
+  ],
+  "public_api": {
+    "parameters": [
+      {"python": "Ferromagnet.set_material_field(\"Ms\", field)", "type": "MaterialParameterField", "default": "none", "si_unit": "\\mathrm{A\\,m^{-1}}", "validation": "finite positive resolved Ms", "meaning": "przestrzenna wartość $M_s$", "backend_support": "FDM CPU reference; GPU unqualified", "problem_ir": "material_parameter_fields[]"},
+      {"python": "Ferromagnet.add_region(..., region_id=...)", "type": "ObjectRegion", "default": "none", "si_unit": "1", "validation": "supported shape and `frame=\"object\"`", "meaning": "selector obiektu/regionu", "backend_support": "FDM CPU reference; GPU unqualified", "problem_ir": "object_regions[]"}
+    ]
+  }
+}

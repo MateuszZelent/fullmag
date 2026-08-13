@@ -132,6 +132,249 @@ fn grid_sample_points(
     points
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum BodyOverlap {
+    Disjoint,
+    Overlapping,
+    Indeterminate,
+}
+
+fn positive_interval_overlap(left: (f64, f64), right: (f64, f64)) -> bool {
+    left.0 < right.1 && right.0 < left.1
+}
+
+fn native_bounds_overlap(left: &LoweredBody, right: &LoweredBody) -> bool {
+    (0..3).all(|axis| {
+        positive_interval_overlap(
+            (
+                left.native_origin[axis],
+                left.native_origin[axis] + left.bounding_size[axis],
+            ),
+            (
+                right.native_origin[axis],
+                right.native_origin[axis] + right.bounding_size[axis],
+            ),
+        )
+    })
+}
+
+fn is_z_axis(axis: [f64; 3]) -> bool {
+    axis[0].abs() <= 64.0 * f64::EPSILON
+        && axis[1].abs() <= 64.0 * f64::EPSILON
+        && (axis[2].abs() - 1.0).abs() <= 64.0 * f64::EPSILON
+}
+
+fn squared_distance_to_interval(value: f64, interval: (f64, f64)) -> f64 {
+    if value < interval.0 {
+        (interval.0 - value).powi(2)
+    } else if value > interval.1 {
+        (value - interval.1).powi(2)
+    } else {
+        0.0
+    }
+}
+
+fn rectangle_circle_overlap(
+    rectangle_center: [f64; 3],
+    rectangle_size: [f64; 3],
+    circle_center: [f64; 3],
+    radius: f64,
+) -> bool {
+    let dx = squared_distance_to_interval(
+        circle_center[0],
+        (
+            rectangle_center[0] - rectangle_size[0] * 0.5,
+            rectangle_center[0] + rectangle_size[0] * 0.5,
+        ),
+    );
+    let dy = squared_distance_to_interval(
+        circle_center[1],
+        (
+            rectangle_center[1] - rectangle_size[1] * 0.5,
+            rectangle_center[1] + rectangle_size[1] * 0.5,
+        ),
+    );
+    dx + dy < radius * radius
+}
+
+fn multilayer_body_overlap(left: &LoweredBody, right: &LoweredBody) -> BodyOverlap {
+    if !native_bounds_overlap(left, right) {
+        return BodyOverlap::Disjoint;
+    }
+    let left_shape = &left.overlap_geometry.shape;
+    let right_shape = &right.overlap_geometry.shape;
+    let left_center = left.overlap_geometry.translation;
+    let right_center = right.overlap_geometry.translation;
+    match (left_shape, right_shape) {
+        (GeometryShape::Box { size: left_size }, GeometryShape::Box { size: right_size }) => {
+            let overlaps = (0..3).all(|axis| {
+                positive_interval_overlap(
+                    (
+                        left_center[axis] - left_size[axis] * 0.5,
+                        left_center[axis] + left_size[axis] * 0.5,
+                    ),
+                    (
+                        right_center[axis] - right_size[axis] * 0.5,
+                        right_center[axis] + right_size[axis] * 0.5,
+                    ),
+                )
+            });
+            if overlaps {
+                BodyOverlap::Overlapping
+            } else {
+                BodyOverlap::Disjoint
+            }
+        }
+        (
+            GeometryShape::Sphere {
+                radius: left_radius,
+            },
+            GeometryShape::Sphere {
+                radius: right_radius,
+            },
+        ) => {
+            let squared_distance = (0..3)
+                .map(|axis| (left_center[axis] - right_center[axis]).powi(2))
+                .sum::<f64>();
+            if squared_distance < (left_radius + right_radius).powi(2) {
+                BodyOverlap::Overlapping
+            } else {
+                BodyOverlap::Disjoint
+            }
+        }
+        (GeometryShape::Box { size }, GeometryShape::Sphere { radius })
+        | (GeometryShape::Sphere { radius }, GeometryShape::Box { size }) => {
+            let (box_center, sphere_center) = if matches!(left_shape, GeometryShape::Box { .. }) {
+                (left_center, right_center)
+            } else {
+                (right_center, left_center)
+            };
+            let squared_distance = (0..3)
+                .map(|axis| {
+                    squared_distance_to_interval(
+                        sphere_center[axis],
+                        (
+                            box_center[axis] - size[axis] * 0.5,
+                            box_center[axis] + size[axis] * 0.5,
+                        ),
+                    )
+                })
+                .sum::<f64>();
+            if squared_distance < radius.powi(2) {
+                BodyOverlap::Overlapping
+            } else {
+                BodyOverlap::Disjoint
+            }
+        }
+        (
+            GeometryShape::Cylinder {
+                radius: left_radius,
+                height: left_height,
+                axis: left_axis,
+            },
+            GeometryShape::Cylinder {
+                radius: right_radius,
+                height: right_height,
+                axis: right_axis,
+            },
+        ) if is_z_axis(*left_axis) && is_z_axis(*right_axis) => {
+            if !positive_interval_overlap(
+                (
+                    left_center[2] - left_height * 0.5,
+                    left_center[2] + left_height * 0.5,
+                ),
+                (
+                    right_center[2] - right_height * 0.5,
+                    right_center[2] + right_height * 0.5,
+                ),
+            ) {
+                return BodyOverlap::Disjoint;
+            }
+            let squared_xy_distance = (left_center[0] - right_center[0]).powi(2)
+                + (left_center[1] - right_center[1]).powi(2);
+            if squared_xy_distance < (left_radius + right_radius).powi(2) {
+                BodyOverlap::Overlapping
+            } else {
+                BodyOverlap::Disjoint
+            }
+        }
+        (
+            GeometryShape::Box { size },
+            GeometryShape::Cylinder {
+                radius,
+                height,
+                axis,
+            },
+        )
+        | (
+            GeometryShape::Cylinder {
+                radius,
+                height,
+                axis,
+            },
+            GeometryShape::Box { size },
+        ) if is_z_axis(*axis) => {
+            let (box_center, cylinder_center) = if matches!(left_shape, GeometryShape::Box { .. }) {
+                (left_center, right_center)
+            } else {
+                (right_center, left_center)
+            };
+            let z_overlaps = positive_interval_overlap(
+                (box_center[2] - size[2] * 0.5, box_center[2] + size[2] * 0.5),
+                (
+                    cylinder_center[2] - height * 0.5,
+                    cylinder_center[2] + height * 0.5,
+                ),
+            );
+            if z_overlaps && rectangle_circle_overlap(box_center, *size, cylinder_center, *radius) {
+                BodyOverlap::Overlapping
+            } else {
+                BodyOverlap::Disjoint
+            }
+        }
+        (
+            GeometryShape::Sphere {
+                radius: sphere_radius,
+            },
+            GeometryShape::Cylinder {
+                radius,
+                height,
+                axis,
+            },
+        )
+        | (
+            GeometryShape::Cylinder {
+                radius,
+                height,
+                axis,
+            },
+            GeometryShape::Sphere {
+                radius: sphere_radius,
+            },
+        ) if is_z_axis(*axis) => {
+            let (sphere_center, cylinder_center) =
+                if matches!(left_shape, GeometryShape::Sphere { .. }) {
+                    (left_center, right_center)
+                } else {
+                    (right_center, left_center)
+                };
+            let radial_distance = ((sphere_center[0] - cylinder_center[0]).powi(2)
+                + (sphere_center[1] - cylinder_center[1]).powi(2))
+            .sqrt()
+                - radius;
+            let axial_distance = (sphere_center[2] - cylinder_center[2]).abs() - height * 0.5;
+            let squared_distance =
+                radial_distance.max(0.0).powi(2) + axial_distance.max(0.0).powi(2);
+            if squared_distance < sphere_radius.powi(2) {
+                BodyOverlap::Overlapping
+            } else {
+                BodyOverlap::Disjoint
+            }
+        }
+        _ => BodyOverlap::Indeterminate,
+    }
+}
+
 /// Restrict a precomputed geometry asset to the smallest Cartesian grid that
 /// contains its active support.  A study-universe asset may intentionally be
 /// expanded to the full target-only Airbox; that grid is not the native
@@ -1333,6 +1576,10 @@ pub(crate) fn plan_fdm(
             "Cylinder (r={:.3e}) voxelized to {}x{}x{} grid, {}/{} active cells",
             radius, grid_cells[0], grid_cells[1], grid_cells[2], active_count, n_cells
         ),
+        GeometryShape::Sphere { radius } => format!(
+            "Sphere (r={:.3e}) voxelized to {}x{}x{} grid, {}/{} active cells",
+            radius, grid_cells[0], grid_cells[1], grid_cells[2], active_count, n_cells
+        ),
         GeometryShape::SinWaveguide {
             period,
             amplitude,
@@ -2460,16 +2707,11 @@ pub(crate) fn plan_fdm_multilayer(
                     "multilayer FDM resolved {label} field contains non-finite or physically invalid values"
                 ));
             }
-            Ok(
-                if values
-                    .iter()
-                    .all(|value| (*value - base_value).abs() <= 1e-12)
-                {
-                    None
-                } else {
-                    Some(values)
-                },
-            )
+            let is_uniform = values.iter().all(|value| {
+                let scale = value.abs().max(base_value.abs()).max(f64::MIN_POSITIVE);
+                (*value - base_value).abs() <= 64.0 * f64::EPSILON * scale
+            });
+            Ok(if is_uniform { None } else { Some(values) })
         };
         let ms_field = match resolve_material_field(
             fullmag_ir::MaterialParameterNameIR::Ms,
@@ -2582,6 +2824,7 @@ pub(crate) fn plan_fdm_multilayer(
 
         lowered_bodies.push(LoweredBody {
             magnet_name: magnet.name.clone(),
+            overlap_geometry: placed,
             bounding_size,
             native_grid: grid_cells,
             native_cell_size: cell_size,
@@ -2650,16 +2893,20 @@ pub(crate) fn plan_fdm_multilayer(
 
     for (index, left) in lowered_bodies.iter().enumerate() {
         for right in lowered_bodies.iter().skip(index + 1) {
-            let overlaps = (0..3).all(|axis| {
-                let left_upper = left.native_origin[axis] + left.bounding_size[axis];
-                let right_upper = right.native_origin[axis] + right.bounding_size[axis];
-                left.native_origin[axis] < right_upper && right.native_origin[axis] < left_upper
-            });
-            if overlaps {
-                errors.push(format!(
+            match multilayer_body_overlap(left, right) {
+                BodyOverlap::Disjoint => {}
+                BodyOverlap::Overlapping => {
+                    errors.push(format!(
                     "multilayer_convolution does not allow overlapping bodies with positive XY/Z volume; '{}' overlaps '{}'",
                     left.magnet_name, right.magnet_name
                 ));
+                }
+                BodyOverlap::Indeterminate => {
+                    errors.push(format!(
+                        "multilayer_convolution cannot safely classify overlap between '{}' and '{}'; CSG/imported geometry requires a dedicated exact overlap realization",
+                        left.magnet_name, right.magnet_name
+                    ));
+                }
             }
         }
     }

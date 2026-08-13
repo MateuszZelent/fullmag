@@ -4,6 +4,7 @@ import pytest
 
 import fullmag as fm
 from fullmag import world as flat_world
+from fullmag.init.preset_eval import evaluate_preset_texture
 from fullmag.meshing import realize_fdm_grid_asset
 
 
@@ -144,7 +145,7 @@ def test_auto_mode_preserves_common_cells_for_planner_resolution() -> None:
     assert demag.to_ir()["common_cells"] == [64, 32, 1]
 
 
-def test_uniform_texture_with_fdm_asset_remains_uniform_ir() -> None:
+def test_uniform_texture_with_fdm_asset_remains_normalized_uniform_ir() -> None:
     geometry = fm.Cylinder(radius=4e-9, height=2e-9, name="body")
     material = fm.Material(name="Py", Ms=800e3, A=13e-12, alpha=0.01)
     problem = fm.Problem(
@@ -154,7 +155,7 @@ def test_uniform_texture_with_fdm_asset_remains_uniform_ir() -> None:
                 name="body",
                 geometry=geometry,
                 material=material,
-                m0=fm.texture.uniform(1.0, 0.0, 0.0),
+                m0=fm.texture.uniform(3.0, 4.0, 0.0),
             )
         ],
         energy=[fm.Exchange()],
@@ -168,7 +169,10 @@ def test_uniform_texture_with_fdm_asset_remains_uniform_ir() -> None:
     assert ir["geometry_assets"] is not None
     initial = ir["magnets"][0]["initial_magnetization"]
 
-    assert initial == {"kind": "uniform", "value": [1.0, 0.0, 0.0]}
+    expected = evaluate_preset_texture(
+        "uniform", {"direction": [3.0, 4.0, 0.0]}, [(0.0, 0.0, 0.0)]
+    ).values[0]
+    assert initial == {"kind": "uniform", "value": list(expected)}
 
 
 @pytest.mark.parametrize(

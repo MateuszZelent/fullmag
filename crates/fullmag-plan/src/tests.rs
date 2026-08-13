@@ -7640,6 +7640,38 @@ fn multilayer_planner_materializes_region_membership_and_linear_ms_per_layer() {
             priority: 10,
             conflict_policy: fullmag_ir::RegionConflictPolicyIR::Error,
         });
+    for (assignment_id, parameter, base, gradient, unit) in [
+        (
+            "free_linear_aex",
+            fullmag_ir::MaterialParameterNameIR::Aex,
+            13e-12,
+            1e-4,
+            "J/m",
+        ),
+        (
+            "free_linear_alpha",
+            fullmag_ir::MaterialParameterNameIR::Alpha,
+            0.1,
+            1e-5,
+            "1",
+        ),
+    ] {
+        ir.material_parameter_fields
+            .push(fullmag_ir::MaterialParameterAssignmentIR {
+                assignment_id: assignment_id.to_string(),
+                owner_object: "free".to_string(),
+                region_id: None,
+                parameter,
+                value: fullmag_ir::MaterialParameterFieldIR::Linear {
+                    base,
+                    gradient: [gradient, 0.0, 0.0],
+                    frame: fullmag_ir::RegionFrameIR::Object,
+                    unit: Some(unit.to_string()),
+                },
+                priority: 10,
+                conflict_policy: fullmag_ir::RegionConflictPolicyIR::Error,
+            });
+    }
 
     let planned = plan(&ir).expect("multilayer regions and linear Ms must lower per layer");
     let BackendPlanIR::FdmMultilayer(multilayer) = planned.backend_plan else {
@@ -7659,8 +7691,62 @@ fn multilayer_planner_materializes_region_membership_and_linear_ms_per_layer() {
     let ms_field = free.material.ms_field.as_ref().expect("linear Ms field");
     assert_eq!(ms_field.len(), 200);
     assert_ne!(ms_field[0], ms_field[19]);
+    let a_field = free
+        .material
+        .a_field
+        .as_ref()
+        .expect("sub-absolute-tolerance Aex gradient must remain non-uniform");
+    assert_eq!(a_field.len(), 200);
+    assert_ne!(a_field[0], a_field[19]);
+    let alpha_field = free
+        .material
+        .alpha_field
+        .as_ref()
+        .expect("sub-absolute-tolerance Alpha gradient must remain non-uniform");
+    assert_eq!(alpha_field.len(), 200);
+    assert_ne!(alpha_field[0], alpha_field[19]);
     assert!(planned.common.material_field_plans.iter().any(|field| {
         field.object_id == "free" && field.parameter == fullmag_ir::MaterialParameterNameIR::Ms
+    }));
+}
+
+#[test]
+fn multilayer_planner_materializes_translated_object_frame_region_membership() {
+    let mut ir = stacked_two_body_multilayer_problem();
+    let GeometryEntryIR::Translate { by, .. } = &mut ir.geometry.entries[0] else {
+        panic!("fixture free geometry must be translated");
+    };
+    *by = [30e-9, 0.0, 0.0];
+    let mut region = fullmag_ir::ObjectRegionIR {
+        owner_object: "free".to_string(),
+        region_id: "free:translated_core".to_string(),
+        ..default_test_object_region()
+    };
+    region.shape = fullmag_ir::RegionShapeIR::Box {
+        size: [20e-9, 20e-9, 2e-9],
+        center: [0.0, 0.0, 0.0],
+    };
+    ir.object_regions.push(region);
+
+    let planned = plan(&ir).expect("object-frame region must follow its translated owner");
+    let BackendPlanIR::FdmMultilayer(multilayer) = planned.backend_plan else {
+        panic!("expected multilayer FDM plan");
+    };
+    let free = multilayer
+        .layers
+        .iter()
+        .find(|layer| layer.object_id == "free")
+        .expect("free layer");
+    assert!(free
+        .native_region_mask
+        .as_deref()
+        .is_some_and(|mask| mask.iter().any(|numeric_id| *numeric_id == 1)));
+    assert!(free.native_region_legend.as_deref().is_some_and(|legend| {
+        legend.iter().any(|entry| {
+            entry.numeric_id == 1
+                && entry.object_id == "free"
+                && entry.region_id == "free:translated_core"
+        })
     }));
 }
 
@@ -7676,6 +7762,35 @@ fn multilayer_planner_allows_coplanar_bodies_with_disjoint_xy_projections() {
 }
 
 #[test]
+fn multilayer_planner_allows_diagonally_disjoint_cylinders_with_overlapping_aabbs() {
+    let mut ir = stacked_two_body_multilayer_problem();
+    ir.geometry.entries = vec![
+        GeometryEntryIR::Translate {
+            name: "free_geom".to_string(),
+            base: std::boxed::Box::new(GeometryEntryIR::Cylinder {
+                name: "free_base".to_string(),
+                radius: 10e-9,
+                height: 2e-9,
+                axis: [0.0, 0.0, 1.0],
+            }),
+            by: [0.0, 0.0, 0.0],
+        },
+        GeometryEntryIR::Translate {
+            name: "ref_geom".to_string(),
+            base: std::boxed::Box::new(GeometryEntryIR::Cylinder {
+                name: "ref_base".to_string(),
+                radius: 10e-9,
+                height: 2e-9,
+                axis: [0.0, 0.0, 1.0],
+            }),
+            by: [15e-9, 15e-9, 0.0],
+        },
+    ];
+
+    plan(&ir).expect("diagonally disjoint cylinders may share their z interval");
+}
+
+#[test]
 fn multilayer_planner_rejects_positive_xy_and_z_volume_overlap() {
     let mut ir = stacked_two_body_multilayer_problem();
     let GeometryEntryIR::Translate { by, .. } = &mut ir.geometry.entries[1] else {
@@ -7688,6 +7803,63 @@ fn multilayer_planner_rejects_positive_xy_and_z_volume_overlap() {
         .reasons
         .iter()
         .any(|reason| reason.contains("overlapping bodies")));
+}
+
+#[test]
+fn multilayer_planner_rejects_translated_sphere_box_volume_overlap() {
+    let mut ir = stacked_two_body_multilayer_problem();
+    ir.geometry.entries = vec![
+        GeometryEntryIR::Translate {
+            name: "free_geom".to_string(),
+            base: std::boxed::Box::new(GeometryEntryIR::Sphere {
+                name: "free_sphere".to_string(),
+                radius: 8e-9,
+            }),
+            by: [0.0, 0.0, 0.0],
+        },
+        GeometryEntryIR::Translate {
+            name: "ref_geom".to_string(),
+            base: std::boxed::Box::new(GeometryEntryIR::Box {
+                name: "ref_box".to_string(),
+                size: [20e-9, 20e-9, 2e-9],
+            }),
+            by: [2e-9, 0.0, 0.0],
+        },
+    ];
+
+    let err = plan(&ir).expect_err("translated sphere and box volume overlap must fail closed");
+    assert!(err
+        .reasons
+        .iter()
+        .any(|reason| reason.contains("overlapping bodies")));
+}
+
+#[test]
+fn multilayer_planner_fails_closed_for_csg_body_overlap() {
+    let mut ir = stacked_two_body_multilayer_problem();
+    ir.geometry.entries[0] = GeometryEntryIR::Difference {
+        name: "free_geom".to_string(),
+        base: std::boxed::Box::new(GeometryEntryIR::Box {
+            name: "free_base".to_string(),
+            size: [40e-9, 20e-9, 2e-9],
+        }),
+        tool: std::boxed::Box::new(GeometryEntryIR::Cylinder {
+            name: "free_hole".to_string(),
+            radius: 2e-9,
+            height: 2e-9,
+            axis: [0.0, 0.0, 1.0],
+        }),
+    };
+    let GeometryEntryIR::Translate { by, .. } = &mut ir.geometry.entries[1] else {
+        panic!("fixture reference geometry must be translated");
+    };
+    *by = [0.0, 0.0, 0.0];
+
+    let err = plan(&ir).expect_err("CSG overlap must not be guessed from a bounding box");
+    assert!(err
+        .reasons
+        .iter()
+        .any(|reason| reason.contains("cannot safely classify overlap")));
 }
 
 #[test]
