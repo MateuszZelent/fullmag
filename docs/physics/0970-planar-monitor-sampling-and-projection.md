@@ -3,8 +3,9 @@
 - Status: accepted scientific contract; implemented surfaces remain
   end-to-end unqualified
 - Owners: Fullmag physics, runtime, API, and control-room maintainers
-- Last updated: 2026-08-12
-- Audited source: `5138078f7fd7b65dfc231faa4aa11c02d8ebf52d`
+- Last updated: 2026-08-13
+- Audited Task 7A implementation delta: `9c3a779571c2815dec8279dbd56d5604b09ab784`
+- Historical Task 0 evidence source: `5138078f7fd7b65dfc231faa4aa11c02d8ebf52d`
 - Related ADRs:
   - `docs/adr/0011-resource-first-api.md`
   - `docs/adr/0016-center-viewport-tabbed-surfaces.md`
@@ -509,14 +510,15 @@ selects every active cell. It is therefore correct only when those active cells
 are exactly the requested object's cells and is incorrect for a general
 multi-object grid.
 
-`apply_resolved_scope` runs before `resolve_dynamic_extent`. The latter extracts
-only `padding_m` from all three dynamic variants and calculates bounds from the
-same already-masked `active_mask`; it never branches on the authored dynamic
-kind. Coincidental combinations such as `target_bounds + region` do not
-qualify the three-tag contract. In particular, broader `magnetic_domain` and
-`universe` policies inherit a narrower target mask, while `magnetic_domain +
-domain` inherits the unmasked rectangular carrier. Explicit $(u,v)$ bounds are
-the only currently qualified FDM extent form.
+The following dynamic-extent defect is historical Task 0 evidence, not a
+claim about the current implementation: at the Task 0 revision, the resolver
+collapsed all three dynamic variants to `padding_m` over one post-target mask.
+The current request builder has two distinct responsibilities:
+`resolve_resolution` validates only bounded raster dimensions, while
+`ResolvedSpatialTarget::resolve_dynamic_extent` chooses separately between
+target, magnetic-domain, and universe bounds. This source distinction is not
+fresh FDM/FEM managed-runtime qualification; explicit $(u,v)$ bounds remain the
+only dynamic-extent form with Task 0 numerical evidence.
 
 ### FEM P1 realization
 
@@ -628,19 +630,19 @@ silent clamp. New HTTP and OpenAPI payloads expose only `range` and
 | PM-N09 | unsupported surface selector | stable rejection; no object-boundary substitution |
 | PM-N10 | FDM target membership on a multi-object grid | `object` selects only the requested object's cells; current all-active-cell object mask fails this gate |
 | PM-N11 | geometry scale sweep | unchanged dimensionless result with scale-aware tolerances |
-| PM-N12 | FEM target/scope dynamic extents | each dynamic extent follows its named target/scope rather than all mesh nodes; current global-node resolution fails this gate |
-| PM-N13 | FDM target × dynamic-extent cross-product | `target_bounds`, `magnetic_domain`, and `universe` resolve independently of target masking for `domain`, `magnetic_domain`, `object`, and `region`; current shared post-mask resolver fails this gate |
+| PM-N12 | FEM target/scope dynamic extents | each dynamic extent follows its named target/scope rather than all mesh nodes; the current distinct-bounds source path requires fresh per-lane qualification |
+| PM-N13 | FDM target × dynamic-extent cross-product | `target_bounds`, `magnetic_domain`, and `universe` resolve independently of target masking for `domain`, `magnetic_domain`, `object`, and `region`; the current distinct-bounds source path requires fresh per-lane qualification |
 
 ### Task 0 evidence boundary
 
-At exact managed source
+At historical exact managed source
 `5138078f7fd7b65dfc231faa4aa11c02d8ebf52d`,
 `just run-viewport-2d-planar-monitor-smoke fdm cpu` produced an FDM CPU science
 report with all recorded science gates true, including plane, slab, depth,
 surface-fixture, analytic RMS, occupancy, probe identity, explicit CPU
 postprocessing, and cross-backend manufactured-field checks.
 
-The same invocation then exited 1 after 180000 ms waiting for a visible
+The same historical invocation then exited 1 after 180000 ms waiting for a visible
 `.fm-field-map__canvas`. A pre-existing browser JSON carrying `pass: true` is
 not evidence for this invocation because the current browser process failed
 before producing a qualifying visible-canvas result. Therefore:
@@ -707,8 +709,9 @@ Structural validation does not prove scientific correctness.
 (planar-monitor-source-code-index)=
 ## Source-code index
 
-Immutable links below resolve against the audited Task 0 source. Test names are
-stable symbols, not line-number claims.
+Rows explicitly labelled **Task 0 historical** link to the historical source;
+Task 7A rows link to its audited implementation delta. Test names are stable
+symbols, not line-number claims.
 
 | Equation or claim | Path | Stable symbol | Responsibility | Lane | Tests/evidence | Status | Immutable link |
 |---|---|---|---|---|---|---|---|
@@ -718,7 +721,8 @@ stable symbols, not line-number claims.
 | IR validation | `crates/fullmag-ir/src/validation.rs` | `validate_planar_monitors` | Identity, target, frame, extent, and operator validation | all authoring lanes | `crates/fullmag-ir/tests/ir_tests.rs::planar_monitor_validation_rejects_invalid_values_and_duplicates` | source + focused tests | [source](https://github.com/MateuszZelent/fullmag/blob/5138078f7fd7b65dfc231faa4aa11c02d8ebf52d/crates/fullmag-ir/src/validation.rs) |
 | OpenAPI monitor schema | `crates/fullmag-api/src/schemas/planar_monitors.rs` | `PlanarMonitorSchema` | Publish the canonical planar-monitor authoring schema | API authoring | OpenAPI planar monitor contract tests | source + focused tests | [source](https://github.com/MateuszZelent/fullmag/blob/5138078f7fd7b65dfc231faa4aa11c02d8ebf52d/crates/fullmag-api/src/schemas/planar_monitors.rs) |
 | OpenAPI planar field schemas | `crates/fullmag-api/src/schemas/planar_fields.rs` | `PlanarFieldQuery`, `PlanarFieldMetaResource` | Define bounded resource queries and revisioned sampling metadata | API data plane | planar field resource/OpenAPI tests | source + focused tests | [source](https://github.com/MateuszZelent/fullmag/blob/5138078f7fd7b65dfc231faa4aa11c02d8ebf52d/crates/fullmag-api/src/schemas/planar_fields.rs) |
-| Canonical planar presentation | `crates/fullmag-api/src/schemas/visualization_state.rs` | `PlanarVisualizationState`; `PlanarColorRangeState` | Own range mode, SI limits, and raster opacity without changing monitor semantics | API visualization | visualization-state migration and patch tests | contract implementation pending Task 7A validation | local source at current revision |
+| Canonical planar presentation | `crates/fullmag-api/src/schemas/visualization_state.rs` | `PlanarVisualizationState`; `PlanarColorRangeState` | Public state owns range mode, SI limits, and raster opacity; legacy aliases are not public writable fields | API visualization | exact PUT/PATCH legacy-alias rejection | Task 7A focused API test; runtime/browser unqualified | [source](https://github.com/MateuszZelent/fullmag/blob/9c3a779571c2815dec8279dbd56d5604b09ab784/crates/fullmag-api/src/schemas/visualization_state.rs) |
+| Persistence-only planar presentation migration | `crates/fullmag-api/src/session_persistence.rs` | `restore_display_presentation` | Map unversioned v6 aliases privately, preserve v7, and reject unsupported versions before workspace mutation | API persistence | v6 manual/invalid migration, v7 preservation, unknown-version rejection | Task 7A focused persistence tests; runtime/browser unqualified | [source](https://github.com/MateuszZelent/fullmag/blob/9c3a779571c2815dec8279dbd56d5604b09ab784/crates/fullmag-api/src/session_persistence.rs) |
 | Exact target-boundary codec | `crates/fullmag-api/src/fem_cross_section.rs` | `serialize_planar_overlay_fmcs_v4` | Serialize parallel exact segment classes in representation-specific `FMCS v4` | FEM postprocessing | Tet4 interior/boundary/degenerate and route ETag tests | contract implementation pending Task 7A validation | local source at current revision |
 | Target-boundary classifier | `crates/fullmag-api/src/planar_sampling/fem.rs` | `build_overlay` | Derive interior, target-boundary, and degenerate classes from selected-target topology | FEM postprocessing | scoped overlay tests | contract implementation pending Task 7A validation | local source at current revision |
 | Frame equations | `crates/fullmag-api/src/planar_sampling/frame.rs` | `try_from_ir` | Resolve and validate physical frame | all sampling lanes | `planar_sampling_fem_p1_linear_arbitrary_plane_is_barycentric` | source + focused tests | [source](https://github.com/MateuszZelent/fullmag/blob/5138078f7fd7b65dfc231faa4aa11c02d8ebf52d/crates/fullmag-api/src/planar_sampling/frame.rs) |
@@ -729,7 +733,7 @@ stable symbols, not line-number claims.
 | Measure-weighted reductions | `crates/fullmag-api/src/planar_sampling/reduction.rs` | `finish` | Mean, integral, RMS, extrema, and empty result semantics | FDM/FEM CPU sampler | `planar_sampling_fdm_linear_depth_is_measure_weighted_and_masks_empty_pixels` | focused tests; managed FDM CPU science pass | [source](https://github.com/MateuszZelent/fullmag/blob/5138078f7fd7b65dfc231faa4aa11c02d8ebf52d/crates/fullmag-api/src/planar_sampling/reduction.rs) |
 | FEM P1 point and volume operators | `crates/fullmag-api/src/planar_sampling/fem.rs` | `sample` | Dispatch P1 plane/slab/depth/surface | FEM CPU sampler | `planar_sampling_fem_p1_linear_arbitrary_plane_is_barycentric` | focused tests; managed/browser open | [source](https://github.com/MateuszZelent/fullmag/blob/5138078f7fd7b65dfc231faa4aa11c02d8ebf52d/crates/fullmag-api/src/planar_sampling/fem.rs) |
 | FEM physical boundary projection | `crates/fullmag-api/src/planar_sampling/surface.rs` | `sample_boundary` | Clip boundary faces and apply visibility | FEM CPU sampler | `planar_sampling_surface_clips_boundary_faces_across_pixel_footprints` | focused tests; managed/browser open | [source](https://github.com/MateuszZelent/fullmag/blob/5138078f7fd7b65dfc231faa4aa11c02d8ebf52d/crates/fullmag-api/src/planar_sampling/surface.rs) |
-| Shared FDM/FEM dynamic-extent resolver | `crates/fullmag-api/src/router_v2/handlers/data/planar_fields.rs` | `resolve_dynamic_extent` | Collapse all three tags into one padding-only branch: FDM uses post-target selected-mask bounds and FEM uses all mesh nodes | FDM/FEM source | `planar_field_resources_publish_meta_binary_probe_png_and_etag`; PM-N12 + PM-N13 | focused API tests; PM-N12 + PM-N13 RED | [source](https://github.com/MateuszZelent/fullmag/blob/5138078f7fd7b65dfc231faa4aa11c02d8ebf52d/crates/fullmag-api/src/router_v2/handlers/data/planar_fields.rs) |
+| Dynamic-extent resolution | `crates/fullmag-api/src/planar_sampling/target.rs` | `resolve_dynamic_extent` | Choose target, magnetic-domain, or universe bounds before projecting into monitor coordinates | FDM/FEM source | `target_tests.rs` dynamic-extent cases; PM-N12 + PM-N13 | structural source/tests only; fresh managed and browser qualification open | [source](https://github.com/MateuszZelent/fullmag/blob/9c3a779571c2815dec8279dbd56d5604b09ab784/crates/fullmag-api/src/planar_sampling/target.rs) |
 | FEM carrier admission | `crates/fullmag-api/src/router_v2/handlers/data/field_resolution.rs` | `extract_fem_field` | Require a complete nodal value tuple for every node and Tet4 connectivity before element scoping | FEM source | focused planar API tests | source + focused tests; scoped carriers unsupported | [source](https://github.com/MateuszZelent/fullmag/blob/5138078f7fd7b65dfc231faa4aa11c02d8ebf52d/crates/fullmag-api/src/router_v2/handlers/data/field_resolution.rs) |
 | Metadata extrema | `crates/fullmag-api/src/router_v2/handlers/data/planar_fields.rs` | `meta_resource` | Compute finite-value metadata extrema without consulting occupancy; currently includes serialized empty-air zero | FDM/FEM source | PM-N05 terminal gate required | known contract divergence for `include_air_as_zero` | [source](https://github.com/MateuszZelent/fullmag/blob/5138078f7fd7b65dfc231faa4aa11c02d8ebf52d/crates/fullmag-api/src/router_v2/handlers/data/planar_fields.rs) |
 | Frontend request plan | `apps/control-room/src/modules/field-map/model/fieldMapDataPlan.ts` | `buildFieldMapDataPlan` | Bound resource requests and reject illegal FDM scopes | browser | `fieldMapDataPlan.test.ts` | component tests; browser RED | [source](https://github.com/MateuszZelent/fullmag/blob/5138078f7fd7b65dfc231faa4aa11c02d8ebf52d/apps/control-room/src/modules/field-map/model/fieldMapDataPlan.ts) |

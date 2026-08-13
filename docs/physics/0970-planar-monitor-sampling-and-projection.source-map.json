@@ -1,32 +1,33 @@
 {
   "document": {
     "path": "docs/physics/0970-planar-monitor-sampling-and-projection.md",
-    "audited_source_revision": "5138078f7fd7b65dfc231faa4aa11c02d8ebf52d"
+    "audited_source_revision": "9c3a779571c2815dec8279dbd56d5604b09ab784",
+    "historical_task0_evidence_revision": "5138078f7fd7b65dfc231faa4aa11c02d8ebf52d"
   },
   "backend_matrix": [
     {
       "solver": "FDM",
       "device": "CPU",
       "status": "science-gate-passed-browser-runtime-unqualified",
-      "reason": "Managed Task 0 science gates passed for their fixture at the audited source, but all FDM dynamic tags share bounds over the post-target mask and require explicit extents, general multi-object object targeting is incorrect because it selects all active cells, include_air_as_zero pollutes metadata extrema, and the same recipe exited 1 after a 180000 ms visible-canvas timeout."
+      "reason": "Historical Task 0 science gates passed for their fixture, but the same recipe exited 1 after a 180000 ms visible-canvas timeout. Current dynamic-extent routing has only structural source/test evidence; there is no fresh FDM CPU managed/browser qualification."
     },
     {
       "solver": "FDM",
       "device": "GPU",
       "status": "source-compatible-unqualified",
-      "reason": "Compatible transported GPU fields may enter the CPU sampler with the same FDM target and shared dynamic-extent defects, but no fresh GPU source/device proof exists and native GPU sampling is absent."
+      "reason": "No fresh GPU source/device proof exists and native GPU sampling is absent."
     },
     {
       "solver": "FEM",
       "device": "CPU",
       "status": "focused-tests-only-unqualified",
-      "reason": "Only a complete Tet4/P1 nodal field over all published mesh nodes is accepted; scoped carriers are unsupported and all dynamic extent tags use global mesh nodes. Focused tests exist, but scoped extents and managed/browser/runtime/production execution are unqualified."
+      "reason": "Only a complete Tet4/P1 nodal field over all published mesh nodes is accepted; scoped carriers are unsupported. Dynamic-extent routing has structural source/test evidence only, and managed/browser/runtime/production execution is unqualified."
     },
     {
       "solver": "FEM",
       "device": "GPU",
       "status": "source-compatible-unqualified",
-      "reason": "Only a complete transported Tet4/P1 nodal field over all mesh nodes may enter the CPU sampler; scoped carriers and scoped dynamic extents are unqualified, no fresh GPU source/device proof exists, and native GPU sampling is absent."
+      "reason": "Only a complete transported Tet4/P1 nodal field over all mesh nodes may enter the CPU sampler; scoped carriers are unqualified, no fresh GPU source/device proof exists, and native GPU sampling is absent."
     }
   ],
   "contract_types": [
@@ -70,13 +71,13 @@
     },
     {
       "id": "PM-N12",
-      "status": "red",
-      "requirement": "FEM dynamic extents follow their named target and runtime scope rather than all mesh nodes."
+      "status": "unqualified",
+      "requirement": "FEM dynamic extents follow their named target and runtime scope rather than all mesh nodes; fresh per-lane evidence is required."
     },
     {
       "id": "PM-N13",
-      "status": "red",
-      "requirement": "FDM target_bounds, magnetic_domain, and universe bounds resolve as distinct policies across domain, magnetic_domain, object, and region targets; explicit extents are required until this passes."
+      "status": "unqualified",
+      "requirement": "FDM target_bounds, magnetic_domain, and universe bounds resolve as distinct policies across domain, magnetic_domain, object, and region targets; fresh per-lane evidence is required."
     }
   ],
   "equations": [
@@ -335,6 +336,12 @@
       "responsibility": "Validate bounded planar resource resolution before request construction; target/extent resolution remains an API request-build responsibility."
     },
     {
+      "id": "target-dynamic-extent",
+      "path": "crates/fullmag-api/src/planar_sampling/target.rs",
+      "symbol": "resolve_dynamic_extent",
+      "responsibility": "Resolve target, magnetic-domain, or universe bounds into the monitor frame before sampling."
+    },
+    {
       "id": "fem-field-carrier",
       "path": "crates/fullmag-api/src/router_v2/handlers/data/field_resolution.rs",
       "symbol": "extract_fem_field",
@@ -351,6 +358,12 @@
       "path": "crates/fullmag-api/src/schemas/visualization_state.rs",
       "symbol": "default_planar_visualization_state",
       "responsibility": "Own canonical planar presentation state without changing monitor or sampler identity."
+    },
+    {
+      "id": "planar-presentation-persistence",
+      "path": "crates/fullmag-api/src/session_persistence.rs",
+      "symbol": "restore_display_presentation",
+      "responsibility": "Migrate the private v6 presentation payload, preserve v7, and reject unsupported versions before restoring workspace state."
     },
     {
       "id": "planar-overlay-codec",
