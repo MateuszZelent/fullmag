@@ -1,3 +1,5 @@
+import { resolveDisplayUnitConversion } from "@/shared/domain/physics/displayUnits";
+
 import { isRenderablePlanarOccupancy } from "./planarOccupancy";
 
 export interface PlanarFrame {
@@ -84,7 +86,7 @@ export interface FieldMapRenderModel {
   layers: FieldMapRenderLayers;
   mask: Uint8Array | null;
   meshOverlay: ArrayBuffer | null;
-  rasterOpacity: number;
+  rasterOpacity: number | null;
   range: { max: number; min: number } | null;
   resolution: readonly [number, number];
   sampleIdentity: string;
@@ -117,14 +119,8 @@ export function resolvePlanarDisplayUnit(canonicalUnit: string, requested: strin
   scale: number;
   unit: string;
 } {
-  const units: Record<string, Record<string, number>> = {
-    "A/m": { "A/m": 1, "kA/m": 1 / 1_000, "MA/m": 1 / 1_000_000 },
-    T: { T: 1, mT: 1_000 },
-  };
-  const scale = units[canonicalUnit]?.[requested];
-  return scale === undefined
-    ? { compatible: false, scale: 1, unit: canonicalUnit }
-    : { compatible: true, scale, unit: requested };
+  const resolved = resolveDisplayUnitConversion(canonicalUnit, requested);
+  return { compatible: resolved.compatible, scale: resolved.factor, unit: resolved.unit };
 }
 
 export function resolvePlanarDisplayRange(
@@ -135,10 +131,8 @@ export function resolvePlanarDisplayRange(
   if (requested.mode === "manual") {
     const min = requested.min;
     const max = requested.max;
-    if (Number.isFinite(min) && Number.isFinite(max) && max! >= min!) {
-      return max === min
-        ? { max: max! + 0.5, min: min! - 0.5 }
-        : { max: max!, min: min! };
+    if (Number.isFinite(min) && Number.isFinite(max) && max! > min!) {
+      return { max: max!, min: min! };
     }
     return null;
   }
@@ -150,12 +144,12 @@ export function resolvePlanarDisplayRange(
     min = Math.min(min, value);
     max = Math.max(max, value);
   }
-  if (!Number.isFinite(min) || !Number.isFinite(max)) return null;
+  if (!Number.isFinite(min) || !Number.isFinite(max)) return { min: 0, max: 0 };
   if (requested.mode === "symmetric") {
     const magnitude = Math.max(Math.abs(min), Math.abs(max));
     return magnitude === 0 ? { max: 0.5, min: -0.5 } : { max: magnitude, min: -magnitude };
   }
-  return max === min ? { max: max + 0.5, min: min - 0.5 } : { max, min };
+  return { max, min };
 }
 
 export function buildFieldMapRenderModel(
@@ -179,7 +173,10 @@ export function buildFieldMapRenderModel(
   const range = input.range
     ? resolvePlanarDisplayRange(input.scalar, input.mask ?? undefined, input.range)
     : null;
-  if (!input.range) diagnostics.push("Planar color range is invalid and was not rendered.");
+  if (!input.range || range === null) diagnostics.push("Planar color range is invalid and was not rendered.");
+  const rasterOpacity = input.rasterOpacity ?? 1;
+  const rasterOpacityValid = Number.isFinite(rasterOpacity) && rasterOpacity >= 0 && rasterOpacity <= 1;
+  if (!rasterOpacityValid) diagnostics.push("Planar raster opacity is invalid and was not rendered.");
   return {
     bounds: input.bounds,
     boundsCenter: [
@@ -201,10 +198,11 @@ export function buildFieldMapRenderModel(
       ...input.layers,
       boundaries: Boolean(input.layers.boundaries && boundariesExact),
       probes: input.layers.probes ?? true,
+      raster: Boolean(input.layers.raster && rasterOpacityValid && range !== null),
     },
     mask: input.mask ?? null,
     meshOverlay: input.meshOverlay ?? null,
-    rasterOpacity: input.rasterOpacity ?? 1,
+    rasterOpacity: rasterOpacityValid ? rasterOpacity : null,
     range,
     resolution: input.resolution,
     sampleIdentity: input.sampleIdentity,

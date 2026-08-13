@@ -65,6 +65,9 @@ export function createPlanarColorizer(
       if (workerMask) transfers.push(workerMask.buffer);
       worker.postMessage(request, transfers);
     },
+    invalidate() {
+      latestId = ++nextId;
+    },
     dispose() {
       worker.onmessage = null;
       worker.terminate();

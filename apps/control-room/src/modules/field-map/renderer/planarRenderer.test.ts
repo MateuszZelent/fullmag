@@ -176,4 +176,30 @@ describe("planar renderer lifecycle", () => {
     expect(context.stroke).toHaveBeenCalledTimes(1);
     expect(context.moveTo).toHaveBeenCalledWith(100, 100);
   });
+
+  it("flips the backend v_min row by canvas transform rather than a negative drawImage height", () => {
+    const callOrder: string[] = [];
+    const context = {
+      clearRect: vi.fn(), drawImage: vi.fn(() => callOrder.push("drawImage")), imageSmoothingEnabled: true,
+      restore: vi.fn(), save: vi.fn(() => callOrder.push("save")), scale: vi.fn(() => callOrder.push("scale")), translate: vi.fn(() => callOrder.push("translate")),
+    } as unknown as CanvasRenderingContext2D;
+    const scratchContext = { putImageData: vi.fn() } as unknown as CanvasRenderingContext2D;
+    const canvas = { getContext: vi.fn(() => context), height: 100, width: 100 } as unknown as HTMLCanvasElement;
+    const descriptor = Object.getOwnPropertyDescriptor(globalThis, "document");
+    const imageData = Object.getOwnPropertyDescriptor(globalThis, "ImageData");
+    Object.defineProperty(globalThis, "document", { configurable: true, value: { createElement: () => ({ getContext: () => scratchContext, height: 0, width: 0 }) } });
+    Object.defineProperty(globalThis, "ImageData", { configurable: true, value: class { constructor(readonly data: Uint8ClampedArray, readonly width: number, readonly height: number) {} } });
+    try {
+      const renderer = createPlanarRenderer(canvas);
+      renderer.setViewport([0, 1, 0, 1], [0, 1, 0, 1]);
+      renderer.draw(new Uint8ClampedArray(8), 1, 2);
+      expect(context.translate).toHaveBeenCalledWith(0, 100);
+      expect(context.scale).toHaveBeenCalledWith(1, -1);
+      expect(context.drawImage).toHaveBeenLastCalledWith(expect.anything(), 0, 0, 1, 2, 0, 0, 100, 100);
+      expect(callOrder.slice(-4)).toEqual(["save", "translate", "scale", "drawImage"]);
+    } finally {
+      if (descriptor) Object.defineProperty(globalThis, "document", descriptor); else Reflect.deleteProperty(globalThis, "document");
+      if (imageData) Object.defineProperty(globalThis, "ImageData", imageData); else Reflect.deleteProperty(globalThis, "ImageData");
+    }
+  });
 });

@@ -24,7 +24,9 @@ describe("displayUnits", () => {
     expect(formatValueWithDisplayUnit(2_000_000, "J/m³", "MJ/m³")).toBe(
       "2 MJ/m³",
     );
-    expect(displayUnitItemsForSourceUnit("1")).toEqual([]);
+    expect(displayUnitItemsForSourceUnit("1")).toEqual([
+      { label: "dimensionless", value: "1" },
+    ]);
     expect(formatValueWithDisplayUnit(0.25, "1", "T")).toBe("0.25");
   });
 });

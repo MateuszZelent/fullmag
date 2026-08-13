@@ -2,6 +2,8 @@
 
 import { useEffect, useRef, useState } from "react";
 
+import { formatValueWithUnit } from "@/shared/domain/physics/displayUnits";
+
 import {
   planarRasterChecksum,
   type PlanarRenderEvidence,
@@ -15,6 +17,7 @@ import {
   createPlanarRenderer,
   drawPlanarOverlays,
   partitionPlanarMeshSegments,
+  type PlanarRenderer,
 } from "./planarRenderer";
 import {
   fitPlanarInteraction,
@@ -45,7 +48,23 @@ export function PlanarSurface({
   const hoverPointerRef = useRef<readonly [number, number] | null>(null);
   const interactionRef = useRef<PlanarInteraction>(model.interaction);
   const dragRef = useRef<{ pointerId: number; u: number; v: number } | null>(null);
+  const rendererRef = useRef<PlanarRenderer | null>(null);
+  const overlayContextRef = useRef<CanvasRenderingContext2D | null>(null);
+  const colorizerRef = useRef<ReturnType<typeof createPlanarColorizer> | null>(null);
+  const drawOverlayRef = useRef<(contours?: readonly ContourSegment[]) => void>(() => undefined);
+  const modelRef = useRef(model);
+  const renderStateRef = useRef<{
+    contours: readonly ContourSegment[];
+    glyphs: ReturnType<typeof buildVectorGlyphs>;
+    mesh: ReturnType<typeof decodePlanarMeshOverlay> | null;
+  }>({ contours: [], glyphs: [], mesh: null });
   const [hoverValue, setHoverValue] = useState<number | null>(null);
+  const rangeMin = model.range?.min;
+  const rangeMax = model.range?.max;
+
+  useEffect(() => {
+    modelRef.current = model;
+  }, [model]);
 
   useEffect(() => {
     interactionRef.current = model.interaction;
@@ -60,34 +79,14 @@ export function PlanarSurface({
     const overlayCanvas = overlayRef.current;
     if (!canvas || !overlayCanvas) return;
     const renderer = createPlanarRenderer(canvas);
-    renderer.setViewport(model.bounds, model.viewport);
+    rendererRef.current = renderer;
     const overlayContext = overlayCanvas.getContext("2d");
-    if (!overlayContext) return renderer.dispose();
-    const needsColorizer = model.range !== null && (model.layers.raster || model.layers.contours);
-    const worker = needsColorizer
-      ? new Worker(new URL("./planarRendererWorker.ts", import.meta.url), { type: "module" })
-      : null;
-    let rasterSummary: PlanarRenderEvidence["raster"] = null;
-    let glyphs: ReturnType<typeof buildVectorGlyphs> = [];
-    let mesh: ReturnType<typeof decodePlanarMeshOverlay> | null = null;
-    let drawOverlay: (contours?: readonly ContourSegment[]) => void = () => undefined;
-    const colorizer = worker ? createPlanarColorizer(worker, ({ contours, pixels }) => {
-      if (model.layers.raster) renderer.draw(pixels, model.resolution[0], model.resolution[1]);
-      drawOverlay(contours);
-      if (!rasterSummary || !model.layers.raster) return;
-      onRenderEvidence?.({
-        glyphCount: glyphs.length,
-        overlayCounts: {
-          contours: contours.length,
-          meshSegments: mesh?.segmentCount ?? 0,
-        },
-        raster: {
-          ...rasterSummary,
-          checksum: planarRasterChecksum(pixels),
-        },
-        sampleIdentity: model.sampleIdentity,
-      });
-    }) : null;
+    if (!overlayContext) {
+      renderer.dispose();
+      rendererRef.current = null;
+      return;
+    }
+    overlayContextRef.current = overlayContext;
     const observer = new ResizeObserver(([entry]) => {
       if (!entry) return;
       renderer.resize(
@@ -97,73 +96,127 @@ export function PlanarSurface({
       );
       overlayCanvas.width = canvas.width;
       overlayCanvas.height = canvas.height;
-      drawOverlay();
+      drawOverlayRef.current();
     });
     observer.observe(canvas);
+    return () => {
+      observer.disconnect();
+      colorizerRef.current?.dispose();
+      colorizerRef.current = null;
+      renderer.dispose();
+      rendererRef.current = null;
+      overlayContextRef.current = null;
+      valuesRef.current = null;
+      maskRef.current = null;
+    };
+  }, []);
 
+  useEffect(() => {
+    const renderer = rendererRef.current;
+    const overlayContext = overlayContextRef.current;
+    const overlayCanvas = overlayRef.current;
+    if (!renderer || !overlayContext || !overlayCanvas) return;
     valuesRef.current = model.scalar;
     maskRef.current = model.mask;
-    rasterSummary = model.layers.raster && model.range
-      ? {
-          checksum: "",
-          max: model.range.max,
-          min: model.range.min,
-          sampleCount: model.scalar.length,
-        }
-      : null;
-    glyphs = model.layers.vectors && model.vectors
+    const glyphs = model.layers.vectors && model.vectors
       ? buildVectorGlyphs(model.vectors, model.vectorBudget, 1e-15, {
           lengthMode: model.vectorStyle.lengthMode,
           maxLengthCells: 0.4 * model.vectorScale,
         })
       : [];
-    mesh = (model.layers.mesh || model.layers.boundaries) && model.meshOverlay
+    const mesh = (model.layers.mesh || model.layers.boundaries) && model.meshOverlay
       ? decodePlanarMeshOverlay(model.meshOverlay)
       : null;
-    const meshSegments = mesh ? partitionPlanarMeshSegments(mesh) : null;
-    drawOverlay = (contours = []) =>
+    renderStateRef.current = { contours: [], glyphs, mesh };
+    drawOverlayRef.current = (contours) => {
+      if (contours) renderStateRef.current.contours = contours;
+      const current = modelRef.current;
+      const state = renderStateRef.current;
+      const currentMeshSegments = state.mesh ? partitionPlanarMeshSegments(state.mesh) : null;
       drawPlanarOverlays(overlayContext, overlayCanvas.width, overlayCanvas.height, {
-        contours,
-        boundarySegments: meshSegments?.boundarySegments,
-        glyphs,
-        gridHeight: model.resolution[1],
-        gridWidth: model.resolution[0],
-        layers: model.layers,
-        meshBounds: mesh?.bounds as [number, number, number, number] | undefined,
-        meshSegments: meshSegments?.meshSegments,
-        meshViewport: model.viewport,
-        vectorColorMode: model.vectorStyle.colorMode,
+        contours: state.contours,
+        boundarySegments: currentMeshSegments?.boundarySegments,
+        glyphs: state.glyphs,
+        gridHeight: current.resolution[1],
+        gridWidth: current.resolution[0],
+        layers: current.layers,
+        meshBounds: state.mesh?.bounds as [number, number, number, number] | undefined,
+        meshSegments: currentMeshSegments?.meshSegments,
+        meshViewport: current.viewport,
+        vectorColorMode: current.vectorStyle.colorMode,
         viewport: [
-          ((model.viewport[0] - model.bounds[0]) / (model.bounds[1] - model.bounds[0])) * (model.resolution[0] - 1),
-          ((model.viewport[1] - model.bounds[0]) / (model.bounds[1] - model.bounds[0])) * (model.resolution[0] - 1),
-          ((model.viewport[2] - model.bounds[2]) / (model.bounds[3] - model.bounds[2])) * (model.resolution[1] - 1),
-          ((model.viewport[3] - model.bounds[2]) / (model.bounds[3] - model.bounds[2])) * (model.resolution[1] - 1),
+          ((current.viewport[0] - current.bounds[0]) / (current.bounds[1] - current.bounds[0])) * (current.resolution[0] - 1),
+          ((current.viewport[1] - current.bounds[0]) / (current.bounds[1] - current.bounds[0])) * (current.resolution[0] - 1),
+          ((current.viewport[2] - current.bounds[2]) / (current.bounds[3] - current.bounds[2])) * (current.resolution[1] - 1),
+          ((current.viewport[3] - current.bounds[2]) / (current.bounds[3] - current.bounds[2])) * (current.resolution[1] - 1),
         ],
       });
-    if (colorizer && model.range) {
-      colorizer.colorize(model.scalar, model.range, model.mask ?? undefined, {
+    };
+    const range = rangeMin === undefined || rangeMax === undefined
+      ? null
+      : { min: rangeMin, max: rangeMax };
+    const needsColorizer = range !== null && model.rasterOpacity !== null &&
+      (model.layers.raster || model.layers.contours);
+    if (needsColorizer) {
+      colorizerRef.current ??= createPlanarColorizer(
+        new Worker(new URL("./planarRendererWorker.ts", import.meta.url), { type: "module" }),
+        ({ contours, pixels }) => {
+          const current = modelRef.current;
+          const state = renderStateRef.current;
+          if (current.layers.raster) rendererRef.current?.draw(pixels, current.resolution[0], current.resolution[1]);
+          drawOverlayRef.current(contours);
+          if (!current.layers.raster || !current.range) return;
+          onRenderEvidence?.({
+            glyphCount: state.glyphs.length,
+            overlayCounts: { contours: contours.length, meshSegments: state.mesh?.segmentCount ?? 0 },
+            raster: {
+              checksum: planarRasterChecksum(pixels),
+              max: current.range.max,
+              min: current.range.min,
+              sampleCount: current.scalar.length,
+            },
+            sampleIdentity: current.sampleIdentity,
+          });
+        },
+      );
+      colorizerRef.current.colorize(model.scalar, range!, model.mask ?? undefined, {
         colormap: model.colormap,
         contours: model.layers.contours,
         height: model.resolution[1],
-        level: (model.range.min + model.range.max) / 2,
-        opacity: model.rasterOpacity,
+        level: (range!.min + range!.max) / 2,
+        opacity: model.rasterOpacity!,
         width: model.resolution[0],
       });
     } else {
-      drawOverlay();
+      colorizerRef.current?.invalidate();
+      drawOverlayRef.current();
     }
-
-    return () => {
-      observer.disconnect();
-      colorizer?.dispose();
-      renderer.dispose();
-      valuesRef.current = null;
-      maskRef.current = null;
-    };
   }, [
-    model,
+    model.colormap,
+    model.layers.boundaries,
+    model.layers.contours,
+    model.layers.mesh,
+    model.layers.raster,
+    model.layers.vectors,
+    model.mask,
+    model.meshOverlay,
+    rangeMax,
+    rangeMin,
+    model.rasterOpacity,
+    model.resolution,
+    model.scalar,
+    model.vectorBudget,
+    model.vectorScale,
+    model.vectorStyle.colorMode,
+    model.vectorStyle.lengthMode,
+    model.vectors,
     onRenderEvidence,
   ]);
+
+  useEffect(() => {
+    rendererRef.current?.setViewport(model.bounds, model.viewport);
+    drawOverlayRef.current();
+  }, [model.bounds, model.viewport]);
 
   return (
     <div
@@ -190,6 +243,18 @@ export function PlanarSurface({
           if (event.key === "0") {
             event.preventDefault();
             interactionRef.current = fitPlanarInteraction();
+            onInteraction?.(interactionRef.current);
+            return;
+          }
+          if (event.key === "+" || event.key === "-") {
+            event.preventDefault();
+            interactionRef.current = zoomPlanarInteractionAt(
+              model.bounds,
+              interactionRef.current,
+              model.boundsCenter[0],
+              model.boundsCenter[1],
+              interactionRef.current.zoom * (event.key === "+" ? 1.25 : 0.8),
+            );
             onInteraction?.(interactionRef.current);
             return;
           }
@@ -269,7 +334,12 @@ export function PlanarSurface({
         className="fm-field-map__canvas fm-field-map__canvas--overlay"
       />
       <output className="fm-field-map__probe" aria-live="polite">
-        {!model.layers.probes || hoverValue === null ? "No sample" : hoverValue * model.display.probeScale}
+        {!model.layers.probes || hoverValue === null
+          ? "No sample"
+          : formatValueWithUnit(
+              hoverValue * model.display.probeScale,
+              model.display.legendUnit,
+            )}
       </output>
     </div>
   );

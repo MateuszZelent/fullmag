@@ -12,6 +12,7 @@ interface DisplayUnitDefinition {
 const MU0_T_PER_APM = 4 * Math.PI * 1e-7;
 
 const DISPLAY_UNITS_BY_SOURCE_UNIT: Record<string, DisplayUnitDefinition[]> = {
+  "1": [{ value: "1", label: "dimensionless", factor: 1 }],
   "A/m": [
     { value: "A/m", label: "A/m", factor: 1 },
     { value: "kA/m", label: "kA/m", factor: 1e-3 },
@@ -95,6 +96,19 @@ export function normalizeDisplayUnit(
     definitions[0]?.value ??
     ""
   );
+}
+
+export function resolveDisplayUnitConversion(
+  sourceUnit: string | null | undefined,
+  displayUnit: string | null | undefined,
+): { compatible: boolean; factor: number; unit: string } {
+  const source = sourceUnit?.trim() ?? "";
+  const definition = displayUnitDefinitionsForSourceUnit(source).find(
+    (item) => item.value === displayUnit?.trim(),
+  );
+  return definition
+    ? { compatible: true, factor: definition.factor, unit: definition.value }
+    : { compatible: false, factor: 1, unit: source };
 }
 
 export function formatValueWithDisplayUnit(

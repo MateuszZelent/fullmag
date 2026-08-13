@@ -148,8 +148,8 @@ describe("field-map render model", () => {
       min: -4,
     });
     expect(resolvePlanarDisplayRange(new Float64Array([5, 5]), undefined, { mode: "auto" })).toEqual({
-      max: 5.5,
-      min: 4.5,
+      max: 5,
+      min: 5,
     });
   });
 
@@ -165,10 +165,17 @@ describe("field-map render model", () => {
       unit: "mT",
     });
     expect(resolvePlanarDisplayUnit("A/m", "mT")).toEqual({
-      compatible: false,
-      scale: 1,
-      unit: "A/m",
+      compatible: true,
+      scale: (4 * Math.PI * 1e-7) * 1_000,
+      unit: "mT",
     });
+    expect(resolvePlanarDisplayUnit("J/m", "pJ/m")).toEqual({
+      compatible: true,
+      scale: 1e12,
+      unit: "pJ/m",
+    });
+    expect(resolvePlanarDisplayUnit("1", "1")).toEqual({ compatible: true, scale: 1, unit: "1" });
+    expect(resolvePlanarDisplayUnit("mystery", "mT")).toEqual({ compatible: false, scale: 1, unit: "mystery" });
   });
 
   it("keeps unsupported planar presentation semantics visible as fail-closed diagnostics", () => {
@@ -192,7 +199,6 @@ describe("field-map render model", () => {
 
     expect(model.diagnostics).toEqual(expect.arrayContaining([
       "2D boundaries are unavailable: mesh overlay classification is unavailable or degraded.",
-      "Display unit 'mT' is incompatible with canonical unit 'A/m'.",
     ]));
     expect(model.range).toEqual({ min: -1, max: 1 });
     expect(model.layers.boundaries).toBe(false);
@@ -260,6 +266,22 @@ describe("field-map render model", () => {
     expect(degraded.diagnostics).toEqual(expect.arrayContaining([
       "2D boundaries are unavailable: mesh overlay classification is unavailable or degraded.",
       "Planar color range is invalid and was not rendered.",
+    ]));
+  });
+
+  it("rejects equal manual limits and invalid raster opacity without expanding or clamping", () => {
+    const model = buildFieldMapRenderModel({
+      bounds: [0, 1, 0, 1], canonicalUnit: "A/m", component: "normal",
+      frame: { normal: [0, 0, 1], uAxis: [1, 0, 0], vAxis: [0, 1, 0] },
+      layers: { contours: false, mesh: false, raster: true, vectors: false },
+      range: { mode: "manual", min: 1, max: 1 }, rasterOpacity: 2,
+      resolution: [1, 1], sampleIdentity: "sample", scalar: new Float64Array([1]),
+    });
+    expect(model.range).toBeNull();
+    expect(model.layers.raster).toBe(false);
+    expect(model.diagnostics).toEqual(expect.arrayContaining([
+      "Planar color range is invalid and was not rendered.",
+      "Planar raster opacity is invalid and was not rendered.",
     ]));
   });
 });

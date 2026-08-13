@@ -60,8 +60,10 @@ describe("PlanarSurface lifecycle", () => {
       putImageData,
       restore: vi.fn(),
       save: vi.fn(),
+      scale: vi.fn(),
       stroke: vi.fn(),
       strokeStyle: "",
+      translate: vi.fn(),
     } as unknown as CanvasRenderingContext2D;
     const originalCreateElement = dom.document.createElement.bind(dom.document);
     dom.document.createElement = ((tagName: string) => {
@@ -193,9 +195,9 @@ describe("PlanarSurface lifecycle", () => {
         glyphCount: 0,
         overlayCounts: { contours: 0, meshSegments: 0 },
         raster: {
-          checksum: "fnv1a32:344ea91d",
-          max: 20.5,
-          min: 19.5,
+          checksum: "fnv1a32:4c4ff03b",
+          max: 20,
+          min: 20,
           sampleCount: 2,
         },
         sampleIdentity: "\"fm-planar-sha256:current\"",
@@ -230,7 +232,7 @@ describe("PlanarSurface lifecycle", () => {
         (element) => element.tagName === "OUTPUT",
         "probe output",
       );
-      expect(probeOutput.textContent).toBe("20");
+      expect(probeOutput.textContent).toBe("20 m");
 
       const emptyPointerMove = new TestEvent("pointermove", { bubbles: true });
       Object.assign(emptyPointerMove, { clientX: 25, clientY: 50 });
@@ -246,6 +248,19 @@ describe("PlanarSurface lifecycle", () => {
         scalarCanvas?.dispatchEvent(pin);
       });
       expect(onPin).toHaveBeenCalledWith(4, 0);
+
+      await act(async () => {
+        root.render(<PlanarSurface model={{
+          ...initialModel,
+          interaction: { panU: 0, panV: 0, zoom: 2 },
+          viewport: [3, 5, -2, 2],
+        }} onPin={onPin} onRenderEvidence={onRenderEvidence} />);
+      });
+      expect(workers).toHaveLength(1);
+      expect(workers[0]?.terminate).not.toHaveBeenCalled();
+      expect(workerTransfers).toHaveLength(1);
+      expect(observers).toHaveLength(1);
+      expect(observers[0]?.disconnect).not.toHaveBeenCalled();
 
       await act(async () => root.unmount());
       expect(workers).toHaveLength(1);
@@ -275,7 +290,7 @@ describe("PlanarSurface lifecycle", () => {
     const root = createRoot(container as unknown as Element);
     const context = {
       beginPath: vi.fn(), clearRect: vi.fn(), drawImage: vi.fn(), imageSmoothingEnabled: true,
-      lineTo: vi.fn(), lineWidth: 0, moveTo: vi.fn(), putImageData: vi.fn(), restore: vi.fn(), save: vi.fn(), stroke: vi.fn(), strokeStyle: "",
+      lineTo: vi.fn(), lineWidth: 0, moveTo: vi.fn(), putImageData: vi.fn(), restore: vi.fn(), save: vi.fn(), scale: vi.fn(), stroke: vi.fn(), strokeStyle: "", translate: vi.fn(),
     } as unknown as CanvasRenderingContext2D;
     const originalCreateElement = dom.document.createElement.bind(dom.document);
     dom.document.createElement = ((tagName: string) => {
@@ -296,15 +311,18 @@ describe("PlanarSurface lifecycle", () => {
       layers: { contours: false, mesh: false, raster: true, vectors: false }, range: { mode: "auto" },
       resolution: [1, 1], sampleIdentity: '"fm-planar-sha256:unit"', scalar: new Float64Array([1_000]),
     });
+    const onInteraction = vi.fn();
     try {
-      await act(async () => { root.render(<PlanarSurface model={model} />); await Promise.resolve(); });
+      await act(async () => { root.render(<PlanarSurface model={model} onInteraction={onInteraction} />); await Promise.resolve(); });
       const canvas = findElement(container, (element) => element.getAttribute("aria-label") === "Planar scalar field", "unit canvas");
       Object.assign(canvas, { clientHeight: 100, clientWidth: 100 });
       const move = new TestEvent("pointermove", { bubbles: true });
       Object.assign(move, { clientX: 50, clientY: 50 });
       await act(async () => { canvas.dispatchEvent(move); });
       const probe = findElement(container, (element) => element.tagName === "OUTPUT", "unit probe");
-      expect(probe.textContent).toBe("1");
+      expect(probe.textContent).toBe("1 kA/m");
+      await act(async () => { canvas.dispatchEvent(new TestEvent("keydown", { bubbles: true, key: "+" })); });
+      expect(onInteraction).toHaveBeenLastCalledWith({ panU: 0, panV: 0, zoom: 1.25 });
       expect(model.scalar[0]).toBe(1_000);
     } finally {
       await act(async () => root.unmount());
@@ -320,7 +338,7 @@ describe("PlanarSurface lifecycle", () => {
     const root = createRoot(container as unknown as Element);
     const context = {
       beginPath: vi.fn(), clearRect: vi.fn(), drawImage: vi.fn(), imageSmoothingEnabled: true,
-      lineTo: vi.fn(), lineWidth: 0, moveTo: vi.fn(), restore: vi.fn(), save: vi.fn(), stroke: vi.fn(), strokeStyle: "",
+      lineTo: vi.fn(), lineWidth: 0, moveTo: vi.fn(), restore: vi.fn(), save: vi.fn(), scale: vi.fn(), stroke: vi.fn(), strokeStyle: "", translate: vi.fn(),
     } as unknown as CanvasRenderingContext2D;
     const originalCreateElement = dom.document.createElement.bind(dom.document);
     dom.document.createElement = ((tagName: string) => {

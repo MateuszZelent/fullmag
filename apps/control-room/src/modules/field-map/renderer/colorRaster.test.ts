@@ -41,4 +41,11 @@ describe("scalar raster colorization", () => {
       })],
     ).toEqual([0, 0, 0, 128, 255, 255, 255, 128]);
   });
+
+  it("uses the deterministic zero range for empty support and rejects invalid opacity", () => {
+    expect(finiteScalarRange([Number.NaN], [1])).toEqual({ min: 0, max: 0 });
+    expect(() => colorizeScalarRaster([1], { min: 0, max: 1 }, undefined, { opacity: 2 })).toThrow(
+      "Planar raster opacity must be finite and within [0, 1]",
+    );
+  });
 });

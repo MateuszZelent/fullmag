@@ -164,9 +164,12 @@ export function createPlanarRenderer(
     const [uMin, uMax, vMin, vMax] = view.bounds;
     const [viewUMin, viewUMax, viewVMin, viewVMax] = view.viewport;
     const sourceX = ((viewUMin - uMin) / (uMax - uMin)) * lastImage.width;
-    const sourceY = ((vMax - viewVMax) / (vMax - vMin)) * lastImage.height;
+    const sourceY = ((viewVMin - vMin) / (vMax - vMin)) * lastImage.height;
     const sourceWidth = ((viewUMax - viewUMin) / (uMax - uMin)) * lastImage.width;
     const sourceHeight = ((viewVMax - viewVMin) / (vMax - vMin)) * lastImage.height;
+    context.save();
+    context.translate(0, canvas.height);
+    context.scale(1, -1);
     context.drawImage(
       scratch,
       sourceX,
@@ -174,10 +177,11 @@ export function createPlanarRenderer(
       sourceWidth,
       sourceHeight,
       0,
-      canvas.height,
+      0,
       canvas.width,
-      -canvas.height,
+      canvas.height,
     );
+    context.restore();
   };
   return {
     dispose() {
