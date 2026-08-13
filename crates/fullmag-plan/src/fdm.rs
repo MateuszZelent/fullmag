@@ -24,10 +24,7 @@ use crate::region_conflict::{resolve_region_conflict, RegionConflictCandidate};
 use crate::spin_torque::{
     resolve_legacy_spin_torque, resolve_sot_fields, SpinTorqueExecutableLane,
 };
-use crate::util::{
-    generate_random_unit_vectors, runtime_requests_cuda, GRID_TOLERANCE, MU0,
-    PLACEMENT_TOLERANCE,
-};
+use crate::util::{generate_random_unit_vectors, runtime_requests_cuda, GRID_TOLERANCE, MU0};
 use crate::validate::{
     planned_study_controls, validate_executable_outputs, validate_grid_asset_cell_size,
 };
@@ -2149,9 +2146,9 @@ pub(crate) fn plan_fdm_multilayer(
                 .to_string(),
         );
     }
-    if problem.object_regions.iter().any(|region| region.enabled) {
+    if problem.couplings.iter().any(|coupling| coupling.enabled) {
         errors.push(
-            "object_regions are authored in ProblemIR but multilayer FDM + region-owned material/coupling is capability-gated out of scope for v1; planner must not silently ignore authored regions in the multilayer FDM path"
+            "active coupling is not executable in the current multilayer FDM path; planner refuses to emit a partial plan without the runner coupling realization"
                 .to_string(),
         );
     }
@@ -2410,6 +2407,103 @@ pub(crate) fn plan_fdm_multilayer(
                 continue;
             }
         };
+        let owner_names = [magnet.name.as_str(), geometry_name];
+        let (native_region_mask, region_index_by_id) = materialize_object_region_mask(
+            problem,
+            &owner_names,
+            grid_cells,
+            cell_size,
+            native_origin,
+            placed.translation,
+            active_mask.as_ref(),
+            &mut errors,
+        );
+        let native_region_legend =
+            build_fdm_region_legend(problem, &owner_names, &region_index_by_id);
+        let sample_points = grid_sample_points(
+            grid_cells,
+            cell_size,
+            native_origin,
+            placed.translation,
+            active_mask.as_ref(),
+        );
+        let point_coords = sample_points
+            .iter()
+            .map(|point| point.position_world)
+            .collect::<Vec<_>>();
+        let resolve_material_field = |parameter, base_value, label: &str| {
+            let values = crate::material::resolve_spatial_parameter(
+                problem,
+                magnet.name.as_str(),
+                parameter,
+                base_value,
+                &point_coords,
+                placed.translation,
+            )?;
+            if values.len() != n_cells {
+                return Err(format!(
+                    "multilayer FDM resolved {label} field length {} does not match native cell count {n_cells}",
+                    values.len()
+                ));
+            }
+            let valid = values.iter().all(|value| {
+                value.is_finite()
+                    && match parameter {
+                        fullmag_ir::MaterialParameterNameIR::Ms => *value > 0.0,
+                        fullmag_ir::MaterialParameterNameIR::Aex
+                        | fullmag_ir::MaterialParameterNameIR::Alpha => *value >= 0.0,
+                        _ => true,
+                    }
+            });
+            if !valid {
+                return Err(format!(
+                    "multilayer FDM resolved {label} field contains non-finite or physically invalid values"
+                ));
+            }
+            Ok(
+                if values
+                    .iter()
+                    .all(|value| (*value - base_value).abs() <= 1e-12)
+                {
+                    None
+                } else {
+                    Some(values)
+                },
+            )
+        };
+        let ms_field = match resolve_material_field(
+            fullmag_ir::MaterialParameterNameIR::Ms,
+            material.saturation_magnetisation,
+            "Ms",
+        ) {
+            Ok(values) => values,
+            Err(reason) => {
+                errors.push(reason);
+                None
+            }
+        };
+        let a_field = match resolve_material_field(
+            fullmag_ir::MaterialParameterNameIR::Aex,
+            material.exchange_stiffness,
+            "Aex",
+        ) {
+            Ok(values) => values,
+            Err(reason) => {
+                errors.push(reason);
+                None
+            }
+        };
+        let alpha_field = match resolve_material_field(
+            fullmag_ir::MaterialParameterNameIR::Alpha,
+            material.damping,
+            "Alpha",
+        ) {
+            Ok(values) => values,
+            Err(reason) => {
+                errors.push(reason);
+                None
+            }
+        };
         let initial_magnetization = match &magnet.initial_magnetization {
             Some(InitialMagnetizationIR::Uniform { value }) => {
                 if let Some(ref mask) = active_mask {
@@ -2493,15 +2587,17 @@ pub(crate) fn plan_fdm_multilayer(
             native_cell_size: cell_size,
             native_origin,
             native_active_mask: active_mask,
+            native_region_mask: Some(native_region_mask),
+            native_region_legend: Some(native_region_legend),
             initial_magnetization,
             material: FdmMaterialIR {
                 name: material.name.clone(),
                 saturation_magnetisation: material.saturation_magnetisation,
                 exchange_stiffness: material.exchange_stiffness,
                 damping: material.damping,
-                ms_field: None,
-                a_field: None,
-                alpha_field: None,
+                ms_field,
+                a_field,
+                alpha_field,
                 uniaxial_anisotropy_ku1: material.uniaxial_anisotropy,
                 uniaxial_anisotropy_ku2: material.uniaxial_anisotropy_k2,
                 anisotropy_axis: material.anisotropy_axis,
@@ -2552,25 +2648,19 @@ pub(crate) fn plan_fdm_multilayer(
         );
     }
 
-    let mut z_intervals = lowered_bodies
-        .iter()
-        .map(|body| {
-            (
-                body.magnet_name.as_str(),
-                body.native_origin[2],
-                body.native_origin[2] + body.bounding_size[2],
-            )
-        })
-        .collect::<Vec<_>>();
-    z_intervals.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
-    for pair in z_intervals.windows(2) {
-        let previous = pair[0];
-        let current = pair[1];
-        if current.1 < previous.2 - PLACEMENT_TOLERANCE {
-            errors.push(format!(
-                "multilayer_convolution does not allow overlapping bodies in z; '{}' overlaps '{}'",
-                current.0, previous.0
-            ));
+    for (index, left) in lowered_bodies.iter().enumerate() {
+        for right in lowered_bodies.iter().skip(index + 1) {
+            let overlaps = (0..3).all(|axis| {
+                let left_upper = left.native_origin[axis] + left.bounding_size[axis];
+                let right_upper = right.native_origin[axis] + right.bounding_size[axis];
+                left.native_origin[axis] < right_upper && right.native_origin[axis] < left_upper
+            });
+            if overlaps {
+                errors.push(format!(
+                    "multilayer_convolution does not allow overlapping bodies with positive XY/Z volume; '{}' overlaps '{}'",
+                    left.magnet_name, right.magnet_name
+                ));
+            }
         }
     }
 
@@ -2828,6 +2918,17 @@ pub(crate) fn plan_fdm_multilayer(
             }
             origin
         });
+    let material_field_plans = problem
+        .magnets
+        .iter()
+        .flat_map(|magnet| {
+            crate::material::build_material_field_plans(
+                problem,
+                magnet.name.as_str(),
+                fullmag_ir::MaterialFieldLocationIR::Cell,
+            )
+        })
+        .collect::<Vec<_>>();
     let layers = lowered_bodies
         .into_iter()
         .map(|body| {
@@ -2840,11 +2941,7 @@ pub(crate) fn plan_fdm_multilayer(
             // geometry; distinct extents/centers become explicit push/pull
             // transfers instead of being rejected or silently reinterpreted
             // as one physical mesh.
-            let convolution_origin = [
-                common_xy_min[0],
-                common_xy_min[1],
-                body.native_origin[2],
-            ];
+            let convolution_origin = [common_xy_min[0], common_xy_min[1], body.native_origin[2]];
             let native_matches_scratch = body.native_grid == common_cells
                 && body.native_cell_size == convolution_cell_size
                 && body.native_origin == convolution_origin;
@@ -2856,6 +2953,8 @@ pub(crate) fn plan_fdm_multilayer(
                 native_cell_size: body.native_cell_size,
                 native_origin: body.native_origin,
                 native_active_mask: body.native_active_mask,
+                native_region_mask: body.native_region_mask,
+                native_region_legend: body.native_region_legend,
                 initial_magnetization: body.initial_magnetization,
                 material: body.material,
                 convolution_grid: common_cells,
@@ -3001,7 +3100,7 @@ pub(crate) fn plan_fdm_multilayer(
             requested_backend: problem.backend_policy.requested_backend,
             resolved_backend,
             execution_mode: problem.validation_profile.execution_mode,
-            material_field_plans: Vec::new(),
+            material_field_plans,
         },
         backend_plan: BackendPlanIR::FdmMultilayer(plan),
         output_plan: OutputPlanIR {

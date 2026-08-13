@@ -212,6 +212,15 @@ def _materialize_preset_texture_initial_conditions(
         initial = magnet_ir.get("initial_magnetization")
         if not isinstance(initial, dict) or initial.get("kind") != "preset_texture":
             continue
+        if initial.get("preset_kind") == "uniform":
+            params = initial.get("preset_params")
+            direction = params.get("direction") if isinstance(params, dict) else None
+            if isinstance(direction, list) and len(direction) == 3:
+                magnet_ir["initial_magnetization"] = {
+                    "kind": "uniform",
+                    "value": [float(value) for value in direction],
+                }
+                continue
         object_transform = _object_transform_for_magnet_geometry(magnet.geometry)
 
         geometry_name = magnet.geometry.geometry_name

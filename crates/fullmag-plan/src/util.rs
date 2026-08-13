@@ -38,7 +38,6 @@ pub(crate) fn field_drive_is_active(
 }
 
 pub(crate) const MU0: f64 = 4.0 * std::f64::consts::PI * 1e-7;
-pub(crate) const PLACEMENT_TOLERANCE: f64 = 1e-12;
 pub(crate) const GRID_TOLERANCE: f64 = 1e-6;
 
 /// Returns `true` when the user requested a CUDA device via `runtime_metadata`.

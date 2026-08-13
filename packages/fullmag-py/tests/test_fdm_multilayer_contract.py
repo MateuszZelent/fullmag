@@ -144,6 +144,33 @@ def test_auto_mode_preserves_common_cells_for_planner_resolution() -> None:
     assert demag.to_ir()["common_cells"] == [64, 32, 1]
 
 
+def test_uniform_texture_with_fdm_asset_remains_uniform_ir() -> None:
+    geometry = fm.Cylinder(radius=4e-9, height=2e-9, name="body")
+    material = fm.Material(name="Py", Ms=800e3, A=13e-12, alpha=0.01)
+    problem = fm.Problem(
+        name="uniform_texture_asset",
+        magnets=[
+            fm.Ferromagnet(
+                name="body",
+                geometry=geometry,
+                material=material,
+                m0=fm.texture.uniform(1.0, 0.0, 0.0),
+            )
+        ],
+        energy=[fm.Exchange()],
+        study=fm.TimeEvolution(dynamics=fm.LLG(), outputs=[]),
+        discretization=fm.DiscretizationHints(fdm=fm.FDM(cell=(2e-9, 2e-9, 2e-9))),
+    )
+
+    ir = problem.to_ir(
+        requested_backend=fm.BackendTarget.FDM
+    )
+    assert ir["geometry_assets"] is not None
+    initial = ir["magnets"][0]["initial_magnetization"]
+
+    assert initial == {"kind": "uniform", "value": [1.0, 0.0, 0.0]}
+
+
 @pytest.mark.parametrize(
     ("kwargs", "message"),
     [

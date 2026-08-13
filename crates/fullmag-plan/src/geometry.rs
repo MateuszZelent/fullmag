@@ -125,6 +125,8 @@ pub(crate) struct LoweredBody {
     pub native_cell_size: [f64; 3],
     pub native_origin: [f64; 3],
     pub native_active_mask: Option<Vec<bool>>,
+    pub native_region_mask: Option<Vec<u32>>,
+    pub native_region_legend: Option<Vec<fullmag_ir::FdmRegionLegendEntryIR>>,
     pub initial_magnetization: Vec<[f64; 3]>,
     pub material: FdmMaterialIR,
 }

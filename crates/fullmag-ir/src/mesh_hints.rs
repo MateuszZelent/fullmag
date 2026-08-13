@@ -138,8 +138,7 @@ impl FdmDemagHintsIR {
                 .any(|component| !component.is_finite() || *component <= 0.0)
             {
                 errors.push(
-                    "fdm.demag.common_cell_size components must be finite and positive"
-                        .to_string(),
+                    "fdm.demag.common_cell_size components must be finite and positive".to_string(),
                 );
             }
             if self.mode == "two_d_stack" {
@@ -263,6 +262,12 @@ pub struct FdmLayerPlanIR {
     pub native_origin: [f64; 3],
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub native_active_mask: Option<Vec<bool>>,
+    /// Object-local numeric region membership aligned with the native grid.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub native_region_mask: Option<Vec<u32>>,
+    /// Stable mapping for `native_region_mask` numeric IDs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub native_region_legend: Option<Vec<crate::plan::FdmRegionLegendEntryIR>>,
     pub initial_magnetization: Vec<[f64; 3]>,
     pub material: FdmMaterialIR,
     pub convolution_grid: [u32; 3],
@@ -283,6 +288,10 @@ struct FdmLayerPlanWireIR {
     native_origin: [f64; 3],
     #[serde(default)]
     native_active_mask: Option<Vec<bool>>,
+    #[serde(default)]
+    native_region_mask: Option<Vec<u32>>,
+    #[serde(default)]
+    native_region_legend: Option<Vec<crate::plan::FdmRegionLegendEntryIR>>,
     initial_magnetization: Vec<[f64; 3]>,
     material: FdmMaterialIR,
     convolution_grid: [u32; 3],
@@ -307,6 +316,8 @@ impl<'de> Deserialize<'de> for FdmLayerPlanIR {
             native_cell_size: wire.native_cell_size,
             native_origin: wire.native_origin,
             native_active_mask: wire.native_active_mask,
+            native_region_mask: wire.native_region_mask,
+            native_region_legend: wire.native_region_legend,
             initial_magnetization: wire.initial_magnetization,
             material: wire.material,
             convolution_grid: wire.convolution_grid,
@@ -359,6 +370,25 @@ pub fn fdm_multilayer_topology_tokens(mode: &str, layers: &[FdmLayerPlanIR]) -> 
             Some(mask) => {
                 tokens.push(mask.len() as u32);
                 tokens.extend(mask.iter().map(|active| u32::from(*active)));
+            }
+            None => tokens.push(u32::MAX),
+        }
+        match layer.native_region_mask.as_deref() {
+            Some(mask) => {
+                tokens.push(mask.len() as u32);
+                tokens.extend(mask);
+            }
+            None => tokens.push(u32::MAX),
+        }
+        match layer.native_region_legend.as_deref() {
+            Some(legend) => {
+                tokens.push(legend.len() as u32);
+                for entry in legend {
+                    tokens.push(entry.numeric_id);
+                    push_text(&mut tokens, &entry.object_id);
+                    push_text(&mut tokens, &entry.region_id);
+                    tokens.push(entry.priority as u32);
+                }
             }
             None => tokens.push(u32::MAX),
         }
@@ -844,6 +874,8 @@ mod multilayer_contract_tests {
             native_cell_size: [1.0, 1.0, 1.0],
             native_origin: [0.0, 0.0, 0.0],
             native_active_mask: None,
+            native_region_mask: None,
+            native_region_legend: None,
             initial_magnetization: vec![[1.0, 0.0, 0.0]; 4],
             material: FdmMaterialIR::default(),
             convolution_grid: [2, 1, 2],
@@ -912,6 +944,8 @@ mod multilayer_contract_tests {
                 let layer = layer.as_object_mut().expect("layer object");
                 layer.remove("layer_id");
                 layer.remove("object_id");
+                layer.remove("native_region_mask");
+                layer.remove("native_region_legend");
             });
         let summary = object
             .get_mut("planner_summary")
@@ -924,6 +958,8 @@ mod multilayer_contract_tests {
         assert_eq!(decoded.mode, "three_d");
         assert_eq!(decoded.layers[0].layer_id, "layer:free");
         assert_eq!(decoded.layers[0].object_id, "free");
+        assert_eq!(decoded.layers[0].native_region_mask, None);
+        assert_eq!(decoded.layers[0].native_region_legend, None);
         assert_eq!(decoded.planner_summary.requested_mode, "auto");
         assert_eq!(decoded.planner_summary.resolved_mode, "three_d");
         let certificate = decoded.grid_certificate.as_ref().expect("certificate");
@@ -946,6 +982,25 @@ mod multilayer_contract_tests {
         let two_d = fdm_multilayer_topology_tokens("two_d_stack", &plan.layers);
         let three_d = fdm_multilayer_topology_tokens("three_d", &plan.layers);
         assert_ne!(two_d, three_d);
+    }
+
+    #[test]
+    fn topology_identity_changes_with_native_region_membership() {
+        let plan = legacy_plan_fixture();
+        let baseline = fdm_multilayer_topology_tokens("three_d", &plan.layers);
+        let mut membership = plan.layers.clone();
+        membership[0].native_region_mask = Some(vec![1, 0, 0, 0]);
+        membership[0].native_region_legend = Some(vec![crate::plan::FdmRegionLegendEntryIR {
+            numeric_id: 1,
+            object_id: "free".to_string(),
+            region_id: "free:core".to_string(),
+            priority: 10,
+        }]);
+
+        assert_ne!(
+            baseline,
+            fdm_multilayer_topology_tokens("three_d", &membership)
+        );
     }
 
     #[test]
