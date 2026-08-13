@@ -124,11 +124,15 @@ describe("CommandPaletteModule", () => {
     expect(run).toHaveBeenCalledWith({ source: "palette" });
   });
 
-  it("does not render or expose execution for monitor selection that requires contextual input", () => {
-    const selectMonitor = fieldMapCommands.find(
-      (command) => command.id === "field-map.select-monitor",
-    );
-    if (!selectMonitor) throw new Error("Missing planar monitor selection command.");
+  it.each([
+    "field-map.select-monitor",
+    "planar-monitor.show-frame-3d",
+    "planar-monitor.delete",
+    "planar-monitor.duplicate",
+    "planar-monitor.rename",
+  ])("does not render monitor command %s that requires contextual input", (id) => {
+    const selectMonitor = fieldMapCommands.find((command) => command.id === id);
+    if (!selectMonitor) throw new Error(`Missing contextual monitor command ${id}.`);
     const onExecute = vi.fn();
     const commands = [
       selectMonitor,
@@ -141,6 +145,7 @@ describe("CommandPaletteModule", () => {
       },
     ];
 
+    expect(selectMonitor.requiresInput).toBe(true);
     expect(filterPaletteCommands(commands, "").map((command) => command.id)).toEqual([
       "workspace.safe-command",
     ]);
@@ -156,7 +161,7 @@ describe("CommandPaletteModule", () => {
     );
 
     expect(html).toContain("Safe command");
-    expect(html).not.toContain("Select Planar Monitor");
+    expect(html).not.toContain(selectMonitor.title);
     expect(onExecute).not.toHaveBeenCalled();
   });
 

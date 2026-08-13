@@ -52,7 +52,12 @@ export const fieldMapCommands: CommandContribution[] = Object.entries(
   category: "Viewport",
   group: "field-map",
   id,
-  requiresInput: id === "field-map.select-monitor",
+  requiresInput:
+    id === "field-map.select-monitor" ||
+    id === "planar-monitor.show-frame-3d" ||
+    id === "planar-monitor.delete" ||
+    id === "planar-monitor.duplicate" ||
+    id === "planar-monitor.rename",
   run: async (context) => {
     const input =
       context.input && typeof context.input === "object"
