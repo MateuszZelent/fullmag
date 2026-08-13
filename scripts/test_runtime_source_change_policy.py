@@ -32,6 +32,8 @@ def test_non_runtime_path_policy_covers_docs_ci_and_packaging_helpers() -> None:
     assert is_non_runtime_path("scripts/test_release_workflow_contract.py")
     assert is_non_runtime_path("scripts/export_fem_gpu_runtime.sh")
     assert is_non_runtime_path("scripts/capture_source_snapshot_identity.py")
+    assert is_non_runtime_path(".worktrees")
+    assert is_non_runtime_path(".worktrees/future-admin-entry")
     assert is_non_runtime_path("justfile")
     assert is_non_runtime_path("scripts/public_docs_information_architecture.py")
     assert is_non_runtime_path(

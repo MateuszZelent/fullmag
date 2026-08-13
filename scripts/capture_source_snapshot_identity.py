@@ -25,6 +25,7 @@ SCHEMA = "fullmag.source-snapshot.v2"
 NON_RUNTIME_PREFIXES = (
     ".agents/",
     ".codex/",
+    ".worktrees/",
     ".github/",
     # The managed native FEM bundle does not compile the browser application.
     # Keep dirty Control Room edits out of the native source identity so a
@@ -36,6 +37,9 @@ NON_RUNTIME_PREFIXES = (
 )
 NON_RUNTIME_FILES = {"AGENTS.md", "CHANGELOG.md", "README.md"}
 NON_RUNTIME_EXACT_PATHS = {
+    # The repository tracks this as an absolute worktree-administration link.
+    # It is not a runtime source input and must not be materialized.
+    ".worktrees",
     "apps/control-room/next-env.d.ts",
     "justfile",
     "scripts/export_fem_gpu_runtime.sh",
@@ -46,6 +50,11 @@ NON_RUNTIME_EXACT_PATHS = {
     "scripts/runtime_source_change_policy.py",
 }
 NON_RUNTIME_SUFFIXES = (".md", ".rst", ".source-map.json")
+
+# Worktree administration is intentionally excluded from the immutable source
+# snapshot even when Git records it in the committed tree.  In this repository
+# it is an absolute symlink, which is valid metadata but unsafe to materialize.
+EXCLUDED_COMMITTED_SOURCE_PATHS = frozenset({".worktrees"})
 
 
 class SourceIdentityError(RuntimeError):
@@ -61,6 +70,14 @@ def _is_non_runtime_path(path: str) -> bool:
         or normalized in NON_RUNTIME_EXACT_PATHS
         or normalized.startswith(NON_RUNTIME_PREFIXES)
         or normalized.endswith(NON_RUNTIME_SUFFIXES)
+    )
+
+
+def _is_excluded_committed_source_path(path: str) -> bool:
+    normalized = path.replace("\\", "/")
+    return normalized in EXCLUDED_COMMITTED_SOURCE_PATHS or any(
+        normalized.startswith(f"{excluded}/")
+        for excluded in EXCLUDED_COMMITTED_SOURCE_PATHS
     )
 
 
@@ -227,6 +244,8 @@ def _committed_entries(repo_root: Path, commit: str) -> dict[str, dict[str, obje
         except UnicodeDecodeError as error:
             raise SourceIdentityError("cannot decode committed source tree") from error
         _safe_relative_path(relative, "committed source")
+        if _is_excluded_committed_source_path(relative):
+            continue
         if mode == "160000":
             continue
         if object_type != "blob" or mode not in {"100644", "100755", "120000"}:
@@ -590,8 +609,17 @@ def materialize(
     _validate_tree_symlinks(committed_entries)
     if not snapshot_root.exists():
         snapshot_root.mkdir(parents=True)
+    archive_command = (
+        "git",
+        "archive",
+        "--format=tar",
+        str(identity["head_commit_full"]),
+        "--",
+        ".",
+        *(f":(exclude){path}" for path in sorted(EXCLUDED_COMMITTED_SOURCE_PATHS)),
+    )
     archive = subprocess.Popen(
-        ("git", "archive", "--format=tar", str(identity["head_commit_full"])),
+        archive_command,
         cwd=repo_root,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
