@@ -103,8 +103,12 @@ export function resolveDisplayUnitConversion(
   displayUnit: string | null | undefined,
 ): { compatible: boolean; factor: number; unit: string } {
   const source = sourceUnit?.trim() ?? "";
+  const display = displayUnit?.trim() ?? "";
+  if (source && display === source) {
+    return { compatible: true, factor: 1, unit: source };
+  }
   const definition = displayUnitDefinitionsForSourceUnit(source).find(
-    (item) => item.value === displayUnit?.trim(),
+    (item) => item.value === display,
   );
   return definition
     ? { compatible: true, factor: definition.factor, unit: definition.value }

@@ -116,8 +116,8 @@ export function PlanarSurface({
     const overlayContext = overlayContextRef.current;
     const overlayCanvas = overlayRef.current;
     if (!renderer || !overlayContext || !overlayCanvas) return;
-    valuesRef.current = model.scalar;
-    maskRef.current = model.mask;
+    valuesRef.current = model.layers.probes ? model.scalar : null;
+    maskRef.current = model.layers.probes ? model.mask : null;
     const glyphs = model.layers.vectors && model.vectors
       ? buildVectorGlyphs(model.vectors, model.vectorBudget, 1e-15, {
           lengthMode: model.vectorStyle.lengthMode,
@@ -155,8 +155,8 @@ export function PlanarSurface({
     const range = rangeMin === undefined || rangeMax === undefined
       ? null
       : { min: rangeMin, max: rangeMax };
-    const needsColorizer = range !== null && model.rasterOpacity !== null &&
-      (model.layers.raster || model.layers.contours);
+    const needsColorizer = range !== null && (model.layers.raster || model.layers.contours);
+    if (!model.layers.raster || !needsColorizer) renderer.clearBase();
     if (needsColorizer) {
       colorizerRef.current ??= createPlanarColorizer(
         new Worker(new URL("./planarRendererWorker.ts", import.meta.url), { type: "module" }),
@@ -184,11 +184,12 @@ export function PlanarSurface({
         contours: model.layers.contours,
         height: model.resolution[1],
         level: (range!.min + range!.max) / 2,
-        opacity: model.rasterOpacity!,
+        opacity: model.rasterOpacity ?? 1,
         width: model.resolution[0],
       });
     } else {
-      colorizerRef.current?.invalidate();
+      colorizerRef.current?.dispose();
+      colorizerRef.current = null;
       drawOverlayRef.current();
     }
   }, [
@@ -196,6 +197,7 @@ export function PlanarSurface({
     model.layers.boundaries,
     model.layers.contours,
     model.layers.mesh,
+    model.layers.probes,
     model.layers.raster,
     model.layers.vectors,
     model.mask,
@@ -212,6 +214,15 @@ export function PlanarSurface({
     model.vectors,
     onRenderEvidence,
   ]);
+
+  useEffect(() => {
+    if (model.layers.probes) return;
+    if (hoverFrameRef.current !== null && hoverFrameRef.current !== -1) {
+      cancelAnimationFrame(hoverFrameRef.current);
+    }
+    hoverFrameRef.current = null;
+    hoverPointerRef.current = null;
+  }, [model.layers.probes]);
 
   useEffect(() => {
     rendererRef.current?.setViewport(model.bounds, model.viewport);
@@ -322,8 +333,16 @@ export function PlanarSurface({
             hoverFrameRef.current = null;
             const point = hoverPointerRef.current;
             const latestValues = valuesRef.current;
-            if (!point || !latestValues) return;
-            setHoverValue(localProbe(point[0], point[1], model.bounds, model.resolution, latestValues, maskRef.current ?? undefined).value);
+            const current = modelRef.current;
+            if (!current.layers.probes || !point || !latestValues) return;
+            setHoverValue(localProbe(
+              point[0],
+              point[1],
+              current.bounds,
+              current.resolution,
+              latestValues,
+              maskRef.current ?? undefined,
+            ).value);
           });
           if (hoverFrameRef.current === -1) hoverFrameRef.current = frame;
         }}

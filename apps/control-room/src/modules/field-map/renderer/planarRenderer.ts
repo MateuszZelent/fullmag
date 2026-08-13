@@ -1,4 +1,5 @@
 export interface PlanarRenderer {
+  clearBase(): void;
   dispose(): void;
   draw(pixels: Uint8ClampedArray, width: number, height: number): void;
   resolveViewport(
@@ -183,17 +184,21 @@ export function createPlanarRenderer(
     );
     context.restore();
   };
+  const clearBase = () => {
+    context.clearRect(0, 0, canvas.width, canvas.height);
+    if (scratch) {
+      scratch.width = 0;
+      scratch.height = 0;
+    }
+    scratch = null;
+    lastImage = null;
+  };
   return {
+    clearBase,
     dispose() {
-      context.clearRect(0, 0, canvas.width, canvas.height);
+      clearBase();
       canvas.width = 0;
       canvas.height = 0;
-      if (scratch) {
-        scratch.width = 0;
-        scratch.height = 0;
-      }
-      scratch = null;
-      lastImage = null;
       view = null;
     },
     draw(pixels, width, height) {

@@ -147,7 +147,7 @@ export function resolvePlanarDisplayRange(
   if (!Number.isFinite(min) || !Number.isFinite(max)) return { min: 0, max: 0 };
   if (requested.mode === "symmetric") {
     const magnitude = Math.max(Math.abs(min), Math.abs(max));
-    return magnitude === 0 ? { max: 0.5, min: -0.5 } : { max: magnitude, min: -magnitude };
+    return magnitude === 0 ? { max: 0, min: 0 } : { max: magnitude, min: -magnitude };
   }
   return { max, min };
 }

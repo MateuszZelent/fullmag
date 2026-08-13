@@ -140,6 +140,49 @@ describe("planar renderer lifecycle", () => {
     }
   });
 
+  it("clears and forgets the owned raster when the scalar layer is disabled", () => {
+    const context = {
+      clearRect: vi.fn(),
+      drawImage: vi.fn(),
+      imageSmoothingEnabled: true,
+      putImageData: vi.fn(),
+    };
+    const canvas = {
+      getContext: vi.fn(() => context),
+      height: 0,
+      width: 0,
+    } as unknown as HTMLCanvasElement;
+    const originalDocument = Object.getOwnPropertyDescriptor(globalThis, "document");
+    const originalImageData = Object.getOwnPropertyDescriptor(globalThis, "ImageData");
+    Object.defineProperty(globalThis, "document", {
+      configurable: true,
+      value: { createElement: vi.fn(() => ({ getContext: vi.fn(() => context), height: 0, width: 0 })) },
+    });
+    Object.defineProperty(globalThis, "ImageData", {
+      configurable: true,
+      value: class { constructor(readonly data: Uint8ClampedArray, readonly width: number, readonly height: number) {} },
+    });
+    const renderer = createPlanarRenderer(canvas);
+
+    try {
+      renderer.resize(10, 10, 1);
+      renderer.draw(new Uint8ClampedArray(4), 1, 1);
+      const drawsBeforeClear = context.drawImage.mock.calls.length;
+      const clearsBeforeClear = context.clearRect.mock.calls.length;
+
+      renderer.clearBase();
+      renderer.setViewport([0, 1, 0, 1], [0, 1, 0, 1]);
+
+      expect(context.clearRect).toHaveBeenCalledTimes(clearsBeforeClear + 1);
+      expect(context.drawImage).toHaveBeenCalledTimes(drawsBeforeClear);
+    } finally {
+      if (originalDocument) Object.defineProperty(globalThis, "document", originalDocument);
+      else Reflect.deleteProperty(globalThis, "document");
+      if (originalImageData) Object.defineProperty(globalThis, "ImageData", originalImageData);
+      else Reflect.deleteProperty(globalThis, "ImageData");
+    }
+  });
+
   it("maps backend row zero at v_min to the bottom consistently for raster contours glyphs and probe", () => {
     const context = {
       beginPath: vi.fn(), clearRect: vi.fn(), drawImage: vi.fn(), imageSmoothingEnabled: true,

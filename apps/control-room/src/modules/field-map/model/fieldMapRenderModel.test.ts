@@ -151,6 +151,10 @@ describe("field-map render model", () => {
       max: 5,
       min: 5,
     });
+    expect(resolvePlanarDisplayRange(new Float64Array([0, 0]), undefined, { mode: "symmetric" })).toEqual({
+      max: 0,
+      min: 0,
+    });
   });
 
   it("fails closed for an unsupported display unit while converting compatible field units", () => {
@@ -175,7 +179,31 @@ describe("field-map render model", () => {
       unit: "pJ/m",
     });
     expect(resolvePlanarDisplayUnit("1", "1")).toEqual({ compatible: true, scale: 1, unit: "1" });
+    expect(resolvePlanarDisplayUnit("Pa", "Pa")).toEqual({ compatible: true, scale: 1, unit: "Pa" });
+    expect(resolvePlanarDisplayUnit("rad", "rad")).toEqual({ compatible: true, scale: 1, unit: "rad" });
+    expect(resolvePlanarDisplayUnit("Pa", "V")).toEqual({ compatible: false, scale: 1, unit: "Pa" });
     expect(resolvePlanarDisplayUnit("mystery", "mT")).toEqual({ compatible: false, scale: 1, unit: "mystery" });
+  });
+
+  it("keeps arbitrary canonical Field Map units identity-compatible without guessing conversions", () => {
+    for (const unit of ["m", "Pa", "V", "rad", "dimensionless"]) {
+      expect(resolvePlanarDisplayUnit(unit, unit)).toEqual({ compatible: true, scale: 1, unit });
+    }
+    const model = buildFieldMapRenderModel({
+      bounds: [0, 1, 0, 1],
+      canonicalUnit: "Pa",
+      component: "normal",
+      displayUnit: "Pa",
+      frame: { normal: [0, 0, 1], uAxis: [1, 0, 0], vAxis: [0, 1, 0] },
+      layers: { contours: false, mesh: false, raster: true, vectors: false },
+      range: { mode: "auto" },
+      resolution: [1, 1],
+      sampleIdentity: "unit-identity",
+      scalar: new Float64Array([1]),
+    });
+
+    expect(model.display).toMatchObject({ legendUnit: "Pa", probeScale: 1 });
+    expect(model.diagnostics).toEqual([]);
   });
 
   it("keeps unsupported planar presentation semantics visible as fail-closed diagnostics", () => {

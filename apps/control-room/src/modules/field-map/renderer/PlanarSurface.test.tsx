@@ -372,4 +372,116 @@ describe("PlanarSurface lifecycle", () => {
       dom.restore();
     }
   });
+
+  it("clears released raster state, cancels probes, and lazily recreates a contour-only worker", async () => {
+    const dom = installSimulationPreparationTestDom();
+    const container = dom.document.createElement("div");
+    const root = createRoot(container as unknown as Element);
+    const context = {
+      beginPath: vi.fn(), clearRect: vi.fn(), drawImage: vi.fn(), imageSmoothingEnabled: true,
+      lineTo: vi.fn(), lineWidth: 0, moveTo: vi.fn(), putImageData: vi.fn(), restore: vi.fn(), save: vi.fn(), scale: vi.fn(), stroke: vi.fn(), strokeStyle: "", translate: vi.fn(),
+    } as unknown as CanvasRenderingContext2D;
+    const originalCreateElement = dom.document.createElement.bind(dom.document);
+    dom.document.createElement = ((tagName: string) => {
+      const element = originalCreateElement(tagName);
+      if (tagName.toLowerCase() === "canvas") Object.assign(element, { getContext: vi.fn(() => context), height: 0, width: 0 });
+      return element;
+    }) as typeof dom.document.createElement;
+    class TestResizeObserver {
+      constructor(private readonly callback: ResizeObserverCallback) {}
+      observe(target: Element): void {
+        this.callback([{ contentRect: { height: 100, width: 100 } } as ResizeObserverEntry], this as unknown as ResizeObserver);
+        Object.assign(target, { clientHeight: 100, clientWidth: 100 });
+      }
+      disconnect(): void {}
+      unobserve(): void {}
+    }
+    const workers: TestWorker[] = [];
+    const requests: PlanarColorizeRequest[] = [];
+    class TestWorker {
+      onmessage: ((event: MessageEvent<PlanarColorizeResponse>) => void) | null = null;
+      readonly terminate = vi.fn();
+
+      constructor() {
+        workers.push(this);
+      }
+
+      postMessage(request: PlanarColorizeRequest): void {
+        requests.push(request);
+        queueMicrotask(() => this.onmessage?.({ data: colorizePlanarRendererRequest(request) } as MessageEvent<PlanarColorizeResponse>));
+      }
+    }
+    const frames: FrameRequestCallback[] = [];
+    const requestAnimationFrame = vi.fn((callback: FrameRequestCallback) => {
+      frames.push(callback);
+      return frames.length;
+    });
+    const cancelAnimationFrame = vi.fn();
+    const previousImageData = Object.getOwnPropertyDescriptor(globalThis, "ImageData");
+    const previousWorker = Object.getOwnPropertyDescriptor(globalThis, "Worker");
+    const previousRequestAnimationFrame = Object.getOwnPropertyDescriptor(globalThis, "requestAnimationFrame");
+    const previousCancelAnimationFrame = Object.getOwnPropertyDescriptor(globalThis, "cancelAnimationFrame");
+    Object.defineProperty(globalThis, "ImageData", { configurable: true, value: class { constructor(readonly data: Uint8ClampedArray, readonly width: number, readonly height: number) {} } });
+    Object.defineProperty(globalThis, "ResizeObserver", { configurable: true, value: TestResizeObserver });
+    Object.defineProperty(globalThis, "Worker", { configurable: true, value: TestWorker });
+    Object.defineProperty(globalThis, "requestAnimationFrame", { configurable: true, value: requestAnimationFrame });
+    Object.defineProperty(globalThis, "cancelAnimationFrame", { configurable: true, value: cancelAnimationFrame });
+    const onRenderEvidence = vi.fn();
+    const initialModel = makeRenderModel([1, 2], [0, 1, 0, 1]);
+    try {
+      await act(async () => {
+        root.render(<PlanarSurface model={initialModel} onRenderEvidence={onRenderEvidence} />);
+        await Promise.resolve();
+      });
+      const canvas = findElement(container, (element) => element.getAttribute("aria-label") === "Planar scalar field", "transition canvas");
+      Object.assign(canvas, { clientHeight: 100, clientWidth: 100 });
+      const pointerMove = new TestEvent("pointermove", { bubbles: true });
+      Object.assign(pointerMove, { clientX: 75, clientY: 50 });
+      await act(async () => { canvas.dispatchEvent(pointerMove); frames[0]?.(0); });
+      const probe = findElement(container, (element) => element.tagName === "OUTPUT", "transition probe");
+      expect(probe.textContent).toBe("2 m");
+      await act(async () => { canvas.dispatchEvent(pointerMove); });
+      const drawsBeforeRelease = (context.drawImage as ReturnType<typeof vi.fn>).mock.calls.length;
+      const evidenceBeforeRelease = onRenderEvidence.mock.calls.length;
+
+      await act(async () => {
+        root.render(<PlanarSurface model={{
+          ...initialModel,
+          layers: { ...initialModel.layers, contours: false, probes: false, raster: false },
+        }} onRenderEvidence={onRenderEvidence} />);
+      });
+
+      expect(cancelAnimationFrame).toHaveBeenCalledWith(2);
+      expect(probe.textContent).toBe("No sample");
+      expect(workers).toHaveLength(1);
+      expect(workers[0]?.terminate).toHaveBeenCalledTimes(1);
+      expect((context.drawImage as ReturnType<typeof vi.fn>).mock.calls).toHaveLength(drawsBeforeRelease);
+      expect(onRenderEvidence.mock.calls).toHaveLength(evidenceBeforeRelease);
+
+      await act(async () => {
+        root.render(<PlanarSurface model={{
+          ...initialModel,
+          layers: { ...initialModel.layers, contours: true, probes: false, raster: false },
+        }} onRenderEvidence={onRenderEvidence} />);
+        await Promise.resolve();
+      });
+
+      expect(workers).toHaveLength(2);
+      expect(workers[1]?.terminate).not.toHaveBeenCalled();
+      expect(requests).toHaveLength(2);
+      expect(requests[1]?.contours).toMatchObject({ enabled: true });
+      expect((context.drawImage as ReturnType<typeof vi.fn>).mock.calls).toHaveLength(drawsBeforeRelease);
+      expect(onRenderEvidence.mock.calls).toHaveLength(evidenceBeforeRelease);
+
+      await act(async () => root.unmount());
+      expect(workers[1]?.terminate).toHaveBeenCalledTimes(1);
+    } finally {
+      await act(async () => root.unmount());
+      if (previousImageData) Object.defineProperty(globalThis, "ImageData", previousImageData); else Reflect.deleteProperty(globalThis, "ImageData");
+      if (previousWorker) Object.defineProperty(globalThis, "Worker", previousWorker); else Reflect.deleteProperty(globalThis, "Worker");
+      if (previousRequestAnimationFrame) Object.defineProperty(globalThis, "requestAnimationFrame", previousRequestAnimationFrame); else Reflect.deleteProperty(globalThis, "requestAnimationFrame");
+      if (previousCancelAnimationFrame) Object.defineProperty(globalThis, "cancelAnimationFrame", previousCancelAnimationFrame); else Reflect.deleteProperty(globalThis, "cancelAnimationFrame");
+      dom.restore();
+    }
+  });
 });
