@@ -32,6 +32,8 @@ use crate::fdm::gpu::cuda::native::NativeFdmBackend;
 use crate::fdm::gpu::cuda::spin_transport::{
     GpuM1TransportSession, NativeGpuM1TransportAbi, PreparedGpuM1Descriptor,
 };
+#[cfg(feature = "cuda")]
+use crate::fdm::gpu::cuda::transport_publication::accepted_transport_field_snapshots;
 #[cfg(feature = "fem-gpu")]
 use crate::fem::relax::scalars::ensure_fem_object_scalars;
 use crate::fem_baseline;
@@ -5036,6 +5038,10 @@ fn execute_cuda_fdm(
         })?;
         Some(session)
     };
+    let gpu_transport_module_id = plan
+        .spin_transport_plans
+        .first()
+        .map(|transport| transport.module_id.as_str());
     let mut backend = NativeFdmBackend::create(plan)?;
     if let Some(session) = gpu_transport.as_ref() {
         let binding = session.llg_binding().map_err(|error| RunError {
@@ -5100,7 +5106,10 @@ fn execute_cuda_fdm(
         ArtifactRecorder::in_memory(provenance.clone())
     };
     let mut scalar_schedules = collect_scalar_schedules(outputs)?;
-    let mut field_schedules = collect_field_schedules(outputs)?;
+    let field_schedules = collect_field_schedules(outputs)?;
+    let (mut transport_field_schedules, mut field_schedules): (Vec<_>, Vec<_>) = field_schedules
+        .into_iter()
+        .partition(|schedule| gpu_transport_field_name(&schedule.name));
     let default_scalar_trace = scalar_schedules.is_empty();
     capture_initial_cuda_fields(&backend, cell_count, &mut field_schedules, &mut artifacts)?;
 
@@ -5195,6 +5204,15 @@ fn execute_cuda_fdm(
             let Some(mut stats) = backend.step_interruptible(dt_step, interrupt_requested)? else {
                 continue;
             };
+            if let Some(session) = gpu_transport.as_mut() {
+                session
+                    .observe_bound_llg_accepted_step()
+                    .map_err(|error| RunError {
+                        message: format!(
+                            "accepting public GPU M1 transport artifacts failed: {error}"
+                        ),
+                    })?;
+            }
             ensure_single_object_scalars(&mut stats, "free");
             // Keep accepted-step controller telemetry independent of the
             // user-visible scalar cadence.  MuMax-compatible runs often have
@@ -5326,6 +5344,14 @@ fn execute_cuda_fdm(
                 &mut steps,
                 &mut artifacts,
             )?;
+            record_gpu_transport_due_outputs(
+                gpu_transport.as_ref(),
+                gpu_transport_module_id,
+                plan.grid.cells,
+                &sampled_stats,
+                &mut transport_field_schedules,
+                &mut artifacts,
+            )?;
             let energy_plateau_range = energy_plateau.record(stats.e_total);
             let stop_for_relaxation = plan.relaxation.as_ref().is_some_and(|control| {
                 stats.step >= control.stop.max_steps.unwrap_or(u64::MAX)
@@ -5348,6 +5374,14 @@ fn execute_cuda_fdm(
     let completion_time_s = latest_stats.as_ref().map(|stats| stats.time);
     let completion_max_torque_apm = latest_stats.as_ref().map(|stats| stats.max_torque_Apm);
     let final_magnetization = backend.copy_m(cell_count)?;
+    record_gpu_transport_final_outputs(
+        gpu_transport.as_ref(),
+        gpu_transport_module_id,
+        plan.grid.cells,
+        latest_stats.as_ref(),
+        &transport_field_schedules,
+        &mut artifacts,
+    )?;
     if let Some(session) = gpu_transport.as_mut() {
         backend.unbind_gpu_transport()?;
         session.close().map_err(|error| RunError {
@@ -6183,6 +6217,94 @@ fn capture_initial_cuda_fields(
     }
     advance_due_schedules(field_schedules, 0.0);
     Ok(())
+}
+
+#[cfg(feature = "cuda")]
+fn gpu_transport_field_name(name: &str) -> bool {
+    matches!(
+        name,
+        "V_electric" | "J_charge" | "spin_potential" | "spin_current_tensor" | "torque_stt"
+    )
+}
+
+#[cfg(feature = "cuda")]
+fn record_gpu_transport_due_outputs(
+    session: Option<&GpuM1TransportSession<NativeGpuM1TransportAbi>>,
+    module_id: Option<&str>,
+    grid: [u32; 3],
+    stats: &StepStats,
+    schedules: &mut [OutputSchedule],
+    artifacts: &mut ArtifactRecorder,
+) -> Result<(), RunError> {
+    let due_names = schedules
+        .iter()
+        .filter(|schedule| is_due(stats.time, schedule.next_time))
+        .map(|schedule| schedule.name.as_str())
+        .collect::<HashSet<_>>();
+    if due_names.is_empty() {
+        return Ok(());
+    }
+    let session = session.ok_or_else(|| RunError {
+        message: "transport field output was scheduled without an active GPU M1 session".into(),
+    })?;
+    let accepted = session
+        .readback_accepted_artifacts()
+        .map_err(|error| RunError {
+            message: format!("reading accepted public GPU M1 transport artifacts failed: {error}"),
+        })?;
+    let accepted_revision = session.accepted_sequence().map_err(|error| RunError {
+        message: format!("reading accepted public GPU M1 publication identity failed: {error}"),
+    })?;
+    let module_id = module_id.ok_or_else(|| RunError {
+        message: "active GPU M1 session has no resolved transport module identity".into(),
+    })?;
+    let scope = format!("transport_module:{module_id}:full_solve_domain");
+    for snapshot in accepted_transport_field_snapshots(
+        grid,
+        accepted,
+        stats.step,
+        stats.time,
+        stats.dt,
+        accepted_revision,
+        &scope,
+    )? {
+        if due_names.contains(snapshot.name.as_str()) {
+            artifacts.record_field_snapshot(snapshot)?;
+        }
+    }
+    advance_due_schedules(schedules, stats.time);
+    Ok(())
+}
+
+#[cfg(feature = "cuda")]
+fn record_gpu_transport_final_outputs(
+    session: Option<&GpuM1TransportSession<NativeGpuM1TransportAbi>>,
+    module_id: Option<&str>,
+    grid: [u32; 3],
+    latest_stats: Option<&StepStats>,
+    schedules: &[OutputSchedule],
+    artifacts: &mut ArtifactRecorder,
+) -> Result<(), RunError> {
+    let Some(stats) = latest_stats else {
+        return Ok(());
+    };
+    let missing = schedules
+        .iter()
+        .filter(|schedule| {
+            schedule
+                .last_sampled_time
+                .is_none_or(|time| !same_time(time, stats.time))
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    if missing.is_empty() {
+        return Ok(());
+    }
+    let mut missing = missing;
+    for schedule in &mut missing {
+        schedule.next_time = stats.time;
+    }
+    record_gpu_transport_due_outputs(session, module_id, grid, stats, &mut missing, artifacts)
 }
 
 #[cfg(feature = "cuda")]

@@ -763,6 +763,19 @@ fn accepted_spin_snapshot_readback_publishes_one_typed_complete_transport_artifa
 }
 
 #[test]
+fn accepted_bound_llg_step_enables_readback_without_a_second_spin_solve() {
+    let abi = FakeAbi::default();
+    let mut session = GpuM1TransportSession::create(abi.clone(), raw_descriptor(2)).unwrap();
+    session.solve_charge(7, 11).unwrap();
+
+    session.observe_bound_llg_accepted_step().unwrap();
+    let artifacts = session.readback_accepted_artifacts().unwrap();
+
+    assert_eq!(artifacts.potential_v, vec![100.0]);
+    assert_eq!(abi.artifact_requests().len(), 5);
+}
+
+#[test]
 fn from_plan_rejects_partial_transport_active_masks_before_abi() {
     let mut plan = planned_public_gpu_m1();
     let descriptor = plan.spin_transport_plans[0]

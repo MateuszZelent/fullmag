@@ -1750,6 +1750,31 @@ impl<A: GpuM1TransportAbi> GpuM1TransportSession<A> {
         })
     }
 
+    /// Records that the bound native LLG context completed one accepted step.
+    ///
+    /// The native LLG owns its stage-local steady-spin solves and commits their
+    /// artifact state transactionally with the accepted magnetic step.  Callers
+    /// may invoke this only after `NativeFdmBackend::step*` returned an accepted
+    /// step; rejected attempts never reach this boundary.
+    pub(crate) fn observe_bound_llg_accepted_step(&mut self) -> Result<(), GpuM1TransportError> {
+        let snapshot = self
+            .accepted_snapshot
+            .as_ref()
+            .ok_or(GpuM1TransportError::ChargeSnapshotRequired)?;
+        self.accepted_spin_sequence = Some(snapshot.accepted_sequence);
+        Ok(())
+    }
+
+    pub(crate) fn accepted_sequence(&self) -> Result<u64, GpuM1TransportError> {
+        let snapshot = self
+            .accepted_snapshot
+            .as_ref()
+            .ok_or(GpuM1TransportError::ChargeSnapshotRequired)?;
+        self.accepted_spin_sequence
+            .filter(|sequence| *sequence == snapshot.accepted_sequence)
+            .ok_or(GpuM1TransportError::SpinSnapshotRequired)
+    }
+
     pub(crate) fn export_stage_checkpoint(
         &self,
         accepted_step: u64,

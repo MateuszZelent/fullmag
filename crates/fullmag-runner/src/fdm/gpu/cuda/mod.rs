@@ -11,3 +11,5 @@ pub(crate) mod native;
 pub(crate) mod route;
 #[cfg(any(feature = "cuda", test))]
 pub(crate) mod spin_transport;
+#[cfg(any(feature = "cuda", test))]
+pub(crate) mod transport_publication;
