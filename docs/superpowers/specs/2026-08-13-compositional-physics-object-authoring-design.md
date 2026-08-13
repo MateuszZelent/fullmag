@@ -149,7 +149,7 @@ hm = study.object(
 )
 
 free_layer = study.object(
-    fm.Box(2.0e-6, 200e-9, 1e-9, center=(0.0, 0.0, 3e-9)),
+    fm.Box(2.0e-6, 200e-9, 1e-9).translate((0.0, 0.0, 3e-9)),
     name="free_layer",
     type="ferromagnet",
 )
@@ -196,18 +196,18 @@ materiałowe są referencją do kanonicznego materiału. Sam
 # %%
 charge = hm.current.solve(
     name="hm_charge",
-    conductivity=5.0e6,
+    conductivity_s_per_m=5.0e6,
 )
 
 charge.electrode(
     name="source",
-    surface=hm.surface("x-"),
-    normal_current_density=1.0e12,
+    surface=hm.surface("x-", orientation=(-1.0, 0.0, 0.0)),
+    outward_current_density_Apm2=-1.0e12,
 )
 charge.electrode(
     name="drain",
-    surface=hm.surface("x+"),
-    potential=0.0,
+    surface=hm.surface("x+", orientation=(1.0, 0.0, 0.0)),
+    potential_V=0.0,
 )
 ```
 
@@ -224,20 +224,24 @@ nakładać sprzecznych BC na tę samą powierzchnię.
 spin = hm.spin_transport.she(
     name="hm_spin",
     current=charge,
-    spin_hall_angle=0.12,
-    spin_diffusion_length=1.5e-9,
+    sigma_s_Spm=5.0e6,
+    polarization_p=0.0,
+    theta_sh=0.12,
+    lambda_sf_m=1.5e-9,
 )
 
 hm_fm = study.interface(
     name="hm_fm",
-    side_a=hm.surface("z+"),
-    side_b=free_layer.surface("z-"),
+    side_a=hm.surface("z+", orientation=(0.0, 0.0, 1.0)),
+    side_b=free_layer.surface("z-", orientation=(0.0, 0.0, -1.0)),
 )
 
 hm_fm.spin_mixing.configure(
     spin_transport=spin,
-    g_mix_real=5.0e14,
-    g_mix_imag=0.0,
+    g_up_Spm2=2.5e14,
+    g_down_Spm2=2.5e14,
+    g_r_Spm2=5.0e14,
+    g_i_Spm2=0.0,
 )
 
 free_layer.spin_torque.from_transport(
@@ -261,7 +265,9 @@ free.magnetization.configure(material=cofeb, initial_state=initial)
 ```
 
 Fizyka globalna jest jawna i nie jest sztucznie przypisywana pierwszemu
-obiektowi:
+obiektowi. Poniższy namespace jest docelowym skrótem authoringowym tej
+migracji; pod spodem zapisuje istniejący `RegionalFieldDrive` z
+`FieldTarget.global_domain()`:
 
 ```python
 study.physics.external_field.uniform(
@@ -286,7 +292,7 @@ Następna publiczna wersja IR wprowadza `objects[]`:
       "label": "Heavy metal",
       "type": "conductor",
       "geometry_id": "geom_heavy_metal",
-      "material_assignments": []
+      "material_assignment_ids": []
     },
     {
       "schema_version": "physics_object.v1",
@@ -294,11 +300,32 @@ Następna publiczna wersja IR wprowadza `objects[]`:
       "name": "free_layer",
       "type": "ferromagnet",
       "geometry_id": "geom_free_layer",
-      "material_assignments": ["cofeb"]
+      "material_assignment_ids": ["assign_free_layer_cofeb"]
     }
   ]
 }
 ```
+
+Przypisanie materiału jest typowanym rekordem root, ponieważ musi zachować
+dokładny target obiektu albo regionu:
+
+```json
+{
+  "material_assignments": [
+    {
+      "schema_version": "object_material_assignment.v1",
+      "assignment_id": "assign_free_layer_cofeb",
+      "target": {"object_id": "obj_free_layer"},
+      "material_id": "cofeb"
+    }
+  ]
+}
+```
+
+Lista ID w obiekcie jest tylko deterministycznym indeksem prezentacyjnym;
+rekord root jest właścicielem targetu i materiału. Przypisania regionalne
+używają dodatkowo `region_id` i round-tripują bez spłaszczenia do jednego
+`material_ref`.
 
 `objects[]` jest jedynym kanonicznym indeksem obiektów sceny. Geometrie nadal
 pozostają oddzielnymi zasobami, ponieważ jedna geometria ma własny lifecycle,
@@ -339,9 +366,28 @@ samodzielnym obiektem objętościowym. Interfejs zawiera dwie zorientowane stron
 oraz stabilne ID obu właścicieli. Normalna jest częścią kontraktu i nie może
 być odtworzona z kolejności obiektów.
 
-Interfejs istnieje raz w `interfaces[]`; Explorer może pokazać linki pod
-obydwoma obiektami, ale nie duplikuje rekordu ani parametrów mixing
-conductance.
+Interfejs istnieje raz w `interfaces[]` jako wersjonowany
+`physics_interface.v1` z `interface_id`, `name`, `side_a`, `side_b` oraz
+jawnym kierunkiem `side_a_to_side_b`. Explorer może pokazać linki pod obydwoma
+obiektami, ale nie duplikuje rekordu. Moduł mixing conductance przechowuje
+parametry konstytutywne i referencję `interface_id`; nie kopiuje stron
+interfejsu do zagnieżdżonego, alternatywnego rekordu.
+
+### 5.4. Własność danych authoringowych
+
+`SceneDocument` ma dokładnie jednego właściciela każdego rekordu:
+
+| Dane | Jedyny właściciel | Projekcje pochodne |
+|---|---|---|
+| identity, geometry, type | `objects[]` | Explorer, viewport |
+| materiał obiektu/regionu | `material_assignments[]` | grupowanie Inspectora |
+| magnetization/current/spin/torque/Oersted | root family collections | `physics_graph` |
+| interfejs geometryczny | `interfaces[]` | scope grafu i linki Explorera |
+| activation i zależności | normalizer grafu | status wykonania |
+
+Legacy `physics_stack`, `magnetization_ref`, `material_ref` i ScriptBuilder są
+wyłącznie wejściami migracji. Nowy writer nie utrzymuje ich jako równoległych,
+edytowalnych źródeł prawdy.
 
 ## 6. Walidacja i semantyka błędów
 
@@ -369,6 +415,20 @@ Reguły fail-closed:
 - usunięcie obiektu jest zablokowane, dopóki jawnie nie zostaną usunięte albo
   przeniesione zależne moduły i interfejsy;
 - rename obiektu nie zmienia `object_id` ani wyników referencyjnych.
+
+Stan modułu current jest deterministyczny:
+
+| Stan authoringu | Activation | Wykonanie |
+|---|---|---|
+| niekompletne BC | `configured` | zakazane |
+| kompletne BC, wszystkie wymuszenia zero | `inactive` | zakazane |
+| kompletne BC, co najmniej jedno wymuszenie niezerowe | `active` | po capability |
+| brak targetu lub named dependency | `blocked` | zakazane |
+| nieznana rodzina z nowszego IR | `unsupported` | zakazane |
+
+Zmiana BC przelicza ten stan oraz wszystkie zależne spin/torque edges w jednej
+transakcji. Zerowy prąd nie usuwa authored modułu; brak modułu oznacza, że
+transport w ogóle nie należy do problemu.
 
 ## 7. Planner i realizacje numeryczne
 
@@ -449,24 +509,22 @@ nie oznacza jednego generycznego formularza dla różnych bytów.
 
 ### 8.3. Zasoby API
 
-OpenAPI v2 publikuje co najmniej:
+OpenAPI v2 zachowuje istniejące zasoby authoringu i mutacje:
 
 ```text
-GET  /v2/sessions/current/model/objects
-GET  /v2/sessions/current/model/objects/{object_id}
+GET  /v2/sessions/current/model/authoring
 POST /v2/sessions/current/model/objects
-PUT  /v2/sessions/current/model/objects/{object_id}
-GET  /v2/sessions/current/model/interfaces
-GET  /v2/sessions/current/model/physics/modules
-POST /v2/sessions/current/model/physics/modules
-PUT  /v2/sessions/current/model/physics/modules/{module_id}
+PATCH /v2/sessions/current/model/objects/{object_id}
+DELETE /v2/sessions/current/model/objects/{object_id}
+POST /v2/sessions/current/model/transactions
 ```
 
-Dokładne ścieżki muszą zostać uzgodnione z istniejącą specyfikacją
-resource-first przed implementacją; powyższe określa rodziny zasobów, nie
-upoważnia do ręcznych endpointów w komponentach. Mutacje używają revision
-preconditions, są atomowe i zwracają nową `scene_revision`. Frontend używa
-generowanych typów, centralnego klienta i resource hooks.
+Zwykłe `POST` generuje `object_id` atomowo; jawne ID jest dozwolone tylko w
+transakcji importu/migracji. Zwykły `PATCH` zmienia `name` lub `label`, ale nie
+`type`. Reclassification używa dedykowanej transakcji z walidacją zależnych
+modułów i proweniencją. Mutacje używają revision preconditions, są atomowe i
+zwracają nową `scene_revision`. Frontend używa generowanych typów, centralnego
+klienta i resource hooks; komponenty nie tworzą własnych endpointów.
 
 ## 9. Round-trip
 

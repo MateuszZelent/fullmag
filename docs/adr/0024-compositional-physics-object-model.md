@@ -38,6 +38,9 @@ obiektu, regionu, interfejsu albo zakresu globalnego.
 Elektroda jest nazwanym warunkiem brzegowym modułu current transport na
 powierzchni; nie jest typem bryły. Interfejs jest osobnym, pojedynczym bytem
 łączącym dwie zorientowane strony i nie należy wyłącznie do jednego obiektu.
+Przypisanie materiału jest osobnym typowanym rekordem wskazującym dokładny
+obiekt albo region; pojedynczy `material_ref` obiektu nie jest wystarczającym
+kontraktem dla scen wielomateriałowych.
 
 Python otrzymuje kanoniczne `study.object(...) -> PhysicsObjectHandle` oraz
 kompozycyjne akcesory modułów. `geometry()` i `antenna_object()` pozostają
@@ -88,11 +91,13 @@ Czytnik starego IR tworzy obiekty deterministycznie: `magnets[]` stają się
 Moduły są mapowane wyłącznie przez jednoznaczne referencje. Niejednoznaczność
 daje `unresolved` i blokuje wykonanie zamiast zgadywania.
 
-Do chwili zakończenia migracji rollback polega na pozostawieniu starego
-publicznego writera jako jawnego eksportera kompatybilności. Nie wolno
-utrzymywać dwóch równorzędnych edytowalnych modeli w jednej scenie. Gdy nowy
-writer stanie się kanoniczny, stary eksport może działać wyłącznie dla modeli
-reprezentowalnych bezstratnie.
+Do chwili zakończenia pełnego pionowego slice'u writer publiczny pozostaje na
+wersji 0.3, natomiast reader/migrator 0.4 może powstawać wcześniej za feature
+gate'em testowym. Przełączenie writera na 0.4 jest jednym atomowym gate'em po
+gotowości Python, SceneDocument, normalizera, planera i eksportera. Nie wolno
+utrzymywać dwóch równorzędnych edytowalnych modeli w jednej scenie. Po
+przełączeniu stary eksport może działać wyłącznie jako jawne narzędzie dla
+modeli reprezentowalnych bezstratnie.
 
 ## Tests and validation
 
