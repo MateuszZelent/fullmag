@@ -4,6 +4,26 @@
 
 `DONE_WITH_CONCERNS`
 
+Po review naprawiono cztery braki publikacyjne w osobnym fixupie: zapis
+MathJax tabeli symboli, dokładne target/carrier/extent capability, terminalny
+kontrakt empty-bin wraz z jawną rozbieżnością implementacji oraz kompletność
+source-map/public API. Między pierwotnym commitem Task 1 `c3ecccaa0` a fixupem
+pojawił się niezależny commit `e442b8971`; nie został zmieniony ani cofnięty.
+Fixup trzech ścieżek dokumentacji Task 1 ma hash
+`68780427fc4c867cf53d7431bca74bee2b1ced7a`.
+
+Drugi review wykazał trzy dalsze luki: wspólny post-target resolver wszystkich
+FDM dynamic extents, code spans w kolumnie SI tabeli parametrów oraz pominięte
+publiczne direct dataclass constructors. Poprawiono je w kolejnym osobnym
+fixupie bez zmiany runtime/API.
+
+Trzeci review skorygował trzy precyzyjne błędy publikacyjne po commicie
+`4b7bedca4`: nieistniejący root export `fm.StudyMonitorRegistry`, typy
+deklarowane trzech pól `PlanarFrame` oraz zbyt słaby wiersz source index dla
+wspólnego resolvera extent. Użyto rzeczywistej publicznej ścieżki
+`fullmag.model.StudyMonitorRegistry.add_planar.*` z normalnym wywołaniem przez
+`study.monitors`, typów `Vector3` i statusu `PM-N12 + PM-N13 RED`.
+
 Kontrakt naukowy, source-map i dokładny fragment macierzy możliwości zostały
 zaktualizowane. ADR 0020 pozostaje bez zmian: decyzja o jednym
 `PlanarMonitor`, jednym samplerze i oddzieleniu prezentacji nie zmieniła się;
@@ -36,6 +56,24 @@ Nie zmodyfikowano `docs/adr/0020-planar-field-map-and-monitor.md`.
   jest zakwalifikowany.
 - Utrwalono granicę: GPU-source konsumowany przez sampler CPU nie jest GPU
   samplingiem.
+- Tabela symboli i jednostek używa MyST inline MathJax `$...$`; nie używa
+  code spans do zapisu matematyki.
+- FDM `object` jest jawnie warunkowy: bieżąca maska wybiera wszystkie aktywne
+  komórki i jest błędna dla ogólnego multi-object grid.
+- FEM dopuszcza wyłącznie kompletny full-mesh Tet4/P1 nodal carrier; target i
+  runtime scope ograniczają elementy dopiero po załadowaniu całego pola.
+- Wszystkie dynamiczne FEM extent tags używają globalnego `fem.nodes`, więc
+  scoped extents są błędne i niezakwalifikowane; poprawnym obejściem jest
+  explicit extent.
+- Terminalny kontrakt wyklucza occupancy `empty` z extrema/range, lecz bieżące
+  `include_air_as_zero` zapisuje `0.0`, a `meta_resource` filtruje jedynie
+  wartości niefinitywne. Ten tor jest jawnie RED do czasu occupancy-aware gate.
+- Wszystkie FDM dynamic extent tags współdzielą bounds z post-target mask;
+  wypisano błędne kombinacje, dodano PM-N13 RED i wymóg explicit extent.
+- Wszystkie komórki SI obu tabel używają MathJax `$...$`.
+- Source-map i tabela obejmują 43/43 unikalne parametry: 26 parametrów
+  bezpośrednich konstruktorów eksportowanych klas oraz 17 factory/add params,
+  z dokładnymi defaultami i słabszą walidacją direct construction.
 
 ## Zweryfikowane symbole źródłowe
 
@@ -107,10 +145,24 @@ bieżącej kwalifikacji browserowej, pełnej runtime ani produkcyjnej.
   — `exit 0`.
 - `git diff --check` — `exit 0`.
 
-Pełna bramka
-`validate_changed_scientific_docs.py --base 5138078f7fd7b65dfc231faa4aa11c02d8ebf52d --head HEAD --repo-root .`
-jest uruchamiana po utworzeniu commitu, ponieważ walidator czyta wyłącznie
-obiekty Git, a nie niezacommitowany working tree.
+Po review uruchomiono ponownie validator source-map, jego 22 testy,
+changed-page gate, kontrolę JSON, lokalne asercje kompletności MathJax,
+contract types i wszystkich 43 publicznych parametrów oraz `git diff --check`.
+
+Po drugim review automatyczny signature-vs-manifest gate potwierdził 43/43
+parametry (w tym 26 direct-constructor), 41/41 symbol-unit oraz 43/43
+parameter-unit cells jako MathJax i 144 węzły matematyczne po parsowaniu MyST.
+
+Po trzecim review runtime-export gate potwierdził, że root `fullmag` nie
+eksportuje `StudyMonitorRegistry`, moduł `fullmag.model` go eksportuje, a
+`PlanarFrame` deklaruje `Vector3` dla `origin`, `normal` i `u_axis`. Dokładny
+export/signature-vs-manifest gate ponownie wymaga 43/43 parametrów.
+
+- `validate_changed_scientific_docs.py --base c3ecccaa0 --head HEAD --repo-root .`
+  — `exit 0` na fixupie `68780427f`.
+- `validate_changed_scientific_docs.py --base 5138078f7fd7b65dfc231faa4aa11c02d8ebf52d --head HEAD --repo-root .`
+  — `exit 0` dla całego zakresu Task 1, mimo niezależnego commitu
+  `e442b8971` pomiędzy commitami Task 1.
 
 ## Nieudane polecenia diagnostyczne
 
@@ -142,8 +194,17 @@ obiekty Git, a nie niezacommitowany working tree.
 - `PlanarFieldMetaResource` nie publikuje source backend/device/precision,
   dlatego sam planar response nie kwalifikuje GPU-source.
 - FDM object target w aktualnym membership sprawdza identity obiektu, ale
-  wybiera wszystkie aktywne komórki; rozdzielenie wielu object IDs wymaga
-  dalszego kontraktu/artifactu.
+  wybiera wszystkie aktywne komórki; generalny multi-object target jest błędny,
+  a nie tylko nieudowodniony. Rozdzielenie object IDs wymaga naprawy runtime i
+  osobnej bramki.
+- FDM `target_bounds`, `magnetic_domain` i `universe` nie mają niezależnych
+  resolverów: wszystkie dziedziczą target mask. Explicit extent jest wymagany
+  do czasu przejścia PM-N13.
+- FEM carrier jest wyłącznie full-mesh Tet4/P1 nodal; scoped/local carrier nie
+  jest wspierany. Dynamic FEM extents używają wszystkich węzłów niezależnie od
+  target/scope, więc wymagają naprawy przed kwalifikacją.
+- `include_air_as_zero` włącza puste zera do metadata min/max. Terminalny
+  kontrakt wymaga wykluczenia ich przez occupancy mask; ten gate jest RED.
 - Aktualny browser smoke pozostaje RED na visible canvas. Nie wolno promować
   żadnej ścieżki do browser/runtime/production-qualified przed świeżym,
   niezależnym dowodem każdego pasa.

@@ -192,7 +192,10 @@ cykli nie obniżono.
 | Task | Status | Commit(s) | Review |
 |---:|---|---|---|
 | 0 | complete | `42eede461`, `5138078f7` | spec compliant; quality approved; managed science pass + browser RED baseline (`canvas` timeout) |
-| 1 | pending | pending | pending |
+| 1 | complete | `c3ecccaa0`, `68780427f`, `4b7bedca4`, `c4a57f1b3` | spec compliant; quality approved; docs/source-map/capability gates pass; browser RED remains unqualified |
+| 2 | complete | `9ce555065`, `66e7579a4` | spec compliant; quality approved; carrier identity/provenance and public field resources verified |
+| 3 | complete | `935d8e681`, `216f603fa`, `d19cfc96b` | spec compliant; quality approved; exact targets, sampling and cache identity verified |
+| 4 | complete | `5bf32e3aa`, `ab973377a`, `ca3107991`, `1b5a2e090`, `618d9b997`, `eec5544d6`, `e48fbe821` | spec compliant; quality approved; public sample identity and exact revision contract verified |
 | 2 | pending | pending | pending |
 | 3 | pending | pending | pending |
 | 4 | pending | pending | pending |

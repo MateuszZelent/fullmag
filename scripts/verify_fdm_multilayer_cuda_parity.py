@@ -57,8 +57,15 @@ def verify(cpu: Path, cuda: Path, thresholds: Path, lane: str) -> dict:
     for key, value in expected.items():
         if stage.get(key) != value:
             raise ValueError(f"d07_telemetry_not_qualified:{key}")
-    if provenance.get("execution_engine") != "cuda_assisted_multilayer":
-        raise ValueError("unexpected overall CUDA execution engine")
+    execution_engine = provenance.get("execution_engine")
+    if execution_engine == "cuda_assisted_multilayer":
+        raise ValueError("cuda_assisted_multilayer_not_qualified")
+    if execution_engine != "cuda_native_multilayer_demag_v2":
+        raise ValueError("cuda_native_multilayer_demag_v2_not_proven")
+    if provenance.get("lossy_fallback_used") is not False:
+        raise ValueError("cuda_fallback_not_proven_absent")
+    if provenance.get("resolved_fallback") is not None:
+        raise ValueError("cuda_fallback_not_proven_absent")
     if provenance.get("fft_backend") != "cuFFT" or not provenance.get("device_name"):
         raise ValueError("CUDA device/cuFFT provenance is incomplete")
 
@@ -89,7 +96,7 @@ def verify(cpu: Path, cuda: Path, thresholds: Path, lane: str) -> dict:
         "schema_version": "fdm_multilayer_cuda_parity.v1",
         "status": "qualified",
         "lane": lane,
-        "overall_execution_residency": "host_authoritative",
+        "overall_execution_residency": "device_resident_per_refresh",
         "d07_stage": stage,
         "parity": metric,
     }

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import importlib.util
+import json
 import subprocess
 from pathlib import Path
 
@@ -12,6 +14,82 @@ from fullmag.runtime.loader import load_problem_from_script
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[6]
 SCENARIO = Path(__file__).with_name("scenario_l3_cuda_v2_small.py")
+CUDA_PARITY_VERIFIER = REPOSITORY_ROOT / "scripts/verify_fdm_multilayer_cuda_parity.py"
+
+
+def load_cuda_parity_verifier():
+    spec = importlib.util.spec_from_file_location(
+        "verify_fdm_multilayer_cuda_parity",
+        CUDA_PARITY_VERIFIER,
+    )
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def write_h_demag_artifact(root: Path, provenance: dict[str, object]) -> None:
+    field_root = root / "fields" / "H_demag"
+    layer_root = field_root / "layer-0"
+    layer_root.mkdir(parents=True)
+    (field_root / "manifest.json").write_text(
+        json.dumps({"layers": [{"id": "layer-0", "directory": "layer-0"}]}),
+        encoding="utf-8",
+    )
+    (layer_root / "step_000000.json").write_text(
+        json.dumps(
+            {
+                "unit": "A/m",
+                "component_order": "xyz",
+                "values": [[1.0, 0.0, 0.0]],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (root / "metadata.json").write_text(
+        json.dumps({"execution_provenance": provenance}),
+        encoding="utf-8",
+    )
+
+
+def test_cuda_parity_verifier_rejects_assisted_multilayer_artifact(
+    tmp_path: Path,
+) -> None:
+    reference = tmp_path / "reference"
+    candidate = tmp_path / "candidate"
+    stage_telemetry = {
+        "status": "recorded",
+        "execution_engine": "cuda_native_multilayer_demag_v2",
+        "data_residency": "device_resident_per_refresh",
+        "fft_backend": "cuFFT",
+        "layer_count": 3,
+        "refresh_count": 1,
+        "forward_fft_count": 3,
+        "inverse_fft_count": 3,
+        "pair_accumulation_count": 9,
+    }
+    write_h_demag_artifact(reference, {})
+    write_h_demag_artifact(
+        candidate,
+        {
+            "execution_engine": "cuda_assisted_multilayer",
+            "lossy_fallback_used": False,
+            "resolved_fallback": None,
+            "fft_backend": "cuFFT",
+            "device_name": "NVIDIA test device",
+            "fdm_multilayer_stage_telemetry": stage_telemetry,
+        },
+    )
+
+    verifier = load_cuda_parity_verifier()
+    with pytest.raises(ValueError, match="cuda_assisted_multilayer_not_qualified"):
+        verifier.verify(
+            reference,
+            candidate,
+            REPOSITORY_ROOT
+            / "tests/standard_problems/mumag/sp4/fdm/multilayer_convolution/thresholds.v1.json",
+            "cuda-fp64",
+        )
 
 
 def test_cuda_v2_scenario_forces_identity_grid_with_distinct_materials() -> None:
@@ -49,6 +127,7 @@ def test_managed_cuda_recipe_runs_real_device_and_fail_closed_verifier(
     assert "scenario_l3_cuda_v2_small.py" in rendered
     assert "verify_fdm_multilayer_cuda_parity.py" in rendered
     assert "d07_telemetry_not_qualified" in rendered
+    assert "cuda_assisted_multilayer_not_qualified" in rendered
     assert "cpu_cuda_parity_not_qualified" in rendered
     assert ".build_identity.source_snapshot_sha256" in rendered
     assert "managed_runtime_source_snapshot_mismatch" in rendered
