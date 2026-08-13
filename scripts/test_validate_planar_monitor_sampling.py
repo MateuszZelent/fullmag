@@ -84,6 +84,41 @@ class PlanarMonitorSamplingValidationTests(unittest.TestCase):
         self.assertEqual(by_id["fdm-object-isolation"]["status"], "blocked")
         self.assertFalse(all(case["passed"] for case in cases))
 
+    def test_fdm_surface_is_not_applicable_but_fem_surface_remains_required(self) -> None:
+        fdm_cases = build_qualification_cases(
+            backend="fdm", device="cpu", executed_case_ids=set()
+        )
+        fem_cases = build_qualification_cases(
+            backend="fem", device="cpu", executed_case_ids=set()
+        )
+
+        fdm_surface = next(
+            case for case in fdm_cases if case["case_id"] == "live-m-surface"
+        )
+        fem_surface = next(
+            case for case in fem_cases if case["case_id"] == "live-m-surface"
+        )
+        self.assertFalse(fdm_surface["required"])
+        self.assertFalse(fdm_surface["passed"])
+        self.assertEqual(fdm_surface["status"], "not_applicable")
+        self.assertIsNone(fdm_surface["blocker"])
+        self.assertTrue(fem_surface["required"])
+        self.assertEqual(fem_surface["status"], "blocked")
+
+        all_legal_fdm_cases = build_qualification_cases(
+            backend="fdm",
+            device="cpu",
+            executed_case_ids={
+                case["case_id"] for case in fdm_cases if case["required"]
+            },
+        )
+        self.assertTrue(
+            all(
+                not case["required"] or case["passed"]
+                for case in all_legal_fdm_cases
+            )
+        )
+
     def test_fdm_gpu_is_an_explicit_no_go_not_inherited_from_cpu(self) -> None:
         no_go = build_fdm_gpu_no_go("deadbeef")
 

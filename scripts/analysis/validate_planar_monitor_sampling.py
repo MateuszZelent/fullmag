@@ -108,18 +108,27 @@ def build_qualification_cases(
 ) -> list[dict[str, Any]]:
     cases = []
     for case_id, requirement in QUALIFICATION_REQUIREMENTS:
+        required = not (backend == "fdm" and case_id == "live-m-surface")
         passed = case_id in executed_case_ids
+        status = (
+            "not_applicable"
+            if not required
+            else "passed"
+            if passed
+            else "blocked"
+        )
         cases.append(
             {
                 "backend": backend,
+                "blocker": None
+                if passed or not required
+                else "this managed lane run did not execute this required case",
                 "case_id": case_id,
                 "device": device,
                 "passed": passed,
+                "required": required,
                 "requirement": requirement,
-                "status": "passed" if passed else "blocked",
-                "blocker": None
-                if passed
-                else "this managed lane run did not execute this required case",
+                "status": status,
             }
         )
     return cases
@@ -1186,7 +1195,9 @@ def main() -> None:
         device=args.device,
         executed_case_ids=passed_case_ids,
     )
-    qualification_complete = all(case["passed"] for case in qualification_cases)
+    qualification_complete = all(
+        not case["required"] or case["passed"] for case in qualification_cases
+    )
     report = {
         "backend": args.backend,
         "device": args.device,
