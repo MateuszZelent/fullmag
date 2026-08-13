@@ -227,7 +227,7 @@ def test_fdm_rejects_invalid_per_magnet_entries(
         fm.FDM(per_magnet=per_magnet)  # type: ignore[arg-type]
 
 
-def test_stage_first_multilayer_material_intent_and_membership_round_trip(
+def test_stage_first_multilayer_material_and_region_authoring_round_trips_stages(
     tmp_path: Path,
 ) -> None:
     source = tmp_path / "multilayer_material_intent.py"
@@ -321,16 +321,26 @@ def test_stage_first_multilayer_material_intent_and_membership_round_trip(
     )
 
     loaded = fm.load_problem_from_script(source, lightweight_assets=True)
-    original_ir = loaded.problem.to_ir(include_geometry_assets=False)
     rendered = rewrite_loaded_problem_script(loaded)["rendered_source"]
     assert isinstance(rendered, str)
     exported = tmp_path / "multilayer_material_intent_exported.py"
     exported.write_text(rendered, encoding="utf-8")
     reloaded = fm.load_problem_from_script(exported, lightweight_assets=True)
-    reloaded_ir = reloaded.problem.to_ir(include_geometry_assets=False)
+
+    lowering_kwargs = {
+        "requested_backend": "fdm",
+        "execution_mode": "strict",
+        "execution_precision": "double",
+        "include_geometry_assets": False,
+    }
+    original_ir = loaded.to_ir(**lowering_kwargs)
+    reloaded_ir = reloaded.to_ir(**lowering_kwargs)
+    original_pipeline = loaded.study_pipeline_document()
+    reloaded_pipeline = reloaded.study_pipeline_document()
 
     planner_keys = (
         "backend_policy",
+        "geometry",
         "materials",
         "object_regions",
         "material_parameter_fields",
@@ -346,9 +356,44 @@ def test_stage_first_multilayer_material_intent_and_membership_round_trip(
         (magnet["name"], magnet["material"], magnet["region"])
         for magnet in original_ir["magnets"]
     ]
+    assert original_pipeline == reloaded_pipeline
+    assert original_pipeline is not None
+    assert [node["stage_kind"] for node in original_pipeline["nodes"]] == ["relax"]
+    assert len(loaded.stages) == len(reloaded.stages) == 1
+
+    original_stage_ir = loaded.stages[0].to_ir(
+        **lowering_kwargs,
+        script_source=loaded.script_source,
+        source_root=loaded.source_path.parent,
+        study_pipeline=original_pipeline,
+    )
+    reloaded_stage_ir = reloaded.stages[0].to_ir(
+        **lowering_kwargs,
+        script_source=reloaded.script_source,
+        source_root=reloaded.source_path.parent,
+        study_pipeline=reloaded_pipeline,
+    )
+    assert {key: reloaded_stage_ir[key] for key in planner_keys} == {
+        key: original_stage_ir[key] for key in planner_keys
+    }
+    assert original_stage_ir["study"]["kind"] == "relaxation"
+    assert original_stage_ir["study"]["algorithm"] == "llg_overdamped"
+    assert original_stage_ir["study"]["stop"]["max_steps"] == 10
+    assert (
+        original_stage_ir["problem_meta"]["runtime_metadata"]["active_stage_id"]
+        == "relax"
+    )
+    assert (
+        reloaded_stage_ir["problem_meta"]["runtime_metadata"]["active_stage_id"]
+        == "relax"
+    )
     assert set(
         original_ir["backend_policy"]["discretization_hints"]["fdm"]["per_magnet"]
     ) == {"free", "reference"}
+    assert [entry["name"] for entry in original_ir["geometry"]["entries"]] == [
+        "free_geom",
+        "reference_geom",
+    ]
     assert {
         (region["owner_object"], region["region_id"])
         for region in original_ir["object_regions"]
