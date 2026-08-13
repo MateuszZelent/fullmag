@@ -193,7 +193,7 @@ describe("PlanarSurface lifecycle", () => {
       expect(raster.data[7]).toBe(255);
       expect(onRenderEvidence).toHaveBeenLastCalledWith({
         glyphCount: 0,
-        overlayCounts: { contours: 0, meshSegments: 0 },
+        overlayCounts: { boundsSegments: 0, contours: 0, meshSegments: 0, pointMarkers: 0 },
         raster: {
           checksum: "fnv1a32:4c4ff03b",
           max: 20,

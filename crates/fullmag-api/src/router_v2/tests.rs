@@ -4888,7 +4888,9 @@ async fn visualization_state_exposes_v2_layer_model_with_legacy_projection() {
     assert_eq!(response.status(), StatusCode::OK);
 
     let json = body_json(response).await;
-    assert_eq!(json["schema_version"], 7);
+    assert_eq!(json["schema_version"], 8);
+    assert_eq!(json["planar"]["layers"]["bounds"], false);
+    assert_eq!(json["planar"]["layers"]["points"], false);
     assert_eq!(
         json["quantity"]["active_quantity_id"],
         json["active_quantity_id"]
@@ -5150,7 +5152,7 @@ async fn visualization_state_patch_accepts_nested_v2_controls() {
     assert_eq!(response.status(), StatusCode::OK);
 
     let json = body_json(response).await;
-    assert_eq!(json["schema_version"], 7);
+    assert_eq!(json["schema_version"], 8);
     assert_eq!(json["active_quantity_id"], "h_eff");
     assert_eq!(json["quantity"]["active_quantity_id"], "h_eff");
     assert_eq!(json["field_component"], "magnitude");
@@ -5267,10 +5269,12 @@ async fn visualization_state_planar_profile_round_trips_without_mutating_three_d
                                 "vector_budget": 750
                             },
                             "layers": {
+                                "bounds": true,
                                 "raster": true,
                                 "contours": true,
                                 "mesh": false,
                                 "boundaries": true,
+                                "points": true,
                                 "vectors": true,
                                 "probes": true
                             }
@@ -5292,6 +5296,8 @@ async fn visualization_state_planar_profile_round_trips_without_mutating_three_d
     assert_eq!(json["planar"]["range"]["max"], 4.0);
     assert_eq!(json["planar"]["raster_opacity"], 0.35);
     assert_eq!(json["planar"]["resolution"]["width"], 640);
+    assert_eq!(json["planar"]["layers"]["bounds"], true);
+    assert_eq!(json["planar"]["layers"]["points"], true);
     assert_eq!(json["planar"]["layers"]["vectors"], true);
     assert_eq!(json["slice"]["quantity_id"], "h_demag");
     assert_eq!(json["slice"]["component"], "magnitude");
@@ -5337,6 +5343,19 @@ async fn visualization_state_planar_profile_round_trips_without_mutating_three_d
     assert_eq!(cleared["planar"]["range"]["min"], serde_json::Value::Null);
     assert_eq!(cleared["planar"]["range"]["max"], serde_json::Value::Null);
     assert_eq!(cleared["planar"]["display_unit"], serde_json::Value::Null);
+}
+
+#[test]
+fn openapi_planar_layer_state_exposes_points_and_bounds() {
+    let openapi = crate::openapi_v2::openapi_json();
+    let schema = &openapi["components"]["schemas"]["PlanarLayerState"];
+    assert_eq!(schema["properties"]["bounds"]["type"], "boolean");
+    assert_eq!(schema["properties"]["points"]["type"], "boolean");
+    let required = schema["required"]
+        .as_array()
+        .expect("PlanarLayerState required fields");
+    assert!(required.contains(&serde_json::json!("bounds")));
+    assert!(required.contains(&serde_json::json!("points")));
 }
 
 #[tokio::test]

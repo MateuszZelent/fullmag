@@ -8,8 +8,10 @@ export interface PlanarRasterEvidence {
 }
 
 export interface PlanarOverlayCounts {
+  boundsSegments?: number;
   contours: number;
   meshSegments: number;
+  pointMarkers?: number;
 }
 
 export interface PlanarRenderEvidence {

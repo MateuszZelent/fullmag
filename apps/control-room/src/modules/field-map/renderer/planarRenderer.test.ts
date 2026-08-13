@@ -73,6 +73,31 @@ describe("planar renderer lifecycle", () => {
     expect(context.moveTo).not.toHaveBeenCalled();
   });
 
+  it("draws exact monitor bounds and occupied evaluation-bin centers as independent layers", () => {
+    const context = {
+      arc: vi.fn(), beginPath: vi.fn(), clearRect: vi.fn(), fill: vi.fn(), fillStyle: "",
+      lineTo: vi.fn(), lineWidth: 0, moveTo: vi.fn(), restore: vi.fn(), save: vi.fn(),
+      stroke: vi.fn(), strokeStyle: "",
+    } as unknown as CanvasRenderingContext2D;
+
+    drawPlanarOverlays(context, 100, 50, {
+      boundsOutline: [2, 6, -4, 4],
+      gridWidth: 4,
+      layers: { bounds: true, contours: false, mesh: false, points: true, vectors: false },
+      meshViewport: [2, 6, -4, 4],
+      samplePoints: [
+        { index: 0, u: 2.5, v: -2 },
+        { index: 7, u: 5.5, v: 2 },
+      ],
+    });
+
+    expect(context.moveTo).toHaveBeenCalledWith(0, 50);
+    expect(context.lineTo).toHaveBeenCalledWith(100, 50);
+    expect(context.lineTo).toHaveBeenCalledWith(100, 0);
+    expect(context.arc).toHaveBeenCalledTimes(2);
+    expect(context.fill).toHaveBeenCalledTimes(1);
+  });
+
   it("maps fit, pan, and zoom in CSS pixels while the backing canvas remains DPR-scaled", () => {
     const context = {
       clearRect: vi.fn(),

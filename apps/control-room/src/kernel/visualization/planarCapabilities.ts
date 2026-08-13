@@ -11,8 +11,10 @@ export interface PlanarMeshOverlayDescriptor {
 
 export interface PlanarInspectorCapabilities {
   boundaries: FieldMapCapability;
+  bounds: FieldMapCapability;
   contours: FieldMapCapability;
   mesh: FieldMapCapability;
+  points: FieldMapCapability;
   raster: FieldMapCapability;
   vectors: FieldMapCapability;
 }
@@ -61,6 +63,8 @@ export function resolveFieldMapCapabilities(input: {
 export function resolvePlanarInspectorCapabilities(input: {
   descriptor: PlanarMeshOverlayDescriptor | null | undefined;
   discretization: string | null | undefined;
+  metaAvailable?: boolean;
+  occupancyAvailable?: boolean;
   quantity: {
     available: boolean;
     components: number;
@@ -87,6 +91,29 @@ export function resolvePlanarInspectorCapabilities(input: {
     spatial: spatial && scope.enabled,
     vectorComponents: input.quantity?.components ?? 0,
   });
+  const metaAvailable = input.metaAvailable ?? false;
+  const bounds = spatial && scope.enabled && metaAvailable
+    ? { enabled: true, reasonCode: null }
+    : {
+        enabled: false,
+        reasonCode: !scope.enabled
+          ? scope.reasonCode
+          : !spatial
+            ? "quantity_not_spatial"
+            : "planar_meta_unavailable",
+      };
+  const points = spatial && scope.enabled && metaAvailable && input.occupancyAvailable === true
+    ? { enabled: true, reasonCode: null }
+    : {
+        enabled: false,
+        reasonCode: !scope.enabled
+          ? scope.reasonCode
+          : !spatial
+            ? "quantity_not_spatial"
+            : !metaAvailable
+              ? "planar_meta_unavailable"
+              : "occupancy_mask_unavailable",
+      };
   const boundaries =
     meshOverlayAvailable && descriptor?.boundaryClassification === "exact"
       ? { enabled: true, reasonCode: null }
@@ -105,8 +132,10 @@ export function resolvePlanarInspectorCapabilities(input: {
 
   return {
     boundaries,
+    bounds,
     contours: base.contours,
     mesh: base.mesh,
+    points,
     raster: base.contours,
     vectors: base.vectors,
   };

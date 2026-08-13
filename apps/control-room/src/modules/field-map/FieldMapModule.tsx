@@ -228,8 +228,10 @@ export default function FieldMapModule() {
       },
       layers: {
         boundaries: presentationPlanar.layers.boundaries,
+        bounds: presentationPlanar.layers.bounds,
         contours: presentationPlanar.layers.contours,
         mesh: presentationPlanar.layers.mesh,
+        points: presentationPlanar.layers.points,
         probes: presentationPlanar.layers.probes,
         raster: presentationPlanar.layers.raster,
         vectors: presentationPlanar.layers.vectors,
@@ -274,8 +276,10 @@ export default function FieldMapModule() {
     operatorKind: monitor.data?.monitor.operator.kind ?? null,
     operatorRevision: meta.data?.monitor_revision ?? null,
     overlayCounts: activeRenderEvidence?.overlayCounts ?? {
+      boundsSegments: 0,
       contours: 0,
       meshSegments: 0,
+      pointMarkers: 0,
     },
     quantityId,
     raster: activeRenderEvidence?.raster ?? null,
@@ -350,7 +354,9 @@ export default function FieldMapModule() {
         data-planar-scalar-identity={evidence.scalarIdentity ?? ""}
         data-planar-status={evidence.status}
         data-planar-contour-count={String(evidence.overlayCounts.contours)}
+        data-planar-bounds-segment-count={String(evidence.overlayCounts.boundsSegments ?? 0)}
         data-planar-mesh-segment-count={String(evidence.overlayCounts.meshSegments)}
+        data-planar-point-marker-count={String(evidence.overlayCounts.pointMarkers ?? 0)}
         data-planar-quantity-id={evidence.quantityId}
         hidden
       />

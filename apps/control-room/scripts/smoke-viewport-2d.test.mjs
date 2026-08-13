@@ -100,18 +100,16 @@ test("2D smoke captures each legal layer and a terminal 3D lifecycle proof", () 
   assert.match(source, /runtime_bundle_identity/);
 });
 
-test("2D smoke reports unsupported points without relabelling another layer", () => {
-  assert.match(source, /points.*unsupported/s);
-  assert.match(source, /case_id: "layer-points"[\s\S]*required: true/);
-  assert.match(source, /unsupported_required_layers/);
+test("2D smoke qualifies points from occupied evaluation-bin centers without relabelling mesh", () => {
+  assert.match(source, /id: "points"/);
+  assert.match(source, /evidence\.overlayCounts\.pointMarkers > 0/);
   assert.doesNotMatch(source, /points:\s*"mesh"/);
 });
 
-test("2D smoke keeps unsupported bounds as a required blocker separate from 3D frame proof", () => {
-  assert.match(source, /case_id: "layer-bounds"[\s\S]*required: true/);
-  assert.match(source, /bounds is not a selectable layer/);
-  assert.match(source, /unsupportedRequiredLayers\.pass === true/);
-  assert.doesNotMatch(source, /case_id: "layer-bounds"[\s\S]{0,160}passed: true/);
+test("2D smoke qualifies meta frame bounds separately from the 3D frame proof", () => {
+  assert.match(source, /id: "bounds"/);
+  assert.match(source, /evidence\.overlayCounts\.boundsSegments === 4/);
+  assert.doesNotMatch(source, /unsupported_required_layers/);
   assert.match(source, /planar-frame-preview-3d\.png/);
 });
 

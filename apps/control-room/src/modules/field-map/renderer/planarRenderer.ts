@@ -24,10 +24,12 @@ export interface PlanarOverlayLayers {
   gridWidth: number;
   gridHeight?: number;
   boundarySegments?: Float32Array;
-  layers?: { boundaries?: boolean; contours: boolean; mesh: boolean; vectors: boolean };
+  boundsOutline?: readonly [number, number, number, number] | null;
+  layers?: { boundaries?: boolean; bounds?: boolean; contours: boolean; mesh: boolean; points?: boolean; vectors: boolean };
   meshBounds?: readonly [number, number, number, number];
   meshSegments?: Float32Array;
   meshViewport?: readonly [number, number, number, number];
+  samplePoints?: readonly { index: number; u: number; v: number }[];
   vectorColorMode?: string;
   viewport?: readonly [number, number, number, number];
 }
@@ -65,6 +67,31 @@ export function drawPlanarOverlays(
   }
   if (layers.layers?.boundaries && layers.boundarySegments) {
     drawMeshSegments(layers.boundarySegments, "var(--fm-accent)");
+  }
+  if (layers.layers?.bounds && layers.boundsOutline) {
+    const [uMin, uMax, vMin, vMax] = layers.boundsOutline;
+    const corners = [
+      mapMesh(uMin, vMin),
+      mapMesh(uMax, vMin),
+      mapMesh(uMax, vMax),
+      mapMesh(uMin, vMax),
+      mapMesh(uMin, vMin),
+    ];
+    context.strokeStyle = "var(--fm-info)";
+    context.beginPath();
+    context.moveTo(corners[0]![0]!, corners[0]![1]!);
+    for (const corner of corners.slice(1)) context.lineTo(corner[0]!, corner[1]!);
+    context.stroke();
+  }
+  if (layers.layers?.points && layers.samplePoints?.length) {
+    context.fillStyle = "var(--fm-accent)";
+    context.beginPath();
+    for (const point of layers.samplePoints) {
+      const [x, y] = mapMesh(point.u, point.v);
+      context.moveTo(x + 1.5, y);
+      context.arc(x, y, 1.5, 0, Math.PI * 2);
+    }
+    context.fill();
   }
 
   if (layers.layers?.contours !== false && layers.contours?.length) {

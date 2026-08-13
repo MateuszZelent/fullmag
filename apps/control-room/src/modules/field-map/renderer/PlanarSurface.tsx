@@ -134,6 +134,7 @@ export function PlanarSurface({
       const state = renderStateRef.current;
       const currentMeshSegments = state.mesh ? partitionPlanarMeshSegments(state.mesh) : null;
       drawPlanarOverlays(overlayContext, overlayCanvas.width, overlayCanvas.height, {
+        boundsOutline: current.boundsOutline,
         contours: state.contours,
         boundarySegments: currentMeshSegments?.boundarySegments,
         glyphs: state.glyphs,
@@ -143,6 +144,7 @@ export function PlanarSurface({
         meshBounds: state.mesh?.bounds as [number, number, number, number] | undefined,
         meshSegments: currentMeshSegments?.meshSegments,
         meshViewport: current.viewport,
+        samplePoints: current.samplePoints,
         vectorColorMode: current.vectorStyle.colorMode,
         viewport: [
           ((current.viewport[0] - current.bounds[0]) / (current.bounds[1] - current.bounds[0])) * (current.resolution[0] - 1),
@@ -168,7 +170,12 @@ export function PlanarSurface({
           if (!current.layers.raster || !current.range) return;
           onRenderEvidence?.({
             glyphCount: state.glyphs.length,
-            overlayCounts: { contours: contours.length, meshSegments: state.mesh?.segmentCount ?? 0 },
+            overlayCounts: {
+              boundsSegments: current.layers.bounds ? 4 : 0,
+              contours: contours.length,
+              meshSegments: state.mesh?.segmentCount ?? 0,
+              pointMarkers: current.samplePoints.length,
+            },
             raster: {
               checksum: planarRasterChecksum(pixels),
               max: current.range.max,
@@ -195,8 +202,10 @@ export function PlanarSurface({
   }, [
     model.colormap,
     model.layers.boundaries,
+    model.layers.bounds,
     model.layers.contours,
     model.layers.mesh,
+    model.layers.points,
     model.layers.probes,
     model.layers.raster,
     model.layers.vectors,

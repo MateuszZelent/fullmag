@@ -15228,10 +15228,16 @@
           "boundaries": {
             "type": "boolean"
           },
+          "bounds": {
+            "type": "boolean"
+          },
           "contours": {
             "type": "boolean"
           },
           "mesh": {
+            "type": "boolean"
+          },
+          "points": {
             "type": "boolean"
           },
           "probes": {
@@ -15249,6 +15255,8 @@
           "contours",
           "mesh",
           "boundaries",
+          "bounds",
+          "points",
           "vectors",
           "probes"
         ],

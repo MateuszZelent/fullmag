@@ -29,8 +29,10 @@ export function PlanarGeometryLayersSection({
 }) {
   const capabilityForLayer = (layer: keyof Planar["layers"]): FieldMapCapability => {
     if (layer === "boundaries") return capabilities.boundaries;
+    if (layer === "bounds") return capabilities.bounds;
     if (layer === "contours") return capabilities.contours;
     if (layer === "mesh") return capabilities.mesh;
+    if (layer === "points") return capabilities.points;
     if (layer === "vectors") return capabilities.vectors;
     return capabilities.raster;
   };
@@ -39,6 +41,8 @@ export function PlanarGeometryLayersSection({
     switch (capability.reasonCode) {
       case "mesh_overlay_unavailable": return "Mesh overlay is unavailable for this sample.";
       case "mesh_overlay_codec_unsupported": return "Mesh overlay requires the fmcs.v4 descriptor codec.";
+      case "occupancy_mask_unavailable": return "Sample points require the canonical occupancy mask.";
+      case "planar_meta_unavailable": return "Planar sample metadata is not materialized.";
       case "boundaries_not_exact": return "Exact boundaries are unavailable for this overlay descriptor.";
       case "fdm_scope_not_supported": return "Structured FDM sampling does not support mesh-part or airbox scope.";
       case "quantity_not_vector": return "The selected scalar quantity has no vector components.";
@@ -47,10 +51,11 @@ export function PlanarGeometryLayersSection({
     }
   };
   return <InspectorGroup collapsible defaultOpen={false} title="Geometry layers">
-    {(["raster", "contours", "mesh", "boundaries", "vectors", "probes"] as const).map((layer) => {
+    {(["raster", "bounds", "contours", "mesh", "boundaries", "points", "vectors", "probes"] as const).map((layer) => {
       const capability = capabilityForLayer(layer);
       return <FormField key={layer} disabled={!capability.enabled} hint={reason(capability)} label={`Layer ${layer}`} type="checkbox" checked={layers[layer]} onChange={() => patch(planarLayerPatch(layers, layer))} />;
     })}
+    <FieldRow label="Points availability" value={capabilities.points.enabled ? "Occupancy-backed bin centers" : reason(capabilities.points) ?? "Unavailable"} />
     <FieldRow label="Boundary availability" value={capabilities.boundaries.enabled ? "Exact boundaries" : reason(capabilities.boundaries) ?? "Unavailable"} />
     <FieldRow label="Mesh overlay" value={capabilities.boundaries.enabled ? "Mesh overlay: exact boundaries" : "Mesh overlay degraded or unavailable"} />
   </InspectorGroup>;

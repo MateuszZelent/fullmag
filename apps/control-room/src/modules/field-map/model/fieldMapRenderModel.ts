@@ -10,8 +10,10 @@ export interface PlanarFrame {
 
 export interface FieldMapRenderLayers {
   boundaries?: boolean;
+  bounds?: boolean;
   contours: boolean;
   mesh: boolean;
+  points?: boolean;
   probes?: boolean;
   raster: boolean;
   vectors: boolean;
@@ -72,6 +74,7 @@ export interface FieldMapRenderModelInput {
 export interface FieldMapRenderModel {
   bounds: readonly [number, number, number, number];
   boundsCenter: readonly [number, number];
+  boundsOutline: readonly [number, number, number, number] | null;
   canonicalUnit: string;
   colormap: string;
   component: string;
@@ -90,12 +93,51 @@ export interface FieldMapRenderModel {
   range: { max: number; min: number } | null;
   resolution: readonly [number, number];
   sampleIdentity: string;
+  samplePoints: readonly PlanarSamplePoint[];
   scalar: Float32Array | Float64Array;
   vectors: Float32Array | Float64Array | null;
   vectorBudget: number;
   vectorScale: number;
   vectorStyle: { colorMode: string; lengthMode: string };
   viewport: readonly [number, number, number, number];
+}
+
+export interface PlanarSamplePoint {
+  index: number;
+  u: number;
+  v: number;
+}
+
+export function buildPlanarSamplePoints(
+  bounds: readonly [number, number, number, number],
+  resolution: readonly [number, number],
+  mask: ArrayLike<number>,
+  maxPoints = 4_096,
+): PlanarSamplePoint[] {
+  const width = Math.max(0, Math.floor(resolution[0]));
+  const height = Math.max(0, Math.floor(resolution[1]));
+  const sampleCount = Math.min(mask.length, width * height);
+  const budget = Math.max(0, Math.floor(maxPoints));
+  if (width === 0 || height === 0 || sampleCount === 0 || budget === 0) return [];
+  const candidates: number[] = [];
+  for (let index = 0; index < sampleCount; index += 1) {
+    if (isRenderable(mask[index])) candidates.push(index);
+  }
+  const stride = Math.max(1, Math.ceil(candidates.length / budget));
+  const deltaU = (bounds[1] - bounds[0]) / width;
+  const deltaV = (bounds[3] - bounds[2]) / height;
+  const points: PlanarSamplePoint[] = [];
+  for (let candidate = 0; candidate < candidates.length && points.length < budget; candidate += stride) {
+    const index = candidates[candidate]!;
+    const column = index % width;
+    const row = Math.floor(index / width);
+    points.push({
+      index,
+      u: bounds[0] + (column + 0.5) * deltaU,
+      v: bounds[2] + (row + 0.5) * deltaV,
+    });
+  }
+  return points;
 }
 
 export function resolvePlanarViewport(
@@ -177,12 +219,19 @@ export function buildFieldMapRenderModel(
   const rasterOpacity = input.rasterOpacity ?? 1;
   const rasterOpacityValid = Number.isFinite(rasterOpacity) && rasterOpacity >= 0 && rasterOpacity <= 1;
   if (!rasterOpacityValid) diagnostics.push("Planar raster opacity is invalid and was not rendered.");
+  const samplePoints = input.layers.points && input.mask
+    ? buildPlanarSamplePoints(input.bounds, input.resolution, input.mask)
+    : [];
+  if (input.layers.points && !input.mask) {
+    diagnostics.push("2D sample points are unavailable: occupancy mask is not materialized.");
+  }
   return {
     bounds: input.bounds,
     boundsCenter: [
       (input.bounds[0] + input.bounds[1]) / 2,
       (input.bounds[2] + input.bounds[3]) / 2,
     ],
+    boundsOutline: input.layers.bounds ? input.bounds : null,
     canonicalUnit: input.canonicalUnit,
     colormap: input.colormap ?? "viridis",
     component: input.component,
@@ -206,6 +255,7 @@ export function buildFieldMapRenderModel(
     range,
     resolution: input.resolution,
     sampleIdentity: input.sampleIdentity,
+    samplePoints,
     scalar: input.scalar,
     vectors: input.vectors ?? null,
     vectorBudget: Math.max(0, Math.floor(input.vectorBudget ?? 2_000)),

@@ -7148,8 +7148,10 @@ export interface components {
         };
         PlanarLayerState: {
             boundaries: boolean;
+            bounds: boolean;
             contours: boolean;
             mesh: boolean;
+            points: boolean;
             probes: boolean;
             raster: boolean;
             vectors: boolean;

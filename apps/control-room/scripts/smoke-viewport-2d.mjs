@@ -247,16 +247,6 @@ async function main() {
     const run = await getJson("/v2/sessions/current/simulation/runs/current");
     const scienceReport = await readScienceReport();
     const currentGitHead = await gitHead();
-    const unsupportedRequiredLayers = {
-      blocker:
-        "Task 10 requires points and bounds layers, but the canonical planar layer schema exposes neither capability",
-      capability_status: {
-        bounds: "not_in_canonical_schema",
-        points: "not_in_canonical_schema",
-      },
-      pass: false,
-      status: "blocked",
-    };
     const runtimeBundleIdentity = {
       api_contract_version: status.api_contract_version,
       requested_backend: run.requested_backend,
@@ -294,7 +284,6 @@ async function main() {
       pass:
         scienceMatchesRuntime &&
         scienceReport.qualification_complete === true &&
-        unsupportedRequiredLayers.pass === true &&
         smokeEvidence.every((evidence) => evidence.status === "ready") &&
         qualificationCases.filter((entry) => entry.required).every((entry) => entry.passed),
       performance: performanceMetrics,
@@ -311,7 +300,6 @@ async function main() {
       runtime_bundle_identity: runtimeBundleIdentity,
       schema_version: "viewport-2d-browser-smoke-v2",
       switch_count: switchCount,
-      unsupported_required_layers: unsupportedRequiredLayers,
       worker_after: workerAfter,
       worker_baseline: workerBaseline,
     };
@@ -334,6 +322,8 @@ async function captureLayerCases(page, monitor, observedPlanarMeta) {
     { id: "contours", layers: { contours: true, raster: true } },
     { id: "mesh", layers: { mesh: true, raster: true } },
     { id: "boundaries", layers: { boundaries: true, raster: true } },
+    { id: "bounds", layers: { bounds: true, raster: true } },
+    { id: "points", layers: { points: true, raster: true } },
     { id: "vectors", layers: { raster: true, vectors: true } },
     { id: "probes", layers: { probes: true, raster: true } },
   ];
@@ -367,6 +357,10 @@ async function captureLayerCases(page, monitor, observedPlanarMeta) {
     const positiveOverlay =
       definition.id === "contours"
         ? evidence.overlayCounts.contours > 0
+        : definition.id === "bounds"
+          ? evidence.overlayCounts.boundsSegments === 4
+          : definition.id === "points"
+            ? evidence.overlayCounts.pointMarkers > 0
         : ["mesh", "boundaries"].includes(definition.id)
           ? evidence.overlayCounts.meshSegments > 0
           : definition.id === "vectors"
@@ -389,22 +383,6 @@ async function captureLayerCases(page, monitor, observedPlanarMeta) {
       status: positiveOverlay && exactLayerSelection ? "passed" : "blocked",
     });
   }
-  cases.push({
-    applicable: true,
-    case_id: "layer-bounds",
-    blocker: "bounds is not a selectable layer in the canonical planar layer schema",
-    passed: false,
-    required: true,
-    status: "unsupported",
-  });
-  cases.push({
-    applicable: true,
-    case_id: "layer-points",
-    blocker: "points is unsupported by the canonical planar layer schema",
-    passed: false,
-    required: true,
-    status: "unsupported",
-  });
   return cases;
 }
 
@@ -621,7 +599,7 @@ async function waitForCanvasPaint(page) {
 
 async function selectMonitor(monitorId, resolution, enabledLayers = null) {
   const layers = Object.fromEntries(
-    ["boundaries", "contours", "mesh", "probes", "raster", "vectors"].map(
+    ["boundaries", "bounds", "contours", "mesh", "points", "probes", "raster", "vectors"].map(
       (layer) => [layer, enabledLayers ? Boolean(enabledLayers[layer]) : true],
     ),
   );

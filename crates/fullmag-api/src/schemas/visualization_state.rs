@@ -314,10 +314,12 @@ pub enum PlanarRenderQuality {
 
 #[derive(Debug, Serialize, Deserialize, ToSchema, Clone, PartialEq, Eq)]
 pub struct PlanarLayerState {
+    pub bounds: bool,
     pub raster: bool,
     pub contours: bool,
     pub mesh: bool,
     pub boundaries: bool,
+    pub points: bool,
     pub vectors: bool,
     pub probes: bool,
 }
@@ -353,10 +355,12 @@ pub(crate) fn default_planar_visualization_state() -> PlanarVisualizationState {
         },
         quality: PlanarRenderQuality::Interactive,
         layers: PlanarLayerState {
+            bounds: false,
             raster: true,
             contours: false,
             mesh: true,
             boundaries: true,
+            points: false,
             vectors: false,
             probes: true,
         },

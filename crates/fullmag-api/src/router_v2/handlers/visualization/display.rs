@@ -1812,7 +1812,7 @@ pub(crate) fn build_visualization_state_response(
 
     VisualizationStateResource {
         revision: selection.revision,
-        schema_version: 7,
+        schema_version: 8,
         quantity: crate::schemas::visualization_state::QuantityVisualizationState {
             active_quantity_id: quantity.active_quantity_id.clone(),
             field_component: quantity.field_component,
