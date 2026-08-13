@@ -22,14 +22,16 @@ const base = {
 };
 
 describe("projectPlanarPresentationState", () => {
-  it("shows a pending layer hide immediately without adopting pending source identity", () => {
+  it("shows pending presentation fields without adopting identity, quality, or resolution", () => {
     const projected = projectPlanarPresentationState(base as VisualizationStateResource, {
       planar: {
         ...base.planar,
         active_monitor_id: "monitor-pending",
         component: "normal",
         layers: { ...base.planar.layers, vectors: false },
+        quality: "export",
         quantity_id: "m",
+        resolution: { height: 1024, vector_budget: 1000, width: 1024 },
       },
     } as VisualizationStateResource);
 
@@ -37,7 +39,9 @@ describe("projectPlanarPresentationState", () => {
       active_monitor_id: "monitor-authoritative",
       component: "magnitude",
       layers: { vectors: false },
+      quality: "interactive",
       quantity_id: "h_eff",
+      resolution: { height: 256, vector_budget: 512, width: 512 },
     });
   });
 });

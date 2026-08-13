@@ -329,7 +329,7 @@ export function FormField(props: FormFieldProps) {
           inputMode={resolvedInputMode}
           type={inputType}
           value={value}
-          onChange={onChange}
+          onInput={onChange as ComponentPropsWithoutRef<"input">["onInput"]}
         />
         {hintText ? <span className={hintClass}>{hintText}</span> : null}
       </div>

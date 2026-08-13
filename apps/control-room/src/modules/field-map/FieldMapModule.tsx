@@ -50,16 +50,17 @@ export default function FieldMapModule() {
     useState<PlanarRenderEvidence | null>(null);
   const active = layout.get().activeViewportMainModuleId === "field-map";
   const visualization = useVisualizationStateResource({ enabled: active });
-  const planar = useMemo(
+  const canonicalPlanar = visualization.data?.planar;
+  const presentationPlanar = useMemo(
     () => projectPlanarPresentationState(
       visualization.data,
       visualization.optimisticData,
     ),
     [visualization.data, visualization.optimisticData],
   );
-  const activePinned = planar?.layers.probes ? pinned : null;
-  const activeRenderEvidence = planar?.layers.raster ? renderEvidence : null;
-  const activeMonitorId = planar?.active_monitor_id ?? null;
+  const activePinned = canonicalPlanar?.layers.probes ? pinned : null;
+  const activeRenderEvidence = presentationPlanar?.layers.raster ? renderEvidence : null;
+  const activeMonitorId = canonicalPlanar?.active_monitor_id ?? null;
   const monitors = usePlanarMonitorsResource({ enabled: active });
   const monitor = usePlanarMonitorResource(activeMonitorId ?? "", {
     enabled: active && activeMonitorId !== null,
@@ -85,40 +86,40 @@ export default function FieldMapModule() {
   });
 
   useEffect(() => {
-    if (!planar || activeMonitorId || !monitors.data?.monitors.length) return;
+    if (!canonicalPlanar || activeMonitorId || !monitors.data?.monitors.length) return;
     const first = monitors.data.monitors[0] as { id?: unknown };
     if (typeof first?.id === "string") {
       visualizationSync.queuePatch({
         planar: { active_monitor_id: first.id },
       });
     }
-  }, [activeMonitorId, monitors.data, planar, visualizationSync]);
+  }, [activeMonitorId, canonicalPlanar, monitors.data, visualizationSync]);
 
   const plan = useMemo(
     () => buildFieldMapDataPlan({
-      active: active && planar !== undefined,
-      component: planar?.component ?? "",
+      active: active && canonicalPlanar !== undefined,
+      component: canonicalPlanar?.component ?? "",
       discretization:
         domain.data?.discretization ?? runtime ?? null,
-      includeMesh: (planar?.layers.mesh ?? false) || (planar?.layers.boundaries ?? false),
+      includeMesh: (canonicalPlanar?.layers.mesh ?? false) || (canonicalPlanar?.layers.boundaries ?? false),
       monitorId: activeMonitorId,
-      quality: planar?.quality ?? "interactive",
-      quantityId: planar?.quantity_id ?? "",
+      quality: canonicalPlanar?.quality ?? "interactive",
+      quantityId: canonicalPlanar?.quantity_id ?? "",
       resolution: [
-        planar?.resolution.width ?? 0,
-        planar?.resolution.height ?? 0,
+        canonicalPlanar?.resolution.width ?? 0,
+        canonicalPlanar?.resolution.height ?? 0,
       ],
-      showVectors: planar?.layers.vectors ?? false,
+      showVectors: canonicalPlanar?.layers.vectors ?? false,
       snapshotId: selectedFieldSnapshot.snapshotId,
       stageId: selectedFieldSnapshot.stageId,
-      viewScope: planar?.view_scope,
-      vectorBudget: planar?.resolution.vector_budget ?? 0,
+      viewScope: canonicalPlanar?.view_scope,
+      vectorBudget: canonicalPlanar?.resolution.vector_budget ?? 0,
     }),
     [
       active,
       activeMonitorId,
       domain.data?.discretization,
-      planar,
+      canonicalPlanar,
       runtime,
       selectedFieldSnapshot.snapshotId,
       selectedFieldSnapshot.stageId,
@@ -190,8 +191,8 @@ export default function FieldMapModule() {
         : null,
     [meta.data],
   );
-  const component = planar?.component ?? "";
-  const quantityId = planar?.quantity_id ?? "";
+  const component = canonicalPlanar?.component ?? "";
+  const quantityId = canonicalPlanar?.quantity_id ?? "";
   const onRenderEvidence = useCallback(
     (next: PlanarRenderEvidence) => setRenderEvidence(next),
     [],
@@ -208,7 +209,7 @@ export default function FieldMapModule() {
     });
   }, [visualizationSync]);
   const renderModel = useMemo(() => {
-    if (!meta.data || !scalar.data || !frame || !planar) return null;
+    if (!meta.data || !scalar.data || !frame || !presentationPlanar) return null;
     const scalarValues = decodeFieldVector(scalar.data.data).values;
     const vectorValues = vectors.data
       ? projectPlanarVectors(decodeFieldVector(vectors.data).values, frame)
@@ -216,22 +217,22 @@ export default function FieldMapModule() {
     return buildFieldMapRenderModel({
       bounds: meta.data.frame.bounds_uv_m as [number, number, number, number],
       canonicalUnit: meta.data.canonical_unit,
-      colormap: planar.colormap,
-      component: planar.component,
-      displayUnit: planar.display_unit,
+      colormap: presentationPlanar.colormap,
+      component: presentationPlanar.component,
+      displayUnit: presentationPlanar.display_unit,
       frame,
       interaction: {
-        panU: planar.interaction.pan_u_m,
-        panV: planar.interaction.pan_v_m,
-        zoom: planar.interaction.zoom,
+        panU: presentationPlanar.interaction.pan_u_m,
+        panV: presentationPlanar.interaction.pan_v_m,
+        zoom: presentationPlanar.interaction.zoom,
       },
       layers: {
-        boundaries: planar.layers.boundaries,
-        contours: planar.layers.contours,
-        mesh: planar.layers.mesh,
-        probes: planar.layers.probes,
-        raster: planar.layers.raster,
-        vectors: planar.layers.vectors,
+        boundaries: presentationPlanar.layers.boundaries,
+        contours: presentationPlanar.layers.contours,
+        mesh: presentationPlanar.layers.mesh,
+        probes: presentationPlanar.layers.probes,
+        raster: presentationPlanar.layers.raster,
+        vectors: presentationPlanar.layers.vectors,
       },
       mask: mask.data ? new Uint8Array(mask.data) : null,
       meshOverlayDescriptor: {
@@ -240,20 +241,20 @@ export default function FieldMapModule() {
         codec: meta.data.mesh_overlay_descriptor.codec,
       },
       meshOverlay: meshOverlay.data,
-      range: normalizePlanarColorRange(planar.range),
-      rasterOpacity: planar.raster_opacity ?? 1,
+      range: normalizePlanarColorRange(presentationPlanar.range),
+      rasterOpacity: presentationPlanar.raster_opacity ?? 1,
       resolution: meta.data.resolution as [number, number],
       sampleIdentity: scalar.data.etag ?? "",
       scalar: scalarValues,
-      vectorBudget: planar.resolution.vector_budget,
-      vectorScale: planar.vector_style.scale,
+      vectorBudget: canonicalPlanar?.resolution.vector_budget ?? 0,
+      vectorScale: presentationPlanar.vector_style.scale,
       vectorStyle: {
-        colorMode: planar.vector_style.color_mode,
-        lengthMode: planar.vector_style.length_mode,
+        colorMode: presentationPlanar.vector_style.color_mode,
+        lengthMode: presentationPlanar.vector_style.length_mode,
       },
       vectors: vectorValues,
     });
-  }, [frame, mask.data, meshOverlay.data, meta.data, planar, scalar.data, vectors.data]);
+  }, [canonicalPlanar?.resolution.vector_budget, frame, mask.data, meshOverlay.data, meta.data, presentationPlanar, scalar.data, vectors.data]);
 
   const evidenceStatus: PlanarEvidenceStatus = resolvePlanarEvidenceStatus({
     metaIdentity: meta.data?.etag,
@@ -291,7 +292,7 @@ export default function FieldMapModule() {
       />
     );
   }
-  if (!planar) {
+  if (!canonicalPlanar || !presentationPlanar) {
     return <FieldMapStatus message="Loading planar visualization state…" planarStatus="loading" />;
   }
   if (!activeMonitorId) {
@@ -355,7 +356,7 @@ export default function FieldMapModule() {
       />
       <header className="fm-field-map__toolbar">
         <strong>{plan.quantityId}</strong>
-        <span>{planar.component}</span>
+        <span>{presentationPlanar.component}</span>
         <span>{renderModel.display.legendUnit}</span>
         {surfaceProjectionStatus(meta.data) === "ambiguous" ? (
           <span className="fm-field-map__diagnostic" role="status">
@@ -390,7 +391,7 @@ export default function FieldMapModule() {
           { label: "Mesh overlay", requested: plan.requestMesh, resource: meshOverlay },
         ]}
       />
-      {planar.layers.probes && probe.data ? (
+      {presentationPlanar.layers.probes && probe.data ? (
         <table className="fm-field-map__pinned-probe">
           <caption>Pinned planar probe</caption>
           <tbody>

@@ -22,10 +22,8 @@ export function projectPlanarPresentationState(
     display_unit: optimistic.display_unit,
     interaction: optimistic.interaction,
     layers: optimistic.layers,
-    quality: optimistic.quality,
     range: optimistic.range,
     raster_opacity: optimistic.raster_opacity,
-    resolution: optimistic.resolution,
     vector_style: optimistic.vector_style,
   };
 }

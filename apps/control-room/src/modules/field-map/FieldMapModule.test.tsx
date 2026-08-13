@@ -10,6 +10,9 @@ import FieldMapModule from "./FieldMapModule";
 const mocks = vi.hoisted(() => ({
   meta: vi.fn(),
   queuePatch: vi.fn(),
+  renderModel: vi.fn(),
+  renderReady: false,
+  surface: vi.fn(),
   visualization: {
     data: null as Record<string, unknown> | null,
     error: null as Error | null,
@@ -25,16 +28,81 @@ vi.mock("@/kernel/KernelContext", () => ({
   }),
 }));
 
+vi.mock("@/kernel/api/codecs", () => ({
+  decodeFieldVector: () => ({ values: new Float64Array([1]) }),
+}));
+
+vi.mock("./model/fieldMapRenderModel", () => ({
+  buildFieldMapRenderModel: (input: unknown) => {
+    mocks.renderModel(input);
+    return {
+      diagnostics: [],
+      display: { axisUnit: "m", legendUnit: "A/m", probeScale: 1 },
+      layers: (input as { layers: unknown }).layers,
+      range: null,
+    };
+  },
+  normalizePlanarColorRange: () => null,
+  projectPlanarVectors: () => null,
+  resolveFieldMapAuxiliaryDiagnostics: () => [],
+  surfaceProjectionStatus: () => "resolved",
+}));
+
+vi.mock("./renderer/PlanarSurface", () => ({
+  PlanarSurface: ({ model }: { model: unknown }) => {
+    mocks.surface(model);
+    return <output data-planar-render-layers={JSON.stringify((model as { layers: unknown }).layers)} />;
+  },
+}));
+
 vi.mock("@/kernel/resources/planarFieldResources", () => ({
-  planarFieldQueryFromMeta: vi.fn(),
+  planarFieldQueryFromMeta: () => ({
+    ok: true,
+    query: {
+      component: "magnitude",
+      quality: "interactive",
+      resolution_x: 256,
+      resolution_y: 128,
+      scope_kind: "monitor_target",
+      vector_budget: 512,
+    },
+  }),
   usePlanarFieldMetaResource: (...args: unknown[]) => {
     mocks.meta(...args);
-    return { data: null, error: null, status: "idle" };
+    return mocks.renderReady
+      ? {
+          data: {
+            canonical_unit: "A/m",
+            etag: "meta-authoritative",
+            field_revision: "4",
+            fold_count: 0,
+            frame: {
+              bounds_uv_m: [0, 1, 0, 1],
+              normal: [0, 0, 1],
+              u_axis: [1, 0, 0],
+              v_axis: [0, 1, 0],
+            },
+            mesh_overlay_descriptor: {
+              available: true,
+              boundary_classification: "exact",
+              codec: "fmcs.v4",
+            },
+            monitor_hash: "monitor-hash",
+            monitor_revision: "2",
+            overlap_count: 0,
+            resolution: [256, 128],
+          },
+          error: null,
+          status: "ready",
+        }
+      : { data: null, error: null, status: "idle" };
   },
   usePlanarMaskResource: () => ({ data: null, error: null, status: "idle" }),
   usePlanarMeshOverlayResource: () => ({ data: null, error: null, status: "idle" }),
   usePlanarProbeResource: () => ({ data: null, error: null, status: "idle" }),
-  usePlanarScalarResource: () => ({ data: null, error: null, status: "idle" }),
+  usePlanarScalarResource: () => mocks.renderReady
+    ? { data: { data: new ArrayBuffer(8), etag: "scalar-authoritative" }, error: null, status: "ready" }
+    : { data: null, error: null, status: "idle" },
   usePlanarVectorResource: () => ({ data: null, error: null, status: "idle" }),
 }));
 
@@ -70,6 +138,7 @@ describe("FieldMapModule planar state ownership", () => {
     mocks.visualization.error = null;
     mocks.visualization.status = "loading";
     mocks.visualization.optimisticData = null;
+    mocks.renderReady = false;
   });
 
   it("does not invent a quantity or component while the server profile is loading", () => {
@@ -136,7 +205,7 @@ describe("FieldMapModule planar state ownership", () => {
     }
   });
 
-  it("uses the shared optimistic presentation projection while preserving authoritative data identity", () => {
+  it("keeps the canonical plan and sample identity stable while optimistic layers alter rendered flags", () => {
     const planar = {
       active_monitor_id: "plane-authoritative",
       colormap: "viridis",
@@ -156,17 +225,37 @@ describe("FieldMapModule planar state ownership", () => {
         active_monitor_id: "plane-pending",
         component: "normal",
         layers: { ...planar.layers, mesh: false, vectors: false },
+        quality: "export",
+        resolution: { height: 1024, vector_budget: 1000, width: 1024 },
         quantity_id: "m",
       },
     };
     mocks.visualization.status = "ready";
+    mocks.renderReady = true;
 
     renderToStaticMarkup(<FieldMapModule />);
 
     expect(mocks.meta).toHaveBeenCalledWith(
       "h_eff",
       "plane-authoritative",
-      expect.objectContaining({ include_mesh: false, vector_budget: 0 }),
+      expect.objectContaining({ include_mesh: true, quality: "interactive", resolution_x: 256, resolution_y: 128, vector_budget: 512 }),
+      { enabled: true },
+    );
+    expect(mocks.renderModel).toHaveBeenLastCalledWith(expect.objectContaining({
+      layers: expect.objectContaining({ mesh: false, vectors: false }),
+      vectorBudget: 512,
+    }));
+
+    mocks.meta.mockClear();
+    mocks.renderModel.mockClear();
+    mocks.visualization.data = mocks.visualization.optimisticData;
+    mocks.visualization.optimisticData = null;
+    renderToStaticMarkup(<FieldMapModule />);
+
+    expect(mocks.meta).toHaveBeenCalledWith(
+      "m",
+      "plane-pending",
+      expect.objectContaining({ include_mesh: false, quality: "export", resolution_x: 1024, resolution_y: 1024, vector_budget: 0 }),
       { enabled: true },
     );
   });
