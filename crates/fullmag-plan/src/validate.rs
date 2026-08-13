@@ -167,7 +167,7 @@ pub(crate) fn validate_region_owned_planning(
                 })
         });
         if has_cuda_region_fields {
-            if problem.magnets.len() > 1 {
+            if crate::routes_to_fdm_multilayer(problem) {
                 for assignment in problem
                     .material_parameter_fields
                     .iter()

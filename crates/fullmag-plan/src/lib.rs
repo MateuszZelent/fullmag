@@ -65,6 +65,18 @@ pub use sampling::{
 pub use surface_selectors::{resolve_fem_surface_selector, ResolvedFemSurfaceSelector};
 pub use util::generate_random_unit_vectors;
 
+fn routes_to_fdm_multilayer(problem: &ProblemIR) -> bool {
+    let requested_demag_strategy = problem
+        .backend_policy
+        .discretization_hints
+        .as_ref()
+        .and_then(|hints| hints.fdm.as_ref())
+        .and_then(|fdm| fdm.demag.as_ref())
+        .map(|demag| demag.strategy.as_str())
+        .unwrap_or("auto");
+    problem.magnets.len() > 1 || requested_demag_strategy == "multilayer_convolution"
+}
+
 /// Plans a `ProblemIR` into an `ExecutionPlanIR`.
 ///
 /// Current planner coverage:
@@ -149,15 +161,7 @@ pub fn plan(problem: &ProblemIR) -> Result<ExecutionPlanIR, PlanError> {
                     ],
                 });
             }
-            let requested_demag_strategy = problem
-                .backend_policy
-                .discretization_hints
-                .as_ref()
-                .and_then(|hints| hints.fdm.as_ref())
-                .and_then(|fdm| fdm.demag.as_ref())
-                .map(|demag| demag.strategy.as_str())
-                .unwrap_or("auto");
-            if problem.magnets.len() > 1 || requested_demag_strategy == "multilayer_convolution" {
+            if routes_to_fdm_multilayer(problem) {
                 fdm::plan_fdm_multilayer(problem, resolved_backend)
             } else {
                 fdm::plan_fdm(problem, resolved_backend)

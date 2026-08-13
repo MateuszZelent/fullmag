@@ -7773,6 +7773,56 @@ fn forced_cuda_multilayer_rejects_cellwise_material_fields_with_layer_identity()
 }
 
 #[test]
+fn forced_cuda_explicit_single_magnet_multilayer_uses_multilayer_material_field_reason() {
+    let mut ir = ProblemIR::bootstrap_example();
+    ir.problem_meta.runtime_metadata.insert(
+        "runtime_selection".to_string(),
+        serde_json::json!({"device": "cuda"}),
+    );
+    ir.backend_policy
+        .discretization_hints
+        .as_mut()
+        .and_then(|hints| hints.fdm.as_mut())
+        .expect("bootstrap fixture must provide FDM hints")
+        .demag = Some(fullmag_ir::FdmDemagHintsIR {
+            strategy: "multilayer_convolution".to_string(),
+            mode: "three_d".to_string(),
+            common_cells: None,
+            common_cells_xy: None,
+            common_cell_size: None,
+        });
+    ir.material_parameter_fields
+        .push(fullmag_ir::MaterialParameterAssignmentIR {
+            assignment_id: "strip_linear_ms".to_string(),
+            owner_object: "strip".to_string(),
+            region_id: None,
+            parameter: fullmag_ir::MaterialParameterNameIR::Ms,
+            value: fullmag_ir::MaterialParameterFieldIR::Linear {
+                base: 800e3,
+                gradient: [1e9, 0.0, 0.0],
+                frame: fullmag_ir::RegionFrameIR::Object,
+                unit: Some("A/m".to_string()),
+            },
+            priority: 10,
+            conflict_policy: fullmag_ir::RegionConflictPolicyIR::Error,
+        });
+
+    let error = plan(&ir).expect_err("explicit multilayer CUDA must reject cellwise Ms");
+    let diagnostic = error.reasons.join("\n");
+    for expected in [
+        "fdm_cuda_multilayer_material_field_unqualified",
+        "ms_field",
+        "layer:strip",
+        "object 'strip'",
+    ] {
+        assert!(
+            diagnostic.contains(expected),
+            "missing {expected:?} in planner diagnostic: {diagnostic}"
+        );
+    }
+}
+
+#[test]
 fn multilayer_planner_materializes_translated_object_frame_region_membership() {
     let mut ir = stacked_two_body_multilayer_problem();
     let GeometryEntryIR::Translate { by, .. } = &mut ir.geometry.entries[0] else {

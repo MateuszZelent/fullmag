@@ -3246,6 +3246,7 @@ pub(crate) fn plan_fdm_multilayer(
     let multilayer_topology_tokens =
         fullmag_ir::fdm_multilayer_topology_tokens(&selected_mode, &layers);
     if runtime_requests_cuda(problem) {
+        errors.extend(fdm_multilayer_cuda_material_field_errors(&layers));
         errors.extend(
             fdm_multilayer_cuda_containment_reason_codes(enable_demag, &selected_mode, &layers)
                 .into_iter()

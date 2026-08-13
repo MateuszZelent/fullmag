@@ -325,8 +325,9 @@ fn resolve_cuda_multilayer_execution_shape(
 
 /// Validate the subset of the multilayer descriptor contract which the
 /// current native CUDA runner can execute without changing the physical
-/// operator. Unqualified assisted operators fail before certificate checks,
-/// device probing, allocation, or FFI.
+/// operator. The entry point validates the grid budget and certificate first;
+/// unqualified assisted operators still fail before device probing, allocation,
+/// or FFI.
 fn validate_cuda_multilayer_execution_contract(plan: &FdmMultilayerPlanIR) -> Result<(), RunError> {
     reject_cuda_multilayer_containment(plan.enable_demag, &plan.mode, &plan.layers)?;
     if let Some(message) = fullmag_plan::fdm_multilayer_cuda_material_field_errors(&plan.layers)
@@ -3531,13 +3532,28 @@ mod tests {
 
     fn certify_plan(plan: &mut FdmMultilayerPlanIR) {
         let topology_tokens = fullmag_ir::fdm_multilayer_topology_tokens(&plan.mode, &plan.layers);
+        let origin = plan
+            .layers
+            .iter()
+            .fold([f64::INFINITY; 3], |mut origin, layer| {
+                for axis in 0..3 {
+                    origin[axis] = origin[axis].min(layer.native_origin[axis]);
+                }
+                origin
+            });
+        let cell = plan.layers[0].convolution_cell_size;
+        let cost = fullmag_plan::checked_fdm_grid_cost(
+            plan.common_cells,
+            fullmag_plan::FDM_GRID_ESTIMATED_BYTES_PER_CELL,
+        )
+        .expect("test grid cost");
         plan.grid_certificate = Some(
             FdmGridCertificateIR::new_with_topology_tokens(
-                [0.0, 0.0, 0.0],
+                origin,
                 plan.common_cells,
-                [2e-9, 2e-9, 1e-9],
-                16,
-                1024,
+                cell,
+                cost.cells,
+                cost.estimated_bytes,
                 None,
                 &topology_tokens,
             )
@@ -3605,7 +3621,7 @@ mod tests {
     }
 
     #[test]
-    fn forced_cuda_multilayer_rejects_cellwise_material_fields_before_cuda_probe() {
+    fn forced_cuda_multilayer_entry_rejects_cellwise_material_fields_before_cuda_probe() {
         for field_name in ["ms_field", "a_field", "alpha_field"] {
             let mut plan = make_plan(false, ExecutionPrecision::Double);
             let cell_count = plan.layers[0].initial_magnetization.len();
@@ -3623,7 +3639,7 @@ mod tests {
             }
             certify_plan(&mut plan);
 
-            let error = validate_cuda_multilayer_execution_contract(&plan)
+            let error = execute_cuda_fdm_multilayer(&plan, 1e-13, &[])
                 .expect_err("forced CUDA must reject cellwise material fields before probing CUDA");
             assert!(
                 error
