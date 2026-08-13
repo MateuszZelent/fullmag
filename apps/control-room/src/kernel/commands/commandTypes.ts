@@ -64,6 +64,8 @@ export interface CommandContribution {
   scope: "global" | "workspace" | "selection" | "viewport" | "runtime" | "debug";
   icon?: ReactNode;
   shortcut?: string;
+  /** Requires a contextual input that the global command palette cannot provide. */
+  requiresInput?: boolean;
   /** When absent the command is always enabled. */
   isEnabled?: (context: CommandContext) => boolean;
   /** User-facing explanation when `isEnabled` returns false. */

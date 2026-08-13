@@ -40,15 +40,16 @@ export function filterPaletteCommands(
   commands: readonly CommandContribution[],
   query: string,
 ): CommandContribution[] {
+  const paletteCommands = commands.filter((command) => !command.requiresInput);
   const terms = query
     .trim()
     .toLowerCase()
     .split(/\s+/)
     .filter(Boolean);
 
-  if (terms.length === 0) return [...commands];
+  if (terms.length === 0) return [...paletteCommands];
 
-  return commands.filter((command) => {
+  return paletteCommands.filter((command) => {
     const haystack = [
       command.id,
       command.title,
@@ -68,9 +69,8 @@ export function executePaletteCommand(
   commands: CommandRegistry,
   commandId: CommandId,
   context: CommandContext,
-  input?: unknown,
 ): Promise<unknown> {
-  return commands.execute(commandId, context, input);
+  return commands.execute(commandId, context);
 }
 
 export function paletteCommandResourceData(
