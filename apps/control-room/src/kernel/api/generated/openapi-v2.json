@@ -15746,6 +15746,7 @@
         ]
       },
       "PlanarVisualizationPatch": {
+        "additionalProperties": false,
         "properties": {
           "active_monitor_id": {
             "type": [
@@ -15862,6 +15863,7 @@
         "type": "object"
       },
       "PlanarVisualizationState": {
+        "additionalProperties": false,
         "properties": {
           "active_monitor_id": {
             "type": [
@@ -39903,8 +39905,8 @@
     }
   ],
   "x-fullmag-build-identity": {
-    "built_at_utc": "2026-08-13T02:32:49Z",
-    "git_commit": "594939f57769b51d9ec601c1a1072846a837f204",
+    "built_at_utc": "2026-08-13T03:28:43Z",
+    "git_commit": "d4a0d2517535955cf81a4b705c3bfebfe5d29de5",
     "source_snapshot_sha256": "unknown",
     "worktree_state": "dirty"
   },
