@@ -1529,6 +1529,25 @@ fn apply_live_step_update_to_workspace_state(
     remainder
 }
 
+fn apply_terminal_live_step_update_to_workspace_state(
+    state: &mut LocalLiveWorkspaceState,
+    run_id: &str,
+    session_id: &str,
+    artifact_dir: &Path,
+    update: fullmag_runner::StepUpdate,
+) -> fullmag_runner::StepUpdate {
+    let remainder = apply_live_step_update_to_workspace_state(
+        state,
+        run_id,
+        session_id,
+        artifact_dir,
+        update,
+        false,
+    );
+    set_latest_scalar_row_for_terminal_update(state, &remainder);
+    remainder
+}
+
 fn ingest_magnetization_field_from_update(
     state: &mut LocalLiveWorkspaceState,
     update: &mut fullmag_runner::StepUpdate,
@@ -8796,15 +8815,15 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                 // The terminal solver payload must use the same ingest path as ordinary live
                 // callbacks; otherwise the latest-step view changes while latest_fields.m
                 // remains at source_step=0.
-                let _ = apply_live_step_update_to_workspace_state(
+                let _ = apply_terminal_live_step_update_to_workspace_state(
                     state,
                     &run_id,
                     &session_id,
                     &artifact_dir,
                     final_update,
-                    true,
                 );
             });
+            live_workspace.force_publish_latest_scalar_row();
         }
 
         let offset_steps = offset_step_stats(&stage_result.steps, step_offset, time_offset);
@@ -10840,6 +10859,7 @@ mod tests {
     use super::{
         adaptive_remesh_legality_reason, apply_current_fem_overrides,
         apply_initial_magnetization_state_override, apply_live_step_update_to_workspace_state,
+        apply_terminal_live_step_update_to_workspace_state,
         apply_remeshed_problem_snapshot_to_stages, apply_stage_heartbeat_progress,
         attach_initial_magnetization_state_override_metadata, attach_region_realization_revisions,
         classify_wait_for_solve_command, cumulative_rhs_evals, default_domain_region_markers,
@@ -10859,8 +10879,8 @@ mod tests {
         resolved_shared_domain_object_region_markers, run_active_preparation_operation,
         run_owned_preparation_stage, run_script_preparation_preflight, run_solver_initialization,
         run_solver_initialization_safety_check, scripted_stage_execution_state,
-        scripted_stage_execution_state_with_completion, set_latest_scalar_row_for_terminal_update,
-        set_latest_scalar_row_if_due, shared_domain_object_region_mesh_specs,
+        scripted_stage_execution_state_with_completion, set_latest_scalar_row_if_due,
+        shared_domain_object_region_mesh_specs,
         stage_allows_sampled_continuation_initial_state,
         step_update_has_frequency_response_progress, user_cancelled_stage_completion,
         validate_periodic_remesh_candidate, wait_for_failed_preparation_close,
@@ -13116,7 +13136,7 @@ mod tests {
     }
 
     #[test]
-    fn terminal_interactive_update_bypasses_table_autosave_period() {
+    fn terminal_scripted_update_bypasses_table_autosave_period() {
         let mut state = test_workspace_state();
         state.metadata = Some(serde_json::json!({
             "table_autosave": { "sample_period_s": 1.0 }
@@ -13133,7 +13153,13 @@ mod tests {
         terminal.stats.e_total = 7.0;
         terminal.finished = false;
 
-        set_latest_scalar_row_for_terminal_update(&mut state, &terminal);
+        let _ = apply_terminal_live_step_update_to_workspace_state(
+            &mut state,
+            "run-test",
+            "session-test",
+            PathBuf::from("/tmp/artifacts").as_path(),
+            terminal,
+        );
 
         let row = state.latest_scalar_row.expect("terminal scalar row");
         assert_eq!(row.step, 5);

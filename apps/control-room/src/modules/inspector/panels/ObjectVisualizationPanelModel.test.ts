@@ -251,7 +251,7 @@ describe("ObjectVisualizationPanelModel", () => {
     });
   });
 
-  it("routes FDM Airbox visualization to the structured-grid target", () => {
+  it("keeps public FDM Airbox visualization on the canonical Airbox target", () => {
     for (const kind of ["airbox.visualization"]) {
       const selection = {
         kind,
@@ -269,7 +269,7 @@ describe("ObjectVisualizationPanelModel", () => {
           selection,
           selectionTarget,
         }),
-      ).toMatchObject({ id: "fdm-domain", kind: "fdm-domain" });
+      ).toMatchObject({ id: "airbox", kind: "airbox" });
     }
   });
 

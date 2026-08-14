@@ -445,16 +445,14 @@ export function resolveObjectVisualizationTargetForLane({
     return selectionTarget?.kind === "fdm-domain" ? null : selectionTarget;
   }
 
-  const fdmVisualizationSelection =
+  const publicAirboxVisualizationSelection =
     selection.kind === "airbox.visualization" ||
-    selection.kind === "airbox.visualization.debug" ||
-    selection.kind === "mesh.grid.universe-outside-support";
-  if (!fdmVisualizationSelection) return null;
-  // Airbox is a shared Explorer vocabulary.  Keep the dedicated FDM Airbox
-  // target when the selection carries it; otherwise use the magnetic grid.
-  return selectionTarget?.kind === "fdm-domain"
-    ? selectionTarget
-    : { id: "fdm-domain", kind: "fdm-domain", label: selection.label };
+    selection.kind === "airbox.visualization.debug";
+  if (publicAirboxVisualizationSelection) {
+    return selectionTarget?.kind === "airbox" ? selectionTarget : null;
+  }
+  if (selection.kind !== "mesh.grid.universe-outside-support") return null;
+  return selectionTarget?.kind === "fdm-domain" ? selectionTarget : null;
 }
 
 export function resolveObjectVisualizationResourceGates({

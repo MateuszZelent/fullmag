@@ -13,7 +13,7 @@ use crate::relaxation::vector_math::{
     add_vec3, global_dot_vec3, max_torque_from_field, normalized_vec3, project_tangent, scale_vec3,
     sub_vec3, tangent_gradient_from_field,
 };
-use crate::scalar_metrics::apply_average_m_to_step_stats;
+use crate::scalar_metrics::apply_average_m_to_step_stats_with_active_mask;
 use crate::types::StepStats;
 use crate::MU0;
 
@@ -532,8 +532,9 @@ pub(crate) fn apply_direct_minimizer_step_metrics(
     accepted_step_size: f64,
     magnetization: &[[f64; 3]],
     h_eff: &[[f64; 3]],
+    active_mask: Option<&[bool]>,
 ) -> f64 {
-    apply_average_m_to_step_stats(stats, magnetization);
+    apply_average_m_to_step_stats_with_active_mask(stats, magnetization, active_mask);
     if let Some(values) = stats.per_object_scalars.get_mut("free") {
         values.insert("mx".to_string(), stats.mx);
         values.insert("my".to_string(), stats.my);
@@ -592,7 +593,7 @@ mod tests {
         let magnetization = [[1.0, 0.0, 0.0], [0.0, 0.0, 1.0]];
         let h_eff = [[0.0, 0.0, 0.0], [0.0, 0.0, 0.0]];
 
-        apply_direct_minimizer_step_metrics(&mut stats, 1, 0.25, &magnetization, &h_eff);
+        apply_direct_minimizer_step_metrics(&mut stats, 1, 0.25, &magnetization, &h_eff, None);
 
         assert_eq!([stats.mx, stats.my, stats.mz], [0.5, 0.0, 0.5]);
         assert_eq!(
@@ -603,6 +604,25 @@ mod tests {
             ],
             [0.5, 0.0, 0.5]
         );
+    }
+
+    #[test]
+    fn accepted_step_metrics_average_only_active_magnetic_cells() {
+        let mut stats = StepStats::default();
+        let magnetization = [[1.0, 0.0, 0.0], [0.0, 0.0, 0.0], [0.0, 1.0, 0.0]];
+        let h_eff = [[0.0, 0.0, 0.0]; 3];
+        let active_mask = [true, false, true];
+
+        apply_direct_minimizer_step_metrics(
+            &mut stats,
+            1,
+            0.25,
+            &magnetization,
+            &h_eff,
+            Some(&active_mask),
+        );
+
+        assert_eq!([stats.mx, stats.my, stats.mz], [0.5, 0.5, 0.0]);
     }
 
     #[test]
@@ -1074,6 +1094,7 @@ mod tests {
             3e-6,
             &[[1.0, 0.0, 0.0]],
             &[[0.0, 4.0, 3.0]],
+            None,
         );
 
         assert_eq!(torque, 5.0);
