@@ -1420,11 +1420,15 @@ mod tests {
     fn multilayer_contexts_preserve_spatial_material_fields() {
         let mut plan = make_plan(false);
         plan.layers[0].material.ms_field = Some((0..16).map(|i| 700e3 + i as f64 * 10e3).collect());
-        plan.layers[0].material.a_field = Some((0..16).map(|i| 11e-12 + i as f64 * 1e-12).collect());
-        plan.layers[0].material.alpha_field = Some((0..16).map(|i| 0.01 + i as f64 * 0.01).collect());
+        plan.layers[0].material.a_field =
+            Some((0..16).map(|i| 11e-12 + i as f64 * 1e-12).collect());
+        plan.layers[0].material.alpha_field =
+            Some((0..16).map(|i| 0.01 + i as f64 * 0.01).collect());
         plan.layers[1].material.ms_field = Some((0..16).map(|i| 800e3 + i as f64 * 20e3).collect());
-        plan.layers[1].material.a_field = Some((0..16).map(|i| 13e-12 + i as f64 * 2e-12).collect());
-        plan.layers[1].material.alpha_field = Some((0..16).map(|i| 0.03 + i as f64 * 0.01).collect());
+        plan.layers[1].material.a_field =
+            Some((0..16).map(|i| 13e-12 + i as f64 * 2e-12).collect());
+        plan.layers[1].material.alpha_field =
+            Some((0..16).map(|i| 0.03 + i as f64 * 0.01).collect());
 
         let (contexts, _) =
             build_contexts_and_states(&plan, fullmag_engine::TimeIntegrator::Heun, false)
@@ -1515,7 +1519,9 @@ mod tests {
             .iter()
             .zip(observables.demag_field[..first_cells].iter())
             .enumerate()
-            .map(|(cell, (m, h))| -0.5 * MU0 * first.problem.ms_at(cell) * dot(*m, *h) * cell_volume)
+            .map(|(cell, (m, h))| {
+                -0.5 * MU0 * first.problem.ms_at(cell) * dot(*m, *h) * cell_volume
+            })
             .sum::<f64>();
         let expected_external = first_state
             .magnetization()
@@ -1532,9 +1538,8 @@ mod tests {
         assert!((scalars["e_demag"] - expected_demag).abs() < 1e-20);
         assert!((scalars["e_ext"] - expected_external).abs() < 1e-20);
         assert!((scalars["m_weight"] - expected_weight).abs() < 1e-30);
-        let scalar_average_weight = first_cells as f64
-            * cell_volume
-            * first.problem.material.saturation_magnetisation;
+        let scalar_average_weight =
+            first_cells as f64 * cell_volume * first.problem.material.saturation_magnetisation;
         assert!((scalars["m_weight"] - scalar_average_weight).abs() > 1e-30);
     }
 

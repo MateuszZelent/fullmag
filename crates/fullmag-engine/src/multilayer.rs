@@ -903,7 +903,10 @@ impl MultilayerDemagRuntime {
                         ms_field.len()
                     ));
                 }
-                if ms_field.iter().any(|value| !value.is_finite() || *value <= 0.0) {
+                if ms_field
+                    .iter()
+                    .any(|value| !value.is_finite() || *value <= 0.0)
+                {
                     return Err(format!(
                         "layer {index} magnet '{}' ms_field contains non-finite or non-positive values",
                         layer.magnet_name
@@ -1060,7 +1063,11 @@ impl MultilayerDemagRuntime {
                 .iter()
                 .enumerate()
                 .map(|(cell, m)| {
-                    let ms = layer.ms_field.as_ref().map(|field| field[cell]).unwrap_or(layer.ms);
+                    let ms = layer
+                        .ms_field
+                        .as_ref()
+                        .map(|field| field[cell])
+                        .unwrap_or(layer.ms);
                     [m[0] * ms, m[1] * ms, m[2] * ms]
                 })
                 .collect::<Vec<_>>();
@@ -1978,7 +1985,12 @@ mod tests {
         let grid = [2, 1, 1];
         let cell_size = [1.0, 1.0, 1.0];
         let kernel = fullmag_fdm_demag::compute_exact_self_kernel(
-            grid[0], grid[1], grid[2], cell_size[0], cell_size[1], cell_size[2],
+            grid[0],
+            grid[1],
+            grid[2],
+            cell_size[0],
+            cell_size[1],
+            cell_size[2],
         );
         let runtime = MultilayerDemagRuntime::new(
             vec![KernelPair {
@@ -2027,8 +2039,14 @@ mod tests {
 
         for (ms_field, expected) in [
             (Some(vec![2.0]), "has 1 entries, expected 2"),
-            (Some(vec![f64::NAN; 2]), "contains non-finite or non-positive values"),
-            (Some(vec![0.0; 2]), "contains non-finite or non-positive values"),
+            (
+                Some(vec![f64::NAN; 2]),
+                "contains non-finite or non-positive values",
+            ),
+            (
+                Some(vec![0.0; 2]),
+                "contains non-finite or non-positive values",
+            ),
         ] {
             let mut invalid = layer(ms_field);
             let error = runtime
