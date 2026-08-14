@@ -79,10 +79,11 @@ export function decodeFdmMultilayerActiveMask(
       `FMBM payload size mismatch: expected ${expectedBufferLength}, got ${buffer.byteLength}`,
     );
   }
+  // The v1 JSON layout schema exposes this unsigned 64-bit revision as a
+  // number, so both transports intentionally use the same JavaScript rounding.
+  // Exact carrier identity remains fail-closed through the grid fingerprint
+  // and mask hash checks below.
   const layoutRevision = Number(view.getBigUint64(28, true));
-  if (!Number.isSafeInteger(layoutRevision)) {
-    throw new Error("FMBM layout revision exceeds the JavaScript safe integer range");
-  }
   const gridFingerprint = hexBytes(buffer, 36, 32);
   const maskHash = hexBytes(buffer, 68, 32);
   const packedMask = new Uint8Array(buffer.slice(FMBM_HEADER_LEN));

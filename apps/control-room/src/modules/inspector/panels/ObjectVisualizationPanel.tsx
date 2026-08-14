@@ -48,6 +48,7 @@ import {
   useDomainMetaResource,
   useFdmRegionMembershipResource,
   useFdmRegionMembershipBinaryResource,
+  useFdmMultilayerLayoutResource,
 } from "@/kernel/resources/geometryLifecycleResources";
 import {
   isVisualizationAirboxIdentity,
@@ -144,7 +145,11 @@ function useObjectVisualizationPanelState(
     },
   );
   const lane = resolveObjectVisualizationLane(manifestStatus?.domain.discretization);
+  const fdmMultilayerLayout = useFdmMultilayerLayoutResource({
+    enabled: lane === "fdm",
+  });
   const target = resolveObjectVisualizationTargetForLane({
+    fdmNativeLayers: fdmMultilayerLayout.data?.layers,
     lane,
     selection,
     selectionTarget,

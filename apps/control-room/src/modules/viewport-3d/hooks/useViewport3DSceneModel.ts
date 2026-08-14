@@ -3369,10 +3369,9 @@ export function useViewport3DSceneModel({
     const settingsById = new Map<string, VisualizationTargetSettings>();
     for (const domain of fdmNativeLayerDomains) {
       const target = targetForFdmNativeLayer(domain.layerId, domain.magnetName);
-      const resolved = resolveTargetVisualization({
+      const resolved = resolveViewport3DFdmTargetVisualization({
         snapshot: objectVisualizationSnapshot,
         target,
-        visualizationState: renderingState,
       }).effectiveSettings;
       settingsById.set(
         domain.layerId,
@@ -3391,7 +3390,6 @@ export function useViewport3DSceneModel({
     fdmNativeLayerDomains,
     fdmMultilayerLayerActiveMasks.data,
     objectVisualizationSnapshot,
-    renderingState,
   ]);
   const nativeLayerFieldRequests = useMemo<
     ReadonlyMap<string, Viewport3DFieldResourceRequest>

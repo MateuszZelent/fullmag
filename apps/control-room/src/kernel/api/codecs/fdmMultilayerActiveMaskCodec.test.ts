@@ -80,6 +80,23 @@ describe("FMBM v1 codec", () => {
     expect([...decoded.activeMask]).toEqual([1, 0, 1, 1]);
   });
 
+  it("accepts the rounded JSON representation of an unsigned 64-bit layout revision", async () => {
+    const buffer = makeBuffer();
+    const view = new DataView(buffer);
+    const revision = BigInt("17920054460318964829");
+    view.setBigUint64(28, revision, true);
+    const decoded = decodeFdmMultilayerActiveMask(buffer);
+
+    expect(decoded.layoutRevision).toBe(Number(revision));
+    await expect(
+      validateFdmMultilayerActiveMaskContract(
+        decoded,
+        { ...layout, layout_revision: Number(revision) },
+        layout.layers[0]!,
+      ),
+    ).resolves.toEqual({ status: "ready" });
+  });
+
   it("rejects malformed payload sizes", () => {
     expect(() => decodeFdmMultilayerActiveMask(makeBuffer().slice(0, FMBM_HEADER_LEN))).toThrow(
       /payload size mismatch/,

@@ -15,6 +15,7 @@ import {
   resolveAuthoredRegionOverlayVisibility,
   resolveViewport3DAirboxFrameState,
   resolveViewport3DModelLayerStageVisibility,
+  resolveViewport3DRealizedFdmObjectIds,
   scheduleViewport3DProjectionRenderFrames,
   VIEWPORT_3D_MODEL_LAYER_FINAL_STAGE,
 } from "./Viewport3DScene";
@@ -31,6 +32,20 @@ function invokeFrameCallback(
 }
 
 describe("Viewport3DScene scale helpers", () => {
+  it("treats native multilayer grids as realized object geometry", () => {
+    expect(
+      resolveViewport3DRealizedFdmObjectIds({
+        fdmNativeLayerViews: [
+          { domain: { objectId: "layer_bottom" } },
+          { domain: { objectId: "layer_top" } },
+        ] as never,
+        fdmTargetViews: [
+          { ownerTarget: { id: "object:single_grid", kind: "object" } },
+        ] as never,
+      }),
+    ).toEqual(new Set(["single_grid", "layer_bottom", "layer_top"]));
+  });
+
   it("wires ordinary OrbitControls into the camera registry interaction lifecycle", () => {
     const source = readFileSync(
       new URL("./Viewport3DScene.tsx", import.meta.url),

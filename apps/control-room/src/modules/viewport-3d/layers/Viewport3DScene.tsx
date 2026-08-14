@@ -997,6 +997,27 @@ function Viewport3DOverlayLayerStack({
   );
 }
 
+export function resolveViewport3DRealizedFdmObjectIds({
+  fdmNativeLayerViews,
+  fdmTargetViews,
+}: {
+  fdmNativeLayerViews: readonly FdmNativeLayerRenderView[];
+  fdmTargetViews: readonly Viewport3DFdmTargetRenderView[];
+}): ReadonlySet<string> {
+  const objectIds = new Set(
+    fdmTargetViews.flatMap((view) =>
+      view.ownerTarget.kind === "object" &&
+      view.ownerTarget.id.startsWith("object:")
+        ? [view.ownerTarget.id.slice("object:".length)]
+        : [],
+    ),
+  );
+  for (const view of fdmNativeLayerViews) {
+    objectIds.add(view.domain.objectId);
+  }
+  return objectIds;
+}
+
 function Viewport3DModelLayerStack({
   adoptionRegistry,
   airboxSettings,
@@ -1130,14 +1151,11 @@ function Viewport3DModelLayerStack({
 
   const realizedFdmObjectIds = useMemo(
     () =>
-      new Set(
-        fdmTargetViews.flatMap((view) =>
-          view.ownerTarget.kind === "object" && view.ownerTarget.id.startsWith("object:")
-            ? [view.ownerTarget.id.slice("object:".length)]
-            : [],
-        ),
-      ),
-    [fdmTargetViews],
+      resolveViewport3DRealizedFdmObjectIds({
+        fdmNativeLayerViews,
+        fdmTargetViews,
+      }),
+    [fdmNativeLayerViews, fdmTargetViews],
   );
 
   if (!sceneLayersEnabled) return null;

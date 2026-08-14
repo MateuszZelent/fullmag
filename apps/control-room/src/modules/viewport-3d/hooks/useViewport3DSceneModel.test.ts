@@ -580,6 +580,21 @@ function fieldVectorFixture(
 }
 
 describe("useViewport3DSceneModel", () => {
+  it("keeps FDM native-layer visibility on the local structured-grid target state", () => {
+    const source = readFileSync(sceneModelSourceUrl, "utf8");
+    const nativeLayerSettingsBlock = source.slice(
+      source.indexOf("const fdmNativeLayerSettingsById = useMemo"),
+      source.indexOf("const nativeLayerFieldRequests = useMemo"),
+    );
+
+    expect(nativeLayerSettingsBlock).toContain(
+      "resolveViewport3DFdmTargetVisualization({",
+    );
+    expect(nativeLayerSettingsBlock).not.toContain(
+      "visualizationState: renderingState",
+    );
+  });
+
   it("uses canonical local Airbox settings for both FDM Airbox carriers", () => {
     const source = readFileSync(sceneModelSourceUrl, "utf8");
     expect(source).toContain(
