@@ -287,6 +287,7 @@ bool run_sinh_preflight(cudaStream_t stream) {
     input.rhs_soa = rhs;
     input.solution_soa = solution;
     input.operator_revision = 77;
+    input.resolved_device_budget_bytes = UINT64_C(2147483648);
     sparse::HierarchyCache hierarchy{};
     sparse::Workspace workspace{};
     sparse::BuildMetrics build{};
@@ -523,6 +524,7 @@ int main() {
     input.solution_soa = solution;
     input.operator_revision = 1;
     input.resident_external_bytes = resident_external_bytes;
+    input.resolved_device_budget_bytes = UINT64_C(2147483648);
 
     sparse::HierarchyCache hierarchy{};
     sparse::Workspace workspace{};

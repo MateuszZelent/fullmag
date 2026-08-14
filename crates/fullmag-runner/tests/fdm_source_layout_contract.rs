@@ -170,3 +170,105 @@ fn native_m1_v1_build_inputs_and_abi_translation_unit_are_fail_closed() {
         );
     }
 }
+
+#[test]
+fn explicit_multilayer_cuda_device_resident_lane_has_no_warm_vector_roundtrips() {
+    let root = crate_root();
+    let source = std::fs::read_to_string(root.join("src/fdm/gpu/cuda/multilayer.rs"))
+        .expect("read CUDA multilayer runner source");
+    let start = source
+        .find("fn execute_native_device_resident_cuda_multilayer(")
+        .expect("explicit multilayer CUDA runner must own a device-resident execution lane");
+    let end = source[start..]
+        .find("\nfn device_resident_multilayer_provenance(")
+        .map(|offset| start + offset)
+        .expect("device-resident execution lane must end at its provenance owner");
+    let lane = &source[start..end];
+    let warm_start = lane
+        .find("    while current_time < until_seconds {")
+        .expect("device-resident lane must expose its warm timestep loop");
+    let warm_end = lane[warm_start..]
+        .find("\n    let final_native_stats =")
+        .map(|offset| warm_start + offset)
+        .expect("warm timestep loop must end before final snapshot handling");
+    let setup = &lane[..warm_start];
+    let warm_loop = &lane[warm_start..warm_end];
+
+    assert_eq!(
+        setup.matches("backend.refresh_multilayer_demag()?").count(),
+        1,
+        "device-resident lane must refresh initial demag exactly once before its initial snapshot"
+    );
+    assert!(
+        setup.contains("transfer_counters.record_setup_h2d_vector("),
+        "device-resident telemetry must account for the initial magnetization upload"
+    );
+    assert!(
+        setup.find("backend.refresh_multilayer_demag()?")
+            < setup.find("snapshot_native_multilayer_observables("),
+        "initial demag refresh must precede the initial scientific snapshot"
+    );
+    assert!(
+        !setup.contains("copy_layer_h_ext"),
+        "uniform H_ext is host-materialized from the canonical plan and must not be miscounted as a vector D2H"
+    );
+
+    assert!(
+        warm_loop.contains("backend.step(dt_step)?"),
+        "warm device-resident lane must advance the staged native v2 backend directly"
+    );
+    for forbidden in [
+        "upload_layer_magnetization",
+        "upload_magnetization",
+        "copy_layer_h_demag",
+        "refresh_multilayer_demag",
+        "execute_cuda_assisted_multilayer_double",
+    ] {
+        assert!(
+            !warm_loop.contains(forbidden),
+            "warm device-resident lane must not contain {forbidden}"
+        );
+    }
+    assert!(
+        warm_loop.contains("snapshot_native_multilayer_observables"),
+        "host-visible scientific data must cross the boundary only through an explicit snapshot owner"
+    );
+}
+
+#[test]
+fn bounded_device_resident_dispatch_precedes_legacy_multilayer_shapes() {
+    let root = crate_root();
+    let source = std::fs::read_to_string(root.join("src/fdm/gpu/cuda/multilayer.rs"))
+        .expect("read CUDA multilayer runner source");
+    let start = source
+        .find("pub(crate) fn execute_cuda_fdm_multilayer_with_live(")
+        .expect("public CUDA multilayer dispatch must exist");
+    let end = source[start..]
+        .find("\nfn resolve_cuda_multilayer_execution_shape(")
+        .map(|offset| start + offset)
+        .expect("CUDA multilayer dispatch must end at shape resolution helper");
+    let dispatch = &source[start..end];
+    let device_resident = dispatch
+        .find("if validate_device_resident_cuda_multilayer_lane(plan).is_ok()")
+        .expect("bounded D-07 dispatch must be explicit");
+    let native_stacked = dispatch
+        .find("let native_stacked =")
+        .expect("legacy native-stacked dispatch must remain available");
+    let native_stacked_resolution = dispatch
+        .find("resolve_cuda_multilayer_execution_shape(plan)?")
+        .expect("native-stacked dispatch must resolve an explicit execution shape");
+    assert!(
+        dispatch.contains("KernelAdmissionModel::CudaNativeSingleGrid"),
+        "native-stacked dispatch must be gated by the resolved single-grid memory model"
+    );
+    let assisted = dispatch
+        .find("let native_demag = build_native_multilayer_demag_operator(plan)?")
+        .expect("legacy assisted dispatch must remain available");
+
+    assert!(
+        device_resident < native_stacked
+            && native_stacked < native_stacked_resolution
+            && native_stacked_resolution < assisted,
+        "bounded D-07 plans must select the device-resident lane while non-qualified plans retain legacy dispatch"
+    );
+}

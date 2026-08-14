@@ -33,22 +33,36 @@ def load_cuda_parity_verifier():
 
 def write_h_demag_artifact(root: Path, provenance: dict[str, object]) -> None:
     field_root = root / "fields" / "H_demag"
-    layer_root = field_root / "layer-0"
-    layer_root.mkdir(parents=True)
+    layers = [
+        {
+            "id": f"layer-{index}",
+            "directory": f"layer-{index}",
+            "value_count": 64,
+            "vector_shape": [64, 3],
+        }
+        for index in range(3)
+    ]
+    field_root.mkdir(parents=True)
     (field_root / "manifest.json").write_text(
-        json.dumps({"layers": [{"id": "layer-0", "directory": "layer-0"}]}),
+        json.dumps({"layer_count": 3, "layers": layers}),
         encoding="utf-8",
     )
-    (layer_root / "step_000000.json").write_text(
-        json.dumps(
-            {
-                "unit": "A/m",
-                "component_order": "xyz",
-                "values": [[1.0, 0.0, 0.0]],
-            }
-        ),
-        encoding="utf-8",
-    )
+    for layer in layers:
+        layer_root = field_root / str(layer["directory"])
+        layer_root.mkdir()
+        for step in range(2):
+            (layer_root / f"step_{step:06}.json").write_text(
+                json.dumps(
+                    {
+                        "unit": "A/m",
+                        "component_count": 3,
+                        "component_order": "xyz",
+                        "provenance": {"precision": provenance.get("precision")},
+                        "values": [[1.0, 0.0, 0.0] for _ in range(64)],
+                    }
+                ),
+                encoding="utf-8",
+            )
     (root / "metadata.json").write_text(
         json.dumps({"execution_provenance": provenance}),
         encoding="utf-8",
@@ -64,14 +78,29 @@ def cuda_identity() -> dict[str, object]:
     }
 
 
-def transfer_telemetry() -> dict[str, object]:
+def transfer_telemetry(precision: str = "double") -> dict[str, object]:
+    scalar_bytes = 4 if precision == "single" else 8
+    setup_bytes = 3 * scalar_bytes * 192
+    snapshot_bytes = 2 * 6 * setup_bytes
     return {
-        "execution_shape": "cuda_native_multilayer_demag_v2",
-        "data_residency": "device_resident_per_refresh",
-        "h2d_transfer_count": 0,
-        "d2h_transfer_count": 0,
-        "h2d_bytes": 0,
-        "d2h_bytes": 0,
+        "execution_shape": "cuda_native_multilayer_convolution",
+        "data_residency": "device_resident_with_observed_host_snapshots",
+        "layer_count": 3,
+        "host_snapshot_count": 2,
+        "payload_precision": precision,
+        "scalar_bytes": scalar_bytes,
+        "setup_h2d_transfer_count": 3,
+        "setup_h2d_bytes": setup_bytes,
+        "observed_snapshot_d2h_transfer_count": 36,
+        "observed_snapshot_d2h_bytes": snapshot_bytes,
+        "warm_step_h2d_transfer_count": 0,
+        "warm_step_h2d_bytes": 0,
+        "warm_step_d2h_transfer_count": 0,
+        "warm_step_d2h_bytes": 0,
+        "h2d_transfer_count": 3,
+        "d2h_transfer_count": 36,
+        "h2d_bytes": setup_bytes,
+        "d2h_bytes": snapshot_bytes,
     }
 
 
@@ -79,7 +108,7 @@ def native_candidate_provenance(precision: str) -> dict[str, object]:
     return {
         "precision": precision,
         **cuda_identity(),
-        "execution_engine": "cuda_native_multilayer_demag_v2",
+        "execution_engine": "cuda_native_multilayer_convolution",
         "lossy_fallback_used": False,
         "resolved_fallback": None,
         "fft_backend": "cuFFT",
@@ -94,7 +123,7 @@ def native_candidate_provenance(precision: str) -> dict[str, object]:
             "inverse_fft_count": 3,
             "pair_accumulation_count": 9,
         },
-        "fdm_multilayer_transfer_telemetry": transfer_telemetry(),
+        "fdm_multilayer_transfer_telemetry": transfer_telemetry(precision),
     }
 
 

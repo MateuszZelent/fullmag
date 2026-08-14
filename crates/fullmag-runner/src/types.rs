@@ -1277,10 +1277,22 @@ mod all_in_gpu_fem_transfer_audit_tests {
             fdm_multilayer_transfer_telemetry: Some(FdmMultilayerTransferTelemetry {
                 execution_shape: "cuda_assisted_multilayer".to_string(),
                 data_residency: "host_authoritative_with_cuda_field_roundtrips".to_string(),
-                h2d_transfer_count: 12,
-                d2h_transfer_count: 12,
-                h2d_bytes: 2_304,
-                d2h_bytes: 2_304,
+                layer_count: 3,
+                host_snapshot_count: 2,
+                payload_precision: "double".to_string(),
+                scalar_bytes: 8,
+                setup_h2d_transfer_count: 3,
+                setup_h2d_bytes: 4_608,
+                observed_snapshot_d2h_transfer_count: 36,
+                observed_snapshot_d2h_bytes: 55_296,
+                warm_step_h2d_transfer_count: 0,
+                warm_step_h2d_bytes: 0,
+                warm_step_d2h_transfer_count: 0,
+                warm_step_d2h_bytes: 0,
+                h2d_transfer_count: 3,
+                d2h_transfer_count: 36,
+                h2d_bytes: 4_608,
+                d2h_bytes: 55_296,
             }),
             ..ExecutionProvenance::default()
         };
@@ -1295,12 +1307,37 @@ mod all_in_gpu_fem_transfer_audit_tests {
             "host_authoritative_with_cuda_field_roundtrips"
         );
         assert_eq!(
+            value["fdm_multilayer_transfer_telemetry"]["layer_count"],
+            3
+        );
+        assert_eq!(
+            value["fdm_multilayer_transfer_telemetry"]["host_snapshot_count"],
+            2
+        );
+        assert_eq!(
+            value["fdm_multilayer_transfer_telemetry"]["scalar_bytes"],
+            8
+        );
+        assert_eq!(
+            value["fdm_multilayer_transfer_telemetry"]["setup_h2d_bytes"],
+            4_608
+        );
+        assert_eq!(
+            value["fdm_multilayer_transfer_telemetry"]
+                ["observed_snapshot_d2h_transfer_count"],
+            36
+        );
+        assert_eq!(
+            value["fdm_multilayer_transfer_telemetry"]["warm_step_d2h_bytes"],
+            0
+        );
+        assert_eq!(
             value["fdm_multilayer_transfer_telemetry"]["h2d_transfer_count"],
-            12
+            3
         );
         assert_eq!(
             value["fdm_multilayer_transfer_telemetry"]["d2h_bytes"],
-            2_304
+            55_296
         );
     }
 
@@ -2717,24 +2754,51 @@ pub struct FemPoissonDemagProvenance {
 }
 
 /// Records which engine and device produced a run.
-/// Measured host/device movement for the CUDA-assisted multilayer FDM lane.
+/// Measured host/device movement for a multilayer FDM CUDA realization.
 ///
 /// The assisted lane deliberately keeps the state and RK orchestration on the
-/// host.  It must therefore never be presented as device-resident merely
+/// host. It must therefore never be presented as device-resident merely
 /// because its local exchange and (optionally) multilayer demag calls use CUDA.
+/// The native D-07 lane uses the same phase fields to prove that warm steps do
+/// not perform vector round-trips.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct FdmMultilayerTransferTelemetry {
     /// Realization selected for the public multilayer run.
     pub execution_shape: String,
     /// Source of truth for the staged state during the hot loop.
     pub data_residency: String,
-    /// Number of vector transfers from host to CUDA during this run.
+    /// Number of independently resident magnetic layers in this run.
+    pub layer_count: u64,
+    /// Number of complete six-field host observation snapshots.
+    pub host_snapshot_count: u64,
+    /// Precision of every accounted vector payload.
+    pub payload_precision: String,
+    /// Bytes per scalar in every accounted vector payload.
+    pub scalar_bytes: u64,
+    /// Initial magnetization vectors uploaded once during setup.
+    pub setup_h2d_transfer_count: u64,
+    pub setup_h2d_bytes: u64,
+    /// Six final/scientific field vectors copied per layer and host snapshot.
+    pub observed_snapshot_d2h_transfer_count: u64,
+    pub observed_snapshot_d2h_bytes: u64,
+    /// Vector transfers inside native device-resident timesteps. These must
+    /// remain zero for the qualified D-07 lane.
+    pub warm_step_h2d_transfer_count: u64,
+    pub warm_step_h2d_bytes: u64,
+    pub warm_step_d2h_transfer_count: u64,
+    pub warm_step_d2h_bytes: u64,
+    /// Number of state/field vector payloads transferred from host to CUDA
+    /// during this run. Descriptor, kernel-spectrum and mask traffic is
+    /// intentionally accounted separately by their owning runtime stages.
     pub h2d_transfer_count: u64,
-    /// Number of vector transfers from CUDA to host during this run.
+    /// Number of state/field vector payloads transferred from CUDA to host
+    /// during this run. Host-materialized uniform fields are not counted as
+    /// device vector transfers.
     pub d2h_transfer_count: u64,
-    /// Cumulative payload bytes moved from host to CUDA during this run.
+    /// Cumulative state/field vector payload bytes moved from host to CUDA.
     pub h2d_bytes: u64,
-    /// Cumulative payload bytes moved from CUDA to host during this run.
+    /// Cumulative state/field vector payload bytes moved from CUDA to host.
     pub d2h_bytes: u64,
 }
 
@@ -3310,8 +3374,8 @@ mod field_snapshot_tests {
     }
 }
 
-#[derive(Debug, Clone)]
-pub(crate) struct AuxiliaryArtifact {
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AuxiliaryArtifact {
     pub relative_path: String,
     pub bytes: Vec<u8>,
 }

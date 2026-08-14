@@ -22,6 +22,7 @@ import {
   viewport3DPrimitiveObjectLayerEnabledFromBrowserConfig,
   viewport3DSceneLayersEnabledFromBrowserConfig,
   viewport3DTopologyMeshLayerEnabledFromBrowserConfig,
+  viewport3DVectorLayersEnabledFromBrowserConfig,
 } from "@/kernel/browserFullmagConfig";
 import { OrthographicCamera, PerspectiveCamera } from "@react-three/drei";
 import { useThree } from "@react-three/fiber";
@@ -119,6 +120,7 @@ import {
 import { PostProcessingLayer } from "./PostProcessingLayer";
 import { PrimitiveObjectLayer } from "./PrimitiveObjectLayer";
 import { FdmCuboidLayer, type FdmCuboidInstanceModel } from "./FdmCuboidLayer";
+import { resolveFdmCuboidPassPlan } from "./fdmCuboidPasses";
 import { VectorGlyphDerivedBufferCacheProvider } from "./vectorGlyphDerivedBufferRuntime";
 import { HysteresisReplayGlyphLayer } from "./HysteresisReplayGlyphLayer";
 import { Viewport3DLightingRig } from "./Viewport3DLightingRig";
@@ -177,6 +179,9 @@ interface Viewport3DSceneProps {
   fdmAirboxVectorBuildReference: Viewport3DVectorBuildReference | null;
   fdmAirboxVectorSegments: Float32Array | null;
   fdmMultilayerAirboxView: FdmMultilayerAirboxRenderView | null;
+  fdmMultilayerAirboxBuildError: string | null;
+  fdmMultilayerAirboxBuildKey: string | null;
+  fdmMultilayerAirboxBuildStatus: string;
   fdmUniverseOutsideSupport: FdmUniverseOutsideSupportOverlayModel | null;
   fdmUniverseOutsideSupportSettings: VisualizationTargetSettings | null;
   fdmInstanceModel: FdmCuboidInstanceModel | null | undefined;
@@ -214,7 +219,10 @@ interface Viewport3DSceneProps {
   onCameraInteractionEnd?: (epoch?: number) => void;
   onCameraInteractionStart?: (epoch?: number) => void;
   onOrbitDebugAnglesChange?: (angles: Viewport3DOrbitDebugAngles) => void;
-  onVisualizationFrameCommitted: (revision: number) => void;
+  onVisualizationFrameCommitted: (
+    revision: number,
+    airboxFrameState: Viewport3DAirboxFrameState,
+  ) => void;
   onSelectObject: (object: Viewport3DPrimitiveObject) => void;
   onSelectPlanarMonitor: (monitorId: string, isDraft: boolean) => void;
   onSelectRegion: (selection: RegionOverlaySelection) => void;
@@ -542,6 +550,86 @@ export interface Viewport3DModelLayerStageVisibility {
   meshSizeHighlight: boolean;
   primitiveObjects: boolean;
   realizedRegionOverlays: boolean;
+}
+
+export interface Viewport3DAirboxFrameState {
+  airboxVectorsVisible: boolean;
+  airboxWireframeVisible: boolean;
+}
+
+export function resolveViewport3DAirboxFrameState({
+  fdmAirboxInstanceModel,
+  fdmAirboxPassPlan,
+  fdmAirboxVectorSegments,
+  fdmCuboidLayerEnabled,
+  fdmLaneActive,
+  multilayerAirboxView,
+  sceneLayersEnabled,
+  stageVisibility,
+  vectorLayersEnabled,
+}: {
+  fdmAirboxInstanceModel: Pick<FdmCuboidInstanceModel, "count"> | null | undefined;
+  fdmAirboxPassPlan: FdmAirboxPassPlan;
+  fdmAirboxVectorSegments: Float32Array | null;
+  fdmCuboidLayerEnabled: boolean;
+  fdmLaneActive: boolean;
+  multilayerAirboxView: {
+    model: Pick<FdmCuboidInstanceModel, "count"> | null | undefined;
+    settings: Pick<
+      VisualizationTargetSettings,
+      | "boundsVisible"
+      | "pointsVisible"
+      | "shaderVisible"
+      | "vectorsVisible"
+      | "visible"
+      | "wireframeVisible"
+    >;
+    vectorSegments: Float32Array | null;
+  } | null;
+  sceneLayersEnabled: boolean;
+  stageVisibility: Viewport3DModelLayerStageVisibility;
+  vectorLayersEnabled: boolean;
+}): Viewport3DAirboxFrameState {
+  const sharedCarrierVisible =
+    sceneLayersEnabled &&
+    stageVisibility.baseGeometry &&
+    fdmCuboidLayerEnabled;
+  const multilayerPassPlan = multilayerAirboxView
+    ? resolveFdmCuboidPassPlan(multilayerAirboxView.settings)
+    : null;
+  const multilayerCarrierVisible = Boolean(
+    sharedCarrierVisible &&
+      multilayerAirboxView?.model &&
+      multilayerAirboxView.model.count > 0 &&
+      multilayerAirboxView.settings.visible &&
+      multilayerPassPlan?.needsCellModel,
+  );
+  const singleGridCarrierVisible = Boolean(
+    sharedCarrierVisible &&
+      fdmLaneActive &&
+      fdmAirboxInstanceModel &&
+      fdmAirboxInstanceModel.count > 0 &&
+      fdmAirboxPassPlan.needsInactiveCellGeometry,
+  );
+
+  return {
+    airboxVectorsVisible: Boolean(
+      vectorLayersEnabled &&
+        ((multilayerCarrierVisible &&
+          stageVisibility.fieldDrivenLayers &&
+          multilayerPassPlan?.needsVectors &&
+          (multilayerAirboxView?.vectorSegments?.length ?? 0) > 0) ||
+          (singleGridCarrierVisible &&
+            fdmAirboxPassPlan.needsVectorAnchors &&
+            (fdmAirboxVectorSegments?.length ?? 0) > 0)),
+    ),
+    airboxWireframeVisible: Boolean(
+      (multilayerCarrierVisible &&
+        multilayerPassPlan?.needsSurfaceInstances &&
+        multilayerAirboxView?.settings.wireframeVisible) ||
+        (singleGridCarrierVisible && fdmAirboxPassPlan.needsSurfaceInstances),
+    ),
+  };
 }
 
 export function resolveNextViewport3DModelLayerStage(stage: number): number {
@@ -922,7 +1010,6 @@ function Viewport3DModelLayerStack({
   fdmAirboxVectorSegments,
   fdmMultilayerAirboxView,
   fdmLaneActive,
-  fdmUniverseOutsideSupportSettings,
   fdmNativeLayerViews,
   fdmTargetViews,
   fieldModel,
@@ -960,6 +1047,9 @@ function Viewport3DModelLayerStack({
   vectorColorMode,
   vectorStyle,
   visualizationRevision,
+  fdmCuboidLayerEnabled,
+  sceneLayersEnabled,
+  stageVisibility,
 }: Pick<
   Viewport3DSceneProps,
   | "adoptionRegistry"
@@ -974,7 +1064,6 @@ function Viewport3DModelLayerStack({
   | "fdmAirboxVectorSegments"
   | "fdmMultilayerAirboxView"
   | "fdmLaneActive"
-  | "fdmUniverseOutsideSupportSettings"
   | "fdmNativeLayerViews"
   | "fdmTargetViews"
   | "fieldModel"
@@ -1012,33 +1101,11 @@ function Viewport3DModelLayerStack({
   | "vectorStyle"
   | "visualizationRevision"
 > & {
+  fdmCuboidLayerEnabled: boolean;
   materialProfile: ReturnType<typeof resolveViewport3DMaterialProfile>;
+  sceneLayersEnabled: boolean;
+  stageVisibility: Viewport3DModelLayerStageVisibility;
 }) {
-  const modelLayerStageKey = useMemo(
-    () =>
-      resolveViewport3DModelLayerStageKey({
-        fdmAirboxInstanceModel,
-        fdmMultilayerAirboxView,
-        fdmNativeLayerViews,
-        fdmTargetViews,
-        primitiveModel,
-        topologyModel,
-      }),
-    [
-      fdmAirboxInstanceModel,
-      fdmMultilayerAirboxView,
-      fdmNativeLayerViews,
-      fdmTargetViews,
-      primitiveModel,
-      topologyModel,
-    ],
-  );
-  const modelLayerStage = useViewport3DModelLayerStage({
-    resetKey: modelLayerStageKey,
-    tracker,
-  });
-  const stageVisibility =
-    resolveViewport3DModelLayerStageVisibility(modelLayerStage);
   const hasMeshBackedRegionOverlays = meshRegionOverlays.length > 0;
   const overlayLayersEnabled = viewport3DOverlayLayersEnabledFromBrowserConfig();
   const realizedRegionOverlaysVisible =
@@ -1073,7 +1140,7 @@ function Viewport3DModelLayerStack({
     [fdmTargetViews],
   );
 
-  if (!viewport3DSceneLayersEnabledFromBrowserConfig()) return null;
+  if (!sceneLayersEnabled) return null;
 
   const authoredRegionOverlaysVisible = resolveAuthoredRegionOverlayVisibility({
     hasMeshBackedRegionOverlays,
@@ -1112,9 +1179,9 @@ function Viewport3DModelLayerStack({
           vectorGlyphColors: null,
           vectorSegments: null,
         };
-  const fdmAirboxMeshSettings = fdmUniverseOutsideSupportSettings
+  const fdmAirboxMeshSettings = fdmLaneActive && airboxSettings
     ? {
-        ...fdmUniverseOutsideSupportSettings,
+        ...airboxSettings,
         boundsVisible: false,
         shaderVisible: false,
       }
@@ -1136,7 +1203,7 @@ function Viewport3DModelLayerStack({
         />
       ) : null}
       {stageVisibility.baseGeometry &&
-      viewport3DFdmCuboidLayerEnabledFromBrowserConfig() ? (
+      fdmCuboidLayerEnabled ? (
         <>
           {stagedFdmNativeLayerViews.map((view) => (
             <FdmCuboidLayer
@@ -1193,6 +1260,9 @@ function Viewport3DModelLayerStack({
                 stagedFdmMultilayerAirboxView.vectorGlyphColors?.colors ?? null
               }
               vectorSegments={stagedFdmMultilayerAirboxView.vectorSegments}
+              vectorBuildReference={
+                stagedFdmMultilayerAirboxView.vectorBuildReference
+              }
               vectorStyle={vectorStyle}
             />
           ) : null}
@@ -1231,7 +1301,7 @@ function Viewport3DModelLayerStack({
         </>
       ) : null}
       {stageVisibility.baseGeometry &&
-      viewport3DFdmCuboidLayerEnabledFromBrowserConfig() &&
+      fdmCuboidLayerEnabled &&
       fdmAirboxPassPlan.needsInactiveCellGeometry && fdmAirboxMeshSettings ? (
         <FdmCuboidLayer
           adoptionRegistry={adoptionRegistry}
@@ -1476,14 +1546,19 @@ function Viewport3DInteractionAndHudStack({
 
 function useViewport3DRenderAdoptionFrame({
   adoptionRegistry,
+  airboxFrameState,
   invalidate,
   onVisualizationFrameCommitted,
   tracker,
   visualizationRevision,
 }: {
   adoptionRegistry?: Viewport3DRenderAdoptionRegistry;
+  airboxFrameState: Viewport3DAirboxFrameState;
   invalidate: () => void;
-  onVisualizationFrameCommitted: (revision: number) => void;
+  onVisualizationFrameCommitted: (
+    revision: number,
+    airboxFrameState: Viewport3DAirboxFrameState,
+  ) => void;
   tracker: Viewport3DResourceTracker;
   visualizationRevision: number | null;
 }) {
@@ -1503,7 +1578,10 @@ function useViewport3DRenderAdoptionFrame({
       // idle-audit-allow-one-shot-raf: acknowledge adoption after its invalidated frame.
       frameId = window.requestAnimationFrame(() => {
         frameId = null;
-        onVisualizationFrameCommitted(visualizationRevision);
+        onVisualizationFrameCommitted(
+          visualizationRevision,
+          airboxFrameState,
+        );
       });
     });
     return () => {
@@ -1514,6 +1592,7 @@ function useViewport3DRenderAdoptionFrame({
     };
   }, [
     adoptionRegistry,
+    airboxFrameState,
     invalidate,
     onVisualizationFrameCommitted,
     tracker,
@@ -1642,9 +1721,66 @@ export function Viewport3DScene({
     () => resolveViewport3DMaterialProfile(visualProfile),
     [visualProfile],
   );
+  const modelLayerStageKey = useMemo(
+    () =>
+      resolveViewport3DModelLayerStageKey({
+        fdmAirboxInstanceModel,
+        fdmMultilayerAirboxView,
+        fdmNativeLayerViews,
+        fdmTargetViews,
+        primitiveModel,
+        topologyModel,
+      }),
+    [
+      fdmAirboxInstanceModel,
+      fdmMultilayerAirboxView,
+      fdmNativeLayerViews,
+      fdmTargetViews,
+      primitiveModel,
+      topologyModel,
+    ],
+  );
+  const modelLayerStage = useViewport3DModelLayerStage({
+    resetKey: modelLayerStageKey,
+    tracker,
+  });
+  const stageVisibility = useMemo(
+    () => resolveViewport3DModelLayerStageVisibility(modelLayerStage),
+    [modelLayerStage],
+  );
+  const sceneLayersEnabled = viewport3DSceneLayersEnabledFromBrowserConfig();
+  const fdmCuboidLayerEnabled =
+    viewport3DFdmCuboidLayerEnabledFromBrowserConfig();
+  const vectorLayersEnabled = viewport3DVectorLayersEnabledFromBrowserConfig();
+  const airboxFrameState = useMemo(
+    () =>
+      resolveViewport3DAirboxFrameState({
+        fdmAirboxInstanceModel,
+        fdmAirboxPassPlan,
+        fdmAirboxVectorSegments,
+        fdmCuboidLayerEnabled,
+        fdmLaneActive,
+        multilayerAirboxView: fdmMultilayerAirboxView,
+        sceneLayersEnabled,
+        stageVisibility,
+        vectorLayersEnabled,
+      }),
+    [
+      fdmAirboxInstanceModel,
+      fdmAirboxPassPlan,
+      fdmAirboxVectorSegments,
+      fdmCuboidLayerEnabled,
+      fdmLaneActive,
+      fdmMultilayerAirboxView,
+      sceneLayersEnabled,
+      stageVisibility,
+      vectorLayersEnabled,
+    ],
+  );
 
   useViewport3DRenderAdoptionFrame({
     adoptionRegistry,
+    airboxFrameState,
     invalidate,
     onVisualizationFrameCommitted,
     tracker,
@@ -1716,10 +1852,11 @@ export function Viewport3DScene({
 
     // idle-audit-allow-one-shot-raf: demand rendering needs one post-invalidate frame ack.
     const frameId = window.requestAnimationFrame(() => {
-      onVisualizationFrameCommitted(visualizationRevision);
+      onVisualizationFrameCommitted(visualizationRevision, airboxFrameState);
     });
     return () => window.cancelAnimationFrame(frameId);
   }, [
+    airboxFrameState,
     invalidate,
     onVisualizationFrameCommitted,
     resourceFrameKey,
@@ -1789,9 +1926,9 @@ export function Viewport3DScene({
         fdmAirboxVectorBuildReference={fdmAirboxVectorBuildReference}
         fdmAirboxVectorSegments={fdmAirboxVectorSegments}
         fdmMultilayerAirboxView={fdmMultilayerAirboxView}
+        fdmCuboidLayerEnabled={fdmCuboidLayerEnabled}
         fdmNativeLayerViews={fdmNativeLayerViews}
         fdmTargetViews={fdmTargetViews}
-        fdmUniverseOutsideSupportSettings={fdmUniverseOutsideSupportSettings}
         fieldModel={fieldModel}
         inspectEnabled={inspectEnabled}
         getObjectSettings={getObjectSettings}
@@ -1819,6 +1956,8 @@ export function Viewport3DScene({
         regionOverlays={regionOverlays}
         selectedObjectId={selectedObjectId}
         selectedRegionId={selectedRegionId}
+        sceneLayersEnabled={sceneLayersEnabled}
+        stageVisibility={stageVisibility}
         topology={topology}
         topologyFreshness={topologyFreshness}
         topologyModel={topologyModel}

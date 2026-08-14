@@ -198,9 +198,15 @@ def test_fdm_projected_gradient_bb_counterpart_materializes_grid_assets() -> Non
     assets = payload["shared_geometry_assets"]["fdm_grid_assets"]
     assert len(assets) == 1
     asset = assets[0]
-    assert asset["cells"] == [128, 32, 30]
-    assert len(asset["active_mask"]) == 128 * 32 * 30
-    assert sum(asset["active_mask"]) == 960
+    assert asset["cells"] == [128, 52, 30]
+    assert asset["cell_size"] == pytest.approx(
+        [6.25e-9, 6.25e-9, 3.0e-9], rel=1e-12
+    )
+    assert len(asset["active_mask"]) == 128 * 52 * 30
+    assert sum(asset["active_mask"]) == 1600
+    assert sum(asset["active_mask"]) * math.prod(asset["cell_size"]) == pytest.approx(
+        500e-9 * 125e-9 * 3e-9, rel=1e-12
+    )
 
 
 @pytest.mark.parametrize("scenario,path", DYNAMICS_SCENARIOS.items())

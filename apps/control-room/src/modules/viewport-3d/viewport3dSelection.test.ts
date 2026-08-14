@@ -64,18 +64,17 @@ describe("viewport3dSelection", () => {
     });
   });
 
-  it("maps the FDM universe overlay pick to its distinct visualization target", () => {
+  it("maps the FDM universe overlay pick to the canonical Airbox visualization target", () => {
     expect(viewportSelectionForFdmUniverseOutsideSupport()).toEqual({
       kind: "airbox.visualization",
       label: "Airbox",
       nodeId: "model:airbox:visualization",
       objectId: null,
       ref: {
-        kind: "mesh.grid.universe-outside-support",
+        kind: "airbox.visualization",
         nodeId: "model:airbox:visualization",
-        scope: "universe-outside-support",
-        type: "fdm-domain",
-        visualizationTargetId: "fdm-universe-outside-support",
+        type: "airbox",
+        visualizationTargetId: "airbox",
       },
     });
   });

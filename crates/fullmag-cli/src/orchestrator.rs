@@ -1028,9 +1028,28 @@ fn is_gpu_device_label(value: &str) -> bool {
 }
 
 fn requested_execution_device(runtime: &SessionRuntimeSelection) -> String {
-    match std::env::var("FULLMAG_FEM_EXECUTION") {
-        Ok(value) if matches!(value.as_str(), "gpu" | "cuda" | "all_in_gpu") => "gpu".to_string(),
-        Ok(value) if value == "cpu" => "cpu".to_string(),
+    let fem_override = std::env::var("FULLMAG_FEM_EXECUTION").ok();
+    let fdm_override = std::env::var("FULLMAG_FDM_EXECUTION").ok();
+    requested_execution_device_for_overrides(
+        runtime,
+        fem_override.as_deref(),
+        fdm_override.as_deref(),
+    )
+}
+
+fn requested_execution_device_for_overrides(
+    runtime: &SessionRuntimeSelection,
+    fem_override: Option<&str>,
+    fdm_override: Option<&str>,
+) -> String {
+    let override_value = match runtime.requested_backend.as_str() {
+        "fdm" => fdm_override.or(fem_override),
+        "fem" => fem_override.or(fdm_override),
+        _ => fem_override.or(fdm_override),
+    };
+    match override_value {
+        Some(value) if matches!(value, "gpu" | "cuda" | "all_in_gpu") => "gpu".to_string(),
+        Some("cpu") => "cpu".to_string(),
         _ => runtime.requested_device.replace("cuda", "gpu"),
     }
 }
@@ -5695,17 +5714,36 @@ fn refresh_problem_preview_state(
     }
 
     let preview_request = display_selection.preview_request();
-    let preview_field = fullmag_runner::snapshot_problem_preview(&problem, &preview_request)?;
-    let cached_fields = if refresh_cache {
+    let (preview_field, cached_fields, auxiliary_artifacts) = if refresh_cache {
         let cached_quantities = fullmag_runner::quantities::field_materialization_quantity_ids();
-        Some(fullmag_runner::snapshot_problem_vector_fields(
+        let batch = fullmag_runner::snapshot_problem_vector_field_batch(
             &problem,
             &cached_quantities,
             &preview_request,
-        )?)
+        )?;
+        let requested_quantity =
+            fullmag_runner::quantities::normalize_quantity_id(&preview_request.quantity)
+                .map_err(|error| anyhow!(error.to_string()))?;
+        let preview_field = batch
+            .fields
+            .iter()
+            .find(|field| field.quantity == requested_quantity.as_str())
+            .cloned()
+            .ok_or_else(|| {
+                anyhow!(
+                    "multilayer preview quantity '{}' is unavailable for the current plan",
+                    preview_request.quantity
+                )
+            })?;
+        (preview_field, Some(batch.fields), batch.auxiliary_artifacts)
     } else {
-        None
+        (
+            fullmag_runner::snapshot_problem_preview(&problem, &preview_request)?,
+            None,
+            Vec::new(),
+        )
     };
+    live_workspace.replace_auxiliary_artifacts(&auxiliary_artifacts)?;
 
     live_workspace.update(|state| {
         state.live_state.updated_at_unix_ms = unix_time_millis().unwrap_or(0);
@@ -6603,8 +6641,10 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
     let phase1_backend = args.backend;
     let phase1_mode = args.mode;
     let phase1_precision = args.precision;
-    let phase1_runtime_device = crate::python_bridge::managed_fem_execution_device(
+    let phase1_runtime_device = crate::python_bridge::managed_execution_device(
+        phase1_backend,
         std::env::var("FULLMAG_FEM_EXECUTION").ok().as_deref(),
+        std::env::var("FULLMAG_FDM_EXECUTION").ok().as_deref(),
     );
     let phase1_handle = own_preparation_boundary_failure(
         &live_workspace,
@@ -10828,13 +10868,24 @@ mod tests {
         write_sampling_resolution_stage_record, ActiveSequenceState, LiveProgressCadence,
         LoadedInitialMagnetizationState, RuntimeCommandPrecondition, SceneProblemPatch,
         StageProgressHeartbeat, WaitForSolveCommandAction, FEM_FREQUENCY_RESPONSE_PROGRESS_KEY,
-        LIVE_PROGRESS_PUBLISH_INTERVAL,
+        LIVE_PROGRESS_PUBLISH_INTERVAL, requested_execution_device_for_overrides,
     };
     use crate::live_workspace::{CurrentLivePublisher, LocalLiveWorkspace};
     use crate::simulation_preparation::{
         PreparationStageId, PreparationStageStatus, PreparationStatus, SimulationPreparationState,
     };
     use crate::types::PythonProgressEvent;
+
+    #[test]
+    fn fdm_override_wins_over_fem_override_in_summary_device() {
+        let runtime = super::requested_runtime_selection(
+            "fdm", true, "cpu", "double", "strict", None,
+        );
+        assert_eq!(
+            requested_execution_device_for_overrides(&runtime, Some("cpu"), Some("gpu")),
+            "gpu"
+        );
+    }
 
     #[test]
     fn adaptive_followup_callback_and_heartbeat_clone_sites_stay_profiled() {
@@ -14328,6 +14379,19 @@ mod tests {
             !function_body.contains("cached_preview_quantity_ids()"),
             "compute_fields must not use the vector-only preview cache quantity list"
         );
+    }
+
+    #[test]
+    fn compute_fields_refresh_publishes_auxiliary_carriers() {
+        let source = include_str!("orchestrator.rs");
+        let function_body = source
+            .split("fn refresh_problem_preview_state(")
+            .nth(1)
+            .and_then(|rest| rest.split("fn refresh_problem_energy_state(").next())
+            .expect("refresh_problem_preview_state should be present");
+
+        assert!(function_body.contains("snapshot_problem_vector_field_batch"));
+        assert!(function_body.contains("replace_auxiliary_artifacts"));
     }
 
     #[test]

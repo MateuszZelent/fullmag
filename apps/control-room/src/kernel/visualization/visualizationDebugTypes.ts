@@ -149,6 +149,8 @@ export interface VisualizationDebugSnapshot {
     label: string;
   };
   viewport: {
+    airboxVectorsVisible?: boolean;
+    airboxWireframeVisible?: boolean;
     contextLost: boolean | null;
     drawingBuffer: readonly [number, number] | null;
     frameCommittedAtMs: number;

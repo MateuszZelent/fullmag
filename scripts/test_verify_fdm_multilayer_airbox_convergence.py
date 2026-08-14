@@ -12,6 +12,14 @@ from verify_fdm_multilayer_airbox_convergence import (
 )
 
 
+BUILD_IDENTITY = {
+    "built_at_utc": "2026-08-14T00:00:00Z",
+    "git_commit": "d" * 40,
+    "worktree_state": "dirty",
+    "source_snapshot_sha256": "e" * 64,
+}
+
+
 def _write_carrier(root: Path, *, cells: tuple[int, int, int], origin_z: float, values: list[list[float]]) -> Path:
     root.mkdir()
     grid = {
@@ -25,6 +33,7 @@ def _write_carrier(root: Path, *, cells: tuple[int, int, int], origin_z: float, 
         "quantity_id": "H_demag",
         "unit": "A/m",
         "scope_kind": "airbox",
+        "build_identity": BUILD_IDENTITY,
         "grid": grid,
         "values": values,
     }
@@ -49,7 +58,9 @@ def _write_carrier(root: Path, *, cells: tuple[int, int, int], origin_z: float, 
             "demag_operator_kind": "multilayer_convolution",
             "fft_backend": "rust_cpu_fft",
             "run_status": "completed",
+            "build_identity": BUILD_IDENTITY,
         },
+        "build_identity": BUILD_IDENTITY,
         "field_artifact": field_path.name,
         "field_artifact_sha256": hashlib.sha256(field_bytes).hexdigest(),
         "sample_count": len(values),

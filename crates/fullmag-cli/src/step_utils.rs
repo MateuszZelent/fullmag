@@ -3439,6 +3439,74 @@ pub(crate) fn apply_continuation_initial_state(
         return Ok(());
     }
 
+    // FDM multilayer snapshots are stored as one native-layer concatenation,
+    // while ProblemIR keeps one initial field per authored magnet. Split the
+    // payload before the next stage is planned so idle compute_fields observes
+    // the actual final state instead of rebuilding every layer from its
+    // original initial texture.
+    let planned_backend = fullmag_plan::plan(problem)
+        .map_err(|error| anyhow::anyhow!(error.to_string()))?
+        .backend_plan;
+    if let BackendPlanIR::FdmMultilayer(plan) = planned_backend {
+        if plan.layers.len() != problem.magnets.len() {
+            bail!(
+                "FDM multilayer continuation has {} planned layers but {} authored magnets",
+                plan.layers.len(),
+                problem.magnets.len()
+            );
+        }
+        let expected_vectors = plan
+            .layers
+            .iter()
+            .map(|layer| {
+                layer
+                    .native_grid
+                    .iter()
+                    .map(|value| *value as usize)
+                    .product::<usize>()
+            })
+            .sum::<usize>();
+        if final_magnetization.len() != expected_vectors {
+            bail!(
+                "FDM multilayer continuation has {} vectors, but the native layer payload requires {}",
+                final_magnetization.len(),
+                expected_vectors
+            );
+        }
+
+        let mut assigned = std::collections::HashSet::new();
+        let mut offset = 0usize;
+        for layer in &plan.layers {
+            let count = layer
+                .native_grid
+                .iter()
+                .map(|value| *value as usize)
+                .product::<usize>();
+            let magnet_index = problem
+                .magnets
+                .iter()
+                .position(|magnet| magnet.name == layer.magnet_name)
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "FDM multilayer continuation layer '{}' has no authored magnet",
+                        layer.magnet_name
+                    )
+                })?;
+            if !assigned.insert(magnet_index) {
+                bail!(
+                    "FDM multilayer continuation maps layer '{}' to an authored magnet more than once",
+                    layer.magnet_name
+                );
+            }
+            problem.magnets[magnet_index].initial_magnetization =
+                Some(fullmag_ir::InitialMagnetizationIR::SampledField {
+                    values: final_magnetization[offset..offset + count].to_vec(),
+                });
+            offset += count;
+        }
+        return Ok(());
+    }
+
     let shared_domain_node_count = problem
         .geometry_assets
         .as_ref()
@@ -4423,6 +4491,116 @@ mod tests {
                 magnet.initial_magnetization.as_ref(),
                 Some(fullmag_ir::InitialMagnetizationIR::SampledField { values })
                     if values == &continuation
+            ));
+        }
+    }
+
+    #[test]
+    fn continuation_initial_state_splits_multilayer_native_payload_by_magnet() {
+        let mut problem = fullmag_ir::ProblemIR::bootstrap_example();
+        problem.geometry.entries = vec![
+            fullmag_ir::GeometryEntryIR::Translate {
+                name: "free_geom".to_string(),
+                base: Box::new(fullmag_ir::GeometryEntryIR::Box {
+                    name: "free_base".to_string(),
+                    size: [4e-9, 2e-9, 2e-9],
+                }),
+                by: [0.0, 0.0, 0.0],
+            },
+            fullmag_ir::GeometryEntryIR::Translate {
+                name: "ref_geom".to_string(),
+                base: Box::new(fullmag_ir::GeometryEntryIR::Box {
+                    name: "ref_base".to_string(),
+                    size: [4e-9, 2e-9, 2e-9],
+                }),
+                by: [0.0, 0.0, 4e-9],
+            },
+        ];
+        problem.regions = vec![
+            fullmag_ir::RegionIR {
+                name: "free_region".to_string(),
+                geometry: "free_geom".to_string(),
+            },
+            fullmag_ir::RegionIR {
+                name: "ref_region".to_string(),
+                geometry: "ref_geom".to_string(),
+            },
+        ];
+        problem.magnets = vec![
+            fullmag_ir::MagnetIR {
+                name: "free".to_string(),
+                region: "free_region".to_string(),
+                material: "Py".to_string(),
+                initial_magnetization: Some(fullmag_ir::InitialMagnetizationIR::Uniform {
+                    value: [1.0, 0.0, 0.0],
+                }),
+                absorbing_boundary: None,
+            },
+            fullmag_ir::MagnetIR {
+                name: "ref".to_string(),
+                region: "ref_region".to_string(),
+                material: "Py".to_string(),
+                initial_magnetization: Some(fullmag_ir::InitialMagnetizationIR::Uniform {
+                    value: [0.0, 1.0, 0.0],
+                }),
+                absorbing_boundary: None,
+            },
+        ];
+        problem.energy_terms = vec![
+            fullmag_ir::EnergyTermIR::Exchange,
+            fullmag_ir::EnergyTermIR::Demag {
+                realization: fullmag_ir::RequestedFemDemagIR::Auto,
+            },
+        ];
+        problem.backend_policy.discretization_hints = Some(fullmag_ir::DiscretizationHintsIR {
+            fdm: Some(fullmag_ir::FdmHintsIR {
+                cell: [2e-9, 2e-9, 2e-9],
+                default_cell: Some([2e-9, 2e-9, 2e-9]),
+                per_magnet: None,
+                demag: Some(fullmag_ir::FdmDemagHintsIR {
+                    strategy: "multilayer_convolution".to_string(),
+                    mode: "two_d_stack".to_string(),
+                    common_cells: None,
+                    common_cells_xy: None,
+                    common_cell_size: None,
+                }),
+                boundary_correction: None,
+                boundary_phi_floor: None,
+                boundary_delta_min: None,
+            }),
+            fem: None,
+            hybrid: None,
+        });
+        let plan = fullmag_plan::plan(&problem).expect("multilayer fixture should plan");
+        let BackendPlanIR::FdmMultilayer(multilayer) = plan.backend_plan else {
+            panic!("fixture must resolve to FDM multilayer");
+        };
+        let counts = multilayer
+            .layers
+            .iter()
+            .map(|layer| layer.initial_magnetization.len())
+            .collect::<Vec<_>>();
+        assert_eq!(counts.len(), 2);
+        let continuation = (0..counts.iter().sum::<usize>())
+            .map(|index| {
+                if index < counts[0] {
+                    [0.0, 0.0, 1.0]
+                } else {
+                    [0.0, 0.0, -1.0]
+                }
+            })
+            .collect::<Vec<_>>();
+
+        apply_continuation_initial_state(&mut problem, &continuation)
+            .expect("multilayer continuation should split by authored magnet");
+
+        for (index, magnet) in problem.magnets.iter().enumerate() {
+            let start = counts.iter().take(index).sum::<usize>();
+            let end = start + counts[index];
+            assert!(matches!(
+                magnet.initial_magnetization.as_ref(),
+                Some(fullmag_ir::InitialMagnetizationIR::SampledField { values })
+                    if values == &continuation[start..end]
             ));
         }
     }

@@ -170,6 +170,85 @@ def test_runtime_materialize_ignores_dirty_administrative_worktree_symlink(
     assert not os.path.lexists(snapshot / ".worktrees")
 
 
+def test_runtime_snapshot_ignores_untracked_impl_racetrack_repository(
+    tmp_path: Path,
+) -> None:
+    repo = _repository(tmp_path)
+    racetrack = repo / ".impl-racetrack"
+    racetrack.mkdir()
+    _git(racetrack, "init", "-q")
+    (racetrack / "metadata.json").write_text("{}\n", encoding="utf-8")
+
+    result = subprocess.run(
+        (
+            sys.executable,
+            str(CAPTURE),
+            "--repo-root",
+            str(repo),
+            "--ignore-non-runtime-dirty",
+        ),
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    identity = json.loads(result.stdout)
+    assert identity["source_snapshot_dirty"] is False
+    assert identity["dirty_path_content"] == []
+
+
+def test_runtime_snapshot_does_not_ignore_other_untracked_repository(
+    tmp_path: Path,
+) -> None:
+    repo = _repository(tmp_path)
+    runtime_source = repo / "runtime-source"
+    runtime_source.mkdir()
+    _git(runtime_source, "init", "-q")
+    (runtime_source / "solver.cpp").write_text("runtime source\n", encoding="utf-8")
+
+    result = subprocess.run(
+        (
+            sys.executable,
+            str(CAPTURE),
+            "--repo-root",
+            str(repo),
+            "--ignore-non-runtime-dirty",
+        ),
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 2
+    assert "unsupported dirty source type: runtime-source/" in result.stderr
+
+
+def test_runtime_snapshot_does_not_ignore_other_untracked_file(tmp_path: Path) -> None:
+    repo = _repository(tmp_path)
+    (repo / "solver.cpp").write_text("runtime source\n", encoding="utf-8")
+
+    result = subprocess.run(
+        (
+            sys.executable,
+            str(CAPTURE),
+            "--repo-root",
+            str(repo),
+            "--ignore-non-runtime-dirty",
+        ),
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    identity = json.loads(result.stdout)
+    assert identity["source_snapshot_dirty"] is True
+    assert [entry["path"] for entry in identity["dirty_path_content"]] == [
+        "solver.cpp"
+    ]
+
+
 def test_compare_fails_when_dirty_content_changes_after_capture(tmp_path: Path) -> None:
     repo = _repository(tmp_path)
     tracked = repo / "tracked.txt"

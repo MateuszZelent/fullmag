@@ -343,7 +343,10 @@ pub(crate) fn load_fdm_multilayer_airbox_carrier(
     if grid_revision != json_content_revision(manifest_grid)?
         || Some(carrier_revision) != sha256_hex_revision(carrier_fingerprint)
     {
-        return Err("Airbox manifest content revisions do not match carrier identity".into());
+        return Err(
+            "Airbox manifest carrier_fingerprint/content revisions do not match carrier identity"
+                .into(),
+        );
     }
     let source_grid_fingerprints_value = manifest
         .get("source_grid_fingerprints")
@@ -2680,6 +2683,11 @@ fn resolve_multilayer_native_layer_scope(
     else {
         return Ok(None);
     };
+    if scope_kind == "region" {
+        return Err(ApiError::unprocessable(
+            "multilayer FDM region scope is unavailable: independent native grids have no single FMRM membership carrier; use layer or object scope",
+        ));
+    }
     let plan = snapshot
         .metadata
         .as_ref()
@@ -2841,12 +2849,21 @@ fn resolve_multilayer_native_layer_scope_from_carrier(
         .get("active_cell_count")
         .and_then(serde_json::Value::as_u64)
         .unwrap_or(count as u64);
-    let native_grid_fingerprint = fullmag_ir::FdmGridCertificateIR::new(
+    // The artifact layout fingerprints a multilayer native grid together with
+    // its topology masks. Recompute the same certificate for field scopes;
+    // the geometry-only constructor would make the response carrier hash
+    // disagree with `native_grid_fingerprint` and block field adoption.
+    let native_active_mask = parse_multilayer_active_mask(plan_layer, count, canonical_scope_id)?;
+    let native_region_mask =
+        parse_multilayer_region_mask(plan_layer, count, canonical_scope_id)?.unwrap_or_default();
+    let native_grid_fingerprint = fullmag_ir::FdmGridCertificateIR::new_with_topology_tokens(
         native_origin,
         grid,
         native_cell_size,
         active_cells,
         1,
+        native_active_mask.as_deref(),
+        &native_region_mask,
     )
     .map_err(|error| {
         ApiError::conflict(format!(
@@ -2863,6 +2880,71 @@ fn resolve_multilayer_native_layer_scope_from_carrier(
         grid: Some(grid),
         carrier_hash: Some(format!("sha256:{native_grid_fingerprint}")),
     }))
+}
+
+fn parse_multilayer_active_mask(
+    plan_layer: &serde_json::Value,
+    count: usize,
+    layer_id: &str,
+) -> Result<Option<Vec<bool>>, ApiError> {
+    let Some(value) = plan_layer.get("native_active_mask") else {
+        return Ok(None);
+    };
+    let values = value.as_array().ok_or_else(|| {
+        ApiError::conflict(format!(
+            "multilayer FDM layer '{layer_id}' native_active_mask is malformed"
+        ))
+    })?;
+    if values.len() != count {
+        return Err(ApiError::conflict(format!(
+            "multilayer FDM layer '{layer_id}' native_active_mask length disagrees with its grid"
+        )));
+    }
+    values
+        .iter()
+        .map(|value| {
+            value.as_bool().ok_or_else(|| {
+                ApiError::conflict(format!(
+                    "multilayer FDM layer '{layer_id}' native_active_mask contains a non-boolean value"
+                ))
+            })
+        })
+        .collect::<Result<Vec<_>, _>>()
+        .map(Some)
+}
+
+fn parse_multilayer_region_mask(
+    plan_layer: &serde_json::Value,
+    count: usize,
+    layer_id: &str,
+) -> Result<Option<Vec<u32>>, ApiError> {
+    let Some(value) = plan_layer.get("native_region_mask") else {
+        return Ok(None);
+    };
+    let values = value.as_array().ok_or_else(|| {
+        ApiError::conflict(format!(
+            "multilayer FDM layer '{layer_id}' native_region_mask is malformed"
+        ))
+    })?;
+    if values.len() != count {
+        return Err(ApiError::conflict(format!(
+            "multilayer FDM layer '{layer_id}' native_region_mask length disagrees with its grid"
+        )));
+    }
+    values
+        .iter()
+        .map(|value| {
+            value
+                .as_u64()
+                .and_then(|value| u32::try_from(value).ok())
+                .ok_or_else(|| {
+                    ApiError::conflict(format!(
+                        "multilayer FDM layer '{layer_id}' native_region_mask contains an invalid region id"
+                    ))
+                })
+        })
+        .collect::<Result<Vec<_>, _>>()
+        .map(Some)
 }
 
 fn fdm_cell_is_domain_surface(index: usize, counts: [u32; 3]) -> bool {

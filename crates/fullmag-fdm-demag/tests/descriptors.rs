@@ -1,6 +1,7 @@
 use fullmag_fdm_demag::descriptors::{
     ActiveMaskIdentity, BoundaryPolicy, CommonTransformLayout, ConvolutionMode, CropWindow,
-    FdmLayerDescriptor, GridGeometry, KernelPrecision, KernelReuseCatalog, NegativeLagMapping,
+    FdmLayerDescriptor, GridGeometry, KernelAdmissionModel, KernelCatalogSpec,
+    KernelMemoryAccounting, KernelPrecision, KernelReuseCatalog, NegativeLagMapping,
     OrientedKernelPairDescriptor, TensorRepresentation, TransferContractMetadata, TransferKind,
     TransferReference, TransformConvention, ZeroPadding,
 };
@@ -511,6 +512,133 @@ fn transform_key_and_catalog_bind_pair_identity() {
 }
 
 #[test]
+fn kernel_reuse_key_differentiates_mode_xy_cell_size_and_thickness() {
+    let source = two_d_layer("layer:s-full-key", "object:s-full-key", 0.0);
+    let destination = two_d_layer("layer:d-full-key", "object:d-full-key", 2.0);
+    let layout = CommonTransformLayout::for_pair(
+        source.scratch.shape,
+        destination.scratch.shape,
+        ConvolutionMode::TwoDStack,
+        [0; 3],
+        [0; 3],
+        [0; 3],
+        destination.scratch.shape,
+        [8, 8, 1],
+        1.0 / 64.0,
+    )
+    .expect("2-D full-key layout");
+    let key = KernelReuseKey::from_layers_with_layout(
+        &destination,
+        &source,
+        [0.0, 0.0, 2.0],
+        TensorRepresentation::FullComplex,
+        &layout,
+        KernelPrecision::F64,
+        BoundaryPolicy::Open,
+    )
+    .expect("baseline full key");
+    let xy_shift = KernelReuseKey::from_layers_with_layout(
+        &destination,
+        &source,
+        [1.0, 0.0, 2.0],
+        TensorRepresentation::FullComplex,
+        &layout,
+        KernelPrecision::F64,
+        BoundaryPolicy::Open,
+    )
+    .expect("XY-shift key");
+    assert_ne!(key, xy_shift);
+
+    let changed_cell_source = FdmLayerDescriptor::new(
+        "layer:s-cell",
+        "object:s-cell",
+        grid([0.0, 0.0, 0.0], [4, 3, 2], [1.0, 1.0, 0.5]),
+        grid([0.0, 0.0, 0.0], [4, 3, 1], [1.5, 1.0, 1.0]),
+        ConvolutionMode::TwoDStack,
+        ActiveMaskIdentity::all_active(),
+        TransferKind::PushPull,
+    )
+    .expect("changed-cell source");
+    let changed_cell = KernelReuseKey::from_layers_with_layout(
+        &destination,
+        &changed_cell_source,
+        [0.0, 0.0, 2.0],
+        TensorRepresentation::FullComplex,
+        &layout,
+        KernelPrecision::F64,
+        BoundaryPolicy::Open,
+    )
+    .expect("cell-size key");
+    assert_ne!(key, changed_cell);
+
+    let changed_thickness_source = FdmLayerDescriptor::new(
+        "layer:s-thickness",
+        "object:s-thickness",
+        grid([0.0, 0.0, 0.0], [4, 3, 2], [1.0, 1.0, 0.75]),
+        grid([0.0, 0.0, 0.0], [4, 3, 1], [1.0, 1.0, 1.0]),
+        ConvolutionMode::TwoDStack,
+        ActiveMaskIdentity::all_active(),
+        TransferKind::PushPull,
+    )
+    .expect("changed-thickness source");
+    let changed_thickness = KernelReuseKey::from_layers_with_layout(
+        &destination,
+        &changed_thickness_source,
+        [0.0, 0.0, 2.0],
+        TensorRepresentation::FullComplex,
+        &layout,
+        KernelPrecision::F64,
+        BoundaryPolicy::Open,
+    )
+    .expect("thickness key");
+    assert_ne!(key, changed_thickness);
+
+    let three_d_source = FdmLayerDescriptor::new(
+        "layer:s-3d",
+        "object:s-3d",
+        grid([0.0, 0.0, 0.0], [4, 3, 1], [1.0, 1.0, 1.0]),
+        grid([0.0, 0.0, 0.0], [4, 3, 1], [1.0, 1.0, 1.0]),
+        ConvolutionMode::ThreeD,
+        ActiveMaskIdentity::all_active(),
+        TransferKind::Identity,
+    )
+    .expect("3-D source");
+    let three_d_destination = FdmLayerDescriptor::new(
+        "layer:d-3d",
+        "object:d-3d",
+        grid([0.0, 0.0, 2.0], [4, 3, 1], [1.0, 1.0, 1.0]),
+        grid([0.0, 0.0, 2.0], [4, 3, 1], [1.0, 1.0, 1.0]),
+        ConvolutionMode::ThreeD,
+        ActiveMaskIdentity::all_active(),
+        TransferKind::Identity,
+    )
+    .expect("3-D destination");
+    let three_d_layout = CommonTransformLayout::for_pair(
+        [4, 3, 1],
+        [4, 3, 1],
+        ConvolutionMode::ThreeD,
+        [0; 3],
+        [0; 3],
+        [0; 3],
+        [4, 3, 1],
+        [8, 8, 2],
+        1.0 / 128.0,
+    )
+    .expect("3-D full-key layout");
+    let three_d = KernelReuseKey::from_layers_with_layout(
+        &three_d_destination,
+        &three_d_source,
+        [0.0, 0.0, 2.0],
+        TensorRepresentation::FullComplex,
+        &three_d_layout,
+        KernelPrecision::F64,
+        BoundaryPolicy::Open,
+    )
+    .expect("3-D key");
+    assert_ne!(key, three_d);
+}
+
+#[test]
 fn descriptors_serde_round_trip_and_fingerprints_are_deterministic() {
     let source = two_d_layer("layer:s", "object:s", 0.0);
     let destination = two_d_layer("layer:d", "object:d", 2.0);
@@ -551,4 +679,127 @@ fn transfer_reference_keeps_identity_and_contract_metadata() {
     assert_eq!(reference.layer_id, "layer:s");
     assert_eq!(reference.kind, TransferKind::Identity);
     assert!(!reference.contract.adjoint_required);
+}
+
+fn catalog_layer(index: usize, thickness: f64) -> FdmLayerDescriptor {
+    let origin = [0.0, 0.0, index as f64 * 8.0];
+    FdmLayerDescriptor::new(
+        format!("layer:{index}"),
+        format!("object:{index}"),
+        grid(origin, [4, 3, 1], [1.0, 1.0, thickness]),
+        grid(origin, [4, 3, 1], [1.0, 1.0, 1.0]),
+        ConvolutionMode::TwoDStack,
+        ActiveMaskIdentity::all_active(),
+        TransferKind::PushPull,
+    )
+    .expect("valid catalog layer")
+}
+
+fn catalog_layout() -> CommonTransformLayout {
+    CommonTransformLayout::for_pair(
+        [4, 3, 1],
+        [4, 3, 1],
+        ConvolutionMode::TwoDStack,
+        [0; 3],
+        [0; 3],
+        [0; 3],
+        [4, 3, 1],
+        [8, 6, 1],
+        1.0 / 48.0,
+    )
+    .expect("valid catalog layout")
+}
+
+#[test]
+fn canonical_catalog_counts_regular_and_unequal_three_layer_stacks() {
+    let layout = catalog_layout();
+    let regular = [2.0, 2.0, 2.0]
+        .into_iter()
+        .enumerate()
+        .map(|(index, thickness)| catalog_layer(index, thickness))
+        .collect::<Vec<_>>();
+    let unequal = [2.0, 3.0, 4.0]
+        .into_iter()
+        .enumerate()
+        .map(|(index, thickness)| catalog_layer(index, thickness))
+        .collect::<Vec<_>>();
+    let build = |layers: &[FdmLayerDescriptor]| {
+        KernelCatalogSpec::build_for_layers_with_layout(
+            layers,
+            &layout,
+            TensorRepresentation::FullComplex,
+            KernelPrecision::F64,
+        )
+        .expect("canonical catalog")
+    };
+
+    let regular = build(&regular);
+    assert_eq!(regular.keys.len(), 5);
+    assert_eq!(regular.pair_bindings.len(), 9);
+    let unequal = build(&unequal);
+    assert_eq!(unequal.keys.len(), 9);
+    assert_eq!(unequal.pair_bindings.len(), 9);
+}
+
+#[test]
+fn canonical_catalog_rejects_unsupported_descriptor_boundary() {
+    let layout = catalog_layout();
+    let mut layer = catalog_layer(0, 2.0);
+    layer.transfer.boundary = BoundaryPolicy::Periodic {
+        axes: [true, false, false],
+    };
+
+    let error = KernelCatalogSpec::build_for_layers_with_layout(
+        &[layer],
+        &layout,
+        TensorRepresentation::FullComplex,
+        KernelPrecision::F64,
+    )
+    .expect_err("descriptor schema v1 must fail closed for periodic transfer boundaries");
+    assert!(error.to_string().contains("periodic transfer boundaries"));
+}
+
+#[test]
+fn memory_accounting_separates_cpu_catalog_bindings_and_cuda_pair_payload() {
+    let layout = catalog_layout();
+    let layers = [2.0, 2.0, 2.0]
+        .into_iter()
+        .enumerate()
+        .map(|(index, thickness)| catalog_layer(index, thickness))
+        .collect::<Vec<_>>();
+    let catalog = KernelCatalogSpec::build_for_layers_with_layout(
+        &layers,
+        &layout,
+        TensorRepresentation::FullComplex,
+        KernelPrecision::F64,
+    )
+    .expect("canonical catalog");
+    let cpu = KernelMemoryAccounting::for_catalog(
+        &catalog,
+        &layout,
+        [4, 3, 1],
+        true,
+        KernelAdmissionModel::CpuFp64Catalog,
+    )
+    .expect("CPU accounting");
+    assert_eq!(cpu.kernel_catalog_spectrum_bytes, 5 * 48 * 6 * 16);
+    assert_eq!(cpu.kernel_pair_binding_bytes, 9 * 12);
+    assert_eq!(cpu.cuda_abi_v2_pair_payload_bytes, 9 * 96 * 6 * 16);
+    assert_eq!(
+        cpu.admission_bytes,
+        cpu.kernel_catalog_spectrum_bytes + cpu.kernel_pair_binding_bytes
+    );
+
+    let cuda = KernelMemoryAccounting::for_catalog(
+        &catalog,
+        &layout,
+        [4, 3, 1],
+        true,
+        KernelAdmissionModel::CudaAbiV2PairPayload,
+    )
+    .expect("CUDA accounting");
+    assert_eq!(
+        cuda.admission_bytes,
+        cuda.cuda_abi_v2_pair_payload_bytes + cuda.kernel_pair_binding_bytes
+    );
 }

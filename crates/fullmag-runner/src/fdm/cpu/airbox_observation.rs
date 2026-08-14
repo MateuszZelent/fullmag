@@ -19,7 +19,10 @@ use fullmag_ir::{FdmMultilayerPlanIR, ProblemIR};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 
-use crate::types::{AuxiliaryArtifact, ExecutedRun};
+use crate::{
+    artifacts::build_identity_json,
+    types::{AuxiliaryArtifact, ExecutedRun},
+};
 
 const OBSERVATION_SCHEMA: &str = "fdm_multilayer_observation.v1";
 const OBSERVATION_FIELD_SCHEMA: &str = "fdm_multilayer_observation_field.v1";
@@ -158,6 +161,7 @@ pub(crate) fn materialize_airbox_observation(
         .iter()
         .map(source_grid_fingerprint)
         .collect::<Result<Vec<_>, _>>()?;
+    let build_identity = build_identity_json();
     let source_runtime_identity = json!({
         "execution_engine": executed.provenance.execution_engine,
         "precision": executed.provenance.precision,
@@ -165,6 +169,7 @@ pub(crate) fn materialize_airbox_observation(
         "fft_backend": executed.provenance.fft_backend,
         "problem_source_hash": problem.problem_meta.source_hash,
         "run_status": executed.result.status,
+        "build_identity": build_identity,
     });
     let target_grid = json!({
         "cells": target.shape,
@@ -177,6 +182,7 @@ pub(crate) fn materialize_airbox_observation(
         "quantity_id": "H_demag",
         "unit": "A/m",
         "scope_kind": "airbox",
+        "build_identity": build_identity,
         "grid": target_grid,
         "values": field,
     });
@@ -219,6 +225,7 @@ pub(crate) fn materialize_airbox_observation(
         "scope_kind": "airbox",
         "quantity_id": "H_demag",
         "unit": "A/m",
+        "build_identity": build_identity,
         "source_policy": "target_only",
         "target_only": true,
         "grid": target_grid,
@@ -251,6 +258,46 @@ pub(crate) fn materialize_airbox_observation(
             bytes: field_bytes,
         },
     ])
+}
+
+/// Materialize an on-demand Airbox carrier from the current planned
+/// multilayer state. The CLI rewrites each layer's initial state from the
+/// terminal continuation before requesting this snapshot.
+pub(crate) fn materialize_airbox_observation_snapshot(
+    problem: &ProblemIR,
+    plan: &FdmMultilayerPlanIR,
+) -> Result<Vec<AuxiliaryArtifact>, String> {
+    if plan.precision != fullmag_ir::ExecutionPrecision::Double {
+        return Err("Airbox observation carrier requires CPU FP64 plan precision".to_string());
+    }
+    let final_magnetization = plan
+        .layers
+        .iter()
+        .flat_map(|layer| layer.initial_magnetization.iter().copied())
+        .collect::<Vec<_>>();
+    let mut provenance = crate::types::ExecutionProvenance::default();
+    provenance.execution_engine = "cpu_reference_multilayer".to_string();
+    provenance.precision = "double".to_string();
+    provenance.demag_operator_kind = plan
+        .enable_demag
+        .then(|| "multilayer_tensor_fft_newell".to_string());
+    provenance.fft_backend =
+        super::reference::resolve_cpu_fft_backend_name_for_demag(plan.enable_demag)
+            .map_err(|error| error.to_string())?;
+    let executed = ExecutedRun {
+        result: crate::types::RunResult {
+            status: crate::types::RunStatus::Completed,
+            steps: Vec::new(),
+            final_magnetization: final_magnetization.clone(),
+            completion: None,
+        },
+        initial_magnetization: final_magnetization,
+        field_snapshots: Vec::new(),
+        field_snapshot_count: 0,
+        auxiliary_artifacts: Vec::new(),
+        provenance,
+    };
+    materialize_airbox_observation(problem, plan, &executed)
 }
 
 fn compute_target_field(
@@ -550,10 +597,14 @@ fn parse_finite3(value: Option<&Value>, label: &str, positive: bool) -> Result<[
 #[cfg(test)]
 mod tests {
     use super::{
-        compute_target_field, content_revision, materialize_airbox_observation, sha256_hex,
-        sha256_hex_revision, AirboxObservationTarget,
+        compute_target_field, content_revision, materialize_airbox_observation,
+        materialize_airbox_observation_snapshot, sha256_hex, sha256_hex_revision,
+        AirboxObservationTarget, FIELD_ARTIFACT, H_EFF_UNAVAILABLE_REASON,
     };
-    use crate::types::{ExecutedRun, ExecutionProvenance, RunResult, RunStatus};
+    use crate::{
+        types::{ExecutedRun, ExecutionProvenance, RunResult, RunStatus},
+        AuxiliaryArtifact,
+    };
     use fullmag_ir::{
         ExchangeBoundaryCondition, ExecutionPrecision, FdmLayerPlanIR, FdmMaterialIR,
         FdmMultilayerPlanIR, FdmMultilayerSummaryIR, IntegratorChoice, ProblemIR,
@@ -669,7 +720,7 @@ mod tests {
     }
 
     #[test]
-    fn materializer_emits_runtime_origin_h_demag_manifest_and_samples() {
+    fn airbox_h_demag_manifest_and_samples_include_build_identity() {
         let plan = tiny_plan();
         let mut problem = ProblemIR::bootstrap_example();
         problem.problem_meta.runtime_metadata.insert(
@@ -726,6 +777,18 @@ mod tests {
         assert_eq!(manifest_json["quantity_id"], "H_demag");
         assert_eq!(manifest_json["source_policy"], "target_only");
         assert!(manifest_json["carrier_fingerprint"].as_str().unwrap().len() == 64);
+        let build_identity = fullmag_build_info::identity();
+        let expected_build_identity = json!({
+            "built_at_utc": build_identity.built_at_utc,
+            "git_commit": build_identity.git_commit,
+            "worktree_state": build_identity.worktree_state,
+            "source_snapshot_sha256": build_identity.source_snapshot_sha256,
+        });
+        assert_eq!(manifest_json["build_identity"], expected_build_identity);
+        assert_eq!(
+            manifest_json["source_runtime_identity"]["build_identity"],
+            expected_build_identity
+        );
         assert_eq!(
             manifest_json["source_common_grid"]["cells"],
             json!([2, 2, 1])
@@ -755,8 +818,51 @@ mod tests {
         let field_json: serde_json::Value = serde_json::from_slice(&field.bytes).unwrap();
         assert_eq!(field_json["observable"], "H_demag");
         assert_eq!(field_json["unit"], "A/m");
+        assert_eq!(field_json["build_identity"], expected_build_identity);
         assert_eq!(field_json["values"].as_array().unwrap().len(), 48);
         assert!(field_json["H_eff"].is_null());
+    }
+
+    #[test]
+    fn on_demand_snapshot_uses_current_planned_state_and_airbox_scope() {
+        let mut problem = ProblemIR::bootstrap_example();
+        problem.problem_meta.source_hash = Some("snapshot-source".to_string());
+        problem.problem_meta.runtime_metadata.insert(
+            "airbox_observation".to_string(),
+            json!({
+                "cells": [4, 4, 3],
+                "spacing_m": [0.5e-9, 0.5e-9, 1.0e-9],
+                "origin_m": [-0.5e-9, -0.5e-9, -1.0e-9],
+                "padding_cells_above_below": [1, 1],
+                "target_only": true,
+                "scope_kind": "airbox",
+                "published_quantities": ["H_demag"],
+                "unavailable_quantities": {
+                    "H_eff": H_EFF_UNAVAILABLE_REASON
+                }
+            }),
+        );
+        let plan_x = tiny_plan();
+        let mut plan_z = plan_x.clone();
+        plan_z.layers[0].initial_magnetization.fill([0.0, 0.0, 1.0]);
+
+        let artifacts_x = materialize_airbox_observation_snapshot(&problem, &plan_x)
+            .expect("x-state Airbox snapshot");
+        let artifacts_z = materialize_airbox_observation_snapshot(&problem, &plan_z)
+            .expect("z-state Airbox snapshot");
+        let payload = |artifacts: &[AuxiliaryArtifact]| {
+            let artifact = artifacts
+                .iter()
+                .find(|artifact| artifact.relative_path.ends_with(FIELD_ARTIFACT))
+                .expect("Airbox samples artifact");
+            serde_json::from_slice::<serde_json::Value>(&artifact.bytes).unwrap()
+        };
+        let field_x = payload(&artifacts_x);
+        let field_z = payload(&artifacts_z);
+
+        assert_eq!(field_x["scope_kind"], "airbox");
+        assert_eq!(field_x["quantity_id"], "H_demag");
+        assert_ne!(field_x["values"], field_z["values"]);
     }
 
     #[test]

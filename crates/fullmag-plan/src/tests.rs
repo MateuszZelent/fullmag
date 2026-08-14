@@ -6706,6 +6706,46 @@ fn stacked_two_body_multilayer_problem() -> ProblemIR {
 }
 
 #[test]
+fn regular_three_layer_planner_uses_deduplicated_cpu_catalog_memory() {
+    let mut ir = stacked_two_body_multilayer_problem();
+    ir.geometry.entries.push(GeometryEntryIR::Translate {
+        name: "third_geom".to_string(),
+        base: std::boxed::Box::new(GeometryEntryIR::Box {
+            name: "third_base".to_string(),
+            size: [40e-9, 20e-9, 2e-9],
+        }),
+        by: [0.0, 0.0, 8e-9],
+    });
+    ir.regions.push(fullmag_ir::RegionIR {
+        name: "third_region".to_string(),
+        geometry: "third_geom".to_string(),
+    });
+    ir.magnets.push(fullmag_ir::MagnetIR {
+        name: "third".to_string(),
+        region: "third_region".to_string(),
+        material: "Py".to_string(),
+        initial_magnetization: Some(InitialMagnetizationIR::Uniform {
+            value: [1.0, 0.0, 0.0],
+        }),
+        absorbing_boundary: None,
+    });
+
+    let planned = plan(&ir).expect("regular three-layer CPU stack should plan");
+    let BackendPlanIR::FdmMultilayer(multilayer) = planned.backend_plan else {
+        panic!("regular three-layer fixture must resolve to multilayer FDM");
+    };
+
+    assert_eq!(multilayer.common_cells, [20, 10, 1]);
+    assert_eq!(multilayer.planner_summary.estimated_pair_kernels, 9);
+    assert_eq!(multilayer.planner_summary.estimated_unique_kernels, 5);
+    assert_eq!(multilayer.planner_summary.estimated_kernel_bytes, 384_108);
+    assert_eq!(
+        multilayer.planner_summary.estimated_kernel_bytes,
+        5 * 40 * 20 * 6 * 16 + 9 * 12
+    );
+}
+
+#[test]
 fn fdm_common_cell_size_resolves_heterogeneous_native_grids_without_rounding() {
     let mut ir = stacked_two_body_multilayer_problem();
     for (entry, z) in ir.geometry.entries.iter_mut().zip([0.0, 20e-9]) {
@@ -6813,15 +6853,143 @@ fn eight_layer_multilayer_problem_for_kernel_budget() -> ProblemIR {
     ir
 }
 
+fn three_layer_catalog_problem(thicknesses_m: [f64; 3]) -> ProblemIR {
+    let mut ir = stacked_two_body_multilayer_problem();
+    ir.geometry.entries.push(GeometryEntryIR::Translate {
+        name: "layer_2_geom".to_string(),
+        base: std::boxed::Box::new(GeometryEntryIR::Box {
+            name: "layer_2_base".to_string(),
+            size: [40e-9, 20e-9, thicknesses_m[2]],
+        }),
+        by: [0.0, 0.0, 16e-9],
+    });
+    ir.regions.push(fullmag_ir::RegionIR {
+        name: "layer_2_region".to_string(),
+        geometry: "layer_2_geom".to_string(),
+    });
+    ir.magnets.push(fullmag_ir::MagnetIR {
+        name: "layer_2".to_string(),
+        region: "layer_2_region".to_string(),
+        material: "Py".to_string(),
+        initial_magnetization: Some(InitialMagnetizationIR::Uniform {
+            value: [0.0, 0.0, 1.0],
+        }),
+        absorbing_boundary: None,
+    });
+    for (entry, (z, thickness)) in ir
+        .geometry
+        .entries
+        .iter_mut()
+        .zip([0.0, 8e-9, 16e-9].into_iter().zip(thicknesses_m))
+    {
+        let GeometryEntryIR::Translate { base, by, .. } = entry else {
+            panic!("catalog fixture geometry must be translated");
+        };
+        let GeometryEntryIR::Box { size, .. } = base.as_mut() else {
+            panic!("catalog fixture base must be a box");
+        };
+        size[2] = thickness;
+        by[2] = z;
+    }
+    let fdm = ir
+        .backend_policy
+        .discretization_hints
+        .as_mut()
+        .and_then(|hints| hints.fdm.as_mut())
+        .expect("catalog fixture must provide FDM hints");
+    fdm.default_cell = None;
+    fdm.per_magnet = Some(BTreeMap::from([
+        (
+            "free".to_string(),
+            fullmag_ir::FdmGridHintsIR {
+                cell: [2e-9, 2e-9, thicknesses_m[0]],
+            },
+        ),
+        (
+            "ref".to_string(),
+            fullmag_ir::FdmGridHintsIR {
+                cell: [2e-9, 2e-9, thicknesses_m[1]],
+            },
+        ),
+        (
+            "layer_2".to_string(),
+            fullmag_ir::FdmGridHintsIR {
+                cell: [2e-9, 2e-9, thicknesses_m[2]],
+            },
+        ),
+    ]));
+    fdm.demag = Some(fullmag_ir::FdmDemagHintsIR {
+        strategy: "multilayer_convolution".to_string(),
+        mode: "two_d_stack".to_string(),
+        common_cells: None,
+        common_cells_xy: Some([20, 10]),
+        common_cell_size: None,
+    });
+    ir
+}
+
+#[test]
+fn multilayer_planner_regular_three_layer_catalog_matches_runtime_count() {
+    let planned = plan(&three_layer_catalog_problem([2e-9, 2e-9, 2e-9]))
+        .expect("regular three-layer catalog should plan");
+    let BackendPlanIR::FdmMultilayer(multilayer) = planned.backend_plan else {
+        panic!("regular fixture must produce a multilayer plan");
+    };
+    assert_eq!(multilayer.planner_summary.estimated_unique_kernels, 5);
+    assert_eq!(multilayer.planner_summary.estimated_pair_kernels, 9);
+}
+
+#[test]
+fn multilayer_planner_unequal_three_layer_catalog_matches_runtime_count() {
+    let planned = plan(&three_layer_catalog_problem([2e-9, 3e-9, 4e-9]))
+        .expect("unequal three-layer catalog should plan");
+    let BackendPlanIR::FdmMultilayer(multilayer) = planned.backend_plan else {
+        panic!("unequal fixture must produce a multilayer plan");
+    };
+    assert_eq!(multilayer.planner_summary.estimated_unique_kernels, 9);
+    assert_eq!(multilayer.planner_summary.estimated_pair_kernels, 9);
+}
+
+#[test]
+fn multilayer_cpu_planner_admits_deduplicated_catalog_below_memory_budget() {
+    let planned = plan(&eight_layer_multilayer_problem_for_kernel_budget())
+        .expect("CPU FP64 must admit the deduplicated catalog rather than the ABI v2 pair payload");
+    let BackendPlanIR::FdmMultilayer(multilayer) = planned.backend_plan else {
+        panic!("eight-layer fixture must produce a multilayer plan");
+    };
+    assert_eq!(multilayer.planner_summary.estimated_unique_kernels, 15);
+    assert!(multilayer.planner_summary.estimated_kernel_bytes < FDM_GRID_MAX_BYTES);
+}
+
+#[test]
+fn multilayer_cuda_planner_retains_abi_v2_pair_payload_memory_budget() {
+    let mut ir = eight_layer_multilayer_problem_for_kernel_budget();
+    ir.problem_meta.runtime_metadata.insert(
+        "runtime_selection".to_string(),
+        serde_json::json!({"device": "cuda", "device_index": 0}),
+    );
+    let error = plan(&ir)
+        .expect_err("full CUDA ABI v2 pair payload must fail planner admission before allocation");
+    assert!(error.reasons.iter().any(|reason| {
+        reason.contains("multilayer_convolution aggregate memory budget exceeded")
+            && reason.contains("admission_model=cuda_abi_v2_pair_payload")
+    }));
+}
+
 #[test]
 fn multilayer_planner_rejects_abi_v2_pair_payload_above_memory_budget() {
-    let error = plan(&eight_layer_multilayer_problem_for_kernel_budget())
+    let mut ir = eight_layer_multilayer_problem_for_kernel_budget();
+    ir.problem_meta.runtime_metadata.insert(
+        "runtime_selection".to_string(),
+        serde_json::json!({"device": "cuda", "device_index": 0}),
+    );
+    let error = plan(&ir)
         .expect_err("full ABI v2 pair payload must fail planner admission before allocation");
-    assert!(error
-        .reasons
-        .iter()
-        .any(|reason| reason.contains("kernel memory budget exceeded")
-            && reason.contains("estimated_bytes=12884901888")));
+    assert!(error.reasons.iter().any(|reason| reason
+        .contains("admission_model=cuda_abi_v2_pair_payload")
+        && reason.contains("multilayer_convolution aggregate memory budget exceeded")
+        && reason.contains("kernel_bytes=12884902656")
+        && reason.contains("estimated_bytes=12952421120")));
 }
 
 #[test]
@@ -7581,6 +7749,86 @@ fn native_cuda_three_d_identity_multilayer_keeps_supported_non_heun_integrators(
 }
 
 #[test]
+fn native_stacked_cuda_shape_does_not_admit_abi_v2_pair_payload() {
+    let mut ir = cuda_three_d_identity_multilayer_problem();
+    ir.backend_policy
+        .discretization_hints
+        .as_mut()
+        .and_then(|hints| hints.fdm.as_mut())
+        .and_then(|fdm| fdm.demag.as_mut())
+        .expect("CUDA fixture must provide demag hints")
+        .strategy = "auto".to_string();
+    let fullmag_ir::StudyIR::TimeEvolution { dynamics, .. } = &mut ir.study else {
+        panic!("bootstrap study should be time evolution");
+    };
+    let fullmag_ir::DynamicsIR::Llg { integrator, .. } = dynamics;
+    *integrator = "rk4".to_string();
+
+    let planned = plan(&ir).expect("RK4 auto stack must resolve to native single-grid CUDA");
+    let BackendPlanIR::FdmMultilayer(plan) = planned.backend_plan else {
+        panic!("expected multilayer plan");
+    };
+    assert_eq!(plan.integrator, IntegratorChoice::Rk4);
+    assert_eq!(plan.planner_summary.estimated_pair_kernels, 0);
+    assert_eq!(plan.planner_summary.estimated_unique_kernels, 0);
+    assert_eq!(plan.planner_summary.estimated_kernel_bytes, 0);
+    assert!(plan
+        .planner_summary
+        .warnings
+        .iter()
+        .all(|warning| !warning.contains("cuda_abi_v2_l_squared_pair_payload")));
+}
+
+#[test]
+fn device_resident_d07_shape_retains_abi_v2_pair_payload_admission() {
+    let mut ir = cuda_three_d_identity_multilayer_problem();
+    ir.backend_policy
+        .discretization_hints
+        .as_mut()
+        .and_then(|hints| hints.fdm.as_mut())
+        .and_then(|fdm| fdm.demag.as_mut())
+        .expect("CUDA fixture must provide demag hints")
+        .strategy = "auto".to_string();
+
+    let planned = plan(&ir).expect("FP64 Heun auto stack must resolve to D-07 ABI v2");
+    let BackendPlanIR::FdmMultilayer(plan) = planned.backend_plan else {
+        panic!("expected multilayer plan");
+    };
+    assert_eq!(plan.integrator, IntegratorChoice::Heun);
+    assert_eq!(plan.planner_summary.estimated_pair_kernels, 4);
+    assert!(plan.planner_summary.estimated_unique_kernels > 0);
+    assert!(plan.planner_summary.estimated_kernel_bytes > 0);
+    assert!(plan
+        .planner_summary
+        .warnings
+        .iter()
+        .any(|warning| warning.contains("cuda_abi_v2_l_squared_pair_payload")));
+}
+
+#[test]
+fn checked_multilayer_aggregate_memory_accepts_exact_boundary_and_rejects_next_byte() {
+    assert_eq!(
+        crate::checked_multilayer_aggregate_memory_bytes(crate::FDM_GRID_MAX_BYTES - 2, 1, 1,)
+            .expect("exact aggregate boundary"),
+        crate::FDM_GRID_MAX_BYTES
+    );
+    let error =
+        crate::checked_multilayer_aggregate_memory_bytes(crate::FDM_GRID_MAX_BYTES - 1, 1, 1)
+            .expect_err("one byte above aggregate boundary must fail");
+    assert!(error
+        .reasons
+        .iter()
+        .any(|reason| reason.contains("aggregate memory budget exceeded")));
+
+    let overflow = crate::checked_multilayer_aggregate_memory_bytes(u64::MAX, 1, 0)
+        .expect_err("aggregate addition overflow must fail closed");
+    assert!(overflow
+        .reasons
+        .iter()
+        .any(|reason| reason.contains("aggregate memory overflow")));
+}
+
+#[test]
 fn multilayer_planner_rejects_thermal_noise_until_rhs_coverage_exists() {
     let mut ir = stacked_two_body_multilayer_problem();
     ir.temperature = Some(300.0);
@@ -7785,12 +8033,12 @@ fn forced_cuda_explicit_single_magnet_multilayer_uses_multilayer_material_field_
         .and_then(|hints| hints.fdm.as_mut())
         .expect("bootstrap fixture must provide FDM hints")
         .demag = Some(fullmag_ir::FdmDemagHintsIR {
-            strategy: "multilayer_convolution".to_string(),
-            mode: "three_d".to_string(),
-            common_cells: None,
-            common_cells_xy: None,
-            common_cell_size: None,
-        });
+        strategy: "multilayer_convolution".to_string(),
+        mode: "three_d".to_string(),
+        common_cells: None,
+        common_cells_xy: None,
+        common_cell_size: None,
+    });
     ir.material_parameter_fields
         .push(fullmag_ir::MaterialParameterAssignmentIR {
             assignment_id: "strip_linear_ms".to_string(),

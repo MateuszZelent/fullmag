@@ -43,7 +43,10 @@ struct NativeMultilayerTensorKernelHost {
 #[cfg(feature = "cuda")]
 impl NativeFdmBackend {
     pub fn create_multilayer_v2(plan: &fullmag_ir::FdmMultilayerPlanIR) -> Result<Self, RunError> {
-        validate_multilayer_grid_budget(plan)?;
+        validate_multilayer_grid_budget(
+            plan,
+            fullmag_fdm_demag::KernelAdmissionModel::CudaAbiV2PairPayload,
+        )?;
         let precision = match plan.precision {
             fullmag_ir::ExecutionPrecision::Single => {
                 ffi::fullmag_fdm_precision::FULLMAG_FDM_PRECISION_SINGLE

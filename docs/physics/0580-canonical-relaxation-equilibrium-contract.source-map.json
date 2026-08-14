@@ -8,8 +8,28 @@
     {"solver": "FDM", "device": "CPU", "status": "documented"},
     {"solver": "FDM", "device": "GPU", "status": "documented"}
   ],
-  "equations": [],
-  "symbols": [],
+  "equations": [
+    {
+      "id": "fdm-cuda-fp32-armijo-budget",
+      "symbols": ["epsilon_E_single", "epsilon_f32", "E"],
+      "sources": ["fp32ArmijoBudget"]
+    },
+    {
+      "id": "fdm-cuda-fp32-armijo-acceptance",
+      "symbols": ["E_trial", "E_previous", "c_1", "lambda", "phi_prime", "epsilon_E_single"],
+      "sources": ["fp32ArmijoAcceptance"]
+    }
+  ],
+  "symbols": [
+    {"id": "epsilon_E_single", "latex": "\\varepsilon_{E,\\mathrm{single}}", "meaning": "FP32 CUDA absolute energy roundoff budget", "si_unit": "\\mathrm{J}"},
+    {"id": "epsilon_f32", "latex": "\\varepsilon_{\\mathrm{f32}}", "meaning": "float32 machine epsilon", "si_unit": "1"},
+    {"id": "E", "latex": "E", "meaning": "total conservative energy", "si_unit": "\\mathrm{J}"},
+    {"id": "E_trial", "latex": "E_{\\mathrm{trial}}", "meaning": "candidate trial energy in line search", "si_unit": "\\mathrm{J}"},
+    {"id": "E_previous", "latex": "E_{\\mathrm{previous}}", "meaning": "last accepted energy", "si_unit": "\\mathrm{J}"},
+    {"id": "c_1", "latex": "c_1", "meaning": "Armijo coefficient", "si_unit": "1"},
+    {"id": "lambda", "latex": "\\lambda", "meaning": "direct-minimizer line-search step", "si_unit": "\\mathrm{m\\,A^{-1}}"},
+    {"id": "phi_prime", "latex": "\\phi'(0)", "meaning": "physical-metric directional energy derivative", "si_unit": "\\mathrm{J\\,A\\,m^{-1}}"}
+  ],
   "sources": [
     {
       "id": "adaptive-timestep-authoring",
@@ -40,6 +60,36 @@
       "path": "examples/bench_fem_gpu_long.py",
       "symbol": "solver_time_to_tolerance_evidence",
       "responsibility": "Measure native accepted-step time to the first torque-qualified state."
+    },
+    {
+      "id": "fp32ArmijoBudget",
+      "path": "crates/fullmag-runner/src/relaxation/direct_minimizer.rs",
+      "symbol": "direct_minimizer_energy_tolerance_j",
+      "responsibility": "Resolve the bounded FP32 CUDA energy budget without changing the public tolerance."
+    },
+    {
+      "id": "fp32ArmijoAcceptance",
+      "path": "crates/fullmag-runner/src/relaxation/direct_minimizer.rs",
+      "symbol": "projected_gradient_armijo_accepts_with_tolerance",
+      "responsibility": "Apply the precision-aware Armijo acceptance decision."
+    },
+    {
+      "id": "cudaDirectMinimizer",
+      "path": "crates/fullmag-runner/src/fdm/gpu/cuda/direct_minimizer.rs",
+      "symbol": "execute_direct_minimizer",
+      "responsibility": "Run the CUDA FDM direct-minimizer loop with requested precision provenance."
+    },
+    {
+      "id": "nativeF32Energy",
+      "path": "backends/fdm/gpu/cuda/runtime/telemetry.cu",
+      "symbol": "context_fill_current_stats",
+      "responsibility": "Publish FP32-state energy reductions as joules for trial evaluation."
+    },
+    {
+      "id": "fp32ArmijoRegression",
+      "path": "crates/fullmag-runner/src/relaxation/direct_minimizer.rs",
+      "symbol": "single_precision_armijo_uses_bounded_energy_roundoff_budget",
+      "responsibility": "Protect strict double Armijo while covering the CUDA single-precision roundoff case."
     }
   ],
   "public_api": {

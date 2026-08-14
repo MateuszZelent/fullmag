@@ -24,7 +24,12 @@ export function buildFdmAirboxNode(
   multilayerLayout: FdmMultilayerLayoutResource | null | undefined = null,
   multilayerLayoutStatus: ModelTreeSnapshot["fdmMultilayerLayoutStatus"] = "idle",
 ): ExplorerNode | null {
-  if (!presentation.universeOutsideMagneticSupport) return null;
+  const multilayerTarget = resolveFdmMultilayerAirboxTarget(multilayerLayout);
+  // A multilayer run publishes a verified target-only Airbox carrier even
+  // while the ordinary structured-grid support presentation is still stale
+  // or unavailable. Keep that carrier reachable in Explorer; otherwise the
+  // viewport/debug inspector cannot qualify the published H_demag field.
+  if (!presentation.universeOutsideMagneticSupport && !multilayerTarget) return null;
   const grid = presentation.fdmGrid;
   const meshStatus: ExplorerNodeStatus =
     presentation.resourceStatus === "error"
@@ -39,7 +44,6 @@ export function buildFdmAirboxNode(
             ? "degraded"
             : "mesh-ready";
   const cellCount = grid.totalCells;
-  const multilayerTarget = resolveFdmMultilayerAirboxTarget(multilayerLayout);
   const multilayerTargetStatus: ExplorerNodeStatus =
     multilayerLayoutStatus === "loading" || multilayerLayoutStatus === "stale"
       ? "stale"
@@ -54,7 +58,7 @@ export function buildFdmAirboxNode(
     badge: "FDM universe",
     icon: "shield",
     status: meshStatus,
-    visualizationTargetId: "fdm-universe-outside-support",
+    visualizationTargetId: "airbox",
     contextCommands: ["workspace.focus-selection"],
     children: [
       {
@@ -122,15 +126,13 @@ export function buildFdmAirboxNode(
       },
       {
         id: "model:airbox:visualization",
-        // Keep the product kind aligned with FEM.  The target marker routes
-        // this FDM selection to the structured-grid outside-support adapter.
         kind: "airbox.visualization",
         label: "Visualization",
         parentId: "model:airbox",
         badge: "display",
         icon: "sparkles",
         status: "ready",
-        visualizationTargetId: "fdm-universe-outside-support",
+        visualizationTargetId: "airbox",
         contextCommands: ["workspace.focus-selection"],
         children: [
           {
@@ -138,7 +140,7 @@ export function buildFdmAirboxNode(
               kind: "airbox.visualization.debug",
               parentId: "model:airbox:visualization",
             }),
-            visualizationTargetId: "fdm-universe-outside-support",
+            visualizationTargetId: "airbox",
           },
         ],
       },

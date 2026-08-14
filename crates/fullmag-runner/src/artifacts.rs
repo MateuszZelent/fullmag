@@ -202,7 +202,18 @@ pub(crate) fn artifact_provenance_json(
         "execution_mode".to_string(),
         serde_json::to_value(context.execution_mode).expect("execution mode must serialize"),
     );
+    object.insert("build_identity".to_string(), build_identity_json());
     value
+}
+
+pub(crate) fn build_identity_json() -> serde_json::Value {
+    let identity = fullmag_build_info::identity();
+    serde_json::json!({
+        "built_at_utc": identity.built_at_utc,
+        "git_commit": identity.git_commit,
+        "worktree_state": identity.worktree_state,
+        "source_snapshot_sha256": identity.source_snapshot_sha256,
+    })
 }
 
 fn runtime_threading_summary(problem: &fullmag_ir::ProblemIR) -> serde_json::Value {
@@ -1363,6 +1374,7 @@ pub(crate) fn write_artifacts(
         "fem_cpu_relaxation_qualification": fem_cpu_relaxation_qualification,
         "fem_gpu_relaxation_qualification": fem_gpu_relaxation_qualification,
         "engine_version": env!("CARGO_PKG_VERSION"),
+        "build_identity": build_identity_json(),
         "status": executed.result.status,
         "scalar_rows": executed.result.steps.len(),
         "accepted_solver_steps": accepted_steps.len(),
@@ -1756,6 +1768,7 @@ fn write_fdm_multilayer_material_field_artifacts(
     output_dir: &Path,
     multilayer: &fullmag_ir::FdmMultilayerPlanIR,
 ) -> std::io::Result<Vec<serde_json::Value>> {
+    let build_identity = build_identity_json();
     let mut prepared_files = Vec::<(String, serde_json::Value)>::new();
     let mut metadata_assets = Vec::new();
     let mut manifest_layers = Vec::with_capacity(multilayer.layers.len());
@@ -1793,6 +1806,7 @@ fn write_fdm_multilayer_material_field_artifacts(
             let payload = serde_json::json!({
                 "schema_version": "fdm_multilayer_material_field.v1",
                 "backend": "fdm_multilayer",
+                "build_identity": build_identity,
                 "layer_id": layer.layer_id,
                 "object_id": layer.object_id,
                 "magnet_name": layer.magnet_name,
@@ -1812,6 +1826,7 @@ fn write_fdm_multilayer_material_field_artifacts(
             metadata_assets.push(serde_json::json!({
                 "schema_version": "fdm_multilayer_material_field.v1",
                 "backend": "fdm_multilayer",
+                "build_identity": build_identity,
                 "artifact_path": relative_path,
                 "layer_id": layer.layer_id,
                 "object_id": layer.object_id,
@@ -1840,6 +1855,7 @@ fn write_fdm_multilayer_material_field_artifacts(
                 serde_json::json!({
                     "schema_version": "fdm_multilayer_region_membership.v1",
                     "backend": "fdm_multilayer",
+                    "build_identity": build_identity,
                     "layer_id": layer.layer_id,
                     "object_id": layer.object_id,
                     "magnet_name": layer.magnet_name,
@@ -1871,6 +1887,7 @@ fn write_fdm_multilayer_material_field_artifacts(
     let manifest = serde_json::json!({
         "schema_version": "fdm_multilayer_material_fields.v1",
         "backend": "fdm_multilayer",
+        "build_identity": build_identity,
         "storage_layout": "per_layer_native_grid",
         "layer_count": manifest_layers.len(),
         "layers": manifest_layers,
@@ -3882,14 +3899,7 @@ fn write_canonical_field_snapshot_file(
     } else {
         serde_json::json!(snapshot.values)
     };
-    let mut field_provenance = serde_json::json!({
-        "problem_name": context.problem_name,
-        "ir_version": context.ir_version,
-        "source_hash": context.source_hash,
-        "execution_mode": context.execution_mode,
-        "execution_engine": provenance.execution_engine,
-        "precision": provenance.precision,
-    });
+    let mut field_provenance = artifact_provenance_json(context, provenance);
     if !provenance.transport_modules.is_empty() {
         field_provenance["transport_modules"] = serde_json::json!(provenance.transport_modules);
     }
@@ -4010,6 +4020,7 @@ fn write_multilayer_field_manifest(
         "schema_version": "fdm_multilayer_field_manifest.v1",
         "observable": observable,
         "unit": field_unit(observable),
+        "build_identity": build_identity_json(),
         "storage_layout": "per_layer_json",
         "component_order": ["x", "y", "z"],
         "layer_count": layers.len(),
@@ -4044,14 +4055,7 @@ fn write_layer_field_file(
         .chunks_exact(3)
         .map(|value| [value[0], value[1], value[2]])
         .collect::<Vec<_>>();
-    let mut field_provenance = serde_json::json!({
-        "problem_name": context.problem_name,
-        "ir_version": context.ir_version,
-        "source_hash": context.source_hash,
-        "execution_mode": context.execution_mode,
-        "execution_engine": provenance.execution_engine,
-        "precision": provenance.precision,
-    });
+    let mut field_provenance = artifact_provenance_json(context, provenance);
     if !provenance.transport_modules.is_empty() {
         field_provenance["transport_modules"] = serde_json::json!(provenance.transport_modules);
     }
@@ -5334,7 +5338,7 @@ mod tests {
     }
 
     #[test]
-    fn fdm_multilayer_writes_per_layer_material_and_membership_artifacts() {
+    fn fdm_multilayer_material_and_membership_artifacts_include_build_identity() {
         let plan = heterogeneous_multilayer_material_plan();
         let unique_suffix = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -5350,11 +5354,12 @@ mod tests {
             .expect("multilayer material artifacts should be written");
 
         assert_eq!(assets.len(), 6);
-        assert!(
-            assets
-                .iter()
-                .all(|asset| asset["backend"] == "fdm_multilayer")
-        );
+        assert!(assets
+            .iter()
+            .all(|asset| asset["backend"] == "fdm_multilayer"));
+        assert!(assets
+            .iter()
+            .all(|asset| asset["build_identity"] == build_identity_json()));
         assert!(assets.iter().all(|asset| asset.get("values").is_none()));
         assert_eq!(
             assets
@@ -5382,6 +5387,7 @@ mod tests {
         );
         assert_eq!(manifest["storage_layout"], "per_layer_native_grid");
         assert_eq!(manifest["layers"].as_array().map(Vec::len), Some(2));
+        assert_eq!(manifest["build_identity"], build_identity_json());
         assert!(manifest.get("common_grid").is_none());
 
         let bottom_ms: serde_json::Value = serde_json::from_str(
@@ -5398,6 +5404,7 @@ mod tests {
         assert_eq!(bottom_ms["unit"], "A/m");
         assert_eq!(bottom_ms["value_count"], 2);
         assert_eq!(bottom_ms["values"], serde_json::json!([700e3, 710e3]));
+        assert_eq!(bottom_ms["build_identity"], build_identity_json());
 
         let top_ms: serde_json::Value = serde_json::from_str(
             &fs::read_to_string(
@@ -5410,6 +5417,7 @@ mod tests {
         assert_eq!(top_ms["native_grid"], serde_json::json!([3, 1, 1]));
         assert_eq!(top_ms["value_count"], 3);
         assert_eq!(top_ms["values"], serde_json::json!([810e3, 820e3, 830e3]));
+        assert_eq!(top_ms["build_identity"], build_identity_json());
         assert_ne!(bottom_ms["value_sha256"], top_ms["value_sha256"]);
 
         let bottom_membership: serde_json::Value =
@@ -5424,6 +5432,7 @@ mod tests {
             bottom_membership["native_region_mask"],
             serde_json::json!([1, 0])
         );
+        assert_eq!(bottom_membership["build_identity"], build_identity_json());
         assert_eq!(
             bottom_membership["native_region_legend"][0]["object_id"],
             "bottom"
@@ -5701,7 +5710,7 @@ mod tests {
     }
 
     #[test]
-    fn fdm_multilayer_persists_transfer_provenance_artifact() {
+    fn fdm_multilayer_mesh_provenance_artifacts_include_build_identity() {
         let mut plan = test_multilayer_execution_plan();
         let BackendPlanIR::FdmMultilayer(multilayer) = &mut plan.backend_plan else {
             panic!("expected multilayer FDM plan");
@@ -5747,6 +5756,28 @@ mod tests {
             value["transfers"][0]["target_grid_fingerprint"],
             value["target_grid_fingerprint"]
         );
+        assert_eq!(value["build_identity"], build_identity_json());
+
+        let grid_artifacts = crate::fdm::artifacts::grid_certificate_artifacts(&plan);
+        assert_eq!(grid_artifacts.len(), 1);
+        assert_eq!(
+            grid_artifacts[0].relative_path,
+            "mesh/fdm_grid_certificate.json"
+        );
+        let grid_value: serde_json::Value = serde_json::from_slice(&grid_artifacts[0].bytes)
+            .expect("grid certificate artifact should be JSON");
+        assert_eq!(grid_value["build_identity"], build_identity_json());
+
+        let pbc_artifacts =
+            crate::fdm::artifacts::pbc_provenance_artifacts(&plan, &ExecutionProvenance::default());
+        assert_eq!(pbc_artifacts.len(), 1);
+        assert_eq!(
+            pbc_artifacts[0].relative_path,
+            "mesh/fdm_pbc_provenance.v1.json"
+        );
+        let pbc_value: serde_json::Value = serde_json::from_slice(&pbc_artifacts[0].bytes)
+            .expect("PBC provenance artifact should be JSON");
+        assert_eq!(pbc_value["build_identity"], build_identity_json());
     }
 
     fn test_fem_execution_plan() -> ExecutionPlanIR {
@@ -8695,6 +8726,20 @@ mod tests {
         )
         .expect("metadata should parse");
         assert_eq!(metadata["field_snapshots"], 1);
+        let build_identity = &metadata["build_identity"];
+        assert_eq!(
+            build_identity["git_commit"].as_str().map(str::len),
+            Some(40)
+        );
+        assert!(matches!(
+            build_identity["worktree_state"].as_str(),
+            Some("clean" | "dirty" | "unknown")
+        ));
+        let source_snapshot = build_identity["source_snapshot_sha256"].as_str();
+        assert!(
+            source_snapshot == Some("unknown")
+                || source_snapshot.is_some_and(|value| value.len() == 64)
+        );
 
         fs::remove_dir_all(output_dir).expect("temporary artifact directory should be removable");
     }

@@ -30,6 +30,8 @@ import {
 import {
   resolveDomainBounds,
   type Viewport3DBounds,
+  type Viewport3DTargetFieldBufferSource,
+  type Viewport3DVectorBuildReference,
 } from "./viewport3dRenderModel";
 import {
   buildDomainPresentation,
@@ -166,10 +168,12 @@ export interface FdmNativeLayerRenderView {
 export interface FdmMultilayerAirboxRenderView {
   domain: FdmMultilayerAirboxRenderDomain;
   fieldVector: DecodedFieldVector | null;
+  fieldBuffer: Viewport3DTargetFieldBufferSource | null;
   model: FdmCuboidInstanceModel | null;
   settings: VisualizationTargetSettings;
   surfaceColors: ScalarColorBuffer | null;
   target: VisualizationTargetRef;
+  vectorBuildReference: Viewport3DVectorBuildReference | null;
   vectorGlyphColors: ScalarColorBuffer | null;
   vectorSegments: Float32Array | null;
 }

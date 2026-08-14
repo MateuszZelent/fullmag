@@ -82,6 +82,8 @@ export interface Viewport3DVisualizationDebugModelInput {
   carriers: readonly Viewport3DVisualizationDebugCarrierInput[];
   fieldCacheBudget: Viewport3DFieldVectorCacheBudgetDiagnostics;
   frame: {
+    airboxVectorsVisible?: boolean;
+    airboxWireframeVisible?: boolean;
     committedAtMs: number;
     commitId: string;
     contextLost: boolean | null;
@@ -168,6 +170,12 @@ export function buildViewport3DVisualizationDebugSnapshot(
       label: boundText(input.target.label),
     }),
     viewport: Object.freeze({
+      ...(typeof input.frame.airboxVectorsVisible === "boolean"
+        ? { airboxVectorsVisible: input.frame.airboxVectorsVisible }
+        : {}),
+      ...(typeof input.frame.airboxWireframeVisible === "boolean"
+        ? { airboxWireframeVisible: input.frame.airboxWireframeVisible }
+        : {}),
       contextLost: typeof input.frame.contextLost === "boolean" ? input.frame.contextLost : null,
       drawingBuffer: safeDrawingBuffer(input.frame.drawingBuffer),
       frameCommittedAtMs: safeNumber(input.frame.committedAtMs),

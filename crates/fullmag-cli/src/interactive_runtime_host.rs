@@ -436,6 +436,7 @@ pub(super) struct InteractiveRuntimeHost {
     base_problem: ProblemIR,
     runtime_capable: bool,
     dynamic_idle_preview_supported: bool,
+    multilayer_idle_snapshot: bool,
 }
 
 impl InteractiveRuntimeHost {
@@ -444,6 +445,9 @@ impl InteractiveRuntimeHost {
         base_problem: ProblemIR,
         backend_plan: &BackendPlanIR,
     ) -> Self {
+        let dynamic_idle_preview_supported =
+            supports_dynamic_idle_preview(&base_problem, backend_plan);
+        let multilayer_idle_snapshot = matches!(backend_plan, BackendPlanIR::FdmMultilayer(_));
         Self {
             control,
             preview_source: Arc::new(Mutex::new(InteractivePreviewSourceState {
@@ -454,7 +458,8 @@ impl InteractiveRuntimeHost {
             runtime: None,
             base_problem,
             runtime_capable: supports_idle_interactive_runtime(backend_plan),
-            dynamic_idle_preview_supported: supports_dynamic_idle_preview(backend_plan),
+            dynamic_idle_preview_supported,
+            multilayer_idle_snapshot,
         }
     }
 
@@ -503,7 +508,7 @@ impl InteractiveRuntimeHost {
         let continuation_slice = continuation_magnetization.as_deref();
         self.ensure_base_runtime_ready(continuation_slice, live_workspace);
 
-        if self.dynamic_idle_preview_supported {
+        if self.dynamic_idle_preview_supported && !self.multilayer_idle_snapshot {
             let preview_request = self.control.preview_request();
             spawn_interactive_preview_cache_refresh(
                 self.base_problem.clone(),
@@ -532,14 +537,26 @@ impl InteractiveRuntimeHost {
         };
 
         if self.dynamic_idle_preview_supported {
-            let preview_request = self.control.preview_request();
-            spawn_interactive_preview_cache_refresh(
-                self.base_problem.clone(),
-                Arc::clone(&self.preview_source),
-                live_workspace.clone(),
-                preview_request,
-                paused_generation,
-            );
+            if self.multilayer_idle_snapshot {
+                if let Err(error) = self.refresh_multilayer_idle_preview(
+                    continuation_magnetization.as_deref(),
+                    live_workspace,
+                ) {
+                    live_workspace.push_log(
+                        "warn",
+                        format!("Idle multilayer preview refresh warning: {error}"),
+                    );
+                }
+            } else {
+                let preview_request = self.control.preview_request();
+                spawn_interactive_preview_cache_refresh(
+                    self.base_problem.clone(),
+                    Arc::clone(&self.preview_source),
+                    live_workspace.clone(),
+                    preview_request,
+                    paused_generation,
+                );
+            }
         }
     }
 
@@ -565,7 +582,7 @@ impl InteractiveRuntimeHost {
             .map(|state| state.generation)
             .unwrap_or(0);
 
-        if self.dynamic_idle_preview_supported {
+        if self.dynamic_idle_preview_supported && !self.multilayer_idle_snapshot {
             let preview_request = self.control.preview_request();
             spawn_interactive_preview_cache_refresh(
                 self.base_problem.clone(),
@@ -603,11 +620,13 @@ impl InteractiveRuntimeHost {
             return Ok(());
         }
 
-        let (preview_field, cached_fields) = snapshot_interactive_preview_payload(
+        let (preview_field, cached_fields, auxiliary_artifacts) =
+            snapshot_interactive_preview_payload(
             &self.base_problem,
             continuation_magnetization,
             &display_selection.preview_request(),
         )?;
+        live_workspace.replace_auxiliary_artifacts(&auxiliary_artifacts)?;
         live_workspace.update(|state| {
             state.live_state.updated_at_unix_ms = unix_time_millis().unwrap_or(0);
             state.live_state.latest_step.preview_field = Some(preview_field.clone());
@@ -696,7 +715,7 @@ impl InteractiveRuntimeHost {
             clear_cached_preview_fields(state);
         });
 
-        if self.dynamic_idle_preview_supported {
+        if self.dynamic_idle_preview_supported && !self.multilayer_idle_snapshot {
             let preview_request = self.control.preview_request();
             spawn_interactive_preview_cache_refresh(
                 self.base_problem.clone(),
@@ -796,6 +815,18 @@ impl InteractiveRuntimeHost {
         }
 
         if self.dynamic_idle_preview_supported {
+            if self.multilayer_idle_snapshot {
+                if let Err(error) =
+                    self.refresh_multilayer_idle_preview(continuation_magnetization, live_workspace)
+                {
+                    eprintln!("multilayer idle preview refresh warning: {error}");
+                    live_workspace.push_log(
+                        "warn",
+                        format!("Idle multilayer preview refresh warning: {error}"),
+                    );
+                }
+                return;
+            }
             let preview_request = self.control.preview_request();
             if let Err(error) = refresh_interactive_preview_snapshot(
                 &self.base_problem,
@@ -811,6 +842,41 @@ impl InteractiveRuntimeHost {
             }
         }
     }
+
+    fn refresh_multilayer_idle_preview(
+        &self,
+        continuation_magnetization: Option<&[[f64; 3]]>,
+        live_workspace: &LocalLiveWorkspace,
+    ) -> Result<()> {
+        let request = self.control.preview_request();
+        let mut problem = self.base_problem.clone();
+        if let Some(previous_final_magnetization) = continuation_magnetization {
+            apply_continuation_initial_state(&mut problem, previous_final_magnetization)?;
+        }
+        let quantities = fullmag_runner::quantities::field_materialization_quantity_ids();
+        let cached_fields =
+            fullmag_runner::snapshot_problem_vector_fields(&problem, &quantities, &request)?;
+        let requested_quantity =
+            fullmag_runner::quantities::normalize_quantity_id(&request.quantity)
+                .map_err(|error| anyhow!(error.to_string()))?
+                .as_str();
+        let preview_field = cached_fields
+            .iter()
+            .find(|field| field.quantity == requested_quantity)
+            .cloned()
+            .ok_or_else(|| {
+                anyhow!(
+                    "multilayer preview quantity '{}' is unavailable for the current plan",
+                    request.quantity
+                )
+            })?;
+        live_workspace.update(|state| {
+            state.live_state.updated_at_unix_ms = unix_time_millis().unwrap_or(0);
+            state.live_state.latest_step.preview_field = Some(preview_field.clone());
+            replace_cached_preview_fields(state, cached_fields.clone());
+        });
+        Ok(())
+    }
 }
 
 fn supports_idle_interactive_runtime(backend_plan: &BackendPlanIR) -> bool {
@@ -823,11 +889,18 @@ fn supports_idle_interactive_runtime(backend_plan: &BackendPlanIR) -> bool {
     }
 }
 
-fn supports_dynamic_idle_preview(backend_plan: &BackendPlanIR) -> bool {
+fn supports_dynamic_idle_preview(problem: &ProblemIR, backend_plan: &BackendPlanIR) -> bool {
     match backend_plan {
         BackendPlanIR::Fem(fem) => {
             fem.domain_mesh_mode != FemDomainMeshModeIR::SharedDomainMeshWithAir
         }
+        // Multilayer does not yet have a persistent InteractiveRuntime backend,
+        // but its CPU reference snapshot path is safe for idle display-sync and
+        // explicit compute_fields. Keep this separate from the running-stage
+        // live-preview capability, which must not select an unsupported runtime.
+        BackendPlanIR::FdmMultilayer(_) => fullmag_runner::resolve_runtime_engine(problem)
+            .map(|runtime| runtime.accelerator == "cpu")
+            .unwrap_or(false),
         _ => supports_dynamic_live_preview(backend_plan),
     }
 }
@@ -1213,6 +1286,20 @@ mod tests {
     }
 
     #[test]
+    fn explicit_compute_fields_publishes_auxiliary_carriers_after_batch_materialization() {
+        let source = include_str!("interactive_runtime_host.rs");
+        let function_body = source
+            .split("pub(super) fn compute_current_fields(")
+            .nth(1)
+            .and_then(|rest| rest.split("pub(super) fn compute_current_energies(").next())
+            .expect("compute_current_fields should be present");
+
+        assert!(function_body.contains("snapshot_interactive_preview_payload"));
+        assert!(function_body.contains("replace_auxiliary_artifacts"));
+        assert!(source.contains("snapshot_problem_vector_field_batch"));
+    }
+
+    #[test]
     fn stage_runtime_reuse_uses_continuation_compatibility() {
         let source = include_str!("interactive_runtime_host.rs");
         let ensure = source
@@ -1250,16 +1337,29 @@ fn snapshot_interactive_preview_payload(
 ) -> Result<(
     fullmag_runner::LivePreviewField,
     Vec<fullmag_runner::LivePreviewField>,
+    Vec<fullmag_runner::AuxiliaryArtifact>,
 )> {
     let mut problem = base_problem.clone();
     if let Some(previous_final_magnetization) = continuation_magnetization {
         apply_continuation_initial_state(&mut problem, previous_final_magnetization)?;
     }
-    let preview_field = fullmag_runner::snapshot_problem_preview(&problem, request)?;
     let quantities = fullmag_runner::quantities::field_materialization_quantity_ids();
-    let cached_fields =
-        fullmag_runner::snapshot_problem_vector_fields(&problem, &quantities, request)?;
-    Ok((preview_field, cached_fields))
+    let batch =
+        fullmag_runner::snapshot_problem_vector_field_batch(&problem, &quantities, request)?;
+    let requested_quantity = fullmag_runner::quantities::normalize_quantity_id(&request.quantity)
+        .map_err(|error| anyhow!(error.to_string()))?;
+    let preview_field = batch
+        .fields
+        .iter()
+        .find(|field| field.quantity == requested_quantity.as_str())
+        .cloned()
+        .ok_or_else(|| {
+            anyhow!(
+                "multilayer preview quantity '{}' is unavailable for the current plan",
+                request.quantity
+            )
+        })?;
+    Ok((preview_field, batch.fields, batch.auxiliary_artifacts))
 }
 
 fn spawn_interactive_preview_cache_refresh(

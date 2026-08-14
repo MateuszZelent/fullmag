@@ -16,6 +16,7 @@ from typing import Any
 NON_RUNTIME_PREFIXES = (
     ".agents/",
     ".codex/",
+    ".impl-racetrack/",
     ".worktrees/",
     ".github/",
     # Control Room is not an input to the managed native FEM binary.
@@ -30,6 +31,7 @@ NON_RUNTIME_FILES = {
     "README.md",
 }
 NON_RUNTIME_EXACT_PATHS = {
+    ".impl-racetrack",
     ".worktrees",
     "apps/control-room/next-env.d.ts",
     "justfile",

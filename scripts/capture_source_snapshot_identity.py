@@ -25,6 +25,7 @@ SCHEMA = "fullmag.source-snapshot.v2"
 NON_RUNTIME_PREFIXES = (
     ".agents/",
     ".codex/",
+    ".impl-racetrack/",
     ".worktrees/",
     ".github/",
     # The managed native FEM bundle does not compile the browser application.
@@ -37,6 +38,7 @@ NON_RUNTIME_PREFIXES = (
 )
 NON_RUNTIME_FILES = {"AGENTS.md", "CHANGELOG.md", "README.md"}
 NON_RUNTIME_EXACT_PATHS = {
+    ".impl-racetrack",
     # The repository tracks this as an absolute worktree-administration link.
     # It is not a runtime source input and must not be materialized.
     ".worktrees",

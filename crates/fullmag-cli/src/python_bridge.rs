@@ -6,7 +6,7 @@ use anyhow::{anyhow, bail, Context, Result};
 use serde_json::Value;
 use std::collections::HashMap;
 
-use crate::args::ScriptCli;
+use crate::args::{BackendArg, ScriptCli};
 use crate::control_room::repo_root;
 use crate::simulation_preparation::PreparationStageId;
 use crate::types::{
@@ -1140,9 +1140,11 @@ pub(crate) fn export_script_execution_config_via_python_with_options(
                 .to_string(),
         );
     }
-    if let Some(device) =
-        managed_fem_execution_device(std::env::var("FULLMAG_FEM_EXECUTION").ok().as_deref())
-    {
+    if let Some(device) = managed_execution_device(
+        args.backend,
+        std::env::var("FULLMAG_FEM_EXECUTION").ok().as_deref(),
+        std::env::var("FULLMAG_FDM_EXECUTION").ok().as_deref(),
+    ) {
         helper_args.push("--runtime-device".to_string());
         helper_args.push(device.to_string());
     }
@@ -1169,6 +1171,19 @@ pub(crate) fn managed_fem_execution_device(value: Option<&str>) -> Option<&'stat
         Some("cpu") => Some("cpu"),
         Some("gpu" | "cuda" | "all_in_gpu") => Some("gpu"),
         _ => None,
+    }
+}
+
+pub(crate) fn managed_execution_device(
+    backend: Option<BackendArg>,
+    fem_value: Option<&str>,
+    fdm_value: Option<&str>,
+) -> Option<&'static str> {
+    match backend {
+        Some(BackendArg::Fdm) => managed_fem_execution_device(fdm_value),
+        Some(BackendArg::Fem | BackendArg::Hybrid) => managed_fem_execution_device(fem_value),
+        Some(BackendArg::Auto) | None => managed_fem_execution_device(fem_value)
+            .or_else(|| managed_fem_execution_device(fdm_value)),
     }
 }
 
@@ -1500,7 +1515,28 @@ pub(crate) fn invoke_adaptive_remesh_full(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::args::BackendArg;
     use crate::simulation_preparation::PreparationStageId;
+
+    #[test]
+    fn managed_execution_device_selects_the_backend_specific_override() {
+        assert_eq!(
+            managed_execution_device(Some(BackendArg::Fdm), Some("cpu"), Some("gpu")),
+            Some("gpu")
+        );
+        assert_eq!(
+            managed_execution_device(Some(BackendArg::Fem), Some("gpu"), Some("cpu")),
+            Some("gpu")
+        );
+        assert_eq!(
+            managed_execution_device(Some(BackendArg::Hybrid), Some("gpu"), Some("cpu")),
+            Some("gpu")
+        );
+        assert_eq!(
+            managed_execution_device(None, Some("cpu"), Some("gpu")),
+            Some("cpu")
+        );
+    }
 
     #[test]
     fn managed_fem_execution_device_maps_only_explicit_cpu_or_gpu_modes() {

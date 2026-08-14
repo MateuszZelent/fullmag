@@ -39,6 +39,8 @@ import type {
 import { resolveViewport3DScalarColorBufferKey } from "../viewport3dFieldMapping";
 
 export interface Viewport3DVisualizationDebugFrameCommit {
+  airboxVectorsVisible?: boolean;
+  airboxWireframeVisible?: boolean;
   commitId: string;
   committedAtMs?: number;
   contextLost?: boolean | null;
@@ -441,6 +443,12 @@ export function createViewport3DVisualizationDebugCandidateBuilder({
           carriers: carrierInputs,
           fieldCacheBudget: getViewport3DFieldVectorCacheBudgetDiagnostics(),
           frame: {
+            ...(typeof frame.airboxVectorsVisible === "boolean"
+              ? { airboxVectorsVisible: frame.airboxVectorsVisible }
+              : {}),
+            ...(typeof frame.airboxWireframeVisible === "boolean"
+              ? { airboxWireframeVisible: frame.airboxWireframeVisible }
+              : {}),
             committedAtMs,
             commitId: frame.commitId,
             contextLost: frame.contextLost ?? null,

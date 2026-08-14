@@ -708,7 +708,7 @@ fn fdm_multilayer_airbox_resource(
 
 fn fdm_multilayer_airbox_resource_from_carrier(
     carrier: FdmMultilayerAirboxCarrier,
-    observation_revision: u64,
+    _observation_revision: u64,
 ) -> FdmMultilayerAirboxResource {
     FdmMultilayerAirboxResource {
         carrier_available: true,
@@ -722,7 +722,10 @@ fn fdm_multilayer_airbox_resource_from_carrier(
         carrier_fingerprint: Some(format!("sha256:{}", carrier.carrier_fingerprint)),
         sample_count: Some(carrier.sample_count as u64),
         value_count: Some(carrier.values.len() as u64),
-        carrier_revision: Some(observation_revision),
+        // The field-plane carrier revision is content-derived and must match
+        // the FMVP topology revision. `observation_revision` is the session
+        // resource revision, not the carrier identity.
+        carrier_revision: Some(carrier.carrier_revision),
         source_policy: Some(carrier.source_policy),
         target_only: Some(true),
         source_grid_fingerprints: Some(

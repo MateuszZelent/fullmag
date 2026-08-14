@@ -24,10 +24,11 @@ pub mod types;
 
 pub use descriptors::{
     ActiveMaskIdentity, BoundaryPolicy, CommonTransformLayout, ConvolutionMode, CropWindow,
-    DescriptorError, FdmLayerDescriptor, GridGeometry, KernelPrecision, KernelReuseCatalog,
-    LayerFingerprintInputs, LayerGridDescriptor, NegativeLagMapping, OrientedKernelPairDescriptor,
-    OrientedPairDescriptor, TensorRepresentation, TransferContractMetadata, TransferReference,
-    TransformConvention, TransformKey, ZeroPadding,
+    DescriptorError, FdmLayerDescriptor, GridGeometry, KernelAdmissionModel,
+    KernelCatalogPairBinding, KernelCatalogSpec, KernelMemoryAccounting, KernelPrecision,
+    KernelReuseCatalog, LayerFingerprintInputs, LayerGridDescriptor, NegativeLagMapping,
+    OrientedKernelPairDescriptor, OrientedPairDescriptor, TensorRepresentation,
+    TransferContractMetadata, TransferReference, TransformConvention, TransformKey, ZeroPadding,
 };
 
 // Re-export the main public types for convenience

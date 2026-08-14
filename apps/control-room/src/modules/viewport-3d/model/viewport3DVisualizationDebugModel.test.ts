@@ -123,6 +123,32 @@ function snapshot(carriers: readonly Viewport3DVisualizationDebugCarrierInput[],
 }
 
 describe("buildViewport3DVisualizationDebugSnapshot", () => {
+  it("keeps Airbox wireframe and vector flags on the committed frame", () => {
+    const result = buildViewport3DVisualizationDebugSnapshot({
+      capturedAtMs: 100,
+      carriers: [carrier()],
+      fieldCacheBudget: { byteLength: 240, entryCount: 1, maxBytes: 1024 },
+      frame: {
+        airboxVectorsVisible: true,
+        airboxWireframeVisible: false,
+        committedAtMs: 90,
+        commitId: "viewport-1:43",
+        contextLost: false,
+        drawingBuffer: [800, 600],
+        viewportId: "viewport-1",
+      },
+      target: { id: "airbox", kind: "airbox", label: "airbox" },
+      visualizationRevision: "43",
+      webglSharedByteLength: null,
+    });
+
+    expect(result.viewport).toMatchObject({
+      airboxVectorsVisible: true,
+      airboxWireframeVisible: false,
+      frameCommitId: "viewport-1:43",
+    });
+  });
+
   it("builds a complete scoped Airbox snapshot with exact memory rows", () => {
     const result = snapshot([carrier()]);
     expect(result.target).toEqual({ carrierIds: ["part:__air__"], id: "airbox", kind: "airbox", label: "airbox" });

@@ -407,11 +407,11 @@ void d07_runner_selection_and_fail_closed_matrix_is_covered() {
             "selection.rs");
 
     check(
-        cuda_runner.find("cuda_multilayer_two_d_mode_preserves_assisted_lane_without_d07") !=
+        cuda_runner.find("cuda_multilayer_two_d_mode_fails_closed_before_d07_or_probe") !=
                 std::string::npos &&
             cuda_runner.find("cuda_multilayer_rejects_forged_fingerprint_before_allocation") !=
                 std::string::npos,
-        "runner must preserve two_d_stack as assisted without D-07 telemetry and fail closed on forged three_d fingerprints");
+        "runner must fail closed on unqualified two_d_stack before D-07 or CUDA probing and reject forged fingerprints before allocation");
     check(
         cpu_runner.find("multilayer_runtime_rejects_push_pull_for_periodic_boundaries") !=
                 std::string::npos &&

@@ -323,15 +323,21 @@ for a lane, that lane rejects Oersted during relaxation.
 | `mu0` | vacuum permeability | `N/A^2` |
 | `gamma` | gyromagnetic ratio used with `H` | `m/(A s)` |
 | `alpha` | Gilbert damping | `1` |
-| `E` | total conservative energy | `J` |
+| `E` | total conservative energy | $\mathrm{J}$ |
 | `g` | tangent field gradient | `A/m` |
 | `p` | direct-minimizer search direction | `A/m` |
-| `lambda` | direct-minimizer line-search step | `m/A` |
+| `lambda` ($\lambda$) | direct-minimizer line-search step | $\mathrm{m\,A^{-1}}$ |
 | `V_i` | nodal/cell integration weight | `m^3` |
 | `max_torque_Apm` | maximum field equilibrium residual | `A/m` |
 | `max_torque_T` | `mu0` times field residual | `T` |
 | `max_rhs_norm_per_s` | maximum total dynamic RHS norm | `1/s` |
 | `relaxation_time_s` | LLG-relaxation stage-local clock | `s` |
+| `epsilon_E_single` ($\varepsilon_{E,\mathrm{single}}$) | FP32 CUDA absolute energy roundoff budget | $\mathrm{J}$ |
+| `epsilon_f32` ($\varepsilon_{\mathrm{f32}}$) | float32 machine epsilon | $1$ |
+| `E_trial` ($E_{\mathrm{trial}}$) | candidate trial energy in line search | $\mathrm{J}$ |
+| `E_previous` ($E_{\mathrm{previous}}$) | last accepted energy | $\mathrm{J}$ |
+| `c_1` ($c_1$) | Armijo coefficient | $1$ |
+| `phi_prime` ($\phi'(0)$) | physical-metric directional energy derivative | $\mathrm{J\,A\,m^{-1}}$ |
 
 (assumptions-and-validity)=
 ### 2.6 Assumptions and validity limits
@@ -365,6 +371,47 @@ sampled at the cell. CPU and CUDA use the same equations and weights.
   only Heun, its capability advertises only Heun and rejects other requests.
 - Every direct minimizer refreshes all conservative fields and energies for
   every trial entering line search.
+
+#### 3.1.1 FP32 CUDA Armijo resolution
+
+The CUDA FDM single-precision lane stores the magnetization and interaction
+fields as `float`, while its scalar energy reduction is exported as joules in
+`double`. Near an equilibrium, the physically expected decrease can therefore
+be smaller than the energy resolution induced by the FP32 state. Treating that
+roundoff as a backend failure would make a legal `execution_precision="single"`
+run stop before the torque criterion is reached.
+
+For a CUDA single-precision trial, the direct PG-BB line search uses the
+absolute energy budget
+
+```{math}
+:label: fdm-cuda-fp32-armijo-budget
+
+\\varepsilon_{E,\\mathrm{single}}(E)
+ = 8\\,\\varepsilon_{\\mathrm{f32}}\\,\\max(|E|,0),
+\\qquad
+\\varepsilon_{\\mathrm{f32}}=2^{-23},
+```
+
+and accepts a finite trial only when
+
+```{math}
+:label: fdm-cuda-fp32-armijo-acceptance
+
+E_{\\mathrm{trial}}
+ \\le E_{\\mathrm{previous}}
+ + c_1\\lambda\\,\\phi'(0)
+ + \\varepsilon_{E,\\mathrm{single}}(E_{\\mathrm{previous}}).
+```
+
+The budget has unit `J`, is applied only to the internal trial decision, and
+does not modify the reported energy, torque, or stop threshold. CUDA double and
+the CPU reference keep the strict budget `\\varepsilon_E=0`. The policy is a
+roundoff guard, not an energy-increase allowance for a macroscopic change: the
+budget remains bounded by the current FP32 energy scale, and the accepted state
+must still pass the canonical fresh torque criterion. No CPU fallback is
+performed; provenance continues to identify the CUDA device and requested
+precision.
 
 ### 3.2 FEM
 
@@ -808,6 +855,11 @@ from the current runs.
 | `scripts/validate_fem_relaxation_equilibrium_parity.py` | `compare_equilibrium_states` | Compares converged CPU/GPU states without requiring equal step counts. |
 | `scripts/analysis/fem_gpu_benchmark.py` | `equilibrium_parity_summary` | Produces the versioned parity summary from benchmark rows. |
 | `examples/bench_fem_gpu_long.py` | `solver_time_to_tolerance_evidence` | Computes native accepted-step time to the first torque-qualified state. |
+| `crates/fullmag-runner/src/relaxation/direct_minimizer.rs` | `fp32ArmijoBudget` / `direct_minimizer_energy_tolerance_j` | Resolves the bounded FP32 CUDA energy budget. |
+| `crates/fullmag-runner/src/relaxation/direct_minimizer.rs` | `fp32ArmijoAcceptance` / `projected_gradient_armijo_accepts_with_tolerance` | Applies precision-aware Armijo acceptance. |
+| `crates/fullmag-runner/src/fdm/gpu/cuda/direct_minimizer.rs` | `cudaDirectMinimizer` / `execute_direct_minimizer` | Executes the CUDA FDM direct-minimizer loop. |
+| `backends/fdm/gpu/cuda/runtime/telemetry.cu` | `nativeF32Energy` / `context_fill_current_stats` | Publishes FP32-state energy reductions as joules. |
+| `crates/fullmag-runner/src/relaxation/direct_minimizer.rs` | `fp32ArmijoRegression` / `single_precision_armijo_uses_bounded_energy_roundoff_budget` | Guards single-vs-double acceptance semantics. |
 
 (scientific-bibliography)=
 ## 8. References

@@ -30,19 +30,17 @@ export function viewportSelectionForDomain(
 
 export function viewportSelectionForFdmUniverseOutsideSupport(): ViewportSelectionPatch {
   return {
-    // Select the shared Airbox Visualization child so the common
-    // ObjectVisualizationPanel opens for both FEM and FDM.  The ref keeps the
-    // FDM grid scope and target id for resource/renderer routing.
+    // The FDM grid is only a renderer carrier.  A viewport pick opens the
+    // same public Airbox Visualization target as Explorer and FEM.
     kind: "airbox.visualization",
     label: "Airbox",
     nodeId: "model:airbox:visualization",
     objectId: null,
     ref: {
-      kind: "mesh.grid.universe-outside-support",
+      kind: "airbox.visualization",
       nodeId: "model:airbox:visualization",
-      scope: "universe-outside-support",
-      type: "fdm-domain",
-      visualizationTargetId: "fdm-universe-outside-support",
+      type: "airbox",
+      visualizationTargetId: "airbox",
     },
   };
 }

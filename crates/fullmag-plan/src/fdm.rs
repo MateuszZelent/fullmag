@@ -1,3 +1,8 @@
+use fullmag_fdm_demag::{
+    ActiveMaskIdentity, CommonTransformLayout, ConvolutionMode, FdmLayerDescriptor, GridGeometry,
+    KernelAdmissionModel, KernelCatalogSpec, KernelMemoryAccounting, KernelPrecision,
+    TensorRepresentation, TransferKind,
+};
 use fullmag_ir::{
     AxisBoundary, BackendPlanIR, BackendTarget, CommonPlanMeta, DiscretizationHintsIR,
     EnergyTermIR, ExchangeBoundaryCondition, ExchangeCouplingModeIR, ExecutionPlanIR,
@@ -90,6 +95,215 @@ pub fn checked_multilayer_pair_kernel_footprint(
                 "multilayer_convolution kernel payload byte overflow: requested_counts={requested_counts} layer_count={layer_count}"
             )],
         })
+}
+
+/// Shared planner/runtime resolution of the canonical multilayer kernel catalog.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResolvedMultilayerKernelMemory {
+    pub catalog: KernelCatalogSpec,
+    pub accounting: KernelMemoryAccounting,
+    pub common_grid_bytes: u64,
+    pub native_grid_bytes: u64,
+    pub aggregate_bytes: u64,
+}
+
+pub fn checked_multilayer_aggregate_memory_bytes(
+    common_grid_bytes: u64,
+    native_grid_bytes: u64,
+    kernel_bytes: u64,
+) -> Result<u64, PlanError> {
+    let aggregate_bytes = common_grid_bytes
+        .checked_add(native_grid_bytes)
+        .and_then(|bytes| bytes.checked_add(kernel_bytes))
+        .ok_or_else(|| PlanError {
+            reasons: vec![
+                "multilayer_convolution aggregate memory overflow before allocation".to_string(),
+            ],
+        })?;
+    if aggregate_bytes > crate::FDM_GRID_MAX_BYTES {
+        return Err(PlanError {
+            reasons: vec![format!(
+                "multilayer_convolution aggregate memory budget exceeded: common_grid_bytes={common_grid_bytes} native_grid_bytes={native_grid_bytes} kernel_bytes={kernel_bytes} estimated_bytes={aggregate_bytes} max_bytes={}",
+                crate::FDM_GRID_MAX_BYTES
+            )],
+        });
+    }
+    Ok(aggregate_bytes)
+}
+
+pub fn resolve_multilayer_kernel_memory(
+    mode: &str,
+    common_cells: [u32; 3],
+    layers: &[FdmLayerPlanIR],
+    precision: ExecutionPrecision,
+    demag_enabled: bool,
+    admission_model: KernelAdmissionModel,
+) -> Result<ResolvedMultilayerKernelMemory, PlanError> {
+    let mode = match mode {
+        "two_d_stack" => ConvolutionMode::TwoDStack,
+        "three_d" => ConvolutionMode::ThreeD,
+        other => {
+            return Err(PlanError {
+                reasons: vec![format!(
+                    "unsupported multilayer kernel catalog mode '{other}'"
+                )],
+            })
+        }
+    };
+    let common_cells = common_cells.map(|value| value as usize);
+    if common_cells.contains(&0) || (mode == ConvolutionMode::TwoDStack && common_cells[2] != 1) {
+        return Err(PlanError {
+            reasons: vec![format!(
+                "invalid multilayer kernel catalog common grid {common_cells:?} for mode {mode:?}"
+            )],
+        });
+    }
+    let mut fft_shape = [0_usize; 3];
+    for axis in 0..3 {
+        fft_shape[axis] = common_cells[axis].checked_mul(2).ok_or_else(|| PlanError {
+            reasons: vec!["multilayer kernel FFT shape overflow".to_string()],
+        })?;
+    }
+    if mode == ConvolutionMode::TwoDStack {
+        fft_shape[2] = 1;
+    }
+    let fft_samples = fft_shape.into_iter().try_fold(1_usize, |product, value| {
+        product.checked_mul(value).ok_or_else(|| PlanError {
+            reasons: vec!["multilayer kernel FFT normalization overflow".to_string()],
+        })
+    })?;
+    let layout = CommonTransformLayout::for_pair(
+        common_cells,
+        common_cells,
+        mode,
+        [0; 3],
+        [0; 3],
+        [0; 3],
+        common_cells,
+        fft_shape,
+        1.0 / fft_samples as f64,
+    )
+    .map_err(|error| PlanError {
+        reasons: vec![format!(
+            "invalid multilayer kernel transform layout: {error}"
+        )],
+    })?;
+    let descriptors = layers
+        .iter()
+        .map(|layer| {
+            let native = GridGeometry::new(
+                layer.native_origin,
+                layer.native_grid.map(|value| value as usize),
+                layer.native_cell_size,
+            )?;
+            let scratch = GridGeometry::new(
+                layer.convolution_origin,
+                layer.convolution_grid.map(|value| value as usize),
+                layer.convolution_cell_size,
+            )?;
+            let active_mask = layer
+                .native_active_mask
+                .as_deref()
+                .map(ActiveMaskIdentity::from_mask)
+                .unwrap_or_else(ActiveMaskIdentity::all_active);
+            let transfer = match layer.transfer_kind.as_str() {
+                "identity" => TransferKind::Identity,
+                "push_pull" => TransferKind::PushPull,
+                other => {
+                    return Err(fullmag_fdm_demag::DescriptorError::Invalid(format!(
+                        "layer '{}' has unsupported transfer_kind '{other}'",
+                        layer.layer_id
+                    )))
+                }
+            };
+            FdmLayerDescriptor::new(
+                layer.layer_id.clone(),
+                layer.object_id.clone(),
+                native,
+                scratch,
+                mode,
+                active_mask,
+                transfer,
+            )
+        })
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| PlanError {
+            reasons: vec![format!(
+                "invalid multilayer kernel layer descriptor: {error}"
+            )],
+        })?;
+    let kernel_precision = match precision {
+        ExecutionPrecision::Single => KernelPrecision::F32,
+        ExecutionPrecision::Double => KernelPrecision::F64,
+    };
+    let catalog = KernelCatalogSpec::build_for_layers_with_layout(
+        &descriptors,
+        &layout,
+        TensorRepresentation::FullComplex,
+        kernel_precision,
+    )
+    .map_err(|error| PlanError {
+        reasons: vec![format!("invalid multilayer kernel catalog: {error}")],
+    })?;
+    let accounting = KernelMemoryAccounting::for_catalog(
+        &catalog,
+        &layout,
+        common_cells,
+        demag_enabled,
+        admission_model,
+    )
+    .map_err(|error| PlanError {
+        reasons: vec![format!(
+            "invalid multilayer kernel memory accounting: {error}"
+        )],
+    })?;
+    let common_grid_bytes = checked_fdm_grid_cost(
+        common_cells.map(|value| value as u32),
+        FDM_GRID_ESTIMATED_BYTES_PER_CELL,
+    )?
+    .estimated_bytes;
+    let native_grid_bytes = layers.iter().try_fold(0_u64, |bytes, layer| {
+        let layer_bytes =
+            checked_fdm_grid_cost(layer.native_grid, FDM_GRID_ESTIMATED_BYTES_PER_CELL)?
+                .estimated_bytes;
+        bytes.checked_add(layer_bytes).ok_or_else(|| PlanError {
+            reasons: vec![
+                "multilayer_convolution native-grid aggregate memory overflow".to_string(),
+            ],
+        })
+    })?;
+    let aggregate_bytes = checked_multilayer_aggregate_memory_bytes(
+        common_grid_bytes,
+        native_grid_bytes,
+        accounting.admission_bytes,
+    )
+    .map_err(|error| PlanError {
+        reasons: error
+            .reasons
+            .into_iter()
+            .map(|reason| {
+                format!(
+                    "admission_model={} {reason}",
+                    accounting.admission_model.as_str()
+                )
+            })
+            .collect(),
+    })?;
+    let catalog = if admission_model == KernelAdmissionModel::CudaNativeSingleGrid {
+        KernelCatalogSpec {
+            keys: Vec::new(),
+            pair_bindings: Vec::new(),
+        }
+    } else {
+        catalog
+    };
+    Ok(ResolvedMultilayerKernelMemory {
+        catalog,
+        accounting,
+        common_grid_bytes,
+        native_grid_bytes,
+        aggregate_bytes,
+    })
 }
 
 fn grid_sample_points(
@@ -2258,7 +2472,7 @@ fn fdm_layer_xy_center(layer: &FdmLayerPlanIR) -> [f64; 2] {
     ]
 }
 
-fn fdm_multilayer_cuda_native_single_grid_eligible(layers: &[FdmLayerPlanIR]) -> bool {
+pub fn fdm_multilayer_cuda_native_single_grid_eligible(layers: &[FdmLayerPlanIR]) -> bool {
     let Some(first_layer) = layers.first() else {
         return false;
     };
@@ -2314,14 +2528,13 @@ fn fdm_multilayer_cuda_native_single_grid_eligible(layers: &[FdmLayerPlanIR]) ->
         Ok(values) if values.len() == 3 => [values[0], values[1], values[2]],
         _ => return false,
     };
-    let Ok(global_cost) = checked_fdm_grid_cost(global_grid_u32, FDM_GRID_ESTIMATED_BYTES_PER_CELL)
-    else {
+    if checked_fdm_grid_cost(global_grid_u32, FDM_GRID_ESTIMATED_BYTES_PER_CELL).is_err() {
         return false;
-    };
-    let Ok(total_cells) = usize::try_from(global_cost.cells) else {
-        return false;
-    };
-    let mut active_mask = vec![false; total_cells];
+    }
+    // Eligibility is resolved before aggregate admission. Keep this check
+    // allocation-free so a large candidate cannot materialize a global mask
+    // before the common/native/kernel memory budget has been accepted.
+    let mut occupied_boxes: Vec<([usize; 3], [usize; 3])> = Vec::with_capacity(layers.len());
 
     for layer in layers {
         let native_grid = [
@@ -2339,32 +2552,22 @@ fn fdm_multilayer_cuda_native_single_grid_eligible(layers: &[FdmLayerPlanIR]) ->
             }
             offset[axis] = rounded as usize;
         }
-        for z in 0..native_grid[2] {
-            for y in 0..native_grid[1] {
-                for x in 0..native_grid[0] {
-                    let local_index = z * native_grid[1] * native_grid[0] + y * native_grid[0] + x;
-                    if layer
-                        .native_active_mask
-                        .as_ref()
-                        .is_some_and(|mask| !mask[local_index])
-                    {
-                        continue;
-                    }
-                    let gx = offset[0] + x;
-                    let gy = offset[1] + y;
-                    let gz = offset[2] + z;
-                    if gx >= global_grid[0] || gy >= global_grid[1] || gz >= global_grid[2] {
-                        return false;
-                    }
-                    let global_index =
-                        gz * global_grid[1] * global_grid[0] + gy * global_grid[0] + gx;
-                    if active_mask[global_index] {
-                        return false;
-                    }
-                    active_mask[global_index] = true;
-                }
+        let mut end = [0usize; 3];
+        for axis in 0..3 {
+            let Some(value) = offset[axis].checked_add(native_grid[axis]) else {
+                return false;
+            };
+            if value > global_grid[axis] {
+                return false;
             }
+            end[axis] = value;
         }
+        if occupied_boxes.iter().any(|(other_offset, other_end)| {
+            (0..3).all(|axis| offset[axis] < other_end[axis] && other_offset[axis] < end[axis])
+        }) {
+            return false;
+        }
+        occupied_boxes.push((offset, end));
     }
 
     true
@@ -3088,60 +3291,6 @@ pub(crate) fn plan_fdm_multilayer(
         }
     }
 
-    let mut unique_shifts = BTreeSet::new();
-    for dst in &lowered_bodies {
-        for src in &lowered_bodies {
-            unique_shifts.insert(
-                ((dst.native_origin[2] - src.native_origin[2]) / convolution_cell_size[2]).round()
-                    as i64,
-            );
-        }
-    }
-
-    let estimated_unique_kernels = match u32::try_from(unique_shifts.len()) {
-        Ok(count) => count,
-        Err(_) => {
-            errors.push(format!(
-                "multilayer_convolution unique shift telemetry exceeds u32: unique_shifts={}",
-                unique_shifts.len()
-            ));
-            0
-        }
-    };
-    let estimated_pair_kernels = match u64::try_from(lowered_bodies.len())
-        .ok()
-        .and_then(|count| count.checked_mul(count))
-        .and_then(|count| u32::try_from(count).ok())
-    {
-        Some(count) => count,
-        None => {
-            errors.push(format!(
-                "multilayer_convolution pair kernel telemetry exceeds ABI v2 u32 limit: layer_count={}",
-                lowered_bodies.len()
-            ));
-            0
-        }
-    };
-    let estimated_kernel_bytes = if enable_demag {
-        match checked_multilayer_pair_kernel_footprint(common_cells, lowered_bodies.len()) {
-            Ok(estimated_kernel_bytes) if estimated_kernel_bytes <= crate::FDM_GRID_MAX_BYTES => {
-                estimated_kernel_bytes
-            }
-            Ok(estimated_kernel_bytes) => {
-                errors.push(format!(
-                    "multilayer_convolution kernel memory budget exceeded: estimated_bytes={estimated_kernel_bytes} max_bytes={}",
-                    crate::FDM_GRID_MAX_BYTES
-                ));
-                0
-            }
-            Err(error) => {
-                errors.extend(error.reasons);
-                0
-            }
-        }
-    } else {
-        0
-    };
     let common_grid_cost = checked_fdm_grid_cost(common_cells, FDM_GRID_ESTIMATED_BYTES_PER_CELL)?;
 
     let resolved_periodic_images = match problem.pbc.as_ref() {
@@ -3243,6 +3392,57 @@ pub(crate) fn plan_fdm_multilayer(
             }
         })
         .collect::<Vec<_>>();
+    let native_cuda_single_grid = runtime_requests_cuda(problem)
+        && requested_strategy == "auto"
+        && integrator != Some(IntegratorChoice::Heun)
+        && fdm_multilayer_cuda_native_single_grid_eligible(&layers);
+    let kernel_admission_model = if native_cuda_single_grid {
+        KernelAdmissionModel::CudaNativeSingleGrid
+    } else if runtime_requests_cuda(problem) {
+        KernelAdmissionModel::CudaAbiV2PairPayload
+    } else {
+        KernelAdmissionModel::CpuFp64Catalog
+    };
+    let (estimated_pair_kernels, estimated_unique_kernels, estimated_kernel_bytes) =
+        match resolve_multilayer_kernel_memory(
+            &selected_mode,
+            common_cells,
+            &layers,
+            problem.backend_policy.execution_precision,
+            enable_demag,
+            kernel_admission_model,
+        ) {
+            Ok(resolved) => {
+                let pair_count =
+                    u32::try_from(resolved.catalog.pair_bindings.len()).map_err(|_| PlanError {
+                        reasons: vec![
+                            "multilayer_convolution pair kernel telemetry exceeds u32".to_string()
+                        ],
+                    })?;
+                let unique_count =
+                    u32::try_from(resolved.catalog.keys.len()).map_err(|_| PlanError {
+                        reasons: vec!["multilayer_convolution unique kernel telemetry exceeds u32"
+                            .to_string()],
+                    })?;
+                if resolved.aggregate_bytes > crate::FDM_GRID_MAX_BYTES {
+                    errors.push(format!(
+                        "multilayer_convolution aggregate memory budget exceeded: admission_model={} estimated_bytes={} max_bytes={}",
+                        resolved.accounting.admission_model.as_str(),
+                        resolved.aggregate_bytes,
+                        crate::FDM_GRID_MAX_BYTES
+                    ));
+                }
+                (
+                    pair_count,
+                    unique_count,
+                    resolved.accounting.admission_bytes,
+                )
+            }
+            Err(error) => {
+                errors.extend(error.reasons);
+                (0, 0, 0)
+            }
+        };
     let multilayer_topology_tokens =
         fullmag_ir::fdm_multilayer_topology_tokens(&selected_mode, &layers);
     if runtime_requests_cuda(problem) {
@@ -3259,6 +3459,7 @@ pub(crate) fn plan_fdm_multilayer(
     }
     let native_cuda_lane = runtime_requests_cuda(problem)
         && requested_strategy == "auto"
+        && integrator != Some(IntegratorChoice::Heun)
         && fdm_multilayer_cuda_native_single_grid_eligible(&layers);
     let requested_auto_integrator = problem.study.optional_dynamics().is_some_and(|dynamics| {
         let fullmag_ir::DynamicsIR::Llg { integrator, .. } = dynamics;
@@ -3336,12 +3537,23 @@ pub(crate) fn plan_fdm_multilayer(
             estimated_pair_kernels,
             estimated_unique_kernels,
             estimated_kernel_bytes,
-            warnings: if has_distinct_xy_geometry {
-                vec![
+            warnings: {
+                let mut warnings = if has_distinct_xy_geometry {
+                    vec![
                     "xy_geometry_uses_common_scratch_transfer; native CUDA identity lane remains fail-closed until it consumes per-layer insertion/crop descriptors".to_string(),
-                ]
-            } else {
-                Vec::new()
+                    ]
+                } else {
+                    Vec::new()
+                };
+                if enable_demag
+                    && kernel_admission_model == KernelAdmissionModel::CudaAbiV2PairPayload
+                {
+                    warnings.push(format!(
+                        "cuda_abi_v2_l_squared_pair_payload: pair_kernels={} unique_catalog_kernels={} estimated_bytes={estimated_kernel_bytes}",
+                        estimated_pair_kernels, estimated_unique_kernels
+                    ));
+                }
+                warnings
             },
         },
     };

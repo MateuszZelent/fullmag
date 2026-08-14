@@ -45,10 +45,42 @@ pub(crate) fn runtime_requests_cuda(problem: &ProblemIR) -> bool {
     problem
         .problem_meta
         .runtime_metadata
-        .get("runtime_selection")
+        .get("runtime_device_override")
+        .or_else(|| {
+            problem
+                .problem_meta
+                .runtime_metadata
+                .get("runtime_selection")
+        })
         .and_then(|v| v.get("device"))
         .and_then(|v| v.as_str())
         .is_some_and(|d| d == "cuda" || d == "gpu")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::runtime_requests_cuda;
+    use fullmag_ir::ProblemIR;
+
+    #[test]
+    fn managed_gpu_override_is_used_without_rewriting_authored_selection() {
+        let mut problem = ProblemIR::bootstrap_example();
+        problem.problem_meta.runtime_metadata.insert(
+            "runtime_selection".to_string(),
+            serde_json::json!({"device": "auto"}),
+        );
+        assert!(!runtime_requests_cuda(&problem));
+
+        problem.problem_meta.runtime_metadata.insert(
+            "runtime_device_override".to_string(),
+            serde_json::json!({"device": "gpu", "source": "managed_launcher"}),
+        );
+        assert!(runtime_requests_cuda(&problem));
+        assert_eq!(
+            problem.problem_meta.runtime_metadata["runtime_selection"]["device"],
+            "auto"
+        );
+    }
 }
 
 pub(crate) fn mesh_workflow_metadata(

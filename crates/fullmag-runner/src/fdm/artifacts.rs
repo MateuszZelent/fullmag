@@ -1,6 +1,9 @@
 //! Shared FDM artifact helpers.
 
-use crate::types::{AuxiliaryArtifact, ExecutionProvenance, RunError, StateObservables};
+use crate::{
+    artifacts::build_identity_json,
+    types::{AuxiliaryArtifact, ExecutionProvenance, RunError, StateObservables},
+};
 use fullmag_ir::{BackendPlanIR, ExecutionPlanIR};
 use serde::Serialize;
 
@@ -111,6 +114,7 @@ pub(crate) fn grid_certificate_artifacts(plan: &ExecutionPlanIR) -> Vec<Auxiliar
     };
     let Ok(bytes) = serde_json::to_vec_pretty(&serde_json::json!({
         "schema_version": "fdm_grid_certificate.v1",
+        "build_identity": build_identity_json(),
         "certificate": certificate,
     })) else {
         return Vec::new();
@@ -313,6 +317,7 @@ pub(crate) fn transfer_provenance_artifacts(plan: &ExecutionPlanIR) -> Vec<Auxil
     let Ok(bytes) = serde_json::to_vec_pretty(&serde_json::json!({
         "schema_version": "fdm_transfer_provenance.v1",
         "backend": "fdm_multilayer",
+        "build_identity": build_identity_json(),
         "target_grid_fingerprint": target_certificate.grid_fingerprint,
         "periodic_axes": periodic_axes,
         "boundary_policy": boundary_policy,
@@ -391,6 +396,7 @@ pub(crate) fn pbc_provenance_artifacts(
         .or_else(|| provenance.demag_operator_kind.clone());
     let value = serde_json::json!({
         "schema_version": "fdm_pbc_provenance.v1",
+        "build_identity": build_identity_json(),
         "requested_periodicity": requested_periodicity,
         "resolved": {
             "origin_m": origin_m,

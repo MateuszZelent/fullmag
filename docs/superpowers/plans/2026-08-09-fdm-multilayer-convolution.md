@@ -2,7 +2,15 @@
 
 > Data: 2026-08-09
 >
-> Status: wdrożenie częściowe; CPU FP64, transfer `push_pull` i zbieżność target-only Airboxa mają świeże dowody. Resource-first API, osobny liść Explorer/Inspector, target resolution i kontrakt target-only viewportu są zaimplementowane oraz niezależnie zreviewowane jako `contract/model verified`; świeży runtime `compute_fields`/WebGL, CUDA/device parity i pełna kwalifikacja pozostają otwarte.
+> Status: wdrożenie częściowe. Lane CPU FP64 jest wykonywalny, ale bieżący
+> materiał dowodowy nie kwalifikuje go jeszcze naukowo. Kontrakt CUDA jest
+> zielony wyłącznie na poziomie build/source/ABI; dedykowany managed runtime
+> CUDA pozostaje zablokowany przez synchronizację source snapshotu z runtime'em
+> i verifierem. Resource-first API, osobny liść Explorer/Inspector, target
+> resolution i kontrakt target-only viewportu są zaimplementowane oraz
+> niezależnie zreviewowane jako `contract/model verified`; świeży runtime
+> `compute_fields`/WebGL, CUDA/device parity i pełna kwalifikacja pozostają
+> otwarte.
 >
 > Właściciel semantyki naukowej: `docs/physics/0421-fdm-multilayer-convolution-demag.md`
 >
@@ -22,23 +30,70 @@
 > device residency D-07 są blokerami P0, a nie wyłącznie brakami finalnej
 > kwalifikacji.
 
+## Korekta bramek managed — 2026-08-14
+
+- `just verify-fdm-multilayer-demag-runtime cpu-fp64` jest bramką CPU. Obecny
+  lane jest wykonywalny, lecz nie ma jeszcze kompletnego, source-bound dowodu
+  spełnienia kryteriów naukowych, więc pozostaje `not_qualified`.
+- `just verify-fdm-multilayer-demag-runtime cuda-fp64` i wariant `cuda-fp32`
+  nie są prawidłowymi bramkami CUDA. Receptura `demag-runtime` celowo odrzuca
+  lane'y CUDA fail-closed.
+- Właścicielem runtime CUDA są dokładnie
+  `just verify-fdm-multilayer-cuda-runtime cuda-fp64` oraz
+  `just verify-fdm-multilayer-cuda-runtime cuda-fp32`.
+- Kontrakt CUDA build/source/ABI jest zielony, ale żadnego lane'u runtime CUDA
+  nie promowano. Bieżącym blokerem jest spójne powiązanie source snapshotu,
+  manifestu zbudowanego runtime'u i wejść verifiera w jednym niezmiennym
+  przebiegu.
+- Wizualna bramka Airboxa zachowuje normatywną kolejność: najpierw wireframe,
+  potem osobna klatka z wyłączonym wireframe i wyłączonymi wektorami, a dopiero
+  następnie włączenie wektorów.
+- Machine-readable capability matrix nie promuje już
+  `fdm_multilayer_fixed_explicit_rk` jako `fdm_gpu_production=production_executable`:
+  status GPU pozostaje `implemented`, bez `validated_workloads`, dopóki nie
+  powstanie niezmienny managed receipt z device identity, licznikami `L+L`,
+  parity, residency i provenance.
+
 ## Korekta stanu — 2026-08-11
 
 | Obszar | Stan po audycie | Decyzja |
 |---|---|---|
 | Python/ProblemIR/planner | częściowo wykonawcze | domknąć typed enums, reason codes, Scene v3, stable object ID i fail-closed `boundary_*` |
-| CPU FP64 identity/shift | lokalnie zweryfikowane zakresowo | odtworzyć jako source-bound managed receipt |
+| CPU FP64 identity/shift | lokalnie zweryfikowane zakresowo; receptura source-bound jest zaimplementowana, świeży receipt nadal oczekuje na pełny przebieg | wykonać managed run i zarchiwizować immutable receipt |
 | CPU `push_pull` | lokalnie zweryfikowane dla różnych extentów i `V_native != V_scratch`; brak direct oracle dla `h_source,z != h_destination,z` | zachować scoped validation, nie rozszerzać jej na unequal native-cell thickness |
-| D-06 | planner liczy shift-only, runtime bogatszy katalog, CUDA alokuje `L^2` | naprawić przed dalszą kwalifikacją pamięci |
+| D-06 | Wspólny `KernelCatalogSpec` jest używany przez descriptor, planner i CPU runtime; fixed-width `src/dst/kernel_index` bindings oraz accounting CPU/CUDA ABI są identycznie wyliczane i testowane. CUDA native single-grid ma jawny model admission z zerowym payloadem katalogu. | utrzymać fail-closed rozdział CPU/catalog, CUDA ABI-v2/L² i native single-grid; nie promować CUDA bez device/runtime proof oraz immutable receipt |
 | CUDA-assisted | publicznie wywoływalne, lecz niekanoniczne dla części heterogenicznego zakresu | fail-close albo użyć wspólnego descriptorowego operatora |
 | D-07 | `L/L/L^2` wewnątrz refreshu | nie kwalifikuje całego solvera; wymagane zero realnych vector H2D/D2H w warm step |
-| API/UI/viewport | kontrakty i testy modelu istnieją | brak świeżego runtime/WebGL proof; rename/object-ID i scratch-grid UI otwarte |
+| API/UI/viewport | kontrakty, target identity, Explorer/Inspector i strict frame-sequence testy istnieją | brak świeżego runtime/WebGL proof; source-bound receipt musi być zgodny z serving API |
 | Airbox | target-only CPU carrier istnieje | przenieść z eager post-run do on-demand `compute_fields`, dodać maskę i FFT counters |
 | Production | niekwalifikowane | fazy containment, CPU oracle, ABI v3/CUDA, round-trip i pełna kwalifikacja pozostają otwarte |
 
 Artefakty lokalne bez śledzonego pełnego SHA są dowodem diagnostycznym, nie
 immutable production receipt. Historyczne liczby suite i Chromium smoke poniżej
 opisują wcześniejszy snapshot; nie są dowodem bieżącego HEAD.
+
+## Korekta source-bound artefaktów i WebGL — 2026-08-14
+
+- Każdy finalny artefakt pola/membership oraz plik `H_demag.samples.v1.json`
+  musi przenosić tę samą `build_identity` co metadata; carrier Airboxa nadal
+  dodatkowo porównuje ją z raportem runtime. Verifier egzekwuje teraz obecność
+  i zgodność identity w top-level manifestu, samples oraz
+  `source_runtime_identity`.
+- Receptura `run-fdm-multilayer-webgl-matrix-cpu` przechwytuje snapshot źródeł
+  przed buildem, wstrzykuje go do `fullmag-build-info`, wymaga porównania
+  snapshotu po przebiegu i przekazuje oczekiwaną tożsamość do smoke.
+- Smoke odczytuje `x-fullmag-build-identity` z serving API i fail-close, jeżeli
+  commit, stan worktree lub SHA snapshotu nie są identyczne z receipt; evidence
+  zapisuje `build_identity` oraz ścieżkę snapshotu.
+- Receptura zapisuje stabilny `reason_code` dla błędów przed uruchomieniem,
+  porównuje snapshot także po nieudanym przebiegu i po zakończeniu ustawia
+  katalog receipt/evidence jako tylko do odczytu. Przed sealingiem tworzy
+  `receipt-inputs-sha256.txt`, `receipt-index.v1.json` i jego plik SHA-256;
+  indeks wiąże source identity, runtime binary, evidence i manifest.
+- Formalny przebieg WebGL nadal musi wykonać kolejno osobne committed frames:
+  `wireframe_on(true,false)`, `wireframe_off(false,false)`,
+  `vectors_on(false,true)`. Self-test przechodzi, ale świeży browser/WebGL
+  runtime pozostaje nieuruchomiony.
 
 ## Stan wykonania — 2026-08-10
 
@@ -372,6 +427,17 @@ push_all_sources
 ```
 
 Licznik etapów jest częścią testowalnej diagnostyki. Dla `L` magnetycznych warstw oczekiwane są `L` forward i `L` inverse niezależnie od `L²` par.
+
+**Stan implementacji 2026-08-14:** w runnerze istnieje ograniczona ścieżka
+`cuda_native_multilayer_convolution` dla FP64, stałego Heuna, `three_d` i
+wspólnej siatki identity. Nie promuje ona jeszcze FP32, różnych `h_z` ani
+`push_pull`; pozostałe przypadki zachowują jawny native-stacked/CUDA-assisted
+wybór. Snapshot końcowy sprawdza kanoniczną sumę `H_eff` i raportuje wyłącznie
+rzeczywiste transfery wektorowych buforów. Source-layout oraz testy jednostkowe
+tej ścieżki przechodzą, a kontrakt CUDA build/source/ABI jest zielony. Nie jest
+to runtime proof: dedykowane bramki `verify-fdm-multilayer-cuda-runtime`
+pozostają zablokowane przez synchronizację source snapshotu z runtime'em i
+verifierem.
 
 ### D-08. Airbox jest target-only observation carrier
 
@@ -1129,8 +1195,8 @@ Zbieżność jest PASS tylko, gdy błąd maleje monotonicznie w zakresie nienasy
 
 - `just verify-fdm-multilayer-demag-contract`;
 - `just verify-fdm-multilayer-demag-runtime cpu-fp64`;
-- `just verify-fdm-multilayer-demag-runtime cuda-fp64`;
-- `just verify-fdm-multilayer-demag-runtime cuda-fp32`;
+- `just verify-fdm-multilayer-cuda-runtime cuda-fp64`;
+- `just verify-fdm-multilayer-cuda-runtime cuda-fp32`;
 - `just verify-fdm-multilayer-airbox-runtime cpu-fp64`;
 - `just verify-fdm-multilayer-airbox-runtime cuda-fp64`;
 - `just verify-fdm-multilayer-airbox-runtime cuda-fp32`;
@@ -1148,7 +1214,7 @@ Recipes są właścicielem kontenera, natywnego builda i runtime. Ręczne hostow
 - OpenAPI/generated client drift;
 - capability negative cases.
 
-**Runtime recipes obejmują:**
+**CPU runtime recipe i dedykowane CUDA runtime recipes obejmują:**
 
 - publiczny Python → runner E2E;
 - dokładnie jeden requested lane na wywołanie;
@@ -1231,6 +1297,13 @@ Automatyczny smoke musi asertywnie sprawdzić:
 - ograniczoną liczbę workerów/listenerów/buforów po wielokrotnych przełączeniach;
 - brak canvas listenera ukrytej warstwy.
 
+Dla Airbox wektorów kolejność jest normatywna i musi być dowiedziona osobnymi
+rewizjami PATCH oraz osobnymi klatkami debug WebGL: najpierw
+`wireframe=true, vectors=false`, następnie `wireframe=false, vectors=false`, a
+dopiero potem `wireframe=false, vectors=true`. Snapshot klatki musi zawierać
+flagi obu przełączników razem z `frameCommitId`; odpowiedź pola i adopcja
+wektorów muszą pochodzić z tej samej, świeżej rewizji co trzeci etap.
+
 Screenshot bez tych asercji nie jest dowodem kwalifikacji.
 
 ### Etap 17. Promocja dokumentacji i capability
@@ -1263,8 +1336,8 @@ Poniższe komendy są focused gates. Hostowe Rust/C++ checks są diagnostyką; m
 | frontend lint | `pnpm --dir apps/control-room lint` | PASS |
 | managed contract | `just verify-fdm-multilayer-demag-contract` | wykonane native targets, brak skip |
 | CPU runtime | `just verify-fdm-multilayer-demag-runtime cpu-fp64` | qualified albo jawny FAIL artifact |
-| CUDA FP64 | `just verify-fdm-multilayer-demag-runtime cuda-fp64` | device-resident, brak fallbacku |
-| CUDA FP32 | `just verify-fdm-multilayer-demag-runtime cuda-fp32` | osobna precision parity |
+| CUDA FP64 | `just verify-fdm-multilayer-cuda-runtime cuda-fp64` | device-resident, brak fallbacku |
+| CUDA FP32 | `just verify-fdm-multilayer-cuda-runtime cuda-fp32` | osobna precision parity |
 | Airbox lanes | `just verify-fdm-multilayer-airbox-runtime cpu-fp64` oraz warianty `cuda-fp64`, `cuda-fp32` | osobne D1/D2 artifacts |
 | pełna promocja | `just verify-fdm-multilayer-demag-production` | agregacja wszystkich obowiązkowych PASS |
 

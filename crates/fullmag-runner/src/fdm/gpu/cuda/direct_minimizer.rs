@@ -10,10 +10,11 @@ use crate::artifact_pipeline::ArtifactRecorder;
 use crate::fdm::gpu::cuda::native::NativeFdmBackend;
 use crate::interactive_runtime::{display_is_global_scalar, display_refresh_due};
 use crate::relaxation::direct_minimizer::{
-    apply_direct_minimizer_step_metrics, direct_minimizer_gradient_degenerate,
-    direct_minimizer_gradient_invalid, direct_minimizer_within_runtime_budget, energy_metric_dot,
-    nonlinear_cg_descent_direction_dot, nonlinear_cg_initial_step_size, nonlinear_cg_line_search,
-    nonlinear_cg_next_direction, projected_gradient_line_search,
+    apply_direct_minimizer_step_metrics, direct_minimizer_energy_tolerance_j,
+    direct_minimizer_gradient_degenerate, direct_minimizer_gradient_invalid,
+    direct_minimizer_within_runtime_budget, energy_metric_dot, nonlinear_cg_descent_direction_dot,
+    nonlinear_cg_initial_step_size, nonlinear_cg_line_search_with_tolerance,
+    nonlinear_cg_next_direction, projected_gradient_line_search_with_tolerance,
     projected_gradient_step_size_update, snapshot_trial_evaluation_counts,
     DirectMinimizerAlgorithm, DirectMinimizerControl, DirectMinimizerState,
     DirectMinimizerTrialEvaluation, NONLINEAR_CG_MAX_BACKTRACK, PROJECTED_GRADIENT_MAX_BACKTRACK,
@@ -157,16 +158,19 @@ pub(crate) fn execute_direct_minimizer(
         }
 
         let mut trial_lambda = state.step_size;
+        let energy_tolerance_j =
+            direct_minimizer_energy_tolerance_j(plan.precision, state.energy_j);
         let (trial_stats, m_trial, line_search_backtracks, energy_evaluations) =
             match direct_minimizer.algorithm {
                 DirectMinimizerAlgorithm::ProjectedGradientBb => {
                     let direction_dot_gradient_j_per_step = -weighted_gradient_norm_sq;
-                    let Some(accepted_trial) = projected_gradient_line_search(
+                    let Some(accepted_trial) = projected_gradient_line_search_with_tolerance(
                         state.energy_j,
                         direction_dot_gradient_j_per_step,
                         &state.magnetization,
                         &state.gradient,
                         trial_lambda,
+                        energy_tolerance_j,
                         |trial| {
                             backend.upload_magnetization(trial)?;
                             let mut stats = backend.snapshot_step_stats(plan.grid.cells)?;
@@ -226,12 +230,13 @@ pub(crate) fn execute_direct_minimizer(
                     );
                     trial_lambda = nonlinear_cg_initial_step_size(&state.search_direction);
 
-                    let Some(accepted_trial) = nonlinear_cg_line_search(
+                    let Some(accepted_trial) = nonlinear_cg_line_search_with_tolerance(
                         state.energy_j,
                         p_dot_g,
                         &state.magnetization,
                         &state.search_direction,
                         trial_lambda,
+                        energy_tolerance_j,
                         |trial| {
                             backend.upload_magnetization(trial)?;
                             let mut stats = backend.snapshot_step_stats(plan.grid.cells)?;

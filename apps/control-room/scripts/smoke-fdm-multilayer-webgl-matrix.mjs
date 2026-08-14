@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { mkdir, rename, unlink, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
+import { exactVisualizationAdoptionMatches } from "./smoke-fdm-terminal-webgl-gate.mjs";
 
 const apiBase = (process.env.CONTROL_ROOM_API_BASE_URL ?? "http://127.0.0.1:18284").replace(/\/$/, "");
 const workspaceUrl = process.env.CONTROL_ROOM_URL ?? "http://127.0.0.1:3284/workspace";
@@ -13,10 +14,22 @@ const vectorBudget = Number(process.env.CONTROL_ROOM_FDM_MULTILAYER_MATRIX_VECTO
 const diagnosticReadbackMode = process.env.CONTROL_ROOM_FDM_MULTILAYER_DIAGNOSTIC_READBACK_MODE ?? "per-case";
 const diagnosticTracePath = process.env.CONTROL_ROOM_FDM_MULTILAYER_DIAGNOSTIC_TRACE_PATH ?? null;
 const selfTestOnly = process.env.CONTROL_ROOM_FDM_MULTILAYER_SELF_TEST_ONLY === "1";
+const airboxOnly = process.env.CONTROL_ROOM_FDM_MULTILAYER_AIRBOX_ONLY === "1";
+const expectedBuildIdentity = expectedBuildIdentityFromEnvironment();
+const expectedSourceSnapshotPath = process.env.CONTROL_ROOM_FDM_MULTILAYER_EXPECTED_SOURCE_SNAPSHOT_PATH ?? null;
+const expectedRuntimeBinarySha256 = process.env.CONTROL_ROOM_FDM_MULTILAYER_EXPECTED_RUNTIME_BINARY_SHA256 ?? null;
 if (!["per-case", "none", "deferred"].includes(diagnosticReadbackMode)) {
   throw new Error(`Unsupported diagnostic readback mode: ${diagnosticReadbackMode}`);
 }
 const canvasSelector = ".fm-viewport-3d canvas";
+const airboxDebugTarget = {
+  debugInspectorOwner: "airbox.visualization.debug",
+  debugNodeId: "model:airbox:visualization:debug",
+  inspectorOwner: "airbox.visualization",
+  nodeId: "model:airbox:visualization",
+  parentNodeIds: ["model:airbox"],
+  targetId: "airbox",
+};
 const quantities = ["m", "H_demag"];
 const geometries = ["surface", "wireframe", "points"];
 const presentations = ["field", "vector"];
@@ -36,8 +49,13 @@ async function main() {
   attemptState.stage = "artifact preparation";
   assertLayerFieldRequestMatcherSelfTest();
   assertAirboxFieldRequestMatcherSelfTest();
+  assertGeometryOnlyAirboxRequestFilterSelfTest();
+  assertAirboxResponseRequestCorrelationSelfTest();
   assertExactListenerMatcherSelfTest();
   assertAirboxIsolationPatchSelfTest();
+  assertAirboxSurfaceStyleSelfTest();
+  assertAirboxPresentationSequenceSelfTest();
+  assertSourceBoundBuildIdentitySelfTest();
   assertDiagnosticQualificationSelfTest();
   if (selfTestOnly) {
     console.log("FDM multilayer WebGL smoke self-tests passed.");
@@ -48,6 +66,9 @@ async function main() {
   const status = await getJson("/v2/sessions/current/status");
   attemptState.session_id = status?.session?.session_id ?? status?.session_id ?? null;
   const layout = await getJson("/v2/sessions/current/data/domain/fdm-multilayer-layout");
+  const openapi = await getJson("/v2/platform/openapi.json");
+  const buildIdentity = assertSourceBoundBuildIdentity(openapi, expectedBuildIdentity);
+  assertRuntimeBinaryReceipt(expectedRuntimeBinarySha256);
   const runtimeProvenance = assertRuntimeProvenance(status);
   const layers = assertMultilayerLayout(status, layout);
   attemptState.stage = "compute_fields";
@@ -86,6 +107,9 @@ async function main() {
   }
   const consoleErrors = [];
   const fieldRequests = [];
+  const fieldResponses = [];
+  const fieldRequestIds = new WeakMap();
+  let nextFieldRequestId = 1;
   const geometryRequests = [];
   const networkFailures = [];
   page.on("console", (message) => {
@@ -97,7 +121,13 @@ async function main() {
     if (request.method() !== "GET") return;
     const url = new URL(request.url());
     if (/\/data\/fields\/[^/]+\/samples\/vector$/.test(url.pathname)) {
-      const fieldRequest = { path: url.pathname, search: url.search, timestamp: Date.now() };
+      const fieldRequest = {
+        path: url.pathname,
+        request_id: `field-request-${nextFieldRequestId++}`,
+        search: url.search,
+        timestamp: Date.now(),
+      };
+      fieldRequestIds.set(request, fieldRequest.request_id);
       fieldRequests.push(fieldRequest);
       console.log(`FDM multilayer browser field request: ${JSON.stringify(fieldRequest)}`);
     }
@@ -110,7 +140,24 @@ async function main() {
     }
   });
   page.on("response", (response) => {
-    if (response.status() >= 400) networkFailures.push({ status: response.status(), url: response.url() });
+    const status = response.status();
+    if (status >= 400) networkFailures.push({ status, url: response.url() });
+    if (
+      response.request().method() === "GET" &&
+      /\/data\/fields\/[^/]+\/samples\/vector(?:\?|$)/.test(response.url()) &&
+      status >= 200 &&
+      status < 300
+    ) {
+      const url = response.url();
+      fieldResponses.push({
+        field_request_id: fieldRequestIds.get(response.request()) ?? null,
+        handle: response,
+        query: Object.fromEntries(new URL(url).searchParams),
+        response_started_at_ms: Date.now(),
+        status,
+        url,
+      });
+    }
   });
   await page.addInitScript((baseUrl) => {
     window.__FULLMAG_CONFIG__ = {
@@ -129,16 +176,20 @@ async function main() {
       undefined,
       { timeout: timeoutMs },
     );
-    attemptState.stage = "native target preflight";
-    const nativeTargetSurface = await assertNativeLayerTargetSurface(page, layers);
-    attemptState.stage = "dual-visible native layer gate";
-    await cdp?.send("Tracing.recordClockSyncMarker", { syncId: "dual-visible-start" });
-    const dualVisibleBaseline = await runDualVisibleNativeLayerGate({ fieldRequests, layers, page });
-    await cdp?.send("Tracing.recordClockSyncMarker", { syncId: "dual-visible-end" });
-    attemptState.stage = "native layer matrix";
+    let nativeTargetSurface = null;
+    let dualVisibleBaseline = null;
     const matrix = [];
     const diagnosticReadbacks = [];
-    for (const layer of layers) {
+    if (!airboxOnly) {
+      attemptState.stage = "native target preflight";
+      nativeTargetSurface = await assertNativeLayerTargetSurface(page, layers);
+      attemptState.stage = "dual-visible native layer gate";
+      await cdp?.send("Tracing.recordClockSyncMarker", { syncId: "dual-visible-start" });
+      dualVisibleBaseline = await runDualVisibleNativeLayerGate({ fieldRequests, layers, page });
+      await cdp?.send("Tracing.recordClockSyncMarker", { syncId: "dual-visible-end" });
+      attemptState.stage = "native layer matrix";
+    }
+    for (const layer of airboxOnly ? [] : layers) {
       // Qualify the selected native carrier at full fidelity without making
       // the other physical layer part of the same render workload.  This is
       // target isolation, not decimation: every cell of the selected layer
@@ -175,10 +226,19 @@ async function main() {
     attemptState.stage = "Airbox matrix";
     const airbox = [];
     for (const mode of ["wireframe", "points", "vectors", "h_demag"]) {
-      airbox.push(await runAirboxCase({ fieldRequests, geometryRequests, layout, mode, page }));
+      airbox.push(await runAirboxCase({
+        fieldRequests,
+        fieldResponses,
+        geometryRequests,
+        layout,
+        mode,
+        page,
+      }));
     }
     attemptState.stage = "interaction matrix";
-    const interaction = await runInteractionCases({ fieldRequests, geometryRequests, layers, layout, page });
+    const interaction = airboxOnly
+      ? null
+      : await runInteractionCases({ fieldRequests, geometryRequests, layers, layout, page });
     if (consoleErrors.length > 0) throw new Error(`Browser console errors: ${JSON.stringify(consoleErrors)}`);
     if (networkFailures.length > 0) throw new Error(`Browser HTTP failures: ${JSON.stringify(networkFailures)}`);
     assertNoScratchCarrierRequests(fieldRequests, layout);
@@ -200,6 +260,15 @@ async function main() {
       diagnostic_readback_mode: diagnosticReadbackMode,
       diagnostic_readbacks: diagnosticReadbacks,
       airbox,
+      airbox_only: airboxOnly,
+      build_identity: buildIdentity,
+      source_snapshot: {
+        path: expectedSourceSnapshotPath,
+        sha256: buildIdentity.source_snapshot_sha256,
+      },
+      runtime_binary: {
+        sha256: expectedRuntimeBinarySha256,
+      },
       network_failures: networkFailures,
       native_target_surface: nativeTargetSurface,
       dual_visible_baseline: dualVisibleBaseline,
@@ -426,57 +495,235 @@ async function runLayerMatrixCase({ fieldRequests, geometry, geometryRequests, l
   };
 }
 
-async function runAirboxCase({ fieldRequests, geometryRequests, layout, mode, page }) {
+async function runAirboxCase({
+  fieldRequests,
+  fieldResponses,
+  geometryRequests,
+  layout,
+  mode,
+  page,
+}) {
   const display = airboxDisplayForMode(mode);
+  const fieldRequired = display.vectors || display.surface;
+  const applyDisplay = async (nextDisplay) => patchJson(
+    "/v2/sessions/current/visualization/state",
+    {
+      active_quantity_id: "H_demag",
+      layers: {
+        airbox: {
+          points: { visible: nextDisplay.points },
+          surface: { visible: nextDisplay.surface },
+          vectors: { density: vectorBudget, domain: "airbox_only", visible: nextDisplay.vectors },
+          visible: true,
+          wireframe: { visible: nextDisplay.wireframe },
+        },
+      },
+      overrides: [{
+        display: {
+          geometry_scope: "full",
+          points: { visible: nextDisplay.points },
+          surface: { visible: nextDisplay.surface },
+          vectors: { visible: nextDisplay.vectors },
+          visible: true,
+          wireframe: { visible: nextDisplay.wireframe },
+        },
+        quantity: { active_quantity_id: "H_demag" },
+        scope: "airbox",
+        scope_id: "airbox",
+        style: buildAirboxOverrideStyle(nextDisplay),
+        visible: true,
+      }],
+      quantity: { active_quantity_id: "H_demag" },
+    },
+  );
+  const fieldOffDisplay = {
+    points: false,
+    surface: false,
+    vectors: false,
+    wireframe: false,
+  };
+  if (fieldRequired) {
+    await applyDisplay(fieldOffDisplay);
+    await poll("Airbox field passes disabled before reload", async () => {
+      const state = await getJson("/v2/sessions/current/visualization/state");
+      const settings = state.targets?.airbox?.settings;
+      return settings?.surface_visible === false &&
+        settings?.vectors_visible === false &&
+        settings?.wireframe_visible === false
+        ? settings
+        : null;
+    });
+    await page.reload({ waitUntil: "domcontentloaded", timeout: timeoutMs });
+    await ensureHealthyCanvas(page);
+    await page.waitForFunction(
+      () => typeof window.__FULLMAG_CONTROL_ROOM_AUDIT__?.readViewportAuditRuntime === "function",
+      undefined,
+      { timeout: timeoutMs },
+    );
+  }
   const geometryRequestCountBefore = geometryRequests.length;
   const fieldRequestCountBefore = fieldRequests.length;
-  await patchJson("/v2/sessions/current/visualization/state", {
-    active_quantity_id: "H_demag",
-    layers: {
-      airbox: {
-        points: { visible: display.points },
-        surface: { visible: display.surface },
-        vectors: { density: vectorBudget, domain: "airbox_only", visible: display.vectors },
-        visible: true,
-        wireframe: { visible: display.wireframe },
-      },
-    },
-    overrides: [{
-      display: {
-        geometry_scope: "full",
-        points: { visible: display.points },
-        surface: { visible: display.surface },
-        vectors: { visible: display.vectors },
-        visible: true,
-        wireframe: { visible: display.wireframe },
-      },
-      quantity: { active_quantity_id: "H_demag" },
-      scope: "airbox",
-      scope_id: "airbox",
-      style: { vector_budget: vectorBudget },
-      visible: true,
-    }],
-    quantity: { active_quantity_id: "H_demag" },
-  });
-  const fieldRequestProof = await waitForAirboxRequest(
-    fieldRequests,
-    fieldRequestCountBefore,
-  );
+  const fieldResponseCountBefore = fieldResponses.length;
+  let disabledPresentation = null;
+  let preSwitchAdoptions = new Map();
+  let switchStartedAtMs = null;
+  let visualizationRevision = null;
+  let wireframePresentation = null;
+  if (mode === "vectors") {
+    const wireframeStartedAtMs = Date.now();
+    const wireframeResponse = await applyDisplay({ ...fieldOffDisplay, wireframe: true });
+    const wireframeRevision = responseRevision(wireframeResponse);
+    wireframePresentation = await waitForAirboxCommittedPresentation({
+      afterFrameCommitId: null,
+      expectedVisualizationRevision: wireframeRevision,
+      page,
+      switchStartedAtMs: wireframeStartedAtMs,
+      vectorsVisible: false,
+      wireframeVisible: true,
+    });
+    const disableStartedAtMs = Date.now();
+    const disableResponse = await applyDisplay(fieldOffDisplay);
+    const disableRevision = responseRevision(disableResponse);
+    disabledPresentation = await waitForAirboxCommittedPresentation({
+      afterFrameCommitId: wireframePresentation.frame_commit_id,
+      expectedVisualizationRevision: disableRevision,
+      page,
+      switchStartedAtMs: disableStartedAtMs,
+      vectorsVisible: false,
+      wireframeVisible: false,
+    });
+    preSwitchAdoptions = await captureLatestExactAirboxAdoptions(page);
+    switchStartedAtMs = Date.now();
+    visualizationRevision = responseRevision(await applyDisplay(display));
+  } else {
+    if (fieldRequired) {
+      preSwitchAdoptions = await captureLatestExactAirboxAdoptions(page);
+      switchStartedAtMs = Date.now();
+    }
+    const displayResponse = await applyDisplay(display);
+    if (fieldRequired) visualizationRevision = responseRevision(displayResponse);
+  }
+  // A wireframe/points-only presentation is geometry-only by contract.  It
+  // must not force a field request merely because the target's selected
+  // quantity is H_demag.  Field-backed presentations (vectors and scalar
+  // surface) must prove the canonical Airbox request.
+  const fieldRequestProof = fieldRequired
+    ? await waitForAirboxRequest(fieldRequests, fieldRequestCountBefore, switchStartedAtMs)
+    : {
+        observed_after_case_start: false,
+        request: null,
+        request_index: null,
+      };
+  const completedFieldResponse = fieldRequired
+    ? await waitForCompletedAirboxFieldResponse(
+        fieldResponses,
+        fieldResponseCountBefore,
+        switchStartedAtMs,
+        fieldRequestProof.request?.request_id ?? null,
+      )
+    : null;
   const state = await getJson("/v2/sessions/current/visualization/state");
   const settings = state.targets?.airbox?.settings;
   assertAirboxPresentation(settings, mode, display);
   const canvas = await ensureHealthyCanvas(page);
+  let lastDomEvidence = null;
+  let domEvidence;
+  try {
+    domEvidence = await poll(
+      `Airbox ${mode} prepared scene data`,
+      async () => {
+        const viewport = page.locator(".fm-viewport-3d");
+        const evidence = await viewport.evaluate((element) => ({
+          build_error: element.getAttribute("data-fdm-airbox-build-error"),
+          build_status: element.getAttribute("data-fdm-airbox-build-status"),
+          domain_cell_count: Number(element.getAttribute("data-fdm-airbox-domain-cell-count") ?? 0),
+          model_count: Number(element.getAttribute("data-fdm-airbox-model-count") ?? 0),
+          target: element.getAttribute("data-fdm-airbox-target"),
+          vector_segment_count: Number(element.getAttribute("data-fdm-airbox-vector-segment-count") ?? 0),
+          vectors_visible: element.getAttribute("data-fdm-airbox-vectors-visible") === "true",
+          view_present: element.getAttribute("data-fdm-airbox-view-present") === "true",
+          wireframe_visible: element.getAttribute("data-fdm-airbox-wireframe-visible") === "true",
+        }));
+        lastDomEvidence = evidence;
+        if (
+          evidence.target !== "airbox" ||
+          !evidence.view_present ||
+          evidence.domain_cell_count <= 0 ||
+          evidence.model_count <= 0 ||
+          evidence.build_status !== "ready" ||
+          evidence.build_error
+        ) {
+          return null;
+        }
+        if (mode === "vectors") {
+          if (evidence.wireframe_visible || !evidence.vectors_visible || evidence.vector_segment_count <= 0) return null;
+        } else if (mode === "wireframe" && !evidence.wireframe_visible) {
+          return null;
+        }
+        return evidence;
+      },
+    );
+  } catch (error) {
+    throw new Error(`${error.message}; last_dom_evidence=${JSON.stringify(lastDomEvidence)}`);
+  }
+  const webglAdoption = completedFieldResponse
+    ? await waitForExactAirboxVisualizationAdoption({
+        page,
+        preSwitchAdoptionSequence:
+          preSwitchAdoptions.get(completedFieldResponse.resource_key)?.[
+            mode === "h_demag" ? "surface" : "vector"
+          ] ?? null,
+        renderPass: mode === "h_demag" ? "surface" : "vector-glyph",
+        response: completedFieldResponse,
+        switchStartedAtMs,
+        expectedVisualizationRevision: visualizationRevision,
+        expectedVectorsVisible: mode === "vectors",
+        expectedWireframeVisible: false,
+      })
+    : null;
   const runtime = await pageAuditSnapshot(page);
   const listenerCount = exactAirboxListenerCount(runtime);
-  if (!fieldRequestProof.observed_after_case_start && listenerCount <= 0) {
-    throw new Error(`Cached Airbox H_demag request has no positive current listener proof: ${JSON.stringify(fieldRequestProof)}`);
+  if (fieldRequired && listenerCount <= 0) {
+    throw new Error(
+      `Airbox H_demag has no positive exact current listener: ${JSON.stringify({
+        completedFieldResponse,
+        fieldRequestProof,
+      })}`,
+    );
+  }
+  if (fieldRequired && !fieldRequestProof.observed_after_case_start) {
+    throw new Error(
+      `Airbox H_demag request was not fresh for ${mode}: ${JSON.stringify(fieldRequestProof)}`,
+    );
+  }
+  const unexpectedAirboxFieldRequests = fieldRequired
+    ? []
+    : exactAirboxFieldRequestsAfter(fieldRequests, fieldRequestCountBefore);
+  if (unexpectedAirboxFieldRequests.length > 0) {
+    throw new Error(
+      `Geometry-only Airbox ${mode} unexpectedly requested field data: ${JSON.stringify(
+        unexpectedAirboxFieldRequests,
+      )}`,
+    );
   }
   assertNoGeometryRequestsAfterSwitch(geometryRequests, geometryRequestCountBefore, `airbox-${mode}`);
   const fidelity = await assertCanvasHasFidelity(page);
+  const presentationSequence = mode === "vectors"
+    ? [
+        { phase: "wireframe_on", ...wireframePresentation },
+        { phase: "wireframe_off", ...disabledPresentation },
+        { phase: "vectors_on", ...webglAdoption },
+      ]
+    : null;
+  if (presentationSequence) assertAirboxVectorPresentationSequence(presentationSequence);
   return {
     canvas,
     case_id: `airbox-${mode}`,
     carrier_fingerprint: layout.airbox.carrier_fingerprint,
+    completed_field_response: completedFieldResponse,
+    disabled_presentation: disabledPresentation,
+    presentation_sequence: presentationSequence,
+    prepared_dom_evidence: domEvidence,
     field_request_count_after: fieldRequests.length,
     field_request_count_before: fieldRequestCountBefore,
     field_request_proof: fieldRequestProof,
@@ -487,8 +734,353 @@ async function runAirboxCase({ fieldRequests, geometryRequests, layout, mode, pa
     mode,
     runtime,
     listener_count: listenerCount,
+    webgl_adoption: webglAdoption,
     screenshot: await captureCanvas(page, `${artifactDir}/airbox-${mode}.png`),
   };
+}
+
+async function waitForCompletedAirboxFieldResponse(
+  responses,
+  start,
+  startedAtMs = null,
+  fieldRequestId = null,
+) {
+  const entry = await poll("fresh completed Airbox H_demag response", () =>
+    responses.slice(start).find((candidate) =>
+      matchesAirboxFieldResponse(candidate, startedAtMs, fieldRequestId)) ?? null,
+  );
+  const responseBodyStartedAtMs = Date.now();
+  const headers = await entry.handle.allHeaders();
+  const bodyError = await entry.handle.finished();
+  if (bodyError) {
+    throw new Error(
+      `Airbox H_demag response body did not finish for ${entry.url}: ${bodyError.message}`,
+    );
+  }
+  const url = new URL(entry.url);
+  return {
+    domain_generation_id: normalizedResponseHeader(
+      headers,
+      "x-fullmag-domain-generation-id",
+    ),
+    etag: normalizedResponseHeader(headers, "etag"),
+    field_revision: normalizedResponseHeader(headers, "x-fullmag-field-revision"),
+    mesh_topology_hash: normalizedResponseHeader(
+      headers,
+      "x-fullmag-mesh-topology-hash",
+    ),
+    field_request_id: entry.field_request_id,
+    query: entry.query,
+    resource_key: `${url.pathname}${url.search}`,
+    response_body_started_at_ms: responseBodyStartedAtMs,
+    response_finished_at_ms: Date.now(),
+    response_started_at_ms: entry.response_started_at_ms,
+    status: entry.status,
+    url: entry.url,
+  };
+}
+
+function matchesAirboxFieldResponse(candidate, startedAtMs, fieldRequestId) {
+  const url = new URL(candidate.url);
+  return candidate.status >= 200 &&
+    candidate.status < 300 &&
+    (startedAtMs === null || candidate.response_started_at_ms >= startedAtMs) &&
+    candidate.field_request_id === fieldRequestId &&
+    url.pathname === "/v2/sessions/current/data/fields/H_demag/samples/vector" &&
+    url.searchParams.get("scope_kind") === "airbox" &&
+    url.searchParams.get("scope_id") === "airbox";
+}
+
+function normalizedResponseHeader(headers, name) {
+  const value = headers[name];
+  return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+function explorerTreeItem(page, nodeId) {
+  return page.locator(
+    `[role="treeitem"][data-node-id=${JSON.stringify(nodeId)}]`,
+  );
+}
+
+async function selectAirboxVisualizationDebug(page) {
+  const modelTab = page.getByRole("tab", { name: "Model", exact: true });
+  await modelTab.waitFor({ state: "visible", timeout: timeoutMs });
+  if (await modelTab.getAttribute("aria-selected") !== "true") {
+    await modelTab.click({ timeout: timeoutMs });
+  }
+  for (const nodeId of [
+    airboxDebugTarget.parentNodeIds[0],
+    airboxDebugTarget.nodeId,
+  ]) {
+    const node = explorerTreeItem(page, nodeId);
+    await node.waitFor({ state: "visible", timeout: timeoutMs });
+    if (await node.getAttribute("aria-expanded") === "false") {
+      await node.focus();
+      await page.keyboard.press("ArrowRight");
+    }
+  }
+  const row = explorerTreeItem(page, airboxDebugTarget.debugNodeId);
+  await row.waitFor({ state: "visible", timeout: timeoutMs });
+  await row.click({ timeout: timeoutMs });
+  await poll("Airbox Visualization Debug selection", async () =>
+    await row.getAttribute("aria-selected") === "true" ? true : null,
+  );
+  const inspector = page.locator(
+    `.fm-inspector-panel[data-inspector-owner="${airboxDebugTarget.debugInspectorOwner}"]`,
+  );
+  await inspector.waitFor({ state: "visible", timeout: timeoutMs });
+  await inspector.locator(".fm-visualization-debug-panel").waitFor({
+    state: "visible",
+    timeout: timeoutMs,
+  });
+  const rawJson = inspector.getByRole("button", {
+    name: "Raw bounded JSON",
+    exact: true,
+  });
+  await rawJson.waitFor({ state: "visible", timeout: timeoutMs });
+  if (await rawJson.getAttribute("aria-expanded") === "false") {
+    await rawJson.click({ timeout: timeoutMs });
+  }
+  return inspector;
+}
+
+async function readAirboxVisualizationDebugDocument(inspector) {
+  return poll("Airbox Visualization Debug raw JSON", async () => {
+    const text = await inspector
+      .locator(".fm-visualization-debug-json code")
+      .textContent();
+    return text ? JSON.parse(text) : null;
+  });
+}
+
+function latestAirboxVisualizationObservation(document) {
+  if (document?.model?.target?.id !== airboxDebugTarget.targetId) return null;
+  let latest = null;
+  for (const viewport of document.model.viewports ?? []) {
+    for (const carrierGroup of viewport?.carriers ?? []) {
+      for (const observation of carrierGroup?.observations ?? []) {
+        if (observation?.carrier?.carrierId !== airboxDebugTarget.targetId) {
+          continue;
+        }
+        if (
+          Number.isFinite(observation?.snapshot?.capturedAtMs) &&
+          (latest === null ||
+            observation.snapshot.capturedAtMs >= latest.snapshot.capturedAtMs)
+        ) {
+          latest = observation;
+        }
+      }
+    }
+  }
+  return latest;
+}
+
+async function waitForAirboxCommittedPresentation({
+  afterFrameCommitId,
+  expectedVisualizationRevision,
+  page,
+  switchStartedAtMs,
+  vectorsVisible,
+  wireframeVisible,
+}) {
+  const inspector = await selectAirboxVisualizationDebug(page);
+  return poll("committed Airbox presentation frame", async () => {
+    const prepared = await page.locator(".fm-viewport-3d").evaluate((element) => ({
+      target: element.getAttribute("data-fdm-airbox-target"),
+      vectors_visible:
+        element.getAttribute("data-fdm-airbox-vectors-visible") === "true",
+      wireframe_visible:
+        element.getAttribute("data-fdm-airbox-wireframe-visible") === "true",
+    }));
+    if (
+      prepared.target !== airboxDebugTarget.targetId ||
+      prepared.vectors_visible !== vectorsVisible ||
+      prepared.wireframe_visible !== wireframeVisible
+    ) {
+      return null;
+    }
+    const observation = latestAirboxVisualizationObservation(
+      await readAirboxVisualizationDebugDocument(inspector),
+    );
+    const frameCommitId = observation?.snapshot?.viewport?.frameCommitId;
+    const viewportId = observation?.snapshot?.viewport?.viewportId;
+    const capturedAtMs = observation?.snapshot?.capturedAtMs;
+    const observedVisualizationRevision =
+      observation?.carrier?.revisions?.visualizationRevision;
+    const frameWireframeVisible = observation?.snapshot?.viewport?.airboxWireframeVisible;
+    const frameVectorsVisible = observation?.snapshot?.viewport?.airboxVectorsVisible;
+    return frameCommitId &&
+      frameCommitId !== afterFrameCommitId &&
+      viewportId &&
+      frameCommitId === `${viewportId}:${expectedVisualizationRevision}` &&
+      observedVisualizationRevision === String(expectedVisualizationRevision) &&
+      frameWireframeVisible === wireframeVisible &&
+      frameVectorsVisible === vectorsVisible &&
+      Number.isFinite(capturedAtMs) &&
+      capturedAtMs >= switchStartedAtMs
+      ? {
+          captured_at_ms: capturedAtMs,
+          frame_commit_id: frameCommitId,
+          visualization_revision: Number.parseInt(observedVisualizationRevision, 10),
+          vectors_visible: frameVectorsVisible,
+          wireframe_visible: frameWireframeVisible,
+        }
+      : null;
+  });
+}
+
+async function captureLatestExactAirboxAdoptions(page) {
+  const inspector = await selectAirboxVisualizationDebug(page);
+  const document = await readAirboxVisualizationDebugDocument(inspector);
+  const adoptions = new Map();
+  for (const viewport of document?.model?.viewports ?? []) {
+    for (const carrierGroup of viewport?.carriers ?? []) {
+      for (const observation of carrierGroup?.observations ?? []) {
+        if (observation?.carrier?.carrierId !== airboxDebugTarget.targetId) {
+          continue;
+        }
+        const resourceKey = observation?.carrier?.request?.resourceKey;
+        const adoption = observation?.carrier?.render?.adoption;
+        if (!resourceKey || !adoption) continue;
+        const current = adoptions.get(resourceKey) ?? {
+          surface: null,
+          vector: null,
+        };
+        for (const pass of ["surface", "vector"]) {
+          const sequence = adoption[pass]?.adoptionSequence;
+          if (
+            Number.isSafeInteger(sequence) &&
+            (current[pass] === null || sequence > current[pass])
+          ) {
+            current[pass] = sequence;
+          }
+        }
+        adoptions.set(resourceKey, current);
+      }
+    }
+  }
+  return adoptions;
+}
+
+function findExactAirboxVisualizationObservation(
+  document,
+  resourceKey,
+  adoptionKind,
+) {
+  if (document?.model?.target?.id !== airboxDebugTarget.targetId) return null;
+  let latest = null;
+  for (const viewport of document.model.viewports ?? []) {
+    for (const carrierGroup of viewport?.carriers ?? []) {
+      for (const observation of carrierGroup?.observations ?? []) {
+        const passAdoption =
+          observation?.carrier?.render?.adoption?.[adoptionKind];
+        const latestAdoption =
+          latest?.carrier?.render?.adoption?.[adoptionKind];
+        if (
+          observation?.carrier?.carrierId === airboxDebugTarget.targetId &&
+          observation?.carrier?.request?.resourceKey === resourceKey &&
+          Number.isSafeInteger(passAdoption?.adoptionSequence) &&
+          (latest === null ||
+            passAdoption.adoptionSequence > latestAdoption.adoptionSequence)
+        ) {
+          latest = observation;
+        }
+      }
+    }
+  }
+  return latest;
+}
+
+async function waitForExactAirboxVisualizationAdoption({
+  expectedVisualizationRevision,
+  expectedVectorsVisible,
+  expectedWireframeVisible,
+  page,
+  preSwitchAdoptionSequence,
+  renderPass,
+  response,
+  switchStartedAtMs,
+}) {
+  const inspector = await selectAirboxVisualizationDebug(page);
+  const adoptionKind = renderPass === "surface" ? "surface" : "vector";
+  return poll(`exact Airbox ${renderPass} WebGL adoption`, async () => {
+    const observation = findExactAirboxVisualizationObservation(
+      await readAirboxVisualizationDebugDocument(inspector),
+      response.resource_key,
+      adoptionKind,
+    );
+    if (
+      !observation ||
+      !exactVisualizationAdoptionMatches({
+        observation,
+        preSwitchAdoptionSequence,
+        quantityId: "H_demag",
+        renderPass,
+        response,
+        switchStartedAtMs,
+      })
+    ) {
+      return null;
+    }
+    const carrier = observation.carrier;
+    const viewport = observation.snapshot.viewport;
+    if (
+      !viewport.viewportId ||
+      viewport.frameCommitId !==
+        `${viewport.viewportId}:${expectedVisualizationRevision}` ||
+      viewport.airboxVectorsVisible !== expectedVectorsVisible ||
+      viewport.airboxWireframeVisible !== expectedWireframeVisible ||
+      carrier.revisions?.visualizationRevision !==
+        String(expectedVisualizationRevision)
+    ) {
+      return null;
+    }
+    const passAdoption = carrier.render.adoption[adoptionKind];
+    if (
+      response.response_finished_at_ms < response.response_started_at_ms ||
+      observation.snapshot.capturedAtMs < passAdoption.adoptedAtMs ||
+      carrier.render.fieldBufferState !== "target-buffer" ||
+      carrier.render.requestedFieldBufferId !==
+        passAdoption.adoptedFieldBufferId
+    ) {
+      return null;
+    }
+    if (renderPass === "surface") {
+      if (
+        !(carrier.render.surface.scalarByteLength > 0) ||
+        !carrier.render.surface.bufferKey ||
+        carrier.render.surface.bufferKey !==
+          passAdoption.adoptedScalarBufferKey
+      ) {
+        return null;
+      }
+    } else if (
+      !(carrier.render.vectors.segmentCount > 0) ||
+      !(passAdoption.adoptedVectorItemCount > 0) ||
+      !carrier.render.vectors.buildKey ||
+      carrier.render.vectors.buildKey !==
+        passAdoption.adoptedVectorBuildKey
+    ) {
+      return null;
+    }
+    return {
+      adopted_at_ms: passAdoption.adoptedAtMs,
+      adopted_field_buffer_id: passAdoption.adoptedFieldBufferId,
+      adopted_resource_key: passAdoption.adoptedResourceKey,
+      adoption_sequence: passAdoption.adoptionSequence,
+      frame_commit_id: observation.snapshot.viewport.frameCommitId,
+      captured_at_ms: observation.snapshot.capturedAtMs,
+      render_pass: renderPass,
+      response_finished_at_ms: response.response_finished_at_ms,
+      snapshot_captured_at_ms: observation.snapshot.capturedAtMs,
+      vectors_visible: viewport.airboxVectorsVisible,
+      visualization_revision: Number.parseInt(
+        carrier.revisions.visualizationRevision,
+        10,
+      ),
+      wireframe_visible: viewport.airboxWireframeVisible,
+    };
+  });
 }
 
 function airboxDisplayForMode(mode) {
@@ -506,6 +1098,59 @@ function airboxDisplayForMode(mode) {
   return display;
 }
 
+function buildAirboxOverrideStyle(nextDisplay) {
+  return {
+    ...(nextDisplay.surface
+      ? { surface_color_source: "magnitude" }
+      : {}),
+    ...(nextDisplay.vectors
+      ? {
+          vector_alpha: 1,
+          vector_color_mode: "monochrome",
+          vector_length_scale: 1,
+          vector_mono_color: "#11111b",
+          vector_thickness: 2,
+        }
+      : {}),
+    vector_budget: vectorBudget,
+  };
+}
+
+function assertAirboxSurfaceStyleSelfTest() {
+  const surfaceStyle = buildAirboxOverrideStyle(
+    airboxDisplayForMode("h_demag"),
+  );
+  if (surfaceStyle.surface_color_source !== "magnitude") {
+    throw new Error(
+      "Airbox H_demag surface self-test requires a field-derived surface color source.",
+    );
+  }
+  if (
+    Object.hasOwn(
+      buildAirboxOverrideStyle(airboxDisplayForMode("vectors")),
+      "surface_color_source",
+    )
+  ) {
+    throw new Error(
+      "Airbox vector self-test must not fabricate a surface color source.",
+    );
+  }
+  const vectorStyle = buildAirboxOverrideStyle(
+    airboxDisplayForMode("vectors"),
+  );
+  if (
+    vectorStyle.vector_length_scale !== 1 ||
+    vectorStyle.vector_thickness !== 2 ||
+    vectorStyle.vector_alpha !== 1 ||
+    vectorStyle.vector_color_mode !== "monochrome" ||
+    vectorStyle.vector_mono_color !== "#11111b"
+  ) {
+    throw new Error(
+      "Airbox vector self-test requires an opaque, readable vector presentation.",
+    );
+  }
+}
+
 function assertAirboxPresentation(settings, mode, display) {
   const actualQuantity = String(settings?.active_quantity_id ?? "").toLowerCase();
   if (
@@ -517,6 +1162,9 @@ function assertAirboxPresentation(settings, mode, display) {
     settings.wireframe_visible !== display.wireframe
   ) {
     throw new Error(`Airbox ${mode} state was not adopted: ${JSON.stringify(settings)}`);
+  }
+  if (mode === "vectors" && (display.wireframe || !display.vectors)) {
+    throw new Error("Airbox vectors case must disable wireframe before enabling vectors.");
   }
 }
 
@@ -638,6 +1286,85 @@ function assertRuntimeProvenance(status) {
     source,
     run: status?.run ?? null,
   };
+}
+
+function expectedBuildIdentityFromEnvironment() {
+  const values = {
+    git_commit: process.env.CONTROL_ROOM_FDM_MULTILAYER_EXPECTED_GIT_COMMIT ?? null,
+    worktree_state: process.env.CONTROL_ROOM_FDM_MULTILAYER_EXPECTED_WORKTREE_STATE ?? null,
+    source_snapshot_sha256: process.env.CONTROL_ROOM_FDM_MULTILAYER_EXPECTED_SOURCE_SNAPSHOT_SHA256 ?? null,
+  };
+  const present = Object.values(values).filter((value) => value !== null);
+  if (present.length === 0) return null;
+  if (present.length !== Object.keys(values).length) {
+    throw new Error(`Source-bound WebGL gate requires all expected build identity fields: ${JSON.stringify(values)}`);
+  }
+  return values;
+}
+
+function assertSourceBoundBuildIdentity(openapi, expected) {
+  if (!expected) {
+    throw new Error("Source-bound WebGL gate requires an immutable expected build identity from the managed recipe.");
+  }
+  const actual = openapi?.["x-fullmag-build-identity"];
+  if (!actual || typeof actual !== "object") {
+    throw new Error(`Serving API did not expose x-fullmag-build-identity: ${JSON.stringify(actual ?? null)}`);
+  }
+  const required = {
+    built_at_utc: actual.built_at_utc,
+    git_commit: actual.git_commit,
+    worktree_state: actual.worktree_state,
+    source_snapshot_sha256: actual.source_snapshot_sha256,
+  };
+  if (
+    typeof required.built_at_utc !== "string" ||
+    !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/.test(required.built_at_utc) ||
+    required.git_commit !== expected.git_commit ||
+    required.worktree_state !== expected.worktree_state ||
+    required.source_snapshot_sha256 !== expected.source_snapshot_sha256 ||
+    required.git_commit === "unknown" ||
+    required.source_snapshot_sha256 === "unknown"
+  ) {
+    throw new Error(`Serving API build identity does not match the immutable managed source receipt: ${JSON.stringify({ actual: required, expected })}`);
+  }
+  return required;
+}
+
+function assertSourceBoundBuildIdentitySelfTest() {
+  const expected = {
+    git_commit: "a".repeat(40),
+    worktree_state: "dirty",
+    source_snapshot_sha256: "b".repeat(64),
+  };
+  const actual = {
+    "x-fullmag-build-identity": {
+      built_at_utc: "2026-08-14T00:00:00Z",
+      ...expected,
+    },
+  };
+  const identity = assertSourceBoundBuildIdentity(actual, expected);
+  if (identity.source_snapshot_sha256 !== expected.source_snapshot_sha256) {
+    throw new Error("Source-bound build identity self-test did not preserve the expected snapshot.");
+  }
+  for (const invalid of [
+    { ...actual, "x-fullmag-build-identity": { ...actual["x-fullmag-build-identity"], source_snapshot_sha256: "c".repeat(64) } },
+    { ...actual, "x-fullmag-build-identity": { ...actual["x-fullmag-build-identity"], git_commit: "unknown" } },
+    {},
+  ]) {
+    let rejected = false;
+    try {
+      assertSourceBoundBuildIdentity(invalid, expected);
+    } catch {
+      rejected = true;
+    }
+    if (!rejected) throw new Error("Source-bound build identity self-test accepted an invalid receipt.");
+  }
+}
+
+function assertRuntimeBinaryReceipt(sha256) {
+  if (!sha256 || !/^[0-9a-f]{64}$/.test(sha256)) {
+    throw new Error(`Source-bound WebGL gate requires the managed runtime binary SHA-256 receipt: ${JSON.stringify(sha256)}`);
+  }
 }
 
 function assertMultilayerLayout(status, layout) {
@@ -773,6 +1500,89 @@ function assertAirboxIsolationPatchSelfTest() {
   }
 }
 
+function assertAirboxVectorPresentationSequence(sequence) {
+  const expected = [
+    ["wireframe_on", true, false],
+    ["wireframe_off", false, false],
+    ["vectors_on", false, true],
+  ];
+  if (!Array.isArray(sequence) || sequence.length !== expected.length) {
+    throw new Error(`Airbox vector presentation sequence must contain three committed frames: ${JSON.stringify(sequence)}`);
+  }
+  let previousRevision = 0;
+  let previousFrameId = null;
+  let previousCapturedAtMs = 0;
+  for (let index = 0; index < expected.length; index += 1) {
+    const [phase, wireframeVisible, vectorsVisible] = expected[index];
+    const receipt = sequence[index];
+    if (
+      receipt?.phase !== phase ||
+      receipt.wireframe_visible !== wireframeVisible ||
+      receipt.vectors_visible !== vectorsVisible ||
+      !Number.isSafeInteger(receipt.visualization_revision) ||
+      receipt.visualization_revision <= previousRevision ||
+      !receipt.frame_commit_id ||
+      receipt.frame_commit_id === previousFrameId ||
+      !Number.isSafeInteger(receipt.captured_at_ms) ||
+      receipt.captured_at_ms <= previousCapturedAtMs ||
+      Number.parseInt(String(receipt.frame_commit_id).match(/:(\d+)$/)?.[1] ?? "", 10) !==
+        receipt.visualization_revision
+    ) {
+      throw new Error(`Airbox vector presentation sequence is not monotonic or frame-bound: ${JSON.stringify(sequence)}`);
+    }
+    previousRevision = receipt.visualization_revision;
+    previousFrameId = receipt.frame_commit_id;
+    previousCapturedAtMs = receipt.captured_at_ms;
+  }
+}
+
+function assertAirboxPresentationSequenceSelfTest() {
+  assertAirboxVectorPresentationSequence([
+    { captured_at_ms: 11, frame_commit_id: "viewport:11", phase: "wireframe_on", vectors_visible: false, visualization_revision: 11, wireframe_visible: true },
+    { captured_at_ms: 12, frame_commit_id: "viewport:12", phase: "wireframe_off", vectors_visible: false, visualization_revision: 12, wireframe_visible: false },
+    { captured_at_ms: 13, frame_commit_id: "viewport:13", phase: "vectors_on", vectors_visible: true, visualization_revision: 13, wireframe_visible: false },
+  ]);
+  for (const invalid of [
+    [
+      { captured_at_ms: 11, frame_commit_id: "viewport:11", phase: "wireframe_on", vectors_visible: false, visualization_revision: 11, wireframe_visible: true },
+      { captured_at_ms: 12, frame_commit_id: "viewport:13", phase: "wireframe_off", vectors_visible: false, visualization_revision: 12, wireframe_visible: false },
+      { captured_at_ms: 13, frame_commit_id: "viewport:14", phase: "vectors_on", vectors_visible: true, visualization_revision: 13, wireframe_visible: false },
+    ],
+    [
+      { captured_at_ms: 11, frame_commit_id: "viewport:11", phase: "wireframe_on", vectors_visible: false, visualization_revision: 11, wireframe_visible: true },
+      { captured_at_ms: 10, frame_commit_id: "viewport:12", phase: "wireframe_off", vectors_visible: false, visualization_revision: 12, wireframe_visible: false },
+      { captured_at_ms: 13, frame_commit_id: "viewport:13", phase: "vectors_on", vectors_visible: true, visualization_revision: 13, wireframe_visible: false },
+    ],
+    [
+      { captured_at_ms: 11, frame_commit_id: "viewport:11", phase: "wireframe_on", vectors_visible: false, visualization_revision: 11, wireframe_visible: true },
+      { captured_at_ms: 12, frame_commit_id: "viewport:12", phase: "wireframe_off", vectors_visible: false, visualization_revision: 12, wireframe_visible: false },
+      { captured_at_ms: 13, frame_commit_id: "viewport:13", phase: "vectors_on", vectors_visible: true, visualization_revision: 13, wireframe_visible: true },
+    ],
+    [
+      { captured_at_ms: 11, frame_commit_id: "viewport:11", phase: "wireframe_on", vectors_visible: false, visualization_revision: 11, wireframe_visible: true },
+      { captured_at_ms: 13, frame_commit_id: "viewport:13", phase: "vectors_on", vectors_visible: true, visualization_revision: 13, wireframe_visible: false },
+    ],
+    [
+      { captured_at_ms: 11, frame_commit_id: "viewport:11", phase: "wireframe_on", vectors_visible: false, visualization_revision: 11, wireframe_visible: true },
+      { captured_at_ms: 12, frame_commit_id: "viewport:12", phase: "wireframe_off", vectors_visible: true, visualization_revision: 12, wireframe_visible: false },
+      { captured_at_ms: 13, frame_commit_id: "viewport:13", phase: "vectors_on", vectors_visible: true, visualization_revision: 13, wireframe_visible: false },
+    ],
+    [
+      { captured_at_ms: 11, frame_commit_id: "viewport:11", phase: "wireframe_on", vectors_visible: false, visualization_revision: 11, wireframe_visible: true },
+      { captured_at_ms: 12, frame_commit_id: "viewport:12", phase: "vectors_on", vectors_visible: true, visualization_revision: 12, wireframe_visible: false },
+      { captured_at_ms: 13, frame_commit_id: "viewport:13", phase: "wireframe_off", vectors_visible: false, visualization_revision: 13, wireframe_visible: false },
+    ],
+  ]) {
+    let rejected = false;
+    try {
+      assertAirboxVectorPresentationSequence(invalid);
+    } catch {
+      rejected = true;
+    }
+    if (!rejected) throw new Error("Airbox sequence self-test accepted an invalid frame-bound receipt.");
+  }
+}
+
 function qualificationEvidenceForReadbackMode(mode) {
   return mode === "per-case"
     ? {
@@ -803,6 +1613,14 @@ function assertDiagnosticQualificationSelfTest() {
   ) {
     throw new Error("Formal per-case qualification status was weakened.");
   }
+  assertRuntimeBinaryReceipt("c".repeat(64));
+  let rejectedBinaryReceipt = false;
+  try {
+    assertRuntimeBinaryReceipt("unknown");
+  } catch {
+    rejectedBinaryReceipt = true;
+  }
+  if (!rejectedBinaryReceipt) throw new Error("Runtime binary receipt self-test accepted an invalid SHA-256.");
 }
 
 function assertAirboxHiddenBeforeNativeGate(state) {
@@ -812,16 +1630,18 @@ function assertAirboxHiddenBeforeNativeGate(state) {
   }
 }
 
-function findAirboxFieldRequest(fieldRequests, countBefore) {
-  const index = fieldRequests.findIndex((request) => {
+function findAirboxFieldRequest(fieldRequests, countBefore, startedAtMs = null) {
+  const relativeIndex = fieldRequests.slice(countBefore).findIndex((request) => {
     const params = new URLSearchParams(request.search);
     return request.path.includes("/data/fields/H_demag/samples/vector") &&
       params.get("scope_kind") === "airbox" &&
-      params.get("scope_id") === "airbox";
+      params.get("scope_id") === "airbox" &&
+      (startedAtMs === null || request.timestamp >= startedAtMs);
   });
-  if (index < 0) return null;
+  if (relativeIndex < 0) return null;
+  const index = countBefore + relativeIndex;
   return {
-    observed_after_case_start: index >= countBefore,
+    observed_after_case_start: true,
     request: fieldRequests[index],
     request_index: index,
   };
@@ -836,7 +1656,7 @@ function assertAirboxFieldRequestMatcherSelfTest() {
   const cached = findAirboxFieldRequest(requests, 1);
   const fresh = findAirboxFieldRequest(requests, 0);
   if (
-    cached?.observed_after_case_start !== false ||
+    cached !== null ||
     fresh?.observed_after_case_start !== true ||
     findAirboxFieldRequest(requests.slice(1), 0) !== null
   ) {
@@ -844,10 +1664,57 @@ function assertAirboxFieldRequestMatcherSelfTest() {
   }
 }
 
-async function waitForAirboxRequest(fieldRequests, countBefore) {
+function exactAirboxFieldRequestsAfter(fieldRequests, countBefore) {
+  return fieldRequests.slice(countBefore).filter((request) =>
+    resourceKeyHasExactFieldScope(
+      `${request.path}${request.search}`,
+      "H_demag",
+      "airbox",
+      "airbox",
+    ));
+}
+
+function assertGeometryOnlyAirboxRequestFilterSelfTest() {
+  const requests = [
+    { path: "/v2/sessions/current/data/fields/H_demag/samples/vector", search: "?scope_kind=airbox&scope_id=airbox" },
+    { path: "/v2/sessions/current/data/fields/H_demag/samples/vector", search: "?scope_kind=layer&scope_id=layer%3Abottom" },
+    { path: "/v2/sessions/current/data/fields/H_demag/samples/vector", search: "?scope_kind=airbox&scope_id=airbox-shell" },
+    { path: "/v2/sessions/current/data/fields/H_eff/samples/vector", search: "?scope_kind=airbox&scope_id=airbox" },
+    { path: "/v2/sessions/current/data/fields/H_demag/samples/vector", search: "?scope_kind=airbox&scope_id=airbox" },
+  ];
+  const exactAfterStart = exactAirboxFieldRequestsAfter(requests, 1);
+  const exactFromBeginning = exactAirboxFieldRequestsAfter(requests, 0);
+  if (
+    exactAfterStart.length !== 1 ||
+    exactAfterStart[0] !== requests[4] ||
+    exactFromBeginning.length !== 2 ||
+    exactFromBeginning[0] !== requests[0] ||
+    exactFromBeginning[1] !== requests[4]
+  ) {
+    throw new Error("Geometry-only Airbox field-request filter self-test failed.");
+  }
+}
+
+function assertAirboxResponseRequestCorrelationSelfTest() {
+  const response = {
+    field_request_id: "field-request-2",
+    response_started_at_ms: 25,
+    status: 200,
+    url: `${apiBase}/v2/sessions/current/data/fields/H_demag/samples/vector?scope_kind=airbox&scope_id=airbox`,
+  };
+  if (
+    matchesAirboxFieldResponse(response, 20, "field-request-1") ||
+    matchesAirboxFieldResponse(response, 30, "field-request-2") ||
+    !matchesAirboxFieldResponse(response, 20, "field-request-2")
+  ) {
+    throw new Error("Airbox response/request correlation self-test failed.");
+  }
+}
+
+async function waitForAirboxRequest(fieldRequests, countBefore, startedAtMs = null) {
   return poll(
     "Airbox H_demag field request",
-    () => findAirboxFieldRequest(fieldRequests, countBefore),
+    () => findAirboxFieldRequest(fieldRequests, countBefore, startedAtMs),
   );
 }
 
@@ -1075,6 +1942,14 @@ async function patchJson(path, body) {
   const response = await fetch(apiBase + path, { body: JSON.stringify(body), headers: { "content-type": "application/json" }, method: "PATCH" });
   if (!response.ok) throw new Error(`${path} returned ${response.status}: ${await response.text()}`);
   return response.json();
+}
+
+function responseRevision(response) {
+  const revision = Number(response?.revision);
+  if (!Number.isSafeInteger(revision) || revision <= 0) {
+    throw new Error(`Visualization PATCH did not return a positive safe revision: ${JSON.stringify(response)}`);
+  }
+  return revision;
 }
 
 async function poll(label, read) {

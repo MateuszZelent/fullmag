@@ -67,6 +67,8 @@ import {
   resolveViewport3DReplayFieldQuery,
   resolveViewport3DFieldDataIssue,
   resolveViewport3DVisualizationQuantityId,
+  resolveViewport3DFdmGridVectorScale,
+  resolveViewport3DVectorScale,
   mergeViewport3DFieldQuery,
   mergeViewport3DPrimaryTargetFieldBuffers,
   resolveViewport3DResolvedPartFieldBuffers,
@@ -100,6 +102,23 @@ import { buildFdmSampledScalarColors } from "../viewport3dFieldMapping";
 
 const sceneModelSourceUrl = new URL("./useViewport3DSceneModel.ts", import.meta.url);
 const planarPreviewSourceUrl = new URL("../../../kernel/workspace/planarMonitorFramePreview.ts", import.meta.url);
+
+describe("viewport vector scale", () => {
+  it("keeps default glyphs readable across the longest scene dimension", () => {
+    expect(resolveViewport3DVectorScale([500e-9, 125e-9, 54e-9], 1)).toBeCloseTo(25e-9);
+    expect(resolveViewport3DVectorScale([500e-9, 125e-9, 54e-9], 4)).toBeCloseTo(100e-9);
+  });
+
+  it("derives multilayer Airbox glyph length from its certified grid", () => {
+    expect(
+      resolveViewport3DFdmGridVectorScale(
+        [160, 40, 18],
+        [3.125e-9, 3.125e-9, 3e-9],
+        1,
+      ),
+    ).toBeCloseTo(25e-9);
+  });
+});
 
 describe("FDM Airbox mesh demand", () => {
   it("adopts an exact terminal FDM scalar grid as the target surface buffer", () => {
@@ -338,11 +357,12 @@ describe("FDM Airbox mesh demand", () => {
 
   it("maps the outside-support debug target to its exact render carrier", () => {
     const source = readFileSync(sceneModelSourceUrl, "utf8");
+    const targetsStart = source.indexOf("const visualizationDebugTargets =");
     const targetsBlock = source.slice(
-      source.indexOf("const visualizationDebugTargets = useMemo"),
+      targetsStart,
       source.indexOf(
         "const visualizationDebugTopologyByteLength",
-        source.indexOf("const visualizationDebugTargets = useMemo"),
+        targetsStart,
       ),
     );
 
@@ -350,8 +370,8 @@ describe("FDM Airbox mesh demand", () => {
       'target.id === "fdm-universe-outside-support"',
     );
     expect(targetsBlock).toContain("carrierIds.add(target.id)");
-    expect(targetsBlock).toContain(
-      'target.id === "fdm-universe-outside-support"\n            ? fdmAirboxDebugRenderPass',
+    expect(targetsBlock).toMatch(
+      /target\.id === "fdm-universe-outside-support"\s*\?\s*fdmAirboxDebugRenderPass/,
     );
     expect(source).toContain(
       "const fdmAirboxDebugRenderPass: Viewport3DTargetRenderPassModel",
@@ -375,6 +395,33 @@ describe("FDM Airbox mesh demand", () => {
 
     expect(source).toContain(
       'field=${fdmAirboxFieldVector ? "ready" : "pending"}',
+    );
+  });
+
+  it("changes the debug publisher resource frame when the multilayer Airbox field arrives", () => {
+    const source = readFileSync(sceneModelSourceUrl, "utf8");
+    const resourceKeyStart = source.indexOf(
+      "const resourceFrameKey = buildViewport3DResourceFrameKey([",
+    );
+    const resourceKeyBlock = source.slice(
+      resourceKeyStart,
+      source.indexOf("const diagnostics =", resourceKeyStart),
+    );
+
+    expect(resourceKeyBlock).toContain(
+      'id: "fdm-multilayer-airbox-field"',
+    );
+    expect(resourceKeyBlock).toContain(
+      "fdmMultilayerAirboxField.payloadRevision",
+    );
+    expect(resourceKeyBlock).toContain(
+      "fdmMultilayerAirboxField.revision",
+    );
+    expect(resourceKeyBlock).toContain(
+      'id: "fdm-multilayer-airbox-build"',
+    );
+    expect(resourceKeyBlock).toContain(
+      "fdmMultilayerAirboxBuildState?.buildKey",
     );
   });
 
@@ -533,19 +580,38 @@ function fieldVectorFixture(
 }
 
 describe("useViewport3DSceneModel", () => {
-  it("keeps FDM outside-support settings on the dedicated FDM target", () => {
+  it("uses canonical local Airbox settings for both FDM Airbox carriers", () => {
     const source = readFileSync(sceneModelSourceUrl, "utf8");
-    expect(source).toContain(
-      "target: targetForFdmUniverseOutsideSupport(),\n      visualizationState: renderingState,",
-    );
     expect(source).toContain(
       "target: AIRBOX_VISUALIZATION_TARGET,\n        visualizationState: renderingState,",
     );
-    const fdmSettingsBlock = source.slice(
-      source.indexOf("const fdmUniverseOutsideSupportSettings = useMemo"),
-      source.indexOf("const fdmSingleGridAirboxSettings =", source.indexOf("const fdmUniverseOutsideSupportSettings = useMemo")),
+    const fdmSingleGridAirboxBlock = source.slice(
+      source.indexOf("const fdmSingleGridAirboxSettings ="),
+      source.indexOf("const fdmVectorScale =", source.indexOf("const fdmSingleGridAirboxSettings =")),
     );
-    expect(fdmSettingsBlock).not.toContain("AIRBOX_VISUALIZATION_TARGET");
+    expect(fdmSingleGridAirboxBlock).toContain("fdmMultilayerAirboxDomain");
+    expect(fdmSingleGridAirboxBlock).toContain(": airboxSettings");
+    expect(fdmSingleGridAirboxBlock).not.toContain("fdmUniverseOutsideSupportSettings");
+  });
+
+  it("uses the canonical remote Airbox target for both FDM renderers", () => {
+    const source = readFileSync(sceneModelSourceUrl, "utf8");
+    const airboxSettingsBlock = source.slice(
+      source.indexOf("const airboxSettings = useMemo"),
+      source.indexOf("const airboxQuantityCompatible", source.indexOf("const airboxSettings = useMemo")),
+    );
+
+    expect(airboxSettingsBlock).toContain("resolveTargetVisualization({");
+    expect(airboxSettingsBlock).toContain("target: AIRBOX_VISUALIZATION_TARGET");
+    expect(airboxSettingsBlock).toContain("visualizationState: renderingState");
+    expect(airboxSettingsBlock).not.toContain("resolveViewport3DFdmTargetVisualization({");
+
+    const singleGridDisplayBlock = source.slice(
+      source.indexOf("const fdmAirboxMaxVectorGlyphs ="),
+      source.indexOf("const fdmAirboxBuildState =", source.indexOf("const fdmAirboxMaxVectorGlyphs =")),
+    );
+    expect(singleGridDisplayBlock).toContain("fdmSingleGridAirboxSettings");
+    expect(singleGridDisplayBlock).not.toContain("fdmUniverseOutsideSupportSettings");
   });
   it("publishes the central FDM display sampling provenance in the HUD summary", () => {
     const source = readFileSync(sceneModelSourceUrl, "utf8");
@@ -4474,7 +4540,7 @@ describe("useViewport3DSceneModel", () => {
   it("builds FDM scalar colors from the FDM target palette, not the FEM/global palette", () => {
     const source = readFileSync(sceneModelSourceUrl, "utf8");
     const fdmColorBlock = source.slice(
-      source.indexOf("const fdmTargetViews:"),
+      source.indexOf("const fdmTargetViews ="),
       source.indexOf("const chunkedScalarColors = useViewport3DChunkedScalarColors"),
     );
 
@@ -4485,7 +4551,7 @@ describe("useViewport3DSceneModel", () => {
   it("builds a separate FDM vector color buffer for vector-only colorbars", () => {
     const source = readFileSync(sceneModelSourceUrl, "utf8");
     const fdmVectorColorBlock = source.slice(
-      source.indexOf("const fdmTargetViews:"),
+      source.indexOf("const fdmTargetViews ="),
       source.indexOf("const chunkedScalarColors = useViewport3DChunkedScalarColors"),
     );
 

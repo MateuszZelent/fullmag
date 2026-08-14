@@ -17,6 +17,8 @@ fn make_plan(enable_demag: bool, precision: ExecutionPrecision) -> FdmMultilayer
                 native_cell_size: [2e-9, 2e-9, 1e-9],
                 native_origin: [-4e-9, -4e-9, 0.0],
                 native_active_mask: None,
+                native_region_mask: None,
+                native_region_legend: None,
                 initial_magnetization: vec![[1.0, 0.0, 0.0]; 16],
                 material: FdmMaterialIR {
                     name: "Py".to_string(),
@@ -38,6 +40,8 @@ fn make_plan(enable_demag: bool, precision: ExecutionPrecision) -> FdmMultilayer
                 native_cell_size: [2e-9, 2e-9, 1e-9],
                 native_origin: [-4e-9, -4e-9, 3e-9],
                 native_active_mask: None,
+                native_region_mask: None,
+                native_region_legend: None,
                 initial_magnetization: vec![[0.0, 1.0, 0.0]; 16],
                 material: FdmMaterialIR {
                     name: "Py".to_string(),
@@ -108,6 +112,8 @@ fn make_touching_plan(precision: ExecutionPrecision) -> FdmMultilayerPlanIR {
                 native_cell_size: [2e-9, 2e-9, 2e-9],
                 native_origin: [0.0, 0.0, 0.0],
                 native_active_mask: None,
+                native_region_mask: None,
+                native_region_legend: None,
                 initial_magnetization: vec![[1.0, 0.0, 0.0]; 2],
                 material: FdmMaterialIR {
                     name: "Py".to_string(),
@@ -129,6 +135,8 @@ fn make_touching_plan(precision: ExecutionPrecision) -> FdmMultilayerPlanIR {
                 native_cell_size: [2e-9, 2e-9, 2e-9],
                 native_origin: [0.0, 0.0, 2e-9],
                 native_active_mask: None,
+                native_region_mask: None,
+                native_region_legend: None,
                 initial_magnetization: vec![[0.0, 1.0, 0.0]; 2],
                 material: FdmMaterialIR {
                     name: "Py".to_string(),

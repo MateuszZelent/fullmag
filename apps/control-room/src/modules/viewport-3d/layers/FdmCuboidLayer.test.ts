@@ -666,7 +666,6 @@ describe("FdmCuboidLayer model", () => {
     const model = buildFdmCuboidInstanceModel(domainFixture(), {
       voxelFillRatio: 0.5,
     });
-
     expect(model?.cellSize[0]).toBeCloseTo(0.5e-9);
     expect(model?.cellSize[1]).toBeCloseTo(1e-9);
     expect(model?.cellSize[2]).toBeCloseTo(1.5e-9);
@@ -1086,12 +1085,18 @@ describe("FdmCuboidLayer model", () => {
     ).toEqual([{ end: 1, start: 0 }]);
   });
 
-  it("caps rendered FDM vector glyph scale to the local voxel size", () => {
+  it("caps FDM vector glyph scale using the realized sampling density", () => {
     const model = buildFdmCuboidInstanceModel(domainFixture(), {
       voxelFillRatio: 0.5,
     });
+    const sampledModel = { ...model!, count: 64 };
 
-    expect(resolveFdmVectorGlyphScale(model, 100e-9)).toBeCloseTo(1.125e-9);
-    expect(resolveFdmVectorGlyphScale(model, 0.25e-9)).toBeCloseTo(0.25e-9);
+    expect(
+      resolveFdmVectorGlyphScale(sampledModel, 100e-9, sampledModel.count) / 1e-9,
+    ).toBeCloseTo(1.125);
+    expect(resolveFdmVectorGlyphScale(sampledModel, 100e-9, 1) / 1e-9).toBeCloseTo(
+      1.125 * Math.cbrt(sampledModel.count),
+    );
+    expect(resolveFdmVectorGlyphScale(sampledModel, 0.25e-9, 1) / 1e-9).toBeCloseTo(0.25);
   });
 });

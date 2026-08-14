@@ -13,6 +13,7 @@ import {
   resolveViewport3DOrthographicZoom,
   resolveNextViewport3DModelLayerStage,
   resolveAuthoredRegionOverlayVisibility,
+  resolveViewport3DAirboxFrameState,
   resolveViewport3DModelLayerStageVisibility,
   scheduleViewport3DProjectionRenderFrames,
   VIEWPORT_3D_MODEL_LAYER_FINAL_STAGE,
@@ -95,10 +96,154 @@ describe("Viewport3DScene scale helpers", () => {
       adoptionFrameHook.indexOf("invalidate();", subscriberStart),
     ).toBeLessThan(
       adoptionFrameHook.indexOf(
-        "onVisualizationFrameCommitted(visualizationRevision)",
+        "onVisualizationFrameCommitted(",
         subscriberStart,
       ),
     );
+    expect(adoptionFrameHook).toContain(
+      "onVisualizationFrameCommitted(\n          visualizationRevision,\n          airboxFrameState,\n        )",
+    );
+  });
+
+  it("binds Airbox frame state to the staged multilayer render passes", () => {
+    const visibleState = resolveViewport3DAirboxFrameState({
+      fdmAirboxInstanceModel: null,
+      fdmAirboxPassPlan: {
+        hasAnyEffectivePass: false,
+        needsExtentOverlay: false,
+        needsInactiveCellGeometry: false,
+        needsPointGeometry: false,
+        needsSurfaceInstances: false,
+        needsVectorAnchors: false,
+      },
+      fdmAirboxVectorSegments: null,
+      fdmCuboidLayerEnabled: true,
+      fdmLaneActive: true,
+      multilayerAirboxView: {
+        model: { count: 4 },
+        settings: {
+          boundsVisible: false,
+          pointsVisible: false,
+          shaderVisible: false,
+          vectorsVisible: true,
+          visible: true,
+          wireframeVisible: true,
+        },
+        vectorSegments: new Float32Array(7),
+      },
+      sceneLayersEnabled: true,
+      stageVisibility: resolveViewport3DModelLayerStageVisibility(2),
+      vectorLayersEnabled: true,
+    });
+
+    expect(visibleState).toEqual({
+      airboxVectorsVisible: true,
+      airboxWireframeVisible: true,
+    });
+    expect(
+      resolveViewport3DAirboxFrameState({
+        fdmAirboxInstanceModel: null,
+        fdmAirboxPassPlan: {
+          hasAnyEffectivePass: false,
+          needsExtentOverlay: false,
+          needsInactiveCellGeometry: false,
+          needsPointGeometry: false,
+          needsSurfaceInstances: false,
+          needsVectorAnchors: false,
+        },
+        fdmAirboxVectorSegments: null,
+        fdmCuboidLayerEnabled: true,
+        fdmLaneActive: true,
+        multilayerAirboxView: {
+          model: { count: 4 },
+          settings: {
+            boundsVisible: false,
+            pointsVisible: false,
+            shaderVisible: false,
+            vectorsVisible: true,
+            visible: true,
+            wireframeVisible: true,
+          },
+          vectorSegments: new Float32Array(7),
+        },
+        sceneLayersEnabled: true,
+        stageVisibility: resolveViewport3DModelLayerStageVisibility(1),
+        vectorLayersEnabled: true,
+      }),
+    ).toEqual({
+      airboxVectorsVisible: false,
+      airboxWireframeVisible: true,
+    });
+  });
+
+  it("reports disabled Airbox passes when renderer feature gates are closed", () => {
+    const baseInput = {
+      fdmAirboxInstanceModel: null,
+      fdmAirboxPassPlan: {
+        hasAnyEffectivePass: false,
+        needsExtentOverlay: false,
+        needsInactiveCellGeometry: false,
+        needsPointGeometry: false,
+        needsSurfaceInstances: false,
+        needsVectorAnchors: false,
+      },
+      fdmAirboxVectorSegments: null,
+      fdmLaneActive: true,
+      multilayerAirboxView: {
+        model: { count: 4 },
+        settings: {
+          boundsVisible: false,
+          pointsVisible: false,
+          shaderVisible: false,
+          vectorsVisible: true,
+          visible: true,
+          wireframeVisible: true,
+        },
+        vectorSegments: new Float32Array(7),
+      },
+      sceneLayersEnabled: true,
+      stageVisibility: resolveViewport3DModelLayerStageVisibility(2),
+    } as const;
+
+    expect(
+      resolveViewport3DAirboxFrameState({
+        ...baseInput,
+        fdmCuboidLayerEnabled: false,
+        vectorLayersEnabled: true,
+      }),
+    ).toEqual({
+      airboxVectorsVisible: false,
+      airboxWireframeVisible: false,
+    });
+    expect(
+      resolveViewport3DAirboxFrameState({
+        ...baseInput,
+        fdmCuboidLayerEnabled: true,
+        vectorLayersEnabled: false,
+      }),
+    ).toEqual({
+      airboxVectorsVisible: false,
+      airboxWireframeVisible: true,
+    });
+  });
+
+  it("passes the frame-bound Airbox state from the resource-frame effect", () => {
+    const source = readFileSync(
+      new URL("./Viewport3DScene.tsx", import.meta.url),
+      "utf8",
+    );
+    const resourceFrameEffect = source.slice(
+      source.indexOf("// Demand rendering needs an explicit frame"),
+      source.indexOf(
+        "\n\n  return (",
+        source.indexOf("// Demand rendering needs an explicit frame"),
+      ),
+    );
+
+    expect(resourceFrameEffect).toContain(
+      "onVisualizationFrameCommitted(visualizationRevision, airboxFrameState)",
+    );
+    expect(resourceFrameEffect).toContain("airboxFrameState,");
   });
 
   it("places the shared glyph-cache provider above the model stack that mounts VectorFieldLayer consumers", () => {

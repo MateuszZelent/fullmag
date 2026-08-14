@@ -37,9 +37,10 @@ pub mod boundary_geometry;
 
 pub use error::PlanError;
 pub use fdm::{
-    checked_multilayer_pair_kernel_footprint, fdm_multilayer_cuda_containment_reason_codes,
-    fdm_multilayer_cuda_material_field_errors,
-    FDM_CUDA_MULTILAYER_HETEROGENEOUS_NATIVE_HZ_UNQUALIFIED,
+    checked_multilayer_aggregate_memory_bytes, checked_multilayer_pair_kernel_footprint,
+    fdm_multilayer_cuda_containment_reason_codes, fdm_multilayer_cuda_material_field_errors,
+    fdm_multilayer_cuda_native_single_grid_eligible, resolve_multilayer_kernel_memory,
+    ResolvedMultilayerKernelMemory, FDM_CUDA_MULTILAYER_HETEROGENEOUS_NATIVE_HZ_UNQUALIFIED,
     FDM_CUDA_MULTILAYER_MATERIAL_FIELD_UNQUALIFIED, FDM_CUDA_MULTILAYER_PUSH_PULL_UNQUALIFIED,
     FDM_CUDA_MULTILAYER_TWO_D_STACK_UNQUALIFIED, FDM_CUDA_MULTILAYER_XY_OFFSET_UNQUALIFIED,
 };

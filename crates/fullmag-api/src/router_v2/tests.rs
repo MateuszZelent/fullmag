@@ -23940,7 +23940,13 @@ fn write_test_fdm_multilayer_airbox_carrier(artifact_dir: &std::path::Path) -> P
             "demag_operator_kind": "multilayer",
             "fft_backend": "rustfft",
             "problem_source_hash": "test-problem-source-hash",
-            "run_status": "completed"
+            "run_status": "completed",
+            "build_identity": {
+                "built_at_utc": "2026-08-14T00:00:00Z",
+                "git_commit": "d".repeat(40),
+                "worktree_state": "dirty",
+                "source_snapshot_sha256": "e".repeat(64),
+            }
         },
         "quantity_revision": 17,
         "field_generation": "airbox-run-7:field-H_demag-3",

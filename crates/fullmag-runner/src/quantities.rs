@@ -3,7 +3,7 @@
 
 use crate::dispatch::{FdmEngine, FemEngine};
 use crate::types::{RunError, StepStats};
-use fullmag_ir::{FdmMaterialIR, FdmPlanIR, FemPlanIR, MaterialIR};
+use fullmag_ir::{FdmMaterialIR, FdmMultilayerPlanIR, FdmPlanIR, FemPlanIR, MaterialIR};
 
 // ── Re-exports from the shared crate ─────────────────────────────────
 
@@ -64,6 +64,17 @@ pub(crate) fn active_fdm_preview_quantities(
     quantities: &[&str],
 ) -> Vec<&'static str> {
     filter_active_quantities(quantities, |id| fdm_quantity_is_active(engine, plan, id))
+}
+
+/// Return the canonical active spatial fields for the CPU multilayer FDM
+/// snapshot path.  Multilayer plans intentionally expose a smaller IR than
+/// single-grid FDM, so this filter is kept beside the shared catalog rather
+/// than duplicated in the solver or API handlers.
+pub(crate) fn active_fdm_multilayer_preview_quantities(
+    plan: &FdmMultilayerPlanIR,
+    quantities: &[&str],
+) -> Vec<&'static str> {
+    filter_active_quantities(quantities, |id| fdm_multilayer_quantity_is_active(plan, id))
 }
 
 pub(crate) fn active_fem_preview_quantities(
@@ -171,6 +182,69 @@ fn fdm_plan_enables_quantity(plan: &FdmPlanIR, id: QuantityId) -> bool {
         QuantityId::HAnt => !plan.antenna_zeeman_masks.is_empty(),
         QuantityId::VElectric | QuantityId::JCharge => !plan.fdm_gpu_charge_transports.is_empty(),
         QuantityId::U
+        | QuantityId::DemagPhi
+        | QuantityId::Eps
+        | QuantityId::Sigma
+        | QuantityId::EEx
+        | QuantityId::EDemag
+        | QuantityId::EExt
+        | QuantityId::EDrive
+        | QuantityId::EAni
+        | QuantityId::EDmi
+        | QuantityId::EEl
+        | QuantityId::EKinEl
+        | QuantityId::ETotal
+        | QuantityId::ElasticResidualNorm
+        | QuantityId::ModeAmplitude
+        | QuantityId::ModeReal
+        | QuantityId::ModeImag
+        | QuantityId::ModePhase
+        | QuantityId::MatDind
+        | QuantityId::MatDbulk
+        | QuantityId::DmDt
+        | QuantityId::SpinPotential
+        | QuantityId::SpinCurrentTensor
+        | QuantityId::TorqueStt
+        | QuantityId::TorqueSot => false,
+    }
+}
+
+fn fdm_multilayer_quantity_is_active(plan: &FdmMultilayerPlanIR, id: QuantityId) -> bool {
+    match id {
+        QuantityId::M
+        | QuantityId::HEff
+        | QuantityId::Torque
+        | QuantityId::EdenTotal
+        | QuantityId::MatMs
+        | QuantityId::MatAex
+        | QuantityId::MatAlpha => true,
+        QuantityId::HEx | QuantityId::EdenEx => plan.enable_exchange,
+        QuantityId::HDemag | QuantityId::EdenDemag => plan.enable_demag,
+        QuantityId::HExt | QuantityId::EdenExt => plan.external_field.is_some(),
+        QuantityId::HAni | QuantityId::EdenAni => plan.layers.iter().any(|layer| {
+            layer.material.uniaxial_anisotropy_ku1.is_some()
+                || layer.material.uniaxial_anisotropy_ku2.is_some()
+        }),
+        QuantityId::HAniCubic => plan.layers.iter().any(|layer| {
+            layer.material.cubic_anisotropy_kc1.is_some()
+                || layer.material.cubic_anisotropy_kc2.is_some()
+                || layer.material.cubic_anisotropy_kc3.is_some()
+        }),
+        QuantityId::HDmi => plan.interfacial_dmi.is_some(),
+        QuantityId::HDmiBulk => plan.bulk_dmi.is_some(),
+        QuantityId::EdenDmi => plan.interfacial_dmi.is_some() || plan.bulk_dmi.is_some(),
+        // The multilayer IR does not yet retain drive, antenna, thermal,
+        // magnetoelastic, transport, or electric-field terms.  They must stay
+        // unavailable rather than being inferred from another plan family.
+        QuantityId::HDrive
+        | QuantityId::HOe
+        | QuantityId::HAnt
+        | QuantityId::HMel
+        | QuantityId::HTherm
+        | QuantityId::EdenDrive
+        | QuantityId::VElectric
+        | QuantityId::JCharge
+        | QuantityId::U
         | QuantityId::DemagPhi
         | QuantityId::Eps
         | QuantityId::Sigma

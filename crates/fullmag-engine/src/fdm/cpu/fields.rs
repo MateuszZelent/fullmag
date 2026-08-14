@@ -645,56 +645,66 @@ impl ExchangeLlgProblem {
         sum * cell_volume
     }
 
-    pub fn anisotropy_field(&self, magnetization: &[Vector3]) -> Vec<Vector3> {
-        let has_uni = self.terms.uniaxial_anisotropy.is_some();
-        let has_cub = self.terms.cubic_anisotropy.is_some();
-        if !has_uni && !has_cub {
-            return zero_vectors(self.grid.cell_count());
+    /// Return the uniaxial and cubic contributions separately.  The solver
+    /// uses their sum, while field materialization needs the canonical
+    /// quantity split (`H_ani` versus `H_ani_cubic`).
+    pub fn anisotropy_field_components(
+        &self,
+        magnetization: &[Vector3],
+    ) -> (Vec<Vector3>, Vec<Vector3>) {
+        let mut uniaxial = zero_vectors(self.grid.cell_count());
+        let mut cubic = zero_vectors(self.grid.cell_count());
+        if self.terms.uniaxial_anisotropy.is_none() && self.terms.cubic_anisotropy.is_none() {
+            return (uniaxial, cubic);
         }
-        magnetization
-            .iter()
-            .enumerate()
-            .map(|(i, m)| {
-                if !self.is_active(i) {
-                    return [0.0, 0.0, 0.0];
-                }
-                let ms_safe = self.ms_at(i).max(1e-30);
-                let mut h = [0.0f64, 0.0, 0.0];
-                if let Some(ref uni) = self.terms.uniaxial_anisotropy {
-                    let n = norm(uni.axis).max(1e-30);
-                    let u = scale(uni.axis, 1.0 / n);
-                    let m_dot_u = dot(*m, u);
-                    let coeff = 2.0 * uni.ku1 / (MU0 * ms_safe) * m_dot_u
-                        + 4.0 * uni.ku2 / (MU0 * ms_safe) * m_dot_u * m_dot_u * m_dot_u;
-                    h = add(h, scale(u, coeff));
-                }
-                if let Some(ref cub) = self.terms.cubic_anisotropy {
-                    let n1 = norm(cub.axis1).max(1e-30);
-                    let n2 = norm(cub.axis2).max(1e-30);
-                    let c1 = scale(cub.axis1, 1.0 / n1);
-                    let c2 = scale(cub.axis2, 1.0 / n2);
-                    let c3 = cross(c1, c2);
-                    let m1 = dot(*m, c1);
-                    let m2 = dot(*m, c2);
-                    let m3 = dot(*m, c3);
-                    let sigma = m1 * m1 * m2 * m2 + m2 * m2 * m3 * m3 + m1 * m1 * m3 * m3;
-                    let pf = 2.0 / (MU0 * ms_safe);
-                    let g1 = -pf
-                        * (cub.kc1 * m1 * (m2 * m2 + m3 * m3)
-                            + cub.kc2 * m1 * m2 * m2 * m3 * m3
-                            + 2.0 * cub.kc3 * sigma * m1 * (m2 * m2 + m3 * m3));
-                    let g2 = -pf
-                        * (cub.kc1 * m2 * (m1 * m1 + m3 * m3)
-                            + cub.kc2 * m2 * m1 * m1 * m3 * m3
-                            + 2.0 * cub.kc3 * sigma * m2 * (m1 * m1 + m3 * m3));
-                    let g3 = -pf
-                        * (cub.kc1 * m3 * (m1 * m1 + m2 * m2)
-                            + cub.kc2 * m3 * m1 * m1 * m2 * m2
-                            + 2.0 * cub.kc3 * sigma * m3 * (m1 * m1 + m2 * m2));
-                    h = add(h, add(add(scale(c1, g1), scale(c2, g2)), scale(c3, g3)));
-                }
-                h
-            })
+        for (i, m) in magnetization.iter().enumerate() {
+            if !self.is_active(i) {
+                continue;
+            }
+            let ms_safe = self.ms_at(i).max(1e-30);
+            if let Some(ref uni) = self.terms.uniaxial_anisotropy {
+                let n = norm(uni.axis).max(1e-30);
+                let u = scale(uni.axis, 1.0 / n);
+                let m_dot_u = dot(*m, u);
+                let coeff = 2.0 * uni.ku1 / (MU0 * ms_safe) * m_dot_u
+                    + 4.0 * uni.ku2 / (MU0 * ms_safe) * m_dot_u * m_dot_u * m_dot_u;
+                uniaxial[i] = scale(u, coeff);
+            }
+            if let Some(ref cub) = self.terms.cubic_anisotropy {
+                let n1 = norm(cub.axis1).max(1e-30);
+                let n2 = norm(cub.axis2).max(1e-30);
+                let c1 = scale(cub.axis1, 1.0 / n1);
+                let c2 = scale(cub.axis2, 1.0 / n2);
+                let c3 = cross(c1, c2);
+                let m1 = dot(*m, c1);
+                let m2 = dot(*m, c2);
+                let m3 = dot(*m, c3);
+                let sigma = m1 * m1 * m2 * m2 + m2 * m2 * m3 * m3 + m1 * m1 * m3 * m3;
+                let pf = 2.0 / (MU0 * ms_safe);
+                let g1 = -pf
+                    * (cub.kc1 * m1 * (m2 * m2 + m3 * m3)
+                        + cub.kc2 * m1 * m2 * m2 * m3 * m3
+                        + 2.0 * cub.kc3 * sigma * m1 * (m2 * m2 + m3 * m3));
+                let g2 = -pf
+                    * (cub.kc1 * m2 * (m1 * m1 + m3 * m3)
+                        + cub.kc2 * m2 * m1 * m1 * m3 * m3
+                        + 2.0 * cub.kc3 * sigma * m2 * (m1 * m1 + m3 * m3));
+                let g3 = -pf
+                    * (cub.kc1 * m3 * (m1 * m1 + m2 * m2)
+                        + cub.kc2 * m3 * m1 * m1 * m2 * m2
+                        + 2.0 * cub.kc3 * sigma * m3 * (m1 * m1 + m2 * m2));
+                cubic[i] = add(add(scale(c1, g1), scale(c2, g2)), scale(c3, g3));
+            }
+        }
+        (uniaxial, cubic)
+    }
+
+    pub fn anisotropy_field(&self, magnetization: &[Vector3]) -> Vec<Vector3> {
+        let (uniaxial, cubic) = self.anisotropy_field_components(magnetization);
+        uniaxial
+            .into_iter()
+            .zip(cubic)
+            .map(|(uniaxial, cubic)| add(uniaxial, cubic))
             .collect()
     }
 
@@ -880,7 +890,7 @@ impl ExchangeLlgProblem {
         energy
     }
 
-    pub(crate) fn interfacial_dmi_field(&self, magnetization: &[Vector3]) -> Vec<Vector3> {
+    pub fn interfacial_dmi_field(&self, magnetization: &[Vector3]) -> Vec<Vector3> {
         let d = match self.terms.interfacial_dmi {
             Some(d) if d.abs() > 0.0 => d,
             _ => return zero_vectors(self.grid.cell_count()),
@@ -927,7 +937,7 @@ impl ExchangeLlgProblem {
             .collect()
     }
 
-    pub(crate) fn bulk_dmi_field(&self, magnetization: &[Vector3]) -> Vec<Vector3> {
+    pub fn bulk_dmi_field(&self, magnetization: &[Vector3]) -> Vec<Vector3> {
         let d = match self.terms.bulk_dmi {
             Some(d) if d.abs() > 0.0 => d,
             _ => return zero_vectors(self.grid.cell_count()),
