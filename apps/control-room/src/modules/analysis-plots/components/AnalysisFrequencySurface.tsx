@@ -24,6 +24,7 @@ import {
 import { frequencyDomainXAxisLabel } from "../frequencyDomainSeriesAdapter";
 import { EChartsSurface } from "./EChartsSurface";
 import {
+  type FmrModalDrivenComparisonModel,
   frequencyDomainResultTitle,
   type FrequencyDomainChartRoute,
   type FrequencyDomainResultContext,
@@ -33,6 +34,7 @@ import type { AnalysisFrequencyPresentationState } from "../hooks/useAnalysisFre
 export function AnalysisFrequencySurface({
   chartId,
   calculationMode,
+  comparisonModel,
   context,
   displayUnits,
   descriptorId,
@@ -52,6 +54,7 @@ export function AnalysisFrequencySurface({
 }: {
   chartId?: string;
   calculationMode?: string;
+  comparisonModel?: FmrModalDrivenComparisonModel;
   context?: FrequencyDomainResultContext;
   displayUnits?: Readonly<Record<string, string>>;
   descriptorId?: string;
@@ -106,6 +109,38 @@ export function AnalysisFrequencySurface({
   );
 
   if (series.length === 0) {
+    if (calculationMode === "fmr_modal_driven") {
+      const comparison = comparisonModel ?? {
+        diagnostics: [],
+        nearestComparison: null,
+        pairs: [],
+        readiness: "missing-peaks" as const,
+      };
+      return (
+        <ChartSection
+          title={surfaceTitle}
+          status={{ presentation, primary: status, trust: "unknown" }}
+        >
+          {physicalMetadata}
+          <div
+            aria-label="Modal-driven comparison"
+            className="fm-analysis-plots__empty fm-analysis-plots__comparison"
+            role="status"
+          >
+            <strong>Modal–Driven comparison</strong>
+            <span>Readiness: {comparison.readiness}</span>
+            {comparison.nearestComparison ? (
+              <span>
+                Nearest detuning: {comparison.nearestComparison.detuningHz.toExponential(3)} Hz
+              </span>
+            ) : null}
+            {unavailableReason || comparison.diagnostics[0] ? (
+              <span>{unavailableReason ?? comparison.diagnostics[0]}</span>
+            ) : null}
+          </div>
+        </ChartSection>
+      );
+    }
     return (
       <ChartSection
         title={surfaceTitle}
@@ -279,6 +314,7 @@ function frequencyTitleChart(
   if (calculationMode === "fmr_response" || calculationMode === "frequency_response") {
     return "response-sweep";
   }
+  if (calculationMode === "fmr_modal_driven") return "comparison";
   if (calculationMode === "fmr_modal" || calculationMode === "free_modes") {
     return "modal-spectrum";
   }
@@ -310,6 +346,7 @@ function frequencyPhysicalMetadata(
       <span>Geometry: {context.geometryId ?? "unavailable"}</span>
       <span>Mesh: {context.meshId ?? "unavailable"}</span>
       <span>Boundary: {context.boundaryContext ?? "unavailable"}</span>
+      <span>Normalization: {context.normalization ?? "unavailable"}</span>
       <span>k: {frequencyKContextLabel(context)}</span>
       <span>Observable: {observable}</span>
       <span>SI axes: {descriptor.xAxis.label} [{descriptor.xAxis.unit}] → {yQuantities}</span>

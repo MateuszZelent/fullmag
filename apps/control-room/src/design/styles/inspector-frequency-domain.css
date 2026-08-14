@@ -494,6 +494,30 @@
   font-size: var(--fm-font-size-xs);
   margin: var(--fm-space-1) 0;
 }
+@container (max-width: 390px) {
+  .fm-mode-phase-control__value,
+  .fm-mode-phase-control__transport {
+    align-items: stretch;
+  }
+
+  .fm-mode-phase-control__value > *,
+  .fm-mode-phase-control__transport > * {
+    flex: 1 1 100%;
+    min-width: 0;
+  }
+
+  .fm-mode-phase-control__value .fm-mode-phase-control__slider {
+    flex-basis: 100%;
+  }
+
+  .fm-mode-phase-control__value .fm-inspector-input,
+  .fm-mode-phase-control__value .fm-button,
+  .fm-mode-phase-control__transport .fm-button,
+  .fm-mode-phase-control__transport .fm-inspector-select {
+    width: 100%;
+  }
+}
+
 .fm-mode-phase-control {
   display: grid;
   gap: var(--fm-space-2);

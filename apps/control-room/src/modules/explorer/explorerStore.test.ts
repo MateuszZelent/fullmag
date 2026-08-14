@@ -101,6 +101,17 @@ describe("explorerStore", () => {
     ).toBe("archived-run");
   });
 
+  it("keeps an explicit historical Result context ahead of a current selected result", () => {
+    expect(
+      reconcileResultContextRunId({
+        currentRunId: "run-current",
+        previousCurrentRunId: "run-current",
+        selectedRunId: "run-history",
+        selectedResultRunId: "run-current",
+      }),
+    ).toBe("run-history");
+  });
+
   it("reveals a viewport selection without clearing the user's filter", () => {
     setExplorerActiveTab("results");
     setExplorerFilterText("energy");

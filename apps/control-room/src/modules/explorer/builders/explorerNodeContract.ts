@@ -15,6 +15,8 @@ import type { PinnedQuickChart } from "@/kernel/workspace/quickChartWorkspace";
 import type { ExplorerNode, ExplorerNodeStatus } from "../explorerTypes";
 import type { RuntimeResourceSnapshot } from "./runtimeExplorerSnapshot";
 export interface ExplorerTreeResources {
+  resultContextContractGaps?: readonly string[];
+  resultContextRunId?: string | null;
   activeAnalysisFieldOverlay?: AnalysisFieldOverlayState | null;
   artifacts?: RuntimeResourceSnapshot<ArtifactResource[]>;
   currentRun?: CurrentRunResource | null;

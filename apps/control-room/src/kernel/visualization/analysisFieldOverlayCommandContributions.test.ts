@@ -750,6 +750,7 @@ describe("analysis field overlay commands", () => {
           kContextKind: "fixed_k",
           kind: "results.resonance.driven.field",
           nodeId: "results:run-1:response:frequency:3",
+          normalization: "unit_l2",
           observableId: "mx",
           representation: "complex-vector-xyz",
           resourceRef: "data/fields/response-field-3",
@@ -768,7 +769,6 @@ describe("analysis field overlay commands", () => {
         cellOrigin: [1, 2, 3],
         floquetSpatialConvention:
           "dst_equals_src_exp_minus_i_k_dot_delta_r",
-        normalization: "unit_l2",
         phaseRad: 0.75,
         phasorConvention: "exp_minus_i_omega_t",
         view: "imag",

@@ -102,6 +102,29 @@ export { EigenBranchInspectorPanel } from "./EigenBranchInspectorPanel";
 export { EigenDispersionInspectorPanel } from "./EigenDispersionInspectorPanel";
 export { EigenModeInspectorPanel } from "./EigenModeInspectorPanel";
 
+export function buildFrequencyResponsePlotCommandInput({
+  fieldId,
+  frequencyIndex,
+  label,
+  phaseRad,
+  view,
+}: {
+  fieldId: string;
+  frequencyIndex?: number | null;
+  label: string;
+  phaseRad: number;
+  view: FrequencyDomainResponsePointAction;
+}) {
+  return {
+    fieldId,
+    ...(frequencyIndex == null ? {} : { frequencyIndex }),
+    label,
+    phaseRad,
+    source: "frequency-response" as const,
+    view,
+  };
+}
+
 // ---------------------------------------------------------------------------
 // Primary result inspector panels — these are referenced by name in the
 // registry and tests. The FMR/eigen/response panels below are dedicated
@@ -869,13 +892,13 @@ export function FmrOverviewInspectorPanel(props: InspectorPanelProps) {
       createCommandContext("inspector", kernel, {
         sourceDetail: "results.frequency_domain.fmr",
       }),
-      {
+      buildFrequencyResponsePlotCommandInput({
         fieldId: point.fieldId,
+        frequencyIndex: point.frequencyIndex,
         label: `${point.observableId} ${formatFrequency(point.frequencyHz)}`,
         phaseRad: point.phaseRad ?? 0,
-        source: "frequency-response",
         view: "phase_rotated_real",
-      },
+      }),
     );
   };
   const selectPeak = (peak: FmrPeakPoint): void => {
@@ -910,6 +933,7 @@ export function FmrOverviewInspectorPanel(props: InspectorPanelProps) {
       }),
       {
         fieldId: peak.fieldId,
+        frequencyIndex: peak.frequencyPointIndex,
         label: `${peak.source} peak ${formatFrequency(peak.frequencyHz)}`,
         phaseRad: 0,
         source: peak.source === "modal" ? "eigen-mode" : "frequency-response",
@@ -1546,6 +1570,7 @@ export function FmrPeaksInspectorPanel(props: InspectorPanelProps) {
       }),
       {
         fieldId: peak.fieldId,
+        frequencyIndex: peak.frequencyPointIndex,
         label: `${peak.source} peak ${formatFrequency(peak.frequencyHz)}`,
         phaseRad: 0,
         source: peak.source === "modal" ? "eigen-mode" : "frequency-response",
@@ -1794,6 +1819,7 @@ function FmrPeakActions({
       }),
       {
         fieldId: summary.fieldId,
+        frequencyIndex: summary.frequencyPointIndex,
         label: summary.target,
         phaseRad: 0,
         source: summary.modeRef ? "eigen-mode" : "frequency-response",
@@ -1924,6 +1950,7 @@ export function FmrComparisonInspectorPanel(props: InspectorPanelProps) {
       }),
       {
         fieldId: pair.drivenPeak.fieldId,
+        frequencyIndex: pair.drivenPeak.frequencyPointIndex,
         label: formatFmrDrivenPairLabel(pair),
         phaseRad: 0,
         source: "frequency-response",
@@ -2059,6 +2086,7 @@ function FmrComparisonActions({
       }),
       {
         fieldId: summary.drivenPeakPoint.fieldId,
+        frequencyIndex: summary.drivenPeakPoint.frequencyPointIndex,
         label: summary.drivenActionTarget,
         phaseRad: 0,
         source: "frequency-response",
@@ -2399,6 +2427,7 @@ function FrequencyResponsePoint3DActions({
         animatePhase: animate ? true : undefined,
         animationRateHz: animate ? 1 : undefined,
         fieldId: summary.fieldId,
+        frequencyIndex: summary.frequencyIndex,
         label: summary.frequencyDisplay,
         phaseRad: summary.defaultPhaseRad,
         source: "frequency-response",
@@ -2542,13 +2571,13 @@ function FrequencyResponsePointCollection({
       createCommandContext("inspector", kernel, {
         sourceDetail: "results.frequency_response.frequency_points",
       }),
-      {
+      buildFrequencyResponsePlotCommandInput({
         fieldId: point.fieldId,
+        frequencyIndex: point.frequencyIndex,
         label: `response ${formatFrequency(point.frequencyHz)}`,
         phaseRad: 0,
-        source: "frequency-response",
         view: action,
-      },
+      }),
     );
   };
 
@@ -2718,13 +2747,13 @@ export function FrequencyResponseSweepInspectorPanel(props: InspectorPanelProps)
       createCommandContext("inspector", kernel, {
         sourceDetail: "results.frequency_response.sweep",
       }),
-      {
+      buildFrequencyResponsePlotCommandInput({
         fieldId: point.fieldId,
+        frequencyIndex: point.frequencyIndex,
         label: `response ${formatFrequency(point.frequencyHz)}`,
         phaseRad: 0,
-        source: "frequency-response",
         view: "phase_rotated_real",
-      },
+      }),
     );
   };
 
@@ -2794,13 +2823,13 @@ export function FrequencyResponseSweepInspectorPanel(props: InspectorPanelProps)
               createCommandContext("inspector", kernel, {
                 sourceDetail: "results.frequency_response.sweep",
               }),
-              {
+              buildFrequencyResponsePlotCommandInput({
                 fieldId: point.fieldId,
+                frequencyIndex: point.frequencyIndex,
                 label: `response ${formatFrequency(point.frequencyHz)}`,
                 phaseRad: 0,
-                source: "frequency-response",
                 view: action,
-              },
+              }),
             );
           }}
           points={summary.responseModel.points}
@@ -4708,6 +4737,7 @@ function useFrequencyResponsePointSummary({ selection }: InspectorPanelProps) {
     fieldResource: fieldResource ?? "not available",
     fieldStatus: fieldId ? `${fieldId}; field-ready` : "field artifact missing",
     frequencyDisplay: formatFrequency(frequencyHz),
+    frequencyIndex,
     observableRows: `${matchingPoints.length} sweep row(s)`,
     phase: phase == null ? "not available" : `${formatNumber(phase)} rad`,
     provenance: provenance || "not available",

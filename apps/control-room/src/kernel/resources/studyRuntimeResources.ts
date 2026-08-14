@@ -55,6 +55,7 @@ import {
   SIMULATION_COMMANDS_PATH,
   SIMULATION_OBJECT_METRICS_PATH,
   SIMULATION_RUN_CURRENT_PATH,
+  SIMULATION_RUN_PATH,
   SIMULATION_STAGE_HYSTERESIS_EXECUTION_TREE_PATH,
   SIMULATION_STAGE_HYSTERESIS_ORIENTATION_PATH,
   SIMULATION_STAGE_HYSTERESIS_PLAN_PATH,
@@ -605,6 +606,32 @@ export function useCurrentRunResource({
     load,
     resolveRevision: (data) => data?.revision ?? null,
     resourceKey: SIMULATION_RUN_CURRENT_PATH,
+  });
+}
+
+export function useResultContextRunResource(
+  runId: string | null | undefined,
+  { enabled = true }: RuntimeResourceOptions = {},
+) {
+  const { api } = useKernel();
+  const resourceKey = runId
+    ? SIMULATION_RUN_PATH.replace("{run_id}", runId)
+    : `${SIMULATION_RUN_PATH}:none`;
+  const load = useCallback(
+    ({ signal }: { signal: AbortSignal }) =>
+      runId
+        ? api.simulation
+            .run(runId, { signal })
+            .catch(ignoreMissingResource<CurrentRunResource>)
+        : Promise.resolve(null),
+    [api, runId],
+  );
+
+  return useResource<CurrentRunResource | null>({
+    enabled: enabled && Boolean(runId),
+    load,
+    resolveRevision: (data) => data?.revision ?? null,
+    resourceKey,
   });
 }
 

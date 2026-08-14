@@ -24,12 +24,14 @@ import { formatXAxisLabel, tableRowsLike, tableWindowTableId } from "./analysisW
 import type { ChartSeries } from "./chartTableModel";
 import type { AnalysisFrequencyPresentationState } from "./hooks/useAnalysisFrequencyData";
 import type { ChartValueRange } from "./chartTableModel";
+import type { FmrModalDrivenComparisonModel } from "@/shared/domain/analysis/frequencyDomainChartModels";
 import { ANALYSIS_COMPARISON_UNAVAILABLE_REASON } from "./analysisComparison";
 
 type AnalysisPlotsViewInput = {
   activeSubview?: AnalysisSubview;
   activeSurface: AnalysisSurface;
   frequencyDomainCalculationMode?: string;
+  frequencyDomainComparisonModel?: FmrModalDrivenComparisonModel;
   descriptorId?: string | null;
   comparisonUnavailableReason?: string | null;
   displayUnits?: Readonly<Record<string, string>>;
@@ -72,7 +74,7 @@ const EMPTY_CHART_SERIES: readonly ChartSeries[] = Object.freeze([]);
 const EMPTY_SURFACE_PROVENANCE: Partial<Record<AnalysisSurface, string>> =
   Object.freeze({});
 export function AnalysisPlotsView(props: AnalysisPlotsViewInput) {
-  const { activeSubview: requestedActiveSubview, activeSurface, datasetRefs = EMPTY_STRING_LIST, descriptorId = null, displayUnits = EMPTY_DISPLAY_UNITS, dynamicStructureFactor = null, dynamicStructureFactorStatus = "idle", frequencyDomainCalculationMode, frequencyDomainProvenance = null, frequencyDomainSeries = EMPTY_CHART_SERIES, frequencyDomainStatus = "idle", frequencyDomainTitle = "Frequency domain", frequencyDomainUnavailableReason = null, kernel, onDatasetRefChange = () => undefined, onSubviewChange = () => undefined, onSurfaceChange = () => undefined, range = null, selectedDatasetRef = null, selectedPoint = null, selectedSeriesIds = EMPTY_STRING_LIST, selectedStageId = null, spinWaveGamma = null, spinWaveGammaStatus = "idle", surfaceProvenance = EMPTY_SURFACE_PROVENANCE, table = null, tableStatus = "idle", tableUnsupportedReason = null, xAxisId: selectedXAxisId = null } = props;
+  const { activeSubview: requestedActiveSubview, activeSurface, datasetRefs = EMPTY_STRING_LIST, descriptorId = null, displayUnits = EMPTY_DISPLAY_UNITS, dynamicStructureFactor = null, dynamicStructureFactorStatus = "idle", frequencyDomainCalculationMode, frequencyDomainComparisonModel, frequencyDomainProvenance = null, frequencyDomainSeries = EMPTY_CHART_SERIES, frequencyDomainStatus = "idle", frequencyDomainTitle = "Frequency domain", frequencyDomainUnavailableReason = null, kernel, onDatasetRefChange = () => undefined, onSubviewChange = () => undefined, onSurfaceChange = () => undefined, range = null, selectedDatasetRef = null, selectedPoint = null, selectedSeriesIds = EMPTY_STRING_LIST, selectedStageId = null, spinWaveGamma = null, spinWaveGammaStatus = "idle", surfaceProvenance = EMPTY_SURFACE_PROVENANCE, table = null, tableStatus = "idle", tableUnsupportedReason = null, xAxisId: selectedXAxisId = null } = props;
   const onPointSelect = props.onPointSelect ?? ignorePointSelection;
   const onDisplayUnitsChange = props.onDisplayUnitsChange ?? ignoreDisplayUnitsChange;
   const onRangeChange = props.onRangeChange ?? ignoreRangeSelection;
@@ -119,7 +121,7 @@ export function AnalysisPlotsView(props: AnalysisPlotsViewInput) {
       </header>
       {surface === "dynamics" ? (resolvedDatasetRef ? <AnalysisTableSurface chartId={chartId} chartSeries={chartSeries} descriptorId={descriptorId ?? undefined} displayUnits={displayUnits} kernel={kernel} onDisplayUnitsChange={onDisplayUnitsChange} onPointSelect={onPointSelect} onRangeChange={onRangeChange} onSelectedSeriesIdsChange={onSelectedSeriesIdsChange} range={range} selectedPoint={selectedPoint} selectedSeriesIds={selectedSeriesIds} status={tableUnsupportedReason ? "unsupported" : resolvedTableStatus} table={resolvedTable} unsupportedReason={tableUnsupportedReason} xAxisId={xAxisId} xAxisLabel={formatXAxisLabel(chartSeries, xAxisId)} /> : spinWaveGamma ? <SpinWaveGammaView resource={spinWaveGamma} status={spinWaveGammaStatus} /> : datasetPrompt) : null}
       {surface === "dispersion" ? (frequencyDomainCalculationMode ? <AnalysisFrequencySurface calculationMode={frequencyDomainCalculationMode} chartId={chartId} descriptorId={descriptorId ?? undefined} displayUnits={displayUnits} kernel={kernel} onDisplayUnitsChange={onDisplayUnitsChange} onPointSelect={onPointSelect} onRangeChange={onRangeChange} onSelectedSeriesIdsChange={onSelectedSeriesIdsChange} presentation={props.frequencyDomainPresentation} range={range} selectedPoint={selectedPoint} selectedSeriesIds={selectedSeriesIds} series={frequencyDomainSeries} status={frequencyDomainStatus} title={frequencyDomainTitle} unavailableReason={frequencyDomainUnavailableReason} /> : <DynamicStructureFactorView resource={dynamicStructureFactor} status={dynamicStructureFactorStatus} />) : null}
-      {surface === "resonance-fmr" ? <AnalysisFrequencySurface calculationMode={frequencyDomainCalculationMode} chartId={chartId} descriptorId={descriptorId ?? undefined} displayUnits={displayUnits} kernel={kernel} onDisplayUnitsChange={onDisplayUnitsChange} onPointSelect={onPointSelect} onRangeChange={onRangeChange} onSelectedSeriesIdsChange={onSelectedSeriesIdsChange} presentation={props.frequencyDomainPresentation} range={range} selectedPoint={selectedPoint} selectedSeriesIds={selectedSeriesIds} series={frequencyDomainSeries} status={frequencyDomainStatus} title={frequencyDomainTitle} unavailableReason={frequencyDomainUnavailableReason} /> : null}
+      {surface === "resonance-fmr" ? <AnalysisFrequencySurface calculationMode={frequencyDomainCalculationMode} chartId={chartId} comparisonModel={frequencyDomainComparisonModel} descriptorId={descriptorId ?? undefined} displayUnits={displayUnits} kernel={kernel} onDisplayUnitsChange={onDisplayUnitsChange} onPointSelect={onPointSelect} onRangeChange={onRangeChange} onSelectedSeriesIdsChange={onSelectedSeriesIdsChange} presentation={props.frequencyDomainPresentation} range={range} selectedPoint={selectedPoint} selectedSeriesIds={selectedSeriesIds} series={frequencyDomainSeries} status={frequencyDomainStatus} title={frequencyDomainTitle} unavailableReason={frequencyDomainUnavailableReason} /> : null}
       {surface === "hysteresis" ? (selectedStageId ? <HysteresisChart kernel={kernel} stageId={selectedStageId} /> : <div className="fm-analysis-plots__empty" role="status">Select a hysteresis stage</div>) : null}
       {surface === "comparison" ? <div className="fm-analysis-plots__comparison fm-analysis-plots__empty" role="status">
         <strong>Comparison unavailable</strong>

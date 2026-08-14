@@ -34,6 +34,7 @@ export function PhysicsFirstResultInspectorPanel({ selection }: InspectorPanelPr
         { label: "Run", mono: true, value: ref?.analysisRunId ?? "Unavailable" },
         { label: "Stage", mono: true, value: ref?.analysisStageId ?? "Unavailable" },
         { label: "Equilibrium", mono: true, value: ref?.equilibriumId ?? "Unavailable" },
+        ...(ref?.normalization ? [{ label: "Normalization", mono: true, value: ref.normalization }] : []),
         { label: "Artifact revision", mono: true, value: ref?.artifactRevision ?? "Unavailable" },
       ]}
       status={{

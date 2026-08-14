@@ -156,6 +156,7 @@ export function buildCouplingsNode(couplings: readonly ModelTreeCouplingSnapshot
     parentId: "model:session",
     badge: `${couplings.length}`,
     icon: "activity",
+    selectable: false,
     status: "ready",
     contextCommands: ["workspace.focus-selection"],
     children: couplings.map((coupling) => ({

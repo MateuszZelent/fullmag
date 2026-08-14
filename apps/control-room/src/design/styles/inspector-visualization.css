@@ -743,6 +743,35 @@ button:hover > .fm-inspector-group-icon-box {
   letter-spacing: 0.01em;
 }
 
+@container (max-width: 420px) {
+  .fm-viz-render-mode-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .fm-visualization-toggle-grid:not(.fm-visualization-toggle-grid--vectors) {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .fm-viz-layer-strip {
+    flex-wrap: wrap;
+  }
+
+  .fm-viz-layer-chip {
+    flex: 1 1 calc(50% - var(--fm-space-1));
+  }
+}
+
+@container (max-width: 260px) {
+  .fm-viz-render-mode-grid,
+  .fm-visualization-toggle-grid:not(.fm-visualization-toggle-grid--vectors) {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .fm-viz-layer-chip {
+    flex-basis: 100%;
+  }
+}
+
 /* ── Reduced motion: disable all animations ── */
 @media (prefers-reduced-motion: reduce) {
   .fm-object-visualization-overview > *,

@@ -611,6 +611,7 @@ export type SelectionRef =
       frequencyHz?: number;
       frequencyIndex?: number;
       kPathCoordinateRadPerM?: number;
+      normalization?: string;
       kind: string;
       modeIndex?: number;
       nodeId: string;
@@ -633,6 +634,7 @@ export type SelectionRef =
       frequencyIndex?: number;
       kContextKind?: AnalysisFieldOverlayKContextKind;
       kPathCoordinateRadPerM?: number;
+      normalization?: string;
       kind: "object.mode_visualization";
       modeIndex?: number;
       nodeId: string;
@@ -1074,6 +1076,7 @@ export function selectionRefEquals(
         (left.frequencyHz ?? null) === (right.frequencyHz ?? null) &&
         left.frequencyIndex === right.frequencyIndex &&
         nullableStringEquals(left.kContextKind, right.kContextKind) &&
+        nullableStringEquals(left.normalization, right.normalization) &&
         (left.kPathCoordinateRadPerM ?? null) ===
           (right.kPathCoordinateRadPerM ?? null) &&
         left.modeIndex === right.modeIndex &&
@@ -1100,6 +1103,7 @@ export function selectionRefEquals(
         (left.frequencyHz ?? null) === (right.frequencyHz ?? null) &&
         left.frequencyIndex === right.frequencyIndex &&
         nullableStringEquals(left.kContextKind, right.kContextKind) &&
+        nullableStringEquals(left.normalization, right.normalization) &&
         (left.kPathCoordinateRadPerM ?? null) ===
           (right.kPathCoordinateRadPerM ?? null) &&
         left.modeIndex === right.modeIndex &&

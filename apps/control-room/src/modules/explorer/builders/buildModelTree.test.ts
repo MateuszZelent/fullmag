@@ -1228,7 +1228,7 @@ describe("buildModelTree", () => {
     ).toMatchObject({ kind: "object.region.regions", badge: "inherits none" });
     expect(
       flattened.find((node) => node.id === "model:physics:couplings"),
-    ).toMatchObject({ badge: "1", kind: "physics.couplings" });
+    ).toMatchObject({ badge: "1", kind: "physics.couplings", selectable: false });
     expect(
       flattened.find(
         (node) => node.id === "model:physics:couplings:cpl-exchange",
@@ -3241,6 +3241,7 @@ describe("buildModelTree", () => {
       badge: "1 plot",
       kind: "visualizations-2d.root",
       label: "Visualizations 2D",
+      selectable: false,
     });
     expect(
       flattened.find((node) => node.id === "model:visualizations-2d:draft"),

@@ -3,6 +3,7 @@ import {
   type FrequencyDomainResultEvidence,
 } from "@/shared/domain/analysis/frequencyDomainResultClassification";
 import {
+  frequencyDomainResultContextFromManifest,
   buildEigenDispersionChartModel,
   buildEigenSpectrumChartModel,
   buildFrequencyResponseChartModel,
@@ -94,6 +95,7 @@ interface ResultManifestLike extends ResultResourceLike {
 }
 
 export interface PhysicsFirstResultResourceInput {
+  contractGaps?: readonly string[];
   artifacts?: PostprocessingCatalogSnapshot<readonly ArtifactResource[]>;
   branches?: ResultResourceLike | null;
   currentRun?: { revision: number | string; run_id: string } | null;
@@ -366,7 +368,7 @@ export function physicsFirstResultsSnapshotFromResources(
   const runId = input.currentRun?.run_id ?? "";
   const resultManifest = input.manifest?.result_manifest;
   const payload = ready(resultManifest) ? record(resultManifest?.payload) : null;
-  const contractGaps: string[] = [];
+  const contractGaps: string[] = [...(input.contractGaps ?? [])];
   const postprocessing =
     input.artifacts || input.tableCatalog
       ? {
@@ -427,6 +429,11 @@ export function physicsFirstResultsSnapshotFromResources(
           responseFields: ready(input.responseSweep),
           responseSpectrum: ready(input.responseSweep),
         };
+  const frequencyContext = frequencyDomainResultContextFromManifest({
+    ...payload,
+    run_id: runId,
+  });
+  const drive = frequencyContext.evidence?.drive;
   const entry: PhysicsFirstResultEntry = {
     analysisFieldTargets:
       studyProduct === "modal_eigen"
@@ -438,9 +445,11 @@ export function physicsFirstResultsSnapshotFromResources(
         : responseFieldTargets(payload, input.responseSweep, kSampling ?? undefined),
     artifactRevision,
     boundaryContext,
+    ...(drive ? { drive } : {}),
     equilibriumId,
     ...(kSampling ? { kSampling } : {}),
     observables: observablesFromPayload(payload.observables),
+    ...(frequencyContext.normalization ? { normalization: frequencyContext.normalization } : {}),
     products,
     runId,
     stageId,
@@ -501,6 +510,7 @@ function leaf(
     equilibriumId: entry.equilibriumId,
     kContextKind: classification.kContext.kind,
     resourceRef: `artifact-revision:${entry.artifactRevision}`,
+    ...(entry.normalization ? { normalization: entry.normalization } : {}),
     studyProduct: entry.studyProduct,
     ...overrides,
   });
@@ -542,6 +552,7 @@ function analysisFieldTargetNodes(
         ...(target.modeIndex !== undefined ? { modeIndex: target.modeIndex } : {}),
         ...(target.observableId ? { observableId: target.observableId } : {}),
         resourceRef: target.resourceRef,
+        ...(entry.normalization ? { normalization: entry.normalization } : {}),
         ...(target.sampleIndex !== undefined ? { sampleIndex: target.sampleIndex } : {}),
         studyProduct: entry.studyProduct,
         ...(target.wavevectorKf ? { wavevectorKf: target.wavevectorKf } : {}),

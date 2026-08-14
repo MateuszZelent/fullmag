@@ -408,6 +408,8 @@ function overlayStateFromContext(
     identityRef?.analysisStageId ?? stringValue(input.stageId) ?? undefined;
   const studyProduct =
     identityRef?.studyProduct ?? stringValue(input.studyProduct) ?? undefined;
+  const normalization =
+    identityRef?.normalization ?? stringValue(input.normalization) ?? activeIdentityOverlay?.provenance?.normalization;
   return {
     ...(appearance ? { appearance } : {}),
     ...(cellOrigin ? { cellOrigin } : {}),
@@ -447,9 +449,7 @@ function overlayStateFromContext(
             artifactRevision,
             equilibriumId,
             kContextKind,
-            normalization:
-              stringValue(input.normalization) ??
-              activeIdentityOverlay?.provenance?.normalization,
+            normalization,
             observableId:
               selectedRef?.observableId ??
               stringValue(input.observableId) ??
