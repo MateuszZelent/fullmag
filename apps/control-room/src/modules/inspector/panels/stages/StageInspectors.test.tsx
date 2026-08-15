@@ -1,6 +1,8 @@
-import { renderToStaticMarkup } from "react-dom/server";
+import { act } from "react";
 import type { ReactNode } from "react";
-import { describe, expect, it } from "vitest";
+import { createRoot } from "react-dom/client";
+import { renderToStaticMarkup } from "react-dom/server";
+import { afterEach, describe, expect, it } from "vitest";
 
 import { Accordion } from "@/shared/ui/Accordion";
 import { KernelContext } from "@/kernel/KernelContext";
@@ -49,9 +51,13 @@ import type {
 } from "@/kernel/api/apiTypes";
 import { EventBus } from "@/kernel/events/EventBus";
 import type { KernelEventMap } from "@/kernel/events/eventTypes";
-import { sharedResourceRuntimeStore } from "@/kernel/resources/ResourceRuntimeStore";
+import {
+  resetSharedResourceRuntimeStoreForTests,
+  sharedResourceRuntimeStore,
+} from "@/kernel/resources/ResourceRuntimeStore";
 import { SelectionController } from "@/kernel/selection/SelectionController";
 import type { KernelApi } from "@/kernel/types";
+import { installSimulationPreparationTestDom } from "@/kernel/layout/simulationPreparationTestDom.test-support";
 import { VisualizationDebugController } from "@/kernel/visualization/VisualizationDebugController";
 
 const selection = new SelectionController(new EventBus<KernelEventMap>());
@@ -130,7 +136,8 @@ const mockKernel = {
     },
   },
   resources: {
-    getRevision: () => 0,
+    getRevision: (resourceKey: string) =>
+      sharedResourceRuntimeStore.getSnapshot(resourceKey).revision,
     subscribe: () => () => {},
     read: () => null,
   },
@@ -207,27 +214,29 @@ function props(kind: Parameters<typeof createDefaultStudyStageDraft>[0]): StageI
   };
 }
 
+const defaultAccordionValue = [
+  "identity",
+  "authoring",
+  "telemetry",
+  "add-field-drive",
+  "add-field-waveform",
+  "add-field-activation",
+  "run-time-integration",
+  "run-drive",
+  "run-workflow-state",
+  "run-progress",
+  "table-autosave-state",
+  "table-autosave-fft-clock",
+  "autosave-state",
+  "fft-response-state",
+  "fft-response-clock",
+  "eigenmodes-command-center",
+  "frequency-response-command-center",
+];
+
 function render(
   children: ReactNode,
-  defaultValue = [
-    "identity",
-    "authoring",
-    "telemetry",
-    "add-field-drive",
-    "add-field-waveform",
-    "add-field-activation",
-    "run-time-integration",
-    "run-drive",
-    "run-workflow-state",
-    "run-progress",
-    "table-autosave-state",
-    "table-autosave-fft-clock",
-    "autosave-state",
-    "fft-response-state",
-    "fft-response-clock",
-    "eigenmodes-command-center",
-    "frequency-response-command-center",
-  ],
+  defaultValue = defaultAccordionValue,
 ): string {
   return renderToStaticMarkup(
     <KernelContext.Provider value={mockKernel}>
@@ -237,6 +246,50 @@ function render(
     </KernelContext.Provider>,
   );
 }
+
+function renderMounted(
+  children: ReactNode,
+  defaultValue = defaultAccordionValue,
+): string {
+  const dom = installSimulationPreparationTestDom();
+  const container = dom.document.createElement("div");
+  dom.document.body.appendChild(container);
+  const root = createRoot(container as unknown as Element);
+
+  try {
+    act(() => {
+      root.render(
+        <KernelContext.Provider value={mockKernel}>
+          <Accordion type="multiple" defaultValue={defaultValue}>
+            {children}
+          </Accordion>
+        </KernelContext.Provider>,
+      );
+    });
+    return escapeMountedMarkup(container.innerHTML);
+  } finally {
+    act(() => root.unmount());
+    dom.restore();
+  }
+}
+
+function escapeMountedMarkup(markup: string): string {
+  const escape = (value: string) =>
+    value
+      .replaceAll("&", "&amp;")
+      .replaceAll("<", "&lt;")
+      .replaceAll(">", "&gt;")
+      .replaceAll('"', "&quot;")
+      .replaceAll("'", "&#x27;");
+
+  return markup
+    .replace(/="([^"]*)"/g, (_match, value: string) => `="${escape(value)}"`)
+    .replace(/>([^<]*)</g, (_match, value: string) => `>${escape(value)}<`);
+}
+
+afterEach(() => {
+  resetSharedResourceRuntimeStoreForTests();
+});
 
 function hysteresisFamilyVariantPointsRef(
   stageId: string,
@@ -1590,7 +1643,7 @@ describe("Study stage inspectors", () => {
       ]),
       settlePipelineMode: "tree",
     };
-    const markup = render(
+    const markup = renderMounted(
       <HysteresisStageInspector
         {...customProps}
         view="settle-pipeline"
@@ -1636,7 +1689,7 @@ describe("Study stage inspectors", () => {
       0,
     );
 
-    const markup = render(
+    const markup = renderMounted(
       <HysteresisStageInspector {...props("hysteresis")} view="orientation" />,
       ["hysteresis-orientation"],
     );
@@ -1696,7 +1749,7 @@ describe("Study stage inspectors", () => {
       "explorer",
     );
 
-    const markup = render(
+    const markup = renderMounted(
       <HysteresisStageInspector {...props("hysteresis")} view="branch-detail" />,
       ["hysteresis-branch-detail"],
     );
@@ -1771,7 +1824,7 @@ describe("Study stage inspectors", () => {
       "explorer",
     );
 
-    const markup = render(
+    const markup = renderMounted(
       <HysteresisStageInspector {...props("hysteresis")} view="branch-detail" />,
       ["hysteresis-branch-detail"],
     );
@@ -1828,7 +1881,7 @@ describe("Study stage inspectors", () => {
       "explorer",
     );
 
-    const markup = render(
+    const markup = renderMounted(
       <HysteresisStageInspector {...props("hysteresis")} view="branch-detail" />,
       ["hysteresis-branch-detail"],
     );
@@ -1869,7 +1922,7 @@ describe("Study stage inspectors", () => {
 
     sharedResourceRuntimeStore.updateData(progressKey, progress, 0);
 
-    const markup = render(
+    const markup = renderMounted(
       <HysteresisStageInspector {...props("hysteresis")} />,
       ["hysteresis-live-progress"],
     );
@@ -1905,7 +1958,7 @@ describe("Study stage inspectors", () => {
     };
     sharedResourceRuntimeStore.updateData(metricsKey, metricsResource, 0);
 
-    const markup = render(
+    const markup = renderMounted(
       <HysteresisStageInspector {...props("hysteresis")} view="saturation" />,
       ["hysteresis-saturation"],
     );
@@ -1939,7 +1992,7 @@ describe("Study stage inspectors", () => {
     };
     sharedResourceRuntimeStore.updateData(progressKey, progress, 0);
 
-    const markup = render(
+    const markup = renderMounted(
       <HysteresisStageInspector {...props("hysteresis")} view="points" />,
       ["hysteresis-points"],
     );
@@ -1982,7 +2035,7 @@ describe("Study stage inspectors", () => {
     ];
     sharedResourceRuntimeStore.updateData(pointsKey, hysteresisPointsResource(points), 0);
 
-    const markup = render(
+    const markup = renderMounted(
       <HysteresisStageInspector {...props("hysteresis")} view="points" />,
       ["hysteresis-points"],
     );
@@ -2027,7 +2080,7 @@ describe("Study stage inspectors", () => {
     ];
     sharedResourceRuntimeStore.updateData(pointsKey, hysteresisPointsResource(points), 0);
 
-    const markup = render(
+    const markup = renderMounted(
       <HysteresisStageInspector {...props("hysteresis")} view="points" />,
       ["hysteresis-points"],
     );
@@ -2066,7 +2119,7 @@ describe("Study stage inspectors", () => {
     sharedResourceRuntimeStore.updateData(pointsKey, hysteresisPointsResource([]), 0);
     sharedResourceRuntimeStore.updateData(progressKey, progress, 0);
 
-    const markup = render(
+    const markup = renderMounted(
       <HysteresisStageInspector {...props("hysteresis")} view="points" />,
       ["hysteresis-points"],
     );
@@ -2138,7 +2191,7 @@ describe("Study stage inspectors", () => {
     sharedResourceRuntimeStore.updateData(pointsKey, hysteresisPointsResource(points), 0);
     sharedResourceRuntimeStore.updateData(progressKey, progress, 0);
 
-    const markup = render(
+    const markup = renderMounted(
       <HysteresisStageInspector {...props("hysteresis")} view="points-completed" />,
       ["hysteresis-points-completed"],
     );
@@ -2194,7 +2247,7 @@ describe("Study stage inspectors", () => {
     };
     sharedResourceRuntimeStore.updateData(progressKey, progress, 0);
 
-    const markup = render(
+    const markup = renderMounted(
       <HysteresisStageInspector {...props("hysteresis")} view="points-queued" />,
       ["hysteresis-points-queued"],
     );
@@ -2229,7 +2282,7 @@ describe("Study stage inspectors", () => {
     };
     sharedResourceRuntimeStore.updateData(progressKey, progress, 0);
 
-    const markup = render(
+    const markup = renderMounted(
       <HysteresisStageInspector {...props("hysteresis")} view="points-planned" />,
       ["hysteresis-points-planned"],
     );
@@ -2324,7 +2377,7 @@ describe("Study stage inspectors", () => {
     sharedResourceRuntimeStore.updateData(bookmarksKey, bookmarks, 0);
     sharedResourceRuntimeStore.updateData(executionTreeKey, executionTree, 0);
 
-    const markup = render(
+    const markup = renderMounted(
       <HysteresisStageInspector {...props("hysteresis")} view="points-bookmarks" />,
       ["hysteresis-points-bookmarks"],
     );
@@ -2408,7 +2461,7 @@ describe("Study stage inspectors", () => {
       "explorer",
     );
 
-    const markup = render(
+    const markup = renderMounted(
       <HysteresisStageInspector {...props("hysteresis")} view="execution-node" />,
       ["hysteresis-execution-node"],
     );
@@ -2448,7 +2501,7 @@ describe("Study stage inspectors", () => {
       "analysis-plots",
     );
 
-    const markup = render(
+    const markup = renderMounted(
       <HysteresisStageInspector {...props("hysteresis")} />,
       ["hysteresis-live-progress"],
     );
@@ -2547,7 +2600,7 @@ describe("Study stage inspectors", () => {
       "analysis-plots",
     );
 
-    const markup = render(
+    const markup = renderMounted(
       <HysteresisStageInspector {...props("hysteresis")} view="transitions" />,
       ["hysteresis-transitions"],
     );
@@ -2630,7 +2683,7 @@ describe("Study stage inspectors", () => {
       "analysis-plots",
     );
 
-    const markup = render(
+    const markup = renderMounted(
       <HysteresisStageInspector {...props("hysteresis")} view="points" />,
       ["hysteresis-points"],
     );
@@ -2714,7 +2767,7 @@ describe("Study stage inspectors", () => {
       "explorer",
     );
 
-    const markup = render(
+    const markup = renderMounted(
       <HysteresisStageInspector {...props("hysteresis")} view="point-detail" />,
       ["hysteresis-point-detail"],
     );
@@ -2796,7 +2849,7 @@ describe("Study stage inspectors", () => {
       "explorer",
     );
 
-    const markup = render(
+    const markup = renderMounted(
       <HysteresisStageInspector {...props("hysteresis")} view="snapshots" />,
       ["hysteresis-snapshots"],
     );
@@ -2857,7 +2910,7 @@ describe("Study stage inspectors", () => {
     ];
     sharedResourceRuntimeStore.updateData(pointsKey, hysteresisPointsResource(points), 0);
 
-    const markup = render(
+    const markup = renderMounted(
       <HysteresisStageInspector {...props("hysteresis")} view="points" />,
       ["hysteresis-points"],
     );
@@ -2930,7 +2983,7 @@ describe("Study stage inspectors", () => {
     ];
     sharedResourceRuntimeStore.updateData(settleTraceKey, settleTrace, 0);
 
-    const markup = render(
+    const markup = renderMounted(
       <HysteresisStageInspector {...props("hysteresis")} />,
       ["hysteresis-settle-trace"],
     );
@@ -2995,7 +3048,7 @@ describe("Study stage inspectors", () => {
       4,
     );
 
-    const markup = render(
+    const markup = renderMounted(
       <HysteresisStageInspector {...props("hysteresis")} view="settle-trace" />,
       ["hysteresis-settle-trace"],
     );
@@ -3046,7 +3099,7 @@ describe("Study stage inspectors", () => {
     ];
     sharedResourceRuntimeStore.updateData(settleTraceKey, settleTrace, 0);
 
-    const markup = render(
+    const markup = renderMounted(
       <HysteresisStageInspector {...props("hysteresis")} view="settle-trace" />,
       ["hysteresis-settle-trace"],
     );
@@ -3103,7 +3156,7 @@ describe("Study stage inspectors", () => {
     ];
     sharedResourceRuntimeStore.updateData(settleTraceKey, settleTrace, 0);
 
-    const markup = render(
+    const markup = renderMounted(
       <HysteresisStageInspector {...props("hysteresis")} view="settle-trace" />,
       ["hysteresis-settle-trace"],
     );
@@ -3209,7 +3262,7 @@ describe("Study stage inspectors", () => {
       0,
     );
 
-    const markup = render(
+    const markup = renderMounted(
       <HysteresisStageInspector {...props("hysteresis")} view="metrics" />,
       ["hysteresis-metrics"],
     );
@@ -3319,7 +3372,7 @@ describe("Study stage inspectors", () => {
       22,
     );
 
-    const markup = render(
+    const markup = renderMounted(
       <HysteresisStageInspector {...props("hysteresis")} view="plan" />,
       ["hysteresis-plan"],
     );
@@ -3397,7 +3450,7 @@ describe("Study stage inspectors", () => {
       22,
     );
 
-    const markup = render(
+    const markup = renderMounted(
       <HysteresisStageInspector
         {...props("hysteresis")}
         view="adaptive-refinement"
@@ -3481,7 +3534,7 @@ describe("Study stage inspectors", () => {
     };
     sharedResourceRuntimeStore.updateData(familyKey, family, 31);
 
-    const markup = render(
+    const markup = renderMounted(
       <HysteresisStageInspector {...props("hysteresis")} view="angular-family" />,
       ["hysteresis-angular-family"],
     );
@@ -3537,11 +3590,12 @@ describe("Study stage inspectors", () => {
     sharedResourceRuntimeStore.updateData(protocolKey, protocol, 23);
     sharedResourceRuntimeStore.updateData(settlePipelineKey, settlePipeline, 23);
 
-    const protocolMarkup = render(
+    const protocolMarkup = renderMounted(
       <HysteresisStageInspector {...props("hysteresis")} view="protocol" />,
       ["hysteresis-protocol"],
     );
-    const settleMarkup = render(
+    sharedResourceRuntimeStore.updateData(settlePipelineKey, settlePipeline, 23);
+    const settleMarkup = renderMounted(
       <HysteresisStageInspector {...props("hysteresis")} />,
       ["hysteresis-settle"],
     );
@@ -3568,7 +3622,7 @@ describe("Study stage inspectors", () => {
       31,
     );
 
-    const settleMarkup = render(
+    const settleMarkup = renderMounted(
       <HysteresisStageInspector {...props("hysteresis")} />,
       ["hysteresis-settle"],
     );
@@ -3613,7 +3667,7 @@ describe("Study stage inspectors", () => {
     };
     sharedResourceRuntimeStore.updateData(settlePipelineKey, settlePipeline, 24);
 
-    const settleMarkup = render(
+    const settleMarkup = renderMounted(
       <HysteresisStageInspector {...props("hysteresis")} />,
       ["hysteresis-settle"],
     );

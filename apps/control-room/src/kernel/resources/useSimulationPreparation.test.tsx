@@ -349,7 +349,7 @@ describe("useSimulationPreparation", () => {
     dom.restore();
   });
 
-  it("matches the server and first client snapshot and aborts on unmount", async () => {
+  it("uses the deterministic server snapshot and client revision before aborting", async () => {
     const pending = deferred<SimulationPreparationResource>();
     let signal: AbortSignal | undefined;
     const load = vi.fn((options?: { signal?: AbortSignal }) => {
@@ -368,22 +368,34 @@ describe("useSimulationPreparation", () => {
     const clientObservations: PreparationResult[] = [];
     const dom = installTestDom();
     const root = createRoot(dom.document.createElement("div") as unknown as Element);
-    await act(async () => {
-      root.render(
-        <KernelContext.Provider value={kernel}>
-          <Probe observations={clientObservations} />
-        </KernelContext.Provider>,
-      );
-    });
+    try {
+      await act(async () => {
+        root.render(
+          <KernelContext.Provider value={kernel}>
+            <Probe observations={clientObservations} />
+          </KernelContext.Provider>,
+        );
+      });
 
-    expect(resultSnapshot(clientObservations[0]!)).toEqual(
-      resultSnapshot(serverObservations[0]!),
-    );
-    await waitFor(() => load.mock.calls.length === 1, "request did not start");
-    expect(signal?.aborted).toBe(false);
-    await act(async () => root.unmount());
-    expect(signal?.aborted).toBe(true);
-    dom.restore();
+      expect(resultSnapshot(serverObservations[0]!)).toEqual({
+        data: null,
+        error: null,
+        revision: null,
+        status: "loading",
+      });
+      expect(resultSnapshot(clientObservations[0]!)).toEqual({
+        data: null,
+        error: null,
+        revision: 11,
+        status: "loading",
+      });
+      await waitFor(() => load.mock.calls.length === 1, "request did not start");
+      expect(signal?.aborted).toBe(false);
+    } finally {
+      await act(async () => root.unmount());
+      expect(signal?.aborted).toBe(true);
+      dom.restore();
+    }
   });
 });
 

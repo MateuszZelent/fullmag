@@ -692,7 +692,7 @@ async function settleMountedModule(): Promise<void> {
   });
   for (let index = 0; index < 8; index += 1) {
     await act(async () => {
-      await new Promise<void>((resolve) => setTimeout(resolve, 0));
+      await Promise.resolve();
     });
   }
 }
