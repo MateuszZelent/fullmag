@@ -5749,25 +5749,13 @@ fn refresh_problem_preview_state(
     let preview_request = display_selection.preview_request();
     let (preview_field, cached_fields, auxiliary_artifacts) = if refresh_cache {
         let cached_quantities = fullmag_runner::quantities::field_materialization_quantity_ids();
+        let materialization_request = full_field_materialization_request(preview_request.clone());
         let batch = fullmag_runner::snapshot_problem_vector_field_batch(
             &problem,
             &cached_quantities,
-            &preview_request,
+            &materialization_request,
         )?;
-        let requested_quantity =
-            fullmag_runner::quantities::normalize_quantity_id(&preview_request.quantity)
-                .map_err(|error| anyhow!(error.to_string()))?;
-        let preview_field = batch
-            .fields
-            .iter()
-            .find(|field| field.quantity == requested_quantity.as_str())
-            .cloned()
-            .ok_or_else(|| {
-                anyhow!(
-                    "multilayer preview quantity '{}' is unavailable for the current plan",
-                    preview_request.quantity
-                )
-            })?;
+        let preview_field = fullmag_runner::snapshot_problem_preview(&problem, &preview_request)?;
         (preview_field, Some(batch.fields), batch.auxiliary_artifacts)
     } else {
         (
@@ -14463,6 +14451,7 @@ mod tests {
 
         assert!(function_body.contains("snapshot_problem_vector_field_batch"));
         assert!(function_body.contains("replace_auxiliary_artifacts"));
+        assert!(function_body.contains("full_field_materialization_request"));
     }
 
     #[test]

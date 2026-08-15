@@ -298,6 +298,7 @@ test("browser smoke proves the FDM Airbox target has visible wireframe and vecto
   assert.match(smokeSource, /ensureFdmAirboxWireframe/);
   assert.match(smokeSource, /assertFdmAirboxVectorRender/);
   assert.match(smokeSource, /data-fdm-airbox-target/);
+  assert.match(smokeSource, /data-fdm-airbox-points-visible/);
   assert.match(smokeSource, /data-fdm-airbox-wireframe-visible/);
   assert.match(smokeSource, /data-fdm-airbox-vectors-visible/);
   assert.match(smokeSource, /data-fdm-airbox-model-count/);

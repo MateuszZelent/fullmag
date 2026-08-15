@@ -378,6 +378,38 @@ describe("FDM Airbox mesh demand", () => {
     );
   });
 
+  it("maps the canonical single-grid Airbox target to the outside-support render carrier", () => {
+    const source = readFileSync(sceneModelSourceUrl, "utf8");
+    const targetsStart = source.indexOf("const visualizationDebugTargets =");
+    const targetsBlock = source.slice(
+      targetsStart,
+      source.indexOf(
+        "const visualizationDebugTopologyByteLength",
+        targetsStart,
+      ),
+    );
+
+    expect(targetsBlock).toMatch(
+      /target\.id === AIRBOX_VISUALIZATION_TARGET\.id[\s\S]*carrierIds\.add\("fdm-universe-outside-support"\)/,
+    );
+    expect(targetsBlock).toMatch(
+      /target\.id === AIRBOX_VISUALIZATION_TARGET\.id[\s\S]*fdmAirboxDebugRenderPass/,
+    );
+  });
+
+  it("keeps canonical FDM Airbox display settings on the subscribed local controller snapshot", () => {
+    const source = readFileSync(sceneModelSourceUrl, "utf8");
+    const settingsStart = source.indexOf("const airboxSettings = useMemo(");
+    const settingsBlock = source.slice(
+      settingsStart,
+      source.indexOf("const fdmSingleGridAirboxSettings", settingsStart),
+    );
+
+    expect(settingsBlock).toContain(
+      "visualizationState: fdmLaneActive ? null : renderingState",
+    );
+  });
+
   it("builds the inactive-cell carrier for wireframe, points, or vectors", () => {
     const source = readFileSync(sceneModelSourceUrl, "utf8");
 

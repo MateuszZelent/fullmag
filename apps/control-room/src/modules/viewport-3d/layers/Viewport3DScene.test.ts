@@ -76,6 +76,21 @@ describe("Viewport3DScene scale helpers", () => {
     expect(source).not.toContain("pointsVisible: false,\n        shaderVisible: false,\n        wireframeVisible: false,");
   });
 
+  it("drives the FDM Airbox extent overlay from the canonical Airbox settings", () => {
+    const source = readFileSync(
+      new URL("./Viewport3DScene.tsx", import.meta.url),
+      "utf8",
+    );
+    const overlayStart = source.indexOf("function Viewport3DOverlayLayerStack");
+    const overlayBlock = source.slice(
+      overlayStart,
+      source.indexOf("function Viewport3DModelLayerStack", overlayStart),
+    );
+
+    expect(overlayBlock).toContain("settings={airboxSettings}");
+    expect(overlayBlock).not.toContain("fdmUniverseOutsideSupportSettings");
+  });
+
   it("routes outside-support FDM field adoption through its exact carrier", () => {
     const source = readFileSync(
       new URL("./Viewport3DScene.tsx", import.meta.url),
