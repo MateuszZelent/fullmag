@@ -146,6 +146,13 @@ fn fdm_quantity_is_active(engine: FdmEngine, plan: &FdmPlanIR, id: QuantityId) -
                 | QuantityId::HAni
                 | QuantityId::HEff
                 | QuantityId::HOe
+                | QuantityId::EdenEx
+                | QuantityId::EdenDemag
+                | QuantityId::EdenExt
+                | QuantityId::EdenDrive
+                | QuantityId::EdenAni
+                | QuantityId::EdenDmi
+                | QuantityId::EdenTotal
                 | QuantityId::VElectric
                 | QuantityId::JCharge
         ),
@@ -596,7 +603,7 @@ mod tests {
         );
         assert_eq!(
             active_fdm_preview_quantities(FdmEngine::CudaFdm, &plan, &quantities),
-            Vec::<&'static str>::new()
+            vec!["eden_ex", "eden_ext", "eden_total"]
         );
 
         plan.enable_demag = true;
@@ -605,6 +612,17 @@ mod tests {
 
         assert_eq!(
             active_fdm_preview_quantities(FdmEngine::CpuReference, &plan, &quantities),
+            vec![
+                "eden_ex",
+                "eden_demag",
+                "eden_ext",
+                "eden_ani",
+                "eden_dmi",
+                "eden_total"
+            ]
+        );
+        assert_eq!(
+            active_fdm_preview_quantities(FdmEngine::CudaFdm, &plan, &quantities),
             vec![
                 "eden_ex",
                 "eden_demag",

@@ -106,7 +106,7 @@ pub fn default_capability_matrix() -> CapabilityMatrix {
     for id in [HAni, HDmi, HMel, HAniCubic, HDmiBulk] {
         m.set(FdmCpuReference, id, Derived);
     }
-    for id in [EAni, EDmi, MatMs, MatAex, MatAlpha] {
+    for id in [EdenEx, EdenDemag, EdenExt, EdenDrive, EdenAni, EdenDmi, EdenTotal, EAni, EDmi, MatMs, MatAex, MatAlpha] {
         m.set(FdmCpuReference, id, Derived);
     }
     // Planned for FDM CPU
@@ -118,7 +118,7 @@ pub fn default_capability_matrix() -> CapabilityMatrix {
     for id in [M, HEx, HDemag, HExt, HAnt, HEff, EEx, EDemag, EExt, ETotal] {
         m.set(FdmCuda, id, Exact);
     }
-    for id in [HAni, HDmi, EAni, EDmi] {
+    for id in [HAni, HDmi, EdenEx, EdenDemag, EdenExt, EdenDrive, EdenAni, EdenDmi, EdenTotal, EAni, EDmi] {
         m.set(FdmCuda, id, Derived);
     }
     for id in [
@@ -191,6 +191,15 @@ mod tests {
         assert!(m.is_available(BackendFamily::FdmCpuReference, ETotal));
         assert!(m.is_available(BackendFamily::FdmCpuReference, HAni));
         assert!(!m.is_available(BackendFamily::FdmCpuReference, HOe)); // planned
+    }
+
+    #[test]
+    fn fdm_cpu_and_cuda_expose_spatial_energy_density_capabilities() {
+        let m = default_capability_matrix();
+        for quantity in [EdenEx, EdenDemag, EdenExt, EdenDrive, EdenAni, EdenDmi, EdenTotal] {
+            assert!(m.is_available(BackendFamily::FdmCpuReference, quantity));
+            assert!(m.is_available(BackendFamily::FdmCuda, quantity));
+        }
     }
 
     #[test]
