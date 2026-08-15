@@ -49,8 +49,8 @@
     },
     {
       "path": "crates/fullmag-api/src/schemas/planar_fields.rs",
-      "symbols": ["PlanarFieldQuery", "PlanarFieldMetaResource"],
-      "responsibility": "OpenAPI query and metadata schemas for sampled planar fields."
+      "symbols": ["PlanarFieldQuery", "PlanarFieldMetaResource", "PlanarMeshOverlayDescriptor"],
+      "responsibility": "OpenAPI query, metadata and geometry-source descriptor schemas for sampled planar fields."
     },
     {
       "path": "crates/fullmag-api/src/schemas/visualization_state.rs",
@@ -370,6 +370,18 @@
       "path": "crates/fullmag-api/src/fem_cross_section.rs",
       "symbol": "serialize_planar_overlay_fmcs_v4",
       "responsibility": "Own the exact FMCS v4 planar-overlay representation and its parallel segment classes."
+    },
+    {
+      "id": "fdm-planar-grid-codec",
+      "path": "crates/fullmag-api/src/fdm_planar_grid_overlay.rs",
+      "symbol": "serialize_fmfg_v1",
+      "responsibility": "Serialize the bounded FMFG v1 structured-grid section representation."
+    },
+    {
+      "id": "fdm-planar-grid-overlay",
+      "path": "crates/fullmag-api/src/planar_sampling/fdm.rs",
+      "symbol": "build_grid_overlay",
+      "responsibility": "Intersect selected FDM cells with the monitor centre plane and deduplicate procedural grid segments."
     },
     {
       "id": "planar-overlay-classifier",

@@ -1,5 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 
 import { assertPlanarEvidenceReady } from "./lib/planar-field-evidence.mjs";
 
@@ -18,6 +20,7 @@ const timeoutMs = Number(
 const switchCount = Number(
   process.env.CONTROL_ROOM_PLANAR_SWITCH_COUNT ?? 100,
 );
+const execFileAsync = promisify(execFile);
 
 async function main() {
   const playwright = await loadPlaywright();
@@ -69,6 +72,28 @@ async function main() {
       ...(window.__FULLMAG_CONFIG__ ?? {}),
       controlRoomApiBase: baseUrl,
     };
+    const NativeWorker = window.Worker;
+    const workerAudit = { active: 0, created: 0, terminated: 0 };
+    window.__FULLMAG_PLANAR_WORKER_AUDIT__ = workerAudit;
+    window.Worker = class FullmagPlanarAuditedWorker extends NativeWorker {
+      constructor(...args) {
+        super(...args);
+        const isPlanar = String(args[0]).includes("planarRendererWorker");
+        if (!isPlanar) return;
+        workerAudit.active += 1;
+        workerAudit.created += 1;
+        let terminated = false;
+        const nativeTerminate = this.terminate.bind(this);
+        this.terminate = () => {
+          if (!terminated) {
+            terminated = true;
+            workerAudit.active -= 1;
+            workerAudit.terminated += 1;
+          }
+          nativeTerminate();
+        };
+      }
+    };
   }, apiBase);
 
   try {
@@ -78,6 +103,7 @@ async function main() {
       timeout: timeoutMs,
       waitUntil: "domcontentloaded",
     });
+    const workerBaseline = await readPlanarWorkerSnapshot(page);
     const open2d = page.getByRole("button", { name: "2D", exact: true });
     await open2d.waitFor({ state: "visible", timeout: timeoutMs });
     const initialOpenStarted = performance.now();
@@ -108,6 +134,12 @@ async function main() {
       fullPage: true,
       path: path.join(outputDir, "scalar-plane.png"),
     });
+
+    const qualificationCases = await captureLayerCases(
+      page,
+      initialMonitor,
+      observedPlanarMeta,
+    );
 
     const performanceMetrics = { initial_open_ms: initialOpenMs };
     const smallSwitch = await timedMonitorSwitch(
@@ -161,7 +193,14 @@ async function main() {
     );
 
     const memoryBefore = await usedHeap(page);
+    if (memoryBefore == null) {
+      throw new Error("performance.memory is unavailable; heap lifecycle gate cannot run");
+    }
     for (let index = 0; index < switchCount; index += 1) {
+      await open3d.click();
+      await assertHealthyWebGL(page, `lifecycle cycle ${index + 1}`);
+      await open2d.click();
+      await assertFieldMapCanvas(page);
       const monitor = monitorById(monitors, required[index % required.length]);
       await selectMonitor(monitor.id, 128);
       await waitForCanvasPaint(page);
@@ -174,14 +213,12 @@ async function main() {
       );
     }
     const memoryAfter = await usedHeap(page);
+    if (memoryAfter == null) {
+      throw new Error("performance.memory disappeared; heap lifecycle gate cannot complete");
+    }
     const memoryGrowthBytes =
-      memoryBefore == null || memoryAfter == null
-        ? null
-        : memoryAfter - memoryBefore;
-    if (
-      memoryGrowthBytes != null &&
-      memoryGrowthBytes > 96 * 1024 * 1024
-    ) {
+      memoryAfter - memoryBefore;
+    if (memoryGrowthBytes > 96 * 1024 * 1024) {
       throw new Error(
         `100-switch heap growth exceeded 96 MiB: ${memoryGrowthBytes}`,
       );
@@ -189,30 +226,164 @@ async function main() {
     if (errors.length > 0) {
       throw new Error(`Browser errors:\n${errors.join("\n")}`);
     }
+    await open3d.click();
+    const finalWebGL = await assertHealthyWebGL(page, "after planar lifecycle cycles");
+    const workerAfter = await readPlanarWorkerSnapshot(page);
+    if (workerAfter.active !== workerBaseline.active) {
+      throw new Error(
+        `Planar worker count did not return to baseline: ${JSON.stringify({ workerAfter, workerBaseline })}`,
+      );
+    }
+    if (
+      workerAfter.created <= workerBaseline.created ||
+      workerAfter.created - workerBaseline.created !==
+        workerAfter.terminated - workerBaseline.terminated
+    ) {
+      throw new Error(
+        `Planar workers were not created and terminated one-for-one: ${JSON.stringify({ workerAfter, workerBaseline })}`,
+      );
+    }
+    const status = await getJson("/v2/sessions/current/status");
+    const run = await getJson("/v2/sessions/current/simulation/runs/current");
+    const scienceReport = await readScienceReport();
+    const currentGitHead = await gitHead();
+    const runtimeBundleIdentity = {
+      api_contract_version: status.api_contract_version,
+      requested_backend: run.requested_backend,
+      requested_device: run.requested_device,
+      resolved_backend: run.resolved_backend,
+      resolved_device: run.resolved_device,
+      resolved_runtime_family: run.resolved_runtime_family,
+      runtime_bundle_version: status.runtime_bundle_version,
+    };
+    const scienceMatchesRuntime =
+      scienceReport.pass === true &&
+      scienceReport.head === currentGitHead &&
+      scienceReport.backend === backend &&
+      scienceReport.device === run.resolved_device &&
+      scienceReport.execution?.requested_backend === run.requested_backend &&
+      scienceReport.execution?.requested_device === run.requested_device &&
+      scienceReport.execution?.resolved_backend === run.resolved_backend &&
+      scienceReport.execution?.resolved_device === run.resolved_device &&
+      scienceReport.execution?.resolved_runtime_family === run.resolved_runtime_family &&
+      scienceReport.runtime_bundle_identity?.api_contract_version ===
+        status.api_contract_version &&
+      scienceReport.runtime_bundle_identity?.runtime_bundle_version ===
+        status.runtime_bundle_version;
     const report = {
       backend,
       canvas: "2d",
       canvas_proof: initialCanvas,
       evidence: smokeEvidence,
+      final_webgl: finalWebGL,
+      git_head: currentGitHead,
       keyboard_shortcut: "2",
       memory_after_bytes: memoryAfter,
       memory_before_bytes: memoryBefore,
       memory_growth_bytes: memoryGrowthBytes,
-      pass: smokeEvidence.every((evidence) => evidence.status === "ready"),
+      pass:
+        scienceMatchesRuntime &&
+        scienceReport.qualification_complete === true &&
+        smokeEvidence.every((evidence) => evidence.status === "ready") &&
+        qualificationCases.filter((entry) => entry.required).every((entry) => entry.passed),
       performance: performanceMetrics,
       reduced_motion: true,
       planar_frame_preview_3d: true,
+      qualification_cases: qualificationCases,
+      scientific_qualification: {
+        complete: scienceReport.qualification_complete === true,
+        matches_runtime: scienceMatchesRuntime,
+        pass: scienceReport.pass === true,
+        report: "../science-report.json",
+        status: scienceReport.qualification_status ?? "blocked",
+      },
+      runtime_bundle_identity: runtimeBundleIdentity,
       schema_version: "viewport-2d-browser-smoke-v2",
       switch_count: switchCount,
+      worker_after: workerAfter,
+      worker_baseline: workerBaseline,
     };
     await fs.writeFile(
       path.join(outputDir, "browser-report.json"),
       JSON.stringify(report, null, 2) + "\n",
     );
+    if (!report.pass) {
+      throw new Error(`Viewport 2D qualification is blocked: ${outputDir}`);
+    }
     console.log(`Viewport 2D browser smoke passed: ${outputDir}`);
   } finally {
     await browser.close();
   }
+}
+
+async function captureLayerCases(page, monitor, observedPlanarMeta) {
+  const definitions = [
+    { id: "raster", layers: { raster: true } },
+    { id: "contours", layers: { contours: true, raster: true } },
+    { id: "mesh", layers: { mesh: true, raster: true } },
+    { id: "boundaries", layers: { boundaries: true, raster: true } },
+    { id: "bounds", layers: { bounds: true, raster: true } },
+    { id: "points", layers: { points: true, raster: true } },
+    { id: "vectors", layers: { raster: true, vectors: true } },
+    { id: "probes", layers: { probes: true, raster: true } },
+  ];
+  const cases = [];
+  for (const definition of definitions) {
+    const visualizationState = await selectMonitor(
+      monitor.id,
+      128,
+      definition.layers,
+    );
+    await waitForCanvasPaint(page);
+    const evidence = await assertPlanarEvidence(
+      page,
+      expectedPlanarEvidence(monitor),
+      observedPlanarMeta,
+    );
+    if (definition.id === "probes") {
+      const canvas = page.locator(".fm-field-map__canvas").first();
+      const box = await canvas.boundingBox();
+      if (!box) throw new Error("Probe layer canvas has no measurable bounds");
+      await canvas.click({ position: { x: box.width / 2, y: box.height / 2 } });
+      await page.getByRole("table", { name: "Pinned planar probe" }).waitFor({
+        state: "visible",
+        timeout: timeoutMs,
+      });
+    }
+    await page.screenshot({
+      fullPage: true,
+      path: path.join(outputDir, `layer-${definition.id}.png`),
+    });
+    const positiveOverlay =
+      definition.id === "contours"
+        ? evidence.overlayCounts.contours > 0
+        : definition.id === "bounds"
+          ? evidence.overlayCounts.boundsSegments === 4
+          : definition.id === "points"
+            ? evidence.overlayCounts.pointMarkers > 0
+        : ["mesh", "boundaries"].includes(definition.id)
+          ? evidence.overlayCounts.meshSegments > 0
+          : definition.id === "vectors"
+            ? evidence.glyphCount > 0
+            : true;
+    const acceptedLayers = visualizationState.planar?.layers ?? null;
+    const exactLayerSelection =
+      acceptedLayers != null &&
+      Object.entries(definition.layers).every(
+        ([layer, enabled]) => acceptedLayers[layer] === enabled,
+      );
+    cases.push({
+      accepted_layers: acceptedLayers,
+      case_id: `layer-${definition.id}`,
+      evidence,
+      layers: definition.layers,
+      passed: positiveOverlay && exactLayerSelection,
+      required: true,
+      screenshot: `layer-${definition.id}.png`,
+      status: positiveOverlay && exactLayerSelection ? "passed" : "blocked",
+    });
+  }
+  return cases;
 }
 
 async function capturePlanarFramePreview(page, monitor, observedPlanarMeta) {
@@ -232,22 +403,7 @@ async function capturePlanarFramePreview(page, monitor, observedPlanarMeta) {
   await showFrame.click();
   const canvas = page.locator(".fm-viewport-3d canvas").first();
   await canvas.waitFor({ state: "visible", timeout: timeoutMs });
-  await page.waitForFunction(
-    () => {
-      const element = document.querySelector(".fm-viewport-3d canvas");
-      if (!(element instanceof HTMLCanvasElement)) return false;
-      const context =
-        element.getContext("webgl2") ?? element.getContext("webgl");
-      return Boolean(
-        context &&
-          !context.isContextLost() &&
-          context.drawingBufferWidth > 0 &&
-          context.drawingBufferHeight > 0,
-      );
-    },
-    undefined,
-    { timeout: timeoutMs },
-  );
+  await assertHealthyWebGL(page, "planar frame preview");
   await page.screenshot({
     fullPage: true,
     path: path.join(outputDir, "planar-frame-preview-3d.png"),
@@ -441,19 +597,17 @@ async function waitForCanvasPaint(page) {
   }
 }
 
-async function selectMonitor(monitorId, resolution) {
-  await patchJson("/v2/sessions/current/visualization/state", {
+async function selectMonitor(monitorId, resolution, enabledLayers = null) {
+  const layers = Object.fromEntries(
+    ["boundaries", "bounds", "contours", "mesh", "points", "probes", "raster", "vectors"].map(
+      (layer) => [layer, enabledLayers ? Boolean(enabledLayers[layer]) : true],
+    ),
+  );
+  return patchJson("/v2/sessions/current/visualization/state", {
     planar: {
       active_monitor_id: monitorId,
       component: "magnitude",
-      layers: {
-        boundaries: true,
-        contours: true,
-        mesh: true,
-        probes: true,
-        raster: true,
-        vectors: true,
-      },
+      layers,
       quality: "interactive",
       quantity_id: "m",
       resolution: {
@@ -506,6 +660,49 @@ async function patchJson(resourcePath, body) {
 
 async function usedHeap(page) {
   return page.evaluate(() => performance.memory?.usedJSHeapSize ?? null);
+}
+
+async function readPlanarWorkerSnapshot(page) {
+  return page.evaluate(() => ({
+    active: window.__FULLMAG_PLANAR_WORKER_AUDIT__?.active ?? null,
+    created: window.__FULLMAG_PLANAR_WORKER_AUDIT__?.created ?? null,
+    terminated: window.__FULLMAG_PLANAR_WORKER_AUDIT__?.terminated ?? null,
+  }));
+}
+
+async function readScienceReport() {
+  const sciencePath = path.resolve(outputDir, "..", "science-report.json");
+  try {
+    return JSON.parse(await fs.readFile(sciencePath, "utf8"));
+  } catch (error) {
+    throw new Error(`Cannot read planar science report ${sciencePath}: ${String(error)}`);
+  }
+}
+
+async function assertHealthyWebGL(page, phase) {
+  const canvas = page.locator(".fm-viewport-3d canvas").first();
+  await canvas.waitFor({ state: "visible", timeout: timeoutMs });
+  const health = await canvas.evaluate((element) => {
+    const context = element.getContext("webgl2") ?? element.getContext("webgl");
+    return {
+      drawingBufferHeight: context?.drawingBufferHeight ?? 0,
+      drawingBufferWidth: context?.drawingBufferWidth ?? 0,
+      isContextLost: context?.isContextLost() ?? true,
+    };
+  });
+  if (
+    health.isContextLost ||
+    health.drawingBufferWidth <= 0 ||
+    health.drawingBufferHeight <= 0
+  ) {
+    throw new Error(`3D WebGL unhealthy ${phase}: ${JSON.stringify(health)}`);
+  }
+  return health;
+}
+
+async function gitHead() {
+  const { stdout } = await execFileAsync("git", ["rev-parse", "HEAD"]);
+  return stdout.trim();
 }
 
 async function loadPlaywright() {

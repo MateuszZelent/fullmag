@@ -38,6 +38,7 @@ import {
 import {
   mergeVisualizationStateTargetOverride,
   persistentVisualizationTargetPatch,
+  targetForFdmNativeLayer,
   visualizationStateOverrideMatchesTarget,
   visualizationTargetKey,
   type ObjectVisualizationSnapshot,
@@ -384,10 +385,16 @@ export function resolveObjectVisualizationLane(
  * structured-grid selection as a FEM scene object.
  */
 export function resolveObjectVisualizationTargetForLane({
+  fdmNativeLayers,
   lane,
   selection,
   selectionTarget,
 }: {
+  fdmNativeLayers?: readonly {
+    layer_id: string;
+    magnet_name: string;
+    object_id: string;
+  }[] | null;
   lane: ObjectVisualizationLane;
   selection: Selection;
   selectionTarget: VisualizationTargetRef | null;
@@ -424,22 +431,28 @@ export function resolveObjectVisualizationTargetForLane({
     selection.kind === "object.region.visualization" ||
     selection.kind === "object.region.visualization.debug";
   if (objectVisualizationSelection) {
-    // An FDM object is still an authored scene object. Its primitive display
-    // preferences must address the same object target used by
-    // PrimitiveObjectLayer; the structured-grid target belongs to Mesh/Grid.
+    if (lane === "fdm" && selection.objectId) {
+      const nativeLayer = fdmNativeLayers?.find(
+        (layer) => layer.object_id === selection.objectId,
+      );
+      if (nativeLayer) {
+        return targetForFdmNativeLayer(
+          nativeLayer.layer_id,
+          nativeLayer.magnet_name,
+        );
+      }
+    }
     return selectionTarget?.kind === "fdm-domain" ? null : selectionTarget;
   }
 
-  const fdmVisualizationSelection =
+  const publicAirboxVisualizationSelection =
     selection.kind === "airbox.visualization" ||
-    selection.kind === "airbox.visualization.debug" ||
-    selection.kind === "mesh.grid.universe-outside-support";
-  if (!fdmVisualizationSelection) return null;
-  // Airbox is a shared Explorer vocabulary.  Keep the dedicated FDM Airbox
-  // target when the selection carries it; otherwise use the magnetic grid.
-  return selectionTarget?.kind === "fdm-domain"
-    ? selectionTarget
-    : { id: "fdm-domain", kind: "fdm-domain", label: selection.label };
+    selection.kind === "airbox.visualization.debug";
+  if (publicAirboxVisualizationSelection) {
+    return selectionTarget?.kind === "airbox" ? selectionTarget : null;
+  }
+  if (selection.kind !== "mesh.grid.universe-outside-support") return null;
+  return selectionTarget?.kind === "fdm-domain" ? selectionTarget : null;
 }
 
 export function resolveObjectVisualizationResourceGates({

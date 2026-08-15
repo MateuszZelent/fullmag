@@ -10,6 +10,7 @@ import argparse
 import json
 import math
 from pathlib import Path
+import re
 from typing import Any
 
 import numpy as np
@@ -18,6 +19,9 @@ from .common import AIRBOX_OBSERVATION, BILAYER, CANONICAL_SP4, QUALIFICATION_SC
 
 MU0 = 4.0 * math.pi * 1.0e-7
 SCHEMA_VERSION = "sp4_fdm_multilayer_runtime.v1"
+HEX_40 = re.compile(r"^[0-9a-f]{40}$")
+HEX_64 = re.compile(r"^[0-9a-f]{64}$")
+RFC3339_UTC = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
 
 
 class RuntimeMeasurementError(ValueError):
@@ -40,8 +44,20 @@ def _read_json(path: Path) -> dict[str, Any]:
     return payload
 
 
-def _field_path(run_dir: Path, layer_id: str, step: int) -> Path:
+def _field_path(
+    run_dir: Path,
+    layer_id: str,
+    step: int,
+    expected_identity: dict[str, str],
+) -> Path:
     manifest = _read_json(run_dir / "fields" / "H_demag" / "manifest.json")
+    manifest_identity = _build_identity(
+        manifest.get("build_identity"), f"{run_dir}:field_manifest"
+    )
+    if manifest_identity != expected_identity:
+        raise RuntimeMeasurementError(
+            f"runtime_build_identity_mismatch: {run_dir}:field_manifest"
+        )
     for layer in manifest.get("layers", []):
         if isinstance(layer, dict) and layer.get("id") == layer_id:
             directory = layer.get("directory")
@@ -50,8 +66,25 @@ def _field_path(run_dir: Path, layer_id: str, step: int) -> Path:
     raise RuntimeMeasurementError(f"runtime_layer_missing: {run_dir}: {layer_id}")
 
 
-def _read_field(run_dir: Path, layer_id: str, step: int) -> np.ndarray:
-    payload = _read_json(_field_path(run_dir, layer_id, step))
+def _read_field(
+    run_dir: Path,
+    layer_id: str,
+    step: int,
+    expected_identity: dict[str, str],
+) -> np.ndarray:
+    payload = _read_json(_field_path(run_dir, layer_id, step, expected_identity))
+    provenance = payload.get("provenance")
+    if not isinstance(provenance, dict):
+        raise RuntimeMeasurementError(
+            f"runtime_field_provenance_missing: {run_dir}: {layer_id}"
+        )
+    field_identity = _build_identity(
+        provenance.get("build_identity"), f"{run_dir}:{layer_id}:field"
+    )
+    if field_identity != expected_identity:
+        raise RuntimeMeasurementError(
+            f"runtime_build_identity_mismatch: {run_dir}:{layer_id}:field"
+        )
     if payload.get("observable") != "H_demag" or payload.get("unit") != "A/m":
         raise RuntimeMeasurementError(f"runtime_field_contract_mismatch: {run_dir}: {layer_id}")
     values = np.asarray(payload.get("values"), dtype=np.float64)
@@ -62,8 +95,16 @@ def _read_field(run_dir: Path, layer_id: str, step: int) -> np.ndarray:
     return values
 
 
-def _read_initial_m(run_dir: Path) -> np.ndarray:
+def _read_initial_m(run_dir: Path, expected_identity: dict[str, str]) -> np.ndarray:
     payload = _read_json(run_dir / "m_initial.json")
+    provenance = payload.get("provenance")
+    if not isinstance(provenance, dict):
+        raise RuntimeMeasurementError(f"runtime_m_initial_provenance_missing: {run_dir}")
+    initial_identity = _build_identity(
+        provenance.get("build_identity"), f"{run_dir}:m_initial"
+    )
+    if initial_identity != expected_identity:
+        raise RuntimeMeasurementError(f"runtime_build_identity_mismatch: {run_dir}:m_initial")
     values = np.asarray(payload.get("values"), dtype=np.float64)
     if payload.get("observable") != "m" or values.ndim != 2 or values.shape[1] != 3:
         raise RuntimeMeasurementError(f"runtime_m_initial_malformed: {run_dir}")
@@ -78,6 +119,36 @@ def _jsonable(value: object) -> object:
     if isinstance(value, dict):
         return {str(key): _jsonable(item) for key, item in value.items()}
     return value
+
+
+def _build_identity(value: Any, label: str) -> dict[str, str]:
+    if not isinstance(value, dict):
+        raise RuntimeMeasurementError(f"runtime_build_identity_missing: {label}")
+    identity = {
+        "built_at_utc": value.get("built_at_utc"),
+        "git_commit": value.get("git_commit"),
+        "worktree_state": value.get("worktree_state"),
+        "source_snapshot_sha256": value.get("source_snapshot_sha256"),
+    }
+    if not isinstance(identity["built_at_utc"], str) or not RFC3339_UTC.fullmatch(
+        identity["built_at_utc"]
+    ):
+        raise RuntimeMeasurementError(f"runtime_build_identity_invalid: {label}:built_at_utc")
+    if not isinstance(identity["git_commit"], str) or not HEX_40.fullmatch(
+        identity["git_commit"]
+    ):
+        raise RuntimeMeasurementError(f"runtime_build_identity_invalid: {label}:git_commit")
+    if identity["worktree_state"] not in {"clean", "dirty"}:
+        raise RuntimeMeasurementError(
+            f"runtime_build_identity_invalid: {label}:worktree_state"
+        )
+    if not isinstance(identity["source_snapshot_sha256"], str) or not HEX_64.fullmatch(
+        identity["source_snapshot_sha256"]
+    ):
+        raise RuntimeMeasurementError(
+            f"runtime_build_identity_invalid: {label}:source_snapshot_sha256"
+        )
+    return identity  # type: ignore[return-value]
 
 
 def measure_runtime(
@@ -95,11 +166,23 @@ def measure_runtime(
     ab = Path(ab_dir)
     a_only = Path(a_only_dir)
     b_only = Path(b_only_dir)
-    h_a_total = _read_field(ab, "layer_bottom", step)
-    h_b_total = _read_field(ab, "layer_top", step)
-    h_a_self = _read_field(a_only, "layer_bottom", step)
-    h_b_self = _read_field(b_only, "layer_top", step)
-    m = _read_initial_m(ab)
+    metadata_by_run = {
+        "ab": _read_json(ab / "metadata.json"),
+        "a_only": _read_json(a_only / "metadata.json"),
+        "b_only": _read_json(b_only / "metadata.json"),
+    }
+    identities = {
+        label: _build_identity(metadata.get("build_identity"), label)
+        for label, metadata in metadata_by_run.items()
+    }
+    build_identity = identities["ab"]
+    if any(identity != build_identity for identity in identities.values()):
+        raise RuntimeMeasurementError("runtime_build_identity_mismatch")
+    h_a_total = _read_field(ab, "layer_bottom", step, identities["ab"])
+    h_b_total = _read_field(ab, "layer_top", step, identities["ab"])
+    h_a_self = _read_field(a_only, "layer_bottom", step, identities["a_only"])
+    h_b_self = _read_field(b_only, "layer_top", step, identities["b_only"])
+    m = _read_initial_m(ab, identities["ab"])
     if m.shape[0] != h_a_total.shape[0] + h_b_total.shape[0]:
         raise RuntimeMeasurementError("runtime_layer_state_length_mismatch")
     if h_a_self.shape != h_a_total.shape or h_b_self.shape != h_b_total.shape:
@@ -118,7 +201,7 @@ def measure_runtime(
     coupling_b = -MU0 * ms * cell_volume * float(np.sum(m_b * h_b_from_a))
     relative_error = abs(coupling_a - coupling_b) / max(abs(coupling_a), abs(coupling_b), 1e-300)
 
-    metadata = _read_json(ab / "metadata.json")
+    metadata = metadata_by_run["ab"]
     layout = metadata.get("artifact_layout")
     if not isinstance(layout, dict) or layout.get("backend") != "fdm_multilayer":
         raise RuntimeMeasurementError("runtime_layout_missing_or_wrong_backend")
@@ -130,6 +213,8 @@ def measure_runtime(
         "precision": "double",
         "strategy": "multilayer_convolution",
         "mode": "two_d_stack",
+        "build_identity": build_identity,
+        "source_artifact_build_identities": identities,
         "airbox": _jsonable(
             {
                 "cells": (160, 40, 18),

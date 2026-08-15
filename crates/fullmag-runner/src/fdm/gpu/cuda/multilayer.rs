@@ -39,9 +39,9 @@ use crate::schedules::{
     advance_due_schedules, collect_field_schedules, collect_scalar_schedules, is_due, same_time,
 };
 use crate::types::{
-    ExecutedRun, ExecutionProvenance, FdmMultilayerStageTelemetry,
-    FdmMultilayerTransferTelemetry, FieldSnapshot, RunError, RunResult, RunStatus,
-    StateObservables, StepAction, StepStats, StepUpdate,
+    ExecutedRun, ExecutionProvenance, FdmMultilayerStageTelemetry, FdmMultilayerTransferTelemetry,
+    FieldSnapshot, RunError, RunResult, RunStatus, StateObservables, StepAction, StepStats,
+    StepUpdate,
 };
 
 use std::time::Instant;
@@ -130,6 +130,75 @@ impl CudaTransferCounters {
             d2h_transfer_count: self.d2h_transfer_count,
             h2d_bytes: self.h2d_bytes,
             d2h_bytes: self.d2h_bytes,
+            ..Default::default()
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+struct DeviceResidentMultilayerTransferCounters {
+    layer_count: u64,
+    host_snapshot_count: u64,
+    scalar_bytes: u64,
+    setup: CudaTransferCounters,
+    observed_snapshots: CudaTransferCounters,
+    warm_steps: CudaTransferCounters,
+}
+
+impl DeviceResidentMultilayerTransferCounters {
+    fn new(layer_count: usize, scalar_bytes: usize) -> Self {
+        Self {
+            layer_count: u64::try_from(layer_count).expect("CUDA layer count does not fit u64"),
+            scalar_bytes: u64::try_from(scalar_bytes)
+                .expect("CUDA scalar byte width does not fit u64"),
+            ..Default::default()
+        }
+    }
+
+    fn record_setup_h2d_vector(&mut self, cell_count: usize) {
+        self.setup.record_h2d_vector(
+            cell_count,
+            usize::try_from(self.scalar_bytes).expect("CUDA scalar byte width does not fit usize"),
+        );
+    }
+
+    fn record_observed_snapshot_d2h_vector(&mut self, cell_count: usize) {
+        self.observed_snapshots.record_d2h_vector(
+            cell_count,
+            usize::try_from(self.scalar_bytes).expect("CUDA scalar byte width does not fit usize"),
+        );
+    }
+
+    fn finish_host_snapshot(&mut self) {
+        self.host_snapshot_count = self
+            .host_snapshot_count
+            .checked_add(1)
+            .expect("CUDA host snapshot count overflow");
+    }
+
+    fn telemetry(self, precision: ExecutionPrecision) -> FdmMultilayerTransferTelemetry {
+        let mut totals = self.setup;
+        totals.merge(self.observed_snapshots);
+        totals.merge(self.warm_steps);
+        FdmMultilayerTransferTelemetry {
+            execution_shape: "cuda_native_multilayer_convolution".to_string(),
+            data_residency: "device_resident_with_observed_host_snapshots".to_string(),
+            layer_count: self.layer_count,
+            host_snapshot_count: self.host_snapshot_count,
+            payload_precision: precision_name(precision).to_string(),
+            scalar_bytes: self.scalar_bytes,
+            setup_h2d_transfer_count: self.setup.h2d_transfer_count,
+            setup_h2d_bytes: self.setup.h2d_bytes,
+            observed_snapshot_d2h_transfer_count: self.observed_snapshots.d2h_transfer_count,
+            observed_snapshot_d2h_bytes: self.observed_snapshots.d2h_bytes,
+            warm_step_h2d_transfer_count: self.warm_steps.h2d_transfer_count,
+            warm_step_h2d_bytes: self.warm_steps.h2d_bytes,
+            warm_step_d2h_transfer_count: self.warm_steps.d2h_transfer_count,
+            warm_step_d2h_bytes: self.warm_steps.d2h_bytes,
+            h2d_transfer_count: totals.h2d_transfer_count,
+            d2h_transfer_count: totals.d2h_transfer_count,
+            h2d_bytes: totals.h2d_bytes,
+            d2h_bytes: totals.d2h_bytes,
         }
     }
 }
@@ -222,7 +291,15 @@ pub(crate) fn execute_cuda_fdm_multilayer_with_live(
 ) -> Result<ExecutedRun, RunError> {
     crate::fdm::reject_adaptive_multilayer_plan(plan)?;
     reject_cuda_multilayer_containment(plan.enable_demag, &plan.mode, &plan.layers)?;
-    validate_multilayer_grid_budget(plan)?;
+    let memory_model = if plan.planner_summary.requested_strategy == "auto"
+        && plan.integrator != fullmag_ir::IntegratorChoice::Heun
+        && fullmag_plan::fdm_multilayer_cuda_native_single_grid_eligible(&plan.layers)
+    {
+        fullmag_fdm_demag::KernelAdmissionModel::CudaNativeSingleGrid
+    } else {
+        fullmag_fdm_demag::KernelAdmissionModel::CudaAbiV2PairPayload
+    };
+    validate_multilayer_grid_budget(plan, memory_model)?;
     validate_cuda_multilayer_execution_contract(plan)?;
     if !is_cuda_available() {
         return Err(RunError {
@@ -234,8 +311,36 @@ pub(crate) fn execute_cuda_fdm_multilayer_with_live(
             message: "until_seconds must be positive".to_string(),
         });
     }
-    let native_stacked = resolve_cuda_multilayer_execution_shape(plan)?;
-    let pure_damping_relax = llg_overdamped_uses_pure_damping(plan.relaxation.as_ref());
+    // The D-07 lane is deliberately narrow.  It must not erase the existing
+    // CUDA-assisted execution path for plans which are executable there but
+    // are not yet device-resident qualified (FP32, RK23/RK4, or push/pull).
+    // Production recipes reject the assisted provenance; ordinary execution
+    // retains it until the corresponding native lane is qualified.
+    if validate_device_resident_cuda_multilayer_lane(plan).is_ok() {
+        return execute_native_device_resident_cuda_multilayer(
+            plan,
+            until_seconds,
+            outputs,
+            live,
+            artifact_writer,
+        );
+    }
+
+    let native_stacked =
+        if memory_model == fullmag_fdm_demag::KernelAdmissionModel::CudaNativeSingleGrid {
+            resolve_cuda_multilayer_execution_shape(plan)?
+        } else {
+            None
+        };
+
+    if memory_model == fullmag_fdm_demag::KernelAdmissionModel::CudaNativeSingleGrid
+        && native_stacked.is_none()
+    {
+        return Err(RunError {
+            message: "CUDA multilayer preflight selected the native single-grid memory model, but the execution shape did not resolve to native-stacked"
+                .to_string(),
+        });
+    }
 
     if let Some(native_stacked) = native_stacked {
         return execute_native_stacked_cuda_multilayer(
@@ -250,6 +355,7 @@ pub(crate) fn execute_cuda_fdm_multilayer_with_live(
 
     let native_demag = build_native_multilayer_demag_operator(plan)?;
     let gpu_contexts = build_gpu_contexts(plan)?;
+    let pure_damping_relax = llg_overdamped_uses_pure_damping(plan.relaxation.as_ref());
     match plan.precision {
         ExecutionPrecision::Double => {
             let (contexts, states) = build_contexts_and_states(plan, pure_damping_relax)?;
@@ -307,28 +413,83 @@ fn resolve_cuda_multilayer_execution_shape(
     plan: &FdmMultilayerPlanIR,
 ) -> Result<Option<NativeStackedCudaPlan>, RunError> {
     let native_stacked = build_native_stacked_cuda_plan(plan)?;
-    if native_stacked.is_none()
-        && !matches!(
+    if native_stacked.is_none() {
+        if !matches!(
             plan.integrator,
             IntegratorChoice::Heun | IntegratorChoice::Rk4 | IntegratorChoice::Rk23
-        )
-    {
-        return Err(RunError {
-            message: format!(
-                "the staged v2 CUDA multilayer FDM runner currently supports only 'heun', 'rk4', and fixed-step 'rk23' integrators; {:?} is executable only for native single-grid-compatible multilayer stacks",
-                plan.integrator
-            ),
-        });
+        ) {
+            return Err(RunError {
+                message: format!(
+                    "the staged v2 CUDA multilayer FDM runner currently supports only 'heun', 'rk4', and fixed-step 'rk23' integrators; {:?} is executable only for native single-grid-compatible multilayer stacks",
+                    plan.integrator
+                ),
+            });
+        }
     }
     Ok(native_stacked)
 }
 
+fn validate_device_resident_cuda_multilayer_lane(
+    plan: &FdmMultilayerPlanIR,
+) -> Result<(), RunError> {
+    if !plan.enable_demag {
+        return Err(RunError {
+            message: "fdm_cuda_device_resident_multilayer_requires_demag: bounded D-07 lane requires enable_demag=true".to_string(),
+        });
+    }
+    if plan.precision != ExecutionPrecision::Double {
+        return Err(RunError {
+            message: "fdm_cuda_device_resident_multilayer_fp32_not_qualified: bounded D-07 lane currently requires precision='double'".to_string(),
+        });
+    }
+    if plan.integrator != IntegratorChoice::Heun || plan.fixed_timestep.is_none() {
+        return Err(RunError {
+            message: "fdm_cuda_device_resident_multilayer_integrator_not_qualified: bounded D-07 lane currently requires fixed-step Heun".to_string(),
+        });
+    }
+    if plan.mode != "three_d" || plan.planner_summary.resolved_mode != "three_d" {
+        return Err(RunError {
+            message: "fdm_cuda_device_resident_multilayer_mode_not_qualified: bounded D-07 lane requires resolved three_d mode".to_string(),
+        });
+    }
+    let Some(first_layer) = plan.layers.first() else {
+        return Err(RunError {
+            message: "fdm_cuda_device_resident_multilayer_empty: at least one layer is required"
+                .to_string(),
+        });
+    };
+    let common_cell_size = first_layer.convolution_cell_size;
+    for layer in &plan.layers {
+        if layer.transfer_kind != "identity"
+            || layer.native_grid != layer.convolution_grid
+            || layer.native_cell_size != layer.convolution_cell_size
+            || layer.convolution_grid != plan.common_cells
+            || layer.convolution_cell_size != common_cell_size
+        {
+            return Err(RunError {
+                message: format!(
+                    "fdm_cuda_device_resident_multilayer_identity_common_grid_required: layer '{}' must use an identity native/scratch descriptor on the common grid",
+                    layer.layer_id
+                ),
+            });
+        }
+    }
+    Ok(())
+}
+
 /// Validate the subset of the multilayer descriptor contract which the
 /// current native CUDA runner can execute without changing the physical
-/// operator. Unqualified assisted operators fail before certificate checks,
-/// device probing, allocation, or FFI.
+/// operator. The entry point validates the grid budget and certificate first;
+/// unqualified assisted operators still fail before device probing, allocation,
+/// or FFI.
 fn validate_cuda_multilayer_execution_contract(plan: &FdmMultilayerPlanIR) -> Result<(), RunError> {
     reject_cuda_multilayer_containment(plan.enable_demag, &plan.mode, &plan.layers)?;
+    if let Some(message) = fullmag_plan::fdm_multilayer_cuda_material_field_errors(&plan.layers)
+        .into_iter()
+        .next()
+    {
+        return Err(RunError { message });
+    }
     if plan.enable_demag
         && (plan.mode != "three_d" || plan.planner_summary.resolved_mode != "three_d")
     {
@@ -584,9 +745,8 @@ impl NativeMultilayerDemagOperator {
         }
         self.backend.refresh_multilayer_demag()?;
         self.latest_stage_telemetry = Some(
-            self.backend.snapshot_multilayer_demag_stage_telemetry(
-                self.layer_cell_counts.len() as u64,
-            )?,
+            self.backend
+                .snapshot_multilayer_demag_stage_telemetry(self.layer_cell_counts.len() as u64)?,
         );
         self.layer_cell_counts
             .iter()
@@ -616,9 +776,8 @@ impl NativeMultilayerDemagOperator {
         }
         self.backend.refresh_multilayer_demag()?;
         self.latest_stage_telemetry = Some(
-            self.backend.snapshot_multilayer_demag_stage_telemetry(
-                self.layer_cell_counts.len() as u64,
-            )?,
+            self.backend
+                .snapshot_multilayer_demag_stage_telemetry(self.layer_cell_counts.len() as u64)?,
         );
         self.layer_cell_counts
             .iter()
@@ -1153,6 +1312,562 @@ fn execute_cuda_assisted_multilayer_single(
         auxiliary_artifacts: Vec::new(),
         provenance,
     })
+}
+
+fn execute_native_device_resident_cuda_multilayer(
+    plan: &FdmMultilayerPlanIR,
+    until_seconds: f64,
+    outputs: &[OutputIR],
+    mut live: Option<(&[u32; 3], &mut dyn FnMut(StepUpdate) -> StepAction)>,
+    artifact_writer: Option<ArtifactPipelineSender>,
+) -> Result<ExecutedRun, RunError> {
+    validate_device_resident_cuda_multilayer_lane(plan)?;
+    let (contexts, _) = build_contexts_and_states(
+        plan,
+        llg_overdamped_uses_pure_damping(plan.relaxation.as_ref()),
+    )?;
+    let mut backend = NativeFdmBackend::create_multilayer_v2(plan)?;
+    let device_info = backend.device_info().ok();
+    let mut stage_telemetry = None;
+    let mut transfer_counters = DeviceResidentMultilayerTransferCounters::new(
+        plan.layers.len(),
+        std::mem::size_of::<f64>(),
+    );
+    for layer in &plan.layers {
+        transfer_counters.record_setup_h2d_vector(layer.initial_magnetization.len());
+    }
+    let provenance = device_resident_multilayer_provenance(
+        plan,
+        device_info.clone(),
+        stage_telemetry.clone(),
+        transfer_counters,
+    )?;
+    let mut artifacts = if let Some(writer) = artifact_writer {
+        ArtifactRecorder::streaming(provenance.clone(), writer)
+    } else {
+        ArtifactRecorder::in_memory(provenance.clone())
+    };
+    let mut scalar_schedules = collect_scalar_schedules(outputs)?;
+    let mut field_schedules = collect_field_schedules(outputs)?;
+    let default_scalar_trace = scalar_schedules.is_empty();
+    let dt = plan.fixed_timestep.ok_or_else(|| RunError {
+        message: "device-resident multilayer FDM requires fixed_timestep".to_string(),
+    })?;
+    let initial_magnetization = flatten_layers(
+        &plan
+            .layers
+            .iter()
+            .map(|layer| layer.initial_magnetization.clone())
+            .collect::<Vec<_>>(),
+    );
+
+    backend.refresh_multilayer_demag()?;
+    stage_telemetry =
+        Some(backend.snapshot_multilayer_demag_stage_telemetry(plan.layers.len() as u64)?);
+    let initial_observables =
+        snapshot_native_multilayer_observables(plan, &contexts, &backend, &mut transfer_counters)?;
+    let initial_stats = make_step_stats(0, 0.0, 0.0, 0, &initial_observables);
+    let mut steps = Vec::new();
+    if default_scalar_trace {
+        artifacts.record_scalar(&initial_stats)?;
+        steps.push(initial_stats.clone());
+    }
+    record_due_fields(
+        &initial_observables,
+        0,
+        0.0,
+        0.0,
+        &mut field_schedules,
+        &mut artifacts,
+    )?;
+    let mut latest_observables = Some((0, 0.0, initial_observables));
+
+    let pure_damping_relax = llg_overdamped_uses_pure_damping(plan.relaxation.as_ref());
+    let mut energy_plateau = RelaxationEnergyPlateauWindow::default();
+    let mut torque_confirmation = RelaxationTorqueConfirmation::default();
+    let mut current_time = 0.0;
+    let mut latest_native_stats = None;
+    let mut cancelled = false;
+    let mut paused = false;
+    while current_time < until_seconds {
+        let dt_step = dt.min(until_seconds - current_time);
+        let native_stats = backend.step(dt_step)?;
+        current_time = native_stats.time;
+        stage_telemetry =
+            Some(backend.snapshot_multilayer_demag_stage_telemetry(plan.layers.len() as u64)?);
+
+        let snapshot_due = default_scalar_trace
+            || scalar_schedules
+                .iter()
+                .any(|schedule| is_due(native_stats.time, schedule.next_time))
+            || field_schedules
+                .iter()
+                .any(|schedule| is_due(native_stats.time, schedule.next_time))
+            || live.is_some()
+            || plan.relaxation.is_some();
+        let observables = if snapshot_due {
+            Some(snapshot_native_multilayer_observables(
+                plan,
+                &contexts,
+                &backend,
+                &mut transfer_counters,
+            )?)
+        } else {
+            None
+        };
+        let stats = observables
+            .as_ref()
+            .map(|observables| {
+                make_step_stats(
+                    native_stats.step,
+                    native_stats.time,
+                    native_stats.dt,
+                    native_stats.wall_time_ns,
+                    observables,
+                )
+            })
+            .unwrap_or_else(|| native_stats.clone());
+
+        if default_scalar_trace
+            || scalar_schedules
+                .iter()
+                .any(|schedule| is_due(stats.time, schedule.next_time))
+        {
+            artifacts.record_scalar(&stats)?;
+            steps.push(stats.clone());
+            advance_due_schedules(&mut scalar_schedules, stats.time);
+        }
+        if let Some(observables) = observables.as_ref() {
+            record_due_fields(
+                observables,
+                stats.step,
+                stats.time,
+                stats.dt,
+                &mut field_schedules,
+                &mut artifacts,
+            )?;
+        }
+
+        if let Some((grid, on_step)) = live.as_mut() {
+            match on_step(StepUpdate {
+                coupled_checkpoint: None,
+                stats: stats.clone(),
+                grid: [grid[0], grid[1], grid[2]],
+                fem_mesh_generation_id: None,
+                magnetization: None,
+                preview_field: None,
+                cached_preview_fields: None,
+                hysteresis_field_m_t: None,
+                hysteresis_point_index: None,
+                hysteresis_settle_step_index: None,
+                hysteresis_settle_step_kind: None,
+                hysteresis_settle_step_method: None,
+                scalar_row_due: false,
+                finished: false,
+            }) {
+                StepAction::Continue => {}
+                StepAction::Stop => cancelled = true,
+                StepAction::Pause => paused = true,
+            }
+        }
+
+        let stop_for_relaxation = if let Some(observables) = observables.as_ref() {
+            let plateau_range = energy_plateau.record(observables.total_energy);
+            plan.relaxation.as_ref().is_some_and(|control| {
+                stats.step >= control.stop.max_steps.unwrap_or(u64::MAX)
+                    || torque_confirmation.observe_stats(
+                        control,
+                        &stats,
+                        plateau_range,
+                        plan.gyromagnetic_ratio,
+                        average_damping(&contexts),
+                        pure_damping_relax,
+                    )
+            })
+        } else {
+            false
+        };
+        if let Some(observables) = observables {
+            latest_observables = Some((stats.step, stats.time, observables));
+        }
+        latest_native_stats = Some(native_stats);
+        if cancelled || paused || stop_for_relaxation {
+            break;
+        }
+    }
+
+    let final_native_stats = latest_native_stats.unwrap_or_default();
+    let final_observables = match latest_observables {
+        Some((step, time, observables))
+            if step == final_native_stats.step && same_time(time, final_native_stats.time) =>
+        {
+            observables
+        }
+        _ => snapshot_native_multilayer_observables(
+            plan,
+            &contexts,
+            &backend,
+            &mut transfer_counters,
+        )?,
+    };
+    let final_stats = make_step_stats(
+        final_native_stats.step,
+        final_native_stats.time,
+        final_native_stats.dt,
+        final_native_stats.wall_time_ns,
+        &final_observables,
+    );
+    if !steps
+        .iter()
+        .any(|step| step.step == final_stats.step && same_time(step.time, final_stats.time))
+    {
+        artifacts.record_scalar(&final_stats)?;
+        steps.push(final_stats.clone());
+    }
+    for schedule in &mut field_schedules {
+        if schedule
+            .last_sampled_time
+            .is_some_and(|time| same_time(time, final_stats.time))
+        {
+            continue;
+        }
+        artifacts.record_field_snapshot(FieldSnapshot {
+            name: schedule.name.clone(),
+            step: final_stats.step,
+            time: final_stats.time,
+            solver_dt: final_stats.dt,
+            component_count: 3,
+            component_order: "xyz".into(),
+            location: "sample".into(),
+            scope: "full".into(),
+            revision: final_stats.step.saturating_add(1),
+            values: FieldSnapshot::flatten_vec3(select_state_observable_field(
+                &final_observables,
+                &schedule.name,
+                false,
+            )?),
+        })?;
+    }
+
+    artifacts.update_provenance(device_resident_multilayer_provenance(
+        plan,
+        device_info,
+        stage_telemetry,
+        transfer_counters,
+    )?);
+    let (field_snapshots, field_snapshot_count, provenance) = artifacts.finish();
+    let status = if paused {
+        RunStatus::Paused
+    } else if cancelled {
+        RunStatus::Cancelled
+    } else {
+        RunStatus::Completed
+    };
+    let completion = crate::relaxation::resolve_stage_completion(
+        status,
+        plan.relaxation.as_ref(),
+        crate::relaxation::RelaxationCompletionMetrics {
+            max_torque_apm: Some(final_stats.max_torque_Apm),
+            torque_confirmed: torque_confirmation.confirmed(),
+            accepted_energy_plateau_range_j: energy_plateau.range(),
+            steps: final_stats.step,
+            relaxation_time_s: Some(final_stats.time),
+            numerical_stagnation: false,
+        },
+    );
+
+    Ok(ExecutedRun {
+        result: RunResult {
+            status,
+            steps,
+            final_magnetization: final_observables.magnetization.clone(),
+            completion: Some(completion),
+        },
+        initial_magnetization,
+        field_snapshots,
+        field_snapshot_count,
+        auxiliary_artifacts: Vec::new(),
+        provenance,
+    })
+}
+
+fn device_resident_multilayer_provenance(
+    plan: &FdmMultilayerPlanIR,
+    device_info: Option<DeviceInfo>,
+    stage_telemetry: Option<FdmMultilayerStageTelemetry>,
+    transfer_counters: DeviceResidentMultilayerTransferCounters,
+) -> Result<ExecutionProvenance, RunError> {
+    let timestep_policy = crate::resolve_timestep_policy(
+        Some(plan.integrator),
+        plan.fixed_timestep,
+        None,
+        crate::types::TimestepExecutionLane::fdm_cuda(plan.precision),
+    )?;
+    Ok(ExecutionProvenance {
+        charge_transport: None,
+        execution_engine: "cuda_native_multilayer_convolution".to_string(),
+        precision: "double".to_string(),
+        demag_operator_kind: Some("native_multilayer_tensor_fft_newell".to_string()),
+        fft_backend: Some("cuFFT".to_string()),
+        device_name: device_info.as_ref().map(|info| info.name.clone()),
+        compute_capability: device_info
+            .as_ref()
+            .map(|info| info.compute_capability.clone()),
+        cuda_driver_version: device_info.as_ref().map(|info| info.driver_version),
+        cuda_runtime_version: device_info.as_ref().map(|info| info.runtime_version),
+        timestep_policy: Some(timestep_policy),
+        fdm_multilayer_transfer_telemetry: Some(transfer_counters.telemetry(plan.precision)),
+        fdm_multilayer_stage_telemetry: stage_telemetry,
+        ..Default::default()
+    })
+}
+
+fn snapshot_native_multilayer_observables(
+    plan: &FdmMultilayerPlanIR,
+    contexts: &[LayerContext],
+    backend: &NativeFdmBackend,
+    transfer_counters: &mut DeviceResidentMultilayerTransferCounters,
+) -> Result<StateObservables, RunError> {
+    let mut magnetization = Vec::new();
+    let mut exchange_field = Vec::new();
+    let mut demag_field = Vec::new();
+    let mut external_field = Vec::new();
+    let mut anisotropy_field = Vec::new();
+    let mut dmi_field = Vec::new();
+    let mut effective_field = Vec::new();
+    let mut torque_field = Vec::new();
+    let mut exchange_energy = 0.0;
+    let mut demag_energy = 0.0;
+    let mut external_energy = 0.0;
+    let mut anisotropy_energy = 0.0;
+    let mut dmi_energy = 0.0;
+    let mut max_dm_dt: f64 = 0.0;
+    let mut max_h_eff: f64 = 0.0;
+    let mut max_h_demag: f64 = 0.0;
+    let mut per_object_scalars = std::collections::HashMap::new();
+
+    for (layer_index, (layer, context)) in plan.layers.iter().zip(contexts.iter()).enumerate() {
+        let cell_count = layer.initial_magnetization.len();
+        let m = backend.copy_layer_m(layer_index as u32, cell_count)?;
+        let mut h_demag = backend.copy_layer_h_demag(layer_index as u32, cell_count)?;
+        let mut h_ex = backend.copy_layer_h_ex(layer_index as u32, cell_count)?;
+        let mut h_ani = backend.copy_layer_h_ani(layer_index as u32, cell_count)?;
+        let mut h_dmi = backend.copy_layer_h_dmi(layer_index as u32, cell_count)?;
+        let mut native_h_eff = backend.copy_layer_h_eff(layer_index as u32, cell_count)?;
+        let active_mask = context.problem.active_mask.as_deref();
+        // The native multilayer ABI materializes the uniform Zeeman field in
+        // the host-side copy helper (and may copy only its uint8 active mask
+        // from the device).  It is therefore not a vector D2H payload.  Build
+        // the same field from the canonical plan and count only the six
+        // actual vector copies below.
+        let mut h_ext = plan
+            .external_field
+            .map(|field| {
+                (0..cell_count)
+                    .map(|index| {
+                        if active_mask.is_none_or(|mask| mask[index]) {
+                            field
+                        } else {
+                            [0.0; 3]
+                        }
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_else(|| vec![[0.0; 3]; cell_count]);
+        for _ in 0..6 {
+            transfer_counters.record_observed_snapshot_d2h_vector(cell_count);
+        }
+        for field in [
+            &mut h_demag,
+            &mut h_ex,
+            &mut h_ext,
+            &mut h_ani,
+            &mut h_dmi,
+            &mut native_h_eff,
+        ] {
+            zero_outside_active(field, active_mask);
+        }
+        let h_eff = canonical_snapshot_effective_field(
+            &native_h_eff,
+            [&h_ex, &h_demag, &h_ext, &h_ani, &h_dmi],
+            &layer.layer_id,
+        )?;
+
+        let cell_volume = context.problem.cell_size.volume();
+        let ms = context.problem.material.saturation_magnetisation;
+        let local_exchange_energy = m
+            .iter()
+            .zip(h_ex.iter())
+            .map(|(m, h)| -0.5 * MU0 * ms * cell_volume * dot(*m, *h))
+            .sum::<f64>();
+        let local_demag_energy = m
+            .iter()
+            .zip(h_demag.iter())
+            .map(|(m, h)| -0.5 * MU0 * ms * cell_volume * dot(*m, *h))
+            .sum::<f64>();
+        let local_external_energy = m
+            .iter()
+            .zip(h_ext.iter())
+            .map(|(m, h)| -MU0 * ms * cell_volume * dot(*m, *h))
+            .sum::<f64>();
+        let local_state =
+            ExchangeLlgState::new(context.problem.grid, m.clone()).map_err(|error| RunError {
+                message: format!(
+                    "native multilayer snapshot state for '{}': {error}",
+                    context.magnet_name
+                ),
+            })?;
+        let local_reference = context
+            .problem
+            .observe(&local_state)
+            .map_err(|error| RunError {
+                message: format!(
+                    "native multilayer snapshot observables for '{}': {error}",
+                    context.magnet_name
+                ),
+            })?;
+        let local_anisotropy_energy = local_reference.anisotropy_energy_joules;
+        let local_dmi_energy = local_reference.dmi_energy_joules;
+        let rhs = llg_rhs_for_layer(context, &m, &h_eff);
+        let local_torque = compute_torque_field(
+            &m,
+            &h_eff,
+            context.problem.material.damping,
+            context.problem.dynamics.precession_enabled,
+        );
+        let [mx, my, mz] = crate::scalar_metrics::average_magnetization_components_with_active_mask(
+            &m,
+            active_mask,
+        );
+        let m_weight = active_mask
+            .map(|mask| mask.iter().filter(|active| **active).count())
+            .unwrap_or(cell_count) as f64
+            * cell_volume
+            * ms;
+        let local_total = local_exchange_energy
+            + local_demag_energy
+            + local_external_energy
+            + local_anisotropy_energy
+            + local_dmi_energy;
+        per_object_scalars.insert(
+            context.magnet_name.clone(),
+            std::collections::HashMap::from([
+                ("e_ex".to_string(), local_exchange_energy),
+                ("e_demag".to_string(), local_demag_energy),
+                ("e_ext".to_string(), local_external_energy),
+                ("e_ani".to_string(), local_anisotropy_energy),
+                ("e_dmi".to_string(), local_dmi_energy),
+                ("e_total".to_string(), local_total),
+                ("mx".to_string(), mx),
+                ("my".to_string(), my),
+                ("mz".to_string(), mz),
+                ("m_weight".to_string(), m_weight),
+            ]),
+        );
+
+        exchange_energy += local_exchange_energy;
+        demag_energy += local_demag_energy;
+        external_energy += local_external_energy;
+        anisotropy_energy += local_anisotropy_energy;
+        dmi_energy += local_dmi_energy;
+        max_dm_dt = max_dm_dt.max(max_norm(&rhs));
+        max_h_eff = max_h_eff.max(max_norm(&h_eff));
+        max_h_demag = max_h_demag.max(max_norm(&h_demag));
+        magnetization.extend(m);
+        exchange_field.extend(h_ex);
+        demag_field.extend(h_demag);
+        external_field.extend(h_ext);
+        anisotropy_field.extend(h_ani);
+        dmi_field.extend(h_dmi);
+        effective_field.extend(h_eff);
+        torque_field.extend(local_torque);
+    }
+
+    for values in per_object_scalars.values_mut() {
+        values.insert("max_dm_dt".to_string(), max_dm_dt);
+        values.insert("max_h_eff".to_string(), max_h_eff);
+        values.insert("max_h_demag".to_string(), max_h_demag);
+    }
+    let max_torque_apm = max_torque_residual_apm_from_field(&magnetization, &effective_field);
+    let total_energy =
+        exchange_energy + demag_energy + external_energy + anisotropy_energy + dmi_energy;
+    let observables = StateObservables {
+        magnetization,
+        torque_field,
+        exchange_field,
+        demag_field,
+        external_field,
+        antenna_field: vec![[0.0; 3]; effective_field.len()],
+        drive_field: vec![[0.0; 3]; effective_field.len()],
+        effective_field,
+        anisotropy_field,
+        dmi_field,
+        magnetoelastic_field: Vec::new(),
+        cubic_anisotropy_field: Vec::new(),
+        bulk_dmi_field: Vec::new(),
+        oersted_field: Vec::new(),
+        thermal_field: Vec::new(),
+        exchange_energy,
+        demag_energy,
+        external_energy,
+        drive_energy: 0.0,
+        anisotropy_energy,
+        dmi_energy,
+        total_energy,
+        max_dm_dt,
+        max_h_eff,
+        max_h_demag,
+        max_torque_Apm: max_torque_apm,
+        per_object_scalars,
+    };
+    transfer_counters.finish_host_snapshot();
+    Ok(observables)
+}
+
+fn canonical_snapshot_effective_field(
+    native_h_eff: &[[f64; 3]],
+    terms: [&[[f64; 3]]; 5],
+    layer_id: &str,
+) -> Result<Vec<[f64; 3]>, RunError> {
+    if terms.iter().any(|term| term.len() != native_h_eff.len()) {
+        return Err(RunError {
+            message: format!(
+                "native multilayer snapshot for '{layer_id}' has inconsistent effective-field lengths"
+            ),
+        });
+    }
+    native_h_eff
+        .iter()
+        .enumerate()
+        .map(|(index, native)| {
+            let mut canonical = [0.0; 3];
+            for component in 0..3 {
+                canonical[component] = terms
+                    .iter()
+                    .map(|term| term[index][component])
+                    .sum::<f64>();
+                let scale = terms
+                    .iter()
+                    .map(|term| term[index][component].abs())
+                    .sum::<f64>()
+                    .max(native[component].abs())
+                    .max(1.0);
+                let tolerance = 64.0 * f64::EPSILON * scale;
+                if !canonical[component].is_finite()
+                    || !native[component].is_finite()
+                    || (native[component] - canonical[component]).abs() > tolerance
+                {
+                    return Err(RunError {
+                        message: format!(
+                            "native multilayer snapshot H_eff mismatch for '{layer_id}' at cell {index}, component {component}: native={}, canonical_sum={}, tolerance={tolerance}",
+                            native[component], canonical[component]
+                        ),
+                    });
+                }
+            }
+            Ok(canonical)
+        })
+        .collect()
 }
 
 fn assisted_multilayer_provenance(
@@ -2252,6 +2967,7 @@ fn compute_demag_fields(
             ],
             origin: context.origin,
             ms: context.problem.material.saturation_magnetisation,
+            ms_field: None,
             exchange_stiffness: context.problem.material.exchange_stiffness,
             damping: context.problem.material.damping,
             active_mask: context.problem.active_mask.clone(),
@@ -3430,6 +4146,8 @@ mod tests {
                     native_cell_size: [2e-9, 2e-9, 1e-9],
                     native_origin: [-4e-9, -4e-9, 0.0],
                     native_active_mask: None,
+                    native_region_mask: None,
+                    native_region_legend: None,
                     initial_magnetization: vec![[1.0, 0.0, 0.0]; 16],
                     material: FdmMaterialIR {
                         name: "Py".to_string(),
@@ -3451,6 +4169,8 @@ mod tests {
                     native_cell_size: [2e-9, 2e-9, 1e-9],
                     native_origin: [-4e-9, -4e-9, 3e-9],
                     native_active_mask: None,
+                    native_region_mask: None,
+                    native_region_legend: None,
                     initial_magnetization: vec![[0.0, 1.0, 0.0]; 16],
                     material: FdmMaterialIR {
                         name: "Py".to_string(),
@@ -3509,13 +4229,188 @@ mod tests {
         plan
     }
 
-    fn make_auto_plan(
-        enable_demag: bool,
-        precision: ExecutionPrecision,
-    ) -> FdmMultilayerPlanIR {
+    fn make_auto_plan(enable_demag: bool, precision: ExecutionPrecision) -> FdmMultilayerPlanIR {
         let mut plan = make_plan(enable_demag, precision);
         plan.planner_summary.requested_strategy = "auto".to_string();
         plan
+    }
+
+    fn certify_plan(plan: &mut FdmMultilayerPlanIR) {
+        let topology_tokens = fullmag_ir::fdm_multilayer_topology_tokens(&plan.mode, &plan.layers);
+        let origin = plan
+            .layers
+            .iter()
+            .fold([f64::INFINITY; 3], |mut origin, layer| {
+                for axis in 0..3 {
+                    origin[axis] = origin[axis].min(layer.native_origin[axis]);
+                }
+                origin
+            });
+        let cell = plan.layers[0].convolution_cell_size;
+        let cost = fullmag_plan::checked_fdm_grid_cost(
+            plan.common_cells,
+            fullmag_plan::FDM_GRID_ESTIMATED_BYTES_PER_CELL,
+        )
+        .expect("test grid cost");
+        plan.grid_certificate = Some(
+            FdmGridCertificateIR::new_with_topology_tokens(
+                origin,
+                plan.common_cells,
+                cell,
+                cost.cells,
+                cost.estimated_bytes,
+                None,
+                &topology_tokens,
+            )
+            .expect("test grid certificate"),
+        );
+    }
+
+    fn make_bounded_device_resident_plan() -> FdmMultilayerPlanIR {
+        let mut plan = make_plan(true, ExecutionPrecision::Double);
+        plan.mode = "three_d".to_string();
+        plan.planner_summary.requested_mode = "three_d".to_string();
+        plan.planner_summary.resolved_mode = "three_d".to_string();
+        certify_plan(&mut plan);
+        plan
+    }
+
+    #[test]
+    fn device_resident_cuda_multilayer_lane_accepts_only_bounded_fp64_heun_identity_grid() {
+        validate_device_resident_cuda_multilayer_lane(&make_bounded_device_resident_plan())
+            .expect("bounded FP64 Heun identity/common-grid plan must be eligible");
+
+        let mut no_demag = make_bounded_device_resident_plan();
+        no_demag.enable_demag = false;
+        assert!(validate_device_resident_cuda_multilayer_lane(&no_demag)
+            .unwrap_err()
+            .message
+            .contains("requires_demag"));
+
+        let mut fp32 = make_bounded_device_resident_plan();
+        fp32.precision = ExecutionPrecision::Single;
+        assert!(validate_device_resident_cuda_multilayer_lane(&fp32)
+            .unwrap_err()
+            .message
+            .contains("fp32_not_qualified"));
+
+        for integrator in [IntegratorChoice::Rk4, IntegratorChoice::Rk23] {
+            let mut unsupported = make_bounded_device_resident_plan();
+            unsupported.integrator = integrator;
+            assert!(validate_device_resident_cuda_multilayer_lane(&unsupported)
+                .unwrap_err()
+                .message
+                .contains("integrator_not_qualified"));
+        }
+
+        let mut adaptive = make_bounded_device_resident_plan();
+        adaptive.fixed_timestep = None;
+        assert!(validate_device_resident_cuda_multilayer_lane(&adaptive)
+            .unwrap_err()
+            .message
+            .contains("integrator_not_qualified"));
+
+        let mut push_pull = make_bounded_device_resident_plan();
+        push_pull.layers[0].transfer_kind = "push_pull".to_string();
+        assert!(validate_device_resident_cuda_multilayer_lane(&push_pull)
+            .unwrap_err()
+            .message
+            .contains("identity_common_grid_required"));
+
+        let mut non_common = make_bounded_device_resident_plan();
+        non_common.layers[0].convolution_grid[0] -= 1;
+        assert!(validate_device_resident_cuda_multilayer_lane(&non_common)
+            .unwrap_err()
+            .message
+            .contains("identity_common_grid_required"));
+
+        let mut two_d = make_bounded_device_resident_plan();
+        two_d.mode = "two_d_stack".to_string();
+        two_d.planner_summary.resolved_mode = "two_d_stack".to_string();
+        assert!(validate_device_resident_cuda_multilayer_lane(&two_d)
+            .unwrap_err()
+            .message
+            .contains("mode_not_qualified"));
+    }
+
+    #[test]
+    fn device_resident_provenance_reports_canonical_engine_and_snapshot_transfers() {
+        let plan = make_bounded_device_resident_plan();
+        let mut counters = DeviceResidentMultilayerTransferCounters::new(
+            plan.layers.len(),
+            std::mem::size_of::<f64>(),
+        );
+        for layer in &plan.layers {
+            counters.record_setup_h2d_vector(layer.initial_magnetization.len());
+            for _ in 0..6 {
+                counters.record_observed_snapshot_d2h_vector(layer.initial_magnetization.len());
+            }
+        }
+        counters.finish_host_snapshot();
+
+        let provenance = device_resident_multilayer_provenance(&plan, None, None, counters)
+            .expect("bounded device-resident provenance must resolve");
+        assert_eq!(
+            provenance.execution_engine,
+            "cuda_native_multilayer_convolution"
+        );
+        let telemetry = provenance
+            .fdm_multilayer_transfer_telemetry
+            .expect("device-resident lane must expose observed snapshot transfers");
+        assert_eq!(
+            telemetry.execution_shape,
+            "cuda_native_multilayer_convolution"
+        );
+        assert_eq!(
+            telemetry.data_residency,
+            "device_resident_with_observed_host_snapshots"
+        );
+        assert_eq!(telemetry.layer_count, plan.layers.len() as u64);
+        assert_eq!(telemetry.host_snapshot_count, 1);
+        assert_eq!(telemetry.payload_precision, "double");
+        assert_eq!(telemetry.scalar_bytes, std::mem::size_of::<f64>() as u64);
+        assert_eq!(telemetry.setup_h2d_transfer_count, plan.layers.len() as u64);
+        assert_eq!(
+            telemetry.observed_snapshot_d2h_transfer_count,
+            plan.layers.len() as u64 * 6
+        );
+        assert_eq!(telemetry.warm_step_h2d_transfer_count, 0);
+        assert_eq!(telemetry.warm_step_h2d_bytes, 0);
+        assert_eq!(telemetry.warm_step_d2h_transfer_count, 0);
+        assert_eq!(telemetry.warm_step_d2h_bytes, 0);
+        assert_eq!(telemetry.h2d_transfer_count, plan.layers.len() as u64);
+        assert_eq!(telemetry.h2d_bytes, telemetry.setup_h2d_bytes);
+        assert_eq!(telemetry.d2h_transfer_count, plan.layers.len() as u64 * 6);
+        assert_eq!(telemetry.d2h_bytes, telemetry.observed_snapshot_d2h_bytes);
+    }
+
+    #[test]
+    fn device_resident_snapshot_effective_field_is_canonical_term_sum() {
+        let h_ex = vec![[1.0, 2.0, 3.0], [0.5, -1.0, 0.0]];
+        let h_demag = vec![[4.0, 5.0, 6.0], [1.5, 2.0, -3.0]];
+        let h_ext = vec![[7.0, 8.0, 9.0], [0.0, 4.0, 1.0]];
+        let h_ani = vec![[10.0, 11.0, 12.0], [-2.0, 0.0, 3.0]];
+        let h_dmi = vec![[13.0, 14.0, 15.0], [5.0, -4.0, 2.0]];
+        let native = vec![[35.0, 40.0, 45.0], [5.0, 1.0, 3.0]];
+
+        let canonical = canonical_snapshot_effective_field(
+            &native,
+            [&h_ex, &h_demag, &h_ext, &h_ani, &h_dmi],
+            "layer-a",
+        )
+        .expect("native H_eff matching all active field terms must be accepted");
+        assert_eq!(canonical, native);
+
+        let mut inconsistent = native;
+        inconsistent[1][2] += 1.0;
+        assert!(canonical_snapshot_effective_field(
+            &inconsistent,
+            [&h_ex, &h_demag, &h_ext, &h_ani, &h_dmi],
+            "layer-a",
+        )
+        .unwrap_err()
+        .message
+        .contains("H_eff mismatch"));
     }
 
     #[test]
@@ -3573,6 +4468,48 @@ mod tests {
             assert!(
                 !error.message.contains("CUDA backend is not available"),
                 "containment must run before CUDA availability probing"
+            );
+        }
+    }
+
+    #[test]
+    fn forced_cuda_multilayer_entry_rejects_cellwise_material_fields_before_cuda_probe() {
+        for field_name in ["ms_field", "a_field", "alpha_field"] {
+            let mut plan = make_plan(false, ExecutionPrecision::Double);
+            let cell_count = plan.layers[0].initial_magnetization.len();
+            let values = vec![1.0, 2.0]
+                .into_iter()
+                .cycle()
+                .take(cell_count)
+                .collect::<Vec<_>>();
+            let material = &mut plan.layers[0].material;
+            match field_name {
+                "ms_field" => material.ms_field = Some(values),
+                "a_field" => material.a_field = Some(values),
+                "alpha_field" => material.alpha_field = Some(values),
+                _ => unreachable!(),
+            }
+            certify_plan(&mut plan);
+
+            let error = execute_cuda_fdm_multilayer(&plan, 1e-13, &[])
+                .expect_err("forced CUDA must reject cellwise material fields before probing CUDA");
+            assert!(
+                error
+                    .message
+                    .contains("fdm_cuda_multilayer_material_field_unqualified"),
+                "missing stable reason code for {field_name}: {}",
+                error.message
+            );
+            for expected in [field_name, "layer:free", "free"] {
+                assert!(
+                    error.message.contains(expected),
+                    "missing {expected:?} in CUDA rejection: {}",
+                    error.message
+                );
+            }
+            assert!(
+                !error.message.contains("CUDA backend is not available"),
+                "material-field containment must run before CUDA probing"
             );
         }
     }
@@ -3726,6 +4663,8 @@ mod tests {
                     native_cell_size: [2e-9, 2e-9, 2e-9],
                     native_origin: [0.0, 0.0, 0.0],
                     native_active_mask: None,
+                    native_region_mask: None,
+                    native_region_legend: None,
                     initial_magnetization: vec![[1.0, 0.0, 0.0]; 2],
                     material: FdmMaterialIR {
                         name: "Py".to_string(),
@@ -3747,6 +4686,8 @@ mod tests {
                     native_cell_size: [2e-9, 2e-9, 2e-9],
                     native_origin: [0.0, 0.0, 2e-9],
                     native_active_mask: None,
+                    native_region_mask: None,
+                    native_region_legend: None,
                     initial_magnetization: vec![[0.0, 1.0, 0.0]; 2],
                     material: FdmMaterialIR {
                         name: "Py".to_string(),

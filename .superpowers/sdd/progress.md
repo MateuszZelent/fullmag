@@ -196,15 +196,12 @@ cykli nie obniżono.
 | 2 | complete | `9ce555065`, `66e7579a4` | spec compliant; quality approved; carrier identity/provenance and public field resources verified |
 | 3 | complete | `935d8e681`, `216f603fa`, `d19cfc96b` | spec compliant; quality approved; exact targets, sampling and cache identity verified |
 | 4 | complete | `5bf32e3aa`, `ab973377a`, `ca3107991`, `1b5a2e090`, `618d9b997`, `eec5544d6`, `e48fbe821` | spec compliant; quality approved; public sample identity and exact revision contract verified |
-| 2 | pending | pending | pending |
-| 3 | pending | pending | pending |
-| 4 | pending | pending | pending |
-| 5 | pending | pending | pending |
-| 6 | pending | pending | pending |
-| 7 | pending | pending | pending |
-| 8 | pending | pending | pending |
-| 9 | pending | pending | pending |
-| 10 | pending | pending | pending |
+| 5 | complete | `b015c81d6`, `acdbe9556`, `c36fd1741`, `04eebbf0e`, `3a2b75df2` | spec/quality reviews clean; full monitor editor and round-trip implementation present; runtime qualification remains Task 10 |
+| 6 | complete | `f4782d038` | state ownership implementation present; focused state/API/hydration reviews clean; runtime qualification remains Task 10 |
+| 7 | complete (static) | `208a40d1f`, `594939f57`, `8e9b08c95`, `396fa7edd`, `6c1aba2f4`, `df1479b6e`, `b36fe10d7`, `dd8c4e697` | render model, presentation profile, points/bounds and FDM grid overlay reviewed; focused tests pass; browser/runtime qualification remains Task 10 |
+| 8 | complete (static) | `cb530a726`, `ff5f7d178`, `1eff3234c` | dedicated Inspector/capability controls reviewed; focused tests/typecheck/lint pass; runtime qualification remains Task 10 |
+| 9 | complete (static) | `8f6d6e467`, `b0157bd86`, `4ffd43741` | monitor creation/clip workflow and overlay lifecycle implementation present; browser/runtime qualification remains Task 10 |
+| 10 | in progress | `c437e4197` plus current runtime attempt | harness and fail-closed aggregation reviewed; compact/full contract PASS (`just verify-viewport-2d-planar-compact-full-contract`, exit 0); fresh FDM CPU reached canonical planner but fixture is invalid for current multilayer contract (4 explicit planner causes), FEM CPU reached mesh/API but dirty snapshot and host-root `ENOSPC` blocked science/browser qualification; browser showed partial WebGL/layer evidence only; FEM GPU and clean-lane reruns remain required |
 | 11 | pending | pending | pending |
 
 FDM multilayer directed/symmetrized pair-energy: complete (commits
@@ -215,3 +212,63 @@ canonical directed wire order, Scene/Python identity evidence, equal/unequal
 push-pull reciprocity, finite-difference and documentation gates passed in the
 task scope. Full runner integration still has separately proven baseline
 source-layout and FEM physics-validation failures.
+
+## FDM multilayer convolution — bieżący stan realizacji (2026-08-14)
+
+- D-07 ma zaimplementowaną wąską ścieżkę `cuda_native_multilayer_convolution`
+  dla FP64, stałego Heuna, `three_d` i wspólnej siatki identity; pozostałe
+  przypadki zachowują jawny native-stacked/CUDA-assisted fallback zamiast
+  cichej zmiany semantyki.
+- Snapshot końcowy materializuje kanoniczne `H_eff = H_ex + H_demag + H_ext +
+  H_ani + H_dmi`, a telemetryka liczy tylko rzeczywiste wektorowe transfery
+  stanu/pól (inicjalne H2D oraz sześć końcowych D2H na warstwę). Kontrakt
+  źródłowy `fdm_source_layout_contract` i trzy testy jednostkowe D-07 przechodzą.
+- `just verify-fdm-multilayer-demag-runtime cpu-fp64` pozostaje bramką CPU.
+  Lane jest wykonywalny, ale nie ma kompletnego source-bound dowodu naukowego,
+  dlatego nie został zakwalifikowany. Verifier rozdziela teraz wprost
+  `artifact_verification_status=verified` od
+  `qualification_status=not_qualified`, zwraca kod 3 i zapisuje brak oceny
+  progów FP64, direct oracle, reciprocity oraz równowagi kontroli ze step-zero;
+  receptura nie może już zakończyć się fałszywym `status=verified`. Bramka
+  Airboxa używa jawnego `--artifact-only`, bez promocji naukowej artefaktu.
+- Kontrakt CUDA build/source/ABI jest zielony. Runtime CUDA ma osobne bramki
+  `just verify-fdm-multilayer-cuda-runtime cuda-fp64` i
+  `just verify-fdm-multilayer-cuda-runtime cuda-fp32`; receptura
+  `verify-fdm-multilayer-demag-runtime` celowo odrzuca lane'y CUDA. Oba lane'y
+  CUDA pozostają niezakwalifikowane, ponieważ source snapshot, manifest
+  runtime'u i wejścia verifiera nie zostały jeszcze zsynchronizowane w jednym
+  niezmiennym przebiegu.
+- Smoke WebGL ma frame-bound dowód kolejności Airbox wektorów: trzy różne,
+  rosnące rewizje PATCH i klatki `wireframe_on` → `wireframe_off` →
+  `vectors_on`; flagi wireframe/wektorów są zapisywane w tym samym snapshotcie
+  debug co `frameCommitId`. Stary snapshot lub odpowiedź pola sprzed przełączenia
+  nie może przejść bramki. Self-test ma także negatywne fixtures dla wektorów
+  przy aktywnym wireframe, braku środkowej klatki, wektorów w klatce pośredniej
+  i zamienionej kolejności; kwalifikacja zawsze musi najpierw wyłączyć wireframe.
+- D-06 ma teraz wspólny `KernelCatalogSpec` oraz `KernelMemoryAccounting` w
+  descriptorze, plannerze i CPU engine/runnerze. Planner i runtime porównują
+  te same liczniki unique/pair, logical spectrum bytes i fixed-width binding
+  bytes; CUDA ABI-v2/L² oraz native single-grid pozostają osobnymi modelami
+  admission i nie są przez to automatycznie promowane.
+- Potwierdzone lokalnie: CUDA source/unit, source-layout 8/8, kontrakt CUDA
+  build/source/ABI, Control Room typecheck, 134 testy viewport/debug, składnia
+  i self-test smoke. Nie są to dowody runtime ani kwalifikacja naukowa. Nadal
+  otwarte: zsynchronizowany managed CUDA runtime, pełna macierz WebGL z aktywną
+  sesją oraz kwalifikacja produkcyjna CPU FP64, CUDA FP64, CUDA FP32,
+  heterogenicznych `h_z` i `push_pull`.
+- Ostatnia próba `just verify-fdm-multilayer-cuda-runtime cuda-fp64` została
+  zatrzymana przed uruchomieniem solvera: `ensure-managed-fem-runtime` wykrył
+  rozbieżność snapshotu źródeł i próbował przebudować runtime, lecz eksport
+  archiwum zakończył się `No space left on device` na pełnym
+  `/mnt/fullmag-zfn2-native` (100%). Wcześniejszy preflight CUDA zgłosił także
+  brak dostępu NVML (`GPU access blocked by the operating system`). Nie użyto
+  starego binarium jako substytutu i nie nadano lane'owi statusu qualified.
+- Bieżąca weryfikacja po domknięciu katalogu D-06/D-07: `fullmag-fdm-demag`
+  31/31, `fullmag-engine` multilayer 19/19 (1 benchmark ignored), runner CPU
+  multilayer 16/16, API multilayer 18/18, Python/runtime 58/58, frontend
+  viewport/debug 321/321, typecheck, rustfmt, diff-check, dokumentacja i
+  smoke self-test przechodzą. Naprawiono także dwa kontrakty API wykryte w tym
+  przebiegu: region na niezależnych siatkach zwraca jawne `422`, a błąd
+  spójności fingerprintu Airboxa zachowuje diagnostyczny token
+  `carrier_fingerprint`. Nadal nie jest to świeży managed runtime ani dowód
+  browser/WebGL z aktywną sesją.

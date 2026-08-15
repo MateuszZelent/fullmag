@@ -581,6 +581,7 @@ fn compute_demag_fields(
             ],
             origin: context.origin,
             ms: context.problem.material.saturation_magnetisation,
+            ms_field: None,
             exchange_stiffness: context.problem.material.exchange_stiffness,
             damping: context.problem.material.damping,
             active_mask: context.problem.active_mask.clone(),

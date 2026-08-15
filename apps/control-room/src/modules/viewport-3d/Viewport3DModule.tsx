@@ -101,6 +101,7 @@ import {
   VIEWPORT_3D_ORBIT_DEBUG_LIMITS,
 } from "./layers/CameraControls";
 import { Viewport3DScene } from "./layers/Viewport3DScene";
+import type { Viewport3DAirboxFrameState } from "./layers/Viewport3DScene";
 import { recordViewport3DCameraTrajectorySample } from "./layers/viewport3DCameraTrajectoryProbe";
 import { resolveViewport3DTargetSurfaceLayerInput } from "./layers/viewport3DLayerPassInputs";
 import type { RegionOverlaySelection } from "./layers/RegionOverlayLayer";
@@ -207,12 +208,16 @@ declare global {
 }
 
 export function buildViewport3DVisualizationDebugFrameCommit({
+  airboxVectorsVisible,
+  airboxWireframeVisible,
   contextLost,
   drawingBuffer,
   nowMs = Date.now,
   revision,
   slotId,
 }: {
+  airboxVectorsVisible?: boolean;
+  airboxWireframeVisible?: boolean;
   contextLost: boolean | null;
   drawingBuffer: readonly [number, number] | null;
   nowMs?: () => number;
@@ -220,6 +225,12 @@ export function buildViewport3DVisualizationDebugFrameCommit({
   slotId: string;
 }): Viewport3DVisualizationDebugFrameCommit {
   return {
+    ...(typeof airboxVectorsVisible === "boolean"
+      ? { airboxVectorsVisible }
+      : {}),
+    ...(typeof airboxWireframeVisible === "boolean"
+      ? { airboxWireframeVisible }
+      : {}),
     commitId: `${slotId}:${revision}`,
     committedAtMs: nowMs(),
     contextLost,
@@ -1134,6 +1145,24 @@ export function formatHysteresisReplayGlyphVector(
   return vector?.map((component) => component.toFixed(6)).join(" ") ?? "";
 }
 
+export function resolveViewport3DVectorSegmentLengthRange(
+  segments: Float32Array | null | undefined,
+): { max: number; min: number } | null {
+  if (!segments || segments.length < 7) return null;
+  let min = Number.POSITIVE_INFINITY;
+  let max = 0;
+  for (let offset = 0; offset + 6 < segments.length; offset += 7) {
+    const length = Math.hypot(
+      (segments[offset + 3] ?? 0) - (segments[offset] ?? 0),
+      (segments[offset + 4] ?? 0) - (segments[offset + 1] ?? 0),
+      (segments[offset + 5] ?? 0) - (segments[offset + 2] ?? 0),
+    );
+    min = Math.min(min, length);
+    max = Math.max(max, length);
+  }
+  return Number.isFinite(min) ? { max, min } : null;
+}
+
 function completePendingViewport3DCapture(
   canvasRef: { current: HTMLCanvasElement | null },
   pendingCaptureRevisionRef: { current: number | null },
@@ -1976,11 +2005,15 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
     viewport3dStore.setActiveScalarColorbarLegends([]);
     viewport3dStore.setRenderedScalarRanges([]);
   }, []);
-  const onVisualizationFrameCommitted = useCallback((revision: number) => {
+  const onVisualizationFrameCommitted = useCallback((
+    revision: number,
+    airboxFrameState: Viewport3DAirboxFrameState,
+  ) => {
     const canvas = canvasRef.current;
     const gl = canvas?.getContext("webgl2") ?? canvas?.getContext("webgl");
     visualizationDebugPublisher.onFrameCommitted(
       buildViewport3DVisualizationDebugFrameCommit({
+        ...airboxFrameState,
         revision,
         slotId,
         contextLost: gl?.isContextLost() ?? null,
@@ -2106,6 +2139,34 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
     hover: visibleInspectHover,
     selectedCellOrdinal: fdmSelectionCellOrdinal,
   });
+  // Expose the actually rendered Airbox carrier for the browser gate.  The
+  // public target is always `airbox`; the FDM outside-support id is only the
+  // field/query carrier used by the legacy single-grid path.
+  const airboxRenderView = sceneProps.fdmMultilayerAirboxView;
+  const airboxModel =
+    airboxRenderView?.model ?? sceneProps.fdmAirboxInstanceModel;
+  const airboxVectorSegments =
+    airboxRenderView?.vectorSegments ?? sceneProps.fdmAirboxVectorSegments;
+  const airboxDisplaySettings =
+    airboxRenderView?.settings ?? sceneProps.airboxSettings;
+  const airboxModelCount = airboxModel?.count ?? 0;
+  const airboxVectorSegmentCount = Math.floor(
+    (airboxVectorSegments?.length ?? 0) / 7,
+  );
+  const airboxVectorSegmentLengthRange = useMemo(
+    () => resolveViewport3DVectorSegmentLengthRange(airboxVectorSegments),
+    [airboxVectorSegments],
+  );
+  const airboxWireframeVisible = Boolean(
+    airboxDisplaySettings.visible &&
+      airboxDisplaySettings.wireframeVisible &&
+      airboxModelCount > 0,
+  );
+  const airboxVectorsVisible = Boolean(
+    airboxDisplaySettings.visible &&
+      airboxDisplaySettings.vectorsVisible &&
+      airboxVectorSegmentCount > 0,
+  );
 
   return (
     <section
@@ -2124,6 +2185,27 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
       data-fdm-vector-segment-count={String(
         Math.floor((sceneProps.fdmVectorSegments?.length ?? 0) / 7),
       )}
+      data-fdm-airbox-target={airboxRenderView?.target.id ?? "airbox"}
+      data-fdm-airbox-view-present={airboxRenderView ? "true" : "false"}
+      data-fdm-airbox-domain-cell-count={String(
+        airboxRenderView?.domain.totalCells ?? 0,
+      )}
+      data-fdm-airbox-build-status={sceneProps.fdmMultilayerAirboxBuildStatus}
+      data-fdm-airbox-build-key={sceneProps.fdmMultilayerAirboxBuildKey ?? ""}
+      data-fdm-airbox-build-error={sceneProps.fdmMultilayerAirboxBuildError ?? ""}
+      data-fdm-airbox-model-count={String(airboxModelCount)}
+      data-fdm-airbox-vector-segment-count={String(airboxVectorSegmentCount)}
+      data-fdm-airbox-vector-length-max={String(
+        airboxVectorSegmentLengthRange?.max ?? 0,
+      )}
+      data-fdm-airbox-vector-length-min={String(
+        airboxVectorSegmentLengthRange?.min ?? 0,
+      )}
+      data-fdm-airbox-vector-length-scale={String(
+        airboxDisplaySettings.vectorLengthScale,
+      )}
+      data-fdm-airbox-wireframe-visible={airboxWireframeVisible ? "true" : "false"}
+      data-fdm-airbox-vectors-visible={airboxVectorsVisible ? "true" : "false"}
       data-inspect-enabled={sceneProps.inspectEnabled ? "true" : "false"}
       data-primitive-object-count={sceneProps.primitiveModel?.objects.length ?? 0}
       data-primitive-object-ids={primitiveObjectIds}

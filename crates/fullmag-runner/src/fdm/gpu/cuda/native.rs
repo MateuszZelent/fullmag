@@ -25,10 +25,10 @@ use crate::quantities::normalized_quantity_name;
 use crate::relaxation::llg_overdamped_uses_pure_damping;
 #[cfg(feature = "cuda")]
 use crate::scalar_metrics::single_object_scalars;
-#[cfg(any(feature = "cuda", test))]
-use crate::types::{FdmMultilayerStageTelemetry, RunError};
 #[cfg(feature = "cuda")]
 use crate::types::StepStats;
+#[cfg(any(feature = "cuda", test))]
+use crate::types::{FdmMultilayerStageTelemetry, RunError};
 #[cfg(feature = "cuda")]
 use crate::types::{LivePreviewField, LivePreviewRequest};
 
@@ -242,13 +242,16 @@ fn validate_multilayer_stage_telemetry(
         && pair_accumulation_count == 0
     {
         return Err(RunError {
-            message: "d07_stage_telemetry_not_recorded: native multilayer demag counters are absent"
-                .to_string(),
+            message:
+                "d07_stage_telemetry_not_recorded: native multilayer demag counters are absent"
+                    .to_string(),
         });
     }
-    let expected_pairs = layer_count.checked_mul(layer_count).ok_or_else(|| RunError {
-        message: "d07_stage_telemetry_counter_overflow: L^2 does not fit u64".to_string(),
-    })?;
+    let expected_pairs = layer_count
+        .checked_mul(layer_count)
+        .ok_or_else(|| RunError {
+            message: "d07_stage_telemetry_counter_overflow: L^2 does not fit u64".to_string(),
+        })?;
     if refresh_count != 1
         || forward_fft_count != layer_count
         || inverse_fft_count != layer_count
@@ -463,7 +466,10 @@ impl NativeFdmBackend {
 
     pub fn create_multilayer_v2(plan: &fullmag_ir::FdmMultilayerPlanIR) -> Result<Self, RunError> {
         reject_cuda_multilayer_containment(plan.enable_demag, &plan.mode, &plan.layers)?;
-        validate_multilayer_grid_budget(plan)?;
+        validate_multilayer_grid_budget(
+            plan,
+            fullmag_fdm_demag::KernelAdmissionModel::CudaAbiV2PairPayload,
+        )?;
         for layer in &plan.layers {
             if layer.material.ms_field.is_some()
                 || layer.material.a_field.is_some()
@@ -1582,6 +1588,30 @@ impl NativeFdmBackend {
         )
     }
 
+    pub fn copy_layer_m(
+        &self,
+        layer_index: u32,
+        cell_count: usize,
+    ) -> Result<Vec<[f64; 3]>, RunError> {
+        self.copy_layer_field(
+            layer_index,
+            ffi::fullmag_fdm_observable::FULLMAG_FDM_OBSERVABLE_M,
+            cell_count,
+        )
+    }
+
+    pub fn copy_layer_h_ex(
+        &self,
+        layer_index: u32,
+        cell_count: usize,
+    ) -> Result<Vec<[f64; 3]>, RunError> {
+        self.copy_layer_field(
+            layer_index,
+            ffi::fullmag_fdm_observable::FULLMAG_FDM_OBSERVABLE_H_EX,
+            cell_count,
+        )
+    }
+
     pub fn copy_layer_h_demag_f32(
         &self,
         layer_index: u32,
@@ -1979,9 +2009,8 @@ impl NativeFdmBackend {
             multilayer_inverse_fft_count: 0,
             multilayer_pair_accumulation_count: 0,
         };
-        let rc = unsafe {
-            ffi::fullmag_fdm_backend_snapshot_stats(self.handle as *mut _, &mut stats)
-        };
+        let rc =
+            unsafe { ffi::fullmag_fdm_backend_snapshot_stats(self.handle as *mut _, &mut stats) };
         if rc != ffi::FULLMAG_FDM_OK {
             return Err(self.last_error_or("snapshot multilayer demag telemetry failed"));
         }
@@ -4338,6 +4367,8 @@ mod exact_metric_contract_tests {
             native_cell_size: [2e-9, 2e-9, 1e-9],
             native_origin: [-2e-9, -2e-9, z],
             native_active_mask: None,
+            native_region_mask: None,
+            native_region_legend: None,
             initial_magnetization: vec![[1.0, 0.0, 0.0]; 4],
             material: fullmag_ir::FdmMaterialIR::default(),
             convolution_grid: [2, 2, 1],
@@ -4456,8 +4487,8 @@ mod exact_metric_contract_tests {
 
     #[test]
     fn d07_l3_stage_telemetry_requires_exact_counts() {
-        let telemetry = validate_multilayer_stage_telemetry(3, 1, 3, 3, 9)
-            .expect("exact L=3 D-07 telemetry");
+        let telemetry =
+            validate_multilayer_stage_telemetry(3, 1, 3, 3, 9).expect("exact L=3 D-07 telemetry");
 
         assert_eq!(telemetry.layer_count, 3);
         assert_eq!(telemetry.refresh_count, 1);

@@ -15,6 +15,8 @@ use utoipa::OpenApi;
         crate::router_v2::handlers::data::domain::get_domain_meta,
         crate::router_v2::handlers::data::domain::get_fdm_multilayer_layout,
         crate::router_v2::handlers::data::domain::get_fdm_multilayer_layer_active_mask,
+        crate::router_v2::handlers::data::domain::get_fdm_multilayer_layer_region_membership,
+        crate::router_v2::handlers::data::domain::get_fdm_multilayer_layer_region_memberships,
         crate::router_v2::handlers::data::domain::get_domain_topology,
         crate::router_v2::handlers::data::domain::get_domain_slice_mesh_overlay,
         crate::router_v2::handlers::data::material_fields::get_material_field_data_catalog,

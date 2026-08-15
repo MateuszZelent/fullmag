@@ -11,7 +11,7 @@ import {
 import type { FieldMapRenderModel } from "../model/fieldMapRenderModel";
 import { localProbe } from "../model/fieldMapProbe";
 import type { ContourSegment } from "./marchingSquares";
-import { decodePlanarMeshOverlay } from "./meshOverlay";
+import { decodePlanarMeshOverlayForDescriptor } from "./meshOverlay";
 import { createPlanarColorizer } from "./planarColorizer";
 import {
   createPlanarRenderer,
@@ -56,7 +56,7 @@ export function PlanarSurface({
   const renderStateRef = useRef<{
     contours: readonly ContourSegment[];
     glyphs: ReturnType<typeof buildVectorGlyphs>;
-    mesh: ReturnType<typeof decodePlanarMeshOverlay> | null;
+    mesh: ReturnType<typeof decodePlanarMeshOverlayForDescriptor> | null;
   }>({ contours: [], glyphs: [], mesh: null });
   const [hoverValue, setHoverValue] = useState<number | null>(null);
   const rangeMin = model.range?.min;
@@ -125,7 +125,7 @@ export function PlanarSurface({
         })
       : [];
     const mesh = (model.layers.mesh || model.layers.boundaries) && model.meshOverlay
-      ? decodePlanarMeshOverlay(model.meshOverlay)
+      ? decodePlanarMeshOverlayForDescriptor(model.meshOverlay, model.meshOverlayDescriptor ?? {})
       : null;
     renderStateRef.current = { contours: [], glyphs, mesh };
     drawOverlayRef.current = (contours) => {
@@ -134,6 +134,7 @@ export function PlanarSurface({
       const state = renderStateRef.current;
       const currentMeshSegments = state.mesh ? partitionPlanarMeshSegments(state.mesh) : null;
       drawPlanarOverlays(overlayContext, overlayCanvas.width, overlayCanvas.height, {
+        boundsOutline: current.boundsOutline,
         contours: state.contours,
         boundarySegments: currentMeshSegments?.boundarySegments,
         glyphs: state.glyphs,
@@ -143,6 +144,7 @@ export function PlanarSurface({
         meshBounds: state.mesh?.bounds as [number, number, number, number] | undefined,
         meshSegments: currentMeshSegments?.meshSegments,
         meshViewport: current.viewport,
+        samplePoints: current.samplePoints,
         vectorColorMode: current.vectorStyle.colorMode,
         viewport: [
           ((current.viewport[0] - current.bounds[0]) / (current.bounds[1] - current.bounds[0])) * (current.resolution[0] - 1),
@@ -168,7 +170,12 @@ export function PlanarSurface({
           if (!current.layers.raster || !current.range) return;
           onRenderEvidence?.({
             glyphCount: state.glyphs.length,
-            overlayCounts: { contours: contours.length, meshSegments: state.mesh?.segmentCount ?? 0 },
+            overlayCounts: {
+              boundsSegments: current.layers.bounds ? 4 : 0,
+              contours: contours.length,
+              meshSegments: state.mesh?.segmentCount ?? 0,
+              pointMarkers: current.samplePoints.length,
+            },
             raster: {
               checksum: planarRasterChecksum(pixels),
               max: current.range.max,
@@ -191,17 +198,38 @@ export function PlanarSurface({
       colorizerRef.current?.dispose();
       colorizerRef.current = null;
       drawOverlayRef.current();
+      const current = modelRef.current;
+      const state = renderStateRef.current;
+      if (
+        current.layers.mesh || current.layers.boundaries || current.layers.bounds ||
+        current.layers.points || current.layers.vectors
+      ) {
+        onRenderEvidence?.({
+          glyphCount: state.glyphs.length,
+          overlayCounts: {
+            boundsSegments: current.layers.bounds ? 4 : 0,
+            contours: 0,
+            meshSegments: current.layers.mesh ? state.mesh?.segmentCount ?? 0 : 0,
+            pointMarkers: current.samplePoints.length,
+          },
+          raster: null,
+          sampleIdentity: current.sampleIdentity,
+        });
+      }
     }
   }, [
     model.colormap,
     model.layers.boundaries,
+    model.layers.bounds,
     model.layers.contours,
     model.layers.mesh,
+    model.layers.points,
     model.layers.probes,
     model.layers.raster,
     model.layers.vectors,
     model.mask,
     model.meshOverlay,
+    model.meshOverlayDescriptor,
     rangeMax,
     rangeMin,
     model.rasterOpacity,

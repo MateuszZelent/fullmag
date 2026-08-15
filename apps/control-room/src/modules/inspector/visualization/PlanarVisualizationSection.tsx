@@ -4,7 +4,11 @@ import { useState } from "react";
 
 import type { VisualizationStateResource } from "@/kernel/api/apiTypes";
 import { useKernel } from "@/kernel/KernelContext";
-import { usePlanarFieldMetaResource } from "@/kernel/resources/planarFieldResources";
+import {
+  planarFieldQueryFromMeta,
+  usePlanarFieldMetaResource,
+  usePlanarMaskResource,
+} from "@/kernel/resources/planarFieldResources";
 import { usePlanarMonitorsResource } from "@/kernel/resources/planarMonitorResources";
 import { useFieldCatalogResource } from "@/kernel/resources/studyRuntimeResources";
 import { useSessionStatusSelector } from "@/kernel/resources/useSessionStatus";
@@ -57,8 +61,14 @@ function capabilityReason(capability: FieldMapCapability): string | undefined {
       return "Structured FDM sampling does not support mesh-part or airbox scope.";
     case "mesh_overlay_unavailable":
       return "Mesh overlay is unavailable for this sample.";
+    case "occupancy_mask_unavailable":
+      return "Sample points require the canonical occupancy mask.";
+    case "planar_meta_unavailable":
+      return "Planar sample metadata is not materialized.";
     case "mesh_overlay_codec_unsupported":
-      return "Mesh overlay requires the fmcs.v4 descriptor codec.";
+      return "Mesh overlay requires the fmcs.v4 or fmfg.v1 descriptor codec.";
+    case "target_boundaries_unavailable":
+      return "FDM structured-grid overlays do not publish exact target boundaries.";
     case "boundaries_not_exact":
       return "Exact boundaries are unavailable for this overlay descriptor.";
     case "quantity_not_vector":
@@ -102,6 +112,21 @@ export function PlanarVisualizationSection({ selection }: { selection: Selection
       : {},
     { enabled: coverage.supported && planar !== undefined && monitorId.length > 0 },
   );
+  const canonicalSample = meta.data
+    ? planarFieldQueryFromMeta(quantityId, monitorId, meta.data)
+    : null;
+  const mask = usePlanarMaskResource(
+    quantityId,
+    monitorId,
+    canonicalSample?.ok ? canonicalSample.query : {},
+    {
+      enabled:
+        coverage.supported &&
+        planar !== undefined &&
+        monitorId.length > 0 &&
+        canonicalSample?.ok === true,
+    },
+  );
   const patch = (next: PlanarPatch) => visualizationSync.queuePatch({ planar: next });
   const selectedDescriptor = fieldCatalog.data?.quantities.find((quantity) => quantity.quantity_id === quantityId);
   const componentItems = (selectedDescriptor?.components ?? 3) > 1 ? PLANAR_COMPONENTS : ["magnitude"];
@@ -125,9 +150,12 @@ export function PlanarVisualizationSection({ selection }: { selection: Selection
           available: meta.data.mesh_overlay_descriptor.available,
           boundaryClassification: meta.data.mesh_overlay_descriptor.boundary_classification,
           codec: meta.data.mesh_overlay_descriptor.codec,
+          geometrySource: meta.data.mesh_overlay_descriptor.geometry_source,
         }
       : null,
     discretization,
+    metaAvailable: meta.status === "ready" && meta.data !== null,
+    occupancyAvailable: mask.status === "ready" && mask.data !== null,
     quantity: selectedDescriptor,
     scopeKind: planar.view_scope.kind,
   });

@@ -3674,7 +3674,7 @@ describe("buildModelTree", () => {
     }
   });
 
-  it("adds the shared Airbox subtree for an explicit FDM universe", () => {
+  it("keeps the public FDM Airbox visualization target canonical before multilayer layout is ready", () => {
     const withUniverse: FdmDomainPresentation = {
       ...(fdmExplorerPresentation() as FdmDomainPresentation),
       universeOutsideMagneticSupport: {
@@ -3700,7 +3700,10 @@ describe("buildModelTree", () => {
     expect(nodes.find((node) => node.id === "model:airbox:visualization")).toMatchObject({
       kind: "airbox.visualization",
       label: "Visualization", parentId: "model:airbox",
-      visualizationTargetId: "fdm-universe-outside-support",
+      visualizationTargetId: "airbox",
+    });
+    expect(nodes.find((node) => node.id === "model:airbox")).toMatchObject({
+      visualizationTargetId: "airbox",
     });
     expect(
       nodes.filter((node) => node.id === "model:airbox:visualization"),
@@ -3757,6 +3760,11 @@ describe("buildModelTree", () => {
       fdmMultilayerLayoutStatus: "ready",
     }));
 
+    expect(nodes.find((node) => node.id === "model:airbox:visualization")).toMatchObject({
+      kind: "airbox.visualization",
+      visualizationTargetId: "airbox",
+    });
+
     expect(nodes.filter((node) => node.kind === "airbox.multilayer.target")).toEqual([
       expect.objectContaining({
         id: "model:airbox:multilayer-target",
@@ -3772,6 +3780,61 @@ describe("buildModelTree", () => {
       nativeGrid: layout.common_transform_layout?.shape,
       nativeCellSize: layout.common_transform_layout?.cell_size,
       nativeOrigin: layout.common_transform_layout?.origin,
+    });
+  });
+
+  it("keeps the multilayer Airbox visible when the regular FDM support presentation is degraded", () => {
+    const layout = {
+      airbox: {
+        carrier_available: true,
+        carrier_fingerprint: "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        cell_size_m: [3e-9, 5e-9, 7e-9],
+        cells: [11, 13, 17],
+        h_demag_available: true,
+        h_eff_available: false,
+        h_eff_unavailable_reason: "fdm_multilayer_airbox_h_eff_unavailable.v1",
+        origin_m: [-2e-9, -4e-9, -6e-9],
+        sample_count: 2431,
+        source_grid_fingerprints: ["sha256:native-a", "sha256:native-b"],
+        source_policy: "target_only",
+        target_only: true,
+        value_count: 7293,
+      },
+      available: true,
+      backend: "fdm_multilayer",
+      common_transform_layout: {
+        cell_size: [101, 103, 107],
+        fft_shape: [109, 113, 127],
+        is_physical_mesh: false,
+        origin: [131, 137, 139],
+        provenance: "fft-scratch-only",
+        shape: [149, 151, 157],
+      },
+      domain_generation_id: "generation-airbox-target",
+      execution_revision: 3,
+      layers: [],
+      layout_revision: 5,
+      observation_revision: 7,
+      schema_version: "fdm-multilayer-layout.v1",
+    } satisfies FdmMultilayerLayoutResource;
+
+    const nodes = flattenExplorerNodes(buildModelTree({
+      domainPresentation: fdmExplorerPresentation(),
+      fdmMultilayerLayout: layout,
+      fdmMultilayerLayoutStatus: "ready",
+    }));
+
+    expect(nodes.find((node) => node.id === "model:airbox")).toMatchObject({
+      kind: "airbox.root",
+      status: "mesh-ready",
+    });
+    expect(nodes.find((node) => node.id === "model:airbox:visualization")).toMatchObject({
+      kind: "airbox.visualization",
+      visualizationTargetId: "airbox",
+    });
+    expect(nodes.find((node) => node.id === "model:airbox:multilayer-target")).toMatchObject({
+      gridFingerprint: layout.airbox.carrier_fingerprint,
+      nativeGrid: layout.airbox.cells,
     });
   });
 
@@ -3805,9 +3868,8 @@ describe("buildModelTree", () => {
     }));
 
     expect(nodes.map((node) => node.kind)).not.toContain("airbox.multilayer.target");
-    expect(nodes.find((node) => node.id === "model:airbox")?.visualizationTargetId).toBe(
-      "fdm-universe-outside-support",
-    );
+    expect(nodes.find((node) => node.id === "model:airbox")?.visualizationTargetId).toBe("airbox");
+    expect(nodes.find((node) => node.id === "model:airbox:visualization")?.visualizationTargetId).toBe("airbox");
   });
 
   it("keeps the FDM Airbox visible from authored geometry before membership materializes", () => {
@@ -3845,7 +3907,7 @@ describe("buildModelTree", () => {
     });
     expect(nodes.find((node) => node.id === "model:airbox:visualization")).toMatchObject({
       kind: "airbox.visualization",
-      visualizationTargetId: "fdm-universe-outside-support",
+      visualizationTargetId: "airbox",
     });
   });
 

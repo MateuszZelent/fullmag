@@ -1,4 +1,5 @@
 use std::collections::{BTreeMap, HashMap, VecDeque};
+use std::path::{Component, Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{mpsc, Arc, Mutex, OnceLock};
 use std::time::Instant;
@@ -370,6 +371,85 @@ impl LocalLiveWorkspace {
             .lock()
             .map(|state| state.clone())
             .unwrap_or_else(|_| panic!("local live workspace state lock poisoned"))
+    }
+
+    /// Atomically publish auxiliary field carriers after a successful
+    /// on-demand materialization. Samples are replaced before the manifest so
+    /// readers never observe a manifest pointing at an incomplete payload;
+    /// an earlier carrier remains intact if materialization fails upstream.
+    pub fn replace_auxiliary_artifacts(
+        &self,
+        artifacts: &[fullmag_runner::AuxiliaryArtifact],
+    ) -> Result<()> {
+        if artifacts.is_empty() {
+            return Ok(());
+        }
+        let artifact_dir = self.current_artifact_dir()?;
+        let mut ordered = artifacts.iter().collect::<Vec<_>>();
+        ordered.sort_by_key(|artifact| artifact.relative_path.ends_with("/manifest.json"));
+        let targets = ordered
+            .into_iter()
+            .map(|artifact| {
+                let relative = Path::new(&artifact.relative_path);
+                if relative.is_absolute()
+                    || relative.components().any(|component| {
+                        matches!(
+                            component,
+                            Component::ParentDir | Component::RootDir | Component::Prefix(_)
+                        )
+                    })
+                {
+                    return Err(anyhow!(
+                        "refusing unsafe auxiliary artifact path '{}'",
+                        artifact.relative_path
+                    ));
+                }
+                let target = artifact_dir.join(relative);
+                let parent = target
+                    .parent()
+                    .ok_or_else(|| anyhow!("auxiliary artifact has no parent"))?
+                    .to_path_buf();
+                Ok((artifact, target, parent))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        for (artifact, target, parent) in targets {
+            std::fs::create_dir_all(&parent)?;
+            let sequence = NEXT_TERMINAL_FIELD_GENERATION_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+            let file_name = target
+                .file_name()
+                .and_then(|name| name.to_str())
+                .ok_or_else(|| anyhow!("auxiliary artifact file name is not UTF-8"))?;
+            let temporary = parent.join(format!(
+                ".{file_name}.tmp-{}-{sequence}",
+                std::process::id()
+            ));
+            std::fs::write(&temporary, &artifact.bytes)?;
+            std::fs::rename(&temporary, &target)?;
+        }
+        if let Ok(mut state) = self.state.lock() {
+            state.field_generation = Some(CurrentLiveFieldGeneration {
+                run_id: state.run.run_id.clone(),
+                sequence: NEXT_TERMINAL_FIELD_GENERATION_SEQUENCE.fetch_add(1, Ordering::Relaxed)
+                    + 1,
+            });
+            state.advance_preview_cache_revision();
+        }
+        self.publish_snapshot();
+        Ok(())
+    }
+
+    fn current_artifact_dir(&self) -> Result<PathBuf> {
+        let path = self
+            .state
+            .lock()
+            .map_err(|_| anyhow!("local live workspace state lock poisoned"))?
+            .run
+            .artifact_dir
+            .clone();
+        if path.trim().is_empty() {
+            return Err(anyhow!("current run artifact_dir is unavailable"));
+        }
+        Ok(PathBuf::from(path))
     }
 
     pub fn latest_magnetization_vectors(&self) -> Option<Vec<[f64; 3]>> {
@@ -2031,6 +2111,109 @@ mod tests {
             snapshot.latest_fields.0["H_demag"]["values"],
             serde_json::json!([0.0, 0.0, 4.0, 0.0, 0.0, 4.0, 0.0, 0.0, 4.0, 0.0, 0.0, 4.0])
         );
+    }
+
+    #[test]
+    fn auxiliary_artifacts_are_atomically_replaced_and_advance_field_generation() {
+        let artifact_dir = std::env::temp_dir().join(format!(
+            "fullmag-airbox-artifacts-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("system clock should follow unix epoch")
+                .as_nanos()
+        ));
+        let mut state = workspace_with_domain_mesh().snapshot();
+        state.run.artifact_dir = artifact_dir.display().to_string();
+        let workspace = LocalLiveWorkspace::new(state, no_op_publisher());
+        let initial_revision = workspace.snapshot().preview_cache_revision;
+        let artifacts = vec![
+            fullmag_runner::AuxiliaryArtifact {
+                relative_path: "fields/H_demag/airbox/manifest.json".to_string(),
+                bytes: br#"{"scope_kind":"airbox"}"#.to_vec(),
+            },
+            fullmag_runner::AuxiliaryArtifact {
+                relative_path: "fields/H_demag/airbox/H_demag.samples.v1.json".to_string(),
+                bytes: br#"{"quantity":"H_demag"}"#.to_vec(),
+            },
+        ];
+
+        workspace
+            .replace_auxiliary_artifacts(&artifacts)
+            .expect("Airbox artifacts should be persisted");
+
+        assert_eq!(
+            std::fs::read(artifact_dir.join("fields/H_demag/airbox/manifest.json"))
+                .expect("manifest should exist"),
+            artifacts[0].bytes
+        );
+        assert_eq!(
+            std::fs::read(artifact_dir.join("fields/H_demag/airbox/H_demag.samples.v1.json"))
+                .expect("samples should exist"),
+            artifacts[1].bytes
+        );
+        let snapshot = workspace.snapshot();
+        assert_eq!(snapshot.preview_cache_revision, initial_revision + 1);
+        assert_eq!(
+            snapshot
+                .field_generation
+                .as_ref()
+                .map(|generation| generation.run_id.as_str()),
+            Some("test-run")
+        );
+        let artifact_parent = artifact_dir.join("fields/H_demag/airbox");
+        assert!(
+            std::fs::read_dir(&artifact_parent)
+                .expect("Airbox artifact directory should be readable")
+                .all(|entry| !entry
+                    .expect("Airbox directory entry should be readable")
+                    .file_name()
+                    .to_string_lossy()
+                    .contains(".tmp-")),
+            "atomic replacements must not leave temporary files"
+        );
+        std::fs::remove_dir_all(&artifact_dir).expect("clean Airbox artifact test directory");
+    }
+
+    #[test]
+    fn auxiliary_artifact_validation_failure_preserves_existing_carrier() {
+        let artifact_dir = std::env::temp_dir().join(format!(
+            "fullmag-airbox-artifact-validation-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("system clock should follow unix epoch")
+                .as_nanos()
+        ));
+        let mut state = workspace_with_domain_mesh().snapshot();
+        state.run.artifact_dir = artifact_dir.display().to_string();
+        let workspace = LocalLiveWorkspace::new(state, no_op_publisher());
+        let carrier_path = artifact_dir.join("fields/H_demag/airbox/H_demag.samples.v1.json");
+        let existing = vec![fullmag_runner::AuxiliaryArtifact {
+            relative_path: "fields/H_demag/airbox/H_demag.samples.v1.json".to_string(),
+            bytes: br#"{\"generation\":\"previous\"}"#.to_vec(),
+        }];
+        workspace
+            .replace_auxiliary_artifacts(&existing)
+            .expect("initial carrier should persist");
+
+        let rejected = vec![
+            fullmag_runner::AuxiliaryArtifact {
+                relative_path: "fields/H_demag/airbox/H_demag.samples.v1.json".to_string(),
+                bytes: br#"{\"generation\":\"new\"}"#.to_vec(),
+            },
+            fullmag_runner::AuxiliaryArtifact {
+                relative_path: "../manifest.json".to_string(),
+                bytes: Vec::new(),
+            },
+        ];
+
+        assert!(workspace.replace_auxiliary_artifacts(&rejected).is_err());
+        assert_eq!(
+            std::fs::read(&carrier_path).expect("existing carrier should remain readable"),
+            existing[0].bytes
+        );
+        std::fs::remove_dir_all(&artifact_dir).expect("clean Airbox artifact test directory");
     }
 
     fn no_op_publisher() -> CurrentLivePublisher {

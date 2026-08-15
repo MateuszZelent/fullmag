@@ -323,6 +323,7 @@ fn validate_single_grid_budget_with_policy(
 
 pub(crate) fn validate_multilayer_grid_budget(
     plan: &fullmag_ir::FdmMultilayerPlanIR,
+    admission_model: fullmag_fdm_demag::KernelAdmissionModel,
 ) -> Result<u64, RunError> {
     if let Err(errors) = plan.validate() {
         return Err(RunError {
@@ -445,7 +446,6 @@ pub(crate) fn validate_multilayer_grid_budget(
             ),
         });
     }
-    let mut aggregate_bytes = cost.estimated_bytes;
     for layer in &plan.layers {
         if layer.convolution_grid != plan.common_cells {
             return Err(RunError {
@@ -462,12 +462,6 @@ pub(crate) fn validate_multilayer_grid_budget(
         .map_err(|error| RunError {
             message: format!("FDM native layer grid budget rejected before allocation: {error}"),
         })?;
-        aggregate_bytes = aggregate_bytes
-            .checked_add(layer_cost.estimated_bytes)
-            .ok_or_else(|| RunError {
-                message: "FDM multilayer aggregate grid memory overflow before allocation"
-                    .to_string(),
-            })?;
         let native_cells = usize::try_from(layer_cost.cells).map_err(|_| RunError {
             message: format!(
                 "FDM native layer cell count {} is not addressable on this runtime",
@@ -496,38 +490,46 @@ pub(crate) fn validate_multilayer_grid_budget(
             });
         }
     }
-    let computed_kernel_bytes = if plan.enable_demag {
-        fullmag_plan::checked_multilayer_pair_kernel_footprint(plan.common_cells, plan.layers.len())
-            .map_err(|error| RunError {
-                message: format!(
-                    "FDM multilayer kernel footprint rejected before allocation: {error}"
-                ),
-            })?
-    } else {
-        0
-    };
+    let resolved_kernel_memory = fullmag_plan::resolve_multilayer_kernel_memory(
+        &plan.mode,
+        plan.common_cells,
+        &plan.layers,
+        plan.precision,
+        plan.enable_demag,
+        admission_model,
+    )
+    .map_err(|error| RunError {
+        message: format!(
+            "FDM multilayer kernel catalog rejected before allocation: {}",
+            error.reasons.join("; ")
+        ),
+    })?;
+    let computed_kernel_bytes = resolved_kernel_memory.accounting.admission_bytes;
+    let computed_unique_kernels = resolved_kernel_memory.catalog.keys.len() as u32;
+    let computed_pair_kernels = resolved_kernel_memory.catalog.pair_bindings.len() as u32;
+    if plan.planner_summary.estimated_unique_kernels != computed_unique_kernels
+        || plan.planner_summary.estimated_pair_kernels != computed_pair_kernels
+    {
+        return Err(RunError {
+            message: format!(
+                "FDM multilayer kernel catalog count mismatch: summary_unique={} recomputed_unique={computed_unique_kernels} summary_pairs={} recomputed_pairs={computed_pair_kernels}",
+                plan.planner_summary.estimated_unique_kernels,
+                plan.planner_summary.estimated_pair_kernels
+            ),
+        });
+    }
     if plan.planner_summary.estimated_kernel_bytes != computed_kernel_bytes {
         return Err(RunError {
             message: format!(
-                "FDM multilayer kernel estimate mismatch: summary={} recomputed={computed_kernel_bytes}",
-                plan.planner_summary.estimated_kernel_bytes
+                "FDM multilayer kernel estimate mismatch: model={} summary={} recomputed={computed_kernel_bytes}",
+                admission_model.as_str(), plan.planner_summary.estimated_kernel_bytes
             ),
         });
     }
-    aggregate_bytes = aggregate_bytes
-        .checked_add(computed_kernel_bytes)
-        .ok_or_else(|| RunError {
-            message: "FDM multilayer aggregate kernel memory overflow before allocation"
-                .to_string(),
-        })?;
-    if aggregate_bytes > fullmag_plan::FDM_GRID_MAX_BYTES {
-        return Err(RunError {
-            message: format!(
-                "FDM multilayer aggregate memory budget exceeded: estimated_bytes={aggregate_bytes} max_bytes={}",
-                fullmag_plan::FDM_GRID_MAX_BYTES
-            ),
-        });
-    }
+    debug_assert_eq!(
+        resolved_kernel_memory.common_grid_bytes,
+        cost.estimated_bytes
+    );
     Ok(cost.cells)
 }
 
@@ -562,6 +564,7 @@ fn validate_resolved_periodic_workspace(
 #[cfg(test)]
 mod tests {
     use super::{validate_multilayer_grid_budget, validate_single_grid_budget};
+    use fullmag_fdm_demag::KernelAdmissionModel;
     use fullmag_ir::{
         ExchangeBoundaryCondition, ExecutionPrecision, FdmLayerPlanIR, FdmMaterialIR,
         FdmMultilayerPlanIR, FdmMultilayerSummaryIR, FdmPlanIR, IntegratorChoice,
@@ -576,6 +579,8 @@ mod tests {
             native_cell_size: [1.0, 1.0, 1.0],
             native_origin: [0.0, 0.0, origin_z],
             native_active_mask: None,
+            native_region_mask: None,
+            native_region_legend: None,
             initial_magnetization: vec![magnetization],
             material: FdmMaterialIR {
                 name: "Py".to_string(),
@@ -642,23 +647,64 @@ mod tests {
 
     #[test]
     fn stale_multilayer_kernel_summary_is_rejected_before_allocation() {
-        let error = validate_multilayer_grid_budget(&valid_multilayer_plan())
-            .expect_err("shift-only summary must fail before a multilayer kernel is built");
+        let mut plan = valid_multilayer_plan();
+        plan.planner_summary.estimated_kernel_bytes = 3_072;
+        let error = validate_multilayer_grid_budget(&plan, KernelAdmissionModel::CpuFp64Catalog)
+            .expect_err("pair-payload summary must fail CPU catalog admission");
         assert!(
             error.message.contains("kernel estimate mismatch"),
             "unexpected preflight error: {}",
             error.message
         );
         assert!(
-            error.message.contains("summary=2304"),
+            error.message.contains("summary=3072"),
             "unexpected preflight error: {}",
             error.message
         );
         assert!(
-            error.message.contains("recomputed=3072"),
+            error.message.contains("recomputed=2352"),
             "unexpected preflight error: {}",
             error.message
         );
+    }
+
+    #[test]
+    fn stale_multilayer_pair_and_unique_counts_are_rejected_before_allocation() {
+        let mut stale_pair = valid_multilayer_plan();
+        stale_pair.planner_summary.estimated_pair_kernels -= 1;
+        let pair_error =
+            validate_multilayer_grid_budget(&stale_pair, KernelAdmissionModel::CpuFp64Catalog)
+                .expect_err("stale pair count must fail before allocation");
+        assert!(pair_error.message.contains("kernel catalog count mismatch"));
+
+        let mut stale_unique = valid_multilayer_plan();
+        stale_unique.planner_summary.estimated_unique_kernels -= 1;
+        let unique_error =
+            validate_multilayer_grid_budget(&stale_unique, KernelAdmissionModel::CpuFp64Catalog)
+                .expect_err("stale unique count must fail before allocation");
+        assert!(unique_error
+            .message
+            .contains("kernel catalog count mismatch"));
+    }
+
+    #[test]
+    fn cuda_abi_v2_preflight_requires_l_squared_pair_payload() {
+        let mut plan = valid_multilayer_plan();
+        plan.planner_summary.estimated_kernel_bytes = 3_120;
+
+        validate_multilayer_grid_budget(&plan, KernelAdmissionModel::CudaAbiV2PairPayload)
+            .expect("CUDA ABI v2 must admit all four ordered pair tensors");
+    }
+
+    #[test]
+    fn native_stacked_preflight_requires_zero_multilayer_kernel_payload() {
+        let mut plan = valid_multilayer_plan();
+        plan.planner_summary.estimated_pair_kernels = 0;
+        plan.planner_summary.estimated_unique_kernels = 0;
+        plan.planner_summary.estimated_kernel_bytes = 0;
+
+        validate_multilayer_grid_budget(&plan, KernelAdmissionModel::CudaNativeSingleGrid)
+            .expect("native stacked single-grid path must not admit multilayer pair tensors");
     }
 
     #[test]
@@ -667,7 +713,7 @@ mod tests {
         plan.enable_demag = false;
         plan.planner_summary.estimated_kernel_bytes = 0;
 
-        validate_multilayer_grid_budget(&plan)
+        validate_multilayer_grid_budget(&plan, KernelAdmissionModel::CpuFp64Catalog)
             .expect("inactive demag must not admit a pair-kernel payload");
     }
 
@@ -677,7 +723,7 @@ mod tests {
         plan.enable_demag = false;
         plan.planner_summary.estimated_kernel_bytes = 3_072;
 
-        let error = validate_multilayer_grid_budget(&plan)
+        let error = validate_multilayer_grid_budget(&plan, KernelAdmissionModel::CpuFp64Catalog)
             .expect_err("inactive demag must reject stale nonzero kernel telemetry");
         assert!(
             error.message.contains("kernel estimate mismatch"),

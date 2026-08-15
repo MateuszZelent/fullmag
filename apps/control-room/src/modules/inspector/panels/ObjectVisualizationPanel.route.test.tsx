@@ -73,6 +73,12 @@ vi.mock("@/kernel/visualization/useVisualizationStateResource", () => ({
 }));
 
 vi.mock("@/kernel/resources/geometryLifecycleResources", () => ({
+  useFdmMultilayerLayoutResource: () => ({
+    data: null,
+    error: null,
+    revision: null,
+    status: "idle",
+  }),
   useDomainMetaResource: ({ enabled }: { enabled: boolean }) => {
     resourceCall("domain-meta", enabled);
     return {

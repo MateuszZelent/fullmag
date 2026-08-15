@@ -77,6 +77,8 @@ pub(crate) enum Command {
         path: PathBuf,
         #[arg(long)]
         backend: Option<BackendArg>,
+        #[arg(long, default_value_t = false)]
+        execution_plan: bool,
     },
     RunJson {
         path: PathBuf,

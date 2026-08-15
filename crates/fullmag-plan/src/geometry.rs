@@ -80,6 +80,9 @@ pub(crate) enum GeometryShape {
         height: f64,
         axis: [f64; 3],
     },
+    Sphere {
+        radius: f64,
+    },
     SinWaveguide {
         length: f64,
         width: f64,
@@ -120,11 +123,14 @@ pub(crate) struct PlacedGeometry {
 #[derive(Debug, Clone)]
 pub(crate) struct LoweredBody {
     pub magnet_name: String,
+    pub overlap_geometry: PlacedGeometry,
     pub bounding_size: [f64; 3],
     pub native_grid: [u32; 3],
     pub native_cell_size: [f64; 3],
     pub native_origin: [f64; 3],
     pub native_active_mask: Option<Vec<bool>>,
+    pub native_region_mask: Option<Vec<u32>>,
+    pub native_region_legend: Option<Vec<fullmag_ir::FdmRegionLegendEntryIR>>,
     pub initial_magnetization: Vec<[f64; 3]>,
     pub material: FdmMaterialIR,
 }
@@ -142,6 +148,7 @@ pub(crate) fn ir_to_shape(entry: &GeometryEntryIR) -> Result<GeometryShape, Stri
             height: *height,
             axis: normalize_axis(*axis)?,
         }),
+        GeometryEntryIR::Sphere { radius, .. } => Ok(GeometryShape::Sphere { radius: *radius }),
         GeometryEntryIR::SinWaveguide {
             length,
             width,
@@ -198,10 +205,6 @@ pub(crate) fn ir_to_shape(entry: &GeometryEntryIR) -> Result<GeometryShape, Stri
             "geometry '{}' (Ellipsoid) is not yet supported by the FDM planner; use Box or Cylinder",
             name
         )),
-        GeometryEntryIR::Sphere { name, .. } => Err(format!(
-            "geometry '{}' (Sphere) is not yet supported by the FDM planner; use Box or Cylinder",
-            name
-        )),
         GeometryEntryIR::Ellipse { name, .. } => Err(format!(
             "geometry '{}' (Ellipse) is not yet supported by the FDM planner; use Box or Cylinder",
             name
@@ -223,6 +226,7 @@ pub(crate) fn extract_multilayer_geometry(
         }
         GeometryEntryIR::Box { .. }
         | GeometryEntryIR::Cylinder { .. }
+        | GeometryEntryIR::Sphere { .. }
         | GeometryEntryIR::SinWaveguide { .. }
         | GeometryEntryIR::ArchWaveguide { .. }
         | GeometryEntryIR::ImportedGeometry { .. }
@@ -235,9 +239,7 @@ pub(crate) fn extract_multilayer_geometry(
             "geometry '{}' uses CSG union/intersection which is not yet supported by the public multilayer planner; use Box/Cylinder/Difference with optional Translate",
             entry.name()
         )),
-        GeometryEntryIR::Ellipsoid { .. }
-        | GeometryEntryIR::Sphere { .. }
-        | GeometryEntryIR::Ellipse { .. } => Err(format!(
+        GeometryEntryIR::Ellipsoid { .. } | GeometryEntryIR::Ellipse { .. } => Err(format!(
             "geometry '{}' is not yet supported by the public multilayer planner; use Box/Cylinder/Difference with optional Translate",
             entry.name()
         )),
@@ -264,6 +266,7 @@ pub(crate) fn shape_local_bounds(shape: &GeometryShape) -> Option<([f64; 3], [f6
             });
             Some(([-extents[0], -extents[1], -extents[2]], extents))
         }
+        GeometryShape::Sphere { radius } => Some(([-*radius; 3], [*radius; 3])),
         GeometryShape::SinWaveguide {
             length,
             width,
@@ -354,6 +357,13 @@ impl GeometryShape {
         match self {
             Self::Box { size } => (0..3).all(|axis| point[axis].abs() <= size[axis] * 0.5),
             Self::Cylinder { .. } => contains_cylinder(self, point),
+            Self::Sphere { radius } => {
+                point
+                    .iter()
+                    .map(|component| component * component)
+                    .sum::<f64>()
+                    <= radius * radius
+            }
             Self::SinWaveguide {
                 length,
                 width,
@@ -493,6 +503,36 @@ pub(crate) fn voxelize_shape(
                 }
             }
             (bbox, Some(mask), [nx, ny, nz], bounds_min)
+        }
+        GeometryShape::Sphere { radius } => {
+            let bbox = [2.0 * *radius; 3];
+            let grid_cells = [
+                (bbox[0] / cell_size[0]).round().max(1.0) as u32,
+                (bbox[1] / cell_size[1]).round().max(1.0) as u32,
+                (bbox[2] / cell_size[2]).round().max(1.0) as u32,
+            ];
+            let Some(n) = checked_voxel_count(grid_cells, errors) else {
+                return (bbox, None, grid_cells, [-*radius; 3]);
+            };
+            let mut mask = vec![false; n];
+            for z in 0..grid_cells[2] {
+                for y in 0..grid_cells[1] {
+                    for x in 0..grid_cells[0] {
+                        let point = [
+                            -*radius + (x as f64 + 0.5) * cell_size[0],
+                            -*radius + (y as f64 + 0.5) * cell_size[1],
+                            -*radius + (z as f64 + 0.5) * cell_size[2],
+                        ];
+                        let index = (x + grid_cells[0] * (y + grid_cells[1] * z)) as usize;
+                        mask[index] = point
+                            .iter()
+                            .map(|component| component * component)
+                            .sum::<f64>()
+                            <= radius * radius;
+                    }
+                }
+            }
+            (bbox, Some(mask), grid_cells, [-*radius; 3])
         }
         GeometryShape::SinWaveguide {
             length,

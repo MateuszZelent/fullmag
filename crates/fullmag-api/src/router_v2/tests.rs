@@ -4890,7 +4890,9 @@ async fn visualization_state_exposes_v2_layer_model_with_legacy_projection() {
     assert_eq!(response.status(), StatusCode::OK);
 
     let json = body_json(response).await;
-    assert_eq!(json["schema_version"], 7);
+    assert_eq!(json["schema_version"], 8);
+    assert_eq!(json["planar"]["layers"]["bounds"], false);
+    assert_eq!(json["planar"]["layers"]["points"], false);
     assert_eq!(
         json["quantity"]["active_quantity_id"],
         json["active_quantity_id"]
@@ -5152,7 +5154,7 @@ async fn visualization_state_patch_accepts_nested_v2_controls() {
     assert_eq!(response.status(), StatusCode::OK);
 
     let json = body_json(response).await;
-    assert_eq!(json["schema_version"], 7);
+    assert_eq!(json["schema_version"], 8);
     assert_eq!(json["active_quantity_id"], "h_eff");
     assert_eq!(json["quantity"]["active_quantity_id"], "h_eff");
     assert_eq!(json["field_component"], "magnitude");
@@ -5269,10 +5271,12 @@ async fn visualization_state_planar_profile_round_trips_without_mutating_three_d
                                 "vector_budget": 750
                             },
                             "layers": {
+                                "bounds": true,
                                 "raster": true,
                                 "contours": true,
                                 "mesh": false,
                                 "boundaries": true,
+                                "points": true,
                                 "vectors": true,
                                 "probes": true
                             }
@@ -5294,6 +5298,8 @@ async fn visualization_state_planar_profile_round_trips_without_mutating_three_d
     assert_eq!(json["planar"]["range"]["max"], 4.0);
     assert_eq!(json["planar"]["raster_opacity"], 0.35);
     assert_eq!(json["planar"]["resolution"]["width"], 640);
+    assert_eq!(json["planar"]["layers"]["bounds"], true);
+    assert_eq!(json["planar"]["layers"]["points"], true);
     assert_eq!(json["planar"]["layers"]["vectors"], true);
     assert_eq!(json["slice"]["quantity_id"], "h_demag");
     assert_eq!(json["slice"]["component"], "magnitude");
@@ -5339,6 +5345,19 @@ async fn visualization_state_planar_profile_round_trips_without_mutating_three_d
     assert_eq!(cleared["planar"]["range"]["min"], serde_json::Value::Null);
     assert_eq!(cleared["planar"]["range"]["max"], serde_json::Value::Null);
     assert_eq!(cleared["planar"]["display_unit"], serde_json::Value::Null);
+}
+
+#[test]
+fn openapi_planar_layer_state_exposes_points_and_bounds() {
+    let openapi = crate::openapi_v2::openapi_json();
+    let schema = &openapi["components"]["schemas"]["PlanarLayerState"];
+    assert_eq!(schema["properties"]["bounds"]["type"], "boolean");
+    assert_eq!(schema["properties"]["points"]["type"], "boolean");
+    let required = schema["required"]
+        .as_array()
+        .expect("PlanarLayerState required fields");
+    assert!(required.contains(&serde_json::json!("bounds")));
+    assert!(required.contains(&serde_json::json!("points")));
 }
 
 #[tokio::test]
@@ -13511,12 +13530,17 @@ async fn planar_field_resources_publish_meta_binary_probe_png_and_etag() {
     assert_eq!(meta_json["scene_revision"], SCENE_REVISION.to_string());
     assert_eq!(meta_json["mesh_revision"], MESH_REVISION.to_string());
     assert_eq!(meta_json["field_revision"], FIELD_REVISION.to_string());
-    assert_eq!(meta_json["mesh_overlay_descriptor"]["available"], false);
+    assert_eq!(meta_json["schema_version"], "planar_sample_meta.v3");
+    assert_eq!(meta_json["mesh_overlay_descriptor"]["available"], true);
     assert_eq!(
         meta_json["mesh_overlay_descriptor"]["boundary_classification"],
         "unavailable"
     );
-    assert!(meta_json["mesh_overlay_descriptor"]["codec"].is_null());
+    assert_eq!(meta_json["mesh_overlay_descriptor"]["codec"], "fmfg.v1");
+    assert_eq!(
+        meta_json["mesh_overlay_descriptor"]["geometry_source"],
+        "fdm_structured_grid"
+    );
     let monitor_revision = meta_json["monitor_revision"].as_str().unwrap();
     let carrier_revision = meta_json["carrier_revision"].as_str().unwrap();
     let sample_token = meta_json["sample_token"].as_str().unwrap();
@@ -13629,7 +13653,40 @@ async fn planar_field_resources_publish_meta_binary_probe_png_and_etag() {
         )
         .await
         .unwrap();
-    assert_eq!(overlay.status(), StatusCode::NO_CONTENT);
+    assert_eq!(overlay.status(), StatusCode::OK);
+    let overlay_etag = overlay.headers()["etag"].to_str().unwrap().to_string();
+    assert!(overlay_etag.contains("fmfg-v1"));
+    let overlay = body_bytes(overlay).await;
+    assert_eq!(&overlay[..4], b"FMFG");
+    assert_eq!(u32::from_le_bytes(overlay[4..8].try_into().unwrap()), 1);
+    assert!(u32::from_le_bytes(overlay[8..12].try_into().unwrap()) > 0);
+    let overlay_not_modified = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(meta_json["links"]["mesh_overlay"].as_str().unwrap())
+                .header("if-none-match", overlay_etag)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(overlay_not_modified.status(), StatusCode::NOT_MODIFIED);
+    let mesh_enabled_meta = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!("{base}/meta{query}&include_mesh=true"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(mesh_enabled_meta.status(), StatusCode::OK);
+    assert_eq!(
+        body_json(mesh_enabled_meta).await["sample_token"],
+        sample_token
+    );
 
     let stale_mesh = app
         .clone()
@@ -13994,6 +14051,10 @@ async fn planar_field_fem_overlay_is_fmcs_v4_and_mesh_part_scope_changes_samplin
     let meta = body_json(meta).await;
     assert_eq!(meta["mesh_overlay_descriptor"]["available"], true);
     assert_eq!(meta["mesh_overlay_descriptor"]["codec"], "fmcs.v4");
+    assert_eq!(
+        meta["mesh_overlay_descriptor"]["geometry_source"],
+        "fem_topology"
+    );
     assert_eq!(
         meta["mesh_overlay_descriptor"]["boundary_classification"],
         "exact"
@@ -23879,7 +23940,13 @@ fn write_test_fdm_multilayer_airbox_carrier(artifact_dir: &std::path::Path) -> P
             "demag_operator_kind": "multilayer",
             "fft_backend": "rustfft",
             "problem_source_hash": "test-problem-source-hash",
-            "run_status": "completed"
+            "run_status": "completed",
+            "build_identity": {
+                "built_at_utc": "2026-08-14T00:00:00Z",
+                "git_commit": "d".repeat(40),
+                "worktree_state": "dirty",
+                "source_snapshot_sha256": "e".repeat(64),
+            }
         },
         "quantity_revision": 17,
         "field_generation": "airbox-run-7:field-H_demag-3",
@@ -25182,11 +25249,15 @@ async fn fdm_multilayer_field_vector_layer_scope_uses_native_layer_layout() {
                     "layers": [{
                         "layer_id": "layer:top",
                         "object_id": "top",
-                        "magnet_name": "layer-a"
+                        "magnet_name": "layer-a",
+                        "native_active_mask": [true, true],
+                        "native_region_mask": [0, 0]
                     }, {
                         "layer_id": "layer:bottom",
                         "object_id": "bottom",
-                        "magnet_name": "layer-b"
+                        "magnet_name": "layer-b",
+                        "native_active_mask": [true],
+                        "native_region_mask": [0]
                     }]
                 }
             },
@@ -25243,9 +25314,17 @@ async fn fdm_multilayer_field_vector_layer_scope_uses_native_layer_layout() {
     assert_eq!(response.headers()["x-fullmag-point-count"], "1");
     let expected_carrier_hash = format!(
         "sha256:{}",
-        fullmag_ir::FdmGridCertificateIR::new([0.0, 0.0, 2.0], [1, 1, 1], [2.0, 1.0, 1.0], 1, 1,)
-            .expect("native layer grid must form a certificate")
-            .grid_fingerprint
+        fullmag_ir::FdmGridCertificateIR::new_with_topology_tokens(
+            [0.0, 0.0, 2.0],
+            [1, 1, 1],
+            [2.0, 1.0, 1.0],
+            1,
+            1,
+            Some(&[true]),
+            &[0],
+        )
+        .expect("native layer grid must form a topology-aware certificate")
+        .grid_fingerprint
     );
     assert_eq!(response.headers()["x-fullmag-encoding"], "FMVP;version=3");
     assert_eq!(
@@ -25527,6 +25606,691 @@ async fn fdm_multilayer_field_vector_region_scope_fails_closed_without_single_gr
     assert!(body["message"]
         .as_str()
         .is_some_and(|detail| detail.contains("no single FMRM membership carrier")));
+}
+
+#[tokio::test]
+async fn fdm_multilayer_planar_layer_scope_uses_native_grid_and_local_region_membership() {
+    let (app, state, artifact_dir) = test_router_with_session_state_and_artifact_dir().await;
+    let material_dir = artifact_dir.join("material-fields/fdm-multilayer");
+    fs::create_dir_all(material_dir.join("layer-bottom"))
+        .expect("failed to create multilayer material artifact directory");
+    let grid_fingerprint = format!(
+        "sha256:{}",
+        fullmag_ir::FdmGridCertificateIR::new_with_topology_tokens(
+            [0.0, 0.0, 2.0],
+            [2, 1, 1],
+            [1.0, 1.0, 1.0],
+            2,
+            1,
+            Some(&[true, true]),
+            &[1, 2],
+        )
+        .expect("native grid should form a certificate")
+        .grid_fingerprint
+    );
+    let top_grid_fingerprint = format!(
+        "sha256:{}",
+        fullmag_ir::FdmGridCertificateIR::new_with_topology_tokens(
+            [0.0, 0.0, 0.0],
+            [2, 1, 1],
+            [1.0, 1.0, 1.0],
+            1,
+            1,
+            Some(&[true, false]),
+            &[1, 0],
+        )
+        .expect("top native grid should form a certificate")
+        .grid_fingerprint
+    );
+    let values = [7.0_f64, 9.0];
+    let value_sha256 = format!(
+        "sha256:{:x}",
+        Sha256::digest(
+            values
+                .iter()
+                .flat_map(|value| value.to_le_bytes())
+                .collect::<Vec<_>>()
+        )
+    );
+    let region_mask = [1_u32, 2_u32];
+    let region_mask_sha256 = format!(
+        "sha256:{:x}",
+        Sha256::digest(
+            region_mask
+                .iter()
+                .flat_map(|value| value.to_le_bytes())
+                .collect::<Vec<_>>()
+        )
+    );
+    let region_legend = serde_json::json!([{
+        "numeric_id": 1,
+        "object_id": "object:bottom",
+        "region_id": "shared",
+        "priority": 0
+    }, {
+        "numeric_id": 2,
+        "object_id": "object:bottom",
+        "region_id": "rim",
+        "priority": 0
+    }]);
+    let legend_sha256 = format!(
+        "sha256:{:x}",
+        Sha256::digest(serde_json::to_vec(&region_legend).unwrap())
+    );
+    let membership_generation_id =
+        crate::router_v2::handlers::data::resolved_spatial_field::native_layer_membership_generation_id(
+            "layer:bottom",
+            "object:bottom",
+            &grid_fingerprint,
+            23,
+            &region_mask_sha256,
+            &legend_sha256,
+        )
+        .expect("membership generation should be canonical");
+    let material_path = "material-fields/fdm-multilayer/layer-bottom/mat_ms.json";
+    let membership_path =
+        "material-fields/fdm-multilayer/layer-bottom/native-region-membership.json";
+    fs::write(
+        artifact_dir.join(material_path),
+        serde_json::to_vec(&serde_json::json!({
+            "schema_version": "fdm_multilayer_material_field.v1",
+            "layer_id": "layer:bottom",
+            "object_id": "object:bottom",
+            "magnet_name": "bottom",
+            "native_grid": [2, 1, 1],
+            "native_origin": [0.0, 0.0, 2.0],
+            "native_cell_size": [1.0, 1.0, 1.0],
+            "native_grid_fingerprint": grid_fingerprint,
+            "field_id": "mat_ms",
+            "unit": "A/m",
+            "value_count": 2,
+            "revision": 17,
+            "generation_id": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+            "value_sha256": value_sha256,
+            "values": values
+        }))
+        .unwrap(),
+    )
+    .expect("failed to write multilayer material field artifact");
+    fs::write(
+        artifact_dir.join(membership_path),
+        serde_json::to_vec(&serde_json::json!({
+            "schema_version": "fdm_multilayer_region_membership.v1",
+            "layer_id": "layer:bottom",
+            "object_id": "object:bottom",
+            "magnet_name": "bottom",
+            "native_grid": [2, 1, 1],
+            "native_origin": [0.0, 0.0, 2.0],
+            "native_cell_size": [1.0, 1.0, 1.0],
+            "native_grid_fingerprint": grid_fingerprint,
+            "value_count": 2,
+            "revision": 23,
+            "generation_id": membership_generation_id.clone(),
+            "value_sha256": region_mask_sha256,
+            "legend_sha256": legend_sha256,
+            "native_region_mask": region_mask,
+            "native_region_legend": region_legend
+        }))
+        .unwrap(),
+    )
+    .expect("failed to write multilayer membership artifact");
+    let mut scene = sample_scene_document();
+    scene.monitors.planar.push(
+        serde_json::from_value(serde_json::json!({
+            "id": "bottom-shared-region",
+            "name": "Bottom shared region",
+            "target": {
+                "kind": "region",
+                "object_id": "object:bottom",
+                "region_id": "shared"
+            },
+            "frame": {
+                "origin_m": [0.0, 0.0, 2.5],
+                "u_axis": [1.0, 0.0, 0.0],
+                "v_axis": [0.0, 1.0, 0.0],
+                "normal": [0.0, 0.0, 1.0],
+                "preset": "xy",
+                "normalization_version": "planar_frame_v1",
+                "extent": {
+                    "kind": "explicit",
+                    "u_min_m": 0.0,
+                    "u_max_m": 2.0,
+                    "v_min_m": 0.0,
+                    "v_max_m": 1.0
+                }
+            },
+            "operator": {"kind": "plane_sample"}
+        }))
+        .expect("multilayer planar monitor should deserialize"),
+    );
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.scene_document = Some(scene);
+        snapshot.session.script_path.clear();
+        snapshot.metadata = Some(serde_json::json!({
+            "execution_plan": {"backend_plan": {"kind": "fdm_multilayer", "layers": [{
+                "layer_id": "layer:top",
+                "object_id": "object:top",
+                "magnet_name": "top",
+                "native_grid": [2, 1, 1],
+                "native_origin": [0.0, 0.0, 0.0],
+                "native_cell_size": [1.0, 1.0, 1.0],
+                "native_active_mask": [true, false],
+                "native_region_mask": [1, 0],
+                "native_region_legend": [{
+                    "numeric_id": 1,
+                    "object_id": "object:top",
+                    "region_id": "shared",
+                    "priority": 4
+                }],
+                "material": {"ms_field": [11.0, 12.0]},
+                "convolution_grid": [2, 1, 1],
+                "convolution_cell_size": [1.0, 1.0, 1.0],
+                "transfer_kind": "identity"
+            }, {
+                "layer_id": "layer:bottom",
+                "object_id": "object:bottom",
+                "magnet_name": "bottom",
+                "native_grid": [2, 1, 1],
+                "native_origin": [0.0, 0.0, 2.0],
+                "native_cell_size": [1.0, 1.0, 1.0],
+                "native_active_mask": [true, true],
+                "native_region_mask": [1, 2],
+                "native_region_legend": region_legend,
+                "material": {"ms_field": values},
+                "convolution_grid": [2, 1, 1],
+                "convolution_cell_size": [1.0, 1.0, 1.0],
+                "transfer_kind": "identity"
+            }]}},
+            "artifact_layout": {"backend": "fdm_multilayer", "layers": [{
+                "layer_id": "layer:top",
+                "object_id": "object:top",
+                "magnet_name": "top",
+                "native_grid": [2, 1, 1],
+                "native_origin": [0.0, 0.0, 0.0],
+                "native_cell_size": [1.0, 1.0, 1.0],
+                "value_offset": 0,
+                "value_count": 2
+            }, {
+                "layer_id": "layer:bottom",
+                "object_id": "object:bottom",
+                "magnet_name": "bottom",
+                "native_grid": [2, 1, 1],
+                "native_origin": [0.0, 0.0, 2.0],
+                "native_cell_size": [1.0, 1.0, 1.0],
+                "native_grid_fingerprint": grid_fingerprint,
+                "value_offset": 2,
+                "value_count": 2,
+                "native_region_mask": {
+                    "available": true,
+                    "value_count": 2,
+                    "value_sha256": region_mask_sha256,
+                    "generation_id": membership_generation_id.clone(),
+                    "revision": 23,
+                    "artifact_path": membership_path
+                },
+                "native_region_legend": {
+                    "available": true,
+                    "entry_count": 2,
+                    "legend_sha256": legend_sha256,
+                    "generation_id": membership_generation_id,
+                    "revision": 23,
+                    "artifact_path": membership_path,
+                    "entries": region_legend
+                },
+                "material_fields": {
+                    "mat_ms": {
+                        "available": true,
+                        "unit": "A/m",
+                        "value_count": 2,
+                        "revision": 17,
+                        "generation_id": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+                        "value_sha256": value_sha256,
+                        "artifact_path": material_path
+                    }
+                }
+            }]}
+        }));
+        snapshot.live_state = None;
+        snapshot.latest_fields = LatestFields::default();
+        snapshot.region_realization_revisions.membership = 23;
+    }
+    {
+        let guard = state.current_live_state.read().await;
+        let snapshot = guard.as_ref().expect("live snapshot should remain present");
+        let resolved =
+            crate::router_v2::handlers::data::resolved_spatial_field::resolve_fdm_multilayer_native_layer_field(
+                snapshot,
+                "mat_ms",
+                1,
+                "layer:bottom",
+            )
+            .expect("planned native material carrier should resolve")
+            .expect("multilayer carrier should be applicable");
+        assert_eq!(
+            resolved.source_kind,
+            crate::router_v2::handlers::data::resolved_spatial_field::SpatialFieldSourceKind::Materialized
+        );
+        assert_eq!(resolved.values, values);
+        match resolved.carrier {
+            crate::router_v2::handlers::data::resolved_spatial_field::SpatialFieldCarrier::FdmNativeLayerCells {
+                layer_id,
+                object_id,
+                membership,
+                ..
+            } => {
+                assert_eq!(layer_id, "layer:bottom");
+                assert_eq!(object_id, "object:bottom");
+                assert_eq!(
+                    membership.region_legend,
+                    serde_json::from_value::<
+                        Vec<crate::schemas::mesh::FdmRegionLegendEntryResource>,
+                    >(region_legend.clone())
+                    .unwrap()
+                );
+                assert_eq!(membership.cell_membership, region_mask);
+            }
+            carrier => panic!("expected native multilayer carrier, got {carrier:?}"),
+        }
+
+        let top =
+            crate::router_v2::handlers::data::resolved_spatial_field::resolve_fdm_multilayer_native_layer_field(
+                snapshot,
+                "mat_ms",
+                1,
+                "layer:top",
+            )
+            .expect("top planned native material carrier should resolve")
+            .expect("top multilayer carrier should be applicable");
+        assert_eq!(top.values, vec![11.0, 12.0]);
+        match top.carrier {
+            crate::router_v2::handlers::data::resolved_spatial_field::SpatialFieldCarrier::FdmNativeLayerCells {
+                layer_id,
+                object_id,
+                grid_fingerprint,
+                membership,
+                ..
+            } => {
+                assert_eq!(layer_id, "layer:top");
+                assert_eq!(object_id, "object:top");
+                assert_eq!(grid_fingerprint, top_grid_fingerprint);
+                assert_eq!(membership.cell_membership, vec![1, u32::MAX]);
+                assert_eq!(membership.region_legend.len(), 1);
+                assert_eq!(membership.region_legend[0].object_id, "object:top");
+                assert_eq!(membership.region_legend[0].region_id, "shared");
+            }
+            carrier => panic!("expected top native multilayer carrier, got {carrier:?}"),
+        }
+    }
+
+    let layout = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/domain/fdm-multilayer-layout")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(layout.status(), StatusCode::OK);
+    let layout = body_json(layout).await;
+    let top_layout = layout["layers"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|layer| layer["layer_id"] == "layer:top")
+        .expect("top layout must remain independently addressable");
+
+    let top_descriptor = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/domain/fdm-multilayer-layers/layer%3Atop/region-memberships")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(top_descriptor.status(), StatusCode::OK);
+    let top_descriptor = body_json(top_descriptor).await;
+    assert_eq!(top_descriptor["layer_id"], "layer:top");
+    assert_eq!(top_descriptor["object_id"], "object:top");
+    assert_eq!(top_descriptor["region_legend"][0]["region_id"], "shared");
+
+    let top_membership = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/domain/fdm-multilayer-layers/layer%3Atop/region-membership")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(top_membership.status(), StatusCode::OK);
+    let top_membership_generation = top_membership.headers()
+        ["x-fullmag-region-membership-fingerprint"]
+        .to_str()
+        .unwrap()
+        .to_string();
+    let top_membership = body_bytes(top_membership).await;
+    let top_mask_bytes = &top_membership[64..];
+    assert_eq!(
+        top_mask_bytes
+            .chunks_exact(4)
+            .map(|bytes| u32::from_le_bytes(bytes.try_into().unwrap()))
+            .collect::<Vec<_>>(),
+        vec![1, u32::MAX]
+    );
+    assert_eq!(
+        top_layout["region_mask_hash"],
+        format!("sha256:{:x}", Sha256::digest(top_mask_bytes))
+    );
+    assert_eq!(
+        top_layout["region_membership_generation_id"],
+        top_membership_generation
+    );
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.metadata.as_mut().unwrap()["artifact_layout"]["layers"][1]
+            ["material_fields"]["mat_ms"]["value_sha256"] =
+            serde_json::json!(format!("sha256:{}", "0".repeat(64)));
+    }
+    {
+        let guard = state.current_live_state.read().await;
+        let snapshot = guard.as_ref().expect("live snapshot should remain present");
+        let error =
+            crate::router_v2::handlers::data::resolved_spatial_field::resolve_fdm_multilayer_native_layer_field(
+                snapshot,
+                "mat_ms",
+                1,
+                "layer:bottom",
+            )
+            .expect_err("persisted material hash mismatch should fail closed");
+        assert_eq!(error.status, StatusCode::CONFLICT);
+    }
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.metadata.as_mut().unwrap()["artifact_layout"]["layers"][1]
+            ["material_fields"] = serde_json::json!({});
+    }
+    fs::remove_file(artifact_dir.join(material_path)).unwrap();
+    let base = "/v2/sessions/current/data/fields/mat_ms/planar-monitors/bottom-shared-region/meta?component=scalar&resolution_x=16&resolution_y=16";
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!("{base}&scope_kind=layer&scope_id=layer%3Abottom"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = response.status();
+    let body = body_json(response).await;
+    assert_eq!(status, StatusCode::OK, "{body:#}");
+    assert_eq!(body["scope_kind"], "layer");
+    assert_eq!(body["scope_id"], "layer:bottom");
+    assert_eq!(body["scalar_min"], 7.0);
+    assert_eq!(body["scalar_max"], 7.0);
+
+    let descriptor = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/domain/fdm-multilayer-layers/layer%3Abottom/region-memberships")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(descriptor.status(), StatusCode::OK);
+    let descriptor = body_json(descriptor).await;
+    assert_eq!(descriptor["layer_id"], "layer:bottom");
+    assert_eq!(descriptor["object_id"], "object:bottom");
+    assert_eq!(descriptor["region_legend"], region_legend);
+    assert_eq!(descriptor["encoding"], "FMRM:u32_membership_le");
+
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.metadata.as_mut().unwrap()["artifact_layout"]["layers"][1]
+            ["material_fields"]["mat_ms"] = serde_json::json!({
+                "available": true,
+                "unit": "A/m",
+                "value_count": 2,
+                "revision": 17,
+                "generation_id": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+                "value_sha256": value_sha256,
+                "artifact_path": material_path
+            });
+    }
+    let missing_declared_material = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!("{base}&scope_kind=layer&scope_id=layer%3Abottom"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(missing_declared_material.status(), StatusCode::CONFLICT);
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.metadata.as_mut().unwrap()["artifact_layout"]["layers"][1]
+            ["material_fields"] = serde_json::json!({});
+    }
+
+    let membership = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/domain/fdm-multilayer-layers/layer%3Abottom/region-membership")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(membership.status(), StatusCode::OK);
+    let membership_etag = membership.headers()["etag"].clone();
+    assert_eq!(
+        membership.headers()["x-fullmag-region-membership-revision"],
+        "23"
+    );
+    let membership = body_bytes(membership).await;
+    assert_eq!(&membership[..4], b"FMRM");
+    assert_eq!(membership[4], 2);
+    assert_eq!(membership[5], 2);
+    let expected_grid_bytes = (0..64)
+        .step_by(2)
+        .map(|index| {
+            u8::from_str_radix(
+                &grid_fingerprint["sha256:".len() + index.."sha256:".len() + index + 2],
+                16,
+            )
+            .unwrap()
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(&membership[28..60], expected_grid_bytes.as_slice());
+    assert_eq!(
+        membership[64..]
+            .chunks_exact(4)
+            .map(|bytes| u32::from_le_bytes(bytes.try_into().unwrap()))
+            .collect::<Vec<_>>(),
+        vec![1, 2]
+    );
+
+    let not_modified = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/domain/fdm-multilayer-layers/layer%3Abottom/region-membership")
+                .header("if-none-match", membership_etag)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(not_modified.status(), StatusCode::NOT_MODIFIED);
+
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.metadata.as_mut().unwrap()["execution_plan"]["backend_plan"]["layers"][1]
+            ["native_region_legend"][0]["priority"] = serde_json::json!(9);
+    }
+    let persisted_legend_mismatch = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/domain/fdm-multilayer-layers/layer%3Abottom/region-memberships")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(persisted_legend_mismatch.status(), StatusCode::CONFLICT);
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.metadata.as_mut().unwrap()["execution_plan"]["backend_plan"]["layers"][1]
+            ["native_region_legend"] = region_legend.clone();
+        snapshot.metadata.as_mut().unwrap()["artifact_layout"]["layers"][1]
+            ["native_region_mask"]["value_sha256"] = serde_json::json!(format!("sha256:{}", "0".repeat(64)));
+    }
+    let persisted_hash_mismatch = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/domain/fdm-multilayer-layers/layer%3Abottom/region-memberships")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(persisted_hash_mismatch.status(), StatusCode::CONFLICT);
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.metadata.as_mut().unwrap()["artifact_layout"]["layers"][1]
+            ["native_region_mask"]["value_sha256"] = serde_json::json!(region_mask_sha256);
+    }
+    fs::remove_file(artifact_dir.join(membership_path)).unwrap();
+    let missing_declared_membership = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/domain/fdm-multilayer-layers/layer%3Abottom/region-memberships")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(missing_declared_membership.status(), StatusCode::CONFLICT);
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        let layer = &mut snapshot.metadata.as_mut().unwrap()["artifact_layout"]["layers"][1];
+        layer.as_object_mut().unwrap().remove("native_region_mask");
+        layer.as_object_mut().unwrap().remove("native_region_legend");
+    }
+
+    let missing = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!("{base}&scope_kind=layer&scope_id=layer%3Amissing"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(missing.status(), StatusCode::NOT_FOUND);
+
+    let stale_revision = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!("{base}&scope_kind=layer&scope_id=layer%3Abottom&expected_field_revision=999"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(stale_revision.status(), StatusCode::CONFLICT);
+
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.field_quantity_revisions.insert("mat_ms".into(), 41);
+    }
+    let stale_token = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!("{base}&scope_kind=layer&scope_id=layer%3Abottom&sample_token={}", body["sample_token"].as_str().unwrap()))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(stale_token.status(), StatusCode::CONFLICT);
+
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        let layer = &mut snapshot.metadata.as_mut().unwrap()["execution_plan"]["backend_plan"]
+            ["layers"][1];
+        layer["native_grid"] = serde_json::json!([3, 1, 1]);
+    }
+    let mismatched_grid = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!("{base}&scope_kind=layer&scope_id=layer%3Abottom"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(mismatched_grid.status(), StatusCode::CONFLICT);
+
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        let layer = &mut snapshot.metadata.as_mut().unwrap()["execution_plan"]["backend_plan"]
+            ["layers"][1];
+        layer["native_grid"] = serde_json::json!([2, 1, 1]);
+        layer["native_region_legend"][0]["object_id"] = serde_json::json!("object:wrong");
+    }
+    let mismatched_legend = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/domain/fdm-multilayer-layers/layer%3Abottom/region-memberships")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(mismatched_legend.status(), StatusCode::CONFLICT);
+
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        let layer = &mut snapshot.metadata.as_mut().unwrap()["execution_plan"]["backend_plan"]
+            ["layers"][1];
+        layer["native_region_legend"] = region_legend.clone();
+        layer["native_region_mask"] = serde_json::json!([2, 2]);
+    }
+    let saved_artifact_layout = {
+        let mut guard = state.current_live_state.write().await;
+        let metadata = guard
+            .as_mut()
+            .and_then(|snapshot| snapshot.metadata.as_mut())
+            .expect("multilayer metadata should remain present");
+        std::mem::replace(
+            &mut metadata["artifact_layout"],
+            serde_json::Value::Null,
+        )
+    };
+    let empty_target = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!("{base}&scope_kind=layer&scope_id=layer%3Abottom"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(empty_target.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.metadata.as_mut().unwrap()["artifact_layout"] = saved_artifact_layout;
+    }
+
+    let _ = fs::remove_dir_all(artifact_dir);
 }
 
 #[tokio::test]
@@ -34268,6 +35032,14 @@ fn openapi_contains_planar_field_data_paths() {
         overlay_descriptor["properties"]["boundary_classification"]["type"],
         "string"
     );
+    assert_eq!(
+        overlay_descriptor["properties"]["geometry_source"]["type"],
+        "string"
+    );
+    assert!(overlay_descriptor["required"]
+        .as_array()
+        .unwrap()
+        .contains(&serde_json::json!("geometry_source")));
     for resource in ["meta", "scalar", "vectors", "empty-mask", "mesh-overlay"] {
         let response = &paths[&format!(
             "/v2/sessions/current/data/fields/{{quantity_id}}/planar-monitors/{{monitor_id}}/{resource}"

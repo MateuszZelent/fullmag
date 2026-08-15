@@ -20,6 +20,14 @@ def recipe_source(name: str) -> str:
 
 
 class EnsurePythonRecipeTests(unittest.TestCase):
+    def test_managed_environment_installs_pytest_with_repository_python(self) -> None:
+        recipe = recipe_source("ensure-python")
+
+        self.assertRegex(
+            recipe,
+            r'"\{\{repo_python\}\}" -m pip install[^\n]*\'pytest>=9,<10\'',
+        )
+
     def test_existing_venv_without_pip_self_heals_or_fails_closed(self) -> None:
         recipe = recipe_source("ensure-python")
 

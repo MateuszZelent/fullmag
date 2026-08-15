@@ -328,9 +328,7 @@ impl ActiveMaskIdentity {
     }
 }
 
-/// Contract metadata for native↔scratch transfer.  `adjoint_required` is a
-/// requirement on a runtime implementation, not a claim that the current
-/// interpolation implementation has already satisfied it.
+/// Contract metadata for native↔scratch transfer.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TransferContractMetadata {
     pub adjoint_required: bool,
@@ -356,7 +354,7 @@ impl TransferContractMetadata {
             adjoint_required: true,
             inner_product: "volume_weighted".to_string(),
             preserves_volume_weighted_moment: true,
-            moment_policy: "volume_weighted_average".to_string(),
+            moment_policy: "full_scratch_volume_moment_density".to_string(),
             active_cell_policy: "preserve_active_mask".to_string(),
         }
     }
@@ -1405,6 +1403,255 @@ impl KernelReuseKey {
 /// descriptors without the FDM-specific prefix.
 pub type LayerGridDescriptor = FdmLayerDescriptor;
 pub type OrientedPairDescriptor = OrientedKernelPairDescriptor;
+
+/// Admission model used to turn a canonical catalog into a memory budget.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum KernelAdmissionModel {
+    /// CPU FP64 stores one six-component complex spectrum per unique key.
+    CpuFp64Catalog,
+    /// Native stacked CUDA uses the ordinary single-grid operator and stores
+    /// no multilayer pair-kernel payload.
+    CudaNativeSingleGrid,
+    /// CUDA ABI v2 still stores one six-component FP64 payload per ordered pair.
+    CudaAbiV2PairPayload,
+}
+
+impl KernelAdmissionModel {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::CpuFp64Catalog => "cpu_fp64_catalog",
+            Self::CudaNativeSingleGrid => "cuda_native_multilayer_single_grid",
+            Self::CudaAbiV2PairPayload => "cuda_abi_v2_pair_payload",
+        }
+    }
+}
+
+/// Fixed-width source-major binding from an ordered layer pair to a unique key.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct KernelCatalogPairBinding {
+    pub src_layer: u32,
+    pub dst_layer: u32,
+    pub kernel_index: u32,
+}
+
+impl KernelCatalogPairBinding {
+    pub const BYTE_WIDTH: u64 = 3 * std::mem::size_of::<u32>() as u64;
+}
+
+/// Backend-neutral deterministic catalog specification used by planning and runtime.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct KernelCatalogSpec {
+    pub keys: Vec<KernelReuseKey>,
+    pub pair_bindings: Vec<KernelCatalogPairBinding>,
+}
+
+impl KernelCatalogSpec {
+    pub fn build_for_layers_with_layout(
+        layers: &[FdmLayerDescriptor],
+        layout: &CommonTransformLayout,
+        representation: TensorRepresentation,
+        precision: KernelPrecision,
+    ) -> Result<Self, DescriptorError> {
+        layout.validate()?;
+        let pair_count = layers
+            .len()
+            .checked_mul(layers.len())
+            .ok_or_else(|| DescriptorError::Invalid("kernel pair count overflow".to_string()))?;
+        let mut keys = Vec::<KernelReuseKey>::new();
+        let mut bindings = Vec::with_capacity(pair_count);
+        for (src_layer, source) in layers.iter().enumerate() {
+            source.validate()?;
+            for (dst_layer, destination) in layers.iter().enumerate() {
+                destination.validate()?;
+                let source_cell = represented_kernel_cell_size(source, layout.mode);
+                let destination_cell = represented_kernel_cell_size(destination, layout.mode);
+                let relative_shift = [
+                    destination.scratch.origin[0] - source.scratch.origin[0]
+                        + 0.5 * (destination_cell[0] - source_cell[0]),
+                    destination.scratch.origin[1] - source.scratch.origin[1]
+                        + 0.5 * (destination_cell[1] - source_cell[1]),
+                    destination.scratch.origin[2] - source.scratch.origin[2]
+                        + 0.5 * (destination_cell[2] - source_cell[2]),
+                ];
+                let key = KernelReuseKey::from_layers_with_layout(
+                    destination,
+                    source,
+                    relative_shift,
+                    representation,
+                    layout,
+                    precision,
+                    source.transfer.boundary,
+                )?;
+                let kernel_index = match keys.iter().position(|candidate| candidate == &key) {
+                    Some(index) => index,
+                    None => {
+                        keys.push(key);
+                        keys.len() - 1
+                    }
+                };
+                bindings.push(KernelCatalogPairBinding {
+                    src_layer: u32::try_from(src_layer).map_err(|_| {
+                        DescriptorError::Invalid("source layer index exceeds u32".to_string())
+                    })?,
+                    dst_layer: u32::try_from(dst_layer).map_err(|_| {
+                        DescriptorError::Invalid("destination layer index exceeds u32".to_string())
+                    })?,
+                    kernel_index: u32::try_from(kernel_index).map_err(|_| {
+                        DescriptorError::Invalid("kernel catalog index exceeds u32".to_string())
+                    })?,
+                });
+            }
+        }
+
+        let mut order = (0..keys.len()).collect::<Vec<_>>();
+        order.sort_by_key(|index| keys[*index].fingerprint());
+        let mut remap = vec![0_u32; keys.len()];
+        for (new_index, old_index) in order.iter().copied().enumerate() {
+            remap[old_index] = u32::try_from(new_index).map_err(|_| {
+                DescriptorError::Invalid("kernel catalog index exceeds u32".to_string())
+            })?;
+        }
+        let sorted_keys = order.into_iter().map(|index| keys[index].clone()).collect();
+        for binding in &mut bindings {
+            binding.kernel_index = remap[binding.kernel_index as usize];
+        }
+        Ok(Self {
+            keys: sorted_keys,
+            pair_bindings: bindings,
+        })
+    }
+}
+
+/// Checked logical memory accounting for the catalog and CUDA ABI-v2 payload.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct KernelMemoryAccounting {
+    pub kernel_catalog_spectrum_bytes: u64,
+    pub kernel_pair_binding_bytes: u64,
+    pub cuda_abi_v2_pair_payload_bytes: u64,
+    pub admission_bytes: u64,
+    pub admission_model: KernelAdmissionModel,
+}
+
+impl KernelMemoryAccounting {
+    pub fn for_catalog(
+        catalog: &KernelCatalogSpec,
+        layout: &CommonTransformLayout,
+        common_cells: [usize; 3],
+        demag_enabled: bool,
+        admission_model: KernelAdmissionModel,
+    ) -> Result<Self, DescriptorError> {
+        layout.validate()?;
+        if !demag_enabled {
+            return Ok(Self {
+                kernel_catalog_spectrum_bytes: 0,
+                kernel_pair_binding_bytes: 0,
+                cuda_abi_v2_pair_payload_bytes: 0,
+                admission_bytes: 0,
+                admission_model,
+            });
+        }
+        if common_cells.contains(&0) {
+            return Err(DescriptorError::Invalid(
+                "common kernel grid dimensions must be positive".to_string(),
+            ));
+        }
+        if catalog
+            .keys
+            .iter()
+            .any(|key| key.representation != TensorRepresentation::FullComplex)
+        {
+            return Err(DescriptorError::Invalid(
+                "kernel memory accounting supports only full-complex six-component spectra"
+                    .to_string(),
+            ));
+        }
+        if admission_model == KernelAdmissionModel::CpuFp64Catalog
+            && catalog
+                .keys
+                .iter()
+                .any(|key| key.precision != KernelPrecision::F64)
+        {
+            return Err(DescriptorError::Invalid(
+                "CPU FP64 catalog admission requires FP64 kernel keys".to_string(),
+            ));
+        }
+        let checked_product = |values: [usize; 3], label: &str| -> Result<u64, DescriptorError> {
+            values.into_iter().try_fold(1_u64, |product, value| {
+                product
+                    .checked_mul(value as u64)
+                    .ok_or_else(|| DescriptorError::Invalid(format!("{label} cell count overflow")))
+            })
+        };
+        let spectrum_samples = checked_product(layout.fft_shape, "kernel spectrum")?;
+        let unique_count = u64::try_from(catalog.keys.len()).map_err(|_| {
+            DescriptorError::Invalid("kernel catalog count exceeds u64".to_string())
+        })?;
+        let pair_count = u64::try_from(catalog.pair_bindings.len())
+            .map_err(|_| DescriptorError::Invalid("kernel pair count exceeds u64".to_string()))?;
+        let spectrum_bytes = unique_count
+            .checked_mul(spectrum_samples)
+            .and_then(|value| value.checked_mul(6))
+            .and_then(|value| value.checked_mul(16))
+            .ok_or_else(|| {
+                DescriptorError::Invalid("kernel catalog spectrum byte overflow".to_string())
+            })?;
+        let binding_bytes = pair_count
+            .checked_mul(KernelCatalogPairBinding::BYTE_WIDTH)
+            .ok_or_else(|| {
+                DescriptorError::Invalid("kernel pair binding byte overflow".to_string())
+            })?;
+        let mut cuda_shape = [0_usize; 3];
+        for axis in 0..3 {
+            cuda_shape[axis] = common_cells[axis].checked_mul(2).ok_or_else(|| {
+                DescriptorError::Invalid("CUDA ABI-v2 doubled grid overflow".to_string())
+            })?;
+        }
+        let cuda_samples = checked_product(cuda_shape, "CUDA ABI-v2 kernel")?;
+        let cuda_bytes = pair_count
+            .checked_mul(cuda_samples)
+            .and_then(|value| value.checked_mul(6))
+            .and_then(|value| value.checked_mul(16))
+            .ok_or_else(|| {
+                DescriptorError::Invalid("CUDA ABI-v2 pair payload byte overflow".to_string())
+            })?;
+        let selected_payload = match admission_model {
+            KernelAdmissionModel::CpuFp64Catalog => spectrum_bytes,
+            KernelAdmissionModel::CudaNativeSingleGrid => 0,
+            KernelAdmissionModel::CudaAbiV2PairPayload => cuda_bytes,
+        };
+        let selected_binding_bytes =
+            if admission_model == KernelAdmissionModel::CudaNativeSingleGrid {
+                0
+            } else {
+                binding_bytes
+            };
+        let admission_bytes = selected_payload
+            .checked_add(selected_binding_bytes)
+            .ok_or_else(|| {
+                DescriptorError::Invalid("kernel admission byte overflow".to_string())
+            })?;
+        Ok(Self {
+            kernel_catalog_spectrum_bytes: spectrum_bytes,
+            kernel_pair_binding_bytes: binding_bytes,
+            cuda_abi_v2_pair_payload_bytes: cuda_bytes,
+            admission_bytes,
+            admission_model,
+        })
+    }
+}
+
+fn represented_kernel_cell_size(layer: &FdmLayerDescriptor, mode: ConvolutionMode) -> [f64; 3] {
+    if mode == ConvolutionMode::TwoDStack {
+        [
+            layer.scratch.spacing[0],
+            layer.scratch.spacing[1],
+            layer.native.thickness(),
+        ]
+    } else {
+        layer.scratch.spacing
+    }
+}
 
 /// Deterministic set of unique kernel keys.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

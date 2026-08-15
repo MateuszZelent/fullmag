@@ -1028,9 +1028,28 @@ fn is_gpu_device_label(value: &str) -> bool {
 }
 
 fn requested_execution_device(runtime: &SessionRuntimeSelection) -> String {
-    match std::env::var("FULLMAG_FEM_EXECUTION") {
-        Ok(value) if matches!(value.as_str(), "gpu" | "cuda" | "all_in_gpu") => "gpu".to_string(),
-        Ok(value) if value == "cpu" => "cpu".to_string(),
+    let fem_override = std::env::var("FULLMAG_FEM_EXECUTION").ok();
+    let fdm_override = std::env::var("FULLMAG_FDM_EXECUTION").ok();
+    requested_execution_device_for_overrides(
+        runtime,
+        fem_override.as_deref(),
+        fdm_override.as_deref(),
+    )
+}
+
+fn requested_execution_device_for_overrides(
+    runtime: &SessionRuntimeSelection,
+    fem_override: Option<&str>,
+    fdm_override: Option<&str>,
+) -> String {
+    let override_value = match runtime.requested_backend.as_str() {
+        "fdm" => fdm_override.or(fem_override),
+        "fem" => fem_override.or(fdm_override),
+        _ => fem_override.or(fdm_override),
+    };
+    match override_value {
+        Some(value) if matches!(value, "gpu" | "cuda" | "all_in_gpu") => "gpu".to_string(),
+        Some("cpu") => "cpu".to_string(),
         _ => runtime.requested_device.replace("cuda", "gpu"),
     }
 }
@@ -1507,6 +1526,25 @@ fn apply_live_step_update_to_workspace_state(
     {
         state.live_state.latest_step.fem_mesh_generation_id = previous_fem_mesh_generation_id;
     }
+    remainder
+}
+
+fn apply_terminal_live_step_update_to_workspace_state(
+    state: &mut LocalLiveWorkspaceState,
+    run_id: &str,
+    session_id: &str,
+    artifact_dir: &Path,
+    update: fullmag_runner::StepUpdate,
+) -> fullmag_runner::StepUpdate {
+    let remainder = apply_live_step_update_to_workspace_state(
+        state,
+        run_id,
+        session_id,
+        artifact_dir,
+        update,
+        false,
+    );
+    set_latest_scalar_row_for_terminal_update(state, &remainder);
     remainder
 }
 
@@ -2037,6 +2075,13 @@ fn frequency_response_terminal_progress_bar(percent: f64) -> String {
     format!("[{}{}]", "#".repeat(filled), "-".repeat(empty))
 }
 
+fn format_average_magnetization(stats: &fullmag_runner::StepStats) -> String {
+    format!(
+        "m_avg=(mx={:.4e} my={:.4e} mz={:.4e})",
+        stats.mx, stats.my, stats.mz
+    )
+}
+
 fn format_stage_progress_line(
     prefix: &str,
     stats: &fullmag_runner::StepStats,
@@ -2059,9 +2104,10 @@ fn format_stage_progress_line(
     let hysteresis_field = hysteresis_field_m_t
         .map(|value| format!("  H={value:.3}mT"))
         .unwrap_or_default();
+    let average_magnetization = format_average_magnetization(stats);
     if let Some(age) = heartbeat_age {
         let mut line = format!(
-            "{prefix}  heartbeat  step {:>6}  t={:.4e}  dt={:.3e}  max_torque[T]={:.4e}  E_total={:.4e}  |H_eff|={:.4e}{hysteresis_field}  idle={:.1}s  [{:.0}ms]",
+            "{prefix}  heartbeat  step {:>6}  t={:.4e}  dt={:.3e}  max_torque[T]={:.4e}  E_total={:.4e}  |H_eff|={:.4e}  {average_magnetization}{hysteresis_field}  idle={:.1}s  [{:.0}ms]",
             stats.step,
             stats.time,
             stats.dt,
@@ -2076,8 +2122,14 @@ fn format_stage_progress_line(
         line
     } else {
         let mut line = format!(
-            "{prefix}  step {:>6}  t={:.4e}  dt={:.3e}  max_torque[T]={:.4e}  E_total={:.4e}  |H_eff|={:.4e}{hysteresis_field}  [{:.0}ms]",
-            stats.step, stats.time, stats.dt, torque_t, stats.e_total, stats.max_h_eff, wall_ms,
+            "{prefix}  step {:>6}  t={:.4e}  dt={:.3e}  max_torque[T]={:.4e}  E_total={:.4e}  |H_eff|={:.4e}  {average_magnetization}{hysteresis_field}  [{:.0}ms]",
+            stats.step,
+            stats.time,
+            stats.dt,
+            torque_t,
+            stats.e_total,
+            stats.max_h_eff,
+            wall_ms,
         );
         append_frequency_response_step_progress(&mut line, stats);
         append_detailed_fem_step_profile(&mut line, stats);
@@ -5695,17 +5747,36 @@ fn refresh_problem_preview_state(
     }
 
     let preview_request = display_selection.preview_request();
-    let preview_field = fullmag_runner::snapshot_problem_preview(&problem, &preview_request)?;
-    let cached_fields = if refresh_cache {
+    let (preview_field, cached_fields, auxiliary_artifacts) = if refresh_cache {
         let cached_quantities = fullmag_runner::quantities::field_materialization_quantity_ids();
-        Some(fullmag_runner::snapshot_problem_vector_fields(
+        let batch = fullmag_runner::snapshot_problem_vector_field_batch(
             &problem,
             &cached_quantities,
             &preview_request,
-        )?)
+        )?;
+        let requested_quantity =
+            fullmag_runner::quantities::normalize_quantity_id(&preview_request.quantity)
+                .map_err(|error| anyhow!(error.to_string()))?;
+        let preview_field = batch
+            .fields
+            .iter()
+            .find(|field| field.quantity == requested_quantity.as_str())
+            .cloned()
+            .ok_or_else(|| {
+                anyhow!(
+                    "multilayer preview quantity '{}' is unavailable for the current plan",
+                    preview_request.quantity
+                )
+            })?;
+        (preview_field, Some(batch.fields), batch.auxiliary_artifacts)
     } else {
-        None
+        (
+            fullmag_runner::snapshot_problem_preview(&problem, &preview_request)?,
+            None,
+            Vec::new(),
+        )
     };
+    live_workspace.replace_auxiliary_artifacts(&auxiliary_artifacts)?;
 
     live_workspace.update(|state| {
         state.live_state.updated_at_unix_ms = unix_time_millis().unwrap_or(0);
@@ -6603,8 +6674,10 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
     let phase1_backend = args.backend;
     let phase1_mode = args.mode;
     let phase1_precision = args.precision;
-    let phase1_runtime_device = crate::python_bridge::managed_fem_execution_device(
+    let phase1_runtime_device = crate::python_bridge::managed_execution_device(
+        phase1_backend,
         std::env::var("FULLMAG_FEM_EXECUTION").ok().as_deref(),
+        std::env::var("FULLMAG_FDM_EXECUTION").ok().as_deref(),
     );
     let phase1_handle = own_preparation_boundary_failure(
         &live_workspace,
@@ -8756,15 +8829,15 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                 // The terminal solver payload must use the same ingest path as ordinary live
                 // callbacks; otherwise the latest-step view changes while latest_fields.m
                 // remains at source_step=0.
-                let _ = apply_live_step_update_to_workspace_state(
+                let _ = apply_terminal_live_step_update_to_workspace_state(
                     state,
                     &run_id,
                     &session_id,
                     &artifact_dir,
                     final_update,
-                    true,
                 );
             });
+            live_workspace.force_publish_latest_scalar_row();
         }
 
         let offset_steps = offset_step_stats(&stage_result.steps, step_offset, time_offset);
@@ -10800,6 +10873,7 @@ mod tests {
     use super::{
         adaptive_remesh_legality_reason, apply_current_fem_overrides,
         apply_initial_magnetization_state_override, apply_live_step_update_to_workspace_state,
+        apply_terminal_live_step_update_to_workspace_state,
         apply_remeshed_problem_snapshot_to_stages, apply_stage_heartbeat_progress,
         attach_initial_magnetization_state_override_metadata, attach_region_realization_revisions,
         classify_wait_for_solve_command, cumulative_rhs_evals, default_domain_region_markers,
@@ -10819,8 +10893,8 @@ mod tests {
         resolved_shared_domain_object_region_markers, run_active_preparation_operation,
         run_owned_preparation_stage, run_script_preparation_preflight, run_solver_initialization,
         run_solver_initialization_safety_check, scripted_stage_execution_state,
-        scripted_stage_execution_state_with_completion, set_latest_scalar_row_for_terminal_update,
-        set_latest_scalar_row_if_due, shared_domain_object_region_mesh_specs,
+        scripted_stage_execution_state_with_completion, set_latest_scalar_row_if_due,
+        shared_domain_object_region_mesh_specs,
         stage_allows_sampled_continuation_initial_state,
         step_update_has_frequency_response_progress, user_cancelled_stage_completion,
         validate_periodic_remesh_candidate, wait_for_failed_preparation_close,
@@ -10828,13 +10902,24 @@ mod tests {
         write_sampling_resolution_stage_record, ActiveSequenceState, LiveProgressCadence,
         LoadedInitialMagnetizationState, RuntimeCommandPrecondition, SceneProblemPatch,
         StageProgressHeartbeat, WaitForSolveCommandAction, FEM_FREQUENCY_RESPONSE_PROGRESS_KEY,
-        LIVE_PROGRESS_PUBLISH_INTERVAL,
+        LIVE_PROGRESS_PUBLISH_INTERVAL, requested_execution_device_for_overrides,
     };
     use crate::live_workspace::{CurrentLivePublisher, LocalLiveWorkspace};
     use crate::simulation_preparation::{
         PreparationStageId, PreparationStageStatus, PreparationStatus, SimulationPreparationState,
     };
     use crate::types::PythonProgressEvent;
+
+    #[test]
+    fn fdm_override_wins_over_fem_override_in_summary_device() {
+        let runtime = super::requested_runtime_selection(
+            "fdm", true, "cpu", "double", "strict", None,
+        );
+        assert_eq!(
+            requested_execution_device_for_overrides(&runtime, Some("cpu"), Some("gpu")),
+            "gpu"
+        );
+    }
 
     #[test]
     fn adaptive_followup_callback_and_heartbeat_clone_sites_stay_profiled() {
@@ -12399,6 +12484,37 @@ mod tests {
     }
 
     #[test]
+    fn terminal_step_progress_includes_average_magnetization_components() {
+        let stats = fullmag_runner::StepStats {
+            step: 12,
+            time: 2.5e-12,
+            dt: 1.0e-14,
+            mx: 0.125,
+            my: -0.25,
+            mz: 0.875,
+            max_torque_T: 2.0e-6,
+            e_total: -3.0e-19,
+            max_h_eff: 1.2e5,
+            wall_time_ns: 4_000_000,
+            ..fullmag_runner::StepStats::default()
+        };
+        let expected = "m_avg=(mx=1.2500e-1 my=-2.5000e-1 mz=8.7500e-1)";
+
+        let regular_line =
+            format_stage_progress_line("stage 1/1 (relax)", &stats, None, None, None);
+        let heartbeat_line = format_stage_progress_line(
+            "stage 1/1 (relax)",
+            &stats,
+            None,
+            Some(Duration::from_secs(2)),
+            None,
+        );
+
+        assert!(regular_line.contains(expected), "{regular_line}");
+        assert!(heartbeat_line.contains(expected), "{heartbeat_line}");
+    }
+
+    #[test]
     fn frequency_response_progress_is_visible_in_terminal_stage_line() {
         let mut progress = std::collections::HashMap::new();
         progress.insert("percent".to_string(), 14.0);
@@ -13065,7 +13181,7 @@ mod tests {
     }
 
     #[test]
-    fn terminal_interactive_update_bypasses_table_autosave_period() {
+    fn terminal_scripted_update_bypasses_table_autosave_period() {
         let mut state = test_workspace_state();
         state.metadata = Some(serde_json::json!({
             "table_autosave": { "sample_period_s": 1.0 }
@@ -13082,7 +13198,13 @@ mod tests {
         terminal.stats.e_total = 7.0;
         terminal.finished = false;
 
-        set_latest_scalar_row_for_terminal_update(&mut state, &terminal);
+        let _ = apply_terminal_live_step_update_to_workspace_state(
+            &mut state,
+            "run-test",
+            "session-test",
+            PathBuf::from("/tmp/artifacts").as_path(),
+            terminal,
+        );
 
         let row = state.latest_scalar_row.expect("terminal scalar row");
         assert_eq!(row.step, 5);
@@ -14328,6 +14450,19 @@ mod tests {
             !function_body.contains("cached_preview_quantity_ids()"),
             "compute_fields must not use the vector-only preview cache quantity list"
         );
+    }
+
+    #[test]
+    fn compute_fields_refresh_publishes_auxiliary_carriers() {
+        let source = include_str!("orchestrator.rs");
+        let function_body = source
+            .split("fn refresh_problem_preview_state(")
+            .nth(1)
+            .and_then(|rest| rest.split("fn refresh_problem_energy_state(").next())
+            .expect("refresh_problem_preview_state should be present");
+
+        assert!(function_body.contains("snapshot_problem_vector_field_batch"));
+        assert!(function_body.contains("replace_auxiliary_artifacts"));
     }
 
     #[test]

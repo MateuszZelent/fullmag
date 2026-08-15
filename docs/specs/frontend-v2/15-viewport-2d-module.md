@@ -131,9 +131,13 @@ world/monitor components and an explicit normal indicator. Contours stop at
 masked cells. Mesh overlays use physical monitor coordinates. `FMCS v4`
 segment classes distinguish `mesh_interior`, exact `target_boundary`, and
 `unclassified_degenerate`; v3 has no exact-boundary interpretation and is
-rendered only as degraded geometry. FDM `204` means unavailable, never a
-guessed rectangular boundary. Surface folds or overlaps remain visible degraded
-diagnostics.
+rendered only as degraded geometry. FDM `monitor_target` dla `plane`, `slab`
+i `depth` używa osobnego `FMFG v1`: proceduralnych segmentów przecięcia
+wybranych komórek structured grid z centralną płaszczyzną monitora. Deskryptor
+oznacza `geometry_source=fdm_structured_grid`, a `boundaries` pozostaje
+wyłączone z `target_boundaries_unavailable`. `FMFG` nie może być interpretowany
+jako `FMCS`, prostokąt monitora ani dokładna topologia granicy targetu. Surface
+folds or overlaps remain visible degraded diagnostics.
 
 ## 6. Tests
 
@@ -156,7 +160,8 @@ Required tests:
 - manufactured FDM/FEM tests prove plane, slab, depth, surface, vector-basis,
   occupancy, and refinement-invariant measure weighting;
 - range-state migration/validation, `FMCS v4` exact-boundary decoding, v3
-  degraded compatibility, FDM unavailable overlay, and representation ETag
+  degraded compatibility, `FMFG v1` FDM grid decoding, fail-closed codec
+  dispatch, niedostępne FDM boundaries oraz representation ETag
   invalidation are covered below renderer integration;
 - object/region/part/airbox/result/monitor inspector coverage uses one registry
   with independent 3D and planar profiles;

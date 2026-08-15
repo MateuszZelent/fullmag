@@ -100,7 +100,7 @@ impl From<&SessionStateResponse> for PersistedCurrentLiveSnapshot {
     }
 }
 
-const DISPLAY_PRESENTATION_SCHEMA_VERSION: u32 = 7;
+const DISPLAY_PRESENTATION_SCHEMA_VERSION: u32 = 8;
 
 fn persisted_display_presentation(
     presentation: &DisplayPresentationState,
@@ -114,12 +114,31 @@ fn restore_display_presentation(
 ) -> Result<DisplayPresentationState, String> {
     match schema_version.unwrap_or(6) {
         6 => migrate_display_presentation_v6(document.clone()),
+        7 => migrate_display_presentation_v7(document.clone()),
         DISPLAY_PRESENTATION_SCHEMA_VERSION => serde_json::from_value(document.clone())
-            .map_err(|error| format!("invalid v7 display presentation: {error}")),
+            .map_err(|error| format!("invalid v8 display presentation: {error}")),
         other => Err(format!(
             "unsupported display presentation schema_version {other}; current version is {DISPLAY_PRESENTATION_SCHEMA_VERSION}"
         )),
     }
+}
+
+fn migrate_display_presentation_v7(
+    mut state: serde_json::Value,
+) -> Result<DisplayPresentationState, String> {
+    if let Some(layers) = state
+        .pointer_mut("/visualization_planar/layers")
+        .and_then(serde_json::Value::as_object_mut)
+    {
+        layers
+            .entry("bounds")
+            .or_insert_with(|| serde_json::json!(false));
+        layers
+            .entry("points")
+            .or_insert_with(|| serde_json::json!(false));
+    }
+    serde_json::from_value(state)
+        .map_err(|error| format!("invalid migrated v7 display presentation: {error}"))
 }
 
 fn migrate_display_presentation_v6(
@@ -174,6 +193,17 @@ fn migrate_display_presentation_v6(
     planar_document
         .entry("raster_opacity")
         .or_insert_with(|| serde_json::json!(1.0));
+    if let Some(layers) = planar_document
+        .get_mut("layers")
+        .and_then(serde_json::Value::as_object_mut)
+    {
+        layers
+            .entry("bounds")
+            .or_insert_with(|| serde_json::json!(false));
+        layers
+            .entry("points")
+            .or_insert_with(|| serde_json::json!(false));
+    }
     if let Some(warning) = warning {
         state
             .as_object_mut()
@@ -2504,7 +2534,7 @@ mod planar_presentation_migration_tests {
     }
 
     #[test]
-    fn v7_presentation_is_preserved_without_legacy_migration() {
+    fn v8_presentation_is_preserved_without_legacy_migration() {
         let state = DisplayPresentationState {
             visualization_planar: Some(
                 crate::schemas::visualization_state::PlanarVisualizationState {
@@ -2525,6 +2555,30 @@ mod planar_presentation_migration_tests {
                 .unwrap(),
             state
         );
+    }
+
+    #[test]
+    fn v7_planar_layers_migrate_with_disabled_points_and_bounds() {
+        let mut document = serde_json::to_value(DisplayPresentationState {
+            visualization_planar: Some(default_planar_visualization_state()),
+            ..DisplayPresentationState::default()
+        })
+        .expect("serialize presentation");
+        let layers = document
+            .pointer_mut("/visualization_planar/layers")
+            .and_then(serde_json::Value::as_object_mut)
+            .expect("planar layers");
+        layers.remove("points");
+        layers.remove("bounds");
+
+        let restored = restore_display_presentation(Some(7), &document)
+            .expect("migrate v7 presentation");
+        let layers = restored
+            .visualization_planar
+            .expect("planar presentation")
+            .layers;
+        assert!(!layers.points);
+        assert!(!layers.bounds);
     }
 
     #[test]

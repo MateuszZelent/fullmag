@@ -37,10 +37,12 @@ pub mod boundary_geometry;
 
 pub use error::PlanError;
 pub use fdm::{
-    checked_multilayer_pair_kernel_footprint, fdm_multilayer_cuda_containment_reason_codes,
-    FDM_CUDA_MULTILAYER_HETEROGENEOUS_NATIVE_HZ_UNQUALIFIED,
-    FDM_CUDA_MULTILAYER_PUSH_PULL_UNQUALIFIED, FDM_CUDA_MULTILAYER_TWO_D_STACK_UNQUALIFIED,
-    FDM_CUDA_MULTILAYER_XY_OFFSET_UNQUALIFIED,
+    checked_multilayer_aggregate_memory_bytes, checked_multilayer_pair_kernel_footprint,
+    fdm_multilayer_cuda_containment_reason_codes, fdm_multilayer_cuda_material_field_errors,
+    fdm_multilayer_cuda_native_single_grid_eligible, resolve_multilayer_kernel_memory,
+    ResolvedMultilayerKernelMemory, FDM_CUDA_MULTILAYER_HETEROGENEOUS_NATIVE_HZ_UNQUALIFIED,
+    FDM_CUDA_MULTILAYER_MATERIAL_FIELD_UNQUALIFIED, FDM_CUDA_MULTILAYER_PUSH_PULL_UNQUALIFIED,
+    FDM_CUDA_MULTILAYER_TWO_D_STACK_UNQUALIFIED, FDM_CUDA_MULTILAYER_XY_OFFSET_UNQUALIFIED,
 };
 pub use geometry::{
     checked_fdm_grid_cost, FdmGridCost, FDM_GRID_ESTIMATED_BYTES_PER_CELL, FDM_GRID_MAX_BYTES,
@@ -63,6 +65,18 @@ pub use sampling::{
 };
 pub use surface_selectors::{resolve_fem_surface_selector, ResolvedFemSurfaceSelector};
 pub use util::generate_random_unit_vectors;
+
+fn routes_to_fdm_multilayer(problem: &ProblemIR) -> bool {
+    let requested_demag_strategy = problem
+        .backend_policy
+        .discretization_hints
+        .as_ref()
+        .and_then(|hints| hints.fdm.as_ref())
+        .and_then(|fdm| fdm.demag.as_ref())
+        .map(|demag| demag.strategy.as_str())
+        .unwrap_or("auto");
+    problem.magnets.len() > 1 || requested_demag_strategy == "multilayer_convolution"
+}
 
 /// Plans a `ProblemIR` into an `ExecutionPlanIR`.
 ///
@@ -148,15 +162,7 @@ pub fn plan(problem: &ProblemIR) -> Result<ExecutionPlanIR, PlanError> {
                     ],
                 });
             }
-            let requested_demag_strategy = problem
-                .backend_policy
-                .discretization_hints
-                .as_ref()
-                .and_then(|hints| hints.fdm.as_ref())
-                .and_then(|fdm| fdm.demag.as_ref())
-                .map(|demag| demag.strategy.as_str())
-                .unwrap_or("auto");
-            if problem.magnets.len() > 1 || requested_demag_strategy == "multilayer_convolution" {
+            if routes_to_fdm_multilayer(problem) {
                 fdm::plan_fdm_multilayer(problem, resolved_backend)
             } else {
                 fdm::plan_fdm(problem, resolved_backend)

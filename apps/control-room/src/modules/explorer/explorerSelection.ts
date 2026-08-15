@@ -207,20 +207,18 @@ export function selectionRefFromNode(node: ExplorerNode): SelectionRef | null {
     };
   }
 
-  // FDM uses the shared product-level Airbox labels but its visualization is
-  // a structured-grid outside-support target, not the FEM airbox target.
-  // Keep the Explorer selection kind (`airbox.visualization`) so the common
-  // visualization panel is used, while carrying the lane-specific ref.
+  // Visualization and Debug are public Airbox controls.  The FDM structured
+  // grid is a renderer carrier, not a second user-facing target.  Normalize
+  // old persisted FDM selections here as well as newly authored nodes.
   if (
-    node.kind === "airbox.visualization" &&
-    node.visualizationTargetId === "fdm-universe-outside-support"
+    node.kind === "airbox.visualization" ||
+    node.kind === "airbox.visualization.debug"
   ) {
     return {
-      kind: "mesh.grid.universe-outside-support",
+      kind: node.kind,
       nodeId: node.id,
-      scope: "universe-outside-support",
-      type: "fdm-domain",
-      visualizationTargetId: "fdm-universe-outside-support",
+      type: "airbox",
+      visualizationTargetId: "airbox",
     };
   }
 
@@ -422,15 +420,17 @@ export function selectionRefFromNode(node: ExplorerNode): SelectionRef | null {
     node.kind === "airbox.mesh.statistics" ||
     node.kind === "airbox.mesh.topology" ||
     node.kind === "airbox.mesh.build" ||
-    node.kind === "airbox.visualization" ||
-    node.kind === "airbox.visualization.debug" ||
     node.kind === "airbox.multilayer.target"
   ) {
+    const isPublicAirboxVisualization =
+      node.kind === "airbox.root" ||
+      node.kind === "airbox.multilayer.target";
     return {
       kind: node.kind,
       nodeId: node.id,
       type: "airbox",
       visualizationTargetId:
+        !isPublicAirboxVisualization &&
         node.visualizationTargetId === "fdm-universe-outside-support"
           ? "fdm-universe-outside-support"
           : "airbox",

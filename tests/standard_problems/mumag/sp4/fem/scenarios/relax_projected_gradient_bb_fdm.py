@@ -21,11 +21,13 @@ study.mode("strict")
 
 study.universe(
     mode="manual",
+    # Keep the authored airbox and choose a cell count that contains the
+    # 500 x 125 x 3 nm film in an exact 80 x 20 x 1-cell block.
     size=(800e-9, 325e-9, 90e-9),
     center=(0.0, 0.0, 0.0),
     padding=(0.0, 0.0, 0.0),
 )
-study.cell(800e-9 / 128.0, 325e-9 / 32.0, 90e-9 / 30.0)
+study.cell(800e-9 / 128.0, 325e-9 / 52.0, 90e-9 / 30.0)
 
 film = study.geometry(
     fm.Box(size=(500e-9, 125e-9, 3e-9), name="film"),

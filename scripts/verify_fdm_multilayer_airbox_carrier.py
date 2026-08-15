@@ -6,11 +6,17 @@ import argparse
 import hashlib
 import json
 from pathlib import Path
+import re
 from typing import Any
 
 
 class AirboxCarrierError(ValueError):
     """Raised when the runtime did not publish a separate Airbox carrier."""
+
+
+_HEX_40 = re.compile(r"^[0-9a-f]{40}$")
+_HEX_64 = re.compile(r"^[0-9a-f]{64}$")
+_RFC3339_UTC = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
 
 
 def _fail(reason: str) -> None:
@@ -29,7 +35,49 @@ def _read_json(path: Path) -> dict[str, Any]:
     return payload
 
 
-def verify_airbox_carrier(path: str | Path) -> dict[str, Any]:
+def _read_runtime_report(path: Path) -> dict[str, Any]:
+    if not path.is_file():
+        _fail(f"airbox_report_runtime_missing:{path}")
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        _fail(f"airbox_report_runtime_unreadable:{path}:{exc}")
+    if not isinstance(payload, dict):
+        _fail("airbox_report_runtime_malformed")
+    return payload
+
+
+def _build_identity(value: Any, label: str, reason_prefix: str) -> dict[str, str]:
+    if not isinstance(value, dict):
+        _fail(f"{reason_prefix}_build_identity_missing:{label}")
+    identity = {
+        "built_at_utc": value.get("built_at_utc"),
+        "git_commit": value.get("git_commit"),
+        "worktree_state": value.get("worktree_state"),
+        "source_snapshot_sha256": value.get("source_snapshot_sha256"),
+    }
+    if not isinstance(identity["built_at_utc"], str) or not _RFC3339_UTC.fullmatch(
+        identity["built_at_utc"]
+    ):
+        _fail(f"{reason_prefix}_build_identity_invalid:{label}:built_at_utc")
+    if not isinstance(identity["git_commit"], str) or not _HEX_40.fullmatch(
+        identity["git_commit"]
+    ):
+        _fail(f"{reason_prefix}_build_identity_invalid:{label}:git_commit")
+    if identity["worktree_state"] not in {"clean", "dirty"}:
+        _fail(f"{reason_prefix}_build_identity_invalid:{label}:worktree_state")
+    if not isinstance(identity["source_snapshot_sha256"], str) or not _HEX_64.fullmatch(
+        identity["source_snapshot_sha256"]
+    ):
+        _fail(f"{reason_prefix}_build_identity_invalid:{label}:source_snapshot_sha256")
+    return identity  # type: ignore[return-value]
+
+
+def verify_airbox_carrier(
+    path: str | Path,
+    *,
+    runtime_json: str | Path | None = None,
+) -> dict[str, Any]:
     """Validate one runtime-created carrier directory without synthesizing data."""
 
     carrier = Path(path)
@@ -68,6 +116,21 @@ def verify_airbox_carrier(path: str | Path) -> dict[str, Any]:
         value = source_identity.get(key)
         if not isinstance(value, str) or not value:
             _fail(f"airbox_carrier_source_runtime_identity_{key}_missing")
+    carrier_build_identity = _build_identity(
+        source_identity.get("build_identity"), "carrier", "airbox_carrier"
+    )
+    manifest_build_identity = _build_identity(
+        payload.get("build_identity"), "manifest", "airbox_carrier"
+    )
+    if manifest_build_identity != carrier_build_identity:
+        _fail("airbox_carrier_build_identity_mismatch:manifest")
+    if runtime_json is not None:
+        runtime = _read_runtime_report(Path(runtime_json))
+        runtime_build_identity = _build_identity(
+            runtime.get("build_identity"), "runtime", "airbox_report"
+        )
+        if carrier_build_identity != runtime_build_identity:
+            _fail("airbox_report_carrier_build_identity_mismatch")
     fingerprint = payload.get("carrier_fingerprint")
     if not isinstance(fingerprint, str) or len(fingerprint) < 16:
         _fail("airbox_carrier_fingerprint_missing")
@@ -93,6 +156,11 @@ def verify_airbox_carrier(path: str | Path) -> dict[str, Any]:
         _fail("airbox_carrier_field_identity_mismatch")
     if field_payload.get("unit") != "A/m":
         _fail("airbox_carrier_field_unit_mismatch")
+    field_build_identity = _build_identity(
+        field_payload.get("build_identity"), "field", "airbox_carrier"
+    )
+    if field_build_identity != carrier_build_identity:
+        _fail("airbox_carrier_build_identity_mismatch:field")
     values = field_payload.get("values")
     if (
         not isinstance(values, list)
@@ -109,6 +177,9 @@ def verify_airbox_carrier(path: str | Path) -> dict[str, Any]:
     if not isinstance(sample_count, int) or sample_count <= 0 or sample_count != len(values):
         _fail("airbox_carrier_sample_count_mismatch")
     payload["manifest_path"] = str(manifest_path)
+    payload["build_identity"] = carrier_build_identity
+    if runtime_json is not None:
+        payload["report_build_identity_validation_status"] = "passed"
     payload["field_artifact_sha256"] = field_hash
     return payload
 
@@ -117,9 +188,10 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("carrier", type=Path)
     parser.add_argument("--output", type=Path)
+    parser.add_argument("--runtime-json", type=Path)
     args = parser.parse_args(argv)
     try:
-        payload = verify_airbox_carrier(args.carrier)
+        payload = verify_airbox_carrier(args.carrier, runtime_json=args.runtime_json)
     except AirboxCarrierError as exc:
         print(str(exc))
         return 3

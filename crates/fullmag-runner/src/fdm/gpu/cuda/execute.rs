@@ -289,6 +289,7 @@ pub(crate) fn execute_cuda_fdm(
                 trial_lambda,
                 &state.magnetization,
                 &state.h_eff,
+                plan.active_mask.as_deref(),
             );
             ensure_single_object_scalars(&mut accepted_stats, "free");
 

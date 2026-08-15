@@ -30,17 +30,40 @@ describe("planar inspector capabilities", () => {
     ["unavailable", { available: false, boundaryClassification: "exact", codec: "fmcs.v4" }, "fem", { kind: "monitor_target" as const }, false, false, true],
     ["wrong codec", { available: true, boundaryClassification: "exact", codec: "fmcs.v3" }, "fem", { kind: "monitor_target" as const }, false, false, true],
     ["FDM mesh part", { available: true, boundaryClassification: "exact", codec: "fmcs.v4" }, "fdm", { kind: "mesh_part" as const }, false, false, false],
+    ["FDM structured grid", { available: true, boundaryClassification: "unavailable", codec: "fmfg.v1", geometrySource: "fdm_structured_grid" }, "fdm", { kind: "monitor_target" as const }, true, false, true],
   ] as const)("fails closed for %s descriptors and scope", (_name, descriptor, discretization, scope, mesh, boundaries, raster) => {
     const result = resolvePlanarInspectorCapabilities({
       descriptor,
       discretization,
+      metaAvailable: true,
+      occupancyAvailable: true,
       quantity,
       scopeKind: scope.kind,
     });
 
     expect(result.mesh.enabled).toBe(mesh);
     expect(result.boundaries.enabled).toBe(boundaries);
+    expect(result.bounds.enabled).toBe(raster);
+    expect(result.points.enabled).toBe(raster);
     expect(result.raster.enabled).toBe(raster);
+  });
+
+  it("fails closed for points until canonical metadata and occupancy are materialized", () => {
+    const input = {
+      descriptor: { available: true, boundaryClassification: "exact", codec: "fmcs.v4" },
+      discretization: "fem",
+      quantity,
+      scopeKind: "monitor_target" as const,
+    };
+    expect(resolvePlanarInspectorCapabilities(input).points).toEqual({
+      enabled: false,
+      reasonCode: "planar_meta_unavailable",
+    });
+    expect(resolvePlanarInspectorCapabilities({ ...input, metaAvailable: true }).points).toEqual({
+      enabled: false,
+      reasonCode: "occupancy_mask_unavailable",
+    });
+    expect(resolvePlanarInspectorCapabilities({ ...input, metaAvailable: true }).bounds.enabled).toBe(true);
   });
 
   it("disables vectors for a scalar spatial quantity with a stable reason", () => {
@@ -48,6 +71,8 @@ describe("planar inspector capabilities", () => {
       resolvePlanarInspectorCapabilities({
         descriptor: { available: true, boundaryClassification: "exact", codec: "fmcs.v4" },
         discretization: "fem",
+        metaAvailable: true,
+        occupancyAvailable: true,
         quantity: { available: true, components: 1, location: "cell" },
         scopeKind: "monitor_target",
       }).vectors,

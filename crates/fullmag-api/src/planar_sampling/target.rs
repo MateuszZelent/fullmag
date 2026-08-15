@@ -8,11 +8,11 @@ use sha2::{Digest, Sha256};
 
 use crate::error::ApiError;
 use crate::router_v2::handlers::data::resolved_spatial_field::{
-    resolve_fdm_object_indices, EntityMapping, ResolvedSpatialField, SpatialFieldCarrier,
+    EntityMapping, ResolvedSpatialField, SpatialFieldCarrier, resolve_fdm_object_indices,
 };
 
 use super::{
-    FdmPlanarField, FemPlanarField, PlanarSampleResult, PlanarSamplingEngine,
+    FdmPlanarField, FemPlanarField, PlanarMeshOverlay, PlanarSampleResult, PlanarSamplingEngine,
     ResolvedPlanarSampleRequest,
 };
 
@@ -21,6 +21,7 @@ pub(crate) enum ResolvedSpatialScope {
     MonitorTarget,
     MeshPart { scope_id: String },
     Airbox { scope_id: Option<String> },
+    FdmNativeLayer { layer_id: String },
 }
 
 #[derive(Debug, Clone)]
@@ -66,6 +67,19 @@ impl ResolvedSpatialTarget {
 
     pub(crate) fn source_entity_kind(&self) -> &'static str {
         self.source_entity_kind
+    }
+
+    pub(crate) fn build_fdm_grid_overlay(
+        &self,
+        request: &ResolvedPlanarSampleRequest,
+    ) -> Result<Option<PlanarMeshOverlay>, ApiError> {
+        match &self.field {
+            TargetField::Fdm(field) => Ok(Some(crate::planar_sampling::fdm::build_grid_overlay(
+                field,
+                &crate::planar_sampling::frame::ResolvedFrame::try_from_ir(&request.frame)?,
+            )?)),
+            TargetField::Fem(_) => Ok(None),
+        }
     }
 
     pub(crate) fn resolve_dynamic_extent(&self, frame: &mut PlanarFrameIR) -> Result<(), ApiError> {
@@ -266,6 +280,47 @@ pub(crate) fn resolve_spatial_target(
                 None,
             )
         }
+        SpatialFieldCarrier::FdmNativeLayerCells {
+            layer_id,
+            cells,
+            origin_m,
+            cell_size_m,
+            membership,
+            carrier_fingerprint,
+            ..
+        } => {
+            if matches!(operator, PlanarOperatorIR::SurfaceProjection { .. }) {
+                return Err(ApiError::unprocessable(
+                    "unsupported_planar_surface: FDM boundary topology is not published",
+                ));
+            }
+            match &scope {
+                ResolvedSpatialScope::FdmNativeLayer {
+                    layer_id: requested,
+                } if requested == layer_id => {}
+                ResolvedSpatialScope::FdmNativeLayer { .. } => {
+                    return Err(ApiError::conflict(
+                        "stale_layer_scope: resolved native layer carrier identity changed",
+                    ));
+                }
+                _ => {
+                    return Err(ApiError::unprocessable(
+                        "target_unsupported: native multilayer field requires exact layer scope",
+                    ));
+                }
+            }
+            let selected = select_fdm_target(*cells, Some(membership), target)?;
+            build_fdm_target(
+                field,
+                *cells,
+                *origin_m,
+                *cell_size_m,
+                selected,
+                carrier_fingerprint,
+                target,
+                Some(membership),
+            )
+        }
         SpatialFieldCarrier::FemNodes {
             topology,
             topology_fingerprint,
@@ -384,7 +439,7 @@ fn select_fdm_target(
                 .map(|entry| entry.numeric_id)
                 .collect::<BTreeSet<_>>();
             if numeric_ids.is_empty() {
-                return Err(ApiError::not_found(format!(
+                return Err(ApiError::unprocessable(format!(
                     "empty_target: FDM region membership not found: {object_id}/{region_id}"
                 )));
             }
@@ -450,6 +505,11 @@ fn build_fem_target(
             select_fem_parts(mesh, elements.len(), |part| {
                 part.role.contains("air") || part.id.contains("airbox")
             })
+        }
+        ResolvedSpatialScope::FdmNativeLayer { .. } => {
+            return Err(ApiError::unprocessable(
+                "target_unsupported: native FDM layer scope is not valid for FEM topology",
+            ));
         }
     };
     let mut selected = select_fem_monitor_target(mesh, &elements, target);

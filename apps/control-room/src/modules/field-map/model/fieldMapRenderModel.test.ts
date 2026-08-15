@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   buildFieldMapRenderModel,
+  buildPlanarSamplePoints,
   normalizePlanarColorRange,
   resolvePlanarDisplayUnit,
   resolveFieldMapAuxiliaryDiagnostics,
@@ -11,6 +12,22 @@ import {
 } from "./fieldMapRenderModel";
 
 describe("field-map render model", () => {
+  it("builds a bounded set of occupied evaluation-bin centers without inventing solver nodes", () => {
+    const points = buildPlanarSamplePoints(
+      [2, 6, -4, 4],
+      [4, 2],
+      new Uint8Array([0, 1, 2, 3, 4, 0, 1, 0]),
+      3,
+    );
+
+    expect(points).toEqual([
+      { index: 0, u: 2.5, v: -2 },
+      { index: 4, u: 2.5, v: 2 },
+      { index: 7, u: 5.5, v: 2 },
+    ]);
+    expect(points).toHaveLength(3);
+  });
+
   it.each([
     ["xy", [1, 0, 0], [0, 1, 0], [0, 0, 1], [2, 3, 4], [2, 3, 4]],
     ["xz", [1, 0, 0], [0, 0, 1], [0, -1, 0], [2, 3, 4], [2, 4, -3]],
@@ -113,7 +130,8 @@ describe("field-map render model", () => {
         uAxis: [1, 0, 0],
         vAxis: [0, 1, 0],
       },
-      layers: { contours: false, mesh: false, raster: true, vectors: false },
+      layers: { bounds: true, contours: false, mesh: false, points: true, raster: true, vectors: false },
+      mask: new Uint8Array([0, 0]),
       range: { mode: "manual", max: 2_000, min: 1_000 },
       resolution: [2, 1],
       sampleIdentity: '"fm-planar-sha256:sample"',
@@ -129,6 +147,11 @@ describe("field-map render model", () => {
     });
     expect(model.range).toEqual({ max: 2_000, min: 1_000 });
     expect(model.boundsCenter).toEqual([4, 0]);
+    expect(model.boundsOutline).toEqual([2, 6, -4, 4]);
+    expect(model.samplePoints).toEqual([
+      { index: 0, u: 3, v: 0 },
+      { index: 1, u: 5, v: 0 },
+    ]);
   });
 
   it("resolves deterministic auto, manual, and symmetric ranges while ignoring masks and non-finite values", () => {

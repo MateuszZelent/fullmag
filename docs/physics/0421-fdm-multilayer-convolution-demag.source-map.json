@@ -7,7 +7,7 @@
       "solver": "FDM",
       "device": "CPU",
       "status": "implemented",
-      "scope": "common-grid CPU reference with active kernel catalog/workspace; exact 2D corner tensor, mode/transfer/heterogeneous production gates remain open",
+      "scope": "common-grid CPU reference with active kernel catalog/workspace and scoped unequal-thickness push-kernel-pull GL8 evidence; broader heterogeneous production gates remain open",
       "qualification": "not production-qualified",
       "evidence": "Rust descriptor/kernel/engine/planner tests and source-bound authoring/runtime fixtures; no immutable managed production receipt"
     },
@@ -200,12 +200,29 @@
         "P",
         "Pstar",
         "Hc",
-        "Vn"
+        "Vn",
+        "Vscratch"
       ],
       "sources": [
+        "transferContractMetadata",
         "push",
         "pull"
       ]
+    },
+    {
+      "id": "eq-multilayer-transfer-moment-density",
+      "symbols": ["P", "Pstar", "M", "Hc", "Vn_i", "Vscratch_q", "active_i", "overlap_qi"],
+      "sources": ["transferContractMetadata", "push", "pull", "unequalTransferCompositionTests"]
+    },
+    {
+      "id": "eq-multilayer-kernel-density",
+      "symbols": ["Mkernel_lq", "Vscratch_l", "Vkernel_l", "P", "M", "hkernel_l"],
+      "sources": ["cpuRefresh", "unequalTransferCompositionTests"]
+    },
+    {
+      "id": "eq-multilayer-composed-push-kernel-pull",
+      "symbols": ["Hn", "Pstar", "N", "hkernel_l", "Mkernel_lq"],
+      "sources": ["push", "pull", "cpuRefresh", "unequalTransferCompositionTests"]
     }
   ],
   "symbols": [
@@ -268,6 +285,16 @@
     {"id":"H_dc","latex":"\\mathbf H_{d,c}","meaning":"demagnetizing field at active target cell $c$","si_unit":"\\mathrm{A\\,m^{-1}}"},
     {"id":"Hc","latex":"\\mathbf H_c","meaning":"field on the convolution grid","si_unit":"\\mathrm{A\\,m^{-1}}"},
     {"id":"Vn","latex":"V_n","meaning":"native-grid cell volume","si_unit":"\\mathrm{m^3}"},
+    {"id":"Vn_i","latex":"V_{n,i}","meaning":"native-grid cell-$i$ volume","si_unit":"\\mathrm{m^3}"},
+    {"id":"Vscratch","latex":"V_{\\mathrm{scratch}}","meaning":"scratch-cell volume in the transfer inner product","si_unit":"\\mathrm{m^3}"},
+    {"id":"Vscratch_q","latex":"V_{\\mathrm{scratch},q}","meaning":"scratch-cell-$q$ volume","si_unit":"\\mathrm{m^3}"},
+    {"id":"Vscratch_l","latex":"V_{\\mathrm{scratch},l}","meaning":"layer-$l$ scratch-cell volume","si_unit":"\\mathrm{m^3}"},
+    {"id":"Vkernel_l","latex":"V^K_l","meaning":"physical source-cell volume represented by layer-$l$ pair kernels","si_unit":"\\mathrm{m^3}"},
+    {"id":"Mkernel_lq","latex":"\\mathbf M^K_{l,q}","meaning":"kernel-cell magnetization density","si_unit":"\\mathrm{A\\,m^{-1}}"},
+    {"id":"hkernel_l","latex":"\\mathbf h^K_l","meaning":"physical cell dimensions represented by layer-$l$ pair kernels","si_unit":"\\mathrm m"},
+    {"id":"active_i","latex":"a_i","meaning":"active-mask value for native cell $i$","si_unit":"1"},
+    {"id":"overlap_qi","latex":"\\omega_{qi}","meaning":"overlap volume of scratch cell $q$ and native cell $i$","si_unit":"\\mathrm{m^3}"},
+    {"id":"Hn","latex":"\\mathbf H^n_{d\\leftarrow s}","meaning":"native destination field contributed by source layer $s$","si_unit":"\\mathrm{A\\,m^{-1}}"},
     {"id":"N_generic","latex":"\\mathsf N","meaning":"pair-cell demagnetizing tensor from Eq. (3)","si_unit":"1"},
     {"id":"Ndd","latex":"N_{dd}","meaning":"target diagonal component in Table I","si_unit":"1"},
     {"id":"Nxz","latex":"N_{xz}","meaning":"off-diagonal xz component in Table I","si_unit":"1"},
@@ -351,16 +378,22 @@
       "responsibility": "applies the field-sign convention after inverse transform"
     },
     {
+      "id": "transferContractMetadata",
+      "path": "crates/fullmag-fdm-demag/src/descriptors.rs",
+      "symbol": "volume_weighted_moment_preserving",
+      "responsibility": "declares full-scratch-volume moment density, volume adjoint, and active-mask preservation as the backend-neutral transfer contract"
+    },
+    {
       "id": "push",
       "path": "crates/fullmag-fdm-demag/src/transfer.rs",
-      "symbol": "push_m_with_boundary_policy",
-      "responsibility": "maps magnetization to convolution grid"
+      "symbol": "push_m_into",
+      "responsibility": "stores active native moment as density over the full scratch-cell volume"
     },
     {
       "id": "pull",
       "path": "crates/fullmag-fdm-demag/src/transfer.rs",
-      "symbol": "pull_h_with_boundary_policy",
-      "responsibility": "samples field onto native grid"
+      "symbol": "pull_h_adjoint_into",
+      "responsibility": "applies the exact volume adjoint from scratch field to active native cells"
     },
     {
       "id": "cpuEnergy",
@@ -403,7 +436,14 @@
       "id": "cpuRefresh",
       "path": "crates/fullmag-engine/src/multilayer.rs",
       "symbol": "compute_demag_fields_checked",
-      "responsibility": "checked CPU refresh using catalog and reusable workspace"
+      "responsibility": "checked CPU refresh using catalog, reusable workspace, and scratch-to-kernel source-density conversion"
+    },
+    {
+      "id": "unequalTransferCompositionTests",
+      "path": "crates/fullmag-engine/tests/multilayer_unequal_transfer.rs",
+      "symbol": "unequal_two_d_push_pull_matches_direct_oracle_for_both_orientations_and_axes",
+      "responsibility": "independent GL8 check of unequal-thickness push-kernel-pull composition, reciprocity, energy derivative, partial-cell moment, and inactive masks",
+      "evidence_status": "scoped executable CPU FP64 oracle; not CUDA or production qualification"
     },
     {
       "id": "descriptorLayoutTests",

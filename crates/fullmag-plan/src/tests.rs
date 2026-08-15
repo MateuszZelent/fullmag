@@ -6706,6 +6706,46 @@ fn stacked_two_body_multilayer_problem() -> ProblemIR {
 }
 
 #[test]
+fn regular_three_layer_planner_uses_deduplicated_cpu_catalog_memory() {
+    let mut ir = stacked_two_body_multilayer_problem();
+    ir.geometry.entries.push(GeometryEntryIR::Translate {
+        name: "third_geom".to_string(),
+        base: std::boxed::Box::new(GeometryEntryIR::Box {
+            name: "third_base".to_string(),
+            size: [40e-9, 20e-9, 2e-9],
+        }),
+        by: [0.0, 0.0, 8e-9],
+    });
+    ir.regions.push(fullmag_ir::RegionIR {
+        name: "third_region".to_string(),
+        geometry: "third_geom".to_string(),
+    });
+    ir.magnets.push(fullmag_ir::MagnetIR {
+        name: "third".to_string(),
+        region: "third_region".to_string(),
+        material: "Py".to_string(),
+        initial_magnetization: Some(InitialMagnetizationIR::Uniform {
+            value: [1.0, 0.0, 0.0],
+        }),
+        absorbing_boundary: None,
+    });
+
+    let planned = plan(&ir).expect("regular three-layer CPU stack should plan");
+    let BackendPlanIR::FdmMultilayer(multilayer) = planned.backend_plan else {
+        panic!("regular three-layer fixture must resolve to multilayer FDM");
+    };
+
+    assert_eq!(multilayer.common_cells, [20, 10, 1]);
+    assert_eq!(multilayer.planner_summary.estimated_pair_kernels, 9);
+    assert_eq!(multilayer.planner_summary.estimated_unique_kernels, 5);
+    assert_eq!(multilayer.planner_summary.estimated_kernel_bytes, 384_108);
+    assert_eq!(
+        multilayer.planner_summary.estimated_kernel_bytes,
+        5 * 40 * 20 * 6 * 16 + 9 * 12
+    );
+}
+
+#[test]
 fn fdm_common_cell_size_resolves_heterogeneous_native_grids_without_rounding() {
     let mut ir = stacked_two_body_multilayer_problem();
     for (entry, z) in ir.geometry.entries.iter_mut().zip([0.0, 20e-9]) {
@@ -6759,9 +6799,10 @@ fn fdm_common_cell_size_resolves_heterogeneous_native_grids_without_rounding() {
         Some([2e-9, 2e-9, 2.5e-9])
     );
     assert_eq!(multilayer.mode, "three_d");
-    assert!(multilayer.layers.iter().all(|layer| {
-        layer.convolution_cell_size == [2e-9, 2e-9, 2.5e-9]
-    }));
+    assert!(multilayer
+        .layers
+        .iter()
+        .all(|layer| { layer.convolution_cell_size == [2e-9, 2e-9, 2.5e-9] }));
     assert!(multilayer
         .layers
         .iter()
@@ -6812,15 +6853,143 @@ fn eight_layer_multilayer_problem_for_kernel_budget() -> ProblemIR {
     ir
 }
 
+fn three_layer_catalog_problem(thicknesses_m: [f64; 3]) -> ProblemIR {
+    let mut ir = stacked_two_body_multilayer_problem();
+    ir.geometry.entries.push(GeometryEntryIR::Translate {
+        name: "layer_2_geom".to_string(),
+        base: std::boxed::Box::new(GeometryEntryIR::Box {
+            name: "layer_2_base".to_string(),
+            size: [40e-9, 20e-9, thicknesses_m[2]],
+        }),
+        by: [0.0, 0.0, 16e-9],
+    });
+    ir.regions.push(fullmag_ir::RegionIR {
+        name: "layer_2_region".to_string(),
+        geometry: "layer_2_geom".to_string(),
+    });
+    ir.magnets.push(fullmag_ir::MagnetIR {
+        name: "layer_2".to_string(),
+        region: "layer_2_region".to_string(),
+        material: "Py".to_string(),
+        initial_magnetization: Some(InitialMagnetizationIR::Uniform {
+            value: [0.0, 0.0, 1.0],
+        }),
+        absorbing_boundary: None,
+    });
+    for (entry, (z, thickness)) in ir
+        .geometry
+        .entries
+        .iter_mut()
+        .zip([0.0, 8e-9, 16e-9].into_iter().zip(thicknesses_m))
+    {
+        let GeometryEntryIR::Translate { base, by, .. } = entry else {
+            panic!("catalog fixture geometry must be translated");
+        };
+        let GeometryEntryIR::Box { size, .. } = base.as_mut() else {
+            panic!("catalog fixture base must be a box");
+        };
+        size[2] = thickness;
+        by[2] = z;
+    }
+    let fdm = ir
+        .backend_policy
+        .discretization_hints
+        .as_mut()
+        .and_then(|hints| hints.fdm.as_mut())
+        .expect("catalog fixture must provide FDM hints");
+    fdm.default_cell = None;
+    fdm.per_magnet = Some(BTreeMap::from([
+        (
+            "free".to_string(),
+            fullmag_ir::FdmGridHintsIR {
+                cell: [2e-9, 2e-9, thicknesses_m[0]],
+            },
+        ),
+        (
+            "ref".to_string(),
+            fullmag_ir::FdmGridHintsIR {
+                cell: [2e-9, 2e-9, thicknesses_m[1]],
+            },
+        ),
+        (
+            "layer_2".to_string(),
+            fullmag_ir::FdmGridHintsIR {
+                cell: [2e-9, 2e-9, thicknesses_m[2]],
+            },
+        ),
+    ]));
+    fdm.demag = Some(fullmag_ir::FdmDemagHintsIR {
+        strategy: "multilayer_convolution".to_string(),
+        mode: "two_d_stack".to_string(),
+        common_cells: None,
+        common_cells_xy: Some([20, 10]),
+        common_cell_size: None,
+    });
+    ir
+}
+
+#[test]
+fn multilayer_planner_regular_three_layer_catalog_matches_runtime_count() {
+    let planned = plan(&three_layer_catalog_problem([2e-9, 2e-9, 2e-9]))
+        .expect("regular three-layer catalog should plan");
+    let BackendPlanIR::FdmMultilayer(multilayer) = planned.backend_plan else {
+        panic!("regular fixture must produce a multilayer plan");
+    };
+    assert_eq!(multilayer.planner_summary.estimated_unique_kernels, 5);
+    assert_eq!(multilayer.planner_summary.estimated_pair_kernels, 9);
+}
+
+#[test]
+fn multilayer_planner_unequal_three_layer_catalog_matches_runtime_count() {
+    let planned = plan(&three_layer_catalog_problem([2e-9, 3e-9, 4e-9]))
+        .expect("unequal three-layer catalog should plan");
+    let BackendPlanIR::FdmMultilayer(multilayer) = planned.backend_plan else {
+        panic!("unequal fixture must produce a multilayer plan");
+    };
+    assert_eq!(multilayer.planner_summary.estimated_unique_kernels, 9);
+    assert_eq!(multilayer.planner_summary.estimated_pair_kernels, 9);
+}
+
+#[test]
+fn multilayer_cpu_planner_admits_deduplicated_catalog_below_memory_budget() {
+    let planned = plan(&eight_layer_multilayer_problem_for_kernel_budget())
+        .expect("CPU FP64 must admit the deduplicated catalog rather than the ABI v2 pair payload");
+    let BackendPlanIR::FdmMultilayer(multilayer) = planned.backend_plan else {
+        panic!("eight-layer fixture must produce a multilayer plan");
+    };
+    assert_eq!(multilayer.planner_summary.estimated_unique_kernels, 15);
+    assert!(multilayer.planner_summary.estimated_kernel_bytes < FDM_GRID_MAX_BYTES);
+}
+
+#[test]
+fn multilayer_cuda_planner_retains_abi_v2_pair_payload_memory_budget() {
+    let mut ir = eight_layer_multilayer_problem_for_kernel_budget();
+    ir.problem_meta.runtime_metadata.insert(
+        "runtime_selection".to_string(),
+        serde_json::json!({"device": "cuda", "device_index": 0}),
+    );
+    let error = plan(&ir)
+        .expect_err("full CUDA ABI v2 pair payload must fail planner admission before allocation");
+    assert!(error.reasons.iter().any(|reason| {
+        reason.contains("multilayer_convolution aggregate memory budget exceeded")
+            && reason.contains("admission_model=cuda_abi_v2_pair_payload")
+    }));
+}
+
 #[test]
 fn multilayer_planner_rejects_abi_v2_pair_payload_above_memory_budget() {
-    let error = plan(&eight_layer_multilayer_problem_for_kernel_budget())
+    let mut ir = eight_layer_multilayer_problem_for_kernel_budget();
+    ir.problem_meta.runtime_metadata.insert(
+        "runtime_selection".to_string(),
+        serde_json::json!({"device": "cuda", "device_index": 0}),
+    );
+    let error = plan(&ir)
         .expect_err("full ABI v2 pair payload must fail planner admission before allocation");
-    assert!(error
-        .reasons
-        .iter()
-        .any(|reason| reason.contains("kernel memory budget exceeded")
-            && reason.contains("estimated_bytes=12884901888")));
+    assert!(error.reasons.iter().any(|reason| reason
+        .contains("admission_model=cuda_abi_v2_pair_payload")
+        && reason.contains("multilayer_convolution aggregate memory budget exceeded")
+        && reason.contains("kernel_bytes=12884902656")
+        && reason.contains("estimated_bytes=12952421120")));
 }
 
 #[test]
@@ -7580,6 +7749,86 @@ fn native_cuda_three_d_identity_multilayer_keeps_supported_non_heun_integrators(
 }
 
 #[test]
+fn native_stacked_cuda_shape_does_not_admit_abi_v2_pair_payload() {
+    let mut ir = cuda_three_d_identity_multilayer_problem();
+    ir.backend_policy
+        .discretization_hints
+        .as_mut()
+        .and_then(|hints| hints.fdm.as_mut())
+        .and_then(|fdm| fdm.demag.as_mut())
+        .expect("CUDA fixture must provide demag hints")
+        .strategy = "auto".to_string();
+    let fullmag_ir::StudyIR::TimeEvolution { dynamics, .. } = &mut ir.study else {
+        panic!("bootstrap study should be time evolution");
+    };
+    let fullmag_ir::DynamicsIR::Llg { integrator, .. } = dynamics;
+    *integrator = "rk4".to_string();
+
+    let planned = plan(&ir).expect("RK4 auto stack must resolve to native single-grid CUDA");
+    let BackendPlanIR::FdmMultilayer(plan) = planned.backend_plan else {
+        panic!("expected multilayer plan");
+    };
+    assert_eq!(plan.integrator, IntegratorChoice::Rk4);
+    assert_eq!(plan.planner_summary.estimated_pair_kernels, 0);
+    assert_eq!(plan.planner_summary.estimated_unique_kernels, 0);
+    assert_eq!(plan.planner_summary.estimated_kernel_bytes, 0);
+    assert!(plan
+        .planner_summary
+        .warnings
+        .iter()
+        .all(|warning| !warning.contains("cuda_abi_v2_l_squared_pair_payload")));
+}
+
+#[test]
+fn device_resident_d07_shape_retains_abi_v2_pair_payload_admission() {
+    let mut ir = cuda_three_d_identity_multilayer_problem();
+    ir.backend_policy
+        .discretization_hints
+        .as_mut()
+        .and_then(|hints| hints.fdm.as_mut())
+        .and_then(|fdm| fdm.demag.as_mut())
+        .expect("CUDA fixture must provide demag hints")
+        .strategy = "auto".to_string();
+
+    let planned = plan(&ir).expect("FP64 Heun auto stack must resolve to D-07 ABI v2");
+    let BackendPlanIR::FdmMultilayer(plan) = planned.backend_plan else {
+        panic!("expected multilayer plan");
+    };
+    assert_eq!(plan.integrator, IntegratorChoice::Heun);
+    assert_eq!(plan.planner_summary.estimated_pair_kernels, 4);
+    assert!(plan.planner_summary.estimated_unique_kernels > 0);
+    assert!(plan.planner_summary.estimated_kernel_bytes > 0);
+    assert!(plan
+        .planner_summary
+        .warnings
+        .iter()
+        .any(|warning| warning.contains("cuda_abi_v2_l_squared_pair_payload")));
+}
+
+#[test]
+fn checked_multilayer_aggregate_memory_accepts_exact_boundary_and_rejects_next_byte() {
+    assert_eq!(
+        crate::checked_multilayer_aggregate_memory_bytes(crate::FDM_GRID_MAX_BYTES - 2, 1, 1,)
+            .expect("exact aggregate boundary"),
+        crate::FDM_GRID_MAX_BYTES
+    );
+    let error =
+        crate::checked_multilayer_aggregate_memory_bytes(crate::FDM_GRID_MAX_BYTES - 1, 1, 1)
+            .expect_err("one byte above aggregate boundary must fail");
+    assert!(error
+        .reasons
+        .iter()
+        .any(|reason| reason.contains("aggregate memory budget exceeded")));
+
+    let overflow = crate::checked_multilayer_aggregate_memory_bytes(u64::MAX, 1, 0)
+        .expect_err("aggregate addition overflow must fail closed");
+    assert!(overflow
+        .reasons
+        .iter()
+        .any(|reason| reason.contains("aggregate memory overflow")));
+}
+
+#[test]
 fn multilayer_planner_rejects_thermal_noise_until_rhs_coverage_exists() {
     let mut ir = stacked_two_body_multilayer_problem();
     ir.temperature = Some(300.0);
@@ -7612,24 +7861,409 @@ fn multilayer_planner_rejects_spatial_material_fields_until_rhs_coverage_exists(
 }
 
 #[test]
-fn multilayer_planner_rejects_object_regions_until_region_runtime_exists() {
+fn multilayer_planner_materializes_region_membership_and_linear_ms_per_layer() {
     let mut ir = stacked_two_body_multilayer_problem();
-    ir.object_regions.push(fullmag_ir::ObjectRegionIR {
+    let mut region = fullmag_ir::ObjectRegionIR {
         owner_object: "free".to_string(),
-        region_id: "free:r1".to_string(),
+        region_id: "free:core".to_string(),
         ..default_test_object_region()
-    });
+    };
+    region.shape = fullmag_ir::RegionShapeIR::Box {
+        size: [20e-9, 20e-9, 2e-9],
+        center: [0.0, 0.0, 0.0],
+    };
+    ir.object_regions.push(region);
+    ir.material_parameter_fields
+        .push(fullmag_ir::MaterialParameterAssignmentIR {
+            assignment_id: "free_linear_ms".to_string(),
+            owner_object: "free".to_string(),
+            region_id: None,
+            parameter: fullmag_ir::MaterialParameterNameIR::Ms,
+            value: fullmag_ir::MaterialParameterFieldIR::Linear {
+                base: 800e3,
+                gradient: [1e12, 0.0, 0.0],
+                frame: fullmag_ir::RegionFrameIR::Object,
+                unit: Some("A/m".to_string()),
+            },
+            priority: 10,
+            conflict_policy: fullmag_ir::RegionConflictPolicyIR::Error,
+        });
+    for (assignment_id, parameter, base, gradient, unit) in [
+        (
+            "free_linear_aex",
+            fullmag_ir::MaterialParameterNameIR::Aex,
+            13e-12,
+            1e-4,
+            "J/m",
+        ),
+        (
+            "free_linear_alpha",
+            fullmag_ir::MaterialParameterNameIR::Alpha,
+            0.1,
+            1e-5,
+            "1",
+        ),
+    ] {
+        ir.material_parameter_fields
+            .push(fullmag_ir::MaterialParameterAssignmentIR {
+                assignment_id: assignment_id.to_string(),
+                owner_object: "free".to_string(),
+                region_id: None,
+                parameter,
+                value: fullmag_ir::MaterialParameterFieldIR::Linear {
+                    base,
+                    gradient: [gradient, 0.0, 0.0],
+                    frame: fullmag_ir::RegionFrameIR::Object,
+                    unit: Some(unit.to_string()),
+                },
+                priority: 10,
+                conflict_policy: fullmag_ir::RegionConflictPolicyIR::Error,
+            });
+    }
 
-    let err = plan(&ir).expect_err("multilayer object regions must not be silently ignored");
-    assert!(
-        err.reasons.iter().any(|reason| {
-            reason.contains("object_regions")
-                && reason.contains("multilayer FDM")
-                && reason.contains("capability-gated out of scope")
-        }),
-        "unexpected planner errors: {:?}",
-        err.reasons
+    let planned = plan(&ir).expect("multilayer regions and linear Ms must lower per layer");
+    let BackendPlanIR::FdmMultilayer(multilayer) = planned.backend_plan else {
+        panic!("expected multilayer FDM plan");
+    };
+    let free = multilayer
+        .layers
+        .iter()
+        .find(|layer| layer.object_id == "free")
+        .expect("free layer");
+    assert_eq!(free.native_region_mask.as_ref().map(Vec::len), Some(200));
+    let legend = free.native_region_legend.as_ref().expect("region legend");
+    assert_eq!(legend.len(), 1);
+    assert_eq!(legend[0].numeric_id, 1);
+    assert_eq!(legend[0].object_id, "free");
+    assert_eq!(legend[0].region_id, "free:core");
+    let ms_field = free.material.ms_field.as_ref().expect("linear Ms field");
+    assert_eq!(ms_field.len(), 200);
+    assert_ne!(ms_field[0], ms_field[19]);
+    let a_field = free
+        .material
+        .a_field
+        .as_ref()
+        .expect("sub-absolute-tolerance Aex gradient must remain non-uniform");
+    assert_eq!(a_field.len(), 200);
+    assert_ne!(a_field[0], a_field[19]);
+    let alpha_field = free
+        .material
+        .alpha_field
+        .as_ref()
+        .expect("sub-absolute-tolerance Alpha gradient must remain non-uniform");
+    assert_eq!(alpha_field.len(), 200);
+    assert_ne!(alpha_field[0], alpha_field[19]);
+    assert!(planned.common.material_field_plans.iter().any(|field| {
+        field.object_id == "free" && field.parameter == fullmag_ir::MaterialParameterNameIR::Ms
+    }));
+}
+
+#[test]
+fn forced_cuda_multilayer_rejects_cellwise_material_fields_with_layer_identity() {
+    for (parameter, field_name, base, gradient, unit) in [
+        (
+            fullmag_ir::MaterialParameterNameIR::Ms,
+            "ms_field",
+            800e3,
+            1e12,
+            "A/m",
+        ),
+        (
+            fullmag_ir::MaterialParameterNameIR::Aex,
+            "a_field",
+            13e-12,
+            1e-4,
+            "J/m",
+        ),
+        (
+            fullmag_ir::MaterialParameterNameIR::Alpha,
+            "alpha_field",
+            0.1,
+            1e-5,
+            "1",
+        ),
+    ] {
+        let mut ir = stacked_two_body_multilayer_problem();
+        ir.problem_meta.runtime_metadata.insert(
+            "runtime_selection".to_string(),
+            serde_json::json!({"device": "cuda"}),
+        );
+        ir.material_parameter_fields
+            .push(fullmag_ir::MaterialParameterAssignmentIR {
+                assignment_id: format!("free_linear_{field_name}"),
+                owner_object: "free".to_string(),
+                region_id: None,
+                parameter,
+                value: fullmag_ir::MaterialParameterFieldIR::Linear {
+                    base,
+                    gradient: [gradient, 0.0, 0.0],
+                    frame: fullmag_ir::RegionFrameIR::Object,
+                    unit: Some(unit.to_string()),
+                },
+                priority: 10,
+                conflict_policy: fullmag_ir::RegionConflictPolicyIR::Error,
+            });
+
+        let error = plan(&ir).expect_err("forced CUDA must reject cellwise material fields");
+        let diagnostic = error.reasons.join("\n");
+        for expected in [
+            "fdm_cuda_multilayer_material_field_unqualified",
+            field_name,
+            "layer:free",
+            "free",
+        ] {
+            assert!(
+                diagnostic.contains(expected),
+                "missing {expected:?} in planner diagnostic: {diagnostic}"
+            );
+        }
+    }
+}
+
+#[test]
+fn forced_cuda_explicit_single_magnet_multilayer_uses_multilayer_material_field_reason() {
+    let mut ir = ProblemIR::bootstrap_example();
+    ir.problem_meta.runtime_metadata.insert(
+        "runtime_selection".to_string(),
+        serde_json::json!({"device": "cuda"}),
     );
+    ir.backend_policy
+        .discretization_hints
+        .as_mut()
+        .and_then(|hints| hints.fdm.as_mut())
+        .expect("bootstrap fixture must provide FDM hints")
+        .demag = Some(fullmag_ir::FdmDemagHintsIR {
+        strategy: "multilayer_convolution".to_string(),
+        mode: "three_d".to_string(),
+        common_cells: None,
+        common_cells_xy: None,
+        common_cell_size: None,
+    });
+    ir.material_parameter_fields
+        .push(fullmag_ir::MaterialParameterAssignmentIR {
+            assignment_id: "strip_linear_ms".to_string(),
+            owner_object: "strip".to_string(),
+            region_id: None,
+            parameter: fullmag_ir::MaterialParameterNameIR::Ms,
+            value: fullmag_ir::MaterialParameterFieldIR::Linear {
+                base: 800e3,
+                gradient: [1e9, 0.0, 0.0],
+                frame: fullmag_ir::RegionFrameIR::Object,
+                unit: Some("A/m".to_string()),
+            },
+            priority: 10,
+            conflict_policy: fullmag_ir::RegionConflictPolicyIR::Error,
+        });
+
+    let error = plan(&ir).expect_err("explicit multilayer CUDA must reject cellwise Ms");
+    let diagnostic = error.reasons.join("\n");
+    for expected in [
+        "fdm_cuda_multilayer_material_field_unqualified",
+        "ms_field",
+        "layer:strip",
+        "object 'strip'",
+    ] {
+        assert!(
+            diagnostic.contains(expected),
+            "missing {expected:?} in planner diagnostic: {diagnostic}"
+        );
+    }
+}
+
+#[test]
+fn multilayer_planner_materializes_translated_object_frame_region_membership() {
+    let mut ir = stacked_two_body_multilayer_problem();
+    let GeometryEntryIR::Translate { by, .. } = &mut ir.geometry.entries[0] else {
+        panic!("fixture free geometry must be translated");
+    };
+    *by = [30e-9, 0.0, 0.0];
+    let mut region = fullmag_ir::ObjectRegionIR {
+        owner_object: "free".to_string(),
+        region_id: "free:translated_core".to_string(),
+        ..default_test_object_region()
+    };
+    region.shape = fullmag_ir::RegionShapeIR::Box {
+        size: [20e-9, 20e-9, 2e-9],
+        center: [0.0, 0.0, 0.0],
+    };
+    ir.object_regions.push(region);
+
+    let planned = plan(&ir).expect("object-frame region must follow its translated owner");
+    let BackendPlanIR::FdmMultilayer(multilayer) = planned.backend_plan else {
+        panic!("expected multilayer FDM plan");
+    };
+    let free = multilayer
+        .layers
+        .iter()
+        .find(|layer| layer.object_id == "free")
+        .expect("free layer");
+    assert!(free
+        .native_region_mask
+        .as_deref()
+        .is_some_and(|mask| mask.iter().any(|numeric_id| *numeric_id == 1)));
+    assert!(free.native_region_legend.as_deref().is_some_and(|legend| {
+        legend.iter().any(|entry| {
+            entry.numeric_id == 1
+                && entry.object_id == "free"
+                && entry.region_id == "free:translated_core"
+        })
+    }));
+}
+
+#[test]
+fn multilayer_planner_allows_coplanar_bodies_with_disjoint_xy_projections() {
+    let mut ir = stacked_two_body_multilayer_problem();
+    let GeometryEntryIR::Translate { by, .. } = &mut ir.geometry.entries[1] else {
+        panic!("fixture reference geometry must be translated");
+    };
+    *by = [50e-9, 0.0, 0.0];
+
+    plan(&ir).expect("disjoint XY bodies may share their z interval");
+}
+
+#[test]
+fn multilayer_planner_allows_diagonally_disjoint_cylinders_with_overlapping_aabbs() {
+    let mut ir = stacked_two_body_multilayer_problem();
+    ir.geometry.entries = vec![
+        GeometryEntryIR::Translate {
+            name: "free_geom".to_string(),
+            base: std::boxed::Box::new(GeometryEntryIR::Cylinder {
+                name: "free_base".to_string(),
+                radius: 10e-9,
+                height: 2e-9,
+                axis: [0.0, 0.0, 1.0],
+            }),
+            by: [0.0, 0.0, 0.0],
+        },
+        GeometryEntryIR::Translate {
+            name: "ref_geom".to_string(),
+            base: std::boxed::Box::new(GeometryEntryIR::Cylinder {
+                name: "ref_base".to_string(),
+                radius: 10e-9,
+                height: 2e-9,
+                axis: [0.0, 0.0, 1.0],
+            }),
+            by: [15e-9, 15e-9, 0.0],
+        },
+    ];
+
+    plan(&ir).expect("diagonally disjoint cylinders may share their z interval");
+}
+
+#[test]
+fn multilayer_planner_rejects_positive_xy_and_z_volume_overlap() {
+    let mut ir = stacked_two_body_multilayer_problem();
+    let GeometryEntryIR::Translate { by, .. } = &mut ir.geometry.entries[1] else {
+        panic!("fixture reference geometry must be translated");
+    };
+    *by = [10e-9, 0.0, 0.0];
+
+    let err = plan(&ir).expect_err("positive physical volume overlap must fail closed");
+    assert!(err
+        .reasons
+        .iter()
+        .any(|reason| reason.contains("overlapping bodies")));
+}
+
+#[test]
+fn multilayer_planner_rejects_translated_sphere_box_volume_overlap() {
+    let mut ir = stacked_two_body_multilayer_problem();
+    ir.geometry.entries = vec![
+        GeometryEntryIR::Translate {
+            name: "free_geom".to_string(),
+            base: std::boxed::Box::new(GeometryEntryIR::Sphere {
+                name: "free_sphere".to_string(),
+                radius: 8e-9,
+            }),
+            by: [0.0, 0.0, 0.0],
+        },
+        GeometryEntryIR::Translate {
+            name: "ref_geom".to_string(),
+            base: std::boxed::Box::new(GeometryEntryIR::Box {
+                name: "ref_box".to_string(),
+                size: [20e-9, 20e-9, 2e-9],
+            }),
+            by: [2e-9, 0.0, 0.0],
+        },
+    ];
+
+    let err = plan(&ir).expect_err("translated sphere and box volume overlap must fail closed");
+    assert!(err
+        .reasons
+        .iter()
+        .any(|reason| reason.contains("overlapping bodies")));
+}
+
+#[test]
+fn multilayer_planner_fails_closed_for_csg_body_overlap() {
+    let mut ir = stacked_two_body_multilayer_problem();
+    ir.geometry.entries[0] = GeometryEntryIR::Difference {
+        name: "free_geom".to_string(),
+        base: std::boxed::Box::new(GeometryEntryIR::Box {
+            name: "free_base".to_string(),
+            size: [40e-9, 20e-9, 2e-9],
+        }),
+        tool: std::boxed::Box::new(GeometryEntryIR::Cylinder {
+            name: "free_hole".to_string(),
+            radius: 2e-9,
+            height: 2e-9,
+            axis: [0.0, 0.0, 1.0],
+        }),
+    };
+    let GeometryEntryIR::Translate { by, .. } = &mut ir.geometry.entries[1] else {
+        panic!("fixture reference geometry must be translated");
+    };
+    *by = [0.0, 0.0, 0.0];
+
+    let err = plan(&ir).expect_err("CSG overlap must not be guessed from a bounding box");
+    assert!(err
+        .reasons
+        .iter()
+        .any(|reason| reason.contains("cannot safely classify overlap")));
+}
+
+#[test]
+fn multilayer_planner_rejects_unsupported_active_region_and_coupling_before_plan() {
+    let mut region_problem = stacked_two_body_multilayer_problem();
+    let mut region = default_test_object_region();
+    region.owner_object = "free".to_string();
+    region.region_id = "free:csg".to_string();
+    region.shape = fullmag_ir::RegionShapeIR::Csg {
+        expression: std::boxed::Box::new(GeometryEntryIR::Box {
+            name: "unsupported_region_shape".to_string(),
+            size: [10e-9, 10e-9, 2e-9],
+        }),
+    };
+    region_problem.object_regions.push(region);
+    let region_error = plan(&region_problem).expect_err("unsupported region shape must fail");
+    assert!(region_error
+        .reasons
+        .iter()
+        .any(|reason| reason.contains("does not yet support CSG")));
+
+    let mut coupling_problem = stacked_two_body_multilayer_problem();
+    coupling_problem.couplings.push(fullmag_ir::CouplingIR {
+        coupling_id: "free-ref-exchange".to_string(),
+        kind: fullmag_ir::CouplingKindIR::Exchange,
+        enabled: true,
+        source: fullmag_ir::CouplingEndpointIR::Object {
+            object: "free".to_string(),
+        },
+        target: fullmag_ir::CouplingEndpointIR::Object {
+            object: "ref".to_string(),
+        },
+        parameters: fullmag_ir::CouplingParametersIR::Exchange {
+            mode: fullmag_ir::ExchangeCouplingModeIR::Explicit,
+            scale: None,
+            inter_exchange: Some(1e-12),
+        },
+        capability_policy: fullmag_ir::CouplingCapabilityPolicyIR::RequireRuntime,
+    });
+    let coupling_error = plan(&coupling_problem).expect_err("unsupported coupling must fail");
+    assert!(coupling_error
+        .reasons
+        .iter()
+        .any(|reason| reason.contains("coupling")));
 }
 
 #[test]
@@ -7912,8 +8546,8 @@ fn multilayer_planner_materializes_xy_offset_in_common_scratch_transfer() {
         },
     ];
 
-    let planned = plan(&ir)
-        .expect("XY-offset multilayer geometry should lower to scratch transfer");
+    let planned =
+        plan(&ir).expect("XY-offset multilayer geometry should lower to scratch transfer");
     let BackendPlanIR::FdmMultilayer(multilayer) = planned.backend_plan else {
         panic!("expected FDM multilayer plan");
     };
@@ -7961,8 +8595,14 @@ fn multilayer_planner_lowers_distinct_xy_extents_and_centers() {
     let BackendPlanIR::FdmMultilayer(multilayer) = planned.backend_plan else {
         panic!("expected FDM multilayer plan");
     };
-    assert_ne!(multilayer.layers[0].native_grid, multilayer.layers[1].native_grid);
-    assert_ne!(multilayer.layers[0].native_origin, multilayer.layers[1].native_origin);
+    assert_ne!(
+        multilayer.layers[0].native_grid,
+        multilayer.layers[1].native_grid
+    );
+    assert_ne!(
+        multilayer.layers[0].native_origin,
+        multilayer.layers[1].native_origin
+    );
 }
 
 #[test]

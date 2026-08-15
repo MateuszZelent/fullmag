@@ -138,7 +138,11 @@ export function buildViewport3DFdmCuboid(
   const vectorSegments = buildFdmVectorSegmentsUncached(
     model,
     request.vectorField,
-    resolveFdmVectorGlyphScale(model, request.vectorScale),
+    resolveFdmVectorGlyphScale(
+      model,
+      request.vectorScale,
+      request.maxVectorGlyphs,
+    ),
     request.maxVectorGlyphs,
     {
       anchorMode: request.vectorAnchorMode,
@@ -514,22 +518,7 @@ function sampleFdmDisplayCellIndicesWithMinimumMembership({
     ) {
       continue;
     }
-    if (selected.size < budget) {
-      selected.add(cellIndex);
-    } else {
-      // Budget full – replace an over-represented inactive sample.
-      const inactiveReplacement = [...selected]
-        .find((sc) => {
-          const sr = realizedRegionIds[sc] ?? FMRM_INACTIVE_REGION_ID;
-          return !cellMatchesSelection(sr, cellSelection);
-        });
-      if (inactiveReplacement !== undefined) {
-        selected.delete(inactiveReplacement);
-        selected.add(cellIndex);
-      }
-      // If no inactive replacement found, skip (budget exhausted with only
-      // matching cells).
-    }
+    if (selected.size < budget) selected.add(cellIndex);
   }
   return Uint32Array.from([...selected].toSorted((left, right) => left - right));
 }
@@ -831,12 +820,21 @@ function resolveFdmVectorSampledInstances(
 export function resolveFdmVectorGlyphScale(
   model: FdmCuboidInstanceModel | null,
   requestedScale: number,
+  maxVectorGlyphs: number,
 ): number {
   const safeScale = Math.max(requestedScale, 1e-12);
   if (!model) return safeScale;
 
   const maxCellSize = Math.max(...model.cellSize);
-  const localCap = Math.max(maxCellSize * 0.75, 1e-12);
+  const sampledGlyphCount = Math.min(
+    model.count,
+    Math.max(1, Math.floor(maxVectorGlyphs)),
+  );
+  const samplingSpacingScale = Math.cbrt(model.count / sampledGlyphCount);
+  const localCap = Math.max(
+    maxCellSize * 0.75 * samplingSpacingScale,
+    1e-12,
+  );
   return Math.min(safeScale, localCap);
 }
 

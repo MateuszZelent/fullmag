@@ -363,6 +363,12 @@ GET /v2/sessions/current/data/fields/{quantity_id}/planar-monitors/{monitor_id}/
 shape, canonical URLs/ETags, revisions, occupancy, source/sampling execution,
 basis/integration order, and diagnostics. Scalar/vector/mask/overlay resources
 are bounded binary payloads using existing codecs where semantically valid.
+`mesh_overlay_descriptor` rozróżnia `geometry_source=fem_topology` z
+`codec=fmcs.v4` od `geometry_source=fdm_structured_grid` z `codec=fmfg.v1`.
+FDM publikuje proceduralny centralny przekrój nośnika dla legalnego
+`monitor_target`, ale nie publikuje target boundaries. ETag overlay wiąże
+sample identity z konkretnym codec; zmiana warstwy prezentacji nie zmienia
+`sample_token`.
 Resolution is limited to `16..2048` per axis and vector budget to
 `0..10000` before allocation.
 

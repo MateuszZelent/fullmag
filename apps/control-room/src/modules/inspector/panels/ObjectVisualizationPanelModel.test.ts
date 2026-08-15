@@ -210,7 +210,48 @@ describe("ObjectVisualizationPanelModel", () => {
     ).toEqual({ fdm: false, fem: true });
   });
 
-  it("routes FDM Airbox visualization to the structured-grid target", () => {
+  it("routes an FDM multilayer object visualization to its native layer target", () => {
+    const selection = {
+      kind: "object.visualization",
+      label: "Layer Bottom visualization",
+      moduleSource: "inspector",
+      nodeId: "model:object:layer_bottom:visualization",
+      objectId: "layer_bottom",
+      ref: {
+        kind: "object.visualization",
+        nodeId: "model:object:layer_bottom:visualization",
+        objectId: "layer_bottom",
+        type: "scene-object",
+        visualizationTargetId: "object:layer_bottom",
+      },
+    } as const;
+
+    expect(
+      resolveObjectVisualizationTargetForLane({
+        fdmNativeLayers: [
+          {
+            layer_id: "layer:bottom",
+            magnet_name: "Layer Bottom",
+            object_id: "layer_bottom",
+          },
+          {
+            layer_id: "layer:top",
+            magnet_name: "Layer Top",
+            object_id: "layer_top",
+          },
+        ],
+        lane: "fdm",
+        selection,
+        selectionTarget: resolveVisualizationTargetFromSelection(selection),
+      }),
+    ).toEqual({
+      id: "fdm-native-layer:layer%3Abottom",
+      kind: "fdm-native-layer",
+      label: "Layer Bottom",
+    });
+  });
+
+  it("keeps public FDM Airbox visualization on the canonical Airbox target", () => {
     for (const kind of ["airbox.visualization"]) {
       const selection = {
         kind,
@@ -228,7 +269,7 @@ describe("ObjectVisualizationPanelModel", () => {
           selection,
           selectionTarget,
         }),
-      ).toMatchObject({ id: "fdm-domain", kind: "fdm-domain" });
+      ).toMatchObject({ id: "airbox", kind: "airbox" });
     }
   });
 

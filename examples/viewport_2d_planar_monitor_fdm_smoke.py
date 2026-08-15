@@ -9,14 +9,16 @@ import fullmag as fm
 
 NM = 1e-9
 SIZE = (80 * NM, 60 * NM, 20 * NM)
+QUALIFICATION_PROFILE = os.environ.get("FULLMAG_PLANAR_QUALIFICATION_PROFILE", "base")
 
 study = fm.study("viewport_2d_planar_monitor_fdm_smoke")
 study.engine("fdm")
 study.device(os.environ.get("FULLMAG_PLANAR_DEVICE", "cpu"), precision="double")
 study.interactive(True)
 study.wait_for_solve(True)
-study.universe(mode="manual", size=SIZE, center=(0.0, 0.0, 0.0), padding=(0.0, 0.0, 0.0))
-study.cell(5 * NM, 5 * NM, 5 * NM)
+study.universe(mode="manual", size=(140 * NM, 60 * NM, 20 * NM), center=(12.5 * NM, 0.0, 0.0), padding=(0.0, 0.0, 0.0))
+cell_size = 2.5 * NM if QUALIFICATION_PROFILE == "mesh-refined" else 5 * NM
+study.cell(cell_size, cell_size, cell_size)
 
 film = study.geometry(fm.Box(size=SIZE, name="planar_film"), name="planar_film")
 film.Ms = 800e3
@@ -25,8 +27,24 @@ film.alpha = 0.1
 film.m = fm.texture.uniform(1.0, 0.0, 0.0)
 film.set_material_field(
     "Ms",
-    fm.fields.linear(base=800e3, gradient=(1e12, 0.0, 0.0), unit="A/m"),
+    fm.fields.linear(base=800e3, gradient=(1e12, 0.0, 2e12), unit="A/m"),
     assignment_id="planar_linear_ms",
+)
+isolation_neighbor = study.geometry(
+    fm.Box(size=(20 * NM, 60 * NM, 20 * NM), name="isolation_neighbor").translate(
+        (55 * NM, 0.0, 0.0)
+    ),
+    name="isolation_neighbor",
+)
+isolation_neighbor.Ms = 400e3
+isolation_neighbor.Aex = 13e-12
+isolation_neighbor.alpha = 0.1
+isolation_neighbor.m = fm.texture.uniform(0.0, 1.0, 0.0)
+qualification_core = film.add_region(
+    "Qualification core",
+    fm.Box(size=(40 * NM, 30 * NM, 20 * NM)),
+    region_id="qualification_core",
+    priority=10,
 )
 
 target = fm.MonitorTarget.object("planar_film")
@@ -42,8 +60,50 @@ study.monitors.add_planar(
     name="XY slab",
     monitor_id="xy-slab",
     target=target,
-    frame=fm.PlanarFrame.xy(position=0.0, extent=extent),
-    operator=fm.SlabAverage(thickness=10 * NM),
+    frame=fm.PlanarFrame.xy(position=5 * NM, extent=extent),
+    operator=fm.SlabAverage(thickness=30 * NM),
+)
+study.monitors.add_planar(
+    name="Isolation neighbor plane",
+    monitor_id="isolation-neighbor-plane",
+    target=fm.MonitorTarget.object("isolation_neighbor"),
+    frame=fm.PlanarFrame.xy(position=0.0, extent=fm.PlanarExtent.target_bounds()),
+    operator=fm.PlaneSample(),
+)
+study.monitors.add_planar(
+    name="XZ plane",
+    monitor_id="xz-plane",
+    target=target,
+    frame=fm.PlanarFrame.xz(position=0.0, extent=extent),
+    operator=fm.PlaneSample(),
+)
+study.monitors.add_planar(
+    name="YZ plane",
+    monitor_id="yz-plane",
+    target=target,
+    frame=fm.PlanarFrame.yz(position=0.0, extent=extent),
+    operator=fm.PlaneSample(),
+)
+study.monitors.add_planar(
+    name="Region plane",
+    monitor_id="region-plane",
+    target=fm.MonitorTarget.region("planar_film", qualification_core.region_id),
+    frame=fm.PlanarFrame.xy(position=0.0, extent=fm.PlanarExtent.target_bounds()),
+    operator=fm.PlaneSample(),
+)
+study.monitors.add_planar(
+    name="Magnetic domain plane",
+    monitor_id="magnetic-plane",
+    target=fm.MonitorTarget.magnetic_domain(),
+    frame=fm.PlanarFrame.xy(position=0.0, extent=fm.PlanarExtent.magnetic_domain()),
+    operator=fm.PlaneSample(),
+)
+study.monitors.add_planar(
+    name="Domain plane",
+    monitor_id="domain-plane",
+    target=fm.MonitorTarget.domain(),
+    frame=fm.PlanarFrame.xy(position=0.0, extent=fm.PlanarExtent.universe()),
+    operator=fm.PlaneSample(),
 )
 study.monitors.add_planar(
     name="Depth mean",
@@ -66,11 +126,28 @@ study.monitors.add_planar(
 )
 
 study.exchange()
+study.demag()
 study.solver(dt=1e-15, integrator="heun", g=2.115)
 study.save("m", every=1e-15)
-study.stages.add_relax(
-    algorithm="llg_overdamped",
-    dt=1e-15,
-    tolA=1e-3,
-    max_steps=1,
+study.stages.add_hysteresis_sweep(
+    field_values_mT=[0.0],
+    orientation=fm.FieldOrientation.preset("in_plane_x"),
+    measurement_axis="field_axis",
+    initial_protocol="as_authored",
+    branch_mode="major_loop",
+    settle_pipeline=fm.SettlePipeline([
+        fm.RelaxStep(
+            method="llg_overdamped",
+            alpha=1.0,
+            torque_tolerance=1e-3,
+            max_steps=1,
+            on_non_convergence="continue_with_warning",
+        )
+    ]),
+    storage=fm.HysteresisStorage(
+        scalar_history=True,
+        magnetization="every_n",
+        every_n=1,
+        key_events=False,
+    ),
 )

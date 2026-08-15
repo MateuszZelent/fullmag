@@ -1,6 +1,6 @@
 {
   "schema_version": "capability_matrix.v0",
-  "updated_at": "2026-08-13",
+  "updated_at": "2026-08-14",
   "status_vocabulary": {
     "unsupported": "The current lane has no legal executable realization for this feature.",
     "source_visible": "Source or planner scaffolding exists, but the lane is not a legal public executable path.",
@@ -127,16 +127,25 @@
       "label": "FDM multilayer fixed-step explicit RK",
       "lanes": {
         "fdm_cpu_reference": "reference_executable",
-        "fdm_gpu_production": "production_executable",
+        "fdm_gpu_production": "implemented",
         "fem_cpu_public": "unsupported",
         "fem_gpu_public": "unsupported"
       },
-      "validated_workloads": [
-        "fixed-step Heun",
-        "fixed-step classical RK4",
-        "fixed-step Bogacki-Shampine RK23"
-      ],
-      "notes": "Staged CPU and CUDA multilayer runners execute the requested fixed-step tableau. Adaptive stepping, staged RK45, and staged ABM3 reject explicitly; native single-grid-compatible CUDA stacks retain their separately qualified integrators."
+      "validated_workloads": [],
+      "notes": "The CPU reference and bounded native CUDA multilayer runners have source and contract coverage, but no current managed source-bound CUDA runtime/parity receipt exists. The only intended D-07 CUDA slice is FP64, fixed-step Heun, resolved three_d, common identity grid, and scalar materials; FP32, RK4/RK23 promotion, adaptive stepping, RK45, ABM3, two_d_stack, unequal h_z, and push_pull remain gated or fail closed. Do not expose this row as production_executable or validated until the dedicated managed CUDA recipe proves device identity, L forward plus L inverse FFT counters, parity, residency, and immutable provenance."
+    },
+    {
+      "id": "fdm_multilayer_material_membership",
+      "label": "FDM multilayer material fields and object-region membership",
+      "lanes": {
+        "fdm_cpu_reference": "implemented",
+        "fdm_gpu_production": "unsupported",
+        "fem_cpu_public": "unsupported",
+        "fem_gpu_public": "unsupported"
+      },
+      "validated_workloads": [],
+      "notes": "Planner/ProblemIR materialize native-region masks and legends plus per-cell Ms/Aex/alpha. Task 10B wires the coefficient arrays into CPU exchange, RHS, demag source, energy and moment. Task 10C publishes per-layer native-grid material and membership artifacts, plan-first and persisted resource-first API carriers, JSON/FMRM membership resources, central client/codec, and exact layer-scoped planar object/region filtering. Plan and persisted identities, grids, legends, hashes, generations and revisions are cross-checked fail-closed; no common-grid, scalar or all-active fallback is legal. Evidence is source/unit/API/client-test only: no managed runtime, scientific or browser/WebGL qualification is claimed. Heterogeneous FDM CUDA is scalar-only and fails closed without CPU fallback. Dynamic m/H still require a published field-store carrier. FEM uses a separate shared-domain coefficient contract.",
+      "validation_state": "unvalidated"
     },
     {
       "id": "relaxation_llg_overdamped",

@@ -1237,6 +1237,8 @@ mod tests {
             native_cell_size: [1.0, 1.0, 1.0],
             native_origin: origin,
             native_active_mask: active_mask,
+            native_region_mask: None,
+            native_region_legend: None,
             initial_magnetization: vec![[1.0, 0.0, 0.0]; 2],
             material: fullmag_ir::FdmMaterialIR::default(),
             convolution_grid: [2, 1, 1],

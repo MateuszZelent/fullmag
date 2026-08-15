@@ -29,6 +29,7 @@ import {
   visibleFdmCuboidInspectTargets,
   resolveFdmCuboidColorUploadRevision,
   shouldAttachFdmCuboidInspectListener,
+  createFdmInspectClearArbitrator,
 } from "./FdmCuboidLayer";
 import { BoxGeometry, InstancedBufferAttribute, InstancedMesh, MeshBasicMaterial } from "three";
 import type { FdmCuboidInstanceModelOptions } from "./fdmCuboidBuildModel";
@@ -101,6 +102,41 @@ const viewport3DSceneModelPath = join(
 );
 
 describe("FdmCuboidLayer model", () => {
+  it("does not clear a valid inspect sample when another target misses in the same frame", () => {
+    const frames = new Map<number, FrameRequestCallback>();
+    let nextFrame = 1;
+    let clears = 0;
+    const arbitrator = createFdmInspectClearArbitrator({
+      cancelFrame: (frame) => frames.delete(frame),
+      onClear: () => {
+        clears += 1;
+      },
+      requestFrame: (callback) => {
+        const frame = nextFrame;
+        nextFrame += 1;
+        frames.set(frame, callback);
+        return frame;
+      },
+    });
+
+    arbitrator.clear();
+    arbitrator.sample();
+    arbitrator.clear();
+    for (const [frame, callback] of [...frames]) {
+      frames.delete(frame);
+      callback(0);
+    }
+    expect(clears).toBe(0);
+
+    arbitrator.clear();
+    for (const [frame, callback] of [...frames]) {
+      frames.delete(frame);
+      callback(16);
+    }
+    expect(clears).toBe(1);
+    arbitrator.dispose();
+  });
+
   it("prepares Three column-major matrices atomically for a target view", () => {
     const model = buildFdmCuboidInstanceModel(domainFixture());
     const prepared = prepareFdmCuboidInstanceMatrices(
@@ -666,7 +702,6 @@ describe("FdmCuboidLayer model", () => {
     const model = buildFdmCuboidInstanceModel(domainFixture(), {
       voxelFillRatio: 0.5,
     });
-
     expect(model?.cellSize[0]).toBeCloseTo(0.5e-9);
     expect(model?.cellSize[1]).toBeCloseTo(1e-9);
     expect(model?.cellSize[2]).toBeCloseTo(1.5e-9);
@@ -1086,12 +1121,18 @@ describe("FdmCuboidLayer model", () => {
     ).toEqual([{ end: 1, start: 0 }]);
   });
 
-  it("caps rendered FDM vector glyph scale to the local voxel size", () => {
+  it("caps FDM vector glyph scale using the realized sampling density", () => {
     const model = buildFdmCuboidInstanceModel(domainFixture(), {
       voxelFillRatio: 0.5,
     });
+    const sampledModel = { ...model!, count: 64 };
 
-    expect(resolveFdmVectorGlyphScale(model, 100e-9)).toBeCloseTo(1.125e-9);
-    expect(resolveFdmVectorGlyphScale(model, 0.25e-9)).toBeCloseTo(0.25e-9);
+    expect(
+      resolveFdmVectorGlyphScale(sampledModel, 100e-9, sampledModel.count) / 1e-9,
+    ).toBeCloseTo(1.125);
+    expect(resolveFdmVectorGlyphScale(sampledModel, 100e-9, 1) / 1e-9).toBeCloseTo(
+      1.125 * Math.cbrt(sampledModel.count),
+    );
+    expect(resolveFdmVectorGlyphScale(sampledModel, 0.25e-9, 1) / 1e-9).toBeCloseTo(0.25);
   });
 });

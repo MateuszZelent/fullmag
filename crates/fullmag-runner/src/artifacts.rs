@@ -202,7 +202,18 @@ pub(crate) fn artifact_provenance_json(
         "execution_mode".to_string(),
         serde_json::to_value(context.execution_mode).expect("execution mode must serialize"),
     );
+    object.insert("build_identity".to_string(), build_identity_json());
     value
+}
+
+pub(crate) fn build_identity_json() -> serde_json::Value {
+    let identity = fullmag_build_info::identity();
+    serde_json::json!({
+        "built_at_utc": identity.built_at_utc,
+        "git_commit": identity.git_commit,
+        "worktree_state": identity.worktree_state,
+        "source_snapshot_sha256": identity.source_snapshot_sha256,
+    })
 }
 
 fn runtime_threading_summary(problem: &fullmag_ir::ProblemIR) -> serde_json::Value {
@@ -1363,6 +1374,7 @@ pub(crate) fn write_artifacts(
         "fem_cpu_relaxation_qualification": fem_cpu_relaxation_qualification,
         "fem_gpu_relaxation_qualification": fem_gpu_relaxation_qualification,
         "engine_version": env!("CARGO_PKG_VERSION"),
+        "build_identity": build_identity_json(),
         "status": executed.result.status,
         "scalar_rows": executed.result.steps.len(),
         "accepted_solver_steps": accepted_steps.len(),
@@ -1674,11 +1686,21 @@ fn write_solver_diagnostics_artifacts(
 fn write_material_field_artifacts(
     output_dir: &Path,
     plan: &fullmag_ir::ExecutionPlanIR,
-) -> std::io::Result<Vec<fullmag_ir::MaterialFieldAssetIR>> {
-    let BackendPlanIR::Fem(fem) = &plan.backend_plan else {
-        return Ok(Vec::new());
-    };
+) -> std::io::Result<Vec<serde_json::Value>> {
+    match &plan.backend_plan {
+        BackendPlanIR::Fem(fem) => write_fem_material_field_artifacts(output_dir, plan, fem),
+        BackendPlanIR::FdmMultilayer(multilayer) => {
+            write_fdm_multilayer_material_field_artifacts(output_dir, multilayer)
+        }
+        _ => Ok(Vec::new()),
+    }
+}
 
+fn write_fem_material_field_artifacts(
+    output_dir: &Path,
+    plan: &fullmag_ir::ExecutionPlanIR,
+    fem: &fullmag_ir::FemPlanIR,
+) -> std::io::Result<Vec<serde_json::Value>> {
     let mut metadata_assets = Vec::new();
     for field_plan in &plan.common.material_field_plans {
         let Some((values, location)) = fem_material_field_values(fem, field_plan) else {
@@ -1726,12 +1748,568 @@ fn write_material_field_artifacts(
         }
         fs::write(&full_path, serde_json::to_string_pretty(&asset).unwrap())?;
 
-        let mut metadata_asset = asset;
-        metadata_asset.values.clear();
+        let mut metadata_asset = serde_json::to_value(asset).map_err(|error| {
+            Error::new(
+                ErrorKind::InvalidData,
+                format!("FEM material field metadata serialization failed: {error}"),
+            )
+        })?;
+        metadata_asset
+            .as_object_mut()
+            .expect("MaterialFieldAssetIR serializes as an object")
+            .insert("values".to_string(), serde_json::json!([]));
         metadata_assets.push(metadata_asset);
     }
 
     Ok(metadata_assets)
+}
+
+fn write_fdm_multilayer_material_field_artifacts(
+    output_dir: &Path,
+    multilayer: &fullmag_ir::FdmMultilayerPlanIR,
+) -> std::io::Result<Vec<serde_json::Value>> {
+    let build_identity = build_identity_json();
+    let mut prepared_files = Vec::<(String, serde_json::Value)>::new();
+    let mut metadata_assets = Vec::new();
+    let mut manifest_layers = Vec::with_capacity(multilayer.layers.len());
+    let mut value_offset = 0usize;
+
+    for layer in &multilayer.layers {
+        let descriptor = fdm_multilayer_layer_artifact_descriptor(layer, value_offset)?;
+        value_offset = value_offset
+            .checked_add(multilayer_native_cell_count(layer)?)
+            .ok_or_else(|| {
+                Error::new(
+                    ErrorKind::InvalidData,
+                    "fdm_multilayer artifact value offsets overflow usize",
+                )
+            })?;
+
+        let native_grid_fingerprint = descriptor["native_grid_fingerprint"]
+            .as_str()
+            .expect("validated native grid fingerprint")
+            .to_string();
+        let material_fields = descriptor["material_fields"]
+            .as_object()
+            .expect("material_fields descriptor");
+        for (field_id, values, unit) in fdm_multilayer_material_values(layer) {
+            let Some(values) = values else {
+                continue;
+            };
+            let field_descriptor = material_fields
+                .get(field_id)
+                .expect("present material array has a descriptor");
+            let relative_path = field_descriptor["artifact_path"]
+                .as_str()
+                .expect("material descriptor has artifact_path")
+                .to_string();
+            let payload = serde_json::json!({
+                "schema_version": "fdm_multilayer_material_field.v1",
+                "backend": "fdm_multilayer",
+                "build_identity": build_identity,
+                "layer_id": layer.layer_id,
+                "object_id": layer.object_id,
+                "magnet_name": layer.magnet_name,
+                "native_grid": layer.native_grid,
+                "native_origin": layer.native_origin,
+                "native_cell_size": layer.native_cell_size,
+                "native_grid_fingerprint": native_grid_fingerprint,
+                "field_id": field_id,
+                "unit": unit,
+                "value_count": values.len(),
+                "revision": field_descriptor["revision"],
+                "generation_id": field_descriptor["generation_id"],
+                "value_sha256": field_descriptor["value_sha256"],
+                "values": values,
+            });
+            prepared_files.push((relative_path.clone(), payload));
+            metadata_assets.push(serde_json::json!({
+                "schema_version": "fdm_multilayer_material_field.v1",
+                "backend": "fdm_multilayer",
+                "build_identity": build_identity,
+                "artifact_path": relative_path,
+                "layer_id": layer.layer_id,
+                "object_id": layer.object_id,
+                "magnet_name": layer.magnet_name,
+                "native_grid": layer.native_grid,
+                "native_origin": layer.native_origin,
+                "native_cell_size": layer.native_cell_size,
+                "native_grid_fingerprint": native_grid_fingerprint,
+                "field_id": field_id,
+                "unit": unit,
+                "value_count": values.len(),
+                "revision": field_descriptor["revision"],
+                "generation_id": field_descriptor["generation_id"],
+                "value_sha256": field_descriptor["value_sha256"],
+            }));
+        }
+
+        if let Some(mask) = fdm_multilayer_artifact_region_mask(layer)? {
+            let membership_descriptor = &descriptor["native_region_mask"];
+            let membership_path = membership_descriptor["artifact_path"]
+                .as_str()
+                .expect("membership descriptor has artifact_path")
+                .to_string();
+            prepared_files.push((
+                membership_path,
+                serde_json::json!({
+                    "schema_version": "fdm_multilayer_region_membership.v1",
+                    "backend": "fdm_multilayer",
+                    "build_identity": build_identity,
+                    "layer_id": layer.layer_id,
+                    "object_id": layer.object_id,
+                    "magnet_name": layer.magnet_name,
+                    "native_grid": layer.native_grid,
+                    "native_origin": layer.native_origin,
+                    "native_cell_size": layer.native_cell_size,
+                    "native_grid_fingerprint": native_grid_fingerprint,
+                    "revision": membership_descriptor["revision"],
+                    "generation_id": membership_descriptor["generation_id"],
+                    "value_count": mask.len(),
+                    "value_sha256": membership_descriptor["value_sha256"],
+                    "legend_sha256": descriptor["native_region_legend"]["legend_sha256"],
+                    "inactive_numeric_id": u32::MAX,
+                    "unassigned_numeric_id": 0,
+                    "native_region_mask": mask,
+                    "native_region_legend": layer.native_region_legend.as_deref().unwrap_or(&[]),
+                }),
+            ));
+        }
+
+        manifest_layers.push(descriptor);
+    }
+
+    if prepared_files.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let manifest_path = "material-fields/fdm-multilayer/manifest.json";
+    let manifest = serde_json::json!({
+        "schema_version": "fdm_multilayer_material_fields.v1",
+        "backend": "fdm_multilayer",
+        "build_identity": build_identity,
+        "storage_layout": "per_layer_native_grid",
+        "layer_count": manifest_layers.len(),
+        "layers": manifest_layers,
+    });
+    prepared_files.push((manifest_path.to_string(), manifest));
+
+    for (relative_path, payload) in prepared_files {
+        let full_path = output_dir.join(relative_path);
+        if let Some(parent) = full_path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        fs::write(full_path, serde_json::to_vec_pretty(&payload).unwrap())?;
+    }
+
+    Ok(metadata_assets)
+}
+
+fn fdm_multilayer_layer_artifact_descriptor(
+    layer: &fullmag_ir::FdmLayerPlanIR,
+    value_offset: usize,
+) -> std::io::Result<serde_json::Value> {
+    if layer.layer_id.trim().is_empty()
+        || layer.object_id.trim().is_empty()
+        || layer.magnet_name.trim().is_empty()
+    {
+        return Err(Error::new(
+            ErrorKind::InvalidData,
+            "fdm_multilayer artifact layer identity must be non-empty",
+        ));
+    }
+    let total_cells = multilayer_native_cell_count(layer)?;
+    if layer
+        .native_cell_size
+        .iter()
+        .any(|value| !value.is_finite() || *value <= 0.0)
+        || layer.native_origin.iter().any(|value| !value.is_finite())
+    {
+        return Err(Error::new(
+            ErrorKind::InvalidData,
+            format!(
+                "fdm_multilayer layer '{}' has invalid native grid units or coordinates",
+                layer.layer_id
+            ),
+        ));
+    }
+    if let Some(active_mask) = layer.native_active_mask.as_deref() {
+        validate_multilayer_value_count(
+            &layer.layer_id,
+            "native_active_mask",
+            active_mask.len(),
+            total_cells,
+        )?;
+    }
+    let active_cell_count = layer
+        .native_active_mask
+        .as_deref()
+        .map(|mask| mask.iter().filter(|active| **active).count())
+        .unwrap_or(total_cells);
+    let native_grid_fingerprint = fullmag_ir::FdmGridCertificateIR::new_with_topology_tokens(
+        layer.native_origin,
+        layer.native_grid,
+        layer.native_cell_size,
+        active_cell_count as u64,
+        1,
+        layer.native_active_mask.as_deref(),
+        layer.native_region_mask.as_deref().unwrap_or(&[]),
+    )
+    .map_err(|error| {
+        Error::new(
+            ErrorKind::InvalidData,
+            format!(
+                "fdm_multilayer layer '{}' cannot establish native grid fingerprint: {error}",
+                layer.layer_id
+            ),
+        )
+    })?
+    .grid_fingerprint;
+    let native_grid_fingerprint = format!("sha256:{native_grid_fingerprint}");
+
+    let layer_directory = fdm_multilayer_layer_directory(&layer.layer_id);
+    let mut material_fields = serde_json::Map::new();
+    for (field_id, values, unit) in fdm_multilayer_material_values(layer) {
+        let Some(values) = values else {
+            continue;
+        };
+        validate_multilayer_material_unit(field_id, unit)?;
+        validate_multilayer_value_count(&layer.layer_id, field_id, values.len(), total_cells)?;
+        validate_multilayer_material_values(&layer.layer_id, field_id, values)?;
+        let value_sha256 = hash_f64_values(values);
+        let revision = 1u64;
+        let generation_id = hash_json_value(&serde_json::json!({
+            "schema_version": "fdm_multilayer_material_generation.v1",
+            "layer_id": layer.layer_id,
+            "object_id": layer.object_id,
+            "native_grid_fingerprint": native_grid_fingerprint,
+            "field_id": field_id,
+            "unit": unit,
+            "value_count": values.len(),
+            "revision": revision,
+            "value_sha256": value_sha256,
+        }))?;
+        material_fields.insert(
+            field_id.to_string(),
+            serde_json::json!({
+                "available": true,
+                "unit": unit,
+                "value_count": values.len(),
+                "revision": revision,
+                "generation_id": generation_id,
+                "value_sha256": value_sha256,
+                "artifact_path": format!(
+                    "material-fields/fdm-multilayer/{layer_directory}/{field_id}.json"
+                ),
+            }),
+        );
+    }
+
+    let (native_region_mask, native_region_legend) = if let Some(mask) =
+        fdm_multilayer_artifact_region_mask(layer)?
+    {
+        let legend = layer.native_region_legend.as_deref().ok_or_else(|| {
+            Error::new(
+                ErrorKind::InvalidData,
+                format!(
+                    "fdm_multilayer layer '{}' native_region_mask requires native_region_legend",
+                    layer.layer_id
+                ),
+            )
+        })?;
+        validate_multilayer_region_legend(&layer.layer_id, &layer.object_id, &mask, legend)?;
+        let value_sha256 = hash_u32_values(&mask);
+        let legend_sha256 = hash_json_value(&serde_json::to_value(legend).map_err(|error| {
+            Error::new(
+                ErrorKind::InvalidData,
+                format!("fdm_multilayer region legend serialization failed: {error}"),
+            )
+        })?)?;
+        let revision = 1u64;
+        let generation_id = hash_json_value(&serde_json::json!({
+            "schema_version": "fdm_multilayer_membership_generation.v1",
+            "layer_id": layer.layer_id,
+            "object_id": layer.object_id,
+            "native_grid_fingerprint": native_grid_fingerprint,
+            "revision": revision,
+            "value_sha256": value_sha256,
+            "legend_sha256": legend_sha256,
+        }))?;
+        let artifact_path = format!(
+            "material-fields/fdm-multilayer/{layer_directory}/native-region-membership.json"
+        );
+        (
+            serde_json::json!({
+                "available": true,
+                "value_count": mask.len(),
+                "revision": revision,
+                "generation_id": generation_id,
+                "value_sha256": value_sha256,
+                "artifact_path": artifact_path,
+            }),
+            serde_json::json!({
+                "available": true,
+                "entry_count": legend.len(),
+                "revision": revision,
+                "generation_id": generation_id,
+                "legend_sha256": legend_sha256,
+                "artifact_path": artifact_path,
+                "entries": legend,
+            }),
+        )
+    } else {
+        if layer
+            .native_region_legend
+            .as_deref()
+            .is_some_and(|legend| !legend.is_empty())
+        {
+            return Err(Error::new(
+                ErrorKind::InvalidData,
+                format!(
+                    "fdm_multilayer layer '{}' native_region_legend requires native_region_mask",
+                    layer.layer_id
+                ),
+            ));
+        }
+        (
+            serde_json::json!({"available": false}),
+            serde_json::json!({"available": false}),
+        )
+    };
+
+    Ok(serde_json::json!({
+        "layer_id": layer.layer_id,
+        "object_id": layer.object_id,
+        "magnet_name": layer.magnet_name,
+        "native_grid": layer.native_grid,
+        "native_cell_size": layer.native_cell_size,
+        "native_origin": layer.native_origin,
+        "native_grid_fingerprint": native_grid_fingerprint,
+        "convolution_grid": layer.convolution_grid,
+        "convolution_cell_size": layer.convolution_cell_size,
+        "convolution_origin": layer.convolution_origin,
+        "transfer_kind": layer.transfer_kind,
+        "total_cell_count": total_cells,
+        "active_mask_present": layer.native_active_mask.is_some(),
+        "active_cell_count": active_cell_count,
+        "inactive_cell_count": total_cells.saturating_sub(active_cell_count),
+        "value_offset": value_offset,
+        "value_count": total_cells,
+        "native_region_mask": native_region_mask,
+        "native_region_legend": native_region_legend,
+        "material_fields": material_fields,
+    }))
+}
+
+fn fdm_multilayer_material_values(
+    layer: &fullmag_ir::FdmLayerPlanIR,
+) -> [(&'static str, Option<&[f64]>, &'static str); 3] {
+    [
+        ("mat_ms", layer.material.ms_field.as_deref(), "A/m"),
+        ("mat_aex", layer.material.a_field.as_deref(), "J/m"),
+        ("mat_alpha", layer.material.alpha_field.as_deref(), "1"),
+    ]
+}
+
+fn fdm_multilayer_artifact_region_mask(
+    layer: &fullmag_ir::FdmLayerPlanIR,
+) -> std::io::Result<Option<Vec<u32>>> {
+    let Some(region_mask) = layer.native_region_mask.as_deref() else {
+        return Ok(None);
+    };
+    let total_cells = multilayer_native_cell_count(layer)?;
+    validate_multilayer_value_count(
+        &layer.layer_id,
+        "native_region_mask",
+        region_mask.len(),
+        total_cells,
+    )?;
+    if region_mask.iter().any(|numeric_id| *numeric_id == u32::MAX) {
+        return Err(Error::new(
+            ErrorKind::InvalidData,
+            format!(
+                "fdm_multilayer layer '{}' raw native_region_mask reserves u32::MAX for artifact-only inactive cells",
+                layer.layer_id
+            ),
+        ));
+    }
+    if let Some(active_mask) = layer.native_active_mask.as_deref() {
+        if active_mask
+            .iter()
+            .zip(region_mask)
+            .any(|(active, numeric_id)| !active && *numeric_id != 0)
+        {
+            return Err(Error::new(
+                ErrorKind::InvalidData,
+                format!(
+                    "fdm_multilayer layer '{}' native_region_mask assigns a region to an inactive cell",
+                    layer.layer_id
+                ),
+            ));
+        }
+    }
+    let mask = match layer.native_active_mask.as_deref() {
+        Some(active_mask) => active_mask
+            .iter()
+            .zip(region_mask)
+            .map(|(active, numeric_id)| if *active { *numeric_id } else { u32::MAX })
+            .collect(),
+        None => region_mask.to_vec(),
+    };
+    Ok(Some(mask))
+}
+
+fn multilayer_native_cell_count(layer: &fullmag_ir::FdmLayerPlanIR) -> std::io::Result<usize> {
+    layer.native_grid.iter().try_fold(1usize, |total, count| {
+        if *count == 0 {
+            return Err(Error::new(
+                ErrorKind::InvalidData,
+                format!(
+                    "fdm_multilayer layer '{}' native_grid contains zero",
+                    layer.layer_id
+                ),
+            ));
+        }
+        total.checked_mul(*count as usize).ok_or_else(|| {
+            Error::new(
+                ErrorKind::InvalidData,
+                format!(
+                    "fdm_multilayer layer '{}' native cell count overflows usize",
+                    layer.layer_id
+                ),
+            )
+        })
+    })
+}
+
+fn validate_multilayer_value_count(
+    layer_id: &str,
+    field_id: &str,
+    actual: usize,
+    expected: usize,
+) -> std::io::Result<()> {
+    if actual != expected {
+        return Err(Error::new(
+            ErrorKind::InvalidData,
+            format!(
+                "fdm_multilayer layer '{layer_id}' {field_id} length {actual} does not match native cell count {expected}"
+            ),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_multilayer_material_unit(field_id: &str, unit: &str) -> std::io::Result<()> {
+    let expected = match field_id {
+        "mat_ms" => "A/m",
+        "mat_aex" => "J/m",
+        "mat_alpha" => "1",
+        _ => {
+            return Err(Error::new(
+                ErrorKind::InvalidData,
+                format!("unsupported fdm_multilayer material field '{field_id}'"),
+            ));
+        }
+    };
+    if unit != expected {
+        return Err(Error::new(
+            ErrorKind::InvalidData,
+            format!(
+                "fdm_multilayer material field '{field_id}' unit '{unit}' does not match '{expected}'"
+            ),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_multilayer_material_values(
+    layer_id: &str,
+    field_id: &str,
+    values: &[f64],
+) -> std::io::Result<()> {
+    for (index, value) in values.iter().copied().enumerate() {
+        let valid_domain = match field_id {
+            "mat_ms" => value > 0.0,
+            "mat_aex" | "mat_alpha" => value >= 0.0,
+            _ => false,
+        };
+        if !value.is_finite() || !valid_domain {
+            return Err(Error::new(
+                ErrorKind::InvalidData,
+                format!(
+                    "fdm_multilayer layer '{layer_id}' {field_id}[{index}] is outside its finite physical domain"
+                ),
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn validate_multilayer_region_legend(
+    layer_id: &str,
+    object_id: &str,
+    mask: &[u32],
+    legend: &[fullmag_ir::FdmRegionLegendEntryIR],
+) -> std::io::Result<()> {
+    let mut ids = BTreeSet::new();
+    for entry in legend {
+        if entry.numeric_id == 0
+            || entry.numeric_id == u32::MAX
+            || entry.object_id != object_id
+            || entry.region_id.trim().is_empty()
+            || !ids.insert(entry.numeric_id)
+        {
+            return Err(Error::new(
+                ErrorKind::InvalidData,
+                format!("fdm_multilayer layer '{layer_id}' has an invalid native region legend"),
+            ));
+        }
+    }
+    if mask
+        .iter()
+        .copied()
+        .filter(|numeric_id| !matches!(*numeric_id, 0 | u32::MAX))
+        .any(|numeric_id| !ids.contains(&numeric_id))
+    {
+        return Err(Error::new(
+            ErrorKind::InvalidData,
+            format!(
+                "fdm_multilayer layer '{layer_id}' native region mask references an unknown legend entry"
+            ),
+        ));
+    }
+    Ok(())
+}
+
+fn fdm_multilayer_layer_directory(layer_id: &str) -> String {
+    let layer_id = layer_id.strip_prefix("layer:").unwrap_or(layer_id);
+    format!("layer-{}", sanitize_layer_id(layer_id))
+}
+
+fn hash_f64_values(values: &[f64]) -> String {
+    let mut hasher = Sha256::new();
+    for value in values {
+        hasher.update(value.to_le_bytes());
+    }
+    format!("sha256:{:x}", hasher.finalize())
+}
+
+fn hash_u32_values(values: &[u32]) -> String {
+    let mut hasher = Sha256::new();
+    for value in values {
+        hasher.update(value.to_le_bytes());
+    }
+    format!("sha256:{:x}", hasher.finalize())
+}
+
+fn hash_json_value(value: &serde_json::Value) -> std::io::Result<String> {
+    let payload = serde_json::to_vec(value).map_err(|error| {
+        Error::new(
+            ErrorKind::InvalidData,
+            format!("fdm_multilayer artifact fingerprint serialization failed: {error}"),
+        )
+    })?;
+    Ok(format!("sha256:{:x}", Sha256::digest(payload)))
 }
 
 fn write_fem_supercell_node_geometry_artifact(
@@ -3321,14 +3899,7 @@ fn write_canonical_field_snapshot_file(
     } else {
         serde_json::json!(snapshot.values)
     };
-    let mut field_provenance = serde_json::json!({
-        "problem_name": context.problem_name,
-        "ir_version": context.ir_version,
-        "source_hash": context.source_hash,
-        "execution_mode": context.execution_mode,
-        "execution_engine": provenance.execution_engine,
-        "precision": provenance.precision,
-    });
+    let mut field_provenance = artifact_provenance_json(context, provenance);
     if !provenance.transport_modules.is_empty() {
         field_provenance["transport_modules"] = serde_json::json!(provenance.transport_modules);
     }
@@ -3360,6 +3931,15 @@ fn multilayer_field_layers(
     if layout.get("backend").and_then(serde_json::Value::as_str) != Some("fdm_multilayer") {
         return Ok(None);
     }
+    if let Some(error) = layout
+        .get("layout_error")
+        .and_then(serde_json::Value::as_str)
+    {
+        return Err(Error::new(
+            ErrorKind::InvalidData,
+            format!("invalid fdm_multilayer artifact layout: {error}"),
+        ));
+    }
     let Some(raw_layers) = layout.get("layers").and_then(serde_json::Value::as_array) else {
         return Err(Error::new(
             ErrorKind::InvalidData,
@@ -3367,7 +3947,10 @@ fn multilayer_field_layers(
         ));
     };
     if raw_layers.is_empty() {
-        return Ok(None);
+        return Err(Error::new(
+            ErrorKind::InvalidData,
+            "fdm_multilayer artifact layout has no native layers",
+        ));
     }
 
     let mut seen_ids = HashMap::<String, usize>::new();
@@ -3393,11 +3976,18 @@ fn multilayer_field_layers(
             let value_count = json_usize_field(raw, "value_count")?;
             let manifest_entry = serde_json::json!({
                 "id": id,
+                "layer_id": raw.get("layer_id").cloned().unwrap_or(serde_json::Value::Null),
+                "object_id": raw.get("object_id").cloned().unwrap_or(serde_json::Value::Null),
+                "magnet_name": raw.get("magnet_name").cloned().unwrap_or(serde_json::Value::Null),
                 "directory": directory,
                 "file_pattern": format!("{directory}/step_{{step:06}}.json"),
                 "native_grid": raw.get("native_grid").cloned().unwrap_or(serde_json::Value::Null),
                 "native_cell_size": raw.get("native_cell_size").cloned().unwrap_or(serde_json::Value::Null),
                 "native_origin": raw.get("native_origin").cloned().unwrap_or(serde_json::Value::Null),
+                "native_grid_fingerprint": raw.get("native_grid_fingerprint").cloned().unwrap_or(serde_json::Value::Null),
+                "native_region_mask": raw.get("native_region_mask").cloned().unwrap_or(serde_json::Value::Null),
+                "native_region_legend": raw.get("native_region_legend").cloned().unwrap_or(serde_json::Value::Null),
+                "material_fields": raw.get("material_fields").cloned().unwrap_or(serde_json::Value::Null),
                 "convolution_grid": raw.get("convolution_grid").cloned().unwrap_or(serde_json::Value::Null),
                 "convolution_cell_size": raw.get("convolution_cell_size").cloned().unwrap_or(serde_json::Value::Null),
                 "transfer_kind": raw.get("transfer_kind").cloned().unwrap_or(serde_json::Value::Null),
@@ -3430,6 +4020,7 @@ fn write_multilayer_field_manifest(
         "schema_version": "fdm_multilayer_field_manifest.v1",
         "observable": observable,
         "unit": field_unit(observable),
+        "build_identity": build_identity_json(),
         "storage_layout": "per_layer_json",
         "component_order": ["x", "y", "z"],
         "layer_count": layers.len(),
@@ -3464,14 +4055,7 @@ fn write_layer_field_file(
         .chunks_exact(3)
         .map(|value| [value[0], value[1], value[2]])
         .collect::<Vec<_>>();
-    let mut field_provenance = serde_json::json!({
-        "problem_name": context.problem_name,
-        "ir_version": context.ir_version,
-        "source_hash": context.source_hash,
-        "execution_mode": context.execution_mode,
-        "execution_engine": provenance.execution_engine,
-        "precision": provenance.precision,
-    });
+    let mut field_provenance = artifact_provenance_json(context, provenance);
     if !provenance.transport_modules.is_empty() {
         field_provenance["transport_modules"] = serde_json::json!(provenance.transport_modules);
     }
@@ -3554,42 +4138,44 @@ pub(crate) fn field_layout(plan: &fullmag_ir::ExecutionPlanIR) -> serde_json::Va
                 },
             })
         }
-        BackendPlanIR::FdmMultilayer(ml) => serde_json::json!({
-            "backend": "fdm_multilayer",
-            "mode": ml.mode,
-            "common_cells": ml.common_cells,
-            "layer_count": ml.layers.len(),
-            "layers": ml.layers.iter().scan(0usize, |offset, layer| {
-                let total_cells = layer.native_grid[0] as usize
-                    * layer.native_grid[1] as usize
-                    * layer.native_grid[2] as usize;
-                let active_cell_count = layer
-                    .native_active_mask
-                    .as_ref()
-                    .map(|mask| mask.iter().filter(|is_active| **is_active).count())
-                    .unwrap_or(total_cells);
-                let current_offset = *offset;
-                *offset += total_cells;
-                Some(serde_json::json!({
-                    "magnet_name": layer.magnet_name,
-                    "native_grid": layer.native_grid,
-                    "native_cell_size": layer.native_cell_size,
-                    "native_origin": layer.native_origin,
-                    "saturation_magnetisation": layer.material.saturation_magnetisation,
-                    "convolution_grid": layer.convolution_grid,
-                    "convolution_cell_size": layer.convolution_cell_size,
-                    "convolution_origin": layer.convolution_origin,
-                    "transfer_kind": layer.transfer_kind,
-                    "total_cell_count": total_cells,
-                    "active_mask_present": layer.native_active_mask.is_some(),
-                    "active_cell_count": active_cell_count,
-                    "inactive_cell_count": total_cells.saturating_sub(active_cell_count),
-                    "value_offset": current_offset,
-                    "value_count": total_cells,
-                }))
-            }).collect::<Vec<_>>(),
-            "planner_summary": ml.planner_summary,
-        }),
+        BackendPlanIR::FdmMultilayer(ml) => {
+            let mut value_offset = 0usize;
+            let layers = ml
+                .layers
+                .iter()
+                .map(|layer| {
+                    let descriptor = fdm_multilayer_layer_artifact_descriptor(layer, value_offset)?;
+                    value_offset = value_offset
+                        .checked_add(multilayer_native_cell_count(layer)?)
+                        .ok_or_else(|| {
+                            Error::new(
+                                ErrorKind::InvalidData,
+                                "fdm_multilayer artifact value offsets overflow usize",
+                            )
+                        })?;
+                    Ok(descriptor)
+                })
+                .collect::<std::io::Result<Vec<_>>>();
+            match layers {
+                Ok(layers) => serde_json::json!({
+                    "backend": "fdm_multilayer",
+                    "mode": ml.mode,
+                    "common_cells": ml.common_cells,
+                    "layer_count": ml.layers.len(),
+                    "layers": layers,
+                    "planner_summary": ml.planner_summary,
+                }),
+                Err(error) => serde_json::json!({
+                    "backend": "fdm_multilayer",
+                    "mode": ml.mode,
+                    "common_cells": ml.common_cells,
+                    "layer_count": ml.layers.len(),
+                    "layers": [],
+                    "layout_error": error.to_string(),
+                    "planner_summary": ml.planner_summary,
+                }),
+            }
+        }
         BackendPlanIR::Fem(fem) => serde_json::json!({
             "backend": "fem",
             "mesh_name": fem.mesh.mesh_name,
@@ -4573,6 +5159,8 @@ mod tests {
                         native_cell_size: [2e-9, 2e-9, 1e-9],
                         native_origin: [0.0, 0.0, 0.0],
                         native_active_mask: None,
+                        native_region_mask: None,
+                        native_region_legend: None,
                         initial_magnetization: vec![[1.0, 0.0, 0.0]; 2],
                         material: layer_material.clone(),
                         convolution_grid: [2, 1, 1],
@@ -4588,6 +5176,8 @@ mod tests {
                         native_cell_size: [2e-9, 2e-9, 1e-9],
                         native_origin: [0.0, 0.0, 4e-9],
                         native_active_mask: Some(vec![true, false]),
+                        native_region_mask: None,
+                        native_region_legend: None,
                         initial_magnetization: vec![[0.0, 1.0, 0.0]; 2],
                         material: layer_material,
                         convolution_grid: [2, 1, 1],
@@ -4630,6 +5220,413 @@ mod tests {
                 physics_graph: None,
             },
         }
+    }
+
+    fn heterogeneous_multilayer_material_plan() -> ExecutionPlanIR {
+        let mut plan = test_multilayer_execution_plan();
+        let BackendPlanIR::FdmMultilayer(multilayer) = &mut plan.backend_plan else {
+            panic!("expected multilayer FDM plan");
+        };
+
+        multilayer.layers[0].native_region_mask = Some(vec![1, 0]);
+        multilayer.layers[0].native_region_legend =
+            Some(vec![fullmag_ir::FdmRegionLegendEntryIR {
+                numeric_id: 1,
+                object_id: "bottom".to_string(),
+                region_id: "edge".to_string(),
+                priority: 3,
+            }]);
+        multilayer.layers[0].material.ms_field = Some(vec![700e3, 710e3]);
+        multilayer.layers[0].material.a_field = Some(vec![11e-12, 12e-12]);
+        multilayer.layers[0].material.alpha_field = Some(vec![0.01, 0.02]);
+
+        let top = &mut multilayer.layers[1];
+        top.native_grid = [3, 1, 1];
+        top.native_active_mask = Some(vec![true, true, true]);
+        top.native_region_mask = Some(vec![0, 7, 7]);
+        top.native_region_legend = Some(vec![fullmag_ir::FdmRegionLegendEntryIR {
+            numeric_id: 7,
+            object_id: "top".to_string(),
+            region_id: "edge".to_string(),
+            priority: 5,
+        }]);
+        top.initial_magnetization = vec![[0.0, 1.0, 0.0]; 3];
+        top.material.ms_field = Some(vec![810e3, 820e3, 830e3]);
+        top.material.a_field = Some(vec![13e-12, 14e-12, 15e-12]);
+        top.material.alpha_field = Some(vec![0.03, 0.04, 0.05]);
+
+        plan
+    }
+
+    #[test]
+    fn fdm_multilayer_layout_describes_native_identity_membership_and_material_fields() {
+        let plan = heterogeneous_multilayer_material_plan();
+
+        let layout = field_layout(&plan);
+        let layers = layout["layers"].as_array().expect("layer descriptors");
+        assert_eq!(layers.len(), 2);
+        assert_eq!(layers[0]["layer_id"], "layer:bottom");
+        assert_eq!(layers[0]["object_id"], "bottom");
+        assert_eq!(layers[0]["magnet_name"], "bottom");
+        assert_eq!(layers[0]["native_grid"], serde_json::json!([2, 1, 1]));
+        assert!(
+            layers[0]["native_grid_fingerprint"]
+                .as_str()
+                .is_some_and(|value| value.starts_with("sha256:") && value.len() == 71)
+        );
+        assert_eq!(layers[0]["value_offset"], 0);
+        assert_eq!(layers[0]["value_count"], 2);
+        assert_eq!(layers[1]["layer_id"], "layer:top");
+        assert_eq!(layers[1]["object_id"], "top");
+        assert_eq!(layers[1]["native_grid"], serde_json::json!([3, 1, 1]));
+        assert_eq!(layers[1]["value_offset"], 2);
+        assert_eq!(layers[1]["value_count"], 3);
+        assert_ne!(
+            layers[0]["native_grid_fingerprint"],
+            layers[1]["native_grid_fingerprint"]
+        );
+
+        assert_eq!(layers[0]["native_region_mask"]["available"], true);
+        assert_eq!(layers[0]["native_region_mask"]["value_count"], 2);
+        assert!(
+            layers[0]["native_region_mask"]["value_sha256"]
+                .as_str()
+                .is_some_and(|value| value.starts_with("sha256:"))
+        );
+        assert_eq!(layers[0]["native_region_legend"]["available"], true);
+        assert_eq!(
+            layers[0]["native_region_legend"]["entries"][0],
+            serde_json::json!({
+                "numeric_id": 1,
+                "object_id": "bottom",
+                "region_id": "edge",
+                "priority": 3,
+            })
+        );
+        assert_eq!(
+            layers[1]["native_region_legend"]["entries"][0]["region_id"], "edge",
+            "the same region_id remains bound to its layer-local object identity"
+        );
+
+        for (field_id, unit, count) in [
+            ("mat_ms", "A/m", 2),
+            ("mat_aex", "J/m", 2),
+            ("mat_alpha", "1", 2),
+        ] {
+            let field = &layers[0]["material_fields"][field_id];
+            assert_eq!(field["available"], true);
+            assert_eq!(field["unit"], unit);
+            assert_eq!(field["value_count"], count);
+            assert_eq!(field["revision"], 1);
+            assert!(
+                field["generation_id"]
+                    .as_str()
+                    .is_some_and(|value| value.starts_with("sha256:"))
+            );
+            assert!(
+                field["value_sha256"]
+                    .as_str()
+                    .is_some_and(|value| value.starts_with("sha256:"))
+            );
+        }
+        assert_eq!(layers[1]["material_fields"]["mat_ms"]["value_count"], 3);
+        assert_ne!(
+            layers[0]["material_fields"]["mat_ms"]["value_sha256"],
+            layers[1]["material_fields"]["mat_ms"]["value_sha256"]
+        );
+        assert!(layout.get("common_grid_material_fields").is_none());
+    }
+
+    #[test]
+    fn fdm_multilayer_material_and_membership_artifacts_include_build_identity() {
+        let plan = heterogeneous_multilayer_material_plan();
+        let unique_suffix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock drift")
+            .as_nanos();
+        let output_dir = std::env::temp_dir().join(format!(
+            "fullmag-artifacts-fdm-multilayer-materials-{}-{}",
+            std::process::id(),
+            unique_suffix
+        ));
+
+        let assets = write_material_field_artifacts(&output_dir, &plan)
+            .expect("multilayer material artifacts should be written");
+
+        assert_eq!(assets.len(), 6);
+        assert!(assets
+            .iter()
+            .all(|asset| asset["backend"] == "fdm_multilayer"));
+        assert!(assets
+            .iter()
+            .all(|asset| asset["build_identity"] == build_identity_json()));
+        assert!(assets.iter().all(|asset| asset.get("values").is_none()));
+        assert_eq!(
+            assets
+                .iter()
+                .filter(|asset| asset["layer_id"] == "layer:bottom")
+                .count(),
+            3
+        );
+        assert_eq!(
+            assets
+                .iter()
+                .filter(|asset| asset["layer_id"] == "layer:top")
+                .count(),
+            3
+        );
+
+        let manifest: serde_json::Value = serde_json::from_str(
+            &fs::read_to_string(output_dir.join("material-fields/fdm-multilayer/manifest.json"))
+                .expect("multilayer material manifest should exist"),
+        )
+        .expect("multilayer material manifest should parse");
+        assert_eq!(
+            manifest["schema_version"],
+            "fdm_multilayer_material_fields.v1"
+        );
+        assert_eq!(manifest["storage_layout"], "per_layer_native_grid");
+        assert_eq!(manifest["layers"].as_array().map(Vec::len), Some(2));
+        assert_eq!(manifest["build_identity"], build_identity_json());
+        assert!(manifest.get("common_grid").is_none());
+
+        let bottom_ms: serde_json::Value = serde_json::from_str(
+            &fs::read_to_string(
+                output_dir.join("material-fields/fdm-multilayer/layer-bottom/mat_ms.json"),
+            )
+            .expect("bottom mat_ms payload should exist"),
+        )
+        .expect("bottom mat_ms payload should parse");
+        assert_eq!(bottom_ms["layer_id"], "layer:bottom");
+        assert_eq!(bottom_ms["object_id"], "bottom");
+        assert_eq!(bottom_ms["native_grid"], serde_json::json!([2, 1, 1]));
+        assert_eq!(bottom_ms["field_id"], "mat_ms");
+        assert_eq!(bottom_ms["unit"], "A/m");
+        assert_eq!(bottom_ms["value_count"], 2);
+        assert_eq!(bottom_ms["values"], serde_json::json!([700e3, 710e3]));
+        assert_eq!(bottom_ms["build_identity"], build_identity_json());
+
+        let top_ms: serde_json::Value = serde_json::from_str(
+            &fs::read_to_string(
+                output_dir.join("material-fields/fdm-multilayer/layer-top/mat_ms.json"),
+            )
+            .expect("top mat_ms payload should exist"),
+        )
+        .expect("top mat_ms payload should parse");
+        assert_eq!(top_ms["layer_id"], "layer:top");
+        assert_eq!(top_ms["native_grid"], serde_json::json!([3, 1, 1]));
+        assert_eq!(top_ms["value_count"], 3);
+        assert_eq!(top_ms["values"], serde_json::json!([810e3, 820e3, 830e3]));
+        assert_eq!(top_ms["build_identity"], build_identity_json());
+        assert_ne!(bottom_ms["value_sha256"], top_ms["value_sha256"]);
+
+        let bottom_membership: serde_json::Value =
+            serde_json::from_str(
+                &fs::read_to_string(output_dir.join(
+                    "material-fields/fdm-multilayer/layer-bottom/native-region-membership.json",
+                ))
+                .expect("bottom membership payload should exist"),
+            )
+            .expect("bottom membership payload should parse");
+        assert_eq!(
+            bottom_membership["native_region_mask"],
+            serde_json::json!([1, 0])
+        );
+        assert_eq!(bottom_membership["build_identity"], build_identity_json());
+        assert_eq!(
+            bottom_membership["native_region_legend"][0]["object_id"],
+            "bottom"
+        );
+        assert_eq!(
+            bottom_membership["native_region_legend"][0]["region_id"],
+            "edge"
+        );
+
+        fs::remove_dir_all(output_dir).expect("temporary artifact directory should be removable");
+    }
+
+    #[test]
+    fn fdm_multilayer_material_artifacts_do_not_expand_scalar_fallbacks() {
+        let plan = test_multilayer_execution_plan();
+        let layout = field_layout(&plan);
+        let layers = layout["layers"].as_array().expect("layer descriptors");
+        assert!(layers.iter().all(|layer| {
+            layer["material_fields"]
+                .as_object()
+                .is_some_and(|fields| fields.is_empty())
+        }));
+
+        let unique_suffix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock drift")
+            .as_nanos();
+        let output_dir = std::env::temp_dir().join(format!(
+            "fullmag-artifacts-fdm-multilayer-no-scalar-fallback-{}-{}",
+            std::process::id(),
+            unique_suffix
+        ));
+        let assets = write_material_field_artifacts(&output_dir, &plan)
+            .expect("missing arrays should remain unmaterialized");
+        assert!(assets.is_empty());
+        assert!(
+            !output_dir
+                .join("material-fields/fdm-multilayer/layer-bottom/mat_ms.json")
+                .exists()
+        );
+        if output_dir.exists() {
+            fs::remove_dir_all(output_dir)
+                .expect("temporary artifact directory should be removable");
+        }
+    }
+
+    #[test]
+    fn fdm_multilayer_material_artifacts_reject_wrong_lengths_and_nonfinite_values() {
+        for case in ["wrong-length", "nonfinite"] {
+            let mut plan = heterogeneous_multilayer_material_plan();
+            let BackendPlanIR::FdmMultilayer(multilayer) = &mut plan.backend_plan else {
+                panic!("expected multilayer FDM plan");
+            };
+            if case == "wrong-length" {
+                multilayer.layers[0].material.ms_field = Some(vec![1.0]);
+            } else {
+                multilayer.layers[0].material.alpha_field = Some(vec![0.01, f64::NAN]);
+            }
+            let unique_suffix = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("clock drift")
+                .as_nanos();
+            let output_dir = std::env::temp_dir().join(format!(
+                "fullmag-artifacts-fdm-multilayer-invalid-{case}-{}-{}",
+                std::process::id(),
+                unique_suffix
+            ));
+
+            let error = write_material_field_artifacts(&output_dir, &plan)
+                .expect_err("invalid material field must fail closed");
+
+            assert_eq!(error.kind(), ErrorKind::InvalidData);
+            assert!(error.to_string().contains("layer:bottom"));
+            assert!(
+                !output_dir
+                    .join("material-fields/fdm-multilayer/manifest.json")
+                    .exists()
+            );
+            if output_dir.exists() {
+                assert_eq!(
+                    fs::read_dir(&output_dir)
+                        .expect("invalid output directory should be readable")
+                        .count(),
+                    0,
+                    "validation must complete before any multilayer material files are written"
+                );
+                fs::remove_dir_all(output_dir)
+                    .expect("temporary artifact directory should be removable");
+            }
+        }
+    }
+
+    #[test]
+    fn fdm_multilayer_native_grid_fingerprint_binds_active_mask_and_raw_membership() {
+        let plan = heterogeneous_multilayer_material_plan();
+        let BackendPlanIR::FdmMultilayer(multilayer) = &plan.backend_plan else {
+            panic!("expected multilayer FDM plan");
+        };
+        let layer = &multilayer.layers[0];
+        let active_count = layer
+            .native_active_mask
+            .as_deref()
+            .map(|mask| mask.iter().filter(|active| **active).count())
+            .unwrap_or(2);
+        let expected = fullmag_ir::FdmGridCertificateIR::new_with_topology_tokens(
+            layer.native_origin,
+            layer.native_grid,
+            layer.native_cell_size,
+            active_count as u64,
+            1,
+            layer.native_active_mask.as_deref(),
+            layer.native_region_mask.as_deref().unwrap(),
+        )
+        .expect("planner-native fingerprint")
+        .grid_fingerprint;
+
+        let layout = field_layout(&plan);
+        assert_eq!(
+            layout["layers"][0]["native_grid_fingerprint"],
+            format!("sha256:{expected}")
+        );
+    }
+
+    #[test]
+    fn fdm_multilayer_invalid_layout_fails_closed_without_single_grid_field_fallback() {
+        let mut plan = heterogeneous_multilayer_material_plan();
+        let BackendPlanIR::FdmMultilayer(multilayer) = &mut plan.backend_plan else {
+            panic!("expected multilayer FDM plan");
+        };
+        multilayer.layers[0].material.ms_field = Some(vec![700e3]);
+        let context = build_field_context(&fullmag_ir::ProblemIR::bootstrap_example(), &plan);
+        assert!(context.layout.get("layout_error").is_some());
+        let snapshot = FieldSnapshot {
+            name: "m".to_string(),
+            step: 1,
+            time: 1e-13,
+            solver_dt: 1e-13,
+            component_count: 3,
+            component_order: "xyz".into(),
+            location: "sample".into(),
+            scope: "full".into(),
+            revision: 1,
+            values: FieldSnapshot::flatten_vec3(vec![[1.0, 0.0, 0.0]; 5]),
+        };
+        let unique_suffix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock drift")
+            .as_nanos();
+        let fields_dir = std::env::temp_dir().join(format!(
+            "fullmag-artifacts-fdm-multilayer-invalid-layout-{}-{}",
+            std::process::id(),
+            unique_suffix
+        ));
+
+        let error = write_field_snapshot_artifact(
+            &fields_dir,
+            &context,
+            &ExecutionProvenance::default(),
+            &snapshot,
+        )
+        .expect_err("invalid multilayer layout must fail closed");
+
+        assert_eq!(error.kind(), ErrorKind::InvalidData);
+        assert!(!fields_dir.join("m/step_000001.json").exists());
+        if fields_dir.exists() {
+            fs::remove_dir_all(fields_dir)
+                .expect("temporary artifact directory should be removable");
+        }
+    }
+
+    #[test]
+    fn fdm_multilayer_membership_artifacts_reject_regions_on_inactive_cells() {
+        let mut plan = heterogeneous_multilayer_material_plan();
+        let BackendPlanIR::FdmMultilayer(multilayer) = &mut plan.backend_plan else {
+            panic!("expected multilayer FDM plan");
+        };
+        multilayer.layers[0].native_active_mask = Some(vec![true, false]);
+        multilayer.layers[0].native_region_mask = Some(vec![1, 1]);
+        let unique_suffix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock drift")
+            .as_nanos();
+        let output_dir = std::env::temp_dir().join(format!(
+            "fullmag-artifacts-fdm-multilayer-inactive-membership-{}-{}",
+            std::process::id(),
+            unique_suffix
+        ));
+
+        let error = write_material_field_artifacts(&output_dir, &plan)
+            .expect_err("inactive membership assignment must fail closed");
+
+        assert_eq!(error.kind(), ErrorKind::InvalidData);
+        assert!(error.to_string().contains("inactive cell"));
+        assert!(!output_dir.exists());
     }
 
     #[test]
@@ -4713,7 +5710,7 @@ mod tests {
     }
 
     #[test]
-    fn fdm_multilayer_persists_transfer_provenance_artifact() {
+    fn fdm_multilayer_mesh_provenance_artifacts_include_build_identity() {
         let mut plan = test_multilayer_execution_plan();
         let BackendPlanIR::FdmMultilayer(multilayer) = &mut plan.backend_plan else {
             panic!("expected multilayer FDM plan");
@@ -4759,6 +5756,28 @@ mod tests {
             value["transfers"][0]["target_grid_fingerprint"],
             value["target_grid_fingerprint"]
         );
+        assert_eq!(value["build_identity"], build_identity_json());
+
+        let grid_artifacts = crate::fdm::artifacts::grid_certificate_artifacts(&plan);
+        assert_eq!(grid_artifacts.len(), 1);
+        assert_eq!(
+            grid_artifacts[0].relative_path,
+            "mesh/fdm_grid_certificate.json"
+        );
+        let grid_value: serde_json::Value = serde_json::from_slice(&grid_artifacts[0].bytes)
+            .expect("grid certificate artifact should be JSON");
+        assert_eq!(grid_value["build_identity"], build_identity_json());
+
+        let pbc_artifacts =
+            crate::fdm::artifacts::pbc_provenance_artifacts(&plan, &ExecutionProvenance::default());
+        assert_eq!(pbc_artifacts.len(), 1);
+        assert_eq!(
+            pbc_artifacts[0].relative_path,
+            "mesh/fdm_pbc_provenance.v1.json"
+        );
+        let pbc_value: serde_json::Value = serde_json::from_slice(&pbc_artifacts[0].bytes)
+            .expect("PBC provenance artifact should be JSON");
+        assert_eq!(pbc_value["build_identity"], build_identity_json());
     }
 
     fn test_fem_execution_plan() -> ExecutionPlanIR {
@@ -7707,6 +8726,20 @@ mod tests {
         )
         .expect("metadata should parse");
         assert_eq!(metadata["field_snapshots"], 1);
+        let build_identity = &metadata["build_identity"];
+        assert_eq!(
+            build_identity["git_commit"].as_str().map(str::len),
+            Some(40)
+        );
+        assert!(matches!(
+            build_identity["worktree_state"].as_str(),
+            Some("clean" | "dirty" | "unknown")
+        ));
+        let source_snapshot = build_identity["source_snapshot_sha256"].as_str();
+        assert!(
+            source_snapshot == Some("unknown")
+                || source_snapshot.is_some_and(|value| value.len() == 64)
+        );
 
         fs::remove_dir_all(output_dir).expect("temporary artifact directory should be removable");
     }

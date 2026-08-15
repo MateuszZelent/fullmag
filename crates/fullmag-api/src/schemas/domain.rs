@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use utoipa::ToSchema;
 
 use crate::field_slice::SlicePlane;
+use crate::schemas::mesh::FdmRegionLegendEntryResource;
 use crate::schemas::relaxation::{
     RelaxationAlgorithm, StageMetricKind, StageMetricUnit, StageStopReason,
 };
@@ -112,6 +113,45 @@ pub struct FdmLayerLayoutResource {
     pub mask_ref: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub mask_provenance: Option<String>,
+    #[serde(default)]
+    pub region_membership_available: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub region_membership_revision: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub region_mask_hash: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub region_legend_hash: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub region_membership_generation_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub region_membership_ref: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub available_material_quantities: Vec<String>,
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub material_field_revisions: HashMap<String, u64>,
+}
+
+/// Thin control-plane descriptor for one native multilayer FDM membership.
+/// The cell-aligned IDs remain on the companion FMRM binary resource.
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+pub struct FdmNativeLayerRegionMembershipResource {
+    pub schema_version: String,
+    pub layer_id: String,
+    pub object_id: String,
+    pub magnet_name: String,
+    pub region_membership_revision: u64,
+    pub freshness: String,
+    pub binary_path: String,
+    pub domain_generation_id: String,
+    pub grid_fingerprint: String,
+    pub region_legend_fingerprint: String,
+    pub origin_m: [f64; 3],
+    pub counts: [u32; 3],
+    pub cell_m: [f64; 3],
+    pub cell_count: u64,
+    pub object_ids: Vec<String>,
+    pub region_legend: Vec<FdmRegionLegendEntryResource>,
+    pub encoding: String,
 }
 
 #[derive(Debug, Serialize, Deserialize, ToSchema)]

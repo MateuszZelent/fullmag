@@ -17,6 +17,7 @@ const mocks = vi.hoisted(() => ({
   components: 3,
   discretization: "fem",
   queuePatch: vi.fn(),
+  maskStatus: "ready" as "error" | "idle" | "loading" | "ready" | "stale",
   overlay: {
     available: true,
     boundary_classification: "exact",
@@ -29,8 +30,10 @@ const mocks = vi.hoisted(() => ({
     display_unit: "A/m",
     layers: {
       boundaries: true,
+      bounds: false,
       contours: false,
       mesh: true,
+      points: false,
       probes: true,
       raster: true,
       vectors: false,
@@ -58,6 +61,7 @@ vi.mock("@/kernel/KernelContext", () => ({
 }));
 
 vi.mock("@/kernel/resources/planarFieldResources", () => ({
+  planarFieldQueryFromMeta: () => ({ ok: true, query: { sample_token: "planar-sample-v2:sample" } }),
   usePlanarFieldMetaResource: () => ({
     data: {
       canonical_unit: "A/m",
@@ -65,8 +69,10 @@ vi.mock("@/kernel/resources/planarFieldResources", () => ({
       occupancy: { occupied_measure: 1 },
       sampling_method: "fdm_cell_constant",
     },
+    error: null,
     status: "ready",
   }),
+  usePlanarMaskResource: () => ({ data: mocks.maskStatus === "ready" ? new ArrayBuffer(1) : null, error: null, status: mocks.maskStatus }),
 }));
 
 vi.mock("@/kernel/resources/planarMonitorResources", () => ({
@@ -128,8 +134,17 @@ describe("PlanarVisualizationSection", () => {
     mocks.overlay.boundary_classification = "exact";
     mocks.overlay.codec = "fmcs.v4";
     mocks.components = 3;
+    mocks.maskStatus = "ready";
     mocks.discretization = "fem";
     mocks.planar.view_scope = { kind: "monitor_target" };
+  });
+
+  it("fails closed for points while the canonical occupancy mask is unavailable", () => {
+    mocks.maskStatus = "loading";
+    const html = renderToStaticMarkup(<PlanarVisualizationSection selection={selection} />);
+    expect(html).toContain('aria-label="Layer points"');
+    expect(html).toContain("disabled");
+    expect(html).toContain("Sample points require the canonical occupancy mask.");
   });
 
   it("server-renders shared quantity, component, unit, range and scope controls", () => {
@@ -156,9 +171,11 @@ describe("PlanarVisualizationSection", () => {
       "Raster opacity",
       "Range mode",
       "Layer raster",
+      "Layer bounds",
       "Layer contours",
       "Layer mesh",
       "Layer boundaries",
+      "Layer points",
       "Layer vectors",
       "Layer probes",
       "Glyph",
@@ -194,9 +211,11 @@ describe("PlanarVisualizationSection", () => {
       await act(async () => change(findControl(container, "Range maximum"), "4"));
       await act(async () => change(findControl(container, "Raster opacity"), "0.5"));
       await act(async () => toggle(findControl(container, "Layer raster")));
+      await act(async () => toggle(findControl(container, "Layer bounds")));
       await act(async () => toggle(findControl(container, "Layer contours")));
       await act(async () => toggle(findControl(container, "Layer mesh")));
       await act(async () => toggle(findControl(container, "Layer boundaries")));
+      await act(async () => toggle(findControl(container, "Layer points")));
       await act(async () => toggle(findControl(container, "Layer vectors")));
       await act(async () => toggle(findControl(container, "Layer probes")));
       await act(async () => change(findControl(container, "Vector density"), "768"));
@@ -218,12 +237,14 @@ describe("PlanarVisualizationSection", () => {
       expect(mocks.queuePatch).toHaveBeenCalledWith({ planar: { range: { mode: "manual", min: -2, max: 1 } } });
       expect(mocks.queuePatch).toHaveBeenCalledWith({ planar: { range: { mode: "manual", min: -1, max: 4 } } });
       expect(mocks.queuePatch).toHaveBeenCalledWith({ planar: { raster_opacity: 0.5 } });
-      expect(mocks.queuePatch).toHaveBeenCalledWith({ planar: { layers: { boundaries: true, contours: false, mesh: true, probes: true, raster: false, vectors: false } } });
-      expect(mocks.queuePatch).toHaveBeenCalledWith({ planar: { layers: { boundaries: true, contours: true, mesh: true, probes: true, raster: true, vectors: false } } });
-      expect(mocks.queuePatch).toHaveBeenCalledWith({ planar: { layers: { boundaries: true, contours: false, mesh: false, probes: true, raster: true, vectors: false } } });
-      expect(mocks.queuePatch).toHaveBeenCalledWith({ planar: { layers: { boundaries: false, contours: false, mesh: true, probes: true, raster: true, vectors: false } } });
-      expect(mocks.queuePatch).toHaveBeenCalledWith({ planar: { layers: { boundaries: true, contours: false, mesh: true, probes: true, raster: true, vectors: true } } });
-      expect(mocks.queuePatch).toHaveBeenCalledWith({ planar: { layers: { boundaries: true, contours: false, mesh: true, probes: false, raster: true, vectors: false } } });
+      expect(mocks.queuePatch).toHaveBeenCalledWith({ planar: { layers: { boundaries: true, bounds: false, contours: false, mesh: true, points: false, probes: true, raster: false, vectors: false } } });
+      expect(mocks.queuePatch).toHaveBeenCalledWith({ planar: { layers: { boundaries: true, bounds: true, contours: false, mesh: true, points: false, probes: true, raster: true, vectors: false } } });
+      expect(mocks.queuePatch).toHaveBeenCalledWith({ planar: { layers: { boundaries: true, bounds: false, contours: true, mesh: true, points: false, probes: true, raster: true, vectors: false } } });
+      expect(mocks.queuePatch).toHaveBeenCalledWith({ planar: { layers: { boundaries: true, bounds: false, contours: false, mesh: false, points: false, probes: true, raster: true, vectors: false } } });
+      expect(mocks.queuePatch).toHaveBeenCalledWith({ planar: { layers: { boundaries: false, bounds: false, contours: false, mesh: true, points: false, probes: true, raster: true, vectors: false } } });
+      expect(mocks.queuePatch).toHaveBeenCalledWith({ planar: { layers: { boundaries: true, bounds: false, contours: false, mesh: true, points: true, probes: true, raster: true, vectors: false } } });
+      expect(mocks.queuePatch).toHaveBeenCalledWith({ planar: { layers: { boundaries: true, bounds: false, contours: false, mesh: true, points: false, probes: true, raster: true, vectors: true } } });
+      expect(mocks.queuePatch).toHaveBeenCalledWith({ planar: { layers: { boundaries: true, bounds: false, contours: false, mesh: true, points: false, probes: false, raster: true, vectors: false } } });
       expect(mocks.queuePatch).toHaveBeenCalledWith({ planar: { resolution: { height: 256, vector_budget: 768, width: 512 } } });
       expect(mocks.queuePatch).toHaveBeenCalledWith({ planar: { vector_style: { color_mode: "orientation", length_mode: "uniform", scale: 1.5 } } });
       expect(mocks.queuePatch).toHaveBeenCalledWith({ planar: { quality: "export" } });
@@ -286,7 +307,7 @@ describe("PlanarVisualizationSection", () => {
       "an unsupported fmcs.v3 descriptor",
       () => { mocks.overlay.codec = "fmcs.v3"; },
       "Layer mesh",
-      "Mesh overlay requires the fmcs.v4 descriptor codec.",
+      "Mesh overlay requires the fmcs.v4 or fmfg.v1 descriptor codec.",
     ],
     [
       "an FDM mesh-part scope",

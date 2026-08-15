@@ -95,6 +95,7 @@ pub struct PlanarMeshOverlayDescriptor {
     pub available: bool,
     pub codec: Option<String>,
     pub boundary_classification: String,
+    pub geometry_source: String,
 }
 
 #[derive(Debug, Clone, Serialize, ToSchema)]

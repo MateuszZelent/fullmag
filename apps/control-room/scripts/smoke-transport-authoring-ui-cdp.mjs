@@ -487,17 +487,6 @@ async function replaceField(label, value, successText = "Transport resource comm
   await waitForText(".fm-inspector", successText);
 }
 
-async function visibleCrud(memberNodeId, fieldLabel, replacement, rootNodeId) {
-  await clickSelector(`[data-node-id="${memberNodeId}"]`);
-  await replaceField(fieldLabel, replacement, "Authoring resource committed.");
-  await clickSelector(`[data-node-id="${rootNodeId}"]`);
-  await clickEnabledButton("Create");
-  await waitForText(".fm-inspector", "Authoring resource committed.");
-  await clickSelector(`[data-node-id="${memberNodeId}"]`);
-  await clickEnabledButton("Delete");
-  await waitForText(".fm-inspector", "Authoring resource deleted.");
-}
-
 async function replaceFieldForGraphModule(nodeId, fieldLabel, replacement, successText) {
   await clickSelector(`[data-node-id="${nodeId}"]`);
   await replaceField(fieldLabel, replacement, successText);
@@ -1434,7 +1423,7 @@ function spinInterfaceProjections() {
 }
 
 function physicsGraphFixture() {
-  const module = (id, kind, family, label, appliesTo, dependsOn = [], activation = "active") => ({
+  const makeModule = (id, kind, family, label, appliesTo, dependsOn = [], activation = "active") => ({
     activation,
     applies_to: appliesTo,
     authored_state: "authored",
@@ -1449,16 +1438,16 @@ function physicsGraphFixture() {
   return {
     edges: [],
     modules: physicsGraphEnabled ? [
-      module("known-current", "current_transport", "prescribed_density", "Known current", [{ kind: "object", object_id: "film" }]),
-      module("future-current", "current_transport", "unsupported", "Future current", [{ kind: "object", object_id: "film" }], [], "unsupported"),
-      module("known-spin", "spin_transport", "steady", "Known spin transport", [{ kind: "object", object_id: "film" }], ["known-current"]),
-      module("future-mixing", "spin_transport", "unsupported", "Future mixing transport", [{ kind: "object", object_id: "film" }], ["known-current"], "unsupported"),
-      module("transparent", "spin_interface", "transparent", "Transparent interface", [{ kind: "cross_object", object_ids: ["film", "lead"] }], ["known-spin"]),
-      module("torque", "spin_torque", "zhang_li", "Zhang-Li torque", [{ kind: "object", object_id: "film" }]),
-      module("oersted", "oersted_field", "oersted_cylinder", "Oersted field", [{ kind: "global" }]),
+      makeModule("known-current", "current_transport", "prescribed_density", "Known current", [{ kind: "object", object_id: "film" }]),
+      makeModule("future-current", "current_transport", "unsupported", "Future current", [{ kind: "object", object_id: "film" }], [], "unsupported"),
+      makeModule("known-spin", "spin_transport", "steady", "Known spin transport", [{ kind: "object", object_id: "film" }], ["known-current"]),
+      makeModule("future-mixing", "spin_transport", "unsupported", "Future mixing transport", [{ kind: "object", object_id: "film" }], ["known-current"], "unsupported"),
+      makeModule("transparent", "spin_interface", "transparent", "Transparent interface", [{ kind: "cross_object", object_ids: ["film", "lead"] }], ["known-spin"]),
+      makeModule("torque", "spin_torque", "zhang_li", "Zhang-Li torque", [{ kind: "object", object_id: "film" }]),
+      makeModule("oersted", "oersted_field", "oersted_cylinder", "Oersted field", [{ kind: "global" }]),
       ...currentTransports
         .filter((current) => current.name === "added-current" || current.name === "region-current")
-        .map((current) => module(
+        .map((current) => makeModule(
           current.name,
           "current_transport",
           current.model,
@@ -1469,7 +1458,7 @@ function physicsGraphFixture() {
         )),
       ...spinTransports
         .filter((spin) => spin.id === "added-spin")
-        .map((spin) => module(
+        .map((spin) => makeModule(
           spin.id,
           "spin_transport",
           spin.mode,

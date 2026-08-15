@@ -16,6 +16,7 @@ import {
   resolveRetainedViewport3DScalarColorbarLegends,
   resolveViewport3DColorbarLegend,
   resolveViewport3DMeshQualityLegend,
+  resolveViewport3DVectorSegmentLengthRange,
   createViewport3DPointerHoldLifecycle,
   resolveViewport3DScalarColorbarLegend,
   resolveViewport3DScalarColorbarLegends,
@@ -45,6 +46,16 @@ function scalarColorBuffer(
     range,
   };
 }
+
+describe("viewport vector segment diagnostics", () => {
+  it("reports the physical length range of packed vector segments", () => {
+    expect(
+      resolveViewport3DVectorSegmentLengthRange(
+        new Float32Array([0, 0, 0, 3, 4, 0, 1, 1, 1, 1, 1, 1, 3, 0.5]),
+      ),
+    ).toEqual({ max: 5, min: 2 });
+  });
+});
 
 function scalarColorbarPart(
   id: string,
@@ -118,6 +129,8 @@ describe("resolveViewport3DMeshQualityLegend", () => {
   it("keeps the render revision in the commit id and uses the supplied wall clock", async () => {
     const moduleExports = (await import("./Viewport3DModule")) as unknown as {
       buildViewport3DVisualizationDebugFrameCommit?: (input: {
+        airboxVectorsVisible?: boolean;
+        airboxWireframeVisible?: boolean;
         contextLost: boolean | null;
         drawingBuffer: readonly [number, number] | null;
         nowMs: () => number;
@@ -145,6 +158,59 @@ describe("resolveViewport3DMeshQualityLegend", () => {
       drawingBuffer: [1280, 720],
     });
     expect(result?.committedAtMs).not.toBe(42);
+  });
+
+  it("binds Airbox display flags to the committed WebGL frame", async () => {
+    const moduleExports = (await import("./Viewport3DModule")) as unknown as {
+      buildViewport3DVisualizationDebugFrameCommit?: (input: {
+        airboxVectorsVisible?: boolean;
+        airboxWireframeVisible?: boolean;
+        contextLost: boolean | null;
+        drawingBuffer: readonly [number, number] | null;
+        nowMs: () => number;
+        revision: number;
+        slotId: string;
+      }) => {
+        airboxVectorsVisible?: boolean;
+        airboxWireframeVisible?: boolean;
+        commitId: string;
+      };
+    };
+    const result = moduleExports.buildViewport3DVisualizationDebugFrameCommit?.({
+      airboxVectorsVisible: true,
+      airboxWireframeVisible: false,
+      contextLost: false,
+      drawingBuffer: [1280, 720],
+      nowMs: () => 1_720_000_000_123,
+      revision: 43,
+      slotId: "viewport-main",
+    });
+
+    expect(result).toMatchObject({
+      airboxVectorsVisible: true,
+      airboxWireframeVisible: false,
+      commitId: "viewport-main:43",
+    });
+  });
+
+  it("uses the frame-bound Airbox state instead of reading DOM datasets", () => {
+    const source = readFileSync(
+      "src/modules/viewport-3d/Viewport3DModule.tsx",
+      "utf8",
+    );
+    const callbackStart = source.indexOf(
+      "const onVisualizationFrameCommitted = useCallback",
+    );
+    const callback = source.slice(
+      callbackStart,
+      source.indexOf("const handleCanvasCreated", callbackStart),
+    );
+
+    expect(callback).toContain("revision: number,");
+    expect(callback).toContain("airboxFrameState: Viewport3DAirboxFrameState");
+    expect(callback).toContain("...airboxFrameState");
+    expect(callback).not.toContain("dataset");
+    expect(callback).not.toContain("closest<HTMLElement>");
   });
 
   it("preserves mesh-part boundary face identity in viewport selection refs", () => {
@@ -1651,6 +1717,21 @@ describe("notifyMeshTopologyRendered", () => {
 });
 
 describe("Viewport3DModule scene wiring", () => {
+  it("publishes target-specific FDM Airbox render evidence", () => {
+    const source = readFileSync(
+      new URL("./Viewport3DModule.tsx", import.meta.url),
+      "utf8",
+    );
+
+    expect(source).toContain(
+      'data-fdm-airbox-target={airboxRenderView?.target.id ?? "airbox"}',
+    );
+    expect(source).toContain("data-fdm-airbox-model-count");
+    expect(source).toContain("data-fdm-airbox-vector-segment-count");
+    expect(source).toContain("data-fdm-airbox-wireframe-visible");
+    expect(source).toContain("data-fdm-airbox-vectors-visible");
+  });
+
   it("keeps ordinary camera gestures local while committing the latest pose to the registry", () => {
     const source = readFileSync(
       new URL("./Viewport3DModule.tsx", import.meta.url),

@@ -51,9 +51,57 @@ E_d=-\frac{\mu_0}{2}\sum_{c\in\mathcal A_d}V_c\,
 
 ```{math}
 :label: eq-multilayer-transfer-adjoint
-\langle P\mathbf M,\mathbf H_c\rangle_{V_c}
+\langle P\mathbf M,\mathbf H_c\rangle_{V_{\mathrm{scratch}}}
 =\langle\mathbf M,P^*\mathbf H_c\rangle_{V_n}.
 ```
+
+For a scratch cell $q$, native cell $i$, active mask $a_i\in\{0,1\}$,
+and overlap volume $\omega_{qi}$, the CPU FP64 transfer is the
+moment-density map
+
+```{math}
+:label: eq-multilayer-transfer-moment-density
+(P\mathbf M)_q=\frac{1}{V_{\mathrm{scratch},q}}
+\sum_i a_i\omega_{qi}\mathbf M_i,
+\qquad
+(P^*\mathbf H_c)_i=\frac{a_i}{V_{n,i}}
+\sum_q\omega_{qi}\mathbf H_{c,q}.
+```
+
+The sum is not renormalized by active or covered volume. Therefore a partially
+covered scratch cell carries the exact represented magnetic moment, and an
+inactive native cell contributes and receives exactly zero. When the scratch
+extent covers only part of a native cell, the operator represents exactly that
+intersection and its pull remains the volume adjoint of the same map.
+
+The cell represented by a pair kernel has dimensions $\mathbf h^K_l$. In
+`three_d`, $\mathbf h^K_l$ is the layer scratch spacing. In `two_d_stack`, it is
+$(h_{\mathrm{scratch},x},h_{\mathrm{scratch},y},h_{n,z})$: the transform has one
+computational Z sample, while the kernel retains the physical native layer
+thickness. Before the forward transform, the stored scratch moment density is
+converted to the magnetization density represented by that kernel cell:
+
+```{math}
+:label: eq-multilayer-kernel-density
+\mathbf M^K_{l,q}=\frac{V_{\mathrm{scratch},l}}{V^K_l}
+(P_l\mathbf M_l)_q,
+\qquad V^K_l=\prod_{\alpha\in\{x,y,z\}}h^K_{l,\alpha}.
+```
+
+The complete oriented contribution is consequently
+
+```{math}
+:label: eq-multilayer-composed-push-kernel-pull
+\mathbf H^n_{d\leftarrow s}
+=P_d^*\left[-\mathsf N_{d\leftarrow s}
+(\mathbf h^K_d,\mathbf h^K_s)\mathbf M^K_s\right].
+```
+
+For one native cell of volume $V_n$ fully contained in one scratch cell,
+$P\mathbf M=(V_n/V_{\mathrm{scratch}})\mathbf M$. In `two_d_stack`,
+$V^K=V_n$ when the XY cells coincide, so Eq. {eq}`eq-multilayer-kernel-density`
+restores the native magnetization density exactly and $P^*$ returns the direct
+cell-average field without a second $V_{\mathrm{scratch}}/V_n$ factor.
 
 The tensor has six independent components,
 $N_{xx},N_{yy},N_{zz},N_{xy},N_{xz},N_{yz}$. Reciprocity is always
@@ -86,14 +134,15 @@ scratch point $\mathbf r'$ and input cells $c_i$,
 $\mathbf M(\mathbf r')=\sum_i w_i\mathbf M(\mathbf r_i)$,
 $w_i=\widetilde d_i\delta_i/\sum_j\widetilde d_j\delta_j$,
 $\widetilde d_i=\lvert(\mathbf h'+\mathbf h)/2\rvert-\lvert\mathbf r'-\mathbf r_i\rvert$,
-where $\delta_i$ selects overlapping cells. In Fullmag, `VolumeWeightedTransfer`
-owns this transfer; the tests
-`volume_weighted_transfer_preserves_2d_moment_through_z_average` and
-`volume_weighted_transfer_is_adjoint_with_active_mask` check the volume moment
-and adjointness for explicitly defined native/scratch extents and masks. Do not
-extend this result to different native thicknesses
-$h_{source,z}\ne h_{destination,z}$ without an independent cell-to-continuum
-oracle.
+where $\delta_i$ selects overlapping cells. Fullmag uses the overlap geometry
+but specializes the discrete weights to Eqs.
+{eq}`eq-multilayer-transfer-moment-density`--{eq}`eq-multilayer-kernel-density`
+so that partial cells retain moment and the pull remains the volume adjoint.
+`VolumeWeightedTransfer` owns $P$ and $P^*$; the active CPU runtime owns the
+conversion from scratch volume to the physical source-cell volume represented
+by each pair kernel. This composed unequal-thickness contract is checked
+against an independent GL8 cell-to-continuum oracle; the source transfer,
+kernel, and pull are not used to construct the expected result.
 
 Appendix A of the paper, pages 6--7 of the PDF, defines irregular Newell:
 
@@ -147,6 +196,7 @@ permutations provide the remaining tensor components following Newell et al.
 | $\mathbf H'_{k,l}$ | discrete field at target cell $(k,l)$ | $\mathrm{A\,m^{-1}}$ |
 | $\mathbf H_{d,c}$ | demagnetizing field at active target cell $c$ | $\mathrm{A\,m^{-1}}$ |
 | $\mathbf H_c$ | field on the convolution grid | $\mathrm{A\,m^{-1}}$ |
+| $\mathbf H^n_{d\leftarrow s}$ | native destination field contributed by source layer $s$ | $\mathrm{A\,m^{-1}}$ |
 | $\mathbf M_s$ | source magnetization | $\mathrm{A\,m^{-1}}$ |
 | $\mathbf M$ | cell magnetization | $\mathrm{A\,m^{-1}}$ |
 | $\mathbf M_{d,c}$ | magnetization of active target cell $c$ | $\mathrm{A\,m^{-1}}$ |
@@ -164,6 +214,11 @@ permutations provide the remaining tensor components following Newell et al.
 | $V_s$ | source-cell volume | $\mathrm{m^3}$ |
 | $V_c$ | active-cell volume | $\mathrm{m^3}$ |
 | $V_n$ | native-grid cell volume | $\mathrm{m^3}$ |
+| $V_{n,i}$ | native-grid cell-$i$ volume | $\mathrm{m^3}$ |
+| $V_{\mathrm{scratch}}$ | scratch-cell volume in the transfer inner product | $\mathrm{m^3}$ |
+| $V_{\mathrm{scratch},q}$ | scratch-cell-$q$ volume | $\mathrm{m^3}$ |
+| $V_{\mathrm{scratch},l}$ | layer-$l$ scratch-cell volume | $\mathrm{m^3}$ |
+| $V^K_l$ | physical source-cell volume represented by layer-$l$ pair kernels | $\mathrm{m^3}$ |
 | $\mathrm dV'$ | source volume element | $\mathrm{m^3}$ |
 | $\mathrm dV_s$ | volume element in source $s$ | $\mathrm{m^3}$ |
 | $\mu_0$ | vacuum permeability | $\mathrm{N\,A^{-2}}$ |
@@ -174,6 +229,7 @@ permutations provide the remaining tensor components following Newell et al.
 | $\mathbf h_d$ | target-cell size in Appendix A | $\mathrm m$ |
 | $\mathbf h'$ | transfer-cell size | $\mathrm m$ |
 | $\mathbf h$ | input transfer-grid cell size | $\mathrm m$ |
+| $\mathbf h^K_l$ | physical cell dimensions represented by layer-$l$ pair kernels | $\mathrm m$ |
 | $h_x$ | cell size along x in Appendix A | $\mathrm m$ |
 | $h_y$ | cell size along y in Appendix A | $\mathrm m$ |
 | $h_{s,z}$ | source-cell thickness | $\mathrm m$ |
@@ -182,6 +238,10 @@ permutations provide the remaining tensor components following Newell et al.
 | $\mathbf r'$ | transfer point | $\mathrm m$ |
 | $P$ | native-to-scratch transfer | $1$ |
 | $P^*$ | scratch-to-native adjoint transfer | $1$ |
+| $\mathbf M^K_{l,q}$ | layer-$l$ kernel-cell magnetization density at scratch cell $q$ | $\mathrm{A\,m^{-1}}$ |
+| $\omega_{qi}$ | overlap volume of scratch cell $q$ and native cell $i$ | $\mathrm{m^3}$ |
+| $a_i$ | active-mask value for native cell $i$ | $1$ |
+| $q$ | scratch-cell index | $1$ |
 | $\mathcal A_d$ | active target cells | $1$ |
 | $w_i$ | transfer weight | $1$ |
 | $\delta_i$ | cell-overlap indicator | $1$ |
@@ -277,20 +337,23 @@ run on this revision before the documentation update.
 | Unequal 3-D cells | `irregular_shifted_kernel.rs::unequal_3d_cell_pair_matches_cubature_and_volume_weighted_reciprocity` | `ok` | cubature and $V_dN_{d\leftarrow s}=V_sN_{s\leftarrow d}^{T}$; no production 3-D qualification |
 | Rejected unequal XY | `irregular_shifted_kernel.rs::three_d_unequal_inplane_spacing_fails_closed_in_translational_kernel_builder` | `ok`, `UnsupportedGeometry` error | no silent interpretation of one translational kernel; does not preclude planner `push_pull` |
 | Reuse and workspace | `crates/fullmag-engine/src/multilayer.rs`: `regular_stack_materializes_five_unique_kernels_for_nine_ordered_pairs`, `irregular_stack_does_not_reuse_oriented_kernel_entries`, `runtime_telemetry_counts_actual_fft_pairs_and_cold_to_warm_workspace` | `ok` | full-key reuse catalog and workspace reuse; no CUDA residency proof |
-| Transfer moment/adjoint | `crates/fullmag-fdm-demag/src/transfer.rs`: `volume_weighted_transfer_preserves_2d_moment_through_z_average`, `volume_weighted_transfer_is_adjoint_with_active_mask` | `ok` (4/4 in the transfer filter) | explicit volume-transfer and mask contract; no composed continuum/native-cell `push_pull` proof |
+| Transfer moment/adjoint | `crates/fullmag-fdm-demag/src/transfer.rs`: `volume_weighted_transfer_preserves_2d_moment_through_z_average`, `volume_weighted_transfer_is_adjoint_with_active_mask`; `crates/fullmag-engine/tests/multilayer_unequal_transfer.rs` | `ok` | full-scratch-volume moment density, exact volume adjoint, active-mask zeroing, and composed unequal-thickness CPU fields against independent GL8; no CUDA or production proof |
 
 The kernel-module test recipe is intentionally explicit:
 
 ```bash
 cargo test -p fullmag-fdm-demag --test descriptors --test irregular_shifted_kernel --test shifted_newell_oracle
+cargo test -p fullmag-engine --test multilayer_unequal_transfer
 cargo test -p fullmag-engine multilayer --lib
 cargo test -p fullmag-plan multilayer --lib
+cargo test -p fullmag-runner multilayer --lib
 ```
 
-The reference result for this update is respectively `19`, `7`, `7`, `16`, and
-`25` completed tests, while the transfer filter reports `4/4`; the workspace
-benchmark remains `ignored` as a manual microbenchmark. These are CPU/Rust
-contract proofs, not a source-bound production artifact or CUDA-device proof.
+The reference result for this update is respectively `19`, `7`, `7`, `3`,
+`16`, `38`, and `24` completed tests, while the transfer filter reports `4/4`;
+the workspace benchmark remains `ignored` as a manual microbenchmark. These
+are CPU/Rust contract proofs, not a source-bound production artifact or
+CUDA-device proof.
 
 (boris-gap-matrix)=
 ## BORIS comparison and gap matrix
@@ -314,7 +377,7 @@ counterpart is an intentional gap, not an alias under another name.
 | Common-cell pitch | BORIS computes `h_common = convolution_rect / n_common` and uses the maximum cell for transfer-dimension normalization. | Fullmag treats common-cell size, native-cell size, and transform layout as separate descriptor fields; transfer or rejection is explicit, and different geometry never silently changes the native grid. | A separate pitch/volume and tolerance proof is needed for each cell-size class; equal `n_common` alone does not prove equal cells. |
 | Different XY extents/centers | `Rect_collection` expands and aligns rectangles to the maximum common size while attempting to preserve common XY projections. | The planner materializes the XY union and `push_pull`; runtime validates insertion offset, lag-zero, and destination crop, and the catalog binds each kernel to its exact layout. | CPU has a fail-closed contract and layout tests, but full extent/center coverage and GPU require fresh runtime artifacts. |
 | Different Z thicknesses | In 2D the XY cell size is common but `h_z` may differ; the kernel has independent `h_src`, `h_dst`. | Checked `compute_shifted_kernel_pair` plus Appendix-A Newell; the active CPU runner handles unequal `h_z` in `two_d_stack`. | GL8, inverse FFT, and focused CPU tests pass; production-qualified runtime/CUDA is absent. |
-| M/H transfer | Weighted average to scratch and transfer of the result back; `VEC_MeshTransfer` provides coverage/weighting. | `push_pull` and `VolumeWeightedTransfer` exist and have moment/adjointness tests, but these do not prove complete integration in every runner. | Report native→scratch→native transfer, active masks, volumes, and transfer error separately from the kernel. |
+| M/H transfer | Weighted average to scratch and transfer of the result back; `VEC_MeshTransfer` provides coverage/weighting. | CPU `push_pull` stores moment density over the full scratch cell, converts it to the pair-kernel source volume before FFT, and applies the exact volume adjoint on pull. | Independent GL8 covers the bounded one-cell unequal-thickness composition; broader extents, CUDA, and production artifacts remain separate gates. |
 | Full XYZ offset | Pair kernels use target minus source positions; BORIS is not limited to a `z_shift`. | The pair API accepts a full center-to-center offset; the runner converts lower-corner origins to cell centers. | For different 3D pitches, translational FFT is rejected; the direct tensor is the oracle. |
 | Kernel reuse and parity | BORIS has a kernel-module catalog, identical-pair reuse, and controlled ±Z symmetries. | CPU runtime has `kernel_catalog` (one tensor per unique `KernelReuseKey`) and `pair_bindings`; the key includes mode, oriented offset, both cell sizes, volumes, transform/padding/crop, representation, precision, scheme, and boundary. Telemetry reports hits/misses, pair and FFT counts, and cold/warm memory. | The catalog/workspace implementation is complete for the CPU descriptor path, but does not yet qualify every BORIS family (reduced/full, X/Y/XYZ shift) or CUDA. Any fingerprint change must invalidate reuse. |
 | Storage/symmetry | BORIS distinguishes real/reduced and full-complex storage; 2D zShift has specific real/imag components. | `TensorDemagKernel` stores six full complex components; the reduced-storage fast path is not runtime-qualified. | Reduction, sign reconstruction, and memory tests are needed separately for CPU/CUDA. |
@@ -504,17 +567,24 @@ pairs may still use the explicitly bounded point-dipole asymptotic branch. The
 independent verifier has its own Newell/GL8 implementation and canonicalizes lag
 signs through tensor parity, so it does not compare unstable, separately
 computed negative lags. Full field and energy coverage has been run for the
-verified L=1/L=2 identity cases; a small heterogeneous `push_pull` case has a
-separate complete verifier. Every destination spectrum is zeroed, sources are
-accumulated, then inverse FFT and `pull_h` return the field to the native grid.
+verified L=1/L=2 identity cases. A small heterogeneous `push_pull` case checks
+both layer orientations and all magnetization axes against an independent GL8
+cell-to-continuum oracle, plus volume reciprocity and the cross-energy
+derivative. Every destination spectrum is zeroed, sources are accumulated,
+then inverse FFT and the volume-adjoint pull return the field to the native
+grid.
 Runtime keeps a catalog of unique tensors and ordered pair bindings; FFT
 workspace, scratch lines, and convolution buffers are allocated once and reused
 between refreshes. Telemetry distinguishes cold/warm bytes, hits/misses, FFT and
 pair counts, and fingerprint invalidation, but `residency=host` is not proof of
 CUDA device residency.
-`push_m` preserves the volume moment; `pull_h` must implement $P^*$. If the
-transfer does not satisfy this identity, energy is computed on the convolution
-grid or the lane remains gated.
+`VolumeWeightedTransfer::push_m_into` stores the exact active moment divided by
+the full scratch-cell volume; `pull_h_adjoint_into` implements $P^*$. The CPU
+refresh multiplies the pushed density by
+$V_{\mathrm{scratch}}/V^K$ before the FFT so that an unequal-thickness 2D pair
+kernel receives the magnetization density of its physical source cell. If any
+native cell is clipped by the scratch extent, only the same geometric
+intersection participates in both push and pull.
 
 (implementation-mapping)=
 ## Implementation mapping
@@ -522,9 +592,11 @@ grid or the lane remains gated.
 `compute_newell_kernels` and `compute_newell_kernels_shifted` build the exact 2D
 corner tensor and the explicitly bounded shifted 3D tensor;
 `accumulate_tensor_convolution` performs the spectral multiplication; and
-`negate_field` applies the conventional field sign. Transfers are
-`push_m_with_boundary_policy` and `pull_h_with_boundary_policy`, and the planner
-is `plan_fdm_multilayer`. Before constructing layers, the planner checks that
+`negate_field` applies the conventional field sign. Active multilayer transfers
+are `VolumeWeightedTransfer::push_m_into` and
+`VolumeWeightedTransfer::pull_h_adjoint_into`; the kernel-density conversion is
+owned by `compute_demag_fields_checked`, and the planner is
+`plan_fdm_multilayer`. Before constructing layers, the planner checks that
 `boundary_correction` is omitted or equal to `none` and that both tunings are
 omitted; non-neutral intent stops planning because `FdmMultilayerPlanIR` cannot
 preserve it. `build_kernel_catalog` deduplicates kernels by the full
@@ -548,10 +620,15 @@ separate from the production builder and also checks the asymptotic signed
 far-field branch.
 
 Transfer has dedicated source tests: `volume_weighted_transfer_preserves_2d_moment_through_z_average`
-checks the Z average and its volume-weighted moment, while
+checks full-scratch-volume density and its volume-weighted moment, while
 `volume_weighted_transfer_is_adjoint_with_active_mask` checks the volume-adjoint
-identity and zeroing of inactive cells. These are transfer-operator contracts,
-not an independent continuum/native-cell proof of the complete composed step.
+identity and zeroing of inactive cells.
+`crates/fullmag-engine/tests/multilayer_unequal_transfer.rs` independently
+integrates rectangular source and destination cells with GL8 cubature. It
+checks both unequal-thickness orientations, all three magnetization axes,
+volume-weighted reciprocity, the cross-energy derivative, partial scratch-cell
+moment preservation, and inactive-cell zeroing. This is scoped executable CPU
+evidence, not a managed production or CUDA artifact.
 
 The Python scenarios in
 `tests/standard_problems/mumag/sp4/fdm/multilayer_convolution/` are real
@@ -643,8 +720,10 @@ the qualification status.
 | CUDA demag energy blocks | backends/fdm/gpu/cuda/runtime/reductions_fp64.cu | demag_energy_blocks_kernel | reduces FP64 demag-energy blocks | FDM CUDA FP64, current owner | planned managed CUDA energy parity | planned; no fresh managed device run | [master@762ca086b](https://github.com/MateuszZelent/fullmag/commit/762ca086b6085c842e28fab1c4a37a788f710fcf) |
 | CUDA demag energy reduction | backends/fdm/gpu/cuda/runtime/reductions_fp64.cu | reduce_demag_energy_fp64 | launches and reduces FP64 demag energy | FDM CUDA FP64, current owner | planned managed CUDA energy parity | planned; no fresh managed device run | [master@762ca086b](https://github.com/MateuszZelent/fullmag/commit/762ca086b6085c842e28fab1c4a37a788f710fcf) |
 | Irregular Newell A1--A4 | crates/fullmag-fdm-demag/src/shifted_kernel.rs | compute_shifted_kernel_pair | current unequal-cell pair-kernel owner; `newell.rs::newell_g` remains the publication-formula anchor | FDM CPU kernel plus theory/oracle boundary | crates/fullmag-fdm-demag/tests/irregular_shifted_kernel.rs | implemented and oracle-tested in scoped CPU cases; not production-qualified | [master@762ca086b](https://github.com/MateuszZelent/fullmag/commit/762ca086b6085c842e28fab1c4a37a788f710fcf) |
-| Push transfer | crates/fullmag-fdm-demag/src/transfer.rs | push_m_with_boundary_policy | maps magnetization to convolution grid | FDM CPU transfer | crates/fullmag-fdm-demag/src/transfer.rs::volume_weighted_transfer_preserves_2d_moment_through_z_average | physically validated for the stated Z moment contract; no unequal-native-cell-thickness continuum oracle | [master@762ca086b](https://github.com/MateuszZelent/fullmag/commit/762ca086b6085c842e28fab1c4a37a788f710fcf) |
-| Pull transfer | crates/fullmag-fdm-demag/src/transfer.rs | pull_h_with_boundary_policy | samples field onto native grid | FDM CPU transfer | crates/fullmag-fdm-demag/src/transfer.rs::volume_weighted_transfer_is_adjoint_with_active_mask | physically validated for the stated volume-adjoint and mask contract; no unequal-native-cell-thickness continuum oracle | [master@762ca086b](https://github.com/MateuszZelent/fullmag/commit/762ca086b6085c842e28fab1c4a37a788f710fcf) |
+| Transfer contract metadata | crates/fullmag-fdm-demag/src/descriptors.rs | volume_weighted_moment_preserving | declares full-scratch-volume moment density, exact volume adjoint, and active-mask preservation | FDM backend-neutral descriptor | crates/fullmag-fdm-demag/tests/descriptors.rs::transfer_contract_is_explicitly_volume_weighted_and_mask_preserving | executable descriptor contract; not production-qualified | current source snapshot |
+| Push transfer | crates/fullmag-fdm-demag/src/transfer.rs | VolumeWeightedTransfer::push_m_into | stores active native moment as density over the full scratch cell | FDM CPU transfer | crates/fullmag-fdm-demag/src/transfer.rs::volume_weighted_transfer_preserves_2d_moment_through_z_average | volume moment and partial-scratch contract; not production-qualified | current source snapshot |
+| Pull transfer | crates/fullmag-fdm-demag/src/transfer.rs | VolumeWeightedTransfer::pull_h_adjoint_into | applies the exact full-scratch/native-volume adjoint and inactive-mask zeroing | FDM CPU transfer | crates/fullmag-fdm-demag/src/transfer.rs::volume_weighted_transfer_is_adjoint_with_active_mask | volume-adjoint contract; not production-qualified | current source snapshot |
+| Unequal transfer composition | crates/fullmag-engine/tests/multilayer_unequal_transfer.rs | unequal_two_d_push_pull_matches_direct_oracle_for_both_orientations_and_axes | independently checks push→kernel→pull for unequal layer thicknesses | FDM CPU FP64 | cargo test `multilayer_unequal_transfer` | scoped GL8 field, reciprocity, energy-derivative, partial-cell, and mask evidence; no CUDA or production artifact | current source snapshot |
 | Planner | crates/fullmag-plan/src/fdm.rs | plan_fdm_multilayer | resolves public multilayer FDM plan | FDM planner | crates/fullmag-plan/src/tests.rs::multilayer_planner_resolves_common_grid_modes_without_overriding_explicit_mode | executable planner contract only | [master@762ca086b](https://github.com/MateuszZelent/fullmag/commit/762ca086b6085c842e28fab1c4a37a788f710fcf) |
 | Planner | crates/fullmag-plan/src/fdm.rs | plan_fdm_multilayer | resolves public multilayer FDM plan and rejects non-neutral boundary intent before layer construction | FDM planner | crates/fullmag-plan/src/tests.rs::multilayer_planner_accepts_exactly_neutral_boundary_intent; crates/fullmag-plan/src/tests.rs::multilayer_planner_rejects_every_non_neutral_boundary_intent | executable fail-closed planner contract only; no runtime/device proof | [3fcf40d6d](https://github.com/MateuszZelent/fullmag/commit/3fcf40d6d8e2c2f106031ae99481539832014349) |
 | CPU catalog and workspace | crates/fullmag-engine/src/multilayer.rs | build_kernel_catalog | deduplicates kernels and binds ordered layer pairs to one descriptor | FDM CPU FP64 | crates/fullmag-engine/src/multilayer.rs::runtime_telemetry_counts_actual_fft_pairs_and_cold_to_warm_workspace | runtime-verified CPU, not production-qualified | [dd25252ecd](https://github.com/MateuszZelent/fullmag/commit/dd25252ecd184fe60835e518ae0e466ed2fd2544) |

@@ -279,6 +279,16 @@ export const DATA_DOMAIN_FDM_MULTILAYER_LAYER_ACTIVE_MASK_PATH = openApiV2Path(
   "/v2/sessions/current/data/domain/fdm-multilayer-layers/{layer_id}/active-mask",
 );
 
+export const DATA_DOMAIN_FDM_MULTILAYER_LAYER_REGION_MEMBERSHIP_PATH =
+  openApiV2Path(
+    "/v2/sessions/current/data/domain/fdm-multilayer-layers/{layer_id}/region-membership",
+  );
+
+export const DATA_DOMAIN_FDM_MULTILAYER_LAYER_REGION_MEMBERSHIPS_PATH =
+  openApiV2Path(
+    "/v2/sessions/current/data/domain/fdm-multilayer-layers/{layer_id}/region-memberships",
+  );
+
 export const DATA_DOMAIN_TOPOLOGY_PATH = openApiV2Path(
   "/v2/sessions/current/data/domain/topology",
 );

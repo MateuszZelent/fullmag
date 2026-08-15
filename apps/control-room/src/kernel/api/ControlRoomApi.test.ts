@@ -4463,6 +4463,55 @@ describe("ControlRoomApi", () => {
     ]);
   });
 
+  it("loads a native multilayer layer membership descriptor and companion binary", async () => {
+    const requests: string[] = [];
+    const binary = new Uint8Array(68);
+    binary.set([..."FMRM"].map((value) => value.charCodeAt(0)), 0);
+    const api = new ControlRoomApi({
+      baseUrl: "http://127.0.0.1:8765",
+      fetchImpl: async (url, init) => {
+        requests.push(`${init?.method ?? "GET"} ${String(url)}`);
+        if (String(url).endsWith("region-memberships")) {
+          return jsonResponse({
+            binary_path:
+              "/v2/sessions/current/data/domain/fdm-multilayer-layers/layer%3Abottom/region-membership",
+            cell_count: 1,
+            cell_m: [1, 1, 1],
+            counts: [1, 1, 1],
+            domain_generation_id: "generation-7",
+            encoding: "FMRM:u32_membership_le",
+            freshness: "current",
+            grid_fingerprint: `sha256:${"0".repeat(64)}`,
+            layer_id: "layer:bottom",
+            magnet_name: "bottom",
+            object_id: "body",
+            object_ids: ["body"],
+            origin_m: [0, 0, 0],
+            region_legend: [],
+            region_legend_fingerprint: `sha256:${"0".repeat(64)}`,
+            region_membership_revision: 9,
+            schema_version: "fdm_multilayer_region_membership.v1",
+          });
+        }
+        return binaryResponse(binary.buffer, { headers: { etag: '"native-membership"' } });
+      },
+    });
+
+    const descriptor = await api.data.domain.fdmMultilayerLayerRegionMemberships(
+      "layer:bottom",
+    );
+    const membership = await api.data.domain.fdmMultilayerLayerRegionMembershipBytes(
+      "layer:bottom",
+    );
+
+    expect(descriptor.layer_id).toBe("layer:bottom");
+    expect(membership.status).toBe("ready");
+    expect(requests).toEqual([
+      "GET http://127.0.0.1:8765/v2/sessions/current/data/domain/fdm-multilayer-layers/layer%3Abottom/region-memberships",
+      "GET http://127.0.0.1:8765/v2/sessions/current/data/domain/fdm-multilayer-layers/layer%3Abottom/region-membership",
+    ]);
+  });
+
   it("treats an unpublished FDM membership descriptor as not applicable", async () => {
     const api = new ControlRoomApi({
       baseUrl: "http://127.0.0.1:8765",

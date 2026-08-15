@@ -304,7 +304,7 @@ describe("selectExplorerNode", () => {
     });
   });
 
-  it("keeps the shared FDM Airbox visualization child on the structured-grid target", () => {
+  it("canonicalizes a legacy FDM Airbox visualization selection", () => {
     const kernel = makeKernel();
     selectExplorerNode(kernel, {
       id: "model:airbox:visualization",
@@ -318,13 +318,39 @@ describe("selectExplorerNode", () => {
       kind: "airbox.visualization",
       nodeId: "model:airbox:visualization",
       ref: {
-        type: "fdm-domain",
-        visualizationTargetId: "fdm-universe-outside-support",
+        type: "airbox",
+        visualizationTargetId: "airbox",
       },
     });
+    expect(resolveVisualizationTargetFromSelection(kernel.selection.get())).toEqual(
+      AIRBOX_VISUALIZATION_TARGET,
+    );
   });
 
-  it("preserves the FDM Airbox lane and Debug support after object Results", () => {
+  it("routes a multilayer Airbox visualization child to the canonical target", () => {
+    const kernel = makeKernel();
+    selectExplorerNode(kernel, {
+      id: "model:airbox:visualization",
+      kind: "airbox.visualization",
+      label: "Visualization",
+      parentId: "model:airbox",
+      visualizationTargetId: "airbox",
+    }, "explorer");
+
+    expect(kernel.selection.get()).toMatchObject({
+      kind: "airbox.visualization",
+      nodeId: "model:airbox:visualization",
+      ref: {
+        type: "airbox",
+        visualizationTargetId: "airbox",
+      },
+    });
+    expect(resolveVisualizationTargetFromSelection(kernel.selection.get())).toEqual(
+      AIRBOX_VISUALIZATION_TARGET,
+    );
+  });
+
+  it("canonicalizes legacy FDM Airbox Visualization and Debug after object Results", () => {
     const kernel = makeKernel();
     selectExplorerNode(kernel, {
       id: "model:object:smoke_box:visualization",
@@ -348,9 +374,9 @@ describe("selectExplorerNode", () => {
       visualizationTargetId: "fdm-universe-outside-support",
     }, "explorer");
     expect(kernel.selection.get().ref).toMatchObject({
-      kind: "mesh.grid.universe-outside-support",
-      type: "fdm-domain",
-      visualizationTargetId: "fdm-universe-outside-support",
+      kind: "airbox.visualization",
+      type: "airbox",
+      visualizationTargetId: "airbox",
     });
     selectExplorerNode(kernel, {
       id: "model:airbox:visualization:debug",
@@ -361,7 +387,7 @@ describe("selectExplorerNode", () => {
     }, "explorer");
 
     expect(resolveVisualizationDebugTarget(kernel.selection.get().ref)).toEqual({
-      id: "fdm-universe-outside-support",
+      id: "airbox",
       kind: "airbox",
       selectionKind: "airbox.visualization.debug",
     });
@@ -403,7 +429,7 @@ describe("selectExplorerNode", () => {
     );
   });
 
-  it("keeps the shared FDM Airbox root on the outside-support target", () => {
+  it("keeps the shared FDM Airbox root on the canonical Airbox target", () => {
     const domainMeta: DomainMetaResource = {
       bounds: { min: [0, 0, 0], max: [2, 1, 1] },
       coordinate_system: "cartesian",
@@ -432,7 +458,7 @@ describe("selectExplorerNode", () => {
 
     expect(kernel.selection.get().ref).toMatchObject({
       type: "airbox",
-      visualizationTargetId: "fdm-universe-outside-support",
+      visualizationTargetId: "airbox",
     });
   });
 
@@ -603,7 +629,7 @@ describe("selectExplorerNode", () => {
     });
   });
 
-  it("keeps the shared Airbox visualization kind while selecting the FDM outside-support target", () => {
+  it("does not expose the FDM outside-support carrier through legacy Airbox visualization", () => {
     const kernel = makeKernel();
     const node: ExplorerNode = {
       id: "model:airbox:visualization",
@@ -620,11 +646,10 @@ describe("selectExplorerNode", () => {
       label: "Visualization",
       nodeId: "model:airbox:visualization",
       ref: {
-        kind: "mesh.grid.universe-outside-support",
+        kind: "airbox.visualization",
         nodeId: "model:airbox:visualization",
-        scope: "universe-outside-support",
-        type: "fdm-domain",
-        visualizationTargetId: "fdm-universe-outside-support",
+        type: "airbox",
+        visualizationTargetId: "airbox",
       },
     });
   });

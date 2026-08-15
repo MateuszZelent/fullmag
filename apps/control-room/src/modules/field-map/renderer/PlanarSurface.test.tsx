@@ -193,7 +193,7 @@ describe("PlanarSurface lifecycle", () => {
       expect(raster.data[7]).toBe(255);
       expect(onRenderEvidence).toHaveBeenLastCalledWith({
         glyphCount: 0,
-        overlayCounts: { contours: 0, meshSegments: 0 },
+        overlayCounts: { boundsSegments: 0, contours: 0, meshSegments: 0, pointMarkers: 0 },
         raster: {
           checksum: "fnv1a32:4c4ff03b",
           max: 20,
@@ -366,6 +366,52 @@ describe("PlanarSurface lifecycle", () => {
       expect(onRenderEvidence).not.toHaveBeenCalled();
       expect(canvas.getAttribute("data-probes-enabled")).toBe("false");
       expect(canvas.getAttribute("tabindex")).toBe("-1");
+    } finally {
+      await act(async () => root.unmount());
+      if (previousWorker) Object.defineProperty(globalThis, "Worker", previousWorker); else Reflect.deleteProperty(globalThis, "Worker");
+      dom.restore();
+    }
+  });
+
+  it("emits positive FMFG mesh evidence without starting a raster worker", async () => {
+    const dom = installSimulationPreparationTestDom();
+    const container = dom.document.createElement("div");
+    const root = createRoot(container as unknown as Element);
+    const context = {
+      beginPath: vi.fn(), clearRect: vi.fn(), drawImage: vi.fn(), imageSmoothingEnabled: true,
+      lineTo: vi.fn(), lineWidth: 0, moveTo: vi.fn(), restore: vi.fn(), save: vi.fn(), scale: vi.fn(), stroke: vi.fn(), strokeStyle: "", translate: vi.fn(),
+    } as unknown as CanvasRenderingContext2D;
+    const originalCreateElement = dom.document.createElement.bind(dom.document);
+    dom.document.createElement = ((tagName: string) => {
+      const element = originalCreateElement(tagName);
+      if (tagName.toLowerCase() === "canvas") Object.assign(element, { getContext: vi.fn(() => context), height: 0, width: 0 });
+      return element;
+    }) as typeof dom.document.createElement;
+    const previousWorker = Object.getOwnPropertyDescriptor(globalThis, "Worker");
+    Object.defineProperty(globalThis, "Worker", { configurable: true, value: class { constructor() { throw new Error("worker must not start"); } } });
+    const onRenderEvidence = vi.fn();
+    const overlay = new ArrayBuffer(176);
+    const view = new DataView(overlay);
+    [..."FMFG"].forEach((value, index) => view.setUint8(index, value.charCodeAt(0)));
+    view.setUint32(4, 1, true); view.setUint32(8, 1, true);
+    [0, 1, 0, 1].forEach((value, index) => view.setFloat64(32 + index * 8, value, true));
+    [0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1].forEach((value, index) => view.setFloat64(64 + index * 8, value, true));
+    [0, 0, 1, 0].forEach((value, index) => view.setFloat32(160 + index * 4, value, true));
+    const model = buildFieldMapRenderModel({
+      bounds: [0, 1, 0, 1], canonicalUnit: "A/m", component: "normal",
+      frame: { normal: [0, 0, 1], uAxis: [1, 0, 0], vAxis: [0, 1, 0] },
+      layers: { boundaries: false, contours: false, mesh: true, probes: false, raster: false, vectors: false },
+      meshOverlay: overlay,
+      meshOverlayDescriptor: { available: true, boundaryClassification: "unavailable", codec: "fmfg.v1", geometrySource: "fdm_structured_grid" },
+      range: { mode: "auto" }, resolution: [1, 1], sampleIdentity: "fmfg-only", scalar: new Float64Array([1]),
+    });
+    try {
+      await act(async () => { root.render(<PlanarSurface model={model} onRenderEvidence={onRenderEvidence} />); });
+      expect(onRenderEvidence).toHaveBeenLastCalledWith(expect.objectContaining({
+        overlayCounts: expect.objectContaining({ meshSegments: 1 }),
+        raster: null,
+        sampleIdentity: "fmfg-only",
+      }));
     } finally {
       await act(async () => root.unmount());
       if (previousWorker) Object.defineProperty(globalThis, "Worker", previousWorker); else Reflect.deleteProperty(globalThis, "Worker");

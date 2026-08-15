@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import re
 from pathlib import Path
 
@@ -44,19 +45,35 @@ def test_contract_recipe_runs_repository_contracts_without_fixtures() -> None:
     assert "synthetic" not in recipe.lower()
 
 
-def test_cpu_runtime_recipe_is_fresh_managed_and_fail_closed() -> None:
+def test_cpu_runtime_recipe_is_fresh_source_bound_and_fail_closed() -> None:
     recipe = recipe_source("verify-fdm-multilayer-demag-runtime")
     for required in (
         'lane="cpu-fp64"',
         "FULLMAG_FDM_EXECUTION=cpu",
         "measure_runtime.py",
         "runtime_verify.py",
+        "scenario_l1.py",
+        "scenario_identity.py",
+        "scenario_unequal_small.py",
+        "verify_fdm_multilayer_independent_oracle.py",
+        "--max-target-cells 8192",
+        "--max-energy-cells 8192",
+        "verify_fdm_multilayer_transfer_parity.py",
+        "independent_oracle_incomplete_without_transfer",
+        "scientific-qualification.json",
+        "capture_source_snapshot_identity.py",
+        'hash_inputs "$run_root/input-sha256.txt"',
+        'hash_inputs "$run_root/input-sha256-post.txt"',
+        'cmp -s "$run_root/input-sha256.txt" "$run_root/input-sha256-post.txt"',
+        '\\\"status\\\":\\\"qualified\\\"',
         "mktemp -d",
         "chmod -R a-w",
         "runtime_artifacts_missing",
     ):
         assert required in recipe
     assert "fixture" not in recipe.lower()
+    assert "cpu_fp64_scientific_qualification_not_evaluated" not in recipe
+    assert "write_status \"cpu_fp64_scientific" not in recipe
 
 
 def test_repository_control_scenarios_are_distinct_real_inputs() -> None:
@@ -68,35 +85,130 @@ def test_repository_control_scenarios_are_distinct_real_inputs() -> None:
     assert "bottom.Ms = 1.0e-30" in b_only.read_text(encoding="utf-8")
 
 
-def test_airbox_runtime_requires_separate_runtime_carrier() -> None:
+def test_airbox_runtime_requires_two_bound_carriers_and_convergence() -> None:
     recipe = recipe_source("verify-fdm-multilayer-airbox-runtime")
     for required in (
         'lane="cpu-fp64"',
         "scope_kind=airbox",
         "H_demag",
         "airbox_carrier",
-        "not_qualified",
+        "FULLMAG_FDM_MULTILAYER_AIRBOX_CANDIDATE",
+        'FULLMAG_FDM_MULTILAYER_AIRBOX_CARRIER_${lane_suffix}',
+        'FULLMAG_FDM_MULTILAYER_AIRBOX_CANDIDATE_${lane_suffix}',
+        "verify_fdm_multilayer_airbox_carrier.py",
+        "verify_fdm_multilayer_airbox_convergence.py",
+        "airbox-convergence.json",
+        "airbox_report_carrier_build_identity_missing",
+        "airbox_report_carrier_build_identity_mismatch",
+        "source-snapshot-pre.v1.json",
+        "source-snapshot-post.v1.json",
+        'hash_inputs "$run_root/input-sha256.txt"',
+        'hash_inputs "$run_root/input-sha256-post.txt"',
+        'airbox_input_hash_drift_after_validation',
+        "capture_source_snapshot_identity.py",
+        "fdm_multilayer_airbox_source_runtime.v1",
+        "candidate/artifacts/metadata.json",
+        '.execution_provenance.execution_engine == "cuda_native_multilayer_convolution"',
+        '.qualification_status == "qualified"',
+        '\\\"status\\\":\\\"qualified\\\"',
         "runtime_verify.py",
     ):
         assert required in recipe
     assert "runtime.json" in recipe
+    assert "airbox_carrier_identity_verified_but_science_not_qualified" not in recipe
 
 
-def test_production_recipe_aggregates_lanes_and_records_gpu_reason_code() -> None:
+def test_production_recipe_aggregates_explicit_child_reports_fail_closed() -> None:
     recipe = recipe_source("verify-fdm-multilayer-demag-production")
     for required in (
         "verify-fdm-multilayer-demag-runtime cpu-fp64",
         "verify-fdm-multilayer-airbox-runtime cpu-fp64",
         "verify-fdm-multilayer-cuda-runtime cuda-fp64",
         "verify-fdm-multilayer-cuda-runtime cuda-fp32",
+        'child_report_root="$run_root/children"',
+        'FULLMAG_FDM_MULTILAYER_REPORT_ROOT="$child_report_root"',
+        'demag-cpu-fp64.run.*',
+        'airbox-cpu-fp64.run.*',
+        'cuda-fp64.run.*',
+        'cuda-fp32.run.*',
+        'airbox-cuda-fp64.run.*',
+        'airbox-cuda-fp32.run.*',
+        '.status == "qualified"',
+        '.status == "verified"',
+        'production-summary.json',
+        'bounded_validation_status',
+        'phase_e_production_matrix_incomplete',
+        'missing_production_coverage',
+        'managed CUDA FP64 L=1,2,4,8 identity/push_pull matrix',
         "cuda-fp64",
         "cuda-fp32",
         "reason_code",
         "cuda_managed_artifact_missing",
-        "not_qualified",
     ):
         assert required in recipe
     assert "verify-fdm-multilayer-demag-runtime cuda-" not in recipe
+    assert "cuda_lane_not_qualified" not in recipe
+    assert '\\\"status\\\":\\\"qualified\\\"' not in recipe
+
+
+def test_multilayer_runtime_recipes_honor_and_normalize_report_root() -> None:
+    for name in (
+        "verify-fdm-multilayer-demag-runtime",
+        "verify-fdm-multilayer-airbox-runtime",
+        "verify-fdm-multilayer-demag-production",
+    ):
+        recipe = recipe_source(name)
+        assert "FULLMAG_FDM_MULTILAYER_REPORT_ROOT" in recipe
+        assert 'report_parent="$(realpath "$report_parent")"' in recipe
+
+    production = recipe_source("verify-fdm-multilayer-demag-production")
+    assert production.count(
+        'FULLMAG_FDM_MULTILAYER_REPORT_ROOT="$child_report_root"'
+    ) == 6
+
+
+def test_bounded_status_is_written_only_after_the_scientific_validators() -> None:
+    cpu = recipe_source("verify-fdm-multilayer-demag-runtime")
+    assert cpu.index('--output "$run_root/independent-oracle.json"') < cpu.index(
+        'write_qualified; echo "qualified real CPU FP64'
+    )
+    assert cpu.index('--json-output "$run_root/transfer-parity.json"') < cpu.index(
+        'write_qualified; echo "qualified real CPU FP64'
+    )
+
+    airbox = recipe_source("verify-fdm-multilayer-airbox-runtime")
+    assert airbox.index(
+        'scripts/verify_fdm_multilayer_airbox_convergence.py "$carrier" "$candidate"'
+    ) < airbox.index(
+        'write_qualified; echo "qualified runtime-origin Airbox H_demag convergence'
+    )
+
+    production = recipe_source("verify-fdm-multilayer-demag-production")
+    summary = production.index('> "$run_root/production-summary.json"')
+    bounded_status = production.index("write_bounded_status; echo")
+    assert production.index(
+        "verify-fdm-multilayer-airbox-runtime cuda-fp32"
+    ) < summary < bounded_status
+    assert bounded_status < production.rindex("exit 3")
+
+
+def test_capability_matrix_does_not_promote_unqualified_multilayer_cuda() -> None:
+    matrix = json.loads(
+        (ROOT / "docs/specs/capability-matrix-v0.json").read_text(encoding="utf-8")
+    )
+    feature = next(
+        item
+        for item in matrix["features"]
+        if item["id"] == "fdm_multilayer_fixed_explicit_rk"
+    )
+    assert feature["lanes"]["fdm_gpu_production"] == "implemented"
+    assert feature["validated_workloads"] == []
+    assert "no current managed source-bound CUDA runtime/parity receipt" in feature[
+        "notes"
+    ]
+    assert "Do not expose this row as production_executable or validated" in feature[
+        "notes"
+    ]
 
 
 def test_webgl_matrix_recipe_owns_a_strict_cpu_fp64_multilayer_session() -> None:
@@ -136,6 +248,19 @@ def test_webgl_matrix_recipe_owns_a_strict_cpu_fp64_multilayer_session() -> None
         "manifest.json",
         "fullmag.log",
         "fdm-multilayer-layout.json",
+        "source-snapshot.v1.json",
+        "source-snapshot-post.v1.json",
+        "capture_source_snapshot_identity.py",
+        "FULLMAG_SOURCE_GIT_COMMIT=",
+        "FULLMAG_SOURCE_WORKTREE_STATE=",
+        "FULLMAG_SOURCE_SNAPSHOT_SHA256=",
+        "CONTROL_ROOM_FDM_MULTILAYER_EXPECTED_GIT_COMMIT=",
+        "CONTROL_ROOM_FDM_MULTILAYER_EXPECTED_WORKTREE_STATE=",
+        "CONTROL_ROOM_FDM_MULTILAYER_EXPECTED_SOURCE_SNAPSHOT_SHA256=",
+        "CONTROL_ROOM_FDM_MULTILAYER_EXPECTED_SOURCE_SNAPSHOT_PATH=",
+        "runtime_binary_sha256=",
+        "sha256sum \"$runtime_binary\"",
+        "CONTROL_ROOM_FDM_MULTILAYER_EXPECTED_RUNTIME_BINARY_SHA256=",
         "sim_pid=$!",
         'kill "$sim_pid"',
         'wait "$sim_pid"',
@@ -157,10 +282,30 @@ def test_webgl_matrix_recipe_normalizes_named_port_overrides() -> None:
     assert 'case "$api_port" in api_port=*) api_port="$(printf "%s" "$api_port" | cut -d= -f2-)" ;; esac' in recipe
 
 
+def test_webgl_matrix_recipe_waits_for_completed_airbox_runtime() -> None:
+    recipe = recipe_source("run-fdm-multilayer-webgl-matrix-cpu")
+    readiness = recipe.index('status.get("solver", {}).get("state") == "completed"')
+    smoke = recipe.index("smoke:fdm-multilayer-webgl-matrix")
+
+    assert 'airbox.get("carrier_available") is True' in recipe
+    assert 'airbox.get("h_demag_available") is True' in recipe
+    assert 'airbox.get("carrier_fingerprint")' in recipe
+    assert readiness < smoke
+
+
 def test_webgl_matrix_recipe_escapes_port_bind_address_for_nested_bash() -> None:
     recipe = recipe_source("run-fdm-multilayer-webgl-matrix-cpu")
     assert 'sock.bind((\\"127.0.0.1\\", 0))' in recipe
     assert "sock.bind(('127.0.0.1', 0))" not in recipe
+
+
+def test_webgl_matrix_recipe_keeps_nested_jq_expression_inside_outer_bash() -> None:
+    recipe = recipe_source("run-fdm-multilayer-webgl-matrix-cpu")
+    assert (
+        'source_worktree_state="$(jq -er "if .source_snapshot_dirty then '
+        '\\"dirty\\" else \\"clean\\" end" "$source_snapshot")"'
+    ) in recipe
+    assert "source_worktree_state=\"$(jq -er '" not in recipe
 
 
 def test_webgl_matrix_recipe_isolates_the_cpu_only_launcher_build() -> None:
@@ -184,3 +329,33 @@ def test_webgl_matrix_recipe_isolates_the_cpu_only_launcher_build() -> None:
         "setsid env"
     )
     assert recipe.count("just build fullmag") == 1
+
+
+def test_webgl_matrix_recipe_records_stable_failure_status_and_seals_evidence() -> None:
+    recipe = recipe_source("run-fdm-multilayer-webgl-matrix-cpu")
+
+    for required in (
+        'reason_code="webgl_matrix_unclassified_failure"',
+        'reason_code="source_drift_after_runtime"',
+        'reason_code="runtime_binary_changed_after_build"',
+        'reason_code="webgl_receipt_package_failed"',
+        '\\"reason_code\\":\\"%s\\"',
+        'receipt_inputs="$run_root/receipt-inputs-sha256.txt"',
+        'receipt_index="$run_root/receipt-index.v1.json"',
+        'receipt_index_sha256="$run_root/receipt-index.v1.json.sha256"',
+        'sha256sum "$evidence"',
+        'sha256sum "$manifest"',
+        'sha256sum "$receipt_inputs"',
+        'sha256sum "$receipt_index" > "$receipt_index_sha256"',
+        'fdm_multilayer_webgl_receipt.v1',
+        'chmod -R a-w "$run_root"',
+    ):
+        assert required in recipe
+
+    manifest_write = recipe.index('\\"reason_code\\":%s,\\"exit_code\\":%s')
+    receipt_inputs_write = recipe.index('> "$receipt_inputs"')
+    receipt_index_write = recipe.index('fdm_multilayer_webgl_receipt.v1')
+    receipt_index_hash = recipe.index('sha256sum "$receipt_index" > "$receipt_index_sha256"')
+    seal = recipe.index('chmod -R a-w "$run_root"')
+
+    assert manifest_write < receipt_inputs_write < receipt_index_write < receipt_index_hash < seal

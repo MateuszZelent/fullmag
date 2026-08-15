@@ -11,15 +11,17 @@ import {
 
 const layers = {
   boundaries: true,
+  bounds: false,
   contours: false,
   mesh: true,
+  points: false,
   probes: true,
   raster: true,
   vectors: false,
 };
 
 describe("planar presentation semantics", () => {
-  it.each(["raster", "contours", "mesh", "boundaries", "vectors", "probes"] as const)(
+  it.each(["raster", "bounds", "contours", "mesh", "boundaries", "points", "vectors", "probes"] as const)(
     "maps the %s control to the full typed layers resource patch",
     (layer) => {
       expect(planarLayerPatch(layers, layer)).toEqual({

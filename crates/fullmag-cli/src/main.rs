@@ -167,8 +167,21 @@ fn main() -> Result<()> {
             validate_ir(&ir)?;
             println!("IR validation passed for {}", path.display());
         }
-        Command::PlanJson { path, backend } => {
-            let ir = read_ir(&path)?;
+        Command::PlanJson {
+            path,
+            backend,
+            execution_plan,
+        } => {
+            let mut ir = read_ir(&path)?;
+            if execution_plan {
+                if let Some(backend) = backend {
+                    ir.backend_policy.requested_backend = BackendTarget::from(backend);
+                }
+                validate_ir(&ir)?;
+                let plan = fullmag_plan::plan(&ir).map_err(|error| anyhow!(error.to_string()))?;
+                println!("{}", serde_json::to_string_pretty(&plan)?);
+                return Ok(());
+            }
             validate_ir(&ir)?;
             let plan = ir
                 .plan_for(backend.map(BackendTarget::from))
@@ -739,6 +752,19 @@ fn resolved_backend_from_problem(problem: &ProblemIR) -> BackendTarget {
 }
 
 fn runtime_selection_string(problem: &ProblemIR, key: &str, default: &str) -> String {
+    if key == "device" {
+        if let Some(device) = problem
+            .problem_meta
+            .runtime_metadata
+            .get("runtime_device_override")
+            .and_then(Value::as_object)
+            .and_then(|override_value| override_value.get("device"))
+            .and_then(Value::as_str)
+        {
+            return device.to_string();
+        }
+    }
+
     problem
         .problem_meta
         .runtime_metadata
@@ -862,11 +888,7 @@ fn local_engine_resolution(
                     false,
                 )
             } else {
-                (
-                    Some("fdm_cpu_reference".to_string()),
-                    Some("CPU FDM".to_string()),
-                    false,
-                )
+                (None, Some("Local CUDA FDM unavailable".to_string()), true)
             }
         }
         _ => match resolved_backend {
@@ -1548,6 +1570,45 @@ mod tests {
                 engine_label.as_deref(),
                 Some("Local time-domain FEM unavailable")
             );
+        }
+    }
+
+    #[test]
+    fn launcher_device_override_supersedes_authored_runtime_selection() {
+        let mut problem = ProblemIR::bootstrap_example();
+        problem
+            .problem_meta
+            .runtime_metadata
+            .insert(
+                "runtime_selection".to_string(),
+                serde_json::json!({"device": "cpu"}),
+            );
+        problem
+            .problem_meta
+            .runtime_metadata
+            .insert(
+                "runtime_device_override".to_string(),
+                serde_json::json!({"device": "gpu", "source": "managed_launcher"}),
+            );
+
+        assert_eq!(runtime_selection_string(&problem, "device", "auto"), "gpu");
+    }
+
+    #[test]
+    fn unavailable_local_fdm_cuda_requires_managed_runtime() {
+        let mut problem = ProblemIR::bootstrap_example();
+        problem.backend_policy.requested_backend = BackendTarget::Fdm;
+
+        let (engine_id, engine_label, requires_managed_runtime) =
+            local_engine_resolution(&problem, BackendTarget::Fdm, "fdm-cuda", false);
+        if fullmag_runner::is_native_fdm_cuda_available() {
+            assert_eq!(engine_id.as_deref(), Some("fdm_cuda"));
+            assert_eq!(engine_label.as_deref(), Some("CUDA FDM"));
+            assert!(!requires_managed_runtime);
+        } else {
+            assert!(engine_id.is_none());
+            assert_eq!(engine_label.as_deref(), Some("Local CUDA FDM unavailable"));
+            assert!(requires_managed_runtime);
         }
     }
 

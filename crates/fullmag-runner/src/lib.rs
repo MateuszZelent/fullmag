@@ -448,7 +448,8 @@ pub use timestep_qualification::{
 pub use types::{
     fem_eigen_mesh_generation_id, fem_frequency_response_mesh_generation_id,
     fem_mesh_topology_fingerprint, fem_plan_mesh_generation_id, live_preview_values_sha256,
-    ExecutionProvenance, FemCrossoverDecision, FemEigenRunResult, FemMeshObjectSegment,
+    AuxiliaryArtifact, ExecutionProvenance, FemCrossoverDecision, FemEigenRunResult,
+    FemMeshObjectSegment,
     FemMeshPartPayload, FemMeshPayload, InitialTimestepReason, LegacyDtPolicy,
     LiveFieldMaterializationState, LiveFieldMaterializationStatus, LivePreviewField,
     LivePreviewRequest, LiveVectorFieldSnapshot, LlgTimestepCapabilityId,
@@ -3716,11 +3717,18 @@ pub fn snapshot_problem_preview(
             let engine = dispatch::resolve_fdm_engine_for_plan_with_trail(problem, fdm)?.engine;
             dispatch::snapshot_fdm_preview(engine, fdm, request)
         }
-        BackendPlanIR::FdmMultilayer(_) => Err(RunError {
-            message:
-                "interactive preview snapshot is not supported for FDM multilayer backends yet"
-                    .to_string(),
-        }),
+        BackendPlanIR::FdmMultilayer(fdm) => {
+            let engine = dispatch::resolve_fdm_engine(problem)?;
+            if engine != dispatch::FdmEngine::CpuReference {
+                return Err(RunError {
+                    message: format!(
+                        "FDM multilayer interactive snapshot requires CPU reference; resolved {:?} is not supported",
+                        engine
+                    ),
+                });
+            }
+            multilayer_reference::snapshot_preview(fdm, request)
+        }
         BackendPlanIR::Fem(fem) => {
             let engine = dispatch::resolve_fem_engine(problem)?;
             dispatch::snapshot_fem_preview(engine, fem, request)
@@ -3748,11 +3756,18 @@ pub fn snapshot_problem_vector_fields(
             let engine = dispatch::resolve_fdm_engine_for_plan_with_trail(problem, fdm)?.engine;
             dispatch::snapshot_fdm_vector_fields(engine, fdm, quantities, request)
         }
-        BackendPlanIR::FdmMultilayer(_) => Err(RunError {
-            message:
-                "interactive vector-field cache is not supported for FDM multilayer backends yet"
-                    .to_string(),
-        }),
+        BackendPlanIR::FdmMultilayer(fdm) => {
+            let engine = dispatch::resolve_fdm_engine(problem)?;
+            if engine != dispatch::FdmEngine::CpuReference {
+                return Err(RunError {
+                    message: format!(
+                        "FDM multilayer interactive vector snapshots require CPU reference; resolved {:?} is not supported",
+                        engine
+                    ),
+                });
+            }
+            multilayer_reference::snapshot_vector_fields(fdm, quantities, request)
+        }
         BackendPlanIR::Fem(fem) => {
             let engine = dispatch::resolve_fem_engine(problem)?;
             dispatch::snapshot_fem_vector_fields(engine, fem, quantities, request)
@@ -3767,6 +3782,81 @@ pub fn snapshot_problem_vector_fields(
                     .to_string(),
         }),
     }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ProblemVectorFieldBatch {
+    pub fields: Vec<LivePreviewField>,
+    pub auxiliary_artifacts: Vec<AuxiliaryArtifact>,
+}
+
+/// Materialize vector fields together with separately scoped carriers such as
+/// the target-only CPU FDM multilayer Airbox field.
+pub fn snapshot_problem_vector_field_batch(
+    problem: &ProblemIR,
+    quantities: &[&str],
+    request: &LivePreviewRequest,
+) -> Result<ProblemVectorFieldBatch, RunError> {
+    let plan = fullmag_plan::plan(problem)?;
+    let fields = match &plan.backend_plan {
+        BackendPlanIR::Fdm(fdm) => {
+            let engine = dispatch::resolve_fdm_engine_for_plan_with_trail(problem, fdm)?.engine;
+            dispatch::snapshot_fdm_vector_fields(engine, fdm, quantities, request)
+        }
+        BackendPlanIR::FdmMultilayer(fdm) => {
+            let engine = dispatch::resolve_fdm_engine(problem)?;
+            if engine != dispatch::FdmEngine::CpuReference {
+                return Err(RunError {
+                    message: format!(
+                        "FDM multilayer interactive vector snapshots require CPU reference; resolved {:?} is not supported",
+                        engine
+                    ),
+                });
+            }
+            multilayer_reference::snapshot_vector_fields(fdm, quantities, request)
+        }
+        BackendPlanIR::Fem(fem) => {
+            let engine = dispatch::resolve_fem_engine(problem)?;
+            dispatch::snapshot_fem_vector_fields(engine, fem, quantities, request)
+        }
+        BackendPlanIR::FemEigen(_) => Err(RunError {
+            message: "interactive vector-field snapshots are not supported for FEM eigenmode plans"
+                .to_string(),
+        }),
+        BackendPlanIR::FemFrequencyResponse(_) => Err(RunError {
+            message:
+                "interactive vector-field snapshots are not supported for FEM frequency-response plans"
+                    .to_string(),
+        }),
+    }?;
+    let auxiliary_artifacts = match &plan.backend_plan {
+        BackendPlanIR::FdmMultilayer(fdm)
+            if quantities.iter().any(|quantity| {
+                fullmag_quantities::normalize_quantity_id(quantity)
+                    .ok()
+                    .is_some_and(|quantity| quantity.as_str() == "H_demag")
+            }) =>
+        {
+            let engine = dispatch::resolve_fdm_engine(problem)?;
+            if engine != dispatch::FdmEngine::CpuReference {
+                return Err(RunError {
+                    message: format!(
+                        "FDM multilayer Airbox materialization requires CPU reference; resolved {:?} is not supported",
+                        engine
+                    ),
+                });
+            }
+            crate::fdm::cpu::airbox_observation::materialize_airbox_observation_snapshot(
+                problem, fdm,
+            )
+            .map_err(|message| RunError { message })?
+        }
+        _ => Vec::new(),
+    };
+    Ok(ProblemVectorFieldBatch {
+        fields,
+        auxiliary_artifacts,
+    })
 }
 
 pub fn resolve_runtime_engine(problem: &ProblemIR) -> Result<RuntimeEngineInfo, RunError> {

@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
 import { FMRM_INACTIVE_REGION_ID } from "@/kernel/api/codecs";
@@ -13,6 +15,11 @@ import {
   resolveFdmCuboidMembershipRevision,
   transferablesForFdmCuboidBuildResult,
 } from "./fdmCuboidBuildModel";
+
+const fdmCuboidBuildModelSource = readFileSync(
+  join(process.cwd(), "src/modules/viewport-3d/layers/fdmCuboidBuildModel.ts"),
+  "utf8",
+);
 
 function allActiveMembership(cellCount: number): Uint32Array {
   return new Uint32Array(cellCount);
@@ -37,6 +44,12 @@ function fieldVector(
 }
 
 describe("FDM cuboid realized membership", () => {
+  it("does not scan a copied selected set for every matching cell after the budget is full", () => {
+    expect(fdmCuboidBuildModelSource).not.toContain(
+      "const inactiveReplacement = [...selected]",
+    );
+  });
+
   it("builds a native layer model from only active FMBM cells", () => {
     const domain = {
       bounds: null,

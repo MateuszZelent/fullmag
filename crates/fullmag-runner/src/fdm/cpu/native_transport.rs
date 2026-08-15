@@ -14,9 +14,8 @@ use sha2::{Digest, Sha256};
 
 use super::spin_transport::{
     stable_transport_interface_id, FdmChargeFaceCurrentSnapshot, FdmChargeInterfaceSnapshot,
-    FdmOerstedClosureProvenanceSnapshot, FdmSpinFaceCurrentSnapshot,
-    FdmSpinInterfaceFluxSnapshot, FdmSpinReactionChannelsSnapshot,
-    FdmSpinTransportModuleSnapshot, FdmSpinTransportTelemetry,
+    FdmOerstedClosureProvenanceSnapshot, FdmSpinFaceCurrentSnapshot, FdmSpinInterfaceFluxSnapshot,
+    FdmSpinReactionChannelsSnapshot, FdmSpinTransportModuleSnapshot, FdmSpinTransportTelemetry,
     FdmStructuredCurrentSourceCutSnapshot,
 };
 use crate::types::RunError;
@@ -175,15 +174,17 @@ fn c_string(label: &str, value: &str) -> Result<CString, RunError> {
 }
 
 fn cell_coordinates(grid: GridShape, cell: u64) -> Result<[usize; 3], RunError> {
-    let cell = usize::try_from(cell)
-        .map_err(|_| run_error("native Oersted cell index exceeds usize"))?;
+    let cell =
+        usize::try_from(cell).map_err(|_| run_error("native Oersted cell index exceeds usize"))?;
     let cells = grid
         .nx
         .checked_mul(grid.ny)
         .and_then(|value| value.checked_mul(grid.nz))
         .ok_or_else(|| run_error("native Oersted grid cell count overflows usize"))?;
     if cell >= cells {
-        return Err(run_error("native Oersted source-cut cell is outside the grid"));
+        return Err(run_error(
+            "native Oersted source-cut cell is outside the grid",
+        ));
     }
     let x = cell % grid.nx;
     let yz = cell / grid.nx;
@@ -1078,30 +1079,15 @@ fn flat_internal_face(
         .ok_or_else(|| run_error("native Oersted y-face count overflows usize"))?;
     let (flat, density) = match axis {
         0 if positive == [negative[0] + 1, negative[1], negative[2]] => {
-            let local = x_face_index(
-                grid,
-                positive[0],
-                negative[1],
-                negative[2],
-            );
+            let local = x_face_index(grid, positive[0], negative[1], negative[2]);
             (local, charge.current_x[local])
         }
         1 if positive == [negative[0], negative[1] + 1, negative[2]] => {
-            let local = y_face_index(
-                grid,
-                negative[0],
-                positive[1],
-                negative[2],
-            );
+            let local = y_face_index(grid, negative[0], positive[1], negative[2]);
             (x_count + local, charge.current_y[local])
         }
         2 if positive == [negative[0], negative[1], negative[2] + 1] => {
-            let local = z_face_index(
-                grid,
-                negative[0],
-                negative[1],
-                positive[2],
-            );
+            let local = z_face_index(grid, negative[0], negative[1], positive[2]);
             (x_count + y_count + local, charge.current_z[local])
         }
         _ => {
@@ -1166,33 +1152,33 @@ fn solve_public_oersted(
             .position(|candidate| *candidate == label)
             .ok_or_else(|| run_error("native Oersted active component label is missing"))
     };
-    let mut inspect_face = |density: f64,
-                            negative: Option<usize>,
-                            positive: Option<usize>|
-     -> Result<(), RunError> {
-        if !density.is_finite() {
-            return Err(run_error("native Oersted face current contains a non-finite value"));
-        }
-        if density == 0.0 {
-            return Ok(());
-        }
-        let negative_active = negative.is_some_and(|cell| conductor_mask[cell] != 0);
-        let positive_active = positive.is_some_and(|cell| conductor_mask[cell] != 0);
-        if !(negative_active && positive_active) {
-            return Err(run_error(
-                "native Oersted face current leaks across the conductor or union-grid boundary",
-            ));
-        }
-        let negative = negative.expect("negative active face side exists");
-        let positive = positive.expect("positive active face side exists");
-        if labels[negative] != labels[positive] {
-            return Err(run_error(
-                "native Oersted nonzero face current crosses disconnected components",
-            ));
-        }
-        driven_components[component_slot(labels[negative])?] = true;
-        Ok(())
-    };
+    let mut inspect_face =
+        |density: f64, negative: Option<usize>, positive: Option<usize>| -> Result<(), RunError> {
+            if !density.is_finite() {
+                return Err(run_error(
+                    "native Oersted face current contains a non-finite value",
+                ));
+            }
+            if density == 0.0 {
+                return Ok(());
+            }
+            let negative_active = negative.is_some_and(|cell| conductor_mask[cell] != 0);
+            let positive_active = positive.is_some_and(|cell| conductor_mask[cell] != 0);
+            if !(negative_active && positive_active) {
+                return Err(run_error(
+                    "native Oersted face current leaks across the conductor or union-grid boundary",
+                ));
+            }
+            let negative = negative.expect("negative active face side exists");
+            let positive = positive.expect("positive active face side exists");
+            if labels[negative] != labels[positive] {
+                return Err(run_error(
+                    "native Oersted nonzero face current crosses disconnected components",
+                ));
+            }
+            driven_components[component_slot(labels[negative])?] = true;
+            Ok(())
+        };
     for z in 0..grid.nz {
         for y in 0..grid.ny {
             for x in 0..=grid.nx {
@@ -1249,9 +1235,8 @@ fn solve_public_oersted(
                 ];
                 let divergence = terms[0] + terms[1] + terms[2];
                 measured_max_abs_divergence = measured_max_abs_divergence.max(divergence.abs());
-                divergence_scale = divergence_scale.max(
-                    terms[0].abs() + terms[1].abs() + terms[2].abs(),
-                );
+                divergence_scale =
+                    divergence_scale.max(terms[0].abs() + terms[1].abs() + terms[2].abs());
             }
         }
     }
@@ -1452,24 +1437,26 @@ fn solve_public_oersted(
     let ffi_source_cuts = source_cuts
         .iter()
         .zip(&source_cut_strings)
-        .map(|(cut, strings)| ffi::fullmag_fdm_cpu_oersted_source_cut_v1 {
-            stable_id: strings.stable_id.as_ptr(),
-            component_label: cut.component_label,
-            ordered_internal_face_ids: ffi::fullmag_fdm_cpu_oersted_const_u64_buffer_v1 {
-                data: cut.ordered_internal_face_ids.as_ptr(),
-                length: cut.ordered_internal_face_ids.len() as u64,
+        .map(
+            |(cut, strings)| ffi::fullmag_fdm_cpu_oersted_source_cut_v1 {
+                stable_id: strings.stable_id.as_ptr(),
+                component_label: cut.component_label,
+                ordered_internal_face_ids: ffi::fullmag_fdm_cpu_oersted_const_u64_buffer_v1 {
+                    data: cut.ordered_internal_face_ids.as_ptr(),
+                    length: cut.ordered_internal_face_ids.len() as u64,
+                },
+                ordered_normals: ffi::fullmag_fdm_cpu_oersted_const_i8_buffer_v1 {
+                    data: cut.ordered_normals.as_ptr(),
+                    length: cut.ordered_normals.len() as u64,
+                },
+                drive_id: strings.drive_id.as_ptr(),
+                drive_kind: strings.drive_kind.as_ptr(),
+                drive_value: cut.drive_value,
+                drive_si_unit: strings.drive_si_unit.as_ptr(),
+                revision: cut.revision,
+                digest: strings.digest.as_ptr(),
             },
-            ordered_normals: ffi::fullmag_fdm_cpu_oersted_const_i8_buffer_v1 {
-                data: cut.ordered_normals.as_ptr(),
-                length: cut.ordered_normals.len() as u64,
-            },
-            drive_id: strings.drive_id.as_ptr(),
-            drive_kind: strings.drive_kind.as_ptr(),
-            drive_value: cut.drive_value,
-            drive_si_unit: strings.drive_si_unit.as_ptr(),
-            revision: cut.revision,
-            digest: strings.digest.as_ptr(),
-        })
+        )
         .collect::<Vec<_>>();
     let certificate_version = c_string("certificate version", OERSTED_CERTIFICATE)?;
     let certificate_digest_c = c_string("certificate digest", &certificate_digest)?;
@@ -1503,11 +1490,10 @@ fn solve_public_oersted(
         divergence_tolerance_a_per_m3: divergence_tolerance,
         exterior_current_tolerance_a: exterior_current_tolerance,
         measured_max_abs_divergence_a_per_m3: measured_max_abs_divergence,
-        measured_component_exterior_current_a:
-            ffi::fullmag_fdm_cpu_oersted_const_f64_buffer_v1 {
-                data: measured_component_exterior_current_a.as_ptr(),
-                length: measured_component_exterior_current_a.len() as u64,
-            },
+        measured_component_exterior_current_a: ffi::fullmag_fdm_cpu_oersted_const_f64_buffer_v1 {
+            data: measured_component_exterior_current_a.as_ptr(),
+            length: measured_component_exterior_current_a.len() as u64,
+        },
         source_cuts: ffi_source_cuts.as_ptr(),
         source_cut_count: ffi_source_cuts.len() as u64,
         imported_certification_method: empty.as_ptr(),
@@ -1516,8 +1502,7 @@ fn solve_public_oersted(
     let target_mask_digest_c = c_string("target-mask digest", &target_mask_digest)?;
     let source_identity_c = c_string("source identity", source_identity)?;
     let envelope_digest_c = c_string("envelope digest", &envelope_digest)?;
-    let trusted_snapshot_digest_c =
-        c_string("trusted-snapshot digest", &trusted_snapshot_digest)?;
+    let trusted_snapshot_digest_c = c_string("trusted-snapshot digest", &trusted_snapshot_digest)?;
     let request = ffi::fullmag_fdm_cpu_oersted_request_v1 {
         abi_version: ffi::FULLMAG_FDM_CPU_OERSTED_ABI_V1,
         struct_size: size_of::<ffi::fullmag_fdm_cpu_oersted_request_v1>() as u32,
@@ -1598,7 +1583,9 @@ fn solve_public_oersted(
         || result.evaluation_time_s.to_bits() != stage_time_s.to_bits()
         || result.evaluated_envelope_multiplier.to_bits() != multiplier.to_bits()
     {
-        return Err(run_error("native M1 public Oersted result identity contract failed"));
+        return Err(run_error(
+            "native M1 public Oersted result identity contract failed",
+        ));
     }
     for (label, actual, expected) in [
         ("API", &result.api_version[..], OERSTED_API),
@@ -1648,7 +1635,9 @@ fn solve_public_oersted(
         validate_version_text(&format!("Oersted {label}"), actual, expected)?;
     }
     if field.iter().any(|value| !value.is_finite()) {
-        return Err(run_error("native M1 public Oersted field contains a non-finite value"));
+        return Err(run_error(
+            "native M1 public Oersted field contains a non-finite value",
+        ));
     }
     Ok(NativeOersted {
         field_apm: field
@@ -2087,17 +2076,20 @@ pub(super) fn solve_native_m1_snapshot(
         })
         .collect::<Result<Vec<_>, RunError>>()?;
     let (oersted_field_apm, oersted_closure_provenance) = if descriptor.oersted_source_bound {
-        let closure = descriptor.structured_current_closure.as_ref().ok_or_else(|| {
-            missing_public_fdm_closure_error(
-                grid,
-                cell_size,
-                descriptor,
-                &charge,
-                multiplier,
-                state_revision,
-                stage_time_s,
-            )
-        })?;
+        let closure = descriptor
+            .structured_current_closure
+            .as_ref()
+            .ok_or_else(|| {
+                missing_public_fdm_closure_error(
+                    grid,
+                    cell_size,
+                    descriptor,
+                    &charge,
+                    multiplier,
+                    state_revision,
+                    stage_time_s,
+                )
+            })?;
         let solved = solve_public_oersted(
             grid,
             cell_size,

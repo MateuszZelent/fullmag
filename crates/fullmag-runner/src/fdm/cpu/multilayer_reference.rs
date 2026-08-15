@@ -25,13 +25,15 @@ use fullmag_fdm_demag::{
 use fullmag_ir::{ExecutionPrecision, FdmMultilayerPlanIR, IntegratorChoice, OutputIR};
 
 use crate::artifact_pipeline::{ArtifactPipelineSender, ArtifactRecorder};
-use crate::derived_fields::compute_torque_field;
 use crate::derived_fields::max_torque_residual_apm_from_field;
 use crate::fdm::artifacts::select_state_observable_field;
 use crate::fdm::multilayer::make_multilayer_step_stats as make_step_stats;
 use crate::fdm::schedules::record_due_fields;
-use crate::preview::flatten_vectors;
-use crate::quantities::{quantity_spatial_domain, quantity_unit};
+use crate::preview::{flatten_vectors, select_observables};
+use crate::quantities::{
+    active_fdm_multilayer_preview_quantities, normalized_quantity_name, quantity_spatial_domain,
+    quantity_spec, quantity_unit,
+};
 use crate::relaxation::{
     llg_overdamped_uses_pure_damping, RelaxationEnergyPlateauWindow, RelaxationTorqueConfirmation,
 };
@@ -64,7 +66,22 @@ pub(crate) fn execute_reference_fdm_multilayer(
     artifact_writer: Option<ArtifactPipelineSender>,
 ) -> Result<ExecutedRun, RunError> {
     crate::fdm::reject_adaptive_multilayer_plan(plan)?;
-    crate::fdm::validate_multilayer_grid_budget(plan)?;
+    if let Some(layer) = plan
+        .layers
+        .iter()
+        .find(|layer| layer.transfer_kind == "unsupported")
+    {
+        return Err(RunError {
+            message: format!(
+                "FDM multilayer runtime refuses unsupported transfer_kind='unsupported' for layer_id='{}' magnet_name='{}' before context or kernel allocation",
+                layer.layer_id, layer.magnet_name
+            ),
+        });
+    }
+    crate::fdm::validate_multilayer_grid_budget(
+        plan,
+        fullmag_fdm_demag::KernelAdmissionModel::CpuFp64Catalog,
+    )?;
     if until_seconds <= 0.0 {
         return Err(RunError {
             message: "until_seconds must be positive".to_string(),
@@ -90,6 +107,30 @@ pub(crate) fn execute_reference_fdm_multilayer(
     } else {
         None
     };
+    if let Some(runtime) = demag_runtime.as_ref() {
+        let telemetry = runtime.telemetry();
+        let logical_bytes = telemetry
+            .kernel_catalog_spectrum_bytes
+            .checked_add(telemetry.kernel_pair_binding_bytes)
+            .ok_or_else(|| RunError {
+                message: "FDM multilayer CPU runtime kernel memory overflow".to_string(),
+            })?;
+        if telemetry.unique_kernel_count as u32 != plan.planner_summary.estimated_unique_kernels
+            || telemetry.pair_count as u32 != plan.planner_summary.estimated_pair_kernels
+            || logical_bytes != plan.planner_summary.estimated_kernel_bytes as usize
+        {
+            return Err(RunError {
+                message: format!(
+                    "FDM multilayer CPU runtime catalog disagrees with planner: runtime_unique={} planner_unique={} runtime_pairs={} planner_pairs={} runtime_bytes={logical_bytes} planner_bytes={}",
+                    telemetry.unique_kernel_count,
+                    plan.planner_summary.estimated_unique_kernels,
+                    telemetry.pair_count,
+                    plan.planner_summary.estimated_pair_kernels,
+                    plan.planner_summary.estimated_kernel_bytes
+                ),
+            });
+        }
+    }
 
     let initial_magnetization = flatten_layers(
         &states
@@ -415,7 +456,8 @@ fn build_multilayer_live_preview_fields(
     observables: &StateObservables,
     source_step: u64,
 ) -> Vec<LivePreviewField> {
-    let common_grid = plan.common_cells;
+    let carrier_grid = multilayer_carrier_grid(plan);
+    let active_mask = multilayer_active_mask(plan);
     let mut fields = Vec::with_capacity(if plan.enable_demag { 2 } else { 1 });
     let mut push_field = |quantity: &'static str, values: &[[f64; 3]]| {
         if values.is_empty() {
@@ -432,8 +474,8 @@ fn build_multilayer_live_preview_fields(
             unit: quantity_unit(quantity).to_string(),
             spatial_kind: "fdm_multilayer".to_string(),
             quantity_domain: quantity_spatial_domain(quantity).to_string(),
-            preview_grid: common_grid,
-            original_grid: common_grid,
+            preview_grid: carrier_grid,
+            original_grid: carrier_grid,
             vector_field_values: flatten_vectors(values),
             x_chosen_size: 0,
             y_chosen_size: 0,
@@ -442,7 +484,7 @@ fn build_multilayer_live_preview_fields(
             applied_layer_stride: 1,
             auto_downscaled: false,
             auto_downscale_message: None,
-            active_mask: None,
+            active_mask: active_mask.clone(),
         });
     };
     push_field("m", &observables.magnetization);
@@ -450,6 +492,251 @@ fn build_multilayer_live_preview_fields(
         push_field("H_demag", &observables.demag_field);
     }
     fields
+}
+
+/// Materialize the current CPU multilayer state for the idle field store.
+///
+/// The common FFT grid is an implementation layout, not a physical carrier;
+/// the payload therefore remains concatenated in native-layer order and is
+/// marked `fdm_multilayer` so the API can resolve layer/object scopes against
+/// the artifact layout. This path is intentionally CPU-reference only until
+/// the native CUDA multilayer snapshot contract is available.
+pub(crate) fn snapshot_preview(
+    plan: &FdmMultilayerPlanIR,
+    request: &crate::types::LivePreviewRequest,
+) -> Result<LivePreviewField, RunError> {
+    let quantity = request.quantity.as_str();
+    let mut fields = snapshot_fields(plan, &[quantity], request)?;
+    fields.pop().ok_or_else(|| RunError {
+        message: format!(
+            "multilayer preview quantity '{}' is unavailable",
+            request.quantity
+        ),
+    })
+}
+
+pub(crate) fn snapshot_vector_fields(
+    plan: &FdmMultilayerPlanIR,
+    quantities: &[&str],
+    request: &crate::types::LivePreviewRequest,
+) -> Result<Vec<LivePreviewField>, RunError> {
+    snapshot_fields(plan, quantities, request)
+}
+
+fn snapshot_fields(
+    plan: &FdmMultilayerPlanIR,
+    quantities: &[&str],
+    request: &crate::types::LivePreviewRequest,
+) -> Result<Vec<LivePreviewField>, RunError> {
+    crate::fdm::reject_adaptive_multilayer_plan(plan)?;
+    if plan.precision != ExecutionPrecision::Double {
+        return Err(RunError {
+            message: "CPU multilayer field snapshots require double precision".to_string(),
+        });
+    }
+    let integrator = match plan.integrator {
+        IntegratorChoice::Heun => fullmag_engine::TimeIntegrator::Heun,
+        IntegratorChoice::Rk4 => fullmag_engine::TimeIntegrator::RK4,
+        IntegratorChoice::Rk23 => fullmag_engine::TimeIntegrator::RK23,
+        IntegratorChoice::Rk45 => fullmag_engine::TimeIntegrator::RK45,
+        IntegratorChoice::Abm3 => fullmag_engine::TimeIntegrator::ABM3,
+    };
+    let pure_damping_relax = llg_overdamped_uses_pure_damping(plan.relaxation.as_ref());
+    let (contexts, states) = build_contexts_and_states(plan, integrator, pure_damping_relax)?;
+    let demag_runtime = if plan.enable_demag {
+        Some(build_multilayer_demag_runtime(plan)?)
+    } else {
+        None
+    };
+    let observables = observe_multilayer(&contexts, &states, demag_runtime.as_ref())?;
+    let native_point_count = observables.magnetization.len();
+    let scalar_fields = build_multilayer_scalar_fields(&contexts, &states, &observables)?;
+    let active_mask = multilayer_active_mask(plan);
+    let active_quantities = active_fdm_multilayer_preview_quantities(plan, quantities);
+    let mut result = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    for requested in quantities {
+        let quantity = normalized_quantity_name(requested)?;
+        if !active_quantities.iter().any(|active| *active == quantity) {
+            continue;
+        }
+        if !seen.insert(quantity) {
+            continue;
+        }
+        let mut field = LivePreviewField {
+            config_revision: request.revision,
+            source_step: 0,
+            source_time_seconds: None,
+            // The host aligns an idle snapshot to the latest completed solver
+            // step. A request/config revision is not a scientific generation
+            // and must not outrank the terminal field solely because it is
+            // numerically larger than the final step.
+            source_revision: 0,
+            materialized_at_unix_ms: 0,
+            materialization_wall_time_ns: 0,
+            quantity: quantity.to_string(),
+            unit: quantity_unit(quantity).to_string(),
+            spatial_kind: "fdm_multilayer".to_string(),
+            quantity_domain: quantity_spatial_domain(quantity).to_string(),
+            preview_grid: multilayer_carrier_grid(plan),
+            original_grid: multilayer_carrier_grid(plan),
+            vector_field_values: Vec::new(),
+            x_chosen_size: request.x_chosen_size,
+            y_chosen_size: request.y_chosen_size,
+            applied_x_chosen_size: 0,
+            applied_y_chosen_size: 0,
+            applied_layer_stride: 1,
+            auto_downscaled: false,
+            auto_downscale_message: None,
+            active_mask: active_mask.clone(),
+        };
+        let spec = quantity_spec(quantity).ok_or_else(|| RunError {
+            message: format!("multilayer quantity '{}' has no catalog entry", quantity),
+        })?;
+        match spec.shape {
+            fullmag_quantities::QuantityShape::SpatialScalar => {
+                field.vector_field_values =
+                    scalar_fields
+                        .get(quantity)
+                        .cloned()
+                        .ok_or_else(|| RunError {
+                            message: format!(
+                            "multilayer scalar quantity '{}' is unavailable for the current plan",
+                            quantity
+                            ),
+                        })?;
+            }
+            fullmag_quantities::QuantityShape::VectorField => {
+                field.vector_field_values =
+                    flatten_vectors(select_observables(&observables, quantity)?);
+            }
+            _ => {
+                return Err(RunError {
+                    message: format!("multilayer quantity '{}' is not a spatial field", quantity),
+                });
+            }
+        }
+        let expected_value_count = native_point_count
+            .checked_mul(spec.n_comp as usize)
+            .ok_or_else(|| RunError {
+                message: format!(
+                    "multilayer quantity '{}' payload length overflow for {} native points and {} components",
+                    quantity, native_point_count, spec.n_comp
+                ),
+            })?;
+        if field.vector_field_values.len() != expected_value_count {
+            return Err(RunError {
+                message: format!(
+                    "multilayer quantity '{}' has {} values, expected {} for {} native points and {} components",
+                    quantity,
+                    field.vector_field_values.len(),
+                    expected_value_count,
+                    native_point_count,
+                    spec.n_comp
+                ),
+            });
+        }
+        result.push(field);
+    }
+    Ok(result)
+}
+
+fn multilayer_active_mask(plan: &FdmMultilayerPlanIR) -> Option<Vec<bool>> {
+    let mut mask = Vec::new();
+    let mut any = false;
+    for layer in &plan.layers {
+        if let Some(layer_mask) = layer.native_active_mask.as_deref() {
+            mask.extend_from_slice(layer_mask);
+            any = true;
+        } else {
+            let cell_count = layer
+                .native_grid
+                .iter()
+                .map(|value| *value as usize)
+                .product::<usize>();
+            mask.extend(std::iter::repeat(true).take(cell_count));
+        }
+    }
+    any.then_some(mask)
+}
+
+fn multilayer_carrier_grid(plan: &FdmMultilayerPlanIR) -> [u32; 3] {
+    let native_cell_count = plan
+        .layers
+        .iter()
+        .map(|layer| {
+            layer
+                .native_grid
+                .iter()
+                .map(|value| *value as u64)
+                .product::<u64>()
+        })
+        .sum::<u64>();
+    [native_cell_count.min(u32::MAX as u64) as u32, 1, 1]
+}
+
+fn build_multilayer_scalar_fields(
+    contexts: &[LayerContext],
+    states: &[ExchangeLlgState],
+    observables: &StateObservables,
+) -> Result<std::collections::HashMap<&'static str, Vec<f64>>, RunError> {
+    let mut fields = std::collections::HashMap::from([
+        ("eden_ex", Vec::new()),
+        ("eden_demag", Vec::new()),
+        ("eden_ext", Vec::new()),
+        ("eden_ani", Vec::new()),
+        ("eden_dmi", Vec::new()),
+        ("eden_total", Vec::new()),
+        ("mat_ms", Vec::new()),
+        ("mat_aex", Vec::new()),
+        ("mat_alpha", Vec::new()),
+    ]);
+    let mut offset = 0usize;
+    for (context, state) in contexts.iter().zip(states) {
+        let local = context.problem.observe(state).map_err(|error| RunError {
+            message: format!("multilayer scalar snapshot observables failed: {error}"),
+        })?;
+        let count = state.magnetization().len();
+        let demag = observables
+            .demag_field
+            .get(offset..offset + count)
+            .ok_or_else(|| RunError {
+                message: "multilayer demag snapshot length does not match layer state".to_string(),
+            })?;
+        let m = state.magnetization();
+        let ex = context
+            .problem
+            .exchange_energy_density_from_field(m, &local.exchange_field);
+        let demag = context.problem.demag_energy_density_from_fields(m, demag);
+        let ext = context
+            .problem
+            .external_energy_density_from_fields(m, &local.external_field);
+        let ani = context.problem.anisotropy_energy_density_from_vectors(m);
+        let dmi = context.problem.dmi_energy_density_from_vectors(m);
+        let total = (0..count)
+            .map(|index| ex[index] + demag[index] + ext[index] + ani[index] + dmi[index])
+            .collect::<Vec<_>>();
+        fields.get_mut("eden_ex").unwrap().extend(ex);
+        fields.get_mut("eden_demag").unwrap().extend(demag);
+        fields.get_mut("eden_ext").unwrap().extend(ext);
+        fields.get_mut("eden_ani").unwrap().extend(ani);
+        fields.get_mut("eden_dmi").unwrap().extend(dmi);
+        fields.get_mut("eden_total").unwrap().extend(total);
+        fields
+            .get_mut("mat_ms")
+            .unwrap()
+            .extend((0..count).map(|index| context.problem.ms_at(index)));
+        fields
+            .get_mut("mat_aex")
+            .unwrap()
+            .extend((0..count).map(|index| context.problem.a_at(index)));
+        fields
+            .get_mut("mat_alpha")
+            .unwrap()
+            .extend((0..count).map(|index| context.problem.alpha_at(index)));
+        offset += count;
+    }
+    Ok(fields)
 }
 
 fn build_contexts_and_states(
@@ -501,12 +788,12 @@ fn build_contexts_and_states(
                 external_field: plan.external_field,
                 per_node_field: None,
                 magnetoelastic: None,
-                uniaxial_anisotropy: layer.material.uniaxial_anisotropy_ku1.map(|ku1| {
-                    UniaxialAnisotropyConfig {
-                        ku1,
-                        ku2: layer.material.uniaxial_anisotropy_ku2.unwrap_or(0.0),
-                        axis: layer.material.anisotropy_axis.unwrap_or([0.0, 0.0, 1.0]),
-                    }
+                uniaxial_anisotropy: (layer.material.uniaxial_anisotropy_ku1.is_some()
+                    || layer.material.uniaxial_anisotropy_ku2.is_some())
+                .then(|| UniaxialAnisotropyConfig {
+                    ku1: layer.material.uniaxial_anisotropy_ku1.unwrap_or(0.0),
+                    ku2: layer.material.uniaxial_anisotropy_ku2.unwrap_or(0.0),
+                    axis: layer.material.anisotropy_axis.unwrap_or([0.0, 0.0, 1.0]),
                 }),
                 cubic_anisotropy: layer
                     .material
@@ -541,6 +828,18 @@ fn build_contexts_and_states(
                 layer.magnet_name, error
             ),
         })?;
+        problem = problem
+            .with_spatial_fields(
+                layer.material.ms_field.clone(),
+                layer.material.a_field.clone(),
+                layer.material.alpha_field.clone(),
+            )
+            .map_err(|error| RunError {
+                message: format!(
+                    "spatial material fields for layer '{}' magnet '{}': {}",
+                    layer.layer_id, layer.magnet_name, error
+                ),
+            })?;
         // Wire periodic boundary policy
         if let Some(ref pbc) = plan.periodicity {
             let map_axis = |a: &fullmag_ir::AxisBoundary| match a {
@@ -604,14 +903,16 @@ fn build_multilayer_demag_runtime(
             message: "FDM multilayer runtime requires at least one layer".to_string(),
         });
     }
-    if plan
+    if let Some(layer) = plan
         .layers
         .iter()
-        .any(|layer| layer.transfer_kind == "unsupported")
+        .find(|layer| layer.transfer_kind == "unsupported")
     {
         return Err(RunError {
-            message: "FDM multilayer runtime refuses transfer_kind='unsupported' before kernel allocation"
-                .to_string(),
+            message: format!(
+                "FDM multilayer runtime refuses unsupported transfer_kind='unsupported' for layer_id='{}' magnet_name='{}' before kernel allocation",
+                layer.layer_id, layer.magnet_name
+            ),
         });
     }
     let mode = match plan.planner_summary.resolved_mode.as_str() {
@@ -739,17 +1040,18 @@ fn build_multilayer_demag_runtime(
         message: format!("common multilayer transform layout: {error}"),
     })?;
 
-    let mut kernel_pairs = Vec::with_capacity(plan.layers.len() * plan.layers.len());
-    for (src_index, src_descriptor) in descriptors.iter().enumerate() {
-        for (dst_index, dst_descriptor) in descriptors.iter().enumerate() {
+    MultilayerDemagRuntime::new_with_layout_descriptors_and_kernel_builder(
+        conv_grid,
+        conv_cell_size,
+        layout,
+        descriptors,
+        |src_index, dst_index, src_descriptor, dst_descriptor| {
             let source_cell_size = if mode == ConvolutionMode::TwoDStack {
                 if src_descriptor.native.shape[2] != 1 {
-                    return Err(RunError {
-                        message: format!(
-                            "two_d_stack source layer '{}' requires one native Z cell for its irregular thickness kernel",
-                            src_descriptor.layer_id
-                        ),
-                    });
+                    return Err(format!(
+                        "two_d_stack source layer '{}' requires one native Z cell for its irregular thickness kernel",
+                        src_descriptor.layer_id
+                    ));
                 }
                 [
                     src_descriptor.scratch.spacing[0],
@@ -761,12 +1063,10 @@ fn build_multilayer_demag_runtime(
             };
             let destination_cell_size = if mode == ConvolutionMode::TwoDStack {
                 if dst_descriptor.native.shape[2] != 1 {
-                    return Err(RunError {
-                        message: format!(
-                            "two_d_stack destination layer '{}' requires one native Z cell for its irregular thickness kernel",
-                            dst_descriptor.layer_id
-                        ),
-                    });
+                    return Err(format!(
+                        "two_d_stack destination layer '{}' requires one native Z cell for its irregular thickness kernel",
+                        dst_descriptor.layer_id
+                    ));
                 }
                 [
                     dst_descriptor.scratch.spacing[0],
@@ -790,32 +1090,24 @@ fn build_multilayer_demag_runtime(
                 destination_cell_size,
                 offset,
             )
-            .map_err(|error| RunError {
-                message: format!(
+            .map_err(|error| {
+                format!(
                     "kernel pair source='{}' destination='{}' rejected: {error}",
                     src_descriptor.layer_id, dst_descriptor.layer_id
-                ),
+                )
             })?;
             let kernel = if mode == ConvolutionMode::TwoDStack {
-                collapse_kernel_z_plane(kernel).map_err(|error| RunError {
-                    message: format!("2-D multilayer kernel collapse: {error}"),
-                })?
+                collapse_kernel_z_plane(kernel)
+                    .map_err(|error| format!("2-D multilayer kernel collapse: {error}"))?
             } else {
                 kernel
             };
-            kernel_pairs.push(KernelPair {
+            Ok(KernelPair {
                 src_layer: src_index,
                 dst_layer: dst_index,
                 kernel,
-            });
-        }
-    }
-    MultilayerDemagRuntime::new_with_layout_and_descriptors(
-        kernel_pairs,
-        conv_grid,
-        conv_cell_size,
-        layout,
-        descriptors,
+            })
+        },
     )
     .map_err(|error| RunError {
         message: format!("multilayer CPU runtime descriptor validation: {error}"),
@@ -833,7 +1125,9 @@ fn observe_multilayer(
     let mut demag_field = Vec::new();
     let mut external_field = Vec::new();
     let mut anisotropy_field = Vec::new();
+    let mut cubic_anisotropy_field = Vec::new();
     let mut dmi_field = Vec::new();
+    let mut bulk_dmi_field = Vec::new();
     let mut effective_field = Vec::new();
     let mut exchange_energy = 0.0;
     let mut demag_energy = 0.0;
@@ -859,16 +1153,24 @@ fn observe_multilayer(
                 context.magnet_name, error
             ),
         })?;
+        let (mut local_anisotropy, mut local_cubic_anisotropy) = context
+            .problem
+            .anisotropy_field_components(state.magnetization());
+        let mut local_dmi = context.problem.interfacial_dmi_field(state.magnetization());
+        let mut local_bulk_dmi = context.problem.bulk_dmi_field(state.magnetization());
         let local_exchange = local_observables.exchange_field;
         let mut local_external = local_observables.external_field;
-        let mut local_anisotropy = context.problem.anisotropy_field(state.magnetization());
-        let mut local_dmi = local_observables.dmi_field;
         zero_outside_active(&mut local_external, context.problem.active_mask.as_deref());
         zero_outside_active(
             &mut local_anisotropy,
             context.problem.active_mask.as_deref(),
         );
+        zero_outside_active(
+            &mut local_cubic_anisotropy,
+            context.problem.active_mask.as_deref(),
+        );
         zero_outside_active(&mut local_dmi, context.problem.active_mask.as_deref());
+        zero_outside_active(&mut local_bulk_dmi, context.problem.active_mask.as_deref());
         let mut local_effective = local_observables.effective_field;
         for cell in 0..local_effective.len() {
             local_effective[cell] = add(local_effective[cell], local_demag[cell]);
@@ -877,19 +1179,24 @@ fn observe_multilayer(
         let rhs = llg_rhs_for_layer(context, state.magnetization(), &local_effective);
 
         let layer_cell_volume = context.problem.cell_size.volume();
-        let layer_ms = context.problem.material.saturation_magnetisation;
         let local_exchange_energy = local_observables.exchange_energy_joules;
         let local_demag_energy = state
             .magnetization()
             .iter()
             .zip(local_demag.iter())
-            .map(|(m, h)| -0.5 * MU0 * layer_ms * dot(*m, *h) * layer_cell_volume)
+            .enumerate()
+            .map(|(cell, (m, h))| {
+                -0.5 * MU0 * context.problem.ms_at(cell) * dot(*m, *h) * layer_cell_volume
+            })
             .sum::<f64>();
         let local_external_energy = state
             .magnetization()
             .iter()
             .zip(local_external.iter())
-            .map(|(m, h)| -MU0 * layer_ms * dot(*m, *h) * layer_cell_volume)
+            .enumerate()
+            .map(|(cell, (m, h))| {
+                -MU0 * context.problem.ms_at(cell) * dot(*m, *h) * layer_cell_volume
+            })
             .sum::<f64>();
         let local_anisotropy_energy = local_observables.anisotropy_energy_joules;
         let local_dmi_energy = local_observables.dmi_energy_joules;
@@ -901,23 +1208,31 @@ fn observe_multilayer(
         max_dm_dt = max_dm_dt.max(max_norm(&rhs));
         max_h_eff = max_h_eff.max(max_norm(&local_effective));
         max_h_demag = max_h_demag.max(max_norm(&local_demag));
-        torque_field.extend(compute_torque_field(
+        torque_field.extend(compute_torque_field_for_layer(
             state.magnetization(),
             &local_effective,
-            context.problem.material.damping,
+            &context.problem,
             context.problem.dynamics.precession_enabled,
         ));
 
         let active_mask = context.problem.active_mask.as_deref();
-        let [mx, my, mz] = crate::scalar_metrics::average_magnetization_components_with_active_mask(
+        let moment_weights = state
+            .magnetization()
+            .iter()
+            .enumerate()
+            .map(|(cell, _)| {
+                if active_mask.map(|mask| mask[cell]).unwrap_or(true) {
+                    context.problem.ms_at(cell) * layer_cell_volume
+                } else {
+                    0.0
+                }
+            })
+            .collect::<Vec<_>>();
+        let [mx, my, mz] = crate::scalar_metrics::weighted_average_magnetization_components(
             state.magnetization(),
-            active_mask,
+            &moment_weights,
         );
-        let m_weight = active_mask
-            .map(|mask| mask.iter().filter(|active| **active).count())
-            .unwrap_or_else(|| state.magnetization().len()) as f64
-            * context.problem.cell_size.volume()
-            * context.problem.material.saturation_magnetisation;
+        let m_weight = moment_weights.iter().sum::<f64>();
         per_object_scalars.insert(
             context.magnet_name.clone(),
             std::collections::HashMap::from([
@@ -946,7 +1261,9 @@ fn observe_multilayer(
         demag_field.extend(local_demag);
         external_field.extend(local_external);
         anisotropy_field.extend(local_anisotropy);
+        cubic_anisotropy_field.extend(local_cubic_anisotropy);
         dmi_field.extend(local_dmi);
+        bulk_dmi_field.extend(local_bulk_dmi);
         effective_field.extend(local_effective);
     }
 
@@ -970,8 +1287,8 @@ fn observe_multilayer(
         anisotropy_field,
         dmi_field,
         magnetoelastic_field: Vec::new(),
-        cubic_anisotropy_field: Vec::new(),
-        bulk_dmi_field: Vec::new(),
+        cubic_anisotropy_field,
+        bulk_dmi_field,
         oersted_field: Vec::new(),
         thermal_field: Vec::new(),
         exchange_energy,
@@ -1098,6 +1415,7 @@ fn compute_demag_fields(
             ],
             origin: context.origin,
             ms: context.problem.material.saturation_magnetisation,
+            ms_field: context.problem.ms_field.clone(),
             exchange_stiffness: context.problem.material.exchange_stiffness,
             damping: context.problem.material.damping,
             active_mask: context.problem.active_mask.clone(),
@@ -1170,14 +1488,42 @@ fn llg_rhs_for_layer(
     magnetization
         .iter()
         .zip(field.iter())
-        .map(|(m, h)| {
+        .enumerate()
+        .map(|(cell, (m, h))| {
             llg_rhs_from_field(
                 *m,
                 *h,
-                context.problem.material.damping,
+                context.problem.alpha_at(cell),
                 context.problem.dynamics.gyromagnetic_ratio,
                 context.problem.dynamics.precession_enabled,
             )
+        })
+        .collect()
+}
+
+fn compute_torque_field_for_layer(
+    magnetization: &[[f64; 3]],
+    effective_field: &[[f64; 3]],
+    problem: &ExchangeLlgProblem,
+    precession_enabled: bool,
+) -> Vec<[f64; 3]> {
+    magnetization
+        .iter()
+        .zip(effective_field.iter())
+        .enumerate()
+        .map(|(cell, (m, h))| {
+            let damping = problem.alpha_at(cell);
+            let b = [MU0 * h[0], MU0 * h[1], MU0 * h[2]];
+            let mx_b = cross(*m, b);
+            let mx_mx_b = cross(*m, mx_b);
+            if precession_enabled {
+                scale(
+                    add(mx_b, scale(mx_mx_b, damping)),
+                    -1.0 / (1.0 + damping * damping),
+                )
+            } else {
+                scale(mx_mx_b, -1.0)
+            }
         })
         .collect()
 }
@@ -1234,6 +1580,7 @@ fn max_norm(values: &[[f64; 3]]) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::LivePreviewRequest;
     use fullmag_ir::{
         AxisBoundary, ExchangeBoundaryCondition, FdmDemagPeriodicityIR, FdmLayerPlanIR,
         FdmMaterialIR, FdmPeriodicityIR, RelaxationControlIR,
@@ -1249,6 +1596,8 @@ mod tests {
                 native_cell_size: [2e-9, 2e-9, 1e-9],
                 native_origin: [-4e-9, -4e-9, 0.0],
                 native_active_mask: None,
+                native_region_mask: None,
+                native_region_legend: None,
                 initial_magnetization: vec![[1.0, 0.0, 0.0]; 16],
                 material: FdmMaterialIR {
                     name: "Py".to_string(),
@@ -1270,6 +1619,8 @@ mod tests {
                 native_cell_size: [2e-9, 2e-9, 1e-9],
                 native_origin: [-4e-9, -4e-9, 3e-9],
                 native_active_mask: None,
+                native_region_mask: None,
+                native_region_legend: None,
                 initial_magnetization: vec![[0.0, 1.0, 0.0]; 16],
                 material: FdmMaterialIR {
                     name: "Py".to_string(),
@@ -1320,12 +1671,7 @@ mod tests {
                 eligibility: "eligible".to_string(),
                 estimated_pair_kernels: 4,
                 estimated_unique_kernels: 3,
-                estimated_kernel_bytes: if enable_demag {
-                    fullmag_plan::checked_multilayer_pair_kernel_footprint([4, 4, 1], 2)
-                        .expect("test ABI v2 kernel footprint should be representable")
-                } else {
-                    0
-                },
+                estimated_kernel_bytes: 0,
                 warnings: Vec::new(),
             },
         };
@@ -1342,7 +1688,185 @@ mod tests {
             )
             .expect("test certificate should be valid"),
         );
+        let estimate = fullmag_plan::resolve_multilayer_kernel_memory(
+            &plan.mode,
+            plan.common_cells,
+            &plan.layers,
+            plan.precision,
+            plan.enable_demag,
+            fullmag_fdm_demag::KernelAdmissionModel::CpuFp64Catalog,
+        )
+        .expect("test CPU catalog estimate");
+        plan.planner_summary.estimated_pair_kernels = estimate.catalog.pair_bindings.len() as u32;
+        plan.planner_summary.estimated_unique_kernels = estimate.catalog.keys.len() as u32;
+        plan.planner_summary.estimated_kernel_bytes = estimate.accounting.admission_bytes;
         plan
+    }
+
+    #[test]
+    fn multilayer_contexts_preserve_spatial_material_fields() {
+        let mut plan = make_plan(false);
+        plan.layers[0].material.ms_field = Some((0..16).map(|i| 700e3 + i as f64 * 10e3).collect());
+        plan.layers[0].material.a_field =
+            Some((0..16).map(|i| 11e-12 + i as f64 * 1e-12).collect());
+        plan.layers[0].material.alpha_field =
+            Some((0..16).map(|i| 0.01 + i as f64 * 0.01).collect());
+        plan.layers[1].material.ms_field = Some((0..16).map(|i| 800e3 + i as f64 * 20e3).collect());
+        plan.layers[1].material.a_field =
+            Some((0..16).map(|i| 13e-12 + i as f64 * 2e-12).collect());
+        plan.layers[1].material.alpha_field =
+            Some((0..16).map(|i| 0.03 + i as f64 * 0.01).collect());
+
+        let (contexts, _) =
+            build_contexts_and_states(&plan, fullmag_engine::TimeIntegrator::Heun, false)
+                .expect("native per-layer material fields should construct contexts");
+
+        assert_eq!(contexts[0].problem.ms_at(0), 700e3);
+        assert_eq!(contexts[0].problem.ms_at(1), 710e3);
+        assert_eq!(contexts[0].problem.a_at(0), 11e-12);
+        assert_eq!(contexts[0].problem.a_at(1), 12e-12);
+        assert_eq!(contexts[0].problem.alpha_at(0), 0.01);
+        assert_eq!(contexts[0].problem.alpha_at(1), 0.02);
+        assert_eq!(contexts[1].problem.ms_at(0), 800e3);
+        assert_eq!(contexts[1].problem.ms_at(1), 820e3);
+        assert_eq!(contexts[1].problem.a_at(0), 13e-12);
+        assert_eq!(contexts[1].problem.a_at(1), 15e-12);
+        assert_eq!(contexts[1].problem.alpha_at(0), 0.03);
+        assert_eq!(contexts[1].problem.alpha_at(1), 0.04);
+    }
+
+    #[test]
+    fn multilayer_rhs_uses_cellwise_alpha() {
+        let mut plan = make_plan(false);
+        plan.layers[0].material.alpha_field = Some(
+            (0..16)
+                .map(|index| if index == 0 { 0.01 } else { 0.40 })
+                .collect(),
+        );
+        let (contexts, _) =
+            build_contexts_and_states(&plan, fullmag_engine::TimeIntegrator::Heun, false)
+                .expect("native alpha field should construct context");
+        let magnetization = vec![[1.0, 0.0, 0.0]; 16];
+        let field = vec![[0.0, 1.0, 0.0]; 16];
+
+        let rhs = llg_rhs_for_layer(&contexts[0], &magnetization, &field);
+
+        assert_eq!(
+            rhs[0],
+            llg_rhs_from_field(
+                magnetization[0],
+                field[0],
+                0.01,
+                contexts[0].problem.dynamics.gyromagnetic_ratio,
+                contexts[0].problem.dynamics.precession_enabled,
+            )
+        );
+        assert_eq!(
+            rhs[1],
+            llg_rhs_from_field(
+                magnetization[1],
+                field[1],
+                0.40,
+                contexts[0].problem.dynamics.gyromagnetic_ratio,
+                contexts[0].problem.dynamics.precession_enabled,
+            )
+        );
+        assert_ne!(rhs[0], rhs[1]);
+
+        let torque = compute_torque_field_for_layer(
+            &magnetization,
+            &field,
+            &contexts[0].problem,
+            contexts[0].problem.dynamics.precession_enabled,
+        );
+        assert_ne!(torque[0], torque[1]);
+    }
+
+    #[test]
+    fn multilayer_observables_weight_demag_external_energy_and_moment_by_ms() {
+        let mut plan = make_plan(true);
+        plan.external_field = Some([0.0, 2.0e4, 0.0]);
+        plan.layers[0].material.ms_field = Some(
+            (0..16)
+                .map(|cell| if cell % 2 == 0 { 500e3 } else { 1_000e3 })
+                .collect(),
+        );
+        let (contexts, states) =
+            build_contexts_and_states(&plan, fullmag_engine::TimeIntegrator::Heun, false)
+                .expect("native Ms field should construct contexts");
+        let runtime = build_multilayer_demag_runtime(&plan).expect("demag runtime should build");
+        let observables = observe_multilayer(&contexts, &states, Some(&runtime))
+            .expect("observables should use native Ms");
+        let first = &contexts[0];
+        let first_cells = first.problem.grid.cell_count();
+        let first_state = &states[0];
+        let cell_volume = first.problem.cell_size.volume();
+        let expected_demag = first_state
+            .magnetization()
+            .iter()
+            .zip(observables.demag_field[..first_cells].iter())
+            .enumerate()
+            .map(|(cell, (m, h))| {
+                -0.5 * MU0 * first.problem.ms_at(cell) * dot(*m, *h) * cell_volume
+            })
+            .sum::<f64>();
+        let expected_external = first_state
+            .magnetization()
+            .iter()
+            .zip(observables.external_field[..first_cells].iter())
+            .enumerate()
+            .map(|(cell, (m, h))| -MU0 * first.problem.ms_at(cell) * dot(*m, *h) * cell_volume)
+            .sum::<f64>();
+        let expected_weight = (0..first_cells)
+            .map(|cell| first.problem.ms_at(cell) * cell_volume)
+            .sum::<f64>();
+        let scalars = &observables.per_object_scalars[&first.magnet_name];
+
+        assert!((scalars["e_demag"] - expected_demag).abs() < 1e-20);
+        assert!((scalars["e_ext"] - expected_external).abs() < 1e-20);
+        assert!((scalars["m_weight"] - expected_weight).abs() < 1e-30);
+        let scalar_average_weight =
+            first_cells as f64 * cell_volume * first.problem.material.saturation_magnetisation;
+        assert!((scalars["m_weight"] - scalar_average_weight).abs() > 1e-30);
+    }
+
+    #[test]
+    fn multilayer_final_step_stats_use_ms_weighted_object_means() {
+        let mut plan = make_plan(false);
+        plan.enable_exchange = false;
+        plan.relaxation = None;
+        plan.layers[0].initial_magnetization = (0..16)
+            .map(|cell| {
+                if cell < 8 {
+                    [1.0, 0.0, 0.0]
+                } else {
+                    [0.0, 1.0, 0.0]
+                }
+            })
+            .collect();
+        plan.layers[0].material.ms_field = Some(
+            (0..16)
+                .map(|cell| if cell < 8 { 100e3 } else { 300e3 })
+                .collect(),
+        );
+        plan.layers[1].initial_magnetization = vec![[0.0, 0.0, 1.0]; 16];
+        plan.layers[1].material.ms_field = Some(vec![200e3; 16]);
+
+        let executed = execute_reference_fdm_multilayer(&plan, 1e-13, &[], None, None)
+            .expect("heterogeneous Ms multilayer run should execute");
+        let final_stats = executed
+            .result
+            .steps
+            .last()
+            .expect("final StepStats should be published");
+        let free = &final_stats.per_object_scalars["free"];
+
+        assert!((free["mx"] - 0.25).abs() < 1e-12);
+        assert!((free["my"] - 0.75).abs() < 1e-12);
+        assert!(free["mz"].abs() < 1e-12);
+        assert!((final_stats.mx - 0.125).abs() < 1e-12);
+        assert!((final_stats.my - 0.375).abs() < 1e-12);
+        assert!((final_stats.mz - 0.5).abs() < 1e-12);
     }
 
     #[test]
@@ -1378,15 +1902,37 @@ mod tests {
     }
 
     #[test]
+    fn cpu_cold_catalog_allocation_matches_planner_unique_kernel_estimate() {
+        let plan = make_plan(true);
+        let estimate = fullmag_plan::resolve_multilayer_kernel_memory(
+            &plan.mode,
+            plan.common_cells,
+            &plan.layers,
+            plan.precision,
+            true,
+            fullmag_fdm_demag::KernelAdmissionModel::CpuFp64Catalog,
+        )
+        .expect("CPU catalog estimate");
+        let runtime = build_multilayer_demag_runtime(&plan).expect("CPU catalog runtime");
+
+        assert_eq!(
+            (runtime.telemetry().kernel_catalog_spectrum_bytes
+                + runtime.telemetry().kernel_pair_binding_bytes) as u64,
+            estimate.accounting.admission_bytes
+        );
+        assert_eq!(
+            runtime.telemetry().unique_kernel_count as u32,
+            estimate.catalog.keys.len() as u32
+        );
+    }
+
+    #[test]
     fn multilayer_reference_run_executes_heterogeneous_xy_native_cells() {
         let mut plan = make_plan(true);
         plan.mode = "three_d".to_string();
         plan.common_cells = [5, 5, 4];
         plan.planner_summary.requested_mode = "auto".to_string();
         plan.planner_summary.resolved_mode = "three_d".to_string();
-        plan.planner_summary.estimated_kernel_bytes =
-            fullmag_plan::checked_multilayer_pair_kernel_footprint([5, 5, 4], 2)
-                .expect("heterogeneous test kernel footprint should be representable");
         plan.layers[0].native_grid = [5, 5, 1];
         plan.layers[0].native_cell_size = [2e-9, 2e-9, 10e-9];
         plan.layers[0].native_origin = [-5e-9, -5e-9, 0.0];
@@ -1414,6 +1960,18 @@ mod tests {
             )
             .expect("heterogeneous test certificate should be valid"),
         );
+        let estimate = fullmag_plan::resolve_multilayer_kernel_memory(
+            &plan.mode,
+            plan.common_cells,
+            &plan.layers,
+            plan.precision,
+            plan.enable_demag,
+            fullmag_fdm_demag::KernelAdmissionModel::CpuFp64Catalog,
+        )
+        .expect("heterogeneous CPU catalog estimate");
+        plan.planner_summary.estimated_pair_kernels = estimate.catalog.pair_bindings.len() as u32;
+        plan.planner_summary.estimated_unique_kernels = estimate.catalog.keys.len() as u32;
+        plan.planner_summary.estimated_kernel_bytes = estimate.accounting.admission_bytes;
 
         let executed = execute_reference_fdm_multilayer(&plan, 1e-13, &[], None, None)
             .expect("heterogeneous 2 nm/5 nm transfer should execute");
@@ -1492,12 +2050,251 @@ mod tests {
         );
         for field in fields {
             assert_eq!(field.spatial_kind, "fdm_multilayer");
-            assert_eq!(field.preview_grid, [4, 4, 1]);
-            assert_eq!(field.original_grid, [4, 4, 1]);
+            assert_eq!(field.preview_grid, [32, 1, 1]);
+            assert_eq!(field.original_grid, [32, 1, 1]);
             assert_eq!(field.source_step, 7);
             assert_eq!(field.source_revision, 7);
             assert_eq!(field.vector_field_values.len(), 32 * 3);
         }
+    }
+
+    #[test]
+    fn multilayer_snapshot_vector_fields_materializes_requested_native_payloads() {
+        let plan = make_plan(true);
+        let request = LivePreviewRequest {
+            revision: 23,
+            quantity: "m".to_string(),
+            all_layers: true,
+            auto_scale_enabled: false,
+            max_points: 0,
+            ..LivePreviewRequest::default()
+        };
+
+        let fields =
+            snapshot_vector_fields(&plan, &["m", "H_ex", "H_demag", "H_eff", "H_ext"], &request)
+                .expect("multilayer vector fields should materialize");
+
+        assert_eq!(
+            fields
+                .iter()
+                .map(|field| field.quantity.as_str())
+                .collect::<Vec<_>>(),
+            ["m", "H_ex", "H_demag", "H_eff"]
+        );
+        for field in fields {
+            assert_eq!(field.config_revision, 23);
+            assert_eq!(field.spatial_kind, "fdm_multilayer");
+            assert_eq!(field.preview_grid, [32, 1, 1]);
+            assert_eq!(field.original_grid, [32, 1, 1]);
+            assert_eq!(field.vector_field_values.len(), 32 * 3);
+        }
+    }
+
+    #[test]
+    fn multilayer_snapshot_preview_uses_requested_quantity_and_current_plan_state() {
+        let mut plan = make_plan(true);
+        plan.layers[0].initial_magnetization[0] = [0.0, 0.0, 1.0];
+        let request = LivePreviewRequest {
+            revision: 31,
+            quantity: "m".to_string(),
+            all_layers: true,
+            auto_scale_enabled: false,
+            max_points: 0,
+            ..LivePreviewRequest::default()
+        };
+
+        let field =
+            snapshot_preview(&plan, &request).expect("multilayer preview should materialize");
+
+        assert_eq!(field.quantity, "m");
+        assert_eq!(&field.vector_field_values[..3], &[0.0, 0.0, 1.0]);
+        assert_eq!(field.config_revision, 31);
+        assert_eq!(field.preview_grid, [32, 1, 1]);
+    }
+
+    #[test]
+    fn multilayer_snapshot_materializes_active_vector_and_energy_catalog() {
+        let mut plan = make_plan(true);
+        plan.external_field = Some([2.0e3, -1.0e3, 3.0e3]);
+        plan.interfacial_dmi = Some(1.0e-3);
+        plan.bulk_dmi = Some(2.0e-3);
+        for layer in &mut plan.layers {
+            layer.material.uniaxial_anisotropy_ku1 = Some(5.0e3);
+            layer.material.anisotropy_axis = Some([0.0, 0.0, 1.0]);
+            layer.material.cubic_anisotropy_kc1 = Some(3.0e3);
+            layer.material.cubic_anisotropy_axis1 = Some([1.0, 0.0, 0.0]);
+            layer.material.cubic_anisotropy_axis2 = Some([0.0, 1.0, 0.0]);
+        }
+        let request = LivePreviewRequest {
+            revision: 41,
+            quantity: "m".to_string(),
+            all_layers: true,
+            auto_scale_enabled: false,
+            max_points: 0,
+            ..LivePreviewRequest::default()
+        };
+        let quantities = [
+            "m",
+            "H_ex",
+            "H_demag",
+            "H_ext",
+            "H_eff",
+            "torque",
+            "H_ani",
+            "H_ani_cubic",
+            "H_dmi",
+            "H_dmi_bulk",
+            "H_ant",
+            "eden_ex",
+            "eden_demag",
+            "eden_ext",
+            "eden_ani",
+            "eden_dmi",
+            "eden_total",
+            "mat_ms",
+            "mat_aex",
+            "mat_alpha",
+        ];
+        let fields = snapshot_vector_fields(&plan, &quantities, &request)
+            .expect("active multilayer field catalog should materialize");
+        let by_quantity = fields
+            .iter()
+            .map(|field| (field.quantity.as_str(), field))
+            .collect::<std::collections::HashMap<_, _>>();
+
+        assert!(!by_quantity.contains_key("H_ant"));
+        for quantity in quantities.iter().filter(|quantity| **quantity != "H_ant") {
+            let field = by_quantity
+                .get(quantity)
+                .unwrap_or_else(|| panic!("missing active multilayer field {quantity}"));
+            let expected_len =
+                if quantity.starts_with("H_") || *quantity == "m" || *quantity == "torque" {
+                    32 * 3
+                } else {
+                    32
+                };
+            assert_eq!(field.vector_field_values.len(), expected_len, "{quantity}");
+            assert_eq!(field.preview_grid, [32, 1, 1]);
+            assert_eq!(field.config_revision, 41);
+        }
+
+        let h_eff = &by_quantity["H_eff"].vector_field_values;
+        for index in 0..32 {
+            let component = 3 * index;
+            for axis in 0..3 {
+                let expected = [
+                    "H_ex",
+                    "H_demag",
+                    "H_ext",
+                    "H_ani",
+                    "H_ani_cubic",
+                    "H_dmi",
+                    "H_dmi_bulk",
+                ]
+                .iter()
+                .map(|quantity| by_quantity[quantity].vector_field_values[component + axis])
+                .sum::<f64>();
+                assert!((h_eff[component + axis] - expected).abs() < 1.0e-10);
+            }
+        }
+        for index in 0..32 {
+            let expected = ["eden_ex", "eden_demag", "eden_ext", "eden_ani", "eden_dmi"]
+                .iter()
+                .map(|quantity| by_quantity[quantity].vector_field_values[index])
+                .sum::<f64>();
+            assert_eq!(
+                by_quantity["eden_total"].vector_field_values[index],
+                expected
+            );
+        }
+    }
+
+    #[test]
+    fn multilayer_snapshot_exposes_cubic_anisotropy_separately_from_uniaxial() {
+        let mut plan = make_plan(false);
+        for layer in &mut plan.layers {
+            layer.material.uniaxial_anisotropy_ku1 = None;
+            layer.material.uniaxial_anisotropy_ku2 = None;
+            layer.material.cubic_anisotropy_kc1 = Some(5.0e3);
+            layer.material.cubic_anisotropy_axis1 = Some([1.0, 0.0, 0.0]);
+            layer.material.cubic_anisotropy_axis2 = Some([0.0, 1.0, 0.0]);
+            layer.initial_magnetization.fill([0.8, 0.6, 0.0]);
+        }
+        let request = LivePreviewRequest {
+            quantity: "H_ani_cubic".to_string(),
+            all_layers: true,
+            ..LivePreviewRequest::default()
+        };
+
+        let fields = snapshot_vector_fields(&plan, &["H_ani", "H_ani_cubic"], &request)
+            .expect("cubic-only multilayer fields should materialize");
+
+        assert_eq!(
+            fields
+                .iter()
+                .map(|field| field.quantity.as_str())
+                .collect::<Vec<_>>(),
+            ["H_ani_cubic"]
+        );
+        assert_eq!(fields[0].vector_field_values.len(), 32 * 3);
+        assert!(fields[0]
+            .vector_field_values
+            .iter()
+            .any(|component| component.abs() > 0.0));
+    }
+
+    #[test]
+    fn multilayer_snapshot_exposes_bulk_dmi_separately_from_interfacial_dmi() {
+        let mut plan = make_plan(false);
+        plan.interfacial_dmi = None;
+        plan.bulk_dmi = Some(2.0e-3);
+        for layer in &mut plan.layers {
+            for (index, magnetization) in layer.initial_magnetization.iter_mut().enumerate() {
+                let angle = 0.35 * (index % layer.native_grid[0] as usize) as f64;
+                *magnetization = [angle.cos(), angle.sin(), 0.0];
+            }
+        }
+        let request = LivePreviewRequest {
+            quantity: "H_dmi_bulk".to_string(),
+            all_layers: true,
+            ..LivePreviewRequest::default()
+        };
+
+        let fields = snapshot_vector_fields(&plan, &["H_dmi", "H_dmi_bulk"], &request)
+            .expect("bulk-only multilayer fields should materialize");
+
+        assert_eq!(
+            fields
+                .iter()
+                .map(|field| field.quantity.as_str())
+                .collect::<Vec<_>>(),
+            ["H_dmi_bulk"]
+        );
+        assert_eq!(fields[0].vector_field_values.len(), 32 * 3);
+        assert!(fields[0]
+            .vector_field_values
+            .iter()
+            .any(|component| component.abs() > 0.0));
+    }
+
+    #[test]
+    fn multilayer_snapshot_preserves_concatenated_native_active_mask() {
+        let mut plan = make_plan(true);
+        plan.layers[0].native_active_mask =
+            Some((0..16).map(|index| index % 2 == 0).collect::<Vec<_>>());
+        let request = LivePreviewRequest {
+            quantity: "m".to_string(),
+            all_layers: true,
+            ..LivePreviewRequest::default()
+        };
+        let field = snapshot_preview(&plan, &request).expect("masked multilayer preview");
+        let mask = field.active_mask.expect("native mask should be carried");
+        assert_eq!(mask.len(), 32);
+        assert_eq!(
+            &mask[..16],
+            &(0..16).map(|index| index % 2 == 0).collect::<Vec<_>>()
+        );
+        assert!(mask[16..].iter().all(|active| *active));
     }
 
     #[test]
@@ -1513,11 +2310,43 @@ mod tests {
     fn multilayer_runtime_rejects_unsupported_transfer_before_allocation() {
         let mut plan = make_plan(true);
         plan.layers[0].transfer_kind = "unsupported".to_string();
+        let topology_tokens = fullmag_ir::fdm_multilayer_topology_tokens(&plan.mode, &plan.layers);
+        plan.grid_certificate = Some(
+            fullmag_ir::FdmGridCertificateIR::new_with_topology_tokens(
+                [-4e-9, -4e-9, 0.0],
+                [4, 4, 1],
+                [2e-9, 2e-9, 1e-9],
+                16,
+                16 * fullmag_plan::FDM_GRID_ESTIMATED_BYTES_PER_CELL,
+                None,
+                &topology_tokens,
+            )
+            .expect("mutated transfer topology certificate should be valid"),
+        );
         let error = execute_reference_fdm_multilayer(&plan, 1e-13, &[], None, None)
             .expect_err("unsupported transfer must fail closed");
         assert!(
-            error.message.contains("unsupported transfer") || error.message.contains("unsupported")
+            error.message.contains("unsupported transfer"),
+            "unexpected error: {}",
+            error.message,
         );
+        assert!(error.message.contains("layer_id='layer:free'"));
+        assert!(error.message.contains("magnet_name='free'"));
+    }
+
+    #[test]
+    fn multilayer_demag_runtime_rejects_unsupported_transfer_with_layer_identity() {
+        let mut plan = make_plan(true);
+        plan.layers[1].transfer_kind = "unsupported".to_string();
+
+        let error = match build_multilayer_demag_runtime(&plan) {
+            Ok(_) => panic!("unsupported transfer must fail before kernel allocation"),
+            Err(error) => error,
+        };
+
+        assert!(error.message.contains("transfer_kind='unsupported'"));
+        assert!(error.message.contains("layer_id='layer:ref'"));
+        assert!(error.message.contains("magnet_name='ref'"));
     }
 
     #[test]
@@ -1610,5 +2439,31 @@ mod tests {
         let selected = select_state_observable_field(&observables, "H_ani", false)
             .expect("H_ani should be selectable from multilayer observables");
         assert_eq!(selected, observables.anisotropy_field);
+    }
+
+    #[test]
+    fn multilayer_reference_cpu_preserves_ku2_without_ku1() {
+        let mut plan = make_plan(false);
+        let tilted = [
+            std::f64::consts::FRAC_1_SQRT_2,
+            0.0,
+            std::f64::consts::FRAC_1_SQRT_2,
+        ];
+        plan.layers[0].initial_magnetization.fill(tilted);
+        plan.layers[0].material.uniaxial_anisotropy_ku1 = None;
+        plan.layers[0].material.uniaxial_anisotropy_ku2 = Some(4.0e5);
+        plan.layers[0].material.anisotropy_axis = Some([0.0, 0.0, 1.0]);
+
+        let (contexts, states) =
+            build_contexts_and_states(&plan, fullmag_engine::TimeIntegrator::Heun, false)
+                .expect("ku2-only multilayer contexts should build");
+        let observables = observe_multilayer(&contexts, &states, None)
+            .expect("ku2-only anisotropy observables should compute");
+        let field = &observables.anisotropy_field[0];
+        let expected_z = 4.0 * 4.0e5 / (MU0 * 800e3) * tilted[2].powi(3);
+
+        assert!(field[0].abs() < 1.0e-9);
+        assert!(field[1].abs() < 1.0e-9);
+        assert!((field[2] - expected_z).abs() <= expected_z.abs() * 1.0e-12);
     }
 }

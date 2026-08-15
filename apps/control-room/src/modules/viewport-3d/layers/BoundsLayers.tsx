@@ -1061,6 +1061,7 @@ export const FdmUniverseOutsideSupportLayer = memo(
     model,
     onSelect,
     settings,
+    tracker,
   }: {
     colors: Viewport3DColors;
     model: FdmUniverseOutsideSupportOverlayModel | null;
@@ -1094,12 +1095,21 @@ export const FdmUniverseOutsideSupportLayer = memo(
           />
         ) : null}
         {settings.wireframeVisible ? (
-          <BoundsBox
-            bounds={model.magneticSupportBounds}
-            color={wireframeColor}
-            opacity={magneticSupportWireframeOpacity}
-            policySemantic="featureEdges"
-          />
+          <>
+            <BoundsVolumeWireframe
+              bounds={model.universeBounds}
+              color={wireframeColor}
+              opacity={magneticSupportWireframeOpacity}
+              policySemantic="hiddenEdges"
+              tracker={tracker}
+            />
+            <BoundsBox
+              bounds={model.magneticSupportBounds}
+              color={wireframeColor}
+              opacity={magneticSupportWireframeOpacity}
+              policySemantic="featureEdges"
+            />
+          </>
         ) : null}
       </group>
     );

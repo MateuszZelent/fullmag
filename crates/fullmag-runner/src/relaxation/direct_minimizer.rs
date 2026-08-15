@@ -7,13 +7,13 @@
 
 #![allow(dead_code)]
 
-use fullmag_ir::{RelaxationAlgorithmIR, RelaxationControlIR};
+use fullmag_ir::{ExecutionPrecision, RelaxationAlgorithmIR, RelaxationControlIR};
 
 use crate::relaxation::vector_math::{
     add_vec3, global_dot_vec3, max_torque_from_field, normalized_vec3, project_tangent, scale_vec3,
     sub_vec3, tangent_gradient_from_field,
 };
-use crate::scalar_metrics::apply_average_m_to_step_stats;
+use crate::scalar_metrics::apply_average_m_to_step_stats_with_active_mask;
 use crate::types::StepStats;
 use crate::MU0;
 
@@ -24,6 +24,16 @@ pub(crate) const ARMIJO_COEFFICIENT: f64 = 1e-4;
 pub(crate) const PROJECTED_GRADIENT_MAX_BACKTRACK: u32 = 20;
 pub(crate) const NONLINEAR_CG_MAX_BACKTRACK: u32 = 30;
 pub(crate) const NONLINEAR_CG_RESTART_INTERVAL: u64 = 50;
+
+pub(crate) fn direct_minimizer_energy_tolerance_j(
+    precision: ExecutionPrecision,
+    energy_j: f64,
+) -> f64 {
+    if precision != ExecutionPrecision::Single || !energy_j.is_finite() {
+        return 0.0;
+    }
+    8.0 * f32::EPSILON as f64 * energy_j.abs()
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum DirectMinimizerAlgorithm {
@@ -180,10 +190,27 @@ pub(crate) fn projected_gradient_armijo_accepts(
     step_size: f64,
     direction_dot_gradient_j_per_step: f64,
 ) -> bool {
+    projected_gradient_armijo_accepts_with_tolerance(
+        previous_energy_j,
+        trial_energy_j,
+        step_size,
+        direction_dot_gradient_j_per_step,
+        0.0,
+    )
+}
+
+pub(crate) fn projected_gradient_armijo_accepts_with_tolerance(
+    previous_energy_j: f64,
+    trial_energy_j: f64,
+    step_size: f64,
+    direction_dot_gradient_j_per_step: f64,
+    energy_tolerance_j: f64,
+) -> bool {
     direction_dot_gradient_j_per_step < 0.0
         && trial_energy_j
             <= previous_energy_j
                 + ARMIJO_COEFFICIENT * step_size * direction_dot_gradient_j_per_step
+                + energy_tolerance_j.max(0.0)
 }
 
 pub(crate) fn nonlinear_cg_armijo_accepts(
@@ -192,7 +219,24 @@ pub(crate) fn nonlinear_cg_armijo_accepts(
     step_size: f64,
     direction_dot_gradient: f64,
 ) -> bool {
+    nonlinear_cg_armijo_accepts_with_tolerance(
+        previous_energy_j,
+        trial_energy_j,
+        step_size,
+        direction_dot_gradient,
+        0.0,
+    )
+}
+
+pub(crate) fn nonlinear_cg_armijo_accepts_with_tolerance(
+    previous_energy_j: f64,
+    trial_energy_j: f64,
+    step_size: f64,
+    direction_dot_gradient: f64,
+    energy_tolerance_j: f64,
+) -> bool {
     trial_energy_j <= previous_energy_j + ARMIJO_COEFFICIENT * step_size * direction_dot_gradient
+        + energy_tolerance_j.max(0.0)
 }
 
 pub(crate) fn backtracked_step_size(step_size: f64) -> f64 {
@@ -231,6 +275,29 @@ pub(crate) fn projected_gradient_line_search<T, E, F>(
     magnetization: &[[f64; 3]],
     gradient: &[[f64; 3]],
     initial_step_size: f64,
+    evaluate_trial: F,
+) -> Result<Option<DirectMinimizerAcceptedTrial<T>>, E>
+where
+    F: FnMut(&[[f64; 3]]) -> Result<DirectMinimizerTrialEvaluation<T>, E>,
+{
+    projected_gradient_line_search_with_tolerance(
+        previous_energy_j,
+        direction_dot_gradient_j_per_step,
+        magnetization,
+        gradient,
+        initial_step_size,
+        0.0,
+        evaluate_trial,
+    )
+}
+
+pub(crate) fn projected_gradient_line_search_with_tolerance<T, E, F>(
+    previous_energy_j: f64,
+    direction_dot_gradient_j_per_step: f64,
+    magnetization: &[[f64; 3]],
+    gradient: &[[f64; 3]],
+    initial_step_size: f64,
+    energy_tolerance_j: f64,
     mut evaluate_trial: F,
 ) -> Result<Option<DirectMinimizerAcceptedTrial<T>>, E>
 where
@@ -242,11 +309,12 @@ where
         let trial =
             projected_gradient_trial_magnetization(magnetization, gradient, trial_step_size);
         let evaluation = evaluate_trial(&trial)?;
-        if projected_gradient_armijo_accepts(
+        if projected_gradient_armijo_accepts_with_tolerance(
             previous_energy_j,
             evaluation.energy_j,
             trial_step_size,
             direction_dot_gradient_j_per_step,
+            energy_tolerance_j,
         ) {
             return Ok(Some(DirectMinimizerAcceptedTrial {
                 stats: evaluation.stats,
@@ -273,6 +341,29 @@ pub(crate) fn nonlinear_cg_line_search<T, E, F>(
     magnetization: &[[f64; 3]],
     direction: &[[f64; 3]],
     initial_step_size: f64,
+    evaluate_trial: F,
+) -> Result<Option<DirectMinimizerAcceptedTrial<T>>, E>
+where
+    F: FnMut(&[[f64; 3]]) -> Result<DirectMinimizerTrialEvaluation<T>, E>,
+{
+    nonlinear_cg_line_search_with_tolerance(
+        previous_energy_j,
+        direction_dot_gradient,
+        magnetization,
+        direction,
+        initial_step_size,
+        0.0,
+        evaluate_trial,
+    )
+}
+
+pub(crate) fn nonlinear_cg_line_search_with_tolerance<T, E, F>(
+    previous_energy_j: f64,
+    direction_dot_gradient: f64,
+    magnetization: &[[f64; 3]],
+    direction: &[[f64; 3]],
+    initial_step_size: f64,
+    energy_tolerance_j: f64,
     mut evaluate_trial: F,
 ) -> Result<Option<DirectMinimizerAcceptedTrial<T>>, E>
 where
@@ -283,11 +374,12 @@ where
     loop {
         let trial = nonlinear_cg_trial_magnetization(magnetization, direction, trial_step_size);
         let evaluation = evaluate_trial(&trial)?;
-        if nonlinear_cg_armijo_accepts(
+        if nonlinear_cg_armijo_accepts_with_tolerance(
             previous_energy_j,
             evaluation.energy_j,
             trial_step_size,
             direction_dot_gradient,
+            energy_tolerance_j,
         ) {
             return Ok(Some(DirectMinimizerAcceptedTrial {
                 stats: evaluation.stats,
@@ -440,8 +532,9 @@ pub(crate) fn apply_direct_minimizer_step_metrics(
     accepted_step_size: f64,
     magnetization: &[[f64; 3]],
     h_eff: &[[f64; 3]],
+    active_mask: Option<&[bool]>,
 ) -> f64 {
-    apply_average_m_to_step_stats(stats, magnetization);
+    apply_average_m_to_step_stats_with_active_mask(stats, magnetization, active_mask);
     if let Some(values) = stats.per_object_scalars.get_mut("free") {
         values.insert("mx".to_string(), stats.mx);
         values.insert("my".to_string(), stats.my);
@@ -500,7 +593,7 @@ mod tests {
         let magnetization = [[1.0, 0.0, 0.0], [0.0, 0.0, 1.0]];
         let h_eff = [[0.0, 0.0, 0.0], [0.0, 0.0, 0.0]];
 
-        apply_direct_minimizer_step_metrics(&mut stats, 1, 0.25, &magnetization, &h_eff);
+        apply_direct_minimizer_step_metrics(&mut stats, 1, 0.25, &magnetization, &h_eff, None);
 
         assert_eq!([stats.mx, stats.my, stats.mz], [0.5, 0.0, 0.5]);
         assert_eq!(
@@ -511,6 +604,25 @@ mod tests {
             ],
             [0.5, 0.0, 0.5]
         );
+    }
+
+    #[test]
+    fn accepted_step_metrics_average_only_active_magnetic_cells() {
+        let mut stats = StepStats::default();
+        let magnetization = [[1.0, 0.0, 0.0], [0.0, 0.0, 0.0], [0.0, 1.0, 0.0]];
+        let h_eff = [[0.0, 0.0, 0.0]; 3];
+        let active_mask = [true, false, true];
+
+        apply_direct_minimizer_step_metrics(
+            &mut stats,
+            1,
+            0.25,
+            &magnetization,
+            &h_eff,
+            Some(&active_mask),
+        );
+
+        assert_eq!([stats.mx, stats.my, stats.mz], [0.5, 0.5, 0.0]);
     }
 
     #[test]
@@ -676,6 +788,33 @@ mod tests {
     fn projected_gradient_armijo_accepts_sufficient_energy_decrease() {
         assert!(projected_gradient_armijo_accepts(10.0, 9.999, 1.0, -1.0));
         assert!(!projected_gradient_armijo_accepts(10.0, 10.0, 1.0, -1.0));
+    }
+
+    #[test]
+    fn single_precision_armijo_uses_bounded_energy_roundoff_budget() {
+        let previous_energy_j = 6.3195e-19;
+        let energy_tolerance_j =
+            direct_minimizer_energy_tolerance_j(ExecutionPrecision::Single, previous_energy_j);
+        let trial_energy_j = previous_energy_j + 0.5 * energy_tolerance_j;
+
+        assert!(energy_tolerance_j > 0.0);
+        assert_eq!(
+            direct_minimizer_energy_tolerance_j(ExecutionPrecision::Double, previous_energy_j),
+            0.0
+        );
+        assert!(!projected_gradient_armijo_accepts(
+            previous_energy_j,
+            trial_energy_j,
+            1.0e-6,
+            -1.0e-20,
+        ));
+        assert!(projected_gradient_armijo_accepts_with_tolerance(
+            previous_energy_j,
+            trial_energy_j,
+            1.0e-6,
+            -1.0e-20,
+            energy_tolerance_j,
+        ));
     }
 
     #[test]
@@ -955,6 +1094,7 @@ mod tests {
             3e-6,
             &[[1.0, 0.0, 0.0]],
             &[[0.0, 4.0, 3.0]],
+            None,
         );
 
         assert_eq!(torque, 5.0);

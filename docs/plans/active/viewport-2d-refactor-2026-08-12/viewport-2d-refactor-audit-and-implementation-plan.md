@@ -1041,3 +1041,29 @@ oraz trzy receptury runtime z zadania 10. Dla zmian React uruchomić także Reac
 Najbezpieczniejszy kierunek to nie „dokończenie obecnego 2D” punktowymi łatami, tylko kontrolowana migracja do wspólnego nośnika danych i jednego stanu prezentacji. A‑MuMax jest dobrym wzorem natychmiastowej obsługi, lecz nie wzorem naukowego modelu. Fullmag powinien zachować tę płynność i dodać to, czego A‑MuMax nie ma: trwałe, dowolnie zorientowane monitory, miarowo poprawne operatory, FEM, wiele targetów, provenance, precyzyjne Inspectory i osobną kwalifikację każdej lane.
 
 Pierwszym wdrażanym commitem powinien być test wykazujący fałszywie dodatni smoke oraz fixture compact FEM/multi-object FDM. Pierwszym commitem produkcyjnym — wspólny `ResolvedSpatialField`. Dopiero po przejściu tych dwóch bramek ma sens rozbudowa UI, ponieważ inaczej Inspector będzie sterował zasobem, którego poprawności nadal nie potrafimy dowieść.
+
+## 19. Ledger wykonania — stan na 2026-08-13
+
+Poniższy wpis aktualizuje stan wykonania planu; nie podnosi statusu żadnej lane do
+`qualified` bez świeżego dowodu managed runtime i browser/WebGL.
+
+| Obszar | Stan | Dowód / następna bramka |
+|---|---|---|
+| Audyt i kontrakt refaktoryzacji 2D | wykonane | niniejszy plan, macierz Task 10 i przeglądy Task 7–9 |
+| Harness kwalifikacyjny Task 10 | zaimplementowany, zreviewowany | branch `codex/viewport-2d-task10`, commit `c437e4197`, 31/31 testów; kwalifikacja runtime nadal `NO-GO` |
+| Source snapshot `.worktrees` | zintegrowane i przetestowane | commit `1497ffa20`, 25/25 testów capture/policy; materializacja i verify przechodzą, a managed preflight dociera do kolejnego etapu storage |
+| Managed native storage | ext4 dostępne, host root pełny | Host-level read-only audit z 2026-08-13 potwierdza `/mnt/fullmag-zfn2-native` jako `rw,noatime` (94 GiB, ok. 8,7 GiB wolne) oraz `/zfn2` jako `rw` (ok. 12 TiB wolnego), ale `/dev/sdd` dla workspace/root ma 0 bajtów wolnego (`100%`). Nie wykonano kasowania, remountu ani restartu; kolejne managed smoke wymagają zatwierdzonego odzyskania miejsca. |
+| Warstwy 2D `points` i `bounds` | zaimplementowane i zintegrowane | commit `b36fe10d7` w fast-forward `master` `7dd98795f`; canonical state/OpenAPI/migracja v7→v8/capability/render model/Inspector/evidence, focused Vitest 64/64 i typecheck PASS |
+| FDM wireframe/mesh | zaimplementowane i zintegrowane kontraktowo | commit `dd8c4e697` (fast-forward z worktree `codex/fdm-planar-grid-overlay`); proceduralny `FMFG v1` dla strukturalnej siatki FDM, lazy endpoint, `geometry_source`, capability gating i overlay-only evidence; Rust 5/5, route FDM 1/1, FEM `FMCS v4` regression 1/1, OpenAPI 1/1, Vitest 19/19, typecheck i ESLint PASS; managed/browser qualification nadal nieprzeprowadzone |
+| Task 10 kwalifikacja runtime | zablokowana po świeżych fixture, compact/full PASS | FDM CPU doszedł do API, lecz canonical planner odrzucił nieobsługiwany multilayer z drugim obiektem (4 jawne przyczyny: regiony, długości sampled-field, nakładanie warstw); `mat_ms` 404 i browser timeout są wtórne. FEM CPU zbudował siatkę i API, ale dirty snapshot `4a4a8812…`, host `/dev/sdd` był pełny (`ENOSPC`), science `blocked`, a browser miał tylko częściowy PASS (raster/boundaries; contours/mesh blocked). `just verify-viewport-2d-planar-compact-full-contract` nadal exit 0 (`1 passed; 0 failed`), lecz nie kwalifikuje żadnej lane; FEM GPU nie uruchomiono. |
+| Task 11 cutover | niewykonany | `fieldMapStore` jest orphanem, ale usunięcie wejść wymaga przejścia Task 10; compatibility `extract_*_field` i FEM slab nie są jeszcze orphanami |
+
+Status całego celu pozostaje częściowy. Integracja kontraktów, harnessu i FDM
+wireframe/grid jest już na `masterze` (`HEAD=4c24e65598d259e61f9948faacebf72cb7e65b37`,
+`origin/master=bab0254d72e1049abe6da932beb1d7587e30f1bf`, origin jest przodkiem
+HEAD; runtime evidence poniżej zebrano jeszcze na `0777d7e1e7645bda365b3610296dc154bc99c185`). Zdalny master został pobrany; merge/rebase nie był potrzebny. Runtime
+ujawnił dwa realne blokery: nielegalny obecnie fixture multilayer FDM oraz pełny
+hostowy root filesystem podczas FEM. Do zamknięcia nadal wymagane są: naprawa i
+rozdzielenie fixture'ów FDM, odzyskanie miejsca zgodnie z polityką storage,
+świeże managed smoke FDM/FEM CPU/GPU na czystym snapshotcie, browser/WebGL
+evidence, dowody naukowe każdej lane oraz dopiero potem cutover starych ścieżek.

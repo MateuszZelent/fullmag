@@ -772,6 +772,38 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v2/sessions/current/data/domain/fdm-multilayer-layers/{layer_id}/region-membership": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["data_get_sessions_current_data_domain_fdm_multilayer_layers_layer_id_region_membership"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v2/sessions/current/data/domain/fdm-multilayer-layers/{layer_id}/region-memberships": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["data_get_sessions_current_data_domain_fdm_multilayer_layers_layer_id_region_memberships"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v2/sessions/current/data/domain/fdm-multilayer-layout": {
         parameters: {
             query?: never;
@@ -4201,6 +4233,7 @@ export interface components {
             active_cell_count: number;
             active_mask_hash?: string | null;
             active_mask_present: boolean;
+            available_material_quantities?: string[];
             convolution_cell_size: number[];
             convolution_grid: number[];
             /** Format: int64 */
@@ -4209,11 +4242,21 @@ export interface components {
             magnet_name: string;
             mask_provenance?: string | null;
             mask_ref?: string | null;
+            material_field_revisions?: {
+                [key: string]: number;
+            };
             native_cell_size: number[];
             native_grid: number[];
             native_grid_fingerprint?: string | null;
             native_origin: number[];
             object_id: string;
+            region_legend_hash?: string | null;
+            region_mask_hash?: string | null;
+            region_membership_available?: boolean;
+            region_membership_generation_id?: string | null;
+            region_membership_ref?: string | null;
+            /** Format: int64 */
+            region_membership_revision?: number | null;
             transfer_kind: string;
         };
         /** @enum {string} */
@@ -4280,6 +4323,31 @@ export interface components {
             schema_version: string;
             strategy?: string | null;
             unavailable_reason?: string | null;
+        };
+        /**
+         * @description Thin control-plane descriptor for one native multilayer FDM membership.
+         *     The cell-aligned IDs remain on the companion FMRM binary resource.
+         */
+        FdmNativeLayerRegionMembershipResource: {
+            binary_path: string;
+            /** Format: int64 */
+            cell_count: number;
+            cell_m: number[];
+            counts: number[];
+            domain_generation_id: string;
+            encoding: string;
+            freshness: string;
+            grid_fingerprint: string;
+            layer_id: string;
+            magnet_name: string;
+            object_id: string;
+            object_ids: string[];
+            origin_m: number[];
+            region_legend: components["schemas"]["FdmRegionLegendEntryResource"][];
+            region_legend_fingerprint: string;
+            /** Format: int64 */
+            region_membership_revision: number;
+            schema_version: string;
         };
         /**
          * @description Thin descriptor for realized FDM cell membership. The mask itself is kept
@@ -7162,8 +7230,10 @@ export interface components {
         };
         PlanarLayerState: {
             boundaries: boolean;
+            bounds: boolean;
             contours: boolean;
             mesh: boolean;
+            points: boolean;
             probes: boolean;
             raster: boolean;
             vectors: boolean;
@@ -7172,6 +7242,7 @@ export interface components {
             available: boolean;
             boundary_classification: string;
             codec?: string | null;
+            geometry_source: string;
         };
         PlanarMonitorCollectionResource: {
             count: number;
@@ -11618,6 +11689,114 @@ export interface operations {
             };
         };
     };
+    data_get_sessions_current_data_domain_fdm_multilayer_layers_layer_id_region_membership: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Strong ETag from a previous FMRM response */
+                "If-None-Match"?: string | null;
+                /** @description Optional single byte range for the FMRM payload */
+                Range?: string | null;
+            };
+            path: {
+                /** @description Stable native multilayer layer identity */
+                layer_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Native-layer realized region membership (FMRM v2) */
+            200: {
+                headers: {
+                    /** @description Exact native grid fingerprint */
+                    "x-fullmag-grid-fingerprint"?: string;
+                    /** @description Native membership and legend identity */
+                    "x-fullmag-region-membership-fingerprint"?: string;
+                    /** @description Native membership revision */
+                    "x-fullmag-region-membership-revision"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/octet-stream": unknown;
+                };
+            };
+            /** @description Partial FMRM payload */
+            206: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/octet-stream": unknown;
+                };
+            };
+            /** @description FMRM payload not modified for the supplied ETag */
+            304: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Layer or native region membership is not materialized */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Native membership disagrees with layer identity, grid, legend, or payload hash */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Requested FMRM byte range is not satisfiable */
+            416: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    data_get_sessions_current_data_domain_fdm_multilayer_layers_layer_id_region_memberships: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Stable native multilayer layer identity */
+                layer_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Thin descriptor and complete layer-local legend for native FMRM membership */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FdmNativeLayerRegionMembershipResource"];
+                };
+            };
+            /** @description Layer or native membership was not materialized */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Declared native membership is stale, missing, corrupt, or disagrees with its layer layout */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
     data_get_sessions_current_data_domain_fdm_multilayer_layout: {
         parameters: {
             query?: never;
@@ -12192,15 +12371,8 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description FMCS v4 planar mesh overlay with exact segment classes */
+            /** @description FMCS v4 FEM topology or FMFG v1 FDM structured-grid planar overlay */
             200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description Structured grid has no FEM overlay */
-            204: {
                 headers: {
                     [name: string]: unknown;
                 };

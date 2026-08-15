@@ -289,6 +289,24 @@ test("browser smoke proves the exact completed response was adopted by the reque
   assert.match(smokeSource, /adoptedVectorItemCount/);
   assert.match(smokeSource, /render\.vectors\.buildKey/);
   assert.match(smokeSource, /render\.surface\.bufferKey/);
+  assert.match(smokeSource, /const renderPass = "surface"/);
+  assert.match(smokeSource, /renderPass = quantityId === "eden_demag" \? "surface" : "vector-glyph"/);
+  assert.match(smokeSource, /adoptionKindForRenderPass\(renderPass\)/);
+});
+
+test("browser smoke proves the FDM Airbox target has visible wireframe and vector geometry", () => {
+  assert.match(smokeSource, /ensureFdmAirboxWireframe/);
+  assert.match(smokeSource, /assertFdmAirboxVectorRender/);
+  assert.match(smokeSource, /data-fdm-airbox-target/);
+  assert.match(smokeSource, /data-fdm-airbox-wireframe-visible/);
+  assert.match(smokeSource, /data-fdm-airbox-vectors-visible/);
+  assert.match(smokeSource, /data-fdm-airbox-model-count/);
+  assert.match(smokeSource, /data-fdm-airbox-vector-segment-count/);
+  assert.match(smokeSource, /getByRole\("radio", \{\s*name: "Wireframe"/s);
+  assert.match(smokeSource, /getByRole\("button", \{\s*name: "Toggle target visibility"/s);
+  assert.match(smokeSource, /airbox_magnetization: airboxMagnetization, airbox_display: airboxDisplay, airbox_render: airboxRender/);
+  assert.match(smokeSource, /airbox_controls: airboxControls/);
+  assert.match(smokeSource, /getByRole\("button", \{ name: "Focus", exact: true \}\)/);
 });
 
 test("browser smoke rejects historical adoption for a repeated resource key", () => {
