@@ -17,7 +17,8 @@ use crate::derived_fields::compute_torque_field;
 use crate::fdm::{validate_multilayer_grid_budget, validate_single_grid_budget};
 #[cfg(feature = "cuda")]
 use crate::preview::{
-    build_grid_preview_field_from_flat_plan, plan_grid_preview, resample_grid_mask, GridPreviewPlan,
+    build_grid_preview_field_from_flat_plan, build_grid_scalar_preview_field, plan_grid_preview,
+    resample_grid_mask, GridPreviewPlan,
 };
 #[cfg(feature = "cuda")]
 use crate::quantities::normalized_quantity_name;
@@ -1441,6 +1442,57 @@ impl NativeFdmBackend {
         Ok(unpack_flat_f32(&flat))
     }
 
+    /// Copy a per-cell scalar observable from device to host as f64.
+    pub fn copy_scalar_field(
+        &self,
+        observable: ffi::fullmag_fdm_observable,
+        cell_count: usize,
+    ) -> Result<Vec<f64>, RunError> {
+        if self.precision == fullmag_ir::ExecutionPrecision::Single {
+            let mut values = vec![0.0f32; cell_count];
+            let rc = unsafe {
+                ffi::fullmag_fdm_backend_copy_scalar_field_f32(
+                    self.handle as *mut _,
+                    observable,
+                    values.as_mut_ptr(),
+                    cell_count as u64,
+                )
+            };
+            if rc != ffi::FULLMAG_FDM_OK {
+                return Err(self.last_error_or("copy_scalar_field_f32 failed"));
+            }
+            Ok(values.into_iter().map(f64::from).collect())
+        } else {
+            let mut values = vec![0.0f64; cell_count];
+            let rc = unsafe {
+                ffi::fullmag_fdm_backend_copy_scalar_field_f64(
+                    self.handle as *mut _,
+                    observable,
+                    values.as_mut_ptr(),
+                    cell_count as u64,
+                )
+            };
+            if rc != ffi::FULLMAG_FDM_OK {
+                return Err(self.last_error_or("copy_scalar_field failed"));
+            }
+            Ok(values)
+        }
+    }
+
+    /// Copy a canonical scalar quantity from device to host as f64.
+    pub fn copy_scalar_quantity(
+        &self,
+        quantity: &str,
+        cell_count: usize,
+    ) -> Result<Vec<f64>, RunError> {
+        let observable =
+            snapshot_observable(quantity).filter(|_| is_scalar_quantity_name(quantity));
+        let observable = observable.ok_or_else(|| RunError {
+            message: format!("unsupported CUDA scalar field snapshot '{quantity}'"),
+        })?;
+        self.copy_scalar_field(observable, cell_count)
+    }
+
     pub fn copy_layer_field(
         &self,
         layer_index: u32,
@@ -1827,6 +1879,24 @@ impl NativeFdmBackend {
             });
         }
 
+        if is_scalar_quantity_name(quantity) {
+            let observable = snapshot_observable(quantity).ok_or_else(|| RunError {
+                message: format!("unsupported CUDA scalar preview snapshot '{quantity}'"),
+            })?;
+            let values = self.copy_scalar_field(
+                observable,
+                (original_grid[0] as usize)
+                    * (original_grid[1] as usize)
+                    * (original_grid[2] as usize),
+            )?;
+            return Ok(build_grid_scalar_preview_field(
+                request,
+                &values,
+                original_grid,
+                active_mask,
+            ));
+        }
+
         let flat = if quantity == "torque" {
             let cell_count = (original_grid[0] as usize)
                 * (original_grid[1] as usize)
@@ -1849,7 +1919,11 @@ impl NativeFdmBackend {
                 "H_oe" => ffi::fullmag_fdm_observable::FULLMAG_FDM_OBSERVABLE_H_OE,
                 "H_ani" => ffi::fullmag_fdm_observable::FULLMAG_FDM_OBSERVABLE_H_ANI,
                 "H_eff" => ffi::fullmag_fdm_observable::FULLMAG_FDM_OBSERVABLE_H_EFF,
-                _ => ffi::fullmag_fdm_observable::FULLMAG_FDM_OBSERVABLE_M,
+                other => {
+                    return Err(RunError {
+                        message: format!("unsupported CUDA vector preview snapshot '{other}'"),
+                    });
+                }
             };
             let len = preview_count * 3;
             if self.precision == fullmag_ir::ExecutionPrecision::Single {
@@ -2187,19 +2261,26 @@ impl NativeFdmFieldSnapshot {
                 }
             };
             let len = len_bytes as usize;
+            if data.is_null() {
+                return Err(RunError {
+                    message: format!(
+                        "CUDA field snapshot '{}' returned a null payload",
+                        self.name
+                    ),
+                });
+            }
+            let info = NativeFieldSnapshotInfo {
+                cell_count: desc.cell_count as usize,
+                component_count: desc.component_count as usize,
+                scalar_bytes: desc.scalar_bytes as usize,
+                scalar_type,
+            };
+            validate_native_snapshot_payload(&self.name, info, len)?;
             // SAFETY: `data` points to a CUDA-managed buffer valid until the
             // handle is destroyed.  We copy immediately into an owned Vec so
             // the raw pointer does not escape this block.
             let owned = unsafe { std::slice::from_raw_parts(data.cast::<u8>(), len) }.to_vec();
-            self.ready = Some(NativeFieldSnapshotReady {
-                data: owned,
-                info: NativeFieldSnapshotInfo {
-                    cell_count: desc.cell_count as usize,
-                    component_count: desc.component_count as usize,
-                    scalar_bytes: desc.scalar_bytes as usize,
-                    scalar_type,
-                },
-            });
+            self.ready = Some(NativeFieldSnapshotReady { data: owned, info });
         }
         Ok(self.ready.as_ref().expect("snapshot ready cached"))
     }
@@ -2260,17 +2341,27 @@ impl NativeFdmPreviewSnapshot {
                     NativeFieldSnapshotScalarType::F64
                 }
             };
+            if data.is_null() {
+                return Err(RunError {
+                    message: format!(
+                        "CUDA preview snapshot '{}' returned a null payload",
+                        self.quantity
+                    ),
+                });
+            }
+            let info = NativeFieldSnapshotInfo {
+                cell_count: desc.cell_count as usize,
+                component_count: desc.component_count as usize,
+                scalar_bytes: desc.scalar_bytes as usize,
+                scalar_type,
+            };
+            validate_native_snapshot_payload(&self.quantity, info, len_bytes as usize)?;
             self.ready = Some(NativeFieldSnapshotReady {
                 // SAFETY: `data` is valid until the handle is destroyed.
                 // We copy immediately so the raw pointer does not escape.
                 data: unsafe { std::slice::from_raw_parts(data.cast::<u8>(), len_bytes as usize) }
                     .to_vec(),
-                info: NativeFieldSnapshotInfo {
-                    cell_count: desc.cell_count as usize,
-                    component_count: desc.component_count as usize,
-                    scalar_bytes: desc.scalar_bytes as usize,
-                    scalar_type,
-                },
+                info,
             });
         }
         Ok(self.ready.as_ref().expect("preview snapshot ready cached"))
@@ -2398,8 +2489,90 @@ fn snapshot_observable(name: &str) -> Option<ffi::fullmag_fdm_observable> {
         "H_oe" | "H_OE" => ffi::fullmag_fdm_observable::FULLMAG_FDM_OBSERVABLE_H_OE,
         "H_ani" | "H_ANI" => ffi::fullmag_fdm_observable::FULLMAG_FDM_OBSERVABLE_H_ANI,
         "H_eff" => ffi::fullmag_fdm_observable::FULLMAG_FDM_OBSERVABLE_H_EFF,
+        "eden_ex" | "EDEN_EX" => ffi::fullmag_fdm_observable::FULLMAG_FDM_OBSERVABLE_EDEN_EX,
+        "eden_demag" | "EDEN_DEMAG" => {
+            ffi::fullmag_fdm_observable::FULLMAG_FDM_OBSERVABLE_EDEN_DEMAG
+        }
+        "eden_ext" | "EDEN_EXT" => ffi::fullmag_fdm_observable::FULLMAG_FDM_OBSERVABLE_EDEN_EXT,
+        "eden_drive" | "EDEN_DRIVE" => {
+            ffi::fullmag_fdm_observable::FULLMAG_FDM_OBSERVABLE_EDEN_DRIVE
+        }
+        "eden_ani" | "EDEN_ANI" => ffi::fullmag_fdm_observable::FULLMAG_FDM_OBSERVABLE_EDEN_ANI,
+        "eden_dmi" | "EDEN_DMI" => ffi::fullmag_fdm_observable::FULLMAG_FDM_OBSERVABLE_EDEN_DMI,
+        "eden_total" | "EDEN_TOTAL" => {
+            ffi::fullmag_fdm_observable::FULLMAG_FDM_OBSERVABLE_EDEN_TOTAL
+        }
         _ => return None,
     })
+}
+
+#[cfg(feature = "cuda")]
+fn is_scalar_quantity_name(name: &str) -> bool {
+    matches!(
+        name,
+        "eden_ex"
+            | "eden_demag"
+            | "eden_ext"
+            | "eden_drive"
+            | "eden_ani"
+            | "eden_dmi"
+            | "eden_total"
+            | "EDEN_EX"
+            | "EDEN_DEMAG"
+            | "EDEN_EXT"
+            | "EDEN_DRIVE"
+            | "EDEN_ANI"
+            | "EDEN_DMI"
+            | "EDEN_TOTAL"
+    )
+}
+
+#[cfg(feature = "cuda")]
+fn validate_native_snapshot_payload(
+    quantity: &str,
+    info: NativeFieldSnapshotInfo,
+    len_bytes: usize,
+) -> Result<(), RunError> {
+    let expected_components = if is_scalar_quantity_name(quantity) {
+        1
+    } else {
+        3
+    };
+    if info.component_count != expected_components {
+        return Err(RunError {
+            message: format!(
+                "CUDA snapshot '{quantity}' component_count={} does not match expected {expected_components}",
+                info.component_count
+            ),
+        });
+    }
+    let expected_scalar_bytes = match info.scalar_type {
+        NativeFieldSnapshotScalarType::F32 => std::mem::size_of::<f32>(),
+        NativeFieldSnapshotScalarType::F64 => std::mem::size_of::<f64>(),
+    };
+    if info.scalar_bytes != expected_scalar_bytes {
+        return Err(RunError {
+            message: format!(
+                "CUDA snapshot '{quantity}' scalar_bytes={} does not match scalar type ({expected_scalar_bytes})",
+                info.scalar_bytes
+            ),
+        });
+    }
+    let expected_len = info
+        .cell_count
+        .checked_mul(info.component_count)
+        .and_then(|count| count.checked_mul(info.scalar_bytes))
+        .ok_or_else(|| RunError {
+            message: format!("CUDA snapshot '{quantity}' payload length overflows usize"),
+        })?;
+    if len_bytes != expected_len {
+        return Err(RunError {
+            message: format!(
+                "CUDA snapshot '{quantity}' payload length {len_bytes} does not match expected {expected_len} bytes"
+            ),
+        });
+    }
+    Ok(())
 }
 
 #[cfg(feature = "cuda")]
@@ -2489,6 +2662,74 @@ mod tests {
             snapshot_observable("H_ANI").is_some(),
             "native CUDA FDM must accept ABI-style H_ANI snapshot names"
         );
+    }
+
+    #[test]
+    fn native_fdm_snapshot_observable_accepts_all_scalar_energy_densities() {
+        let scalar_observables = [
+            (
+                "eden_ex",
+                ffi::fullmag_fdm_observable::FULLMAG_FDM_OBSERVABLE_EDEN_EX,
+            ),
+            (
+                "eden_demag",
+                ffi::fullmag_fdm_observable::FULLMAG_FDM_OBSERVABLE_EDEN_DEMAG,
+            ),
+            (
+                "eden_ext",
+                ffi::fullmag_fdm_observable::FULLMAG_FDM_OBSERVABLE_EDEN_EXT,
+            ),
+            (
+                "eden_drive",
+                ffi::fullmag_fdm_observable::FULLMAG_FDM_OBSERVABLE_EDEN_DRIVE,
+            ),
+            (
+                "eden_ani",
+                ffi::fullmag_fdm_observable::FULLMAG_FDM_OBSERVABLE_EDEN_ANI,
+            ),
+            (
+                "eden_dmi",
+                ffi::fullmag_fdm_observable::FULLMAG_FDM_OBSERVABLE_EDEN_DMI,
+            ),
+            (
+                "eden_total",
+                ffi::fullmag_fdm_observable::FULLMAG_FDM_OBSERVABLE_EDEN_TOTAL,
+            ),
+        ];
+
+        for (name, expected) in scalar_observables {
+            assert_eq!(snapshot_observable(name), Some(expected), "{name}");
+            assert!(is_scalar_quantity_name(name), "{name} must be scalar");
+        }
+        assert!(snapshot_observable("not_a_quantity").is_none());
+        assert!(!is_scalar_quantity_name("not_a_quantity"));
+    }
+
+    #[test]
+    fn native_fdm_snapshot_descriptor_requires_quantity_shape_and_exact_payload() {
+        let info = NativeFieldSnapshotInfo {
+            cell_count: 4,
+            component_count: 1,
+            scalar_bytes: 8,
+            scalar_type: NativeFieldSnapshotScalarType::F64,
+        };
+        validate_native_snapshot_payload("eden_total", info, 32)
+            .expect("scalar snapshot descriptor should be accepted");
+
+        let error = validate_native_snapshot_payload("eden_total", info, 96)
+            .expect_err("scalar payload with vector byte length must fail closed");
+        assert!(error.message.contains("payload length"));
+
+        let error = validate_native_snapshot_payload(
+            "H_demag",
+            NativeFieldSnapshotInfo {
+                component_count: 1,
+                ..info
+            },
+            32,
+        )
+        .expect_err("vector quantity must not accept scalar descriptor");
+        assert!(error.message.contains("component_count"));
     }
 
     #[test]

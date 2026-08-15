@@ -6103,18 +6103,18 @@ fn capture_initial_cuda_fields(
             let snapshot = backend.begin_field_snapshot(&name, 0, 0.0, 0.0)?;
             artifacts.record_native_field_snapshot(snapshot)?;
         } else {
-            let values = copy_cuda_field_snapshot(backend, &name, cell_count)?;
+            let payload = copy_cuda_field_snapshot(backend, &name, cell_count)?;
             artifacts.record_field_snapshot(FieldSnapshot {
                 name: name.clone(),
                 step: 0,
                 time: 0.0,
                 solver_dt: 0.0,
-                component_count: 3,
-                component_order: "xyz".into(),
+                component_count: payload.component_count,
+                component_order: payload.component_order.into(),
                 location: "sample".into(),
                 scope: "full".into(),
                 revision: (0 as u64).saturating_add(1),
-                values: FieldSnapshot::flatten_vec3(values),
+                values: payload.values,
             })?;
         }
     }
@@ -6158,18 +6158,18 @@ fn record_cuda_due_outputs(
             let snapshot = backend.begin_field_snapshot(&name, stats.step, stats.time, stats.dt)?;
             artifacts.record_native_field_snapshot(snapshot)?;
         } else {
-            let values = copy_cuda_field_snapshot(backend, &name, cell_count)?;
+            let payload = copy_cuda_field_snapshot(backend, &name, cell_count)?;
             artifacts.record_field_snapshot(FieldSnapshot {
                 name: name.clone(),
                 step: stats.step,
                 time: stats.time,
                 solver_dt: stats.dt,
-                component_count: 3,
-                component_order: "xyz".into(),
+                component_count: payload.component_count,
+                component_order: payload.component_order.into(),
                 location: "sample".into(),
                 scope: "full".into(),
                 revision: (stats.step as u64).saturating_add(1),
-                values: FieldSnapshot::flatten_vec3(values),
+                values: payload.values,
             })?;
         }
     }
@@ -6233,18 +6233,18 @@ fn record_cuda_final_outputs(
             )?;
             artifacts.record_native_field_snapshot(snapshot)?;
         } else {
-            let values = copy_cuda_field_snapshot(backend, &name, cell_count)?;
+            let payload = copy_cuda_field_snapshot(backend, &name, cell_count)?;
             artifacts.record_field_snapshot(FieldSnapshot {
                 name,
                 step: latest_stats.step,
                 time: latest_stats.time,
                 solver_dt: latest_stats.dt,
-                component_count: 3,
-                component_order: "xyz".into(),
+                component_count: payload.component_count,
+                component_order: payload.component_order.into(),
                 location: "sample".into(),
                 scope: "full".into(),
                 revision: (latest_stats.step as u64).saturating_add(1),
-                values: FieldSnapshot::flatten_vec3(values),
+                values: payload.values,
             })?;
         }
     }
@@ -6253,15 +6253,23 @@ fn record_cuda_final_outputs(
 }
 
 #[cfg(feature = "cuda")]
+#[derive(Debug)]
+struct CudaFieldSnapshotPayload {
+    component_count: u8,
+    component_order: &'static str,
+    values: Vec<f64>,
+}
+
+#[cfg(feature = "cuda")]
 fn copy_cuda_field_snapshot(
     backend: &NativeFdmBackend,
     name: &str,
     cell_count: usize,
-) -> Result<Vec<[f64; 3]>, RunError> {
+) -> Result<CudaFieldSnapshotPayload, RunError> {
     let quantity = normalized_quantity_name(name).map_err(|_| RunError {
         message: format!("unsupported CUDA field snapshot '{}'", name),
     })?;
-    match quantity {
+    let values = match quantity {
         "m" => backend.copy_m(cell_count),
         "H_ex" => backend.copy_h_ex(cell_count),
         "H_demag" => backend.copy_h_demag(cell_count),
@@ -6269,10 +6277,23 @@ fn copy_cuda_field_snapshot(
         "H_oe" => backend.copy_h_oe(cell_count),
         "H_ani" => backend.copy_h_ani(cell_count),
         "H_eff" => backend.copy_h_eff(cell_count),
+        "eden_ex" | "eden_demag" | "eden_ext" | "eden_drive" | "eden_ani" | "eden_dmi"
+        | "eden_total" => {
+            return Ok(CudaFieldSnapshotPayload {
+                component_count: 1,
+                component_order: "scalar",
+                values: backend.copy_scalar_quantity(quantity, cell_count)?,
+            });
+        }
         other => Err(RunError {
             message: format!("unsupported CUDA field snapshot '{}'", other),
         }),
-    }
+    }?;
+    Ok(CudaFieldSnapshotPayload {
+        component_count: 3,
+        component_order: "xyz",
+        values: FieldSnapshot::flatten_vec3(values),
+    })
 }
 
 #[cfg(test)]
@@ -6414,6 +6435,11 @@ mod tests {
             source.contains("\"H_oe\" => backend.copy_h_oe(cell_count)")
                 && source.contains("\"H_ani\" => backend.copy_h_ani(cell_count)"),
             "native CUDA field output helper must expose H_oe and H_ani local fields"
+        );
+        assert!(
+            source.contains("backend.copy_scalar_quantity(quantity, cell_count)")
+                && source.contains("component_count: payload.component_count"),
+            "native CUDA field output helper must publish scalar energy-density payloads"
         );
 
         for function_name in [
