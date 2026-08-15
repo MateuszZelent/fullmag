@@ -269,3 +269,13 @@ Klasyfikacja nie używa label/path/filename jako źródła fizyki. `Eigenmodes`,
 3. Zatwierdzić zmiany opisowym commitem, wypchnąć branch i dopiero wtedy scalić go do `master`.
 
 Stan: implementacja funkcjonalna i produkcyjna weryfikacja physics-first są domknięte; pozostał etap kontroli diffu i integracji Git. Checkboxy przy poszczególnych commitach pozostają celowo nieodhaczone do czasu ich wykonania.
+
+### Integracja zakończona — 2026-08-15
+
+Końcowy diff został przejrzany, artefakty wygenerowane przez smoke/build zostały wyłączone z commita i odłożone w odwracalnym stashu. Zmiany źródłowe zostały zapisane, branch physics-first został wypchnięty, a `origin/master` przesunięty fast-forward do tego samego commita integracyjnego.
+
+Po ostatniej poprawce tokenizacji selecta wykonano ponownie pełny frontendowy gate: 561 plików i 5294 testy, typecheck, lint, production build Next.js 16.2.11 oraz Inspector browser smoke bez błędów konsoli dla 360/416/560 px, dark/light i 200% zoom. `git diff --check` pozostaje zielony.
+
+`just --fmt --check` nadal raportuje wcześniejszy, niezależny drift formattera w istniejącym `justfile`; nie został naprawiony masowym formatowaniem niepowiązanych recept. Audyt chart performance potwierdza zwalnianie instancji ECharts, brak chart-owned RAF po zamknięciu, stabilny WebGL i brak niekontrolowanego wzrostu requestów; pomiar hit/miss cache pozostaje jawnie `NOT_MEASURED` i wymaga osobnego SLO, jeśli ma stać się bramką wydajnościową.
+
+Stan końcowy: wymagany physics-first workflow jest zaimplementowany, zweryfikowany produkcyjnie i opublikowany na `origin/master`; otwarty pozostaje wyłącznie niezależny formatter drift oraz opcjonalne zaostrzenie ilościowego SLO cache/performance.
