@@ -365,7 +365,7 @@ describe("ObjectVisualizationPanel lane routing", () => {
     expect(airbox).toContain('data-inspector-owner="airbox.visualization"');
     expect(airbox).toContain("Airbox visualization");
     expect(airbox).toContain("Target scope:Airbox");
-    expect(airbox).toContain("Target ID:fdm-domain");
+    expect(airbox).toContain("Target ID:airbox");
     expect(airbox).toContain("Airbox-specific bounds and field support");
     expect(airbox).toContain("Airbox extent, display passes, field quantity");
     expectSharedVisualizationInspectorContract(
