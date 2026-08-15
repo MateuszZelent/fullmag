@@ -1176,6 +1176,7 @@ async function installInspectorFixtureApi(page, fixture) {
     if (path === "/v2/sessions/current/data/fields") return fulfillJson(route, inspectorFieldCatalog());
     if (path === "/v2/sessions/current/visualization/state") return fulfillJson(route, fixture.visualization);
     if (path === "/v2/sessions/current/meshing/meshes/shared-domain/manifest") return fulfillJson(route, fixture.manifest);
+    if (path === "/v2/sessions/current/meshing/builds") return fulfillJson(route, { history: [], revision: 7 });
     if (path === "/v2/sessions/current/meshing/capabilities") return fulfillJson(route, { mesh_adaptivity_state: null, mesh_capabilities: null, revision: 7 });
     if (path === "/v2/sessions/current/meshing/mesh/periodic_pairs.v1") return fulfillJson(route, {
       pairs: [],
@@ -1219,6 +1220,10 @@ async function installInspectorFixtureApi(page, fixture) {
       },
       revision: 7,
     });
+    if (path === "/v2/sessions/current/meshing/meshes/shared-domain/report") return fulfillJson(route, { report: null, revision: 7 });
+    if (path === "/v2/sessions/current/meshing/meshes/shared-domain/quality") return fulfillJson(route, { quality: null, revision: 7 });
+    if (path === "/v2/sessions/current/meshing/meshes/universe/report") return fulfillJson(route, { report: null, revision: 7 });
+    if (path === "/v2/sessions/current/meshing/meshes/universe/quality") return fulfillJson(route, { quality: null, revision: 7 });
     if (path === "/v2/sessions/current/meshing/builds/current") return fulfillJson(route, { active_build: null, mesh_pipeline_status: "ready", revision: 7 });
     if (path === "/v2/sessions/current/meshing/builds/latest-successful") return fulfillJson(route, { provenance: { scene_revision: fixture.revision }, revision: 7, status: "completed" });
     if (path === "/v2/sessions/current/meshing/region-memberships") return fulfillJson(route, { memberships: [], revision: 7 });
