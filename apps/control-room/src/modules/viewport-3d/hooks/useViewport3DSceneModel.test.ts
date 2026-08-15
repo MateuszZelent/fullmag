@@ -378,6 +378,38 @@ describe("FDM Airbox mesh demand", () => {
     );
   });
 
+  it("maps the canonical single-grid Airbox target to the outside-support render carrier", () => {
+    const source = readFileSync(sceneModelSourceUrl, "utf8");
+    const targetsStart = source.indexOf("const visualizationDebugTargets =");
+    const targetsBlock = source.slice(
+      targetsStart,
+      source.indexOf(
+        "const visualizationDebugTopologyByteLength",
+        targetsStart,
+      ),
+    );
+
+    expect(targetsBlock).toMatch(
+      /target\.id === AIRBOX_VISUALIZATION_TARGET\.id[\s\S]*carrierIds\.add\("fdm-universe-outside-support"\)/,
+    );
+    expect(targetsBlock).toMatch(
+      /target\.id === AIRBOX_VISUALIZATION_TARGET\.id[\s\S]*fdmAirboxDebugRenderPass/,
+    );
+  });
+
+  it("keeps canonical FDM Airbox display settings on the subscribed local controller snapshot", () => {
+    const source = readFileSync(sceneModelSourceUrl, "utf8");
+    const settingsStart = source.indexOf("const airboxSettings = useMemo(");
+    const settingsBlock = source.slice(
+      settingsStart,
+      source.indexOf("const fdmSingleGridAirboxSettings", settingsStart),
+    );
+
+    expect(settingsBlock).toContain(
+      "visualizationState: fdmLaneActive ? null : renderingState",
+    );
+  });
+
   it("builds the inactive-cell carrier for wireframe, points, or vectors", () => {
     const source = readFileSync(sceneModelSourceUrl, "utf8");
 
@@ -598,7 +630,7 @@ describe("useViewport3DSceneModel", () => {
   it("uses canonical local Airbox settings for both FDM Airbox carriers", () => {
     const source = readFileSync(sceneModelSourceUrl, "utf8");
     expect(source).toContain(
-      "target: AIRBOX_VISUALIZATION_TARGET,\n        visualizationState: renderingState,",
+      "target: AIRBOX_VISUALIZATION_TARGET,\n        visualizationState: fdmLaneActive ? null : renderingState,",
     );
     const fdmSingleGridAirboxBlock = source.slice(
       source.indexOf("const fdmSingleGridAirboxSettings ="),
@@ -618,7 +650,9 @@ describe("useViewport3DSceneModel", () => {
 
     expect(airboxSettingsBlock).toContain("resolveTargetVisualization({");
     expect(airboxSettingsBlock).toContain("target: AIRBOX_VISUALIZATION_TARGET");
-    expect(airboxSettingsBlock).toContain("visualizationState: renderingState");
+    expect(airboxSettingsBlock).toContain(
+      "visualizationState: fdmLaneActive ? null : renderingState",
+    );
     expect(airboxSettingsBlock).not.toContain("resolveViewport3DFdmTargetVisualization({");
 
     const singleGridDisplayBlock = source.slice(
@@ -4555,9 +4589,7 @@ describe("useViewport3DSceneModel", () => {
   it("builds FDM scalar colors from the FDM target palette, not the FEM/global palette", () => {
     const source = readFileSync(sceneModelSourceUrl, "utf8");
     const fdmColorBlock = source.slice(
-      source.indexOf(
-        "const fdmTargetViews: readonly Viewport3DFdmTargetRenderView[] = useMemo(",
-      ),
+      source.indexOf("const fdmTargetViews:"),
       source.indexOf("const chunkedScalarColors = useViewport3DChunkedScalarColors"),
     );
 
@@ -4568,9 +4600,7 @@ describe("useViewport3DSceneModel", () => {
   it("builds a separate FDM vector color buffer for vector-only colorbars", () => {
     const source = readFileSync(sceneModelSourceUrl, "utf8");
     const fdmVectorColorBlock = source.slice(
-      source.indexOf(
-        "const fdmTargetViews: readonly Viewport3DFdmTargetRenderView[] = useMemo(",
-      ),
+      source.indexOf("const fdmTargetViews:"),
       source.indexOf("const chunkedScalarColors = useViewport3DChunkedScalarColors"),
     );
 

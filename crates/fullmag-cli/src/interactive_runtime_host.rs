@@ -603,6 +603,8 @@ impl InteractiveRuntimeHost {
         live_workspace: &LocalLiveWorkspace,
     ) -> Result<()> {
         let display_selection = self.control.display_selection_snapshot();
+        let preview_request = display_selection.preview_request();
+        let materialization_request = full_field_materialization_request(preview_request.clone());
         self.ensure_base_runtime_ready(continuation_magnetization, live_workspace);
 
         if let Some(runtime) = self.runtime.as_mut() {
@@ -612,8 +614,8 @@ impl InteractiveRuntimeHost {
                 live_workspace,
             )?;
             let quantities = fullmag_runner::quantities::field_materialization_quantity_ids();
-            let cached_fields = runtime
-                .snapshot_vector_fields(&quantities, &display_selection.preview_request())?;
+            let cached_fields =
+                runtime.snapshot_vector_fields(&quantities, &materialization_request)?;
             live_workspace.update(|state| {
                 replace_cached_preview_fields(state, cached_fields.clone());
             });
@@ -622,10 +624,10 @@ impl InteractiveRuntimeHost {
 
         let (preview_field, cached_fields, auxiliary_artifacts) =
             snapshot_interactive_preview_payload(
-            &self.base_problem,
-            continuation_magnetization,
-            &display_selection.preview_request(),
-        )?;
+                &self.base_problem,
+                continuation_magnetization,
+                &preview_request,
+            )?;
         live_workspace.replace_auxiliary_artifacts(&auxiliary_artifacts)?;
         live_workspace.update(|state| {
             state.live_state.updated_at_unix_ms = unix_time_millis().unwrap_or(0);
@@ -1296,6 +1298,7 @@ mod tests {
 
         assert!(function_body.contains("snapshot_interactive_preview_payload"));
         assert!(function_body.contains("replace_auxiliary_artifacts"));
+        assert!(function_body.contains("full_field_materialization_request"));
         assert!(source.contains("snapshot_problem_vector_field_batch"));
     }
 
@@ -1344,21 +1347,13 @@ fn snapshot_interactive_preview_payload(
         apply_continuation_initial_state(&mut problem, previous_final_magnetization)?;
     }
     let quantities = fullmag_runner::quantities::field_materialization_quantity_ids();
-    let batch =
-        fullmag_runner::snapshot_problem_vector_field_batch(&problem, &quantities, request)?;
-    let requested_quantity = fullmag_runner::quantities::normalize_quantity_id(&request.quantity)
-        .map_err(|error| anyhow!(error.to_string()))?;
-    let preview_field = batch
-        .fields
-        .iter()
-        .find(|field| field.quantity == requested_quantity.as_str())
-        .cloned()
-        .ok_or_else(|| {
-            anyhow!(
-                "multilayer preview quantity '{}' is unavailable for the current plan",
-                request.quantity
-            )
-        })?;
+    let preview_field = fullmag_runner::snapshot_problem_preview(&problem, request)?;
+    let materialization_request = full_field_materialization_request(request.clone());
+    let batch = fullmag_runner::snapshot_problem_vector_field_batch(
+        &problem,
+        &quantities,
+        &materialization_request,
+    )?;
     Ok((preview_field, batch.fields, batch.auxiliary_artifacts))
 }
 

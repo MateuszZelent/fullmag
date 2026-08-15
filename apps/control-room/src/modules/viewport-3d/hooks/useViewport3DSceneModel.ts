@@ -3472,24 +3472,14 @@ export function useViewport3DSceneModel({
         : [],
     [fdmTargetDefinitionsResult, fdmTargetSettingsById],
   );
-  const fdmUniverseOutsideSupportSettings = useMemo(() => {
-    if (!fdmUniverseOutsideSupport) return null;
-    return resolveViewport3DFdmTargetVisualization({
-      snapshot: objectVisualizationSnapshot,
-      target: targetForFdmUniverseOutsideSupport(),
-    }).effectiveSettings;
-  }, [
-    fdmUniverseOutsideSupport,
-    objectVisualizationSnapshot,
-  ]);
   const airboxSettings = useMemo(
     () =>
       resolveTargetVisualization({
         snapshot: objectVisualizationSnapshot,
         target: AIRBOX_VISUALIZATION_TARGET,
-        visualizationState: renderingState,
+        visualizationState: fdmLaneActive ? null : renderingState,
       }).effectiveSettings,
-    [objectVisualizationSnapshot, renderingState],
+    [fdmLaneActive, objectVisualizationSnapshot, renderingState],
   );
   // Airbox is the public display target for both FDM paths.  The structured
   // outside-support id remains a carrier/query scope only; it must not own a
@@ -5579,6 +5569,13 @@ export function useViewport3DSceneModel({
         ) {
           carrierIds.add(fdmMultilayerAirboxView.target.id);
         }
+        if (
+          target.id === AIRBOX_VISUALIZATION_TARGET.id &&
+          fdmUniverseOutsideSupport &&
+          !fdmMultilayerAirboxView
+        ) {
+          carrierIds.add("fdm-universe-outside-support");
+        }
         if (target.id === "fdm-universe-outside-support") {
           carrierIds.add(target.id);
         }
@@ -5591,6 +5588,9 @@ export function useViewport3DSceneModel({
             target.id === AIRBOX_VISUALIZATION_TARGET.id &&
             fdmMultilayerAirboxView
               ? fdmMultilayerAirboxDebugRenderPass
+              : target.id === AIRBOX_VISUALIZATION_TARGET.id &&
+                  fdmUniverseOutsideSupport
+                ? fdmAirboxDebugRenderPass
               : target.id === "fdm-universe-outside-support"
                 ? fdmAirboxDebugRenderPass
                 : fdmTargetView
@@ -5919,7 +5919,6 @@ export function useViewport3DSceneModel({
     fdmAirboxVectorGlyphColors,
     fdmInstanceModel: fdmInstanceModel,
     fdmUniverseOutsideSupport,
-    fdmUniverseOutsideSupportSettings,
     fdmSettings,
     fdmMultilayerAirboxView,
     fdmMultilayerAirboxBuildError:

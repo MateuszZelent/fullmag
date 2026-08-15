@@ -5734,12 +5734,18 @@ fn cumulative_rhs_evals(steps: &[fullmag_runner::StepStats]) -> u64 {
     steps.iter().map(|step| u64::from(step.rhs_evals)).sum()
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ProblemPreviewRefreshMode {
+    PreviewOnly,
+    MaterializeFields,
+}
+
 fn refresh_problem_preview_state(
     base_problem: &ProblemIR,
     continuation_magnetization: Option<&[[f64; 3]]>,
     display_selection: &CurrentDisplaySelection,
     live_workspace: &LocalLiveWorkspace,
-    refresh_cache: bool,
+    refresh_mode: ProblemPreviewRefreshMode,
 ) -> Result<()> {
     let mut problem = base_problem.clone();
     if let Some(previous_final_magnetization) = continuation_magnetization {
@@ -5747,27 +5753,17 @@ fn refresh_problem_preview_state(
     }
 
     let preview_request = display_selection.preview_request();
-    let (preview_field, cached_fields, auxiliary_artifacts) = if refresh_cache {
+    let (preview_field, cached_fields, auxiliary_artifacts) = if refresh_mode
+        == ProblemPreviewRefreshMode::MaterializeFields
+    {
         let cached_quantities = fullmag_runner::quantities::field_materialization_quantity_ids();
+        let materialization_request = full_field_materialization_request(preview_request.clone());
         let batch = fullmag_runner::snapshot_problem_vector_field_batch(
             &problem,
             &cached_quantities,
-            &preview_request,
+            &materialization_request,
         )?;
-        let requested_quantity =
-            fullmag_runner::quantities::normalize_quantity_id(&preview_request.quantity)
-                .map_err(|error| anyhow!(error.to_string()))?;
-        let preview_field = batch
-            .fields
-            .iter()
-            .find(|field| field.quantity == requested_quantity.as_str())
-            .cloned()
-            .ok_or_else(|| {
-                anyhow!(
-                    "multilayer preview quantity '{}' is unavailable for the current plan",
-                    preview_request.quantity
-                )
-            })?;
+        let preview_field = fullmag_runner::snapshot_problem_preview(&problem, &preview_request)?;
         (preview_field, Some(batch.fields), batch.auxiliary_artifacts)
     } else {
         (
@@ -7926,7 +7922,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                         continuation_magnetization.as_deref(),
                         &display_selection,
                         &live_workspace,
-                        supports_dynamic_live_preview(&stage_execution_plans[0].backend_plan),
+                        ProblemPreviewRefreshMode::PreviewOnly,
                     ) {
                         live_workspace.push_log(
                             "warn",
@@ -7965,9 +7961,13 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                                 continuation_magnetization.as_deref(),
                                 &display_selection,
                                 &live_workspace,
-                                supports_dynamic_live_preview(
+                                if supports_dynamic_live_preview(
                                     &stage_execution_plans[0].backend_plan,
-                                ),
+                                ) {
+                                    ProblemPreviewRefreshMode::MaterializeFields
+                                } else {
+                                    ProblemPreviewRefreshMode::PreviewOnly
+                                },
                             ) {
                                 live_workspace.push_log(
                                     "warn",
@@ -8011,7 +8011,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                         compute_magnetization,
                         &display_selection,
                         &live_workspace,
-                        true,
+                        ProblemPreviewRefreshMode::MaterializeFields,
                     ) {
                         Ok(()) => live_workspace.push_log(
                             "success",
@@ -8438,7 +8438,11 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                     Some(synthetic_outcome.magnetization.as_slice()),
                     &display_selection,
                     &live_workspace,
-                    supports_dynamic_live_preview(&execution_plan.backend_plan),
+                    if supports_dynamic_live_preview(&execution_plan.backend_plan) {
+                        ProblemPreviewRefreshMode::MaterializeFields
+                    } else {
+                        ProblemPreviewRefreshMode::PreviewOnly
+                    },
                 ) {
                     live_workspace.push_log(
                         "warn",
@@ -14463,6 +14467,21 @@ mod tests {
 
         assert!(function_body.contains("snapshot_problem_vector_field_batch"));
         assert!(function_body.contains("replace_auxiliary_artifacts"));
+        assert!(function_body.contains("full_field_materialization_request"));
+    }
+
+    #[test]
+    fn display_sync_refresh_stays_bounded_to_the_preview_request() {
+        let source = include_str!("orchestrator.rs");
+        let display_sync_arm = source
+            .split("\"display_sync\" => {")
+            .nth(1)
+            .and_then(|rest| rest.split("\"load_state\" => {").next())
+            .expect("display_sync command arm should be present");
+
+        assert!(display_sync_arm.contains("ProblemPreviewRefreshMode::PreviewOnly"));
+        assert!(!display_sync_arm.contains("ProblemPreviewRefreshMode::MaterializeFields"));
+        assert!(!display_sync_arm.contains("full_field_materialization_request"));
     }
 
     #[test]
