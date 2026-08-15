@@ -8,6 +8,11 @@ import type { InspectorPanelProps } from "../../inspectorTypes";
 import { FeedbackBanner } from "../../primitives/FeedbackBanner";
 import { FieldRow } from "../../primitives/FieldRow";
 import { InspectorGroup } from "../../primitives/InspectorGroup";
+import { AirboxInspectorIdentityFrame } from "./AirboxInspectorIdentityFrame";
+import {
+  resolveAirboxInspectorLane,
+  useAirboxInspectorRuntimeStatus,
+} from "./airboxInspectorRuntimeStatus";
 import {
   resolveFdmMultilayerAirboxTargetInspectorModel,
   type FdmMultilayerAirboxTargetInspectorModel,
@@ -58,12 +63,18 @@ export function FdmMultilayerAirboxTargetPanelView({
 }
 
 export function FdmMultilayerAirboxTargetPanel({ selection }: InspectorPanelProps) {
+  const runtimeStatus = useAirboxInspectorRuntimeStatus();
+  const lane = resolveAirboxInspectorLane(selection, runtimeStatus);
   const layout = useFdmMultilayerLayoutResource({
-    enabled: selection.kind === "airbox.multilayer.target",
+    enabled: selection.kind === "airbox.multilayer.target" && lane === "fdm",
   });
   const model = useMemo(
     () => resolveFdmMultilayerAirboxTargetInspectorModel(layout.data),
     [layout.data],
   );
-  return <FdmMultilayerAirboxTargetPanelView model={model} />;
+  return (
+    <AirboxInspectorIdentityFrame lane={lane} selection={selection}>
+      <FdmMultilayerAirboxTargetPanelView model={model} />
+    </AirboxInspectorIdentityFrame>
+  );
 }

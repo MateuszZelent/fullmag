@@ -6,7 +6,7 @@ import { resolveInspectorPanel } from "../inspectorRegistry";
 describe("LiveChartInspectorPanel", () => {
   it("shows descriptor and point provenance without taking over Analysis controls", () => {
     const panel = resolveInspectorPanel({ kind: "live.chart-point" });
-    expect(panel?.id).toBe("live-chart");
+    expect(panel?.id).toBe("live-chart-point");
 
     const Panel = panel!.component;
     const html = renderToStaticMarkup(

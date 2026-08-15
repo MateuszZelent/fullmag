@@ -90,6 +90,37 @@ describe("control-room design styles", () => {
     expect(inspectorCss).not.toContain("color: white !important;");
   });
 
+  it("keeps Explorer semantic icon colors in the Catppuccin token system", () => {
+    const explorerCss = readAppFile("src/design/styles/explorer.css");
+    const themeCss = readAppFile("src/design/styles/theme.css");
+
+    expect(explorerCss).not.toMatch(/color:\s*#[\da-f]{3,8}\b/i);
+    expect(explorerCss).toContain("--fm-explorer-icon-results");
+    expect(themeCss).toContain("--fm-explorer-icon-results:");
+    expect(themeCss).toContain('[data-theme="light"]');
+  });
+
+  it("styles resource failures as bounded danger notifications", () => {
+    const notificationsCss = readAppFile(
+      "src/design/styles/dialog-notifications.css",
+    );
+
+    expect(notificationsCss).toContain(
+      '.fm-notifications__toast[data-kind="error"]',
+    );
+    expect(notificationsCss).toContain("var(--fm-danger)");
+    expect(notificationsCss).toContain("max-height:");
+    expect(notificationsCss).toContain("overflow-y: auto;");
+  });
+
+  it("keeps Inspector select indicators token-aware", () => {
+    const inspectorCss = readAppFile("src/design/styles/inspector.css");
+
+    expect(inspectorCss).toContain("--fm-text-muted");
+    expect(inspectorCss).not.toContain("data:image/svg+xml");
+    expect(inspectorCss).not.toContain("%23");
+  });
+
   it("keeps footer tab content inside the resizable dock height", () => {
     const footerCss = readAppFile("src/design/styles/footer.css");
     const footerModule = readAppFile("src/modules/footer/FooterModule.tsx");

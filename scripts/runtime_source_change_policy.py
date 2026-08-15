@@ -42,6 +42,8 @@ NON_RUNTIME_EXACT_PATHS = {
     "scripts/public_docs_information_architecture.py",
     "scripts/runtime_source_change_policy.py",
     "examples/assets/fem_performance/relaxation_torque_calibration_suite_v2.json",
+    # The dispersion recipe writes this plot as a verification artifact.
+    "examples/dyspersje.png",
 }
 NON_RUNTIME_SUFFIXES = (".md", ".rst", ".source-map.json")
 

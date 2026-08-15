@@ -6,6 +6,9 @@
   display: grid;
   gap: var(--fm-space-2);
   width: min(360px, calc(100vw - (var(--fm-space-4) * 2)));
+  max-height: min(40vh, 22rem);
+  overflow-y: auto;
+  overscroll-behavior: contain;
   pointer-events: none;
 }
 
@@ -20,6 +23,11 @@
   box-shadow: var(--fm-shadow-panel);
   color: var(--fm-text-primary);
   pointer-events: auto;
+}
+
+.fm-notifications__toast[data-kind="error"] {
+  border-left-color: var(--fm-danger);
+  background: color-mix(in srgb, var(--fm-danger) 10%, var(--fm-bg-panel));
 }
 
 .fm-notifications__toast-header {
@@ -39,6 +47,9 @@
 }
 
 .fm-notifications__toast span {
+  max-block-size: 5rem;
+  overflow-y: auto;
+  overflow-wrap: anywhere;
   color: var(--fm-text-muted);
   font-size: var(--fm-font-size-xs);
 }

@@ -11,6 +11,7 @@ import { InspectorDirtySelectionGuard } from "./InspectorDirtySelectionGuard";
 import { InspectorEditSessionProvider } from "./InspectorEditSession";
 import { resolveInspectorDescriptor } from "./inspectorDescriptor";
 import { resolveInspectorPanel } from "./inspectorRegistry";
+import { resolveUnknownInspectorRoute } from "./inspectorRouteCatalog";
 import { InspectorShell } from "./InspectorShell";
 
 export default function InspectorModule() {
@@ -33,12 +34,15 @@ export default function InspectorModule() {
         <InspectorDirtySelectionGuard controller={kernel.selection} selection={selection}>
         {(guardedSelection) => {
           const panel = resolveInspectorPanel(guardedSelection);
+          const fallbackPanel = guardedSelection.kind
+            ? resolveUnknownInspectorRoute().contribution
+            : null;
           const baseDescriptor = resolveInspectorDescriptor(guardedSelection);
           const descriptor = {
             ...baseDescriptor,
-            title: panel?.title ?? baseDescriptor.title,
+            title: panel?.title ?? fallbackPanel?.title ?? baseDescriptor.title,
           };
-          const Panel = panel?.component;
+          const Panel = panel?.component ?? fallbackPanel?.component;
           return (
             <InspectorShell
               descriptor={descriptor}

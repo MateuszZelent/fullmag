@@ -72,6 +72,7 @@ import { VisualizationVectorAccountingRows } from "./VisualizationVectorAccounti
 import { SHARED_VECTOR_COLOR_MODE_ITEMS } from "../visualization/presentationSemantics";
 import {
   visualizationSectionDisabledDescription,
+  nextVisualizationRadioValue,
 } from "./ObjectVisualizationPanelAccessibility";
 import { surfaceFieldStatus } from "./ObjectVisualizationHelpers";
 import { FeedbackBanner } from "../primitives/FeedbackBanner";
@@ -274,6 +275,20 @@ export function VisualizationRenderModeSection({
   const unsupportedCurrentMode =
     currentMode !== "off" &&
     !capabilities.primaryRenderModes.includes(currentMode);
+  const radioValues = renderModeOptions.map((option) => option.value);
+  const activeIndex = renderModeOptions.findIndex(
+    (option) => option.value === currentMode,
+  );
+  const tabStopIndex = activeIndex >= 0 ? activeIndex : 0;
+  const radioRefs = React.useRef<Array<HTMLButtonElement | null>>([]);
+
+  const applyRenderMode = (value: VisualizationDisplayMode) =>
+    void patch(
+      target.id === "fdm-universe-outside-support"
+        ? { renderMode: value }
+        : renderModeDisplayPatch(value),
+    );
+
   return (
     <div className="grid min-w-0 gap-1.5">
       <span className="fm-viz-render-mode-label">Render Mode</span>
@@ -288,7 +303,7 @@ export function VisualizationRenderModeSection({
         role="radiogroup"
         aria-label="Render mode"
       >
-        {renderModeOptions.map((option) => {
+        {renderModeOptions.map((option, index) => {
           const isActive = currentMode === option.value;
           return (
             <button
@@ -297,15 +312,27 @@ export function VisualizationRenderModeSection({
               aria-label={option.label}
               className={`fm-viz-render-mode-tile ${isActive ? "fm-viz-render-mode-tile--active" : ""}`}
               disabled={passControlsDisabled || pending}
+              ref={(element) => {
+                radioRefs.current[index] = element;
+              }}
               role="radio"
+              tabIndex={index === tabStopIndex ? 0 : -1}
               type="button"
-              onClick={() =>
-                void patch(
-                  target.id === "fdm-universe-outside-support"
-                    ? { renderMode: option.value }
-                    : renderModeDisplayPatch(option.value),
-                )
-              }
+              onClick={() => applyRenderMode(option.value)}
+              onKeyDown={(event) => {
+                const nextValue = nextVisualizationRadioValue(
+                  radioValues,
+                  option.value,
+                  event.key,
+                );
+                if (nextValue === option.value) return;
+                event.preventDefault();
+                const nextIndex = renderModeOptions.findIndex(
+                  (candidate) => candidate.value === nextValue,
+                );
+                radioRefs.current[nextIndex]?.focus();
+                applyRenderMode(nextValue);
+              }}
             >
               <span className="fm-viz-render-mode-tile__icon" aria-hidden="true">
                 {option.value === "surface" && (

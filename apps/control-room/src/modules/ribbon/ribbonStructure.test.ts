@@ -4867,6 +4867,11 @@ describe("ribbon structure", () => {
         "study.add-save-state-stage",
       ]),
     );
+    expect(
+      addStageGroup?.actions
+        .filter((action) => action.menu?.length)
+        .map((action) => action.splitButton),
+    ).toEqual([true, true, true, true, true, true]);
     expect(selectionGroup?.actions.map((action) => action.id)).toEqual(
       expect.arrayContaining(["study.remove-selected-stage"]),
     );

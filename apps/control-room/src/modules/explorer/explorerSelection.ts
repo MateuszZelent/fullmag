@@ -215,8 +215,12 @@ export function selectionRefFromNode(node: ExplorerNode): SelectionRef | null {
     node.kind === "airbox.visualization.debug"
   ) {
     return {
+      ...(node.availability ? { availability: node.availability } : {}),
+      ...(node.contractGap !== undefined ? { contractGap: node.contractGap } : {}),
+      ...(node.executionState ? { executionState: node.executionState } : {}),
       kind: node.kind,
       nodeId: node.id,
+      ...(node.resourceState ? { resourceState: node.resourceState } : {}),
       type: "airbox",
       visualizationTargetId: "airbox",
     };
@@ -288,7 +292,10 @@ export function selectionRefFromNode(node: ExplorerNode): SelectionRef | null {
       ...(node.artifactRevision !== undefined
         ? { artifactRevision: node.artifactRevision }
         : {}),
+      ...(node.availability ? { availability: node.availability } : {}),
+      ...(node.contractGap !== undefined ? { contractGap: node.contractGap } : {}),
       ...(node.equilibriumId ? { equilibriumId: node.equilibriumId } : {}),
+      ...(node.executionState ? { executionState: node.executionState } : {}),
       ...(node.kContextKind ? { kContextKind: node.kContextKind } : {}),
       ...(node.normalization ? { normalization: node.normalization } : {}),
       ...(node.artifactPath ? { artifactPath: node.artifactPath } : {}),
@@ -310,6 +317,7 @@ export function selectionRefFromNode(node: ExplorerNode): SelectionRef | null {
       nodeId: node.id,
       ...(node.observableId ? { observableId: node.observableId } : {}),
       ...(node.resourceRef ? { resourceRef: node.resourceRef } : {}),
+      ...(node.resourceState ? { resourceState: node.resourceState } : {}),
       ...(node.analysisFieldRepresentation
         ? { representation: node.analysisFieldRepresentation }
         : {}),
@@ -708,18 +716,72 @@ export function resolveCurrentExplorerSelectionNode(
   return resultsRoot?.availability === "unavailable" ? resultsRoot : null;
 }
 
+const FREQUENCY_DOMAIN_RESULT_KINDS = new Set<ExplorerNode["kind"]>([
+  "results.resonance.root",
+  "results.resonance.modal.stage",
+  "results.resonance.driven.stage",
+  "results.resonance.modal.spectrum",
+  "results.resonance.modal.modes",
+  "results.resonance.modal.mode",
+  "results.resonance.modal.coupling",
+  "results.resonance.modal.provenance",
+  "results.resonance.driven.spectrum",
+  "results.resonance.driven.peaks",
+  "results.resonance.driven.frequency_points",
+  "results.resonance.driven.fields",
+  "results.resonance.driven.field",
+  "results.resonance.driven.provenance",
+  "results.dispersion.root",
+  "results.dispersion.modal.stage",
+  "results.dispersion.driven.stage",
+  "results.dispersion.k_sampling",
+  "results.dispersion.modal.relation",
+  "results.dispersion.modal.branches",
+  "results.dispersion.modal.modes_at_k",
+  "results.dispersion.modal.mode_at_k",
+  "results.dispersion.modal.provenance",
+  "results.dispersion.driven.response_map",
+  "results.dispersion.driven.field_at_k",
+  "results.dispersion.driven.provenance",
+  "results.frequency_domain.root",
+  "results.frequency_domain.run",
+  "results.frequency_domain.calculation_modes",
+  "results.frequency_domain.fmr",
+  "results.frequency_domain.fmr_modal_spectrum",
+  "results.frequency_domain.fmr_response_sweep",
+  "results.frequency_domain.fmr_peaks",
+  "results.frequency_domain.fmr_peak",
+  "results.frequency_domain.dispersion",
+  "results.frequency_domain.response_map",
+  "results.eigen.root",
+  "results.eigen.study",
+  "results.eigen.spectrum",
+  "results.eigen.modes",
+  "results.eigen.modes.visualization",
+  "results.eigen.mode",
+  "results.eigen.dispersion",
+  "results.eigen.k_path",
+  "results.eigen.branches",
+  "results.eigen.branch",
+  "results.eigen.diagnostics",
+  "results.eigen.provenance",
+  "results.frequency_response.root",
+  "results.frequency_response.study",
+  "results.frequency_response.sweep",
+  "results.frequency_response.progress",
+  "results.frequency_response.cancel_requested",
+  "results.frequency_response.frequency_points",
+  "results.frequency_response.frequency_point",
+  "results.frequency_response.observables",
+  "results.frequency_response.observable",
+  "results.frequency_response.diagnostics",
+  "results.frequency_response.provenance",
+  "results.frequency_domain.comparison",
+  "results.frequency_domain.exports",
+]);
+
 function isFrequencyDomainSelectionNode(node: ExplorerNode): boolean {
-  return (
-    node.kind.startsWith("results.resonance") ||
-    node.kind.startsWith("results.dispersion") ||
-    node.kind.startsWith("results.analysis_views") ||
-    node.kind.startsWith("results.derived_values") ||
-    node.kind.startsWith("results.tables") ||
-    node.kind.startsWith("results.exports") ||
-    node.kind.startsWith("results.frequency_domain") ||
-    node.kind.startsWith("results.eigen") ||
-    node.kind.startsWith("results.frequency_response")
-  );
+  return FREQUENCY_DOMAIN_RESULT_KINDS.has(node.kind);
 }
 
 export function selectExplorerNode(

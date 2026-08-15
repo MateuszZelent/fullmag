@@ -185,3 +185,7 @@ export function RuntimeFrequencyDiagnosticInspectorPanel(props: InspectorPanelPr
 export function RuntimePerformanceDiagnosticInspectorPanel(props: InspectorPanelProps) {
   return <RuntimeDiagnosticPanel {...props} title="Performance diagnostic" />;
 }
+
+export function RuntimeResourceDiagnosticInspectorPanel(props: InspectorPanelProps) {
+  return <RuntimeDiagnosticPanel {...props} title="Resource diagnostic" />;
+}

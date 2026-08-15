@@ -268,6 +268,8 @@ export interface FrequencyDomainTextArtifactLike {
 
 const FREQUENCY_DOMAIN_EIGEN_SPECTRUM_RESOURCE_KEY =
   ANALYSIS_FREQUENCY_DOMAIN_EIGEN_SPECTRUM_V2_PATH;
+
+const NOT_PUBLISHED_UNIT = "not published";
 const FREQUENCY_DOMAIN_EIGEN_DISPERSION_RESOURCE_KEY =
   ANALYSIS_FREQUENCY_DOMAIN_EIGEN_DISPERSION_PATH;
 const FREQUENCY_DOMAIN_RESPONSE_SWEEP_RESOURCE_KEY =
@@ -279,6 +281,13 @@ export interface FrequencyDomainChartBuildResult<TPoint> {
   droppedPointCount: number;
   points: TPoint[];
   series: FrequencyDomainChartSeries[];
+}
+
+export function frequencyResponseSeriesUnit(
+  model: Pick<FrequencyDomainChartBuildResult<unknown>, "series">,
+  quantity: string,
+): string {
+  return model.series.find((series) => series.quantity === quantity)?.unit ?? NOT_PUBLISHED_UNIT;
 }
 
 export interface FrequencyDomainChartPoint {
@@ -402,7 +411,9 @@ export interface FrequencyResponsePoint {
 
 export interface FmrPeakPoint {
   amplitude: number | null;
+  amplitudeUnit?: string;
   absorbedPowerDensity: number | null;
+  absorbedPowerDensityUnit?: string;
   fieldId: string | null;
   fieldResourceKey?: string | null;
   frequencyHz: number;
@@ -1125,6 +1136,31 @@ export function buildFrequencyResponseChartModel(
     points.map((point) => point.frequencyHz),
   );
 
+  const amplitudeUnit = responseObservableUnit(
+    points,
+    manifestPayload,
+    ["response_amplitude", "drive_projected_response"],
+    "amplitude",
+    (point) => point.amplitude,
+    diagnostics,
+  );
+  const absorbedPowerDensityUnit = responseObservableUnit(
+    points,
+    manifestPayload,
+    ["absorbed_power"],
+    "absorbed power density",
+    (point) => point.absorbedPowerDensity,
+    diagnostics,
+  );
+  const susceptibilityUnit = responseObservableUnit(
+    points,
+    manifestPayload,
+    ["susceptibility"],
+    "susceptibility",
+    (point) => maxAbsSusceptibility(point.susceptibility),
+    diagnostics,
+  );
+
   return {
     dataSourceVersion,
     diagnostics,
@@ -1137,7 +1173,7 @@ export function buildFrequencyResponseChartModel(
         frequencyScale,
         "amplitude",
         "Amplitude",
-        "a.u.",
+        amplitudeUnit,
         (point) => point.amplitude,
       ),
       responseSeries(
@@ -1155,7 +1191,7 @@ export function buildFrequencyResponseChartModel(
         frequencyScale,
         "absorbed-power-density",
         "Absorbed power density",
-        "W/m^3",
+        absorbedPowerDensityUnit,
         (point) => point.absorbedPowerDensity,
       ),
       responseSeries(
@@ -1164,11 +1200,56 @@ export function buildFrequencyResponseChartModel(
         frequencyScale,
         "susceptibility-max-abs",
         "Max |susceptibility|",
-        "a.u.",
+        susceptibilityUnit,
         (point) => maxAbsSusceptibility(point.susceptibility),
       ),
     ].filter((series) => series.points.length > 0),
   };
+}
+
+type ResponseObservableKind =
+  | "absorbed_power"
+  | "drive_projected_response"
+  | "response_amplitude"
+  | "susceptibility";
+
+function responseObservableUnit(
+  points: readonly FrequencyResponsePoint[],
+  manifestPayload: unknown,
+  kinds: readonly ResponseObservableKind[],
+  label: string,
+  selector: (point: FrequencyResponsePoint) => number | null,
+  diagnostics: string[],
+): string {
+  if (!points.some((point) => selector(point) != null)) return NOT_PUBLISHED_UNIT;
+  if (manifestPayload == null) return NOT_PUBLISHED_UNIT;
+
+  const observableKinds = new Set(kinds);
+  const observables = typedObservableEvidence(record(manifestPayload)?.observables)
+    .filter((observable) => observableKinds.has(observable.kind as ResponseObservableKind));
+  const units = new Set(observables.map((observable) => observable.unit));
+  if (units.size === 1) return [...units][0]!;
+
+  const pointObservableIds = new Set<string>();
+  for (const point of points) {
+    if (selector(point) != null && point.observableId) {
+      pointObservableIds.add(point.observableId);
+    }
+  }
+  const matchedUnits = new Set<string>();
+  for (const observable of observables) {
+    if (pointObservableIds.has(observable.identity)) {
+      matchedUnits.add(observable.unit);
+    }
+  }
+  if (matchedUnits.size === 1) return [...matchedUnits][0]!;
+
+  diagnostics.push(
+    units.size === 0
+      ? `${label} unit is not published in the result manifest`
+      : `${label} unit is ambiguous in the result manifest`,
+  );
+  return NOT_PUBLISHED_UNIT;
 }
 
 export function buildFrequencyResponsePointSelectionRef(
@@ -1205,10 +1286,17 @@ export function buildFmrPeakTableModel({
   const diagnostics: string[] = [];
   const modal = buildEigenSpectrumChartModel(spectrum);
   const response = buildFrequencyResponseChartModel(responseSweep, manifestPayload);
+  const amplitudeUnit = frequencyResponseSeriesUnit(response, "amplitude");
+  const absorbedPowerDensityUnit = frequencyResponseSeriesUnit(
+    response,
+    "absorbed-power-density",
+  );
   const peaks: FmrPeakPoint[] = [
     ...modal.points.map((point) => ({
       absorbedPowerDensity: null,
       amplitude: null,
+      amplitudeUnit: NOT_PUBLISHED_UNIT,
+      absorbedPowerDensityUnit: NOT_PUBLISHED_UNIT,
       fieldId: point.modeFieldId,
       fieldResourceKey: point.modeFieldResourceKey,
       frequencyHz: point.frequencyHz,
@@ -1226,6 +1314,8 @@ export function buildFmrPeakTableModel({
     ...localResponsePeaks(response.points).map((point) => ({
       absorbedPowerDensity: point.absorbedPowerDensity,
       amplitude: point.amplitude,
+      amplitudeUnit,
+      absorbedPowerDensityUnit,
       fieldId: point.fieldId,
       fieldResourceKey: point.fieldId ? fieldVectorResourceKey(point.fieldId) : null,
       frequencyHz: point.frequencyHz,

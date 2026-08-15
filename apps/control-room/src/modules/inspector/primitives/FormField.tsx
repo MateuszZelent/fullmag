@@ -169,13 +169,27 @@ export function FormField(props: FormFieldProps) {
   const { label, unit, hint, error, help, inline = true, disabled, invalid } =
     props;
   const fieldId = useId();
+  const hintText = error ?? hint;
+  const feedbackId = hintText
+    ? `${fieldId}-${error ? "error" : "hint"}`
+    : undefined;
+  const invalidValue = invalid || Boolean(error);
   const wrapClass = inline
     ? "fm-inspector-form-field fm-inspector-form-field--inline"
     : "fm-inspector-form-field";
-  const hintText = error ?? hint;
   const hintClass = error
     ? "fm-inspector-form-field__hint fm-inspector-form-field__hint--error"
     : "fm-inspector-form-field__hint";
+  const feedback = hintText ? (
+    <span
+      aria-live={error ? "assertive" : undefined}
+      className={hintClass}
+      id={feedbackId}
+      role={error ? "alert" : undefined}
+    >
+      {hintText}
+    </span>
+  ) : null;
   const labelNode = (
     <FormFieldLabel fieldId={fieldId} help={help} label={label} />
   );
@@ -193,13 +207,16 @@ export function FormField(props: FormFieldProps) {
           <input
             id={fieldId}
             aria-label={label}
-            aria-invalid={invalid || undefined}
+            aria-describedby={feedbackId}
+            aria-errormessage={error ? feedbackId : undefined}
+            aria-invalid={invalidValue || undefined}
             checked={checked}
             className="fm-inspector-checkbox size-4 shrink-0 accent-fm-accent disabled:cursor-not-allowed disabled:opacity-100"
             disabled={disabled}
             type="checkbox"
             onChange={onChange}
           />
+          {feedback}
         </div>
       </InspectorPropertyRow>
     );
@@ -227,7 +244,9 @@ export function FormField(props: FormFieldProps) {
             {...(rest as object)}
             id={fieldId}
             aria-label={label}
-            aria-invalid={invalid || undefined}
+            aria-describedby={feedbackId}
+            aria-errormessage={error ? feedbackId : undefined}
+            aria-invalid={invalidValue || undefined}
             className={cn(
               "fm-inspector-select w-full appearance-none",
               controlVariants({ invalid: Boolean(invalid) }),
@@ -238,7 +257,7 @@ export function FormField(props: FormFieldProps) {
           >
             {children}
           </select>
-          {hintText ? <span className={hintClass}>{hintText}</span> : null}
+          {feedback}
         </div>
       </InspectorPropertyRow>
     );
@@ -269,7 +288,9 @@ export function FormField(props: FormFieldProps) {
             {...(rest as object)}
             id={fieldId}
             aria-label={label}
-            aria-invalid={invalid || undefined}
+            aria-describedby={feedbackId}
+            aria-errormessage={error ? feedbackId : undefined}
+            aria-invalid={invalidValue || undefined}
             className={cn(
               "fm-inspector-textarea h-auto min-h-24 w-full resize-y py-2",
               controlVariants({ invalid: Boolean(invalid) }),
@@ -280,7 +301,7 @@ export function FormField(props: FormFieldProps) {
             value={value}
             onChange={onChange}
           />
-          {hintText ? <span className={hintClass}>{hintText}</span> : null}
+          {feedback}
         </div>
       </InspectorPropertyRow>
     );
@@ -323,7 +344,9 @@ export function FormField(props: FormFieldProps) {
           {...(rest as object)}
           id={fieldId}
           aria-label={label}
-          aria-invalid={invalid || undefined}
+          aria-describedby={feedbackId}
+          aria-errormessage={error ? feedbackId : undefined}
+          aria-invalid={invalidValue || undefined}
           className={inputClass}
           disabled={disabled}
           inputMode={resolvedInputMode}
@@ -331,7 +354,7 @@ export function FormField(props: FormFieldProps) {
           value={value}
           onInput={onChange as ComponentPropsWithoutRef<"input">["onInput"]}
         />
-        {hintText ? <span className={hintClass}>{hintText}</span> : null}
+        {feedback}
       </div>
     </InspectorPropertyRow>
   );

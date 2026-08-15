@@ -1,5 +1,7 @@
 "use client";
 
+import { memo } from "react";
+
 import type { KernelApi } from "@/kernel/types";
 import type { ResourceResult } from "@/kernel/resources/resourceTypes";
 import type { AnalysisChartCursorPoint } from "@/shared/domain/analysis/chartCursorPoint";
@@ -30,7 +32,7 @@ import { EChartsSurface } from "./EChartsSurface";
  * component display-only avoids a second, divergent set of controls beside
  * the dedicated inspector.
  */
-export function AnalysisTableSurface({
+export const AnalysisTableSurface = memo(function AnalysisTableSurface({
   chartSeries,
   chartId,
   displayUnits,
@@ -189,7 +191,7 @@ export function AnalysisTableSurface({
       )}
     </ChartSection>
   );
-}
+});
 
 function resourceStatus(status: string): "idle" | "loading" | "ready" | "stale" | "error" | "unsupported" {
   return status === "loading" || status === "ready" || status === "stale" || status === "error" || status === "unsupported"

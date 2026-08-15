@@ -90,7 +90,7 @@ function resolveFamily(kind: string): FamilyDescriptor {
     return { tabs: [], typeLabel: "Object display" };
   }
   if (kind === "mesh-part-airbox") {
-    return { tabs: [], typeLabel: "Airbox display" };
+    return { tabs: [], typeLabel: "Airbox mesh-part display" };
   }
   if (kind === "mesh-part") {
     return { tabs: [], typeLabel: "Mesh-part display" };

@@ -67,9 +67,10 @@ export function resolveAirboxInspectorLane(
 ): AirboxInspectorLane {
   const selectionLane =
     selection.ref?.type === "airbox"
-      ? selection.ref.visualizationTargetId === "fdm-universe-outside-support"
+      ? selection.kind === "airbox.multilayer.target" ||
+        selection.ref.visualizationTargetId === "fdm-universe-outside-support"
         ? "fdm"
-        : "fem"
+        : null
       : null;
   const discretization = status?.domain.discretization.trim().toLowerCase();
   const runtimeLane =

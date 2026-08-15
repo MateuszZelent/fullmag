@@ -1106,6 +1106,7 @@ describe("StudyInspectorPanel", () => {
 
     expect(html).toContain("Selected stage has validation errors");
     expect(html).not.toContain("Stage ID is required.");
+    expect(html).not.toContain('data-testid="study-stage-authoring-toolbar"');
   });
 
   it("renders editable global settings and applies production capability validation", () => {
@@ -1414,8 +1415,14 @@ describe("StudyInspectorPanel", () => {
     };
     const eigenDraft = {
       ...createDefaultStudyStageDraft("eigenmodes", 0),
-      target: "near_frequency",
+      target: "nearest",
       targetFrequency: "750000000",
+    };
+    const windowDraft = {
+      ...createDefaultStudyStageDraft("eigenmodes", 0),
+      frequencyMax: "2500000000",
+      frequencyMin: "1500000000",
+      target: "frequency_window",
     };
 
     const responseHtml = renderToStaticMarkup(
@@ -1434,11 +1441,24 @@ describe("StudyInspectorPanel", () => {
         onUpdate={() => undefined}
       />,
     );
+    const windowHtml = renderToStaticMarkup(
+      <StudyStageDraftEditor
+        draft={windowDraft}
+        index={0}
+        validation={[]}
+        onUpdate={() => undefined}
+      />,
+    );
 
     expect(responseHtml).toContain("Stored as Hz; preview 9.5 GHz, 12 GHz");
     expect(responseHtml).toContain('value="9500000000 12000000000"');
     expect(eigenHtml).toContain("Stored as Hz; preview 750 MHz");
     expect(eigenHtml).toContain('value="750000000"');
+    expect(windowHtml).toContain('value="frequency_window"');
+    expect(windowHtml).toContain('aria-label="Frequency min"');
+    expect(windowHtml).toContain('aria-label="Frequency max"');
+    expect(windowHtml).toContain('value="1500000000"');
+    expect(windowHtml).toContain('value="2500000000"');
   });
 
   it("renders change-device stage authoring controls", () => {

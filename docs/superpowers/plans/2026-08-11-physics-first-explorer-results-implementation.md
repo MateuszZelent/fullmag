@@ -240,3 +240,32 @@
 - Implemented, production-executable i validated są potwierdzone oddzielnie.
 - Branch zawiera dokumentację fizyki, ADR, kod, testy i dowody smoke/performance; nie zawiera fikcyjnych zasobów ani niezamkniętych regresji.
 - Zatrzymany zostaje wyłącznie proces dev-server uruchomiony przez ten plan; cudze procesy pozostają nietknięte.
+
+## Stan realizacji i weryfikacji — 2026-08-15
+
+### Zrealizowane funkcjonalnie
+
+Zakres zadań 1–13 jest zaimplementowany w bieżącym branchu: physics-first Results i Explorer, typed snapshots oraz trzy osie statusu, run/stage-scoped selection, dedykowane routing Inspectora, wspólny template oparty na Visualization, osobne Inspectory dla eigenmodes/response/FMR/dispersion/mode/point/field, lokalna wizualizacja fazora, powierzchnie Analysis, Active Analysis Overlay, typed Resources/Jobs/Diagnostics oraz postprocessing powiązany z tożsamością datasetu.
+
+Klasyfikacja nie używa label/path/filename jako źródła fizyki. `Eigenmodes`, `Frequency Response`, `Spectrum/FMR` i `Dispersion Relation` pozostają osobnymi produktami. `S(k,f)` jest ładowane tylko dla legalnego subview `dynamics.s-k-f`, a nie dla modalnej dyspersji. Nieznane lub niekompletne dane kończą się neutralnym `unavailable`/`unsupported` albo jawnie opisanym contract gap.
+
+### Zweryfikowane bramy
+
+- focused Analysis/SSR/CSS suite: 5 plików, 46 testów;
+- pełny Control Room suite: 561 plików, 5293 testy;
+- typecheck, lint, API hygiene i architecture hygiene: zielone;
+- Python runtime-target tests: 63 testy; polityka źródeł managed runtime: 4 testy;
+- production build Next.js 16.2.11: zielony;
+- Inspector browser smoke: 0 błędów konsoli, WebGL, narrow 360/416/560 px, dark/light i 200% zoom;
+- Analysis smoke: canvas 685×326, 0 failed responses, 0 nieplanowanych binary rows requests, dark/light/200%/reduced-motion;
+- Study authoring smoke: 16 transakcji modelu i 1 synchronizacja skryptu;
+- oficjalne managed FEM eigen runtime: strict CPU/double, 10 eigenmodes, artifact validation i production shift-invert window;
+- oficjalne managed FEM dispersion runtime: pełny 2×2 Floquet, exchange-only analytic i reciprocal dispersion artifact validation.
+
+### Pozostało przed integracją
+
+1. Wykonać końcowy review całego dirty diffu oraz rozdzielić artefakty wygenerowane przez smoke od zmian źródłowych.
+2. Rozstrzygnąć istniejący, niezależny drift formattera `just --fmt --check` bez masowego formatowania niepowiązanego `justfile`.
+3. Zatwierdzić zmiany opisowym commitem, wypchnąć branch i dopiero wtedy scalić go do `master`.
+
+Stan: implementacja funkcjonalna i produkcyjna weryfikacja physics-first są domknięte; pozostał etap kontroli diffu i integracji Git. Checkboxy przy poszczególnych commitach pozostają celowo nieodhaczone do czasu ich wykonania.

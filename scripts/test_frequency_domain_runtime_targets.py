@@ -273,6 +273,27 @@ def test_eigen_dispersion_runtime_target_uses_k_path_example_and_validator() -> 
     assert "test -f examples/dyspersje.png" in target
 
 
+def test_frequency_domain_eigen_targets_mount_the_active_managed_runtime() -> None:
+    justfile = JUSTFILE.read_text(encoding="utf-8")
+    runtime_mount = (
+        '-v "$(readlink -f .fullmag/runtimes/fem-gpu-host):'
+        '/workspace/.fullmag/runtimes/fem-gpu-host:ro"'
+    )
+
+    target_names = (
+        "verify-fem-frequency-domain-eigen-runtime",
+        "verify-fem-frequency-domain-eigen-dispersion-runtime",
+        "verify-fem-frequency-domain-eigen-dispersion-window-runtime",
+        "verify-fem-frequency-domain-eigen-dispersion-de-bv-low-k-runtime",
+    )
+    for target_name in target_names:
+        target_start = justfile.find(f"{target_name}:")
+        assert target_start != -1
+        next_target = justfile.find("\nverify-", target_start + 1)
+        target = justfile[target_start:] if next_target == -1 else justfile[target_start:next_target]
+        assert runtime_mount in target, target_name
+
+
 def test_eigen_dispersion_window_runtime_target_uses_windowed_k_path_example() -> None:
     justfile = JUSTFILE.read_text(encoding="utf-8")
 
@@ -1458,9 +1479,11 @@ def test_frequency_domain_runtime_suite_includes_production_modal_k_path_gate() 
     assert "just verify-fem-frequency-domain-eigen-dispersion-window-runtime" in target
 
 
-def test_managed_fem_runtime_staleness_tracks_runtime_copy_helper() -> None:
-    justfile = JUSTFILE.read_text(encoding="utf-8")
+def test_managed_fem_runtime_staleness_tracks_the_script_source_tree() -> None:
+    source_manifest = (
+        REPO_ROOT / "scripts" / "managed_fem_runtime_source_inputs.v1.txt"
+    ).read_text(encoding="utf-8").splitlines()
+    copy_helper = REPO_ROOT / "scripts" / "lib" / "runtime_bundle_copy.sh"
 
-    assert (
-        justfile.count("scripts/lib/runtime_bundle_copy.sh") >= 2
-    ), "managed FEM runtime stale checks must track the export copy helper"
+    assert "scripts" in source_manifest
+    assert copy_helper.is_file()

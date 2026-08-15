@@ -956,7 +956,7 @@ describe("StudyStageAuthoringModel", () => {
           kind: "eigenmodes",
           normalization: "max_component",
           stage_id: "modes-1",
-          target: "near_frequency",
+          target: "nearest",
           target_frequency: 2e9,
         },
         2,
@@ -973,7 +973,7 @@ describe("StudyStageAuthoringModel", () => {
       kind: "eigenmodes",
       normalization: "unit_max_amplitude",
       stageId: "modes-1",
-      target: "near_frequency",
+      target: "nearest",
       targetFrequency: "2000000000",
     });
 
@@ -1476,7 +1476,7 @@ describe("StudyStageAuthoringModel", () => {
         kVector: "0, 1, -1",
         normalization: "unit_max_amplitude",
         stageId: "modes-1",
-        target: "near_frequency",
+        target: "nearest",
         targetFrequency: "2e9",
       }),
     ).toEqual({
@@ -1495,7 +1495,7 @@ describe("StudyStageAuthoringModel", () => {
       eigen_normalization: "unit_max_amplitude",
       eigen_operator: "linearized_llg",
       eigen_spin_wave_bc: { axes: ["x"], kind: "periodic" },
-      eigen_target: "near_frequency",
+      eigen_target: "nearest",
       eigen_target_frequency: 2e9,
       equilibrium_artifact: "artifact://relaxed",
       equilibrium_source: "provided",
@@ -1507,7 +1507,7 @@ describe("StudyStageAuthoringModel", () => {
       normalization: "unit_max_amplitude",
       operator: "linearized_llg",
       stage_id: "modes-1",
-      target: "near_frequency",
+      target: "nearest",
       target_frequency: 2e9,
     });
 

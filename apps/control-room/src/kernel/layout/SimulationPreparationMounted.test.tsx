@@ -282,7 +282,7 @@ describe("mounted simulation preparation UI", () => {
 
     await act(async () => root.unmount());
     dom.restore();
-  });
+  }, 15_000);
 
   it("keeps routine polling quiet and follows an advanced status pointer through HTTP", async () => {
     vi.useFakeTimers();

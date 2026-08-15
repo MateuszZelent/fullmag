@@ -1273,6 +1273,7 @@ verify-fem-frequency-domain-eigen-runtime:
     rm -rf .fullmag/reports/frequency-domain-eigen-runtime
     mkdir -p .fullmag/reports/frequency-domain-eigen-runtime
     docker compose --profile fem-gpu run --rm \
+      -v "$(readlink -f .fullmag/runtimes/fem-gpu-host):/workspace/.fullmag/runtimes/fem-gpu-host:ro" \
       -e PYTHONPATH=/workspace/packages/fullmag-py/src \
       -e FULLMAG_PYTHON=/usr/bin/python3 \
       -e FULLMAG_FDM_EXECUTION=cpu \
@@ -1318,6 +1319,7 @@ verify-fem-frequency-domain-eigen-dispersion-runtime:
     rm -rf .fullmag/reports/frequency-domain-eigen-dispersion-runtime
     mkdir -p .fullmag/reports/frequency-domain-eigen-dispersion-runtime
     docker compose --profile fem-gpu run --rm \
+      -v "$(readlink -f .fullmag/runtimes/fem-gpu-host):/workspace/.fullmag/runtimes/fem-gpu-host:ro" \
       -e PYTHONPATH=/workspace/packages/fullmag-py/src \
       -e FULLMAG_PYTHON=/usr/bin/python3 \
       -e FULLMAG_FDM_EXECUTION=cpu \
@@ -1357,6 +1359,7 @@ verify-fem-frequency-domain-eigen-dispersion-window-runtime:
     rm -rf .fullmag/reports/frequency-domain-eigen-dispersion-window-runtime
     mkdir -p .fullmag/reports/frequency-domain-eigen-dispersion-window-runtime
     docker compose --profile fem-gpu run --rm \
+      -v "$(readlink -f .fullmag/runtimes/fem-gpu-host):/workspace/.fullmag/runtimes/fem-gpu-host:ro" \
       -e PYTHONPATH=/workspace/packages/fullmag-py/src \
       -e FULLMAG_PYTHON=/usr/bin/python3 \
       -e FULLMAG_FDM_EXECUTION=cpu \
@@ -1397,6 +1400,7 @@ verify-fem-frequency-domain-eigen-dispersion-de-bv-low-k-runtime:
     rm -rf .fullmag/reports/frequency-domain-eigen-dispersion-de-bv-low-k-runtime
     mkdir -p .fullmag/reports/frequency-domain-eigen-dispersion-de-bv-low-k-runtime
     docker compose --profile fem-gpu run --rm \
+      -v "$(readlink -f .fullmag/runtimes/fem-gpu-host):/workspace/.fullmag/runtimes/fem-gpu-host:ro" \
       -e PYTHONPATH=/workspace/packages/fullmag-py/src \
       -e FULLMAG_PYTHON=/usr/bin/python3 \
       -e FULLMAG_FDM_EXECUTION=cpu \

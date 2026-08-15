@@ -53,6 +53,7 @@ import { buildPhysicsFirstResultsTree } from "./builders/resultsExplorerNodes";
 import { buildPhysicsGraphTree } from "./builders/physicsGraphTree";
 import {
   resolveCurrentExplorerSelectionNode,
+  selectionRefFromNode,
   selectExplorerNode,
 } from "./explorerSelection";
 import type { ExplorerNode } from "./explorerTypes";
@@ -123,6 +124,29 @@ function resultsTreeWithTables(
 }
 
 describe("selectExplorerNode", () => {
+  it("preserves independent result status facets in a frequency selection ref", () => {
+    const ref = selectionRefFromNode({
+      availability: "partial",
+      contractGap: "Drive observable evidence is incomplete.",
+      executionState: "running",
+      id: "results:run:run-7:resonance:driven:spectrum",
+      kind: "results.resonance.driven.spectrum",
+      label: "Driven response spectrum",
+      parentId: "results:run:run-7:resonance",
+      resourceRef: "artifact-revision:response-r3",
+      resourceState: "stale",
+      status: "stale",
+    });
+
+    expect(ref).toMatchObject({
+      availability: "partial",
+      contractGap: "Drive observable evidence is incomplete.",
+      executionState: "running",
+      resourceState: "stale",
+      type: "frequency-domain",
+    });
+  });
+
   it("does not select a semantic grouping root marked nonselectable", () => {
     const kernel = makeKernel();
 
@@ -832,6 +856,17 @@ describe("selectExplorerNode", () => {
         type: "frequency-domain",
       },
     });
+  });
+
+  it("does not infer frequency-domain semantics from an unknown result prefix", () => {
+    const ref = selectionRefFromNode({
+      id: "results:frequency-domain:future",
+      kind: "results.frequency_domain.future" as ExplorerNode["kind"],
+      label: "Future result",
+      parentId: "results",
+    });
+
+    expect(ref).toBeNull();
   });
 
   it("preserves frequency-domain response observable metadata for inspectors", () => {

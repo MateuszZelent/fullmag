@@ -8,30 +8,20 @@ const smokeScript = readFileSync(
 );
 
 describe("study authoring smoke script", () => {
-  it("asserts current FMR modal spectrum headings", () => {
+  it("asserts the current run-scoped driven result workflow", () => {
+    expect(smokeScript).toContain("results:run:study-authoring-smoke-run");
     expect(smokeScript).toContain(
-      '[data-inspector-surface="fmr-modal-spectrum"]',
+      '[data-inspector-surface="frequency-response-sweep"]',
     );
-    expect(smokeScript).toContain("FMR Modal Spectrum Control");
-    expect(smokeScript).toContain("FMR Modal Spectrum Chart");
-    expect(smokeScript).not.toContain('name: "Modal Spectrum"');
+    expect(smokeScript).toContain("Driven Response Sweep Control");
+    expect(smokeScript).toContain("Driven Response Chart");
+    expect(smokeScript).not.toContain('data-node-id="results:root"');
+    expect(smokeScript).not.toContain("results:frequency-domain:fmr");
   });
 
-  it("asserts current Eigen mode inspector headings", () => {
-    expect(smokeScript).toContain('[data-inspector-surface="eigen-mode"]');
-    expect(smokeScript).toContain("Eigen Mode Control");
-    expect(smokeScript).toContain("Eigen Mode 3D Visualization");
-    expect(smokeScript).toContain(
-      "Plot selected eigen mode with phase-rotated real display",
-    );
-    expect(smokeScript).toContain(
-      'article.fm-frequency-domain-response-card[data-status="ready"]',
-    );
-    expect(smokeScript).toContain(
-      'name: "Plot 3D"',
-    );
-    expect(smokeScript).not.toContain("Selected Eigen Mode");
-    expect(smokeScript).not.toContain("Plot mode rotated");
+  it("keeps modal visualization coverage in the dedicated inspector smoke", () => {
+    expect(smokeScript).not.toContain("verifyFrequencyDomainModalResults");
+    expect(smokeScript).toContain("assertStableViewport3DCanvas");
   });
 
   it("reports Explorer row selection state after smoke clicks", () => {

@@ -262,6 +262,19 @@ function pathWavevectorAtSample(
   return null;
 }
 
+function gridWavevectorAtSample(
+  value: unknown,
+  sampleIndex: number,
+): readonly [number, number, number] | null {
+  const sampling = record(record(value)?.sampling);
+  if (sampling?.kind !== "grid" || !Number.isInteger(sampleIndex) || sampleIndex < 0) {
+    return null;
+  }
+  const points = Array.isArray(sampling.points) ? sampling.points : [];
+  const point = points[sampleIndex];
+  return vector3(point) ?? vector3(record(point)?.k_vector ?? record(point)?.vector_rad_per_m);
+}
+
 function kSamplingForFrequencyContext(
   sampling: NonNullable<FrequencyDomainResultEvidence["kSampling"]>,
 ): Record<string, unknown> {
@@ -326,7 +339,17 @@ function modalFieldTargets({
           sampleIndex: point.sampleIndex,
           source: "eigen-mode" as const,
           view: "phase_rotated_real" as const,
-          ...(fixedWavevector ? { wavevectorKf: fixedWavevector } : {}),
+          ...(fixedWavevector
+            ? { wavevectorKf: fixedWavevector }
+            : kSampling?.kind === "grid"
+              ? (() => {
+                  const wavevectorKf = gridWavevectorAtSample(
+                    dispersion?.path_metadata,
+                    point.sampleIndex,
+                  );
+                  return wavevectorKf ? { wavevectorKf } : {};
+                })()
+              : {}),
         }]
       : [],
   );
@@ -442,11 +465,22 @@ export function physicsFirstResultsSnapshotFromResources(
       snapshot: { ...emptySnapshot, contractGaps: [...contractGaps] },
     };
   }
+  const frequencyContext = frequencyDomainResultContextFromManifest({
+    ...payload,
+    ...(kSampling ? { k_sampling: kSamplingForFrequencyContext(kSampling) } : {}),
+    run_id: runId,
+  });
+  for (const gap of frequencyContext.contractGaps) {
+    addContractGap(gap);
+  }
   const artifactRevision =
     nonEmptyString(payload.revision) ?? input.currentRun?.revision ?? "unknown";
   const products: PhysicsFirstResultProducts =
     studyProduct === "modal_eigen"
       ? {
+          ...(frequencyContext.classification?.fmrQualified
+            ? { coupling: true }
+            : {}),
           modeBranches: ready(input.branches),
           modeShapes: ready(input.spectrum),
           spectrum: ready(input.spectrum),
@@ -457,14 +491,6 @@ export function physicsFirstResultsSnapshotFromResources(
           responseFields: ready(input.responseSweep),
           responseSpectrum: ready(input.responseSweep),
         };
-  const frequencyContext = frequencyDomainResultContextFromManifest({
-    ...payload,
-    ...(kSampling ? { k_sampling: kSamplingForFrequencyContext(kSampling) } : {}),
-    run_id: runId,
-  });
-  for (const gap of frequencyContext.contractGaps) {
-    addContractGap(gap);
-  }
   const drive = frequencyContext.evidence?.drive;
   const entry: PhysicsFirstResultEntry = {
     analysisFieldTargets:
@@ -1024,7 +1050,9 @@ export function buildPhysicsFirstResultsTree(snapshot: PhysicsFirstResultsSnapsh
   const dispersionStages = snapshot.entries.map((entry) => kResolvedStage(dispersionId, entry));
   const definitions = postprocessingDefinitions(snapshot.postprocessing);
   const contractGap = snapshot.contractGaps?.filter(Boolean).join("; ") ?? "";
-  const resultHasPublishedProducts = snapshot.entries.length > 0;
+  const resultHasPublishedProducts = snapshot.entries.some((entry) =>
+    hasPublishedProduct(entry.products),
+  );
 
   return [
     node(resultsId, "results.root", "Results", null, {

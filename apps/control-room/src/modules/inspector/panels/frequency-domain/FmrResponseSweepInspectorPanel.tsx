@@ -18,6 +18,7 @@ import {
   buildFrequencyResponseChartModel,
   buildFrequencyResponsePointSelectionRef,
   frequencyDomainManifestPayload,
+  frequencyResponseSeriesUnit,
   responseFieldResourcesFromManifest,
 } from "@/shared/domain/analysis/frequencyDomainChartModels";
 import type {
@@ -231,6 +232,9 @@ export function FmrResponseSweepInspectorPanel(props: InspectorPanelProps) {
         badge={`${summary.responsePointCount} point(s)`}
       >
         <FmrResponsePointBrowser
+          absorbedPowerDensityUnit={summary.absorbedPowerDensityUnit}
+          amplitudeUnit={summary.amplitudeUnit}
+          susceptibilityUnit={summary.susceptibilityUnit}
           onPlotResponsePoint={plotResponsePoint}
           onSelectResponsePoint={selectResponsePoint}
           points={summary.responseModel.points}
@@ -241,6 +245,8 @@ export function FmrResponseSweepInspectorPanel(props: InspectorPanelProps) {
         badge={`${summary.responsePointCount} point(s)`}
       >
         <FrequencyDomainResponsePointTable
+          absorbedPowerDensityUnit={summary.absorbedPowerDensityUnit}
+          amplitudeUnit={summary.amplitudeUnit}
           onPlotResponsePoint={plotResponsePoint}
           points={summary.responseModel.points}
         />
@@ -260,16 +266,22 @@ export function FmrResponseSweepInspectorPanel(props: InspectorPanelProps) {
 }
 
 function FmrResponsePointBrowser({
+  absorbedPowerDensityUnit,
+  amplitudeUnit,
+  susceptibilityUnit,
   onPlotResponsePoint,
   onSelectResponsePoint,
   points,
 }: {
+  absorbedPowerDensityUnit: string;
+  amplitudeUnit: string;
   onPlotResponsePoint: (
     point: FrequencyResponsePoint,
     action?: FrequencyDomainResponsePointAction,
   ) => void;
   onSelectResponsePoint: (point: FrequencyResponsePoint) => void;
   points: readonly FrequencyResponsePoint[];
+  susceptibilityUnit: string;
 }) {
   if (points.length === 0) {
     return (
@@ -310,7 +322,7 @@ function FmrResponsePointBrowser({
           <div className="fm-frequency-domain-response-card__grid">
             <FieldRow
               label="Amplitude"
-              value={formatNumberOrUnavailable(point.amplitude)}
+              value={formatQuantity(point.amplitude, amplitudeUnit)}
             />
             <FieldRow
               label="Phase"
@@ -322,11 +334,11 @@ function FmrResponsePointBrowser({
             />
             <FieldRow
               label="Absorbed power"
-              value={formatPowerDensity(point.absorbedPowerDensity)}
+              value={formatPowerDensity(point.absorbedPowerDensity, absorbedPowerDensityUnit)}
             />
             <FieldRow
               label="Susceptibility"
-              value={formatMaxAbsSusceptibility(point.susceptibility)}
+              value={formatMaxAbsSusceptibility(point.susceptibility, susceptibilityUnit)}
             />
             <FieldRow label="Residual" value={formatResidual(point.residualNorm)} />
             <FieldRow
@@ -381,6 +393,15 @@ function useFmrResponseSweepSummary() {
     responseSweep.data,
     manifestPayload,
   );
+  const amplitudeUnit = frequencyResponseSeriesUnit(responseModel, "amplitude");
+  const absorbedPowerDensityUnit = frequencyResponseSeriesUnit(
+    responseModel,
+    "absorbed-power-density",
+  );
+  const susceptibilityUnit = frequencyResponseSeriesUnit(
+    responseModel,
+    "susceptibility-max-abs",
+  );
   const peakModel = buildFmrPeakTableModel({
     manifestPayload,
     responseSweep: responseSweep.data,
@@ -395,6 +416,8 @@ function useFmrResponseSweepSummary() {
   const responseResource = ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_MAGNETIC_SWEEP_PATH;
 
   return {
+    amplitudeUnit,
+    absorbedPowerDensityUnit,
     peaks: peakModel.peaks,
     progress: activeProgress,
     resourceStatus: responseSweep.status,
@@ -410,6 +433,7 @@ function useFmrResponseSweepSummary() {
     responsePointCount: responseModel.points.length,
     responseResource,
     responseSeriesCount: responseModel.series.length,
+    susceptibilityUnit,
   };
 }
 
@@ -437,12 +461,6 @@ function formatNumber(value: number): string {
   return Number.isInteger(value) ? String(value) : value.toPrecision(4);
 }
 
-function formatNumberOrUnavailable(value: number | null | undefined): string {
-  return value == null || !Number.isFinite(value)
-    ? "not available"
-    : formatNumber(value);
-}
-
 function formatCompactNumberOrUnavailable(
   value: number | null | undefined,
 ): string {
@@ -450,21 +468,31 @@ function formatCompactNumberOrUnavailable(
   return `${Number(value.toPrecision(6))}`;
 }
 
-function formatPowerDensity(value: number | null | undefined): string {
+function formatPowerDensity(
+  value: number | null | undefined,
+  unit = "not published",
+): string {
   return value == null || !Number.isFinite(value)
     ? "not available"
-    : `${formatCompactNumberOrUnavailable(value)} W/m^3`;
+    : `${formatCompactNumberOrUnavailable(value)} ${unit === "not published" ? "[unit not published]" : unit}`;
+}
+
+function formatQuantity(value: number | null | undefined, unit: string): string {
+  return value == null || !Number.isFinite(value)
+    ? "not available"
+    : `${formatNumber(value)} ${unit === "not published" ? "[unit not published]" : unit}`;
 }
 
 function formatMaxAbsSusceptibility(
   values: readonly number[] | null | undefined,
+  unit = "not published",
 ): string {
   if (!values?.length) return "not available";
   const finiteValues = values.filter((value) => Number.isFinite(value));
   if (!finiteValues.length) return "not available";
-  return formatCompactNumberOrUnavailable(
+  return `${formatCompactNumberOrUnavailable(
     Math.max(...finiteValues.map((value) => Math.abs(value))),
-  );
+  )} ${unit === "not published" ? "[unit not published]" : unit}`;
 }
 
 function formatResidual(value: number | null | undefined): string {

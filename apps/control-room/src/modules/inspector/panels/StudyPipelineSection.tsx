@@ -279,10 +279,11 @@ export function StudyPipelineSection({
           message={authoringFeedback.message}
         />
       ) : null}
-      <div
-        className="fm-inspector-toolbar"
-        data-testid="study-stage-authoring-toolbar"
-      >
+      {showDraftEditor ? (
+        <div
+          className="fm-inspector-toolbar"
+          data-testid="study-stage-authoring-toolbar"
+        >
         <Button
           size="sm"
           type="button"
@@ -382,7 +383,8 @@ export function StudyPipelineSection({
           <Plus size={13} aria-hidden="true" />
           Save state
         </Button>
-      </div>
+        </div>
+      ) : null}
 
       <div className="fm-inspector-toolbar fm-mt-2">
         <PipelineCommandButton

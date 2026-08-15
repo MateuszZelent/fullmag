@@ -56,7 +56,10 @@ describe("mode visualization selection identity", () => {
       analysisRunId: "run-1",
       analysisStageId: "stage-1",
       artifactRevision: 7,
+      availability: "available",
+      contractGap: null,
       equilibriumId: "eq-1",
+      executionState: "completed",
       fieldId: "field-a",
       frequencyHz: 12.5e9,
       kContextKind: "gamma",
@@ -64,6 +67,7 @@ describe("mode visualization selection identity", () => {
       nodeId: "results:run-1:mode-1",
       representation: "complex-vector-xyz",
       resourceRef: "data/fields/field-a",
+      resourceState: "ready",
       source: "eigen-mode",
       studyProduct: "modal_eigen",
       type: "frequency-domain",
@@ -71,10 +75,14 @@ describe("mode visualization selection identity", () => {
 
     expect(selectionRefEquals(first, { ...first })).toBe(true);
     expect(selectionRefEquals(first, { ...first, artifactRevision: 8 })).toBe(false);
+    expect(selectionRefEquals(first, { ...first, availability: "partial" })).toBe(false);
+    expect(selectionRefEquals(first, { ...first, contractGap: "missing drive evidence" })).toBe(false);
     expect(selectionRefEquals(first, { ...first, equilibriumId: "eq-2" })).toBe(false);
     expect(selectionRefEquals(first, { ...first, kContextKind: "fixed_k" })).toBe(false);
     expect(selectionRefEquals(first, { ...first, frequencyHz: 13e9 })).toBe(false);
     expect(selectionRefEquals(first, { ...first, representation: "other" })).toBe(false);
+    expect(selectionRefEquals(first, { ...first, executionState: "running" })).toBe(false);
+    expect(selectionRefEquals(first, { ...first, resourceState: "stale" })).toBe(false);
     expect(
       selectionRefEquals(first, { ...first, studyProduct: "driven_response" }),
     ).toBe(false);

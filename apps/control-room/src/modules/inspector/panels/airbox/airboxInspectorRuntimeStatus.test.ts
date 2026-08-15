@@ -7,6 +7,7 @@ import {
 import {
   airboxInspectorRuntimeStatusEquals,
   isExplicitFdmAirboxRuntime,
+  resolveAirboxInspectorLane,
   selectAirboxInspectorRuntimeStatus,
 } from "./airboxInspectorRuntimeStatus";
 
@@ -81,5 +82,37 @@ describe("airboxInspectorRuntimeStatus", () => {
         resources: { mesh_build_revision: 4, mesh_revision: 5 },
       }),
     ).toBe(true);
+  });
+
+  it("keeps the multilayer target on the FDM lane even though its display target is Airbox", () => {
+    const selection = {
+      kind: "airbox.multilayer.target",
+      ref: { type: "airbox", visualizationTargetId: "airbox" },
+    } as never;
+    const fdmStatus = {
+      capabilities: { explicit_topology: true },
+      domain: { discretization: "fdm" },
+      resources: { mesh_build_revision: 4, mesh_revision: 5 },
+    } as const;
+    const femStatus = { ...fdmStatus, domain: { discretization: "fem" } } as const;
+
+    expect(resolveAirboxInspectorLane(selection, fdmStatus)).toBe("fdm");
+    expect(resolveAirboxInspectorLane(selection, femStatus)).toBe("conflict");
+  });
+
+  it("resolves a generic Airbox display target from the explicit runtime lane", () => {
+    const selection = {
+      kind: "airbox.visualization",
+      ref: { type: "airbox", visualizationTargetId: "airbox" },
+    } as never;
+    const fdmStatus = {
+      capabilities: { explicit_topology: true },
+      domain: { discretization: "fdm" },
+      resources: { mesh_build_revision: 4, mesh_revision: 5 },
+    } as const;
+    const femStatus = { ...fdmStatus, domain: { discretization: "fem" } } as const;
+
+    expect(resolveAirboxInspectorLane(selection, fdmStatus)).toBe("fdm");
+    expect(resolveAirboxInspectorLane(selection, femStatus)).toBe("fem");
   });
 });

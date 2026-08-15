@@ -383,7 +383,7 @@ function responseQuantityOptions(
   );
   return options.length > 0
     ? options
-    : [{ label: "Amplitude", unit: "a.u.", value: "amplitude" }];
+    : [{ label: "Amplitude", unit: "not published", value: "amplitude" }];
 }
 
 function filterResponseChartSeries(

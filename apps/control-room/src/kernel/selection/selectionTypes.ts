@@ -1,6 +1,11 @@
 import type { ModuleId } from "../types";
 import type { CrossSectionQualityMetric, ResourceRevision } from "../api/apiTypes";
 import type {
+  ResourceAvailability,
+  ResourceExecutionState,
+  ResourceStatus,
+} from "../resources/resourceTypes";
+import type {
   PostprocessingDefinitionKind,
   PostprocessingFreshness,
   PostprocessingOwnerKind,
@@ -348,6 +353,9 @@ export type SelectionRef =
       carrierPartId?: string;
       elementFamily?: MeshElementFamily | null;
       globalCellOrdinal?: string | null;
+      availability?: ResourceAvailability;
+      contractGap?: string | null;
+      executionState?: ResourceExecutionState;
       kind:
         | "airbox.root"
         | "airbox.mesh"
@@ -360,6 +368,7 @@ export type SelectionRef =
         | "airbox.visualization.debug"
         | "airbox.multilayer.target";
       nodeId: string;
+      resourceState?: ResourceStatus;
       type: "airbox";
       visualizationTargetId: "airbox" | "fdm-universe-outside-support";
     }
@@ -601,7 +610,10 @@ export type SelectionRef =
       analysisRunId?: string;
       analysisStageId?: string;
       artifactRevision?: number | string;
+      availability?: ResourceAvailability;
+      contractGap?: string | null;
       equilibriumId?: string;
+      executionState?: ResourceExecutionState;
       kContextKind?: AnalysisFieldOverlayKContextKind;
       artifactPath?: string;
       branchId?: string;
@@ -618,6 +630,7 @@ export type SelectionRef =
       observableId?: string;
       representation?: AnalysisFieldOverlayRepresentation | string;
       resourceRef?: string;
+      resourceState?: ResourceStatus;
       sampleIndex?: number;
       source?: AnalysisFieldOverlaySource;
       studyProduct?: string;
@@ -1064,6 +1077,8 @@ export function selectionRefEquals(
         right.type === "frequency-domain" &&
         left.kind === right.kind &&
         left.nodeId === right.nodeId &&
+        left.availability === right.availability &&
+        nullableStringEquals(left.contractGap, right.contractGap) &&
         nullableStringEquals(left.analysisRunId, right.analysisRunId) &&
         nullableStringEquals(left.analysisStageId, right.analysisStageId) &&
         nullableStringEquals(left.artifactPath, right.artifactPath) &&
@@ -1083,7 +1098,9 @@ export function selectionRefEquals(
         nullableStringEquals(left.observableId, right.observableId) &&
         nullableStringEquals(left.representation, right.representation) &&
         nullableStringEquals(left.resourceRef, right.resourceRef) &&
+        left.resourceState === right.resourceState &&
         left.sampleIndex === right.sampleIndex &&
+        left.executionState === right.executionState &&
         nullableStringEquals(left.source, right.source) &&
         nullableStringEquals(left.studyProduct, right.studyProduct) &&
         centroidEquals(left.wavevectorKf, right.wavevectorKf)

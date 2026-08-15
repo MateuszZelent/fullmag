@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 
+import * as frequencyInspectors from "./frequency-domain/FrequencyDomainResultInspectors";
+
 import { resolveInspectorPanel } from "../inspectorRegistry";
 import {
   DispersionRelationResultInspector,
@@ -10,6 +12,18 @@ import {
 import { buildFrequencyResponsePlotCommandInput } from "./frequency-domain/FrequencyDomainResultInspectors";
 
 describe("physics-first frequency result inspectors", () => {
+  it("keeps response-map readiness fail-closed until a typed k-by-f resource exists", () => {
+    const resolveAvailability = (
+      frequencyInspectors as unknown as {
+        responseMapAvailabilityFromTypedResource?: (resource: unknown) => string;
+      }
+    ).responseMapAvailabilityFromTypedResource;
+
+    expect(resolveAvailability?.(null)).toBe("unsupported");
+    expect(resolveAvailability?.({ data: { points: [] }, status: "ready" })).toBe("ready");
+    expect(resolveAvailability?.({ data: null, status: "ready" })).toBe("unsupported");
+  });
+
   it("routes modal spectrum as eigenfrequency rather than automatic FMR", () => {
     expect(resolveInspectorPanel({ kind: "results.resonance.modal.spectrum" })?.component)
       .toBe(ResonanceModalSpectrumResultInspector);

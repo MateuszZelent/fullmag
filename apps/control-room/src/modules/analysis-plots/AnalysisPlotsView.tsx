@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo } from "react";
+import { memo, useMemo } from "react";
 
 import type { KernelApi } from "@/kernel/types";
 import {
@@ -73,7 +73,7 @@ const EMPTY_STRING_LIST: readonly string[] = Object.freeze([]);
 const EMPTY_CHART_SERIES: readonly ChartSeries[] = Object.freeze([]);
 const EMPTY_SURFACE_PROVENANCE: Partial<Record<AnalysisSurface, string>> =
   Object.freeze({});
-export function AnalysisPlotsView(props: AnalysisPlotsViewInput) {
+export const AnalysisPlotsView = memo(function AnalysisPlotsView(props: AnalysisPlotsViewInput) {
   const { activeSubview: requestedActiveSubview, activeSurface, datasetRefs = EMPTY_STRING_LIST, descriptorId = null, displayUnits = EMPTY_DISPLAY_UNITS, dynamicStructureFactor = null, dynamicStructureFactorStatus = "idle", frequencyDomainCalculationMode, frequencyDomainComparisonModel, frequencyDomainProvenance = null, frequencyDomainSeries = EMPTY_CHART_SERIES, frequencyDomainStatus = "idle", frequencyDomainTitle = "Frequency domain", frequencyDomainUnavailableReason = null, kernel, onDatasetRefChange = () => undefined, onSubviewChange = () => undefined, onSurfaceChange = () => undefined, range = null, selectedDatasetRef = null, selectedPoint = null, selectedSeriesIds = EMPTY_STRING_LIST, selectedStageId = null, spinWaveGamma = null, spinWaveGammaStatus = "idle", surfaceProvenance = EMPTY_SURFACE_PROVENANCE, table = null, tableStatus = "idle", tableUnsupportedReason = null, xAxisId: selectedXAxisId = null } = props;
   const onPointSelect = props.onPointSelect ?? ignorePointSelection;
   const onDisplayUnitsChange = props.onDisplayUnitsChange ?? ignoreDisplayUnitsChange;
@@ -140,7 +140,7 @@ export function AnalysisPlotsView(props: AnalysisPlotsViewInput) {
       </div> : null}
     </section>
   </div>;
-}
+});
 
 function ignorePointSelection(): void {}
 function ignoreRangeSelection(): void {}

@@ -52,6 +52,7 @@ import {
   buildFmrModalDrivenComparisonModel,
   buildFmrPeakTableModel,
   frequencyDomainManifestPayload,
+  frequencyResponseSeriesUnit,
   responseFieldResourcesFromManifest,
   routeFrequencyDomainCalculationMode,
 } from "@/shared/domain/analysis/frequencyDomainChartModels";
@@ -1705,7 +1706,13 @@ function FmrPeakBrowser({
           <div className="fm-frequency-domain-peak-card__grid">
             <FieldRow label="Target" value={formatFmrPeakTarget(peak)} />
             <FieldRow label="Amplitude" value={formatNumberOrUnavailable(peak.amplitude)} />
-            <FieldRow label="Power density" value={formatPowerDensity(peak.absorbedPowerDensity)} />
+            <FieldRow
+              label="Power density"
+              value={formatPowerDensity(
+                peak.absorbedPowerDensity,
+                peak.absorbedPowerDensityUnit,
+              )}
+            />
             <FieldRow label="Linewidth" value={formatFrequency(peak.linewidthHz)} />
             <FieldRow label="Q factor" value={formatFmrPeakQualityFactor(peak)} />
             <FieldRow
@@ -2626,6 +2633,8 @@ function FrequencyResponsePointCollection({
         badge={summary.badge}
       >
         <FrequencyDomainResponsePointTable
+          absorbedPowerDensityUnit={summary.absorbedPowerDensityUnit}
+          amplitudeUnit={summary.amplitudeUnit}
           onPlotResponsePoint={plotPoint}
           points={summary.responseModel.points}
         />
@@ -2836,6 +2845,8 @@ export function FrequencyResponseSweepInspectorPanel(props: InspectorPanelProps)
         badge={summary.badge}
       >
         <FrequencyDomainResponsePointTable
+          absorbedPowerDensityUnit={summary.absorbedPowerDensityUnit}
+          amplitudeUnit={summary.amplitudeUnit}
           onPlotResponsePoint={(point, action) => {
             if (!point.fieldId) return;
             void kernel.commands.execute(
@@ -3531,6 +3542,11 @@ function useFmrResultSummary() {
     responseSweep.data,
     manifestPayload,
   );
+  const amplitudeUnit = frequencyResponseSeriesUnit(responseModel, "amplitude");
+  const absorbedPowerDensityUnit = frequencyResponseSeriesUnit(
+    responseModel,
+    "absorbed-power-density",
+  );
   const peakModel = buildFmrPeakTableModel({
     manifestPayload,
     responseSweep: responseSweep.data,
@@ -3580,6 +3596,8 @@ function useFmrResultSummary() {
 
   return {
     activeChartRoute: `${chartRoute.mode} -> ${chartRoute.primaryChart}`,
+    amplitudeUnit,
+    absorbedPowerDensityUnit,
     capabilitySummary: `reference_cpu: ${modalReferenceCpu}; magnetic_cpu: ${responseMagneticCpu}`,
     comparisonPairs: comparisonModel.pairs,
     comparisonState:
@@ -4387,6 +4405,27 @@ function useEigenSpectrumSummary() {
   };
 }
 
+export function responseMapAvailabilityFromTypedResource(
+  resource: unknown,
+): "ready" | "loading" | "stale" | "error" | "unsupported" {
+  if (!resource || typeof resource !== "object" || Array.isArray(resource)) {
+    return "unsupported";
+  }
+
+  const candidate = resource as { data?: unknown; status?: unknown };
+  if (candidate.status === "ready" && candidate.data != null) {
+    return "ready";
+  }
+  if (
+    candidate.status === "loading" ||
+    candidate.status === "stale" ||
+    candidate.status === "error"
+  ) {
+    return candidate.status;
+  }
+  return "unsupported";
+}
+
 function useFrequencyDomainResponseMapSummary() {
   const manifest = useFrequencyDomainManifestResource();
   const responseSweep = useFrequencyDomainResponseSweepResource();
@@ -4412,12 +4451,15 @@ function useFrequencyDomainResponseMapSummary() {
   const fieldCount =
     responseFieldResourcesFromManifest(manifestPayload).length ||
     responseModel.points.filter((point) => point.fieldId).length;
-  const responseMapSupported =
-    manifest.data?.floquet_nonzero_k_response_supported === true;
+  // The capability bit describes a legal execution lane, not a published
+  // k-by-f response resource. Until that typed resource is exposed, keep the
+  // result unavailable and fall back to the verified FMR response sweep.
+  const responseMapAvailability =
+    responseMapAvailabilityFromTypedResource(null);
 
   return {
-    availability: responseMapSupported ? "ready" : "unsupported",
-    badge: responseMapSupported ? "ready" : "unsupported",
+    availability: responseMapAvailability,
+    badge: responseMapAvailability,
     blockingPhysics: `dynamic_demag_k: ${capabilityStatus(demagCapabilities?.floquet_dynamic_k)}`,
     capabilityGate: responseMapRow?.capabilityStatus ?? "not available",
     currentResponseEvidence: `${responseModel.points.length} point(s), ${fieldCount} response field(s)`,
@@ -4428,9 +4470,10 @@ function useFrequencyDomainResponseMapSummary() {
             .join(", ")}] rad/m`
         : "not requested",
     manifestResource: ANALYSIS_FREQUENCY_DOMAIN_MANIFEST_V1_PATH,
-    uiFallback: responseMapSupported
-      ? "show response map controls"
-      : "show FMR response sweep until nonzero-k map is executable",
+    uiFallback:
+      responseMapAvailability === "ready"
+        ? "show response map controls"
+        : "Typed response-map resource is not published; show FMR response sweep until nonzero-k map is executable",
   };
 }
 
@@ -4570,8 +4613,13 @@ function useFmrPeakSummary({ selection }: InspectorPanelProps) {
   const manifest = useFrequencyDomainManifestResource();
   const spectrum = useFrequencyDomainEigenSpectrumResource();
   const responseSweep = useFrequencyDomainResponseSweepResource();
+  const manifestPayload = frequencyDomainManifestPayload(manifest.data);
+  const responseModel = buildFrequencyResponseChartModel(
+    responseSweep.data,
+    manifestPayload,
+  );
   const peakModel = buildFmrPeakTableModel({
-    manifestPayload: frequencyDomainManifestPayload(manifest.data),
+    manifestPayload,
     responseSweep: responseSweep.data,
     spectrum: spectrum.data,
   });
@@ -4597,13 +4645,18 @@ function useFmrPeakSummary({ selection }: InspectorPanelProps) {
   const sourceInspectorNodeId = isModal
     ? "results:frequency-domain:fmr:modal-spectrum"
     : "results:frequency-domain:fmr:response-sweep";
+  const amplitudeUnit =
+    peak?.amplitudeUnit ?? frequencyResponseSeriesUnit(responseModel, "amplitude");
+  const absorbedPowerDensityUnit =
+    peak?.absorbedPowerDensityUnit ??
+    frequencyResponseSeriesUnit(responseModel, "absorbed-power-density");
 
   return {
     absorbedPowerDensity:
       peak?.absorbedPowerDensity == null
         ? "not available"
-        : `${formatNumber(peak.absorbedPowerDensity)} W/m^3`,
-    amplitude: formatNumberOrUnavailable(peak?.amplitude),
+        : formatQuantity(peak.absorbedPowerDensity, absorbedPowerDensityUnit),
+    amplitude: formatQuantity(peak?.amplitude, amplitudeUnit),
     actionBadge: peak?.fieldId ? "3D-ready" : "metadata",
     artifactFamily: isModal ? "eigen/spectrum.v2.json" : "response/magnetic-sweep",
     badge:
@@ -4684,6 +4737,11 @@ function useFrequencyResponsePointSummary({ selection }: InspectorPanelProps) {
     responseSweep.data,
     frequencyDomainManifestPayload(manifest.data),
   );
+  const amplitudeUnit = frequencyResponseSeriesUnit(responseModel, "amplitude");
+  const absorbedPowerDensityUnit = frequencyResponseSeriesUnit(
+    responseModel,
+    "absorbed-power-density",
+  );
   const matchingPoints = responseModel.points.filter(
     (point) => point.frequencyIndex === frequencyIndex,
   );
@@ -4743,8 +4801,9 @@ function useFrequencyResponsePointSummary({ selection }: InspectorPanelProps) {
     absorbedPowerDensity:
       absorbedPowerDensity == null
         ? "not available"
-        : `${formatNumber(absorbedPowerDensity)} W/m^3`,
-    amplitude: formatNumberOrUnavailable(amplitude),
+        : formatQuantity(absorbedPowerDensity, absorbedPowerDensityUnit),
+    amplitude: formatQuantity(amplitude, amplitudeUnit),
+    amplitudeUnit,
     artifactPath: frequencyPoint.data?.artifact_path ?? "not available",
     availableViews: availableViews.length ? availableViews.join(", ") : "not available",
     availableViewValues: normalizedAnalysisFieldViewOptions(
@@ -4777,6 +4836,7 @@ function useFrequencyResponsePointSummary({ selection }: InspectorPanelProps) {
     field3DStatus,
     frequencyDisplay: formatFrequency(frequencyHz),
     frequencyIndex,
+    absorbedPowerDensityUnit,
     observableRows: `${matchingPoints.length} sweep row(s)`,
     phase: phase == null ? "not available" : `${formatNumber(phase)} rad`,
     provenance: provenance || "not available",
@@ -4811,6 +4871,11 @@ function useFrequencyResponseFrequencyPointsSummary() {
     responseSweep.data,
     manifestPayload,
   );
+  const amplitudeUnit = frequencyResponseSeriesUnit(responseModel, "amplitude");
+  const absorbedPowerDensityUnit = frequencyResponseSeriesUnit(
+    responseModel,
+    "absorbed-power-density",
+  );
   const frequencies = responseModel.points.map((point) => point.frequencyHz);
   const amplitudes = responseModel.points.flatMap((point) =>
     point.amplitude == null ? [] : [point.amplitude],
@@ -4824,7 +4889,9 @@ function useFrequencyResponseFrequencyPointsSummary() {
     .length;
 
   return {
-    amplitudeRange: formatNumberRange(amplitudes),
+    amplitudeRange: formatNumberRange(amplitudes, ` ${amplitudeUnit}`),
+    amplitudeUnit,
+    absorbedPowerDensityUnit,
     badge:
       responseSweep.status === "ready"
         ? `${responseModel.points.length} point(s)`
@@ -4877,6 +4944,11 @@ function useFrequencyResponseObservableSummary({ selection }: InspectorPanelProp
     responseSweep.data,
     frequencyDomainManifestPayload(manifest.data),
   );
+  const amplitudeUnit = frequencyResponseSeriesUnit(responseModel, "amplitude");
+  const absorbedPowerDensityUnit = frequencyResponseSeriesUnit(
+    responseModel,
+    "absorbed-power-density",
+  );
   const observableId = ref?.observableId ?? selection.label ?? null;
   const points = responseModel.points.filter(
     (point) => point.observableId === observableId,
@@ -4910,14 +4982,14 @@ function useFrequencyResponseObservableSummary({ selection }: InspectorPanelProp
     frequencyRange: formatFrequencyRange(frequencies),
     maxAbsorbedPowerDensity: maxFinite(absorbedPowers) == null
       ? "not available"
-      : `${formatNumber(maxFinite(absorbedPowers)!)} W/m^3`,
+      : formatQuantity(maxFinite(absorbedPowers)!, absorbedPowerDensityUnit),
     meanAmplitude: meanFinite(amplitudes) == null
       ? "not available"
-      : formatNumber(meanFinite(amplitudes)!),
+      : formatQuantity(meanFinite(amplitudes)!, amplitudeUnit),
     observableId: observableId ?? "not selected",
     peakAmplitude: maxFinite(amplitudes) == null
       ? "not available"
-      : formatNumber(maxFinite(amplitudes)!),
+      : formatQuantity(maxFinite(amplitudes)!, amplitudeUnit),
     phaseRange: formatNumberRange(phases, " rad"),
     pointCount: String(points.length),
     resourceKey:
@@ -4933,6 +5005,15 @@ function useFrequencyResponseSweepSummary() {
   const responseModel = buildFrequencyResponseChartModel(
     responseSweep.data,
     frequencyDomainManifestPayload(manifest.data),
+  );
+  const amplitudeUnit = frequencyResponseSeriesUnit(responseModel, "amplitude");
+  const absorbedPowerDensityUnit = frequencyResponseSeriesUnit(
+    responseModel,
+    "absorbed-power-density",
+  );
+  const susceptibilityUnit = frequencyResponseSeriesUnit(
+    responseModel,
+    "susceptibility-max-abs",
   );
   const fmrPeakModel = buildFmrPeakTableModel({
     manifestPayload: frequencyDomainManifestPayload(manifest.data),
@@ -4961,9 +5042,9 @@ function useFrequencyResponseSweepSummary() {
     frequencyRange: formatFrequencyRange(frequencies),
     maxAbsorbedPowerDensity: maxFinite(absorbedPowers) == null
       ? "not available"
-      : `${formatNumber(maxFinite(absorbedPowers)!)} W/m^3`,
+      : formatQuantity(maxFinite(absorbedPowers)!, absorbedPowerDensityUnit),
     peakResponse: peak
-      ? `${formatFrequency(peak.frequencyHz)}; amplitude ${formatNumberOrUnavailable(peak.amplitude)}`
+      ? `${formatFrequency(peak.frequencyHz)}; amplitude ${formatQuantity(peak.amplitude, amplitudeUnit)}`
       : "not available",
     pointCount: String(responseModel.points.length),
     progressState: progress.data
@@ -4975,11 +5056,14 @@ function useFrequencyResponseSweepSummary() {
     resourceKey: responseSweep.data?.resource_key ??
       ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_MAGNETIC_SWEEP_PATH,
     responseModel,
+    amplitudeUnit,
+    absorbedPowerDensityUnit,
     seriesStatus: responseModel.series.length
       ? `${responseModel.series.length} series: ${responseModel.series.map((series) => series.label).join(", ")}`
       : "not available",
     absorbedPowerCoverage: `${absorbedPowers.length}/${responseModel.points.length} point(s)`,
-    susceptibilityComponent: "max |χ| from response tensor",
+    susceptibilityComponent: `max |χ| from response tensor [${susceptibilityUnit}]`,
+    susceptibilityUnit,
   };
 }
 
@@ -5727,6 +5811,14 @@ function formatNumberOrUnavailable(value: number | null | undefined): string {
     : formatNumber(value);
 }
 
+function formatQuantity(
+  value: number | null | undefined,
+  unit: string,
+): string {
+  if (value == null || !Number.isFinite(value)) return "not available";
+  return `${formatNumber(value)} ${unit === "not published" ? "[unit not published]" : unit}`;
+}
+
 function formatFmrModalPairLabel(pair: FmrModalDrivenComparisonPoint): string {
   const mode = pair.modalPeak.modeRef?.rawModeIndex ?? "?";
   return `mode ${mode} @ ${formatFrequency(pair.modalPeak.frequencyHz)}`;
@@ -5788,10 +5880,13 @@ function formatFmrPeakQualityFactor(peak: FmrPeakPoint): string {
   return formatCompactNumberOrUnavailable(peak.frequencyHz / peak.linewidthHz);
 }
 
-function formatPowerDensity(value: number | null | undefined): string {
+function formatPowerDensity(
+  value: number | null | undefined,
+  unit = "not published",
+): string {
   return value == null || !Number.isFinite(value)
     ? "not available"
-    : `${formatCompactNumberOrUnavailable(value)} W/m^3`;
+    : `${formatCompactNumberOrUnavailable(value)} ${unit === "not published" ? "[unit not published]" : unit}`;
 }
 
 function formatCompactNumberOrUnavailable(
