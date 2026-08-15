@@ -1724,6 +1724,7 @@ export function Viewport3DScene({
   const inspectClearArbitrator = useMemo(
     () =>
       createFdmInspectClearArbitrator({
+        // idle-audit-allow-one-shot-raf: coalesce pointer-inspection clear/sample callbacks.
         cancelFrame: (frame) => window.cancelAnimationFrame(frame),
         onClear: () => onInspectClear?.(),
         requestFrame: (callback) => window.requestAnimationFrame(callback),

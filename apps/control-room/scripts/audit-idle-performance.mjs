@@ -175,14 +175,16 @@ function allowsViewport3DDemandFrameOneShots(relativePath, content) {
   const cancelCount = countOccurrences(content, "cancelAnimationFrame(");
   return (
     // Camera projection, staged model layers, render adoption, and resource
-    // acknowledgement are each bounded one-shot frames.
-    requestCount === 4 &&
-    cancelCount === 4 &&
+    // acknowledgement plus pointer inspection arbitration are bounded one-shot frames.
+    requestCount === 5 &&
+    cancelCount === 5 &&
     content.includes("idle-audit-allow-one-shot-raf") &&
     content.includes('tracker.recordDirtyFrame("camera-projection-followup")') &&
     content.includes('tracker.recordDirtyFrame("resources-updated")') &&
     content.includes('tracker.recordDirtyFrame("model-layer-stage")') &&
-    content.includes("invalidate();")
+    content.includes("invalidate();") &&
+    content.includes("createFdmInspectClearArbitrator") &&
+    content.includes("inspectClearArbitrator.dispose()")
   );
 }
 
