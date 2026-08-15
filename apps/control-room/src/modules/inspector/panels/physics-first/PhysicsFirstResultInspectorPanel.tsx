@@ -1,10 +1,20 @@
+import type { ReactNode } from "react";
+
 import { ScientificInspectorTemplate } from "../../components/ScientificInspectorTemplate";
 import type { InspectorPanelProps } from "../../inspectorTypes";
 import { FieldRow } from "../../primitives/FieldRow";
 import { InspectorGroup } from "../../primitives/InspectorGroup";
 import { physicsFirstResultInspectorModel } from "./physicsFirstResultInspectorModel";
 
-export function PhysicsFirstResultInspectorPanel({ selection }: InspectorPanelProps) {
+interface PhysicsFirstResultInspectorFrameProps {
+  children?: ReactNode;
+  selection: InspectorPanelProps["selection"];
+}
+
+export function PhysicsFirstResultInspectorFrame({
+  children,
+  selection,
+}: PhysicsFirstResultInspectorFrameProps) {
   const model = physicsFirstResultInspectorModel(selection.kind ?? "");
   const ref = selection.ref?.type === "frequency-domain" ? selection.ref : null;
   if (!model) {
@@ -43,6 +53,12 @@ export function PhysicsFirstResultInspectorPanel({ selection }: InspectorPanelPr
         resource: ref ? "ready" : "unavailable",
       }}
       title={selection.label || model.title}
-    />
+    >
+      {children}
+    </ScientificInspectorTemplate>
   );
+}
+
+export function PhysicsFirstResultInspectorPanel({ selection }: InspectorPanelProps) {
+  return <PhysicsFirstResultInspectorFrame selection={selection} />;
 }

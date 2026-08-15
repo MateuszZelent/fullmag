@@ -21,6 +21,7 @@ export interface ScientificInspectorStatus {
 export interface ScientificInspectorTemplateProps {
   actions?: ReactNode;
   breadcrumbs?: readonly string[];
+  children?: ReactNode;
   diagnostics?: readonly string[];
   methodLabel: string;
   physicalLabel: string;
@@ -33,6 +34,7 @@ export interface ScientificInspectorTemplateProps {
 export function ScientificInspectorTemplate({
   actions,
   breadcrumbs = [],
+  children,
   diagnostics = [],
   methodLabel,
   physicalLabel,
@@ -83,6 +85,7 @@ export function ScientificInspectorTemplate({
           ))}
         </InspectorGroup>
       ) : null}
+      {children ? <div className="fm-scientific-inspector__content">{children}</div> : null}
       {actions ? <div className="fm-scientific-inspector__actions">{actions}</div> : null}
     </div>
   );

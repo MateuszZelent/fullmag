@@ -883,6 +883,12 @@
   overflow-wrap: anywhere;
 }
 
+.fm-scientific-inspector__content {
+  display: grid;
+  min-width: 0;
+  gap: var(--fm-space-3);
+}
+
 .fm-scientific-inspector__breadcrumbs {
   color: var(--fm-text-muted);
   font-size: var(--fm-font-size-xs);

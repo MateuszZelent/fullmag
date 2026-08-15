@@ -27,4 +27,21 @@ describe("ScientificInspectorTemplate", () => {
     expect(html).toContain("run-1");
     expect(html).toContain("Observable contract unavailable");
   });
+
+  it("keeps panel-specific content inside the shared scientific frame", () => {
+    const html = renderToStaticMarkup(
+      <ScientificInspectorTemplate
+        methodLabel="Frequency-driven"
+        physicalLabel="Driven resonance"
+        status={{ availability: "available", execution: "completed", resource: "ready" }}
+        title="Response spectrum"
+      >
+        <div data-inspector-surface="response-spectrum">Chart and response controls</div>
+      </ScientificInspectorTemplate>,
+    );
+
+    expect(html).toContain('class="fm-scientific-inspector__content"');
+    expect(html).toContain('data-inspector-surface="response-spectrum"');
+    expect(html).toContain("Chart and response controls");
+  });
 });
