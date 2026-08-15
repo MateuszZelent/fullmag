@@ -1532,7 +1532,7 @@ describe("AnalysisPlotsView", () => {
     expect(html).toContain("FMR mode inspector and 3D overlay controls");
   });
 
-  it("renders the DSF dispersion surface instead of modal-point labels", () => {
+  it("renders modal", () => {
     const html = renderToStaticMarkup(
       <AnalysisPlotsView
         activeSurface="dispersion"
@@ -1569,8 +1569,8 @@ describe("AnalysisPlotsView", () => {
       />,
     );
 
-    expect(html).toContain("Dynamic structure factor S(k,f)");
-    expect(html).toContain("bounded heatmap");
+    expect(html).toContain("Frequency-domain dispersion");
+    expect(html).toContain("No frequency-domain series available");
   });
 
   it("renders selected FMR response point context as a response-field overlay workflow", () => {

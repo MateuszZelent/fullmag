@@ -388,6 +388,20 @@ const ExplorerTreeRow = memo(function ExplorerTreeRow({
       aria-expanded={hasChildren ? expanded : undefined}
       aria-selected={selectable ? active : undefined}
       onClick={selectable ? handleSelect : undefined}
+      onPointerDown={
+        selectable
+          ? (event) => {
+              if (event.button !== 0) return;
+              if (
+                event.target instanceof HTMLElement &&
+                event.target.closest(".fm-explorer-tree-row__branch")
+              ) {
+                return;
+              }
+              handleSelect();
+            }
+          : undefined
+      }
       onDoubleClick={handleToggle}
       onFocus={() => setExplorerKeyboardRow(node.id)}
       onKeyDown={handleKeyDown}

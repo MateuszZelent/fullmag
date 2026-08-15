@@ -4293,7 +4293,7 @@ describe("useViewport3DSceneModel", () => {
     const source = readFileSync(sceneModelSourceUrl, "utf8");
 
     expect(source).toContain(
-      "useFieldCatalogResource({ enabled: Boolean(fdmLaneActive) })",
+      "domainMeta.data?.discretization === \"fem\"",
     );
     expect(source).toContain(
       "const availableQuantityIdsForPlanning = fdmLaneActive",

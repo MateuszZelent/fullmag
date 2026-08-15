@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { act } from "react";
-import { createRoot } from "react-dom/client";
+import { createRoot, hydrateRoot } from "react-dom/client";
 import { flushSync } from "react-dom";
 import { renderToString } from "react-dom/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -94,6 +94,87 @@ describe("useResource loader callback", () => {
 
     expect(html).toContain('data-resource="true">loading:</div>');
     expect(html).toContain('data-selector="true">loading:</div>');
+  });
+
+  it("hydrates against the server snapshot, adopts prefetched live data, and refetches after invalidation", async () => {
+    vi.useFakeTimers();
+    const bus = new EventBus<KernelEventMap>();
+    const resources = new ResourceInvalidationController(bus);
+    const kernel = {
+      api: {},
+      bus,
+      diagnosticRecorder: new DiagnosticRecorderController({ config: { enabled: false } }),
+      resources,
+    } as unknown as KernelApi;
+    const resourceKey = "test:hydrated-live-resource";
+    const selectorResourceKey = "test:hydrated-live-selector";
+    const load = vi.fn(async () => ({ source: "network", revision: 8 }));
+    const selectorLoad = vi.fn(async () => ({ source: "network-selector", revision: 8 }));
+    sharedResourceRuntimeStore.updateData(resourceKey, { source: "live", revision: 7 }, 7);
+    sharedResourceRuntimeStore.updateData(selectorResourceKey, { source: "live-selector", revision: 7 }, 7);
+    resources.invalidate(resourceKey, 7);
+    resources.invalidate(selectorResourceKey, 7);
+
+    function Harness() {
+      const resource = useResource({
+        load,
+        resolveRevision: (data) => data.revision,
+        resourceKey,
+      });
+      const selected = useResourceSelector({
+        load: selectorLoad,
+        resolveRevision: (data) => data.revision,
+        resourceKey: selectorResourceKey,
+        selector: (resource) => `${resource.status}:${resource.data?.source ?? ""}`,
+      });
+      return <><div data-resource>{`${resource.status}:${resource.data?.source ?? ""}`}</div><div data-selector>{selected}</div></>;
+    }
+
+    const serverHtml = renderToString(
+      <KernelContext.Provider value={kernel}>
+        <Harness />
+      </KernelContext.Provider>,
+    );
+    const dom = installSimulationPreparationTestDom();
+    const container = dom.document.createElement("div");
+    (container as unknown as { innerHTML: string }).innerHTML = serverHtml;
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    let root: ReturnType<typeof hydrateRoot> | undefined;
+    try {
+      await act(async () => {
+        root = hydrateRoot(
+          container as unknown as Element,
+          <KernelContext.Provider value={kernel}>
+            <Harness />
+          </KernelContext.Provider>,
+        );
+        await Promise.resolve();
+      });
+
+      expect(serverHtml).toContain('data-resource="true">loading:</div>');
+      expect(serverHtml).toContain('data-selector="true">loading:</div>');
+      expect(consoleError).not.toHaveBeenCalled();
+      expect(container.textContent).toContain("ready:live");
+      expect(container.textContent).toContain("ready:live-selector");
+      expect(load).not.toHaveBeenCalled();
+      expect(selectorLoad).not.toHaveBeenCalled();
+
+      await act(async () => {
+        resources.invalidate(resourceKey, 8);
+        resources.invalidate(selectorResourceKey, 8);
+        await vi.runOnlyPendingTimersAsync();
+      });
+
+      expect(load).toHaveBeenCalledTimes(1);
+      expect(selectorLoad).toHaveBeenCalledTimes(1);
+      expect(container.textContent).toContain("ready:network");
+      expect(container.textContent).toContain("ready:network-selector");
+      expect(consoleError).not.toHaveBeenCalled();
+    } finally {
+      await act(async () => root?.unmount());
+      consoleError.mockRestore();
+      dom.restore();
+    }
   });
 
   it("uses the latest loader when a retry timer fires after a loader change", async () => {

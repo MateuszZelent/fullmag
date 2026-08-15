@@ -361,6 +361,7 @@ function useObjectVisualizationPanelState(
   const fieldCatalog = useFieldCatalogResource({
     enabled:
       fdmTarget ||
+      target?.kind === "airbox" ||
       shouldLoadObjectVisualizationFieldCatalog({
         requested: fieldCatalogRequested,
         surfaceColorSource: settings?.surfaceColorSource,

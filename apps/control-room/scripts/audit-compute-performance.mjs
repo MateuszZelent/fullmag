@@ -1784,7 +1784,8 @@ function checkAnalysisPlotsStableResourceInputs() {
     "comparisonUnavailableReason: ANALYSIS_COMPARISON_UNAVAILABLE_REASON",
     'activeSurface === "resonance-fmr" || activeSurface === "dispersion"',
     'useSpinWaveGammaResource(activeSurface === "dynamics")',
-    'useDynamicStructureFactorResource(activeSurface === "dispersion")',
+    "useDynamicStructureFactorResource(",
+    'activeSurface === "dynamics" && activeSubview === "dynamics.s-k-f"',
   ]);
   requireTokens(datasetDataHookSource, "analysis plots dataset resource owner", [
     "resolveAnalysisDatasetTableId",

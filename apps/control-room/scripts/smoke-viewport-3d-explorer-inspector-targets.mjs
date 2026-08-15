@@ -145,16 +145,26 @@ async function verifyFdmFieldFailureRecovery(browser, url) {
     await installFixtureConfig(page);
     try {
       await page.goto(url, { waitUntil: "domcontentloaded", timeout: timeoutMs });
+      await assertHealthyCanvas(page, `FDM ${fieldMode} initial`);
+      const failedBaseline = await sampleViewportPixels(page);
       await requestFdmField(page, "m");
       const failed = await waitForFdmFieldResource(page, "m");
-      if (failed.hasValues) {
+      if (fieldMode === "empty" && failed.hasValues) {
         throw new Error(`${fieldMode} field response was rendered instead of failing closed: ${JSON.stringify(failed)}.`);
+      }
+      if (fieldMode !== "empty") {
+        if (!failed.hasValues) {
+          throw new Error(`${fieldMode} field response did not expose a payload for the identity rejection check: ${JSON.stringify(failed)}.`);
+        }
+        await assertNoViewportPixelDelta(page, failedBaseline, `${fieldMode} field response fail-closed`);
       }
       fixture.fieldMode = "ready";
       await requestFdmField(page, "H_eff");
       await waitForFdmFieldResource(page, "H_eff");
       const recoveryBaseline = await sampleViewportPixels(page);
       const mRequestsBeforeRecovery = countFieldRequests(fixture, { quantityId: "m" });
+      await invalidateFieldResource(page, failed.key);
+      await waitForAnimationFrame(page);
       await requestFdmField(page, "m");
       const recovered = await waitForFdmFieldResource(page, "m");
       if (!recovered.hasValues || recovered.key !== failed.key) {
@@ -226,10 +236,16 @@ async function verifyFdmObjectAndAirboxTargets(browser, url) {
       throw new Error(`FDM left object did not recover its independent state: ${JSON.stringify({ aState, aRecovered, bState })}`);
     }
 
+    // Region targets are sparse overrides of their owner. Hiding an otherwise
+    // identical region layer leaves the owner carrier visible, so establish a
+    // plain owner baseline and qualify the region with a visible wireframe
+    // override instead.
+    await selectVisualizationNode(page, "fdm-left", null);
+    await setObjectDisplayState(page, { colorbar: false, vectors: false, wireframe: false });
     const leftRegionTarget = await selectVisualizationNode(page, "fdm-left", "core");
     const leftRegionBeforePixels = await sampleViewportPixels(page);
     await assertNoViewportPixelDelta(page, leftRegionBeforePixels, "FDM left same-named region no-op negative control");
-    await setObjectDisplayState(page, { colorbar: false, vectors: false, wireframe: false });
+    await setObjectDisplayState(page, { colorbar: false, vectors: false, wireframe: true });
     const leftRegionDelta = await waitForViewportPixelDelta(page, leftRegionBeforePixels, "FDM left same-named region controls");
     const leftRegionState = await readTargetControls(page);
     const rightRegionTarget = await selectVisualizationNode(page, "fdm-right", "core");
@@ -294,10 +310,12 @@ async function verifyFemObjectTargetAndFallback(browser, url) {
     const owned = await readTargetControls(page);
     await selectVisualizationNode(page, "fem-fallback", null);
     await assertTarget(page, "object:fem-fallback");
-    const fallbackBeforePixels = await sampleViewportPixels(page);
+    const fallbackBeforePixels = await sampleViewportPixels(page, 1);
     await assertNoViewportPixelDelta(page, fallbackBeforePixels, "FEM fallback target no-op negative control");
-    await setObjectDisplayState(page, { colorbar: false, vectors: false, wireframe: false });
-    const fallbackDelta = await waitForViewportPixelDelta(page, fallbackBeforePixels, "FEM fallback target controls");
+    await setObjectDisplayState(page, { colorbar: false, vectors: false, wireframe: false, visible: false });
+    const fallbackDelta = await waitForViewportPixelDelta(page, fallbackBeforePixels, "FEM fallback target controls", {
+      minimumChangedPixels: 18,
+    });
     const fallback = await readTargetControls(page);
     if (sameControlState(owned, fallback)) {
       throw new Error(`FEM object target and fallback share state: ${JSON.stringify({ owned, fallback })}`);
@@ -306,7 +324,11 @@ async function verifyFemObjectTargetAndFallback(browser, url) {
     await verifyAirboxGeometryModes(page, "fem");
     await assertAirboxControls(page);
     await setAirboxQuantityAndVectors(page, "H_demag");
-    await waitForFieldRequest(page, { component: "full", quantityId: "H_demag", scopeId: "part-airbox", scopeKind: "airbox" });
+    try {
+      await waitForFieldRequest(page, { component: "full", quantityId: "H_demag", scopeId: "part-airbox", scopeKind: "airbox" });
+    } catch (error) {
+      throw new Error(`FEM Airbox H_demag request mismatch: ${error instanceof Error ? error.message : String(error)}; observed=${JSON.stringify(fixture.fieldRequests)}`);
+    }
     assertFieldRequest(fixture, { component: "full", quantityId: "H_demag", scopeId: "part-airbox", scopeKind: "airbox" });
     await assertHealthyCanvas(page, "FEM target/fallback interactions");
     assertNoBrowserErrors(errors);
@@ -677,6 +699,16 @@ async function setAirboxQuantityAndVectors(page, quantityId) {
   const panel = page.locator(".fm-inspector-panel").last();
   const quantity = panel.locator('select[aria-label="Quantity Source"]');
   if (await quantity.count() !== 1) throw new Error(`Airbox inspector must expose exactly one Quantity Source combobox; found ${await quantity.count()}.`);
+  if (await quantity.isDisabled()) throw new Error(`Airbox Quantity Source is disabled before selecting ${quantityId}.`);
+  const quantityIdAttribute = await quantity.getAttribute("id");
+  await page.waitForFunction(
+    ({ id, value }) => {
+      const select = id ? document.getElementById(id) : null;
+      return select instanceof HTMLSelectElement && Array.from(select.options).some((option) => option.value === value);
+    },
+    { id: quantityIdAttribute, value: quantityId },
+    { timeout: timeoutMs },
+  );
   await quantity.selectOption(quantityId);
   const vectors = panel.getByRole("button", { name: "Toggle vector field arrows" });
   if ((await vectors.getAttribute("aria-pressed")) !== "true") await vectors.click();
@@ -740,23 +772,33 @@ async function verifyAnalysisViewportHandoff(page, lane) {
     state: "attached",
     timeout: timeoutMs,
   });
-  for (const surface of ["Frequency Response", "Eigenmodes", "Dispersion"]) {
-    const tab = page.locator(".fm-analysis-plots__tab").filter({ hasText: new RegExp(`^${surface}$`) }).first();
+  const workflows = [
+    { surface: "Resonance & FMR", subview: "Frequency Response" },
+    { surface: "Resonance & FMR", subview: "Eigenmodes" },
+    { surface: "Dispersion", subview: "Modal fₙ(k)" },
+  ];
+  for (const workflow of workflows) {
+    const tab = page.locator(".fm-analysis-plots__tab").filter({ hasText: new RegExp(`^${escapeRegExp(workflow.surface)}$`) }).first();
     await tab.click({ timeout: timeoutMs });
+    const subview = page.getByRole("combobox", { name: `${workflow.surface} subview` });
+    await subview.click({ timeout: timeoutMs });
+    await page.getByRole("option", { name: workflow.subview, exact: true }).click({ timeout: timeoutMs });
     await page.waitForFunction(
-      (label) => {
+      ({ surface, subview }) => {
         const tabs = Array.from(document.querySelectorAll(".fm-analysis-plots__tab"));
-        const activeTab = tabs.find((candidate) => candidate.textContent?.trim() === label);
+        const activeTab = tabs.find((candidate) => candidate.textContent?.trim() === surface);
+        const subviewTrigger = document.querySelector("[data-slot='select-trigger'][data-analysis-subview]");
         const panel = document.querySelector(".fm-analysis-plots__panel--primary");
         return (
           activeTab?.getAttribute("data-state") === "active" &&
+          subviewTrigger?.textContent?.includes(subview) &&
           panel instanceof HTMLElement &&
           panel.offsetWidth > 0 &&
           panel.offsetHeight > 0 &&
           Boolean(panel.querySelector(".fm-chart-section, .fm-analysis-plots__empty, [role='status']"))
         );
       },
-      surface,
+      workflow,
       { timeout: timeoutMs },
     );
   }
@@ -767,7 +809,11 @@ async function verifyAnalysisViewportHandoff(page, lane) {
     timeout: timeoutMs,
   });
   await assertHealthyCanvas(page, `${lane} Analysis to 3D handoff`);
-  return { surfaces: ["Frequency Response", "Eigenmodes", "Dispersion"] };
+  return { surfaces: workflows.map(({ surface, subview }) => `${surface} / ${subview}`) };
+}
+
+function escapeRegExp(value) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 async function sampleViewportPixels(page, explicitStride = null) {
@@ -799,11 +845,8 @@ async function waitForViewportPixelDelta(page, baseline, label, options = {}) {
     last = delta;
     await waitForAnimationFrame(page);
   }
-  const debug = process.env.CONTROL_ROOM_TARGET_SMOKE_DEBUG === "1"
-    ? await readViewportDeltaDiagnostics(page)
-    : null;
-  await captureViewportDeltaFailure(page, label, { debug, delta: last });
-  throw new Error(`${label} did not change rendered viewport pixels: ${JSON.stringify({ delta: last, debug })}.`);
+  await captureViewportDeltaFailure(page, label, { delta: last });
+  throw new Error(`${label} did not change rendered viewport pixels: ${JSON.stringify({ delta: last })}.`);
 }
 
 async function captureViewportDeltaFailure(page, label, payload) {
@@ -816,26 +859,6 @@ async function captureViewportDeltaFailure(page, label, payload) {
     join(browserAuditArtifactDir, `target-smoke-${slug}-failure.json`),
     `${JSON.stringify({ label, ...payload }, null, 2)}\n`,
   );
-}
-
-async function readViewportDeltaDiagnostics(page) {
-  return page.evaluate(() => {
-    const audit = window.__FULLMAG_CONTROL_ROOM_AUDIT__;
-    const panel = document.querySelectorAll(".fm-inspector-panel");
-    const selected = document.querySelector('[aria-selected="true"][data-node-id]');
-    const runtime = audit?.readViewportAuditRuntime?.() ?? null;
-    return {
-      selectedNode: selected?.getAttribute("data-node-id") ?? null,
-      controls: Array.from(panel).at(-1)?.textContent?.slice(0, 2_000) ?? null,
-      fdmSettings: audit?.readFdmVisualizationSettings?.() ?? null,
-      fieldUpdateHoldActive: audit?.readViewport3DFieldUpdateHoldActive?.() ?? null,
-      runtime,
-      resources: performance.getEntriesByType("resource")
-        .map((entry) => entry.name)
-        .filter((name) => name.includes("/v2/sessions/current/"))
-        .slice(-50),
-    };
-  });
 }
 
 async function assertNoViewportPixelDelta(page, baseline, label) {
@@ -922,6 +945,16 @@ async function waitForFdmFieldResource(page, quantityId) {
   }, quantityId, { timeout: timeoutMs }).then((handle) => handle.jsonValue());
 }
 
+async function invalidateFieldResource(page, resourceKey) {
+  await page.evaluate((key) => {
+    const audit = window.__FULLMAG_CONTROL_ROOM_AUDIT__;
+    if (typeof audit?.invalidateResource !== "function") {
+      throw new Error("Missing browser-audit resource invalidation hook.");
+    }
+    audit.invalidateResource(key, `smoke-recovery:${Date.now()}`);
+  }, resourceKey);
+}
+
 function attachBrowserErrors(page) {
   const errors = [];
   page.on("console", (message) => { if (message.type() === "error") errors.push(message.text()); });
@@ -951,7 +984,10 @@ function createFemFixture() {
     geometry: { geometry_params: { size: [0.5, 0.5, 0.5] }, kind: "box" },
     id,
     regions: [],
-    transform: { translation: [index * 0.5, 0, 0] },
+    // Keep the primitive-only fallback outside the realized tetrahedral
+    // carrier; otherwise hiding it changes only the few front-most pixels
+    // that are not occluded by the owned FEM surface.
+    transform: { translation: [index === 0 ? 0 : -0.5, 0, 0] },
     visible: true,
   }));
   const fixture = baseFixture("fem", objects);
@@ -1022,7 +1058,7 @@ function regionListFixture(objects) {
   };
 }
 
-function fieldCatalogFixture() { return { domain_generation_id: 1, quantities: ["m", "H_eff", "H_demag", "H_ext"].map((quantity_id) => ({ available: true, components: 3, domain_generation_id: 1, field_revision: 1, kind: "vector", label: quantity_id === "m" ? "Magnetization" : quantity_id === "H_eff" ? "Effective field" : quantity_id === "H_ext" ? "External field" : "Demag field", location: "nodes", materialization_wall_time_ns: 0, materialized_at_unix_ms: 1, quantity_id, source_revision: 1, source_step: 0, stale_by_steps: 0, state: "complete", unit: quantity_id === "m" ? "1" : "A/m" })), revision: 1 }; }
+function fieldCatalogFixture() { return { domain_generation_id: "1", quantities: ["m", "H_eff", "H_demag", "H_ext"].map((quantity_id) => ({ available: true, components: 3, domain: "full_domain", domain_generation_id: "1", field_revision: 1, kind: "vector", label: quantity_id === "m" ? "Magnetization" : quantity_id === "H_eff" ? "Effective field" : quantity_id === "H_ext" ? "External field" : "Demag field", location: "nodes", materialization_wall_time_ns: 0, materialized_at_unix_ms: 1, quantity_id, source_revision: 1, source_step: 0, spatial: true, stale_by_steps: 0, state: "complete", unit: quantity_id === "m" ? "1" : "A/m" })), revision: 1 }; }
 function fieldMetaFixture(quantityId) { return { components: ["x", "y", "z"], quantity_id: quantityId, stats: { max: 1, min: 0 }, unit: quantityId === "m" ? "1" : "A/m" }; }
 function fdmMembershipFixture(objects) {
   const region_legend = objects.map(({ id }, index) => ({
@@ -1123,7 +1159,11 @@ function fdmScopedFieldVectorBuffer({ fieldRequest, fixture }) {
       : [0, 1, 2, 3];
   const encoder = new TextEncoder();
   const scopeKindBytes = encoder.encode(fieldRequest.scopeKind ?? "full");
-  const scopeIdBytes = encoder.encode(fieldRequest.scopeId ?? "");
+  const resolvedScopeId =
+    fieldRequest.scopeKind === "airbox" && fieldRequest.scopeId === null
+      ? "airbox"
+      : fieldRequest.scopeId ?? "";
+  const scopeIdBytes = encoder.encode(resolvedScopeId);
   const domainGenerationId = String(
     fixture.fdmMembership?.domain_generation_id ?? fixture.domain.generation_id,
   );
@@ -1201,6 +1241,7 @@ function fdmScopedFieldVectorBuffer({ fieldRequest, fixture }) {
       ...fieldVectorHeaders({
         ...fieldRequest,
         domainGenerationId,
+        scopeId: resolvedScopeId,
       }),
       "x-fullmag-encoding": "FMVP;version=3",
       "x-fullmag-field-indexing": "explicit_node_indices",

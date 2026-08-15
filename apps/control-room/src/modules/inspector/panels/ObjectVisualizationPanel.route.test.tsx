@@ -512,6 +512,18 @@ describe("ObjectVisualizationPanel lane routing", () => {
     );
   });
 
+  it("loads the field catalog for a FEM Airbox target before quantity interaction", () => {
+    testState.discretization = "fem";
+    testState.resourceCalls.length = 0;
+
+    renderToStaticMarkup(<ObjectVisualizationPanel selection={airboxSelection} />);
+
+    expect(testState.resourceCalls).toContainEqual({
+      name: "field-catalog",
+      enabled: true,
+    });
+  });
+
   it("does not fall back to either lane while status is unresolved", () => {
     testState.discretization = "";
     testState.resourceCalls.length = 0;

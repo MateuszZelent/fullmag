@@ -66,7 +66,9 @@ export function useAnalysisPlotsController(kernel: KernelApi) {
     analysisWorkspaceStore.setFocusedChartId(sourceChartId);
   }, [activeSurface, frequencyChartId, sourceChartId]);
   const gamma = useSpinWaveGammaResource(activeSurface === "dynamics");
-  const dynamicStructureFactor = useDynamicStructureFactorResource(activeSurface === "dispersion");
+  const dynamicStructureFactor = useDynamicStructureFactorResource(
+    activeSurface === "dynamics" && activeSubview === "dynamics.s-k-f",
+  );
   const selectedStageId = useSelectionSelector(selectedHysteresisStageIdFromSelection);
   const [selectedPoint, setSelectedPoint] = useState<AnalysisChartCursorPoint | null>(null);
   const descriptorId = useMemo(

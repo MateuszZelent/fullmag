@@ -406,6 +406,10 @@ function BrowserAuditConnector({ kernel }: { kernel: KernelApi }) {
           revision: ResourceRevision | null;
           status: string;
         };
+        invalidateResource: (
+          resourceKey: string,
+          revision: ResourceRevision,
+        ) => void;
         injectViewportAuditListenerLeak: () => void;
         injectViewportAuditWorkerLeak: () => void;
       };
@@ -545,6 +549,9 @@ function BrowserAuditConnector({ kernel }: { kernel: KernelApi }) {
           revision: snapshot.revision,
           status: snapshot.status,
         };
+      },
+      invalidateResource: (resourceKey: string, revision: ResourceRevision) => {
+        kernel.resources.invalidate(resourceKey, revision);
       },
       injectViewportAuditListenerLeak: () => {
         // Deliberately retained only when an audit asks for a negative control.

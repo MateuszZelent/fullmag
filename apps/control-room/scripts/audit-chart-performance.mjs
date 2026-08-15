@@ -1676,6 +1676,10 @@ function chartPerformanceAuxiliaryFixture(pathname) {
       "/v2/sessions/current/data/fields",
       { domain_generation_id: "1", quantities: [], revision: 0 },
     ],
+    [
+      "/v2/sessions/current/data/scalars",
+      { columns: [], returned_rows: 0, revision: 0, rows: [], total_rows: 0 },
+    ],
     ["/v2/sessions/current/data/domain/topology", null],
     ["/v2/sessions/current/data/fdm-region-memberships", null],
     [

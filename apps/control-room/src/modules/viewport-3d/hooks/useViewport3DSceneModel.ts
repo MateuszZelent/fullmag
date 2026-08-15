@@ -2676,7 +2676,11 @@ export function useViewport3DSceneModel({
       ),
     [fdmMultilayerLayout.data],
   );
-  const fieldCatalog = useFieldCatalogResource({ enabled: Boolean(fdmLaneActive) });
+  const fieldCatalog = useFieldCatalogResource({
+    enabled: Boolean(
+      fdmLaneActive || domainMeta.data?.discretization === "fem",
+    ),
+  });
   const availableFieldQuantityIds = useMemo(
     () => resolveViewport3DAvailableFieldQuantityIds(fieldCatalog.data),
     [fieldCatalog.data],

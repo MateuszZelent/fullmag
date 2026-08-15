@@ -260,6 +260,47 @@ describe("AnalysisFieldOverlayPhaseAnimation", () => {
     expect(documentStub.removeEventListener).toHaveBeenCalled();
   });
 
+  it("cancels a browser frame when the document becomes hidden", () => {
+    const callbacks: FrameRequestCallback[] = [];
+    const requestFrame = vi.fn((callback: FrameRequestCallback) => {
+      callbacks.push(callback);
+      return callbacks.length;
+    });
+    const cancelFrame = vi.fn();
+    vi.stubGlobal("requestAnimationFrame", requestFrame);
+    vi.stubGlobal("cancelAnimationFrame", cancelFrame);
+    const visibilityListeners = new Set<() => void>();
+    const documentStub = {
+      visibilityState: "visible" as DocumentVisibilityState,
+      addEventListener: vi.fn((_type: string, listener: () => void) => {
+        visibilityListeners.add(listener);
+      }),
+      removeEventListener: vi.fn((_type: string, listener: () => void) => {
+        visibilityListeners.delete(listener);
+      }),
+    };
+    vi.stubGlobal("document", documentStub);
+    const controller = new AnalysisFieldOverlayController();
+    setEigenOverlay(controller);
+    controller.update({ visualizationPhaseRad: 1.5 });
+
+    const handle = startAnalysisFieldOverlayPhaseAnimation(controller);
+    expect(requestFrame).toHaveBeenCalledTimes(1);
+
+    documentStub.visibilityState = "hidden";
+    visibilityListeners.forEach((listener) => listener());
+
+    expect(cancelFrame).toHaveBeenCalledWith(1);
+    expect(controller.getSnapshot()).toMatchObject({
+      animation: { animatePhase: false },
+      query: { phase_rad: 0 },
+      visualizationPhaseRad: 1.5,
+    });
+
+    handle.stop();
+    expect(callbacks).toHaveLength(1);
+  });
+
   it("uses frame timestamps for smooth browser animation and cancels the owned frame", () => {
     const callbacks: FrameRequestCallback[] = [];
     const requestFrame = vi.fn((callback: FrameRequestCallback) => {

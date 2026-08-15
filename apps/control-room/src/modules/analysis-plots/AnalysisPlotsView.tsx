@@ -103,11 +103,13 @@ export function AnalysisPlotsView(props: AnalysisPlotsViewInput) {
   const datasetPrompt = !resolvedDatasetRef
     ? <div className="fm-analysis-plots__empty" role="status">Select a dataset or artifact</div>
     : null;
-  const canonicalSubviews = ANALYSIS_SUBVIEWS[surface];
-  const subviews = props.subviews ?? canonicalSubviews;
+  const canonicalSubviews = ANALYSIS_SUBVIEWS[surface] as readonly AnalysisSubview[];
+  const customSubviews = props.subviews ?? canonicalSubviews;
+  const legalSubviews = customSubviews.filter((subview) => canonicalSubviews.includes(subview));
+  const subviews = legalSubviews.length > 0 ? legalSubviews : canonicalSubviews;
   const activeSubview = resolveActiveSubview(surface, requestedActiveSubview, subviews);
-  const isDynamicStructureFactorSubview = activeSubview === "dynamics.s-k-f" || activeSubview === "dispersion.modal" && !frequencyDomainCalculationMode;
-  const isFrequencySubview = !isDynamicStructureFactorSubview && (activeSubview === "dispersion.modal" || activeSubview === "dispersion.driven-map" || activeSubview === "dispersion.branches" || activeSubview === "resonance.eigenmodes" || activeSubview === "resonance.frequency-response" || activeSubview === "resonance.modal-driven");
+  const isDynamicStructureFactorSubview = activeSubview === "dynamics.s-k-f";
+  const isFrequencySubview = activeSubview === "dispersion.modal" || activeSubview === "dispersion.driven-map" || activeSubview === "dispersion.branches" || activeSubview === "resonance.eigenmodes" || activeSubview === "resonance.frequency-response" || activeSubview === "resonance.modal-driven";
   const isHysteresisSubview = activeSubview === "hysteresis.loop" || activeSubview === "hysteresis.branches";
 
   return <div className="fm-analysis-plots">
@@ -147,7 +149,8 @@ function resolveActiveSubview(
   subviews: readonly AnalysisSubview[],
 ): AnalysisSubview {
   const canonicalSubviews = ANALYSIS_SUBVIEWS[surface] as readonly AnalysisSubview[];
-  return requested && canonicalSubviews.includes(requested) && subviews.includes(requested)
+  const allowedSubviews = subviews.length > 0 ? subviews : canonicalSubviews;
+  return requested && canonicalSubviews.includes(requested) && allowedSubviews.includes(requested)
     ? requested
-    : canonicalSubviews[0];
+    : allowedSubviews[0] ?? canonicalSubviews[0];
 }
