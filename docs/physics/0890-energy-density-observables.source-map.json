@@ -1,0 +1,193 @@
+{
+  "document": {
+    "path": "docs/physics/0890-energy-density-observables.md"
+  },
+  "backend_matrix": [
+    {
+      "solver": "FDM",
+      "device": "CPU",
+      "status": "implemented",
+      "scope": "Reference field and spatial energy-density snapshots.",
+      "qualification": "source and focused regression qualified",
+      "evidence": "CPU field and runner implementations"
+    },
+    {
+      "solver": "FDM",
+      "device": "GPU",
+      "status": "implemented",
+      "scope": "CUDA FP64/FP32 visual demag and scalar snapshot path.",
+      "qualification": "runtime parity gate required",
+      "evidence": "native CUDA source and managed device tests"
+    },
+    {
+      "solver": "FEM",
+      "device": "CPU",
+      "status": "implemented",
+      "scope": "Existing native FEM full-domain and projected field adapter.",
+      "qualification": "regression qualified for the bounded snapshot contract",
+      "evidence": "native snapshot contract"
+    },
+    {
+      "solver": "FEM",
+      "device": "GPU",
+      "status": "implemented",
+      "scope": "Existing Poisson-gradient full-domain GPU snapshot source.",
+      "qualification": "regression qualified; scientific lane remains separate",
+      "evidence": "native GPU snapshot contract"
+    }
+  ],
+  "sources": [
+    {
+      "id": "fdm-cpu-density",
+      "path": "crates/fullmag-engine/src/fdm/cpu/fields.rs",
+      "symbol": "field_dot_energy_density",
+      "responsibility": "Canonical CPU field-derived energy-density arithmetic."
+    },
+    {
+      "id": "fdm-cpu-scalar-snapshot",
+      "path": "crates/fullmag-runner/src/fdm/cpu/reference.rs",
+      "symbol": "select_scalar",
+      "responsibility": "Selects scalar density payloads from one CPU snapshot state."
+    },
+    {
+      "id": "fdm-cuda-demag-fp64",
+      "path": "backends/fdm/gpu/cuda/interactions/demag_fp64.cu",
+      "symbol": "launch_demag_field_fp64",
+      "responsibility": "Computes FP64 demagnetization and publishes solver and visual buffers."
+    },
+    {
+      "id": "fdm-cuda-demag-fp32",
+      "path": "backends/fdm/gpu/cuda/interactions/demag_fp32.cu",
+      "symbol": "launch_demag_field_fp32",
+      "responsibility": "Computes FP32 demagnetization with the same observable contract."
+    },
+    {
+      "id": "fdm-runner-activation",
+      "path": "crates/fullmag-runner/src/quantities.rs",
+      "symbol": "fdm_quantity_is_active",
+      "responsibility": "Gates quantity activation by resolved physical terms and engine."
+    },
+    {
+      "id": "planner-capability",
+      "path": "crates/fullmag-plan/src/quantities.rs",
+      "symbol": "default_capability_matrix",
+      "responsibility": "Declares backend quantity capability and planned status."
+    },
+    {
+      "id": "api-quantity-catalog",
+      "path": "crates/fullmag-api/src/quantities.rs",
+      "symbol": "build_quantities",
+      "responsibility": "Builds resource-first quantity descriptors independently of cache."
+    },
+    {
+      "id": "fem-gpu-source",
+      "path": "backends/fem/src/api.cpp",
+      "symbol": "gpu_snapshot_source_field",
+      "responsibility": "Selects the full-domain FEM GPU demag source."
+    },
+    {
+      "id": "fem-gpu-api",
+      "path": "backends/fem/src/api.cpp",
+      "symbol": "gpu_snapshot_source_field",
+      "responsibility": "Keeps the FEM GPU source selector separate from the regression caller."
+    }
+  ],
+  "symbols": [
+    {
+      "id": "m",
+      "latex": "$\\mathbf m$",
+      "meaning": "normalized magnetization direction",
+      "si_unit": "$1$"
+    },
+    {
+      "id": "Ms",
+      "latex": "$M_s$",
+      "meaning": "saturation magnetization",
+      "si_unit": "$\\mathrm{A\\,m^{-1}}$"
+    },
+    {
+      "id": "Hi",
+      "latex": "$\\mathbf H_i$",
+      "meaning": "effective-field contribution",
+      "si_unit": "$\\mathrm{A\\,m^{-1}}$"
+    },
+    {
+      "id": "mu0",
+      "latex": "$\\mu_0$",
+      "meaning": "vacuum permeability",
+      "si_unit": "$\\mathrm{N\\,A^{-2}}$"
+    },
+    {
+      "id": "epsilon",
+      "latex": "$\\varepsilon_i$",
+      "meaning": "local energy density contribution",
+      "si_unit": "$\\mathrm{J\\,m^{-3}}$"
+    },
+    {
+      "id": "E",
+      "latex": "$E_i$",
+      "meaning": "integrated energy contribution",
+      "si_unit": "$\\mathrm{J}$"
+    },
+    {
+      "id": "Vc",
+      "latex": "$V_c$",
+      "meaning": "FDM cell volume",
+      "si_unit": "$\\mathrm{m^3}$"
+    },
+    {
+      "id": "Omega",
+      "latex": "$\\Omega$",
+      "meaning": "observation domain",
+      "si_unit": "$\\mathrm{m^3}$"
+    }
+  ],
+  "equations": [
+    {
+      "id": "eq-eden-ex",
+      "symbols": ["epsilon", "mu0", "Ms", "m", "Hi"],
+      "sources": ["fdm-cpu-density", "fdm-cpu-scalar-snapshot"]
+    },
+    {
+      "id": "eq-eden-demag",
+      "symbols": ["epsilon", "mu0", "Ms", "m", "Hi"],
+      "sources": ["fdm-cpu-density", "fdm-cuda-demag-fp64", "fdm-cuda-demag-fp32"]
+    },
+    {
+      "id": "eq-eden-ext",
+      "symbols": ["epsilon", "mu0", "Ms", "m", "Hi"],
+      "sources": ["fdm-cpu-density", "fdm-cpu-scalar-snapshot"]
+    },
+    {
+      "id": "eq-eden-total",
+      "symbols": ["epsilon", "E", "Omega", "Vc"],
+      "sources": ["fdm-runner-activation", "planner-capability", "api-quantity-catalog"]
+    }
+  ],
+  "public_api": {
+    "parameters": [
+      {
+        "python": "study.observables.quantity(\"eden_total\")",
+        "type": "QuantityId",
+        "default": "not requested",
+        "si_unit": "$1$",
+        "validation": "catalog membership and active-term check",
+        "meaning": "requested spatial observable",
+        "backend_support": "FDM/FEM CPU/GPU lane gated",
+        "problem_ir": "observables[].quantity"
+      }
+    ]
+  },
+  "tests": [
+    {
+      "path": "backends/fem/tests/snapshot_contract.cpp",
+      "symbol": "gpu_snapshot_preserves_full_domain_observable_fields",
+      "scope": "FEM full-domain demag source regression"
+    },
+    {
+      "path": "crates/fullmag-runner/src/fdm/cpu/reference.rs",
+      "symbol": "select_scalar",
+      "scope": "FDM scalar density materialization"
+    }
+  ]
+}

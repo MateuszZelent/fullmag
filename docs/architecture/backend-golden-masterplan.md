@@ -829,3 +829,20 @@ Kierunek backendu jest z powrotem poprawny, gdy:
 - testy source-layout chronią natywną własność bez wymuszania błędnych ścieżek
   Rust,
 - walidacja runtime pozostaje oddzielona od lokalnej walidacji kontraktów.
+
+## 15. Wspólny kontrakt obserwacyjny FEM/FDM
+
+Materializacja obserwacji jest wspólną odpowiedzialnością katalogu quantity,
+runnera i resource-first API, ale właściciel fizyki pozostaje backendowy.
+FDM CUDA rozdziela solverowy `h_demag` (maskowany przez `active_mask`) od
+pełnodomenowego `h_demag_visual`; ten drugi jest jedynym źródłem Airboxowego
+`H_demag` i nie może być używany przez LLG. FEM zachowuje analogiczny podział:
+GPU snapshot wybiera odzyskany pełnodomenowy gradient Poissona, a nie pole
+maskowane materiałem.
+
+`data/quantities` publikuje capability i plan materializacji niezależnie od
+cache. `data/fields` publikuje stan `unmaterialized`, `pending`, `complete`,
+`stale_complete` albo `error` oraz provenance generation. Runner nie mapuje
+nieznanego quantity do `m`; zwraca stabilny reason code. Scalar `eden_*` jest
+transportowany jako `spatial_scalar` z `n_comp=1`, a renderer nie wykonuje
+żadnych obliczeń fizycznych.

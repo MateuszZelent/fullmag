@@ -1,201 +1,258 @@
-# Energy and energy-density observables
+# Obserwowalne pola i gęstości energii: wspólna materializacja FEM/FDM
 
-- Status: draft
-- Owners: Fullmag
-- Last updated: 2026-07-23
+- Status: active contract
+- Owners: Fullmag physics, runtime and control-room teams
+- Last updated: 2026-08-16
 - Related ADRs: `docs/adr/0011-resource-first-api.md`
-- Related specs: `docs/specs/resource-first-control-room-api-v2.md`, `docs/physics/0870-active-observable-and-energy-availability.md`, `docs/physics/0880-active-effective-field-terms.md`
+- Related specs: `docs/specs/resource-first-control-room-api-v2.md`, `docs/specs/capability-matrix-v0.md`
 
 ## 1. Problem statement
 
-Fullmag already exposes global energy scalars for active micromagnetic terms. The missing product capability is direct visualization and export of spatial energy density fields, analogous to mumax `Edens_*` and Boris per-module energy display, without turning energy display into a frontend-only derived overlay.
+(fdm-fem-observable-problem-statement)=
 
-The canonical observable family is:
-
-- global energies: `E_ex`, `E_demag`, `E_ext`, `E_ani`, `E_dmi`, `E_total` with SI unit `J`;
-- spatial energy densities: `eden_ex`, `eden_demag`, `eden_ext`, `eden_ani`, `eden_dmi`, `eden_total` with SI unit `J/m^3`.
+FDM i FEM muszą publikować te same obserwowalne quantity przez jeden katalog,
+bez utożsamiania materializacji z obecnością danych w cache. W szczególności
+pełnodomenowe `H_demag` musi zawierać wartości także poza magnetycznym
+wsparciem, a przestrzenne `eden_*` muszą być prawdziwymi polami skalarnymi,
+nie nakładką obliczaną w przeglądarce. `data/quantities` opisuje capability i
+planowaną materializację; `data/fields` opisuje aktualny stan cache i payloadu.
 
 ## 2. Physical model
 
 ### 2.1 Governing equations
 
-For a normalized magnetization field `m` and saturation magnetization `M_s`, field-derived density terms use the same convention as the corresponding scalar energies:
+(fdm-fem-observable-governing-equations)=
 
-```text
-epsilon_ex    = -0.5 * mu0 * M_s * dot(m, H_ex)
-epsilon_demag = -0.5 * mu0 * M_s * dot(m, H_demag)
-epsilon_ext   = -1.0 * mu0 * M_s * dot(m, H_ext)
+Dla znormalizowanej magnetyzacji $\mathbf m$, nasycenia $M_s$ i składowej
+pola $\mathbf H_i$ gęstości field-derived są:
+
+```{math}
+:label: eq-eden-ex
+\varepsilon_{\mathrm{ex}}(\mathbf x) = -\frac{1}{2}\mu_0 M_s(\mathbf x)\,\mathbf m(\mathbf x)\cdot\mathbf H_{\mathrm{ex}}(\mathbf x).
 ```
 
-Anisotropy and coupled terms must use the same local energy model used by the backend scalar energy. They must not be redefined in the browser. `eden_total` is the pointwise sum of the active, available density terms.
-
-For native FEM, `eden_ani` is the sum of every resolved anisotropy operator, including both uniaxial (`H_ani`) and cubic (`H_ani_cubic`) contributions. The term set for `eden_total` is resolved once from the same plan flags and material fields passed to the native backend; the preview path must not maintain a narrower, independently guessed term list.
-
-The scalar consistency invariant is:
-
-```text
-E_i = integral_Omega epsilon_i dV
+```{math}
+:label: eq-eden-demag
+\varepsilon_{\mathrm{demag}}(\mathbf x) = -\frac{1}{2}\mu_0 M_s(\mathbf x)\,\mathbf m(\mathbf x)\cdot\mathbf H_{\mathrm{demag}}(\mathbf x).
 ```
 
-For uniform FDM cells this is `sum(epsilon_i[cell] * cell_volume)`. For FEM this is the backend quadrature or lumped-mass rule documented by the backend.
+```{math}
+:label: eq-eden-ext
+\varepsilon_{\mathrm{ext}}(\mathbf x) = -\mu_0 M_s(\mathbf x)\,\mathbf m(\mathbf x)\cdot\mathbf H_{\mathrm{ext}}(\mathbf x).
+```
+
+```{math}
+:label: eq-eden-total
+\varepsilon_{\mathrm{total}}(\mathbf x) = \sum_{i\in\mathcal A_{\mathrm{resolved}}}\varepsilon_i(\mathbf x),\qquad
+E_i = \int_{\Omega}\varepsilon_i\,\mathrm dV.
+```
+
+FDM używa cell-centered payloadu o `n_comp=1` dla `eden_*`; w komórce o
+objętości $V_c$ całka jest sumą $E_i=\sum_c\varepsilon_i(c)V_c$. FEM
+zachowuje elementową lub kwadraturową własność fizyczną, a ewentualny payload
+węzłowy ma jawne provenance projekcji. Solverowe `h_demag` pozostaje
+maskowane dla LLG. `h_demag_visual` jest osobnym buforem obserwacyjnym i jest
+źródłem pełnodomenowego `H_demag`.
 
 ### 2.2 Symbols and SI units
 
+(fdm-fem-observable-symbols-and-si-units)=
+
 | Symbol | Meaning | Unit |
 |---|---|---|
-| `m` | normalized magnetization direction | `1` |
-| `M_s` | saturation magnetization | `A/m` |
-| `H_i` | effective-field contribution | `A/m` |
-| `mu0` | vacuum permeability | `N/A^2` |
-| `epsilon_i` | energy density contribution | `J/m^3` |
-| `E_i` | integrated energy contribution | `J` |
+| $\mathbf m$ | normalized magnetization direction | $1$ |
+| $M_s$ | saturation magnetization | $\mathrm{A\,m^{-1}}$ |
+| $\mathbf H_i$ | effective-field contribution | $\mathrm{A\,m^{-1}}$ |
+| $\mu_0$ | vacuum permeability | $\mathrm{N\,A^{-2}}$ |
+| $\varepsilon_i$ | local energy density contribution | $\mathrm{J\,m^{-3}}$ |
+| $E_i$ | integrated energy contribution | $\mathrm{J}$ |
+| $V_c$ | FDM cell volume | $\mathrm{m^3}$ |
+| $\Omega$ | observation domain | $\mathrm{m^3}$ |
 
 ### 2.3 Assumptions and approximations
 
-- Energy densities are active only when their corresponding physical term is active.
-- The browser does not synthesize energy densities from unrelated fields.
-- `eden_total` includes only terms available in the resolved backend snapshot.
-- FDM density is cell-centered.
-- FEM density is element/quadrature-owned; nodal or surface coloring is a visualization projection, not the canonical physical location.
-- A sharp regional `M_s` realization remains element-DG0. A nodal visualization payload may use a volume-lumped projection of that DG0 coefficient, but it must be labelled as a nodal visualization projection and must not be presented as the canonical FEM density location.
+(fdm-fem-observable-assumptions-and-validity)=
+
+- Quantity jest aktywne tylko wtedy, gdy odpowiadający mu term fizyczny jest
+  aktywny w rozstrzygniętym planie.
+- Renderer nie rekonstruuje pola ani energii z innych quantity.
+- `eden_total` sumuje wyłącznie termy dostępne w tym samym snapshot generation.
+- FDM `H_demag` poza magnetycznym wsparciem jest obserwacją pełnodomenową;
+  nie jest wejściem do LLG.
+- FEM payload węzłowy jest projekcją wizualizacyjną i musi zachować informację
+  o lokalizacji kanonicznej oraz regule całkowania.
+- FP32 i FP64 mają tę samą semantykę, ale osobne bramki dokładności.
 
 ## 3. Numerical interpretation
 
+(fdm-fem-observable-discrete-realization)=
+
 ### 3.1 FDM
 
-FDM CPU computes energy densities from the same field buffers used for scalar energy evaluation. Demag density must reuse the demag field from the current snapshot and must not trigger an additional FFT when the field has already been materialized. The first implementation targets the CPU reference path and the resource/data-plane contract; CUDA should follow with reusable device-side scalar buffers and selected/cadenced host copies.
+(fdm-fem-observable-discrete-realization-fdm)=
+
+CPU reference korzysta z tych samych pól co redukcja energii. CUDA przechowuje
+osobno `h_demag` (solver, z `active_mask`) i `h_demag_visual` (obserwacja,
+pełna domena). Kernel demagnetyzacji wylicza wartości raz, zapisuje visual
+buffer przed maskowaniem i nie uruchamia drugiego FFT dla żądania pola. Scalar
+`eden_*` jest materializowany w buforze urządzenia i kopiowany jako jeden
+komponent na komórkę. Nieznane quantity kończy się błędem, a nie mapowaniem do
+magnetyzacji.
 
 ### 3.2 FEM
 
-FEM backends must expose element or quadrature density according to the operator contract. Native FEM CPU already has local energy-cache concepts; those should be the source for density publication. A viewport projection may resample to nodes or faces, but the API metadata must preserve the projection provenance.
+(fdm-fem-observable-discrete-realization-fem)=
 
-The current live FEM preview payload is a node-aligned visualization projection. Its coefficient realization is resolved as follows:
-
-- uniform `M_s`: the scalar plan value is repeated on active magnetic nodes;
-- nodal-P1 `M_s`: the resolved nodal field is used directly;
-- element-DG0/regional `M_s`: non-energy display coefficients use the volume-lumped nodal weighted mean, but field-derived energy densities use the conservative tetrahedral projection below.
-
-For DG0 `M_s` and P1 fields `u` and `v`, the exact element contribution is
-
-```text
-integral_T M_s (u . v) dV
-  = M_s V_T / 20 * (sum_i u_i . v_i + (sum_i u_i) . (sum_i v_i)).
-```
-
-The live preview distributes one quarter of this element integral to each
-incident node and divides the accumulated numerator by the node's lumped
-volume. Therefore integrating the node-aligned payload with the usual P1
-lumped-volume rule exactly preserves the element weak-form integral, including
-the off-diagonal consistent-mass contributions. This restricted DG0 path must
-carry `fem_nodal_conservative_tetra_projection` location/provenance. Uniform and
-nodal-P1 paths carry `fem_nodal_visualization_projection`. The backend scalar
-energies remain authoritative. Validation must independently integrate each
-projected term with the matching FEM lumped-volume rule and compare it with the
-native scalar term for qualified fixtures; passing a pointwise dot-product unit
-test alone is insufficient.
-
-The production-executable DG0 scope is deliberately narrower than the general
-FEM material model. Native FEM CPU may accept element-DG0 `M_s` only when every
-active owner uses the common element/quadrature material realization. The
-qualified Task 5 slice requires enabled consistent-mass exchange. Poisson
-demag and Zeeman may be additional owners, but neither a Zeeman-only nor a
-demag-only plan promotes DG0 `M_s`. GPU DG0 material upload and CPU DG0
-combined with anisotropy, interfacial or bulk DMI, thermal, STT, Oersted, or
-magnetoelastic owners remain unsupported and must be rejected by both planner
-and native validation. There is no nodal fallback for a sharp DG0 coefficient.
-Direct native FEM relaxation algorithms also remain unsupported with
-element-DG0 `M_s`; the qualified CPU path is the ordinary time-evolution owner
-set, whose reported average magnetization must use the same DG0 mass
-integration rather than a scalar-`M_s` fallback. This workflow restriction is
-enforced twice: by canonical planning and again at the native ABI/runtime
-boundary. A reusable ordinary-time handle must reject PG-BB, nonlinear-CG, and
-tangent-plane relaxation calls, while an LLG-overdamped plan must reject before
-its first RK relaxation step. The ordinary explicit-RK time-evolution call on
-the same qualified CPU exchange/consistent-mass material lane remains legal.
-
-The DG0 average-magnetization observable is
-
-```text
-<m> = (integral_Omega_m M_s m dV) / (integral_Omega_m M_s dV).
-```
-
-For P1 `m` and element-DG0 `M_s`, each active tetrahedron contributes
-`M_s V_T (sum_i m_i) / 4` to the vector numerator and `M_s V_T` to the
-denominator. Native step statistics must accumulate all four values in one
-direct element traversal. Constructing nodal unit fields, projecting DG0
-`M_s`, or allocating mesh-sized scratch vectors per accepted step is not a
-qualified realization.
-
-Uniform-`M_s` uniaxial and cubic anisotropy, and interfacial and bulk DMI
-density semantics, are qualified as four separate native GPU plans. The
-anisotropy cases prove selection of `H_ani` versus `H_ani_cubic` and
-`eden_ani` versus native `E_ani`. The DMI cases prove selection of the distinct
-`H_dmi` and `H_dmi_bulk` operators and `eden_dmi` versus native `E_dmi`. None
-of these cases implies GPU DG0 support or DG0 combined with those owners.
+FEM zachowuje istniejący adapter snapshotu. Dla `H_demag` native GPU wybiera
+odzyskany pełnodomenowy gradient potencjału Poissona, a nie materiałowo
+maskowane pole LLG. Gęstości energii są elementowe/kwadraturowe; węzłowy
+payload jest oznaczony jako projekcja `fem_nodal_visualization_projection`
+albo, dla wspieranego DG0, jako `fem_nodal_conservative_tetra_projection`.
+Backend scalar energy pozostaje źródłem prawdy dla walidacji całki.
 
 ### 3.3 Hybrid
 
-Hybrid density is deferred. When added, each subdomain must publish its own integration weights and density ownership so `eden_total` remains a sum of physically compatible terms.
+(fdm-fem-observable-discrete-realization-hybrid)=
+
+Hybrid nie ma jeszcze własnej materializacji. Planner odrzuca żądanie, gdy
+żaden właściciel poddomeny nie publikuje kompatybilnego snapshotu; nie ma
+cichego browser fallbacku.
 
 ## 4. API, IR, and planner impact
 
 ### 4.1 Python API surface
 
-No new public authoring semantics are required. Energy density is an observable selected through the canonical quantity IDs. Future Python convenience wrappers may expose `world.quantity("eden_total")` or equivalent, but this note does not introduce new physics authoring inputs.
+(fdm-fem-observable-python-api)=
+
+Nie dodajemy nowego termu fizycznego. Quantity jest obserwacją wybieraną z
+katalogu, a publiczny przykład pozostaje stage-first:
+
+```python
+# %%
+import fullmag as fm
+
+# %%
+study = fm.study("observable_parity")
+study.engine("fdm").device("cuda", precision="double")
+study.observables.quantity("H_demag")
+study.observables.quantity("eden_total")
+study.stages.add_relax(steps=4)
+```
+
+| Python | Type | Default | SI unit | Validation | Meaning | Backend support | ProblemIR |
+|---|---|---|---|---|---|---|---|
+| `study.observables.quantity("eden_total")` | `QuantityId` | `not requested` | $1$ | catalog membership and active-term check | requested spatial observable | FDM/FEM CPU/GPU lane gated | `observables[].quantity` |
 
 ### 4.2 ProblemIR representation
 
-No new `ProblemIR` term is required. Energy-density observables are derived from the active physical terms already represented in IR. Availability and provenance must preserve requested execution intent and resolved backend support.
+(fdm-fem-observable-problem-ir)=
+
+IR nie dostaje drugiego modelu energii. Żądanie jest reprezentowane jako
+`observables[].quantity`; planner łączy je z aktywnymi `energy_terms` oraz
+resolved backend/device. Pole `eden_*` ma `shape=spatial_scalar`, `n_comp=1`,
+`location=cell` dla FDM. `H_demag` ma `shape=vector`, `n_comp=3`, a domena
+`full_domain` wybiera visual source.
 
 ### 4.3 Planner and capability-matrix impact
 
-The planner should advertise density quantities only for backends that can compute them from canonical solver state. Unsupported density requests fail as unavailable quantities rather than silently falling back to browser synthesis.
+(fdm-fem-observable-implementation-mapping)=
+
+Capability matrix mówi, czy quantity jest `Exact`, `Derived`, `Planned` lub
+nieobsługiwane. `supported` nie oznacza jeszcze `materialized`: `data/fields`
+może raportować `unmaterialized`, `pending`, `complete`, `stale_complete` albo
+`error`. Reason codes obejmują `quantity_not_active`,
+`demag_visual_buffer_unavailable`, `scalar_snapshot_unsupported` i
+`unsupported_combination`.
+
+### 4.4 Round-trip and failure semantics
+
+(fdm-fem-observable-round-trip-and-failure-semantics)=
+
+`requested intent` z UI/Python jest przechowywane bez zmian, a `resolved execution`
+zawiera faktyczny backend, device, precision i generation. Planner zgłasza
+`validation errors` dla nieaktywnych termów oraz `unsupported combinations` przed
+uruchomieniem; runtime powtarza walidację na granicy ABI.
+Brak cache nie zmienia capability na `unsupported`. WebSocket publikuje jedynie
+invalidację/completion, zaś payload jest pobierany przez resource-first data
+plane.
 
 ## 5. Validation strategy
 
+(fdm-fem-observable-validation)=
+
 ### 5.1 Analytical checks
 
-- Uniform Zeeman field: `sum(eden_ext * cell_volume)` equals `E_ext`.
-- Exchange and demag density integration equals the existing scalar energy for the same snapshot.
-- `eden_total` equals the pointwise sum of active density terms and integrates to `E_total`.
+(fdm-fem-observable-validation-analytical)=
+
+Jednokomórkowy Zeeman spełnia równanie `eq-eden-ext`, a całka każdego `eden_i`
+zgadza się z odpowiadającym globalnym `E_i`. `eden_total` jest sumą aktywnych
+składowych w tym samym generation.
 
 ### 5.2 Cross-backend checks
 
-- FDM CPU is the first reference path.
-- FDM CUDA must match FDM CPU in double precision before single precision is exposed.
-- FEM density must match FEM scalar energy under its documented quadrature rule.
-- Native FEM qualification includes separate uniaxial and cubic anisotropy activation, interfacial versus bulk DMI selection, uniform/nodal-P1/element-DG0 `M_s`, and `eden_total` versus the sum of active native scalar terms.
-- Element-DG0 `M_s` qualification uses the restricted native FEM CPU owner set above; uniform-`M_s` uniaxial, cubic, interfacial DMI, and bulk DMI qualification uses four separate native FEM GPU fixtures.
-- Native ABI regressions must prove fail-closed DG0 behavior for every relaxation route and continued ordinary CPU RK execution. A hot-path allocation regression must prove the DG0 average-magnetization reduction performs no heap allocation per call.
+(fdm-fem-observable-validation-cross-backend)=
+
+FDM CPU jest referencją. FDM CUDA FP64 musi przejść parity w double przed
+kwalifikacją FP32. FEM CPU i GPU zachowują istniejącą regresję pełnodomenowego
+snapshotu. Każdy lane raportuje osobno status executable, validated i
+production-qualified.
 
 ### 5.3 Regression tests
 
-- Quantity availability exposes `eden_*` only for supported active terms.
-- Field data-plane responses carry `n_comp=1` scalar payloads for `eden_*`.
-- Control-room result menus use canonical `eden_*` IDs and do not use `"energy_density"`.
-- Displaying density does not add a duplicate demag solve/FFT in the CPU FDM preview path.
+(fdm-fem-observable-validation-regression)=
+
+- katalog publikuje `eden_*` tylko dla aktywnych i wspieranych termów;
+- scalar data-plane ma `n_comp=1` i niezerowe metadane dla materializowanego pola;
+- Airbox `H_demag` nie jest zerowany przez maskę magnetyczną;
+- Wireframe i Points działają bez żadnego pola, a Vectors wymaga zgodnego
+  vector payloadu;
+- snapshot demag nie zwiększa liczby FFT ponad jeden dla tego samego generation.
 
 ## 6. Completeness checklist
 
-- [ ] Python API
-- [x] ProblemIR
-- [x] Planner for the bounded FEM slices
-- [x] Capability matrix
-- [ ] FDM backend
-- [x] FEM backend for the bounded CPU-DG0 and uniform-GPU slices
+- [x] Python API contract
+- [x] ProblemIR semantics
+- [x] Planner and capability matrix
+- [x] FDM CPU reference
+- [ ] FDM CUDA FP64 production qualification
+- [ ] FDM CUDA FP32 precision qualification
+- [x] FEM CPU/GPU full-domain snapshot regression
+- [x] Resource-first observables contract
 - [ ] Hybrid backend
-- [x] Outputs / observables for the bounded FEM slices
-- [x] Tests / managed qualification for the bounded FEM slices
-- [x] Documentation
+- [ ] Browser/WebGL qualification
 
 ## 7. Known limits and deferred work
 
-- Canonical FEM element/quadrature density publication remains deferred. Until then, the live node-aligned payload is explicitly a visualization projection and backend scalar energies remain authoritative.
-- `eden_*` scalar fields are not global scalar history columns; scalar history remains owned by `data/scalars` and solver-energy resources.
-- Energy density visualization is scalar coloring, not vector glyph rendering.
+(fdm-fem-observable-limitations)=
 
-## 8. References
+FEM canonical element/quadrature publication i hybrid materialization są poza
+tym bounded slice. Do czasu ich kwalifikacji UI pokazuje provenance projekcji.
+FP32 nie może być oznaczany jako qualified na podstawie samego builda. Globalne
+historie energii pozostają osobnym zasobem scalar history.
 
-- mumax3 energy-density registry and integration checks: `https://github.com/mumax/3`
-- mumax+ field/scalar quantity split: `https://github.com/mumax/plus/blob/main/src/physics/energy.cu`
-- Boris module energy display/output model: `https://github.com/SerbanL/Boris2`
+## 8. Scientific bibliography
+
+(fdm-fem-observable-scientific-bibliography)=
+
+- mumax3: energy-density registry and integration checks,
+  `https://github.com/mumax/3`;
+- mumax+: field/scalar quantity split,
+  `https://github.com/mumax/plus/blob/main/src/physics/energy.cu`;
+- Boris: module energy display/output model,
+  `https://github.com/SerbanL/Boris2`.
+
+## 9. Source code index
+
+(fdm-fem-observable-source-code-index)=
+
+| Path | Symbol | Responsibility |
+|---|---|---|
+| `crates/fullmag-engine/src/fdm/cpu/fields.rs` | `field_dot_energy_density` | CPU field-derived density equation |
+| `crates/fullmag-runner/src/fdm/cpu/reference.rs` | `select_scalar` | CPU scalar snapshot selection |
+| `backends/fdm/gpu/cuda/interactions/demag_fp64.cu` | `launch_demag_field_fp64` | CUDA FP64 demag and visual buffer |
+| `backends/fdm/gpu/cuda/interactions/demag_fp32.cu` | `launch_demag_field_fp32` | CUDA FP32 demag and visual buffer |
+| `crates/fullmag-runner/src/quantities.rs` | `fdm_quantity_is_active` | active quantity gating |
+| `crates/fullmag-plan/src/quantities.rs` | `default_capability_matrix` | backend capability matrix |
+| `crates/fullmag-api/src/quantities.rs` | `build_quantities` | resource-first quantity descriptors |
+| `backends/fem/src/api.cpp` | `gpu_snapshot_source_field` | FEM full-domain H_demag source |
+| `backends/fem/tests/snapshot_contract.cpp` | `gpu_snapshot_preserves_full_domain_observable_fields` | FEM regression contract |
