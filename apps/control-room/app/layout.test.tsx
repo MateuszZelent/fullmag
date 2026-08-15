@@ -16,6 +16,10 @@ describe("RootLayout runtime config", () => {
     expect(source).not.toContain("disablePerformanceDiagnostics: false");
   });
 
+  it("tolerates browser extensions adding attributes to the document body", () => {
+    expect(source).toContain("<body suppressHydrationWarning>");
+  });
+
   it("uses the project-root client instrumentation hook for early diagnostics", () => {
     expect(existsSync(join(appRoot, "instrumentation-client.ts"))).toBe(true);
   });
