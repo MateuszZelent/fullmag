@@ -307,7 +307,7 @@ describe("PlanarVisualizationSection", () => {
       "an unsupported fmcs.v3 descriptor",
       () => { mocks.overlay.codec = "fmcs.v3"; },
       "Layer mesh",
-      "Mesh overlay requires the fmcs.v4 descriptor codec.",
+      "Mesh overlay requires the fmcs.v4 or fmfg.v1 descriptor codec.",
     ],
     [
       "an FDM mesh-part scope",

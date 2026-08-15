@@ -154,7 +154,7 @@ it("routes generic FDM domain-frame opacity and Airbox wireframe color through t
   expect(source).not.toContain("color={colors.field}");
 });
 
-it("keeps FDM context bounds as extent boxes instead of a procedural volume grid", () => {
+it("renders the full single-grid FDM Airbox wireframe as a procedural volume grid", () => {
   const start = boundsLayersSource.indexOf(
     "export const FdmUniverseOutsideSupportLayer",
   );
@@ -162,7 +162,9 @@ it("keeps FDM context bounds as extent boxes instead of a procedural volume grid
   const source = boundsLayersSource.slice(start, end);
 
   expect(source).toContain("<BoundsBox");
-  expect(source).not.toContain("<BoundsVolumeWireframe");
+  expect(source).toContain("<BoundsVolumeWireframe");
+  expect(source).toContain("tracker={tracker}");
+  expect(source).toContain("policySemantic=\"hiddenEdges\"");
 });
 
 it("maps an airbox surface triangle to its canonical cell identity", () => {

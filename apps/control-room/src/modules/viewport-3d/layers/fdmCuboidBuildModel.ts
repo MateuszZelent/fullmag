@@ -518,22 +518,7 @@ function sampleFdmDisplayCellIndicesWithMinimumMembership({
     ) {
       continue;
     }
-    if (selected.size < budget) {
-      selected.add(cellIndex);
-    } else {
-      // Budget full – replace an over-represented inactive sample.
-      const inactiveReplacement = [...selected]
-        .find((sc) => {
-          const sr = realizedRegionIds[sc] ?? FMRM_INACTIVE_REGION_ID;
-          return !cellMatchesSelection(sr, cellSelection);
-        });
-      if (inactiveReplacement !== undefined) {
-        selected.delete(inactiveReplacement);
-        selected.add(cellIndex);
-      }
-      // If no inactive replacement found, skip (budget exhausted with only
-      // matching cells).
-    }
+    if (selected.size < budget) selected.add(cellIndex);
   }
   return Uint32Array.from([...selected].toSorted((left, right) => left - right));
 }

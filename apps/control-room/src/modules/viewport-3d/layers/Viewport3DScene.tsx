@@ -119,7 +119,11 @@ import {
 } from "../region-overlays/useViewport3DRegionOverlayModels";
 import { PostProcessingLayer } from "./PostProcessingLayer";
 import { PrimitiveObjectLayer } from "./PrimitiveObjectLayer";
-import { FdmCuboidLayer, type FdmCuboidInstanceModel } from "./FdmCuboidLayer";
+import {
+  FdmCuboidLayer,
+  createFdmInspectClearArbitrator,
+  type FdmCuboidInstanceModel,
+} from "./FdmCuboidLayer";
 import { resolveFdmCuboidPassPlan } from "./fdmCuboidPasses";
 import { VectorGlyphDerivedBufferCacheProvider } from "./vectorGlyphDerivedBufferRuntime";
 import { HysteresisReplayGlyphLayer } from "./HysteresisReplayGlyphLayer";
@@ -153,6 +157,8 @@ import type { FdmUniverseOutsideSupportOverlayModel } from "../model/fdmUniverse
 import type { Viewport3DFdmTargetRenderView } from "../model/viewport3DFdmTargetViews";
 import type { FdmAirboxPassPlan } from "./fdmAirboxPassPlan";
 import type { Viewport3DVectorBuildReference } from "../viewport3dRenderModel";
+
+const EMPTY_REGION_OVERLAYS: readonly RegionOverlayInput[] = [];
 
 interface Viewport3DSceneProps {
   adoptionRegistry?: Viewport3DRenderAdoptionRegistry;
@@ -1238,7 +1244,7 @@ function Viewport3DModelLayerStack({
               onSelectTarget={() => onSelectFdmTarget(view.target)}
               onSelectFdmCell={undefined}
               onSelectRegion={undefined}
-              regionOverlays={[]}
+              regionOverlays={EMPTY_REGION_OVERLAYS}
               selectedObjectId={selectedObjectId}
               selectedRegionId={selectedRegionId}
               settings={view.settings}
@@ -1267,7 +1273,7 @@ function Viewport3DModelLayerStack({
               }
               onSelectFdmCell={undefined}
               onSelectRegion={undefined}
-              regionOverlays={[]}
+              regionOverlays={EMPTY_REGION_OVERLAYS}
               selectedObjectId={selectedObjectId}
               selectedRegionId={selectedRegionId}
               settings={stagedFdmMultilayerAirboxView.settings}
@@ -1303,7 +1309,11 @@ function Viewport3DModelLayerStack({
               onSelectTarget={() => onSelectFdmTarget(view.target)}
               onSelectFdmCell={onSelectFdmCell}
               onSelectRegion={onSelectRegion}
-              regionOverlays={authoredRegionOverlaysVisible ? regionOverlays : []}
+              regionOverlays={
+                authoredRegionOverlaysVisible
+                  ? regionOverlays
+                  : EMPTY_REGION_OVERLAYS
+              }
               selectedObjectId={selectedObjectId}
               selectedRegionId={selectedRegionId}
               settings={view.settings}
@@ -1332,7 +1342,7 @@ function Viewport3DModelLayerStack({
           inspectQuantityId="m"
           materialProfile={materialProfile}
           onSelectDomain={onSelectFdmUniverseOutsideSupport}
-          regionOverlays={[]}
+          regionOverlays={EMPTY_REGION_OVERLAYS}
           settings={fdmAirboxMeshSettings}
           surfaceColors={null}
           tracker={tracker}
@@ -1713,6 +1723,30 @@ export function Viewport3DScene({
     clip: Viewport3DCameraClip;
   } | null>(null);
   const cameraGestureRef = useMemo(() => createViewport3DCameraGestureRef(), []);
+  const inspectClearArbitrator = useMemo(
+    () =>
+      createFdmInspectClearArbitrator({
+        cancelFrame: (frame) => window.cancelAnimationFrame(frame),
+        onClear: () => onInspectClear?.(),
+        requestFrame: (callback) => window.requestAnimationFrame(callback),
+      }),
+    [onInspectClear],
+  );
+  useEffect(
+    () => () => inspectClearArbitrator.dispose(),
+    [inspectClearArbitrator],
+  );
+  const handleArbitratedInspectSample = useMemo(
+    () =>
+      (
+        sample: Viewport3DInspectSample,
+        screenPosition: Viewport3DInspectScreenPosition,
+      ) => {
+        inspectClearArbitrator.sample();
+        onInspectSample?.(sample, screenPosition);
+      },
+    [inspectClearArbitrator, onInspectSample],
+  );
   const effectiveCameraState = useMemo(
     () => resolveViewport3DEffectiveCameraState({ bounds, cameraState }),
     [bounds, cameraState],
@@ -1960,8 +1994,8 @@ export function Viewport3DScene({
         meshRegionOverlays={meshRegionOverlays}
         periodicOverlayModel={periodicOverlayModel}
         meshSizeHighlightModel={meshSizeHighlightModel}
-        onInspectClear={onInspectClear}
-        onInspectSample={onInspectSample}
+        onInspectClear={inspectClearArbitrator.clear}
+        onInspectSample={handleArbitratedInspectSample}
         onSelectDomain={onSelectDomain}
         onSelectFdmTarget={onSelectFdmTarget}
         onSelectFdmUniverseOutsideSupport={onSelectFdmUniverseOutsideSupport}

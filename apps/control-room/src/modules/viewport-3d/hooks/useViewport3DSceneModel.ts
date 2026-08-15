@@ -4614,9 +4614,7 @@ export function useViewport3DSceneModel({
     fdmAirboxBuildState?.result?.vectorSegments ?? null;
   const fdmAirboxVectorCellIndices =
     fdmAirboxBuildState?.result?.vectorCellIndices ?? null;
-  const fdmTargetViews = useMemo<
-    readonly Viewport3DFdmTargetRenderView[]
-  >(
+  const fdmTargetViews: readonly Viewport3DFdmTargetRenderView[] = useMemo(
     () =>
       fdmTargetViewsResult.status === "ready"
         ? fdmTargetViewsResult.views.flatMap((view) => {

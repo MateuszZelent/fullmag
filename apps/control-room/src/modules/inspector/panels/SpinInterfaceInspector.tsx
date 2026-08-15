@@ -178,9 +178,7 @@ export function SpinInterfaceInspectorPanel({ selection }: InspectorPanelProps) 
     localInterfaceId,
     ownerId,
     projected.data?.items,
-    ref?.spinInterfaceId,
-    ref?.spinInterfaceIndex,
-    ref?.spinInterfaceOwnerId,
+    ref,
   ]);
   const baseDraft = interfaceDraft(selected?.interface);
   const draftKey = `${ownerId}:${selected?.interface_id ?? "new"}:${JSON.stringify(baseDraft)}`;

@@ -524,6 +524,53 @@ export function shouldAttachFdmCuboidInspectListener({
   );
 }
 
+export function createFdmInspectClearArbitrator({
+  cancelFrame,
+  onClear,
+  requestFrame,
+}: {
+  cancelFrame: (frame: number) => void;
+  onClear: () => void;
+  requestFrame: (callback: FrameRequestCallback) => number;
+}): {
+  clear: () => void;
+  dispose: () => void;
+  sample: () => void;
+} {
+  let clearFrame: number | null = null;
+  let sampleProtectionFrame: number | null = null;
+
+  const cancelClear = () => {
+    if (clearFrame === null) return;
+    cancelFrame(clearFrame);
+    clearFrame = null;
+  };
+  const clear = () => {
+    if (sampleProtectionFrame !== null || clearFrame !== null) return;
+    clearFrame = requestFrame(() => {
+      clearFrame = null;
+      onClear();
+    });
+  };
+  const sample = () => {
+    cancelClear();
+    if (sampleProtectionFrame !== null) {
+      cancelFrame(sampleProtectionFrame);
+    }
+    sampleProtectionFrame = requestFrame(() => {
+      sampleProtectionFrame = null;
+    });
+  };
+  const dispose = () => {
+    cancelClear();
+    if (sampleProtectionFrame !== null) {
+      cancelFrame(sampleProtectionFrame);
+      sampleProtectionFrame = null;
+    }
+  };
+  return { clear, dispose, sample };
+}
+
 export function uploadFdmCuboidAttribute(
   attribute: InstancedBufferAttribute,
   source: Float32Array,

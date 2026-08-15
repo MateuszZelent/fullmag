@@ -69,8 +69,8 @@ function selectedModule(
 
 export function PhysicsGraphModuleInspectorPanel({ selection }: InspectorPanelProps) {
   const resource = usePhysicsGraphResource({ enabled: true });
-  const module = selectedModule(selection, resource.data?.modules ?? []);
-  if (!module) {
+  const selectedPhysicsModule = selectedModule(selection, resource.data?.modules ?? []);
+  if (!selectedPhysicsModule) {
     return (
       <div className="fm-inspector-panel">
         <FeedbackBanner kind="warning" message="The selected physics module is no longer present in the current graph revision." />
@@ -78,27 +78,27 @@ export function PhysicsGraphModuleInspectorPanel({ selection }: InspectorPanelPr
     );
   }
 
-  const status = module.activation;
+  const status = selectedPhysicsModule.activation;
   const model = buildPhysicsInspectorOverviewModel({
     dependency: {
-      requiredSourceIds: module.depends_on,
+      requiredSourceIds: selectedPhysicsModule.depends_on,
       status,
     },
     execution: {
-      capability: module.capability,
+      capability: selectedPhysicsModule.capability,
       graphRevision: resource.data?.scene_revision ?? null,
       sceneRevision: resource.data?.scene_revision ?? null,
     },
-    family: module.presentation.family,
-    scope: scopeFromResource(module),
+    family: selectedPhysicsModule.presentation.family,
+    scope: scopeFromResource(selectedPhysicsModule),
     source: {
-      id: module.id,
-      kind: module.kind,
-      path: module.source_path,
+      id: selectedPhysicsModule.id,
+      kind: selectedPhysicsModule.kind,
+      path: selectedPhysicsModule.source_path,
       status,
     },
     status,
-    statusReason: module.activation === "active" ? null : `Activation: ${module.activation}`,
+    statusReason: selectedPhysicsModule.activation === "active" ? null : `Activation: ${selectedPhysicsModule.activation}`,
   });
 
   return <PhysicsInspectorOverview model={model} />;

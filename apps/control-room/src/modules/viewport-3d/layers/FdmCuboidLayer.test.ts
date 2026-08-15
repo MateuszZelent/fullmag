@@ -29,6 +29,7 @@ import {
   visibleFdmCuboidInspectTargets,
   resolveFdmCuboidColorUploadRevision,
   shouldAttachFdmCuboidInspectListener,
+  createFdmInspectClearArbitrator,
 } from "./FdmCuboidLayer";
 import { BoxGeometry, InstancedBufferAttribute, InstancedMesh, MeshBasicMaterial } from "three";
 import type { FdmCuboidInstanceModelOptions } from "./fdmCuboidBuildModel";
@@ -101,6 +102,41 @@ const viewport3DSceneModelPath = join(
 );
 
 describe("FdmCuboidLayer model", () => {
+  it("does not clear a valid inspect sample when another target misses in the same frame", () => {
+    const frames = new Map<number, FrameRequestCallback>();
+    let nextFrame = 1;
+    let clears = 0;
+    const arbitrator = createFdmInspectClearArbitrator({
+      cancelFrame: (frame) => frames.delete(frame),
+      onClear: () => {
+        clears += 1;
+      },
+      requestFrame: (callback) => {
+        const frame = nextFrame;
+        nextFrame += 1;
+        frames.set(frame, callback);
+        return frame;
+      },
+    });
+
+    arbitrator.clear();
+    arbitrator.sample();
+    arbitrator.clear();
+    for (const [frame, callback] of [...frames]) {
+      frames.delete(frame);
+      callback(0);
+    }
+    expect(clears).toBe(0);
+
+    arbitrator.clear();
+    for (const [frame, callback] of [...frames]) {
+      frames.delete(frame);
+      callback(16);
+    }
+    expect(clears).toBe(1);
+    arbitrator.dispose();
+  });
+
   it("prepares Three column-major matrices atomically for a target view", () => {
     const model = buildFdmCuboidInstanceModel(domainFixture());
     const prepared = prepareFdmCuboidInstanceMatrices(

@@ -1,7 +1,7 @@
 "use client";
 
 import { HelpCircle } from "lucide-react";
-import { useMemo, useReducer, useState } from "react";
+import { useCallback, useMemo, useReducer, useState } from "react";
 
 import { MODEL_SCENE_PATH, MODEL_STUDY_PATH } from "@/kernel/api/apiPaths";
 import { useKernel } from "@/kernel/KernelContext";
@@ -267,7 +267,7 @@ export function PhysicsInteractionPanel({ selection }: InspectorPanelProps) {
     });
   }
 
-  async function applyInteraction(): Promise<boolean> {
+  const applyInteraction = useCallback(async (): Promise<boolean> => {
     if (!activeLaneOperation.enabled) {
       dispatch({
         type: "setFeedback",
@@ -344,7 +344,18 @@ export function PhysicsInteractionPanel({ selection }: InspectorPanelProps) {
     } finally {
       dispatch({ type: "setPending", pending: false });
     }
-  }
+  }, [
+    activeLaneOperation,
+    api.model,
+    dispatch,
+    draft,
+    interactionDiscretization,
+    interactionId,
+    objectId,
+    objectInteractionKind,
+    resources,
+    spec,
+  ]);
 
   if (interactionDiscretization === "unknown") {
     return (

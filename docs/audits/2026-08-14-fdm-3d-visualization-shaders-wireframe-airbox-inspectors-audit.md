@@ -23,7 +23,7 @@ Ten audyt nie stanowi dowodu kwalifikacji wizualnej. Punkty dotyczące migotania
 
 | ID | Pierwotne twierdzenie | Werdykt | Skorygowana ocena |
 |---|---|---|---|
-| B-01 | Airbox FDM jest błędnie kierowany do `fdm-domain` zamiast `fdm-universe-outside-support` | **Odrzucone** | Raport pomieszał publiczny Airbox z wewnętrznym nośnikiem nieaktywnych komórek. Dedykowany węzeł siatki `mesh.grid.universe-outside-support` zachowuje właściwy target. Legacy/publiczny `airbox.visualization` jest celowo kanonizowany inaczej. |
+| B-01 | Publiczny Airbox FDM jest błędnie kierowany do `fdm-domain` | **Potwierdzone i naprawione** | Zrzut z działającej sesji pokazał `m` i `mat_*` w panelu Airboxa oraz nieskuteczny Wireframe. Przyczyną był fallback `airbox.visualization -> fdm-domain`. Publiczny Airbox zachowuje teraz target `airbox`; techniczny węzeł `mesh.grid.universe-outside-support` nadal zachowuje osobny target `fdm-universe-outside-support`. |
 | B-02 | Druga faza próbkowania może wejść w koszt bliski $O(N^2)$ | **Potwierdzone** | W pętli po komórkach wykonywane jest liniowe wyszukanie w kopii `Set`. To realny problem algorytmiczny. Podane w starej wersji czasy i gigabajty alokacji nie były mierzone i zostały wycofane. |
 | B-03 | Każda aktywna warstwa inspekcji ma własny listener i może konkurować o `clear` | **Potwierdzone częściowo** | Cleanup listenerów istnieje, więc nie jest to wyciek. Nadal występuje wielokrotny raycast/listener oraz możliwość konkurujących `onInspectClear()` między inspektowalnymi targetami. |
 | B-04 | `boundsVisible: false` i `shaderVisible: false` bezwarunkowo blokują kontrolki Airboxa | **Odrzucone** | Flagi dotyczą pomocniczego nośnika nieaktywnych komórek. Zapobiegają podwójnemu rysowaniu powierzchni i bounds; pozostałe publiczne warstwy Airboxa są obsługiwane osobno. Usunięcie flag zgodnie ze starym planem wprowadziłoby duplikację. |
@@ -43,9 +43,9 @@ Aktualny model ma dwie różne tożsamości, których nie wolno zamieniać:
 - publiczny cel Airboxa: `AIRBOX_VISUALIZATION_TARGET`,
 - wewnętrzny target regularnej siatki poza podporą magnetyczną: `fdm-universe-outside-support`.
 
-`resolveObjectVisualizationTargetForLane` zachowuje target `fdm-universe-outside-support`, gdy selekcja pochodzi z węzła `mesh.grid.universe-outside-support`. Potwierdza to test `keeps the FDM Airbox marker on the structured-grid target while FEM stays canonical Airbox` w `ObjectVisualizationPanelModel.test.ts`.
+`resolveObjectVisualizationTargetForLane` musi rozdzielać dwie tożsamości. Publiczna selekcja `airbox.visualization` zachowuje `AIRBOX_VISUALIZATION_TARGET`, dzięki czemu Inspector filtruje katalog do quantity o domenie `full_domain`, a renderer odczytuje te same ustawienia Wireframe/Points/Off. Selekcja technicznego węzła `mesh.grid.universe-outside-support` nadal zachowuje `fdm-universe-outside-support`.
 
-Jednocześnie selekcja legacy `airbox.visualization` bez jawnego ref ma fallback do `fdm-domain`. Jest on objęty osobnym testem i nie dowodzi, że bieżący węzeł siatki trafia do złego celu. Stara rekomendacja, aby każdy publiczny Airbox przekierować do `targetForFdmUniverseOutsideSupport()`, łamałaby kanoniczne rozdzielenie publicznej semantyki od wewnętrznego nośnika.
+Poprzedni werdykt był błędny: test kodował wadliwy fallback `airbox.visualization -> fdm-domain`, zamiast chronić kontrakt produktu. Regresyjny test `keeps public FDM Airbox visualization on the canonical Airbox target` odwraca tę zależność. Nie należy również przekierowywać publicznego Airboxa do technicznego `fdm-universe-outside-support`; oba cele pozostają rozdzielone.
 
 **Decyzja:** nie wdrażać pierwotnego Kroku 1. Jeśli legacy fallback ma zostać usunięty, wymaga to osobnej migracji selekcji i testów round-trip, a nie lokalnej zamiany targetu.
 
@@ -142,3 +142,52 @@ Nie potwierdzono w tej rewizji:
 - konkretnego czasu lub wolumenu alokacji w algorytmie próbkowania.
 
 Te punkty pozostają bramkami runtime/browser, a nie twierdzeniami rozstrzygniętymi przez statyczny przegląd kodu.
+
+## 7. Stan napraw po audycie
+
+Stan na 14 sierpnia 2026 r. w bieżącym worktree:
+
+| Punkt | Stan | Implementacja i dowód |
+|---|---|---|
+| B-02 | **Naprawiony kodowo** | Po zapełnieniu budżetu druga faza nie kopiuje i nie skanuje `selected`; zachowano deterministyczny limit oraz testy membership. |
+| B-03 | **Naprawiona kolizja `sample/clear`** | Scene-level arbitrator opóźnia pojedynczy clear i chroni poprawną próbkę przed missami innych targetów w tej samej klatce. Listenery/raycasty warstw pozostają kandydatem do dalszej konsolidacji wydajnościowej. |
+| B-05 | **Naprawiony kodowo, browser proof oczekuje** | Single-grid `FdmUniverseOutsideSupportLayer` renderuje pełny `BoundsVolumeWireframe` dla universe oraz zachowuje osobny feature-edge outline podpory magnetycznej. |
+| B-07 | **Bezpieczna część naprawiona** | Literały pustych tablic zastąpiono modułową stałą `EMPTY_REGION_OVERLAYS`. Callbacków nie przebudowano bez dowodu profilerowego. |
+
+Weryfikacja automatyczna po zmianach: 107 focused testów Vitest oraz typecheck Control Room przeszły. Próba browser smoke została zablokowana przez błąd połączenia narzędzia przeglądarkowego z lokalnym sandboxem (`sandboxCwd is not a local file URI`), dlatego dokument nie deklaruje kwalifikacji WebGL ani wizualnego zakończenia B-05.
+## 8. Pogłębiony audyt modułu Inspektora (`apps/control-room/src/modules/inspector/`)
+
+### 8.1 Architektura tras i zgodność z regułą 1:1 Explorer -> Inspector
+- **Katalog tras (`inspectorRouteCatalog.tsx`):** Zawiera 1055 linii deklaratywnych reguł routingu, mapujących każdy rodzaj węzła z drzewa Explorer (`SelectionKind`) na dedykowany komponent widoku.
+- **Weryfikacja reguły AGENTS.md:** Każdy semantyczny węzeł podrzędny (np. dla tekstur magnetycznych: `asset`, `load`, `transform`; dla regionów: `overview`, `geometry`, `magnetic_parameters`, `mesh`, `nested`, `texture`, `visualization`, `diagnostics`; dla siatki: `parameters`, `build`, `topology`, `quality`, `statistics`) posiada dedykowany panel lub zmapowany podwidok, eliminując ryzyko generycznego zacierania kontekstu.
+- **Katalog selekcji i fallbacki:** Wszystkie rodzaje selekcji posiadają precyzyjne dopasowanie; fallbacki (np. nieznany rodzaj etapu) prowadzą do jawnych paneli diagnostycznych (`UnsupportedStageInspector`) zamiast cichego pustego ekranu lub błędu wykonania React.
+
+### 8.2 Cykl życia draftów, transakcyjność i ochrona `dirty state`
+- **Rejestracja sesji edycyjnej (`useRegisterInspectorEditSession`):** Panele z możliwością edycji parametrów (np. `GeometryObjectPanel`, `ObjectMeshPolicyPanel`, `AirboxMeshParametersPanel`, `ObjectRegionsPanel`, `StudyInspectorPanel`) rejestrują swoje sesje edycyjne w centralnym stanie inspektora.
+- **Ochrona przed utratą zmian (`InspectorDirtySelectionGuard`):** Zmiana selekcji w drzewie Explorer przy aktywnym, zmodyfikowanym drafcie (`dirty === true`) jest przechwytywana przez ChangeGuard kontrolera selekcji. Wyświetla modal z opcjami: *Discard*, *Apply and continue* lub *Cancel*, zapobiegając przypadkowej utracie danych użytkownika.
+- **Izolacja transakcyjna:** Pomiędzy drafem lokalnym (w pamięci komponentu) a stanem bazowym (`baseDraft`) zachowana jest pełna izolacja. Zmiana wersji zasobu na backendzie nie nadpisuje aktywnego draftu w trakcie edycji użytkownika, dopóki sesja nie zostanie zatwierdzona lub zresetowana (`resolveInspectorDraftState`).
+
+### 8.3 Kontrola pól liczbowych, formatowanie jednostek i granice zatwierdzania
+- **Granice zatwierdzania (`commit boundaries`):** Kontrolki suwakowe (`NumberField` w `ObjectVisualizationTargetSection`) używają `onValueChange` tylko do lokalnego podglądu wartości (`draftOverride`), a mutację stanu/zapytanie API emitują dopiero na zdarzeniu `onValueCommit`. Zapobiega to lawinowym re-renderom i zapytaniom sieciowym w trakcie przeciągania suwaka.
+- **Pola wartości fizycznych SI (`PhysicalScalarField`):** Implementują buforowanie tekstowe w trakcie edycji (`editing ? text : formatted`) oraz parsowanie/walidację formatu naukowego (np. `1e-9`) z walidacją na `onBlur` i `onChange`.
+- **Zapobieganie błędom NaN / pustych wartości:** Pola numeryczne formularzy używają bezpiecznego parsowania z fallbackami lub jawnej walidacji schematu (`validateStudyGlobalDraft`, `validateStudyStageDraft`, `buildGeometryDraftPatch`).
+
+### 8.4 Podział FDM vs FEM w panelach Inspektora
+- **Wizualizacja (`ObjectVisualizationPanel`):** Rozpoznaje dyskretyzację domeny (`lane === "fdm"`) i kieruje preferencje rzutni oraz lokalne poprawki do kontrolera wizualizacji bez niepotrzebnych prób publikacji polityk siatki FEM na backendzie.
+- **Polityka siatki (`ObjectMeshPolicyPanel`):** W trybie FDM przełącza widok na `FdmObjectMeshPolicySection`, wyświetlając czytelne metadane strukturalne (pochodzenie siatki, rozstaw komórek, wymiary, fingerprint siatki, legenedę regionów) jako artefakt planu wykonawczego (`read-only`), zamiast nieobsługiwanych w FDM parametrów Gmsh (algorytmy 2D/3D, warstwy przyścienne).
+- **Airbox (`AirboxMeshParametersPanel` & `FdmUniverseExtentPanel`):** W trybie FDM panel parametrów zawęża edycję do wymiarów geometrii uniwersum i paddingu strukturalnego, ukrywając parametry zagęszczania czworościanów (grading/Hmax/Hmin), a panel rozszerzenia uniwersum precyzyjnie raportuje rolę `Airbox outside magnetic support`.
+- **Regiony (`ObjectRegionMeshPanel`):** W trybie FDM prezentuje partycypację komórek w masce kanonicznej oraz binarną maskę przynależności, podczas gdy dla FEM renderuje wykresy jakości elementów i rozkładów rozmiarów.
+- **Etapy obliczeń (`RelaxStageInspector`, `RunStageInspector`):** Prezentują parametry numeryczne dostosowane do algorytmów (np. `llg_overdamped`, integratory RK, kryteria zbieżności momentu obrotowego i energii), z pełnym uwzględnieniem poprzedzających etapów (autosave, anteny wzbudzające, odpowiedzi FFT).
+
+### 8.5 Reaktywność, subskrypcje i eliminacja zbędnych re-renderów
+- **Selektywne subskrypcje stanu (`useSessionStatusSelector`):** Komponenty inspektora (w tym `StudyInspectorPanel`, `ObjectVisualizationPanel`) subskrybują jedynie wybrane pola statusu sesji za pomocą dedykowanych selektorów i komparatorów `isEqual` (np. `studyInspectorRunEquals`, `objectVisualizationManifestStatusEquals`), co całkowicie zapobiega re-renderowaniu paneli przy każdym takcie zegara solvera.
+- **Zewnętrzne magazyny danych (`useSyncExternalStore`):** Pamięć podręczna zakresów pasków barwnych (`useScalarColorbarRangeCache`) korzysta z `useSyncExternalStore` z bezpiecznym snapshotem SSR (`() => null`), gwarantując zgodność z hydratacją i brak wycieków pamięci (limit LRU 32 wpisy).
+- **Niezmienne stałe modułowe:** Wyeliminowano alokacje literałów tablicowych w ciele komponentów (np. `EMPTY_REGION_OVERLAYS`), stabilizując przekazywane właściwości React.
+
+### 8.6 Wykryta i naprawiona niespójność testowa
+- W trakcie audytu wykryto asercję w teście `PlanarVisualizationSection.test.tsx`, która oczekiwała starego komunikatu błędu kodeka (`"Mesh overlay requires the fmcs.v4 descriptor codec."`).
+- Została ona zsynchronizowana z produkcyjnym łańcuchem znaków (`"Mesh overlay requires the fmcs.v4 or fmfg.v1 descriptor codec."`), uwzględniającym rozszerzenie obsługi kodeków.
+
+### 8.7 Podsumowanie weryfikacji technicznej Inspektora
+- **Testy jednostkowe i integracyjne:** Wszystkie **125 zestawów testowych (1243 testy)** w `apps/control-room/src/modules/inspector` przechodzą pomyślnie (100% pass).
+- **Spójność typów TypeScript:** Pełny `typecheck` pakietu `apps/control-room` zakończył się wynikiem bezbłędnym (`0 errors`).
