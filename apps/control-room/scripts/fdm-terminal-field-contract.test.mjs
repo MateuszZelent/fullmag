@@ -294,8 +294,8 @@ test("browser smoke proves the exact completed response was adopted by the reque
   assert.match(smokeSource, /adoptionKindForRenderPass\(renderPass\)/);
 });
 
-test("browser smoke proves the FDM Airbox target has visible wireframe and vector geometry", () => {
-  assert.match(smokeSource, /ensureFdmAirboxWireframe/);
+test("browser smoke proves distinct FDM Airbox points, wireframe, off, and vector-only frames", () => {
+  assert.match(smokeSource, /exerciseFdmAirboxRenderModes/);
   assert.match(smokeSource, /assertFdmAirboxVectorRender/);
   assert.match(smokeSource, /data-fdm-airbox-target/);
   assert.match(smokeSource, /data-fdm-airbox-points-visible/);
@@ -304,6 +304,11 @@ test("browser smoke proves the FDM Airbox target has visible wireframe and vecto
   assert.match(smokeSource, /data-fdm-airbox-model-count/);
   assert.match(smokeSource, /data-fdm-airbox-vector-segment-count/);
   assert.match(smokeSource, /getByRole\("radio", \{\s*name: "Wireframe"/s);
+  assert.match(smokeSource, /getByRole\("radio", \{\s*name: "Off"/s);
+  assert.match(smokeSource, /fdm-airbox-points-on\.png/);
+  assert.match(smokeSource, /fdm-airbox-wireframe-on\.png/);
+  assert.match(smokeSource, /fdm-airbox-wireframe-off\.png/);
+  assert.match(smokeSource, /values\.wireframe_visible === "false"/);
   assert.match(smokeSource, /getByRole\("button", \{\s*name: "Toggle target visibility"/s);
   assert.match(smokeSource, /airbox_magnetization: airboxMagnetization, airbox_display: airboxDisplay, airbox_render: airboxRender/);
   assert.match(smokeSource, /airbox_controls: airboxControls/);

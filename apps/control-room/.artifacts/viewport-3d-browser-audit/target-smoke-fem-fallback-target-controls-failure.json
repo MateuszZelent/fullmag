@@ -1,10 +1,9 @@
 {
   "label": "FEM fallback target controls",
-  "debug": null,
   "delta": {
     "changed": false,
-    "changedPixels": 0,
-    "minimumChangedPixels": 18,
-    "sampledPixels": 6141
+    "changedPixels": 267,
+    "minimumChangedPixels": 884,
+    "sampledPixels": 294926
   }
 }

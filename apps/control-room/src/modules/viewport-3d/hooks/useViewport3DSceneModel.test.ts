@@ -630,7 +630,7 @@ describe("useViewport3DSceneModel", () => {
   it("uses canonical local Airbox settings for both FDM Airbox carriers", () => {
     const source = readFileSync(sceneModelSourceUrl, "utf8");
     expect(source).toContain(
-      "target: AIRBOX_VISUALIZATION_TARGET,\n        visualizationState: renderingState,",
+      "target: AIRBOX_VISUALIZATION_TARGET,\n        visualizationState: fdmLaneActive ? null : renderingState,",
     );
     const fdmSingleGridAirboxBlock = source.slice(
       source.indexOf("const fdmSingleGridAirboxSettings ="),
@@ -650,7 +650,9 @@ describe("useViewport3DSceneModel", () => {
 
     expect(airboxSettingsBlock).toContain("resolveTargetVisualization({");
     expect(airboxSettingsBlock).toContain("target: AIRBOX_VISUALIZATION_TARGET");
-    expect(airboxSettingsBlock).toContain("visualizationState: renderingState");
+    expect(airboxSettingsBlock).toContain(
+      "visualizationState: fdmLaneActive ? null : renderingState",
+    );
     expect(airboxSettingsBlock).not.toContain("resolveViewport3DFdmTargetVisualization({");
 
     const singleGridDisplayBlock = source.slice(
@@ -4587,7 +4589,7 @@ describe("useViewport3DSceneModel", () => {
   it("builds FDM scalar colors from the FDM target palette, not the FEM/global palette", () => {
     const source = readFileSync(sceneModelSourceUrl, "utf8");
     const fdmColorBlock = source.slice(
-      source.indexOf("const fdmTargetViews ="),
+      source.indexOf("const fdmTargetViews:"),
       source.indexOf("const chunkedScalarColors = useViewport3DChunkedScalarColors"),
     );
 
@@ -4598,7 +4600,7 @@ describe("useViewport3DSceneModel", () => {
   it("builds a separate FDM vector color buffer for vector-only colorbars", () => {
     const source = readFileSync(sceneModelSourceUrl, "utf8");
     const fdmVectorColorBlock = source.slice(
-      source.indexOf("const fdmTargetViews ="),
+      source.indexOf("const fdmTargetViews:"),
       source.indexOf("const chunkedScalarColors = useViewport3DChunkedScalarColors"),
     );
 
