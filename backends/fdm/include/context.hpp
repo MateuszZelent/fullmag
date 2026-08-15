@@ -262,6 +262,8 @@ struct Context {
     // masked by active_mask and is not consumed by the LLG hot loop.
     DeviceVectorField h_demag_visual;
     DeviceVectorField h_ani;  // anisotropy field
+    // Per-cell energy-density observable scratch [J/m^3], one scalar/cell.
+    void *energy_density = nullptr;
     DeviceVectorField k1;     // RHS stage 1 (all integrators)
     DeviceVectorField tmp;    // predictor state / scratch
     DeviceVectorField work;   // effective field / scratch
@@ -412,6 +414,7 @@ bool context_end_compute_stream_work(Context &ctx, const char *operation);
 struct AsyncFieldSnapshot {
     fullmag_fdm_precision precision = FULLMAG_FDM_PRECISION_DOUBLE;
     uint64_t cell_count = 0;
+    uint32_t component_count = 3;
     DeviceVectorField staging;
     void *host_soa = nullptr;
     size_t host_soa_len_bytes = 0;
@@ -833,6 +836,20 @@ bool context_download_field_f32(
     float *out_xyz,
     uint64_t out_len);
 
+/// Download a per-cell scalar energy-density observable as f64.
+bool context_download_scalar_f64(
+    Context &ctx,
+    fullmag_fdm_observable observable,
+    double *out_values,
+    uint64_t out_len);
+
+/// Download a per-cell scalar energy-density observable as f32.
+bool context_download_scalar_f32(
+    Context &ctx,
+    fullmag_fdm_observable observable,
+    float *out_values,
+    uint64_t out_len);
+
 /// Download a v2 multilayer layer field observable from device to host as f64 AoS.
 bool context_download_layer_field_f64(
     Context &ctx,
@@ -881,6 +898,11 @@ bool context_refresh_observables(Context &ctx);
 
 /// Populate only H_demag for the current state without advancing time.
 bool context_refresh_demag_observable(Context &ctx);
+
+/// Materialize one per-cell energy-density observable from current device state.
+bool context_refresh_energy_density_observable(
+    Context &ctx,
+    fullmag_fdm_observable observable);
 
 /// Populate full current-step diagnostics from the current device state.
 bool context_fill_current_stats(Context &ctx, fullmag_fdm_step_stats *out_stats);

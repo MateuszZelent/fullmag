@@ -1223,6 +1223,52 @@ int fullmag_fdm_backend_copy_field_f32(
 #endif
 }
 
+int fullmag_fdm_backend_copy_scalar_field_f64(
+    fullmag_fdm_backend   *handle,
+    fullmag_fdm_observable observable,
+    double                *out_values,
+    uint64_t               out_len)
+{
+#if FULLMAG_HAS_CUDA
+    if (!handle || !out_values) return FULLMAG_FDM_ERR_INVALID;
+    auto *ctx = reinterpret_cast<Context *>(handle);
+    if (out_len != ctx->cell_count) {
+        ctx->last_error = "scalar_out_len_mismatch";
+        return FULLMAG_FDM_ERR_INVALID;
+    }
+    if (!context_download_scalar_f64(*ctx, observable, out_values, out_len)) {
+        return FULLMAG_FDM_ERR_CUDA;
+    }
+    return FULLMAG_FDM_OK;
+#else
+    (void)handle; (void)observable; (void)out_values; (void)out_len;
+    return FULLMAG_FDM_ERR_CUDA;
+#endif
+}
+
+int fullmag_fdm_backend_copy_scalar_field_f32(
+    fullmag_fdm_backend   *handle,
+    fullmag_fdm_observable observable,
+    float                 *out_values,
+    uint64_t               out_len)
+{
+#if FULLMAG_HAS_CUDA
+    if (!handle || !out_values) return FULLMAG_FDM_ERR_INVALID;
+    auto *ctx = reinterpret_cast<Context *>(handle);
+    if (out_len != ctx->cell_count) {
+        ctx->last_error = "scalar_out_len_mismatch";
+        return FULLMAG_FDM_ERR_INVALID;
+    }
+    if (!context_download_scalar_f32(*ctx, observable, out_values, out_len)) {
+        return FULLMAG_FDM_ERR_CUDA;
+    }
+    return FULLMAG_FDM_OK;
+#else
+    (void)handle; (void)observable; (void)out_values; (void)out_len;
+    return FULLMAG_FDM_ERR_CUDA;
+#endif
+}
+
 int fullmag_fdm_backend_copy_layer_field_f64(
     fullmag_fdm_backend   *handle,
     uint32_t               layer_index,

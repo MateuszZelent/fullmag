@@ -68,6 +68,13 @@ pub enum fullmag_fdm_observable {
     FULLMAG_FDM_OBSERVABLE_H_OE = 6,
     FULLMAG_FDM_OBSERVABLE_H_DMI = 7,
     FULLMAG_FDM_OBSERVABLE_H_ANI = 8,
+    FULLMAG_FDM_OBSERVABLE_EDEN_EX = 9,
+    FULLMAG_FDM_OBSERVABLE_EDEN_DEMAG = 10,
+    FULLMAG_FDM_OBSERVABLE_EDEN_EXT = 11,
+    FULLMAG_FDM_OBSERVABLE_EDEN_DRIVE = 12,
+    FULLMAG_FDM_OBSERVABLE_EDEN_ANI = 13,
+    FULLMAG_FDM_OBSERVABLE_EDEN_DMI = 14,
+    FULLMAG_FDM_OBSERVABLE_EDEN_TOTAL = 15,
 }
 
 #[repr(C)]
@@ -1112,6 +1119,20 @@ extern "C" {
         handle: *mut fullmag_fdm_backend,
         observable: fullmag_fdm_observable,
         out_xyz: *mut f32,
+        out_len: u64,
+    ) -> i32;
+
+    pub fn fullmag_fdm_backend_copy_scalar_field_f64(
+        handle: *mut fullmag_fdm_backend,
+        observable: fullmag_fdm_observable,
+        out_values: *mut f64,
+        out_len: u64,
+    ) -> i32;
+
+    pub fn fullmag_fdm_backend_copy_scalar_field_f32(
+        handle: *mut fullmag_fdm_backend,
+        observable: fullmag_fdm_observable,
+        out_values: *mut f32,
         out_len: u64,
     ) -> i32;
 

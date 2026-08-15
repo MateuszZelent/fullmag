@@ -38,6 +38,7 @@ if(FULLMAG_ENABLE_CUDA)
         gpu/cuda/interactions/exchange_t1_fp64.cu
         gpu/cuda/interactions/demag_fp64.cu
         gpu/cuda/interactions/demag_fp32.cu
+        gpu/cuda/interactions/energy_density_fp64.cu
         gpu/cuda/interactions/demag_boundary_fp64.cu
         gpu/cuda/integrators/llg_fp64.cu
         gpu/cuda/integrators/llg_fp32.cu
@@ -645,6 +646,11 @@ add_test(NAME fdm_cpu_oersted_fft_public_abi_contract
 
 add_executable(demag_observable_contract tests/demag_observable_contract.cpp)
 add_test(NAME fdm_demag_observable_contract COMMAND demag_observable_contract)
+
+add_executable(energy_density_observable_contract
+    tests/energy_density_observable_contract.cpp)
+add_test(NAME fdm_energy_density_observable_contract
+         COMMAND energy_density_observable_contract)
 
 if(FULLMAG_ENABLE_CUDA)
     add_executable(smoke_context tests/smoke_context.cpp)

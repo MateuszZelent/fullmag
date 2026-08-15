@@ -39,6 +39,9 @@ extern void launch_multilayer_exchange_field_fp64(Context &ctx);
 extern void launch_multilayer_exchange_field_fp32(Context &ctx);
 extern bool launch_multilayer_effective_field_fp64(Context &ctx);
 extern bool launch_multilayer_effective_field_fp32(Context &ctx);
+extern bool launch_energy_density_observable(
+    Context &ctx,
+    fullmag_fdm_observable observable);
 static void free_boundary_correction(Context &ctx);
 static void free_anisotropy_fields(Context &ctx);
 static void free_cubic_anisotropy_fields(Context &ctx);
@@ -72,6 +75,23 @@ static bool alloc_vector_field(Context &ctx, DeviceVectorField &field) {
     if (err != cudaSuccess) { set_cuda_error(ctx, "cudaMalloc(z)", err); return false; }
 
     return true;
+}
+
+static bool alloc_energy_density(Context &ctx) {
+    const size_t bytes = ctx.cell_count * scalar_size(ctx.precision);
+    const cudaError_t err = cudaMalloc(&ctx.energy_density, bytes);
+    if (err != cudaSuccess) {
+        set_cuda_error(ctx, "cudaMalloc(energy_density)", err);
+        return false;
+    }
+    return true;
+}
+
+static void free_energy_density(Context &ctx) {
+    if (ctx.energy_density) {
+        cudaFree(ctx.energy_density);
+        ctx.energy_density = nullptr;
+    }
 }
 
 static void free_vector_field(DeviceVectorField &field) {
@@ -875,6 +895,7 @@ static void destroy_async_snapshot_resources(AsyncFieldSnapshot &snapshot) {
         snapshot.host_soa = nullptr;
     }
     snapshot.host_soa_len_bytes = 0;
+    snapshot.component_count = 3;
     free_vector_field(snapshot.staging);
     snapshot.needs_wait = false;
 }
@@ -1384,6 +1405,7 @@ bool context_alloc_device(Context &ctx) {
     if (!alloc_vector_field(ctx, ctx.h_demag)) return false;
     if (!alloc_vector_field(ctx, ctx.h_demag_visual)) return false;
     if (!alloc_vector_field(ctx, ctx.h_ani)) return false;
+    if (!alloc_energy_density(ctx)) return false;
     if (!alloc_vector_field(ctx, ctx.k1))   return false;
     if (!alloc_vector_field(ctx, ctx.tmp))  return false;
     if (!alloc_vector_field(ctx, ctx.work)) return false;
@@ -1456,6 +1478,7 @@ bool context_alloc_device(Context &ctx) {
     cudaMemset(ctx.work.x, 0, bytes);
     cudaMemset(ctx.work.y, 0, bytes);
     cudaMemset(ctx.work.z, 0, bytes);
+    cudaMemset(ctx.energy_density, 0, bytes);
 
     return true;
 }
@@ -1468,6 +1491,7 @@ void context_free_device(Context &ctx) {
     free_vector_field(ctx.h_demag);
     free_vector_field(ctx.h_demag_visual);
     free_vector_field(ctx.h_ani);
+    free_energy_density(ctx);
     free_vector_field(ctx.k1);
     free_vector_field(ctx.tmp);
     free_vector_field(ctx.work);
@@ -2696,6 +2720,75 @@ bool context_download_field_f32(
     return context_download_field_impl(ctx, observable, out_xyz, out_len);
 }
 
+static bool is_energy_density_observable(fullmag_fdm_observable observable) {
+    return observable >= FULLMAG_FDM_OBSERVABLE_EDEN_EX &&
+        observable <= FULLMAG_FDM_OBSERVABLE_EDEN_TOTAL;
+}
+
+template <typename HostScalar>
+static bool context_download_scalar_impl(
+    Context &ctx,
+    fullmag_fdm_observable observable,
+    HostScalar *out_values,
+    uint64_t out_len)
+{
+    if (!out_values || out_len != ctx.cell_count) {
+        ctx.last_error = "scalar_out_len_mismatch";
+        return false;
+    }
+    if (!is_energy_density_observable(observable)) {
+        ctx.last_error = "unsupported scalar observable";
+        return false;
+    }
+    if (!context_refresh_energy_density_observable(ctx, observable)) {
+        return false;
+    }
+
+    const size_t bytes = ctx.cell_count * scalar_size(ctx.precision);
+    if (ctx.precision == FULLMAG_FDM_PRECISION_DOUBLE) {
+        std::vector<double> values(ctx.cell_count);
+        cudaError_t err = cudaMemcpy(
+            values.data(), ctx.energy_density, bytes, cudaMemcpyDeviceToHost);
+        if (err != cudaSuccess) {
+            set_cuda_error(ctx, "cudaMemcpy(energy_density)", err);
+            return false;
+        }
+        for (uint64_t index = 0; index < ctx.cell_count; ++index) {
+            out_values[index] = static_cast<HostScalar>(values[index]);
+        }
+    } else {
+        std::vector<float> values(ctx.cell_count);
+        cudaError_t err = cudaMemcpy(
+            values.data(), ctx.energy_density, bytes, cudaMemcpyDeviceToHost);
+        if (err != cudaSuccess) {
+            set_cuda_error(ctx, "cudaMemcpy(energy_density)", err);
+            return false;
+        }
+        for (uint64_t index = 0; index < ctx.cell_count; ++index) {
+            out_values[index] = static_cast<HostScalar>(values[index]);
+        }
+    }
+    return true;
+}
+
+bool context_download_scalar_f64(
+    Context &ctx,
+    fullmag_fdm_observable observable,
+    double *out_values,
+    uint64_t out_len)
+{
+    return context_download_scalar_impl(ctx, observable, out_values, out_len);
+}
+
+bool context_download_scalar_f32(
+    Context &ctx,
+    fullmag_fdm_observable observable,
+    float *out_values,
+    uint64_t out_len)
+{
+    return context_download_scalar_impl(ctx, observable, out_values, out_len);
+}
+
 static bool context_refresh_multilayer_exchange_observable(Context &ctx)
 {
     if (!ctx.enable_exchange) {
@@ -3127,7 +3220,10 @@ AsyncFieldSnapshot *context_begin_async_field_snapshot(
     }
     snapshot->precision = ctx.precision;
     snapshot->cell_count = ctx.cell_count;
-    snapshot->host_soa_len_bytes = ctx.cell_count * 3u * scalar_size(ctx.precision);
+    const bool scalar_observable = is_energy_density_observable(observable);
+    snapshot->component_count = scalar_observable ? 1u : 3u;
+    snapshot->host_soa_len_bytes =
+        ctx.cell_count * snapshot->component_count * scalar_size(ctx.precision);
 
     auto fail = [&](const char *label, cudaError_t err) -> AsyncFieldSnapshot * {
         ctx.last_error = std::string(label) + ": " + cudaGetErrorString(err);
@@ -3146,10 +3242,12 @@ AsyncFieldSnapshot *context_begin_async_field_snapshot(
     const size_t component_bytes = ctx.cell_count * scalar_size(ctx.precision);
     cudaError_t err = cudaMalloc(&snapshot->staging.x, component_bytes);
     if (err != cudaSuccess) return fail("cudaMalloc(snapshot.x)", err);
-    err = cudaMalloc(&snapshot->staging.y, component_bytes);
-    if (err != cudaSuccess) return fail("cudaMalloc(snapshot.y)", err);
-    err = cudaMalloc(&snapshot->staging.z, component_bytes);
-    if (err != cudaSuccess) return fail("cudaMalloc(snapshot.z)", err);
+    if (!scalar_observable) {
+        err = cudaMalloc(&snapshot->staging.y, component_bytes);
+        if (err != cudaSuccess) return fail("cudaMalloc(snapshot.y)", err);
+        err = cudaMalloc(&snapshot->staging.z, component_bytes);
+        if (err != cudaSuccess) return fail("cudaMalloc(snapshot.z)", err);
+    }
 
     err = cudaHostAlloc(&snapshot->host_soa, snapshot->host_soa_len_bytes, cudaHostAllocDefault);
     if (err != cudaSuccess) return fail("cudaHostAlloc(snapshot.host_soa)", err);
@@ -3175,7 +3273,12 @@ AsyncFieldSnapshot *context_begin_async_field_snapshot(
     snapshot->done_event = reinterpret_cast<void *>(done_event);
 
     const DeviceVectorField *field = nullptr;
-    switch (observable) {
+    if (scalar_observable) {
+        if (!context_refresh_energy_density_observable(ctx, observable)) {
+            return fail_message(
+                ctx.last_error.empty() ? "failed to refresh scalar snapshot" : ctx.last_error);
+        }
+    } else switch (observable) {
         case FULLMAG_FDM_OBSERVABLE_M:
             field = &ctx.m;
             break;
@@ -3290,15 +3393,20 @@ AsyncFieldSnapshot *context_begin_async_field_snapshot(
     err = cudaStreamWaitEvent(io_stream, ready_event, 0);
     if (err != cudaSuccess) return fail("cudaStreamWaitEvent(snapshot.ready_event)", err);
 
+    const void *source_x = scalar_observable
+        ? ctx.energy_density
+        : field->x;
     err = cudaMemcpyAsync(
-        snapshot->staging.x, field->x, component_bytes, cudaMemcpyDeviceToDevice, io_stream);
+        snapshot->staging.x, source_x, component_bytes, cudaMemcpyDeviceToDevice, io_stream);
     if (err != cudaSuccess) return fail("cudaMemcpyAsync(snapshot.x)", err);
-    err = cudaMemcpyAsync(
-        snapshot->staging.y, field->y, component_bytes, cudaMemcpyDeviceToDevice, io_stream);
-    if (err != cudaSuccess) return fail("cudaMemcpyAsync(snapshot.y)", err);
-    err = cudaMemcpyAsync(
-        snapshot->staging.z, field->z, component_bytes, cudaMemcpyDeviceToDevice, io_stream);
-    if (err != cudaSuccess) return fail("cudaMemcpyAsync(snapshot.z)", err);
+    if (!scalar_observable) {
+        err = cudaMemcpyAsync(
+            snapshot->staging.y, field->y, component_bytes, cudaMemcpyDeviceToDevice, io_stream);
+        if (err != cudaSuccess) return fail("cudaMemcpyAsync(snapshot.y)", err);
+        err = cudaMemcpyAsync(
+            snapshot->staging.z, field->z, component_bytes, cudaMemcpyDeviceToDevice, io_stream);
+        if (err != cudaSuccess) return fail("cudaMemcpyAsync(snapshot.z)", err);
+    }
 
     err = cudaEventRecord(staging_done_event, io_stream);
     if (err != cudaSuccess) return fail("cudaEventRecord(snapshot.staging_done_event)", err);
@@ -3314,20 +3422,22 @@ AsyncFieldSnapshot *context_begin_async_field_snapshot(
         cudaMemcpyDeviceToHost,
         io_stream);
     if (err != cudaSuccess) return fail("cudaMemcpyAsync(snapshot.host_x)", err);
-    err = cudaMemcpyAsync(
-        host_bytes + component_bytes,
-        snapshot->staging.y,
-        component_bytes,
-        cudaMemcpyDeviceToHost,
-        io_stream);
-    if (err != cudaSuccess) return fail("cudaMemcpyAsync(snapshot.host_y)", err);
-    err = cudaMemcpyAsync(
-        host_bytes + (component_bytes * 2u),
-        snapshot->staging.z,
-        component_bytes,
-        cudaMemcpyDeviceToHost,
-        io_stream);
-    if (err != cudaSuccess) return fail("cudaMemcpyAsync(snapshot.host_z)", err);
+    if (!scalar_observable) {
+        err = cudaMemcpyAsync(
+            host_bytes + component_bytes,
+            snapshot->staging.y,
+            component_bytes,
+            cudaMemcpyDeviceToHost,
+            io_stream);
+        if (err != cudaSuccess) return fail("cudaMemcpyAsync(snapshot.host_y)", err);
+        err = cudaMemcpyAsync(
+            host_bytes + (component_bytes * 2u),
+            snapshot->staging.z,
+            component_bytes,
+            cudaMemcpyDeviceToHost,
+            io_stream);
+        if (err != cudaSuccess) return fail("cudaMemcpyAsync(snapshot.host_z)", err);
+    }
 
     err = cudaEventRecord(done_event, io_stream);
     if (err != cudaSuccess) return fail("cudaEventRecord(snapshot.done_event)", err);
@@ -3362,7 +3472,7 @@ bool context_wait_async_field_snapshot(
     *out_data = snapshot.host_soa;
     out_len_bytes = static_cast<uint64_t>(snapshot.host_soa_len_bytes);
     out_desc.cell_count = snapshot.cell_count;
-    out_desc.component_count = 3;
+    out_desc.component_count = snapshot.component_count;
     out_desc.scalar_bytes =
         snapshot.precision == FULLMAG_FDM_PRECISION_SINGLE ? 4u : 8u;
     out_desc.scalar_type =
@@ -3833,6 +3943,56 @@ static bool context_refresh_anisotropy_observable(Context &ctx) {
         return false;
     }
     return true;
+}
+
+bool context_refresh_energy_density_observable(
+    Context &ctx,
+    fullmag_fdm_observable observable)
+{
+    if (!is_energy_density_observable(observable)) {
+        ctx.last_error = "unsupported energy density observable";
+        return false;
+    }
+
+    ctx.last_error.clear();
+    const bool wants_total = observable == FULLMAG_FDM_OBSERVABLE_EDEN_TOTAL;
+    const bool wants_exchange =
+        wants_total || observable == FULLMAG_FDM_OBSERVABLE_EDEN_EX;
+    const bool wants_demag =
+        wants_total || observable == FULLMAG_FDM_OBSERVABLE_EDEN_DEMAG;
+    const bool wants_anisotropy =
+        wants_total || observable == FULLMAG_FDM_OBSERVABLE_EDEN_ANI;
+
+    if (wants_exchange && ctx.enable_exchange) {
+        if (ctx.precision == FULLMAG_FDM_PRECISION_DOUBLE) {
+            launch_exchange_field_fp64(ctx);
+        } else {
+            launch_exchange_field_fp32(ctx);
+        }
+        if (!ctx.last_error.empty()) return false;
+    }
+    if (wants_demag && ctx.enable_demag) {
+        if (ctx.precision == FULLMAG_FDM_PRECISION_DOUBLE) {
+            launch_demag_field_fp64(ctx);
+        } else {
+            launch_demag_field_fp32(ctx);
+        }
+        if (!ctx.last_error.empty()) return false;
+    }
+    if (wants_anisotropy &&
+        (ctx.has_uniaxial_anisotropy || ctx.has_cubic_anisotropy)) {
+        if (!context_refresh_anisotropy_observable(ctx)) return false;
+        // The anisotropy kernels currently use the legacy default stream.
+        // Synchronize it before the scalar kernel is queued on the compute
+        // stream so the materialized value cannot observe stale H_ani data.
+        const cudaError_t err = cudaStreamSynchronize(nullptr);
+        if (err != cudaSuccess) {
+            set_cuda_error(ctx, "cudaStreamSynchronize(anisotropy)", err);
+            return false;
+        }
+    }
+
+    return launch_energy_density_observable(ctx, observable);
 }
 
 } // namespace fdm

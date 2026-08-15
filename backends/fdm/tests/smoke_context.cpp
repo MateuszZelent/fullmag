@@ -146,7 +146,58 @@ int main() {
           "transverse external field snapshot must report nonzero total RHS");
     fullmag_fdm_backend_destroy(no_stats_handle);
 
-    // 7. Accepted-state snapshot keeps field torque separate from direct torque.
+    // 7. Scalar energy-density ABI and component-count=1 async snapshots.
+    fullmag_fdm_plan_desc plan_energy = plan;
+    plan_energy.enable_exchange = 0;
+    plan_energy.enable_demag = 0;
+    plan_energy.has_external_field = 1;
+    plan_energy.external_field_am[0] = 1e5;
+    plan_energy.external_field_am[1] = 0.0;
+    plan_energy.external_field_am[2] = 0.0;
+    plan_energy.stats_mode = FULLMAG_FDM_STATS_NONE;
+    fullmag_fdm_backend *energy_handle = fullmag_fdm_backend_create(&plan_energy);
+    check(energy_handle != nullptr, "backend_create for scalar energy returned NULL");
+    err = fullmag_fdm_backend_last_error(energy_handle);
+    if (err) {
+        std::fprintf(stderr, "Create error for scalar energy: %s\n", err);
+        fullmag_fdm_backend_destroy(energy_handle);
+        return 1;
+    }
+    const double mu0 = 4.0 * std::acos(-1.0) * 1e-7;
+    const double expected_external_density =
+        -mu0 * plan_energy.material.saturation_magnetisation * 1e5;
+    std::vector<double> external_density(cell_count, 0.0);
+    rc = fullmag_fdm_backend_copy_scalar_field_f64(
+        energy_handle,
+        FULLMAG_FDM_OBSERVABLE_EDEN_EXT,
+        external_density.data(),
+        cell_count);
+    check(rc == FULLMAG_FDM_OK, "copy scalar EDEN_EXT failed");
+    for (double value : external_density) {
+        check(std::isfinite(value), "EDEN_EXT must be finite");
+        check(std::fabs(value - expected_external_density) <
+                  1e-8 * std::fabs(expected_external_density),
+              "EDEN_EXT must match the SI external-energy density");
+    }
+    fullmag_fdm_field_snapshot *scalar_snapshot =
+        fullmag_fdm_backend_begin_field_snapshot(
+            energy_handle, FULLMAG_FDM_OBSERVABLE_EDEN_EXT);
+    check(scalar_snapshot != nullptr, "begin scalar field snapshot failed");
+    const void *scalar_data = nullptr;
+    uint64_t scalar_len_bytes = 0;
+    fullmag_fdm_snapshot_desc scalar_desc = {};
+    rc = fullmag_fdm_field_snapshot_wait(
+        scalar_snapshot, &scalar_data, &scalar_len_bytes, &scalar_desc);
+    check(rc == FULLMAG_FDM_OK, "wait scalar field snapshot failed");
+    check(scalar_data != nullptr, "scalar snapshot data must be present");
+    check(scalar_desc.component_count == 1, "scalar snapshot must report one component");
+    check(scalar_desc.scalar_bytes == sizeof(double), "scalar snapshot dtype must be f64");
+    check(scalar_len_bytes == cell_count * sizeof(double),
+          "scalar snapshot byte length must be one value per cell");
+    fullmag_fdm_field_snapshot_destroy(scalar_snapshot);
+    fullmag_fdm_backend_destroy(energy_handle);
+
+    // 8. Accepted-state snapshot keeps field torque separate from direct torque.
     fullmag_fdm_plan_desc plan_direct_torque = plan;
     plan_direct_torque.enable_exchange = 0;
     plan_direct_torque.enable_demag = 0;
@@ -176,7 +227,7 @@ int main() {
           "direct torque must contribute to accepted-state total RHS");
     fullmag_fdm_backend_destroy(direct_torque_handle);
 
-    // 8. Demag-enabled refresh exercises the batched cuFFT workspace/plan path.
+    // 9. Demag-enabled refresh exercises the batched cuFFT workspace/plan path.
     fullmag_fdm_plan_desc plan_demag = plan;
     plan_demag.enable_exchange = 0;
     plan_demag.enable_demag = 1;
@@ -255,7 +306,7 @@ int main() {
           "full-domain H_DEMAG must remain observable in an inactive airbox cell");
     fullmag_fdm_backend_destroy(demag_handle);
 
-    // 9. Destroy
+    // 10. Destroy
     fullmag_fdm_backend_destroy(handle);
     std::printf("Handle destroyed OK\n");
 

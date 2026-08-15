@@ -81,6 +81,14 @@ typedef enum {
     FULLMAG_FDM_OBSERVABLE_H_OE     = 6,
     FULLMAG_FDM_OBSERVABLE_H_DMI    = 7,
     FULLMAG_FDM_OBSERVABLE_H_ANI    = 8,
+    /* Per-cell energy densities [J/m^3]; values are append-only ABI IDs. */
+    FULLMAG_FDM_OBSERVABLE_EDEN_EX    = 9,
+    FULLMAG_FDM_OBSERVABLE_EDEN_DEMAG = 10,
+    FULLMAG_FDM_OBSERVABLE_EDEN_EXT   = 11,
+    FULLMAG_FDM_OBSERVABLE_EDEN_DRIVE = 12,
+    FULLMAG_FDM_OBSERVABLE_EDEN_ANI   = 13,
+    FULLMAG_FDM_OBSERVABLE_EDEN_DMI   = 14,
+    FULLMAG_FDM_OBSERVABLE_EDEN_TOTAL = 15,
 } fullmag_fdm_observable;
 
 typedef enum {
@@ -518,7 +526,7 @@ typedef struct {
 
 typedef struct {
     uint64_t cell_count;
-    uint32_t component_count; /* always 3 for vector fields */
+    uint32_t component_count; /* 3 for vectors, 1 for scalar fields */
     uint32_t scalar_bytes;    /* 4 for f32, 8 for f64 */
     fullmag_fdm_snapshot_scalar_type scalar_type;
 } fullmag_fdm_snapshot_desc;
@@ -597,6 +605,24 @@ int fullmag_fdm_backend_copy_field_f32(
     uint64_t               out_len);
 
 /**
+ * Copy a per-cell scalar energy-density observable from device to host as f64.
+ * `out_len` must equal the backend cell count. Only EDEN_* observables are
+ * valid; scalar values use the canonical unit J/m^3.
+ */
+int fullmag_fdm_backend_copy_scalar_field_f64(
+    fullmag_fdm_backend   *handle,
+    fullmag_fdm_observable observable,
+    double                *out_values,
+    uint64_t               out_len);
+
+/** Copy a per-cell scalar energy-density observable from device to host as f32. */
+int fullmag_fdm_backend_copy_scalar_field_f32(
+    fullmag_fdm_backend   *handle,
+    fullmag_fdm_observable observable,
+    float                 *out_values,
+    uint64_t               out_len);
+
+/**
  * Copy a v2 multilayer layer field observable from device to host as f64.
  * Supports FULLMAG_FDM_OBSERVABLE_M, FULLMAG_FDM_OBSERVABLE_H_EX,
  * FULLMAG_FDM_OBSERVABLE_H_DEMAG, FULLMAG_FDM_OBSERVABLE_H_DMI,
@@ -663,8 +689,9 @@ int fullmag_fdm_backend_copy_field_preview_f32(
  *
  * The snapshot owns its own device staging buffers and pinned host buffer.
  * The payload layout exposed by `fullmag_fdm_field_snapshot_wait` is
- * component-major SoA:
+ * component-major SoA for vector observables:
  *   [x0..xN-1, y0..yN-1, z0..zN-1]
+ * Scalar EDEN_* observables contain one component: [value0..valueN-1].
  *
  * This call schedules:
  *   1. device-to-device snapshot staging on the backend compute/default stream,
