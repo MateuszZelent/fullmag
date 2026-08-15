@@ -184,6 +184,9 @@ __global__ void unpack_demag_fft_fp32_kernel(
     float * __restrict__ hx,
     float * __restrict__ hy,
     float * __restrict__ hz,
+    float * __restrict__ hx_visual,
+    float * __restrict__ hy_visual,
+    float * __restrict__ hz_visual,
     int nx, int ny, int nz,
     int px, int py,
     int has_active_mask,
@@ -199,6 +202,13 @@ __global__ void unpack_demag_fft_fp32_kernel(
     int x = rem - y * nx;
     int src = z * py * px + y * px + x;
 
+    const float hx_value = fx[src].x * normalisation;
+    const float hy_value = fy[src].x * normalisation;
+    const float hz_value = fz[src].x * normalisation;
+    hx_visual[idx] = hx_value;
+    hy_visual[idx] = hy_value;
+    hz_visual[idx] = hz_value;
+
     if (has_active_mask && active_mask[idx] == 0) {
         hx[idx] = 0.0f;
         hy[idx] = 0.0f;
@@ -206,9 +216,9 @@ __global__ void unpack_demag_fft_fp32_kernel(
         return;
     }
 
-    hx[idx] = fx[src].x * normalisation;
-    hy[idx] = fy[src].x * normalisation;
-    hz[idx] = fz[src].x * normalisation;
+    hx[idx] = hx_value;
+    hy[idx] = hy_value;
+    hz[idx] = hz_value;
 }
 
 __global__ void combine_effective_field_fp32_kernel(
@@ -605,6 +615,9 @@ void launch_demag_field_fp32(Context &ctx) {
         static_cast<float*>(ctx.h_demag.x),
         static_cast<float*>(ctx.h_demag.y),
         static_cast<float*>(ctx.h_demag.z),
+        static_cast<float*>(ctx.h_demag_visual.x),
+        static_cast<float*>(ctx.h_demag_visual.y),
+        static_cast<float*>(ctx.h_demag_visual.z),
         static_cast<int>(ctx.nx),
         static_cast<int>(ctx.ny),
         static_cast<int>(ctx.nz),

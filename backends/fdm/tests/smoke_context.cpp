@@ -11,6 +11,7 @@
 
 #include "fullmag_fdm.h"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -180,6 +181,42 @@ int main() {
     plan_demag.enable_exchange = 0;
     plan_demag.enable_demag = 1;
     plan_demag.stats_mode = FULLMAG_FDM_STATS_NONE;
+    std::vector<double> m_demag = m0;
+    const uint64_t inactive_cell = 5u;
+    m_demag[3u * inactive_cell] = 0.0;
+    m_demag[3u * inactive_cell + 1u] = 0.0;
+    m_demag[3u * inactive_cell + 2u] = 0.0;
+    std::vector<uint8_t> demag_active_mask(cell_count, 1u);
+    demag_active_mask[inactive_cell] = 0u;
+    const uint32_t demag_fft_nx = nx * 2u;
+    const uint32_t demag_fft_ny = ny * 2u;
+    const uint32_t demag_fft_nz = nz;
+    const uint64_t demag_fft_cell_count = static_cast<uint64_t>(demag_fft_nx)
+        * demag_fft_ny * demag_fft_nz;
+    std::vector<double> demag_kernel_xx(demag_fft_cell_count * 2u, 0.0);
+    std::vector<double> demag_kernel_yy(demag_fft_cell_count * 2u, 0.0);
+    std::vector<double> demag_kernel_zz(demag_fft_cell_count * 2u, 0.0);
+    std::vector<double> demag_kernel_xy(demag_fft_cell_count * 2u, 0.0);
+    std::vector<double> demag_kernel_xz(demag_fft_cell_count * 2u, 0.0);
+    std::vector<double> demag_kernel_yz(demag_fft_cell_count * 2u, 0.0);
+    for (uint64_t i = 0; i < demag_fft_cell_count; ++i) {
+        demag_kernel_xx[2u * i] = 1.0;
+        demag_kernel_yy[2u * i] = 1.0;
+        demag_kernel_zz[2u * i] = 1.0;
+    }
+    plan_demag.initial_magnetization_xyz = m_demag.data();
+    plan_demag.active_mask = demag_active_mask.data();
+    plan_demag.active_mask_len = cell_count;
+    plan_demag.demag_kernel_xx_spectrum = demag_kernel_xx.data();
+    plan_demag.demag_kernel_yy_spectrum = demag_kernel_yy.data();
+    plan_demag.demag_kernel_zz_spectrum = demag_kernel_zz.data();
+    plan_demag.demag_kernel_xy_spectrum = demag_kernel_xy.data();
+    plan_demag.demag_kernel_xz_spectrum = demag_kernel_xz.data();
+    plan_demag.demag_kernel_yz_spectrum = demag_kernel_yz.data();
+    plan_demag.demag_kernel_spectrum_len = demag_fft_cell_count * 2u;
+    plan_demag.demag_fft_nx = demag_fft_nx;
+    plan_demag.demag_fft_ny = demag_fft_ny;
+    plan_demag.demag_fft_nz = demag_fft_nz;
 
     fullmag_fdm_backend *demag_handle = fullmag_fdm_backend_create(&plan_demag);
     check(demag_handle != nullptr, "backend_create for demag returned NULL");
@@ -200,6 +237,22 @@ int main() {
     for (double value : h_demag) {
         check(std::isfinite(value), "H_DEMAG must stay finite after batched FFT refresh");
     }
+    const double inactive_magnitude = std::fabs(h_demag[3u * inactive_cell])
+        + std::fabs(h_demag[3u * inactive_cell + 1u])
+        + std::fabs(h_demag[3u * inactive_cell + 2u]);
+    std::printf("Inactive H_DEMAG: %.17g %.17g %.17g (sum %.17g)\n",
+                h_demag[3u * inactive_cell], h_demag[3u * inactive_cell + 1u],
+                h_demag[3u * inactive_cell + 2u], inactive_magnitude);
+    double max_magnitude = 0.0;
+    for (uint64_t i = 0; i < cell_count; ++i) {
+        max_magnitude = std::max(max_magnitude,
+                                 std::fabs(h_demag[3u * i])
+                                     + std::fabs(h_demag[3u * i + 1u])
+                                     + std::fabs(h_demag[3u * i + 2u]));
+    }
+    std::printf("Maximum H_DEMAG magnitude: %.17g\n", max_magnitude);
+    check(inactive_magnitude > 1e-20,
+          "full-domain H_DEMAG must remain observable in an inactive airbox cell");
     fullmag_fdm_backend_destroy(demag_handle);
 
     // 9. Destroy

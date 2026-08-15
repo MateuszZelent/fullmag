@@ -1382,6 +1382,7 @@ bool context_alloc_device(Context &ctx) {
     if (!alloc_vector_field(ctx, ctx.m))    return false;
     if (!alloc_vector_field(ctx, ctx.h_ex)) return false;
     if (!alloc_vector_field(ctx, ctx.h_demag)) return false;
+    if (!alloc_vector_field(ctx, ctx.h_demag_visual)) return false;
     if (!alloc_vector_field(ctx, ctx.h_ani)) return false;
     if (!alloc_vector_field(ctx, ctx.k1))   return false;
     if (!alloc_vector_field(ctx, ctx.tmp))  return false;
@@ -1440,6 +1441,9 @@ bool context_alloc_device(Context &ctx) {
     cudaMemset(ctx.h_demag.x, 0, bytes);
     cudaMemset(ctx.h_demag.y, 0, bytes);
     cudaMemset(ctx.h_demag.z, 0, bytes);
+    cudaMemset(ctx.h_demag_visual.x, 0, bytes);
+    cudaMemset(ctx.h_demag_visual.y, 0, bytes);
+    cudaMemset(ctx.h_demag_visual.z, 0, bytes);
     cudaMemset(ctx.h_ani.x, 0, bytes);
     cudaMemset(ctx.h_ani.y, 0, bytes);
     cudaMemset(ctx.h_ani.z, 0, bytes);
@@ -1462,6 +1466,7 @@ void context_free_device(Context &ctx) {
     free_vector_field(ctx.m);
     free_vector_field(ctx.h_ex);
     free_vector_field(ctx.h_demag);
+    free_vector_field(ctx.h_demag_visual);
     free_vector_field(ctx.h_ani);
     free_vector_field(ctx.k1);
     free_vector_field(ctx.tmp);
@@ -2564,7 +2569,14 @@ static bool context_download_field_impl(
     switch (observable) {
         case FULLMAG_FDM_OBSERVABLE_M: field = &ctx.m; break;
         case FULLMAG_FDM_OBSERVABLE_H_EX: field = &ctx.h_ex; break;
-        case FULLMAG_FDM_OBSERVABLE_H_DEMAG: field = &ctx.h_demag; break;
+        case FULLMAG_FDM_OBSERVABLE_H_DEMAG:
+            if (ctx.h_demag_visual.x == nullptr || ctx.h_demag_visual.y == nullptr ||
+                ctx.h_demag_visual.z == nullptr) {
+                ctx.last_error = "demag_visual_buffer_unavailable";
+                return false;
+            }
+            field = &ctx.h_demag_visual;
+            break;
         case FULLMAG_FDM_OBSERVABLE_H_ANI: field = &ctx.h_ani; break;
         case FULLMAG_FDM_OBSERVABLE_H_EFF: field = &ctx.work; break;
         case FULLMAG_FDM_OBSERVABLE_H_OE: {
@@ -2917,7 +2929,12 @@ static bool context_download_field_preview_impl(
             field = &ctx.h_ex;
             break;
         case FULLMAG_FDM_OBSERVABLE_H_DEMAG:
-            field = &ctx.h_demag;
+            if (ctx.h_demag_visual.x == nullptr || ctx.h_demag_visual.y == nullptr ||
+                ctx.h_demag_visual.z == nullptr) {
+                ctx.last_error = "demag_visual_buffer_unavailable";
+                return false;
+            }
+            field = &ctx.h_demag_visual;
             break;
         case FULLMAG_FDM_OBSERVABLE_H_ANI:
             field = &ctx.h_ani;
@@ -3166,7 +3183,11 @@ AsyncFieldSnapshot *context_begin_async_field_snapshot(
             field = &ctx.h_ex;
             break;
         case FULLMAG_FDM_OBSERVABLE_H_DEMAG:
-            field = &ctx.h_demag;
+            if (ctx.h_demag_visual.x == nullptr || ctx.h_demag_visual.y == nullptr ||
+                ctx.h_demag_visual.z == nullptr) {
+                return fail_message("demag_visual_buffer_unavailable");
+            }
+            field = &ctx.h_demag_visual;
             break;
         case FULLMAG_FDM_OBSERVABLE_H_ANI:
             if (!context_refresh_anisotropy_observable(ctx)) {
@@ -3429,7 +3450,11 @@ AsyncPreviewSnapshot *context_begin_async_preview_snapshot(
             field = &ctx.h_ex;
             break;
         case FULLMAG_FDM_OBSERVABLE_H_DEMAG:
-            field = &ctx.h_demag;
+            if (ctx.h_demag_visual.x == nullptr || ctx.h_demag_visual.y == nullptr ||
+                ctx.h_demag_visual.z == nullptr) {
+                return fail_message("demag_visual_buffer_unavailable");
+            }
+            field = &ctx.h_demag_visual;
             break;
         case FULLMAG_FDM_OBSERVABLE_H_ANI:
             if (!context_refresh_anisotropy_observable(ctx)) {

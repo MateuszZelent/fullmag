@@ -258,6 +258,9 @@ struct Context {
     DeviceVectorField m;      // magnetization
     DeviceVectorField h_ex;   // exchange field
     DeviceVectorField h_demag;// demag field
+    // Full-domain observable demag field. Unlike h_demag, this is never
+    // masked by active_mask and is not consumed by the LLG hot loop.
+    DeviceVectorField h_demag_visual;
     DeviceVectorField h_ani;  // anisotropy field
     DeviceVectorField k1;     // RHS stage 1 (all integrators)
     DeviceVectorField tmp;    // predictor state / scratch

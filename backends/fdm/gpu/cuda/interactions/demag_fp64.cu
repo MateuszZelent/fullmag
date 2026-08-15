@@ -197,6 +197,9 @@ __global__ void unpack_demag_fft_fp64_kernel(
     double * __restrict__ hx,
     double * __restrict__ hy,
     double * __restrict__ hz,
+    double * __restrict__ hx_visual,
+    double * __restrict__ hy_visual,
+    double * __restrict__ hz_visual,
     int nx, int ny, int nz,
     int px, int py,
     int has_active_mask,
@@ -212,6 +215,13 @@ __global__ void unpack_demag_fft_fp64_kernel(
     int x = rem - y * nx;
     int src = z * py * px + y * px + x;
 
+    const double hx_value = fx[src].x * normalisation;
+    const double hy_value = fy[src].x * normalisation;
+    const double hz_value = fz[src].x * normalisation;
+    hx_visual[idx] = hx_value;
+    hy_visual[idx] = hy_value;
+    hz_visual[idx] = hz_value;
+
     if (has_active_mask && active_mask[idx] == 0) {
         hx[idx] = 0.0;
         hy[idx] = 0.0;
@@ -219,9 +229,9 @@ __global__ void unpack_demag_fft_fp64_kernel(
         return;
     }
 
-    hx[idx] = fx[src].x * normalisation;
-    hy[idx] = fy[src].x * normalisation;
-    hz[idx] = fz[src].x * normalisation;
+    hx[idx] = hx_value;
+    hy[idx] = hy_value;
+    hz[idx] = hz_value;
 }
 
 __global__ void combine_effective_field_fp64_kernel(
@@ -625,6 +635,9 @@ void launch_demag_field_fp64(Context &ctx) {
         static_cast<double*>(ctx.h_demag.x),
         static_cast<double*>(ctx.h_demag.y),
         static_cast<double*>(ctx.h_demag.z),
+        static_cast<double*>(ctx.h_demag_visual.x),
+        static_cast<double*>(ctx.h_demag_visual.y),
+        static_cast<double*>(ctx.h_demag_visual.z),
         static_cast<int>(ctx.nx),
         static_cast<int>(ctx.ny),
         static_cast<int>(ctx.nz),
@@ -640,6 +653,20 @@ void launch_demag_field_fp64(Context &ctx) {
             static_cast<double*>(ctx.h_demag.x),
             static_cast<double*>(ctx.h_demag.y),
             static_cast<double*>(ctx.h_demag.z),
+            static_cast<const double*>(ctx.m.x),
+            static_cast<const double*>(ctx.m.y),
+            static_cast<const double*>(ctx.m.z),
+            ctx.volume_fraction,
+            ctx.demag_corr_target_idx,
+            ctx.demag_corr_source_idx,
+            ctx.demag_corr_tensor,
+            ctx.Ms,
+            ctx.demag_corr_target_count,
+            ctx.demag_corr_stencil_size);
+        demag_boundary_correction_fp64_kernel<<<corr_grid, BLOCK_SIZE, 0, stream>>>(
+            static_cast<double*>(ctx.h_demag_visual.x),
+            static_cast<double*>(ctx.h_demag_visual.y),
+            static_cast<double*>(ctx.h_demag_visual.z),
             static_cast<const double*>(ctx.m.x),
             static_cast<const double*>(ctx.m.y),
             static_cast<const double*>(ctx.m.z),

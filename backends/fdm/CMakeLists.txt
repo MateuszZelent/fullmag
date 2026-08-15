@@ -643,6 +643,9 @@ endif()
 add_test(NAME fdm_cpu_oersted_fft_public_abi_contract
          COMMAND fdm_cpu_oersted_fft_public_abi_contract)
 
+add_executable(demag_observable_contract tests/demag_observable_contract.cpp)
+add_test(NAME fdm_demag_observable_contract COMMAND demag_observable_contract)
+
 if(FULLMAG_ENABLE_CUDA)
     add_executable(smoke_context tests/smoke_context.cpp)
     target_link_libraries(smoke_context PRIVATE fullmag_fdm)
