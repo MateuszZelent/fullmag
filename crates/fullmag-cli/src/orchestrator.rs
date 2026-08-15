@@ -2075,6 +2075,13 @@ fn frequency_response_terminal_progress_bar(percent: f64) -> String {
     format!("[{}{}]", "#".repeat(filled), "-".repeat(empty))
 }
 
+fn format_average_magnetization(stats: &fullmag_runner::StepStats) -> String {
+    format!(
+        "m_avg=(mx={:.4e} my={:.4e} mz={:.4e})",
+        stats.mx, stats.my, stats.mz
+    )
+}
+
 fn format_stage_progress_line(
     prefix: &str,
     stats: &fullmag_runner::StepStats,
@@ -2097,9 +2104,10 @@ fn format_stage_progress_line(
     let hysteresis_field = hysteresis_field_m_t
         .map(|value| format!("  H={value:.3}mT"))
         .unwrap_or_default();
+    let average_magnetization = format_average_magnetization(stats);
     if let Some(age) = heartbeat_age {
         let mut line = format!(
-            "{prefix}  heartbeat  step {:>6}  t={:.4e}  dt={:.3e}  max_torque[T]={:.4e}  E_total={:.4e}  |H_eff|={:.4e}{hysteresis_field}  idle={:.1}s  [{:.0}ms]",
+            "{prefix}  heartbeat  step {:>6}  t={:.4e}  dt={:.3e}  max_torque[T]={:.4e}  E_total={:.4e}  |H_eff|={:.4e}  {average_magnetization}{hysteresis_field}  idle={:.1}s  [{:.0}ms]",
             stats.step,
             stats.time,
             stats.dt,
@@ -2114,8 +2122,14 @@ fn format_stage_progress_line(
         line
     } else {
         let mut line = format!(
-            "{prefix}  step {:>6}  t={:.4e}  dt={:.3e}  max_torque[T]={:.4e}  E_total={:.4e}  |H_eff|={:.4e}{hysteresis_field}  [{:.0}ms]",
-            stats.step, stats.time, stats.dt, torque_t, stats.e_total, stats.max_h_eff, wall_ms,
+            "{prefix}  step {:>6}  t={:.4e}  dt={:.3e}  max_torque[T]={:.4e}  E_total={:.4e}  |H_eff|={:.4e}  {average_magnetization}{hysteresis_field}  [{:.0}ms]",
+            stats.step,
+            stats.time,
+            stats.dt,
+            torque_t,
+            stats.e_total,
+            stats.max_h_eff,
+            wall_ms,
         );
         append_frequency_response_step_progress(&mut line, stats);
         append_detailed_fem_step_profile(&mut line, stats);
@@ -12467,6 +12481,37 @@ mod tests {
         assert!(detail.contains("range=2.000000-5.000000 GHz"));
         assert!(detail.contains("frequency point 2/7"));
         assert!(detail.contains("GMRES iteration=64"));
+    }
+
+    #[test]
+    fn terminal_step_progress_includes_average_magnetization_components() {
+        let stats = fullmag_runner::StepStats {
+            step: 12,
+            time: 2.5e-12,
+            dt: 1.0e-14,
+            mx: 0.125,
+            my: -0.25,
+            mz: 0.875,
+            max_torque_T: 2.0e-6,
+            e_total: -3.0e-19,
+            max_h_eff: 1.2e5,
+            wall_time_ns: 4_000_000,
+            ..fullmag_runner::StepStats::default()
+        };
+        let expected = "m_avg=(mx=1.2500e-1 my=-2.5000e-1 mz=8.7500e-1)";
+
+        let regular_line =
+            format_stage_progress_line("stage 1/1 (relax)", &stats, None, None, None);
+        let heartbeat_line = format_stage_progress_line(
+            "stage 1/1 (relax)",
+            &stats,
+            None,
+            Some(Duration::from_secs(2)),
+            None,
+        );
+
+        assert!(regular_line.contains(expected), "{regular_line}");
+        assert!(heartbeat_line.contains(expected), "{heartbeat_line}");
     }
 
     #[test]
