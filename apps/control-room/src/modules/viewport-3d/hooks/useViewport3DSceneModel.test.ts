@@ -4555,7 +4555,7 @@ describe("useViewport3DSceneModel", () => {
   it("builds FDM scalar colors from the FDM target palette, not the FEM/global palette", () => {
     const source = readFileSync(sceneModelSourceUrl, "utf8");
     const fdmColorBlock = source.slice(
-      source.indexOf("const fdmTargetViews ="),
+      source.indexOf("const fdmTargetViews:"),
       source.indexOf("const chunkedScalarColors = useViewport3DChunkedScalarColors"),
     );
 
@@ -4566,7 +4566,7 @@ describe("useViewport3DSceneModel", () => {
   it("builds a separate FDM vector color buffer for vector-only colorbars", () => {
     const source = readFileSync(sceneModelSourceUrl, "utf8");
     const fdmVectorColorBlock = source.slice(
-      source.indexOf("const fdmTargetViews ="),
+      source.indexOf("const fdmTargetViews:"),
       source.indexOf("const chunkedScalarColors = useViewport3DChunkedScalarColors"),
     );
 
