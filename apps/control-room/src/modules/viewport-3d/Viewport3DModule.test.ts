@@ -1728,6 +1728,8 @@ describe("Viewport3DModule scene wiring", () => {
     );
     expect(source).toContain("data-fdm-airbox-model-count");
     expect(source).toContain("data-fdm-airbox-vector-segment-count");
+    expect(source).toContain("data-fdm-airbox-points-visible");
+    expect(source).toContain("airboxDisplaySettings.pointsVisible");
     expect(source).toContain("data-fdm-airbox-wireframe-visible");
     expect(source).toContain("data-fdm-airbox-vectors-visible");
   });
@@ -1977,7 +1979,7 @@ describe("Viewport3DModule scene wiring", () => {
     );
   });
 
-  it("exposes the FDM universe overlay as a distinct optional target with its own legend", () => {
+  it("exposes the FDM universe carrier through the canonical Airbox display target", () => {
     const source = readFileSync(
       new URL("./Viewport3DModule.tsx", import.meta.url),
       "utf8",
@@ -1985,11 +1987,11 @@ describe("Viewport3DModule scene wiring", () => {
 
     expect(source).toContain('aria-label="Airbox overlay"');
     expect(source).toMatch(/\n\s+Airbox\n/);
-    expect(source).toContain("fdmUniverseOutsideSupportSettings?.visible");
-    expect(source).toContain(
+    expect(source).toContain("sceneProps.airboxSettings.visible");
+    expect(source).toContain("patchTarget(AIRBOX_VISUALIZATION_TARGET");
+    expect(source).not.toContain(
       "patchTarget(FDM_UNIVERSE_OUTSIDE_SUPPORT_TARGET",
     );
-    expect(source).not.toContain("patchTarget(AIRBOX_VISUALIZATION_TARGET");
     expect(source).toContain("legend.magneticSupport");
     expect(source).toContain("legend.outsideSupport");
     expect(source).toContain('className="fm-viewport-3d__airbox-legend"');

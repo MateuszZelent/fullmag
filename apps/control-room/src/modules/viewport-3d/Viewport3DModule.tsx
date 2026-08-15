@@ -52,7 +52,7 @@ import { WorkspaceRenderProfiler } from "@/kernel/performance/reactRenderProfile
 import { recordVisualizationDebugResourceCounts } from "@/kernel/performance/visualizationDebugPerformanceProbe";
 import type { ModuleProps } from "@/kernel/types";
 import {
-  FDM_UNIVERSE_OUTSIDE_SUPPORT_TARGET,
+  AIRBOX_VISUALIZATION_TARGET,
   surfaceColorSourceToColorMode,
   type VisualizationTargetRef,
   type VisualizationTargetSettings,
@@ -1430,7 +1430,7 @@ export default function Viewport3DModule({
   }, []);
   const changeFdmUniverseOverlayVisibility = useCallback(
     (visible: boolean) => {
-      kernel.visualization.patchTarget(FDM_UNIVERSE_OUTSIDE_SUPPORT_TARGET, {
+      kernel.visualization.patchTarget(AIRBOX_VISUALIZATION_TARGET, {
         visible,
       });
     },
@@ -2162,6 +2162,11 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
       airboxDisplaySettings.wireframeVisible &&
       airboxModelCount > 0,
   );
+  const airboxPointsVisible = Boolean(
+    airboxDisplaySettings.visible &&
+      airboxDisplaySettings.pointsVisible &&
+      airboxModelCount > 0,
+  );
   const airboxVectorsVisible = Boolean(
     airboxDisplaySettings.visible &&
       airboxDisplaySettings.vectorsVisible &&
@@ -2204,6 +2209,7 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
       data-fdm-airbox-vector-length-scale={String(
         airboxDisplaySettings.vectorLengthScale,
       )}
+      data-fdm-airbox-points-visible={airboxPointsVisible ? "true" : "false"}
       data-fdm-airbox-wireframe-visible={airboxWireframeVisible ? "true" : "false"}
       data-fdm-airbox-vectors-visible={airboxVectorsVisible ? "true" : "false"}
       data-inspect-enabled={sceneProps.inspectEnabled ? "true" : "false"}
@@ -2305,24 +2311,24 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
           >
             <Button
               aria-pressed={Boolean(
-                sceneProps.fdmUniverseOutsideSupportSettings?.visible,
+                sceneProps.airboxSettings.visible,
               )}
               size="sm"
               type="button"
               variant={
-                sceneProps.fdmUniverseOutsideSupportSettings?.visible
+                sceneProps.airboxSettings.visible
                   ? "primary"
                   : "secondary"
               }
               onClick={() =>
                 onFdmUniverseOverlayVisibilityChange(
-                  !sceneProps.fdmUniverseOutsideSupportSettings?.visible,
+                  !sceneProps.airboxSettings.visible,
                 )
               }
             >
               Airbox
             </Button>
-            {sceneProps.fdmUniverseOutsideSupportSettings?.visible ? (
+            {sceneProps.airboxSettings.visible ? (
               <span
                 aria-label={`${sceneProps.fdmUniverseOutsideSupport.legend.magneticSupport} · ${sceneProps.fdmUniverseOutsideSupport.legend.outsideSupport}`}
                 className="fm-viewport-3d__airbox-legend"

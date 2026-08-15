@@ -62,7 +62,7 @@ async function main() {
       nodeId: "model:airbox:visualization",
       parentNodeIds: ["model:airbox"],
       inspectorOwner: "airbox.visualization",
-      targetId: "fdm-universe-outside-support",
+      targetId: "airbox",
     },
     object: {
       debugInspectorOwner: "object.visualization.debug",
@@ -135,7 +135,7 @@ async function main() {
     setPhase("airbox-quantity-gate");
     const airboxMagnetization = await assertAirboxMagnetizationUnavailable({ page, explorerTargets, scopes });
     setPhase("airbox-display-preflight");
-    const airboxDisplay = await ensureFdmAirboxWireframe({ page, explorerTargets });
+    const airboxDisplay = await exerciseFdmAirboxRenderModes({ artifactDir, page, explorerTargets });
     setPhase("airbox-field-switches");
     for (const [scope, quantityId] of [["airbox", "H_demag"], ["airbox", "H_eff"]]) {
       switches.push(await switchInspectorQuantity({ page, explorerTargets, quantityId, responses, scope, scopes }));
@@ -312,7 +312,7 @@ async function assertAirboxMagnetizationUnavailable({ page, explorerTargets, sco
   return { option_count: count, disabled };
 }
 
-async function ensureFdmAirboxWireframe({ page, explorerTargets }) {
+async function exerciseFdmAirboxRenderModes({ artifactDir, page, explorerTargets }) {
   const inspector = await selectExplorerVisualizationTarget(page, explorerTargets.airbox);
   const visibility = inspector.getByRole("button", {
     name: "Toggle target visibility",
@@ -322,6 +322,27 @@ async function ensureFdmAirboxWireframe({ page, explorerTargets }) {
   if (await visibility.getAttribute("aria-pressed") !== "true") {
     await visibility.click({ timeout: timeoutMs });
   }
+  const points = inspector.getByRole("radio", {
+    name: "Points",
+    exact: true,
+  });
+  await points.waitFor({ state: "visible", timeout: timeoutMs });
+  if (await points.getAttribute("aria-checked") !== "true") {
+    await points.click({ timeout: timeoutMs });
+  }
+  const pointsRender = await poll("FDM Airbox points target", async () => {
+    const [targetId, pointsActive] = await page.locator(".fm-viewport-3d").evaluate((node) => [
+      node.getAttribute("data-fdm-airbox-target"),
+      node.getAttribute("data-fdm-airbox-points-visible"),
+    ]);
+    return targetId === "airbox" && pointsActive === "true"
+      ? { target_id: targetId, points_visible: pointsActive }
+      : null;
+  });
+  const pointsScreenshotPath = `${artifactDir}/fdm-airbox-points-on.png`;
+  const pointsScreenshot = await page.locator(canvasSelector).screenshot({
+    path: pointsScreenshotPath,
+  });
   const wireframe = inspector.getByRole("radio", {
     name: "Wireframe",
     exact: true,
@@ -330,24 +351,64 @@ async function ensureFdmAirboxWireframe({ page, explorerTargets }) {
   if (await wireframe.getAttribute("aria-checked") !== "true") {
     await wireframe.click({ timeout: timeoutMs });
   }
-  await poll("FDM Airbox wireframe target", async () => {
+  const wireframeRender = await poll("FDM Airbox wireframe target", async () => {
     const [targetId, wireframeActive] = await page.locator(".fm-viewport-3d").evaluate((node) => [
       node.getAttribute("data-fdm-airbox-target"),
       node.getAttribute("data-fdm-airbox-wireframe-visible"),
     ]);
-    return targetId === "fdm-universe-outside-support" && wireframeActive === "true"
+    return targetId === "airbox" && wireframeActive === "true"
       ? { target_id: targetId, wireframe_visible: wireframeActive }
       : null;
   });
+  const wireframeScreenshotPath = `${artifactDir}/fdm-airbox-wireframe-on.png`;
+  const wireframeScreenshot = await page.locator(canvasSelector).screenshot({
+    path: wireframeScreenshotPath,
+  });
+  const off = inspector.getByRole("radio", {
+    name: "Off",
+    exact: true,
+  });
+  await off.click({ timeout: timeoutMs });
+  const offRender = await poll("FDM Airbox wireframe off target", async () => {
+    const values = await page.locator(".fm-viewport-3d").evaluate((node) => ({
+      points_visible: node.getAttribute("data-fdm-airbox-points-visible"),
+      target_id: node.getAttribute("data-fdm-airbox-target"),
+      wireframe_visible: node.getAttribute("data-fdm-airbox-wireframe-visible"),
+    }));
+    return values.target_id === "airbox"
+      && values.points_visible === "false"
+      && values.wireframe_visible === "false"
+      ? values
+      : null;
+  });
+  const offScreenshotPath = `${artifactDir}/fdm-airbox-wireframe-off.png`;
+  const offScreenshot = await page.locator(canvasSelector).screenshot({
+    path: offScreenshotPath,
+  });
   return {
-    target_id: "fdm-universe-outside-support",
+    target_id: "airbox",
+    points_render: pointsRender,
+    points_screenshot: {
+      path: pointsScreenshotPath,
+      sha256: createHash("sha256").update(pointsScreenshot).digest("hex"),
+    },
+    wireframe_render: wireframeRender,
+    wireframe_screenshot: {
+      path: wireframeScreenshotPath,
+      sha256: createHash("sha256").update(wireframeScreenshot).digest("hex"),
+    },
+    off_render: offRender,
+    off_screenshot: {
+      path: offScreenshotPath,
+      sha256: createHash("sha256").update(offScreenshot).digest("hex"),
+    },
     visibility_pressed: await visibility.getAttribute("aria-pressed"),
-    wireframe_checked: await wireframe.getAttribute("aria-checked"),
+    wireframe_checked_after_off: await wireframe.getAttribute("aria-checked"),
   };
 }
 
 async function assertFdmAirboxVectorRender({ page }) {
-  return poll("FDM Airbox wireframe and vector render adoption", async () => {
+  return poll("FDM Airbox vector-only render adoption", async () => {
     const values = await page.locator(".fm-viewport-3d").evaluate((node) => ({
       target_id: node.getAttribute("data-fdm-airbox-target"),
       model_count: Number(node.getAttribute("data-fdm-airbox-model-count") ?? 0),
@@ -355,8 +416,8 @@ async function assertFdmAirboxVectorRender({ page }) {
       wireframe_visible: node.getAttribute("data-fdm-airbox-wireframe-visible"),
       vectors_visible: node.getAttribute("data-fdm-airbox-vectors-visible"),
     }));
-    return values.target_id === "fdm-universe-outside-support"
-      && values.wireframe_visible === "true"
+    return values.target_id === "airbox"
+      && values.wireframe_visible === "false"
       && values.vectors_visible === "true"
       && values.model_count > 0
       && values.vector_segment_count > 0

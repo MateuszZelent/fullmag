@@ -1791,6 +1791,19 @@ fn live_api_publish_enabled(port: u16) -> bool {
     port != 0
 }
 
+pub(crate) fn full_field_materialization_request(
+    mut request: fullmag_runner::LivePreviewRequest,
+) -> fullmag_runner::LivePreviewRequest {
+    request.component = "3D".to_string();
+    request.layer = 0;
+    request.all_layers = true;
+    request.x_chosen_size = 0;
+    request.y_chosen_size = 0;
+    request.auto_scale_enabled = false;
+    request.max_points = 0;
+    request
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
@@ -1799,14 +1812,14 @@ mod tests {
 
     use super::{
         apply_python_progress_event, bootstrap_live_state, clear_cached_preview_fields,
-        fem_mesh_payload_clone_count, ingest_preview_fields_from_update, live_api_publish_enabled,
-        merge_detailed_mesh_workspace, merge_pending_publish_payload, merge_preview_field_payloads,
-        publish_pending_scalar_rows, replace_cached_preview_fields,
-        reset_fem_mesh_payload_clone_count, scalar_candidate_from_workspace_state,
-        table_autosave_sample_due, upsert_cached_preview_field, CurrentLivePublisher,
-        CurrentLiveScalarRow, CurrentLiveSnapshotPayload, LivePublishSink,
-        LiveTelemetryPublishGate, LocalLiveWorkspace, LocalLiveWorkspaceState, PendingScalarRows,
-        ScalarSequenceKey,
+        fem_mesh_payload_clone_count, full_field_materialization_request,
+        ingest_preview_fields_from_update, live_api_publish_enabled, merge_detailed_mesh_workspace,
+        merge_pending_publish_payload, merge_preview_field_payloads, publish_pending_scalar_rows,
+        replace_cached_preview_fields, reset_fem_mesh_payload_clone_count,
+        scalar_candidate_from_workspace_state, table_autosave_sample_due,
+        upsert_cached_preview_field, CurrentLivePublisher, CurrentLiveScalarRow,
+        CurrentLiveSnapshotPayload, LivePublishSink, LiveTelemetryPublishGate, LocalLiveWorkspace,
+        LocalLiveWorkspaceState, PendingScalarRows, ScalarSequenceKey,
     };
     use crate::simulation_preparation::{
         PreparationStageId, PreparationStageStatus, SimulationPreparationState,
@@ -1822,6 +1835,32 @@ mod tests {
     fn headless_zero_api_port_disables_live_http_publication() {
         assert!(!live_api_publish_enabled(0));
         assert!(live_api_publish_enabled(8081));
+    }
+
+    #[test]
+    fn full_field_materialization_request_disables_display_downsampling() {
+        let request = full_field_materialization_request(fullmag_runner::LivePreviewRequest {
+            revision: 17,
+            quantity: "H_demag".to_string(),
+            component: "z".to_string(),
+            layer: 9,
+            all_layers: false,
+            every_n: 50,
+            x_chosen_size: 64,
+            y_chosen_size: 32,
+            auto_scale_enabled: true,
+            max_points: 16_384,
+        });
+
+        assert_eq!(request.revision, 17);
+        assert_eq!(request.quantity, "H_demag");
+        assert_eq!(request.component, "3D");
+        assert_eq!(request.layer, 0);
+        assert!(request.all_layers);
+        assert_eq!(request.x_chosen_size, 0);
+        assert_eq!(request.y_chosen_size, 0);
+        assert!(!request.auto_scale_enabled);
+        assert_eq!(request.max_points, 0);
     }
 
     fn preview_field(quantity: &str, revision: u64, z: f64) -> fullmag_runner::LivePreviewField {

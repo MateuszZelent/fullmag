@@ -189,7 +189,6 @@ interface Viewport3DSceneProps {
   fdmMultilayerAirboxBuildKey: string | null;
   fdmMultilayerAirboxBuildStatus: string;
   fdmUniverseOutsideSupport: FdmUniverseOutsideSupportOverlayModel | null;
-  fdmUniverseOutsideSupportSettings: VisualizationTargetSettings | null;
   fdmInstanceModel: FdmCuboidInstanceModel | null | undefined;
   availableQuantityIds?: ReadonlySet<string> | null;
   fdmNativeLayerViews: readonly FdmNativeLayerRenderView[];
@@ -839,6 +838,7 @@ function Viewport3DProjectionStack({
 }
 
 function Viewport3DOverlayLayerStack({
+  airboxSettings,
   bounds,
   cameraProjection,
   cameraState,
@@ -855,7 +855,6 @@ function Viewport3DOverlayLayerStack({
   fdmDomain,
   fdmMultilayerAirboxView,
   fdmUniverseOutsideSupport,
-  fdmUniverseOutsideSupportSettings,
   fdmSettings,
   materialProfile,
   onSelectDomain,
@@ -868,6 +867,7 @@ function Viewport3DOverlayLayerStack({
   tracker,
 }: Pick<
   Viewport3DSceneProps,
+  | "airboxSettings"
   | "bounds"
   | "cameraProjection"
   | "cameraState"
@@ -884,7 +884,6 @@ function Viewport3DOverlayLayerStack({
   | "fdmDomain"
   | "fdmMultilayerAirboxView"
   | "fdmUniverseOutsideSupport"
-  | "fdmUniverseOutsideSupportSettings"
   | "fdmSettings"
   | "onSelectDomain"
   | "onSelectFdmTarget"
@@ -954,7 +953,7 @@ function Viewport3DOverlayLayerStack({
                 : null
             }
             onSelect={onSelectFdmUniverseOutsideSupport}
-            settings={fdmUniverseOutsideSupportSettings}
+            settings={airboxSettings}
             tracker={tracker}
           />
           <FdmMultilayerAirboxBoundsLayer
@@ -1650,7 +1649,6 @@ export function Viewport3DScene({
   airboxSettings,
   fdmDomain,
   fdmUniverseOutsideSupport,
-  fdmUniverseOutsideSupportSettings,
   fdmAirboxVectorGlyphColors,
   fdmAirboxVectorBuildReference,
   fdmAirboxVectorSegments,
@@ -1953,7 +1951,7 @@ export function Viewport3DScene({
         fdmDomain={fdmDomain}
         fdmMultilayerAirboxView={fdmMultilayerAirboxView}
         fdmUniverseOutsideSupport={fdmUniverseOutsideSupport}
-        fdmUniverseOutsideSupportSettings={fdmUniverseOutsideSupportSettings}
+        airboxSettings={airboxSettings}
         fdmSettings={fdmSettings}
         materialProfile={materialProfile}
         onSelectDomain={onSelectDomain}

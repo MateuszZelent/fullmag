@@ -435,7 +435,8 @@ describe("FdmCuboidLayer model", () => {
     expect(sceneModelSource).toContain('cellSelection: "inactive"');
     expect(sceneModelSource).toContain("fdmAirboxInstanceModel");
     expect(sceneSource).toContain("fdmAirboxInstanceModel: FdmCuboidInstanceModel");
-    expect(sceneSource).toContain("settings={fdmUniverseOutsideSupportSettings}");
+    expect(sceneSource).toContain("settings={airboxSettings}");
+    expect(sceneSource).not.toContain("settings={fdmUniverseOutsideSupportSettings}");
   });
 
   it("keeps native multilayer and Airbox surface colors independent from shader visibility", () => {
