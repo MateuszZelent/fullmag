@@ -391,6 +391,12 @@ export function physicsFirstResultsSnapshotFromResources(
   const resultManifest = input.manifest?.result_manifest;
   const payload = ready(resultManifest) ? record(resultManifest?.payload) : null;
   const contractGaps: string[] = [...(input.contractGaps ?? [])];
+  const contractGapSet = new Set(contractGaps);
+  const addContractGap = (gap: string) => {
+    if (contractGapSet.has(gap)) return;
+    contractGapSet.add(gap);
+    contractGaps.push(gap);
+  };
   const postprocessing =
     input.artifacts || input.tableCatalog
       ? {
@@ -412,10 +418,10 @@ export function physicsFirstResultsSnapshotFromResources(
   const requested = record(payload.requested_execution);
   const boundaryContext = nonEmptyString(requested?.boundary_context);
   if (!equilibriumId) {
-    contractGaps.push("Frequency-domain artifact does not publish equilibrium_identity");
+    addContractGap("Frequency-domain artifact does not publish equilibrium_identity");
   }
   if (boundaryContext !== "finite_open" && boundaryContext !== "floquet_periodic") {
-    contractGaps.push("Frequency-domain artifact does not publish boundary_context");
+    addContractGap("Frequency-domain artifact does not publish boundary_context");
   }
   if (
     !stageId ||
@@ -430,7 +436,7 @@ export function physicsFirstResultsSnapshotFromResources(
     kSamplingFromMetadata(input.dispersion?.path_metadata) ??
     kSamplingFromRequestedExecution(requested);
   if (boundaryContext === "floquet_periodic" && !kSampling) {
-    contractGaps.push("Periodic/Floquet artifact does not publish a supported k sampling resource");
+    addContractGap("Periodic/Floquet artifact does not publish a supported k sampling resource");
     return {
       contractGaps,
       snapshot: { ...emptySnapshot, contractGaps: [...contractGaps] },
@@ -457,7 +463,7 @@ export function physicsFirstResultsSnapshotFromResources(
     run_id: runId,
   });
   for (const gap of frequencyContext.contractGaps) {
-    if (!contractGaps.includes(gap)) contractGaps.push(gap);
+    addContractGap(gap);
   }
   const drive = frequencyContext.evidence?.drive;
   const entry: PhysicsFirstResultEntry = {

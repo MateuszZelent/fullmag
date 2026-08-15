@@ -22,10 +22,13 @@ import {
   PhysicsFirstResultInspectorPanel,
 } from "./PhysicsFirstResultInspectorPanel";
 
-function renderWithScientificFrame(
-  Panel: ComponentType<InspectorPanelProps>,
-  props: InspectorPanelProps,
-) {
+function ScientificFrameRoute({
+  Panel,
+  props,
+}: {
+  Panel: ComponentType<InspectorPanelProps>;
+  props: InspectorPanelProps;
+}) {
   return (
     <PhysicsFirstResultInspectorFrame selection={props.selection}>
       <Panel {...props} />
@@ -42,23 +45,23 @@ export function ResonanceOverviewResultInspector(props: InspectorPanelProps) {
 }
 
 export function ResonanceModalStageResultInspector(props: InspectorPanelProps) {
-  return renderWithScientificFrame(EigenStudyInspectorPanel, props);
+  return <ScientificFrameRoute Panel={EigenStudyInspectorPanel} props={props} />;
 }
 
 export function ResonanceDrivenStageResultInspector(props: InspectorPanelProps) {
-  return renderWithScientificFrame(FrequencyResponseStudyInspectorPanel, props);
+  return <ScientificFrameRoute Panel={FrequencyResponseStudyInspectorPanel} props={props} />;
 }
 
 export function ResonanceModalSpectrumResultInspector(props: InspectorPanelProps) {
-  return renderWithScientificFrame(EigenSpectrumInspectorPanel, props);
+  return <ScientificFrameRoute Panel={EigenSpectrumInspectorPanel} props={props} />;
 }
 
 export function ResonanceModeShapesResultInspector(props: InspectorPanelProps) {
-  return renderWithScientificFrame(EigenModesInspectorPanel, props);
+  return <ScientificFrameRoute Panel={EigenModesInspectorPanel} props={props} />;
 }
 
 export function ResonanceModalModeResultInspector(props: InspectorPanelProps) {
-  return renderWithScientificFrame(EigenModeInspectorPanel, props);
+  return <ScientificFrameRoute Panel={EigenModeInspectorPanel} props={props} />;
 }
 
 export function ResonanceModalCouplingResultInspector(props: InspectorPanelProps) {
@@ -83,19 +86,19 @@ export function ResonanceDrivenSpectrumResultInspector(props: InspectorPanelProp
 }
 
 export function ResonanceDrivenPeaksResultInspector(props: InspectorPanelProps) {
-  return renderWithScientificFrame(FmrPeaksInspectorPanel, props);
+  return <ScientificFrameRoute Panel={FmrPeaksInspectorPanel} props={props} />;
 }
 
 export function ResonanceFrequencyPointsResultInspector(props: InspectorPanelProps) {
-  return renderWithScientificFrame(FrequencyResponseFrequencyPointsInspectorPanel, props);
+  return <ScientificFrameRoute Panel={FrequencyResponseFrequencyPointsInspectorPanel} props={props} />;
 }
 
 export function ResonanceResponseFieldsResultInspector(props: InspectorPanelProps) {
-  return renderWithScientificFrame(FrequencyResponseFieldsInspectorPanel, props);
+  return <ScientificFrameRoute Panel={FrequencyResponseFieldsInspectorPanel} props={props} />;
 }
 
 export function ResonanceResponseFieldResultInspector(props: InspectorPanelProps) {
-  return renderWithScientificFrame(FrequencyResponsePointInspectorPanel, props);
+  return <ScientificFrameRoute Panel={FrequencyResponsePointInspectorPanel} props={props} />;
 }
 
 export function ResonanceDrivenProvenanceResultInspector(props: InspectorPanelProps) {
@@ -116,31 +119,31 @@ export function DispersionOverviewResultInspector(props: InspectorPanelProps) {
 }
 
 export function DispersionModalStageResultInspector(props: InspectorPanelProps) {
-  return renderWithScientificFrame(EigenStudyInspectorPanel, props);
+  return <ScientificFrameRoute Panel={EigenStudyInspectorPanel} props={props} />;
 }
 
 export function DispersionDrivenStageResultInspector(props: InspectorPanelProps) {
-  return renderWithScientificFrame(FrequencyResponseStudyInspectorPanel, props);
+  return <ScientificFrameRoute Panel={FrequencyResponseStudyInspectorPanel} props={props} />;
 }
 
 export function DispersionKSamplingResultInspector(props: InspectorPanelProps) {
-  return renderWithScientificFrame(EigenKPathInspectorPanel, props);
+  return <ScientificFrameRoute Panel={EigenKPathInspectorPanel} props={props} />;
 }
 
 export function DispersionRelationResultInspector(props: InspectorPanelProps) {
-  return renderWithScientificFrame(EigenDispersionInspectorPanel, props);
+  return <ScientificFrameRoute Panel={EigenDispersionInspectorPanel} props={props} />;
 }
 
 export function DispersionBranchesResultInspector(props: InspectorPanelProps) {
-  return renderWithScientificFrame(EigenBranchesInspectorPanel, props);
+  return <ScientificFrameRoute Panel={EigenBranchesInspectorPanel} props={props} />;
 }
 
 export function DispersionModesAtKResultInspector(props: InspectorPanelProps) {
-  return renderWithScientificFrame(EigenModesInspectorPanel, props);
+  return <ScientificFrameRoute Panel={EigenModesInspectorPanel} props={props} />;
 }
 
 export function DispersionModeAtKResultInspector(props: InspectorPanelProps) {
-  return renderWithScientificFrame(EigenModeInspectorPanel, props);
+  return <ScientificFrameRoute Panel={EigenModeInspectorPanel} props={props} />;
 }
 
 export function DispersionModalProvenanceResultInspector(props: InspectorPanelProps) {
@@ -161,7 +164,7 @@ export function DispersionResponseMapResultInspector(props: InspectorPanelProps)
 }
 
 export function DispersionResponseFieldAtKResultInspector(props: InspectorPanelProps) {
-  return renderWithScientificFrame(FrequencyResponsePointInspectorPanel, props);
+  return <ScientificFrameRoute Panel={FrequencyResponsePointInspectorPanel} props={props} />;
 }
 
 export function DispersionDrivenProvenanceResultInspector(props: InspectorPanelProps) {

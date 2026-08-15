@@ -105,7 +105,11 @@ export function AnalysisPlotsView(props: AnalysisPlotsViewInput) {
     : null;
   const canonicalSubviews = ANALYSIS_SUBVIEWS[surface] as readonly AnalysisSubview[];
   const customSubviews = props.subviews ?? canonicalSubviews;
-  const legalSubviews = customSubviews.filter((subview) => canonicalSubviews.includes(subview));
+  const canonicalSubviewSet = useMemo(
+    () => new Set(canonicalSubviews),
+    [canonicalSubviews],
+  );
+  const legalSubviews = customSubviews.filter((subview) => canonicalSubviewSet.has(subview));
   const subviews = legalSubviews.length > 0 ? legalSubviews : canonicalSubviews;
   const activeSubview = resolveActiveSubview(surface, requestedActiveSubview, subviews);
   const isDynamicStructureFactorSubview = activeSubview === "dynamics.s-k-f";
