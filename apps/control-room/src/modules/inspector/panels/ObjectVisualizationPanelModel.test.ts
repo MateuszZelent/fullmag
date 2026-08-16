@@ -1137,6 +1137,66 @@ describe("ObjectVisualizationPanelModel", () => {
     ).toEqual(["H_demag", "eden_demag"]);
   });
 
+  it("does not reintroduce magnetic-only fields when capability and field catalogs are merged for Airbox", () => {
+    const fieldCatalog = {
+      domain_generation_id: "fdm-generation-1",
+      quantities: [
+        { available: true, domain: "magnetic_only", quantity_id: "m", label: "Magnetization" },
+        { available: true, domain: "full_domain", quantity_id: "H_demag", label: "Demag field" },
+      ],
+      revision: 3,
+    } as FieldCatalogResource;
+    const quantityCatalog = {
+      schema_version: "quantities.v2",
+      quantities: [
+        {
+          capability_state: "supported",
+          description: "Magnetization",
+          domain: "magnetic_only",
+          id: "m",
+          interactive_preview: true,
+          label: "Magnetization",
+          location: "node",
+          materializable: true,
+          materialization_state: "complete",
+          n_comp: 3,
+          normalization_hint: "max_abs",
+          shape: "vector_field",
+          supports_export: true,
+          supports_history: false,
+          supports_preview_2d: true,
+          supports_preview_3d: true,
+          unit: "1",
+        },
+        {
+          capability_state: "supported",
+          description: "Demagnetization field",
+          domain: "full_domain",
+          id: "H_demag",
+          interactive_preview: true,
+          label: "Demag field",
+          location: "node",
+          materializable: true,
+          materialization_state: "complete",
+          n_comp: 3,
+          normalization_hint: "max_abs",
+          shape: "vector_field",
+          supports_export: true,
+          supports_history: false,
+          supports_preview_2d: true,
+          supports_preview_3d: true,
+          unit: "A/m",
+        },
+      ],
+    } as QuantityCatalogResource;
+
+    expect(
+      visualizationQuantityItems("H_demag", "airbox", fieldCatalog, quantityCatalog).map(
+        (item) => item.value,
+      ),
+    ).toEqual(["H_demag"]);
+  });
+
   it("offers only catalog-available full-domain quantities for an Airbox", () => {
     const catalog = {
       domain_generation_id: "fdm-generation-1",

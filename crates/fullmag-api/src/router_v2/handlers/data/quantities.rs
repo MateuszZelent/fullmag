@@ -35,12 +35,13 @@ fn annotate_runtime_quantity_state(
     };
 
     for entry in &mut response.quantities {
-        let supported = capabilities
+        let advertised = capabilities
             .preview_quantities
             .iter()
             .chain(capabilities.snapshot_quantities.iter())
             .filter_map(|id| normalize_quantity_id(id).ok())
             .any(|id| id.as_str() == entry.id);
+        let supported = advertised;
         entry.capability_state = if supported {
             "supported".to_string()
         } else {

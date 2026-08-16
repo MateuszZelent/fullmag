@@ -1368,7 +1368,6 @@ impl NativeFdmBackend {
     pub fn apply_average_m_to_step_stats(&self, stats: &mut StepStats) -> Result<(), RunError> {
         let magnetization = self.copy_m(self.cell_count)?;
         self.apply_average_m_to_step_stats_from_values(stats, &magnetization);
-        stats.per_object_scalars = single_object_scalars("free", stats);
         Ok(())
     }
 
@@ -1382,6 +1381,10 @@ impl NativeFdmBackend {
             &magnetization,
             self.active_mask.as_deref(),
         );
+        // Keep the object-scoped telemetry synchronized with the sampled
+        // magnetization. This path is also used when a scalar output is due,
+        // without going through `apply_average_m_to_step_stats`.
+        stats.per_object_scalars = single_object_scalars("free", stats);
     }
 
     /// Execute one time step.
@@ -1913,6 +1916,7 @@ impl NativeFdmBackend {
             crate::preview::flatten_vectors(&sampled)
         } else {
             let observable = match quantity {
+                "m" => ffi::fullmag_fdm_observable::FULLMAG_FDM_OBSERVABLE_M,
                 "H_ex" => ffi::fullmag_fdm_observable::FULLMAG_FDM_OBSERVABLE_H_EX,
                 "H_demag" => ffi::fullmag_fdm_observable::FULLMAG_FDM_OBSERVABLE_H_DEMAG,
                 "H_ext" => ffi::fullmag_fdm_observable::FULLMAG_FDM_OBSERVABLE_H_EXT,
@@ -3232,17 +3236,7 @@ mod tests {
         vectors
     }
 
-    fn cpu_reference_single_step(
-        plan: &FdmPlanIR,
-    ) -> (
-        Vec<[f64; 3]>,
-        Vec<[f64; 3]>,
-        Vec<[f64; 3]>,
-        Vec<[f64; 3]>,
-        Vec<[f64; 3]>,
-        Vec<[f64; 3]>,
-        fullmag_engine::StepReport,
-    ) {
+    fn cpu_reference_problem(plan: &FdmPlanIR) -> ExchangeLlgProblem {
         let grid = fullmag_engine::GridShape::new(
             plan.grid.cells[0] as usize,
             plan.grid.cells[1] as usize,
@@ -3267,7 +3261,7 @@ mod tests {
         let dynamics = LlgConfig::new(plan.gyromagnetic_ratio, integrator)
             .expect("dynamics")
             .with_precession_enabled(!llg_overdamped_uses_pure_damping(plan.relaxation.as_ref()));
-        let problem = ExchangeLlgProblem::with_terms_and_mask(
+        ExchangeLlgProblem::with_terms_and_mask(
             grid,
             cell_size,
             material,
@@ -3312,7 +3306,21 @@ mod tests {
             },
             plan.active_mask.clone(),
         )
-        .expect("problem");
+        .expect("problem")
+    }
+
+    fn cpu_reference_single_step(
+        plan: &FdmPlanIR,
+    ) -> (
+        Vec<[f64; 3]>,
+        Vec<[f64; 3]>,
+        Vec<[f64; 3]>,
+        Vec<[f64; 3]>,
+        Vec<[f64; 3]>,
+        Vec<[f64; 3]>,
+        fullmag_engine::StepReport,
+    ) {
+        let problem = cpu_reference_problem(plan);
 
         let mut state = problem
             .new_state(plan.initial_magnetization.clone())
@@ -3336,6 +3344,41 @@ mod tests {
             observables.effective_field,
             report,
         )
+    }
+
+    fn cpu_reference_energy_densities_after_single_step(plan: &FdmPlanIR) -> [Vec<f64>; 6] {
+        let problem = cpu_reference_problem(plan);
+        let mut state = problem
+            .new_state(plan.initial_magnetization.clone())
+            .expect("state");
+        let mut workspace = problem.create_workspace();
+        problem
+            .step_with_workspace(
+                &mut state,
+                plan.fixed_timestep.expect("fixed dt"),
+                &mut workspace,
+            )
+            .expect("cpu step");
+        [
+            problem
+                .exchange_energy_density(&state)
+                .expect("CPU exchange density"),
+            problem
+                .demag_energy_density(&state)
+                .expect("CPU demag density"),
+            problem
+                .external_energy_density(&state)
+                .expect("CPU external density"),
+            problem
+                .anisotropy_energy_density(&state)
+                .expect("CPU anisotropy density"),
+            problem
+                .dmi_energy_density(&state)
+                .expect("CPU DMI density"),
+            problem
+                .total_energy_density(&state)
+                .expect("CPU total density"),
+        ]
     }
 
     #[test]
@@ -3945,7 +3988,7 @@ mod tests {
     }
 
     #[test]
-    fn native_fdm_masked_demag_fields_stay_zero_outside_active_domain_when_cuda_is_available() {
+    fn native_fdm_observable_fields_keep_full_domain_stray_field_when_cuda_is_available() {
         if !is_cuda_available() {
             eprintln!(
                 "skipping native CUDA FDM masked demag test: CUDA backend is not available on this host"
@@ -3975,19 +4018,18 @@ mod tests {
                     "inactive m leak at {index}"
                 );
                 assert_eq!(
-                    actual_h_demag[index],
-                    [0.0, 0.0, 0.0],
-                    "inactive H_demag leak at {index}"
-                );
-                assert_eq!(
                     actual_h_ext[index],
-                    [0.0, 0.0, 0.0],
-                    "inactive H_ext leak at {index}"
+                    plan.external_field.expect("external field"),
+                    "inactive H_ext should remain full-domain at {index}"
                 );
                 assert_eq!(
                     actual_h_eff[index],
-                    [0.0, 0.0, 0.0],
-                    "inactive H_eff leak at {index}"
+                    [
+                        actual_h_demag[index][0] + actual_h_ext[index][0],
+                        actual_h_demag[index][1] + actual_h_ext[index][1],
+                        actual_h_demag[index][2] + actual_h_ext[index][2],
+                    ],
+                    "inactive H_eff should combine full-domain demag and external field at {index}"
                 );
             } else {
                 assert_eq!(
@@ -4002,8 +4044,8 @@ mod tests {
             actual_h_demag
                 .iter()
                 .zip(active_mask.iter())
-                .any(|(value, is_active)| *is_active && *value != [0.0, 0.0, 0.0]),
-            "expected at least one active cell to carry non-zero H_demag"
+                .any(|(value, is_active)| !*is_active && *value != [0.0, 0.0, 0.0]),
+            "expected at least one inactive Airbox cell to carry non-zero H_demag"
         );
     }
 
@@ -4352,6 +4394,204 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn native_fdm_single_precision_energy_density_snapshots_match_double_and_global_energy_when_cuda_is_available()
+    {
+        if !is_cuda_available() {
+            eprintln!(
+                "skipping native CUDA FDM single-precision energy-density qualification: CUDA backend is not available on this host"
+            );
+            return;
+        }
+
+        let mut double_plan = make_masked_test_plan(true, ExecutionPrecision::Double);
+        double_plan.material.uniaxial_anisotropy_ku1 = Some(8.0e4);
+        double_plan.material.uniaxial_anisotropy_ku2 = Some(1.0e4);
+        double_plan.material.anisotropy_axis = Some([0.0, 0.0, 1.0]);
+        double_plan.interfacial_dmi = Some(1.2e-3);
+        let mut single_plan = double_plan.clone();
+        single_plan.precision = ExecutionPrecision::Single;
+
+        let cell_count = double_plan.initial_magnetization.len();
+        let active_mask = double_plan.active_mask.as_ref().expect("active mask");
+        let cell_volume = double_plan.cell_size.iter().product::<f64>();
+
+        let mut backend_double = NativeFdmBackend::create(&double_plan)
+            .expect("native fdm create double energy-density qualification");
+        let stats_double = backend_double
+            .step(double_plan.fixed_timestep.expect("fixed dt"))
+            .expect("native fdm double step");
+        let mut backend_single = NativeFdmBackend::create(&single_plan)
+            .expect("native fdm create single energy-density qualification");
+        let stats_single = backend_single
+            .step(single_plan.fixed_timestep.expect("fixed dt"))
+            .expect("native fdm single step");
+
+        let quantities = [
+            ("eden_ex", stats_double.e_ex, stats_single.e_ex),
+            ("eden_demag", stats_double.e_demag, stats_single.e_demag),
+            ("eden_ext", stats_double.e_ext, stats_single.e_ext),
+            ("eden_ani", stats_double.e_ani, stats_single.e_ani),
+            ("eden_dmi", stats_double.e_dmi, stats_single.e_dmi),
+            ("eden_total", stats_double.e_total, stats_single.e_total),
+        ];
+
+        for (quantity, expected_double, expected_single) in quantities {
+            let values_double = backend_double
+                .copy_scalar_quantity(quantity, cell_count)
+                .expect("double scalar energy-density copy");
+            let values_single = backend_single
+                .copy_scalar_quantity(quantity, cell_count)
+                .expect("single scalar energy-density copy");
+            assert_eq!(values_double.len(), cell_count);
+            assert_eq!(values_single.len(), cell_count);
+
+            let max_double = values_double
+                .iter()
+                .copied()
+                .map(f64::abs)
+                .fold(0.0, f64::max);
+            let max_diff = values_double
+                .iter()
+                .zip(values_single.iter())
+                .map(|(double, single)| (double - single).abs())
+                .fold(0.0, f64::max);
+            assert!(
+                max_diff <= max_double * 5.0e-3 + 1.0e-6,
+                "{quantity} FP32/FP64 pointwise drift too large: max_diff={max_diff:.6e}, max_double={max_double:.6e}"
+            );
+
+            for (index, is_active) in active_mask.iter().copied().enumerate() {
+                if !is_active {
+                    assert_eq!(values_double[index], 0.0, "inactive {quantity} double leak");
+                    assert_eq!(values_single[index], 0.0, "inactive {quantity} single leak");
+                }
+            }
+
+            let integral_double = values_double.iter().sum::<f64>() * cell_volume;
+            let integral_single = values_single.iter().sum::<f64>() * cell_volume;
+            assert_scalar_close(
+                &format!("{quantity}.double_integral"),
+                integral_double,
+                expected_double,
+                5.0e-4,
+                1.0e-21,
+            );
+            assert_scalar_close(
+                &format!("{quantity}.single_integral"),
+                integral_single,
+                expected_single,
+                5.0e-3,
+                1.0e-21,
+            );
+        }
+    }
+
+    #[test]
+    fn native_fdm_fp64_observable_fields_and_densities_match_cpu_reference_when_cuda_is_available()
+    {
+        if !is_cuda_available() {
+            eprintln!(
+                "skipping native CUDA FDM CPU/FP64 observable parity: CUDA backend is not available on this host"
+            );
+            return;
+        }
+
+        let mut plan = make_masked_test_plan(true, ExecutionPrecision::Double);
+        plan.material.uniaxial_anisotropy_ku1 = Some(8.0e4);
+        plan.material.uniaxial_anisotropy_ku2 = Some(1.0e4);
+        plan.material.anisotropy_axis = Some([0.0, 0.0, 1.0]);
+        plan.interfacial_dmi = Some(1.2e-3);
+        let active_mask = plan.active_mask.as_ref().expect("active mask");
+        let cell_count = plan.initial_magnetization.len();
+
+        let (
+            expected_m,
+            expected_h_ex,
+            expected_h_demag,
+            expected_h_ext,
+            expected_h_ani,
+            expected_h_eff,
+            _expected_report,
+        ) = cpu_reference_single_step(&plan);
+        let expected_densities = cpu_reference_energy_densities_after_single_step(&plan);
+
+        let mut backend = NativeFdmBackend::create(&plan).expect("native fdm create");
+        backend
+            .step(plan.fixed_timestep.expect("fixed dt"))
+            .expect("native fdm step");
+        let actual_m = backend.copy_m(cell_count).expect("copy m");
+        let actual_h_ex = backend.copy_h_ex(cell_count).expect("copy H_ex");
+        let actual_h_demag = backend.copy_h_demag(cell_count).expect("copy H_demag");
+        let actual_h_ext = backend.copy_h_ext(cell_count).expect("copy H_ext");
+        let actual_h_ani = backend.copy_h_ani(cell_count).expect("copy H_ani");
+        let actual_h_eff = backend.copy_h_eff(cell_count).expect("copy H_eff");
+
+        for index in 0..cell_count {
+            if active_mask[index] {
+                for (label, actual, expected) in [
+                    ("m", actual_m[index], expected_m[index]),
+                    ("H_ex", actual_h_ex[index], expected_h_ex[index]),
+                    ("H_demag", actual_h_demag[index], expected_h_demag[index]),
+                    ("H_ext", actual_h_ext[index], expected_h_ext[index]),
+                    ("H_ani", actual_h_ani[index], expected_h_ani[index]),
+                    ("H_eff", actual_h_eff[index], expected_h_eff[index]),
+                ] {
+                    for component in 0..3 {
+                        assert_scalar_close(
+                            &format!("CPU/FP64 {label}[{index}][{component}]"),
+                            actual[component],
+                            expected[component],
+                            5.0e-3,
+                            1.0e-6,
+                        );
+                    }
+                }
+            } else {
+                assert_eq!(actual_m[index], [0.0, 0.0, 0.0]);
+                assert_eq!(actual_h_ex[index], [0.0, 0.0, 0.0]);
+                assert_eq!(actual_h_ani[index], [0.0, 0.0, 0.0]);
+            }
+        }
+
+        let quantities = [
+            "eden_ex",
+            "eden_demag",
+            "eden_ext",
+            "eden_ani",
+            "eden_dmi",
+            "eden_total",
+        ];
+        let mut max_density_drift: f64 = 0.0;
+        for (quantity_index, quantity) in quantities.iter().enumerate() {
+            let actual = backend
+                .copy_scalar_quantity(quantity, cell_count)
+                .expect("CUDA scalar density copy");
+            let expected = &expected_densities[quantity_index];
+            for (index, (&actual_value, &expected_value)) in
+                actual.iter().zip(expected.iter()).enumerate()
+            {
+                if active_mask[index] {
+                    assert_scalar_close(
+                        &format!("CPU/FP64 {quantity}[{index}]"),
+                        actual_value,
+                        expected_value,
+                        5.0e-3,
+                        1.0e-3,
+                    );
+                    max_density_drift = max_density_drift
+                        .max((actual_value - expected_value).abs());
+                } else {
+                    assert_eq!(actual_value, 0.0, "inactive {quantity} must be zero");
+                }
+            }
+        }
+        println!(
+            "FDM observable CPU/FP64 parity: max_density_abs_drift={max_density_drift:.6e}, active_cells={}",
+            active_mask.iter().filter(|active| **active).count()
+        );
     }
 
     #[test]
@@ -4802,6 +5042,10 @@ mod exact_metric_contract_tests {
         assert!(
             average_stats.contains("apply_average_m_to_step_stats_with_active_mask"),
             "native average-m helper must publish averaged magnetization components"
+        );
+        assert!(
+            average_stats.contains("stats.per_object_scalars = single_object_scalars(\"free\", stats)"),
+            "native average-m helper must refresh object-scoped telemetry"
         );
     }
 }

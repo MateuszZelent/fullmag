@@ -348,7 +348,6 @@ pub(crate) fn capabilities_for_fdm_engine(
                 QuantityId::EdenEx,
                 QuantityId::EdenDemag,
                 QuantityId::EdenExt,
-                QuantityId::EdenDrive,
                 QuantityId::EdenAni,
                 QuantityId::EdenDmi,
                 QuantityId::EdenTotal,
@@ -364,7 +363,6 @@ pub(crate) fn capabilities_for_fdm_engine(
                 QuantityId::EdenEx,
                 QuantityId::EdenDemag,
                 QuantityId::EdenExt,
-                QuantityId::EdenDrive,
                 QuantityId::EdenAni,
                 QuantityId::EdenDmi,
                 QuantityId::EdenTotal,
@@ -379,6 +377,21 @@ pub(crate) fn capabilities_for_fdm_engine(
             supports_lossy_fallback_override: false,
         },
     }
+}
+
+/// Resolve the executable quantity surface for the selected precision.
+///
+/// The observable materialization contract is qualified for both CUDA FP64 and
+/// CUDA FP32.  Keep the precision argument in this boundary because the
+/// planner/runtime use it as part of the resolved execution identity, but do
+/// not silently remove qualified observable IDs from the public capability
+/// surface.
+pub(crate) fn capabilities_for_fdm_engine_with_precision(
+    engine: FdmEngine,
+    profile: FdmCapabilityProfile,
+    _precision: fullmag_ir::ExecutionPrecision,
+) -> BackendCapabilities {
+    capabilities_for_fdm_engine(engine, profile)
 }
 
 pub(crate) fn capabilities_for_fem_engine(engine: FemEngine) -> BackendCapabilities {
@@ -840,5 +853,28 @@ mod tests {
             capabilities.term_scopes.get("thermal").map(String::as_str),
             Some("single_grid; fixed_timestep; adaptive=unsupported; H_therm=unmaterialized"),
         );
+    }
+
+    #[test]
+    fn cuda_single_precision_advertises_qualified_observables() {
+        let capabilities = capabilities_for_fdm_engine_with_precision(
+            FdmEngine::CudaFdm,
+            FdmCapabilityProfile::SingleGrid,
+            fullmag_ir::ExecutionPrecision::Single,
+        );
+        for quantity in [
+            "H_demag",
+            "H_eff",
+            "eden_ex",
+            "eden_demag",
+            "eden_ext",
+            "eden_ani",
+            "eden_dmi",
+            "eden_total",
+        ] {
+            assert!(capabilities.preview_quantities.iter().any(|id| id == quantity));
+            assert!(capabilities.snapshot_quantities.iter().any(|id| id == quantity));
+        }
+        assert!(capabilities.preview_quantities.iter().any(|id| id == "m"));
     }
 }

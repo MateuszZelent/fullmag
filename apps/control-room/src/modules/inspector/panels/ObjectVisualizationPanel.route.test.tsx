@@ -42,6 +42,10 @@ vi.mock("@/kernel/resources/studyRuntimeResources", () => ({
     resourceCall("field-catalog", enabled);
     return { data: null, error: null, revision: null, status: "idle" };
   },
+  useQuantityCatalogResource: ({ enabled }: { enabled: boolean }) => {
+    resourceCall("quantity-catalog", enabled);
+    return { data: null, error: null, revision: null, status: "idle" };
+  },
 }));
 
 vi.mock("@/kernel/visualization/useVisualizationStateResource", () => ({

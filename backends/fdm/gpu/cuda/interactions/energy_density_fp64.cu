@@ -63,6 +63,27 @@ __global__ void energy_density_kernel(
     int include_external,
     int include_drive,
     int include_anisotropy,
+    int has_uniaxial_anisotropy,
+    double ku1,
+    double ku2,
+    double anis_u_x,
+    double anis_u_y,
+    double anis_u_z,
+    const double *ku1_field,
+    const double *ku2_field,
+    int has_cubic_anisotropy,
+    double kc1,
+    double kc2,
+    double kc3,
+    double cubic_axis1_x,
+    double cubic_axis1_y,
+    double cubic_axis1_z,
+    double cubic_axis2_x,
+    double cubic_axis2_y,
+    double cubic_axis2_z,
+    const double *kc1_field,
+    const double *kc2_field,
+    const double *kc3_field,
     int include_interfacial_dmi,
     int include_bulk_dmi,
     int kind,
@@ -109,17 +130,37 @@ __global__ void energy_density_kernel(
     if ((wants_total || kind == FULLMAG_FDM_OBSERVABLE_EDEN_EXT) && include_external) {
         density += -MU0 * ms * (mmx * external_x + mmy * external_y + mmz * external_z);
     }
-    if ((wants_total || kind == FULLMAG_FDM_OBSERVABLE_EDEN_DRIVE) && include_drive) {
+    if (kind == FULLMAG_FDM_OBSERVABLE_EDEN_DRIVE && include_drive) {
         density += -MU0 * ms * drive_scale * (
             mmx * static_cast<double>(h_oe_x[index]) +
             mmy * static_cast<double>(h_oe_y[index]) +
             mmz * static_cast<double>(h_oe_z[index]));
     }
     if ((wants_total || kind == FULLMAG_FDM_OBSERVABLE_EDEN_ANI) && include_anisotropy) {
-        density += -0.5 * MU0 * ms * (
-            mmx * static_cast<double>(h_ani_x[index]) +
-            mmy * static_cast<double>(h_ani_y[index]) +
-            mmz * static_cast<double>(h_ani_z[index]));
+        if (has_uniaxial_anisotropy) {
+            const double ku1_value = ku1_field ? ku1_field[index] : ku1;
+            const double ku2_value = ku2_field ? ku2_field[index] : ku2;
+            const double projection = mmx * anis_u_x + mmy * anis_u_y + mmz * anis_u_z;
+            density -= ku1_value * projection * projection +
+                ku2_value * projection * projection * projection * projection;
+        }
+        if (has_cubic_anisotropy) {
+            const double c3_x = cubic_axis1_y * cubic_axis2_z - cubic_axis1_z * cubic_axis2_y;
+            const double c3_y = cubic_axis1_z * cubic_axis2_x - cubic_axis1_x * cubic_axis2_z;
+            const double c3_z = cubic_axis1_x * cubic_axis2_y - cubic_axis1_y * cubic_axis2_x;
+            const double m1 = mmx * cubic_axis1_x + mmy * cubic_axis1_y + mmz * cubic_axis1_z;
+            const double m2 = mmx * cubic_axis2_x + mmy * cubic_axis2_y + mmz * cubic_axis2_z;
+            const double m3 = mmx * c3_x + mmy * c3_y + mmz * c3_z;
+            const double m1_sq = m1 * m1;
+            const double m2_sq = m2 * m2;
+            const double m3_sq = m3 * m3;
+            const double sigma = m1_sq * m2_sq + m2_sq * m3_sq + m1_sq * m3_sq;
+            const double kc1_value = kc1_field ? kc1_field[index] : kc1;
+            const double kc2_value = kc2_field ? kc2_field[index] : kc2;
+            const double kc3_value = kc3_field ? kc3_field[index] : kc3;
+            density += kc1_value * sigma +
+                kc2_value * m1_sq * m2_sq * m3_sq + kc3_value * sigma * sigma;
+        }
     }
 
     if ((wants_total || kind == FULLMAG_FDM_OBSERVABLE_EDEN_DMI) &&
@@ -225,6 +266,21 @@ bool launch_energy_density_observable(
             ctx.has_external_field ? 1 : 0,
             include_drive,
             include_anisotropy,
+            ctx.has_uniaxial_anisotropy ? 1 : 0,
+            ctx.Ku1,
+            ctx.Ku2,
+            ctx.anisU[0], ctx.anisU[1], ctx.anisU[2],
+            ctx.ku1_field,
+            ctx.ku2_field,
+            ctx.has_cubic_anisotropy ? 1 : 0,
+            ctx.Kc1,
+            ctx.Kc2,
+            ctx.Kc3,
+            ctx.cubic_axis1[0], ctx.cubic_axis1[1], ctx.cubic_axis1[2],
+            ctx.cubic_axis2[0], ctx.cubic_axis2[1], ctx.cubic_axis2[2],
+            ctx.kc1_field,
+            ctx.kc2_field,
+            ctx.kc3_field,
             ctx.has_interfacial_dmi ? 1 : 0,
             ctx.has_bulk_dmi ? 1 : 0,
             static_cast<int>(observable),
@@ -261,6 +317,21 @@ bool launch_energy_density_observable(
             ctx.has_external_field ? 1 : 0,
             include_drive,
             include_anisotropy,
+            ctx.has_uniaxial_anisotropy ? 1 : 0,
+            ctx.Ku1,
+            ctx.Ku2,
+            ctx.anisU[0], ctx.anisU[1], ctx.anisU[2],
+            ctx.ku1_field,
+            ctx.ku2_field,
+            ctx.has_cubic_anisotropy ? 1 : 0,
+            ctx.Kc1,
+            ctx.Kc2,
+            ctx.Kc3,
+            ctx.cubic_axis1[0], ctx.cubic_axis1[1], ctx.cubic_axis1[2],
+            ctx.cubic_axis2[0], ctx.cubic_axis2[1], ctx.cubic_axis2[2],
+            ctx.kc1_field,
+            ctx.kc2_field,
+            ctx.kc3_field,
             ctx.has_interfacial_dmi ? 1 : 0,
             ctx.has_bulk_dmi ? 1 : 0,
             static_cast<int>(observable),

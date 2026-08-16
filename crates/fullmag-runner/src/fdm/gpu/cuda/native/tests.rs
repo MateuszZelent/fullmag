@@ -714,11 +714,11 @@ fn native_fdm_slonczewski_matches_cpu_reference_without_zhang_li_when_cuda_is_av
 }
 
 #[test]
-fn native_fdm_masked_demag_fields_stay_zero_outside_active_domain_when_cuda_is_available() {
+fn native_fdm_observable_fields_keep_full_domain_stray_field_when_cuda_is_available() {
     if !is_cuda_available() {
         eprintln!(
-                "skipping native CUDA FDM masked demag test: CUDA backend is not available on this host"
-            );
+            "skipping native CUDA FDM masked demag test: CUDA backend is not available on this host"
+        );
         return;
     }
 
@@ -744,19 +744,18 @@ fn native_fdm_masked_demag_fields_stay_zero_outside_active_domain_when_cuda_is_a
                 "inactive m leak at {index}"
             );
             assert_eq!(
-                actual_h_demag[index],
-                [0.0, 0.0, 0.0],
-                "inactive H_demag leak at {index}"
-            );
-            assert_eq!(
                 actual_h_ext[index],
-                [0.0, 0.0, 0.0],
-                "inactive H_ext leak at {index}"
+                plan.external_field.expect("external field"),
+                "inactive H_ext should remain full-domain at {index}"
             );
             assert_eq!(
                 actual_h_eff[index],
-                [0.0, 0.0, 0.0],
-                "inactive H_eff leak at {index}"
+                [
+                    actual_h_demag[index][0] + actual_h_ext[index][0],
+                    actual_h_demag[index][1] + actual_h_ext[index][1],
+                    actual_h_demag[index][2] + actual_h_ext[index][2],
+                ],
+                "inactive H_eff should combine full-domain demag and external field at {index}"
             );
         } else {
             assert_eq!(
@@ -771,8 +770,8 @@ fn native_fdm_masked_demag_fields_stay_zero_outside_active_domain_when_cuda_is_a
         actual_h_demag
             .iter()
             .zip(active_mask.iter())
-            .any(|(value, is_active)| *is_active && *value != [0.0, 0.0, 0.0]),
-        "expected at least one active cell to carry non-zero H_demag"
+            .any(|(value, is_active)| !*is_active && *value != [0.0, 0.0, 0.0]),
+        "expected at least one inactive Airbox cell to carry non-zero H_demag"
     );
 }
 

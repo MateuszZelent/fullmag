@@ -49,6 +49,85 @@ static bool context_refresh_anisotropy_observable(Context &ctx);
 static bool upload_f64_array(Context &ctx, double *&dst, const double *src,
                               uint64_t len, const char *label);
 
+template <typename Scalar>
+__global__ static void compose_visual_effective_field_kernel(
+    const Scalar *work_x,
+    const Scalar *work_y,
+    const Scalar *work_z,
+    const Scalar *demag_x,
+    const Scalar *demag_y,
+    const Scalar *demag_z,
+    Scalar external_x,
+    Scalar external_y,
+    Scalar external_z,
+    const uint8_t *active_mask,
+    Scalar *visual_x,
+    Scalar *visual_y,
+    Scalar *visual_z,
+    uint64_t cell_count,
+    bool has_active_mask)
+{
+    const uint64_t index = static_cast<uint64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+    if (index >= cell_count) return;
+    const bool active = !has_active_mask || active_mask[index] != 0;
+    visual_x[index] = active ? work_x[index] : demag_x[index] + external_x;
+    visual_y[index] = active ? work_y[index] : demag_y[index] + external_y;
+    visual_z[index] = active ? work_z[index] : demag_z[index] + external_z;
+}
+
+static bool context_refresh_effective_field_visual(Context &ctx)
+{
+    if (ctx.h_eff_visual.x == nullptr || ctx.h_eff_visual.y == nullptr ||
+        ctx.h_eff_visual.z == nullptr) {
+        ctx.last_error = "effective_visual_buffer_unavailable";
+        return false;
+    }
+    constexpr uint32_t threads = 256;
+    const uint32_t blocks = static_cast<uint32_t>(
+        (ctx.cell_count + threads - 1u) / threads);
+    if (ctx.precision == FULLMAG_FDM_PRECISION_DOUBLE) {
+        compose_visual_effective_field_kernel<double><<<blocks, threads>>>(
+            static_cast<const double *>(ctx.work.x),
+            static_cast<const double *>(ctx.work.y),
+            static_cast<const double *>(ctx.work.z),
+            static_cast<const double *>(ctx.h_demag_visual.x),
+            static_cast<const double *>(ctx.h_demag_visual.y),
+            static_cast<const double *>(ctx.h_demag_visual.z),
+            static_cast<double>(ctx.has_external_field ? ctx.external_field[0] : 0.0),
+            static_cast<double>(ctx.has_external_field ? ctx.external_field[1] : 0.0),
+            static_cast<double>(ctx.has_external_field ? ctx.external_field[2] : 0.0),
+            ctx.active_mask,
+            static_cast<double *>(ctx.h_eff_visual.x),
+            static_cast<double *>(ctx.h_eff_visual.y),
+            static_cast<double *>(ctx.h_eff_visual.z),
+            ctx.cell_count,
+            ctx.has_active_mask);
+    } else {
+        compose_visual_effective_field_kernel<float><<<blocks, threads>>>(
+            static_cast<const float *>(ctx.work.x),
+            static_cast<const float *>(ctx.work.y),
+            static_cast<const float *>(ctx.work.z),
+            static_cast<const float *>(ctx.h_demag_visual.x),
+            static_cast<const float *>(ctx.h_demag_visual.y),
+            static_cast<const float *>(ctx.h_demag_visual.z),
+            static_cast<float>(ctx.has_external_field ? ctx.external_field[0] : 0.0),
+            static_cast<float>(ctx.has_external_field ? ctx.external_field[1] : 0.0),
+            static_cast<float>(ctx.has_external_field ? ctx.external_field[2] : 0.0),
+            ctx.active_mask,
+            static_cast<float *>(ctx.h_eff_visual.x),
+            static_cast<float *>(ctx.h_eff_visual.y),
+            static_cast<float *>(ctx.h_eff_visual.z),
+            ctx.cell_count,
+            ctx.has_active_mask);
+    }
+    const cudaError_t error = cudaGetLastError();
+    if (error != cudaSuccess) {
+        set_cuda_error(ctx, "compose_visual_effective_field", error);
+        return false;
+    }
+    return true;
+}
+
 /* ── Helper: element size based on precision ── */
 
 static size_t scalar_size(fullmag_fdm_precision prec) {
@@ -98,6 +177,314 @@ static void free_vector_field(DeviceVectorField &field) {
     if (field.x) { cudaFree(field.x); field.x = nullptr; }
     if (field.y) { cudaFree(field.y); field.y = nullptr; }
     if (field.z) { cudaFree(field.z); field.z = nullptr; }
+}
+
+static void destroy_async_field_snapshot_pool_resources(AsyncFieldSnapshotPool &pool)
+{
+    for (auto &slot : pool.slots) {
+        if (slot.done_event) {
+            // Context teardown is the last owner of the pool.  Synchronize the
+            // slot event rather than the whole device so an in-flight I/O
+            // transfer cannot race resource destruction.
+            cudaEventSynchronize(reinterpret_cast<cudaEvent_t>(slot.done_event));
+            cudaEventDestroy(reinterpret_cast<cudaEvent_t>(slot.done_event));
+            slot.done_event = nullptr;
+        }
+        if (slot.staging_done_event) {
+            cudaEventDestroy(reinterpret_cast<cudaEvent_t>(slot.staging_done_event));
+            slot.staging_done_event = nullptr;
+        }
+        if (slot.ready_event) {
+            cudaEventDestroy(reinterpret_cast<cudaEvent_t>(slot.ready_event));
+            slot.ready_event = nullptr;
+        }
+        if (slot.stream) {
+            cudaStreamDestroy(reinterpret_cast<cudaStream_t>(slot.stream));
+            slot.stream = nullptr;
+        }
+        if (slot.host_soa) {
+            cudaFreeHost(slot.host_soa);
+            slot.host_soa = nullptr;
+        }
+        free_vector_field(slot.staging);
+    }
+    pool.component_bytes = 0;
+    pool.host_soa_bytes = 0;
+    pool.cell_count = 0;
+    __atomic_store_n(&pool.leased_slots, 0u, __ATOMIC_RELEASE);
+    __atomic_store_n(&pool.retired_slots, 0u, __ATOMIC_RELEASE);
+    pool.initialized = false;
+}
+
+bool initialize_async_field_snapshot_pool(Context &ctx)
+{
+    AsyncFieldSnapshotPool &pool = ctx.async_field_snapshot_pool;
+    destroy_async_field_snapshot_pool_resources(pool);
+    pool.cell_count = ctx.cell_count;
+    pool.component_bytes = ctx.cell_count * scalar_size(ctx.precision);
+    pool.host_soa_bytes = pool.component_bytes * 3u;
+
+    auto fail = [&](const char *label, cudaError_t error) -> bool {
+        set_cuda_error(ctx, label, error);
+        destroy_async_field_snapshot_pool_resources(pool);
+        return false;
+    };
+
+    for (auto &slot : pool.slots) {
+        cudaError_t error = cudaMalloc(&slot.staging.x, pool.component_bytes);
+        if (error != cudaSuccess) return fail("cudaMalloc(async_snapshot_pool.x)", error);
+        error = cudaMalloc(&slot.staging.y, pool.component_bytes);
+        if (error != cudaSuccess) return fail("cudaMalloc(async_snapshot_pool.y)", error);
+        error = cudaMalloc(&slot.staging.z, pool.component_bytes);
+        if (error != cudaSuccess) return fail("cudaMalloc(async_snapshot_pool.z)", error);
+        error = cudaHostAlloc(&slot.host_soa, pool.host_soa_bytes, cudaHostAllocDefault);
+        if (error != cudaSuccess) return fail("cudaHostAlloc(async_snapshot_pool.host_soa)", error);
+
+        cudaStream_t stream{};
+        error = cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking);
+        if (error != cudaSuccess) return fail("cudaStreamCreate(async_snapshot_pool)", error);
+        slot.stream = reinterpret_cast<void *>(stream);
+
+        cudaEvent_t ready_event{};
+        error = cudaEventCreateWithFlags(&ready_event, cudaEventDisableTiming);
+        if (error != cudaSuccess) return fail("cudaEventCreate(async_snapshot_pool.ready)", error);
+        slot.ready_event = reinterpret_cast<void *>(ready_event);
+
+        cudaEvent_t staging_done_event{};
+        error = cudaEventCreateWithFlags(&staging_done_event, cudaEventDisableTiming);
+        if (error != cudaSuccess) return fail("cudaEventCreate(async_snapshot_pool.staging_done)", error);
+        slot.staging_done_event = reinterpret_cast<void *>(staging_done_event);
+
+        cudaEvent_t done_event{};
+        error = cudaEventCreateWithFlags(&done_event, cudaEventDisableTiming);
+        if (error != cudaSuccess) return fail("cudaEventCreate(async_snapshot_pool.done)", error);
+        slot.done_event = reinterpret_cast<void *>(done_event);
+    }
+    __atomic_store_n(&pool.leased_slots, 0u, __ATOMIC_RELEASE);
+    __atomic_store_n(&pool.retired_slots, 0u, __ATOMIC_RELEASE);
+    pool.initialized = true;
+    return true;
+}
+
+void destroy_async_field_snapshot_pool(Context &ctx)
+{
+    destroy_async_field_snapshot_pool_resources(ctx.async_field_snapshot_pool);
+}
+
+bool acquire_async_field_snapshot_pool_slot(
+    Context &ctx,
+    std::size_t &slot_index,
+    std::string &error)
+{
+    AsyncFieldSnapshotPool &pool = ctx.async_field_snapshot_pool;
+    slot_index = kFdmAsyncFieldSnapshotPoolCapacity;
+    if (!pool.initialized) {
+        error = "fdm_async_snapshot_pool_uninitialized";
+        return false;
+    }
+
+    for (std::size_t candidate = 0;
+         candidate < kFdmAsyncFieldSnapshotPoolCapacity;
+         ++candidate) {
+        const uint32_t bit = uint32_t{1} << candidate;
+        uint32_t leased = __atomic_load_n(&pool.leased_slots, __ATOMIC_ACQUIRE);
+        if ((leased & bit) != 0) {
+            const uint32_t retired = __atomic_load_n(&pool.retired_slots, __ATOMIC_ACQUIRE);
+            if ((retired & bit) == 0 ||
+                cudaEventQuery(reinterpret_cast<cudaEvent_t>(pool.slots[candidate].done_event)) !=
+                    cudaSuccess) {
+                continue;
+            }
+            // A caller released the handle before waiting.  Reclaim it only
+            // after the completion event is observable, then retry the same
+            // slot through the normal lease CAS.
+            __atomic_fetch_and(&pool.retired_slots, ~bit, __ATOMIC_ACQ_REL);
+            __atomic_fetch_and(&pool.leased_slots, ~bit, __ATOMIC_ACQ_REL);
+            leased = __atomic_load_n(&pool.leased_slots, __ATOMIC_ACQUIRE);
+        }
+        if ((leased & bit) != 0) continue;
+        if (__atomic_compare_exchange_n(
+                &pool.leased_slots,
+                &leased,
+                leased | bit,
+                true,
+                __ATOMIC_ACQ_REL,
+                __ATOMIC_ACQUIRE)) {
+            slot_index = candidate;
+            return true;
+        }
+    }
+
+    error = "fdm_async_snapshot_pool_exhausted";
+    return false;
+}
+
+void release_async_field_snapshot_pool_slot(
+    AsyncFieldSnapshotPool &pool,
+    std::size_t slot_index,
+    bool work_complete)
+{
+    if (slot_index >= kFdmAsyncFieldSnapshotPoolCapacity) return;
+    const uint32_t bit = uint32_t{1} << slot_index;
+    if (work_complete) {
+        __atomic_fetch_and(&pool.retired_slots, ~bit, __ATOMIC_ACQ_REL);
+        __atomic_fetch_and(&pool.leased_slots, ~bit, __ATOMIC_ACQ_REL);
+    } else {
+        __atomic_fetch_or(&pool.retired_slots, bit, __ATOMIC_ACQ_REL);
+    }
+}
+
+static void destroy_async_preview_snapshot_pool_resources(AsyncPreviewSnapshotPool &pool)
+{
+    for (auto &slot : pool.slots) {
+        if (slot.done_event) {
+            cudaEventSynchronize(reinterpret_cast<cudaEvent_t>(slot.done_event));
+            cudaEventDestroy(reinterpret_cast<cudaEvent_t>(slot.done_event));
+            slot.done_event = nullptr;
+        }
+        if (slot.staging_done_event) {
+            cudaEventDestroy(reinterpret_cast<cudaEvent_t>(slot.staging_done_event));
+            slot.staging_done_event = nullptr;
+        }
+        if (slot.ready_event) {
+            cudaEventDestroy(reinterpret_cast<cudaEvent_t>(slot.ready_event));
+            slot.ready_event = nullptr;
+        }
+        if (slot.stream) {
+            cudaStreamDestroy(reinterpret_cast<cudaStream_t>(slot.stream));
+            slot.stream = nullptr;
+        }
+        if (slot.host_xyz) {
+            cudaFreeHost(slot.host_xyz);
+            slot.host_xyz = nullptr;
+        }
+        if (slot.device_xyz) {
+            cudaFree(slot.device_xyz);
+            slot.device_xyz = nullptr;
+        }
+    }
+    pool.xyz_bytes = 0;
+    pool.max_preview_count = 0;
+    __atomic_store_n(&pool.leased_slots, 0u, __ATOMIC_RELEASE);
+    __atomic_store_n(&pool.retired_slots, 0u, __ATOMIC_RELEASE);
+    pool.initialized = false;
+}
+
+bool initialize_async_preview_snapshot_pool(Context &ctx)
+{
+    AsyncPreviewSnapshotPool &pool = ctx.async_preview_snapshot_pool;
+    destroy_async_preview_snapshot_pool_resources(pool);
+    pool.max_preview_count = ctx.cell_count;
+    pool.xyz_bytes = pool.max_preview_count * 3u * scalar_size(ctx.precision);
+
+    auto fail = [&](const char *label, cudaError_t error) -> bool {
+        set_cuda_error(ctx, label, error);
+        destroy_async_preview_snapshot_pool_resources(pool);
+        return false;
+    };
+
+    for (auto &slot : pool.slots) {
+        cudaError_t error = cudaMalloc(&slot.device_xyz, pool.xyz_bytes);
+        if (error != cudaSuccess) return fail("cudaMalloc(async_preview_pool.device_xyz)", error);
+        error = cudaHostAlloc(&slot.host_xyz, pool.xyz_bytes, cudaHostAllocDefault);
+        if (error != cudaSuccess) return fail("cudaHostAlloc(async_preview_pool.host_xyz)", error);
+
+        cudaStream_t stream{};
+        error = cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking);
+        if (error != cudaSuccess) return fail("cudaStreamCreate(async_preview_pool)", error);
+        slot.stream = reinterpret_cast<void *>(stream);
+
+        cudaEvent_t ready_event{};
+        error = cudaEventCreateWithFlags(&ready_event, cudaEventDisableTiming);
+        if (error != cudaSuccess) return fail("cudaEventCreate(async_preview_pool.ready)", error);
+        slot.ready_event = reinterpret_cast<void *>(ready_event);
+
+        cudaEvent_t staging_done_event{};
+        error = cudaEventCreateWithFlags(&staging_done_event, cudaEventDisableTiming);
+        if (error != cudaSuccess) {
+            return fail("cudaEventCreate(async_preview_pool.staging_done)", error);
+        }
+        slot.staging_done_event = reinterpret_cast<void *>(staging_done_event);
+
+        cudaEvent_t done_event{};
+        error = cudaEventCreateWithFlags(&done_event, cudaEventDisableTiming);
+        if (error != cudaSuccess) return fail("cudaEventCreate(async_preview_pool.done)", error);
+        slot.done_event = reinterpret_cast<void *>(done_event);
+    }
+    __atomic_store_n(&pool.leased_slots, 0u, __ATOMIC_RELEASE);
+    __atomic_store_n(&pool.retired_slots, 0u, __ATOMIC_RELEASE);
+    pool.initialized = true;
+    return true;
+}
+
+void destroy_async_preview_snapshot_pool(Context &ctx)
+{
+    destroy_async_preview_snapshot_pool_resources(ctx.async_preview_snapshot_pool);
+}
+
+bool acquire_async_preview_snapshot_pool_slot(
+    Context &ctx,
+    uint64_t preview_count,
+    std::size_t &slot_index,
+    std::string &error)
+{
+    AsyncPreviewSnapshotPool &pool = ctx.async_preview_snapshot_pool;
+    slot_index = kFdmAsyncPreviewSnapshotPoolCapacity;
+    if (!pool.initialized) {
+        error = "fdm_async_preview_snapshot_pool_uninitialized";
+        return false;
+    }
+    if (preview_count > pool.max_preview_count) {
+        error = "fdm_async_preview_snapshot_capacity_exceeded";
+        return false;
+    }
+
+    for (std::size_t candidate = 0;
+         candidate < kFdmAsyncPreviewSnapshotPoolCapacity;
+         ++candidate) {
+        const uint32_t bit = uint32_t{1} << candidate;
+        uint32_t leased = __atomic_load_n(&pool.leased_slots, __ATOMIC_ACQUIRE);
+        if ((leased & bit) != 0) {
+            const uint32_t retired = __atomic_load_n(&pool.retired_slots, __ATOMIC_ACQUIRE);
+            if ((retired & bit) == 0 ||
+                cudaEventQuery(reinterpret_cast<cudaEvent_t>(pool.slots[candidate].done_event)) !=
+                    cudaSuccess) {
+                continue;
+            }
+            __atomic_fetch_and(&pool.retired_slots, ~bit, __ATOMIC_ACQ_REL);
+            __atomic_fetch_and(&pool.leased_slots, ~bit, __ATOMIC_ACQ_REL);
+            leased = __atomic_load_n(&pool.leased_slots, __ATOMIC_ACQUIRE);
+        }
+        if ((leased & bit) != 0) continue;
+        if (__atomic_compare_exchange_n(
+                &pool.leased_slots,
+                &leased,
+                leased | bit,
+                true,
+                __ATOMIC_ACQ_REL,
+                __ATOMIC_ACQUIRE)) {
+            slot_index = candidate;
+            return true;
+        }
+    }
+
+    error = "fdm_async_preview_snapshot_pool_exhausted";
+    return false;
+}
+
+void release_async_preview_snapshot_pool_slot(
+    AsyncPreviewSnapshotPool &pool,
+    std::size_t slot_index,
+    bool work_complete)
+{
+    if (slot_index >= kFdmAsyncPreviewSnapshotPoolCapacity) return;
+    const uint32_t bit = uint32_t{1} << slot_index;
+    if (work_complete) {
+        __atomic_fetch_and(&pool.retired_slots, ~bit, __ATOMIC_ACQ_REL);
+        __atomic_fetch_and(&pool.leased_slots, ~bit, __ATOMIC_ACQ_REL);
+    } else {
+        __atomic_fetch_or(&pool.retired_slots, bit, __ATOMIC_ACQ_REL);
+    }
 }
 
 static bool alloc_demag_kernel(Context &ctx) {
@@ -874,59 +1261,106 @@ static void free_preview_download_scratch(Context &ctx) {
 }
 
 static void destroy_async_snapshot_resources(AsyncFieldSnapshot &snapshot) {
-    if (snapshot.done_event) {
-        cudaEventDestroy(reinterpret_cast<cudaEvent_t>(snapshot.done_event));
-        snapshot.done_event = nullptr;
+    if (snapshot.pool != nullptr) {
+        bool work_complete = !snapshot.needs_wait;
+        if (snapshot.needs_wait && !snapshot.done_event_recorded) {
+            // Setup can fail after the ready event has been recorded but before
+            // the completion event is recorded.  The pool slot's old done
+            // event is then not evidence for this request, so drain only this
+            // slot's dependency and I/O stream before making it reusable.
+            const cudaError_t ready_error = snapshot.ready_event
+                ? cudaEventSynchronize(reinterpret_cast<cudaEvent_t>(snapshot.ready_event))
+                : cudaSuccess;
+            const cudaError_t stream_error = snapshot.stream
+                ? cudaStreamSynchronize(reinterpret_cast<cudaStream_t>(snapshot.stream))
+                : cudaSuccess;
+            work_complete = ready_error == cudaSuccess && stream_error == cudaSuccess;
+        }
+        release_async_field_snapshot_pool_slot(
+            *snapshot.pool,
+            snapshot.pool_slot,
+            work_complete);
+    } else {
+        // Defensive cleanup for a partially initialized legacy handle.  New
+        // snapshots always lease a persistent pool slot and never enter this
+        // branch after successful acquisition.
+        if (snapshot.done_event) {
+            cudaEventDestroy(reinterpret_cast<cudaEvent_t>(snapshot.done_event));
+        }
+        if (snapshot.staging_done_event) {
+            cudaEventDestroy(reinterpret_cast<cudaEvent_t>(snapshot.staging_done_event));
+        }
+        if (snapshot.ready_event) {
+            cudaEventDestroy(reinterpret_cast<cudaEvent_t>(snapshot.ready_event));
+        }
+        if (snapshot.stream) {
+            cudaStreamDestroy(reinterpret_cast<cudaStream_t>(snapshot.stream));
+        }
+        if (snapshot.host_soa) {
+            cudaFreeHost(snapshot.host_soa);
+        }
+        free_vector_field(snapshot.staging);
     }
-    if (snapshot.staging_done_event) {
-        cudaEventDestroy(reinterpret_cast<cudaEvent_t>(snapshot.staging_done_event));
-        snapshot.staging_done_event = nullptr;
-    }
-    if (snapshot.ready_event) {
-        cudaEventDestroy(reinterpret_cast<cudaEvent_t>(snapshot.ready_event));
-        snapshot.ready_event = nullptr;
-    }
-    if (snapshot.stream) {
-        cudaStreamDestroy(reinterpret_cast<cudaStream_t>(snapshot.stream));
-        snapshot.stream = nullptr;
-    }
-    if (snapshot.host_soa) {
-        cudaFreeHost(snapshot.host_soa);
-        snapshot.host_soa = nullptr;
-    }
+    snapshot.host_soa = nullptr;
     snapshot.host_soa_len_bytes = 0;
     snapshot.component_count = 3;
-    free_vector_field(snapshot.staging);
+    snapshot.stream = nullptr;
+    snapshot.ready_event = nullptr;
+    snapshot.staging_done_event = nullptr;
+    snapshot.done_event = nullptr;
+    snapshot.pool = nullptr;
+    snapshot.pool_slot = kFdmAsyncFieldSnapshotPoolCapacity;
     snapshot.needs_wait = false;
+    snapshot.done_event_recorded = false;
 }
 
 static void destroy_async_preview_resources(AsyncPreviewSnapshot &snapshot) {
-    if (snapshot.done_event) {
-        cudaEventDestroy(reinterpret_cast<cudaEvent_t>(snapshot.done_event));
-        snapshot.done_event = nullptr;
+    if (snapshot.pool != nullptr) {
+        bool work_complete = !snapshot.needs_wait;
+        if (snapshot.needs_wait && !snapshot.done_event_recorded) {
+            const cudaError_t ready_error = snapshot.ready_event
+                ? cudaEventSynchronize(reinterpret_cast<cudaEvent_t>(snapshot.ready_event))
+                : cudaSuccess;
+            const cudaError_t stream_error = snapshot.stream
+                ? cudaStreamSynchronize(reinterpret_cast<cudaStream_t>(snapshot.stream))
+                : cudaSuccess;
+            work_complete = ready_error == cudaSuccess && stream_error == cudaSuccess;
+        }
+        release_async_preview_snapshot_pool_slot(
+            *snapshot.pool,
+            snapshot.pool_slot,
+            work_complete);
+    } else {
+        if (snapshot.done_event) {
+            cudaEventDestroy(reinterpret_cast<cudaEvent_t>(snapshot.done_event));
+        }
+        if (snapshot.staging_done_event) {
+            cudaEventDestroy(reinterpret_cast<cudaEvent_t>(snapshot.staging_done_event));
+        }
+        if (snapshot.ready_event) {
+            cudaEventDestroy(reinterpret_cast<cudaEvent_t>(snapshot.ready_event));
+        }
+        if (snapshot.stream) {
+            cudaStreamDestroy(reinterpret_cast<cudaStream_t>(snapshot.stream));
+        }
+        if (snapshot.host_xyz) {
+            cudaFreeHost(snapshot.host_xyz);
+        }
+        if (snapshot.device_xyz) {
+            cudaFree(snapshot.device_xyz);
+        }
     }
-    if (snapshot.staging_done_event) {
-        cudaEventDestroy(reinterpret_cast<cudaEvent_t>(snapshot.staging_done_event));
-        snapshot.staging_done_event = nullptr;
-    }
-    if (snapshot.ready_event) {
-        cudaEventDestroy(reinterpret_cast<cudaEvent_t>(snapshot.ready_event));
-        snapshot.ready_event = nullptr;
-    }
-    if (snapshot.stream) {
-        cudaStreamDestroy(reinterpret_cast<cudaStream_t>(snapshot.stream));
-        snapshot.stream = nullptr;
-    }
-    if (snapshot.host_xyz) {
-        cudaFreeHost(snapshot.host_xyz);
-        snapshot.host_xyz = nullptr;
-    }
-    if (snapshot.device_xyz) {
-        cudaFree(snapshot.device_xyz);
-        snapshot.device_xyz = nullptr;
-    }
+    snapshot.pool = nullptr;
+    snapshot.pool_slot = kFdmAsyncPreviewSnapshotPoolCapacity;
+    snapshot.done_event = nullptr;
+    snapshot.staging_done_event = nullptr;
+    snapshot.ready_event = nullptr;
+    snapshot.stream = nullptr;
+    snapshot.host_xyz = nullptr;
+    snapshot.device_xyz = nullptr;
     snapshot.host_xyz_len_bytes = 0;
     snapshot.needs_wait = false;
+    snapshot.done_event_recorded = false;
 }
 
 template <typename InputScalar, typename OutputScalar>
@@ -1404,6 +1838,7 @@ bool context_alloc_device(Context &ctx) {
     if (!alloc_vector_field(ctx, ctx.h_ex)) return false;
     if (!alloc_vector_field(ctx, ctx.h_demag)) return false;
     if (!alloc_vector_field(ctx, ctx.h_demag_visual)) return false;
+    if (!alloc_vector_field(ctx, ctx.h_eff_visual)) return false;
     if (!alloc_vector_field(ctx, ctx.h_ani)) return false;
     if (!alloc_energy_density(ctx)) return false;
     if (!alloc_vector_field(ctx, ctx.k1))   return false;
@@ -1466,6 +1901,9 @@ bool context_alloc_device(Context &ctx) {
     cudaMemset(ctx.h_demag_visual.x, 0, bytes);
     cudaMemset(ctx.h_demag_visual.y, 0, bytes);
     cudaMemset(ctx.h_demag_visual.z, 0, bytes);
+    cudaMemset(ctx.h_eff_visual.x, 0, bytes);
+    cudaMemset(ctx.h_eff_visual.y, 0, bytes);
+    cudaMemset(ctx.h_eff_visual.z, 0, bytes);
     cudaMemset(ctx.h_ani.x, 0, bytes);
     cudaMemset(ctx.h_ani.y, 0, bytes);
     cudaMemset(ctx.h_ani.z, 0, bytes);
@@ -1480,16 +1918,25 @@ bool context_alloc_device(Context &ctx) {
     cudaMemset(ctx.work.z, 0, bytes);
     cudaMemset(ctx.energy_density, 0, bytes);
 
+    if (!initialize_async_field_snapshot_pool(ctx)) return false;
+    if (!initialize_async_preview_snapshot_pool(ctx)) {
+        destroy_async_field_snapshot_pool(ctx);
+        return false;
+    }
+
     return true;
 }
 
 void context_free_device(Context &ctx) {
+    destroy_async_preview_snapshot_pool(ctx);
+    destroy_async_field_snapshot_pool(ctx);
     context_destroy_compute_stream(ctx);
     free_multilayer_plan_v2(ctx);
     free_vector_field(ctx.m);
     free_vector_field(ctx.h_ex);
     free_vector_field(ctx.h_demag);
     free_vector_field(ctx.h_demag_visual);
+    free_vector_field(ctx.h_eff_visual);
     free_vector_field(ctx.h_ani);
     free_energy_density(ctx);
     free_vector_field(ctx.k1);
@@ -2588,6 +3035,11 @@ static bool context_download_field_impl(
     {
         return false;
     }
+    if (observable == FULLMAG_FDM_OBSERVABLE_H_EFF
+        && !context_refresh_observables(ctx))
+    {
+        return false;
+    }
 
     const DeviceVectorField *field;
     switch (observable) {
@@ -2602,7 +3054,7 @@ static bool context_download_field_impl(
             field = &ctx.h_demag_visual;
             break;
         case FULLMAG_FDM_OBSERVABLE_H_ANI: field = &ctx.h_ani; break;
-        case FULLMAG_FDM_OBSERVABLE_H_EFF: field = &ctx.work; break;
+        case FULLMAG_FDM_OBSERVABLE_H_EFF: field = &ctx.h_eff_visual; break;
         case FULLMAG_FDM_OBSERVABLE_H_OE: {
             const double scale = oersted_field_scale(ctx, ctx.current_time);
             for (uint64_t i = 0; i < n; i++) {
@@ -3012,6 +3464,11 @@ static bool context_download_field_preview_impl(
     {
         return false;
     }
+    if (observable == FULLMAG_FDM_OBSERVABLE_H_EFF
+        && !context_refresh_observables(ctx))
+    {
+        return false;
+    }
 
     const DeviceVectorField *field = nullptr;
     switch (observable) {
@@ -3033,7 +3490,7 @@ static bool context_download_field_preview_impl(
             field = &ctx.h_ani;
             break;
         case FULLMAG_FDM_OBSERVABLE_H_EFF:
-            field = &ctx.work;
+            field = &ctx.h_eff_visual;
             break;
         case FULLMAG_FDM_OBSERVABLE_H_OE:
             if (!ctx.has_oersted_field) {
@@ -3225,6 +3682,23 @@ AsyncFieldSnapshot *context_begin_async_field_snapshot(
     snapshot->host_soa_len_bytes =
         ctx.cell_count * snapshot->component_count * scalar_size(ctx.precision);
 
+    std::size_t pool_slot = kFdmAsyncFieldSnapshotPoolCapacity;
+    std::string pool_error;
+    if (!acquire_async_field_snapshot_pool_slot(ctx, pool_slot, pool_error)) {
+        ctx.last_error = pool_error;
+        delete snapshot;
+        return nullptr;
+    }
+    snapshot->pool = &ctx.async_field_snapshot_pool;
+    snapshot->pool_slot = pool_slot;
+    const auto &slot = snapshot->pool->slots[pool_slot];
+    snapshot->staging = slot.staging;
+    snapshot->host_soa = slot.host_soa;
+    snapshot->stream = slot.stream;
+    snapshot->ready_event = slot.ready_event;
+    snapshot->staging_done_event = slot.staging_done_event;
+    snapshot->done_event = slot.done_event;
+
     auto fail = [&](const char *label, cudaError_t err) -> AsyncFieldSnapshot * {
         ctx.last_error = std::string(label) + ": " + cudaGetErrorString(err);
         destroy_async_snapshot_resources(*snapshot);
@@ -3240,37 +3714,11 @@ AsyncFieldSnapshot *context_begin_async_field_snapshot(
     };
 
     const size_t component_bytes = ctx.cell_count * scalar_size(ctx.precision);
-    cudaError_t err = cudaMalloc(&snapshot->staging.x, component_bytes);
-    if (err != cudaSuccess) return fail("cudaMalloc(snapshot.x)", err);
-    if (!scalar_observable) {
-        err = cudaMalloc(&snapshot->staging.y, component_bytes);
-        if (err != cudaSuccess) return fail("cudaMalloc(snapshot.y)", err);
-        err = cudaMalloc(&snapshot->staging.z, component_bytes);
-        if (err != cudaSuccess) return fail("cudaMalloc(snapshot.z)", err);
-    }
-
-    err = cudaHostAlloc(&snapshot->host_soa, snapshot->host_soa_len_bytes, cudaHostAllocDefault);
-    if (err != cudaSuccess) return fail("cudaHostAlloc(snapshot.host_soa)", err);
-
-    cudaStream_t io_stream{};
-    err = cudaStreamCreateWithFlags(&io_stream, cudaStreamNonBlocking);
-    if (err != cudaSuccess) return fail("cudaStreamCreate(snapshot.io_stream)", err);
-    snapshot->stream = reinterpret_cast<void *>(io_stream);
-
-    cudaEvent_t ready_event{};
-    err = cudaEventCreateWithFlags(&ready_event, cudaEventDisableTiming);
-    if (err != cudaSuccess) return fail("cudaEventCreate(snapshot.ready_event)", err);
-    snapshot->ready_event = reinterpret_cast<void *>(ready_event);
-
-    cudaEvent_t staging_done_event{};
-    err = cudaEventCreateWithFlags(&staging_done_event, cudaEventDisableTiming);
-    if (err != cudaSuccess) return fail("cudaEventCreate(snapshot.staging_done_event)", err);
-    snapshot->staging_done_event = reinterpret_cast<void *>(staging_done_event);
-
-    cudaEvent_t done_event{};
-    err = cudaEventCreateWithFlags(&done_event, cudaEventDisableTiming);
-    if (err != cudaSuccess) return fail("cudaEventCreate(snapshot.done_event)", err);
-    snapshot->done_event = reinterpret_cast<void *>(done_event);
+    cudaError_t err = cudaSuccess;
+    cudaStream_t io_stream = reinterpret_cast<cudaStream_t>(snapshot->stream);
+    cudaEvent_t ready_event = reinterpret_cast<cudaEvent_t>(snapshot->ready_event);
+    cudaEvent_t staging_done_event = reinterpret_cast<cudaEvent_t>(snapshot->staging_done_event);
+    cudaEvent_t done_event = reinterpret_cast<cudaEvent_t>(snapshot->done_event);
 
     const DeviceVectorField *field = nullptr;
     if (scalar_observable) {
@@ -3301,7 +3749,11 @@ AsyncFieldSnapshot *context_begin_async_field_snapshot(
             field = &ctx.h_ani;
             break;
         case FULLMAG_FDM_OBSERVABLE_H_EFF:
-            field = &ctx.work;
+            if (!context_refresh_observables(ctx)) {
+                return fail_message(
+                    ctx.last_error.empty() ? "failed to refresh H_eff snapshot" : ctx.last_error);
+            }
+            field = &ctx.h_eff_visual;
             break;
         case FULLMAG_FDM_OBSERVABLE_H_OE:
             if (ctx.precision == FULLMAG_FDM_PRECISION_DOUBLE) {
@@ -3389,6 +3841,9 @@ AsyncFieldSnapshot *context_begin_async_field_snapshot(
 
     err = cudaEventRecord(ready_event, nullptr);
     if (err != cudaSuccess) return fail("cudaEventRecord(snapshot.ready_event)", err);
+    // From this point onward the leased slot may have work in flight.  A
+    // failure must retire it until the completion event is observable.
+    snapshot->needs_wait = true;
 
     err = cudaStreamWaitEvent(io_stream, ready_event, 0);
     if (err != cudaSuccess) return fail("cudaStreamWaitEvent(snapshot.ready_event)", err);
@@ -3410,9 +3865,6 @@ AsyncFieldSnapshot *context_begin_async_field_snapshot(
 
     err = cudaEventRecord(staging_done_event, io_stream);
     if (err != cudaSuccess) return fail("cudaEventRecord(snapshot.staging_done_event)", err);
-
-    err = cudaStreamWaitEvent(nullptr, staging_done_event, 0);
-    if (err != cudaSuccess) return fail("cudaStreamWaitEvent(snapshot.staging_done_event)", err);
 
     auto *host_bytes = static_cast<unsigned char *>(snapshot->host_soa);
     err = cudaMemcpyAsync(
@@ -3441,8 +3893,8 @@ AsyncFieldSnapshot *context_begin_async_field_snapshot(
 
     err = cudaEventRecord(done_event, io_stream);
     if (err != cudaSuccess) return fail("cudaEventRecord(snapshot.done_event)", err);
+    snapshot->done_event_recorded = true;
 
-    snapshot->needs_wait = true;
     return snapshot;
 }
 
@@ -3513,6 +3965,27 @@ AsyncPreviewSnapshot *context_begin_async_preview_snapshot(
     snapshot->preview_count = static_cast<uint64_t>(preview_nx) * preview_ny * preview_nz;
     snapshot->host_xyz_len_bytes = snapshot->preview_count * 3u * scalar_size(ctx.precision);
 
+    std::size_t pool_slot = kFdmAsyncPreviewSnapshotPoolCapacity;
+    std::string pool_error;
+    if (!acquire_async_preview_snapshot_pool_slot(
+            ctx,
+            snapshot->preview_count,
+            pool_slot,
+            pool_error)) {
+        ctx.last_error = pool_error;
+        delete snapshot;
+        return nullptr;
+    }
+    snapshot->pool = &ctx.async_preview_snapshot_pool;
+    snapshot->pool_slot = pool_slot;
+    const auto &slot = snapshot->pool->slots[pool_slot];
+    snapshot->device_xyz = slot.device_xyz;
+    snapshot->host_xyz = slot.host_xyz;
+    snapshot->stream = slot.stream;
+    snapshot->ready_event = slot.ready_event;
+    snapshot->staging_done_event = slot.staging_done_event;
+    snapshot->done_event = slot.done_event;
+
     auto fail = [&](const char *label, cudaError_t err) -> AsyncPreviewSnapshot * {
         ctx.last_error = std::string(label) + ": " + cudaGetErrorString(err);
         destroy_async_preview_resources(*snapshot);
@@ -3527,29 +4000,11 @@ AsyncPreviewSnapshot *context_begin_async_preview_snapshot(
         return nullptr;
     };
 
-    cudaError_t err =
-        cudaHostAlloc(&snapshot->host_xyz, snapshot->host_xyz_len_bytes, cudaHostAllocDefault);
-    if (err != cudaSuccess) return fail("cudaHostAlloc(preview_snapshot.host_xyz)", err);
-
-    cudaStream_t io_stream{};
-    err = cudaStreamCreateWithFlags(&io_stream, cudaStreamNonBlocking);
-    if (err != cudaSuccess) return fail("cudaStreamCreate(preview_snapshot.io_stream)", err);
-    snapshot->stream = reinterpret_cast<void *>(io_stream);
-
-    cudaEvent_t ready_event{};
-    err = cudaEventCreateWithFlags(&ready_event, cudaEventDisableTiming);
-    if (err != cudaSuccess) return fail("cudaEventCreate(preview_snapshot.ready_event)", err);
-    snapshot->ready_event = reinterpret_cast<void *>(ready_event);
-
-    cudaEvent_t staging_done_event{};
-    err = cudaEventCreateWithFlags(&staging_done_event, cudaEventDisableTiming);
-    if (err != cudaSuccess) return fail("cudaEventCreate(preview_snapshot.staging_done_event)", err);
-    snapshot->staging_done_event = reinterpret_cast<void *>(staging_done_event);
-
-    cudaEvent_t done_event{};
-    err = cudaEventCreateWithFlags(&done_event, cudaEventDisableTiming);
-    if (err != cudaSuccess) return fail("cudaEventCreate(preview_snapshot.done_event)", err);
-    snapshot->done_event = reinterpret_cast<void *>(done_event);
+    cudaError_t err = cudaSuccess;
+    cudaStream_t io_stream = reinterpret_cast<cudaStream_t>(snapshot->stream);
+    cudaEvent_t ready_event = reinterpret_cast<cudaEvent_t>(snapshot->ready_event);
+    cudaEvent_t staging_done_event = reinterpret_cast<cudaEvent_t>(snapshot->staging_done_event);
+    cudaEvent_t done_event = reinterpret_cast<cudaEvent_t>(snapshot->done_event);
 
     const DeviceVectorField *field = nullptr;
     switch (observable) {
@@ -3575,7 +4030,11 @@ AsyncPreviewSnapshot *context_begin_async_preview_snapshot(
             field = &ctx.h_ani;
             break;
         case FULLMAG_FDM_OBSERVABLE_H_EFF:
-            field = &ctx.work;
+            if (!context_refresh_observables(ctx)) {
+                return fail_message(
+                    ctx.last_error.empty() ? "failed to refresh H_eff preview snapshot" : ctx.last_error);
+            }
+            field = &ctx.h_eff_visual;
             break;
         case FULLMAG_FDM_OBSERVABLE_H_OE:
             if (!ctx.has_oersted_field) {
@@ -3741,11 +4200,9 @@ AsyncPreviewSnapshot *context_begin_async_preview_snapshot(
         return snapshot;
     }
 
-    err = cudaMalloc(&snapshot->device_xyz, snapshot->host_xyz_len_bytes);
-    if (err != cudaSuccess) return fail("cudaMalloc(preview_snapshot.device_xyz)", err);
-
     err = cudaEventRecord(ready_event, nullptr);
     if (err != cudaSuccess) return fail("cudaEventRecord(preview_snapshot.ready_event)", err);
+    snapshot->needs_wait = true;
 
     err = cudaStreamWaitEvent(io_stream, ready_event, 0);
     if (err != cudaSuccess) return fail("cudaStreamWaitEvent(preview_snapshot.ready_event)", err);
@@ -3791,9 +4248,6 @@ AsyncPreviewSnapshot *context_begin_async_preview_snapshot(
     err = cudaEventRecord(staging_done_event, io_stream);
     if (err != cudaSuccess) return fail("cudaEventRecord(preview_snapshot.staging_done_event)", err);
 
-    err = cudaStreamWaitEvent(nullptr, staging_done_event, 0);
-    if (err != cudaSuccess) return fail("cudaStreamWaitEvent(preview_snapshot.staging_done_event)", err);
-
     err = cudaMemcpyAsync(
         snapshot->host_xyz,
         snapshot->device_xyz,
@@ -3804,8 +4258,8 @@ AsyncPreviewSnapshot *context_begin_async_preview_snapshot(
 
     err = cudaEventRecord(done_event, io_stream);
     if (err != cudaSuccess) return fail("cudaEventRecord(preview_snapshot.done_event)", err);
+    snapshot->done_event_recorded = true;
 
-    snapshot->needs_wait = true;
     return snapshot;
 }
 
@@ -3893,6 +4347,7 @@ bool context_refresh_observables(Context &ctx) {
             launch_demag_field_fp64(ctx);
         }
         launch_effective_field_fp64(ctx, ctx.current_time);
+        if (!context_refresh_effective_field_visual(ctx)) return false;
     } else {
         if (ctx.enable_exchange) {
             launch_exchange_field_fp32(ctx);
@@ -3901,6 +4356,7 @@ bool context_refresh_observables(Context &ctx) {
             launch_demag_field_fp32(ctx);
         }
         launch_effective_field_fp32(ctx, ctx.current_time);
+        if (!context_refresh_effective_field_visual(ctx)) return false;
     }
 
     cudaError_t err = cudaGetLastError();

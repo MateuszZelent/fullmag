@@ -460,7 +460,8 @@ pub use types::{
 };
 
 use crate::capabilities::{
-    capabilities_for_fdm_engine, capabilities_for_fem_eigen_engine, capabilities_for_fem_engine,
+    capabilities_for_fdm_engine_with_precision,
+    capabilities_for_fem_eigen_engine, capabilities_for_fem_engine,
     capabilities_for_fem_frequency_response_validation_engine,
 };
 use crate::fdm::cpu::multilayer_reference;
@@ -4053,16 +4054,18 @@ pub fn resolve_planned_runtime_capabilities(
 ) -> Result<BackendCapabilities, RunError> {
     require_supported_fem_topology(problem, plan)?;
     match &plan.backend_plan {
-        BackendPlanIR::Fdm(fdm) => Ok(capabilities_for_fdm_engine(
+        BackendPlanIR::Fdm(fdm) => Ok(capabilities_for_fdm_engine_with_precision(
             dispatch::resolve_fdm_engine_for_plan_with_trail(problem, fdm)?.engine,
             capabilities::FdmCapabilityProfile::SingleGrid,
+            fdm.precision,
         )),
         BackendPlanIR::Fem(fem) => Ok(capabilities_for_fem_engine(
             dispatch::resolve_fem_engine_for_plan_with_trail(problem, fem, false)?.engine,
         )),
-        BackendPlanIR::FdmMultilayer(_) => Ok(capabilities_for_fdm_engine(
+        BackendPlanIR::FdmMultilayer(fdm) => Ok(capabilities_for_fdm_engine_with_precision(
             dispatch::resolve_fdm_engine_with_trail(problem)?.engine,
             capabilities::FdmCapabilityProfile::Multilayer,
+            fdm.precision,
         )),
         BackendPlanIR::FemEigen(_) => Ok(capabilities_for_fem_eigen_engine(
             dispatch::resolve_fem_engine_with_trail(problem)?.engine,

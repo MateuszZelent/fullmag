@@ -69,6 +69,12 @@ void cuda_materialization_contract_is_present() {
           "CUDA energy-density launcher must be present");
     check(kernel.find("FULLMAG_FDM_OBSERVABLE_EDEN_TOTAL") != std::string::npos,
           "CUDA materializer must define total energy density");
+    check(kernel.find("ku2_value * projection * projection * projection * projection") !=
+              std::string::npos,
+          "CUDA anisotropy density must use the canonical Ku2 functional");
+    check(kernel.find("kind == FULLMAG_FDM_OBSERVABLE_EDEN_DRIVE && include_drive") !=
+              std::string::npos,
+          "regional drive density must not be folded into eden_total implicitly");
 }
 
 } // namespace

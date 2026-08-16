@@ -249,9 +249,10 @@ Docelowy status po całym rolloutcie:
 | FDM CUDA FP32 | tak | tak | produkcyjna po parytecie FP64 |
 | FEM CPU/GPU | bez regresji | bez regresji | istniejący kontrakt |
 
-FP32 pozostaje `unsupported` dla nowych obserwabli do chwili przejścia
-dedykowanych bram. Nie wolno automatycznie materializować ich przez FP64 lub
-CPU i przedstawiać jako wynik FP32.
+FP32 jest `supported` dla tego bounded slice dopiero po przejściu dedykowanych
+managed bram parity. Nie wolno automatycznie materializować go przez FP64 lub
+CPU i przedstawiać jako wynik FP32; przy braku kwalifikacji planner/API musi
+pozostać fail-closed.
 
 ## Proweniencja
 
@@ -357,3 +358,50 @@ na ten sam zaakceptowany stan magnetyzacji.
    pola solverowego.
 6. Capability i materialization state są różnymi pojęciami w API i UI.
 7. HTTP v2 pozostaje źródłem prawdy; realtime wyłącznie unieważnia zasoby.
+
+## Evidence aktualizacji — 2026-08-16
+
+Świeży managed launcher z `master` (`c8873c7d0d09a7831c48d294d1a9cfa8013bce51`)
+został zbudowany przez `just build fullmag` w trybie `cuda-fem-gpu`. Dla
+fixture `examples/fdm_cpu_relax_smoke.py` rozstrzygnięty lane był
+`fdm_cuda`/FP32, bez fallbacku (`device=gpu`, `fallback=null`). Terminalny
+snapshot opublikował `H_demag`, `H_eff`, `eden_*` i `m` z tym samym
+`source_step=4`, `source_time_seconds=4e-13` oraz zgodną identyfikacją
+generacji domeny.
+
+Wcześniejszy błąd telemetrii obiektowej miał osobną przyczynę niż brak pola:
+ścieżka scalar snapshotu aktualizowała średnią w `StepStats`, lecz nie
+odświeżała `per_object_scalars`. API zwracało przez to zerowe `mx/my/mz`, mimo
+że tabela scalar i binarne pole `m` były poprawne. Wspólny helper aktualizuje
+teraz oba widoki atomowo. Świeży endpoint metryk zwrócił
+`my=0.9999988093647432`, `mz=3.677104947078164e-5` oraz niezerowe energie.
+
+Managed parity bramy FDM przeszły przez
+`FULLMAG_CUDA_ARCHITECTURES=native FULLMAG_NATIVE_BUILD_JOBS=2 just
+verify-fdm-observable-materialization-parity`. Evidence znajduje się w
+`/mnt/fullmag-zfn2-native/fdm-observable-materialization-parity/evidence/qualification.json`
+(`source_commit` i `source_diff_sha256` są zapisane w JSON): CPU↔CUDA FP64
+obejmuje pola i gęstości (`max_density_abs_drift=1.082183e-2`),
+CUDA FP32↔FP64, transfery F32→F64 oraz wszystkie sześć `eden_*` z całkami
+zgodnymi z globalnymi energiami.
+
+Pełny browser/WebGL gate przeszedł przez istniejący skrypt
+`pnpm --dir apps/control-room smoke:fdm-terminal-webgl-gate` na świeżym
+runtime FP32. Evidence znajduje się w
+`/tmp/fullmag-observable-browser-proof-cuda-fp32-1/fdm-terminal-webgl-gate.json`:
+Airbox nie oferuje `m`, `H_demag/H_eff` mają pełnodomenowe próbki, Wireframe,
+Points i Vectors commitują osobne stany, a kontekst WebGL i drawing buffer są
+zdrowe. Audyt 120 przełączeń quantity/layer znajduje się w
+`/tmp/fullmag-observable-viewport-audit-fp32-1/metrics.json` (heap
+`69.2MB -> 71.8MB`, cache `0B -> 0B`, geometria `2 -> 2`, GPU buffers
+`4591/4595` usuniętych). Direct API i proxy zwróciły wcześniej identyczny
+katalog quantity oraz meta `H_demag`; zmiana precision gate nie zmieniła
+kształtu kontraktu v2.
+
+Ten evidence kwalifikuje bieżący bounded slice jako
+`validated / runtime-qualified` dla FDM CUDA FP64/FP32 oraz utrzymuje
+`regression-qualified` status istniejącego FEM CPU/GPU snapshotu. Nie jest to
+kwalifikacja hybrydowej materializacji ani każdego modelu materiałowego.
+Lokalny `react-doctor` nie jest zainstalowany (`pnpm exec react-doctor` zwraca
+`Command "react-doctor" not found`), więc ten review-tool gate pozostaje
+jawnie `tooling_gap`, bez zastępowania go innym score.

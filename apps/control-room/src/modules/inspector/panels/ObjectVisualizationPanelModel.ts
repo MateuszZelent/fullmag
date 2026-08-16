@@ -1283,7 +1283,11 @@ export function visualizationQuantityItems(
     : [];
   const fieldItems = fieldCatalog
     ? fieldCatalog.quantities
-        .filter(fieldCatalogQuantitySupportsSpatialVisualization)
+        .filter(
+          (quantity) =>
+            fieldCatalogQuantitySupportsSpatialVisualization(quantity) &&
+            (targetKind !== "airbox" || quantity.domain === "full_domain"),
+        )
         .map((quantity) => {
           const canonicalQuantityId = resolveCanonicalQuantityId(
             quantity.quantity_id,

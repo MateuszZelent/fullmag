@@ -1,11 +1,10 @@
 /*
  * async_snapshot_contract.cpp - native FDM asynchronous snapshot contract.
  *
- * Field and preview snapshots may wait for the legacy default stream before
- * reading solver buffers, but the staging and host download work must run on
- * the snapshot IO stream.  The default stream only waits for private staging to
- * finish so solver writes cannot race the snapshot while host downloads can
- * still overlap later solver work.
+ * Field and preview snapshots lease bounded persistent CUDA resources.  Solver
+ * readiness is observed through an event and all staging/host-download work
+ * runs on the private snapshot IO stream; no global device synchronization or
+ * per-request CUDA allocation is allowed on the publication path.
  */
 
 #include <cstdio>
@@ -69,33 +68,51 @@ std::string function_body(const std::string &source, const std::string &signatur
 void async_snapshot_handles_record_staging_completion() {
     const std::filesystem::path root = fdm_source_root();
     const std::string context_header = read_text_file(root / "include" / "context.hpp");
-    const std::string context = read_text_file(root / "core" / "context.cu");
+    const std::string context = read_text_file(root / "gpu" / "cuda" / "runtime" / "context.cu");
 
     check(
         context_header.find("staging_done_event") != std::string::npos,
         "async snapshot handles must own a staging_done_event");
     check(
-        context.find("cudaEventDestroy(reinterpret_cast<cudaEvent_t>(snapshot.staging_done_event))") !=
+        context.find("cudaEventDestroy(reinterpret_cast<cudaEvent_t>(slot.staging_done_event))") !=
             std::string::npos,
-        "async snapshot resource cleanup must destroy staging_done_event");
+        "async snapshot pool cleanup must destroy staging_done_event");
+    check(
+        context_header.find("kFdmAsyncFieldSnapshotPoolCapacity = 4") != std::string::npos,
+        "FDM async field snapshots must use a bounded pool");
+    check(
+        context_header.find("kFdmAsyncPreviewSnapshotPoolCapacity = 4") != std::string::npos,
+        "FDM async preview snapshots must use a bounded pool");
+    check(
+        context_header.find("done_event_recorded") != std::string::npos,
+        "async snapshot handles must distinguish a current completion event from a reused pool event");
+    check(
+        context.find("if (snapshot.needs_wait && !snapshot.done_event_recorded)") != std::string::npos,
+        "failed snapshot setup must drain a slot before reusing its persistent resources");
+    check(
+        context.find("fdm_async_snapshot_pool_exhausted") != std::string::npos,
+        "FDM async field snapshots must expose bounded backpressure");
+    check(
+        context.find("fdm_async_preview_snapshot_pool_exhausted") != std::string::npos,
+        "FDM async preview snapshots must expose bounded backpressure");
 }
 
 void async_field_snapshot_stages_on_io_stream() {
     const std::filesystem::path root = fdm_source_root();
     const std::string field_snapshot = function_body(
-        read_text_file(root / "core" / "context.cu"),
+        read_text_file(root / "gpu" / "cuda" / "runtime" / "context.cu"),
         "AsyncFieldSnapshot *context_begin_async_field_snapshot");
 
     check(
-        field_snapshot.find("cudaEventCreateWithFlags(&staging_done_event, cudaEventDisableTiming)") !=
+        field_snapshot.find("snapshot->staging_done_event = slot.staging_done_event") !=
             std::string::npos,
-        "field snapshots must create a staging completion event");
+        "field snapshots must lease the persistent staging completion event");
     check(
         field_snapshot.find("cudaStreamWaitEvent(io_stream, ready_event, 0)") !=
             std::string::npos,
         "field snapshots must wait for default-stream readiness on the IO stream");
     check(
-        field_snapshot.find("snapshot->staging.x, field->x, component_bytes, cudaMemcpyDeviceToDevice, io_stream") !=
+        field_snapshot.find("snapshot->staging.x, source_x, component_bytes, cudaMemcpyDeviceToDevice, io_stream") !=
             std::string::npos,
         "field snapshot x staging copy must run on the IO stream");
     check(
@@ -107,32 +124,40 @@ void async_field_snapshot_stages_on_io_stream() {
             std::string::npos,
         "field snapshot z staging copy must run on the IO stream");
     check(
+        field_snapshot.find("cudaMalloc(") == std::string::npos &&
+            field_snapshot.find("cudaHostAlloc(") == std::string::npos,
+        "field snapshots must not allocate CUDA resources per request");
+    check(
         field_snapshot.find("cudaEventRecord(staging_done_event, io_stream)") !=
             std::string::npos,
         "field snapshots must record staging completion on the IO stream");
     check(
-        field_snapshot.find("cudaStreamWaitEvent(nullptr, staging_done_event, 0)") !=
+        field_snapshot.find("cudaStreamWaitEvent(nullptr, staging_done_event, 0)") ==
             std::string::npos,
-        "field snapshots must protect future default-stream writes until staging is complete");
+        "field snapshots must not block the global default stream after staging");
 }
 
 void async_preview_snapshot_downsamples_on_io_stream() {
     const std::filesystem::path root = fdm_source_root();
     const std::string preview_snapshot = function_body(
-        read_text_file(root / "core" / "context.cu"),
+        read_text_file(root / "gpu" / "cuda" / "runtime" / "context.cu"),
         "AsyncPreviewSnapshot *context_begin_async_preview_snapshot");
 
     const std::size_t switch_pos = preview_snapshot.find("switch (observable)");
-    const std::size_t host_alloc_pos =
-        preview_snapshot.find("cudaHostAlloc(&snapshot->host_xyz");
+    const std::size_t pool_acquire_pos = preview_snapshot.find(
+        "acquire_async_preview_snapshot_pool_slot");
     check(
-        host_alloc_pos != std::string::npos && switch_pos != std::string::npos &&
-            host_alloc_pos < switch_pos,
-        "preview snapshots must allocate pinned host storage before host-filled observable branches");
+        pool_acquire_pos != std::string::npos && switch_pos != std::string::npos &&
+            pool_acquire_pos < switch_pos,
+        "preview snapshots must lease pinned host storage before host-filled observable branches");
     check(
-        preview_snapshot.find("cudaEventCreateWithFlags(&staging_done_event, cudaEventDisableTiming)") !=
+        preview_snapshot.find("cudaMalloc(") == std::string::npos &&
+            preview_snapshot.find("cudaHostAlloc(") == std::string::npos,
+        "preview snapshots must not allocate CUDA resources per request");
+    check(
+        preview_snapshot.find("snapshot->staging_done_event = slot.staging_done_event") !=
             std::string::npos,
-        "preview snapshots must create a staging completion event");
+        "preview snapshots must lease the persistent staging completion event");
     check(
         preview_snapshot.find("cudaStreamWaitEvent(io_stream, ready_event, 0)") !=
             std::string::npos,
@@ -150,9 +175,9 @@ void async_preview_snapshot_downsamples_on_io_stream() {
             std::string::npos,
         "preview snapshots must record staging completion on the IO stream");
     check(
-        preview_snapshot.find("cudaStreamWaitEvent(nullptr, staging_done_event, 0)") !=
+        preview_snapshot.find("cudaStreamWaitEvent(nullptr, staging_done_event, 0)") ==
             std::string::npos,
-        "preview snapshots must protect future default-stream writes until staging is complete");
+        "preview snapshots must not block the global default stream after staging");
 }
 
 } // namespace

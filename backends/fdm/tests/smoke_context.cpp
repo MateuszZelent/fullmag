@@ -15,6 +15,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <string>
 #include <vector>
 
 static void check(bool condition, const char *msg) {
@@ -195,6 +196,82 @@ int main() {
     check(scalar_len_bytes == cell_count * sizeof(double),
           "scalar snapshot byte length must be one value per cell");
     fullmag_fdm_field_snapshot_destroy(scalar_snapshot);
+
+    std::vector<fullmag_fdm_field_snapshot *> field_snapshots;
+    for (std::size_t index = 0; index < 4; ++index) {
+        auto *snapshot = fullmag_fdm_backend_begin_field_snapshot(
+            energy_handle, FULLMAG_FDM_OBSERVABLE_M);
+        check(snapshot != nullptr, "bounded field snapshot pool slot acquisition failed");
+        field_snapshots.push_back(snapshot);
+    }
+    auto *field_pool_exhausted = fullmag_fdm_backend_begin_field_snapshot(
+        energy_handle, FULLMAG_FDM_OBSERVABLE_M);
+    check(field_pool_exhausted == nullptr,
+          "bounded field snapshot pool must reject a fifth leased slot");
+    err = fullmag_fdm_backend_last_error(energy_handle);
+    check(err && std::string(err).find("fdm_async_snapshot_pool_exhausted") != std::string::npos,
+          "field snapshot pool exhaustion must expose a stable reason code");
+
+    const void *pool_data = nullptr;
+    uint64_t pool_len_bytes = 0;
+    fullmag_fdm_snapshot_desc pool_desc = {};
+    rc = fullmag_fdm_field_snapshot_wait(
+        field_snapshots.front(), &pool_data, &pool_len_bytes, &pool_desc);
+    check(rc == FULLMAG_FDM_OK && pool_data != nullptr,
+          "field snapshot pool slot must complete successfully");
+    fullmag_fdm_field_snapshot_destroy(field_snapshots.front());
+    field_snapshots.erase(field_snapshots.begin());
+
+    auto *replacement_field_snapshot = fullmag_fdm_backend_begin_field_snapshot(
+        energy_handle, FULLMAG_FDM_OBSERVABLE_M);
+    check(replacement_field_snapshot != nullptr,
+          "completed field snapshot slot must be reusable");
+    for (auto *snapshot : field_snapshots) {
+        rc = fullmag_fdm_field_snapshot_wait(
+            snapshot, &pool_data, &pool_len_bytes, &pool_desc);
+        check(rc == FULLMAG_FDM_OK, "field snapshot pool wait failed");
+        fullmag_fdm_field_snapshot_destroy(snapshot);
+    }
+    rc = fullmag_fdm_field_snapshot_wait(
+        replacement_field_snapshot, &pool_data, &pool_len_bytes, &pool_desc);
+    check(rc == FULLMAG_FDM_OK, "replacement field snapshot wait failed");
+    fullmag_fdm_field_snapshot_destroy(replacement_field_snapshot);
+
+    std::vector<fullmag_fdm_preview_snapshot *> preview_snapshots;
+    for (std::size_t index = 0; index < 4; ++index) {
+        auto *snapshot = fullmag_fdm_backend_begin_preview_snapshot(
+            energy_handle, FULLMAG_FDM_OBSERVABLE_M, 2, 2, 1, 0, 1);
+        check(snapshot != nullptr, "bounded preview snapshot pool slot acquisition failed");
+        preview_snapshots.push_back(snapshot);
+    }
+    auto *preview_pool_exhausted = fullmag_fdm_backend_begin_preview_snapshot(
+        energy_handle, FULLMAG_FDM_OBSERVABLE_M, 2, 2, 1, 0, 1);
+    check(preview_pool_exhausted == nullptr,
+          "bounded preview snapshot pool must reject a fifth leased slot");
+    err = fullmag_fdm_backend_last_error(energy_handle);
+    check(err && std::string(err).find("fdm_async_preview_snapshot_pool_exhausted") != std::string::npos,
+          "preview snapshot pool exhaustion must expose a stable reason code");
+
+    rc = fullmag_fdm_preview_snapshot_wait(
+        preview_snapshots.front(), &pool_data, &pool_len_bytes, &pool_desc);
+    check(rc == FULLMAG_FDM_OK && pool_data != nullptr,
+          "preview snapshot pool slot must complete successfully");
+    fullmag_fdm_preview_snapshot_destroy(preview_snapshots.front());
+    preview_snapshots.erase(preview_snapshots.begin());
+    auto *replacement_preview_snapshot = fullmag_fdm_backend_begin_preview_snapshot(
+        energy_handle, FULLMAG_FDM_OBSERVABLE_M, 2, 2, 1, 0, 1);
+    check(replacement_preview_snapshot != nullptr,
+          "completed preview snapshot slot must be reusable");
+    for (auto *snapshot : preview_snapshots) {
+        rc = fullmag_fdm_preview_snapshot_wait(
+            snapshot, &pool_data, &pool_len_bytes, &pool_desc);
+        check(rc == FULLMAG_FDM_OK, "preview snapshot pool wait failed");
+        fullmag_fdm_preview_snapshot_destroy(snapshot);
+    }
+    rc = fullmag_fdm_preview_snapshot_wait(
+        replacement_preview_snapshot, &pool_data, &pool_len_bytes, &pool_desc);
+    check(rc == FULLMAG_FDM_OK, "replacement preview snapshot wait failed");
+    fullmag_fdm_preview_snapshot_destroy(replacement_preview_snapshot);
     fullmag_fdm_backend_destroy(energy_handle);
 
     // 8. Accepted-state snapshot keeps field torque separate from direct torque.

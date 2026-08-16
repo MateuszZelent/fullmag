@@ -3986,6 +3986,35 @@ mod tests {
     }
 
     #[test]
+    fn replacing_current_preview_fields_completes_missing_source_provenance() {
+        let workspace = workspace_with_domain_mesh();
+        workspace.update(|state| {
+            state.live_state.latest_step.step = 4;
+            state.live_state.latest_step.time = 4.0e-13;
+
+            let mut field = preview_field("H_demag", 3, 42.0);
+            field.spatial_kind = "grid".to_string();
+            field.quantity_domain = "full_domain".to_string();
+            replace_cached_preview_fields(state, vec![field]);
+        });
+
+        let snapshot = workspace.snapshot();
+        let field = snapshot
+            .latest_fields
+            .0
+            .get("H_demag")
+            .expect("current H_demag should be promoted to latest_fields");
+        assert_eq!(field["source_step"], serde_json::json!(4));
+        assert_eq!(
+            field["source_time_seconds"],
+            serde_json::json!(4.0e-13)
+        );
+        assert!(field["materialized_at_unix_ms"]
+            .as_u64()
+            .is_some_and(|timestamp| timestamp > 0));
+    }
+
+    #[test]
     fn idle_preview_refresh_cannot_replace_newer_terminal_preview_provenance() {
         let workspace = workspace_with_domain_mesh();
         workspace.update(|state| {
@@ -5251,6 +5280,11 @@ pub(crate) fn replace_cached_preview_fields(
         return;
     }
     let source_step = state.live_state.latest_step.step;
+    let source_time_seconds = Some(state.live_state.latest_step.time)
+        .filter(|time| time.is_finite() && *time > 0.0);
+    let materialized_at_unix_ms = source_time_seconds
+        .map(|_| unix_time_millis().unwrap_or(0) as u64)
+        .unwrap_or(0);
     let fields = newest_preview_fields(
         state
             .preview_fields
@@ -5258,7 +5292,14 @@ pub(crate) fn replace_cached_preview_fields(
             .into_iter()
             .chain(state.pending_preview_fields.to_vec())
             .chain(fields.into_iter().map(|mut field| {
-                align_preview_field_source_coordinates(&mut field, source_step, None);
+                align_preview_field_source_coordinates(
+                    &mut field,
+                    source_step,
+                    source_time_seconds,
+                );
+                if field.materialized_at_unix_ms == 0 {
+                    field.materialized_at_unix_ms = materialized_at_unix_ms;
+                }
                 field
             })),
     );

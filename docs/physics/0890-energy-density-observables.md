@@ -192,10 +192,12 @@ składowych w tym samym generation.
 
 (fdm-fem-observable-validation-cross-backend)=
 
-FDM CPU jest referencją. FDM CUDA FP64 musi przejść parity w double przed
-kwalifikacją FP32. FEM CPU i GPU zachowują istniejącą regresję pełnodomenowego
+FDM CPU jest referencją. Managed brama FDM kwalifikuje bounded slice CUDA FP64
+przez parity w double, a FP32 przez parity z CUDA FP64 na tych samych maskach,
+siatkach i stanach. FEM CPU i GPU zachowują istniejącą regresję pełnodomenowego
 snapshotu. Każdy lane raportuje osobno status executable, validated i
-production-qualified.
+production-qualified; kwalifikacja nie rozszerza się automatycznie na inne
+modele materiałowe ani hybrydową materializację.
 
 ### 5.3 Regression tests
 
@@ -214,21 +216,33 @@ production-qualified.
 - [x] ProblemIR semantics
 - [x] Planner and capability matrix
 - [x] FDM CPU reference
-- [ ] FDM CUDA FP64 production qualification
-- [ ] FDM CUDA FP32 precision qualification
+- [x] FDM CUDA FP64 bounded-slice production qualification
+- [x] FDM CUDA FP32 bounded-slice precision qualification
 - [x] FEM CPU/GPU full-domain snapshot regression
 - [x] Resource-first observables contract
 - [ ] Hybrid backend
-- [ ] Browser/WebGL qualification
+- [x] Browser/WebGL qualification
 
 ## 7. Known limits and deferred work
 
 (fdm-fem-observable-limitations)=
 
 FEM canonical element/quadrature publication i hybrid materialization są poza
-tym bounded slice. Do czasu ich kwalifikacji UI pokazuje provenance projekcji.
-FP32 nie może być oznaczany jako qualified na podstawie samego builda. Globalne
-historie energii pozostają osobnym zasobem scalar history.
+tym bounded slice. UI pokazuje provenance projekcji. FP32 nie może być
+oznaczany jako qualified na podstawie samego builda; wymagane są managed parity
+bramy. Globalne historie energii pozostają osobnym zasobem scalar history.
+
+### 7.1 Evidence dla bounded slice (2026-08-16)
+
+Managed evidence `fdm_observable_materialization_parity.v1` znajduje się w
+`/mnt/fullmag-zfn2-native/fdm-observable-materialization-parity/evidence/qualification.json`.
+Obejmuje CPU↔CUDA FP64 pól i gęstości, CUDA FP32↔FP64, transfery F32→F64
+oraz wszystkie sześć `eden_*`; test CPU↔FP64 raportuje
+`max_density_abs_drift=1.082183e-2` na 7 aktywnych komórkach. Browser/WebGL
+evidence jest w `/tmp/fullmag-observable-browser-proof-cuda-fp32-1/`, a
+120-cyklowy lifecycle evidence w
+`/tmp/fullmag-observable-viewport-audit-fp32-1/metrics.json`. Lokalny
+`react-doctor` nie jest zainstalowany i pozostaje jawnie `tooling_gap`.
 
 ## 8. Scientific bibliography
 

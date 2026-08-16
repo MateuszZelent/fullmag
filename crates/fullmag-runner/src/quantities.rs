@@ -149,7 +149,6 @@ fn fdm_quantity_is_active(engine: FdmEngine, plan: &FdmPlanIR, id: QuantityId) -
                 | QuantityId::EdenEx
                 | QuantityId::EdenDemag
                 | QuantityId::EdenExt
-                | QuantityId::EdenDrive
                 | QuantityId::EdenAni
                 | QuantityId::EdenDmi
                 | QuantityId::EdenTotal

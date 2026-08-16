@@ -34,6 +34,49 @@ struct DeviceVectorField {
     void *z = nullptr;
 };
 
+// Fixed-size CUDA transfer pool for observable snapshots.  The solver never
+// allocates device or pinned-host transfer storage on the publication path;
+// callers either lease one of these slots or receive bounded backpressure.
+constexpr std::size_t kFdmAsyncFieldSnapshotPoolCapacity = 4;
+constexpr std::size_t kFdmAsyncPreviewSnapshotPoolCapacity = 4;
+
+struct AsyncFieldSnapshotPoolSlot {
+    DeviceVectorField staging;
+    void *host_soa = nullptr;
+    void *stream = nullptr;      // cudaStream_t
+    void *ready_event = nullptr; // cudaEvent_t
+    void *staging_done_event = nullptr; // cudaEvent_t
+    void *done_event = nullptr;  // cudaEvent_t
+};
+
+struct AsyncFieldSnapshotPool {
+    AsyncFieldSnapshotPoolSlot slots[kFdmAsyncFieldSnapshotPoolCapacity]{};
+    std::size_t component_bytes = 0;
+    std::size_t host_soa_bytes = 0;
+    uint64_t cell_count = 0;
+    uint32_t leased_slots = 0;
+    uint32_t retired_slots = 0;
+    bool initialized = false;
+};
+
+struct AsyncPreviewSnapshotPoolSlot {
+    void *device_xyz = nullptr;
+    void *host_xyz = nullptr;
+    void *stream = nullptr;      // cudaStream_t
+    void *ready_event = nullptr; // cudaEvent_t
+    void *staging_done_event = nullptr; // cudaEvent_t
+    void *done_event = nullptr;  // cudaEvent_t
+};
+
+struct AsyncPreviewSnapshotPool {
+    AsyncPreviewSnapshotPoolSlot slots[kFdmAsyncPreviewSnapshotPoolCapacity]{};
+    std::size_t xyz_bytes = 0;
+    uint64_t max_preview_count = 0;
+    uint32_t leased_slots = 0;
+    uint32_t retired_slots = 0;
+    bool initialized = false;
+};
+
 struct DeviceDemagKernel {
     void *xx = nullptr;
     void *yy = nullptr;
@@ -261,6 +304,10 @@ struct Context {
     // Full-domain observable demag field. Unlike h_demag, this is never
     // masked by active_mask and is not consumed by the LLG hot loop.
     DeviceVectorField h_demag_visual;
+    // Full-domain observable effective field. The solver keeps `work` masked
+    // for the LLG hot loop; this buffer combines the solver result on active
+    // cells with the unmasked demag field in the Airbox.
+    DeviceVectorField h_eff_visual;
     DeviceVectorField h_ani;  // anisotropy field
     // Per-cell energy-density observable scratch [J/m^3], one scalar/cell.
     void *energy_density = nullptr;
@@ -391,6 +438,9 @@ struct Context {
     // Error state
     std::string last_error;
 
+    AsyncFieldSnapshotPool async_field_snapshot_pool;
+    AsyncPreviewSnapshotPool async_preview_snapshot_pool;
+
     // Native FDM ABI v2 multilayer staging. These buffers are uploaded and
     // stepped separately from the legacy single-grid state.
     bool has_multilayer_plan_v2 = false;
@@ -423,6 +473,9 @@ struct AsyncFieldSnapshot {
     void *staging_done_event = nullptr; // cudaEvent_t
     void *done_event = nullptr;  // cudaEvent_t
     bool needs_wait = false;
+    bool done_event_recorded = false;
+    AsyncFieldSnapshotPool *pool = nullptr;
+    std::size_t pool_slot = kFdmAsyncFieldSnapshotPoolCapacity;
 };
 
 struct AsyncPreviewSnapshot {
@@ -436,7 +489,32 @@ struct AsyncPreviewSnapshot {
     void *staging_done_event = nullptr; // cudaEvent_t
     void *done_event = nullptr;  // cudaEvent_t
     bool needs_wait = false;
+    bool done_event_recorded = false;
+    AsyncPreviewSnapshotPool *pool = nullptr;
+    std::size_t pool_slot = kFdmAsyncPreviewSnapshotPoolCapacity;
 };
+
+bool initialize_async_field_snapshot_pool(Context &ctx);
+void destroy_async_field_snapshot_pool(Context &ctx);
+bool acquire_async_field_snapshot_pool_slot(
+    Context &ctx,
+    std::size_t &slot_index,
+    std::string &error);
+void release_async_field_snapshot_pool_slot(
+    AsyncFieldSnapshotPool &pool,
+    std::size_t slot_index,
+    bool work_complete);
+bool initialize_async_preview_snapshot_pool(Context &ctx);
+void destroy_async_preview_snapshot_pool(Context &ctx);
+bool acquire_async_preview_snapshot_pool_slot(
+    Context &ctx,
+    uint64_t preview_count,
+    std::size_t &slot_index,
+    std::string &error);
+void release_async_preview_snapshot_pool_slot(
+    AsyncPreviewSnapshotPool &pool,
+    std::size_t slot_index,
+    bool work_complete);
 
 /// Plain-old-data copy of STT-related fields from Context.
 /// Passed by value to CUDA kernels so they don't need host-side Context access.
