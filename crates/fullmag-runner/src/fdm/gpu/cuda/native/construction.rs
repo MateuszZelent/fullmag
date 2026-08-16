@@ -403,6 +403,16 @@ impl NativeFdmBackend {
                 .flat_map(|value| value.iter().copied())
                 .collect()
         });
+        let static_external_field_flat: Option<Vec<f64>> =
+            plan.static_external_field_xyz.as_ref().map(|field| {
+                field
+                    .iter()
+                    .flat_map(|value| value.iter().copied())
+                    .collect()
+            });
+        let uploaded_profile_flat = static_external_field_flat
+            .as_ref()
+            .or(oersted_field_flat.as_ref());
 
         // Build exchange LUT when region mask is present.
         // Default: A_ii = A_material, A_ij (i≠j) = 0 (no inter-region coupling).
@@ -498,10 +508,10 @@ impl NativeFdmBackend {
             oersted_time_dep_offset: plan.oersted_time_dep_offset,
             oersted_time_dep_t_on: plan.oersted_time_dep_t_on,
             oersted_time_dep_t_off: plan.oersted_time_dep_t_off,
-            oersted_field_xyz: oersted_field_flat
+            oersted_field_xyz: uploaded_profile_flat
                 .as_ref()
                 .map_or(std::ptr::null(), |field| field.as_ptr()),
-            oersted_field_len: oersted_field_flat
+            oersted_field_len: uploaded_profile_flat
                 .as_ref()
                 .map_or(0, |field| field.len() as u64),
 
@@ -733,6 +743,28 @@ impl NativeFdmBackend {
             let msg = unsafe { CStr::from_ptr(err) }.to_string_lossy().to_string();
             unsafe { ffi::fullmag_fdm_backend_destroy(handle) };
             return Err(RunError { message: msg });
+        }
+
+        if let Some(field) = static_external_field_flat.as_ref() {
+            let marked = unsafe {
+                ffi::fullmag_fdm_backend_set_static_external_field_f64(
+                    handle,
+                    field.as_ptr(),
+                    field.len() as u64,
+                )
+            };
+            if marked != 1 {
+                let message = unsafe {
+                    let err = ffi::fullmag_fdm_backend_last_error(handle);
+                    if err.is_null() {
+                        "failed to mark static external field profile".to_string()
+                    } else {
+                        CStr::from_ptr(err).to_string_lossy().to_string()
+                    }
+                };
+                unsafe { ffi::fullmag_fdm_backend_destroy(handle) };
+                return Err(RunError { message });
+            }
         }
 
         Ok(Self {

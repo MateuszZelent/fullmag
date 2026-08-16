@@ -1,0 +1,54 @@
+{
+  "ir_version": "0.3.0",
+  "problem_meta": {
+    "name": "object-migration-fixture",
+    "script_api_version": "0.3.0",
+    "serializer_version": "0.3.0"
+  },
+  "geometry": {
+    "entries": [
+      {
+        "kind": "translate",
+        "name": "free_layer",
+        "base": {"kind": "box", "name": "free_layer_base", "size": [2e-7, 2e-8, 6e-9]},
+        "by": [0.0, 0.0, 3e-9]
+      },
+      {"kind": "box", "name": "heavy_metal", "size": [2e-7, 2e-8, 3e-9], "role": "antenna"}
+    ]
+  },
+  "regions": [
+    {"name": "free_layer", "geometry": "free_layer"},
+    {"name": "heavy_metal", "geometry": "heavy_metal"}
+  ],
+  "materials": [
+    {"name": "CoFeB", "saturation_magnetisation": 580000.0, "exchange_stiffness": 1.5e-11, "damping": 0.3},
+    {"name": "Pt", "saturation_magnetisation": 0.0, "exchange_stiffness": 0.0, "damping": 0.0}
+  ],
+  "material_parameter_fields": [
+    {"assignment_id": "free_ms", "owner_object": "free_layer", "parameter": "ms", "value": {"kind": "constant", "value": 580000.0, "unit": "A/m"}}
+  ],
+  "magnets": [
+    {
+      "name": "free_layer",
+      "region": "free_layer",
+      "material": "CoFeB",
+      "initial_magnetization": {"kind": "uniform", "value": [1.0, 0.0, 0.0]}
+    }
+  ],
+  "surface_boundary_conditions": [
+    {"surface": {"object_id": "heavy_metal", "surface_id": "left", "orientation": [-1.0, 0.0, 0.0]}, "kind": "voltage", "value_v": 0.01}
+  ],
+  "interfaces": [
+    {
+      "schema_version": "physics_interface.v1",
+      "interface_id": "hm_fm",
+      "name": "HM/FM",
+      "side_a": {"object_id": "heavy_metal", "surface_id": "top", "orientation": [0.0, 0.0, 1.0]},
+      "side_b": {"object_id": "free_layer", "surface_id": "bottom", "orientation": [0.0, 0.0, -1.0]},
+      "side_a_to_side_b": [0.0, 0.0, 1.0]
+    }
+  ],
+  "unresolved": [
+    {"source_path": "/legacy/ambiguous_reference", "reason": "ambiguous legacy reference"}
+  ]
+}

@@ -45,6 +45,9 @@ pub struct ExchangeLlgProblem {
     pub alpha_field: Option<Vec<f64>>,
     /// Canonical regional field drives, separate from legacy per-node fields.
     pub regional_field_drives: Vec<RegionalFieldDriveTerm>,
+    /// Resolved static external H_ext profile [A/m], kept separate from the
+    /// legacy Oersted/antenna per-node buffer for observable provenance.
+    pub static_external_field: Option<Vec<Vector3>>,
 }
 
 impl ExchangeLlgProblem {
@@ -139,6 +142,7 @@ impl ExchangeLlgProblem {
             a_field: None,
             alpha_field: None,
             regional_field_drives: Vec::new(),
+            static_external_field: None,
         })
     }
 
@@ -588,6 +592,31 @@ impl ExchangeLlgProblem {
         Ok(self)
     }
 
+    pub fn with_static_external_field(
+        mut self,
+        static_external_field: Option<Vec<Vector3>>,
+    ) -> Result<Self> {
+        if let Some(field) = static_external_field.as_ref() {
+            if field.len() != self.grid.cell_count() {
+                return Err(EngineError::new(format!(
+                    "static external field length {} does not match grid cell count {}",
+                    field.len(),
+                    self.grid.cell_count()
+                )));
+            }
+            if field
+                .iter()
+                .any(|value| value.iter().any(|component| !component.is_finite()))
+            {
+                return Err(EngineError::new(
+                    "static external field contains non-finite values",
+                ));
+            }
+        }
+        self.static_external_field = static_external_field;
+        Ok(self)
+    }
+
     pub fn ms_at(&self, i: usize) -> f64 {
         self.ms_field
             .as_ref()
@@ -639,6 +668,7 @@ impl Clone for ExchangeLlgProblem {
             a_field: self.a_field.clone(),
             alpha_field: self.alpha_field.clone(),
             regional_field_drives: self.regional_field_drives.clone(),
+            static_external_field: self.static_external_field.clone(),
         }
     }
 }
@@ -660,5 +690,6 @@ impl PartialEq for ExchangeLlgProblem {
             && self.a_field == other.a_field
             && self.alpha_field == other.alpha_field
             && self.regional_field_drives == other.regional_field_drives
+            && self.static_external_field == other.static_external_field
     }
 }

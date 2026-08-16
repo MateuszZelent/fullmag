@@ -26,12 +26,12 @@ def _problem(**overrides: object) -> SimpleNamespace:
     return SimpleNamespace(**values)
 
 
-def test_absent_current_does_not_create_a_graph_module() -> None:
+def test_missing_transport_module_emits_no_transport_nodes() -> None:
     graph = build_physics_graph(_problem())
     assert graph.to_ir()["modules"] == []
 
 
-def test_zero_drive_remains_an_inactive_authored_module() -> None:
+def test_zero_current_preserves_transport_module() -> None:
     current = _Module(
         {
             "kind": "current_transport",
@@ -87,6 +87,107 @@ def test_spin_torque_graph_kind_is_generic_and_family_stays_in_payload() -> None
     assert module.family_payload["kind"] == "zhang_li"
     assert module.applies_to[0].kind == "object"
     assert module.applies_to[0].object_id == "film"
+
+
+def test_spin_torque_edges_preserve_dependency_semantics() -> None:
+    current = _Module(
+        {
+            "kind": "current_transport",
+            "name": "current:film",
+            "model": "prescribed_density",
+            "current_density": [1.0, 0.0, 0.0],
+            "domain": [{"object_id": "film"}],
+        }
+    )
+    spin = _Module(
+        {
+            "kind": "spin_transport",
+            "id": "spin:film",
+            "current_source_id": "current:film",
+            "domain": [{"object_id": "film"}],
+        }
+    )
+    transport_torque = _Module(
+        {
+            "kind": "drift_diffusion_spin_torque",
+            "id": "torque:transport",
+            "solve_id": "spin:film",
+            "target": {"object_id": "film"},
+        }
+    )
+    current_torque = fm.ZhangLiSTT(
+        current_source="current:film",
+        id="torque:current",
+        target=fm.RegionRef("film"),
+        lande_g=2.0,
+        operator_version="zl_central_reference_v1",
+    )
+
+    graph = build_physics_graph(
+        _problem(
+            current_modules=(current,),
+            spin_transports=(spin,),
+            spin_torques=(transport_torque, current_torque),
+        )
+    )
+
+    assert [edge.to_ir() for edge in graph.edges] == [
+        {
+            "kind": "current_to_spin_transport",
+            "source_id": "current:film",
+            "target_id": "spin:film",
+            "status": "active",
+        },
+        {
+            "kind": "current_to_torque",
+            "source_id": "current:film",
+            "target_id": "torque:current",
+            "status": "active",
+        },
+        {
+            "kind": "spin_transport_to_torque",
+            "source_id": "spin:film",
+            "target_id": "torque:transport",
+            "status": "active",
+        },
+    ]
+
+
+def test_prescribed_sot_vector_drive_declares_its_current_dependency_edge() -> None:
+    current = _Module(
+        {
+            "kind": "current_transport",
+            "name": "current:film",
+            "model": "prescribed_density",
+            "current_density": [1.0, 0.0, 0.0],
+            "domain": [{"object_id": "film"}],
+        }
+    )
+    torque = fm.PrescribedSpinOrbitTorque(
+        "torque:sot",
+        fm.RegionRef("film"),
+        fm.VectorCurrentDrive(
+            "current:film",
+            drive_direction=(1.0, 0.0, 0.0),
+            interface_normal=(0.0, 0.0, 1.0),
+        ),
+        xi_dl=0.1,
+        free_layer_thickness_m=1e-9,
+    )
+
+    graph = build_physics_graph(
+        _problem(current_modules=(current,), spin_torques=(torque,))
+    )
+
+    assert graph.modules[1].depends_on == ("current:film",)
+    assert [edge.to_ir() for edge in graph.edges] == [
+        {
+            "kind": "current_to_torque",
+            "source_id": "current:film",
+            "target_id": "torque:sot",
+            "status": "active",
+        }
+    ]
 
 
 def test_reordering_authored_families_keeps_graph_order() -> None:

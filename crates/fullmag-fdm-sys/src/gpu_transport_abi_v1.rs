@@ -3,6 +3,8 @@
 #![allow(non_camel_case_types)]
 #![allow(non_snake_case)]
 
+use crate::fullmag_fdm_backend;
+
 #[repr(C)]
 #[derive(Clone, Copy, Default)]
 pub struct gpu_prefix_v1 {
@@ -30,6 +32,16 @@ pub struct fullmag_fdm_gpu_charge_snapshot_handle_v1 {
     pub type_tag: u64,
 }
 macro_rules! record { ($name:ident { $($field:ident:$ty:ty),* $(,)? }) => { #[repr(C)] #[derive(Clone,Copy,Default)] pub struct $name { pub prefix:gpu_prefix_v1,$(pub $field:$ty),* } }; }
+record!(fullmag_fdm_gpu_transport_llg_binding_v1 {
+    transport_context: fullmag_fdm_gpu_transport_context_handle_v1,
+    charge_snapshot: fullmag_fdm_gpu_charge_snapshot_handle_v1,
+    accepted_sequence: u64,
+    source_revision: u64,
+    operator_revision: u64,
+    relative_tolerance: f64,
+    max_iterations: u64,
+    reserved1: u64
+});
 record!(fullmag_fdm_gpu_transport_buffer_view_v1 {
     address: u64,
     element_count: u64,
@@ -410,15 +422,20 @@ pub const FULLMAG_FDM_GPU_TRANSPORT_BOOL_TRUE: u32 = 1;
 pub const FULLMAG_FDM_GPU_TRANSPORT_FEATURE_STRICT_RESIDENCY: u64 = 0x01;
 pub const FULLMAG_FDM_GPU_TRANSPORT_FEATURE_DETERMINISTIC_REDUCTIONS: u64 = 0x02;
 pub const FULLMAG_FDM_GPU_TRANSPORT_FEATURE_M1_CHARGE: u64 = 0x04;
+pub const FULLMAG_FDM_GPU_TRANSPORT_FEATURE_CHECKPOINT_V1: u64 = 0x20;
 pub const FULLMAG_FDM_GPU_TRANSPORT_FEATURE_ARTIFACT_READBACK: u64 = 0x40;
 pub const FULLMAG_FDM_GPU_TRANSPORT_ELEMENT_TYPE_U8: u32 = 1;
 pub const FULLMAG_FDM_GPU_TRANSPORT_ELEMENT_TYPE_F64: u32 = 5;
 pub const FULLMAG_FDM_GPU_TRANSPORT_ELEMENT_TYPE_RAW_BYTES: u32 = 6;
 pub const FULLMAG_FDM_GPU_TRANSPORT_COMPONENT_ORDER_SCALAR: u32 = 1;
+pub const FULLMAG_FDM_GPU_TRANSPORT_COMPONENT_ORDER_XYZ: u32 = 2;
+pub const FULLMAG_FDM_GPU_TRANSPORT_COMPONENT_ORDER_SOA_XYZ: u32 = 3;
 pub const FULLMAG_FDM_GPU_TRANSPORT_COMPONENT_ORDER_ORIENTED_FACE_XYZ: u32 = 5;
 pub const FULLMAG_FDM_GPU_TRANSPORT_PRECISION_DOUBLE: u32 = 1;
 pub const FULLMAG_FDM_GPU_TRANSPORT_POINTER_SPACE_HOST_READ_ONLY: u32 = 1;
 pub const FULLMAG_FDM_GPU_TRANSPORT_POINTER_SPACE_HOST_WRITE_ONLY: u32 = 2;
+pub const FULLMAG_FDM_GPU_TRANSPORT_POINTER_SPACE_DEVICE_READ_ONLY: u32 = 3;
+pub const FULLMAG_FDM_GPU_TRANSPORT_POINTER_SPACE_DEVICE_WRITE_ONLY: u32 = 4;
 pub const FULLMAG_FDM_GPU_TRANSPORT_STREAM_POLICY_CONTEXT_OWNED_SINGLE_STREAM: u32 = 1;
 pub const FULLMAG_FDM_GPU_TRANSPORT_CHARGE_SOLVER_POLICY_CG_DEVICE_AMG_V1: u32 = 1;
 pub const FULLMAG_FDM_GPU_TRANSPORT_CHARGE_BOUNDARY_INVALID: u32 = 0;
@@ -434,8 +451,19 @@ pub const FULLMAG_FDM_GPU_TRANSPORT_GAUGE_POLICY_ZERO_MEAN_PER_FREE_COMPONENT: u
 pub const FULLMAG_FDM_GPU_TRANSPORT_CONVERGENCE_CONVERGED: u32 = 1;
 pub const FULLMAG_FDM_GPU_TRANSPORT_ARTIFACT_FIELD_V: u32 = 1;
 pub const FULLMAG_FDM_GPU_TRANSPORT_ARTIFACT_FIELD_J_C: u32 = 2;
+pub const FULLMAG_FDM_GPU_TRANSPORT_ARTIFACT_FIELD_MU_S: u32 = 3;
+pub const FULLMAG_FDM_GPU_TRANSPORT_ARTIFACT_FIELD_Q_IA: u32 = 4;
+pub const FULLMAG_FDM_GPU_TRANSPORT_ARTIFACT_FIELD_TORQUE_STT: u32 = 5;
+pub const FULLMAG_FDM_GPU_TRANSPORT_ARTIFACT_CADENCE_FORBIDDEN: u32 = 0;
+pub const FULLMAG_FDM_GPU_TRANSPORT_ARTIFACT_CADENCE_ACCEPTED_STEP: u32 = 1;
+pub const FULLMAG_FDM_GPU_TRANSPORT_ARTIFACT_CADENCE_FINAL_STATE: u32 = 2;
 pub const FULLMAG_FDM_GPU_TRANSPORT_ARTIFACT_CADENCE_EXPLICIT_REQUEST: u32 = 3;
 pub const FULLMAG_FDM_GPU_TRANSPORT_ERROR_OK: u32 = 0;
+pub const FULLMAG_FDM_GPU_TRANSPORT_ERROR_STALE_SNAPSHOT: u32 = 9;
+pub const FULLMAG_FDM_GPU_TRANSPORT_CHECKPOINT_SCHEMA_V1: u32 = 1;
+pub const FULLMAG_FDM_GPU_TRANSPORT_CHECKPOINT_INCLUDE_ALL_V1: u32 = 0x3f;
+pub const FULLMAG_FDM_GPU_TRANSPORT_CHECKPOINT_RESTORE_POLICY_EXACT_SAME_DEVICE_BUILD: u32 = 1;
+pub const FULLMAG_FDM_GPU_TRANSPORT_CHECKPOINT_RESTORED_STATE_SPIN_ACCEPTED: u32 = 2;
 pub const FULLMAG_FDM_GPU_TRANSPORT_FEATURE_STEADY_SPIN: u64 = 0x08;
 pub const FULLMAG_FDM_GPU_TRANSPORT_FEATURE_MIXING_V2: u64 = 0x10;
 pub const FULLMAG_FDM_GPU_TRANSPORT_SPIN_BOUNDARY_INVALID: u32 = 0;
@@ -468,8 +496,14 @@ pub const FULLMAG_FDM_GPU_TRANSPORT_SPIN_RESIDUAL_INVALID: u32 = 0;
 pub const FULLMAG_FDM_GPU_TRANSPORT_SPIN_RESIDUAL_INTEGRATED_L2_V1: u32 = 1;
 pub const FULLMAG_FDM_GPU_TRANSPORT_SPIN_LOCAL_RESIDUAL_INVALID: u32 = 0;
 pub const FULLMAG_FDM_GPU_TRANSPORT_SPIN_LOCAL_RESIDUAL_FV_V1: u32 = 1;
+pub const FULLMAG_FDM_GPU_TRANSPORT_SPIN_SOLVER_POLICY_RESTARTED_GMRES_COMPONENT_AMG_V1: u32 = 1;
 
 extern "C" {
+    pub fn fullmag_fdm_context_bind_gpu_transport_v1(
+        context: *mut fullmag_fdm_backend,
+        binding: *const fullmag_fdm_gpu_transport_llg_binding_v1,
+    ) -> i32;
+    pub fn fullmag_fdm_context_unbind_gpu_transport_v1(context: *mut fullmag_fdm_backend) -> i32;
     pub fn fullmag_fdm_gpu_transport_context_create_v1(
         request: *const fullmag_fdm_gpu_transport_context_create_request_v1,
         result: *mut fullmag_fdm_gpu_transport_context_create_result_v1,
@@ -554,6 +588,7 @@ mod tests {
     macro_rules! layout {($t:ty,$size:expr,$($f:ident:$o:expr),+)=>{{assert_eq!(size_of::<$t>(),$size);assert_eq!(align_of::<$t>(),8);$(assert_eq!(offset_of!($t,$f),$o);)+}}}
     #[test]
     fn gpu_transport_abi_layout_matches_every_frozen_tail_offset() {
+        layout!(fullmag_fdm_gpu_transport_llg_binding_v1,144,transport_context:32,charge_snapshot:64,accepted_sequence:96,source_revision:104,operator_revision:112,relative_tolerance:120,max_iterations:128,reserved1:136);
         layout!(fullmag_fdm_gpu_transport_buffer_view_v1,80,address:32,element_count:40,byte_stride:48,byte_length:56,element_type:64,pointer_space:68,component_order:72,reserved1:76);
         layout!(fullmag_fdm_gpu_transport_charge_cell_v1,48,active:32,conductor:36,material_index:40,reserved1:44);
         layout!(fullmag_fdm_gpu_transport_charge_material_v1,56,material_index:32,reserved1:36,conductivity:40,material_revision:48);
@@ -650,6 +685,16 @@ mod tests {
         assert_eq!(FULLMAG_FDM_GPU_TRANSPORT_CONVERGENCE_CONVERGED, 1);
         assert_eq!(FULLMAG_FDM_GPU_TRANSPORT_ARTIFACT_FIELD_V, 1);
         assert_eq!(FULLMAG_FDM_GPU_TRANSPORT_ARTIFACT_FIELD_J_C, 2);
+        assert_eq!(FULLMAG_FDM_GPU_TRANSPORT_ARTIFACT_FIELD_MU_S, 3);
+        assert_eq!(FULLMAG_FDM_GPU_TRANSPORT_ARTIFACT_FIELD_Q_IA, 4);
+        assert_eq!(FULLMAG_FDM_GPU_TRANSPORT_ARTIFACT_FIELD_TORQUE_STT, 5);
+        assert_eq!(FULLMAG_FDM_GPU_TRANSPORT_ARTIFACT_CADENCE_FORBIDDEN, 0);
+        assert_eq!(FULLMAG_FDM_GPU_TRANSPORT_ARTIFACT_CADENCE_ACCEPTED_STEP, 1);
+        assert_eq!(FULLMAG_FDM_GPU_TRANSPORT_ARTIFACT_CADENCE_FINAL_STATE, 2);
+        assert_eq!(
+            FULLMAG_FDM_GPU_TRANSPORT_ARTIFACT_CADENCE_EXPLICIT_REQUEST,
+            3
+        );
         assert_eq!(FULLMAG_FDM_GPU_TRANSPORT_ERROR_OK, 0);
     }
     #[test]

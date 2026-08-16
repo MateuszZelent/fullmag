@@ -14,6 +14,7 @@ use std::os::raw::c_char;
 
 pub const FULLMAG_FDM_MAX_EXCHANGE_REGIONS: usize = 256;
 pub const FULLMAG_FDM_MAX_REGION_ID: u32 = (FULLMAG_FDM_MAX_EXCHANGE_REGIONS - 1) as u32;
+pub const FULLMAG_FDM_LLG_CHECKPOINT_SCHEMA_V1: u32 = 1;
 
 // ── Return codes ──
 
@@ -137,6 +138,27 @@ pub struct fullmag_fdm_exchange_pair_desc {
 pub enum fullmag_fdm_stats_mode {
     FULLMAG_FDM_STATS_FULL = 0,
     FULLMAG_FDM_STATS_NONE = 1,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct fullmag_fdm_llg_checkpoint_info_v1 {
+    pub schema_version: u32,
+    pub integrator: u32,
+    pub precision: u32,
+    pub array_mask: u32,
+    pub cell_count: u64,
+    pub payload_bytes: u64,
+    pub step_count: u64,
+    pub current_time: f64,
+    pub current_dt: f64,
+    pub transport_attempt_generation: u64,
+    pub fsal_valid: u32,
+    pub abm_startup: u32,
+    pub abm_last_dt: f64,
+    pub adaptive_has_previous_error: u32,
+    pub reserved0: u32,
+    pub adaptive_previous_error: f64,
 }
 
 #[repr(C)]
@@ -1096,6 +1118,12 @@ extern "C" {
         plan: *const fullmag_fdm_multilayer_plan_desc_v2,
     ) -> *mut fullmag_fdm_backend;
 
+    pub fn fullmag_fdm_backend_set_static_external_field_f64(
+        handle: *mut fullmag_fdm_backend,
+        field_xyz: *const f64,
+        field_len: u64,
+    ) -> i32;
+
     pub fn fullmag_fdm_backend_step(
         handle: *mut fullmag_fdm_backend,
         dt_seconds: f64,
@@ -1219,6 +1247,25 @@ extern "C" {
         handle: *mut fullmag_fdm_backend,
         m_xyz: *const f32,
         len: u64,
+    ) -> i32;
+
+    pub fn fullmag_fdm_backend_llg_checkpoint_query_size_v1(
+        handle: *mut fullmag_fdm_backend,
+        out_required_bytes: *mut u64,
+    ) -> i32;
+
+    pub fn fullmag_fdm_backend_llg_checkpoint_export_v1(
+        handle: *mut fullmag_fdm_backend,
+        destination: *mut c_void,
+        exact_capacity: u64,
+        out_info: *mut fullmag_fdm_llg_checkpoint_info_v1,
+    ) -> i32;
+
+    pub fn fullmag_fdm_backend_llg_checkpoint_import_v1(
+        handle: *mut fullmag_fdm_backend,
+        source: *const c_void,
+        exact_bytes: u64,
+        expected_info: *const fullmag_fdm_llg_checkpoint_info_v1,
     ) -> i32;
 
     pub fn fullmag_fdm_backend_upload_layer_magnetization_f64(
@@ -1937,6 +1984,24 @@ mod tests {
                 result_size,
                 result_alignment
             ]
+        );
+    }
+
+    #[test]
+    fn llg_checkpoint_info_v1_matches_the_frozen_c_layout() {
+        assert_eq!(size_of::<fullmag_fdm_llg_checkpoint_info_v1>(), 96);
+        assert_eq!(align_of::<fullmag_fdm_llg_checkpoint_info_v1>(), 8);
+        assert_eq!(offset_of!(fullmag_fdm_llg_checkpoint_info_v1, schema_version), 0);
+        assert_eq!(offset_of!(fullmag_fdm_llg_checkpoint_info_v1, cell_count), 16);
+        assert_eq!(offset_of!(fullmag_fdm_llg_checkpoint_info_v1, current_time), 40);
+        assert_eq!(
+            offset_of!(fullmag_fdm_llg_checkpoint_info_v1, transport_attempt_generation),
+            56
+        );
+        assert_eq!(offset_of!(fullmag_fdm_llg_checkpoint_info_v1, abm_last_dt), 72);
+        assert_eq!(
+            offset_of!(fullmag_fdm_llg_checkpoint_info_v1, adaptive_previous_error),
+            88
         );
     }
 }

@@ -377,6 +377,15 @@ pub(crate) enum ScriptExecutionStageAction {
         #[serde(default)]
         request: Option<Value>,
     },
+    SetTransportCurrent {
+        module_id: String,
+        #[serde(rename = "terminal_outward_current_density_Apm2")]
+        terminal_outward_current_density_apm2: BTreeMap<String, f64>,
+    },
+    SetSpinTorqueEnabled {
+        module_id: String,
+        enabled: bool,
+    },
 }
 
 fn default_stage_action_artifact_name() -> String {
@@ -461,6 +470,14 @@ pub(crate) enum ResolvedScriptStageAction {
     FftResponse {
         enabled: bool,
         request: Option<Value>,
+    },
+    SetTransportCurrent {
+        module_id: String,
+        terminal_outward_current_density_apm2: BTreeMap<String, f64>,
+    },
+    SetSpinTorqueEnabled {
+        module_id: String,
+        enabled: bool,
     },
 }
 

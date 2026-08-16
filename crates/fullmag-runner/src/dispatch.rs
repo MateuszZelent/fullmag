@@ -28,6 +28,12 @@ use crate::fdm::cpu::reference as cpu_reference;
 use crate::fdm::gpu::cuda::multilayer as multilayer_cuda;
 #[cfg(feature = "cuda")]
 use crate::fdm::gpu::cuda::native::NativeFdmBackend;
+#[cfg(feature = "cuda")]
+use crate::fdm::gpu::cuda::spin_transport::{
+    GpuM1TransportSession, NativeGpuM1TransportAbi, PreparedGpuM1Descriptor,
+};
+#[cfg(feature = "cuda")]
+use crate::fdm::gpu::cuda::transport_publication::accepted_transport_field_snapshots;
 #[cfg(feature = "fem-gpu")]
 use crate::fem::relax::scalars::ensure_fem_object_scalars;
 use crate::fem_baseline;
@@ -2053,7 +2059,27 @@ pub(crate) fn execute_fdm<'a>(
     live: Option<LiveStepConsumer<'a>>,
     artifact_writer: Option<ArtifactPipelineSender>,
 ) -> Result<ExecutedRun, RunError> {
-    if !plan.fdm_gpu_charge_transports.is_empty() {
+    use crate::fdm::gpu::cuda::route::{public_gpu_transport_route, PublicGpuTransportRoute};
+
+    let transport_route = public_gpu_transport_route(plan, matches!(engine, FdmEngine::CudaFdm));
+    if matches!(transport_route, PublicGpuTransportRoute::InvalidGpuSpinPlan) {
+        let _ = (until_seconds, outputs, live, artifact_writer);
+        return Err(RunError {
+            message: "public FDM GPU M1 spin execution requires exactly one requested/resolved GPU plan with exactly one fdm_gpu_double descriptor; fallback and partial execution are forbidden"
+                .to_string(),
+        });
+    }
+    if matches!(
+        transport_route,
+        PublicGpuTransportRoute::SpinOnNonCudaForbidden
+    ) {
+        let _ = (until_seconds, outputs, live, artifact_writer);
+        return Err(RunError {
+            message: "public FDM GPU M1 spin plan resolved to a non-CUDA engine; hidden fallback is forbidden"
+                .to_string(),
+        });
+    }
+    if matches!(transport_route, PublicGpuTransportRoute::ChargeOnly) {
         if !matches!(engine, FdmEngine::CudaFdm) {
             return Err(RunError {
                 message: "public FDM GPU charge-only plan resolved to a non-CUDA engine; fallback is forbidden"
@@ -4988,7 +5014,41 @@ fn execute_cuda_fdm(
         crate::schedules::OUTPUT_TIME_TOLERANCE,
     );
 
+    let device_ordinal = std::env::var("FULLMAG_FDM_GPU_INDEX")
+        .unwrap_or_else(|_| "0".to_string())
+        .parse::<i32>()
+        .ok()
+        .filter(|ordinal| *ordinal >= 0)
+        .ok_or_else(|| RunError {
+            message: "FULLMAG_FDM_GPU_INDEX must be a non-negative i32".to_string(),
+        })?;
+    let mut gpu_transport = if plan.spin_transport_plans.is_empty() {
+        None
+    } else {
+        let prepared =
+            PreparedGpuM1Descriptor::from_plan(plan, device_ordinal).map_err(|error| RunError {
+                message: format!("materializing public GPU M1 transport failed: {error}"),
+            })?;
+        let mut session = GpuM1TransportSession::create(NativeGpuM1TransportAbi, prepared)
+            .map_err(|error| RunError {
+                message: format!("creating public GPU M1 transport session failed: {error}"),
+            })?;
+        session.solve_charge(1, 0).map_err(|error| RunError {
+            message: format!("solving public GPU M1 charge snapshot failed: {error}"),
+        })?;
+        Some(session)
+    };
+    let gpu_transport_module_id = plan
+        .spin_transport_plans
+        .first()
+        .map(|transport| transport.module_id.as_str());
     let mut backend = NativeFdmBackend::create(plan)?;
+    if let Some(session) = gpu_transport.as_ref() {
+        let binding = session.llg_binding().map_err(|error| RunError {
+            message: format!("materializing public GPU M1 LLG binding failed: {error}"),
+        })?;
+        backend.bind_gpu_transport(&binding)?;
+    }
     let device_info = backend.device_info()?;
     let cell_count = (plan.grid.cells[0] as usize)
         * (plan.grid.cells[1] as usize)
@@ -5025,6 +5085,9 @@ fn execute_cuda_fdm(
         compute_capability: Some(device_info.compute_capability.clone()),
         cuda_driver_version: Some(device_info.driver_version),
         cuda_runtime_version: Some(device_info.runtime_version),
+        transport_modules: crate::fdm::cpu::spin_transport::fdm_gpu_transport_execution_provenance(
+            plan,
+        ),
         timestep_policy,
         executed_physics_kinds: if direct_minimizer_control(plan.relaxation.as_ref()).is_none()
             && (plan.zhang_li_formula_version.is_some()
@@ -5043,7 +5106,8 @@ fn execute_cuda_fdm(
         ArtifactRecorder::in_memory(provenance.clone())
     };
     let mut scalar_schedules = collect_scalar_schedules(outputs)?;
-    let mut field_schedules = collect_field_schedules(outputs)?;
+    let (mut transport_field_schedules, mut field_schedules) =
+        partition_cuda_field_schedules(outputs, !plan.spin_transport_plans.is_empty())?;
     let default_scalar_trace = scalar_schedules.is_empty();
     capture_initial_cuda_fields(&backend, cell_count, &mut field_schedules, &mut artifacts)?;
 
@@ -5138,6 +5202,15 @@ fn execute_cuda_fdm(
             let Some(mut stats) = backend.step_interruptible(dt_step, interrupt_requested)? else {
                 continue;
             };
+            if let Some(session) = gpu_transport.as_mut() {
+                session
+                    .observe_bound_llg_accepted_step()
+                    .map_err(|error| RunError {
+                        message: format!(
+                            "accepting public GPU M1 transport artifacts failed: {error}"
+                        ),
+                    })?;
+            }
             ensure_single_object_scalars(&mut stats, "free");
             // Keep accepted-step controller telemetry independent of the
             // user-visible scalar cadence.  MuMax-compatible runs often have
@@ -5269,6 +5342,14 @@ fn execute_cuda_fdm(
                 &mut steps,
                 &mut artifacts,
             )?;
+            record_gpu_transport_due_outputs(
+                gpu_transport.as_ref(),
+                gpu_transport_module_id,
+                plan.grid.cells,
+                &sampled_stats,
+                &mut transport_field_schedules,
+                &mut artifacts,
+            )?;
             let energy_plateau_range = energy_plateau.record(stats.e_total);
             let stop_for_relaxation = plan.relaxation.as_ref().is_some_and(|control| {
                 stats.step >= control.stop.max_steps.unwrap_or(u64::MAX)
@@ -5291,6 +5372,20 @@ fn execute_cuda_fdm(
     let completion_time_s = latest_stats.as_ref().map(|stats| stats.time);
     let completion_max_torque_apm = latest_stats.as_ref().map(|stats| stats.max_torque_Apm);
     let final_magnetization = backend.copy_m(cell_count)?;
+    record_gpu_transport_final_outputs(
+        gpu_transport.as_ref(),
+        gpu_transport_module_id,
+        plan.grid.cells,
+        latest_stats.as_ref(),
+        &transport_field_schedules,
+        &mut artifacts,
+    )?;
+    if let Some(session) = gpu_transport.as_mut() {
+        backend.unbind_gpu_transport()?;
+        session.close().map_err(|error| RunError {
+            message: format!("closing public GPU M1 transport session failed: {error}"),
+        })?;
+    }
     record_cuda_final_outputs(
         &backend,
         cell_count,
@@ -6123,6 +6218,113 @@ fn capture_initial_cuda_fields(
 }
 
 #[cfg(feature = "cuda")]
+fn gpu_transport_field_name(name: &str) -> bool {
+    matches!(
+        name,
+        "V_electric" | "J_charge" | "spin_potential" | "spin_current_tensor" | "torque_stt"
+    )
+}
+
+#[cfg(feature = "cuda")]
+fn partition_cuda_field_schedules(
+    outputs: &[OutputIR],
+    transport_active: bool,
+) -> Result<(Vec<OutputSchedule>, Vec<OutputSchedule>), RunError> {
+    let field_schedules = collect_field_schedules(outputs)?;
+    let (mut transport, field): (Vec<_>, Vec<_>) = field_schedules
+        .into_iter()
+        .partition(|schedule| gpu_transport_field_name(&schedule.name));
+    // Transport outputs are legal study-level declarations, but they have no
+    // physical value in a stage where the complete solved-current pipeline is
+    // inactive.  Never ask the CUDA recorder to synthesize them without an
+    // accepted M1 publication.
+    if !transport_active {
+        transport.clear();
+    }
+    Ok((transport, field))
+}
+
+#[cfg(feature = "cuda")]
+fn record_gpu_transport_due_outputs(
+    session: Option<&GpuM1TransportSession<NativeGpuM1TransportAbi>>,
+    module_id: Option<&str>,
+    grid: [u32; 3],
+    stats: &StepStats,
+    schedules: &mut [OutputSchedule],
+    artifacts: &mut ArtifactRecorder,
+) -> Result<(), RunError> {
+    let due_names = schedules
+        .iter()
+        .filter(|schedule| is_due(stats.time, schedule.next_time))
+        .map(|schedule| schedule.name.as_str())
+        .collect::<HashSet<_>>();
+    if due_names.is_empty() {
+        return Ok(());
+    }
+    let session = session.ok_or_else(|| RunError {
+        message: "transport field output was scheduled without an active GPU M1 session".into(),
+    })?;
+    let accepted = session
+        .readback_accepted_artifacts()
+        .map_err(|error| RunError {
+            message: format!("reading accepted public GPU M1 transport artifacts failed: {error}"),
+        })?;
+    let accepted_revision = session.accepted_sequence().map_err(|error| RunError {
+        message: format!("reading accepted public GPU M1 publication identity failed: {error}"),
+    })?;
+    let module_id = module_id.ok_or_else(|| RunError {
+        message: "active GPU M1 session has no resolved transport module identity".into(),
+    })?;
+    let scope = format!("transport_module:{module_id}:full_solve_domain");
+    for snapshot in accepted_transport_field_snapshots(
+        grid,
+        accepted,
+        stats.step,
+        stats.time,
+        stats.dt,
+        accepted_revision,
+        &scope,
+    )? {
+        if due_names.contains(snapshot.name.as_str()) {
+            artifacts.record_field_snapshot(snapshot)?;
+        }
+    }
+    advance_due_schedules(schedules, stats.time);
+    Ok(())
+}
+
+#[cfg(feature = "cuda")]
+fn record_gpu_transport_final_outputs(
+    session: Option<&GpuM1TransportSession<NativeGpuM1TransportAbi>>,
+    module_id: Option<&str>,
+    grid: [u32; 3],
+    latest_stats: Option<&StepStats>,
+    schedules: &[OutputSchedule],
+    artifacts: &mut ArtifactRecorder,
+) -> Result<(), RunError> {
+    let Some(stats) = latest_stats else {
+        return Ok(());
+    };
+    let missing = schedules
+        .iter()
+        .filter(|schedule| {
+            schedule
+                .last_sampled_time
+                .is_none_or(|time| !same_time(time, stats.time))
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    if missing.is_empty() {
+        return Ok(());
+    }
+    let mut missing = missing;
+    for schedule in &mut missing {
+        schedule.next_time = stats.time;
+    }
+    record_gpu_transport_due_outputs(session, module_id, grid, stats, &mut missing, artifacts)
+}
+
+#[cfg(feature = "cuda")]
 fn record_cuda_due_outputs(
     backend: &NativeFdmBackend,
     cell_count: usize,
@@ -6353,6 +6555,94 @@ mod tests {
         LOCK.get_or_init(|| Mutex::new(()))
     }
 
+    fn public_gpu_m1_dispatch_plan() -> FdmPlanIR {
+        let fixture: Value = serde_json::from_str(include_str!(
+            "../../../tests/standard_problems/transport/racetrack_m1_v1/fixture.v1.json"
+        ))
+        .expect("racetrack fixture must be valid JSON");
+        let lowering = fixture
+            .get("normalized_problem_ir_contract")
+            .and_then(|value| value.get("expected_lowering"))
+            .expect("racetrack fixture lowering");
+        let mut problem: ProblemIR =
+            serde_json::from_value(lowering.clone()).expect("fixture ProblemIR");
+        problem.backend_policy.requested_backend = BackendTarget::Fdm;
+        problem.backend_policy.execution_precision = ExecutionPrecision::Double;
+        problem.validation_profile.execution_mode = ExecutionMode::Strict;
+        problem.problem_meta.runtime_metadata.insert(
+            "runtime_selection".into(),
+            serde_json::json!({
+                "backend": "fdm",
+                "device": "gpu",
+                "gpu_count": 1,
+                "device_index": 0,
+                "cpu_threads": null,
+                "execution_mode": "strict",
+                "execution_precision": "double"
+            }),
+        );
+        let module = &mut problem.spin_transport_modules[0];
+        module.requested_execution.discretization = BackendTarget::Fdm;
+        module.requested_execution.device = ExecutionDevice::Gpu;
+        module.requested_execution.precision = ExecutionPrecision::Double;
+        module.requested_execution.execution_mode = ExecutionMode::Strict;
+        module.solver.engine = "native_m1_v1".into();
+        match fullmag_plan::plan(&problem)
+            .expect("public GPU M1 fixture must plan")
+            .backend_plan
+        {
+            fullmag_ir::BackendPlanIR::Fdm(plan) => plan,
+            other => panic!("expected FDM plan, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn public_gpu_m1_dispatch_executes_one_coupled_transport_llg_step() {
+        let plan = public_gpu_m1_dispatch_plan();
+        let expected_module_id = plan.spin_transport_plans[0].module_id.clone();
+        let expected_current_source_id = plan.spin_transport_plans[0].current_source_id.clone();
+        let executed = execute_fdm(FdmEngine::CudaFdm, &plan, 1.0e-13, &[], None, None)
+            .expect("public GPU M1 plan must execute solved charge/spin torque in LLG");
+        assert_eq!(executed.result.steps.len(), 1);
+        assert_eq!(executed.result.steps[0].step, 1);
+        assert_eq!(executed.provenance.execution_engine, "cuda_fdm");
+        assert_eq!(executed.provenance.transport_modules.len(), 1);
+        let transport = &executed.provenance.transport_modules[0];
+        assert_eq!(transport.module_id, expected_module_id);
+        assert_eq!(transport.current_source_id, expected_current_source_id);
+        assert_eq!(transport.requested_discretization, "fdm");
+        assert_eq!(transport.requested_device, "gpu");
+        assert_eq!(transport.requested_precision, "double");
+        assert_eq!(transport.requested_execution_mode, "strict");
+        assert_eq!(transport.resolved_discretization, "fdm");
+        assert_eq!(transport.resolved_device, "gpu");
+        assert_eq!(transport.resolved_precision, "double");
+        assert_eq!(transport.resolved_execution_mode, "strict");
+        assert_eq!(transport.runtime_family, "fullmag_fdm_cuda_transport");
+        assert_eq!(transport.runtime_id, "fdm_cuda_transport_m1_v1");
+        assert_eq!(transport.engine_id, "native_m1_v1");
+        assert_eq!(transport.stage_coupling, "one_way_stage_refresh");
+        assert_eq!(transport.implementation_state, "executable");
+    }
+
+    #[test]
+    fn public_gpu_m1_dispatch_rejects_non_cuda_and_missing_descriptor() {
+        let plan = public_gpu_m1_dispatch_plan();
+        let error = execute_fdm(FdmEngine::CpuReference, &plan, 0.0, &[], None, None)
+            .expect_err("GPU M1 must reject hidden CPU fallback");
+        assert!(error.message.contains("non-CUDA engine"));
+        assert!(error.message.contains("hidden fallback is forbidden"));
+
+        let mut malformed = plan;
+        malformed.spin_transport_plans[0].fdm_gpu_double = None;
+        let error = execute_fdm(FdmEngine::CudaFdm, &malformed, 0.0, &[], None, None)
+            .expect_err("GPU intent without descriptor must fail closed");
+        assert!(error
+            .message
+            .contains("exactly one fdm_gpu_double descriptor"));
+        assert!(error.message.contains("partial execution are forbidden"));
+    }
+
     #[test]
     fn cpu_fdm_capability_accepts_oersted_cylinder() {
         let mut plan = fullmag_ir::FdmPlanIR::default();
@@ -6501,6 +6791,35 @@ mod tests {
                 && execution.contains("&final_magnetization,\n        latest_stats"),
             "native CUDA final scalar publication must share the final m snapshot"
         );
+    }
+
+    #[cfg(feature = "cuda")]
+    #[test]
+    fn inactive_cuda_transport_drops_transport_field_schedules() {
+        let outputs = vec![
+            OutputIR::Field {
+                name: "V_electric".into(),
+                every_seconds: 1.0,
+            },
+            OutputIR::Field {
+                name: "torque_stt".into(),
+                every_seconds: 1.0,
+            },
+            OutputIR::Field {
+                name: "m".into(),
+                every_seconds: 1.0,
+            },
+        ];
+        let (transport, magnetic) =
+            partition_cuda_field_schedules(&outputs, false).expect("schedules should parse");
+        assert!(transport.is_empty());
+        assert_eq!(magnetic.len(), 1);
+        assert_eq!(magnetic[0].name, "m");
+
+        let (transport, magnetic) =
+            partition_cuda_field_schedules(&outputs, true).expect("schedules should parse");
+        assert_eq!(transport.len(), 2);
+        assert_eq!(magnetic.len(), 1);
     }
 
     #[test]
@@ -6821,6 +7140,7 @@ mod tests {
             oersted_radius: None,
             oersted_center: None,
             oersted_axis: None,
+            static_external_field_xyz: None,
             oersted_field_xyz: None,
             oersted_time_dep_kind: 0,
             oersted_time_dep_freq: 0.0,

@@ -1,7 +1,8 @@
 use fullmag_ir::{
     BackendPlanIR, BackendTarget, PhysicsGraphModuleProvenanceIR, PhysicsGraphModuleRealizationIR,
     PhysicsGraphRealizationProvenanceIR, PhysicsGraphRealizationStateIR,
-    PhysicsGraphRuntimeProvenanceIR, ProblemIR, PHYSICS_GRAPH_REALIZATION_SCHEMA,
+    PhysicsGraphRuntimeProvenanceIR, PrescribedSotFormulaIR, PrescribedSotLegacyDriveIR,
+    PrescribedSotV1DriveIR, ProblemIR, SpinTorqueModuleIR, PHYSICS_GRAPH_REALIZATION_SCHEMA,
     PHYSICS_GRAPH_RUNTIME_PROVENANCE_SCHEMA,
 };
 use serde_json::Value;
@@ -33,6 +34,142 @@ pub struct ResolvedPhysicsModule {
     pub source_path: String,
 }
 
+#[derive(Clone, Copy)]
+struct TorqueSourceContract<'a> {
+    source_id: &'a str,
+    source_kind: &'static str,
+    edge_kind: &'static str,
+}
+
+struct TypedTorqueContract<'a> {
+    family: &'static str,
+    source: Option<TorqueSourceContract<'a>>,
+    payload: Value,
+}
+
+const PHYSICS_GRAPH_STATUS_VOCABULARY: &str =
+    "configured|active|inactive|blocked|unsupported|unresolved";
+
+fn valid_physics_graph_status(status: &str) -> bool {
+    matches!(
+        status,
+        "configured" | "active" | "inactive" | "blocked" | "unsupported" | "unresolved"
+    )
+}
+
+fn valid_typed_torque_family(family: &str) -> bool {
+    matches!(
+        family,
+        "slonczewski" | "zhang_li" | "drift_diffusion_spin_torque" | "prescribed_sot"
+    )
+}
+
+fn known_physics_graph_module_kind(kind: &str) -> bool {
+    matches!(
+        kind,
+        "current_transport"
+            | "spin_transport"
+            | "spin_interface"
+            | "spin_torque"
+            | "oersted_field"
+            | "regional_field_drive"
+            | "external_field"
+    )
+}
+
+fn typed_torque_module_id(module: &SpinTorqueModuleIR) -> Option<&str> {
+    match module {
+        SpinTorqueModuleIR::Slonczewski { id, .. } | SpinTorqueModuleIR::ZhangLi { id, .. } => {
+            id.as_deref()
+        }
+        SpinTorqueModuleIR::DriftDiffusionSpinTorque { id, .. }
+        | SpinTorqueModuleIR::PrescribedSot { id, .. } => Some(id),
+        SpinTorqueModuleIR::InterfaceCpp { .. }
+        | SpinTorqueModuleIR::DriftDiffusion { .. }
+        | SpinTorqueModuleIR::SpinOrbitTorque { .. } => None,
+    }
+}
+
+fn typed_torque_contract<'a>(
+    problem: &'a ProblemIR,
+    module_id: &str,
+) -> Result<TypedTorqueContract<'a>, String> {
+    let mut matches = problem.spin_torque_modules.iter().filter_map(|module| {
+        let (family, source) = match module {
+            SpinTorqueModuleIR::Slonczewski {
+                id, current_source, ..
+            } if id.as_deref() == Some(module_id) => Some((
+                "slonczewski",
+                current_source.as_deref().map(current_torque_source),
+            )),
+            SpinTorqueModuleIR::ZhangLi {
+                id, current_source, ..
+            } if id.as_deref() == Some(module_id) => Some((
+                "zhang_li",
+                current_source.as_deref().map(current_torque_source),
+            )),
+            SpinTorqueModuleIR::DriftDiffusionSpinTorque { id, solve_id, .. }
+                if id == module_id =>
+            {
+                Some((
+                    "drift_diffusion_spin_torque",
+                    Some(TorqueSourceContract {
+                        source_id: solve_id,
+                        source_kind: "spin_transport",
+                        edge_kind: "spin_transport_to_torque",
+                    }),
+                ))
+            }
+            SpinTorqueModuleIR::PrescribedSot { id, formula, .. } if id == module_id => {
+                Some(("prescribed_sot", prescribed_sot_source(formula)))
+            }
+            _ => None,
+        }?;
+        Some(TypedTorqueContract {
+            family,
+            source,
+            payload: serde_json::to_value(module)
+                .expect("SpinTorqueModuleIR must serialize for graph validation"),
+        })
+    });
+    let first = matches.next().ok_or_else(|| {
+        format!(
+            "physics_graph torque '{module_id}' must match exactly one canonical typed spin_torque_modules record"
+        )
+    })?;
+    if matches.next().is_some() {
+        return Err(format!(
+            "physics_graph torque '{module_id}' must match exactly one canonical typed spin_torque_modules record"
+        ));
+    }
+    Ok(first)
+}
+
+fn current_torque_source(source_id: &str) -> TorqueSourceContract<'_> {
+    TorqueSourceContract {
+        source_id,
+        source_kind: "current_transport",
+        edge_kind: "current_to_torque",
+    }
+}
+
+fn prescribed_sot_source(formula: &PrescribedSotFormulaIR) -> Option<TorqueSourceContract<'_>> {
+    match formula {
+        PrescribedSotFormulaIR::FullmagV1 {
+            drive:
+                PrescribedSotV1DriveIR::VectorCurrentSource {
+                    current_source_id, ..
+                },
+            ..
+        }
+        | PrescribedSotFormulaIR::LegacyFullmagV0 {
+            drive: PrescribedSotLegacyDriveIR::LegacyCurrentSourceNorm { current_source_id },
+            ..
+        } => Some(current_torque_source(current_source_id)),
+        _ => None,
+    }
+}
+
 /// Validate the optional authored graph before backend-specific lowering.
 ///
 /// An absent graph is accepted for legacy ProblemIR.  A present graph is
@@ -55,6 +192,7 @@ pub fn resolve_physics_graph(problem: &ProblemIR) -> Result<Option<Value>, Vec<S
         .and_then(Value::as_array)
         .ok_or_else(|| vec!["physics_graph.modules must be an array".to_string()])?;
     let mut statuses = BTreeMap::new();
+    let mut module_kinds = BTreeMap::new();
     let mut errors = Vec::new();
     for (index, module) in modules.iter().enumerate() {
         let Some(module_object) = module.as_object() else {
@@ -76,11 +214,34 @@ pub fn resolve_physics_graph(problem: &ProblemIR) -> Result<Option<Value>, Vec<S
         if statuses.contains_key(id) {
             errors.push(format!("physics_graph contains duplicate module id '{id}'"));
         }
-        let activation = module_object
-            .get("activation")
-            .and_then(Value::as_str)
-            .unwrap_or("unsupported");
+        let module_kind = module_object.get("kind").and_then(Value::as_str);
+        let activation = match module_object.get("activation").and_then(Value::as_str) {
+            Some(activation) if valid_physics_graph_status(activation) => activation,
+            _ => {
+                if module_kind == Some("spin_torque") {
+                    errors.push(format!(
+                        "physics_graph torque '{id}' activation must be an explicit string in {PHYSICS_GRAPH_STATUS_VOCABULARY}"
+                    ));
+                } else {
+                    errors.push(format!(
+                        "physics_graph.modules[{index}].activation must be an explicit string in {PHYSICS_GRAPH_STATUS_VOCABULARY}"
+                    ));
+                }
+                "unsupported"
+            }
+        };
+        if !module_kind.is_some_and(known_physics_graph_module_kind)
+            && !matches!(activation, "unsupported" | "unresolved")
+        {
+            errors.push(format!(
+                "physics_graph module '{id}' has unknown kind '{}' and must be explicitly unsupported or unresolved",
+                module_kind.unwrap_or("<missing or non-string>")
+            ));
+        }
         statuses.insert(id.to_string(), activation.to_string());
+        if let Some(kind) = module_kind {
+            module_kinds.insert(id.to_string(), kind.to_string());
+        }
         for field in ["applies_to", "solve_domain", "depends_on"] {
             if !module_object.get(field).is_some_and(Value::is_array) {
                 errors.push(format!(
@@ -102,7 +263,10 @@ pub fn resolve_physics_graph(problem: &ProblemIR) -> Result<Option<Value>, Vec<S
         let Some(module_object) = module.as_object() else {
             continue;
         };
-        if module_object.get("activation").and_then(Value::as_str) != Some("active") {
+        if !matches!(
+            module_object.get("activation").and_then(Value::as_str),
+            Some("active" | "configured")
+        ) {
             continue;
         }
         let Some(dependencies) = module_object.get("depends_on").and_then(Value::as_array) else {
@@ -135,15 +299,181 @@ pub fn resolve_physics_graph(problem: &ProblemIR) -> Result<Option<Value>, Vec<S
         let source = edge_object.get("source_id").and_then(Value::as_str);
         let target = edge_object.get("target_id").and_then(Value::as_str);
         let status = edge_object.get("status").and_then(Value::as_str);
+        let kind = edge_object.get("kind").and_then(Value::as_str);
+        if !status.is_some_and(valid_physics_graph_status) {
+            if target.is_some_and(|target_id| {
+                module_kinds.get(target_id).map(String::as_str) == Some("spin_torque")
+            }) {
+                errors.push(format!(
+                    "physics_graph torque '{}' semantic edge status must be an explicit string in {PHYSICS_GRAPH_STATUS_VOCABULARY}",
+                    target.expect("spin_torque target checked above")
+                ));
+            } else {
+                errors.push(format!(
+                    "physics_graph.edges[{index}].status must be an explicit string in {PHYSICS_GRAPH_STATUS_VOCABULARY}"
+                ));
+            }
+        }
         if target.is_none_or(|id| !module_ids.contains(id)) {
             errors.push(format!(
                 "physics_graph.edges[{index}] target_id is not a module"
             ));
         }
-        if status == Some("active") && source.is_none_or(|id| !module_ids.contains(id)) {
+        if matches!(status, Some("active" | "configured"))
+            && source.is_none_or(|id| !module_ids.contains(id))
+        {
             errors.push(format!(
                 "physics_graph.edges[{index}] is active but source_id is not a module"
             ));
+        }
+        if let (Some(source), Some(target)) = (source, target) {
+            let expected_kind = match (
+                module_kinds.get(source).map(String::as_str),
+                module_kinds.get(target).map(String::as_str),
+            ) {
+                (Some("spin_transport"), Some("spin_torque")) => Some("spin_transport_to_torque"),
+                (Some("current_transport"), Some("spin_torque")) => Some("current_to_torque"),
+                _ => None,
+            };
+            if let Some(expected_kind) = expected_kind {
+                if kind != Some(expected_kind) {
+                    errors.push(format!(
+                        "physics_graph.edges[{index}] kind '{}' must be '{expected_kind}' for {source} -> {target}",
+                        kind.unwrap_or("<missing>")
+                    ));
+                }
+            }
+        }
+    }
+    for torque in &problem.spin_torque_modules {
+        let Some(module_id) = typed_torque_module_id(torque) else {
+            continue;
+        };
+        let matching_nodes = modules
+            .iter()
+            .filter(|module| module.get("id").and_then(Value::as_str) == Some(module_id))
+            .collect::<Vec<_>>();
+        if matching_nodes.len() != 1 {
+            errors.push(format!(
+                "canonical typed spin_torque_modules record '{module_id}' must match exactly one physics_graph module, found {}",
+                matching_nodes.len()
+            ));
+            continue;
+        }
+        if matching_nodes[0].get("kind").and_then(Value::as_str) != Some("spin_torque") {
+            errors.push(format!(
+                "canonical typed spin_torque_modules record '{module_id}' physics_graph module kind must be the string 'spin_torque'"
+            ));
+        }
+    }
+    for module in modules {
+        let Some(module_object) = module.as_object() else {
+            continue;
+        };
+        if module_object.get("kind").and_then(Value::as_str) != Some("spin_torque") {
+            continue;
+        }
+        let Some(module_id) = module_object.get("id").and_then(Value::as_str) else {
+            continue;
+        };
+        let typed_contract = match typed_torque_contract(problem, module_id) {
+            Ok(contract) => contract,
+            Err(error) => {
+                errors.push(error);
+                continue;
+            }
+        };
+        let Some(payload) = module_object
+            .get("family_payload")
+            .and_then(Value::as_object)
+        else {
+            errors.push(format!(
+                "physics_graph torque '{module_id}' family_payload must match its canonical typed spin_torque_modules record"
+            ));
+            continue;
+        };
+        let graph_family = payload.get("kind").and_then(Value::as_str);
+        if let Some(family) = graph_family {
+            if !valid_typed_torque_family(family) {
+                errors.push(format!(
+                    "physics_graph torque '{module_id}' has unknown family '{family}' and must match its canonical typed spin_torque_modules record"
+                ));
+            }
+        }
+        if graph_family != Some(typed_contract.family)
+            || Value::Object(payload.clone()) != typed_contract.payload
+        {
+            errors.push(format!(
+                "physics_graph torque '{module_id}' family_payload must match its canonical typed spin_torque_modules record"
+            ));
+        }
+        let contract = typed_contract.source;
+        let dependencies = module_object
+            .get("depends_on")
+            .and_then(Value::as_array)
+            .map(|dependencies| {
+                dependencies
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        let target_edges = edges
+            .iter()
+            .filter(|edge| edge.get("target_id").and_then(Value::as_str) == Some(module_id))
+            .collect::<Vec<_>>();
+        let Some(TorqueSourceContract {
+            source_id,
+            source_kind: expected_source_kind,
+            edge_kind: expected_edge_kind,
+        }) = contract
+        else {
+            if !dependencies.is_empty() || !target_edges.is_empty() {
+                errors.push(format!(
+                    "physics_graph torque '{module_id}' has no typed source and must not declare dependencies or incoming edges"
+                ));
+            }
+            continue;
+        };
+        if dependencies != [source_id] {
+            errors.push(format!(
+                "physics_graph torque '{module_id}' {graph_family:?} payload source '{source_id}' must be its only depends_on entry"
+            ));
+        }
+        if module_kinds.get(source_id).map(String::as_str) != Some(expected_source_kind) {
+            errors.push(format!(
+                "physics_graph torque '{module_id}' {graph_family:?} source '{source_id}' must be a {expected_source_kind} module"
+            ));
+        }
+        if target_edges.len() != 1 {
+            errors.push(format!(
+                "physics_graph torque '{module_id}' requires exactly one {expected_edge_kind} edge from declared dependency '{source_id}', found {}",
+                target_edges.len()
+            ));
+            continue;
+        }
+        let edge = target_edges[0];
+        if edge.get("source_id").and_then(Value::as_str) != Some(source_id)
+            || edge.get("kind").and_then(Value::as_str) != Some(expected_edge_kind)
+        {
+            errors.push(format!(
+                "physics_graph torque '{module_id}' permits only {expected_edge_kind} from declared dependency '{source_id}'"
+            ));
+        }
+        let torque_activation = module_object
+            .get("activation")
+            .and_then(Value::as_str)
+            .filter(|status| valid_physics_graph_status(status));
+        let edge_status = edge
+            .get("status")
+            .and_then(Value::as_str)
+            .filter(|status| valid_physics_graph_status(status));
+        if let (Some(torque_activation), Some(edge_status)) = (torque_activation, edge_status) {
+            if edge_status != torque_activation {
+                errors.push(format!(
+                    "physics_graph torque '{module_id}' edge status '{edge_status}' must match torque activation '{torque_activation}'"
+                ));
+            }
         }
     }
     if errors.is_empty() {
@@ -271,7 +601,7 @@ pub fn resolve_physics_modules(
         let mut reason = None;
         if requested_lane != "auto"
             && requested_lane != resolved_lane.as_str()
-            && status == "active"
+            && matches!(status.as_str(), "active" | "configured")
         {
             status = "unsupported".to_string();
             reason = Some(format!(
@@ -1223,6 +1553,44 @@ fn stable_marker_id(value: &str) -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn spin_transport_torque_dependency_rejects_current_edge_kind() {
+        let mut problem = ProblemIR::bootstrap_example();
+        problem.physics_graph = Some(serde_json::json!({
+            "schema_version": "physics_graph.v1",
+            "modules": [
+                {
+                    "id": "spin",
+                    "kind": "spin_transport",
+                    "activation": "active",
+                    "applies_to": [],
+                    "solve_domain": [],
+                    "depends_on": []
+                },
+                {
+                    "id": "torque",
+                    "kind": "spin_torque",
+                    "activation": "active",
+                    "applies_to": [],
+                    "solve_domain": [],
+                    "depends_on": ["spin"]
+                }
+            ],
+            "edges": [{
+                "kind": "current_to_torque",
+                "source_id": "spin",
+                "target_id": "torque",
+                "status": "active"
+            }]
+        }));
+
+        let errors = resolve_physics_graph(&problem)
+            .expect_err("spin transport torque dependency must use its semantic edge kind");
+        assert!(errors.iter().any(|error| {
+            error.contains("spin_transport_to_torque") && error.contains("current_to_torque")
+        }));
+    }
 
     fn layer(
         transfer_kind: &str,

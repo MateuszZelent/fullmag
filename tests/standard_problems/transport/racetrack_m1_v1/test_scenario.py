@@ -1,0 +1,115 @@
+from __future__ import annotations
+
+from pathlib import Path
+
+import fullmag as fm
+
+
+REPO_ROOT = Path(__file__).resolve().parents[4]
+SCENARIO = REPO_ROOT / "examples" / "fdm_gpu_solved_current_skyrmion_racetrack.py"
+
+
+def _load_scenario():
+    return fm.load_problem_from_script(SCENARIO, lightweight_assets=True)
+
+
+def _terminal_currents(problem: fm.Problem) -> dict[str, float]:
+    charge = problem.current_modules[0]
+    return {
+        boundary.id: boundary.outward_current_density_Apm2
+        for boundary in charge.boundaries
+        if isinstance(boundary, fm.NormalCurrentElectrode)
+    }
+
+
+def test_public_stage_first_racetrack_declares_zero_current_relaxation_and_six_solved_drives() -> None:
+    loaded = _load_scenario()
+
+    relax = next(stage for stage in loaded.stages if stage.stage_id == "relax_zero_current")
+    assert relax.entrypoint_kind == "flat_relax"
+    assert _terminal_currents(relax.problem) == {
+        "terminal_x_minus": 0.0,
+        "terminal_x_plus": 0.0,
+    }
+
+    drives = [stage for stage in loaded.stages if stage.entrypoint_kind == "flat_run"]
+    assert [stage.stage_id for stage in drives] == [
+        "drive_solved_current_minus_1_5",
+        "drive_solved_current_minus_1_0",
+        "drive_solved_current_minus_0_5",
+        "drive_solved_current_plus_0_5",
+        "drive_solved_current_plus_1_0",
+        "drive_solved_current_plus_1_5",
+    ]
+    assert [_terminal_currents(stage.problem) for stage in drives] == [
+        {"terminal_x_minus": 1.5e12, "terminal_x_plus": -1.5e12},
+        {"terminal_x_minus": 1.0e12, "terminal_x_plus": -1.0e12},
+        {"terminal_x_minus": 0.5e12, "terminal_x_plus": -0.5e12},
+        {"terminal_x_minus": -0.5e12, "terminal_x_plus": 0.5e12},
+        {"terminal_x_minus": -1.0e12, "terminal_x_plus": 1.0e12},
+        {"terminal_x_minus": -1.5e12, "terminal_x_plus": 1.5e12},
+    ]
+
+    actions = [stage.action for stage in loaded.stages if stage.action is not None]
+    assert "drive_solved_current" in [stage.stage_id for stage in loaded.stages]
+    assert actions[0] == {
+        "kind": "set_spin_torque_enabled",
+        "module_id": "transport_torque",
+        "enabled": False,
+    }
+    assert any(
+        action == {
+            "kind": "set_spin_torque_enabled",
+            "module_id": "transport_torque",
+            "enabled": True,
+        }
+        for action in actions
+    )
+    assert sum(action["kind"] == "load_state" for action in actions) == 6
+    assert all(
+        action.get("artifact_name") == "relaxed_zero_current"
+        for action in actions
+        if action["kind"] == "load_state"
+    )
+
+
+def test_public_stage_first_racetrack_preserves_the_frozen_transport_contract() -> None:
+    loaded = _load_scenario()
+    ir = loaded.pipeline_base_problem().to_ir(include_geometry_assets=False)
+
+    runtime = ir["problem_meta"]["runtime_metadata"]["runtime_selection"]
+    assert runtime == {
+        "backend": "fdm",
+        "device": "cuda",
+        "gpu_count": 1,
+        "device_index": 0,
+        "cpu_threads": None,
+        "execution_mode": "strict",
+        "execution_precision": "double",
+    }
+    assert ir["spin_transport_modules"][0]["requested_execution"] == {
+        "discretization": "fdm",
+        "device": "gpu",
+        "precision": "double",
+        "execution_mode": "strict",
+    }
+    assert [entry["name"] for entry in ir["magnets"]] == ["fm"]
+    assert [entry["name"] for entry in ir["geometry"]["entries"]] == ["fm_geom", "hm"]
+    assert ir["current_modules"][0]["gauge"] == "zero_mean"
+    assert ir["spin_transport_modules"][0]["solver"]["engine"] == "native_m1_v1"
+    assert ir["spin_transport_modules"][0]["interfaces"][0]["normal_surface"] == {
+        "object_id": "hm",
+        "surface_id": "z+",
+        "orientation": [0.0, 0.0, 1.0],
+    }
+    assert ir["spin_transport_modules"][0]["interfaces"][0]["ferromagnet_surface"] == {
+        "object_id": "fm",
+        "surface_id": "z-",
+        "orientation": [0.0, 0.0, -1.0],
+    }
+    assert [entry["kind"] for entry in ir["spin_torque_modules"]] == [
+        "drift_diffusion_spin_torque"
+    ]
+    assert "oersted" not in {entry["kind"] for entry in ir["energy_terms"]}
+    assert "Prescribed" not in SCENARIO.read_text(encoding="utf-8")
+    assert "json" not in SCENARIO.read_text(encoding="utf-8").lower()

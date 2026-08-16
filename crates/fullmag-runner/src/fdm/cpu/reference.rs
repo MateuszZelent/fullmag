@@ -315,19 +315,28 @@ pub(crate) fn resolved_per_node_external_field_for_count(
             ),
         )
     };
-    match (plan.oersted_field_xyz.as_ref(), antenna) {
-        (None, None) => None,
-        (Some(field), None) => Some(field.clone()),
-        (None, Some(field)) => Some(field),
-        (Some(oersted), Some(mut field)) => {
-            for (index, value) in oersted.iter().enumerate().take(field.len()) {
-                field[index][0] += value[0];
-                field[index][1] += value[1];
-                field[index][2] += value[2];
-            }
-            Some(field)
+    // Static external maps are materialized through the dedicated problem
+    // field below. Keep this legacy per-node buffer limited to the dynamic
+    // Oersted/antenna sources so observable provenance cannot conflate them.
+    if plan.oersted_field_xyz.is_none() && antenna.is_none() {
+        return None;
+    }
+    let mut field = vec![[0.0; 3]; plan.initial_magnetization.len()];
+    if let Some(oersted) = plan.oersted_field_xyz.as_ref() {
+        for (index, value) in oersted.iter().enumerate().take(field.len()) {
+            field[index][0] += value[0];
+            field[index][1] += value[1];
+            field[index][2] += value[2];
         }
     }
+    if let Some(antenna) = antenna.as_ref() {
+        for (index, value) in antenna.iter().enumerate().take(field.len()) {
+            field[index][0] += value[0];
+            field[index][1] += value[1];
+            field[index][2] += value[2];
+        }
+    }
+    Some(field.clone())
 }
 
 fn resolved_antenna_zeeman_field(plan: &FdmPlanIR, time_seconds: f64) -> Vec<Vector3> {
@@ -740,6 +749,11 @@ fn build_reference_problem(plan: &FdmPlanIR) -> Result<ExchangeLlgProblem, RunEr
     .map_err(|e| RunError {
         message: format!("Problem construction: {}", e),
     })?;
+    let problem = problem
+        .with_static_external_field(plan.static_external_field_xyz.clone())
+        .map_err(|e| RunError {
+            message: format!("Static external field: {}", e),
+        })?;
     materialize_reference_problem(problem, plan)
 }
 
@@ -2202,11 +2216,18 @@ fn observe_state_with_antenna_field(
     let observables = problem.observe(state).map_err(|e| RunError {
         message: format!("Engine observables: {}", e),
     })?;
-    let uniform_external = if let Some(field) = problem.terms.external_field {
+    let mut external_field = if let Some(field) = problem.terms.external_field {
         state.magnetization().iter().map(|_| field).collect()
     } else {
         vec![[0.0, 0.0, 0.0]; state.magnetization().len()]
     };
+    if let Some(static_field) = problem.static_external_field.as_ref() {
+        for (total, value) in external_field.iter_mut().zip(static_field) {
+            total[0] += value[0];
+            total[1] += value[1];
+            total[2] += value[2];
+        }
+    }
     let oersted_field = problem.oersted_field_at_time(state.time_seconds);
     let antenna_field = antenna_field_override
         .unwrap_or_else(|| vec![[0.0, 0.0, 0.0]; state.magnetization().len()]);
@@ -2237,7 +2258,7 @@ fn observe_state_with_antenna_field(
         reconstruct_inactive_fdm_visual_effective_field(
             &mut effective_field,
             &observables.demag_field,
-            &uniform_external,
+            &external_field,
             &oersted_field,
             &antenna_field,
             active_mask,
@@ -2259,7 +2280,7 @@ fn observe_state_with_antenna_field(
         torque_field,
         exchange_field: observables.exchange_field,
         demag_field: observables.demag_field,
-        external_field: uniform_external,
+        external_field,
         antenna_field,
         drive_field,
         effective_field,
@@ -2781,6 +2802,7 @@ mod tests {
             oersted_radius: None,
             oersted_center: None,
             oersted_axis: None,
+            static_external_field_xyz: None,
             oersted_field_xyz: None,
             oersted_time_dep_kind: 0,
             oersted_time_dep_freq: 0.0,
@@ -3217,6 +3239,7 @@ mod tests {
             oersted_radius: None,
             oersted_center: None,
             oersted_axis: None,
+            static_external_field_xyz: None,
             oersted_field_xyz: None,
             oersted_time_dep_kind: 0,
             oersted_time_dep_freq: 0.0,

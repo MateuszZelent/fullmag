@@ -165,6 +165,45 @@ fn zhang_li_target_is_preserved_as_exact_graph_scope() {
 }
 
 #[test]
+fn drift_diffusion_torque_preserves_spin_solve_and_exact_target_scope() {
+    let mut scene = fixture("object_local_current_chain");
+    scene.spin_torques[0] = serde_json::from_value(serde_json::json!({
+        "kind": "drift_diffusion_spin_torque",
+        "schema_version": "drift_diffusion_spin_torque.v1",
+        "id": "transport_torque",
+        "solve_id": "spin:film",
+        "target": {"object_id": "film"},
+        "formula_version": "transport_torque_angular_momentum.fullmag.v1"
+    }))
+    .expect("typed drift-diffusion torque");
+
+    assert!(matches!(
+        &scene.spin_torques[0],
+        fullmag_authoring::SceneSpinTorque::Known(
+            fullmag_authoring::KnownSceneSpinTorque::DriftDiffusionSpinTorque {
+                solve_id,
+                target,
+                ..
+            }
+        ) if solve_id == "spin:film" && target.object_id == "film"
+    ));
+
+    let graph = normalize_physics_graph(&scene).expect("normalization");
+    let module = graph
+        .modules
+        .iter()
+        .find(|module| module.id == "transport_torque")
+        .expect("drift-diffusion torque module");
+    assert_eq!(module.depends_on, vec!["spin:film"]);
+    assert_eq!(module.solve_domain[0].object_id, "film");
+    assert!(graph.edges.iter().any(|edge| {
+        edge.kind == "spin_transport_to_torque"
+            && edge.source_id == "spin:film"
+            && edge.target_id == "transport_torque"
+    }));
+}
+
+#[test]
 fn interface_is_emitted_once_as_cross_object_scope() {
     let graph = normalize_physics_graph(&fixture("cross_object_interface")).expect("normalization");
     let interfaces: Vec<_> = graph

@@ -334,10 +334,8 @@ def _snapshot_entries(snapshot_root: Path) -> dict[str, dict[str, object]]:
     return entries
 
 
-def _status_records(repo_root: Path) -> list[dict[str, object]]:
-    parts = _git(
-        repo_root, "status", "--porcelain=v1", "-z", "--untracked-files=all"
-    ).split(b"\0")
+def _parse_status_records(parts: bytes) -> list[dict[str, object]]:
+    parts = parts.split(b"\0")
     records: list[dict[str, object]] = []
     index = 0
     try:
@@ -357,6 +355,99 @@ def _status_records(repo_root: Path) -> list[dict[str, object]]:
     except UnicodeDecodeError as error:
         raise SourceIdentityError("cannot decode canonical Git status") from error
     return records
+
+
+def _runtime_status_pathspecs(repo_root: Path) -> tuple[str, ...]:
+    """Return pathspecs that cover native runtime inputs without docs/UI trees.
+
+    The managed native runtime does not consume the Control Room, documentation,
+    or test-only script trees.  Supplying positive top-level pathspecs lets Git
+    prune those trees before it walks the worktree, which is important on the
+    shared CIFS checkout where a full untracked scan can take minutes.
+    """
+    top_level = _git(repo_root, "ls-tree", "--name-only", "HEAD").splitlines()
+    pathspecs: list[str] = []
+    for raw_path in top_level:
+        try:
+            path = raw_path.decode("utf-8")
+        except UnicodeDecodeError as error:
+            raise SourceIdentityError("cannot decode Git top-level path") from error
+        if _is_non_runtime_path(path):
+            continue
+        pathspecs.append(path)
+    if not pathspecs:
+        raise SourceIdentityError("cannot construct runtime source pathspecs")
+    # Keep positive roots broad enough to catch new runtime files while pruning
+    # known non-runtime subtrees from mixed roots.
+    exclusions = (
+        ":(exclude).agents/**",
+        ":(exclude).codex/**",
+        ":(exclude).github/**",
+        ":(exclude)apps/control-room/**",
+        ":(exclude)docs/**",
+        ":(exclude)public_docs/**",
+        ":(exclude)scripts/test_*",
+        ":(exclude)scripts/test_*/**",
+        ":(exclude)**/*.md",
+        ":(exclude)**/*.rst",
+        ":(exclude)**/*.source-map.json",
+    )
+    # The wildcard is needed for a newly-created runtime file at repository
+    # root; committed top-level entries alone cannot name it.
+    return tuple([*pathspecs, ":(top)*", *exclusions])
+
+
+def _untracked_runtime_records(repo_root: Path) -> list[dict[str, object]]:
+    raw_paths = _git(
+        repo_root,
+        "ls-files",
+        "--others",
+        "--exclude-standard",
+        "-z",
+        "--",
+        *_runtime_status_pathspecs(repo_root),
+    )
+    records: list[dict[str, object]] = []
+    for raw_path in raw_paths.split(b"\0"):
+        if not raw_path:
+            continue
+        try:
+            relative = raw_path.decode("utf-8")
+        except UnicodeDecodeError as error:
+            raise SourceIdentityError("cannot decode untracked runtime path") from error
+        records.append({"status": "??", "paths": [relative]})
+    return records
+
+
+def _status_records(
+    repo_root: Path, *, ignore_non_runtime_dirty: bool = False
+) -> list[dict[str, object]]:
+    if not ignore_non_runtime_dirty:
+        return _parse_status_records(
+            _git(
+                repo_root,
+                "status",
+                "--porcelain=v1",
+                "-z",
+                "--untracked-files=all",
+            )
+        )
+
+    # Ask status only for tracked changes.  Untracked files are collected via
+    # the pruned runtime pathspec scan below; this avoids the pathological full
+    # worktree walk while preserving exact dirty-content capture.
+    tracked = _parse_status_records(
+        _git(
+            repo_root,
+            "status",
+            "--porcelain=v1",
+            "-z",
+            "--untracked-files=no",
+            "--",
+            *_runtime_status_pathspecs(repo_root),
+        )
+    )
+    return [*tracked, *_untracked_runtime_records(repo_root)]
 
 
 def _gitlink_paths(repo_root: Path) -> set[str]:
@@ -466,7 +557,9 @@ def _capture_once(
     gitlink_paths = _gitlink_paths(repo_root)
     status_records = [
         record
-        for record in _status_records(repo_root)
+        for record in _status_records(
+            repo_root, ignore_non_runtime_dirty=ignore_non_runtime_dirty
+        )
         if not any(_is_gitlink_path(path, gitlink_paths) for path in record["paths"])
     ]
     if ignore_non_runtime_dirty:

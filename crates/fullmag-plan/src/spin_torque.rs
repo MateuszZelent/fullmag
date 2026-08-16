@@ -154,7 +154,7 @@ fn spin_torque_module_id(module: &SpinTorqueModuleIR) -> Option<&str> {
     }
 }
 
-fn executable_spin_torque_modules<'a>(
+pub(crate) fn executable_spin_torque_modules<'a>(
     problem: &'a ProblemIR,
 ) -> Result<Vec<&'a SpinTorqueModuleIR>, PlanError> {
     if problem.physics_graph.is_none() {
@@ -181,6 +181,10 @@ fn executable_spin_torque_modules<'a>(
     } else {
         Err(PlanError { reasons })
     }
+}
+
+pub(crate) fn has_active_spin_torque_modules(problem: &ProblemIR) -> Result<bool, PlanError> {
+    executable_spin_torque_modules(problem).map(|modules| !modules.is_empty())
 }
 
 pub(crate) fn resolve_legacy_spin_torque(
@@ -616,6 +620,8 @@ mod tests {
             beta: 0.02,
             lande_g: Some(2.1),
         }];
+        let family_payload = serde_json::to_value(&problem.spin_torque_modules[0])
+            .expect("serialize canonical inactive torque payload");
         problem.physics_graph = Some(serde_json::json!({
             "schema_version": "physics_graph.v1",
             "scene_revision": 1,
@@ -625,7 +631,8 @@ mod tests {
                 "applies_to": [{"kind": "object", "object_id": "strip"}],
                 "solve_domain": [{"object_id": "strip"}],
                 "depends_on": [],
-                "activation": "inactive"
+                "activation": "inactive",
+                "family_payload": family_payload
             }],
             "edges": []
         }));

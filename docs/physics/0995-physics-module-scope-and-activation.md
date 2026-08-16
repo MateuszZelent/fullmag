@@ -149,6 +149,16 @@ ale nie mogą uruchamiać current transport, torque ani Oersteda. Payload bez
 odpowiadającego mu stabilnego `kind`/`id` jest błędem planowania, nie ścieżką
 legacy. Gdy graphu nie ma, zachowana jest kompatybilność starszego ProblemIR.
 
+Workflow może wykonać wąską, stage-local mutację
+`set_spin_torque_enabled(module_id, enabled)`. Materializator wymaga dokładnie
+jednego modułu graphu o podanym ID i `kind="spin_torque"`, zgodnego typowanego
+payloadu `spin_torque_modules[]`, po czym atomowo ustawia aktywację modułu i
+status wszystkich krawędzi wchodzących na odpowiednio `active` albo
+`inactive`. Mutacja nie zmienia `authored_state`, `family_payload`, scope'u ani
+zależności. Wyłączony torque nie może zalegalizować niezerowego solved-current
+transportu do magnetycznego sinku; wyjątek planera dotyczy wyłącznie pełnego
+zerowego zestawu terminali i służy relaksacji stanu początkowego.
+
 `physics_graph.modules[].presentation` jest obowiązkowe w graphie
 znormalizowanym z `SceneDocument` i zachowuje jedynie `family` oraz `label`.
 Czytnik starszego `ProblemIR` bez tych metadanych pozostaje kompatybilny,

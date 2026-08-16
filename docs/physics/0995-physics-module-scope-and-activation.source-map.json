@@ -304,7 +304,25 @@
       "path": "apps/control-room/src/modules/inspector/primitives/InspectorOverviewFrame.tsx",
       "symbol": "InspectorOverviewFrame",
       "responsibility": "Shared responsive Visualization inspector composition."
-      }
+    },
+    {
+      "id": "stage-torque-python",
+      "path": "packages/fullmag-py/src/fullmag/world.py",
+      "symbol": "StudyStagesBuilder.set_spin_torque_enabled",
+      "responsibility": "Capture an exact typed spin-torque activation mutation as an ordered public study-pipeline action."
+    },
+    {
+      "id": "stage-torque-materializer",
+      "path": "crates/fullmag-cli/src/step_utils.rs",
+      "symbol": "apply_pipeline_set_spin_torque_enabled",
+      "responsibility": "Validate typed and graph identity and atomically mutate torque activation plus incoming edge status."
+    },
+    {
+      "id": "zero-terminal-inactive-torque-gate",
+      "path": "crates/fullmag-plan/src/spin_transport.rs",
+      "symbol": "materialize_fdm_descriptor",
+      "responsibility": "Keep inactive torque executable only for an exact zero-terminal solved-current relaxation state."
+    }
   ],
   "equations": [
     {
@@ -332,6 +350,16 @@
         "meaning": "fizyczny zakres modułu",
         "backend_support": "FEM/FDM wspólna semantyka; realizacja lane-specific",
         "problem_ir": "physics_graph.modules[].applies_to[].kind"
+      },
+      {
+        "python": "StudyStagesBuilder.set_spin_torque_enabled",
+        "type": "module_id plus bool",
+        "default": "required",
+        "si_unit": "$1$",
+        "validation": "exactly one typed and graph spin_torque identity; only active or inactive workflow states",
+        "meaning": "stage-local inclusion of a named torque in executable physics",
+        "backend_support": "backend-neutral graph semantics with lane-specific planner checks",
+        "problem_ir": "physics_graph.modules[].activation and incoming edges[].status"
       }
     ]
   },

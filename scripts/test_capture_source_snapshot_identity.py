@@ -415,6 +415,46 @@ def test_runtime_snapshot_ignores_non_runtime_dirty_paths_during_materialization
     assert materialized.returncode == 0, materialized.stderr
 
 
+def test_runtime_capture_uses_pruned_status_and_untracked_scans(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo = _repository(tmp_path)
+    docs = repo / "docs"
+    docs.mkdir()
+    (docs / "notes.md").write_text("docs\n", encoding="utf-8")
+    _git(repo, "add", "docs/notes.md")
+    _git(repo, "commit", "-qm", "add docs")
+    (docs / "notes.md").write_text("dirty docs\n", encoding="utf-8")
+    (repo / "runtime.py").write_text("runtime\n", encoding="utf-8")
+
+    spec = importlib.util.spec_from_file_location("source_identity_status_under_test", CAPTURE)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    calls: list[tuple[str, ...]] = []
+    original_git = module._git
+
+    def recording_git(root: Path, *arguments: str) -> bytes:
+        calls.append(arguments)
+        return original_git(root, *arguments)
+
+    monkeypatch.setattr(module, "_git", recording_git)
+    identity = module.capture(repo, ignore_non_runtime_dirty=True)
+
+    assert identity["dirty_path_content"] == [{
+        "path": "runtime.py",
+        "kind": "regular_file",
+        "mode": "100644",
+        "sha256": module._sha256(b"runtime\n"),
+        "git_index_entries": [],
+    }]
+    status_calls = [call for call in calls if call[:2] == ("status", "--porcelain=v1")]
+    assert status_calls
+    assert all("--untracked-files=all" not in call for call in status_calls)
+    assert any(call[:2] == ("ls-files", "--others") for call in calls)
+
+
 def test_successful_compare_is_silent(tmp_path: Path) -> None:
     repo = _repository(tmp_path)
     identity_path = tmp_path / "identity.json"

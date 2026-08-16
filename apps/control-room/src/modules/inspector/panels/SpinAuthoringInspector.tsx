@@ -456,7 +456,7 @@ export function SpinAuthoringInspector({ family, initialScope, resourceId, resou
     resetDraft,
   );
 
-  return <div className="fm-inspector-panel"><InspectorGroup title={family === "spin_torque" ? "Spin torque" : "Oersted field"}>
+  return <div className="fm-inspector-panel"><InspectorGroup title={family === "spin_torque" ? "Transport torque" : "Oersted field"}>
     {resourceId === undefined && resourceIndex === undefined ? <FormField label="Resource" type="select" value={localSelectedId} onChange={(event) => setLocalSelectedId(event.target.value)}><option value="">New resource</option>{items.map((item, index) => <option key={`${identity(item)}:${index}`} value={identity(item)}>{identity(item) || `Unknown ${index + 1}`}</option>)}</FormField> : null}
     {readOnly && selected ? <><FeedbackBanner kind="warning" message="Unknown authoring record is preserved losslessly and is read-only." /><FormField label="Opaque payload" type="textarea" rows={20} readOnly value={JSON.stringify(selected, null, 2)} /></> : family === "spin_torque" ? <TorqueFields currentTransports={currents.data?.items ?? []} draft={draft as TorqueDraft} identityReadOnly={Boolean(selected)} patch={patch} /> : <OerstedFields currentTransports={currents.data?.items ?? []} draft={draft as OerstedDraft} identityReadOnly={Boolean(selected)} patch={patch} />}
     {!readOnly ? <div className="fm-help-text"><div>Qualification: {validation?.execution.qualification ?? capability?.status ?? "checking"}</div><div>{validation?.execution.reason ?? capability?.reason ?? "Capability unavailable."}</div></div> : null}

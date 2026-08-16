@@ -122,5 +122,19 @@ bool context_end_compute_stream_work(Context &ctx, const char *operation) {
     return true;
 }
 
+bool context_test_copy_f64_on_compute_stream(
+    Context &ctx, double *destination, const double *source, uint64_t values) {
+    if (destination == nullptr || source == nullptr || values == 0 ||
+        values > SIZE_MAX / sizeof(double)) {
+        return false;
+    }
+    const auto stream = context_compute_stream(ctx);
+    return stream != nullptr &&
+        cudaMemcpyAsync(destination, source,
+                        static_cast<size_t>(values) * sizeof(double),
+                        cudaMemcpyDeviceToDevice, stream) == cudaSuccess &&
+        cudaStreamSynchronize(stream) == cudaSuccess;
+}
+
 } // namespace fdm
 } // namespace fullmag

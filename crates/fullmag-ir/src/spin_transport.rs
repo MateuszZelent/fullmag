@@ -141,9 +141,7 @@ impl StructuredCurrentClosureIR {
         let mut circuit_ids = BTreeSet::new();
         let mut drive_ids = BTreeSet::new();
         for (index, cut) in source_cuts.iter().enumerate() {
-            let cut_path = format!(
-                "{path}.structured_current_closure.source_cuts[{index}]"
-            );
+            let cut_path = format!("{path}.structured_current_closure.source_cuts[{index}]");
             if cut.source_cut_id.trim().is_empty() {
                 errors.push(format!("{cut_path}.source_cut_id must not be empty"));
             } else if !cut_ids.insert(cut.source_cut_id.as_str()) {
@@ -369,6 +367,10 @@ pub enum SpinInterfaceIR {
         normal_to_ferromagnet: [f64; 3],
         normal_side: RegionRefIR,
         ferromagnet_side: RegionRefIR,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        normal_surface: Option<SurfaceRefIR>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        ferromagnet_surface: Option<SurfaceRefIR>,
         #[serde(rename = "g_up_Spm2")]
         g_up_spm2: f64,
         #[serde(rename = "g_down_Spm2")]
@@ -460,6 +462,7 @@ pub struct ResolvedSpinTransportPlanIR {
     pub resolved_discretization: crate::BackendTarget,
     pub resolved_device: ExecutionDevice,
     pub resolved_precision: ExecutionPrecision,
+    pub resolved_execution_mode: ExecutionMode,
     pub constitutive_version: String,
     pub operator_version: String,
     pub physical_residual_version: String,
@@ -467,6 +470,8 @@ pub struct ResolvedSpinTransportPlanIR {
     pub inserted_default_boundaries: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fdm_cpu_double: Option<ResolvedFdmSpinTransportIR>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fdm_gpu_double: Option<ResolvedFdmSpinTransportIR>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fdm_cpu_double_reciprocal: Option<ResolvedFdmCoupledSpinTransportIR>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -839,6 +844,13 @@ pub struct ResolvedFdmGpuChargeTransportIR {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ResolvedFdmTorqueTargetMaskIR {
+    pub torque_module_id: String,
+    pub target: RegionRefIR,
+    pub active_mask: Vec<bool>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ResolvedFdmSpinTransportIR {
     pub descriptor_schema: String,
     #[serde(default)]
@@ -851,6 +863,12 @@ pub struct ResolvedFdmSpinTransportIR {
     /// transport stage.  `None` means the source is constant.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub time_envelope: Option<crate::TimeEnvelopeIR>,
+    /// Union of the authored charge-transport domain on the resolved common grid.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub transport_active_mask: Vec<bool>,
+    /// Cells that carry magnetization dynamics on the resolved common grid.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub magnetic_active_mask: Vec<bool>,
     pub charge_active_cells: Vec<bool>,
     #[serde(rename = "charge_conductivity_Spm")]
     pub charge_conductivity_spm: Vec<f64>,
@@ -870,6 +888,9 @@ pub struct ResolvedFdmSpinTransportIR {
     pub region_ids: Vec<u32>,
     pub spin_boundaries: Vec<ResolvedSpinBoundaryFaceIR>,
     pub interfaces: Vec<ResolvedSpinInterfaceFaceIR>,
+    /// Per-consumer torque targets retained separately from the aggregate legacy mask.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub torque_target_masks: Vec<ResolvedFdmTorqueTargetMaskIR>,
     pub torque_target_cells: Vec<bool>,
     #[serde(rename = "saturation_magnetization_Apm")]
     pub saturation_magnetization_apm: Vec<f64>,

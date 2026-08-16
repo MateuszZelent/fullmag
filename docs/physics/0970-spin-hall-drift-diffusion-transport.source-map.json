@@ -23,7 +23,7 @@
       "solver": "FDM",
       "device": "GPU",
       "status": "semantic_only",
-      "reason": "Bounded native CUDA FP64 charge and steady-spin slices execute managed actual-device contract gates, including immutable range-bounded reaction, torque, interface, and accepted charge-trace observations. The aggregate capability remains semantic_only with validation_state unvalidated and validated_workloads empty; public ProblemIR/planner/runner execution, scalable sparse-spin performance closure, convergence studies, and production qualification remain open."
+      "reason": "Bounded native CUDA FP64 charge and steady-spin slices execute managed actual-device contract gates, including immutable range-bounded reaction, torque, interface, accepted charge-trace observations, and exclusive transactional Heun/RK4 coupling. The aggregate capability remains semantic_only with validation_state unvalidated and validated_workloads empty; complete public ProblemIR/planner/runner execution, convergence studies, and production qualification remain open."
     }
   ],
   "equations": [
@@ -36,6 +36,13 @@
       "id": "fdm-gpu-m1-charge-fv",
       "symbols": ["V", "J_c", "sigma"],
       "sources": ["fdm-native-charge", "fdm-gpu-m1-charge-solver", "fdm-gpu-m1-uniform-test", "fdm-gpu-m1-layered-test"]
+    },
+    {
+      "id": "fdm-gpu-m1-neumann-compatibility",
+      "symbols": ["b_K", "K", "C", "V", "V_bar_C"],
+      "sources": ["fdm-gpu-m1-neumann-gauge", "fdm-gpu-m1-uniform-test", "fdm-gpu-public-charge-preflight"],
+      "evidence_status": "source_and_actual_device_tests",
+      "owner_task": "Task 1"
     },
     {
       "id": "m2-reciprocal-constitutive-block",
@@ -66,10 +73,54 @@
       "id": "fdm-local-fv-balance-and-torque",
       "symbols": ["Q", "R_sf", "R_J", "R_phi", "r_K", "S_K", "S_Gamma", "tau_abs", "tau_rel", "gamma_e", "M_s", "hbar", "e", "q_abs", "T_tr_G"],
       "sources": ["fdm-native-spin-validation", "fdm-native-spin", "fdm-native-spin-test", "fdm-gpu-m1-contract", "fdm-gpu-m1-spin-solver", "fdm-gpu-m1-spin-observables-test"]
+    },
+    {
+      "id": "racetrack-charge-continuity",
+      "symbols": ["J_c", "sigma", "E", "V"],
+      "sources": ["fdm-native-charge", "racetrack-m1-v1-contract"]
+    },
+    {
+      "id": "racetrack-direct-she",
+      "symbols": ["Q", "theta_SH", "J_c"],
+      "sources": ["fdm-native-spin-validation", "fdm-native-spin", "racetrack-m1-v1-contract"]
+    },
+    {
+      "id": "racetrack-steady-spin-balance",
+      "symbols": ["Q", "R_sf", "R_J", "R_phi", "sigma_s", "lambda_sf", "lambda_J", "lambda_phi", "mu_s", "m"],
+      "sources": ["fdm-native-spin", "racetrack-m1-v1-contract"]
+    },
+    {
+      "id": "racetrack-mixing-boundary",
+      "symbols": ["G_up", "G_down", "G_r", "G_i", "delta_V_Gamma", "q_abs", "m", "mu_s"],
+      "sources": ["fdm-native-charge", "fdm-native-spin", "racetrack-m1-v1-contract"]
+    },
+    {
+      "id": "racetrack-torque-balance",
+      "symbols": ["T_tr_G", "gamma_e", "M_s", "hbar", "e", "R_J", "R_phi", "q_abs"],
+      "sources": ["fdm-native-spin", "racetrack-m1-v1-contract"]
+    },
+    {
+      "id": "racetrack-gilbert-llg",
+      "symbols": ["m", "alpha", "gamma_e", "B_eff", "T_tr_G"],
+      "sources": ["racetrack-m1-v1-contract"]
+    },
+    {
+      "id": "racetrack-theta-sh-torque-decomposition",
+      "symbols": ["theta_SH", "T_P", "T_SHE"],
+      "sources": ["racetrack-m1-v1-contract"]
+    },
+    {
+      "id": "racetrack-neel-seed",
+      "symbols": ["seed_xy", "seed_center", "seed_rho", "seed_phi", "seed_theta", "seed_phase", "seed_radius", "seed_wall_width", "seed_polarity", "seed_m_raw", "m"],
+      "sources": ["python-neel-skyrmion-authoring", "python-neel-skyrmion-evaluator", "rust-neel-skyrmion-evaluator", "racetrack-m1-v1-contract"]
     }
   ],
   "symbols": [
     {"id": "V", "latex": "V", "meaning": "charge electrochemical potential", "si_unit": "\\mathrm{V}"},
+    {"id": "b_K", "latex": "b_K", "meaning": "assembled finite-volume charge right-hand side for cell $K$", "si_unit": "\\mathrm{A}"},
+    {"id": "K", "latex": "K", "meaning": "deterministic finite-volume cell index", "si_unit": "$1$"},
+    {"id": "C", "latex": "C", "meaning": "one numerically connected conducting-cell component", "si_unit": "$1$"},
+    {"id": "V_bar_C", "latex": "\\bar V_C", "meaning": "arithmetic mean charge potential on component $C$", "si_unit": "\\mathrm{V}"},
     {"id": "mu_s", "latex": "\\mu_s", "meaning": "full spin-channel splitting", "si_unit": "\\mathrm{V}"},
     {"id": "E", "latex": "E_i", "meaning": "electric field, negative charge-potential gradient", "si_unit": "\\mathrm{V\\,m^{-1}}"},
     {"id": "G", "latex": "G_{ia}", "meaning": "spin-voltage gradient", "si_unit": "\\mathrm{V\\,m^{-1}}"},
@@ -104,7 +155,22 @@
     {"id": "hbar", "latex": "\\hbar", "meaning": "reduced Planck constant", "si_unit": "\\mathrm{J\\,s}"},
     {"id": "e", "latex": "e", "meaning": "positive elementary charge", "si_unit": "\\mathrm{C}"},
     {"id": "q_abs", "latex": "q_{\\mathrm{abs},\\perp}", "meaning": "transversely absorbed interface spin-current density", "si_unit": "\\mathrm{A\\,m^{-2}}"},
-    {"id": "T_tr_G", "latex": "T_{\\mathrm{tr},G}", "meaning": "transport-derived Gilbert-source torque", "si_unit": "\\mathrm{s^{-1}}"}
+    {"id": "T_tr_G", "latex": "T_{\\mathrm{tr},G}", "meaning": "transport-derived Gilbert-source torque", "si_unit": "\\mathrm{s^{-1}}"},
+    {"id": "m", "latex": "m", "meaning": "reduced magnetization direction", "si_unit": "$1$"},
+    {"id": "alpha", "latex": "\\alpha", "meaning": "Gilbert damping", "si_unit": "$1$"},
+    {"id": "B_eff", "latex": "B_{\\mathrm{eff}}", "meaning": "effective magnetic induction", "si_unit": "\\mathrm{T}"},
+    {"id": "T_P", "latex": "T_P", "meaning": "polarization-driven contribution to transport torque", "si_unit": "\\mathrm{s^{-1}}"},
+    {"id": "T_SHE", "latex": "T_{\\mathrm{SHE}}", "meaning": "direct-SHE contribution to transport torque", "si_unit": "\\mathrm{s^{-1}}"},
+    {"id": "seed_xy", "latex": "x,y", "meaning": "world-space coordinates in the racetrack plane", "si_unit": "\\mathrm{m}"},
+    {"id": "seed_center", "latex": "x_c,y_c", "meaning": "frozen world-space skyrmion centre", "si_unit": "\\mathrm{m}"},
+    {"id": "seed_rho", "latex": "\\rho", "meaning": "radial distance from the frozen centre", "si_unit": "\\mathrm{m}"},
+    {"id": "seed_phi", "latex": "\\phi", "meaning": "polar angle about the frozen centre", "si_unit": "\\mathrm{rad}"},
+    {"id": "seed_theta", "latex": "\\theta", "meaning": "skyrmion polar profile angle", "si_unit": "\\mathrm{rad}"},
+    {"id": "seed_phase", "latex": "\\chi", "meaning": "in-plane phase; equals $\\phi$ for the frozen outward Néel wall", "si_unit": "\\mathrm{rad}"},
+    {"id": "seed_radius", "latex": "R", "meaning": "frozen seed radius", "si_unit": "\\mathrm{m}"},
+    {"id": "seed_wall_width", "latex": "\\Delta", "meaning": "frozen seed wall width", "si_unit": "\\mathrm{m}"},
+    {"id": "seed_polarity", "latex": "p", "meaning": "serialized polarity multiplier in the repository profile", "si_unit": "$1$"},
+    {"id": "seed_m_raw", "latex": "\\mathbf m_{\\mathrm{raw}}", "meaning": "pre-normalization seed vector", "si_unit": "$1$"}
   ],
   "sources": [
     {"id": "fem-m1-charge", "path": "backends/fem/cpu/mfem/transport/steady_transport.cpp", "symbol": "SteadyTransportOracle::solve_charge", "responsibility": "Assemble and solve the bounded conforming H1/P1 charge equation for M1."},
@@ -139,9 +205,11 @@
     {"id": "fdm-m2-heterogeneous-interface-gate", "path": "crates/fullmag-engine/src/fdm/cpu/transport/coupled_charge_spin_tests.rs", "symbol": "m2_anisotropic_nf_interface_meets_the_declared_physical_balance_tolerance", "responsibility": "Check anisotropic N/F balance and companion mixing/SML closure with explicit oriented interface and torque accounting."},
     {"id": "m2-3d-she-ishe-ahe-common-limit-gate", "path": "crates/fullmag-runner/src/native_fem/steady_transport.rs", "symbol": "reciprocal_m2_3d_she_ishe_common_limit_matches_fdm_and_fem_profiles", "responsibility": "Compare matched 3-D reciprocal FDM/FEM plane profiles under coupled transverse refinement with nonzero SHE, iSHE, and AHE."},
     {"id": "fdm-gpu-m1-contract", "path": "docs/physics/0970-spin-hall-drift-diffusion-transport.md", "symbol": "DOC-ANCHOR:fdm-gpu-m1-fp64-contract", "responsibility": "Own the bounded FDM GPU FP64 charge realization and preserve the broader M1 qualification boundary.", "evidence_status": "planned_contract"},
+    {"id": "fdm-gpu-m1-resolved-execution-tuple", "path": "crates/fullmag-plan/src/spin_transport.rs", "symbol": "resolve_spin_transport_with_active_graph", "responsibility": "Materialize the typed resolved execution mode alongside resolved discretization, device, and precision while preserving the authored requested tuple.", "evidence_status": "source_contract"},
     {"id": "fdm-gpu-m1-abi", "path": "backends/fdm/include/fullmag/fdm/transport/gpu_abi_v1.h", "symbol": "fullmag_fdm_gpu_transport_solve_charge_v1", "responsibility": "Declare append-only typed charge payloads, opaque handles, lifecycle, artifact, telemetry, and checkpoint records.", "evidence_status": "implemented_contract"},
     {"id": "fdm-gpu-m1-charge-context", "path": "backends/fdm/gpu/cuda/transport/context.cu", "symbol": "validate_host_view", "responsibility": "Validate typed static host records before ownership transfer and prevent malformed payload publication.", "evidence_status": "actual_device_contract"},
     {"id": "fdm-gpu-m1-charge-solver", "path": "backends/fdm/gpu/cuda/transport/charge/device_solver.cu", "symbol": "solve_device", "responsibility": "Assemble conservative harmonic finite-volume charge and execute deterministic FP64 device CG with linear-cost geometric 2x2x2 aggregation and exact device RAP.", "evidence_status": "actual_device_contract"},
+    {"id": "fdm-gpu-m1-neumann-gauge", "path": "backends/fdm/gpu/cuda/transport/charge/device_solver.cu", "symbol": "label_reference_components_kernel", "responsibility": "Identify conductive components, enforce component-wise Neumann compatibility, and select the explicit zero-mean or boundary-reference gauge policy on device.", "evidence_status": "actual_device_contract", "owner_task": "Task 1"},
     {"id": "fdm-gpu-m1-checkpoint-codec", "path": "backends/fdm/gpu/cuda/transport/charge/checkpoint_codec.cpp", "symbol": "build_checkpoint", "responsibility": "Encode canonical FMGPUTR1 charge sections 1--9/18/20 and bind runtime identity-dependent digests.", "evidence_status": "actual_device_contract"},
     {"id": "fdm-gpu-m1-rust-abi", "path": "crates/fullmag-fdm-sys/src/gpu_transport_abi_v1.rs", "symbol": "fullmag_fdm_gpu_transport_solve_charge_v1", "responsibility": "Mirror the append-only C ABI records and symbols in Rust without claiming a public runner path.", "evidence_status": "layout_contract"},
     {"id": "fdm-gpu-m1-uniform-test", "path": "backends/fdm/tests/gpu_m1_charge_uniform_v1_contract.cpp", "symbol": "main", "responsibility": "Check analytic uniform potential/current, AMG/cache audit, bounded transfers, and zero fallback on an actual GPU.", "evidence_status": "actual_device_contract"},
@@ -161,10 +229,61 @@
     {"id": "fdm-gpu-m1-spin-payload-contract", "path": "docs/physics/0970-spin-hall-drift-diffusion-transport.md", "symbol": "DOC-ANCHOR:fdm-gpu-m1-fp64-contract", "responsibility": "Freeze exact append-only typed spin payload layouts, order-independent interface identity, accepted spin artifacts, and checkpoint sections without changing outer records 8 and 9.", "evidence_status": "planned_contract"},
     {"id": "fdm-gpu-m1-abi-contract", "path": "docs/specs/spin-transport-runtime-contract-v1.md", "symbol": "DOC-ANCHOR:fdm-gpu-m1-abi-v1", "responsibility": "Specify the append-only opaque-handle ABI, canonical checkpoint grammar, ownership, state machine, and fail-closed errors.", "evidence_status": "planned_contract"},
     {"id": "fdm-gpu-m1-spin-abi", "path": "backends/fdm/include/fullmag/fdm/transport/gpu_abi_v1.h", "symbol": "fullmag_fdm_gpu_transport_solve_steady_spin_v1", "responsibility": "Declare the steady-spin entry point whose append-only ABI includes the 288-byte typed immutable spin-observation readback contract.", "evidence_status": "layout_contract"},
+    {"id": "fdm-gpu-m1-llg-binding-abi", "path": "native/include/fullmag_fdm.h", "symbol": "fullmag_fdm_context_bind_gpu_transport_v1", "responsibility": "Declare the append-only 144-byte transport-to-LLG binding and public bind/unbind entry points.", "evidence_status": "layout_and_actual_device_contract"},
     {"id": "fdm-gpu-m1-spin-solver", "path": "backends/fdm/gpu/cuda/transport/spin/device_solver.cu", "symbol": "solve_device", "responsibility": "Solve the bounded FP64 steady-spin operator and materialize reaction, torque, interface, accepted charge-trace, and non-tautological balance observations on device.", "evidence_status": "actual_device_contract"},
+    {"id": "fdm-gpu-m1-llg-binding", "path": "backends/fdm/gpu/cuda/transport/context.cu", "symbol": "context_bind_gpu_transport_rhs", "responsibility": "Claim one transport Slot for exactly one LLG owner, reject competing binds and teardown while pinned, and release ownership after a drained failure.", "evidence_status": "actual_device_contract"},
+    {"id": "fdm-gpu-m1-llg-transaction", "path": "backends/fdm/gpu/cuda/transport/context.cu", "symbol": "context_begin_gpu_transport_step", "responsibility": "Keep every stage spin solution provisional, promote only after the enclosing accepted LLG step, and discard trial buffers and sparse state on rollback.", "evidence_status": "actual_device_contract"},
+    {"id": "fdm-gpu-m1-llg-torque-rhs", "path": "backends/fdm/gpu/cuda/integrators/transport_rhs_fp64.cu", "symbol": "launch_add_gpu_transport_torque_fp64", "responsibility": "Add the Gilbert-form transport torque exactly once on the LLG compute stream and locally drain launch, event-record, and event-sync failures before releasing the storage pin.", "evidence_status": "actual_device_contract"},
+    {"id": "fdm-gpu-m1-rk23-transport-stages", "path": "backends/fdm/gpu/cuda/integrators/llg_rk23_fp64.cu", "symbol": "compute_rhs_into", "responsibility": "Evaluate the bound solved-transport torque at every RK23 stage and accepted endpoint, prevent cross-attempt FSAL reuse, and assign a fresh transaction identity after adaptive rejection; restart qualification remains open.", "evidence_status": "partial_actual_device_contract"},
+    {"id": "fdm-gpu-m1-dp45-transport-stages", "path": "backends/fdm/gpu/cuda/integrators/llg_dp45_fp64.cu", "symbol": "compute_rhs_into", "responsibility": "Evaluate the bound solved-transport torque at every DP45 stage and accepted endpoint, prevent cross-attempt FSAL reuse, and assign a fresh transaction identity after adaptive rejection; restart qualification remains open.", "evidence_status": "partial_actual_device_contract"},
+    {"id": "fdm-gpu-m1-abm3-transport-stages", "path": "backends/fdm/gpu/cuda/integrators/llg_abm3_fp64.cu", "symbol": "launch_abm3_step_fp64", "responsibility": "Evaluate solved transport during ABM3 warmup and predictor-corrector execution and commit the corrected-endpoint derivative to accepted history only after every transport stage succeeds; checkpoint and restart qualification remain open.", "evidence_status": "partial_actual_device_contract"},
     {"id": "fdm-gpu-m1-spin-observables-test", "path": "backends/fdm/tests/gpu_m1_spin_operator_parity_v1_contract.cpp", "symbol": "main", "responsibility": "Compare immutable GPU fields and observations against the CPU owner, including reversed interface orientation, deterministic identity order, and accepted charge traces on an actual GPU.", "evidence_status": "actual_device_contract"},
     {"id": "fdm-gpu-m1-spin-sparse-dispatch-test", "path": "backends/fdm/tests/gpu_m1_spin_sparse_dispatch_v1_contract.cpp", "symbol": "main", "responsibility": "Execute the public 1,048,576-cell spin path, enforce the 512 MiB external and 2 GiB total memory limits, and prove cache, digest invalidation, NaN rollback, and deterministic recovery.", "evidence_status": "actual_device_contract"},
-    {"id": "fdm-gpu-m1-spin-sparse-performance-test", "path": "backends/fdm/tests/gpu_m1_spin_sparse_performance_v1_contract.cu", "symbol": "main", "responsibility": "Record identified-GPU setup, five warm solve timings, exact byte ledger, hierarchy levels, and forbidden transfers against frozen absolute limits.", "evidence_status": "actual_device_contract"}
+    {"id": "fdm-gpu-m1-spin-sparse-performance-test", "path": "backends/fdm/tests/gpu_m1_spin_sparse_performance_v1_contract.cu", "symbol": "main", "responsibility": "Record identified-GPU setup, five warm solve timings, exact byte ledger, hierarchy levels, and forbidden transfers against frozen absolute limits.", "evidence_status": "actual_device_contract"},
+    {"id": "python-neel-skyrmion-authoring", "path": "packages/fullmag-py/src/fullmag/init/textures.py", "symbol": "neel_skyrmion", "responsibility": "Serialize the public Neel preset parameters, mapping, and texture transform into current ProblemIR."},
+    {"id": "python-neel-skyrmion-evaluator", "path": "packages/fullmag-py/src/fullmag/init/preset_eval.py", "symbol": "_skyrmion", "responsibility": "Evaluate and normalize the repository-owned analytic skyrmion formula for Python materialization."},
+    {"id": "rust-neel-skyrmion-evaluator", "path": "crates/fullmag-plan/src/magnetization_textures.rs", "symbol": "eval_skyrmion", "responsibility": "Evaluate the same analytic preset from current typed ProblemIR in the Rust planner."},
+    {"id": "racetrack-stage-current-action", "path": "crates/fullmag-cli/src/step_utils.rs", "symbol": "apply_pipeline_set_transport_current", "responsibility": "Mutate exactly the complete named normal-current electrode set between solved-current workflow stages.", "evidence_status": "source_contract"},
+    {"id": "racetrack-stage-torque-action", "path": "crates/fullmag-cli/src/step_utils.rs", "symbol": "apply_pipeline_set_spin_torque_enabled", "responsibility": "Atomically switch one typed spin-torque graph module and all of its incoming edge statuses between active and inactive.", "evidence_status": "source_contract"},
+    {"id": "racetrack-zero-drive-torque-gate", "path": "crates/fullmag-plan/src/spin_transport.rs", "symbol": "materialize_fdm_descriptor", "responsibility": "Permit a provenance-preserved inactive torque only when every named normal-current terminal is exactly zero, while retaining fail-closed nonzero-drive conservation.", "evidence_status": "source_contract"},
+    {"id": "racetrack-m1-v1-contract", "path": "docs/physics/0970-spin-hall-drift-diffusion-transport.md", "symbol": "DOC-ANCHOR:racetrack-m1-v1-contract", "responsibility": "Freeze the synthetic solved-current racetrack fixture, complete M1 equations, sign operations, parameter provenance, and qualification boundary without claiming implementation.", "evidence_status": "planned_contract"}
+  ],
+  "planned_symbols": [
+    {
+      "path": "crates/fullmag-ir/src/spin_transport.rs",
+      "symbol": "ResolvedFdmSpinTransportIR.transport_active_mask",
+      "status": "planned_not_implemented",
+      "owner_task": "Task 2",
+      "evidence_gate": "Python to ProblemIR round-trip and deterministic transport-mask digest tests"
+    },
+    {
+      "path": "crates/fullmag-plan/src/spin_transport.rs",
+      "symbol": "ResolvedSpinTransportPlanIR.fdm_gpu_double",
+      "status": "planned_not_implemented",
+      "owner_task": "Task 3",
+      "evidence_gate": "fail-closed exact-tuple planner tests with no CPU or device fallback"
+    },
+    {
+      "path": "crates/fullmag-runner/src/fdm/gpu/cuda/spin_transport.rs",
+      "symbol": "GpuM1TransportSession::prepare",
+      "status": "planned_not_implemented",
+      "owner_task": "Task 4",
+      "evidence_gate": "managed public runner lifecycle, reuse, rollback, and restart tests"
+    },
+    {
+      "path": "crates/fullmag-runner/src/fdm/gpu/cuda/spin_transport.rs",
+      "symbol": "TransportStageCheckpointV1",
+      "status": "planned_not_implemented",
+      "owner_task": "Task 6",
+      "evidence_gate": "bitwise no-resolve restart plus invalid-digest rollback tests"
+    },
+    {
+      "path": "crates/fullmag-runner/src/artifacts.rs",
+      "symbol": "execution_provenance.transport_m1_v1",
+      "status": "planned_not_implemented",
+      "owner_task": "Task 7",
+      "evidence_gate": "resource-first artifact and provenance schema verification"
+    }
   ],
   "public_api": {
     "parameters": [
@@ -173,7 +292,9 @@
       {"python": "ChargeTransportMaterial.sigma_parallel_Spm", "type": "float-or-none", "default": "required for bounded FEM M2", "si_unit": "\\mathrm{S\\,m^{-1}}", "validation": "finite and positive; uniform across the bounded FEM domain", "meaning": "AMR/PHE conductivity parallel to magnetization", "backend_support": "FEM CPU bounded M2; FDM M2 reference", "problem_ir": "current_modules[].definition.materials[].material.sigma_parallel_spm"},
       {"python": "ChargeTransportMaterial.sigma_perpendicular_Spm", "type": "float-or-none", "default": "required for bounded FEM M2", "si_unit": "\\mathrm{S\\,m^{-1}}", "validation": "finite and positive; uniform across the bounded FEM domain", "meaning": "AMR/PHE conductivity transverse to magnetization", "backend_support": "FEM CPU bounded M2; FDM M2 reference", "problem_ir": "current_modules[].definition.materials[].material.sigma_perpendicular_spm"},
       {"python": "ChargeTransportMaterial.sigma_AHE_Spm", "type": "float-or-none", "default": "required for bounded FEM M2", "si_unit": "\\mathrm{S\\,m^{-1}}", "validation": "finite; uniform across the bounded FEM domain", "meaning": "anomalous-Hall coefficient", "backend_support": "FEM CPU bounded M2; FDM M2 reference", "problem_ir": "current_modules[].definition.materials[].material.sigma_ahe_spm"},
-      {"python": "SpinDriftDiffusion.solver", "type": "SpinSolverPolicy", "default": "required", "si_unit": "$1$", "validation": "bounded FEM M2 requires block_gmres-compatible charge/spin linear policies and no reciprocal_nonlinear policy", "meaning": "spatial transport solve and residual policy", "backend_support": "FEM CPU bounded M2; GPU rejected", "problem_ir": "spin_transport_modules[].solver"}
+      {"python": "SpinDriftDiffusion.solver", "type": "SpinSolverPolicy", "default": "required", "si_unit": "$1$", "validation": "bounded FEM M2 requires block_gmres-compatible charge/spin linear policies and no reciprocal_nonlinear policy", "meaning": "spatial transport solve and residual policy", "backend_support": "FEM CPU bounded M2; GPU rejected", "problem_ir": "spin_transport_modules[].solver"},
+      {"python": "StudyStagesBuilder.set_transport_current", "type": "module_id plus Mapping[str,float]", "default": "required", "si_unit": "\\mathrm{A\\,m^{-2}}", "validation": "finite values and exact coverage of all named normal-current electrodes", "meaning": "stage-local solved-current terminal drive", "backend_support": "planner-neutral workflow mutation; execution remains lane-qualified", "problem_ir": "current_modules[].definition.boundaries[].outward_current_density_apm2"},
+      {"python": "StudyStagesBuilder.set_spin_torque_enabled", "type": "module_id plus bool", "default": "required", "si_unit": "$1$", "validation": "exactly one typed and graph spin_torque module; inactive magnetic sinks require every solved-current terminal to be exactly zero", "meaning": "stage-local torque participation in the LLG RHS", "backend_support": "physics_graph-filtered FEM/FDM semantics; racetrack gate targets FDM", "problem_ir": "physics_graph.modules[].activation and incoming edges[].status"}
     ]
   }
 }

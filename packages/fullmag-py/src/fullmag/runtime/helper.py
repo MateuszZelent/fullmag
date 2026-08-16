@@ -220,6 +220,14 @@ def main(argv: Sequence[str] | None = None) -> int:
             ir,
             has_stages=bool(loaded.stages),
         )
+        requires_analytic_fdm_transport = _requires_analytic_fdm_transport_grid(ir)
+        if requires_analytic_fdm_transport:
+            # FDM solved-current transport constructs one common charge/spin
+            # grid from analytic FM and conductor geometries.  A precomputed
+            # magnet-only grid asset cannot describe the auxiliary charge
+            # domain and is rejected by the planner.
+            ir["geometry_assets"] = None
+            shared_geometry_assets = None
 
         stages = []
         script_device_override: str | None = None
@@ -233,7 +241,10 @@ def main(argv: Sequence[str] | None = None) -> int:
                 script_source=loaded.script_source,
                 source_root=loaded.source_path.parent,
                 asset_cache=asset_cache,
-                include_geometry_assets=not getattr(args, "skip_geometry_assets", False),
+                include_geometry_assets=(
+                    not getattr(args, "skip_geometry_assets", False)
+                    and not requires_analytic_fdm_transport
+                ),
                 study_pipeline=study_pipeline,
                 runtime_device_override=getattr(args, "runtime_device", None),
                 stage_start_time_s=stage_start_time_s,
@@ -428,6 +439,25 @@ def _geometry_assets_semantically_equal(left: object, right: object) -> bool:
     if left is None or isinstance(left, (bool, int, float, str)):
         return left == right
     return False
+
+
+def _requires_analytic_fdm_transport_grid(ir: dict[str, object]) -> bool:
+    """Return whether FDM transport must rebuild a common analytic grid."""
+    problem_meta = ir.get("problem_meta")
+    runtime_metadata = problem_meta.get("runtime_metadata") if isinstance(problem_meta, dict) else None
+    runtime_selection = runtime_metadata.get("runtime_selection") if isinstance(runtime_metadata, dict) else None
+    if not isinstance(runtime_selection, dict) or runtime_selection.get("backend") != "fdm":
+        return False
+    graph = ir.get("physics_graph")
+    modules = graph.get("modules") if isinstance(graph, dict) else None
+    if not isinstance(modules, list):
+        return False
+    return any(
+        isinstance(module, dict)
+        and module.get("kind") == "spin_transport"
+        and module.get("activation") == "active"
+        for module in modules
+    )
 
 
 def _change_device_action_device(action: dict[str, object] | None) -> str | None:

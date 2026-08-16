@@ -61,6 +61,7 @@ from fullmag.model.current_transport import (
     ChargeSolverPolicy,
     ChargeTransportMaterialAssignment,
     ConservativeCurrentView,
+    NormalCurrentElectrode,
     StructuredCurrentClosure,
     CurrentTransport,
 )
@@ -2401,6 +2402,7 @@ class _WorldState:
     # Magnets (ordered)
     _magnets: list[MagnetHandle] = field(default_factory=list)
     _auxiliary_geometries: list[object] = field(default_factory=list)
+    _auxiliary_geometry_roles: dict[str, str] = field(default_factory=dict)
     _couplings: CouplingRegistry = field(default_factory=CouplingRegistry)
     _loaded_field_states: dict[tuple[str, str, str], object] = field(default_factory=dict)
 
@@ -2430,6 +2432,7 @@ class _WorldState:
     _field_drives: list[RegionalFieldDrive] = field(default_factory=list)
     _planar_monitors: list[PlanarMonitor] = field(default_factory=list)
     _spin_torques: list[SpinTorqueModule] = field(default_factory=list)
+    _spin_torque_activation: dict[str, bool] = field(default_factory=dict)
     _spin_transports: list[SpinDriftDiffusion] = field(default_factory=list)
     _oersted_terms: list[OerstedCylinder | OerstedField] = field(default_factory=list)
     _excitation_analysis: SpinWaveExcitationAnalysis | None = None
@@ -4251,6 +4254,160 @@ class StudyStagesBuilder:
             )
         )
 
+    def add_load_state(
+        self,
+        *,
+        artifact_name: str | None = None,
+        state_path: str | Path | None = None,
+        format: str | None = None,
+        dataset: str | None = None,
+        sample_index: int | None = None,
+        stage_id: str | None = None,
+    ) -> "StudyStagesBuilder":
+        """Restore magnetization from one named stage artifact or explicit path."""
+        if (artifact_name is None) == (state_path is None):
+            raise ValueError(
+                "add_load_state() requires exactly one of artifact_name or state_path"
+            )
+        normalized_artifact = (
+            require_non_empty(artifact_name, "artifact_name")
+            if artifact_name is not None
+            else None
+        )
+        normalized_path = str(state_path) if state_path is not None else None
+        if normalized_path is not None and not normalized_path.strip():
+            raise ValueError("state_path must be non-empty")
+        if sample_index is not None and (
+            isinstance(sample_index, bool) or not isinstance(sample_index, int)
+        ):
+            raise TypeError("sample_index must be an int or None")
+        self._append_configuration_action(
+            problem=_build_problem(),
+            entrypoint_kind="flat_load_state",
+            stage_id=self._allocate_stage_id("load-state", stage_id),
+            action={
+                "kind": "load_state",
+                "artifact_name": normalized_artifact,
+                "state_path": normalized_path,
+                "format": str(format) if format is not None else None,
+                "dataset": str(dataset) if dataset is not None else None,
+                "sample_index": sample_index,
+            },
+        )
+        return self
+
+    def set_transport_current(
+        self,
+        *,
+        module_id: str,
+        terminal_outward_current_density_Apm2: Mapping[str, float],
+        stage_id: str | None = None,
+    ) -> "StudyStagesBuilder":
+        """Set every normal-current electrode of one solved-current module."""
+        normalized_module_id = require_non_empty(module_id, "module_id")
+        if not isinstance(terminal_outward_current_density_Apm2, Mapping):
+            raise TypeError(
+                "terminal_outward_current_density_Apm2 must be a boundary-id mapping"
+            )
+        values: dict[str, float] = {}
+        for boundary_id, value in terminal_outward_current_density_Apm2.items():
+            if not isinstance(boundary_id, str) or not boundary_id.strip():
+                raise ValueError("transport-current boundary ids must be non-empty strings")
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                raise TypeError(
+                    "transport-current density values must be real numbers in A/m^2"
+                )
+            normalized_value = float(value)
+            if not math.isfinite(normalized_value):
+                raise ValueError("transport-current density values must be finite")
+            values[boundary_id] = normalized_value
+        if not values:
+            raise ValueError(
+                "terminal_outward_current_density_Apm2 must not be empty"
+            )
+
+        matching = [
+            (index, module)
+            for index, module in enumerate(_state._current_modules)
+            if isinstance(module, CurrentTransport) and module.name == normalized_module_id
+        ]
+        if len(matching) != 1:
+            raise ValueError(
+                f"transport module id '{normalized_module_id}' must identify exactly one CurrentTransport"
+            )
+        module_index, module = matching[0]
+        electrode_ids = {
+            boundary.id
+            for boundary in module.boundaries
+            if isinstance(boundary, NormalCurrentElectrode)
+        }
+        supplied_ids = set(values)
+        if supplied_ids != electrode_ids:
+            missing = sorted(electrode_ids - supplied_ids)
+            unexpected = sorted(supplied_ids - electrode_ids)
+            raise ValueError(
+                "terminal_outward_current_density_Apm2 must cover exactly the module's "
+                f"normal-current electrodes; missing={missing}, unexpected={unexpected}"
+            )
+
+        problem_before_action = _build_problem()
+        boundaries = tuple(
+            NormalCurrentElectrode(
+                boundary.id,
+                boundary.surfaces,
+                outward_current_density_Apm2=values[boundary.id],
+            )
+            if isinstance(boundary, NormalCurrentElectrode)
+            else boundary
+            for boundary in module.boundaries
+        )
+        _state._current_modules[module_index] = replace(module, boundaries=boundaries)
+        self._append_configuration_action(
+            problem=problem_before_action,
+            entrypoint_kind="flat_set_transport_current",
+            stage_id=self._allocate_stage_id("set-transport-current", stage_id),
+            action={
+                "kind": "set_transport_current",
+                "module_id": normalized_module_id,
+                "terminal_outward_current_density_Apm2": values,
+            },
+        )
+        return self
+
+    def set_spin_torque_enabled(
+        self,
+        *,
+        module_id: str,
+        enabled: bool,
+        stage_id: str | None = None,
+    ) -> "StudyStagesBuilder":
+        """Enable or disable one existing spin-torque module for later stages."""
+        normalized_module_id = require_non_empty(module_id, "module_id")
+        if not isinstance(enabled, bool):
+            raise TypeError("enabled must be a bool")
+        matching = []
+        for module in _state._spin_torques:
+            payload = module.to_ir_module()
+            candidate_id = payload.get("id") or payload.get("name")
+            if candidate_id == normalized_module_id:
+                matching.append(module)
+        if len(matching) != 1:
+            raise ValueError(
+                f"spin torque module id '{normalized_module_id}' must identify exactly one module"
+            )
+        self._append_configuration_action(
+            problem=_build_problem(),
+            entrypoint_kind="flat_set_spin_torque_enabled",
+            stage_id=self._allocate_stage_id("set-spin-torque-enabled", stage_id),
+            action={
+                "kind": "set_spin_torque_enabled",
+                "module_id": normalized_module_id,
+                "enabled": enabled,
+            },
+        )
+        _state._spin_torque_activation[normalized_module_id] = enabled
+        return self
+
     def change_device(self, device: str) -> "StudyStagesBuilder":
         normalized = _normalize_stage_device(device)
         _state._declared_stages.append(
@@ -5283,6 +5440,18 @@ class StudyBuilder:
 
     def geometry(self, shape: object, name: str = "body") -> MagnetHandle:
         return geometry(shape, name=name)
+
+    def geometry_object(
+        self,
+        shape: object,
+        name: str = "object",
+        *,
+        type: str = "geometry",
+    ) -> object:
+        return geometry_object(shape, name=name, type=type)
+
+    def conductor(self, shape: object, name: str = "conductor") -> object:
+        return geometry_object(shape, name=name, type="conductor")
 
     def antenna_object(self, shape: object, name: str = "antenna") -> object:
         return antenna_object(shape, name=name)
@@ -7264,20 +7433,52 @@ def geometry(shape: object, name: str = "body") -> MagnetHandle:
     return handle
 
 
-def antenna_object(shape: object, name: str = "antenna") -> object:
-    """Register a non-magnetic geometry object for prescribed antenna masks."""
+def geometry_object(
+    shape: object,
+    name: str = "object",
+    *,
+    type: str = "geometry",
+) -> object:
+    """Register a non-magnetic geometry with an explicit physical object type.
+
+    ``type=\"conductor\"`` is the canonical declaration for a solved-current
+    heavy-metal or electrode domain.  Antenna masks remain available through
+    :func:`antenna_object` and are deliberately kept a separate role.
+    """
+    normalized_type = require_non_empty(type, "type").strip().lower()
+    if normalized_type not in {"geometry", "conductor", "electrode", "antenna"}:
+        raise ValueError(
+            "geometry_object(type=...) must be one of: geometry, conductor, electrode, antenna"
+        )
     resolved = shape
     if hasattr(resolved, "name"):
         import copy
 
         resolved = copy.copy(resolved)
         object.__setattr__(resolved, "name", require_non_empty(name, "name"))
+    geometry_name = getattr(resolved, "geometry_name", None)
+    if not isinstance(geometry_name, str) or not geometry_name:
+        raise TypeError("geometry_object() requires a geometry with a geometry_name")
+    if geometry_name in _state._auxiliary_geometry_roles:
+        raise ValueError(f"duplicate geometry object name {geometry_name!r}")
     _state._auxiliary_geometries.append(resolved)
-    _state._register_geometry_visualization_hint(
-        resolved.geometry_name,
-        {"role": "antenna", "display": "shaded_frame"},
-    )
+    _state._auxiliary_geometry_roles[geometry_name] = normalized_type
+    if normalized_type == "antenna":
+        _state._register_geometry_visualization_hint(
+            geometry_name,
+            {"role": "antenna", "display": "shaded_frame"},
+        )
+    else:
+        _state._register_geometry_visualization_hint(
+            geometry_name,
+            {"role": normalized_type, "display": "shaded_frame"},
+        )
     return resolved
+
+
+def antenna_object(shape: object, name: str = "antenna") -> object:
+    """Register a non-magnetic geometry object for prescribed antenna masks."""
+    return geometry_object(shape, name=name, type="antenna")
 
 
 # ---------------------------------------------------------------------------
@@ -8278,10 +8479,12 @@ def _build_problem(
         runtime=rt,
         runtime_metadata=runtime_metadata,
         auxiliary_geometries=tuple(s._auxiliary_geometries),
+        auxiliary_geometry_roles=dict(s._auxiliary_geometry_roles),
         current_modules=tuple(s._current_modules),
         field_drives=tuple(s._field_drives),
         monitors=tuple(s._planar_monitors),
         spin_torques=tuple(s._spin_torques),
+        spin_torque_activation=dict(s._spin_torque_activation),
         spin_transports=tuple(s._spin_transports),
         couplings=s._couplings.items(),
         temperature=s._thermal_noise.temperature if s._thermal_noise is not None else None,

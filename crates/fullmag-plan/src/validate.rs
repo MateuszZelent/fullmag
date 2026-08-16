@@ -590,7 +590,14 @@ fn validate_conservative_relaxation(problem: &ProblemIR, errors: &mut Vec<String
     if !matches!(problem.study, fullmag_ir::StudyIR::Relaxation { .. }) {
         return;
     }
-    for module in &problem.spin_torque_modules {
+    let active_torque_modules = match crate::spin_torque::executable_spin_torque_modules(problem) {
+        Ok(modules) => modules,
+        Err(error) => {
+            errors.extend(error.reasons);
+            Vec::new()
+        }
+    };
+    for module in active_torque_modules {
         let name = match module {
             fullmag_ir::SpinTorqueModuleIR::ZhangLi { .. } => "zhang_li",
             fullmag_ir::SpinTorqueModuleIR::Slonczewski { .. } => "slonczewski",

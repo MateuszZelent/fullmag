@@ -7,6 +7,7 @@
 
 FULLMAG_ABI_ASSERT(_Alignof(fullmag_fdm_gpu_transport_context_handle_v1) == 8);
 FULLMAG_ABI_ASSERT(_Alignof(fullmag_fdm_gpu_charge_snapshot_handle_v1) == 8);
+FULLMAG_ABI_ASSERT(_Alignof(fullmag_fdm_gpu_transport_llg_binding_v1) == 8);
 FULLMAG_ABI_ASSERT(_Alignof(fullmag_fdm_gpu_transport_buffer_view_v1) == 8);
 FULLMAG_ABI_ASSERT(_Alignof(fullmag_fdm_gpu_transport_charge_cell_v1) == 8);
 FULLMAG_ABI_ASSERT(_Alignof(fullmag_fdm_gpu_transport_charge_material_v1) == 8);
@@ -31,6 +32,7 @@ FULLMAG_ABI_ASSERT(sizeof(fullmag_fdm_gpu_transport_spin_interface_v1) == 176);
 FULLMAG_ABI_ASSERT(sizeof(fullmag_fdm_gpu_transport_spin_observation_record_v1) == 288);
 FULLMAG_ABI_ASSERT(sizeof(fullmag_fdm_gpu_transport_charge_interface_trace_v1) == 136);
 FULLMAG_ABI_ASSERT(sizeof(fullmag_fdm_gpu_transport_formula_ids_v1) == 144);
+FULLMAG_ABI_ASSERT(sizeof(fullmag_fdm_gpu_transport_llg_binding_v1) == 144);
 FULLMAG_ABI_ASSERT(offsetof(fullmag_fdm_gpu_transport_charge_face_v1, source_id) == 80);
 
 int main(void) { return 0; }

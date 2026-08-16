@@ -147,6 +147,27 @@ typedef enum {
     FULLMAG_FDM_STATS_NONE = 1,  /* step returns only step/time/dt metadata */
 } fullmag_fdm_stats_mode;
 
+#define FULLMAG_FDM_LLG_CHECKPOINT_SCHEMA_V1 UINT32_C(1)
+
+typedef struct {
+    uint32_t schema_version;
+    uint32_t integrator;
+    uint32_t precision;
+    uint32_t array_mask;
+    uint64_t cell_count;
+    uint64_t payload_bytes;
+    uint64_t step_count;
+    double current_time;
+    double current_dt;
+    uint64_t transport_attempt_generation;
+    uint32_t fsal_valid;
+    uint32_t abm_startup;
+    double abm_last_dt;
+    uint32_t adaptive_has_previous_error;
+    uint32_t reserved0;
+    double adaptive_previous_error;
+} fullmag_fdm_llg_checkpoint_info_v1;
+
 typedef int (*fullmag_fdm_interrupt_poll_fn)(void *user_data);
 
 /* ── Plan descriptor ── */
@@ -537,6 +558,38 @@ typedef struct fullmag_fdm_backend fullmag_fdm_backend;
 typedef struct fullmag_fdm_field_snapshot fullmag_fdm_field_snapshot;
 typedef struct fullmag_fdm_preview_snapshot fullmag_fdm_preview_snapshot;
 
+/*
+ * Append-only binding between a single-grid FP64 LLG context and an accepted
+ * GPU M1 charge snapshot.  The record contains registry identities and solver
+ * policy only: CUDA pointers, streams, and transport buffers remain owned by
+ * the native GPU transport context.
+ */
+#if defined(__cplusplus)
+#define FULLMAG_FDM_BINDING_ALIGN8 alignas(8)
+#define FULLMAG_FDM_BINDING_ALIGN8_FIELD
+#else
+#define FULLMAG_FDM_BINDING_ALIGN8
+#define FULLMAG_FDM_BINDING_ALIGN8_FIELD _Alignas(8)
+#endif
+typedef struct FULLMAG_FDM_BINDING_ALIGN8 fullmag_fdm_gpu_transport_llg_binding_v1 {
+    FULLMAG_FDM_BINDING_ALIGN8_FIELD uint32_t abi_version;
+    uint32_t struct_version;
+    uint32_t struct_size;
+    uint32_t reserved_flags;
+    uint64_t required_features;
+    uint64_t reserved0;
+    fullmag_fdm_gpu_transport_context_handle_v1 transport_context;
+    fullmag_fdm_gpu_charge_snapshot_handle_v1 charge_snapshot;
+    uint64_t accepted_sequence;
+    uint64_t source_revision;
+    uint64_t operator_revision;
+    double relative_tolerance;
+    uint64_t max_iterations;
+    uint64_t reserved1;
+} fullmag_fdm_gpu_transport_llg_binding_v1;
+#undef FULLMAG_FDM_BINDING_ALIGN8_FIELD
+#undef FULLMAG_FDM_BINDING_ALIGN8
+
 /* ── Functions ── */
 
 /**
@@ -569,6 +622,16 @@ fullmag_fdm_backend *fullmag_fdm_backend_create_time_policy_v2(
 fullmag_fdm_backend *fullmag_fdm_backend_create_v2(
     const fullmag_fdm_multilayer_plan_desc_v2 *plan);
 
+/** Mark the uploaded cell-wise profile as static external H_ext [A/m].
+ * The legacy descriptor keeps the wire layout stable; this role marker is
+ * intentionally a separate versioned operation and is valid only for a
+ * non-cylindrical single-grid profile.
+ */
+int fullmag_fdm_backend_set_static_external_field_f64(
+    fullmag_fdm_backend *handle,
+    const double *field_xyz,
+    uint64_t field_len);
+
 /**
  * Execute one time step of length dt_seconds using the configured integrator.
  * For DP45: dt_seconds is the initial step size; adaptive stepping may adjust it.
@@ -578,6 +641,14 @@ int fullmag_fdm_backend_step(
     fullmag_fdm_backend    *handle,
     double                  dt_seconds,
     fullmag_fdm_step_stats *out_stats);
+
+/* Bind/unbind the stage-wise GPU transport torque source for Heun or RK4. */
+int fullmag_fdm_context_bind_gpu_transport_v1(
+    fullmag_fdm_backend *handle,
+    const fullmag_fdm_gpu_transport_llg_binding_v1 *binding);
+
+int fullmag_fdm_context_unbind_gpu_transport_v1(
+    fullmag_fdm_backend *handle);
 
 int fullmag_fdm_backend_set_interrupt_poll(
     fullmag_fdm_backend *handle,
@@ -782,6 +853,30 @@ int fullmag_fdm_backend_upload_magnetization_f32(
     fullmag_fdm_backend   *handle,
     const float           *m_xyz,
     uint64_t               len);
+
+/**
+ * Query/export/import an exact FP64 single-grid LLG continuation checkpoint.
+ *
+ * These calls are explicit checkpoint boundaries and may perform synchronous
+ * device/host transfers. Import is accepted only by a fresh, matching context.
+ * The opaque payload includes the accepted magnetization and all integrator
+ * history needed for bitwise continuation.
+ */
+int fullmag_fdm_backend_llg_checkpoint_query_size_v1(
+    fullmag_fdm_backend *handle,
+    uint64_t *out_required_bytes);
+
+int fullmag_fdm_backend_llg_checkpoint_export_v1(
+    fullmag_fdm_backend *handle,
+    void *destination,
+    uint64_t exact_capacity,
+    fullmag_fdm_llg_checkpoint_info_v1 *out_info);
+
+int fullmag_fdm_backend_llg_checkpoint_import_v1(
+    fullmag_fdm_backend *handle,
+    const void *source,
+    uint64_t exact_bytes,
+    const fullmag_fdm_llg_checkpoint_info_v1 *expected_info);
 
 /**
  * Replace one v2 multilayer layer magnetization from host-side f64 AoS storage.

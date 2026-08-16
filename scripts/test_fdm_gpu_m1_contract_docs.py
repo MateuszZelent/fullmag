@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import struct
+import sys
 import unicodedata
 import unittest
 from pathlib import Path
@@ -13,6 +15,12 @@ from markdown_it import MarkdownIt
 ROOT = Path(__file__).resolve().parents[1]
 PAGE = ROOT / "docs/physics/0970-spin-hall-drift-diffusion-transport.md"
 SOURCE_MAP = ROOT / "docs/physics/0970-spin-hall-drift-diffusion-transport.source-map.json"
+TOPOLOGICAL_PAGE = ROOT / "docs/physics/0940-topological-charge-observable.md"
+TOPOLOGICAL_SOURCE_MAP = ROOT / "docs/physics/0940-topological-charge-observable.source-map.json"
+RACETRACK_FIXTURE = (
+    ROOT / "tests/standard_problems/transport/racetrack_m1_v1/fixture.v1.json"
+)
+RACETRACK_README = ROOT / "tests/standard_problems/transport/racetrack_m1_v1/README.md"
 RUNTIME = ROOT / "docs/specs/spin-transport-runtime-contract-v1.md"
 MASTERPLAN = ROOT / "docs/architecture/backend-golden-masterplan.md"
 CAPABILITY_MD = ROOT / "docs/specs/capability-matrix-v0.md"
@@ -22,10 +30,120 @@ PLAN = (
     / "docs/raports/2026-07-15_audyt-stt-sot-she-fem-fdm"
     / "PLAN_WDROZENIA_I_SPECYFIKACJA_FIZYKI.md"
 )
+RACETRACK_PLAN = (
+    ROOT / "docs/superpowers/plans/2026-08-11-solved-current-skyrmion-racetrack.md"
+)
+
+CAPABILITY_STATUS_VOCABULARY = {
+    "unsupported",
+    "source_visible",
+    "semantic_only",
+    "reference_executable",
+    "development_executable",
+    "partial_production_executable",
+    "implemented",
+    "production_executable",
+    "validated",
+}
+CAPABILITY_LANES = {
+    "fdm_cpu_reference",
+    "fdm_gpu_production",
+    "fem_cpu_public",
+    "fem_gpu_public",
+}
+TASK_3_BOUNDED_CAPABILITIES = {
+    "transport.spin.steady_drift_diffusion.fdm_gpu_bounded_m1.v1": (
+        "transport.spin.steady_drift_diffusion",
+        "transport_constitutive.one_way.fullmag.v1",
+    ),
+    "transport.spin.direct_she.fdm_gpu_bounded_m1.v1": (
+        "transport.spin.direct_she",
+        "transport_constitutive.one_way.fullmag.v1",
+    ),
+    "transport.spin.mixing_conductance.fdm_gpu_bounded_m1.v1": (
+        "transport.spin.mixing_conductance",
+        "magnetoelectronic.fullmag.v2",
+    ),
+    "coupling.transport_llg.one_way.fdm_gpu_bounded_m1.v1": (
+        "coupling.transport_llg.one_way",
+        "transport_torque_angular_momentum.fullmag.v1",
+    ),
+}
 
 
 def _normalise(value: str) -> str:
     return " ".join(value.replace("`", "").split())
+
+
+def _assert_capability_matrix_schema(matrix: object) -> None:
+    if not isinstance(matrix, dict):
+        raise AssertionError("capability matrix must be a JSON object")
+    if matrix.get("schema_version") != "capability_matrix.v0":
+        raise AssertionError("capability matrix lost schema_version=capability_matrix.v0")
+    vocabulary = matrix.get("status_vocabulary")
+    if not isinstance(vocabulary, dict) or set(vocabulary) != CAPABILITY_STATUS_VOCABULARY:
+        raise AssertionError("capability status vocabulary differs from the canonical set")
+    if set(matrix.get("lanes", ())) != CAPABILITY_LANES:
+        raise AssertionError("capability matrix lanes differ from the canonical four-lane set")
+    features = matrix.get("features")
+    if not isinstance(features, list):
+        raise AssertionError("capability matrix must contain features[]")
+    feature_ids = [
+        feature.get("id")
+        for feature in features
+        if isinstance(feature, dict) and isinstance(feature.get("id"), str)
+    ]
+    if len(feature_ids) != len(features):
+        raise AssertionError("every capability feature must be an object with a string id")
+    if len(feature_ids) != len(set(feature_ids)):
+        raise AssertionError("capability matrix contains duplicate feature ids")
+    for feature in features:
+        lanes = feature.get("lanes")
+        if not isinstance(lanes, dict) or set(lanes) != CAPABILITY_LANES:
+            raise AssertionError(f"capability {feature['id']} lost the canonical four lanes")
+        unknown_statuses = set(lanes.values()) - CAPABILITY_STATUS_VOCABULARY
+        if unknown_statuses:
+            raise AssertionError(
+                f"capability {feature['id']} uses unknown lane statuses: {sorted(unknown_statuses)}"
+            )
+
+
+def _assert_task_3_bounded_capability_rows(matrix: dict[str, object]) -> None:
+    features = matrix["features"]
+    by_id = {feature["id"]: feature for feature in features}
+    actual_ids = {
+        feature_id
+        for feature_id in by_id
+        if feature_id.endswith(".fdm_gpu_bounded_m1.v1")
+        and feature_id != "transport.charge.ohmic.fdm_gpu_bounded_m1.v1"
+    }
+    if actual_ids != set(TASK_3_BOUNDED_CAPABILITIES):
+        raise AssertionError("Task 3 bounded capability row ids differ from the exact four-row set")
+    expected_lanes = {
+        "fdm_cpu_reference": "unsupported",
+        "fdm_gpu_production": "implemented",
+        "fem_cpu_public": "unsupported",
+        "fem_gpu_public": "unsupported",
+    }
+    for feature_id, (capability_id, formula_version) in TASK_3_BOUNDED_CAPABILITIES.items():
+        feature = by_id[feature_id]
+        expected = {
+            "capability_id": capability_id,
+            "formula_version": formula_version,
+            "operator_versions": ["fv_spin_upwind_v1"],
+            "lanes": expected_lanes,
+            "precision_scope": ["double"],
+            "execution_mode_scope": ["strict"],
+            "implementation_state": "implemented",
+            "validation_state": "unvalidated",
+            "validated_workloads": [],
+        }
+        for field, value in expected.items():
+            if feature.get(field) != value:
+                raise AssertionError(
+                    f"Task 3 capability {feature_id}.{field} must be {value!r}, "
+                    f"got {feature.get(field)!r}"
+                )
 
 
 def _gpu_section(page: str) -> str:
@@ -38,6 +156,241 @@ def _anchored_section(document: str, start: str, end: str) -> str:
     section_start = document.index(start)
     section_end = document.index(end, section_start)
     return document[section_start:section_end]
+
+
+def _resolve_problem_ir_path(problem_ir: object, path: str) -> object:
+    value = problem_ir
+    for segment in path.split("."):
+        match = re.fullmatch(r"([A-Za-z_][A-Za-z0-9_]*)(.*)", segment)
+        if match is None:
+            raise AssertionError(f"invalid ProblemIR path segment: {segment!r}")
+        field, indexes = match.groups()
+        if not isinstance(value, dict) or field not in value:
+            raise AssertionError(f"ProblemIR path {path!r} cannot resolve field {field!r}")
+        value = value[field]
+        offset = 0
+        for index_match in re.finditer(r"\[(\d+)\]", indexes):
+            if index_match.start() != offset:
+                raise AssertionError(
+                    f"ProblemIR path {path!r} uses a non-numeric or malformed selector"
+                )
+            if not isinstance(value, list):
+                raise AssertionError(
+                    f"ProblemIR path {path!r} indexes a non-array value"
+                )
+            value = value[int(index_match.group(1))]
+            offset = index_match.end()
+        if offset != len(indexes):
+            raise AssertionError(
+                f"ProblemIR path {path!r} uses a non-numeric or malformed selector"
+            )
+    return value
+
+
+def _racetrack_public_lowering() -> dict[str, object]:
+    python_src = ROOT / "packages/fullmag-py/src"
+    if str(python_src) not in sys.path:
+        sys.path.insert(0, str(python_src))
+
+    import fullmag as fm
+
+    fixture = json.loads(RACETRACK_FIXTURE.read_text(encoding="utf-8"))
+    hm_geometry = fm.Translate(
+        fm.Box(size=(512.0e-9, 128.0e-9, 3.0e-9), name="hm_base"),
+        offset=(256.0e-9, 64.0e-9, 1.5e-9),
+        name="hm",
+    )
+    fm_geometry = fm.Translate(
+        fm.Box(size=(512.0e-9, 128.0e-9, 1.0e-9), name="fm_base"),
+        offset=(256.0e-9, 64.0e-9, 3.5e-9),
+        name="fm",
+    )
+    hm = fm.RegionRef("hm")
+    ferromagnet = fm.RegionRef("fm")
+
+    def surface(value: dict[str, object]) -> object:
+        return fm.SurfaceRef(
+            value["object_id"],
+            value["surface_id"],
+            value["orientation"],
+        )
+
+    charge_boundaries = {
+        boundary["id"]: boundary
+        for boundary in fixture["charge_boundary_contract"]["boundaries"]
+    }
+    current_transport = fm.CurrentTransport(
+        name="charge",
+        model="ohmic_poisson",
+        coupling="one_way",
+        domain=(hm, ferromagnet),
+        materials=(
+            fm.ChargeTransportMaterialAssignment(
+                hm, fm.ChargeTransportMaterial(sigma_Spm=5.0e6)
+            ),
+            fm.ChargeTransportMaterialAssignment(
+                ferromagnet, fm.ChargeTransportMaterial(sigma_Spm=1.0e6)
+            ),
+        ),
+        boundaries=(
+            fm.NormalCurrentElectrode(
+                "terminal_x_minus",
+                tuple(surface(value) for value in charge_boundaries["terminal_x_minus"]["surfaces"]),
+                outward_current_density_Apm2=0.0,
+            ),
+            fm.NormalCurrentElectrode(
+                "terminal_x_plus",
+                tuple(surface(value) for value in charge_boundaries["terminal_x_plus"]["surfaces"]),
+                outward_current_density_Apm2=0.0,
+            ),
+            fm.ChargeInsulating(
+                "insulating_outer",
+                tuple(surface(value) for value in charge_boundaries["insulating_outer"]["surfaces"]),
+            ),
+        ),
+        gauge=fm.ChargePotentialGauge("zero_mean"),
+        solver=fm.ChargeSolverPolicy(),
+    )
+
+    interface = fixture["interface_contract"]
+    spin_boundary = fixture["spin_boundary_contract"]
+    spin_transport = fm.SpinDriftDiffusion(
+        id="spin",
+        current_source_id="charge",
+        mode="steady",
+        domain=(hm, ferromagnet),
+        materials=(
+            fm.SpinTransportMaterialAssignment(
+                hm,
+                fm.SpinTransportMaterial(
+                    sigma_s_Spm=5.0e6,
+                    polarization_p=0.0,
+                    theta_sh=0.2,
+                    lambda_sf_m=1.5e-9,
+                ),
+            ),
+            fm.SpinTransportMaterialAssignment(
+                ferromagnet,
+                fm.SpinTransportMaterial(
+                    sigma_s_Spm=1.0e6,
+                    polarization_p=0.4,
+                    theta_sh=0.0,
+                    lambda_sf_m=5.0e-9,
+                    lambda_j_m=1.0e-9,
+                    lambda_phi_m=1.0e-9,
+                ),
+            ),
+        ),
+        interfaces=(
+            fm.MixingConductanceSpinInterface(
+                id="hm_fm",
+                normal_to_ferromagnet=interface["normal_to_ferromagnet"],
+                normal_side=hm,
+                ferromagnet_side=ferromagnet,
+                normal_surface=surface(interface["normal_surface"]),
+                ferromagnet_surface=surface(interface["ferromagnet_surface"]),
+                g_up_Spm2=2.5e14,
+                g_down_Spm2=2.5e14,
+                g_r_Spm2=5.0e14,
+                g_i_Spm2=5.0e13,
+            ),
+        ),
+        boundaries=(
+            fm.SpinInsulating(
+                spin_boundary["id"],
+                tuple(surface(value) for value in spin_boundary["surfaces"]),
+            ),
+        ),
+        solver=fm.SpinSolverPolicy(engine="native_m1_v1"),
+        requested_execution=fm.TransportExecution(
+            discretization="fdm",
+            device="gpu",
+            precision="double",
+            execution_mode="strict",
+        ),
+    )
+
+    runtime = fm.RuntimeSelection(
+        backend_target=fm.BackendTarget.FDM,
+        device_target=fm.DeviceTarget.GPU,
+        gpu_count=1,
+        device_index=0,
+        execution_mode=fm.ExecutionMode.STRICT,
+        execution_precision=fm.ExecutionPrecision.DOUBLE,
+    )
+    discretization = fm.DiscretizationHints(
+        fdm=fm.FDM(cell=(2.0e-9, 2.0e-9, 1.0e-9))
+    )
+    material = fm.Material(
+        name="fm_material",
+        Ms=580.0e3,
+        A=15.0e-12,
+        alpha=0.3,
+        Ku1=0.8e6,
+        anisU=(0.0, 0.0, 1.0),
+    )
+    problem = fm.Problem(
+        name="racetrack_m1_v1_base_drive",
+        magnets=(
+            fm.Ferromagnet(
+                name="fm",
+                geometry=fm_geometry,
+                material=material,
+                m0=(
+                    fm.texture.neel_skyrmion(
+                        radius=30.0e-9,
+                        wall_width=5.0e-9,
+                        chirality=1,
+                        core_polarity=1,
+                        plane="xy",
+                    )
+                    .with_mapping(space="world")
+                    .translate(256.0e-9, 64.0e-9, 3.5e-9)
+                ),
+            ),
+        ),
+        auxiliary_geometries=(hm_geometry,),
+        energy=(
+            fm.Exchange(),
+            fm.Demag(),
+            fm.InterfacialDMI(
+                D=3.0e-3, interface_normal=(0.0, 0.0, 1.0)
+            ),
+        ),
+        study=fm.TimeEvolution(
+            dynamics=fm.LLG(integrator="rk4", fixed_timestep=1.0e-13),
+            outputs=(fm.SaveField("m", every=5.0e-12),),
+        ),
+        runtime=runtime,
+        discretization=discretization,
+        current_modules=(current_transport,),
+        spin_transports=(spin_transport,),
+        spin_torques=(
+            fm.DriftDiffusionSpinTorque(
+                id="transport_torque", solve_id="spin", target=ferromagnet
+            ),
+        ),
+    )
+    lowered = problem.to_ir(include_geometry_assets=False, entrypoint_kind="flat_run")
+    lowered["problem_meta"]["runtime_metadata"] = {
+        "runtime_selection": runtime.to_runtime_metadata()
+    }
+    typed_problem_ir_keys = (
+        "ir_version",
+        "problem_meta",
+        "geometry",
+        "regions",
+        "materials",
+        "magnets",
+        "energy_terms",
+        "study",
+        "backend_policy",
+        "validation_profile",
+        "current_modules",
+        "spin_transport_modules",
+        "spin_torque_modules",
+    )
+    return {key: lowered[key] for key in typed_problem_ir_keys}
 
 
 REQUIRED_QUALIFICATION_GATES = {
@@ -997,7 +1350,7 @@ def _status_sections() -> dict[str, str]:
         ),
         "capability": _anchored_section(
             capability,
-            "PR-15 nie promuje FDM GPU/FP64 M1.",
+            "PR-15 does not promote FDM GPU/FP64 M1.",
             "\n\n| Capability id |",
         ),
         "plan": plan[
@@ -1125,6 +1478,53 @@ def _assert_page_contract(page: str) -> None:
 
 
 class FdmGpuM1ContractDocsTests(unittest.TestCase):
+    def test_task_3_resolved_execution_tuple_is_source_mapped(self) -> None:
+        page = PAGE.read_text(encoding="utf-8")
+        source_map = json.loads(SOURCE_MAP.read_text(encoding="utf-8"))
+        self.assertIn(
+            "resolved_discretization, resolved_device, resolved_precision, and "
+            "resolved_execution_mode",
+            _normalise(page),
+        )
+        sources = {source["id"]: source for source in source_map["sources"]}
+        resolved_tuple = sources["fdm-gpu-m1-resolved-execution-tuple"]
+        self.assertEqual(
+            "crates/fullmag-plan/src/spin_transport.rs", resolved_tuple["path"]
+        )
+        self.assertEqual(
+            "resolve_spin_transport_with_active_graph",
+            resolved_tuple["symbol"],
+        )
+        self.assertEqual("source_contract", resolved_tuple["evidence_status"])
+
+    def test_capability_json_has_canonical_vocabulary_and_exact_task_3_rows(self) -> None:
+        capability = json.loads(CAPABILITY_JSON.read_text(encoding="utf-8"))
+        _assert_capability_matrix_schema(capability)
+        _assert_task_3_bounded_capability_rows(capability)
+
+        mutations = []
+        unknown_status = json.loads(json.dumps(capability))
+        unknown_status["features"][0]["lanes"]["fdm_cpu_reference"] = "implemented_unqualified"
+        mutations.append((_assert_capability_matrix_schema, unknown_status))
+        widened_precision = json.loads(json.dumps(capability))
+        next(
+            feature
+            for feature in widened_precision["features"]
+            if feature["id"] == "transport.spin.direct_she.fdm_gpu_bounded_m1.v1"
+        )["precision_scope"].append("single")
+        mutations.append((_assert_task_3_bounded_capability_rows, widened_precision))
+        promoted_validation = json.loads(json.dumps(capability))
+        next(
+            feature
+            for feature in promoted_validation["features"]
+            if feature["id"] == "coupling.transport_llg.one_way.fdm_gpu_bounded_m1.v1"
+        )["validation_state"] = "validated"
+        mutations.append((_assert_task_3_bounded_capability_rows, promoted_validation))
+        for validator, mutation in mutations:
+            with self.subTest(validator=validator.__name__):
+                with self.assertRaises(AssertionError):
+                    validator(mutation)
+
     def test_fdm_gpu_m1_fp64_contract_is_frozen_without_capability_promotion(self) -> None:
         page = PAGE.read_text(encoding="utf-8")
         runtime = _normalise(RUNTIME.read_text(encoding="utf-8"))
@@ -1418,6 +1818,1023 @@ class FdmGpuM1ContractDocsTests(unittest.TestCase):
             self.assertIn(old, page + runtime)
             with self.assertRaises(AssertionError):
                 _assert_telemetry_and_fixture_closure(page.replace(old, new), runtime.replace(old, new))
+
+
+class RacetrackM1PhysicsContractDocsTests(unittest.TestCase):
+    def test_racetrack_fixture_equations_signs_and_planned_symbols_are_frozen(self) -> None:
+        fixture = json.loads(RACETRACK_FIXTURE.read_text(encoding="utf-8"))
+        transport_page = PAGE.read_text(encoding="utf-8")
+        topological_page = TOPOLOGICAL_PAGE.read_text(encoding="utf-8")
+        readme = RACETRACK_README.read_text(encoding="utf-8")
+        transport_source_map = json.loads(SOURCE_MAP.read_text(encoding="utf-8"))
+        topological_source_map = json.loads(
+            TOPOLOGICAL_SOURCE_MAP.read_text(encoding="utf-8")
+        )
+
+        self.assertEqual("racetrack_m1_v1", fixture["schema_version"])
+        self.assertEqual("synthetic_validation_fixture", fixture["fixture_kind"])
+        self.assertFalse(fixture["claims_single_real_material"])
+        self.assertEqual(
+            {
+                "track_axis": "+x",
+                "transverse_axis": "+y",
+                "stack_axis": "+z",
+                "interface_normal_hm_to_fm": "+z",
+                "positive_conventional_current": "+x",
+            },
+            fixture["orientation"],
+        )
+        self.assertEqual(
+            {"racetrack_m1_v1", "she_1d_film_v1", "skyrmion_hall_angle_v1"},
+            set(fixture["contract_ids"]),
+        )
+
+        expected_values = {
+            "track.length": (512e-9, "m"),
+            "track.width": (128e-9, "m"),
+            "hm.thickness": (3e-9, "m"),
+            "fm.thickness": (1e-9, "m"),
+            "cell.x": (2e-9, "m"),
+            "cell.y": (2e-9, "m"),
+            "cell.z": (1e-9, "m"),
+            "fm.Ms": (580e3, "A/m"),
+            "fm.A": (15e-12, "J/m"),
+            "fm.alpha": (0.3, "1"),
+            "fm.Ku": (0.8e6, "J/m^3"),
+            "fm.D": (3e-3, "J/m^2"),
+            "hm.sigma_charge": (5e6, "S/m"),
+            "hm.sigma_spin": (5e6, "S/m"),
+            "hm.theta_SH": (0.2, "1"),
+            "hm.lambda_sf": (1.5e-9, "m"),
+            "fm.sigma_charge": (1e6, "S/m"),
+            "fm.sigma_spin": (1e6, "S/m"),
+            "fm.P": (0.4, "1"),
+            "fm.lambda_sf": (5e-9, "m"),
+            "fm.lambda_J": (1e-9, "m"),
+            "fm.lambda_phi": (1e-9, "m"),
+            "interface.G_up": (2.5e14, "S/m^2"),
+            "interface.G_down": (2.5e14, "S/m^2"),
+            "interface.G_r": (5e14, "S/m^2"),
+            "interface.G_i": (5e13, "S/m^2"),
+            "drive.J_minus_1_5": (-1.5e12, "A/m^2"),
+            "drive.J_minus_1_0": (-1.0e12, "A/m^2"),
+            "drive.J_minus_0_5": (-0.5e12, "A/m^2"),
+            "drive.J_plus_0_5": (0.5e12, "A/m^2"),
+            "drive.J_plus_1_0": (1.0e12, "A/m^2"),
+            "drive.J_plus_1_5": (1.5e12, "A/m^2"),
+        }
+        parameters = {row["id"]: row for row in fixture["parameters"]}
+        self.assertEqual(set(expected_values), set(parameters))
+        for parameter_id, (value, si_unit) in expected_values.items():
+            with self.subTest(parameter_id=parameter_id):
+                row = parameters[parameter_id]
+                self.assertEqual(value, row["value"])
+                self.assertEqual(si_unit, row["si_unit"])
+                self.assertEqual("numerical_validation_fixture", row["value_kind"])
+                for field in (
+                    "symbol",
+                    "si_unit",
+                    "value",
+                    "validity",
+                    "problem_ir_path",
+                    "motivation",
+                ):
+                    self.assertIn(field, row)
+                    self.assertNotEqual("", row[field])
+
+        for equation_id in (
+            "racetrack-charge-continuity",
+            "racetrack-direct-she",
+            "racetrack-steady-spin-balance",
+            "racetrack-mixing-boundary",
+            "racetrack-torque-balance",
+            "racetrack-gilbert-llg",
+        ):
+            self.assertIn(f":label: {equation_id}", transport_page)
+        for equation_id in (
+            "skyrmion-hall-weighted-regression",
+            "skyrmion-hall-angle",
+        ):
+            self.assertIn(f":label: {equation_id}", topological_page)
+        for operation in (
+            "reverse_J",
+            "reverse_theta_SH",
+            "reverse_normal",
+            "reverse_transverse_axis",
+        ):
+            self.assertIn(f"| `{operation}` |", transport_page + topological_page)
+
+        planned_symbols = {
+            row["symbol"]
+            for source_map in (transport_source_map, topological_source_map)
+            for row in source_map["planned_symbols"]
+        }
+        self.assertEqual(
+            {
+                "ResolvedFdmSpinTransportIR.transport_active_mask",
+                "ResolvedSpinTransportPlanIR.fdm_gpu_double",
+                "GpuM1TransportSession::prepare",
+                "TransportStageCheckpointV1",
+                "execution_provenance.transport_m1_v1",
+                "SkyrmionTrajectoryV1",
+                "SkyrmionHallAngleV1",
+            },
+            planned_symbols,
+        )
+        for source_map in (transport_source_map, topological_source_map):
+            for row in source_map["planned_symbols"]:
+                self.assertEqual("planned_not_implemented", row["status"])
+                for field in ("path", "symbol", "owner_task", "evidence_gate"):
+                    self.assertTrue(row[field])
+
+        planned_by_owner_and_symbol = {
+            (row["owner_task"], row["symbol"]): row["path"]
+            for source_map in (transport_source_map, topological_source_map)
+            for row in source_map["planned_symbols"]
+        }
+        self.assertEqual(
+            {
+                (
+                    "Task 2",
+                    "ResolvedFdmSpinTransportIR.transport_active_mask",
+                ): "crates/fullmag-ir/src/spin_transport.rs",
+                (
+                    "Task 3",
+                    "ResolvedSpinTransportPlanIR.fdm_gpu_double",
+                ): "crates/fullmag-plan/src/spin_transport.rs",
+                (
+                    "Task 4",
+                    "GpuM1TransportSession::prepare",
+                ): "crates/fullmag-runner/src/fdm/gpu/cuda/spin_transport.rs",
+                (
+                    "Task 6",
+                    "TransportStageCheckpointV1",
+                ): "crates/fullmag-runner/src/fdm/gpu/cuda/spin_transport.rs",
+                (
+                    "Task 7",
+                    "execution_provenance.transport_m1_v1",
+                ): "crates/fullmag-runner/src/artifacts.rs",
+                (
+                    "Task 8",
+                    "SkyrmionTrajectoryV1",
+                ): "crates/fullmag-api/src/analysis/skyrmion_trajectory.rs",
+                (
+                    "Task 8",
+                    "SkyrmionHallAngleV1",
+                ): "crates/fullmag-api/src/analysis/skyrmion_trajectory.rs",
+            },
+            planned_by_owner_and_symbol,
+        )
+        plan = RACETRACK_PLAN.read_text(encoding="utf-8")
+        for (owner_task, symbol), path in planned_by_owner_and_symbol.items():
+            with self.subTest(owner_task=owner_task, symbol=symbol):
+                owner_start = plan.index(f"### {owner_task}:")
+                next_task = plan.find("\n### Task ", owner_start + 1)
+                owner_section = plan[owner_start : next_task if next_task >= 0 else None]
+                self.assertIn(path, plan)
+                for symbol_token in re.split(r"\.|::", symbol):
+                    self.assertIn(symbol_token, owner_section)
+                self.assertTrue(
+                    (ROOT / path).exists() or f"Create: `{path}`" in plan,
+                    f"planned path {path} must exist or be declared Create in the plan",
+                )
+
+        for required in (
+            "racetrack_m1_v1",
+            "syntetyczny fixture walidacyjny",
+            "nie reprezentuje jednego rzeczywistego materiału",
+            "skyrmion_hall_angle_v1",
+        ):
+            self.assertIn(required, transport_page + topological_page + readme)
+
+    def test_racetrack_fixture_freezes_one_complete_normalized_problem(self) -> None:
+        fixture = json.loads(RACETRACK_FIXTURE.read_text(encoding="utf-8"))
+
+        self.assertEqual(
+            {
+                "discretization": "fdm",
+                "device": "gpu",
+                "precision": "double",
+                "execution_mode": "strict",
+            },
+            fixture["execution_intent"]["requested_tuple"],
+        )
+        self.assertEqual(
+            [
+                "cpu",
+                "single",
+                "prescribed_torque",
+                "prescribed_current_density",
+                "oersted",
+                "inverse_spin_hall_effect",
+                "reciprocal_m2",
+                "transient_m3",
+                "mtj",
+                "periodic_boundaries",
+                "thermal_noise",
+                "multi_gpu",
+                "adaptive_geometry",
+            ],
+            fixture["execution_intent"]["forbidden_fallbacks"],
+        )
+        self.assertEqual(
+            {
+                "counts": [256, 64, 4],
+                "cell_size_m": [2e-9, 2e-9, 1e-9],
+                "extent_m": [512e-9, 128e-9, 4e-9],
+                "origin_m": [0.0, 0.0, 0.0],
+                "cell_order": "x_fastest_then_y_then_z",
+            },
+            fixture["structured_grid"],
+        )
+        self.assertEqual(
+            {
+                "hm": {
+                    "object_id": "hm",
+                    "origin_m": [0.0, 0.0, 0.0],
+                    "size_m": [512e-9, 128e-9, 3e-9],
+                    "cell_bounds": {"x": [0, 256], "y": [0, 64], "z": [0, 3]},
+                },
+                "fm": {
+                    "object_id": "fm",
+                    "origin_m": [0.0, 0.0, 3e-9],
+                    "size_m": [512e-9, 128e-9, 1e-9],
+                    "cell_bounds": {"x": [0, 256], "y": [0, 64], "z": [3, 4]},
+                },
+                "interface_z_m": 3e-9,
+                "overlap_rule": "disjoint_half_open_cell_bounds_with_one_shared_geometric_face",
+            },
+            fixture["layer_placement"],
+        )
+
+        charge = fixture["charge_boundary_contract"]
+        self.assertEqual("zero_mean", charge["gauge"])
+        self.assertEqual("every_external_surface_exactly_once", charge["coverage_rule"])
+        boundaries = {row["id"]: row for row in charge["boundaries"]}
+        self.assertEqual(
+            {"terminal_x_minus", "terminal_x_plus", "insulating_outer"},
+            set(boundaries),
+        )
+        self.assertEqual(-1.0, boundaries["terminal_x_minus"]["current_multiplier"])
+        self.assertEqual(1.0, boundaries["terminal_x_plus"]["current_multiplier"])
+        self.assertEqual(
+            [
+                {"object_id": "hm", "surface_id": "x-", "orientation": [-1.0, 0.0, 0.0]},
+                {"object_id": "fm", "surface_id": "x-", "orientation": [-1.0, 0.0, 0.0]},
+            ],
+            boundaries["terminal_x_minus"]["surfaces"],
+        )
+        self.assertEqual(
+            [
+                {"object_id": "hm", "surface_id": "x+", "orientation": [1.0, 0.0, 0.0]},
+                {"object_id": "fm", "surface_id": "x+", "orientation": [1.0, 0.0, 0.0]},
+            ],
+            boundaries["terminal_x_plus"]["surfaces"],
+        )
+        insulating_surfaces = [
+            {"object_id": "hm", "surface_id": "y-", "orientation": [0.0, -1.0, 0.0]},
+            {"object_id": "hm", "surface_id": "y+", "orientation": [0.0, 1.0, 0.0]},
+            {"object_id": "hm", "surface_id": "z-", "orientation": [0.0, 0.0, -1.0]},
+            {"object_id": "fm", "surface_id": "y-", "orientation": [0.0, -1.0, 0.0]},
+            {"object_id": "fm", "surface_id": "y+", "orientation": [0.0, 1.0, 0.0]},
+            {"object_id": "fm", "surface_id": "z+", "orientation": [0.0, 0.0, 1.0]},
+        ]
+        self.assertEqual(insulating_surfaces, boundaries["insulating_outer"]["surfaces"])
+        self.assertEqual(
+            {
+                "id": "spin_insulating_outer",
+                "kind": "spin_insulating",
+                "coverage_rule": "every_external_surface_exactly_once",
+                "surfaces": [
+                    {"object_id": "hm", "surface_id": "x-", "orientation": [-1.0, 0.0, 0.0]},
+                    {"object_id": "hm", "surface_id": "x+", "orientation": [1.0, 0.0, 0.0]},
+                    *insulating_surfaces[:3],
+                    {"object_id": "fm", "surface_id": "x-", "orientation": [-1.0, 0.0, 0.0]},
+                    {"object_id": "fm", "surface_id": "x+", "orientation": [1.0, 0.0, 0.0]},
+                    *insulating_surfaces[3:],
+                ],
+            },
+            fixture["spin_boundary_contract"],
+        )
+
+        self.assertEqual(
+            {
+                "id": "hm_fm",
+                "kind": "mixing_conductance",
+                "normal_side": {"object_id": "hm"},
+                "ferromagnet_side": {"object_id": "fm"},
+                "normal_to_ferromagnet": [0.0, 0.0, 1.0],
+                "normal_surface": {
+                    "object_id": "hm",
+                    "surface_id": "z+",
+                    "orientation": [0.0, 0.0, 1.0],
+                },
+                "ferromagnet_surface": {
+                    "object_id": "fm",
+                    "surface_id": "z-",
+                    "orientation": [0.0, 0.0, -1.0],
+                },
+                "interface_z_m": 3e-9,
+            },
+            fixture["interface_contract"],
+        )
+
+        masks = fixture["mask_contract"]
+        self.assertEqual([256, 64, 4], masks["shape"])
+        self.assertEqual("x_fastest_then_y_then_z", masks["cell_order"])
+        self.assertEqual(65_536, masks["transport_active"]["active_cell_count"])
+        self.assertEqual([0, 4], masks["transport_active"]["cell_bounds"]["z"])
+        for mask_id in ("magnetic_active", "torque_target"):
+            self.assertEqual(16_384, masks[mask_id]["active_cell_count"])
+            self.assertEqual([3, 4], masks[mask_id]["cell_bounds"]["z"])
+        self.assertEqual(
+            "torque_target subset magnetic_active subset transport_active",
+            masks["subset_invariant"],
+        )
+
+        stages = fixture["stage_contract"]
+        self.assertEqual(
+            {
+                "order": 0,
+                "id": "relax_zero_current",
+                "kind": "relax",
+                "transport_module_present": True,
+                "current_density_Apm2": 0.0,
+                "transport_torque_enabled": False,
+                "output_checkpoint": "relaxed_zero_current",
+            },
+            stages[0],
+        )
+        self.assertEqual(1, stages[1]["order"])
+        self.assertEqual("drive_solved_current", stages[1]["id"])
+        self.assertEqual("independent_fixed_step_runs", stages[1]["kind"])
+        self.assertTrue(stages[1]["transport_module_present"])
+        self.assertTrue(stages[1]["transport_torque_enabled"])
+        self.assertEqual("relaxed_zero_current", stages[1]["restart_from"])
+        self.assertEqual(
+            [
+                "drive.J_minus_1_5",
+                "drive.J_minus_1_0",
+                "drive.J_minus_0_5",
+                "drive.J_plus_0_5",
+                "drive.J_plus_1_0",
+                "drive.J_plus_1_5",
+            ],
+            [case["parameter_id"] for case in fixture["current_schedule"]["drive_cases"]],
+        )
+        schedule = fixture["current_schedule"]
+        self.assertEqual("racetrack_current_schedule.v1", schedule["schema_version"])
+        self.assertEqual("relax_zero_current", schedule["preparation_stage"])
+        self.assertEqual("relaxed_zero_current", schedule["relaxed_checkpoint"])
+        self.assertTrue(schedule["reset_to_relaxed_checkpoint_before_each_case"])
+        self.assertEqual("every_llg_rhs_evaluation", schedule["transport_update"])
+        for order, case in enumerate(schedule["drive_cases"]):
+            self.assertEqual(order, case["order"])
+            self.assertEqual(-case["current_density_Apm2"], case["terminal_outward_Apm2"]["terminal_x_minus"])
+            self.assertEqual(case["current_density_Apm2"], case["terminal_outward_Apm2"]["terminal_x_plus"])
+            self.assertEqual(2e-9, case["duration_s"])
+            self.assertEqual(1e-13, case["fixed_time_step_s"])
+            self.assertEqual(5e-12, case["sample_interval_s"])
+
+        normalized = fixture["normalized_problem_ir_contract"]
+        self.assertEqual(["fm", "hm"], normalized["geometry_entry_order"])
+        self.assertEqual(
+            [
+                "geometry.entries[0].base.size[0] == geometry.entries[1].base.size[0]",
+                "geometry.entries[0].base.size[1] == geometry.entries[1].base.size[1]",
+            ],
+            normalized["geometry_equalities"],
+        )
+        self.assertEqual(["charge"], normalized["current_module_order"])
+        self.assertEqual(["spin"], normalized["spin_transport_module_order"])
+        self.assertEqual(["transport_torque"], normalized["spin_torque_module_order"])
+        self.assertEqual(
+            {
+                "hm": {"object_id": "hm"},
+                "fm": {"object_id": "fm"},
+                "transport_domain": [{"object_id": "hm"}, {"object_id": "fm"}],
+                "magnetic_domain": [{"object_id": "fm"}],
+                "torque_target": {"object_id": "fm"},
+            },
+            normalized["region_refs"],
+        )
+        self.assertEqual(
+            "expected_lowering arrays and top-level fixture boundary, mask, and stage arrays are ordered; no field may be backend-defaulted; workflow-only fields are not ProblemIR",
+            normalized["canonicalization_rule"],
+        )
+
+    def test_racetrack_expected_lowering_matches_public_python_dsl(self) -> None:
+        fixture = json.loads(RACETRACK_FIXTURE.read_text(encoding="utf-8"))
+        normalized = fixture["normalized_problem_ir_contract"]
+
+        self.assertEqual("typed_expected_lowering_map", normalized["contract_kind"])
+        self.assertEqual(
+            _racetrack_public_lowering(),
+            normalized["expected_lowering"],
+        )
+        self.assertEqual(
+            {
+                "status": "not_publicly_lowerable_as_one_problem",
+                "missing_capabilities": [
+                    "per_stage_current_boundary_mutation",
+                    "restart_each_drive_from_named_checkpoint",
+                ],
+                "rule": "typed records are current ProblemIR; the six-case restart schedule remains an external fixture workflow until both stage capabilities exist",
+            },
+            normalized["public_lowering_boundary"],
+        )
+
+        expected_lowering = normalized["expected_lowering"]
+        self.assertEqual("translate", expected_lowering["geometry"]["entries"][0]["kind"])
+        self.assertEqual("box", expected_lowering["geometry"]["entries"][0]["base"]["kind"])
+        self.assertEqual("translate", expected_lowering["geometry"]["entries"][1]["kind"])
+        self.assertEqual("box", expected_lowering["geometry"]["entries"][1]["base"]["kind"])
+        self.assertEqual(
+            [256.0e-9, 64.0e-9, 3.5e-9],
+            expected_lowering["geometry"]["entries"][0]["by"],
+        )
+        self.assertEqual(
+            [256.0e-9, 64.0e-9, 1.5e-9],
+            expected_lowering["geometry"]["entries"][1]["by"],
+        )
+        self.assertEqual("fm_material", expected_lowering["materials"][0]["name"])
+
+        parameters = {row["id"]: row for row in fixture["parameters"]}
+        expected_paths = {
+            "track.length": "geometry.entries[1].base.size[0]",
+            "track.width": "geometry.entries[1].base.size[1]",
+            "hm.thickness": "geometry.entries[1].base.size[2]",
+            "fm.thickness": "geometry.entries[0].base.size[2]",
+            "fm.Ms": "materials[0].saturation_magnetisation",
+            "fm.A": "materials[0].exchange_stiffness",
+            "fm.alpha": "materials[0].damping",
+            "fm.Ku": "materials[0].uniaxial_anisotropy",
+        }
+        for parameter_id, expected_path in expected_paths.items():
+            self.assertEqual(expected_path, parameters[parameter_id]["problem_ir_path"])
+        for parameter_id, parameter in parameters.items():
+            with self.subTest(parameter_id=parameter_id):
+                resolved = _resolve_problem_ir_path(
+                    expected_lowering,
+                    parameter["problem_ir_path"],
+                )
+                if not parameter_id.startswith("drive."):
+                    self.assertEqual(parameter["value"], resolved)
+
+        charge = expected_lowering["current_modules"][0]
+        self.assertEqual("current_transport", charge["kind"])
+        self.assertEqual("ohmic_poisson", charge["model"])
+        self.assertEqual("one_way", charge["coupling"])
+        self.assertEqual("charge_balance_integrated_l2.v1", charge["solver"]["physical_residual_version"])
+        self.assertEqual("fv_charge_harmonic_v1", charge["solver"]["operator_version"])
+
+        spin = expected_lowering["spin_transport_modules"][0]
+        self.assertEqual("charge", spin["current_source_id"])
+        self.assertEqual("steady", spin["mode"])
+        self.assertEqual("transport_constitutive.one_way.fullmag.v1", spin["constitutive_version"])
+        self.assertEqual(
+            {
+                "discretization": "fdm",
+                "device": "gpu",
+                "precision": "double",
+                "execution_mode": "strict",
+            },
+            spin["requested_execution"],
+        )
+        self.assertEqual(
+            {
+                "kind": "drift_diffusion_spin_torque",
+                "schema_version": "drift_diffusion_spin_torque.v1",
+                "id": "transport_torque",
+                "solve_id": "spin",
+                "target": {"object_id": "fm"},
+                "formula_version": "transport_torque_angular_momentum.fullmag.v1",
+            },
+            expected_lowering["spin_torque_modules"][0],
+        )
+        self.assertEqual(
+            ["exchange", "demag", "interfacial_dmi"],
+            [term["kind"] for term in expected_lowering["energy_terms"]],
+        )
+        self.assertEqual(
+            "rk4",
+            expected_lowering["study"]["dynamics"]["integrator"],
+        )
+        self.assertEqual(
+            {"execution_mode": "strict"},
+            expected_lowering["validation_profile"],
+        )
+        self.assertEqual(
+            {
+                "backend": "fdm",
+                "device": "gpu",
+                "gpu_count": 1,
+                "device_index": 0,
+                "cpu_threads": None,
+                "execution_mode": "strict",
+                "execution_precision": "double",
+            },
+            expected_lowering["problem_meta"]["runtime_metadata"]["runtime_selection"],
+        )
+
+    def test_racetrack_native_engine_and_neel_seed_are_exact_public_lowering(self) -> None:
+        fixture = json.loads(RACETRACK_FIXTURE.read_text(encoding="utf-8"))
+        page = PAGE.read_text(encoding="utf-8")
+        readme = RACETRACK_README.read_text(encoding="utf-8")
+        expected_lowering = fixture["normalized_problem_ir_contract"]["expected_lowering"]
+        public_lowering = _racetrack_public_lowering()
+
+        expected_solver = expected_lowering["spin_transport_modules"][0]["solver"]
+        public_solver = public_lowering["spin_transport_modules"][0]["solver"]
+        self.assertEqual("native_m1_v1", expected_solver["engine"])
+        self.assertEqual("native_m1_v1", public_solver["engine"])
+        self.assertNotIn(expected_solver["engine"], {"auto", "gmres"})
+        self.assertNotIn("fallback", expected_solver)
+        self.assertEqual("forbidden", fixture["execution_intent"]["spin_solver_fallback"])
+
+        seed = fixture["initial_state"]
+        self.assertEqual(
+            {
+                "kind": "canonical_neel_skyrmion_seed",
+                "target": "fm",
+                "public_constructor": "fm.texture.neel_skyrmion",
+                "problem_ir_path": "magnets[0].initial_magnetization",
+                "mapping_space": "world",
+                "plane": "xy",
+                "center_m": [256.0e-9, 64.0e-9, 3.5e-9],
+                "radius_m": 30.0e-9,
+                "wall_width_m": 5.0e-9,
+                "chirality": 1,
+                "helicity_rad": 0.0,
+                "polarity_parameter": 1,
+                "core_axis_sign": -1,
+                "background_axis_sign": 1,
+                "wall_direction": "radially_outward",
+                "profile": {
+                    "rho": "hypot(x-x_c,y-y_c)",
+                    "phi": "atan2(y-y_c,x-x_c)",
+                    "theta": "2*atan(exp((radius-rho)/wall_width))",
+                    "phase": "phi for chirality=+1 and Neel helicity=0",
+                    "raw_vector": "[sin(theta)*cos(phase),sin(theta)*sin(phase),polarity_parameter*cos(theta)]",
+                },
+                "normalization": {
+                    "rule": "per_sample_euclidean_l2_to_unit_vector",
+                    "zero_norm_fallback": [0.0, 0.0, 1.0],
+                },
+                "qualification_rule": "The zero-current relaxation stage, not the seed alone, must establish stable signed topological charge, center, radius, and energy on three grids.",
+            },
+            seed,
+        )
+        seed_ir = expected_lowering["magnets"][0]["initial_magnetization"]
+        self.assertEqual(seed_ir, public_lowering["magnets"][0]["initial_magnetization"])
+        self.assertEqual(
+            {
+                "kind": "preset_texture",
+                "preset_kind": "neel_skyrmion",
+                "preset_params": {
+                    "radius": 30.0e-9,
+                    "wall_width": 5.0e-9,
+                    "chirality": 1,
+                    "core_polarity": 1,
+                    "plane": "xy",
+                },
+                "mapping": {
+                    "space": "world",
+                    "projection": "object_local",
+                    "clamp_mode": "none",
+                },
+                "texture_transform": {
+                    "translation": [256.0e-9, 64.0e-9, 3.5e-9],
+                    "rotation_quat": [0.0, 0.0, 0.0, 1.0],
+                    "scale": [1.0, 1.0, 1.0],
+                    "pivot": [0.0, 0.0, 0.0],
+                },
+                "ui_label": None,
+                "preview_proxy": "disc",
+            },
+            seed_ir,
+        )
+
+        python_src = ROOT / "packages/fullmag-py/src"
+        if str(python_src) not in sys.path:
+            sys.path.insert(0, str(python_src))
+        import fullmag as fm
+
+        samples = fm.evaluate_preset_texture(
+            "neel_skyrmion",
+            seed_ir["preset_params"],
+            ([0.0, 0.0, 0.0], [30.0e-9, 0.0, 0.0], [300.0e-9, 0.0, 0.0]),
+        ).values
+        self.assertLess(samples[0][2], 0.0)
+        self.assertGreater(samples[1][0], 0.999999)
+        self.assertAlmostEqual(0.0, samples[1][2], places=12)
+        self.assertGreater(samples[2][2], 0.999999)
+        for sample in samples:
+            self.assertAlmostEqual(1.0, sum(component * component for component in sample), places=12)
+        for fragment in (
+            "native_m1_v1",
+            "[256e-9,64e-9,3.5e-9]",
+            "R=30e-9",
+            "Delta=5e-9",
+            "helicity=0",
+            "core m_z<0",
+            "background m_z->+1",
+            "adaptive_geometry",
+        ):
+            self.assertIn(fragment, page + readme)
+
+    def test_racetrack_schedule_targets_existing_problem_ir_fields(self) -> None:
+        fixture = json.loads(RACETRACK_FIXTURE.read_text(encoding="utf-8"))
+        schedule = fixture["current_schedule"]
+
+        for index, case in enumerate(schedule["drive_cases"], start=1):
+            self.assertEqual(index, case["stage_index"])
+            self.assertEqual("flat_run", case["entrypoint_kind"])
+            self.assertEqual(
+                {
+                    "current_modules[0].boundaries[0].outward_current_density_Apm2": (
+                        -case["current_density_Apm2"]
+                    ),
+                    "current_modules[0].boundaries[1].outward_current_density_Apm2": case[
+                        "current_density_Apm2"
+                    ],
+                },
+                case["problem_ir_overrides"],
+            )
+            self.assertNotIn("current_sweep", json.dumps(case))
+        for parameter in fixture["parameters"]:
+            path = parameter["problem_ir_path"]
+            self.assertNotIn("current_sweep", path)
+            self.assertNotIn("[charge]", path)
+            self.assertNotIn("[spin]", path)
+            self.assertNotIn("[hm_fm]", path)
+
+    def test_racetrack_equation_blocks_freeze_exact_signs_and_index_order(self) -> None:
+        page = PAGE.read_text(encoding="utf-8")
+        charge = _anchored_section(
+            page, ":label: racetrack-charge-continuity", "```\n\nDirect SHE"
+        )
+        direct_she = _anchored_section(
+            page, ":label: racetrack-direct-she", "```\n\nSteady M1"
+        )
+        steady = _anchored_section(
+            page, ":label: racetrack-steady-spin-balance", "```\n\nDla skoku"
+        )
+        mixing = _anchored_section(
+            page, ":label: racetrack-mixing-boundary", "```\n\nMoment pędu"
+        )
+        torque = _anchored_section(
+            page, ":label: racetrack-torque-balance", "```\n\n`T_tr,G`"
+        )
+        gilbert = _anchored_section(
+            page, ":label: racetrack-gilbert-llg", "```\n\n#### 2.9.2"
+        )
+
+        self.assertIn(r"\nabla\!\cdot\mathbf J_c=0", charge)
+        self.assertIn(r"\mathbf J_c=\sigma\mathbf E=-\sigma\nabla V", charge)
+        self.assertIn(r"Q^{\mathrm{SHE}}_{ia}", direct_she)
+        self.assertIn(r"\theta_{\mathrm{SH}}\epsilon_{ika}J_{c,k}", direct_she)
+        self.assertIn(r"J_{c,x}>0,\ \theta_{\mathrm{SH}}>0", direct_she)
+        self.assertIn(r"Q^{\mathrm{SHE}}_{zy}>0", direct_she)
+        self.assertIn(r"$n=+e_z$", page)
+        for fragment in (
+            r"\partial_iQ_{ia}&=-R_{\mathrm{sf},a}-R_{J,a}-R_{\phi,a}",
+            r"R_{\mathrm{sf}}&=\frac{\sigma_s}{2\lambda_{\mathrm{sf}}^2}\mu_s",
+            r"R_J&=\frac{\sigma_s}{2\lambda_J^2}(\mu_s\times m)",
+            r"R_\phi&=\frac{\sigma_s}{2\lambda_\phi^2}m\times(\mu_s\times m)",
+        ):
+            self.assertIn(fragment, steady)
+        self.assertIn(r"\Delta\mu_s=\mu_{s,HM}-\mu_{s,FM}", page)
+        self.assertIn(r"\Delta V_\Gamma=V_{HM}-V_{FM}", page)
+        for fragment in (
+            r"j_{c,n}&=(G_\uparrow+G_\downarrow)\Delta V_\Gamma",
+            r"(G_\uparrow-G_\downarrow)\Delta V_\Gamma",
+            r"G_r m\times(\Delta\mu_s\times m)",
+            r"+G_i(\Delta\mu_s\times m)",
+        ):
+            self.assertIn(fragment, mixing)
+        self.assertIn(r"T_{\mathrm{tr},G,K}=-\frac{\gamma_e}{M_{s,K}}\frac{\hbar}{2e}", torque)
+        self.assertIn(r"R_{J,K}+R_{\phi,K}", torque)
+        self.assertNotIn(r"R_{\mathrm{sf},K}", torque)
+        self.assertIn(r"(1+\alpha^2)\partial_t m=", gilbert)
+        self.assertIn(r"-\gamma_e\left[m\times B_{\mathrm{eff}}", gilbert)
+        self.assertIn(r"+T_{\mathrm{tr},G}+\alpha m\times T_{\mathrm{tr},G}", gilbert)
+
+    def test_new_symbol_table_rows_wrap_latex_and_si_units_in_math(self) -> None:
+        pages_and_rows = (
+            (
+                PAGE.read_text(encoding="utf-8"),
+                (
+                    "m",
+                    "alpha",
+                    "B_eff",
+                    "T_P",
+                    "T_SHE",
+                    "b_K",
+                    "K",
+                    "C",
+                    "V_bar_C",
+                ),
+            ),
+            (
+                TOPOLOGICAL_PAGE.read_text(encoding="utf-8"),
+                ("$t_n$", "$v_x$", "$\\Theta_H$", "$S_{tt}$"),
+            ),
+        )
+        for page, row_ids in pages_and_rows:
+            for row_id in row_ids:
+                with self.subTest(row_id=row_id):
+                    row = next(
+                        line for line in page.splitlines() if line.startswith(f"| {row_id} |")
+                    )
+                    cells = [cell.strip() for cell in row.strip().strip("|").split("|")]
+                    self.assertTrue(cells[1].startswith("$") and cells[1].endswith("$"))
+                    self.assertTrue(cells[3].startswith("$") and cells[3].endswith("$"))
+
+    def test_theta_sh_reversal_separates_polarized_and_pure_she_responses(self) -> None:
+        fixture = json.loads(RACETRACK_FIXTURE.read_text(encoding="utf-8"))
+        page = PAGE.read_text(encoding="utf-8")
+        oracle = fixture["sign_contract"]["reverse_theta_sh"]
+
+        self.assertEqual(0.4, oracle["production_fixture_polarization"])
+        self.assertEqual(
+            "T(+theta_SH)=T_P+T_SHE; T(-theta_SH)=T_P-T_SHE",
+            oracle["torque_decomposition"],
+        )
+        self.assertEqual({"fm.P": 0.0}, oracle["pure_she_oracle"]["parameter_overrides"])
+        self.assertEqual(
+            ["mu_s", "Q_spin", "T_tr_G"],
+            oracle["pure_she_oracle"]["exactly_odd_observables"],
+        )
+        self.assertEqual(
+            "no exact oddness claim for nonlinear trajectory velocity",
+            oracle["pure_she_oracle"]["velocity_semantics"],
+        )
+        for fragment in (
+            r"T(+\theta_{\mathrm{SH}})=T_P+T_{\mathrm{SHE}}",
+            r"T(-\theta_{\mathrm{SH}})=T_P-T_{\mathrm{SHE}}",
+            r"P=0",
+            "nie jest ogólnie odd",
+            "no exact oddness claim for nonlinear trajectory velocity",
+        ):
+            self.assertIn(fragment, page)
+        reverse_row = next(
+            line for line in page.splitlines() if line.startswith("| `reverse_theta_SH` |")
+        )
+        self.assertIn(r"$T_P+T_{\mathrm{SHE}}\to T_P-T_{\mathrm{SHE}}$", reverse_row)
+        self.assertNotIn("$(-v_x,-v_y)$", reverse_row)
+
+    def test_skyrmion_hall_angle_v1_is_fully_deterministic(self) -> None:
+        fixture = json.loads(RACETRACK_FIXTURE.read_text(encoding="utf-8"))
+        page = TOPOLOGICAL_PAGE.read_text(encoding="utf-8")
+        contract = fixture["analysis_contract"]
+
+        self.assertEqual("skyrmion_hall_angle_v1", contract["algorithm_version"])
+        self.assertEqual("signed_topological_density_first_moment", contract["centre"]["method"])
+        self.assertEqual(0.5, contract["centre"]["minimum_abs_charge"])
+        windows = contract["candidate_windows"]
+        self.assertEqual("all_contiguous_intervals", windows["enumeration"])
+        self.assertEqual(21, windows["minimum_samples"])
+        self.assertEqual(1e-10, windows["minimum_duration_s"])
+        self.assertEqual(0.05, windows["maximum_relative_charge_deviation"])
+        self.assertEqual(16e-9, windows["minimum_edge_distance_m"])
+        self.assertEqual(1.0, windows["minimum_mean_speed_mps"])
+        self.assertEqual(4e-9, windows["minimum_net_displacement_m"])
+        self.assertEqual(0.10, windows["maximum_speed_coefficient_of_variation"])
+        self.assertEqual(
+            ["maximum_duration", "minimum_start_index", "minimum_end_index"],
+            windows["selection_tie_break"],
+        )
+        regression = contract["regression"]
+        self.assertEqual("equal_weight_v1", regression["weight_policy"])
+        self.assertEqual(1.0, regression["sample_weight"])
+        self.assertEqual(
+            ["time_s", "centre_m[0]", "centre_m[1]"],
+            regression["fit_inputs"],
+        )
+        self.assertEqual(
+            "sum(r_a_n*r_b_n)/(N-2)",
+            regression["residual_cross_covariance"],
+        )
+        self.assertEqual(
+            "residual_cross_covariance/S_tt",
+            regression["velocity_covariance"],
+        )
+        self.assertEqual("N-2", regression["residual_degrees_of_freedom"])
+        trajectory = contract["trajectory_input"]
+        self.assertEqual("signed_topological_density_first_moment", trajectory["producer"])
+        self.assertEqual(
+            [
+                "accepted_sequence",
+                "time_s",
+                "topological_charge",
+                "centre_m",
+                "minimum_edge_distance_m",
+            ],
+            trajectory["required_sample_fields"],
+        )
+        self.assertEqual("not_produced", trajectory["position_variance"])
+        self.assertEqual(
+            [
+                "scene_revision",
+                "field_revision",
+                "mesh_revision",
+                "mesh_generation_id",
+                "domain_generation_id",
+                "global_node_mapping_id",
+                "snapshot_id",
+                "stage_id",
+                "cache_key_digest",
+            ],
+            trajectory["required_provenance"],
+        )
+        self.assertEqual(
+            [
+                "topology_lost",
+                "edge_contaminated",
+                "insufficient_samples",
+                "no_motion",
+                "no_stationary_window",
+            ],
+            contract["reason_code_precedence"],
+        )
+        for equation_id in (
+            "skyrmion-signed-density-centre",
+            "skyrmion-candidate-speed-statistics",
+            "skyrmion-hall-weighted-regression",
+            "skyrmion-hall-weighted-covariance",
+            "skyrmion-hall-angle",
+            "skyrmion-hall-angle-variance",
+        ):
+            self.assertIn(f":label: {equation_id}", page)
+        for fragment in (
+            r"\Delta Q_{n,k}=\frac{\Omega_{n,k}}{4\pi}",
+            r"\mathbf r_n=\frac{\sum_k\Delta Q_{n,k}\mathbf c_{n,k}}{Q_n}",
+            r"c_v=\frac{\sqrt{\frac{1}{N_w-1}\sum_{k=i}^{j-1}(s_k-\bar s)^2}}{\max(\bar s,1\,\mathrm{m\,s^{-1}})}",
+            r"w_n=1",
+            r"\chi_{ab}=\frac{1}{N_w-2}\sum_nr_{a,n}r_{b,n}",
+            r"\operatorname{Cov}(v_a,v_b)=\frac{\chi_{ab}}{S_{tt}}",
+            "position variances are not produced",
+            "equal_weight_v1",
+            "accepted_sequence",
+            "cache_key_digest",
+        ):
+            self.assertIn(fragment, page)
+        self.assertIn(
+            "`topology_lost` → `edge_contaminated` → `insufficient_samples` → "
+            "`no_motion` → `no_stationary_window`",
+            page,
+        )
+
+    def test_topological_source_map_covers_equations_and_numerical_claims(self) -> None:
+        page = TOPOLOGICAL_PAGE.read_text(encoding="utf-8")
+        source_map = json.loads(TOPOLOGICAL_SOURCE_MAP.read_text(encoding="utf-8"))
+        equations = {row["id"]: row for row in source_map["equations"]}
+        self.assertEqual(
+            {
+                "topological-support-frame",
+                "topological-normalized-magnetization",
+                "topological-charge-density",
+                "topological-charge-integral",
+                "topological-solid-angle",
+                "topological-discrete-charge",
+                "fdm-thickness-weighted-charge",
+                "fem-midpoint-thickness-average",
+                "skyrmion-signed-density-centre",
+                "skyrmion-candidate-speed-statistics",
+                "skyrmion-hall-weighted-regression",
+                "skyrmion-hall-weighted-covariance",
+                "skyrmion-hall-angle",
+                "skyrmion-hall-angle-variance",
+                "belavin-polyakov-texture",
+            },
+            set(equations),
+        )
+        self.assertEqual(["topological-charge-kernel"], equations["topological-solid-angle"]["sources"])
+        self.assertEqual(["topological-fdm-weighting"], equations["fdm-thickness-weighted-charge"]["sources"])
+        self.assertEqual(["topological-fem-weighting"], equations["fem-midpoint-thickness-average"]["sources"])
+        for equation_id in (
+            "skyrmion-signed-density-centre",
+            "skyrmion-candidate-speed-statistics",
+            "skyrmion-hall-weighted-regression",
+            "skyrmion-hall-weighted-covariance",
+            "skyrmion-hall-angle",
+            "skyrmion-hall-angle-variance",
+        ):
+            equation = equations[equation_id]
+            self.assertEqual("Task 1", equation.get("owner_task"))
+            self.assertEqual("planned_contract", equation.get("evidence_status"))
+            self.assertTrue(equation["sources"])
+
+        hall_section = _anchored_section(
+            page,
+            "(skyrmion-hall-angle-v1-contract)=",
+            "\n### 4.3 Planner and capability impact",
+        )
+        hall_document_labels = set(re.findall(r":label:\s+([^\s]+)", hall_section))
+        hall_map_labels = {
+            equation_id
+            for equation_id, equation in equations.items()
+            if equation.get("owner_task") == "Task 1"
+        }
+        self.assertEqual(hall_document_labels, hall_map_labels)
+
+        claims = {row["id"]: row for row in source_map["claims"]}
+        task_1_claim_sources = {
+            "skyrmion-hall-steady-window-thresholds": "skyrmion-hall-window-thresholds-contract",
+            "skyrmion-hall-exhaustive-window-selection": "skyrmion-hall-window-selection-contract",
+            "skyrmion-hall-equal-weight-wls": "skyrmion-hall-equal-weight-wls-contract",
+            "skyrmion-hall-covariance": "skyrmion-hall-equal-weight-wls-contract",
+            "skyrmion-hall-trajectory-provenance": "skyrmion-hall-trajectory-provenance-contract",
+            "skyrmion-hall-reason-code-precedence": "skyrmion-hall-reason-code-contract",
+        }
+        self.assertTrue(set(task_1_claim_sources).issubset(claims))
+        for claim_id, source_id in task_1_claim_sources.items():
+            with self.subTest(claim_id=claim_id):
+                claim = claims[claim_id]
+                self.assertEqual([source_id], claim["sources"])
+                self.assertEqual("planned_contract", claim["evidence_status"])
+                self.assertEqual("Task 1", claim["owner_task"])
+        source_ids = {row["id"] for row in source_map["sources"]}
+        for claim in claims.values():
+            self.assertTrue(claim["sources"])
+            self.assertTrue(set(claim["sources"]).issubset(source_ids))
+            self.assertIn(claim["evidence_status"], {"source_and_tests", "planned_contract"})
+        sources = {row["id"]: row for row in source_map["sources"]}
+        self.assertEqual("compute_oriented_charge", sources["topological-charge-kernel"]["symbol"])
+        self.assertEqual("fem_midpoint_weights", sources["topological-fem-weighting"]["symbol"])
+        self.assertEqual(
+            "resolved_profile_sample_count",
+            sources["topological-profile-sampling"]["symbol"],
+        )
+        self.assertEqual("planned_contract", sources["skyrmion-hall-contract"]["evidence_status"])
+        for source_id in set(task_1_claim_sources.values()) | {"skyrmion-hall-contract"}:
+            with self.subTest(source_id=source_id):
+                source = sources[source_id]
+                self.assertEqual(TOPOLOGICAL_PAGE.relative_to(ROOT).as_posix(), source["path"])
+                self.assertTrue(source["symbol"].startswith("DOC-ANCHOR:"))
+                self.assertEqual("planned_contract", source["evidence_status"])
+                self.assertEqual("Task 1", source["owner_task"])
+
+        symbols = {row["id"]: row for row in source_map["symbols"]}
+        self.assertEqual("N", symbols["N"]["latex"])
+        self.assertEqual("number of uniformly weighted FEM profile cuts", symbols["N"]["meaning"])
+        self.assertEqual("N_w", symbols["N_w"]["latex"])
+        self.assertEqual("number of samples in a candidate Hall window", symbols["N_w"]["meaning"])
+        self.assertEqual("Q_{\\mathrm{med}}", symbols["Q_med"]["latex"])
+
+    def test_task_1_transport_equations_are_mapped_from_document_to_source_map(self) -> None:
+        page = PAGE.read_text(encoding="utf-8")
+        source_map = json.loads(SOURCE_MAP.read_text(encoding="utf-8"))
+        equations = {row["id"]: row for row in source_map["equations"]}
+        task_1_labels = {
+            "fdm-gpu-m1-neumann-compatibility",
+            "racetrack-charge-continuity",
+            "racetrack-direct-she",
+            "racetrack-steady-spin-balance",
+            "racetrack-mixing-boundary",
+            "racetrack-torque-balance",
+            "racetrack-gilbert-llg",
+            "racetrack-theta-sh-torque-decomposition",
+            "racetrack-neel-seed",
+        }
+        self.assertTrue(task_1_labels.issubset(set(re.findall(r":label:\s+([^\s]+)", page))))
+        self.assertTrue(task_1_labels.issubset(equations))
+
+        neumann = equations["fdm-gpu-m1-neumann-compatibility"]
+        self.assertEqual("Task 1", neumann["owner_task"])
+        self.assertEqual("source_and_actual_device_tests", neumann["evidence_status"])
+        self.assertEqual(
+            [
+                "fdm-gpu-m1-neumann-gauge",
+                "fdm-gpu-m1-uniform-test",
+                "fdm-gpu-public-charge-preflight",
+            ],
+            neumann["sources"],
+        )
+
+        sources = {row["id"]: row for row in source_map["sources"]}
+        gauge = sources["fdm-gpu-m1-neumann-gauge"]
+        self.assertEqual(
+            "backends/fdm/gpu/cuda/transport/charge/device_solver.cu",
+            gauge["path"],
+        )
+        self.assertEqual("label_reference_components_kernel", gauge["symbol"])
+        self.assertEqual("actual_device_contract", gauge["evidence_status"])
+        self.assertEqual("Task 1", gauge["owner_task"])
+
+    def test_new_topological_tables_use_myst_inline_math(self) -> None:
+        page = TOPOLOGICAL_PAGE.read_text(encoding="utf-8")
+        for row in (
+            r"| $t_n$ | $t_n$ | accepted trajectory time sample | $\mathrm{s}$ |",
+            r"| $w_n$ | $w_n$ | deterministic equal sample weight, exactly one | $1$ |",
+            r"| $\Theta_H$ | $\Theta_H$ | signed skyrmion Hall angle in the reported frame | $\mathrm{rad}$ |",
+            r"| $\chi_{ab}$ | $\chi_{ab}$ | equal-weight residual cross-covariance of centre coordinates | $\mathrm{m^2}$ |",
+            r"| $Q_{\mathrm{med}}$ | $Q_{\mathrm{med}}$ | deterministic median charge in a candidate window | $1$ |",
+            r"| $N_w$ | $N_w$ | number of samples in a candidate Hall window | $1$ |",
+        ):
+            self.assertIn(row, page)
+        self.assertNotIn("| t_n | t_n | accepted trajectory time sample | \\mathrm{s} |", page)
 
 
 if __name__ == "__main__":

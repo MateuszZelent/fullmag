@@ -2135,6 +2135,12 @@ pub(crate) fn plan_fem(
             | fullmag_ir::EnergyTermIR::OerstedField { .. } => {
                 // Oersted field: extracted separately below.
             }
+            fullmag_ir::EnergyTermIR::StaticFieldMap { .. } => {
+                errors.push(
+                    "StaticFieldMap is not executable in the current FEM path; use the qualified single-grid FDM lane"
+                        .to_string(),
+                );
+            }
             fullmag_ir::EnergyTermIR::Magnetoelastic { .. } => {
                 if has_magnetoelastic {
                     errors.push("Magnetoelastic is declared more than once".to_string());

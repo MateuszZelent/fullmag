@@ -110,18 +110,41 @@ pub(crate) fn resolve_current_transports(
     }
 }
 
+#[cfg(test)]
 pub(crate) fn resolve_fdm_gpu_charge_transports(
     problem: &ProblemIR,
     resolved_backend: BackendTarget,
     context: &crate::spin_transport::FdmSpinTransportResolutionContext<'_>,
 ) -> Result<Vec<ResolvedFdmGpuChargeTransportIR>, PlanError> {
-    let mut active_modules = Vec::new();
+    let active_graph = crate::spin_transport::resolve_active_fdm_transport_graph(problem)?;
+    resolve_fdm_gpu_charge_transports_with_active_graph(
+        problem,
+        resolved_backend,
+        context,
+        &active_graph,
+    )
+}
+
+pub(crate) fn resolve_fdm_gpu_charge_transports_with_active_graph(
+    problem: &ProblemIR,
+    resolved_backend: BackendTarget,
+    context: &crate::spin_transport::FdmSpinTransportResolutionContext<'_>,
+    active_graph: &crate::spin_transport::ActiveFdmTransportGraph,
+) -> Result<Vec<ResolvedFdmGpuChargeTransportIR>, PlanError> {
     let mut graph_reasons = Vec::new();
+    let mut active_modules = Vec::new();
     for module in &problem.current_modules {
         let (kind, name) = match module {
             CurrentModuleIR::AntennaFieldSource { name, .. } => ("antenna_field_source", name),
             CurrentModuleIR::CurrentTransport { name, .. } => ("current_transport", name),
         };
+        if kind == "current_transport"
+            && active_graph
+                .coupled_current_source_ids
+                .contains(name.as_str())
+        {
+            continue;
+        }
         match physics_module_execution_enabled(problem, kind, name) {
             Ok(Some(false)) => {}
             Ok(Some(true) | None) => active_modules.push(module),
@@ -184,7 +207,7 @@ pub(crate) fn resolve_fdm_gpu_charge_transports(
     {
         scope_reasons.push("periodic_charge_boundary=unsupported".into());
     }
-    if !problem.spin_transport_modules.is_empty() || !problem.spin_torque_modules.is_empty() {
+    if !active_graph.spin_module_ids.is_empty() || active_graph.has_active_torque_modules {
         scope_reasons.push("charge_only_requires_no_spin_transport_or_torque_modules".into());
     }
     if problem.energy_terms.iter().any(|term| {
@@ -707,6 +730,8 @@ mod tests {
         let region_index_by_id = BTreeMap::from([("strip".to_string(), 0_u32)]);
         let context = crate::spin_transport::FdmSpinTransportResolutionContext {
             owner_names: &owner_names,
+            object_masks_by_id: None,
+            region_masks_by_ref: None,
             grid_cells: [1, 1, 1],
             origin_m: [0.0; 3],
             cell_size_m: [1.0; 3],
@@ -750,6 +775,8 @@ mod tests {
         let region_index_by_id = BTreeMap::from([("strip".to_string(), 0_u32)]);
         let context = crate::spin_transport::FdmSpinTransportResolutionContext {
             owner_names: &owner_names,
+            object_masks_by_id: None,
+            region_masks_by_ref: None,
             grid_cells: [2, 1, 1],
             origin_m: [0.0; 3],
             cell_size_m: [1.0; 3],

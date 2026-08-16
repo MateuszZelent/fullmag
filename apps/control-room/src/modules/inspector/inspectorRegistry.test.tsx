@@ -215,6 +215,21 @@ describe("inspectorRegistry", () => {
     );
   });
 
+  it("uses the racetrack transport vocabulary for dedicated inspector routes", () => {
+    expect(resolveInspectorRoute("physics.current-transport")?.title).toBe(
+      "Charge transport",
+    );
+    expect(resolveInspectorRoute("physics.spin-transport")?.title).toBe(
+      "Spin transport",
+    );
+    expect(resolveInspectorRoute("physics.spin-interface")?.title).toBe(
+      "HM/FM interface",
+    );
+    expect(resolveInspectorRoute("physics.spin-torque")?.title).toBe(
+      "Transport torque",
+    );
+  });
+
   it("resolves object material selections to the material assignment panel", () => {
     expect(resolveInspectorPanel({ kind: "object.material" })?.id).toBe(
       "object-material-assignment",

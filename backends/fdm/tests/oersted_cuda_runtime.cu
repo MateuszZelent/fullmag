@@ -361,6 +361,102 @@ void verify_accepted_observables_and_stats(fullmag_fdm_precision precision) {
     fullmag_fdm_backend_destroy(handle);
 }
 
+void verify_static_external_profile(fullmag_fdm_precision precision) {
+    const double m0[6] = {1.0, 0.0, 0.0, 1.0, 0.0, 0.0};
+    const uint8_t active_mask[2] = {1, 1};
+    const double profile[6] = {2.0, 3.0, 4.0, -5.0, 6.0, -7.0};
+    fullmag_fdm_plan_desc plan{};
+    plan.grid = {2, 1, 1, 1.0, 1.0, 1.0};
+    plan.material = {1.0, 1.0e-30, 0.1, 1.0};
+    plan.precision = precision;
+    plan.integrator = FULLMAG_FDM_INTEGRATOR_HEUN;
+    plan.enable_exchange = 0;
+    plan.enable_demag = 0;
+    plan.initial_magnetization_xyz = m0;
+    plan.initial_magnetization_len = 6;
+    plan.active_mask = active_mask;
+    plan.active_mask_len = 2;
+    plan.oersted_field_xyz = profile;
+    plan.oersted_field_len = 6;
+    plan.stats_mode = FULLMAG_FDM_STATS_FULL;
+
+    fullmag_fdm_backend *handle = create_backend(plan, "static external profile backend create failed");
+    check(fullmag_fdm_backend_set_static_external_field_f64(handle, profile, 6)
+              == FULLMAG_FDM_OK,
+          "static external profile role marker failed");
+    // Copy the complete field in one call so the two cells are checked.
+    std::array<double, 6> ext{};
+    if (precision == FULLMAG_FDM_PRECISION_DOUBLE) {
+        check(fullmag_fdm_backend_copy_field_f64(
+                  handle, FULLMAG_FDM_OBSERVABLE_H_EXT, ext.data(), ext.size())
+                  == FULLMAG_FDM_OK,
+              "static H_EXT f64 download failed");
+    } else {
+        std::array<float, 6> ext_f32{};
+        check(fullmag_fdm_backend_copy_field_f32(
+                  handle, FULLMAG_FDM_OBSERVABLE_H_EXT, ext_f32.data(), ext_f32.size())
+                  == FULLMAG_FDM_OK,
+              "static H_EXT f32 download failed");
+        for (size_t i = 0; i < ext.size(); ++i) ext[i] = ext_f32[i];
+    }
+    const double tolerance = precision == FULLMAG_FDM_PRECISION_DOUBLE ? 2.0e-12 : 2.0e-5;
+    for (size_t i = 0; i < ext.size(); ++i) {
+        check_close(ext[i], profile[i], tolerance,
+                    "static external H_EXT profile mismatch");
+    }
+    std::array<double, 6> oe{};
+    if (precision == FULLMAG_FDM_PRECISION_DOUBLE) {
+        check(fullmag_fdm_backend_copy_field_f64(
+                  handle, FULLMAG_FDM_OBSERVABLE_H_OE, oe.data(), oe.size())
+                  == FULLMAG_FDM_OK,
+              "static H_OE f64 download failed");
+    } else {
+        std::array<float, 6> oe_f32{};
+        check(fullmag_fdm_backend_copy_field_f32(
+                  handle, FULLMAG_FDM_OBSERVABLE_H_OE, oe_f32.data(), oe_f32.size())
+                  == FULLMAG_FDM_OK,
+              "static H_OE f32 download failed");
+        for (size_t i = 0; i < oe.size(); ++i) oe[i] = oe_f32[i];
+    }
+    for (double value : oe) {
+        check_close(value, 0.0, tolerance, "static external profile leaked into H_OE");
+    }
+
+    fullmag_fdm_step_stats stats{};
+    check(fullmag_fdm_backend_step(handle, 1.0e-12, &stats) == FULLMAG_FDM_OK,
+          "static external profile step failed");
+    std::array<double, 6> h_eff{};
+    if (precision == FULLMAG_FDM_PRECISION_DOUBLE) {
+        check(fullmag_fdm_backend_copy_field_f64(
+                  handle, FULLMAG_FDM_OBSERVABLE_H_EFF, h_eff.data(), h_eff.size())
+                  == FULLMAG_FDM_OK,
+              "static H_EFF f64 download failed");
+    } else {
+        std::array<float, 6> h_eff_f32{};
+        check(fullmag_fdm_backend_copy_field_f32(
+                  handle, FULLMAG_FDM_OBSERVABLE_H_EFF, h_eff_f32.data(), h_eff_f32.size())
+                  == FULLMAG_FDM_OK,
+              "static H_EFF f32 download failed");
+        for (size_t i = 0; i < h_eff.size(); ++i) h_eff[i] = h_eff_f32[i];
+    }
+    for (size_t i = 0; i < h_eff.size(); ++i) {
+        check_close(h_eff[i], profile[i], tolerance,
+                    "static external profile missing from H_EFF");
+    }
+    check(std::isfinite(stats.external_energy_joules),
+          "static external profile produced non-finite Zeeman energy");
+    fullmag_fdm_backend_destroy(handle);
+
+    double invalid_profile[6] = {2.0, 3.0, 4.0, -5.0, std::nan(""), -7.0};
+    plan.oersted_field_xyz = invalid_profile;
+    fullmag_fdm_backend *invalid_handle = create_backend(
+        plan, "non-finite static external profile backend create failed");
+    check(fullmag_fdm_backend_set_static_external_field_f64(invalid_handle, invalid_profile, 6)
+              == FULLMAG_FDM_ERR_INVALID,
+          "non-finite static external profile was not rejected");
+    fullmag_fdm_backend_destroy(invalid_handle);
+}
+
 void verify_precision(fullmag_fdm_precision precision, double stage_tolerance) {
     verify_stage_times(precision, stage_tolerance);
     verify_full_abm3_branch(precision, stage_tolerance);
@@ -371,6 +467,7 @@ void verify_precision(fullmag_fdm_precision precision, double stage_tolerance) {
     verify_fsal_second_step(precision, FULLMAG_FDM_INTEGRATOR_RK23);
     verify_fsal_second_step(precision, FULLMAG_FDM_INTEGRATOR_DP45);
     verify_accepted_observables_and_stats(precision);
+    verify_static_external_profile(precision);
 }
 
 }  // namespace

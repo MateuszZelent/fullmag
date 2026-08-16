@@ -656,6 +656,8 @@ def _infer_pipeline_stage_kind(stage_draft: dict[str, object]) -> str:
     if kind in {
         "save_state",
         "load_state",
+        "set_transport_current",
+        "set_spin_torque_enabled",
         "export",
         "change_device",
         "add_field_drive",
@@ -712,6 +714,32 @@ def _export_stage_draft(stage: LoadedStage) -> dict[str, object]:
                 "format": _text_value(action.get("format")),
                 "dataset": _text_value(action.get("dataset")),
                 "sample_index": _text_value(action.get("sample_index")),
+            }
+        if action_kind == "set_transport_current":
+            module_id = _text_value(action.get("module_id"))
+            values = action.get("terminal_outward_current_density_Apm2")
+            if not module_id or not isinstance(values, dict):
+                raise TypeError(
+                    "set_transport_current action requires module_id and terminal current mapping"
+                )
+            return {
+                "kind": "set_transport_current",
+                "entrypoint_kind": stage.entrypoint_kind,
+                "module_id": module_id,
+                "terminal_outward_current_density_Apm2": copy.deepcopy(values),
+            }
+        if action_kind == "set_spin_torque_enabled":
+            module_id = _text_value(action.get("module_id"))
+            enabled = action.get("enabled")
+            if not module_id or not isinstance(enabled, bool):
+                raise TypeError(
+                    "set_spin_torque_enabled action requires module_id and bool enabled"
+                )
+            return {
+                "kind": "set_spin_torque_enabled",
+                "entrypoint_kind": stage.entrypoint_kind,
+                "module_id": module_id,
+                "enabled": enabled,
             }
         if action_kind == "export":
             return {
@@ -1487,8 +1515,15 @@ def _render_geometry_and_materials(
             lines.append(f"{var_name}.Dbulk = {_py_number(bulk_dmi)}")
         lines.append("")
     for geometry in problem.auxiliary_geometries:
+        role = problem.auxiliary_geometry_roles.get(geometry.geometry_name, "antenna")
+        if role == "antenna":
+            constructor = "antenna_object"
+            type_suffix = ""
+        else:
+            constructor = "geometry_object"
+            type_suffix = f", type={_py_repr(role)}"
         lines.append(
-            f"{_safe_identifier(geometry.geometry_name)} = {_surface_call(surface, 'antenna_object')}({_render_geometry_expr(geometry, magnet_name=geometry.geometry_name, source_root=source_root)}, name={_py_repr(geometry.geometry_name)})"
+            f"{_safe_identifier(geometry.geometry_name)} = {_surface_call(surface, constructor)}({_render_geometry_expr(geometry, magnet_name=geometry.geometry_name, source_root=source_root)}, name={_py_repr(geometry.geometry_name)}{type_suffix})"
         )
         lines.append("")
     if lines[-1] == "":
@@ -2408,6 +2443,15 @@ def _render_spin_interface_payload(payload: object) -> str:
         f"normal_side={_render_region_ref_payload(entry.get('normal_side'))}",
         f"ferromagnet_side={_render_region_ref_payload(entry.get('ferromagnet_side'))}",
     ]
+    normal_surface = entry.get("normal_surface")
+    ferromagnet_surface = entry.get("ferromagnet_surface")
+    if (normal_surface is None) != (ferromagnet_surface is None):
+        raise ValueError("mixing-conductance interface requires both explicit surfaces or neither")
+    if normal_surface is not None:
+        kwargs.append(f"normal_surface={_render_surface_ref_payload(normal_surface)}")
+        kwargs.append(
+            f"ferromagnet_surface={_render_surface_ref_payload(ferromagnet_surface)}"
+        )
     for key in ("g_up_Spm2", "g_down_Spm2", "g_r_Spm2", "g_i_Spm2"):
         value = _number_or_none(entry.get(key))
         if value is None:
@@ -5079,6 +5123,69 @@ def _render_stages(
                 if is_study_surface:
                     lines.append(f"study.stages.add_save_state({', '.join(call_parts)})")
                 continue
+            if action_kind == "load_state":
+                if not is_study_surface:
+                    raise ValueError("load_state action requires the study API surface")
+                call_parts = []
+                artifact_name = _text_value(stage.action.get("artifact_name"))
+                state_path = _text_value(stage.action.get("state_path"))
+                if artifact_name:
+                    call_parts.append(f"artifact_name={_py_repr(artifact_name)}")
+                if state_path:
+                    call_parts.append(f"state_path={_py_repr(state_path)}")
+                for key in ("format", "dataset"):
+                    value = _text_value(stage.action.get(key))
+                    if value:
+                        call_parts.append(f"{key}={_py_repr(value)}")
+                sample_index = stage.action.get("sample_index")
+                if sample_index is not None:
+                    call_parts.append(f"sample_index={int(sample_index)}")
+                if stage.stage_id is not None:
+                    call_parts.append(f"stage_id={_py_repr(stage.stage_id)}")
+                lines.append(f"study.stages.add_load_state({', '.join(call_parts)})")
+                continue
+            if action_kind == "set_transport_current":
+                if not is_study_surface:
+                    raise ValueError(
+                        "set_transport_current action requires the study API surface"
+                    )
+                module_id = _text_value(stage.action.get("module_id"))
+                values = stage.action.get("terminal_outward_current_density_Apm2")
+                if not module_id or not isinstance(values, dict):
+                    raise ValueError(
+                        "set_transport_current action requires module_id and terminal current mapping"
+                    )
+                call_parts = [
+                    f"module_id={_py_repr(module_id)}",
+                    "terminal_outward_current_density_Apm2=" + _py_literal(values),
+                ]
+                if stage.stage_id is not None:
+                    call_parts.append(f"stage_id={_py_repr(stage.stage_id)}")
+                lines.append(
+                    f"study.stages.set_transport_current({', '.join(call_parts)})"
+                )
+                continue
+            if action_kind == "set_spin_torque_enabled":
+                if not is_study_surface:
+                    raise ValueError(
+                        "set_spin_torque_enabled action requires the study API surface"
+                    )
+                module_id = _text_value(stage.action.get("module_id"))
+                enabled = stage.action.get("enabled")
+                if not module_id or not isinstance(enabled, bool):
+                    raise ValueError(
+                        "set_spin_torque_enabled action requires module_id and bool enabled"
+                    )
+                call_parts = [
+                    f"module_id={_py_repr(module_id)}",
+                    f"enabled={enabled!r}",
+                ]
+                if stage.stage_id is not None:
+                    call_parts.append(f"stage_id={_py_repr(stage.stage_id)}")
+                lines.append(
+                    f"study.stages.set_spin_torque_enabled({', '.join(call_parts)})"
+                )
+                continue
             if action_kind == "change_device":
                 action_device = _text_value(stage.action.get("device")) or "auto"
                 if is_study_surface:
@@ -5855,6 +5962,8 @@ def _stage_override_for(
         if action_kind in {
             "save_state",
             "load_state",
+            "set_transport_current",
+            "set_spin_torque_enabled",
             "export",
             "change_device",
             "add_field_drive",
@@ -6959,7 +7068,11 @@ def _export_auxiliary_geometry_entry(
     hint = _normalize_mapping(geometry_hints.get(name))
     return {
         "name": name,
-        "role": str(hint.get("role") or "auxiliary"),
+        "role": str(
+            problem.auxiliary_geometry_roles.get(name)
+            or hint.get("role")
+            or "geometry"
+        ),
         "geometry_kind": geometry_kind,
         "geometry_params": geometry_params,
         "bounds_min": list(bounds_min) if bounds_min is not None else None,
@@ -8096,6 +8209,7 @@ def _stage_signature(problem: Problem) -> dict[str, object]:
             *[_geometry_signature(magnet.geometry) for magnet in problem.magnets],
             *[_geometry_signature(geometry) for geometry in problem.auxiliary_geometries],
         ],
+        "auxiliary_geometry_roles": dict(problem.auxiliary_geometry_roles),
         "materials": [_material_signature(magnet) for magnet in problem.magnets],
         "magnets": [
             {
@@ -8106,7 +8220,7 @@ def _stage_signature(problem: Problem) -> dict[str, object]:
             for magnet in problem.magnets
         ],
         "energy_terms": [term.to_ir() for term in problem.energy],
-        "current_modules": [module.to_ir() for module in problem.current_modules],
+        "current_modules": _stage_current_module_signatures(problem),
         "spin_torque_modules": [module.to_ir_module() for module in problem.spin_torques],
         "excitation_analysis": problem.excitation_analysis.to_ir()
         if problem.excitation_analysis is not None
@@ -8118,6 +8232,26 @@ def _stage_signature(problem: Problem) -> dict[str, object]:
         "domain_frame": runtime_metadata.get("domain_frame"),
         "study_universe": runtime_metadata.get("study_universe"),
     }
+
+
+def _stage_current_module_signatures(problem: Problem) -> list[dict[str, object]]:
+    """Compare transport structure while ignoring declared stage drive values.
+
+    ``study.stages.set_transport_current`` is an explicit workflow action.  Its
+    boundary values therefore belong to the stage action stream, not to the
+    immutable geometry/material signature used by canonical script rewriting.
+    """
+    signatures: list[dict[str, object]] = []
+    for module in problem.current_modules:
+        payload = copy.deepcopy(module.to_ir())
+        if payload.get("model") in {"ohmic_poisson", "magnetoresistive_poisson"}:
+            boundaries = payload.get("boundaries")
+            if isinstance(boundaries, list):
+                for boundary in boundaries:
+                    if isinstance(boundary, dict) and "outward_current_density_Apm2" in boundary:
+                        boundary["outward_current_density_Apm2"] = "<stage-current>"
+        signatures.append(payload)
+    return signatures
 
 
 def _geometry_signature(geometry: object) -> dict[str, object]:

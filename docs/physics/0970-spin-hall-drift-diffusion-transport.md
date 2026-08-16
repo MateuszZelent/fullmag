@@ -2,7 +2,7 @@
 
 - Status: draft — implementation-blocking normative physics
 - Owners: Fullmag core
-- Last updated: 2026-08-11
+- Last updated: 2026-08-12
 - Related ADRs: `docs/adr/0019-spin-transport-and-prescribed-sot-semantics.md`
 - Related specs: `docs/specs/spin-transport-runtime-contract-v1.md`
 - Formula versions: `transport_constitutive.one_way.fullmag.v1`,
@@ -398,6 +398,10 @@ The machine-readable symbol contract used by the source map is:
 | id | latex | meaning | si_unit |
 |---|---|---|---|
 | V | V | charge electrochemical potential | \mathrm{V} |
+| b_K | $b_K$ | assembled finite-volume charge right-hand side for cell $K$ | $\mathrm{A}$ |
+| K | $K$ | deterministic finite-volume cell index | $1$ |
+| C | $C$ | one numerically connected conducting-cell component | $1$ |
+| V_bar_C | $\bar V_C$ | arithmetic mean charge potential on component $C$ | $\mathrm{V}$ |
 | mu_s | \mu_s | full spin-channel splitting | \mathrm{V} |
 | E | E_i | electric field, negative charge-potential gradient | \mathrm{V\,m^{-1}} |
 | G | G_{ia} | spin-voltage gradient | \mathrm{V\,m^{-1}} |
@@ -433,6 +437,21 @@ The machine-readable symbol contract used by the source map is:
 | e | e | positive elementary charge | \mathrm{C} |
 | q_abs | q_{\mathrm{abs},\perp} | transversely absorbed interface spin-current density | \mathrm{A\,m^{-2}} |
 | T_tr_G | T_{\mathrm{tr},G} | transport-derived Gilbert-source torque | \mathrm{s^{-1}} |
+| m | $m$ | reduced magnetization direction | $1$ |
+| alpha | $\alpha$ | Gilbert damping | $1$ |
+| B_eff | $B_{\mathrm{eff}}$ | effective magnetic induction | $\mathrm{T}$ |
+| T_P | $T_P$ | polarization-driven contribution to transport torque | $\mathrm{s^{-1}}$ |
+| T_SHE | $T_{\mathrm{SHE}}$ | direct-SHE contribution to transport torque | $\mathrm{s^{-1}}$ |
+| seed_xy | $x,y$ | world-space coordinates in the racetrack plane | $\mathrm{m}$ |
+| seed_center | $x_c,y_c$ | frozen world-space skyrmion centre | $\mathrm{m}$ |
+| seed_rho | $\rho$ | radial distance from the frozen centre | $\mathrm{m}$ |
+| seed_phi | $\phi$ | polar angle about the frozen centre | $\mathrm{rad}$ |
+| seed_theta | $\theta$ | skyrmion polar profile angle | $\mathrm{rad}$ |
+| seed_phase | $\chi$ | in-plane phase; equals $\phi$ for the frozen outward Néel wall | $\mathrm{rad}$ |
+| seed_radius | $R$ | frozen seed radius | $\mathrm{m}$ |
+| seed_wall_width | $\Delta$ | frozen seed wall width | $\mathrm{m}$ |
+| seed_polarity | $p$ | serialized polarity multiplier in the repository profile | $1$ |
+| seed_m_raw | $\mathbf m_{\mathrm{raw}}$ | pre-normalization seed vector | $1$ |
 
 ```{math}
 :label: m1-constitutive-block
@@ -533,6 +552,337 @@ unresolved interfacial quantum chemistry, and implicit spin pumping. Planner
 warns or rejects when device dimensions approach the mean free path. NaN/Inf,
 nonpositive dissipative coefficients, invalid references, missing charge gauge,
 nonpositive active lengths, M1+iSHE, or transient without `C_s` are invalid.
+
+(racetrack-m1-v1-contract)=
+### 2.9 Frozen solved-current racetrack fixture `racetrack_m1_v1`
+
+`racetrack_m1_v1` jest syntetycznym fixture walidacyjnym. Nie reprezentuje
+jednego rzeczywistego materiału ani dopasowanego stosu HM/FM. Wartości
+magnetyczne korzystają ze skali klasycznego workloadu ultracienkiego skyrmionu
+Sampaio et al.; model dyfuzyjny i interfejsowy opierają się odpowiednio na
+Valet--Fert, Abert et al. i Brataas--Nazarov--Bauer. Geometria, kontrast
+przewodności, mixing conductance i symetryczny sweep są jawnymi wyborami
+benchmarkowymi służącymi pokryciu gałęzi oraz testom znaków. Normatywną wersją
+maszynową jest
+`tests/standard_problems/transport/racetrack_m1_v1/fixture.v1.json`.
+
+#### 2.9.1 Osie, current i komplet równań M1
+
+Układ jest prawoskrętny: $+x$ biegnie wzdłuż toru, $+y$ jest osią poprzeczną,
+a $+z$ biegnie od HM do FM. Dodatni $J_x$ oznacza conventional current, $e>0$,
+a moment elektronu nie zmienia tej definicji prądu. Normalna interfejsu HM→FM
+wynosi $n=+e_z$. Z równania charge continuity otrzymujemy:
+
+```{math}
+:label: racetrack-charge-continuity
+\nabla\!\cdot\mathbf J_c=0,
+\qquad
+\mathbf J_c=\sigma\mathbf E=-\sigma\nabla V.
+```
+
+Direct SHE jest częścią jednego tensora $Q_{ia}$, a nie nieopisanym wektorem:
+
+```{math}
+:label: racetrack-direct-she
+Q^{\mathrm{SHE}}_{ia}
+=\theta_{\mathrm{SH}}\epsilon_{ika}J_{c,k},
+\qquad
+J_{c,x}>0,\ \theta_{\mathrm{SH}}>0
+\Longrightarrow Q^{\mathrm{SHE}}_{zy}>0.
+```
+
+Steady M1 rozwiązuje trzy składowe akumulacji spinowej z kompletem reakcji:
+
+```{math}
+:label: racetrack-steady-spin-balance
+\begin{aligned}
+\partial_iQ_{ia}&=-R_{\mathrm{sf},a}-R_{J,a}-R_{\phi,a},\\
+R_{\mathrm{sf}}&=\frac{\sigma_s}{2\lambda_{\mathrm{sf}}^2}\mu_s,\\
+R_J&=\frac{\sigma_s}{2\lambda_J^2}(\mu_s\times m),\\
+R_\phi&=\frac{\sigma_s}{2\lambda_\phi^2}m\times(\mu_s\times m).
+\end{aligned}
+```
+
+Dla skoku $\Delta\mu_s=\mu_{s,HM}-\mu_{s,FM}$ i zaakceptowanego skoku
+$\Delta V_\Gamma=V_{HM}-V_{FM}$ warunek mixing ma postać:
+
+```{math}
+:label: racetrack-mixing-boundary
+\begin{aligned}
+j_{c,n}&=(G_\uparrow+G_\downarrow)\Delta V_\Gamma,\\
+q_{s,\parallel}&=\left[(G_\uparrow-G_\downarrow)\Delta V_\Gamma
++\frac{G_\uparrow+G_\downarrow}{2}m\cdot\Delta\mu_s\right]m,\\
+q_{\mathrm{abs},\perp}&=G_r m\times(\Delta\mu_s\times m)
++G_i(\Delta\mu_s\times m).
+\end{aligned}
+```
+
+Moment pędu przekazany do jednej komórki FM $K$ jest sumą reakcji
+objętościowych i zorientowanej absorpcji powierzchniowej. Spin-flip nie należy
+do torque magnetycznego:
+
+```{math}
+:label: racetrack-torque-balance
+T_{\mathrm{tr},G,K}=-\frac{\gamma_e}{M_{s,K}}\frac{\hbar}{2e}
+\left[R_{J,K}+R_{\phi,K}
++\frac{1}{|K|}\sum_{f\in\Gamma_K}|f|q_{\mathrm{abs},\perp,f}\right].
+```
+
+`T_tr,G` jest źródłem w kanonicznej postaci Gilberta. Dla
+$B_{\mathrm{eff}}=\mu_0H_{\mathrm{eff}}$ pełny jawny RHS wynosi:
+
+```{math}
+:label: racetrack-gilbert-llg
+(1+\alpha^2)\partial_t m=
+-\gamma_e\left[m\times B_{\mathrm{eff}}
++\alpha m\times(m\times B_{\mathrm{eff}})\right]
++T_{\mathrm{tr},G}+\alpha m\times T_{\mathrm{tr},G}.
+```
+
+#### 2.9.2 Pełna tabela znaków
+
+Tabela opisuje model liniowy M1 przed nieliniową odpowiedzią trajektorii.
+`odd` oznacza dokładne odwrócenie znaku przy ustalonym deskryptorze i stanie
+$m$. Kąt Halla jest surowo zdefiniowany przez `atan2(v_y,v_x)`; po odwróceniu
+obu składowych prędkości zmienia gałąź o $\pi$, a nie po prostu znak.
+
+Produkcyjny fixture ma $P=0.4$, dlatego odwrócenie samego
+$\theta_{\mathrm{SH}}$ nie odwraca całej $\mu_s$, całego $Q$ ani całego
+torque. Dla ustalonego $m$, zaakceptowanego snapshotu charge i wszystkich
+pozostałych parametrów odpowiedź rozdziela się na część polaryzacyjną oraz
+SHE. Dla torque zapis jest następujący:
+
+```{math}
+:label: racetrack-theta-sh-torque-decomposition
+T(+\theta_{\mathrm{SH}})=T_P+T_{\mathrm{SHE}},
+\qquad
+T(-\theta_{\mathrm{SH}})=T_P-T_{\mathrm{SHE}}.
+```
+
+Tak samo rozkładają się $\mu_s$ i $Q$. Ich całkowita odpowiedź przy $P=0.4$
+nie jest ogólnie odd. Dokładny oracle odwrócenia czystego SHE używa kopii
+fixture z jedyną zmianą $P=0$; zachowuje $G_\uparrow=G_\downarrow$, ten sam
+$m$ i ten sam charge snapshot. Wtedy $\mu_s$, $Q$ i $T_{\mathrm{tr},G}$ muszą
+być dokładnie odd względem $\theta_{\mathrm{SH}}$ w tolerancji numerycznej
+orakla. Dla pełnej nieliniowej dynamiki obowiązuje jawne ograniczenie:
+`no exact oddness claim for nonlinear trajectory velocity`.
+
+| Operacja | $J_c$ | $Q^{SHE}$, $\mu_s$, oriented flux | $T_{tr,G}$ | $(v_x,v_y)$ w granicy liniowej | $\Theta_H$ | Warunek legalności |
+|---|---:|---:|---:|---:|---:|---|
+| `identity` | bez zmiany | bez zmiany | bez zmiany | bez zmiany | bez zmiany | osie jak wyżej |
+| `reverse_J` | odd | odd | odd | $(-v_x,-v_y)$ | `wrap(Theta_H +/- pi)` | odwrócić oba zbilansowane terminale; moduł nadal istnieje |
+| `reverse_theta_SH` | bez zmiany | część polaryzacyjna bez zmiany, część SHE odd | $T_P+T_{\mathrm{SHE}}\to T_P-T_{\mathrm{SHE}}$ | brak dokładnego prawa dla pełnej trajektorii; w oracle $P=0$ odd jest transport przy ustalonym $m$ | brak ogólnego prawa | nie zmieniać charge snapshotu; dokładny oracle czystego SHE ustawia wyłącznie $P=0$ |
+| `reverse_normal` | bez zmiany | oriented flux zmienia znak | fizyczny torque bez zmiany | bez zmiany | bez zmiany | tylko spójna zamiana HM↔FM, $n\to-n$ i $\Delta\to-\Delta$; sam flip normalnej fail-closed |
+| `reverse_transverse_axis` | bez zmiany | składowe z indeksem $y$ zmieniają znak prezentacji | fizyczny torque bez zmiany | $(v_x,-v_y)$ | $-\Theta_H$ w gałęzi głównej | jest to zmiana osi raportowania, nie lewoskrętny frame solvera |
+
+#### 2.9.3 Znormalizowany deskryptor geometrii, BC, masek i etapów
+
+Normatywny JSON zamraża jedną reprezentację bez domyślnych pól. Siatka ma
+dokładnie `counts=[256,64,4]`, `cell_size_m=[2e-9,2e-9,1e-9]`, początek
+`[0,0,0]` i porządek `x_fastest_then_y_then_z`. HM zajmuje półotwarty zakres
+komórek $[0,256)\times[0,64)\times[0,3)$, czyli
+$0\le z<3\,\mathrm{nm}$. FM zajmuje
+$[0,256)\times[0,64)\times[3,4)$, czyli
+$3\,\mathrm{nm}\le z<4\,\mathrm{nm}$. Wspólna płaszczyzna interfejsu ma
+$z=3\,\mathrm{nm}$.
+
+Charge BC ma gauge `zero_mean` i pokrywa każdą zewnętrzną powierzchnię
+dokładnie raz. Terminal `terminal_x_minus` zawiera `hm:x-` i `fm:x-`, obie z
+orientacją $(-1,0,0)$, a jego outward density wynosi $-J_x$. Terminal
+`terminal_x_plus` zawiera `hm:x+` i `fm:x+`, obie z orientacją $(1,0,0)$, a
+jego outward density wynosi $+J_x$. `insulating_outer` obejmuje dokładnie
+`hm:y-`, `hm:y+`, `hm:z-`, `fm:y-`, `fm:y+` i `fm:z+` z odpowiadającymi
+zewnętrznymi orientacjami. Spin BC `spin_insulating_outer` obejmuje wszystkie
+dziesięć zewnętrznych powierzchni HM i FM, łącznie z czterema powierzchniami
+terminali charge.
+
+Interfejs `hm_fm` ma `kind=mixing_conductance`, `normal_side=hm`,
+`ferromagnet_side=fm`, `normal_to_ferromagnet=[0,0,1]`, stronę HM `hm:z+` o
+orientacji $+z$ i stronę FM `fm:z-` o orientacji $-z$. Sam wektor normalny bez
+tej pary stron i powierzchni nie jest kompletnym deskryptorem.
+
+Publiczny `MixingConductanceSpinInterface` zapisuje tę parę jako wymagane dla
+`native_m1_v1` pola `normal_surface` i `ferromagnet_surface`. Obie wartości są
+`SurfaceRef`, muszą występować razem, należeć odpowiednio do obiektów
+`normal_side` i `ferromagnet_side`, wskazywać przeciwne strony tej samej osi
+oraz mieć orientacje zgodne z `normal_to_ferromagnet` i
+`-normal_to_ferromagnet`. Starszy zapis bez powierzchni pozostaje czytelny dla
+innych, historycznych modeli, ale planner `native_m1_v1` odrzuca go przed
+materializacją deskryptora; nie rekonstruuje powierzchni wyłącznie z masek.
+
+Trzy maski używają tego samego kształtu i porządku komórek:
+
+| Maska | Aktywny zakres $z$ | Liczba aktywnych komórek | Własność |
+|---|---:|---:|---|
+| `transport_active` | $[0,4)$ | `65536` | HM i FM |
+| `magnetic_active` | $[3,4)$ | `16384` | tylko FM |
+| `torque_target` | $[3,4)$ | `16384` | tylko FM |
+
+Obowiązuje `torque_target subset magnetic_active subset transport_active`.
+Deskryptor `cell_bounds` wraz z `shape` i `cell_order` wyznacza każdy bit maski;
+runtime nie może rekonstruować maski z $M_s$, z amplitudy prądu ani z samej
+obecności materiału.
+
+Kanoniczny stan początkowy nie jest jednorodnym $m$. Publiczny konstruktor
+`fm.texture.neel_skyrmion` zapisuje `preset_texture` w
+`magnets[0].initial_magnetization`, z mapowaniem `world`, płaszczyzną `xy`,
+centrum `[256e-9,64e-9,3.5e-9]`, `R=30e-9`, `Delta=5e-9`,
+`chirality=+1`, Néel `helicity=0` i serializowanym
+`core_polarity=+1`. Dla $\rho$ liczonego od tego centrum repozytoryjny profil
+jest dokładnie
+
+```{math}
+:label: racetrack-neel-seed
+\rho=\sqrt{(x-x_c)^2+(y-y_c)^2},\qquad
+\phi=\operatorname{atan2}(y-y_c,x-x_c),\qquad
+\theta(\rho)=2\operatorname{atan}\!\left[\exp\!\left(\frac{R-\rho}{\Delta}\right)\right],
+\qquad
+\chi=\phi,
+\qquad
+\mathbf m_{\mathrm{raw}}=
+(\sin\theta\cos\chi,\sin\theta\sin\chi,p\cos\theta),\quad p=+1,
+\qquad
+\mathbf m=\frac{\mathbf m_{\mathrm{raw}}}{\lVert\mathbf m_{\mathrm{raw}}\rVert_2}.
+```
+
+Zatem ściana przy $\rho=R$ jest radialnie skierowana na zewnątrz,
+`core m_z<0`, a `background m_z->+1`. Normalizacja jest wykonywana osobno dla
+każdej próbki; tylko hipotetyczna zerowa norma używa deterministycznego
+fallbacku `[0,0,1]`. Seed jest wejściem do relaksacji, nie dowodem stabilności
+ani kwalifikacji skyrmionu.
+
+Etap `relax_zero_current` zachowuje moduł transportu, ustawia $J_x=0$, wyłącza
+transportowy torque i publikuje checkpoint `relaxed_zero_current`. Etap
+`drive_solved_current` wykonuje sześć niezależnych przebiegów w porządku
+$(-1.5,-1.0,-0.5,+0.5,+1.0,+1.5)\times10^{12}\,\mathrm{A\,m^{-2}}$.
+Każdy przebieg zaczyna się od tego samego checkpointu, trwa $2\,\mathrm{ns}$,
+używa stałego kroku $0.1\,\mathrm{ps}$, zapisuje próbkę co $5\,\mathrm{ps}$ i
+aktualizuje transport przy każdej ewaluacji RHS LLG. Dla każdego $J_x$ JSON
+zapisuje obie konkretne outward densities, więc znak terminali nie jest
+wyprowadzany później z nazwy powierzchni.
+
+Spin solver fixture jest jawnie i dokładnie `native_m1_v1`. Wartości `auto`,
+`gmres` i każdy fallback są zabronione. Pełny zamrożony zakres zabroniony to
+CPU, FP32, prescribed torque, prescribed current density, Oersted, iSHE, M2,
+M3, MTJ, PBC, thermal noise, multi-GPU oraz `adaptive_geometry`. Ostatni zakaz
+oznacza, że geometria, siatka, maski i indeksowanie komórek pozostają identyczne
+we wszystkich przebiegach.
+
+`normalized_problem_ir_contract.expected_lowering` jest kompletną, typowaną
+projekcją bieżącego `ProblemIR`, zbudowaną przez publiczne konstruktory
+`Box`, `Translate`, `Material`, `Ferromagnet` i `Problem`. Zawiera rzeczywiste
+tablice `geometry.entries` i `materials`, pełny `CurrentTransport`, steady
+`SpinDriftDiffusion`, `DriftDiffusionSpinTorque`, energy terms `Exchange`,
+`Demag` i `InterfacialDMI(D=3e-3, interface_normal=(0,0,1))`, jeden bazowy
+`TimeEvolution`, `BackendPolicyIR` oraz `ValidationProfileIR`. Test Python
+porównuje całą projekcję z publicznym loweringiem i dereferencjonuje każdą
+ścieżkę parametru. Test Rust deserializuje cały `ProblemIR`, osobno parsuje
+`ValidationProfileIR` i sprawdza selection w jego rzeczywistym położeniu
+`problem_meta.runtime_metadata.runtime_selection`. Kolejność BC jest
+normatywna: terminale mają indeksy `0` i `1`, a zewnętrzny
+charge-insulating boundary indeks `2`.
+
+Publiczny `study_pipeline.v1` rozróżnia prescribed-current i solved-current.
+Istniejące `set_current(direction,current_density)` dotyczy wyłącznie
+`ProblemIR.current_density` i nie może mutować transportu elektrodowego. Akcja
+`set_transport_current(module_id, terminal_outward_current_density_Apm2)`
+wybiera dokładnie jeden `CurrentTransport`, wymaga niepustej mapy
+`boundary_id -> A/m^2`, pozwala zmieniać wyłącznie istniejące
+`normal_current_electrode` oraz odrzuca brakujące, nadmiarowe i niefinitywne
+wartości. Python i materializator pipeline sprawdzają dokładne pokrycie
+identyfikatorów elektrod; planner po rozwiązaniu geometrii sprawdza bilans
+powierzchniowy $\sum_k J_{n,k}A_k=0$. Nie wolno zastępować tego warunku sumą
+samych gęstości, ponieważ powierzchnie terminali mogą mieć różne pola. Mutacja
+jest kontekstowa: dotyczy wszystkich następnych węzłów pipeline i jest
+zachowana w provenance dokumentu.
+
+Akcja `load_state(artifact_name=..., dataset="m")` jest jawną granicą
+restartu. Dla racetracku występuje przed każdym z sześciu runów i wskazuje
+`relaxed_zero_current`; runtime nie może zastąpić jej kontynuacją z poprzedniego
+drive. Kolejność `set_transport_current -> load_state -> run` jest normatywna,
+a każda materializacja runu musi zawierać konkretne istniejące cele
+`current_modules[0].boundaries[0|1].outward_current_density_Apm2`. Nie istnieje
+syntetyczny cel `boundaries[current_sweep]`.
+
+Stage-local `set_spin_torque_enabled(module_id, enabled)` zmienia wyłącznie
+stan istniejącego modułu `spin_torque` w `physics_graph.v1` oraz status jego
+wchodzącej krawędzi. Nie usuwa payloadu torque, spin transportu ani źródła
+ładunkowego. `enabled=False` mapuje się na `activation="inactive"`, a
+`enabled=True` na `activation="active"`; inne stany graphu nie są publiczną
+mutacją workflow. Wyłączenie torque przy zachowaniu magnetycznych sinków jest
+dozwolone tylko wtedy, gdy wszystkie terminale `normal_current_electrode`
+sprzężonego solve mają dokładnie `0 A/m^2`. Dla niezerowego napędu brak
+aktywnego `DriftDiffusionSpinTorque` nadal jest błędem fail-closed. Dzięki temu
+`relax_zero_current` zachowuje pełny, audytowalny graf transportu, ale nie
+wiąże torque do RHS LLG i nie otwiera ogólnej ścieżki utraty momentu pędu przy
+przepływie prądu.
+
+Normatywna sekwencja workloadu to:
+`set_transport_current(J_n=0) -> set_spin_torque_enabled(False) -> relax ->
+save_state("relaxed_zero_current") -> set_spin_torque_enabled(True)`, a każdy
+drive wykonuje następnie
+`set_transport_current -> load_state("relaxed_zero_current") -> run`.
+
+Sama obecność tych dwóch akcji nie kwalifikuje jeszcze workloadu. Osobna
+stage-local activation musi dowieść, że `relax_zero_current` zachowuje moduł
+transportu, ale nie wiąże transportowego torque do RHS; dopóki ta bramka oraz
+pełne wykonanie sześciu restartów nie przejdą, `public_lowering_boundary`
+pozostaje otwarte i tuple `fdm/gpu/double/strict` pozostaje niezakwalifikowane.
+
+#### 2.9.4 Pełna tabela liczb fixture
+
+Każdy wiersz ma status `numerical_validation_fixture`; pole `ProblemIR` jest
+ścieżką semantyczną zweryfikowaną względem obecnych konstruktorów Python,
+struktur `ProblemIR` i ich nazw serializowanych. Motywacja `paper-scale` nie
+oznacza przypisania zestawu jednemu materiałowi.
+
+| id | symbol | si_unit | value | validity | problem_ir_path | motivation |
+|---|---|---|---:|---|---|---|
+| `track.length` | $L_x$ | $\mathrm m$ | `512e-9` | 256 cells; FM must equal HM | `geometry.entries[1].base.size[0]` | Sampaio scale + bounded grid |
+| `track.width` | $L_y$ | $\mathrm m$ | `128e-9` | 64 cells; FM must equal HM | `geometry.entries[1].base.size[1]` | Sampaio scale + edge margin |
+| `hm.thickness` | $t_{HM}$ | $\mathrm m$ | `3e-9` | 3 z cells | `geometry.entries[1].base.size[2]` | diffusive HM benchmark |
+| `fm.thickness` | $t_{FM}$ | $\mathrm m$ | `1e-9` | 1 z cell | `geometry.entries[0].base.size[2]` | ultrathin DMI benchmark |
+| `cell.x` | $h_x$ | $\mathrm m$ | `2e-9` | exact divisor of $L_x$ | `backend_policy.discretization_hints.fdm.cell[0]` | bounded in-plane resolution |
+| `cell.y` | $h_y$ | $\mathrm m$ | `2e-9` | exact divisor of $L_y$ | `backend_policy.discretization_hints.fdm.cell[1]` | bounded in-plane resolution |
+| `cell.z` | $h_z$ | $\mathrm m$ | `1e-9` | exact 3+1 layer ownership | `backend_policy.discretization_hints.fdm.cell[2]` | interface ownership |
+| `fm.Ms` | $M_s$ | $\mathrm{A\,m^{-1}}$ | `580e3` | finite, $>0$ in FM | `materials[0].saturation_magnetisation` | Sampaio paper-scale |
+| `fm.A` | $A$ | $\mathrm{J\,m^{-1}}$ | `15e-12` | finite, $>0$ | `materials[0].exchange_stiffness` | Sampaio paper-scale |
+| `fm.alpha` | $\alpha$ | $1$ | `0.3` | finite, $\ge0$ | `materials[0].damping` | deterministic relaxation scale |
+| `fm.Ku` | $K_u$ | $\mathrm{J\,m^{-3}}$ | `0.8e6` | finite, axis $+z$ | `materials[0].uniaxial_anisotropy` | Sampaio paper-scale |
+| `fm.D` | $D$ | $\mathrm{J\,m^{-2}}$ | `3e-3` | finite, Fullmag DMI sign, interface normal $+z$ | `energy_terms[2].D` | Sampaio paper-scale |
+| `hm.sigma_charge` | $\sigma_{HM}$ | $\mathrm{S\,m^{-1}}$ | `5e6` | finite, $>0$ | `current_modules[0].materials[0].material.sigma_Spm` | metallic benchmark |
+| `hm.sigma_spin` | $\sigma_{s,HM}$ | $\mathrm{S\,m^{-1}}$ | `5e6` | finite, $>0$ | `spin_transport_modules[0].materials[0].material.sigma_s_Spm` | unpolarized HM benchmark |
+| `hm.theta_SH` | $\theta_{SH,HM}$ | $1$ | `0.2` | finite, signed | `spin_transport_modules[0].materials[0].material.theta_sh` | sign-sensitive SHE benchmark |
+| `hm.lambda_sf` | $\lambda_{sf,HM}$ | $\mathrm m$ | `1.5e-9` | finite, $>0$ | `spin_transport_modules[0].materials[0].material.lambda_sf_m` | short metallic scale |
+| `fm.sigma_charge` | $\sigma_{FM}$ | $\mathrm{S\,m^{-1}}$ | `1e6` | finite, $>0$ | `current_modules[0].materials[1].material.sigma_Spm` | HM/FM contrast benchmark |
+| `fm.sigma_spin` | $\sigma_{s,FM}$ | $\mathrm{S\,m^{-1}}$ | `1e6` | finite, $>0$ | `spin_transport_modules[0].materials[1].material.sigma_s_Spm` | FM transport benchmark |
+| `fm.P` | $P_{FM}$ | $1$ | `0.4` | finite in $[-1,1]$ | `spin_transport_modules[0].materials[1].material.polarization_p` | moderate polarization |
+| `fm.lambda_sf` | $\lambda_{sf,FM}$ | $\mathrm m$ | `5e-9` | finite, $>0$ | `spin_transport_modules[0].materials[1].material.lambda_sf_m` | longitudinal reaction coverage |
+| `fm.lambda_J` | $\lambda_{J,FM}$ | $\mathrm m$ | `1e-9` | finite, $>0$ | `spin_transport_modules[0].materials[1].material.lambda_j_m` | transverse exchange coverage |
+| `fm.lambda_phi` | $\lambda_{\phi,FM}$ | $\mathrm m$ | `1e-9` | finite, $>0$ | `spin_transport_modules[0].materials[1].material.lambda_phi_m` | dephasing coverage |
+| `interface.G_up` | $G_\uparrow$ | $\mathrm{S\,m^{-2}}$ | `2.5e14` | finite, $\ge0$ | `spin_transport_modules[0].interfaces[0].g_up_Spm2` | symmetric longitudinal branch |
+| `interface.G_down` | $G_\downarrow$ | $\mathrm{S\,m^{-2}}$ | `2.5e14` | finite, $\ge0$ | `spin_transport_modules[0].interfaces[0].g_down_Spm2` | symmetric longitudinal branch |
+| `interface.G_r` | $G_r$ | $\mathrm{S\,m^{-2}}$ | `5e14` | finite, $\ge0$ | `spin_transport_modules[0].interfaces[0].g_r_Spm2` | damping-like branch coverage |
+| `interface.G_i` | $G_i$ | $\mathrm{S\,m^{-2}}$ | `5e13` | finite, signed | `spin_transport_modules[0].interfaces[0].g_i_Spm2` | field-like branch coverage |
+| `interface.normal_surface` | $\Gamma_N$ | $1$ | `hm:z+`, orientation `+z` | required by `native_m1_v1`; object must match `normal_side`; orientation must equal $\mathbf n$ | `spin_transport_modules[0].interfaces[0].normal_surface` | explicit HM trace ownership |
+| `interface.ferromagnet_surface` | $\Gamma_F$ | $1$ | `fm:z-`, orientation `-z` | required by `native_m1_v1`; object must match `ferromagnet_side`; orientation must equal $-\mathbf n$ | `spin_transport_modules[0].interfaces[0].ferromagnet_surface` | explicit FM trace ownership |
+| `drive.J_minus_1_5` | $J_x^{(-1.5)}$ | $\mathrm{A\,m^{-2}}$ | `-1.5e12` | balanced signed terminals | `current_modules[0].boundaries[1].outward_current_density_Apm2` | symmetric sweep; paired x-minus override is explicit in `current_schedule` |
+| `drive.J_minus_1_0` | $J_x^{(-1.0)}$ | $\mathrm{A\,m^{-2}}$ | `-1.0e12` | balanced signed terminals | `current_modules[0].boundaries[1].outward_current_density_Apm2` | symmetric sweep |
+| `drive.J_minus_0_5` | $J_x^{(-0.5)}$ | $\mathrm{A\,m^{-2}}$ | `-0.5e12` | balanced signed terminals | `current_modules[0].boundaries[1].outward_current_density_Apm2` | symmetric sweep |
+| `drive.J_plus_0_5` | $J_x^{(+0.5)}$ | $\mathrm{A\,m^{-2}}$ | `0.5e12` | balanced signed terminals | `current_modules[0].boundaries[1].outward_current_density_Apm2` | symmetric sweep |
+| `drive.J_plus_1_0` | $J_x^{(+1.0)}$ | $\mathrm{A\,m^{-2}}$ | `1.0e12` | balanced signed terminals | `current_modules[0].boundaries[1].outward_current_density_Apm2` | symmetric sweep |
+| `drive.J_plus_1_5` | $J_x^{(+1.5)}$ | $\mathrm{A\,m^{-2}}$ | `1.5e12` | balanced signed terminals | `current_modules[0].boundaries[1].outward_current_density_Apm2` | symmetric sweep |
+
+#### 2.9.5 Kryteria kwalifikacji fixture
+
+Task 1 zamraża wyłącznie kontrakt. `she_1d_film_v1` musi później przejść
+analityczny profil, residual, zbieżność i odwrócenia znaków. Racetrack wymaga
+trzech siatek relaksacji, stabilnego podpisanego $Q$, dodatnich i ujemnych
+prądów, co najmniej trzech amplitud, bilansu charge/spin/torque, atomowego
+rollback/restart, CPU↔CUDA FP64 parity, zarządzanej tożsamości GPU oraz
+algorytmu `skyrmion_hall_angle_v1` z niepewnością i reason codes. Do czasu
+świeżego manifestu Task 12 exact tuple pozostaje niezakwalifikowany; obecność
+źródła, fixture, testu dokumentacji lub natywnego kernela nie promuje statusu.
 
 (discrete-realization)=
 ## 3. Numerical interpretation
@@ -696,7 +1046,7 @@ map is `coupled_charge_spin.rs::initial_state_guess`,
 `coupled_block_linear.rs::BlockLinePreconditioner`.
 
 (fdm-gpu-m1-fp64-contract)=
-### 3.1.1 FDM GPU/FP64 M1 realization contract (PR-15; bounded charge implementation)
+### 3.1.1 FDM GPU/FP64 M1 realization contract (PR-15; partial native implementation)
 
 This section freezes the first native CUDA milestone for one-way M1 charge,
 steady spin/direct-SHE, interface mixing, and transport torque. It is a
@@ -707,13 +1057,38 @@ share mutable solver state or implementation workspaces.
 
 Ogólny agregat pozostaje `semantic_only`, ponieważ poza bounded
 `CurrentTransport` charge-only nie ma jeszcze publicznej ścieżki dla tego ABI.
-Agregat FDM GPU M1 ma `implementation_state=partial`: zaimplementowany jest
-wyłącznie ograniczony charge-only FP64 slice, natomiast steady spin, direct
-SHE, mixing i torque z tego kontraktu nadal nie mają realizacji CUDA. Stan
+Agregat FDM GPU M1 ma `implementation_state=partial`: oprócz ograniczonego
+charge-only FP64 slice istnieje natywny solver steady spin/direct-SHE,
+mixing i torque oraz niekwalifikowane etapowe sprzężenie torque z FP64
+Heun/RK4. Implementacja Task 6 obejmuje także etapowe oceny RK23 i DP45,
+łącznie z końcowym solve dla zaakceptowanego `m` oraz transakcyjnym resetem
+trial, sparse cache, czasu etapów i monotonicznej tożsamości przy wewnętrznym
+adaptive retry. Task 6 obejmuje ponadto trzy transportowe oceny podczas
+warmupu ABM3, dwie oceny pełnego kroku predictor-corrector i zapis pochodnej
+dla skorygowanego zaakceptowanego końca zamiast pochodnej predyktora. Te
+integratory pozostają poza claimem do zamknięcia restartu FSAL/historii ABM i
+checkpointu. Wyłączny claim wiąże jeden
+kontekst LLG z jednym accepted charge
+snapshotem. Rozwiązania spinowe etapów są stanem trial; dopiero przyjęcie
+całego kroku LLG promuje trial policzony dla końcowego zaakceptowanego `m` do
+`spin_accepted`; wybór poziomu statystyk nie uruchamia dodatkowego solve i nie
+zmienia stanu naukowego. Awaria późnego etapu przywraca bitowo `m`, czas i
+liczniki accepted oraz usuwa trial i mutowalny sparse cache. `t_stage` jest
+sprawdzany pod kątem skończoności i niemalejącej kolejności, lecz ten ograniczony
+slice używa jednego niemutowalnego accepted charge snapshotu przez wszystkie
+kroki danego wiązania.
+Realizuje więc tylko stałe w czasie $J_c$; wymuszenie $J_c(t)$ z ogólnego
+kontraktu sekcji 2.6 pozostaje niewykonywalne i nie może być deklarowane jako
+obsługiwane. Stan
 walidacji pozostaje `validation_state=unvalidated`, z
-`validated_workloads=[]`. Świeży managed device proof poniżej jest dowodem
-wykonania testów kontraktowych, nie promocją capability ani kwalifikacją
-produkcyjną.
+`validated_workloads=[]`. Managed lifecycle gate po zmianach
+final-state/statistics/rollback i stream-local pin/drain przechodzi testy
+Heun/RK4 oraz wstępny kontrakt etapów i późnego rollbacku RK23/DP45, błędy
+launch/event-record/event-sync, teardown rejection podczas
+in-flight, C11/Rust ABI oraz dwa przebiegi `compute-sanitizer` bez błędów. Jest
+to dowód testów kontraktowych, a nie promocja capability ani kwalifikacja
+produkcyjna; globalna serializacja registry i pełna ścieżka publicznego
+ProblemIR/plannera/runnera pozostają otwarte.
 
 #### Stan ograniczonej implementacji M1 charge z 2026-08-11
 
@@ -826,8 +1201,8 @@ Zaimportowany iterate jest
 odtwarzany jako accepted snapshot, ale następny solve nie konsumuje jeszcze
 tego stanu jako persistent Krylov warm start. Nie ma publicznego runnera,
 ProblemIR stage ani stabilnych artefaktów/proweniencji tego slice'u. Nie ma też
-CUDA steady spin, SHE, mixing, torque, FP32, periodic, multi-device, konwergencji
-siatkowej ani kwalifikacji wydajnościowej. W historycznym runie wiersze
+publicznego dispatchu spin, FP32, periodic, multi-device, konwergencji siatkowej
+ani kwalifikacji wydajnościowej. W historycznym runie wiersze
 `component_gauge_v1`, `determinism_restart_v1`, `public_path_v1`, spin/SHE/mixing/torque,
 `convergence_v1` i `performance_v1` pozostają niezamknięte.
 
@@ -866,7 +1241,7 @@ Ten wynik zamyka managed proof bounded zero-mean realization, ale nie zmienia
 granic publicznej kwalifikacji: publiczny zero-mean gauge istnieje wyłącznie
 dla opisanego w sekcji 7.3 pełnopowierzchniowego profilu dwóch elektrod
 `NormalCurrentElectrode`. Nie ma persistent Krylov warm start w tym przepływie,
-CUDA steady spin/SHE/mixing/torque, compute-sanitizer, mesh convergence,
+publicznego dispatchu spin/SHE/mixing/torque, mesh convergence,
 cross-backend parity ani produkcyjnego statusu. Ogólna capability pozostaje
 `semantic_only`.
 
@@ -1460,7 +1835,11 @@ Capabilities are separately scoped:
 `transport.spin.inverse_she`, `transport.spin.mixing_conductance`, and
 one-way/bidirectional coupling. Planner resolves one engine, enforces solver
 symmetry, positivity, validity, stage cadence, strict residency, and records
-requested/resolved lane. `validated` is workload/lane/precision/BC scoped.
+requested/resolved lane. `ResolvedSpinTransportPlanIR` retains authored intent
+in `requested_execution` and publishes the complete typed resolved tuple as
+`resolved_discretization`, `resolved_device`, `resolved_precision`, and
+`resolved_execution_mode`; the bounded GPU M1 lane resolves exactly to
+FDM/GPU/double/strict. `validated` is workload/lane/precision/BC scoped.
 
 (implementation-mapping)=
 ### 4.4 Runtime, quantities, provenance, OpenAPI, and UI
@@ -1928,6 +2307,7 @@ a qualified workload without the validation gates above.
 | M2 reciprocal realization | backends/fem/cpu/mfem/transport/steady_transport.cpp | SteadyTransportOracle::solve_reciprocal | monolithic reciprocal FEM block solve | focused managed M2 runtime test |
 | M2 C ABI | native/include/fullmag_fem.h | fullmag_fem_solve_steady_transport_m2_v1 | stable request and result contract | native ABI contract |
 | Planner resolution | crates/fullmag-plan/src/spin_transport.rs | resolve_m1_fem_spin_transport | bounded M1/M2 descriptor and Schur checks | planner M2 test |
+| Resolved transport execution tuple | crates/fullmag-plan/src/spin_transport.rs | resolve_spin_transport_with_active_graph | complete typed requested/resolved discretization, device, precision, and execution-mode provenance | bounded FDM GPU M1 planner and serde round-trip test; unvalidated |
 | Descriptor materialization | crates/fullmag-runner/src/native_fem/steady_transport/descriptor.rs | materialize_native_fem_steady_transport_request | fail-closed descriptor-to-FFI mapping | runner materialization test |
 | Native dispatch | crates/fullmag-runner/src/native_fem/steady_transport.rs | solve_native_fem_steady_transport | explicit M1/M2 ABI selection and provenance | runner runtime test |
 | FDM reference | crates/fullmag-runner/src/fdm/cpu/spin_transport.rs | solve_coupled_module | CPU FDM coupled charge/spin realization | FDM reference/common-limit tests |
@@ -1945,6 +2325,12 @@ a qualified workload without the validation gates above.
 | Native FDM M1 validation helpers | backends/fdm/cpu/transport/spin_transport_validation_v1.cpp | evaluate_local_residual_gate | cell-local FV acceptance and independently testable direct-SHE contraction | native spin contract |
 | Native FDM M1 charge regression | backends/fdm/tests/cpu_charge_transport_contract.cpp | main | oriented traces, conservative current, reversed orientation, and finite-conductance validation | native charge contract |
 | Native FDM M1 spin regression | backends/fdm/tests/cpu_spin_transport_contract.cpp | main | independent mixing/reaction/torque algebra, local residual rejection, and six SHE contractions | native spin contract |
+| Native FDM GPU M1 spin solver | backends/fdm/gpu/cuda/transport/spin/device_solver.cu | solve_device | FP64 steady spin/direct-SHE, dynamic mixing and target-masked transport torque on the context-owned stream | managed GPU CPU-parity contract; partial and unvalidated |
+| Native FDM GPU M1 LLG binding ABI | native/include/fullmag_fdm.h | fullmag_fdm_context_bind_gpu_transport_v1 | append-only 144-byte binding record and public bind/unbind entry points | C11/C++/Rust layout and actual-device ownership contract |
+| Native FDM GPU M1 LLG binding | backends/fdm/gpu/cuda/transport/context.cu | context_bind_gpu_transport_rhs; context_begin_gpu_transport_step; context_commit_gpu_transport_step; context_rollback_gpu_transport_step | exclusive one-owner binding, stage trial state and accepted-step promotion/rollback | `just verify-fdm-gpu-m1-transport-llg-lifecycle-contract`; not production qualification |
+| Native FDM GPU M1 torque RHS | backends/fdm/gpu/cuda/integrators/transport_rhs_fp64.cu | launch_add_gpu_transport_torque_fp64 | add Gilbert-form transport torque exactly once and pin transport storage through kernel completion | managed Heun/RK4 stage contract and compute-sanitizer; RK23/DP45 Task 6 integration remains under qualification |
+| Native FDM GPU M1 adaptive RK stages | backends/fdm/gpu/cuda/integrators/llg_rk23_fp64.cu; backends/fdm/gpu/cuda/integrators/llg_dp45_fp64.cu | compute_rhs_into | evaluate solved transport for every current-attempt RK stage and for the accepted endpoint without cross-attempt FSAL reuse | stage, late-failure rollback and fresh-attempt adaptive-retry contract; restart gate still open |
+| Native FDM GPU M1 ABM3 stages | backends/fdm/gpu/cuda/integrators/llg_abm3_fp64.cu | launch_abm3_step_fp64 | evaluate solved transport in warmup and predictor-corrector stages, publish only the corrected-endpoint derivative into accepted ABM history, and preserve history on pre-commit failure | warmup, full-step and late-failure history contract; checkpoint/restart gate still open |
 | Rust M1 parity oracle | crates/fullmag-engine/examples/fdm_spin_oracle_v1.rs | main | nonzero mixing charge/spin fixture and public interface observations | managed Rust/native parity |
 | Native M1 parity comparator | backends/fdm/tests/cpu_spin_transport_parity.cpp | main | solved-field, reaction, torque, balance, and public interface-flux comparison | managed Rust/native parity |
 | Planner regression | crates/fullmag-plan/src/spin_transport.rs | resolves_bounded_fem_m2_to_reciprocal_descriptor_without_fallback | no-fallback M2 planning invariant | focused managed test |
@@ -1968,6 +2354,10 @@ a qualified workload without the validation gates above.
 | `fdm-gpu-public-zero-mean-fixture` and `fdm-gpu-public-zero-mean-verifier`: public pure-Neumann fixture and analytic oracle | examples/fdm_gpu_charge_zero_mean_public.py; scripts/verify_fdm_gpu_public_charge_zero_mean_output.py | build_study; main | define the balanced 2 x 1 x 1 current-density fixture and verify sign, gauge, balances, and provenance | managed pure-Neumann gate |
 | Public pure-Neumann managed recipe | justfile | verify-fdm-gpu-public-charge-zero-mean-runtime | compile through the container-backed runtime, execute the public fixture, and run the independent oracle | managed actual-device gate |
 | FDM GPU M1 contract and qualification boundary | docs/physics/0970-spin-hall-drift-diffusion-transport.md | DOC-ANCHOR:fdm-gpu-m1-fp64-contract | own the bounded charge realization and keep the broader M1 qualification gates explicit | partial implementation; unvalidated |
+| Frozen solved-current racetrack contract | docs/physics/0970-spin-hall-drift-diffusion-transport.md | DOC-ANCHOR:racetrack-m1-v1-contract | freeze the synthetic fixture, equations, signs, parameter provenance, and qualification boundary | planned contract only; not implemented or qualified |
+| Public racetrack Neel seed authoring | packages/fullmag-py/src/fullmag/init/textures.py | neel_skyrmion | serialize the exact public preset parameters, world mapping, and translation into current ProblemIR | public lowering and formula-sample contract test |
+| Python racetrack Neel seed evaluator | packages/fullmag-py/src/fullmag/init/preset_eval.py | _skyrmion | evaluate and normalize the repository-owned analytic skyrmion formula | centre, wall, far-field, direction, and norm contract samples |
+| Rust racetrack Neel seed evaluator | crates/fullmag-plan/src/magnetization_textures.rs | eval_skyrmion | evaluate the same analytic preset from typed ProblemIR | current typed fixture parser and formula source-map gate |
 | FDM GPU M1 append-only ABI | backends/fdm/include/fullmag/fdm/transport/gpu_abi_v1.h | fullmag_fdm_gpu_transport_solve_charge_v1 | declare typed/versioned charge payloads, opaque handles, artifact and checkpoint records | layout/C11/Rust contract gates |
 | FDM GPU M1 typed-view validation | backends/fdm/gpu/cuda/transport/context.cu | validate_host_view | reject malformed host records before static ownership transfer or publication | managed actual-device charge gates |
 | FDM GPU M1 charge operator | backends/fdm/gpu/cuda/transport/charge/device_solver.cu | solve_device | assemble conservative harmonic-FV charge and execute fixed-tree FP64 CG with linear-cost geometric `2 x 2 x 2` aggregation and exact device RAP | uniform/layered/scalability actual-device gates |

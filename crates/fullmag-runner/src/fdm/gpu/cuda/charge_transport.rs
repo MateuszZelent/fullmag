@@ -826,7 +826,7 @@ fn stable_source_id(source_id: &str) -> u64 {
     )
 }
 
-fn expand_resolved_boundaries(
+pub(crate) fn expand_resolved_boundaries(
     boundaries: &[fullmag_ir::ResolvedChargeBoundaryFaceIR],
     active_cells: &[bool],
     grid: [u64; 3],

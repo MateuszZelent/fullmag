@@ -241,6 +241,7 @@ When the user corrects your approach, append a one-line rule here before ending 
 - FDM GPU launcher resolution must honor `runtime_device_override` and route to the managed CUDA runtime when local FDM CUDA is unavailable; never report or execute a silent CPU fallback for a forced GPU request.
 - FEM scenario scripts that mirror a standard-problem study must use a flat module-level `study` configuration; only small dedicated geometry helpers may be defined when they improve readability.
 - Always write reports, plans, audits, implementation documents, and artifact summaries in Polish. Code comments, commit messages, and variable names remain in English.
+- Model scene entities with separate immutable `object_id`, user-facing `name`, presentation `type`, and explicitly authored physics modules; never infer or activate solver physics from an object name or type alone.
 
 ---
 

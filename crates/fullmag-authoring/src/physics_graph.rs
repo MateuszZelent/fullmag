@@ -244,6 +244,14 @@ pub fn normalize_physics_graph(scene: &SceneDocument) -> Result<PhysicsGraphIR, 
         match record {
             crate::SceneSpinTorque::Known(torque) => {
                 let id = torque.id().to_string();
+                let dependency_edge_kind = if matches!(
+                    torque,
+                    KnownSceneSpinTorque::DriftDiffusionSpinTorque { .. }
+                ) {
+                    "spin_transport_to_torque"
+                } else {
+                    "current_to_torque"
+                };
                 let (scope, source_id) = torque_scope_and_source(torque);
                 let solve_domain = scope_domain(&scope);
                 validate_domain(&solve_domain, &object_ids, scene, &source_path)?;
@@ -270,7 +278,7 @@ pub fn normalize_physics_graph(scene: &SceneDocument) -> Result<PhysicsGraphIR, 
                 )?;
                 if let Some(source_id) = source_id {
                     edges.push(PhysicsEdgeIR {
-                        kind: "current_to_torque".to_string(),
+                        kind: dependency_edge_kind.to_string(),
                         source_id,
                         target_id: id,
                         status: activation,
@@ -558,6 +566,9 @@ fn torque_presentation(torque: &KnownSceneSpinTorque) -> PhysicsModulePresentati
         KnownSceneSpinTorque::PrescribedSot { .. } => {
             presentation("prescribed_sot", "Prescribed SOT")
         }
+        KnownSceneSpinTorque::DriftDiffusionSpinTorque { .. } => {
+            presentation("drift_diffusion_spin_torque", "Drift-diffusion spin torque")
+        }
     }
 }
 
@@ -772,6 +783,9 @@ fn torque_scope_and_source(torque: &KnownSceneSpinTorque) -> (PhysicsScopeRef, O
                 source,
             )
         }
+        KnownSceneSpinTorque::DriftDiffusionSpinTorque {
+            target, solve_id, ..
+        } => (region_scope(target), Some(solve_id.clone())),
     }
 }
 

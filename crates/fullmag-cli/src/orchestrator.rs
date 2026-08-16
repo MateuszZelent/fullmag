@@ -6,6 +6,7 @@ use fullmag_ir::{
     RelaxationAlgorithmIR, StudyIR,
 };
 use std::ffi::OsString;
+use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{mpsc, Arc, Mutex};
@@ -42,6 +43,22 @@ const DEFERRED_MESH_COMPLETION_DETAIL: &str =
 
 fn preparation_unix_time_millis() -> Result<u64> {
     u64::try_from(unix_time_millis()?).context("preparation timestamp exceeds u64")
+}
+
+fn continuation_source_for_backend_plan(plan: &BackendPlanIR) -> ContinuationSource {
+    match plan {
+        BackendPlanIR::Fem(fem_plan) => ContinuationSource::Fem(fem_plan.mesh.clone()),
+        BackendPlanIR::Fdm(fdm_plan) => ContinuationSource::FdmGrid(FdmContinuationGrid {
+            cells: fdm_plan.grid.cells,
+            origin_m: fdm_plan.origin_m,
+            cell_size_m: fdm_plan.cell_size,
+            active_mask: fdm_plan.active_mask.clone(),
+        }),
+        BackendPlanIR::FdmMultilayer(_) => ContinuationSource::Fdm,
+        BackendPlanIR::FemEigen(_) | BackendPlanIR::FemFrequencyResponse(_) => {
+            ContinuationSource::Fdm
+        }
+    }
 }
 
 fn new_simulation_preparation(
@@ -6414,6 +6431,46 @@ fn execute_synthetic_stage(
                 ),
             })
         }
+        ResolvedScriptStageAction::SetTransportCurrent {
+            module_id,
+            terminal_outward_current_density_apm2,
+        } => {
+            let vectors =
+                current_stage_magnetization_vectors(continuation_magnetization, backend_plan);
+            write_synthetic_stage_record(
+                current_stage_artifact_dir,
+                serde_json::json!({
+                    "kind": "set_transport_current",
+                    "module_id": module_id,
+                    "terminal_outward_current_density_Apm2": terminal_outward_current_density_apm2,
+                    "vector_count": vectors.len(),
+                }),
+            )?;
+            Ok(SyntheticStageOutcome {
+                magnetization: vectors,
+                message: format!("Set solved-current drive for transport module {module_id}"),
+            })
+        }
+        ResolvedScriptStageAction::SetSpinTorqueEnabled { module_id, enabled } => {
+            let vectors =
+                current_stage_magnetization_vectors(continuation_magnetization, backend_plan);
+            write_synthetic_stage_record(
+                current_stage_artifact_dir,
+                serde_json::json!({
+                    "kind": "set_spin_torque_enabled",
+                    "module_id": module_id,
+                    "enabled": enabled,
+                    "vector_count": vectors.len(),
+                }),
+            )?;
+            Ok(SyntheticStageOutcome {
+                magnetization: vectors,
+                message: format!(
+                    "Spin torque module {module_id} {}",
+                    if *enabled { "enabled" } else { "disabled" }
+                ),
+            })
+        }
     }
 }
 
@@ -7209,6 +7266,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
     let mut time_offset = 0.0f64;
     let mut continuation_magnetization: Option<Vec<[f64; 3]>> = None;
     let mut continuation_source: Option<ContinuationSource> = None;
+    let mut saved_state_sources: HashMap<String, ContinuationSource> = HashMap::new();
     let mut continuation_completion: Option<fullmag_ir::StageCompletionIR> = None;
     let mut start_solver_command_id: Option<String> = None;
     let mut paused_stage: Option<PausedInteractiveStage> = None;
@@ -8387,6 +8445,23 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                 }
             };
 
+            match &action {
+                ResolvedScriptStageAction::SaveState { artifact_name, .. } => {
+                    saved_state_sources.insert(
+                        artifact_name.clone(),
+                        continuation_source_for_backend_plan(&execution_plan.backend_plan),
+                    );
+                }
+                ResolvedScriptStageAction::LoadState {
+                    artifact_name: Some(artifact_name),
+                    state_path: None,
+                    ..
+                } => {
+                    continuation_source = saved_state_sources.get(artifact_name).cloned();
+                }
+                _ => {}
+            }
+
             let synthetic_stats = aggregated_steps.last().cloned().unwrap_or_default();
             let final_update = snapshot_step_update_from_stats(
                 &execution_plan.backend_plan,
@@ -8453,7 +8528,16 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
 
             continuation_magnetization = Some(synthetic_outcome.magnetization);
             if matches!(action, ResolvedScriptStageAction::LoadState { .. }) {
-                continuation_source = None;
+                if !matches!(
+                    action,
+                    ResolvedScriptStageAction::LoadState {
+                        artifact_name: Some(_),
+                        state_path: None,
+                        ..
+                    }
+                ) {
+                    continuation_source = None;
+                }
                 continuation_completion = None;
             }
             live_workspace.push_log("success", synthetic_outcome.message);
@@ -8852,10 +8936,9 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
         aggregated_steps.extend(offset_steps);
         continuation_magnetization = Some(stage_result.final_magnetization.clone());
         continuation_completion = stage_result.completion.clone();
-        continuation_source = Some(match &execution_plan.backend_plan {
-            BackendPlanIR::Fem(fem_plan) => ContinuationSource::Fem(fem_plan.mesh.clone()),
-            _ => ContinuationSource::Fdm,
-        });
+        continuation_source = Some(continuation_source_for_backend_plan(
+            &execution_plan.backend_plan,
+        ));
 
         // If the stage was cancelled (user clicked Stop) or paused, skip
         // remaining scripted stages so that the interactive command loop can
@@ -10062,10 +10145,9 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                 aggregated_steps.extend(offset_steps);
                 continuation_magnetization = Some(stage_result.final_magnetization.clone());
                 continuation_completion = stage_result.completion.clone();
-                continuation_source = Some(match &execution_plan.backend_plan {
-                    BackendPlanIR::Fem(fem_plan) => ContinuationSource::Fem(fem_plan.mesh.clone()),
-                    _ => ContinuationSource::Fdm,
-                });
+                continuation_source = Some(continuation_source_for_backend_plan(
+                    &execution_plan.backend_plan,
+                ));
                 interactive_stage_index += 1;
 
                 let paused_at_unix_ms = unix_time_millis()?;
@@ -10170,10 +10252,9 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                 aggregated_steps.extend(offset_steps);
                 continuation_magnetization = Some(stage_result.final_magnetization.clone());
                 continuation_completion = stage_result.completion.clone();
-                continuation_source = Some(match &execution_plan.backend_plan {
-                    BackendPlanIR::Fem(fem_plan) => ContinuationSource::Fem(fem_plan.mesh.clone()),
-                    _ => ContinuationSource::Fdm,
-                });
+                continuation_source = Some(continuation_source_for_backend_plan(
+                    &execution_plan.backend_plan,
+                ));
                 interactive_stage_index += 1;
 
                 let cancelled_at_unix_ms = unix_time_millis()?;
@@ -10456,10 +10537,9 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
             aggregated_steps.extend(offset_steps);
             continuation_completion = stage_result.completion.clone();
             continuation_magnetization = Some(stage_result.final_magnetization);
-            continuation_source = Some(match &execution_plan.backend_plan {
-                BackendPlanIR::Fem(fem_plan) => ContinuationSource::Fem(fem_plan.mesh.clone()),
-                _ => ContinuationSource::Fdm,
-            });
+            continuation_source = Some(continuation_source_for_backend_plan(
+                &execution_plan.backend_plan,
+            ));
             interactive_stage_index += 1;
 
             let ready_at_unix_ms = unix_time_millis()?;
@@ -13615,6 +13695,7 @@ mod tests {
             oersted_radius: None,
             oersted_center: None,
             oersted_axis: None,
+            static_external_field_xyz: None,
             oersted_field_xyz: None,
             oersted_time_dep_kind: 0,
             oersted_time_dep_freq: 0.0,
@@ -13728,6 +13809,7 @@ mod tests {
             oersted_radius: None,
             oersted_center: None,
             oersted_axis: None,
+            static_external_field_xyz: None,
             oersted_field_xyz: None,
             oersted_time_dep_kind: 0,
             oersted_time_dep_freq: 0.0,
@@ -13868,6 +13950,7 @@ mod tests {
             oersted_radius: None,
             oersted_center: None,
             oersted_axis: None,
+            static_external_field_xyz: None,
             oersted_field_xyz: None,
             oersted_time_dep_kind: 0,
             oersted_time_dep_freq: 0.0,

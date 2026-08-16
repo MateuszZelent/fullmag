@@ -988,7 +988,9 @@ fn classify_action_stage_transition(action: &ResolvedScriptStageAction) -> Stage
         | ResolvedScriptStageAction::RemoveFieldDrive { .. }
         | ResolvedScriptStageAction::TableAutosave { .. }
         | ResolvedScriptStageAction::Autosave { .. }
-        | ResolvedScriptStageAction::FftResponse { .. } => {
+        | ResolvedScriptStageAction::FftResponse { .. }
+        | ResolvedScriptStageAction::SetTransportCurrent { .. }
+        | ResolvedScriptStageAction::SetSpinTorqueEnabled { .. } => {
             StageTransitionMetadata::continue_in_place()
         }
     }
@@ -1190,6 +1192,38 @@ fn resolve_explicit_stage_action(
                 ResolvedScriptStageAction::FftResponse { enabled, request },
             )
         }
+        ScriptExecutionStageAction::SetTransportCurrent {
+            module_id,
+            terminal_outward_current_density_apm2,
+        } => {
+            let payload = BTreeMap::from([
+                ("module_id".to_string(), Value::String(module_id.clone())),
+                (
+                    "terminal_outward_current_density_Apm2".to_string(),
+                    serde_json::to_value(&terminal_outward_current_density_apm2)
+                        .context("failed to encode set_transport_current payload")?,
+                ),
+            ]);
+            apply_pipeline_set_transport_current(&mut ir, &payload)?;
+            (
+                "study_pipeline_set_transport_current",
+                ResolvedScriptStageAction::SetTransportCurrent {
+                    module_id,
+                    terminal_outward_current_density_apm2,
+                },
+            )
+        }
+        ScriptExecutionStageAction::SetSpinTorqueEnabled { module_id, enabled } => {
+            let payload = BTreeMap::from([
+                ("module_id".to_string(), Value::String(module_id.clone())),
+                ("enabled".to_string(), Value::Bool(enabled)),
+            ]);
+            apply_pipeline_set_spin_torque_enabled(&mut ir, &payload)?;
+            (
+                "study_pipeline_set_spin_torque_enabled",
+                ResolvedScriptStageAction::SetSpinTorqueEnabled { module_id, enabled },
+            )
+        }
     };
     let entrypoint = if entrypoint_kind.trim().is_empty() {
         entrypoint_fallback.to_string()
@@ -1329,6 +1363,14 @@ fn materialize_pipeline_primitive(
         }
         "set_current" => {
             apply_pipeline_set_current(current_ir, payload)?;
+            Ok(None)
+        }
+        "set_transport_current" => {
+            apply_pipeline_set_transport_current(current_ir, payload)?;
+            Ok(None)
+        }
+        "set_spin_torque_enabled" => {
+            apply_pipeline_set_spin_torque_enabled(current_ir, payload)?;
             Ok(None)
         }
         "save_state" => materialize_pipeline_save_state(current_ir, payload).map(Some),
@@ -3315,6 +3357,407 @@ fn apply_pipeline_set_current(
     Ok(())
 }
 
+fn apply_pipeline_set_transport_current(
+    problem: &mut ProblemIR,
+    payload: &BTreeMap<String, Value>,
+) -> Result<()> {
+    let module_id = payload_string(payload, "module_id")
+        .filter(|value| !value.trim().is_empty())
+        .context("study pipeline set_transport_current requires payload.module_id")?;
+    let raw_values = payload
+        .get("terminal_outward_current_density_Apm2")
+        .and_then(Value::as_object)
+        .context(
+            "study pipeline set_transport_current requires payload.terminal_outward_current_density_Apm2 object",
+        )?;
+    if raw_values.is_empty() {
+        bail!("study pipeline set_transport_current terminal map must not be empty");
+    }
+    let mut values = BTreeMap::new();
+    for (boundary_id, raw_value) in raw_values {
+        if boundary_id.trim().is_empty() {
+            bail!("study pipeline set_transport_current boundary ids must be non-empty");
+        }
+        let value = match raw_value {
+            Value::Number(number) => number.as_f64(),
+            Value::String(text) => text.trim().parse::<f64>().ok(),
+            _ => None,
+        }
+        .with_context(|| {
+            format!(
+                "study pipeline set_transport_current boundary '{}' must carry a finite A/m^2 value",
+                boundary_id
+            )
+        })?;
+        if !value.is_finite() {
+            bail!(
+                "study pipeline set_transport_current boundary '{}' must carry a finite A/m^2 value",
+                boundary_id
+            );
+        }
+        values.insert(boundary_id.as_str(), value);
+    }
+
+    let matching: Vec<_> = problem
+        .current_modules
+        .iter()
+        .enumerate()
+        .filter_map(|(index, module)| match module {
+            fullmag_ir::CurrentModuleIR::CurrentTransport { name, .. } if name == &module_id => {
+                Some(index)
+            }
+            _ => None,
+        })
+        .collect();
+    let [module_index] = matching.as_slice() else {
+        bail!(
+            "study pipeline set_transport_current module_id '{}' must identify exactly one CurrentTransport",
+            module_id
+        );
+    };
+    let fullmag_ir::CurrentModuleIR::CurrentTransport { definition, .. } =
+        &mut problem.current_modules[*module_index]
+    else {
+        unreachable!("matching index must identify CurrentTransport");
+    };
+    let definition = definition
+        .as_mut()
+        .context("study pipeline set_transport_current requires a complete transport definition")?;
+    let electrode_ids: std::collections::BTreeSet<_> = definition
+        .boundaries
+        .iter()
+        .filter_map(|boundary| match boundary {
+            fullmag_ir::ChargeBoundaryIR::NormalCurrentElectrode { id, .. } => Some(id.as_str()),
+            _ => None,
+        })
+        .collect();
+    let supplied_ids: std::collections::BTreeSet<_> = values.keys().copied().collect();
+    if supplied_ids != electrode_ids {
+        let missing: Vec<_> = electrode_ids.difference(&supplied_ids).copied().collect();
+        let unexpected: Vec<_> = supplied_ids.difference(&electrode_ids).copied().collect();
+        bail!(
+            "study pipeline set_transport_current must cover exactly the normal-current electrodes; missing={:?}, unexpected={:?}",
+            missing,
+            unexpected
+        );
+    }
+    for boundary in &mut definition.boundaries {
+        if let fullmag_ir::ChargeBoundaryIR::NormalCurrentElectrode {
+            id,
+            outward_current_density_apm2,
+            ..
+        } = boundary
+        {
+            *outward_current_density_apm2 = values[id.as_str()];
+        }
+    }
+    Ok(())
+}
+
+fn apply_pipeline_set_spin_torque_enabled(
+    problem: &mut ProblemIR,
+    payload: &BTreeMap<String, Value>,
+) -> Result<()> {
+    let module_id = payload_string(payload, "module_id")
+        .filter(|value| !value.trim().is_empty())
+        .context("study pipeline set_spin_torque_enabled requires payload.module_id")?;
+    let enabled = payload
+        .get("enabled")
+        .and_then(Value::as_bool)
+        .context("study pipeline set_spin_torque_enabled requires boolean payload.enabled")?;
+
+    let typed_matches = problem
+        .spin_torque_modules
+        .iter()
+        .filter(|module| match module {
+            fullmag_ir::SpinTorqueModuleIR::Slonczewski { id, .. }
+            | fullmag_ir::SpinTorqueModuleIR::ZhangLi { id, .. } => {
+                id.as_deref() == Some(module_id.as_str())
+            }
+            fullmag_ir::SpinTorqueModuleIR::DriftDiffusionSpinTorque { id, .. }
+            | fullmag_ir::SpinTorqueModuleIR::PrescribedSot { id, .. } => id == &module_id,
+            fullmag_ir::SpinTorqueModuleIR::InterfaceCpp { .. }
+            | fullmag_ir::SpinTorqueModuleIR::DriftDiffusion { .. }
+            | fullmag_ir::SpinTorqueModuleIR::SpinOrbitTorque { .. } => false,
+        })
+        .count();
+    if typed_matches != 1 {
+        bail!(
+            "study pipeline set_spin_torque_enabled module_id '{}' must identify exactly one typed spin torque module",
+            module_id
+        );
+    }
+
+    let graph = problem
+        .physics_graph
+        .as_mut()
+        .and_then(Value::as_object_mut)
+        .context("study pipeline set_spin_torque_enabled requires physics_graph.v1")?;
+    if graph.get("schema_version").and_then(Value::as_str) != Some("physics_graph.v1") {
+        bail!("study pipeline set_spin_torque_enabled requires physics_graph.v1");
+    }
+    let modules = graph
+        .get_mut("modules")
+        .and_then(Value::as_array_mut)
+        .context("physics_graph.v1 modules must be an array")?;
+    let matching_graph_indices: Vec<_> = modules
+        .iter()
+        .enumerate()
+        .filter_map(|(index, module)| {
+            (module.get("id").and_then(Value::as_str) == Some(module_id.as_str())
+                && module.get("kind").and_then(Value::as_str) == Some("spin_torque"))
+            .then_some(index)
+        })
+        .collect();
+    let [module_index] = matching_graph_indices.as_slice() else {
+        bail!(
+            "study pipeline set_spin_torque_enabled module_id '{}' must identify exactly one physics_graph spin_torque module",
+            module_id
+        );
+    };
+    let activation = if enabled { "active" } else { "inactive" };
+    modules[*module_index]
+        .as_object_mut()
+        .expect("matching graph module must be an object")
+        .insert(
+            "activation".to_string(),
+            Value::String(activation.to_string()),
+        );
+
+    let edges = graph
+        .get_mut("edges")
+        .and_then(Value::as_array_mut)
+        .context("physics_graph.v1 edges must be an array")?;
+    for edge in edges {
+        if edge.get("target_id").and_then(Value::as_str) == Some(module_id.as_str()) {
+            edge.as_object_mut()
+                .expect("physics graph edge must be an object")
+                .insert("status".to_string(), Value::String(activation.to_string()));
+        }
+    }
+    propagate_disabled_transport_pipeline(graph, &module_id)?;
+    Ok(())
+}
+
+fn graph_module_is_active(module: &Value) -> bool {
+    matches!(
+        module.get("activation").and_then(Value::as_str),
+        Some("active" | "configured")
+    )
+}
+
+fn set_graph_module_activation(module: &mut Value, active: bool) {
+    module
+        .as_object_mut()
+        .expect("physics graph module must be an object")
+        .insert(
+            "activation".to_string(),
+            Value::String(if active { "active" } else { "inactive" }.to_string()),
+        );
+}
+
+/// Propagate a stage-local torque action through its solved transport pipeline.
+///
+/// The typed torque node is the user-facing switch, but an inactive transport
+/// consumer must not leave its upstream charge/spin solver executable during a
+/// preparation stage.  Conversely, enabling the torque reactivates the same
+/// source and transport nodes before the following run.  The graph remains
+/// present for provenance in both cases.
+fn propagate_disabled_transport_pipeline(
+    graph: &mut serde_json::Map<String, Value>,
+    changed_torque_id: &str,
+) -> Result<()> {
+    let modules = graph
+        .get("modules")
+        .and_then(Value::as_array)
+        .context("physics_graph.v1 modules must be an array")?;
+    let snapshot = modules
+        .iter()
+        .map(|module| {
+            (
+                module
+                    .get("id")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_string(),
+                module
+                    .get("kind")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_string(),
+                module
+                    .get("depends_on")
+                    .and_then(Value::as_array)
+                    .map(|dependencies| {
+                        dependencies
+                            .iter()
+                            .filter_map(Value::as_str)
+                            .map(str::to_string)
+                            .collect::<Vec<_>>()
+                    })
+                    .unwrap_or_default(),
+                graph_module_is_active(module),
+            )
+        })
+        .collect::<Vec<_>>();
+    let changed = snapshot
+        .iter()
+        .find(|(id, kind, _, _)| id == changed_torque_id && kind == "spin_torque");
+    let Some((_, _, changed_dependencies, _)) = changed else {
+        return Ok(());
+    };
+    let affected_transport_ids = changed_dependencies
+        .iter()
+        .filter(|dependency| {
+            snapshot
+                .iter()
+                .any(|(id, kind, _, _)| id == *dependency && kind == "spin_transport")
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    if affected_transport_ids.is_empty() {
+        return Ok(());
+    }
+
+    let mut desired_transport = BTreeMap::new();
+    let mut affected_sources = BTreeMap::<String, Vec<String>>::new();
+    for transport_id in &affected_transport_ids {
+        let consumers = snapshot
+            .iter()
+            .filter(|(_, kind, dependencies, _)| {
+                kind == "spin_torque" && dependencies.iter().any(|id| id == transport_id)
+            })
+            .collect::<Vec<_>>();
+        if consumers.is_empty() {
+            continue;
+        }
+        desired_transport.insert(
+            transport_id.clone(),
+            consumers.iter().any(|(_, _, _, active)| *active),
+        );
+        if let Some((_, _, dependencies, _)) = snapshot
+            .iter()
+            .find(|(id, kind, _, _)| id == transport_id && kind == "spin_transport")
+        {
+            for source_id in dependencies {
+                if snapshot
+                    .iter()
+                    .any(|(id, kind, _, _)| id == source_id && kind == "current_transport")
+                {
+                    affected_sources
+                        .entry(source_id.clone())
+                        .or_default()
+                        .push(transport_id.clone());
+                }
+            }
+        }
+    }
+
+    let mut desired_source = BTreeMap::new();
+    for (source_id, transports) in &affected_sources {
+        let active_dependent = snapshot.iter().any(|(id, kind, dependencies, active)| {
+            id != source_id
+                && dependencies.iter().any(|dependency| dependency == source_id)
+                && if kind == "spin_transport" {
+                    transports
+                        .iter()
+                        .find_map(|transport_id| {
+                            (id == transport_id).then(|| desired_transport[transport_id])
+                        })
+                        .unwrap_or(*active)
+                } else {
+                    *active
+                }
+        });
+        desired_source.insert(source_id.clone(), active_dependent);
+    }
+
+    let modules = graph
+        .get_mut("modules")
+        .and_then(Value::as_array_mut)
+        .context("physics_graph.v1 modules must be an array")?;
+    for module in modules.iter_mut() {
+        let id = module.get("id").and_then(Value::as_str).unwrap_or_default();
+        let kind = module.get("kind").and_then(Value::as_str).unwrap_or_default();
+        if let Some(active) = desired_source.get(id) {
+            set_graph_module_activation(module, *active);
+            continue;
+        }
+        if kind == "spin_transport" {
+            if let Some(active) = desired_transport.get(id) {
+                let source_active = module
+                    .get("depends_on")
+                    .and_then(Value::as_array)
+                    .and_then(|dependencies| dependencies.first())
+                    .and_then(Value::as_str)
+                    .and_then(|source_id| desired_source.get(source_id))
+                    .copied()
+                    .unwrap_or(true);
+                set_graph_module_activation(module, *active && source_active);
+            }
+        }
+    }
+
+    let module_status = modules
+        .iter()
+        .filter_map(|module| {
+            Some((
+                module.get("id")?.as_str()?.to_string(),
+                graph_module_is_active(module),
+            ))
+        })
+        .collect::<BTreeMap<_, _>>();
+    for module in modules.iter_mut() {
+        let kind = module.get("kind").and_then(Value::as_str).unwrap_or_default();
+        if !matches!(kind, "spin_interface" | "spin_torque" | "oersted_field") {
+            continue;
+        }
+        let dependencies = module
+            .get("depends_on")
+            .and_then(Value::as_array)
+            .map(|values| values.iter().filter_map(Value::as_str).collect::<Vec<_>>())
+            .unwrap_or_default();
+        if dependencies
+            .iter()
+            .any(|dependency| module_status.get(*dependency) == Some(&false))
+        {
+            set_graph_module_activation(module, false);
+        } else if matches!(kind, "spin_interface" | "oersted_field") {
+            set_graph_module_activation(module, true);
+        }
+    }
+
+    let module_status = modules
+        .iter()
+        .filter_map(|module| {
+            Some((
+                module.get("id")?.as_str()?.to_string(),
+                module
+                    .get("activation")
+                    .and_then(Value::as_str)
+                    .unwrap_or("inactive")
+                    .to_string(),
+            ))
+        })
+        .collect::<BTreeMap<_, _>>();
+    let edges = graph
+        .get_mut("edges")
+        .and_then(Value::as_array_mut)
+        .context("physics_graph.v1 edges must be an array")?;
+    for edge in edges {
+        let Some(target_id) = edge.get("target_id").and_then(Value::as_str) else {
+            continue;
+        };
+        let Some(status) = module_status.get(target_id) else {
+            continue;
+        };
+        edge.as_object_mut()
+            .expect("physics graph edge must be an object")
+            .insert("status".to_string(), Value::String(status.clone()));
+    }
+    Ok(())
+}
+
 fn apply_pipeline_external_field(problem: &mut ProblemIR, field_t: [f64; 3]) {
     for term in &mut problem.energy_terms {
         if let fullmag_ir::EnergyTermIR::Zeeman { b } = term {
@@ -3584,9 +4027,21 @@ fn planned_fem_mesh_node_count(problem: &ProblemIR) -> Result<Option<usize>> {
 pub(crate) enum ContinuationSource {
     /// Magnetization came from an FDM stage — cell-centered on a regular grid.
     Fdm,
+    /// Magnetization came from a single-grid FDM stage and carries the exact
+    /// source grid needed for a same-backend continuation onto a compatible
+    /// union grid (for example FM-only relaxation -> FM+HM transport).
+    FdmGrid(FdmContinuationGrid),
     /// Magnetization came from a FEM stage — node-based on a tet mesh.
     /// Carries the mesh IR needed for resampling to a different backend.
     Fem(fullmag_ir::MeshIR),
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct FdmContinuationGrid {
+    pub cells: [u32; 3],
+    pub origin_m: [f64; 3],
+    pub cell_size_m: [f64; 3],
+    pub active_mask: Option<Vec<bool>>,
 }
 
 /// Result of cross-backend resampling with transfer statistics.
@@ -3612,17 +4067,23 @@ pub(crate) fn resample_continuation_if_cross_backend(
     source: &ContinuationSource,
     next_stage_ir: &ProblemIR,
 ) -> Result<Option<CrossBackendTransferResult>> {
+    let source_grid = match source {
+        ContinuationSource::Fem(_) => None,
+        ContinuationSource::Fdm => return Ok(None), // legacy same-backend marker
+        ContinuationSource::FdmGrid(grid) => Some(grid),
+    };
+
     let fem_mesh_ir = match source {
-        ContinuationSource::Fem(mesh_ir) => mesh_ir,
-        ContinuationSource::Fdm => return Ok(None), // same-backend, no resampling
+        ContinuationSource::Fem(mesh_ir) => Some(mesh_ir),
+        ContinuationSource::Fdm | ContinuationSource::FdmGrid(_) => None,
     };
 
     // Pre-plan the next stage to discover if it's FDM and get grid parameters.
     let next_plan = fullmag_plan::plan(next_stage_ir)
         .map_err(|e| anyhow::anyhow!("pre-plan for cross-backend transfer failed: {}", e))?;
 
-    match &next_plan.backend_plan {
-        BackendPlanIR::Fem(fem) => {
+    match (&next_plan.backend_plan, source_grid, fem_mesh_ir) {
+        (BackendPlanIR::Fem(fem), None, Some(fem_mesh_ir)) => {
             if fem_mesh_ir.nodes.len() != continuation_m.len() {
                 bail!(
                     "FEM → FEM continuation has {} vectors, but source FEM mesh has {} nodes",
@@ -3657,7 +4118,7 @@ pub(crate) fn resample_continuation_if_cross_backend(
                 unit_label: "nodes",
             }))
         }
-        BackendPlanIR::Fdm(fdm_plan) => {
+        (BackendPlanIR::Fdm(fdm_plan), None, Some(fem_mesh_ir)) => {
             // Extract FDM grid parameters.
             let grid_cells = fdm_plan.grid.cells;
             let cell_size = fdm_plan.cell_size;
@@ -3702,12 +4163,151 @@ pub(crate) fn resample_continuation_if_cross_backend(
                 unit_label: "cells",
             }))
         }
-        BackendPlanIR::FdmMultilayer(_) => {
+        (BackendPlanIR::Fdm(fdm_plan), Some(source_grid), None) => {
+            let target_grid = FdmContinuationGrid {
+                cells: fdm_plan.grid.cells,
+                origin_m: fdm_plan.origin_m,
+                cell_size_m: fdm_plan.cell_size,
+                active_mask: fdm_plan.active_mask.clone(),
+            };
+            if source_grid == &target_grid {
+                return Ok(None);
+            }
+            let transfer = transfer_fdm_field_to_grid(continuation_m, source_grid, &target_grid)?;
+            Ok(Some(transfer))
+        }
+        (BackendPlanIR::FdmMultilayer(_), _, _) => {
             // Multi-layer FDM continuation from FEM is not yet supported.
             bail!("FEM → FDM-multilayer cross-backend continuation is not yet supported");
         }
         _ => Ok(None),
     }
+}
+
+fn transfer_fdm_field_to_grid(
+    continuation_m: &[[f64; 3]],
+    source: &FdmContinuationGrid,
+    target: &FdmContinuationGrid,
+) -> Result<CrossBackendTransferResult> {
+    let source_count = source
+        .cells
+        .iter()
+        .try_fold(1usize, |count, cells| count.checked_mul(*cells as usize))
+        .ok_or_else(|| anyhow::anyhow!("source FDM grid cell count overflows usize"))?;
+    if continuation_m.len() != source_count {
+        bail!(
+            "FDM continuation has {} vectors, but source grid requires {}",
+            continuation_m.len(),
+            source_count
+        );
+    }
+    if source
+        .active_mask
+        .as_ref()
+        .is_some_and(|mask| mask.len() != source_count)
+    {
+        bail!("source FDM continuation active mask length does not match its grid");
+    }
+    let target_count = target
+        .cells
+        .iter()
+        .try_fold(1usize, |count, cells| count.checked_mul(*cells as usize))
+        .ok_or_else(|| anyhow::anyhow!("target FDM grid cell count overflows usize"))?;
+    if target
+        .active_mask
+        .as_ref()
+        .is_some_and(|mask| mask.len() != target_count)
+    {
+        bail!("target FDM continuation active mask length does not match its grid");
+    }
+    for (axis, cell) in source.cell_size_m.iter().enumerate() {
+        if !cell.is_finite() || *cell <= 0.0 {
+            bail!("source FDM continuation cell size axis {axis} is not finite and positive");
+        }
+    }
+    for (axis, cell) in target.cell_size_m.iter().enumerate() {
+        if !cell.is_finite() || *cell <= 0.0 {
+            bail!("target FDM continuation cell size axis {axis} is not finite and positive");
+        }
+    }
+
+    let mut values = vec![[0.0; 3]; target_count];
+    let mut n_located = 0usize;
+    let mut n_outside = 0usize;
+    for z in 0..target.cells[2] as usize {
+        for y in 0..target.cells[1] as usize {
+            for x in 0..target.cells[0] as usize {
+                let target_index = x
+                    + target.cells[0] as usize
+                        * (y + target.cells[1] as usize * z);
+                if target
+                    .active_mask
+                    .as_ref()
+                    .is_some_and(|mask| !mask[target_index])
+                {
+                    n_outside += 1;
+                    continue;
+                }
+
+                let target_center = [
+                    target.origin_m[0] + (x as f64 + 0.5) * target.cell_size_m[0],
+                    target.origin_m[1] + (y as f64 + 0.5) * target.cell_size_m[1],
+                    target.origin_m[2] + (z as f64 + 0.5) * target.cell_size_m[2],
+                ];
+                let mut source_index = [0usize; 3];
+                let mut outside = false;
+                for axis in 0..3 {
+                    let coordinate =
+                        (target_center[axis] - source.origin_m[axis]) / source.cell_size_m[axis]
+                            - 0.5;
+                    let nearest = coordinate.round();
+                    if nearest < 0.0 || nearest >= source.cells[axis] as f64 {
+                        outside = true;
+                        break;
+                    }
+                    source_index[axis] = nearest as usize;
+                }
+                if outside {
+                    n_outside += 1;
+                    continue;
+                }
+                let source_flat = source_index[0]
+                    + source.cells[0] as usize
+                        * (source_index[1] + source.cells[1] as usize * source_index[2]);
+                if source
+                    .active_mask
+                    .as_ref()
+                    .is_some_and(|mask| !mask[source_flat])
+                {
+                    n_outside += 1;
+                    continue;
+                }
+                values[target_index] = continuation_m[source_flat];
+                n_located += 1;
+            }
+        }
+    }
+    let target_active_count = target
+        .active_mask
+        .as_ref()
+        .map_or(target_count, |mask| mask.iter().filter(|active| **active).count());
+    if n_located != target_active_count {
+        bail!(
+            "FDM continuation cannot map {} active target cells from the source grid (located {}, outside {})",
+            target_active_count,
+            n_located,
+            n_outside
+        );
+    }
+    normalize_unit_vectors(&mut values, 1e-12);
+    Ok(CrossBackendTransferResult {
+        values,
+        n_located,
+        n_outside,
+        n_total: target_count,
+        label: "FDM→FDM",
+        unit_label: "cells",
+    })
 }
 
 /// Estimate available system RAM in bytes.
@@ -5930,6 +6530,147 @@ mod tests {
     }
 
     #[test]
+    fn materialize_script_stages_supports_explicit_solved_current_action() {
+        let mut ir = sample_problem_ir();
+        ir.current_modules = serde_json::from_value(json!([{
+            "kind": "current_transport",
+            "name": "charge",
+            "model": "ohmic_poisson",
+            "coupling": "one_way",
+            "domain": [{"object_id": "track", "region_id": "track:transport"}],
+            "materials": [{
+                "region": {"object_id": "track", "region_id": "track:transport"},
+                "material": {"sigma_Spm": 5e6}
+            }],
+            "boundaries": [
+                {
+                    "kind": "normal_current_electrode",
+                    "id": "left",
+                    "surfaces": [{"object_id": "track", "surface_id": "x-", "orientation": [-1.0, 0.0, 0.0]}],
+                    "outward_current_density_Apm2": 0.0
+                },
+                {
+                    "kind": "normal_current_electrode",
+                    "id": "right",
+                    "surfaces": [{"object_id": "track", "surface_id": "x+", "orientation": [1.0, 0.0, 0.0]}],
+                    "outward_current_density_Apm2": 0.0
+                }
+            ],
+            "gauge": "zero_mean",
+            "solver": {
+                "engine": "cg",
+                "linear": {"relative_tolerance": 1e-10, "absolute_tolerance": 0.0, "max_iterations": 10000},
+                "physical_residual_version": "charge_balance_integrated_l2.v1",
+                "operator_version": "fv_charge_harmonic_v1"
+            }
+        }]))
+        .expect("transport fixture should deserialize");
+        let config = ScriptExecutionConfig {
+            ir: ir.clone(),
+            shared_geometry_assets: None,
+            default_until_seconds: Some(3e-12),
+            study_pipeline: None,
+            stages: vec![crate::types::ScriptExecutionStage {
+                ir,
+                default_until_seconds: None,
+                entrypoint_kind: "flat_set_transport_current".to_string(),
+                action: Some(crate::types::ScriptExecutionStageAction::SetTransportCurrent {
+                    module_id: "charge".to_string(),
+                    terminal_outward_current_density_apm2: BTreeMap::from([
+                        ("left".to_string(), -1.0e12),
+                        ("right".to_string(), 1.0e12),
+                    ]),
+                }),
+            }],
+        };
+
+        let stages = materialize_script_stages(config)
+            .expect("explicit set_transport_current should materialize");
+        assert!(matches!(
+            &stages[0].action,
+            Some(ResolvedScriptStageAction::SetTransportCurrent {
+                module_id,
+                terminal_outward_current_density_apm2,
+            }) if module_id == "charge"
+                && terminal_outward_current_density_apm2["left"] == -1.0e12
+                && terminal_outward_current_density_apm2["right"] == 1.0e12
+        ));
+        let fullmag_ir::CurrentModuleIR::CurrentTransport {
+            definition: Some(definition),
+            ..
+        } = &stages[0].ir.current_modules[0]
+        else {
+            panic!("expected complete current transport");
+        };
+        let values: Vec<_> = definition
+            .boundaries
+            .iter()
+            .filter_map(|boundary| match boundary {
+                fullmag_ir::ChargeBoundaryIR::NormalCurrentElectrode {
+                    outward_current_density_apm2,
+                    ..
+                } => Some(*outward_current_density_apm2),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(values, vec![-1.0e12, 1.0e12]);
+    }
+
+    #[test]
+    fn torque_stage_action_disables_and_reenables_its_solved_pipeline() {
+        let mut graph = serde_json::from_value::<Value>(json!({
+            "schema_version": "physics_graph.v1",
+            "modules": [
+                {"id": "charge", "kind": "current_transport", "depends_on": [], "activation": "active"},
+                {"id": "spin", "kind": "spin_transport", "depends_on": ["charge"], "activation": "active"},
+                {"id": "hm_fm", "kind": "spin_interface", "depends_on": ["spin"], "activation": "active"},
+                {"id": "transport_torque", "kind": "spin_torque", "depends_on": ["spin"], "activation": "active"}
+            ],
+            "edges": [
+                {"kind": "current_to_spin_transport", "source_id": "charge", "target_id": "spin", "status": "active"},
+                {"kind": "spin_transport_to_torque", "source_id": "spin", "target_id": "transport_torque", "status": "active"}
+            ]
+        }))
+        .expect("transport physics graph");
+        let object = graph.as_object_mut().expect("graph object");
+        object
+            .get_mut("modules")
+            .and_then(Value::as_array_mut)
+            .expect("modules")
+            .iter_mut()
+            .find(|module| module["id"] == "transport_torque")
+            .expect("torque module")
+            .as_object_mut()
+            .expect("torque object")
+            .insert("activation".into(), Value::String("inactive".into()));
+        propagate_disabled_transport_pipeline(object, "transport_torque")
+            .expect("disable propagation");
+        let modules = object["modules"].as_array().expect("modules");
+        assert!(modules.iter().all(|module| module["activation"] == "inactive"));
+        assert!(object["edges"].as_array().expect("edges").iter().all(|edge| {
+            edge["status"] == "inactive"
+        }));
+
+        object
+            .get_mut("modules")
+            .and_then(Value::as_array_mut)
+            .expect("modules")
+            .iter_mut()
+            .find(|module| module["id"] == "transport_torque")
+            .expect("torque module")
+            .as_object_mut()
+            .expect("torque object")
+            .insert("activation".into(), Value::String("active".into()));
+        propagate_disabled_transport_pipeline(object, "transport_torque")
+            .expect("enable propagation");
+        let modules = object["modules"].as_array().expect("modules");
+        assert!(modules.iter().all(|module| module["activation"] == "active"));
+        assert!(object["edges"].as_array().expect("edges").iter().all(|edge| {
+            edge["status"] == "active"
+        }));
+    }
+
+    #[test]
     fn materialize_script_stages_supports_contextual_set_field_and_set_current_nodes() {
         let config = ScriptExecutionConfig {
             ir: sample_problem_ir(),
@@ -5987,6 +6728,193 @@ mod tests {
         assert_eq!(stages[0].entrypoint_kind, "pipeline_run_after_context");
         assert_eq!(zeeman_field(&stages[0].ir), Some([0.0, 0.0, 0.025]));
         assert_eq!(stages[0].ir.current_density, Some([0.0, 2.5e10, 0.0]));
+    }
+
+    #[test]
+    fn materialize_script_stages_sets_exact_solved_current_electrodes() {
+        let mut ir = sample_problem_ir();
+        ir.current_modules = serde_json::from_value(json!([{
+            "kind": "current_transport",
+            "name": "charge",
+            "model": "ohmic_poisson",
+            "coupling": "one_way",
+            "domain": [{"object_id": "track", "region_id": "track:transport"}],
+            "materials": [{
+                "region": {"object_id": "track", "region_id": "track:transport"},
+                "material": {"sigma_Spm": 5e6}
+            }],
+            "boundaries": [
+                {
+                    "kind": "normal_current_electrode",
+                    "id": "left",
+                    "surfaces": [{
+                        "object_id": "track", "surface_id": "x-",
+                        "orientation": [-1.0, 0.0, 0.0]
+                    }],
+                    "outward_current_density_Apm2": 0.0
+                },
+                {
+                    "kind": "normal_current_electrode",
+                    "id": "right",
+                    "surfaces": [{
+                        "object_id": "track", "surface_id": "x+",
+                        "orientation": [1.0, 0.0, 0.0]
+                    }],
+                    "outward_current_density_Apm2": 0.0
+                }
+            ],
+            "gauge": "zero_mean",
+            "solver": {
+                "engine": "cg",
+                "linear": {
+                    "relative_tolerance": 1e-10,
+                    "absolute_tolerance": 0.0,
+                    "max_iterations": 10000
+                },
+                "physical_residual_version": "charge_balance_integrated_l2.v1",
+                "operator_version": "fv_charge_harmonic_v1"
+            }
+        }]))
+        .expect("transport fixture should deserialize");
+        let config = ScriptExecutionConfig {
+            ir,
+            shared_geometry_assets: None,
+            default_until_seconds: Some(3e-12),
+            study_pipeline: Some(StudyPipelineDocument {
+                version: "study_pipeline.v1".to_string(),
+                nodes: vec![
+                    StudyPipelineNode::Primitive {
+                        id: "set-drive".to_string(),
+                        label: "Set transport current".to_string(),
+                        enabled: true,
+                        notes: None,
+                        source: Some("script_imported".to_string()),
+                        stage_kind: "set_transport_current".to_string(),
+                        payload: serde_json::from_value(json!({
+                            "module_id": "charge",
+                            "terminal_outward_current_density_Apm2": {
+                                "left": -1e12,
+                                "right": 1e12
+                            }
+                        }))
+                        .expect("payload"),
+                    },
+                    StudyPipelineNode::Primitive {
+                        id: "run".to_string(),
+                        label: "Run".to_string(),
+                        enabled: true,
+                        notes: None,
+                        source: Some("script_imported".to_string()),
+                        stage_kind: "run".to_string(),
+                        payload: serde_json::from_value(json!({
+                            "until_seconds": "3e-12"
+                        }))
+                        .expect("payload"),
+                    },
+                ],
+            }),
+            stages: vec![],
+        };
+
+        let stages = materialize_script_stages(config).expect("pipeline should materialize");
+        let fullmag_ir::CurrentModuleIR::CurrentTransport {
+            definition: Some(definition),
+            ..
+        } = &stages[0].ir.current_modules[0]
+        else {
+            panic!("expected complete current transport");
+        };
+        let values: Vec<_> = definition
+            .boundaries
+            .iter()
+            .filter_map(|boundary| match boundary {
+                fullmag_ir::ChargeBoundaryIR::NormalCurrentElectrode {
+                    outward_current_density_apm2,
+                    ..
+                } => Some(*outward_current_density_apm2),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(values, vec![-1e12, 1e12]);
+    }
+
+    #[test]
+    fn materialize_script_stages_updates_spin_torque_graph_activation_and_edge() {
+        let fixture: Value = serde_json::from_str(include_str!(
+            "../../../tests/standard_problems/transport/racetrack_m1_v1/fixture.v1.json"
+        ))
+        .expect("racetrack fixture");
+        let lowering = fixture
+            .get("normalized_problem_ir_contract")
+            .and_then(|value| value.get("expected_lowering"))
+            .expect("fixture lowering");
+        let mut ir: ProblemIR =
+            serde_json::from_value(lowering.clone()).expect("typed racetrack lowering");
+        let torque_payload = serde_json::to_value(&ir.spin_torque_modules[0])
+            .expect("serialize typed torque payload");
+        ir.physics_graph = Some(json!({
+            "schema_version": "physics_graph.v1",
+            "scene_revision": 0,
+            "modules": [{
+                "id": "transport_torque",
+                "kind": "spin_torque",
+                "applies_to": [],
+                "solve_domain": [],
+                "depends_on": ["spin"],
+                "activation": "active",
+                "authored_state": "authored",
+                "capability": "semantic_only",
+                "source_path": "/spin_torque_modules/0",
+                "family_payload": torque_payload
+            }],
+            "edges": [{
+                "kind": "spin_transport_to_torque",
+                "source_id": "spin",
+                "target_id": "transport_torque",
+                "status": "active"
+            }]
+        }));
+        let config = ScriptExecutionConfig {
+            ir,
+            shared_geometry_assets: None,
+            default_until_seconds: Some(3e-12),
+            study_pipeline: Some(StudyPipelineDocument {
+                version: "study_pipeline.v1".to_string(),
+                nodes: vec![
+                    StudyPipelineNode::Primitive {
+                        id: "disable-torque".to_string(),
+                        label: "Disable transport torque".to_string(),
+                        enabled: true,
+                        notes: None,
+                        source: Some("script_imported".to_string()),
+                        stage_kind: "set_spin_torque_enabled".to_string(),
+                        payload: serde_json::from_value(json!({
+                            "module_id": "transport_torque",
+                            "enabled": false
+                        }))
+                        .expect("payload"),
+                    },
+                    StudyPipelineNode::Primitive {
+                        id: "run".to_string(),
+                        label: "Run".to_string(),
+                        enabled: true,
+                        notes: None,
+                        source: Some("script_imported".to_string()),
+                        stage_kind: "run".to_string(),
+                        payload: serde_json::from_value(json!({
+                            "until_seconds": "3e-12"
+                        }))
+                        .expect("payload"),
+                    },
+                ],
+            }),
+            stages: vec![],
+        };
+
+        let stages = materialize_script_stages(config).expect("pipeline should materialize");
+        let graph = stages[0].ir.physics_graph.as_ref().expect("physics graph");
+        assert_eq!(graph["modules"][0]["activation"], "inactive");
+        assert_eq!(graph["edges"][0]["status"], "inactive");
     }
 
     #[test]
@@ -7509,6 +8437,34 @@ mod tests {
             result.is_none(),
             "FDM→FDM should return None (no resampling)"
         );
+    }
+
+    #[test]
+    fn test_fdm_union_grid_transfer_preserves_magnetic_layer() {
+        let source = FdmContinuationGrid {
+            cells: [2, 1, 1],
+            origin_m: [0.0, 0.0, 1.0e-9],
+            cell_size_m: [1.0e-9, 1.0e-9, 1.0e-9],
+            active_mask: Some(vec![true, true]),
+        };
+        let target = FdmContinuationGrid {
+            cells: [2, 1, 2],
+            origin_m: [0.0, 0.0, 0.0],
+            cell_size_m: [1.0e-9, 1.0e-9, 1.0e-9],
+            active_mask: Some(vec![false, false, true, true]),
+        };
+        let transfer = transfer_fdm_field_to_grid(
+            &[[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]],
+            &source,
+            &target,
+        )
+        .expect("FM-only state should transfer to FM+HM union grid");
+        assert_eq!(transfer.n_total, 4);
+        assert_eq!(transfer.n_located, 2);
+        assert_eq!(transfer.values[0], [0.0, 0.0, 0.0]);
+        assert_eq!(transfer.values[1], [0.0, 0.0, 0.0]);
+        assert_eq!(transfer.values[2], [1.0, 0.0, 0.0]);
+        assert_eq!(transfer.values[3], [0.0, 1.0, 0.0]);
     }
 
     #[test]

@@ -525,6 +525,99 @@ verify-fdm-sp5-converged-demag-artifacts cpu_run gpu_run reference_ovf output:
       --converged-reference-tolerance 1e-4 \
       --output "{{output}}"
 
+# MuMax3 is an external common-limit comparator only: it receives the
+# Fullmag-exported torque-equivalent field and is never a solved-current oracle.
+# The recipe fails before publishing a report if either runtime identity or the
+# input/output digests supplied by the external manifest are absent or differ.
+verify-fdm-gpu-racetrack-mumax-common-limit:
+    bash -euo pipefail -c '\
+      source_digest="$(git rev-parse HEAD)"; \
+      report_root="/zfn2/mateuszz/git/fullmag/reports/fdm-gpu-racetrack-mumax/$source_digest"; \
+      durable_build="/mnt/fullmag-zfn2-native/fdm-gpu-racetrack-mumax"; \
+      fullmag_input="${FULLMAG_RACETRACK_COMMON_LIMIT_INPUT:-}"; \
+      mumax_input="${MUMAX_RACETRACK_COMMON_LIMIT_INPUT:-}"; \
+      relaxed_ovf="${FULLMAG_RACETRACK_RELAXED_OVF:-}"; \
+      torque_ovf="${FULLMAG_RACETRACK_TORQUE_EQUIVALENT_OVF:-}"; \
+      torque_snapshot="${FULLMAG_RACETRACK_TORQUE_SNAPSHOT:-}"; \
+      torque_export="${FULLMAG_RACETRACK_TORQUE_EXPORT_MANIFEST:-}"; \
+      for required in "$fullmag_input" "$mumax_input" "$relaxed_ovf"; do \
+        if [ -z "$required" ] || [ ! -f "$required" ]; then echo "missing required common-limit input manifest or OVF" >&2; exit 2; fi; \
+      done; \
+      if [ -e "$report_root/racetrack_mumax_common_limit_v2.json" ]; then echo "refusing to overwrite existing report: $report_root" >&2; exit 3; fi; \
+      mkdir -p "$report_root" "$durable_build"; \
+      work_dir="$(mktemp -d "$durable_build/run.XXXXXXXX")"; \
+      cleanup() { rm -rf "$work_dir"; }; trap cleanup EXIT INT TERM; \
+      if [ -n "$torque_snapshot" ]; then \
+        if [ ! -f "$torque_snapshot" ]; then echo "Fullmag torque snapshot is missing" >&2; exit 2; fi; \
+        torque_ovf="$work_dir/fullmag_transport_torque_common_limit_field.ovf"; \
+        torque_export="$work_dir/fullmag_transport_torque_mumax_export.v1.json"; \
+        python3 scripts/export_fullmag_transport_torque_for_mumax.py --input "$torque_snapshot" --output-ovf "$torque_ovf" --output-manifest "$torque_export"; \
+      fi; \
+      if [ -z "$torque_ovf" ] || [ ! -f "$torque_ovf" ] || [ -z "$torque_export" ] || [ ! -f "$torque_export" ]; then \
+        echo "supply FULLMAG_RACETRACK_TORQUE_SNAPSHOT or both an exported B_eq OVF and its export manifest" >&2; exit 2; \
+      fi; \
+      expected_export_b="$(python3 -c "import json; print(json.load(open(\"$fullmag_input\"))[\"torque_export\"][\"equivalent_field\"][\"field_digest_sha256\"])" 2>/dev/null || true)"; \
+      actual_export_b="$(python3 -c "import json; print(json.load(open(\"$torque_export\"))[\"equivalent_field\"][\"field_digest_sha256\"])" 2>/dev/null || true)"; \
+      expected_export_ovf="$(python3 -c "import json; print(json.load(open(\"$torque_export\"))[\"equivalent_field\"][\"ovf_sha256\"])" 2>/dev/null || true)"; \
+      actual_export_ovf="$(sha256sum "$torque_ovf" | awk '\''{print $1}'\'')"; \
+      if [ -z "$expected_export_b" ] || [ "$expected_export_b" != "$actual_export_b" ] || [ -z "$expected_export_ovf" ] || [ "$expected_export_ovf" != "$actual_export_ovf" ]; then \
+        echo "Fullmag common-limit manifest, B_eq export manifest, and OVF digest do not form one identity" >&2; exit 4; \
+      fi; \
+      cp tests/standard_problems/transport/racetrack_m1_v1/mumax/common_limit.mx3 "$work_dir/common_limit.mx3"; \
+      cp "$relaxed_ovf" "$work_dir/relaxed_zero_current.ovf"; \
+      cp "$torque_ovf" "$work_dir/fullmag_transport_torque_common_limit_field.ovf"; \
+      cp "$fullmag_input" "$report_root/fullmag-input.json"; \
+      cp "$mumax_input" "$report_root/mumax-input.json"; \
+      expected_script="$(python3 -c "import json; print(json.load(open(\"$mumax_input\"))[\"mumax\"][\"input_script_digest_sha256\"])" 2>/dev/null || true)"; \
+      actual_script="$(sha256sum "$work_dir/common_limit.mx3" | awk '\''{print $1}'\'')"; \
+      if [ -z "$expected_script" ] || [ "$expected_script" != "$actual_script" ]; then echo "MuMax input-script digest is missing or mismatched" >&2; exit 4; fi; \
+      if [ -n "${MUMAX3_BIN:-}" ] && [ -x "$MUMAX3_BIN" ]; then \
+        sha256sum "$MUMAX3_BIN" | awk '\''{print $1}'\'' > "$work_dir/mumax3.sha256"; \
+        (cd "$work_dir" && "$MUMAX3_BIN" common_limit.mx3) 2>&1 | tee "$report_root/mumax-runtime.log"; \
+      elif [ -n "${MUMAX3_CONTAINER_IMAGE:-}" ]; then \
+        docker run --rm -v "$work_dir:/work" -w /work "$MUMAX3_CONTAINER_IMAGE" sh -lc '\''sha256sum "$(command -v mumax3)" | awk "{print \$1}" > /work/mumax3.sha256; exec mumax3 common_limit.mx3'\'' 2>&1 | tee "$report_root/mumax-runtime.log"; \
+      else \
+        echo "no MuMax3 executable or container image supplied; common-limit comparison is not qualified" >&2; exit 5; \
+      fi; \
+      expected_binary="$(python3 -c "import json; print(json.load(open(\"$mumax_input\"))[\"mumax\"][\"binary_digest_sha256\"])" 2>/dev/null || true)"; \
+      actual_binary="$(tr -d "\\n" < "$work_dir/mumax3.sha256")"; \
+      if [ -z "$expected_binary" ] || [ "$expected_binary" != "$actual_binary" ]; then echo "MuMax binary digest is missing or mismatched" >&2; exit 6; fi; \
+      result_ovf="$(find "$work_dir/common_limit.out" -maxdepth 1 -name 'm*.ovf' -type f -print | sort | tail -n 1)"; \
+      table_file="$work_dir/common_limit.out/table.txt"; \
+      if [ -z "$result_ovf" ] || [ ! -f "$result_ovf" ] || [ ! -f "$table_file" ]; then echo "MuMax did not produce the final magnetization OVF and autosaved table" >&2; exit 7; fi; \
+      expected_table="$(python3 -c "import json; print(json.load(open(\"$mumax_input\"))[\"mumax\"][\"table_digest_sha256\"])" 2>/dev/null || true)"; \
+      actual_table="$(sha256sum "$table_file" | awk '\''{print $1}'\'')"; \
+      if [ -z "$expected_table" ] || [ "$expected_table" != "$actual_table" ]; then echo "MuMax autosaved trajectory table digest is missing or mismatched" >&2; exit 8; fi; \
+      expected_output="$(python3 -c "import json; print(json.load(open(\"$mumax_input\"))[\"mumax\"][\"output_ovf_digest_sha256\"])" 2>/dev/null || true)"; \
+      actual_output="$(sha256sum "$result_ovf" | awk '\''{print $1}'\'')"; \
+      if [ -z "$expected_output" ] || [ "$expected_output" != "$actual_output" ]; then echo "MuMax output OVF digest is missing or mismatched" >&2; exit 9; fi; \
+      cp "$result_ovf" "$report_root/m_final.ovf"; \
+      cp "$table_file" "$report_root/mumax-table.txt"; \
+      cp "$torque_export" "$report_root/fullmag_transport_torque_mumax_export.v1.json"; \
+      python3 scripts/compare_fdm_racetrack_mumax.py --fullmag "$report_root/fullmag-input.json" --mumax "$report_root/mumax-input.json" --output "$report_root/racetrack_mumax_common_limit_v2.json"; \
+      sha256sum "$report_root"/* | tee "$report_root/SHA256SUMS.txt"'
+
+# Build the Hall observable only from a persisted accepted FDM m.zarr series.
+# This is deliberately an explicit post-run step: it never invents a time
+# series when the runtime did not publish one and it keeps the provisional
+# uncertainty model visible in the artifact producer metadata.
+build-fdm-racetrack-hall-artifact stage_dir output="":
+    bash -euo pipefail -c '\
+      if [ -n "{{output}}" ]; then \
+        PYTHONPATH=. python3 scripts/build_skyrmion_hall_artifact.py "{{stage_dir}}" --output "{{output}}"; \
+      else \
+        PYTHONPATH=. python3 scripts/build_skyrmion_hall_artifact.py "{{stage_dir}}"; \
+      fi'
+
+verify-fdm-racetrack-hall-artifact stage_dir:
+    bash -euo pipefail -c '\
+      artifact="$(mktemp /dev/shm/fullmag-hall-artifact.XXXXXXXX.json)"; \
+      cleanup() { rm -f "$artifact"; }; \
+      trap cleanup EXIT INT TERM; \
+      PYTHONPATH=. python3 scripts/build_skyrmion_hall_artifact.py "{{stage_dir}}" --output "$artifact"; \
+      PYTHONPATH=. python3 scripts/validate_skyrmion_hall_angle.py "$artifact"; \
+      python3 -c "import json; a=json.load(open(\"$artifact\", encoding=\"utf-8\")); print(json.dumps(a[\"hall_angle\"], sort_keys=True))"'
+
 verify-fdm-slonczewski-native-contract:
     docker compose --profile fem-gpu run --rm \
       fem-gpu bash -lc 'cd /workspace && build_dir=/tmp/fullmag-fdm-slonczewski-build && cargo_target=/tmp/fullmag-fdm-slonczewski-cargo && cmake -S native -B "$build_dir" -DCMAKE_CUDA_ARCHITECTURES="${FULLMAG_CUDA_ARCHITECTURES:-native}" -DFULLMAG_ENABLE_CUDA=ON -DFULLMAG_ENABLE_FEM_GPU=OFF -DFULLMAG_USE_MFEM_STACK=OFF -DFULLMAG_FEM_WITH_SLEPC=OFF && CMAKE_BUILD_PARALLEL_LEVEL=1 cmake --build "$build_dir" --target fullmag_fdm && FULLMAG_FDM_LIB_DIR="$build_dir/backends/fdm" LD_LIBRARY_PATH="$build_dir/backends/fdm${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" CARGO_TARGET_DIR="$cargo_target" cargo +nightly test -p fullmag-runner --features cuda --lib native_fdm_canonical_slonczewski_ -- --nocapture'
@@ -732,6 +825,25 @@ verify-fdm-gpu-m1-spin-observables-contract:
       -e CMAKE_BUILD_PARALLEL_LEVEL="${FULLMAG_NATIVE_BUILD_JOBS:-2}" \
       -e FULLMAG_CUDA_ARCHITECTURES="${FULLMAG_CUDA_ARCHITECTURES:-native}" \
       fem-gpu bash -lc 'set -euo pipefail; cd /workspace; build_dir=/mnt/fullmag-zfn2-native/fdm-gpu-m1-spin-observables; mkdir -p "$build_dir" "$build_dir/cargo-home" "$build_dir/cargo-target"; cmake -S native -B "$build_dir" -DCMAKE_CUDA_ARCHITECTURES="$FULLMAG_CUDA_ARCHITECTURES" -DFULLMAG_ENABLE_CUDA=ON -DFULLMAG_ENABLE_FEM_GPU=OFF -DFULLMAG_USE_MFEM_STACK=OFF -DFULLMAG_FEM_WITH_SLEPC=OFF; cmake --build "$build_dir" --target fullmag_fdm fdm_gpu_transport_layout_abi_v1_c11_contract fdm_gpu_m1_spin_operator_parity_v1_contract; FULLMAG_FDM_LIB_DIR="$build_dir/backends/fdm" LD_LIBRARY_PATH="$build_dir/backends/fdm${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" CARGO_HOME="$build_dir/cargo-home" CARGO_TARGET_DIR="$build_dir/cargo-target" CARGO_INCREMENTAL=0 cargo test -p fullmag-fdm-sys gpu_transport_abi_v1::tests -- --nocapture; ctest --test-dir "$build_dir/backends/fdm" --output-on-failure -R "^fdm_gpu_transport_layout_abi_v1_c11_contract$"; "$build_dir/backends/fdm/fdm_gpu_m1_spin_operator_parity_v1_contract"'
+
+verify-fdm-gpu-m1-transport-llg-native-contract:
+    docker compose -p fullmag --profile fem-gpu run --rm --no-deps \
+      -v /mnt/fullmag-zfn2-native:/mnt/fullmag-zfn2-native \
+      -e CMAKE_BUILD_PARALLEL_LEVEL="${FULLMAG_NATIVE_BUILD_JOBS:-2}" \
+      -e FULLMAG_CUDA_ARCHITECTURES="${FULLMAG_CUDA_ARCHITECTURES:-native}" \
+      fem-gpu bash -lc 'set -euo pipefail; cd /workspace; build_dir=/mnt/fullmag-zfn2-native/fdm-gpu-m1-transport-llg; mkdir -p "$build_dir/cargo-home" "$build_dir/cargo-target"; cmake -S native -B "$build_dir" -DCMAKE_CUDA_ARCHITECTURES="$FULLMAG_CUDA_ARCHITECTURES" -DFULLMAG_ENABLE_CUDA=ON -DFULLMAG_ENABLE_FEM_GPU=OFF -DFULLMAG_USE_MFEM_STACK=OFF -DFULLMAG_FEM_WITH_SLEPC=OFF; cmake --build "$build_dir" --target fullmag_fdm fdm_gpu_transport_layout_abi_v1_c11_contract fdm_gpu_m1_transport_llg_stage_v1_contract fdm_gpu_m1_spin_operator_parity_v1_contract; LD_LIBRARY_PATH="$build_dir/backends/fdm${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" "$build_dir/backends/fdm/fdm_gpu_m1_transport_llg_stage_v1_contract"; "$build_dir/backends/fdm/fdm_gpu_m1_spin_operator_parity_v1_contract"; ctest --test-dir "$build_dir/backends/fdm" --output-on-failure -R "^fdm_gpu_transport_layout_abi_v1_c11_contract$"; FULLMAG_FDM_LIB_DIR="$build_dir/backends/fdm" LD_LIBRARY_PATH="$build_dir/backends/fdm${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" CARGO_HOME="$build_dir/cargo-home" CARGO_TARGET_DIR="$build_dir/cargo-target" CARGO_INCREMENTAL=0 cargo test -p fullmag-fdm-sys -- --nocapture'
+
+verify-fdm-gpu-m1-transport-llg-lifecycle-contract: verify-fdm-gpu-m1-transport-llg-native-contract
+    docker compose -p fullmag --profile fem-gpu run --rm --no-deps \
+      -v /mnt/fullmag-zfn2-native:/mnt/fullmag-zfn2-native \
+      fem-gpu bash -lc 'set -euo pipefail; cd /workspace; build_dir=/mnt/fullmag-zfn2-native/fdm-gpu-m1-transport-llg; export FULLMAG_FDM_LIB_DIR="$build_dir/backends/fdm" LD_LIBRARY_PATH="$build_dir/backends/fdm${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" CARGO_HOME="$build_dir/cargo-home" CARGO_TARGET_DIR="$build_dir/cargo-target" CARGO_INCREMENTAL=0; cargo test -p fullmag-runner --features cuda checkpoint_ -- --nocapture; cargo test -p fullmag-runner --features cuda accepted_charge_snapshot_materializes_the_exact_public_llg_binding -- --nocapture; cargo test -p fullmag-runner --features cuda accepted_bound_llg_step_enables_readback_without_a_second_spin_solve -- --nocapture; cargo test -p fullmag-runner --features cuda accepted_face_fields_are_reconstructed_at_cells_with_canonical_component_order -- --nocapture; cargo test -p fullmag-runner --features cuda public_gpu_m1_dispatch_ -- --nocapture; cargo test -p fullmag-runner --features cuda fdm::gpu::cuda::route::tests -- --nocapture'
+
+verify-fdm-gpu-m1-transport-llg-compute-sanitizer: verify-fdm-gpu-m1-transport-llg-lifecycle-contract
+    docker compose -p fullmag --profile fem-gpu run --rm --no-deps \
+      -v /mnt/fullmag-zfn2-native:/mnt/fullmag-zfn2-native \
+      fem-gpu bash -lc 'set -euo pipefail; build_dir=/mnt/fullmag-zfn2-native/fdm-gpu-m1-transport-llg; command -v compute-sanitizer >/dev/null; export LD_LIBRARY_PATH="$build_dir/backends/fdm${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"; compute-sanitizer --tool memcheck --error-exitcode 99 "$build_dir/backends/fdm/fdm_gpu_m1_transport_llg_stage_v1_contract"; compute-sanitizer --tool memcheck --error-exitcode 99 "$build_dir/backends/fdm/fdm_gpu_m1_spin_operator_parity_v1_contract"; compute-sanitizer --tool synccheck --error-exitcode 99 "$build_dir/backends/fdm/fdm_gpu_m1_transport_llg_stage_v1_contract"; compute-sanitizer --tool synccheck --error-exitcode 99 "$build_dir/backends/fdm/fdm_gpu_m1_spin_operator_parity_v1_contract"'
+
+verify-fdm-gpu-m1-transport-llg-sanitizer: verify-fdm-gpu-m1-transport-llg-compute-sanitizer
 
 verify-fdm-gpu-m1-spin-sparse-performance-contract:
     docker compose --profile fem-gpu run --rm --no-deps \
@@ -5681,3 +5793,24 @@ bench-profile threads="auto":
     FULLMAG_FEM_EXECUTION=cpu \
     FULLMAG_CPU_THREADS="{{threads}}" \
     '{{gpu_runtime_bin}}' --headless examples/bench_fem_simple.py
+
+# The validator is deliberately separate from the individual native contracts:
+# none of them may be relabelled as the public racetrack qualification.  A
+# future managed workload harness must write all twelve gate artifacts and the
+# manifest below; until then this recipe fails closed after the managed builds.
+verify-fdm-gpu-solved-current-racetrack-production:
+    bash -euo pipefail -c '\
+      evidence_root="${FULLMAG_FDM_GPU_RACETRACK_REPORT_ROOT:-/zfn2/mateuszz/git/fullmag/reports/fdm-gpu-racetrack}"; \
+      mkdir -p "$evidence_root"; \
+      source_snapshot="$evidence_root/source-snapshot.v1.json.tmp"; \
+      cleanup() { rm -f "$source_snapshot"; }; trap cleanup EXIT INT TERM; \
+      python3 scripts/capture_source_snapshot_identity.py --repo-root "{{repo_root}}" --ignore-non-runtime-dirty --output "$source_snapshot"; \
+      just verify-fdm-gpu-m1-layout-abi-contract; \
+      just verify-fdm-gpu-m1-charge-native-contract; \
+      just verify-fdm-gpu-m1-spin-native-contract; \
+      just verify-fdm-gpu-m1-transport-llg-lifecycle-contract; \
+      just verify-fdm-gpu-m1-transport-llg-compute-sanitizer; \
+      just verify-fdm-gpu-m1-spin-sparse-performance-contract; \
+      docker compose -p fullmag --profile fem-gpu run --rm --no-deps -v /mnt/fullmag-zfn2-native:/mnt/fullmag-zfn2-native -e FULLMAG_CUDA_ARCHITECTURES="${FULLMAG_CUDA_ARCHITECTURES:-native}" fem-gpu bash -lc "set -euo pipefail; cd /workspace; build_dir=/mnt/fullmag-zfn2-native/fdm-gpu-racetrack-qualification; mkdir -p \"\$build_dir/cargo-home\" \"\$build_dir/cargo-target\"; cmake -S native -B \"\$build_dir/native\" -DCMAKE_CUDA_ARCHITECTURES=\"\$FULLMAG_CUDA_ARCHITECTURES\" -DFULLMAG_ENABLE_CUDA=ON -DFULLMAG_ENABLE_FEM_GPU=OFF -DFULLMAG_USE_MFEM_STACK=OFF -DFULLMAG_FEM_WITH_SLEPC=OFF; cmake --build \"\$build_dir/native\" --target fullmag_fdm; CARGO_HOME=\"\$build_dir/cargo-home\" CARGO_TARGET_DIR=\"\$build_dir/cargo-target\" FULLMAG_FDM_LIB_DIR=\"\$build_dir/native/backends/fdm\" cargo +nightly build -p fullmag-cli --features cuda"; \
+      python3 scripts/verify_fdm_gpu_racetrack_qualification.py --evidence-root "$evidence_root" --source-snapshot "$source_snapshot"; \
+      echo "production-qualified racetrack manifest: $evidence_root/fdm_gpu_solved_current_racetrack_qualification_v1.json"'

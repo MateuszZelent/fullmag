@@ -1,0 +1,48 @@
+// racetrack_mumax_common_limit_v2
+//
+// This is intentionally a common LLG limit, not a MuMax transport model.
+// `fullmag_transport_torque_common_limit_field.ovf` is emitted from an
+// accepted Fullmag snapshot of T_tr_G [s^-1].  The exporter uses the canonical
+// explicit-Gilbert identity B_eq = (m x T_tr_G) / gamma_e [T].  This is one
+// frozen B_ext field: it is not recomputed as m evolves.  The companion
+// manifests bind both the source T_tr_G digest and the injected B_eq digest.
+// Do not replace it with J, Zhang-Li, Slonczewski, or another current torque.
+
+SetGridSize(256, 64, 1)
+SetCellSize(2e-9, 2e-9, 1e-9)
+
+Msat = 580e3
+Aex = 15e-12
+alpha = 0.3
+GammaLL = 1.76085963023e11 // rad/(T s), equal to exporter gamma_e
+Ku1 = 0.8e6
+anisU = vector(0, 0, 1)
+Dind = 3e-3
+
+// Literal common-limit demagnetization policy. The managed recipe records
+// this separately from any later converged-demag sensitivity run.
+SetDemagAccuracy(6)
+SetSolver(2) // Heun
+FixDt = 1e-13
+
+// The relaxed state and frozen torque-equivalent B_eq field are generated
+// inputs. Both are hashed in the fail-closed Fullmag/MuMax manifests before
+// comparison. B_ext is deliberately assigned exactly once.
+m = LoadFile("relaxed_zero_current.ovf")
+B_ext = LoadFile("fullmag_transport_torque_common_limit_field.ovf")
+
+TableAdd(E_total)
+TableAdd(ext_topologicalcharge)
+TableAdd(ext_bubblepos)
+// MuMax's time-based autosave may overshoot a nominal cadence by one fixed
+// step due to accumulated floating-point time.  The comparator therefore uses
+// an explicit fixed-step schedule: 50 Heun steps = 5 ps, followed by matching
+// TableSave/Save calls.  The initial state is recorded exactly once.
+TableSave()
+Save(m)
+for i := 0; i < 400; i++ {
+    Steps(50)
+    TableSave()
+    Save(m)
+}
+Save(m)

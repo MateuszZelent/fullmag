@@ -416,7 +416,10 @@ __device__ void mixing_flux(
     for (uint32_t component = 0; component < 3; ++component)
         delta[component] = mu == nullptr ? 0.0
             : mu[component * cells + from] - mu[component * cells + to];
-    const double *m = interface_record.magnetization_xyz;
+    const double m[3] = {
+        in.m_stage[to],
+        in.m_stage[cells + to],
+        in.m_stage[2 * cells + to]};
     const double projection = m[0] * delta[0] + m[1] * delta[1] + m[2] * delta[2];
     const double delta_cross_m[3] = {
         delta[1] * m[2] - delta[2] * m[1],
@@ -803,7 +806,11 @@ __global__ void assemble_sparse_interfaces_kernel(
         const double scale=in.cell_size[(iface->axis+1)%3]*
                            in.cell_size[(iface->axis+2)%3]/volume;
         const double gl=0.5*(iface->G_up+iface->G_down);
-        const double *m=iface->magnetization_xyz;
+        const uint64_t cells=in.grid[0]*in.grid[1]*in.grid[2];
+        const uint64_t magnetic_cell=iface->to_cell;
+        const double m[3]={in.m_stage[magnetic_cell],
+            in.m_stage[cells+magnetic_cell],
+            in.m_stage[2*cells+magnetic_cell]};
         for(uint32_t r=0;r<3;++r) for(uint32_t c=0;c<3;++c) {
             const double longitudinal=gl*m[r]*m[c];
             const double cross=(r==0&&c==1)?m[2]:(r==0&&c==2)?-m[1]:
@@ -1983,7 +1990,6 @@ uint32_t solve_device(const SolveInput &input, SolveOutput *output) noexcept {
     op.resolved_device_budget_bytes = resolved_device_budget_bytes;
     for(uint32_t i=0;i<32;++i) op.operator_digest[i]=uint8_t(
         (digest_words[i / 8] >> ((i % 8) * 8)) ^
-        input.accepted_snapshot_digest[i] ^
         (input.operator_revision >> (i % 8)) ^ (0x5d+i*17));
     sparse::BuildMetrics build{};
     const bool was_cached=state.hierarchy.valid && state.hierarchy.operator_revision==op.operator_revision &&
@@ -2016,6 +2022,10 @@ uint32_t solve_device(const SolveInput &input, SolveOutput *output) noexcept {
     sparse::SolveMetrics metrics{};
     status=sparse::solve(op,input.stream,state.hierarchy,state.workspace,input.relative_tolerance,input.max_iterations,&metrics);
     trace_phase("sparse_solve");
+    if (metrics.forbidden_transfer_bytes != 0) {
+        output->forbidden_transfer_bytes = metrics.forbidden_transfer_bytes;
+        return FULLMAG_FDM_GPU_TRANSPORT_ERROR_STRICT_GPU_RESIDENCY_VIOLATION;
+    }
     if(status!=0 || metrics.reason!=sparse::ConvergenceReason::converged) {
         output->iterations=metrics.iterations; output->reason=FULLMAG_FDM_GPU_TRANSPORT_CONVERGENCE_MAX_ITERATIONS;
         output->algebraic_residual=metrics.relative_residual;
@@ -2161,7 +2171,21 @@ uint32_t solve_device(const SolveInput &input, SolveOutput *output) noexcept {
     output->global_balance = diagnostics.global_balance;
     output->interface_balance = diagnostics.interface_balance;
     output->torque_balance = diagnostics.torque_balance;
-    output->transfer_count = 0; output->transfer_bytes = 0;
+    output->transfer_count = build.control_transfer_count +
+        metrics.control_transfer_count + 3;
+    output->transfer_bytes = build.control_transfer_bytes +
+        metrics.control_transfer_bytes + 2 * sizeof(DeviceDiagnostics) +
+        sizeof(result_words);
+    output->control_host_sync_count = build.control_host_sync_count +
+        metrics.control_host_sync_count + 4;
+    output->forbidden_transfer_bytes = metrics.forbidden_transfer_bytes;
+    output->control_h2d_count = 1;
+    output->control_h2d_bytes = sizeof(DeviceDiagnostics);
+    output->control_d2h_count = build.control_transfer_count +
+        metrics.control_transfer_count + 2;
+    output->control_d2h_bytes = build.control_transfer_bytes +
+        metrics.control_transfer_bytes + sizeof(DeviceDiagnostics) +
+        sizeof(result_words);
     output->peak_bytes = solve_peak_bytes > materialization_peak_bytes
         ? solve_peak_bytes : materialization_peak_bytes;
     output->amg_apply_count = metrics.amg_applications;

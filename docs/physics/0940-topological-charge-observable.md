@@ -7,6 +7,7 @@
 - Related specs: `docs/specs/resource-first-control-room-api-v2.md`, `docs/specs/frontend-v2/03-api-integration-layer.md`, `docs/specs/frontend-v2/13-inspector-and-property-editing.md`
 - Supersedes: the physical and numerical sections of `docs/plans/active/object-extensions-topological-charge-implementation-plan-2026-06-26-pl.md`
 
+(problem-statement)=
 ## 1. Problem statement
 
 Fullmag exposes an object-scoped observable for the planar skyrmion charge of
@@ -38,24 +39,28 @@ qualification gates pass.
 
 ## 2. Physical model
 
+(governing-equations)=
 ### 2.1 Governing equations
 
 Let `Sigma` be an oriented planar support with an ordered orthonormal frame
 `(e_u, e_v, n)` satisfying
 
-```math
+```{math}
+:label: topological-support-frame
 \mathbf n = \mathbf e_u \times \mathbf e_v .
 ```
 
 For a finite, nonzero magnetization field `M`, define
 
-```math
+```{math}
+:label: topological-normalized-magnetization
 \hat{\mathbf m} = \frac{\mathbf M}{\lVert\mathbf M\rVert} .
 ```
 
 The continuum topological-charge density and charge are
 
-```math
+```{math}
+:label: topological-charge-density
 q(u,v) = \frac{1}{4\pi}
 \hat{\mathbf m}\cdot
 \left(
@@ -65,7 +70,8 @@ q(u,v) = \frac{1}{4\pi}
 \right),
 ```
 
-```math
+```{math}
+:label: topological-charge-integral
 Q(\Sigma) = \int_\Sigma q(u,v)\,du\,dv .
 ```
 
@@ -73,7 +79,8 @@ Fullmag evaluates `Q` geometrically on an oriented triangle support. For unit
 magnetization samples `a`, `b`, and `c` ordered consistently with the support
 frame, the signed solid angle is
 
-```math
+```{math}
+:label: topological-solid-angle
 \Omega(a,b,c) =
 2\,\operatorname{atan2}\!\left(
 a\cdot(b\times c),
@@ -83,7 +90,8 @@ a\cdot(b\times c),
 
 and the discrete charge is
 
-```math
+```{math}
+:label: topological-discrete-charge
 Q_h = \frac{1}{4\pi}
 \sum_{\triangle\in\mathcal T_h}\Omega_\triangle .
 ```
@@ -112,20 +120,30 @@ Exact or tolerance-level ties resolve in the fixed order `xy`, then `xz`, then
 `yz`; the response always echoes `requested_plane=auto` and the concrete
 resolved plane.
 
+(symbols-and-si-units)=
 ### 2.3 Symbols and SI units
 
 | Symbol | Meaning | SI unit |
 |---|---|---|
-| `M` | magnetization vector before normalization | `A/m` when dimensional |
-| `hat(m)` | normalized magnetization direction | `1` |
-| `u`, `v` | physical in-plane coordinates | `m` |
-| `s` | physical coordinate along the canonical support normal | `m` |
-| `Sigma` | oriented two-dimensional support | no unit; its measure has `m^2` |
-| `q` | continuum topological-charge density | `1/m^2` |
-| `Q`, `Q_h` | continuum and discrete topological charge | `1` |
-| `Omega` | signed solid angle | `rad`, dimensionally `1` |
-| `T_h` | oriented support triangulation | no unit |
-| `h` | characteristic support-mesh length | `m` |
+| $\mathbf e_u,\mathbf e_v,\mathbf n$ | ordered orthonormal support-frame directions | $1$ |
+| $\mathbf M$ | magnetization vector before normalization | $\mathrm{A\,m^{-1}}$ |
+| $\hat{\mathbf m}$ | normalized magnetization direction | $1$ |
+| $\mathbf a,\mathbf b,\mathbf c$ | ordered unit-magnetization samples of one triangle | $1$ |
+| $u,v$ | physical in-plane coordinates | $\mathrm{m}$ |
+| $s$ | physical coordinate along the canonical support normal | $\mathrm{m}$ |
+| $\Sigma$ | oriented planar integration support; unit refers to its measure | $\mathrm{m^2}$ |
+| $q$ | continuum topological-charge density | $\mathrm{m^{-2}}$ |
+| $Q,Q_h$ | continuum and discrete topological charge | $1$ |
+| $\Omega$ | signed solid angle | $\mathrm{rad}$ |
+| $\mathcal T_h$ | oriented support triangulation | $1$ |
+| $h$ | characteristic support-mesh length | $\mathrm{m}$ |
+| $\bar Q$ | full-thickness averaged topological charge | $1$ |
+| $Q(s_i)$ | topological charge at physical cut $s_i$ | $1$ |
+| $\Delta s_i$ | physical thickness weight owned by FDM cut $i$ | $\mathrm{m}$ |
+| $N$ | number of uniformly weighted FEM profile cuts | $1$ |
+| $i$ | deterministic layer or profile-cut index | $1$ |
+| $x,y$ | Cartesian coordinates of the analytic validation texture | $\mathrm{m}$ |
+| $\lambda$ | scale parameter of the analytic Belavin-Polyakov texture | $\mathrm{m}$ |
 
 FDM layer indices are not physical coordinates. A response containing a layer
 profile must return both `index` and `coordinate_m`; it must never place a grid
@@ -143,6 +161,7 @@ must not expose a field named `polarity` unless a separate, documented
 classifier actually evaluates the core magnetization. The production v2
 resource therefore removes the current derived `polarity` field.
 
+(assumptions-and-validity)=
 ### 2.5 Assumptions and validity limits
 
 The production observable requires all of the following:
@@ -172,6 +191,7 @@ The following are explicit unsupported cases for this resource:
 Unsupported input returns a typed status. It must never fall back to a global
 domain, a surface preview, a raster preview, or a different quantity.
 
+(discrete-realization)=
 ## 3. Numerical interpretation
 
 ### 3.1 Shared oriented-triangle kernel
@@ -289,7 +309,8 @@ For a layer profile, `Q(s_i)` is computed on each object-scoped native plane.
 FDM samples are cell-centred, so the scalar thickness summary is the
 cell-thickness-weighted mean
 
-```math
+```{math}
+:label: fdm-thickness-weighted-charge
 \bar Q = \frac{\sum_i \Delta s_i Q(s_i)}{\sum_i \Delta s_i}.
 ```
 
@@ -346,7 +367,8 @@ The FEM scalar summary is a thickness average over the full interval
 `[s_min,s_max]`. Each interior bin-midpoint cut owns its complete bin width, so
 uniform `N`-cut profiles use
 
-```math
+```{math}
+:label: fem-midpoint-thickness-average
 \bar Q = \frac{1}{N}\sum_{i=0}^{N-1}Q(s_i).
 ```
 
@@ -374,16 +396,241 @@ It must not average FDM and FEM charges implicitly.
 
 ## 4. Runtime, API, IR, and planner impact
 
+(python-api)=
 ### 4.1 Python API surface
 
 No authoring class is added. This is an on-demand analysis over an existing
 object and materialized magnetization field. Python analysis helpers may be
 added later, but they must call the same versioned resource contract.
 
+The following executable cell freezes the analysis-request shape without
+claiming that a dedicated Python SDK helper already exists:
+
+```python
+# %%
+request = {
+    "method": "skyrmion_hall_angle_v1",
+    "object_id": "racetrack",
+    "quantity": "m",
+    "plane": "xy",
+    "support": "midplane",
+}
+assert request["method"] == "skyrmion_hall_angle_v1"
+assert request["quantity"] == "m"
+```
+
+(problem-ir)=
 ### 4.2 ProblemIR representation
 
 No `ProblemIR` field is added. Plane, support mode, profile sampling, snapshot,
 and method version are analysis-query state, not physical problem definition.
+
+(round-trip-and-failure-semantics)=
+### 4.2.1 Requested intent, resolved execution, and failure semantics
+
+The resource preserves requested intent separately from resolved execution.
+Requested object, plane, support, snapshot, method version, weighting rule, and
+steady-window policy are echoed alongside the resolved support frame, field
+revision, mesh/domain revisions, accepted sample interval, and algorithm
+version. Validation errors identify the failed physical gate.
+Unsupported combinations fail closed; they never substitute a renderer trajectory, a
+different object, a different plane, or a fixed frame interval.
+
+(skyrmion-hall-angle-v1-contract)=
+### 4.2.2 Planned trajectory and Hall-angle contract
+
+`skyrmion_hall_angle_v1` is a source-backed pure analysis over an accepted
+sequence of signed topological-density samples. It has focused source tests,
+but no HTTP v2 resource, managed-runtime, device, or production-workload
+qualification. Each sample first passes the existing support, topology, boundary,
+resolution, and provenance gates. On triangle $k$ at time $t_n$, the exact
+discrete density moment uses its signed solid-angle charge and the arithmetic
+centroid of its three physical support vertices:
+
+```{math}
+:label: skyrmion-signed-density-centre
+\Delta Q_{n,k}=\frac{\Omega_{n,k}}{4\pi},\qquad
+\mathbf c_{n,k}=\frac{\mathbf r_{n,k,0}+\mathbf r_{n,k,1}+\mathbf r_{n,k,2}}{3},
+\qquad
+Q_n=\sum_k\Delta Q_{n,k},\qquad
+\mathbf r_n=\frac{\sum_k\Delta Q_{n,k}\mathbf c_{n,k}}{Q_n}
+=(x_n,y_n).
+```
+
+The denominator is signed. Every $Q_n$ must have one nonzero sign over the
+complete trajectory and satisfy $|Q_n|\ge0.5$. A renderer centroid, an
+unsigned-density centre, a maximum-amplitude pixel, or a centre computed after
+discarding negative triangle contributions is not admissible.
+
+The steady interval is selected from all contiguous sample intervals $[i,j]$.
+Times must be finite and strictly increasing. For $N_w=j-i+1$, adjacent secant
+speeds, their mean, and the population coefficient of variation are
+
+```{math}
+:label: skyrmion-candidate-speed-statistics
+s_k=\frac{\lVert\mathbf r_{k+1}-\mathbf r_k\rVert}{t_{k+1}-t_k},
+\qquad
+\bar s=\frac{1}{N_w-1}\sum_{k=i}^{j-1}s_k,\qquad
+c_v=\frac{\sqrt{\frac{1}{N_w-1}\sum_{k=i}^{j-1}(s_k-\bar s)^2}}{\max(\bar s,1\,\mathrm{m\,s^{-1}})}.
+```
+
+(skyrmion-hall-steady-window-thresholds)=
+A candidate requires all of the following exact `skyrmion_hall_angle_v1`
+thresholds:
+
+- at least $N_w=21$ samples and duration $t_j-t_i\ge100\,\mathrm{ps}$;
+- one charge sign, $|Q_n|\ge0.5$, and
+  $\max_n|Q_n-Q_{\mathrm{med}}|\le0.05|Q_{\mathrm{med}}|$, where the
+  deterministic median is the sorted middle value or the arithmetic mean of
+  the two sorted middle values for even $N_w$;
+- distance from the centre to every track edge of at least $16\,\mathrm{nm}$;
+- net displacement at least $4\,\mathrm{nm}$ and $\bar s\ge1\,\mathrm{m\,s^{-1}}$;
+- $c_v\le0.10$.
+
+(skyrmion-hall-candidate-window-selection)=
+Enumerate every interval in increasing start index and then increasing end
+index. Among passing candidates select maximum duration; an exact duration tie
+selects the minimum start index, then the minimum end index. This is the only
+candidate-window selection and tie-break rule.
+
+(skyrmion-hall-weighted-gls)=
+Every accepted centre sample now carries a calibrated symmetric positive-definite
+two-coordinate covariance $C_n$ in $mathrm{m^2}$. The trajectory producer
+must obtain it from the accepted signed-density-moment estimator; it must not
+invent a variance from the FDM cell size, FEM edge length, or viewport pixel
+spacing. A missing, nonfinite, non-symmetric, or non-positive-definite $C_n$
+rejects the complete artifact before a Hall angle is fitted.
+
+The v1 estimator is therefore genuine generalized weighted least squares (GLS),
+not equal-weight OLS labelled as WLS. With $\beta=(b_x,b_y,v_x,v_y)^T$ and
+$y_n=(x_n,y_n)^T$, it uses an intercept and the per-sample design matrix
+
+```{math}
+:label: skyrmion-hall-weighted-regression
+A_n=\begin{pmatrix}1&0&t_n&0\\0&1&0&t_n\end{pmatrix},\qquad
+N=\sum_n A_n^T C_n^{-1} A_n,\qquad
+\hat\beta=N^{-1}\sum_n A_n^T C_n^{-1}y_n,
+\qquad
+r_n=y_n-A_n\hat\beta.
+```
+
+The fit is invalid when $N$ is singular or $N_w-2\le0$. The fitted parameter
+covariance is $N^{-1}$; its $(v_x,v_y)$ block is reported. The residual gate
+uses the calibrated Mahalanobis statistic and has exact threshold
+$\chi^2_\nu\le4$. It is a quality gate, not a rescaling of the declared
+measurement covariance:
+
+```{math}
+:label: skyrmion-hall-weighted-covariance
+\operatorname{Cov}(\hat\beta)=N^{-1},\qquad
+\chi^2_\nu=\frac{1}{2(N_w-2)}\sum_n r_n^T C_n^{-1}r_n\le4.
+```
+
+The fitted velocity direction also has to explain the accumulated directed
+motion. With $hat{\mathbf v}=\mathbf v/\lVert\mathbf v\rVert$ and
+$\Delta\mathbf r_k=\mathbf r_{k+1}-\mathbf r_k$, the deterministic
+coherence gate is
+
+```{math}
+:label: skyrmion-hall-directional-coherence
+d_{\mathrm{coh}}=
+\frac{\sum_k\Delta\mathbf r_k\cdot\hat{\mathbf v}}
+{\sum_k\lVert\Delta\mathbf r_k\rVert}\ge0.95.
+```
+
+It prevents a large net displacement assembled from reversals from being
+reported as a steady directed Hall drift. The existing adjacent-speed $c_v$
+gate remains independent of this regression-quality gate.
+
+(skyrmion-hall-trajectory-provenance)=
+Every trajectory sample must provide `accepted_sequence`, finite strictly
+increasing `time_s`, finite `topological_charge`, finite two-component
+`centre_m`, and finite nonnegative `minimum_edge_distance_m`. These fields
+supply every numeric input used by window selection and the fit. It must also
+provide `centre_covariance_m2` and one source seam containing the accepted
+magnetization quantity and series identifiers, object, geometry, grid-or-mesh,
+support, and topological-charge method version. The serialized artifact uses
+`schema_version=skyrmion_hall_angle.v1` and
+`algorithm_version=weighted_gls.v1`. The accepted trajectory also preserves
+`scene_revision`, `field_revision`, `mesh_revision`,
+`mesh_generation_id`, `domain_generation_id`, `global_node_mapping_id`,
+`snapshot_id`, `stage_id`, and `cache_key_digest`; samples with mixed or
+missing provenance are rejected before regression.
+
+The signed Hall angle uses the principal branch
+
+```{math}
+:label: skyrmion-hall-angle
+\Theta_H=\operatorname{atan2}(v_y,v_x)\in(-\pi,\pi].
+```
+
+Its uncertainty uses the full fitted velocity covariance, including the
+off-diagonal term:
+
+```{math}
+:label: skyrmion-hall-angle-variance
+\operatorname{Var}(\Theta_H)=
+\frac{v_y^2\operatorname{Cov}(v_x,v_x)
++v_x^2\operatorname{Cov}(v_y,v_y)
+-2v_xv_y\operatorname{Cov}(v_x,v_y)}
+{(v_x^2+v_y^2)^2}.
+```
+
+| id | latex | meaning | si_unit |
+|---|---|---|---|
+| $t_n$ | $t_n$ | accepted trajectory time sample | $\mathrm{s}$ |
+| $C_n$ | $C_n$ | calibrated signed-density-centre covariance | $\mathrm{m^2}$ |
+| $A_n$ | $A_n$ | two-coordinate affine trajectory design matrix | $1,\mathrm{s}$ by column |
+| $N$ | $N$ | GLS normal matrix | mixed by parameter block |
+| $\hat\beta$ | $\hat\beta$ | fitted intercept and velocity parameter vector | mixed $\mathrm{m},\mathrm{m\,s^{-1}}$ |
+| $x_n$ | $x_n$ | signed-density centre coordinate along the track | $\mathrm{m}$ |
+| $y_n$ | $y_n$ | signed-density centre coordinate along the transverse axis | $\mathrm{m}$ |
+| $v_x$ | $v_x$ | fitted longitudinal velocity | $\mathrm{m\,s^{-1}}$ |
+| $v_y$ | $v_y$ | fitted transverse velocity | $\mathrm{m\,s^{-1}}$ |
+| $\Theta_H$ | $\Theta_H$ | signed skyrmion Hall angle in the reported frame | $\mathrm{rad}$ |
+| $\Delta Q_{n,k}$ | $\Delta Q_{n,k}$ | signed triangle contribution to charge sample $n$ | $1$ |
+| $\Omega_{n,k}$ | $\Omega_{n,k}$ | signed solid angle of triangle $k$ at sample $n$ | $\mathrm{rad}$ |
+| $\mathbf c_{n,k}$ | $\mathbf c_{n,k}$ | physical centroid of support triangle $k$ | $\mathrm{m}$ |
+| $\mathbf r_{n,k,\ell}$ | $\mathbf r_{n,k,\ell}$ | physical position of support vertex $\ell$ on triangle $k$ | $\mathrm{m}$ |
+| $\mathbf r_n$ | $\mathbf r_n$ | signed-density skyrmion centre | $\mathrm{m}$ |
+| $Q_n$ | $Q_n$ | signed topological charge at trajectory sample $n$ | $1$ |
+| $Q_{\mathrm{med}}$ | $Q_{\mathrm{med}}$ | deterministic median charge in a candidate window | $1$ |
+| $s_k$ | $s_k$ | adjacent secant speed | $\mathrm{m\,s^{-1}}$ |
+| $\bar s$ | $\bar s$ | arithmetic mean of adjacent secant speeds | $\mathrm{m\,s^{-1}}$ |
+| $c_v$ | $c_v$ | coefficient of variation of adjacent speeds | $1$ |
+| $N_w$ | $N_w$ | number of samples in a candidate Hall window | $1$ |
+| $b_x$ | $b_x$ | fitted longitudinal intercept | $\mathrm{m}$ |
+| $b_y$ | $b_y$ | fitted transverse intercept | $\mathrm{m}$ |
+| $r_{a,n}$ | $r_{a,n}$ | coordinate-$a$ regression residual | $\mathrm{m}$ |
+| $a,b$ | $a,b$ | coordinate indices taking values $x$ or $y$ | $1$ |
+| $\chi^2_\nu$ | $\chi^2_\nu$ | reduced Mahalanobis residual statistic | $1$ |
+| $d_{\mathrm{coh}}$ | $d_{\mathrm{coh}}$ | directed-motion coherence with the fitted velocity | $1$ |
+| $\operatorname{Cov}(v_a,v_b)$ | $\operatorname{Cov}(v_a,v_b)$ | fitted velocity covariance entry | $\mathrm{m^2\,s^{-2}}$ |
+| $\operatorname{Var}(\Theta_H)$ | $\operatorname{Var}(\Theta_H)$ | delta-method Hall-angle variance | $\mathrm{rad^2}$ |
+
+(skyrmion-hall-reason-code-precedence)=
+The method returns no angle and exactly one stable reason code. Precedence is
+`topology_lost` → `edge_contaminated` → `insufficient_samples` → `no_motion` → `no_stationary_window`.
+`topology_lost` wins for any
+nonfinite/unqualified sample, $|Q_n|<0.5$, or charge-sign change;
+`edge_contaminated` wins next for any centre closer than $16\,\mathrm{nm}$ to
+an edge; `insufficient_samples` wins next when fewer than 21 base-qualified
+samples remain; `no_motion` means no enumerated interval reaches both the
+$4\,\mathrm{nm}$ displacement and $1\,\mathrm{m\,s^{-1}}$ mean-speed gates;
+`no_stationary_window` is the remaining case in which motion exists but no
+interval passes duration, charge-stability, and $c_v$ gates.
+
+`reverse_transverse_axis` is a reporting-frame transformation: it maps
+`(v_x,v_y)` to `(v_x,-v_y)` and therefore maps the principal-branch
+`Theta_H` to `-Theta_H`; it does not alter the solver frame or physical
+trajectory.
+
+The current CPU topological-charge resource and its managed FDM/FEM checks are
+prerequisites only. The pure `SkyrmionTrajectoryV1` and
+`SkyrmionHallAngleV1` seam has focused source tests, but that does not prove a
+v2 resource, GPU execution, uncertainty calibration, or the `racetrack_m1_v1`
+production workload. All of those remain unqualified until their own managed
+evidence gates pass.
 
 ### 4.3 Planner and capability impact
 
@@ -404,6 +651,7 @@ The endpoint must preserve:
 - FEM order and resolved discretization;
 - exact cache-key digest.
 
+(implementation-mapping)=
 ### 4.4 Resource status and trust
 
 Computation status and trust are separate fields.
@@ -521,13 +769,15 @@ The extension is offered only for committed magnetic objects. Unsupported
 objects remain visible only when explaining a typed reason is useful; they do
 not appear as apparently runnable analyses.
 
+(validation)=
 ## 6. Validation strategy
 
 Convergence error is measured against an independent continuum reference on
 the same finite physical support, not blindly against an infinite-domain
 integer. The primary smooth oracle is the Belavin-Polyakov texture
 
-```math
+```{math}
+:label: belavin-polyakov-texture
 \hat{\mathbf m}(x,y)=
 \frac{(2\lambda x,\ 2\lambda y,\ x^2+y^2-\lambda^2)}
 {x^2+y^2+\lambda^2},
@@ -630,6 +880,7 @@ host-only build.
 - [ ] Inspector and Explorer conform to this note
 - [x] Managed FDM/FEM runtime evidence passes (`just verify-topological-charge-cross-backend`)
 
+(limitations)=
 ## 8. Known limits and deferred work
 
 - Curved-surface degree requires a separate oriented-surface note and resource.
@@ -643,6 +894,7 @@ host-only build.
 - Component-wise charge for disconnected objects is deferred until component
   identity is stable in mesh provenance.
 
+(scientific-bibliography)=
 ## 9. References
 
 1. B. Berg and M. Luescher, "Definition and statistical distributions of a
@@ -655,3 +907,30 @@ host-only build.
 4. Fullmag production implementation target:
    `crates/fullmag-api/src/analysis/topological_charge.rs` and the dedicated
    support-builder modules defined by the implementation plan.
+
+(source-code-index)=
+## 10. Source-code index
+
+Rows marked as current source identify implemented CPU/resource contracts.
+Documentation anchors own accepted equations but are not executable evidence.
+The Hall-angle pure seam is source-tested only and remains unqualified.
+
+| Claim | Path | Symbol | Responsibility | Evidence |
+|---|---|---|---|---|
+| Continuum topological-charge contract | docs/physics/0940-topological-charge-observable.md | DOC-ANCHOR:governing-equations | own the accepted frame, normalization, density, and continuum integral definitions | documentation contract; not executable evidence |
+| Oriented charge kernel | crates/fullmag-api/src/analysis/topological_charge.rs | compute_oriented_charge | integrate signed solid angles over an oriented triangle support | current CPU source and focused unit tests |
+| Support topology gate | crates/fullmag-api/src/analysis/topological_charge.rs | qualify_support_topology | reject duplicate, nonmanifold, or disconnected supports | current CPU source and focused unit tests |
+| Boundary trust gate | crates/fullmag-api/src/analysis/topological_charge.rs | qualify_boundary | qualify boundary uniformity separately from the charge value | current CPU source and focused unit tests |
+| FDM profile weighting | crates/fullmag-api/src/analysis/topological_charge.rs | fdm_weighted_mean | compute thickness-weighted FDM layer summaries | current CPU source and focused unit tests |
+| FEM profile weighting | crates/fullmag-api/src/analysis/topological_charge.rs | fem_midpoint_weights | compute equal physical bin-midpoint weights for FEM profile summaries | current CPU source and focused unit tests |
+| Automatic FEM profile count | crates/fullmag-api/src/schemas/analysis_extensions.rs | resolved_profile_sample_count | resolve `auto` to exactly 33 physical cuts | current schema source and focused unit tests |
+| Cache identity | crates/fullmag-api/src/quantity_data_plane.rs | topological_charge_cache_key | bind object, field, support, method, mesh, domain, and snapshot identity | router cache-key regression |
+| Managed evidence validator | scripts/validate_topological_charge_runtime.py | validate_evidence | reject incomplete FDM/FEM managed-runtime evidence | managed cross-backend recipes |
+| Belavin-Polyakov validation contract | docs/physics/0940-topological-charge-observable.md | DOC-ANCHOR:validation | own the independent continuum validation target | documentation contract; not production-kernel evidence |
+| Hall semantic contract | docs/physics/0940-topological-charge-observable.md | DOC-ANCHOR:skyrmion-hall-angle-v1-contract | own signed-density centre, steady-window, regression, covariance, angle, and reason-code semantics | documentation contract; source seam is separately tested |
+| Trajectory and Hall-angle pure seam | crates/fullmag-api/src/analysis/skyrmion_trajectory.rs | analyze_skyrmion_hall_angle_v1 | consume accepted signed-density samples, select a steady interval, and produce fail-closed trajectory/Hall result | source and focused unit tests; no v2 resource, managed runtime, GPU, or production qualification |
+| Hall steady-window thresholds | docs/physics/0940-topological-charge-observable.md | DOC-ANCHOR:skyrmion-hall-steady-window-thresholds | freeze all numeric candidate-window gates | source and focused unit tests; no runtime qualification |
+| Hall candidate-window selection | docs/physics/0940-topological-charge-observable.md | DOC-ANCHOR:skyrmion-hall-candidate-window-selection | freeze exhaustive enumeration and deterministic tie-break | source and focused unit tests; no runtime qualification |
+| Hall weighted GLS and covariance | docs/physics/0940-topological-charge-observable.md | DOC-ANCHOR:skyrmion-hall-weighted-gls | freeze calibrated centre covariance, GLS fit, residual and directional gates, and velocity covariance | source and focused unit tests; no runtime qualification |
+| Hall trajectory provenance | docs/physics/0940-topological-charge-observable.md | DOC-ANCHOR:skyrmion-hall-trajectory-provenance | freeze required sample fields and common provenance identity | source and focused unit tests; no runtime qualification |
+| Hall reason-code precedence | docs/physics/0940-topological-charge-observable.md | DOC-ANCHOR:skyrmion-hall-reason-code-precedence | freeze fail-closed reason ordering and gate ownership | source and focused unit tests; no runtime qualification |

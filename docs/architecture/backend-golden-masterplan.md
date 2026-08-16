@@ -639,9 +639,22 @@ transaction owner znajduje się w
 w `backends/fdm/gpu/cuda/transport/charge/device_solver.cu`, a kanoniczny
 checkpoint w `backends/fdm/gpu/cuda/transport/charge/checkpoint_codec.cpp`.
 Managed bramka wykonuje uniform, layered, snapshot i boundary-mutation gates na
-rzeczywistym GPU oraz raportuje `host_fallback_count=0`. Nie istnieją jeszcze
-free-component zero-mean gauge, next-solve Krylov warm-start continuation,
-publiczny ProblemIR/planner/runner ani CUDA spin/SHE/mixing/torque.
+rzeczywistym GPU oraz raportuje `host_fallback_count=0`. Istnieje także
+częściowy, niekwalifikowany natywny slice CUDA/FP64 steady-spin/direct-SHE/
+mixing/torque. `backends/fdm/gpu/cuda/transport/spin/**` realizuje operator i
+solver, a `context.cu` wraz z `integrators/transport_rhs_fp64.cu` zapewnia
+wyłączne, etapowe sprzężenie z Heun/RK4. Stan spinowy etapów jest trial i
+przechodzi do accepted dopiero razem z zaakceptowanym krokiem LLG, zawsze z
+końcowego zaakceptowanego `m` i niezależnie od trybu statystyk; odrzucony późny
+etap odtwarza `m`, czas i liczniki accepted oraz usuwa trialowy sparse cache.
+Charge snapshot jest zamrożony przez wszystkie kroki danego wiązania, więc ten
+slice obsługuje wyłącznie stały w czasie prąd; $J_c(t)$ pozostaje poza
+wykonywalnym zakresem. Torque storage pozostaje przypięty do zakończenia kernela
+na strumieniu obliczeniowym LLG; błędy launch/event-record/event-sync wykonują
+lokalny drain strumienia i zwalniają pin bez `cudaDeviceSynchronize`. Nie
+istnieją jeszcze next-solve Krylov warm-start
+continuation ani kompletny publiczny
+ProblemIR/planner/runner tej ścieżki.
 
 Dlatego capability FDM GPU M1 pozostaje `semantic_only`, agregat ma
 `implementation_state=partial`, `validation_state=unvalidated` i

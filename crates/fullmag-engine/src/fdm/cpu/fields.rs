@@ -299,6 +299,7 @@ impl ExchangeLlgProblem {
         };
         let external_energy_joules = if self.terms.external_field.is_some()
             || self.terms.per_node_field.is_some()
+            || self.static_external_field.is_some()
             || self.terms.oersted_cylinder.is_some()
         {
             let combined_external = external_field
@@ -564,6 +565,13 @@ impl ExchangeLlgProblem {
                         value[2] += node_value[2];
                     }
                 }
+                if let Some(static_field) = self.static_external_field.as_ref() {
+                    if let Some(node_value) = static_field.get(i) {
+                        value[0] += node_value[0];
+                        value[1] += node_value[1];
+                        value[2] += node_value[2];
+                    }
+                }
                 value
             })
             .collect()
@@ -572,6 +580,7 @@ impl ExchangeLlgProblem {
     pub(crate) fn has_external_zeeman_source(&self) -> bool {
         self.terms.external_field.is_some()
             || self.terms.per_node_field.is_some()
+            || self.static_external_field.is_some()
             || self.terms.oersted_cylinder.is_some()
     }
 
@@ -1118,7 +1127,8 @@ impl ExchangeLlgProblem {
     pub(crate) fn external_field_add_into(&self, h_eff: &mut [Vector3]) {
         let ext = self.terms.external_field.unwrap_or([0.0, 0.0, 0.0]);
         let per_node_field = self.terms.per_node_field.as_ref();
-        if self.terms.external_field.is_some() || per_node_field.is_some() {
+        let static_field = self.static_external_field.as_ref();
+        if self.terms.external_field.is_some() || per_node_field.is_some() || static_field.is_some() {
             #[cfg(feature = "parallel")]
             {
                 h_eff.par_iter_mut().enumerate().for_each(|(i, h)| {
@@ -1127,6 +1137,11 @@ impl ExchangeLlgProblem {
                         h[1] += ext[1];
                         h[2] += ext[2];
                         if let Some(value) = per_node_field.and_then(|field| field.get(i)) {
+                            h[0] += value[0];
+                            h[1] += value[1];
+                            h[2] += value[2];
+                        }
+                        if let Some(value) = static_field.and_then(|field| field.get(i)) {
                             h[0] += value[0];
                             h[1] += value[1];
                             h[2] += value[2];
@@ -1142,6 +1157,11 @@ impl ExchangeLlgProblem {
                         h_eff[i][1] += ext[1];
                         h_eff[i][2] += ext[2];
                         if let Some(value) = per_node_field.and_then(|field| field.get(i)) {
+                            h_eff[i][0] += value[0];
+                            h_eff[i][1] += value[1];
+                            h_eff[i][2] += value[2];
+                        }
+                        if let Some(value) = static_field.and_then(|field| field.get(i)) {
                             h_eff[i][0] += value[0];
                             h_eff[i][1] += value[1];
                             h_eff[i][2] += value[2];
@@ -1600,7 +1620,8 @@ impl ExchangeLlgProblem {
     pub(crate) fn external_field_add_into_soa(&self, h_eff: &mut VectorFieldSoA) {
         let ext = self.terms.external_field.unwrap_or([0.0, 0.0, 0.0]);
         let per_node_field = self.terms.per_node_field.as_ref();
-        if self.terms.external_field.is_none() && per_node_field.is_none() {
+        let static_field = self.static_external_field.as_ref();
+        if self.terms.external_field.is_none() && per_node_field.is_none() && static_field.is_none() {
             return;
         }
 
@@ -1610,6 +1631,11 @@ impl ExchangeLlgProblem {
                 h_eff.y[i] += ext[1];
                 h_eff.z[i] += ext[2];
                 if let Some(value) = per_node_field.and_then(|field| field.get(i)) {
+                    h_eff.x[i] += value[0];
+                    h_eff.y[i] += value[1];
+                    h_eff.z[i] += value[2];
+                }
+                if let Some(value) = static_field.and_then(|field| field.get(i)) {
                     h_eff.x[i] += value[0];
                     h_eff.y[i] += value[1];
                     h_eff.z[i] += value[2];
