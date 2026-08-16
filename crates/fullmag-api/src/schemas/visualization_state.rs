@@ -204,7 +204,8 @@ pub struct QuantityVisualizationPatch {
 #[derive(Debug, Serialize, Deserialize, ToSchema, Clone, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct PlanarVisualizationState {
-    pub active_monitor_id: Option<String>,
+    pub source: PlanarSourceSelectionState,
+    pub default_slice: DefaultPlanarSliceState,
     pub view_scope: PlanarViewScopeState,
     pub quantity_id: String,
     pub component: PlanarFieldComponent,
@@ -224,8 +225,8 @@ pub struct PlanarVisualizationState {
 #[derive(Debug, Serialize, Deserialize, ToSchema, Default)]
 #[serde(deny_unknown_fields)]
 pub struct PlanarVisualizationPatch {
-    #[serde(default, deserialize_with = "deserialize_double_option")]
-    pub active_monitor_id: Option<Option<String>>,
+    pub source: Option<PlanarSourceSelectionState>,
+    pub default_slice: Option<DefaultPlanarSliceState>,
     pub view_scope: Option<PlanarViewScopeState>,
     pub quantity_id: Option<String>,
     pub component: Option<PlanarFieldComponent>,
@@ -239,6 +240,41 @@ pub struct PlanarVisualizationPatch {
     pub layers: Option<PlanarLayerState>,
     pub vector_style: Option<PlanarVectorStyleState>,
     pub interaction: Option<PlanarInteractionState>,
+}
+
+/// The source selected by the session-scoped planar viewport state.
+///
+/// `Default` is a presentation source resolved from the current domain. It is
+/// intentionally not a monitor identity and is never written into the scene
+/// document or the canonical Python model.
+#[derive(Debug, Serialize, Deserialize, ToSchema, Clone, PartialEq, Eq)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum PlanarSourceSelectionState {
+    Default,
+    Monitor { monitor_id: String },
+}
+
+#[derive(Debug, Serialize, Deserialize, ToSchema, Clone, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct DefaultPlanarSliceState {
+    pub plane: PlanarAxisPlane,
+    pub position_fraction: f64,
+    pub operator: DefaultPlanarOperatorState,
+}
+
+#[derive(Debug, Serialize, Deserialize, ToSchema, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum PlanarAxisPlane {
+    Xy,
+    Xz,
+    Yz,
+}
+
+#[derive(Debug, Serialize, Deserialize, ToSchema, Clone, PartialEq)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum DefaultPlanarOperatorState {
+    PlaneSample,
+    SlabAverage { thickness_m: f64 },
 }
 
 #[derive(Debug, Serialize, Deserialize, ToSchema, Clone, Copy, PartialEq, Eq)]
@@ -340,7 +376,12 @@ pub struct PlanarInteractionState {
 
 pub(crate) fn default_planar_visualization_state() -> PlanarVisualizationState {
     PlanarVisualizationState {
-        active_monitor_id: None,
+        source: PlanarSourceSelectionState::Default,
+        default_slice: DefaultPlanarSliceState {
+            plane: PlanarAxisPlane::Xy,
+            position_fraction: 0.5,
+            operator: DefaultPlanarOperatorState::PlaneSample,
+        },
         view_scope: PlanarViewScopeState::MonitorTarget,
         quantity_id: "m".to_string(),
         component: PlanarFieldComponent::Magnitude,

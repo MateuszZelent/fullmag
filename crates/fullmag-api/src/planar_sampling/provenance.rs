@@ -13,8 +13,6 @@ pub(super) fn meta(
     PlanarSampleMeta {
         sampler_version: PLANAR_SAMPLER_VERSION,
         sampling_method,
-        monitor_id: request.monitor_id.clone(),
-        monitor_hash: request.monitor_hash.clone(),
         bounds_uv_m: match request.frame.extent {
             fullmag_ir::PlanarExtentIR::Explicit {
                 u_min_m,

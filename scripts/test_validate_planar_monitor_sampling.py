@@ -5,6 +5,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+from scripts.analysis import validate_planar_monitor_sampling as validation
 from scripts.analysis.validate_planar_monitor_sampling import (
     SLAB_ORACLE,
     aggregate_qualification_reports,
@@ -16,6 +17,7 @@ from scripts.analysis.validate_planar_monitor_sampling import (
     attempted_monitor_report,
     exact_sample_identity_matches,
     canonical_sample_links_match,
+    default_slice_patch,
     is_terminal_stop_conflict,
     is_transitional_stop_conflict,
     occupied_probe_coordinates,
@@ -32,6 +34,88 @@ from scripts.analysis.validate_planar_monitor_sampling import (
 
 
 class PlanarMonitorSamplingValidationTests(unittest.TestCase):
+    def test_default_slice_evidence_validator_is_present(self) -> None:
+        self.assertTrue(
+            callable(getattr(validation, "validate_default_slice_evidence", None))
+        )
+
+    def test_default_slice_evidence_validates_frame_identity_and_probe(self) -> None:
+        report = {
+            "carrier_revision": 4,
+            "exact_sample_identity": True,
+            "field_revision": 5,
+            "frame": {
+                "origin_m": [12.0, 21.5, 36.0],
+                "preset": "xz",
+                "u_axis": [1.0, 0.0, 0.0],
+                "v_axis": [0.0, 0.0, 1.0],
+                "normal": [0.0, -1.0, 0.0],
+                "bounds_uv_m": [-2.0, 2.0, -6.0, 6.0],
+            },
+            "mask_exact_sample_identity": True,
+            "mesh_revision": 6,
+            "operator": {"kind": "plane_sample"},
+            "probe": {
+                "scalar": 1.0,
+                "source": {"kind": "default"},
+                "world_m": [12.0, 21.5, 36.0],
+            },
+            "quantity_id": "m",
+            "sample_token": "sample:default",
+            "source": {
+                "default_slice_hash": "sha256:default",
+                "default_slice_revision": "7",
+                "domain_generation_id": "generation-a",
+                "kind": "default",
+            },
+            "source_hash": "sha256:default",
+            "source_id": "default",
+            "source_kind": "default",
+            "source_revision": "7",
+            "stats": {"count": 3},
+            "target": {"kind": "domain"},
+            "vector_exact_sample_identity": True,
+            "vector_value_count": 9,
+        }
+
+        evidence = validation.validate_default_slice_evidence(
+            report,
+            plane="xz",
+            position_fraction=0.25,
+            domain_bounds={"min": [10.0, 20.0, 30.0], "max": [14.0, 26.0, 42.0]},
+            operator_kind="plane_sample",
+            quantity_id="m",
+        )
+
+        self.assertTrue(evidence["pass"], evidence)
+        self.assertEqual(evidence["resolved_coordinate_m"], 21.5)
+
+        report["frame"]["normal"] = [0.0, 1.0, 0.0]
+        self.assertFalse(
+            validation.validate_default_slice_evidence(
+                report,
+                plane="xz",
+                position_fraction=0.25,
+                domain_bounds={"min": [10.0, 20.0, 30.0], "max": [14.0, 26.0, 42.0]},
+                operator_kind="plane_sample",
+                quantity_id="m",
+            )["pass"]
+        )
+
+    def test_default_and_authored_monitor_identities_are_typed_and_distinct(self) -> None:
+        self.assertTrue(
+            validation.planar_source_identities_are_distinct(
+                {"source": {"kind": "default", "default_slice_hash": "d"}},
+                {"source": {"kind": "monitor", "monitor_id": "m", "monitor_hash": "m"}},
+            )
+        )
+        self.assertFalse(
+            validation.planar_source_identities_are_distinct(
+                {"source": {"kind": "default", "default_slice_hash": "d"}},
+                {"source": {"kind": "default", "default_slice_hash": "d"}},
+            )
+        )
+
     def test_validator_exits_nonzero_for_a_blocked_qualification_report(self) -> None:
         source = (
             Path(__file__).resolve().parent
@@ -111,6 +195,53 @@ class PlanarMonitorSamplingValidationTests(unittest.TestCase):
 
         self.assertFalse(canonical_sample_links_match(meta))
 
+    def test_canonical_sample_links_bind_default_source_revision(self) -> None:
+        meta = {
+            "carrier_revision": 4,
+            "field_revision": 5,
+            "mesh_revision": 6,
+            "sample_token": "sample:default",
+            "scene_revision": 2,
+            "source": {
+                "default_slice_revision": "3",
+                "kind": "default",
+            },
+        }
+        query = (
+            "sample_token=sample%3Adefault&expected_scene_revision=2&"
+            "expected_source_revision=3&expected_mesh_revision=6&"
+            "expected_carrier_revision=4&expected_field_revision=5"
+        )
+        meta["links"] = {
+            name: f"/planar-default/{name}?{query}"
+            for name in ("scalar", "vectors", "empty_mask", "probe")
+        }
+
+        self.assertTrue(canonical_sample_links_match(meta))
+        meta["links"]["probe"] = meta["links"]["probe"].replace(
+            "expected_source_revision=3", "expected_monitor_revision=3"
+        )
+        self.assertFalse(canonical_sample_links_match(meta))
+
+    def test_default_slice_patch_is_typed_and_contains_no_legacy_monitor_id(self) -> None:
+        patch = default_slice_patch(
+            plane="xz",
+            position_fraction=0.25,
+            operator_kind="slab_average",
+            thickness_m=2e-9,
+        )
+
+        self.assertEqual(patch["source"], {"kind": "default"})
+        self.assertEqual(
+            patch["default_slice"],
+            {
+                "operator": {"kind": "slab_average", "thickness_m": 2e-9},
+                "plane": "xz",
+                "position_fraction": 0.25,
+            },
+        )
+        self.assertNotIn("active_monitor_id", patch)
+
     def test_attempted_monitor_case_retains_exact_runtime_error(self) -> None:
         monitor = {
             "id": "airbox-plane",
@@ -163,6 +294,27 @@ class PlanarMonitorSamplingValidationTests(unittest.TestCase):
             self.assertIn("study.demag(", source)
             self.assertIn("study.stages.add_hysteresis_sweep(", source)
             self.assertIn('magnetization="every_n"', source)
+
+    def test_default_slice_fixtures_have_no_authored_planar_monitors(self) -> None:
+        root = Path(__file__).resolve().parents[1]
+        for backend in ("fdm", "fem"):
+            fixture = root / f"examples/viewport_2d_default_slice_{backend}_smoke.py"
+            self.assertTrue(fixture.exists(), fixture)
+            source = fixture.read_text()
+            self.assertNotIn("study.monitors.add_planar", source)
+            self.assertIn("study.engine(", source)
+            self.assertIn("study.device(", source)
+
+    def test_default_slice_recipe_exposes_the_required_runtime_matrix(self) -> None:
+        recipe = (Path(__file__).resolve().parents[1] / "justfile").read_text()
+        start = recipe.index("run-viewport-2d-default-slice-smoke")
+        end = recipe.index("\nrun-permalloy-skyrmion-relax", start)
+        default_recipe = recipe[start:end]
+        self.assertIn("--source-kind default", default_recipe)
+        self.assertIn("viewport_2d_default_slice_${backend}_smoke.py", default_recipe)
+        self.assertIn("run-viewport-2d-default-slice-smoke fdm cpu", recipe)
+        self.assertIn("run-viewport-2d-default-slice-smoke fem cpu", recipe)
+        self.assertIn("run-viewport-2d-default-slice-smoke fem gpu", recipe)
 
     def test_qualification_cases_fail_closed_for_unexecuted_required_axes(self) -> None:
         cases = build_qualification_cases(

@@ -151,6 +151,29 @@ pub struct FieldVectorQuery {
     pub view: Option<String>,
     /// Phase angle in radians for `view=phase_rotated_real`.
     pub phase_rad: Option<f64>,
+    /// Optional optimistic-concurrency precondition for the domain generation.
+    pub expected_generation_id: Option<String>,
+    /// Optional optimistic-concurrency precondition for the resolved field carrier.
+    pub expected_carrier_revision: Option<String>,
+}
+
+/// JSON response returned while a requested field vector is being materialized.
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct FieldVectorPendingResponse {
+    /// Current materialization state, normally `pending`.
+    pub state: String,
+    /// Stable reason code suitable for client-side diagnostics.
+    pub reason_code: String,
+    /// Recommended delay before retrying the same resource request.
+    pub retry_after_ms: u64,
+    /// Active compute-fields command, when one owns the materialization.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub command_id: Option<String>,
+    pub quantity_id: String,
+    pub scope_kind: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scope_id: Option<String>,
+    pub generation_id: String,
 }
 
 // ── P2: 2D slice JSON types ───────────────────────────────────────────────────

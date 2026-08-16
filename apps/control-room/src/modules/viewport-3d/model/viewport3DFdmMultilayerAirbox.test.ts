@@ -37,16 +37,17 @@ function field(overrides: Partial<DecodedFieldVector> = {}): DecodedFieldVector 
 }
 
 describe("FDM multilayer Airbox target field", () => {
-  it("requests only H_demag on the canonical target-only Airbox scope", () => {
-    expect(buildFdmMultilayerAirboxFieldRequest(domain as never)).toEqual({
+  it("bounds vectors-only transport with max_samples on the canonical Airbox scope", () => {
+    expect(buildFdmMultilayerAirboxFieldRequest(domain as never, 1200)).toEqual({
       consumers: ["viewport-3d:fdm-multilayer-airbox"],
       quantityId: "H_demag",
       query: {
         component: "full",
+        max_samples: 1200,
         scope_id: "airbox",
         scope_kind: "airbox",
       },
-      requestId: "fdm-multilayer-airbox:H_demag",
+      requestId: "fdm-multilayer-airbox:H_demag:max_samples=1200",
     });
   });
 
@@ -79,6 +80,21 @@ describe("FDM multilayer Airbox target field", () => {
 
   it("accepts a matching FMVP v3 target grid with explicit index coverage", () => {
     expect(resolveFdmMultilayerAirboxFieldVector(domain as never, field())).toBeTruthy();
+  });
+
+  it("accepts a sampled FMVP v3 payload with explicit cell ordinals", () => {
+    expect(
+      resolveFdmMultilayerAirboxFieldVector(
+        domain as never,
+        field({
+          indexing: "sampled_node_indices",
+          nodeIndices: new Uint32Array([1, 3]),
+          pointCount: 2,
+          valueCount: 6,
+          values: new Float64Array(6),
+        }),
+      ),
+    ).toBeTruthy();
   });
 
   it.each([

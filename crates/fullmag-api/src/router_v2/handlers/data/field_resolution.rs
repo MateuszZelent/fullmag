@@ -68,7 +68,11 @@ pub(super) fn field_point_count_matches_current_domain(
             return true;
         }
         return fdm_grid_point_count(snapshot)
-            .is_some_and(|expected_count| point_count == expected_count);
+            .map(|expected_count| point_count == expected_count)
+            // An explicit FDM lane can expose a field before the grid
+            // geometry resource is published. Once the count is known, enforce
+            // it; while unknown, keep the canonical field resolvable.
+            .unwrap_or(true);
     }
 
     let Some(mesh) = snapshot.fem_mesh.as_ref() else {
@@ -143,7 +147,7 @@ pub(crate) fn is_fdm_snapshot(snapshot: &SessionStateResponse) -> bool {
             return false;
         }
         if resolved_backend.to_ascii_lowercase().contains("fdm") {
-            return fdm_grid_point_count(snapshot).is_some();
+            return true;
         }
     }
     let backend_requested_fdm = snapshot
@@ -156,7 +160,7 @@ pub(crate) fn is_fdm_snapshot(snapshot: &SessionStateResponse) -> bool {
             .resolved_backend
             .as_deref()
             .is_some_and(|backend| backend.to_ascii_lowercase().contains("fdm"));
-    backend_requested_fdm && fdm_grid_point_count(snapshot).is_some()
+    backend_requested_fdm
 }
 
 fn visit_json_field_values(raw: &serde_json::Value, mut visit: impl FnMut(f64)) -> usize {

@@ -45,8 +45,6 @@ fn request(
     resolution: [u32; 2],
 ) -> ResolvedPlanarSampleRequest {
     ResolvedPlanarSampleRequest {
-        monitor_id: "target-test".to_string(),
-        monitor_hash: "target-test-hash".to_string(),
         frame,
         operator,
         resolution,
@@ -670,9 +668,11 @@ fn slab_average_is_measure_weighted_and_refinement_invariant() {
 fn sample_identity_distinguishes_target_operator_resolution_quality_and_quantity_revision() {
     let identity = |quantity_revision, target_fingerprint: &str, quality: &str, thickness_m, resolution| PlanarSampleIdentity {
         session_id: "session-1".to_string(),
-        monitor_id: "monitor-1".to_string(),
-        monitor_revision: 3,
-        monitor_hash: "monitor-hash".to_string(),
+        source_kind: "monitor".to_string(),
+        source_id: Some("monitor-1".to_string()),
+        source_revision: 3,
+        source_hash: "monitor-hash".to_string(),
+        domain_generation_id: String::new(),
         scene_revision: 5,
         target_fingerprint: target_fingerprint.to_string(),
         target_kind: "object".to_string(),
@@ -686,7 +686,7 @@ fn sample_identity_distinguishes_target_operator_resolution_quality_and_quantity
         field_generation: Some("run-1:5".to_string()),
         field_content_fingerprint: None,
         carrier_revision: 11,
-        source_kind: "materialized".to_string(),
+        field_source_kind: "materialized".to_string(),
         source_backend: Some("fem".to_string()),
         source_device: Some("gpu".to_string()),
         source_precision: Some("double".to_string()),

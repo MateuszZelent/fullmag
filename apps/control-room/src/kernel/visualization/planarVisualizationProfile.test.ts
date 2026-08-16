@@ -9,7 +9,7 @@ describe("planar visualization profile contract", () => {
   it("keeps planar changes structurally independent from the 3D profile", () => {
     const patch = {
       planar: {
-        active_monitor_id: "plane-1",
+        source: { kind: "monitor", monitor_id: "plane-1" },
         component: "normal",
         quantity_id: "h_demag",
       },

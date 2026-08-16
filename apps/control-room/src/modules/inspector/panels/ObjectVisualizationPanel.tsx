@@ -4,6 +4,7 @@ import React, {
   useCallback,
   useMemo,
   useState,
+  useSyncExternalStore,
 } from "react";
 
 import { useKernel } from "@/kernel/KernelContext";
@@ -16,8 +17,8 @@ import {
   isFdmUniverseOutsideSupportTarget,
   mergeVisualizationStateTargetOverride,
   persistentVisualizationTargetPatch,
-  resolveTargetVisualization,
   resetAirboxVisualizationState,
+  resolveTargetVisualization,
   resolveVisualizationTargetFromSelection,
   visualizationTargetCapabilities,
   visualizationStateOverrideMatchesTarget,
@@ -50,6 +51,7 @@ import {
   useFdmRegionMembershipResource,
   useFdmRegionMembershipBinaryResource,
   useFdmMultilayerLayoutResource,
+  useFdmMultilayerLayerActiveMasksResource,
 } from "@/kernel/resources/geometryLifecycleResources";
 import {
   isVisualizationAirboxIdentity,
@@ -69,6 +71,8 @@ import {
   buildVisualizationPanelSections,
   canonicalVisualizationStateForBaseline,
   resolveVisualizationVectorBudgetRange,
+  visualizationOverridesForTargetReset,
+  resolveVisualizationVectorCapacityForTarget,
   resolveObjectVisualizationPanelTopologyFreshness,
   resolveObjectChildRegionVisualizationTargets,
   resolveChildRegionOverrideTargetIds,
@@ -76,7 +80,6 @@ import {
   resolveRegionVisualizationCarrier,
   resolveVisualizationRenderResolution,
   restoreVisualizationAppliedBaseline,
-  fdmGridCellCount,
   fdmVisualizationResourceNotice,
   isVisualizationBaselineReady,
   resolveObjectVisualizationLane,
@@ -137,6 +140,11 @@ function useObjectVisualizationPanelState(
 ) {
   const selectionTarget = resolveVisualizationTargetFromSelection(selection);
   const { visualizationSync } = useKernel();
+  const visualizationSyncSnapshot = useSyncExternalStore(
+    (onStoreChange) => visualizationSync.subscribe(onStoreChange),
+    () => visualizationSync.getSnapshot(),
+    () => visualizationSync.getSnapshot(),
+  );
   const visualization = useObjectVisualizationController();
   const activeModuleTab = useLayoutSelector((layout) => layout.activeModuleTab);
   const manifestStatus = useSessionStatusSelector(
@@ -150,6 +158,10 @@ function useObjectVisualizationPanelState(
   const fdmMultilayerLayout = useFdmMultilayerLayoutResource({
     enabled: lane === "fdm",
   });
+  const fdmMultilayerActiveMasks = useFdmMultilayerLayerActiveMasksResource(
+    fdmMultilayerLayout.data,
+    { enabled: lane === "fdm" },
+  );
   const target = resolveObjectVisualizationTargetForLane({
     fdmNativeLayers: fdmMultilayerLayout.data?.layers,
     lane,
@@ -172,7 +184,6 @@ function useObjectVisualizationPanelState(
   const [patchChildRegions, setPatchChildRegions] = useState(false);
   const [fieldCatalogRequestedTargetKey, setFieldCatalogRequestedTargetKey] =
     useState<string | null>(null);
-  const pending = false;
   const scene = useSceneResource({ enabled: femResourcesEnabled });
   const fdmDomain = useDomainMetaResource({ enabled: fdmResourcesEnabled });
   const fdmMembership = useFdmRegionMembershipResource({
@@ -362,6 +373,12 @@ function useObjectVisualizationPanelState(
   const targetKey = resolvedTarget
     ? visualizationTargetKey(resolvedTarget)
     : null;
+  const pending = Boolean(
+    targetKey &&
+      (snapshot.pendingOverrides?.[targetKey] ||
+        visualizationSyncSnapshot.pendingTargetIds.includes(targetKey) ||
+        visualizationSyncSnapshot.inflightTargetIds.includes(targetKey)),
+  );
   const fieldCatalogRequested =
     targetKey !== null && fieldCatalogRequestedTargetKey === targetKey;
   const fieldCatalog = useFieldCatalogResource({
@@ -423,6 +440,7 @@ function useObjectVisualizationPanelState(
       )
     : false;
   const revision = targetVisualization?.revision ?? snapshot.version;
+  const visualizationResourceRevision = visualizationState.data?.revision ?? null;
 
   async function patch(patchValue: VisualizationTargetPatch): Promise<void> {
     if (!resolvedTarget) return;
@@ -447,7 +465,7 @@ function useObjectVisualizationPanelState(
         airboxLocalVisualizationPatchFromTargetPatch(patchValue);
       const statePatch = airboxVisualizationStatePatchFromTargetPatch(
         patchValue,
-        visualizationState.data?.overrides,
+        displayVisualizationState?.overrides,
       );
       if (Object.keys(localPatch).length > 0) {
         visualization.patchViewportPreferences(resolvedTarget, localPatch);
@@ -457,7 +475,7 @@ function useObjectVisualizationPanelState(
         return;
       }
 
-      visualizationSync.queuePatch(statePatch);
+      visualizationSync.queuePatch(statePatch, [targetKey ?? visualizationTargetKey(resolvedTarget)]);
       visualization.patchTargetPending(
         resolvedTarget,
         persistentVisualizationTargetPatch(patchValue),
@@ -492,7 +510,7 @@ function useObjectVisualizationPanelState(
       }
     }
     if (Object.keys(remotePatch).length > 0) {
-      let overrides = visualizationState.data.overrides ?? [];
+      let overrides = displayVisualizationState?.overrides ?? [];
       for (const patchTarget of patchTargets) {
         overrides = mergeVisualizationStateTargetOverride(
           overrides,
@@ -500,9 +518,12 @@ function useObjectVisualizationPanelState(
           remotePatch,
         );
       }
-      visualizationSync.queuePatch({
-        overrides,
-      });
+      visualizationSync.queuePatch(
+        {
+          overrides,
+        },
+        patchTargets.map((patchTarget) => visualizationTargetKey(patchTarget)),
+      );
       // Keep the remote patch locally only until a newer visualization-state
       // revision acknowledges the queued backend transaction.
       for (const patchTarget of patchTargets) {
@@ -525,7 +546,8 @@ function useObjectVisualizationPanelState(
     }
     if (resolvedTarget.kind === "airbox") {
       visualizationSync.queuePatch(
-        resetAirboxVisualizationState(visualizationState.data ?? { overrides: [] }),
+        resetAirboxVisualizationState(displayVisualizationState ?? { overrides: [] }),
+        [visualizationTargetKey(resolvedTarget)],
       );
       visualization.clearTarget(resolvedTarget);
       setFeedback(null);
@@ -537,11 +559,15 @@ function useObjectVisualizationPanelState(
       return;
     }
 
-    visualizationSync.queuePatch({
-      overrides: (visualizationState.data.overrides ?? []).filter(
-        (entry) => !visualizationStateOverrideMatchesTarget(entry, resolvedTarget),
-      ),
-    });
+    visualizationSync.queuePatch(
+      {
+        overrides: visualizationOverridesForTargetReset(
+          displayVisualizationState ?? { overrides: [] },
+          resolvedTarget,
+        ),
+      },
+      [visualizationTargetKey(resolvedTarget)],
+    );
     visualization.clearTarget(resolvedTarget);
     setFeedback(null);
   }
@@ -555,12 +581,15 @@ function useObjectVisualizationPanelState(
       return;
     }
 
-    visualizationSync.queuePatch({
-      overrides: removeOwnerChildRegionVisualizationOverrides({
-        objectId: selection.objectId ?? "",
-        overrides: visualizationState.data.overrides ?? [],
-      }),
-    });
+    visualizationSync.queuePatch(
+      {
+        overrides: removeOwnerChildRegionVisualizationOverrides({
+          objectId: selection.objectId ?? "",
+          overrides: displayVisualizationState?.overrides ?? [],
+        }),
+      },
+      childRegionTargets.map((childTarget) => visualizationTargetKey(childTarget)),
+    );
     for (const childTarget of childRegionTargets) {
       visualization.clearTarget(childTarget);
     }
@@ -572,9 +601,10 @@ function useObjectVisualizationPanelState(
   ): Promise<void> {
     restoreVisualizationAppliedBaseline({
       baseline,
-      currentOverrides: visualizationState.data?.overrides ?? [],
+      currentOverrides: displayVisualizationState?.overrides ?? [],
       fdm: fdmTarget,
-      queuePatch: (statePatch) => visualizationSync.queuePatch(statePatch),
+      queuePatch: (statePatch, targetIds) =>
+        visualizationSync.queuePatch(statePatch, targetIds),
       visualization,
     });
     setFeedback(null);
@@ -660,7 +690,6 @@ function useObjectVisualizationPanelState(
   const displaySettings =
     renderResolution?.finalSettings ?? effectiveSettings ?? panelSettings;
   const renderWarning = renderResolution?.degradedReasons[0]?.message ?? null;
-  const fdmCellCount = fdmTarget ? fdmGridCellCount(fdmDomain.data) : null;
   const fdmNotice = fdmTarget
     ? fdmVisualizationResourceNotice({
         domain: fdmDomain.data,
@@ -681,21 +710,89 @@ function useObjectVisualizationPanelState(
     memberships: fdmTarget ? null : regionMemberships,
     target: fdmTarget ? null : resolvedTarget,
   });
+  const nativeLayer =
+    resolvedTarget?.kind === "fdm-native-layer"
+      ? fdmMultilayerLayout.data?.layers.find(
+          (layer) =>
+            resolvedTarget.id ===
+            `fdm-native-layer:${encodeURIComponent(layer.layer_id)}`,
+        )
+      : null;
+  const nativeLayerCapacity = nativeLayer
+    ? {
+        activeCellCount: nativeLayer.active_cell_count,
+        carrierId: `fdm-native-layer:${encodeURIComponent(nativeLayer.layer_id)}`,
+        domainGenerationId:
+          nativeLayer.region_membership_generation_id ??
+          fdmMultilayerLayout.data?.domain_generation_id ??
+          null,
+        gridFingerprint: nativeLayer.native_grid_fingerprint ?? null,
+        inactiveCellCount: nativeLayer.inactive_cell_count,
+        revision:
+          nativeLayer.region_membership_revision ??
+          fdmMultilayerLayout.data?.layout_revision ??
+          null,
+        shape: [
+          nativeLayer.native_grid[0] ?? 0,
+          nativeLayer.native_grid[1] ?? 0,
+          nativeLayer.native_grid[2] ?? 0,
+        ] as const,
+      }
+    : null;
+  const multilayerAirboxCapacity =
+    resolvedTarget?.kind === "airbox" &&
+    fdmMultilayerLayout.data?.available &&
+    fdmMultilayerLayout.data.airbox?.carrier_available &&
+    fdmMultilayerLayout.data.airbox.cells
+      ? {
+          carrierFingerprint:
+            fdmMultilayerLayout.data.airbox.carrier_fingerprint ?? null,
+          cellCount:
+            fdmMultilayerLayout.data.airbox.cells.reduce(
+              (total, value) => total * value,
+              1,
+            ),
+          carrierId: `fdm-multilayer-airbox:${fdmMultilayerLayout.data.airbox.carrier_fingerprint ?? fdmMultilayerLayout.data.layout_fingerprint ?? "unknown"}`,
+          domainGenerationId:
+            fdmMultilayerLayout.data.domain_generation_id ?? null,
+          revision: fdmMultilayerLayout.data.airbox.carrier_revision ?? null,
+          shape: [
+            fdmMultilayerLayout.data.airbox.cells[0] ?? 0,
+            fdmMultilayerLayout.data.airbox.cells[1] ?? 0,
+            fdmMultilayerLayout.data.airbox.cells[2] ?? 0,
+          ] as const,
+        }
+      : null;
+  const vectorCapacity = resolveVisualizationVectorCapacityForTarget({
+    domain: fdmTarget ? fdmDomain.data : null,
+    fdmMembership: fdmTarget ? fdmMembership.data : null,
+    fdmNativeActiveMask: nativeLayer
+      ? fdmMultilayerActiveMasks.data?.masks.get(nativeLayer.layer_id)
+          ?.activeMask ?? null
+      : null,
+    fdmNativeLayer: nativeLayerCapacity,
+    fdmRealizedRegionIds: fdmTarget
+      ? fdmMembershipBinary.data?.regionIds ?? null
+      : null,
+    femManifest: fdmTarget ? null : manifest.data,
+    multilayerAirbox: multilayerAirboxCapacity,
+    target: resolvedTarget,
+  });
   const vectorBudgetRanges = {
     full: resolveVisualizationVectorBudgetRange({
-      fdmCellCount,
+      capacity: vectorCapacity,
       geometryScope: "full",
-      manifestRegions: manifest.data?.regions,
-      memberships: regionMemberships,
-      meshParts: manifest.data?.mesh_parts,
+      manifestRegions: fdmTarget ? null : manifest.data?.regions,
+      memberships: fdmTarget ? null : regionMemberships,
+      meshParts: fdmTarget ? null : manifest.data?.mesh_parts,
       target: resolvedTarget,
     }),
     surface: resolveVisualizationVectorBudgetRange({
-      fdmCellCount,
+      capacity: vectorCapacity,
       geometryScope: "surface",
-      manifestRegions: manifest.data?.regions,
-      memberships: regionMemberships,
-      meshParts: manifest.data?.mesh_parts,
+      manifestRegions: fdmTarget ? null : manifest.data?.regions,
+      memberships: fdmTarget ? null : regionMemberships,
+      meshParts: fdmTarget ? null : manifest.data?.mesh_parts,
       target: resolvedTarget,
     }),
   } satisfies Record<
@@ -705,10 +802,10 @@ function useObjectVisualizationPanelState(
   const vectorBudgetRange =
     vectorBudgetRanges[settings?.geometryScope ?? "full"];
   function onTogglePartVectors(visible: boolean) {
-    if (!resolvedTarget || !visualizationState.data) return;
+    if (!resolvedTarget || !displayVisualizationState) return;
     queueTargetVectorVisibilityPatch({
       controller: visualization,
-      state: visualizationState.data,
+      state: displayVisualizationState,
       sync: visualizationSync,
       target: resolvedTarget,
       visible,
@@ -748,10 +845,12 @@ function useObjectVisualizationPanelState(
     primitiveDisplayToggleVisible,
     vectorBudgetRange,
     vectorBudgetRanges,
+    vectorCapacity,
+    visualizationResourceRevision,
     vectorMeshParts,
-    vectorTopologyHash: fdmTarget
-      ? fdmMembership.data?.grid_fingerprint ?? null
-      : manifest.data?.topology_fingerprint ?? null,
+    vectorTopologyHash:
+      vectorCapacity?.topologyHash ??
+      (fdmTarget ? fdmMembership.data?.grid_fingerprint ?? null : manifest.data?.topology_fingerprint ?? null),
     visualizationBaselineReady,
     fdmNotice,
   } as const;
@@ -937,6 +1036,8 @@ function ObjectVisualizationPanelView({
     primitiveDisplayToggleVisible,
     vectorBudgetRange,
     vectorBudgetRanges,
+    vectorCapacity,
+    visualizationResourceRevision,
     vectorMeshParts,
     vectorTopologyHash,
   } = panel;
@@ -1139,6 +1240,8 @@ function ObjectVisualizationPanelView({
               target={target}
               targetKind={target.kind}
               vectorBudgetRange={vectorBudgetRange}
+              vectorCapacity={vectorCapacity}
+              visualizationRevision={visualizationResourceRevision}
               vectorTopologyHash={vectorTopologyHash}
               />
             ) : null}

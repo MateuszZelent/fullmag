@@ -8,12 +8,16 @@ use axum::http::HeaderMap;
 use axum::Json;
 
 use crate::error::ApiError;
+use crate::router_v2::handlers::sessions::status::domain_generation_id;
 use crate::schemas::commands::{
     CommandResponse, RuntimeCommandIntent, RuntimeCommandTarget, SolverPolicyRequest,
     StructuredCommandRequest, FDM_GRID_REFRESH_DEFERRED_REASON,
 };
+use crate::schemas::runtime::FieldMaterializationRequirement;
 use crate::session::effective_runtime_status_code;
-use crate::types::{AppState, CommandLifecycleState, SessionCommand, TrackedCommandRecord};
+use crate::types::{
+    AppState, CommandLifecycleState, SessionCommand, SessionStateResponse, TrackedCommandRecord,
+};
 use fullmag_authoring::{
     geometry_blocks_solver_run, realize_geometry_scene, GeometryBackendTarget,
     GeometryRealizationSnapshot, SceneDocument, SceneGeometry, SceneObject,
@@ -1154,11 +1158,13 @@ pub(crate) async fn enqueue_session_command_impl(
     headers: &HeaderMap,
     command: SessionCommand,
 ) -> Result<CommandResponse, ApiError> {
-    let _guard = state.current_live_state.read().await;
-    if _guard.is_none() {
-        return Err(ApiError::not_found("no active local live workspace"));
-    }
-    drop(_guard);
+    let snapshot = state
+        .current_live_state
+        .read()
+        .await
+        .as_ref()
+        .cloned()
+        .ok_or_else(|| ApiError::not_found("no active local live workspace"))?;
 
     if let Some(idempotency_key) = command_request_key(&headers) {
         let cached = {
@@ -1183,6 +1189,10 @@ pub(crate) async fn enqueue_session_command_impl(
     };
     let mut enqueued = command;
     enqueued.seq = seq;
+    if enqueued.kind == "compute_fields" {
+        enqueued.field_materialization_requirements =
+            compute_fields_materialization_requirements(&snapshot);
+    }
     state
         .current_control_queue
         .lock()
@@ -1354,7 +1364,104 @@ fn new_session_command(command_id: String, kind: &str, created_at_unix_ms: u128)
         preview_config: None,
         stages: None,
         profile: None,
+        field_materialization_requirements: Vec::new(),
     }
+}
+
+fn compute_fields_materialization_requirements(
+    snapshot: &SessionStateResponse,
+) -> Vec<FieldMaterializationRequirement> {
+    let canonical_ids = fullmag_runner::quantities::field_materialization_quantity_ids();
+    let quantity_ids = supported_materialization_quantity_ids(snapshot, &canonical_ids);
+    let generation_id = domain_generation_id(snapshot);
+    let mut requirements = vec![FieldMaterializationRequirement {
+        quantity_ids: quantity_ids.into_iter().map(ToString::to_string).collect(),
+        scope_kind: "full".to_string(),
+        scope_id: None,
+        generation_id: generation_id.clone(),
+        carrier_fingerprint: None,
+    }];
+
+    if snapshot_is_fdm_multilayer(snapshot) {
+        let carrier_fingerprint =
+            crate::router_v2::handlers::data::fields::load_fdm_multilayer_airbox_carrier(snapshot)
+                .ok()
+                .flatten()
+                .map(|carrier| carrier.carrier_fingerprint);
+        requirements.push(FieldMaterializationRequirement {
+            quantity_ids: vec!["H_demag".to_string()],
+            scope_kind: "airbox".to_string(),
+            scope_id: Some("airbox".to_string()),
+            generation_id,
+            carrier_fingerprint,
+        });
+    }
+    requirements
+}
+
+fn supported_materialization_quantity_ids<'a>(
+    snapshot: &SessionStateResponse,
+    canonical_ids: &'a [&'a str],
+) -> Vec<&'a str> {
+    let supported = snapshot
+        .metadata
+        .as_ref()
+        .and_then(|metadata| metadata.get("capabilities"))
+        .and_then(|capabilities| capabilities.get("preview_quantities"))
+        .and_then(serde_json::Value::as_array)
+        .or_else(|| {
+            snapshot
+                .metadata
+                .as_ref()
+                .and_then(|metadata| metadata.get("live_preview"))
+                .and_then(|preview| preview.get("supported_quantities"))
+                .and_then(serde_json::Value::as_array)
+        });
+    if let Some(supported) = supported {
+        return canonical_ids
+            .iter()
+            .copied()
+            .filter(|quantity| {
+                supported
+                    .iter()
+                    .any(|value| value.as_str() == Some(*quantity))
+            })
+            .collect();
+    }
+
+    let descriptor_ids = snapshot
+        .quantities
+        .iter()
+        .filter(|descriptor| descriptor.interactive_preview && descriptor.available)
+        .map(|descriptor| descriptor.id.as_str())
+        .collect::<std::collections::BTreeSet<_>>();
+    if !descriptor_ids.is_empty() {
+        return canonical_ids
+            .iter()
+            .copied()
+            .filter(|quantity| descriptor_ids.contains(quantity))
+            .collect();
+    }
+
+    canonical_ids.to_vec()
+}
+
+fn snapshot_is_fdm_multilayer(snapshot: &SessionStateResponse) -> bool {
+    snapshot
+        .metadata
+        .as_ref()
+        .and_then(|metadata| metadata.get("artifact_layout"))
+        .and_then(|layout| layout.get("backend"))
+        .and_then(serde_json::Value::as_str)
+        == Some("fdm_multilayer")
+        || snapshot
+            .metadata
+            .as_ref()
+            .and_then(|metadata| metadata.get("execution_plan"))
+            .and_then(|plan| plan.get("backend_plan"))
+            .and_then(|plan| plan.get("kind"))
+            .and_then(serde_json::Value::as_str)
+            == Some("fdm_multilayer")
 }
 
 fn command_from_structured(

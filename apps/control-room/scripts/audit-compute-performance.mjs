@@ -1327,7 +1327,7 @@ function checkVisualizationPatchHotPath() {
   );
   const queuePatch = blockBetween(
     source,
-    "  queuePatch(patch: VisualizationStatePatch): void {",
+    "  queuePatch(\n",
     "  start(): void {",
   );
   const samePatchStart = objectVisualizationController.indexOf("function samePatch");

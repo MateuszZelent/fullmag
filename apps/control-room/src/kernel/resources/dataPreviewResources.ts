@@ -5,6 +5,7 @@ import { useCallback, useMemo } from "react";
 import type {
   BinaryResourceResult,
   FieldVectorQuery,
+  FieldVectorResponseMetadata,
 } from "@/kernel/api/apiTypes";
 import {
   canonicalFieldVectorQuery,
@@ -109,7 +110,9 @@ async function loadCachedDataPreviewFieldVector(
   resourceKey: string,
   request: (
     etag?: string | null,
-  ) => Promise<BinaryResourceResult<DecodedFieldVector>>,
+  ) => Promise<
+    BinaryResourceResult<DecodedFieldVector, FieldVectorResponseMetadata>
+  >,
 ): Promise<DecodedFieldVector | null> {
   const cached = dataPreviewFieldVectorCache.get(resourceKey);
   const result = await request(cached?.etag);
@@ -121,6 +124,18 @@ async function loadCachedDataPreviewFieldVector(
   }
   if (result.status === "not-applicable") {
     return null;
+  }
+  if (result.status === "pending") {
+    throw Object.assign(
+      new Error(result.reason_code),
+      {
+        code: result.reason_code,
+        command_id: result.command_id ?? null,
+        reason_code: result.reason_code,
+        retry_after_ms: result.retry_after_ms,
+        status: 202,
+      },
+    );
   }
 
   dataPreviewFieldVectorCache.set(resourceKey, {

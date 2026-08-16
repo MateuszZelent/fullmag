@@ -5486,6 +5486,63 @@ run-viewport-2d-planar-monitor-smoke backend="fdm" device="cpu" web_port="3194" 
 run-viewport-2d-planar-monitor-refinement-peer backend="fdm" device="cpu" web_port="3194" api_port="8194":
     just run-viewport-2d-planar-monitor-smoke "{{backend}}" "{{device}}" "{{web_port}}" "{{api_port}}" mesh-refined
 
+run-viewport-2d-default-slice-smoke backend="fdm" device="cpu" web_port="3196" api_port="8196":
+    just ensure-python
+    just ensure-managed-fem-runtime
+    bash -euo pipefail -c '\
+      backend="{{backend}}"; \
+      device="{{device}}"; \
+      case "$backend" in fdm|fem) ;; *) echo "unsupported backend: $backend (expected fdm or fem)" >&2; exit 2 ;; esac; \
+      case "$device" in cpu|gpu) ;; *) echo "unsupported device: $device (expected cpu or gpu)" >&2; exit 2 ;; esac; \
+      if [ "$backend" = "fdm" ] && [ "$device" = "gpu" ]; then echo "FDM GPU default-slice lane is not qualified; run the explicit managed FDM GPU gate first" >&2; exit 2; fi; \
+      if command -v pnpm >/dev/null 2>&1; then PNPM_CMD=pnpm; \
+      elif command -v corepack >/dev/null 2>&1; then PNPM_CMD="corepack pnpm"; \
+      else echo "pnpm or corepack not found on PATH" >&2; exit 127; fi; \
+      fixture="examples/viewport_2d_default_slice_${backend}_smoke.py"; \
+      report_dir="{{repo_root}}/.fullmag/reports/viewport-2d-default-slice-smoke/${backend}-${device}"; \
+      runtime_log="$report_dir/runtime.log"; \
+      science_report="$report_dir/science-report.json"; \
+      browser_dir="$report_dir/browser"; \
+      mkdir -p "$report_dir" "$browser_dir"; \
+      sim_pid=""; \
+      cleanup() { \
+        status=$?; \
+        if [ -n "$sim_pid" ] && kill -0 "$sim_pid" >/dev/null 2>&1; then kill "$sim_pid" >/dev/null 2>&1 || true; wait "$sim_pid" >/dev/null 2>&1 || true; fi; \
+        exit "$status"; \
+      }; \
+      trap cleanup EXIT INT TERM; \
+      FULLMAG_PYTHON="{{repo_python}}" \
+      FULLMAG_PLANAR_DEVICE="$device" \
+      FULLMAG_FDM_EXECUTION="$device" \
+      FULLMAG_FEM_EXECUTION="$device" \
+      FULLMAG_RELAX_DEVICE="$device" \
+      FULLMAG_API_PORT="{{api_port}}" \
+      NEXT_PUBLIC_AUDIT_BUILD=1 \
+      "{{gpu_runtime_bin}}" --dev --web-port "{{web_port}}" -i "$fixture" \
+        > "$runtime_log" 2>&1 & \
+      sim_pid=$!; \
+      api_url="http://localhost:{{api_port}}"; \
+      web_url="http://localhost:{{web_port}}/workspace"; \
+      for _ in $(seq 1 600); do \
+        if curl -fsS "$api_url/v2/sessions/current/data/domain/meta" >/dev/null 2>&1 && curl -fsS "$web_url" >/dev/null 2>&1; then break; fi; \
+        if ! kill -0 "$sim_pid" >/dev/null 2>&1; then tail -n 120 "$runtime_log" >&2 || true; exit 1; fi; \
+        sleep 0.5; \
+      done; \
+      curl -fsS "$api_url/v2/sessions/current/data/domain/meta" >/dev/null || { echo "default-slice API did not become ready; see $runtime_log" >&2; exit 1; }; \
+      "{{repo_python}}" scripts/analysis/validate_planar_monitor_sampling.py \
+        --api-base "$api_url" --backend "$backend" --device "$device" --source-kind default \
+        --output "$science_report"; \
+      printf "\\nViewport 2D default-slice science report:\\n  runtime: %s\\n  science: %s\\n" "$runtime_log" "$science_report"'
+
+run-viewport-2d-default-slice-smoke-fdm-cpu:
+    just run-viewport-2d-default-slice-smoke fdm cpu
+
+run-viewport-2d-default-slice-smoke-fem-cpu:
+    just run-viewport-2d-default-slice-smoke fem cpu
+
+run-viewport-2d-default-slice-smoke-fem-gpu:
+    just run-viewport-2d-default-slice-smoke fem gpu
+
 verify-viewport-2d-planar-compact-full-contract:
     mkdir -p .fullmag/reports/viewport-2d-planar-monitor-smoke
     set -o pipefail; docker compose --profile fem-gpu run --rm fem-gpu bash -lc 'cd /workspace && cargo test -p fullmag-api planar_sampling::target_tests::compact_fem_plane_and_slab_match_equivalent_full_carrier -- --exact' 2>&1 | tee .fullmag/reports/viewport-2d-planar-monitor-smoke/compact-full-contract.log

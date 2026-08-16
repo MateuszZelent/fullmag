@@ -1,8 +1,11 @@
 "use client";
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 
-import type { VisualizationStateResource } from "@/kernel/api/apiTypes";
+import type {
+  PlanarFieldSource,
+  VisualizationStateResource,
+} from "@/kernel/api/apiTypes";
 import { useKernel } from "@/kernel/KernelContext";
 import {
   planarFieldQueryFromMeta,
@@ -10,6 +13,7 @@ import {
   usePlanarMaskResource,
 } from "@/kernel/resources/planarFieldResources";
 import { usePlanarMonitorsResource } from "@/kernel/resources/planarMonitorResources";
+import { useDomainMetaResource } from "@/kernel/resources/geometryLifecycleResources";
 import { useFieldCatalogResource } from "@/kernel/resources/studyRuntimeResources";
 import { useSessionStatusSelector } from "@/kernel/resources/useSessionStatus";
 import { useVisualizationStateResource } from "@/kernel/visualization/useVisualizationStateResource";
@@ -29,6 +33,7 @@ import {
   SCALAR_COLOR_PALETTE_ITEMS,
 } from "../panels/ObjectVisualizationPanelModel";
 import { PLANAR_RANGE_MODE_ITEMS, planarRangeForMode } from "./presentationSemantics";
+import { DefaultPlanarSourceSection } from "./DefaultPlanarSourceSection";
 import {
   PlanarGeometryLayersSection,
   PlanarProvenanceSection,
@@ -91,16 +96,23 @@ export function PlanarVisualizationSection({ selection }: { selection: Selection
   const viewScope = planarViewScopeForSelection(selection);
   const [validationError, setValidationError] = useState<string | null>(null);
   const monitors = usePlanarMonitorsResource({ enabled: coverage.supported });
+  const domain = useDomainMetaResource({ enabled: coverage.supported });
   const fieldCatalog = useFieldCatalogResource({ enabled: coverage.supported });
   const discretization = useSessionStatusSelector(
     (status) => status.data?.domain.discretization ?? null,
     { enabled: coverage.supported },
   );
-  const monitorId = planar?.active_monitor_id ?? "";
+  const source = useMemo<PlanarFieldSource>(() => {
+    if (planar?.source?.kind === "monitor") {
+      return { kind: "monitor", monitorId: planar.source.monitor_id };
+    }
+    return { kind: "default" };
+  }, [planar?.source]);
+  const sourceValue = source.kind === "default" ? "default" : source.monitorId;
   const quantityId = planar?.quantity_id ?? "";
   const meta = usePlanarFieldMetaResource(
     quantityId,
-    monitorId,
+    source,
     planar
       ? {
           component: planar.component,
@@ -110,20 +122,19 @@ export function PlanarVisualizationSection({ selection }: { selection: Selection
           scope_kind: planar.view_scope.kind,
         }
       : {},
-    { enabled: coverage.supported && planar !== undefined && monitorId.length > 0 },
+    { enabled: coverage.supported && planar !== undefined },
   );
   const canonicalSample = meta.data
-    ? planarFieldQueryFromMeta(quantityId, monitorId, meta.data)
+    ? planarFieldQueryFromMeta(quantityId, source, meta.data)
     : null;
   const mask = usePlanarMaskResource(
     quantityId,
-    monitorId,
+    source,
     canonicalSample?.ok ? canonicalSample.query : {},
     {
       enabled:
         coverage.supported &&
         planar !== undefined &&
-        monitorId.length > 0 &&
         canonicalSample?.ok === true,
     },
   );
@@ -172,10 +183,26 @@ export function PlanarVisualizationSection({ selection }: { selection: Selection
   return (
     <InspectorGroup title="2D visualization">
       <FieldRow label="Target" value={coverage.targetKind} />
-      <FormField label="Monitor" type="select" value={monitorId} onChange={(event) => patch({ active_monitor_id: event.currentTarget.value || null })}>
-        <option value="">Select monitor</option>
-        {(monitors.data?.monitors ?? []).map((monitor) => <option key={monitor.id} value={monitor.id}>{monitor.name}</option>)}
+      <FormField label="Source" type="select" value={sourceValue} onChange={(event) => {
+        const value = event.currentTarget.value;
+        patch({
+          source: value === "default"
+            ? { kind: "default" }
+            : { kind: "monitor", monitor_id: value },
+        });
+      }}>
+        <option value="default">Default</option>
+        <optgroup label="Monitors">
+          {(monitors.data?.monitors ?? []).map((monitor) => <option key={monitor.id} value={monitor.id}>{monitor.name}</option>)}
+        </optgroup>
       </FormField>
+      {source.kind === "default" ? (
+        <DefaultPlanarSourceSection
+          defaultSlice={planar.default_slice}
+          domain={domain.data}
+          patch={patch}
+        />
+      ) : null}
       <FormField label="Quantity" type="select" value={quantityId} onChange={(event) => patch({ component: "magnitude", quantity_id: event.currentTarget.value })}>
         {(fieldCatalog.data?.quantities ?? []).filter((quantity) => quantity.available).map((quantity) => <option key={quantity.quantity_id} value={quantity.quantity_id}>{quantity.label} ({quantity.unit || "1"})</option>)}
       </FormField>
@@ -196,8 +223,8 @@ export function PlanarVisualizationSection({ selection }: { selection: Selection
       <PlanarGeometryLayersSection capabilities={capabilities} layers={planar.layers} patch={patch} />
       <PlanarVectorStyleSection capability={capabilities.vectors} patch={patch} resolution={planar.resolution} vectorStyle={vectorStyle} />
       <PlanarQualitySection capability={capabilities.raster} interaction={interaction} patch={patch} quality={quality} resolution={planar.resolution} />
-      <PlanarProvenanceSection meta={meta} monitorId={monitorId} />
-      <div className="fm-inspector-toolbar"><Button disabled={!monitorId} size="sm" type="button" variant="secondary" onClick={() => patch({ view_scope: viewScope })}>Use target scope</Button></div>
+      <PlanarProvenanceSection meta={meta} source={source} />
+      <div className="fm-inspector-toolbar"><Button size="sm" type="button" variant="secondary" onClick={() => patch({ view_scope: viewScope })}>Use target scope</Button></div>
     </InspectorGroup>
   );
 }

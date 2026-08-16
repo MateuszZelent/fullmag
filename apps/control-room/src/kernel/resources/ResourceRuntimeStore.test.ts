@@ -5,7 +5,10 @@ import {
   VISUALIZATION_STATE_PATH,
 } from "@/kernel/api/apiPaths";
 
-import { ResourceRuntimeStore } from "./ResourceRuntimeStore";
+import {
+  createResourcePartialLoadError,
+  ResourceRuntimeStore,
+} from "./ResourceRuntimeStore";
 
 function deferred<TData>(): {
   promise: Promise<TData>;
@@ -573,5 +576,198 @@ describe("ResourceRuntimeStore", () => {
       pendingRequestCount: 0,
       readyCount: 0,
     });
+  });
+
+  it("autonomously retries an allowlisted transient 404 using retry_after_ms", async () => {
+    vi.useFakeTimers();
+    try {
+      const store = new ResourceRuntimeStore<string>();
+      const load = vi
+        .fn()
+        .mockRejectedValueOnce(
+          Object.assign(new Error("field is materializing"), {
+            code: "field_pending",
+            retry_after_ms: 25,
+            status: 404,
+          }),
+        )
+        .mockResolvedValue("ready");
+
+      const requestSpec = {
+        externalRevision: "generation-1",
+        load,
+        resourceKey: "data/fields/H_demag/samples/vector?scope_kind=airbox",
+        retryPolicy: {
+          deadlineMs: 200,
+          maxAttempts: 3,
+          retryableReasonCodes: ["field_pending"],
+        },
+      };
+      await store.ensureLoad(requestSpec as never);
+
+      expect(load).toHaveBeenCalledTimes(1);
+      expect(store.getSnapshot(requestSpec.resourceKey)).toMatchObject({
+        data: null,
+        status: "error",
+      });
+
+      await vi.advanceTimersByTimeAsync(24);
+      expect(load).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(1);
+      await vi.waitFor(() => expect(load).toHaveBeenCalledTimes(2));
+      expect(store.getSnapshot(requestSpec.resourceKey)).toMatchObject({
+        data: "ready",
+        status: "ready",
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not retry a persistent conflict and keeps the last-good data", async () => {
+    vi.useFakeTimers();
+    try {
+      const store = new ResourceRuntimeStore<string>();
+      store.updateData("data/fields/H_demag", "last-good", "generation-1");
+      const load = vi.fn(async () => {
+        throw Object.assign(new Error("carrier identity conflict"), {
+          code: "carrier_generation_mismatch",
+          status: 409,
+        });
+      });
+
+      await store.ensureLoad({
+        externalRevision: "generation-2",
+        load,
+        resourceKey: "data/fields/H_demag",
+        retryPolicy: {
+          deadlineMs: 200,
+          maxAttempts: 5,
+          retryableReasonCodes: ["carrier_generation_mismatch"],
+        } as never,
+      } as never);
+
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(load).toHaveBeenCalledTimes(1);
+      expect(store.getSnapshot("data/fields/H_demag")).toMatchObject({
+        data: "last-good",
+        status: "error",
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not start a retry after the bounded deadline", async () => {
+    vi.useFakeTimers();
+    try {
+      const store = new ResourceRuntimeStore<string>();
+      const load = vi.fn(async () => {
+        throw Object.assign(new Error("still pending"), {
+          code: "field_pending",
+          retry_after_ms: 100,
+          status: 202,
+        });
+      });
+
+      await store.ensureLoad({
+        externalRevision: "generation-1",
+        load,
+        resourceKey: "data/fields/H_demag/deadline",
+        retryPolicy: {
+          deadlineMs: 20,
+          maxAttempts: 5,
+          retryableReasonCodes: ["field_pending"],
+        },
+      });
+
+      await vi.advanceTimersByTimeAsync(100);
+      expect(load).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("aborts an active load when the bounded deadline expires", async () => {
+    vi.useFakeTimers();
+    try {
+      const store = new ResourceRuntimeStore<string>();
+      const pending = deferred<string>();
+      const signals: AbortSignal[] = [];
+      const load = vi.fn(({ signal }: { signal: AbortSignal }) => {
+        signals.push(signal);
+        signal.addEventListener(
+          "abort",
+          () => pending.reject(new DOMException("deadline", "AbortError")),
+          { once: true },
+        );
+        return pending.promise;
+      });
+
+      const result = store.ensureLoad({
+        externalRevision: null,
+        load,
+        resourceKey: "data/fields/H_demag/active-deadline",
+        retryPolicy: {
+          deadlineMs: 20,
+          maxAttempts: 3,
+          retryableReasonCodes: ["field_pending"],
+        },
+      });
+
+      expect(signals[0]?.aborted).toBe(false);
+      await vi.advanceTimersByTimeAsync(19);
+      expect(signals[0]?.aborted).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      await expect(result).resolves.toMatchObject({
+        error: expect.objectContaining({
+          message: "Resource load deadline exceeded",
+          name: "TimeoutError",
+        }),
+        status: "error",
+      });
+      expect(signals[0]?.aborted).toBe(true);
+      expect(load).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("preserves partial data without retrying a partial 409 failure", async () => {
+    vi.useFakeTimers();
+    try {
+      const store = new ResourceRuntimeStore<ReadonlyMap<string, string>>();
+      const load = vi.fn(async () => {
+        const conflict = Object.assign(new Error("carrier mismatch"), {
+          code: "carrier_generation_mismatch",
+          status: 409,
+        });
+        throw createResourcePartialLoadError(
+          "one target failed",
+          new Map([["target-a", "last-good"]]),
+          conflict,
+        );
+      });
+
+      await store.ensureLoad({
+        externalRevision: "generation-2",
+        load,
+        resourceKey: "data/fields/collection",
+        retryPolicy: {
+          deadlineMs: 200,
+          maxAttempts: 5,
+          retryableReasonCodes: ["carrier_generation_mismatch"],
+        },
+      });
+      await vi.advanceTimersByTimeAsync(1_000);
+
+      expect(load).toHaveBeenCalledTimes(1);
+      expect(store.getSnapshot("data/fields/collection")).toMatchObject({
+        data: new Map([["target-a", "last-good"]]),
+        status: "error",
+      });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

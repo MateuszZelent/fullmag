@@ -41,6 +41,7 @@ import {
 import {
   mergeVisualizationStateTargetOverride,
   persistentVisualizationTargetPatch,
+  resetAirboxVisualizationState,
   targetForFdmNativeLayer,
   visualizationStateOverrideMatchesTarget,
   visualizationTargetKey,
@@ -64,9 +65,18 @@ import {
   resolveVisualizationTopologyFreshness,
   type VisualizationTopologyFreshness,
 } from "@/kernel/visualization/visualizationDisplayResolution";
+import {
+  fdmMultilayerAirboxVisualizationVectorCapacitySource,
+  fdmNativeLayerVisualizationVectorCapacitySource,
+  fdmVisualizationVectorCapacitySource,
+  femVisualizationVectorCapacitySource,
+  resolveVisualizationVectorCapacityDescriptor,
+  type VisualizationVectorCapacityDescriptor,
+} from "@/kernel/visualization/visualizationVectorCapacity";
 export {
   resolveVisualizationRenderResolution,
 } from "@/kernel/visualization/visualizationDisplayResolution";
+export type { VisualizationVectorCapacityDescriptor } from "@/kernel/visualization/visualizationVectorCapacity";
 
 type AppliedVisualizationBaselineTarget = {
   preferences: ViewportTargetRenderingPreferences | null;
@@ -91,7 +101,10 @@ export function restoreVisualizationAppliedBaseline({
     targets: readonly AppliedVisualizationBaselineTarget[];
   };
   currentOverrides: VisualizationStateResource["overrides"];
-  queuePatch: (patch: VisualizationStatePatch) => void;
+  queuePatch: (
+    patch: VisualizationStatePatch,
+    targetIds?: readonly string[],
+  ) => void;
   visualization: Pick<
     ObjectVisualizationController,
     "clearTarget" | "patchTarget" | "patchViewportPreferences"
@@ -114,9 +127,12 @@ export function restoreVisualizationAppliedBaseline({
           visualizationStateOverrideMatchesTarget(entry, baselineTarget),
         ),
     );
-    queuePatch({
-      overrides: [...retainedOverrides, ...structuredClone(baseline.overrides)],
-    });
+    queuePatch(
+      {
+        overrides: [...retainedOverrides, ...structuredClone(baseline.overrides)],
+      },
+      baseline.targets.map(({ target }) => visualizationTargetKey(target)),
+    );
   }
 
   for (const { preferences, settings, target } of baseline.targets) {
@@ -131,6 +147,18 @@ export function restoreVisualizationAppliedBaseline({
       visualization.patchViewportPreferences(target, preferences);
     }
   }
+}
+
+export function visualizationOverridesForTargetReset(
+  currentState: Pick<VisualizationStateResource, "overrides">,
+  target: VisualizationTargetRef,
+): VisualizationStateResource["overrides"] {
+  if (target.kind === "airbox") {
+    return resetAirboxVisualizationState(currentState).overrides ?? [];
+  }
+  return (currentState.overrides ?? []).filter(
+    (entry) => !visualizationStateOverrideMatchesTarget(entry, target),
+  );
 }
 
 export const SURFACE_COLOR_SOURCE_ITEMS: Array<{
@@ -357,6 +385,41 @@ export function fieldMetaScopeQueryForVisualizationTarget(
       return { scope_id: null, scope_kind: null };
     case undefined:
       return { scope_id: null, scope_kind: null };
+  }
+}
+
+export interface VisualizationVectorScopeIdentity {
+  scopeId: string | null;
+  scopeKind: string | null;
+}
+
+/**
+ * Return only scope identities that are unambiguous for the vector carrier.
+ * FEM object/region targets may aggregate several mesh-part carriers, so they
+ * intentionally remain unconstrained here.
+ */
+export function resolveVisualizationVectorScopeForTarget(
+  target: VisualizationTargetRef | null | undefined,
+): VisualizationVectorScopeIdentity {
+  switch (target?.kind) {
+    case "airbox":
+      return { scopeId: null, scopeKind: "airbox" };
+    case "fdm-domain":
+      return {
+        scopeId: null,
+        scopeKind: isFdmUniverseOutsideSupportTarget(target) ? "airbox" : "full",
+      };
+    case "fdm-native-layer": {
+      const encodedLayerId = target.id.startsWith("fdm-native-layer:")
+        ? target.id.slice("fdm-native-layer:".length)
+        : "";
+      return {
+        scopeId: encodedLayerId ? decodeSafe(encodedLayerId) : null,
+        scopeKind: encodedLayerId ? "layer" : null,
+      };
+    }
+    default:
+      return { scopeId: null, scopeKind: null };
   }
 }
 
@@ -656,7 +719,7 @@ export function resolveSelectedTargetVectorMeshParts({
   visualizationState,
 }: {
   manifestRegions: readonly MeshRegion[] | null | undefined;
-  meshParts: readonly MeshPart[] | null | undefined;
+  meshParts?: readonly MeshPart[] | null | undefined;
   sceneObjectIds: ReadonlySet<string>;
   target: VisualizationTargetRef | null | undefined;
   visualizationState: VisualizationStateResource | null | undefined;
@@ -697,7 +760,7 @@ export function visualizationVectorSurfaceActionTargetLabel(
 
 export function resolveSelectedTargetVectorMeshPartRows(input: {
   manifestRegions: readonly MeshRegion[] | null | undefined;
-  meshParts: readonly MeshPart[] | null | undefined;
+  meshParts?: readonly MeshPart[] | null | undefined;
   sceneObjectIds: ReadonlySet<string>;
   target: VisualizationTargetRef | null | undefined;
   visualizationState: VisualizationStateResource | null | undefined;
@@ -845,8 +908,6 @@ export const VISUALIZATION_QUANTITY_ITEMS: Array<{
   { value: "mat_dbulk", label: "Bulk DMI / mat_dbulk" },
 ];
 
-const FALLBACK_VECTOR_BUDGET_MAX = 4096;
-
 type MeshPart = NonNullable<MeshSharedDomainManifestResource["mesh_parts"]>[number];
 type MeshRegion = NonNullable<MeshSharedDomainManifestResource["regions"]>[number];
 
@@ -911,31 +972,107 @@ export function visualizationResetActionLabel(
 
 export interface VisualizationVectorBudgetRange {
   availableNodeCount: number;
+  availableAnchorCount?: number | null;
+  anchorKind?: "cell" | "node" | null;
+  carrierId?: string | null;
   exact: boolean;
+  generation?: string | null;
   max: number;
   min: 0;
+  revision?: string | number | null;
   step: 1;
+  topologyHash?: string | null;
 }
 
 export interface VisualizationVectorAccounting {
   adoptedGlyphCount: number | null;
+  allocatedBudget?: number | null;
+  anchorKind?: "cell" | "node" | null;
+  availableAnchorCount?: number | null;
   availableNodeCount: number | null;
   decodedSampleCount: number | null;
+  requestedBudget?: number | null;
+  status?: "ready" | "pending" | "stale" | "unavailable";
 }
 
 export function resolveVisualizationVectorAccounting({
+  anchorKind,
+  availableAnchorCount,
   availableNodeCount,
+  capacity,
+  currentComponent,
+  currentGeneration,
+  currentScopeId,
+  currentScopeKind,
+  currentTargetId,
   currentTopologyHash,
+  currentVisualizationRevision,
+  currentVectorBuildKey,
+  expectedGeneration,
+  expectedQuantityId,
+  expectedScopeId,
+  expectedScopeKind,
+  expectedVisualizationRevision,
+  expectedVectorBuildKey,
+  effectiveAllocation,
+  requestedBudget,
   snapshots,
 }: {
-  availableNodeCount: number | null;
+  anchorKind?: "cell" | "node" | null;
+  availableAnchorCount?: number | null;
+  availableNodeCount?: number | null;
+  capacity?: VisualizationVectorCapacityDescriptor | null;
+  currentComponent?: string | null;
+  currentGeneration?: string | null;
+  currentScopeId?: string | null;
+  currentScopeKind?: string | null;
+  currentTargetId?: string | null;
   currentTopologyHash?: string | null;
+  currentVisualizationRevision?: string | number | null;
+  currentVectorBuildKey?: string | null;
+  expectedGeneration?: string | null;
+  expectedQuantityId?: string | null;
+  expectedScopeId?: string | null;
+  expectedScopeKind?: string | null;
+  expectedVisualizationRevision?: string | number | null;
+  expectedVectorBuildKey?: string | null;
+  effectiveAllocation?: number | null;
+  requestedBudget?: number | null;
   snapshots: readonly VisualizationDebugSnapshot[];
 }): VisualizationVectorAccounting {
-  const available =
-    availableNodeCount === null
-      ? null
-      : Math.max(0, Math.floor(availableNodeCount));
+  if (
+    capacity !== undefined ||
+    availableAnchorCount !== undefined ||
+    requestedBudget !== undefined ||
+    effectiveAllocation !== undefined ||
+    currentTargetId !== undefined
+  ) {
+    return resolveTargetVisualizationVectorAccounting({
+      anchorKind: capacity?.anchorKind ?? anchorKind ?? null,
+      availableAnchorCount:
+        availableAnchorCount !== undefined
+          ? availableAnchorCount
+          : capacity?.fullCount ?? null,
+      currentComponent,
+      currentGeneration,
+      currentScopeId,
+      currentScopeKind,
+      currentTargetId,
+      currentTopologyHash,
+      currentVisualizationRevision,
+      currentVectorBuildKey,
+      expectedGeneration,
+      expectedQuantityId,
+      expectedScopeId,
+      expectedScopeKind,
+      expectedVisualizationRevision,
+      expectedVectorBuildKey,
+      requestedBudget,
+      snapshots,
+    });
+  }
+
+  const available = normalizeVectorCount(availableNodeCount);
   const snapshot = [...snapshots].sort(
     (left, right) => right.capturedAtMs - left.capturedAtMs,
   )[0];
@@ -989,7 +1126,299 @@ export function resolveVisualizationVectorAccounting({
   };
 }
 
+function resolveTargetVisualizationVectorAccounting({
+  anchorKind,
+  availableAnchorCount,
+  currentComponent,
+  currentGeneration,
+  currentScopeId,
+  currentScopeKind,
+  currentTargetId,
+  currentTopologyHash,
+  currentVisualizationRevision,
+  currentVectorBuildKey,
+  expectedGeneration,
+  expectedQuantityId,
+  expectedScopeId,
+  expectedScopeKind,
+  expectedVisualizationRevision,
+  expectedVectorBuildKey,
+  requestedBudget,
+  snapshots,
+}: {
+  anchorKind: "cell" | "node" | null;
+  availableAnchorCount: number | null;
+  currentComponent?: string | null;
+  currentGeneration?: string | null;
+  currentScopeId?: string | null;
+  currentScopeKind?: string | null;
+  currentTargetId?: string | null;
+  currentTopologyHash?: string | null;
+  currentVisualizationRevision?: string | number | null;
+  currentVectorBuildKey?: string | null;
+  expectedGeneration?: string | null;
+  expectedQuantityId?: string | null;
+  expectedScopeId?: string | null;
+  expectedScopeKind?: string | null;
+  expectedVisualizationRevision?: string | number | null;
+  expectedVectorBuildKey?: string | null;
+  requestedBudget?: number | null;
+  snapshots: readonly VisualizationDebugSnapshot[];
+}): VisualizationVectorAccounting {
+  const available = normalizeVectorCount(availableAnchorCount);
+  const requested = normalizeVectorCount(requestedBudget);
+  const base: VisualizationVectorAccounting = {
+    adoptedGlyphCount: null,
+    allocatedBudget: null,
+    anchorKind,
+    availableAnchorCount: available,
+    availableNodeCount: available,
+    decodedSampleCount: null,
+    requestedBudget: requested,
+  };
+  const snapshot = [...snapshots].sort(
+    (left, right) => right.capturedAtMs - left.capturedAtMs,
+  )[0];
+  if (!snapshot || available === null) {
+    return { ...base, status: "unavailable" };
+  }
+  if (
+    snapshot.disposition === "blocked" ||
+    (currentTargetId && snapshot.target.id !== currentTargetId)
+  ) {
+    return { ...base, status: "stale" };
+  }
+
+  const matchingCarriers = snapshot.carriers.filter((carrier) =>
+    visualizationVectorCarrierMatchesIdentity(carrier, {
+      currentComponent,
+      currentGeneration,
+      currentScopeId,
+      currentScopeKind,
+      currentTopologyHash,
+      currentVisualizationRevision,
+      currentVectorBuildKey,
+      expectedGeneration,
+      expectedQuantityId,
+      expectedScopeId,
+      expectedScopeKind,
+      expectedVisualizationRevision,
+      expectedVectorBuildKey,
+    }),
+  );
+  if (matchingCarriers.length === 0) {
+    return { ...base, status: "stale" };
+  }
+
+  let adoptedGlyphCount = 0;
+  let decodedSampleCount = 0;
+  let adoptedComplete = true;
+  let decodedComplete = true;
+  const publishedAllocations = matchingCarriers.map((carrier) =>
+    normalizeVectorCount(carrier.render.vectors.segmentCount),
+  );
+  for (const carrier of matchingCarriers) {
+    if (!carrier.payload) {
+      decodedComplete = false;
+    } else if (carrier.payload.pointCount > available) {
+      decodedComplete = false;
+      adoptedComplete = false;
+    } else {
+      decodedSampleCount += carrier.payload.pointCount;
+    }
+
+    const adoption = carrier.render.adoption.vector;
+    const adoptionMatches = Boolean(
+      adoption.adoptedVectorItemCount != null &&
+        carrier.render.requestedFieldBufferId &&
+        carrier.request.resourceKey &&
+        carrier.render.vectors.buildKey &&
+        adoption.adoptedFieldBufferId === carrier.render.requestedFieldBufferId &&
+        adoption.adoptedResourceKey === carrier.request.resourceKey &&
+        adoption.adoptedVectorBuildKey === carrier.render.vectors.buildKey,
+    );
+    if (!adoptionMatches) adoptedComplete = false;
+    else adoptedGlyphCount += adoption.adoptedVectorItemCount ?? 0;
+  }
+
+  return {
+    ...base,
+    allocatedBudget: publishedAllocations.every(
+      (allocation): allocation is number => allocation !== null,
+    )
+      ? publishedAllocations.reduce((total, allocation) => total + allocation, 0)
+      : null,
+    adoptedGlyphCount: adoptedComplete ? adoptedGlyphCount : null,
+    decodedSampleCount: decodedComplete ? decodedSampleCount : null,
+    status:
+      decodedComplete && adoptedComplete
+        ? "ready"
+        : decodedComplete || adoptedComplete
+          ? "pending"
+          : "stale",
+  };
+}
+
+function visualizationVectorCarrierMatchesIdentity(
+  carrier: VisualizationDebugSnapshot["carriers"][number],
+  expected: {
+    currentComponent?: string | null;
+    currentGeneration?: string | null;
+    currentScopeId?: string | null;
+    currentScopeKind?: string | null;
+    currentTopologyHash?: string | null;
+    currentVisualizationRevision?: string | number | null;
+    currentVectorBuildKey?: string | null;
+    expectedGeneration?: string | null;
+    expectedQuantityId?: string | null;
+    expectedScopeId?: string | null;
+    expectedScopeKind?: string | null;
+    expectedVisualizationRevision?: string | number | null;
+    expectedVectorBuildKey?: string | null;
+  },
+): boolean {
+  const payload = carrier.payload;
+  const revisions = carrier.revisions;
+  const expectedScopeKind =
+    expected.expectedScopeKind ?? expected.currentScopeKind;
+  const expectedScopeId = expected.expectedScopeId ?? expected.currentScopeId;
+  const expectedGeneration =
+    expected.expectedGeneration ?? expected.currentGeneration;
+  const expectedVisualizationRevision =
+    expected.expectedVisualizationRevision ?? expected.currentVisualizationRevision;
+  const expectedVectorBuildKey =
+    expected.expectedVectorBuildKey ?? expected.currentVectorBuildKey;
+  return (
+    (!expected.expectedQuantityId ||
+      payload?.quantityId === expected.expectedQuantityId) &&
+    (!expected.currentComponent ||
+      payload?.component === expected.currentComponent) &&
+    (!expectedScopeKind || payload?.scopeKind === expectedScopeKind) &&
+    (expectedScopeId === undefined ||
+      expectedScopeId === null ||
+      payload?.scopeId === expectedScopeId) &&
+    (!expectedGeneration ||
+      revisions.domainGenerationId === expectedGeneration) &&
+    (!expected.currentTopologyHash ||
+      revisions.meshTopologyHash === expected.currentTopologyHash) &&
+    (!expectedVisualizationRevision ||
+      String(revisions.visualizationRevision) ===
+        String(expectedVisualizationRevision)) &&
+    (!expectedVectorBuildKey ||
+      carrier.render.vectors.buildKey === expectedVectorBuildKey)
+  );
+}
+
+function normalizeVectorCount(
+  value: number | null | undefined,
+): number | null {
+  return value === null || value === undefined || !Number.isFinite(value)
+    ? null
+    : Math.max(0, Math.floor(value));
+}
+
+export const DEFAULT_VISUALIZATION_VECTOR_SCENE_CAP = 2_048;
+
+export function resolveVisualizationVectorEffectiveBudget({
+  availableAnchorCount,
+  requestedBudget,
+  sceneCap = DEFAULT_VISUALIZATION_VECTOR_SCENE_CAP,
+}: {
+  availableAnchorCount: number | null | undefined;
+  requestedBudget: number | null | undefined;
+  sceneCap?: number | null;
+}): number | null {
+  const available = normalizeVectorCount(availableAnchorCount);
+  if (available === null) return null;
+  const requested = normalizeVectorCount(requestedBudget) ?? 0;
+  const cap = normalizeVectorCount(sceneCap) ?? DEFAULT_VISUALIZATION_VECTOR_SCENE_CAP;
+  return Math.min(available, requested, cap);
+}
+
+export function availableVectorAnchorCount(
+  range: VisualizationVectorBudgetRange,
+): number | null {
+  return range.availableAnchorCount === null
+    ? null
+    : range.availableAnchorCount ?? range.availableNodeCount;
+}
+
+export function resolveVisualizationVectorCapacityForTarget({
+  domain,
+  fdmMembership,
+  fdmNativeActiveMask,
+  fdmNativeLayer,
+  fdmRealizedRegionIds,
+  femManifest,
+  multilayerAirbox,
+  target,
+}: {
+  domain?: DomainMetaResource | null;
+  fdmMembership?: FdmRegionMembershipResource | null;
+  fdmNativeActiveMask?: ArrayLike<number> | null;
+  fdmNativeLayer?: {
+    activeCellCount: number;
+    carrierId: string;
+    domainGenerationId: string | null;
+    gridFingerprint: string | null;
+    inactiveCellCount: number;
+    revision: string | number | null;
+    shape: readonly [number, number, number];
+  } | null;
+  fdmRealizedRegionIds?: ArrayLike<number> | null;
+  femManifest?: MeshSharedDomainManifestResource | null;
+  multilayerAirbox?: {
+    carrierFingerprint: string | null;
+    cellCount: number;
+    carrierId: string;
+    domainGenerationId: string | null;
+    revision: string | number | null;
+    shape: readonly [number, number, number];
+  } | null;
+  target: VisualizationTargetRef | null | undefined;
+}): VisualizationVectorCapacityDescriptor | null {
+  if (!target) return null;
+  if (target.kind === "fdm-native-layer" && fdmNativeLayer) {
+    const source = fdmNativeLayerVisualizationVectorCapacitySource({
+      ...fdmNativeLayer,
+      activeMask: fdmNativeActiveMask ?? null,
+    });
+    return source
+      ? resolveVisualizationVectorCapacityDescriptor({ source, target })
+      : null;
+  }
+  if (target.kind === "airbox" && multilayerAirbox) {
+    const source = fdmMultilayerAirboxVisualizationVectorCapacitySource(
+      multilayerAirbox,
+    );
+    return source
+      ? resolveVisualizationVectorCapacityDescriptor({ source, target })
+      : null;
+  }
+  if (domain?.discretization.toLowerCase() === "fdm") {
+    const source = fdmVisualizationVectorCapacitySource({
+      domain,
+      membership: fdmMembership,
+      realizedRegionIds: fdmRealizedRegionIds,
+      revision: fdmMembership
+        ? `${fdmMembership.mesh_revision}:${fdmMembership.region_membership_revision}`
+        : null,
+    });
+    return source
+      ? resolveVisualizationVectorCapacityDescriptor({ source, target })
+      : null;
+  }
+  const source = femVisualizationVectorCapacitySource({
+    manifest: femManifest,
+    target,
+  });
+  return source
+    ? resolveVisualizationVectorCapacityDescriptor({ source, target })
+    : null;
+}
+
 export function resolveVisualizationVectorBudgetRange({
+  capacity,
   fdmCellCount: structuredGridCellCount,
   geometryScope = "full",
   manifestRegions,
@@ -997,13 +1426,41 @@ export function resolveVisualizationVectorBudgetRange({
   meshParts,
   target,
 }: {
+  capacity?: VisualizationVectorCapacityDescriptor | null;
   fdmCellCount?: number | null;
   geometryScope?: VisualizationGeometryScope;
   manifestRegions?: readonly MeshRegion[] | null | undefined;
   memberships?: readonly MeshRegionMembershipResource[] | null | undefined;
-  meshParts: readonly MeshPart[] | null | undefined;
+  meshParts?: readonly MeshPart[] | null | undefined;
   target: VisualizationTargetRef | null | undefined;
 }): VisualizationVectorBudgetRange {
+  if (capacity !== undefined) {
+    if (!capacity) return unknownVisualizationVectorBudgetRange();
+    const exact =
+      geometryScope === "surface"
+        ? capacity.surfaceExact ?? capacity.exact
+        : capacity.fullExact ?? capacity.exact;
+    if (!exact) return unknownVisualizationVectorBudgetRange();
+    const available = Math.max(
+      0,
+      Math.floor(
+        geometryScope === "surface" ? capacity.surfaceCount : capacity.fullCount,
+      ),
+    );
+    return {
+      availableAnchorCount: available,
+      availableNodeCount: available,
+      anchorKind: capacity.anchorKind,
+      carrierId: capacity.carrierId,
+      exact: capacity.exact,
+      generation: capacity.generation,
+      max: Math.min(available, DEFAULT_VISUALIZATION_VECTOR_SCENE_CAP),
+      min: 0,
+      revision: capacity.revision,
+      step: 1,
+      topologyHash: capacity.topologyHash,
+    };
+  }
   if (structuredGridCellCount !== null && structuredGridCellCount !== undefined) {
     const cellCount = structuredGridCellCount;
     if (
@@ -1470,6 +1927,18 @@ export function geometryScopeDisplayPatch(
   return { geometryScope };
 }
 
+function unknownVisualizationVectorBudgetRange(): VisualizationVectorBudgetRange {
+  return {
+    availableAnchorCount: null,
+    availableNodeCount: 0,
+    anchorKind: null,
+    exact: false,
+    max: 0,
+    min: 0,
+    step: 1,
+  };
+}
+
 function rgbToHex(red: number, green: number, blue: number): string {
   return `#${[red, green, blue]
     .map((channel) => channel.toString(16).padStart(2, "0"))
@@ -1477,13 +1946,7 @@ function rgbToHex(red: number, green: number, blue: number): string {
 }
 
 function fallbackVisualizationVectorBudgetRange(): VisualizationVectorBudgetRange {
-  return {
-    availableNodeCount: FALLBACK_VECTOR_BUDGET_MAX,
-    exact: false,
-    max: FALLBACK_VECTOR_BUDGET_MAX,
-    min: 0,
-    step: 1,
-  };
+  return unknownVisualizationVectorBudgetRange();
 }
 
 function meshPartVectorNodeCount(

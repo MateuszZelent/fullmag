@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useMemo, type ReactNode } from "react";
+import { useMemo, type ReactNode } from "react";
 
 import {
   useDomainMetaResource,
@@ -9,16 +9,6 @@ import {
   useFdmRegionMembershipResource,
 } from "@/kernel/resources/geometryLifecycleResources";
 import { useSessionStatusSelector } from "@/kernel/resources/useSessionStatus";
-import {
-  FDM_UNIVERSE_OUTSIDE_SUPPORT_TARGET,
-  resolveTargetVisualization,
-  type VisualizationTargetPatch,
-  type VisualizationTargetSettings,
-} from "@/kernel/visualization/ObjectVisualizationController";
-import {
-  useObjectVisualizationController,
-  useObjectVisualizationSelector,
-} from "@/kernel/visualization/useObjectVisualization";
 import { resolveFdmDisplaySampling } from "@/shared/domain/mesh/fdmDisplaySampling";
 
 import type { InspectorPanelProps } from "../../inspectorTypes";
@@ -26,10 +16,6 @@ import { FeedbackBanner } from "../../primitives/FeedbackBanner";
 import { FieldRow } from "../../primitives/FieldRow";
 import { InspectorGroup } from "../../primitives/InspectorGroup";
 import { ObjectVisualizationPanel } from "../ObjectVisualizationPanel";
-import {
-  NumberField,
-  VisualizationToggleButton,
-} from "../ObjectVisualizationTargetSection";
 import {
   resolveFdmGridInspectorModel,
   resolveFdmGridSelectionInspectorModel,
@@ -64,69 +50,6 @@ function statusBannerKind(
   return null;
 }
 
-function FdmUniverseDisplayControls({
-  disabled,
-  onPatch,
-  settings,
-}: {
-  disabled: boolean;
-  onPatch: (patch: VisualizationTargetPatch) => void;
-  settings: VisualizationTargetSettings;
-}) {
-  return (
-    <InspectorGroup
-      title="Airbox · Visualization"
-      badge="structured grid"
-      description="Controls apply to the FDM Airbox extent and its magnetic-support bounds. The mesh remains one regular structured grid."
-    >
-      <div className="fm-viz-layer-strip" role="group" aria-label="FDM universe display layers">
-        <VisualizationToggleButton
-          active={settings.visible}
-          disabled={disabled}
-          label="Visible"
-          onClick={() => onPatch({ visible: !settings.visible })}
-        />
-        <VisualizationToggleButton
-          active={settings.boundsVisible}
-          disabled={disabled || !settings.visible}
-          label="Bounds"
-          onClick={() => onPatch({ boundsVisible: !settings.boundsVisible })}
-        />
-        <VisualizationToggleButton
-          active={settings.wireframeVisible}
-          disabled={disabled || !settings.visible}
-          label="Grid wireframe"
-          onClick={() => onPatch({ wireframeVisible: !settings.wireframeVisible })}
-        />
-      </div>
-      {settings.boundsVisible ? (
-        <NumberField
-          disabled={disabled || !settings.visible}
-          label="Universe/support bounds opacity"
-          max={100}
-          min={0}
-          step={1}
-          unit="%"
-          value={settings.boundsOpacityPercent}
-          onChange={(value) => onPatch({ boundsOpacityPercent: value })}
-        />
-      ) : null}
-      {settings.wireframeVisible ? (
-        <NumberField
-          disabled={disabled || !settings.visible}
-          label="Grid wireframe opacity"
-          max={100}
-          min={0}
-          step={1}
-          unit="%"
-          value={settings.wireframeOpacityPercent}
-          onChange={(value) => onPatch({ wireframeOpacityPercent: value })}
-        />
-      ) : null}
-    </InspectorGroup>
-  );
-}
-
 function FdmMultilayerInspectorPanelView({
   model,
   visualizationControls,
@@ -154,18 +77,16 @@ function FdmMultilayerInspectorPanelView({
 
 export function FdmGridInspectorPanelView({
   detail,
-  displaySettings,
   model,
   multilayer,
   multilayerVisualizationControls,
-  onDisplayPatch,
+  universeVisualizationControls,
 }: {
   detail: FdmGridSelectionInspectorModel;
-  displaySettings?: VisualizationTargetSettings | null;
   model: FdmGridInspectorModel;
   multilayer?: FdmMultilayerInspectorModel | null;
   multilayerVisualizationControls?: ReactNode;
-  onDisplayPatch?: (patch: VisualizationTargetPatch) => void;
+  universeVisualizationControls?: ReactNode;
 }) {
   if (multilayer) {
     return (
@@ -222,15 +143,9 @@ export function FdmGridInspectorPanelView({
         />
       ) : null}
 
-      {detail.scope === "universe-outside-support" &&
-      displaySettings &&
-      onDisplayPatch ? (
-        <FdmUniverseDisplayControls
-          disabled={model.status !== "ready"}
-          onPatch={onDisplayPatch}
-          settings={displaySettings}
-        />
-      ) : null}
+      {detail.scope === "universe-outside-support"
+        ? universeVisualizationControls
+        : null}
 
       <InspectorGroup title={detail.title} badge={detail.status}>
         <FieldRow label="Scope" value={detail.scope} mono />
@@ -401,30 +316,9 @@ export function FdmGridInspectorPanel({ selection }: InspectorPanelProps) {
     [binary, membership, model, selection],
   );
 
-  const visualization = useObjectVisualizationController();
-  const visualizationSnapshot = useObjectVisualizationSelector(
-    (snapshot) => snapshot,
-  );
   const outsideSupportSelected =
     selection.ref?.type === "fdm-domain" &&
     selection.ref.scope === "universe-outside-support";
-  const displaySettings = useMemo(
-    () =>
-      outsideSupportSelected
-        ? resolveTargetVisualization({
-            snapshot: visualizationSnapshot,
-            target: FDM_UNIVERSE_OUTSIDE_SUPPORT_TARGET,
-          }).settings
-        : null,
-    [outsideSupportSelected, visualizationSnapshot],
-  );
-  const onDisplayPatch = useCallback(
-    (patch: VisualizationTargetPatch) => {
-      if (!outsideSupportSelected) return;
-      visualization.patchTarget(FDM_UNIVERSE_OUTSIDE_SUPPORT_TARGET, patch);
-    },
-    [outsideSupportSelected, visualization],
-  );
   const nativeLayerSelected =
     selection.ref?.type === "fdm-domain" &&
     selection.ref.visualizationTargetId.startsWith("fdm-native-layer:");
@@ -432,13 +326,14 @@ export function FdmGridInspectorPanel({ selection }: InspectorPanelProps) {
   return (
     <FdmGridInspectorPanelView
       detail={detail}
-      displaySettings={displaySettings}
       model={model}
       multilayer={multilayer}
       multilayerVisualizationControls={
         nativeLayerSelected ? <ObjectVisualizationPanel selection={selection} /> : null
       }
-      onDisplayPatch={onDisplayPatch}
+      universeVisualizationControls={
+        outsideSupportSelected ? <ObjectVisualizationPanel selection={selection} /> : null
+      }
     />
   );
 }

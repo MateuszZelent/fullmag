@@ -64,8 +64,7 @@ use crate::session::{
     current_artifact_dir, latest_field_source_precedence, preview_cache_precedes_latest,
     preview_field_source_precedence, resolved_current_field_source, ResolvedCurrentFieldSource,
 };
-use crate::types::AppState;
-use crate::types::SessionStateResponse;
+use crate::types::{AppState, CommandLifecycleState, SessionStateResponse};
 use fullmag_quantities::{normalize_quantity_id, quantity_spec};
 use fullmag_runner::{FemMeshPayload, RuntimeEngineId};
 
@@ -88,6 +87,7 @@ const HYSTERESIS_ZARR_M_FIELD: &str = "fields/m";
 const FDM_MULTILAYER_AIRBOX_MANIFEST: &str = "fields/H_demag/airbox/manifest.json";
 const FDM_MULTILAYER_AIRBOX_SCHEMA: &str = "fdm_multilayer_observation.v1";
 const FDM_MULTILAYER_AIRBOX_FIELD_SCHEMA: &str = "fdm_multilayer_observation_field.v1";
+const FIELD_VECTOR_PENDING_RETRY_AFTER_MS: u64 = 250;
 const STEADY_TRANSPORT_FIELDS: [&str; 5] = [
     "V_electric",
     "J_charge",
@@ -551,13 +551,16 @@ fn requested_fdm_multilayer_airbox_carrier(
     {
         return Err(ApiError::not_found("multilayer FDM Airbox scope not found"));
     }
-    let carrier = load_fdm_multilayer_airbox_carrier(snapshot)
-        .map_err(|reason| {
-            ApiError::not_found(format!(
-                "multilayer FDM Airbox carrier unavailable: {reason}"
-            ))
-        })?
-        .ok_or_else(|| ApiError::not_found("multilayer FDM Airbox carrier is unavailable"))?;
+    let Some(carrier) = load_fdm_multilayer_airbox_carrier(snapshot).map_err(|reason| {
+        ApiError::conflict(format!(
+            "multilayer FDM Airbox carrier is malformed or stale: {reason}"
+        ))
+    })? else {
+        // A carrier may not have been published yet while the solver is still
+        // producing the observation artifact. The caller distinguishes this
+        // from an invalid carrier and reports either 202 or 204.
+        return Ok(None);
+    };
     if let Some(reason) = carrier.unavailable_quantities.get(quantity_id) {
         return Err(ApiError::not_found(format!(
             "multilayer FDM Airbox field '{quantity_id}' is unavailable: {reason}"
@@ -1593,6 +1596,214 @@ fn legacy_pending_field_freshness(snapshot: &SessionStateResponse) -> FieldFresh
     }
 }
 
+fn validate_field_vector_generation_precondition(
+    query: &FieldVectorQuery,
+    snapshot: &SessionStateResponse,
+) -> Result<(), ApiError> {
+    let Some(expected) = query
+        .expected_generation_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        return Ok(());
+    };
+    let actual = domain_generation_id(snapshot);
+    if expected != actual {
+        return Err(ApiError::conflict(format!(
+            "stale_generation_id: expected '{expected}', current generation is '{actual}'"
+        )));
+    }
+    Ok(())
+}
+
+fn validate_field_vector_carrier_precondition(
+    query: &FieldVectorQuery,
+    carrier_revision: Option<u64>,
+) -> Result<(), ApiError> {
+    let Some(expected) = query
+        .expected_carrier_revision
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        return Ok(());
+    };
+    let Some(actual) = carrier_revision else {
+        return Err(ApiError::conflict(
+            "stale_carrier_revision: requested field carrier is not published",
+        ));
+    };
+    if expected != actual.to_string() {
+        return Err(ApiError::conflict(format!(
+            "stale_carrier_revision: expected '{expected}', current carrier revision is '{actual}'"
+        )));
+    }
+    Ok(())
+}
+
+fn field_vector_carrier_revision(
+    snapshot: &SessionStateResponse,
+    resolved_scope: Option<&ResolvedFieldScope>,
+    airbox_field: Option<&ResolvedSpatialField<'_>>,
+) -> Option<u64> {
+    airbox_field
+        .map(|field| field.mesh_or_grid_revision)
+        .or_else(|| {
+            resolved_scope
+                .and_then(|scope| scope.carrier_hash.as_deref())
+                .and_then(|hash| hash.strip_prefix("sha256:"))
+                .and_then(sha256_hex_revision)
+        })
+        .or_else(|| {
+            if is_fdm_snapshot(snapshot) {
+                Some(domain_generation_revision(snapshot))
+            } else {
+                snapshot.fem_mesh.as_ref().map(|_| snapshot.mesh_revision)
+            }
+        })
+}
+
+fn pending_field_scope_point_count(
+    snapshot: &SessionStateResponse,
+    quantity_id: &str,
+) -> Result<usize, ApiError> {
+    if is_fdm_snapshot(snapshot) {
+        if is_fdm_multilayer_snapshot(snapshot) {
+            let count = snapshot
+                .metadata
+                .as_ref()
+                .and_then(|metadata| metadata.get("artifact_layout"))
+                .and_then(|layout| layout.get("layers"))
+                .and_then(serde_json::Value::as_array)
+                .and_then(|layers| {
+                    layers.iter().try_fold(0usize, |total, layer| {
+                        let count = layer
+                            .get("value_count")
+                            .and_then(serde_json::Value::as_u64)
+                            .and_then(|value| usize::try_from(value).ok())?;
+                        total.checked_add(count)
+                    })
+                });
+            return count.ok_or_else(|| {
+                ApiError::not_found(
+                    "field scope cannot be resolved before the multilayer carrier is published",
+                )
+            });
+        }
+
+        return load_resolved_fdm_membership(snapshot)
+            .map(|membership| membership.cell_membership.len())
+            .map_err(|error| {
+                ApiError::not_found(format!(
+                    "field scope cannot be resolved before FDM membership is published: {}",
+                    error.message
+                ))
+            });
+    }
+
+    let mesh = snapshot.fem_mesh.as_ref().ok_or_else(|| {
+        ApiError::not_found(format!(
+            "field scope for '{quantity_id}' cannot be resolved before the FEM mesh is published"
+        ))
+    })?;
+    Ok(if quantity_spec(quantity_id).is_some_and(|spec| spec.location.as_str() == "cell") {
+        mesh.cell_count()
+    } else {
+        mesh.nodes.len()
+    })
+}
+
+fn validate_pending_field_vector_scope(
+    query: &FieldVectorQuery,
+    snapshot: &SessionStateResponse,
+    workspace_selection: Option<&crate::schemas::workspace::WorkspaceSelectionResource>,
+    quantity_id: &str,
+) -> Result<(), ApiError> {
+    let Some(scope_kind) = query
+        .scope_kind
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty() && *value != "full")
+    else {
+        return Ok(());
+    };
+
+    // The multilayer Airbox identity is independent of the field payload and
+    // is checked by `requested_fdm_multilayer_airbox_carrier`, including the
+    // canonical optional `airbox` scope id. A missing carrier is therefore a
+    // pending resource, not an unknown scope.
+    if is_fdm_multilayer_snapshot(snapshot) && scope_kind == "airbox" {
+        return Ok(());
+    }
+
+    let raw_point_count = pending_field_scope_point_count(snapshot, quantity_id)?;
+    resolve_field_scope(
+        query,
+        snapshot,
+        workspace_selection,
+        raw_point_count,
+        quantity_id,
+        None,
+    )?;
+    Ok(())
+}
+
+async fn active_compute_fields_command_id(state: &AppState) -> Option<String> {
+    let ledger = state.current_command_ledger.lock().await;
+    ledger
+        .iter()
+        .rev()
+        .find(|record| {
+            record.command.kind == "compute_fields"
+                && matches!(
+                    record.status,
+                    CommandLifecycleState::Queued
+                        | CommandLifecycleState::Accepted
+                        | CommandLifecycleState::Dispatched
+                        | CommandLifecycleState::Running
+                )
+        })
+        .map(|record| record.command.command_id.clone())
+}
+
+async fn pending_field_vector_response(
+    state: &AppState,
+    query: &FieldVectorQuery,
+    quantity_id: &str,
+    generation_id: String,
+    reason_code: &str,
+) -> axum::response::Response {
+    let scope_kind = query
+        .scope_kind
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("full")
+        .to_string();
+    let scope_id = query
+        .scope_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string);
+    let command_id = active_compute_fields_command_id(state).await;
+    (
+        StatusCode::ACCEPTED,
+        Json(FieldVectorPendingResponse {
+            state: "pending".to_string(),
+            reason_code: reason_code.to_string(),
+            retry_after_ms: FIELD_VECTOR_PENDING_RETRY_AFTER_MS,
+            command_id,
+            quantity_id: quantity_id.to_string(),
+            scope_kind,
+            scope_id,
+            generation_id,
+        }),
+    )
+        .into_response()
+}
+
 fn invalid_live_magnetization_is_present(snapshot: &SessionStateResponse) -> bool {
     snapshot
         .live_state
@@ -1921,6 +2132,8 @@ pub async fn get_field_meta(
             stage_id: query.stage_id.clone(),
             view: None,
             phase_rad: None,
+            expected_generation_id: None,
+            expected_carrier_revision: None,
         },
         quantity_id,
     )?;
@@ -2146,6 +2359,8 @@ pub async fn get_field_meta(
         stage_id: query.stage_id.clone(),
         view: None,
         phase_rad: None,
+        expected_generation_id: None,
+        expected_carrier_revision: None,
     };
     let resolved_scope = resolve_field_scope(
         &scope_query,
@@ -3336,14 +3551,10 @@ fn resolve_field_vector_sample_limit(
             "max_samples must be greater than zero",
         ));
     }
-    // Full-domain FDM remains on the legacy FMVP v2 contract and has no cell
-    // ordinal mapping. Single-grid scoped FDM carries explicit cell ordinals
-    // in FMVP v3, so it can safely honour max_samples. Multilayer native
-    // scopes remain unchanged until their separate sampling contract is
-    // qualified.
-    if is_fdm && (scope.is_none() || scope.is_some_and(|scope| scope.grid.is_some())) {
-        return Ok(None);
-    }
+    // FDM requests may be sampled as well as scoped. Scoped carriers expose
+    // explicit ordinals; unscoped regular-grid responses retain their grid
+    // coordinates in the sampled FMVP payload.
+    let _ = (is_fdm, scope);
     Ok(Some(max_samples as usize))
 }
 
@@ -3371,6 +3582,7 @@ fn sample_field_scope(
         .iter()
         .filter_map(|position| scope.value_indices.get(*position).copied())
         .collect();
+    scope.grid = Some([scope.node_indices.len() as u32, 1, 1]);
     scope
 }
 
@@ -3475,6 +3687,7 @@ fn sample_unscoped_field_values(
             ("x-fullmag-field-indexing" = String, description = "Optional FMVP v3 field indexing"),
             ("x-fullmag-node-index-count" = usize, description = "Optional FMVP v3 node-index count")
         )),
+        (status = 202, description = "Field vector materialization is pending", body = FieldVectorPendingResponse, content_type = "application/json"),
         (status = 204, description = "Recognized field quantity is not available yet"),
         (status = 304, description = "Not modified — ETag matched"),
         (status = 400, description = "Invalid component or snapshot parameter"),
@@ -3501,6 +3714,7 @@ pub async fn get_field_vector(
     let Some(snapshot) = guard.as_ref() else {
         return Ok(StatusCode::NO_CONTENT.into_response());
     };
+    validate_field_vector_generation_precondition(&query, snapshot)?;
     if let Some(response) =
         analysis_frequency_response_vector_response(snapshot, quantity_id, &query, &headers)?
     {
@@ -3517,6 +3731,11 @@ pub async fn get_field_vector(
 
     let component = parse_component(query.component.as_deref(), n_comp)?;
     let airbox_carrier = requested_fdm_multilayer_airbox_carrier(snapshot, &query, quantity_id)?;
+    let multilayer_airbox_scope =
+        is_fdm_multilayer_snapshot(snapshot) && query.scope_kind.as_deref() == Some("airbox");
+    if multilayer_airbox_scope && airbox_carrier.is_none() {
+        validate_field_vector_carrier_precondition(&query, None)?;
+    }
     let airbox_field = airbox_carrier
         .as_ref()
         .map(|carrier| resolved_fdm_multilayer_airbox_field(snapshot, quantity_id, n_comp, carrier))
@@ -3544,7 +3763,9 @@ pub async fn get_field_vector(
         })
     };
     let raw_values_opt: Option<(Vec<f64>, [u32; 3], Option<ResolvedSpatialField<'_>>)> =
-        if let Some(field) = airbox_field.as_ref() {
+        if multilayer_airbox_scope && airbox_carrier.is_none() {
+            None
+        } else if let Some(field) = airbox_field.as_ref() {
             let SpatialFieldCarrier::FdmAirboxCells { cells, .. } = &field.carrier else {
                 return Err(ApiError::internal(
                     "resolved multilayer Airbox field has a non-Airbox carrier",
@@ -3585,9 +3806,10 @@ pub async fn get_field_vector(
                 })
         };
     let has_field_source = airbox_field.is_some()
-        || snapshot.latest_fields.get(quantity_id).is_some()
-        || snapshot.preview_cache.get(quantity_id).is_some()
-        || transport_field.is_some()
+        || (!multilayer_airbox_scope
+            && (snapshot.latest_fields.get(quantity_id).is_some()
+                || snapshot.preview_cache.get(quantity_id).is_some()
+                || transport_field.is_some()))
         || (quantity_id == "m"
             && snapshot
                 .live_state
@@ -3595,9 +3817,71 @@ pub async fn get_field_vector(
                 .and_then(|state| state.latest_step.magnetization.as_ref())
                 .is_some());
 
+    if raw_values_opt.is_none() && spec.is_some() {
+        validate_pending_field_vector_scope(
+            &query,
+            snapshot,
+            workspace_selection.as_ref(),
+            quantity_id,
+        )?;
+        let pending_carrier_revision = {
+            let scope_kind = query
+                .scope_kind
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty() && *value != "full");
+            if scope_kind.is_none() {
+                field_vector_carrier_revision(snapshot, None, None)
+            } else {
+                None
+            }
+        };
+        if !(multilayer_airbox_scope && airbox_carrier.is_none()) {
+            validate_field_vector_carrier_precondition(&query, pending_carrier_revision)?;
+        }
+    }
+
     let (raw_values, grid, resolved_field) = match raw_values_opt {
         Some(values) => values,
-        None if spec.is_some() && !has_field_source => {
+        None if spec.is_some() => {
+            let materializer_pending = materializer_status(snapshot, quantity_id)
+                .is_some_and(|status| {
+                    status.state == fullmag_runner::LiveFieldMaterializationState::Pending
+                });
+            let selected_quantity = canonical_quantity_id(&snapshot.display_selection.selection.quantity);
+            let legacy_pending = requested_snapshot_id.is_none()
+                && selected_quantity.as_ref() == quantity_id
+                && !is_fem_runtime(snapshot)
+                && snapshot
+                    .live_state
+                    .as_ref()
+                    .is_some_and(|state| state.status == "running")
+                && !(quantity_id == "m" && invalid_live_magnetization_is_present(snapshot));
+            if materializer_pending {
+                let generation_id = domain_generation_id(snapshot);
+                return Ok(pending_field_vector_response(
+                    &state,
+                    &query,
+                    quantity_id,
+                    generation_id,
+                    "field_materialization_pending",
+                )
+                .await);
+            }
+            if legacy_pending {
+                let generation_id = domain_generation_id(snapshot);
+                return Ok(pending_field_vector_response(
+                    &state,
+                    &query,
+                    quantity_id,
+                    generation_id,
+                    "field_unmaterialized",
+                )
+                .await);
+            }
+            if !has_field_source || multilayer_airbox_scope {
+                return Ok(StatusCode::NO_CONTENT.into_response());
+            }
             return Ok(StatusCode::NO_CONTENT.into_response());
         }
         None => {
@@ -3624,6 +3908,10 @@ pub async fn get_field_vector(
         raw_point_count,
         quantity_id,
         resolved_field.as_ref(),
+    )?;
+    validate_field_vector_carrier_precondition(
+        &query,
+        field_vector_carrier_revision(snapshot, resolved_scope.as_ref(), airbox_field.as_ref()),
     )?;
     let sample_limit = resolve_field_vector_sample_limit(
         &query,
@@ -6979,6 +7267,8 @@ mod tests {
             stage_id: None,
             view: None,
             phase_rad: None,
+            expected_generation_id: None,
+            expected_carrier_revision: None,
         };
 
         let scope = resolve_field_scope(&query, &snapshot, None, 4, "H_demag", Some(&field))
@@ -7279,6 +7569,8 @@ mod tests {
                 snapshot_id: None,
                 stage_id: None,
                 view: None,
+                expected_generation_id: None,
+                expected_carrier_revision: None,
             },
             &snapshot,
             None,
@@ -7305,6 +7597,8 @@ mod tests {
                 snapshot_id: None,
                 stage_id: None,
                 view: None,
+                expected_generation_id: None,
+                expected_carrier_revision: None,
             },
             &snapshot,
             None,
@@ -7406,6 +7700,8 @@ mod tests {
                 snapshot_id: None,
                 stage_id: None,
                 view: None,
+                expected_generation_id: None,
+                expected_carrier_revision: None,
             },
             &snapshot,
             None,

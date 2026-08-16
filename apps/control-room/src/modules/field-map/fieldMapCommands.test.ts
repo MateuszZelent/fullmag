@@ -37,43 +37,41 @@ describe("field-map commands", () => {
       } as never,
       source: "test",
       resourceData: {
-        [VISUALIZATION_STATE_PATH]: { planar: { active_monitor_id: null } },
+        [VISUALIZATION_STATE_PATH]: {
+          planar: { source: { kind: "default" } },
+        },
       },
       visualizationSync: { queuePatch } as never,
     });
 
     expect(queuePatch).toHaveBeenCalledTimes(1);
     expect(queuePatch).toHaveBeenCalledWith({
-      planar: { active_monitor_id: "plane-1" },
+      planar: { source: { kind: "monitor", monitor_id: "plane-1" } },
     });
     expect(setActiveViewportMainModule).toHaveBeenCalledWith("field-map");
     expect(setFocusedSlot).toHaveBeenCalledWith("viewport-main");
   });
 
-  it("offers an uncommitted Midplane draft when 2D opens without monitors", async () => {
+  it("opens the session default without querying monitors, domain, or creating a draft", async () => {
     const setActiveViewportMainModule = vi.fn();
     const setFocusedSlot = vi.fn();
     const setPanelVisible = vi.fn();
     const selectionSet = vi.fn();
+    const list = vi.fn();
+    const domainMeta = vi.fn();
     const command = fieldMapCommands.find((entry) => entry.id === "field-map.open");
 
     const result = await command?.run({
       api: {
         data: {
           domain: {
-            meta: vi.fn().mockResolvedValue({ bounds: { min: [-4, -6, -8], max: [4, 6, 8] } }),
+            meta: domainMeta,
           },
         },
         model: {
           planarMonitors: {
-            list: vi.fn().mockResolvedValue({ monitors: [], scene_revision: 4 }),
+            list,
           },
-        },
-        visualization: {
-          state: vi.fn().mockResolvedValue({
-            clip: { axis: "z", enabled: false, flipped: false, position_percent: 50 },
-            slice: { axis: "z", position_percent: 50 },
-          }),
         },
       } as never,
       layout: {
@@ -85,18 +83,12 @@ describe("field-map commands", () => {
       source: "test",
     });
 
-    expect(result).toEqual({
-      message: "Apply the Midplane draft to render the 2D field.",
-      status: "completed",
-    });
-    expect(crossSectionWorkspaceStore.getSnapshot().planarMonitorDraft).toMatchObject({
-      monitor: { name: "Midplane" },
-    });
-    expect(selectionSet).toHaveBeenCalledWith(
-      expect.objectContaining({ kind: "model.planar.monitor.draft" }),
-      "test",
-    );
-    expect(setPanelVisible).toHaveBeenCalledWith("right", true);
+    expect(result).toEqual({ status: "completed" });
+    expect(list).not.toHaveBeenCalled();
+    expect(domainMeta).not.toHaveBeenCalled();
+    expect(selectionSet).not.toHaveBeenCalled();
+    expect(setPanelVisible).not.toHaveBeenCalled();
+    expect(crossSectionWorkspaceStore.getSnapshot().planarMonitorDraft).toBeNull();
   });
 
   it("creates every user entrypoint draft through the canonical monitor factory before opening the Inspector", async () => {
@@ -196,6 +188,7 @@ describe("field-map commands", () => {
               component: "magnitude",
               quantity_id: "m",
               resolution: { height: 256, width: 512 },
+              source: { kind: "default" },
               view_scope: { kind: "monitor_target" },
             },
           }),
@@ -213,7 +206,7 @@ describe("field-map commands", () => {
     expect(result).toEqual({ status: "completed" });
     expect(meta).toHaveBeenCalledWith(
       "m",
-      "plane-1",
+      { kind: "monitor", monitorId: "plane-1" },
       expect.objectContaining({ scope_kind: "monitor_target" }),
     );
     expect(planarMonitorFramePreviewStore.getSnapshot()).toMatchObject({
@@ -222,7 +215,7 @@ describe("field-map commands", () => {
       originM: [0, 0, 3],
     });
     expect(queuePatch).toHaveBeenCalledWith({
-      planar: { active_monitor_id: "plane-1" },
+      planar: { source: { kind: "monitor", monitor_id: "plane-1" } },
     });
     expect(setActiveViewportMainModule).toHaveBeenCalledWith("viewport-3d");
   });
@@ -290,5 +283,91 @@ describe("field-map commands", () => {
       MODEL_PLANAR_MONITORS_PATH,
       8,
     );
+  });
+
+  it("repairs an actively deleted monitor to Default only after the delete succeeds", async () => {
+    const queuePatch = vi.fn();
+    const remove = vi.fn().mockResolvedValue({ scene_revision: 9 });
+    const command = fieldMapCommands.find((entry) => entry.id === "planar-monitor.delete");
+
+    await command?.run({
+      api: {
+        model: {
+          planarMonitors: {
+            list: vi.fn().mockResolvedValue({ scene_revision: 8 }),
+            remove,
+          },
+        },
+        visualization: {
+          state: vi.fn().mockResolvedValue({
+            planar: { source: { kind: "monitor", monitor_id: "plane-1" } },
+          }),
+        },
+      } as never,
+      input: { monitorId: "plane-1" },
+      resources: { invalidate: vi.fn() } as never,
+      source: "test",
+      visualizationSync: { queuePatch } as never,
+    });
+
+    expect(remove).toHaveBeenCalledWith("plane-1", { expected_scene_revision: 8 });
+    expect(queuePatch).toHaveBeenCalledWith({
+      planar: { source: { kind: "default" } },
+    });
+  });
+
+  it("does not change Default when deleting a non-active monitor", async () => {
+    const queuePatch = vi.fn();
+    const command = fieldMapCommands.find((entry) => entry.id === "planar-monitor.delete");
+
+    await command?.run({
+      api: {
+        model: {
+          planarMonitors: {
+            list: vi.fn().mockResolvedValue({ scene_revision: 8 }),
+            remove: vi.fn().mockResolvedValue({ scene_revision: 9 }),
+          },
+        },
+        visualization: {
+          state: vi.fn().mockResolvedValue({ planar: { source: { kind: "default" } } }),
+        },
+      } as never,
+      input: { monitorId: "plane-1" },
+      resources: { invalidate: vi.fn() } as never,
+      source: "test",
+      visualizationSync: { queuePatch } as never,
+    });
+
+    expect(queuePatch).not.toHaveBeenCalled();
+  });
+
+  it("selects the server-returned id after duplicating a monitor", async () => {
+    const queuePatch = vi.fn();
+    const command = fieldMapCommands.find((entry) => entry.id === "planar-monitor.duplicate");
+
+    await command?.run({
+      api: {
+        model: {
+          planarMonitors: {
+            list: vi.fn().mockResolvedValue({ scene_revision: 8 }),
+            duplicate: vi.fn().mockResolvedValue({
+              monitor: { id: "returned-id" },
+              scene_revision: 9,
+            }),
+          },
+        },
+        visualization: {
+          state: vi.fn().mockResolvedValue({ planar: { source: { kind: "default" } } }),
+        },
+      } as never,
+      input: { monitorId: "plane-1" },
+      resources: { invalidate: vi.fn() } as never,
+      source: "test",
+      visualizationSync: { queuePatch } as never,
+    });
+
+    expect(queuePatch).toHaveBeenCalledWith({
+      planar: { source: { kind: "monitor", monitor_id: "returned-id" } },
+    });
   });
 });

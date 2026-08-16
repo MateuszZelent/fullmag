@@ -23,17 +23,17 @@ export type Viewport3DBuildJobKey = string;
 
 export interface Viewport3DBuildJobKeyParts {
   readonly algorithmVersion: number;
-  readonly component: string | null;
+  readonly component?: string | null;
   readonly domainId: string;
   readonly domainGenerationId?: string | null;
-  readonly fieldRevision: string | null;
-  readonly quantityId: string | null;
+  readonly fieldRevision?: string | null;
+  readonly quantityId?: string | null;
   readonly samplingRevision: string;
   readonly scopeId: string | null;
   readonly scopeKind: string | null;
   readonly sessionId: string;
   readonly styleRevision: string;
-  readonly targetVisualizationRevision: string;
+  readonly targetVisualizationRevision?: string;
   readonly topologyRevision: string | null;
 }
 

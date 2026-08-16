@@ -422,10 +422,17 @@ describe("FDM Airbox mesh demand", () => {
     expect(source).toContain('cellSelection: "inactive"');
   });
 
-  it("changes the worker cache key when the requested field payload becomes ready", () => {
+  it("keeps the Airbox worker key independent of quantity and field readiness", () => {
     const source = readFileSync(sceneModelSourceUrl, "utf8");
+    const keyStart = source.indexOf("const fdmAirboxBuildKey =");
+    const keyBlock = source.slice(
+      keyStart,
+      source.indexOf("const fdmAirboxVectorOnlyBuildInput", keyStart),
+    );
 
-    expect(source).toContain(
+    expect(keyBlock).not.toContain("fieldRevision:");
+    expect(keyBlock).not.toContain("quantityId:");
+    expect(keyBlock).not.toContain(
       'field=${fdmAirboxFieldVector ? "ready" : "pending"}',
     );
   });
@@ -4291,6 +4298,38 @@ describe("useViewport3DSceneModel", () => {
     });
   });
 
+  it("feeds every visible FDM and FEM vector carrier through the global allocator", () => {
+    const source = readFileSync(sceneModelSourceUrl, "utf8");
+    const allocationBlock = source.slice(
+      source.indexOf("const fdmTargetVectorAllocations ="),
+      source.indexOf("const fdmTargetViews: "),
+    );
+
+    expect(allocationBlock).toContain("fdmTargetViewsResult");
+    expect(allocationBlock).toContain("fdmNativeLayerDomains");
+    expect(allocationBlock).toContain("fdmMultilayerAirboxDomain");
+    expect(allocationBlock).toContain("fieldCompatibleTopologyRenderModel");
+    expect(allocationBlock).toContain('targetId: `fdm-target:${view.target.id}`');
+    expect(allocationBlock).toContain('targetId: "fdm-airbox"');
+    expect(allocationBlock).toContain('targetId: `fdm-native:${domain.layerId}`');
+    expect(allocationBlock).toContain('targetId: "fdm-multilayer-airbox"');
+    expect(allocationBlock).toContain(
+      'targetId: `fem-part:${partModel.part.id}`',
+    );
+    expect(allocationBlock).toContain(
+      "resolveViewport3DGlobalVectorAllocation(",
+    );
+    expect(source).toContain(
+      "const globalFieldRenderOptionsWithPrimaryTargetBuffers = useMemo(",
+    );
+    expect(source).toContain(
+      "applyViewport3DGlobalVectorAllocationsToFieldRenderOptions(",
+    );
+    expect(source).toContain(
+      "fieldRenderOptions: globalFieldRenderOptionsWithPrimaryTargetBuffers",
+    );
+  });
+
   it("consumes visualization resources separately from the camera registry", () => {
     const source = readFileSync(sceneModelSourceUrl, "utf8");
 
@@ -4584,6 +4623,32 @@ describe("useViewport3DSceneModel", () => {
     expect(enablement).toContain("fdmTargetDefinitionsResult.status");
     expect(enablement).not.toContain("fdmTargetSettings");
     expect(enablement).not.toContain("resolveFdmCuboidPassPlan");
+  });
+
+  it("passes the FDM target Surface scope and lift settings to the vector builder", () => {
+    const source = readFileSync(sceneModelSourceUrl, "utf8");
+    const targetBlock = source.slice(
+      source.indexOf("const fdmTargetViews:"),
+      source.indexOf("const fdmMultilayerVoxelFillRatio"),
+    );
+    expect(targetBlock).toContain("geometryScope: settings.geometryScope");
+    expect(targetBlock).toContain(
+      "surfaceOffsetEnabled:\n                          settings.vectorSurfaceOffsetEnabled",
+    );
+    expect(targetBlock).toContain(
+      "surfaceOffsetScale:\n                          settings.vectorSurfaceOffsetScale",
+    );
+
+    const airboxBuildBlock = source.slice(
+      source.indexOf("const fdmAirboxBuildState ="),
+      source.indexOf("const fdmAirboxInstanceModel", source.indexOf("const fdmAirboxBuildState =")),
+    );
+    expect(airboxBuildBlock).toContain(
+      "vectorSurfaceOffsetEnabled:\n      fdmSingleGridAirboxSettings?.vectorSurfaceOffsetEnabled ?? false",
+    );
+    expect(airboxBuildBlock).toContain(
+      "vectorSurfaceOffsetScale:\n      fdmSingleGridAirboxSettings?.vectorSurfaceOffsetScale ?? 0",
+    );
   });
 
   it("builds FDM scalar colors from the FDM target palette, not the FEM/global palette", () => {

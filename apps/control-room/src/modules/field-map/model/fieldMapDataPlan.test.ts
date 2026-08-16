@@ -14,7 +14,7 @@ describe("field-map data plan", () => {
         active: false,
         component: "normal",
         includeMesh: true,
-        monitorId: "plane-1",
+        source: { kind: "monitor", monitorId: "plane-1" },
         quality: "interactive",
         quantityId: "m",
         resolution: [512, 256],
@@ -35,7 +35,7 @@ describe("field-map data plan", () => {
       active: true,
       component: "normal",
       includeMesh: false,
-      monitorId: "plane-1",
+      source: { kind: "monitor", monitorId: "plane-1" },
       quality: "export",
       quantityId: "m",
       resolution: [512, 256],
@@ -71,7 +71,7 @@ describe("field-map data plan", () => {
         expectedMonitorRevision: sceneRevision,
       },
       includeMesh: true,
-      monitorId: "plane-1",
+      source: { kind: "monitor", monitorId: "plane-1" },
       quality: "interactive",
       quantityId: "m",
       resolution: [128, 64],
@@ -102,7 +102,7 @@ describe("field-map data plan", () => {
     expect(source).not.toContain("monitor.data?.scene_revision");
     expect(source).toContain("planarFieldQueryFromMeta(");
     expect(source).toContain("plan.quantityId");
-    expect(source).toContain("plan.monitorId");
+    expect(source).toContain("plan.source");
     expect(source).toContain("meta.data");
     expect(source).toContain("canonicalSample?.ok ? canonicalSample.query : null");
     expect(source).toContain("const canonicalSampleReady = canonicalQuery !== null");
@@ -121,7 +121,7 @@ describe("field-map data plan", () => {
       active: true,
       component: "magnitude",
       includeMesh: false,
-      monitorId: "plane-1",
+      source: { kind: "monitor", monitorId: "plane-1" },
       quality: "interactive",
       quantityId: "m",
       resolution: [32, 32],
@@ -134,6 +134,27 @@ describe("field-map data plan", () => {
     expect(plan.query.scope_id).toBe(scopeId);
   });
 
+  it("enables a fresh default source without requiring a monitor id", () => {
+    const plan = buildFieldMapDataPlan({
+      active: true,
+      component: "magnitude",
+      includeMesh: false,
+      source: { kind: "default" },
+      quality: "interactive",
+      quantityId: "m",
+      resolution: [32, 32],
+      showVectors: false,
+      vectorBudget: 256,
+    });
+
+    expect(plan).toMatchObject({
+      availability: "ready",
+      enabled: true,
+      source: { kind: "default" },
+    });
+    expect(plan).not.toHaveProperty("monitorId");
+  });
+
   it("fails closed with an explicit not-applicable state for FDM mesh-part and airbox scopes", () => {
     for (const viewScope of [
       { kind: "mesh_part" as const, scope_id: "part-7" },
@@ -144,7 +165,7 @@ describe("field-map data plan", () => {
         component: "magnitude",
         discretization: "fdm",
         includeMesh: true,
-        monitorId: "plane-1",
+        source: { kind: "monitor", monitorId: "plane-1" },
         quality: "interactive",
         quantityId: "m",
         resolution: [32, 32],

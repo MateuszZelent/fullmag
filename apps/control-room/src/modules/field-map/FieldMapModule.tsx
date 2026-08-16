@@ -1,9 +1,10 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 
 import { useKernel } from "@/kernel/KernelContext";
 import { decodeFieldVector } from "@/kernel/api/codecs";
+import type { PlanarFieldSource } from "@/kernel/api/apiTypes";
 import {
   planarFieldQueryFromMeta,
   usePlanarFieldMetaResource,
@@ -13,10 +14,6 @@ import {
   usePlanarScalarResource,
   usePlanarVectorResource,
 } from "@/kernel/resources/planarFieldResources";
-import {
-  usePlanarMonitorResource,
-  usePlanarMonitorsResource,
-} from "@/kernel/resources/planarMonitorResources";
 import { useDomainMetaResource } from "@/kernel/resources/geometryLifecycleResources";
 import { useSessionStatusSelector } from "@/kernel/resources/useSessionStatus";
 import { useSelectionSelector } from "@/kernel/selection/useSelection";
@@ -60,11 +57,15 @@ export default function FieldMapModule() {
   );
   const activePinned = canonicalPlanar?.layers.probes ? pinned : null;
   const activeRenderEvidence = presentationPlanar?.layers.raster ? renderEvidence : null;
-  const activeMonitorId = canonicalPlanar?.active_monitor_id ?? null;
-  const monitors = usePlanarMonitorsResource({ enabled: active });
-  const monitor = usePlanarMonitorResource(activeMonitorId ?? "", {
-    enabled: active && activeMonitorId !== null,
-  });
+  const source = useMemo<PlanarFieldSource>(() => {
+    if (canonicalPlanar?.source.kind === "monitor") {
+      return {
+        kind: "monitor",
+        monitorId: canonicalPlanar.source.monitor_id,
+      };
+    }
+    return { kind: "default" };
+  }, [canonicalPlanar?.source]);
   const domain = useDomainMetaResource({ enabled: active });
   const runtime = useSessionStatusSelector(
     (status) => status.data?.domain.discretization ?? null,
@@ -85,16 +86,6 @@ export default function FieldMapModule() {
       left.snapshotId === right.snapshotId && left.stageId === right.stageId,
   });
 
-  useEffect(() => {
-    if (!canonicalPlanar || activeMonitorId || !monitors.data?.monitors.length) return;
-    const first = monitors.data.monitors[0] as { id?: unknown };
-    if (typeof first?.id === "string") {
-      visualizationSync.queuePatch({
-        planar: { active_monitor_id: first.id },
-      });
-    }
-  }, [activeMonitorId, canonicalPlanar, monitors.data, visualizationSync]);
-
   const plan = useMemo(
     () => buildFieldMapDataPlan({
       active: active && canonicalPlanar !== undefined,
@@ -102,7 +93,7 @@ export default function FieldMapModule() {
       discretization:
         domain.data?.discretization ?? runtime ?? null,
       includeMesh: (canonicalPlanar?.layers.mesh ?? false) || (canonicalPlanar?.layers.boundaries ?? false),
-      monitorId: activeMonitorId,
+      source,
       quality: canonicalPlanar?.quality ?? "interactive",
       quantityId: canonicalPlanar?.quantity_id ?? "",
       resolution: [
@@ -117,7 +108,6 @@ export default function FieldMapModule() {
     }),
     [
       active,
-      activeMonitorId,
       domain.data?.discretization,
       canonicalPlanar,
       runtime,
@@ -125,11 +115,10 @@ export default function FieldMapModule() {
       selectedFieldSnapshot.stageId,
     ],
   );
-  const planMonitorId = plan.monitorId;
   const planQuantityId = plan.quantityId;
   const meta = usePlanarFieldMetaResource(
     plan.quantityId,
-    plan.monitorId,
+    plan.source,
     plan.query,
     { enabled: plan.enabled },
   );
@@ -138,11 +127,11 @@ export default function FieldMapModule() {
       meta.status === "ready" && meta.data
         ? planarFieldQueryFromMeta(
             planQuantityId,
-            planMonitorId,
+            plan.source,
             meta.data,
           )
         : null,
-    [meta.data, meta.status, planMonitorId, planQuantityId],
+    [meta.data, meta.status, plan.source, planQuantityId],
   );
   const canonicalQuery =
     canonicalSample?.ok ? canonicalSample.query : null;
@@ -152,31 +141,31 @@ export default function FieldMapModule() {
   const canonicalSampleReady = canonicalQuery !== null;
   const scalar = usePlanarScalarResource(
     plan.quantityId,
-    plan.monitorId,
+    plan.source,
     dataQuery,
     { enabled: plan.requestScalar && canonicalSampleReady },
   );
   const mask = usePlanarMaskResource(
     plan.quantityId,
-    plan.monitorId,
+    plan.source,
     dataQuery,
     { enabled: plan.requestMask && canonicalSampleReady },
   );
   const vectors = usePlanarVectorResource(
     plan.quantityId,
-    plan.monitorId,
+    plan.source,
     dataQuery,
     { enabled: plan.requestVectors && canonicalSampleReady },
   );
   const meshOverlay = usePlanarMeshOverlayResource(
     plan.quantityId,
-    plan.monitorId,
+    plan.source,
     dataQuery,
     { enabled: plan.requestMesh && canonicalSampleReady },
   );
   const probe = usePlanarProbeResource(
     plan.quantityId,
-    plan.monitorId,
+    plan.source,
     buildFieldMapProbeQuery(dataQuery, activePinned?.[0] ?? 0, activePinned?.[1] ?? 0),
     { enabled: plan.enabled && canonicalSampleReady && activePinned !== null },
   );
@@ -266,16 +255,57 @@ export default function FieldMapModule() {
     scalarIdentity: scalar.data?.etag,
     scalarStatus: scalar.status,
   });
+  const evidenceSource = meta.data?.source;
+  const sourceKind = evidenceSource?.kind ?? source.kind;
+  const sourceId = evidenceSource?.kind === "monitor"
+    ? evidenceSource.monitor_id
+    : "default";
+  const sourceHash = evidenceSource?.kind === "monitor"
+    ? evidenceSource.monitor_hash
+    : evidenceSource?.default_slice_hash ?? null;
+  const sourceRevision = evidenceSource?.kind === "monitor"
+    ? evidenceSource.monitor_revision
+    : evidenceSource?.default_slice_revision ?? null;
+  const defaultPlane = canonicalPlanar?.source.kind === "default"
+    ? canonicalPlanar.default_slice.plane
+    : null;
+  const positionFraction = canonicalPlanar?.source.kind === "default"
+    ? canonicalPlanar.default_slice.position_fraction
+    : null;
+  const normalIndex = defaultPlane === "xy" ? 2 : defaultPlane === "xz" ? 1 : 0;
+  const resolvedCoordinateM = defaultPlane && meta.data
+    ? meta.data.frame.origin_m[normalIndex] ?? null
+    : null;
+  const operatorThicknessM = meta.data?.operator.kind === "slab_average"
+    ? meta.data.operator.thickness_m
+    : null;
   const evidence = createPlanarEvidence({
+    canonicalUnit: meta.data?.canonical_unit ?? null,
+    carrierRevision: meta.data?.carrier_revision ?? null,
     component,
+    defaultPlane,
+    domainGenerationId: evidenceSource?.kind === "default"
+      ? evidenceSource.domain_generation_id
+      : null,
+    fieldBackend: meta.data?.field_backend ?? null,
+    fieldDevice: meta.data?.field_device ?? null,
     fieldRevision: meta.data?.field_revision ?? null,
+    fieldSource: meta.data?.field_source ?? null,
+    fieldPrecision: meta.data?.field_precision ?? null,
     glyphCount: activeRenderEvidence?.glyphCount ?? 0,
     metaIdentity: meta.data?.etag ?? null,
-    monitorHash: meta.data?.monitor_hash ?? null,
-    monitorId: activeMonitorId ?? "",
-    monitorRevision: meta.data?.monitor_revision ?? null,
-    operatorKind: monitor.data?.monitor.operator.kind ?? null,
-    operatorRevision: meta.data?.monitor_revision ?? null,
+    meshRevision: meta.data?.mesh_revision ?? null,
+    operatorThicknessM,
+    positionFraction,
+    resolvedCoordinateM,
+    sampleToken: meta.data?.sample_token ?? null,
+    samplingExecution: meta.data?.sampling_execution ?? null,
+    sourceKind,
+    sourceId,
+    sourceHash,
+    sourceRevision,
+    operatorKind: meta.data?.operator.kind ?? null,
+    operatorRevision: sourceRevision,
     overlayCounts: activeRenderEvidence?.overlayCounts ?? {
       boundsSegments: 0,
       contours: 0,
@@ -299,9 +329,6 @@ export default function FieldMapModule() {
   }
   if (!canonicalPlanar || !presentationPlanar) {
     return <FieldMapStatus message="Loading planar visualization state…" planarStatus="loading" />;
-  }
-  if (!activeMonitorId) {
-    return <FieldMapStatus message="Select a planar monitor to open the 2D view." />;
   }
   if (plan.availability === "not-applicable") {
     return (
@@ -343,14 +370,30 @@ export default function FieldMapModule() {
         data-planar-evidence={JSON.stringify(evidence)}
         data-planar-field-revision={String(evidence.fieldRevision ?? "")}
         data-planar-glyph-count={String(evidence.glyphCount)}
-        data-planar-monitor-id={evidence.monitorId}
+        data-planar-source-kind={evidence.sourceKind}
+        data-planar-source-id={evidence.sourceId}
         data-planar-operator-kind={evidence.operatorKind ?? ""}
         data-planar-raster-checksum={evidence.raster?.checksum ?? ""}
         data-planar-raster-max={String(evidence.raster?.max ?? "")}
         data-planar-raster-min={String(evidence.raster?.min ?? "")}
+        data-planar-raster-sample-count={String(evidence.raster?.sampleCount ?? "")}
         data-planar-meta-identity={evidence.metaIdentity ?? ""}
-        data-planar-monitor-hash={evidence.monitorHash ?? ""}
-        data-planar-monitor-revision={String(evidence.monitorRevision ?? "")}
+        data-planar-source-hash={evidence.sourceHash ?? ""}
+        data-planar-source-revision={String(evidence.sourceRevision ?? "")}
+        data-planar-default-plane={evidence.defaultPlane ?? ""}
+        data-planar-position-fraction={String(evidence.positionFraction ?? "")}
+        data-planar-resolved-coordinate-m={String(evidence.resolvedCoordinateM ?? "")}
+        data-planar-operator-thickness-m={String(evidence.operatorThicknessM ?? "")}
+        data-planar-domain-generation-id={evidence.domainGenerationId ?? ""}
+        data-planar-field-backend={evidence.fieldBackend ?? ""}
+        data-planar-field-device={evidence.fieldDevice ?? ""}
+        data-planar-field-precision={evidence.fieldPrecision ?? ""}
+        data-planar-canonical-unit={evidence.canonicalUnit ?? ""}
+        data-planar-carrier-revision={String(evidence.carrierRevision ?? "")}
+        data-planar-mesh-revision={String(evidence.meshRevision ?? "")}
+        data-planar-sample-token={evidence.sampleToken ?? ""}
+        data-planar-field-source={evidence.fieldSource ?? ""}
+        data-planar-sampling-execution={evidence.samplingExecution ?? ""}
         data-planar-operator-revision={String(evidence.operatorRevision ?? "")}
         data-planar-scalar-identity={evidence.scalarIdentity ?? ""}
         data-planar-status={evidence.status}

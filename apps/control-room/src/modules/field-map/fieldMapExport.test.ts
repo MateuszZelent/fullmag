@@ -14,6 +14,17 @@ describe("field-map PNG export", () => {
     ).toBe("mid-plane-free-layer_h-demag_r17_a-m.png");
   });
 
+  it("keeps the default source and resolved plane in the export filename", () => {
+    expect(
+      planarExportFilename({
+        fieldRevision: 17,
+        sourceLabel: "default-xy-z30nm",
+        quantityId: "m",
+        unit: "A/m",
+      }),
+    ).toBe("default-xy-z30nm_m_r17_a-m.png");
+  });
+
   it("revokes the object URL after triggering the download", () => {
     const anchor = { click: vi.fn(), download: "", href: "" };
     const objectUrlApi = {

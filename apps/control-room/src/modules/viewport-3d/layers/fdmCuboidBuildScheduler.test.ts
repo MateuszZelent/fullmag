@@ -4,6 +4,7 @@ import { FMRM_INACTIVE_REGION_ID } from "@/kernel/api/codecs";
 
 import {
   buildViewport3DFdmCuboidOffMainThread,
+  buildViewport3DFdmVectorsOffMainThread,
   disposeViewport3DFdmCuboidBuildWorker,
 } from "./fdmCuboidBuildScheduler";
 import {
@@ -111,5 +112,33 @@ describe("FDM cuboid build scheduler", () => {
     expect(result.model?.regionIds).toEqual(
       new Uint32Array([FMRM_INACTIVE_REGION_ID]),
     );
+  });
+
+  it("routes vector-only requests through the worker without a cuboid model", async () => {
+    vi.stubGlobal("Worker", LoopbackFdmCuboidWorker);
+    const result = await buildViewport3DFdmVectorsOffMainThread(
+      {
+        anchorMode: "center",
+        anchors: new Float32Array([0, 0, 0, 1, 0, 0]),
+        cellIndices: new Uint32Array([0, 1]),
+        fieldVector: {
+          dtype: "float64",
+          grid: [2, 1, 1],
+          nComp: 3,
+          pointCount: 2,
+          quantityId: "H_demag",
+          valueCount: 6,
+          values: new Float64Array([1, 0, 0, 0, 1, 0]),
+        },
+        gridShape: [2, 1, 1],
+        maxVectors: 2,
+        scale: 1,
+      },
+      { buildKey: "fdm-vector-only:test" },
+    );
+
+    expect(LoopbackFdmCuboidWorker.instances[0]?.requests[0]?.vectorOnly).toBeTruthy();
+    expect(result.model).toBeNull();
+    expect(result.vectorCellIndices).toEqual(new Uint32Array([0, 1]));
   });
 });

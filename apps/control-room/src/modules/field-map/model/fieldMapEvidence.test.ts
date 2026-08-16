@@ -8,11 +8,26 @@ import {
 
 describe("field-map evidence", () => {
   const requested = {
+    canonicalUnit: "A/m",
+    carrierRevision: "9007199254741003",
     component: "magnitude",
+    defaultPlane: null,
+    domainGenerationId: null,
+    fieldBackend: "fem",
+    fieldDevice: "cpu",
     fieldRevision: "9007199254741001",
-    monitorId: "xy-slab",
-    monitorHash: "sha256:monitor-current",
-    monitorRevision: "9007199254741002",
+    fieldSource: "live",
+    fieldPrecision: "double",
+    meshRevision: "9007199254741004",
+    operatorThicknessM: 1e-9,
+    positionFraction: null,
+    resolvedCoordinateM: null,
+    sampleToken: "planar-sample-v3:current",
+    samplingExecution: "cpu",
+    sourceKind: "monitor",
+    sourceId: "xy-slab",
+    sourceHash: "sha256:monitor-current",
+    sourceRevision: "9007199254741002",
     operatorKind: "slab_average",
     operatorRevision: "9007199254741002",
     quantityId: "m",
@@ -49,7 +64,7 @@ describe("field-map evidence", () => {
     );
   });
 
-  it("accepts the ready raster only when monitor, operator, revision, and identity match", () => {
+  it("accepts the ready raster only when source, operator, revision, and identity match", () => {
     const evidence = createPlanarEvidence({
       ...requested,
       glyphCount: 64,
@@ -75,6 +90,18 @@ describe("field-map evidence", () => {
           sampleIdentity: '"fm-planar-sha256:old"',
         },
         scalarIdentity: '"fm-planar-sha256:old"',
+        scalarStatus: "ready",
+      }),
+    ).toBe("loading");
+  });
+
+  it("never reports ready without scalar/meta identities and render evidence", () => {
+    expect(
+      resolvePlanarEvidenceStatus({
+        metaIdentity: undefined,
+        metaStatus: "ready",
+        renderEvidence: null,
+        scalarIdentity: undefined,
         scalarStatus: "ready",
       }),
     ).toBe("loading");

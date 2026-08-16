@@ -29,7 +29,8 @@ vi.mock("@/kernel/resources/useResource", () => ({
 
 function PlanarIdentity() {
   const visualization = useVisualizationStateResource();
-  return <output>{(visualization.data as { planar?: { active_monitor_id?: string | null } } | null)?.planar?.active_monitor_id ?? "none"}</output>;
+  const source = (visualization.data as { planar?: { source?: { kind: string; monitor_id?: string } } } | null)?.planar?.source;
+  return <output>{source?.kind === "monitor" ? source.monitor_id : source?.kind ?? "none"}</output>;
 }
 
 describe("useVisualizationStateResource", () => {
@@ -39,16 +40,16 @@ describe("useVisualizationStateResource", () => {
     });
     mocks.controller = controller;
     mocks.remote = {
-      planar: { active_monitor_id: "plane-1" },
+      planar: { source: { kind: "monitor", monitor_id: "plane-1" } },
       revision: 7,
     };
 
-    controller.queuePatch({ planar: { active_monitor_id: "plane-2" } });
+    controller.queuePatch({ planar: { source: { kind: "monitor", monitor_id: "plane-2" } } });
 
     expect(renderToStaticMarkup(<PlanarIdentity />)).toContain("plane-1");
 
     mocks.remote = {
-      planar: { active_monitor_id: "plane-2" },
+      planar: { source: { kind: "monitor", monitor_id: "plane-2" } },
       revision: 8,
     };
 

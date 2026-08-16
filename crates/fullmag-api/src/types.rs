@@ -6,6 +6,7 @@ use crate::schemas::commands::{
 use crate::schemas::diagnostics::SolverProfileResource;
 use crate::schemas::hysteresis::HysteresisBookmarkSchema;
 use crate::schemas::realtime::RealtimeResourceChange;
+use crate::schemas::runtime::FieldMaterializationRequirement;
 use crate::schemas::visualization_state::{
     ClipVisualizationState, DomainVisualizationState, FemVisualizationState,
     PlanarVisualizationState, SamplingVisualizationState, SliceVisualizationState,
@@ -1344,6 +1345,8 @@ pub(crate) struct SessionCommand {
     pub stages: Option<Vec<fullmag_runner::SequenceStage>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub profile: Option<Value>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub field_materialization_requirements: Vec<FieldMaterializationRequirement>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]

@@ -1,6 +1,7 @@
 import type {
   PlanarFieldProbeQuery,
   PlanarFieldQuery,
+  PlanarFieldSource,
 } from "@/kernel/api/apiTypes";
 
 import { planarScopeCapability } from "./fieldMapCapabilities";
@@ -23,7 +24,7 @@ export interface FieldMapDataPlanInput {
   component: string;
   discretization?: string | null;
   includeMesh: boolean;
-  monitorId: string | null;
+  source: PlanarFieldSource;
   quality: "interactive" | "export";
   quantityId: string;
   resolution: readonly [number, number];
@@ -37,7 +38,7 @@ export interface FieldMapDataPlanInput {
 export interface FieldMapDataPlan {
   availability: FieldMapDataPlanAvailability;
   enabled: boolean;
-  monitorId: string;
+  source: PlanarFieldSource;
   quantityId: string;
   query: PlanarFieldQuery;
   requestMask: boolean;
@@ -59,7 +60,7 @@ export function buildFieldMapDataPlan(
     ? "structured FDM grid planar sampling does not support mesh-part or airbox scopes."
     : null;
   const enabled =
-    input.active && input.monitorId !== null && scope.enabled;
+    input.active && scope.enabled;
   const availability: FieldMapDataPlanAvailability = !scope.enabled
     ? "not-applicable"
     : enabled
@@ -68,7 +69,7 @@ export function buildFieldMapDataPlan(
   return {
     availability,
     enabled,
-    monitorId: input.monitorId ?? "",
+    source: input.source,
     quantityId: input.quantityId,
     query: {
       component: input.component,

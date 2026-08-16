@@ -23,10 +23,25 @@ export interface PlanarRenderEvidence {
 
 export interface PlanarEvidenceInput extends Omit<PlanarRenderEvidence, "sampleIdentity"> {
   component: string;
+  canonicalUnit: string | null;
+  carrierRevision: number | string | null;
+  defaultPlane: string | null;
+  domainGenerationId: string | null;
+  fieldBackend: string | null;
+  fieldDevice: string | null;
   fieldRevision: number | string | null;
-  monitorId: string;
-  monitorHash: string | null;
-  monitorRevision: number | string | null;
+  fieldSource: string | null;
+  fieldPrecision: string | null;
+  meshRevision: number | string | null;
+  operatorThicknessM: number | null;
+  positionFraction: number | null;
+  resolvedCoordinateM: number | null;
+  sampleToken: string | null;
+  samplingExecution: string | null;
+  sourceKind: "default" | "monitor";
+  sourceId: string;
+  sourceHash: string | null;
+  sourceRevision: number | string | null;
   operatorKind: string | null;
   operatorRevision: number | string | null;
   quantityId: string;
@@ -38,12 +53,13 @@ export interface PlanarEvidenceInput extends Omit<PlanarRenderEvidence, "sampleI
 export interface PlanarEvidenceExpectation {
   component: string;
   fieldRevision: number | string;
-  monitorId: string;
+  sourceKind: "default" | "monitor";
+  sourceId: string;
   operatorKind: string;
   quantityId: string;
   metaIdentity: string;
-  monitorHash: string;
-  monitorRevision: number | string;
+  sourceHash: string;
+  sourceRevision: number | string;
   scalarIdentity: string;
 }
 
@@ -67,8 +83,11 @@ export function assertPlanarEvidenceReady(
   if (evidence.status !== "ready") {
     throw new Error(`Planar evidence status ${evidence.status}, expected ready`);
   }
-  if (evidence.monitorId !== expected.monitorId) {
-    throw new Error(`Planar evidence monitor mismatch: ${evidence.monitorId}`);
+  if (evidence.sourceKind !== expected.sourceKind) {
+    throw new Error(`Planar evidence source kind mismatch: ${evidence.sourceKind}`);
+  }
+  if (evidence.sourceId !== expected.sourceId) {
+    throw new Error(`Planar evidence source mismatch: ${evidence.sourceId}`);
   }
   if (evidence.operatorKind !== expected.operatorKind) {
     throw new Error(`Planar evidence operator mismatch: ${evidence.operatorKind}`);
@@ -94,13 +113,13 @@ export function assertPlanarEvidenceReady(
       `Planar evidence field revision mismatch: ${evidence.fieldRevision}`,
     );
   }
-  if (evidence.monitorRevision !== expected.monitorRevision) {
-    throw new Error(`Planar evidence monitor revision mismatch: ${evidence.monitorRevision}`);
+  if (evidence.sourceRevision !== expected.sourceRevision) {
+    throw new Error(`Planar evidence source revision mismatch: ${evidence.sourceRevision}`);
   }
-  if (evidence.monitorHash !== expected.monitorHash) {
-    throw new Error(`Planar evidence monitor hash mismatch: ${evidence.monitorHash}`);
+  if (evidence.sourceHash !== expected.sourceHash) {
+    throw new Error(`Planar evidence source hash mismatch: ${evidence.sourceHash}`);
   }
-  if (evidence.operatorRevision !== evidence.monitorRevision) {
+  if (evidence.operatorRevision !== evidence.sourceRevision) {
     throw new Error(`Planar evidence operator revision mismatch: ${evidence.operatorRevision}`);
   }
   if (!evidence.raster || evidence.raster.sampleCount <= 0) {
@@ -125,9 +144,11 @@ export function resolvePlanarEvidenceStatus({
   if (metaStatus === "error" || scalarStatus === "error") return "error";
   return metaStatus === "ready" &&
       scalarStatus === "ready" &&
-      metaIdentity !== null &&
-      scalarIdentity !== null &&
-      renderEvidence?.raster !== null &&
+      typeof metaIdentity === "string" &&
+      metaIdentity.length > 0 &&
+      typeof scalarIdentity === "string" &&
+      scalarIdentity.length > 0 &&
+      renderEvidence?.raster != null &&
       renderEvidence?.sampleIdentity === scalarIdentity &&
       scalarIdentity === metaIdentity
     ? "ready"

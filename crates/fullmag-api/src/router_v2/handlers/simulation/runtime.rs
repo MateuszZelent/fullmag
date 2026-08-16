@@ -2118,6 +2118,10 @@ pub async fn get_command_detail(
         resolved_execution,
         resource_invalidations,
         diagnostics,
+        field_materialization_requirements: record
+            .command
+            .field_materialization_requirements
+            .clone(),
         status: record.status.as_str().to_string(),
         created_at_unix_ms: record.command.created_at_unix_ms,
         accepted_at_unix_ms,

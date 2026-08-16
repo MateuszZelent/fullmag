@@ -18,6 +18,7 @@ import { errorRetryDelayMs } from "../realtime/communicationPolicy";
 
 import {
   sharedResourceRuntimeStore,
+  type ResourceRetryPolicy,
   type ResourceRuntimeSnapshot,
   type ResourceRuntimeStore,
 } from "./ResourceRuntimeStore";
@@ -38,6 +39,7 @@ interface UseResourceOptions<TData> {
   load: (context: LoadContext) => Promise<TData>;
   minRefetchIntervalMs?: number;
   pauseLoad?: boolean;
+  retryPolicy?: ResourceRetryPolicy | null;
   resolveRevision?: (data: TData) => ResourceRevision | null;
   resourceKey: ResourceKey;
 }
@@ -51,6 +53,16 @@ interface UseResourceSelectorOptions<TData, TSelected>
 const NOOP_SUBSCRIBE = () => undefined;
 const NOOP_REFETCH = () => undefined;
 const NOOP_RESOLVE_REVISION = () => null;
+const DEFAULT_RESOURCE_RETRYABLE_REASON_CODES = [
+  "field_materialization_pending",
+  "field_pending",
+  "field_unmaterialized",
+  "materialization_pending",
+  "not_ready",
+  "pending",
+  "temporary_not_found",
+  "transient_not_found",
+] as const;
 const getServerRevision = (): ResourceRevision | null => null;
 const SERVER_RUNTIME_SNAPSHOT: ResourceRuntimeSnapshot<unknown> = {
   data: null,
@@ -71,11 +83,16 @@ export function useResource<TData>({
   load,
   minRefetchIntervalMs,
   pauseLoad = false,
+  retryPolicy,
   resolveRevision,
   resourceKey,
 }: UseResourceOptions<TData>): ResourceResult<TData> {
   const { bus, diagnosticRecorder, resources } = useKernel();
   const runtimeStore = sharedResourceRuntimeStore as ResourceRuntimeStore<TData>;
+  const effectiveRetryPolicy = useMemo(
+    () => resolveResourceRetryPolicy(retryPolicy),
+    [retryPolicy],
+  );
 
   // Stabilize the subscribe callback so useSyncExternalStore doesn't
   // unsubscribe/resubscribe on every render.
@@ -130,6 +147,7 @@ export function useResource<TData>({
     loadedRefreshToken,
     minRefetchIntervalMs,
     pauseLoad,
+    retryPolicy: effectiveRetryPolicy,
     refreshToken,
     resolveRevision,
     resourceKey,
@@ -170,12 +188,17 @@ export function useResourceSelector<TData, TSelected>({
   load,
   minRefetchIntervalMs,
   pauseLoad = false,
+  retryPolicy,
   resolveRevision,
   resourceKey,
   selector,
 }: UseResourceSelectorOptions<TData, TSelected>): TSelected {
   const { bus, diagnosticRecorder, resources } = useKernel();
   const runtimeStore = sharedResourceRuntimeStore as ResourceRuntimeStore<TData>;
+  const effectiveRetryPolicy = useMemo(
+    () => resolveResourceRetryPolicy(retryPolicy),
+    [retryPolicy],
+  );
   const [refreshToken, setRefreshToken] = useState(0);
   const [loadedRefreshToken, setLoadedRefreshToken] = useState(refreshToken);
   const errorCountRef = useRef(0);
@@ -271,6 +294,7 @@ export function useResourceSelector<TData, TSelected>({
     loadedRefreshToken,
     minRefetchIntervalMs,
     pauseLoad,
+    retryPolicy: effectiveRetryPolicy,
     refreshToken,
     resolveRevision,
     resourceKey,
@@ -292,6 +316,7 @@ function useResourceLoader<TData>({
   loadedRefreshToken,
   minRefetchIntervalMs = 0,
   pauseLoad = false,
+  retryPolicy,
   refreshToken,
   resolveRevision,
   resourceKey,
@@ -308,6 +333,7 @@ function useResourceLoader<TData>({
   loadedRefreshToken: number;
   minRefetchIntervalMs?: number;
   pauseLoad?: boolean;
+  retryPolicy?: ResourceRetryPolicy;
   refreshToken: number;
   resolveRevision?: (data: TData) => ResourceRevision | null;
   resourceKey: ResourceKey;
@@ -336,6 +362,14 @@ function useResourceLoader<TData>({
     let cancelled = false;
     let completed = false;
     let started = false;
+
+    const snapshotAtEffect = runtimeStore.getSnapshot(resourceKey);
+    const externalRevisionChanged =
+      snapshotAtEffect.settledResourceKey === resourceKey &&
+      snapshotAtEffect.settledExternalRevision !== externalRevision;
+    if (externalRevisionChanged) {
+      runtimeStore.cancelRetry(resourceKey);
+    }
 
     // If the last attempt failed, wait before retrying to avoid
     // a hot render loop when the backend is unreachable.
@@ -367,6 +401,7 @@ function useResourceLoader<TData>({
           force: hasManualRefresh,
           load: loadLatest,
           minRefetchIntervalMs,
+          retryPolicy,
           resolveRevision: resolveRevisionLatest,
           resourceKey,
         })
@@ -439,11 +474,26 @@ function useResourceLoader<TData>({
     loadedRefreshToken,
     minRefetchIntervalMs,
     pauseLoad,
+    retryPolicy,
     refreshToken,
     resourceKey,
     runtimeStore,
     setLoadedRefreshToken,
   ]);
+}
+
+function resolveResourceRetryPolicy(
+  policy: ResourceRetryPolicy | null | undefined,
+): ResourceRetryPolicy | undefined {
+  if (policy === null) return undefined;
+  return (
+    policy ?? {
+      deadlineMs: 5_000,
+      maxAttempts: 3,
+      retryAfterMs: errorRetryDelayMs(),
+      retryableReasonCodes: DEFAULT_RESOURCE_RETRYABLE_REASON_CODES,
+    }
+  );
 }
 
 function recordResourceHookDiagnostic({

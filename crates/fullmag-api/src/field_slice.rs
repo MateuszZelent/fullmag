@@ -591,8 +591,6 @@ fn fdm_slice_via_planar_engine(
     let sampled = PlanarSamplingEngine::sample_fdm(
         &source,
         &ResolvedPlanarSampleRequest {
-            monitor_id: "compat-slice".to_string(),
-            monitor_hash: "compat-slice-v1".to_string(),
             frame,
             operator: PlanarOperatorIR::PlaneSample,
             resolution: [q.x_size, q.y_size],
@@ -959,8 +957,6 @@ fn fdm_projection_via_planar_engine(
         ProjectionReduction::Sum | ProjectionReduction::Stddev => PlanarReductionIR::MeanOccupied,
     };
     let request = ResolvedPlanarSampleRequest {
-        monitor_id: "legacy-fdm-projection".to_string(),
-        monitor_hash: "legacy-fdm-projection-v1".to_string(),
         frame: PlanarFrameIR {
             origin_m: [0.0; 3],
             u_axis: u_vector,
@@ -1410,8 +1406,6 @@ fn fem_projection_via_planar_engine(
             field.values.clone(),
         )?;
         let request = ResolvedPlanarSampleRequest {
-            monitor_id: "legacy-projection".to_string(),
-            monitor_hash: "legacy-projection-v1".to_string(),
             frame,
             operator: PlanarOperatorIR::DepthProjection {
                 reduction,

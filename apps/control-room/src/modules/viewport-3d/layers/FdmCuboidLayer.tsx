@@ -85,12 +85,14 @@ import {
   type FdmCuboidBuildResult,
   type FdmCuboidCellSelection,
   type FdmCuboidInstanceModel,
+  type FdmVectorOnlyBuildInput,
   type FdmVoxelTopographyOptions,
 } from "./fdmCuboidBuildModel";
 import { buildViewport3DFdmCuboidOffMainThread } from "./fdmCuboidBuildScheduler";
 import {
   createFdmCuboidBuildStateController,
   EMPTY_FDM_CUBOID_BUILD_SNAPSHOT,
+  mergeFdmCuboidBuildResult,
   resolveFdmCuboidBuildState,
   type FdmCuboidBuildState,
 } from "./fdmCuboidBuildState";
@@ -107,6 +109,8 @@ export {
   type FdmCuboidInstanceModelOptions,
   type FdmVoxelTopographyOptions,
 } from "./fdmCuboidBuildModel";
+
+export { createFdmVectorOnlyBuildInput } from "./fdmCuboidBuildModel";
 
 export { resolveFdmCuboidPassPlan } from "./fdmCuboidPasses";
 export function hasAnyEffectiveFdmPass(
@@ -260,8 +264,12 @@ export function buildFdmVectorSegments(
   maxVectors: number,
   options: {
     anchorMode?: Viewport3DVectorAnchorMode;
+    cellSelection?: FdmCuboidCellSelection;
     geometryScope?: "surface" | "full";
     instanceOrdinals?: Uint32Array | null;
+    realizedRegionIds?: Uint32Array | null;
+    surfaceOffsetEnabled?: boolean;
+    surfaceOffsetScale?: number;
   } = {},
 ): Float32Array | null {
   if (!model || !fieldVector) return null;
@@ -275,7 +283,7 @@ export function buildFdmVectorSegments(
     );
   }
   const anchorMode = options.anchorMode ?? "center";
-  const cacheKey = `${scale}:${maxVectors}:${anchorMode}:${options.geometryScope ?? "full"}`;
+  const cacheKey = `${scale}:${maxVectors}:${anchorMode}:${options.geometryScope ?? "full"}:${options.surfaceOffsetEnabled === true}:${options.surfaceOffsetScale ?? 0}`;
   const cachedSegments = cachedFdmVectorSegments(model, fieldVector, cacheKey);
   if (cachedSegments !== undefined) return cachedSegments;
 
@@ -608,10 +616,16 @@ export interface FdmCuboidAsyncBuildInput {
   nativeActiveMask?: Uint8Array | null;
   realizedRegionIds: Uint32Array | null;
   revisionSummary: string;
+  /** Stable carrier/grid identity used to retain a last-good model. */
+  topologyKey?: string | null;
+  /** Optional bounded anchor carrier for a vectors-only build. */
+  vectorOnly?: FdmVectorOnlyBuildInput | null;
   vectorAnchorMode: Viewport3DVectorAnchorMode;
   vectorField?: DecodedFieldVector | null;
   vectorGeometryScope?: "full" | "surface";
   vectorScale: number;
+  vectorSurfaceOffsetEnabled?: boolean;
+  vectorSurfaceOffsetScale?: number;
   voxelFillRatio: number;
   voxelMagnitudeThreshold: number;
   voxelTopography: FdmVoxelTopographyOptions;
@@ -634,6 +648,7 @@ const EMPTY_FDM_CUBOID_BUILD_RESULTS = new Map<string, FdmCuboidBuildState>();
 function createFdmCuboidBuildResultsController(): FdmCuboidBuildResultsController {
   let snapshot: ReadonlyMap<string, FdmCuboidBuildState> =
     EMPTY_FDM_CUBOID_BUILD_RESULTS;
+  const topologyKeys = new Map<string, string | null>();
   const listeners = new Set<() => void>();
   const publish = (next: ReadonlyMap<string, FdmCuboidBuildState>) => {
     snapshot = next;
@@ -641,21 +656,29 @@ function createFdmCuboidBuildResultsController(): FdmCuboidBuildResultsControlle
   };
   const begin = (entries: readonly FdmCuboidAsyncBuildEntry[]) => {
     const next = new Map(
-      entries.flatMap((entry) =>
-        entry.enabled && entry.buildKey
-          ? [[
-              entry.id,
-              snapshot.get(entry.id)?.buildKey === entry.buildKey
-                ? snapshot.get(entry.id)!
-                : {
-                    buildKey: entry.buildKey,
-                    error: null,
-                    result: null,
-                    status: "pending" as const,
-                  },
-            ] as const]
-          : [],
-      ),
+      entries.flatMap((entry) => {
+        if (!entry.enabled || !entry.buildKey) return [];
+        const previous = snapshot.get(entry.id);
+        const previousTopologyKey = topologyKeys.get(entry.id) ?? null;
+        const topologyKey = entry.topologyKey ?? null;
+        topologyKeys.set(entry.id, topologyKey);
+        const retainLastGood =
+          previous?.result !== null &&
+          previousTopologyKey !== null &&
+          topologyKey !== null &&
+          previousTopologyKey === topologyKey;
+        return [[
+          entry.id,
+          previous?.buildKey === entry.buildKey
+            ? previous
+            : {
+                buildKey: entry.buildKey,
+                error: null,
+                result: retainLastGood ? previous?.result ?? null : null,
+                status: "pending" as const,
+              },
+        ] as const];
+      }),
     );
     if (
       next.size === snapshot.size &&
@@ -675,7 +698,7 @@ function createFdmCuboidBuildResultsController(): FdmCuboidBuildResultsControlle
       publish(new Map(snapshot).set(id, {
         buildKey,
         error: error instanceof Error ? error : new Error(String(error)),
-        result: null,
+        result: current.result,
         status: "error",
       }));
     },
@@ -685,7 +708,7 @@ function createFdmCuboidBuildResultsController(): FdmCuboidBuildResultsControlle
       publish(new Map(snapshot).set(id, {
         buildKey,
         error: null,
-        result,
+        result: mergeFdmCuboidBuildResult(current.result, result),
         status: "ready",
       }));
     },
@@ -754,7 +777,10 @@ export function createFdmCuboidBatchBuildController(
         vectorAnchorMode: entry.vectorAnchorMode,
         vectorField: entry.vectorField,
         vectorGeometryScope: entry.vectorGeometryScope,
+        vectorOnly: entry.vectorOnly,
         vectorScale: entry.vectorScale,
+        vectorSurfaceOffsetEnabled: entry.vectorSurfaceOffsetEnabled,
+        vectorSurfaceOffsetScale: entry.vectorSurfaceOffsetScale,
         voxelFillRatio: entry.voxelFillRatio,
         voxelMagnitudeThreshold: entry.voxelMagnitudeThreshold,
         voxelTopography: entry.voxelTopography,
@@ -830,9 +856,14 @@ export function useFdmCuboidBuildResult({
   modelFieldVector,
   realizedRegionIds,
   revisionSummary,
+  topologyKey,
   vectorAnchorMode,
   vectorField,
+  vectorGeometryScope,
+  vectorOnly,
   vectorScale,
+  vectorSurfaceOffsetEnabled,
+  vectorSurfaceOffsetScale,
   voxelFillRatio,
   voxelMagnitudeThreshold,
   voxelTopography,
@@ -849,8 +880,11 @@ export function useFdmCuboidBuildResult({
             realizedRegionIds: realizedRegionIds ?? null,
             vectorAnchorMode,
             vectorField,
-            vectorGeometryScope: "full",
+            vectorGeometryScope: vectorGeometryScope ?? "full",
+            vectorOnly: vectorOnly ?? null,
             vectorScale,
+            vectorSurfaceOffsetEnabled: vectorSurfaceOffsetEnabled ?? false,
+            vectorSurfaceOffsetScale: vectorSurfaceOffsetScale ?? 0,
             voxelFillRatio,
             voxelMagnitudeThreshold,
             voxelTopography,
@@ -865,7 +899,11 @@ export function useFdmCuboidBuildResult({
       realizedRegionIds,
       vectorAnchorMode,
       vectorField,
+      vectorGeometryScope,
+      vectorOnly,
       vectorScale,
+      vectorSurfaceOffsetEnabled,
+      vectorSurfaceOffsetScale,
       voxelFillRatio,
       voxelMagnitudeThreshold,
       voxelTopography,
@@ -882,7 +920,11 @@ export function useFdmCuboidBuildResult({
       return;
     }
 
-    store.begin(buildKey);
+    if (topologyKey) {
+      store.begin(buildKey, topologyKey);
+    } else {
+      store.begin(buildKey);
+    }
     const abortController = new AbortController();
     void buildViewport3DFdmCuboidOffMainThread(request, {
       buildKey,
@@ -903,7 +945,7 @@ export function useFdmCuboidBuildResult({
     return () => {
       abortController.abort();
     };
-  }, [buildKey, groupKey, request, revisionSummary, store]);
+  }, [buildKey, groupKey, request, revisionSummary, store, topologyKey]);
 
   if (!request) return undefined;
   return resolveFdmCuboidBuildState({

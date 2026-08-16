@@ -62,13 +62,12 @@ describe("generated OpenAPI v2 transport", () => {
     expect(meta.required).toEqual(expect.arrayContaining([
       "sample_token",
       "scene_revision",
-      "monitor_revision",
+      "source",
       "carrier_revision",
       "field_revision",
     ]));
     for (const revision of [
       "scene_revision",
-      "monitor_revision",
       "mesh_revision",
       "carrier_revision",
       "field_revision",
@@ -92,6 +91,37 @@ describe("generated OpenAPI v2 transport", () => {
         expect(parameter.schema.type, parameter.name).toBe("string");
       }
     }
+  });
+
+  it("publishes typed default and authored-monitor planar source families", () => {
+    const document = JSON.parse(
+      readFileSync(new URL("./generated/openapi-v2.json", import.meta.url), "utf8"),
+    );
+    const defaultResources = [
+      "meta",
+      "scalar",
+      "vectors",
+      "empty-mask",
+      "mesh-overlay",
+      "probe",
+      "render.png",
+    ];
+    for (const resource of defaultResources) {
+      expect(
+        document.paths[
+          `/v2/sessions/current/data/fields/{quantity_id}/planar-default/${resource}`
+        ],
+        resource,
+      ).toBeDefined();
+    }
+    const source = document.components.schemas.PlanarSampleSourceResource;
+    expect(source.oneOf).toHaveLength(2);
+    expect(source.oneOf.map((variant: { properties: { kind: { enum: string[] } } }) =>
+      variant.properties.kind.enum[0],
+    )).toEqual(expect.arrayContaining(["default", "monitor"]));
+    expect(
+      document.components.schemas.PlanarFieldMetaResource.properties.source.$ref,
+    ).toBe("#/components/schemas/PlanarSampleSourceResource");
   });
 
   it("declares structured planar data-plane error responses", () => {

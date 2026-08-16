@@ -68,7 +68,7 @@ export function PlanarMonitorDraftInspectorPanel() {
       const monitor = created.monitor;
       discardPlanarMonitorDraft();
       kernel.visualizationSync.queuePatch({
-        planar: { active_monitor_id: monitor.id },
+        planar: { source: { kind: "monitor", monitor_id: monitor.id } },
       });
       kernel.resources.invalidate(
         MODEL_PLANAR_MONITORS_PATH,

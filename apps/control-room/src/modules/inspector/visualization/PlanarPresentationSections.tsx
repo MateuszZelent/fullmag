@@ -1,4 +1,7 @@
-import type { VisualizationStateResource } from "@/kernel/api/apiTypes";
+import type {
+  PlanarFieldSource,
+  VisualizationStateResource,
+} from "@/kernel/api/apiTypes";
 import type { FieldMapCapability, PlanarInspectorCapabilities } from "@/kernel/visualization/planarCapabilities";
 
 import { FieldRow } from "../primitives/FieldRow";
@@ -107,17 +110,64 @@ export function PlanarQualitySection({
 
 export function PlanarProvenanceSection({
   meta,
-  monitorId,
+  source,
 }: {
-  meta: { data: { field_revision?: string; mesh_revision?: string; monitor_revision?: string; sample_token?: string; sampling_method?: string } | null; status: string };
-  monitorId: string;
+  meta: {
+    data: {
+      canonical_unit?: string;
+      component?: string;
+      field_backend?: string | null;
+      field_device?: string | null;
+      field_revision?: string;
+      field_precision?: string | null;
+      field_source?: string;
+      carrier_revision?: string;
+      mesh_revision?: string;
+      quantity_id?: string;
+      sample_token?: string;
+      sampling_execution?: string;
+      sampling_method?: string;
+      source?:
+        | {
+            kind: "default";
+            default_slice_hash: string;
+            default_slice_revision: string;
+          }
+        | {
+            kind: "monitor";
+            monitor_hash: string;
+            monitor_id: string;
+            monitor_revision: string;
+          };
+    } | null;
+    status: string;
+  };
+  source: PlanarFieldSource;
 }) {
+  const sourceLabel = source.kind === "default" ? "Default" : source.monitorId;
+  const sourceRevision = meta.data?.source?.kind === "default"
+    ? meta.data.source.default_slice_revision
+    : meta.data?.source?.monitor_revision;
+  const sourceHash = meta.data?.source?.kind === "default"
+    ? meta.data.source.default_slice_hash
+    : meta.data?.source?.monitor_hash;
   return <InspectorGroup collapsible defaultOpen={false} title="Provenance">
-    <FieldRow label="Availability" value={!monitorId ? "Select a planar monitor" : meta.status === "error" ? "Unavailable for this target" : meta.status} />
+    <FieldRow label="Availability" value={meta.status === "error" ? "Unavailable for this source" : meta.status} />
+    <FieldRow label="Source" value={sourceLabel} />
+    <FieldRow label="Source hash" mono value={sourceHash ?? "Not sampled"} />
+    <FieldRow label="Source revision" value={sourceRevision ?? "Not sampled"} />
     <FieldRow label="Sample token" value={meta.data?.sample_token ?? "Not sampled"} />
+    <FieldRow label="Quantity" value={meta.data?.quantity_id ?? "Not sampled"} />
+    <FieldRow label="Component" value={meta.data?.component ?? "Not sampled"} />
+    <FieldRow label="Unit" value={meta.data?.canonical_unit ?? "Not sampled"} />
+    <FieldRow label="Field backend" value={meta.data?.field_backend ?? "Not published"} />
+    <FieldRow label="Field device" value={meta.data?.field_device ?? "Not published"} />
+    <FieldRow label="Field precision" value={meta.data?.field_precision ?? "Not published"} />
+    <FieldRow label="Field source" value={meta.data?.field_source ?? "Not sampled"} />
     <FieldRow label="Field revision" value={meta.data?.field_revision ?? "Not sampled"} />
+    <FieldRow label="Carrier revision" value={meta.data?.carrier_revision ?? "Not sampled"} />
     <FieldRow label="Mesh revision" value={meta.data?.mesh_revision ?? "Not sampled"} />
-    <FieldRow label="Monitor revision" value={meta.data?.monitor_revision ?? "Not sampled"} />
+    <FieldRow label="Sampling execution" value={meta.data?.sampling_execution ?? "Not sampled"} />
     <FieldRow label="Sampling" value={meta.data?.sampling_method ?? "Not sampled"} />
   </InspectorGroup>;
 }

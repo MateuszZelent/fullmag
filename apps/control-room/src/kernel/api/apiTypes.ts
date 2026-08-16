@@ -64,6 +64,8 @@ export type FieldStateInspectResponse =
 export type FieldStateTargetRef =
   components["schemas"]["FieldStateTargetRef"];
 export type FieldVectorQuery = components["schemas"]["FieldVectorQuery"];
+export type FieldVectorPendingResponse =
+  components["schemas"]["FieldVectorPendingResponse"];
 type FdmFieldVectorQueryBase = Omit<
   FieldVectorQuery,
   "geometry_scope" | "scope_id" | "scope_kind"
@@ -89,6 +91,8 @@ export type FdmScopedFieldVectorQuery =
   | FdmMultilayerFieldVectorQuery;
 export type PlanarFieldMetaResource =
   components["schemas"]["PlanarFieldMetaResource"];
+export type PlanarSampleSourceResource =
+  components["schemas"]["PlanarSampleSourceResource"];
 export type PlanarFieldProbeResource =
   components["schemas"]["PlanarFieldProbeResource"];
 export type PlanarMonitorCollectionResource =
@@ -105,6 +109,11 @@ export type PlanarMonitorResource =
   components["schemas"]["PlanarMonitorResource"];
 export type PlanarViewScopeState =
   components["schemas"]["PlanarViewScopeState"];
+
+export type PlanarFieldSource =
+  | { kind: "default" }
+  | { kind: "monitor"; monitorId: string };
+
 export interface PlanarFieldQuery {
   [key: string]: boolean | number | string | undefined;
   sample_token?: string;
@@ -113,6 +122,7 @@ export interface PlanarFieldQuery {
   expected_field_revision?: string;
   expected_mesh_revision?: string;
   expected_monitor_revision?: string;
+  expected_source_revision?: string;
   expected_scene_revision?: string;
   include_mesh?: boolean;
   quality?: string;
@@ -133,6 +143,7 @@ export interface PlanarFieldProbeQuery
     | "expected_field_revision"
     | "expected_mesh_revision"
     | "expected_monitor_revision"
+    | "expected_source_revision"
     | "expected_scene_revision"
     | "quality"
     | "resolution_x"
@@ -708,6 +719,16 @@ export interface FieldVectorResponseMetadata {
   valueCount: number | null;
 }
 
+export type PendingBinaryResourceResult = FieldVectorPendingResponse & {
+  etag: string | null;
+  status: "pending";
+};
+
+type PendingBinaryResourceFor<TMetadata> =
+  Extract<TMetadata, FieldVectorResponseMetadata> extends never
+    ? never
+    : PendingBinaryResourceResult;
+
 type ReadyBinaryResourceResult<TData, TMetadata> = {
       byteLength: number;
       contentRange?: string | null;
@@ -720,6 +741,7 @@ type ReadyBinaryResourceResult<TData, TMetadata> = {
 
 export type BinaryResourceResult<TData, TMetadata = unknown> =
   | ReadyBinaryResourceResult<TData, TMetadata>
+  | PendingBinaryResourceFor<TMetadata>
   | {
       etag: string | null;
       status: "not-applicable";

@@ -1,12 +1,8 @@
 "use client";
 
-import { useEffect } from "react";
-
 import type { VisualizationTargetKind } from "@/kernel/visualization/ObjectVisualizationController";
-import {
-  useVisualizationDebugController,
-  useVisualizationDebugSnapshots,
-} from "@/kernel/visualization/useVisualizationDebug";
+import { useVisualizationDebugSnapshots } from "@/kernel/visualization/useVisualizationDebug";
+import type { VisualizationVectorCapacityDescriptor } from "@/kernel/visualization/visualizationVectorCapacity";
 
 import { FieldRow } from "../primitives/FieldRow";
 import { formatCount } from "./MeshResourceView";
@@ -16,86 +12,129 @@ import {
 } from "./ObjectVisualizationPanelModel";
 
 interface VisualizationVectorAccountingRowsProps {
-  availableNodeCount: number;
+  anchorKind?: "cell" | "node" | null;
+  availableAnchorCount?: number | null;
+  /** @deprecated Kept for the opt-in visualization debug panel contract. */
+  availableNodeCount?: number;
+  capacity?: VisualizationVectorCapacityDescriptor | null;
+  currentComponent?: string | null;
+  currentGeneration?: string | null;
+  currentScopeId?: string | null;
+  currentScopeKind?: string | null;
   currentTopologyHash?: string | null;
   exact: boolean;
+  expectedGeneration?: string | null;
+  expectedQuantityId?: string | null;
+  expectedScopeId?: string | null;
+  expectedScopeKind?: string | null;
+  expectedVisualizationRevision?: string | number | null;
+  effectiveAllocation?: number | null;
+  requestedBudget?: number | null;
+  targetId?: string;
   targetKind: VisualizationTargetKind;
 }
 
 export function VisualizationVectorAccountingRows(
   props: VisualizationVectorAccountingRowsProps,
 ) {
-  if (props.targetKind === "airbox") {
-    return <AirboxVectorAccountingRows {...props} />;
-  }
-  return (
-    <VectorAccountingRows
-      accounting={resolveVisualizationVectorAccounting({
-        availableNodeCount: props.exact ? props.availableNodeCount : null,
-        currentTopologyHash: props.currentTopologyHash,
-        snapshots: [],
-      })}
-      {...props}
-    />
+  // Reading already-published snapshots is passive. The explicit Debug panel
+  // owns demand leases and value-statistics scans.
+  const snapshots = useVisualizationDebugSnapshots(
+    props.targetId ?? props.targetKind,
   );
-}
-
-function AirboxVectorAccountingRows(
-  props: VisualizationVectorAccountingRowsProps,
-) {
-  const controller = useVisualizationDebugController();
-  const snapshots = useVisualizationDebugSnapshots("airbox");
-  useEffect(() => controller.request("airbox"), [controller]);
+  const accounting = resolveVisualizationVectorAccounting({
+    anchorKind: props.anchorKind,
+    availableAnchorCount: props.exact
+      ? props.availableAnchorCount ?? props.availableNodeCount ?? null
+      : props.availableAnchorCount ?? props.availableNodeCount ?? null,
+    availableNodeCount:
+      props.requestedBudget === undefined && props.capacity === undefined
+        ? props.exact
+          ? props.availableNodeCount ?? null
+          : null
+        : undefined,
+    capacity: props.capacity,
+    currentComponent: props.currentComponent,
+    currentGeneration: props.currentGeneration,
+    currentScopeId: props.currentScopeId,
+    currentScopeKind: props.currentScopeKind,
+    currentTargetId: props.targetId,
+    currentTopologyHash: props.currentTopologyHash,
+    expectedGeneration: props.expectedGeneration,
+    expectedQuantityId: props.expectedQuantityId,
+    expectedScopeId: props.expectedScopeId,
+    expectedScopeKind: props.expectedScopeKind,
+    expectedVisualizationRevision: props.expectedVisualizationRevision,
+    effectiveAllocation: props.effectiveAllocation,
+    requestedBudget: props.requestedBudget,
+    snapshots,
+  });
   return (
     <VectorAccountingRows
-      accounting={resolveVisualizationVectorAccounting({
-        availableNodeCount: props.exact ? props.availableNodeCount : null,
-        currentTopologyHash: props.currentTopologyHash,
-        snapshots,
-      })}
-      {...props}
+      accounting={accounting}
+      anchorKind={props.anchorKind}
+      availableAnchorCount={
+        props.availableAnchorCount ?? props.availableNodeCount ?? null
+      }
+      exact={props.exact}
+      targetKind={props.targetKind}
     />
   );
 }
 
 function VectorAccountingRows({
   accounting,
-  availableNodeCount,
+  anchorKind,
+  availableAnchorCount,
   exact,
   targetKind,
 }: VisualizationVectorAccountingRowsProps & {
   accounting: VisualizationVectorAccounting;
 }) {
+  const resolvedAnchorKind = accounting.anchorKind ?? anchorKind;
+  const anchorUnit = resolvedAnchorKind === "node" ? "nodes" : "cells";
+  const availableValue =
+    accounting.availableAnchorCount ?? availableAnchorCount;
+  const status = accounting.status ?? "unavailable";
   return (
     <>
       <FieldRow
-        label={
-          targetKind === "airbox"
-            ? "Available air-only nodes"
-            : "Available nodes"
-        }
+        label="Available vector anchors"
         value={
-          targetKind === "airbox" && !exact
-            ? "waiting"
-            : `${formatCount(availableNodeCount)}${exact ? "" : " est."}`
+          availableValue === null || availableValue === undefined
+            ? "unavailable"
+            : `${formatCount(availableValue)} ${anchorUnit}${exact ? "" : " est."}`
         }
+      />
+      <FieldRow
+        label="Requested budget"
+        value={formatAccountingValue(accounting.requestedBudget, status)}
+      />
+      <FieldRow
+        label="Effective scene allocation"
+        value={formatAccountingValue(accounting.allocatedBudget, status)}
       />
       <FieldRow
         label="Decoded field samples"
-        value={
-          accounting.decodedSampleCount === null
-            ? "waiting"
-            : formatCount(accounting.decodedSampleCount)
-        }
+        value={formatAccountingValue(accounting.decodedSampleCount, status)}
       />
       <FieldRow
         label="Adopted arrows"
-        value={
-          accounting.adoptedGlyphCount === null
-            ? "waiting"
-            : formatCount(accounting.adoptedGlyphCount)
-        }
+        value={formatAccountingValue(accounting.adoptedGlyphCount, status)}
       />
+      {targetKind !== "airbox" && status === "unavailable" ? (
+        <span className="sr-only">Vector accounting is not reported for this target.</span>
+      ) : null}
     </>
   );
+}
+
+function formatAccountingValue(
+  value: number | null | undefined,
+  status: VisualizationVectorAccounting["status"],
+): string {
+  if (value !== null && value !== undefined) return formatCount(value);
+  if (status === "pending") return "pending";
+  if (status === "stale") return "stale";
+  return "not reported";
 }

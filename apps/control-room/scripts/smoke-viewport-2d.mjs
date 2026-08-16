@@ -54,12 +54,14 @@ async function main() {
   page.on("response", async (response) => {
     const requestUrl = new URL(response.url());
     const match = requestUrl.pathname.match(
-      /^\/v2\/sessions\/current\/data\/fields\/([^/]+)\/planar-monitors\/([^/]+)\/meta$/,
+      /^\/v2\/sessions\/current\/data\/fields\/([^/]+)\/(planar-default|planar-monitors\/([^/]+))\/meta$/,
     );
     if (!match || response.status() !== 200) return;
     try {
+      const sourceKind = match[2] === "planar-default" ? "default" : "monitor";
       observedPlanarMeta.push({
-        monitorId: decodeURIComponent(match[2]),
+        sourceId: sourceKind === "default" ? "default" : decodeURIComponent(match[3]),
+        sourceKind,
         payload: await response.json(),
         quantityId: decodeURIComponent(match[1]),
       });
@@ -480,9 +482,10 @@ function expectedPlanarEvidence(monitor) {
   }
   return {
     component: "magnitude",
-    monitorId: monitor.id,
     operatorKind: monitor.operator.kind,
     quantityId: "m",
+    sourceId: monitor.id,
+    sourceKind: "monitor",
   };
 }
 
@@ -497,7 +500,8 @@ async function assertPlanarEvidence(page, expected, observedPlanarMeta) {
         const evidence = JSON.parse(raw);
         if (evidence.status === "error") return evidence;
         return evidence.status === "ready" &&
-          evidence.monitorId === request.monitorId &&
+          evidence.sourceKind === request.sourceKind &&
+          evidence.sourceId === request.sourceId &&
           evidence.operatorKind === request.operatorKind &&
           evidence.quantityId === request.quantityId &&
           evidence.component === request.component
@@ -520,7 +524,8 @@ async function waitForObservedPlanarMeta(observedPlanarMeta, evidence, expected)
   while (Date.now() < deadline) {
     const match = [...observedPlanarMeta].reverse().find(
       (entry) =>
-        entry.monitorId === expected.monitorId &&
+        entry.sourceKind === expected.sourceKind &&
+        entry.sourceId === expected.sourceId &&
         entry.quantityId === expected.quantityId &&
         entry.payload?.etag === evidence.metaIdentity,
     );
@@ -605,7 +610,7 @@ async function selectMonitor(monitorId, resolution, enabledLayers = null) {
   );
   return patchJson("/v2/sessions/current/visualization/state", {
     planar: {
-      active_monitor_id: monitorId,
+      source: { kind: "monitor", monitor_id: monitorId },
       component: "magnitude",
       layers,
       quality: "interactive",

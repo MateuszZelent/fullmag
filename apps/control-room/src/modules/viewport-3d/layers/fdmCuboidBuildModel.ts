@@ -104,11 +104,144 @@ export interface FdmCuboidBuildRequest {
   realizedRegionIds: Uint32Array | null;
   vectorAnchorMode: Viewport3DVectorAnchorMode;
   vectorField?: DecodedFieldVector | null;
+  /** Optional vector-only payload. When present no cuboid model is built. */
+  vectorOnly?: FdmVectorOnlyBuildInput | null;
   vectorGeometryScope?: "full" | "surface";
   vectorScale: number;
+  vectorSurfaceOffsetEnabled?: boolean;
+  vectorSurfaceOffsetScale?: number;
   voxelFillRatio: number;
   voxelMagnitudeThreshold: number;
   voxelTopography: FdmVoxelTopographyOptions;
+}
+
+export interface FdmVectorOnlyBuildInput {
+  anchors: Float32Array;
+  cellIndices: Uint32Array;
+  gridShape: [number, number, number];
+}
+
+/**
+ * Prepare the bounded anchor carrier used by the vectors-only worker path.
+ * Membership selection is shared with the full cuboid builder, so Surface and
+ * Full remain a presentation filter over the same target cell identity.
+ */
+export function createFdmVectorOnlyBuildInput({
+  cellSelection,
+  domain,
+  fieldVector,
+  maxSamples,
+  realizedRegionIds,
+}: {
+  cellSelection: FdmCuboidCellSelection;
+  domain: FdmGridRenderDomain | null;
+  fieldVector?: Pick<
+    DecodedFieldVector,
+    "indexing" | "nodeIndices" | "pointCount"
+  > | null;
+  maxSamples?: number | null;
+  realizedRegionIds: Uint32Array | null;
+}): FdmVectorOnlyBuildInput | null {
+  if (!domain || domain.totalCells <= 0) return null;
+  const [nx, ny, nz] = domain.shape;
+  const totalCells = Math.min(domain.totalCells, nx * ny * nz);
+  if (realizedRegionIds && realizedRegionIds.length !== totalCells) return null;
+  const requestedSamples = normalizeFdmVectorSampleLimit(
+    maxSamples,
+    fieldVector?.pointCount ?? domain.displayCellCount,
+  );
+  const candidateCellIndices = resolveFdmVectorAnchorCandidates(
+    fieldVector,
+    totalCells,
+    requestedSamples,
+  );
+  const selectedCandidates: number[] = [];
+  for (const cellIndex of candidateCellIndices) {
+    const regionId = realizedRegionIds?.[cellIndex] ?? FMRM_INACTIVE_REGION_ID;
+    if (!cellMatchesSelection(regionId, cellSelection)) continue;
+    selectedCandidates.push(cellIndex);
+  }
+  const selected = sampleFdmVectorAnchorCandidates(
+    selectedCandidates,
+    requestedSamples,
+  );
+  if (selected.length === 0) return null;
+  const anchors = new Float32Array(selected.length * 3);
+  const [dx, dy, dz] = domain.spacing;
+  const [ox, oy, oz] = domain.origin;
+  const planeStride = nx * ny;
+  for (let ordinal = 0; ordinal < selected.length; ordinal += 1) {
+    const cellIndex = selected[ordinal] ?? 0;
+    const ix = cellIndex % nx;
+    const iy = Math.floor(cellIndex / nx) % ny;
+    const iz = Math.floor(cellIndex / planeStride) % nz;
+    const offset = ordinal * 3;
+    anchors[offset] = ox + (ix + 0.5) * dx;
+    anchors[offset + 1] = oy + (iy + 0.5) * dy;
+    anchors[offset + 2] = oz + (iz + 0.5) * dz;
+  }
+  return {
+    anchors,
+    cellIndices: selected,
+    gridShape: [nx, ny, nz],
+  };
+}
+
+function resolveFdmVectorAnchorCandidates(
+  fieldVector: Pick<
+    DecodedFieldVector,
+    "indexing" | "nodeIndices" | "pointCount"
+  > | null | undefined,
+  totalCells: number,
+  maxSamples: number,
+): Uint32Array {
+  const nodeIndices = fieldVector?.nodeIndices;
+  if (
+    nodeIndices &&
+    (fieldVector?.indexing === "explicit_node_indices" ||
+      fieldVector?.indexing === "sampled_node_indices") &&
+    nodeIndices.length === fieldVector.pointCount
+  ) {
+    const candidates: number[] = [];
+    const seen = new Set<number>();
+    for (const value of nodeIndices) {
+      const index = Number(value);
+      if (
+        !Number.isSafeInteger(index) ||
+        index < 0 ||
+        index >= totalCells ||
+        seen.has(index)
+      ) {
+        continue;
+      }
+      seen.add(index);
+      candidates.push(index);
+    }
+    return Uint32Array.from(candidates);
+  }
+  return sampleFdmDisplayCellIndices(totalCells, maxSamples);
+}
+
+function sampleFdmVectorAnchorCandidates(
+  candidates: readonly number[],
+  maxSamples: number,
+): Uint32Array {
+  if (candidates.length <= maxSamples) return Uint32Array.from(candidates);
+  const sampled = new Uint32Array(maxSamples);
+  for (let ordinal = 0; ordinal < maxSamples; ordinal += 1) {
+    sampled[ordinal] = candidates[
+      Math.min(candidates.length - 1, Math.floor((ordinal * candidates.length) / maxSamples))
+    ] ?? 0;
+  }
+  return sampled;
+}
+
+function normalizeFdmVectorSampleLimit(
+  requested: number | null | undefined,
+  fallback: number,
+): number {
+  const value = requested == null ? fallback : requested;
+  return Math.max(0, Math.min(Math.floor(Number.isFinite(value) ? value : 0), 0xffffffff));
 }
 
 export interface FdmCuboidBuildResult {
@@ -121,6 +254,25 @@ export interface FdmCuboidBuildResult {
 export function buildViewport3DFdmCuboid(
   request: FdmCuboidBuildRequest,
 ): FdmCuboidBuildResult {
+  if (request.vectorOnly) {
+    const vectorSegments = buildFdmVectorSegmentsFromAnchors({
+      anchorMode: request.vectorAnchorMode,
+      cellSelection: request.cellSelection,
+      fieldVector: request.vectorField,
+      geometryScope: request.vectorGeometryScope ?? "full",
+      maxVectors: request.maxVectorGlyphs,
+      realizedRegionIds: request.realizedRegionIds,
+      scale: request.vectorScale,
+      surfaceOffsetEnabled: request.vectorSurfaceOffsetEnabled,
+      surfaceOffsetScale: request.vectorSurfaceOffsetScale,
+      ...request.vectorOnly,
+    });
+    return {
+      model: null,
+      vectorCellIndices: vectorSegments?.cellIndices ?? null,
+      vectorSegments: vectorSegments?.segments ?? null,
+    };
+  }
   const model = request.cellSelection === "dense"
     ? buildFdmMaskedNativeLayerInstanceModel(
         request.domain,
@@ -147,6 +299,10 @@ export function buildViewport3DFdmCuboid(
     {
       anchorMode: request.vectorAnchorMode,
       geometryScope: request.vectorGeometryScope ?? "full",
+      cellSelection: request.cellSelection,
+      realizedRegionIds: request.realizedRegionIds,
+      surfaceOffsetEnabled: request.vectorSurfaceOffsetEnabled,
+      surfaceOffsetScale: request.vectorSurfaceOffsetScale,
     },
   );
   const vectorCellIndices = buildFdmVectorSampledCellIndices(
@@ -155,8 +311,255 @@ export function buildViewport3DFdmCuboid(
     request.maxVectorGlyphs,
     undefined,
     request.vectorGeometryScope ?? "full",
+    request.realizedRegionIds,
+    request.cellSelection,
   );
   return { model, vectorCellIndices, vectorSegments };
+}
+
+export interface FdmVectorOnlyBuildRequest extends FdmVectorOnlyBuildInput {
+  anchorMode: Viewport3DVectorAnchorMode;
+  cellSelection?: FdmCuboidCellSelection;
+  fieldVector: DecodedFieldVector | null | undefined;
+  geometryScope?: "full" | "surface";
+  maxVectors: number;
+  realizedRegionIds?: Uint32Array | null;
+  scale: number;
+  surfaceOffsetEnabled?: boolean;
+  surfaceOffsetScale?: number;
+}
+
+export interface FdmVectorOnlyBuildResult {
+  cellIndices: Uint32Array;
+  segments: Float32Array;
+}
+
+/**
+ * Builds vector segments directly from sampled anchors. This is intentionally
+ * independent from the cuboid carrier so quantity switches do not rebuild or
+ * copy inactive-cell matrices merely to update arrows.
+ */
+export function buildFdmVectorSegmentsFromAnchors(
+  request: FdmVectorOnlyBuildRequest,
+): FdmVectorOnlyBuildResult | null {
+  const { anchors, cellIndices, fieldVector, maxVectors } = request;
+  if (
+    !fieldVector ||
+    fieldVector.nComp < 3 ||
+    fieldVector.pointCount <= 0 ||
+    maxVectors <= 0 ||
+    anchors.length < cellIndices.length * 3
+  ) {
+    return null;
+  }
+  const indexing = buildFdmFieldIndexResolver(
+    fieldVector,
+    request.gridShape[0] * request.gridShape[1] * request.gridShape[2],
+  );
+  if (indexing.status !== "compatible") return null;
+
+  const candidates: number[] = [];
+  for (let ordinal = 0; ordinal < cellIndices.length; ordinal += 1) {
+    if (indexing.resolve(cellIndices[ordinal] ?? -1) !== null) {
+      candidates.push(ordinal);
+    }
+  }
+  const scoped = request.geometryScope === "surface"
+    ? resolveAnchorSurfaceOrdinals(
+        candidates,
+        cellIndices,
+        request.gridShape,
+        request.realizedRegionIds,
+        request.cellSelection,
+      )
+    : candidates;
+  const count = Math.min(scoped.length, Math.floor(maxVectors));
+  if (count <= 0) return null;
+  const stride = Math.max(1, Math.floor(scoped.length / count));
+  const selected = new Uint32Array(count);
+  for (let index = 0; index < count; index += 1) {
+    selected[index] = scoped[Math.min(scoped.length - 1, index * stride)] ?? 0;
+  }
+
+  let maxMagnitude = 0;
+  for (const ordinal of selected) {
+    const fieldIndex = indexing.resolve(cellIndices[ordinal] ?? -1);
+    if (fieldIndex === null) continue;
+    const offset = fieldIndex * fieldVector.nComp;
+    maxMagnitude = Math.max(
+      maxMagnitude,
+      Math.hypot(
+        fieldVector.values[offset] ?? 0,
+        fieldVector.values[offset + 1] ?? 0,
+        fieldVector.values[offset + 2] ?? 0,
+      ),
+    );
+  }
+  const segments = new Float32Array(count * FDM_VECTOR_SEGMENT_STRIDE);
+  const halfScale = Math.max(request.scale, 1e-12) / 2;
+  const scaleMagnitude = Math.max(maxMagnitude, 1e-12);
+  const surfaceOffsetDistance = resolveFdmSurfaceOffsetDistance(
+    request.scale,
+    request.anchorMode,
+    request.surfaceOffsetEnabled === true && request.geometryScope === "surface",
+    request.surfaceOffsetScale ?? 0,
+  );
+  const surfaceTargetCells =
+    request.geometryScope === "surface" &&
+    !hasExactFdmMembership(request.realizedRegionIds, request.gridShape)
+      ? new Set(candidates.map((ordinal) => cellIndices[ordinal] ?? -1))
+      : null;
+  for (let index = 0; index < count; index += 1) {
+    const ordinal = selected[index] ?? 0;
+    const anchorOffset = ordinal * 3;
+    const fieldIndex = indexing.resolve(cellIndices[ordinal] ?? -1);
+    if (fieldIndex === null) continue;
+    const valueOffset = fieldIndex * fieldVector.nComp;
+    const vx = fieldVector.values[valueOffset] ?? 0;
+    const vy = fieldVector.values[valueOffset + 1] ?? 0;
+    const vz = fieldVector.values[valueOffset + 2] ?? 0;
+    const length = Math.hypot(vx, vy, vz) || 1;
+    const ux = vx / length;
+    const uy = vy / length;
+    const uz = vz / length;
+    const target = index * FDM_VECTOR_SEGMENT_STRIDE;
+    const [x, y, z] = offsetFdmVectorAnchor(
+      anchors[anchorOffset] ?? 0,
+      anchors[anchorOffset + 1] ?? 0,
+      anchors[anchorOffset + 2] ?? 0,
+      cellIndices[ordinal] ?? -1,
+      request.gridShape,
+      request.realizedRegionIds,
+      request.cellSelection,
+      surfaceTargetCells,
+      surfaceOffsetDistance,
+    );
+    const half = request.anchorMode === "tail" ? 0 : halfScale;
+    segments[target] = x - ux * half;
+    segments[target + 1] = y - uy * half;
+    segments[target + 2] = z - uz * half;
+    segments[target + 3] = request.anchorMode === "tail" ? x + ux * request.scale : x + ux * halfScale;
+    segments[target + 4] = request.anchorMode === "tail" ? y + uy * request.scale : y + uy * halfScale;
+    segments[target + 5] = request.anchorMode === "tail" ? z + uz * request.scale : z + uz * halfScale;
+    segments[target + 6] = length / scaleMagnitude;
+  }
+  return {
+    cellIndices: Uint32Array.from(selected, (ordinal) => cellIndices[ordinal] ?? 0),
+    segments,
+  };
+}
+
+function resolveAnchorSurfaceOrdinals(
+  candidates: readonly number[],
+  cellIndices: Uint32Array,
+  [nx, ny, nz]: readonly [number, number, number],
+  realizedRegionIds: Uint32Array | null | undefined,
+  cellSelection: FdmCuboidCellSelection | undefined,
+): number[] {
+  const exactMembership = hasExactFdmMembership(
+    realizedRegionIds,
+    [nx, ny, nz],
+  );
+  if (candidates.length <= 1 && !exactMembership) return [...candidates];
+  const cells = exactMembership
+    ? null
+    : new Set(candidates.map((ordinal) => cellIndices[ordinal] ?? -1));
+  return candidates.filter((ordinal) =>
+    resolveFdmSurfaceAnchorNormal(
+      cellIndices[ordinal] ?? -1,
+      [nx, ny, nz],
+      realizedRegionIds,
+      cellSelection,
+      cells,
+    ) !== null,
+  );
+}
+
+function hasExactFdmMembership(
+  realizedRegionIds: Uint32Array | null | undefined,
+  [nx, ny, nz]: readonly [number, number, number],
+): realizedRegionIds is Uint32Array {
+  return realizedRegionIds?.length === nx * ny * nz;
+}
+
+function resolveFdmSurfaceAnchorNormal(
+  cellIndex: number,
+  [nx, ny, nz]: readonly [number, number, number],
+  realizedRegionIds: Uint32Array | null | undefined,
+  cellSelection: FdmCuboidCellSelection | undefined,
+  candidateCells: ReadonlySet<number> | null,
+): [number, number, number] | null {
+  const totalCells = nx * ny * nz;
+  if (cellIndex < 0 || cellIndex >= totalCells) return null;
+  const selection = cellSelection ?? "all";
+  const hasMembership = hasExactFdmMembership(realizedRegionIds, [nx, ny, nz]);
+  const targetAt = (index: number): boolean => {
+    if (index < 0 || index >= totalCells) return false;
+    if (hasMembership) {
+      const regionId = realizedRegionIds[index] ?? FMRM_INACTIVE_REGION_ID;
+      return selection === "dense" || cellMatchesSelection(regionId, selection);
+    }
+    return candidateCells?.has(index) ?? false;
+  };
+  if (!targetAt(cellIndex)) return null;
+
+  const ix = cellIndex % nx;
+  const iy = Math.floor(cellIndex / nx) % ny;
+  const iz = Math.floor(cellIndex / (nx * ny)) % nz;
+  let normalX = 0;
+  let normalY = 0;
+  let normalZ = 0;
+  if (ix === 0 || !targetAt(cellIndex - 1)) normalX -= 1;
+  if (ix === nx - 1 || !targetAt(cellIndex + 1)) normalX += 1;
+  if (iy === 0 || !targetAt(cellIndex - nx)) normalY -= 1;
+  if (iy === ny - 1 || !targetAt(cellIndex + nx)) normalY += 1;
+  const planeStride = nx * ny;
+  if (iz === 0 || !targetAt(cellIndex - planeStride)) normalZ -= 1;
+  if (iz === nz - 1 || !targetAt(cellIndex + planeStride)) normalZ += 1;
+  const length = Math.hypot(normalX, normalY, normalZ);
+  if (length <= 0) return null;
+  return [normalX / length, normalY / length, normalZ / length];
+}
+
+function offsetFdmVectorAnchor(
+  x: number,
+  y: number,
+  z: number,
+  cellIndex: number,
+  gridShape: readonly [number, number, number],
+  realizedRegionIds: Uint32Array | null | undefined,
+  cellSelection: FdmCuboidCellSelection | undefined,
+  candidateCells: ReadonlySet<number> | null,
+  offsetDistance: number,
+): [number, number, number] {
+  if (offsetDistance <= 0) return [x, y, z];
+  const normal = resolveFdmSurfaceAnchorNormal(
+    cellIndex,
+    gridShape,
+    realizedRegionIds,
+    cellSelection,
+    candidateCells,
+  );
+  if (!normal) return [x, y, z];
+  return [
+    x + normal[0] * offsetDistance,
+    y + normal[1] * offsetDistance,
+    z + normal[2] * offsetDistance,
+  ];
+}
+
+function resolveFdmSurfaceOffsetDistance(
+  scale: number,
+  anchorMode: Viewport3DVectorAnchorMode,
+  enabled: boolean,
+  extraScale: number,
+): number {
+  if (!enabled) return 0;
+  const effectiveScale = Math.max(scale, 1e-12);
+  return (
+    (anchorMode === "tail" ? effectiveScale : effectiveScale / 2) +
+    effectiveScale * Math.max(extraScale, 0)
+  );
 }
 
 export function buildFdmCuboidInstanceModel(
@@ -590,12 +993,42 @@ export function resolveFdmGeometryScopeInstanceOrdinals(
   model: FdmCuboidInstanceModel,
   geometryScope: "surface" | "full",
   instanceOrdinals?: Uint32Array | null,
+  realizedRegionIds?: Uint32Array | null,
+  cellSelection?: FdmCuboidCellSelection,
 ): Uint32Array {
   const candidateCount = instanceOrdinals?.length ?? model.count;
   const candidates = instanceOrdinals
     ? instanceOrdinals
     : Uint32Array.from({ length: model.count }, (_, index) => index);
-  if (geometryScope === "full" || candidateCount <= 1) return candidates;
+  if (geometryScope === "full") return candidates;
+
+  const exactMembership = hasExactFdmMembership(
+    realizedRegionIds,
+    model.gridShape,
+  );
+  if (exactMembership) {
+    const surfaceInstances = new Uint32Array(candidateCount);
+    let surfaceCount = 0;
+    for (const sourceInstance of candidates) {
+      if (
+        sourceInstance === undefined ||
+        sourceInstance >= model.count ||
+        resolveFdmSurfaceAnchorNormal(
+          model.cellIndices[sourceInstance] ?? -1,
+          model.gridShape,
+          realizedRegionIds,
+          cellSelection,
+          null,
+        ) === null
+      ) {
+        continue;
+      }
+      surfaceInstances[surfaceCount] = sourceInstance;
+      surfaceCount += 1;
+    }
+    return surfaceInstances.slice(0, surfaceCount);
+  }
+  if (candidateCount <= 1) return candidates;
 
   const targetCells = new Set<number>();
   for (let index = 0; index < candidateCount; index += 1) {
@@ -619,7 +1052,9 @@ export function resolveFdmGeometryScopeInstanceOrdinals(
       surfaceCount += 1;
     }
   }
-  if (surfaceCount > 0) return surfaceInstances.slice(0, surfaceCount);
+  if (surfaceCount > 0 || exactMembership) {
+    return surfaceInstances.slice(0, surfaceCount);
+  }
   const fallback = candidates[0];
   return fallback === undefined ? new Uint32Array() : Uint32Array.of(fallback);
 }
@@ -654,8 +1089,12 @@ export function buildFdmVectorSegmentsUncached(
   maxVectors: number,
   options: {
     anchorMode?: Viewport3DVectorAnchorMode;
+    cellSelection?: FdmCuboidCellSelection;
     geometryScope?: "surface" | "full";
     instanceOrdinals?: Uint32Array | null;
+    realizedRegionIds?: Uint32Array | null;
+    surfaceOffsetEnabled?: boolean;
+    surfaceOffsetScale?: number;
   } = {},
 ): Float32Array | null {
   if (
@@ -674,6 +1113,8 @@ export function buildFdmVectorSegmentsUncached(
     maxVectors,
     options.instanceOrdinals,
     options.geometryScope,
+    options.realizedRegionIds,
+    options.cellSelection,
   );
   if (!sampledInstances) return null;
   const vectorCount = sampledInstances.length;
@@ -703,6 +1144,21 @@ export function buildFdmVectorSegmentsUncached(
   const scaleMagnitude = Math.max(maxMagnitude, 1e-12);
   const halfScale = scale / 2;
   const segments = new Float32Array(vectorCount * FDM_VECTOR_SEGMENT_STRIDE);
+  const surfaceTargetCells =
+    options.geometryScope === "surface"
+      && !hasExactFdmMembership(options.realizedRegionIds, model.gridShape)
+      ? new Set(
+          (options.instanceOrdinals ??
+            Uint32Array.from({ length: model.count }, (_, index) => index)
+          ).map((instance) => model.cellIndices[instance] ?? -1),
+        )
+      : null;
+  const surfaceOffsetDistance = resolveFdmSurfaceOffsetDistance(
+    scale,
+    anchorMode,
+    options.surfaceOffsetEnabled === true && options.geometryScope === "surface",
+    options.surfaceOffsetScale ?? 0,
+  );
 
   for (let vector = 0; vector < vectorCount; vector += 1) {
     const instance = sampledInstances[vector] ?? 0;
@@ -713,9 +1169,17 @@ export function buildFdmVectorSegmentsUncached(
     const positionOffset = instance * 3;
     const valueOffset = fieldIndex * fieldVector.nComp;
     const target = vector * FDM_VECTOR_SEGMENT_STRIDE;
-    const x = model.centers[positionOffset] ?? 0;
-    const y = model.centers[positionOffset + 1] ?? 0;
-    const z = model.centers[positionOffset + 2] ?? 0;
+    const [x, y, z] = offsetFdmVectorAnchor(
+      model.centers[positionOffset] ?? 0,
+      model.centers[positionOffset + 1] ?? 0,
+      model.centers[positionOffset + 2] ?? 0,
+      cellOrdinal,
+      model.gridShape,
+      options.realizedRegionIds,
+      options.cellSelection,
+      surfaceTargetCells,
+      surfaceOffsetDistance,
+    );
     const vx = fieldVector.values[valueOffset] ?? 0;
     const vy = fieldVector.values[valueOffset + 1] ?? 0;
     const vz = fieldVector.values[valueOffset + 2] ?? 0;
@@ -752,6 +1216,8 @@ export function buildFdmVectorSampledCellIndices(
   maxVectors: number,
   instanceOrdinals?: Uint32Array | null,
   geometryScope: "surface" | "full" = "full",
+  realizedRegionIds?: Uint32Array | null,
+  cellSelection?: FdmCuboidCellSelection,
 ): Uint32Array | null {
   const sampledInstances = resolveFdmVectorSampledInstances(
     model,
@@ -759,6 +1225,8 @@ export function buildFdmVectorSampledCellIndices(
     maxVectors,
     instanceOrdinals,
     geometryScope,
+    realizedRegionIds,
+    cellSelection,
   );
   if (!sampledInstances || !model) return null;
 
@@ -775,6 +1243,8 @@ function resolveFdmVectorSampledInstances(
   maxVectors: number,
   instanceOrdinals?: Uint32Array | null,
   geometryScope: "surface" | "full" = "full",
+  realizedRegionIds?: Uint32Array | null,
+  cellSelection?: FdmCuboidCellSelection,
 ): Uint32Array | null {
   if (
     !model ||
@@ -796,6 +1266,8 @@ function resolveFdmVectorSampledInstances(
     model,
     geometryScope,
     instanceOrdinals,
+    realizedRegionIds,
+    cellSelection,
   );
   const validInstances: number[] = [];
   for (const instance of scopedInstances) {
@@ -846,13 +1318,17 @@ export function estimateFdmCuboidBuildInputBytes(
     estimateFieldVectorBytes(request.vectorField) +
     (request.nativeActiveMask?.byteLength ?? 0) +
     (request.realizedRegionIds?.byteLength ?? 0)
+    + (request.vectorOnly?.anchors.byteLength ?? 0)
+    + (request.vectorOnly?.cellIndices.byteLength ?? 0)
   );
 }
 
 export function estimateFdmCuboidBuildOutputBytes(
   request: FdmCuboidBuildRequest,
 ): number {
-  const modelCount = Math.max(0, request.domain?.displayCellCount ?? 0);
+  const modelCount = request.vectorOnly
+    ? 0
+    : Math.max(0, request.domain?.displayCellCount ?? 0);
   const vectorCount = Math.min(
     modelCount,
     Math.max(0, request.vectorField?.pointCount ?? 0),

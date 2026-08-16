@@ -221,7 +221,7 @@ describe("VisualizationRegistrySyncController", () => {
   it("keeps stable JSON fingerprinting out of the high-frequency queuePatch path", () => {
     const queuePatchBlock = blockBetween(
       visualizationRegistrySyncControllerSource,
-      "  queuePatch(patch: VisualizationStatePatch): void {",
+      "  queuePatch(\n",
       "  start(): void {",
     );
 
@@ -233,7 +233,7 @@ describe("VisualizationRegistrySyncController", () => {
   it("keeps generic deep merge out of the high-frequency queuePatch path", () => {
     const queuePatchBlock = blockBetween(
       visualizationRegistrySyncControllerSource,
-      "  queuePatch(patch: VisualizationStatePatch): void {",
+      "  queuePatch(\n",
       "  start(): void {",
     );
     const queuedMergeBlock = blockBetween(
@@ -598,5 +598,67 @@ describe("VisualizationRegistrySyncController", () => {
 
     expect(patchSpy).toHaveBeenNthCalledWith(2, patch);
     expect(controller.getSnapshot().mutation?.status).toBe("succeeded");
+  });
+
+  it("retains interleaved optimistic target overrides by scope identity", () => {
+    const { controller } = createController({ now: () => 0 });
+    const remote = visualizationState(10);
+    controller.observeRemoteState(remote);
+
+    controller.queuePatch({
+      overrides: [
+        {
+          scope: "object",
+          scope_id: "object:a",
+          style: { vector_budget: 111 },
+        },
+      ],
+    });
+    controller.queuePatch({
+      overrides: [
+        {
+          scope: "object",
+          scope_id: "object:b",
+          style: { vector_budget: 222 },
+        },
+      ],
+    });
+
+    expect(controller.getSnapshot().pendingPatch?.overrides).toEqual([
+      {
+        scope: "object",
+        scope_id: "object:a",
+        style: { vector_budget: 111 },
+      },
+      {
+        scope: "object",
+        scope_id: "object:b",
+        style: { vector_budget: 222 },
+      },
+    ]);
+  });
+
+  it("tracks target identities from queued through inflight mutation", async () => {
+    let resolvePatch!: (state: VisualizationStateResource) => void;
+    const patchSpy = vi.fn(
+      () =>
+        new Promise<VisualizationStateResource>((resolve) => {
+          resolvePatch = resolve;
+        }),
+    );
+    const { controller } = createController({ now: () => 0, patch: patchSpy });
+
+    controller.queuePatch({ overrides: [] }, ["object:film"]);
+    expect(controller.getSnapshot().pendingTargetIds).toEqual(["object:film"]);
+
+    const flush = controller.flushNow();
+    expect(controller.getSnapshot().inflightTargetIds).toEqual(["object:film"]);
+    expect(controller.getSnapshot().pendingTargetIds).toEqual([]);
+
+    resolvePatch(visualizationState(2, { overrides: [] }));
+    await flush;
+
+    expect(controller.getSnapshot().inflightTargetIds).toEqual([]);
+    expect(controller.getSnapshot().pendingTargetIds).toEqual([]);
   });
 });

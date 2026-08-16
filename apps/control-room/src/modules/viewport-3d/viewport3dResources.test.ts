@@ -26,10 +26,13 @@ import {
   resolveViewport3DAirboxFieldVectorResourceKeys,
   resolveViewport3DAirboxFieldVectorResourceRequests,
   resolveViewport3DFieldVectorResourceKey,
+  resolveViewport3DFieldVectorCollectionLastGood,
   resolveViewport3DPartFieldVectorResourceRequests,
   resolveViewport3DQuantityFieldVectorResourceRequests,
   resolveViewport3DQuantityFieldVectorResourceKeys,
+  viewport3DFieldVectorMatchesRequestIdentity,
   viewport3DFieldMetaResourceMatchesQuantity,
+  type Viewport3DFieldVectorEnvelope,
 } from "./viewport3dResources";
 
 const viewport3dResourcesSourceUrl = new URL(
@@ -72,6 +75,224 @@ function fieldResponseMetadata(
 }
 
 describe("viewport3dResources", () => {
+  it("retains only last-good field vectors matching the current request identity", () => {
+    const previous = new Map<string, Viewport3DFieldVectorEnvelope>([
+      [
+        "target-a",
+        {
+          data: {
+            dtype: "float64",
+            formatVersion: 3,
+            domainGenerationId: "generation-1",
+            grid: [1, 1, 1] as [number, number, number],
+            indexing: "full_domain" as const,
+            nComp: 3,
+            pointCount: 1,
+            quantityId: "m",
+            scopeId: "target-a",
+            scopeKind: "part" as const,
+            valueCount: 3,
+            values: new Float64Array([1, 2, 3]),
+          },
+          etag: '"field-m-1"',
+          responseMetadata: fieldResponseMetadata({
+            domainGenerationId: "generation-1",
+            quantityId: "m",
+            scopeId: "target-a",
+            scopeKind: "part",
+          }),
+          resourceKey: "field:m:target-a",
+        },
+      ],
+    ]);
+    const requests = new Map([
+      [
+        "target-a",
+        {
+          consumers: ["target-a:vector-glyph"],
+          quantityId: "m",
+          query: { component: "full", scope_id: "target-a", scope_kind: "part" },
+          requestId: "target-a",
+        },
+      ],
+    ]);
+    const replacement = new Map<string, Viewport3DFieldVectorEnvelope>([
+      [
+        "target-a",
+        {
+          ...previous.get("target-a")!,
+          data: {
+            ...previous.get("target-a")!.data,
+            values: new Float64Array([4, 5, 6]),
+          },
+          etag: '"field-m-2"',
+        },
+      ],
+    ]);
+
+    expect(
+      resolveViewport3DFieldVectorCollectionLastGood({
+        current: replacement,
+        previous,
+        requests,
+        status: "stale",
+      }).get("target-a")?.etag,
+    ).toBe('"field-m-1"');
+    expect(
+      resolveViewport3DFieldVectorCollectionLastGood({
+        current: replacement,
+        previous,
+        requests,
+        status: "ready",
+      }).get("target-a")?.etag,
+    ).toBe('"field-m-2"');
+  });
+
+  it("drops last-good data when a target changes quantity or scope identity", () => {
+    const field = {
+      dtype: "float64" as const,
+      formatVersion: 3 as const,
+      domainGenerationId: "generation-1",
+      grid: [1, 1, 1] as [number, number, number],
+      indexing: "full_domain" as const,
+      nComp: 3,
+      pointCount: 1,
+      quantityId: "m",
+      scopeId: "target-a",
+      scopeKind: "part" as const,
+      valueCount: 3,
+      values: new Float64Array([1, 2, 3]),
+    };
+    const envelope: Viewport3DFieldVectorEnvelope = {
+      data: field,
+      etag: '"field-m-1"',
+      responseMetadata: fieldResponseMetadata({
+        domainGenerationId: "generation-1",
+        quantityId: "m",
+        scopeId: "target-a",
+        scopeKind: "part",
+      }),
+      resourceKey: "field:m:target-a",
+    };
+    const previous = new Map([["target-a", envelope]]);
+    const changedRequest = new Map([
+      [
+        "target-a",
+        {
+          consumers: ["target-a:vector-glyph"],
+          quantityId: "H_demag",
+          query: { component: "full", scope_id: "target-a", scope_kind: "part" },
+          requestId: "target-a",
+        },
+      ],
+    ]);
+
+    expect(
+      resolveViewport3DFieldVectorCollectionLastGood({
+        current: null,
+        previous,
+        requests: changedRequest,
+        status: "loading",
+      }),
+    ).toEqual(new Map());
+    expect(
+      resolveViewport3DFieldVectorCollectionLastGood({
+        current: new Map([[
+          "target-a",
+          {
+            ...envelope,
+            data: { ...envelope.data, quantityId: "H_demag" },
+          },
+        ]]),
+        previous,
+        requests: changedRequest,
+        status: "ready",
+      }),
+    ).toEqual(new Map());
+    expect(
+      resolveViewport3DFieldVectorCollectionLastGood({
+        current: null,
+        previous,
+        requests: new Map([
+          [
+            "target-a",
+            {
+              ...changedRequest.get("target-a")!,
+              quantityId: "m",
+            },
+          ],
+        ]),
+        status: "idle",
+      }),
+    ).toEqual(new Map());
+    expect(
+      viewport3DFieldVectorMatchesRequestIdentity(envelope, changedRequest.get("target-a")!),
+    ).toBe(false);
+  });
+
+  it("rejects a last-good carrier whose generation or topology precondition is stale", () => {
+    const envelope: Viewport3DFieldVectorEnvelope = {
+      data: {
+        dtype: "float64",
+        formatVersion: 3,
+        domainGenerationId: "generation-1",
+        grid: [1, 1, 1],
+        indexing: "full_domain",
+        meshTopologyHash: "carrier-1",
+        nComp: 3,
+        pointCount: 1,
+        quantityId: "H_demag",
+        scopeId: "airbox",
+        scopeKind: "airbox",
+        valueCount: 3,
+        values: new Float64Array([1, 2, 3]),
+      },
+      etag: '"field-h-1"',
+      responseMetadata: fieldResponseMetadata({
+        domainGenerationId: "generation-1",
+        meshTopologyHash: "carrier-1",
+        quantityId: "H_demag",
+      }),
+      resourceKey: "field:H_demag:airbox",
+    };
+    const request = {
+      consumers: ["airbox:vector-glyph"],
+      quantityId: "H_demag",
+      query: {
+        component: "full",
+        expected_carrier_revision: "carrier-2",
+        expected_generation_id: "generation-2",
+        scope_kind: "airbox",
+        scope_id: "airbox",
+      },
+      requestId: "airbox",
+    };
+
+    expect(viewport3DFieldVectorMatchesRequestIdentity(envelope, request)).toBe(
+      false,
+    );
+  });
+
+  it("loads collection members independently instead of atomically awaiting Promise.all", () => {
+    const source = readFileSync(viewport3dResourcesSourceUrl, "utf8");
+    const quantityCollectionSource = source.slice(
+      source.indexOf("export function useViewport3DQuantityFieldVectors"),
+      source.indexOf("export function useViewport3DPartFieldVectors"),
+    );
+    const partCollectionSource = source.slice(
+      source.indexOf("export function useViewport3DPartFieldVectors"),
+      source.indexOf("export function useViewport3DMeshQualityData"),
+    );
+    const airboxCollectionSource = source.slice(
+      source.indexOf("export function useViewport3DAirboxFieldVectors"),
+      source.indexOf("function isViewport3DAirboxFieldVectorRequestMap"),
+    );
+
+    expect(quantityCollectionSource).not.toContain("Promise.all(");
+    expect(partCollectionSource).not.toContain("Promise.all(");
+    expect(airboxCollectionSource).not.toContain("Promise.all(");
+  });
+
   it("binds field data and response metadata from the same cache entry", () => {
     const cache = new ResourceCache<
       DecodedFieldVector,
@@ -613,6 +834,32 @@ describe("viewport3dResources", () => {
     );
   });
 
+  it("preserves generation and carrier preconditions in airbox requests", () => {
+    const request = resolveViewport3DAirboxFieldVectorResourceRequests(
+      "h_eff",
+      [{ id: "airbox" }],
+      {
+        component: "full",
+        expected_carrier_revision: "carrier-7",
+        expected_generation_id: "generation-3",
+        scope_kind: "full",
+      },
+      airboxFieldCatalog,
+    ).get("airbox");
+
+    expect(request).toMatchObject({
+      query: {
+        component: "full",
+        expected_carrier_revision: "carrier-7",
+        expected_generation_id: "generation-3",
+        scope_id: "airbox",
+        scope_kind: "airbox",
+      },
+    });
+    expect(request?.key).toContain("expected_carrier_revision=carrier-7");
+    expect(request?.key).toContain("expected_generation_id=generation-3");
+  });
+
   it("builds scoped magnetic part field vector resource requests", () => {
     expect(
       resolveViewport3DPartFieldVectorResourceRequests(
@@ -701,6 +948,37 @@ describe("viewport3dResources", () => {
     });
   });
 
+  it("preserves generation and carrier preconditions in part requests", () => {
+    const request = resolveViewport3DPartFieldVectorResourceRequests(
+      new Map([
+        [
+          "part-a",
+          {
+            quantityId: "m",
+            query: {
+              component: "full",
+              expected_carrier_revision: "carrier-7",
+              expected_generation_id: "generation-3",
+              scope_kind: "full",
+            },
+          },
+        ],
+      ]),
+    ).get("part-a");
+
+    expect(request).toMatchObject({
+      query: {
+        component: "full",
+        expected_carrier_revision: "carrier-7",
+        expected_generation_id: "generation-3",
+        scope_id: "part-a",
+        scope_kind: "part",
+      },
+    });
+    expect(request?.key).toContain("expected_carrier_revision=carrier-7");
+    expect(request?.key).toContain("expected_generation_id=generation-3");
+  });
+
   it("preserves scoped magnetic part request identity and consumers from planner requests", () => {
     expect(
       resolveViewport3DPartFieldVectorResourceRequests(
@@ -779,6 +1057,34 @@ describe("viewport3dResources", () => {
         ],
       ]),
     );
+  });
+
+  it("preserves generation and carrier preconditions in quantity requests", () => {
+    const requests = resolveViewport3DQuantityFieldVectorResourceRequests(
+      new Map([
+        [
+          "h_eff",
+          {
+            component: "full",
+            expected_carrier_revision: "carrier-7",
+            expected_generation_id: "generation-3",
+            scope_kind: "full",
+          },
+        ],
+      ]),
+    );
+    const request = Array.from(requests.values())[0];
+
+    expect(request).toMatchObject({
+      query: {
+        component: "full",
+        expected_carrier_revision: "carrier-7",
+        expected_generation_id: "generation-3",
+        scope_kind: "full",
+      },
+    });
+    expect(request?.key).toContain("expected_carrier_revision=carrier-7");
+    expect(request?.key).toContain("expected_generation_id=generation-3");
   });
 
   it("keeps same-quantity target-specific field vector requests separated by request identity", () => {

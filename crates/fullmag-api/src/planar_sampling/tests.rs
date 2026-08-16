@@ -35,8 +35,6 @@ fn request(
     resolution: [u32; 2],
 ) -> ResolvedPlanarSampleRequest {
     ResolvedPlanarSampleRequest {
-        monitor_id: "manufactured".into(),
-        monitor_hash: "test".into(),
         frame,
         operator,
         resolution,

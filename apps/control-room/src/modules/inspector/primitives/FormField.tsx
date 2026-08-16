@@ -41,7 +41,7 @@ interface BaseFieldProps {
 }
 
 type TextFieldProps = BaseFieldProps & {
-  type?: "text" | "number";
+  type?: "text" | "number" | "range";
   mono?: boolean;
 } & Omit<ComponentPropsWithoutRef<"input">, "type" | "disabled">;
 

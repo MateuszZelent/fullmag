@@ -196,6 +196,39 @@ def post_json(base: str, path: str, payload: dict[str, Any]) -> dict[str, Any]:
         return json.load(response)
 
 
+def patch_json(base: str, path: str, payload: dict[str, Any]) -> dict[str, Any]:
+    request = urllib.request.Request(
+        base.rstrip("/") + path,
+        data=json.dumps(payload).encode("utf-8"),
+        headers={"Content-Type": "application/json"},
+        method="PATCH",
+    )
+    with urllib.request.urlopen(request, timeout=10) as response:
+        return json.load(response)
+
+
+def patch_default_slice(
+    base: str,
+    *,
+    plane: str,
+    position_fraction: float,
+    operator_kind: str = "plane_sample",
+    thickness_m: float | None = None,
+) -> dict[str, Any]:
+    return patch_json(
+        base,
+        "/v2/sessions/current/visualization/state",
+        {
+            "planar": default_slice_patch(
+                plane=plane,
+                position_fraction=position_fraction,
+                operator_kind=operator_kind,
+                thickness_m=thickness_m,
+            )
+        },
+    )
+
+
 def request_bytes_with_headers(base: str, path: str) -> tuple[bytes, dict[str, str]]:
     with urllib.request.urlopen(base.rstrip("/") + path, timeout=10) as response:
         return response.read(), {key.lower(): value for key, value in response.headers.items()}
@@ -303,10 +336,19 @@ def exact_sample_identity_matches(
 
 
 def canonical_sample_links_match(meta: dict[str, Any]) -> bool:
+    source = meta.get("source") or {}
+    if source.get("kind") == "default":
+        source_revision_key = "expected_source_revision"
+        source_revision = source.get("default_slice_revision")
+    else:
+        source_revision_key = "expected_monitor_revision"
+        source_revision = source.get("monitor_revision", meta.get("monitor_revision"))
+    if source_revision is None:
+        return False
     expected = {
         "sample_token": str(meta.get("sample_token")),
         "expected_scene_revision": str(meta.get("scene_revision")),
-        "expected_monitor_revision": str(meta.get("monitor_revision")),
+        source_revision_key: str(source_revision),
         "expected_mesh_revision": str(meta.get("mesh_revision")),
         "expected_carrier_revision": str(meta.get("carrier_revision")),
         "expected_field_revision": str(meta.get("field_revision")),
@@ -320,6 +362,202 @@ def canonical_sample_links_match(meta: dict[str, Any]) -> bool:
         if any(query.get(key) != [value] for key, value in expected.items()):
             return False
     return True
+
+
+def default_slice_patch(
+    *,
+    plane: str,
+    position_fraction: float,
+    operator_kind: str = "plane_sample",
+    thickness_m: float | None = None,
+) -> dict[str, Any]:
+    """Build the typed session patch used by the managed default-slice gate."""
+    if plane not in {"xy", "xz", "yz"}:
+        raise ValueError(f"unsupported default plane: {plane}")
+    if not math.isfinite(position_fraction) or not 0.0 <= position_fraction <= 1.0:
+        raise ValueError("default position_fraction must be finite and within [0, 1]")
+    if operator_kind not in {"plane_sample", "slab_average"}:
+        raise ValueError(f"unsupported default operator: {operator_kind}")
+    operator: dict[str, Any] = {"kind": operator_kind}
+    if operator_kind == "slab_average":
+        if thickness_m is None or not math.isfinite(thickness_m) or thickness_m <= 0.0:
+            raise ValueError("default slab thickness must be finite and positive")
+        operator["thickness_m"] = thickness_m
+    return {
+        "source": {"kind": "default"},
+        "default_slice": {
+            "operator": operator,
+            "plane": plane,
+            "position_fraction": position_fraction,
+        },
+    }
+
+
+def planar_source_identities_are_distinct(
+    default_report: dict[str, Any], monitor_report_result: dict[str, Any]
+) -> bool:
+    """Require the default and authored-monitor sources to remain typed apart."""
+    default_source = default_report.get("source")
+    monitor_source = monitor_report_result.get("source")
+    return bool(
+        isinstance(default_source, dict)
+        and isinstance(monitor_source, dict)
+        and default_source.get("kind") == "default"
+        and monitor_source.get("kind") == "monitor"
+        and isinstance(default_source.get("default_slice_hash"), str)
+        and isinstance(monitor_source.get("monitor_id"), str)
+        and bool(monitor_source["monitor_id"])
+    )
+
+
+def validate_default_slice_evidence(
+    report: dict[str, Any],
+    *,
+    plane: str,
+    position_fraction: float,
+    domain_bounds: dict[str, list[float]],
+    operator_kind: str,
+    quantity_id: str,
+    thickness_m: float | None = None,
+) -> dict[str, Any]:
+    """Validate one live default-source sample against domain geometry and identity."""
+    if plane not in {"xy", "xz", "yz"}:
+        raise ValueError(f"unsupported default plane: {plane}")
+    if not math.isfinite(position_fraction) or not 0.0 <= position_fraction <= 1.0:
+        raise ValueError("default position_fraction must be finite and within [0, 1]")
+    bounds_min = [float(value) for value in domain_bounds["min"]]
+    bounds_max = [float(value) for value in domain_bounds["max"]]
+    if len(bounds_min) != 3 or len(bounds_max) != 3:
+        raise ValueError("default validation requires three-dimensional domain bounds")
+    lengths = [maximum - minimum for minimum, maximum in zip(bounds_min, bounds_max)]
+    centers = [0.5 * (minimum + maximum) for minimum, maximum in zip(bounds_min, bounds_max)]
+    normal_axis = {"xy": 2, "xz": 1, "yz": 0}[plane]
+    specs = {
+        "xy": {
+            "u_axis": [1.0, 0.0, 0.0],
+            "v_axis": [0.0, 1.0, 0.0],
+            "normal": [0.0, 0.0, 1.0],
+            "u_length": lengths[0],
+            "v_length": lengths[1],
+        },
+        "xz": {
+            "u_axis": [1.0, 0.0, 0.0],
+            "v_axis": [0.0, 0.0, 1.0],
+            "normal": [0.0, -1.0, 0.0],
+            "u_length": lengths[0],
+            "v_length": lengths[2],
+        },
+        "yz": {
+            "u_axis": [0.0, 1.0, 0.0],
+            "v_axis": [0.0, 0.0, 1.0],
+            "normal": [1.0, 0.0, 0.0],
+            "u_length": lengths[1],
+            "v_length": lengths[2],
+        },
+    }[plane]
+    expected_origin = centers.copy()
+    expected_origin[normal_axis] = (
+        bounds_min[normal_axis] + position_fraction * lengths[normal_axis]
+    )
+    expected_bounds = [
+        -0.5 * specs["u_length"],
+        0.5 * specs["u_length"],
+        -0.5 * specs["v_length"],
+        0.5 * specs["v_length"],
+    ]
+
+    blockers: list[str] = []
+
+    def close(actual: Any, expected: float) -> bool:
+        try:
+            return math.isclose(float(actual), expected, rel_tol=1e-9, abs_tol=1e-15)
+        except (TypeError, ValueError):
+            return False
+
+    def close_vector(actual: Any, expected: list[float]) -> bool:
+        return isinstance(actual, list) and len(actual) == len(expected) and all(
+            close(observed, target) for observed, target in zip(actual, expected, strict=True)
+        )
+
+    source = report.get("source")
+    if not isinstance(source, dict) or source.get("kind") != "default":
+        blockers.append("sample source is not typed default")
+    if report.get("source_kind") != "default" or report.get("source_id") != "default":
+        blockers.append("report source identity is not default")
+    if not isinstance(report.get("source_hash"), str) or not report["source_hash"]:
+        blockers.append("default source hash is missing")
+    if not report.get("source_revision"):
+        blockers.append("default source revision is missing")
+    if not isinstance(source, dict) or source.get("default_slice_hash") != report.get("source_hash"):
+        blockers.append("report/source default hash mismatch")
+    if not isinstance(source, dict) or not source.get("domain_generation_id"):
+        blockers.append("default source domain generation is missing")
+
+    frame = report.get("frame") or {}
+    if "preset" in frame and frame.get("preset") != plane:
+        blockers.append(f"frame preset is not {plane}")
+    if not close_vector(frame.get("origin_m"), expected_origin):
+        blockers.append("resolved physical coordinate does not match position_fraction")
+    for key in ("u_axis", "v_axis", "normal"):
+        if not close_vector(frame.get(key), specs[key]):
+            blockers.append(f"default {plane} frame has incorrect {key} signs")
+    if not close_vector(frame.get("bounds_uv_m"), expected_bounds):
+        blockers.append("default frame bounds do not cover the complete domain AABB")
+
+    operator = report.get("operator") or {}
+    if operator.get("kind") != operator_kind:
+        blockers.append("default operator kind mismatch")
+    if operator_kind == "slab_average":
+        if thickness_m is None or not close(operator.get("thickness_m"), thickness_m):
+            blockers.append("default slab thickness mismatch")
+    elif "thickness_m" in operator:
+        blockers.append("plane sample unexpectedly carries slab thickness")
+
+    if report.get("target", {}).get("kind") != "domain":
+        blockers.append("default source target is not the published domain")
+    if report.get("quantity_id") != quantity_id:
+        blockers.append("default quantity identity mismatch")
+    if not report.get("sample_token"):
+        blockers.append("default sample token is missing")
+    for identity_key in ("exact_sample_identity", "mask_exact_sample_identity"):
+        if report.get(identity_key) is not True:
+            blockers.append(f"{identity_key} is not proven")
+    if quantity_id == "m":
+        if report.get("vector_exact_sample_identity") is not True:
+            blockers.append("vector exact sample identity is not proven")
+        if int(report.get("vector_value_count") or 0) <= 0:
+            blockers.append("default vector payload is empty")
+    if int((report.get("stats") or {}).get("count") or 0) <= 0:
+        blockers.append("default scalar payload has no finite samples")
+    probe = report.get("probe") or {}
+    if probe.get("source", {}).get("kind") != "default":
+        blockers.append("default probe source identity is not proven")
+    if probe.get("scalar") is None:
+        blockers.append("default probe has no scalar value")
+
+    return {
+        "blockers": blockers,
+        "expected_bounds_uv_m": expected_bounds,
+        "expected_frame": {
+            "normal": specs["normal"],
+            "u_axis": specs["u_axis"],
+            "v_axis": specs["v_axis"],
+        },
+        "expected_origin_m": expected_origin,
+        "operator_kind": operator_kind,
+        "pass": not blockers,
+        "plane": plane,
+        "position_fraction": position_fraction,
+        "resolved_coordinate_m": expected_origin[normal_axis],
+        "source_identity": {
+            "domain_generation_id": source.get("domain_generation_id")
+            if isinstance(source, dict)
+            else None,
+            "hash": report.get("source_hash"),
+            "kind": report.get("source_kind"),
+            "revision": report.get("source_revision"),
+        },
+    }
 
 
 def occupied_probe_coordinates(
@@ -350,6 +588,7 @@ def monitor_report(
     base: str,
     monitor_id: str,
     *,
+    source_kind: str = "monitor",
     component: str,
     quantity_id: str,
     stage_id: str | None = None,
@@ -377,11 +616,24 @@ def monitor_report(
     if expected_field_revision is not None:
         query_parameters["expected_field_revision"] = expected_field_revision
     query = urllib.parse.urlencode(query_parameters)
-    prefix = (
-        f"/v2/sessions/current/data/fields/{urllib.parse.quote(quantity_id, safe='')}/planar-monitors/"
-        f"{urllib.parse.quote(monitor_id, safe='')}"
-    )
+    if source_kind == "default":
+        prefix = (
+            f"/v2/sessions/current/data/fields/{urllib.parse.quote(quantity_id, safe='')}"
+            "/planar-default"
+        )
+    elif source_kind == "monitor":
+        prefix = (
+            f"/v2/sessions/current/data/fields/{urllib.parse.quote(quantity_id, safe='')}/planar-monitors/"
+            f"{urllib.parse.quote(monitor_id, safe='')}"
+        )
+    else:
+        raise ValueError(f"unsupported planar source kind: {source_kind}")
     meta = wait_json(base, f"{prefix}/meta?{query}", timeout_s=wait_timeout_s)
+    source = meta.get("source")
+    if not isinstance(source, dict) or source.get("kind") != source_kind:
+        raise RuntimeError(
+            f"planar meta source mismatch: expected {source_kind}, got {source!r}"
+        )
     if not canonical_sample_links_match(meta):
         raise RuntimeError("planar metadata links do not bind the canonical sample revisions")
     scalar_payload, scalar_headers = request_bytes_with_headers(
@@ -432,7 +684,7 @@ def monitor_report(
             code: occupancy.count(code) for code in sorted(set(occupancy))
         }
         raise ValueError(
-            f"{error}: monitor_id={monitor_id!r}, occupancy_codes={occupancy_counts}, "
+            f"{error}: source_id={monitor_id!r}, occupancy_codes={occupancy_counts}, "
             f"meta_occupancy={meta.get('occupancy')!r}"
         ) from error
     probe_link = urllib.parse.urlsplit(meta["links"]["probe"])
@@ -449,7 +701,7 @@ def monitor_report(
     if probe.get("scalar") is None:
         raise RuntimeError(
             "occupied raster sample resolved to an empty probe: "
-            f"monitor_id={monitor_id!r}, u_m={u_m}, v_m={v_m}, "
+            f"source_id={monitor_id!r}, u_m={u_m}, v_m={v_m}, "
             f"sample_support={meta.get('sample_support')!r}, "
             f"probe_occupancy={probe.get('occupancy')!r}, "
             f"probe_cell_id={probe.get('cell_id')!r}, "
@@ -459,19 +711,42 @@ def monitor_report(
     scalar_identity = scalar_headers.get("etag")
     exact_sample_identity = exact_sample_identity_matches(meta, scalar_headers)
     mask_exact_sample_identity = exact_sample_identity_matches(meta, mask_headers)
+    source_id = "default" if source_kind == "default" else source["monitor_id"]
+    source_hash = (
+        source["default_slice_hash"]
+        if source_kind == "default"
+        else source["monitor_hash"]
+    )
+    source_revision = (
+        source["default_slice_revision"]
+        if source_kind == "default"
+        else source["monitor_revision"]
+    )
     report = {
         "basis_order": meta["basis_order"],
         "carrier_revision": meta["carrier_revision"],
         "exact_sample_identity": exact_sample_identity,
         "field_revision": meta["field_revision"],
         "field_source": meta["field_source"],
+        "field_backend": meta.get("field_backend"),
+        "field_device": meta.get("field_device"),
+        "field_precision": meta.get("field_precision"),
         "frame": meta["frame"],
         "generation_id": meta["generation_id"],
         "mesh_revision": meta["mesh_revision"],
         "mask_exact_sample_identity": mask_exact_sample_identity,
         "mask_identity": mask_headers.get("etag"),
-        "monitor_revision": meta["monitor_revision"],
-        "monitor_hash": meta["monitor_hash"],
+        "source": source,
+        "source_hash": source_hash,
+        "source_id": source_id,
+        "source_kind": source_kind,
+        "source_revision": source_revision,
+        "source_identity": {
+            "domain_generation_id": source.get("domain_generation_id"),
+            "hash": source_hash,
+            "kind": source_kind,
+            "revision": source_revision,
+        },
         "occupancy": meta["occupancy"],
         "oracle": (
             {
@@ -486,8 +761,10 @@ def monitor_report(
             "element_id": probe.get("element_id"),
             "occupancy": probe["occupancy"],
             "scalar": probe.get("scalar"),
+            "source": probe.get("source"),
             "world_m": probe["world_m"],
         },
+        "operator": meta["operator"],
         "sampling_execution": meta["sampling_execution"],
         "sampling_method": meta["sampling_method"],
         "sample_token": meta["sample_token"],
@@ -504,12 +781,52 @@ def monitor_report(
         "vector_identity": vector_identity,
         "vector_value_count": vector_value_count,
     }
+    if source_kind == "monitor":
+        report.update(
+            {
+                "monitor_hash": source_hash,
+                "monitor_id": source_id,
+                "monitor_revision": source_revision,
+            }
+        )
     if validate_linear_ms:
         report["linear_validation"] = linear_ms_validation(meta, scalar, probe)
         report["oracle"] = {
             "analytic": report["linear_validation"]["analytic"],
             "kind": "linear_material_field",
         }
+    return report
+
+
+def default_slice_report(
+    base: str,
+    *,
+    component: str,
+    quantity_id: str,
+    stage_id: str | None = None,
+    snapshot_id: str | None = None,
+    validate_linear_ms: bool = False,
+    wait_timeout_s: float = 180.0,
+    resolution: int = 32,
+    scope_kind: str | None = None,
+    expected_field_revision: int | None = None,
+) -> dict[str, Any]:
+    """Read the typed session Default source through the same resource pipeline."""
+    report = monitor_report(
+        base,
+        "default",
+        source_kind="default",
+        component=component,
+        quantity_id=quantity_id,
+        stage_id=stage_id,
+        snapshot_id=snapshot_id,
+        validate_linear_ms=validate_linear_ms,
+        wait_timeout_s=wait_timeout_s,
+        resolution=resolution,
+        scope_kind=scope_kind,
+        expected_field_revision=expected_field_revision,
+    )
+    report["target"] = {"kind": "domain"}
     return report
 
 
@@ -774,6 +1091,57 @@ def wait_for_fresh_monitor_report(
     raise RuntimeError(
         f"solve produced no fresh field revision for {monitor_id}: "
         f"baseline={baseline_field_revision}, last={last and last.get('field_revision')}"
+    )
+
+
+def wait_for_fresh_default_slice_report(
+    base: str,
+    *,
+    plane: str,
+    position_fraction: float,
+    operator_kind: str,
+    thickness_m: float | None,
+    baseline_field_revision: int,
+    component: str,
+    quantity_id: str,
+    timeout_s: float = 180.0,
+) -> dict[str, Any]:
+    deadline = time.monotonic() + timeout_s
+    last: dict[str, Any] | None = None
+    while time.monotonic() < deadline:
+        patch_default_slice(
+            base,
+            plane=plane,
+            position_fraction=position_fraction,
+            operator_kind=operator_kind,
+            thickness_m=thickness_m,
+        )
+        last = default_slice_report(
+            base,
+            component=component,
+            quantity_id=quantity_id,
+            wait_timeout_s=10.0,
+        )
+        if int(last["field_revision"]) > baseline_field_revision:
+            patch_default_slice(
+                base,
+                plane=plane,
+                position_fraction=position_fraction,
+                operator_kind=operator_kind,
+                thickness_m=thickness_m,
+            )
+            return default_slice_report(
+                base,
+                component=component,
+                quantity_id=quantity_id,
+                expected_field_revision=int(last["field_revision"]),
+                wait_timeout_s=10.0,
+            )
+        time.sleep(0.5)
+    raise RuntimeError(
+        "solve produced no fresh field revision for default source: "
+        f"plane={plane}, q={position_fraction}, baseline={baseline_field_revision}, "
+        f"last={last and last.get('field_revision')}"
     )
 
 
@@ -1429,6 +1797,288 @@ def aggregate_qualification_reports(report_root: Path) -> dict[str, Any]:
     return aggregate
 
 
+def validate_default_qualification_report(report: dict[str, Any]) -> None:
+    for field in (
+        "execution",
+        "head",
+        "default_slices",
+        "qualification_cases",
+        "runtime_bundle_identity",
+    ):
+        if not report.get(field):
+            raise ValueError(f"default qualification report is missing {field}")
+    execution = report["execution"]
+    for field in (
+        "requested_backend",
+        "requested_device",
+        "resolved_backend",
+        "resolved_device",
+    ):
+        if not execution.get(field):
+            raise ValueError(f"default qualification execution is missing {field}")
+    runtime_identity = report["runtime_bundle_identity"]
+    for field in ("runtime_bundle_version", "resolved_runtime_family"):
+        if not runtime_identity.get(field):
+            raise ValueError(f"default runtime identity is missing {field}")
+    for source_id, result in report["default_slices"].items():
+        if not isinstance(result, dict) or result.get("source_kind") != "default":
+            raise ValueError(f"default slice {source_id} is not a typed default report")
+        if not result.get("sample_token") or not result.get("source_hash"):
+            raise ValueError(f"default slice {source_id} is missing sample identity")
+
+
+def default_slice_case(
+    *,
+    backend: str,
+    device: str,
+    case_id: str,
+    requirement: str,
+    passed: bool,
+    blocker: str | None = None,
+) -> dict[str, Any]:
+    return {
+        "backend": backend,
+        "blocker": blocker if not passed else None,
+        "case_id": case_id,
+        "device": device,
+        "passed": passed,
+        "required": True,
+        "requirement": requirement,
+        "status": "passed" if passed else "blocked",
+    }
+
+
+def run_default_slice_validation(args: argparse.Namespace) -> dict[str, Any]:
+    domain = wait_json(args.api_base, "/v2/sessions/current/data/domain/meta")
+    domain_bounds = domain["bounds"]
+    collection = wait_json(
+        args.api_base, "/v2/sessions/current/model/planar-monitors"
+    )
+    authored_monitors = collection.get("monitors", [])
+    if authored_monitors:
+        raise RuntimeError(
+            "default-slice fixture must not publish authored planar monitors: "
+            f"{[monitor.get('id') for monitor in authored_monitors]}"
+        )
+
+    patch_default_slice(
+        args.api_base,
+        plane="xy",
+        position_fraction=0.5,
+    )
+    pre_solve = default_slice_report(
+        args.api_base,
+        component="magnitude",
+        quantity_id="m",
+    )
+    solve_command_id = start_fixture_solver(args.api_base)
+    default_slices: dict[str, dict[str, Any]] = {}
+    try:
+        baseline_field_revision = int(pre_solve["field_revision"])
+        fresh_center = wait_for_fresh_default_slice_report(
+            args.api_base,
+            plane="xy",
+            position_fraction=0.5,
+            operator_kind="plane_sample",
+            thickness_m=None,
+            baseline_field_revision=baseline_field_revision,
+            component="magnitude",
+            quantity_id="m",
+        )
+        fresh_field_revision = int(fresh_center["field_revision"])
+        for plane in ("xy", "xz", "yz"):
+            for position_fraction in (0.0, 0.5, 1.0):
+                key = f"{plane}-q{position_fraction:g}"
+                patch_default_slice(
+                    args.api_base,
+                    plane=plane,
+                    position_fraction=position_fraction,
+                )
+                result = default_slice_report(
+                    args.api_base,
+                    component="magnitude",
+                    quantity_id="m",
+                    expected_field_revision=fresh_field_revision,
+                )
+                result["requested_default_slice"] = {
+                    "operator": {"kind": "plane_sample"},
+                    "plane": plane,
+                    "position_fraction": position_fraction,
+                }
+                result["default_slice_evidence"] = validate_default_slice_evidence(
+                    result,
+                    plane=plane,
+                    position_fraction=position_fraction,
+                    domain_bounds=domain_bounds,
+                    operator_kind="plane_sample",
+                    quantity_id="m",
+                )
+                default_slices[key] = result
+
+        slab_thickness = 0.25 * (float(domain_bounds["max"][2]) - float(domain_bounds["min"][2]))
+        patch_default_slice(
+            args.api_base,
+            plane="xy",
+            position_fraction=0.5,
+            operator_kind="slab_average",
+            thickness_m=slab_thickness,
+        )
+        slab = default_slice_report(
+            args.api_base,
+            component="magnitude",
+            quantity_id="m",
+            expected_field_revision=fresh_field_revision,
+        )
+        slab["requested_default_slice"] = {
+            "operator": {"kind": "slab_average", "thickness_m": slab_thickness},
+            "plane": "xy",
+            "position_fraction": 0.5,
+        }
+        slab["default_slice_evidence"] = validate_default_slice_evidence(
+            slab,
+            plane="xy",
+            position_fraction=0.5,
+            domain_bounds=domain_bounds,
+            operator_kind="slab_average",
+            thickness_m=slab_thickness,
+            quantity_id="m",
+        )
+        default_slices["xy-q0.5-slab"] = slab
+    finally:
+        stop_fixture_solver(args.api_base, solve_command_id)
+
+    slice_evidence = {
+        key: result["default_slice_evidence"]
+        for key, result in default_slices.items()
+    }
+    plane_results = {
+        key: evidence
+        for key, evidence in slice_evidence.items()
+        if not key.endswith("-slab")
+    }
+    slab_evidence = slice_evidence["xy-q0.5-slab"]
+    source_hashes = [result["source_hash"] for result in default_slices.values()]
+    sample_tokens = [result["sample_token"] for result in default_slices.values()]
+    monitor_identity_reference = {
+        "source": {
+            "kind": "monitor",
+            "monitor_hash": "authored-monitor-reference",
+            "monitor_id": "authored-monitor-reference",
+        }
+    }
+    center_default = default_slices["xy-q0.5"]
+    default_vs_monitor_identity = {
+        "authored_monitor_present_in_fixture": False,
+        "default_source": center_default["source_identity"],
+        "identities_distinct": planar_source_identities_are_distinct(
+            center_default, monitor_identity_reference
+        ),
+        "monitor_source_reference": monitor_identity_reference["source"],
+        "scope": "typed_source_discriminant; no authored monitor is created by this fixture",
+    }
+    status = wait_json(args.api_base, "/v2/sessions/current/status")
+    execution, execution_matches = run_execution(
+        wait_json(args.api_base, "/v2/sessions/current/simulation/runs/current"),
+        args.backend,
+        args.device,
+    )
+    gates = {
+        "fixture_has_no_authored_planar_monitors": not authored_monitors,
+        "default_plane_samples": all(evidence["pass"] for evidence in plane_results.values()),
+        "default_slab_average": slab_evidence["pass"],
+        "scalar_vector_mask_probe_identity": all(
+            result["exact_sample_identity"]
+            and result["mask_exact_sample_identity"]
+            and result["vector_exact_sample_identity"]
+            and result["probe"].get("source", {}).get("kind") == "default"
+            for result in default_slices.values()
+        ),
+        "default_source_revision_changes_with_slice": len(set(source_hashes)) == len(source_hashes),
+        "sample_token_changes_with_slice": len(set(sample_tokens)) == len(sample_tokens),
+        "default_vs_monitor_identity_is_distinct": default_vs_monitor_identity["identities_distinct"],
+        "execution_provenance_matches_requested_lane": execution_matches,
+    }
+    qualification_cases = [
+        default_slice_case(
+            backend=args.backend,
+            device=args.device,
+            case_id=f"default-{key}",
+            requirement=f"default source {key} resolves frame, bounds, signs and coordinate",
+            passed=evidence["pass"],
+            blocker="; ".join(evidence["blockers"]) or None,
+        )
+        for key, evidence in plane_results.items()
+    ]
+    qualification_cases.append(
+        default_slice_case(
+            backend=args.backend,
+            device=args.device,
+            case_id="default-xy-q0.5-slab",
+            requirement="default source slab average resolves positive thickness and identity",
+            passed=slab_evidence["pass"],
+            blocker="; ".join(slab_evidence["blockers"]) or None,
+        )
+    )
+    qualification_cases.extend(
+        [
+            default_slice_case(
+                backend=args.backend,
+                device=args.device,
+                case_id="default-resource-identities",
+                requirement="scalar, vector, mask and probe share the default sample identity",
+                passed=gates["scalar_vector_mask_probe_identity"],
+            ),
+            default_slice_case(
+                backend=args.backend,
+                device=args.device,
+                case_id="default-source-vs-monitor-identity",
+                requirement="default and authored monitor source identities remain typed and distinct",
+                passed=gates["default_vs_monitor_identity_is_distinct"],
+            ),
+        ]
+    )
+    qualification_complete = all(case["passed"] for case in qualification_cases) and all(
+        gates.values()
+    )
+    report = {
+        "backend": args.backend,
+        "device": args.device,
+        "domain": {
+            "bounds": domain_bounds,
+            "generation_id": domain.get("generation_id"),
+        },
+        "default_slices": default_slices,
+        "default_vs_monitor_identity": default_vs_monitor_identity,
+        "execution": execution,
+        "gates": gates,
+        "head": git_head(),
+        "metrics": {
+            "default_slice_count": len(default_slices),
+            "distinct_source_hash_count": len(set(source_hashes)),
+            "distinct_sample_token_count": len(set(sample_tokens)),
+            "slab_thickness_m": slab_thickness,
+        },
+        "monitor_collection": {
+            "revision": collection.get("scene_revision"),
+            "count": len(authored_monitors),
+        },
+        "qualification_cases": qualification_cases,
+        "qualification_complete": qualification_complete,
+        "qualification_profile": args.qualification_profile,
+        "qualification_status": "qualified" if qualification_complete else "blocked",
+        "pass": qualification_complete,
+        "runtime_bundle_identity": {
+            "api_contract_version": status.get("api_contract_version"),
+            "resolved_runtime_family": execution.get("resolved_runtime_family"),
+            "runtime_bundle_version": status.get("runtime_bundle_version"),
+        },
+        "schema_version": "viewport-2d-default-slice-science-report-v1",
+        "source_kind": "default",
+    }
+    validate_default_qualification_report(report)
+    return report
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--aggregate-report-root", type=Path)
@@ -1437,6 +2087,7 @@ def main() -> None:
     parser.add_argument("--api-base")
     parser.add_argument("--backend", choices=("fdm", "fem"))
     parser.add_argument("--device", choices=("cpu", "gpu"))
+    parser.add_argument("--source-kind", choices=("monitor", "default"), default="monitor")
     parser.add_argument("--output", type=Path)
     parser.add_argument(
         "--qualification-profile",
@@ -1469,6 +2120,17 @@ def main() -> None:
         parser.error(
             "--api-base, --backend, --device, and --output are required outside aggregate mode"
         )
+    if args.source_kind == "default":
+        report = run_default_slice_validation(args)
+        args.output.parent.mkdir(parents=True, exist_ok=True)
+        write_json(args.output, report)
+        if not report["pass"]:
+            raise SystemExit(
+                f"default planar science qualification {report['qualification_status']}: "
+                f"{args.output}"
+            )
+        print(f"Default planar science report {report['qualification_status']}: {args.output}")
+        return
 
     collection = wait_json(
         args.api_base, "/v2/sessions/current/model/planar-monitors"

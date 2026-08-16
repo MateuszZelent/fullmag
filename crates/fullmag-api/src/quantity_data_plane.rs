@@ -618,8 +618,6 @@ mod tests {
             meta: PlanarSampleMeta {
                 sampler_version: "test",
                 sampling_method: "test",
-                monitor_id: "monitor".to_string(),
-                monitor_hash: "hash".to_string(),
                 bounds_uv_m: [0.0, 1.0, 0.0, 1.0],
                 resolution: [value_count as u32, 1],
                 occupied_count: value_count as u32,

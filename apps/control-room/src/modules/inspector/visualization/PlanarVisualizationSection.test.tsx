@@ -24,7 +24,6 @@ const mocks = vi.hoisted(() => ({
     codec: "fmcs.v4",
   },
   planar: {
-    active_monitor_id: "plane-1",
     colormap: "viridis",
     component: "magnitude",
     display_unit: "A/m",
@@ -39,6 +38,14 @@ const mocks = vi.hoisted(() => ({
       vectors: false,
     },
     quantity_id: "h_eff",
+    source: { kind: "monitor", monitor_id: "plane-1" } as
+      | { kind: "default" }
+      | { kind: "monitor"; monitor_id: string },
+    default_slice: {
+      operator: { kind: "plane_sample" },
+      plane: "xy" as const,
+      position_fraction: 0.5,
+    },
     range: { mode: "manual", min: -1, max: 1 },
     raster_opacity: 1,
     interaction: { pan_u_m: 0, pan_v_m: 0, zoom: 1 },
@@ -65,9 +72,22 @@ vi.mock("@/kernel/resources/planarFieldResources", () => ({
   usePlanarFieldMetaResource: () => ({
     data: {
       canonical_unit: "A/m",
+      component: "magnitude",
+      field_backend: "fem",
+      field_device: "cpu",
+      field_precision: "double",
+      field_source: "live",
       mesh_overlay_descriptor: mocks.overlay,
       occupancy: { occupied_measure: 1 },
+      operator: { kind: "plane_sample" },
+      source: {
+        kind: "monitor",
+        monitor_hash: "sha256:monitor",
+        monitor_id: "plane-1",
+        monitor_revision: "2",
+      },
       sampling_method: "fdm_cell_constant",
+      sampling_execution: "cpu",
     },
     error: null,
     status: "ready",
@@ -80,6 +100,16 @@ vi.mock("@/kernel/resources/planarMonitorResources", () => ({
     data: {
       monitors: [{ id: "plane-1", name: "Mid-plane" }],
     },
+  }),
+}));
+
+vi.mock("@/kernel/resources/geometryLifecycleResources", () => ({
+  useDomainMetaResource: () => ({
+    data: {
+      bounds: { min: [10, 20, 30], max: [14, 26, 42] },
+    },
+    error: null,
+    status: "ready",
   }),
 }));
 
@@ -136,7 +166,28 @@ describe("PlanarVisualizationSection", () => {
     mocks.components = 3;
     mocks.maskStatus = "ready";
     mocks.discretization = "fem";
+    mocks.planar.source = { kind: "monitor", monitor_id: "plane-1" };
     mocks.planar.view_scope = { kind: "monitor_target" };
+  });
+
+  it("always offers Default and exposes plane/position controls without a monitor", () => {
+    mocks.planar.source = { kind: "default" };
+    mocks.planar.default_slice = {
+      operator: { kind: "plane_sample" },
+      plane: "xy",
+      position_fraction: 0.5,
+    };
+    const html = renderToStaticMarkup(
+      <PlanarVisualizationSection selection={selection} />,
+    );
+
+    expect(html).toContain('aria-label="Source"');
+    expect(html).toContain(">Default<");
+    expect(html).toContain('aria-label="Plane"');
+    expect(html).toContain('aria-label="Position"');
+    expect(html).toContain('aria-label="Coordinate (z)"');
+    expect(html).toContain('aria-label="Sampling"');
+    expect(html).not.toContain("Select monitor");
   });
 
   it("fails closed for points while the canonical occupancy mask is unavailable", () => {
@@ -160,6 +211,21 @@ describe("PlanarVisualizationSection", () => {
     expect(html).toContain('aria-label="Range mode"');
     expect(html).toContain("Use target scope");
     expect(html).not.toContain("sessions/current");
+  });
+
+  it("shows runtime field provenance in the planar inspector", () => {
+    const html = renderToStaticMarkup(
+      <PlanarVisualizationSection selection={selection} />,
+    );
+
+    expect(html).toContain("Field backend");
+    expect(html).toContain("fem");
+    expect(html).toContain("Field device");
+    expect(html).toContain("cpu");
+    expect(html).toContain("Field precision");
+    expect(html).toContain("double");
+    expect(html).toContain("Field source");
+    expect(html).toContain("live");
   });
 
   it("renders the complete v7 planar presentation contract without 3D-only controls", () => {
@@ -201,7 +267,7 @@ describe("PlanarVisualizationSection", () => {
     const root = createRoot(container as unknown as Element);
     try {
       await act(async () => root.render(<PlanarVisualizationSection selection={selection} />));
-      await act(async () => change(findControl(container, "Monitor"), "plane-1"));
+      await act(async () => change(findControl(container, "Source"), "plane-1"));
       await act(async () => change(findControl(container, "Quantity"), "m"));
       await act(async () => change(findControl(container, "Component"), "normal"));
       await act(async () => change(findControl(container, "Color map"), "inferno"));
@@ -228,7 +294,7 @@ describe("PlanarVisualizationSection", () => {
       await act(async () => change(findControl(container, "Vector color mode"), "monochrome"));
       await act(async () => clickButton(container, "Use target scope"));
 
-      expect(mocks.queuePatch).toHaveBeenCalledWith({ planar: { active_monitor_id: "plane-1" } });
+      expect(mocks.queuePatch).toHaveBeenCalledWith({ planar: { source: { kind: "monitor", monitor_id: "plane-1" } } });
       expect(mocks.queuePatch).toHaveBeenCalledWith({ planar: { component: "magnitude", quantity_id: "m" } });
       expect(mocks.queuePatch).toHaveBeenCalledWith({ planar: { component: "normal" } });
       expect(mocks.queuePatch).toHaveBeenCalledWith({ planar: { colormap: "inferno" } });

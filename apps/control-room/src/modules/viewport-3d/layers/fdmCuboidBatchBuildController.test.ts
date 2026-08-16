@@ -77,7 +77,7 @@ describe("FDM cuboid batch build controller", () => {
         new Promise((resolve) => {
           if (!options) throw new Error("batch build options are required");
           pending.push({
-            buildKey: options.buildKey ?? "missing",
+            buildKey: options?.buildKey ?? "missing",
             resolve,
             signal: options.signal!,
           });
@@ -112,5 +112,51 @@ describe("FDM cuboid batch build controller", () => {
     expect(pending[0]?.signal.aborted).toBe(true);
     expect(controller.getActiveBuildCount()).toBe(0);
     expect(controller.getSnapshot().size).toBe(0);
+  });
+
+  it("keeps a ready topology model when a same-carrier vectors-only build resolves", async () => {
+    const pending: Array<{
+      buildKey: string;
+      resolve: (result: FdmCuboidBuildResult) => void;
+    }> = [];
+    const controller = createFdmCuboidBatchBuildController(
+      (_request, options) =>
+        new Promise((resolve) => {
+          pending.push({
+            buildKey: options?.buildKey ?? "missing",
+            resolve,
+          });
+        }),
+    );
+    const topologyModel = {} as NonNullable<FdmCuboidBuildResult["model"]>;
+
+    controller.reconcile([
+      { ...entry("airbox", "airbox:topology"), topologyKey: "carrier" },
+    ]);
+    pending[0]?.resolve({
+      model: topologyModel,
+      vectorCellIndices: null,
+      vectorSegments: null,
+    });
+    await Promise.resolve();
+
+    controller.reconcile([
+      { ...entry("airbox", "airbox:vectors"), topologyKey: "carrier", vectorOnly: {
+        anchors: new Float32Array([0, 0, 0]),
+        cellIndices: new Uint32Array([0]),
+        gridShape: [1, 1, 1],
+      } },
+    ]);
+    pending[1]?.resolve({
+      model: null,
+      vectorCellIndices: new Uint32Array([0]),
+      vectorSegments: new Float32Array(7),
+    });
+    await Promise.resolve();
+
+    expect(controller.getSnapshot().get("airbox")?.result?.model).toBe(
+      topologyModel,
+    );
+    controller.dispose();
   });
 });

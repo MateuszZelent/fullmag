@@ -11,6 +11,8 @@ import {
   buildFdmDenseNativeLayerInstanceModel,
   buildFdmMaskedNativeLayerInstanceModel,
   buildViewport3DFdmCuboid,
+  buildFdmVectorSegmentsFromAnchors,
+  createFdmVectorOnlyBuildInput,
   estimateFdmCuboidBuildOutputBytes,
   resolveFdmCuboidMembershipRevision,
   transferablesForFdmCuboidBuildResult,
@@ -44,6 +46,57 @@ function fieldVector(
 }
 
 describe("FDM cuboid realized membership", () => {
+  it("derives vectors-only anchors from sampled field ordinals instead of the full grid", () => {
+    const input = createFdmVectorOnlyBuildInput({
+      cellSelection: "inactive",
+      domain: {
+        bounds: null,
+        displayCellBudget: 8,
+        displayCellCount: 8,
+        kind: "fdm-grid",
+        origin: [0, 0, 0],
+        shape: [8, 1, 1],
+        spacing: [1, 1, 1],
+        stride: 1,
+        totalCells: 8,
+      },
+      fieldVector: {
+        indexing: "sampled_node_indices",
+        nodeIndices: new Uint32Array([1, 7]),
+        pointCount: 2,
+      },
+      maxSamples: 2,
+      realizedRegionIds: new Uint32Array([
+        0,
+        FMRM_INACTIVE_REGION_ID,
+        FMRM_INACTIVE_REGION_ID,
+        0,
+        0,
+        0,
+        0,
+        FMRM_INACTIVE_REGION_ID,
+      ]),
+    });
+
+    expect(input?.cellIndices).toEqual(new Uint32Array([1, 7]));
+    expect(input?.anchors).toEqual(new Float32Array([1.5, 0.5, 0.5, 7.5, 0.5, 0.5]));
+  });
+
+  it("builds a sampled vector stream from anchors without constructing a cuboid model", () => {
+    const result = buildFdmVectorSegmentsFromAnchors({
+      anchorMode: "center",
+      anchors: new Float32Array([0, 0, 0, 1, 0, 0, 2, 0, 0]),
+      cellIndices: new Uint32Array([0, 1, 2]),
+      fieldVector: fieldVector([1, 0, 0, 0, 1, 0, 0, 0, 1]),
+      gridShape: [3, 1, 1],
+      maxVectors: 2,
+      scale: 1,
+    });
+
+    expect(result?.cellIndices.length).toBe(2);
+    expect(result?.segments.length).toBe(2 * 7);
+  });
+
   it("does not scan a copied selected set for every matching cell after the budget is full", () => {
     expect(fdmCuboidBuildModelSource).not.toContain(
       "const inactiveReplacement = [...selected]",
@@ -256,6 +309,82 @@ describe("FDM cuboid realized membership", () => {
     expect((colors?.colors.length ?? 0) / 3).toBe(
       (result.vectorSegments?.length ?? 0) / 7,
     );
+  });
+
+  it("uses the authoritative target mask when filtering sampled Surface anchors", () => {
+    const realizedRegionIds = new Uint32Array(27);
+    realizedRegionIds.fill(FMRM_INACTIVE_REGION_ID);
+    const result = buildViewport3DFdmCuboid({
+      cellSelection: "inactive",
+      domain: {
+        bounds: null,
+        displayCellBudget: 27,
+        displayCellCount: 27,
+        kind: "fdm-grid",
+        origin: [0, 0, 0],
+        shape: [3, 3, 3],
+        spacing: [1, 1, 1],
+        stride: 1,
+        totalCells: 27,
+      },
+      maxVectorGlyphs: 3,
+      realizedRegionIds,
+      vectorAnchorMode: "center",
+      vectorField: fieldVector(
+        Array.from({ length: 27 }, () => [1, 0, 0]).flat(),
+      ),
+      vectorGeometryScope: "surface",
+      vectorOnly: {
+        anchors: new Float32Array([
+          0.5, 0.5, 0.5,
+          1.5, 1.5, 1.5,
+          2.5, 2.5, 2.5,
+        ]),
+        cellIndices: new Uint32Array([0, 13, 26]),
+        gridShape: [3, 3, 3],
+      },
+      vectorScale: 1,
+      voxelFillRatio: 0.92,
+      voxelMagnitudeThreshold: 0,
+      voxelTopography: {
+        amplitudeCells: 0,
+        component: "magnitude",
+        enabled: false,
+      },
+    });
+
+    expect(result.vectorCellIndices).toEqual(new Uint32Array([0, 26]));
+  });
+
+  it("lifts Surface vector segments along the target normal when enabled", () => {
+    const realizedRegionIds = new Uint32Array(27);
+    realizedRegionIds.fill(FMRM_INACTIVE_REGION_ID);
+    const result = buildFdmVectorSegmentsFromAnchors({
+      anchorMode: "center",
+      anchors: new Float32Array([0.5, 0.5, 0.5]),
+      cellIndices: new Uint32Array([0]),
+      fieldVector: fieldVector(
+        Array.from({ length: 27 }, () => [1, 0, 0]).flat(),
+      ),
+      geometryScope: "surface",
+      gridShape: [3, 3, 3],
+      maxVectors: 1,
+      realizedRegionIds,
+      scale: 1,
+      cellSelection: "inactive",
+      surfaceOffsetEnabled: true,
+      surfaceOffsetScale: 0.25,
+    } as Parameters<typeof buildFdmVectorSegmentsFromAnchors>[0]);
+
+    const normalComponent = 1 / Math.sqrt(3);
+    const offsetDistance = 0.5 + 0.25;
+    const shiftedAnchor = 0.5 - normalComponent * offsetDistance;
+    expect(result?.segments[0]).toBeCloseTo(shiftedAnchor - 0.5);
+    expect(result?.segments[1]).toBeCloseTo(shiftedAnchor);
+    expect(result?.segments[2]).toBeCloseTo(shiftedAnchor);
+    expect(result?.segments[3]).toBeCloseTo(shiftedAnchor + 0.5);
+    expect(result?.segments[4]).toBeCloseTo(shiftedAnchor);
+    expect(result?.segments[5]).toBeCloseTo(shiftedAnchor);
   });
 
   it("fails closed for an all-cell pass without an exact FMRM mask", () => {

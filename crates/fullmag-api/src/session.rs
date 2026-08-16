@@ -8,6 +8,11 @@ use crate::router_v2::handlers::data::field_resolution::{
     json_field_grid, json_field_matches_current_domain, json_field_payload_signature,
     live_magnetization_values_ref,
 };
+use crate::router_v2::handlers::data::fields::{
+    load_fdm_multilayer_airbox_carrier, resolved_fdm_multilayer_airbox_field,
+};
+use crate::router_v2::handlers::data::resolved_spatial_field::resolve_current_spatial_field;
+use crate::router_v2::handlers::sessions::status::domain_generation_id;
 use crate::types::*;
 use fullmag_runner::{LivePreviewField, RuntimeStatus};
 use serde_json::{json, Value};
@@ -146,8 +151,9 @@ fn infer_dispatched_command_completion(
             Some(CommandCompletionState::Failed)
         }
         "compute_fields"
-            if command_has_terminal_log(record, snapshot, "Field snapshots computed")
-                || snapshot_has_field_readback(snapshot) =>
+            if command_readiness_matches_requirements(record, snapshot)
+                .ok()
+                .is_some_and(|ready| ready) =>
         {
             Some(CommandCompletionState::Completed)
         }
@@ -237,8 +243,101 @@ fn command_has_terminal_log(
         .any(|entry| entry.timestamp_unix_ms >= min_timestamp && entry.message.contains(marker))
 }
 
-fn snapshot_has_field_readback(snapshot: &SessionStateResponse) -> bool {
-    snapshot.latest_fields.len() > 0 || snapshot.preview_cache.iter().next().is_some()
+pub(crate) fn command_readiness_matches_requirements(
+    record: &TrackedCommandRecord,
+    snapshot: &SessionStateResponse,
+) -> Result<bool, String> {
+    if record.command.kind != "compute_fields" {
+        return Ok(true);
+    }
+    let requirements = &record.command.field_materialization_requirements;
+    if requirements.is_empty() {
+        return Ok(false);
+    }
+    let current_generation = domain_generation_id(snapshot);
+    for requirement in requirements {
+        if requirement.generation_id != current_generation {
+            return Ok(false);
+        }
+        if requirement.quantity_ids.is_empty() {
+            return Err(format!(
+                "field materialization requirement for scope '{}' has no quantities",
+                requirement.scope_kind
+            ));
+        }
+        for quantity_id in &requirement.quantity_ids {
+            let quantity = fullmag_quantities::quantity_spec(quantity_id)
+                .ok_or_else(|| format!("unknown materialization quantity '{quantity_id}'"))?;
+            if let Some(status) = snapshot.live_state.as_ref().and_then(|state| {
+                state
+                    .latest_step
+                    .field_materialization_states
+                    .iter()
+                    .rev()
+                    .find(|status| status.quantity == *quantity_id)
+            }) {
+                if status.state != fullmag_runner::LiveFieldMaterializationState::Complete {
+                    return Ok(false);
+                }
+            }
+
+            match requirement.scope_kind.as_str() {
+                "full" => {
+                    if requirement.scope_id.is_some() || requirement.carrier_fingerprint.is_some() {
+                        return Err(
+                            "full-domain materialization requirement has an invalid scope identity"
+                                .to_string(),
+                        );
+                    }
+                    let resolved = resolve_current_spatial_field(
+                        snapshot,
+                        quantity_id,
+                        quantity.n_comp as usize,
+                    )
+                    .map_err(|error| error.to_string())?;
+                    if resolved.is_none() {
+                        return Ok(false);
+                    }
+                }
+                "airbox" => {
+                    if requirement.scope_id.as_deref() != Some("airbox") {
+                        return Err(
+                            "Airbox materialization requirement has an invalid scope identity"
+                                .to_string(),
+                        );
+                    }
+                    let Some(carrier) = load_fdm_multilayer_airbox_carrier(snapshot)
+                        .map_err(|error| format!("Airbox carrier resolution failed: {error}"))?
+                    else {
+                        return Ok(false);
+                    };
+                    if !carrier.published_quantities.contains(quantity_id)
+                        || carrier.unavailable_quantities.contains_key(quantity_id)
+                    {
+                        return Ok(false);
+                    }
+                    if requirement
+                        .carrier_fingerprint
+                        .as_deref()
+                        .is_some_and(|expected| expected != carrier.carrier_fingerprint)
+                    {
+                        return Ok(false);
+                    }
+                    resolved_fdm_multilayer_airbox_field(
+                        snapshot,
+                        quantity_id,
+                        quantity.n_comp as usize,
+                        &carrier,
+                    )
+                    .map_err(|error| error.to_string())?;
+                }
+                other => {
+                    return Err(format!("unsupported field materialization scope '{other}'"));
+                }
+            }
+        }
+    }
+    Ok(true)
 }
 
 fn snapshot_runtime_accepts_commands(snapshot: &SessionStateResponse) -> bool {
@@ -3018,12 +3117,28 @@ mod tests {
     #[test]
     fn snapshot_reconciliation_marks_compute_commands_terminal() {
         let mut current = test_current_snapshot();
+        current.metadata = Some(json!({
+            "artifact_layout": {
+                "backend": "fdm",
+                "grid_cells": [1, 1, 1]
+            }
+        }));
         current.latest_fields =
             serde_json::from_value(json!({"m": {"generation": 1}})).expect("valid fields fixture");
         current.scalar_rows.push(scalar_row(1, 2.0));
 
+        let mut fields_command = tracked_command("cmd-fields", "compute_fields");
+        fields_command.command.field_materialization_requirements =
+            vec![crate::schemas::runtime::FieldMaterializationRequirement {
+                quantity_ids: vec!["m".to_string()],
+                scope_kind: "full".to_string(),
+                scope_id: None,
+                generation_id: domain_generation_id(&current),
+                carrier_fingerprint: None,
+            }];
+        merge_cached_preview_fields(&mut current.preview_cache, vec![preview_field("m")]);
         let mut ledger = VecDeque::from([
-            tracked_command("cmd-fields", "compute_fields"),
+            fields_command,
             tracked_command("cmd-energies", "compute_energies"),
         ]);
 
@@ -3164,25 +3279,115 @@ mod tests {
     }
 
     #[test]
-    fn snapshot_reconciliation_marks_compute_fields_terminal_from_preview_cache() {
+    fn snapshot_reconciliation_does_not_complete_compute_fields_from_unrelated_preview_cache() {
         let mut current = test_current_snapshot();
         merge_cached_preview_fields(&mut current.preview_cache, vec![preview_field("m")]);
 
         let mut ledger = VecDeque::from([tracked_command("cmd-fields", "compute_fields")]);
 
-        assert!(reconcile_dispatched_command_ledger_from_snapshot(
+        assert!(!reconcile_dispatched_command_ledger_from_snapshot(
             &mut ledger,
             &current,
             1_700_000_002_000
         ));
 
         let record = ledger.front().expect("ledger record should remain");
-        assert_eq!(record.status, CommandLifecycleState::Completed);
+        assert_eq!(record.status, CommandLifecycleState::Dispatched);
+        assert_eq!(record.completion_status, None);
+        assert_eq!(record.completed_at_unix_ms, None);
+    }
+
+    #[test]
+    fn snapshot_reconciliation_requires_each_requested_quantity_for_current_generation() {
+        let mut current = test_current_snapshot();
+        current.metadata = Some(json!({
+            "artifact_layout": {
+                "backend": "fdm",
+                "grid_cells": [1, 1, 1]
+            }
+        }));
+        let generation_id = domain_generation_id(&current);
+        let mut command = session_command("cmd-fields", "compute_fields");
+        command.field_materialization_requirements =
+            vec![crate::schemas::runtime::FieldMaterializationRequirement {
+                quantity_ids: vec!["H_demag".to_string()],
+                scope_kind: "full".to_string(),
+                scope_id: None,
+                generation_id,
+                carrier_fingerprint: None,
+            }];
+        merge_cached_preview_fields(&mut current.preview_cache, vec![preview_field("m")]);
+        let mut ledger = VecDeque::from([TrackedCommandRecord {
+            command,
+            request_id: None,
+            status: CommandLifecycleState::Dispatched,
+            dispatched_at_unix_ms: Some(1_700_000_000_500),
+            completed_at_unix_ms: None,
+            completion_status: None,
+            error: None,
+        }]);
+
+        assert!(!reconcile_dispatched_command_ledger_from_snapshot(
+            &mut ledger,
+            &current,
+            1_700_000_002_000
+        ));
+
+        merge_cached_preview_fields(&mut current.preview_cache, vec![preview_field("H_demag")]);
+        assert!(reconcile_dispatched_command_ledger_from_snapshot(
+            &mut ledger,
+            &current,
+            1_700_000_003_000
+        ));
         assert_eq!(
-            record.completion_status,
+            ledger.front().and_then(|record| record.completion_status),
             Some(CommandCompletionState::Completed)
         );
-        assert_eq!(record.completed_at_unix_ms, Some(1_700_000_002_000));
+    }
+
+    #[test]
+    fn snapshot_reconciliation_does_not_accept_pending_materialization_status() {
+        let mut current = test_current_snapshot();
+        let generation_id = domain_generation_id(&current);
+        let mut command = session_command("cmd-fields", "compute_fields");
+        command.field_materialization_requirements =
+            vec![crate::schemas::runtime::FieldMaterializationRequirement {
+                quantity_ids: vec!["H_demag".to_string()],
+                scope_kind: "full".to_string(),
+                scope_id: None,
+                generation_id,
+                carrier_fingerprint: None,
+            }];
+        merge_cached_preview_fields(&mut current.preview_cache, vec![preview_field("H_demag")]);
+        let mut live_state = live_state_with_magnetization(0, vec![1.0, 0.0, 0.0]);
+        live_state.latest_step.field_materialization_states =
+            vec![fullmag_runner::LiveFieldMaterializationStatus {
+                quantity: "H_demag".to_string(),
+                source_step: 0,
+                request_revision: 1,
+                state: fullmag_runner::LiveFieldMaterializationState::Pending,
+                error: None,
+            }];
+        current.live_state = Some(live_state);
+        let mut ledger = VecDeque::from([TrackedCommandRecord {
+            command,
+            request_id: None,
+            status: CommandLifecycleState::Dispatched,
+            dispatched_at_unix_ms: Some(1_700_000_000_500),
+            completed_at_unix_ms: None,
+            completion_status: None,
+            error: None,
+        }]);
+
+        assert!(!reconcile_dispatched_command_ledger_from_snapshot(
+            &mut ledger,
+            &current,
+            1_700_000_002_000
+        ));
+        assert_eq!(
+            ledger.front().map(|record| record.status),
+            Some(CommandLifecycleState::Dispatched)
+        );
     }
 
     #[test]
@@ -3544,6 +3749,7 @@ mod tests {
             preview_config: None,
             stages: None,
             profile: None,
+            field_materialization_requirements: Vec::new(),
         }
     }
 

@@ -856,8 +856,14 @@ impl InteractiveRuntimeHost {
             apply_continuation_initial_state(&mut problem, previous_final_magnetization)?;
         }
         let quantities = fullmag_runner::quantities::field_materialization_quantity_ids();
-        let cached_fields =
-            fullmag_runner::snapshot_problem_vector_fields(&problem, &quantities, &request)?;
+        let materialization_request = full_field_materialization_request(request.clone());
+        let batch = fullmag_runner::snapshot_problem_vector_field_batch(
+            &problem,
+            &quantities,
+            &materialization_request,
+        )?;
+        live_workspace.replace_auxiliary_artifacts(&batch.auxiliary_artifacts)?;
+        let cached_fields = batch.fields;
         let requested_quantity =
             fullmag_runner::quantities::normalize_quantity_id(&request.quantity)
                 .map_err(|error| anyhow!(error.to_string()))?

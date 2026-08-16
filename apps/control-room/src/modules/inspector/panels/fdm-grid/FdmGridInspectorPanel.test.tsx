@@ -1,8 +1,6 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
-import { DEFAULT_FDM_UNIVERSE_OUTSIDE_SUPPORT_VISUALIZATION } from "@/kernel/visualization/ObjectVisualizationController";
-
 import { FdmGridInspectorPanelView } from "./FdmGridInspectorPanel";
 import type {
   FdmGridInspectorModel,
@@ -223,7 +221,7 @@ describe("FdmGridInspectorPanelView", () => {
     expect(html).not.toContain("Active cells");
   });
 
-  it("exposes structured-grid display controls and every owner/region for the universe outside support", () => {
+  it("delegates Airbox visualization to the shared target editor", () => {
     const html = renderToStaticMarkup(
       <FdmGridInspectorPanelView
         detail={selectionDetail({
@@ -237,20 +235,19 @@ describe("FdmGridInspectorPanelView", () => {
             inactiveCellCount: 8,
           },
         })}
-        displaySettings={{
-          ...DEFAULT_FDM_UNIVERSE_OUTSIDE_SUPPORT_VISUALIZATION,
-          visible: true,
-          boundsVisible: true,
-          wireframeVisible: true,
-        }}
         model={readyModel()}
-        onDisplayPatch={() => undefined}
+        universeVisualizationControls={(
+          <div data-testid="canonical-airbox-visualization-controls">
+            Canonical target controls
+          </div>
+        )}
       />,
     );
 
-    expect(html).toContain("Airbox · Visualization");
-    expect(html).toContain("Universe/support bounds opacity");
-    expect(html).toContain("Grid wireframe opacity");
+    expect(html).toContain("canonical-airbox-visualization-controls");
+    expect(html).not.toContain("Airbox · Visualization");
+    expect(html).not.toContain("Universe/support bounds opacity");
+    expect(html).not.toContain("Grid wireframe opacity");
     expect(html).toContain("Owner: object:core · Region: region:core");
     expect(html).not.toMatch(/Gmsh|hmax|hmin|tet|quality|Build|FEM|shared-domain/i);
   });

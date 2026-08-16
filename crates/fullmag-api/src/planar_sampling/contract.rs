@@ -6,8 +6,6 @@ pub(crate) const MAX_PLANAR_SAMPLE_POINTS: u32 = 1_048_576;
 
 #[derive(Debug, Clone)]
 pub(crate) struct ResolvedPlanarSampleRequest {
-    pub monitor_id: String,
-    pub monitor_hash: String,
     pub frame: PlanarFrameIR,
     pub operator: PlanarOperatorIR,
     pub resolution: [u32; 2],
@@ -71,8 +69,6 @@ pub(crate) enum Occupancy {
 pub(crate) struct PlanarSampleMeta {
     pub sampler_version: &'static str,
     pub sampling_method: &'static str,
-    pub monitor_id: String,
-    pub monitor_hash: String,
     pub bounds_uv_m: [f64; 4],
     pub resolution: [u32; 2],
     pub occupied_count: u32,

@@ -1,4 +1,5 @@
 use std::collections::{BTreeMap, HashMap, VecDeque};
+use std::io::Write;
 use std::path::{Component, Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{mpsc, Arc, Mutex, OnceLock};
@@ -30,6 +31,7 @@ use crate::types::*;
 /// Call `init_feature_flags()` early in `run_script_mode()` to populate.
 static FEATURE_FLAGS: OnceLock<FeatureFlags> = OnceLock::new();
 static NEXT_TERMINAL_FIELD_GENERATION_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+const FDM_MULTILAYER_AIRBOX_MANIFEST: &str = "fields/H_demag/airbox/manifest.json";
 
 /// Initialize the global feature flags. Call once early in startup.
 pub(crate) fn init_feature_flags(flags: FeatureFlags) {
@@ -374,9 +376,9 @@ impl LocalLiveWorkspace {
     }
 
     /// Atomically publish auxiliary field carriers after a successful
-    /// on-demand materialization. Samples are replaced before the manifest so
-    /// readers never observe a manifest pointing at an incomplete payload;
-    /// an earlier carrier remains intact if materialization fails upstream.
+    /// on-demand materialization. Airbox payloads are written below an
+    /// immutable generation directory and the manifest is the final atomic
+    /// pointer, so readers never observe a mixed manifest/payload pair.
     pub fn replace_auxiliary_artifacts(
         &self,
         artifacts: &[fullmag_runner::AuxiliaryArtifact],
@@ -385,52 +387,65 @@ impl LocalLiveWorkspace {
             return Ok(());
         }
         let artifact_dir = self.current_artifact_dir()?;
-        let mut ordered = artifacts.iter().collect::<Vec<_>>();
-        ordered.sort_by_key(|artifact| artifact.relative_path.ends_with("/manifest.json"));
-        let targets = ordered
-            .into_iter()
+        let validated = artifacts
+            .iter()
             .map(|artifact| {
                 let relative = Path::new(&artifact.relative_path);
-                if relative.is_absolute()
-                    || relative.components().any(|component| {
-                        matches!(
-                            component,
-                            Component::ParentDir | Component::RootDir | Component::Prefix(_)
-                        )
-                    })
-                {
-                    return Err(anyhow!(
-                        "refusing unsafe auxiliary artifact path '{}'",
-                        artifact.relative_path
-                    ));
+                validate_auxiliary_relative_path(relative, &artifact.relative_path)?;
+                if relative.as_os_str().is_empty() {
+                    return Err(anyhow!("auxiliary artifact path is empty"));
                 }
-                let target = artifact_dir.join(relative);
-                let parent = target
-                    .parent()
-                    .ok_or_else(|| anyhow!("auxiliary artifact has no parent"))?
-                    .to_path_buf();
-                Ok((artifact, target, parent))
+                Ok((artifact, relative.to_path_buf()))
             })
             .collect::<Result<Vec<_>>>()?;
-        for (artifact, target, parent) in targets {
-            std::fs::create_dir_all(&parent)?;
-            let sequence = NEXT_TERMINAL_FIELD_GENERATION_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+        let mut seen_paths = std::collections::BTreeSet::new();
+        if validated
+            .iter()
+            .any(|(_, relative)| !seen_paths.insert(relative.to_string_lossy().into_owned()))
+        {
+            return Err(anyhow!("duplicate auxiliary artifact path"));
+        }
+
+        let publication_sequence = NEXT_TERMINAL_FIELD_GENERATION_SEQUENCE
+            .fetch_add(1, Ordering::Relaxed)
+            .saturating_add(1);
+        let mut prepared = validated
+            .iter()
+            .map(|(artifact, relative)| PreparedAuxiliaryArtifact {
+                relative_path: relative.clone(),
+                bytes: artifact.bytes.clone(),
+                is_manifest: relative
+                    .to_string_lossy()
+                    .replace('\\', "/")
+                    .ends_with("/manifest.json"),
+            })
+            .collect::<Vec<_>>();
+        prepare_airbox_generation(&mut prepared, publication_sequence)?;
+        prepared.sort_by_key(|artifact| artifact.is_manifest);
+
+        for artifact in prepared {
+            let target = artifact_dir.join(&artifact.relative_path);
+            let parent = target
+                .parent()
+                .ok_or_else(|| anyhow!("auxiliary artifact has no parent"))?;
+            std::fs::create_dir_all(parent)?;
             let file_name = target
                 .file_name()
                 .and_then(|name| name.to_str())
                 .ok_or_else(|| anyhow!("auxiliary artifact file name is not UTF-8"))?;
             let temporary = parent.join(format!(
-                ".{file_name}.tmp-{}-{sequence}",
+                ".{file_name}.tmp-{}-{publication_sequence}",
                 std::process::id()
             ));
-            std::fs::write(&temporary, &artifact.bytes)?;
+            let mut file = std::fs::File::create(&temporary)?;
+            file.write_all(&artifact.bytes)?;
+            file.sync_all()?;
             std::fs::rename(&temporary, &target)?;
         }
         if let Ok(mut state) = self.state.lock() {
             state.field_generation = Some(CurrentLiveFieldGeneration {
                 run_id: state.run.run_id.clone(),
-                sequence: NEXT_TERMINAL_FIELD_GENERATION_SEQUENCE.fetch_add(1, Ordering::Relaxed)
-                    + 1,
+                sequence: publication_sequence,
             });
             state.advance_preview_cache_revision();
         }
@@ -1791,6 +1806,88 @@ fn live_api_publish_enabled(port: u16) -> bool {
     port != 0
 }
 
+struct PreparedAuxiliaryArtifact {
+    relative_path: PathBuf,
+    bytes: Vec<u8>,
+    is_manifest: bool,
+}
+
+fn validate_auxiliary_relative_path(relative: &Path, display: &str) -> Result<()> {
+    if relative.is_absolute()
+        || relative.components().any(|component| {
+            matches!(
+                component,
+                Component::ParentDir | Component::RootDir | Component::Prefix(_)
+            )
+        })
+    {
+        return Err(anyhow!(
+            "refusing unsafe auxiliary artifact path '{display}'"
+        ));
+    }
+    Ok(())
+}
+
+fn path_to_artifact_string(path: &Path) -> String {
+    path.to_string_lossy().replace('\\', "/")
+}
+
+fn prepare_airbox_generation(
+    prepared: &mut [PreparedAuxiliaryArtifact],
+    publication_sequence: u64,
+) -> Result<()> {
+    let manifest_path = Path::new(FDM_MULTILAYER_AIRBOX_MANIFEST);
+    let Some(manifest_index) = prepared
+        .iter()
+        .position(|artifact| artifact.relative_path == manifest_path)
+    else {
+        return Ok(());
+    };
+    let mut manifest: serde_json::Value =
+        serde_json::from_slice(&prepared[manifest_index].bytes)
+            .map_err(|error| anyhow!("Airbox manifest is not valid JSON: {error}"))?;
+    let field_artifact = manifest
+        .get("field_artifact")
+        .and_then(serde_json::Value::as_str)
+        .filter(|path| !path.is_empty())
+        .ok_or_else(|| anyhow!("Airbox manifest field_artifact is missing"))?
+        .to_string();
+    let field_artifact_path = Path::new(&field_artifact);
+    validate_auxiliary_relative_path(field_artifact_path, &field_artifact)?;
+    let airbox_parent = manifest_path
+        .parent()
+        .ok_or_else(|| anyhow!("Airbox manifest has no parent"))?;
+    let payload_path = airbox_parent.join(field_artifact_path);
+    let Some(payload_index) = prepared
+        .iter()
+        .position(|artifact| artifact.relative_path == payload_path)
+    else {
+        return Err(anyhow!(
+            "Airbox manifest payload '{}' is not part of the publication",
+            payload_path.display()
+        ));
+    };
+    if payload_index == manifest_index {
+        return Err(anyhow!("Airbox manifest field_artifact points to itself"));
+    }
+
+    let generation_name = format!("generation-{publication_sequence}");
+    let generation_relative = Path::new("generations")
+        .join(&generation_name)
+        .join(field_artifact_path);
+    let generation_payload_path = airbox_parent.join(&generation_relative);
+    validate_auxiliary_relative_path(
+        &generation_payload_path,
+        &generation_payload_path.display().to_string(),
+    )?;
+    let generation_field_artifact = path_to_artifact_string(&generation_relative);
+    manifest["field_artifact"] = serde_json::Value::String(generation_field_artifact);
+    prepared[manifest_index].bytes = serde_json::to_vec_pretty(&manifest)
+        .map_err(|error| anyhow!("Airbox manifest serialization failed: {error}"))?;
+    prepared[payload_index].relative_path = generation_payload_path;
+    Ok(())
+}
+
 pub(crate) fn full_field_materialization_request(
     mut request: fullmag_runner::LivePreviewRequest,
 ) -> fullmag_runner::LivePreviewRequest {
@@ -1807,6 +1904,7 @@ pub(crate) fn full_field_materialization_request(
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
+    use std::sync::atomic::Ordering;
     use std::sync::{Arc, Mutex};
     use std::time::Instant;
 
@@ -2169,7 +2267,8 @@ mod tests {
         let artifacts = vec![
             fullmag_runner::AuxiliaryArtifact {
                 relative_path: "fields/H_demag/airbox/manifest.json".to_string(),
-                bytes: br#"{"scope_kind":"airbox"}"#.to_vec(),
+                bytes: br#"{"scope_kind":"airbox","field_artifact":"H_demag.samples.v1.json"}"#
+                    .to_vec(),
             },
             fullmag_runner::AuxiliaryArtifact {
                 relative_path: "fields/H_demag/airbox/H_demag.samples.v1.json".to_string(),
@@ -2181,16 +2280,27 @@ mod tests {
             .replace_auxiliary_artifacts(&artifacts)
             .expect("Airbox artifacts should be persisted");
 
-        assert_eq!(
-            std::fs::read(artifact_dir.join("fields/H_demag/airbox/manifest.json"))
+        let manifest: serde_json::Value = serde_json::from_slice(
+            &std::fs::read(artifact_dir.join("fields/H_demag/airbox/manifest.json"))
                 .expect("manifest should exist"),
-            artifacts[0].bytes
-        );
+        )
+        .expect("manifest should remain valid JSON");
+        let field_artifact = manifest["field_artifact"]
+            .as_str()
+            .expect("manifest should point to a field artifact");
+        assert!(field_artifact.starts_with("generations/generation-"));
         assert_eq!(
-            std::fs::read(artifact_dir.join("fields/H_demag/airbox/H_demag.samples.v1.json"))
-                .expect("samples should exist"),
+            std::fs::read(
+                artifact_dir
+                    .join("fields/H_demag/airbox")
+                    .join(field_artifact),
+            )
+            .expect("generation payload should exist"),
             artifacts[1].bytes
         );
+        assert!(!artifact_dir
+            .join("fields/H_demag/airbox/H_demag.samples.v1.json")
+            .exists());
         let snapshot = workspace.snapshot();
         assert_eq!(snapshot.preview_cache_revision, initial_revision + 1);
         assert_eq!(
@@ -2212,6 +2322,95 @@ mod tests {
             "atomic replacements must not leave temporary files"
         );
         std::fs::remove_dir_all(&artifact_dir).expect("clean Airbox artifact test directory");
+    }
+
+    #[test]
+    fn concurrent_airbox_readers_observe_only_complete_generations() {
+        let artifact_dir = std::env::temp_dir().join(format!(
+            "fullmag-airbox-concurrent-publication-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("system clock should follow unix epoch")
+                .as_nanos()
+        ));
+        let mut state = workspace_with_domain_mesh().snapshot();
+        state.run.artifact_dir = artifact_dir.display().to_string();
+        let workspace = std::sync::Arc::new(LocalLiveWorkspace::new(state, no_op_publisher()));
+        let publish_generation = |generation: u64| {
+            let manifest = serde_json::json!({
+                "scope_kind": "airbox",
+                "field_artifact": "H_demag.samples.v1.json",
+                "generation": generation,
+            });
+            let payload = serde_json::json!({ "generation": generation });
+            workspace
+                .replace_auxiliary_artifacts(&[
+                    fullmag_runner::AuxiliaryArtifact {
+                        relative_path: "fields/H_demag/airbox/manifest.json".to_string(),
+                        bytes: serde_json::to_vec(&manifest).expect("manifest should serialize"),
+                    },
+                    fullmag_runner::AuxiliaryArtifact {
+                        relative_path: "fields/H_demag/airbox/H_demag.samples.v1.json".to_string(),
+                        bytes: serde_json::to_vec(&payload).expect("payload should serialize"),
+                    },
+                ])
+                .expect("generation should publish");
+        };
+        publish_generation(0);
+        let reader_root = artifact_dir.join("fields/H_demag/airbox");
+        let reader_failure = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let readers = (0..4)
+            .map(|_| {
+                let root = reader_root.clone();
+                let failure = std::sync::Arc::clone(&reader_failure);
+                std::thread::spawn(move || {
+                    for _ in 0..400 {
+                        let manifest_bytes = match std::fs::read(root.join("manifest.json")) {
+                            Ok(bytes) => bytes,
+                            Err(_) => {
+                                failure.store(true, Ordering::Release);
+                                break;
+                            }
+                        };
+                        let manifest: serde_json::Value =
+                            match serde_json::from_slice(&manifest_bytes) {
+                                Ok(manifest) => manifest,
+                                Err(_) => {
+                                    failure.store(true, Ordering::Release);
+                                    break;
+                                }
+                            };
+                        let Some(field_artifact) = manifest["field_artifact"].as_str() else {
+                            failure.store(true, Ordering::Release);
+                            break;
+                        };
+                        let Ok(payload_bytes) = std::fs::read(root.join(field_artifact)) else {
+                            failure.store(true, Ordering::Release);
+                            break;
+                        };
+                        let Ok(payload) =
+                            serde_json::from_slice::<serde_json::Value>(&payload_bytes)
+                        else {
+                            failure.store(true, Ordering::Release);
+                            break;
+                        };
+                        if manifest["generation"] != payload["generation"] {
+                            failure.store(true, Ordering::Release);
+                            break;
+                        }
+                    }
+                })
+            })
+            .collect::<Vec<_>>();
+        for generation in 1..=20 {
+            publish_generation(generation);
+        }
+        for reader in readers {
+            reader.join().expect("reader should finish");
+        }
+        assert!(!reader_failure.load(Ordering::Acquire));
+        std::fs::remove_dir_all(&artifact_dir).expect("clean concurrent Airbox test directory");
     }
 
     #[test]

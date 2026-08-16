@@ -12,16 +12,19 @@ export interface DownloadAnchor {
 export function planarExportFilename({
   fieldRevision,
   monitorName,
+  sourceLabel,
   quantityId,
   unit,
 }: {
   fieldRevision: number | string;
-  monitorName: string;
+  monitorName?: string;
+  sourceLabel?: string;
   quantityId: string;
   unit: string;
 }): string {
+  const label = sourceLabel ?? monitorName ?? "default";
   return [
-    safeSlug(monitorName),
+    safeSlug(label),
     safeSlug(quantityId),
     `r${fieldRevision}`,
     safeSlug(unit),

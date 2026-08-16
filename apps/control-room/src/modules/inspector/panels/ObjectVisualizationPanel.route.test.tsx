@@ -21,6 +21,12 @@ vi.mock("@/kernel/KernelContext", () => ({
     },
     visualizationSync: {
       queuePatch: testState.queuePatch,
+      getSnapshot: () => ({
+        inflightTargetIds: [],
+        pendingTargetIds: [],
+        version: 0,
+      }),
+      subscribe: () => () => undefined,
     },
   }),
 }));
@@ -78,6 +84,12 @@ vi.mock("@/kernel/visualization/useVisualizationStateResource", () => ({
 
 vi.mock("@/kernel/resources/geometryLifecycleResources", () => ({
   useFdmMultilayerLayoutResource: () => ({
+    data: null,
+    error: null,
+    revision: null,
+    status: "idle",
+  }),
+  useFdmMultilayerLayerActiveMasksResource: () => ({
     data: null,
     error: null,
     revision: null,
