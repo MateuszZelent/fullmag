@@ -581,6 +581,48 @@ static bool upload_vector_field_aos_f64(
     return true;
 }
 
+/*
+ * Keep cell-wise static profiles independent from the Oersted role.  The
+ * legacy descriptor predates static H_ext and the two roles currently share
+ * the device allocation, but they must never share the enable flag or the
+ * descriptor pointer.  This helper owns the allocation/upload boundary for
+ * both roles; the caller decides which semantic role is enabled.
+ */
+static bool upload_cell_profile(
+    Context &ctx,
+    const double *field_xyz,
+    uint64_t len,
+    const char *label)
+{
+    const uint64_t expected_len = ctx.cell_count * 3u;
+    if (!field_xyz || len != expected_len) {
+        ctx.last_error = std::string(label) + " length mismatch";
+        return false;
+    }
+    for (uint64_t i = 0; i < len; ++i) {
+        if (!std::isfinite(field_xyz[i])) {
+            ctx.last_error = std::string(label) + " contains non-finite values";
+            return false;
+        }
+    }
+
+    const bool allocated = ctx.h_oe_static.x != nullptr
+        && ctx.h_oe_static.y != nullptr
+        && ctx.h_oe_static.z != nullptr;
+    if (!allocated) {
+        free_vector_field(ctx.h_oe_static);
+        if (!alloc_vector_field(ctx, ctx.h_oe_static)) {
+            return false;
+        }
+    }
+    return upload_vector_field_aos_f64(
+        ctx,
+        ctx.h_oe_static,
+        field_xyz,
+        ctx.cell_count,
+        label);
+}
+
 template <typename HostScalar>
 static bool upload_vector_field_aos_host(
     Context &ctx,
@@ -2949,40 +2991,7 @@ bool context_upload_oersted_field(Context &ctx, const double *field_xyz, uint64_
         ctx.last_error = "oersted_field_len mismatch";
         return false;
     }
-
-    const uint64_t n = ctx.cell_count;
-    std::vector<double> hx(n), hy(n), hz(n);
-    for (uint64_t i = 0; i < n; ++i) {
-        hx[i] = field_xyz[3u * i + 0];
-        hy[i] = field_xyz[3u * i + 1];
-        hz[i] = field_xyz[3u * i + 2];
-    }
-
-    const size_t bytes = n * scalar_size(ctx.precision);
-    cudaError_t err;
-    if (ctx.precision == FULLMAG_FDM_PRECISION_DOUBLE) {
-        err = cudaMemcpy(ctx.h_oe_static.x, hx.data(), bytes, cudaMemcpyHostToDevice);
-        if (err != cudaSuccess) { set_cuda_error(ctx, "cudaMemcpy(oersted_field_x)", err); return false; }
-        err = cudaMemcpy(ctx.h_oe_static.y, hy.data(), bytes, cudaMemcpyHostToDevice);
-        if (err != cudaSuccess) { set_cuda_error(ctx, "cudaMemcpy(oersted_field_y)", err); return false; }
-        err = cudaMemcpy(ctx.h_oe_static.z, hz.data(), bytes, cudaMemcpyHostToDevice);
-        if (err != cudaSuccess) { set_cuda_error(ctx, "cudaMemcpy(oersted_field_z)", err); return false; }
-    } else {
-        std::vector<float> hx_f(n), hy_f(n), hz_f(n);
-        for (uint64_t i = 0; i < n; ++i) {
-            hx_f[i] = static_cast<float>(hx[i]);
-            hy_f[i] = static_cast<float>(hy[i]);
-            hz_f[i] = static_cast<float>(hz[i]);
-        }
-        err = cudaMemcpy(ctx.h_oe_static.x, hx_f.data(), bytes, cudaMemcpyHostToDevice);
-        if (err != cudaSuccess) { set_cuda_error(ctx, "cudaMemcpy(oersted_field_x)", err); return false; }
-        err = cudaMemcpy(ctx.h_oe_static.y, hy_f.data(), bytes, cudaMemcpyHostToDevice);
-        if (err != cudaSuccess) { set_cuda_error(ctx, "cudaMemcpy(oersted_field_y)", err); return false; }
-        err = cudaMemcpy(ctx.h_oe_static.z, hz_f.data(), bytes, cudaMemcpyHostToDevice);
-        if (err != cudaSuccess) { set_cuda_error(ctx, "cudaMemcpy(oersted_field_z)", err); return false; }
-    }
-
-    return true;
+    return upload_cell_profile(ctx, field_xyz, len, "oersted_field");
 }
 
 bool context_mark_static_external_field_profile(
@@ -2995,15 +3004,17 @@ bool context_mark_static_external_field_profile(
             "static external field profile cannot be combined with OerstedCylinder";
         return false;
     }
-    if (!ctx.has_oersted_field || field_xyz == nullptr || len != ctx.cell_count * 3u) {
-        ctx.last_error = "static external field profile requires an uploaded cell-wise field";
+    if (ctx.has_oersted_field) {
+        ctx.last_error =
+            "static external field profile cannot reuse an Oersted field profile";
         return false;
     }
-    for (uint64_t i = 0; i < len; ++i) {
-        if (!std::isfinite(field_xyz[i])) {
-            ctx.last_error = "static external field profile contains non-finite values";
-            return false;
-        }
+    if (!field_xyz || len != ctx.cell_count * 3u) {
+        ctx.last_error = "static external field profile requires a cell-wise field";
+        return false;
+    }
+    if (!upload_cell_profile(ctx, field_xyz, len, "static external field profile")) {
+        return false;
     }
     ctx.has_static_external_field_profile = true;
     return true;

@@ -563,6 +563,10 @@
 - Modify: `justfile`
 - Create: `scripts/verify_fdm_gpu_racetrack_qualification.py`
 - Create: `scripts/test_verify_fdm_gpu_racetrack_qualification.py`
+- Create: `scripts/run_fdm_gpu_racetrack_qualification.py`
+- Create: `scripts/test_run_fdm_gpu_racetrack_qualification.py`
+- Create: `scripts/assemble_fdm_gpu_racetrack_qualification.py`
+- Create: `scripts/test_assemble_fdm_gpu_racetrack_qualification.py`
 - Modify: `docs/specs/capability-matrix-v0.json`
 - Modify: `docs/specs/capability-matrix-v0.md`
 - Modify: `docs/physics/0970-spin-hall-drift-diffusion-transport.md`
@@ -589,6 +593,20 @@
 - [ ] **Step 3: Dodać atomową recepturę produkcyjną**
 
   `verify-fdm-gpu-solved-current-racetrack-production` buduje natywny FDM/CUDA i CLI w zarządzanym kontenerze, zapisuje source snapshot, input hashes, GPU UUID, driver/runtime, build digest, wolną pamięć i descriptor-derived memory budget; uruchamia wszystkie kontrakty, convergence sweeps, publiczny workload, restart/determinism, MuMax comparison i validator. Artefakty tymczasowe kończą się `.tmp`; summary jest publikowane dopiero po pełnym PASS.
+
+  **Stan implementacji 2026-08-14:** dodano zarządzany launcher
+  `scripts/run_fdm_gpu_racetrack_qualification.py` z zamrożonym sześcioprądowym
+  workloadem oraz atomowy assembler
+  `scripts/assemble_fdm_gpu_racetrack_qualification.py`. Receptura wykrywa
+  zapisywalny managed-native mount (`/mnt/fullmag-zfn2-native-2` przed starszym
+  aliasem), uruchamia launcher i zapisuje blokujący summary, jeśli brakuje
+  niezależnych artefaktów bramek. Convergence sweeps, restart/determinism,
+  MuMax comparison i producenci wszystkich 12 gate artifacts pozostają do
+  wykonania; dlatego punkt pozostaje niezamknięty. Launcher wymusza także
+  `FULLMAG_ARTIFACT_FIELD_STORAGE=zarr`, a runner zapisuje regularne transportowe
+  snapshoty binarnie jako Zarr v2; JSON pozostaje domyślnym formatem poza tym
+  workloadem. Collector rozpoznaje oba formaty i nie podnosi statusu bramki na
+  podstawie samego istnienia plików.
 
 - [ ] **Step 4: Uruchomić pełną kwalifikację i przejrzeć dowody**
 

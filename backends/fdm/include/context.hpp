@@ -282,8 +282,8 @@ struct Context {
     // Oersted field (cylindrical conductor)
     bool has_oersted_field = false;
     bool has_oersted_cylinder = false;
-    // The shared AoS buffer may also carry a static external H_ext profile;
-    // this role is marked separately so observables never label it as H_OE.
+    // The shared device buffer may carry an Oersted or static H_ext profile;
+    // the role is marked separately so observables never label H_ext as H_OE.
     bool has_static_external_field_profile = false;
     double oersted_current = 0.0;        // DC current [A]
     double oersted_radius = 0.0;         // cylinder radius [m]
@@ -963,10 +963,10 @@ bool context_upload_cubic_anisotropy_fields(
 /// Must be called after context_alloc_device when has_oersted_cylinder is set.
 bool context_precompute_oersted_field(Context &ctx);
 
-/// Upload precomputed AoS Oersted field H_oe(x) [A/m] to the shared device buffer.
+/// Upload precomputed AoS Oersted field H_oe(x) [A/m] to the Oersted device buffer.
 bool context_upload_oersted_field(Context &ctx, const double *field_xyz, uint64_t len);
 
-/// Mark the already uploaded shared profile as a static external field H_ext.
+/// Upload and mark a cell-wise profile as static external field H_ext [A/m].
 bool context_mark_static_external_field_profile(
     Context &ctx,
     const double *field_xyz,

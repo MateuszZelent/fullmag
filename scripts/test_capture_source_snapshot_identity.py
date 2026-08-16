@@ -538,6 +538,29 @@ def test_snapshot_identity_digest_binds_schema(tmp_path: Path) -> None:
     assert before["source_snapshot_sha256"] != after["source_snapshot_sha256"]
 
 
+def test_qualification_input_is_bound_to_source_snapshot(tmp_path: Path) -> None:
+    repo = _repository(tmp_path)
+    fixture = repo / "fixture.v1.json"
+    fixture.write_text('{"drive": 1}\n', encoding="utf-8")
+    spec = importlib.util.spec_from_file_location("source_identity_qualification_input", CAPTURE)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+
+    before = module.capture(repo, qualification_inputs=("fixture.v1.json",))
+    assert before["qualification_inputs"] == [
+        {
+            "path": "fixture.v1.json",
+            "mode": module._normalized_mode(fixture.stat().st_mode),
+            "sha256": module._sha256(b'{"drive": 1}\n'),
+        }
+    ]
+    fixture.write_text('{"drive": 2}\n', encoding="utf-8")
+    after = module.capture(repo, qualification_inputs=("fixture.v1.json",))
+    assert before["source_snapshot_sha256"] != after["source_snapshot_sha256"]
+
+
 @pytest.mark.parametrize(
     ("links", "expected_detail"),
     [

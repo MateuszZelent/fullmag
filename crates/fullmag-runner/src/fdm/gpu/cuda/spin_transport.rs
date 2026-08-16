@@ -22,6 +22,8 @@ use std::collections::BTreeMap;
 use std::fmt;
 use std::mem::size_of;
 
+use crate::types::FdmGpuTransportTelemetry;
+
 const BASE_STATIC_DESCRIPTOR_FEATURES: u64 = ffi::FULLMAG_FDM_GPU_TRANSPORT_FEATURE_M1_CHARGE
     | ffi::FULLMAG_FDM_GPU_TRANSPORT_FEATURE_STEADY_SPIN;
 const BASE_CHECKPOINT_FEATURES: u64 =
@@ -29,6 +31,130 @@ const BASE_CHECKPOINT_FEATURES: u64 =
 
 const CHECKPOINT_HOST_BYTES_PER_CELL_LIMIT: u64 = 4096;
 const CHECKPOINT_HOST_FIXED_BYTES_LIMIT: u64 = 1 << 20;
+const BOUNDED_CONTROL_TRANSFER_BYTES: u64 = 4096;
+
+#[derive(Default)]
+struct GpuM1TransportTelemetryAccumulator {
+    cursor: u64,
+    record_count: u64,
+    hot_loop_host_device_transfers: u64,
+    hot_loop_device_to_device_transfers: u64,
+    hot_loop_host_sync_count: u64,
+    forbidden_transfer_bytes: u64,
+    allowed_control_h2d_records: u64,
+    allowed_control_h2d_bytes: u64,
+    allowed_scalar_d2h_records: u64,
+    allowed_scalar_d2h_bytes: u64,
+    solved_rhs_records: u64,
+    failed_records: u64,
+    accepted_steps: u64,
+}
+
+impl GpuM1TransportTelemetryAccumulator {
+    fn record(&mut self, value: &ffi::fullmag_fdm_gpu_transport_telemetry_v1) {
+        self.cursor = self.cursor.max(value.audit_sequence);
+        self.record_count = self.record_count.saturating_add(1);
+        if value.status != ffi::FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_STATUS_SUCCESS {
+            self.failed_records = self.failed_records.saturating_add(1);
+        }
+        if value.reason == ffi::FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_REASON_SOLVED_TRANSPORT_RHS
+            && value.direction == ffi::FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_DIRECTION_DEVICE_INTERNAL
+            && value.status == ffi::FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_STATUS_SUCCESS
+            && value.event_flags == 0
+            && value.bytes == 0
+            && value.count == 1
+            && value.attempt_id != 0
+            && value.stage_id != 0
+        {
+            self.solved_rhs_records = self.solved_rhs_records.saturating_add(1);
+        }
+        let hot_loop = value.attempt_id != 0 || value.stage_id != 0;
+        if !hot_loop {
+            return;
+        }
+        match value.direction {
+            ffi::FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_DIRECTION_D2D => {
+                self.hot_loop_device_to_device_transfers = self
+                    .hot_loop_device_to_device_transfers
+                    .saturating_add(value.count.max(1));
+            }
+            ffi::FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_DIRECTION_H2D
+                if value.reason
+                    == ffi::FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_REASON_CONTROL_STATE_H2D
+                    && value.status == ffi::FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_STATUS_SUCCESS
+                    && value.bytes > 0
+                    && value.bytes <= BOUNDED_CONTROL_TRANSFER_BYTES
+                    && value.count > 0 =>
+            {
+                self.allowed_control_h2d_records =
+                    self.allowed_control_h2d_records.saturating_add(1);
+                self.allowed_control_h2d_bytes =
+                    self.allowed_control_h2d_bytes.saturating_add(value.bytes);
+            }
+            ffi::FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_DIRECTION_D2H
+                if value.reason
+                    == ffi::FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_REASON_SCALAR_REDUCTION_D2H
+                    && value.status == ffi::FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_STATUS_SUCCESS
+                    && value.bytes > 0
+                    && value.bytes <= BOUNDED_CONTROL_TRANSFER_BYTES
+                    && value.count > 0 =>
+            {
+                self.allowed_scalar_d2h_records = self.allowed_scalar_d2h_records.saturating_add(1);
+                self.allowed_scalar_d2h_bytes =
+                    self.allowed_scalar_d2h_bytes.saturating_add(value.bytes);
+            }
+            ffi::FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_DIRECTION_H2D
+            | ffi::FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_DIRECTION_D2H => {
+                self.hot_loop_host_device_transfers =
+                    self.hot_loop_host_device_transfers.saturating_add(1);
+                self.forbidden_transfer_bytes =
+                    self.forbidden_transfer_bytes.saturating_add(value.bytes);
+            }
+            ffi::FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_DIRECTION_DEVICE_INTERNAL
+                if value.reason
+                    == ffi::FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_REASON_STREAM_SYNCHRONIZE =>
+            {
+                self.hot_loop_host_sync_count = self.hot_loop_host_sync_count.saturating_add(1);
+            }
+            _ => {}
+        }
+    }
+
+    fn summary(&self) -> FdmGpuTransportTelemetry {
+        let all_stage_records_present = self.accepted_steps > 0 && self.record_count > 0;
+        let torque_provenance =
+            if all_stage_records_present && self.solved_rhs_records >= self.accepted_steps {
+                "solved_transport"
+            } else {
+                "unknown"
+            };
+        let status = if all_stage_records_present
+            && self.failed_records == 0
+            && self.hot_loop_host_device_transfers == 0
+            && torque_provenance == "solved_transport"
+        {
+            "pass"
+        } else {
+            "blocked"
+        };
+        FdmGpuTransportTelemetry {
+            schema_version: "fdm_gpu_transport_telemetry_summary.v1".into(),
+            status: status.into(),
+            stage_count: 1,
+            record_count: self.record_count,
+            hot_loop_host_device_transfers: self.hot_loop_host_device_transfers,
+            hot_loop_device_to_device_transfers: self.hot_loop_device_to_device_transfers,
+            hot_loop_host_sync_count: self.hot_loop_host_sync_count,
+            forbidden_transfer_bytes: self.forbidden_transfer_bytes,
+            allowed_control_h2d_records: self.allowed_control_h2d_records,
+            allowed_control_h2d_bytes: self.allowed_control_h2d_bytes,
+            allowed_scalar_d2h_records: self.allowed_scalar_d2h_records,
+            allowed_scalar_d2h_bytes: self.allowed_scalar_d2h_bytes,
+            torque_provenance: torque_provenance.into(),
+            all_stage_records_present,
+        }
+    }
+}
 
 fn static_descriptor_features(
     interfaces: &[ffi::fullmag_fdm_gpu_transport_spin_interface_v1],
@@ -597,24 +723,93 @@ fn validate_frozen_gpu_m1_contract(
     plan: &fullmag_ir::ResolvedSpinTransportPlanIR,
     descriptor: &fullmag_ir::ResolvedFdmSpinTransportIR,
 ) -> Result<(), GpuM1TransportError> {
-    if plan.constitutive_version != "transport_constitutive.one_way.fullmag.v1"
-        || plan.operator_version != "fv_spin_upwind_v1"
-        || plan.physical_residual_version != "transport_balance_integrated_l2.v1"
-        || descriptor.charge_solver.engine != "cg"
-        || descriptor.charge_solver.operator_version != "fv_charge_harmonic_v1"
-        || descriptor.charge_solver.physical_residual_version != "charge_balance_integrated_l2.v1"
-        || descriptor.spin_solver.engine != "native_m1_v1"
-        || descriptor.spin_solver.operator_version != "fv_spin_upwind_v1"
-        || descriptor.spin_solver.physical_residual_version != "transport_balance_integrated_l2.v1"
-        || descriptor.spin_solver.default_external_boundary != "spin_insulating"
-        || descriptor.spin_solver.reciprocal_nonlinear.is_some()
-        || descriptor.torque_formula_version.as_deref()
-            != Some("transport_torque_angular_momentum.fullmag.v1")
-        || !valid_linear_policy(&descriptor.charge_solver.linear)
-        || !valid_linear_policy(&descriptor.spin_solver.linear)
+    let mut mismatches = Vec::new();
+    if plan.constitutive_version != "transport_constitutive.one_way.fullmag.v1" {
+        mismatches.push(format!(
+            "plan.constitutive_version={:?}",
+            plan.constitutive_version
+        ));
+    }
+    if plan.operator_version != "fv_spin_upwind_v1" {
+        mismatches.push(format!("plan.operator_version={:?}", plan.operator_version));
+    }
+    if plan.physical_residual_version != "transport_balance_integrated_l2.v1" {
+        mismatches.push(format!(
+            "plan.physical_residual_version={:?}",
+            plan.physical_residual_version
+        ));
+    }
+    if descriptor.charge_solver.engine != "cg" {
+        mismatches.push(format!(
+            "charge_solver.engine={:?}",
+            descriptor.charge_solver.engine
+        ));
+    }
+    if descriptor.charge_solver.operator_version != "fv_charge_harmonic_v1" {
+        mismatches.push(format!(
+            "charge_solver.operator_version={:?}",
+            descriptor.charge_solver.operator_version
+        ));
+    }
+    if descriptor.charge_solver.physical_residual_version != "charge_balance_integrated_l2.v1" {
+        mismatches.push(format!(
+            "charge_solver.physical_residual_version={:?}",
+            descriptor.charge_solver.physical_residual_version
+        ));
+    }
+    if descriptor.spin_solver.engine != "native_m1_v1" {
+        mismatches.push(format!(
+            "spin_solver.engine={:?}",
+            descriptor.spin_solver.engine
+        ));
+    }
+    if descriptor.spin_solver.operator_version != "fv_spin_upwind_v1" {
+        mismatches.push(format!(
+            "spin_solver.operator_version={:?}",
+            descriptor.spin_solver.operator_version
+        ));
+    }
+    if descriptor.spin_solver.physical_residual_version != "transport_balance_integrated_l2.v1" {
+        mismatches.push(format!(
+            "spin_solver.physical_residual_version={:?}",
+            descriptor.spin_solver.physical_residual_version
+        ));
+    }
+    if descriptor.spin_solver.default_external_boundary != "spin_insulating" {
+        mismatches.push(format!(
+            "spin_solver.default_external_boundary={:?}",
+            descriptor.spin_solver.default_external_boundary
+        ));
+    }
+    if descriptor.spin_solver.reciprocal_nonlinear.is_some() {
+        mismatches.push("spin_solver.reciprocal_nonlinear=Some".into());
+    }
+    if descriptor.torque_formula_version.as_deref()
+        != Some("transport_torque_angular_momentum.fullmag.v1")
     {
+        mismatches.push(format!(
+            "torque_formula_version={:?}",
+            descriptor.torque_formula_version
+        ));
+    }
+    if !valid_linear_policy(&descriptor.charge_solver.linear) {
+        mismatches.push(format!(
+            "charge_solver.linear={:?}",
+            descriptor.charge_solver.linear
+        ));
+    }
+    if !valid_linear_policy(&descriptor.spin_solver.linear) {
+        mismatches.push(format!(
+            "spin_solver.linear={:?}",
+            descriptor.spin_solver.linear
+        ));
+    }
+    if !mismatches.is_empty() {
         return Err(invalid(
-            "resolved GPU M1 solver/formula versions or linear policies do not match the frozen production registry",
+            format!(
+                "resolved GPU M1 solver/formula versions or linear policies do not match the frozen production registry: {}",
+                mismatches.join(", ")
+            ),
         ));
     }
     if descriptor.torque_target_masks.len() != 1
@@ -1228,6 +1423,13 @@ pub(crate) trait GpuM1TransportAbi {
         request: &fullmag_fdm_gpu_steady_spin_solve_request_v1,
     ) -> Result<fullmag_fdm_gpu_steady_spin_solve_result_v1, u32>;
 
+    fn query_telemetry(
+        &self,
+        context: fullmag_fdm_gpu_transport_context_handle_v1,
+        cursor: u64,
+        records: &mut [ffi::fullmag_fdm_gpu_transport_telemetry_v1],
+    ) -> Result<usize, u32>;
+
     fn readback_artifact(
         &self,
         request: &fullmag_fdm_gpu_transport_artifact_request_v1,
@@ -1330,6 +1532,7 @@ pub(crate) struct GpuM1TransportSession<A: GpuM1TransportAbi> {
     cell_count: u64,
     accepted_snapshot: Option<AcceptedChargeSnapshot>,
     accepted_spin_sequence: Option<u64>,
+    telemetry: GpuM1TransportTelemetryAccumulator,
 }
 
 impl<A: GpuM1TransportAbi> GpuM1TransportSession<A> {
@@ -1423,6 +1626,7 @@ impl<A: GpuM1TransportAbi> GpuM1TransportSession<A> {
             cell_count,
             accepted_snapshot: None,
             accepted_spin_sequence: None,
+            telemetry: GpuM1TransportTelemetryAccumulator::default(),
         })
     }
 
@@ -1762,7 +1966,34 @@ impl<A: GpuM1TransportAbi> GpuM1TransportSession<A> {
             .as_ref()
             .ok_or(GpuM1TransportError::ChargeSnapshotRequired)?;
         self.accepted_spin_sequence = Some(snapshot.accepted_sequence);
+        self.telemetry.accepted_steps = self.telemetry.accepted_steps.saturating_add(1);
+        self.refresh_telemetry()?;
         Ok(())
+    }
+
+    fn refresh_telemetry(&mut self) -> Result<(), GpuM1TransportError> {
+        let mut records = [ffi::fullmag_fdm_gpu_transport_telemetry_v1::default(); 128];
+        let count = self
+            .abi
+            .query_telemetry(self.context_handle(), self.telemetry.cursor, &mut records)
+            .map_err(|status| GpuM1TransportError::AbiFailure {
+                operation: "query_telemetry",
+                status,
+            })?;
+        if count > records.len() {
+            return Err(invalid("GPU M1 telemetry query returned too many records"));
+        }
+        for record in records.iter().take(count) {
+            self.telemetry.record(record);
+        }
+        Ok(())
+    }
+
+    pub(crate) fn transport_telemetry(
+        &mut self,
+    ) -> Result<FdmGpuTransportTelemetry, GpuM1TransportError> {
+        self.refresh_telemetry()?;
+        Ok(self.telemetry.summary())
     }
 
     pub(crate) fn accepted_sequence(&self) -> Result<u64, GpuM1TransportError> {
@@ -2118,6 +2349,31 @@ impl GpuM1TransportAbi for NativeGpuM1TransportAbi {
         (status == 0).then_some(result).ok_or(status)
     }
 
+    fn query_telemetry(
+        &self,
+        context: fullmag_fdm_gpu_transport_context_handle_v1,
+        cursor: u64,
+        records: &mut [ffi::fullmag_fdm_gpu_transport_telemetry_v1],
+    ) -> Result<usize, u32> {
+        let mut record_count = 0_u64;
+        let status = unsafe {
+            ffi::fullmag_fdm_gpu_transport_query_telemetry_v1(
+                context,
+                cursor,
+                records.as_mut_ptr(),
+                records.len() as u64,
+                &mut record_count,
+            )
+        };
+        if status != 0 {
+            return Err(status);
+        }
+        if record_count > records.len() as u64 {
+            return Ok(records.len().saturating_add(1));
+        }
+        Ok(record_count as usize)
+    }
+
     fn upload_static_descriptor(
         &self,
         context: fullmag_fdm_gpu_transport_context_handle_v1,
@@ -2260,5 +2516,100 @@ impl GpuM1TransportAbi for NativeGpuM1TransportAbi {
             )
         };
         (status == 0).then_some(()).ok_or(status)
+    }
+}
+#[cfg(test)]
+mod telemetry_tests {
+    use super::*;
+
+    fn record(
+        direction: u32,
+        reason: u32,
+        bytes: u64,
+        count: u64,
+        event_flags: u32,
+    ) -> ffi::fullmag_fdm_gpu_transport_telemetry_v1 {
+        ffi::fullmag_fdm_gpu_transport_telemetry_v1 {
+            direction,
+            reason,
+            status: ffi::FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_STATUS_SUCCESS,
+            event_flags,
+            bytes,
+            count,
+            attempt_id: 1,
+            stage_id: 1,
+            audit_sequence: 1,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn bounded_control_and_scalar_transfers_are_not_forbidden() {
+        let mut accumulator = GpuM1TransportTelemetryAccumulator {
+            accepted_steps: 1,
+            ..Default::default()
+        };
+        accumulator.record(&record(
+            ffi::FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_DIRECTION_H2D,
+            ffi::FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_REASON_CONTROL_STATE_H2D,
+            256,
+            1,
+            ffi::FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_EVENT_TRANSFER,
+        ));
+        accumulator.record(&record(
+            ffi::FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_DIRECTION_D2H,
+            ffi::FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_REASON_SCALAR_REDUCTION_D2H,
+            128,
+            1,
+            ffi::FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_EVENT_TRANSFER,
+        ));
+        accumulator.record(&record(
+            ffi::FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_DIRECTION_DEVICE_INTERNAL,
+            ffi::FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_REASON_SOLVED_TRANSPORT_RHS,
+            0,
+            1,
+            0,
+        ));
+
+        let summary = accumulator.summary();
+        assert_eq!(summary.status, "pass");
+        assert_eq!(summary.hot_loop_host_device_transfers, 0);
+        assert_eq!(summary.forbidden_transfer_bytes, 0);
+        assert_eq!(summary.allowed_control_h2d_records, 1);
+        assert_eq!(summary.allowed_control_h2d_bytes, 256);
+        assert_eq!(summary.allowed_scalar_d2h_records, 1);
+        assert_eq!(summary.allowed_scalar_d2h_bytes, 128);
+        assert_eq!(summary.torque_provenance, "solved_transport");
+    }
+
+    #[test]
+    fn oversized_control_transfer_blocks_without_losing_provenance_reason() {
+        let mut accumulator = GpuM1TransportTelemetryAccumulator {
+            accepted_steps: 1,
+            ..Default::default()
+        };
+        accumulator.record(&record(
+            ffi::FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_DIRECTION_H2D,
+            ffi::FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_REASON_CONTROL_STATE_H2D,
+            BOUNDED_CONTROL_TRANSFER_BYTES + 1,
+            1,
+            ffi::FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_EVENT_TRANSFER,
+        ));
+        accumulator.record(&record(
+            ffi::FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_DIRECTION_DEVICE_INTERNAL,
+            ffi::FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_REASON_SOLVED_TRANSPORT_RHS,
+            0,
+            1,
+            0,
+        ));
+
+        let summary = accumulator.summary();
+        assert_eq!(summary.status, "blocked");
+        assert_eq!(summary.hot_loop_host_device_transfers, 1);
+        assert_eq!(
+            summary.forbidden_transfer_bytes,
+            BOUNDED_CONTROL_TRANSFER_BYTES + 1
+        );
+        assert_eq!(summary.torque_provenance, "solved_transport");
     }
 }

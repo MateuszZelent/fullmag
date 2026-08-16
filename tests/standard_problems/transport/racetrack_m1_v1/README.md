@@ -73,10 +73,11 @@ celują w istniejące indeksy terminali `current_modules[0].boundaries[0]` i
 `[1]`; `boundaries[current_sweep]` nie jest polem ProblemIR.
 
 Pełny sześcioprzebiegowy workload nie jest jeszcze lowerowalny jako jeden
-publiczny `Problem`: obiekt HM i jego materiały charge/spin są reprezentowalne,
-ale brakuje mutacji BC między etapami i restartu każdego drive z nazwanego
-checkpointu. Te dwie luki są jawnie zapisane w `public_lowering_boundary`; harmonogram pozostaje
-kontraktem workflow fixture, a nie deklaracją bieżącej wykonywalności.
+niemutowalny `Problem`: neutralny obiekt HM typu `conductor`, jego region oraz
+materiały charge/spin są już reprezentowalne, natomiast mutacje BC między
+etapami i restart każdego drive z nazwanego checkpointu należą do jawnego
+kontraktu workflow. Te dwie granice pozostają zapisane w
+`public_lowering_boundary`; nie są ukrywane przez zmianę typu obiektu.
 
 `she_1d_film_v1` jest analitycznym oraklem direct-SHE/steady-spin, natomiast
 `skyrmion_hall_angle_v1` jest wersją algorytmu trajektorii, okna ruchu ustalonego
@@ -123,8 +124,9 @@ nie wolno go po cichu projekować, jeśli `m · T_tr_G != 0`. Manifest v1
 eksportu oddziela digest źródłowego `T_tr_G` (`s^-1`) od digestu wstrzykniętego
 `B_eq` (`T`), zapisuje `alpha`, `gamma_rad_s_T`, konwencję Gilberta i digest
 OVF. `common_limit.mx3` ustawia identyczne `GammaLL`, używa fixed-step Heuna
-oraz `TableSave`, `TableAutoSave(5e-12)` i `AutoSave(m, 5e-12)` dla jawnej
-kadencji próbkowania. Comparator v2 odrzuca dynamiczną rekalkulację torque,
+`FixDt=5e-14 s` oraz jawnych par `Steps(100)` + `TableSave()` + `Save(m)` dla
+próbek co `5e-12 s`; nie używa czasowego autosave jako dowodu kadencji.
+Comparator v2 odrzuca dynamiczną rekalkulację torque,
 brak jednego z digestów, różne jednostki, niecałkowitą relację
 `dt`/próbkowanie/czas przebiegu oraz inną literalną politykę demag. Receptura
 wiąże ponadto digest rzeczywiście wygenerowanego `table.txt` z manifestem

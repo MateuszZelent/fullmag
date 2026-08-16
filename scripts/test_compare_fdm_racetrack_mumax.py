@@ -7,6 +7,7 @@ import unittest
 
 SCRIPT = Path(__file__).with_name("compare_fdm_racetrack_mumax.py")
 EXPORTER = Path(__file__).with_name("export_fullmag_transport_torque_for_mumax.py")
+PARSER = Path(__file__).with_name("parse_mumax_common_limit.py")
 
 
 def load_module():
@@ -22,6 +23,15 @@ def load_exporter():
     spec = importlib.util.spec_from_file_location("export_fullmag_transport_torque_for_mumax", EXPORTER)
     if spec is None or spec.loader is None:
         raise RuntimeError("cannot load Fullmag transport torque exporter")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def load_parser():
+    spec = importlib.util.spec_from_file_location("parse_mumax_common_limit", PARSER)
+    if spec is None or spec.loader is None:
+        raise RuntimeError("cannot load MuMax common-limit parser")
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
@@ -131,6 +141,19 @@ def mumax_manifest(*, source_torque_digest: str = "source-torque-digest", beq_di
 
 
 class CompareFdmRacetrackMumaxTests(unittest.TestCase):
+    def test_parser_converts_centered_mumax_bubble_position_to_grid_frame(self) -> None:
+        parser = load_parser()
+        grid = {
+            "shape": [256, 64, 1],
+            "cell_size_m": [2.0e-9, 2.0e-9, 1.0e-9],
+            "origin_m": [0.0, 0.0, 0.0],
+        }
+        centre = parser._bubble_position_in_grid_frame(
+            {"ext_bubbleposx (m)": -1.0e-9, "ext_bubbleposy (m)": -1.0e-9}, grid
+        )
+        self.assertAlmostEqual(centre[0], 2.55e-7)
+        self.assertAlmostEqual(centre[1], 6.3e-8)
+
     def test_matching_common_limit_inputs_pass_with_named_metrics(self) -> None:
         module = load_module()
 

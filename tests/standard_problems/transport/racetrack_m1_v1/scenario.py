@@ -1,8 +1,8 @@
-"""Public solved-current skyrmion racetrack workload ``racetrack_m1_v1``.
+"""Base ProblemIR for the solved-current skyrmion racetrack fixture.
 
-This is the canonical positive-current member of the frozen workload.  It
-authors charge, direct SHE, steady spin accumulation and transport torque; it
-does not contain prescribed SOT/STT or an Oersted term.
+The immutable base problem deliberately carries zero terminal current.  The
+six signed solved-current runs, including checkpoint/restart semantics, are
+authored by the stage-first public example in ``examples/``.
 """
 
 from __future__ import annotations
@@ -15,7 +15,6 @@ TRACK_WIDTH = 128.0e-9
 HM_THICKNESS = 3.0e-9
 FM_THICKNESS = 1.0e-9
 CELL = (2.0e-9, 2.0e-9, 1.0e-9)
-CURRENT_DENSITY = 1.0e12
 OUTPUT_PERIOD = 5.0e-12
 DEFAULT_UNTIL = 2.0e-9
 
@@ -104,7 +103,7 @@ def build() -> fm.Problem:
                     _surface("hm", "x-", (-1.0, 0.0, 0.0)),
                     _surface("fm", "x-", (-1.0, 0.0, 0.0)),
                 ],
-                outward_current_density_Apm2=-CURRENT_DENSITY,
+                outward_current_density_Apm2=0.0,
             ),
             fm.NormalCurrentElectrode(
                 "terminal_x_plus",
@@ -112,7 +111,7 @@ def build() -> fm.Problem:
                     _surface("hm", "x+", (1.0, 0.0, 0.0)),
                     _surface("fm", "x+", (1.0, 0.0, 0.0)),
                 ],
-                outward_current_density_Apm2=CURRENT_DENSITY,
+                outward_current_density_Apm2=0.0,
             ),
             fm.ChargeInsulating("insulating_outer", charge_outer),
         ],
@@ -180,7 +179,7 @@ def build() -> fm.Problem:
     )
 
     return fm.Problem(
-        name="racetrack_m1_v1_positive_drive",
+        name="racetrack_m1_v1_base_drive",
         magnets=[magnet],
         auxiliary_geometries=[hm_geometry],
         energy=[

@@ -37,6 +37,33 @@ use std::thread::{self, JoinHandle};
 
 pub(crate) const DEFAULT_ARTIFACT_PIPELINE_CAPACITY: usize = 4;
 
+/// Storage for regular (host-materialized) field snapshots.
+///
+/// JSON remains the compatibility default.  The managed solved-current
+/// qualification explicitly selects Zarr so transport readback does not turn
+/// every sample into a multi-megabyte pretty-printed document.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FieldArtifactStorage {
+    Json,
+    Zarr,
+}
+
+fn configured_field_artifact_storage() -> Result<FieldArtifactStorage, RunError> {
+    match std::env::var("FULLMAG_ARTIFACT_FIELD_STORAGE")
+        .ok()
+        .as_deref()
+        .unwrap_or("json")
+    {
+        "json" => Ok(FieldArtifactStorage::Json),
+        "zarr" => Ok(FieldArtifactStorage::Zarr),
+        value => Err(RunError {
+            message: format!(
+                "unsupported FULLMAG_ARTIFACT_FIELD_STORAGE={value:?}; expected json or zarr"
+            ),
+        }),
+    }
+}
+
 #[derive(Debug, Clone, Default)]
 pub(crate) struct ArtifactPipelineSummary {
     pub scalar_rows_written: usize,
@@ -389,6 +416,7 @@ impl ArtifactPipeline {
             crate::physics_graph_execution::PhysicsGraphExecutionContext,
         >,
     ) -> Result<Self, RunError> {
+        let field_storage = configured_field_artifact_storage()?;
         fs::create_dir_all(&output_dir).map_err(|error| RunError {
             message: format!(
                 "failed to create artifact output directory '{}': {}",
@@ -427,10 +455,11 @@ impl ArtifactPipeline {
                     &autosave_root,
                     field_context,
                     rx,
-                    writer_queue_depth,
-                    writer_diagnostics,
-                    stage_autosave,
-                )
+                writer_queue_depth,
+                writer_diagnostics,
+                stage_autosave,
+                field_storage,
+            )
             })
             .map_err(|error| RunError {
                 message: format!("failed to spawn artifact writer thread: {}", error),
@@ -998,6 +1027,9 @@ struct ZarrFieldSeriesWriter {
     root_dir: PathBuf,
     zarray_path: PathBuf,
     info: NativeVectorSnapshotInfo,
+    component_order: String,
+    location: String,
+    scope: String,
     sample_count: usize,
     samples_writer: BufWriter<File>,
 }
@@ -1010,7 +1042,13 @@ impl ZarrFieldSeriesWriter {
         provenance: &ExecutionProvenance,
         observable: &str,
         info: NativeVectorSnapshotInfo,
+        component_order: impl Into<String>,
+        location: impl Into<String>,
+        scope: impl Into<String>,
     ) -> Result<Self, String> {
+        let component_order = component_order.into();
+        let location = location.into();
+        let scope = scope.into();
         let root_dir = fields_dir.join(format!("{observable}.zarr"));
         fs::create_dir_all(&root_dir).map_err(|error| {
             format!(
@@ -1021,10 +1059,12 @@ impl ZarrFieldSeriesWriter {
         })?;
 
         let zattrs_path = root_dir.join(".zattrs");
-        let component_order = if info.component_count == 1 {
+        let component_order_json = if info.component_count == 1 {
             serde_json::json!(["scalar"])
-        } else {
+        } else if component_order == "xyz" {
             serde_json::json!(["x", "y", "z"])
+        } else {
+            serde_json::Value::String(component_order.clone())
         };
         fs::write(
             &zattrs_path,
@@ -1032,8 +1072,11 @@ impl ZarrFieldSeriesWriter {
                 "observable": observable,
                 "unit": field_unit(observable),
                 "axes": ["sample", "component", "cell"],
-                "component_order": component_order,
+                "component_count": info.component_count,
+                "component_order": component_order_json,
                 "storage_layout": "soa_component_major",
+                "location": location,
+                "scope": scope,
                 "sample_index_file": "samples.csv",
                 "layout": context.layout.clone(),
                 "provenance": crate::artifacts::artifact_provenance_json(context, provenance),
@@ -1072,6 +1115,9 @@ impl ZarrFieldSeriesWriter {
             zarray_path: root_dir.join(".zarray"),
             root_dir,
             info,
+            component_order,
+            location,
+            scope,
             sample_count: 0,
             samples_writer,
         };
@@ -1085,13 +1131,13 @@ impl ZarrFieldSeriesWriter {
             .info()
             .map_err(|error| format!("failed to query CUDA snapshot info: {}", error.message))?;
         let name = snapshot.name.clone();
-        self.append_native_payload(
+        self.append_payload(
             name.as_str(),
             snapshot.step,
             snapshot.time,
             snapshot.solver_dt,
             info.into(),
-            |writer| snapshot.write_payload(writer).map(|_| ()),
+            |writer| snapshot.write_payload(writer).map(|_| ()).map_err(|error| error.message),
         )
     }
 
@@ -1104,17 +1150,54 @@ impl ZarrFieldSeriesWriter {
             )
         })?;
         let name = snapshot.name.clone();
-        self.append_native_payload(
+        self.append_payload(
             name.as_str(),
             snapshot.step,
             snapshot.time,
             snapshot.solver_dt,
             info.into(),
-            |writer| snapshot.write_payload(writer).map(|_| ()),
+            |writer| snapshot.write_payload(writer).map(|_| ()).map_err(|error| error.message),
         )
     }
 
-    fn append_native_payload<F>(
+    fn append_field_snapshot(&mut self, snapshot: &FieldSnapshot) -> Result<(), String> {
+        let component_count = usize::from(snapshot.component_count);
+        let cell_count = snapshot.sample_count();
+        let info = NativeVectorSnapshotInfo {
+            cell_count,
+            component_count,
+            scalar_bytes: std::mem::size_of::<f64>(),
+            scalar_type: NativeSnapshotScalarType::F64,
+        };
+        if snapshot.component_order != self.component_order
+            || snapshot.location != self.location
+            || snapshot.scope != self.scope
+        {
+            return Err(format!(
+                "inconsistent Zarr snapshot metadata for '{}'",
+                snapshot.name
+            ));
+        }
+        self.append_payload(
+            &snapshot.name,
+            snapshot.step,
+            snapshot.time,
+            snapshot.solver_dt,
+            info,
+            |writer| {
+                for component in 0..component_count {
+                    for cell in 0..cell_count {
+                        writer
+                            .write_all(&snapshot.values[cell * component_count + component].to_le_bytes())
+                            .map_err(|error| error.to_string())?;
+                    }
+                }
+                Ok(())
+            },
+        )
+    }
+
+    fn append_payload<F>(
         &mut self,
         snapshot_name: &str,
         step: u64,
@@ -1124,7 +1207,7 @@ impl ZarrFieldSeriesWriter {
         write_payload: F,
     ) -> Result<(), String>
     where
-        F: FnOnce(&mut BufWriter<File>) -> Result<(), RunError>,
+        F: FnOnce(&mut BufWriter<File>) -> Result<(), String>,
     {
         if info.cell_count != self.info.cell_count
             || info.component_count != self.info.component_count
@@ -1146,7 +1229,7 @@ impl ZarrFieldSeriesWriter {
                 error
             )
         })?);
-        write_payload(&mut chunk_file).map_err(|error| error.message)?;
+        write_payload(&mut chunk_file)?;
         chunk_file.flush().map_err(|error| {
             format!(
                 "failed to flush Zarr chunk '{}': {}",
@@ -1252,12 +1335,26 @@ fn writer_loop(
     queue_depth: Arc<AtomicUsize>,
     diagnostics: Arc<ArtifactPipelineDiagnosticsState>,
     stage_autosave_config: Option<StageAutosavePipelineConfig>,
+    field_storage: FieldArtifactStorage,
 ) -> Result<ArtifactPipelineSummary, String> {
     fs::create_dir_all(output_dir)
         .map_err(|error| format!("failed to prepare output directory: {}", error))?;
 
     let scalars_path = output_dir.join("scalars.csv");
     let fields_dir = output_dir.join("fields");
+    fs::write(
+        output_dir.join("field-storage.v1.json"),
+        serde_json::to_vec_pretty(&serde_json::json!({
+            "schema_version": "fullmag_field_storage.v1",
+            "storage": match field_storage {
+                FieldArtifactStorage::Json => "json_snapshot_files",
+                FieldArtifactStorage::Zarr => "zarr_v2_uncompressed",
+            },
+            "authoritative": true,
+        }))
+        .map_err(|error| format!("failed to serialize field storage metadata: {error}"))?,
+    )
+    .map_err(|error| format!("failed to write field storage metadata: {error}"))?;
     let mut summary = ArtifactPipelineSummary::default();
     let mut scalar_writer: Option<BufWriter<File>> = None;
     let mut stage_autosave = stage_autosave_config
@@ -1326,15 +1423,70 @@ fn writer_loop(
                 provenance,
             } => {
                 let job_start = std::time::Instant::now();
-                write_field_snapshot_artifact(&fields_dir, &field_context, &provenance, &snapshot)
-                    .map_err(|error| {
-                        format!(
-                            "failed to write field snapshot '{}' step {}: {}",
-                            snapshot.name, snapshot.step, error
+                match field_storage {
+                    FieldArtifactStorage::Json => {
+                        write_field_snapshot_artifact(
+                            &fields_dir,
+                            &field_context,
+                            &provenance,
+                            &snapshot,
                         )
-                    })?;
+                        .map_err(|error| {
+                            format!(
+                                "failed to write field snapshot '{}' step {}: {}",
+                                snapshot.name, snapshot.step, error
+                            )
+                        })?;
+                    }
+                    FieldArtifactStorage::Zarr => {
+                        #[cfg(any(feature = "cuda", feature = "fem-gpu"))]
+                        {
+                            let info = NativeVectorSnapshotInfo {
+                                cell_count: snapshot.sample_count(),
+                                component_count: usize::from(snapshot.component_count),
+                                scalar_bytes: std::mem::size_of::<f64>(),
+                                scalar_type: NativeSnapshotScalarType::F64,
+                            };
+                            let writer = zarr_writers.entry(snapshot.name.clone()).or_insert(
+                                ZarrFieldSeriesWriter::open(
+                                    &fields_dir,
+                                    &field_context,
+                                    &provenance,
+                                    &snapshot.name,
+                                    info,
+                                    snapshot.component_order.clone(),
+                                    snapshot.location.clone(),
+                                    snapshot.scope.clone(),
+                                )?,
+                            );
+                            writer.append_field_snapshot(&snapshot)?;
+                        }
+                        #[cfg(not(any(feature = "cuda", feature = "fem-gpu")))]
+                        {
+                            return Err(
+                                "Zarr field artifacts require a native CUDA or FEM-GPU build"
+                                    .into(),
+                            );
+                        }
+                    }
+                }
                 if let Some(runtime) = stage_autosave.as_mut() {
-                    runtime.append_field(&snapshot)?;
+                    match field_storage {
+                        FieldArtifactStorage::Json => runtime.append_field(&snapshot)?,
+                        FieldArtifactStorage::Zarr => {
+                            #[cfg(any(feature = "cuda", feature = "fem-gpu"))]
+                            if let Some(writer) = zarr_writers.get(&snapshot.name) {
+                                let values = writer.last_chunk_values_f64()?;
+                                runtime.append_field_values(
+                                    &snapshot.name,
+                                    snapshot.step,
+                                    snapshot.time,
+                                    snapshot.solver_dt,
+                                    &values,
+                                )?;
+                            }
+                        }
+                    }
                 }
                 summary.field_snapshots_written += 1;
                 record_writer_job_time(
@@ -1360,6 +1512,9 @@ fn writer_loop(
                         &provenance,
                         &snapshot.name,
                         info.into(),
+                        "xyz",
+                        "sample",
+                        "full",
                     )?,
                 );
                 writer.append_fdm_snapshot(&mut snapshot)?;
@@ -1400,6 +1555,9 @@ fn writer_loop(
                         &provenance,
                         &snapshot.name,
                         info.into(),
+                        "xyz",
+                        "node",
+                        "full",
                     )?,
                 );
                 writer.append_fem_snapshot(&mut snapshot)?;
@@ -1616,6 +1774,74 @@ mod tests {
             assert_eq!(payload["unit"], unit);
         }
         fs::remove_dir_all(output_dir).expect("remove transport artifact fixture");
+    }
+
+    #[cfg(feature = "cuda")]
+    #[test]
+    fn zarr_writer_preserves_regular_transport_snapshot_shape_and_soa_order() {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time")
+            .as_nanos();
+        let fields_dir = std::env::temp_dir().join(format!(
+            "fullmag-transport-zarr-{}-{unique}",
+            std::process::id()
+        ));
+        let context = FieldArtifactContext {
+            problem_name: "transport-zarr".into(),
+            ir_version: "v0".into(),
+            source_hash: None,
+            execution_mode: fullmag_ir::ExecutionMode::Strict,
+            layout: serde_json::json!({"kind": "fdm", "grid": [2, 1, 1]}),
+        };
+        let info = NativeVectorSnapshotInfo {
+            cell_count: 2,
+            component_count: 3,
+            scalar_bytes: 8,
+            scalar_type: NativeSnapshotScalarType::F64,
+        };
+        let mut writer = ZarrFieldSeriesWriter::open(
+            &fields_dir,
+            &context,
+            &ExecutionProvenance::default(),
+            "J_charge",
+            info,
+            "xyz",
+            "sample",
+            "full",
+        )
+        .expect("open Zarr writer");
+        let snapshot = FieldSnapshot::new(
+            "J_charge",
+            4,
+            2.0e-12,
+            5.0e-15,
+            3,
+            "xyz",
+            "sample",
+            "full",
+            5,
+            vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
+        )
+        .expect("valid snapshot");
+        writer
+            .append_field_snapshot(&snapshot)
+            .expect("append regular snapshot");
+        writer.samples_writer.flush().expect("flush sample index");
+
+        let payload = fs::read(fields_dir.join("J_charge.zarr/0.0.0")).expect("read chunk");
+        let values = payload
+            .chunks_exact(8)
+            .map(|chunk| f64::from_le_bytes(chunk.try_into().expect("f64 chunk")))
+            .collect::<Vec<_>>();
+        assert_eq!(values, vec![1.0, 4.0, 2.0, 5.0, 3.0, 6.0]);
+        let zattrs: serde_json::Value = serde_json::from_slice(
+            &fs::read(fields_dir.join("J_charge.zarr/.zattrs")).expect("read zattrs"),
+        )
+        .expect("decode zattrs");
+        assert_eq!(zattrs["storage_layout"], "soa_component_major");
+        assert_eq!(zattrs["component_order"], serde_json::json!(["x", "y", "z"]));
+        fs::remove_dir_all(fields_dir).expect("remove Zarr fixture");
     }
 
     #[test]

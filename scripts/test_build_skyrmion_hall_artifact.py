@@ -171,4 +171,5 @@ def test_accepts_weighted_gls_window_only_after_real_motion_samples(tmp_path: Pa
     assert hall["reason_code"] is None
     assert hall["v_parallel_m_per_s"] > 1.0
     assert abs(hall["angle_deg"]) < 1.0
+    assert hall["mean_signed_current_a_per_m2"] == pytest.approx(-1.5e12)
     assert artifact["producer"]["uncertainty_calibration_status"] == "provisional_cell_quantization"

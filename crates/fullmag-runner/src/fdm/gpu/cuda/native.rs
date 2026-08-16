@@ -889,6 +889,19 @@ impl NativeFdmBackend {
                 .flat_map(|value| value.iter().copied())
                 .collect()
         });
+        let static_external_field_flat: Option<Vec<f64>> = plan
+            .static_external_field_xyz
+            .as_ref()
+            .map(|field| {
+                field
+                    .iter()
+                    .flat_map(|value| value.iter().copied())
+                    .collect()
+            });
+        // The legacy descriptor has one append-only Oersted pointer.  A
+        // static H_ext profile is uploaded through its separate role setter
+        // after creation, so it must never be advertised as H_OE here.
+        let uploaded_profile_flat = oersted_field_flat.as_ref();
 
         // Current region-owned semantics keep exchange continuous by default.
         // Explicit triples are compact pair descriptors; the native backend
@@ -1012,10 +1025,10 @@ impl NativeFdmBackend {
             oersted_time_dep_offset: plan.oersted_time_dep_offset,
             oersted_time_dep_t_on: plan.oersted_time_dep_t_on,
             oersted_time_dep_t_off: plan.oersted_time_dep_t_off,
-            oersted_field_xyz: oersted_field_flat
+            oersted_field_xyz: uploaded_profile_flat
                 .as_ref()
                 .map_or(std::ptr::null(), |field| field.as_ptr()),
-            oersted_field_len: oersted_field_flat
+            oersted_field_len: uploaded_profile_flat
                 .as_ref()
                 .map_or(0, |field| field.len() as u64),
 
@@ -1275,6 +1288,28 @@ impl NativeFdmBackend {
             let msg = unsafe { CStr::from_ptr(err) }.to_string_lossy().to_string();
             unsafe { ffi::fullmag_fdm_backend_destroy(handle) };
             return Err(RunError { message: msg });
+        }
+
+        if let Some(field) = static_external_field_flat.as_ref() {
+            let marked = unsafe {
+                ffi::fullmag_fdm_backend_set_static_external_field_f64(
+                    handle,
+                    field.as_ptr(),
+                    field.len() as u64,
+                )
+            };
+            if marked != ffi::FULLMAG_FDM_OK {
+                let message = unsafe {
+                    let err = ffi::fullmag_fdm_backend_last_error(handle);
+                    if err.is_null() {
+                        "failed to mark static external field profile".to_string()
+                    } else {
+                        CStr::from_ptr(err).to_string_lossy().to_string()
+                    }
+                };
+                unsafe { ffi::fullmag_fdm_backend_destroy(handle) };
+                return Err(RunError { message });
+            }
         }
 
         Ok(Self {
@@ -4340,6 +4375,58 @@ mod tests {
             1e-12,
             1e-18,
         );
+    }
+
+    #[test]
+    fn native_fdm_static_external_profile_reaches_single_grid_effective_field_when_cuda_is_available() {
+        if !is_cuda_available() {
+            eprintln!(
+                "skipping native CUDA FDM static external profile test: CUDA backend is not available on this host"
+            );
+            return;
+        }
+
+        let mut plan = make_masked_test_plan(false, ExecutionPrecision::Double);
+        plan.enable_exchange = false;
+        plan.external_field = None;
+        plan.static_external_field_xyz = Some(vec![
+            [120.0, -30.0, 5.0],
+            [80.0, 40.0, -10.0],
+            [-25.0, 15.0, 70.0],
+            [11.0, 22.0, 33.0],
+            [90.0, 100.0, 110.0],
+            [-4.0, -5.0, -6.0],
+            [7.0, 8.0, 9.0],
+            [-12.0, -13.0, -14.0],
+            [1.0, 2.0, 3.0],
+        ]);
+        let expected = plan.static_external_field_xyz.clone().expect("static profile");
+        let active_mask = plan.active_mask.clone().expect("active mask");
+        let cell_count = plan.initial_magnetization.len();
+
+        let mut backend = NativeFdmBackend::create(&plan).expect("native fdm create");
+        backend
+            .step(plan.fixed_timestep.expect("fixed dt"))
+            .expect("native fdm static profile step");
+
+        let actual_h_ext = backend.copy_h_ext(cell_count).expect("copy H_ext");
+        let actual_h_oe = backend.copy_h_oe(cell_count).expect("copy H_OE");
+        let actual_h_eff = backend.copy_h_eff(cell_count).expect("copy H_eff");
+        let expected_active = expected
+            .iter()
+            .zip(active_mask.iter())
+            .map(|(value, active)| if *active { *value } else { [0.0, 0.0, 0.0] })
+            .collect::<Vec<_>>();
+
+        assert_vector_field_close("H_ext", &actual_h_ext, &expected_active, 1e-12, 1e-12);
+        assert_vector_field_close(
+            "H_OE",
+            &actual_h_oe,
+            &vec![[0.0, 0.0, 0.0]; cell_count],
+            1e-12,
+            1e-12,
+        );
+        assert_vector_field_close("H_eff", &actual_h_eff, &expected_active, 1e-12, 1e-12);
     }
 
     #[test]

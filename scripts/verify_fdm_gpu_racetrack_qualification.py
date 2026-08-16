@@ -18,6 +18,8 @@ from typing import Any
 MANIFEST_NAME = "fdm_gpu_solved_current_racetrack_qualification_v1.json"
 SCHEMA_VERSION = "fdm_gpu_solved_current_racetrack_qualification.v1"
 GATE_EVIDENCE_SCHEMA = "fdm_gpu_racetrack_gate_evidence.v1"
+GATE_PROOF_SCHEMA = "fdm_gpu_racetrack_gate_proof.v1"
+EXECUTION_AUDIT_SCHEMA = "fdm_gpu_racetrack_execution_audit.v1"
 REQUIRED_GATES = (
     "workload_signs_units",
     "solved_charge",
@@ -119,6 +121,68 @@ def load_json(path: Path, label: str) -> dict[str, Any]:
         raise QualificationError(f"{label}_unreadable") from error
 
 
+def validate_gate_proof(
+    root: Path,
+    gate_id: str,
+    evidence: dict[str, Any],
+    expected_source: dict[str, Any],
+    expected_runtime: dict[str, Any],
+) -> None:
+    """Require an identity-bound proof and at least one independent raw file."""
+
+    proof_meta = object_at(evidence.get("proof"), f"{gate_id}_proof")
+    string_at(proof_meta, "schema_version", GATE_PROOF_SCHEMA, f"{gate_id}_proof")
+    raw_path = proof_meta.get("path")
+    require(isinstance(raw_path, str) and raw_path, f"{gate_id}_proof_path_missing")
+    proof_path = (root / raw_path).resolve()
+    try:
+        proof_relative = proof_path.relative_to(root.resolve()).as_posix()
+    except ValueError as error:
+        raise QualificationError(f"{gate_id}_proof_outside_evidence_root") from error
+    require(proof_relative.split("/", 1)[0] == "proofs", f"{gate_id}_proof_path_invalid")
+    require(proof_relative.rsplit("/", 1)[-1] == f"{gate_id}.json", f"{gate_id}_proof_path_invalid")
+    require(proof_path.is_file() and not proof_path.is_symlink(), f"{gate_id}_proof_missing")
+    proof = load_json(proof_path, f"{gate_id}_proof_file")
+    string_at(proof, "schema_version", GATE_PROOF_SCHEMA, f"{gate_id}_proof_file")
+    string_at(proof, "gate_id", gate_id, f"{gate_id}_proof_file")
+    string_at(proof, "status", "pass", f"{gate_id}_proof_file")
+    same_identity(
+        expected_source,
+        identity(proof.get("source_identity"), f"{gate_id}_proof_source_identity"),
+        f"{gate_id}_proof",
+    )
+    same_runtime_identity(
+        expected_runtime,
+        runtime_identity(proof.get("runtime_identity"), f"{gate_id}_proof_runtime_identity"),
+        f"{gate_id}_proof",
+    )
+    proof_claims = object_at(proof.get("claims"), f"{gate_id}_proof_claims")
+    claims = object_at(evidence.get("claims"), f"{gate_id}_claims")
+    require(proof_claims == claims, f"{gate_id}_proof_claims_mismatch")
+    validate_gate_claims(gate_id, proof_claims)
+
+    proof_paths = proof.get("evidence_paths")
+    declared_paths = proof_meta.get("evidence_paths")
+    require(isinstance(proof_paths, list) and proof_paths, f"{gate_id}_proof_evidence_missing")
+    require(isinstance(declared_paths, list) and declared_paths, f"{gate_id}_proof_evidence_missing")
+    require(
+        all(isinstance(item, str) and item for item in declared_paths),
+        f"{gate_id}_proof_evidence_path_invalid",
+    )
+    normalized: list[str] = []
+    for item in proof_paths:
+        require(isinstance(item, str) and item, f"{gate_id}_proof_evidence_path_invalid")
+        candidate = (root / item).resolve()
+        try:
+            relative = candidate.relative_to(root.resolve()).as_posix()
+        except ValueError as error:
+            raise QualificationError(f"{gate_id}_proof_evidence_outside_root") from error
+        require(relative.split("/", 1)[0] not in {"proofs", "gates"}, f"{gate_id}_proof_evidence_must_be_raw")
+        require(candidate.is_file() and not candidate.is_symlink(), f"{gate_id}_proof_evidence_missing")
+        normalized.append(relative)
+    require(sorted(set(normalized)) == sorted(set(declared_paths)), f"{gate_id}_proof_evidence_mismatch")
+
+
 def validate_gate_claims(gate_id: str, claims: dict[str, Any]) -> None:
     if gate_id == "workload_signs_units":
         string_at(claims, "fixture_id", "racetrack_m1_v1", gate_id)
@@ -203,9 +267,35 @@ def validate_evidence_root(
         require(isinstance(hashes.get(key), str) and SHA256.fullmatch(hashes[key]), f"input_hashes_{key}_invalid")
     require(hashes["before"] == hashes["after"], "input_hash_drift")
     audit = object_at(manifest.get("execution_audit"), "execution_audit")
+    string_at(audit, "schema_version", EXECUTION_AUDIT_SCHEMA, "execution_audit")
+    string_at(audit, "status", "pass", "execution_audit")
+    same_runtime_identity(runtime, runtime_identity(audit.get("runtime_identity"), "execution_audit_runtime_identity"), "execution_audit")
+    require(audit.get("reason_codes") == [], "execution_audit_reason_codes_nonempty")
     require(audit.get("fallbacks") == [], "execution_audit_fallback_forbidden")
     require(audit.get("hot_loop_host_device_transfers") == 0, "execution_audit_hot_loop_transfer_forbidden")
+    require(audit.get("forbidden_transfer_bytes") == 0, "execution_audit_forbidden_transfer_bytes")
     string_at(audit, "torque_provenance", "solved_transport", "execution_audit")
+    telemetry = object_at(audit.get("transport_telemetry"), "execution_audit_transport_telemetry")
+    string_at(telemetry, "schema_version", "fdm_gpu_transport_telemetry_summary.v1", "execution_audit_transport_telemetry")
+    string_at(telemetry, "status", "pass", "execution_audit_transport_telemetry")
+    require(telemetry.get("hot_loop_host_device_transfers") == 0, "execution_audit_transport_telemetry_host_transfer_forbidden")
+    require(telemetry.get("forbidden_transfer_bytes") == 0, "execution_audit_transport_telemetry_forbidden_bytes")
+    for field in (
+        "stage_count",
+        "record_count",
+        "hot_loop_host_device_transfers",
+        "hot_loop_device_to_device_transfers",
+        "hot_loop_host_sync_count",
+        "forbidden_transfer_bytes",
+        "allowed_control_h2d_records",
+        "allowed_control_h2d_bytes",
+        "allowed_scalar_d2h_records",
+        "allowed_scalar_d2h_bytes",
+    ):
+        require(isinstance(telemetry.get(field), int) and telemetry[field] >= 0, f"execution_audit_transport_telemetry_{field}_invalid")
+    require(telemetry.get("stage_count") == 6, "execution_audit_transport_telemetry_stage_count_invalid")
+    require(telemetry.get("record_count", 0) > 0, "execution_audit_transport_telemetry_record_count_invalid")
+    require(telemetry.get("all_stage_records_present") is True, "execution_audit_transport_telemetry_stage_records_incomplete")
     gate_index = object_at(manifest.get("gates"), "gates")
     require(set(gate_index) == set(REQUIRED_GATES), "gate_set_incomplete_or_unknown")
     validated_gates: dict[str, dict[str, str]] = {}
@@ -219,6 +309,7 @@ def validate_evidence_root(
         same_identity(source, identity(evidence.get("source_identity"), f"{gate_id}_source_identity"), gate_id)
         same_runtime_identity(runtime, runtime_identity(evidence.get("runtime_identity"), f"{gate_id}_runtime_identity"), gate_id)
         validate_gate_claims(gate_id, object_at(evidence.get("claims"), f"{gate_id}_claims"))
+        validate_gate_proof(root, gate_id, evidence, source, runtime)
         validated_gates[gate_id] = {"status": "pass", "artifact": str(artifact_path.relative_to(root))}
     return {
         "schema_version": SCHEMA_VERSION,

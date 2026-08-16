@@ -102,17 +102,19 @@ void require_llg_stage_transfer_audit(
                 context, cursor, records.data(), records.size(), &count) ==
                 FULLMAG_FDM_GPU_TRANSPORT_ERROR_OK,
             scenario + ": LLG stage telemetry query failed");
-    require(count == 4 * expected_stages,
+    require(count == 5 * expected_stages,
             scenario + ": LLG stage transfer audit has the wrong record count");
-    std::array<uint64_t, 4> reason_counts{};
+    std::array<uint64_t, 5> reason_counts{};
     for (uint64_t index = 0; index < count; ++index) {
         const auto &record = records[index];
         require(record.status ==
                     FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_STATUS_SUCCESS &&
                     record.attempt_id == 1 && record.stage_id >= 1 &&
                     record.stage_id <= expected_stages &&
-                    (record.event_flags &
-                     FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_EVENT_PROVISIONAL) != 0,
+                    (record.reason ==
+                         FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_REASON_SOLVED_TRANSPORT_RHS ||
+                     (record.event_flags &
+                      FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_EVENT_PROVISIONAL) != 0),
                 scenario + ": LLG stage audit identity/status drifted");
         switch (record.reason) {
         case FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_REASON_CONTROL_STATE_H2D:
@@ -145,6 +147,14 @@ void require_llg_stage_transfer_audit(
                         record.bytes == 3 * cell_count * sizeof(double) &&
                         record.count == 1,
                     scenario + ": invalid device-resident torque handoff");
+            break;
+        case FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_REASON_SOLVED_TRANSPORT_RHS:
+            ++reason_counts[4];
+            require(record.direction ==
+                        FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_DIRECTION_DEVICE_INTERNAL &&
+                        record.bytes == 0 && record.count == 1 &&
+                        record.event_flags == 0,
+                    scenario + ": invalid solved-transport RHS provenance");
             break;
         default:
             fail(scenario +

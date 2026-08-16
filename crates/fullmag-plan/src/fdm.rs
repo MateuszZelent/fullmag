@@ -31,7 +31,7 @@ use crate::spin_torque::{
     resolve_legacy_spin_torque, resolve_sot_fields, SpinTorqueExecutableLane,
 };
 use crate::util::{
-    generate_random_unit_vectors, runtime_requests_cuda, GRID_TOLERANCE, MU0, PLACEMENT_TOLERANCE,
+    generate_random_unit_vectors, runtime_requests_cuda, GRID_TOLERANCE, MU0,
 };
 use crate::validate::{
     planned_study_controls, validate_executable_outputs, validate_grid_asset_cell_size,
@@ -647,7 +647,6 @@ fn resolve_static_external_field_map(
         });
     }
     Ok(Some(field_h_apm))
-}
 }
 
 /// Restrict a precomputed geometry asset to the smallest Cartesian grid that

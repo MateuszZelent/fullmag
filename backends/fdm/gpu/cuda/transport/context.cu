@@ -4531,6 +4531,12 @@ bool evaluate_bound_gpu_transport_rhs(
     torque_view.x = parent.llg_torque;
     torque_view.y = parent.llg_torque + ctx.cell_count;
     torque_view.z = parent.llg_torque + 2 * ctx.cell_count;
+    append_charge_telemetry(
+        parent, FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_DIRECTION_DEVICE_INTERNAL,
+        FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_REASON_SOLVED_TRANSPORT_RHS,
+        FULLMAG_FDM_GPU_TRANSPORT_TELEMETRY_STATUS_SUCCESS,
+        0, 0, 1, attempt_id, stage_id, result.iterations,
+        result.deterministic_compute_digest);
     ctx.gpu_transport_test_completion_fault = parent.test_llg_completion_fault;
     parent.test_llg_completion_fault = 0;
     ++parent.llg_stage_evaluation_count;

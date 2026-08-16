@@ -5895,7 +5895,6 @@ mod tests {
                 oersted_radius: None,
                 oersted_center: None,
                 oersted_axis: None,
-                static_external_field_xyz: None,
                 oersted_field_xyz: None,
                 oersted_time_dep_kind: 0,
                 oersted_time_dep_freq: 0.0,
@@ -7708,6 +7707,7 @@ mod tests {
         let provenance = crate::types::ExecutionProvenance {
             charge_transport: None,
             transport_modules: Vec::new(),
+            fdm_gpu_transport_telemetry: None,
             executed_physics_kinds: Vec::new(),
             executed_physics_module_ids: Vec::new(),
             execution_engine: "fem_cpu_native".to_string(),
@@ -8591,6 +8591,7 @@ mod tests {
         let provenance = ExecutionProvenance {
             charge_transport: None,
             transport_modules: Vec::new(),
+            fdm_gpu_transport_telemetry: None,
             executed_physics_kinds: Vec::new(),
             executed_physics_module_ids: Vec::new(),
             execution_engine: "fdm_gpu_native".to_string(),

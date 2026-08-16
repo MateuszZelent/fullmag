@@ -337,9 +337,16 @@
         "time_s",
         "topological_charge",
         "centre_m",
-        "minimum_edge_distance_m"
+        "minimum_edge_distance_m",
+        "centre_covariance_m2"
       ],
-      "position_variance": "not_produced",
+      "centre_covariance": {
+        "field": "centre_covariance_m2",
+        "units": "m^2",
+        "method": "cell_centroid_quantization.v1",
+        "required": true,
+        "symmetric_positive_definite": true
+      },
       "required_provenance": [
         "scene_revision",
         "field_revision",
@@ -364,13 +371,14 @@
       "selection_tie_break": ["maximum_duration", "minimum_start_index", "minimum_end_index"]
     },
     "regression": {
-      "weight_policy": "equal_weight_v1",
-      "sample_weight": 1.0,
+      "weight_policy": "calibrated_covariance_gls_v1",
+      "covariance_field": "centre_covariance_m2",
       "fit_inputs": ["time_s", "centre_m[0]", "centre_m[1]"],
-      "fit": "intercept_and_slope_for_x_and_y_with_one_common_sample_mask",
-      "residual_cross_covariance": "sum(r_a_n*r_b_n)/(N-2)",
-      "velocity_covariance": "residual_cross_covariance/S_tt",
-      "residual_degrees_of_freedom": "N-2",
+      "fit": "intercept_and_slope_for_x_and_y_with_per_sample_2x2_covariance",
+      "normal_matrix": "sum(A_n^T*C_n^-1*A_n)",
+      "velocity_covariance": "velocity_block_of_inverse_normal_matrix",
+      "residual_statistic": "sum(r_n^T*C_n^-1*r_n)/(2*(N_w-2))",
+      "residual_degrees_of_freedom": "2*(N_w-2)",
       "angle_branch": "atan2(v_y,v_x) in (-pi,pi]"
     },
     "reason_code_precedence": [

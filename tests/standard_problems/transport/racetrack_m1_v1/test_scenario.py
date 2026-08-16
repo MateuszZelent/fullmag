@@ -1,8 +1,12 @@
 from __future__ import annotations
 
+import contextlib
+import io
+import json
 from pathlib import Path
 
 import fullmag as fm
+from fullmag.runtime import helper as runtime_helper
 
 
 REPO_ROOT = Path(__file__).resolve().parents[4]
@@ -73,6 +77,33 @@ def test_public_stage_first_racetrack_declares_zero_current_relaxation_and_six_s
     )
 
 
+def test_public_stage_first_racetrack_disables_the_transport_pipeline_during_relaxation() -> None:
+    loaded = _load_scenario()
+    relax = next(stage for stage in loaded.stages if stage.stage_id == "relax_zero_current")
+    drive = next(stage for stage in loaded.stages if stage.stage_id == "drive_solved_current_plus_1_5")
+
+    relax_activation = {
+        module["id"]: module["activation"]
+        for module in relax.problem.to_ir(include_geometry_assets=False)["physics_graph"]["modules"]
+    }
+    drive_activation = {
+        module["id"]: module["activation"]
+        for module in drive.problem.to_ir(include_geometry_assets=False)["physics_graph"]["modules"]
+    }
+    assert relax_activation == {
+        "charge": "inactive",
+        "spin": "inactive",
+        "hm_fm": "inactive",
+        "transport_torque": "inactive",
+    }
+    assert drive_activation == {
+        "charge": "active",
+        "spin": "active",
+        "hm_fm": "active",
+        "transport_torque": "active",
+    }
+
+
 def test_public_stage_first_racetrack_preserves_the_frozen_transport_contract() -> None:
     loaded = _load_scenario()
     ir = loaded.pipeline_base_problem().to_ir(include_geometry_assets=False)
@@ -113,3 +144,53 @@ def test_public_stage_first_racetrack_preserves_the_frozen_transport_contract() 
     assert "oersted" not in {entry["kind"] for entry in ir["energy_terms"]}
     assert "Prescribed" not in SCENARIO.read_text(encoding="utf-8")
     assert "json" not in SCENARIO.read_text(encoding="utf-8").lower()
+
+
+def test_public_stage_first_racetrack_declares_hm_as_conductor_object() -> None:
+    loaded = _load_scenario()
+    ir = loaded.pipeline_base_problem().to_ir(include_geometry_assets=False)
+
+    assert {entry["name"]: entry["type"] for entry in ir["physics_objects"]} == {
+        "hm": "conductor",
+    }
+    assert ir["physics_graph"]["objects"] == ir["physics_objects"]
+    assert {region["name"]: region["geometry"] for region in ir["regions"]} == {
+        "fm": "fm_geom",
+        "hm": "hm",
+    }
+    assert 'study.geometry_object(' in SCENARIO.read_text(encoding="utf-8")
+    assert 'study.antenna_object(' not in SCENARIO.read_text(encoding="utf-8")
+
+
+def test_public_stage_first_racetrack_round_trips_typed_hm_geometry() -> None:
+    from fullmag.runtime.script_builder import rewrite_loaded_problem_script
+
+    rendered = rewrite_loaded_problem_script(_load_scenario())["rendered_source"]
+
+    assert 'study.geometry_object(' in rendered
+    assert 'name="hm", type="conductor"' in rendered
+    assert 'study.antenna_object(' not in rendered
+
+
+def test_public_stage_first_racetrack_uses_analytic_common_transport_grid() -> None:
+    stdout = io.StringIO()
+    with contextlib.redirect_stdout(stdout):
+        exit_code = runtime_helper.main(
+            [
+                "export-run-config",
+                "--script",
+                str(SCENARIO),
+                "--backend",
+                "fdm",
+                "--mode",
+                "strict",
+                "--precision",
+                "double",
+            ]
+        )
+
+    assert exit_code == 0
+    payload = json.loads(stdout.getvalue())
+    assert payload["ir"]["geometry_assets"] is None
+    assert payload["shared_geometry_assets"] is None
+    assert all(stage["ir"]["geometry_assets"] is None for stage in payload["stages"])

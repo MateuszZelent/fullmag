@@ -284,7 +284,10 @@ def _current_density(metadata: Mapping[str, Any]) -> float:
         raise HallBuildError("stage current transport lacks both x terminal boundary values")
     if not math.isclose(values["terminal_x_minus"], -values["terminal_x_plus"], rel_tol=1e-12, abs_tol=1e-9):
         raise HallBuildError("x terminal current boundary values are not conservative opposites")
-    return -values["terminal_x_plus"]
+    # The public contract defines the signed drive as the outward density on
+    # the +x terminal: terminal_x_plus = +J_x.  Do not negate it here; doing
+    # so would invert the current–Hall-angle correlation in the report.
+    return values["terminal_x_plus"]
 
 
 def _provenance(stage: Path, grid: Mapping[str, Any], source_files: Sequence[Path], membership_bytes: bytes, metadata: Mapping[str, Any], graph: Mapping[str, Any]) -> dict[str, Any]:

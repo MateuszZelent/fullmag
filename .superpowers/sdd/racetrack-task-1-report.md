@@ -385,3 +385,229 @@ Ta korekta dowodzi istnienia i typu ścieżek, zgodności publicznego loweringu 
 fixture oraz zgodności future-owner mapy z zaakceptowanym planem. Nie dowodzi
 wykonania transportu, materializacji masek, etapowego restartu, działania CUDA
 ani kwalifikacji fizycznej. Nie zmieniono równań ani statusu capability.
+
+## Korekta czterech Important findings po review Task 1
+
+### Zamknięty zakres
+
+1. Fixture i rzeczywisty publiczny lowering używają dokładnie
+   `SpinSolverPolicy(engine="native_m1_v1")`. Test odrzuca `auto`, `gmres`,
+   nieobecny jawny zakaz fallbacku oraz każdą rozbieżność pełnej projekcji
+   `Problem.to_ir()`.
+2. Kanoniczny stan początkowy jest rzeczywistym publicznym
+   `fm.texture.neel_skyrmion(...).with_mapping(space="world").translate(...)`,
+   serializowanym jako `magnets[0].initial_magnetization` typu
+   `preset_texture`. Fixture, nota i README zamrażają centrum, promień, szerokość
+   ściany, chirality, helicity, parametr polaryzacji, profile, normalizację,
+   znak rdzenia/tła i radialnie outward ścianę. Próbki środka, ściany i dalekiego
+   tła przechodzą przez bieżący publiczny evaluator, a pełny wire jest
+   porównywany z aktualnym publicznym loweringiem.
+3. `skyrmion_hall_angle_v1` nie deklaruje już nieistniejących wariancji pozycji.
+   Bieżący planowany producer signed-density moment nie wytwarza statystycznej
+   niepewności próbki, dlatego kontrakt jawnie wybiera
+   `weight_policy=equal_weight_v1`, `w_n=1`, estymuje pełną macierz kowariancji z
+   reszt obu współrzędnych i zachowuje dokładny zestaw pól próbki oraz
+   proweniencji wejściowej.
+4. Dokładna lista zabronionego zakresu obejmuje teraz `adaptive_geometry`.
+   Fixture, nota, README i test wymagają niezmiennej geometrii, siatki, masek i
+   indeksowania komórek we wszystkich sześciu drive.
+
+### Kontrolowany RED
+
+```text
+PYTHONPATH=packages/fullmag-py/src \
+python3 -m unittest scripts.test_fdm_gpu_m1_contract_docs.RacetrackM1PhysicsContractDocsTests
+
+Ran 11 tests
+FAILED (failures=2, errors=1)
+
+expected solver engine: native_m1_v1; actual public lowering: auto
+forbidden_fallbacks: missing adaptive_geometry
+KeyError: 'weight_policy'
+```
+
+RED ładował bieżące publiczne klasy i fixture; zatrzymał się dokładnie na trzech
+lukach kontraktu, nie na imporcie, składni ani zależności. Po materializacji
+publicznego seedu pozostały wyłącznie oczekiwane braki dokumentacyjne, które
+zamknięto bez dodawania nowej klasy Python lub fikcyjnego pola ProblemIR.
+
+### Świeże GREEN i pełne bramki
+
+```text
+PYTHONPATH=packages/fullmag-py/src \
+python3 -m pytest scripts/test_fdm_gpu_m1_contract_docs.py -q
+23 passed, 151 subtests passed in 0.67s
+
+cargo test -p fullmag-ir --test racetrack_m1_fixture
+1 passed; 0 failed
+
+python3 .agents/skills/scientific-documentation-contract/scripts/validate_scientific_docs.py \
+  docs/physics/0970-spin-hall-drift-diffusion-transport.source-map.json --repo-root .
+PASS
+
+python3 .agents/skills/scientific-documentation-contract/scripts/validate_scientific_docs.py \
+  docs/physics/0940-topological-charge-observable.source-map.json --repo-root .
+PASS
+
+python3 -m unittest discover \
+  -s .agents/skills/scientific-documentation-contract/scripts -p 'test_*.py'
+Ran 22 tests; OK
+
+python3 -m pytest scripts/test_validate_topological_charge_runtime.py -q
+4 passed in 0.06s
+
+python3 scripts/check_public_doc_examples.py --root public_docs/site
+Public documentation Python examples passed: public_docs/site
+
+python3 .agents/skills/scientific-documentation-contract/scripts/validate_changed_scientific_docs.py \
+  --base ec0610144fbac13292c0d636379adb5699936e1e --head HEAD --repo-root .
+PASS
+
+git diff --cached --check
+PASS
+
+git show --check --oneline --no-renames HEAD
+5cb0518f3 docs(physics): correct racetrack seed and Hall contract
+```
+
+### Commit i granica dowodu
+
+Commit: `5cb0518f3` (`docs(physics): correct racetrack seed and Hall contract`).
+Indeks zawierał wyłącznie cztery artefakty dokumentacji/source map, test
+kontraktowy oraz fixture z README. Istniejący, obcy
+`.superpowers/sdd/progress.md` pozostał poza indeksem i bez zmian tego zadania.
+
+Ta korekta dowodzi dokładności kontraktu dokumentacyjnego, bieżącego publicznego
+loweringu Python, parsowalności typed `ProblemIR`, deterministycznej definicji
+regresji i jawnego fail-closed scope. Nie uruchamia workloadu, nie dowodzi
+transportu charge/spin, masek, restartu etapów, runtime CUDA ani produkcyjnej
+kwalifikacji. Status pozostaje planowany i niekwalifikowany do zamknięcia Tasks
+2--12.
+
+## Końcowa korekta kompletności source map Task 1
+
+### Zakres i wynik
+
+- Mapa 0940 obejmuje teraz wszystkie normatywne reguły
+  `skyrmion_hall_angle_v1`: dokładne progi okna, pełną enumerację kandydatów i
+  tie-break, equal-weight WLS z interceptem, kowariancję reszt i prędkości,
+  wymagania proweniencji oraz precedencję reason codes. Każdy wpis Task 1 ma
+  jawnego właściciela i odsyła do istniejącego `DOC-ANCHOR` ze statusem
+  `planned_contract`.
+- Symbol $N$ pozostaje wyłącznie liczbą przekrojów profilu FEM. Próbki okna
+  Halla używają wszędzie $N_w$; mapa zawiera też brakujący symbol
+  $Q_{\mathrm{med}}$.
+- Istniejące równanie `fdm-gpu-m1-neumann-compatibility` jest mapowane przez
+  bieżący kernel CUDA `label_reference_components_kernel`, actual-device test
+  `gpu_m1_charge_uniform_v1_contract.cpp::main` oraz preflight runnera
+  `validate_boundary_faces`. Status dowodu równania to
+  `source_and_actual_device_tests`; nie zmieniono fizyki ani kwalifikacji.
+- Test kontraktu sprawdza teraz kierunek dokument -> mapa dla etykiet i claims
+  Task 1, zamiast ograniczać się do kierunku mapa -> dokument.
+
+### Kontrolowany RED
+
+```text
+PYTHONPATH=packages/fullmag-py/src python3 -m unittest \
+  scripts.test_fdm_gpu_m1_contract_docs.RacetrackM1PhysicsContractDocsTests.test_skyrmion_hall_angle_v1_is_fully_deterministic \
+  scripts.test_fdm_gpu_m1_contract_docs.RacetrackM1PhysicsContractDocsTests.test_topological_source_map_covers_equations_and_numerical_claims \
+  scripts.test_fdm_gpu_m1_contract_docs.RacetrackM1PhysicsContractDocsTests.test_task_1_transport_equations_are_mapped_from_document_to_source_map \
+  scripts.test_fdm_gpu_m1_contract_docs.RacetrackM1PhysicsContractDocsTests.test_new_topological_tables_use_myst_inline_math
+
+Ran 4 tests
+FAILED (failures=4)
+```
+
+RED zatrzymał się wyłącznie na brakach $N_w$, metadata/claims 0940 i wpisie
+równania Neumanna 0970; nie wystąpił błąd importu, składni ani zależności.
+
+### Świeże GREEN i bramki
+
+```text
+PYTHONPATH=packages/fullmag-py/src \
+python3 -m pytest scripts/test_fdm_gpu_m1_contract_docs.py -q
+24 passed, 163 subtests passed in 0.85s
+
+python3 .agents/skills/scientific-documentation-contract/scripts/validate_scientific_docs.py \
+  docs/physics/0940-topological-charge-observable.source-map.json --repo-root .
+PASS
+
+python3 .agents/skills/scientific-documentation-contract/scripts/validate_scientific_docs.py \
+  docs/physics/0970-spin-hall-drift-diffusion-transport.source-map.json --repo-root .
+PASS
+
+python3 -m unittest discover \
+  -s .agents/skills/scientific-documentation-contract/scripts -p 'test_*.py'
+Ran 22 tests; OK
+
+python3 -m pytest scripts/test_validate_topological_charge_runtime.py -q
+4 passed in 0.07s
+
+python3 scripts/check_public_doc_examples.py --root public_docs/site
+Public documentation Python examples passed: public_docs/site
+
+python3 .agents/skills/scientific-documentation-contract/scripts/validate_changed_scientific_docs.py \
+  --base 5cb0518f3 --head HEAD --repo-root .
+PASS
+
+git diff --check
+PASS
+
+git diff --cached --check
+PASS
+
+git show --check --oneline --no-renames HEAD
+cb103405c docs(physics): complete racetrack source maps
+```
+
+### Commit i granica dowodu
+
+Commit: `cb103405c5716ea7e6ef4696bcd1e2ba52437d64`
+(`docs(physics): complete racetrack source maps`). Osobna inspekcja indeksu
+wykazała dokładnie pięć plików dokumentacji, source map i testu. Raport oraz
+istniejący, obcy `.superpowers/sdd/progress.md` pozostały poza indeksem.
+
+Ta korekta zamyka wyłącznie kompletność i identyfikowalność source map. Nie
+implementuje `SkyrmionTrajectoryV1` ani `SkyrmionHallAngleV1`, nie uruchamia
+racetrack workloadu i nie promuje żadnej ścieżki GPU do stanu validated lub
+production-qualified.
+
+## Końcowa korekta review: MyST dla wierszy Neumanna
+
+### Zakres i przyczyna
+
+Review wykazał, że nowe wiersze maszynowej tabeli symboli 0970 dla `$b_K$`,
+`$K$`, `$C$` i `$\bar V_C$` nie stosowały składni MyST `$...$` konsekwentnie
+w komórkach symbolu i jednostki SI. Istniejący test sprawdzał wcześniejsze
+wiersze, lecz pomijał te cztery identyfikatory.
+
+### Kontrolowany RED
+
+```text
+PYTHONPATH=packages/fullmag-py/src \
+python3 -m pytest scripts/test_fdm_gpu_m1_contract_docs.py -q
+
+4 failed, 24 passed, 163 subtests passed
+```
+
+Po rozszerzeniu istniejącego testu o `b_K`, `K`, `C` i `V_bar_C` każde
+niepowodzenie wskazało dokładnie brak delimitatorów w komórce LaTeX tych
+wierszy.
+
+### GREEN i bramki
+
+```text
+PYTHONPATH=packages/fullmag-py/src \
+python3 -m pytest scripts/test_fdm_gpu_m1_contract_docs.py -q
+24 passed, 167 subtests passed in 0.69s
+
+python3 .agents/skills/scientific-documentation-contract/scripts/validate_scientific_docs.py \
+  docs/physics/0970-spin-hall-drift-diffusion-transport.source-map.json --repo-root .
+PASS (exit 0)
+
+git diff --check
+PASS (exit 0)
+```
+
+Zmiana pozostaje czysto dokumentacyjna: nie zmienia równań, source map,
+implementacji runtime ani statusu kwalifikacji FDM GPU.

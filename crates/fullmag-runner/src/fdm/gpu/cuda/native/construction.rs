@@ -410,9 +410,9 @@ impl NativeFdmBackend {
                     .flat_map(|value| value.iter().copied())
                     .collect()
             });
-        let uploaded_profile_flat = static_external_field_flat
-            .as_ref()
-            .or(oersted_field_flat.as_ref());
+        // Static H_ext is uploaded through its role-specific setter after
+        // creation; never advertise it through the legacy Oersted pointer.
+        let uploaded_profile_flat = oersted_field_flat.as_ref();
 
         // Build exchange LUT when region mask is present.
         // Default: A_ii = A_material, A_ij (i≠j) = 0 (no inter-region coupling).

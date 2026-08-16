@@ -376,8 +376,6 @@ void verify_static_external_profile(fullmag_fdm_precision precision) {
     plan.initial_magnetization_len = 6;
     plan.active_mask = active_mask;
     plan.active_mask_len = 2;
-    plan.oersted_field_xyz = profile;
-    plan.oersted_field_len = 6;
     plan.stats_mode = FULLMAG_FDM_STATS_FULL;
 
     fullmag_fdm_backend *handle = create_backend(plan, "static external profile backend create failed");
@@ -448,7 +446,6 @@ void verify_static_external_profile(fullmag_fdm_precision precision) {
     fullmag_fdm_backend_destroy(handle);
 
     double invalid_profile[6] = {2.0, 3.0, 4.0, -5.0, std::nan(""), -7.0};
-    plan.oersted_field_xyz = invalid_profile;
     fullmag_fdm_backend *invalid_handle = create_backend(
         plan, "non-finite static external profile backend create failed");
     check(fullmag_fdm_backend_set_static_external_field_f64(invalid_handle, invalid_profile, 6)

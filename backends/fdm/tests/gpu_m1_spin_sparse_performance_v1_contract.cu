@@ -287,6 +287,9 @@ bool run_sinh_preflight(cudaStream_t stream) {
     input.rhs_soa = rhs;
     input.solution_soa = solution;
     input.operator_revision = 77;
+    // The public sparse operator is fail-closed when no resolved device
+    // budget is supplied. Keep this manufactured oracle inside the same
+    // whole-context ceiling as the production performance gate.
     input.resolved_device_budget_bytes = UINT64_C(2147483648);
     sparse::HierarchyCache hierarchy{};
     sparse::Workspace workspace{};

@@ -51,8 +51,8 @@ def test_public_scenario_authors_exact_gpu_m1_transport_without_prescribed_torqu
     assert not any(key.startswith("prescribed") for key in torque[0])
 
     electrodes = charge[0]["boundaries"][:2]
-    assert electrodes[0]["outward_current_density_Apm2"] == -1.0e12
-    assert electrodes[1]["outward_current_density_Apm2"] == 1.0e12
+    assert electrodes[0]["outward_current_density_Apm2"] == 0.0
+    assert electrodes[1]["outward_current_density_Apm2"] == 0.0
     assert charge[0]["gauge"] == "zero_mean"
 
     assert spin[0]["interfaces"][0]["normal_surface"] == {

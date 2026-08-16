@@ -622,10 +622,10 @@ fullmag_fdm_backend *fullmag_fdm_backend_create_time_policy_v2(
 fullmag_fdm_backend *fullmag_fdm_backend_create_v2(
     const fullmag_fdm_multilayer_plan_desc_v2 *plan);
 
-/** Mark the uploaded cell-wise profile as static external H_ext [A/m].
- * The legacy descriptor keeps the wire layout stable; this role marker is
+/** Upload a cell-wise profile as static external H_ext [A/m].
+ * The legacy descriptor keeps the wire layout stable; this role setter is
  * intentionally a separate versioned operation and is valid only for a
- * non-cylindrical single-grid profile.
+ * non-cylindrical single-grid profile. It does not set the Oersted role.
  */
 int fullmag_fdm_backend_set_static_external_field_f64(
     fullmag_fdm_backend *handle,

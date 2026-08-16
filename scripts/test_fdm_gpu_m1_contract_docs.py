@@ -1943,7 +1943,10 @@ class RacetrackM1PhysicsContractDocsTests(unittest.TestCase):
         )
         for source_map in (transport_source_map, topological_source_map):
             for row in source_map["planned_symbols"]:
-                self.assertEqual("planned_not_implemented", row["status"])
+                self.assertIn(
+                    row["status"],
+                    {"planned_not_implemented", "source_tested_no_runtime_resource"},
+                )
                 for field in ("path", "symbol", "owner_task", "evidence_gate"):
                     self.assertTrue(row[field])
 
@@ -2538,7 +2541,7 @@ class RacetrackM1PhysicsContractDocsTests(unittest.TestCase):
             ),
             (
                 TOPOLOGICAL_PAGE.read_text(encoding="utf-8"),
-                ("$t_n$", "$v_x$", "$\\Theta_H$", "$S_{tt}$"),
+                ("$t_n$", "$C_n$", "$v_x$", "$\\Theta_H$"),
             ),
         )
         for page, row_ids in pages_and_rows:
@@ -2606,21 +2609,21 @@ class RacetrackM1PhysicsContractDocsTests(unittest.TestCase):
             windows["selection_tie_break"],
         )
         regression = contract["regression"]
-        self.assertEqual("equal_weight_v1", regression["weight_policy"])
-        self.assertEqual(1.0, regression["sample_weight"])
+        self.assertEqual("calibrated_covariance_gls_v1", regression["weight_policy"])
+        self.assertEqual("centre_covariance_m2", regression["covariance_field"])
         self.assertEqual(
             ["time_s", "centre_m[0]", "centre_m[1]"],
             regression["fit_inputs"],
         )
         self.assertEqual(
-            "sum(r_a_n*r_b_n)/(N-2)",
-            regression["residual_cross_covariance"],
+            "sum(A_n^T*C_n^-1*A_n)",
+            regression["normal_matrix"],
         )
         self.assertEqual(
-            "residual_cross_covariance/S_tt",
+            "velocity_block_of_inverse_normal_matrix",
             regression["velocity_covariance"],
         )
-        self.assertEqual("N-2", regression["residual_degrees_of_freedom"])
+        self.assertEqual("2*(N_w-2)", regression["residual_degrees_of_freedom"])
         trajectory = contract["trajectory_input"]
         self.assertEqual("signed_topological_density_first_moment", trajectory["producer"])
         self.assertEqual(
@@ -2630,10 +2633,20 @@ class RacetrackM1PhysicsContractDocsTests(unittest.TestCase):
                 "topological_charge",
                 "centre_m",
                 "minimum_edge_distance_m",
+                "centre_covariance_m2",
             ],
             trajectory["required_sample_fields"],
         )
-        self.assertEqual("not_produced", trajectory["position_variance"])
+        self.assertEqual(
+            {
+                "field": "centre_covariance_m2",
+                "units": "m^2",
+                "method": "cell_centroid_quantization.v1",
+                "required": True,
+                "symmetric_positive_definite": True,
+            },
+            trajectory["centre_covariance"],
+        )
         self.assertEqual(
             [
                 "scene_revision",
@@ -2663,6 +2676,7 @@ class RacetrackM1PhysicsContractDocsTests(unittest.TestCase):
             "skyrmion-candidate-speed-statistics",
             "skyrmion-hall-weighted-regression",
             "skyrmion-hall-weighted-covariance",
+            "skyrmion-hall-directional-coherence",
             "skyrmion-hall-angle",
             "skyrmion-hall-angle-variance",
         ):
@@ -2671,11 +2685,11 @@ class RacetrackM1PhysicsContractDocsTests(unittest.TestCase):
             r"\Delta Q_{n,k}=\frac{\Omega_{n,k}}{4\pi}",
             r"\mathbf r_n=\frac{\sum_k\Delta Q_{n,k}\mathbf c_{n,k}}{Q_n}",
             r"c_v=\frac{\sqrt{\frac{1}{N_w-1}\sum_{k=i}^{j-1}(s_k-\bar s)^2}}{\max(\bar s,1\,\mathrm{m\,s^{-1}})}",
-            r"w_n=1",
-            r"\chi_{ab}=\frac{1}{N_w-2}\sum_nr_{a,n}r_{b,n}",
-            r"\operatorname{Cov}(v_a,v_b)=\frac{\chi_{ab}}{S_{tt}}",
-            "position variances are not produced",
-            "equal_weight_v1",
+            r"N=\sum_n A_n^T C_n^{-1} A_n",
+            r"\operatorname{Cov}(\hat\beta)=N^{-1}",
+            r"d_{\mathrm{coh}}=",
+            "calibrated symmetric positive-definite",
+            "weighted_gls.v1",
             "accepted_sequence",
             "cache_key_digest",
         ):
@@ -2704,6 +2718,7 @@ class RacetrackM1PhysicsContractDocsTests(unittest.TestCase):
                 "skyrmion-candidate-speed-statistics",
                 "skyrmion-hall-weighted-regression",
                 "skyrmion-hall-weighted-covariance",
+                "skyrmion-hall-directional-coherence",
                 "skyrmion-hall-angle",
                 "skyrmion-hall-angle-variance",
                 "belavin-polyakov-texture",
@@ -2718,12 +2733,13 @@ class RacetrackM1PhysicsContractDocsTests(unittest.TestCase):
             "skyrmion-candidate-speed-statistics",
             "skyrmion-hall-weighted-regression",
             "skyrmion-hall-weighted-covariance",
+            "skyrmion-hall-directional-coherence",
             "skyrmion-hall-angle",
             "skyrmion-hall-angle-variance",
         ):
             equation = equations[equation_id]
-            self.assertEqual("Task 1", equation.get("owner_task"))
-            self.assertEqual("planned_contract", equation.get("evidence_status"))
+            self.assertEqual("Task 8", equation.get("owner_task"))
+            self.assertEqual("source_and_tests", equation.get("evidence_status"))
             self.assertTrue(equation["sources"])
 
         hall_section = _anchored_section(
@@ -2735,26 +2751,26 @@ class RacetrackM1PhysicsContractDocsTests(unittest.TestCase):
         hall_map_labels = {
             equation_id
             for equation_id, equation in equations.items()
-            if equation.get("owner_task") == "Task 1"
+            if equation.get("owner_task") == "Task 8"
         }
         self.assertEqual(hall_document_labels, hall_map_labels)
 
         claims = {row["id"]: row for row in source_map["claims"]}
-        task_1_claim_sources = {
+        hall_claim_sources = {
             "skyrmion-hall-steady-window-thresholds": "skyrmion-hall-window-thresholds-contract",
             "skyrmion-hall-exhaustive-window-selection": "skyrmion-hall-window-selection-contract",
-            "skyrmion-hall-equal-weight-wls": "skyrmion-hall-equal-weight-wls-contract",
-            "skyrmion-hall-covariance": "skyrmion-hall-equal-weight-wls-contract",
+            "skyrmion-hall-weighted-gls": "skyrmion-hall-weighted-gls-contract",
+            "skyrmion-hall-covariance": "skyrmion-hall-weighted-gls-contract",
             "skyrmion-hall-trajectory-provenance": "skyrmion-hall-trajectory-provenance-contract",
             "skyrmion-hall-reason-code-precedence": "skyrmion-hall-reason-code-contract",
         }
-        self.assertTrue(set(task_1_claim_sources).issubset(claims))
-        for claim_id, source_id in task_1_claim_sources.items():
+        self.assertTrue(set(hall_claim_sources).issubset(claims))
+        for claim_id, source_id in hall_claim_sources.items():
             with self.subTest(claim_id=claim_id):
                 claim = claims[claim_id]
                 self.assertEqual([source_id], claim["sources"])
-                self.assertEqual("planned_contract", claim["evidence_status"])
-                self.assertEqual("Task 1", claim["owner_task"])
+                self.assertEqual("source_and_tests", claim["evidence_status"])
+                self.assertEqual("Task 8", claim["owner_task"])
         source_ids = {row["id"] for row in source_map["sources"]}
         for claim in claims.values():
             self.assertTrue(claim["sources"])
@@ -2768,13 +2784,13 @@ class RacetrackM1PhysicsContractDocsTests(unittest.TestCase):
             sources["topological-profile-sampling"]["symbol"],
         )
         self.assertEqual("planned_contract", sources["skyrmion-hall-contract"]["evidence_status"])
-        for source_id in set(task_1_claim_sources.values()) | {"skyrmion-hall-contract"}:
+        for source_id in set(hall_claim_sources.values()) | {"skyrmion-hall-contract"}:
             with self.subTest(source_id=source_id):
                 source = sources[source_id]
                 self.assertEqual(TOPOLOGICAL_PAGE.relative_to(ROOT).as_posix(), source["path"])
                 self.assertTrue(source["symbol"].startswith("DOC-ANCHOR:"))
                 self.assertEqual("planned_contract", source["evidence_status"])
-                self.assertEqual("Task 1", source["owner_task"])
+                self.assertEqual("Task 8", source["owner_task"])
 
         symbols = {row["id"]: row for row in source_map["symbols"]}
         self.assertEqual("N", symbols["N"]["latex"])
@@ -2827,9 +2843,9 @@ class RacetrackM1PhysicsContractDocsTests(unittest.TestCase):
         page = TOPOLOGICAL_PAGE.read_text(encoding="utf-8")
         for row in (
             r"| $t_n$ | $t_n$ | accepted trajectory time sample | $\mathrm{s}$ |",
-            r"| $w_n$ | $w_n$ | deterministic equal sample weight, exactly one | $1$ |",
+            r"| $C_n$ | $C_n$ | calibrated signed-density-centre covariance | $\mathrm{m^2}$ |",
             r"| $\Theta_H$ | $\Theta_H$ | signed skyrmion Hall angle in the reported frame | $\mathrm{rad}$ |",
-            r"| $\chi_{ab}$ | $\chi_{ab}$ | equal-weight residual cross-covariance of centre coordinates | $\mathrm{m^2}$ |",
+            r"| $C_n$ | $C_n$ | calibrated signed-density-centre covariance | $\mathrm{m^2}$ |",
             r"| $Q_{\mathrm{med}}$ | $Q_{\mathrm{med}}$ | deterministic median charge in a candidate window | $1$ |",
             r"| $N_w$ | $N_w$ | number of samples in a candidate Hall window | $1$ |",
         ):

@@ -237,10 +237,11 @@ study.stages.set_spin_torque_enabled(
     enabled=True,
     stage_id="enable-transport-torque",
 )
+study.stages.add_run(stage_id="run-after-enable", until=1e-12)
 """
         )
 
-        disabled, relax, enabled = loaded.stages
+        disabled, relax, enabled, run_after_enable = loaded.stages
         self.assertEqual(
             disabled.action,
             {
@@ -251,9 +252,17 @@ study.stages.set_spin_torque_enabled(
         )
         self.assertEqual(relax.stage_id, "relax-zero-current")
         self.assertEqual(enabled.action["enabled"], True)
+        disabled_graph = disabled.problem.to_ir(include_geometry_assets=False)["physics_graph"]
+        relax_graph = relax.problem.to_ir(include_geometry_assets=False)["physics_graph"]
+        enabled_graph = enabled.problem.to_ir(include_geometry_assets=False)["physics_graph"]
+        self.assertEqual(disabled_graph["modules"][-1]["activation"], "active")
+        self.assertEqual(relax_graph["modules"][-1]["activation"], "inactive")
+        self.assertEqual(enabled_graph["modules"][-1]["activation"], "inactive")
+        run_graph = run_after_enable.problem.to_ir(include_geometry_assets=False)["physics_graph"]
+        self.assertEqual(run_graph["modules"][-1]["activation"], "active")
         self.assertEqual(
             [node["stage_kind"] for node in loaded.study_pipeline_document()["nodes"]],
-            ["set_spin_torque_enabled", "relax", "set_spin_torque_enabled"],
+            ["set_spin_torque_enabled", "relax", "set_spin_torque_enabled", "run"],
         )
         rendered = rewrite_loaded_problem_script(loaded)["rendered_source"]
         reloaded = _load(rendered)

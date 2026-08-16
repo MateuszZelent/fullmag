@@ -374,6 +374,16 @@ impl GpuM1TransportAbi for FakeAbi {
         })
     }
 
+    fn query_telemetry(
+        &self,
+        _context: fullmag_fdm_gpu_transport_context_handle_v1,
+        _cursor: u64,
+        _records: &mut [ffi::fullmag_fdm_gpu_transport_telemetry_v1],
+    ) -> Result<usize, u32> {
+        self.record("telemetry");
+        Ok(0)
+    }
+
     fn readback_artifact(
         &self,
         request: &fullmag_fdm_gpu_transport_artifact_request_v1,

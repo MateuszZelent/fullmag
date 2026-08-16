@@ -151,6 +151,7 @@ pub(crate) fn execute_reference_fdm_multilayer(
     let provenance = ExecutionProvenance {
         charge_transport: None,
         transport_modules: Vec::new(),
+        fdm_gpu_transport_telemetry: None,
         executed_physics_kinds: Vec::new(),
         executed_physics_module_ids: Vec::new(),
         execution_engine: "cpu_reference_multilayer".to_string(),

@@ -264,6 +264,7 @@ __global__ void combine_effective_field_fp64_kernel(
     const double * __restrict__ ku1_field,
     const double * __restrict__ ku2_field,
     double ms,
+    double exchange_stiffness,
     int has_cubic_anisotropy,
     double Kc1,
     double Kc2,
@@ -354,7 +355,7 @@ __global__ void combine_effective_field_fp64_kernel(
         hz += g1 * c1z + g2 * c2z + g3 * c3z;
     }
 
-    // --- DMI (finite differences with Neumann BC clamping) ---
+    // --- DMI (MuMax-compatible natural free-surface boundary conditions) ---
     if ((has_interfacial_dmi || has_bulk_dmi) && ms > 0.0) {
         int iz = idx / (ny * nx);
         int rem = idx - iz * ny * nx;
@@ -368,24 +369,90 @@ __global__ void combine_effective_field_fp64_kernel(
         int zm = pbc_neighbor_index(iz, nz, nx * ny, idx, -1, periodic_z);
         int zp = pbc_neighbor_index(iz, nz, nx * ny, idx, 1, periodic_z);
 
+        bool missing_xm = !periodic_x && ix == 0;
+        bool missing_xp = !periodic_x && ix == nx - 1;
+        bool missing_ym = !periodic_y && iy == 0;
+        bool missing_yp = !periodic_y && iy == ny - 1;
+        bool missing_zm = !periodic_z && iz == 0;
+        bool missing_zp = !periodic_z && iz == nz - 1;
         if (has_active_mask) {
-            if (active_mask[xm] == 0) xm = idx;
-            if (active_mask[xp] == 0) xp = idx;
-            if (active_mask[ym] == 0) ym = idx;
-            if (active_mask[yp] == 0) yp = idx;
-            if (active_mask[zm] == 0) zm = idx;
-            if (active_mask[zp] == 0) zp = idx;
+            missing_xm = missing_xm || active_mask[xm] == 0;
+            missing_xp = missing_xp || active_mask[xp] == 0;
+            missing_ym = missing_ym || active_mask[ym] == 0;
+            missing_yp = missing_yp || active_mask[yp] == 0;
+            missing_zm = missing_zm || active_mask[zm] == 0;
+            missing_zp = missing_zp || active_mask[zp] == 0;
+            if (missing_xm) xm = idx;
+            if (missing_xp) xp = idx;
+            if (missing_ym) ym = idx;
+            if (missing_yp) yp = idx;
+            if (missing_zm) zm = idx;
+            if (missing_zp) zp = idx;
         }
 
         double mu0 = 4.0 * M_PI * 1e-7;
         double dmi_pf = 2.0 / (mu0 * ms);
 
         if (has_interfacial_dmi) {
+            // MuMax's interfacial DMI uses the natural boundary condition
+            // dm/dn = (D/(2A)) (n x m).  Extrapolate a missing neighbor and
+            // use it for both the central DMI derivative and the exchange
+            // correction.  The ordinary exchange kernel intentionally keeps
+            // its clamped-Neumann stencil, so the correction is applied here.
+            double mxm = m_x[xm], mym = m_y[xm], mzm = m_z[xm];
+            double mxp = m_x[xp], myp = m_y[xp], mzp = m_z[xp];
+            double mxym = m_x[ym], myym = m_y[ym], mzym = m_z[ym];
+            double mxyP = m_x[yp], myyP = m_y[yp], mzyP = m_z[yp];
+            if (exchange_stiffness > 0.0) {
+                const double d_over_2a = D_int / (2.0 * exchange_stiffness);
+                const double dx = 0.5 / inv_2dx;
+                const double dy = 0.5 / inv_2dy;
+                if (missing_xm) {
+                    mxm = mx + dx * d_over_2a * mz;
+                    mzm = mz - dx * d_over_2a * mx;
+                }
+                if (missing_xp) {
+                    mxp = mx - dx * d_over_2a * mz;
+                    mzp = mz + dx * d_over_2a * mx;
+                }
+                if (missing_ym) {
+                    myym = my + dy * d_over_2a * mz;
+                    mzym = mz - dy * d_over_2a * my;
+                }
+                if (missing_yp) {
+                    myyP = my - dy * d_over_2a * mz;
+                    mzyP = mz + dy * d_over_2a * my;
+                }
+
+                const double exchange_pf = 2.0 * exchange_stiffness / (mu0 * ms);
+                const double inv_dx2 = 4.0 * inv_2dx * inv_2dx;
+                const double inv_dy2 = 4.0 * inv_2dy * inv_2dy;
+                if (missing_xm) {
+                    hx += exchange_pf * (mxm - mx) * inv_dx2;
+                    hy += exchange_pf * (mym - my) * inv_dx2;
+                    hz += exchange_pf * (mzm - mz) * inv_dx2;
+                }
+                if (missing_xp) {
+                    hx += exchange_pf * (mxp - mx) * inv_dx2;
+                    hy += exchange_pf * (myp - my) * inv_dx2;
+                    hz += exchange_pf * (mzp - mz) * inv_dx2;
+                }
+                if (missing_ym) {
+                    hx += exchange_pf * (mxym - mx) * inv_dy2;
+                    hy += exchange_pf * (myym - my) * inv_dy2;
+                    hz += exchange_pf * (mzym - mz) * inv_dy2;
+                }
+                if (missing_yp) {
+                    hx += exchange_pf * (mxyP - mx) * inv_dy2;
+                    hy += exchange_pf * (myyP - my) * inv_dy2;
+                    hz += exchange_pf * (mzyP - mz) * inv_dy2;
+                }
+            }
             // Interfacial DMI: H_x = D*(dmz/dx), H_y = D*(dmz/dy), H_z = -D*(dmx/dx + dmy/dy)
-            double dmz_dx = (m_z[xp] - m_z[xm]) * inv_2dx;
-            double dmz_dy = (m_z[yp] - m_z[ym]) * inv_2dy;
-            double dmx_dx = (m_x[xp] - m_x[xm]) * inv_2dx;
-            double dmy_dy = (m_y[yp] - m_y[ym]) * inv_2dy;
+            double dmz_dx = (mzp - mzm) * inv_2dx;
+            double dmz_dy = (mzyP - mzym) * inv_2dy;
+            double dmx_dx = (mxp - mxm) * inv_2dx;
+            double dmy_dy = (myyP - myym) * inv_2dy;
 
             hx += dmi_pf * D_int * dmz_dx;
             hy += dmi_pf * D_int * dmz_dy;
@@ -686,10 +753,14 @@ void launch_demag_field_fp64(Context &ctx) {
 __global__ void add_scaled_field_fp64_kernel(
     double *dst_x, double *dst_y, double *dst_z,
     const double *src_x, const double *src_y, const double *src_z,
-    double scale, int n)
+    double scale,
+    const uint8_t *active_mask,
+    int has_active_mask,
+    int n)
 {
     int i = blockIdx.x * blockDim.x + threadIdx.x;
     if (i >= n) return;
+    if (has_active_mask && active_mask[i] == 0) return;
     dst_x[i] += scale * src_x[i];
     dst_y[i] += scale * src_y[i];
     dst_z[i] += scale * src_z[i];
@@ -739,6 +810,7 @@ void launch_effective_field_fp64(Context &ctx, double evaluation_time) {
         ctx.ku1_field,
         ctx.ku2_field,
         ctx.Ms,
+        ctx.A,
         ctx.has_cubic_anisotropy ? 1 : 0,
         ctx.Kc1,
         ctx.Kc2,
@@ -765,8 +837,20 @@ void launch_effective_field_fp64(Context &ctx, double evaluation_time) {
         ctx.mel_strain[0], ctx.mel_strain[1], ctx.mel_strain[2],  // e11, e22, e33
         ctx.mel_strain[3] * 0.5, ctx.mel_strain[4] * 0.5, ctx.mel_strain[5] * 0.5); // e23, e13, e12 (tensor)
 
-    // ── Add Oersted field contribution: H_eff += I(t) * H_oe_static ──
-    if (ctx.has_oersted_field) {
+    // ── Add a static external profile directly, or scale a dynamic Oersted profile by I(t). ──
+    if (ctx.has_static_external_field_profile) {
+        add_scaled_field_fp64_kernel<<<grid, BLOCK_SIZE>>>(
+            static_cast<double*>(ctx.work.x),
+            static_cast<double*>(ctx.work.y),
+            static_cast<double*>(ctx.work.z),
+            static_cast<const double*>(ctx.h_oe_static.x),
+            static_cast<const double*>(ctx.h_oe_static.y),
+            static_cast<const double*>(ctx.h_oe_static.z),
+            1.0,
+            ctx.active_mask,
+            ctx.has_active_mask ? 1 : 0,
+            n);
+    } else if (ctx.has_oersted_field) {
         const double I_scale = oersted_field_scale(ctx, evaluation_time);
         // Simple axpy: work += I_scale * h_oe_static
         add_scaled_field_fp64_kernel<<<grid, BLOCK_SIZE>>>(
@@ -776,7 +860,10 @@ void launch_effective_field_fp64(Context &ctx, double evaluation_time) {
             static_cast<const double*>(ctx.h_oe_static.x),
             static_cast<const double*>(ctx.h_oe_static.y),
             static_cast<const double*>(ctx.h_oe_static.z),
-            I_scale, n);
+            I_scale,
+            ctx.active_mask,
+            ctx.has_active_mask ? 1 : 0,
+            n);
     }
 }
 

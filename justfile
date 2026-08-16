@@ -770,17 +770,19 @@ verify-fdm-cpu-m1-transport-abi-contract:
 
 verify-fdm-gpu-m1-layout-abi-contract:
     docker compose --profile fem-gpu run --rm --no-deps \
-      -v /mnt/fullmag-zfn2-native:/mnt/fullmag-zfn2-native \
+      -v "${FULLMAG_MANAGED_NATIVE_ROOT:-/mnt/fullmag-zfn2-native}:${FULLMAG_MANAGED_NATIVE_ROOT:-/mnt/fullmag-zfn2-native}" \
+      -e FULLMAG_MANAGED_NATIVE_ROOT="${FULLMAG_MANAGED_NATIVE_ROOT:-/mnt/fullmag-zfn2-native}" \
       -e CMAKE_BUILD_PARALLEL_LEVEL="${FULLMAG_NATIVE_BUILD_JOBS:-2}" \
       -e FULLMAG_CUDA_ARCHITECTURES="${FULLMAG_CUDA_ARCHITECTURES:-native}" \
-      fem-gpu bash -lc 'set -euo pipefail; cd /workspace; build_dir=/mnt/fullmag-zfn2-native/fdm-gpu-m1-layout; mkdir -p "$build_dir" "$build_dir/cargo-home" "$build_dir/cargo-target"; evidence="$build_dir/fdm-gpu-m1-layout-abi-v1.json"; rm -f "$evidence" "$evidence.tmp"; cmake -S native -B "$build_dir" -DCMAKE_CUDA_ARCHITECTURES="$FULLMAG_CUDA_ARCHITECTURES" -DFULLMAG_ENABLE_CUDA=ON -DFULLMAG_ENABLE_FEM_GPU=OFF -DFULLMAG_USE_MFEM_STACK=OFF -DFULLMAG_FEM_WITH_SLEPC=OFF; cmake --build "$build_dir" --target fullmag_fdm fdm_gpu_transport_layout_abi_v1_contract fdm_gpu_transport_registry_fail_closed_v1_contract fdm_gpu_transport_checkpoint_semantic_v1_contract fdm_gpu_transport_layout_abi_v1_c11_contract; FULLMAG_FDM_LIB_DIR="$build_dir/backends/fdm" LD_LIBRARY_PATH="$build_dir/backends/fdm${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" CARGO_HOME="$build_dir/cargo-home" CARGO_TARGET_DIR="$build_dir/cargo-target" CARGO_INCREMENTAL=0 cargo test -p fullmag-fdm-sys gpu_transport_abi_v1::tests -- --nocapture; ctest --test-dir "$build_dir/backends/fdm" --output-on-failure -R "^fdm_gpu_transport_(layout_abi_v1(_c11)?|registry_fail_closed_v1|checkpoint_semantic_v1)_contract$"; FULLMAG_FDM_GPU_M1_EVIDENCE_PATH="$evidence" "$build_dir/backends/fdm/fdm_gpu_transport_layout_abi_v1_contract"; test -s "$evidence"; python3 -m json.tool "$evidence"'
+      fem-gpu bash -lc 'set -euo pipefail; cd /workspace; build_dir="${FULLMAG_MANAGED_NATIVE_ROOT:-/mnt/fullmag-zfn2-native}/fdm-gpu-m1-layout"; mkdir -p "$build_dir" "$build_dir/cargo-home" "$build_dir/cargo-target"; evidence="$build_dir/fdm-gpu-m1-layout-abi-v1.json"; rm -f "$evidence" "$evidence.tmp"; cmake -S native -B "$build_dir" -DCMAKE_CUDA_ARCHITECTURES="$FULLMAG_CUDA_ARCHITECTURES" -DFULLMAG_ENABLE_CUDA=ON -DFULLMAG_ENABLE_FEM_GPU=OFF -DFULLMAG_USE_MFEM_STACK=OFF -DFULLMAG_FEM_WITH_SLEPC=OFF; cmake --build "$build_dir" --target fullmag_fdm fdm_gpu_transport_layout_abi_v1_contract fdm_gpu_transport_registry_fail_closed_v1_contract fdm_gpu_transport_checkpoint_semantic_v1_contract fdm_gpu_transport_layout_abi_v1_c11_contract; FULLMAG_FDM_LIB_DIR="$build_dir/backends/fdm" LD_LIBRARY_PATH="$build_dir/backends/fdm${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" CARGO_HOME="$build_dir/cargo-home" CARGO_TARGET_DIR="$build_dir/cargo-target" CARGO_INCREMENTAL=0 cargo test -p fullmag-fdm-sys gpu_transport_abi_v1::tests -- --nocapture; ctest --test-dir "$build_dir/backends/fdm" --output-on-failure -R "^fdm_gpu_transport_(layout_abi_v1(_c11)?|registry_fail_closed_v1|checkpoint_semantic_v1)_contract$"; FULLMAG_FDM_GPU_M1_EVIDENCE_PATH="$evidence" "$build_dir/backends/fdm/fdm_gpu_transport_layout_abi_v1_contract"; test -s "$evidence"; python3 -m json.tool "$evidence"'
 
 verify-fdm-gpu-m1-charge-native-contract:
     docker compose --profile fem-gpu run --rm --no-deps \
-      -v /mnt/fullmag-zfn2-native:/mnt/fullmag-zfn2-native \
+      -v "${FULLMAG_MANAGED_NATIVE_ROOT:-/mnt/fullmag-zfn2-native}:${FULLMAG_MANAGED_NATIVE_ROOT:-/mnt/fullmag-zfn2-native}" \
+      -e FULLMAG_MANAGED_NATIVE_ROOT="${FULLMAG_MANAGED_NATIVE_ROOT:-/mnt/fullmag-zfn2-native}" \
       -e CMAKE_BUILD_PARALLEL_LEVEL="${FULLMAG_NATIVE_BUILD_JOBS:-2}" \
       -e FULLMAG_CUDA_ARCHITECTURES="${FULLMAG_CUDA_ARCHITECTURES:-native}" \
-      fem-gpu bash -lc 'set -euo pipefail; cd /workspace; build_dir=/mnt/fullmag-zfn2-native/fdm-gpu-m1-charge; mkdir -p "$build_dir"; export LD_LIBRARY_PATH="$build_dir/backends/fdm${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"; uniform="$build_dir/fdm-gpu-m1-charge-uniform-v1.json"; layered="$build_dir/fdm-gpu-m1-charge-layered-v1.json"; snapshot="$build_dir/fdm-gpu-m1-charge-snapshot-v1.json"; mutation="$build_dir/fdm-gpu-m1-charge-boundary-mutation-v1.json"; transfer="$build_dir/fdm-gpu-m1-charge-transfer-audit-v1.json"; rm -f "$uniform" "$uniform.tmp" "$layered" "$layered.tmp" "$snapshot" "$snapshot.tmp" "$mutation" "$mutation.tmp" "$transfer" "$transfer.tmp"; cmake -S native -B "$build_dir" -DCMAKE_CUDA_ARCHITECTURES="$FULLMAG_CUDA_ARCHITECTURES" -DFULLMAG_ENABLE_CUDA=ON -DFULLMAG_ENABLE_FEM_GPU=OFF -DFULLMAG_USE_MFEM_STACK=OFF -DFULLMAG_FEM_WITH_SLEPC=OFF; cmake --build "$build_dir" --target fullmag_fdm fdm_gpu_m1_charge_uniform_v1_contract fdm_gpu_m1_charge_layered_v1_contract fdm_gpu_m1_charge_snapshot_v1_contract fdm_gpu_m1_charge_boundary_mutation_v1_contract fdm_gpu_m1_charge_transfer_audit_v1_contract; FULLMAG_FDM_GPU_M1_CHARGE_EVIDENCE_PATH="$uniform.tmp" "$build_dir/backends/fdm/fdm_gpu_m1_charge_uniform_v1_contract"; FULLMAG_FDM_GPU_M1_CHARGE_LAYERED_EVIDENCE_PATH="$layered.tmp" "$build_dir/backends/fdm/fdm_gpu_m1_charge_layered_v1_contract"; FULLMAG_FDM_GPU_M1_CHARGE_SNAPSHOT_EVIDENCE_PATH="$snapshot.tmp" "$build_dir/backends/fdm/fdm_gpu_m1_charge_snapshot_v1_contract"; FULLMAG_FDM_GPU_M1_CHARGE_MUTATION_EVIDENCE_PATH="$mutation.tmp" "$build_dir/backends/fdm/fdm_gpu_m1_charge_boundary_mutation_v1_contract"; FULLMAG_FDM_GPU_M1_CHARGE_TRANSFER_AUDIT_EVIDENCE_PATH="$transfer.tmp" "$build_dir/backends/fdm/fdm_gpu_m1_charge_transfer_audit_v1_contract"; test -s "$uniform.tmp"; test -s "$layered.tmp"; test -s "$snapshot.tmp"; test -s "$mutation.tmp"; test -s "$transfer.tmp"; python3 -m json.tool "$uniform.tmp" >/dev/null; python3 -m json.tool "$layered.tmp" >/dev/null; python3 -m json.tool "$snapshot.tmp" >/dev/null; python3 -m json.tool "$mutation.tmp" >/dev/null; python3 -m json.tool "$transfer.tmp" >/dev/null; mv "$uniform.tmp" "$uniform"; mv "$layered.tmp" "$layered"; mv "$snapshot.tmp" "$snapshot"; mv "$mutation.tmp" "$mutation"; mv "$transfer.tmp" "$transfer"; python3 -m json.tool "$uniform"; python3 -m json.tool "$layered"; python3 -m json.tool "$snapshot"; python3 -m json.tool "$mutation"; python3 -m json.tool "$transfer"'
+      fem-gpu bash -lc 'set -euo pipefail; cd /workspace; build_dir="${FULLMAG_MANAGED_NATIVE_ROOT:-/mnt/fullmag-zfn2-native}/fdm-gpu-m1-charge"; mkdir -p "$build_dir"; export LD_LIBRARY_PATH="$build_dir/backends/fdm${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"; uniform="$build_dir/fdm-gpu-m1-charge-uniform-v1.json"; layered="$build_dir/fdm-gpu-m1-charge-layered-v1.json"; snapshot="$build_dir/fdm-gpu-m1-charge-snapshot-v1.json"; mutation="$build_dir/fdm-gpu-m1-charge-boundary-mutation-v1.json"; transfer="$build_dir/fdm-gpu-m1-charge-transfer-audit-v1.json"; rm -f "$uniform" "$uniform.tmp" "$layered" "$layered.tmp" "$snapshot" "$snapshot.tmp" "$mutation" "$mutation.tmp" "$transfer" "$transfer.tmp"; cmake -S native -B "$build_dir" -DCMAKE_CUDA_ARCHITECTURES="$FULLMAG_CUDA_ARCHITECTURES" -DFULLMAG_ENABLE_CUDA=ON -DFULLMAG_ENABLE_FEM_GPU=OFF -DFULLMAG_USE_MFEM_STACK=OFF -DFULLMAG_FEM_WITH_SLEPC=OFF; cmake --build "$build_dir" --target fullmag_fdm fdm_gpu_m1_charge_uniform_v1_contract fdm_gpu_m1_charge_layered_v1_contract fdm_gpu_m1_charge_snapshot_v1_contract fdm_gpu_m1_charge_boundary_mutation_v1_contract fdm_gpu_m1_charge_transfer_audit_v1_contract; FULLMAG_FDM_GPU_M1_CHARGE_EVIDENCE_PATH="$uniform.tmp" "$build_dir/backends/fdm/fdm_gpu_m1_charge_uniform_v1_contract"; FULLMAG_FDM_GPU_M1_CHARGE_LAYERED_EVIDENCE_PATH="$layered.tmp" "$build_dir/backends/fdm/fdm_gpu_m1_charge_layered_v1_contract"; FULLMAG_FDM_GPU_M1_CHARGE_SNAPSHOT_EVIDENCE_PATH="$snapshot.tmp" "$build_dir/backends/fdm/fdm_gpu_m1_charge_snapshot_v1_contract"; FULLMAG_FDM_GPU_M1_CHARGE_MUTATION_EVIDENCE_PATH="$mutation.tmp" "$build_dir/backends/fdm/fdm_gpu_m1_charge_boundary_mutation_v1_contract"; FULLMAG_FDM_GPU_M1_CHARGE_TRANSFER_AUDIT_EVIDENCE_PATH="$transfer.tmp" "$build_dir/backends/fdm/fdm_gpu_m1_charge_transfer_audit_v1_contract"; test -s "$uniform.tmp"; test -s "$layered.tmp"; test -s "$snapshot.tmp"; test -s "$mutation.tmp"; test -s "$transfer.tmp"; python3 -m json.tool "$uniform.tmp" >/dev/null; python3 -m json.tool "$layered.tmp" >/dev/null; python3 -m json.tool "$snapshot.tmp" >/dev/null; python3 -m json.tool "$mutation.tmp" >/dev/null; python3 -m json.tool "$transfer.tmp" >/dev/null; mv "$uniform.tmp" "$uniform"; mv "$layered.tmp" "$layered"; mv "$snapshot.tmp" "$snapshot"; mv "$mutation.tmp" "$mutation"; mv "$transfer.tmp" "$transfer"; python3 -m json.tool "$uniform"; python3 -m json.tool "$layered"; python3 -m json.tool "$snapshot"; python3 -m json.tool "$mutation"; python3 -m json.tool "$transfer"'
 
 verify-fdm-gpu-public-charge-runtime:
     docker compose --profile fem-gpu run --rm --no-deps \
@@ -813,11 +815,12 @@ verify-fdm-gpu-m1-charge-boundary-compute-sanitizer:
 
 verify-fdm-gpu-m1-spin-native-contract:
     docker compose --profile fem-gpu run --rm --no-deps \
-      -v /mnt/fullmag-zfn2-native:/mnt/fullmag-zfn2-native \
+      -v "${FULLMAG_MANAGED_NATIVE_ROOT:-/mnt/fullmag-zfn2-native}:${FULLMAG_MANAGED_NATIVE_ROOT:-/mnt/fullmag-zfn2-native}" \
+      -e FULLMAG_MANAGED_NATIVE_ROOT="${FULLMAG_MANAGED_NATIVE_ROOT:-/mnt/fullmag-zfn2-native}" \
       -v /zfn2/mateuszz/git/fullmag/reports:/zfn2-reports \
       -e CMAKE_BUILD_PARALLEL_LEVEL="${FULLMAG_NATIVE_BUILD_JOBS:-2}" \
       -e FULLMAG_CUDA_ARCHITECTURES="${FULLMAG_CUDA_ARCHITECTURES:-native}" \
-      fem-gpu bash -lc 'set -euo pipefail; cd /workspace; build_dir=/mnt/fullmag-zfn2-native/fdm-gpu-m1-spin; evidence_dir=/zfn2-reports/fdm-gpu-m1-spin-public; mkdir -p "$build_dir" "$evidence_dir"; evidence="$build_dir/fdm-gpu-m1-spin-diffusion-she-v1.json"; public_evidence="$evidence_dir/fdm-gpu-m1-spin-public-v1.json"; rm -f "$evidence" "$evidence.tmp" "$public_evidence" "$public_evidence.tmp"; cmake -S native -B "$build_dir" -DCMAKE_CUDA_ARCHITECTURES="$FULLMAG_CUDA_ARCHITECTURES" -DFULLMAG_ENABLE_CUDA=ON -DFULLMAG_ENABLE_FEM_GPU=OFF -DFULLMAG_USE_MFEM_STACK=OFF -DFULLMAG_FEM_WITH_SLEPC=OFF; cmake --build "$build_dir" --target fullmag_fdm fdm_gpu_m1_spin_memory_policy_contract fdm_gpu_m1_spin_diffusion_she_v1_contract fdm_gpu_m1_spin_operator_parity_v1_contract fdm_gpu_m1_spin_sparse_dispatch_v1_contract; "$build_dir/backends/fdm/fdm_gpu_m1_spin_memory_policy_contract"; FULLMAG_FDM_GPU_M1_SPIN_EVIDENCE_PATH="$evidence.tmp" "$build_dir/backends/fdm/fdm_gpu_m1_spin_diffusion_she_v1_contract"; "$build_dir/backends/fdm/fdm_gpu_m1_spin_operator_parity_v1_contract"; FULLMAG_FDM_GPU_TRACE_STATIC_UPLOAD=1 FULLMAG_FDM_GPU_TRACE_SPIN_SOLVE=1 FULLMAG_FDM_GPU_M1_SPIN_PUBLIC_EVIDENCE_PATH="$public_evidence.tmp" "$build_dir/backends/fdm/fdm_gpu_m1_spin_sparse_dispatch_v1_contract"; test -s "$evidence.tmp"; test -s "$public_evidence.tmp"; python3 -m json.tool "$evidence.tmp" >/dev/null; python3 -m json.tool "$public_evidence.tmp" >/dev/null; mv "$evidence.tmp" "$evidence"; mv "$public_evidence.tmp" "$public_evidence"; python3 -m json.tool "$evidence"; python3 -m json.tool "$public_evidence"'
+      fem-gpu bash -lc 'set -euo pipefail; cd /workspace; build_dir="${FULLMAG_MANAGED_NATIVE_ROOT:-/mnt/fullmag-zfn2-native}/fdm-gpu-m1-spin"; evidence_dir=/zfn2-reports/fdm-gpu-m1-spin-public; mkdir -p "$build_dir" "$evidence_dir"; evidence="$build_dir/fdm-gpu-m1-spin-diffusion-she-v1.json"; public_evidence="$evidence_dir/fdm-gpu-m1-spin-public-v1.json"; rm -f "$evidence" "$evidence.tmp" "$public_evidence" "$public_evidence.tmp"; cmake -S native -B "$build_dir" -DCMAKE_CUDA_ARCHITECTURES="$FULLMAG_CUDA_ARCHITECTURES" -DFULLMAG_ENABLE_CUDA=ON -DFULLMAG_ENABLE_FEM_GPU=OFF -DFULLMAG_USE_MFEM_STACK=OFF -DFULLMAG_FEM_WITH_SLEPC=OFF; cmake --build "$build_dir" --target fullmag_fdm fdm_gpu_m1_spin_memory_policy_contract fdm_gpu_m1_spin_diffusion_she_v1_contract fdm_gpu_m1_spin_operator_parity_v1_contract fdm_gpu_m1_spin_sparse_dispatch_v1_contract; "$build_dir/backends/fdm/fdm_gpu_m1_spin_memory_policy_contract"; FULLMAG_FDM_GPU_M1_SPIN_EVIDENCE_PATH="$evidence.tmp" "$build_dir/backends/fdm/fdm_gpu_m1_spin_diffusion_she_v1_contract"; "$build_dir/backends/fdm/fdm_gpu_m1_spin_operator_parity_v1_contract"; FULLMAG_FDM_GPU_TRACE_STATIC_UPLOAD=1 FULLMAG_FDM_GPU_TRACE_SPIN_SOLVE=1 FULLMAG_FDM_GPU_M1_SPIN_PUBLIC_EVIDENCE_PATH="$public_evidence.tmp" "$build_dir/backends/fdm/fdm_gpu_m1_spin_sparse_dispatch_v1_contract"; test -s "$evidence.tmp"; test -s "$public_evidence.tmp"; python3 -m json.tool "$evidence.tmp" >/dev/null; python3 -m json.tool "$public_evidence.tmp" >/dev/null; mv "$evidence.tmp" "$evidence"; mv "$public_evidence.tmp" "$public_evidence"; python3 -m json.tool "$evidence"; python3 -m json.tool "$public_evidence"'
 
 verify-fdm-gpu-m1-spin-observables-contract:
     docker compose --profile fem-gpu run --rm --no-deps \
@@ -828,30 +831,34 @@ verify-fdm-gpu-m1-spin-observables-contract:
 
 verify-fdm-gpu-m1-transport-llg-native-contract:
     docker compose -p fullmag --profile fem-gpu run --rm --no-deps \
-      -v /mnt/fullmag-zfn2-native:/mnt/fullmag-zfn2-native \
+      -v "${FULLMAG_MANAGED_NATIVE_ROOT:-/mnt/fullmag-zfn2-native}:${FULLMAG_MANAGED_NATIVE_ROOT:-/mnt/fullmag-zfn2-native}" \
+      -e FULLMAG_MANAGED_NATIVE_ROOT="${FULLMAG_MANAGED_NATIVE_ROOT:-/mnt/fullmag-zfn2-native}" \
       -e CMAKE_BUILD_PARALLEL_LEVEL="${FULLMAG_NATIVE_BUILD_JOBS:-2}" \
       -e FULLMAG_CUDA_ARCHITECTURES="${FULLMAG_CUDA_ARCHITECTURES:-native}" \
-      fem-gpu bash -lc 'set -euo pipefail; cd /workspace; build_dir=/mnt/fullmag-zfn2-native/fdm-gpu-m1-transport-llg; mkdir -p "$build_dir/cargo-home" "$build_dir/cargo-target"; cmake -S native -B "$build_dir" -DCMAKE_CUDA_ARCHITECTURES="$FULLMAG_CUDA_ARCHITECTURES" -DFULLMAG_ENABLE_CUDA=ON -DFULLMAG_ENABLE_FEM_GPU=OFF -DFULLMAG_USE_MFEM_STACK=OFF -DFULLMAG_FEM_WITH_SLEPC=OFF; cmake --build "$build_dir" --target fullmag_fdm fdm_gpu_transport_layout_abi_v1_c11_contract fdm_gpu_m1_transport_llg_stage_v1_contract fdm_gpu_m1_spin_operator_parity_v1_contract; LD_LIBRARY_PATH="$build_dir/backends/fdm${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" "$build_dir/backends/fdm/fdm_gpu_m1_transport_llg_stage_v1_contract"; "$build_dir/backends/fdm/fdm_gpu_m1_spin_operator_parity_v1_contract"; ctest --test-dir "$build_dir/backends/fdm" --output-on-failure -R "^fdm_gpu_transport_layout_abi_v1_c11_contract$"; FULLMAG_FDM_LIB_DIR="$build_dir/backends/fdm" LD_LIBRARY_PATH="$build_dir/backends/fdm${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" CARGO_HOME="$build_dir/cargo-home" CARGO_TARGET_DIR="$build_dir/cargo-target" CARGO_INCREMENTAL=0 cargo test -p fullmag-fdm-sys -- --nocapture'
+      fem-gpu bash -lc 'set -euo pipefail; cd /workspace; build_dir="${FULLMAG_MANAGED_NATIVE_ROOT:-/mnt/fullmag-zfn2-native}/fdm-gpu-m1-transport-llg"; mkdir -p "$build_dir/cargo-home" "$build_dir/cargo-target"; cmake -S native -B "$build_dir" -DCMAKE_CUDA_ARCHITECTURES="$FULLMAG_CUDA_ARCHITECTURES" -DFULLMAG_ENABLE_CUDA=ON -DFULLMAG_ENABLE_FEM_GPU=OFF -DFULLMAG_USE_MFEM_STACK=OFF -DFULLMAG_FEM_WITH_SLEPC=OFF; cmake --build "$build_dir" --target fullmag_fdm fdm_gpu_transport_layout_abi_v1_c11_contract fdm_gpu_m1_transport_llg_stage_v1_contract fdm_gpu_m1_spin_operator_parity_v1_contract; LD_LIBRARY_PATH="$build_dir/backends/fdm${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" "$build_dir/backends/fdm/fdm_gpu_m1_transport_llg_stage_v1_contract"; "$build_dir/backends/fdm/fdm_gpu_m1_spin_operator_parity_v1_contract"; ctest --test-dir "$build_dir/backends/fdm" --output-on-failure -R "^fdm_gpu_transport_layout_abi_v1_c11_contract$"; FULLMAG_FDM_LIB_DIR="$build_dir/backends/fdm" LD_LIBRARY_PATH="$build_dir/backends/fdm${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" CARGO_HOME="$build_dir/cargo-home" CARGO_TARGET_DIR="$build_dir/cargo-target" CARGO_INCREMENTAL=0 cargo test -p fullmag-fdm-sys -- --nocapture'
 
 verify-fdm-gpu-m1-transport-llg-lifecycle-contract: verify-fdm-gpu-m1-transport-llg-native-contract
     docker compose -p fullmag --profile fem-gpu run --rm --no-deps \
-      -v /mnt/fullmag-zfn2-native:/mnt/fullmag-zfn2-native \
-      fem-gpu bash -lc 'set -euo pipefail; cd /workspace; build_dir=/mnt/fullmag-zfn2-native/fdm-gpu-m1-transport-llg; export FULLMAG_FDM_LIB_DIR="$build_dir/backends/fdm" LD_LIBRARY_PATH="$build_dir/backends/fdm${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" CARGO_HOME="$build_dir/cargo-home" CARGO_TARGET_DIR="$build_dir/cargo-target" CARGO_INCREMENTAL=0; cargo test -p fullmag-runner --features cuda checkpoint_ -- --nocapture; cargo test -p fullmag-runner --features cuda accepted_charge_snapshot_materializes_the_exact_public_llg_binding -- --nocapture; cargo test -p fullmag-runner --features cuda accepted_bound_llg_step_enables_readback_without_a_second_spin_solve -- --nocapture; cargo test -p fullmag-runner --features cuda accepted_face_fields_are_reconstructed_at_cells_with_canonical_component_order -- --nocapture; cargo test -p fullmag-runner --features cuda public_gpu_m1_dispatch_ -- --nocapture; cargo test -p fullmag-runner --features cuda fdm::gpu::cuda::route::tests -- --nocapture'
+      -v "${FULLMAG_MANAGED_NATIVE_ROOT:-/mnt/fullmag-zfn2-native}:${FULLMAG_MANAGED_NATIVE_ROOT:-/mnt/fullmag-zfn2-native}" \
+      -e FULLMAG_MANAGED_NATIVE_ROOT="${FULLMAG_MANAGED_NATIVE_ROOT:-/mnt/fullmag-zfn2-native}" \
+      fem-gpu bash -lc 'set -euo pipefail; cd /workspace; build_dir="${FULLMAG_MANAGED_NATIVE_ROOT:-/mnt/fullmag-zfn2-native}/fdm-gpu-m1-transport-llg"; export FULLMAG_FDM_LIB_DIR="$build_dir/backends/fdm" LD_LIBRARY_PATH="$build_dir/backends/fdm${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" CARGO_HOME="$build_dir/cargo-home" CARGO_TARGET_DIR="$build_dir/cargo-target" CARGO_INCREMENTAL=0; cargo test -p fullmag-runner --features cuda checkpoint_ -- --nocapture; cargo test -p fullmag-runner --features cuda accepted_charge_snapshot_materializes_the_exact_public_llg_binding -- --nocapture; cargo test -p fullmag-runner --features cuda accepted_bound_llg_step_enables_readback_without_a_second_spin_solve -- --nocapture; cargo test -p fullmag-runner --features cuda accepted_face_fields_are_reconstructed_at_cells_with_canonical_component_order -- --nocapture; cargo test -p fullmag-runner --features cuda public_gpu_m1_dispatch_ -- --nocapture; cargo test -p fullmag-runner --features cuda fdm::gpu::cuda::route::tests -- --nocapture; cargo test -p fullmag-runner --features cuda artifact_pipeline::tests::zarr_writer_preserves_regular_transport_snapshot_shape_and_soa_order -- --exact --nocapture; cargo test -p fullmag-runner --features cuda telemetry_tests -- --nocapture'
 
 verify-fdm-gpu-m1-transport-llg-compute-sanitizer: verify-fdm-gpu-m1-transport-llg-lifecycle-contract
     docker compose -p fullmag --profile fem-gpu run --rm --no-deps \
-      -v /mnt/fullmag-zfn2-native:/mnt/fullmag-zfn2-native \
-      fem-gpu bash -lc 'set -euo pipefail; build_dir=/mnt/fullmag-zfn2-native/fdm-gpu-m1-transport-llg; command -v compute-sanitizer >/dev/null; export LD_LIBRARY_PATH="$build_dir/backends/fdm${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"; compute-sanitizer --tool memcheck --error-exitcode 99 "$build_dir/backends/fdm/fdm_gpu_m1_transport_llg_stage_v1_contract"; compute-sanitizer --tool memcheck --error-exitcode 99 "$build_dir/backends/fdm/fdm_gpu_m1_spin_operator_parity_v1_contract"; compute-sanitizer --tool synccheck --error-exitcode 99 "$build_dir/backends/fdm/fdm_gpu_m1_transport_llg_stage_v1_contract"; compute-sanitizer --tool synccheck --error-exitcode 99 "$build_dir/backends/fdm/fdm_gpu_m1_spin_operator_parity_v1_contract"'
+      -v "${FULLMAG_MANAGED_NATIVE_ROOT:-/mnt/fullmag-zfn2-native}:${FULLMAG_MANAGED_NATIVE_ROOT:-/mnt/fullmag-zfn2-native}" \
+      -e FULLMAG_MANAGED_NATIVE_ROOT="${FULLMAG_MANAGED_NATIVE_ROOT:-/mnt/fullmag-zfn2-native}" \
+      fem-gpu bash -lc 'set -euo pipefail; build_dir="${FULLMAG_MANAGED_NATIVE_ROOT:-/mnt/fullmag-zfn2-native}/fdm-gpu-m1-transport-llg"; command -v compute-sanitizer >/dev/null; export LD_LIBRARY_PATH="$build_dir/backends/fdm${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"; compute-sanitizer --tool memcheck --error-exitcode 99 "$build_dir/backends/fdm/fdm_gpu_m1_transport_llg_stage_v1_contract"; compute-sanitizer --tool memcheck --error-exitcode 99 "$build_dir/backends/fdm/fdm_gpu_m1_spin_operator_parity_v1_contract"; compute-sanitizer --tool synccheck --error-exitcode 99 "$build_dir/backends/fdm/fdm_gpu_m1_transport_llg_stage_v1_contract"; compute-sanitizer --tool synccheck --error-exitcode 99 "$build_dir/backends/fdm/fdm_gpu_m1_spin_operator_parity_v1_contract"'
 
 verify-fdm-gpu-m1-transport-llg-sanitizer: verify-fdm-gpu-m1-transport-llg-compute-sanitizer
 
 verify-fdm-gpu-m1-spin-sparse-performance-contract:
     docker compose --profile fem-gpu run --rm --no-deps \
-      -v /mnt/fullmag-zfn2-native:/mnt/fullmag-zfn2-native \
+      -v "${FULLMAG_MANAGED_NATIVE_ROOT:-/mnt/fullmag-zfn2-native}:${FULLMAG_MANAGED_NATIVE_ROOT:-/mnt/fullmag-zfn2-native}" \
+      -e FULLMAG_MANAGED_NATIVE_ROOT="${FULLMAG_MANAGED_NATIVE_ROOT:-/mnt/fullmag-zfn2-native}" \
       -v /zfn2/mateuszz/git/fullmag/reports:/zfn2-reports \
       -e CMAKE_BUILD_PARALLEL_LEVEL="${FULLMAG_NATIVE_BUILD_JOBS:-2}" \
       -e FULLMAG_CUDA_ARCHITECTURES="${FULLMAG_CUDA_ARCHITECTURES:-native}" \
-      fem-gpu bash -lc 'set -euo pipefail; cd /workspace; build_dir=/mnt/fullmag-zfn2-native/fdm-gpu-m1-spin-sparse-performance; evidence_dir=/zfn2-reports/fdm-gpu-m1-spin-sparse-performance; mkdir -p "$build_dir" "$evidence_dir"; evidence="$evidence_dir/fdm-gpu-m1-spin-sparse-performance-v1.json"; rm -f "$evidence" "$evidence.tmp"; cmake -S native -B "$build_dir" -DCMAKE_CUDA_ARCHITECTURES="$FULLMAG_CUDA_ARCHITECTURES" -DFULLMAG_ENABLE_CUDA=ON -DFULLMAG_ENABLE_FEM_GPU=OFF -DFULLMAG_USE_MFEM_STACK=OFF -DFULLMAG_FEM_WITH_SLEPC=OFF; cmake --build "$build_dir" --target fullmag_fdm fdm_gpu_m1_spin_sparse_performance_v1_contract; FULLMAG_FDM_GPU_M1_PERFORMANCE_EVIDENCE_PATH="$evidence.tmp" "$build_dir/backends/fdm/fdm_gpu_m1_spin_sparse_performance_v1_contract"; test -s "$evidence.tmp"; python3 -m json.tool "$evidence.tmp" >/dev/null; mv "$evidence.tmp" "$evidence"; python3 -m json.tool "$evidence"'
+      fem-gpu bash -lc 'set -euo pipefail; cd /workspace; build_dir="${FULLMAG_MANAGED_NATIVE_ROOT:-/mnt/fullmag-zfn2-native}/fdm-gpu-m1-spin-sparse-performance"; evidence_dir=/zfn2-reports/fdm-gpu-m1-spin-sparse-performance; mkdir -p "$build_dir" "$evidence_dir"; evidence="$evidence_dir/fdm-gpu-m1-spin-sparse-performance-v1.json"; rm -f "$evidence" "$evidence.tmp"; cmake -S native -B "$build_dir" -DCMAKE_CUDA_ARCHITECTURES="$FULLMAG_CUDA_ARCHITECTURES" -DFULLMAG_ENABLE_CUDA=ON -DFULLMAG_ENABLE_FEM_GPU=OFF -DFULLMAG_USE_MFEM_STACK=OFF -DFULLMAG_FEM_WITH_SLEPC=OFF; cmake --build "$build_dir" --target fullmag_fdm fdm_gpu_m1_spin_sparse_performance_v1_contract; FULLMAG_FDM_GPU_M1_PERFORMANCE_EVIDENCE_PATH="$evidence.tmp" "$build_dir/backends/fdm/fdm_gpu_m1_spin_sparse_performance_v1_contract"; test -s "$evidence.tmp"; python3 -m json.tool "$evidence.tmp" >/dev/null; mv "$evidence.tmp" "$evidence"; python3 -m json.tool "$evidence"'
 
 verify-fdm-cpu-oersted-open-fft-native-contract:
     docker compose run --rm --no-deps \
@@ -5795,22 +5802,70 @@ bench-profile threads="auto":
     '{{gpu_runtime_bin}}' --headless examples/bench_fem_simple.py
 
 # The validator is deliberately separate from the individual native contracts:
-# none of them may be relabelled as the public racetrack qualification.  A
-# future managed workload harness must write all twelve gate artifacts and the
-# manifest below; until then this recipe fails closed after the managed builds.
+# none of them may be relabelled as the public racetrack qualification.  The
+# managed workload launcher writes runtime evidence, while the assembler can
+# publish a manifest only after all twelve identity-matched gate artifacts exist.
 verify-fdm-gpu-solved-current-racetrack-production:
     bash -euo pipefail -c '\
       evidence_root="${FULLMAG_FDM_GPU_RACETRACK_REPORT_ROOT:-/zfn2/mateuszz/git/fullmag/reports/fdm-gpu-racetrack}"; \
+      case "$evidence_root" in /*) ;; *) echo "FULLMAG_FDM_GPU_RACETRACK_REPORT_ROOT must be absolute" >&2; exit 2;; esac; \
       mkdir -p "$evidence_root"; \
+      managed_native_root="${FULLMAG_MANAGED_NATIVE_ROOT:-}"; \
+      if [ -z "$managed_native_root" ]; then \
+        for candidate in /mnt/fullmag-zfn2-native-2 /mnt/fullmag-zfn2-native; do \
+          if [ -d "$candidate" ] && [ -w "$candidate" ]; then managed_native_root="$candidate"; break; fi; \
+        done; \
+      fi; \
+      if [ -z "$managed_native_root" ]; then echo "no writable managed native build mount; set FULLMAG_MANAGED_NATIVE_ROOT" >&2; exit 2; fi; \
       source_snapshot="$evidence_root/source-snapshot.v1.json.tmp"; \
       cleanup() { rm -f "$source_snapshot"; }; trap cleanup EXIT INT TERM; \
-      python3 scripts/capture_source_snapshot_identity.py --repo-root "{{repo_root}}" --ignore-non-runtime-dirty --output "$source_snapshot"; \
-      just verify-fdm-gpu-m1-layout-abi-contract; \
-      just verify-fdm-gpu-m1-charge-native-contract; \
-      just verify-fdm-gpu-m1-spin-native-contract; \
-      just verify-fdm-gpu-m1-transport-llg-lifecycle-contract; \
-      just verify-fdm-gpu-m1-transport-llg-compute-sanitizer; \
-      just verify-fdm-gpu-m1-spin-sparse-performance-contract; \
-      docker compose -p fullmag --profile fem-gpu run --rm --no-deps -v /mnt/fullmag-zfn2-native:/mnt/fullmag-zfn2-native -e FULLMAG_CUDA_ARCHITECTURES="${FULLMAG_CUDA_ARCHITECTURES:-native}" fem-gpu bash -lc "set -euo pipefail; cd /workspace; build_dir=/mnt/fullmag-zfn2-native/fdm-gpu-racetrack-qualification; mkdir -p \"\$build_dir/cargo-home\" \"\$build_dir/cargo-target\"; cmake -S native -B \"\$build_dir/native\" -DCMAKE_CUDA_ARCHITECTURES=\"\$FULLMAG_CUDA_ARCHITECTURES\" -DFULLMAG_ENABLE_CUDA=ON -DFULLMAG_ENABLE_FEM_GPU=OFF -DFULLMAG_USE_MFEM_STACK=OFF -DFULLMAG_FEM_WITH_SLEPC=OFF; cmake --build \"\$build_dir/native\" --target fullmag_fdm; CARGO_HOME=\"\$build_dir/cargo-home\" CARGO_TARGET_DIR=\"\$build_dir/cargo-target\" FULLMAG_FDM_LIB_DIR=\"\$build_dir/native/backends/fdm\" cargo +nightly build -p fullmag-cli --features cuda"; \
+      python3 scripts/capture_source_snapshot_identity.py --repo-root "{{repo_root}}" --ignore-non-runtime-dirty --qualification-input "tests/standard_problems/transport/racetrack_m1_v1/fixture.v1.json" --output "$source_snapshot"; \
+      FULLMAG_MANAGED_NATIVE_ROOT="$managed_native_root" just verify-fdm-gpu-m1-layout-abi-contract; \
+      FULLMAG_MANAGED_NATIVE_ROOT="$managed_native_root" just verify-fdm-gpu-m1-charge-native-contract; \
+      FULLMAG_MANAGED_NATIVE_ROOT="$managed_native_root" just verify-fdm-gpu-m1-spin-native-contract; \
+      FULLMAG_MANAGED_NATIVE_ROOT="$managed_native_root" just verify-fdm-gpu-m1-transport-llg-lifecycle-contract; \
+      FULLMAG_MANAGED_NATIVE_ROOT="$managed_native_root" just verify-fdm-gpu-m1-transport-llg-compute-sanitizer; \
+      FULLMAG_MANAGED_NATIVE_ROOT="$managed_native_root" just verify-fdm-gpu-m1-spin-sparse-performance-contract; \
+      build_dir="$managed_native_root/fdm-gpu-racetrack-qualification"; \
+      docker compose -p fullmag --profile fem-gpu run --rm --no-deps \
+        -v "$managed_native_root:$managed_native_root" \
+        -v "$evidence_root:$evidence_root" \
+        -e FULLMAG_CUDA_ARCHITECTURES="${FULLMAG_CUDA_ARCHITECTURES:-native}" \
+        fem-gpu bash -lc "set -euo pipefail; cd /workspace; build_dir=\"$build_dir\"; mkdir -p \"\$build_dir/cargo-home\" \"\$build_dir/cargo-target\"; cmake -S native -B \"\$build_dir/native\" -DCMAKE_CUDA_ARCHITECTURES=\"\$FULLMAG_CUDA_ARCHITECTURES\" -DFULLMAG_ENABLE_CUDA=ON -DFULLMAG_ENABLE_FEM_GPU=OFF -DFULLMAG_USE_MFEM_STACK=OFF -DFULLMAG_FEM_WITH_SLEPC=OFF; cmake --build \"\$build_dir/native\" --target fullmag_fdm; CARGO_HOME=\"\$build_dir/cargo-home\" CARGO_TARGET_DIR=\"\$build_dir/cargo-target\" FULLMAG_FDM_LIB_DIR=\"\$build_dir/native/backends/fdm\" cargo +nightly build -p fullmag-cli --features cuda; workload_status=0; FULLMAG_MANAGED_CONTAINER=1 FULLMAG_FDM_LIB_DIR=\"\$build_dir/native/backends/fdm\" python3 scripts/run_fdm_gpu_racetrack_qualification.py --runtime-bin \"\$build_dir/cargo-target/debug/fullmag\" --build-root \"\$build_dir\" --repo-root /workspace --script /workspace/examples/fdm_gpu_solved_current_skyrmion_racetrack.py --output-root \"$evidence_root/workload\" --session-history-root \"$evidence_root/session-history\" || workload_status=\$?; echo \"racetrack workload exit=\$workload_status; qualification assembler remains fail-closed\""; \
+      python3 scripts/collect_fdm_gpu_racetrack_contract_artifacts.py \
+        --evidence-root "$evidence_root" \
+        --artifact workload-run="$evidence_root/workload/workload-run.v1.json" \
+        --artifact runtime-identity="$evidence_root/workload/runtime-identity.v1.json" \
+        --artifact runtime-evidence="$evidence_root/workload/evidence/fdm_gpu_solved_current_racetrack_runtime_evidence.v1.json" \
+        --log workload-runtime="$evidence_root/workload/runtime.log" \
+        --artifact charge-uniform="$managed_native_root/fdm-gpu-m1-charge/fdm-gpu-m1-charge-uniform-v1.json" \
+        --artifact charge-layered="$managed_native_root/fdm-gpu-m1-charge/fdm-gpu-m1-charge-layered-v1.json" \
+        --artifact charge-snapshot="$managed_native_root/fdm-gpu-m1-charge/fdm-gpu-m1-charge-snapshot-v1.json" \
+        --artifact charge-transfer="$managed_native_root/fdm-gpu-m1-charge/fdm-gpu-m1-charge-transfer-audit-v1.json" \
+        --artifact spin-diffusion="$managed_native_root/fdm-gpu-m1-spin/fdm-gpu-m1-spin-diffusion-she-v1.json" \
+        --artifact spin-public="/zfn2/mateuszz/git/fullmag/reports/fdm-gpu-m1-spin-public/fdm-gpu-m1-spin-public-v1.json" \
+        --artifact spin-sparse="/zfn2/mateuszz/git/fullmag/reports/fdm-gpu-m1-spin-sparse-performance/fdm-gpu-m1-spin-sparse-performance-v1.json" || true; \
+      python3 scripts/build_fdm_gpu_racetrack_execution_audit.py \
+        --evidence-root "$evidence_root" \
+        --runtime-evidence "$evidence_root/workload/evidence/fdm_gpu_solved_current_racetrack_runtime_evidence.v1.json" \
+        --workload-run "$evidence_root/workload/workload-run.v1.json" \
+        --runtime-identity "$evidence_root/workload/runtime-identity.v1.json" \
+        --contracts "$evidence_root/fdm_gpu_racetrack_contract_artifacts.v1.json" \
+        --output "$evidence_root/execution-audit.v1.json" || true; \
+      python3 scripts/produce_fdm_gpu_racetrack_gate_evidence.py \
+        --evidence-root "$evidence_root" \
+        --source-snapshot "$source_snapshot" \
+        --runtime-identity "$evidence_root/workload/runtime-identity.v1.json" \
+        --input "{{repo_root}}/examples/fdm_gpu_solved_current_skyrmion_racetrack.py" \
+        --fixture "{{repo_root}}/tests/standard_problems/transport/racetrack_m1_v1/fixture.v1.json" \
+        --qualification-input "tests/standard_problems/transport/racetrack_m1_v1/fixture.v1.json" || true; \
+      python3 scripts/assemble_fdm_gpu_racetrack_qualification.py \
+        --evidence-root "$evidence_root" \
+        --source-snapshot "$source_snapshot" \
+        --runtime-identity "$evidence_root/workload/runtime-identity.v1.json" \
+        --input "{{repo_root}}/examples/fdm_gpu_solved_current_skyrmion_racetrack.py" \
+        --fixture "{{repo_root}}/tests/standard_problems/transport/racetrack_m1_v1/fixture.v1.json" \
+        --qualification-input "tests/standard_problems/transport/racetrack_m1_v1/fixture.v1.json" \
+        --execution-audit "$evidence_root/execution-audit.v1.json" || true; \
       python3 scripts/verify_fdm_gpu_racetrack_qualification.py --evidence-root "$evidence_root" --source-snapshot "$source_snapshot"; \
       echo "production-qualified racetrack manifest: $evidence_root/fdm_gpu_solved_current_racetrack_qualification_v1.json"'

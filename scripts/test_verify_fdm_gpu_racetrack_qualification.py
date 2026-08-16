@@ -135,9 +135,31 @@ def _claims() -> dict[str, dict[str, object]]:
 def write_valid_manifest(root: Path) -> Path:
     source, runtime = _identity()
     gate_dir = root / "gates"
+    proof_dir = root / "proofs"
+    raw_dir = root / "raw"
     gate_dir.mkdir(parents=True)
+    proof_dir.mkdir(parents=True)
+    raw_dir.mkdir(parents=True)
     gates: dict[str, dict[str, object]] = {}
     for gate_id, claims in _claims().items():
+        raw_path = raw_dir / f"{gate_id}.json"
+        raw_path.write_text(json.dumps({"gate_id": gate_id}), encoding="utf-8")
+        proof_path = proof_dir / f"{gate_id}.json"
+        evidence_paths = [f"raw/{gate_id}.json"]
+        proof_path.write_text(
+            json.dumps(
+                {
+                    "schema_version": qualification.GATE_PROOF_SCHEMA,
+                    "gate_id": gate_id,
+                    "status": "pass",
+                    "source_identity": source,
+                    "runtime_identity": runtime,
+                    "claims": claims,
+                    "evidence_paths": evidence_paths,
+                }
+            ),
+            encoding="utf-8",
+        )
         artifact = gate_dir / f"{gate_id}.json"
         artifact.write_text(
             json.dumps(
@@ -147,6 +169,11 @@ def write_valid_manifest(root: Path) -> Path:
                     "source_identity": source,
                     "runtime_identity": runtime,
                     "claims": claims,
+                    "proof": {
+                        "schema_version": qualification.GATE_PROOF_SCHEMA,
+                        "path": f"proofs/{gate_id}.json",
+                        "evidence_paths": evidence_paths,
+                    },
                 }
             ),
             encoding="utf-8",
@@ -167,9 +194,30 @@ def write_valid_manifest(root: Path) -> Path:
         "runtime_identity": runtime,
         "input_hashes": {"before": "f" * 64, "after": "f" * 64},
         "execution_audit": {
+            "schema_version": "fdm_gpu_racetrack_execution_audit.v1",
+            "status": "pass",
+            "runtime_identity": runtime,
+            "reason_codes": [],
             "fallbacks": [],
             "hot_loop_host_device_transfers": 0,
+            "forbidden_transfer_bytes": 0,
             "torque_provenance": "solved_transport",
+            "transport_telemetry": {
+                "schema_version": "fdm_gpu_transport_telemetry_summary.v1",
+                "status": "pass",
+                "stage_count": 6,
+                "record_count": 120,
+                "hot_loop_host_device_transfers": 0,
+                "hot_loop_device_to_device_transfers": 120,
+                "hot_loop_host_sync_count": 120,
+                "forbidden_transfer_bytes": 0,
+                "allowed_control_h2d_records": 120,
+                "allowed_control_h2d_bytes": 30720,
+                "allowed_scalar_d2h_records": 120,
+                "allowed_scalar_d2h_bytes": 30720,
+                "torque_provenance": "solved_transport",
+                "all_stage_records_present": True,
+            },
         },
         "gates": gates,
     }
@@ -240,6 +288,17 @@ class VerifyFdmGpuRacetrackQualificationTests(unittest.TestCase):
             )
             with self.assertRaisesRegex(qualification.QualificationError, "current_source_snapshot_commit_mismatch"):
                 qualification.validate_evidence_root(root, manifest_path, source_snapshot)
+
+    def test_gate_without_identity_bound_raw_proof_fails_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            manifest_path = write_valid_manifest(root)
+            artifact_path = root / "gates" / "workload_signs_units.json"
+            artifact = json.loads(artifact_path.read_text(encoding="utf-8"))
+            artifact.pop("proof", None)
+            artifact_path.write_text(json.dumps(artifact), encoding="utf-8")
+            with self.assertRaisesRegex(qualification.QualificationError, "proof_missing"):
+                qualification.validate_evidence_root(root, manifest_path)
 
 
 if __name__ == "__main__":

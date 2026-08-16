@@ -67,6 +67,99 @@ def test_missing_current_blocks_dependent_spin_transport() -> None:
     assert graph.modules[0].activation is PhysicsActivation.BLOCKED
 
 
+def test_disabled_transport_torque_deactivates_only_its_upstream_pipeline() -> None:
+    current = _Module(
+        {
+            "kind": "current_transport",
+            "name": "charge:film",
+            "model": "ohmic_poisson",
+            "domain": [{"object_id": "film"}],
+        }
+    )
+    spin = _Module(
+        {
+            "kind": "spin_transport",
+            "id": "spin:film",
+            "current_source_id": "charge:film",
+            "domain": [{"object_id": "film"}],
+        }
+    )
+    torque = _Module(
+        {
+            "kind": "drift_diffusion_spin_torque",
+            "id": "torque:film",
+            "solve_id": "spin:film",
+            "target": {"object_id": "film"},
+        }
+    )
+
+    graph = build_physics_graph(
+        _problem(
+            current_modules=(current,),
+            spin_transports=(spin,),
+            spin_torques=(torque,),
+            spin_torque_activation={"torque:film": False},
+        )
+    )
+    modules = {module.id: module for module in graph.modules}
+    assert modules["charge:film"].activation is PhysicsActivation.INACTIVE
+    assert modules["spin:film"].activation is PhysicsActivation.INACTIVE
+    assert modules["torque:film"].activation is PhysicsActivation.INACTIVE
+    assert [edge.status for edge in graph.edges] == [
+        PhysicsActivation.INACTIVE,
+        PhysicsActivation.INACTIVE,
+    ]
+
+
+def test_shared_transport_stays_active_when_one_torque_consumer_remains_enabled() -> None:
+    current = _Module(
+        {
+            "kind": "current_transport",
+            "name": "charge:film",
+            "model": "ohmic_poisson",
+            "domain": [{"object_id": "film"}],
+        }
+    )
+    spin = _Module(
+        {
+            "kind": "spin_transport",
+            "id": "spin:film",
+            "current_source_id": "charge:film",
+            "domain": [{"object_id": "film"}],
+        }
+    )
+    disabled = _Module(
+        {
+            "kind": "drift_diffusion_spin_torque",
+            "id": "torque:disabled",
+            "solve_id": "spin:film",
+            "target": {"object_id": "film"},
+        }
+    )
+    enabled = _Module(
+        {
+            "kind": "drift_diffusion_spin_torque",
+            "id": "torque:enabled",
+            "solve_id": "spin:film",
+            "target": {"object_id": "film"},
+        }
+    )
+
+    graph = build_physics_graph(
+        _problem(
+            current_modules=(current,),
+            spin_transports=(spin,),
+            spin_torques=(disabled, enabled),
+            spin_torque_activation={"torque:disabled": False, "torque:enabled": True},
+        )
+    )
+    modules = {module.id: module for module in graph.modules}
+    assert modules["charge:film"].activation is PhysicsActivation.ACTIVE
+    assert modules["spin:film"].activation is PhysicsActivation.ACTIVE
+    assert modules["torque:disabled"].activation is PhysicsActivation.INACTIVE
+    assert modules["torque:enabled"].activation is PhysicsActivation.ACTIVE
+
+
 def test_spin_torque_graph_kind_is_generic_and_family_stays_in_payload() -> None:
     torque = fm.ZhangLiSTT(
         current_density=(1e12, 0.0, 0.0),

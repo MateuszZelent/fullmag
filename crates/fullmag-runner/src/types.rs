@@ -2882,6 +2882,9 @@ pub struct ExecutionProvenance {
     pub charge_transport: Option<ChargeTransportExecutionProvenance>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub transport_modules: Vec<TransportExecutionProvenance>,
+    /// Measured native CUDA M1 transport residency and provenance counters.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fdm_gpu_transport_telemetry: Option<FdmGpuTransportTelemetry>,
     /// Legacy compatibility observations retained for historical artifacts.
     /// Physics-graph realization must never infer an executed module from a
     /// kind-only observation.
@@ -3087,6 +3090,26 @@ pub struct ExecutionProvenance {
     /// FEM Poisson demag solver policy and observed solve result.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub fem_poisson_demag: Option<FemPoissonDemagProvenance>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct FdmGpuTransportTelemetry {
+    pub schema_version: String,
+    pub status: String,
+    pub stage_count: u64,
+    pub record_count: u64,
+    /// Full magnetic/state transfers in the accepted-step hot loop. Bounded
+    /// control uploads and scalar reductions are reported separately below.
+    pub hot_loop_host_device_transfers: u64,
+    pub hot_loop_device_to_device_transfers: u64,
+    pub hot_loop_host_sync_count: u64,
+    pub forbidden_transfer_bytes: u64,
+    pub allowed_control_h2d_records: u64,
+    pub allowed_control_h2d_bytes: u64,
+    pub allowed_scalar_d2h_records: u64,
+    pub allowed_scalar_d2h_bytes: u64,
+    pub torque_provenance: String,
+    pub all_stage_records_present: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

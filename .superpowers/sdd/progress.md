@@ -1,5 +1,28 @@
 # Subagent-driven development progress
 
+## Plan: Compositional physics object authoring (2026-08-13)
+
+- Worktree: `/home/kkingstoun/git/fullmag/fullmag/.worktrees/fdm-gpu-public-m1-spin`
+- Branch: `codex/fdm-gpu-public-m1-spin`
+- Plan commit: `f2594cc5ff6e70e8b9377c252c7574962c112c38`
+- Protected unrelated file: `.superpowers/sdd/task-1-report.md`
+
+| Task | Status | Implementer | Review |
+|---:|---|---|---|
+| 1 | fixes pending | `260238ce4` | migration targets/references review findings |
+| 2 | pending | — | — |
+| 3 | pending | — | — |
+| 4 | pending | — | — |
+| 5 | pending | — | — |
+| 6 | pending | — | — |
+| 7 | pending | — | — |
+| 8 | pending | — | — |
+| 9 | pending | — | — |
+| 10 | pending | — | — |
+| 11 | pending | — | — |
+| 12 | pending | — | — |
+| 13 | pending | — | — |
+
 ## Plan: FEM single-layer prism/pyramid shared domain
 
 - Worktree: `/home/kkingstoun/git/fullmag/fullmag/.worktrees/fem-mixed-prism-pyramid-runtime`

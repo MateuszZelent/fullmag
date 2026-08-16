@@ -5065,7 +5065,7 @@ fn execute_cuda_fdm(
         )?)
     };
     let mut steps = Vec::new();
-    let provenance = ExecutionProvenance {
+    let mut provenance = ExecutionProvenance {
         execution_engine: "cuda_fdm".to_string(),
         precision: match plan.precision {
             fullmag_ir::ExecutionPrecision::Single => "single".to_string(),
@@ -5381,6 +5381,14 @@ fn execute_cuda_fdm(
         &mut artifacts,
     )?;
     if let Some(session) = gpu_transport.as_mut() {
+        provenance.fdm_gpu_transport_telemetry = Some(
+            session
+                .transport_telemetry()
+                .map_err(|error| RunError {
+                    message: format!("reading public GPU M1 transport telemetry failed: {error}"),
+                })?,
+        );
+        artifacts.update_provenance(provenance.clone());
         backend.unbind_gpu_transport()?;
         session.close().map_err(|error| RunError {
             message: format!("closing public GPU M1 transport session failed: {error}"),
@@ -7140,7 +7148,6 @@ mod tests {
             oersted_radius: None,
             oersted_center: None,
             oersted_axis: None,
-            static_external_field_xyz: None,
             oersted_field_xyz: None,
             oersted_time_dep_kind: 0,
             oersted_time_dep_freq: 0.0,

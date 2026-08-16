@@ -24,6 +24,7 @@ SCHEMA = "fullmag.source-snapshot.v2"
 # contents.
 NON_RUNTIME_PREFIXES = (
     ".agents/",
+    ".claude/",
     ".codex/",
     ".impl-racetrack/",
     ".worktrees/",
@@ -542,10 +543,45 @@ def _dirty_content(repo_root: Path, records: Sequence[dict[str, object]]) -> lis
     return identities
 
 
+def _qualification_input_content(
+    repo_root: Path, paths: Sequence[str]
+) -> list[dict[str, object]]:
+    """Hash explicit non-runtime inputs that still govern qualification.
+
+    Test fixtures are intentionally excluded from the native runtime dirty
+    scan, but a qualification recipe consumes them after the build.  Binding
+    their stable bytes into the source identity closes that race without
+    pretending that the fixture is compiled native code.
+    """
+
+    identities: list[dict[str, object]] = []
+    for relative in sorted(set(paths)):
+        candidate = _safe_relative_path(relative, "qualification input")
+        _validate_filesystem_symlink_path(repo_root, relative)
+        path = repo_root / candidate
+        try:
+            metadata, content = _read_regular_file_stable(
+                path, f"qualification input {relative}"
+            )
+        except FileNotFoundError as error:
+            raise SourceIdentityError(
+                f"qualification input is missing: {relative}"
+            ) from error
+        identities.append(
+            {
+                "path": relative,
+                "mode": _normalized_mode(metadata.st_mode),
+                "sha256": _sha256(content),
+            }
+        )
+    return identities
+
+
 def _capture_once(
     repo_root: Path,
     *,
     ignore_non_runtime_dirty: bool = False,
+    qualification_inputs: Sequence[str] = (),
 ) -> dict[str, object]:
     try:
         commit = _git(repo_root, "rev-parse", "--verify", "HEAD").decode("ascii").strip()
@@ -576,6 +612,9 @@ def _capture_once(
         "git_status_porcelain_v1": status_records,
         "dirty_path_content": dirty_content,
     }
+    explicit_inputs = _qualification_input_content(repo_root, qualification_inputs)
+    if explicit_inputs:
+        payload["qualification_inputs"] = explicit_inputs
     if ignore_non_runtime_dirty:
         payload["ignored_non_runtime_dirty"] = True
     return {
@@ -590,17 +629,34 @@ def capture(
     repo_root: Path,
     *,
     ignore_non_runtime_dirty: bool = False,
+    qualification_inputs: Sequence[str] = (),
 ) -> dict[str, object]:
     repo_root = repo_root.resolve()
     first = _capture_once(
-        repo_root, ignore_non_runtime_dirty=ignore_non_runtime_dirty
+        repo_root,
+        ignore_non_runtime_dirty=ignore_non_runtime_dirty,
+        qualification_inputs=qualification_inputs,
     )
     second = _capture_once(
-        repo_root, ignore_non_runtime_dirty=ignore_non_runtime_dirty
+        repo_root,
+        ignore_non_runtime_dirty=ignore_non_runtime_dirty,
+        qualification_inputs=qualification_inputs,
     )
     if second != first:
         raise SourceIdentityError("source identity changed while capturing the snapshot")
     return first
+
+
+def _qualification_input_paths(identity: dict[str, object]) -> tuple[str, ...]:
+    raw = identity.get("qualification_inputs", [])
+    if not isinstance(raw, list):
+        raise SourceIdentityError("source identity has invalid qualification inputs")
+    paths: list[str] = []
+    for item in raw:
+        if not isinstance(item, dict) or not isinstance(item.get("path"), str):
+            raise SourceIdentityError("source identity has invalid qualification input")
+        paths.append(item["path"])
+    return tuple(paths)
 
 
 def _remove_snapshot_entry(path: Path) -> None:
@@ -742,7 +798,11 @@ def materialize(
         if not isinstance(entry, dict):
             raise SourceIdentityError("source identity has an invalid dirty entry")
         _copy_dirty_entry(repo_root, snapshot_root, entry)
-    if capture(repo_root, ignore_non_runtime_dirty=ignore_non_runtime_dirty) != identity:
+    if capture(
+        repo_root,
+        ignore_non_runtime_dirty=ignore_non_runtime_dirty,
+        qualification_inputs=_qualification_input_paths(identity),
+    ) != identity:
         raise SourceIdentityError("source identity changed while materializing the snapshot")
     verify_materialized(repo_root, snapshot_root, identity)
     _make_snapshot_read_only(snapshot_root)
@@ -874,6 +934,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         help="exclude documentation, CI, tests, and packaging-only dirty paths",
     )
     parser.add_argument(
+        "--qualification-input",
+        action="append",
+        default=[],
+        help="bind an explicit non-runtime qualification input by relative path",
+    )
+    parser.add_argument(
         "--verify-materialized-snapshot",
         type=Path,
         help="verify a materialized snapshot without reading the live worktree",
@@ -899,6 +965,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         identity = capture(
             arguments.repo_root,
             ignore_non_runtime_dirty=arguments.ignore_non_runtime_dirty,
+            qualification_inputs=arguments.qualification_input,
         )
         if arguments.materialize is not None:
             materialize(

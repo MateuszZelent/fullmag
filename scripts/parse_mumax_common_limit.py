@@ -161,6 +161,19 @@ def _grid_from_ovf(header: dict[str, str]) -> dict[str, object]:
     return grid
 
 
+def _bubble_position_in_grid_frame(row: dict[str, float], grid: dict[str, object]) -> list[float]:
+    """Convert MuMax ``ext_bubblepos`` from its centered mesh frame."""
+    shape = grid["shape"]
+    cell = grid["cell_size_m"]
+    origin = grid["origin_m"]
+    if not isinstance(shape, list) or not isinstance(cell, list) or not isinstance(origin, list):
+        raise MuMaxManifestError("MuMax grid certificate is malformed")
+    return [
+        row["ext_bubbleposx (m)"] + float(origin[0]) + 0.5 * int(shape[0]) * float(cell[0]),
+        row["ext_bubbleposy (m)"] + float(origin[1]) + 0.5 * int(shape[1]) * float(cell[1]),
+    ]
+
+
 def build_manifest(
     output_dir: Path,
     *,
@@ -194,17 +207,20 @@ def build_manifest(
     if not math.isclose(rows[-1]["t (s)"], duration_s, rel_tol=1e-12, abs_tol=0.0):
         raise MuMaxManifestError("MuMax table final time does not match common-limit duration")
     trajectories: list[dict[str, object]] = []
-    for index, (ovf, row) in enumerate(zip(ovfs, rows)):
+    for index, (ovf, row, expected_time) in enumerate(zip(ovfs, rows, expected_times)):
         ovf_header, values = _header_and_values(ovf)
         if _grid_from_ovf(ovf_header) != grid:
             raise MuMaxManifestError(f"MuMax OVF grid changed at sample {index}")
+        centre_m = _bubble_position_in_grid_frame(row, grid)
         trajectories.append(
             {
-                "time_s": row["t (s)"],
+                # Store the declared common-limit cadence, not MuMax's
+                # accumulated floating-point representation.
+                "time_s": expected_time,
                 "m": values,
                 "energy_J": row["E_total (J)"],
                 "topological_charge": row["ext_topologicalcharge ()"],
-                "centre_m": [row["ext_bubbleposx (m)"], row["ext_bubbleposy (m)"]],
+                "centre_m": centre_m,
             }
         )
     try:
@@ -241,9 +257,13 @@ def build_manifest(
         }
     else:
         raise MuMaxManifestError("sampling_mode must be 'autosave' or 'explicit_steps'")
-    trajectory_source.update({
-        "initial_sample_recorded": True,
-    })
+    trajectory_source.update(
+        {
+            "initial_sample_recorded": True,
+            "centre_coordinate_frame": "fullmag_grid_origin_v1",
+            "centre_source_transform": "mumax_ext_bubblepos_centered_mesh_to_ovf_origin_v1",
+        }
+    )
     manifest: dict[str, object] = {
         "schema_version": SCHEMA_VERSION,
         "mumax": {

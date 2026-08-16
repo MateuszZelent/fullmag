@@ -272,6 +272,7 @@ __global__ void exchange_energy_blocks_kernel(
                 }
             }
         }
+
     }
 
     shared[threadIdx.x] = energy;
@@ -1127,7 +1128,7 @@ double reduce_external_energy_fp64(Context &ctx) {
         oe_x,
         oe_y,
         oe_z,
-        oersted_field_scale(ctx, ctx.current_time));
+        ctx.has_static_external_field_profile ? 1.0 : oersted_field_scale(ctx, ctx.current_time));
     return finalize_sum_reduction(ctx.reduction_scratch, blocks);
 }
 
@@ -1156,7 +1157,7 @@ double reduce_external_energy_fp32(Context &ctx) {
         oe_x,
         oe_y,
         oe_z,
-        oersted_field_scale(ctx, ctx.current_time));
+        ctx.has_static_external_field_profile ? 1.0 : oersted_field_scale(ctx, ctx.current_time));
     return finalize_sum_reduction(ctx.reduction_scratch, blocks);
 }
 
@@ -1266,6 +1267,7 @@ __global__ void dmi_energy_blocks_kernel(
     int nx, int ny, int nz,
     int periodic_x, int periodic_y, int periodic_z,
     double inv_2dx, double inv_2dy, double inv_2dz,
+    double exchange_stiffness,
     const uint8_t *active_mask, int has_active_mask)
 {
     __shared__ double shared[REDUCTION_BLOCK_SIZE];
@@ -1300,12 +1302,42 @@ __global__ void dmi_energy_blocks_kernel(
 
         double mmx = to_f64(mx[idx]), mmy = to_f64(my[idx]), mmz = to_f64(mz[idx]);
 
+        const bool missing_xm = !periodic_x && ix == 0;
+        const bool missing_xp = !periodic_x && ix == nx - 1;
+        const bool missing_ym = !periodic_y && iy == 0;
+        const bool missing_yp = !periodic_y && iy == ny - 1;
+        double mxm = to_f64(mx[xm]), mym = to_f64(my[xm]), mzm = to_f64(mz[xm]);
+        double mxp = to_f64(mx[xp]), myp = to_f64(my[xp]), mzp = to_f64(mz[xp]);
+        double mxym = to_f64(mx[ym]), myym = to_f64(my[ym]), mzym = to_f64(mz[ym]);
+        double mxyP = to_f64(mx[yp]), myyP = to_f64(my[yp]), mzyP = to_f64(mz[yp]);
+        if (has_interfacial && exchange_stiffness > 0.0) {
+            const double d_over_2a = D_int / (2.0 * exchange_stiffness);
+            const double dx_cell = 1.0 / (2.0 * inv_2dx);
+            const double dy_cell = 1.0 / (2.0 * inv_2dy);
+            if (missing_xm) {
+                mxm = mmx + dx_cell * d_over_2a * mmz;
+                mzm = mmz - dx_cell * d_over_2a * mmx;
+            }
+            if (missing_xp) {
+                mxp = mmx - dx_cell * d_over_2a * mmz;
+                mzp = mmz + dx_cell * d_over_2a * mmx;
+            }
+            if (missing_ym) {
+                myym = mmy + dy_cell * d_over_2a * mmz;
+                mzym = mmz - dy_cell * d_over_2a * mmy;
+            }
+            if (missing_yp) {
+                myyP = mmy - dy_cell * d_over_2a * mmz;
+                mzyP = mmz + dy_cell * d_over_2a * mmy;
+            }
+        }
+
         if (has_interfacial) {
             // E_dmi = D * [mz(dmx/dx + dmy/dy) - mx*dmz/dx - my*dmz/dy] * V
-            double dmx_dx = (to_f64(mx[xp]) - to_f64(mx[xm])) * inv_2dx;
-            double dmy_dy = (to_f64(my[yp]) - to_f64(my[ym])) * inv_2dy;
-            double dmz_dx = (to_f64(mz[xp]) - to_f64(mz[xm])) * inv_2dx;
-            double dmz_dy = (to_f64(mz[yp]) - to_f64(mz[ym])) * inv_2dy;
+            double dmx_dx = (mxp - mxm) * inv_2dx;
+            double dmy_dy = (myyP - myym) * inv_2dy;
+            double dmz_dx = (mzp - mzm) * inv_2dx;
+            double dmz_dy = (mzyP - mzym) * inv_2dy;
             energy += coeff * D_int * (mmz * (dmx_dx + dmy_dy) - mmx * dmz_dx - mmy * dmz_dy);
         }
 
@@ -1381,6 +1413,7 @@ double reduce_dmi_energy_fp64(Context &ctx) {
         static_cast<int>(ctx.nx), static_cast<int>(ctx.ny), static_cast<int>(ctx.nz),
         ctx.periodic_x ? 1 : 0, ctx.periodic_y ? 1 : 0, ctx.periodic_z ? 1 : 0,
         0.5 / ctx.dx, 0.5 / ctx.dy, 0.5 / ctx.dz,
+        ctx.A,
         ctx.active_mask, ctx.has_active_mask ? 1 : 0);
     return finalize_sum_reduction(ctx.reduction_scratch, blocks);
 }
@@ -1399,6 +1432,7 @@ double reduce_dmi_energy_fp32(Context &ctx) {
         static_cast<int>(ctx.nx), static_cast<int>(ctx.ny), static_cast<int>(ctx.nz),
         ctx.periodic_x ? 1 : 0, ctx.periodic_y ? 1 : 0, ctx.periodic_z ? 1 : 0,
         0.5 / ctx.dx, 0.5 / ctx.dy, 0.5 / ctx.dz,
+        ctx.A,
         ctx.active_mask, ctx.has_active_mask ? 1 : 0);
     return finalize_sum_reduction(ctx.reduction_scratch, blocks);
 }
