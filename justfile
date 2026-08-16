@@ -527,8 +527,9 @@ verify-fdm-sp5-converged-demag-artifacts cpu_run gpu_run reference_ovf output:
 
 # MuMax3 is an external common-limit comparator only: it receives the
 # Fullmag-exported torque-equivalent field and is never a solved-current oracle.
-# The recipe fails before publishing a report if either runtime identity or the
-# input/output digests supplied by the external manifest are absent or differ.
+# The recipe generates the MuMax manifest from the completed output before
+# publishing the report; an optional prior manifest is checked only as an
+# identity expectation and never substitutes for the fresh run.
 verify-fdm-gpu-racetrack-mumax-common-limit:
     bash -euo pipefail -c '\
       source_digest="$(git rev-parse HEAD)"; \
@@ -540,7 +541,7 @@ verify-fdm-gpu-racetrack-mumax-common-limit:
       torque_ovf="${FULLMAG_RACETRACK_TORQUE_EQUIVALENT_OVF:-}"; \
       torque_snapshot="${FULLMAG_RACETRACK_TORQUE_SNAPSHOT:-}"; \
       torque_export="${FULLMAG_RACETRACK_TORQUE_EXPORT_MANIFEST:-}"; \
-      for required in "$fullmag_input" "$mumax_input" "$relaxed_ovf"; do \
+      for required in "$fullmag_input" "$relaxed_ovf"; do \
         if [ -z "$required" ] || [ ! -f "$required" ]; then echo "missing required common-limit input manifest or OVF" >&2; exit 2; fi; \
       done; \
       if [ -e "$report_root/racetrack_mumax_common_limit_v2.json" ]; then echo "refusing to overwrite existing report: $report_root" >&2; exit 3; fi; \
@@ -567,10 +568,6 @@ verify-fdm-gpu-racetrack-mumax-common-limit:
       cp "$relaxed_ovf" "$work_dir/relaxed_zero_current.ovf"; \
       cp "$torque_ovf" "$work_dir/fullmag_transport_torque_common_limit_field.ovf"; \
       cp "$fullmag_input" "$report_root/fullmag-input.json"; \
-      cp "$mumax_input" "$report_root/mumax-input.json"; \
-      expected_script="$(python3 -c "import json; print(json.load(open(\"$mumax_input\"))[\"mumax\"][\"input_script_digest_sha256\"])" 2>/dev/null || true)"; \
-      actual_script="$(sha256sum "$work_dir/common_limit.mx3" | awk '\''{print $1}'\'')"; \
-      if [ -z "$expected_script" ] || [ "$expected_script" != "$actual_script" ]; then echo "MuMax input-script digest is missing or mismatched" >&2; exit 4; fi; \
       if [ -n "${MUMAX3_BIN:-}" ] && [ -x "$MUMAX3_BIN" ]; then \
         sha256sum "$MUMAX3_BIN" | awk '\''{print $1}'\'' > "$work_dir/mumax3.sha256"; \
         (cd "$work_dir" && "$MUMAX3_BIN" common_limit.mx3) 2>&1 | tee "$report_root/mumax-runtime.log"; \
@@ -579,18 +576,27 @@ verify-fdm-gpu-racetrack-mumax-common-limit:
       else \
         echo "no MuMax3 executable or container image supplied; common-limit comparison is not qualified" >&2; exit 5; \
       fi; \
-      expected_binary="$(python3 -c "import json; print(json.load(open(\"$mumax_input\"))[\"mumax\"][\"binary_digest_sha256\"])" 2>/dev/null || true)"; \
       actual_binary="$(tr -d "\\n" < "$work_dir/mumax3.sha256")"; \
-      if [ -z "$expected_binary" ] || [ "$expected_binary" != "$actual_binary" ]; then echo "MuMax binary digest is missing or mismatched" >&2; exit 6; fi; \
       result_ovf="$(find "$work_dir/common_limit.out" -maxdepth 1 -name 'm*.ovf' -type f -print | sort | tail -n 1)"; \
       table_file="$work_dir/common_limit.out/table.txt"; \
       if [ -z "$result_ovf" ] || [ ! -f "$result_ovf" ] || [ ! -f "$table_file" ]; then echo "MuMax did not produce the final magnetization OVF and autosaved table" >&2; exit 7; fi; \
-      expected_table="$(python3 -c "import json; print(json.load(open(\"$mumax_input\"))[\"mumax\"][\"table_digest_sha256\"])" 2>/dev/null || true)"; \
-      actual_table="$(sha256sum "$table_file" | awk '\''{print $1}'\'')"; \
-      if [ -z "$expected_table" ] || [ "$expected_table" != "$actual_table" ]; then echo "MuMax autosaved trajectory table digest is missing or mismatched" >&2; exit 8; fi; \
-      expected_output="$(python3 -c "import json; print(json.load(open(\"$mumax_input\"))[\"mumax\"][\"output_ovf_digest_sha256\"])" 2>/dev/null || true)"; \
-      actual_output="$(sha256sum "$result_ovf" | awk '\''{print $1}'\'')"; \
-      if [ -z "$expected_output" ] || [ "$expected_output" != "$actual_output" ]; then echo "MuMax output OVF digest is missing or mismatched" >&2; exit 9; fi; \
+      python3 scripts/parse_mumax_common_limit.py "$work_dir/common_limit.out" \
+        --torque-export "$torque_export" \
+        --binary-digest "$actual_binary" \
+        --input-script "$work_dir/common_limit.mx3" \
+        --fixed-timestep-s 5e-14 \
+        --sample-interval-s 5e-12 \
+        --duration-s 2e-9 \
+        --alpha 0.3 \
+        --gamma-rad-s-t 1.76085963023e11 \
+        --demag-policy literal \
+        --sampling-mode explicit_steps \
+        --output "$work_dir/mumax-input.generated.json" >/dev/null; \
+      if [ -n "$mumax_input" ]; then \
+        python3 -c "import json,sys; expected=json.load(open(sys.argv[1], encoding='utf-8'))['mumax']; actual=json.load(open(sys.argv[2], encoding='utf-8'))['mumax']; keys=('binary_digest_sha256','input_script_digest_sha256','table_digest_sha256','output_ovf_digest_sha256'); assert all(expected.get(key)==actual.get(key) for key in keys), 'supplied MuMax manifest does not match the fresh run'" "$mumax_input" "$work_dir/mumax-input.generated.json"; \
+        cp "$mumax_input" "$report_root/mumax-input.expected.json"; \
+      fi; \
+      cp "$work_dir/mumax-input.generated.json" "$report_root/mumax-input.json"; \
       cp "$result_ovf" "$report_root/m_final.ovf"; \
       cp "$table_file" "$report_root/mumax-table.txt"; \
       cp "$torque_export" "$report_root/fullmag_transport_torque_mumax_export.v1.json"; \

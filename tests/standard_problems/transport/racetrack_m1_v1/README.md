@@ -102,10 +102,14 @@ promować dokładny tuple `fdm/gpu/double/strict/racetrack_m1_v1`.
 Wymaga początkowego stanu po relaksacji oraz pola równoważnego torque
 wyeksportowanego z Fullmag. Nie wolno zastępować go terminem Slonczewskiego,
 Zhang–Li ani innym prescribed-current torque. Receptura
-`just verify-fdm-gpu-racetrack-mumax-common-limit` wymaga zewnętrznych,
-wersjonowanych manifestów wejściowych Fullmag i MuMax3; porównywarka odrzuca
-brak digestu binarium MuMax3, niezgodną siatkę, różny krok/integrator common
-limit albo brak identycznego digestu pola torque.
+`just verify-fdm-gpu-racetrack-mumax-common-limit` wymaga manifestu wejściowego
+Fullmag oraz stanu po relaksacji i pola torque. Po zakończeniu MuMax3 parser
+`scripts/parse_mumax_common_limit.py` buduje manifest MuMax3 bezpośrednio z
+rzeczywistych OVF/table, binarium, skryptu i kadencji; opcjonalny
+`MUMAX_RACETRACK_COMMON_LIMIT_INPUT` jest tylko oczekiwaniem tożsamości i nie
+zastępuje świeżego wyniku. Porównywarka odrzuca brak digestu binarium MuMax3,
+niezgodną siatkę, różny krok/integrator common limit albo brak identycznego
+digestu pola torque.
 
 Źródłem eksportu jest zaakceptowane `T_tr_G` Fullmag w `s^-1`, nie
 prescribed field. Dla kanonicznego jawnego równania Gilberta z
