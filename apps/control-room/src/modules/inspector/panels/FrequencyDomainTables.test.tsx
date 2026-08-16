@@ -35,6 +35,8 @@ describe("FrequencyDomainTables", () => {
       ),
       renderToStaticMarkup(
         <FrequencyDomainResponsePointTable
+          absorbedPowerDensityUnit="W/m^3"
+          amplitudeUnit="A/m"
           onPlotResponsePoint={onPlotResponsePoint}
           points={[
             {
@@ -75,7 +77,9 @@ describe("FrequencyDomainTables", () => {
           peaks={[
             {
               absorbedPowerDensity: null,
+              absorbedPowerDensityUnit: "W/m^3",
               amplitude: null,
+              amplitudeUnit: "A/m",
               fieldId: null,
               frequencyHz: 600e6,
               frequencyPointIndex: null,
@@ -94,6 +98,8 @@ describe("FrequencyDomainTables", () => {
     expect(html).toContain("Imag freq.");
     expect(html).toContain("20 MHz");
     expect(html).toContain("500 MHz");
+    expect(html).toContain("Amplitude [A/m]");
+    expect(html).toContain("Absorbed power [W/m^3]");
     expect(html).toContain("250 MHz-950 MHz");
     expect(html).toContain("600 MHz");
     expect(html).toContain("Select");

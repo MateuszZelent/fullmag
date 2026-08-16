@@ -7,16 +7,12 @@ import {
   AirboxMeshTopologyLanePanel,
   AirboxOverviewLanePanel,
 } from "./panels/airbox/AirboxInspectorLanePanel";
-import { AirboxVisualizationPanel } from "./panels/airbox/AirboxVisualizationPanel";
 import { FdmMultilayerAirboxTargetPanel } from "./panels/airbox/FdmMultilayerAirboxTargetPanel";
+import { AirboxVisualizationDebugInspectorPanel } from "./panels/airbox/AirboxVisualizationDebugInspectorPanel";
 import { AntennaObjectPanel } from "./panels/AntennaObjectPanel";
-import { ChartInspectorPanel } from "./panels/ChartInspectorPanel";
-import { LiveChartInspectorPanel } from "./panels/LiveChartInspectorPanel";
 import { QuickChartInspectorPanel } from "./panels/QuickChartInspectorPanel";
 import { BoundaryFacesOverviewPanel } from "./panels/boundary-faces/BoundaryFacesOverviewPanel";
 import { CouplingInspectorPanel } from "./panels/CouplingInspectorPanel";
-import { RegionalFieldDrivePanel } from "./panels/RegionalFieldDrivePanel";
-import { CrossSectionInspectorPanel } from "./panels/CrossSectionInspectorPanel";
 import {
   EigenBranchesInspectorPanel,
   EigenDiagnosticsInspectorPanel,
@@ -54,25 +50,17 @@ import { EigenDispersionInspectorPanel } from "./panels/frequency-domain/EigenDi
 import { EigenModeInspectorPanel } from "./panels/frequency-domain/EigenModeInspectorPanel";
 import { FmrModalSpectrumInspectorPanel } from "./panels/frequency-domain/FmrModalSpectrumInspectorPanel";
 import { FmrResponseSweepInspectorPanel } from "./panels/frequency-domain/FmrResponseSweepInspectorPanel";
-import { GeometryObjectPanel } from "./panels/GeometryObjectPanel";
 import { FieldQuantityInspectorPanel } from "./panels/FieldQuantityInspectorPanel";
-import { MeshDetailsPanel } from "./panels/MeshDetailsPanel";
 import { MeshPartVisualizationPanel } from "./panels/MeshPartVisualizationPanel";
-import { FdmGridInspectorPanel } from "./panels/fdm-grid/FdmGridInspectorPanel";
 import { ModeVisualizationOverviewPanel } from "./panels/mode-visualization/ModeVisualizationOverviewPanel";
 import { ObjectGeneralPanel } from "./panels/ObjectGeneralPanel";
-import { ObjectMagneticTexturePanel } from "./panels/ObjectMagneticTexturePanel";
-import { ObjectMaterialPanel } from "./panels/ObjectMaterialPanel";
 import { ObjectMeshPolicyPanel } from "./panels/ObjectMeshPolicyPanel";
 import { TopologicalChargeExtensionPanel } from "./extensions/topological-charge/TopologicalChargeExtensionPanel";
 import {
   ObjectRegionDiagnosticsPanel,
-  ObjectRegionGeometryPanel,
-  ObjectRegionMagneticParametersPanel,
   ObjectRegionMeshPanel,
   ObjectRegionNestedRegionsPanel,
   ObjectRegionOverviewPanel,
-  ObjectRegionTexturePanel,
   ObjectRegionVisualizationPanel,
 } from "./panels/ObjectRegionsPanel";
 import { ObjectVisualizationPanel } from "./panels/ObjectVisualizationPanel";
@@ -129,6 +117,25 @@ import {
   TableDefinitionInspector,
   TablesOverviewInspector,
 } from "./panels/physics-first/PostprocessingResultInspectors";
+import { ResultsOverviewInspectorPanel } from "./panels/physics-first/ResultsOverviewInspectorPanel";
+import {
+  CrossObjectPhysicsScopeInspectorPanel,
+  DefinitionsRootInspectorPanel,
+  GlobalPhysicsScopeInspectorPanel,
+  MeshUnassignedInspectorPanel,
+  MeshUnassignedPartInspectorPanel,
+  ObjectPhysicsScopeInspectorPanel,
+  ObjectsRootInspectorPanel,
+  PhysicsCouplingsInspectorPanel,
+  PlanarMonitorsInspectorPanel,
+  SessionRootInspectorPanel,
+  UniverseRootInspectorPanel,
+  UnresolvedPhysicsScopeInspectorPanel,
+  Visualizations2DDraftInspectorPanel,
+  Visualizations2DOverviewInspectorPanel,
+  Visualizations2DParameterInspectorPanel,
+  Visualizations2DPlotInspectorPanel,
+} from "./panels/ModelTreeOverviewInspectorPanels";
 import { RegionsListPanel } from "./panels/RegionsListPanel";
 import {
   RuntimeCapabilityDiagnosticInspectorPanel,
@@ -138,12 +145,80 @@ import {
   RuntimeMeshDiagnosticInspectorPanel,
   RuntimePerformanceDiagnosticInspectorPanel,
   RuntimeProblemDiagnosticInspectorPanel,
+  RuntimeResourceDiagnosticInspectorPanel,
   RuntimeResourceInspectorPanel,
   RuntimeRunJobInspectorPanel,
   RuntimeSolverDiagnosticInspectorPanel,
   RuntimeStageJobInspectorPanel,
 } from "./panels/RuntimeExplorerInspectorPanels";
-import { StudyInspectorPanel } from "./panels/StudyInspectorPanel";
+import {
+  DiagnosticsOverviewInspectorPanel,
+  JobsOverviewInspectorPanel,
+  ResourcesOverviewInspectorPanel,
+} from "./panels/RuntimeExplorerOverviewInspectorPanels";
+import {
+  AirboxVisualizationInspectorPanel,
+  AnalysisChartInspectorPanel,
+  AnalysisChartPointInspectorPanel,
+  BuilderPrimitiveInspectorPanel,
+  CrossSectionDraftInspectorPanel,
+  CrossSectionInspectorPanelRoute,
+  CrossSectionPlotInspectorPanel,
+  FdmCellInspectorPanel,
+  FdmGridActiveUnassignedInspectorPanel,
+  FdmGridCommonInspectorPanel,
+  FdmGridDescriptorInspectorPanel,
+  FdmGridInspectorPanelRoute,
+  FdmGridLayerInspectorPanel,
+  FdmGridLayerMaskInspectorPanel,
+  FdmGridLayerProvenanceInspectorPanel,
+  FdmGridLayerTransferInspectorPanel,
+  FdmGridLayersInspectorPanel,
+  FdmGridMagneticSupportInspectorPanel,
+  FdmGridMaskInspectorPanel,
+  FdmGridNativeGridInspectorPanel,
+  FdmGridProvenanceInspectorPanel,
+  FdmGridRegionInspectorPanel,
+  FdmGridUniverseOutsideSupportInspectorPanel,
+  FieldDriveInspectorPanel,
+  FieldDrivesInspectorPanel,
+  GeometryObjectInspectorPanel,
+  LiveChartInspectorPanel,
+  LiveChartPointInspectorPanel,
+  MeshBuildsInspectorPanel,
+  MeshPartAirboxInspectorPanel,
+  MeshQualityInspectorPanel,
+  MeshRegionsInspectorPanel,
+  MeshRootInspectorPanel,
+  MeshSharedDomainInspectorPanel,
+  MeshSizeFieldsInspectorPanel,
+  ObjectMagneticParametersInspectorPanel,
+  ObjectMagneticTextureAssetInspectorPanel,
+  ObjectMagneticTextureInspectorPanel,
+  ObjectMagneticTextureLoadInspectorPanel,
+  ObjectMagneticTextureTransformInspectorPanel,
+  ObjectMaterialInspectorPanel,
+  ObjectRegionGeometryInspectorPanel,
+  ObjectRegionMagneticParametersInspectorPanel,
+  ObjectRegionMagneticTextureInspectorPanel,
+  ObjectRegionMaterialInspectorPanel,
+  ObjectRegionShapeInspectorPanel,
+  ObjectRegionTextureInspectorPanel,
+  StudyExecutionInspectorPanel,
+  StudyRecoveryInspectorPanel,
+  StudyRootInspectorPanel,
+  StudyStageActionInspectorPanel,
+  StudyStageAddFieldDriveInspectorPanel,
+  StudyStageAutosaveInspectorPanel,
+  StudyStageChangeDeviceInspectorPanel,
+  StudyStageFftResponseInspectorPanel,
+  StudyStageHysteresisInspectorPanel,
+  StudyStageRelaxInspectorPanel,
+  StudyStageRunInspectorPanel,
+  StudyStageSaveStateInspectorPanel,
+  StudyStageTableAutosaveInspectorPanel,
+  StudyStagesInspectorPanel,
+} from "./panels/DedicatedExplorerInspectorPanels";
 import { FieldRow } from "./primitives/FieldRow";
 import { InspectorGroup } from "./primitives/InspectorGroup";
 import { VisualizationDebugPanel } from "./panels/visualization-debug/VisualizationDebugPanel";
@@ -172,7 +247,6 @@ import {
   FrequencyResponseSolverStageInspectorPanel,
   FrequencyResponseStageOverviewInspectorPanel,
   FrequencyResponseSweepStageInspectorPanel,
-  StudyStageInspectorRouter,
 } from "./panels/StudyStageInspectorRouter";
 import { resolveFrequencyDomainNodeDetail } from "./panels/frequencyDomainNodeDetails";
 import type {
@@ -478,15 +552,6 @@ interface VisualizationDebugInspectorOwner {
   title: string;
 }
 
-const AIRBOX_VISUALIZATION_DEBUG_OWNER: VisualizationDebugInspectorOwner = {
-  actionSummary: "Inspect Airbox render adoption and export bounded evidence",
-  capabilityDescription:
-    "Airbox FEM viewport snapshots, field carriers, and exact transport metadata",
-  id: "airbox.visualization.debug",
-  targetLabel: "Airbox target",
-  title: "Airbox Visualization Debug",
-};
-
 const OBJECT_VISUALIZATION_DEBUG_OWNER: VisualizationDebugInspectorOwner = {
   actionSummary: "Inspect object render adoption and export bounded evidence",
   capabilityDescription:
@@ -532,15 +597,6 @@ function VisualizationDebugOwnerPanel({
   );
 }
 
-function AirboxVisualizationDebugOwner({ selection }: InspectorPanelProps) {
-  return (
-    <VisualizationDebugOwnerPanel
-      owner={AIRBOX_VISUALIZATION_DEBUG_OWNER}
-      selection={selection}
-    />
-  );
-}
-
 function ObjectVisualizationDebugOwner({ selection }: InspectorPanelProps) {
   return (
     <VisualizationDebugOwnerPanel
@@ -575,14 +631,26 @@ const INSPECTOR_ROUTE_CONTRIBUTIONS: InspectorPanelContribution[] = [
   {
     id: "chart",
     title: "Charts",
-    selectionKinds: ["analysis.chart", "analysis.chart-point"],
-    component: ChartInspectorPanel,
+    selectionKinds: ["analysis.chart"],
+    component: AnalysisChartInspectorPanel,
+  },
+  {
+    id: "chart-point",
+    title: "Chart Point",
+    selectionKinds: ["analysis.chart-point"],
+    component: AnalysisChartPointInspectorPanel,
   },
   {
     id: "live-chart",
     title: "Live Chart",
-    selectionKinds: ["live.chart", "live.chart-point"],
+    selectionKinds: ["live.chart"],
     component: LiveChartInspectorPanel,
+  },
+  {
+    id: "live-chart-point",
+    title: "Live Chart Point",
+    selectionKinds: ["live.chart-point"],
+    component: LiveChartPointInspectorPanel,
   },
   {
     id: "quick-chart",
@@ -591,28 +659,130 @@ const INSPECTOR_ROUTE_CONTRIBUTIONS: InspectorPanelContribution[] = [
     component: QuickChartInspectorPanel,
   },
   {
+    id: "session-root",
+    title: "Session Model",
+    selectionKinds: ["session.root"],
+    component: SessionRootInspectorPanel,
+  },
+  {
+    id: "universe-root",
+    title: "Universe",
+    selectionKinds: ["universe.root"],
+    component: UniverseRootInspectorPanel,
+  },
+  {
+    id: "objects-root",
+    title: "Objects",
+    selectionKinds: ["objects.root"],
+    component: ObjectsRootInspectorPanel,
+  },
+  {
+    id: "definitions-root",
+    title: "Definitions",
+    selectionKinds: ["definitions.root"],
+    component: DefinitionsRootInspectorPanel,
+  },
+  {
+    id: "planar-monitors",
+    title: "Planar Monitors",
+    selectionKinds: ["model.planar.monitors"],
+    component: PlanarMonitorsInspectorPanel,
+  },
+  {
+    id: "physics-couplings",
+    title: "Couplings",
+    selectionKinds: ["physics.couplings"],
+    component: PhysicsCouplingsInspectorPanel,
+  },
+  {
+    id: "physics-scope-global",
+    title: "Global Physics",
+    selectionKinds: ["physics.scope.global"],
+    component: GlobalPhysicsScopeInspectorPanel,
+  },
+  {
+    id: "object-physics-scope",
+    title: "Object Physics Scope",
+    selectionKinds: ["object.physics.scope"],
+    component: ObjectPhysicsScopeInspectorPanel,
+  },
+  {
+    id: "physics-scope-cross-object",
+    title: "Cross-object Interfaces",
+    selectionKinds: ["physics.scope.cross-object"],
+    component: CrossObjectPhysicsScopeInspectorPanel,
+  },
+  {
+    id: "physics-scope-unresolved",
+    title: "Unresolved Physics",
+    selectionKinds: ["physics.scope.unresolved"],
+    component: UnresolvedPhysicsScopeInspectorPanel,
+  },
+  {
+    id: "mesh-unassigned",
+    title: "Unassigned Mesh Parts",
+    selectionKinds: ["mesh.unassigned"],
+    component: MeshUnassignedInspectorPanel,
+  },
+  {
+    id: "mesh-unassigned-part",
+    title: "Unassigned Mesh Part",
+    selectionKinds: ["mesh.unassigned.part"],
+    component: MeshUnassignedPartInspectorPanel,
+  },
+  {
+    id: "visualizations-2d-root",
+    title: "Visualizations 2D",
+    selectionKinds: ["visualizations-2d.root"],
+    component: Visualizations2DOverviewInspectorPanel,
+  },
+  {
+    id: "visualizations-2d-draft",
+    title: "2D Visualization Draft",
+    selectionKinds: ["visualizations-2d.draft"],
+    component: Visualizations2DDraftInspectorPanel,
+  },
+  {
+    id: "visualizations-2d-parameter",
+    title: "2D Visualization Parameter",
+    selectionKinds: ["visualizations-2d.parameter"],
+    component: Visualizations2DParameterInspectorPanel,
+  },
+  {
+    id: "visualizations-2d-plot",
+    title: "2D Visualization Plot",
+    selectionKinds: ["visualizations-2d.plot"],
+    component: Visualizations2DPlotInspectorPanel,
+  },
+  {
     id: "resources-overview",
     title: "Resources",
     selectionKinds: ["resources.root"],
-    component: FieldQuantityInspectorPanel,
+    component: ResourcesOverviewInspectorPanel,
   },
   {
     id: "results-overview",
     title: "Results",
     selectionKinds: ["results.root"],
-    component: FieldQuantityInspectorPanel,
+    component: ResultsOverviewInspectorPanel,
   },
   {
     id: "jobs-overview",
     title: "Jobs",
     selectionKinds: ["jobs.root"],
-    component: StudyInspectorPanel,
+    component: JobsOverviewInspectorPanel,
   },
   {
     id: "diagnostics-overview",
     title: "Diagnostics",
-    selectionKinds: ["diagnostics.root", "diagnostics.resource"],
-    component: VisualizationDebugPanel,
+    selectionKinds: ["diagnostics.root"],
+    component: DiagnosticsOverviewInspectorPanel,
+  },
+  {
+    id: "runtime-resource-diagnostic",
+    title: "Resource Diagnostic",
+    selectionKinds: ["diagnostics.resource"],
+    component: RuntimeResourceDiagnosticInspectorPanel,
   },
   {
     id: "runtime-resource",
@@ -689,8 +859,14 @@ const INSPECTOR_ROUTE_CONTRIBUTIONS: InspectorPanelContribution[] = [
   {
     id: "geometry-object",
     title: "Geometry",
-    selectionKinds: ["object.geometry", "builder.primitive"],
-    component: GeometryObjectPanel,
+    selectionKinds: ["object.geometry"],
+    component: GeometryObjectInspectorPanel,
+  },
+  {
+    id: "builder-primitive",
+    title: "Builder Primitive",
+    selectionKinds: ["builder.primitive"],
+    component: BuilderPrimitiveInspectorPanel,
   },
   {
     id: "antenna-object",
@@ -719,8 +895,14 @@ const INSPECTOR_ROUTE_CONTRIBUTIONS: InspectorPanelContribution[] = [
   {
     id: "airbox-visualization",
     title: "Airbox Visualization",
-    selectionKinds: ["airbox.visualization", "mesh-part-airbox"],
-    component: AirboxVisualizationPanel,
+    selectionKinds: ["airbox.visualization"],
+    component: AirboxVisualizationInspectorPanel,
+  },
+  {
+    id: "mesh-part-airbox-visualization",
+    title: "Airbox Mesh Part Visualization",
+    selectionKinds: ["mesh-part-airbox"],
+    component: MeshPartAirboxInspectorPanel,
   },
   {
     id: "object-visualization",
@@ -738,7 +920,7 @@ const INSPECTOR_ROUTE_CONTRIBUTIONS: InspectorPanelContribution[] = [
     id: "airbox-visualization-debug",
     title: "Airbox Visualization Debug",
     selectionKinds: ["airbox.visualization.debug"],
-    component: AirboxVisualizationDebugOwner,
+    component: AirboxVisualizationDebugInspectorPanel,
   },
   {
     id: "object-visualization-debug",
@@ -821,14 +1003,26 @@ const INSPECTOR_ROUTE_CONTRIBUTIONS: InspectorPanelContribution[] = [
   {
     id: "physics-field-drive",
     title: "Field Drive",
-    selectionKinds: ["physics.field-drives", "physics.field-drive"],
-    component: RegionalFieldDrivePanel,
+    selectionKinds: ["physics.field-drives"],
+    component: FieldDrivesInspectorPanel,
+  },
+  {
+    id: "physics-field-drive-item",
+    title: "Field Drive Item",
+    selectionKinds: ["physics.field-drive"],
+    component: FieldDriveInspectorPanel,
   },
   {
     id: "object-material",
     title: "Magnetic Parameters",
-    selectionKinds: ["object.magnetic-parameters", "object.material"],
-    component: ObjectMaterialPanel,
+    selectionKinds: ["object.magnetic-parameters"],
+    component: ObjectMagneticParametersInspectorPanel,
+  },
+  {
+    id: "object-material-assignment",
+    title: "Material Assignment",
+    selectionKinds: ["object.material"],
+    component: ObjectMaterialInspectorPanel,
   },
   {
     id: "object-regions",
@@ -845,17 +1039,26 @@ const INSPECTOR_ROUTE_CONTRIBUTIONS: InspectorPanelContribution[] = [
   {
     id: "object-region-geometry",
     title: "Region Geometry",
-    selectionKinds: ["object.region.geometry", "object.region.shape"],
-    component: ObjectRegionGeometryPanel,
+    selectionKinds: ["object.region.geometry"],
+    component: ObjectRegionGeometryInspectorPanel,
+  },
+  {
+    id: "object-region-shape",
+    title: "Region Shape",
+    selectionKinds: ["object.region.shape"],
+    component: ObjectRegionShapeInspectorPanel,
   },
   {
     id: "object-region-magnetic-parameters",
     title: "Region Magnetic Parameters",
-    selectionKinds: [
-      "object.region.magnetic-parameters",
-      "object.region.material",
-    ],
-    component: ObjectRegionMagneticParametersPanel,
+    selectionKinds: ["object.region.magnetic-parameters"],
+    component: ObjectRegionMagneticParametersInspectorPanel,
+  },
+  {
+    id: "object-region-material",
+    title: "Region Material",
+    selectionKinds: ["object.region.material"],
+    component: ObjectRegionMaterialInspectorPanel,
   },
   {
     id: "object-region-mesh",
@@ -866,8 +1069,14 @@ const INSPECTOR_ROUTE_CONTRIBUTIONS: InspectorPanelContribution[] = [
   {
     id: "object-region-texture",
     title: "Region Texture",
-    selectionKinds: ["object.region.texture", "object.region-magnetic-texture"],
-    component: ObjectRegionTexturePanel,
+    selectionKinds: ["object.region.texture"],
+    component: ObjectRegionTextureInspectorPanel,
+  },
+  {
+    id: "object-region-magnetic-texture",
+    title: "Region Magnetic Texture",
+    selectionKinds: ["object.region-magnetic-texture"],
+    component: ObjectRegionMagneticTextureInspectorPanel,
   },
   {
     id: "object-region-visualization",
@@ -890,13 +1099,26 @@ const INSPECTOR_ROUTE_CONTRIBUTIONS: InspectorPanelContribution[] = [
   {
     id: "object-magnetic-texture",
     title: "Magnetic Texture",
-    selectionKinds: [
-      "object.magnetic-texture",
-      "object.magnetic-texture.asset",
-      "object.magnetic-texture.load",
-      "object.magnetic-texture.transform",
-    ],
-    component: ObjectMagneticTexturePanel,
+    selectionKinds: ["object.magnetic-texture"],
+    component: ObjectMagneticTextureInspectorPanel,
+  },
+  {
+    id: "object-magnetic-texture-asset",
+    title: "Magnetic Texture Asset",
+    selectionKinds: ["object.magnetic-texture.asset"],
+    component: ObjectMagneticTextureAssetInspectorPanel,
+  },
+  {
+    id: "object-magnetic-texture-load",
+    title: "Magnetic Texture Load",
+    selectionKinds: ["object.magnetic-texture.load"],
+    component: ObjectMagneticTextureLoadInspectorPanel,
+  },
+  {
+    id: "object-magnetic-texture-transform",
+    title: "Magnetic Texture Transform",
+    selectionKinds: ["object.magnetic-texture.transform"],
+    component: ObjectMagneticTextureTransformInspectorPanel,
   },
   {
     id: "airbox-mesh-overview",
@@ -949,71 +1171,236 @@ const INSPECTOR_ROUTE_CONTRIBUTIONS: InspectorPanelContribution[] = [
   {
     id: "mesh-details",
     title: "Mesh",
-    selectionKinds: [
-      "mesh.root",
-      "mesh.shared-domain",
-      "mesh.builds",
-      "mesh.quality",
-      "mesh.size-fields",
-      "mesh.regions",
-    ],
-    component: MeshDetailsPanel,
+    selectionKinds: ["mesh.root"],
+    component: MeshRootInspectorPanel,
+  },
+  {
+    id: "mesh-shared-domain",
+    title: "Shared Domain Mesh",
+    selectionKinds: ["mesh.shared-domain"],
+    component: MeshSharedDomainInspectorPanel,
+  },
+  {
+    id: "mesh-builds",
+    title: "Mesh Builds",
+    selectionKinds: ["mesh.builds"],
+    component: MeshBuildsInspectorPanel,
+  },
+  {
+    id: "mesh-quality",
+    title: "Mesh Quality",
+    selectionKinds: ["mesh.quality"],
+    component: MeshQualityInspectorPanel,
+  },
+  {
+    id: "mesh-size-fields",
+    title: "Mesh Size Fields",
+    selectionKinds: ["mesh.size-fields"],
+    component: MeshSizeFieldsInspectorPanel,
+  },
+  {
+    id: "mesh-regions",
+    title: "Mesh Regions",
+    selectionKinds: ["mesh.regions"],
+    component: MeshRegionsInspectorPanel,
   },
   {
     id: "fdm-grid",
     title: "FDM Mesh",
-    selectionKinds: [
-      "mesh.grid",
-      "mesh.grid.descriptor",
-      "mesh.grid.common",
-      "mesh.grid.layers",
-      "mesh.grid.layer",
-      "mesh.grid.layer.native-grid",
-      "mesh.grid.layer.mask",
-      "mesh.grid.layer.transfer",
-      "mesh.grid.layer.provenance",
-      "mesh.grid.magnetic-support",
-      "mesh.grid.active-unassigned",
-      "mesh.grid.mask",
-      "mesh.grid.provenance",
-      "mesh.grid.region",
-      "mesh.grid.universe-outside-support",
-      "fdm.cell",
-    ],
-    component: FdmGridInspectorPanel,
+    selectionKinds: ["mesh.grid"],
+    component: FdmGridInspectorPanelRoute,
+  },
+  {
+    id: "fdm-grid-descriptor",
+    title: "FDM Grid Descriptor",
+    selectionKinds: ["mesh.grid.descriptor"],
+    component: FdmGridDescriptorInspectorPanel,
+  },
+  {
+    id: "fdm-grid-common",
+    title: "FDM Grid Common",
+    selectionKinds: ["mesh.grid.common"],
+    component: FdmGridCommonInspectorPanel,
+  },
+  {
+    id: "fdm-grid-layers",
+    title: "FDM Grid Layers",
+    selectionKinds: ["mesh.grid.layers"],
+    component: FdmGridLayersInspectorPanel,
+  },
+  {
+    id: "fdm-grid-layer",
+    title: "FDM Grid Layer",
+    selectionKinds: ["mesh.grid.layer"],
+    component: FdmGridLayerInspectorPanel,
+  },
+  {
+    id: "fdm-grid-native-grid",
+    title: "FDM Native Grid",
+    selectionKinds: ["mesh.grid.layer.native-grid"],
+    component: FdmGridNativeGridInspectorPanel,
+  },
+  {
+    id: "fdm-grid-layer-mask",
+    title: "FDM Grid Layer Mask",
+    selectionKinds: ["mesh.grid.layer.mask"],
+    component: FdmGridLayerMaskInspectorPanel,
+  },
+  {
+    id: "fdm-grid-layer-transfer",
+    title: "FDM Grid Layer Transfer",
+    selectionKinds: ["mesh.grid.layer.transfer"],
+    component: FdmGridLayerTransferInspectorPanel,
+  },
+  {
+    id: "fdm-grid-layer-provenance",
+    title: "FDM Grid Layer Provenance",
+    selectionKinds: ["mesh.grid.layer.provenance"],
+    component: FdmGridLayerProvenanceInspectorPanel,
+  },
+  {
+    id: "fdm-grid-magnetic-support",
+    title: "FDM Magnetic Support",
+    selectionKinds: ["mesh.grid.magnetic-support"],
+    component: FdmGridMagneticSupportInspectorPanel,
+  },
+  {
+    id: "fdm-grid-active-unassigned",
+    title: "FDM Active Unassigned Cells",
+    selectionKinds: ["mesh.grid.active-unassigned"],
+    component: FdmGridActiveUnassignedInspectorPanel,
+  },
+  {
+    id: "fdm-grid-mask",
+    title: "FDM Grid Mask",
+    selectionKinds: ["mesh.grid.mask"],
+    component: FdmGridMaskInspectorPanel,
+  },
+  {
+    id: "fdm-grid-provenance",
+    title: "FDM Grid Provenance",
+    selectionKinds: ["mesh.grid.provenance"],
+    component: FdmGridProvenanceInspectorPanel,
+  },
+  {
+    id: "fdm-grid-region",
+    title: "FDM Grid Region",
+    selectionKinds: ["mesh.grid.region"],
+    component: FdmGridRegionInspectorPanel,
+  },
+  {
+    id: "fdm-grid-universe-outside-support",
+    title: "FDM Universe Outside Support",
+    selectionKinds: ["mesh.grid.universe-outside-support"],
+    component: FdmGridUniverseOutsideSupportInspectorPanel,
+  },
+  {
+    id: "fdm-cell",
+    title: "FDM Cell",
+    selectionKinds: ["fdm.cell"],
+    component: FdmCellInspectorPanel,
   },
   {
     id: "cross-section",
     title: "Cross-Section",
-    selectionKinds: [
-      "mesh.cross-section",
-      "mesh.cross-section.draft",
-      "mesh.cross-section.plot",
-    ],
-    component: CrossSectionInspectorPanel,
+    selectionKinds: ["mesh.cross-section"],
+    component: CrossSectionInspectorPanelRoute,
+  },
+  {
+    id: "cross-section-draft",
+    title: "Cross-Section Draft",
+    selectionKinds: ["mesh.cross-section.draft"],
+    component: CrossSectionDraftInspectorPanel,
+  },
+  {
+    id: "cross-section-plot",
+    title: "Cross-Section Plot",
+    selectionKinds: ["mesh.cross-section.plot"],
+    component: CrossSectionPlotInspectorPanel,
   },
   {
     id: "study-root",
     title: "Study",
-    selectionKinds: ["study.root", "study.stages", "study.execution", "study.recovery"],
-    component: StudyInspectorPanel,
+    selectionKinds: ["study.root"],
+    component: StudyRootInspectorPanel,
+  },
+  {
+    id: "study-stages",
+    title: "Study Stages",
+    selectionKinds: ["study.stages"],
+    component: StudyStagesInspectorPanel,
+  },
+  {
+    id: "study-execution",
+    title: "Study Execution",
+    selectionKinds: ["study.execution"],
+    component: StudyExecutionInspectorPanel,
+  },
+  {
+    id: "study-recovery",
+    title: "Study Recovery",
+    selectionKinds: ["study.recovery"],
+    component: StudyRecoveryInspectorPanel,
   },
   {
     id: "study-stage",
     title: "Study Stage",
-    selectionKinds: [
-      "study.stage.action",
-      "study.stage.add_field_drive",
-      "study.stage.autosave",
-      "study.stage.fft_response",
-      "study.stage.hysteresis",
-      "study.stage.relax",
-      "study.stage.run",
-      "study.stage.table_autosave",
-      "study.stage.change_device",
-      "study.stage.save_state",
-    ],
-    component: StudyStageInspectorRouter,
+    selectionKinds: ["study.stage.action"],
+    component: StudyStageActionInspectorPanel,
+  },
+  {
+    id: "study-stage-add-field-drive",
+    title: "Study Stage Add Field Drive",
+    selectionKinds: ["study.stage.add_field_drive"],
+    component: StudyStageAddFieldDriveInspectorPanel,
+  },
+  {
+    id: "study-stage-autosave",
+    title: "Study Stage Autosave",
+    selectionKinds: ["study.stage.autosave"],
+    component: StudyStageAutosaveInspectorPanel,
+  },
+  {
+    id: "study-stage-fft-response",
+    title: "Study Stage FFT Response",
+    selectionKinds: ["study.stage.fft_response"],
+    component: StudyStageFftResponseInspectorPanel,
+  },
+  {
+    id: "study-stage-hysteresis",
+    title: "Study Stage Hysteresis",
+    selectionKinds: ["study.stage.hysteresis"],
+    component: StudyStageHysteresisInspectorPanel,
+  },
+  {
+    id: "study-stage-relax",
+    title: "Study Stage Relax",
+    selectionKinds: ["study.stage.relax"],
+    component: StudyStageRelaxInspectorPanel,
+  },
+  {
+    id: "study-stage-run",
+    title: "Study Stage Run",
+    selectionKinds: ["study.stage.run"],
+    component: StudyStageRunInspectorPanel,
+  },
+  {
+    id: "study-stage-table-autosave",
+    title: "Study Stage Table Autosave",
+    selectionKinds: ["study.stage.table_autosave"],
+    component: StudyStageTableAutosaveInspectorPanel,
+  },
+  {
+    id: "study-stage-change-device",
+    title: "Study Stage Change Device",
+    selectionKinds: ["study.stage.change_device"],
+    component: StudyStageChangeDeviceInspectorPanel,
+  },
+  {
+    id: "study-stage-save-state",
+    title: "Study Stage Save State",
+    selectionKinds: ["study.stage.save_state"],
+    component: StudyStageSaveStateInspectorPanel,
   },
   ...frequencyDomainPanels,
   {

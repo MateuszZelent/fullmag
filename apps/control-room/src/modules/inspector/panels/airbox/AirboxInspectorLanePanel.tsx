@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, type ComponentType } from "react";
+import { useMemo, type ComponentType, type ReactNode } from "react";
 
 import {
   useDomainMetaResource,
@@ -13,6 +13,7 @@ import {
 } from "@/shared/domain/mesh/domainPresentation";
 
 import type { InspectorPanelProps } from "../../inspectorTypes";
+import { AirboxInspectorIdentityFrame } from "./AirboxInspectorIdentityFrame";
 import {
   resolveAirboxInspectorLane,
   useAirboxInspectorRuntimeStatus,
@@ -81,21 +82,19 @@ function AirboxInspectorLanePanel({
     scene.data,
   ]);
 
+  let content: ReactNode;
   if (lane === "conflict") {
-    return (
+    content = (
       <div className="fm-inspector-panel" role="status">
         <p>Airbox selection is unavailable</p>
         <p>The selected Airbox target does not match the current runtime lane.</p>
       </div>
     );
-  }
-
-  if (explicitFdm) {
+  } else if (explicitFdm) {
     if (FdmPanel) {
-      return <FdmPanel lane="fdm" selection={selection} />;
-    }
-    if (fdmFactsView) {
-      return (
+      content = <FdmPanel lane="fdm" selection={selection} />;
+    } else if (fdmFactsView) {
+      content = (
         <FdmAirboxMeshFactsPanel
           membership={membership.data}
           resource={domain}
@@ -103,16 +102,24 @@ function AirboxInspectorLanePanel({
           view={fdmFactsView}
         />
       );
+    } else {
+      content = (
+        <FdmUniverseExtentPanel
+          membership={membership.data}
+          resource={domain}
+          roleEvidence={roleEvidence}
+        />
+      );
     }
-    return (
-      <FdmUniverseExtentPanel
-        membership={membership.data}
-        resource={domain}
-        roleEvidence={roleEvidence}
-      />
-    );
+  } else {
+    content = <FemPanel selection={selection} />;
   }
-  return <FemPanel selection={selection} />;
+
+  return (
+    <AirboxInspectorIdentityFrame lane={lane} selection={selection}>
+      {content}
+    </AirboxInspectorIdentityFrame>
+  );
 }
 
 export function AirboxOverviewLanePanel(props: InspectorPanelProps) {

@@ -242,64 +242,64 @@
 /* ── Semantic icon colors ── */
 /* Each icon token maps to a harmonious semantic color */
 .fm-explorer-tree-row__icon[data-icon="layers"] {
-  color: #6366f1; /* indigo — groups, hierarchy */
+  color: var(--fm-explorer-icon-group);
 }
 
 .fm-explorer-tree-row__icon[data-icon="box"] {
-  color: #f97316; /* orange — physical objects */
+  color: var(--fm-explorer-icon-object);
 }
 
 .fm-explorer-tree-row__icon[data-icon="mesh"],
 .fm-explorer-tree-row__icon[data-icon="triangle"] {
-  color: #f59e0b; /* amber — mesh / geometry */
+  color: var(--fm-explorer-icon-mesh);
 }
 
 .fm-explorer-tree-row__icon[data-icon="wave"] {
-  color: #0d9488; /* teal — fields, waves, parameters */
+  color: var(--fm-explorer-icon-field);
 }
 
 .fm-explorer-tree-row__icon[data-icon="sparkles"] {
-  color: #06b6d4; /* cyan — visualization */
+  color: var(--fm-explorer-icon-visualization);
 }
 
 .fm-explorer-tree-row__icon[data-icon="activity"] {
-  color: #8b5cf6; /* violet — results, analysis */
+  color: var(--fm-explorer-icon-results);
 }
 
 .fm-explorer-tree-row__icon[data-icon="magnet"] {
-  color: #f43f5e; /* rose — magnetic materials */
+  color: var(--fm-explorer-icon-material);
 }
 
 .fm-explorer-tree-row__icon[data-icon="settings"] {
-  color: #10b981; /* emerald — build pipeline, config */
+  color: var(--fm-explorer-icon-config);
 }
 
 .fm-explorer-tree-row__icon[data-icon="braces"] {
-  color: #38bdf8; /* sky — geometry DSL, code nodes */
+  color: var(--fm-explorer-icon-code);
 }
 
 .fm-explorer-tree-row__icon[data-icon="circle"] {
-  color: #a855f7; /* purple — regions */
+  color: var(--fm-explorer-icon-region);
 }
 
 .fm-explorer-tree-row__icon[data-icon="shield"] {
-  color: #22c55e; /* green — quality gates */
+  color: var(--fm-explorer-icon-quality);
 }
 
 .fm-explorer-tree-row__icon[data-icon="gauge"] {
-  color: #64748b; /* slate — diagnostics, stats */
+  color: var(--fm-explorer-icon-diagnostics);
 }
 
 .fm-explorer-tree-row__icon[data-icon="play"] {
-  color: #22c55e; /* green — run controls */
+  color: var(--fm-explorer-icon-run);
 }
 
 .fm-explorer-tree-row__icon[data-icon="folder"] {
-  color: #f59e0b; /* amber — resource folders */
+  color: var(--fm-explorer-icon-folder);
 }
 
 .fm-explorer-tree-row__icon[data-icon="database"] {
-  color: #64748b; /* slate — data */
+  color: var(--fm-explorer-icon-data);
 }
 
 /* Dim icons on muted/disabled rows, but keep color on selected */

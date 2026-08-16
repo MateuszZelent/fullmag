@@ -9,6 +9,8 @@ const relaxationOnly =
   process.env.CONTROL_ROOM_STUDY_AUTHORING_SMOKE_RELAXATION_ONLY === "1";
 const workflowActionsOnly =
   process.env.CONTROL_ROOM_STUDY_AUTHORING_SMOKE_WORKFLOW_ACTIONS_ONLY === "1";
+const resultsOnly =
+  process.env.CONTROL_ROOM_STUDY_AUTHORING_SMOKE_RESULTS_ONLY === "1";
 const workflowAntennaScreenshot =
   process.env.CONTROL_ROOM_STUDY_WORKFLOW_ANTENNA_SCREENSHOT ?? null;
 const workflowRunScreenshot =
@@ -97,7 +99,7 @@ function relaxStageFixture() {
   return {
     algorithm: "llg_overdamped",
     entrypoint_kind: "flat_relax",
-    fixed_timestep: "",
+    fixed_timestep: 1e-13,
     integrator: "rk23",
     kind: "relax",
     max_steps: 50000,
@@ -197,7 +199,7 @@ page.on("console", (message) => {
     if (!text.includes("WebSocket")) errors.push(text);
   }
 });
-page.on("pageerror", (error) => errors.push(error.message));
+page.on("pageerror", (error) => errors.push(error.stack ?? error.message));
 page.on("response", (response) => {
   const status = response.status();
   if (status >= 400) failedResponses.push(`${status} ${response.url()}`);
@@ -208,6 +210,29 @@ await page.route("**/v2/**", async (route) => {
   const url = new URL(request.url());
   const pathname = url.pathname;
   fixtureRequests.push(`${request.method()} ${pathname}`);
+
+  if (
+    request.method() === "GET" &&
+    pathname.includes("/v2/sessions/current/data/fields/") &&
+    pathname.endsWith("/samples/vector")
+  ) {
+    if (pathname.includes("analysis%3Afrequency-response%3A") || pathname.includes("analysis:frequency-response:")) {
+      responseFieldVectorRequests.push(url);
+      await fulfillBinary(route, makeFrequencyResponseFieldVectorBuffer());
+    } else {
+      fieldVectorRequests.push(url);
+      await fulfillBinary(route, makeEigenModeFieldVectorBuffer());
+    }
+    return;
+  }
+
+  if (
+    request.method() === "GET" &&
+    pathname === "/v2/sessions/current/data/domain/topology"
+  ) {
+    await fulfillTopology(route, femTopologyBuffer());
+    return;
+  }
 
   if (
     request.method() === "GET" &&
@@ -296,9 +321,12 @@ try {
     .locator(".fm-explorer .fm-tabs-trigger", { hasText: "Model" })
     .waitFor({ state: "visible", timeout: timeoutMs });
   await assertStatusBarFallbackReadback();
-  await page
-    .locator('[data-node-id="model:study"]')
-    .waitFor({ state: "visible", timeout: timeoutMs });
+  if (resultsOnly) {
+    await verifyFrequencyDomainDrivenResults();
+  } else {
+    await page
+      .locator('[data-node-id="model:study"]')
+      .waitFor({ state: "visible", timeout: timeoutMs });
   if (workflowActionsOnly) {
     await verifyWorkflowActionInspectors();
   } else {
@@ -317,14 +345,14 @@ try {
   });
 
   const inspector = page.locator(".fm-inspector");
-  const demagEnabled = inspector.getByLabel("Demag enabled");
+  const demagEnabled = inspector.getByRole("checkbox", { name: "Demag enabled" });
   if (!(await demagEnabled.isChecked())) {
     await demagEnabled.check();
   }
   await page.locator('[data-node-id="model:study:stages:stage:relax-1"]').click();
-  const algorithm = inspector.getByLabel("Algorithm");
-  await inspector.getByLabel("Integrator").waitFor({ state: "visible" });
-  await inspector.getByLabel("Max relaxation time").waitFor({ state: "visible" });
+  const algorithm = inspector.locator('[aria-label="Algorithm"]');
+  await inspector.locator('[aria-label="Integrator"]').waitFor({ state: "visible" });
+  await inspector.locator('[aria-label="Max relaxation time"]').waitFor({ state: "visible" });
   const tpiOption = algorithm.locator('option[value="tangent_plane_implicit"]');
   if ((await tpiOption.count()) > 0 && !(await tpiOption.isDisabled())) {
     throw new Error("TPI must be unavailable for the strict-mode fixture.");
@@ -342,15 +370,18 @@ try {
   }
   for (const directAlgorithm of ["nonlinear_cg"]) {
     await algorithm.selectOption(directAlgorithm);
-    if (await inspector.getByLabel("Integrator").isVisible()) {
+    if (await inspector.locator('[aria-label="Integrator"]').isVisible()) {
       throw new Error(`${directAlgorithm} exposed LLG-only integrator controls.`);
     }
-    if (await inspector.getByLabel("Max relaxation time").isVisible()) {
+    if (await inspector.locator('[aria-label="Max relaxation time"]').isVisible()) {
       throw new Error(`${directAlgorithm} exposed an LLG-only time budget.`);
     }
   }
   await algorithm.selectOption("llg_overdamped");
-  await inspector.getByLabel("Integrator").selectOption("rk23");
+  await inspector.locator('[aria-label="Integrator"]').selectOption("rk23");
+  await inspector.locator('[aria-label="Relax alpha"]').fill("1");
+  await inspector.locator('[aria-label="Timestep mode"]').selectOption("fixed");
+  await inspector.locator('[aria-label="Fixed dt"]').fill("1e-13");
 
   await inspector.getByText("Relax Results").waitFor({ state: "visible" });
   await inspector
@@ -366,13 +397,18 @@ try {
     .first()
     .waitFor({ state: "visible" });
   await page.locator('[data-node-id="model:study"]').click();
+  await discardDirtyInspectorSelection();
+  await inspector.getByText("Global Study Settings").waitFor({
+    state: "visible",
+    timeout: timeoutMs,
+  });
 
-  await page.getByLabel("CPU threads").fill("16");
+  await page.getByRole("textbox", { name: "CPU threads", exact: true }).fill("16");
   await page
-    .getByRole("textbox", { name: "Solver" })
-    .fill('{"integrator":"rk45"}');
+    .getByRole("combobox", { name: "Integrator", exact: true })
+    .selectOption("rk45");
   await page
-    .getByLabel("FEM demag policy")
+    .getByRole("textbox", { name: "FEM demag policy", exact: true })
     .fill('{"linear_solver":"gmres","tolerance":1e-9}');
   await page.getByRole("button", { name: /Save globals/i }).click();
   await waitForTransactionCount(1);
@@ -389,25 +425,21 @@ try {
     .first()
     .waitFor({ state: "visible" });
   await page.locator('[data-node-id="model:study"]').click();
+  await discardDirtyInspectorSelection();
+  await inspector.getByText("Global Study Settings").waitFor({
+    state: "visible",
+    timeout: timeoutMs,
+  });
 
-  await inspector
-    .getByTestId("study-stage-authoring-toolbar")
-    .getByRole("button", { name: /^Run$/i })
-    .click();
-  try {
-    await inspector.getByRole("button", { name: /Save stages/i }).click();
-  } catch (error) {
-    const inspectorText = await inspector.textContent();
-    const toolbarText = await inspector
-      .getByTestId("study-stage-authoring-toolbar")
-      .textContent()
-      .catch((toolbarError) =>
-        toolbarError instanceof Error ? toolbarError.message : String(toolbarError),
-      );
-    throw new Error(
-      `Save stages button was not available after adding Run. Toolbar text: ${JSON.stringify(toolbarText)}. Inspector text: ${JSON.stringify(inspectorText?.slice(0, 3000))}. ${error}`,
-    );
-  }
+  const studyTab = page
+    .locator(".fm-ribbon__tab")
+    .filter({ hasText: /^Study$/i });
+  await studyTab.click();
+  const runStageButton = page.locator(
+    '.fm-ribbon [data-action-id="study.add-run-stage"]',
+  );
+  await runStageButton.waitFor({ state: "visible", timeout: timeoutMs });
+  await runStageButton.click();
   await waitForTransactionCount(2);
   await page
     .locator('[data-node-id="model:study:stages:stage:run-2"]')
@@ -421,7 +453,7 @@ try {
     state: "visible",
     timeout: timeoutMs,
   });
-  await inspector.getByLabel("Until").fill("2e-9");
+  await inspector.getByRole("textbox", { name: "Until", exact: true }).fill("2e-9");
   await inspector.getByRole("button", { name: /Save stage/i }).click();
   await waitForTransactionCount(3);
 
@@ -431,14 +463,14 @@ try {
     // The relaxation-only lane ends after canonical authoring and terminal-state checks.
   } else if (frequencyOnly) {
     await addFrequencyResponseAndEditExcitation(3);
-    await verifyFrequencyDomainModalResults();
-    await verifyFrequencyDomainResponseResults();
+    await verifyFrequencyDomainDrivenResults();
   } else {
     await addHysteresisFromRibbon();
     await addEigenmodesAndEditKPath(4);
     await addEigenmodesAndEditFrequencyWindow(5);
     await addFrequencyResponseAndEditExcitation(6);
     await createObjectRegionAndAssertScriptSync();
+  }
   }
   }
 
@@ -649,8 +681,18 @@ async function openWorkflowStage(stageId) {
   await clickExplorerRow(stage);
 }
 
+async function discardDirtyInspectorSelection() {
+  const dialog = page.getByRole("dialog", { name: "Unapplied Inspector changes" });
+  if (!(await dialog.isVisible().catch(() => false))) return;
+  await dialog.getByRole("button", { name: "Discard" }).click();
+  await dialog.waitFor({ state: "hidden", timeout: timeoutMs });
+}
+
 function resourceForPath(pathname) {
   if (pathname === "/v2/sessions/current/status") return sessionStatus();
+  if (pathname === "/v2/sessions/current/simulation/preparation") {
+    return simulationPreparation();
+  }
   if (
     pathname ===
     "/v2/sessions/current/analysis/frequency-domain/manifest.v1"
@@ -711,6 +753,12 @@ function resourceForPath(pathname) {
     return frequencyDomainResponseFieldMeta();
   }
   if (pathname === "/v2/sessions/current/model/scene") return scene;
+  if (pathname === "/v2/sessions/current/meshing/meshes/shared-domain/manifest") {
+    return sharedDomainManifest();
+  }
+  if (pathname === "/v2/sessions/current/simulation/runs/current") {
+    return currentRun();
+  }
   if (pathname === "/v2/sessions/current/model/regions") {
     return modelRegions();
   }
@@ -732,6 +780,28 @@ function resourceForPath(pathname) {
       requested_mode: scene.study.requested_mode,
       requested_precision: scene.study.requested_precision,
     };
+  }
+  if (pathname === "/v2/sessions/current/data/scalars") {
+    return {
+      columns: ["step", "time", "mx", "my", "mz", "e_total"],
+      returned_rows: 0,
+      revision: sceneRevision,
+      rows: [],
+      total_rows: 0,
+    };
+  }
+  if (pathname === "/v2/sessions/current/data/fields") {
+    return {
+      domain_generation_id: "0",
+      quantities: [],
+      revision: sceneRevision,
+    };
+  }
+  if (pathname === "/v2/sessions/current/data/artifacts") {
+    return [];
+  }
+  if (pathname === "/v2/sessions/current/data/tables") {
+    return { revision: sceneRevision, tables: [] };
   }
   if (pathname === "/v2/sessions/current/data/domain/meta") {
     return {
@@ -789,35 +859,81 @@ function resourceForPath(pathname) {
   return { revision: sceneRevision };
 }
 
-async function verifyFrequencyDomainModalResults() {
+function simulationPreparation() {
+  const startedAt = Date.parse("2026-06-02T00:00:00.000Z");
+  return {
+    active_stage_id: null,
+    completed_at_unix_ms: startedAt + 2_000,
+    failure: null,
+    log_tail: [],
+    preparation_id: "study-authoring-smoke-preparation",
+    requested_execution: {
+      backend: scene.study.requested_backend,
+      device: scene.study.requested_device,
+      engine_id: null,
+      mode: scene.study.requested_mode,
+      precision: scene.study.requested_precision,
+      runtime_family: null,
+      worker: null,
+    },
+    resolved_execution: {
+      backend: scene.study.backend ?? scene.study.requested_backend,
+      device: "cpu",
+      engine_id: "fem_cpu_native",
+      mode: scene.study.requested_mode,
+      precision: scene.study.requested_precision,
+      runtime_family: "fem-cpu-native",
+      worker: null,
+    },
+    revision: sceneRevision,
+    stages: scene.study.stages.map((stage, index) => ({
+      completed_at_unix_ms: startedAt + 1_000 + index * 250,
+      detail: "Study authoring fixture is ready.",
+      duration_ms: 1_000 + index * 250,
+      id: stage.stage_id ?? `stage-${index + 1}`,
+      label: stage.kind ?? stage.stage_id ?? `Stage ${index + 1}`,
+      progress_label: null,
+      progress_percent: 100,
+      started_at_unix_ms: startedAt + index * 250,
+      status: "completed",
+    })),
+    started_at_unix_ms: startedAt,
+    status: "ready",
+  };
+}
+
+async function verifyFrequencyDomainDrivenResults() {
   const resultsTab = page
     .locator(".fm-explorer .fm-tabs-trigger")
     .filter({ hasText: /^Results$/ });
   await resultsTab.click();
-  await expandExplorerNode("results:root");
-  await expandExplorerNode("results:frequency-domain");
-  await expandExplorerNode("results:frequency-domain:fmr");
+  const resultsRootId = "results:run:study-authoring-smoke-run";
+  await expandExplorerNode(resultsRootId);
+  const resonanceRootId = `${resultsRootId}:resonance`;
+  await expandExplorerNode(resonanceRootId);
+  const stageId = `${resonanceRootId}:stage:frequency-response-3:driven_response`;
+  await expandExplorerNode(stageId);
 
-  const modalSpectrumNode = page.locator(
-    '[data-node-id="results:frequency-domain:fmr:modal-spectrum"]',
+  const responseSpectrumNode = page.locator(
+    `[data-node-id="${stageId}:response-spectrum"]`,
   );
-  await modalSpectrumNode.waitFor({ state: "visible", timeout: timeoutMs });
-  await clickExplorerRow(modalSpectrumNode);
+  await responseSpectrumNode.waitFor({ state: "visible", timeout: timeoutMs });
+  await clickExplorerRow(responseSpectrumNode);
 
   const inspector = page.locator(".fm-inspector");
   await inspector
-    .locator('[data-inspector-surface="fmr-modal-spectrum"]')
+    .locator('[data-inspector-surface="frequency-response-sweep"]')
     .waitFor({ state: "visible", timeout: timeoutMs });
   await inspector.getByRole("heading", {
     exact: true,
-    name: "FMR Modal Spectrum Control",
+    name: "Driven Response Sweep Control",
   }).waitFor({
     state: "visible",
     timeout: timeoutMs,
   });
   await inspector.getByRole("heading", {
     exact: true,
-    name: "FMR Modal Spectrum Chart",
+    name: "Driven Response Chart",
   }).waitFor({
     state: "visible",
     timeout: timeoutMs,
@@ -826,119 +942,26 @@ async function verifyFrequencyDomainModalResults() {
     .locator(".fm-frequency-domain-chart canvas")
     .waitFor({ state: "visible", timeout: timeoutMs });
 
-  const modeButton = inspector.getByRole("button", {
-    name: "Select mode 2 at 12.5 GHz",
-  });
-  await modeButton.waitFor({ state: "visible", timeout: timeoutMs });
-  await modeButton.click();
-
-  await inspector
-    .locator('[data-inspector-surface="eigen-mode"]')
-    .waitFor({ state: "visible", timeout: timeoutMs });
-  await inspector.getByRole("heading", {
-    exact: true,
-    name: "Eigen Mode Control",
-  }).waitFor({
-    state: "visible",
-    timeout: timeoutMs,
-  });
-  await inspector.getByRole("heading", {
-    exact: true,
-    name: "Eigen Mode 3D Visualization",
-  }).waitFor({
-    state: "visible",
-    timeout: timeoutMs,
-  });
-  await inspector
-    .getByText("analysis:eigen:sample-0000:mode-0002", { exact: true })
-    .first()
-    .waitFor({
-      state: "visible",
-      timeout: timeoutMs,
-    });
-  const plotButton = inspector.getByRole("button", {
-    exact: true,
-    name: "Plot selected eigen mode with phase-rotated real display",
-  });
-  await plotButton.waitFor({
-    state: "visible",
-    timeout: timeoutMs,
-  });
-  if (!(await plotButton.isEnabled())) {
-    throw new Error("Selected eigen mode 3D visualization button is disabled.");
-  }
-  const plotButtonClass = await plotButton.getAttribute("class");
-  if (!plotButtonClass?.split(/\s+/).includes("fm-button")) {
-    throw new Error(
-      `Selected eigen mode visualization is not a shared shadcn Button: ${plotButtonClass}`,
-    );
-  }
-  await plotButton.click();
-  await waitForEigenModeFieldVectorRequest();
-  await assertStableViewport3DCanvas();
-
-  const imagButton = inspector.getByRole("button", {
-    exact: true,
-    name: "Plot selected eigen mode imaginary component",
-  });
-  await imagButton.waitFor({ state: "visible", timeout: timeoutMs });
-  if (!(await imagButton.isEnabled())) {
-    throw new Error("Selected eigen mode Imag visualization button is disabled.");
-  }
-  await imagButton.click();
-  await waitForEigenModeFieldVectorRequest("imag");
-  await assertStableViewport3DCanvas();
-}
-
-async function verifyFrequencyDomainResponseResults() {
-  await expandExplorerNode("results:frequency-domain:fmr");
-  const responseSweepNode = page.locator(
-    '[data-node-id="results:frequency-domain:fmr:response-sweep"]',
+  const responseFieldsId = `${stageId}:response-fields`;
+  await expandExplorerNode(responseFieldsId);
+  const responseFieldNode = page.locator(
+    `[data-node-id="${responseFieldsId}:frequency-response:analysis%3Afrequency-response%3Afrequency-0001"]`,
   );
-  await responseSweepNode.waitFor({ state: "visible", timeout: timeoutMs });
-  await clickExplorerRow(responseSweepNode);
-
-  const inspector = page.locator(".fm-inspector");
-  await inspector
-    .locator('[data-inspector-surface="fmr-response-sweep"]')
-    .waitFor({ state: "visible", timeout: timeoutMs });
-  await inspector.locator("h2", {
-    hasText: "FMR Response Sweep",
-  }).waitFor({ state: "visible", timeout: timeoutMs });
-  await inspector
-    .locator(".fm-frequency-domain-chart canvas")
-    .waitFor({ state: "visible", timeout: timeoutMs });
-
-  const responseCard = inspector
-    .locator('article.fm-frequency-domain-response-card[data-status="ready"]')
-    .filter({ hasText: "12.55 GHz" });
-  await responseCard.waitFor({ state: "visible", timeout: timeoutMs });
-  const plotButton = responseCard.getByRole("button", {
-    exact: true,
-    name: "Plot 3D",
-  });
-  await plotButton.waitFor({ state: "visible", timeout: timeoutMs });
-  if (!(await plotButton.isEnabled())) {
-    throw new Error("FMR response field 3D visualization button is disabled.");
-  }
-  const plotButtonClass = await plotButton.getAttribute("class");
-  if (!plotButtonClass?.split(/\s+/).includes("fm-button")) {
-    throw new Error(
-      `FMR response field visualization is not a shared shadcn Button: ${plotButtonClass}`,
-    );
-  }
-  await plotButton.click();
-  await waitForFrequencyResponseFieldVectorRequest();
-  await assertStableViewport3DCanvas();
-
-  const inspectButton = responseCard.getByRole("button", {
-    exact: true,
-    name: "Inspect",
-  });
-  await inspectButton.waitFor({ state: "visible", timeout: timeoutMs });
-  await inspectButton.click();
+  await responseFieldNode.waitFor({ state: "visible", timeout: timeoutMs });
+  await clickExplorerRow(responseFieldNode);
   await inspector
     .locator('[data-inspector-surface="frequency-response-point"]')
+    .waitFor({ state: "visible", timeout: timeoutMs });
+  await inspector.getByRole("heading", {
+    exact: true,
+    name: "Response Point 3D Visualization",
+  }).waitFor({
+    state: "visible",
+    timeout: timeoutMs,
+  });
+  await inspector
+    .getByText("analysis:frequency-response:frequency-0001", { exact: true })
+    .first()
     .waitFor({ state: "visible", timeout: timeoutMs });
   const realButton = inspector.getByRole("button", {
     exact: true,
@@ -946,7 +969,13 @@ async function verifyFrequencyDomainResponseResults() {
   });
   await realButton.waitFor({ state: "visible", timeout: timeoutMs });
   if (!(await realButton.isEnabled())) {
-    throw new Error("Selected response point Real visualization button is disabled.");
+    throw new Error("Selected response field 3D visualization button is disabled.");
+  }
+  const realButtonClass = await realButton.getAttribute("class");
+  if (!realButtonClass?.split(/\s+/).includes("fm-button")) {
+    throw new Error(
+      `Selected response field visualization is not a shared shadcn Button: ${realButtonClass}`,
+    );
   }
   await realButton.click();
   await waitForFrequencyResponseFieldVectorRequest("real");
@@ -955,7 +984,36 @@ async function verifyFrequencyDomainResponseResults() {
 
 async function expandExplorerNode(nodeId) {
   const node = page.locator(`[data-node-id="${nodeId}"]`);
-  await node.waitFor({ state: "visible", timeout: timeoutMs });
+  try {
+    await node.waitFor({ state: "visible", timeout: timeoutMs });
+  } catch (error) {
+    const visibleNodes = await page
+      .locator(".fm-explorer [data-node-id]")
+      .evaluateAll((nodes) =>
+        nodes.slice(0, 80).map((candidate) => candidate.getAttribute("data-node-id")),
+      )
+      .catch(() => []);
+    const explorerText = await page
+      .locator(".fm-explorer")
+      .innerText()
+      .catch(() => "");
+    const activeTabs = await page
+      .locator(".fm-explorer .fm-tabs-trigger")
+      .evaluateAll((tabs) =>
+        tabs.map((tab) => ({
+          ariaSelected: tab.getAttribute("aria-selected"),
+          text: tab.textContent?.trim(),
+        })),
+      )
+      .catch(() => []);
+    const bodyText = await page
+      .locator("body")
+      .innerText()
+      .catch(() => "");
+    throw new Error(
+      `Explorer node ${nodeId} did not mount. URL: ${page.url()}. Visible nodes: ${JSON.stringify(visibleNodes)}. Active tabs: ${JSON.stringify(activeTabs)}. Explorer text: ${JSON.stringify(explorerText.slice(0, 2000))}. Body text: ${JSON.stringify(bodyText.slice(0, 2500))}. Browser errors: ${JSON.stringify(errors)}. Failed responses: ${JSON.stringify(failedResponses)}. Fixture requests: ${JSON.stringify(summarizeFixtureRequests())}. ${error}`,
+    );
+  }
   if ((await node.getAttribute("aria-expanded")) === "false") {
     await node.dblclick();
   }
@@ -1057,6 +1115,47 @@ function frequencyDomainManifest() {
       study_kind: "frequency_response",
     },
     response_cancel_requested: null,
+    result_manifest: {
+      artifact_path: "frequency_domain/manifest.v1.json",
+      missing_reason: null,
+      payload: {
+        drive: {
+          identity: "study-authoring-smoke-rf-drive",
+          kind: "magnetic_rf",
+        },
+        excitation: {
+          field_au_per_m: [1, 2, 3],
+          phase_rad: 0.25,
+        },
+        equilibrium_identity: "study-authoring-smoke-equilibrium",
+        observables: [
+          { identity: "mx", kind: "susceptibility", unit: "1" },
+        ],
+        resources: {
+          response_field_resources: [
+            {
+              field_resource_id: "analysis:frequency-response:frequency-0001",
+              frequency_index: 1,
+              payload_path:
+                "response/field_payloads.zarr/frequency_0001/vector_xyz_complex/0.0.0",
+            },
+          ],
+        },
+        requested_execution: {
+          boundary_context: "finite_open",
+          calculation_mode: "fmr_response",
+        },
+        revision: "study-authoring-smoke-result-1",
+        run_id: "study-authoring-smoke-run",
+        stage_id: "frequency-response-3",
+        stage_label: "Frequency Response",
+        study_product: "driven_response",
+      },
+      resource_key:
+        "/v2/sessions/current/analysis/frequency-domain/manifest.v1",
+      schema_version: "frequency_domain_result_manifest.v1",
+      status: "ready",
+    },
     response_progress: {
       completed_frequency_points: 2,
       current_frequency_hz: null,
@@ -1068,16 +1167,6 @@ function frequencyDomainManifest() {
       state: "completed",
       total_frequency_points: 2,
       written_frequency_point_artifacts: 2,
-    },
-    resources: {
-      response_field_resources: [
-        {
-          field_resource_id: "analysis:frequency-response:frequency-0001",
-          frequency_index: 1,
-          payload_path:
-            "response/field_payloads.zarr/frequency_0001/vector_xyz_complex/0.0.0",
-        },
-      ],
     },
     requested_execution: {
       calculation_mode: "fmr_response",
@@ -1290,6 +1379,108 @@ function frequencyDomainResponseFieldMeta() {
   };
 }
 
+function femTopologyBuffer() {
+  const nodeCount = 4;
+  const elementCount = 1;
+  const boundaryFaceCount = 4;
+  const buffer = new ArrayBuffer(
+    32 +
+      nodeCount * 3 * Float64Array.BYTES_PER_ELEMENT +
+      elementCount * 4 * Uint32Array.BYTES_PER_ELEMENT +
+      boundaryFaceCount * 3 * Uint32Array.BYTES_PER_ELEMENT +
+      elementCount * Uint32Array.BYTES_PER_ELEMENT * 2,
+  );
+  const view = new DataView(buffer);
+  for (const [index, code] of [..."FMMT"].entries()) {
+    view.setUint8(index, code.charCodeAt(0));
+  }
+  view.setUint8(4, 1);
+  view.setUint8(5, 1);
+  view.setUint32(8, nodeCount, true);
+  view.setUint32(12, elementCount, true);
+  view.setUint32(16, boundaryFaceCount, true);
+  view.setUint32(20, elementCount, true);
+  view.setUint32(24, elementCount, true);
+  let offset = 32;
+  new Float64Array(buffer, offset, nodeCount * 3).set([
+    0,
+    0,
+    0,
+    1,
+    0,
+    0,
+    0,
+    1,
+    0,
+    0,
+    0,
+    1,
+  ]);
+  offset += nodeCount * 3 * Float64Array.BYTES_PER_ELEMENT;
+  new Uint32Array(buffer, offset, elementCount * 4).set([0, 1, 2, 3]);
+  offset += elementCount * 4 * Uint32Array.BYTES_PER_ELEMENT;
+  new Uint32Array(buffer, offset, boundaryFaceCount * 3).set([
+    0,
+    1,
+    2,
+    0,
+    1,
+    3,
+    0,
+    2,
+    3,
+    1,
+    2,
+    3,
+  ]);
+  offset += boundaryFaceCount * 3 * Uint32Array.BYTES_PER_ELEMENT;
+  new Uint32Array(buffer, offset, elementCount).set([1]);
+  offset += elementCount * Uint32Array.BYTES_PER_ELEMENT;
+  new Uint32Array(buffer, offset, elementCount).set([1]);
+  return buffer;
+}
+
+function sharedDomainManifest() {
+  return {
+    domain_mesh_mode: "shared_domain",
+    generation_id: "1",
+    mesh_id: "study-authoring-smoke-mesh",
+    mesh_name: "Study authoring smoke mesh",
+    mesh_parts: [
+      {
+        boundary_face_count: 4,
+        boundary_face_indices: [0, 1, 2, 3],
+        boundary_face_start: 0,
+        bounds_max: [1, 1, 1],
+        bounds_min: [0, 0, 0],
+        element_count: 1,
+        element_start: 0,
+        id: "part-film",
+        node_count: 4,
+        node_indices: [0, 1, 2, 3],
+        node_start: 0,
+        object_id: "film",
+        role: "magnetic",
+        surface_faces: [
+          [0, 2, 1],
+          [0, 1, 3],
+          [0, 2, 3],
+          [1, 2, 3],
+        ],
+        topology: "tet4",
+      },
+    ],
+    regions: [],
+    revision: sceneRevision,
+    // Study-stage edits do not mutate geometry. Keep the fixture's mesh
+    // provenance explicitly unknown so it remains renderable after those
+    // authoring transactions without claiming a stale geometry revision.
+    source_scene_revision: null,
+    topology_fingerprint: "1".repeat(64),
+    topology_schema_version: 1,
+  };
+}
+
 async function createObjectRegionAndAssertScriptSync() {
   const regionsNode = page.locator('[data-node-id="model:object:film:regions"]');
   if (!(await regionsNode.isVisible().catch(() => false))) {
@@ -1322,7 +1513,7 @@ async function createObjectRegionAndAssertScriptSync() {
     .first()
     .click();
   const regionName = "Script Sync Region";
-  await inspector.getByLabel("Name").fill(regionName);
+  await inspector.getByRole("textbox", { name: "Name", exact: true }).fill(regionName);
   await inspector.locator('select[aria-label="Shape"]').selectOption("cylinder");
 
   const previousSyncCount = scriptSyncs.length;
@@ -1391,7 +1582,7 @@ async function addEigenmodesAndEditKPath(stageNumber) {
 
   const inspector = page.locator(".fm-inspector");
   const kPath = "Gamma:0,0,0; X:1e7,0,0 | samples=5";
-  await inspector.getByLabel("k path", { exact: true }).fill(kPath);
+  await inspector.getByRole("textbox", { name: "k path", exact: true }).fill(kPath);
   await inspector.getByRole("button", { name: /Save stage/i }).click();
   await waitForTransactionCount(transactionBeforeAdd + 2);
 
@@ -1414,10 +1605,16 @@ async function addEigenmodesAndEditKPath(stageNumber) {
   }
   await kPathNode.waitFor({ state: "visible", timeout: timeoutMs });
   await clickExplorerRow(kPathNode);
-  await inspector.getByText(kPath, { exact: true }).waitFor({
-    state: "visible",
-    timeout: timeoutMs,
-  });
+  await inspector
+    .getByRole("textbox", { name: "k path", exact: true })
+    .waitFor({ state: "visible", timeout: timeoutMs });
+  if (
+    (await inspector
+      .getByRole("textbox", { name: "k path", exact: true })
+      .inputValue()) !== kPath
+  ) {
+    throw new Error("Eigenmodes k path inspector did not read back the saved value.");
+  }
 }
 
 async function addEigenmodesAndEditFrequencyWindow(stageNumber) {
@@ -1455,13 +1652,17 @@ async function addEigenmodesAndEditFrequencyWindow(stageNumber) {
 
   const inspector = page.locator(".fm-inspector");
   await inspector
-    .getByLabel("Operator", { exact: true })
+    .getByRole("combobox", { name: "Operator", exact: true })
     .selectOption("full_2x2");
   await inspector
-    .getByLabel("Target", { exact: true })
+    .getByRole("combobox", { name: "Target", exact: true })
     .selectOption("frequency_window");
-  await inspector.getByLabel("Frequency min", { exact: true }).fill("1.5e9");
-  await inspector.getByLabel("Frequency max", { exact: true }).fill("2.5e9");
+  await inspector
+    .getByRole("textbox", { name: "Frequency min", exact: true })
+    .fill("1.5e9");
+  await inspector
+    .getByRole("textbox", { name: "Frequency max", exact: true })
+    .fill("2.5e9");
   await inspector.getByRole("button", { name: /Save stage/i }).click();
   await waitForTransactionCount(transactionBeforeAdd + 2);
 
@@ -1486,16 +1687,16 @@ async function addEigenmodesAndEditFrequencyWindow(stageNumber) {
   }
 
   const savedTarget = await inspector
-    .getByLabel("Target", { exact: true })
+    .getByRole("combobox", { name: "Target", exact: true })
     .inputValue();
   const savedFrequencyMin = await inspector
-    .getByLabel("Frequency min", { exact: true })
+    .getByRole("textbox", { name: "Frequency min", exact: true })
     .inputValue();
   const savedFrequencyMax = await inspector
-    .getByLabel("Frequency max", { exact: true })
+    .getByRole("textbox", { name: "Frequency max", exact: true })
     .inputValue();
   const savedOperator = await inspector
-    .getByLabel("Operator", { exact: true })
+    .getByRole("combobox", { name: "Operator", exact: true })
     .inputValue();
   if (
     savedTarget !== "frequency_window" ||
@@ -1555,14 +1756,18 @@ async function addFrequencyResponseAndEditExcitation(stageNumber) {
   await clickExplorerRow(excitationNode);
 
   const inspector = page.locator(".fm-inspector");
-  await inspector.getByLabel("Excitation", { exact: true }).waitFor({
-    state: "visible",
-    timeout: timeoutMs,
-  });
-  await inspector.getByLabel("Excitation phase", { exact: true }).waitFor({
-    state: "visible",
-    timeout: timeoutMs,
-  });
+  await inspector
+    .getByRole("textbox", { name: "Excitation", exact: true })
+    .waitFor({
+      state: "visible",
+      timeout: timeoutMs,
+    });
+  await inspector
+    .getByRole("textbox", { name: "Excitation phase", exact: true })
+    .waitFor({
+      state: "visible",
+      timeout: timeoutMs,
+    });
   if (await inspector.getByLabel("Frequencies").isVisible().catch(() => false)) {
     throw new Error("Excitation inspector leaked frequency-sweep controls.");
   }
@@ -1570,9 +1775,11 @@ async function addFrequencyResponseAndEditExcitation(stageNumber) {
     throw new Error("Excitation inspector leaked k-sampling controls.");
   }
 
-  await inspector.getByLabel("Excitation", { exact: true }).fill("1, 2, 3");
   await inspector
-    .getByLabel("Excitation phase", { exact: true })
+    .getByRole("textbox", { name: "Excitation", exact: true })
+    .fill("1, 2, 3");
+  await inspector
+    .getByRole("textbox", { name: "Excitation phase", exact: true })
     .fill("0.25");
   await inspector.getByRole("button", { name: /Save stage/i }).click();
   await waitForTransactionCount(transactionBeforeAdd + 2);
@@ -1596,19 +1803,15 @@ async function addFrequencyResponseAndEditExcitation(stageNumber) {
   );
   await calculationModeNode.waitFor({ state: "visible", timeout: timeoutMs });
   await clickExplorerRow(calculationModeNode);
-  await inspector.getByLabel("Calculation mode", { exact: true }).waitFor({
-    state: "visible",
-    timeout: timeoutMs,
-  });
-  if (await inspector.getByLabel("Frequencies").isVisible().catch(() => false)) {
+  const calculationMode = inspector.locator('[aria-label="Calculation mode"]');
+  await calculationMode.waitFor({ state: "visible", timeout: timeoutMs });
+  if (await inspector.locator('[aria-label="Frequencies"]').isVisible().catch(() => false)) {
     throw new Error("Calculation-mode inspector leaked sweep controls.");
   }
-  if (await inspector.getByLabel("Excitation").isVisible().catch(() => false)) {
+  if (await inspector.locator('[aria-label="Excitation"]').isVisible().catch(() => false)) {
     throw new Error("Calculation-mode inspector leaked excitation controls.");
   }
-  await inspector
-    .getByLabel("Calculation mode", { exact: true })
-    .selectOption("response_map");
+  await calculationMode.selectOption("response_map");
   await inspector.getByRole("button", { name: /Save stage/i }).click();
   await waitForTransactionCount(transactionBeforeAdd + 3);
 
@@ -1631,14 +1834,11 @@ async function addFrequencyResponseAndEditExcitation(stageNumber) {
   );
   await kGridNode.waitFor({ state: "visible", timeout: timeoutMs });
   await clickExplorerRow(kGridNode);
-  await inspector.getByLabel("k vector", { exact: true }).waitFor({
-    state: "visible",
-    timeout: timeoutMs,
-  });
-  await inspector.getByLabel("k vector", { exact: true }).fill("1e6, 0, 0");
-  await inspector
-    .getByLabel("k sampling", { exact: true })
-    .fill('{"kind":"grid","points":[[0,0,0],[1000000,0,0]]}');
+  const kVector = inspector.locator('[aria-label="k vector"]');
+  const kSampling = inspector.locator('[aria-label="k sampling"]');
+  await kVector.waitFor({ state: "visible", timeout: timeoutMs });
+  await kVector.fill("1e6, 0, 0");
+  await kSampling.fill('{"kind":"grid","points":[[0,0,0],[1000000,0,0]]}');
   await inspector.getByRole("button", { name: /Save stage/i }).click();
   await waitForTransactionCount(transactionBeforeAdd + 4);
 
@@ -1663,16 +1863,12 @@ async function addFrequencyResponseAndEditExcitation(stageNumber) {
   );
   await sweepNode.waitFor({ state: "visible", timeout: timeoutMs });
   await clickExplorerRow(sweepNode);
-  await inspector.getByLabel("Frequencies", { exact: true }).waitFor({
-    state: "visible",
-    timeout: timeoutMs,
-  });
-  if (await inspector.getByLabel("Excitation").isVisible().catch(() => false)) {
+  const frequencies = inspector.locator('[aria-label="Frequencies"]');
+  await frequencies.waitFor({ state: "visible", timeout: timeoutMs });
+  if (await inspector.locator('[aria-label="Excitation"]').isVisible().catch(() => false)) {
     throw new Error("Sweep inspector leaked excitation controls.");
   }
-  await inspector
-    .getByLabel("Frequencies", { exact: true })
-    .fill("1e9, 2e9, 3e9");
+  await frequencies.fill("1e9, 2e9, 3e9");
   await inspector.getByRole("button", { name: /Save stage/i }).click();
   await waitForTransactionCount(transactionBeforeAdd + 5);
 
@@ -1697,11 +1893,9 @@ async function addFrequencyResponseAndEditExcitation(stageNumber) {
   );
   await outputsNode.waitFor({ state: "visible", timeout: timeoutMs });
   await clickExplorerRow(outputsNode);
-  await inspector.getByLabel("Observable", { exact: true }).waitFor({
-    state: "visible",
-    timeout: timeoutMs,
-  });
-  await inspector.getByLabel("Observable", { exact: true }).fill("mx");
+  const observable = inspector.locator('[aria-label="Observable"]');
+  await observable.waitFor({ state: "visible", timeout: timeoutMs });
+  await observable.fill("mx");
   await inspector.getByRole("button", { name: /Save stage/i }).click();
   await waitForTransactionCount(transactionBeforeAdd + 6);
 
@@ -1724,20 +1918,15 @@ async function addFrequencyResponseAndEditExcitation(stageNumber) {
   );
   await operatorNode.waitFor({ state: "visible", timeout: timeoutMs });
   await clickExplorerRow(operatorNode);
-  await inspector.getByLabel("Include demag", { exact: true }).waitFor({
-    state: "visible",
-    timeout: timeoutMs,
-  });
-  const includeDemag = inspector.getByLabel("Include demag", { exact: true });
+  const includeDemag = inspector.locator('[aria-label="Include demag"]');
+  await includeDemag.waitFor({ state: "visible", timeout: timeoutMs });
   if (await includeDemag.isChecked()) {
     await includeDemag.uncheck();
   }
   await inspector
-    .getByLabel("Normalization", { exact: true })
+    .locator('[aria-label="Normalization"]')
     .selectOption("unit_max_amplitude");
-  await inspector
-    .getByLabel("Damping", { exact: true })
-    .selectOption("include");
+  await inspector.locator('[aria-label="Damping"]').selectOption("include");
   await inspector.getByRole("button", { name: /Save stage/i }).click();
   await waitForTransactionCount(transactionBeforeAdd + 7);
 
@@ -1760,15 +1949,11 @@ async function addFrequencyResponseAndEditExcitation(stageNumber) {
   }
 
   await clickExplorerRow(stageNode);
-  await inspector.getByLabel("BC", { exact: true }).waitFor({
-    state: "visible",
-    timeout: timeoutMs,
-  });
+  const boundaryCondition = inspector.locator('[aria-label="BC"]');
+  await boundaryCondition.waitFor({ state: "visible", timeout: timeoutMs });
+  await boundaryCondition.fill('{"kind":"periodic","axes":["x","y"]}');
   await inspector
-    .getByLabel("BC", { exact: true })
-    .fill('{"kind":"periodic","axes":["x","y"]}');
-  await inspector
-    .getByLabel("Magnetostatic BC", { exact: true })
+    .locator('[aria-label="Magnetostatic BC"]')
     .selectOption("periodic_airbox_k0");
   await inspector.getByRole("button", { name: /Save stage/i }).click();
   await waitForTransactionCount(transactionBeforeAdd + 8);
@@ -1835,7 +2020,7 @@ async function assertHysteresisChildInspectors(stageId) {
   );
   await pointsNode.waitFor({ state: "visible", timeout: timeoutMs });
   await clickExplorerRow(pointsNode);
-  await inspector.getByText("Hysteresis Points").waitFor({
+  await inspector.getByRole("heading", { name: "Hysteresis Points", exact: true }).waitFor({
     state: "visible",
     timeout: timeoutMs,
   });
@@ -1988,6 +2173,49 @@ async function fulfillBinary(route, body, status = 200) {
   });
 }
 
+async function fulfillTopology(route, topology) {
+  const range = route.request().headers().range;
+  const etag = '"study-authoring-fem-topology"';
+  if (!range) {
+    await route.fulfill({
+      body: Buffer.from(topology),
+      contentType: "application/octet-stream",
+      headers: {
+        "accept-ranges": "bytes",
+        "content-length": String(topology.byteLength),
+        etag,
+        "x-api-contract-version": "1.0.0",
+      },
+      status: 200,
+    });
+    return;
+  }
+  const match = /^bytes=(\d+)-(\d+)$/.exec(range);
+  if (!match) {
+    await route.fulfill({
+      body: "",
+      headers: { "content-range": `bytes */${topology.byteLength}`, etag },
+      status: 416,
+    });
+    return;
+  }
+  const start = Number(match[1]);
+  const requestedEnd = Number(match[2]);
+  const end = Math.min(requestedEnd, topology.byteLength - 1);
+  await route.fulfill({
+    body: Buffer.from(topology.slice(start, end + 1)),
+    contentType: "application/octet-stream",
+    headers: {
+      "accept-ranges": "bytes",
+      "content-length": String(end - start + 1),
+      "content-range": `bytes ${start}-${end}/${topology.byteLength}`,
+      etag,
+      "x-api-contract-version": "1.0.0",
+    },
+    status: 206,
+  });
+}
+
 function makeEigenModeFieldVectorBuffer() {
   const grid = [8, 4, 1];
   const pointCount = grid[0] * grid[1] * grid[2];
@@ -2062,23 +2290,6 @@ function makeFrequencyResponseFieldVectorBuffer() {
   return buffer;
 }
 
-async function waitForEigenModeFieldVectorRequest(
-  view = "phase_rotated_real",
-) {
-  const deadline = Date.now() + timeoutMs;
-  const phaseRad = view === "phase_rotated_real" ? "0" : null;
-  let request = matchingFieldViewRequest(fieldVectorRequests, view, phaseRad);
-  while (!request && Date.now() < deadline) {
-    await page.waitForTimeout(50);
-    request = matchingFieldViewRequest(fieldVectorRequests, view, phaseRad);
-  }
-  if (!request) {
-    throw new Error(
-      `Plot selected eigen mode ${view} display did not request the eigen-mode field.`,
-    );
-  }
-}
-
 async function waitForFrequencyResponseFieldVectorRequest(
   view = "phase_rotated_real",
 ) {
@@ -2091,7 +2302,11 @@ async function waitForFrequencyResponseFieldVectorRequest(
   }
   if (!request) {
     throw new Error(
-      `Plot ${view} did not request the driven FMR response field.`,
+      `Plot ${view} did not request the driven FMR response field. Requests: ${JSON.stringify(
+        responseFieldVectorRequests.map((entry) => entry.toString()),
+      )}. Fixture requests: ${JSON.stringify(fixtureRequests.slice(-30))}. Inspector: ${JSON.stringify(
+        await inspectorDebugSnapshot(),
+      )}`,
     );
   }
 }
@@ -2184,6 +2399,73 @@ function sessionStatus() {
   return {
     api_contract_version: "1.0.0",
     capabilities: {
+      active_lane: {
+        schema_version: "active-lane-capabilities.v2",
+        authored: {
+          backend: "fem",
+          discretization: "fem",
+          device: "gpu",
+          precision: "double",
+          mode: "strict",
+        },
+        requested: {
+          backend: "fem",
+          discretization: "fem",
+          device: "gpu",
+          precision: "double",
+          mode: "strict",
+        },
+        resolved: {
+          backend: "fem",
+          discretization: "fem",
+          device: "cpu",
+          precision: "double",
+          mode: "strict",
+        },
+        source: {
+          kind: "planner",
+          capability_profile_version: "study-authoring-smoke",
+          engine_id: "fem_cpu_native",
+          authored_intent: "study-authoring-fixture",
+          effective_request: "study-authoring-fixture",
+        },
+        qualification: {
+          status: "not_asserted",
+          reason: "UI authoring fixture.",
+        },
+        operations: {
+          "study.relaxation": {
+            state: "supported",
+            reason_code: "capability_supported",
+            reason: "Relaxation authoring is available in the fixture lane.",
+            requires: [],
+          },
+          "study.time_integration": {
+            state: "supported",
+            reason_code: "capability_supported",
+            reason: "Time integration authoring is available in the fixture lane.",
+            requires: [],
+          },
+          "study.eigenmodes": {
+            state: "supported",
+            reason_code: "capability_supported",
+            reason: "Eigenmode authoring is available in the fixture lane.",
+            requires: [],
+          },
+          "study.frequency_response": {
+            state: "supported",
+            reason_code: "capability_supported",
+            reason: "Frequency-response authoring is available in the fixture lane.",
+            requires: [],
+          },
+          "study.fft": {
+            state: "supported",
+            reason_code: "capability_supported",
+            reason: "FFT authoring is available in the fixture lane.",
+            requires: [],
+          },
+        },
+      },
       algorithms_available: [
         "llg_overdamped",
         "projected_gradient_bb",
@@ -2253,7 +2535,7 @@ function sessionStatus() {
       visualization_state_revision: 0,
       workspace_revision: 0,
     },
-    run: null,
+    run: currentRun(),
     runtime_bundle_version: "smoke",
     session: {
       created_at: "2026-06-02T00:00:00.000Z",
@@ -2583,7 +2865,20 @@ async function waitForTransactionCount(count) {
     await page.waitForTimeout(50);
   }
   if (transactions.length < count) {
-    throw new Error(`Expected ${count} transactions, saw ${transactions.length}.`);
+    throw new Error(
+      `Expected ${count} transactions, saw ${transactions.length}. Diagnostics: ${JSON.stringify({
+        inspectorTail: (await page.locator(".fm-inspector").textContent())?.slice(-2400),
+        inspectorButtons: await page.locator(".fm-inspector button").evaluateAll((buttons) =>
+          buttons.slice(-12).map((button) => ({
+            disabled: button.hasAttribute("disabled"),
+            label: button.textContent?.trim(),
+            title: button.getAttribute("title"),
+          })),
+        ),
+        errors: errors.slice(-5),
+        failedResponses: failedResponses.slice(-5),
+      })}`,
+    );
   }
 }
 
@@ -2642,7 +2937,7 @@ function assertStageTransaction(transaction) {
     relax.entrypoint_kind !== "flat_relax" ||
     relax.algorithm !== "llg_overdamped" ||
     relax.integrator !== "rk23" ||
-    relax.fixed_timestep !== undefined ||
+    relax.fixed_timestep !== 1e-13 ||
     relax.torque_tolerance_apm !== 1e-6 ||
     relax.relax_algorithm !== undefined ||
     relax.torque_tolerance !== undefined

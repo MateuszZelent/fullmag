@@ -26,10 +26,22 @@ export function PhysicsFirstResultInspectorFrame({
     );
   }
 
+  const diagnostics = ref
+    ? [
+        ...(ref.contractGap ? [ref.contractGap] : []),
+        ...(ref.availability === "unsupported"
+          ? ["This result product is not supported by the published runtime contract."]
+          : []),
+        ...(ref.availability === "unavailable"
+          ? ["The typed result resource is currently unavailable."]
+          : []),
+      ]
+    : ["Typed result owner is unavailable; visualization and comparison are disabled."];
+
   return (
     <ScientificInspectorTemplate
       breadcrumbs={["Results", model.physicalLabel]}
-      diagnostics={ref ? [] : ["Typed result owner is unavailable; visualization and comparison are disabled."]}
+      diagnostics={diagnostics}
       methodLabel={model.methodLabel}
       physicalLabel={model.physicalLabel}
       properties={[
@@ -48,17 +60,13 @@ export function PhysicsFirstResultInspectorFrame({
         { label: "Artifact revision", mono: true, value: ref?.artifactRevision ?? "Unavailable" },
       ]}
       status={{
-        availability: ref ? "available" : "unavailable",
-        execution: ref ? "completed" : "unknown",
-        resource: ref ? "ready" : "unavailable",
+        availability: ref?.availability ?? "unavailable",
+        execution: ref?.executionState ?? "unknown",
+        resource: ref?.resourceState ?? "unavailable",
       }}
       title={selection.label || model.title}
     >
       {children}
     </ScientificInspectorTemplate>
   );
-}
-
-export function PhysicsFirstResultInspectorPanel({ selection }: InspectorPanelProps) {
-  return <PhysicsFirstResultInspectorFrame selection={selection} />;
 }

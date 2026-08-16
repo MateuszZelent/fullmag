@@ -202,7 +202,10 @@ describe("compute performance audit script", () => {
     expect(auditScript).toContain("visibleTable = pinnedForDataset?.table ?? decodedTable");
     expect(auditScript).toContain("useFrequencyDomainManifestResource");
     expect(auditScript).toContain("const loadMatchingArtifact = loadFrequency && manifestReady && !surfaceMismatch");
-    expect(auditScript).toContain("useSpinWaveGammaResource(activeSurface === \"dynamics\")");
+    expect(auditScript).toContain("useSpinWaveGammaResource(");
+    expect(auditScript).toContain(
+      'activeSurface === "dynamics" && activeSubview === "dynamics.temporal-fft"',
+    );
     expect(auditScript).toContain("useDynamicStructureFactorResource(");
     expect(auditScript).toContain(
       'activeSurface === "dynamics" && activeSubview === "dynamics.s-k-f"',

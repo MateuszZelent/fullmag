@@ -1,5 +1,10 @@
 import type { CommandId } from "@/kernel/commands/commandTypes";
-import type { ResourceStatus } from "@/kernel/resources/resourceTypes";
+import type {
+  ResourceAvailability,
+  ResourceExecutionState,
+  ResourceStateFacets,
+  ResourceStatus,
+} from "@/kernel/resources/resourceTypes";
 import type {
   DomainMetaResource,
   FdmMultilayerLayoutResource,
@@ -265,24 +270,10 @@ export type ExplorerNodeStatus =
   | "unavailable"
   | "unsupported";
 
-export type ExplorerResourceState = "idle" | "loading" | "ready" | "stale" | "error";
-
-export type ExplorerExecutionState =
-  | "not_started"
-  | "queued"
-  | "running"
-  | "paused"
-  | "completed"
-  | "cancelled"
-  | "failed";
-
-export type ExplorerAvailability = "available" | "partial" | "unavailable" | "unsupported";
-
-export interface ExplorerNodeStateFacets {
-  availability: ExplorerAvailability;
-  executionState: ExplorerExecutionState;
-  resourceState: ExplorerResourceState;
-}
+export type ExplorerResourceState = ResourceStatus;
+export type ExplorerExecutionState = ResourceExecutionState;
+export type ExplorerAvailability = ResourceAvailability;
+export type ExplorerNodeStateFacets = ResourceStateFacets;
 
 export type {
   RuntimeExecutionDetail,
@@ -324,6 +315,7 @@ export interface ExplorerNode {
   analysisRunId?: string;
   analysisStageId?: string;
   artifactRevision?: number | string;
+  contractGap?: string | null;
   postprocessingCatalogRevision?: ResourceRevision | null;
   postprocessingContractGap?: string | null;
   postprocessingDefinitionKind?: PostprocessingDefinitionKind;

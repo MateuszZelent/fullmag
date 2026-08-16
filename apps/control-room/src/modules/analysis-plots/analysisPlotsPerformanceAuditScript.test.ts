@@ -68,7 +68,8 @@ describe("analysis plots performance audit", () => {
     expect(auditScript).toContain('enabled: activeSurface === "dynamics"');
     expect(auditScript).not.toContain('activeSurface === "dynamics" || activeSurface === "comparison"');
     expect(auditScript).toContain('activeSurface === "resonance-fmr" || activeSurface === "dispersion"');
-    expect(auditScript).toContain('useSpinWaveGammaResource(activeSurface === "dynamics")');
+    expect(auditScript).toContain("useSpinWaveGammaResource(");
+    expect(auditScript).toContain('activeSurface === "dynamics" && activeSubview === "dynamics.temporal-fft"');
     expect(auditScript).toContain("useDynamicStructureFactorResource(");
     expect(auditScript).toContain(
       'activeSurface === "dynamics" && activeSubview === "dynamics.s-k-f"',

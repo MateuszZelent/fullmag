@@ -311,7 +311,11 @@ describe("Inspector design-system reference contract", () => {
   ])("keeps remaining Inspector surface %s on compact groups", (fileName) => {
     const panel = read(`src/modules/inspector/panels/${fileName}`);
 
-    expect(panel).toContain("InspectorGroup");
+    if (fileName === "PlaceholderPanel.tsx") {
+      expect(panel).toContain("ScientificInspectorTemplate");
+    } else {
+      expect(panel).toContain("InspectorGroup");
+    }
     expect(panel).not.toMatch(/<\/?InspectorSection\b/);
     expect(panel).not.toMatch(/import\s+\{\s*InspectorSection\s*\}/);
   });

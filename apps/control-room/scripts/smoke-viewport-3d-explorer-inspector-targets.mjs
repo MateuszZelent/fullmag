@@ -145,6 +145,14 @@ async function verifyFdmFieldFailureRecovery(browser, url) {
     await installFixtureConfig(page);
     try {
       await page.goto(url, { waitUntil: "domcontentloaded", timeout: timeoutMs });
+      await page.waitForFunction(
+        () => typeof window.__FULLMAG_CONTROL_ROOM_AUDIT__?.setActiveViewportModule === "function",
+        null,
+        { timeout: timeoutMs },
+      );
+      await page.evaluate(() => {
+        window.__FULLMAG_CONTROL_ROOM_AUDIT__.setActiveViewportModule("viewport-3d");
+      });
       await assertHealthyCanvas(page, `FDM ${fieldMode} initial`);
       const failedBaseline = await sampleViewportPixels(page);
       await requestFdmField(page, "m");
@@ -166,6 +174,11 @@ async function verifyFdmFieldFailureRecovery(browser, url) {
       await invalidateFieldResource(page, failed.key);
       await waitForAnimationFrame(page);
       await requestFdmField(page, "m");
+      await waitForFieldRequestCount(
+        fixture,
+        { quantityId: "m" },
+        mRequestsBeforeRecovery + 1,
+      );
       const recovered = await waitForFdmFieldResource(page, "m");
       if (!recovered.hasValues || recovered.key !== failed.key) {
         throw new Error(`${fieldMode} recovery did not rematerialize the same resource key: ${JSON.stringify({ failed, recovered })}.`);
@@ -899,6 +912,21 @@ async function waitForFieldRequest(page, expected) {
         url.searchParams.get("scope_id") === expectedRequest.scopeId &&
         url.searchParams.get("scope_kind") === expectedRequest.scopeKind;
     }), expected, { timeout: timeoutMs });
+}
+
+async function waitForFieldRequestCount(fixture, expected, count) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (countFieldRequests(fixture, expected) >= count) return;
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  throw new Error(
+    `Timed out waiting for field request count ${count}: ${JSON.stringify({
+      actual: countFieldRequests(fixture, expected),
+      expected,
+      requests: fixture.fieldRequests,
+    })}`,
+  );
 }
 
 function assertFieldRequest(fixture, expected) {

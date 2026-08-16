@@ -48,6 +48,22 @@
   --fm-chart-flamingo: #f2cdcd;
   --fm-chart-rosewater: #f5e0dc;
 
+  --fm-explorer-icon-group: var(--fm-accent-strong);
+  --fm-explorer-icon-object: var(--fm-chart-peach);
+  --fm-explorer-icon-mesh: var(--fm-chart-yellow);
+  --fm-explorer-icon-field: var(--fm-chart-teal);
+  --fm-explorer-icon-visualization: var(--fm-chart-sky);
+  --fm-explorer-icon-results: var(--fm-chart-mauve);
+  --fm-explorer-icon-material: var(--fm-chart-red);
+  --fm-explorer-icon-config: var(--fm-success);
+  --fm-explorer-icon-code: var(--fm-chart-sky);
+  --fm-explorer-icon-region: var(--fm-chart-mauve);
+  --fm-explorer-icon-quality: var(--fm-success);
+  --fm-explorer-icon-diagnostics: var(--fm-text-muted);
+  --fm-explorer-icon-run: var(--fm-success);
+  --fm-explorer-icon-folder: var(--fm-warning);
+  --fm-explorer-icon-data: var(--fm-text-muted);
+
   --fm-region-overlay-0: #f38ba8;
   --fm-region-overlay-1: #fab387;
   --fm-region-overlay-2: #f9e2af;
@@ -127,6 +143,22 @@
   --fm-chart-lavender: #7287fd;
   --fm-chart-flamingo: #dd7878;
   --fm-chart-rosewater: #dc8a78;
+
+  --fm-explorer-icon-group: var(--fm-accent-strong);
+  --fm-explorer-icon-object: var(--fm-chart-peach);
+  --fm-explorer-icon-mesh: var(--fm-chart-yellow);
+  --fm-explorer-icon-field: var(--fm-chart-teal);
+  --fm-explorer-icon-visualization: var(--fm-chart-sky);
+  --fm-explorer-icon-results: var(--fm-chart-mauve);
+  --fm-explorer-icon-material: var(--fm-chart-red);
+  --fm-explorer-icon-config: var(--fm-success);
+  --fm-explorer-icon-code: var(--fm-chart-sky);
+  --fm-explorer-icon-region: var(--fm-chart-mauve);
+  --fm-explorer-icon-quality: var(--fm-success);
+  --fm-explorer-icon-diagnostics: var(--fm-text-muted);
+  --fm-explorer-icon-run: var(--fm-success);
+  --fm-explorer-icon-folder: var(--fm-warning);
+  --fm-explorer-icon-data: var(--fm-text-muted);
 
   --fm-region-overlay-0: #d20f39;
   --fm-region-overlay-1: #fe640b;

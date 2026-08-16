@@ -266,9 +266,13 @@ function modeTablePointKey(point: EigenSpectrumPoint): string {
 }
 
 export function FrequencyDomainResponsePointTable({
+  absorbedPowerDensityUnit = "not published",
+  amplitudeUnit = "not published",
   onPlotResponsePoint,
   points,
 }: {
+  absorbedPowerDensityUnit?: string;
+  amplitudeUnit?: string;
   onPlotResponsePoint: (
     point: FrequencyResponsePoint,
     action: FrequencyDomainResponsePointAction,
@@ -301,9 +305,9 @@ export function FrequencyDomainResponsePointTable({
             <th>Index</th>
             <th>Observable</th>
             <th>Frequency</th>
-            <th>Amplitude</th>
+            <th>{quantityColumnLabel("Amplitude", amplitudeUnit)}</th>
             <th>Phase</th>
-            <th>Absorbed power</th>
+            <th>{quantityColumnLabel("Absorbed power", absorbedPowerDensityUnit)}</th>
             <th>Residual</th>
             <th>Field</th>
             <th className="fm-frequency-domain-table__actions-heading">
@@ -494,9 +498,9 @@ export function FrequencyDomainFmrPeakTable({
             <th>Source</th>
             <th>Frequency</th>
             <th>Mode / point</th>
-            <th>Amplitude</th>
+            <th>{quantityColumnLabel("Amplitude", peakUnit(rows, "amplitudeUnit"))}</th>
             <th>Phase</th>
-            <th>Absorbed power</th>
+            <th>{quantityColumnLabel("Absorbed power", peakUnit(rows, "absorbedPowerDensityUnit"))}</th>
             <th>Linewidth</th>
             <th>Q factor</th>
             <th>Status</th>
@@ -565,6 +569,20 @@ function formatPeakRef(peak: FmrPeakPoint): string {
     return `frequency point ${peak.frequencyPointIndex}`;
   }
   return "-";
+}
+
+function peakUnit(
+  peaks: readonly FmrPeakPoint[],
+  key: "amplitudeUnit" | "absorbedPowerDensityUnit",
+): string {
+  const units = new Set(
+    peaks.map((peak) => peak[key] ?? "not published"),
+  );
+  return units.size === 1 ? [...units][0]! : "not published";
+}
+
+function quantityColumnLabel(label: string, unit: string): string {
+  return `${label} [${unit}]`;
 }
 
 function formatQualityFactor(peak: FmrPeakPoint): string {

@@ -309,7 +309,12 @@ export function useAnalysisFrequencyData(
   const frequencyDomainPresentation = useMemo<AnalysisFrequencyPresentationState>(
     () => ({
       ...deriveFrequencyDomainPresentationState(
-        frequencyDomainResource,
+        {
+          data: frequencyDomainResource.data,
+          error: frequencyDomainResource.error,
+          revision: frequencyDomainResource.revision,
+          status: frequencyDomainResource.status,
+        },
         frequencyDomainStatus,
         frequencyDomainUnavailableReason,
       ),
@@ -317,7 +322,10 @@ export function useAnalysisFrequencyData(
     }),
     [
       frequencyDomainContext,
-      frequencyDomainResource,
+      frequencyDomainResource.data,
+      frequencyDomainResource.error,
+      frequencyDomainResource.revision,
+      frequencyDomainResource.status,
       frequencyDomainStatus,
       frequencyDomainUnavailableReason,
     ],

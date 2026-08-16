@@ -8,10 +8,7 @@ import {
   resolveInspectorRoute,
   resolveUnknownInspectorRoute,
 } from "./inspectorRouteCatalog";
-import {
-  ObjectRegionTexturePanel,
-  ObjectRegionVisualizationPanel,
-} from "./panels/ObjectRegionsPanel";
+import { ObjectRegionVisualizationPanel } from "./panels/ObjectRegionsPanel";
 import {
   AirboxMeshBuildLanePanel,
   AirboxMeshOverviewLanePanel,
@@ -22,7 +19,23 @@ import {
   AirboxOverviewLanePanel,
 } from "./panels/airbox/AirboxInspectorLanePanel";
 import { FdmMultilayerAirboxTargetPanel } from "./panels/airbox/FdmMultilayerAirboxTargetPanel";
-import { FdmGridInspectorPanel } from "./panels/fdm-grid/FdmGridInspectorPanel";
+import { AirboxVisualizationDebugInspectorPanel } from "./panels/airbox/AirboxVisualizationDebugInspectorPanel";
+import {
+  FdmCellInspectorPanel,
+  FdmGridActiveUnassignedInspectorPanel,
+  FdmGridDescriptorInspectorPanel,
+  FdmGridInspectorPanelRoute,
+  FdmGridMagneticSupportInspectorPanel,
+  FdmGridMaskInspectorPanel,
+  FdmGridProvenanceInspectorPanel,
+  FdmGridRegionInspectorPanel,
+  FdmGridUniverseOutsideSupportInspectorPanel,
+  ObjectMagneticTextureAssetInspectorPanel,
+  ObjectMagneticTextureLoadInspectorPanel,
+  ObjectMagneticTextureTransformInspectorPanel,
+  ObjectRegionMagneticTextureInspectorPanel,
+  ObjectRegionTextureInspectorPanel,
+} from "./panels/DedicatedExplorerInspectorPanels";
 import {
   EigenModeInspectorPanel,
   EigenBranchInspectorPanel,
@@ -112,10 +125,48 @@ describe("inspectorRegistry", () => {
     );
   });
 
+  it("gives runtime tree roots and resource diagnostics dedicated Inspectors", () => {
+    expect(resolveInspectorPanel({ kind: "resources.root" })?.component.name).toBe(
+      "ResourcesOverviewInspectorPanel",
+    );
+    expect(resolveInspectorPanel({ kind: "jobs.root" })?.component.name).toBe(
+      "JobsOverviewInspectorPanel",
+    );
+    expect(resolveInspectorPanel({ kind: "diagnostics.root" })?.component.name).toBe(
+      "DiagnosticsOverviewInspectorPanel",
+    );
+    expect(resolveInspectorPanel({ kind: "diagnostics.resource" })?.component.name).toBe(
+      "RuntimeResourceDiagnosticInspectorPanel",
+    );
+  });
+
+  it("keeps every semantic explorer kind on an explicit Inspector route", () => {
+    for (const kind of [
+      "session.root",
+      "universe.root",
+      "objects.root",
+      "definitions.root",
+      "model.planar.monitors",
+      "object.physics.scope",
+      "mesh.unassigned",
+      "mesh.unassigned.part",
+      "visualizations-2d.root",
+      "visualizations-2d.draft",
+      "visualizations-2d.parameter",
+      "visualizations-2d.plot",
+      "physics.couplings",
+      "physics.scope.global",
+      "physics.scope.cross-object",
+      "physics.scope.unresolved",
+    ]) {
+      expect(resolveInspectorRoute(kind), kind).not.toBeNull();
+    }
+  });
+
   it("resolves Live Chart and Live Chart point selections to their own Inspector", () => {
     expect(resolveInspectorPanel({ kind: "live.chart" })?.id).toBe("live-chart");
     expect(resolveInspectorPanel({ kind: "live.chart-point" })?.id).toBe(
-      "live-chart",
+      "live-chart-point",
     );
   });
 
@@ -166,7 +217,7 @@ describe("inspectorRegistry", () => {
 
   it("resolves object material selections to the material assignment panel", () => {
     expect(resolveInspectorPanel({ kind: "object.material" })?.id).toBe(
-      "object-material",
+      "object-material-assignment",
     );
     expect(resolveInspectorPanel({ kind: "object.magnetic-parameters" })?.id).toBe(
       "object-material",
@@ -190,13 +241,13 @@ describe("inspectorRegistry", () => {
       "object-region-geometry",
     );
     expect(resolveInspectorPanel({ kind: "object.region.shape" })?.id).toBe(
-      "object-region-geometry",
+      "object-region-shape",
     );
     expect(
       resolveInspectorPanel({ kind: "object.region.magnetic-parameters" })?.id,
     ).toBe("object-region-magnetic-parameters");
     expect(resolveInspectorPanel({ kind: "object.region.material" })?.id).toBe(
-      "object-region-magnetic-parameters",
+      "object-region-material",
     );
     expect(resolveInspectorPanel({ kind: "object.region.mesh" })?.id).toBe(
       "object-region-mesh",
@@ -211,11 +262,14 @@ describe("inspectorRegistry", () => {
       "object-region-texture",
     );
     expect(resolveInspectorPanel({ kind: "object.region.texture" })?.component).toBe(
-      ObjectRegionTexturePanel,
+      ObjectRegionTextureInspectorPanel,
     );
     expect(
       resolveInspectorPanel({ kind: "object.region-magnetic-texture" })?.id,
-    ).toBe("object-region-texture");
+    ).toBe("object-region-magnetic-texture");
+    expect(
+      resolveInspectorPanel({ kind: "object.region-magnetic-texture" })?.component,
+    ).toBe(ObjectRegionMagneticTextureInspectorPanel);
     expect(resolveInspectorPanel({ kind: "object.region.visualization" })?.id).toBe(
       "object-region-visualization",
     );
@@ -227,13 +281,28 @@ describe("inspectorRegistry", () => {
     );
     expect(
       resolveInspectorPanel({ kind: "object.magnetic-texture.asset" })?.id,
-    ).toBe("object-magnetic-texture");
+    ).toBe("object-magnetic-texture-asset");
     expect(
       resolveInspectorPanel({ kind: "object.magnetic-texture.load" })?.id,
-    ).toBe("object-magnetic-texture");
+    ).toBe("object-magnetic-texture-load");
     expect(
       resolveInspectorPanel({ kind: "object.magnetic-texture.transform" })?.id,
-    ).toBe("object-magnetic-texture");
+    ).toBe("object-magnetic-texture-transform");
+  });
+
+  it("keeps magnetic texture asset, load, and transform routes independently addressable", () => {
+    const panels = [
+      resolveInspectorPanel({ kind: "object.magnetic-texture.asset" }),
+      resolveInspectorPanel({ kind: "object.magnetic-texture.load" }),
+      resolveInspectorPanel({ kind: "object.magnetic-texture.transform" }),
+    ];
+
+    expect(new Set(panels.map((panel) => panel?.id)).size).toBe(3);
+    expect(panels.map((panel) => panel?.component)).toEqual([
+      ObjectMagneticTextureAssetInspectorPanel,
+      ObjectMagneticTextureLoadInspectorPanel,
+      ObjectMagneticTextureTransformInspectorPanel,
+    ]);
   });
 
   it("resolves object mesh selections to the object mesh policy panel", () => {
@@ -242,14 +311,14 @@ describe("inspectorRegistry", () => {
     );
   });
 
-  it("registers one Mesh inspector contract for global, object, region, and Airbox scopes", () => {
+  it("registers dedicated Mesh routes for each global mesh scope", () => {
     const expected = new Map([
       ["mesh.root", "mesh-details"],
-      ["mesh.shared-domain", "mesh-details"],
-      ["mesh.builds", "mesh-details"],
-      ["mesh.quality", "mesh-details"],
-      ["mesh.size-fields", "mesh-details"],
-      ["mesh.regions", "mesh-details"],
+      ["mesh.shared-domain", "mesh-shared-domain"],
+      ["mesh.builds", "mesh-builds"],
+      ["mesh.quality", "mesh-quality"],
+      ["mesh.size-fields", "mesh-size-fields"],
+      ["mesh.regions", "mesh-regions"],
       ["object.mesh", "object-mesh-policy"],
       ["object.region.mesh", "object-region-mesh"],
       ["airbox.mesh", "airbox-mesh-overview"],
@@ -264,7 +333,7 @@ describe("inspectorRegistry", () => {
   it("keeps FDM grid as a technical detail below the product-level Mesh contract", () => {
     expect(resolveInspectorPanel({ kind: "mesh.root" })?.title).toBe("Mesh");
     expect(resolveInspectorPanel({ kind: "mesh.grid.descriptor" })?.title).toBe(
-      "FDM Mesh",
+      "FDM Grid Descriptor",
     );
   });
 
@@ -283,12 +352,28 @@ describe("inspectorRegistry", () => {
 
     const panels = kinds.map((kind) => resolveInspectorPanel({ kind }));
 
-    expect(panels.map((panel) => panel?.id)).toEqual(
-      kinds.map(() => "fdm-grid"),
-    );
-    expect(panels.every((panel) => panel?.component === FdmGridInspectorPanel)).toBe(
-      true,
-    );
+    expect(panels.map((panel) => panel?.id)).toEqual([
+      "fdm-grid",
+      "fdm-grid-descriptor",
+      "fdm-grid-magnetic-support",
+      "fdm-grid-active-unassigned",
+      "fdm-grid-mask",
+      "fdm-grid-provenance",
+      "fdm-grid-region",
+      "fdm-grid-universe-outside-support",
+      "fdm-cell",
+    ]);
+    expect(panels.map((panel) => panel?.component)).toEqual([
+      FdmGridInspectorPanelRoute,
+      FdmGridDescriptorInspectorPanel,
+      FdmGridMagneticSupportInspectorPanel,
+      FdmGridActiveUnassignedInspectorPanel,
+      FdmGridMaskInspectorPanel,
+      FdmGridProvenanceInspectorPanel,
+      FdmGridRegionInspectorPanel,
+      FdmGridUniverseOutsideSupportInspectorPanel,
+      FdmCellInspectorPanel,
+    ]);
     expect(panels.every((panel) => panel?.id !== "placeholder")).toBe(true);
   });
 
@@ -301,6 +386,12 @@ describe("inspectorRegistry", () => {
   it("routes field quantities to a dedicated scientific inspector", () => {
     expect(resolveInspectorPanel({ kind: "results.field_quantity" })?.id).toBe(
       "field-quantity",
+    );
+  });
+
+  it("routes the Results root to a Results overview rather than Field Quantity", () => {
+    expect(resolveInspectorPanel({ kind: "results.root" })?.component.name).toBe(
+      "ResultsOverviewInspectorPanel",
     );
   });
 
@@ -380,6 +471,7 @@ describe("inspectorRegistry", () => {
     ]);
     expect(new Set(panels.map((panel) => panel?.component)).size).toBe(3);
     expect(new Set(kinds).size).toBe(3);
+    expect(panels[0]?.component).toBe(AirboxVisualizationDebugInspectorPanel);
   });
 
   it("resolves cross-section selections to the cross-section inspector", () => {
@@ -387,10 +479,10 @@ describe("inspectorRegistry", () => {
       "cross-section",
     );
     expect(resolveInspectorPanel({ kind: "mesh.cross-section.draft" })?.id).toBe(
-      "cross-section",
+      "cross-section-draft",
     );
     expect(resolveInspectorPanel({ kind: "mesh.cross-section.plot" })?.id).toBe(
-      "cross-section",
+      "cross-section-plot",
     );
   });
 
@@ -405,16 +497,16 @@ describe("inspectorRegistry", () => {
       "study-root",
     );
     expect(resolveInspectorPanel({ kind: "study.stage.relax" })?.id).toBe(
-      "study-stage",
+      "study-stage-relax",
     );
     expect(resolveInspectorPanel({ kind: "study.stage.run" })?.id).toBe(
-      "study-stage",
+      "study-stage-run",
     );
     expect(
       resolveInspectorPanel({ kind: "study.stage.change_device" })?.id,
-    ).toBe("study-stage");
+    ).toBe("study-stage-change-device");
     expect(resolveInspectorPanel({ kind: "study.stage.hysteresis" })?.id).toBe(
-      "study-stage",
+      "study-stage-hysteresis",
     );
     expect(
       resolveInspectorPanel({ kind: "study.stage.frequency_response" })?.id,
@@ -427,7 +519,7 @@ describe("inspectorRegistry", () => {
         ?.id,
     ).toBe(frequencyDomainPanelId("study.stage.frequency_response.excitation"));
     expect(resolveInspectorPanel({ kind: "study.stage.save_state" })?.id).toBe(
-      "study-stage",
+      "study-stage-save-state",
     );
   });
 

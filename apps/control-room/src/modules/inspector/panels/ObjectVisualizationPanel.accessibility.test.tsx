@@ -9,6 +9,7 @@ import {
 import {
   NumberField,
   VisualizationDisplayPassesSection,
+  VisualizationRenderModeSection,
 } from "./ObjectVisualizationTargetSection";
 import {
   AIRBOX_VISUALIZATION_TARGET,
@@ -165,6 +166,23 @@ describe("ObjectVisualizationPanel accessibility controls", () => {
     expect(nextVisualizationRadioValue(values, "surface", "End")).toBe(
       "wireframe",
     );
+  });
+
+  it("renders render modes with a roving keyboard tab stop", () => {
+    const html = renderToStaticMarkup(
+      <VisualizationRenderModeSection
+        displaySettings={DEFAULT_AIRBOX_VISUALIZATION}
+        passControlsDisabled={false}
+        pending={false}
+        patch={vi.fn().mockResolvedValue(undefined)}
+        target={AIRBOX_VISUALIZATION_TARGET}
+      />,
+    );
+
+    expect(html).toContain('role="radiogroup"');
+    expect(html).toContain('role="radio"');
+    expect(html).toContain('tabindex="0"');
+    expect(html).toContain('tabindex="-1"');
   });
 
   it("gives color picker and text input distinct accessible names", () => {

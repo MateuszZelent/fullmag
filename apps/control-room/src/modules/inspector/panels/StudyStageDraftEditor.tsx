@@ -469,28 +469,7 @@ function EigenmodesStageDraftFields({
           value={draft.count}
           onChange={(event) => onUpdate({ count: event.target.value })}
         />
-        <FormField
-          label="Target"
-          type="select"
-          value={draft.target}
-          onChange={(event) => onUpdate({ target: event.target.value })}
-        >
-          <option value="smallest_magnitude">Smallest magnitude</option>
-          <option value="largest_magnitude">Largest magnitude</option>
-          <option value="smallest_real">Smallest real</option>
-          <option value="largest_real">Largest real</option>
-          <option value="smallest_imaginary">Smallest imaginary</option>
-          <option value="largest_imaginary">Largest imaginary</option>
-          <option value="near_frequency">Near frequency</option>
-        </FormField>
-        {draft.target === "near_frequency" ? (
-          <FormField
-            label="Shift frequency"
-            hint={frequencyDraftPreview(draft.targetFrequency)}
-            value={draft.targetFrequency}
-            onChange={(event) => onUpdate({ targetFrequency: event.target.value })}
-          />
-        ) : null}
+        <EigenmodeTargetFields draft={draft} onUpdate={onUpdate} />
       </>
     );
   }
@@ -515,27 +494,56 @@ function EigenmodesStageDraftFields({
         value={draft.count}
         onChange={(event) => onUpdate({ count: event.target.value })}
       />
+      <EigenmodeTargetFields draft={draft} onUpdate={onUpdate} />
+    </>
+  );
+}
+
+function EigenmodeTargetFields({
+  draft,
+  onUpdate,
+}: {
+  draft: StudyStageDraft;
+  onUpdate: (patch: Partial<StudyStageDraft>) => void;
+}) {
+  return (
+    <>
       <FormField
         label="Target"
         type="select"
         value={draft.target}
         onChange={(event) => onUpdate({ target: event.target.value })}
       >
-        <option value="smallest_magnitude">Smallest magnitude</option>
-        <option value="largest_magnitude">Largest magnitude</option>
-        <option value="smallest_real">Smallest real</option>
-        <option value="largest_real">Largest real</option>
-        <option value="smallest_imaginary">Smallest imaginary</option>
-        <option value="largest_imaginary">Largest imaginary</option>
-        <option value="near_frequency">Near frequency</option>
+        <option value="lowest">Lowest frequency</option>
+        <option value="nearest">Nearest frequency</option>
+        <option value="frequency_window">Frequency window</option>
       </FormField>
-      {draft.target === "near_frequency" ? (
+      {draft.target === "nearest" ? (
         <FormField
-          label="Shift frequency"
+          label="Target frequency"
+          unit="Hz"
           hint={frequencyDraftPreview(draft.targetFrequency)}
           value={draft.targetFrequency}
           onChange={(event) => onUpdate({ targetFrequency: event.target.value })}
         />
+      ) : null}
+      {draft.target === "frequency_window" ? (
+        <>
+          <FormField
+            label="Frequency min"
+            unit="Hz"
+            hint={frequencyDraftPreview(draft.frequencyMin)}
+            value={draft.frequencyMin}
+            onChange={(event) => onUpdate({ frequencyMin: event.target.value })}
+          />
+          <FormField
+            label="Frequency max"
+            unit="Hz"
+            hint={frequencyDraftPreview(draft.frequencyMax)}
+            value={draft.frequencyMax}
+            onChange={(event) => onUpdate({ frequencyMax: event.target.value })}
+          />
+        </>
       ) : null}
     </>
   );

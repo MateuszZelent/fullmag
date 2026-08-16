@@ -52,7 +52,7 @@ describe("frequencyDomainSeriesAdapter", () => {
           resourceKey: ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_MAGNETIC_SWEEP_PATH,
           tableId: "frequency-domain:response-sweep",
         },
-        unit: "a.u.",
+        unit: "not published",
         xUnit: "GHz",
       }),
     );
@@ -71,7 +71,7 @@ describe("frequencyDomainSeriesAdapter", () => {
       points: [{ rowIndex: 0, x: 9.5, y: 2 }],
       source: { kind: "analysis.frequency_domain", resourceKey: ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_MAGNETIC_SWEEP_PATH, tableId: "frequency-domain:response-sweep" },
       status: "ready",
-      unit: "a.u.",
+      unit: "not published",
       xUnit: "GHz",
     }]);
   });

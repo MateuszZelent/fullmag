@@ -504,6 +504,21 @@ describe("inspector route coverage", () => {
     expect(routes.every(Boolean)).toBe(true);
     expect(new Set(routes.map((route) => route?.component)).size).toBe(kinds.length);
   });
+
+  it("gives every selectable semantic kind its own route component and owner", () => {
+    const kinds = [...new Set(
+      tabIds
+        .flatMap((tabId) => nodesForTab(tabId))
+        .filter((node) => node.selectable !== false)
+        .map((node) => node.kind),
+    )];
+    const routes = kinds.map((kind) => resolveInspectorRoute(kind));
+
+    expect(routes.every(Boolean)).toBe(true);
+    expect(new Set(routes.map((route) => route?.component)).size).toBe(kinds.length);
+    expect(new Set(routes.map((route) => route?.id)).size).toBe(kinds.length);
+  });
+
   it("covers the complete model and conditional resource trees before routing every selectable node", () => {
     const nodesByTab = new Map(tabIds.map((tabId) => [tabId, nodesForTab(tabId)]));
     const kindsByTab = (tabId: (typeof tabIds)[number]) =>

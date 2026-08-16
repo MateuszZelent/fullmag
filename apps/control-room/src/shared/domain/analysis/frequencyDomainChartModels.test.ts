@@ -19,6 +19,7 @@ import {
   buildFrequencyResponsePointSelectionRef,
   buildFrequencyResponseChartModel,
   buildFmrPeakTableModel,
+  frequencyResponseSeriesUnit,
   frequencyDomainChartRouteOverrideFromSelection,
   frequencyDomainChartRouteOverrideFromSubview,
   frequencyDomainResultContextFromManifest,
@@ -774,6 +775,47 @@ describe("frequencyDomainChartModels", () => {
     expect(model.series[3]?.points).toEqual([{ rowIndex: 0, x: 9.5, y: 5 }]);
   });
 
+  it("uses typed observable units and fails closed when a response unit is not published", () => {
+    const resource = jsonResource({
+      points: [
+        {
+          absorbed_power_density: 4.5,
+          amplitude: 2.0,
+          frequency_hz: 9.5e9,
+          observable_id: "mx",
+          phase_rad: 1.25,
+          susceptibility_tensor: [[1, 2], [3, 4]],
+        },
+      ],
+      schema_version: "magnetic_response_sweep.v1",
+    });
+
+    const typed = buildFrequencyResponseChartModel(resource, {
+      observables: [
+        { identity: "mx", kind: "drive_projected_response", unit: "A/m" },
+        { identity: "absorbed-power", kind: "absorbed_power", unit: "W/m^3" },
+        { identity: "chi-xx", kind: "susceptibility", unit: "m/A" },
+      ],
+    });
+
+    expect(typed.series.find((series) => series.quantity === "amplitude")?.unit).toBe("A/m");
+    expect(typed.series.find((series) => series.quantity === "absorbed-power-density")?.unit).toBe("W/m^3");
+    expect(typed.series.find((series) => series.quantity === "susceptibility-max-abs")?.unit).toBe("m/A");
+    expect(typed.series.find((series) => series.quantity === "phase")?.unit).toBe("rad");
+
+    const missing = buildFrequencyResponseChartModel(resource, { observables: [] });
+    expect(missing.series.find((series) => series.quantity === "amplitude")?.unit).toBe("not published");
+    expect(missing.series.find((series) => series.quantity === "absorbed-power-density")?.unit).toBe("not published");
+    expect(missing.series.find((series) => series.quantity === "susceptibility-max-abs")?.unit).toBe("not published");
+    expect(missing.diagnostics).toEqual(expect.arrayContaining([
+      "amplitude unit is not published in the result manifest",
+      "absorbed power density unit is not published in the result manifest",
+      "susceptibility unit is not published in the result manifest",
+    ]));
+    expect(frequencyResponseSeriesUnit(typed, "amplitude")).toBe("A/m");
+    expect(frequencyResponseSeriesUnit(missing, "amplitude")).toBe("not published");
+  });
+
   it("builds canonical frequency-domain selection refs for response frequency points", () => {
     const model = buildFrequencyResponseChartModel(
       jsonResource(
@@ -1005,6 +1047,8 @@ describe("frequencyDomainChartModels", () => {
       }),
       expect.objectContaining({
         amplitude: 1.2,
+        amplitudeUnit: "not published",
+        absorbedPowerDensityUnit: "not published",
         frequencyHz: 10.5e9,
         frequencyPointIndex: 1,
         phaseRad: 0.25,

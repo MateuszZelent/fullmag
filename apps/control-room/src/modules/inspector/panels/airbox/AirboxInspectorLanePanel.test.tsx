@@ -122,7 +122,52 @@ const explicitFdmSelection = {
   },
 } satisfies Selection;
 
+const staleAirboxSelection = {
+  ...selection,
+  ref: {
+    availability: "partial",
+    contractGap: "Airbox manifest is older than the authored policy.",
+    executionState: "running",
+    kind: "airbox.root",
+    nodeId: "model:airbox",
+    resourceState: "stale",
+    type: "airbox",
+    visualizationTargetId: "airbox",
+  },
+} satisfies Selection;
+
 describe("AirboxInspectorLanePanel", () => {
+  it.each([
+    AirboxOverviewLanePanel,
+    AirboxMeshParametersLanePanel,
+    AirboxMeshQualityGatesLanePanel,
+    AirboxMeshStatisticsLanePanel,
+    AirboxMeshTopologyLanePanel,
+    AirboxMeshBuildLanePanel,
+  ])("uses the shared scientific identity frame for %s", (Panel) => {
+    testState.discretization = "fem";
+
+    const html = renderToStaticMarkup(<Panel selection={selection} />);
+
+    expect(html).toContain('data-inspector-owner="airbox-inspector"');
+    expect(html).toContain('aria-label="Scientific result path"');
+    expect(html).toContain("Resource");
+    expect(html).toContain("Provenance");
+  });
+
+  it("keeps Airbox status facets and contract gaps visible in the shared frame", () => {
+    testState.discretization = "fem";
+
+    const html = renderToStaticMarkup(
+      <AirboxOverviewLanePanel selection={staleAirboxSelection} />,
+    );
+
+    expect(html).toContain(">stale<");
+    expect(html).toContain(">running<");
+    expect(html).toContain(">partial<");
+    expect(html).toContain("Airbox manifest is older than the authored policy.");
+  });
+
   it("loads only DomainMeta and never mounts the FEM child in FDM", () => {
     testState.discretization = "fdm";
     testState.calls.length = 0;

@@ -49,9 +49,9 @@ describe("resolveInspectorDescriptor", () => {
       cases.length,
     );
     expect(resolveInspectorDescriptor(selection("mesh-part-airbox"))).toMatchObject({
-      ownerId: "airbox-visualization",
+      ownerId: "mesh-part-airbox-visualization",
       icon: "airbox",
-      typeLabel: "Airbox display",
+      typeLabel: "Airbox mesh-part display",
     });
   });
 

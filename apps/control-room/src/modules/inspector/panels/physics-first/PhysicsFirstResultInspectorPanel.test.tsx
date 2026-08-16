@@ -1,6 +1,22 @@
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+
+vi.mock("@/kernel/KernelContext", () => ({
+  useKernel: () => ({ commands: { execute: vi.fn() } }),
+}));
+
+vi.mock("@/kernel/resources/studyRuntimeResources", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/kernel/resources/studyRuntimeResources")>();
+  const unavailable = () => ({ data: null, status: "unavailable" });
+  return {
+    ...actual,
+    useFrequencyDomainManifestResource: unavailable,
+    useFrequencyDomainResponseCancelRequestedResource: unavailable,
+    useFrequencyDomainResponseProgressResource: unavailable,
+    useFrequencyDomainResponseSweepResource: unavailable,
+  };
+});
 
 import { resolveInspectorRoute } from "../../inspectorRouteCatalog";
 
@@ -26,7 +42,53 @@ function renderRoute(kind: string, ref: Record<string, unknown>, label: string) 
   );
 }
 
+function renderFrequencyRoute(
+  kind: string,
+  ref: Record<string, unknown>,
+  label: string,
+) {
+  const route = resolveInspectorRoute(kind);
+  if (!route) throw new Error(`Missing route for ${kind}`);
+  return renderToStaticMarkup(
+    createElement(route.component, {
+      selection: {
+        kind,
+        label,
+        moduleSource: "explorer",
+        nodeId: `results:run:run-7:${kind}`,
+        objectId: null,
+        ref: {
+          ...ref,
+          kind,
+          nodeId: `results:run:run-7:${kind}`,
+          type: "frequency-domain",
+        } as never,
+      },
+    }),
+  );
+}
+
 describe("routed postprocessing Inspectors", () => {
+  it("renders the selected result status facets and contract gap truthfully", () => {
+    const html = renderFrequencyRoute(
+      "results.resonance.driven.spectrum",
+      {
+        availability: "partial",
+        contractGap: "Drive observable evidence is incomplete.",
+        executionState: "running",
+        resourceRef: "artifact-revision:response-r3",
+        resourceState: "stale",
+        studyProduct: "driven_response",
+      },
+      "Driven response spectrum",
+    );
+
+    expect(html).toContain(">stale<");
+    expect(html).toContain(">running<");
+    expect(html).toContain(">partial<");
+    expect(html).toContain("Drive observable evidence is incomplete.");
+  });
+
   it("renders Table semantics from the actual route component", () => {
     const html = renderRoute(
       "results.tables.definition",

@@ -202,6 +202,48 @@ describe("buildPhysicsFirstResultsTree", () => {
     expect(labels).not.toContain("Linear eigenmodes · Modal");
   });
 
+  it("publishes modal RF coupling as a separate FMR activity product", () => {
+    const adapted = physicsFirstResultsSnapshotFromResources({
+      currentRun: { revision: 7, run_id: "run-fmr-modal" },
+      manifest: {
+        result_manifest: {
+          payload: {
+            equilibrium_identity: "eq-fmr-modal",
+            observables: [
+              { identity: "rf-coupling", kind: "rf_coupling", unit: "1" },
+            ],
+            requested_execution: { boundary_context: "finite_open" },
+            stage_id: "modal-fmr-stage",
+            study_product: "modal_eigen",
+          },
+          status: "ready",
+        },
+      },
+      spectrum: { status: "ready" },
+    });
+
+    expect(adapted.snapshot.entries[0]?.products.coupling).toBe(true);
+    expect(
+      flattenExplorerNodes(buildPhysicsFirstResultsTree(adapted.snapshot)).map(
+        (node) => node.label,
+      ),
+    ).toContain("RF Coupling / FMR Activity");
+  });
+
+  it("keeps the Results root unavailable when entries have no published products", () => {
+    const tree = buildPhysicsFirstResultsTree({
+      entries: [{ ...modalFinite, products: {} }],
+      resultContextRunId: modalFinite.runId,
+    });
+
+    expect(tree[0]).toMatchObject({
+      availability: "unavailable",
+      executionState: "not_started",
+      resourceState: "idle",
+      status: "unavailable",
+    });
+  });
+
   it("marks empty result families unavailable instead of presenting them as ready", () => {
     const nodes = flattenExplorerNodes(
       buildPhysicsFirstResultsTree({
@@ -684,6 +726,62 @@ describe("physicsFirstResultsSnapshotFromResources", () => {
       modeIndex: 3,
       sampleIndex: 2,
       wavevectorKf: [5e7, 0, 0],
+    });
+  });
+
+  it("publishes an explicit wavevector for a grid mode target when the grid resource provides one", () => {
+    const adapted = physicsFirstResultsSnapshotFromResources({
+      currentRun: { revision: 26, run_id: "runtime-run-26" },
+      dispersion: {
+        path_metadata: {
+          sampling: {
+            kind: "grid",
+            points: [
+              { k_vector: [0, 0, 0] },
+              { k_vector: [2e7, 0, 0] },
+            ],
+          },
+        },
+        status: "ready",
+      },
+      manifest: {
+        result_manifest: {
+          payload: {
+            equilibrium_identity: "eq-grid-fields",
+            requested_execution: {
+              boundary_context: "floquet_periodic",
+              k_sampling: { kind: "grid", sample_count: 2 },
+            },
+            revision: "grid-fields-r1",
+            stage_id: "grid-fields-stage",
+            study_product: "modal_eigen",
+          },
+          status: "ready",
+        },
+      },
+      spectrum: {
+        payload: {
+          modes: [
+            {
+              frequency_hz: 11e9,
+              mode_field_id: "analysis:eigen:grid:mode-0001",
+              mode_field_resource_key: "data/fields/analysis:eigen:grid:mode-0001",
+              raw_mode_index: 1,
+              sample_index: 1,
+            },
+          ],
+        },
+        status: "ready",
+      },
+    });
+
+    const target = flattenExplorerNodes(buildPhysicsFirstResultsTree(adapted.snapshot))
+      .find((node) => node.kind === "results.dispersion.modal.mode_at_k");
+
+    expect(target).toMatchObject({
+      kContextKind: "k_grid",
+      sampleIndex: 1,
+      wavevectorKf: [2e7, 0, 0],
     });
   });
 

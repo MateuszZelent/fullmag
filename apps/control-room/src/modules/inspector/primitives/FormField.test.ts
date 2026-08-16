@@ -62,4 +62,24 @@ describe("FormField physical numeric input contract", () => {
       consoleError.mockRestore();
     }
   });
+
+  it("associates hints and errors with the native control", () => {
+    const html = renderToStaticMarkup(
+      createElement(FormField, {
+        error: "Maximum element size is outside the valid range.",
+        invalid: true,
+        label: "Maximum element size",
+        onChange: () => undefined,
+        type: "number",
+        unit: "m",
+        value: "1e-9",
+      }),
+    );
+
+    expect(html).toMatch(/aria-describedby="[^"]+-error"/);
+    expect(html).toMatch(/aria-errormessage="[^"]+-error"/);
+    expect(html).toContain('aria-invalid="true"');
+    expect(html).toContain('id="');
+    expect(html).toContain("Maximum element size is outside the valid range.");
+  });
 });

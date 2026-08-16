@@ -1783,7 +1783,8 @@ function checkAnalysisPlotsStableResourceInputs() {
     'enabled: activeSurface === "dynamics"',
     "comparisonUnavailableReason: ANALYSIS_COMPARISON_UNAVAILABLE_REASON",
     'activeSurface === "resonance-fmr" || activeSurface === "dispersion"',
-    'useSpinWaveGammaResource(activeSurface === "dynamics")',
+    "useSpinWaveGammaResource(",
+    'activeSurface === "dynamics" && activeSubview === "dynamics.temporal-fft"',
     "useDynamicStructureFactorResource(",
     'activeSurface === "dynamics" && activeSubview === "dynamics.s-k-f"',
   ]);
