@@ -78,9 +78,29 @@
       "id": "PM-N13",
       "status": "unqualified",
       "requirement": "FDM target_bounds, magnetic_domain, and universe bounds resolve as distinct policies across domain, magnetic_domain, object, and region targets; fresh per-lane evidence is required."
+    },
+    {
+      "id": "PM-D01",
+      "status": "planned",
+      "requirement": "Default source resolution must not create a monitor, change ProblemIR, or change canonical Python."
+    },
+    {
+      "id": "PM-D02",
+      "status": "planned",
+      "requirement": "Default position_fraction and resolved position_m have complete SI validation."
+    },
+    {
+      "id": "PM-D03",
+      "status": "planned",
+      "requirement": "Default and authored monitors use the same sampler and measure-weighted reductions after source resolution."
     }
   ],
   "equations": [
+    {
+      "id": "eq-planar-default-position",
+      "symbols": ["phi", "pn", "normal_bounds"],
+      "sources": ["default-planar-source-contract"]
+    },
     {
       "id": "eq-planar-frame",
       "symbols": ["x", "o", "eu", "ev", "n", "uvs"],
@@ -193,9 +213,19 @@
     {"id": "qa", "latex": "q_a", "meaning": "Nodal P1 value", "si_unit": "[q]"},
     {"id": "N", "latex": "N", "meaning": "Number of nodes in an arithmetic average", "si_unit": "1"},
     {"id": "qnodes", "latex": "q_{\\mathrm{nodes}}", "meaning": "Illegal unweighted nodal mean", "si_unit": "[q]"},
-    {"id": "pi", "latex": "\\pi", "meaning": "Circle constant", "si_unit": "1"}
+    {"id": "pi", "latex": "\\pi", "meaning": "Circle constant", "si_unit": "1"},
+    {"id": "phi", "latex": "\\phi", "meaning": "Validated default-source position fraction", "si_unit": "1"},
+    {"id": "pn", "latex": "p_n", "meaning": "Resolved physical coordinate along the selected normal", "si_unit": "\\mathrm{m}"},
+    {"id": "normal_bounds", "latex": "b_{\\min},b_{\\max}", "meaning": "Published domain bounds along the selected normal", "si_unit": "\\mathrm{m}"}
   ],
   "sources": [
+    {
+      "id": "default-planar-source-contract",
+      "path": "docs/physics/0970-planar-monitor-sampling-and-projection.md",
+      "symbol": "DOC-ANCHOR:default-planar-source-contract",
+      "responsibility": "Document the session-resolved Default source without claiming a runtime implementation.",
+      "evidence_status": "planned_contract"
+    },
     {
       "id": "python-monitor",
       "path": "packages/fullmag-py/src/fullmag/model/planar_monitor.py",

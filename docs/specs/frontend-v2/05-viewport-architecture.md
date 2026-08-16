@@ -69,11 +69,17 @@ resources and must not reimplement solver-specific sampling.
 | selected object | kernel selection store |
 | layer visibility | visualization resource for canonical state, local store for transient panels |
 | per-object display overrides | visualization resource/controller keyed by canonical object or airbox target |
-| active planar monitor and view profile | planar visualization resource; monitor definition remains a model resource |
+| active planar source and view profile | planar visualization resource; `Default` is session-resolved and authored monitor definitions remain model resources |
 | monitor edit draft | inspector-local explicit draft transaction |
 | planar scalar/vector/occupancy buffers | revision-aware resource cache, never React state |
 | planar pan/zoom and hover probe | private field-map external store/renderer |
 | perf counters | diagnostics controller |
+
+The planar visualization source is a typed session selection, not a magic
+monitor ID. `Default` resolves the complete published domain to an `xy`, `xz`,
+or `yz` frame and uses `position_fraction = 0.5` initially; an authored
+monitor selection resolves through `SceneDocument.monitors.planar[]`. Opening
+the `field-map` surface never creates an inspector draft or mutates the model.
 
 ## 5. Rendering Budget
 

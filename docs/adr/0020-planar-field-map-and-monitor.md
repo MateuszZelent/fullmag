@@ -20,7 +20,11 @@ heavy center surface. `viewport-3d` must remain the only WebGL/R3F surface.
 ## Decision
 
 1. Introduce the canonical `PlanarMonitor` in Python, `ProblemIR`, and
-   `SceneDocument`. It owns physical target, frame, extent, and operator.
+   `SceneDocument`. It owns physical target, frame, extent, and operator. The
+   planar visualization source is a typed union: `Default` is a
+   session-resolved domain slice, while `monitor:{monitor_id}` selects this
+   authored model resource. `Default` is never a `PlanarMonitor` and does not
+   enter `SceneDocument`, `ProblemIR`, or canonical Python.
 2. Keep quantity, component, unit, range, palette, raster resolution, quality,
    opacity, and vector budget in a separate `PlanarViewProfile` and data
    request. The canonical planar range is `auto | manual | symmetric`, with
@@ -49,6 +53,9 @@ single-WebGL invariants.
 ## Consequences
 
 - Monitors round-trip through canonical Python and survive UI rollback.
+- `Default` is always available when domain metadata is ready and opens at
+  `xy`, position fraction `0.5`; selecting it does not create or mutate a
+  monitor.
 - One monitor can display every compatible published spatial quantity.
 - Runtime-only mesh-part and airbox scopes do not leak discretization identity
   into authored physics.
@@ -86,6 +93,8 @@ single-WebGL invariants.
 ## Migration
 
 1. Add monitor/IR/sampler/API contracts without changing the existing ribbon.
+   Add the session-scoped typed planar source and its v8-to-v9 persistence
+   migration without dual-writing `active_monitor_id`.
 2. Add hidden `field-map` and resource hooks.
 3. Reach scalar/vector/mesh/contour/probe and inspector parity.
 4. Point the `2D` command to `field-map`.
@@ -95,6 +104,10 @@ single-WebGL invariants.
 7. Migrate persisted visualization schema 6 to schema 7 once, translating
    legacy contrast state to canonical planar range state. New HTTP/OpenAPI
    writes do not dual-write aliases.
+8. Migrate planar visualization persistence from v8 to v9: a null legacy
+   monitor selection becomes `Default`, and a non-null selection becomes an
+   authored monitor source. A stale authored ID repairs to `Default` at
+   resolution time with a diagnostic.
 
 Rollback may hide `field-map` and restore the static PNG command. It must not
 delete authored monitors, change `ProblemIR`, or replace conservative FEM
