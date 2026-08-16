@@ -6424,6 +6424,97 @@ async fn quantities_catalog_returns_json_without_session() {
     assert!(first["supports_preview_3d"].is_boolean());
     assert!(first["supports_history"].is_boolean());
     assert!(first["supports_export"].is_boolean());
+    assert!(first["capability_state"].is_string());
+    assert!(first["materializable"].is_boolean());
+    assert!(first["materialization_state"].is_string());
+}
+
+#[tokio::test]
+async fn quantity_capability_is_separate_from_unmaterialized_field_cache() {
+    let state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.capabilities = Some(
+            serde_json::from_value(serde_json::json!({
+                "engine_id": "fdm_cuda",
+                "capability_profile_version": "test-profile",
+                "supported_terms": ["exchange", "demag_tensor_fft_newell"],
+                "supported_demag_realizations": ["tensor_fft_newell"],
+                "preview_quantities": ["m", "H_demag", "eden_demag"],
+                "snapshot_quantities": ["m", "H_demag", "eden_demag"],
+                "scalar_outputs": ["E_total"],
+                "approximate_operators": [],
+                "supports_frequency_response": false,
+                "supports_coupled_magnetoelastic_quasistatic": false,
+                "supports_coupled_magnetoelastic_elastodynamic": false,
+                "supports_frequency_domain_elastodynamics": false,
+                "supports_coupled_eigenmodes": false,
+                "supports_lossy_fallback_override": false
+            }))
+            .expect("valid CUDA capability fixture"),
+        );
+        snapshot.latest_fields = LatestFields::default();
+        snapshot.preview_cache = Default::default();
+    }
+    let app = build_v2_router().with_state(state);
+
+    let quantities_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/quantities")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(quantities_response.status(), StatusCode::OK);
+    let quantities = body_json(quantities_response).await;
+    for quantity_id in ["H_demag", "eden_demag"] {
+        let entry = quantities["quantities"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|entry| entry["id"] == quantity_id)
+            .unwrap_or_else(|| panic!("missing quantity catalog entry: {quantity_id}"));
+        assert_eq!(entry["capability_state"], "supported", "{quantity_id}");
+        assert_eq!(entry["materializable"], true, "{quantity_id}");
+        assert_eq!(
+            entry["materialization_state"], "unmaterialized",
+            "{quantity_id}"
+        );
+    }
+
+    let fields_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/fields")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(fields_response.status(), StatusCode::OK);
+    let fields = body_json(fields_response).await;
+    assert!(fields["quantities"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|entry| entry["quantity_id"] != "H_demag"));
+
+    let meta_response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/fields/H_demag/meta")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(meta_response.status(), StatusCode::OK);
+    let meta = body_json(meta_response).await;
+    assert_eq!(meta["state"], "unmaterialized");
+    assert_eq!(meta["materialization_reason_code"], "field_unmaterialized");
 }
 
 // ─── display endpoint ───────────────────────────────────────────────────────
@@ -24910,7 +25001,9 @@ async fn fdm_terminal_spatial_scalar_full_grid_preserves_values_and_object_indic
         )
         .await
         .unwrap();
-    assert_eq!(airbox.status(), StatusCode::NOT_FOUND);
+    assert_eq!(airbox.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    let airbox_error = body_json(airbox).await;
+    assert_eq!(airbox_error["code"], "unsupported_scope");
     let _ = fs::remove_dir_all(&artifact_dir);
 }
 
@@ -33078,7 +33171,9 @@ async fn v2_field_vector_rejects_magnetic_only_quantity_on_airbox_scope() {
         )
         .await
         .unwrap();
-    assert_eq!(airbox_response.status(), StatusCode::NOT_FOUND);
+    assert_eq!(airbox_response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    let airbox_error = body_json(airbox_response).await;
+    assert_eq!(airbox_error["code"], "unsupported_scope");
 
     let air_part_response = app
         .clone()
@@ -33090,7 +33185,9 @@ async fn v2_field_vector_rejects_magnetic_only_quantity_on_airbox_scope() {
         )
         .await
         .unwrap();
-    assert_eq!(air_part_response.status(), StatusCode::NOT_FOUND);
+    assert_eq!(air_part_response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    let air_part_error = body_json(air_part_response).await;
+    assert_eq!(air_part_error["code"], "unsupported_scope");
 
     let legacy_air_object_response = app
         .oneshot(
@@ -33101,7 +33198,12 @@ async fn v2_field_vector_rejects_magnetic_only_quantity_on_airbox_scope() {
         )
         .await
         .unwrap();
-    assert_eq!(legacy_air_object_response.status(), StatusCode::NOT_FOUND);
+    assert_eq!(
+        legacy_air_object_response.status(),
+        StatusCode::UNPROCESSABLE_ENTITY
+    );
+    let legacy_air_object_error = body_json(legacy_air_object_response).await;
+    assert_eq!(legacy_air_object_error["code"], "unsupported_scope");
 }
 
 #[tokio::test]

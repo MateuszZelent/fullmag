@@ -13,6 +13,8 @@ pub struct FieldCatalog {
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, ToSchema, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum FieldMaterializationState {
+    Unsupported,
+    Unmaterialized,
     Complete,
     StaleComplete,
     Pending,
@@ -45,6 +47,8 @@ pub struct FieldDescriptor {
     pub materialization_wall_time_ns: u64,
     pub state: FieldMaterializationState,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub materialization_reason_code: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub materialization_error: Option<String>,
 }
 
@@ -68,6 +72,8 @@ pub struct FieldMeta {
     pub stale_by_steps: u64,
     pub materialization_wall_time_ns: u64,
     pub state: FieldMaterializationState,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub materialization_reason_code: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub materialization_error: Option<String>,
 }

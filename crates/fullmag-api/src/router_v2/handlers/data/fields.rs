@@ -1334,6 +1334,7 @@ struct FieldFreshness {
     stale_by_steps: u64,
     materialization_wall_time_ns: u64,
     state: FieldMaterializationState,
+    materialization_reason_code: Option<String>,
     materialization_error: Option<String>,
 }
 
@@ -1357,6 +1358,8 @@ fn completed_field_freshness(
         } else {
             FieldMaterializationState::StaleComplete
         },
+        materialization_reason_code: (stale_by_steps > 0)
+            .then_some("field_stale_complete".to_string()),
         materialization_error: None,
     }
 }
@@ -1512,17 +1515,22 @@ fn materializer_request_freshness(
     snapshot: &SessionStateResponse,
     status: &fullmag_runner::LiveFieldMaterializationStatus,
 ) -> FieldFreshness {
-    let state = match status.state {
-        fullmag_runner::LiveFieldMaterializationState::Pending => {
-            FieldMaterializationState::Pending
-        }
+    let (state, reason_code) = match status.state {
+        fullmag_runner::LiveFieldMaterializationState::Pending => (
+            FieldMaterializationState::Pending,
+            Some("field_materialization_pending".to_string()),
+        ),
         fullmag_runner::LiveFieldMaterializationState::Complete => {
-            FieldMaterializationState::Complete
+            (FieldMaterializationState::Complete, None)
         }
-        fullmag_runner::LiveFieldMaterializationState::Superseded => {
-            FieldMaterializationState::Pending
-        }
-        fullmag_runner::LiveFieldMaterializationState::Error => FieldMaterializationState::Error,
+        fullmag_runner::LiveFieldMaterializationState::Superseded => (
+            FieldMaterializationState::StaleComplete,
+            Some("field_materialization_stale".to_string()),
+        ),
+        fullmag_runner::LiveFieldMaterializationState::Error => (
+            FieldMaterializationState::Error,
+            Some("field_materialization_error".to_string()),
+        ),
     };
     FieldFreshness {
         source_step: status.source_step,
@@ -1532,6 +1540,7 @@ fn materializer_request_freshness(
         stale_by_steps: current_source_step(snapshot).saturating_sub(status.source_step),
         materialization_wall_time_ns: 0,
         state,
+        materialization_reason_code: reason_code,
         materialization_error: status.error.clone(),
     }
 }
@@ -1544,10 +1553,12 @@ fn completed_payload_freshness_with_materializer_status(
         fullmag_runner::LiveFieldMaterializationState::Pending
         | fullmag_runner::LiveFieldMaterializationState::Superseded => {
             freshness.state = FieldMaterializationState::StaleComplete;
+            freshness.materialization_reason_code = Some("field_stale_complete".to_string());
             freshness.materialization_error = None;
         }
         fullmag_runner::LiveFieldMaterializationState::Error => {
             freshness.state = FieldMaterializationState::Error;
+            freshness.materialization_reason_code = Some("field_materialization_error".to_string());
             freshness.materialization_error = status.error.clone();
         }
         fullmag_runner::LiveFieldMaterializationState::Complete => {}
@@ -1577,6 +1588,7 @@ fn legacy_pending_field_freshness(snapshot: &SessionStateResponse) -> FieldFresh
         stale_by_steps: 0,
         materialization_wall_time_ns: 0,
         state: FieldMaterializationState::Pending,
+        materialization_reason_code: Some("field_unmaterialized".to_string()),
         materialization_error: None,
     }
 }
@@ -1778,10 +1790,14 @@ pub async fn get_field_catalog(
                 fullmag_runner::LiveFieldMaterializationState::Pending
                 | fullmag_runner::LiveFieldMaterializationState::Superseded => {
                     descriptor.state = FieldMaterializationState::StaleComplete;
+                    descriptor.materialization_reason_code =
+                        Some("field_stale_complete".to_string());
                     descriptor.materialization_error = None;
                 }
                 fullmag_runner::LiveFieldMaterializationState::Error => {
                     descriptor.state = FieldMaterializationState::Error;
+                    descriptor.materialization_reason_code =
+                        Some("field_materialization_error".to_string());
                     descriptor.materialization_error = status.error.clone();
                 }
                 fullmag_runner::LiveFieldMaterializationState::Complete => {}
@@ -1878,6 +1894,13 @@ pub async fn get_field_meta(
         .map(|s| s.shape.as_api_kind().to_string())
         .unwrap_or_else(|| "vector_field".into());
     let unit = quantity_unit(quantity_id).to_string();
+    if query.scope_kind.as_deref() == Some("airbox")
+        && quantity_spatial_domain(quantity_id) == "magnetic_only"
+    {
+        return Err(ApiError::unprocessable(format!(
+            "unsupported_scope: field '{quantity_id}' is not available on airbox scope"
+        )));
+    }
     let location = snapshot
         .preview_cache
         .get(quantity_id)
@@ -2027,6 +2050,7 @@ pub async fn get_field_meta(
                 stale_by_steps: freshness.stale_by_steps,
                 materialization_wall_time_ns: freshness.materialization_wall_time_ns,
                 state: freshness.state,
+                materialization_reason_code: freshness.materialization_reason_code,
                 materialization_error: freshness.materialization_error,
             }));
         }
@@ -2059,7 +2083,41 @@ pub async fn get_field_meta(
                 stale_by_steps: freshness.stale_by_steps,
                 materialization_wall_time_ns: freshness.materialization_wall_time_ns,
                 state: freshness.state,
+                materialization_reason_code: freshness.materialization_reason_code,
                 materialization_error: freshness.materialization_error,
+            }));
+        }
+        if let Some(supported) = capability_supports_quantity(snapshot, quantity_id) {
+            let (state, reason_code) = if supported {
+                (
+                    FieldMaterializationState::Unmaterialized,
+                    Some("field_unmaterialized".to_string()),
+                )
+            } else {
+                (
+                    FieldMaterializationState::Unsupported,
+                    Some("quantity_unsupported".to_string()),
+                )
+            };
+            return Ok(Json(FieldMeta {
+                quantity_id: quantity_id.to_string(),
+                label,
+                kind,
+                components: n_comp,
+                location,
+                unit,
+                field_revision: field_quantity_revision(snapshot, quantity_id),
+                domain_generation_id: gen_id.clone(),
+                stats: None,
+                source_step: current_source_step(snapshot),
+                source_time_seconds: None,
+                source_revision: snapshot.display_selection.revision,
+                materialized_at_unix_ms: 0,
+                stale_by_steps: 0,
+                materialization_wall_time_ns: 0,
+                state,
+                materialization_reason_code: reason_code,
+                materialization_error: None,
             }));
         }
         return Err(ApiError::not_found(format!(
@@ -2120,6 +2178,7 @@ pub async fn get_field_meta(
         stale_by_steps: freshness.stale_by_steps,
         materialization_wall_time_ns: freshness.materialization_wall_time_ns,
         state: freshness.state,
+        materialization_reason_code: freshness.materialization_reason_code,
         materialization_error: freshness.materialization_error,
     }))
 }
@@ -2211,8 +2270,23 @@ fn push_field_descriptor(
         stale_by_steps: freshness.stale_by_steps,
         materialization_wall_time_ns: freshness.materialization_wall_time_ns,
         state: freshness.state,
+        materialization_reason_code: freshness.materialization_reason_code,
         materialization_error: freshness.materialization_error,
     });
+}
+
+fn capability_supports_quantity(
+    snapshot: &SessionStateResponse,
+    quantity_id: &str,
+) -> Option<bool> {
+    let capabilities = snapshot.capabilities.as_ref()?;
+    let supported = capabilities
+        .preview_quantities
+        .iter()
+        .chain(capabilities.snapshot_quantities.iter())
+        .filter_map(|id| normalize_quantity_id(id).ok())
+        .any(|id| id.as_str() == quantity_id);
+    Some(supported)
 }
 
 // ── Internal helpers ──────────────────────────────────────────────────────────
@@ -2448,8 +2522,8 @@ fn resolve_field_scope(
     if quantity_spatial_domain(quantity_id) == "magnetic_only"
         && scope.domain == ResolvedFieldScopeDomain::Air
     {
-        return Err(ApiError::not_found(format!(
-            "field '{quantity_id}' is not available on airbox mesh scope"
+        return Err(ApiError::unprocessable(format!(
+            "unsupported_scope: field '{quantity_id}' is not available on airbox mesh scope"
         )));
     }
     let node_indices = scope
@@ -2552,8 +2626,8 @@ fn resolve_fdm_field_scope_from_carrier(
     if quantity_spatial_domain(quantity_id) == "magnetic_only"
         && domain == ResolvedFieldScopeDomain::Air
     {
-        return Err(ApiError::not_found(format!(
-            "field '{quantity_id}' is not available on airbox grid scope"
+        return Err(ApiError::unprocessable(format!(
+            "unsupported_scope: field '{quantity_id}' is not available on airbox grid scope"
         )));
     }
     Ok(ResolvedFieldScope {
@@ -6788,6 +6862,7 @@ mod tests {
             stale_by_steps: 0,
             materialization_wall_time_ns: 0,
             state: FieldMaterializationState::Complete,
+            materialization_reason_code: None,
             materialization_error: None,
         };
         let mut quantities = Vec::new();

@@ -4810,6 +4810,12 @@
               "null"
             ]
           },
+          "materialization_reason_code": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "materialization_wall_time_ns": {
             "format": "int64",
             "minimum": 0,
@@ -5045,6 +5051,8 @@
       },
       "FieldMaterializationState": {
         "enum": [
+          "unsupported",
+          "unmaterialized",
           "complete",
           "stale_complete",
           "pending",
@@ -5230,6 +5238,12 @@
             "type": "string"
           },
           "materialization_error": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "materialization_reason_code": {
             "type": [
               "string",
               "null"
@@ -16430,6 +16444,10 @@
       },
       "QuantityCatalogEntry": {
         "properties": {
+          "capability_state": {
+            "description": "Capability of the resolved backend/plan, independent of field cache.",
+            "type": "string"
+          },
           "description": {
             "type": "string"
           },
@@ -16446,6 +16464,20 @@
             "type": "string"
           },
           "location": {
+            "type": "string"
+          },
+          "materializable": {
+            "description": "Whether the current plan can materialize this quantity on demand.",
+            "type": "boolean"
+          },
+          "materialization_reason_code": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "materialization_state": {
+            "description": "Current cache/materialization state.  This is intentionally separate\nfrom `capability_state`: an advertised quantity may have no payload yet.",
             "type": "string"
           },
           "n_comp": {
@@ -16501,7 +16533,10 @@
           "supports_preview_2d",
           "supports_preview_3d",
           "supports_history",
-          "supports_export"
+          "supports_export",
+          "capability_state",
+          "materializable",
+          "materialization_state"
         ],
         "type": "object"
       },
@@ -40232,8 +40267,8 @@
     }
   ],
   "x-fullmag-build-identity": {
-    "built_at_utc": "2026-08-13T17:02:56Z",
-    "git_commit": "f9ae55dbb38b2ee6de13ee7ae5d7a5647e200635",
+    "built_at_utc": "2026-08-16T00:16:56Z",
+    "git_commit": "37071d4cfd0160e4071154c67b809c6dda723a4c",
     "source_snapshot_sha256": "unknown",
     "worktree_state": "dirty"
   },

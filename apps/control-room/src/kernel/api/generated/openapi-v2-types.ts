@@ -4513,6 +4513,7 @@ export interface components {
             label: string;
             location: string;
             materialization_error?: string | null;
+            materialization_reason_code?: string | null;
             /** Format: int64 */
             materialization_wall_time_ns: number;
             /** Format: int64 */
@@ -4579,7 +4580,7 @@ export interface components {
             window?: string;
         };
         /** @enum {string} */
-        FieldMaterializationState: "complete" | "stale_complete" | "pending" | "error";
+        FieldMaterializationState: "unsupported" | "unmaterialized" | "complete" | "stale_complete" | "pending" | "error";
         FieldMatrixResponse: {
             aggregation?: string | null;
             bounds: components["schemas"]["FieldSliceBounds"];
@@ -4621,6 +4622,7 @@ export interface components {
             label: string;
             location: string;
             materialization_error?: string | null;
+            materialization_reason_code?: string | null;
             /** Format: int64 */
             materialization_wall_time_ns: number;
             /** Format: int64 */
@@ -7462,12 +7464,22 @@ export interface components {
             status: components["schemas"]["GeometrySupportStatus"];
         };
         QuantityCatalogEntry: {
+            /** @description Capability of the resolved backend/plan, independent of field cache. */
+            capability_state: string;
             description: string;
             domain: string;
             id: string;
             interactive_preview: boolean;
             label: string;
             location: string;
+            /** @description Whether the current plan can materialize this quantity on demand. */
+            materializable: boolean;
+            materialization_reason_code?: string | null;
+            /**
+             * @description Current cache/materialization state.  This is intentionally separate
+             *     from `capability_state`: an advertised quantity may have no payload yet.
+             */
+            materialization_state: string;
             /** Format: int32 */
             n_comp: number;
             normalization_hint: string;

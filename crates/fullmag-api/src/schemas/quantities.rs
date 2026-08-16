@@ -17,6 +17,15 @@ pub struct QuantityCatalogEntry {
     pub supports_preview_3d: bool,
     pub supports_history: bool,
     pub supports_export: bool,
+    /// Capability of the resolved backend/plan, independent of field cache.
+    pub capability_state: String,
+    /// Whether the current plan can materialize this quantity on demand.
+    pub materializable: bool,
+    /// Current cache/materialization state.  This is intentionally separate
+    /// from `capability_state`: an advertised quantity may have no payload yet.
+    pub materialization_state: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub materialization_reason_code: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub quick_access_label: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -40,6 +49,10 @@ impl From<fullmag_quantities::QuantityDescriptorWire> for QuantityCatalogEntry {
             supports_preview_3d: value.supports_preview_3d,
             supports_history: value.supports_history,
             supports_export: value.supports_export,
+            capability_state: "unknown".to_string(),
+            materializable: false,
+            materialization_state: "unmaterialized".to_string(),
+            materialization_reason_code: None,
             quick_access_label: value.quick_access_label,
             scalar_metric_key: value.scalar_metric_key,
         }
