@@ -166,11 +166,10 @@ describe("VisualizationDebugPanel mounted interaction", () => {
     expect(VisualizationDebugPanel.name).toBe("VisualizationDebugPanel");
   });
 
-  it("mounts ordinary Visualization without requesting or subscribing to Debug evidence", async () => {
+  it("mounts ordinary Visualization without requesting Debug demand", async () => {
     const dom = installInteractiveTestDom();
     const kernel = makeKernel();
     const request = vi.spyOn(kernel.visualizationDebug, "request");
-    const subscribe = vi.spyOn(kernel.visualizationDebug, "subscribe");
     const container = dom.document.createElement("div");
     dom.document.body.appendChild(container);
     const root = createRoot(container as unknown as Element);
@@ -193,13 +192,12 @@ describe("VisualizationDebugPanel mounted interaction", () => {
     });
 
     expect(request).not.toHaveBeenCalled();
-    expect(subscribe).not.toHaveBeenCalled();
 
     await act(async () => root.unmount());
     dom.restore();
   });
 
-  it("requests bounded Airbox evidence only while its vector accounting rows are mounted", async () => {
+  it("reads published Airbox accounting without requesting Debug demand", async () => {
     const dom = installInteractiveTestDom();
     const kernel = makeKernel();
     const request = vi.spyOn(kernel.visualizationDebug, "request");
@@ -221,7 +219,7 @@ describe("VisualizationDebugPanel mounted interaction", () => {
       );
     });
 
-    expect(request).toHaveBeenCalledWith("airbox");
+    expect(request).not.toHaveBeenCalled();
     expect(subscribe).toHaveBeenCalledWith("airbox", expect.any(Function));
     const publisher = kernel.visualizationDebug.registerPublisher("viewport-primary");
     await act(async () => {
@@ -231,7 +229,7 @@ describe("VisualizationDebugPanel mounted interaction", () => {
         airboxAccountingSnapshot(),
       );
     });
-    expect(container.textContent).toContain("Available air-only nodes10,586");
+    expect(container.textContent).toContain("Available vector anchors10,586 cells");
     expect(container.textContent).toContain("Decoded field samples10,586");
     expect(container.textContent).toContain("Adopted arrows10,586");
 
@@ -242,7 +240,7 @@ describe("VisualizationDebugPanel mounted interaction", () => {
     dom.restore();
   });
 
-  it("reports waiting instead of the fallback budget when Airbox availability is not exact", async () => {
+  it("marks an estimated Airbox capacity without inventing decoded or adopted counts", async () => {
     const dom = installInteractiveTestDom();
     const kernel = makeKernel();
     const container = dom.document.createElement("div");
@@ -262,10 +260,9 @@ describe("VisualizationDebugPanel mounted interaction", () => {
       );
     });
 
-    expect(container.textContent).toContain("Available air-only nodeswaiting");
-    expect(container.textContent).toContain("Decoded field sampleswaiting");
-    expect(container.textContent).toContain("Adopted arrowswaiting");
-    expect(container.textContent).not.toContain("4,096 est.");
+    expect(container.textContent).toContain("Available vector anchors4,096 cells est.");
+    expect(container.textContent).toContain("Decoded field samplesnot reported");
+    expect(container.textContent).toContain("Adopted arrowsnot reported");
 
     await act(async () => root.unmount());
     dom.restore();
@@ -290,6 +287,7 @@ const debugSelection: Selection = {
 function makeKernel(): KernelApi {
   const bus = new EventBus<KernelEventMap>();
   const resources = new ResourceInvalidationController(bus);
+  const visualizationSyncSnapshot = { version: 0 };
   return {
     api: {
       data: {
@@ -339,7 +337,7 @@ function makeKernel(): KernelApi {
     visualization: new ObjectVisualizationController(),
     visualizationSync: {
       applyOptimisticState: (value: unknown) => value,
-      getSnapshot: () => ({ version: 0 }),
+      getSnapshot: () => visualizationSyncSnapshot,
       observeRemoteState: vi.fn(),
       subscribe: () => () => undefined,
     },

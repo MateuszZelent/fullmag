@@ -59,6 +59,8 @@ import {
   surfaceFieldProjectionModePatch,
   surfaceColorSourceFieldMetaComponent,
   vectorColorModeFieldMetaComponent,
+  availableVectorAnchorCount,
+  resolveVisualizationVectorScopeForTarget,
   geometryScopeDisplayPatch,
   quantitySourcePatch,
   regionVisualizationCarrierSupportsFieldMeta,
@@ -71,6 +73,7 @@ import {
   visualizationQuantityItems,
   type ScalarColorbarDisplayUnit,
   colorPickerInputValue,
+  DEFAULT_VISUALIZATION_VECTOR_SCENE_CAP,
 } from "./ObjectVisualizationPanelModel";
 import { VisualizationVectorAccountingRows } from "./VisualizationVectorAccountingRows";
 import { SHARED_VECTOR_COLOR_MODE_ITEMS } from "../visualization/presentationSemantics";
@@ -539,7 +542,7 @@ export function VisualizationSurfaceColoringSection({
             aria-label="Add colorbar to viewport"
             checked={settings.viewportColorbarVisible}
             disabled={pending || sectionDisabled("surface-coloring")}
-            onCheckedChange={(checked) =>
+            onCheckedChange={(checked: boolean) =>
               void patch({ viewportColorbarVisible: checked })
             }
           />
@@ -872,6 +875,8 @@ export function VisualizationVectorsSection({
   target,
   targetKind,
   vectorBudgetRange,
+  vectorCapacity,
+  visualizationRevision,
   vectorTopologyHash,
 }: {
   fieldCatalog: { data: FieldCatalogResource | null; status: string };
@@ -902,6 +907,8 @@ export function VisualizationVectorsSection({
   target: VisualizationTargetRef;
   targetKind: VisualizationTargetKind;
   vectorBudgetRange: VisualizationVectorBudgetRange;
+  vectorCapacity: import("@/kernel/visualization/visualizationVectorCapacity").VisualizationVectorCapacityDescriptor | null;
+  visualizationRevision: string | number | null;
   vectorTopologyHash: string | null;
 }) {
   const colorbarComponent = vectorColorModeFieldMetaComponent(
@@ -947,10 +954,16 @@ export function VisualizationVectorsSection({
     scopeId: fieldMetaScopeQuery.scope_id,
     scopeKind: viewportRenderedRangeScopeKind(fieldMetaScopeQuery.scope_kind),
   });
+  const vectorBudgetMax = vectorBudgetRange.exact
+    ? Math.min(vectorBudgetRange.max, DEFAULT_VISUALIZATION_VECTOR_SCENE_CAP)
+    : 0;
+  const vectorBudgetUnavailable =
+    !vectorBudgetRange.exact || availableVectorAnchorCount(vectorBudgetRange) === null;
   const vectorBudgetValue = Math.max(
     vectorBudgetRange.min,
-    Math.min(vectorBudgetRange.max, settings.vectorBudget),
+    Math.min(vectorBudgetMax, settings.vectorBudget),
   );
+  const vectorScope = resolveVisualizationVectorScopeForTarget(target);
   const vectorsDisabled = pending || sectionDisabled("vectors");
 
   const vectorsSummary = settings.geometryScope
@@ -1005,7 +1018,7 @@ export function VisualizationVectorsSection({
             aria-label="Add vector colorbar to viewport"
             checked={settings.viewportColorbarVisible}
             disabled={vectorsDisabled}
-            onCheckedChange={(checked) =>
+            onCheckedChange={(checked: boolean) =>
               void patch({ viewportColorbarVisible: checked })
             }
           />
@@ -1026,9 +1039,9 @@ export function VisualizationVectorsSection({
       </div>
       <div className="fm-viz-vector-subgroup">
         <NumberField
-          disabled={vectorsDisabled}
+          disabled={vectorsDisabled || vectorBudgetUnavailable}
           label="Arrow budget"
-          max={vectorBudgetRange.max}
+          max={vectorBudgetMax}
           min={vectorBudgetRange.min}
           step={vectorBudgetRange.step}
           value={vectorBudgetValue}
@@ -1037,9 +1050,18 @@ export function VisualizationVectorsSection({
       </div>
       <div className="fm-viz-vector-accounting">
         <VisualizationVectorAccountingRows
-          availableNodeCount={vectorBudgetRange.availableNodeCount}
+          anchorKind={vectorBudgetRange.anchorKind}
+          availableAnchorCount={availableVectorAnchorCount(vectorBudgetRange)}
+          capacity={vectorCapacity}
           currentTopologyHash={vectorTopologyHash}
           exact={vectorBudgetRange.exact}
+          expectedGeneration={vectorBudgetRange.generation}
+          expectedQuantityId={settings.activeQuantityId}
+          expectedScopeId={vectorScope.scopeId}
+          expectedScopeKind={vectorScope.scopeKind}
+          expectedVisualizationRevision={visualizationRevision}
+          requestedBudget={settings.vectorBudget}
+          targetId={target.id}
           targetKind={targetKind}
         />
       </div>
@@ -1296,10 +1318,10 @@ export function NumberField({
         min={min}
         step={step}
         value={[displayValue]}
-        onValueChange={([nextValue]) => {
+        onValueChange={([nextValue]: number[]) => {
           if (nextValue !== undefined) setDraftOverride(nextValue);
         }}
-        onValueCommit={([nextValue]) => {
+        onValueCommit={([nextValue]: number[]) => {
           setDraftOverride(null);
           if (nextValue !== undefined) onChange(nextValue);
         }}

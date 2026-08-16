@@ -15,7 +15,8 @@ use crate::schemas::visualization_state::{
     default_planar_visualization_state, AirboxLayerPatch, AirboxLayerState, BasicLayerPatch,
     BasicLayerState, ClipAxis, ClipVisualizationState, DomainVisualizationState,
     FdmVisualizationState, FemTopologyMode, FemVisualizationState, FerromagnetVisibilityMode,
-    PlanarColorRangeMode, PlanarVisualizationPatch, PlanarVisualizationState, SamplingProfile,
+    DefaultPlanarOperatorState, PlanarColorRangeMode, PlanarSourceSelectionState,
+    PlanarVisualizationPatch, PlanarVisualizationState, SamplingProfile,
     SamplingVisualizationState, SliceAirboxRenderMode, SliceRenderMode, SliceVisualizationMode,
     SliceVisualizationState, SurfaceColorSource, SurfaceFieldProjectionMode,
     TrimAxisVisualizationAxes, TrimAxisVisualizationAxesPatch, TrimAxisVisualizationPatch,
@@ -169,6 +170,7 @@ pub async fn replace_visualization_state(
 ) -> Result<Json<VisualizationStateResource>, ApiError> {
     validate_camera_state(&replacement.camera)?;
     validate_planar_visualization_state(&replacement.planar)?;
+    validate_planar_source_selection(&state, &replacement.planar.source).await?;
     let display_replacement = visualization_state_to_display_selection(&replacement);
     apply_display_replace(state.clone(), display_replacement).await?;
     {
@@ -229,13 +231,23 @@ pub async fn patch_visualization_state(
     Json(update): Json<VisualizationStatePatch>,
 ) -> Result<Json<VisualizationStateResource>, ApiError> {
     validate_visualization_state_patch(&update)?;
+    if let Some(planar) = &update.planar {
+        if let Some(source) = &planar.source {
+            validate_planar_source_selection(&state, source).await?;
+        }
+    }
     let display_patch = visualization_patch_to_display_patch(&update);
     let display_revision = {
         let mut selection = state.current_display_selection.write().await;
         let mut presentation = state.current_display_presentation.write().await;
-        apply_display_patch_to_state(&mut selection, &mut presentation, display_patch);
-        apply_visualization_presentation_patch(&mut presentation, &update)?;
-        selection.revision
+        let mut next_selection = selection.clone();
+        let mut next_presentation = presentation.clone();
+        apply_display_patch_to_state(&mut next_selection, &mut next_presentation, display_patch);
+        apply_visualization_presentation_patch(&mut next_presentation, &update)?;
+        let revision = next_selection.revision;
+        *selection = next_selection;
+        *presentation = next_presentation;
+        revision
     };
     emit_display_realtime_change(&state, display_revision).await?;
     let selection = state.current_display_selection.read().await;
@@ -505,6 +517,35 @@ fn validate_visualization_state_patch(update: &VisualizationStatePatch) -> Resul
 }
 
 fn validate_planar_visualization_patch(patch: &PlanarVisualizationPatch) -> Result<(), ApiError> {
+    if let Some(default_slice) = &patch.default_slice {
+        if !default_slice.position_fraction.is_finite()
+            || !(0.0..=1.0).contains(&default_slice.position_fraction)
+        {
+            return Err(ApiError::bad_request(
+                "planar.default_slice.position_fraction must be finite and between 0 and 1",
+            ));
+        }
+        if let DefaultPlanarOperatorState::SlabAverage { thickness_m } = &default_slice.operator
+        {
+            if !thickness_m.is_finite() || *thickness_m <= 0.0 {
+                return Err(ApiError::bad_request(
+                    "planar.default_slice.operator.thickness_m must be finite and greater than zero",
+                ));
+            }
+        }
+    }
+    if let Some(source) = &patch.source {
+        if let crate::schemas::visualization_state::PlanarSourceSelectionState::Monitor {
+            monitor_id,
+        } = source
+        {
+            if monitor_id.trim().is_empty() {
+                return Err(ApiError::bad_request(
+                    "planar.source.monitor_id must not be empty",
+                ));
+            }
+        }
+    }
     if let Some(resolution) = &patch.resolution {
         if !(16..=2048).contains(&resolution.width) || !(16..=2048).contains(&resolution.height) {
             return Err(ApiError::bad_request(
@@ -558,18 +599,54 @@ fn validate_planar_visualization_patch(patch: &PlanarVisualizationPatch) -> Resu
 
 fn validate_planar_visualization_state(state: &PlanarVisualizationState) -> Result<(), ApiError> {
     validate_planar_visualization_patch(&PlanarVisualizationPatch {
+        source: Some(state.source.clone()),
+        default_slice: Some(state.default_slice.clone()),
         range: Some(state.range.clone()),
         raster_opacity: Some(state.raster_opacity),
         ..PlanarVisualizationPatch::default()
     })
 }
 
+async fn validate_planar_source_selection(
+    state: &Arc<AppState>,
+    source: &PlanarSourceSelectionState,
+) -> Result<(), ApiError> {
+    let PlanarSourceSelectionState::Monitor { monitor_id } = source else {
+        return Ok(());
+    };
+    let guard = state.current_live_state.read().await;
+    // A presentation patch may arrive while a session is being restored and
+    // before its scene document is published. In that state the typed choice
+    // is persisted and the data-plane resolver will validate it once a scene
+    // exists. When a scene is available, stale monitor IDs fail closed here.
+    let Some(scene) = guard
+        .as_ref()
+        .and_then(|snapshot| snapshot.scene_document.as_ref())
+    else {
+        return Ok(());
+    };
+    let exists = scene
+        .monitors
+        .planar
+        .iter()
+        .any(|monitor| monitor.id == *monitor_id);
+    if !exists {
+        return Err(ApiError::not_found(format!(
+            "planar_source_monitor_not_found: monitor '{monitor_id}' does not exist in the current scene"
+        )));
+    }
+    Ok(())
+}
+
 fn apply_planar_visualization_patch(
     state: &mut PlanarVisualizationState,
     patch: &PlanarVisualizationPatch,
 ) {
-    if let Some(active_monitor_id) = &patch.active_monitor_id {
-        state.active_monitor_id = active_monitor_id.clone();
+    if let Some(source) = &patch.source {
+        state.source = source.clone();
+    }
+    if let Some(default_slice) = &patch.default_slice {
+        state.default_slice = default_slice.clone();
     }
     if let Some(view_scope) = &patch.view_scope {
         state.view_scope = view_scope.clone();
@@ -1812,7 +1889,7 @@ pub(crate) fn build_visualization_state_response(
 
     VisualizationStateResource {
         revision: selection.revision,
-        schema_version: 8,
+        schema_version: 9,
         quantity: crate::schemas::visualization_state::QuantityVisualizationState {
             active_quantity_id: quantity.active_quantity_id.clone(),
             field_component: quantity.field_component,

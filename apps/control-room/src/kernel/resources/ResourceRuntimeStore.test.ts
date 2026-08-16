@@ -688,6 +688,51 @@ describe("ResourceRuntimeStore", () => {
     }
   });
 
+  it("aborts an active load when the bounded deadline expires", async () => {
+    vi.useFakeTimers();
+    try {
+      const store = new ResourceRuntimeStore<string>();
+      const pending = deferred<string>();
+      const signals: AbortSignal[] = [];
+      const load = vi.fn(({ signal }: { signal: AbortSignal }) => {
+        signals.push(signal);
+        signal.addEventListener(
+          "abort",
+          () => pending.reject(new DOMException("deadline", "AbortError")),
+          { once: true },
+        );
+        return pending.promise;
+      });
+
+      const result = store.ensureLoad({
+        externalRevision: null,
+        load,
+        resourceKey: "data/fields/H_demag/active-deadline",
+        retryPolicy: {
+          deadlineMs: 20,
+          maxAttempts: 3,
+          retryableReasonCodes: ["field_pending"],
+        },
+      });
+
+      expect(signals[0]?.aborted).toBe(false);
+      await vi.advanceTimersByTimeAsync(19);
+      expect(signals[0]?.aborted).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      await expect(result).resolves.toMatchObject({
+        error: expect.objectContaining({
+          message: "Resource load deadline exceeded",
+          name: "TimeoutError",
+        }),
+        status: "error",
+      });
+      expect(signals[0]?.aborted).toBe(true);
+      expect(load).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("preserves partial data without retrying a partial 409 failure", async () => {
     vi.useFakeTimers();
     try {

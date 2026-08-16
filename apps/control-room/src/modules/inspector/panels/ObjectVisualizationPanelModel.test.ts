@@ -46,8 +46,11 @@ import {
   resolveRegionVisualizationCarrier,
   scalarColorPalettePatch,
   resolveVisualizationVectorBudgetRange,
+  visualizationOverridesForTargetReset,
   restoreVisualizationAppliedBaseline,
   resolveVisualizationVectorAccounting,
+  resolveVisualizationVectorEffectiveBudget,
+  resolveVisualizationVectorScopeForTarget,
   shouldShowPrimitiveDisplayToggle,
   shouldLoadObjectVisualizationFieldCatalog,
   shouldShowSurfaceFieldColorbar,
@@ -75,12 +78,196 @@ import {
   resolveObjectVisualizationResourceGates,
   resolveObjectVisualizationTargetForLane,
 } from "./ObjectVisualizationPanelModel";
+import {
+  resolveVisualizationVectorCapacityDescriptor,
+  type VisualizationVectorCapacitySource,
+} from "@/kernel/visualization/visualizationVectorCapacity";
 import { resolveVisualizationTargetFromSelection } from "@/kernel/visualization/ObjectVisualizationController";
 import { OBJECT_VISUALIZATION_TARGET_KINDS } from "./ObjectVisualizationHelpers";
 
 type MeshPart = NonNullable<MeshSharedDomainManifestResource["mesh_parts"]>[number];
 
 describe("ObjectVisualizationPanelModel", () => {
+  it("uses target capacity for FDM accounting and exposes requested/effective budgets", () => {
+    const source: VisualizationVectorCapacitySource = {
+      activeCellCount: 1_600,
+      carrierId: "fdm:grid-7",
+      domainGenerationId: "generation-7",
+      gridFingerprint: "grid-7",
+      inactiveCellCount: 198_080,
+      kind: "fdm",
+      realizedRegionIds: null,
+      revision: "mesh-3:membership-4",
+      shape: [199_680, 1, 1],
+    };
+    const capacity = resolveVisualizationVectorCapacityDescriptor({
+      geometryScope: "full",
+      source,
+      target: { id: "airbox", kind: "airbox" },
+    });
+
+    expect(capacity).toMatchObject({
+      anchorKind: "cell",
+      fullCount: 198_080,
+      targetId: "airbox",
+    });
+    expect(
+      resolveVisualizationVectorEffectiveBudget({
+        availableAnchorCount: capacity?.fullCount ?? null,
+        requestedBudget: 50_000,
+        sceneCap: 1_200,
+      }),
+    ).toBe(1_200);
+  });
+
+  it("keeps accounting stale when the current target identity changes", () => {
+    const capacity = {
+      anchorKind: "cell" as const,
+      carrierId: "fdm:grid-7",
+      exact: true,
+      fullCount: 198_080,
+      generation: "generation-7",
+      revision: "visualization-7",
+      surfaceCount: 4_000,
+      targetId: "airbox",
+      topologyHash: "grid-7",
+    };
+    const snapshot = {
+      capturedAtMs: 10,
+      carriers: [{
+        payload: {
+          component: "full",
+          pointCount: 120,
+          quantityId: "m",
+          scopeId: null,
+          scopeKind: "airbox",
+        },
+        request: { resourceKey: "field-key" },
+        revisions: {
+          domainGenerationId: "generation-7",
+          meshTopologyHash: "grid-7",
+          visualizationRevision: "visualization-7",
+        },
+        render: {
+          requestedFieldBufferId: "field-buffer",
+          vectors: { buildKey: "vector-build" },
+          adoption: {
+            vector: {
+              adoptedFieldBufferId: "field-buffer",
+              adoptedResourceKey: "field-key",
+              adoptedVectorBuildKey: "vector-build",
+              adoptedVectorItemCount: 120,
+            },
+          },
+        },
+      }],
+      target: { id: "airbox", kind: "airbox" },
+    } as unknown as VisualizationDebugSnapshot;
+
+    expect(resolveVisualizationVectorAccounting({
+      capacity,
+      currentTargetId: "airbox:new-generation",
+      expectedGeneration: "generation-7",
+      expectedQuantityId: "m",
+      expectedScopeKind: "airbox",
+      effectiveAllocation: 120,
+      requestedBudget: 120,
+      snapshots: [snapshot],
+    })).toMatchObject({
+      adoptedGlyphCount: null,
+      decodedSampleCount: null,
+      status: "stale",
+    });
+  });
+
+  it("uses the renderer-published allocation instead of a local scene-cap clamp", () => {
+    const snapshot = {
+      capturedAtMs: 10,
+      carriers: [{
+        payload: {
+          component: "full",
+          pointCount: 600,
+          quantityId: "m",
+          scopeId: null,
+          scopeKind: "full",
+        },
+        request: { resourceKey: "field-key" },
+        revisions: {
+          domainGenerationId: "generation-7",
+          meshTopologyHash: "grid-7",
+          visualizationRevision: "visualization-7",
+        },
+        render: {
+          requestedFieldBufferId: "field-buffer",
+          vectors: { buildKey: "vector-build", segmentCount: 600 },
+          adoption: {
+            vector: {
+              adoptedFieldBufferId: "field-buffer",
+              adoptedResourceKey: "field-key",
+              adoptedVectorBuildKey: "vector-build",
+              adoptedVectorItemCount: 600,
+            },
+          },
+        },
+      }],
+      target: { id: "fdm-domain", kind: "object" },
+    } as unknown as VisualizationDebugSnapshot;
+
+    expect(resolveVisualizationVectorAccounting({
+      availableAnchorCount: 10_000,
+      anchorKind: "cell",
+      currentTargetId: "fdm-domain",
+      expectedQuantityId: "m",
+      expectedScopeKind: "full",
+      effectiveAllocation: 1_200,
+      requestedBudget: 1_200,
+      snapshots: [snapshot],
+    })).toMatchObject({
+      allocatedBudget: 600,
+      adoptedGlyphCount: 600,
+      decodedSampleCount: 600,
+      status: "ready",
+    });
+  });
+
+  it("does not leave a non-Airbox target in a permanent waiting state", () => {
+    const accounting = resolveVisualizationVectorAccounting({
+      availableAnchorCount: 18,
+      anchorKind: "node",
+      currentTargetId: "object:film",
+      effectiveAllocation: 12,
+      requestedBudget: 12,
+      snapshots: [],
+    });
+
+    expect(accounting.status).toBe("unavailable");
+    expect(accounting.decodedSampleCount).toBeNull();
+    expect(accounting.adoptedGlyphCount).toBeNull();
+  });
+
+  it("maps only unambiguous target scopes for vector accounting", () => {
+    expect(
+      resolveVisualizationVectorScopeForTarget({
+        id: "fdm-domain",
+        kind: "fdm-domain",
+      }),
+    ).toEqual({ scopeId: null, scopeKind: "full" });
+    expect(
+      resolveVisualizationVectorScopeForTarget({ id: "airbox", kind: "airbox" }),
+    ).toEqual({ scopeId: null, scopeKind: "airbox" });
+    expect(
+      resolveVisualizationVectorScopeForTarget({
+        id: "fdm-native-layer:layer%3Atop",
+        kind: "fdm-native-layer",
+      }),
+    ).toEqual({ scopeId: "layer:top", scopeKind: "layer" });
+    expect(
+      resolveVisualizationVectorScopeForTarget({
+        id: "object:film",
+        kind: "object",
+      }),
+    ).toEqual({ scopeId: null, scopeKind: null });
+  });
   it("uses canonical visualization data for reset baselines", () => {
     const canonical = {
       overrides: [{ scope: "object", scope_id: "object:film" }],
@@ -346,6 +533,53 @@ describe("ObjectVisualizationPanelModel", () => {
     });
   });
 
+  it("builds target reset from the optimistic override snapshot", () => {
+    const target = { id: "object:film", kind: "object" as const };
+    const optimistic = {
+      overrides: [
+        { scope: "object", scope_id: "film", visible: false },
+        { scope: "object", scope_id: "other", visible: false },
+      ],
+    } as VisualizationStateResource;
+
+    expect(visualizationOverridesForTargetReset(optimistic, target)).toEqual([
+      { scope: "object", scope_id: "other", visible: false },
+    ]);
+  });
+
+  it("restores one target baseline without dropping an optimistic sibling target", () => {
+    const target = { id: "object:film", kind: "object" as const };
+    const visualization = {
+      clearTarget: vi.fn(),
+      patchTarget: vi.fn(),
+      patchViewportPreferences: vi.fn(),
+    };
+    const queuePatch = vi.fn();
+
+    restoreVisualizationAppliedBaseline({
+      baseline: {
+        overrides: [{ scope: "object", scope_id: "film", visible: true }],
+        targets: [{ preferences: null, settings: DEFAULT_OBJECT_VISUALIZATION, target }],
+      },
+      currentOverrides: [
+        { scope: "object", scope_id: "film", visible: false },
+        { scope: "object", scope_id: "other", visible: false },
+      ],
+      queuePatch,
+      visualization,
+    });
+
+    expect(queuePatch).toHaveBeenCalledWith(
+      {
+        overrides: [
+          { scope: "object", scope_id: "other", visible: false },
+          { scope: "object", scope_id: "film", visible: true },
+        ],
+      },
+      ["object:film"],
+    );
+  });
+
   it("restores an FDM region baseline locally", () => {
     const target = { id: "region:film:core", kind: "region" as const };
     const visualization = {
@@ -398,9 +632,10 @@ describe("ObjectVisualizationPanelModel", () => {
       visualization,
     });
 
-    expect(queuePatch).toHaveBeenCalledWith({
-      overrides: [{ scope: "object", scope_id: "sample", visible: true }],
-    });
+    expect(queuePatch).toHaveBeenCalledWith(
+      { overrides: [{ scope: "object", scope_id: "sample", visible: true }] },
+      ["object:sample"],
+    );
     expect(visualization.clearTarget).toHaveBeenCalledWith(target);
     expect(visualization.patchTarget).not.toHaveBeenCalled();
   });
@@ -2604,11 +2839,61 @@ describe("ObjectVisualizationPanelModel", () => {
         },
       }),
     ).toEqual({
-      availableNodeCount: 4096,
+      anchorKind: null,
+      availableAnchorCount: null,
+      availableNodeCount: 0,
       exact: false,
-      max: 4096,
+      max: 0,
       min: 0,
       step: 1,
+    });
+  });
+
+  it("caps a known target range at the renderer policy while retaining full capacity", () => {
+    const range = resolveVisualizationVectorBudgetRange({
+      capacity: {
+        anchorKind: "cell",
+        carrierId: "fdm:grid",
+        exact: true,
+        fullCount: 50_000,
+        generation: "generation-1",
+        revision: 1,
+        surfaceCount: 2_000,
+        targetId: "airbox",
+        topologyHash: "grid-1",
+      },
+      target: { id: "airbox", kind: "airbox" },
+    });
+
+    expect(range).toMatchObject({
+      availableAnchorCount: 50_000,
+      max: 2_048,
+      exact: true,
+    });
+  });
+
+  it("does not expose an inexact capacity through accounting", () => {
+    const accounting = resolveVisualizationVectorAccounting({
+      availableAnchorCount: null,
+      capacity: {
+        anchorKind: "node",
+        carrierId: "mesh:unknown",
+        exact: false,
+        fullCount: 200,
+        generation: null,
+        revision: null,
+        surfaceCount: 100,
+        targetId: "object:film",
+        topologyHash: null,
+      },
+      currentTargetId: "object:film",
+      requestedBudget: 20,
+      snapshots: [],
+    });
+
+    expect(accounting).toMatchObject({
+      availableAnchorCount: null,
+      status: "unavailable",
     });
   });
 

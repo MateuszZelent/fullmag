@@ -64,6 +64,7 @@ interface ResourceRuntimeEntry<TData> {
   retryExternalRevision: ResourceRevision | null;
   retryRequest: ResourceRuntimeLoadRequest<TData> | null;
   retryTimer: ReturnType<typeof setTimeout> | null;
+  deadlineTimer: ReturnType<typeof setTimeout> | null;
   sequence: number;
   snapshot: ResourceRuntimeSnapshot<TData>;
 }
@@ -106,6 +107,7 @@ function createEntry<TData>(): ResourceRuntimeEntry<TData> {
     retryExternalRevision: null,
     retryRequest: null,
     retryTimer: null,
+    deadlineTimer: null,
     sequence: 0,
     snapshot: createInitialSnapshot<TData>(),
   };
@@ -306,6 +308,9 @@ export class ResourceRuntimeStore<TData = unknown> {
       if (entry.retryTimer) {
         clearTimeout(entry.retryTimer);
       }
+      if (entry.deadlineTimer) {
+        clearTimeout(entry.deadlineTimer);
+      }
     }
     this.entries.clear();
     this.pausePredicates.clear();
@@ -337,6 +342,7 @@ export class ResourceRuntimeStore<TData = unknown> {
     entry.lastSettledAtMs = Date.now();
     entry.pendingRequest = null;
     entry.pendingTimer = null;
+    this.clearDeadlineTimer(entry);
     this.clearRetryState(entry);
     entry.snapshot = {
       ...markResourceReady(entry.snapshot, data, revision),
@@ -357,6 +363,7 @@ export class ResourceRuntimeStore<TData = unknown> {
       clearTimeout(entry.pendingTimer);
     }
     this.clearRetryState(entry);
+    this.clearDeadlineTimer(entry);
     entry.controller = null;
     entry.inflight = null;
     entry.inflightExternalRevision = null;
@@ -498,6 +505,7 @@ export class ResourceRuntimeStore<TData = unknown> {
 
     if (!force && entry.inflight && abortStaleInflight) {
       entry.sequence += 1;
+      this.clearDeadlineTimer(entry);
       entry.controller?.abort();
       entry.controller = null;
       entry.inflight = null;
@@ -523,6 +531,7 @@ export class ResourceRuntimeStore<TData = unknown> {
       return entry.inflight;
     }
 
+    this.clearDeadlineTimer(entry);
     entry.controller?.abort();
     if (entry.pendingTimer) {
       clearTimeout(entry.pendingTimer);
@@ -535,7 +544,10 @@ export class ResourceRuntimeStore<TData = unknown> {
     entry.sequence = sequence;
     entry.inflightExternalRevision = externalRevision;
     if (retryPolicy) {
-      if (entry.retryExternalRevision !== externalRevision) {
+      if (
+        entry.retryDeadlineAtMs <= 0 ||
+        entry.retryExternalRevision !== externalRevision
+      ) {
         entry.retryAttempt = 0;
         entry.retryDeadlineAtMs =
           Date.now() + boundedPositiveNumber(retryPolicy.deadlineMs, 5_000);
@@ -548,6 +560,29 @@ export class ResourceRuntimeStore<TData = unknown> {
       settledResourceKey: entry.snapshot.settledResourceKey,
     };
     this.notify(entry);
+
+    const deadlineAtMs = retryPolicy ? entry.retryDeadlineAtMs : 0;
+    let deadlineTimer: ReturnType<typeof setTimeout> | null = null;
+    if (deadlineAtMs > 0) {
+      const remainingMs = Math.max(0, deadlineAtMs - Date.now());
+      deadlineTimer = setTimeout(() => {
+        if (entry.sequence !== sequence || entry.controller !== controller) {
+          return;
+        }
+        entry.deadlineTimer = null;
+        const timeoutError = new Error("Resource load deadline exceeded");
+        timeoutError.name = "TimeoutError";
+        entry.snapshot = {
+          ...markResourceError(entry.snapshot, timeoutError),
+          settledExternalRevision: externalRevision,
+          settledResourceKey: resourceKey,
+        };
+        this.clearRetryState(entry);
+        controller.abort();
+        this.notify(entry);
+      }, remainingMs);
+      entry.deadlineTimer = deadlineTimer;
+    }
 
     const pending = load({ signal: controller.signal })
       .then((data) => {
@@ -608,6 +643,12 @@ export class ResourceRuntimeStore<TData = unknown> {
         return entry.snapshot;
       })
       .finally(() => {
+        if (deadlineTimer) {
+          clearTimeout(deadlineTimer);
+          if (entry.deadlineTimer === deadlineTimer) {
+            entry.deadlineTimer = null;
+          }
+        }
         if (entry.sequence !== sequence) return;
         const pendingRequest = entry.pendingRequest;
         entry.pendingRequest = null;
@@ -685,6 +726,7 @@ export class ResourceRuntimeStore<TData = unknown> {
     entry.inflightExternalRevision = null;
     entry.pendingRequest = null;
     entry.pendingTimer = null;
+    this.clearDeadlineTimer(entry);
     this.clearRetryState(entry);
     entry.sequence += 1;
     this.entries.delete(resourceKey);
@@ -701,6 +743,15 @@ export class ResourceRuntimeStore<TData = unknown> {
     entry.retryAttempt = 0;
     entry.retryDeadlineAtMs = 0;
     entry.retryExternalRevision = null;
+  }
+
+  private clearDeadlineTimer<TEntryData>(
+    entry: ResourceRuntimeEntry<TEntryData>,
+  ): void {
+    if (entry.deadlineTimer) {
+      clearTimeout(entry.deadlineTimer);
+    }
+    entry.deadlineTimer = null;
   }
 
   private scheduleRetry<TEntryData>(

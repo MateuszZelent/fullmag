@@ -1,13 +1,20 @@
 import {
   DATA_FIELD_VECTOR_PATH,
+  DATA_PLANAR_DEFAULT_FIELD_META_PATH,
   DATA_PLANAR_FIELD_META_PATH,
 } from "./apiPaths";
-import type { FieldVectorQuery, PlanarFieldQuery } from "./apiTypes";
+import type {
+  FieldVectorQuery,
+  PlanarFieldQuery,
+  PlanarFieldSource,
+} from "./apiTypes";
 import { resolveCanonicalQuantityId } from "./quantityIds";
 
 export interface CanonicalFieldVectorQuery {
   readonly component: string;
   readonly componentExplicit: boolean;
+  readonly expectedCarrierRevision?: string;
+  readonly expectedGenerationId?: string;
   readonly geometryScope?: string;
   readonly maxSamples?: number;
   readonly ownerObjectId?: string;
@@ -23,6 +30,8 @@ export interface CanonicalFieldVectorQuery {
 
 const FIELD_VECTOR_QUERY_ORDER = [
   "component",
+  "expected_carrier_revision",
+  "expected_generation_id",
   "geometry_scope",
   "max_samples",
   "owner_object_id",
@@ -87,6 +96,8 @@ export function canonicalFieldVectorQuery(
   return {
     component: component ?? "full",
     componentExplicit: component !== undefined,
+    expectedCarrierRevision: nonEmptyString(query.expected_carrier_revision),
+    expectedGenerationId: nonEmptyString(query.expected_generation_id),
     geometryScope: nonEmptyString(query.geometry_scope),
     maxSamples: finiteNumber(query.max_samples),
     ownerObjectId: nonEmptyString(query.owner_object_id),
@@ -106,6 +117,8 @@ export function canonicalFieldVectorQueryParams(
 ): Record<(typeof FIELD_VECTOR_QUERY_ORDER)[number], string | undefined> {
   return {
     component: query.componentExplicit ? query.component : undefined,
+    expected_carrier_revision: query.expectedCarrierRevision,
+    expected_generation_id: query.expectedGenerationId,
     geometry_scope: query.geometryScope,
     max_samples: query.maxSamples === undefined ? undefined : String(query.maxSamples),
     owner_object_id: query.ownerObjectId,
@@ -124,6 +137,8 @@ export function canonicalFieldVectorQueriesEqual(
 ): boolean {
   return (
     left.component === right.component &&
+    left.expectedCarrierRevision === right.expectedCarrierRevision &&
+    left.expectedGenerationId === right.expectedGenerationId &&
     left.geometryScope === right.geometryScope &&
     left.maxSamples === right.maxSamples &&
     left.ownerObjectId === right.ownerObjectId &&
@@ -193,6 +208,10 @@ export function parseCanonicalFieldVectorResourceKey(
   const phaseRad = url.searchParams.get("phase_rad");
   return canonicalFieldVectorQuery(quantityId, {
     component: url.searchParams.get("component") ?? undefined,
+    expected_carrier_revision:
+      url.searchParams.get("expected_carrier_revision") ?? undefined,
+    expected_generation_id:
+      url.searchParams.get("expected_generation_id") ?? undefined,
     geometry_scope: url.searchParams.get("geometry_scope") ?? undefined,
     max_samples:
       maxSamples === null || maxSamples.length === 0 ? undefined : Number(maxSamples),
@@ -214,6 +233,7 @@ const PLANAR_FIELD_QUERY_ORDER = [
   "expected_field_revision",
   "expected_mesh_revision",
   "expected_monitor_revision",
+  "expected_source_revision",
   "expected_scene_revision",
   "include_mesh",
   "quality",
@@ -259,21 +279,29 @@ export function normalizePlanarFieldQuery(
 
 export function planarFieldResourcePath(
   quantityId: string,
-  monitorId: string,
-  path: string = DATA_PLANAR_FIELD_META_PATH,
+  source: PlanarFieldSource,
+  path?: string,
 ): string {
-  return path
+  const sourcePath =
+    path ??
+    (source.kind === "default"
+      ? DATA_PLANAR_DEFAULT_FIELD_META_PATH
+      : DATA_PLANAR_FIELD_META_PATH);
+  return sourcePath
     .replace("{quantity_id}", encodeURIComponent(quantityId))
-    .replace("{monitor_id}", encodeURIComponent(monitorId));
+    .replace(
+      "{monitor_id}",
+      encodeURIComponent(source.kind === "monitor" ? source.monitorId : ""),
+    );
 }
 
 export function planarFieldResourceKey(
   quantityId: string,
-  monitorId: string,
+  source: PlanarFieldSource,
   query: PlanarFieldQuery = {},
-  path: string = DATA_PLANAR_FIELD_META_PATH,
+  path?: string,
 ): string {
-  const resolvedPath = planarFieldResourcePath(quantityId, monitorId, path);
+  const resolvedPath = planarFieldResourcePath(quantityId, source, path);
   const search = new URLSearchParams();
   const normalized = normalizePlanarFieldQuery(query);
   for (const key of PLANAR_FIELD_QUERY_ORDER) {

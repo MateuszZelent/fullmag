@@ -8,6 +8,7 @@ use axum::http::HeaderMap;
 use axum::Json;
 
 use crate::error::ApiError;
+use crate::router_v2::handlers::sessions::status::domain_generation_id;
 use crate::schemas::commands::{
     CommandResponse, RuntimeCommandIntent, RuntimeCommandTarget, SolverPolicyRequest,
     StructuredCommandRequest, FDM_GRID_REFRESH_DEFERRED_REASON,
@@ -17,7 +18,6 @@ use crate::session::effective_runtime_status_code;
 use crate::types::{
     AppState, CommandLifecycleState, SessionCommand, SessionStateResponse, TrackedCommandRecord,
 };
-use crate::router_v2::handlers::sessions::status::domain_generation_id;
 use fullmag_authoring::{
     geometry_blocks_solver_run, realize_geometry_scene, GeometryBackendTarget,
     GeometryRealizationSnapshot, SceneDocument, SceneGeometry, SceneObject,
@@ -1375,10 +1375,7 @@ fn compute_fields_materialization_requirements(
     let quantity_ids = supported_materialization_quantity_ids(snapshot, &canonical_ids);
     let generation_id = domain_generation_id(snapshot);
     let mut requirements = vec![FieldMaterializationRequirement {
-        quantity_ids: quantity_ids
-            .into_iter()
-            .map(ToString::to_string)
-            .collect(),
+        quantity_ids: quantity_ids.into_iter().map(ToString::to_string).collect(),
         scope_kind: "full".to_string(),
         scope_id: None,
         generation_id: generation_id.clone(),
@@ -1386,10 +1383,11 @@ fn compute_fields_materialization_requirements(
     }];
 
     if snapshot_is_fdm_multilayer(snapshot) {
-        let carrier_fingerprint = crate::router_v2::handlers::data::fields::load_fdm_multilayer_airbox_carrier(snapshot)
-            .ok()
-            .flatten()
-            .map(|carrier| carrier.carrier_fingerprint);
+        let carrier_fingerprint =
+            crate::router_v2::handlers::data::fields::load_fdm_multilayer_airbox_carrier(snapshot)
+                .ok()
+                .flatten()
+                .map(|carrier| carrier.carrier_fingerprint);
         requirements.push(FieldMaterializationRequirement {
             quantity_ids: vec!["H_demag".to_string()],
             scope_kind: "airbox".to_string(),
@@ -1423,7 +1421,11 @@ fn supported_materialization_quantity_ids<'a>(
         return canonical_ids
             .iter()
             .copied()
-            .filter(|quantity| supported.iter().any(|value| value.as_str() == Some(*quantity)))
+            .filter(|quantity| {
+                supported
+                    .iter()
+                    .any(|value| value.as_str() == Some(*quantity))
+            })
             .collect();
     }
 

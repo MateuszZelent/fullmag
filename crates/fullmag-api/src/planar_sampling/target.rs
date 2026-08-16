@@ -156,9 +156,11 @@ impl ResolvedSpatialTarget {
 #[derive(Debug, Clone, Serialize)]
 pub(crate) struct PlanarSampleIdentity {
     pub session_id: String,
-    pub monitor_id: String,
-    pub monitor_revision: u64,
-    pub monitor_hash: String,
+    pub source_kind: String,
+    pub source_id: Option<String>,
+    pub source_revision: u64,
+    pub source_hash: String,
+    pub domain_generation_id: String,
     pub scene_revision: u64,
     pub target_fingerprint: String,
     pub target_kind: String,
@@ -172,7 +174,7 @@ pub(crate) struct PlanarSampleIdentity {
     pub field_generation: Option<String>,
     pub field_content_fingerprint: Option<String>,
     pub carrier_revision: u64,
-    pub source_kind: String,
+    pub field_source_kind: String,
     pub source_backend: Option<String>,
     pub source_device: Option<String>,
     pub source_precision: Option<String>,
@@ -185,7 +187,7 @@ pub(crate) struct PlanarSampleIdentity {
 impl PlanarSampleIdentity {
     pub(crate) fn cache_key(&self) -> String {
         let bytes = serde_json::to_vec(self).expect("planar sample identity is serializable");
-        format!("planar-sample-v2:{:x}", Sha256::digest(bytes))
+        format!("planar-sample-v3:{:x}", Sha256::digest(bytes))
     }
 }
 

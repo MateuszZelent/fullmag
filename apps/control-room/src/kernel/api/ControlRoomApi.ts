@@ -51,6 +51,13 @@ import {
   DATA_PLANAR_FIELD_RENDER_PNG_PATH,
   DATA_PLANAR_FIELD_SCALAR_PATH,
   DATA_PLANAR_FIELD_VECTORS_PATH,
+  DATA_PLANAR_DEFAULT_FIELD_EMPTY_MASK_PATH,
+  DATA_PLANAR_DEFAULT_FIELD_MESH_OVERLAY_PATH,
+  DATA_PLANAR_DEFAULT_FIELD_META_PATH,
+  DATA_PLANAR_DEFAULT_FIELD_PROBE_PATH,
+  DATA_PLANAR_DEFAULT_FIELD_RENDER_PNG_PATH,
+  DATA_PLANAR_DEFAULT_FIELD_SCALAR_PATH,
+  DATA_PLANAR_DEFAULT_FIELD_VECTORS_PATH,
   DATA_FIELD_VECTOR_PATH,
   DATA_MESH_REGION_MEMBERSHIP_PATH,
   DATA_MESH_REGION_MEMBERSHIPS_PATH,
@@ -215,6 +222,7 @@ import type {
   FieldCatalogResource,
   QuantityCatalogResource,
   FieldVectorIdentityIssue,
+  FieldVectorPendingResponse,
   FieldVectorResponseMetadata,
   FieldMetaResource,
   FieldMetaQuery,
@@ -230,6 +238,7 @@ import type {
   PlanarFieldProbeQuery,
   PlanarFieldProbeResource,
   PlanarFieldQuery,
+  PlanarFieldSource,
   PlanarMonitorCollectionResource,
   PlanarMonitorCreateRequest,
   PlanarMonitorDeleteRequest,
@@ -568,6 +577,20 @@ type BinaryOpenApiTransportResult = {
   error?: unknown;
   response: Response;
 };
+
+function planarRequestSpec(
+  source: PlanarFieldSource,
+  quantityId: string,
+  monitorPath: OpenApiV2Path,
+  defaultPath: OpenApiV2Path,
+): { path: OpenApiV2Path; pathParams: PathParams } {
+  return source.kind === "default"
+    ? { path: defaultPath, pathParams: { quantity_id: quantityId } }
+    : {
+        path: monitorPath,
+        pathParams: { monitor_id: source.monitorId, quantity_id: quantityId },
+      };
+}
 
 export interface AuthoringWriteOptions extends RequestOptions {
   baseRevision?: number;
@@ -1066,92 +1089,133 @@ export class ControlRoomApi {
       planar: {
         meta: (
           quantityId: string,
-          monitorId: string,
+          source: PlanarFieldSource,
           query: PlanarFieldQuery = {},
           options?: RequestOptions,
-        ) =>
-          this.requestJson<PlanarFieldMetaResource>(
+        ) => {
+          const request = planarRequestSpec(
+            source,
+            quantityId,
             DATA_PLANAR_FIELD_META_PATH,
-            options,
-            {
-              path: { monitor_id: monitorId, quantity_id: quantityId },
-              query,
-            },
-          ),
+            DATA_PLANAR_DEFAULT_FIELD_META_PATH,
+          );
+          return this.requestJson<PlanarFieldMetaResource>(request.path, options, {
+            path: request.pathParams,
+            query,
+          });
+        },
         scalar: (
           quantityId: string,
-          monitorId: string,
+          source: PlanarFieldSource,
           query: PlanarFieldQuery = {},
           options?: BinaryRequestOptions,
-        ) =>
-          this.requestBinaryBytes(
+        ) => {
+          const request = planarRequestSpec(
+            source,
+            quantityId,
             DATA_PLANAR_FIELD_SCALAR_PATH,
+            DATA_PLANAR_DEFAULT_FIELD_SCALAR_PATH,
+          );
+          return this.requestBinaryBytes(
+            request.path,
             options,
-            { monitor_id: monitorId, quantity_id: quantityId },
+            request.pathParams,
             query,
-          ),
+          );
+        },
         vectors: (
           quantityId: string,
-          monitorId: string,
+          source: PlanarFieldSource,
           query: PlanarFieldQuery = {},
           options?: BinaryRequestOptions,
-        ) =>
-          this.requestBinaryBytes(
+        ) => {
+          const request = planarRequestSpec(
+            source,
+            quantityId,
             DATA_PLANAR_FIELD_VECTORS_PATH,
+            DATA_PLANAR_DEFAULT_FIELD_VECTORS_PATH,
+          );
+          return this.requestBinaryBytes(
+            request.path,
             options,
-            { monitor_id: monitorId, quantity_id: quantityId },
+            request.pathParams,
             query,
-          ),
+          );
+        },
         emptyMask: (
           quantityId: string,
-          monitorId: string,
+          source: PlanarFieldSource,
           query: PlanarFieldQuery = {},
           options?: BinaryRequestOptions,
-        ) =>
-          this.requestBinaryBytes(
+        ) => {
+          const request = planarRequestSpec(
+            source,
+            quantityId,
             DATA_PLANAR_FIELD_EMPTY_MASK_PATH,
+            DATA_PLANAR_DEFAULT_FIELD_EMPTY_MASK_PATH,
+          );
+          return this.requestBinaryBytes(
+            request.path,
             options,
-            { monitor_id: monitorId, quantity_id: quantityId },
+            request.pathParams,
             query,
-          ),
+          );
+        },
         meshOverlay: (
           quantityId: string,
-          monitorId: string,
+          source: PlanarFieldSource,
           query: PlanarFieldQuery = {},
           options?: BinaryRequestOptions,
-        ) =>
-          this.requestBinaryBytes(
+        ) => {
+          const request = planarRequestSpec(
+            source,
+            quantityId,
             DATA_PLANAR_FIELD_MESH_OVERLAY_PATH,
+            DATA_PLANAR_DEFAULT_FIELD_MESH_OVERLAY_PATH,
+          );
+          return this.requestBinaryBytes(
+            request.path,
             options,
-            { monitor_id: monitorId, quantity_id: quantityId },
+            request.pathParams,
             query,
-          ),
+          );
+        },
         probe: (
           quantityId: string,
-          monitorId: string,
+          source: PlanarFieldSource,
           query: PlanarFieldProbeQuery,
           options?: RequestOptions,
-        ) =>
-          this.requestJson<PlanarFieldProbeResource>(
+        ) => {
+          const request = planarRequestSpec(
+            source,
+            quantityId,
             DATA_PLANAR_FIELD_PROBE_PATH,
-            options,
-            {
-              path: { monitor_id: monitorId, quantity_id: quantityId },
-              query,
-            },
-          ),
+            DATA_PLANAR_DEFAULT_FIELD_PROBE_PATH,
+          );
+          return this.requestJson<PlanarFieldProbeResource>(request.path, options, {
+            path: request.pathParams,
+            query,
+          });
+        },
         renderPng: (
           quantityId: string,
-          monitorId: string,
+          source: PlanarFieldSource,
           query: PlanarFieldQuery = {},
           options?: BinaryRequestOptions,
-        ) =>
-          this.requestBinaryBytes(
+        ) => {
+          const request = planarRequestSpec(
+            source,
+            quantityId,
             DATA_PLANAR_FIELD_RENDER_PNG_PATH,
+            DATA_PLANAR_DEFAULT_FIELD_RENDER_PNG_PATH,
+          );
+          return this.requestBinaryBytes(
+            request.path,
             options,
-            { monitor_id: monitorId, quantity_id: quantityId },
+            request.pathParams,
             query,
-          ),
+          );
+        },
       },
     },
     quantities: {
@@ -2740,6 +2804,15 @@ export class ControlRoomApi {
     options: BinaryRequestOptions = {},
   ): Promise<BinaryResourceResult<DecodedFieldVector, FieldVectorResponseMetadata>> {
     const result = await this.requestFieldVector(path, pathParams, query, options);
+    if (result.status === "pending") {
+      return this.retryFieldVectorUntilReady(
+        path,
+        pathParams,
+        query,
+        options,
+        result,
+      );
+    }
     if (result.status !== "not-applicable") {
       return result;
     }
@@ -2748,11 +2821,11 @@ export class ControlRoomApi {
     }
     await this.materializeFieldsForQuantity(quantityId, options);
     return this.retryFieldVectorUntilReady(
-      quantityId,
       path,
       pathParams,
       query,
       options,
+      result,
     );
   }
 
@@ -2845,30 +2918,34 @@ export class ControlRoomApi {
   }
 
   private async retryFieldVectorUntilReady(
-    quantityId: string,
     path: OpenApiV2Path,
     pathParams: PathParams,
     query: QueryParams,
     options: BinaryRequestOptions,
+    initialResult: BinaryResourceResult<DecodedFieldVector, FieldVectorResponseMetadata>,
   ): Promise<BinaryResourceResult<DecodedFieldVector, FieldVectorResponseMetadata>> {
     const deadline = Date.now() + FIELD_MATERIALIZATION_TIMEOUT_MS;
-    let lastResult: BinaryResourceResult<DecodedFieldVector, FieldVectorResponseMetadata> | null = null;
-    while (Date.now() <= deadline) {
+    let lastResult = initialResult;
+    while (Date.now() < deadline) {
       throwIfAborted(options.signal);
-      await delay(FIELD_MATERIALIZATION_RETRY_MS, options.signal);
+      const retryDelay =
+        lastResult.status === "pending"
+          ? lastResult.retry_after_ms
+          : FIELD_MATERIALIZATION_RETRY_MS;
+      await delay(
+        Math.min(Math.max(1, retryDelay), deadline - Date.now()),
+        options.signal,
+      );
+      if (Date.now() >= deadline) {
+        return lastResult;
+      }
       const result = await this.requestFieldVector(path, pathParams, query, options);
-      if (result.status !== "not-applicable") {
+      if (result.status === "ready" || result.status === "not-modified") {
         return result;
       }
       lastResult = result;
     }
-    if (lastResult) {
-      return lastResult;
-    }
-    throw new ControlRoomApiError(
-      `Timed out waiting for field vector materialization for quantity '${quantityId}'`,
-      0,
-    );
+    return lastResult;
   }
 
   private async requestBinaryResource<TData, TMetadata = undefined>(
@@ -2946,6 +3023,15 @@ export class ControlRoomApi {
 
         if (response.status === 204) {
           return { etag, status: "not-applicable" };
+        }
+
+        if (response.status === 202 && decoderKind === "field-vector") {
+          const pending = parseFieldVectorPendingResponse(result.data);
+          return {
+            ...pending,
+            etag,
+            status: "pending",
+          } as unknown as BinaryResourceResult<TData, TMetadata>;
         }
 
         if (!response.ok || result.error) {
@@ -3367,6 +3453,39 @@ function fieldMetaQueryParams(query: FieldMetaQuery): QueryParams {
 
 function fieldVectorQueryParams(query: FieldVectorQuery): QueryParams {
   return canonicalFieldVectorQueryParams(canonicalFieldVectorQuery("m", query));
+}
+
+function parseFieldVectorPendingResponse(
+  data: unknown,
+): FieldVectorPendingResponse {
+  let value: unknown = data;
+  if (value instanceof ArrayBuffer) {
+    try {
+      value = JSON.parse(new TextDecoder().decode(value));
+    } catch {
+      throw new ControlRoomApiError(
+        "Invalid pending field-vector response body",
+        202,
+      );
+    }
+  }
+  if (!value || typeof value !== "object") {
+    throw new ControlRoomApiError("Invalid pending field-vector response body", 202);
+  }
+  const pending = value as Record<string, unknown>;
+  if (
+    pending.state !== "pending" ||
+    typeof pending.reason_code !== "string" ||
+    typeof pending.retry_after_ms !== "number" ||
+    !Number.isFinite(pending.retry_after_ms) ||
+    pending.retry_after_ms < 0 ||
+    typeof pending.generation_id !== "string" ||
+    typeof pending.quantity_id !== "string" ||
+    typeof pending.scope_kind !== "string"
+  ) {
+    throw new ControlRoomApiError("Invalid pending field-vector response body", 202);
+  }
+  return pending as unknown as FieldVectorPendingResponse;
 }
 
 function topologicalChargeQueryParams(

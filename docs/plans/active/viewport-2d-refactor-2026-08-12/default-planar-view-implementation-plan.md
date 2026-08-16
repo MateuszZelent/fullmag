@@ -1,6 +1,7 @@
 # Domyślny przekrój 2D bez wymaganego monitora — szczegółowy plan implementacji
 
 > **Status dokumentu:** zatwierdzony kierunek produktowy i plan wykonawczy; żadna opisana niżej zmiana nie jest jeszcze potwierdzeniem implementacji ani kwalifikacji produkcyjnej.
+
 > **Task 0 status:** documentation contract changes are implemented in the
 > working tree and remain source-tested only until the required validator and
 > contract-test commands pass. Runtime/API/UI/science/browser tasks remain

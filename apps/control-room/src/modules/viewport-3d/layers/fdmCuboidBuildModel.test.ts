@@ -12,6 +12,7 @@ import {
   buildFdmMaskedNativeLayerInstanceModel,
   buildViewport3DFdmCuboid,
   buildFdmVectorSegmentsFromAnchors,
+  createFdmVectorOnlyBuildInput,
   estimateFdmCuboidBuildOutputBytes,
   resolveFdmCuboidMembershipRevision,
   transferablesForFdmCuboidBuildResult,
@@ -45,6 +46,42 @@ function fieldVector(
 }
 
 describe("FDM cuboid realized membership", () => {
+  it("derives vectors-only anchors from sampled field ordinals instead of the full grid", () => {
+    const input = createFdmVectorOnlyBuildInput({
+      cellSelection: "inactive",
+      domain: {
+        bounds: null,
+        displayCellBudget: 8,
+        displayCellCount: 8,
+        kind: "fdm-grid",
+        origin: [0, 0, 0],
+        shape: [8, 1, 1],
+        spacing: [1, 1, 1],
+        stride: 1,
+        totalCells: 8,
+      },
+      fieldVector: {
+        indexing: "sampled_node_indices",
+        nodeIndices: new Uint32Array([1, 7]),
+        pointCount: 2,
+      },
+      maxSamples: 2,
+      realizedRegionIds: new Uint32Array([
+        0,
+        FMRM_INACTIVE_REGION_ID,
+        FMRM_INACTIVE_REGION_ID,
+        0,
+        0,
+        0,
+        0,
+        FMRM_INACTIVE_REGION_ID,
+      ]),
+    });
+
+    expect(input?.cellIndices).toEqual(new Uint32Array([1, 7]));
+    expect(input?.anchors).toEqual(new Float32Array([1.5, 0.5, 0.5, 7.5, 0.5, 0.5]));
+  });
+
   it("builds a sampled vector stream from anchors without constructing a cuboid model", () => {
     const result = buildFdmVectorSegmentsFromAnchors({
       anchorMode: "center",

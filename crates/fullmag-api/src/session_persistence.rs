@@ -12,7 +12,8 @@ use utoipa::ToSchema;
 use crate::error::ApiError;
 use crate::router_v2::handlers::sessions::status::field_revision;
 use crate::schemas::visualization_state::{
-    default_planar_color_range_state, PlanarColorRangeMode, PlanarColorRangeState,
+    default_planar_color_range_state, default_planar_visualization_state, PlanarColorRangeMode,
+    PlanarColorRangeState, PlanarSourceSelectionState,
 };
 use crate::types::{AppState, DisplayPresentationState, RuntimeStatusView, SessionStateResponse};
 use crate::{
@@ -100,7 +101,7 @@ impl From<&SessionStateResponse> for PersistedCurrentLiveSnapshot {
     }
 }
 
-const DISPLAY_PRESENTATION_SCHEMA_VERSION: u32 = 8;
+const DISPLAY_PRESENTATION_SCHEMA_VERSION: u32 = 9;
 
 fn persisted_display_presentation(
     presentation: &DisplayPresentationState,
@@ -115,8 +116,9 @@ fn restore_display_presentation(
     match schema_version.unwrap_or(6) {
         6 => migrate_display_presentation_v6(document.clone()),
         7 => migrate_display_presentation_v7(document.clone()),
+        8 => migrate_display_presentation_v8(document.clone()),
         DISPLAY_PRESENTATION_SCHEMA_VERSION => serde_json::from_value(document.clone())
-            .map_err(|error| format!("invalid v8 display presentation: {error}")),
+            .map_err(|error| format!("invalid v9 display presentation: {error}")),
         other => Err(format!(
             "unsupported display presentation schema_version {other}; current version is {DISPLAY_PRESENTATION_SCHEMA_VERSION}"
         )),
@@ -137,8 +139,44 @@ fn migrate_display_presentation_v7(
             .entry("points")
             .or_insert_with(|| serde_json::json!(false));
     }
+    migrate_display_presentation_v8(state)
+}
+
+fn migrate_display_presentation_v8(
+    mut state: serde_json::Value,
+) -> Result<DisplayPresentationState, String> {
+    let Some(planar_document) = state
+        .pointer_mut("/visualization_planar")
+        .and_then(serde_json::Value::as_object_mut)
+    else {
+        return serde_json::from_value(state)
+            .map_err(|error| format!("invalid v8 display presentation: {error}"));
+    };
+
+    if !planar_document.contains_key("source") {
+        let source = match planar_document.remove("active_monitor_id") {
+            Some(serde_json::Value::String(monitor_id)) if !monitor_id.trim().is_empty() => {
+                serde_json::to_value(PlanarSourceSelectionState::Monitor { monitor_id })
+                    .expect("planar monitor source serializes")
+            }
+            _ => serde_json::to_value(PlanarSourceSelectionState::Default)
+                .expect("default planar source serializes"),
+        };
+        planar_document.insert("source".to_string(), source);
+    } else {
+        // The legacy alias is accepted only by this persistence migration.
+        planar_document.remove("active_monitor_id");
+    }
+    if !planar_document.contains_key("default_slice") {
+        let default_slice = default_planar_visualization_state().default_slice;
+        planar_document.insert(
+            "default_slice".to_string(),
+            serde_json::to_value(default_slice).expect("default planar slice serializes"),
+        );
+    }
+
     serde_json::from_value(state)
-        .map_err(|error| format!("invalid migrated v7 display presentation: {error}"))
+        .map_err(|error| format!("invalid migrated v8 display presentation: {error}"))
 }
 
 fn migrate_display_presentation_v6(
@@ -214,8 +252,7 @@ fn migrate_display_presentation_v6(
             .expect("restore warnings remain an array")
             .push(serde_json::Value::String(warning));
     }
-    serde_json::from_value(state)
-        .map_err(|error| format!("invalid migrated v6 display presentation: {error}"))
+    migrate_display_presentation_v7(state)
 }
 
 impl From<PersistedCurrentLiveSnapshot> for SessionStateResponse {
@@ -2534,7 +2571,64 @@ mod planar_presentation_migration_tests {
     }
 
     #[test]
-    fn v8_presentation_is_preserved_without_legacy_migration() {
+    fn display_presentation_v8_null_monitor_migrates_to_default_source() {
+        let mut document = serde_json::to_value(DisplayPresentationState {
+            visualization_planar: Some(default_planar_visualization_state()),
+            ..DisplayPresentationState::default()
+        })
+        .expect("serialize v8 presentation");
+        let planar = document
+            .pointer_mut("/visualization_planar")
+            .and_then(serde_json::Value::as_object_mut)
+            .expect("planar presentation");
+        planar.insert("active_monitor_id".to_string(), serde_json::Value::Null);
+        planar.remove("source");
+        planar.remove("default_slice");
+
+        let restored = restore_display_presentation(Some(8), &document)
+            .expect("migrate v8 default source");
+        let restored = serde_json::to_value(restored).expect("serialize migrated presentation");
+        assert_eq!(
+            restored["visualization_planar"]["source"],
+            serde_json::json!({"kind": "default"})
+        );
+        assert!(restored["visualization_planar"]
+            .get("active_monitor_id")
+            .is_none());
+    }
+
+    #[test]
+    fn display_presentation_v8_monitor_id_migrates_to_monitor_source() {
+        let mut document = serde_json::to_value(DisplayPresentationState {
+            visualization_planar: Some(default_planar_visualization_state()),
+            ..DisplayPresentationState::default()
+        })
+        .expect("serialize v8 presentation");
+        let planar = document
+            .pointer_mut("/visualization_planar")
+            .and_then(serde_json::Value::as_object_mut)
+            .expect("planar presentation");
+        planar.insert(
+            "active_monitor_id".to_string(),
+            serde_json::json!("plane-1"),
+        );
+        planar.remove("source");
+        planar.remove("default_slice");
+
+        let restored = restore_display_presentation(Some(8), &document)
+            .expect("migrate v8 monitor source");
+        let restored = serde_json::to_value(restored).expect("serialize migrated presentation");
+        assert_eq!(
+            restored["visualization_planar"]["source"],
+            serde_json::json!({"kind": "monitor", "monitor_id": "plane-1"})
+        );
+        assert!(restored["visualization_planar"]
+            .get("active_monitor_id")
+            .is_none());
+    }
+
+    #[test]
+    fn display_presentation_v9_round_trips_without_legacy_active_monitor_id() {
         let state = DisplayPresentationState {
             visualization_planar: Some(
                 crate::schemas::visualization_state::PlanarVisualizationState {
@@ -2549,10 +2643,16 @@ mod planar_presentation_migration_tests {
             ),
             ..DisplayPresentationState::default()
         };
-        let document = persisted_display_presentation(&state).expect("serialize v7 presentation");
+        let document = persisted_display_presentation(&state).expect("serialize v9 presentation");
+        assert!(document["visualization_planar"]
+            .get("active_monitor_id")
+            .is_none());
         assert_eq!(
-            restore_display_presentation(Some(DISPLAY_PRESENTATION_SCHEMA_VERSION), &document)
-                .unwrap(),
+            document["visualization_planar"]["source"]["kind"],
+            "default"
+        );
+        assert_eq!(
+            restore_display_presentation(Some(9), &document).unwrap(),
             state
         );
     }
@@ -2584,7 +2684,7 @@ mod planar_presentation_migration_tests {
     #[test]
     fn unknown_presentation_version_is_rejected_without_migration() {
         let document = serde_json::json!({});
-        assert!(restore_display_presentation(Some(8), &document)
+        assert!(restore_display_presentation(Some(10), &document)
             .expect_err("future schema must not mutate state")
             .contains("unsupported"));
     }

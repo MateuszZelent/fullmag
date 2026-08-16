@@ -7,7 +7,7 @@ use axum::{
     http::{HeaderMap, HeaderValue, Response, StatusCode, header},
     response::IntoResponse,
 };
-use fullmag_ir::{PlanarMonitorIR, PlanarOperatorIR};
+use fullmag_ir::{PlanarFrameIR, PlanarOperatorIR};
 use sha2::{Digest, Sha256};
 
 use crate::{
@@ -16,8 +16,9 @@ use crate::{
     field_store::serialize_field_vector_binary_v2,
     planar_sampling::{
         MAX_PLANAR_SAMPLE_POINTS, Occupancy, PlanarComponent, PlanarSampleIdentity,
-        PlanarSampleResult, ResolvedPlanarSampleRequest, ResolvedSpatialScope,
-        ResolvedSpatialTarget, resolve_spatial_target, sample_resolved_target,
+        PlanarSampleResult, ResolvedPlanarSampleRequest, ResolvedPlanarSourceIdentity,
+        ResolvedSpatialScope, ResolvedSpatialTarget, resolve_authored_planar_source,
+        resolve_default_planar_source, resolve_spatial_target, sample_resolved_target,
     },
     preview::quantity_unit,
     router_v2::handlers::{
@@ -34,7 +35,7 @@ use crate::{
     schemas::{
         PlanarFieldFrameResource, PlanarFieldLinksResource, PlanarFieldMetaResource,
         PlanarFieldOccupancyResource, PlanarFieldProbeQuery, PlanarFieldProbeResource,
-        PlanarFieldQuery, PlanarMeshOverlayDescriptor,
+        PlanarFieldQuery, PlanarMeshOverlayDescriptor, PlanarSampleSourceResource,
     },
     types::AppState,
 };
@@ -43,13 +44,20 @@ const DEFAULT_RESOLUTION: u32 = 128;
 const MIN_RESOLUTION: u32 = 16;
 const MAX_RESOLUTION: u32 = 2048;
 
+#[derive(Debug, Clone)]
+enum PlanarDataSource {
+    Default,
+    Monitor(String),
+}
+
 struct BuiltPlanarField {
     result: Arc<PlanarSampleResult>,
     target: Arc<ResolvedSpatialTarget>,
     request: ResolvedPlanarSampleRequest,
-    monitor: PlanarMonitorIR,
+    source: ResolvedPlanarSourceIdentity,
+    frame: PlanarFrameIR,
+    operator: PlanarOperatorIR,
     scene_revision: u64,
-    monitor_revision: u64,
     quantity_id: String,
     component: String,
     field_revision: u64,
@@ -88,12 +96,14 @@ pub async fn get_planar_field_meta(
     Query(query): Query<PlanarFieldQuery>,
     headers: HeaderMap,
 ) -> Result<Response<Body>, ApiError> {
-    let built = build_planar_field(&state, &quantity_id, &monitor_id, &query).await?;
-    if etag_matches(&headers, &built.etag) {
-        return not_modified(&built.etag);
-    }
-    let meta = meta_resource(&built);
-    json_response(&meta, &built.etag)
+    planar_meta_response(
+        &state,
+        &quantity_id,
+        PlanarDataSource::Monitor(monitor_id),
+        &query,
+        &headers,
+    )
+    .await
 }
 
 #[utoipa::path(
@@ -116,23 +126,14 @@ pub async fn get_planar_field_scalar(
     Query(query): Query<PlanarFieldQuery>,
     headers: HeaderMap,
 ) -> Result<Response<Body>, ApiError> {
-    let built = build_planar_field(&state, &quantity_id, &monitor_id, &query).await?;
-    if etag_matches(&headers, &built.etag) {
-        return not_modified(&built.etag);
-    }
-    let values = finite_payload(&built.result.scalar_values);
-    let bytes = serialize_field_vector_binary_v2(
+    planar_scalar_response(
+        &state,
         &quantity_id,
-        1,
-        [
-            built.result.meta.resolution[0],
-            built.result.meta.resolution[1],
-            1,
-        ],
-        &values,
+        PlanarDataSource::Monitor(monitor_id),
+        &query,
+        &headers,
     )
-    .map_err(ApiError::internal)?;
-    binary_response(bytes, "application/vnd.fullmag.field-vector", &built.etag)
+    .await
 }
 
 #[utoipa::path(
@@ -155,34 +156,14 @@ pub async fn get_planar_field_vectors(
     Query(query): Query<PlanarFieldQuery>,
     headers: HeaderMap,
 ) -> Result<Response<Body>, ApiError> {
-    let built = build_planar_field(&state, &quantity_id, &monitor_id, &query).await?;
-    if etag_matches(&headers, &built.etag) {
-        return not_modified(&built.etag);
-    }
-    let vectors =
-        built.result.vector_values.as_ref().ok_or_else(|| {
-            ApiError::unprocessable("planar_vector_unsupported: quantity is scalar")
-        })?;
-    let values = vectors
-        .iter()
-        .flat_map(|vector| {
-            vector
-                .iter()
-                .map(|value| if value.is_finite() { *value } else { 0.0 })
-        })
-        .collect::<Vec<_>>();
-    let bytes = serialize_field_vector_binary_v2(
+    planar_vectors_response(
+        &state,
         &quantity_id,
-        3,
-        [
-            built.result.meta.resolution[0],
-            built.result.meta.resolution[1],
-            1,
-        ],
-        &values,
+        PlanarDataSource::Monitor(monitor_id),
+        &query,
+        &headers,
     )
-    .map_err(ApiError::internal)?;
-    binary_response(bytes, "application/vnd.fullmag.field-vector", &built.etag)
+    .await
 }
 
 #[utoipa::path(
@@ -205,17 +186,14 @@ pub async fn get_planar_field_empty_mask(
     Query(query): Query<PlanarFieldQuery>,
     headers: HeaderMap,
 ) -> Result<Response<Body>, ApiError> {
-    let built = build_planar_field(&state, &quantity_id, &monitor_id, &query).await?;
-    if etag_matches(&headers, &built.etag) {
-        return not_modified(&built.etag);
-    }
-    let bytes = built
-        .result
-        .occupancy
-        .iter()
-        .map(|occupancy| *occupancy as u8)
-        .collect();
-    binary_response(bytes, "application/octet-stream", &built.etag)
+    planar_empty_mask_response(
+        &state,
+        &quantity_id,
+        PlanarDataSource::Monitor(monitor_id),
+        &query,
+        &headers,
+    )
+    .await
 }
 
 #[utoipa::path(
@@ -236,72 +214,13 @@ pub async fn get_planar_field_probe(
     Path((quantity_id, monitor_id)): Path<(String, String)>,
     Query(probe): Query<PlanarFieldProbeQuery>,
 ) -> Result<Json<PlanarFieldProbeResource>, ApiError> {
-    if !probe.u_m.is_finite() || !probe.v_m.is_finite() {
-        return Err(ApiError::bad_request(
-            "invalid_planar_probe: coordinates must be finite",
-        ));
-    }
-    let query = PlanarFieldQuery {
-        sample_token: probe.sample_token,
-        component: probe.component,
-        scope_kind: probe.scope_kind,
-        scope_id: probe.scope_id,
-        stage_id: probe.stage_id,
-        snapshot_id: probe.snapshot_id,
-        resolution_x: probe.resolution_x,
-        resolution_y: probe.resolution_y,
-        quality: probe.quality,
-        vector_budget: Some(0),
-        include_mesh: Some(false),
-        expected_scene_revision: probe.expected_scene_revision,
-        expected_monitor_revision: probe.expected_monitor_revision,
-        expected_mesh_revision: probe.expected_mesh_revision,
-        expected_carrier_revision: probe.expected_carrier_revision,
-        expected_field_revision: probe.expected_field_revision,
-    };
-    let built = build_planar_field(&state, &quantity_id, &monitor_id, &query).await?;
-    let bounds = built.result.meta.bounds_uv_m;
-    let x = (((probe.u_m - bounds[0]) / (bounds[1] - bounds[0])
-        * built.result.meta.resolution[0] as f64)
-        .floor() as i64)
-        .clamp(0, built.result.meta.resolution[0] as i64 - 1) as u32;
-    let y = (((probe.v_m - bounds[2]) / (bounds[3] - bounds[2])
-        * built.result.meta.resolution[1] as f64)
-        .floor() as i64)
-        .clamp(0, built.result.meta.resolution[1] as i64 - 1) as u32;
-    let index = (y * built.result.meta.resolution[0] + x) as usize;
-    let occupancy = built.result.occupancy[index];
-    let source_entity_id = built.result.source_entity_ids[index];
-    let frame = &built.monitor.frame;
-    let world_m = [
-        frame.origin_m[0] + probe.u_m * frame.u_axis[0] + probe.v_m * frame.v_axis[0],
-        frame.origin_m[1] + probe.u_m * frame.u_axis[1] + probe.v_m * frame.v_axis[1],
-        frame.origin_m[2] + probe.u_m * frame.u_axis[2] + probe.v_m * frame.v_axis[2],
-    ];
-    Ok(Json(PlanarFieldProbeResource {
-        monitor_id,
-        quantity_id,
-        u_m: probe.u_m,
-        v_m: probe.v_m,
-        world_m,
-        scalar: built.result.scalar_values[index]
-            .is_finite()
-            .then_some(built.result.scalar_values[index]),
-        vector: built
-            .result
-            .vector_values
-            .as_ref()
-            .map(|vectors| vectors[index])
-            .filter(|vector| vector.iter().all(|value| value.is_finite())),
-        cell_id: (built.source_entity_kind == "cell")
-            .then_some(source_entity_id)
-            .flatten(),
-        element_id: (built.source_entity_kind == "element")
-            .then_some(source_entity_id)
-            .flatten(),
-        occupancy: occupancy_label(occupancy).to_string(),
-        sampling_method: built.result.meta.sampling_method.to_string(),
-    }))
+    planar_probe_response(
+        &state,
+        &quantity_id,
+        PlanarDataSource::Monitor(monitor_id),
+        probe,
+    )
+    .await
 }
 
 #[utoipa::path(
@@ -322,25 +241,13 @@ pub async fn get_planar_field_render_png(
     Path((quantity_id, monitor_id)): Path<(String, String)>,
     Query(query): Query<PlanarFieldQuery>,
 ) -> Result<Response<Body>, ApiError> {
-    let built = build_planar_field(&state, &quantity_id, &monitor_id, &query).await?;
-    let mask = built
-        .result
-        .occupancy
-        .iter()
-        .map(|occupancy| u8::from(*occupancy == Occupancy::Empty))
-        .collect::<Vec<_>>();
-    let png = encode_scalar_png(
-        built.result.meta.resolution[0],
-        built.result.meta.resolution[1],
-        &built.result.scalar_values,
-        &mask,
-        "viridis",
-        AutoScaleMode::Slice,
-        None,
-        None,
-        true,
-    )?;
-    binary_response(png, "image/png", &built.etag)
+    planar_render_png_response(
+        &state,
+        &quantity_id,
+        PlanarDataSource::Monitor(monitor_id),
+        &query,
+    )
+    .await
 }
 
 #[utoipa::path(
@@ -363,39 +270,213 @@ pub async fn get_planar_field_mesh_overlay(
     Query(query): Query<PlanarFieldQuery>,
     headers: HeaderMap,
 ) -> Result<Response<Body>, ApiError> {
-    let built = build_planar_field(&state, &quantity_id, &monitor_id, &query).await?;
-    let codec = if fdm_grid_overlay_available(&built) {
-        "fmfg.v1"
-    } else {
-        "fmcs.v4"
-    };
-    let overlay_etag = planar_overlay_etag(&built.etag, codec);
-    if etag_matches(&headers, &overlay_etag) {
-        return not_modified(&overlay_etag);
-    }
-    let bytes = if codec == "fmfg.v1" {
-        let overlay = built
-            .target
-            .build_fdm_grid_overlay(&built.request)?
-            .ok_or_else(|| {
-                ApiError::unprocessable(
-                    "planar_mesh_overlay_unavailable: FDM grid geometry is absent",
-                )
-            })?;
-        crate::fdm_planar_grid_overlay::serialize_fmfg_v1(&overlay)?
-    } else {
-        let Some(overlay) = built.result.overlay.as_ref() else {
-            return Ok(StatusCode::NO_CONTENT.into_response());
-        };
-        crate::fem_cross_section::serialize_planar_overlay_fmcs_v4(overlay)
-    };
-    binary_response(bytes, "application/octet-stream", &overlay_etag)
+    planar_mesh_overlay_response(
+        &state,
+        &quantity_id,
+        PlanarDataSource::Monitor(monitor_id),
+        &query,
+        &headers,
+    )
+    .await
 }
 
-async fn build_planar_field(
+#[utoipa::path(
+    get,
+    path = "/v2/sessions/current/data/fields/{quantity_id}/planar-default/meta",
+    params(("quantity_id" = String, Path), PlanarFieldQuery),
+    responses(
+        (status = 200, body = PlanarFieldMetaResource),
+        (status = 304, description = "Not modified"),
+        (status = 400, description = "Invalid planar query", body = crate::schemas::common::ApiErrorResponse),
+        (status = 404, description = "Field or domain missing", body = crate::schemas::common::ApiErrorResponse),
+        (status = 409, description = "Stale source", body = crate::schemas::common::ApiErrorResponse),
+        (status = 422, description = "Unsupported planar sampling", body = crate::schemas::common::ApiErrorResponse)
+    ),
+    tag = "data"
+)]
+pub async fn get_planar_default_field_meta(
+    State(state): State<Arc<AppState>>,
+    Path(quantity_id): Path<String>,
+    Query(query): Query<PlanarFieldQuery>,
+    headers: HeaderMap,
+) -> Result<Response<Body>, ApiError> {
+    planar_meta_response(
+        &state,
+        &quantity_id,
+        PlanarDataSource::Default,
+        &query,
+        &headers,
+    )
+    .await
+}
+
+#[utoipa::path(
+    get,
+    path = "/v2/sessions/current/data/fields/{quantity_id}/planar-default/scalar",
+    params(("quantity_id" = String, Path), PlanarFieldQuery),
+    responses(
+        (status = 200, description = "FMVP v2 scalar raster"),
+        (status = 304, description = "Not modified"),
+        (status = 400, description = "Invalid planar query", body = crate::schemas::common::ApiErrorResponse),
+        (status = 404, description = "Field or domain missing", body = crate::schemas::common::ApiErrorResponse),
+        (status = 409, description = "Stale source", body = crate::schemas::common::ApiErrorResponse),
+        (status = 422, description = "Unsupported planar sampling", body = crate::schemas::common::ApiErrorResponse)
+    ),
+    tag = "data"
+)]
+pub async fn get_planar_default_field_scalar(
+    State(state): State<Arc<AppState>>,
+    Path(quantity_id): Path<String>,
+    Query(query): Query<PlanarFieldQuery>,
+    headers: HeaderMap,
+) -> Result<Response<Body>, ApiError> {
+    planar_scalar_response(
+        &state,
+        &quantity_id,
+        PlanarDataSource::Default,
+        &query,
+        &headers,
+    )
+    .await
+}
+
+#[utoipa::path(
+    get,
+    path = "/v2/sessions/current/data/fields/{quantity_id}/planar-default/vectors",
+    params(("quantity_id" = String, Path), PlanarFieldQuery),
+    responses(
+        (status = 200, description = "FMVP v2 vector raster"),
+        (status = 304, description = "Not modified"),
+        (status = 400, description = "Invalid planar query", body = crate::schemas::common::ApiErrorResponse),
+        (status = 404, description = "Field or domain missing", body = crate::schemas::common::ApiErrorResponse),
+        (status = 409, description = "Stale source", body = crate::schemas::common::ApiErrorResponse),
+        (status = 422, description = "Quantity or sampling mode unsupported", body = crate::schemas::common::ApiErrorResponse)
+    ),
+    tag = "data"
+)]
+pub async fn get_planar_default_field_vectors(
+    State(state): State<Arc<AppState>>,
+    Path(quantity_id): Path<String>,
+    Query(query): Query<PlanarFieldQuery>,
+    headers: HeaderMap,
+) -> Result<Response<Body>, ApiError> {
+    planar_vectors_response(
+        &state,
+        &quantity_id,
+        PlanarDataSource::Default,
+        &query,
+        &headers,
+    )
+    .await
+}
+
+#[utoipa::path(
+    get,
+    path = "/v2/sessions/current/data/fields/{quantity_id}/planar-default/empty-mask",
+    params(("quantity_id" = String, Path), PlanarFieldQuery),
+    responses(
+        (status = 200, description = "One occupancy byte per pixel"),
+        (status = 304, description = "Not modified"),
+        (status = 400, description = "Invalid planar query", body = crate::schemas::common::ApiErrorResponse),
+        (status = 404, description = "Field or domain missing", body = crate::schemas::common::ApiErrorResponse),
+        (status = 409, description = "Stale source", body = crate::schemas::common::ApiErrorResponse),
+        (status = 422, description = "Unsupported planar sampling", body = crate::schemas::common::ApiErrorResponse)
+    ),
+    tag = "data"
+)]
+pub async fn get_planar_default_field_empty_mask(
+    State(state): State<Arc<AppState>>,
+    Path(quantity_id): Path<String>,
+    Query(query): Query<PlanarFieldQuery>,
+    headers: HeaderMap,
+) -> Result<Response<Body>, ApiError> {
+    planar_empty_mask_response(
+        &state,
+        &quantity_id,
+        PlanarDataSource::Default,
+        &query,
+        &headers,
+    )
+    .await
+}
+
+#[utoipa::path(
+    get,
+    path = "/v2/sessions/current/data/fields/{quantity_id}/planar-default/probe",
+    params(("quantity_id" = String, Path), PlanarFieldProbeQuery),
+    responses(
+        (status = 200, body = PlanarFieldProbeResource),
+        (status = 400, description = "Invalid planar query or probe coordinates", body = crate::schemas::common::ApiErrorResponse),
+        (status = 404, description = "Field or domain missing", body = crate::schemas::common::ApiErrorResponse),
+        (status = 409, description = "Stale source", body = crate::schemas::common::ApiErrorResponse),
+        (status = 422, description = "Unsupported planar sampling", body = crate::schemas::common::ApiErrorResponse)
+    ),
+    tag = "data"
+)]
+pub async fn get_planar_default_field_probe(
+    State(state): State<Arc<AppState>>,
+    Path(quantity_id): Path<String>,
+    Query(probe): Query<PlanarFieldProbeQuery>,
+) -> Result<Json<PlanarFieldProbeResource>, ApiError> {
+    planar_probe_response(&state, &quantity_id, PlanarDataSource::Default, probe).await
+}
+
+#[utoipa::path(
+    get,
+    path = "/v2/sessions/current/data/fields/{quantity_id}/planar-default/render.png",
+    params(("quantity_id" = String, Path), PlanarFieldQuery),
+    responses(
+        (status = 200, description = "PNG export"),
+        (status = 400, description = "Invalid planar query", body = crate::schemas::common::ApiErrorResponse),
+        (status = 404, description = "Field or domain missing", body = crate::schemas::common::ApiErrorResponse),
+        (status = 409, description = "Stale source", body = crate::schemas::common::ApiErrorResponse),
+        (status = 422, description = "Unsupported planar sampling", body = crate::schemas::common::ApiErrorResponse)
+    ),
+    tag = "data"
+)]
+pub async fn get_planar_default_field_render_png(
+    State(state): State<Arc<AppState>>,
+    Path(quantity_id): Path<String>,
+    Query(query): Query<PlanarFieldQuery>,
+) -> Result<Response<Body>, ApiError> {
+    planar_render_png_response(&state, &quantity_id, PlanarDataSource::Default, &query).await
+}
+
+#[utoipa::path(
+    get,
+    path = "/v2/sessions/current/data/fields/{quantity_id}/planar-default/mesh-overlay",
+    params(("quantity_id" = String, Path), PlanarFieldQuery),
+    responses(
+        (status = 200, description = "FMCS v4 FEM topology or FMFG v1 FDM structured-grid planar overlay"),
+        (status = 204, description = "Mesh overlay unavailable for the current field"),
+        (status = 304, description = "Not modified"),
+        (status = 400, description = "Invalid planar query", body = crate::schemas::common::ApiErrorResponse),
+        (status = 404, description = "Field or domain missing", body = crate::schemas::common::ApiErrorResponse),
+        (status = 409, description = "Stale source", body = crate::schemas::common::ApiErrorResponse),
+        (status = 422, description = "Unsupported planar sampling", body = crate::schemas::common::ApiErrorResponse)
+    ),
+    tag = "data"
+)]
+pub async fn get_planar_default_field_mesh_overlay(
+    State(state): State<Arc<AppState>>,
+    Path(quantity_id): Path<String>,
+    Query(query): Query<PlanarFieldQuery>,
+    headers: HeaderMap,
+) -> Result<Response<Body>, ApiError> {
+    planar_mesh_overlay_response(
+        &state,
+        &quantity_id,
+        PlanarDataSource::Default,
+        &query,
+        &headers,
+    )
+    .await
+}
+
+async fn build_planar_field_from_source(
     state: &Arc<AppState>,
     quantity_id: &str,
-    monitor_id: &str,
+    source: PlanarDataSource,
     query: &PlanarFieldQuery,
 ) -> Result<BuiltPlanarField, ApiError> {
     let resolution = resolve_resolution(query)?;
@@ -404,17 +485,31 @@ async fn build_planar_field(
     let snapshot = guard
         .as_ref()
         .ok_or_else(|| ApiError::not_found("no active local live workspace"))?;
-    let scene = snapshot
+    let presentation = state.current_display_presentation.read().await.clone();
+    let planar_state = presentation
+        .visualization_planar
+        .unwrap_or_else(crate::schemas::visualization_state::default_planar_visualization_state);
+    let resolved_source = match &source {
+        PlanarDataSource::Default => {
+            let domain = super::domain::domain_meta_for_snapshot(snapshot);
+            resolve_default_planar_source(&domain, &planar_state.default_slice)?
+        }
+        PlanarDataSource::Monitor(monitor_id) => {
+            let scene = snapshot
+                .scene_document
+                .as_ref()
+                .ok_or_else(|| ApiError::not_found("no canonical scene document"))?;
+            resolve_authored_planar_source(&scene.monitors.planar, monitor_id)?
+        }
+    };
+    let mut frame = resolved_source.frame.clone();
+    let operator = resolved_source.operator.clone();
+    let target_definition = resolved_source.target.clone();
+    let scene_revision = snapshot
         .scene_document
         .as_ref()
-        .ok_or_else(|| ApiError::not_found("no canonical scene document"))?;
-    let mut monitor = scene
-        .monitors
-        .planar
-        .iter()
-        .find(|monitor| monitor.id == monitor_id)
-        .cloned()
-        .ok_or_else(|| ApiError::not_found(format!("planar monitor not found: {monitor_id}")))?;
+        .map(|scene| scene.revision)
+        .unwrap_or(0);
     let spec = fullmag_quantities::quantity_spec(quantity_id).ok_or_else(|| {
         ApiError::not_found(format!(
             "quantity_unavailable: quantity '{quantity_id}' is unknown"
@@ -492,13 +587,13 @@ async fn build_planar_field(
         })?
     };
     let field_revision = resolved_field.quantity_revision;
-    let monitor_hash = monitor_hash(&monitor)?;
-    let monitor_revision = monitor_revision(&monitor_hash);
+    let source_revision = resolved_source.identity.source_revision;
     let carrier_revision = resolved_field.mesh_or_grid_revision;
     validate_expected_revisions(
         query,
-        scene.revision,
-        monitor_revision,
+        scene_revision,
+        &resolved_source.identity.source_kind,
+        source_revision,
         mesh_revision,
         carrier_revision,
         field_revision,
@@ -516,10 +611,8 @@ async fn build_planar_field(
         },
         _ => unreachable!("scope validated before target resolution"),
     };
-    let target =
-        resolve_spatial_target(&resolved_field, &monitor.target, scope, &monitor.operator)?;
-    target.resolve_dynamic_extent(&mut monitor.frame)?;
-    let scene_revision = scene.revision;
+    let target = resolve_spatial_target(&resolved_field, &target_definition, scope, &operator)?;
+    target.resolve_dynamic_extent(&mut frame)?;
     let session_id = snapshot.session.session_id.clone();
     let target_fingerprint = target.fingerprint().to_string();
     let target_kind = target.target_kind().to_string();
@@ -529,7 +622,7 @@ async fn build_planar_field(
     let field_generation = resolved_field.field_generation.clone();
     let field_content_fingerprint = (field_revision == 0 && field_generation.is_none())
         .then(|| spatial_field_content_fingerprint(&resolved_field.values));
-    let source_kind = spatial_source_kind_label(resolved_field.source_kind).to_string();
+    let field_source_kind = spatial_source_kind_label(resolved_field.source_kind).to_string();
     let source_backend = resolved_field.provenance.backend.clone();
     let source_device = resolved_field.provenance.device.clone();
     let source_precision = resolved_field.provenance.precision.clone();
@@ -542,10 +635,8 @@ async fn build_planar_field(
 
     let component = resolve_component(query.component.as_deref(), n_comp)?;
     let request = ResolvedPlanarSampleRequest {
-        monitor_id: monitor.id.clone(),
-        monitor_hash: monitor_hash.clone(),
-        frame: monitor.frame.clone(),
-        operator: monitor.operator.clone(),
+        frame: frame.clone(),
+        operator: operator.clone(),
         resolution,
         component,
     };
@@ -562,9 +653,11 @@ async fn build_planar_field(
     });
     let sample_token = PlanarSampleIdentity {
         session_id,
-        monitor_id: monitor.id.clone(),
-        monitor_revision,
-        monitor_hash: monitor_hash.clone(),
+        source_kind: resolved_source.identity.source_kind.clone(),
+        source_id: resolved_source.identity.source_id.clone(),
+        source_revision,
+        source_hash: resolved_source.identity.source_hash.clone(),
+        domain_generation_id: generation_id.clone(),
         scene_revision,
         target_fingerprint,
         target_kind,
@@ -578,12 +671,12 @@ async fn build_planar_field(
         field_generation,
         field_content_fingerprint,
         carrier_revision,
-        source_kind,
+        field_source_kind,
         source_backend,
         source_device,
         source_precision,
-        frame: monitor.frame.clone(),
-        operator: monitor.operator.clone(),
+        frame: frame.clone(),
+        operator: operator.clone(),
         resolution,
         quality: query
             .quality
@@ -620,9 +713,10 @@ async fn build_planar_field(
         result,
         target,
         request,
-        monitor,
+        source: resolved_source.identity,
+        frame,
+        operator,
         scene_revision,
-        monitor_revision,
         quantity_id: quantity_id.to_string(),
         component: component_label,
         field_revision,
@@ -643,6 +737,243 @@ async fn build_planar_field(
         etag,
         sample_token,
     })
+}
+
+async fn planar_meta_response(
+    state: &Arc<AppState>,
+    quantity_id: &str,
+    source: PlanarDataSource,
+    query: &PlanarFieldQuery,
+    headers: &HeaderMap,
+) -> Result<Response<Body>, ApiError> {
+    let built = build_planar_field_from_source(state, quantity_id, source, query).await?;
+    if etag_matches(headers, &built.etag) {
+        return not_modified(&built.etag);
+    }
+    let meta = meta_resource(&built);
+    json_response(&meta, &built.etag)
+}
+
+async fn planar_scalar_response(
+    state: &Arc<AppState>,
+    quantity_id: &str,
+    source: PlanarDataSource,
+    query: &PlanarFieldQuery,
+    headers: &HeaderMap,
+) -> Result<Response<Body>, ApiError> {
+    let built = build_planar_field_from_source(state, quantity_id, source, query).await?;
+    if etag_matches(headers, &built.etag) {
+        return not_modified(&built.etag);
+    }
+    let values = finite_payload(&built.result.scalar_values);
+    let bytes = serialize_field_vector_binary_v2(
+        quantity_id,
+        1,
+        [
+            built.result.meta.resolution[0],
+            built.result.meta.resolution[1],
+            1,
+        ],
+        &values,
+    )
+    .map_err(ApiError::internal)?;
+    binary_response(bytes, "application/vnd.fullmag.field-vector", &built.etag)
+}
+
+async fn planar_vectors_response(
+    state: &Arc<AppState>,
+    quantity_id: &str,
+    source: PlanarDataSource,
+    query: &PlanarFieldQuery,
+    headers: &HeaderMap,
+) -> Result<Response<Body>, ApiError> {
+    let built = build_planar_field_from_source(state, quantity_id, source, query).await?;
+    if etag_matches(headers, &built.etag) {
+        return not_modified(&built.etag);
+    }
+    let vectors = built
+        .result
+        .vector_values
+        .as_ref()
+        .ok_or_else(|| ApiError::unprocessable("planar_vector_unsupported: quantity is scalar"))?;
+    let values = vectors
+        .iter()
+        .flat_map(|vector| {
+            vector
+                .iter()
+                .map(|value| if value.is_finite() { *value } else { 0.0 })
+        })
+        .collect::<Vec<_>>();
+    let bytes = serialize_field_vector_binary_v2(
+        quantity_id,
+        3,
+        [
+            built.result.meta.resolution[0],
+            built.result.meta.resolution[1],
+            1,
+        ],
+        &values,
+    )
+    .map_err(ApiError::internal)?;
+    binary_response(bytes, "application/vnd.fullmag.field-vector", &built.etag)
+}
+
+async fn planar_empty_mask_response(
+    state: &Arc<AppState>,
+    quantity_id: &str,
+    source: PlanarDataSource,
+    query: &PlanarFieldQuery,
+    headers: &HeaderMap,
+) -> Result<Response<Body>, ApiError> {
+    let built = build_planar_field_from_source(state, quantity_id, source, query).await?;
+    if etag_matches(headers, &built.etag) {
+        return not_modified(&built.etag);
+    }
+    let bytes = built
+        .result
+        .occupancy
+        .iter()
+        .map(|occupancy| *occupancy as u8)
+        .collect();
+    binary_response(bytes, "application/octet-stream", &built.etag)
+}
+
+async fn planar_probe_response(
+    state: &Arc<AppState>,
+    quantity_id: &str,
+    source: PlanarDataSource,
+    probe: PlanarFieldProbeQuery,
+) -> Result<Json<PlanarFieldProbeResource>, ApiError> {
+    if !probe.u_m.is_finite() || !probe.v_m.is_finite() {
+        return Err(ApiError::bad_request(
+            "invalid_planar_probe: coordinates must be finite",
+        ));
+    }
+    let query = PlanarFieldQuery {
+        sample_token: probe.sample_token.clone(),
+        component: probe.component.clone(),
+        scope_kind: probe.scope_kind.clone(),
+        scope_id: probe.scope_id.clone(),
+        stage_id: probe.stage_id.clone(),
+        snapshot_id: probe.snapshot_id.clone(),
+        resolution_x: probe.resolution_x,
+        resolution_y: probe.resolution_y,
+        quality: probe.quality.clone(),
+        vector_budget: Some(0),
+        include_mesh: Some(false),
+        expected_scene_revision: probe.expected_scene_revision,
+        expected_monitor_revision: probe.expected_monitor_revision,
+        expected_source_revision: probe.expected_source_revision,
+        expected_mesh_revision: probe.expected_mesh_revision,
+        expected_carrier_revision: probe.expected_carrier_revision,
+        expected_field_revision: probe.expected_field_revision,
+    };
+    let built = build_planar_field_from_source(state, quantity_id, source, &query).await?;
+    let bounds = built.result.meta.bounds_uv_m;
+    let x = (((probe.u_m - bounds[0]) / (bounds[1] - bounds[0])
+        * built.result.meta.resolution[0] as f64)
+        .floor() as i64)
+        .clamp(0, built.result.meta.resolution[0] as i64 - 1) as u32;
+    let y = (((probe.v_m - bounds[2]) / (bounds[3] - bounds[2])
+        * built.result.meta.resolution[1] as f64)
+        .floor() as i64)
+        .clamp(0, built.result.meta.resolution[1] as i64 - 1) as u32;
+    let index = (y * built.result.meta.resolution[0] + x) as usize;
+    let occupancy = built.result.occupancy[index];
+    let source_entity_id = built.result.source_entity_ids[index];
+    let frame = &built.frame;
+    let world_m = [
+        frame.origin_m[0] + probe.u_m * frame.u_axis[0] + probe.v_m * frame.v_axis[0],
+        frame.origin_m[1] + probe.u_m * frame.u_axis[1] + probe.v_m * frame.v_axis[1],
+        frame.origin_m[2] + probe.u_m * frame.u_axis[2] + probe.v_m * frame.v_axis[2],
+    ];
+    Ok(Json(PlanarFieldProbeResource {
+        source: source_resource(&built.source),
+        quantity_id: quantity_id.to_string(),
+        u_m: probe.u_m,
+        v_m: probe.v_m,
+        world_m,
+        scalar: built.result.scalar_values[index]
+            .is_finite()
+            .then_some(built.result.scalar_values[index]),
+        vector: built
+            .result
+            .vector_values
+            .as_ref()
+            .map(|vectors| vectors[index])
+            .filter(|vector| vector.iter().all(|value| value.is_finite())),
+        cell_id: (built.source_entity_kind == "cell")
+            .then_some(source_entity_id)
+            .flatten(),
+        element_id: (built.source_entity_kind == "element")
+            .then_some(source_entity_id)
+            .flatten(),
+        occupancy: occupancy_label(occupancy).to_string(),
+        sampling_method: built.result.meta.sampling_method.to_string(),
+    }))
+}
+
+async fn planar_render_png_response(
+    state: &Arc<AppState>,
+    quantity_id: &str,
+    source: PlanarDataSource,
+    query: &PlanarFieldQuery,
+) -> Result<Response<Body>, ApiError> {
+    let built = build_planar_field_from_source(state, quantity_id, source, query).await?;
+    let mask = built
+        .result
+        .occupancy
+        .iter()
+        .map(|occupancy| u8::from(*occupancy == Occupancy::Empty))
+        .collect::<Vec<_>>();
+    let png = encode_scalar_png(
+        built.result.meta.resolution[0],
+        built.result.meta.resolution[1],
+        &built.result.scalar_values,
+        &mask,
+        "viridis",
+        AutoScaleMode::Slice,
+        None,
+        None,
+        true,
+    )?;
+    binary_response(png, "image/png", &built.etag)
+}
+
+async fn planar_mesh_overlay_response(
+    state: &Arc<AppState>,
+    quantity_id: &str,
+    source: PlanarDataSource,
+    query: &PlanarFieldQuery,
+    headers: &HeaderMap,
+) -> Result<Response<Body>, ApiError> {
+    let built = build_planar_field_from_source(state, quantity_id, source, query).await?;
+    let codec = if fdm_grid_overlay_available(&built) {
+        "fmfg.v1"
+    } else {
+        "fmcs.v4"
+    };
+    let overlay_etag = planar_overlay_etag(&built.etag, codec);
+    if etag_matches(headers, &overlay_etag) {
+        return not_modified(&overlay_etag);
+    }
+    let bytes = if codec == "fmfg.v1" {
+        let overlay = built
+            .target
+            .build_fdm_grid_overlay(&built.request)?
+            .ok_or_else(|| {
+                ApiError::unprocessable(
+                    "planar_mesh_overlay_unavailable: FDM grid geometry is absent",
+                )
+            })?;
+        crate::fdm_planar_grid_overlay::serialize_fmfg_v1(&overlay)?
+    } else {
+        let Some(overlay) = built.result.overlay.as_ref() else {
+            return Ok(StatusCode::NO_CONTENT.into_response());
+        };
+        crate::fem_cross_section::serialize_planar_overlay_fmcs_v4(overlay)
+    };
+    binary_response(bytes, "application/octet-stream", &overlay_etag)
 }
 
 fn resolve_resolution(query: &PlanarFieldQuery) -> Result<[u32; 2], ApiError> {
@@ -682,14 +1013,14 @@ fn validate_auxiliary_query(query: &PlanarFieldQuery) -> Result<(), ApiError> {
 fn validate_expected_revisions(
     query: &PlanarFieldQuery,
     scene_revision: u64,
-    monitor_revision: u64,
+    source_kind: &str,
+    source_revision: u64,
     mesh_revision: u64,
     carrier_revision: u64,
     field_revision: u64,
 ) -> Result<(), ApiError> {
     for (kind, expected, current) in [
         ("scene", query.expected_scene_revision, scene_revision),
-        ("monitor", query.expected_monitor_revision, monitor_revision),
         ("mesh", query.expected_mesh_revision, mesh_revision),
         ("carrier", query.expected_carrier_revision, carrier_revision),
         ("field", query.expected_field_revision, field_revision),
@@ -700,6 +1031,20 @@ fn validate_expected_revisions(
                 expected.expect("checked expected revision")
             )));
         }
+    }
+    let expected_source_revision = query
+        .expected_source_revision
+        .or_else(|| (source_kind == "monitor").then_some(query.expected_monitor_revision).flatten());
+    if expected_source_revision.is_some_and(|expected| expected != source_revision) {
+        let kind = if source_kind == "monitor" {
+            "monitor"
+        } else {
+            "source"
+        };
+        return Err(ApiError::conflict(format!(
+            "stale_{kind}_revision: expected {}, current {source_revision}",
+            expected_source_revision.expect("checked expected source revision")
+        )));
     }
     Ok(())
 }
@@ -811,11 +1156,7 @@ fn spatial_field_content_fingerprint(values: &[f64]) -> String {
 
 fn meta_resource(built: &BuiltPlanarField) -> PlanarFieldMetaResource {
     let bounds = built.result.meta.bounds_uv_m;
-    let base = format!(
-        "/v2/sessions/current/data/fields/{}/planar-monitors/{}",
-        encode_query_component(&built.quantity_id),
-        encode_query_component(&built.monitor.id)
-    );
+    let base = source_base_path(built);
     let query = canonical_sample_query(built);
     let (scalar_min, scalar_max) = built
         .result
@@ -829,12 +1170,10 @@ fn meta_resource(built: &BuiltPlanarField) -> PlanarFieldMetaResource {
             )
         });
     PlanarFieldMetaResource {
-        schema_version: "planar_sample_meta.v3".to_string(),
+        schema_version: "planar_sample_meta.v4".to_string(),
         sample_token: built.sample_token.clone(),
         scene_revision: built.scene_revision,
-        monitor_id: built.result.meta.monitor_id.clone(),
-        monitor_revision: built.monitor_revision,
-        monitor_hash: built.result.meta.monitor_hash.clone(),
+        source: source_resource(&built.source),
         quantity_id: built.quantity_id.clone(),
         canonical_unit: quantity_unit(&built.quantity_id).to_string(),
         component: built.component.clone(),
@@ -846,18 +1185,19 @@ fn meta_resource(built: &BuiltPlanarField) -> PlanarFieldMetaResource {
         scope_kind: built.scope_kind.clone(),
         scope_id: built.scope_id.clone(),
         frame: PlanarFieldFrameResource {
-            origin_m: built.monitor.frame.origin_m,
-            u_axis: built.monitor.frame.u_axis,
-            v_axis: built.monitor.frame.v_axis,
-            normal: built.monitor.frame.normal,
+            origin_m: built.frame.origin_m,
+            u_axis: built.frame.u_axis,
+            v_axis: built.frame.v_axis,
+            normal: built.frame.normal,
             bounds_uv_m: bounds,
         },
+        operator: (&built.operator).into(),
         resolution: built.result.meta.resolution,
         pixel_size_m: [
             (bounds[1] - bounds[0]) / built.result.meta.resolution[0] as f64,
             (bounds[3] - bounds[2]) / built.result.meta.resolution[1] as f64,
         ],
-        sample_support: match built.monitor.operator {
+        sample_support: match built.operator {
             PlanarOperatorIR::PlaneSample => "point_center",
             PlanarOperatorIR::SlabAverage { .. } | PlanarOperatorIR::DepthProjection { .. } => {
                 "pixel_prism"
@@ -919,7 +1259,7 @@ fn fdm_grid_overlay_available(built: &BuiltPlanarField) -> bool {
     built.source_entity_kind == "cell"
         && matches!(built.scope_kind.as_str(), "monitor_target" | "layer")
         && !matches!(
-            built.monitor.operator,
+            built.operator,
             PlanarOperatorIR::SurfaceProjection { .. }
         )
 }
@@ -938,8 +1278,12 @@ fn canonical_sample_query(built: &BuiltPlanarField) -> String {
         ("component", built.component.clone()),
         ("expected_scene_revision", built.scene_revision.to_string()),
         (
-            "expected_monitor_revision",
-            built.monitor_revision.to_string(),
+            if built.source.source_kind == "monitor" {
+                "expected_monitor_revision"
+            } else {
+                "expected_source_revision"
+            },
+            built.source.source_revision.to_string(),
         ),
         ("expected_mesh_revision", built.mesh_revision.to_string()),
         (
@@ -969,6 +1313,46 @@ fn canonical_sample_query(built: &BuiltPlanarField) -> String {
         .join("&")
 }
 
+fn source_base_path(built: &BuiltPlanarField) -> String {
+    match built.source.source_kind.as_str() {
+        "default" => format!(
+            "/v2/sessions/current/data/fields/{}/planar-default",
+            encode_query_component(&built.quantity_id)
+        ),
+        "monitor" => format!(
+            "/v2/sessions/current/data/fields/{}/planar-monitors/{}",
+            encode_query_component(&built.quantity_id),
+            encode_query_component(
+                built
+                    .source
+                    .source_id
+                    .as_deref()
+                    .expect("authored planar source has an ID"),
+            )
+        ),
+        other => panic!("unsupported resolved planar source kind: {other}"),
+    }
+}
+
+fn source_resource(identity: &ResolvedPlanarSourceIdentity) -> PlanarSampleSourceResource {
+    match identity.source_kind.as_str() {
+        "default" => PlanarSampleSourceResource::Default {
+            default_slice_hash: identity.source_hash.clone(),
+            default_slice_revision: identity.source_revision,
+            domain_generation_id: identity.domain_generation_id.clone(),
+        },
+        "monitor" => PlanarSampleSourceResource::Monitor {
+            monitor_id: identity
+                .source_id
+                .clone()
+                .expect("authored planar source has an ID"),
+            monitor_hash: identity.source_hash.clone(),
+            monitor_revision: identity.source_revision,
+        },
+        other => panic!("unsupported resolved planar source kind: {other}"),
+    }
+}
+
 fn encode_query_component(value: &str) -> String {
     value
         .bytes()
@@ -979,21 +1363,6 @@ fn encode_query_component(value: &str) -> String {
             _ => format!("%{byte:02X}"),
         })
         .collect()
-}
-
-fn monitor_hash(monitor: &PlanarMonitorIR) -> Result<String, ApiError> {
-    let json = serde_json::to_vec(monitor)
-        .map_err(|error| ApiError::internal(format!("monitor serialization failed: {error}")))?;
-    Ok(format!("sha256:{:x}", Sha256::digest(json)))
-}
-
-fn monitor_revision(monitor_hash: &str) -> u64 {
-    let digest = Sha256::digest(monitor_hash.as_bytes());
-    u64::from(u32::from_be_bytes(
-        digest[..4]
-            .try_into()
-            .expect("SHA-256 prefix is four bytes"),
-    ))
 }
 
 fn finite_payload(values: &[f64]) -> Vec<f64> {

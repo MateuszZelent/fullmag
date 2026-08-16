@@ -105,6 +105,34 @@ describe("visualization vector capacity", () => {
     });
   });
 
+  it("uses the validated active count for a dense native layer when its mask is omitted", () => {
+    const source: VisualizationVectorCapacitySource = {
+      kind: "fdm-native-layer",
+      carrierId: "fdm-native-layer:layer%3Adense",
+      domainGenerationId: "generation-native-dense",
+      gridFingerprint: "native-grid-dense",
+      shape: [4, 4, 4],
+      activeCellCount: 64,
+      inactiveCellCount: 0,
+      activeMask: null,
+      revision: 13,
+    };
+
+    expect(
+      resolveVisualizationVectorCapacityDescriptor({
+        source,
+        target: { id: source.carrierId, kind: "fdm-native-layer" },
+        geometryScope: "full",
+      }),
+    ).toMatchObject({
+      fullCount: 64,
+      anchorKind: "cell",
+      carrierId: source.carrierId,
+      generation: "generation-native-dense",
+      revision: 13,
+    });
+  });
+
   it("counts FEM anchors as a union of target mesh-part nodes", () => {
     const source: VisualizationVectorCapacitySource = {
       kind: "fem",
@@ -132,5 +160,51 @@ describe("visualization vector capacity", () => {
       revision: 4,
       topologyHash: "topology-1",
     });
+  });
+
+  it("fails closed when FEM node indices are not published", () => {
+    const source: VisualizationVectorCapacitySource = {
+      kind: "fem",
+      carrierId: "mesh-unknown",
+      fullExact: false,
+      fullNodeIndices: [0, 1, 2, 3],
+      generation: "mesh-generation-unknown",
+      revision: 5,
+      surfaceExact: false,
+      surfaceNodeIndices: [0, 1],
+      topologyHash: null,
+    };
+
+    expect(
+      resolveVisualizationVectorCapacityDescriptor({
+        source,
+        target: { id: "object:film", kind: "object" },
+      }),
+    ).toMatchObject({
+      exact: false,
+      fullCount: 4,
+      surfaceCount: 2,
+    });
+  });
+
+  it("fails closed for a partial native layer without its active mask", () => {
+    const source: VisualizationVectorCapacitySource = {
+      activeCellCount: 10,
+      activeMask: null,
+      carrierId: "native:layer-top",
+      domainGenerationId: "generation-native",
+      gridFingerprint: "native-grid",
+      inactiveCellCount: 54,
+      kind: "fdm-native-layer",
+      revision: 6,
+      shape: [4, 4, 4],
+    };
+
+    expect(
+      resolveVisualizationVectorCapacityDescriptor({
+        source,
+        target: { id: "native:layer-top", kind: "fdm-native-layer" },
+      }),
+    ).toMatchObject({ exact: false, fullCount: 10 });
   });
 });

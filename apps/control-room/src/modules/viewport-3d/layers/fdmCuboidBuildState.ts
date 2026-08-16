@@ -89,12 +89,30 @@ export function createFdmCuboidBuildStateController(): FdmCuboidBuildStateContro
     },
     resolve: (buildKey, result) => {
       if (snapshot.buildKey !== buildKey) return;
-      publish({ buildKey, error: null, result, status: "ready" });
+      publish({
+        buildKey,
+        error: null,
+        result: mergeFdmCuboidBuildResult(snapshot.result, result),
+        status: "ready",
+      });
     },
     subscribe: (listener) => {
       listeners.add(listener);
       return () => listeners.delete(listener);
     },
+  };
+}
+
+export function mergeFdmCuboidBuildResult(
+  previous: FdmCuboidBuildResult | null,
+  next: FdmCuboidBuildResult,
+): FdmCuboidBuildResult {
+  if (next.model !== null || previous?.model === null || previous === null) {
+    return next;
+  }
+  return {
+    ...next,
+    model: previous.model,
   };
 }
 

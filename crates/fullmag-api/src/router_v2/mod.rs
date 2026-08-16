@@ -586,6 +586,34 @@ pub fn build_v2_router() -> Router<Arc<AppState>> {
             get(handlers::data::get_planar_field_render_png),
         )
         .route(
+            "/v2/sessions/current/data/fields/:quantity_id/planar-default/meta",
+            get(handlers::data::get_planar_default_field_meta),
+        )
+        .route(
+            "/v2/sessions/current/data/fields/:quantity_id/planar-default/scalar",
+            get(handlers::data::get_planar_default_field_scalar),
+        )
+        .route(
+            "/v2/sessions/current/data/fields/:quantity_id/planar-default/vectors",
+            get(handlers::data::get_planar_default_field_vectors),
+        )
+        .route(
+            "/v2/sessions/current/data/fields/:quantity_id/planar-default/empty-mask",
+            get(handlers::data::get_planar_default_field_empty_mask),
+        )
+        .route(
+            "/v2/sessions/current/data/fields/:quantity_id/planar-default/mesh-overlay",
+            get(handlers::data::get_planar_default_field_mesh_overlay),
+        )
+        .route(
+            "/v2/sessions/current/data/fields/:quantity_id/planar-default/probe",
+            get(handlers::data::get_planar_default_field_probe),
+        )
+        .route(
+            "/v2/sessions/current/data/fields/:quantity_id/planar-default/render.png",
+            get(handlers::data::get_planar_default_field_render_png),
+        )
+        .route(
             "/v2/sessions/current/data/fields/:quantity_id/projection/meta",
             get(handlers::data::get_field_projection_meta),
         )

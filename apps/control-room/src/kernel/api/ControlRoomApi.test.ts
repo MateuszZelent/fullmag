@@ -94,6 +94,18 @@ describe("field vector response metadata", () => {
     >();
   });
 
+  it("exposes pending only for field-vector binary results", () => {
+    type Pending = Extract<
+      BinaryResourceResult<DecodedFieldVector, FieldVectorResponseMetadata>,
+      { status: "pending" }
+    >;
+    expectTypeOf<Pending["reason_code"]>().toEqualTypeOf<string>();
+    expectTypeOf<Pending["retry_after_ms"]>().toEqualTypeOf<number>();
+    expectTypeOf<
+      Extract<BinaryResourceResult<DecodedFieldVector>, { status: "pending" }>
+    >().toEqualTypeOf<never>();
+  });
+
   it("parses every documented response header and reports invalid numbers", () => {
     const headers = new Headers({
       "x-fullmag-component": "full",
@@ -1948,6 +1960,103 @@ describe("ControlRoomApi", () => {
       target: { kind: "study" },
     });
   });
+
+  it("retries a pending field vector without enqueueing a duplicate compute command", async () => {
+    const calls: Array<{ method: string | undefined; url: string }> = [];
+    let vectorRequests = 0;
+    const api = new ControlRoomApi({
+      baseUrl: "http://127.0.0.1:8765",
+      retryDelayMs: 0,
+      fetchImpl: async (url, init) => {
+        const requestUrl = String(url);
+        calls.push({ method: init?.method, url: requestUrl });
+        if (
+          requestUrl.includes(
+            "/v2/sessions/current/data/fields/H_demag/samples/vector",
+          )
+        ) {
+          vectorRequests += 1;
+          if (vectorRequests === 1) {
+            return jsonResponse(
+              {
+                command_id: "cmd-fields",
+                generation_id: "generation-3",
+                quantity_id: "H_demag",
+                reason_code: "field_materialization_pending",
+                retry_after_ms: 0,
+                scope_kind: "airbox",
+                state: "pending",
+              },
+              { status: 202 },
+            );
+          }
+          return binaryResponse(makeFieldVectorBuffer(), {
+            headers: {
+              "etag": '"field-3"',
+              "x-fullmag-domain-generation-id": "generation-3",
+              ...contractHeaders,
+            },
+          });
+        }
+        if (requestUrl.endsWith("/v2/sessions/current/simulation/commands")) {
+          throw new Error("pending field must not enqueue compute_fields");
+        }
+        throw new Error(`Unexpected request ${requestUrl}`);
+      },
+    });
+
+    const result = await api.data.fields.vector("H_demag", {
+      component: "full",
+      expected_carrier_revision: "7",
+      expected_generation_id: "generation-3",
+      scope_kind: "airbox",
+    });
+
+    expect(result.status).toBe("ready");
+    expect(vectorRequests).toBe(2);
+    expect(calls.every((call) => call.url.includes("expected_carrier_revision=7"))).toBe(
+      true,
+    );
+    expect(
+      calls.every((call) => call.url.includes("expected_generation_id=generation-3")),
+    ).toBe(true);
+    expect(
+      calls.filter(
+        (call) =>
+          call.method === "POST" &&
+          call.url.endsWith("/v2/sessions/current/simulation/commands"),
+      ),
+    ).toHaveLength(0);
+  });
+
+  it.each([404, 409] as const)(
+    "does not retry or materialize a field vector after HTTP %s",
+    async (status) => {
+      const fetchImpl = vi.fn(async () =>
+        jsonResponse(
+          {
+            code: status === 409 ? "stale_generation_id" : "field_not_found",
+            message: status === 409 ? "stale generation" : "unknown scope",
+          },
+          { status },
+        ),
+      );
+      const api = new ControlRoomApi({
+        baseUrl: "http://127.0.0.1:8765",
+        fetchImpl,
+        retryDelayMs: 0,
+      });
+
+      await expect(
+        api.data.fields.vector("H_demag", {
+          expected_generation_id: "generation-3",
+          scope_id: "unknown-scope",
+          scope_kind: "airbox",
+        }),
+      ).rejects.toMatchObject({ status });
+      expect(fetchImpl).toHaveBeenCalledTimes(1);
+    },
+  );
 
   it.each(["pending", "stale_complete", "error", "complete"] as const)(
     "returns a %s live-publisher miss for resource invalidation without enqueueing compute_fields",

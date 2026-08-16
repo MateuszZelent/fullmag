@@ -127,8 +127,6 @@ fn fem_tetra_linear_slice_via_planar_engine(
     let sampled = PlanarSamplingEngine::sample_fem(
         &source,
         &ResolvedPlanarSampleRequest {
-            monitor_id: "legacy-fem-slice".to_string(),
-            monitor_hash: "legacy-fem-slice-v1".to_string(),
             frame: PlanarFrameIR {
                 origin_m,
                 u_axis,

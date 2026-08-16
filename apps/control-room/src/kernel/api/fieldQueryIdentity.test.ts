@@ -66,6 +66,8 @@ describe("fieldQueryIdentity", () => {
     const key = serializeCanonicalFieldVectorResourceKey(
       canonicalFieldVectorQuery("m", {
         component: "y",
+        expected_carrier_revision: "carrier-7",
+        expected_generation_id: "generation-3",
         geometry_scope: "surface",
         max_samples: 1200,
         phase_rad: 1.5,
@@ -78,7 +80,7 @@ describe("fieldQueryIdentity", () => {
     );
 
     expect(key).toBe(
-      "/v2/sessions/current/data/fields/m/samples/vector?component=y&geometry_scope=surface&max_samples=1200&phase_rad=1.5&scope_id=film&scope_kind=object&snapshot_id=snapshot-1&stage_id=stage-1&view=phase_rotated_real",
+      "/v2/sessions/current/data/fields/m/samples/vector?component=y&expected_carrier_revision=carrier-7&expected_generation_id=generation-3&geometry_scope=surface&max_samples=1200&phase_rad=1.5&scope_id=film&scope_kind=object&snapshot_id=snapshot-1&stage_id=stage-1&view=phase_rotated_real",
     );
   });
 
@@ -110,11 +112,13 @@ describe("fieldQueryIdentity", () => {
   it("parses an exact recommended fetch regardless of query parameter order", () => {
     expect(
       parseCanonicalFieldVectorResourceKey(
-        "/v2/sessions/current/data/fields/m/samples/vector?view=phase_rotated_real&stage_id=stage-1&scope_kind=object&scope_id=object%3Afilm&snapshot_id=snapshot-1&phase_rad=1.5&max_samples=1200&geometry_scope=surface&component=y",
+        "/v2/sessions/current/data/fields/m/samples/vector?view=phase_rotated_real&stage_id=stage-1&scope_kind=object&scope_id=object%3Afilm&snapshot_id=snapshot-1&phase_rad=1.5&max_samples=1200&geometry_scope=surface&expected_generation_id=generation-3&expected_carrier_revision=carrier-7&component=y",
       ),
     ).toEqual(
       canonicalFieldVectorQuery("m", {
         component: "y",
+        expected_carrier_revision: "carrier-7",
+        expected_generation_id: "generation-3",
         geometry_scope: "surface",
         max_samples: 1200,
         phase_rad: 1.5,

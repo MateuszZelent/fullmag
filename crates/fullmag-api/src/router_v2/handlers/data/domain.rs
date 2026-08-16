@@ -54,6 +54,14 @@ pub async fn get_domain_meta(
         .as_ref()
         .ok_or_else(|| ApiError::not_found("no active local live workspace"))?;
 
+    Ok(Json(domain_meta_for_snapshot(snapshot)))
+}
+
+/// Build the canonical physical domain metadata from the same snapshot used
+/// by the public `/data/domain/meta` endpoint.  Default planar sampling must
+/// resolve against this exact geometry rather than reconstructing bounds from
+/// a client payload or from a monitor.
+pub(crate) fn domain_meta_for_snapshot(snapshot: &SessionStateResponse) -> DomainMeta {
     let is_fem = snapshot.fem_mesh.is_some() && !is_fdm_snapshot(snapshot);
     let latest = snapshot.live_state.as_ref().map(|l| &l.latest_step);
 
@@ -127,7 +135,7 @@ pub async fn get_domain_meta(
         }
     };
 
-    Ok(Json(DomainMeta {
+    DomainMeta {
         domain_id: "current".into(),
         discretization: if is_fem { "fem" } else { "fdm" }.into(),
         generation_id,
@@ -145,7 +153,7 @@ pub async fn get_domain_meta(
         element_type: is_fem
             .then(|| snapshot.fem_mesh.as_ref().and_then(fem_element_type))
             .flatten(),
-    }))
+    }
 }
 
 #[utoipa::path(

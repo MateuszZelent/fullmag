@@ -60,19 +60,30 @@ const fieldVectorCache = new ResourceCache<
 >({
   maxBytes: 128 * 1024 * 1024,
 });
+const lastGoodFieldVectorRequestKeys = new Map<string, string>();
+const MAX_LAST_GOOD_FIELD_VECTOR_REQUEST_KEYS = 1_024;
 
-interface CachedFieldVectorEnvelope {
+export interface Viewport3DFieldVectorEnvelope {
   data: DecodedFieldVector;
   etag: string | null;
   responseMetadata: FieldVectorResponseMetadata | null;
   resourceKey: string;
 }
 
+type CachedFieldVectorEnvelope = Viewport3DFieldVectorEnvelope;
+
+type Viewport3DFieldVectorCollectionStatus =
+  | "error"
+  | "idle"
+  | "loading"
+  | "ready"
+  | "stale";
+
 export function resolveCachedFieldVectorEnvelope(
   cache: ResourceCache<DecodedFieldVector, FieldVectorResponseMetadata>,
   resourceKey: string,
   data: DecodedFieldVector,
-): CachedFieldVectorEnvelope | null {
+): Viewport3DFieldVectorEnvelope | null {
   const entry = cache.peek(resourceKey);
   if (!entry || entry.data !== data) return null;
   return {
@@ -82,6 +93,201 @@ export function resolveCachedFieldVectorEnvelope(
     resourceKey,
   };
 }
+
+function rememberLastGoodFieldVectorRequestKey(
+  collectionId: string,
+  requestId: string,
+  resourceKey: string,
+): void {
+  const stableRequestId = `${collectionId}:${requestId}`;
+  if (!lastGoodFieldVectorRequestKeys.has(stableRequestId)) {
+    while (
+      lastGoodFieldVectorRequestKeys.size >=
+      MAX_LAST_GOOD_FIELD_VECTOR_REQUEST_KEYS
+    ) {
+      const oldest = lastGoodFieldVectorRequestKeys.keys().next().value;
+      if (oldest === undefined) break;
+      lastGoodFieldVectorRequestKeys.delete(oldest);
+    }
+  }
+  lastGoodFieldVectorRequestKeys.delete(stableRequestId);
+  lastGoodFieldVectorRequestKeys.set(stableRequestId, resourceKey);
+}
+
+function resolveLastGoodFieldVectorEnvelope(
+  collectionId: string,
+  requestId: string,
+  resourceKey: string,
+): Viewport3DFieldVectorEnvelope | null {
+  const rememberedResourceKey =
+    lastGoodFieldVectorRequestKeys.get(`${collectionId}:${requestId}`);
+  const resolvedResourceKey = fieldVectorCache.peek(resourceKey)
+    ? resourceKey
+    : rememberedResourceKey;
+  if (!resolvedResourceKey) return null;
+  const cached = fieldVectorCache.peek(resolvedResourceKey);
+  return cached
+    ? resolveCachedFieldVectorEnvelope(
+        fieldVectorCache,
+        resolvedResourceKey,
+        cached.data,
+      )
+    : null;
+}
+
+function resolveLastGoodFieldVectorCollectionFromCache(
+  collectionId: string,
+  requests: ReadonlyMap<
+    string,
+    Pick<Viewport3DFieldResourceRequest, "quantityId" | "query"> & {
+      key: string;
+    }
+  >,
+): Map<string, Viewport3DFieldVectorEnvelope> {
+  const previous = new Map<string, Viewport3DFieldVectorEnvelope>();
+  for (const [requestId, request] of requests) {
+    const envelope = resolveLastGoodFieldVectorEnvelope(
+      collectionId,
+      requestId,
+      request.key,
+    );
+    if (envelope) previous.set(requestId, envelope);
+  }
+  return previous;
+}
+
+export function viewport3DFieldVectorMatchesRequestIdentity(
+  envelope: Viewport3DFieldVectorEnvelope,
+  request: Pick<Viewport3DFieldResourceRequest, "quantityId" | "query">,
+): boolean {
+  const field = envelope.data;
+  if (
+    resolveCanonicalQuantityId(field.quantityId) !==
+    resolveCanonicalQuantityId(request.quantityId)
+  ) {
+    return false;
+  }
+
+  const requestedScopeKind = request.query.scope_kind ?? "full";
+  const requestedScopeId = request.query.scope_id ?? null;
+  const responseScopeKind = field.scopeKind ?? envelope.responseMetadata?.scopeKind ?? null;
+  const responseScopeId = field.scopeId ?? envelope.responseMetadata?.scopeId ?? null;
+  const responseGenerationId =
+    field.domainGenerationId ?? envelope.responseMetadata?.domainGenerationId ?? null;
+  const responseCarrierRevision =
+    field.meshTopologyHash ?? envelope.responseMetadata?.meshTopologyHash ?? null;
+  const expectedGenerationId = request.query.expected_generation_id?.trim() || null;
+  const expectedCarrierRevision =
+    request.query.expected_carrier_revision?.trim() || null;
+  if (
+    !matchesViewport3DFieldIdentityPrecondition(
+      expectedGenerationId,
+      responseGenerationId,
+    ) ||
+    !matchesViewport3DFieldIdentityPrecondition(
+      expectedCarrierRevision,
+      responseCarrierRevision,
+    )
+  ) {
+    return false;
+  }
+  if (
+    envelope.responseMetadata?.identityIssues.some(
+      (issue) =>
+        issue.field === "domainGenerationId" ||
+        issue.field === "meshTopologyHash",
+    )
+  ) {
+    return false;
+  }
+  if (
+    responseScopeKind !== null &&
+    responseScopeKind !== requestedScopeKind
+  ) {
+    return false;
+  }
+  if (requestedScopeKind !== "full" && responseScopeKind === null) {
+    return false;
+  }
+  if (requestedScopeId !== null && responseScopeId !== requestedScopeId) {
+    return false;
+  }
+  if (requestedScopeKind !== "full" && responseScopeId === null) {
+    return false;
+  }
+
+  const metadataQuantityId = envelope.responseMetadata?.quantityId;
+  if (
+    metadataQuantityId === null ||
+    metadataQuantityId === undefined ||
+    resolveCanonicalQuantityId(metadataQuantityId) ===
+      resolveCanonicalQuantityId(request.quantityId)
+  ) {
+    const requestedComponent = request.query.component ?? "full";
+    const responseComponent =
+      envelope.data.nComp === 1 && requestedComponent === "full"
+        ? null
+        : envelope.responseMetadata?.component ?? null;
+    return responseComponent === null || responseComponent === requestedComponent;
+  }
+  return false;
+}
+
+function matchesViewport3DFieldIdentityPrecondition(
+  expected: string | null,
+  actual: string | null | undefined,
+): boolean {
+  if (expected === null) return true;
+  if (actual == null || actual.trim().length === 0) return false;
+  return canonicalViewport3DFieldIdentityToken(expected) ===
+    canonicalViewport3DFieldIdentityToken(actual);
+}
+
+function canonicalViewport3DFieldIdentityToken(value: string): string {
+  const trimmed = value.trim();
+  return trimmed.replace(/^sha256:/i, "").toLowerCase();
+}
+
+export function resolveViewport3DFieldVectorCollectionLastGood({
+  current,
+  previous,
+  requests,
+  status,
+}: {
+  current: ReadonlyMap<string, Viewport3DFieldVectorEnvelope> | null | undefined;
+  previous: ReadonlyMap<string, Viewport3DFieldVectorEnvelope>;
+  requests: ReadonlyMap<
+    string,
+    Pick<Viewport3DFieldResourceRequest, "quantityId" | "query">
+  >;
+  status: Viewport3DFieldVectorCollectionStatus;
+}): Map<string, Viewport3DFieldVectorEnvelope> {
+  const retained = new Map<string, Viewport3DFieldVectorEnvelope>();
+  for (const [requestId, request] of requests) {
+    const currentEnvelope = current?.get(requestId);
+    const previousEnvelope = previous.get(requestId);
+    if (
+      status === "ready" &&
+      currentEnvelope &&
+      viewport3DFieldVectorMatchesRequestIdentity(currentEnvelope, request)
+    ) {
+      retained.set(requestId, currentEnvelope);
+      continue;
+    }
+    if (status === "ready") continue;
+    if (status !== "error" && status !== "loading" && status !== "stale") {
+      continue;
+    }
+    if (
+      previousEnvelope &&
+      viewport3DFieldVectorMatchesRequestIdentity(previousEnvelope, request)
+    ) {
+      retained.set(requestId, previousEnvelope);
+    }
+  }
+  return retained;
+}
+
 const qualityDataCache = new ResourceCache<DecodedMeshQualityData>({
   maxBytes: 48 * 1024 * 1024,
 });
@@ -391,13 +597,8 @@ export async function loadCachedBinaryResource<TData, TMetadata = undefined>(
   const pending = (async () => {
     const result = await request(cached?.etag, controller.signal);
 
-    const resultStatus = (result as { status?: string }).status;
-    if (resultStatus === "pending") {
-      const pendingResult = result as BinaryResourceResult<TData, TMetadata> & {
-        command_id?: string | null;
-        reason_code?: string | null;
-        retry_after_ms?: number | null;
-      };
+    if (result.status === "pending") {
+      const pendingResult = result;
       throw Object.assign(
         new Error(
           pendingResult.reason_code ??
@@ -953,57 +1154,81 @@ export function useViewport3DAirboxFieldVectors(
           Array.from(requests.values(), (request) => [request.key, request]),
         ).values(),
       );
-      const dataByKey = new Map<string, DecodedFieldVector | null>();
+      const dataByKey = new Map<string, CachedFieldVectorEnvelope | null>();
       let firstError: unknown = null;
       for (const request of uniqueRequests) {
+        if (signal.aborted) {
+          throw signal.reason ?? new DOMException("aborted", "AbortError");
+        }
         try {
-            const data = await loadCachedBinaryResource(
-              fieldVectorCache,
-              request.key,
-              (etag, requestSignal) =>
-                api.data.fields.vector(request.quantityId, request.query, {
-                  etag,
-                  signal: requestSignal,
-                }),
-              {
-                preferCached: cachedBinaryResourceMatchesRevision(
+          const data = await loadCachedBinaryResource(
+            fieldVectorCache,
+            request.key,
+            (etag, requestSignal) =>
+              api.data.fields.vector(request.quantityId, request.query, {
+                etag,
+                signal: requestSignal,
+              }),
+            {
+              preferCached: cachedBinaryResourceMatchesRevision(
+                fieldVectorCache,
+                request.key,
+                resources.getRevision(request.key),
+              ),
+              signal,
+            },
+          );
+          if (data !== null) {
+            invalidateViewport3DFieldMetaResources(
+              resources,
+              request.quantityId,
+              fieldVectorCache.peek(request.key)?.etag ?? null,
+            );
+          }
+          dataByKey.set(
+            request.key,
+            data === null
+              ? null
+              : resolveCachedFieldVectorEnvelope(
                   fieldVectorCache,
                   request.key,
-                  resources.getRevision(request.key),
+                  data,
                 ),
-                signal,
-              },
-            );
-            if (data !== null) {
-              invalidateViewport3DFieldMetaResources(
-                resources,
-                request.quantityId,
-                fieldVectorCache.peek(request.key)?.etag ?? null,
-              );
-            }
-            dataByKey.set(
-              request.key,
-              data === null
-                ? null
-                : (resolveCachedFieldVectorEnvelope(
-                    fieldVectorCache,
-                    request.key,
-                    data,
-                  )?.data ?? null),
-            );
+          );
         } catch (error) {
+          if (signal.aborted) throw error;
           if (!airboxFieldVectorUnavailable(error)) firstError ??= error;
-          dataByKey.set(request.key, fieldVectorCache.peek(request.key)?.data ?? null);
+          const cached = fieldVectorCache.peek(request.key);
+          dataByKey.set(
+            request.key,
+            cached
+              ? resolveCachedFieldVectorEnvelope(
+                  fieldVectorCache,
+                  request.key,
+                  cached.data,
+                )
+              : null,
+          );
         }
       }
       const entries = Array.from(requests, ([partId, request]) => [
         partId,
         dataByKey.get(request.key) ?? null,
       ] as const);
+      for (const [partId, request] of requests) {
+        const envelope = dataByKey.get(request.key);
+        if (envelope) {
+          rememberLastGoodFieldVectorRequestKey(
+            "airbox",
+            partId,
+            envelope.resourceKey,
+          );
+        }
+      }
 
       const partial = new Map(
         entries.filter(
-          (entry): entry is readonly [string, DecodedFieldVector] =>
+          (entry): entry is readonly [string, CachedFieldVectorEnvelope] =>
             entry[1] !== null,
         ),
       );
@@ -1035,9 +1260,44 @@ export function useViewport3DAirboxFieldVectors(
     resolveRevision,
     resourceKey,
   });
+  const previousFieldVectorEnvelopes = useMemo(
+    () => resolveLastGoodFieldVectorCollectionFromCache("airbox", requests),
+    [requests],
+  );
+  const fieldVectorEnvelopes = useMemo(
+    () =>
+      resolveViewport3DFieldVectorCollectionLastGood({
+        current: resource.data,
+        previous: previousFieldVectorEnvelopes,
+        requests,
+        status: resource.status,
+      }),
+    [previousFieldVectorEnvelopes, requests, resource.data, resource.status],
+  );
+  const data = useMemo(
+    () =>
+      new Map(
+        Array.from(fieldVectorEnvelopes, ([partId, envelope]) => [
+          partId,
+          envelope.data,
+        ]),
+      ),
+    [fieldVectorEnvelopes],
+  );
+  const payloadRevision = useMemo(
+    () =>
+      fieldVectorEnvelopes.size > 0
+        ? Array.from(
+            fieldVectorEnvelopes.values(),
+            (envelope) => envelope.etag ?? "missing",
+          ).join("|")
+        : null,
+    [fieldVectorEnvelopes],
+  );
   return {
     ...resource,
-    payloadRevision: resolveRevision(),
+    data,
+    payloadRevision,
   };
 }
 
@@ -1104,6 +1364,9 @@ export function useViewport3DQuantityFieldVectors(
       const entries: Array<readonly [string, CachedFieldVectorEnvelope | null]> = [];
       let firstError: unknown = null;
       for (const [requestId, request] of requestKeys) {
+        if (signal.aborted) {
+          throw signal.reason ?? new DOMException("aborted", "AbortError");
+        }
         try {
           const data = await loadCachedBinaryResource(
             fieldVectorCache,
@@ -1140,7 +1403,16 @@ export function useViewport3DQuantityFieldVectors(
                   data,
                 ),
           ]);
+          const envelope = entries.at(-1)?.[1];
+          if (envelope) {
+            rememberLastGoodFieldVectorRequestKey(
+              "quantity",
+              requestId,
+              envelope.resourceKey,
+            );
+          }
         } catch (error) {
+          if (signal.aborted) throw error;
           firstError ??= error;
           const cached = fieldVectorCache.peek(request.key);
           entries.push([
@@ -1191,7 +1463,21 @@ export function useViewport3DQuantityFieldVectors(
     resolveRevision,
     resourceKey,
   });
-  const fieldVectorEnvelopes = resource.data;
+  const previousFieldVectorEnvelopes = useMemo(
+    () =>
+      resolveLastGoodFieldVectorCollectionFromCache("quantity", requestKeys),
+    [requestKeys],
+  );
+  const fieldVectorEnvelopes = useMemo(
+    () =>
+      resolveViewport3DFieldVectorCollectionLastGood({
+        current: resource.data,
+        previous: previousFieldVectorEnvelopes,
+        requests: requestKeys,
+        status: resource.status,
+      }),
+    [previousFieldVectorEnvelopes, requestKeys, resource.data, resource.status],
+  );
   const data = useMemo(
     () =>
       fieldVectorEnvelopes
@@ -1264,9 +1550,12 @@ export function useViewport3DPartFieldVectors(
   }, [requestKeys]);
   const load = useCallback(
     async ({ signal }: { signal: AbortSignal }) => {
-      const entries: Array<readonly [string, DecodedFieldVector | null]> = [];
+      const entries: Array<readonly [string, CachedFieldVectorEnvelope | null]> = [];
       let firstError: unknown = null;
       for (const [partId, request] of requestKeys) {
+        if (signal.aborted) {
+          throw signal.reason ?? new DOMException("aborted", "AbortError");
+        }
         try {
           const data = await loadCachedBinaryResource(
             fieldVectorCache,
@@ -1297,24 +1586,40 @@ export function useViewport3DPartFieldVectors(
             partId,
             data === null
               ? null
-              : (resolveCachedFieldVectorEnvelope(
+              : resolveCachedFieldVectorEnvelope(
                   fieldVectorCache,
                   request.key,
                   data,
-                )?.data ?? null),
+                ),
           ]);
+          const envelope = entries.at(-1)?.[1];
+          if (envelope) {
+            rememberLastGoodFieldVectorRequestKey(
+              "part",
+              partId,
+              envelope.resourceKey,
+            );
+          }
         } catch (error) {
+          if (signal.aborted) throw error;
           firstError ??= error;
+          const cached = fieldVectorCache.peek(request.key);
           entries.push([
             partId,
-            fieldVectorCache.peek(request.key)?.data ?? null,
+            cached
+              ? resolveCachedFieldVectorEnvelope(
+                  fieldVectorCache,
+                  request.key,
+                  cached.data,
+                )
+              : null,
           ]);
         }
       }
 
       const partial = new Map(
         entries.filter(
-          (entry): entry is readonly [string, DecodedFieldVector] =>
+          (entry): entry is readonly [string, CachedFieldVectorEnvelope] =>
             entry[1] !== null,
         ),
       );
@@ -1346,9 +1651,44 @@ export function useViewport3DPartFieldVectors(
     resolveRevision,
     resourceKey,
   });
+  const previousFieldVectorEnvelopes = useMemo(
+    () => resolveLastGoodFieldVectorCollectionFromCache("part", requestKeys),
+    [requestKeys],
+  );
+  const fieldVectorEnvelopes = useMemo(
+    () =>
+      resolveViewport3DFieldVectorCollectionLastGood({
+        current: resource.data,
+        previous: previousFieldVectorEnvelopes,
+        requests: requestKeys,
+        status: resource.status,
+      }),
+    [previousFieldVectorEnvelopes, requestKeys, resource.data, resource.status],
+  );
+  const data = useMemo(
+    () =>
+      new Map(
+        Array.from(fieldVectorEnvelopes, ([partId, envelope]) => [
+          partId,
+          envelope.data,
+        ]),
+      ),
+    [fieldVectorEnvelopes],
+  );
+  const payloadRevision = useMemo(
+    () =>
+      fieldVectorEnvelopes.size > 0
+        ? Array.from(
+            fieldVectorEnvelopes.values(),
+            (envelope) => envelope.etag ?? "missing",
+          ).join("|")
+        : null,
+    [fieldVectorEnvelopes],
+  );
   return {
     ...resource,
-    payloadRevision: resolveRevision(),
+    data,
+    payloadRevision,
   };
 }
 

@@ -22,11 +22,13 @@ interface VisualizationRegistrySyncApi {
 export interface VisualizationRegistrySyncSnapshot {
   error: Error | null;
   inflightPatch: VisualizationStatePatch | null;
+  inflightTargetIds: readonly string[];
   lastLocalChangedAt: number | null;
   lastRemoteRevision: ResourceRevision | null;
   mutation: VisualizationRegistryMutationState | null;
   pendingFingerprint: string | null;
   pendingPatch: VisualizationStatePatch | null;
+  pendingTargetIds: readonly string[];
   version: number;
 }
 
@@ -52,15 +54,18 @@ const DEFAULT_MAX_LATENCY_MS = 2_500;
 const DEFAULT_QUIET_MS = 600;
 const DEFAULT_MAX_TRANSIENT_ATTEMPTS = 3;
 const DEFAULT_RETRY_BASE_DELAY_MS = 250;
+const EMPTY_TARGET_IDS: readonly string[] = [];
 
 const INITIAL_SNAPSHOT: VisualizationRegistrySyncSnapshot = {
   error: null,
   inflightPatch: null,
+  inflightTargetIds: EMPTY_TARGET_IDS,
   lastLocalChangedAt: null,
   lastRemoteRevision: null,
   mutation: null,
   pendingFingerprint: null,
   pendingPatch: null,
+  pendingTargetIds: EMPTY_TARGET_IDS,
   version: 0,
 };
 
@@ -77,6 +82,7 @@ export class VisualizationRegistrySyncController {
   private flushPromise: Promise<void> | null = null;
   private inflightCameraInvalidationSuppressed = false;
   private rejectedPatch: VisualizationStatePatch | null = null;
+  private rejectedTargetIds: readonly string[] = EMPTY_TARGET_IDS;
   private started = false;
   private readonly suppressedCameraInvalidationRevisions = new Set<string>();
   private snapshot: VisualizationRegistrySyncSnapshot = INITIAL_SNAPSHOT;
@@ -156,8 +162,13 @@ export class VisualizationRegistrySyncController {
         this.snapshot.inflightPatch,
         patch,
       ),
+      inflightTargetIds: mergeTargetIds(
+        this.snapshot.inflightTargetIds,
+        this.snapshot.pendingTargetIds,
+      ),
       pendingFingerprint: null,
       pendingPatch: null,
+      pendingTargetIds: EMPTY_TARGET_IDS,
       mutation: {
         attempts: 0,
         error: null,
@@ -175,6 +186,7 @@ export class VisualizationRegistrySyncController {
     this.flushPromise = this.patchWithBoundedRetry(patch)
       .then((state) => {
         this.rejectedPatch = null;
+        this.rejectedTargetIds = EMPTY_TARGET_IDS;
         this.observeRemoteState(state);
         // Optimize: populate the local resource cache pessimistically with the fresh patched state
         // to avoid triggering a redundant GET /v2/sessions/current/visualization/state fetch.
@@ -204,13 +216,16 @@ export class VisualizationRegistrySyncController {
       })
       .catch((error: unknown) => {
         this.rejectedPatch = patch;
+        this.rejectedTargetIds = this.snapshot.inflightTargetIds;
         const normalizedError = error instanceof Error ? error : new Error(String(error));
         this.snapshot = {
           ...this.snapshot,
           error: normalizedError,
           inflightPatch: null,
+          inflightTargetIds: EMPTY_TARGET_IDS,
           pendingFingerprint: null,
           pendingPatch: null,
+          pendingTargetIds: EMPTY_TARGET_IDS,
           mutation: this.snapshot.mutation
             ? {
                 ...this.snapshot.mutation,
@@ -293,10 +308,18 @@ export class VisualizationRegistrySyncController {
       visualizationStateSatisfiesPatch(state, this.snapshot.inflightPatch)
         ? null
         : this.snapshot.inflightPatch;
+    const pendingTargetIds = pendingPatch
+      ? this.snapshot.pendingTargetIds
+      : EMPTY_TARGET_IDS;
+    const inflightTargetIds = inflightPatch
+      ? this.snapshot.inflightTargetIds
+      : EMPTY_TARGET_IDS;
     if (
       this.snapshot.lastRemoteRevision === state.revision &&
       this.snapshot.pendingPatch === pendingPatch &&
-      this.snapshot.inflightPatch === inflightPatch
+      this.snapshot.inflightPatch === inflightPatch &&
+      this.snapshot.pendingTargetIds === pendingTargetIds &&
+      this.snapshot.inflightTargetIds === inflightTargetIds
     ) {
       return;
     }
@@ -304,9 +327,11 @@ export class VisualizationRegistrySyncController {
     this.snapshot = {
       ...this.snapshot,
       inflightPatch,
+      inflightTargetIds,
       lastRemoteRevision: state.revision,
       pendingFingerprint: null,
       pendingPatch,
+      pendingTargetIds,
       version: this.snapshot.version + 1,
     };
     if (!pendingPatch) {
@@ -317,7 +342,10 @@ export class VisualizationRegistrySyncController {
     }
   }
 
-  queuePatch(patch: VisualizationStatePatch): void {
+  queuePatch(
+    patch: VisualizationStatePatch,
+    targetIds: readonly string[] = [],
+  ): void {
     if (!hasPatchKeys(patch)) return;
     if (
       this.snapshot.pendingPatch &&
@@ -331,6 +359,10 @@ export class VisualizationRegistrySyncController {
       this.snapshot.pendingPatch,
       patch,
     );
+    const pendingTargetIds = mergeTargetIds(
+      this.snapshot.pendingTargetIds,
+      targetIds.length > 0 ? targetIds : targetIdsFromPatch(patch),
+    );
 
     this.firstPendingAt = this.firstPendingAt ?? now;
     this.snapshot = {
@@ -339,6 +371,7 @@ export class VisualizationRegistrySyncController {
       lastLocalChangedAt: now,
       pendingFingerprint: null,
       pendingPatch,
+      pendingTargetIds,
       version: this.snapshot.version + 1,
     };
     if (!isCameraOnlyPatch(pendingPatch)) {
@@ -350,7 +383,9 @@ export class VisualizationRegistrySyncController {
   retryRejectedMutation(): Promise<void> {
     const patch = this.rejectedPatch;
     if (!patch || this.flushPromise) return Promise.resolve();
-    this.queuePatch(patch);
+    const targetIds = this.rejectedTargetIds;
+    this.rejectedTargetIds = EMPTY_TARGET_IDS;
+    this.queuePatch(patch, targetIds);
     return this.flushNow();
   }
 
@@ -578,6 +613,24 @@ function valueSatisfiesPatch(value: unknown, patch: unknown): boolean {
 
 function hasPatchKeys(patch: VisualizationStatePatch): boolean {
   return Object.keys(patch).length > 0;
+}
+
+function mergeTargetIds(
+  current: readonly string[],
+  next: readonly string[],
+): readonly string[] {
+  return [...new Set([...current, ...next].filter((value) => value.length > 0))];
+}
+
+function targetIdsFromPatch(patch: VisualizationStatePatch): readonly string[] {
+  if (!Array.isArray(patch.overrides)) return [];
+  return mergeTargetIds(
+    [],
+    patch.overrides.flatMap((entry) => {
+      if (!entry.scope || !entry.scope_id) return [];
+      return [`${entry.scope}:${entry.scope_id}`];
+    }),
+  );
 }
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {

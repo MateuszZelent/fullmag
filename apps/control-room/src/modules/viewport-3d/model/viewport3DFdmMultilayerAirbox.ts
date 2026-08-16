@@ -15,17 +15,24 @@ const FDM_MULTILAYER_AIRBOX_QUANTITY_ID = "H_demag";
  */
 export function buildFdmMultilayerAirboxFieldRequest(
   _domain: FdmMultilayerAirboxRenderDomain,
+  maxSamples?: number | null,
 ): Viewport3DFieldResourceRequest {
   const query: FdmMultilayerFieldVectorQuery = {
     component: "full",
     scope_id: FDM_MULTILAYER_AIRBOX_SCOPE_ID,
     scope_kind: "airbox",
   };
+  const normalizedMaxSamples = normalizeSampleLimit(maxSamples);
+  if (normalizedMaxSamples !== null) {
+    query.max_samples = normalizedMaxSamples;
+  }
   return {
     consumers: ["viewport-3d:fdm-multilayer-airbox"],
     quantityId: FDM_MULTILAYER_AIRBOX_QUANTITY_ID,
     query,
-    requestId: "fdm-multilayer-airbox:H_demag",
+    requestId: `fdm-multilayer-airbox:H_demag${
+      normalizedMaxSamples === null ? "" : `:max_samples=${normalizedMaxSamples}`
+    }`,
   };
 }
 
@@ -67,11 +74,12 @@ export function resolveFdmMultilayerAirboxFieldVector(
     canonicalFingerprint(fieldVector.meshTopologyHash) !==
       canonicalFingerprint(domain.carrierFingerprint) ||
     fieldVector.grid.some((value, axis) => value !== domain.shape[axis]) ||
-    fieldVector.pointCount !== domain.totalCells ||
+    fieldVector.pointCount <= 0 ||
+    fieldVector.pointCount > domain.totalCells ||
     fieldVector.nComp !== 3 ||
-    fieldVector.valueCount !== domain.totalCells * 3 ||
+    fieldVector.valueCount !== fieldVector.pointCount * 3 ||
     fieldVector.values.length !== fieldVector.valueCount ||
-    !hasCompleteExplicitCellIndices(fieldVector, domain.totalCells)
+    !hasValidExplicitCellIndices(fieldVector, domain.totalCells)
   ) {
     return null;
   }
@@ -89,18 +97,19 @@ function canonicalFingerprint(value: string | null | undefined): string | null {
   return matched?.[1]?.toLowerCase() ?? null;
 }
 
-function hasCompleteExplicitCellIndices(
+function hasValidExplicitCellIndices(
   fieldVector: DecodedFieldVector,
   totalCells: number,
 ): boolean {
   if (
-    fieldVector.indexing !== "explicit_node_indices" ||
+    (fieldVector.indexing !== "explicit_node_indices" &&
+      fieldVector.indexing !== "sampled_node_indices") ||
     !fieldVector.nodeIndices ||
-    fieldVector.nodeIndices.length !== totalCells
+    fieldVector.nodeIndices.length !== fieldVector.pointCount
   ) {
     return false;
   }
-  const seen = new Uint8Array(totalCells);
+  const seen = new Uint8Array(Math.max(0, Math.floor(totalCells)));
   for (const index of fieldVector.nodeIndices) {
     if (!Number.isSafeInteger(index) || index < 0 || index >= totalCells || seen[index]) {
       return false;
@@ -108,4 +117,10 @@ function hasCompleteExplicitCellIndices(
     seen[index] = 1;
   }
   return true;
+}
+
+function normalizeSampleLimit(value: number | null | undefined): number | null {
+  if (value == null || !Number.isFinite(value)) return null;
+  const normalized = Math.floor(value);
+  return normalized > 0 ? normalized : null;
 }

@@ -46,7 +46,7 @@ describe("ObjectVisualizationPanel performance contracts", () => {
     expect(panelSource).toContain(
       "resolveObjectVisualizationTargetForLane({",
     );
-    expect(panelSource).toContain("fdmGridCellCount");
+    expect(panelSource).toContain("resolveVisualizationVectorCapacityForTarget");
     expect(panelSource).toContain('value="Structured grid cells"');
     expect(panelSource).not.toContain('"No airbox mesh part is present in the shared-domain manifest."');
   });
@@ -68,6 +68,19 @@ describe("ObjectVisualizationPanel performance contracts", () => {
   it("uses a revision-bounded local target patch while remote visualization state is pending", () => {
     expect(panelSource).toContain("visualization.patchTargetPending(");
     expect(panelSource).toContain("visualizationState.rawData?.revision");
+  });
+
+  it("derives control pending state from target-scoped sync mutations", () => {
+    expect(panelSource).toContain("useSyncExternalStore");
+    expect(panelSource).toContain("visualizationSyncSnapshot.pendingTargetIds");
+    expect(panelSource).toContain("visualizationSyncSnapshot.inflightTargetIds");
+    expect(panelSource).not.toContain("const pending = false");
+  });
+
+  it("rebases reset and restore operations on the optimistic target snapshot", () => {
+    expect(panelSource).toContain("resetAirboxVisualizationState(displayVisualizationState");
+    expect(panelSource).toContain("visualizationOverridesForTargetReset(");
+    expect(panelSource).toContain("currentOverrides: displayVisualizationState?.overrides");
   });
 
   it("labels and keeps viewport-only rendering preferences out of pending backend transactions", () => {

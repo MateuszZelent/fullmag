@@ -26,6 +26,7 @@ import type {
 } from "@/kernel/api/apiTypes";
 import {
   asDecodedComplexFieldVector,
+  FMRM_INACTIVE_REGION_ID,
   type DecodedFieldVector,
 } from "@/kernel/api/codecs";
 import { ControlRoomApiError } from "@/kernel/api/ControlRoomApi";
@@ -187,6 +188,7 @@ import {
 import {
   buildFdmVectorSegments,
   buildFdmVectorSampledCellIndices,
+  createFdmVectorOnlyBuildInput,
   useFdmCuboidBuildResult,
   useFdmCuboidBuildResults,
   type FdmCuboidAsyncBuildEntry,
@@ -202,7 +204,11 @@ import {
   memoizeViewport3DFdmSurfaceColors,
   type Viewport3DFdmTargetRenderView,
 } from "../model/viewport3DFdmTargetViews";
-import { resolveViewport3DGlobalVectorAllocation } from "../model/viewport3DVectorBudgetAllocator";
+import {
+  applyViewport3DGlobalVectorAllocationsToFieldRenderOptions,
+  resolveViewport3DGlobalVectorAllocation,
+  type Viewport3DVectorBudgetTarget,
+} from "../model/viewport3DVectorBudgetAllocator";
 import {
   buildFdmMultilayerAirboxFieldRequest,
   resolveFdmMultilayerAirboxFieldVector,
@@ -295,6 +301,7 @@ import {
   getViewport3DCacheStats as getCacheStats,
   resolveViewport3DFieldVectorResourceKey,
   resolveViewport3DFieldVectorRequestResourceKey,
+  viewport3DFieldVectorMatchesRequestIdentity,
   useViewport3DAirboxFieldVectors,
   useViewport3DDomainMeta,
   useViewport3DDomainTopology,
@@ -306,6 +313,7 @@ import {
   useViewport3DScene,
   useViewport3DSharedDomainManifest,
   useViewport3DUniverse,
+  type Viewport3DFieldVectorEnvelope,
 } from "../viewport3dResources";
 import { useViewport3DFieldUpdateHoldActive } from "../viewport3dFieldUpdateHold";
 import type { Viewport3DFieldRefreshState } from "../viewport3dRefreshCountdown";
@@ -1809,10 +1817,10 @@ export function resolveViewport3DPrimaryFieldVectorEnabled({
 }
 
 export function resolveViewport3DDisplayedLiveValue<TValue>(
-  incoming: TValue,
-  previousDisplayed: TValue,
+  incoming: TValue | null,
+  previousDisplayed: TValue | null,
   holdActive: boolean,
-): TValue {
+): TValue | null {
   return holdActive ? previousDisplayed : incoming;
 }
 
@@ -3735,12 +3743,33 @@ export function useViewport3DSceneModel({
   ]);
   const targetQuantityFieldRequests = targetQuantityFieldDemandPlan.requests;
   const fieldUpdateHoldActive = useViewport3DFieldUpdateHoldActive();
+  const fdmMultilayerAirboxMaxSamples = useMemo(() => {
+    if (
+      !fdmMultilayerAirboxDomain ||
+      !airboxSettings.vectorsVisible ||
+      airboxSettings.shaderVisible
+    ) {
+      return null;
+    }
+    return resolveViewport3DAirboxVectorSampleBudget(
+      airboxSettings.vectorBudget,
+      fdmMultilayerAirboxDomain.totalCells,
+    );
+  }, [
+    airboxSettings.shaderVisible,
+    airboxSettings.vectorBudget,
+    airboxSettings.vectorsVisible,
+    fdmMultilayerAirboxDomain,
+  ]);
   const fdmMultilayerAirboxFieldRequest = useMemo(
     () =>
       fdmMultilayerAirboxDomain
-        ? buildFdmMultilayerAirboxFieldRequest(fdmMultilayerAirboxDomain)
+        ? buildFdmMultilayerAirboxFieldRequest(
+            fdmMultilayerAirboxDomain,
+            fdmMultilayerAirboxMaxSamples,
+          )
         : EMPTY_FDM_MULTILAYER_AIRBOX_FIELD_REQUEST,
-    [fdmMultilayerAirboxDomain],
+    [fdmMultilayerAirboxDomain, fdmMultilayerAirboxMaxSamples],
   );
   const fdmMultilayerAirboxField = useViewport3DFieldVectorRequest(
     fdmMultilayerAirboxFieldRequest,
@@ -4243,11 +4272,51 @@ export function useViewport3DSceneModel({
     fieldVectorEnabled,
     { pauseLoad: fieldUpdateHoldActive },
   );
-  const displayedFieldVector = resolveViewport3DDisplayedLiveValue(
-    fieldVector.data,
-    fieldVector.data,
+  const incomingFieldVectorEnvelope = useMemo<Viewport3DFieldVectorEnvelope | null>(
+    () =>
+      fieldVector.data
+        ? {
+            data: fieldVector.data,
+            etag:
+              fieldVector.payloadRevision == null
+                ? fieldVector.revision == null
+                  ? null
+                  : String(fieldVector.revision)
+                : String(fieldVector.payloadRevision),
+            responseMetadata: fieldVector.responseMetadata,
+            resourceKey: fieldVectorResourceKey,
+          }
+        : null,
+    [
+      fieldVector.data,
+      fieldVector.payloadRevision,
+      fieldVector.responseMetadata,
+      fieldVector.revision,
+      fieldVectorResourceKey,
+    ],
+  );
+  const incomingFieldVectorReady = Boolean(
+    fieldVector.status === "ready" &&
+      incomingFieldVectorEnvelope &&
+      viewport3DFieldVectorMatchesRequestIdentity(
+        incomingFieldVectorEnvelope,
+        primaryFieldRequest,
+      ),
+  );
+  const previousFieldVectorCompatible = Boolean(
+    fieldVector.status !== "ready" &&
+      incomingFieldVectorEnvelope &&
+      viewport3DFieldVectorMatchesRequestIdentity(
+        incomingFieldVectorEnvelope,
+        primaryFieldRequest,
+      ),
+  );
+  const displayedFieldVectorEnvelope = resolveViewport3DDisplayedLiveValue(
+    incomingFieldVectorReady ? incomingFieldVectorEnvelope : null,
+    previousFieldVectorCompatible ? incomingFieldVectorEnvelope : null,
     fieldVector.status !== "ready" || fieldUpdateHoldActive,
   );
+  const displayedFieldVector = displayedFieldVectorEnvelope?.data ?? null;
   const analysisComplexFieldQuery = useMemo(
     () =>
       analysisOverlay
@@ -4313,8 +4382,7 @@ export function useViewport3DSceneModel({
     ],
   );
   const committedFieldVector = displayedFieldVector;
-  const primaryFieldRevision =
-    fieldVector.payloadRevision ?? fieldVector.revision;
+  const primaryFieldRevision = displayedFieldVectorEnvelope?.etag ?? null;
   const fieldRenderOptionsWithPrimaryTargetBuffers = useMemo(
     () =>
       mergeViewport3DPrimaryTargetFieldBuffers({
@@ -4574,6 +4642,121 @@ export function useViewport3DSceneModel({
       sceneObjectIds,
     ],
   );
+  const fdmTargetVectorAllocations = useMemo(() => {
+    const targets: Viewport3DVectorBudgetTarget[] = [];
+    if (fdmTargetViewsResult.status === "ready") {
+      for (const view of fdmTargetViewsResult.views) {
+        const settings = fdmTargetSettingsById.get(view.target.id);
+        targets.push({
+          available:
+            settings?.geometryScope === "surface"
+              ? view.surfaceInstanceOrdinals.length
+              : view.instanceOrdinals.length,
+          requested: settings?.vectorsVisible ? settings.vectorBudget : 0,
+          targetId: `fdm-target:${view.target.id}`,
+        });
+      }
+    }
+
+    if (
+      fdmSingleGridAirboxSettings?.visible &&
+      fdmSingleGridAirboxSettings.vectorsVisible
+    ) {
+      const available = fdmRealizedRegionIds
+        ? fdmRealizedRegionIds.reduce(
+            (count, regionId) =>
+              count + (regionId === FMRM_INACTIVE_REGION_ID ? 1 : 0),
+            0,
+          )
+        : fdmDomain?.displayCellCount ?? 0;
+      targets.push({
+        available,
+        requested: fdmSingleGridAirboxSettings.vectorBudget,
+        targetId: "fdm-airbox",
+      });
+    }
+
+    for (const domain of fdmNativeLayerDomains) {
+      const settings = fdmNativeLayerSettingsById.get(domain.layerId) ?? fdmSettings;
+      targets.push({
+        available: domain.activeCellCount,
+        requested: settings.visible && settings.vectorsVisible
+          ? settings.vectorBudget
+          : 0,
+        targetId: `fdm-native:${domain.layerId}`,
+      });
+    }
+
+    if (fdmMultilayerAirboxDomain) {
+      targets.push({
+        available: fdmMultilayerAirboxDomain.totalCells,
+        requested:
+          airboxSettings.visible && airboxSettings.vectorsVisible
+            ? airboxSettings.vectorBudget
+            : 0,
+        targetId: "fdm-multilayer-airbox",
+      });
+    }
+
+    if (fieldCompatibleTopologyRenderModel) {
+      for (const partModel of [
+        ...fieldCompatibleTopologyRenderModel.magneticParts,
+        ...fieldCompatibleTopologyRenderModel.airboxParts,
+      ]) {
+        const isAirbox = fieldCompatibleTopologyRenderModel.airboxParts.some(
+          (candidate) => candidate.part.id === partModel.part.id,
+        );
+        const settings = isAirbox
+          ? airboxSettings
+          : getPartSettings(partModel.part);
+        const selection =
+          settings.geometryScope === "surface"
+            ? partModel.surfaceNodeSelection ?? { nodeIndices: [] }
+            : partModel.fullNodeSelection;
+        targets.push({
+          available: resolveNodeSelectionCount(
+            selection,
+            fieldCompatibleTopologyRenderModel,
+          ),
+          requested:
+            settings.visible && settings.vectorsVisible
+              ? settings.vectorBudget
+              : 0,
+          targetId: `fem-part:${partModel.part.id}`,
+        });
+      }
+    }
+
+    return resolveViewport3DGlobalVectorAllocation(
+      targets,
+      maxInteractiveVectorGlyphs,
+    );
+  }, [
+    airboxSettings,
+    fdmDomain,
+    fdmMultilayerAirboxDomain,
+    fdmNativeLayerDomains,
+    fdmNativeLayerSettingsById,
+    fdmRealizedRegionIds,
+    fdmSettings,
+    fdmSingleGridAirboxSettings,
+    fdmTargetSettingsById,
+    fdmTargetViewsResult,
+    fieldCompatibleTopologyRenderModel,
+    getPartSettings,
+    maxInteractiveVectorGlyphs,
+  ]);
+  const globalFieldRenderOptionsWithPrimaryTargetBuffers = useMemo(
+    () =>
+      applyViewport3DGlobalVectorAllocationsToFieldRenderOptions(
+        fieldRenderOptionsWithPrimaryTargetBuffers,
+        fdmTargetVectorAllocations,
+      ),
+    [
+      fdmTargetVectorAllocations,
+      fieldRenderOptionsWithPrimaryTargetBuffers,
+    ],
+  );
   const fdmAirboxPassPlan = resolveFdmAirboxPassPlan(
     fdmSingleGridAirboxSettings ?? { ...fdmSettings, visible: false },
   );
@@ -4583,7 +4766,8 @@ export function useViewport3DSceneModel({
       ? null
       : String(renderingState.revision);
   const fdmAirboxMaxVectorGlyphs = fdmSingleGridAirboxSettings
-    ? clampViewport3DInteractiveVectorBudget(
+    ? fdmTargetVectorAllocations.get("fdm-airbox")?.effective ??
+      clampViewport3DInteractiveVectorBudget(
         fdmSingleGridAirboxSettings.vectorBudget,
         maxInteractiveVectorGlyphs,
       )
@@ -4606,25 +4790,40 @@ export function useViewport3DSceneModel({
   const fdmAirboxBuildKey = fdmAirboxInstanceModelEnabled
     ? buildViewport3DFdmCuboidJobKey({
         algorithmVersion: 1,
-        component: fdmAirboxVectorsVisible ? "full" : null,
         domainId: domainMeta.data?.domain_id ?? "shared-domain",
         domainGenerationId: fdmDomainGenerationId,
-        fieldRevision:
-          fdmAirboxVectorsVisible && fdmAirboxFieldRevision != null
-            ? String(fdmAirboxFieldRevision)
-            : null,
-        quantityId: resolveCanonicalQuantityId(
-          fdmSingleGridAirboxSettings?.activeQuantityId ?? "m",
-        ),
         samplingRevision: fdmBuildSamplingRevision,
         scopeId: "airbox",
         scopeKind: "airbox",
         sessionId: "current",
-        styleRevision: `fill=${visualProfile.voxelFillRatio}|airbox=true|vectors=${fdmAirboxVectorsVisible}:${fdmAirboxMaxVectorGlyphs}:${fdmAirboxVectorScale}:${fdmAirboxVectorAnchorMode}|field=${fdmAirboxFieldVector ? "ready" : "pending"}`,
-        targetVisualizationRevision: fdmAirboxBuildTargetRevision ?? "unknown",
+        styleRevision: `fill=${visualProfile.voxelFillRatio}|airbox=true`,
         topologyRevision: fdmBuildTopologyRevision,
       })
     : null;
+  const fdmAirboxVectorOnlyBuildInput = useMemo(
+    () =>
+      fdmAirboxPassPlan.needsVectorAnchors &&
+      !fdmAirboxPassPlan.needsPointGeometry &&
+      !fdmAirboxPassPlan.needsSurfaceInstances
+        ? createFdmVectorOnlyBuildInput({
+            cellSelection: "inactive",
+            domain: fdmDomain,
+            fieldVector: fdmAirboxFieldVector,
+            maxSamples: fdmAirboxMaxVectorGlyphs,
+            realizedRegionIds: fdmRealizedRegionIds,
+          })
+        : null,
+    [
+      fdmAirboxPassPlan.needsPointGeometry,
+      fdmAirboxPassPlan.needsSurfaceInstances,
+      fdmAirboxPassPlan.needsVectorAnchors,
+      fdmDomain,
+      // eslint-disable-next-line react-hooks/preserve-manual-memoization
+      fdmAirboxFieldVector,
+      fdmAirboxMaxVectorGlyphs,
+      fdmRealizedRegionIds,
+    ],
+  );
   const fdmAirboxBuildState = useFdmCuboidBuildResult({
     buildKey: fdmAirboxBuildKey,
     cellSelection: "inactive",
@@ -4640,6 +4839,8 @@ export function useViewport3DSceneModel({
     revisionSummary: `domain=${fdmBuildTopologyRevision ?? "none"} membership=${fdmRegionMembership.revision ?? "none"} target=${fdmAirboxBuildTargetRevision ?? "none"}`,
     vectorAnchorMode: fdmAirboxVectorAnchorMode,
     vectorField: fdmAirboxVectorsVisible ? fdmAirboxFieldVector : null,
+    vectorGeometryScope: fdmSingleGridAirboxSettings?.geometryScope ?? "full",
+    vectorOnly: fdmAirboxVectorOnlyBuildInput,
     vectorScale: fdmAirboxVectorScale,
     voxelFillRatio: visualProfile.voxelFillRatio,
     voxelMagnitudeThreshold: 0,
@@ -4651,32 +4852,6 @@ export function useViewport3DSceneModel({
     fdmAirboxBuildState?.result?.vectorSegments ?? null;
   const fdmAirboxVectorCellIndices =
     fdmAirboxBuildState?.result?.vectorCellIndices ?? null;
-  const fdmTargetVectorAllocations = useMemo(
-    () =>
-      resolveViewport3DGlobalVectorAllocation(
-        fdmTargetViewsResult.status === "ready"
-          ? fdmTargetViewsResult.views.map((view) => {
-              const settings = fdmTargetSettingsById.get(view.target.id);
-              return {
-                available:
-                  settings?.geometryScope === "surface"
-                    ? view.surfaceInstanceOrdinals.length
-                    : view.instanceOrdinals.length,
-                requested: settings?.vectorsVisible
-                  ? settings.vectorBudget
-                  : 0,
-                targetId: view.target.id,
-              };
-            })
-          : [],
-        maxInteractiveVectorGlyphs,
-      ),
-    [
-      fdmTargetSettingsById,
-      fdmTargetViewsResult,
-      maxInteractiveVectorGlyphs,
-    ],
-  );
   const fdmTargetViews: readonly Viewport3DFdmTargetRenderView[] = useMemo(
     () =>
       fdmTargetViewsResult.status === "ready"
@@ -4852,7 +5027,7 @@ export function useViewport3DSceneModel({
                   maxInteractiveVectorGlyphs,
                 );
                 const maxVectors =
-                  fdmTargetVectorAllocations.get(view.target.id)?.effective ??
+                  fdmTargetVectorAllocations.get(`fdm-target:${view.target.id}`)?.effective ??
                   requestedMaxVectors;
                 const vectorInstanceOrdinals =
                   settings.geometryScope === "surface"
@@ -5002,10 +5177,13 @@ export function useViewport3DSceneModel({
         const vectorsVisible = Boolean(
           settings.visible && settings.vectorsVisible && fieldVector,
         );
-        const maxVectors = clampViewport3DInteractiveVectorBudget(
+        const requestedMaxVectors = clampViewport3DInteractiveVectorBudget(
           settings.vectorBudget,
           maxInteractiveVectorGlyphs,
         );
+        const maxVectors =
+          fdmTargetVectorAllocations.get(`fdm-native:${domain.layerId}`)?.effective ??
+          requestedMaxVectors;
         const fieldRevision = request
           ? String(
               nativeLayerFieldVectors.payloadRevisionByRequestId.get(
@@ -5015,7 +5193,7 @@ export function useViewport3DSceneModel({
           : "none";
         const targetStyleRevision =
           `visible=${settings.visible}|vectors=${vectorsVisible}|budget=${maxVectors}` +
-          `|scale=${settings.vectorLengthScale}|center=${settings.vectorCenteringEnabled}`;
+          `|scale=${settings.vectorLengthScale}|center=${settings.vectorCenteringEnabled}|scope=${settings.geometryScope}`;
         const buildKey = buildViewport3DFdmCuboidJobKey({
           algorithmVersion: 2,
           component: vectorsVisible ? "full" : null,
@@ -5029,7 +5207,7 @@ export function useViewport3DSceneModel({
           scopeId: domain.layerId,
           scopeKind: "fdm_native_layer",
           sessionId: "current",
-          styleRevision: `fill=${fdmMultilayerVoxelFillRatio}|vectors=${vectorsVisible}:${maxVectors}:${vectorScale * settings.vectorLengthScale}:${settings.vectorCenteringEnabled}`,
+          styleRevision: `fill=${fdmMultilayerVoxelFillRatio}|vectors=${vectorsVisible}:${maxVectors}:${vectorScale * settings.vectorLengthScale}:${settings.vectorCenteringEnabled}:${settings.geometryScope}`,
           targetVisualizationRevision: targetStyleRevision,
           topologyRevision: `${domain.gridFingerprint ?? "missing"}|layout=${fdmMultilayerLayout.data?.layout_revision ?? "missing"}|mask=${maskRevision}`,
         });
@@ -5048,6 +5226,19 @@ export function useViewport3DSceneModel({
           revisionSummary: `carrier=${domain.gridFingerprint ?? "none"} target=${targetStyleRevision} field=${fieldRevision}`,
           vectorAnchorMode: settings.vectorCenteringEnabled ? "center" : "tail",
           vectorField: vectorsVisible ? fieldVector : null,
+          vectorGeometryScope: settings.geometryScope,
+          vectorOnly:
+            vectorsVisible &&
+            !settings.pointsVisible &&
+            !settings.wireframeVisible
+              ? createFdmVectorOnlyBuildInput({
+                  cellSelection: "all",
+                  domain: { ...domain, kind: "fdm-grid" as const },
+                  fieldVector,
+                  maxSamples: maxVectors,
+                  realizedRegionIds: null,
+                })
+              : null,
           vectorScale: vectorScale * settings.vectorLengthScale,
           voxelFillRatio: fdmMultilayerVoxelFillRatio,
           voxelMagnitudeThreshold: 0,
@@ -5063,10 +5254,13 @@ export function useViewport3DSceneModel({
       const vectorsVisible = Boolean(
         airboxSettings.vectorsVisible && fieldVector,
       );
-      const maxVectors = clampViewport3DInteractiveVectorBudget(
+      const requestedMaxVectors = clampViewport3DInteractiveVectorBudget(
         airboxSettings.vectorBudget,
         maxInteractiveVectorGlyphs,
       );
+      const maxVectors =
+        fdmTargetVectorAllocations.get("fdm-multilayer-airbox")?.effective ??
+        requestedMaxVectors;
       const airboxFieldRevision = String(
         fdmMultilayerAirboxField.payloadRevision ?? "missing",
       );
@@ -5109,6 +5303,18 @@ export function useViewport3DSceneModel({
         vectorAnchorMode: airboxSettings.vectorCenteringEnabled ? "center" : "tail",
         vectorField: vectorsVisible ? fieldVector : null,
         vectorGeometryScope: airboxSettings.geometryScope,
+        vectorOnly:
+          vectorsVisible &&
+          !airboxSettings.pointsVisible &&
+          !airboxSettings.wireframeVisible
+            ? createFdmVectorOnlyBuildInput({
+                cellSelection: "all",
+                domain: { ...fdmMultilayerAirboxDomain, kind: "fdm-grid" as const },
+                fieldVector,
+                maxSamples: maxVectors,
+                realizedRegionIds: null,
+              })
+            : null,
         vectorScale: airboxVectorScale,
         voxelFillRatio: fdmMultilayerVoxelFillRatio,
         voxelMagnitudeThreshold: 0,
@@ -5126,6 +5332,7 @@ export function useViewport3DSceneModel({
     fdmNativeLayerDomains,
     fdmNativeLayerSettingsById,
     fdmSettings,
+    fdmTargetVectorAllocations,
     maxInteractiveVectorGlyphs,
     nativeLayerFieldRequests,
     nativeLayerFieldVectors.data,
@@ -5551,17 +5758,17 @@ export function useViewport3DSceneModel({
     fieldRevision: primaryFieldRevision,
     fieldScalarRangesByMode,
     fieldVector: committedFieldVector,
-    partFieldVectors: fieldRenderOptionsWithPrimaryTargetBuffers.partFieldVectors,
+    partFieldVectors: globalFieldRenderOptionsWithPrimaryTargetBuffers.partFieldVectors,
     partTargetFieldBuffers:
-      fieldRenderOptionsWithPrimaryTargetBuffers.partTargetFieldBuffers,
+      globalFieldRenderOptionsWithPrimaryTargetBuffers.partTargetFieldBuffers,
     partScalarColorModes:
-      fieldRenderOptionsWithPrimaryTargetBuffers.partScalarColorModes,
+      globalFieldRenderOptionsWithPrimaryTargetBuffers.partScalarColorModes,
     partScalarColorPalettes:
-      fieldRenderOptionsWithPrimaryTargetBuffers.partScalarColorPalettes,
+      globalFieldRenderOptionsWithPrimaryTargetBuffers.partScalarColorPalettes,
     partScalarRangesByMode:
-      fieldRenderOptionsWithPrimaryTargetBuffers.partScalarRangesByMode,
+      globalFieldRenderOptionsWithPrimaryTargetBuffers.partScalarRangesByMode,
     targetRenderPlans:
-      fieldRenderOptionsWithPrimaryTargetBuffers.targetRenderPlans,
+      globalFieldRenderOptionsWithPrimaryTargetBuffers.targetRenderPlans,
     targetVisualizationRevision: renderingState?.revision ?? null,
     topology: fieldCompatibleTopologyRenderModel,
     topologyRevision: topology.revision,
@@ -5570,7 +5777,7 @@ export function useViewport3DSceneModel({
     () =>
       resolveViewport3DFieldRenderModelBuildOptions({
         complexFieldVector: analysisComplexField,
-        fieldRenderOptions: fieldRenderOptionsWithPrimaryTargetBuffers,
+        fieldRenderOptions: globalFieldRenderOptionsWithPrimaryTargetBuffers,
         fieldVector: committedFieldVector,
         topology: fieldCompatibleTopologyRenderModel,
       }),
@@ -5578,7 +5785,7 @@ export function useViewport3DSceneModel({
       analysisComplexField,
       committedFieldVector,
       fieldCompatibleTopologyRenderModel,
-      fieldRenderOptionsWithPrimaryTargetBuffers,
+      globalFieldRenderOptionsWithPrimaryTargetBuffers,
     ],
   );
   const fieldRenderModel = useMemo(() => {

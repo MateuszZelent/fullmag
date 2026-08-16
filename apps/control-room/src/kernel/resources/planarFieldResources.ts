@@ -3,9 +3,15 @@
 import { useCallback, useMemo, useSyncExternalStore } from "react";
 
 import {
+  DATA_PLANAR_DEFAULT_FIELD_EMPTY_MASK_PATH,
+  DATA_PLANAR_DEFAULT_FIELD_MESH_OVERLAY_PATH,
+  DATA_PLANAR_DEFAULT_FIELD_META_PATH,
+  DATA_PLANAR_DEFAULT_FIELD_PROBE_PATH,
+  DATA_PLANAR_DEFAULT_FIELD_RENDER_PNG_PATH,
+  DATA_PLANAR_DEFAULT_FIELD_SCALAR_PATH,
+  DATA_PLANAR_DEFAULT_FIELD_VECTORS_PATH,
   DATA_PLANAR_FIELD_EMPTY_MASK_PATH,
   DATA_PLANAR_FIELD_MESH_OVERLAY_PATH,
-  DATA_PLANAR_FIELD_META_PATH,
   DATA_PLANAR_FIELD_PROBE_PATH,
   DATA_PLANAR_FIELD_RENDER_PNG_PATH,
   DATA_PLANAR_FIELD_SCALAR_PATH,
@@ -17,6 +23,8 @@ import type {
   PlanarFieldProbeQuery,
   PlanarFieldProbeResource,
   PlanarFieldQuery,
+  PlanarFieldSource,
+  PlanarSampleSourceResource,
   ResourceRevision,
 } from "../api/apiTypes";
 import {
@@ -40,9 +48,9 @@ type PlanarFieldMetaIdentity = Pick<
   | "field_revision"
   | "links"
   | "mesh_revision"
-  | "monitor_revision"
   | "sample_token"
   | "scene_revision"
+  | "source"
 >;
 
 interface ResourceHookOptions {
@@ -50,6 +58,11 @@ interface ResourceHookOptions {
 }
 
 type BinaryKind = "emptyMask" | "meshOverlay" | "renderPng" | "scalar" | "vectors";
+
+type SourcePaths = {
+  default: string;
+  monitor: string;
+};
 
 export interface PlanarScalarResource {
   data: ArrayBuffer;
@@ -64,41 +77,81 @@ const binaryCaches: Record<BinaryKind, ResourceCache<ArrayBuffer>> = {
   vectors: new ResourceCache({ maxBytes: 128 * 1024 * 1024 }),
 };
 
-const binaryPaths: Record<BinaryKind, string> = {
-  emptyMask: DATA_PLANAR_FIELD_EMPTY_MASK_PATH,
-  meshOverlay: DATA_PLANAR_FIELD_MESH_OVERLAY_PATH,
-  renderPng: DATA_PLANAR_FIELD_RENDER_PNG_PATH,
-  scalar: DATA_PLANAR_FIELD_SCALAR_PATH,
-  vectors: DATA_PLANAR_FIELD_VECTORS_PATH,
+const binaryPaths: Record<BinaryKind, SourcePaths> = {
+  emptyMask: {
+    default: DATA_PLANAR_DEFAULT_FIELD_EMPTY_MASK_PATH,
+    monitor: DATA_PLANAR_FIELD_EMPTY_MASK_PATH,
+  },
+  meshOverlay: {
+    default: DATA_PLANAR_DEFAULT_FIELD_MESH_OVERLAY_PATH,
+    monitor: DATA_PLANAR_FIELD_MESH_OVERLAY_PATH,
+  },
+  renderPng: {
+    default: DATA_PLANAR_DEFAULT_FIELD_RENDER_PNG_PATH,
+    monitor: DATA_PLANAR_FIELD_RENDER_PNG_PATH,
+  },
+  scalar: {
+    default: DATA_PLANAR_DEFAULT_FIELD_SCALAR_PATH,
+    monitor: DATA_PLANAR_FIELD_SCALAR_PATH,
+  },
+  vectors: {
+    default: DATA_PLANAR_DEFAULT_FIELD_VECTORS_PATH,
+    monitor: DATA_PLANAR_FIELD_VECTORS_PATH,
+  },
 };
 
-const metaLinkPaths = {
-  empty_mask: DATA_PLANAR_FIELD_EMPTY_MASK_PATH,
-  mesh_overlay: DATA_PLANAR_FIELD_MESH_OVERLAY_PATH,
-  probe: DATA_PLANAR_FIELD_PROBE_PATH,
-  render_png: DATA_PLANAR_FIELD_RENDER_PNG_PATH,
-  scalar: DATA_PLANAR_FIELD_SCALAR_PATH,
-  vectors: DATA_PLANAR_FIELD_VECTORS_PATH,
-} as const satisfies Record<keyof PlanarFieldMetaResource["links"], string>;
+const metaLinkPaths: Record<keyof PlanarFieldMetaResource["links"], SourcePaths> = {
+  empty_mask: {
+    default: DATA_PLANAR_DEFAULT_FIELD_EMPTY_MASK_PATH,
+    monitor: DATA_PLANAR_FIELD_EMPTY_MASK_PATH,
+  },
+  mesh_overlay: {
+    default: DATA_PLANAR_DEFAULT_FIELD_MESH_OVERLAY_PATH,
+    monitor: DATA_PLANAR_FIELD_MESH_OVERLAY_PATH,
+  },
+  probe: {
+    default: DATA_PLANAR_DEFAULT_FIELD_PROBE_PATH,
+    monitor: DATA_PLANAR_FIELD_PROBE_PATH,
+  },
+  render_png: {
+    default: DATA_PLANAR_DEFAULT_FIELD_RENDER_PNG_PATH,
+    monitor: DATA_PLANAR_FIELD_RENDER_PNG_PATH,
+  },
+  scalar: {
+    default: DATA_PLANAR_DEFAULT_FIELD_SCALAR_PATH,
+    monitor: DATA_PLANAR_FIELD_SCALAR_PATH,
+  },
+  vectors: {
+    default: DATA_PLANAR_DEFAULT_FIELD_VECTORS_PATH,
+    monitor: DATA_PLANAR_FIELD_VECTORS_PATH,
+  },
+};
 
 export function planarFieldQueryFromMeta(
   quantityId: string,
-  monitorId: string,
+  source: PlanarFieldSource,
   meta: PlanarFieldMetaIdentity,
 ): PlanarFieldMetaParseResult {
   try {
     if (
       typeof meta.sample_token !== "string" ||
-      !meta.sample_token.startsWith("planar-sample-v2:") ||
-      meta.sample_token.length === "planar-sample-v2:".length
+      !meta.sample_token.startsWith("planar-sample-v3:") ||
+      meta.sample_token.length === "planar-sample-v3:".length
     ) {
       throw new Error("Canonical planar metadata sample_token is invalid");
     }
+    assertMetaSourceMatches(source, meta.source);
+    const sourceRevision =
+      meta.source.kind === "default"
+        ? meta.source.default_slice_revision
+        : meta.source.monitor_revision;
     const metaRevisions = {
       expected_carrier_revision: meta.carrier_revision,
       expected_field_revision: meta.field_revision,
       expected_mesh_revision: meta.mesh_revision,
-      expected_monitor_revision: meta.monitor_revision,
+      ...(source.kind === "default"
+        ? { expected_source_revision: sourceRevision }
+        : { expected_monitor_revision: sourceRevision }),
       expected_scene_revision: meta.scene_revision,
     } as const;
     for (const [name, revision] of Object.entries(metaRevisions)) {
@@ -109,15 +162,15 @@ export function planarFieldQueryFromMeta(
 
     for (const [kind, template] of Object.entries(metaLinkPaths) as [
       keyof PlanarFieldMetaResource["links"],
-      string,
+      SourcePaths,
     ][]) {
       const link = meta.links[kind];
       const query = planarFieldQueryFromMetaLink(link);
       const url = new URL(link, "http://fullmag.invalid");
       const expectedPath = planarFieldResourcePath(
         quantityId,
-        monitorId,
-        template,
+        source,
+        template[source.kind],
       );
       if (url.pathname !== expectedPath) {
         throw new Error(`Canonical planar metadata ${kind} link has invalid path`);
@@ -157,6 +210,21 @@ export function planarFieldQueryFromMeta(
   }
 }
 
+function assertMetaSourceMatches(
+  source: PlanarFieldSource,
+  metaSource: PlanarSampleSourceResource,
+): void {
+  if (source.kind === "default") {
+    if (metaSource.kind !== "default") {
+      throw new Error("Canonical planar metadata source family disagrees");
+    }
+    return;
+  }
+  if (metaSource.kind !== "monitor" || metaSource.monitor_id !== source.monitorId) {
+    throw new Error("Canonical planar metadata source family disagrees");
+  }
+}
+
 function planarFieldQueryFromMetaLink(link: string): PlanarFieldQuery {
   const expectedOrigin =
     typeof window === "undefined" ? "http://fullmag.invalid" : window.location.origin;
@@ -191,7 +259,9 @@ function planarFieldQueryFromMetaLink(link: string): PlanarFieldQuery {
     expected_carrier_revision: revision("expected_carrier_revision"),
     expected_field_revision: revision("expected_field_revision"),
     expected_mesh_revision: revision("expected_mesh_revision"),
-    expected_monitor_revision: revision("expected_monitor_revision"),
+    ...(url.searchParams.has("expected_monitor_revision")
+      ? { expected_monitor_revision: revision("expected_monitor_revision") }
+      : { expected_source_revision: revision("expected_source_revision") }),
     expected_scene_revision: revision("expected_scene_revision"),
     include_mesh: includeMesh === "true",
     quality: required("quality"),
@@ -213,35 +283,35 @@ function requireCanonicalU64(value: string, name: string): string {
 
 export function resolvePlanarFieldResourceKey(
   quantityId: string,
-  monitorId: string,
+  source: PlanarFieldSource,
   query: PlanarFieldQuery,
   revision: ResourceRevision | null,
-  path: string = DATA_PLANAR_FIELD_META_PATH,
+  path?: string,
 ): string {
-  return `${planarFieldResourceKey(quantityId, monitorId, query, path)}#revision=${encodeURIComponent(String(revision ?? "none"))}`;
+  return `${planarFieldResourceKey(quantityId, source, query, path)}#revision=${encodeURIComponent(String(revision ?? "none"))}`;
 }
 
 export function usePlanarFieldMetaResource(
   quantityId: string,
-  monitorId: string,
+  source: PlanarFieldSource,
   query: PlanarFieldQuery = {},
   options: ResourceHookOptions = {},
 ) {
   const { api } = useKernel();
   const stableQuery = useStablePlanarFieldQuery(query);
-  const baseKey = planarFieldResourceKey(quantityId, monitorId, stableQuery);
+  const baseKey = planarFieldResourceKey(quantityId, source, stableQuery);
   const revision = useResourceRevision(baseKey);
   const load = useCallback(
     ({ signal }: { signal: AbortSignal }) =>
-      api.data.fields.planar.meta(quantityId, monitorId, stableQuery, { signal }),
-    [api, monitorId, quantityId, stableQuery],
+      api.data.fields.planar.meta(quantityId, source, stableQuery, { signal }),
+    [api, quantityId, source, stableQuery],
   );
   return useResource<PlanarFieldMetaResource | null>({
     enabled: options.enabled,
     load,
     resourceKey: resolvePlanarFieldResourceKey(
       quantityId,
-      monitorId,
+      source,
       stableQuery,
       revision,
     ),
@@ -251,18 +321,18 @@ export function usePlanarFieldMetaResource(
 export function usePlanarFieldBinaryResource(
   kind: BinaryKind,
   quantityId: string,
-  monitorId: string,
+  source: PlanarFieldSource,
   query: PlanarFieldQuery = {},
   options: ResourceHookOptions = {},
 ) {
   const { api } = useKernel();
   const stableQuery = useStablePlanarFieldQuery(query);
-  const path = binaryPaths[kind];
-  const baseKey = planarFieldResourceKey(quantityId, monitorId, stableQuery, path);
+  const path = binaryPaths[kind][source.kind];
+  const baseKey = planarFieldResourceKey(quantityId, source, stableQuery, path);
   const revision = useResourceRevision(baseKey);
   const resourceKey = resolvePlanarFieldResourceKey(
     quantityId,
-    monitorId,
+    source,
     stableQuery,
     revision,
     path,
@@ -270,12 +340,12 @@ export function usePlanarFieldBinaryResource(
   const load = useCallback(
     ({ signal }: { signal: AbortSignal }) =>
       loadCachedPlanarBinary(binaryCaches[kind], resourceKey, (etag) =>
-        api.data.fields.planar[kind](quantityId, monitorId, stableQuery, {
+        api.data.fields.planar[kind](quantityId, source, stableQuery, {
           etag,
           signal,
         }),
       ),
-    [api, kind, monitorId, quantityId, resourceKey, stableQuery],
+    [api, kind, quantityId, resourceKey, source, stableQuery],
   );
   const resolveRevision = useCallback(
     () => binaryCaches[kind].peek(resourceKey)?.etag ?? null,
@@ -291,18 +361,18 @@ export function usePlanarFieldBinaryResource(
 
 export function usePlanarScalarResource(
   quantityId: string,
-  monitorId: string,
+  source: PlanarFieldSource,
   query: PlanarFieldQuery = {},
   options: ResourceHookOptions = {},
 ) {
   const { api } = useKernel();
   const stableQuery = useStablePlanarFieldQuery(query);
-  const path = binaryPaths.scalar;
-  const baseKey = planarFieldResourceKey(quantityId, monitorId, stableQuery, path);
+  const path = binaryPaths.scalar[source.kind];
+  const baseKey = planarFieldResourceKey(quantityId, source, stableQuery, path);
   const revision = useResourceRevision(baseKey);
   const resourceKey = resolvePlanarFieldResourceKey(
     quantityId,
-    monitorId,
+    source,
     stableQuery,
     revision,
     path,
@@ -310,12 +380,12 @@ export function usePlanarScalarResource(
   const load = useCallback(
     ({ signal }: { signal: AbortSignal }) =>
       loadCachedPlanarScalar(binaryCaches.scalar, resourceKey, (etag) =>
-        api.data.fields.planar.scalar(quantityId, monitorId, stableQuery, {
+        api.data.fields.planar.scalar(quantityId, source, stableQuery, {
           etag,
           signal,
         }),
       ),
-    [api, monitorId, quantityId, resourceKey, stableQuery],
+    [api, quantityId, resourceKey, source, stableQuery],
   );
   const resolveRevision = useCallback(
     () => binaryCaches.scalar.peek(resourceKey)?.etag ?? null,
@@ -331,14 +401,14 @@ export function usePlanarScalarResource(
 
 export function usePlanarVectorResource(
   quantityId: string,
-  monitorId: string,
+  source: PlanarFieldSource,
   query: PlanarFieldQuery = {},
   options: ResourceHookOptions = {},
 ) {
   return usePlanarFieldBinaryResource(
     "vectors",
     quantityId,
-    monitorId,
+    source,
     query,
     options,
   );
@@ -346,14 +416,14 @@ export function usePlanarVectorResource(
 
 export function usePlanarMaskResource(
   quantityId: string,
-  monitorId: string,
+  source: PlanarFieldSource,
   query: PlanarFieldQuery = {},
   options: ResourceHookOptions = {},
 ) {
   return usePlanarFieldBinaryResource(
     "emptyMask",
     quantityId,
-    monitorId,
+    source,
     query,
     options,
   );
@@ -361,14 +431,14 @@ export function usePlanarMaskResource(
 
 export function usePlanarMeshOverlayResource(
   quantityId: string,
-  monitorId: string,
+  source: PlanarFieldSource,
   query: PlanarFieldQuery = {},
   options: ResourceHookOptions = {},
 ) {
   return usePlanarFieldBinaryResource(
     "meshOverlay",
     quantityId,
-    monitorId,
+    source,
     query,
     options,
   );
@@ -376,14 +446,14 @@ export function usePlanarMeshOverlayResource(
 
 export function usePlanarRenderPngResource(
   quantityId: string,
-  monitorId: string,
+  source: PlanarFieldSource,
   query: PlanarFieldQuery = {},
   options: ResourceHookOptions = {},
 ) {
   return usePlanarFieldBinaryResource(
     "renderPng",
     quantityId,
-    monitorId,
+    source,
     query,
     options,
   );
@@ -391,7 +461,7 @@ export function usePlanarRenderPngResource(
 
 export function usePlanarProbeResource(
   quantityId: string,
-  monitorId: string,
+  source: PlanarFieldSource,
   query: PlanarFieldProbeQuery,
   options: ResourceHookOptions = {},
 ) {
@@ -404,6 +474,7 @@ export function usePlanarProbeResource(
       expected_field_revision: query.expected_field_revision,
       expected_mesh_revision: query.expected_mesh_revision,
       expected_monitor_revision: query.expected_monitor_revision,
+      expected_source_revision: query.expected_source_revision,
       expected_scene_revision: query.expected_scene_revision,
       quality: query.quality,
       resolution_x: query.resolution_x,
@@ -422,6 +493,7 @@ export function usePlanarProbeResource(
       query.expected_field_revision,
       query.expected_mesh_revision,
       query.expected_monitor_revision,
+      query.expected_source_revision,
       query.expected_scene_revision,
       query.quality,
       query.resolution_x,
@@ -439,9 +511,10 @@ export function usePlanarProbeResource(
     component: stableQuery.component,
     expected_carrier_revision: stableQuery.expected_carrier_revision,
     expected_field_revision: stableQuery.expected_field_revision,
-    expected_mesh_revision: stableQuery.expected_mesh_revision,
-    expected_monitor_revision: stableQuery.expected_monitor_revision,
-    expected_scene_revision: stableQuery.expected_scene_revision,
+      expected_mesh_revision: stableQuery.expected_mesh_revision,
+      expected_monitor_revision: stableQuery.expected_monitor_revision,
+      expected_source_revision: stableQuery.expected_source_revision,
+      expected_scene_revision: stableQuery.expected_scene_revision,
     quality: stableQuery.quality,
     resolution_x: stableQuery.resolution_x,
     resolution_y: stableQuery.resolution_y,
@@ -450,11 +523,11 @@ export function usePlanarProbeResource(
     snapshot_id: stableQuery.snapshot_id,
     stage_id: stableQuery.stage_id,
   };
-  const resourceKey = `${planarFieldResourceKey(quantityId, monitorId, fieldQuery)}#probe=${stableQuery.u_m},${stableQuery.v_m}`;
+  const resourceKey = `${planarFieldResourceKey(quantityId, source, fieldQuery)}#probe=${stableQuery.u_m},${stableQuery.v_m}`;
   const load = useCallback(
     ({ signal }: { signal: AbortSignal }) =>
-      api.data.fields.planar.probe(quantityId, monitorId, stableQuery, { signal }),
-    [api, monitorId, quantityId, stableQuery],
+      api.data.fields.planar.probe(quantityId, source, stableQuery, { signal }),
+    [api, quantityId, source, stableQuery],
   );
   return useResource<PlanarFieldProbeResource | null>({
     enabled: options.enabled,
@@ -533,10 +606,11 @@ function useStablePlanarFieldQuery(query: PlanarFieldQuery): PlanarFieldQuery {
         sample_token: query.sample_token,
         component: query.component,
         expected_carrier_revision: query.expected_carrier_revision,
-        expected_field_revision: query.expected_field_revision,
-        expected_mesh_revision: query.expected_mesh_revision,
-        expected_monitor_revision: query.expected_monitor_revision,
-        expected_scene_revision: query.expected_scene_revision,
+      expected_field_revision: query.expected_field_revision,
+      expected_mesh_revision: query.expected_mesh_revision,
+      expected_monitor_revision: query.expected_monitor_revision,
+      expected_source_revision: query.expected_source_revision,
+      expected_scene_revision: query.expected_scene_revision,
         include_mesh: query.include_mesh,
         quality: query.quality,
         resolution_x: query.resolution_x,
@@ -554,6 +628,7 @@ function useStablePlanarFieldQuery(query: PlanarFieldQuery): PlanarFieldQuery {
       query.expected_field_revision,
       query.expected_mesh_revision,
       query.expected_monitor_revision,
+      query.expected_source_revision,
       query.expected_scene_revision,
       query.include_mesh,
       query.quality,

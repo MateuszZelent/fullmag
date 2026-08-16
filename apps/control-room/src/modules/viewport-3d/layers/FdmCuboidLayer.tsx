@@ -80,17 +80,20 @@ import type { RegionOverlaySelection } from "./RegionOverlayLayer";
 import {
   buildFdmVectorSegmentsUncached,
   buildFdmPointPositions,
+  createFdmVectorOnlyBuildInput,
   resolveFdmCuboidMembershipRevision,
   type FdmCuboidBuildRequest,
   type FdmCuboidBuildResult,
   type FdmCuboidCellSelection,
   type FdmCuboidInstanceModel,
+  type FdmVectorOnlyBuildInput,
   type FdmVoxelTopographyOptions,
 } from "./fdmCuboidBuildModel";
 import { buildViewport3DFdmCuboidOffMainThread } from "./fdmCuboidBuildScheduler";
 import {
   createFdmCuboidBuildStateController,
   EMPTY_FDM_CUBOID_BUILD_SNAPSHOT,
+  mergeFdmCuboidBuildResult,
   resolveFdmCuboidBuildState,
   type FdmCuboidBuildState,
 } from "./fdmCuboidBuildState";
@@ -100,6 +103,7 @@ export {
   buildFdmCuboidInstanceModel,
   buildFdmDenseNativeLayerInstanceModel,
   buildFdmPointPositions,
+  createFdmVectorOnlyBuildInput,
   buildFdmVectorSampledCellIndices,
   resolveFdmCuboidMembershipRevision,
   resolveFdmVectorGlyphScale,
@@ -610,6 +614,8 @@ export interface FdmCuboidAsyncBuildInput {
   revisionSummary: string;
   /** Stable carrier/grid identity used to retain a last-good model. */
   topologyKey?: string | null;
+  /** Optional bounded anchor carrier for a vectors-only build. */
+  vectorOnly?: FdmVectorOnlyBuildInput | null;
   vectorAnchorMode: Viewport3DVectorAnchorMode;
   vectorField?: DecodedFieldVector | null;
   vectorGeometryScope?: "full" | "surface";
@@ -696,7 +702,7 @@ function createFdmCuboidBuildResultsController(): FdmCuboidBuildResultsControlle
       publish(new Map(snapshot).set(id, {
         buildKey,
         error: null,
-        result,
+        result: mergeFdmCuboidBuildResult(current.result, result),
         status: "ready",
       }));
     },
@@ -765,6 +771,7 @@ export function createFdmCuboidBatchBuildController(
         vectorAnchorMode: entry.vectorAnchorMode,
         vectorField: entry.vectorField,
         vectorGeometryScope: entry.vectorGeometryScope,
+        vectorOnly: entry.vectorOnly,
         vectorScale: entry.vectorScale,
         voxelFillRatio: entry.voxelFillRatio,
         voxelMagnitudeThreshold: entry.voxelMagnitudeThreshold,
@@ -844,6 +851,8 @@ export function useFdmCuboidBuildResult({
   topologyKey,
   vectorAnchorMode,
   vectorField,
+  vectorGeometryScope,
+  vectorOnly,
   vectorScale,
   voxelFillRatio,
   voxelMagnitudeThreshold,
@@ -861,7 +870,8 @@ export function useFdmCuboidBuildResult({
             realizedRegionIds: realizedRegionIds ?? null,
             vectorAnchorMode,
             vectorField,
-            vectorGeometryScope: "full",
+            vectorGeometryScope: vectorGeometryScope ?? "full",
+            vectorOnly: vectorOnly ?? null,
             vectorScale,
             voxelFillRatio,
             voxelMagnitudeThreshold,
@@ -877,6 +887,8 @@ export function useFdmCuboidBuildResult({
       realizedRegionIds,
       vectorAnchorMode,
       vectorField,
+      vectorGeometryScope,
+      vectorOnly,
       vectorScale,
       voxelFillRatio,
       voxelMagnitudeThreshold,

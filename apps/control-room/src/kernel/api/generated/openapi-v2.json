@@ -1695,6 +1695,12 @@
               "null"
             ]
           },
+          "field_materialization_requirements": {
+            "items": {
+              "$ref": "#/components/schemas/FieldMaterializationRequirement"
+            },
+            "type": "array"
+          },
           "fixed_timestep": {
             "format": "double",
             "type": [
@@ -2783,6 +2789,64 @@
         "required": [
           "base_revision",
           "resource"
+        ],
+        "type": "object"
+      },
+      "DefaultPlanarOperatorState": {
+        "oneOf": [
+          {
+            "properties": {
+              "kind": {
+                "enum": [
+                  "plane_sample"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "kind": {
+                "enum": [
+                  "slab_average"
+                ],
+                "type": "string"
+              },
+              "thickness_m": {
+                "format": "double",
+                "type": "number"
+              }
+            },
+            "required": [
+              "thickness_m",
+              "kind"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "DefaultPlanarSliceState": {
+        "additionalProperties": false,
+        "properties": {
+          "operator": {
+            "$ref": "#/components/schemas/DefaultPlanarOperatorState"
+          },
+          "plane": {
+            "$ref": "#/components/schemas/PlanarAxisPlane"
+          },
+          "position_fraction": {
+            "format": "double",
+            "type": "number"
+          }
+        },
+        "required": [
+          "plane",
+          "position_fraction",
+          "operator"
         ],
         "type": "object"
       },
@@ -5049,6 +5113,39 @@
           }
         ]
       },
+      "FieldMaterializationRequirement": {
+        "properties": {
+          "carrier_fingerprint": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "generation_id": {
+            "type": "string"
+          },
+          "quantity_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "scope_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "scope_kind": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "scope_kind",
+          "generation_id"
+        ],
+        "type": "object"
+      },
       "FieldMaterializationState": {
         "enum": [
           "unsupported",
@@ -6236,11 +6333,75 @@
         ],
         "type": "string"
       },
+      "FieldVectorPendingResponse": {
+        "description": "JSON response returned while a requested field vector is being materialized.",
+        "properties": {
+          "command_id": {
+            "description": "Active compute-fields command, when one owns the materialization.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "generation_id": {
+            "type": "string"
+          },
+          "quantity_id": {
+            "type": "string"
+          },
+          "reason_code": {
+            "description": "Stable reason code suitable for client-side diagnostics.",
+            "type": "string"
+          },
+          "retry_after_ms": {
+            "description": "Recommended delay before retrying the same resource request.",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "scope_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "scope_kind": {
+            "type": "string"
+          },
+          "state": {
+            "description": "Current materialization state, normally `pending`.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "state",
+          "reason_code",
+          "retry_after_ms",
+          "quantity_id",
+          "scope_kind",
+          "generation_id"
+        ],
+        "type": "object"
+      },
       "FieldVectorQuery": {
         "description": "Query parameters for the `/fields/{quantity_id}/vector` endpoint.",
         "properties": {
           "component": {
             "description": "Component to return.\n\nAccepted values: `full` (default), `magnitude`, `x`, `y`, `z`, `c0`, `c1`, …, `cN-1`.\n\n- `full` → full interleaved vector (nComp unchanged)\n- `magnitude` → per-point L2 norm (nComp=1)\n- `x`/`y`/`z`/`cN` → single component by index (nComp=1)",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "expected_carrier_revision": {
+            "description": "Optional optimistic-concurrency precondition for the resolved field carrier.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "expected_generation_id": {
+            "description": "Optional optimistic-concurrency precondition for the domain generation.",
             "type": [
               "string",
               "null"
@@ -10138,6 +10299,40 @@
               "xi_dl",
               "xi_fl",
               "free_layer_thickness_m",
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "formula_version": {
+                "type": "string"
+              },
+              "id": {
+                "type": "string"
+              },
+              "kind": {
+                "enum": [
+                  "drift_diffusion_spin_torque"
+                ],
+                "type": "string"
+              },
+              "schema_version": {
+                "type": "string"
+              },
+              "solve_id": {
+                "type": "string"
+              },
+              "target": {
+                "$ref": "#/components/schemas/SceneRegionRef"
+              }
+            },
+            "required": [
+              "schema_version",
+              "id",
+              "solve_id",
+              "target",
+              "formula_version",
               "kind"
             ],
             "type": "object"
@@ -14834,6 +15029,14 @@
           }
         ]
       },
+      "PlanarAxisPlane": {
+        "enum": [
+          "xy",
+          "xz",
+          "yz"
+        ],
+        "type": "string"
+      },
       "PlanarColorRangeMode": {
         "enum": [
           "auto",
@@ -15111,20 +15314,14 @@
           "mesh_revision": {
             "type": "string"
           },
-          "monitor_hash": {
-            "type": "string"
-          },
-          "monitor_id": {
-            "type": "string"
-          },
-          "monitor_revision": {
-            "type": "string"
-          },
           "non_injective": {
             "type": "boolean"
           },
           "occupancy": {
             "$ref": "#/components/schemas/PlanarFieldOccupancyResource"
+          },
+          "operator": {
+            "$ref": "#/components/schemas/PlanarOperatorSchema"
           },
           "overlap_count": {
             "format": "int32",
@@ -15192,15 +15389,16 @@
           },
           "scope_kind": {
             "type": "string"
+          },
+          "source": {
+            "$ref": "#/components/schemas/PlanarSampleSourceResource"
           }
         },
         "required": [
           "schema_version",
           "sample_token",
           "scene_revision",
-          "monitor_id",
-          "monitor_revision",
-          "monitor_hash",
+          "source",
           "quantity_id",
           "canonical_unit",
           "component",
@@ -15211,6 +15409,7 @@
           "field_source",
           "scope_kind",
           "frame",
+          "operator",
           "resolution",
           "pixel_size_m",
           "sample_support",
@@ -15277,9 +15476,6 @@
               "null"
             ]
           },
-          "monitor_id": {
-            "type": "string"
-          },
           "occupancy": {
             "type": "string"
           },
@@ -15295,6 +15491,9 @@
               "number",
               "null"
             ]
+          },
+          "source": {
+            "$ref": "#/components/schemas/PlanarSampleSourceResource"
           },
           "u_m": {
             "format": "double",
@@ -15323,7 +15522,7 @@
           }
         },
         "required": [
-          "monitor_id",
+          "source",
           "quantity_id",
           "u_m",
           "v_m",
@@ -15821,6 +16020,100 @@
         ],
         "type": "object"
       },
+      "PlanarSampleSourceResource": {
+        "description": "The resolved data-plane source.  `Default` is a session presentation\nsource and deliberately has no monitor ID; `Monitor` is the authored\nSceneDocument source.",
+        "oneOf": [
+          {
+            "properties": {
+              "default_slice_hash": {
+                "type": "string"
+              },
+              "default_slice_revision": {
+                "type": "string"
+              },
+              "domain_generation_id": {
+                "type": "string"
+              },
+              "kind": {
+                "enum": [
+                  "default"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "default_slice_hash",
+              "default_slice_revision",
+              "domain_generation_id",
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "kind": {
+                "enum": [
+                  "monitor"
+                ],
+                "type": "string"
+              },
+              "monitor_hash": {
+                "type": "string"
+              },
+              "monitor_id": {
+                "type": "string"
+              },
+              "monitor_revision": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "monitor_id",
+              "monitor_hash",
+              "monitor_revision",
+              "kind"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "PlanarSourceSelectionState": {
+        "description": "The source selected by the session-scoped planar viewport state.\n\n`Default` is a presentation source resolved from the current domain. It is\nintentionally not a monitor identity and is never written into the scene\ndocument or the canonical Python model.",
+        "oneOf": [
+          {
+            "properties": {
+              "kind": {
+                "enum": [
+                  "default"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "kind": {
+                "enum": [
+                  "monitor"
+                ],
+                "type": "string"
+              },
+              "monitor_id": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "monitor_id",
+              "kind"
+            ],
+            "type": "object"
+          }
+        ]
+      },
       "PlanarSurfaceBoundarySelectorSchema": {
         "oneOf": [
           {
@@ -15957,12 +16250,6 @@
       "PlanarVisualizationPatch": {
         "additionalProperties": false,
         "properties": {
-          "active_monitor_id": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
           "colormap": {
             "type": [
               "string",
@@ -15976,6 +16263,16 @@
               },
               {
                 "$ref": "#/components/schemas/PlanarFieldComponent"
+              }
+            ]
+          },
+          "default_slice": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/DefaultPlanarSliceState"
               }
             ]
           },
@@ -16048,6 +16345,16 @@
               }
             ]
           },
+          "source": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/PlanarSourceSelectionState"
+              }
+            ]
+          },
           "vector_style": {
             "oneOf": [
               {
@@ -16074,17 +16381,14 @@
       "PlanarVisualizationState": {
         "additionalProperties": false,
         "properties": {
-          "active_monitor_id": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
           "colormap": {
             "type": "string"
           },
           "component": {
             "$ref": "#/components/schemas/PlanarFieldComponent"
+          },
+          "default_slice": {
+            "$ref": "#/components/schemas/DefaultPlanarSliceState"
           },
           "display_unit": {
             "type": [
@@ -16114,6 +16418,9 @@
           "resolution": {
             "$ref": "#/components/schemas/PlanarResolutionPolicy"
           },
+          "source": {
+            "$ref": "#/components/schemas/PlanarSourceSelectionState"
+          },
           "vector_style": {
             "$ref": "#/components/schemas/PlanarVectorStyleState"
           },
@@ -16122,6 +16429,8 @@
           }
         },
         "required": [
+          "source",
+          "default_slice",
           "view_scope",
           "quantity_id",
           "component",
@@ -30307,6 +30616,1473 @@
         ]
       }
     },
+    "/v2/sessions/current/data/fields/{quantity_id}/planar-default/empty-mask": {
+      "get": {
+        "operationId": "data_get_sessions_current_data_fields_quantity_id_planar_default_empty_mask",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "quantity_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "sample_token",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "component",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "scope_kind",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "scope_id",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "stage_id",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "snapshot_id",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "resolution_x",
+            "required": false,
+            "schema": {
+              "format": "int32",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "resolution_y",
+            "required": false,
+            "schema": {
+              "format": "int32",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "quality",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "vector_budget",
+            "required": false,
+            "schema": {
+              "format": "int32",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "include_mesh",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "in": "query",
+            "name": "expected_scene_revision",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "expected_monitor_revision",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "expected_source_revision",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "expected_mesh_revision",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "expected_carrier_revision",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "expected_field_revision",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "One occupancy byte per pixel"
+          },
+          "304": {
+            "description": "Not modified"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Invalid planar query"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Field or domain missing"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Stale source"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Unsupported planar sampling"
+          }
+        },
+        "tags": [
+          "data"
+        ]
+      }
+    },
+    "/v2/sessions/current/data/fields/{quantity_id}/planar-default/mesh-overlay": {
+      "get": {
+        "operationId": "data_get_sessions_current_data_fields_quantity_id_planar_default_mesh_overlay",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "quantity_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "sample_token",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "component",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "scope_kind",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "scope_id",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "stage_id",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "snapshot_id",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "resolution_x",
+            "required": false,
+            "schema": {
+              "format": "int32",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "resolution_y",
+            "required": false,
+            "schema": {
+              "format": "int32",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "quality",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "vector_budget",
+            "required": false,
+            "schema": {
+              "format": "int32",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "include_mesh",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "in": "query",
+            "name": "expected_scene_revision",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "expected_monitor_revision",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "expected_source_revision",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "expected_mesh_revision",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "expected_carrier_revision",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "expected_field_revision",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "FMCS v4 FEM topology or FMFG v1 FDM structured-grid planar overlay"
+          },
+          "204": {
+            "description": "Mesh overlay unavailable for the current field"
+          },
+          "304": {
+            "description": "Not modified"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Invalid planar query"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Field or domain missing"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Stale source"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Unsupported planar sampling"
+          }
+        },
+        "tags": [
+          "data"
+        ]
+      }
+    },
+    "/v2/sessions/current/data/fields/{quantity_id}/planar-default/meta": {
+      "get": {
+        "operationId": "data_get_sessions_current_data_fields_quantity_id_planar_default_meta",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "quantity_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "sample_token",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "component",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "scope_kind",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "scope_id",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "stage_id",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "snapshot_id",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "resolution_x",
+            "required": false,
+            "schema": {
+              "format": "int32",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "resolution_y",
+            "required": false,
+            "schema": {
+              "format": "int32",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "quality",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "vector_budget",
+            "required": false,
+            "schema": {
+              "format": "int32",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "include_mesh",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "in": "query",
+            "name": "expected_scene_revision",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "expected_monitor_revision",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "expected_source_revision",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "expected_mesh_revision",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "expected_carrier_revision",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "expected_field_revision",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PlanarFieldMetaResource"
+                }
+              }
+            },
+            "description": ""
+          },
+          "304": {
+            "description": "Not modified"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Invalid planar query"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Field or domain missing"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Stale source"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Unsupported planar sampling"
+          }
+        },
+        "tags": [
+          "data"
+        ]
+      }
+    },
+    "/v2/sessions/current/data/fields/{quantity_id}/planar-default/probe": {
+      "get": {
+        "operationId": "data_get_sessions_current_data_fields_quantity_id_planar_default_probe",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "quantity_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "u_m",
+            "required": true,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
+            "in": "query",
+            "name": "v_m",
+            "required": true,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
+            "in": "query",
+            "name": "sample_token",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "component",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "resolution_x",
+            "required": false,
+            "schema": {
+              "format": "int32",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "resolution_y",
+            "required": false,
+            "schema": {
+              "format": "int32",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "quality",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "scope_kind",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "scope_id",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "stage_id",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "snapshot_id",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "expected_scene_revision",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "expected_monitor_revision",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "expected_source_revision",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "expected_mesh_revision",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "expected_carrier_revision",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "expected_field_revision",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PlanarFieldProbeResource"
+                }
+              }
+            },
+            "description": ""
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Invalid planar query or probe coordinates"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Field or domain missing"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Stale source"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Unsupported planar sampling"
+          }
+        },
+        "tags": [
+          "data"
+        ]
+      }
+    },
+    "/v2/sessions/current/data/fields/{quantity_id}/planar-default/render.png": {
+      "get": {
+        "operationId": "data_get_sessions_current_data_fields_quantity_id_planar_default_render_png",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "quantity_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "sample_token",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "component",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "scope_kind",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "scope_id",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "stage_id",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "snapshot_id",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "resolution_x",
+            "required": false,
+            "schema": {
+              "format": "int32",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "resolution_y",
+            "required": false,
+            "schema": {
+              "format": "int32",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "quality",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "vector_budget",
+            "required": false,
+            "schema": {
+              "format": "int32",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "include_mesh",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "in": "query",
+            "name": "expected_scene_revision",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "expected_monitor_revision",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "expected_source_revision",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "expected_mesh_revision",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "expected_carrier_revision",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "expected_field_revision",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "PNG export"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Invalid planar query"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Field or domain missing"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Stale source"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Unsupported planar sampling"
+          }
+        },
+        "tags": [
+          "data"
+        ]
+      }
+    },
+    "/v2/sessions/current/data/fields/{quantity_id}/planar-default/scalar": {
+      "get": {
+        "operationId": "data_get_sessions_current_data_fields_quantity_id_planar_default_scalar",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "quantity_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "sample_token",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "component",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "scope_kind",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "scope_id",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "stage_id",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "snapshot_id",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "resolution_x",
+            "required": false,
+            "schema": {
+              "format": "int32",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "resolution_y",
+            "required": false,
+            "schema": {
+              "format": "int32",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "quality",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "vector_budget",
+            "required": false,
+            "schema": {
+              "format": "int32",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "include_mesh",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "in": "query",
+            "name": "expected_scene_revision",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "expected_monitor_revision",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "expected_source_revision",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "expected_mesh_revision",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "expected_carrier_revision",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "expected_field_revision",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "FMVP v2 scalar raster"
+          },
+          "304": {
+            "description": "Not modified"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Invalid planar query"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Field or domain missing"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Stale source"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Unsupported planar sampling"
+          }
+        },
+        "tags": [
+          "data"
+        ]
+      }
+    },
+    "/v2/sessions/current/data/fields/{quantity_id}/planar-default/vectors": {
+      "get": {
+        "operationId": "data_get_sessions_current_data_fields_quantity_id_planar_default_vectors",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "quantity_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "sample_token",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "component",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "scope_kind",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "scope_id",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "stage_id",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "snapshot_id",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "resolution_x",
+            "required": false,
+            "schema": {
+              "format": "int32",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "resolution_y",
+            "required": false,
+            "schema": {
+              "format": "int32",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "quality",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "vector_budget",
+            "required": false,
+            "schema": {
+              "format": "int32",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "include_mesh",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "in": "query",
+            "name": "expected_scene_revision",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "expected_monitor_revision",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "expected_source_revision",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "expected_mesh_revision",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "expected_carrier_revision",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "expected_field_revision",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "FMVP v2 vector raster"
+          },
+          "304": {
+            "description": "Not modified"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Invalid planar query"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Field or domain missing"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Stale source"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Quantity or sampling mode unsupported"
+          }
+        },
+        "tags": [
+          "data"
+        ]
+      }
+    },
     "/v2/sessions/current/data/fields/{quantity_id}/planar-monitors/{monitor_id}/empty-mask": {
       "get": {
         "operationId": "data_get_sessions_current_data_fields_quantity_id_planar_monitors_monitor_id_empty_mask",
@@ -30432,6 +32208,14 @@
           {
             "in": "query",
             "name": "expected_monitor_revision",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "expected_source_revision",
             "required": false,
             "schema": {
               "type": "string"
@@ -30647,6 +32431,14 @@
           },
           {
             "in": "query",
+            "name": "expected_source_revision",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
             "name": "expected_mesh_revision",
             "required": false,
             "schema": {
@@ -30848,6 +32640,14 @@
           {
             "in": "query",
             "name": "expected_monitor_revision",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "expected_source_revision",
             "required": false,
             "schema": {
               "type": "string"
@@ -31070,6 +32870,14 @@
           },
           {
             "in": "query",
+            "name": "expected_source_revision",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
             "name": "expected_mesh_revision",
             "required": false,
             "schema": {
@@ -31282,6 +33090,14 @@
           },
           {
             "in": "query",
+            "name": "expected_source_revision",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
             "name": "expected_mesh_revision",
             "required": false,
             "schema": {
@@ -31480,6 +33296,14 @@
           {
             "in": "query",
             "name": "expected_monitor_revision",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "expected_source_revision",
             "required": false,
             "schema": {
               "type": "string"
@@ -31688,6 +33512,14 @@
           {
             "in": "query",
             "name": "expected_monitor_revision",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "expected_source_revision",
             "required": false,
             "schema": {
               "type": "string"
@@ -33812,6 +35644,30 @@
                 "null"
               ]
             }
+          },
+          {
+            "description": "Optional optimistic-concurrency precondition for the domain generation.",
+            "in": "query",
+            "name": "expected_generation_id",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "description": "Optional optimistic-concurrency precondition for the resolved field carrier.",
+            "in": "query",
+            "name": "expected_carrier_revision",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
           }
         ],
         "responses": {
@@ -33910,6 +35766,16 @@
                 }
               }
             }
+          },
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FieldVectorPendingResponse"
+                }
+              }
+            },
+            "description": "Field vector materialization is pending"
           },
           "204": {
             "description": "Recognized field quantity is not available yet"
@@ -40267,8 +42133,8 @@
     }
   ],
   "x-fullmag-build-identity": {
-    "built_at_utc": "2026-08-16T00:16:56Z",
-    "git_commit": "37071d4cfd0160e4071154c67b809c6dda723a4c",
+    "built_at_utc": "2026-08-16T13:20:48Z",
+    "git_commit": "f1adc7bb3a76bc90840feee5971f34fe9e50418e",
     "source_snapshot_sha256": "unknown",
     "worktree_state": "dirty"
   },

@@ -22,6 +22,19 @@ import {
 } from "./planarFieldResources";
 
 describe("planar field resources", () => {
+  it("keeps default and monitor source families distinct even for a monitor id named default", () => {
+    const defaultKey = planarFieldResourceKey("m", { kind: "default" }, {});
+    const monitorKey = planarFieldResourceKey(
+      "m",
+      { kind: "monitor", monitorId: "default" },
+      {},
+    );
+
+    expect(defaultKey).toContain("/planar-default/");
+    expect(monitorKey).toContain("/planar-monitors/default/");
+    expect(defaultKey).not.toBe(monitorKey);
+  });
+
   const defaultRevisions = {
     carrier_revision: "304",
     field_revision: "404",

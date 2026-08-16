@@ -231,6 +231,34 @@ export const DATA_PLANAR_FIELD_RENDER_PNG_PATH = openApiV2Path(
   "/v2/sessions/current/data/fields/{quantity_id}/planar-monitors/{monitor_id}/render.png",
 );
 
+export const DATA_PLANAR_DEFAULT_FIELD_META_PATH = openApiV2Path(
+  "/v2/sessions/current/data/fields/{quantity_id}/planar-default/meta",
+);
+
+export const DATA_PLANAR_DEFAULT_FIELD_SCALAR_PATH = openApiV2Path(
+  "/v2/sessions/current/data/fields/{quantity_id}/planar-default/scalar",
+);
+
+export const DATA_PLANAR_DEFAULT_FIELD_VECTORS_PATH = openApiV2Path(
+  "/v2/sessions/current/data/fields/{quantity_id}/planar-default/vectors",
+);
+
+export const DATA_PLANAR_DEFAULT_FIELD_EMPTY_MASK_PATH = openApiV2Path(
+  "/v2/sessions/current/data/fields/{quantity_id}/planar-default/empty-mask",
+);
+
+export const DATA_PLANAR_DEFAULT_FIELD_MESH_OVERLAY_PATH = openApiV2Path(
+  "/v2/sessions/current/data/fields/{quantity_id}/planar-default/mesh-overlay",
+);
+
+export const DATA_PLANAR_DEFAULT_FIELD_PROBE_PATH = openApiV2Path(
+  "/v2/sessions/current/data/fields/{quantity_id}/planar-default/probe",
+);
+
+export const DATA_PLANAR_DEFAULT_FIELD_RENDER_PNG_PATH = openApiV2Path(
+  "/v2/sessions/current/data/fields/{quantity_id}/planar-default/render.png",
+);
+
 export const DATA_QUANTITIES_PATH = openApiV2Path(
   "/v2/sessions/current/data/quantities",
 );

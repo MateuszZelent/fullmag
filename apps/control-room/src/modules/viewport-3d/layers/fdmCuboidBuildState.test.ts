@@ -7,6 +7,7 @@ import {
 import type { FdmCuboidBuildResult } from "./fdmCuboidBuildModel";
 
 const resultA = {} as FdmCuboidBuildResult;
+const topologyModel = {} as FdmCuboidBuildResult["model"];
 
 describe("resolveFdmCuboidBuildState", () => {
   it("returns pending with no result when the snapshot belongs to an old build key", () => {
@@ -90,5 +91,30 @@ describe("resolveFdmCuboidBuildState", () => {
     controller.begin("topology-b", "carrier-b");
 
     expect(controller.getSnapshot().result).toBeNull();
+  });
+
+  it("retains the immutable topology model when a vectors-only result has no model", () => {
+    const controller = createFdmCuboidBuildStateController();
+    const topologyResult: FdmCuboidBuildResult = {
+      model: topologyModel,
+      vectorCellIndices: null,
+      vectorSegments: null,
+    };
+    const vectorsOnlyResult: FdmCuboidBuildResult = {
+      model: null,
+      vectorCellIndices: new Uint32Array([3]),
+      vectorSegments: new Float32Array(7),
+    };
+
+    controller.begin("topology", "carrier");
+    controller.resolve("topology", topologyResult);
+    controller.begin("vectors:r2", "carrier");
+    controller.resolve("vectors:r2", vectorsOnlyResult);
+
+    expect(controller.getSnapshot().result).toEqual({
+      model: topologyModel,
+      vectorCellIndices: vectorsOnlyResult.vectorCellIndices,
+      vectorSegments: vectorsOnlyResult.vectorSegments,
+    });
   });
 });

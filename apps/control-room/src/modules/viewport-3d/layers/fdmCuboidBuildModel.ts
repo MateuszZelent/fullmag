@@ -119,6 +119,129 @@ export interface FdmVectorOnlyBuildInput {
   gridShape: [number, number, number];
 }
 
+/**
+ * Prepare the bounded anchor carrier used by the vectors-only worker path.
+ * Membership selection is shared with the full cuboid builder, so Surface and
+ * Full remain a presentation filter over the same target cell identity.
+ */
+export function createFdmVectorOnlyBuildInput({
+  cellSelection,
+  domain,
+  fieldVector,
+  maxSamples,
+  realizedRegionIds,
+}: {
+  cellSelection: FdmCuboidCellSelection;
+  domain: FdmGridRenderDomain | null;
+  fieldVector?: Pick<
+    DecodedFieldVector,
+    "indexing" | "nodeIndices" | "pointCount"
+  > | null;
+  maxSamples?: number | null;
+  realizedRegionIds: Uint32Array | null;
+}): FdmVectorOnlyBuildInput | null {
+  if (!domain || domain.totalCells <= 0) return null;
+  const [nx, ny, nz] = domain.shape;
+  const totalCells = Math.min(domain.totalCells, nx * ny * nz);
+  if (realizedRegionIds && realizedRegionIds.length !== totalCells) return null;
+  const requestedSamples = normalizeFdmVectorSampleLimit(
+    maxSamples,
+    fieldVector?.pointCount ?? domain.displayCellCount,
+  );
+  const candidateCellIndices = resolveFdmVectorAnchorCandidates(
+    fieldVector,
+    totalCells,
+    requestedSamples,
+  );
+  const selectedCandidates: number[] = [];
+  for (const cellIndex of candidateCellIndices) {
+    const regionId = realizedRegionIds?.[cellIndex] ?? FMRM_INACTIVE_REGION_ID;
+    if (!cellMatchesSelection(regionId, cellSelection)) continue;
+    selectedCandidates.push(cellIndex);
+  }
+  const selected = sampleFdmVectorAnchorCandidates(
+    selectedCandidates,
+    requestedSamples,
+  );
+  if (selected.length === 0) return null;
+  const anchors = new Float32Array(selected.length * 3);
+  const [dx, dy, dz] = domain.spacing;
+  const [ox, oy, oz] = domain.origin;
+  const planeStride = nx * ny;
+  for (let ordinal = 0; ordinal < selected.length; ordinal += 1) {
+    const cellIndex = selected[ordinal] ?? 0;
+    const ix = cellIndex % nx;
+    const iy = Math.floor(cellIndex / nx) % ny;
+    const iz = Math.floor(cellIndex / planeStride) % nz;
+    const offset = ordinal * 3;
+    anchors[offset] = ox + (ix + 0.5) * dx;
+    anchors[offset + 1] = oy + (iy + 0.5) * dy;
+    anchors[offset + 2] = oz + (iz + 0.5) * dz;
+  }
+  return {
+    anchors,
+    cellIndices: selected,
+    gridShape: [nx, ny, nz],
+  };
+}
+
+function resolveFdmVectorAnchorCandidates(
+  fieldVector: Pick<
+    DecodedFieldVector,
+    "indexing" | "nodeIndices" | "pointCount"
+  > | null | undefined,
+  totalCells: number,
+  maxSamples: number,
+): Uint32Array {
+  const nodeIndices = fieldVector?.nodeIndices;
+  if (
+    nodeIndices &&
+    (fieldVector?.indexing === "explicit_node_indices" ||
+      fieldVector?.indexing === "sampled_node_indices") &&
+    nodeIndices.length === fieldVector.pointCount
+  ) {
+    const candidates: number[] = [];
+    const seen = new Set<number>();
+    for (const value of nodeIndices) {
+      const index = Number(value);
+      if (
+        !Number.isSafeInteger(index) ||
+        index < 0 ||
+        index >= totalCells ||
+        seen.has(index)
+      ) {
+        continue;
+      }
+      seen.add(index);
+      candidates.push(index);
+    }
+    return Uint32Array.from(candidates);
+  }
+  return sampleFdmDisplayCellIndices(totalCells, maxSamples);
+}
+
+function sampleFdmVectorAnchorCandidates(
+  candidates: readonly number[],
+  maxSamples: number,
+): Uint32Array {
+  if (candidates.length <= maxSamples) return Uint32Array.from(candidates);
+  const sampled = new Uint32Array(maxSamples);
+  for (let ordinal = 0; ordinal < maxSamples; ordinal += 1) {
+    sampled[ordinal] = candidates[
+      Math.min(candidates.length - 1, Math.floor((ordinal * candidates.length) / maxSamples))
+    ] ?? 0;
+  }
+  return sampled;
+}
+
+function normalizeFdmVectorSampleLimit(
+  requested: number | null | undefined,
+  fallback: number,
+): number {
+  const value = requested == null ? fallback : requested;
+  return Math.max(0, Math.min(Math.floor(Number.isFinite(value) ? value : 0), 0xffffffff));
+}
+
 export interface FdmCuboidBuildResult {
   model: FdmCuboidInstanceModel | null;
   /** Cell ordinals represented by the vector segment stream, in the same order. */

@@ -1,3 +1,5 @@
+import type { Viewport3DFieldRenderOptions } from "../viewport3dRenderModel";
+
 /**
  * Deterministic global glyph allocation shared by FDM/FEM target adapters.
  * The allocator never changes field transport; it only clamps visible arrows.
@@ -15,6 +17,58 @@ export interface Viewport3DVectorBudgetAllocation {
   reason: "global-cap" | "target-cap" | "none";
   requested: number;
   targetId: string;
+}
+
+export function applyViewport3DGlobalVectorAllocationsToFieldRenderOptions(
+  options: Viewport3DFieldRenderOptions,
+  allocations: ReadonlyMap<
+    string,
+    Viewport3DVectorBudgetAllocation
+  >,
+): Viewport3DFieldRenderOptions {
+  const femAllocations = new Map<string, Viewport3DVectorBudgetAllocation>();
+  for (const [targetId, allocation] of allocations) {
+    if (targetId.startsWith("fem-part:")) {
+      femAllocations.set(targetId.slice("fem-part:".length), allocation);
+    }
+  }
+  if (femAllocations.size === 0) return options;
+
+  const partVectorBudgets = options.partVectorBudgets
+    ? new Map(options.partVectorBudgets)
+    : undefined;
+  if (partVectorBudgets) {
+    for (const [partId, allocation] of femAllocations) {
+      if (partVectorBudgets.has(partId)) {
+        partVectorBudgets.set(partId, allocation.effective);
+      }
+    }
+  }
+
+  const targetRenderPlans = options.targetRenderPlans
+    ? new Map(options.targetRenderPlans)
+    : undefined;
+  if (targetRenderPlans) {
+    for (const [partId, plan] of targetRenderPlans) {
+      const allocation = femAllocations.get(partId);
+      if (!allocation || plan.vectors.budget === allocation.effective) {
+        continue;
+      }
+      targetRenderPlans.set(partId, {
+        ...plan,
+        vectors: {
+          ...plan.vectors,
+          budget: allocation.effective,
+        },
+      });
+    }
+  }
+
+  return {
+    ...options,
+    ...(partVectorBudgets ? { partVectorBudgets } : {}),
+    ...(targetRenderPlans ? { targetRenderPlans } : {}),
+  };
 }
 
 export function resolveViewport3DGlobalVectorAllocation(
