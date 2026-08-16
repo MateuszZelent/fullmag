@@ -192,14 +192,31 @@ def _validate_identity(fullmag: Mapping[str, Any], mumax: Mapping[str, Any]) -> 
     if fullmag_common_limit["alpha"] != llg["alpha"] or fullmag_common_limit["gamma_rad_s_T"] != llg["gamma_rad_s_T"]:
         raise ComparisonError("Fullmag common-limit alpha/gamma do not match the torque export")
     trajectory_source = _mapping(mumax.get("trajectory_source"), "MuMax trajectory source")
-    if trajectory_source.get("kind") != "mumax_table_autosave_v1":
-        raise ComparisonError("MuMax trajectory source must be table plus field autosave")
+    trajectory_kind = _text(trajectory_source.get("kind"), "MuMax trajectory source kind")
+    if trajectory_kind not in {"mumax_table_autosave_v1", "mumax_table_save_steps_v1"}:
+        raise ComparisonError("MuMax trajectory source must be autosave or explicit Steps/TableSave")
     if trajectory_source.get("initial_sample_recorded") is not True:
         raise ComparisonError("MuMax trajectory must include the initial sample")
-    if _number(trajectory_source.get("table_autosave_interval_s"), "MuMax table autosave interval") != mumax_common_limit["sample_interval_s"]:
-        raise ComparisonError("MuMax table autosave interval does not match common-limit cadence")
-    if _number(trajectory_source.get("field_autosave_interval_s"), "MuMax field autosave interval") != mumax_common_limit["sample_interval_s"]:
-        raise ComparisonError("MuMax field autosave interval does not match common-limit cadence")
+    if trajectory_kind == "mumax_table_autosave_v1":
+        table_interval = _number(trajectory_source.get("table_autosave_interval_s"), "MuMax table autosave interval")
+        field_interval = _number(trajectory_source.get("field_autosave_interval_s"), "MuMax field autosave interval")
+    else:
+        table_interval = _number(trajectory_source.get("table_save_interval_s"), "MuMax table save interval")
+        field_interval = _number(trajectory_source.get("field_save_interval_s"), "MuMax field save interval")
+        steps_per_sample = trajectory_source.get("steps_per_sample")
+        if not isinstance(steps_per_sample, int) or steps_per_sample < 1:
+            raise ComparisonError("MuMax explicit Steps source must declare steps_per_sample")
+        if not math.isclose(
+            steps_per_sample * mumax_common_limit["fixed_timestep_s"],
+            mumax_common_limit["sample_interval_s"],
+            rel_tol=1e-12,
+            abs_tol=0.0,
+        ):
+            raise ComparisonError("MuMax steps_per_sample does not match common-limit cadence")
+    if table_interval != mumax_common_limit["sample_interval_s"]:
+        raise ComparisonError("MuMax table sampling interval does not match common-limit cadence")
+    if field_interval != mumax_common_limit["sample_interval_s"]:
+        raise ComparisonError("MuMax field sampling interval does not match common-limit cadence")
     if _text(trajectory_source.get("table_digest_sha256"), "MuMax trajectory table digest") != table_digest:
         raise ComparisonError("MuMax trajectory table digest does not match runtime identity")
     return {

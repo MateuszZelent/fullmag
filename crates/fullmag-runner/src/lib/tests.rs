@@ -571,6 +571,7 @@ fn make_test_plan() -> FdmPlanIR {
         oersted_radius: None,
         oersted_center: None,
         oersted_axis: None,
+        static_external_field_xyz: None,
         oersted_field_xyz: None,
         oersted_time_dep_kind: 0,
         oersted_time_dep_freq: 0.0,

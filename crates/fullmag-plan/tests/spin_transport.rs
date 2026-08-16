@@ -532,6 +532,26 @@ fn transport_domain_drives_common_grid_while_llg_stays_on_magnetic_cells() {
 }
 
 #[test]
+fn static_field_map_is_lowered_to_cellwise_h_ext_without_oersted_provenance() {
+    let mut problem = racetrack_problem();
+    problem
+        .energy_terms
+        .push(fullmag_ir::EnergyTermIR::StaticFieldMap {
+            id: "racetrack-bias".into(),
+            field_b_t: vec![[0.0, 0.0, 1.0e-3]; 256 * 64 * 4],
+        });
+
+    let plan = fdm_plan(&problem);
+    let field = plan
+        .static_external_field_xyz
+        .as_ref()
+        .expect("static external field map must be resolved");
+    assert_eq!(field.len(), 256 * 64 * 4);
+    assert_eq!(field[0], [0.0, 0.0, 1.0e-3 / 1.2566370614359173e-6]);
+    assert!(plan.oersted_field_xyz.is_none());
+}
+
+#[test]
 fn zero_current_preserves_transport_domain_module() {
     let problem = racetrack_problem();
     let CurrentModuleIR::CurrentTransport { definition, .. } = &problem.current_modules[0] else {

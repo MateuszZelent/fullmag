@@ -1,6 +1,6 @@
 # Produkcyjny racetrack ze skyrmionem i rozwiązanym transportem
 
-**Status:** zatwierdzony projekt; oczekuje na przegląd zapisanej specyfikacji
+**Status:** zatwierdzony projekt; implementacja bounded FDM/CUDA FP64 trwa, kwalifikacja produkcyjna oczekuje na bramki 2, 6, 8–12
 
 **Data:** 2026-08-11
 
@@ -204,6 +204,13 @@ fixture produkcyjny używa jawnego `Steps(n)` + `TableSave()` + `Save(m)`.
 Zgodność tej bramki nie promuje
 MuMax3 do orakla transportu i nie pozwala zastąpić solved-current prescribed
 torque.
+
+Implementacja wspólnego limitu posiada obecnie jawny `StaticFieldMap` w Python
+DSL/ProblemIR/plannerze FDM oraz osobne role CPU/CUDA. Jest to wyłącznie
+zamrożony artefakt `B_eq` do porównania numerycznego; nie jest to implementacja
+dynamicznego transportu ani dowód zgodności solved-current. Aktualny wynik,
+świeże bramki i blokery są zapisane w
+`docs/raports/2026-07-15_audyt-stt-sot-she-fem-fdm/RACETRACK_ETAP_1_STATUS_2026-08-13.md`.
 
 ### 4.11. Bramka 11 — pełny kontrakt produktu
 

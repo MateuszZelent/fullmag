@@ -239,6 +239,9 @@ struct Context {
     // Oersted field (cylindrical conductor)
     bool has_oersted_field = false;
     bool has_oersted_cylinder = false;
+    // The shared AoS buffer may also carry a static external H_ext profile;
+    // this role is marked separately so observables never label it as H_OE.
+    bool has_static_external_field_profile = false;
     double oersted_current = 0.0;        // DC current [A]
     double oersted_radius = 0.0;         // cylinder radius [m]
     double oersted_center[3] = {0,0,0};  // cross-section centre [m]
@@ -878,6 +881,12 @@ bool context_precompute_oersted_field(Context &ctx);
 
 /// Upload precomputed AoS Oersted field H_oe(x) [A/m] to the shared device buffer.
 bool context_upload_oersted_field(Context &ctx, const double *field_xyz, uint64_t len);
+
+/// Mark the already uploaded shared profile as a static external field H_ext.
+bool context_mark_static_external_field_profile(
+    Context &ctx,
+    const double *field_xyz,
+    uint64_t len);
 
 /// Upload sparse demag boundary correction tensors.
 bool context_upload_demag_boundary_corr(

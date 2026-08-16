@@ -1864,6 +1864,25 @@ int fullmag_fdm_backend_get_device_info(
 #endif
 }
 
+int fullmag_fdm_backend_set_static_external_field_f64(
+    fullmag_fdm_backend *handle,
+    const double *field_xyz,
+    uint64_t field_len)
+{
+#if FULLMAG_HAS_CUDA
+    if (!handle || !field_xyz) return FULLMAG_FDM_ERR_INVALID;
+    auto *ctx = reinterpret_cast<Context *>(handle);
+    return context_mark_static_external_field_profile(*ctx, field_xyz, field_len)
+        ? FULLMAG_FDM_OK
+        : FULLMAG_FDM_ERR_INVALID;
+#else
+    (void)handle;
+    (void)field_xyz;
+    (void)field_len;
+    return FULLMAG_FDM_ERR_CUDA;
+#endif
+}
+
 /* ── Error ── */
 
 const char *fullmag_fdm_backend_last_error(fullmag_fdm_backend *handle) {

@@ -99,16 +99,20 @@ class PhysicsEdge:
 class PhysicsGraph:
     modules: tuple[PhysicsModule, ...] = ()
     edges: tuple[PhysicsEdge, ...] = ()
+    objects: tuple[Mapping[str, object], ...] = ()
     schema_version: str = "physics_graph.v1"
     scene_revision: int = 0
 
     def to_ir(self) -> dict[str, object]:
-        return {
+        result: dict[str, object] = {
             "schema_version": self.schema_version,
             "scene_revision": self.scene_revision,
             "modules": [module.to_ir() for module in self.modules],
             "edges": [edge.to_ir() for edge in self.edges],
         }
+        if self.objects:
+            result["objects"] = [dict(obj) for obj in self.objects]
+        return result
 
 
 def build_physics_graph(problem: Any) -> PhysicsGraph:
@@ -116,6 +120,11 @@ def build_physics_graph(problem: Any) -> PhysicsGraph:
 
     modules: list[PhysicsModule] = []
     edges: list[PhysicsEdge] = []
+    inactive_spin_transport_ids = _stage_inactive_spin_transport_ids(problem)
+    inactive_current_source_ids = _stage_inactive_current_source_ids(
+        problem,
+        inactive_spin_transport_ids,
+    )
 
     def add(module: PhysicsModule) -> None:
         if any(existing.id == module.id for existing in modules):
@@ -128,6 +137,8 @@ def build_physics_graph(problem: Any) -> PhysicsGraph:
         module_id = str(payload.get("name") or payload.get("id") or f"current:{index}")
         domain = _regions(payload.get("domain"))
         activation = _current_activation(payload)
+        if module_id in inactive_current_source_ids:
+            activation = PhysicsActivation.INACTIVE
         add(_module(module_id, kind, domain, (), activation, f"/current_modules/{index}", payload))
 
     statuses = {module.id: module.activation for module in modules}
@@ -137,6 +148,11 @@ def build_physics_graph(problem: Any) -> PhysicsGraph:
         domain = _regions(payload.get("domain"))
         dependency = _optional_string(payload.get("current_source_id"))
         activation = _dependency_activation(PhysicsActivation.ACTIVE, dependency, statuses)
+        if (
+            module_id in inactive_spin_transport_ids
+            and activation is not PhysicsActivation.BLOCKED
+        ):
+            activation = PhysicsActivation.INACTIVE
         add(_module(module_id, "spin_transport", domain, (dependency,) if dependency else (), activation, f"/spin_transports/{index}", payload))
         if dependency:
             edges.append(_edge("current_to_spin_transport", dependency, module_id, activation))
@@ -163,6 +179,9 @@ def build_physics_graph(problem: Any) -> PhysicsGraph:
         target = payload.get("target")
         domain = _regions((target,) if isinstance(target, Mapping) else ())
         activation = _dependency_activation(PhysicsActivation.ACTIVE, dependency, statuses) if dependency else PhysicsActivation.ACTIVE
+        authored_activation = getattr(problem, "spin_torque_activation", {}).get(module_id)
+        if authored_activation is False:
+            activation = PhysicsActivation.INACTIVE
         add(_module(module_id, "spin_torque", domain, (dependency,) if dependency else (), activation, f"/spin_torques/{index}", payload))
         if dependency:
             edge_kind = (
@@ -195,7 +214,21 @@ def build_physics_graph(problem: Any) -> PhysicsGraph:
 
     modules.sort(key=lambda module: (_module_rank(module.kind), module.id))
     edges.sort(key=lambda edge: (edge.kind, edge.source_id, edge.target_id))
-    return PhysicsGraph(tuple(modules), tuple(edges))
+    objects = tuple(
+        {
+            "schema_version": "physics_object.v1",
+            "object_id": name,
+            "name": name,
+            "type": role,
+            "geometry_id": name,
+            "material_assignment_ids": [],
+        }
+        for name, role in sorted(
+            getattr(problem, "auxiliary_geometry_roles", {}).items()
+        )
+        if role != "antenna"
+    )
+    return PhysicsGraph(tuple(modules), tuple(edges), objects=objects)
 
 
 def _module(
@@ -309,6 +342,89 @@ def _dependency_activation(own: PhysicsActivation, dependency: str | None, statu
     if status in {PhysicsActivation.BLOCKED, PhysicsActivation.UNSUPPORTED, PhysicsActivation.UNRESOLVED}:
         return PhysicsActivation.BLOCKED
     return own
+
+
+def _stage_inactive_spin_transport_ids(problem: Any) -> set[str]:
+    """Disable solved transport when every explicitly controlled consumer is off.
+
+    A transport module remains present in the canonical IR even while it is
+    inactive.  This preserves authoring/provenance, but prevents a zero-current
+    preparation stage from materializing a charge/spin solve merely because a
+    downstream transport torque was authored for a later stage.
+    """
+
+    activation = getattr(problem, "spin_torque_activation", {})
+    consumers: dict[str, list[bool]] = {}
+    for source in getattr(problem, "spin_torques", ()):
+        payload = _payload(source, module=True)
+        solve_id = _optional_string(payload.get("solve_id"))
+        if solve_id is None:
+            continue
+        module_id = _optional_string(payload.get("id"))
+        if module_id is None:
+            continue
+        consumers.setdefault(solve_id, []).append(activation.get(module_id, True))
+    return {
+        solve_id
+        for solve_id, states in consumers.items()
+        if states and not any(states)
+    }
+
+
+def _stage_inactive_current_source_ids(
+    problem: Any,
+    inactive_spin_transport_ids: set[str],
+) -> set[str]:
+    """Propagate an explicit disabled transport pipeline to its sole source.
+
+    The source is kept active when another active spin transport, direct torque,
+    or Oersted field still consumes it.  An authored current module is therefore
+    never hidden just because its density happens to be zero.
+    """
+
+    if not inactive_spin_transport_ids:
+        return set()
+    transport_by_source: dict[str, list[tuple[str, bool]]] = {}
+    for source in getattr(problem, "spin_transports", ()):
+        payload = _payload(source)
+        transport_id = _optional_string(payload.get("id"))
+        current_source_id = _optional_string(payload.get("current_source_id"))
+        if transport_id is None or current_source_id is None:
+            continue
+        transport_by_source.setdefault(current_source_id, []).append(
+            (transport_id, transport_id not in inactive_spin_transport_ids)
+        )
+
+    activation = getattr(problem, "spin_torque_activation", {})
+    direct_torque_by_source: dict[str, bool] = {}
+    for source in getattr(problem, "spin_torques", ()):
+        payload = _payload(source, module=True)
+        current_source_id = _optional_string(
+            payload.get("current_source") or payload.get("current_source_id")
+        )
+        module_id = _optional_string(payload.get("id"))
+        if current_source_id is None or module_id is None:
+            continue
+        direct_torque_by_source[current_source_id] = (
+            direct_torque_by_source.get(current_source_id, False)
+            or activation.get(module_id, True)
+        )
+
+    oersted_sources = {
+        _optional_string(_payload(source).get("source"))
+        for source in getattr(problem, "energy", ())
+        if _payload(source).get("kind") in {"oersted_field", "oersted_cylinder"}
+    }
+    inactive: set[str] = set()
+    for source_id, transports in transport_by_source.items():
+        if not any(not active for _, active in transports):
+            continue
+        if any(active for _, active in transports):
+            continue
+        if direct_torque_by_source.get(source_id, False) or source_id in oersted_sources:
+            continue
+        inactive.add(source_id)
+    return inactive
 
 
 def _first_string(payload: Mapping[str, object], *keys: str) -> str | None:

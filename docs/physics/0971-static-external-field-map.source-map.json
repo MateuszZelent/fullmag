@@ -1,0 +1,46 @@
+{
+  "document": {"path": "docs/physics/0971-static-external-field-map.md"},
+  "backend_matrix": [
+    {"solver": "FDM", "device": "CPU", "status": "implemented_contract", "reason": "Per-cell map uses the CPU reference per-node Zeeman path; runtime qualification is separate."},
+    {"solver": "FDM", "device": "GPU", "status": "implemented_contract", "reason": "Single-grid CUDA uses the static external profile role and requires managed FP64 evidence."},
+    {"solver": "FEM", "device": "CPU", "status": "unsupported", "reason": "No FE projection contract or qualification exists for this map."},
+    {"solver": "FEM", "device": "GPU", "status": "unsupported", "reason": "No FE projection contract or qualification exists for this map."}
+  ],
+  "equations": [
+    {"id": "static-field-map-h", "symbols": ["B_map", "H_map", "mu0", "r_q"], "sources": ["python-api", "fdm-plan"]},
+    {"id": "static-field-map-zeeman-energy", "symbols": ["E_Z", "Ms", "m_q", "H_uniform", "H_map", "V_q"], "sources": ["fdm-cpu", "cuda-energy"]},
+    {"id": "static-field-map-gilbert-inversion", "symbols": ["B_eq", "m_q", "T_tr_G", "gamma_e", "H_eq", "mu0"], "sources": ["exporter", "python-api"]}
+  ],
+  "symbols": [
+    {"id": "r_q", "latex": "$\\mathbf r_q$", "meaning": "położenie punktu/komórki $q$", "si_unit": "$\\mathrm{m}$"},
+    {"id": "B_map", "latex": "$\\mathbf B_{\\mathrm{map}}$", "meaning": "zadana mapa indukcji", "si_unit": "$\\mathrm{T}$"},
+    {"id": "H_map", "latex": "$\\mathbf H_{\\mathrm{map}}$", "meaning": "mapa pola używana przez LLG", "si_unit": "$\\mathrm{A\\,m^{-1}}$"},
+    {"id": "B_eq", "latex": "$\\mathbf B_{\\mathrm{eq}}$", "meaning": "indukcja równoważna zamrożonemu torque", "si_unit": "$\\mathrm{T}$"},
+    {"id": "H_eq", "latex": "$\\mathbf H_{\\mathrm{eq}}$", "meaning": "równoważne pole w solverze", "si_unit": "$\\mathrm{A\\,m^{-1}}$"},
+    {"id": "T_tr_G", "latex": "$\\mathbf T_{\\mathrm{tr,G}}$", "meaning": "transportowe źródło Gilberta", "si_unit": "$\\mathrm{s^{-1}}$"},
+    {"id": "gamma_e", "latex": "$\\gamma_e$", "meaning": "dodatnia wartość stosunku giromagnetycznego elektronu", "si_unit": "$\\mathrm{rad\\,s^{-1}\\,T^{-1}}$"},
+    {"id": "mu0", "latex": "$\\mu_0$", "meaning": "przenikalność próżni", "si_unit": "$\\mathrm{N\\,A^{-2}}$"},
+    {"id": "E_Z", "latex": "$E_{\\mathrm Z}$", "meaning": "energia Zeemana", "si_unit": "$\\mathrm{J}$"},
+    {"id": "Ms", "latex": "$M_s$", "meaning": "magnetyzacja nasycenia", "si_unit": "$\\mathrm{A\\,m^{-1}}$"},
+    {"id": "m_q", "latex": "$\\mathbf m_q$", "meaning": "zredukowana magnetyzacja", "si_unit": "$1$"},
+    {"id": "V_q", "latex": "$V_q$", "meaning": "objętość komórki", "si_unit": "$\\mathrm{m^3}$"}
+    ,{"id": "H_uniform", "latex": "$\\mathbf H_{\\mathrm{uniform}}$", "meaning": "jednorodne pole zewnętrzne", "si_unit": "$\\mathrm{A\\,m^{-1}}$"}
+  ],
+  "public_api": {
+    "parameters": [
+      {"python": "StaticFieldMap.id", "type": "str", "default": "required", "si_unit": "$1$", "validation": "niepusty", "meaning": "stabilny identyfikator mapy pola", "backend_support": "kontrakt FDM CPU/GPU", "problem_ir": "energy_terms[].id"},
+      {"python": "StaticFieldMap.field_B_T", "type": "Sequence[Sequence[float]]", "default": "required", "si_unit": "$\\mathrm{T}$", "validation": "niepuste skończone wektory", "meaning": "komórkowa mapa indukcji statycznej", "backend_support": "kontrakt FDM CPU/GPU", "problem_ir": "energy_terms[].field_B_T"}
+    ]
+  },
+  "sources": [
+    {"id": "python-api", "path": "packages/fullmag-py/src/fullmag/model/energy.py", "symbol": "class StaticFieldMap", "responsibility": "Validate and serialize the static field map."},
+    {"id": "ir", "path": "crates/fullmag-ir/src/study.rs", "symbol": "is_static_field_map", "responsibility": "Canonical ProblemIR representation and variant predicate."},
+    {"id": "fdm-plan", "path": "crates/fullmag-plan/src/fdm.rs", "symbol": "plan_fdm", "responsibility": "Convert B/T to H/A/m and bind map to the resolved grid."},
+    {"id": "fdm-cpu", "path": "crates/fullmag-runner/src/fdm/cpu/reference.rs", "symbol": "build_reference_problem", "responsibility": "Consume the per-cell static Zeeman field in the CPU reference."},
+    {"id": "cuda-construction", "path": "crates/fullmag-runner/src/fdm/gpu/cuda/native/construction.rs", "symbol": "create", "responsibility": "Upload and mark static external profile for CUDA."},
+    {"id": "cuda-context", "path": "backends/fdm/gpu/cuda/runtime/context.cu", "symbol": "context_download_field_impl", "responsibility": "Expose H_EXT/H_OE semantics and field snapshots."},
+    {"id": "cuda-energy", "path": "backends/fdm/gpu/cuda/runtime/reductions_fp64.cu", "symbol": "reduce_external_energy_fp64", "responsibility": "Reduce Zeeman energy using the static external profile."},
+    {"id": "cuda-api", "path": "backends/fdm/api/c_api.cpp", "symbol": "fullmag_fdm_backend_set_static_external_field_f64", "responsibility": "Mark the already-uploaded profile without changing the plan ABI."},
+    {"id": "exporter", "path": "scripts/export_fullmag_transport_torque_for_mumax.py", "symbol": "equivalent_field", "responsibility": "Produce the frozen equivalent B field and provenance."}
+  ]
+}

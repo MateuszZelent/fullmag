@@ -51,7 +51,55 @@ fn v0_3_magnet_migrates_to_object_and_magnetization_module() {
         value["unresolved"][0]["source_path"],
         "/legacy/ambiguous_reference"
     );
+    assert_eq!(
+        value["material_assignments"][0]["target"],
+        serde_json::json!({"object_id": "obj_free_layer", "region_id": "free_layer"})
+    );
+    assert_eq!(
+        value["magnetization_modules"][0]["target"],
+        serde_json::json!({"object_id": "obj_free_layer", "region_id": "free_layer"})
+    );
+    assert_eq!(
+        value["material_parameter_fields"][0]["owner_object"],
+        "obj_free_layer"
+    );
+    assert_eq!(
+        value["surface_boundary_conditions"][0]["surface"]["object_id"],
+        "obj_heavy_metal"
+    );
+    let problem: ProblemIRV04 = serde_json::from_value(value.clone()).unwrap();
+    let round_trip = serde_json::to_value(problem).unwrap();
+    assert_eq!(
+        round_trip["surface_boundary_conditions"],
+        value["surface_boundary_conditions"]
+    );
+    assert_eq!(round_trip["unresolved"], value["unresolved"]);
     assert!(value.get("magnets").is_none());
+}
+
+#[test]
+fn v0_4_material_assignments_preserve_object_and_region_targets() {
+    let mut problem = ProblemIRV04::bootstrap_example();
+    problem
+        .material_assignments
+        .push(ObjectMaterialAssignmentIR::new(
+            "assignment_object_level",
+            RegionRefIR {
+                object_id: "obj_strip".into(),
+                region_id: None,
+            },
+            "Py",
+        ));
+
+    let value = serde_json::to_value(problem).unwrap();
+    assert_eq!(
+        value["material_assignments"][0]["target"],
+        serde_json::json!({"object_id": "obj_strip", "region_id": "strip"})
+    );
+    assert_eq!(
+        value["material_assignments"][1]["target"],
+        serde_json::json!({"object_id": "obj_strip"})
+    );
 }
 
 #[test]
@@ -126,6 +174,17 @@ fn v0_3_migration_rejects_missing_geometry_and_identifier_collisions() {
     assert!(migrate_v0_3_problem_ir_to_v0_4(&mut missing_geometry)
         .expect_err("unresolved magnet region must fail closed")
         .contains("/magnets/0/region"));
+
+    let mut region_missing_geometry: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../tests/golden/problem_ir/bootstrap_v0_3_object_migration.json"
+    ))
+    .unwrap();
+    region_missing_geometry["regions"][0]["geometry"] = serde_json::json!("missing_geometry");
+    assert!(
+        migrate_v0_3_problem_ir_to_v0_4(&mut region_missing_geometry)
+            .expect_err("region geometry must resolve before magnet migration")
+            .contains("/regions/0/geometry")
+    );
 
     let mut collision = fixture;
     collision["geometry"]["entries"] = serde_json::json!([

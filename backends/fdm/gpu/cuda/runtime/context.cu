@@ -2509,6 +2509,30 @@ bool context_upload_oersted_field(Context &ctx, const double *field_xyz, uint64_
     return true;
 }
 
+bool context_mark_static_external_field_profile(
+    Context &ctx,
+    const double *field_xyz,
+    uint64_t len)
+{
+    if (ctx.has_oersted_cylinder) {
+        ctx.last_error =
+            "static external field profile cannot be combined with OerstedCylinder";
+        return false;
+    }
+    if (!ctx.has_oersted_field || field_xyz == nullptr || len != ctx.cell_count * 3u) {
+        ctx.last_error = "static external field profile requires an uploaded cell-wise field";
+        return false;
+    }
+    for (uint64_t i = 0; i < len; ++i) {
+        if (!std::isfinite(field_xyz[i])) {
+            ctx.last_error = "static external field profile contains non-finite values";
+            return false;
+        }
+    }
+    ctx.has_static_external_field_profile = true;
+    return true;
+}
+
 template <typename HostScalar>
 static bool context_upload_magnetization_impl(Context &ctx, const HostScalar *m_xyz, uint64_t len) {
     uint64_t n = ctx.cell_count;
@@ -2640,6 +2664,10 @@ static bool context_download_field_impl(
         case FULLMAG_FDM_OBSERVABLE_H_ANI: field = &ctx.h_ani; break;
         case FULLMAG_FDM_OBSERVABLE_H_EFF: field = &ctx.work; break;
         case FULLMAG_FDM_OBSERVABLE_H_OE: {
+            if (ctx.has_static_external_field_profile) {
+                std::fill(out_xyz, out_xyz + (n * 3u), static_cast<HostScalar>(0.0));
+                return true;
+            }
             const double scale = oersted_field_scale(ctx, ctx.current_time);
             for (uint64_t i = 0; i < n; i++) {
                 const bool is_active = !ctx.has_active_mask || ctx.active_mask_host[i] != 0;
@@ -2687,6 +2715,36 @@ static bool context_download_field_impl(
             return copy_components(float{0.0f});
         }
         case FULLMAG_FDM_OBSERVABLE_H_EXT: {
+            if (ctx.has_static_external_field_profile) {
+                const DeviceVectorField *profile = &ctx.h_oe_static;
+                auto copy_profile = [&](auto tag) -> bool {
+                    using DeviceScalar = decltype(tag);
+                    std::vector<DeviceScalar> hx(n), hy(n), hz(n);
+                    size_t bytes = n * sizeof(DeviceScalar);
+                    cudaError_t err = cudaMemcpy(hx.data(), profile->x, bytes, cudaMemcpyDeviceToHost);
+                    if (err != cudaSuccess) { set_cuda_error(const_cast<Context &>(ctx), "cudaMemcpy(h_ext_profile.x)", err); return false; }
+                    err = cudaMemcpy(hy.data(), profile->y, bytes, cudaMemcpyDeviceToHost);
+                    if (err != cudaSuccess) { set_cuda_error(const_cast<Context &>(ctx), "cudaMemcpy(h_ext_profile.y)", err); return false; }
+                    err = cudaMemcpy(hz.data(), profile->z, bytes, cudaMemcpyDeviceToHost);
+                    if (err != cudaSuccess) { set_cuda_error(const_cast<Context &>(ctx), "cudaMemcpy(h_ext_profile.z)", err); return false; }
+                    for (uint64_t i = 0; i < n; ++i) {
+                        const bool is_active = !ctx.has_active_mask || ctx.active_mask_host[i] != 0;
+                        out_xyz[3u * i + 0] = is_active
+                            ? static_cast<HostScalar>(ctx.external_field[0] + static_cast<double>(hx[i]))
+                            : static_cast<HostScalar>(0.0);
+                        out_xyz[3u * i + 1] = is_active
+                            ? static_cast<HostScalar>(ctx.external_field[1] + static_cast<double>(hy[i]))
+                            : static_cast<HostScalar>(0.0);
+                        out_xyz[3u * i + 2] = is_active
+                            ? static_cast<HostScalar>(ctx.external_field[2] + static_cast<double>(hz[i]))
+                            : static_cast<HostScalar>(0.0);
+                    }
+                    return true;
+                };
+                return ctx.precision == FULLMAG_FDM_PRECISION_DOUBLE
+                    ? copy_profile(double{0.0})
+                    : copy_profile(float{0.0f});
+            }
             for (uint64_t i = 0; i < n; i++) {
                 bool is_active = !ctx.has_active_mask || ctx.active_mask_host[i] != 0;
                 out_xyz[3 * i + 0] = (ctx.has_external_field && is_active)
@@ -3007,6 +3065,89 @@ static bool context_download_field_preview_impl(
             field = &ctx.h_oe_static;
             break;
         case FULLMAG_FDM_OBSERVABLE_H_EXT: {
+            if (ctx.has_static_external_field_profile) {
+                const DeviceVectorField *profile = &ctx.h_oe_static;
+                auto copy_profile_preview = [&](auto tag) -> bool {
+                    using DeviceScalar = decltype(tag);
+                    std::vector<DeviceScalar> hx(ctx.cell_count), hy(ctx.cell_count), hz(ctx.cell_count);
+                    size_t bytes = ctx.cell_count * sizeof(DeviceScalar);
+                    cudaError_t err = cudaMemcpy(hx.data(), profile->x, bytes, cudaMemcpyDeviceToHost);
+                    if (err != cudaSuccess) {
+                        set_cuda_error(ctx, "cudaMemcpy(h_ext_profile_preview.x)", err);
+                        return false;
+                    }
+                    err = cudaMemcpy(hy.data(), profile->y, bytes, cudaMemcpyDeviceToHost);
+                    if (err != cudaSuccess) {
+                        set_cuda_error(ctx, "cudaMemcpy(h_ext_profile_preview.y)", err);
+                        return false;
+                    }
+                    err = cudaMemcpy(hz.data(), profile->z, bytes, cudaMemcpyDeviceToHost);
+                    if (err != cudaSuccess) {
+                        set_cuda_error(ctx, "cudaMemcpy(h_ext_profile_preview.z)", err);
+                        return false;
+                    }
+                    for (uint32_t pz = 0; pz < preview_nz; ++pz) {
+                        uint32_t z_start = z_origin + pz * z_stride;
+                        if (z_start >= ctx.nz) z_start = ctx.nz - 1;
+                        uint32_t z_end = z_origin + (pz + 1) * z_stride;
+                        if (z_end <= z_start) z_end = z_start + 1;
+                        if (z_end > ctx.nz) z_end = ctx.nz;
+                        for (uint32_t py = 0; py < preview_ny; ++py) {
+                            uint32_t y_start = static_cast<uint32_t>(
+                                (static_cast<uint64_t>(py) * ctx.ny) / preview_ny);
+                            uint32_t y_end = static_cast<uint32_t>(
+                                (static_cast<uint64_t>(py + 1) * ctx.ny) / preview_ny);
+                            if (y_end <= y_start) y_end = y_start + 1;
+                            if (y_end > ctx.ny) y_end = ctx.ny;
+                            for (uint32_t px = 0; px < preview_nx; ++px) {
+                                uint32_t x_start = static_cast<uint32_t>(
+                                    (static_cast<uint64_t>(px) * ctx.nx) / preview_nx);
+                                uint32_t x_end = static_cast<uint32_t>(
+                                    (static_cast<uint64_t>(px + 1) * ctx.nx) / preview_nx);
+                                if (x_end <= x_start) x_end = x_start + 1;
+                                if (x_end > ctx.nx) x_end = ctx.nx;
+
+                                double profile_x = 0.0;
+                                double profile_y = 0.0;
+                                double profile_z = 0.0;
+                                double active_count = 0.0;
+                                double count = 0.0;
+                                for (uint32_t z = z_start; z < z_end; ++z) {
+                                    for (uint32_t y = y_start; y < y_end; ++y) {
+                                        for (uint32_t x = x_start; x < x_end; ++x) {
+                                            uint64_t index =
+                                                (static_cast<uint64_t>(z) * ctx.ny + y) * ctx.nx + x;
+                                            bool is_active =
+                                                !ctx.has_active_mask || ctx.active_mask_host[index] != 0;
+                                            if (is_active) {
+                                                profile_x += static_cast<double>(hx[index]);
+                                                profile_y += static_cast<double>(hy[index]);
+                                                profile_z += static_cast<double>(hz[index]);
+                                                active_count += 1.0;
+                                            }
+                                            count += 1.0;
+                                        }
+                                    }
+                                }
+                                uint64_t preview_index =
+                                    (static_cast<uint64_t>(pz) * preview_ny + py) * preview_nx + px;
+                                double active_scale = count > 0.0 ? active_count / count : 0.0;
+                                out_xyz[preview_index * 3 + 0] = static_cast<HostScalar>(
+                                    ctx.external_field[0] * active_scale + profile_x / (count > 0.0 ? count : 1.0));
+                                out_xyz[preview_index * 3 + 1] = static_cast<HostScalar>(
+                                    ctx.external_field[1] * active_scale + profile_y / (count > 0.0 ? count : 1.0));
+                                out_xyz[preview_index * 3 + 2] = static_cast<HostScalar>(
+                                    ctx.external_field[2] * active_scale + profile_z / (count > 0.0 ? count : 1.0));
+                            }
+                        }
+                    }
+                    return true;
+                };
+                if (ctx.precision == FULLMAG_FDM_PRECISION_DOUBLE) {
+                    return copy_profile_preview(double{0.0});
+                }
+                return copy_profile_preview(float{0.0f});
+            }
             for (uint32_t pz = 0; pz < preview_nz; ++pz) {
                 uint32_t z_start = z_origin + pz * z_stride;
                 if (z_start >= ctx.nz) z_start = ctx.nz - 1;
@@ -3252,6 +3393,17 @@ AsyncFieldSnapshot *context_begin_async_field_snapshot(
             field = &ctx.work;
             break;
         case FULLMAG_FDM_OBSERVABLE_H_OE:
+            if (ctx.has_static_external_field_profile) {
+                if (ctx.precision == FULLMAG_FDM_PRECISION_DOUBLE) {
+                    auto *host = reinterpret_cast<double *>(snapshot->host_soa);
+                    std::fill(host, host + (ctx.cell_count * 3u), 0.0);
+                } else {
+                    auto *host = reinterpret_cast<float *>(snapshot->host_soa);
+                    std::fill(host, host + (ctx.cell_count * 3u), 0.0f);
+                }
+                snapshot->needs_wait = false;
+                return snapshot;
+            }
             if (ctx.precision == FULLMAG_FDM_PRECISION_DOUBLE) {
                 if (!ctx.has_oersted_field) {
                     auto *host = reinterpret_cast<double *>(snapshot->host_soa);
@@ -3304,6 +3456,41 @@ AsyncFieldSnapshot *context_begin_async_field_snapshot(
             snapshot->needs_wait = false;
             return snapshot;
         case FULLMAG_FDM_OBSERVABLE_H_EXT:
+            if (ctx.has_static_external_field_profile) {
+                if (ctx.precision == FULLMAG_FDM_PRECISION_DOUBLE) {
+                    std::vector<double> hx(ctx.cell_count), hy(ctx.cell_count), hz(ctx.cell_count);
+                    err = cudaMemcpy(hx.data(), ctx.h_oe_static.x, component_bytes, cudaMemcpyDeviceToHost);
+                    if (err != cudaSuccess) return fail("cudaMemcpy(snapshot.h_ext_profile_x)", err);
+                    err = cudaMemcpy(hy.data(), ctx.h_oe_static.y, component_bytes, cudaMemcpyDeviceToHost);
+                    if (err != cudaSuccess) return fail("cudaMemcpy(snapshot.h_ext_profile_y)", err);
+                    err = cudaMemcpy(hz.data(), ctx.h_oe_static.z, component_bytes, cudaMemcpyDeviceToHost);
+                    if (err != cudaSuccess) return fail("cudaMemcpy(snapshot.h_ext_profile_z)", err);
+                    auto *host = reinterpret_cast<double *>(snapshot->host_soa);
+                    for (uint64_t i = 0; i < ctx.cell_count; ++i) {
+                        const bool is_active = !ctx.has_active_mask || ctx.active_mask_host[i] != 0;
+                        host[i] = is_active ? ctx.external_field[0] + hx[i] : 0.0;
+                        host[ctx.cell_count + i] = is_active ? ctx.external_field[1] + hy[i] : 0.0;
+                        host[(ctx.cell_count * 2u) + i] = is_active ? ctx.external_field[2] + hz[i] : 0.0;
+                    }
+                } else {
+                    std::vector<float> hx(ctx.cell_count), hy(ctx.cell_count), hz(ctx.cell_count);
+                    err = cudaMemcpy(hx.data(), ctx.h_oe_static.x, component_bytes, cudaMemcpyDeviceToHost);
+                    if (err != cudaSuccess) return fail("cudaMemcpy(snapshot.h_ext_profile_x)", err);
+                    err = cudaMemcpy(hy.data(), ctx.h_oe_static.y, component_bytes, cudaMemcpyDeviceToHost);
+                    if (err != cudaSuccess) return fail("cudaMemcpy(snapshot.h_ext_profile_y)", err);
+                    err = cudaMemcpy(hz.data(), ctx.h_oe_static.z, component_bytes, cudaMemcpyDeviceToHost);
+                    if (err != cudaSuccess) return fail("cudaMemcpy(snapshot.h_ext_profile_z)", err);
+                    auto *host = reinterpret_cast<float *>(snapshot->host_soa);
+                    for (uint64_t i = 0; i < ctx.cell_count; ++i) {
+                        const bool is_active = !ctx.has_active_mask || ctx.active_mask_host[i] != 0;
+                        host[i] = is_active ? static_cast<float>(ctx.external_field[0]) + hx[i] : 0.0f;
+                        host[ctx.cell_count + i] = is_active ? static_cast<float>(ctx.external_field[1]) + hy[i] : 0.0f;
+                        host[(ctx.cell_count * 2u) + i] = is_active ? static_cast<float>(ctx.external_field[2]) + hz[i] : 0.0f;
+                    }
+                }
+                snapshot->needs_wait = false;
+                return snapshot;
+            }
             if (ctx.precision == FULLMAG_FDM_PRECISION_DOUBLE) {
                 auto *host = reinterpret_cast<double *>(snapshot->host_soa);
                 for (uint64_t i = 0; i < ctx.cell_count; ++i) {

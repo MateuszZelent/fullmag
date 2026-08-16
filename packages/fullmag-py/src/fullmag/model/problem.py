@@ -8,7 +8,7 @@ from dataclasses import dataclass, field, replace
 from enum import Enum
 from hashlib import sha256
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Any, Mapping, Sequence
 
 from fullmag._progress import emit_progress, emit_progress_event
 from fullmag._validation import ensure_unique_names, require_non_empty
@@ -28,7 +28,7 @@ from fullmag.model.current_transport import CurrentTransport
 from fullmag.model.discretization import DiscretizationHints, FEM
 from fullmag.model.dynamics import LLG
 from fullmag.model.domain_frame import build_domain_frame, geometry_bounds
-from fullmag.model.energy import BulkDMI, CubicAnisotropy, Demag, Exchange, InterfacialDMI, Magnetoelastic, OerstedField, OerstedCylinder, PiecewiseLinear, ThermalNoise, UniaxialAnisotropy, Zeeman
+from fullmag.model.energy import BulkDMI, CubicAnisotropy, Demag, Exchange, InterfacialDMI, Magnetoelastic, OerstedField, OerstedCylinder, PiecewiseLinear, StaticFieldMap, ThermalNoise, UniaxialAnisotropy, Zeeman
 from fullmag.model.spin_torque import (
     LegacySpinTorque,
     PrescribedSpinOrbitTorque,
@@ -910,7 +910,7 @@ class RuntimeSelection:
 backend = RuntimeSelection()
 
 
-EnergyTerm = Exchange | Demag | InterfacialDMI | BulkDMI | Zeeman | Magnetoelastic | UniaxialAnisotropy | OerstedCylinder | OerstedField | CubicAnisotropy | ThermalNoise
+EnergyTerm = Exchange | Demag | InterfacialDMI | BulkDMI | Zeeman | StaticFieldMap | Magnetoelastic | UniaxialAnisotropy | OerstedCylinder | OerstedField | CubicAnisotropy | ThermalNoise
 CurrentModule = AntennaFieldSource | CurrentTransport
 LegacyOutputSpec = SaveField | SaveScalar | Snapshot
 OutputSpec = LegacyOutputSpec | SaveSpectrum | SaveMode | SaveDispersion
@@ -1309,6 +1309,7 @@ class Problem:
     runtime: RuntimeSelection = field(default_factory=RuntimeSelection)
     runtime_metadata: dict[str, object] = field(default_factory=dict)
     auxiliary_geometries: Sequence[object] = ()
+    auxiliary_geometry_roles: Mapping[str, str] = field(default_factory=dict)
     current_modules: Sequence[CurrentModule] = ()
     field_drives: Sequence[RegionalFieldDrive] = ()
     couplings: Sequence[Coupling] = ()
@@ -1323,6 +1324,8 @@ class Problem:
     spin_torque: LegacySpinTorque | None = None
     # Canonical torque family. Allows more than one module to be authored.
     spin_torques: Sequence[SpinTorqueModule] = ()
+    # Stage-local activation state for canonical torque modules.
+    spin_torque_activation: Mapping[str, bool] = field(default_factory=dict)
     spin_transports: Sequence[SpinDriftDiffusion] = ()
     # Temperature for Brown thermal field [K] (optional, 0 = no noise)
     temperature: float | None = None
@@ -1338,6 +1341,30 @@ class Problem:
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "name", require_non_empty(self.name, "name"))
+        roles = {
+            require_non_empty(str(name), "auxiliary_geometry_roles.name"): require_non_empty(
+                str(role), "auxiliary_geometry_roles.role"
+            ).lower()
+            for name, role in self.auxiliary_geometry_roles.items()
+        }
+        allowed_roles = {"geometry", "conductor", "electrode", "antenna"}
+        invalid_roles = sorted(set(roles.values()) - allowed_roles)
+        if invalid_roles:
+            raise ValueError(
+                "auxiliary_geometry_roles contains unsupported type(s): "
+                + ", ".join(invalid_roles)
+            )
+        auxiliary_names = {
+            str(getattr(geometry, "geometry_name", ""))
+            for geometry in self.auxiliary_geometries
+        }
+        unknown_roles = sorted(set(roles) - auxiliary_names)
+        if unknown_roles:
+            raise ValueError(
+                "auxiliary_geometry_roles references unknown geometry object(s): "
+                + ", ".join(unknown_roles)
+            )
+        object.__setattr__(self, "auxiliary_geometry_roles", roles)
         if not self.magnets:
             raise ValueError("Problem requires at least one magnet")
         if not self.energy and not any(
@@ -1371,6 +1398,23 @@ class Problem:
         )
         object.__setattr__(self, "spin_torque", None)
         object.__setattr__(self, "spin_torques", normalized_spin_torques)
+        activation = {}
+        for module_id, enabled in self.spin_torque_activation.items():
+            normalized_id = require_non_empty(str(module_id), "spin_torque_activation.module_id")
+            if not isinstance(enabled, bool):
+                raise TypeError("spin_torque_activation values must be bool")
+            activation[normalized_id] = enabled
+        torque_ids = {
+            str(payload.get("id") or payload.get("name"))
+            for payload in (module.to_ir_module() for module in normalized_spin_torques)
+        }
+        unknown_activation = sorted(set(activation) - torque_ids)
+        if unknown_activation:
+            raise ValueError(
+                "spin_torque_activation references unknown module id(s): "
+                + ", ".join(unknown_activation)
+            )
+        object.__setattr__(self, "spin_torque_activation", activation)
         ensure_unique_names(
             (
                 module.name
@@ -1663,7 +1707,20 @@ class Problem:
             spin_torque_payload["spin_torque_modules"] = _spin_torque_modules_ir(self)
         spin_torque_payload.update(_legacy_spin_torque_fields(self))
 
-        return {
+        physics_objects = [
+            {
+                "schema_version": "physics_object.v1",
+                "object_id": name,
+                "name": name,
+                "type": role,
+                "geometry_id": name,
+                "material_assignment_ids": [],
+            }
+            for name, role in self.auxiliary_geometry_roles.items()
+            if role != "antenna"
+        ]
+
+        result = {
             "ir_version": IR_VERSION,
             "problem_meta": {
                 "name": self.name,
@@ -1724,6 +1781,9 @@ class Problem:
             # Periodic boundary conditions
             **({"pbc": pbc_ir} if pbc_ir is not None else {}),
         }
+        if physics_objects:
+            result["physics_objects"] = physics_objects
+        return result
 
     def _resolve_discretization(
         self,
@@ -1828,6 +1888,13 @@ class Problem:
             if region.name not in seen:
                 regions.append(region)
                 seen.add(region.name)
+        for geometry in self.auxiliary_geometries:
+            geometry_name = geometry.geometry_name
+            role = self.auxiliary_geometry_roles.get(geometry_name)
+            if role is None or role == "antenna" or geometry_name in seen:
+                continue
+            regions.append(Region(name=geometry_name, geometry=geometry))
+            seen.add(geometry_name)
         return regions
 
     def _collect_object_regions(self) -> list[ObjectRegion]:
@@ -1866,6 +1933,16 @@ class Problem:
                     f"region '{region_name}' is bound to conflicting geometries"
                 )
             seen[region_name] = geometry_name
+        for geometry in self.auxiliary_geometries:
+            geometry_name = geometry.geometry_name
+            role = self.auxiliary_geometry_roles.get(geometry_name)
+            if role not in {"conductor", "electrode", "geometry"}:
+                continue
+            if geometry_name in seen and seen[geometry_name] != geometry_name:
+                raise ValueError(
+                    f"region '{geometry_name}' is bound to conflicting geometries"
+                )
+            seen[geometry_name] = geometry_name
 
     def _build_geometry_assets(
         self,

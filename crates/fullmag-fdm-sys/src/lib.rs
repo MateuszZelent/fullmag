@@ -1111,6 +1111,12 @@ extern "C" {
         plan: *const fullmag_fdm_multilayer_plan_desc_v2,
     ) -> *mut fullmag_fdm_backend;
 
+    pub fn fullmag_fdm_backend_set_static_external_field_f64(
+        handle: *mut fullmag_fdm_backend,
+        field_xyz: *const f64,
+        field_len: u64,
+    ) -> i32;
+
     pub fn fullmag_fdm_backend_step(
         handle: *mut fullmag_fdm_backend,
         dt_seconds: f64,

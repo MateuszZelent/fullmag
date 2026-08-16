@@ -616,6 +616,10 @@ pub struct FdmPlanIR {
     /// Plan-only per-cell Oersted field used by generalized FDM lowering.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub oersted_field_xyz: Option<Vec<[f64; 3]>>,
+    /// Static per-cell external field H_ext [A/m], lowered from an authored
+    /// induction map B_ext [T]. This is distinct from the Oersted profile.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub static_external_field_xyz: Option<Vec<[f64; 3]>>,
     /// Time-dependence kind: 0=constant, 1=sinusoidal, 2=pulse
     #[serde(default)]
     pub oersted_time_dep_kind: u32,

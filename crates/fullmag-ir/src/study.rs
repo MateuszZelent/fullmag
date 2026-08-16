@@ -561,6 +561,13 @@ pub enum EnergyTermIR {
         #[serde(rename = "B")]
         b: [f64; 3],
     },
+    /// Cell-wise static Zeeman induction map [T]. The planner validates that
+    /// its cell count matches the resolved discretization.
+    StaticFieldMap {
+        id: String,
+        #[serde(rename = "field_B_T")]
+        field_b_t: Vec<[f64; 3]>,
+    },
     /// Oersted field from a cylindrical conductor (STNO / MTJ pillar).
     ///
     /// The static spatial profile H_oe(x,y,z) is precomputed on the GPU
@@ -602,6 +609,12 @@ pub enum EnergyTermIR {
         /// Name of the MagnetostrictionLawIR.
         law: String,
     },
+}
+
+impl EnergyTermIR {
+    pub fn is_static_field_map(&self) -> bool {
+        matches!(self, Self::StaticFieldMap { .. })
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

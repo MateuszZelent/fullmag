@@ -733,6 +733,7 @@ impl ProblemIR {
         validate_spin_wave_response_request(self, &mut errors);
         validate_oersted_energy_terms(self, &mut errors);
         validate_dmi_energy_terms(self, &mut errors);
+        validate_static_field_map_energy_terms(self, &mut errors);
         validate_material_scalar_values(self, &mut errors);
         validate_material_dmi_values(self, &mut errors);
         validate_legacy_spin_torque_fields(self, &mut errors);

@@ -1100,6 +1100,40 @@ pub(crate) fn validate_dmi_energy_terms(problem: &ProblemIR, errors: &mut Vec<St
     }
 }
 
+pub(crate) fn validate_static_field_map_energy_terms(
+    problem: &ProblemIR,
+    errors: &mut Vec<String>,
+) {
+    let mut map_count = 0usize;
+    for (index, term) in problem.energy_terms.iter().enumerate() {
+        let EnergyTermIR::StaticFieldMap { id, field_b_t } = term else {
+            continue;
+        };
+        map_count += 1;
+        if id.trim().is_empty() {
+            errors.push(format!(
+                "energy_terms[{index}] static_field_map id must not be empty"
+            ));
+        }
+        if field_b_t.is_empty() {
+            errors.push(format!(
+                "energy_terms[{index}] static_field_map field_B_T must not be empty"
+            ));
+        }
+        if field_b_t.iter().any(|value| !vector3_is_finite(value)) {
+            errors.push(format!(
+                "energy_terms[{index}] static_field_map field_B_T must contain only finite values"
+            ));
+        }
+    }
+    if map_count > 1 {
+        errors.push(
+            "at most one executable static_field_map energy term is currently supported"
+                .to_string(),
+        );
+    }
+}
+
 pub(crate) fn validate_material_dmi_values(problem: &ProblemIR, errors: &mut Vec<String>) {
     for material in &problem.materials {
         if material

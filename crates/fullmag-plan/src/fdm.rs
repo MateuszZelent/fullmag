@@ -135,6 +135,63 @@ fn grid_sample_points(
     points
 }
 
+fn resolve_static_external_field_map(
+    problem: &ProblemIR,
+    n_cells: usize,
+) -> Result<Option<Vec<[f64; 3]>>, PlanError> {
+    let Some((id, field_b_t)) = problem.energy_terms.iter().find_map(|term| {
+        match term {
+            EnergyTermIR::StaticFieldMap { id, field_b_t } => Some((id.as_str(), field_b_t)),
+            _ => None,
+        }
+    }) else {
+        return Ok(None);
+    };
+    if problem
+        .energy_terms
+        .iter()
+        .filter(|term| matches!(term, EnergyTermIR::StaticFieldMap { .. }))
+        .count()
+        != 1
+    {
+        return Err(PlanError {
+            reasons: vec![
+                "FDM supports exactly one static_field_map term per resolved single-grid plan"
+                    .to_string(),
+            ],
+        });
+    }
+    if field_b_t.len() != n_cells {
+        return Err(PlanError {
+            reasons: vec![format!(
+                "static_field_map '{id}' length mismatch on resolved FDM grid: expected {n_cells} cells, actual {}",
+                field_b_t.len()
+            )],
+        });
+    }
+    let field_h_apm = field_b_t
+        .iter()
+        .map(|value| {
+            [
+                value[0] / MU0,
+                value[1] / MU0,
+                value[2] / MU0,
+            ]
+        })
+        .collect::<Vec<_>>();
+    if field_h_apm
+        .iter()
+        .any(|value| value.iter().any(|component| !component.is_finite()))
+    {
+        return Err(PlanError {
+            reasons: vec![format!(
+                "static_field_map '{id}' produces a non-finite H_ext map after B/μ0 conversion"
+            )],
+        });
+    }
+    Ok(Some(field_h_apm))
+}
+
 /// Restrict a precomputed geometry asset to the smallest Cartesian grid that
 /// contains its active support.  A study-universe asset may intentionally be
 /// expanded to the full target-only Airbox; that grid is not the native
@@ -1151,6 +1208,10 @@ pub(crate) fn plan_fdm(
             EnergyTermIR::OerstedCylinder { .. } | EnergyTermIR::OerstedField { .. }
         )
     });
+    let has_static_field_map = problem
+        .energy_terms
+        .iter()
+        .any(|term| matches!(term, EnergyTermIR::StaticFieldMap { .. }));
     for term in &problem.energy_terms {
         match term {
             EnergyTermIR::Exchange => {
@@ -1171,6 +1232,7 @@ pub(crate) fn plan_fdm(
                 }
                 external_field = Some([b[0] / MU0, b[1] / MU0, b[2] / MU0]);
             }
+            EnergyTermIR::StaticFieldMap { .. } => {}
             // Terms handled in the post-plan mapping loop below:
             EnergyTermIR::OerstedCylinder { .. } | EnergyTermIR::OerstedField { .. } => {}
             EnergyTermIR::InterfacialDmi {
@@ -1265,9 +1327,9 @@ pub(crate) fn plan_fdm(
             correction = boundary_correction.unwrap_or("?"),
         ));
     }
-    if !(enable_exchange || enable_demag || external_field.is_some()) {
+    if !(enable_exchange || enable_demag || external_field.is_some() || has_static_field_map) {
         errors.push(
-            "the current executable FDM path requires at least one of Exchange, Demag, or Zeeman"
+        "the current executable FDM path requires at least one of Exchange, Demag, Zeeman, or StaticFieldMap"
                 .to_string(),
         );
     }
@@ -1384,7 +1446,7 @@ pub(crate) fn plan_fdm(
         &problem.study.sampling().outputs,
         enable_exchange,
         enable_demag,
-        external_field.is_some(),
+        external_field.is_some() || has_static_field_map,
         enable_oersted,
         problem.energy_terms.iter().any(|term| {
             matches!(
@@ -1555,6 +1617,15 @@ pub(crate) fn plan_fdm(
             grid_cost.cells, grid_cells
         )],
     })?;
+    let static_external_field_xyz = resolve_static_external_field_map(problem, n_cells)?;
+    if static_external_field_xyz.is_some() && enable_oersted {
+        return Err(PlanError {
+            reasons: vec![
+                "StaticFieldMap cannot be combined with an Oersted energy term in the current native FDM lane; use one resolved per-cell field source at a time"
+                    .to_string(),
+            ],
+        });
+    }
     let mut initial_magnetization = match &magnet.initial_magnetization {
         Some(InitialMagnetizationIR::Uniform { value }) => {
             if let Some(ref mask) = active_mask {
@@ -2007,6 +2078,7 @@ pub(crate) fn plan_fdm(
         enable_exchange,
         enable_demag,
         external_field,
+        static_external_field_xyz,
         antenna_zeeman_masks,
         field_drives: active_field_drives,
         regional_field_drive_bases,
@@ -2753,6 +2825,12 @@ pub(crate) fn plan_fdm_multilayer(
                     errors.push("Zeeman is declared more than once".to_string());
                 }
                 external_field = Some([b[0] / MU0, b[1] / MU0, b[2] / MU0]);
+            }
+            fullmag_ir::EnergyTermIR::StaticFieldMap { .. } => {
+                errors.push(
+                    "StaticFieldMap is not executable in the current public multilayer FDM path; use a qualified single-grid FDM plan"
+                        .to_string(),
+                );
             }
             fullmag_ir::EnergyTermIR::InterfacialDmi {
                 d,

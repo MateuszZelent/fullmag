@@ -2402,6 +2402,7 @@ class _WorldState:
     # Magnets (ordered)
     _magnets: list[MagnetHandle] = field(default_factory=list)
     _auxiliary_geometries: list[object] = field(default_factory=list)
+    _auxiliary_geometry_roles: dict[str, str] = field(default_factory=dict)
     _couplings: CouplingRegistry = field(default_factory=CouplingRegistry)
     _loaded_field_states: dict[tuple[str, str, str], object] = field(default_factory=dict)
 
@@ -2431,6 +2432,7 @@ class _WorldState:
     _field_drives: list[RegionalFieldDrive] = field(default_factory=list)
     _planar_monitors: list[PlanarMonitor] = field(default_factory=list)
     _spin_torques: list[SpinTorqueModule] = field(default_factory=list)
+    _spin_torque_activation: dict[str, bool] = field(default_factory=dict)
     _spin_transports: list[SpinDriftDiffusion] = field(default_factory=list)
     _oersted_terms: list[OerstedCylinder | OerstedField] = field(default_factory=list)
     _excitation_analysis: SpinWaveExcitationAnalysis | None = None
@@ -4403,6 +4405,7 @@ class StudyStagesBuilder:
                 "enabled": enabled,
             },
         )
+        _state._spin_torque_activation[normalized_module_id] = enabled
         return self
 
     def change_device(self, device: str) -> "StudyStagesBuilder":
@@ -5437,6 +5440,18 @@ class StudyBuilder:
 
     def geometry(self, shape: object, name: str = "body") -> MagnetHandle:
         return geometry(shape, name=name)
+
+    def geometry_object(
+        self,
+        shape: object,
+        name: str = "object",
+        *,
+        type: str = "geometry",
+    ) -> object:
+        return geometry_object(shape, name=name, type=type)
+
+    def conductor(self, shape: object, name: str = "conductor") -> object:
+        return geometry_object(shape, name=name, type="conductor")
 
     def antenna_object(self, shape: object, name: str = "antenna") -> object:
         return antenna_object(shape, name=name)
@@ -7418,20 +7433,52 @@ def geometry(shape: object, name: str = "body") -> MagnetHandle:
     return handle
 
 
-def antenna_object(shape: object, name: str = "antenna") -> object:
-    """Register a non-magnetic geometry object for prescribed antenna masks."""
+def geometry_object(
+    shape: object,
+    name: str = "object",
+    *,
+    type: str = "geometry",
+) -> object:
+    """Register a non-magnetic geometry with an explicit physical object type.
+
+    ``type=\"conductor\"`` is the canonical declaration for a solved-current
+    heavy-metal or electrode domain.  Antenna masks remain available through
+    :func:`antenna_object` and are deliberately kept a separate role.
+    """
+    normalized_type = require_non_empty(type, "type").strip().lower()
+    if normalized_type not in {"geometry", "conductor", "electrode", "antenna"}:
+        raise ValueError(
+            "geometry_object(type=...) must be one of: geometry, conductor, electrode, antenna"
+        )
     resolved = shape
     if hasattr(resolved, "name"):
         import copy
 
         resolved = copy.copy(resolved)
         object.__setattr__(resolved, "name", require_non_empty(name, "name"))
+    geometry_name = getattr(resolved, "geometry_name", None)
+    if not isinstance(geometry_name, str) or not geometry_name:
+        raise TypeError("geometry_object() requires a geometry with a geometry_name")
+    if geometry_name in _state._auxiliary_geometry_roles:
+        raise ValueError(f"duplicate geometry object name {geometry_name!r}")
     _state._auxiliary_geometries.append(resolved)
-    _state._register_geometry_visualization_hint(
-        resolved.geometry_name,
-        {"role": "antenna", "display": "shaded_frame"},
-    )
+    _state._auxiliary_geometry_roles[geometry_name] = normalized_type
+    if normalized_type == "antenna":
+        _state._register_geometry_visualization_hint(
+            geometry_name,
+            {"role": "antenna", "display": "shaded_frame"},
+        )
+    else:
+        _state._register_geometry_visualization_hint(
+            geometry_name,
+            {"role": normalized_type, "display": "shaded_frame"},
+        )
     return resolved
+
+
+def antenna_object(shape: object, name: str = "antenna") -> object:
+    """Register a non-magnetic geometry object for prescribed antenna masks."""
+    return geometry_object(shape, name=name, type="antenna")
 
 
 # ---------------------------------------------------------------------------
@@ -8432,10 +8479,12 @@ def _build_problem(
         runtime=rt,
         runtime_metadata=runtime_metadata,
         auxiliary_geometries=tuple(s._auxiliary_geometries),
+        auxiliary_geometry_roles=dict(s._auxiliary_geometry_roles),
         current_modules=tuple(s._current_modules),
         field_drives=tuple(s._field_drives),
         monitors=tuple(s._planar_monitors),
         spin_torques=tuple(s._spin_torques),
+        spin_torque_activation=dict(s._spin_torque_activation),
         spin_transports=tuple(s._spin_transports),
         couplings=s._couplings.items(),
         temperature=s._thermal_noise.temperature if s._thermal_noise is not None else None,

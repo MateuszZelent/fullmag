@@ -614,6 +614,16 @@ fullmag_fdm_backend *fullmag_fdm_backend_create_time_policy_v2(
 fullmag_fdm_backend *fullmag_fdm_backend_create_v2(
     const fullmag_fdm_multilayer_plan_desc_v2 *plan);
 
+/** Mark the uploaded cell-wise profile as static external H_ext [A/m].
+ * The legacy descriptor keeps the wire layout stable; this role marker is
+ * intentionally a separate versioned operation and is valid only for a
+ * non-cylindrical single-grid profile.
+ */
+int fullmag_fdm_backend_set_static_external_field_f64(
+    fullmag_fdm_backend *handle,
+    const double *field_xyz,
+    uint64_t field_len);
+
 /**
  * Execute one time step of length dt_seconds using the configured integrator.
  * For DP45: dt_seconds is the initial step size; adaptive stepping may adjust it.

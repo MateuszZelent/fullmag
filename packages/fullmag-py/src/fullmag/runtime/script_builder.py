@@ -1515,8 +1515,15 @@ def _render_geometry_and_materials(
             lines.append(f"{var_name}.Dbulk = {_py_number(bulk_dmi)}")
         lines.append("")
     for geometry in problem.auxiliary_geometries:
+        role = problem.auxiliary_geometry_roles.get(geometry.geometry_name, "antenna")
+        if role == "antenna":
+            constructor = "antenna_object"
+            type_suffix = ""
+        else:
+            constructor = "geometry_object"
+            type_suffix = f", type={_py_repr(role)}"
         lines.append(
-            f"{_safe_identifier(geometry.geometry_name)} = {_surface_call(surface, 'antenna_object')}({_render_geometry_expr(geometry, magnet_name=geometry.geometry_name, source_root=source_root)}, name={_py_repr(geometry.geometry_name)})"
+            f"{_safe_identifier(geometry.geometry_name)} = {_surface_call(surface, constructor)}({_render_geometry_expr(geometry, magnet_name=geometry.geometry_name, source_root=source_root)}, name={_py_repr(geometry.geometry_name)}{type_suffix})"
         )
         lines.append("")
     if lines[-1] == "":
@@ -7061,7 +7068,11 @@ def _export_auxiliary_geometry_entry(
     hint = _normalize_mapping(geometry_hints.get(name))
     return {
         "name": name,
-        "role": str(hint.get("role") or "auxiliary"),
+        "role": str(
+            problem.auxiliary_geometry_roles.get(name)
+            or hint.get("role")
+            or "geometry"
+        ),
         "geometry_kind": geometry_kind,
         "geometry_params": geometry_params,
         "bounds_min": list(bounds_min) if bounds_min is not None else None,
@@ -8198,6 +8209,7 @@ def _stage_signature(problem: Problem) -> dict[str, object]:
             *[_geometry_signature(magnet.geometry) for magnet in problem.magnets],
             *[_geometry_signature(geometry) for geometry in problem.auxiliary_geometries],
         ],
+        "auxiliary_geometry_roles": dict(problem.auxiliary_geometry_roles),
         "materials": [_material_signature(magnet) for magnet in problem.magnets],
         "magnets": [
             {
@@ -8208,7 +8220,7 @@ def _stage_signature(problem: Problem) -> dict[str, object]:
             for magnet in problem.magnets
         ],
         "energy_terms": [term.to_ir() for term in problem.energy],
-        "current_modules": [module.to_ir() for module in problem.current_modules],
+        "current_modules": _stage_current_module_signatures(problem),
         "spin_torque_modules": [module.to_ir_module() for module in problem.spin_torques],
         "excitation_analysis": problem.excitation_analysis.to_ir()
         if problem.excitation_analysis is not None
@@ -8220,6 +8232,26 @@ def _stage_signature(problem: Problem) -> dict[str, object]:
         "domain_frame": runtime_metadata.get("domain_frame"),
         "study_universe": runtime_metadata.get("study_universe"),
     }
+
+
+def _stage_current_module_signatures(problem: Problem) -> list[dict[str, object]]:
+    """Compare transport structure while ignoring declared stage drive values.
+
+    ``study.stages.set_transport_current`` is an explicit workflow action.  Its
+    boundary values therefore belong to the stage action stream, not to the
+    immutable geometry/material signature used by canonical script rewriting.
+    """
+    signatures: list[dict[str, object]] = []
+    for module in problem.current_modules:
+        payload = copy.deepcopy(module.to_ir())
+        if payload.get("model") in {"ohmic_poisson", "magnetoresistive_poisson"}:
+            boundaries = payload.get("boundaries")
+            if isinstance(boundaries, list):
+                for boundary in boundaries:
+                    if isinstance(boundary, dict) and "outward_current_density_Apm2" in boundary:
+                        boundary["outward_current_density_Apm2"] = "<stage-current>"
+        signatures.append(payload)
+    return signatures
 
 
 def _geometry_signature(geometry: object) -> dict[str, object]:

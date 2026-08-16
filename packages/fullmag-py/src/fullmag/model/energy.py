@@ -168,6 +168,49 @@ class Zeeman:
         return {"kind": "zeeman", "B": list(self.B)}
 
 
+@dataclass(frozen=True, slots=True)
+class StaticFieldMap:
+    """Cell-wise static external induction map in tesla."""
+
+    id: str
+    field_B_T: tuple[tuple[float, float, float], ...]
+
+    def __init__(
+        self,
+        *,
+        id: str,
+        field_B_T: Sequence[Sequence[float]],
+    ) -> None:
+        object.__setattr__(self, "id", require_non_empty(id, "static_field_map.id"))
+        if isinstance(field_B_T, (str, bytes)):
+            raise TypeError("static_field_map.field_B_T must be a sequence of vectors")
+        values: list[tuple[float, float, float]] = []
+        for index, vector in enumerate(field_B_T):
+            if isinstance(vector, (str, bytes)):
+                raise TypeError(f"static_field_map.field_B_T[{index}] must contain three values")
+            components = tuple(vector)
+            if len(components) != 3:
+                raise ValueError(
+                    f"static_field_map.field_B_T[{index}] must contain exactly three values"
+                )
+            values.append(
+                tuple(
+                    require_finite(value, f"static_field_map.field_B_T[{index}][{axis}]")
+                    for axis, value in enumerate(components)
+                )
+            )
+        if not values:
+            raise ValueError("static_field_map.field_B_T must not be empty")
+        object.__setattr__(self, "field_B_T", tuple(values))
+
+    def to_ir(self) -> dict[str, object]:
+        return {
+            "kind": "static_field_map",
+            "id": self.id,
+            "field_B_T": [list(vector) for vector in self.field_B_T],
+        }
+
+
 # ── Time dependence envelopes for Oersted field current ──
 
 
