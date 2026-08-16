@@ -5585,6 +5585,7 @@ fn fem_gpu_execution_provenance(
     let mut provenance = ExecutionProvenance {
         charge_transport: None,
         transport_modules: Vec::new(),
+        fdm_gpu_transport_telemetry: None,
         executed_physics_kinds: if timestep_policy.is_some() && plan.spin_torque_contract.is_some()
         {
             vec!["spin_torque".to_string()]

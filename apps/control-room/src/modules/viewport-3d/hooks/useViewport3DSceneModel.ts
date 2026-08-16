@@ -5033,7 +5033,10 @@ export function useViewport3DSceneModel({
                 const maxVectors =
                   fdmTargetVectorAllocations.get(`fdm-target:${view.target.id}`)?.effective ??
                   requestedMaxVectors;
-                const vectorInstanceOrdinals = view.instanceOrdinals;
+                const vectorInstanceOrdinals =
+                  settings.geometryScope === "surface"
+                    ? view.surfaceInstanceOrdinals
+                    : view.instanceOrdinals;
                 const vectorCellIndices = vectorsVisible
                   ? buildFdmVectorSampledCellIndices(
                       view.sourceModel,

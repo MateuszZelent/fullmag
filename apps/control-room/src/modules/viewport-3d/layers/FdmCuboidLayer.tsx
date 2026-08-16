@@ -80,6 +80,7 @@ import type { RegionOverlaySelection } from "./RegionOverlayLayer";
 import {
   buildFdmVectorSegmentsUncached,
   buildFdmPointPositions,
+  createFdmVectorOnlyBuildInput,
   resolveFdmCuboidMembershipRevision,
   type FdmCuboidBuildRequest,
   type FdmCuboidBuildResult,
@@ -102,6 +103,7 @@ export {
   buildFdmCuboidInstanceModel,
   buildFdmDenseNativeLayerInstanceModel,
   buildFdmPointPositions,
+  createFdmVectorOnlyBuildInput,
   buildFdmVectorSampledCellIndices,
   resolveFdmCuboidMembershipRevision,
   resolveFdmVectorGlyphScale,

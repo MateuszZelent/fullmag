@@ -416,6 +416,7 @@ backend before the common sampler is called.
 
 | Field | Type | Default | SI unit | Validation | Meaning | Lane status | `ProblemIR` destination |
 |---|---|---|---|---|---|---|---|
+| Session-resolved `Default` source contract | `docs/physics/0970-planar-monitor-sampling-and-projection.md` | `DOC-ANCHOR:default-planar-source-contract` | Distinguish session source resolution from authored monitor state without claiming a typed implementation | all | Task 0 documentation regression; typed state/resolver tests deferred | planned contract | pending implementation |
 | `default_slice.position_fraction` | `float` | `0.5` | $1$ | finite and in $[0,1]$; public out-of-range values reject | Dimensionless position between the published bounds along the selected normal | planned typed session contract; no qualification yet | none |
 | resolved `position_m` | `float` | resolved from domain bounds | $\mathrm{m}$ | finite and within `[normal_min_m, normal_max_m]`; read-only resolved value | Physical coordinate used to construct the default frame | planned typed session contract; no qualification yet | none |
 | `default_slice.operator.thickness_m` | `float` | absent for `plane_sample` | $\mathrm{m}$ | required and strictly positive for `slab_average`; absent for `plane_sample` | Full slab thickness passed to the common measure-weighted sampler | planned typed session contract; no qualification yet | none |
