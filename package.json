@@ -36,6 +36,13 @@
     "control-room:lint": "pnpm --dir apps/control-room lint",
     "control-room:test": "pnpm --dir apps/control-room test",
     "control-room:typecheck": "pnpm --dir apps/control-room typecheck",
-    "fullmag:check-api-clean": "bash ./scripts/ci-resource-first-gates.sh --strict"
+    "fullmag:check-api-clean": "bash ./scripts/ci-resource-first-gates.sh --strict",
+    "doctor": "npx react-doctor@latest"
+  },
+  "devDependencies": {
+    "react-doctor": "^0.9.12"
+  },
+  "dependencies": {
+    "next": "^16.3.1"
   }
 }

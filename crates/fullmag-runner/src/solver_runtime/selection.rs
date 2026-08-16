@@ -236,6 +236,19 @@ pub(crate) fn runtime_fdm_policy(problem: &ProblemIR) -> &'static str {
     }
 }
 
+fn normalize_fdm_execution_policy(value: &str) -> Result<&str, RunError> {
+    match value {
+        "cpu" => Ok("cpu"),
+        "gpu" | "cuda" => Ok("cuda"),
+        "auto" => Ok("auto"),
+        other => Err(RunError {
+            message: format!(
+                "unsupported FULLMAG_FDM_EXECUTION={other}; expected cpu, gpu, cuda, or auto"
+            ),
+        }),
+    }
+}
+
 pub(crate) fn require_public_fdm_gpu_charge_runtime_selection(
     charge_plan_active: bool,
     requested_device: &str,
@@ -284,7 +297,7 @@ pub(crate) fn resolve_fdm_engine_with_trail(
 ) -> Result<EngineResolution<FdmEngine>, RunError> {
     apply_runtime_gpu_index(problem, "fdm");
     let ir_policy = runtime_fdm_policy(problem);
-    let policy = match std::env::var("FULLMAG_FDM_EXECUTION") {
+    let requested_policy = match std::env::var("FULLMAG_FDM_EXECUTION") {
         Ok(env_val) => {
             if env_val != ir_policy {
                 let message = format!(
@@ -297,8 +310,9 @@ pub(crate) fn resolve_fdm_engine_with_trail(
         }
         Err(_) => ir_policy.to_string(),
     };
+    let policy = normalize_fdm_execution_policy(&requested_policy)?;
 
-    let resolution = match policy.as_str() {
+    let resolution = match policy {
         "cpu" => Ok(EngineResolution {
             engine: FdmEngine::CpuReference,
             fallback: None,
@@ -317,7 +331,7 @@ pub(crate) fn resolve_fdm_engine_with_trail(
                 })
             }
         }
-        "auto" | _ => {
+        "auto" => {
             if native_fdm::is_cuda_available() {
                 Ok(EngineResolution {
                     engine: FdmEngine::CudaFdm,
@@ -336,6 +350,7 @@ pub(crate) fn resolve_fdm_engine_with_trail(
                 })
             }
         }
+        _ => unreachable!("normalize_fdm_execution_policy returned an unknown value"),
     }?;
 
     if resolution.engine == FdmEngine::CudaFdm && has_prescribed_zeeman_mask_antenna(problem) {
@@ -437,7 +452,7 @@ pub(crate) fn apply_runtime_gpu_index(problem: &ProblemIR, backend: &str) {
 mod tests {
     use super::{
         effective_fem_device_request_from_snapshot, effective_fem_device_request_from_sources,
-        public_fdm_gpu_charge_device_request_from_sources,
+        normalize_fdm_execution_policy, public_fdm_gpu_charge_device_request_from_sources,
         require_public_fdm_gpu_charge_runtime_selection, resolve_fdm_engine_with_trail,
         FemSelectionEnvSnapshot,
     };
@@ -447,6 +462,15 @@ mod tests {
     use std::sync::{LazyLock, Mutex};
 
     static ENV_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
+
+    #[test]
+    fn fdm_execution_policy_normalizes_gpu_alias_and_rejects_unknown_values() {
+        assert_eq!(normalize_fdm_execution_policy("gpu").unwrap(), "cuda");
+        assert_eq!(normalize_fdm_execution_policy("cuda").unwrap(), "cuda");
+        assert_eq!(normalize_fdm_execution_policy("cpu").unwrap(), "cpu");
+        assert_eq!(normalize_fdm_execution_policy("auto").unwrap(), "auto");
+        assert!(normalize_fdm_execution_policy("unexpected").is_err());
+    }
 
     #[test]
     fn public_gpu_charge_preserves_explicit_auto_and_unknown_environment_requests() {

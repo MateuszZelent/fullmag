@@ -21,7 +21,10 @@ import { createServer, request } from "node:http";
 import { resolve, dirname, extname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { resolvePnpmInvocation } from "./scripts/resolve-pnpm-invocation.mjs";
+import {
+  ensureControlRoomDependencies,
+  resolvePnpmInvocation,
+} from "./scripts/resolve-pnpm-invocation.mjs";
 
 const appDir = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(appDir, "../..");
@@ -65,6 +68,20 @@ function startDevServer() {
   } catch (error) {
     process.stderr.write(
       `[control-room dev-server] ${error instanceof Error ? error.message : String(error)}\n`,
+    );
+    process.exit(1);
+    return;
+  }
+
+  try {
+    if (ensureControlRoomDependencies({ appDir, cwd: repoRoot, pnpm })) {
+      process.stderr.write(
+        "[control-room dev-server] installed missing frontend dependencies\n",
+      );
+    }
+  } catch (error) {
+    process.stderr.write(
+      `[control-room dev-server] frontend dependency setup failed: ${error instanceof Error ? error.message : String(error)}\n`,
     );
     process.exit(1);
     return;

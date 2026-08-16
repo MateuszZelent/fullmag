@@ -25,6 +25,55 @@ pub(crate) const PROJECTED_GRADIENT_MAX_BACKTRACK: u32 = 20;
 pub(crate) const NONLINEAR_CG_MAX_BACKTRACK: u32 = 30;
 pub(crate) const NONLINEAR_CG_RESTART_INTERVAL: u64 = 50;
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct DirectMinimizerLineSearchFailure {
+    pub(crate) previous_energy_j: f64,
+    pub(crate) last_trial_energy_j: f64,
+    pub(crate) initial_step_size_m_per_a: f64,
+    pub(crate) last_trial_step_size_m_per_a: f64,
+    pub(crate) direction_dot_gradient_j_per_step: f64,
+    pub(crate) energy_tolerance_j: f64,
+    pub(crate) evaluations: u32,
+    pub(crate) gradient_max_apm: f64,
+    pub(crate) active_gradient_max_apm: f64,
+    pub(crate) active_cell_count: usize,
+    pub(crate) cell_volume_m3: f64,
+    pub(crate) ms_min_apm: f64,
+    pub(crate) ms_max_apm: f64,
+}
+
+pub(crate) fn format_line_search_failure_message(
+    algorithm: &str,
+    max_backtracks: u32,
+    failure: DirectMinimizerLineSearchFailure,
+) -> String {
+    format!(
+        concat!(
+            "FDM CUDA {} failed Armijo line search after {} backtracks; ",
+            "previous_energy={:.15e} J; last_trial_energy={:.15e} J; ",
+            "initial_step={:.15e} m/A; last_trial_step={:.15e} m/A; ",
+            "direction_slope={:.15e} J/(m/A); energy_tolerance={:.15e} J; evaluations={}; ",
+            "gradient_max={:.15e} A/m; active_gradient_max={:.15e} A/m; ",
+            "active_cells={}; cell_volume={:.15e} m^3; Ms_range=[{:.15e}, {:.15e}] A/m"
+        ),
+        algorithm,
+        max_backtracks,
+        failure.previous_energy_j,
+        failure.last_trial_energy_j,
+        failure.initial_step_size_m_per_a,
+        failure.last_trial_step_size_m_per_a,
+        failure.direction_dot_gradient_j_per_step,
+        failure.energy_tolerance_j,
+        failure.evaluations,
+        failure.gradient_max_apm,
+        failure.active_gradient_max_apm,
+        failure.active_cell_count,
+        failure.cell_volume_m3,
+        failure.ms_min_apm,
+        failure.ms_max_apm,
+    )
+}
+
 pub(crate) fn direct_minimizer_energy_tolerance_j(
     precision: ExecutionPrecision,
     energy_j: f64,
@@ -117,6 +166,17 @@ pub(crate) fn energy_metric_dot(
             MU0 * ms * volume * crate::relaxation::vector_math::dot_vec3(*ai, *bi)
         })
         .sum()
+}
+
+pub(crate) fn mask_vectors_to_active_domain(values: &mut [[f64; 3]], active_mask: Option<&[bool]>) {
+    let Some(active_mask) = active_mask else {
+        return;
+    };
+    for (index, value) in values.iter_mut().enumerate() {
+        if active_mask.get(index).copied() != Some(true) {
+            *value = [0.0; 3];
+        }
+    }
 }
 
 pub(crate) fn direct_minimizer_gradient_degenerate(gradient_norm_sq: f64) -> bool {
@@ -235,8 +295,10 @@ pub(crate) fn nonlinear_cg_armijo_accepts_with_tolerance(
     direction_dot_gradient: f64,
     energy_tolerance_j: f64,
 ) -> bool {
-    trial_energy_j <= previous_energy_j + ARMIJO_COEFFICIENT * step_size * direction_dot_gradient
-        + energy_tolerance_j.max(0.0)
+    trial_energy_j
+        <= previous_energy_j
+            + ARMIJO_COEFFICIENT * step_size * direction_dot_gradient
+            + energy_tolerance_j.max(0.0)
 }
 
 pub(crate) fn backtracked_step_size(step_size: f64) -> f64 {
@@ -732,6 +794,17 @@ mod tests {
     }
 
     #[test]
+    fn active_mask_projection_keeps_void_magnetization_zero() {
+        let mut values = vec![[1.0, 2.0, 3.0], [4.0, 5.0, 6.0], [7.0, 8.0, 9.0]];
+        mask_vectors_to_active_domain(&mut values, Some(&[true, false, true]));
+
+        assert_eq!(
+            values,
+            vec![[1.0, 2.0, 3.0], [0.0, 0.0, 0.0], [7.0, 8.0, 9.0]]
+        );
+    }
+
+    #[test]
     fn projected_gradient_step_size_update_uses_bb1_then_toggles() {
         let update = projected_gradient_step_size_update(
             &[[1.0, 0.0, 0.0]],
@@ -815,6 +888,37 @@ mod tests {
             -1.0e-20,
             energy_tolerance_j,
         ));
+    }
+
+    #[test]
+    fn line_search_failure_diagnostic_reports_energy_and_step_scale() {
+        let message = format_line_search_failure_message(
+            "projected-gradient BB",
+            20,
+            DirectMinimizerLineSearchFailure {
+                previous_energy_j: 6.319466566342548e-19,
+                last_trial_energy_j: 6.319466566342549e-19,
+                initial_step_size_m_per_a: 1.0e-6,
+                last_trial_step_size_m_per_a: 9.5367431640625e-22,
+                direction_dot_gradient_j_per_step: -2.7e-16,
+                energy_tolerance_j: 0.0,
+                evaluations: 21,
+                gradient_max_apm: 4.0e3,
+                active_gradient_max_apm: 3.0e3,
+                active_cell_count: 1600,
+                cell_volume_m3: 1.171875e-25,
+                ms_min_apm: 8.0e5,
+                ms_max_apm: 8.0e5,
+            },
+        );
+
+        assert!(message.contains("previous_energy=6.319466566342548e-19 J"));
+        assert!(message.contains("last_trial_energy=6.319466566342549e-19 J"));
+        assert!(message.contains("last_trial_step=9.536743164062501e-22 m/A"));
+        assert!(message.contains("direction_slope=-2.700000000000000e-16 J/(m/A)"));
+        assert!(message.contains("evaluations=21"));
+        assert!(message.contains("active_cells=1600"));
+        assert!(message.contains("Ms_range=[8.000000000000000e5, 8.000000000000000e5] A/m"));
     }
 
     #[test]

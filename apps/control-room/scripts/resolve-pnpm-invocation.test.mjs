@@ -4,7 +4,10 @@ import { fileURLToPath } from "node:url";
 
 import { describe, expect, it } from "vitest";
 
-import { resolvePnpmInvocation } from "./resolve-pnpm-invocation.mjs";
+import {
+  ensureControlRoomDependencies,
+  resolvePnpmInvocation,
+} from "./resolve-pnpm-invocation.mjs";
 
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 
@@ -138,6 +141,39 @@ describe("resolvePnpmInvocation", () => {
         pathExists: () => false,
       }),
     ).toThrow(/Corepack or set PNPM_HOME/);
+  });
+});
+
+describe("control-room dependency readiness", () => {
+  it("installs dependencies when node_modules exists without the Next executable", () => {
+    const installCalls = [];
+    let nextAvailable = false;
+
+    const installed = ensureControlRoomDependencies({
+      appDir: "/repo/apps/control-room",
+      cwd: "/repo",
+      pnpm: {
+        command: "/usr/bin/pnpm",
+        argsPrefix: [],
+        shell: false,
+        source: "pnpm-home",
+      },
+      pathExists: (candidate) =>
+        nextAvailable && candidate.endsWith("/node_modules/.bin/next"),
+      execFile: (command, args, options) => {
+        installCalls.push({ command, args, options });
+        nextAvailable = true;
+      },
+    });
+
+    expect(installed).toBe(true);
+    expect(installCalls).toEqual([
+      {
+        command: "/usr/bin/pnpm",
+        args: ["--dir", "/repo/apps/control-room", "install", "--frozen-lockfile"],
+        options: { cwd: "/repo", shell: false, stdio: "inherit" },
+      },
+    ]);
   });
 });
 

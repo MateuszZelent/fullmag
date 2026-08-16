@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import { existsSync, realpathSync } from "node:fs";
 import { dirname, join } from "node:path";
 
@@ -70,6 +71,41 @@ export function resolvePnpmInvocation({
   throw new Error(
     "No Linux pnpm installation was found. Install Corepack or set PNPM_HOME to a Linux path.",
   );
+}
+
+export function ensureControlRoomDependencies({
+  appDir,
+  cwd = appDir,
+  pnpm,
+  pathExists = existsSync,
+  execFile = execFileSync,
+} = {}) {
+  const nextBinaryNames =
+    process.platform === "win32" ? ["next.cmd", "next"] : ["next", "next.cmd"];
+  const hasNextBinary = nextBinaryNames.some((name) =>
+    pathExists(join(appDir, "node_modules", ".bin", name)),
+  );
+
+  if (hasNextBinary) {
+    return false;
+  }
+
+  execFile(
+    pnpm.command,
+    [...pnpm.argsPrefix, "--dir", appDir, "install", "--frozen-lockfile"],
+    { cwd, shell: pnpm.shell, stdio: "inherit" },
+  );
+
+  const installedNext = nextBinaryNames.some((name) =>
+    pathExists(join(appDir, "node_modules", ".bin", name)),
+  );
+  if (!installedNext) {
+    throw new Error(
+      `Control Room dependencies were installed, but Next.js is still unavailable at ${join(appDir, "node_modules", ".bin")}.`,
+    );
+  }
+
+  return true;
 }
 
 function canonicalPath(candidate, realPath) {
