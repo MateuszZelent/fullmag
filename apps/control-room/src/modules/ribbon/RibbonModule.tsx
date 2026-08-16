@@ -43,6 +43,7 @@ import {
   useCommandDetailResource,
   useCheckpointCatalogResource,
   useFieldCatalogResource,
+  useQuantityCatalogResource,
   useSolverStatusResource,
   useStageExecutionResource,
 } from "@/kernel/resources/studyRuntimeResources";
@@ -194,6 +195,9 @@ export default function RibbonModule({ kernel }: ModuleProps) {
     enabled: needsVisualizationResources,
   });
   const fieldCatalog = useFieldCatalogResource({
+    enabled: needsVisualizationResources,
+  });
+  const quantityCatalog = useQuantityCatalogResource({
     enabled: needsVisualizationResources,
   });
   const geometryCapabilities = useGeometryCapabilitiesResource({
@@ -350,6 +354,7 @@ export default function RibbonModule({ kernel }: ModuleProps) {
         commandContext,
         commands: kernel.commands,
         fieldCatalog: fieldCatalog.data,
+        quantityCatalog: quantityCatalog.data,
         meshBuildCurrent: meshBuildCurrent.data,
         meshBuildLatest: meshBuildLatest.data,
         meshCapabilities: meshCapabilities.data,
@@ -370,6 +375,7 @@ export default function RibbonModule({ kernel }: ModuleProps) {
       commandContext,
       commandVersion,
       fieldCatalog.data,
+      quantityCatalog.data,
       kernel.api,
       kernel.commands,
       kernel.resources,

@@ -22,6 +22,7 @@ import {
   DATA_FDM_REGION_MEMBERSHIP_SCOPED_PATH,
   DATA_FDM_REGION_MEMBERSHIPS_PATH,
   DATA_FIELDS_PATH,
+  DATA_QUANTITIES_PATH,
   DATA_PLANAR_FIELD_META_PATH,
   DATA_SCALARS_PATH,
   MESHING_BUILDS_CURRENT_PATH,
@@ -522,6 +523,13 @@ export class RealtimeInvalidationBridge {
             recommendedFetch,
             change.revision,
           );
+          if (
+            recommendedFetch === DATA_FIELDS_PATH &&
+            change.resource === "fields" &&
+            change.resource_id === "catalog"
+          ) {
+            this.queueResourceInvalidation(DATA_QUANTITIES_PATH, change.revision);
+          }
         }
         handled = true;
       }

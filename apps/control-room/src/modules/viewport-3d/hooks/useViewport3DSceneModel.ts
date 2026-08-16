@@ -21,6 +21,7 @@ import type {
   MeshSharedDomainManifestResource,
   RegionListResource,
   ResourceRevision,
+  QuantityCatalogResource,
   VisualizationStateResource,
 } from "@/kernel/api/apiTypes";
 import {
@@ -33,6 +34,8 @@ import {
   isAnalysisFieldQuantityId,
   fieldCatalogQuantitySupportsAirbox,
   isScalarSpatialQuantityId,
+  quantityCatalogSupportsQuantity,
+  quantityCatalogEntrySupportsSpatialVisualization,
   resolveCanonicalQuantityId,
   sameQuantityId,
 } from "@/kernel/api/quantityIds";
@@ -51,6 +54,7 @@ import {
   useMeshPeriodicPairsResource,
   useFieldCatalogResource,
   useFieldMetaResource,
+  useQuantityCatalogResource,
 } from "@/kernel/resources/studyRuntimeResources";
 import { useResource } from "@/kernel/resources/useResource";
 import { useSessionStatusSelector } from "@/kernel/resources/useSessionStatus";
@@ -376,6 +380,20 @@ function resolveViewport3DAvailableFieldQuantityIds(
       .filter((quantity) => quantity.available)
       .map((quantity) => resolveCanonicalQuantityId(quantity.quantity_id)),
   );
+}
+
+function mergeViewport3DQuantityCapabilityIds(
+  fieldQuantityIds: ReadonlySet<string> | null,
+  quantityCatalog: QuantityCatalogResource | null,
+): ReadonlySet<string> | null {
+  if (!fieldQuantityIds && !quantityCatalog) return null;
+  const merged = new Set(fieldQuantityIds ?? []);
+  for (const quantity of quantityCatalog?.quantities ?? []) {
+    if (quantityCatalogEntrySupportsSpatialVisualization(quantity)) {
+      merged.add(resolveCanonicalQuantityId(quantity.id));
+    }
+  }
+  return merged;
 }
 
 function viewport3DFieldQuantityAvailable(
@@ -2706,12 +2724,20 @@ export function useViewport3DSceneModel({
       fdmLaneActive || domainMeta.data?.discretization === "fem",
     ),
   });
+  const quantityCatalog = useQuantityCatalogResource({
+    enabled: Boolean(
+      fdmLaneActive || domainMeta.data?.discretization === "fem",
+    ),
+  });
   const availableFieldQuantityIds = useMemo(
     () => resolveViewport3DAvailableFieldQuantityIds(fieldCatalog.data),
     [fieldCatalog.data],
   );
   const availableQuantityIdsForPlanning = fdmLaneActive
-    ? availableFieldQuantityIds ?? EMPTY_VIEWPORT_3D_FIELD_QUANTITY_IDS
+    ? mergeViewport3DQuantityCapabilityIds(
+        availableFieldQuantityIds,
+        quantityCatalog.data,
+      ) ?? EMPTY_VIEWPORT_3D_FIELD_QUANTITY_IDS
     : availableFieldQuantityIds;
   const fdmRegionMembership = useFdmRegionMembershipResource({
     enabled: fdmLaneActive,
@@ -3491,10 +3517,15 @@ export function useViewport3DSceneModel({
     : airboxSettings;
   const fdmVectorScale = vectorScale * fdmSettings.vectorLengthScale;
   const airboxQuantityCompatible =
-    fieldCatalogQuantitySupportsAirbox(
-      fieldCatalog.data,
+    (quantityCatalogSupportsQuantity(
+      quantityCatalog.data,
       airboxSettings.activeQuantityId,
-    ) &&
+      "airbox",
+    ) ??
+      fieldCatalogQuantitySupportsAirbox(
+        fieldCatalog.data,
+        airboxSettings.activeQuantityId,
+      )) &&
     viewport3DFieldQuantityAvailable(
       airboxSettings.activeQuantityId,
       availableQuantityIdsForPlanning,
@@ -3616,6 +3647,7 @@ export function useViewport3DSceneModel({
         airboxParts: airboxFieldVectorParts,
         availableQuantityIds: availableQuantityIdsForPlanning,
         fieldCatalog: fieldCatalog.data,
+        quantityCatalog: quantityCatalog.data,
         fieldQuery: airboxFieldQuery,
         quantityId: airboxSettings.activeQuantityId,
         replayQuery: selectedSnapshotQuery,
@@ -3634,6 +3666,7 @@ export function useViewport3DSceneModel({
       airboxVectorsVisible,
       availableQuantityIdsForPlanning,
       fieldCatalog.data,
+      quantityCatalog.data,
       selectedSnapshotQuery,
     ],
   );
@@ -3682,6 +3715,7 @@ export function useViewport3DSceneModel({
       selectedSnapshotQuery,
       availableQuantityIds: availableQuantityIdsForPlanning,
       fieldCatalog: fieldCatalog.data,
+      quantityCatalog: quantityCatalog.data,
     });
   }, [
     fdmDomain,
@@ -3696,6 +3730,7 @@ export function useViewport3DSceneModel({
     selectedSnapshotQuery,
     availableQuantityIdsForPlanning,
     fieldCatalog.data,
+    quantityCatalog.data,
   ]);
   const targetQuantityFieldRequests = targetQuantityFieldDemandPlan.requests;
   const fieldUpdateHoldActive = useViewport3DFieldUpdateHoldActive();

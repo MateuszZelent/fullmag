@@ -1,7 +1,12 @@
-import type { FieldCatalogResource, FieldVectorQuery } from "@/kernel/api/apiTypes";
+import type {
+  FieldCatalogResource,
+  FieldVectorQuery,
+  QuantityCatalogResource,
+} from "@/kernel/api/apiTypes";
 import {
   fieldCatalogQuantitySupportsAirbox,
   isScalarSpatialQuantityId,
+  quantityCatalogSupportsQuantity,
   resolveCanonicalQuantityId,
 } from "@/kernel/api/quantityIds";
 import {
@@ -151,6 +156,7 @@ export interface Viewport3DPlanPartModel {
 export interface Viewport3DTargetQuantityFieldRequestsOptions {
   availableQuantityIds?: ReadonlySet<string> | null;
   fieldCatalog?: FieldCatalogResource | null;
+  quantityCatalog?: QuantityCatalogResource | null;
   fdmAirboxSettings?: VisualizationTargetSettings | null;
   fdmSettings: VisualizationTargetSettings | null;
   fdmTargetSettings?: readonly Viewport3DFdmTargetSettingsForPlanning[];
@@ -595,6 +601,7 @@ export function resolveViewport3DAirboxFieldVectorDemandPlan({
   airboxParts,
   availableQuantityIds,
   fieldCatalog,
+  quantityCatalog,
   fieldQuery = { component: "full", scope_kind: "full" },
   quantityId,
   replayQuery = null,
@@ -604,6 +611,7 @@ export function resolveViewport3DAirboxFieldVectorDemandPlan({
   airboxParts: readonly { id: string; label?: string | null }[];
   availableQuantityIds?: ReadonlySet<string> | null;
   fieldCatalog?: FieldCatalogResource | null;
+  quantityCatalog?: QuantityCatalogResource | null;
   fieldQuery?: FieldVectorQuery;
   quantityId: string;
   replayQuery?: FieldVectorQuery | null;
@@ -612,9 +620,16 @@ export function resolveViewport3DAirboxFieldVectorDemandPlan({
   vectorBudget?: number;
   vectorsVisible?: boolean;
 }): Viewport3DAirboxFieldVectorDemandPlan {
+  const quantityCatalogSupportsAirbox = quantityCatalogSupportsQuantity(
+    quantityCatalog,
+    quantityId,
+    "airbox",
+  );
   if (
-    (fieldCatalog &&
-      !fieldCatalogQuantitySupportsAirbox(fieldCatalog, quantityId)) ||
+    (quantityCatalogSupportsAirbox === false ||
+      (quantityCatalogSupportsAirbox === null &&
+        fieldCatalog &&
+        !fieldCatalogQuantitySupportsAirbox(fieldCatalog, quantityId))) ||
     !isViewport3DQuantityAvailable(quantityId, availableQuantityIds)
   ) {
     return {
@@ -695,6 +710,24 @@ function isViewport3DQuantityAvailable(
     availableQuantityIds == null ||
     availableQuantityIds.has(resolveCanonicalQuantityId(quantityId))
   );
+}
+
+function airboxQuantityIsAvailable({
+  fieldCatalog,
+  quantityCatalog,
+  quantityId,
+}: {
+  fieldCatalog?: FieldCatalogResource | null;
+  quantityCatalog?: QuantityCatalogResource | null;
+  quantityId: string;
+}): boolean {
+  const capability = quantityCatalogSupportsQuantity(
+    quantityCatalog,
+    quantityId,
+    "airbox",
+  );
+  if (capability !== null) return capability;
+  return !fieldCatalog || fieldCatalogQuantitySupportsAirbox(fieldCatalog, quantityId);
 }
 
 export function resolveViewport3DScopedPartVectorFieldDemandPlan({
@@ -790,6 +823,7 @@ export function resolveViewport3DScopedPartVectorFieldDemandPlan({
 export function resolveViewport3DTargetQuantityFieldDemandPlan({
   availableQuantityIds,
   fieldCatalog,
+  quantityCatalog,
   fdmAirboxSettings,
   fdmSettings,
   fdmTargetSettings = [],
@@ -852,8 +886,11 @@ export function resolveViewport3DTargetQuantityFieldDemandPlan({
     if (
       !isViewport3DQuantityAvailable(quantityId, availableQuantityIds) ||
       (target.targetId === "fdm-universe-outside-support" &&
-        fieldCatalog &&
-        !fieldCatalogQuantitySupportsAirbox(fieldCatalog, quantityId))
+        !airboxQuantityIsAvailable({
+          fieldCatalog,
+          quantityCatalog,
+          quantityId,
+        }))
     ) {
       continue;
     }
@@ -908,8 +945,11 @@ export function resolveViewport3DTargetQuantityFieldDemandPlan({
     if (
       !isViewport3DQuantityAvailable(quantityId, availableQuantityIds) ||
       (target.targetId === "fdm-universe-outside-support" &&
-        fieldCatalog &&
-        !fieldCatalogQuantitySupportsAirbox(fieldCatalog, quantityId))
+        !airboxQuantityIsAvailable({
+          fieldCatalog,
+          quantityCatalog,
+          quantityId,
+        }))
     ) {
       continue;
     }

@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 
-import type { FieldCatalogResource } from "@/kernel/api/apiTypes";
+import type {
+  FieldCatalogResource,
+  QuantityCatalogResource,
+} from "@/kernel/api/apiTypes";
 import {
   DEFAULT_FDM_UNIVERSE_OUTSIDE_SUPPORT_VISUALIZATION,
   DEFAULT_OBJECT_VISUALIZATION,
@@ -827,6 +830,57 @@ describe("viewport3DFieldDataPlan", () => {
 
     expect(plan.demands).toEqual([]);
     expect(plan.requests).toEqual(new Map());
+  });
+
+  it("requests an advertised Airbox quantity before its field payload is cached", () => {
+    const quantityCatalog = {
+      schema_version: "v1",
+      quantities: [
+        {
+          capability_state: "supported",
+          description: "Demagnetization field",
+          domain: "full_domain",
+          id: "H_demag",
+          interactive_preview: true,
+          label: "Demag field",
+          location: "node",
+          materializable: true,
+          materialization_state: "unmaterialized",
+          n_comp: 3,
+          normalization_hint: "max_abs",
+          shape: "vector_field",
+          supports_export: true,
+          supports_history: false,
+          supports_preview_2d: true,
+          supports_preview_3d: true,
+          unit: "A/m",
+        },
+      ],
+    } as QuantityCatalogResource;
+
+    const plan = resolveViewport3DAirboxFieldVectorDemandPlan({
+      airboxParts: [{ id: "part:__air__" }],
+      availableQuantityIds: new Set(["H_demag"]),
+      fieldCatalog: {
+        domain_generation_id: "fdm-generation-1",
+        quantities: [],
+        revision: 3,
+      } as FieldCatalogResource,
+      quantityCatalog,
+      quantityId: "H_demag",
+      vectorBudget: 64,
+      vectorsVisible: true,
+    });
+
+    expect(plan.requests.get("part:__air__")).toMatchObject({
+      quantityId: "H_demag",
+      query: {
+        component: "full",
+        max_samples: 64,
+        scope_id: "part:__air__",
+        scope_kind: "airbox",
+      },
+    });
   });
 
   it("requests only catalog-available full-domain quantities for FDM Airbox vectors", () => {

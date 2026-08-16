@@ -12,7 +12,11 @@ import {
   SquareDashed,
 } from "lucide-react";
 import React, { useState, useId } from "react";
-import { type FieldCatalogResource, type FieldMetaResource } from "@/kernel/api/apiTypes";
+import {
+  type FieldCatalogResource,
+  type FieldMetaResource,
+  type QuantityCatalogResource,
+} from "@/kernel/api/apiTypes";
 import { quantityUnitForColorbar } from "@/kernel/api/quantityIds";
 import { Button } from "@/shared/ui/Button";
 import {
@@ -722,6 +726,7 @@ function viewportRenderedRangeScopeKind(
 export function VisualizationQuantitySection({
   fieldCatalog,
   fieldCatalogLoading,
+  quantityCatalog,
   onFieldCatalogRequest,
   patch,
   pending,
@@ -730,6 +735,7 @@ export function VisualizationQuantitySection({
 }: {
   fieldCatalog: FieldCatalogResource | null;
   fieldCatalogLoading: boolean;
+  quantityCatalog: QuantityCatalogResource | null;
   onFieldCatalogRequest: () => void;
   patch: PatchVisualizationTarget;
   pending: boolean;
@@ -757,6 +763,7 @@ export function VisualizationQuantitySection({
         settings.activeQuantityId,
         targetKind,
         fieldCatalog,
+        quantityCatalog,
       ).map((quantity) => (
         <option disabled={quantity.disabled} key={quantity.value} value={quantity.value}>
           {quantity.label}

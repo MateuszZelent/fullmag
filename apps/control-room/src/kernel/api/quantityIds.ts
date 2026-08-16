@@ -1,6 +1,47 @@
-import type { FieldCatalogResource } from "./apiTypes";
+import type {
+  FieldCatalogResource,
+  QuantityCatalogResource,
+} from "./apiTypes";
 
 export type FieldCatalogQuantity = FieldCatalogResource["quantities"][number];
+export type QuantityCatalogEntry = QuantityCatalogResource["quantities"][number];
+
+export function quantityCatalogEntrySupportsSpatialVisualization(
+  quantity: QuantityCatalogEntry,
+): boolean {
+  return (
+    quantity.capability_state === "supported" &&
+    quantity.materializable &&
+    quantity.interactive_preview &&
+    quantity.supports_preview_3d &&
+    quantity.location !== "global"
+  );
+}
+
+export function quantityCatalogEntrySupportsAirbox(
+  quantity: QuantityCatalogEntry,
+): boolean {
+  return (
+    quantityCatalogEntrySupportsSpatialVisualization(quantity) &&
+    quantity.domain === "full_domain"
+  );
+}
+
+export function quantityCatalogSupportsQuantity(
+  catalog: QuantityCatalogResource | null | undefined,
+  quantityId: string,
+  targetKind: "airbox" | "spatial" = "spatial",
+): boolean | null {
+  if (!catalog) return null;
+  const canonicalQuantityId = resolveCanonicalQuantityId(quantityId);
+  const entry = catalog.quantities.find(
+    (quantity) => resolveCanonicalQuantityId(quantity.id) === canonicalQuantityId,
+  );
+  if (!entry) return false;
+  return targetKind === "airbox"
+    ? quantityCatalogEntrySupportsAirbox(entry)
+    : quantityCatalogEntrySupportsSpatialVisualization(entry);
+}
 
 /** Canonical catalog gate for quantities the spatial viewport may offer. */
 export function fieldCatalogQuantitySupportsSpatialVisualization(

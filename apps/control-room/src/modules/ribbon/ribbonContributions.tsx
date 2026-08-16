@@ -64,6 +64,7 @@ import type {
   MeshLastSuccessfulBuildResource,
   MeshSemanticsResource,
   MeshSummaryResource,
+  QuantityCatalogResource,
   VisualizationStatePatch,
   VisualizationStateResource,
 } from "@/kernel/api/apiTypes";
@@ -750,6 +751,7 @@ export interface RibbonBuildContext {
   api?: { visualization: RibbonVisualizationApi };
   commandContext?: CommandContext;
   fieldCatalog?: FieldCatalogResource | null;
+  quantityCatalog?: QuantityCatalogResource | null;
   commands?: CommandRegistry;
   meshBuildCurrent?: MeshActiveBuildResource | null;
   meshBuildLatest?: MeshLastSuccessfulBuildResource | null;
@@ -3346,6 +3348,7 @@ function buildSelectedVisualizationGroup(
     selectedQuantityId,
     isAirboxLikeTarget ? "airbox" : target?.kind,
     context.fieldCatalog,
+    context.quantityCatalog,
   );
   const targetQuantityPatch = (value: string): VisualizationTargetPatch => {
     const activeQuantityId = normalizeQuantityIdOrDefault(value);

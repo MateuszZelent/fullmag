@@ -33,6 +33,7 @@ import { useSessionStatusSelector } from "@/kernel/resources/useSessionStatus";
 import {
   shouldLoadRuntimeMeshManifest,
   useFieldCatalogResource,
+  useQuantityCatalogResource,
 } from "@/kernel/resources/studyRuntimeResources";
 import {
   useObjectVisualizationController,
@@ -364,6 +365,17 @@ function useObjectVisualizationPanelState(
   const fieldCatalogRequested =
     targetKey !== null && fieldCatalogRequestedTargetKey === targetKey;
   const fieldCatalog = useFieldCatalogResource({
+    enabled:
+      fdmTarget ||
+      target?.kind === "airbox" ||
+      shouldLoadObjectVisualizationFieldCatalog({
+        requested: fieldCatalogRequested,
+        surfaceColorSource: settings?.surfaceColorSource,
+        targetActive: Boolean(resolvedTarget),
+        vectorsVisible: Boolean(settings?.vectorsVisible),
+      }),
+  });
+  const quantityCatalog = useQuantityCatalogResource({
     enabled:
       fdmTarget ||
       target?.kind === "airbox" ||
@@ -710,6 +722,7 @@ function useObjectVisualizationPanelState(
     feedback,
     fdmTarget,
     fieldCatalog,
+    quantityCatalog,
     childRegionOverrideCount,
     childRegionTargets,
     hasTargetOverride,
@@ -900,6 +913,7 @@ function ObjectVisualizationPanelView({
     fdmNotice,
     fdmTarget,
     fieldCatalog,
+    quantityCatalog,
     hasTargetOverride,
     onFieldCatalogRequest,
     onTogglePartVectors,
@@ -1071,6 +1085,7 @@ function ObjectVisualizationPanelView({
                   <VisualizationQuantitySection
                     fieldCatalog={fieldCatalog.data}
                     fieldCatalogLoading={fieldCatalogLoading}
+                    quantityCatalog={quantityCatalog.data}
                     onFieldCatalogRequest={onFieldCatalogRequest}
                     patch={patch}
                     pending={pending}

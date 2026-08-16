@@ -33,6 +33,7 @@ import {
   DATA_FIELD_META_PATH,
   DATA_ARTIFACTS_PATH,
   DATA_FIELDS_PATH,
+  DATA_QUANTITIES_PATH,
   DATA_SCALARS_PATH,
   DATA_TABLE_COLUMNS_PATH,
   DATA_TABLE_PATH,
@@ -79,6 +80,7 @@ import type {
   CurrentRunResource,
   EngineLogResource,
   FieldCatalogResource,
+  QuantityCatalogResource,
   FieldMetaResource,
   FieldMetaQuery,
   CpuTelemetryResource,
@@ -1754,6 +1756,24 @@ export function useFieldCatalogResource({
     load,
     resolveRevision: (data) => data.revision,
     resourceKey: DATA_FIELDS_PATH,
+  });
+}
+
+export function useQuantityCatalogResource({
+  enabled = true,
+}: RuntimeResourceOptions = {}) {
+  const { api } = useKernel();
+  const load = useCallback(
+    ({ signal }: { signal: AbortSignal }) =>
+      api.data.quantities.catalog({ signal }),
+    [api],
+  );
+
+  return useResource<QuantityCatalogResource>({
+    enabled,
+    load,
+    resolveRevision: (data) => data.schema_version,
+    resourceKey: DATA_QUANTITIES_PATH,
   });
 }
 

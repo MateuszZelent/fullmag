@@ -1,10 +1,81 @@
 import { describe, expect, it } from "vitest";
 
-import type { FieldCatalogResource } from "@/kernel/api/apiTypes";
+import type {
+  FieldCatalogResource,
+  QuantityCatalogResource,
+} from "@/kernel/api/apiTypes";
 
 import { quantityItemsForVisualizationTarget } from "./ribbonTabViews";
 
 describe("quantityItemsForVisualizationTarget", () => {
+  it("offers advertised materializable quantities before field payloads exist", () => {
+    const fieldCatalog = {
+      domain_generation_id: "fdm-generation-1",
+      quantities: [],
+      revision: 3,
+    } as FieldCatalogResource;
+    const quantityCatalog = {
+      schema_version: "v1",
+      quantities: [
+        {
+          capability_state: "supported",
+          description: "Demagnetization field",
+          domain: "full_domain",
+          id: "H_demag",
+          interactive_preview: true,
+          label: "Demag field",
+          location: "node",
+          materializable: true,
+          materialization_state: "unmaterialized",
+          n_comp: 3,
+          normalization_hint: "max_abs",
+          shape: "vector_field",
+          supports_export: true,
+          supports_history: false,
+          supports_preview_2d: true,
+          supports_preview_3d: true,
+          unit: "A/m",
+        },
+        {
+          capability_state: "supported",
+          description: "Demag energy density",
+          domain: "magnetic_only",
+          id: "eden_demag",
+          interactive_preview: true,
+          label: "Demag energy density",
+          location: "cell",
+          materializable: true,
+          materialization_state: "unmaterialized",
+          n_comp: 1,
+          normalization_hint: "signed",
+          shape: "spatial_scalar",
+          supports_export: true,
+          supports_history: false,
+          supports_preview_2d: true,
+          supports_preview_3d: true,
+          unit: "J/m³",
+        },
+      ],
+    } as QuantityCatalogResource;
+
+    expect(
+      quantityItemsForVisualizationTarget(
+        "H_demag",
+        "airbox",
+        fieldCatalog,
+        quantityCatalog,
+      ).map((item) => item.value),
+    ).toEqual(["H_demag"]);
+    expect(
+      quantityItemsForVisualizationTarget(
+        "eden_demag",
+        "object",
+        fieldCatalog,
+        quantityCatalog,
+      ).map((item) => item.value),
+    ).toEqual(["H_demag", "eden_demag"]);
+  });
+
   it("offers only catalog full-domain quantities for an Airbox", () => {
     const fieldCatalog = {
       domain_generation_id: "fdm-generation-1",

@@ -39,6 +39,8 @@ export type FdmNativeLayerRegionMembershipResource =
 export type EngineLogResource = components["schemas"]["EngineLogResource"];
 export type FieldCatalogResource = components["schemas"]["FieldCatalog"];
 export type FieldMetaResource = components["schemas"]["FieldMeta"];
+export type QuantityCatalogResource =
+  components["schemas"]["QuantityCatalogResponse"];
 export interface FieldMetaQuery {
   component?: string | null;
   owner_object_id?: string | null;

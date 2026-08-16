@@ -40,11 +40,14 @@ import {
 import {
   fieldCatalogQuantitySupportsAirbox,
   fieldCatalogQuantitySupportsSpatialVisualization,
+  quantityCatalogEntrySupportsAirbox,
+  quantityCatalogEntrySupportsSpatialVisualization,
 } from "@/kernel/api/quantityIds";
 import { RIBBON_CROSS_SECTION_BEGIN_DRAFT_COMMAND } from "./ribbonCommands";
 
 import type {
   FieldCatalogResource,
+  QuantityCatalogResource,
   VisualizationStatePatch,
 } from "@/kernel/api/apiTypes";
 
@@ -91,8 +94,23 @@ export function quantityItemsForVisualizationTarget(
   activeQuantityId: string,
   targetKind?: VisualizationTargetKind,
   fieldCatalog?: FieldCatalogResource | null,
+  quantityCatalog?: QuantityCatalogResource | null,
 ): Array<{ disabled?: boolean; label: string; value: string }> {
-  const baseItems = fieldCatalog
+  const capabilityItems = quantityCatalog
+    ? quantityCatalog.quantities
+        .filter(
+          targetKind === "airbox"
+            ? quantityCatalogEntrySupportsAirbox
+            : quantityCatalogEntrySupportsSpatialVisualization,
+        )
+        .map((quantity) => ({
+          label: quantity.unit
+            ? `${quantity.label} / ${quantity.unit}`
+            : quantity.label || quantity.id,
+          value: quantity.id,
+        }))
+    : [];
+  const fieldItems = fieldCatalog
     ? fieldCatalog.quantities
         .filter(fieldCatalogQuantitySupportsSpatialVisualization)
         .filter(
@@ -111,19 +129,36 @@ export function quantityItemsForVisualizationTarget(
     : targetKind === "airbox"
       ? []
       : QUANTITY_ITEMS;
-  if (targetKind === "airbox" && !fieldCatalog) return baseItems;
+  const baseItems = quantityCatalog
+    ? mergeQuantityItems(capabilityItems, fieldItems)
+    : fieldItems;
+  if (targetKind === "airbox" && !fieldCatalog && !quantityCatalog) {
+    return baseItems;
+  }
   return baseItems.some((item) => item.value === activeQuantityId)
     ? baseItems
     : [
         {
-          disabled: Boolean(fieldCatalog),
+          disabled: Boolean(fieldCatalog || quantityCatalog),
           value: activeQuantityId,
-          label: fieldCatalog
+          label: fieldCatalog || quantityCatalog
             ? `Unavailable / ${activeQuantityId}`
             : activeQuantityId,
         },
         ...baseItems,
       ];
+}
+
+function mergeQuantityItems(
+  capabilityItems: Array<{ label: string; value: string }>,
+  fieldItems: Array<{ label: string; value: string }>,
+): Array<{ label: string; value: string }> {
+  const merged = new Map<string, { label: string; value: string }>();
+  for (const item of capabilityItems) merged.set(item.value, item);
+  for (const item of fieldItems) {
+    if (!merged.has(item.value)) merged.set(item.value, item);
+  }
+  return Array.from(merged.values());
 }
 
 export const VECTOR_COLOR_ITEMS: Array<{

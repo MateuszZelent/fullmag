@@ -12,6 +12,7 @@ import {
   DATA_FDM_REGION_MEMBERSHIP_BINARY_PATH,
   DATA_FDM_REGION_MEMBERSHIPS_PATH,
   DATA_FIELDS_PATH,
+  DATA_QUANTITIES_PATH,
   DATA_FIELD_META_PATH,
   DATA_FIELD_VECTOR_PATH,
   DATA_MESH_REGION_MEMBERSHIPS_PATH,
@@ -442,6 +443,35 @@ describe("RealtimeInvalidationBridge", () => {
       "session:session-1:2",
     );
     expect(resources.getRevision(DATA_FIELDS_PATH)).toBe(7);
+  });
+
+  it("refreshes the quantity capability catalog with the field catalog", () => {
+    const bus = new EventBus<KernelEventMap>();
+    const resources = new ResourceInvalidationController(bus);
+    const bridge = new RealtimeInvalidationBridge(resources);
+
+    resources.subscribe(DATA_QUANTITIES_PATH, () => {});
+
+    expect(
+      bridge.handleEvent({
+        payload: {
+          changes: [
+            {
+              recommended_fetch: DATA_FIELDS_PATH,
+              resource: "fields",
+              resource_id: "catalog",
+              revision: 11,
+            },
+          ],
+        },
+        seq: 11,
+        session_id: "session-1",
+        type: "resource.batch_changed",
+      }),
+    ).toBe(true);
+
+    expect(resources.getRevision(DATA_FIELDS_PATH)).toBe(11);
+    expect(resources.getRevision(DATA_QUANTITIES_PATH)).toBe(11);
   });
 
   it("invalidates session-scoped runtime resources when a run appears in the current session", () => {

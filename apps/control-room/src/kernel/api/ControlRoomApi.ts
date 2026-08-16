@@ -31,6 +31,7 @@ import {
   ANALYSIS_HYSTERESIS_SETTLE_TRACE_PATH,
   API_CONTRACT_VERSION_HEADER,
   DATA_FIELDS_PATH,
+  DATA_QUANTITIES_PATH,
   DATA_ARTIFACT_PATH,
   DATA_ARTIFACTS_PATH,
   DATA_DOMAIN_META_PATH,
@@ -212,6 +213,7 @@ import type {
   FdmNativeLayerRegionMembershipResource,
   EngineLogResource,
   FieldCatalogResource,
+  QuantityCatalogResource,
   FieldVectorIdentityIssue,
   FieldVectorResponseMetadata,
   FieldMetaResource,
@@ -1151,6 +1153,10 @@ export class ControlRoomApi {
             query,
           ),
       },
+    },
+    quantities: {
+      catalog: (options?: RequestOptions) =>
+        this.requestJson<QuantityCatalogResource>(DATA_QUANTITIES_PATH, options),
     },
     meshRegionMembership: (
       ownerObjectId: string,

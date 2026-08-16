@@ -8,6 +8,7 @@ import type {
   MeshRegionMembershipResource,
   VisualizationStatePatch,
   VisualizationStateResource,
+  QuantityCatalogResource,
 } from "@/kernel/api/apiTypes";
 import {
   canonicalVisualizationSceneObjectId,
@@ -22,6 +23,8 @@ import {
   fieldCatalogQuantitySupportsAirbox,
   fieldCatalogQuantitySupportsSpatialVisualization,
   isScalarSpatialQuantityId,
+  quantityCatalogEntrySupportsAirbox,
+  quantityCatalogEntrySupportsSpatialVisualization,
   resolveCanonicalQuantityId,
 } from "@/kernel/api/quantityIds";
 import {
@@ -1258,6 +1261,7 @@ export function visualizationQuantityItems(
   activeQuantityId: string,
   targetKind?: VisualizationTargetKind,
   fieldCatalog?: FieldCatalogResource | null,
+  quantityCatalog?: QuantityCatalogResource | null,
 ): Array<{ disabled?: boolean; label: string; value: string }> {
   const staticItemsByQuantityId = new Map(
     VISUALIZATION_QUANTITY_ITEMS.map((item) => [
@@ -1265,7 +1269,19 @@ export function visualizationQuantityItems(
       item,
     ]),
   );
-  let baseItems = fieldCatalog
+  const capabilityItems = quantityCatalog
+    ? quantityCatalog.quantities
+        .filter(
+          targetKind === "airbox"
+            ? quantityCatalogEntrySupportsAirbox
+            : quantityCatalogEntrySupportsSpatialVisualization,
+        )
+        .map((quantity) => ({
+          label: quantity.label || quantity.id,
+          value: quantity.id,
+        }))
+    : [];
+  const fieldItems = fieldCatalog
     ? fieldCatalog.quantities
         .filter(fieldCatalogQuantitySupportsSpatialVisualization)
         .map((quantity) => {
@@ -1281,12 +1297,14 @@ export function visualizationQuantityItems(
     : targetKind === "airbox"
       ? []
       : VISUALIZATION_QUANTITY_ITEMS;
-  if (targetKind === "airbox") {
-    baseItems = baseItems.filter((item) =>
-      fieldCatalogQuantitySupportsAirbox(fieldCatalog, item.value),
-    );
-    if (!fieldCatalog) return baseItems;
-  }
+  const baseItems = quantityCatalog
+    ? mergeVisualizationQuantityItems(capabilityItems, fieldItems)
+    : targetKind === "airbox"
+      ? fieldItems.filter((item) =>
+          fieldCatalogQuantitySupportsAirbox(fieldCatalog, item.value),
+        )
+      : fieldItems;
+  if (targetKind === "airbox" && !fieldCatalog && !quantityCatalog) return baseItems;
 
   if (
     !activeQuantityId ||
@@ -1302,13 +1320,25 @@ export function visualizationQuantityItems(
   return [
     {
       value: activeQuantityId,
-      label: fieldCatalog
+      label: fieldCatalog || quantityCatalog
         ? `Unavailable / ${activeQuantityId}`
         : activeQuantityId,
-      ...(fieldCatalog ? { disabled: true } : {}),
+      ...(fieldCatalog || quantityCatalog ? { disabled: true } : {}),
     },
     ...baseItems,
   ];
+}
+
+function mergeVisualizationQuantityItems(
+  capabilityItems: Array<{ label: string; value: string }>,
+  fieldItems: Array<{ label: string; value: string }>,
+): Array<{ label: string; value: string }> {
+  const merged = new Map<string, { label: string; value: string }>();
+  for (const item of capabilityItems) merged.set(item.value, item);
+  for (const item of fieldItems) {
+    if (!merged.has(item.value)) merged.set(item.value, item);
+  }
+  return Array.from(merged.values());
 }
 
 export function fieldCatalogQuantityAvailable(

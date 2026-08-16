@@ -1614,6 +1614,52 @@ describe("ControlRoomApi", () => {
     expect(headers.get("x-request-id")).toBe("req-fields");
   });
 
+  it("queries quantity capabilities separately from the field payload cache", async () => {
+    let observedUrl = "";
+    const api = new ControlRoomApi({
+      baseUrl: "http://127.0.0.1:8765",
+      fetchImpl: async (url) => {
+        observedUrl = String(url);
+        return jsonResponse({
+          schema_version: "quantities.v2",
+          quantities: [
+            {
+              capability_state: "supported",
+              description: "Demagnetization field",
+              domain: "full_domain",
+              id: "H_demag",
+              interactive_preview: true,
+              label: "Demag field",
+              location: "node",
+              materializable: true,
+              materialization_state: "unmaterialized",
+              n_comp: 3,
+              normalization_hint: "max_abs",
+              shape: "vector_field",
+              supports_export: true,
+              supports_history: false,
+              supports_preview_2d: true,
+              supports_preview_3d: true,
+              unit: "A/m",
+            },
+          ],
+        });
+      },
+    });
+
+    const catalog = await api.data.quantities.catalog();
+
+    expect(observedUrl).toBe(
+      "http://127.0.0.1:8765/v2/sessions/current/data/quantities",
+    );
+    expect(catalog.quantities[0]).toMatchObject({
+      capability_state: "supported",
+      id: "H_demag",
+      materialization_state: "unmaterialized",
+      materializable: true,
+    });
+  });
+
   it("queries scoped field metadata through the v2 data facade", async () => {
     let observedUrl = "";
     const api = new ControlRoomApi({
