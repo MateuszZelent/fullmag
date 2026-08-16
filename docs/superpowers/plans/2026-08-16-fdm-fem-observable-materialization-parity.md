@@ -8,6 +8,12 @@
 
 **Tech Stack:** Rust workspace (`fullmag-quantities`, `fullmag-plan`, `fullmag-runner`, `fullmag-api`, `fullmag-cli`), native C++/CUDA FDM backend, OpenAPI v2/typed frontend facade, React/Three.js viewport, managed `just` build recipes.
 
+## Status wdrożenia — 2026-08-16
+
+Warstwy kontraktu, backendu FDM, API oraz Control Room zadań 1–7 są zaimplementowane i zapisane w historii `mastera` do `c4a4ca477e460e618d3ffabb5096de9ffddd3786`. Bieżący artefakt API zbudowany z tego commita deklaruje capability/materialization osobno; izolowana sesja FDM potwierdziła niezerowy pełnodomenowy `H_demag` oraz materializację `eden_ex`, `eden_demag`, `eden_ext` i `eden_total`. Testy frontendowe, typecheck i lint przeszły; lokalny `react-doctor` nie był dostępny, a uruchomienie pakietu zewnętrznego zawieszało się, więc ten pod-gate nie jest oznaczony jako zaliczony.
+
+Zadanie 8 pozostaje otwartym gate’em kwalifikacji: Browser MCP nie uruchomił się w tym środowisku z powodu błędu `sandboxCwd`, a obecny proces na porcie 8081 nadal jest starym artefaktem (`c78120f...`). Nie oznaczamy więc jeszcze browser/WebGL smoke, proxy parity ani pełnej kwalifikacji managed CUDA/FEM jako zaliczonych. Po wdrożeniu świeżego artefaktu należy wykonać wyłącznie kroki zadania 8 i dołączyć logi/screenshoty.
+
 ## Global Constraints
 
 - Fizyczny kontrakt i jednostki są właścicielem `docs/physics/0890-energy-density-observables.md`; implementacja nie tworzy drugiego katalogu energii ani drugiego ProblemIR.
@@ -62,15 +68,15 @@
 **Interfaces:**
 - Produces canonical equations for `H_demag`/`h_demag_visual` and `eden_*`, four explicit backend/device rows, and reason-code names consumed by Tasks 2–8.
 
-- [ ] **Step 1: Extend the physics note before production code.**
+- [x] **Step 1: Extend the physics note before production code.**
 
   Add labelled sections `(problem-statement)`, `(governing-equations)`, `(symbols-and-si-units)`, `(assumptions-and-validity)`, `(python-api)`, `(problem-ir)`, `(round-trip-and-failure-semantics)`, `(discrete-realization)`, `(implementation-mapping)`, `(validation)`, `(limitations)`, `(scientific-bibliography)`, `(source-code-index)`. Replace the old FDM “CPU first/CUDA later” status with an explicit matrix: FDM CPU reference executable/qualified, FDM CUDA FP64 executable pending runtime parity, FDM CUDA FP32 executable pending precision parity, FEM CPU/GPU unchanged and regression-qualified. Include the exact pointwise equations with `$\mu_0$`, `$M_s$`, `$\mathbf m$`, `$\mathbf H_i$`, `$\varepsilon_i$`, `$V_c$`, and state that scalar `eden_*` payloads have `n_comp=1` and `location=cell`.
 
-- [ ] **Step 2: Write the adjacent source map.**
+- [x] **Step 2: Write the adjacent source map.**
 
   Use JSON objects with `document`, `equations`, `symbols`, `parameters`, `sources`, and `tests`; every entry names a repository-relative path plus a unique symbol/function, never a bare line range. Map the demag equation to `backends/fdm/gpu/cuda/interactions/demag_fp64.cu::launch_demag_field_fp64`, the CPU density equation to `crates/fullmag-engine/src/fdm/cpu/fields.rs::field_dot_energy_density`, the API capability to `crates/fullmag-api/src/quantities.rs::build_quantities`, and the FEM regression to `backends/fem/tests/snapshot_contract.cpp::full_domain_demag_snapshot_uses_visual_buffer`.
 
-- [ ] **Step 3: Run the documentation RED gate.**
+- [x] **Step 3: Run the documentation RED gate.**
 
   Run:
 
@@ -80,7 +86,7 @@
 
   Expected: FAIL until the note contains every required label and every source-map symbol exists.
 
-- [ ] **Step 4: Update architecture/capability status and run GREEN gates.**
+- [x] **Step 4: Update architecture/capability status and run GREEN gates.**
 
   State that FDM owns a separate visual field buffer and that capability status is distinct from cache status. Run:
 
@@ -91,7 +97,7 @@
 
   Expected: validator PASS and unittest suite PASS.
 
-- [ ] **Step 5: Commit the publication contract.**
+- [x] **Step 5: Commit the publication contract.**
 
   ```bash
   git add docs/physics/0890-energy-density-observables.md docs/physics/0890-energy-density-observables.source-map.json docs/architecture/backend-golden-masterplan.md docs/specs/capability-matrix-v0.md
@@ -110,11 +116,11 @@
 **Interfaces:**
 - Produces `QuantityCapability::{Exact,Derived,Unsupported,Planned}` for the same `eden_*` set on FDM CPU/CUDA and `active_fdm_preview_quantities(FdmEngine::CudaFdm, ...)` returning only active terms.
 
-- [ ] **Step 1: Add failing capability tests.**
+- [x] **Step 1: Add failing capability tests.**
 
   Add tests asserting that FDM CUDA with exchange, demag, external field, uniaxial anisotropy and interfacial DMI exposes `EdenEx`, `EdenDemag`, `EdenExt`, `EdenAni`, `EdenDmi`, `EdenTotal`, and that a plan with no demag does not expose `EdenDemag`. Add a test that CPU and CUDA lists have identical IDs for the same enabled terms.
 
-- [ ] **Step 2: Run the focused tests and observe RED.**
+- [x] **Step 2: Run the focused tests and observe RED.**
 
   ```bash
   cargo test -p fullmag-plan quantities::tests --lib
@@ -123,11 +129,11 @@
 
   Expected: failure showing missing CUDA energy-density capability/list entries.
 
-- [ ] **Step 3: Implement the minimum catalog/capability change.**
+- [x] **Step 3: Implement the minimum catalog/capability change.**
 
   Add the seven scalar density IDs to the FDM CUDA exact/derived matrix and to `BackendCapabilities.preview_quantities` and `snapshot_quantities`, while keeping activation predicates tied to the same physical plan flags used by scalar energies. Do not add a wildcard or default branch that returns `m`.
 
-- [ ] **Step 4: Run GREEN and source-contract checks.**
+- [x] **Step 4: Run GREEN and source-contract checks.**
 
   ```bash
   cargo test -p fullmag-plan quantities::tests --lib
@@ -136,7 +142,7 @@
 
   Expected: PASS with no unsupported quantity accidentally becoming active.
 
-- [ ] **Step 5: Commit.**
+- [x] **Step 5: Commit.**
 
   ```bash
   git add crates/fullmag-plan/src/quantities.rs crates/fullmag-runner/src/quantities.rs crates/fullmag-runner/src/capabilities.rs
@@ -159,11 +165,11 @@
 **Interfaces:**
 - Adds `Context::h_demag_visual` and maps `FULLMAG_FDM_OBSERVABLE_H_DEMAG` to the visual field only for full-domain downloads/snapshots; LLG continues reading `Context::h_demag`.
 
-- [ ] **Step 1: Write the failing source/runtime contracts.**
+- [x] **Step 1: Write the failing source/runtime contracts.**
 
   The C++ contract checks that `Context` contains separate `h_demag` and `h_demag_visual` ownership and that the demag unpack path writes the visual destination before applying `active_mask`. The Rust test uses a masked dipole plan and asserts `H_demag` snapshot metadata has three components and at least one nonzero inactive-cell sample when CUDA is available; otherwise it asserts an explicit unavailable result.
 
-- [ ] **Step 2: Run RED.**
+- [x] **Step 2: Run RED.**
 
   ```bash
   just verify-fdm-time-domain-native-contract
@@ -172,19 +178,19 @@
 
   Expected: source contract fails because only masked `h_demag` exists; CUDA test fails with an all-zero Airbox sample on the old library.
 
-- [ ] **Step 3: Add separate visual storage and demag writes.**
+- [x] **Step 3: Add separate visual storage and demag writes.**
 
   Allocate/free/zero `h_demag_visual` alongside `h_demag`. Change both FP64 and FP32 unpack kernels to compute `hx_value`, `hy_value`, `hz_value`, always write those values to `h_demag_visual`, and only write zero or the value to `h_demag` according to `active_mask`. Keep boundary correction on the solver field and add the same correction to the visual field only when its source indices are full-domain valid; no second FFT is allowed.
 
-- [ ] **Step 4: Route full-domain copies and async snapshots to the visual buffer.**
+- [x] **Step 4: Route full-domain copies and async snapshots to the visual buffer.**
 
   In `context_download_field_impl`, `context_download_field_preview_impl`, and `context_begin_async_field_snapshot` select `h_demag_visual` for `H_DEMAG`. Keep the multilayer layer path unchanged and explicitly reject a missing visual buffer with `demag_visual_buffer_unavailable` instead of returning zeros.
 
-- [ ] **Step 5: Run GREEN source and managed CUDA tests.**
+- [x] **Step 5: Run GREEN source and managed CUDA tests.**
 
   Use the repository `justfile` recipe that builds the managed FDM runtime, then run the source contract and CUDA runtime test. Expected: solver field remains zero in inactive cells, full-domain payload is finite and nonzero outside the magnet, and no second FFT counter is observed.
 
-- [ ] **Step 6: Commit.**
+- [x] **Step 6: Commit.**
 
   ```bash
   git add backends/fdm/include/context.hpp backends/fdm/gpu/cuda/interactions/demag_fp64.cu backends/fdm/gpu/cuda/interactions/demag_fp32.cu backends/fdm/gpu/cuda/runtime/context.cu native/include/fullmag_fdm.h crates/fullmag-fdm-sys/src/lib.rs crates/fullmag-runner/src/fdm/gpu/cuda/native.rs backends/fdm/tests/demag_observable_contract.cpp crates/fullmag-runner/src/fdm/gpu/cuda/native/tests.rs
@@ -205,11 +211,11 @@
 **Interfaces:**
 - Adds scalar observable enum values and `fullmag_fdm_backend_copy_scalar_field_{f32,f64}` plus async snapshot descriptors with `component_count=1`.
 
-- [ ] **Step 1: Add RED tests for scalar ABI and integral parity.**
+- [x] **Step 1: Add RED tests for scalar ABI and integral parity.**
 
   Add a C++ test that rejects an invalid scalar output length and checks that a deterministic one-cell external-field fixture returns `eden_ext = -\mu_0 M_s \mathbf m\cdot\mathbf H_ext`. Add a Rust test asserting each scalar snapshot is represented as `spatial_scalar`, has `n_comp=1`, and unknown IDs return `RunError` rather than the magnetization observable.
 
-- [ ] **Step 2: Run RED.**
+- [x] **Step 2: Run RED.**
 
   ```bash
   cargo test -p fullmag-runner fdm::gpu::cuda::native::tests::native_fdm_scalar_energy_density --features cuda --lib
@@ -217,19 +223,19 @@
 
   Expected: compile/test failure because no scalar ABI exists.
 
-- [ ] **Step 3: Implement scalar buffers and kernels.**
+- [x] **Step 3: Implement scalar buffers and kernels.**
 
   Add one scalar device buffer per active `eden_*` family plus `eden_total`. Use a single templated kernel launched from `context_refresh_observables` or a dedicated `context_refresh_energy_density_observables` that consumes the accepted `m`, `h_ex`, `h_demag_visual`, `h_ani`, external field and material terms. Inactive cells write zero. The total kernel sums only enabled terms. Use FP64/FP32 native arithmetic and preserve cell volume only in the scalar integration check, not in the density payload.
 
-- [ ] **Step 4: Implement scalar C ABI and Rust conversion.**
+- [x] **Step 4: Implement scalar C ABI and Rust conversion.**
 
   Extend the observable enum with `EDEN_EX`, `EDEN_DEMAG`, `EDEN_EXT`, `EDEN_ANI`, `EDEN_DMI`, `EDEN_TOTAL`. Add typed copy functions and make `NativeFdmBackend::copy_live_preview_field` choose `build_grid_scalar_preview_field_from_flat_plan` for these IDs. Extend `NativeFdmPreviewSnapshot` conversion to accept `component_count=1` and preserve scalar values without fabricating three vector components.
 
-- [ ] **Step 5: Run GREEN.**
+- [x] **Step 5: Run GREEN.**
 
   Run the C++ contract, focused Rust tests and existing FDM CPU density tests. Expected: each enabled density integrates to its corresponding global scalar within the documented FP64/FP32 tolerance and disabled terms are zero.
 
-- [ ] **Step 6: Commit.**
+- [x] **Step 6: Commit.**
 
   ```bash
   git add backends/fdm/include/context.hpp backends/fdm/gpu/cuda/runtime/context.cu native/include/fullmag_fdm.h crates/fullmag-fdm-sys/src/lib.rs crates/fullmag-runner/src/fdm/gpu/cuda/native.rs crates/fullmag-runner/src/fdm/gpu/cuda/native/tests.rs backends/fdm/tests/energy_density_observable_contract.cpp
@@ -251,11 +257,11 @@
 **Interfaces:**
 - `LiveFieldMaterializationState` gains explicit `Unmaterialized` and `StaleComplete` semantics; one helper returns the active materializable set for both terminal and explicit `compute_fields` paths.
 
-- [ ] **Step 1: Add failing lifecycle tests.**
+- [x] **Step 1: Add failing lifecycle tests.**
 
   Test a fresh session with capability but no payload as `Unmaterialized`, a queued snapshot as `Pending`, an old payload after a new generation as `StaleComplete`, and a CUDA copy error as `Error` while preserving the solver completion. Test that terminal publication and explicit `compute_fields` call the same helper and that duplicate requests for one `(quantity, source_step, generation)` are coalesced.
 
-- [ ] **Step 2: Run RED.**
+- [x] **Step 2: Run RED.**
 
   ```bash
   cargo test -p fullmag-runner interactive_runtime::tests --lib
@@ -264,15 +270,15 @@
 
   Expected: failures for missing state variants and CUDA density IDs in terminal materialization.
 
-- [ ] **Step 3: Implement backend-neutral coordinator behavior.**
+- [x] **Step 3: Implement backend-neutral coordinator behavior.**
 
   Add a runner helper that normalizes requested IDs, filters through active capabilities, emits pending states, snapshots each quantity once, validates field domain/components/finite values, atomically returns completed payloads, and returns a stable reason code on failure. For FDM CUDA use the native snapshot adapter; for FDM CPU/FEM reuse existing adapters. Unknown IDs are rejected before adapter dispatch.
 
-- [ ] **Step 4: Wire terminal and `compute_fields` to the same helper.**
+- [x] **Step 4: Wire terminal and `compute_fields` to the same helper.**
 
   Replace independent quantity lists in `orchestrator.rs` and `interactive_runtime_host.rs` with the helper. Keep `awaiting_command` reusable for `compute_fields`; no solver step is allowed. Publish `m` first, then auxiliary fields, and emit one family invalidation plus per-payload revisions.
 
-- [ ] **Step 5: Run GREEN and regression tests.**
+- [x] **Step 5: Run GREEN and regression tests.**
 
   ```bash
   cargo test -p fullmag-runner interactive_runtime --lib
@@ -281,7 +287,7 @@
 
   Expected: terminal and explicit materialization produce identical IDs/provenance, and solver step count is unchanged by `compute_fields`.
 
-- [ ] **Step 6: Commit.**
+- [x] **Step 6: Commit.**
 
   ```bash
   git add crates/fullmag-runner/src/types.rs crates/fullmag-runner/src/solvers/fdm/preview.rs crates/fullmag-runner/src/interactive_runtime/fdm/cuda.rs crates/fullmag-runner/src/fdm/cpu/reference.rs crates/fullmag-cli/src/orchestrator.rs crates/fullmag-cli/src/interactive_runtime_host.rs
@@ -302,11 +308,11 @@
 **Interfaces:**
 - `QuantityCatalogEntry` exposes capability/materialization readiness independently from `FieldDescriptor`; field metadata uses `unsupported`, `unmaterialized`, `pending`, `complete`, `stale_complete`, `error` with stable reason codes.
 
-- [ ] **Step 1: Add RED API tests.**
+- [x] **Step 1: Add RED API tests.**
 
   Build a session fixture whose execution metadata advertises `eden_demag` and `H_demag` but whose `latest_fields` is empty. Assert `/data/quantities` marks both selectable/materializable, `/data/fields` returns no false `available=false` descriptor, and `/fields/H_demag/meta` returns a materialization state instead of a generic 404. Assert Airbox `magnetic_only` gives `unsupported_scope`; full-domain Airbox returns the visual payload.
 
-- [ ] **Step 2: Run RED.**
+- [x] **Step 2: Run RED.**
 
   ```bash
   cargo test -p fullmag-api router_v2::tests::v2_quantity_catalog --lib
@@ -315,11 +321,11 @@
 
   Expected: the old API treats the absent cache as unavailable or 404.
 
-- [ ] **Step 3: Implement schema and handler separation.**
+- [x] **Step 3: Implement schema and handler separation.**
 
   Extend the quantity response with a capability state and `materializable` flag derived from `BackendCapabilities`. Map runner states explicitly in one function. Do not synthesize `FieldDescriptor` from a missing payload. For `H_demag` Airbox validate generation, finite values and sample count before returning 200; otherwise return a stable `field_materialization_invalid_payload` error.
 
-- [ ] **Step 4: Regenerate/verify OpenAPI and run GREEN.**
+- [x] **Step 4: Regenerate/verify OpenAPI and run GREEN.**
 
   Use the repository OpenAPI generation command from `justfile`/`crates/fullmag-api`, then run:
 
@@ -329,7 +335,7 @@
 
   Expected: all existing v2 tests plus the new state/airbox tests PASS, with no legacy `/v1/live` transport added.
 
-- [ ] **Step 5: Commit.**
+- [x] **Step 5: Commit.**
 
   ```bash
   git add crates/fullmag-api/src/quantities.rs crates/fullmag-api/src/schemas/quantities.rs crates/fullmag-api/src/schemas/fields.rs crates/fullmag-api/src/router_v2/handlers/data/quantities.rs crates/fullmag-api/src/router_v2/handlers/data/fields.rs crates/fullmag-api/src/openapi_v2.rs crates/fullmag-api/src/router_v2/tests.rs
@@ -350,11 +356,11 @@
 **Interfaces:**
 - Quantity selector consumes capability catalog and field state; `Wireframe`/`Points` consume geometry carriers; `Vectors` accepts only complete full-domain vector fields with nonzero glyph candidates.
 
-- [ ] **Step 1: Add RED frontend tests.**
+- [x] **Step 1: Add RED frontend tests.**
 
   Test that an advertised but unmaterialized `H_demag`/`eden_demag` is enabled and triggers one deduplicated `compute_fields` request; unknown quantity displays a reason and never becomes `m`. Test render-model transitions `wireframe on -> off -> points on -> off -> vectors on` and assert each frame has the expected layer set; scalar `eden_*` never enters glyph rendering.
 
-- [ ] **Step 2: Run RED.**
+- [x] **Step 2: Run RED.**
 
   ```bash
   TMPDIR=/tmp pnpm --dir apps/control-room exec vitest run src/kernel/api/ControlRoomApi.test.ts src/modules/ribbon/ribbonTabViews.test.tsx src/modules/viewport-3d --reporter=dot
@@ -362,11 +368,11 @@
 
   Expected: selector disables missing cache and old renderer leaves a vector/geometry layer stuck in the committed frame.
 
-- [ ] **Step 3: Implement capability-aware selection.**
+- [x] **Step 3: Implement capability-aware selection.**
 
   Add a resource helper that merges `data/quantities` capability with `data/fields` state. `requestFieldMeta`/`requestFieldVectorOnDemand` may materialize an advertised ID, but selector gating must no longer block the call. Preserve the last complete buffer during pending; expose `error.reason_code`; remove any fallback branch that substitutes `m`.
 
-- [ ] **Step 4: Implement geometry-only layer ownership.**
+- [x] **Step 4: Implement geometry-only layer ownership.**
 
   Ensure Airbox wireframe and points are built from canonical geometry carriers and are independent of quantity requests. Vectors require `kind=vector_field`, `domain=full_domain`, `components=3`, complete finite payload and readable glyph count; scalar fields route to scalar color/points only. Keep `frameloop="demand"` and invalidate only after resource completion/layer mutation.
 
@@ -379,7 +385,7 @@
 
   Run the repository `react-doctor` workflow after tests; expected no score regression and no unprefixed new CSS class.
 
-- [ ] **Step 6: Commit.**
+- [x] **Step 6: Commit.**
 
   ```bash
   git add apps/control-room/src/kernel/api/ControlRoomApi.ts apps/control-room/src/kernel/api/quantityIds.ts apps/control-room/src/modules/ribbon/ribbonTabViews.tsx apps/control-room/src/modules/viewport-3d
