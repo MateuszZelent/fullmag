@@ -232,5 +232,37 @@ Requested intent is preserved; planner-resolved execution is recorded. Validatio
         self.assertTrue(any("placeholder" in error for error in self.errors(broken)))
 
 
+class DefaultPlanarViewDocumentationContractTests(unittest.TestCase):
+    def test_default_source_replaces_monitor_draft_and_empty_state_contract(self) -> None:
+        root = Path(__file__).resolve().parents[4]
+        viewport_spec = (root / "docs/specs/frontend-v2/15-viewport-2d-module.md").read_text(
+            encoding="utf-8"
+        )
+        audit_plan = (
+            root
+            / "docs/plans/active/viewport-2d-refactor-2026-08-12/"
+            / "viewport-2d-refactor-audit-and-implementation-plan.md"
+        ).read_text(encoding="utf-8")
+
+        stale_contracts = (
+            (
+                "2D opening creates an editable monitor draft",
+                "opening 2D in a scene without monitors creates an editable monitor draft",
+                viewport_spec,
+            ),
+            (
+                "field-map uses an empty state without a monitor",
+                "`field-map` pokazuje pusty stan",
+                audit_plan,
+            ),
+        )
+        violations = [
+            label
+            for label, stale_text, document in stale_contracts
+            if stale_text in document
+        ]
+        self.assertEqual([], violations)
+
+
 if __name__ == "__main__":
     unittest.main()

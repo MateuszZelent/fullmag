@@ -342,6 +342,28 @@ DELETE /v2/sessions/current/model/planar-monitors/{monitor_id}
 POST   /v2/sessions/current/model/planar-monitors/{monitor_id}/duplicate
 ```
 
+The planar visualization source is a separate session resource and never uses
+`monitor_id = "default"` as a sentinel:
+
+```json
+{
+  "source": {"kind": "default"},
+  "default_slice": {
+    "plane": "xy",
+    "position_fraction": 0.5,
+    "operator": {"kind": "plane_sample"}
+  }
+}
+```
+
+`source.kind = "default"` is resolved from the current published domain at
+data-plane request time. It is not persisted in `SceneDocument`, `ProblemIR`,
+or canonical Python. `source.kind = "monitor"` contains the authored monitor
+ID and is resolved through the model resource. Public v9 patches validate a
+finite `position_fraction` in `[0,1]` and a positive finite slab thickness;
+legacy v8 persistence input is migrated privately and is never dual-written
+as `active_monitor_id`.
+
 Mutations carry `expected_scene_revision`, use the canonical scene transaction
 owner, update script export, and emit invalidation. Monitor JSON contains only
 physical target, frame, extent, and operator. Quantity and presentation state
@@ -382,6 +404,30 @@ sampling budget exhaustion.
 Existing `/samples/slice` and `/projection` resources remain compatibility
 adapters to the same `PlanarSamplingEngine` until a separately approved removal.
 They are not a second numerical implementation.
+
+The canonical source-specific data-plane families are the target contract for
+Task 3 of the active default-slice implementation plan. They are **planned,
+not executable at this document revision**: until the typed backend handlers,
+OpenAPI generation, and resource hooks land, only the existing
+`planar-monitors/{monitor_id}` family is a live implementation. A client must
+not synthesize or request these paths before that task's route tests pass.
+
+The planned families are:
+
+```text
+GET /v2/sessions/current/data/fields/{quantity_id}/planar-default/meta
+GET /v2/sessions/current/data/fields/{quantity_id}/planar-default/scalar
+GET /v2/sessions/current/data/fields/{quantity_id}/planar-default/vectors
+GET /v2/sessions/current/data/fields/{quantity_id}/planar-default/empty-mask
+GET /v2/sessions/current/data/fields/{quantity_id}/planar-default/mesh-overlay
+GET /v2/sessions/current/data/fields/{quantity_id}/planar-default/probe
+GET /v2/sessions/current/data/fields/{quantity_id}/planar-default/render.png
+```
+
+These routes and the existing `planar-monitors/{monitor_id}` family dispatch
+to one typed source resolver and one sampler. Metadata publishes source kind,
+resolved frame/operator, domain generation, and canonical child links; it does
+not invent monitor hash/revision fields for `Default`.
 
 The session-scoped `visualization/state.planar` resource owns range and raster
 opacity. Its schema-7 range is `{ mode: auto|manual|symmetric, min, max }`;

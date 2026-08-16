@@ -96,12 +96,24 @@ and cell-intersection measure. FEM P1 uses barycentric point evaluation and
 conservative tetrahedron/boundary measure. Node count is diagnostics only.
 Vector reduction precedes world or monitor-basis component derivation.
 
-## 4. Planar Monitor Authoring Flow
+## 4. Planar Source and Monitor Authoring Flow
 
-The View ribbon, Inspector, or opening 2D in a scene without monitors creates an editable monitor draft. While the draft
-is active, the 3D viewport may show a lightweight frame overlay. Apply commits
-the monitor through a revision-safe `SceneDocument` transaction, updates
-canonical Python, selects the returned monitor id, and opens `field-map`.
+The View ribbon, Inspector, or opening 2D changes only the active center
+surface. The session visualization state always has a typed planar source:
+`Default` or an authored monitor selection. When no authored monitor is
+selected, `field-map` resolves `Default` from the published domain with
+`plane=xy` and `position_fraction=0.5`; it does not create a monitor draft,
+change `SceneDocument`, or update canonical Python. The default source uses
+the same backend sampler as authored monitors after the server resolves its
+target, frame, extent, and operator.
+
+Creating or editing an authored monitor remains an explicit Inspector
+transaction. While that draft is active, the 3D viewport may show a
+lightweight frame overlay. Apply commits the monitor through a revision-safe
+`SceneDocument` transaction, updates canonical Python, selects the returned
+monitor ID, and opens `field-map`. Discard leaves the session source and
+authored model unchanged. Selecting `Default` later restores the session
+slice controls without fabricating a persistent monitor.
 Discard restores the committed monitor. A revision conflict must not overwrite
 the scene.
 
@@ -145,7 +157,7 @@ Required tests:
 
 - center tab host renders all tab triggers but mounts only one active module;
 - stale persisted active tab ids repair to a registered module;
-- committing a monitor draft updates canonical model/script and switches
+- committing an authored monitor draft updates canonical model/script and switches
   `activeViewportMainModuleId` to `field-map`;
 - the typed API exposes the cross-section PNG endpoint as a binary resource;
 - object URLs created by the image surface are revoked on replacement/unmount;
