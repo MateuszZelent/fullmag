@@ -38,6 +38,11 @@ import {
   ResourceCache,
   type ResourceCacheEntryDiagnostics,
 } from "@/kernel/resources/ResourceCache";
+import {
+  createResourcePartialLoadError,
+  shouldRetryResourceError,
+  type ResourceRetryPolicy,
+} from "@/kernel/resources/ResourceRuntimeStore";
 import type { ResourceInvalidationController } from "@/kernel/resources/ResourceInvalidationController";
 import { useResource } from "@/kernel/resources/useResource";
 
@@ -139,6 +144,21 @@ const VIEWPORT_3D_UNIVERSE_RESOURCE_KEY = MODEL_UNIVERSE_PATH;
 const FULL_FIELD_VECTOR_QUERY: FieldVectorQuery = {
   component: "full",
   scope_kind: "full",
+};
+const FIELD_VECTOR_RETRY_POLICY: ResourceRetryPolicy = {
+  deadlineMs: 5_000,
+  maxAttempts: 5,
+  retryAfterMs: 250,
+  retryableReasonCodes: [
+    "field_materialization_pending",
+    "field_pending",
+    "field_unmaterialized",
+    "materialization_pending",
+    "not_ready",
+    "pending",
+    "temporary_not_found",
+    "transient_not_found",
+  ],
 };
 
 export interface Viewport3DQuantityFieldVectorRequest {
@@ -371,6 +391,28 @@ export async function loadCachedBinaryResource<TData, TMetadata = undefined>(
   const pending = (async () => {
     const result = await request(cached?.etag, controller.signal);
 
+    const resultStatus = (result as { status?: string }).status;
+    if (resultStatus === "pending") {
+      const pendingResult = result as BinaryResourceResult<TData, TMetadata> & {
+        command_id?: string | null;
+        reason_code?: string | null;
+        retry_after_ms?: number | null;
+      };
+      throw Object.assign(
+        new Error(
+          pendingResult.reason_code ??
+            `Binary resource ${key} is pending materialization`,
+        ),
+        {
+          code: pendingResult.reason_code ?? "pending",
+          command_id: pendingResult.command_id ?? null,
+          reason_code: pendingResult.reason_code ?? "pending",
+          retry_after_ms: pendingResult.retry_after_ms ?? null,
+          status: 202,
+        },
+      );
+    }
+
     if (result.status === "not-modified") {
       if (!cached) {
         throw new Error(`Binary resource ${key} returned 304 without cache entry`);
@@ -521,7 +563,11 @@ export function resolveViewport3DAirboxFieldVectorQuery(
 }
 
 function airboxFieldVectorUnavailable(error: unknown): boolean {
-  return error instanceof ControlRoomApiError && error.status === 404;
+  return (
+    error instanceof ControlRoomApiError &&
+    error.status === 404 &&
+    !shouldRetryResourceError(error, FIELD_VECTOR_RETRY_POLICY)
+  );
 }
 
 export function resolveViewport3DAirboxFieldVectorResourceKeys(
@@ -851,6 +897,7 @@ export function useViewport3DFieldVectorRequest(
     load,
     minRefetchIntervalMs: fieldVectorMinRefetchIntervalMs(),
     pauseLoad: options.pauseLoad,
+    retryPolicy: FIELD_VECTOR_RETRY_POLICY,
     resolveRevision,
     resourceKey: requestKey,
   });
@@ -896,7 +943,7 @@ export function useViewport3DAirboxFieldVectors(
   const resourceKey = useMemo(() => {
     return resolveViewport3DFieldVectorCollectionResourceKey(
       "airbox",
-      Array.from(requests.values(), (request) => request.key),
+      Array.from(requests.keys()).toSorted(),
     );
   }, [requests]);
   const load = useCallback(
@@ -906,9 +953,10 @@ export function useViewport3DAirboxFieldVectors(
           Array.from(requests.values(), (request) => [request.key, request]),
         ).values(),
       );
-      const dataByKey = new Map(
-        await Promise.all(
-          uniqueRequests.map(async (request) => {
+      const dataByKey = new Map<string, DecodedFieldVector | null>();
+      let firstError: unknown = null;
+      for (const request of uniqueRequests) {
+        try {
             const data = await loadCachedBinaryResource(
               fieldVectorCache,
               request.key,
@@ -925,12 +973,7 @@ export function useViewport3DAirboxFieldVectors(
                 ),
                 signal,
               },
-            ).catch((error: unknown) => {
-              if (airboxFieldVectorUnavailable(error)) {
-                return null;
-              }
-              throw error;
-            });
+            );
             if (data !== null) {
               invalidateViewport3DFieldMetaResources(
                 resources,
@@ -938,21 +981,40 @@ export function useViewport3DAirboxFieldVectors(
                 fieldVectorCache.peek(request.key)?.etag ?? null,
               );
             }
-            return [request.key, data] as const;
-          }),
-        ),
-      );
+            dataByKey.set(
+              request.key,
+              data === null
+                ? null
+                : (resolveCachedFieldVectorEnvelope(
+                    fieldVectorCache,
+                    request.key,
+                    data,
+                  )?.data ?? null),
+            );
+        } catch (error) {
+          if (!airboxFieldVectorUnavailable(error)) firstError ??= error;
+          dataByKey.set(request.key, fieldVectorCache.peek(request.key)?.data ?? null);
+        }
+      }
       const entries = Array.from(requests, ([partId, request]) => [
         partId,
         dataByKey.get(request.key) ?? null,
       ] as const);
 
-      return new Map(
+      const partial = new Map(
         entries.filter(
           (entry): entry is readonly [string, DecodedFieldVector] =>
             entry[1] !== null,
         ),
       );
+      if (firstError) {
+        throw createResourcePartialLoadError(
+          "One or more Airbox field vectors are not ready",
+          partial,
+          firstError,
+        );
+      }
+      return partial;
     },
     [api, requests, resources],
   );
@@ -969,6 +1031,7 @@ export function useViewport3DAirboxFieldVectors(
     load,
     minRefetchIntervalMs: fieldVectorMinRefetchIntervalMs(),
     pauseLoad: options.pauseLoad,
+    retryPolicy: FIELD_VECTOR_RETRY_POLICY,
     resolveRevision,
     resourceKey,
   });
@@ -1033,13 +1096,15 @@ export function useViewport3DQuantityFieldVectors(
   const resourceKey = useMemo(() => {
     return resolveViewport3DFieldVectorCollectionResourceKey(
       "quantity",
-      Array.from(requestKeys.values(), (request) => request.key),
+      Array.from(requestKeys.keys()).toSorted(),
     );
   }, [requestKeys]);
   const load = useCallback(
     async ({ signal }: { signal: AbortSignal }) => {
-      const entries = await Promise.all(
-        Array.from(requestKeys, async ([requestId, request]) => {
+      const entries: Array<readonly [string, CachedFieldVectorEnvelope | null]> = [];
+      let firstError: unknown = null;
+      for (const [requestId, request] of requestKeys) {
+        try {
           const data = await loadCachedBinaryResource(
             fieldVectorCache,
             request.key,
@@ -1065,7 +1130,7 @@ export function useViewport3DQuantityFieldVectors(
               fieldVectorCache.peek(request.key)?.etag ?? null,
             );
           }
-          return [
+          entries.push([
             requestId,
             data === null
               ? null
@@ -1074,16 +1139,38 @@ export function useViewport3DQuantityFieldVectors(
                   request.key,
                   data,
                 ),
-          ] as const;
-        }),
-      );
+          ]);
+        } catch (error) {
+          firstError ??= error;
+          const cached = fieldVectorCache.peek(request.key);
+          entries.push([
+            requestId,
+            cached
+              ? {
+                  data: cached.data,
+                  etag: cached.etag ?? null,
+                  responseMetadata: cached.metadata ?? null,
+                  resourceKey: request.key,
+                }
+              : null,
+          ]);
+        }
+      }
 
-      return new Map(
+      const partial = new Map(
         entries.filter(
           (entry): entry is readonly [string, CachedFieldVectorEnvelope] =>
             entry[1] !== null,
         ),
       );
+      if (firstError) {
+        throw createResourcePartialLoadError(
+          "One or more quantity field vectors are not ready",
+          partial,
+          firstError,
+        );
+      }
+      return partial;
     },
     [api, requestKeys, resources],
   );
@@ -1100,6 +1187,7 @@ export function useViewport3DQuantityFieldVectors(
     load,
     minRefetchIntervalMs: fieldVectorMinRefetchIntervalMs(),
     pauseLoad: options.pauseLoad,
+    retryPolicy: FIELD_VECTOR_RETRY_POLICY,
     resolveRevision,
     resourceKey,
   });
@@ -1171,13 +1259,15 @@ export function useViewport3DPartFieldVectors(
   const resourceKey = useMemo(() => {
     return resolveViewport3DFieldVectorCollectionResourceKey(
       "part",
-      Array.from(requestKeys.values(), (request) => request.key),
+      Array.from(requestKeys.keys()).toSorted(),
     );
   }, [requestKeys]);
   const load = useCallback(
     async ({ signal }: { signal: AbortSignal }) => {
-      const entries = await Promise.all(
-        Array.from(requestKeys, async ([partId, request]) => {
+      const entries: Array<readonly [string, DecodedFieldVector | null]> = [];
+      let firstError: unknown = null;
+      for (const [partId, request] of requestKeys) {
+        try {
           const data = await loadCachedBinaryResource(
             fieldVectorCache,
             request.key,
@@ -1203,16 +1293,39 @@ export function useViewport3DPartFieldVectors(
               fieldVectorCache.peek(request.key)?.etag ?? null,
             );
           }
-          return [partId, data] as const;
-        }),
-      );
+          entries.push([
+            partId,
+            data === null
+              ? null
+              : (resolveCachedFieldVectorEnvelope(
+                  fieldVectorCache,
+                  request.key,
+                  data,
+                )?.data ?? null),
+          ]);
+        } catch (error) {
+          firstError ??= error;
+          entries.push([
+            partId,
+            fieldVectorCache.peek(request.key)?.data ?? null,
+          ]);
+        }
+      }
 
-      return new Map(
+      const partial = new Map(
         entries.filter(
           (entry): entry is readonly [string, DecodedFieldVector] =>
             entry[1] !== null,
         ),
       );
+      if (firstError) {
+        throw createResourcePartialLoadError(
+          "One or more mesh-part field vectors are not ready",
+          partial,
+          firstError,
+        );
+      }
+      return partial;
     },
     [api, requestKeys, resources],
   );
@@ -1229,6 +1342,7 @@ export function useViewport3DPartFieldVectors(
     load,
     minRefetchIntervalMs: fieldVectorMinRefetchIntervalMs(),
     pauseLoad: options.pauseLoad,
+    retryPolicy: FIELD_VECTOR_RETRY_POLICY,
     resolveRevision,
     resourceKey,
   });

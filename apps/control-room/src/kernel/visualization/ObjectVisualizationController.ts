@@ -1385,16 +1385,46 @@ export function mergeVisualizationStateTargetOverride(
 ): VisualizationStateResource["overrides"] {
   const next = visualizationStateOverrideFromTargetPatch(target, patch);
   if (!next) {
-    return overrides.map(normalizeVisualizationStateOverride);
+    return mergeVisualizationStateTargetOverrides(overrides, []);
   }
-  const current = overrides.find((entry) =>
-    visualizationStateOverrideMatchesTarget(entry, target),
-  );
-  const merged = current ? mergeVisualizationOverride(current, next) : next;
-  const rest = overrides.filter(
-    (entry) => !visualizationStateOverrideMatchesTarget(entry, target),
-  );
-  return [...rest.map(normalizeVisualizationStateOverride), merged];
+  return mergeVisualizationStateTargetOverrides(overrides, [next]);
+}
+
+/**
+ * Merge serialized target overrides by their `(scope, scope_id)` identity.
+ *
+ * Target patches are often built from a stale/partial snapshot while another
+ * target mutation is still queued.  A plain array merge would replace the
+ * whole list and lose that unrelated mutation.  Keep the first occurrence's
+ * position stable, merge duplicate entries field-by-field, and append only
+ * genuinely new target identities.
+ */
+export function mergeVisualizationStateTargetOverrides(
+  current: readonly VisualizationStateResource["overrides"][number][],
+  next: readonly VisualizationStateResource["overrides"][number][],
+): VisualizationStateResource["overrides"] {
+  const mergedByIdentity = new Map<
+    string,
+    VisualizationStateResource["overrides"][number]
+  >();
+  const order: string[] = [];
+
+  for (const entry of [...current, ...next]) {
+    const normalized = normalizeVisualizationStateOverride(entry);
+    const identity = visualizationStateOverrideIdentity(normalized);
+    const existing = mergedByIdentity.get(identity);
+    if (existing) {
+      mergedByIdentity.set(identity, mergeVisualizationOverride(existing, normalized));
+      continue;
+    }
+    order.push(identity);
+    mergedByIdentity.set(identity, normalized);
+  }
+
+  return order.flatMap((identity) => {
+    const entry = mergedByIdentity.get(identity);
+    return entry ? [entry] : [];
+  });
 }
 
 /**
@@ -1717,6 +1747,12 @@ function mergeVisualizationOverride(
     },
   };
   return quantity ? { ...merged, quantity } : merged;
+}
+
+function visualizationStateOverrideIdentity(
+  entry: VisualizationStateResource["overrides"][number],
+): string {
+  return `${entry.scope}\u0000${entry.scope_id}`;
 }
 
 function mergeOptionalRecord<T extends object>(

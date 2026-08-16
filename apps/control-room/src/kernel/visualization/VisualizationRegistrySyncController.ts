@@ -8,6 +8,7 @@ import { ControlRoomApiError } from "../api/ControlRoomApi";
 import { VISUALIZATION_STATE_PATH } from "../api/apiPaths";
 import type { ResourceInvalidationController } from "../resources/ResourceInvalidationController";
 import { sharedResourceRuntimeStore } from "../resources/ResourceRuntimeStore";
+import { mergeVisualizationStateTargetOverrides } from "./ObjectVisualizationController";
 
 type VisualizationRegistrySyncListener = () => void;
 
@@ -503,6 +504,13 @@ function mergeQueuedPatchRecords(
   const output: Record<string, unknown> = { ...current };
   for (const [key, value] of Object.entries(next)) {
     const previous = output[key];
+    if (key === "overrides" && Array.isArray(previous) && Array.isArray(value)) {
+      output[key] = mergeVisualizationStateTargetOverrides(
+        previous as VisualizationStateResource["overrides"],
+        value as VisualizationStateResource["overrides"],
+      );
+      continue;
+    }
     output[key] =
       isPlainObject(previous) && isPlainObject(value)
         ? mergeQueuedPatchRecords(previous, value)

@@ -66,4 +66,29 @@ describe("resolveFdmCuboidBuildState", () => {
       status: "error",
     });
   });
+
+  it("retains the last compatible result while a field-only rebuild is pending", () => {
+    const controller = createFdmCuboidBuildStateController();
+
+    controller.begin("topology-a", "carrier-a");
+    controller.resolve("topology-a", resultA);
+    controller.begin("field-b", "carrier-a");
+
+    expect(controller.getSnapshot()).toEqual({
+      buildKey: "field-b",
+      error: null,
+      result: resultA,
+      status: "pending",
+    });
+  });
+
+  it("does not retain a result when the carrier identity changes", () => {
+    const controller = createFdmCuboidBuildStateController();
+
+    controller.begin("topology-a", "carrier-a");
+    controller.resolve("topology-a", resultA);
+    controller.begin("topology-b", "carrier-b");
+
+    expect(controller.getSnapshot().result).toBeNull();
+  });
 });

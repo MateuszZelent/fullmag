@@ -11,6 +11,7 @@ import {
   estimateFdmCuboidBuildOutputBytes,
   type FdmCuboidBuildRequest,
   type FdmCuboidBuildResult,
+  type FdmVectorOnlyBuildRequest,
 } from "./fdmCuboidBuildModel";
 import type {
   FdmCuboidBuildWorkerRequest,
@@ -86,6 +87,37 @@ export async function buildViewport3DFdmCuboidOffMainThread(
       latestWins: options.latestWins,
       onDiagnosticRecord: options.onDiagnosticRecord,
       signal: options.signal,
+    },
+  );
+}
+
+/** Schedule a vector-only FDM build without allocating cuboid matrices. */
+export async function buildViewport3DFdmVectorsOffMainThread(
+  request: FdmVectorOnlyBuildRequest,
+  options: FdmCuboidBuildOptions = {},
+): Promise<FdmCuboidBuildResult> {
+  return buildViewport3DFdmCuboidOffMainThread(
+    {
+      cellSelection: "all",
+      domain: null,
+      maxVectorGlyphs: request.maxVectors,
+      realizedRegionIds: null,
+      vectorAnchorMode: request.anchorMode,
+      vectorField: request.fieldVector,
+      vectorGeometryScope: request.geometryScope,
+      vectorOnly: {
+        anchors: request.anchors,
+        cellIndices: request.cellIndices,
+        gridShape: request.gridShape,
+      },
+      vectorScale: request.scale,
+      voxelFillRatio: 1,
+      voxelMagnitudeThreshold: 0,
+      voxelTopography: { amplitudeCells: 0, component: "z", enabled: false },
+    },
+    {
+      ...options,
+      groupKey: options.groupKey ?? "fdm-vector-only",
     },
   );
 }
@@ -308,6 +340,13 @@ function cloneFdmCuboidBuildRequestForWorker(
       ? new Uint32Array(input.realizedRegionIds)
       : input.realizedRegionIds,
     vectorField: cloneFieldVectorForWorker(input.vectorField),
+    vectorOnly: input.vectorOnly
+      ? {
+          anchors: new Float32Array(input.vectorOnly.anchors),
+          cellIndices: new Uint32Array(input.vectorOnly.cellIndices),
+          gridShape: input.vectorOnly.gridShape,
+        }
+      : input.vectorOnly,
   };
 }
 
@@ -335,6 +374,8 @@ function transferablesForFdmCuboidBuildRequest(
     addArrayBufferTransferable(transferables, request.vectorField?.values.buffer);
   }
   addArrayBufferTransferable(transferables, request.realizedRegionIds?.buffer);
+  addArrayBufferTransferable(transferables, request.vectorOnly?.anchors.buffer);
+  addArrayBufferTransferable(transferables, request.vectorOnly?.cellIndices.buffer);
   return transferables;
 }
 

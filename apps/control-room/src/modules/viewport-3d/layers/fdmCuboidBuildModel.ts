@@ -104,11 +104,19 @@ export interface FdmCuboidBuildRequest {
   realizedRegionIds: Uint32Array | null;
   vectorAnchorMode: Viewport3DVectorAnchorMode;
   vectorField?: DecodedFieldVector | null;
+  /** Optional vector-only payload. When present no cuboid model is built. */
+  vectorOnly?: FdmVectorOnlyBuildInput | null;
   vectorGeometryScope?: "full" | "surface";
   vectorScale: number;
   voxelFillRatio: number;
   voxelMagnitudeThreshold: number;
   voxelTopography: FdmVoxelTopographyOptions;
+}
+
+export interface FdmVectorOnlyBuildInput {
+  anchors: Float32Array;
+  cellIndices: Uint32Array;
+  gridShape: [number, number, number];
 }
 
 export interface FdmCuboidBuildResult {
@@ -121,6 +129,21 @@ export interface FdmCuboidBuildResult {
 export function buildViewport3DFdmCuboid(
   request: FdmCuboidBuildRequest,
 ): FdmCuboidBuildResult {
+  if (request.vectorOnly) {
+    const vectorSegments = buildFdmVectorSegmentsFromAnchors({
+      anchorMode: request.vectorAnchorMode,
+      fieldVector: request.vectorField,
+      geometryScope: request.vectorGeometryScope ?? "full",
+      maxVectors: request.maxVectorGlyphs,
+      scale: request.vectorScale,
+      ...request.vectorOnly,
+    });
+    return {
+      model: null,
+      vectorCellIndices: vectorSegments?.cellIndices ?? null,
+      vectorSegments: vectorSegments?.segments ?? null,
+    };
+  }
   const model = request.cellSelection === "dense"
     ? buildFdmMaskedNativeLayerInstanceModel(
         request.domain,
@@ -157,6 +180,127 @@ export function buildViewport3DFdmCuboid(
     request.vectorGeometryScope ?? "full",
   );
   return { model, vectorCellIndices, vectorSegments };
+}
+
+export interface FdmVectorOnlyBuildRequest extends FdmVectorOnlyBuildInput {
+  anchorMode: Viewport3DVectorAnchorMode;
+  fieldVector: DecodedFieldVector | null | undefined;
+  geometryScope?: "full" | "surface";
+  maxVectors: number;
+  scale: number;
+}
+
+export interface FdmVectorOnlyBuildResult {
+  cellIndices: Uint32Array;
+  segments: Float32Array;
+}
+
+/**
+ * Builds vector segments directly from sampled anchors. This is intentionally
+ * independent from the cuboid carrier so quantity switches do not rebuild or
+ * copy inactive-cell matrices merely to update arrows.
+ */
+export function buildFdmVectorSegmentsFromAnchors(
+  request: FdmVectorOnlyBuildRequest,
+): FdmVectorOnlyBuildResult | null {
+  const { anchors, cellIndices, fieldVector, maxVectors } = request;
+  if (
+    !fieldVector ||
+    fieldVector.nComp < 3 ||
+    fieldVector.pointCount <= 0 ||
+    maxVectors <= 0 ||
+    anchors.length < cellIndices.length * 3
+  ) {
+    return null;
+  }
+  const indexing = buildFdmFieldIndexResolver(
+    fieldVector,
+    request.gridShape[0] * request.gridShape[1] * request.gridShape[2],
+  );
+  if (indexing.status !== "compatible") return null;
+
+  const candidates: number[] = [];
+  for (let ordinal = 0; ordinal < cellIndices.length; ordinal += 1) {
+    if (indexing.resolve(cellIndices[ordinal] ?? -1) !== null) {
+      candidates.push(ordinal);
+    }
+  }
+  const scoped = request.geometryScope === "surface"
+    ? resolveAnchorSurfaceOrdinals(candidates, cellIndices, request.gridShape)
+    : candidates;
+  const count = Math.min(scoped.length, Math.floor(maxVectors));
+  if (count <= 0) return null;
+  const stride = Math.max(1, Math.floor(scoped.length / count));
+  const selected = new Uint32Array(count);
+  for (let index = 0; index < count; index += 1) {
+    selected[index] = scoped[Math.min(scoped.length - 1, index * stride)] ?? 0;
+  }
+
+  let maxMagnitude = 0;
+  for (const ordinal of selected) {
+    const fieldIndex = indexing.resolve(cellIndices[ordinal] ?? -1);
+    if (fieldIndex === null) continue;
+    const offset = fieldIndex * fieldVector.nComp;
+    maxMagnitude = Math.max(
+      maxMagnitude,
+      Math.hypot(
+        fieldVector.values[offset] ?? 0,
+        fieldVector.values[offset + 1] ?? 0,
+        fieldVector.values[offset + 2] ?? 0,
+      ),
+    );
+  }
+  const segments = new Float32Array(count * FDM_VECTOR_SEGMENT_STRIDE);
+  const halfScale = Math.max(request.scale, 1e-12) / 2;
+  const scaleMagnitude = Math.max(maxMagnitude, 1e-12);
+  for (let index = 0; index < count; index += 1) {
+    const ordinal = selected[index] ?? 0;
+    const anchorOffset = ordinal * 3;
+    const fieldIndex = indexing.resolve(cellIndices[ordinal] ?? -1);
+    if (fieldIndex === null) continue;
+    const valueOffset = fieldIndex * fieldVector.nComp;
+    const vx = fieldVector.values[valueOffset] ?? 0;
+    const vy = fieldVector.values[valueOffset + 1] ?? 0;
+    const vz = fieldVector.values[valueOffset + 2] ?? 0;
+    const length = Math.hypot(vx, vy, vz) || 1;
+    const ux = vx / length;
+    const uy = vy / length;
+    const uz = vz / length;
+    const target = index * FDM_VECTOR_SEGMENT_STRIDE;
+    const x = anchors[anchorOffset] ?? 0;
+    const y = anchors[anchorOffset + 1] ?? 0;
+    const z = anchors[anchorOffset + 2] ?? 0;
+    const half = request.anchorMode === "tail" ? 0 : halfScale;
+    segments[target] = x - ux * half;
+    segments[target + 1] = y - uy * half;
+    segments[target + 2] = z - uz * half;
+    segments[target + 3] = request.anchorMode === "tail" ? x + ux * request.scale : x + ux * halfScale;
+    segments[target + 4] = request.anchorMode === "tail" ? y + uy * request.scale : y + uy * halfScale;
+    segments[target + 5] = request.anchorMode === "tail" ? z + uz * request.scale : z + uz * halfScale;
+    segments[target + 6] = length / scaleMagnitude;
+  }
+  return {
+    cellIndices: Uint32Array.from(selected, (ordinal) => cellIndices[ordinal] ?? 0),
+    segments,
+  };
+}
+
+function resolveAnchorSurfaceOrdinals(
+  candidates: readonly number[],
+  cellIndices: Uint32Array,
+  [nx, ny, nz]: readonly [number, number, number],
+): number[] {
+  if (candidates.length <= 1) return [...candidates];
+  const cells = new Set(candidates.map((ordinal) => cellIndices[ordinal] ?? -1));
+  return candidates.filter((ordinal) => {
+    const cell = cellIndices[ordinal] ?? -1;
+    const ix = cell % nx;
+    const iy = Math.floor(cell / nx) % ny;
+    const iz = Math.floor(cell / (nx * ny)) % nz;
+    if (ix === 0 || iy === 0 || iz === 0 || ix === nx - 1 || iy === ny - 1 || iz === nz - 1) return true;
+    const xy = nx * ny;
+    return ![cell - 1, cell + 1, cell - nx, cell + nx, cell - xy, cell + xy].every((neighbor) => cells.has(neighbor));
+  });
 }
 
 export function buildFdmCuboidInstanceModel(
@@ -846,13 +990,17 @@ export function estimateFdmCuboidBuildInputBytes(
     estimateFieldVectorBytes(request.vectorField) +
     (request.nativeActiveMask?.byteLength ?? 0) +
     (request.realizedRegionIds?.byteLength ?? 0)
+    + (request.vectorOnly?.anchors.byteLength ?? 0)
+    + (request.vectorOnly?.cellIndices.byteLength ?? 0)
   );
 }
 
 export function estimateFdmCuboidBuildOutputBytes(
   request: FdmCuboidBuildRequest,
 ): number {
-  const modelCount = Math.max(0, request.domain?.displayCellCount ?? 0);
+  const modelCount = request.vectorOnly
+    ? 0
+    : Math.max(0, request.domain?.displayCellCount ?? 0);
   const vectorCount = Math.min(
     modelCount,
     Math.max(0, request.vectorField?.pointCount ?? 0),

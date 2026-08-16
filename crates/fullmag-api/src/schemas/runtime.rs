@@ -370,6 +370,18 @@ pub struct CommandStatusResource {
     pub error: Option<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, ToSchema)]
+pub struct FieldMaterializationRequirement {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub quantity_ids: Vec<String>,
+    pub scope_kind: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub scope_id: Option<String>,
+    pub generation_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub carrier_fingerprint: Option<String>,
+}
+
 #[derive(Debug, Serialize, Deserialize, ToSchema)]
 pub struct CommandDetailResource {
     pub command_id: String,
@@ -401,6 +413,8 @@ pub struct CommandDetailResource {
     pub resource_invalidations: Vec<CommandResourceInvalidationResource>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub diagnostics: Vec<CommandDiagnosticReferenceResource>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub field_materialization_requirements: Vec<FieldMaterializationRequirement>,
     pub status: String,
     pub created_at_unix_ms: u128,
     #[serde(skip_serializing_if = "Option::is_none")]

@@ -1523,6 +1523,7 @@ async fn test_router_with_runtime_read_models() -> axum::Router {
                 preview_config: None,
                 stages: None,
                 profile: None,
+                field_materialization_requirements: Vec::new(),
             },
             request_id: Some("req-cmd-1".into()),
             status: CommandLifecycleState::Queued,
@@ -1563,6 +1564,7 @@ async fn test_router_with_runtime_read_models() -> axum::Router {
                 preview_config: None,
                 stages: None,
                 profile: None,
+                field_materialization_requirements: Vec::new(),
             },
             request_id: Some("req-cmd-2".into()),
             status: CommandLifecycleState::Dispatched,
@@ -1603,6 +1605,7 @@ async fn test_router_with_runtime_read_models() -> axum::Router {
                 preview_config: None,
                 stages: None,
                 profile: None,
+                field_materialization_requirements: Vec::new(),
             },
             request_id: Some("req-cmd-3".into()),
             status: CommandLifecycleState::Completed,
@@ -4298,6 +4301,73 @@ async fn field_vector_returns_204_for_known_field_that_is_not_available_yet() {
 
     assert_eq!(response.status(), StatusCode::NO_CONTENT);
     assert!(body_bytes(response).await.is_empty());
+}
+
+#[tokio::test]
+async fn field_vector_returns_pending_metadata_for_materializer_request() {
+    use fullmag_runner::{LiveFieldMaterializationState, LiveFieldMaterializationStatus};
+
+    let state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.live_state = Some(LiveState {
+            status: "running".into(),
+            updated_at_unix_ms: 1_700_000_000_100,
+            latest_step: StepUpdateView {
+                step: 4,
+                time: 4.0e-12,
+                dt: 1.0e-13,
+                pseudo_time_s: None,
+                e_ex: 0.0,
+                e_demag: 0.0,
+                e_ext: 0.0,
+                e_ani: 0.0,
+                e_dmi: 0.0,
+                e_total: 0.0,
+                max_dm_dt: 0.0,
+                max_h_eff: 0.0,
+                max_h_demag: 0.0,
+                max_torque_Apm: 0.0,
+                max_torque_T: 0.0,
+                wall_time_ns: 0,
+                grid: [1, 1, 1],
+                fem_mesh_generation_id: None,
+                fem_mesh: None,
+                magnetization: None,
+                per_object_scalars: Default::default(),
+                field_materialization_states: vec![LiveFieldMaterializationStatus {
+                    quantity: "H_eff".into(),
+                    source_step: 4,
+                    request_revision: 12,
+                    state: LiveFieldMaterializationState::Pending,
+                    error: None,
+                }],
+                preview_field: None,
+                finished: false,
+            },
+        });
+    }
+    let app = build_v2_router().with_state(state);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/fields/H_eff/samples/vector")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::ACCEPTED);
+    let pending = body_json(response).await;
+    assert_eq!(pending["state"], "pending");
+    assert_eq!(pending["reason_code"], "field_materialization_pending");
+    assert_eq!(pending["retry_after_ms"], 250);
+    assert_eq!(pending["quantity_id"], "H_eff");
+    assert_eq!(pending["scope_kind"], "full");
+    assert!(pending["scope_id"].is_null());
+    assert!(pending["generation_id"].is_string());
+    assert!(pending["command_id"].is_null());
 }
 
 #[tokio::test]
@@ -18345,6 +18415,7 @@ async fn commands_endpoint_rejects_resource_revision_precondition_mismatches() {
                 preview_config: None,
                 stages: None,
                 profile: None,
+                field_materialization_requirements: Vec::new(),
             },
             request_id: None,
             status: CommandLifecycleState::Queued,
@@ -18799,6 +18870,7 @@ async fn command_detail_endpoint_exposes_stage_state_linkage() {
                 preview_config: None,
                 stages: None,
                 profile: None,
+                field_materialization_requirements: Vec::new(),
             },
             request_id: None,
             status: CommandLifecycleState::Completed,
@@ -24270,9 +24342,9 @@ async fn fdm_multilayer_airbox_field_catalog_meta_and_vector_use_target_carrier(
     );
     assert_eq!(
         vector.headers()["x-fullmag-field-indexing"],
-        "explicit_node_indices"
+        "sampled_node_indices"
     );
-    assert_eq!(vector.headers()["x-fullmag-point-count"], "4");
+    assert_eq!(vector.headers()["x-fullmag-point-count"], "1");
     assert_eq!(vector.headers()["x-fullmag-field-revision"], "17");
     assert_eq!(
         vector.headers()["x-fullmag-domain-generation-id"],
@@ -24293,10 +24365,10 @@ async fn fdm_multilayer_airbox_field_catalog_meta_and_vector_use_target_carrier(
         ("airbox".into(), "airbox".into())
     );
     assert_eq!(decode_fmvp_topology_revision(&bytes), carrier_revision);
-    assert_eq!(decode_fmvp_node_indices(&bytes), vec![0, 1, 2, 3]);
+    assert_eq!(decode_fmvp_node_indices(&bytes), vec![0]);
     assert_eq!(
         decode_fmvp_payload_f64(&bytes),
-        vec![1.0, 0.0, 0.0, 0.0, 2.0, 0.0, 0.0, 0.0, 3.0, 4.0, 5.0, 6.0]
+        vec![1.0, 0.0, 0.0]
     );
 
     {
@@ -25444,6 +25516,23 @@ async fn fdm_multilayer_field_vector_layer_scope_uses_native_layer_layout() {
         ],
         [1, 1, 1]
     );
+
+    let sampled = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/fields/m/samples/vector?scope_kind=layer&scope_id=layer%3Atop&max_samples=1")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(sampled.status(), StatusCode::OK);
+    assert_eq!(sampled.headers()["x-fullmag-point-count"], "1");
+    assert_eq!(sampled.headers()["x-fullmag-field-indexing"], "sampled_node_indices");
+    let sampled_bytes = body_bytes(sampled).await;
+    assert_eq!(decode_fmvp_node_indices(&sampled_bytes), vec![0]);
+    assert_eq!(decode_fmvp_payload_f64(&sampled_bytes), vec![1.0, 0.0, 0.0]);
 
     if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
         snapshot.metadata.as_mut().unwrap()["artifact_layout"]["layers"][1]["magnet_name"] =

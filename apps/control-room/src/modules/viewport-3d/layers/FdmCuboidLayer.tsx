@@ -608,6 +608,8 @@ export interface FdmCuboidAsyncBuildInput {
   nativeActiveMask?: Uint8Array | null;
   realizedRegionIds: Uint32Array | null;
   revisionSummary: string;
+  /** Stable carrier/grid identity used to retain a last-good model. */
+  topologyKey?: string | null;
   vectorAnchorMode: Viewport3DVectorAnchorMode;
   vectorField?: DecodedFieldVector | null;
   vectorGeometryScope?: "full" | "surface";
@@ -634,6 +636,7 @@ const EMPTY_FDM_CUBOID_BUILD_RESULTS = new Map<string, FdmCuboidBuildState>();
 function createFdmCuboidBuildResultsController(): FdmCuboidBuildResultsController {
   let snapshot: ReadonlyMap<string, FdmCuboidBuildState> =
     EMPTY_FDM_CUBOID_BUILD_RESULTS;
+  const topologyKeys = new Map<string, string | null>();
   const listeners = new Set<() => void>();
   const publish = (next: ReadonlyMap<string, FdmCuboidBuildState>) => {
     snapshot = next;
@@ -641,21 +644,29 @@ function createFdmCuboidBuildResultsController(): FdmCuboidBuildResultsControlle
   };
   const begin = (entries: readonly FdmCuboidAsyncBuildEntry[]) => {
     const next = new Map(
-      entries.flatMap((entry) =>
-        entry.enabled && entry.buildKey
-          ? [[
-              entry.id,
-              snapshot.get(entry.id)?.buildKey === entry.buildKey
-                ? snapshot.get(entry.id)!
-                : {
-                    buildKey: entry.buildKey,
-                    error: null,
-                    result: null,
-                    status: "pending" as const,
-                  },
-            ] as const]
-          : [],
-      ),
+      entries.flatMap((entry) => {
+        if (!entry.enabled || !entry.buildKey) return [];
+        const previous = snapshot.get(entry.id);
+        const previousTopologyKey = topologyKeys.get(entry.id) ?? null;
+        const topologyKey = entry.topologyKey ?? null;
+        topologyKeys.set(entry.id, topologyKey);
+        const retainLastGood =
+          previous?.result !== null &&
+          previousTopologyKey !== null &&
+          topologyKey !== null &&
+          previousTopologyKey === topologyKey;
+        return [[
+          entry.id,
+          previous?.buildKey === entry.buildKey
+            ? previous
+            : {
+                buildKey: entry.buildKey,
+                error: null,
+                result: retainLastGood ? previous?.result ?? null : null,
+                status: "pending" as const,
+              },
+        ] as const];
+      }),
     );
     if (
       next.size === snapshot.size &&
@@ -675,7 +686,7 @@ function createFdmCuboidBuildResultsController(): FdmCuboidBuildResultsControlle
       publish(new Map(snapshot).set(id, {
         buildKey,
         error: error instanceof Error ? error : new Error(String(error)),
-        result: null,
+        result: current.result,
         status: "error",
       }));
     },
@@ -830,6 +841,7 @@ export function useFdmCuboidBuildResult({
   modelFieldVector,
   realizedRegionIds,
   revisionSummary,
+  topologyKey,
   vectorAnchorMode,
   vectorField,
   vectorScale,
@@ -882,7 +894,11 @@ export function useFdmCuboidBuildResult({
       return;
     }
 
-    store.begin(buildKey);
+    if (topologyKey) {
+      store.begin(buildKey, topologyKey);
+    } else {
+      store.begin(buildKey);
+    }
     const abortController = new AbortController();
     void buildViewport3DFdmCuboidOffMainThread(request, {
       buildKey,
@@ -903,7 +919,7 @@ export function useFdmCuboidBuildResult({
     return () => {
       abortController.abort();
     };
-  }, [buildKey, groupKey, request, revisionSummary, store]);
+  }, [buildKey, groupKey, request, revisionSummary, store, topologyKey]);
 
   if (!request) return undefined;
   return resolveFdmCuboidBuildState({

@@ -12,7 +12,7 @@ export interface FdmCuboidBuildState {
 export type FdmCuboidBuildSnapshot = FdmCuboidBuildState;
 
 export interface FdmCuboidBuildStateController {
-  readonly begin: (buildKey: string) => void;
+  readonly begin: (buildKey: string, topologyKey?: string | null) => void;
   readonly getSnapshot: () => FdmCuboidBuildSnapshot;
   readonly reject: (buildKey: string, error: unknown) => void;
   readonly resolve: (buildKey: string, result: FdmCuboidBuildResult) => void;
@@ -55,6 +55,7 @@ export function resolveFdmCuboidBuildState({
 
 export function createFdmCuboidBuildStateController(): FdmCuboidBuildStateController {
   let snapshot = EMPTY_FDM_CUBOID_BUILD_SNAPSHOT;
+  let topologyKey: string | null = null;
   const listeners = new Set<() => void>();
   const publish = (nextSnapshot: FdmCuboidBuildSnapshot) => {
     if (snapshot === nextSnapshot) return;
@@ -63,8 +64,17 @@ export function createFdmCuboidBuildStateController(): FdmCuboidBuildStateContro
   };
 
   return {
-    begin: (buildKey) =>
-      publish({ buildKey, error: null, result: null, status: "pending" }),
+    begin: (buildKey, nextTopologyKey = null) => {
+      const retainLastGood =
+        nextTopologyKey !== null && topologyKey !== null && nextTopologyKey === topologyKey;
+      topologyKey = nextTopologyKey;
+      publish({
+        buildKey,
+        error: null,
+        result: retainLastGood ? snapshot.result : null,
+        status: "pending",
+      });
+    },
     getSnapshot: () => snapshot,
     reject: (buildKey, error) => {
       if (snapshot.buildKey !== buildKey || isFdmCuboidBuildAbortError(error)) {
@@ -73,7 +83,7 @@ export function createFdmCuboidBuildStateController(): FdmCuboidBuildStateContro
       publish({
         buildKey,
         error: error instanceof Error ? error : new Error(String(error)),
-        result: null,
+        result: snapshot.result,
         status: "error",
       });
     },

@@ -599,4 +599,42 @@ describe("VisualizationRegistrySyncController", () => {
     expect(patchSpy).toHaveBeenNthCalledWith(2, patch);
     expect(controller.getSnapshot().mutation?.status).toBe("succeeded");
   });
+
+  it("retains interleaved optimistic target overrides by scope identity", () => {
+    const { controller } = createController({ now: () => 0 });
+    const remote = visualizationState(10);
+    controller.observeRemoteState(remote);
+
+    controller.queuePatch({
+      overrides: [
+        {
+          scope: "object",
+          scope_id: "object:a",
+          style: { vector_budget: 111 },
+        },
+      ],
+    });
+    controller.queuePatch({
+      overrides: [
+        {
+          scope: "object",
+          scope_id: "object:b",
+          style: { vector_budget: 222 },
+        },
+      ],
+    });
+
+    expect(controller.getSnapshot().pendingPatch?.overrides).toEqual([
+      {
+        scope: "object",
+        scope_id: "object:a",
+        style: { vector_budget: 111 },
+      },
+      {
+        scope: "object",
+        scope_id: "object:b",
+        style: { vector_budget: 222 },
+      },
+    ]);
+  });
 });

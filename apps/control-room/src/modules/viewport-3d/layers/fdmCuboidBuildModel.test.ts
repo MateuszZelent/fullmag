@@ -11,6 +11,7 @@ import {
   buildFdmDenseNativeLayerInstanceModel,
   buildFdmMaskedNativeLayerInstanceModel,
   buildViewport3DFdmCuboid,
+  buildFdmVectorSegmentsFromAnchors,
   estimateFdmCuboidBuildOutputBytes,
   resolveFdmCuboidMembershipRevision,
   transferablesForFdmCuboidBuildResult,
@@ -44,6 +45,21 @@ function fieldVector(
 }
 
 describe("FDM cuboid realized membership", () => {
+  it("builds a sampled vector stream from anchors without constructing a cuboid model", () => {
+    const result = buildFdmVectorSegmentsFromAnchors({
+      anchorMode: "center",
+      anchors: new Float32Array([0, 0, 0, 1, 0, 0, 2, 0, 0]),
+      cellIndices: new Uint32Array([0, 1, 2]),
+      fieldVector: fieldVector([1, 0, 0, 0, 1, 0, 0, 0, 1]),
+      gridShape: [3, 1, 1],
+      maxVectors: 2,
+      scale: 1,
+    });
+
+    expect(result?.cellIndices.length).toBe(2);
+    expect(result?.segments.length).toBe(2 * 7);
+  });
+
   it("does not scan a copied selected set for every matching cell after the budget is full", () => {
     expect(fdmCuboidBuildModelSource).not.toContain(
       "const inactiveReplacement = [...selected]",

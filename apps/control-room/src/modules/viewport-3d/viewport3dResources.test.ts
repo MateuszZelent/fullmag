@@ -72,6 +72,26 @@ function fieldResponseMetadata(
 }
 
 describe("viewport3dResources", () => {
+  it("loads collection members independently instead of atomically awaiting Promise.all", () => {
+    const source = readFileSync(viewport3dResourcesSourceUrl, "utf8");
+    const quantityCollectionSource = source.slice(
+      source.indexOf("export function useViewport3DQuantityFieldVectors"),
+      source.indexOf("export function useViewport3DPartFieldVectors"),
+    );
+    const partCollectionSource = source.slice(
+      source.indexOf("export function useViewport3DPartFieldVectors"),
+      source.indexOf("export function useViewport3DMeshQualityData"),
+    );
+    const airboxCollectionSource = source.slice(
+      source.indexOf("export function useViewport3DAirboxFieldVectors"),
+      source.indexOf("function isViewport3DAirboxFieldVectorRequestMap"),
+    );
+
+    expect(quantityCollectionSource).not.toContain("Promise.all(");
+    expect(partCollectionSource).not.toContain("Promise.all(");
+    expect(airboxCollectionSource).not.toContain("Promise.all(");
+  });
+
   it("binds field data and response metadata from the same cache entry", () => {
     const cache = new ResourceCache<
       DecodedFieldVector,
