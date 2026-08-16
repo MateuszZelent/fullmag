@@ -40,6 +40,47 @@ Changing a presentation option must not change the monitor or the sampled
 physical operator. A solver GPU field consumed by the current CPU sampler is a
 GPU-source/CPU-sampling path; it is not native GPU sampling.
 
+(default-planar-source-contract)=
+### Authored monitor and session-resolved default source
+
+The planar view has two source identities. An authored `PlanarMonitor` is a
+durable model object: it is created explicitly, round-trips through
+`SceneDocument`, `ProblemIR`, and canonical Python, and owns its target, frame,
+extent, and operator. `Default` is a session-resolved planar source: it is
+derived from `visualization/state.planar` and the current published domain
+metadata, is not a model object, and must never be serialized as a monitor.
+
+| Source | Owner | Persistence | Python / `ProblemIR` | Resolved physical definition |
+|---|---|---:|---:|---|
+| Authored `PlanarMonitor` | `SceneDocument.monitors.planar[]` | model | yes | authored target, frame, extent, and operator |
+| `Default` | session visualization state + domain metadata | session | no | domain target, axis-preset frame, resolved extent, and default operator |
+
+After source resolution, both identities use the same frame validation,
+interpolation, occupancy handling, physical-measure integration, and
+measure-weighted reduction. Only the provenance of the target, frame, and
+operator differs. `Default` therefore cannot be implemented by inventing a
+monitor ID or by using a separate browser-side sampler.
+
+For `Default`, the normal-axis coordinate is resolved from the published
+domain bounds. Let $\phi$ be the validated dimensionless
+`position_fraction`, and let $b_{\min}$ and $b_{\max}$ be the finite SI bounds
+along the selected normal. The resolved `position_m` is
+
+```{math}
+:label: eq-planar-default-position
+\phi=\operatorname{clamp}(\mathrm{position\_fraction},0,1),\qquad
+p_n=b_{\min}+\phi\bigl(b_{\max}-b_{\min}\bigr),
+\quad b_{\min},b_{\max},p_n\in\mathrm{m}.
+```
+
+Public state validation rejects non-finite `position_fraction` or a value
+outside $[0,1]$; the clamp in the resolver is defensive for migrated state.
+`position_m` must be finite and lie within the selected normal bounds.
+The initial default is `xy`, $\phi=0.5$, and `plane_sample`. A default
+`slab_average` is legal only with finite `thickness_m` and $t>0$; depth and surface
+operators remain authored-monitor capabilities until they have an explicit
+source and Inspector contract.
+
 (planar-monitor-governing-equations)=
 ## Governing equations
 
@@ -218,6 +259,9 @@ exceed $10^{-12}$ times the maximum raster vector norm receive
 | $S^{\mathrm{depth}}_{ij}$ | Full-depth pixel-prism support | $\mathrm{m^3}$ |
 | $S^{\mathrm{surface}}_{ij}$ | Selected boundary support projected into a pixel | $\mathrm{m^2}$ |
 | $t$ | Full slab thickness | $\mathrm{m}$ |
+| $\phi$ | Validated default-source position fraction | $1$ |
+| $p_n$ | Resolved physical coordinate along the selected normal | $\mathrm{m}$ |
+| $b_{\min},b_{\max}$ | Published domain bounds along the selected normal | $\mathrm{m}$ |
 | $M_{ij}$ | Occupied volume or area | $\mathrm{m^3}\ \text{or}\ \mathrm{m^2}$ |
 | $q$ | Scalar source quantity | $[q]$ |
 | $\mathbf q$ | Vector source quantity | $[q]$ |
@@ -364,6 +408,23 @@ study.stages.add_run(stage_id="sample", until=1e-15)
 `required` means that the public factory has no default. Units describe the
 parameter itself, not the sampled quantity.
 
+### Session-resolved default-source state (not Python API)
+
+The following fields belong to the session visualization contract, not to
+`PlanarMonitor`, canonical Python, or `ProblemIR`. They are resolved by the
+backend before the common sampler is called.
+
+| Field | Type | Default | SI unit | Validation | Meaning | Lane status | `ProblemIR` destination |
+|---|---|---|---|---|---|---|---|
+| Session-resolved `Default` source contract | `docs/physics/0970-planar-monitor-sampling-and-projection.md` | `DOC-ANCHOR:default-planar-source-contract` | Distinguish session source resolution from authored monitor state without claiming a typed implementation | all | Task 0 documentation regression; typed state/resolver tests deferred | planned contract | pending implementation |
+| `default_slice.position_fraction` | `float` | `0.5` | $1$ | finite and in $[0,1]$; public out-of-range values reject | Dimensionless position between the published bounds along the selected normal | planned typed session contract; no qualification yet | none |
+| resolved `position_m` | `float` | resolved from domain bounds | $\mathrm{m}$ | finite and within `[normal_min_m, normal_max_m]`; read-only resolved value | Physical coordinate used to construct the default frame | planned typed session contract; no qualification yet | none |
+| `default_slice.operator.thickness_m` | `float` | absent for `plane_sample` | $\mathrm{m}$ | required and strictly positive for `slab_average`; absent for `plane_sample` | Full slab thickness passed to the common measure-weighted sampler | planned typed session contract; no qualification yet | none |
+
+These fields do not add a second numerical method. `position_fraction` and
+`position_m` select the target/frame provenance for `Default`; `thickness_m`
+selects the same slab operator already documented for authored monitors.
+
 | Python | Type | Default | SI unit | Validation | Meaning | Backend support | `ProblemIR` destination |
 |---|---|---|---|---|---|---|---|
 | `fullmag.model.StudyMonitorRegistry.add_planar.name` | `str` | `required` | $1$ | non-empty and unique in the study | Authored monitor name; normally called as `study.monitors.add_planar(name=...)` | FDM/FEM CPU/GPU authoring | `planar_monitors[].name` |
@@ -457,6 +518,11 @@ right-handedness, normalization version, extents, thickness, and the
 `include_air_as_zero` restriction. Missing `planar_monitors` in older payloads
 normalizes to an empty list.
 
+`Default` is deliberately absent from this representation. It is resolved
+from session visualization state and current domain metadata at data-plane
+request time; opening 2D or selecting `Default` does not append a
+`planar_monitors[]` entry, mutate `SceneDocument`, or change canonical Python.
+
 (planar-monitor-round-trip-and-failure-semantics)=
 ## Round-trip and failure semantics
 
@@ -464,7 +530,11 @@ Canonical Python export uses `study.monitors.add_planar(...)` and preserves
 semantic equality through Python → `ProblemIR` → `SceneDocument` → canonical
 Python → `ProblemIR`. The authored monitor contains requested intent. Dynamic
 bounds and runtime scopes are resolved execution facts and must not overwrite
-that intent.
+that intent. The session-resolved `Default` source follows a separate path:
+its source selection and default slice controls are session presentation state,
+while its resolved target, frame, and operator are ephemeral execution facts.
+They never become an authored monitor, a `ProblemIR` entry, or a canonical
+Python statement.
 
 Validation errors reject non-finite or degenerate frames, invalid extents,
 duplicate identities, missing targets, invalid policies, and non-positive slab
@@ -491,12 +561,12 @@ and must preserve both requested intent and resolved execution in provenance.
 The source lane names the solver that produced the published field. All
 currently implemented sampling kernels execute on CPU.
 
-| Source lane | Target and runtime-scope legality | Required source carrier | Legal current operators | Sampler | Qualification at audited source |
-|---|---|---|---|---|---|
-| FDM CPU | `domain`: full rectangular carrier; `magnetic_domain`: all active cells; `region`: exact numeric membership; `object`: only conditionally correct for single-object/all-active-equivalent grids and incorrect for general multi-object grids; `mesh_part`/`airbox`: unsupported; every dynamic extent tag is unqualified because all three reuse post-target selected-mask bounds | Published cell-centred structured-grid field plus matching membership for non-domain targets; explicit extent required | plane, slab, depth; surface unsupported | CPU binary64 | managed science artifact passed only for its explicit/fixture extent; multi-object object targeting, all dynamic extent policies, and end-to-end runtime/browser/production remain unqualified because the same recipe ended RED in the browser |
-| FDM GPU | Same target and dynamic-extent restrictions as FDM CPU after compatible field transport | Compatible transported cell-centred structured-grid field; source device/precision is absent from planar metadata; explicit extent required | plane, slab, depth; surface unsupported | CPU binary64 | source-compatible by code path only; no fresh GPU-source/device proof, no correct distinct dynamic-policy proof, no multi-object object-target proof, and no native GPU sampling |
-| FEM CPU | Authored target plus optional intersecting `mesh_part`/`airbox` element scope; scoped dynamic extents are incorrect because all dynamic kinds use global mesh nodes | Complete published tetrahedral P1 nodal field over all mesh nodes; scoped/local and higher-order carriers unsupported | plane, slab, depth, `object_boundary` surface; use explicit extent for scoped correctness | CPU binary64 | focused numerical/API tests exist; dynamic scoped extents, fresh managed FEM, browser, runtime, and production are unqualified |
-| FEM GPU | Same target, scope, dynamic-extent, and surface restrictions as FEM CPU after compatible field transport | Complete transported tetrahedral P1 nodal field over all mesh nodes; source device/precision is absent from planar metadata | same P1 operators as FEM CPU; use explicit extent for scoped correctness | CPU binary64 | source-compatible by code path only; no fresh GPU-source/device proof, no scoped dynamic-extent proof, and no native GPU sampling |
+| Source lane | Target and runtime-scope legality | Required source carrier | Legal current operators | Sampler | Default-source contract | Qualification at audited source |
+|---|---|---|---|---|---|---|
+| FDM CPU | `domain`: full rectangular carrier; `magnetic_domain`: all active cells; `region`: exact numeric membership; `object`: only conditionally correct for single-object/all-active-equivalent grids and incorrect for general multi-object grids; `mesh_part`/`airbox`: unsupported; every dynamic extent tag is unqualified because all three reuse post-target selected-mask bounds | Published cell-centred structured-grid field plus matching membership for non-domain targets; explicit extent required for authored monitors | plane, slab, depth; surface unsupported | CPU binary64 | `Default` resolves a full-domain target and axis-preset frame, then reuses these operators; it adds no qualification to the lane | managed science artifact passed only for its explicit/fixture extent; multi-object object targeting, all dynamic extent policies, default-source runtime/browser/production, and end-to-end runtime remain unqualified because the same recipe ended RED in the browser |
+| FDM GPU | Same target and dynamic-extent restrictions as FDM CPU after compatible field transport | Compatible transported cell-centred structured-grid field; source device/precision is absent from planar metadata; explicit extent required for authored monitors | plane, slab, depth; surface unsupported | CPU binary64 | `Default` is source-compatible with the same CPU sampler only; no device identity or native GPU sampler is implied | no fresh GPU-source/device proof, no correct distinct dynamic-policy proof, no multi-object object-target proof, and no native GPU sampling |
+| FEM CPU | Authored target plus optional intersecting `mesh_part`/`airbox` element scope; scoped dynamic extents are incorrect because all dynamic kinds use global mesh nodes | Complete published tetrahedral P1 nodal field over all mesh nodes; scoped/local and higher-order carriers unsupported | plane, slab, depth, `object_boundary` surface; use explicit extent for scoped correctness | CPU binary64 | `Default` resolves the published domain target and axis-preset frame, then reuses the P1 sampler; it adds no qualification to the lane | focused numerical/API tests exist; dynamic scoped extents, default-source resolution, fresh managed FEM, browser, runtime, and production are unqualified |
+| FEM GPU | Same target, scope, dynamic-extent, and surface restrictions as FEM CPU after compatible field transport | Complete transported tetrahedral P1 nodal field over all mesh nodes; source device/precision is absent from planar metadata | same P1 operators as FEM CPU; use explicit extent for scoped correctness | CPU binary64 | `Default` is source-compatible with the same CPU sampler only; no device identity or native GPU sampling is implied | no fresh GPU-source/device proof, no scoped dynamic-extent/default-source proof, and no native GPU sampling |
 
 ### FDM realization
 
@@ -574,6 +644,12 @@ measure-weighted result to remain invariant.
 (planar-monitor-implementation-mapping)=
 ## Implementation mapping
 
+The `Default` source is a documentation/API contract in this task, not an
+implemented source symbol. The typed state, source discriminator, and resolver
+are deliberately deferred to the later implementation task. Until then, this
+page maps the contract to the stable `default-planar-source-contract` anchor
+and does not claim runtime execution, source parity, or qualification.
+
 The public model, IR, runtime sampler, API resource, and UI renderer are
 separate owners. The API resolves authored target/extent and presentation
 query into `ResolvedPlanarSampleRequest`, then invokes
@@ -644,8 +720,19 @@ silent clamp. New HTTP and OpenAPI payloads expose only `range` and
 | PM-N12 | FEM target/scope dynamic extents | each dynamic extent follows its named target/scope rather than all mesh nodes; the current distinct-bounds source path requires fresh per-lane qualification |
 | PM-N13 | FDM target × dynamic-extent cross-product | `target_bounds`, `magnetic_domain`, and `universe` resolve independently of target masking for `domain`, `magnetic_domain`, `object`, and `region`; the current distinct-bounds source path requires fresh per-lane qualification |
 | PM-N14 | FDM procedural grid overlay | `FMFG v1` zawiera skończone, nieduplikowane segmenty przecięcia wybranych komórek z $s=0$, zachowuje sample identity i odrzuca przekroczenie budżetu zamiast zwracać uciętą geometrię |
+| PM-D01 | default source identity | `Default` resolves from session state and domain metadata without creating a monitor, changing `ProblemIR`, or changing canonical Python |
+| PM-D02 | default position validation | `position_fraction` is finite and in $[0,1]$; resolved `position_m` is finite and inside the selected normal bounds |
+| PM-D03 | default/authored sampler parity | after source resolution, both source identities use the same interpolation and measure-weighted reduction; source provenance remains distinct |
 
 ### Task 0 evidence boundary
+
+Task 0 establishes the distinction between authored monitors and the
+session-resolved `Default` source. It does not claim that the typed default
+state, resolver, API resource family, or browser behavior already exists.
+Future source-map rows for those symbols belong to their implementation task
+and are intentionally absent here. The shared sampler equations and
+measure-weighted reductions remain the only implementation truth reused by
+both source identities.
 
 At historical exact managed source
 `5138078f7fd7b65dfc231faa4aa11c02d8ebf52d`,
@@ -700,6 +787,8 @@ Structural validation does not prove scientific correctness.
   production performance and scale invariance.
 - The failed current browser smoke blocks visible-canvas, lifecycle,
   accessibility, performance, and 3D/2D preservation qualification.
+- The session-resolved `Default` source is contract-only until its typed state,
+  resolver, data resources, and browser lifecycle are implemented and tested.
 - Movie/time-series export and simultaneous heavy center surfaces are outside
   this contract.
 - A stage output that mandates `quantity @ monitor` requires a separate output

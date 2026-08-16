@@ -1,6 +1,10 @@
 # Domyślny przekrój 2D bez wymaganego monitora — szczegółowy plan implementacji
 
 > **Status dokumentu:** zatwierdzony kierunek produktowy i plan wykonawczy; żadna opisana niżej zmiana nie jest jeszcze potwierdzeniem implementacji ani kwalifikacji produkcyjnej.
+> **Task 0 status:** documentation contract changes are implemented in the
+> working tree and remain source-tested only until the required validator and
+> contract-test commands pass. Runtime/API/UI/science/browser tasks remain
+> pending; this status must be updated only with their own evidence.
 >
 > **Stan źródeł użyty do analizy:** Fullmag `28a953c515212fbda76fbd372e14264ca672d519`, 2026-08-16. Analiza obejmuje aktualny `master`, istniejący plan refaktoryzacji 2D, kontrakty API/viewport oraz bieżące implementacje `field-map`, Inspectora i `PlanarSamplingEngine`.
 >

@@ -43,7 +43,7 @@ Wniosek: nie należy dodawać kolejnego „przełącznika 2D” ani łatać poje
 
 Zmiana jest zakończona dopiero, gdy wszystkie poniższe warunki są prawdziwe:
 
-1. przełączenie `viewport-3d ↔ field-map` zachowuje zaznaczenie, aktywny monitor, wielkość i ustawienia prezentacji oraz nie psuje stanu kamery 3D;
+1. przełączenie `viewport-3d ↔ field-map` zachowuje zaznaczenie, aktywne źródło planarnego widoku, wielkość i ustawienia prezentacji oraz nie psuje stanu kamery 3D;
 2. użytkownik może utworzyć, zduplikować, edytować i usunąć wiele monitorów oraz zobaczyć ich dokładne ramki/objętości w 3D;
 3. monitor ma jawny target, układ lokalny, rozmiar i operator; grubość jest edytowalna dla `slab_average`;
 4. FDM i FEM korzystają z tego samego kontraktu nośnika pola, ale zachowują właściwe dla siebie mapowania siatki/topologii;
@@ -294,7 +294,7 @@ Wady:
 
 ## 8. Docelowy model produktu
 
-### 8.1 Płynne przełączanie 3D/2D
+### 8.1 Płynne przełączanie 3D/2D — zastąpione przez domyślne źródło planarnego widoku
 
 Kanoniczna kontrolka przełącza aktywną powierzchnię `viewport-3d` i `field-map`. Musi być dostępna:
 
@@ -305,14 +305,25 @@ Kanoniczna kontrolka przełącza aktywną powierzchnię `viewport-3d` i `field-m
 
 Przełączenie:
 
-1. nie tworzy nowego monitora automatycznie, jeżeli istnieje aktywny;
+1. nie tworzy monitora przy wejściu do 2D, niezależnie od tego, czy zapisane
+   monitory istnieją;
 2. zachowuje aktywny quantity/component;
 3. zachowuje osobno kamerę 3D i zoom/pan 2D;
-4. zaznacza ten sam monitor w Explorerze i Inspectorze;
+4. zachowuje typed source selection; `Default` jest dostępny bez wpisu w
+   Explorerze, a authored monitor selection wskazuje zwrócone ID;
 5. nie utrzymuje ukrytej pętli renderowania;
 6. może zachować immutable cache ostatniego rastra, ale musi zweryfikować jego sample identity przed pokazaniem.
 
-Jeżeli nie ma monitora, `field-map` pokazuje pusty stan z akcjami „New monitor from current view” i „Choose existing monitor”, a nie milczący fallback do środkowej warstwy.
+Jeżeli nie ma monitora, `field-map` otwiera `Default` po przygotowaniu
+`DomainMeta`: `xy`, `position_fraction=0.5`, środek zakresu `z`. Brak domeny
+jest loading/error z kodem diagnostycznym, a nie fallbackiem klienta. Jawne
+„New monitor from current view” pozostaje osobną akcją authoringową.
+
+Wszystkie dalsze punkty tego historycznego audytu, które mówią o
+`active_monitor_id` jako właścicielu wejścia do 2D, są zastąpione przez
+`visualization/state.planar.source` oraz `default_slice`. Trwały monitor
+pozostaje encją sceny; `Default` nie trafia do `ProblemIR`, eksportu Python ani
+Explorera.
 
 ### 8.2 Monitor jako encja sceny
 
