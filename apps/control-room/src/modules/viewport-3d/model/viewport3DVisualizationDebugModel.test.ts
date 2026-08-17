@@ -162,6 +162,60 @@ describe("buildViewport3DVisualizationDebugSnapshot", () => {
     expect(JSON.stringify(result).length).toBeLessThan(64 * 1024);
   });
 
+  it("keeps per-carrier Airbox resource states and degrades the aggregate snapshot", () => {
+    const result = snapshot([
+      carrier({
+        carrierId: "part:__air__:ready",
+        fieldResourceState: {
+          dataAvailable: true,
+          lastValidDataAvailable: true,
+          reasonCode: null,
+          revision: "field-ready",
+          status: "ready",
+        },
+      }),
+      carrier({
+        carrierId: "part:__air__:stale",
+        fieldResourceState: {
+          dataAvailable: false,
+          lastValidDataAvailable: true,
+          reasonCode: "field_refresh_in_progress",
+          revision: "field-stale",
+          status: "stale",
+        },
+      }),
+      carrier({
+        carrierId: "part:__air__:pending",
+        fieldResourceState: {
+          dataAvailable: false,
+          lastValidDataAvailable: false,
+          reasonCode: "field_materialization_pending",
+          revision: null,
+          status: "pending",
+        },
+      }),
+    ]);
+
+    expect(result.disposition).toBe("degraded");
+    expect(result.disposition).not.toBe("ready");
+    expect(result.carriers.map((entry) => [
+      entry.carrierId,
+      entry.fieldResourceState?.status,
+      entry.fieldResourceState?.dataAvailable,
+      entry.fieldResourceState?.lastValidDataAvailable,
+      entry.fieldResourceState?.reasonCode,
+      entry.fieldResourceState?.revision,
+    ])).toEqual([
+      ["part:__air__:ready", "ready", true, true, null, "field-ready"],
+      ["part:__air__:stale", "stale", false, true, "field_refresh_in_progress", "field-stale"],
+      ["part:__air__:pending", "pending", false, false, "field_materialization_pending", null],
+    ]);
+    expect(result.issues).toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: "airbox-field-resource-stale" }),
+      expect.objectContaining({ code: "airbox-field-resource-pending" }),
+    ]));
+  });
+
   it("exports the exact response topology hash when FMVP stores raw hash bytes", () => {
     const base = carrier();
     const result = snapshot([

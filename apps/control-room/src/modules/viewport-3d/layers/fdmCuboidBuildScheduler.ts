@@ -39,6 +39,7 @@ interface PendingFdmCuboidBuild {
 }
 
 const FDM_CUBOID_WORKER_IDLE_TIMEOUT_MS = 30_000;
+const MAX_MAIN_THREAD_FDM_CUBOID_FALLBACK_CELLS = 4096;
 
 let fallbackFdmCuboidBuildId = 1;
 let fdmCuboidBuildJobScheduler:
@@ -140,6 +141,13 @@ async function executeFdmCuboidBuild(
   } else {
     options.recordFallback?.(
       fdmCuboidWorkerFallbackReason ?? "worker-unavailable",
+    );
+  }
+
+  if (fdmCuboidBuildExceedsMainThreadFallbackLimit(request)) {
+    throw createFdmCuboidWorkerFallbackLimitError(
+      fdmCuboidWorkerFallbackReason ?? "worker-unavailable",
+      request,
     );
   }
 
@@ -406,4 +414,41 @@ function isAbortError(error: unknown): boolean {
     (error.name === "AbortError" ||
       error.message === "FDM cuboid build aborted")
   );
+}
+
+function fdmCuboidBuildExceedsMainThreadFallbackLimit(
+  request: FdmCuboidBuildRequest,
+): boolean {
+  if (request.vectorOnly) return false;
+  return (
+    Math.floor(request.domain?.displayCellCount ?? 0) >
+    MAX_MAIN_THREAD_FDM_CUBOID_FALLBACK_CELLS
+  );
+}
+
+function createFdmCuboidWorkerFallbackLimitError(
+  reason: string,
+  request: FdmCuboidBuildRequest,
+): Error {
+  const cellCount = Math.max(0, Math.floor(request.domain?.displayCellCount ?? 0));
+  const workerState =
+    reason === "worker-error"
+      ? "worker failed"
+      : reason === "worker-construction-failed"
+        ? "worker construction failed"
+        : "worker is unavailable";
+  const error = new Error(
+    [
+      `Viewport 3D FDM cuboid ${workerState} for a large build.`,
+      `Refusing ${cellCount} cells on the main thread`,
+      `(limit ${MAX_MAIN_THREAD_FDM_CUBOID_FALLBACK_CELLS}).`,
+    ].join(" "),
+  );
+  error.name =
+    reason === "worker-error"
+      ? "Viewport3DFdmCuboidWorkerFailedError"
+      : reason === "worker-construction-failed"
+        ? "Viewport3DFdmCuboidWorkerConstructionFailedError"
+        : "Viewport3DFdmCuboidWorkerUnavailableError";
+  return error;
 }

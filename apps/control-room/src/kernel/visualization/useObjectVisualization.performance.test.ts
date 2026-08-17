@@ -61,10 +61,17 @@ describe("object visualization subscription performance contracts", () => {
   });
 
   it("keeps geometry object color editing off the full visualization snapshot", () => {
-    expect(objectGeneralPanelSource).toContain("useObjectVisualizationController");
     expect(objectGeneralPanelSource).toContain("useObjectVisualizationSelector");
     expect(objectGeneralPanelSource).toContain("geometryObjectVisualizationColorsEquals");
     expect(objectGeneralPanelSource).toContain("resolveGeometryObjectVisualizationColors");
+    expect(objectGeneralPanelSource).toContain("createCommandContext");
+    expect(objectGeneralPanelSource).toContain("kernel.commands.execute");
+    expect(objectGeneralPanelSource).toContain(
+      'visualization.target.set-wireframe-color',
+    );
+    expect(objectGeneralPanelSource).toContain(
+      'visualization.target.set-shader-mono-color',
+    );
     expect(objectGeneralPanelSource).not.toContain("useObjectVisualizationRegistry()");
   });
 

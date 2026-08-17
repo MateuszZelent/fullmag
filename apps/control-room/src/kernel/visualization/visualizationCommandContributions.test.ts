@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { VISUALIZATION_STATE_PATH } from "../api/apiPaths";
 import type {
@@ -10,8 +10,13 @@ import { createCommandContext } from "../commands/commandContext";
 import { EventBus } from "../events/EventBus";
 import type { KernelEventMap } from "../events/eventTypes";
 import { SelectionController } from "../selection/SelectionController";
+import { ControlRoomApiError } from "../api/ControlRoomApi";
 
-import { ObjectVisualizationController } from "./ObjectVisualizationController";
+import {
+  FDM_UNIVERSE_OUTSIDE_SUPPORT_TARGET,
+  ObjectVisualizationController,
+} from "./ObjectVisualizationController";
+import { VisualizationRegistrySyncController } from "./VisualizationRegistrySyncController";
 import { VISUALIZATION_TARGET_COMMANDS } from "./visualizationCommandContributions";
 
 describe("visualization target commands", () => {
@@ -19,6 +24,7 @@ describe("visualization target commands", () => {
     const commands = new CommandRegistry();
     const selection = new SelectionController(new EventBus<KernelEventMap>());
     const visualization = new ObjectVisualizationController();
+    const queuedPatches: VisualizationStatePatch[] = [];
     for (const command of VISUALIZATION_TARGET_COMMANDS) {
       commands.register(command);
     }
@@ -34,24 +40,81 @@ describe("visualization target commands", () => {
     const result = await commands.execute(
       "visualization.target.set-vectors-visible",
       {
+        resourceData: {
+          [VISUALIZATION_STATE_PATH]: {
+            overrides: [],
+            revision: 7,
+          },
+        },
         selection,
         source: "test" as const,
         visualization,
+        visualizationSync: {
+          queuePatch: (patch: VisualizationStatePatch) => queuedPatches.push(patch),
+        } as never,
       },
       true,
     );
 
     expect(result.status).toBe("completed");
-    expect(visualization.getSettings({ id: "object:free-layer", kind: "object" }))
-      .toMatchObject({
-        vectorsVisible: true,
-      });
+    expect(queuedPatches).toEqual([
+      {
+        overrides: [
+          {
+            display: { vectors: { visible: true } },
+            scope: "object",
+            scope_id: "free-layer",
+          },
+        ],
+      },
+    ]);
+    expect(visualization.getSnapshot().overrides).not.toHaveProperty(
+      "object:free-layer",
+    );
+  });
+
+  it("passes the canonical target identity to the session synchronizer", async () => {
+    const commands = new CommandRegistry();
+    const visualization = new ObjectVisualizationController();
+    const queuePatch = vi.fn();
+    for (const command of VISUALIZATION_TARGET_COMMANDS) {
+      commands.register(command);
+    }
+
+    const result = await commands.execute(
+      "visualization.target.set-vectors-visible",
+      {
+        resourceData: {
+          [VISUALIZATION_STATE_PATH]: { overrides: [], revision: 7 },
+        },
+        source: "test",
+        visualization,
+        visualizationSync: { queuePatch } as never,
+        visualizationTarget: FDM_UNIVERSE_OUTSIDE_SUPPORT_TARGET,
+      },
+      true,
+    );
+
+    expect(result).toMatchObject({ status: "completed" });
+    expect(queuePatch).toHaveBeenCalledWith(
+      {
+        overrides: [
+          {
+            display: { vectors: { visible: true } },
+            scope: "fdm_domain",
+            scope_id: "fdm-universe-outside-support",
+          },
+        ],
+      },
+      ["fdm-universe-outside-support"],
+    );
   });
 
   it("maps ordinary render-mode commands to the corresponding display passes", async () => {
     const commands = new CommandRegistry();
     const selection = new SelectionController(new EventBus<KernelEventMap>());
     const visualization = new ObjectVisualizationController();
+    const queuedPatches: VisualizationStatePatch[] = [];
     for (const command of VISUALIZATION_TARGET_COMMANDS) {
       commands.register(command);
     }
@@ -64,44 +127,68 @@ describe("visualization target commands", () => {
       },
       "test",
     );
-    const context = { selection, source: "test" as const, visualization };
-    const target = { id: "object:free-layer", kind: "object" as const };
-
+    const context = {
+      resourceData: {
+        [VISUALIZATION_STATE_PATH]: { overrides: [], revision: 7 },
+      },
+      selection,
+      source: "test" as const,
+      visualization,
+      visualizationSync: {
+        queuePatch: (patch: VisualizationStatePatch) => queuedPatches.push(patch),
+      } as never,
+    };
     await expect(
       commands.execute("visualization.target.set-render-mode", context, "wireframe"),
     ).resolves.toMatchObject({ status: "completed" });
-    expect(visualization.getSettings(target)).toMatchObject({
-      renderMode: "wireframe",
-      shaderVisible: false,
-      wireframeVisible: true,
-      pointsVisible: false,
+    expect(queuedPatches[0]).toMatchObject({
+      overrides: [{
+        display: {
+          points: { visible: false },
+          surface: { visible: false },
+          wireframe: { visible: true },
+        },
+        scope: "object",
+        scope_id: "free-layer",
+      }],
     });
 
     await expect(
       commands.execute("visualization.target.set-render-mode", context, "points"),
     ).resolves.toMatchObject({ status: "completed" });
-    expect(visualization.getSettings(target)).toMatchObject({
-      renderMode: "points",
-      shaderVisible: false,
-      wireframeVisible: false,
-      pointsVisible: true,
+    expect(queuedPatches[1]).toMatchObject({
+      overrides: [{
+        display: {
+          points: { visible: true },
+          surface: { visible: false },
+          wireframe: { visible: false },
+        },
+        scope: "object",
+        scope_id: "free-layer",
+      }],
     });
 
     await expect(
       commands.execute("visualization.target.set-render-mode", context, "off"),
     ).resolves.toMatchObject({ status: "completed" });
-    expect(visualization.getSettings(target)).toMatchObject({
-      renderMode: "off",
-      shaderVisible: false,
-      wireframeVisible: false,
-      pointsVisible: false,
+    expect(queuedPatches[2]).toMatchObject({
+      overrides: [{
+        display: {
+          points: { visible: false },
+          surface: { visible: false },
+          wireframe: { visible: false },
+        },
+        scope: "object",
+        scope_id: "free-layer",
+      }],
     });
   });
 
-  it("accepts vector commands and rejects shader modes for the FDM Airbox target", async () => {
+  it("routes session-scoped FDM target settings through the visualization resource", async () => {
     const commands = new CommandRegistry();
     const selection = new SelectionController(new EventBus<KernelEventMap>());
     const visualization = new ObjectVisualizationController();
+    const queuedPatches: VisualizationStatePatch[] = [];
     for (const command of VISUALIZATION_TARGET_COMMANDS) {
       commands.register(command);
     }
@@ -127,7 +214,6 @@ describe("visualization target commands", () => {
       kind: "fdm-domain" as const,
       label: "Airbox",
     };
-    const queuedPatches: VisualizationStatePatch[] = [];
     const context = {
         resourceData: {
           [VISUALIZATION_STATE_PATH]: {
@@ -150,11 +236,18 @@ describe("visualization target commands", () => {
     );
 
     expect(result).toMatchObject({ status: "completed" });
-    expect(visualization.getSettings(target).vectorsVisible).toBe(true);
-    expect(visualization.getSnapshot().overrides[target.id]).toMatchObject({
-      vectorsVisible: true,
-    });
-    expect(queuedPatches).toEqual([]);
+    expect(queuedPatches).toEqual([
+      {
+        overrides: [
+          {
+            display: { vectors: { visible: true } },
+            scope: "fdm_domain",
+            scope_id: target.id,
+          },
+        ],
+      },
+    ]);
+    expect(visualization.getSnapshot().overrides).not.toHaveProperty(target.id);
 
     await expect(
       commands.execute(
@@ -283,6 +376,7 @@ describe("visualization target commands", () => {
     const commands = new CommandRegistry();
     const selection = new SelectionController(new EventBus<KernelEventMap>());
     const visualization = new ObjectVisualizationController();
+    const queuedPatches: VisualizationStatePatch[] = [];
     for (const command of VISUALIZATION_TARGET_COMMANDS) {
       commands.register(command);
     }
@@ -311,26 +405,37 @@ describe("visualization target commands", () => {
     const result = await commands.execute(
       "visualization.target.set-wireframe-visible",
       {
+        resourceData: {
+          [VISUALIZATION_STATE_PATH]: { overrides: [], revision: 7 },
+        },
         selection,
         source: "test",
         visualization,
+        visualizationSync: {
+          queuePatch: (patch: VisualizationStatePatch) => queuedPatches.push(patch),
+        } as never,
       },
       false,
     );
 
     expect(result.status).toBe("completed");
-    expect(
-      visualization.getSettings({
-        id: "region:free-layer:region%3Acore",
-        kind: "region",
-      }),
-    ).toMatchObject({
-      wireframeVisible: false,
+    expect(queuedPatches).toEqual([
+      {
+        overrides: [
+          {
+            display: { wireframe: { visible: false } },
+            scope: "region",
+            scope_id: "region:free-layer:region%3Acore",
+          },
+        ],
+      },
+    ]);
+    expect(visualization.getSnapshot().overrides).toMatchObject({
+      "region:free-layer:region%3Acore": { visible: true },
     });
-    expect(visualization.getSettings({ id: "free-layer", kind: "object" }))
-      .toMatchObject({
-        wireframeVisible: false,
-      });
+    expect(visualization.getSnapshot().overrides).not.toHaveProperty(
+      "object:free-layer",
+    );
   });
 
   it("removes the serialized surface color override when Inherited is selected", async () => {
@@ -383,6 +488,7 @@ describe("visualization target commands", () => {
     const commands = new CommandRegistry();
     const selection = new SelectionController(new EventBus<KernelEventMap>());
     const visualization = new ObjectVisualizationController();
+    const queuedPatches: VisualizationStatePatch[] = [];
     for (const command of VISUALIZATION_TARGET_COMMANDS) {
       commands.register(command);
     }
@@ -395,36 +501,46 @@ describe("visualization target commands", () => {
       },
       "test",
     );
-    visualization.patchTarget(
-      {
-        id: "object:free-layer",
-        kind: "object",
-      },
-      {
-        surfaceOpacityPercent: 35,
-      },
+    visualization.patchTargetPending(
+      { id: "object:free-layer", kind: "object" },
+      { surfaceOpacityPercent: 35 },
+      7,
     );
-
     const result = await commands.execute(
       "visualization.target.clear-overrides",
       {
+        resourceData: {
+          [VISUALIZATION_STATE_PATH]: {
+            overrides: [
+              {
+                scope: "object",
+                scope_id: "free-layer",
+                display: { surface: { opacity: 0.35 } },
+              },
+            ],
+            revision: 7,
+          },
+        },
         selection,
         source: "test",
         visualization,
+        visualizationSync: {
+          queuePatch: (patch: VisualizationStatePatch) => queuedPatches.push(patch),
+        } as never,
       },
     );
 
     expect(result.status).toBe("completed");
-    expect(visualization.getSettings({ id: "object:free-layer", kind: "object" }))
-      .toMatchObject({
-        surfaceOpacityPercent: 100,
-      });
+    expect(queuedPatches).toEqual([{ overrides: [] }]);
+    expect(visualization.getSnapshot().overrides).toEqual({});
+    expect(visualization.getSnapshot().pendingOverrides).toEqual({});
   });
 
   it("patches and clears a mesh-part selection as a part even when it has an owning object", async () => {
     const commands = new CommandRegistry();
     const selection = new SelectionController(new EventBus<KernelEventMap>());
     const visualization = new ObjectVisualizationController();
+    const queuedPatches: VisualizationStatePatch[] = [];
     for (const command of VISUALIZATION_TARGET_COMMANDS) {
       commands.register(command);
     }
@@ -448,44 +564,58 @@ describe("visualization target commands", () => {
     const setResult = await commands.execute(
       "visualization.target.set-vectors-visible",
       {
+        resourceData: {
+          [VISUALIZATION_STATE_PATH]: { overrides: [], revision: 7 },
+        },
         selection,
         source: "test",
         visualization,
+        visualizationSync: {
+          queuePatch: (patch: VisualizationStatePatch) => queuedPatches.push(patch),
+        } as never,
         visualizationTarget: { id: "part-film", kind: "part" },
       },
       false,
     );
 
     expect(setResult.status).toBe("completed");
-    expect(visualization.getSettings({ id: "part-film", kind: "part" }))
-      .toMatchObject({ vectorsVisible: false });
-    expect(visualization.getSnapshot().overrides).toMatchObject({
-      "part:part-film": { vectorsVisible: false },
-    });
-    expect(visualization.getSnapshot().overrides).not.toHaveProperty(
-      "object:projection-film",
-    );
+    expect(queuedPatches).toEqual([
+      {
+        overrides: [
+          {
+            display: { vectors: { visible: false } },
+            scope: "part",
+            scope_id: "part-film",
+          },
+        ],
+      },
+    ]);
 
     const clearResult = await commands.execute(
       "visualization.target.clear-overrides",
       {
+        resourceData: {
+          [VISUALIZATION_STATE_PATH]: { overrides: [], revision: 7 },
+        },
         selection,
         source: "test",
         visualization,
+        visualizationSync: {
+          queuePatch: (patch: VisualizationStatePatch) => queuedPatches.push(patch),
+        } as never,
         visualizationTarget: { id: "part-film", kind: "part" },
       },
     );
 
     expect(clearResult.status).toBe("completed");
-    expect(visualization.getSnapshot().overrides).not.toHaveProperty(
-      "part:part-film",
-    );
+    expect(queuedPatches[1]).toEqual({ overrides: [] });
   });
 
   it("uses a Ribbon-provided canonical target after createCommandContext", async () => {
     const commands = new CommandRegistry();
     const selection = new SelectionController(new EventBus<KernelEventMap>());
     const visualization = new ObjectVisualizationController();
+    const queuedPatches: VisualizationStatePatch[] = [];
     for (const command of VISUALIZATION_TARGET_COMMANDS) {
       commands.register(command);
     }
@@ -508,8 +638,19 @@ describe("visualization target commands", () => {
 
     const context = createCommandContext(
       "ribbon",
-      { selection, visualization } as never,
-      { visualizationTarget: { id: "object:projection-film", kind: "object" } },
+      {
+        selection,
+        visualization,
+        visualizationSync: {
+          queuePatch: (patch: VisualizationStatePatch) => queuedPatches.push(patch),
+        },
+      } as never,
+      {
+        resourceData: {
+          [VISUALIZATION_STATE_PATH]: { overrides: [], revision: 7 },
+        },
+        visualizationTarget: { id: "object:projection-film", kind: "object" },
+      },
     );
     const result = await commands.execute(
       "visualization.target.set-vectors-visible",
@@ -518,12 +659,18 @@ describe("visualization target commands", () => {
     );
 
     expect(result.status).toBe("completed");
-    expect(visualization.getSnapshot().overrides).toMatchObject({
-      "object:projection-film": { vectorsVisible: false },
-    });
-    expect(visualization.getSnapshot().overrides).not.toHaveProperty(
-      "part:part-film",
-    );
+    expect(queuedPatches).toEqual([
+      {
+        overrides: [
+          {
+            display: { vectors: { visible: false } },
+            scope: "object",
+            scope_id: "projection-film",
+          },
+        ],
+      },
+    ]);
+    expect(visualization.getSnapshot().overrides).toEqual({});
   });
 
   it("writes selected object target patches to backend-owned visualization overrides when state is available", async () => {
@@ -599,5 +746,233 @@ describe("visualization target commands", () => {
         ],
       },
     ]);
+  });
+
+  it("fails closed for a session-scoped object when visualization state is unavailable", async () => {
+    const commands = new CommandRegistry();
+    const visualization = new ObjectVisualizationController();
+    for (const command of VISUALIZATION_TARGET_COMMANDS) {
+      commands.register(command);
+    }
+
+    const result = await commands.execute(
+      "visualization.target.set-wireframe-color",
+      {
+        source: "inspector",
+        visualization,
+        visualizationTarget: { id: "object:film", kind: "object" },
+      },
+      "#123456",
+    );
+
+    expect(result).toMatchObject({ status: "failed" });
+    expect(visualization.getSnapshot().overrides).not.toHaveProperty(
+      "object:film",
+    );
+  });
+
+  it("does not persist ordinary object settings locally when visualization state is unavailable", async () => {
+    const commands = new CommandRegistry();
+    const visualization = new ObjectVisualizationController();
+    for (const command of VISUALIZATION_TARGET_COMMANDS) {
+      commands.register(command);
+    }
+
+    const result = await commands.execute(
+      "visualization.target.set-vectors-visible",
+      {
+        source: "inspector",
+        visualization,
+        visualizationTarget: { id: "object:film", kind: "object" },
+      },
+      true,
+    );
+
+    expect(result).toMatchObject({
+      status: "failed",
+      message: "Visualization state resource is unavailable.",
+    });
+    expect(
+      visualization.getSettings({ id: "object:film", kind: "object" }).vectorsVisible,
+    ).toBe(false);
+    expect(visualization.getSnapshot().overrides).not.toHaveProperty(
+      "object:film",
+    );
+  });
+
+  it("does not clear ordinary object settings locally when visualization state is unavailable", async () => {
+    const commands = new CommandRegistry();
+    const visualization = new ObjectVisualizationController();
+    const target = { id: "object:film", kind: "object" as const };
+    for (const command of VISUALIZATION_TARGET_COMMANDS) {
+      commands.register(command);
+    }
+    visualization.patchTarget(target, { vectorsVisible: true });
+
+    const result = await commands.execute(
+      "visualization.target.clear-overrides",
+      {
+        source: "inspector",
+        visualization,
+        visualizationTarget: target,
+      },
+    );
+
+    expect(result).toMatchObject({
+      status: "failed",
+      message: "Visualization state resource is unavailable.",
+    });
+    expect(visualization.getSettings(target).vectorsVisible).toBe(true);
+  });
+
+  it("keeps object color optimistic through the shared sync and acknowledges its revision", async () => {
+    const commands = new CommandRegistry();
+    const visualization = new ObjectVisualizationController();
+    const remote = { overrides: [], revision: 7 } as unknown as VisualizationStateResource;
+    const patchedStates: VisualizationStateResource[] = [];
+    const sync = new VisualizationRegistrySyncController({
+      api: {
+        patch: async (patch) => {
+          const next = {
+            ...remote,
+            ...patch,
+            revision: 8,
+          } as VisualizationStateResource;
+          patchedStates.push(next);
+          return next;
+        },
+      },
+      retryBaseDelayMs: 0,
+    });
+    for (const command of VISUALIZATION_TARGET_COMMANDS) {
+      commands.register(command);
+    }
+    sync.observeRemoteState(remote);
+
+    const result = await commands.execute(
+      "visualization.target.set-wireframe-color",
+      {
+        resourceData: { [VISUALIZATION_STATE_PATH]: remote },
+        source: "inspector",
+        visualization,
+        visualizationSync: sync,
+        visualizationTarget: { id: "object:film", kind: "object" },
+      },
+      "#123456",
+    );
+
+    expect(result).toMatchObject({ status: "completed" });
+    expect(sync.applyOptimisticState(remote)?.overrides).toEqual([
+      {
+        scope: "object",
+        scope_id: "film",
+        style: { wireframe_color: "#123456" },
+      },
+    ]);
+
+    await sync.flushNow();
+
+    expect(patchedStates).toHaveLength(1);
+    expect(patchedStates[0]?.revision).toBe(8);
+    expect(sync.getSnapshot()).toMatchObject({
+      inflightPatch: null,
+      pendingPatch: null,
+      lastRemoteRevision: 8,
+      mutation: { status: "succeeded", targetId: "object:film" },
+    });
+    expect(sync.applyOptimisticState(patchedStates[0])?.overrides).toEqual(
+      patchedStates[0]?.overrides,
+    );
+  });
+
+  it("rolls back an optimistic object color when the shared session mutation is rejected", async () => {
+    const commands = new CommandRegistry();
+    const visualization = new ObjectVisualizationController();
+    const remote = { overrides: [], revision: 7 } as unknown as VisualizationStateResource;
+    const sync = new VisualizationRegistrySyncController({
+      api: {
+        patch: async () => {
+          throw new ControlRoomApiError("invalid color", 400, "req-color");
+        },
+      },
+      retryBaseDelayMs: 0,
+    });
+    for (const command of VISUALIZATION_TARGET_COMMANDS) {
+      commands.register(command);
+    }
+    sync.observeRemoteState(remote);
+
+    await commands.execute(
+      "visualization.target.set-shader-mono-color",
+      {
+        resourceData: { [VISUALIZATION_STATE_PATH]: remote },
+        source: "inspector",
+        visualization,
+        visualizationSync: sync,
+        visualizationTarget: { id: "object:film", kind: "object" },
+      },
+      "#654321",
+    );
+    expect(sync.applyOptimisticState(remote)?.overrides).toHaveLength(1);
+
+    await sync.flushNow();
+
+    expect(sync.applyOptimisticState(remote)).toBe(remote);
+    expect(sync.getSnapshot().error?.message).toBe("invalid color");
+    expect(sync.getSnapshot()).toMatchObject({
+      mutation: {
+        requestId: "req-color",
+        status: "rejected",
+        targetId: "object:film",
+      },
+      pendingPatch: null,
+      inflightPatch: null,
+    });
+  });
+
+  it("routes FDM native-layer colors through the session visualization resource", async () => {
+    const commands = new CommandRegistry();
+    const visualization = new ObjectVisualizationController();
+    const target = {
+      id: "fdm-native-layer:film",
+      kind: "fdm-native-layer" as const,
+    };
+    const queuedPatches: VisualizationStatePatch[] = [];
+    for (const command of VISUALIZATION_TARGET_COMMANDS) {
+      commands.register(command);
+    }
+
+    const result = await commands.execute(
+      "visualization.target.set-wireframe-color",
+      {
+        resourceData: {
+          [VISUALIZATION_STATE_PATH]: {
+            overrides: [],
+            revision: 7,
+          },
+        },
+        source: "inspector",
+        visualization,
+        visualizationSync: {
+          queuePatch: (patch: VisualizationStatePatch) => queuedPatches.push(patch),
+        } as never,
+        visualizationTarget: target,
+      },
+      "#123456",
+    );
+
+    expect(result).toMatchObject({ status: "completed" });
+    expect(queuedPatches).toEqual([
+      {
+        overrides: [
+          {
+            scope: "fdm_native_layer",
+            scope_id: target.id,
+            style: { wireframe_color: "#123456" },
+          },
+        ],
+      },
+    ]);
+    expect(visualization.getSnapshot().overrides).not.toHaveProperty(target.id);
   });
 });

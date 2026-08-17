@@ -1,24 +1,24 @@
 use std::sync::Arc;
 
 use axum::{
-    Json,
     body::Body,
     extract::{Path, Query, State},
-    http::{HeaderMap, HeaderValue, Response, StatusCode, header},
+    http::{header, HeaderMap, HeaderValue, Response, StatusCode},
     response::IntoResponse,
+    Json,
 };
 use fullmag_ir::{PlanarFrameIR, PlanarOperatorIR};
 use sha2::{Digest, Sha256};
 
 use crate::{
     error::ApiError,
-    field_render_png::{AutoScaleMode, encode_scalar_png},
+    field_render_png::{encode_scalar_png, AutoScaleMode},
     field_store::serialize_field_vector_binary_v2,
     planar_sampling::{
-        MAX_PLANAR_SAMPLE_POINTS, Occupancy, PlanarComponent, PlanarSampleIdentity,
+        resolve_authored_planar_source, resolve_default_planar_source, resolve_spatial_target,
+        sample_resolved_target, Occupancy, PlanarComponent, PlanarSampleIdentity,
         PlanarSampleResult, ResolvedPlanarSampleRequest, ResolvedPlanarSourceIdentity,
-        ResolvedSpatialScope, ResolvedSpatialTarget, resolve_authored_planar_source,
-        resolve_default_planar_source, resolve_spatial_target, sample_resolved_target,
+        ResolvedSpatialScope, ResolvedSpatialTarget, MAX_PLANAR_SAMPLE_POINTS,
     },
     preview::quantity_unit,
     router_v2::handlers::{
@@ -27,8 +27,8 @@ use crate::{
             resolved_fdm_multilayer_airbox_field, validate_hysteresis_snapshot_stage_scope,
         },
         data::resolved_spatial_field::{
-            SpatialFieldProvenance, SpatialFieldSourceKind, resolve_current_spatial_field,
-            resolve_fdm_multilayer_native_layer_field, resolve_spatial_field_from_values,
+            resolve_current_spatial_field, resolve_fdm_multilayer_native_layer_field,
+            resolve_spatial_field_from_values, SpatialFieldProvenance, SpatialFieldSourceKind,
         },
         sessions::status::{domain_generation_id, field_quantity_revision},
     },
@@ -797,11 +797,10 @@ async fn planar_vectors_response(
     if etag_matches(headers, &built.etag) {
         return not_modified(&built.etag);
     }
-    let vectors = built
-        .result
-        .vector_values
-        .as_ref()
-        .ok_or_else(|| ApiError::unprocessable("planar_vector_unsupported: quantity is scalar"))?;
+    let vectors =
+        built.result.vector_values.as_ref().ok_or_else(|| {
+            ApiError::unprocessable("planar_vector_unsupported: quantity is scalar")
+        })?;
     let values = vectors
         .iter()
         .flat_map(|vector| {
@@ -1038,9 +1037,11 @@ fn validate_expected_revisions(
             )));
         }
     }
-    let expected_source_revision = query
-        .expected_source_revision
-        .or_else(|| (source_kind == "monitor").then_some(query.expected_monitor_revision).flatten());
+    let expected_source_revision = query.expected_source_revision.or_else(|| {
+        (source_kind == "monitor")
+            .then_some(query.expected_monitor_revision)
+            .flatten()
+    });
     if expected_source_revision.is_some_and(|expected| expected != source_revision) {
         let kind = if source_kind == "monitor" {
             "monitor"
@@ -1267,10 +1268,7 @@ fn meta_resource(built: &BuiltPlanarField) -> PlanarFieldMetaResource {
 fn fdm_grid_overlay_available(built: &BuiltPlanarField) -> bool {
     built.source_entity_kind == "cell"
         && matches!(built.scope_kind.as_str(), "monitor_target" | "layer")
-        && !matches!(
-            built.operator,
-            PlanarOperatorIR::SurfaceProjection { .. }
-        )
+        && !matches!(built.operator, PlanarOperatorIR::SurfaceProjection { .. })
 }
 
 fn planar_overlay_etag(sample_etag: &str, codec: &str) -> String {

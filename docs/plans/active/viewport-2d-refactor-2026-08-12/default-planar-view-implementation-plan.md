@@ -2,10 +2,13 @@
 
 > **Status dokumentu:** zatwierdzony kierunek produktowy i plan wykonawczy; żadna opisana niżej zmiana nie jest jeszcze potwierdzeniem implementacji ani kwalifikacji produkcyjnej.
 
-> **Task 0 status:** documentation contract changes are implemented in the
-> working tree and remain source-tested only until the required validator and
-> contract-test commands pass. Runtime/API/UI/science/browser tasks remain
-> pending; this status must be updated only with their own evidence.
+> **Status snapshot (2026-08-16):** Tasks 0–9 are implemented and have
+> source/contract evidence; Task 10 has the validator, fixtures, and focused
+> contract coverage but still needs managed science execution; Task 11 has the
+> default-source browser harness and managed `just` recipe, but its runtime
+> execution is blocked before fixture startup by full managed storage. Task 12
+> (fresh managed reports, final regression, and status audit) remains open.
+> No FDM/FEM CPU/GPU lane is production-qualified from this snapshot.
 >
 > **Stan źródeł użyty do analizy:** Fullmag `28a953c515212fbda76fbd372e14264ca672d519`, 2026-08-16. Analiza obejmuje aktualny `master`, istniejący plan refaktoryzacji 2D, kontrakty API/viewport oraz bieżące implementacje `field-map`, Inspectora i `PlanarSamplingEngine`.
 >
@@ -32,9 +35,13 @@
 
 ---
 
-## 1. Problem potwierdzony w aktualnym kodzie
+## 1. Problem potwierdzony w kodzie bazowym przed implementacją
 
-Dzisiejsza implementacja wymusza trwały monitor w czterech kolejnych miejscach:
+Poniższy opis zachowuje dowód problemu, który uzasadniał plan; nie opisuje już
+bieżącego zachowania po wdrożeniu Tasks 0–11.
+
+W stanie bazowym planu implementacja wymuszała trwały monitor w czterech
+kolejnych miejscach:
 
 1. `apps/control-room/src/modules/field-map/fieldMapCommands.ts::field-map.open` pobiera kolekcję monitorów; gdy jest pusta, wywołuje `beginPlanarMonitorDraft(...)`, zaznacza `model.planar.monitor.draft` i zwraca komunikat „Apply the Midplane draft to render the 2D field.”
 2. `apps/control-room/src/modules/field-map/FieldMapModule.tsx::FieldMapModule` odczytuje `active_monitor_id`, automatycznie wybiera pierwszy trwały monitor i bez ID pokazuje „Select a planar monitor to open the 2D view.”
@@ -937,4 +944,6 @@ Implementacja jest ukończona dopiero wtedy, gdy:
 6. dokumenty źródłowe, ADR, specyfikacje i główny plan nie zawierają starego, sprzecznego kontraktu;
 7. każda lane ma uczciwy status kwalifikacji, bez wnioskowania GPU/browser z testów źródłowych.
 
-Do tego momentu poprawne określenie stanu brzmi: **plan zatwierdzony, implementacja nieukończona**.
+Aktualne określenie stanu brzmi: **implementacja Tasks 0–11 jest wykonana i
+źródłowo przetestowana, ale plan nie jest ukończony ani produkcyjnie
+zakwalifikowany do czasu świeżych managed science/browser reports oraz Task 12**.

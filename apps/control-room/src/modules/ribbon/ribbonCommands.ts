@@ -376,11 +376,18 @@ async function patchVisualizationTargetFromCommand(
     context.visualization.patchViewportPreferences(input.target, localPatch);
   }
   const persistentPatch = persistentVisualizationTargetPatch(input.patch);
-  if (
-    Object.keys(persistentPatch).length > 0 &&
-    !(await patchTargetOverrideResource(context, input.target, persistentPatch))
-  ) {
-    context.visualization.patchTarget(input.target, persistentPatch);
+  if (Object.keys(persistentPatch).length > 0) {
+    const patched = await patchTargetOverrideResource(
+      context,
+      input.target,
+      persistentPatch,
+    );
+    if (!patched) {
+      return {
+        message: "Session visualization state is unavailable.",
+        status: "failed",
+      };
+    }
   }
   return { status: "completed" };
 }
@@ -394,7 +401,10 @@ async function clearVisualizationTargetFromCommand(
   }
 
   if (!(await clearTargetOverrideResource(context, target))) {
-    context.visualization.clearTarget(target);
+    return {
+      message: "Session visualization state is unavailable.",
+      status: "failed",
+    };
   }
   return { status: "completed" };
 }
@@ -733,11 +743,6 @@ async function patchTargetOverrideResource(
   target: VisualizationTargetRef,
   patch: VisualizationTargetPatch,
 ): Promise<boolean> {
-  // The structured-grid FDM target is viewport-local.  The v2 visualization
-  // registry has no `fdm-domain` scope, so callers must fall back to the
-  // ObjectVisualizationController instead of queueing an unchanged backend
-  // override and reporting success.
-  if (target.kind === "fdm-domain") return false;
   const state = visualizationStateFromContext(context);
   if ((!context.visualizationSync && (!context.api || !context.resources)) || !state) {
     return false;
@@ -757,9 +762,6 @@ async function clearTargetOverrideResource(
   context: CommandContext,
   target: VisualizationTargetRef,
 ): Promise<boolean> {
-  // See patchTargetOverrideResource: FDM display state is not a backend
-  // visualization-state scope.
-  if (target.kind === "fdm-domain") return false;
   const state = visualizationStateFromContext(context);
   if ((!context.visualizationSync && (!context.api || !context.resources)) || !state) {
     return false;

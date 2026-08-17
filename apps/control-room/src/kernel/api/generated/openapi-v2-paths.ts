@@ -58,6 +58,7 @@ export const openApiV2PathLiterals = [
   "/v2/sessions/current/data/fdm-region-membership/{region_id}",
   "/v2/sessions/current/data/fdm-region-memberships",
   "/v2/sessions/current/data/fields",
+  "/v2/sessions/current/data/fields/{quantity_id}/availability",
   "/v2/sessions/current/data/fields/{quantity_id}/meta",
   "/v2/sessions/current/data/fields/{quantity_id}/planar-default/empty-mask",
   "/v2/sessions/current/data/fields/{quantity_id}/planar-default/mesh-overlay",

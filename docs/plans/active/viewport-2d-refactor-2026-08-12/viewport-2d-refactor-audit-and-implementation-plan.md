@@ -1078,3 +1078,25 @@ hostowy root filesystem podczas FEM. Do zamknięcia nadal wymagane są: naprawa 
 rozdzielenie fixture'ów FDM, odzyskanie miejsca zgodnie z polityką storage,
 świeże managed smoke FDM/FEM CPU/GPU na czystym snapshotcie, browser/WebGL
 evidence, dowody naukowe każdej lane oraz dopiero potem cutover starych ścieżek.
+
+## 20. Ledger default planar source — stan na 2026-08-16
+
+Poniższy wpis jest nowszy od historycznego ledgera powyżej i dotyczy
+`default-planar-view-implementation-plan.md`. Nie podnosi żadnej lane do
+`production-qualified` bez świeżego raportu managed science i browser/WebGL
+na tym samym snapshotcie.
+
+| Obszar | Stan | Dowód / pozostała bramka |
+|---|---|---|
+| Typed `Default` source, state v9 i migracja v8→v9 | zaimplementowane | Rust state/persistence contracts i OpenAPI integration; świeży rerun Rust jest obecnie ograniczony przez brak miejsca na build |
+| Wspólny resolver i `planar-default` data plane | zaimplementowane | source-aware meta/token/link contracts oraz focused API tests; runtime sampling wymaga managed execution |
+| Frontend facade, resources, FieldMap i Inspector | zaimplementowane, source-tested | focused frontend/API suite 122/122, typecheck PASS, API/architecture hygiene PASS |
+| Monitor actions, provenance i diagnostics | zaimplementowane, source-tested | focused command/evidence tests; authored monitor remains explicit and `Default` is non-persistent |
+| Manufactured FDM/FEM validation | przygotowane, niezakwalifikowane | fixtures and validator are present; managed science cannot start while native runtime storage is full |
+| Managed browser/WebGL lifecycle | harness zaimplementowany, wykonanie zablokowane | `just run-viewport-2d-default-slice-smoke` fails before fixture startup on `/mnt/fullmag-zfn2-native` with 134 MB available |
+| Task 12 regression/status audit | częściowo wykonane | docs updated; fresh full `pnpm test` has five unrelated ObjectVisualization/Airbox failures and final managed reports are missing |
+
+Wniosek: nowy default-source contract jest zintegrowany na `masterze`, ale
+pełny cel pozostaje otwarty do czasu odzyskania miejsca, wykonania trzech
+managed lanes, zgodności science/browser reports z tym samym HEAD i końcowego
+audytu kryteriów akceptacji.

@@ -23,10 +23,12 @@ import {
   loadCachedBinaryResource,
   resolveCachedFieldVectorEnvelope,
   resolveViewport3DAirboxFieldVectorQuery,
+  resolveViewport3DAirboxFieldVectorPartStates,
   resolveViewport3DAirboxFieldVectorResourceKeys,
   resolveViewport3DAirboxFieldVectorResourceRequests,
   resolveViewport3DFieldVectorResourceKey,
   resolveViewport3DFieldVectorCollectionLastGood,
+  resolveViewport3DFieldVectorCollectionResourceKey,
   resolveViewport3DPartFieldVectorResourceRequests,
   resolveViewport3DQuantityFieldVectorResourceRequests,
   resolveViewport3DQuantityFieldVectorResourceKeys,
@@ -75,6 +77,83 @@ function fieldResponseMetadata(
 }
 
 describe("viewport3dResources", () => {
+  it("keeps FEM Airbox failures per carrier and exposes compatible last-good data", () => {
+    const makeEnvelope = (
+      partId: string,
+    ): Viewport3DFieldVectorEnvelope => ({
+      data: {
+        dtype: "float64",
+        formatVersion: 3,
+        domainGenerationId: "generation-1",
+        grid: [1, 1, 1],
+        indexing: "explicit_node_indices",
+        meshTopologyHash: "mesh-1",
+        nComp: 3,
+        nodeIndices: [0],
+        pointCount: 1,
+        quantityId: "H_demag",
+        scopeId: partId,
+        scopeKind: "part",
+        valueCount: 3,
+        values: new Float64Array([1, 0, 0]),
+      },
+      etag: `field-${partId}-1`,
+      responseMetadata: fieldResponseMetadata({
+        domainGenerationId: "generation-1",
+        meshTopologyHash: "mesh-1",
+        quantityId: "H_demag",
+        scopeId: partId,
+        scopeKind: "part",
+      }),
+      resourceKey: `field:H_demag:${partId}`,
+    });
+    const partA = makeEnvelope("part-a");
+    const partB = makeEnvelope("part-b");
+    const states = resolveViewport3DAirboxFieldVectorPartStates({
+      current: new Map([["part-a", partA]]),
+      displayed: new Map([
+        ["part-a", partA],
+        ["part-b", partB],
+      ]),
+      failures: new Map([
+        ["part-b", { reasonCode: "target_carrier_missing", status: 404 }],
+        ["part-c", { reasonCode: "field_materialization_pending", status: 202 }],
+      ]),
+      previous: new Map([
+        ["part-a", partA],
+        ["part-b", partB],
+      ]),
+      requests: new Map([
+        ["part-a", {}],
+        ["part-b", {}],
+        ["part-c", {}],
+      ]),
+      status: "error",
+    });
+
+    expect(states.get("part-a")).toMatchObject({
+      data: partA.data,
+      lastValidData: partA.data,
+      reasonCode: null,
+      revision: partA.etag,
+      status: "ready",
+    });
+    expect(states.get("part-b")).toMatchObject({
+      data: null,
+      lastValidData: partB.data,
+      reasonCode: "target_carrier_missing",
+      revision: partB.etag,
+      status: "stale",
+    });
+    expect(states.get("part-c")).toMatchObject({
+      data: null,
+      lastValidData: null,
+      reasonCode: "field_materialization_pending",
+      revision: null,
+      status: "pending",
+    });
+  });
+
   it("retains only last-good field vectors matching the current request identity", () => {
     const previous = new Map<string, Viewport3DFieldVectorEnvelope>([
       [
@@ -291,6 +370,27 @@ describe("viewport3dResources", () => {
     expect(quantityCollectionSource).not.toContain("Promise.all(");
     expect(partCollectionSource).not.toContain("Promise.all(");
     expect(airboxCollectionSource).not.toContain("Promise.all(");
+  });
+
+  it("changes a collection resource identity when a stable target changes quantity or query", () => {
+    const first = resolveViewport3DFieldVectorCollectionResourceKey("airbox", [
+      resolveViewport3DFieldVectorResourceKey("m", {
+        component: "full",
+        max_samples: 1200,
+        scope_id: "part:__air__",
+        scope_kind: "airbox",
+      }),
+    ]);
+    const second = resolveViewport3DFieldVectorCollectionResourceKey("airbox", [
+      resolveViewport3DFieldVectorResourceKey("H_demag", {
+        component: "full",
+        max_samples: 1200,
+        scope_id: "part:__air__",
+        scope_kind: "airbox",
+      }),
+    ]);
+
+    expect(first).not.toBe(second);
   });
 
   it("binds field data and response metadata from the same cache entry", () => {

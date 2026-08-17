@@ -638,6 +638,264 @@ describe("VisualizationRegistrySyncController", () => {
     ]);
   });
 
+  it("removes a target override when a reset omits it from a queued replacement", () => {
+    const { controller } = createController({ now: () => 0 });
+    const remote = visualizationState(10);
+    controller.observeRemoteState(remote);
+
+    controller.queuePatch(
+      {
+        overrides: [
+          {
+            scope: "object",
+            scope_id: "film",
+            display: { vectors: { visible: true } },
+          },
+          {
+            scope: "object",
+            scope_id: "other",
+            display: { vectors: { visible: true } },
+          },
+        ],
+      },
+      ["object:film", "object:other"],
+    );
+    controller.queuePatch(
+      {
+        overrides: [
+          {
+            scope: "object",
+            scope_id: "other",
+            display: { vectors: { visible: true } },
+          },
+        ],
+      },
+      ["object:film"],
+    );
+
+    expect(controller.getSnapshot().pendingPatch?.overrides).toEqual([
+      {
+        scope: "object",
+        scope_id: "other",
+        display: { vectors: { visible: true } },
+      },
+    ]);
+    expect(controller.applyOptimisticState(remote)?.overrides).toEqual([
+      {
+        scope: "object",
+        scope_id: "other",
+        display: { vectors: { visible: true } },
+      },
+    ]);
+  });
+
+  it("rebases a target reset against the latest remote overrides", () => {
+    const { controller } = createController({ now: () => 0 });
+    const remote = visualizationState(10, {
+      overrides: [
+        {
+          scope: "object",
+          scope_id: "film",
+          display: { vectors: { visible: true } },
+        },
+        {
+          scope: "object",
+          scope_id: "other",
+          display: { vectors: { visible: true } },
+        },
+      ],
+    });
+    controller.observeRemoteState(remote);
+
+    controller.queuePatch({ overrides: [] }, ["object:film"]);
+
+    expect(controller.applyOptimisticState(remote)?.overrides).toEqual([
+      {
+        scope: "object",
+        scope_id: "other",
+        display: { vectors: { visible: true } },
+      },
+    ]);
+  });
+
+  it("maps persisted FDM and native-layer scopes to canonical target identities", () => {
+    const { controller } = createController({ now: () => 0 });
+    const remote = visualizationState(10, {
+      overrides: [
+        {
+          scope: "fdm_domain",
+          scope_id: "fdm-universe-outside-support",
+          display: { vectors: { visible: false } },
+        },
+        {
+          scope: "fdm_native_layer",
+          scope_id: "fdm-native-layer:bottom",
+          display: { vectors: { visible: false } },
+        },
+        {
+          scope: "object",
+          scope_id: "film",
+          display: { vectors: { visible: false } },
+        },
+      ],
+    });
+    controller.observeRemoteState(remote);
+
+    controller.queuePatch(
+      { overrides: [] },
+      ["fdm-universe-outside-support"],
+    );
+    controller.queuePatch(
+      { overrides: [] },
+      ["fdm-native-layer:bottom"],
+    );
+
+    expect(controller.getSnapshot().pendingTargetIds).toEqual([
+      "fdm-universe-outside-support",
+      "fdm-native-layer:bottom",
+    ]);
+
+    expect(controller.applyOptimisticState(remote)?.overrides).toEqual([
+      {
+        scope: "object",
+        scope_id: "film",
+        display: { vectors: { visible: false } },
+      },
+    ]);
+  });
+
+  it("rebases a queued target operation onto newer remote overrides before sending", async () => {
+    const sentPatches: VisualizationStatePatch[] = [];
+    const { controller } = createController({
+      now: () => 0,
+      patch: async (patch) => {
+        sentPatches.push(patch);
+        return visualizationState(12, patch as Partial<VisualizationStateResource>);
+      },
+    });
+    const initial = visualizationState(10, {
+      overrides: [
+        {
+          scope: "object",
+          scope_id: "film",
+          display: { vectors: { visible: false } },
+        },
+      ],
+    });
+    controller.observeRemoteState(initial);
+    controller.queuePatch(
+      {
+        overrides: [
+          {
+            scope: "object",
+            scope_id: "film",
+            display: { vectors: { visible: true } },
+          },
+        ],
+      },
+      ["object:film"],
+    );
+
+    controller.observeRemoteState(
+      visualizationState(11, {
+        overrides: [
+          {
+            scope: "object",
+            scope_id: "film",
+            display: { vectors: { visible: false } },
+          },
+          {
+            scope: "object",
+            scope_id: "other",
+            display: { vectors: { visible: true } },
+          },
+        ],
+      }),
+    );
+    await controller.flushNow();
+
+    expect(sentPatches[0]).toEqual(
+      expect.objectContaining({
+        overrides: expect.arrayContaining([
+          expect.objectContaining({
+            scope: "object",
+            scope_id: "film",
+            display: expect.objectContaining({ vectors: { visible: true } }),
+          }),
+          expect.objectContaining({
+            scope: "object",
+            scope_id: "other",
+            display: { vectors: { visible: true } },
+          }),
+        ]),
+      }),
+    );
+    expect(sentPatches[0]?.overrides).toHaveLength(2);
+  });
+
+  it("exposes rejected target identities for pending overlay rollback", async () => {
+    const patchSpy = vi.fn(async () => {
+      throw new ControlRoomApiError("invalid visibility", 400, "req-visibility");
+    });
+    const onRejectedTargetPatches = vi.fn();
+    const controller = new VisualizationRegistrySyncController({
+      api: { patch: patchSpy },
+      onRejectedTargetPatches,
+      retryBaseDelayMs: 0,
+    });
+    controller.observeRemoteState(visualizationState(7));
+    controller.queuePatch(
+      {
+        overrides: [
+          {
+            scope: "fdm_domain",
+            scope_id: "fdm-universe-outside-support",
+            display: { vectors: { visible: true } },
+          },
+        ],
+      },
+      ["fdm-universe-outside-support"],
+    );
+
+    await controller.flushNow();
+
+    expect(controller.getSnapshot()).toMatchObject({
+      mutation: {
+        requestId: "req-visibility",
+        status: "rejected",
+      },
+      rejectedTargetIds: ["fdm-universe-outside-support"],
+    });
+    expect(onRejectedTargetPatches).toHaveBeenCalledWith([
+      "fdm-universe-outside-support",
+    ]);
+  });
+
+  it("flushes FDM target overrides through the versioned visualization resource", async () => {
+    const { controller, patchSpy } = createController({ now: () => 0 });
+    const remote = visualizationState(10);
+    controller.observeRemoteState(remote);
+    const patch = {
+      overrides: [
+        {
+          scope: "fdm_domain",
+          scope_id: "fdm-universe-outside-support",
+          display: { vectors: { visible: true } },
+          style: { vector_budget: 256 },
+        },
+      ],
+    } as unknown as VisualizationStatePatch;
+
+    controller.queuePatch(patch);
+
+    expect(controller.applyOptimisticState(remote)?.overrides).toEqual(
+      patch.overrides,
+    );
+    await controller.flushNow();
+
+    expect(patchSpy).toHaveBeenCalledWith(patch);
+  });
+
   it("tracks target identities from queued through inflight mutation", async () => {
     let resolvePatch!: (state: VisualizationStateResource) => void;
     const patchSpy = vi.fn(

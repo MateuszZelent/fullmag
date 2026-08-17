@@ -38,7 +38,13 @@
     ".next-audit/types/**/*.ts",
     ".next-audit/dev/types/**/*.ts",
     ".next-audit-target-smoke-fdm-multilayer-20260810/types/**/*.ts",
-    ".next-audit-target-smoke-fdm-multilayer-20260810/dev/types/**/*.ts"
+    ".next-audit-target-smoke-fdm-multilayer-20260810/dev/types/**/*.ts",
+    ".next-audit-target-smoke-3055181-930c77db618243fc84c501b6d204359d/types/**/*.ts",
+    ".next-audit-target-smoke-3055181-930c77db618243fc84c501b6d204359d/dev/types/**/*.ts",
+    ".next-audit-target-smoke-3060848-01ebe44f9ff646a5899b96ac4cec1ba9/types/**/*.ts",
+    ".next-audit-target-smoke-3060848-01ebe44f9ff646a5899b96ac4cec1ba9/dev/types/**/*.ts",
+    ".next-audit-target-smoke-3113111-ee0eeba98d2a4e79950843187c3a8f75/types/**/*.ts",
+    ".next-audit-target-smoke-3113111-ee0eeba98d2a4e79950843187c3a8f75/dev/types/**/*.ts"
   ],
   "exclude": [
     "node_modules",

@@ -28,6 +28,22 @@ export interface VisualizationDebugSample {
   pointIndex: number;
 }
 
+export type VisualizationDebugFieldResourceStatus =
+  | "error"
+  | "loading"
+  | "pending"
+  | "ready"
+  | "stale"
+  | "unavailable";
+
+export interface VisualizationDebugFieldResourceState {
+  dataAvailable: boolean;
+  lastValidDataAvailable: boolean;
+  reasonCode: string | null;
+  revision: string | null;
+  status: VisualizationDebugFieldResourceStatus;
+}
+
 export interface VisualizationDebugNumericStats {
   finiteCount: number;
   max: number | null;
@@ -61,6 +77,7 @@ export interface VisualizationDebugCarrierSnapshot {
   };
   carrierId: string;
   carrierRole: string;
+  fieldResourceState?: VisualizationDebugFieldResourceState;
   geometryMaskDescription?: string | null;
   memory: readonly VisualizationDebugMemoryRow[];
   payload: {

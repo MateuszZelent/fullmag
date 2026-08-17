@@ -11,6 +11,7 @@ import { FieldRow } from "../../primitives/FieldRow";
 import { InspectorGroup } from "../../primitives/InspectorGroup";
 import { VisualizationDebugSampleTable, formatScientific } from "./VisualizationDebugSampleTable";
 import type {
+  VisualizationDebugCarrierObservation,
   VisualizationDebugPanelModel,
 } from "./VisualizationDebugPanelModel";
 import {
@@ -182,6 +183,12 @@ export function VisualizationDebugPanelView({
             <div className="fm-visualization-debug-subsection" key={`${viewport.viewportId}:${carrier.carrierId}`}>
               <h4>{carrier.carrierId}</h4>
               <FieldRow label="Carrier role" value={carrier.observations[0]?.carrier.carrierRole ?? "—"} />
+              <FieldRow
+                label="Field resource"
+                value={formatFieldResourceState(
+                  carrier.observations[0]?.carrier.fieldResourceState ?? null,
+                )}
+              />
               <FieldRow label="Observations" value={carrier.observations.length.toLocaleString("en-US")} />
             </div>
           )),
@@ -314,4 +321,13 @@ export function VisualizationDebugPanelView({
       </InspectorGroup>
     </div>
   );
+}
+
+function formatFieldResourceState(
+  state: VisualizationDebugCarrierObservation["carrier"]["fieldResourceState"] | null,
+): string {
+  if (!state) return "not tracked";
+  const reason = state.reasonCode ? ` · ${state.reasonCode}` : "";
+  const revision = state.revision ? ` · rev ${state.revision}` : "";
+  return `${state.status} · data ${state.dataAvailable ? "present" : "absent"} · last-valid ${state.lastValidDataAvailable ? "present" : "absent"}${reason}${revision}`;
 }

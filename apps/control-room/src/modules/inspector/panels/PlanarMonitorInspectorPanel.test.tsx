@@ -62,7 +62,7 @@ vi.mock("@/kernel/resources/planarMonitorResources", () => ({
 
 vi.mock("@/kernel/visualization/useVisualizationStateResource", () => ({
   useVisualizationStateResource: () => ({
-    data: { planar: { active_monitor_id: "plane-1" } },
+    data: { planar: { source: { kind: "monitor", monitor_id: "plane-1" } } },
   }),
 }));
 

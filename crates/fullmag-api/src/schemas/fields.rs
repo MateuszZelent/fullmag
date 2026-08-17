@@ -10,6 +10,41 @@ pub struct FieldCatalog {
     pub quantities: Vec<FieldDescriptor>,
 }
 
+/// Target-scoped field availability. Unlike [`FieldCatalog`], this resource
+/// proves readiness for one concrete target/scope carrier; it deliberately
+/// does not include frontend renderer adoption state.
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema, PartialEq, Eq)]
+pub struct FieldAvailabilityResource {
+    pub quantity_id: String,
+    pub target_id: String,
+    pub scope_kind: String,
+    #[serde(default)]
+    pub scope_id: Option<String>,
+    pub supported: bool,
+    pub materialized: bool,
+    pub pending: bool,
+    pub state: TargetFieldAvailabilityState,
+    #[serde(default)]
+    pub carrier_id: Option<String>,
+    pub generation: String,
+    #[serde(default)]
+    pub revision: Option<u64>,
+    #[serde(default)]
+    pub reason_code: Option<String>,
+}
+
+/// Backend availability states intentionally stop at `ready`; `adopted` is a
+/// renderer/frontend fact and must not be inferred from an HTTP resource.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, ToSchema, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum TargetFieldAvailabilityState {
+    Supported,
+    Materializing,
+    Ready,
+    Stale,
+    Unavailable,
+}
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, ToSchema, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum FieldMaterializationState {
@@ -122,18 +157,21 @@ pub struct FieldVectorQuery {
     /// supported for `airbox` scope and is resolved from the selected mesh
     /// part's canonical surface-node membership before `max_samples` is applied.
     pub geometry_scope: Option<String>,
-    /// Optional hard cap for vector samples returned by the binary payload.
+    /// Optional positive hard cap for vector samples returned by the binary payload.
     ///
-    /// FMVP v3 encodes sampled FEM responses with `sampled_node_indices`.
-    /// Sampled responses with a complete `node_indices` mapping and matching
-    /// mesh topology are valid for vector glyph placement and surface projection
-    /// modes (`surface_faces`, `thickness_average_z`). Raw nodal coloring still
-    /// requires complete field coverage.
-    /// Full-domain FDM responses always return the complete cell-centred field,
-    /// even when this cap is provided, because FMVP v2 has no cell-index
-    /// mapping for a downsampled payload. Scoped FDM responses use FMVP v3
-    /// explicit cell ordinals; multilayer layer/object scopes carry the native
-    /// grid certificate fingerprint and scope provenance in FMMI metadata.
+    /// When `max_samples=K` is supplied, the response contains at most `K`
+    /// deterministic samples. FMVP v3 carries `sampled_node_indices` (FEM) or
+    /// explicit cell ordinals/native-grid provenance (FDM), so sampled vectors
+    /// remain placeable on their source carrier. This applies to full-domain
+    /// regular-grid FDM as well as scoped FDM and multilayer native-grid
+    /// requests. Without a cap, a full-domain FDM response remains the complete
+    /// cell-centred field and may use the legacy FMVP v2 representation.
+    ///
+    /// A value of zero is invalid and returns HTTP 400. Raw FEM nodal coloring
+    /// still requires complete field coverage even when vector glyph transport
+    /// is sampled.
+    #[param(minimum = 1)]
+    #[schema(minimum = 1)]
     pub max_samples: Option<u32>,
     /// Optional persisted analysis snapshot id, for example a saved
     /// hysteresis-point magnetization state.
@@ -158,6 +196,10 @@ pub struct FieldVectorQuery {
 }
 
 /// JSON response returned while a requested field vector is being materialized.
+///
+/// The stable `reason_code` and `retry_after_ms` fields let clients retry a
+/// pending resource without parsing an error message. The `generation_id`
+/// identifies the domain generation for which materialization is pending.
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct FieldVectorPendingResponse {
     /// Current materialization state, normally `pending`.

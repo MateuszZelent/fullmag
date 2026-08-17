@@ -29,6 +29,7 @@ export interface VisualizationRegistrySyncSnapshot {
   pendingFingerprint: string | null;
   pendingPatch: VisualizationStatePatch | null;
   pendingTargetIds: readonly string[];
+  rejectedTargetIds: readonly string[];
   version: number;
 }
 
@@ -48,6 +49,7 @@ interface VisualizationRegistrySyncControllerOptions {
   maxTransientAttempts?: number;
   retryBaseDelayMs?: number;
   resources?: Pick<ResourceInvalidationController, "invalidate">;
+  onRejectedTargetPatches?: (targetIds: readonly string[]) => void;
 }
 
 const DEFAULT_MAX_LATENCY_MS = 2_500;
@@ -66,6 +68,7 @@ const INITIAL_SNAPSHOT: VisualizationRegistrySyncSnapshot = {
   pendingFingerprint: null,
   pendingPatch: null,
   pendingTargetIds: EMPTY_TARGET_IDS,
+  rejectedTargetIds: EMPTY_TARGET_IDS,
   version: 0,
 };
 
@@ -78,11 +81,14 @@ export class VisualizationRegistrySyncController {
   private readonly maxTransientAttempts: number;
   private readonly retryBaseDelayMs: number;
   private readonly resources: Pick<ResourceInvalidationController, "invalidate"> | null;
+  private readonly onRejectedTargetPatches:
+    | ((targetIds: readonly string[]) => void)
+    | null;
   private firstPendingAt: number | null = null;
   private flushPromise: Promise<void> | null = null;
   private inflightCameraInvalidationSuppressed = false;
+  private remoteState: VisualizationStateResource | null = null;
   private rejectedPatch: VisualizationStatePatch | null = null;
-  private rejectedTargetIds: readonly string[] = EMPTY_TARGET_IDS;
   private started = false;
   private readonly suppressedCameraInvalidationRevisions = new Set<string>();
   private snapshot: VisualizationRegistrySyncSnapshot = INITIAL_SNAPSHOT;
@@ -96,6 +102,7 @@ export class VisualizationRegistrySyncController {
     maxTransientAttempts = DEFAULT_MAX_TRANSIENT_ATTEMPTS,
     retryBaseDelayMs = DEFAULT_RETRY_BASE_DELAY_MS,
     resources,
+    onRejectedTargetPatches,
   }: VisualizationRegistrySyncControllerOptions) {
     this.api = api;
     this.maxLatencyMs = maxLatencyMs;
@@ -104,21 +111,39 @@ export class VisualizationRegistrySyncController {
     this.maxTransientAttempts = Math.max(1, Math.trunc(maxTransientAttempts));
     this.retryBaseDelayMs = Math.max(0, retryBaseDelayMs);
     this.resources = resources ?? null;
+    this.onRejectedTargetPatches = onRejectedTargetPatches ?? null;
   }
 
   applyOptimisticState(
     remote: VisualizationStateResource | null | undefined,
   ): VisualizationStateResource | null {
     if (!remote) return null;
-    const activePatch = this.activePatch();
-    if (!activePatch) return remote;
-    if (isCameraOnlyPatch(activePatch)) {
-      const projectionPatch = cameraProjectionPatch(activePatch);
-      return projectionPatch
-        ? applyVisualizationStatePatch(remote, projectionPatch)
-        : remote;
+    let optimistic = remote;
+    const activePatches = [
+      {
+        patch: this.snapshot.inflightPatch,
+        targetIds: this.snapshot.inflightTargetIds,
+      },
+      {
+        patch: this.snapshot.pendingPatch,
+        targetIds: this.snapshot.pendingTargetIds,
+      },
+    ];
+    for (const { patch, targetIds } of activePatches) {
+      if (!patch) continue;
+      if (isCameraOnlyPatch(patch)) {
+        const projectionPatch = cameraProjectionPatch(patch);
+        if (projectionPatch) {
+          optimistic = applyVisualizationStatePatch(
+            optimistic,
+            projectionPatch,
+          );
+        }
+        continue;
+      }
+      optimistic = applyVisualizationStatePatch(optimistic, patch, targetIds);
     }
-    return applyVisualizationStatePatch(remote, activePatch);
+    return optimistic;
   }
 
   flushDue(): Promise<void> {
@@ -150,6 +175,12 @@ export class VisualizationRegistrySyncController {
     if (this.flushPromise) return this.flushPromise;
     const patch = this.snapshot.pendingPatch;
     if (!patch) return Promise.resolve();
+    const targetIds = this.snapshot.pendingTargetIds;
+    const requestPatch = rebaseVisualizationStatePatch(
+      this.remoteState,
+      patch,
+      targetIds,
+    );
     const renderAffectingPatch = !isCameraOnlyPatch(patch);
     if (!renderAffectingPatch) {
       this.inflightCameraInvalidationSuppressed = false;
@@ -183,10 +214,9 @@ export class VisualizationRegistrySyncController {
       this.notify();
     }
 
-    this.flushPromise = this.patchWithBoundedRetry(patch)
+    this.flushPromise = this.patchWithBoundedRetry(requestPatch)
       .then((state) => {
         this.rejectedPatch = null;
-        this.rejectedTargetIds = EMPTY_TARGET_IDS;
         this.observeRemoteState(state);
         // Optimize: populate the local resource cache pessimistically with the fresh patched state
         // to avoid triggering a redundant GET /v2/sessions/current/visualization/state fetch.
@@ -211,12 +241,13 @@ export class VisualizationRegistrySyncController {
           mutation: this.snapshot.mutation
             ? { ...this.snapshot.mutation, status: "succeeded" }
             : null,
+          rejectedTargetIds: EMPTY_TARGET_IDS,
           version: this.snapshot.version + 1,
         };
       })
       .catch((error: unknown) => {
         this.rejectedPatch = patch;
-        this.rejectedTargetIds = this.snapshot.inflightTargetIds;
+        const rejectedTargetIds = targetIds;
         const normalizedError = error instanceof Error ? error : new Error(String(error));
         this.snapshot = {
           ...this.snapshot,
@@ -226,6 +257,7 @@ export class VisualizationRegistrySyncController {
           pendingFingerprint: null,
           pendingPatch: null,
           pendingTargetIds: EMPTY_TARGET_IDS,
+          rejectedTargetIds,
           mutation: this.snapshot.mutation
             ? {
                 ...this.snapshot.mutation,
@@ -237,6 +269,7 @@ export class VisualizationRegistrySyncController {
           version: this.snapshot.version + 1,
         };
         this.firstPendingAt = null;
+        this.onRejectedTargetPatches?.(rejectedTargetIds);
         if (renderAffectingPatch) {
           this.notify();
         }
@@ -296,16 +329,25 @@ export class VisualizationRegistrySyncController {
 
   observeRemoteState(state: VisualizationStateResource | null | undefined): void {
     if (!state) return;
+    this.remoteState = state;
     const previousSnapshot = this.snapshot;
 
     const pendingPatch =
       this.snapshot.pendingPatch &&
-      visualizationStateSatisfiesPatch(state, this.snapshot.pendingPatch)
+      visualizationStateSatisfiesPatch(
+        state,
+        this.snapshot.pendingPatch,
+        this.snapshot.pendingTargetIds,
+      )
         ? null
         : this.snapshot.pendingPatch;
     const inflightPatch =
       this.snapshot.inflightPatch &&
-      visualizationStateSatisfiesPatch(state, this.snapshot.inflightPatch)
+      visualizationStateSatisfiesPatch(
+        state,
+        this.snapshot.inflightPatch,
+        this.snapshot.inflightTargetIds,
+      )
         ? null
         : this.snapshot.inflightPatch;
     const pendingTargetIds = pendingPatch
@@ -347,9 +389,17 @@ export class VisualizationRegistrySyncController {
     targetIds: readonly string[] = [],
   ): void {
     if (!hasPatchKeys(patch)) return;
+    const effectiveTargetIds = normalizeTargetIds(
+      targetIds.length > 0 ? targetIds : targetIdsFromPatch(patch),
+    );
     if (
       this.snapshot.pendingPatch &&
-      visualizationPatchSatisfiesPatch(this.snapshot.pendingPatch, patch)
+      visualizationPatchSatisfiesPatch(
+        this.snapshot.pendingPatch,
+        patch,
+        this.snapshot.pendingTargetIds,
+        effectiveTargetIds,
+      )
     ) {
       return;
     }
@@ -358,10 +408,11 @@ export class VisualizationRegistrySyncController {
     const pendingPatch = mergeQueuedVisualizationPatch(
       this.snapshot.pendingPatch,
       patch,
+      effectiveTargetIds,
     );
     const pendingTargetIds = mergeTargetIds(
       this.snapshot.pendingTargetIds,
-      targetIds.length > 0 ? targetIds : targetIdsFromPatch(patch),
+      effectiveTargetIds,
     );
 
     this.firstPendingAt = this.firstPendingAt ?? now;
@@ -383,8 +434,12 @@ export class VisualizationRegistrySyncController {
   retryRejectedMutation(): Promise<void> {
     const patch = this.rejectedPatch;
     if (!patch || this.flushPromise) return Promise.resolve();
-    const targetIds = this.rejectedTargetIds;
-    this.rejectedTargetIds = EMPTY_TARGET_IDS;
+    const targetIds = this.snapshot.rejectedTargetIds;
+    this.snapshot = {
+      ...this.snapshot,
+      rejectedTargetIds: EMPTY_TARGET_IDS,
+      version: this.snapshot.version + 1,
+    };
     this.queuePatch(patch, targetIds);
     return this.flushNow();
   }
@@ -485,7 +540,7 @@ function requestIdFromError(error: unknown): string | null {
 
 function visualizationPatchTargetId(patch: VisualizationStatePatch): string {
   const target = patch.overrides?.[0];
-  if (target?.scope_id) return `${target.scope}:${target.scope_id}`;
+  if (target?.scope_id) return visualizationOverrideTargetId(target);
   return "visualization";
 }
 
@@ -510,18 +565,21 @@ function snapshotChangeAffectsRender(
 function applyVisualizationStatePatch<TState>(
   state: TState,
   patch: VisualizationStatePatch | null | undefined,
+  targetIds: readonly string[] = EMPTY_TARGET_IDS,
 ): TState {
   if (!patch || !hasPatchKeys(patch)) return state;
   if (!isPlainObject(state)) return patch as TState;
   return mergeQueuedPatchRecords(
     state,
     patch as Record<string, unknown>,
+    targetIds,
   ) as TState;
 }
 
 function mergeQueuedVisualizationPatch(
   current: VisualizationStatePatch | null | undefined,
   next: VisualizationStatePatch | null | undefined,
+  targetIds: readonly string[] = EMPTY_TARGET_IDS,
 ): VisualizationStatePatch | null {
   if (!current && !next) return null;
   if (!current) return next ?? null;
@@ -529,29 +587,124 @@ function mergeQueuedVisualizationPatch(
   return mergeQueuedPatchRecords(
     current as Record<string, unknown>,
     next as Record<string, unknown>,
+    targetIds,
   ) as VisualizationStatePatch;
+}
+
+function rebaseVisualizationStatePatch(
+  remote: VisualizationStateResource | null,
+  patch: VisualizationStatePatch,
+  targetIds: readonly string[],
+): VisualizationStatePatch {
+  if (!remote || !Array.isArray(patch.overrides) || targetIds.length === 0) {
+    return patch;
+  }
+
+  const rebased = applyVisualizationStatePatch(remote, patch, targetIds);
+  return {
+    ...patch,
+    overrides: rebased.overrides,
+  };
 }
 
 function mergeQueuedPatchRecords(
   current: Record<string, unknown>,
   next: Record<string, unknown>,
+  targetIds: readonly string[] = EMPTY_TARGET_IDS,
 ): Record<string, unknown> {
   const output: Record<string, unknown> = { ...current };
   for (const [key, value] of Object.entries(next)) {
     const previous = output[key];
     if (key === "overrides" && Array.isArray(previous) && Array.isArray(value)) {
-      output[key] = mergeVisualizationStateTargetOverrides(
+      output[key] = mergeQueuedTargetOverrides(
         previous as VisualizationStateResource["overrides"],
         value as VisualizationStateResource["overrides"],
+        targetIds,
       );
       continue;
     }
     output[key] =
       isPlainObject(previous) && isPlainObject(value)
-        ? mergeQueuedPatchRecords(previous, value)
+        ? mergeQueuedPatchRecords(previous, value, targetIds)
         : value;
   }
   return output;
+}
+
+function mergeQueuedTargetOverrides(
+  current: VisualizationStateResource["overrides"],
+  next: VisualizationStateResource["overrides"],
+  targetIds: readonly string[],
+): VisualizationStateResource["overrides"] {
+  if (targetIds.length === 0) {
+    return mergeVisualizationStateTargetOverrides(current, next);
+  }
+
+  const targeted = new Set(targetIds);
+  const currentByIdentity = new Map(
+    current.map((entry) => [visualizationStateOverrideIdentity(entry), entry]),
+  );
+  const nextByIdentity = new Map(
+    next.map((entry) => [visualizationStateOverrideIdentity(entry), entry]),
+  );
+  const result: VisualizationStateResource["overrides"] = [];
+
+  for (const entry of current) {
+    const identity = visualizationStateOverrideIdentity(entry);
+    if (!targeted.has(visualizationOverrideTargetId(entry))) {
+      result.push(entry);
+      continue;
+    }
+    const replacement = nextByIdentity.get(identity);
+    if (replacement) {
+      result.push(
+        ...mergeVisualizationStateTargetOverrides([entry], [replacement]),
+      );
+    }
+  }
+
+  for (const entry of next) {
+    const identity = visualizationStateOverrideIdentity(entry);
+    if (
+      !currentByIdentity.has(identity) &&
+      targeted.has(visualizationOverrideTargetId(entry))
+    ) {
+      result.push(entry);
+    }
+  }
+
+  return result;
+}
+
+function visualizationStateOverrideIdentity(
+  entry: VisualizationStateResource["overrides"][number],
+): string {
+  return `${entry.scope}:${entry.scope_id}`;
+}
+
+function visualizationOverrideTargetId(
+  entry: VisualizationStateResource["overrides"][number],
+): string {
+  if (entry.scope === "fdm_domain" || entry.scope === "fdm_native_layer") {
+    return entry.scope_id;
+  }
+  if (entry.scope === "airbox") return "airbox";
+  if (entry.scope === "object") {
+    return entry.scope_id.startsWith("object:")
+      ? entry.scope_id
+      : `object:${entry.scope_id}`;
+  }
+  if (entry.scope === "part") {
+    return entry.scope_id.startsWith("part:")
+      ? entry.scope_id
+      : `part:${entry.scope_id}`;
+  }
+  if (entry.scope === "region") {
+    return entry.scope_id.startsWith("region:")
+      ? entry.scope_id
+      : `region:${entry.scope_id}`;
+  }
+  return `${entry.scope}:${entry.scope_id}`;
 }
 
 function mergeVisualizationStatePatch(
@@ -570,25 +723,56 @@ function mergeVisualizationStatePatch(
 function visualizationStateSatisfiesPatch(
   state: VisualizationStateResource,
   patch: VisualizationStatePatch,
+  targetIds: readonly string[] = EMPTY_TARGET_IDS,
 ): boolean {
   return Object.entries(patch).every(([key, patchValue]) =>
-    valueSatisfiesPatch(
-      (state as Record<string, unknown>)[key],
-      patchValue,
-    ),
+    key === "overrides" && Array.isArray(patchValue) && targetIds.length > 0
+      ? targetOverridesSatisfyPatch(state.overrides, patchValue, targetIds)
+      : valueSatisfiesPatch((state as Record<string, unknown>)[key], patchValue),
   );
 }
 
 function visualizationPatchSatisfiesPatch(
   current: VisualizationStatePatch,
   patch: VisualizationStatePatch,
+  currentTargetIds: readonly string[] = EMPTY_TARGET_IDS,
+  targetIds: readonly string[] = EMPTY_TARGET_IDS,
 ): boolean {
+  if (
+    targetIds.length > 0 &&
+    !normalizeTargetIds(targetIds).every((targetId) =>
+      normalizeTargetIds(currentTargetIds).includes(targetId),
+    )
+  ) {
+    return false;
+  }
   return Object.entries(patch).every(([key, patchValue]) =>
-    valueSatisfiesPatch(
-      (current as Record<string, unknown>)[key],
-      patchValue,
-    ),
+    key === "overrides" && Array.isArray(patchValue) && targetIds.length > 0
+      ? targetOverridesSatisfyPatch(
+          Array.isArray(current.overrides) ? current.overrides : [],
+          patchValue,
+          targetIds,
+        )
+      : valueSatisfiesPatch((current as Record<string, unknown>)[key], patchValue),
   );
+}
+
+function targetOverridesSatisfyPatch(
+  current: readonly VisualizationStateResource["overrides"][number][],
+  expected: readonly VisualizationStateResource["overrides"][number][],
+  targetIds: readonly string[],
+): boolean {
+  return normalizeTargetIds(targetIds).every((targetId) => {
+    const currentEntry = current.find(
+      (entry) => visualizationOverrideTargetId(entry) === targetId,
+    );
+    const expectedEntry = expected.find(
+      (entry) => visualizationOverrideTargetId(entry) === targetId,
+    );
+    return expectedEntry
+      ? currentEntry !== undefined && valueSatisfiesPatch(currentEntry, expectedEntry)
+      : currentEntry === undefined;
+  });
 }
 
 function valueSatisfiesPatch(value: unknown, patch: unknown): boolean {
@@ -628,8 +812,15 @@ function targetIdsFromPatch(patch: VisualizationStatePatch): readonly string[] {
     [],
     patch.overrides.flatMap((entry) => {
       if (!entry.scope || !entry.scope_id) return [];
-      return [`${entry.scope}:${entry.scope_id}`];
+      return [visualizationOverrideTargetId(entry)];
     }),
+  );
+}
+
+function normalizeTargetIds(targetIds: readonly string[]): readonly string[] {
+  return mergeTargetIds(
+    [],
+    targetIds.filter((targetId) => targetId.length > 0),
   );
 }
 

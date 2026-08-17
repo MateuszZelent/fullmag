@@ -30,6 +30,7 @@ import {
   ANALYSIS_HYSTERESIS_STAGE_SETTLE_TRACE_PATH,
   ANALYSIS_HYSTERESIS_SETTLE_TRACE_PATH,
   API_CONTRACT_VERSION_HEADER,
+  DATA_FIELD_AVAILABILITY_PATH,
   DATA_FIELDS_PATH,
   DATA_QUANTITIES_PATH,
   DATA_ARTIFACT_PATH,
@@ -219,6 +220,8 @@ import type {
   FdmMultilayerLayoutResource,
   FdmNativeLayerRegionMembershipResource,
   EngineLogResource,
+  FieldAvailabilityQuery,
+  FieldAvailabilityResource,
   FieldCatalogResource,
   QuantityCatalogResource,
   FieldVectorIdentityIssue,
@@ -446,11 +449,18 @@ export function collectFieldVectorIdentityIssues(
   if (payload.formatVersion === 3) {
     compare("scopeKind", metadata.scopeKind, payload.scopeKind ?? null);
     compare("scopeId", metadata.scopeId, payload.scopeId ?? null);
-    compare(
-      "meshTopologyHash",
-      metadata.meshTopologyHash,
-      payload.meshTopologyHash ?? null,
-    );
+    const payloadMeshTopologyHash = payload.meshTopologyHash ?? null;
+    if (
+      metadata.meshTopologyHash !== null &&
+      canonicalFieldVectorTopologyHash(metadata.meshTopologyHash) !==
+        canonicalFieldVectorTopologyHash(payloadMeshTopologyHash)
+    ) {
+      issues.push({
+        field: "meshTopologyHash",
+        headerValue: metadata.meshTopologyHash,
+        payloadValue: payloadMeshTopologyHash,
+      });
+    }
     compare("fieldIndexing", metadata.fieldIndexing, payload.indexing ?? null);
     compare(
       "nodeIndexCount",
@@ -464,6 +474,11 @@ export function collectFieldVectorIdentityIssues(
     );
   }
   return issues;
+}
+
+function canonicalFieldVectorTopologyHash(value: string | null): string | null {
+  const match = /^(?:sha256:)?([0-9a-f]{64})$/i.exec(value ?? "");
+  return match?.[1]?.toLowerCase() ?? value;
 }
 
 export function withDerivedDriveFluxDensity(
@@ -1048,6 +1063,22 @@ export class ControlRoomApi {
         this.requestJson<FieldCatalogResource>(DATA_FIELDS_PATH, options).then(
           withDerivedDriveFluxDensity,
         ),
+      availability: (
+        quantityId: string,
+        query: FieldAvailabilityQuery = {},
+        options?: RequestOptions,
+      ) => {
+        const requestedQuantityId = resolveCanonicalQuantityId(quantityId);
+        const storedQuantityId = storedFieldQuantityId(requestedQuantityId);
+        return this.requestJson<FieldAvailabilityResource>(
+          DATA_FIELD_AVAILABILITY_PATH,
+          options,
+          {
+            path: { quantity_id: storedQuantityId },
+            query: fieldAvailabilityQueryParams(query),
+          },
+        );
+      },
       meta: (
         quantityId: string,
         query: FieldMetaQuery = {},
@@ -3448,6 +3479,15 @@ function fieldMetaQueryParams(query: FieldMetaQuery): QueryParams {
     scope_kind: query.scope_kind ?? undefined,
     snapshot_id: query.snapshot_id ?? undefined,
     stage_id: query.stage_id ?? undefined,
+  };
+}
+
+function fieldAvailabilityQueryParams(query: FieldAvailabilityQuery): QueryParams {
+  return {
+    target_id: query.target_id ?? undefined,
+    scope_kind: query.scope_kind ?? undefined,
+    scope_id: query.scope_id ?? undefined,
+    owner_object_id: query.owner_object_id ?? undefined,
   };
 }
 

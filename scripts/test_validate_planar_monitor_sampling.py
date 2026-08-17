@@ -139,6 +139,20 @@ class PlanarMonitorSamplingValidationTests(unittest.TestCase):
         self.assertLess(recipe.index("|| science_status=$?"), recipe.index("smoke:viewport-2d"))
         self.assertLess(recipe.index("smoke:viewport-2d"), recipe.index("qualification blocked"))
 
+    def test_default_recipe_runs_typed_browser_lane_and_fails_closed(self) -> None:
+        recipe = (Path(__file__).resolve().parents[1] / "justfile").read_text()
+        start = recipe.index("run-viewport-2d-default-slice-smoke ")
+        end = recipe.index("\nrun-viewport-2d-default-slice-smoke-fdm-cpu", start)
+        recipe = recipe[start:end]
+
+        self.assertIn("--source-kind default", recipe)
+        self.assertIn('CONTROL_ROOM_PLANAR_SOURCE_KIND="default"', recipe)
+        self.assertIn('CONTROL_ROOM_PLANAR_OUTPUT_DIR="$browser_dir"', recipe)
+        self.assertIn('browser_status=0', recipe)
+        self.assertIn('|| browser_status=$?', recipe)
+        self.assertIn('$PNPM_CMD --dir apps/control-room smoke:viewport-2d', recipe)
+        self.assertIn('if [ "$science_status" -ne 0 ] || [ "$browser_status" -ne 0 ]', recipe)
+
     def test_exact_sample_identity_requires_meta_token_and_matching_scalar_etag(self) -> None:
         meta = {"etag": '"sample:1"', "sample_token": "token:1"}
 

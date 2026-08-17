@@ -370,6 +370,12 @@ async function installFixtureApi(page, fixture) {
     const path = requestUrl.pathname;
     fixture.requests.push(`${request.method()} ${path}${requestUrl.search}`);
     if (request.method() === "OPTIONS") return fulfillEmpty(route, 204);
+    if (path === "/v2/sessions/current/visualization/state" && request.method() === "PATCH") {
+      const patch = request.postDataJSON() ?? {};
+      fixture.visualization = applyPatch(fixture.visualization, patch);
+      fixture.visualization.revision += 1;
+      return fulfillJson(route, fixture.visualization);
+    }
     if (path === "/v2/sessions/current/status") return fulfillJson(route, fixture.status);
     if (path === "/v2/sessions/current/visualization/state") return fulfillJson(route, fixture.visualization);
     if (path === "/v2/sessions/current/model/scene") return fulfillJson(route, fixture.scene);
@@ -387,6 +393,14 @@ async function installFixtureApi(page, fixture) {
     }
     if (path.startsWith("/v2/sessions/current/data/fdm-region-membership")) {
       return fulfillBinary(route, fixture.fdmMembershipBinary);
+    }
+    if (path.startsWith("/v2/sessions/current/data/fields/") && path.endsWith("/availability")) {
+      const quantityId = path.split("/")[6] ?? "m";
+      return fulfillJson(route, fieldAvailabilityFixture({
+        fixture,
+        quantityId,
+        query: requestUrl.searchParams,
+      }));
     }
     if (path.includes("/data/fields/") && path.endsWith("/meta")) return fulfillJson(route, fieldMetaFixture(path.split("/")[6] ?? "m"));
     if (path.includes("/data/fields/") && path.endsWith("/samples/vector")) {
@@ -517,14 +531,39 @@ async function setObjectDisplayState(page, expected) {
   const visible = panel.getByRole("button", { name: "Toggle target visibility" });
   const expectedVisible = expected.visible ?? true;
   const currentVisible = await visible.getAttribute("aria-pressed");
-  if (expectedVisible && currentVisible !== "true") await visible.click();
-  const vectors = panel.getByRole("button", { name: "Toggle vector field arrows" });
-  if ((await vectors.getAttribute("aria-pressed")) !== String(expected.vectors)) await vectors.click();
+  if (expectedVisible && currentVisible !== "true") {
+    await visible.click();
+    await waitForVisualizationMutationSettled(page, panel);
+  }
   const shadedWithEdges = panel.getByRole("radio", { name: "Shaded +" });
-  if (expected.wireframe && (await shadedWithEdges.getAttribute("aria-checked")) !== "true") await shadedWithEdges.click();
+  if (expected.wireframe && (await shadedWithEdges.getAttribute("aria-checked")) !== "true") {
+    await shadedWithEdges.click();
+    await page.waitForFunction(
+      () => document.querySelector('.fm-viz-render-mode-grid [role="radio"][aria-label="Shaded +"]')?.getAttribute("aria-checked") === "true",
+      null,
+      { timeout: timeoutMs },
+    );
+    await waitForVisualizationMutationSettled(page, panel);
+  }
   if (!expected.wireframe) {
     const shaded = panel.getByRole("radio", { name: "Shaded", exact: true });
-    if ((await shaded.getAttribute("aria-checked")) !== "true") await shaded.click();
+    if ((await shaded.getAttribute("aria-checked")) !== "true") {
+      await shaded.click();
+      await page.waitForFunction(
+        () => document.querySelector('.fm-viz-render-mode-grid [role="radio"][aria-label="Shaded"]')?.getAttribute("aria-checked") === "true",
+        null,
+        { timeout: timeoutMs },
+      );
+      await waitForVisualizationMutationSettled(page, panel);
+    }
+  }
+  // Surface coloring is deliberately disabled while the surface pass is off.
+  // Establish the requested render mode before enabling vectors or selecting a
+  // scalar color source, otherwise the smoke would test an invalid UI order.
+  const vectors = panel.getByRole("button", { name: "Toggle vector field arrows" });
+  if ((await vectors.getAttribute("aria-pressed")) !== String(expected.vectors)) {
+    await vectors.click();
+    await waitForVisualizationMutationSettled(page, panel);
   }
   if (expected.colorbar) {
     const colorSource = panel.locator('select[aria-label="Color source"]');
@@ -542,12 +581,46 @@ async function setObjectDisplayState(page, expected) {
     }
     await page.waitForFunction((source) => source instanceof HTMLSelectElement && !source.disabled && Array.from(source.options).some((option) => option.value === "magnitude"), await colorSource.elementHandle(), { timeout: timeoutMs });
     await colorSource.selectOption("magnitude");
+    await waitForVisualizationMutationSettled(page, panel);
   }
   const colorbar = panel.getByRole("switch", { name: "Add colorbar to viewport" });
-  if (await colorbar.count() && (await colorbar.getAttribute("aria-checked")) !== String(expected.colorbar)) await colorbar.click();
+  if (await colorbar.count() && (await colorbar.getAttribute("aria-checked")) !== String(expected.colorbar)) {
+    await colorbar.click();
+    await waitForVisualizationMutationSettled(page, panel);
+  }
   // Hiding is applied last because the Inspector intentionally disables
   // render-mode controls for a hidden target.
   if (!expectedVisible && (await visible.getAttribute("aria-pressed")) !== "false") await visible.click();
+}
+
+async function waitForVisualizationMutationSettled(page, panel) {
+  const panelHandle = await panel.elementHandle();
+  if (!panelHandle) throw new Error("Selected visualization Inspector disappeared while saving a display mutation.");
+  try {
+    await page.waitForFunction(
+      (element) =>
+        element instanceof HTMLElement &&
+        !element.innerText.includes("Saving display changes."),
+      panelHandle,
+      { timeout: timeoutMs },
+    );
+  } catch (error) {
+    const diagnostic = await page.evaluate(() => {
+      const audit = window.__FULLMAG_CONTROL_ROOM_AUDIT__;
+      const panelElement = document.querySelectorAll(".fm-inspector-panel").item(
+        document.querySelectorAll(".fm-inspector-panel").length - 1,
+      );
+      return {
+        inspectorText: panelElement?.textContent?.slice(-2_000) ?? null,
+        sync: audit?.readVisualizationSyncSnapshot?.() ?? null,
+        controller: audit?.readVisualizationControllerSnapshot?.() ?? null,
+        visualization: audit?.readViewportAuditResource?.("/v2/sessions/current/visualization/state") ?? null,
+      };
+    });
+    throw new Error(
+      `Visualization mutation did not settle: ${error instanceof Error ? error.message : String(error)} ${JSON.stringify(diagnostic)}`,
+    );
+  }
 }
 
 async function verifyPrimaryRenderModeCycle(page, targetLabel) {
@@ -563,6 +636,7 @@ async function verifyPrimaryRenderModeCycle(page, targetLabel) {
       mode,
       { timeout: timeoutMs },
     );
+    await waitForVisualizationMutationSettled(page, panel);
     deltas[mode] = await waitForViewportPixelDelta(
       page,
       baseline,
@@ -575,6 +649,8 @@ async function verifyPrimaryRenderModeCycle(page, targetLabel) {
 }
 
 async function captureColorSourceGate(page, panel, colorSource) {
+  const selectedTarget = await readTargetId(page);
+  const targetRef = visualizationTargetRefFromInspectorId(selectedTarget);
   return {
     colorSource: await colorSource.evaluate((select) => ({
       ariaDisabled: select.getAttribute("aria-disabled"),
@@ -584,19 +660,30 @@ async function captureColorSourceGate(page, panel, colorSource) {
     })),
     inspectorDebug: await panel.locator('[role="alert"], [data-slot*="diagnostic"], [data-slot*="warning"]').allTextContents(),
     inspectorText: (await panel.innerText()).slice(0, 8_000),
-    selectedTarget: await readTargetId(page),
+    selectedTarget,
     runtime: await page.evaluate(() => {
       const audit = window.__FULLMAG_CONTROL_ROOM_AUDIT__;
       return {
-        fdmSettings: audit?.readFdmVisualizationSettings?.() ?? null,
+        targetSettings: audit?.readVisualizationTargetSettings?.(targetRef) ?? null,
         listeners: audit?.readViewportAuditRuntime?.().listenerCounts ?? null,
         visualization: audit?.readViewportAuditResource?.("/v2/sessions/current/visualization/state") ?? null,
       };
-    }),
+    }, targetRef),
     requests: await page.evaluate(() => performance.getEntriesByType("resource")
       .map((entry) => entry.name)
       .filter((name) => name.includes("/v2/sessions/current/"))),
   };
+}
+
+function visualizationTargetRefFromInspectorId(targetId) {
+  if (targetId === "airbox") return { id: "airbox", kind: "airbox" };
+  if (targetId?.startsWith("object:")) return { id: targetId, kind: "object" };
+  if (targetId?.startsWith("part:")) return { id: targetId, kind: "part" };
+  if (targetId?.startsWith("region:")) return { id: targetId, kind: "region" };
+  if (targetId?.startsWith("fdm-native-layer:")) {
+    return { id: targetId, kind: "fdm-native-layer" };
+  }
+  return { id: targetId ?? "fdm-domain", kind: "fdm-domain" };
 }
 
 async function readTargetControls(page) {
@@ -706,6 +793,7 @@ async function setAirboxGeometryOff(page) {
     null,
     { timeout: timeoutMs },
   );
+  await waitForVisualizationMutationSettled(page, page.locator(".fm-inspector-panel").last());
 }
 
 async function setAirboxQuantityAndVectors(page, quantityId) {
@@ -722,6 +810,24 @@ async function setAirboxQuantityAndVectors(page, quantityId) {
     { id: quantityIdAttribute, value: quantityId },
     { timeout: timeoutMs },
   );
+  const optionState = await quantity.locator(`option[value="${quantityId}"]`).evaluate((option) => ({
+    disabled: option.disabled,
+    label: option.textContent,
+    value: option.value,
+  }));
+  if (optionState.disabled) {
+    const diagnostic = await page.evaluate(() => {
+      const audit = window.__FULLMAG_CONTROL_ROOM_AUDIT__;
+      return {
+        inspectorText: document.querySelectorAll(".fm-inspector-panel").item(
+          document.querySelectorAll(".fm-inspector-panel").length - 1,
+        )?.textContent?.slice(-4_000) ?? null,
+        sync: audit?.readVisualizationSyncSnapshot?.() ?? null,
+        visualization: audit?.readViewportAuditResource?.("/v2/sessions/current/visualization/state") ?? null,
+      };
+    });
+    throw new Error(`Airbox quantity option ${quantityId} is disabled: ${JSON.stringify({ optionState, diagnostic })}`);
+  }
   await quantity.selectOption(quantityId);
   const vectors = panel.getByRole("button", { name: "Toggle vector field arrows" });
   if ((await vectors.getAttribute("aria-pressed")) !== "true") await vectors.click();
@@ -865,12 +971,97 @@ async function waitForViewportPixelDelta(page, baseline, label, options = {}) {
 async function captureViewportDeltaFailure(page, label, payload) {
   await mkdir(browserAuditArtifactDir, { recursive: true });
   const slug = label.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+  const diagnostics = await page.evaluate(() => {
+    function serializeViewportAuditValue(value, depth = 0) {
+      if (depth > 4) return "[depth-limit]";
+      if (value instanceof Map) {
+        return {
+          __type: "Map",
+          entries: Array.from(value.entries()).slice(0, 64).map(([key, entry]) => [
+            String(key),
+            serializeViewportAuditValue(entry, depth + 1),
+          ]),
+          size: value.size,
+        };
+      }
+      if (ArrayBuffer.isView(value)) {
+        return {
+          __type: value.constructor?.name ?? "TypedArray",
+          length: value.length,
+          sample: Array.from(value).slice(0, 8),
+        };
+      }
+      if (Array.isArray(value)) {
+        return value.slice(0, 64).map((entry) =>
+          serializeViewportAuditValue(entry, depth + 1),
+        );
+      }
+      if (value && typeof value === "object") {
+        return Object.fromEntries(
+          Object.entries(value)
+            .slice(0, 64)
+            .map(([key, entry]) => [
+              key,
+              serializeViewportAuditValue(entry, depth + 1),
+            ]),
+        );
+      }
+      return value;
+    }
+    const audit = window.__FULLMAG_CONTROL_ROOM_AUDIT__;
+    const selectedNode = document.querySelector('[aria-selected="true"][data-node-id]');
+    const viewport = document.querySelector(".fm-viewport-3d");
+    const panel = document.querySelectorAll(".fm-inspector-panel").item(
+      document.querySelectorAll(".fm-inspector-panel").length - 1,
+    );
+    const targetIds = ["object:fdm-left", "object:fdm-right", "fdm-domain", "airbox"];
+    const resources = Object.fromEntries(
+      Object.keys(audit?.readViewportAuditRuntime?.().listenerCounts ?? {})
+        .filter((key) => key.includes("/v2/sessions/current/data/fields/") || key.includes("visualization/state"))
+        .map((key) => [key, audit?.readViewportAuditResource?.(key) ?? null]),
+    );
+    const targetSettings = Object.fromEntries(
+      targetIds.map((id) => {
+        const kind = id === "airbox" ? "airbox" : id === "fdm-domain" ? "fdm-domain" : "object";
+        return [id, audit?.readVisualizationTargetSettings?.({ id, kind }) ?? null];
+      }),
+    );
+    const canvas = document.querySelector(".fm-viewport-3d canvas");
+    const canvasState = canvas instanceof HTMLCanvasElement
+      ? (() => {
+          const gl = canvas.getContext("webgl2") ?? canvas.getContext("webgl");
+          return {
+            contextLost: gl?.isContextLost() ?? true,
+            drawingBufferHeight: gl?.drawingBufferHeight ?? 0,
+            drawingBufferWidth: gl?.drawingBufferWidth ?? 0,
+            height: canvas.height,
+            width: canvas.width,
+          };
+        })()
+      : null;
+    return {
+      activeViewportModule: audit?.readActiveViewportModule?.() ?? null,
+      canvas: canvasState,
+      inspector: panel?.textContent?.slice(0, 12_000) ?? null,
+      listenerCounts: audit?.readViewportAuditRuntime?.().listenerCounts ?? null,
+      resourceStats: audit?.readViewportAuditRuntime?.().resources ?? null,
+      selectedNodeId: selectedNode?.getAttribute("data-node-id") ?? null,
+      sync: audit?.readVisualizationSyncSnapshot?.() ?? null,
+      targetSettings,
+      viewportAttributes: viewport
+        ? Object.fromEntries(Array.from(viewport.attributes).map((attribute) => [attribute.name, attribute.value]))
+        : null,
+      visualization: audit?.readViewportAuditResource?.("/v2/sessions/current/visualization/state") ?? null,
+      workers: audit?.readViewportAuditRuntime?.().workers ?? null,
+      fieldResources: serializeViewportAuditValue(resources),
+    };
+  });
   await page.screenshot({
     path: join(browserAuditArtifactDir, `target-smoke-${slug}-failure.png`),
   });
   await writeFile(
     join(browserAuditArtifactDir, `target-smoke-${slug}-failure.json`),
-    `${JSON.stringify({ label, ...payload }, null, 2)}\n`,
+    `${JSON.stringify({ diagnostics, label, ...payload }, null, 2)}\n`,
   );
 }
 
@@ -1003,6 +1194,19 @@ function createFdmFixture() {
   fixture.regions = regionListFixture(objects);
   fixture.fdmMembership = fdmMembershipFixture(objects);
   fixture.fdmMembershipBinary = fdmMembershipBuffer();
+  // Keep the realized topology provenance stable while visualization patches
+  // invalidate and reload resources.  Without a source-scene revision the
+  // Inspector correctly enters its fail-closed edge-only safety view during a
+  // transient manifest refresh, which would make the smoke select a disabled
+  // surface-color control even though the FDM carrier itself is current.
+  fixture.manifest = {
+    generation_id: "1",
+    mesh_parts: [],
+    regions: [],
+    revision: 1,
+    source_scene_revision: 1,
+    topology_fingerprint: "0".repeat(64),
+  };
   validateFdmTargetFixture(fixture);
   return fixture;
 }
@@ -1086,7 +1290,47 @@ function regionListFixture(objects) {
   };
 }
 
-function fieldCatalogFixture() { return { domain_generation_id: "1", quantities: ["m", "H_eff", "H_demag", "H_ext"].map((quantity_id) => ({ available: true, components: 3, domain: "full_domain", domain_generation_id: "1", field_revision: 1, kind: "vector", label: quantity_id === "m" ? "Magnetization" : quantity_id === "H_eff" ? "Effective field" : quantity_id === "H_ext" ? "External field" : "Demag field", location: "nodes", materialization_wall_time_ns: 0, materialized_at_unix_ms: 1, quantity_id, source_revision: 1, source_step: 0, spatial: true, stale_by_steps: 0, state: "complete", unit: quantity_id === "m" ? "1" : "A/m" })), revision: 1 }; }
+function applyPatch(state, patch) {
+  return mergeRecords(state, patch ?? {});
+}
+
+function mergeRecords(current, patch) {
+  const output = { ...current };
+  for (const [key, value] of Object.entries(patch)) {
+    const previous = output[key];
+    output[key] =
+      isPlainObject(previous) && isPlainObject(value)
+        ? mergeRecords(previous, value)
+        : value;
+  }
+  return output;
+}
+
+function isPlainObject(value) {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function fieldAvailabilityFixture({ fixture, quantityId, query }) {
+  const scopeKind = query.get("scope_kind") ?? "full";
+  const scopeId = query.get("scope_id");
+  const targetId = query.get("target_id") ?? (scopeKind === "airbox" ? "airbox" : scopeId ?? "full");
+  const materialized = fixture.fieldMode !== "empty";
+  return {
+    carrier_id: materialized ? `fixture:${fixture.discretization}:${scopeKind}:${scopeId ?? "full"}` : null,
+    generation: String(fixture.domain.generation_id ?? 1),
+    pending: false,
+    quantity_id: quantityId,
+    reason_code: materialized ? null : "target_carrier_missing",
+    revision: 1,
+    scope_id: scopeId,
+    scope_kind: scopeKind,
+    state: materialized ? "ready" : "supported",
+    supported: true,
+    target_id: targetId,
+    materialized,
+  };
+}
+function fieldCatalogFixture() { return { domain_generation_id: "1", quantities: ["m", "H_eff", "H_demag", "H_ext"].map((quantity_id) => ({ available: true, components: 3, domain: "full_domain", domain_generation_id: "1", field_revision: 1, kind: "vector", label: quantity_id === "m" ? "Magnetization" : quantity_id === "H_eff" ? "Effective field" : quantity_id === "H_ext" ? "External field" : "Demag field", location: "nodes", materialization_wall_time_ns: 0, materialized_at_unix_ms: 1, quantity_id, source_revision: 1, source_step: 0, spatial: true, stale_by_steps: 0, state: "complete", ui_exposed: true, unit: quantity_id === "m" ? "1" : "A/m" })), revision: 1 }; }
 function fieldMetaFixture(quantityId) { return { components: ["x", "y", "z"], quantity_id: quantityId, stats: { max: 1, min: 0 }, unit: quantityId === "m" ? "1" : "A/m" }; }
 function fdmMembershipFixture(objects) {
   const region_legend = objects.map(({ id }, index) => ({

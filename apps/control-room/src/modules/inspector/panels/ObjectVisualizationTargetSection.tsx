@@ -60,6 +60,7 @@ import {
   surfaceColorSourceFieldMetaComponent,
   vectorColorModeFieldMetaComponent,
   availableVectorAnchorCount,
+  resolveVisualizationVectorBudgetValues,
   resolveVisualizationVectorScopeForTarget,
   geometryScopeDisplayPatch,
   quantitySourcePatch,
@@ -69,11 +70,11 @@ import {
   resolveVisualizationDisplayMode,
   type VisualizationDisplayMode,
   type VisualizationVectorBudgetRange,
+  type TargetFieldAvailability,
   type RegionVisualizationCarrier,
   visualizationQuantityItems,
   type ScalarColorbarDisplayUnit,
   colorPickerInputValue,
-  DEFAULT_VISUALIZATION_VECTOR_SCENE_CAP,
 } from "./ObjectVisualizationPanelModel";
 import { VisualizationVectorAccountingRows } from "./VisualizationVectorAccountingRows";
 import { SHARED_VECTOR_COLOR_MODE_ITEMS } from "../visualization/presentationSemantics";
@@ -761,6 +762,7 @@ export function VisualizationQuantitySection({
   patch,
   pending,
   settings,
+  targetFieldAvailability,
   targetKind,
 }: {
   fieldCatalog: FieldCatalogResource | null;
@@ -770,6 +772,7 @@ export function VisualizationQuantitySection({
   patch: PatchVisualizationTarget;
   pending: boolean;
   settings: VisualizationTargetSettings;
+  targetFieldAvailability?: ReadonlyMap<string, TargetFieldAvailability>;
   targetKind?: VisualizationTargetKind;
 }) {
   return (
@@ -794,6 +797,7 @@ export function VisualizationQuantitySection({
         targetKind,
         fieldCatalog,
         quantityCatalog,
+        targetFieldAvailability,
       ).map((quantity) => (
         <option disabled={quantity.disabled} key={quantity.value} value={quantity.value}>
           {quantity.label}
@@ -870,6 +874,7 @@ export function VisualizationVectorsSection({
   patchNumber,
   pending,
   regionCarrier,
+  sceneCap,
   sectionDisabled,
   settings,
   target,
@@ -902,6 +907,7 @@ export function VisualizationVectorsSection({
   ) => void;
   pending: boolean;
   regionCarrier?: RegionVisualizationCarrier | null;
+  sceneCap: number;
   sectionDisabled: SectionDisabled;
   settings: VisualizationTargetSettings;
   target: VisualizationTargetRef;
@@ -911,6 +917,8 @@ export function VisualizationVectorsSection({
   visualizationRevision: string | number | null;
   vectorTopologyHash: string | null;
 }) {
+  const supportsVectorSurfaceOffset =
+    visualizationTargetCapabilities(target).supportsVectorSurfaceOffset;
   const colorbarComponent = vectorColorModeFieldMetaComponent(
     settings.vectorColorMode,
     settings.activeQuantityId,
@@ -954,15 +962,15 @@ export function VisualizationVectorsSection({
     scopeId: fieldMetaScopeQuery.scope_id,
     scopeKind: viewportRenderedRangeScopeKind(fieldMetaScopeQuery.scope_kind),
   });
-  const vectorBudgetMax = vectorBudgetRange.exact
-    ? Math.min(vectorBudgetRange.max, DEFAULT_VISUALIZATION_VECTOR_SCENE_CAP)
-    : 0;
-  const vectorBudgetUnavailable =
-    !vectorBudgetRange.exact || availableVectorAnchorCount(vectorBudgetRange) === null;
-  const vectorBudgetValue = Math.max(
-    vectorBudgetRange.min,
-    Math.min(vectorBudgetMax, settings.vectorBudget),
-  );
+  const budgetValues = resolveVisualizationVectorBudgetValues({
+    range: vectorBudgetRange,
+    requestedBudget: settings.vectorBudget,
+    sceneCap,
+  });
+  const vectorBudgetMax = budgetValues.max ?? 0;
+  const vectorBudgetUnavailable = budgetValues.max === null;
+  const vectorBudgetValue = budgetValues.normalizedRequested;
+  const effectiveAllocation = budgetValues.effective;
   const vectorScope = resolveVisualizationVectorScopeForTarget(target);
   const vectorsDisabled = pending || sectionDisabled("vectors");
 
@@ -1060,7 +1068,9 @@ export function VisualizationVectorsSection({
           expectedScopeId={vectorScope.scopeId}
           expectedScopeKind={vectorScope.scopeKind}
           expectedVisualizationRevision={visualizationRevision}
-          requestedBudget={settings.vectorBudget}
+          effectiveAllocation={effectiveAllocation}
+          requestedBudget={budgetValues.requested}
+          sceneCap={budgetValues.policyCap}
           targetId={target.id}
           targetKind={targetKind}
         />
@@ -1083,26 +1093,30 @@ export function VisualizationVectorsSection({
             })
           }
         />
-        <ToggleButton
-          active={settings.vectorSurfaceOffsetEnabled}
-          disabled={vectorsDisabled}
-          disabledDescription={visualizationSectionDisabledDescription({
-            disabled: vectorsDisabled,
-            pending,
-            requiredPass: "Vectors",
-            requiredPassEnabled: settings.vectorsVisible,
-            targetVisible: settings.visible,
-          })}
-          label="Lift above surface"
-          onClick={() =>
-            void patch({
-              vectorSurfaceOffsetEnabled:
-                !settings.vectorSurfaceOffsetEnabled,
-            })
-          }
-        />
+        {supportsVectorSurfaceOffset && settings.geometryScope === "surface" && (
+          <ToggleButton
+            active={settings.vectorSurfaceOffsetEnabled}
+            disabled={vectorsDisabled}
+            disabledDescription={visualizationSectionDisabledDescription({
+              disabled: vectorsDisabled,
+              pending,
+              requiredPass: "Vectors",
+              requiredPassEnabled: settings.vectorsVisible,
+              targetVisible: settings.visible,
+            })}
+            label="Lift above surface"
+            onClick={() =>
+              void patch({
+                vectorSurfaceOffsetEnabled:
+                  !settings.vectorSurfaceOffsetEnabled,
+              })
+            }
+          />
+        )}
       </div>
-      {settings.vectorSurfaceOffsetEnabled ? (
+      {supportsVectorSurfaceOffset &&
+      settings.geometryScope === "surface" &&
+      settings.vectorSurfaceOffsetEnabled ? (
         <NumberField disabled={pending || sectionDisabled("vectors")} label="Extra surface gap" max={1} min={0} step={0.01} value={settings.vectorSurfaceOffsetScale} onChange={(value) => patchNumber("vectorSurfaceOffsetScale", value)} />
       ) : null}
       {meshParts && meshParts.length > 1 && onTogglePartVectors && (
@@ -1150,6 +1164,7 @@ export function VisualizationGeometryScopeSection({
   passControlsDisabled,
   pending,
   patch,
+  sceneCap,
   settings,
   vectorBudgetRange,
   vectorBudgetRanges,
@@ -1157,6 +1172,7 @@ export function VisualizationGeometryScopeSection({
   passControlsDisabled: boolean;
   pending: boolean;
   patch: PatchVisualizationTarget;
+  sceneCap: number;
   settings: VisualizationTargetSettings;
   vectorBudgetRange: VisualizationVectorBudgetRange;
   vectorBudgetRanges: Record<
@@ -1180,6 +1196,7 @@ export function VisualizationGeometryScopeSection({
                 vectorBudgetRanges[settings.geometryScope] ?? vectorBudgetRange,
               geometryScope: value as VisualizationGeometryScope,
               nextRange: vectorBudgetRanges[value as VisualizationGeometryScope],
+              sceneCap,
               settings,
             }),
           })
@@ -1192,17 +1209,25 @@ export function VisualizationGeometryScopeSection({
 export function VisualizationOverridesSection({
   childRegionOverrideCount,
   childRegionTargets,
+  childRegionPending,
   feedback,
+  mutationError,
+  mutationStatus,
   onReset,
   onResetChildRegions,
+  onRetry,
   pending,
   resetLabel,
 }: {
   childRegionOverrideCount: number;
   childRegionTargets: number;
+  childRegionPending: boolean;
   feedback: string | null;
+  mutationError: string | null;
+  mutationStatus: "acknowledged" | "idle" | "inflight" | "queued" | "rejected" | "retrying";
   onReset: () => void;
   onResetChildRegions: () => void;
+  onRetry: () => void;
   pending: boolean;
   resetLabel: string;
 }) {
@@ -1217,7 +1242,7 @@ export function VisualizationOverridesSection({
           <Button
             size="sm"
             type="button"
-            disabled={pending || childRegionOverrideCount === 0}
+            disabled={childRegionPending || childRegionOverrideCount === 0}
             variant="ghost"
             onClick={onResetChildRegions}
           >
@@ -1225,8 +1250,14 @@ export function VisualizationOverridesSection({
             Clear child region overrides
           </Button>
         ) : null}
+        {mutationStatus === "rejected" ? (
+          <Button size="sm" type="button" variant="ghost" onClick={onRetry}>
+            Retry display update
+          </Button>
+        ) : null}
       </div>
       {feedback && <FeedbackBanner kind="error" message={feedback} />}
+      {mutationError ? <FeedbackBanner kind="error" message={mutationError} /> : null}
     </InspectorGroup>
   );
 }

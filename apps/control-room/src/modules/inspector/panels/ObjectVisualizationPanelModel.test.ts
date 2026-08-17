@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 import type {
+  FieldAvailabilityResource,
   FieldCatalogResource,
   MeshSharedDomainManifestResource,
   QuantityCatalogResource,
@@ -46,10 +47,13 @@ import {
   resolveRegionVisualizationCarrier,
   scalarColorPalettePatch,
   resolveVisualizationVectorBudgetRange,
+  resolveVisualizationVectorSceneCap,
   visualizationOverridesForTargetReset,
   restoreVisualizationAppliedBaseline,
   resolveVisualizationVectorAccounting,
   resolveVisualizationVectorEffectiveBudget,
+  resolveVisualizationVectorBudgetValues,
+  resolveVisualizationTargetMutationStatus,
   resolveVisualizationVectorScopeForTarget,
   shouldShowPrimitiveDisplayToggle,
   shouldLoadObjectVisualizationFieldCatalog,
@@ -69,6 +73,7 @@ import {
   visualizationOverrideStateLabel,
   visualizationQuantityItems,
   fieldCatalogQuantityAvailable,
+  fieldAvailabilityQueryForVisualizationTarget,
   visualizationResetActionLabel,
   fdmGridCellCount,
   fdmVisualizationResourceNotice,
@@ -77,6 +82,9 @@ import {
   resolveObjectVisualizationLane,
   resolveObjectVisualizationResourceGates,
   resolveObjectVisualizationTargetForLane,
+  resolveObjectVisualizationDataState,
+  targetFieldCarrierDescriptorFromDebugSnapshots,
+  resolveTargetFieldAvailabilityMap,
 } from "./ObjectVisualizationPanelModel";
 import {
   resolveVisualizationVectorCapacityDescriptor,
@@ -88,6 +96,333 @@ import { OBJECT_VISUALIZATION_TARGET_KINDS } from "./ObjectVisualizationHelpers"
 type MeshPart = NonNullable<MeshSharedDomainManifestResource["mesh_parts"]>[number];
 
 describe("ObjectVisualizationPanelModel", () => {
+  it("maps each visualization target to the backend availability scope", () => {
+    expect(
+      fieldAvailabilityQueryForVisualizationTarget({
+        id: "object:film",
+        kind: "object",
+      }),
+    ).toEqual({
+      owner_object_id: null,
+      scope_id: "film",
+      scope_kind: "object",
+      target_id: "object:film",
+    });
+    expect(
+      fieldAvailabilityQueryForVisualizationTarget({
+        id: "region:film:core%3Ainner",
+        kind: "region",
+      }),
+    ).toEqual({
+      owner_object_id: "film",
+      scope_id: "core:inner",
+      scope_kind: "region",
+      target_id: "region:film:core%3Ainner",
+    });
+    expect(
+      fieldAvailabilityQueryForVisualizationTarget({
+        id: "fdm-native-layer:layer%3Abottom",
+        kind: "fdm-native-layer",
+      }),
+    ).toEqual({
+      owner_object_id: null,
+      scope_id: "layer:bottom",
+      scope_kind: "layer",
+      target_id: "fdm-native-layer:layer%3Abottom",
+    });
+    expect(
+      fieldAvailabilityQueryForVisualizationTarget({
+        id: "fdm-universe-outside-support",
+        kind: "fdm-domain",
+      }),
+    ).toEqual({
+      owner_object_id: null,
+      scope_id: null,
+      scope_kind: "full",
+      target_id: "fdm-universe-outside-support",
+    });
+  });
+
+  it("marks target-unavailable quantities disabled while keeping pending quantities selectable", () => {
+    const fieldCatalog: FieldCatalogResource = {
+      domain_generation_id: "generation-7",
+      quantities: [
+        {
+          available: true,
+          components: 3,
+          domain: "full_domain",
+          domain_generation_id: "generation-7",
+          field_revision: 42,
+          kind: "vector_field",
+          label: "Demagnetizing field",
+          location: "cell",
+          materialized_at_unix_ms: 1,
+          materialization_wall_time_ns: 0,
+          quantity_id: "H_demag",
+          source_revision: 42,
+          source_step: 12,
+          spatial: true,
+          stale_by_steps: 0,
+          state: "complete",
+          ui_exposed: true,
+          unit: "A/m",
+        },
+        {
+          available: true,
+          components: 3,
+          domain: "full_domain",
+          domain_generation_id: "generation-7",
+          field_revision: 0,
+          kind: "vector_field",
+          label: "Exchange field",
+          location: "cell",
+          materialized_at_unix_ms: 0,
+          materialization_wall_time_ns: 0,
+          materialization_reason_code: "field_not_materialized",
+          quantity_id: "H_exch",
+          source_revision: 0,
+          source_step: 0,
+          spatial: true,
+          stale_by_steps: 0,
+          state: "error",
+          ui_exposed: true,
+          unit: "A/m",
+        },
+      ],
+      revision: 42,
+    };
+    const target = { id: "airbox", kind: "airbox" as const };
+    const availability = resolveTargetFieldAvailabilityMap({
+      fieldCatalog,
+      quantityIds: ["H_demag", "H_exch"],
+      target,
+    });
+
+    const items = visualizationQuantityItems(
+      "H_demag",
+      "airbox",
+      fieldCatalog,
+      null,
+      availability,
+    );
+
+    expect(items.find((item) => item.value === "H_exch")).toMatchObject({
+      disabled: true,
+    });
+    expect(
+      availability.get("H_demag")?.state,
+    ).toBe("supported");
+  });
+
+  it("does not call a globally ready catalog Live without adopted target payload", () => {
+    const fieldCatalog: FieldCatalogResource = {
+      domain_generation_id: "generation-7",
+      quantities: [
+        {
+          available: true,
+          components: 3,
+          domain: "full_domain",
+          domain_generation_id: "generation-7",
+          field_revision: 42,
+          kind: "vector_field",
+          label: "Demagnetizing field",
+          location: "cell",
+          materialization_wall_time_ns: 0,
+          materialized_at_unix_ms: 1,
+          quantity_id: "H_demag",
+          source_revision: 42,
+          source_step: 12,
+          spatial: true,
+          stale_by_steps: 0,
+          state: "complete",
+          ui_exposed: true,
+          unit: "A/m",
+        },
+      ],
+      revision: 42,
+    };
+
+    expect(
+      resolveObjectVisualizationDataState({
+        carrier: null,
+        fieldCatalog,
+        fieldCatalogStatus: "ready",
+        quantityId: "H_demag",
+        requiresFieldData: true,
+        target: { id: "airbox", kind: "airbox" },
+      }),
+    ).toBe("Supported");
+  });
+
+  it("uses target availability as the canonical active-quantity state", () => {
+    const fieldCatalog: FieldCatalogResource = {
+      domain_generation_id: "generation-7",
+      quantities: [
+        {
+          available: true,
+          components: 3,
+          domain: "full_domain",
+          domain_generation_id: "generation-7",
+          field_revision: 42,
+          kind: "vector_field",
+          label: "Demagnetizing field",
+          location: "cell",
+          materialization_wall_time_ns: 0,
+          materialized_at_unix_ms: 1,
+          quantity_id: "H_demag",
+          source_revision: 42,
+          source_step: 12,
+          spatial: true,
+          stale_by_steps: 0,
+          state: "complete",
+          ui_exposed: true,
+          unit: "A/m",
+        },
+      ],
+      revision: 42,
+    };
+    const availability: FieldAvailabilityResource = {
+      carrier_id: null,
+      generation: "generation-7",
+      materialized: false,
+      pending: true,
+      quantity_id: "H_demag",
+      reason_code: "field_materialization_pending",
+      revision: 42,
+      scope_id: null,
+      scope_kind: "full",
+      state: "materializing",
+      supported: true,
+      target_id: "fdm-universe-outside-support",
+    };
+
+    expect(
+      resolveObjectVisualizationDataState({
+        backendAvailability: availability,
+        backendAvailabilityStatus: "ready",
+        carrier: null,
+        fieldCatalog,
+        fieldCatalogStatus: "ready",
+        quantityId: "H_demag",
+        requiresFieldData: true,
+        target: {
+          id: "fdm-universe-outside-support",
+          kind: "fdm-domain",
+        },
+      }),
+    ).toBe("Materializing");
+  });
+
+  it("keeps a target last-good payload stale while backend rematerializes", () => {
+    const availability: FieldAvailabilityResource = {
+      carrier_id: "carrier:airbox",
+      generation: "generation-7",
+      materialized: true,
+      pending: true,
+      quantity_id: "H_demag",
+      reason_code: "field_materialization_pending",
+      revision: 42,
+      scope_id: null,
+      scope_kind: "airbox",
+      state: "materializing",
+      supported: true,
+      target_id: "airbox",
+    };
+
+    expect(
+      resolveObjectVisualizationDataState({
+        backendAvailability: availability,
+        backendAvailabilityStatus: "ready",
+        carrier: {
+          adopted: false,
+          carrierId: "carrier:airbox",
+          fieldRevision: 42,
+          generationId: "generation-7",
+          payloadPointCount: 4,
+          payloadState: "ready",
+          quantityId: "H_demag",
+          scopeId: null,
+          scopeKind: "airbox",
+        },
+        fieldCatalog: null,
+        fieldCatalogStatus: "idle",
+        quantityId: "H_demag",
+        requiresFieldData: true,
+        target: { id: "airbox", kind: "airbox" },
+      }),
+    ).toBe("Stale");
+  });
+
+  it("converts an adopted viewport snapshot into target carrier proof", () => {
+    const snapshot = {
+      capturedAtMs: 10,
+      carriers: [
+        {
+          carrierId: "carrier:airbox",
+          payload: {
+            component: "full",
+            formatVersion: 3,
+            grid: [2, 2, 1],
+            indexing: "sampled_node_indices",
+            nComp: 3,
+            nodeIndexCount: 4,
+            pointCount: 4,
+            quantityId: "H_demag",
+            scopeId: "airbox",
+            scopeKind: "airbox",
+            valueCount: 12,
+          },
+          render: {
+            adoption: {
+              surface: {
+                adoptedAtMs: 10,
+                adoptedFieldBufferId: "field-buffer",
+                adoptedResourceKey: "field-key",
+                adoptedScalarBufferKey: "scalar-key",
+                adoptionSequence: 1,
+              },
+              vector: {
+                adoptedAtMs: 10,
+                adoptedFieldBufferId: "field-buffer",
+                adoptedResourceKey: "field-key",
+                adoptedVectorBuildKey: "vector-key",
+                adoptedVectorItemCount: 4,
+                adoptionSequence: 1,
+              },
+            },
+            fieldBufferState: "ready",
+            requestedFieldBufferId: "field-buffer",
+            vectors: { buildKey: "vector-key", segmentCount: 4 },
+          },
+          request: { resourceKey: "field-key" },
+          revisions: {
+            domainGenerationId: "generation-7",
+            fieldBufferRevision: "buffer-42",
+            fieldRevision: "42",
+          },
+        },
+      ],
+      target: { id: "airbox", kind: "airbox" },
+    } as unknown as VisualizationDebugSnapshot;
+
+    expect(
+      targetFieldCarrierDescriptorFromDebugSnapshots({
+        pass: "vector",
+        quantityId: "H_demag",
+        snapshots: [snapshot],
+        target: { id: "airbox", kind: "airbox" },
+      }),
+    ).toMatchObject({
+      adopted: true,
+      carrierId: "carrier:airbox",
+      fieldRevision: "42",
+      generationId: "generation-7",
+      payloadPointCount: 4,
+      payloadState: "ready",
+      quantityId: "H_demag",
+    });
+  });
+
   it("uses target capacity for FDM accounting and exposes requested/effective budgets", () => {
     const source: VisualizationVectorCapacitySource = {
       activeCellCount: 1_600,
@@ -118,6 +453,157 @@ describe("ObjectVisualizationPanelModel", () => {
         sceneCap: 1_200,
       }),
     ).toBe(1_200);
+  });
+
+  it("keeps requested, normalized, and effective vector budgets explicit", () => {
+    const range = {
+      availableAnchorCount: 50_000,
+      availableNodeCount: 50_000,
+      exact: true,
+      max: 2_048,
+      min: 0,
+      step: 1,
+    } as const;
+
+    expect(
+      resolveVisualizationVectorBudgetValues({
+        range,
+        requestedBudget: 50_000,
+      }),
+    ).toEqual({
+      effective: 2_048,
+      max: 2_048,
+      normalizedRequested: 2_048,
+      policyCap: 2_048,
+      requested: 50_000,
+    });
+  });
+
+  it("uses the session sampling policy as the Inspector scene cap", () => {
+    expect(
+      resolveVisualizationVectorSceneCap({
+        sampling: { max_glyphs: 384 },
+      } as VisualizationStateResource),
+    ).toBe(384);
+    expect(
+      resolveVisualizationVectorBudgetValues({
+        range: {
+          availableAnchorCount: 10_000,
+          availableNodeCount: 10_000,
+          exact: true,
+          max: 10_000,
+          min: 0,
+          step: 1,
+        },
+        requestedBudget: 10_000,
+        sceneCap: 384,
+      }),
+    ).toMatchObject({
+      effective: 384,
+      max: 384,
+      normalizedRequested: 384,
+      policyCap: 384,
+    });
+    expect(resolveVisualizationVectorSceneCap(null)).toBe(2_048);
+  });
+
+  it("preserves the requested budget when the next geometry scope is unknown", () => {
+    expect(
+      geometryScopeVectorBudgetPatch({
+        currentRange: {
+          availableAnchorCount: 20,
+          availableNodeCount: 20,
+          exact: true,
+          max: 20,
+          min: 0,
+          step: 1,
+        },
+        geometryScope: "full",
+        nextRange: {
+          availableAnchorCount: null,
+          availableNodeCount: 0,
+          exact: false,
+          max: null,
+          min: 0,
+          step: 1,
+        },
+        settings: {
+          ...DEFAULT_OBJECT_VISUALIZATION,
+          geometryScope: "surface",
+          vectorBudget: 7,
+        },
+      }),
+    ).toEqual({ geometryScope: "full" });
+  });
+
+  it("maps mutation state per target and exposes rejected recovery", () => {
+    expect(
+      resolveVisualizationTargetMutationStatus({
+        snapshot: {
+          error: new Error("display update rejected"),
+          inflightTargetIds: ["object:film"],
+          mutation: {
+            error: "display update rejected",
+            requestId: "req-7",
+            status: "retrying",
+            targetId: "object:film",
+          },
+          pendingTargetIds: [],
+          rejectedTargetIds: [],
+        },
+        targetIds: ["object:film", "region:film:core"],
+      }),
+    ).toMatchObject({
+      error: "display update rejected",
+      pending: true,
+      state: "retrying",
+    });
+
+    expect(
+      resolveVisualizationTargetMutationStatus({
+        snapshot: {
+          error: new Error("display update rejected"),
+          inflightTargetIds: [],
+          mutation: {
+            error: "display update rejected",
+            requestId: "req-7",
+            status: "rejected",
+            targetId: "object:film",
+          },
+          pendingTargetIds: [],
+          rejectedTargetIds: ["object:film"],
+        },
+        targetIds: ["object:film"],
+      }),
+    ).toEqual({
+      error: "display update rejected",
+      pending: false,
+      retryable: true,
+      state: "rejected",
+    });
+
+    expect(
+      resolveVisualizationTargetMutationStatus({
+        snapshot: {
+          error: null,
+          inflightTargetIds: ["object:other"],
+          mutation: {
+            error: null,
+            requestId: null,
+            status: "inflight",
+            targetId: "object:other",
+          },
+          pendingTargetIds: [],
+          rejectedTargetIds: [],
+        },
+        targetIds: ["object:film"],
+      }),
+    ).toEqual({
+      error: null,
+      pending: false,
+      retryable: false,
+      state: "idle",
+    });
   });
 
   it("keeps accounting stale when the current target identity changes", () => {
@@ -245,6 +731,230 @@ describe("ObjectVisualizationPanelModel", () => {
     expect(accounting.adoptedGlyphCount).toBeNull();
   });
 
+  it.each([
+    {
+      targetId: "object:film",
+      targetKind: "object" as const,
+      scopeId: null,
+      scopeKind: null,
+      anchorKind: "node" as const,
+    },
+    {
+      targetId: "region:film:core",
+      targetKind: "region" as const,
+      scopeId: "core",
+      scopeKind: "region",
+      anchorKind: "node" as const,
+    },
+    {
+      targetId: "part:film:core",
+      targetKind: "part" as const,
+      scopeId: "part:film:core",
+      scopeKind: "part",
+      anchorKind: "node" as const,
+    },
+    {
+      targetId: "fdm-native-layer:layer%3Abottom",
+      targetKind: "fdm-native-layer" as const,
+      scopeId: "layer:bottom",
+      scopeKind: "layer",
+      anchorKind: "cell" as const,
+    },
+  ])(
+    "publishes ready accounting for the target-scoped $targetKind carrier",
+    ({ anchorKind, scopeId, scopeKind, targetId, targetKind }) => {
+      const accounting = resolveVisualizationVectorAccounting({
+        anchorKind,
+        availableAnchorCount: 10,
+        currentTargetId: targetId,
+        expectedQuantityId: "H_demag",
+        expectedScopeId: scopeId,
+        expectedScopeKind: scopeKind,
+        snapshots: [
+          {
+            capturedAtMs: 10,
+            carriers: [
+              {
+                payload: {
+                  component: "full",
+                  pointCount: 4,
+                  quantityId: "H_demag",
+                  scopeId,
+                  scopeKind,
+                },
+                request: { resourceKey: `field:${targetId}` },
+                revisions: {
+                  domainGenerationId: "generation-7",
+                  meshTopologyHash: "topology-7",
+                  visualizationRevision: "visualization-7",
+                },
+                render: {
+                  requestedFieldBufferId: `buffer:${targetId}`,
+                  vectors: { buildKey: `vectors:${targetId}`, segmentCount: 4 },
+                  adoption: {
+                    vector: {
+                      adoptedFieldBufferId: `buffer:${targetId}`,
+                      adoptedResourceKey: `field:${targetId}`,
+                      adoptedVectorBuildKey: `vectors:${targetId}`,
+                      adoptedVectorItemCount: 4,
+                    },
+                  },
+                },
+              },
+            ],
+            target: {
+              id: targetId,
+              kind: targetKind,
+            },
+          },
+        ] as unknown as VisualizationDebugSnapshot[],
+      });
+
+      expect(accounting).toMatchObject({
+        adoptedGlyphCount: 4,
+        decodedSampleCount: 4,
+        status: "ready",
+      });
+    },
+  );
+
+  it("keeps the current effective allocation visible before a snapshot arrives", () => {
+    const accounting = resolveVisualizationVectorAccounting({
+      availableAnchorCount: 18,
+      anchorKind: "node",
+      currentTargetId: "object:film",
+      effectiveAllocation: 9,
+      requestedBudget: 12,
+      snapshots: [],
+    });
+
+    expect(accounting).toMatchObject({
+      allocatedBudget: 9,
+      requestedBudget: 12,
+      status: "unavailable",
+    });
+  });
+
+  it("rejects a snapshot whose carrier revision no longer matches capacity", () => {
+    const snapshot = {
+      capturedAtMs: 10,
+      carriers: [{
+        payload: {
+          component: "full",
+          pointCount: 9,
+          quantityId: "m",
+          scopeId: null,
+          scopeKind: "full",
+        },
+        request: { resourceKey: "field-key" },
+        revisions: {
+          domainGenerationId: "generation-7",
+          meshTopologyHash: "topology-7",
+          topologyRevision: "capacity-revision-old",
+          visualizationRevision: "visualization-7",
+        },
+        render: {
+          requestedFieldBufferId: "field-buffer",
+          vectors: { buildKey: "vector-build", segmentCount: 9 },
+          adoption: {
+            vector: {
+              adoptedFieldBufferId: "field-buffer",
+              adoptedResourceKey: "field-key",
+              adoptedVectorBuildKey: "vector-build",
+              adoptedVectorItemCount: 9,
+            },
+          },
+        },
+      }],
+      target: { id: "object:film", kind: "object" },
+    } as unknown as VisualizationDebugSnapshot;
+
+    const accounting = resolveVisualizationVectorAccounting({
+      capacity: {
+        anchorKind: "node",
+        carrierId: "mesh-7",
+        exact: true,
+        fullCount: 18,
+        generation: "generation-7",
+        revision: "capacity-revision-current",
+        surfaceCount: 10,
+        targetId: "object:film",
+        topologyHash: "topology-7",
+      },
+      currentTargetId: "object:film",
+      expectedQuantityId: "m",
+      expectedScopeKind: "full",
+      snapshots: [snapshot],
+    });
+
+    expect(accounting).toMatchObject({
+      adoptedGlyphCount: null,
+      decodedSampleCount: null,
+      status: "stale",
+    });
+  });
+
+  it("does not compare FDM membership tokens with FMVP topology revisions", () => {
+    const accounting = resolveVisualizationVectorAccounting({
+      capacity: {
+        anchorKind: "cell",
+        carrierId: "fdm:grid-7",
+        exact: true,
+        fullCount: 100,
+        generation: "generation-7",
+        revision: "mesh-3:membership-4",
+        surfaceCount: 100,
+        targetId: "fdm-domain",
+        topologyHash: "grid-7",
+      },
+      currentTargetId: "fdm-domain",
+      expectedQuantityId: "m",
+      expectedScopeKind: "full",
+      snapshots: [
+        {
+          capturedAtMs: 10,
+          carriers: [
+            {
+              payload: {
+                component: "full",
+                pointCount: 12,
+                quantityId: "m",
+                scopeId: null,
+                scopeKind: "full",
+              },
+              request: { resourceKey: "field-key" },
+              revisions: {
+                domainGenerationId: "generation-7",
+                meshTopologyHash: "grid-7",
+                topologyRevision: "42",
+                visualizationRevision: "visualization-7",
+              },
+              render: {
+                requestedFieldBufferId: "field-buffer",
+                vectors: { buildKey: "vector-build", segmentCount: 12 },
+                adoption: {
+                  vector: {
+                    adoptedFieldBufferId: "field-buffer",
+                    adoptedResourceKey: "field-key",
+                    adoptedVectorBuildKey: "vector-build",
+                    adoptedVectorItemCount: 12,
+                  },
+                },
+              },
+            },
+          ],
+          target: { id: "fdm-domain", kind: "object" },
+        },
+      ] as unknown as VisualizationDebugSnapshot[],
+    });
+
+    expect(accounting).toMatchObject({
+      adoptedGlyphCount: 12,
+      decodedSampleCount: 12,
+      status: "ready",
+    });
+  });
+
   it("maps only unambiguous target scopes for vector accounting", () => {
     expect(
       resolveVisualizationVectorScopeForTarget({
@@ -283,29 +993,29 @@ describe("ObjectVisualizationPanelModel", () => {
     expect(canonicalVisualizationStateForBaseline(canonical, optimistic)).toBe(canonical);
   });
 
-  it("waits for the FEM visualization resource before capturing an applied baseline", () => {
+  it("waits for the session visualization resource before capturing an applied baseline", () => {
     const target = { id: "object:film", kind: "object" } as const;
     const state = {} as VisualizationStateResource;
 
     expect(
       isVisualizationBaselineReady({
-        femResourcesEnabled: true,
         target,
         visualizationState: null,
+        visualizationStateEnabled: true,
       }),
     ).toBe(false);
     expect(
       isVisualizationBaselineReady({
-        femResourcesEnabled: true,
         target,
         visualizationState: state,
+        visualizationStateEnabled: true,
       }),
     ).toBe(true);
     expect(
       isVisualizationBaselineReady({
-        femResourcesEnabled: false,
         target,
         visualizationState: null,
+        visualizationStateEnabled: false,
       }),
     ).toBe(true);
   });
@@ -492,7 +1202,7 @@ describe("ObjectVisualizationPanelModel", () => {
     ).toEqual(selectionTarget);
   });
 
-  it("restores an FDM baseline locally without queueing FEM VisualizationState", () => {
+  it("restores an FDM baseline through the session VisualizationState resource", () => {
     const target = { id: "fdm-domain", kind: "fdm-domain" as const };
     const visualization = {
       clearTarget: vi.fn(),
@@ -508,7 +1218,13 @@ describe("ObjectVisualizationPanelModel", () => {
 
     restoreVisualizationAppliedBaseline({
       baseline: {
-        overrides: [],
+        overrides: [
+          {
+            scope: "fdm_domain",
+            scope_id: target.id,
+            display: { visible: true },
+          },
+        ] as never,
         targets: [
           {
             preferences: { primitiveVisible: true },
@@ -522,12 +1238,20 @@ describe("ObjectVisualizationPanelModel", () => {
       visualization,
     });
 
-    expect(queuePatch).not.toHaveBeenCalled();
-    expect(visualization.clearTarget).toHaveBeenCalledWith(target);
-    expect(visualization.patchTarget).toHaveBeenCalledWith(
-      target,
-      expect.objectContaining({ visible: true, shaderVisible: true }),
+    expect(queuePatch).toHaveBeenCalledWith(
+      {
+        overrides: [
+          {
+            scope: "fdm_domain",
+            scope_id: target.id,
+            display: { visible: true },
+          },
+        ],
+      },
+      ["fdm-domain"],
     );
+    expect(visualization.clearTarget).toHaveBeenCalledWith(target);
+    expect(visualization.patchTarget).not.toHaveBeenCalled();
     expect(visualization.patchViewportPreferences).toHaveBeenCalledWith(target, {
       primitiveVisible: true,
     });
@@ -580,7 +1304,7 @@ describe("ObjectVisualizationPanelModel", () => {
     );
   });
 
-  it("restores an FDM region baseline locally", () => {
+  it("restores an FDM region baseline through the session VisualizationState resource", () => {
     const target = { id: "region:film:core", kind: "region" as const };
     const visualization = {
       clearTarget: vi.fn(),
@@ -591,20 +1315,33 @@ describe("ObjectVisualizationPanelModel", () => {
 
     restoreVisualizationAppliedBaseline({
       baseline: {
-        overrides: [],
+        overrides: [
+          {
+            scope: "region",
+            scope_id: target.id,
+            visible: true,
+          },
+        ],
         targets: [{ preferences: null, settings: DEFAULT_OBJECT_VISUALIZATION, target }],
       },
       currentOverrides: [],
-      fdm: true,
       queuePatch,
       visualization,
     });
 
-    expect(queuePatch).not.toHaveBeenCalled();
-    expect(visualization.patchTarget).toHaveBeenCalledWith(
-      target,
-      expect.objectContaining({ visible: true }),
+    expect(queuePatch).toHaveBeenCalledWith(
+      {
+        overrides: [
+          {
+            scope: "region",
+            scope_id: target.id,
+            visible: true,
+          },
+        ],
+      },
+      ["region:film:core"],
     );
+    expect(visualization.patchTarget).not.toHaveBeenCalled();
   });
 
   it("keeps FEM baseline restoration on the backend queue path", () => {
@@ -675,6 +1412,7 @@ describe("ObjectVisualizationPanelModel", () => {
         target: { id: "fdm-domain", kind: "fdm-domain" },
       }),
     ).toEqual({
+      anchorKind: "cell",
       availableNodeCount: 24,
       exact: true,
       max: 24,
@@ -1302,6 +2040,38 @@ describe("ObjectVisualizationPanelModel", () => {
 
   it("waits for the realized field catalog before offering Airbox quantities", () => {
     expect(visualizationQuantityItems("H_demag", "airbox")).toEqual([]);
+  });
+
+  it("keeps a ready target-scoped active quantity selectable without a global catalog entry", () => {
+    const targetAvailability = new Map([
+      [
+        "H_demag",
+        {
+          adopted: false,
+          carrierId: "fixture:airbox",
+          generationId: "generation-1",
+          materialized: true,
+          quantityId: "H_demag",
+          reasonCode: null,
+          revision: 1,
+          scopeId: null,
+          scopeKind: "airbox",
+          state: "ready" as const,
+          supported: true,
+          targetId: "airbox",
+        },
+      ],
+    ]);
+
+    expect(
+      visualizationQuantityItems(
+        "H_demag",
+        "airbox",
+        null,
+        null,
+        targetAvailability,
+      ),
+    ).toEqual([{ label: "Demag field / H_demag", value: "H_demag" }]);
   });
 
   it("offers advertised quantities before their field payloads reach the inspector", () => {
@@ -2314,6 +3084,29 @@ describe("ObjectVisualizationPanelModel", () => {
     );
   });
 
+  it("does not expose unsupported surface-offset controls for the FDM Airbox target", () => {
+    const sections = buildVisualizationPanelSections({
+      effectiveSettings: resolveEffectiveVisualizationSettings(
+        DEFAULT_FDM_UNIVERSE_OUTSIDE_SUPPORT_VISUALIZATION,
+      ),
+      settings: DEFAULT_FDM_UNIVERSE_OUTSIDE_SUPPORT_VISUALIZATION,
+      target: {
+        id: "fdm-universe-outside-support",
+        kind: "fdm-domain",
+      },
+    });
+
+    const vectorFieldIds = sections
+      .find((section) => section.id === "vectors")
+      ?.fields.map((field) => field.id);
+    expect(vectorFieldIds).not.toEqual(
+      expect.arrayContaining([
+        "vectorSurfaceOffsetEnabled",
+        "vectorSurfaceOffsetScale",
+      ]),
+    );
+  });
+
   it("marks pass-specific controls inactive while preserving configured values", () => {
     const hidden = {
       ...DEFAULT_OBJECT_VISUALIZATION,
@@ -2425,6 +3218,7 @@ describe("ObjectVisualizationPanelModel", () => {
         target: { id: "airbox", kind: "airbox" },
       }),
     ).toEqual({
+      anchorKind: "node",
       availableNodeCount: 10_586,
       exact: true,
       max: 10_586,
@@ -2458,6 +3252,7 @@ describe("ObjectVisualizationPanelModel", () => {
         target: { id: "airbox", kind: "airbox" },
       }),
     ).toEqual({
+      anchorKind: "node",
       availableNodeCount: 0,
       exact: true,
       max: 0,
@@ -2503,6 +3298,51 @@ describe("ObjectVisualizationPanelModel", () => {
       availableNodeCount: 912,
       exact: true,
       max: 912,
+    });
+  });
+
+  it("counts shared FEM target anchors as a union for full and surface scopes", () => {
+    const meshParts: MeshPart[] = [
+      meshPart({
+        id: "part:film:a",
+        label: "Film A",
+        node_count: 100,
+        node_indices: Array.from({ length: 100 }, (_, index) => index),
+        object_id: "film",
+        role: "object",
+        surface_node_indices: [0, 1, 2, 3],
+      }),
+      meshPart({
+        id: "part:film:b",
+        label: "Film B",
+        node_count: 100,
+        node_indices: Array.from({ length: 100 }, (_, index) => index + 90),
+        object_id: "film",
+        role: "object",
+        surface_node_indices: [3, 4, 5],
+      }),
+    ];
+
+    expect(
+      resolveVisualizationVectorBudgetRange({
+        meshParts,
+        target: { id: "film", kind: "object" },
+      }),
+    ).toMatchObject({
+      anchorKind: "node",
+      availableNodeCount: 190,
+      exact: true,
+    });
+    expect(
+      resolveVisualizationVectorBudgetRange({
+        geometryScope: "surface",
+        meshParts,
+        target: { id: "film", kind: "object" },
+      }),
+    ).toMatchObject({
+      anchorKind: "node",
+      availableNodeCount: 6,
+      exact: true,
     });
   });
 
@@ -2843,9 +3683,32 @@ describe("ObjectVisualizationPanelModel", () => {
       availableAnchorCount: null,
       availableNodeCount: 0,
       exact: false,
-      max: 0,
+      max: null,
       min: 0,
       step: 1,
+    });
+  });
+
+  it("keeps an unknown vector capacity fail-closed for the budget control", () => {
+    const range = resolveVisualizationVectorBudgetRange({
+      target: { id: "part:film:unknown", kind: "part" },
+    });
+
+    expect(range).toMatchObject({
+      availableAnchorCount: null,
+      exact: false,
+      max: null,
+    });
+    expect(
+      resolveVisualizationVectorBudgetValues({
+        range,
+        requestedBudget: 120,
+      }),
+    ).toMatchObject({
+      effective: null,
+      max: null,
+      normalizedRequested: 120,
+      requested: 120,
     });
   });
 
@@ -2919,6 +3782,7 @@ describe("ObjectVisualizationPanelModel", () => {
         target: { id: "arch_waveguide", kind: "object" },
       }),
     ).toEqual({
+      anchorKind: "node",
       availableNodeCount: 5,
       exact: true,
       max: 5,
@@ -3038,6 +3902,37 @@ describe("ObjectVisualizationPanelModel", () => {
     ).toEqual({
       geometryScope: "full",
       vectorBudget: 12,
+    });
+  });
+
+  it("uses the session scene cap when preserving budget across geometry scopes", () => {
+    expect(
+      geometryScopeVectorBudgetPatch({
+        currentRange: {
+          availableNodeCount: 10_000,
+          exact: true,
+          max: 10_000,
+          min: 0,
+          step: 1,
+        },
+        geometryScope: "full",
+        nextRange: {
+          availableNodeCount: 20_000,
+          exact: true,
+          max: 20_000,
+          min: 0,
+          step: 1,
+        },
+        sceneCap: 384,
+        settings: {
+          ...DEFAULT_OBJECT_VISUALIZATION,
+          geometryScope: "surface",
+          vectorBudget: 10_000,
+        },
+      }),
+    ).toEqual({
+      geometryScope: "full",
+      vectorBudget: 384,
     });
   });
 

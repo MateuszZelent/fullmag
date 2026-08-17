@@ -8,7 +8,12 @@ import React, {
 } from "react";
 
 import { useKernel } from "@/kernel/KernelContext";
+import { VISUALIZATION_STATE_PATH } from "@/kernel/api/apiPaths";
 import type { VisualizationStateResource } from "@/kernel/api/apiTypes";
+import { createCommandContext } from "@/kernel/commands/commandContext";
+import {
+  EMPTY_VISUALIZATION_DEBUG_SNAPSHOTS,
+} from "@/kernel/visualization/VisualizationDebugController";
 import {
   airboxLocalVisualizationPatchFromTargetPatch,
   airboxVisualizationStatePatchFromTargetPatch,
@@ -36,6 +41,7 @@ import {
   useFieldCatalogResource,
   useQuantityCatalogResource,
 } from "@/kernel/resources/studyRuntimeResources";
+import { useFieldAvailabilityResource } from "@/kernel/resources/fieldAvailabilityResources";
 import {
   useObjectVisualizationController,
   useObjectVisualizationSelector,
@@ -71,6 +77,7 @@ import {
   buildVisualizationPanelSections,
   canonicalVisualizationStateForBaseline,
   resolveVisualizationVectorBudgetRange,
+  resolveVisualizationVectorSceneCap,
   visualizationOverridesForTargetReset,
   resolveVisualizationVectorCapacityForTarget,
   resolveObjectVisualizationPanelTopologyFreshness,
@@ -81,13 +88,18 @@ import {
   resolveVisualizationRenderResolution,
   restoreVisualizationAppliedBaseline,
   fdmVisualizationResourceNotice,
+  fieldAvailabilityQueryForVisualizationTarget,
   isVisualizationBaselineReady,
   resolveObjectVisualizationLane,
   resolveObjectVisualizationResourceGates,
   resolveObjectVisualizationTargetForLane,
+  resolveObjectVisualizationDataState,
+  resolveTargetFieldAvailabilityMap,
+  resolveTargetFieldAvailabilityFromBackend,
+  targetFieldCarrierDescriptorFromDebugSnapshots,
+  resolveVisualizationTargetMutationStatus,
   shouldLoadObjectVisualizationFieldCatalog,
   shouldShowPrimitiveDisplayToggle,
-  surfaceSolidColorPatch,
   queueTargetVectorVisibilityPatch,
   resolveObjectVisualizationPanelTarget,
   resolveSelectedTargetVectorMeshPartRows,
@@ -139,7 +151,8 @@ function useObjectVisualizationPanelState(
   selection: InspectorPanelProps["selection"],
 ) {
   const selectionTarget = resolveVisualizationTargetFromSelection(selection);
-  const { visualizationSync } = useKernel();
+  const kernel = useKernel();
+  const { visualizationDebug, visualizationSync } = kernel;
   const visualizationSyncSnapshot = useSyncExternalStore(
     (onStoreChange) => visualizationSync.subscribe(onStoreChange),
     () => visualizationSync.getSnapshot(),
@@ -171,8 +184,11 @@ function useObjectVisualizationPanelState(
   const { fdm: fdmResourcesEnabled, fem: femResourcesEnabled } =
     resolveObjectVisualizationResourceGates({ lane, target });
   const fdmTarget = fdmResourcesEnabled && target !== null;
+  const visualizationStateEnabled = Boolean(
+    target || (selection.ref?.type === "mesh-part" && selectionTarget),
+  );
   const visualizationState = useVisualizationStateResource({
-    enabled: femResourcesEnabled,
+    enabled: visualizationStateEnabled,
   });
   const displayVisualizationState =
     visualizationState.optimisticData ?? visualizationState.data;
@@ -220,7 +236,6 @@ function useObjectVisualizationPanelState(
   );
   /* The target resolver returns a scoped identity object; keep this memoized
    * because downstream resource selectors use its identity as a cache key. */
-  /* eslint-disable react-hooks/preserve-manual-memoization */
   const resolvedTarget = useMemo(
     () =>
       resolveObjectVisualizationPanelSelectionTarget({
@@ -238,7 +253,17 @@ function useObjectVisualizationPanelState(
       visualizationState.data,
     ],
   );
-  /* eslint-enable react-hooks/preserve-manual-memoization */
+  const targetDebugSnapshots = useSyncExternalStore(
+    (onStoreChange) =>
+      resolvedTarget
+        ? visualizationDebug.subscribe(resolvedTarget.id, onStoreChange)
+        : () => undefined,
+    () =>
+      resolvedTarget
+        ? visualizationDebug.getSnapshots(resolvedTarget.id)
+        : EMPTY_VISUALIZATION_DEBUG_SNAPSHOTS,
+    () => EMPTY_VISUALIZATION_DEBUG_SNAPSHOTS,
+  );
   const regionTarget = useMemo(() => {
     if (resolvedTarget?.kind !== "region") return null;
     return parseRegionVisualizationTargetId(resolvedTarget.id);
@@ -359,9 +384,9 @@ function useObjectVisualizationPanelState(
     }),
   };
   const visualizationBaselineReady = isVisualizationBaselineReady({
-    femResourcesEnabled,
     target: resolvedTarget,
     visualizationState: visualizationState.data,
+    visualizationStateEnabled,
   });
   const childRegionOverrideCount = resolveChildRegionOverrideTargetIds({
     backendOverrides: displayVisualizationState?.overrides ?? [],
@@ -373,11 +398,38 @@ function useObjectVisualizationPanelState(
   const targetKey = resolvedTarget
     ? visualizationTargetKey(resolvedTarget)
     : null;
+  const childRegionTargetIds = childRegionTargets.map((childTarget) =>
+    visualizationTargetKey(childTarget),
+  );
+  const mutationTargetIds = targetKey
+    ? [
+        targetKey,
+        ...(patchChildRegions ? childRegionTargetIds : []),
+      ]
+    : [];
+  const childRegionMutationStatus = resolveVisualizationTargetMutationStatus({
+    snapshot: visualizationSyncSnapshot,
+    targetIds: childRegionTargetIds,
+  });
+  const targetMutationStatus = resolveVisualizationTargetMutationStatus({
+    snapshot: visualizationSyncSnapshot,
+    targetIds: mutationTargetIds,
+  });
+  const mutationStatus = resolveVisualizationTargetMutationStatus({
+    snapshot: visualizationSyncSnapshot,
+    targetIds: [targetKey ?? "", ...childRegionTargetIds],
+  });
   const pending = Boolean(
-    targetKey &&
-      (snapshot.pendingOverrides?.[targetKey] ||
-        visualizationSyncSnapshot.pendingTargetIds.includes(targetKey) ||
-        visualizationSyncSnapshot.inflightTargetIds.includes(targetKey)),
+    targetMutationStatus.pending ||
+      mutationTargetIds.some((mutationTargetId) =>
+        Boolean(snapshot.pendingOverrides?.[mutationTargetId]),
+      ),
+  );
+  const childRegionPending = Boolean(
+    childRegionMutationStatus.pending ||
+      childRegionTargetIds.some((mutationTargetId) =>
+        Boolean(snapshot.pendingOverrides?.[mutationTargetId]),
+      ),
   );
   const fieldCatalogRequested =
     targetKey !== null && fieldCatalogRequestedTargetKey === targetKey;
@@ -403,6 +455,67 @@ function useObjectVisualizationPanelState(
         vectorsVisible: Boolean(settings?.vectorsVisible),
       }),
   });
+  const requiresFieldData = Boolean(
+    resolvedTarget &&
+      settings &&
+      visualizationTargetCapabilities(resolvedTarget).supportsFieldData &&
+      (settings.vectorsVisible ||
+        (settings.shaderVisible && settings.surfaceColorSource !== "solid")),
+  );
+  const fieldAvailabilityQuery = useMemo(
+    () => fieldAvailabilityQueryForVisualizationTarget(resolvedTarget),
+    [resolvedTarget],
+  );
+  const fieldAvailability = useFieldAvailabilityResource({
+    ...fieldAvailabilityQuery,
+    enabled: Boolean(resolvedTarget && requiresFieldData),
+    quantityId: settings?.activeQuantityId ?? "H_demag",
+  });
+  const fieldAvailabilityEnabled = Boolean(resolvedTarget && requiresFieldData);
+  const targetFieldCarrier =
+    resolvedTarget && settings
+      ? targetFieldCarrierDescriptorFromDebugSnapshots({
+          pass: settings.vectorsVisible ? "vector" : "surface",
+          quantityId: settings.activeQuantityId,
+          snapshots: targetDebugSnapshots,
+          target: resolvedTarget,
+        })
+      : null;
+  const dataState = resolveObjectVisualizationDataState({
+    backendAvailability: fieldAvailability.data,
+    backendAvailabilityStatus: fieldAvailabilityEnabled
+      ? fieldAvailability.status
+      : undefined,
+    carrier: targetFieldCarrier,
+    fieldCatalog: fieldCatalog.data,
+    fieldCatalogStatus: fieldCatalog.status,
+    quantityId: settings?.activeQuantityId ?? "",
+    requiresFieldData,
+    target: resolvedTarget,
+  });
+  const targetFieldAvailability = resolvedTarget
+    ? (() => {
+        const availability = new Map(
+          resolveTargetFieldAvailabilityMap({
+            carrier: targetFieldCarrier,
+            fieldCatalog: fieldCatalog.data,
+            quantityIds: fieldCatalog.data?.quantities.map(
+              (quantity) => quantity.quantity_id,
+            ),
+            target: resolvedTarget,
+          }),
+        );
+        const backendAvailability = fieldAvailability.data;
+        if (backendAvailability?.target_id === resolvedTarget.id) {
+          const targetAvailability = resolveTargetFieldAvailabilityFromBackend(
+            backendAvailability,
+            resolvedTarget,
+          );
+          availability.set(targetAvailability.quantityId, targetAvailability);
+        }
+        return availability;
+      })()
+    : new Map();
   const topologyFreshness = resolvedTarget
     ? resolveObjectVisualizationPanelTopologyFreshness({
         manifest: manifest.data,
@@ -444,18 +557,6 @@ function useObjectVisualizationPanelState(
 
   async function patch(patchValue: VisualizationTargetPatch): Promise<void> {
     if (!resolvedTarget) return;
-    if (fdmTarget) {
-      const viewportPatch = viewportRenderingPreferencesPatch(patchValue);
-      if (Object.keys(viewportPatch).length > 0) {
-        visualization.patchViewportPreferences(resolvedTarget, viewportPatch);
-      }
-      const localPatch = persistentVisualizationTargetPatch(patchValue);
-      if (Object.keys(localPatch).length > 0) {
-        visualization.patchTarget(resolvedTarget, localPatch);
-      }
-      setFeedback(null);
-      return;
-    }
     const patchTargets =
       resolvedTarget.kind === "object" && patchChildRegions && childRegionTargets.length > 0
         ? [resolvedTarget, ...childRegionTargets]
@@ -482,23 +583,6 @@ function useObjectVisualizationPanelState(
         visualizationState.rawData?.revision ?? visualizationState.data?.revision ?? 0,
       );
       setFeedback(null);
-      return;
-    }
-
-    if (!visualizationState.data) {
-      const viewportPreferencesPatch = viewportRenderingPreferencesPatch(patchValue);
-      const persistentPatch = persistentVisualizationTargetPatch(patchValue);
-      for (const patchTarget of patchTargets) {
-        if (Object.keys(viewportPreferencesPatch).length > 0) {
-          visualization.patchViewportPreferences(
-            patchTarget,
-            viewportPreferencesPatch,
-          );
-        }
-        if (Object.keys(persistentPatch).length > 0) {
-          visualization.patchTarget(patchTarget, persistentPatch);
-        }
-      }
       return;
     }
 
@@ -530,7 +614,7 @@ function useObjectVisualizationPanelState(
         visualization.patchTargetPending(
           patchTarget,
           remotePatch,
-          visualizationState.rawData?.revision ?? visualizationState.data.revision,
+          visualizationState.rawData?.revision ?? visualizationState.data?.revision ?? 0,
         );
       }
     }
@@ -539,11 +623,6 @@ function useObjectVisualizationPanelState(
 
   async function resetTarget(): Promise<void> {
     if (!resolvedTarget) return;
-    if (fdmTarget) {
-      visualization.clearTarget(resolvedTarget);
-      setFeedback(null);
-      return;
-    }
     if (resolvedTarget.kind === "airbox") {
       visualizationSync.queuePatch(
         resetAirboxVisualizationState(displayVisualizationState ?? { overrides: [] }),
@@ -554,8 +633,8 @@ function useObjectVisualizationPanelState(
       return;
     }
 
-    if (!visualizationState.data) {
-      visualization.clearTarget(resolvedTarget);
+    if (!displayVisualizationState) {
+      setFeedback("Visualization state is still loading.");
       return;
     }
 
@@ -574,10 +653,8 @@ function useObjectVisualizationPanelState(
 
   async function resetChildRegionTargets(): Promise<void> {
     if (childRegionOverrideCount === 0) return;
-    if (!visualizationState.data) {
-      for (const childTarget of childRegionTargets) {
-        visualization.clearTarget(childTarget);
-      }
+    if (!displayVisualizationState) {
+      setFeedback("Visualization state is still loading.");
       return;
     }
 
@@ -602,11 +679,16 @@ function useObjectVisualizationPanelState(
     restoreVisualizationAppliedBaseline({
       baseline,
       currentOverrides: displayVisualizationState?.overrides ?? [],
-      fdm: fdmTarget,
       queuePatch: (statePatch, targetIds) =>
         visualizationSync.queuePatch(statePatch, targetIds),
       visualization,
     });
+    setFeedback(null);
+  }
+
+  async function retryRejectedMutation(): Promise<void> {
+    if (!mutationStatus.retryable) return;
+    await visualizationSync.retryRejectedMutation();
     setFeedback(null);
   }
 
@@ -625,14 +707,35 @@ function useObjectVisualizationPanelState(
       return;
     }
     if (field === "shaderMonoColor") {
-      void patch(surfaceSolidColorPatch(value));
+      void executeColorCommand("visualization.target.set-shader-mono-color", value);
       return;
     }
     if (field === "vectorMonoColor") {
       void patch({ vectorMonoColor: value });
       return;
     }
-    void patch({ wireframeColor: value });
+    void executeColorCommand("visualization.target.set-wireframe-color", value);
+  }
+
+  async function executeColorCommand(
+    commandId:
+      | "visualization.target.set-shader-mono-color"
+      | "visualization.target.set-wireframe-color",
+    value: string,
+  ): Promise<void> {
+    if (!resolvedTarget) return;
+    const result = await kernel.commands.execute(
+      commandId,
+      createCommandContext("inspector", kernel, {
+        resourceData: displayVisualizationState
+          ? { [VISUALIZATION_STATE_PATH]: displayVisualizationState }
+          : undefined,
+        sourceDetail: "ObjectVisualizationPanel",
+        visualizationTarget: resolvedTarget,
+      }),
+      value,
+    );
+    setFeedback(result.status === "failed" ? result.message ?? "Color update failed." : null);
   }
 
   function patchNumber(
@@ -801,6 +904,9 @@ function useObjectVisualizationPanelState(
   >;
   const vectorBudgetRange =
     vectorBudgetRanges[settings?.geometryScope ?? "full"];
+  const vectorSceneCap = resolveVisualizationVectorSceneCap(
+    displayVisualizationState,
+  );
   function onTogglePartVectors(visible: boolean) {
     if (!resolvedTarget || !displayVisualizationState) return;
     queueTargetVectorVisibilityPatch({
@@ -822,6 +928,7 @@ function useObjectVisualizationPanelState(
     quantityCatalog,
     childRegionOverrideCount,
     childRegionTargets,
+    dataState,
     hasTargetOverride,
     onFieldCatalogRequest: () => setFieldCatalogRequestedTargetKey(targetKey),
     onTogglePartVectors,
@@ -831,6 +938,11 @@ function useObjectVisualizationPanelState(
     patchColor,
     patchNumber,
     pending,
+    mutationError:
+      mutationStatus.state === "rejected" ? mutationStatus.error : null,
+    mutationStatus,
+    childRegionPending,
+    retryRejectedMutation,
     renderResolution,
     renderWarning,
     regionCarrier,
@@ -841,11 +953,13 @@ function useObjectVisualizationPanelState(
     sectionDisabled,
     settings: panelSettings,
     target: resolvedTarget,
+    targetFieldAvailability,
     setPatchChildRegions,
     primitiveDisplayToggleVisible,
     vectorBudgetRange,
     vectorBudgetRanges,
     vectorCapacity,
+    vectorSceneCap,
     visualizationResourceRevision,
     vectorMeshParts,
     vectorTopologyHash:
@@ -1008,6 +1122,7 @@ function ObjectVisualizationPanelView({
     displaySettings,
     childRegionOverrideCount,
     childRegionTargets,
+    dataState,
     feedback,
     fdmNotice,
     fdmTarget,
@@ -1022,6 +1137,9 @@ function ObjectVisualizationPanelView({
     patchColor,
     patchNumber,
     pending,
+    childRegionPending,
+    mutationError,
+    mutationStatus,
     renderResolution,
     renderWarning,
     regionCarrier,
@@ -1033,10 +1151,12 @@ function ObjectVisualizationPanelView({
     settings,
     setPatchChildRegions,
     target,
+    targetFieldAvailability,
     primitiveDisplayToggleVisible,
     vectorBudgetRange,
     vectorBudgetRanges,
     vectorCapacity,
+    vectorSceneCap,
     visualizationResourceRevision,
     vectorMeshParts,
     vectorTopologyHash,
@@ -1079,19 +1199,6 @@ function ObjectVisualizationPanelView({
   const meshState = renderResolution?.degradedReasons.length
     ? "Degraded"
     : "Ready";
-  const requiresFieldData =
-    capabilities.supportsFieldData &&
-    (displaySettings.vectorsVisible ||
-      (displaySettings.shaderVisible && settings.surfaceColorSource !== "solid"));
-  const dataState =
-    !capabilities.supportsFieldData
-      ? "Not available"
-      : !requiresFieldData
-      ? "Not required"
-      : fieldCatalog.status === "ready"
-        ? "Live"
-        : fieldCatalog.status;
-
   return (
     <div
       className="fm-inspector-panel grid min-w-0 gap-fm-inspector-group"
@@ -1187,6 +1294,7 @@ function ObjectVisualizationPanelView({
                     fieldCatalog={fieldCatalog.data}
                     fieldCatalogLoading={fieldCatalogLoading}
                     quantityCatalog={quantityCatalog.data}
+                    targetFieldAvailability={targetFieldAvailability}
                     onFieldCatalogRequest={onFieldCatalogRequest}
                     patch={patch}
                     pending={pending}
@@ -1241,6 +1349,7 @@ function ObjectVisualizationPanelView({
               targetKind={target.kind}
               vectorBudgetRange={vectorBudgetRange}
               vectorCapacity={vectorCapacity}
+              sceneCap={vectorSceneCap}
               visualizationRevision={visualizationResourceRevision}
               vectorTopologyHash={vectorTopologyHash}
               />
@@ -1269,6 +1378,7 @@ function ObjectVisualizationPanelView({
         passControlsDisabled={passControlsDisabled}
         pending={pending}
         patch={patch}
+        sceneCap={vectorSceneCap}
         settings={settings}
         vectorBudgetRange={vectorBudgetRange}
         vectorBudgetRanges={vectorBudgetRanges}
@@ -1280,9 +1390,13 @@ function ObjectVisualizationPanelView({
         childRegionOverrideCount={childRegionOverrideCount}
         childRegionTargets={Math.max(childRegionTargets.length, childRegionOverrideCount)}
         feedback={feedback}
+        mutationError={mutationError}
+        mutationStatus={mutationStatus.state}
         onReset={() => void resetTarget()}
         onResetChildRegions={() => void resetChildRegionTargets()}
+        onRetry={() => void panel.retryRejectedMutation()}
         pending={pending}
+        childRegionPending={childRegionPending}
         resetLabel={visualizationResetActionLabel(target.kind)}
       />
     </div>

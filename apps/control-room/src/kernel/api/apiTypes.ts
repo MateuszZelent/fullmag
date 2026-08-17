@@ -38,9 +38,17 @@ export type FdmNativeLayerRegionMembershipResource =
   components["schemas"]["FdmNativeLayerRegionMembershipResource"];
 export type EngineLogResource = components["schemas"]["EngineLogResource"];
 export type FieldCatalogResource = components["schemas"]["FieldCatalog"];
+export type FieldAvailabilityResource =
+  components["schemas"]["FieldAvailabilityResource"];
 export type FieldMetaResource = components["schemas"]["FieldMeta"];
 export type QuantityCatalogResource =
   components["schemas"]["QuantityCatalogResponse"];
+export interface FieldAvailabilityQuery {
+  target_id?: string | null;
+  scope_kind?: string | null;
+  scope_id?: string | null;
+  owner_object_id?: string | null;
+}
 export interface FieldMetaQuery {
   component?: string | null;
   owner_object_id?: string | null;

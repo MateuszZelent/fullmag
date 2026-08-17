@@ -53,7 +53,7 @@ vi.mock("@/kernel/resources/planarMonitorResources", () => ({
 
 vi.mock("@/kernel/visualization/useVisualizationStateResource", () => ({
   useVisualizationStateResource: () => ({
-    data: { planar: { active_monitor_id: null } },
+    data: { planar: { source: { kind: "default" } } },
   }),
 }));
 
@@ -121,7 +121,9 @@ describe("PlanarMonitorDraftInspectorPanel", () => {
       expect(crossSectionWorkspaceStore.getSnapshot().planarMonitorDraft).toBeNull();
       expect(mocks.invalidate).toHaveBeenCalledWith(expect.any(String), 8);
       expect(mocks.queuePatch).toHaveBeenCalledWith({
-        planar: { active_monitor_id: "planar_monitor_1" },
+        planar: {
+          source: { kind: "monitor", monitor_id: "planar_monitor_1" },
+        },
       });
     } finally {
       await act(async () => root.unmount());

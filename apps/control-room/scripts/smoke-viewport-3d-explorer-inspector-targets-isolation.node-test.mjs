@@ -104,7 +104,7 @@ test("target smoke proves every magnetic primary render mode with canvas pixels"
   assert.match(source, /minimumChangedPixels: 6/);
   assert.match(source, /target-smoke-fdm-success\.png/);
   assert.match(source, /target-smoke-fem-success\.png/);
-  assert.match(source, /CONTROL_ROOM_TARGET_SMOKE_PHASE === "fem"/);
+  assert.match(source, /targetSmokePhase === "fem"/);
 });
 
 test("target smoke cannot report Airbox success after a missing vector pixel delta", async () => {
@@ -114,7 +114,7 @@ test("target smoke cannot report Airbox success after a missing vector pixel del
   );
 
   assert.doesNotMatch(source, /AIRBOX_DEBUG_DELTA_ERROR/);
-  assert.match(source, /const delta = await waitForViewportPixelDelta\(page, baseline, "Airbox vectors"\)/);
+  assert.match(source, /await waitForViewportPixelDelta\(page, airboxBefore, "Airbox vectors"/);
 });
 
 test("target smoke persists canvas-delta failure evidence", async () => {
@@ -126,6 +126,18 @@ test("target smoke persists canvas-delta failure evidence", async () => {
   assert.match(source, /async function captureViewportDeltaFailure\(page, label, payload\)/);
   assert.match(source, /target-smoke-\$\{slug\}-failure\.png/);
   assert.match(source, /target-smoke-\$\{slug\}-failure\.json/);
+});
+
+test("target smoke serializes Map-backed resource data in failure evidence", async () => {
+  const source = await readFile(
+    new URL("./smoke-viewport-3d-explorer-inspector-targets.mjs", import.meta.url),
+    "utf8",
+  );
+
+  assert.match(source, /function serializeViewportAuditValue\(value(?:, depth = 0)?\)/);
+  assert.match(source, /value instanceof Map/);
+  assert.match(source, /Array\.from\(value\.entries\(\)/);
+  assert.match(source, /fieldResources: serializeViewportAuditValue\(resources\)/);
 });
 
 test("FEM fixture honors exact topology range requests", async () => {
@@ -149,4 +161,39 @@ test("target smoke serves production-shaped scoped FDM FMVP v3 metadata", async 
   assert.match(source, /for \(const \[index, code\] of \[\.\.\."FMMI"\]\.entries\(\)\)/);
   assert.match(source, /view\.setUint8\(4, 3\)/);
   assert.match(source, /fieldRequest\.scopeKind === "full"/);
+});
+
+test("target smoke fixture acknowledges visualization patches and exposes target availability", async () => {
+  const source = await readFile(
+    new URL("./smoke-viewport-3d-explorer-inspector-targets.mjs", import.meta.url),
+    "utf8",
+  );
+
+  assert.match(source, /request\.method\(\) === "PATCH"/);
+  assert.match(source, /fixture\.visualization\s*=\s*applyPatch\(fixture\.visualization/);
+  assert.match(source, /data\/fields\/.*availability/);
+  assert.match(source, /target_id|scope_kind|scope_id/);
+});
+
+test("target smoke waits for target display mutations before touching dependent controls", async () => {
+  const source = await readFile(
+    new URL("./smoke-viewport-3d-explorer-inspector-targets.mjs", import.meta.url),
+    "utf8",
+  );
+
+  assert.match(source, /async function waitForVisualizationMutationSettled\(page, panel\)/);
+  assert.match(source, /await waitForVisualizationMutationSettled\(page, panel\)/);
+  assert.match(source, /Saving display changes/);
+});
+
+test("target smoke waits for the Airbox geometry mutation before changing quantity", async () => {
+  const source = await readFile(
+    new URL("./smoke-viewport-3d-explorer-inspector-targets.mjs", import.meta.url),
+    "utf8",
+  );
+
+  assert.match(
+    source,
+    /async function setAirboxGeometryOff\(page\)[\s\S]*?waitForVisualizationMutationSettled\(page, page\.locator\("\.fm-inspector-panel"\)\.last\(\)\)/,
+  );
 });

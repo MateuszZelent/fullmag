@@ -494,6 +494,10 @@ pub fn build_v2_router() -> Router<Arc<AppState>> {
             get(handlers::data::get_field_catalog),
         )
         .route(
+            "/v2/sessions/current/data/fields/:quantity_id/availability",
+            get(handlers::data::get_field_availability),
+        )
+        .route(
             "/v2/sessions/current/data/domain/meta",
             get(handlers::data::get_domain_meta),
         )

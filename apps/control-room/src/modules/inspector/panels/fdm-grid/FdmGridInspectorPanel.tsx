@@ -9,13 +9,20 @@ import {
   useFdmRegionMembershipResource,
 } from "@/kernel/resources/geometryLifecycleResources";
 import { useSessionStatusSelector } from "@/kernel/resources/useSessionStatus";
+import {
+  FDM_UNIVERSE_OUTSIDE_SUPPORT_TARGET,
+} from "@/kernel/visualization/ObjectVisualizationController";
 import { resolveFdmDisplaySampling } from "@/shared/domain/mesh/fdmDisplaySampling";
 
 import type { InspectorPanelProps } from "../../inspectorTypes";
 import { FeedbackBanner } from "../../primitives/FeedbackBanner";
 import { FieldRow } from "../../primitives/FieldRow";
 import { InspectorGroup } from "../../primitives/InspectorGroup";
-import { ObjectVisualizationPanel } from "../ObjectVisualizationPanel";
+import {
+  ObjectVisualizationPanel,
+  VisualizationTargetInspectorPanel,
+  type VisualizationInspectorOwner,
+} from "../ObjectVisualizationPanel";
 import {
   resolveFdmGridInspectorModel,
   resolveFdmGridSelectionInspectorModel,
@@ -48,6 +55,26 @@ function statusBannerKind(
     return "warning";
   }
   return null;
+}
+
+const FDM_UNIVERSE_OUTSIDE_SUPPORT_VISUALIZATION_OWNER: VisualizationInspectorOwner = {
+  actionSummary: "Airbox extent, display passes, field quantity, and overrides",
+  capabilityDescription:
+    "Uses the canonical FDM universe-outside-support target and its shared visualization mutation lifecycle.",
+  id: "fdm-grid.universe-outside-support.visualization",
+  targetLabel: FDM_UNIVERSE_OUTSIDE_SUPPORT_TARGET.label ?? "Airbox",
+  title: "FDM Airbox visualization",
+};
+
+export function FdmGridUniverseVisualizationPanel({
+  selection,
+}: InspectorPanelProps) {
+  return (
+    <VisualizationTargetInspectorPanel
+      owner={FDM_UNIVERSE_OUTSIDE_SUPPORT_VISUALIZATION_OWNER}
+      selection={selection}
+    />
+  );
 }
 
 function FdmMultilayerInspectorPanelView({
@@ -332,7 +359,9 @@ export function FdmGridInspectorPanel({ selection }: InspectorPanelProps) {
         nativeLayerSelected ? <ObjectVisualizationPanel selection={selection} /> : null
       }
       universeVisualizationControls={
-        outsideSupportSelected ? <ObjectVisualizationPanel selection={selection} /> : null
+        outsideSupportSelected ? (
+          <FdmGridUniverseVisualizationPanel selection={selection} />
+        ) : null
       }
     />
   );

@@ -203,6 +203,10 @@ export const DATA_FIELDS_PATH = openApiV2Path(
   "/v2/sessions/current/data/fields",
 );
 
+export const DATA_FIELD_AVAILABILITY_PATH = openApiV2Path(
+  "/v2/sessions/current/data/fields/{quantity_id}/availability",
+);
+
 export const DATA_PLANAR_FIELD_META_PATH = openApiV2Path(
   "/v2/sessions/current/data/fields/{quantity_id}/planar-monitors/{monitor_id}/meta",
 );

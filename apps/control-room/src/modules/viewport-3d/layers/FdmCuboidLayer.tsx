@@ -80,7 +80,6 @@ import type { RegionOverlaySelection } from "./RegionOverlayLayer";
 import {
   buildFdmVectorSegmentsUncached,
   buildFdmPointPositions,
-  createFdmVectorOnlyBuildInput,
   resolveFdmCuboidMembershipRevision,
   type FdmCuboidBuildRequest,
   type FdmCuboidBuildResult,
@@ -111,8 +110,6 @@ export {
   type FdmCuboidInstanceModelOptions,
   type FdmVoxelTopographyOptions,
 } from "./fdmCuboidBuildModel";
-
-export { createFdmVectorOnlyBuildInput } from "./fdmCuboidBuildModel";
 
 export { resolveFdmCuboidPassPlan } from "./fdmCuboidPasses";
 export function hasAnyEffectiveFdmPass(

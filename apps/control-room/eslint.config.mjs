@@ -9,6 +9,9 @@ const eslintConfig = defineConfig([
   globalIgnores([
     // Default ignores of eslint-config-next:
     ".next/**",
+    // Audit/smoke harnesses use isolated Next output directories whose names
+    // carry a suffix (for example `.next-audit-target-smoke-fdm`).
+    ".next-*/**",
     ".next-audit/**",
     ".fullmag/**",
     "out/**",

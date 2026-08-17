@@ -31,6 +31,7 @@ import {
   getViewport3DFieldVectorCacheBudgetDiagnostics,
   getViewport3DFieldVectorCacheEntryDiagnostics,
 } from "../viewport3dResources";
+import type { Viewport3DAirboxFieldVectorPartState } from "../viewport3dResources";
 import type {
   Viewport3DFieldRenderModel,
   Viewport3DTargetFieldBufferSource,
@@ -68,6 +69,10 @@ export interface Viewport3DVisualizationDebugTargetSource {
 }
 
 export interface Viewport3DVisualizationDebugSource {
+  airboxFieldVectorPartStates?: ReadonlyMap<
+    string,
+    Viewport3DAirboxFieldVectorPartState
+  >;
   carrierRoles?: ReadonlyMap<string, string>;
   fieldModel: Viewport3DFieldRenderModel | null;
   fullFieldBufferIdentity?: {
@@ -637,6 +642,8 @@ function buildCarrierInput({
     ? parseCanonicalFieldVectorResourceKey(resourceKey)
     : null;
   const scalarColors = pass.surface.scalarColors;
+  const airboxFieldVectorPartState =
+    source.airboxFieldVectorPartStates?.get(carrierId) ?? null;
   const cache = resourceKey
     ? getViewport3DFieldVectorCacheEntryDiagnostics(
         resourceKey,
@@ -659,6 +666,19 @@ function buildCarrierInput({
     fieldBufferId: fieldBuffer?.bufferId ?? null,
     fieldBufferRevision: fieldBuffer?.fieldRevision ?? null,
     fieldBufferState: pass.fieldBufferState,
+    fieldResourceState: airboxFieldVectorPartState
+      ? {
+          dataAvailable: airboxFieldVectorPartState.data !== null,
+          lastValidDataAvailable:
+            airboxFieldVectorPartState.lastValidData !== null,
+          reasonCode: airboxFieldVectorPartState.reasonCode,
+          revision:
+            airboxFieldVectorPartState.revision == null
+              ? null
+              : String(airboxFieldVectorPartState.revision),
+          status: airboxFieldVectorPartState.status,
+        }
+      : null,
     fieldRevision: cache?.responseMetadata?.fieldRevision ?? null,
     geometryMaskDescription:
       carrierId === "fdm-domain" ||

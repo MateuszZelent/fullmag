@@ -7,6 +7,7 @@ import {
   Panel,
   Separator,
   type Layout,
+  type LayoutChangedMeta,
 } from "react-resizable-panels";
 
 import { cn } from "@/shared/utils/className";
@@ -130,7 +131,7 @@ export function ResizablePanelGroup({
     }
   }, [autoSaveId, panelCount]);
 
-  function handleLayoutChanged(layout: Layout): void {
+  function handleLayoutChanged(layout: Layout, meta: LayoutChangedMeta): void {
     if (autoSaveId && canPersistLayoutRef.current) {
       try {
         window.localStorage.setItem(autoSaveId, JSON.stringify(layout));
@@ -139,7 +140,7 @@ export function ResizablePanelGroup({
       }
     }
 
-    onLayoutChanged?.(layout);
+    onLayoutChanged?.(layout, meta);
   }
 
   return (

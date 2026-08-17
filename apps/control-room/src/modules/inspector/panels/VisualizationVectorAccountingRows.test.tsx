@@ -22,6 +22,10 @@ describe("VisualizationVectorAccountingRows performance contract", () => {
     expect(source).toContain("Adopted arrows");
   });
 
+  it("renders the global scene policy cap as an explicit accounting row", () => {
+    expect(source).toContain("Scene policy cap");
+  });
+
   it("passes the expected visualization revision into identity matching", () => {
     expect(source).toContain("expectedVisualizationRevision?:");
     expect(source).toContain("expectedVisualizationRevision: props.expectedVisualizationRevision");

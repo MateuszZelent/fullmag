@@ -5509,6 +5509,7 @@ run-viewport-2d-default-slice-smoke backend="fdm" device="cpu" web_port="3196" a
       runtime_log="$report_dir/runtime.log"; \
       science_report="$report_dir/science-report.json"; \
       browser_dir="$report_dir/browser"; \
+      browser_log="$report_dir/browser.log"; \
       mkdir -p "$report_dir" "$browser_dir"; \
       sim_pid=""; \
       cleanup() { \
@@ -5535,10 +5536,24 @@ run-viewport-2d-default-slice-smoke backend="fdm" device="cpu" web_port="3196" a
         sleep 0.5; \
       done; \
       curl -fsS "$api_url/v2/sessions/current/data/domain/meta" >/dev/null || { echo "default-slice API did not become ready; see $runtime_log" >&2; exit 1; }; \
+      science_status=0; \
       "{{repo_python}}" scripts/analysis/validate_planar_monitor_sampling.py \
         --api-base "$api_url" --backend "$backend" --device "$device" --source-kind default \
-        --output "$science_report"; \
-      printf "\\nViewport 2D default-slice science report:\\n  runtime: %s\\n  science: %s\\n" "$runtime_log" "$science_report"'
+        --output "$science_report" \
+        || science_status=$?; \
+      browser_status=0; \
+      CONTROL_ROOM_API_BASE_URL="$api_url" \
+      CONTROL_ROOM_URL="$web_url" \
+      CONTROL_ROOM_PLANAR_BACKEND="$backend" \
+      CONTROL_ROOM_PLANAR_SOURCE_KIND="default" \
+      CONTROL_ROOM_PLANAR_OUTPUT_DIR="$browser_dir" \
+      $PNPM_CMD --dir apps/control-room smoke:viewport-2d | tee "$browser_log" \
+        || browser_status=$?; \
+      printf "\\nViewport 2D default-slice reports:\\n  runtime: %s\\n  science: %s\\n  browser: %s\\n" "$runtime_log" "$science_report" "$browser_log"; \
+      if [ "$science_status" -ne 0 ] || [ "$browser_status" -ne 0 ]; then \
+        echo "viewport 2D default-slice qualification blocked: science=$science_status browser=$browser_status" >&2; \
+        exit 1; \
+      fi'
 
 run-viewport-2d-default-slice-smoke-fdm-cpu:
     just run-viewport-2d-default-slice-smoke fdm cpu

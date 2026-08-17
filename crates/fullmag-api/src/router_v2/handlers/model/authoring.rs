@@ -290,7 +290,7 @@ fn requested_lane(resource: &SceneSpinTransport) -> Option<TransportExecutionLan
 fn candidate_capability(candidate: &TransportValidationCandidate) -> TransportExecutionCapability {
     let (status, allowed, reason, requested) = match candidate {
         TransportValidationCandidate::CurrentTransport { resource, .. } => {
-            if resource.known().is_none() {
+            let Some(value) = resource.known() else {
                 return TransportExecutionCapability {
                     status: "unsupported".to_string(),
                     qualification: "unsupported".to_string(),
@@ -299,11 +299,24 @@ fn candidate_capability(candidate: &TransportValidationCandidate) -> TransportEx
                     requested_lane: None,
                     resolved_lane: None,
                 };
+            };
+            if value.model == CurrentTransportModel::PrescribedDensity
+                && value.coupling == SceneTransportCoupling::Bidirectional
+            {
+                return TransportExecutionCapability {
+                    status: "unsupported".to_string(),
+                    qualification: "unsupported".to_string(),
+                    authoring_allowed: false,
+                    reason: Some(
+                        "M2 bidirectional coupling is unsupported for prescribed_density transport."
+                            .to_string(),
+                    ),
+                    requested_lane: None,
+                    resolved_lane: None,
+                };
             }
-            let reciprocal = resource.known().is_some_and(|value| {
-                value.coupling == SceneTransportCoupling::Bidirectional
-                    || value.model == CurrentTransportModel::MagnetoresistivePoisson
-            });
+            let reciprocal = value.coupling == SceneTransportCoupling::Bidirectional
+                || value.model == CurrentTransportModel::MagnetoresistivePoisson;
             if reciprocal {
                 ("semantic_only", true, Some("M2 reciprocal authoring is available; executable qualification remains workload-scoped.".to_string()), None)
             } else {

@@ -102,12 +102,24 @@ export function PlanarVisualizationSection({ selection }: { selection: Selection
     (status) => status.data?.domain.discretization ?? null,
     { enabled: coverage.supported },
   );
+  const planarSourceKind = planar?.source?.kind;
+  const planarSourceMonitorId = planarSourceKind === "monitor"
+    ? planar?.source?.monitor_id
+    : undefined;
+  const planarSourceKey = planarSourceKind === "monitor"
+    ? planarSourceMonitorId ?? ""
+    : "default";
+  /* Keep the source object stable: resource hooks use its identity in their
+   * canonical query key, while the React compiler cannot prove the derived
+   * presentation object is immutable. */
+  /* eslint-disable react-hooks/preserve-manual-memoization */
   const source = useMemo<PlanarFieldSource>(() => {
-    if (planar?.source?.kind === "monitor") {
-      return { kind: "monitor", monitorId: planar.source.monitor_id };
+    if (planarSourceKey !== "default" && planarSourceKey.length > 0) {
+      return { kind: "monitor", monitorId: planarSourceKey };
     }
     return { kind: "default" };
-  }, [planar?.source]);
+  }, [planarSourceKey]);
+  /* eslint-enable react-hooks/preserve-manual-memoization */
   const sourceValue = source.kind === "default" ? "default" : source.monitorId;
   const quantityId = planar?.quantity_id ?? "";
   const meta = usePlanarFieldMetaResource(

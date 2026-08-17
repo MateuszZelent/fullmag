@@ -17,7 +17,11 @@ import type { VisualizationDebugSnapshot } from "@/kernel/visualization/visualiz
 
 import { ObjectVisualizationPanel } from "../ObjectVisualizationPanel";
 import { VisualizationVectorAccountingRows } from "../VisualizationVectorAccountingRows";
-import { VisualizationDebugPanel } from "./VisualizationDebugPanel";
+import {
+  VisualizationDebugPanel,
+  VisualizationDebugPanelView,
+} from "./VisualizationDebugPanel";
+import { buildVisualizationDebugPanelModel } from "./VisualizationDebugPanelModel";
 import {
   createVisualizationDebugEvidenceActions,
   type VisualizationDebugEvidenceActionEnvironment,
@@ -267,6 +271,98 @@ describe("VisualizationDebugPanel mounted interaction", () => {
     await act(async () => root.unmount());
     dom.restore();
   });
+
+  it("shows exact per-carrier FEM Airbox field resource state in the Debug Inspector", async () => {
+    const dom = installInteractiveTestDom();
+    const container = dom.document.createElement("div");
+    dom.document.body.appendChild(container);
+    const root = createRoot(container as unknown as Element);
+    const base = airboxAccountingSnapshot();
+    const readyCarrier = base.carriers[0];
+    if (!readyCarrier) throw new Error("Airbox carrier fixture is required.");
+    const staleCarrier = {
+      ...readyCarrier,
+      carrierId: "part:__air__:stale",
+      fieldResourceState: {
+        dataAvailable: false,
+        lastValidDataAvailable: true,
+        reasonCode: "field_refresh_in_progress",
+        revision: "field-stale",
+        status: "stale" as const,
+      },
+    };
+    const readyCarrierWithState = {
+      ...readyCarrier,
+      carrierId: "part:__air__:ready",
+      fieldResourceState: {
+        dataAvailable: true,
+        lastValidDataAvailable: true,
+        reasonCode: null,
+        revision: "field-ready",
+        status: "ready" as const,
+      },
+    };
+    const snapshot: VisualizationDebugSnapshot = {
+      ...base,
+      carriers: [readyCarrierWithState, staleCarrier],
+      disposition: "degraded",
+      issues: [
+        {
+          code: "airbox-field-resource-stale",
+          evidence: [
+            "carrier=part:__air__:stale",
+            "status=stale",
+            "reason=field_refresh_in_progress",
+          ],
+          message: "The Airbox carrier is rendered from a last-valid field while its requested resource is stale.",
+          severity: "warning",
+          source: "transport",
+        },
+      ],
+      target: {
+        ...base.target,
+        carrierIds: ["part:__air__:ready", "part:__air__:stale"],
+      },
+    };
+    const model = buildVisualizationDebugPanelModel({
+      activeViewportMainModuleId: "viewport-3d",
+      clientAcks: { entries: [], revision: 0 },
+      diagnostics: [],
+      fieldMetaByQueryKey: new Map(),
+      selection: airboxDebugSelection.ref,
+      snapshots: [snapshot],
+    });
+
+    await act(async () => {
+      root.render(
+        <VisualizationDebugPanelView
+          createActions={() => ({
+            copyResourceKey: async () => undefined,
+            copySnapshot: async () => undefined,
+            dispose: () => undefined,
+            exportJson: () => undefined,
+            rawJson: () => "{}",
+          })}
+          model={model}
+        />,
+      );
+    });
+
+    const health = findElements(container, (element) =>
+      element.getAttribute("class")?.includes("fm-visualization-debug-health") ?? false,
+    )[0];
+    expect(health?.getAttribute("data-disposition")).toBe("degraded");
+    expect(container.textContent).toContain(
+      "ready · data present · last-valid present · rev field-ready",
+    );
+    expect(container.textContent).toContain(
+      "stale · data absent · last-valid present · field_refresh_in_progress · rev field-stale",
+    );
+    expect(container.textContent).toContain("airbox-field-resource-stale");
+
+    await act(async () => root.unmount());
+    dom.restore();
+  });
 });
 
 const debugSelection: Selection = {
@@ -284,14 +380,46 @@ const debugSelection: Selection = {
   },
 };
 
+const airboxDebugSelection: Selection = {
+  kind: "airbox.visualization.debug",
+  label: "Airbox visualization debug",
+  moduleSource: "inspector",
+  nodeId: "model:airbox:visualization:debug",
+  objectId: null,
+  ref: {
+    kind: "airbox.visualization.debug",
+    nodeId: "model:airbox:visualization:debug",
+    type: "airbox",
+    visualizationTargetId: "airbox",
+  },
+};
+
 function makeKernel(): KernelApi {
   const bus = new EventBus<KernelEventMap>();
   const resources = new ResourceInvalidationController(bus);
-  const visualizationSyncSnapshot = { version: 0 };
+  const visualizationSyncSnapshot = {
+    inflightTargetIds: [],
+    pendingTargetIds: [],
+    version: 0,
+  };
   return {
     api: {
       data: {
         fields: {
+          availability: async () => ({
+            carrier_id: "fixture:object:magnet",
+            generation: "domain-1",
+            materialized: true,
+            pending: false,
+            quantity_id: "m",
+            reason_code: null,
+            revision: 42,
+            scope_id: "magnet",
+            scope_kind: "object",
+            state: "ready",
+            supported: true,
+            target_id: "object:magnet",
+          }),
           meta: async () => ({
             components: 3,
             domain_generation_id: "domain-1",

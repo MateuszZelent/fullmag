@@ -119,6 +119,41 @@ describe("viewport3dDiagnostics", () => {
     ).toBe("q:m top:7 field:8 surface:stale-visible obj:3 air:1 geo:1 cache:2KB glyph-cache:0/0B/0B worker-runtime:0/0/0 frames:2");
   });
 
+  it("reports bounded per-carrier Airbox field status and reason", () => {
+    expect(
+      buildViewport3DDiagnostics({
+        airboxFieldVectorPartStates: new Map([
+          ["part:a", { reasonCode: null, revision: "field-1", status: "ready" }],
+          [
+            "part:b",
+            {
+              reasonCode: "field_refresh_in_progress",
+              revision: "field-2",
+              status: "stale",
+            },
+          ],
+        ]),
+        airboxPartCount: 2,
+        cache: { byteLength: 0, entryCount: 0 },
+        objectCount: 0,
+        quantityId: "H_demag",
+        tracker: {
+          contextLosses: 0,
+          contextRestores: 0,
+          dirtyReason: null,
+          frames: 0,
+          geometries: 0,
+          materials: 0,
+          renderTargets: 0,
+          textures: 0,
+          workers: 0,
+        },
+      }),
+    ).toContain(
+      "airbox-fields:2[part:a=ready@field-1;part:b=stale:field_refresh_in_progress@field-2]",
+    );
+  });
+
   it("reports rejected unaddressable render carriers as a bounded diagnostic", () => {
     const diagnostics = buildViewport3DDiagnostics({
       airboxPartCount: 0,

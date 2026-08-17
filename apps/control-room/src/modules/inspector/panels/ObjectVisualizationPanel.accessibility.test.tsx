@@ -9,6 +9,7 @@ import {
 import {
   NumberField,
   VisualizationDisplayPassesSection,
+  VisualizationOverridesSection,
   VisualizationRenderModeSection,
 } from "./ObjectVisualizationTargetSection";
 import {
@@ -215,5 +216,27 @@ describe("ObjectVisualizationPanel accessibility controls", () => {
     expect(html).toContain('aria-valuemin="0"');
     expect(html).toContain('aria-valuemax="100"');
     expect(html).toContain("72%");
+  });
+
+  it("exposes rejected target mutations with an explicit recovery action", () => {
+    const html = renderToStaticMarkup(
+      <VisualizationOverridesSection
+        childRegionOverrideCount={0}
+        childRegionTargets={0}
+        feedback={null}
+        mutationError="display update rejected"
+        mutationStatus="rejected"
+        onReset={vi.fn()}
+        onResetChildRegions={vi.fn()}
+        onRetry={vi.fn()}
+        pending={false}
+        childRegionPending={false}
+        resetLabel="Reset display"
+      />,
+    );
+
+    expect(html).toContain("display update rejected");
+    expect(html).toContain("Retry display update");
+    expect(html).not.toContain('disabled=""');
   });
 });

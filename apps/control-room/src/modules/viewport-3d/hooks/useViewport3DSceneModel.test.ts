@@ -422,16 +422,20 @@ describe("FDM Airbox mesh demand", () => {
     expect(source).toContain('cellSelection: "inactive"');
   });
 
-  it("keeps the Airbox worker key independent of quantity and field readiness", () => {
+  it("keeps geometry identity independent while vector-only builds carry field identity", () => {
     const source = readFileSync(sceneModelSourceUrl, "utf8");
     const keyStart = source.indexOf("const fdmAirboxBuildKey =");
     const keyBlock = source.slice(
       keyStart,
-      source.indexOf("const fdmAirboxVectorOnlyBuildInput", keyStart),
+      source.indexOf("const fdmAirboxBuildState =", keyStart),
     );
 
-    expect(keyBlock).not.toContain("fieldRevision:");
-    expect(keyBlock).not.toContain("quantityId:");
+    expect(keyBlock).toMatch(
+      /fieldRevision:\s*fdmAirboxVectorOnlyBuildEnabled\s*\?/,
+    );
+    expect(keyBlock).toMatch(
+      /quantityId:\s*fdmAirboxVectorOnlyBuildEnabled\s*\?/,
+    );
     expect(keyBlock).not.toContain(
       'field=${fdmAirboxFieldVector ? "ready" : "pending"}',
     );
@@ -619,6 +623,19 @@ function fieldVectorFixture(
 }
 
 describe("useViewport3DSceneModel", () => {
+  it("propagates FEM Airbox per-carrier field states into scene and debug models", () => {
+    const source = readFileSync(sceneModelSourceUrl, "utf8");
+
+    expect(source).toContain(
+      "airboxFieldVectorPartStates: airboxFieldVectors.partStates,",
+    );
+    expect(
+      source.match(
+        /airboxFieldVectorPartStates: airboxFieldVectors\.partStates,/g,
+      ),
+    ).toHaveLength(3);
+  });
+
   it("keeps FDM native-layer visibility on the local structured-grid target state", () => {
     const source = readFileSync(sceneModelSourceUrl, "utf8");
     const nativeLayerSettingsBlock = source.slice(
@@ -4598,6 +4615,17 @@ describe("useViewport3DSceneModel", () => {
     expect(source).not.toContain("const fdmInstanceModel = useMemo<");
     expect(source).not.toContain("buildFdmCuboidInstanceModel(");
     expect(source).not.toContain("const fdmSurfaceInstanceModel");
+  });
+
+  it("keeps the single-grid Airbox vector-only build enabled without inactive-cell geometry", () => {
+    const source = readFileSync(sceneModelSourceUrl, "utf8");
+
+    expect(source).toContain("const fdmAirboxVectorOnlyBuildEnabled = Boolean(");
+    expect(source).toContain(
+      "const fdmAirboxBuildEnabled = Boolean(\n    fdmAirboxInstanceModelEnabled ||\n    fdmAirboxVectorOnlyBuildEnabled",
+    );
+    expect(source).toContain("enabled: fdmAirboxBuildEnabled,");
+    expect(source).toContain("const fdmAirboxBuildKey = fdmAirboxBuildEnabled");
   });
 
   it("keeps the shared FDM model build key independent of target render settings", () => {

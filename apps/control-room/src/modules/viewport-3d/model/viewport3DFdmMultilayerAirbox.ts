@@ -63,6 +63,11 @@ export function resolveFdmMultilayerAirboxFieldVector(
   const domainGenerationId = safeNonEmptyDomainGenerationId(
     domain.domainGenerationId,
   );
+  const sampledGrid =
+    fieldVector.indexing === "sampled_node_indices" &&
+    fieldVector.grid[0] === fieldVector.pointCount &&
+    fieldVector.grid[1] === 1 &&
+    fieldVector.grid[2] === 1;
   if (
     fieldVector.formatVersion !== 3 ||
     fieldVector.quantityId !== FDM_MULTILAYER_AIRBOX_QUANTITY_ID ||
@@ -73,7 +78,8 @@ export function resolveFdmMultilayerAirboxFieldVector(
     fieldGenerationId !== domainGenerationId ||
     canonicalFingerprint(fieldVector.meshTopologyHash) !==
       canonicalFingerprint(domain.carrierFingerprint) ||
-    fieldVector.grid.some((value, axis) => value !== domain.shape[axis]) ||
+    (!sampledGrid &&
+      fieldVector.grid.some((value, axis) => value !== domain.shape[axis])) ||
     fieldVector.pointCount <= 0 ||
     fieldVector.pointCount > domain.totalCells ||
     fieldVector.nComp !== 3 ||

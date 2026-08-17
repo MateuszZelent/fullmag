@@ -87,6 +87,7 @@ describe("FDM multilayer Airbox target field", () => {
       resolveFdmMultilayerAirboxFieldVector(
         domain as never,
         field({
+          grid: [2, 1, 1],
           indexing: "sampled_node_indices",
           nodeIndices: new Uint32Array([1, 3]),
           pointCount: 2,

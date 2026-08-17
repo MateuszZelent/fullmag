@@ -1,7 +1,18 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
-import { FdmGridInspectorPanelView } from "./FdmGridInspectorPanel";
+import type { Selection } from "@/kernel/selection/selectionTypes";
+import {
+  FDM_UNIVERSE_OUTSIDE_SUPPORT_TARGET,
+} from "@/kernel/visualization/ObjectVisualizationController";
+import {
+  ObjectVisualizationPanel,
+  VisualizationTargetInspectorPanel,
+} from "../ObjectVisualizationPanel";
+import {
+  FdmGridInspectorPanelView,
+  FdmGridUniverseVisualizationPanel,
+} from "./FdmGridInspectorPanel";
 import type {
   FdmGridInspectorModel,
   FdmGridSelectionInspectorModel,
@@ -55,7 +66,40 @@ function selectionDetail(
   };
 }
 
+const universeSelection: Selection = {
+  kind: "mesh.grid.universe-outside-support",
+  label: "Airbox",
+  moduleSource: "inspector",
+  nodeId: "model:mesh:grid:universe-outside-support",
+  objectId: null,
+  ref: {
+    kind: "mesh.grid.universe-outside-support",
+    nodeId: "model:mesh:grid:universe-outside-support",
+    scope: "universe-outside-support",
+    type: "fdm-domain",
+    visualizationTargetId: FDM_UNIVERSE_OUTSIDE_SUPPORT_TARGET.id,
+  },
+};
+
 describe("FdmGridInspectorPanelView", () => {
+  it("uses the same target inspector mutation path as the main visualization entry", () => {
+    const gridEntry = FdmGridUniverseVisualizationPanel({
+      selection: universeSelection,
+    });
+    const mainEntry = ObjectVisualizationPanel({
+      selection: universeSelection,
+    });
+
+    expect(gridEntry.type).toBe(VisualizationTargetInspectorPanel);
+    expect(mainEntry.type).toBe(VisualizationTargetInspectorPanel);
+    expect(gridEntry.type).toBe(mainEntry.type);
+    expect(gridEntry.props.selection.ref).toMatchObject({
+      scope: "universe-outside-support",
+      type: "fdm-domain",
+      visualizationTargetId: FDM_UNIVERSE_OUTSIDE_SUPPORT_TARGET.id,
+    });
+  });
+
   it("keeps native-layer facts and target-local visualization controls in one Inspector", () => {
     const multilayer: FdmMultilayerInspectorModel = {
       notice: null,

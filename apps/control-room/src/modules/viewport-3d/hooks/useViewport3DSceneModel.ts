@@ -4787,19 +4787,6 @@ export function useViewport3DSceneModel({
       fdmSingleGridAirboxSettings?.visible &&
       fdmAirboxPassPlan.needsInactiveCellGeometry,
   );
-  const fdmAirboxBuildKey = fdmAirboxInstanceModelEnabled
-    ? buildViewport3DFdmCuboidJobKey({
-        algorithmVersion: 1,
-        domainId: domainMeta.data?.domain_id ?? "shared-domain",
-        domainGenerationId: fdmDomainGenerationId,
-        samplingRevision: fdmBuildSamplingRevision,
-        scopeId: "airbox",
-        scopeKind: "airbox",
-        sessionId: "current",
-        styleRevision: `fill=${visualProfile.voxelFillRatio}|airbox=true`,
-        topologyRevision: fdmBuildTopologyRevision,
-      })
-    : null;
   const fdmAirboxVectorOnlyBuildInput = useMemo(
     () =>
       fdmAirboxPassPlan.needsVectorAnchors &&
@@ -4824,12 +4811,49 @@ export function useViewport3DSceneModel({
       fdmRealizedRegionIds,
     ],
   );
+  const fdmAirboxVectorOnlyBuildEnabled = Boolean(
+    fdmAirboxVectorOnlyBuildInput,
+  );
+  const fdmAirboxBuildEnabled = Boolean(
+    fdmAirboxInstanceModelEnabled ||
+    fdmAirboxVectorOnlyBuildEnabled,
+  );
+  const fdmAirboxBuildKey = fdmAirboxBuildEnabled
+    ? buildViewport3DFdmCuboidJobKey({
+        algorithmVersion: 1,
+        domainId: domainMeta.data?.domain_id ?? "shared-domain",
+        domainGenerationId: fdmDomainGenerationId,
+        fieldRevision: fdmAirboxVectorOnlyBuildEnabled
+          ? fdmAirboxFieldRevision == null
+            ? null
+            : String(fdmAirboxFieldRevision)
+          : null,
+        quantityId: fdmAirboxVectorOnlyBuildEnabled
+          ? fdmAirboxActiveQuantityId
+          : null,
+        samplingRevision: fdmBuildSamplingRevision,
+        scopeId: "airbox",
+        scopeKind: "airbox",
+        sessionId: "current",
+        styleRevision: fdmAirboxVectorOnlyBuildEnabled
+          ? [
+              "vector-only",
+              `max=${fdmAirboxMaxVectorGlyphs}`,
+              `geometry=${fdmSingleGridAirboxSettings?.geometryScope ?? "full"}`,
+              `scale=${fdmAirboxVectorScale}`,
+              `anchor=${fdmAirboxVectorAnchorMode}`,
+              `offset=${fdmSingleGridAirboxSettings?.vectorSurfaceOffsetEnabled ?? false}:${fdmSingleGridAirboxSettings?.vectorSurfaceOffsetScale ?? 0}`,
+            ].join("|")
+          : `fill=${visualProfile.voxelFillRatio}|airbox=true`,
+        topologyRevision: fdmBuildTopologyRevision,
+      })
+    : null;
   const fdmAirboxBuildState = useFdmCuboidBuildResult({
     buildKey: fdmAirboxBuildKey,
     cellSelection: "inactive",
     domain: fdmDomain,
-    enabled: fdmAirboxInstanceModelEnabled,
-    groupKey: fdmAirboxInstanceModelEnabled
+    enabled: fdmAirboxBuildEnabled,
+    groupKey: fdmAirboxBuildEnabled
       ? `fdm-cuboid:session=current:domain=${domainMeta.data?.domain_id ?? "shared-domain"}:airbox`
       : null,
     maxVectorGlyphs: fdmAirboxMaxVectorGlyphs,
@@ -5984,6 +6008,7 @@ export function useViewport3DSceneModel({
   );
   const diagnostics = buildViewport3DDiagnostics({
     airboxPartCount: femDomain.airboxParts.length,
+    airboxFieldVectorPartStates: airboxFieldVectors.partStates,
     buildFallbacks: buildFallbackDiagnostics,
     cache: getCacheStats(),
     dataPlaneIssues,
@@ -6155,6 +6180,7 @@ export function useViewport3DSceneModel({
     },
   ]);
   const visualizationDebugSource = {
+    airboxFieldVectorPartStates: airboxFieldVectors.partStates,
     carrierRoles: new Map(
       [...femDomain.partsById].map(([carrierId, part]) => [carrierId, part.role]),
     ),
@@ -6210,6 +6236,7 @@ export function useViewport3DSceneModel({
     fdmAirboxInstanceModel,
     fdmAirboxPassPlan,
     fdmAirboxFieldVector,
+    airboxFieldVectorPartStates: airboxFieldVectors.partStates,
     fdmAirboxVectorBuildReference,
     fdmAirboxVectorSegments,
     fdmAirboxVectorGlyphColors,

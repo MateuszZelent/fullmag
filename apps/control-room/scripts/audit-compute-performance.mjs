@@ -1132,10 +1132,14 @@ function checkViewport3DObjectVisualizationSelector() {
 function checkObjectGeneralPanelVisualizationSelector() {
   const source = readFileSync(objectGeneralPanelPath, "utf8");
   requireTokens(source, "ObjectGeneralPanel visualization selector", [
-    "useObjectVisualizationController",
     "useObjectVisualizationSelector",
     "resolveGeometryObjectVisualizationColors",
     "geometryObjectVisualizationColorsEquals",
+    "createCommandContext",
+    "kernel.commands.execute",
+    'visualization.target.set-shader-mono-color',
+    'visualization.target.set-wireframe-color',
+    "useVisualizationStateResource",
     "shaderMonoColor",
     "wireframeColor",
   ]);
@@ -1658,7 +1662,7 @@ function checkFdmVectorSegmentCache() {
     "FdmVectorSegmentCache",
   ]);
   requireTokens(buildSegments, "buildFdmVectorSegments cache lookup", [
-    "const cacheKey = `${scale}:${maxVectors}:${anchorMode}:${options.geometryScope ?? \"full\"}`",
+    "const cacheKey = `${scale}:${maxVectors}:${anchorMode}:${options.geometryScope ?? \"full\"}:${options.surfaceOffsetEnabled === true}:${options.surfaceOffsetScale ?? 0}`",
     "cachedFdmVectorSegments(model, fieldVector, cacheKey)",
     "if (cachedSegments !== undefined) return cachedSegments",
     "cacheFdmVectorSegments(model, fieldVector, cacheKey",

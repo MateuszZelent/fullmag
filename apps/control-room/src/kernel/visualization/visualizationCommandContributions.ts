@@ -19,6 +19,7 @@ import {
   visualizationTargetUnsupportedPatchFields,
   viewportRenderingPreferencesFromTargetPatch,
   visualizationStateOverrideMatchesTarget,
+  visualizationTargetKey,
   type SurfaceColorSource,
   type VisualizationColorMode,
   type VisualizationGeometryScope,
@@ -96,7 +97,10 @@ async function patchSelectedTarget(
       Object.keys(persistentPatch).length > 0 &&
       !(await patchTargetOverrideResource(context, target, persistentPatch))
     ) {
-      visualization.patchTarget(target, persistentPatch);
+      return {
+        status: "failed" as const,
+        message: "Visualization state resource is unavailable.",
+      };
     }
     return { status: "completed" as const };
   }
@@ -120,7 +124,7 @@ async function patchSelectedTarget(
     };
   }
 
-  await patchVisualizationState(context, statePatch);
+  await patchVisualizationState(context, statePatch, [visualizationTargetKey(target)]);
   return { status: "completed" as const };
 }
 
@@ -130,23 +134,24 @@ async function patchTargetOverrideResource(
   patch: VisualizationTargetPatch,
   basePatch: VisualizationStatePatch = {},
 ): Promise<boolean> {
-  // FDM targets live in the local structured-grid renderer. They are not
-  // valid FEM `/visualization/state` override scopes, so return false and
-  // let callers apply the patch to ObjectVisualizationController locally.
-  if (target.kind === "fdm-domain") return false;
   const state = visualizationStateFromContext(context);
   if ((!context.visualizationSync && (!context.api || !context.resources)) || !state) {
     return false;
   }
 
-  await patchVisualizationState(context, {
-    ...basePatch,
-    overrides: mergeVisualizationStateTargetOverride(
-      state.overrides ?? [],
-      target,
-      patch,
-    ),
-  });
+  await patchVisualizationState(
+    context,
+    {
+      ...basePatch,
+      overrides: mergeVisualizationStateTargetOverride(
+        state.overrides ?? [],
+        target,
+        patch,
+      ),
+    },
+    [visualizationTargetKey(target)],
+  );
+  context.visualization?.patchTargetPending(target, patch, state.revision);
   return true;
 }
 
@@ -154,17 +159,21 @@ async function clearTargetOverrideResource(
   context: CommandContext,
   target: VisualizationTargetRef,
 ): Promise<boolean> {
-  if (target.kind === "fdm-domain") return false;
   const state = visualizationStateFromContext(context);
   if ((!context.visualizationSync && (!context.api || !context.resources)) || !state) {
     return false;
   }
 
-  await patchVisualizationState(context, {
-    overrides: (state.overrides ?? []).filter(
-      (entry) => !visualizationStateOverrideMatchesTarget(entry, target),
-    ),
-  });
+  await patchVisualizationState(
+    context,
+    {
+      overrides: (state.overrides ?? []).filter(
+        (entry) => !visualizationStateOverrideMatchesTarget(entry, target),
+      ),
+    },
+    [visualizationTargetKey(target)],
+  );
+  context.visualization?.clearPendingTarget(target);
   return true;
 }
 
@@ -173,26 +182,28 @@ async function removeTargetOverrideFieldResource(
   target: VisualizationTargetRef,
   field: keyof VisualizationTargetPatch,
 ): Promise<boolean> {
-  // FDM structured-grid display state is local to the viewport controller;
-  // there is no corresponding `/visualization/state` scope to remove.
-  if (target.kind === "fdm-domain") return false;
   const state = visualizationStateFromContext(context);
   if ((!context.visualizationSync && (!context.api || !context.resources)) || !state) {
     return false;
   }
 
-  await patchVisualizationState(context, {
-    overrides: removeTargetOverrideField(state.overrides ?? [], target, field),
-  });
+  await patchVisualizationState(
+    context,
+    {
+      overrides: removeTargetOverrideField(state.overrides ?? [], target, field),
+    },
+    [visualizationTargetKey(target)],
+  );
   return true;
 }
 
 async function patchVisualizationState(
   context: CommandContext,
   patch: VisualizationStatePatch,
+  targetIds: readonly string[] = [],
 ): Promise<void> {
   if (context.visualizationSync) {
-    context.visualizationSync.queuePatch(patch);
+    context.visualizationSync.queuePatch(patch, targetIds);
     return;
   }
 
@@ -435,17 +446,12 @@ export const VISUALIZATION_TARGET_COMMANDS: CommandContribution[] = [
         }
         if (
           target.kind !== "airbox" &&
-          target.kind !== "fdm-domain" &&
           (await removeTargetOverrideFieldResource(
             context,
             target,
             "surfaceColorSource",
           ))
         ) {
-          visualization.removeTargetOverrideField(target, "surfaceColorSource");
-          return { status: "completed" as const };
-        }
-        if (target.kind === "fdm-domain") {
           visualization.removeTargetOverrideField(target, "surfaceColorSource");
           return { status: "completed" as const };
         }
@@ -532,7 +538,10 @@ export const VISUALIZATION_TARGET_COMMANDS: CommandContribution[] = [
         };
       }
       if (!(await clearTargetOverrideResource(context, target))) {
-        visualization.clearTarget(target);
+        return {
+          status: "failed" as const,
+          message: "Visualization state resource is unavailable.",
+        };
       }
       return { status: "completed" as const };
     },

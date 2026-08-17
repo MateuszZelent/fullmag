@@ -14,6 +14,7 @@ import type {
   AuthoringTransactionRequest,
   BinaryResourceResult,
   CurrentTransportMutationRequest,
+  FieldAvailabilityQuery,
   FdmSingleGridFieldVectorQuery,
   FdmScopedFieldVectorQuery,
   FieldVectorResponseMetadata,
@@ -261,6 +262,47 @@ describe("field vector response metadata", () => {
         { ...decoded, formatVersion: 2, indexing: "legacy_count_only" },
         trustedV2Metadata,
       ),
+    ).toEqual([]);
+  });
+
+  it("treats sha256-prefixed topology headers as equal to FMVP raw hash bytes", () => {
+    const topologyHash = "ab".repeat(32);
+    const payload: DecodedFieldVector = {
+      dtype: "float64",
+      domainGenerationId: "generation-1",
+      formatVersion: 3,
+      grid: [1, 1, 1],
+      indexing: "full_domain",
+      meshTopologyHash: topologyHash,
+      meshTopologyRevision: "1",
+      nComp: 3,
+      nodeIndices: null,
+      pointCount: 1,
+      quantityId: "H_demag",
+      scopeId: "airbox",
+      scopeKind: "airbox",
+      valueCount: 3,
+      values: new Float64Array(3),
+    };
+
+    expect(
+      collectFieldVectorIdentityIssues(payload, {
+        component: "full",
+        domainGenerationId: "generation-1",
+        encoding: "FMVP;version=3",
+        fieldIndexing: "full_domain",
+        fieldRevision: null,
+        identityIssues: [],
+        meshTopologyHash: `sha256:${topologyHash}`,
+        nComp: 3,
+        nodeIndexCount: 0,
+        pointCount: 1,
+        quantityId: "H_demag",
+        scopeId: "airbox",
+        scopeKind: "airbox",
+        snapshotId: null,
+        valueCount: 3,
+      }),
     ).toEqual([]);
   });
 });
@@ -1624,6 +1666,49 @@ describe("ControlRoomApi", () => {
     expect(observedUrl).toBe("http://127.0.0.1:8765/v2/sessions/current/data/fields");
     expect(observedInit?.method).toBe("GET");
     expect(headers.get("x-request-id")).toBe("req-fields");
+  });
+
+  it("queries target-scoped field availability through the v2 data facade", async () => {
+    let observedUrl = "";
+    const api = new ControlRoomApi({
+      baseUrl: "http://127.0.0.1:8765",
+      fetchImpl: async (url) => {
+        observedUrl = String(url);
+        return jsonResponse({
+          carrier_id: null,
+          generation: "generation-4",
+          materialized: false,
+          pending: true,
+          quantity_id: "H_demag",
+          reason_code: "field_materialization_pending",
+          revision: null,
+          scope_id: "airbox",
+          scope_kind: "airbox",
+          state: "materializing",
+          supported: true,
+          target_id: "airbox",
+        });
+      },
+    });
+
+    const availability = await api.data.fields.availability("H_demag", {
+      owner_object_id: "body-a",
+      scope_id: "airbox",
+      scope_kind: "airbox",
+      target_id: "airbox",
+    });
+
+    expect(availability).toMatchObject({
+      pending: true,
+      reason_code: "field_materialization_pending",
+      state: "materializing",
+    });
+    expect(observedUrl).toBe(
+      "http://127.0.0.1:8765/v2/sessions/current/data/fields/H_demag/availability?target_id=airbox&scope_kind=airbox&scope_id=airbox&owner_object_id=body-a",
+    );
+    expectTypeOf(api.data.fields.availability)
+      .parameter(1)
+      .toEqualTypeOf<FieldAvailabilityQuery | undefined>();
   });
 
   it("queries quantity capabilities separately from the field payload cache", async () => {

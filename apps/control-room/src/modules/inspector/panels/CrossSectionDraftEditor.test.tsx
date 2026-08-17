@@ -36,7 +36,7 @@ vi.mock("@/kernel/KernelContext", () => ({
 
 vi.mock("@/kernel/visualization/useVisualizationStateResource", () => ({
   useVisualizationStateResource: () => ({
-    data: { planar: { active_monitor_id: null } },
+    data: { planar: { source: { kind: "default" } } },
   }),
 }));
 
@@ -80,7 +80,9 @@ describe("CrossSectionDraftEditor", () => {
     const source = readFileSync(crossSectionDraftEditorSourceUrl, "utf8");
 
     expect(source).toContain("updateCrossSectionDraft(patch);");
-    expect(source).toContain("planar: { active_monitor_id: monitor.id }");
+    expect(source).toContain(
+      'planar: { source: { kind: "monitor", monitor_id: monitor.id } }',
+    );
     expect(source).not.toContain("fieldMapStore");
     expect(source).not.toContain("crossSectionVisualizationPatchFromDraft");
   });

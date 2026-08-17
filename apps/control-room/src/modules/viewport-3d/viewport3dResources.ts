@@ -40,7 +40,6 @@ import {
 } from "@/kernel/resources/ResourceCache";
 import {
   createResourcePartialLoadError,
-  shouldRetryResourceError,
   type ResourceRetryPolicy,
 } from "@/kernel/resources/ResourceRuntimeStore";
 import type { ResourceInvalidationController } from "@/kernel/resources/ResourceInvalidationController";
@@ -78,6 +77,34 @@ type Viewport3DFieldVectorCollectionStatus =
   | "loading"
   | "ready"
   | "stale";
+
+export type Viewport3DAirboxFieldVectorPartStatus =
+  | "error"
+  | "loading"
+  | "pending"
+  | "ready"
+  | "stale"
+  | "unavailable";
+
+export interface Viewport3DAirboxFieldVectorPartFailure {
+  readonly reasonCode: string;
+  readonly status: number | null;
+}
+
+export interface Viewport3DAirboxFieldVectorPartState {
+  readonly data: DecodedFieldVector | null;
+  readonly lastValidData: DecodedFieldVector | null;
+  readonly reasonCode: string | null;
+  readonly revision: ResourceRevision | null;
+  readonly status: Viewport3DAirboxFieldVectorPartStatus;
+}
+
+interface Viewport3DAirboxFieldVectorPartialLoadError extends Error {
+  partFailures: ReadonlyMap<
+    string,
+    Viewport3DAirboxFieldVectorPartFailure
+  >;
+}
 
 export function resolveCachedFieldVectorEnvelope(
   cache: ResourceCache<DecodedFieldVector, FieldVectorResponseMetadata>,
@@ -286,6 +313,77 @@ export function resolveViewport3DFieldVectorCollectionLastGood({
     }
   }
   return retained;
+}
+
+/**
+ * Preserve per-carrier truth when one FEM Airbox part fails. The renderer may
+ * consume the compatible last-good payload, but the state remains `stale` or
+ * `unavailable`; a partial collection must never be presented as `ready`.
+ */
+export function resolveViewport3DAirboxFieldVectorPartStates({
+  current,
+  displayed,
+  failures,
+  previous,
+  requests,
+  status,
+}: {
+  current: ReadonlyMap<string, Viewport3DFieldVectorEnvelope> | null | undefined;
+  displayed: ReadonlyMap<string, Viewport3DFieldVectorEnvelope>;
+  failures?: ReadonlyMap<string, Viewport3DAirboxFieldVectorPartFailure>;
+  previous: ReadonlyMap<string, Viewport3DFieldVectorEnvelope>;
+  requests: ReadonlyMap<string, unknown>;
+  status: Viewport3DFieldVectorCollectionStatus;
+}): Map<string, Viewport3DAirboxFieldVectorPartState> {
+  const states = new Map<string, Viewport3DAirboxFieldVectorPartState>();
+  for (const partId of requests.keys()) {
+    const currentEnvelope = current?.get(partId) ?? null;
+    const displayedEnvelope = displayed.get(partId) ?? null;
+    const previousEnvelope = previous.get(partId) ?? null;
+    const failure = failures?.get(partId);
+    const hasLastValid = Boolean(previousEnvelope || displayedEnvelope);
+    let partStatus: Viewport3DAirboxFieldVectorPartStatus;
+    let reasonCode = failure?.reasonCode ?? null;
+
+    if (failure) {
+      if (hasLastValid) {
+        partStatus = "stale";
+      } else if (failure.status === 202) {
+        partStatus = "pending";
+      } else if (failure.status === 404) {
+        partStatus = "unavailable";
+      } else {
+        partStatus = "error";
+      }
+    } else if (currentEnvelope) {
+      partStatus = "ready";
+    } else if (displayedEnvelope) {
+      partStatus = "stale";
+      reasonCode = "field_refresh_in_progress";
+    } else if (status === "loading" || status === "stale") {
+      partStatus = "loading";
+      reasonCode = "field_materialization_pending";
+    } else if (status === "error") {
+      partStatus = "error";
+      reasonCode = "field_vector_request_failed";
+    } else {
+      partStatus = "unavailable";
+      reasonCode = "target_carrier_missing";
+    }
+
+    states.set(partId, {
+      data: failure ? null : currentEnvelope?.data ?? null,
+      lastValidData:
+        previousEnvelope?.data ?? displayedEnvelope?.data ?? null,
+      reasonCode,
+      revision:
+        (failure ? displayedEnvelope?.etag : currentEnvelope?.etag) ??
+        previousEnvelope?.etag ??
+        null,
+      status: partStatus,
+    });
+  }
+  return states;
 }
 
 const qualityDataCache = new ResourceCache<DecodedMeshQualityData>({
@@ -763,12 +861,43 @@ export function resolveViewport3DAirboxFieldVectorQuery(
   };
 }
 
-function airboxFieldVectorUnavailable(error: unknown): boolean {
-  return (
-    error instanceof ControlRoomApiError &&
-    error.status === 404 &&
-    !shouldRetryResourceError(error, FIELD_VECTOR_RETRY_POLICY)
-  );
+function airboxFieldVectorFailure(
+  error: unknown,
+): Viewport3DAirboxFieldVectorPartFailure {
+  if (error instanceof ControlRoomApiError) {
+    return {
+      reasonCode:
+        error.code ??
+        (error.status === 404
+          ? "target_carrier_missing"
+          : error.status === 202
+            ? "field_materialization_pending"
+            : "field_vector_request_failed"),
+      status: error.status,
+    };
+  }
+  if (error && typeof error === "object") {
+    const candidate = error as Record<string, unknown>;
+    const reasonCode =
+      (typeof candidate.reasonCode === "string" && candidate.reasonCode) ||
+      (typeof candidate.reason_code === "string" && candidate.reason_code) ||
+      (typeof candidate.code === "string" && candidate.code) ||
+      "field_vector_request_failed";
+    return {
+      reasonCode,
+      status: typeof candidate.status === "number" ? candidate.status : null,
+    };
+  }
+  return { reasonCode: "field_vector_request_failed", status: null };
+}
+
+function airboxPartFailuresFromError(
+  error: Error | null,
+): ReadonlyMap<string, Viewport3DAirboxFieldVectorPartFailure> {
+  if (!error || !("partFailures" in error)) return new Map();
+  const partFailures = (error as Partial<Viewport3DAirboxFieldVectorPartialLoadError>)
+    .partFailures;
+  return partFailures instanceof Map ? partFailures : new Map();
 }
 
 export function resolveViewport3DAirboxFieldVectorResourceKeys(
@@ -959,11 +1088,11 @@ export function resolveViewport3DPartFieldVectorResourceRequests(
   );
 }
 
-function resolveViewport3DFieldVectorCollectionResourceKey(
+export function resolveViewport3DFieldVectorCollectionResourceKey(
   kind: "airbox" | "part" | "quantity",
   resourceKeys: Iterable<string>,
 ): string {
-  const suffix = Array.from(resourceKeys).join("|");
+  const suffix = Array.from(resourceKeys).toSorted().join("|");
   return suffix
     ? `${DATA_FIELDS_PATH}#viewport-3d:${kind}-field-vectors:${suffix}`
     : `${DATA_FIELDS_PATH}#viewport-3d:${kind}-field-vectors:none`;
@@ -1144,7 +1273,7 @@ export function useViewport3DAirboxFieldVectors(
   const resourceKey = useMemo(() => {
     return resolveViewport3DFieldVectorCollectionResourceKey(
       "airbox",
-      Array.from(requests.keys()).toSorted(),
+      Array.from(requests.values(), (request) => request.key),
     );
   }, [requests]);
   const load = useCallback(
@@ -1155,6 +1284,10 @@ export function useViewport3DAirboxFieldVectors(
         ).values(),
       );
       const dataByKey = new Map<string, CachedFieldVectorEnvelope | null>();
+      const failureByKey = new Map<
+        string,
+        Viewport3DAirboxFieldVectorPartFailure
+      >();
       let firstError: unknown = null;
       for (const request of uniqueRequests) {
         if (signal.aborted) {
@@ -1197,7 +1330,8 @@ export function useViewport3DAirboxFieldVectors(
           );
         } catch (error) {
           if (signal.aborted) throw error;
-          if (!airboxFieldVectorUnavailable(error)) firstError ??= error;
+          firstError ??= error;
+          failureByKey.set(request.key, airboxFieldVectorFailure(error));
           const cached = fieldVectorCache.peek(request.key);
           dataByKey.set(
             request.key,
@@ -1215,6 +1349,14 @@ export function useViewport3DAirboxFieldVectors(
         partId,
         dataByKey.get(request.key) ?? null,
       ] as const);
+      const partFailures = new Map<
+        string,
+        Viewport3DAirboxFieldVectorPartFailure
+      >();
+      for (const [partId, request] of requests) {
+        const failure = failureByKey.get(request.key);
+        if (failure) partFailures.set(partId, failure);
+      }
       for (const [partId, request] of requests) {
         const envelope = dataByKey.get(request.key);
         if (envelope) {
@@ -1233,11 +1375,14 @@ export function useViewport3DAirboxFieldVectors(
         ),
       );
       if (firstError) {
-        throw createResourcePartialLoadError(
+        const partialError = createResourcePartialLoadError(
           "One or more Airbox field vectors are not ready",
           partial,
           firstError,
         );
+        (partialError as unknown as Viewport3DAirboxFieldVectorPartialLoadError).partFailures =
+          partFailures;
+        throw partialError;
       }
       return partial;
     },
@@ -1274,6 +1419,25 @@ export function useViewport3DAirboxFieldVectors(
       }),
     [previousFieldVectorEnvelopes, requests, resource.data, resource.status],
   );
+  const partStates = useMemo(
+    () =>
+      resolveViewport3DAirboxFieldVectorPartStates({
+        current: resource.data,
+        displayed: fieldVectorEnvelopes,
+        failures: airboxPartFailuresFromError(resource.error),
+        previous: previousFieldVectorEnvelopes,
+        requests,
+        status: resource.status,
+      }),
+    [
+      fieldVectorEnvelopes,
+      previousFieldVectorEnvelopes,
+      requests,
+      resource.data,
+      resource.error,
+      resource.status,
+    ],
+  );
   const data = useMemo(
     () =>
       new Map(
@@ -1297,6 +1461,7 @@ export function useViewport3DAirboxFieldVectors(
   return {
     ...resource,
     data,
+    partStates,
     payloadRevision,
   };
 }
@@ -1356,7 +1521,7 @@ export function useViewport3DQuantityFieldVectors(
   const resourceKey = useMemo(() => {
     return resolveViewport3DFieldVectorCollectionResourceKey(
       "quantity",
-      Array.from(requestKeys.keys()).toSorted(),
+      Array.from(requestKeys.values(), (request) => request.key),
     );
   }, [requestKeys]);
   const load = useCallback(
@@ -1545,7 +1710,7 @@ export function useViewport3DPartFieldVectors(
   const resourceKey = useMemo(() => {
     return resolveViewport3DFieldVectorCollectionResourceKey(
       "part",
-      Array.from(requestKeys.keys()).toSorted(),
+      Array.from(requestKeys.values(), (request) => request.key),
     );
   }, [requestKeys]);
   const load = useCallback(

@@ -90,6 +90,8 @@ pub async fn get_fdm_region_memberships(
     }
     let descriptor = if has_membership_descriptor_artifact(snapshot) {
         load_descriptor(snapshot)?.0
+    } else if !has_fdm_execution_plan(snapshot) {
+        return Ok(StatusCode::NO_CONTENT.into_response());
     } else {
         let resolved = load_resolved_fdm_membership(snapshot)?;
         descriptor_from_resolved_membership(snapshot, &resolved)?
@@ -182,11 +184,15 @@ async fn serve_fdm_region_membership_binary(
             ApiError::internal(format!("failed to read FMRM artifact: {error}"))
         })?;
         (descriptor, payload)
-    } else {
+    } else if has_fdm_execution_plan(snapshot) {
         let resolved = load_resolved_fdm_membership(snapshot)?;
         let descriptor = descriptor_from_resolved_membership(snapshot, &resolved)?;
         let payload = serialize_resolved_membership_payload(&descriptor, &resolved)?;
         (descriptor, payload)
+    } else {
+        return Err(ApiError::not_found(
+            "no realized FDM region membership artifact",
+        ));
     };
     let (mut payload, mask_offset) = validate_fmrm_payload(&original, &descriptor)?;
 
@@ -384,6 +390,14 @@ fn has_membership_descriptor_artifact(snapshot: &SessionStateResponse) -> bool {
                 .join("mesh/fdm_region_membership.v1.json")
                 .is_file()
     })
+}
+
+fn has_fdm_execution_plan(snapshot: &SessionStateResponse) -> bool {
+    snapshot
+        .metadata
+        .as_ref()
+        .and_then(|metadata| metadata.get("execution_plan"))
+        .is_some()
 }
 
 fn descriptor_from_resolved_membership(

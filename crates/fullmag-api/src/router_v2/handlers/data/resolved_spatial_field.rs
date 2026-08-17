@@ -6,13 +6,14 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use fullmag_quantities::{QuantityComponent, QuantityLocation, QuantityShape, quantity_spec};
+use fullmag_quantities::{quantity_spec, QuantityComponent, QuantityLocation, QuantityShape};
 use fullmag_runner::FemMeshPayload;
 use sha2::{Digest, Sha256};
 
-use super::fdm_region_membership::{ResolvedFdmMembership, load_resolved_fdm_membership};
+use super::fdm_region_membership::{load_resolved_fdm_membership, ResolvedFdmMembership};
 use super::field_resolution::{
-    fem_magnetic_node_indices, flatten_json_field_values, is_fdm_snapshot, json_field_grid,
+    fem_magnetic_node_indices, flatten_json_field_values,
+    fem_nodal_visualization_projection_allowed, is_fdm_snapshot, json_field_grid,
 };
 use crate::artifacts::read_json_artifact_value;
 use crate::error::ApiError;
@@ -21,7 +22,7 @@ use crate::router_v2::handlers::sessions::status::{
 };
 use crate::schemas::mesh::FdmRegionLegendEntryResource;
 use crate::session::{
-    ResolvedCurrentFieldSource, current_artifact_dir, resolved_current_field_source,
+    current_artifact_dir, resolved_current_field_source, ResolvedCurrentFieldSource,
 };
 use crate::types::SessionStateResponse;
 
@@ -492,8 +493,7 @@ pub(crate) fn resolve_fdm_multilayer_native_layer_field(
     let matching = artifact_layers
         .iter()
         .filter(|layer| {
-            layer.get("layer_id").and_then(serde_json::Value::as_str)
-                == Some(requested_layer_id)
+            layer.get("layer_id").and_then(serde_json::Value::as_str) == Some(requested_layer_id)
         })
         .collect::<Vec<_>>();
     let artifact_layer = match matching.as_slice() {
@@ -839,8 +839,7 @@ pub(crate) fn load_fdm_multilayer_native_layer_membership(
     let matching = artifact_layers
         .iter()
         .filter(|layer| {
-            layer.get("layer_id").and_then(serde_json::Value::as_str)
-                == Some(requested_layer_id)
+            layer.get("layer_id").and_then(serde_json::Value::as_str) == Some(requested_layer_id)
         })
         .collect::<Vec<_>>();
     let artifact_layer = match matching.as_slice() {
@@ -1063,7 +1062,9 @@ fn planned_native_layer<'a>(
     let Some(backend_plan) = metadata
         .get("execution_plan")
         .and_then(|plan| plan.get("backend_plan"))
-        .filter(|plan| plan.get("kind").and_then(serde_json::Value::as_str) == Some("fdm_multilayer"))
+        .filter(|plan| {
+            plan.get("kind").and_then(serde_json::Value::as_str) == Some("fdm_multilayer")
+        })
     else {
         return Ok(None);
     };
@@ -1075,8 +1076,7 @@ fn planned_native_layer<'a>(
     let matching = layers
         .iter()
         .filter(|layer| {
-            layer.get("layer_id").and_then(serde_json::Value::as_str)
-                == Some(requested_layer_id)
+            layer.get("layer_id").and_then(serde_json::Value::as_str) == Some(requested_layer_id)
         })
         .collect::<Vec<_>>();
     match matching.as_slice() {
@@ -1111,9 +1111,11 @@ fn planned_native_layer_membership(
                 .map(serde_json::Value::as_bool)
                 .collect::<Option<Vec<_>>>()
                 .filter(|mask| mask.len() == cell_count)
-                .ok_or_else(|| ApiError::conflict(format!(
-                    "layer '{layer_id}' native_active_mask is malformed"
-                )))
+                .ok_or_else(|| {
+                    ApiError::conflict(format!(
+                        "layer '{layer_id}' native_active_mask is malformed"
+                    ))
+                })
         })
         .transpose()?
         .unwrap_or_else(|| vec![true; cell_count]);
@@ -1134,15 +1136,17 @@ fn planned_native_layer_membership(
     let legend_value = layer
         .get("native_region_legend")
         .and_then(serde_json::Value::as_array)
-        .ok_or_else(|| ApiError::conflict(format!(
-            "layer '{layer_id}' has no native region legend"
-        )))?;
+        .ok_or_else(|| {
+            ApiError::conflict(format!("layer '{layer_id}' has no native region legend"))
+        })?;
     let region_legend = serde_json::from_value::<Vec<FdmRegionLegendEntryResource>>(
         serde_json::Value::Array(legend_value.clone()),
     )
-    .map_err(|error| ApiError::conflict(format!(
-        "layer '{layer_id}' native region legend is malformed: {error}"
-    )))?;
+    .map_err(|error| {
+        ApiError::conflict(format!(
+            "layer '{layer_id}' native region legend is malformed: {error}"
+        ))
+    })?;
     validate_region_legend(&region_legend, &mask, &object_id, &layer_id)?;
     let grid_fingerprint = format!(
         "sha256:{}",
@@ -1239,9 +1243,7 @@ fn persisted_native_layer<'a>(
         .ok_or_else(|| ApiError::conflict("multilayer FDM artifact layout has no native layers"))?;
     let matching = layers
         .iter()
-        .filter(|layer| {
-            layer.get("layer_id").and_then(serde_json::Value::as_str) == Some(layer_id)
-        })
+        .filter(|layer| layer.get("layer_id").and_then(serde_json::Value::as_str) == Some(layer_id))
         .collect::<Vec<_>>();
     match matching.as_slice() {
         [layer] => Ok(Some(*layer)),
@@ -1261,8 +1263,7 @@ fn cross_check_planned_layer_identity(
     let layer_id = carrier.layer_id.as_str();
     let identity_matches = required_string(artifact_layer, "layer_id", "layer descriptor")?
         == layer_id
-        && required_string(artifact_layer, "object_id", "layer descriptor")?
-            == carrier.object_id
+        && required_string(artifact_layer, "object_id", "layer descriptor")? == carrier.object_id
         && required_string(artifact_layer, "magnet_name", "layer descriptor")?
             == carrier.magnet_name
         && required_array3_u32(artifact_layer, "native_grid", layer_id)? == carrier.cells
@@ -1296,20 +1297,23 @@ fn cross_check_planned_membership(
         return Ok(());
     };
     cross_check_planned_layer_identity(carrier, artifact_layer)?;
-    let mask_descriptor = artifact_layer.get("native_region_mask").filter(|descriptor| {
-        descriptor
-            .get("available")
-            .and_then(serde_json::Value::as_bool)
-            == Some(true)
-    });
-    let legend_descriptor = artifact_layer.get("native_region_legend").filter(|descriptor| {
-        descriptor
-            .get("available")
-            .and_then(serde_json::Value::as_bool)
-            == Some(true)
-    });
-    let (Some(mask_descriptor), Some(legend_descriptor)) =
-        (mask_descriptor, legend_descriptor)
+    let mask_descriptor = artifact_layer
+        .get("native_region_mask")
+        .filter(|descriptor| {
+            descriptor
+                .get("available")
+                .and_then(serde_json::Value::as_bool)
+                == Some(true)
+        });
+    let legend_descriptor = artifact_layer
+        .get("native_region_legend")
+        .filter(|descriptor| {
+            descriptor
+                .get("available")
+                .and_then(serde_json::Value::as_bool)
+                == Some(true)
+        });
+    let (Some(mask_descriptor), Some(legend_descriptor)) = (mask_descriptor, legend_descriptor)
     else {
         if mask_descriptor.is_some() || legend_descriptor.is_some() {
             return Err(ApiError::conflict(format!(
@@ -1319,13 +1323,9 @@ fn cross_check_planned_membership(
         }
         return Ok(());
     };
-    let membership_path = required_string(
-        mask_descriptor,
-        "artifact_path",
-        "membership descriptor",
-    )?;
-    if required_string(legend_descriptor, "artifact_path", "legend descriptor")?
-        != membership_path
+    let membership_path =
+        required_string(mask_descriptor, "artifact_path", "membership descriptor")?;
+    if required_string(legend_descriptor, "artifact_path", "legend descriptor")? != membership_path
     {
         return Err(ApiError::conflict(
             "multilayer FDM membership mask and legend refer to different artifacts",
@@ -1373,9 +1373,11 @@ fn cross_check_planned_membership(
     let legend = serde_json::from_value::<Vec<FdmRegionLegendEntryResource>>(
         serde_json::Value::Array(legend_value.clone()),
     )
-    .map_err(|error| ApiError::conflict(format!(
-        "multilayer FDM membership legend is malformed: {error}"
-    )))?;
+    .map_err(|error| {
+        ApiError::conflict(format!(
+            "multilayer FDM membership legend is malformed: {error}"
+        ))
+    })?;
     let legend_hash = format!(
         "sha256:{:x}",
         Sha256::digest(serde_json::to_vec(legend_value).map_err(|error| {
@@ -1458,12 +1460,7 @@ fn cross_check_planned_material(
             "multilayer material field '{quantity_id}' unit or identity is inconsistent"
         )));
     }
-    let values = strict_finite_values(
-        &payload,
-        "values",
-        planned_values.len(),
-        quantity_id,
-    )?;
+    let values = strict_finite_values(&payload, "values", planned_values.len(), quantity_id)?;
     let value_hash = hash_f64_values(&values);
     validate_content_descriptor(
         descriptor,
@@ -1489,9 +1486,11 @@ fn resolve_planned_native_layer_field(
 ) -> Result<ResolvedSpatialField<'static>, ApiError> {
     let membership = planned_native_layer_membership(snapshot, layer)?;
     cross_check_planned_membership(snapshot, &membership)?;
-    let spec = quantity_spec(quantity_id).ok_or_else(|| ApiError::not_found(format!(
-        "quantity_unavailable: quantity '{quantity_id}' is unknown"
-    )))?;
+    let spec = quantity_spec(quantity_id).ok_or_else(|| {
+        ApiError::not_found(format!(
+            "quantity_unavailable: quantity '{quantity_id}' is unknown"
+        ))
+    })?;
     if component_count != 1 || usize::from(spec.n_comp) != component_count {
         return Err(ApiError::conflict(format!(
             "multilayer material field '{quantity_id}' has an invalid component contract"
@@ -1501,15 +1500,19 @@ fn resolve_planned_native_layer_field(
         "mat_ms" => "ms_field",
         "mat_aex" => "a_field",
         "mat_alpha" => "alpha_field",
-        _ => return Err(ApiError::not_found(format!(
+        _ => {
+            return Err(ApiError::not_found(format!(
             "quantity_not_materialized: field '{quantity_id}' has no native array for layer '{}'",
             membership.layer_id
-        ))),
+        )))
+        }
     };
-    let material = layer.get("material").ok_or_else(|| ApiError::conflict(format!(
-        "layer '{}' has no material contract",
-        membership.layer_id
-    )))?;
+    let material = layer.get("material").ok_or_else(|| {
+        ApiError::conflict(format!(
+            "layer '{}' has no material contract",
+            membership.layer_id
+        ))
+    })?;
     if material.get(material_key).is_none() {
         return Err(ApiError::not_found(format!(
             "quantity_not_materialized: field '{quantity_id}' has no native array for layer '{}'",
@@ -2084,6 +2087,13 @@ pub(crate) fn resolve_current_spatial_field<'a>(
                 .field_quantity_revisions
                 .get(quantity_id)
                 .copied()
+                .filter(|revision| *revision > 0)
+                .or_else(|| {
+                    snapshot
+                        .live_state
+                        .as_ref()
+                        .map(|state| state.latest_step.step)
+                })
                 .unwrap_or(0),
             None,
         ),
@@ -2174,6 +2184,18 @@ pub(crate) fn resolve_spatial_field_from_values<'a>(
                     },
                 }
             }
+            QuantityLocation::Cell
+                if fem_nodal_visualization_projection_allowed(
+                    snapshot,
+                    quantity_id,
+                    point_count,
+                ) => SpatialFieldCarrier::FemNodes {
+                topology: mesh,
+                topology_fingerprint,
+                mapping: EntityMapping::Identity {
+                    entity_count: point_count,
+                },
+            },
             QuantityLocation::Cell => {
                 return Err(ApiError::conflict(format!(
                     "element field '{quantity_id}' length does not match the FEM element layout"
@@ -2266,9 +2288,8 @@ mod tests {
     use crate::schemas::mesh::FdmRegionLegendEntryResource;
 
     use super::{
-        EntityMapping, FdmCellMembership, ResolvedSpatialField, SpatialFieldCarrier,
-        SpatialFieldProvenance, SpatialFieldSourceKind, resolve_fdm_object_indices,
-        resolve_fem_node_mapping,
+        resolve_fdm_object_indices, resolve_fem_node_mapping, EntityMapping, FdmCellMembership,
+        ResolvedSpatialField, SpatialFieldCarrier, SpatialFieldProvenance, SpatialFieldSourceKind,
     };
 
     fn fem_mesh() -> FemMeshPayload {
@@ -2433,24 +2454,22 @@ mod tests {
         assert_eq!(field.default_component, QuantityComponent::Vector3);
         assert_eq!(field.quantity_revision, 11);
         assert_eq!(field.mesh_or_grid_revision, 9);
-        assert!(
-            ResolvedSpatialField::from_airbox(
-                "H_eff",
-                "H_demag",
-                "A/m",
-                3,
-                vec![1.0, 2.0, 3.0],
-                [1, 1, 1],
-                [0.0, 0.0, 0.0],
-                [1.0e-9, 1.0e-9, 1.0e-9],
-                "airbox-grid-7".to_string(),
-                11,
-                4,
-                9,
-                SpatialFieldSourceKind::Persisted,
-            )
-            .is_err()
-        );
+        assert!(ResolvedSpatialField::from_airbox(
+            "H_eff",
+            "H_demag",
+            "A/m",
+            3,
+            vec![1.0, 2.0, 3.0],
+            [1, 1, 1],
+            [0.0, 0.0, 0.0],
+            [1.0e-9, 1.0e-9, 1.0e-9],
+            "airbox-grid-7".to_string(),
+            11,
+            4,
+            9,
+            SpatialFieldSourceKind::Persisted,
+        )
+        .is_err());
     }
 
     fn fdm_field_with_geometry(
@@ -2488,11 +2507,9 @@ mod tests {
 
     #[test]
     fn fdm_structured_grid_rejects_non_finite_origin() {
-        assert!(
-            fdm_field_with_geometry([0.0, 0.0, 0.0], [1.0, 1.0, 1.0])
-                .validate_contract()
-                .is_ok()
-        );
+        assert!(fdm_field_with_geometry([0.0, 0.0, 0.0], [1.0, 1.0, 1.0])
+            .validate_contract()
+            .is_ok());
         let field = fdm_field_with_geometry([f64::NAN, 0.0, 0.0], [1.0, 1.0, 1.0]);
 
         assert!(field.validate_contract().is_err());
@@ -2500,11 +2517,9 @@ mod tests {
 
     #[test]
     fn fdm_structured_grid_rejects_non_finite_spacing() {
-        assert!(
-            fdm_field_with_geometry([0.0, 0.0, 0.0], [1.0, 1.0, 1.0])
-                .validate_contract()
-                .is_ok()
-        );
+        assert!(fdm_field_with_geometry([0.0, 0.0, 0.0], [1.0, 1.0, 1.0])
+            .validate_contract()
+            .is_ok());
         for spacing in [
             [f64::INFINITY, 1.0, 1.0],
             [f64::NAN, 1.0, 1.0],

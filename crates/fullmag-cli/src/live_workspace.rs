@@ -2360,12 +2360,15 @@ mod tests {
         publish_generation(0);
         let reader_root = artifact_dir.join("fields/H_demag/airbox");
         let reader_failure = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-        let readers = (0..4)
+        // The production contract is explicitly qualified against the
+        // expected browser fan-out: one writer may publish while 100 readers
+        // resolve the manifest and its immutable carrier generation.
+        let readers = (0..100)
             .map(|_| {
                 let root = reader_root.clone();
                 let failure = std::sync::Arc::clone(&reader_failure);
                 std::thread::spawn(move || {
-                    for _ in 0..400 {
+                    for _ in 0..100 {
                         let manifest_bytes = match std::fs::read(root.join("manifest.json")) {
                             Ok(bytes) => bytes,
                             Err(_) => {

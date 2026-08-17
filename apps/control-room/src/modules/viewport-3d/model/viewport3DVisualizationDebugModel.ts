@@ -7,6 +7,7 @@ import {
 } from "@/kernel/visualization/buildVisualizationDebugHealth";
 import type {
   VisualizationDebugCarrierSnapshot,
+  VisualizationDebugFieldResourceState,
   VisualizationDebugIssue,
   VisualizationDebugMemoryRow,
   VisualizationDebugNumericStats,
@@ -33,6 +34,7 @@ export interface Viewport3DVisualizationDebugCarrierInput {
   carrierId: string;
   carrierRole: string;
   decoded: DecodedFieldVector | null;
+  fieldResourceState?: VisualizationDebugFieldResourceState | null;
   expectedDomainGenerationId?: string | null;
   expectedTopologyHash?: string | null;
   fieldBufferId?: string | null;
@@ -210,6 +212,7 @@ function buildCarrier(
   state.remainingSamples -= samples.length;
   const statistics = buildStatistics(carrier);
   const health = buildVisualizationDebugHealth(buildHealthEvidence(carrier, input, statistics));
+  const fieldResourceIssue = buildFieldResourceIssue(carrier);
   const responseMetadataIssues = buildResponseMetadataIdentityIssues(carrier);
   const memory = buildMemory(carrier, state);
   const cache = carrier.cache;
@@ -221,9 +224,13 @@ function buildCarrier(
     : null;
 
   return {
-    disposition: health.disposition,
+    disposition: combineDisposition(
+      health.disposition,
+      fieldResourceIssue?.disposition ?? "ready",
+    ),
     issues: Object.freeze([
       ...health.issues,
+      ...(fieldResourceIssue ? [fieldResourceIssue.issue] : []),
       ...responseMetadataIssues,
       ...sampleResult.issues,
     ]),
@@ -243,6 +250,21 @@ function buildCarrier(
       }),
       carrierId: boundText(carrier.carrierId),
       carrierRole: boundText(carrier.carrierRole),
+      ...(carrier.fieldResourceState
+        ? {
+            fieldResourceState: Object.freeze({
+              dataAvailable: Boolean(carrier.fieldResourceState.dataAvailable),
+              lastValidDataAvailable: Boolean(
+                carrier.fieldResourceState.lastValidDataAvailable,
+              ),
+              reasonCode: boundNullableText(
+                carrier.fieldResourceState.reasonCode,
+              ),
+              revision: boundNullableText(carrier.fieldResourceState.revision),
+              status: carrier.fieldResourceState.status,
+            }),
+          }
+        : {}),
       geometryMaskDescription: boundNullableText(carrier.geometryMaskDescription),
       memory,
       payload: decoded ? Object.freeze({
@@ -307,6 +329,38 @@ function buildCarrier(
       samples,
       scanState: carrier.scanState,
       statistics,
+    }),
+  };
+}
+
+function buildFieldResourceIssue(
+  carrier: Viewport3DVisualizationDebugCarrierInput,
+): {
+  disposition: VisualizationDebugSnapshot["disposition"];
+  issue: VisualizationDebugIssue;
+} | null {
+  const state = carrier.fieldResourceState;
+  if (!state || state.status === "ready") return null;
+  const degraded = state.status === "loading" || state.status === "pending" || state.status === "stale";
+  const reason = state.reasonCode ?? "unspecified";
+  return {
+    disposition: degraded ? "degraded" : "blocked",
+    issue: Object.freeze({
+      code: `airbox-field-resource-${state.status}`,
+      evidence: Object.freeze([
+        `carrier=${carrier.carrierId}`,
+        `status=${state.status}`,
+        `reason=${reason}`,
+        `data=${state.dataAvailable ? "present" : "absent"}`,
+        `last_valid=${state.lastValidDataAvailable ? "present" : "absent"}`,
+        `revision=${state.revision ?? "none"}`,
+      ]),
+      message:
+        state.status === "stale"
+          ? "The Airbox carrier is rendered from a last-valid field while its requested resource is stale."
+          : `The Airbox carrier field resource is ${state.status}.`,
+      severity: degraded ? ("warning" as const) : ("error" as const),
+      source: "transport" as const,
     }),
   };
 }

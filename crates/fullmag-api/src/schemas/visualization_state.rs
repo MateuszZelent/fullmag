@@ -561,6 +561,12 @@ pub enum VisualizationScopeKind {
     Part,
     Region,
     Selection,
+    /// Structured-grid FDM domain target. This is a session-scoped display
+    /// override, not a FEM mesh object.
+    FdmDomain,
+    /// Native multilayer FDM carrier target. The viewport supplies the
+    /// carrier identity; the session stores only its display override.
+    FdmNativeLayer,
 }
 
 #[derive(Debug, Serialize, Deserialize, ToSchema, Clone, PartialEq)]

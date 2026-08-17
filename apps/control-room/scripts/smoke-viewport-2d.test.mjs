@@ -71,6 +71,9 @@ test("2D smoke has a typed Default-source lane with full frame and operator cove
   assert.match(source, /slab_average/);
   assert.match(source, /planar-default/);
   assert.match(source, /createAuthoredMonitor/);
+  assert.match(source, /async function postJson\(resourcePath, body\)/);
+  assert.doesNotMatch(source, /import assert from "node:assert\/strict"/);
+  assert.doesNotMatch(source, /bounds_uv_m: undefined/);
   assert.match(source, /render_png/);
   assert.match(source, /default-vs-monitor/);
 });

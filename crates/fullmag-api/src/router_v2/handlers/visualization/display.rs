@@ -13,9 +13,9 @@ use crate::schemas::realtime::{RealtimeResourceChange, RealtimeResourceName};
 use crate::schemas::status::{DisplaySelection, DisplayViewMode, FieldComponent};
 use crate::schemas::visualization_state::{
     default_planar_visualization_state, AirboxLayerPatch, AirboxLayerState, BasicLayerPatch,
-    BasicLayerState, ClipAxis, ClipVisualizationState, DomainVisualizationState,
-    FdmVisualizationState, FemTopologyMode, FemVisualizationState, FerromagnetVisibilityMode,
-    DefaultPlanarOperatorState, PlanarColorRangeMode, PlanarSourceSelectionState,
+    BasicLayerState, ClipAxis, ClipVisualizationState, DefaultPlanarOperatorState,
+    DomainVisualizationState, FdmVisualizationState, FemTopologyMode, FemVisualizationState,
+    FerromagnetVisibilityMode, PlanarColorRangeMode, PlanarSourceSelectionState,
     PlanarVisualizationPatch, PlanarVisualizationState, SamplingProfile,
     SamplingVisualizationState, SliceAirboxRenderMode, SliceRenderMode, SliceVisualizationMode,
     SliceVisualizationState, SurfaceColorSource, SurfaceFieldProjectionMode,
@@ -525,8 +525,7 @@ fn validate_planar_visualization_patch(patch: &PlanarVisualizationPatch) -> Resu
                 "planar.default_slice.position_fraction must be finite and between 0 and 1",
             ));
         }
-        if let DefaultPlanarOperatorState::SlabAverage { thickness_m } = &default_slice.operator
-        {
+        if let DefaultPlanarOperatorState::SlabAverage { thickness_m } = &default_slice.operator {
             if !thickness_m.is_finite() || *thickness_m <= 0.0 {
                 return Err(ApiError::bad_request(
                     "planar.default_slice.operator.thickness_m must be finite and greater than zero",

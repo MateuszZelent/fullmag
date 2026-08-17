@@ -40,9 +40,8 @@ describe("ObjectVisualizationPanel performance contracts", () => {
       "const fdmTarget = fdmResourcesEnabled && target !== null",
     );
     expect(panelSource).toContain("femResourcesEnabled &&");
-    expect(panelSource).toContain(
-      "useVisualizationStateResource({\n    enabled: femResourcesEnabled",
-    );
+    expect(panelSource).toContain("useVisualizationStateResource({");
+    expect(panelSource).toContain("enabled: visualizationStateEnabled");
     expect(panelSource).toContain(
       "resolveObjectVisualizationTargetForLane({",
     );
@@ -72,8 +71,7 @@ describe("ObjectVisualizationPanel performance contracts", () => {
 
   it("derives control pending state from target-scoped sync mutations", () => {
     expect(panelSource).toContain("useSyncExternalStore");
-    expect(panelSource).toContain("visualizationSyncSnapshot.pendingTargetIds");
-    expect(panelSource).toContain("visualizationSyncSnapshot.inflightTargetIds");
+    expect(panelSource).toContain("resolveVisualizationTargetMutationStatus");
     expect(panelSource).not.toContain("const pending = false");
   });
 
@@ -81,6 +79,23 @@ describe("ObjectVisualizationPanel performance contracts", () => {
     expect(panelSource).toContain("resetAirboxVisualizationState(displayVisualizationState");
     expect(panelSource).toContain("visualizationOverridesForTargetReset(");
     expect(panelSource).toContain("currentOverrides: displayVisualizationState?.overrides");
+    expect(panelSource).toContain("if (!displayVisualizationState)");
+    expect(panelSource).not.toContain("if (!visualizationState.data)");
+  });
+
+  it("renders mutation rejection recovery through the shared target sync", () => {
+    expect(panelSource).toContain("resolveVisualizationTargetMutationStatus");
+    expect(panelSource).toContain("retryRejectedMutation");
+    expect(panelSource).toContain('state === "rejected"');
+    expect(panelSource).toContain("Retry display update");
+  });
+
+  it("uses one requested/normalized/effective budget contract for the slider", () => {
+    expect(panelSource).toContain("resolveVisualizationVectorBudgetValues");
+    expect(panelSource).toContain("budgetValues.normalizedRequested");
+    expect(panelSource).toContain("budgetValues.requested");
+    expect(panelSource).toContain("budgetValues.effective");
+    expect(panelSource).not.toContain("Math.min(vectorBudgetMax, settings.vectorBudget)");
   });
 
   it("labels and keeps viewport-only rendering preferences out of pending backend transactions", () => {

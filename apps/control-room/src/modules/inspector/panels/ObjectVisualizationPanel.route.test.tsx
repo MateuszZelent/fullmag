@@ -1,9 +1,14 @@
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+
+import type { FieldCatalogResource } from "@/kernel/api/apiTypes";
 
 const testState = vi.hoisted(() => ({
   discretization: "fdm",
+  fieldCatalog: null as FieldCatalogResource | null,
+  fieldCatalogRequested: false,
+  fieldCatalogStatus: "idle" as "idle" | "ready",
   planarActivate: null as (() => void) | null,
   queuePatch: vi.fn(),
   resourceCalls: [] as Array<{ enabled: boolean; name: string }>,
@@ -28,6 +33,10 @@ vi.mock("@/kernel/KernelContext", () => ({
       }),
       subscribe: () => () => undefined,
     },
+    visualizationDebug: {
+      getSnapshots: () => [],
+      subscribe: () => () => undefined,
+    },
   }),
 }));
 
@@ -44,13 +53,37 @@ vi.mock("@/kernel/resources/useSessionStatus", () => ({
 
 vi.mock("@/kernel/resources/studyRuntimeResources", () => ({
   shouldLoadRuntimeMeshManifest: () => true,
+  shouldLoadObjectVisualizationFieldCatalog: ({
+    requested,
+    targetActive,
+  }: {
+    requested: boolean;
+    targetActive: boolean;
+  }) => Boolean(targetActive && (requested || testState.fieldCatalogRequested)),
   useFieldCatalogResource: ({ enabled }: { enabled: boolean }) => {
     resourceCall("field-catalog", enabled);
-    return { data: null, error: null, revision: null, status: "idle" };
+    return {
+      data: testState.fieldCatalog,
+      error: null,
+      revision: testState.fieldCatalog?.revision ?? null,
+      status: testState.fieldCatalog ? testState.fieldCatalogStatus : "idle",
+    };
   },
   useQuantityCatalogResource: ({ enabled }: { enabled: boolean }) => {
     resourceCall("quantity-catalog", enabled);
     return { data: null, error: null, revision: null, status: "idle" };
+  },
+}));
+
+vi.mock("@/kernel/resources/fieldAvailabilityResources", () => ({
+  useFieldAvailabilityResource: ({ enabled }: { enabled: boolean }) => {
+    resourceCall("field-availability", enabled);
+    return {
+      data: null,
+      error: null,
+      revision: null,
+      status: enabled ? "ready" : "idle",
+    };
   },
 }));
 
@@ -61,7 +94,7 @@ vi.mock("@/kernel/visualization/useVisualizationStateResource", () => ({
       data: enabled ? {
         overrides: [],
         planar: {
-          active_monitor_id: "plane-1",
+          source: { kind: "monitor", monitor_id: "plane-1" },
           component: "magnitude",
           layers: { boundaries: false, contours: false, mesh: false, probes: false, raster: true, vectors: true },
           quality: "interactive",
@@ -210,7 +243,9 @@ vi.mock("../primitives/InspectorGroup", () => ({
   ),
 }));
 vi.mock("./ObjectVisualizationOverview", () => ({
-  ObjectVisualizationOverview: () => null,
+  ObjectVisualizationOverview: ({ dataState }: { dataState: string }) => (
+    <div data-visualization-data-state={dataState} />
+  ),
 }));
 vi.mock("../visualization/PlanarVisualizationSection", () => ({
   PlanarVisualizationSection: () => null,
@@ -360,6 +395,12 @@ function expectSharedVisualizationInspectorContract(
   expect(html).toContain(`data-inspector-owner="${owner}"`);
 }
 
+afterEach(() => {
+  testState.fieldCatalog = null;
+  testState.fieldCatalogRequested = false;
+  testState.fieldCatalogStatus = "idle";
+});
+
 describe("ObjectVisualizationPanel lane routing", () => {
   it("gives object, Airbox, and mesh-part routes distinct owner identities", () => {
     testState.discretization = "fdm";
@@ -482,7 +523,7 @@ describe("ObjectVisualizationPanel lane routing", () => {
       expect.arrayContaining([
         { name: "domain-meta", enabled: true },
         { name: "fdm-membership", enabled: true },
-        { name: "visualization-state", enabled: false },
+        { name: "visualization-state", enabled: true },
         { name: "scene", enabled: false },
         { name: "shared-domain-manifest", enabled: false },
       ]),
@@ -544,6 +585,45 @@ describe("ObjectVisualizationPanel lane routing", () => {
       name: "field-catalog",
       enabled: true,
     });
+  });
+
+  it("does not promote a ready global catalog to Live without an adopted target carrier", () => {
+    testState.discretization = "fem";
+    testState.fieldCatalogRequested = true;
+    testState.fieldCatalogStatus = "ready";
+    testState.fieldCatalog = {
+      domain_generation_id: "generation-7",
+      quantities: [
+        {
+          available: true,
+          components: 3,
+          domain: "magnetic_only",
+          domain_generation_id: "generation-7",
+          field_revision: 42,
+          kind: "vector_field",
+          label: "Magnetization",
+          location: "cell",
+          materialized_at_unix_ms: 1,
+          materialization_wall_time_ns: 0,
+          quantity_id: "m",
+          source_revision: 42,
+          source_step: 12,
+          spatial: true,
+          stale_by_steps: 0,
+          state: "complete",
+          ui_exposed: true,
+          unit: "A/m",
+        },
+      ],
+      revision: 42,
+    };
+
+    const html = renderToStaticMarkup(
+      <ObjectVisualizationPanel selection={selection} />,
+    );
+
+    expect(html).toContain('data-visualization-data-state="Supported"');
+    expect(html).not.toContain('data-visualization-data-state="Live"');
   });
 
   it("does not fall back to either lane while status is unresolved", () => {

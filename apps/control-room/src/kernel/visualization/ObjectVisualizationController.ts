@@ -171,13 +171,13 @@ export const AIRBOX_VISUALIZATION_TARGET: VisualizationTargetRef = {
  * visualization target so its viewport choices cannot overwrite the
  * magnetic-support target.
  */
-export const FDM_UNIVERSE_OUTSIDE_SUPPORT_TARGET: VisualizationTargetRef = {
+export const FDM_UNIVERSE_OUTSIDE_SUPPORT_TARGET = {
   id: "fdm-universe-outside-support",
   kind: "fdm-domain",
   // User-facing identity is shared with the FEM domain.  The id/kind remain
   // FDM-specific so the regular-grid settings cannot leak into FEM state.
   label: "Airbox",
-};
+} as const satisfies VisualizationTargetRef;
 
 export interface VisualizationTargetCapabilities {
   primaryRenderModes: readonly VisualizationRenderMode[];
@@ -186,6 +186,7 @@ export interface VisualizationTargetCapabilities {
   supportsFieldData: boolean;
   supportsPoints: boolean;
   supportsVectors: boolean;
+  supportsVectorSurfaceOffset: boolean;
 }
 
 const DEFAULT_VISUALIZATION_TARGET_CAPABILITIES: VisualizationTargetCapabilities = {
@@ -195,6 +196,7 @@ const DEFAULT_VISUALIZATION_TARGET_CAPABILITIES: VisualizationTargetCapabilities
   supportsFieldData: true,
   supportsPoints: true,
   supportsVectors: true,
+  supportsVectorSurfaceOffset: true,
 };
 
 const AIRBOX_VISUALIZATION_TARGET_CAPABILITIES: VisualizationTargetCapabilities = {
@@ -204,6 +206,7 @@ const AIRBOX_VISUALIZATION_TARGET_CAPABILITIES: VisualizationTargetCapabilities 
   supportsFieldData: true,
   supportsPoints: true,
   supportsVectors: true,
+  supportsVectorSurfaceOffset: true,
 };
 
 const FDM_UNIVERSE_OUTSIDE_SUPPORT_TARGET_CAPABILITIES: VisualizationTargetCapabilities = {
@@ -213,6 +216,7 @@ const FDM_UNIVERSE_OUTSIDE_SUPPORT_TARGET_CAPABILITIES: VisualizationTargetCapab
   supportsFieldData: true,
   supportsPoints: true,
   supportsVectors: true,
+  supportsVectorSurfaceOffset: false,
 };
 
 export function visualizationTargetCapabilities(
@@ -415,9 +419,9 @@ export const DEFAULT_FDM_UNIVERSE_OUTSIDE_SUPPORT_VISUALIZATION: VisualizationTa
 };
 
 /**
- * Native multilayer carriers are viewport-local targets.  They intentionally
- * never enter the persisted VisualizationState registry because their
- * geometry and field identity come from the FDM layout resource.
+ * Native multilayer carriers keep their geometry and field identity in the
+ * FDM layout resource, while their display settings use the session-scoped
+ * visualization override contract like FEM targets.
  */
 export const FDM_NATIVE_LAYER_TARGET_PREFIX = "fdm-native-layer:";
 
@@ -604,6 +608,11 @@ export class ObjectVisualizationController {
     this.bump();
   }
 
+  clearPendingTarget(target: VisualizationTargetRef): void {
+    if (!this.pendingOverrides.delete(visualizationTargetKey(target))) return;
+    this.bump();
+  }
+
   removeTargetOverrideField(
     target: VisualizationTargetRef,
     field: keyof VisualizationTargetPatch,
@@ -705,6 +714,11 @@ export class ObjectVisualizationController {
       ...(current?.patch ?? {}),
       ...visualizationTargetSupportedPatch(target, patch),
     });
+    // Pending acknowledgements compare against the serialized target
+    // override. `shaderColorMode` is a normalized UI alias; the backend stores
+    // the canonical `surfaceColorSource` instead. `renderMode` was already
+    // lowered to pass flags by normalizePatch above.
+    delete nextPatch.shaderColorMode;
     const next: PendingVisualizationTargetPatch = {
       baseRevision,
       patch: nextPatch,
@@ -712,7 +726,8 @@ export class ObjectVisualizationController {
     };
 
     if (
-      current?.baseRevision === next.baseRevision &&
+      current &&
+      current.baseRevision === next.baseRevision &&
       samePatch(current.patch, next.patch)
     ) {
       return;
@@ -734,9 +749,27 @@ export class ObjectVisualizationController {
         persistedOverride &&
         visualizationTargetPatchSatisfiesPatch(persistedOverride, pending.patch)
       ) {
+        const committedOverride = {
+          ...(this.overrides.get(key) ?? {}),
+          ...persistedOverride,
+        };
+        this.overrides.set(key, committedOverride);
         this.pendingOverrides.delete(key);
         changed = true;
       }
+    }
+    if (changed) this.bump();
+  }
+
+  rejectPendingTargetPatches(targetIds: readonly string[]): void {
+    if (targetIds.length === 0 || this.pendingOverrides.size === 0) return;
+
+    const rejected = new Set(targetIds);
+    let changed = false;
+    for (const [key] of this.pendingOverrides) {
+      if (!rejected.has(key)) continue;
+      this.pendingOverrides.delete(key);
+      changed = true;
     }
     if (changed) this.bump();
   }
@@ -881,6 +914,7 @@ export function resolveVisualizationSettings(
   target: VisualizationTargetRef,
   baseSettings?: VisualizationTargetPatch,
 ): VisualizationTargetSettings {
+  const targetKey = visualizationTargetKey(target);
   const settings = normalizeVisualizationSettings({
     ...resolveDefaultVisualizationSettings(
       snapshot,
@@ -888,7 +922,8 @@ export function resolveVisualizationSettings(
       baseSettings,
       target.id,
     ),
-    ...(snapshot.overrides[visualizationTargetKey(target)] ?? {}),
+    ...(snapshot.overrides[targetKey] ?? {}),
+    ...(snapshot.pendingOverrides?.[targetKey]?.patch ?? {}),
   });
   if (isFdmUniverseOutsideSupportTarget(target)) {
     return normalizeFdmUniverseOutsideSupportVisualizationSettings(settings);
@@ -1112,11 +1147,6 @@ function resolveVisualizationStateTargetOverride(
   state: VisualizationStateResource | null | undefined,
   target: VisualizationTargetRef,
 ): VisualizationStoredTargetPatch | null {
-  // FDM is a client-side structured-grid target. It has no FEM/object scope
-  // in the persisted visualization registry, so never serialize it as one.
-  if (target.kind === "fdm-domain" || target.kind === "fdm-native-layer") {
-    return null;
-  }
   const override = state?.overrides?.find((entry) =>
     visualizationStateOverrideMatchesTarget(entry, target),
   );
@@ -1232,14 +1262,9 @@ export function visualizationStateOverrideFromTargetPatch(
   target: VisualizationTargetRef,
   patch: VisualizationTargetPatch,
 ): VisualizationStateResource["overrides"][number] | null {
-  // The FDM domain target is owned by the viewport's structured-grid model.
-  // It is deliberately not a backend VisualizationState scope (the API only
-  // accepts full/magnetic/airbox/object/part/region/selection).  Callers that
-  // patch it must therefore fail closed instead of emitting invalid FEM data.
-  if (target.kind === "fdm-domain" || target.kind === "fdm-native-layer") {
-    return null;
-  }
-  const normalized = normalizePatch(patch);
+  const normalized = normalizePatch(
+    visualizationTargetSupportedPatch(target, patch),
+  );
   const display = {
     ...(normalized.geometryScope === undefined
       ? {}
@@ -1357,7 +1382,7 @@ export function visualizationStateOverrideFromTargetPatch(
       : { active_quantity_id: normalized.activeQuantityId };
 
   return {
-    scope: target.kind,
+    scope: visualizationStateScopeForTarget(target),
     scope_id: visualizationStateScopeIdForTarget(target),
     ...(normalized.visible === undefined ? {} : { visible: normalized.visible }),
     ...(Object.keys(display).length === 0 ? {} : { display }),
@@ -1376,6 +1401,14 @@ function visualizationStateScopeIdForTarget(target: VisualizationTargetRef): str
     return visualizationPartScopeIdFromTargetId(target.id);
   }
   return target.id;
+}
+
+function visualizationStateScopeForTarget(
+  target: VisualizationTargetRef,
+): VisualizationStateResource["overrides"][number]["scope"] {
+  if (target.kind === "fdm-domain") return "fdm_domain";
+  if (target.kind === "fdm-native-layer") return "fdm_native_layer";
+  return target.kind;
 }
 
 export function mergeVisualizationStateTargetOverride(
@@ -1580,7 +1613,7 @@ export function visualizationStateOverrideMatchesTarget(
   entry: VisualizationStateResource["overrides"][number],
   target: VisualizationTargetRef,
 ): boolean {
-  if (entry.scope !== target.kind) return false;
+  if (entry.scope !== visualizationStateScopeForTarget(target)) return false;
   if (
     entry.scope_id === target.id ||
     entry.scope_id === visualizationStateScopeIdForTarget(target)
@@ -1774,9 +1807,8 @@ function resolveVisualizationBaseSettings(
   if (kind === "airbox") {
     return resolveAirboxVisualizationSettingsFromState(state);
   }
-  // FDM is a client-side structured-grid target.  The backend visualization
-  // resource describes FEM/object layers, so it must never seed the FDM
-  // baseline (local FDM snapshot overrides/preferences still apply below).
+  // The backend target registry does not publish structured-grid FDM entries,
+  // so resolve the FDM baseline locally and apply its session override below.
   if (kind === "fdm-domain") {
     return defaultVisualizationSettings(kind, targetId);
   }
@@ -2107,6 +2139,14 @@ export function persistentVisualizationTargetPatch(
   patch: VisualizationTargetPatch,
 ): VisualizationTargetPatch {
   const persistent = { ...patch };
+  // `renderMode` is a derived UI value. The v2 target override serializes its
+  // primitive pass flags instead, so retaining it in the pending overlay
+  // would make acknowledgement impossible even after the backend persisted
+  // the equivalent surface/wireframe state.
+  delete persistent.renderMode;
+  // The serialized style stores the canonical `surfaceColorSource`; the
+  // normalized `shaderColorMode` is only a local presentation alias.
+  delete persistent.shaderColorMode;
   delete persistent.airboxSyntheticVectorsEnabled;
   delete persistent.primitiveVisible;
   delete persistent.primitiveMonoColor;

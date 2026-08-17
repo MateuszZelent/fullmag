@@ -74,6 +74,7 @@ import { ANALYSIS_FIELD_OVERLAY_COMMANDS } from "./visualization/analysisFieldOv
 import {
   ObjectVisualizationController,
   type VisualizationTargetPatch,
+  type VisualizationTargetRef,
 } from "./visualization/ObjectVisualizationController";
 import { VisualizationDebugController } from "./visualization/VisualizationDebugController";
 import { VisualizationRegistrySyncController } from "./visualization/VisualizationRegistrySyncController";
@@ -133,6 +134,8 @@ function createKernel(): KernelApi {
   const visualizationSync = new VisualizationRegistrySyncController({
     api: api.visualization,
     resources,
+    onRejectedTargetPatches: (targetIds) =>
+      visualization.rejectPendingTargetPatches(targetIds),
   });
   const realtime = new RealtimeInvalidationBridge(resources, {
     bus,
@@ -389,6 +392,15 @@ function BrowserAuditConnector({ kernel }: { kernel: KernelApi }) {
         readFdmVisualizationSettings: () => ReturnType<
           ObjectVisualizationController["getSettings"]
         >;
+        readVisualizationTargetSettings: (
+          target: VisualizationTargetRef,
+        ) => ReturnType<ObjectVisualizationController["getSettings"]>;
+        readVisualizationSyncSnapshot: () => ReturnType<
+          VisualizationRegistrySyncController["getSnapshot"]
+        >;
+        readVisualizationControllerSnapshot: () => ReturnType<
+          ObjectVisualizationController["getSnapshot"]
+        >;
         readViewport3DFieldUpdateHoldActive: () => boolean;
         readActiveViewportModule: () => string;
         publishVisualizationState: (state: VisualizationStateResource) => void;
@@ -500,12 +512,16 @@ function BrowserAuditConnector({ kernel }: { kernel: KernelApi }) {
       patchFdmVisualization: (patch: VisualizationTargetPatch) => {
         kernel.visualization.patchDefaults("fdm-domain", patch);
       },
-      readFdmVisualizationSettings: () =>
-        kernel.visualization.getSettings({
-          id: "fdm-domain",
-          kind: "fdm-domain",
-          label: "FDM domain",
-        }),
+       readFdmVisualizationSettings: () =>
+         kernel.visualization.getSettings({
+           id: "fdm-domain",
+           kind: "fdm-domain",
+           label: "FDM domain",
+         }),
+       readVisualizationTargetSettings: (target: VisualizationTargetRef) =>
+         kernel.visualization.getSettings(target),
+       readVisualizationSyncSnapshot: () => kernel.visualizationSync.getSnapshot(),
+       readVisualizationControllerSnapshot: () => kernel.visualization.getSnapshot(),
       readViewport3DFieldUpdateHoldActive: () =>
         viewport3DFieldUpdateHoldActive(),
       readActiveViewportModule: () =>

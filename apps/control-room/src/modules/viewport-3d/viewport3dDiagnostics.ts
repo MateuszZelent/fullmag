@@ -57,6 +57,20 @@ export interface Viewport3DResourceCounts {
 
 export interface Viewport3DDiagnosticsInput {
   airboxPartCount: number;
+  airboxFieldVectorPartStates?: ReadonlyMap<
+    string,
+    {
+      reasonCode: string | null;
+      revision: string | number | null;
+      status:
+        | "error"
+        | "loading"
+        | "pending"
+        | "ready"
+        | "stale"
+        | "unavailable";
+    }
+  >;
   buildFallbacks?: readonly Viewport3DBuildFallbackSnapshot[];
   cache: ResourceCacheStats;
   dataPlaneIssues?: readonly string[];
@@ -406,6 +420,7 @@ export function buildViewport3DDiagnostics(
     `top:${input.topologyRevision ?? "none"}`,
     `field:${input.fieldPayloadRevision ?? input.fieldRevision ?? "none"}`,
     ...formatFieldSyncDiagnostic(input),
+    ...formatAirboxFieldVectorPartStates(input.airboxFieldVectorPartStates),
     ...(input.surfaceColorStatus
       ? [`surface:${input.surfaceColorStatus}`]
       : []),
@@ -432,6 +447,22 @@ export function buildViewport3DDiagnostics(
     `worker-runtime:${input.tracker.workerRuntimeWorkers ?? 0}/${input.tracker.workerRuntimeTimers ?? 0}/${input.tracker.workerRuntimeJobs ?? 0}`,
     `frames:${input.tracker.frames}`,
   ].join(" ");
+}
+
+function formatAirboxFieldVectorPartStates(
+  states: Viewport3DDiagnosticsInput["airboxFieldVectorPartStates"],
+): string[] {
+  if (!states?.size) return [];
+  const entries = [...states.entries()]
+    .sort(([left], [right]) => left.localeCompare(right))
+    .slice(0, 8)
+    .map(([partId, state]) => {
+      const reason = state.reasonCode ? `:${state.reasonCode}` : "";
+      const revision = state.revision == null ? "none" : String(state.revision);
+      return `${partId}=${state.status}${reason}@${revision}`;
+    });
+  const suffix = states.size > entries.length ? ";..." : "";
+  return [`airbox-fields:${states.size}[${entries.join(";")}${suffix}]`];
 }
 
 function formatFieldSyncDiagnostic(

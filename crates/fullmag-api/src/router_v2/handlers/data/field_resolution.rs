@@ -85,9 +85,29 @@ pub(super) fn field_point_count_matches_current_domain(
         Some(QuantityLocation::Node) => {
             resolve_fem_node_mapping(mesh, quantity_id, point_count).is_ok()
         }
-        Some(QuantityLocation::Cell) => point_count == mesh.cell_count(),
+        Some(QuantityLocation::Cell) => {
+            point_count == mesh.cell_count()
+                || fem_nodal_visualization_projection_allowed(snapshot, quantity_id, point_count)
+        }
         Some(QuantityLocation::Global) | None => false,
     }
+}
+
+pub(crate) fn fem_nodal_visualization_projection_allowed(
+    snapshot: &SessionStateResponse,
+    quantity_id: &str,
+    point_count: usize,
+) -> bool {
+    if is_fdm_snapshot(snapshot) {
+        return false;
+    }
+    let Some(mesh) = snapshot.fem_mesh.as_ref() else {
+        return false;
+    };
+    point_count == mesh.nodes.len()
+        && quantity_spec(quantity_id).is_some_and(|spec| {
+            spec.location == QuantityLocation::Cell && spec.unit == "J/m³"
+        })
 }
 
 fn multilayer_native_point_count(snapshot: &SessionStateResponse) -> Option<usize> {

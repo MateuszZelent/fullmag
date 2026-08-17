@@ -12,6 +12,7 @@ import {
   ObjectVisualizationController,
   mergeVisualizationStateTargetOverride,
   removeTargetOverrideField,
+  persistentVisualizationTargetPatch,
   renderModePatch,
   resolveAirboxVisualizationSettingsFromState,
   resetAirboxVisualizationState,
@@ -29,6 +30,20 @@ import {
 } from "./ObjectVisualizationController";
 
 describe("ObjectVisualizationController", () => {
+  it("removes derived renderMode before a target patch is tracked for backend acknowledgement", () => {
+    expect(
+      persistentVisualizationTargetPatch({
+        renderMode: "surface+edges",
+        shaderColorMode: "magnitude",
+        shaderVisible: true,
+        wireframeVisible: true,
+      }),
+    ).toEqual({
+      shaderVisible: true,
+      wireframeVisible: true,
+    });
+  });
+
   it("keeps production style defaults for object and airbox targets", () => {
     expect(DEFAULT_OBJECT_VISUALIZATION).toMatchObject({
       geometryScope: "surface",
@@ -126,6 +141,7 @@ describe("ObjectVisualizationController", () => {
       showGeometryScopeControl: true,
       supportsFieldData: true,
       supportsPoints: true,
+      supportsVectorSurfaceOffset: true,
       supportsVectors: true,
     });
     expect(visualizationTargetCapabilities({ id: "film", kind: "object" })).toEqual({
@@ -134,6 +150,7 @@ describe("ObjectVisualizationController", () => {
       showGeometryScopeControl: true,
       supportsFieldData: true,
       supportsPoints: true,
+      supportsVectorSurfaceOffset: true,
       supportsVectors: true,
     });
   });
@@ -148,6 +165,8 @@ describe("ObjectVisualizationController", () => {
       vectorBudget: 400,
       vectorsVisible: true,
       vectorColorMode: "magnitude",
+      vectorSurfaceOffsetEnabled: true,
+      vectorSurfaceOffsetScale: 0.25,
       viewportColorbarVisible: true,
     });
 
@@ -200,6 +219,7 @@ describe("ObjectVisualizationController", () => {
     expect(visualizationTargetCapabilities(FDM_UNIVERSE_OUTSIDE_SUPPORT_TARGET)).toMatchObject({
       primaryRenderModes: ["wireframe", "points"],
       supportsPoints: true,
+      supportsVectorSurfaceOffset: false,
     });
   });
 
@@ -800,7 +820,7 @@ describe("ObjectVisualizationController", () => {
     });
   });
 
-  it("keeps native multilayer targets local and excludes FFT scratch selections", () => {
+  it("persists native multilayer target display settings and excludes FFT scratch selections", () => {
     expect(
       resolveVisualizationTargetFromSelection({
         kind: "mesh.grid.layer",
@@ -844,7 +864,11 @@ describe("ObjectVisualizationController", () => {
         },
         { visible: false },
       ),
-    ).toBeNull();
+    ).toMatchObject({
+      scope: "fdm_native_layer",
+      scope_id: "fdm-native-layer:layer%3Abottom",
+      visible: false,
+    });
   });
 
   it("preserves the dedicated FDM universe outside-support target from selection refs", () => {
@@ -1704,6 +1728,49 @@ describe("ObjectVisualizationController", () => {
     expect(controller.getSnapshot().pendingOverrides).toEqual({});
   });
 
+  it("commits an acknowledged target patch for the local FDM renderer", () => {
+    const controller = new ObjectVisualizationController();
+    const target = { id: "object:fdm-left", kind: "object" as const };
+    const patch = {
+      surfaceColorSource: "magnitude" as const,
+      vectorsVisible: true,
+      wireframeVisible: true,
+    };
+    const persistedOverride = visualizationStateOverrideFromTargetPatch(
+      target,
+      patch,
+    );
+
+    expect(persistedOverride).not.toBeNull();
+    controller.patchTargetPending(target, patch, 1);
+    controller.acknowledgePendingTargetPatches({
+      revision: 2,
+      overrides: [persistedOverride!],
+    } as never);
+
+    expect(controller.getSnapshot().pendingOverrides).toEqual({});
+    expect(controller.getSnapshot().overrides).toHaveProperty(
+      "object:fdm-left",
+      patch,
+    );
+    expect(resolveVisualizationSettings(controller.getSnapshot(), target)).toMatchObject({
+      surfaceColorSource: "magnitude",
+      vectorsVisible: true,
+      wireframeVisible: true,
+    });
+  });
+
+  it("tracks only serialized color fields in a pending target patch", () => {
+    const controller = new ObjectVisualizationController();
+    const target = { id: "object:film", kind: "object" as const };
+
+    controller.patchTargetPending(target, { surfaceColorSource: "magnitude" }, 3);
+
+    expect(controller.getSnapshot().pendingOverrides?.["object:film"]?.patch).toEqual({
+      surfaceColorSource: "magnitude",
+    });
+  });
+
   it("applies a pending FEM target patch before a backend target registry exists", () => {
     const controller = new ObjectVisualizationController();
     const target = { id: "object:fem-owned", kind: "object" as const };
@@ -1726,10 +1793,69 @@ describe("ObjectVisualizationController", () => {
           },
           overrides: [],
         } as never,
-      }).settings,
+    }).settings,
     ).toMatchObject({
       shaderVisible: false,
       wireframeVisible: true,
+    });
+  });
+
+  it("rejects only the pending overlays named by a failed session mutation", () => {
+    const controller = new ObjectVisualizationController();
+    const femTarget = { id: "object:fem-owned", kind: "object" as const };
+    const fdmTarget = FDM_UNIVERSE_OUTSIDE_SUPPORT_TARGET;
+    const nativeTarget = {
+      id: "fdm-native-layer:bottom",
+      kind: "fdm-native-layer" as const,
+    };
+
+    controller.patchTarget(femTarget, { wireframeVisible: false });
+    controller.patchTargetPending(femTarget, { shaderVisible: false }, 14);
+    controller.patchTargetPending(fdmTarget, { vectorsVisible: true }, 14);
+    controller.patchTargetPending(nativeTarget, { wireframeVisible: true }, 14);
+
+    controller.rejectPendingTargetPatches([
+      visualizationTargetKey(fdmTarget),
+      visualizationTargetKey(nativeTarget),
+    ]);
+
+    expect(controller.getSnapshot().pendingOverrides).toEqual({
+      [visualizationTargetKey(femTarget)]: expect.objectContaining({
+        patch: { shaderVisible: false },
+      }),
+    });
+    expect(controller.getSnapshot().overrides).toEqual({
+      [visualizationTargetKey(femTarget)]: { wireframeVisible: false },
+    });
+    expect(
+      resolveVisualizationSettings(
+        controller.getSnapshot(),
+        fdmTarget,
+      ).vectorsVisible,
+    ).toBe(false);
+    expect(
+      resolveVisualizationSettings(
+        controller.getSnapshot(),
+        nativeTarget,
+      ).wireframeVisible,
+    ).toBe(true);
+  });
+
+  it("clears a target pending overlay without deleting committed or viewport state", () => {
+    const controller = new ObjectVisualizationController();
+    const target = { id: "object:film", kind: "object" as const };
+    controller.patchTarget(target, { wireframeVisible: false });
+    controller.patchViewportPreferences(target, { primitiveVisible: true });
+    controller.patchTargetPending(target, { shaderVisible: false }, 14);
+
+    controller.clearPendingTarget(target);
+
+    expect(controller.getSnapshot().pendingOverrides).toEqual({});
+    expect(controller.getSnapshot().overrides).toEqual({
+      "object:film": { wireframeVisible: false },
+    });
+    expect(controller.getSnapshot().viewportPreferences).toEqual({
+      "object:film": { primitiveVisible: true },
     });
   });
 
@@ -2068,8 +2194,11 @@ describe("ObjectVisualizationController", () => {
     });
   });
 
-  it("keeps the viewport-local FDM domain out of FEM visualization overrides", () => {
-    const target = { id: "fdm-domain", kind: "fdm-domain" as const };
+  it("persists the structured FDM domain through the session visualization contract", () => {
+    const target = {
+      id: "fdm-universe-outside-support",
+      kind: "fdm-domain" as const,
+    };
     const existing = [
       {
         scope: "object" as const,
@@ -2078,14 +2207,22 @@ describe("ObjectVisualizationController", () => {
       },
     ];
 
-    expect(
-      visualizationStateOverrideFromTargetPatch(target, { visible: false }),
-    ).toBeNull();
-    expect(
-      mergeVisualizationStateTargetOverride(existing, target, {
+    expect(visualizationStateOverrideFromTargetPatch(target, { visible: false }))
+      .toMatchObject({
+        scope: "fdm_domain",
+        scope_id: "fdm-universe-outside-support",
         visible: false,
-      }),
-    ).toEqual(existing);
+      });
+    expect(mergeVisualizationStateTargetOverride(existing, target, { visible: false }))
+      .toEqual([
+        existing[0],
+        {
+          scope: "fdm_domain",
+          scope_id: "fdm-universe-outside-support",
+          display: { visible: false },
+          visible: false,
+        },
+      ]);
   });
 
   it("defaults target surface projection to raw nodal", () => {
@@ -2837,6 +2974,58 @@ describe("ObjectVisualizationController", () => {
         visualizationState: serverState,
       }).settings,
     ).toMatchObject({ primitiveVisible: false, vectorCenteringEnabled: true, visible: false });
+  });
+
+  it("replays session-scoped FDM settings while keeping viewport preferences local", () => {
+    const target = FDM_UNIVERSE_OUTSIDE_SUPPORT_TARGET;
+    const firstViewport = new ObjectVisualizationController();
+    const secondViewport = new ObjectVisualizationController();
+    const serverState = {
+      revision: 9,
+      overrides: [
+        {
+          scope: "fdm_domain",
+          scope_id: target.id,
+          display: { wireframe: { visible: true } },
+          style: { vector_budget: 256, wireframe_color: "#123456" },
+          quantity: { active_quantity_id: "H_eff" },
+          visible: false,
+        },
+      ],
+    } as never;
+
+    firstViewport.patchViewportPreferences(target, {
+      vectorCenteringEnabled: false,
+    });
+
+    expect(
+      resolveTargetVisualization({
+        snapshot: firstViewport.getSnapshot(),
+        target,
+        visualizationState: serverState,
+      }).settings,
+    ).toMatchObject({
+      activeQuantityId: "H_eff",
+      vectorBudget: 256,
+      vectorCenteringEnabled: false,
+      visible: false,
+      wireframeColor: "#123456",
+      wireframeVisible: true,
+    });
+    expect(
+      resolveTargetVisualization({
+        snapshot: secondViewport.getSnapshot(),
+        target,
+        visualizationState: serverState,
+      }).settings,
+    ).toMatchObject({
+      activeQuantityId: "H_eff",
+      vectorBudget: 256,
+      vectorCenteringEnabled: true,
+      visible: false,
+      wireframeColor: "#123456",
+      wireframeVisible: true,
+    });
   });
 
   it("builds backend global visualization state patches from default target patches", () => {

@@ -112,6 +112,12 @@ describe("KernelProvider performance contracts", () => {
     expect(kernelProviderSource).toContain("visualizationDebug,\n    visualizationSync,");
   });
 
+  it("rolls back rejected target patches through the canonical visualization controller", () => {
+    expect(kernelProviderSource).toContain(
+      "onRejectedTargetPatches: (targetIds) =>\n      visualization.rejectPendingTargetPatches(targetIds),",
+    );
+  });
+
   it("allows controlled browser audits to disable realtime websocket coupling", () => {
     expect(kernelProviderSource).toContain("disableRealtime");
     expect(kernelProviderSource).toContain(
@@ -150,5 +156,12 @@ describe("KernelProvider performance contracts", () => {
       'setActiveViewportModule: (moduleId: "field-map" | "viewport-3d")',
     );
     expect(kernelProviderSource).not.toContain('"viewport-2d" | "viewport-3d"');
+  });
+
+  it("exposes target-scoped visualization settings to browser audits", () => {
+    expect(kernelProviderSource).toContain("readVisualizationTargetSettings");
+    expect(kernelProviderSource).toContain("kernel.visualization.getSettings(target)");
+    expect(kernelProviderSource).toContain("readVisualizationSyncSnapshot");
+    expect(kernelProviderSource).toContain("readVisualizationControllerSnapshot");
   });
 });

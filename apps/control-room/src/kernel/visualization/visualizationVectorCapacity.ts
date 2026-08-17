@@ -335,9 +335,14 @@ export function visualizationVectorBudgetRangeFromCapacity(
       ? descriptorValue.surfaceCount
       : descriptorValue.fullCount
     : 0;
+  const exact = descriptorValue
+    ? geometryScope === "surface"
+      ? descriptorValue.surfaceExact ?? descriptorValue.exact
+      : descriptorValue.fullExact ?? descriptorValue.exact
+    : false;
   return {
     availableNodeCount: Math.max(0, Math.floor(available)),
-    exact: descriptorValue?.exact ?? false,
+    exact,
     max: Math.max(0, Math.floor(available)),
     min: 0,
     step: 1,
@@ -568,9 +573,21 @@ function femPartMatchesTarget(
   if (target.kind === "airbox") return isVisualizationAirboxIdentity(part);
   if (target.kind === "part") return part.id === target.id;
   if (target.kind === "region") {
+    const regionTarget = parseRegionTargetId(target.id);
+    if (!regionTarget) return false;
     const region = manifest.regions?.find((entry) => {
       const regionId = entry.source_region_candidate_id;
-      return regionId && `region:${encodeURIComponent(target.id)}`.includes(encodeURIComponent(regionId));
+      if (!regionId) return false;
+      const objectMatches = (entry.source_object_ids ?? []).some(
+        (objectId) =>
+          canonicalVisualizationSceneObjectId(decodeSafe(objectId)) ===
+          canonicalVisualizationSceneObjectId(regionTarget.objectId),
+      );
+      const candidateId = decodeSafe(regionId);
+      const regionMatches =
+        candidateId === regionTarget.regionId ||
+        candidateId === `${regionTarget.objectId}:${regionTarget.regionId}`;
+      return objectMatches && regionMatches;
     });
     return Boolean(region?.mesh_part_ids?.includes(part.id));
   }
@@ -578,4 +595,15 @@ function femPartMatchesTarget(
   return [part.object_id, part.geometry_id, part.id]
     .filter((value): value is string => Boolean(value))
     .some((value) => canonicalVisualizationSceneObjectId(value) === targetId);
+}
+
+function parseRegionTargetId(
+  targetId: string,
+): { objectId: string; regionId: string } | null {
+  const match = /^region:([^:]+):(.+)$/.exec(targetId);
+  if (!match) return null;
+  return {
+    objectId: decodeSafe(match[1] ?? ""),
+    regionId: decodeSafe(match[2] ?? ""),
+  };
 }

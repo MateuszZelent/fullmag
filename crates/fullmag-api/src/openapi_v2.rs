@@ -28,6 +28,7 @@ use utoipa::OpenApi;
         crate::router_v2::handlers::data::fdm_region_membership::get_fdm_region_membership_binary_scoped,
         crate::router_v2::handlers::data::quantities::get_quantities_catalog,
         crate::router_v2::handlers::data::fields::get_field_catalog,
+        crate::router_v2::handlers::data::fields::get_field_availability,
         crate::router_v2::handlers::data::fields::get_field_meta,
         crate::router_v2::handlers::data::fields::get_field_vector,
         crate::router_v2::handlers::data::fields::get_field_projection_meta,
@@ -297,8 +298,10 @@ use utoipa::OpenApi;
         crate::schemas::quantities::QuantityCatalogResponse,
         crate::schemas::quantities::QuantityCatalogEntry,
         crate::schemas::fields::FieldCatalog,
+        crate::schemas::fields::FieldAvailabilityResource,
         crate::schemas::fields::FieldDescriptor,
         crate::schemas::fields::FieldMaterializationState,
+        crate::schemas::fields::TargetFieldAvailabilityState,
         crate::schemas::fields::FieldMeta,
         crate::schemas::fields::FieldStats,
         crate::schemas::fields::FieldVectorQuery,
@@ -977,8 +980,8 @@ mod tests {
     fn openapi_current_transport_exposes_typed_structured_current_closure() {
         let document = openapi_json();
         let schemas = &document["components"]["schemas"];
-        let property = &schemas["KnownSceneCurrentTransport"]["properties"]
-            ["structured_current_closure"];
+        let property =
+            &schemas["KnownSceneCurrentTransport"]["properties"]["structured_current_closure"];
 
         assert!(property
             .to_string()

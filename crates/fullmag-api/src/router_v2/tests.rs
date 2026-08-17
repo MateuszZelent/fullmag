@@ -4371,6 +4371,46 @@ async fn field_vector_returns_pending_metadata_for_materializer_request() {
 }
 
 #[tokio::test]
+async fn field_vector_returns_pending_metadata_for_active_compute_fields_quantity() {
+    let (app, state, artifact_dir) = test_router_with_session_state_and_artifact_dir().await;
+    set_test_fdm_multilayer_layout(&state, [4, 1, 1]).await;
+
+    let detail = enqueue_compute_fields_and_get_detail(&app).await;
+    let command_id = detail["command_id"]
+        .as_str()
+        .expect("compute_fields response should contain command_id")
+        .to_string();
+    dispatch_compute_fields_command(&state, &command_id).await;
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri(
+                    "/v2/sessions/current/data/fields/H_demag/samples/vector?scope_kind=airbox&scope_id=airbox",
+                )
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::ACCEPTED);
+    let pending = body_json(response).await;
+    assert_eq!(pending["state"], "pending");
+    assert_eq!(pending["reason_code"], "field_materialization_pending");
+    assert_eq!(pending["retry_after_ms"], 250);
+    assert_eq!(pending["command_id"], command_id);
+    assert_eq!(pending["quantity_id"], "H_demag");
+    assert_eq!(pending["scope_kind"], "airbox");
+    assert_eq!(pending["scope_id"], "airbox");
+    assert!(pending["generation_id"]
+        .as_str()
+        .is_some_and(|generation| !generation.is_empty()));
+
+    let _ = fs::remove_dir_all(&artifact_dir);
+}
+
+#[tokio::test]
 async fn field_vector_rejects_stale_generation_and_carrier_preconditions() {
     let app = test_v2_router_with_session().await;
 
@@ -5422,7 +5462,10 @@ async fn visualization_default_planar_source_is_xy_midplane() {
     assert_eq!(response.status(), StatusCode::OK);
 
     let json = body_json(response).await;
-    assert_eq!(json["planar"]["source"], serde_json::json!({"kind": "default"}));
+    assert_eq!(
+        json["planar"]["source"],
+        serde_json::json!({"kind": "default"})
+    );
     assert_eq!(json["planar"]["default_slice"]["plane"], "xy");
     assert_eq!(json["planar"]["default_slice"]["position_fraction"], 0.5);
     assert_eq!(
@@ -5717,7 +5760,10 @@ async fn visualization_state_planar_profile_round_trips_without_mutating_three_d
         .unwrap();
     assert_eq!(cleared.status(), StatusCode::OK);
     let cleared = body_json(cleared).await;
-    assert_eq!(cleared["planar"]["source"], serde_json::json!({"kind": "default"}));
+    assert_eq!(
+        cleared["planar"]["source"],
+        serde_json::json!({"kind": "default"})
+    );
     assert_eq!(cleared["planar"]["range"]["mode"], "auto");
     assert_eq!(cleared["planar"]["range"]["min"], serde_json::Value::Null);
     assert_eq!(cleared["planar"]["range"]["max"], serde_json::Value::Null);
@@ -6417,7 +6463,11 @@ async fn table_rows_resource_returns_cursor_window_and_column_metadata() {
                 "dimension": "count",
                 "component": null,
                 "reduction": null,
-                "value_type": "integer"
+                "value_type": "integer",
+                "scope": "global",
+                "object_id": null,
+                "expression_id": null,
+                "weighting": null
             },
             {
                 "column_id": "t",
@@ -6427,7 +6477,11 @@ async fn table_rows_resource_returns_cursor_window_and_column_metadata() {
                 "dimension": "time",
                 "component": null,
                 "reduction": null,
-                "value_type": "float"
+                "value_type": "float",
+                "scope": "global",
+                "object_id": null,
+                "expression_id": null,
+                "weighting": null
             },
             {
                 "column_id": "e_total",
@@ -6437,7 +6491,11 @@ async fn table_rows_resource_returns_cursor_window_and_column_metadata() {
                 "dimension": "energy",
                 "component": null,
                 "reduction": "sum",
-                "value_type": "float"
+                "value_type": "float",
+                "scope": "global",
+                "object_id": null,
+                "expression_id": null,
+                "weighting": null
             },
             {
                 "column_id": "max_torque",
@@ -6447,7 +6505,11 @@ async fn table_rows_resource_returns_cursor_window_and_column_metadata() {
                 "dimension": "effective_field",
                 "component": null,
                 "reduction": "max",
-                "value_type": "float"
+                "value_type": "float",
+                "scope": "global",
+                "object_id": null,
+                "expression_id": null,
+                "weighting": null
             }
         ])
     );
@@ -7246,6 +7308,86 @@ async fn visualization_state_patch_persists_nested_layer_sampling_and_fem_state(
     assert!(presentation.visualization_clip.is_some());
     assert!(presentation.visualization_slice.is_some());
     assert!(presentation.visualization_vector_style.is_some());
+}
+
+#[tokio::test]
+async fn visualization_state_patch_persists_fdm_and_fem_target_overrides_for_a_second_client() {
+    let state = test_app_state();
+    let app = build_v2_router().with_state(state);
+    let patch = serde_json::json!({
+        "overrides": [
+            {
+                "scope": "object",
+                "scope_id": "film",
+                "display": { "vectors": { "visible": true } },
+                "style": { "vector_budget": 384 }
+            },
+            {
+                "scope": "fdm_domain",
+                "scope_id": "fdm-universe-outside-support",
+                "display": { "wireframe": { "visible": true } },
+                "style": { "vector_budget": 256 }
+            },
+            {
+                "scope": "fdm_native_layer",
+                "scope_id": "fdm-native-layer:layer%3Abottom",
+                "display": { "surface": { "visible": false } },
+                "style": { "vector_length_scale": 1.75 }
+            }
+        ]
+    });
+
+    let patched = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri("/v2/sessions/current/visualization/state")
+                .header("content-type", "application/json")
+                .body(Body::from(patch.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(patched.status(), StatusCode::OK);
+    let patched_json = body_json(patched).await;
+    assert_eq!(patched_json["overrides"].as_array().unwrap().len(), 3);
+
+    let reloaded = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/v2/sessions/current/visualization/state")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(reloaded.status(), StatusCode::OK);
+    let reloaded_json = body_json(reloaded).await;
+    let overrides = reloaded_json["overrides"].as_array().unwrap();
+    assert_eq!(overrides.len(), 3);
+    assert_eq!(
+        overrides
+            .iter()
+            .find(|entry| entry["scope"] == "object")
+            .expect("object override should survive reload")["style"]["vector_budget"],
+        384
+    );
+    assert_eq!(
+        overrides
+            .iter()
+            .find(|entry| entry["scope"] == "fdm_domain")
+            .expect("FDM domain override should survive reload")["style"]["vector_budget"],
+        256
+    );
+    assert_eq!(
+        overrides
+            .iter()
+            .find(|entry| entry["scope"] == "fdm_native_layer")
+            .expect("native-layer override should survive reload")["style"]["vector_length_scale"],
+        1.75
+    );
 }
 
 #[tokio::test]
@@ -18330,6 +18472,198 @@ async fn compute_fields_command_contract_resolves_multilayer_full_and_airbox_req
 }
 
 #[tokio::test]
+async fn compute_fields_completion_requires_exact_quantity_scope_generation_and_carrier() {
+    let (app, state, artifact_dir) = test_router_with_session_state_and_artifact_dir().await;
+    let carrier_dir = write_test_fdm_multilayer_airbox_carrier(&artifact_dir);
+    let carrier_fingerprint = test_fdm_multilayer_airbox_fingerprint(&carrier_dir);
+    set_test_fdm_multilayer_layout(&state, [4, 1, 1]).await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.metadata.as_mut().expect("multilayer metadata")["capabilities"] =
+            serde_json::json!({ "preview_quantities": ["m"] });
+        snapshot.latest_fields = serde_json::from_value(serde_json::json!({
+            "m": {
+                "values": [
+                    [1.0, 0.0, 0.0],
+                    [0.0, 1.0, 0.0],
+                    [0.0, 0.0, 1.0],
+                    [1.0, 1.0, 0.0]
+                ],
+                "layout": { "grid_cells": [4, 1, 1] }
+            }
+        }))
+        .expect("multilayer field fixture should deserialize");
+        snapshot.field_quantity_revisions.insert("m".into(), 1);
+    }
+
+    let detail = enqueue_compute_fields_and_get_detail(&app).await;
+    let command_id = detail["command_id"]
+        .as_str()
+        .expect("compute_fields command should expose command_id")
+        .to_string();
+    let generation_id = detail["field_materialization_requirements"][0]["generation_id"]
+        .as_str()
+        .expect("full requirement should expose generation_id")
+        .to_string();
+    assert_eq!(
+        detail["field_materialization_requirements"][1]["carrier_fingerprint"],
+        carrier_fingerprint
+    );
+
+    let saved_m = state
+        .current_live_state
+        .read()
+        .await
+        .as_ref()
+        .and_then(|snapshot| snapshot.latest_fields.get("m"))
+        .cloned()
+        .expect("full magnetization field should be present");
+
+    dispatch_compute_fields_command(&state, &command_id).await;
+
+    {
+        let mut guard = state.current_live_state.write().await;
+        guard
+            .as_mut()
+            .expect("live session should exist")
+            .latest_fields = LatestFields::default();
+    }
+    assert!(
+        !reconcile_compute_fields_command(&state).await,
+        "a missing requested quantity must keep compute_fields dispatched"
+    );
+
+    {
+        let mut guard = state.current_live_state.write().await;
+        guard
+            .as_mut()
+            .expect("live session should exist")
+            .latest_fields
+            .insert("m".into(), saved_m);
+    }
+
+    {
+        let mut ledger = state.current_command_ledger.lock().await;
+        let record = ledger
+            .iter_mut()
+            .find(|record| record.command.command_id == command_id)
+            .expect("compute_fields command should remain in the ledger");
+        record.command.field_materialization_requirements[1].scope_id =
+            Some("wrong-airbox".into());
+    }
+    assert!(
+        !reconcile_compute_fields_command(&state).await,
+        "a mismatched scope identity must keep compute_fields dispatched"
+    );
+
+    {
+        let mut ledger = state.current_command_ledger.lock().await;
+        let record = ledger
+            .iter_mut()
+            .find(|record| record.command.command_id == command_id)
+            .expect("compute_fields command should remain in the ledger");
+        let requirement = &mut record.command.field_materialization_requirements[1];
+        requirement.scope_id = Some("airbox".into());
+        requirement.generation_id = "stale-generation".into();
+    }
+    assert!(
+        !reconcile_compute_fields_command(&state).await,
+        "a stale domain generation must keep compute_fields dispatched"
+    );
+
+    {
+        let mut ledger = state.current_command_ledger.lock().await;
+        let record = ledger
+            .iter_mut()
+            .find(|record| record.command.command_id == command_id)
+            .expect("compute_fields command should remain in the ledger");
+        let requirement = &mut record.command.field_materialization_requirements[1];
+        requirement.generation_id = generation_id;
+        requirement.carrier_fingerprint = Some("0".repeat(64));
+    }
+    assert!(
+        !reconcile_compute_fields_command(&state).await,
+        "a mismatched Airbox carrier must keep compute_fields dispatched"
+    );
+
+    {
+        let mut ledger = state.current_command_ledger.lock().await;
+        let record = ledger
+            .iter_mut()
+            .find(|record| record.command.command_id == command_id)
+            .expect("compute_fields command should remain in the ledger");
+        record.command.field_materialization_requirements[1].carrier_fingerprint =
+            Some(carrier_fingerprint);
+    }
+    assert!(
+        reconcile_compute_fields_command(&state).await,
+        "only the exact quantity/scope/generation/carrier tuple may complete compute_fields"
+    );
+
+    let completed = get_command_detail(&app, &command_id).await;
+    assert_eq!(completed["status"], "completed");
+    assert_eq!(completed["completion_status"], "completed");
+    let _ = fs::remove_dir_all(&artifact_dir);
+}
+
+#[tokio::test]
+async fn compute_fields_command_stays_dispatched_until_airbox_carrier_is_readable() {
+    let (app, state, artifact_dir) = test_router_with_session_state_and_artifact_dir().await;
+    set_test_fdm_multilayer_layout(&state, [4, 1, 1]).await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.metadata.as_mut().expect("multilayer metadata")["capabilities"] =
+            serde_json::json!({ "preview_quantities": ["m"] });
+        snapshot.latest_fields = serde_json::from_value(serde_json::json!({
+            "m": {
+                "values": [
+                    [1.0, 0.0, 0.0],
+                    [0.0, 1.0, 0.0],
+                    [0.0, 0.0, 1.0],
+                    [1.0, 1.0, 0.0]
+                ],
+                "layout": { "grid_cells": [4, 1, 1] }
+            }
+        }))
+        .expect("multilayer field fixture should deserialize");
+        snapshot.field_quantity_revisions.insert("m".into(), 1);
+    }
+
+    let detail = enqueue_compute_fields_and_get_detail(&app).await;
+    let command_id = detail["command_id"]
+        .as_str()
+        .expect("multilayer command detail should expose command_id");
+    let requirements = detail["field_materialization_requirements"]
+        .as_array()
+        .expect("multilayer requirements should be an array");
+    assert_eq!(requirements.len(), 2);
+    assert_eq!(requirements[1]["scope_kind"], "airbox");
+    assert!(requirements[1]["carrier_fingerprint"].is_null());
+
+    let availability = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/fields/H_demag/availability?target_id=airbox&scope_kind=airbox&scope_id=airbox")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(availability.status(), StatusCode::OK);
+    let availability = body_json(availability).await;
+    assert_eq!(availability["state"], "supported");
+    assert_eq!(availability["reason_code"], "target_carrier_missing");
+    assert!(availability["generation"].as_str().is_some_and(|value| !value.is_empty()));
+
+    dispatch_compute_fields_command(&state, command_id).await;
+    assert!(!reconcile_compute_fields_command(&state).await);
+    let still_dispatched = get_command_detail(&app, command_id).await;
+    assert_eq!(still_dispatched["status"], "dispatched");
+    assert!(still_dispatched["completion_status"].is_null());
+
+    let _ = fs::remove_dir_all(&artifact_dir);
+}
+
+#[tokio::test]
 async fn compute_fields_command_contract_resolves_fem_full_requirement() {
     let state = test_app_state_with_live_session().await;
     if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
@@ -22868,7 +23202,7 @@ async fn session_import_commit_round_trips_exported_session() {
 }
 
 fn complete_coupled_m3_checkpoint() -> serde_json::Value {
-    serde_json::json!({
+    let mut checkpoint = serde_json::json!({
         "schema": "fullmag.fdm.coupled_m3_checkpoint.v1",
         "problem_ir_abi": "fullmag.problem_ir.v1",
         "scalar_layout": "f64",
@@ -22933,6 +23267,9 @@ fn complete_coupled_m3_checkpoint() -> serde_json::Value {
                 "charge_operator_version": "fv_charge_face_flux.v1",
                 "spin_operator_version": "fv_spin_upwind_v1",
                 "torque_formula_version": "drift_diffusion_absorbed_flux.v1",
+                "transport_realization": "rust_reference_v1",
+                "fallback_used": false,
+                "evaluated_envelope_multiplier": 1.0,
                 "state_revision": 1,
                 "operator_revision": 0
             }],
@@ -22958,7 +23295,10 @@ fn complete_coupled_m3_checkpoint() -> serde_json::Value {
         "thermal_rng_algorithm": "counter_hash_box_muller.fullmag.v1",
         "thermal_seed": 17,
         "thermal_counter": 42
-    })
+    });
+    checkpoint["accepted"]["modules"][0]["runtime_owner"] =
+        serde_json::json!("fdm_cpu_rust_coupled_transport_reference_v1");
+    checkpoint
 }
 
 fn append_coupled_m3_checkpoint_module(checkpoint: &mut serde_json::Value, module_id: &str) {
@@ -23022,7 +23362,11 @@ async fn session_checkpoint_create_captures_live_magnetization() {
         .await
         .unwrap();
 
-    assert_eq!(response.status(), StatusCode::OK);
+    if response.status() != StatusCode::OK {
+        let status = response.status();
+        let body = body_bytes(response).await;
+        panic!("checkpoint create returned {status}: {}", String::from_utf8_lossy(&body));
+    }
     let json = body_json(response).await;
     assert_eq!(json["checkpoint"]["checkpoint_id"], "cp-000042");
     assert_eq!(json["checkpoint"]["run_id"], "test-run");
@@ -26187,7 +26531,10 @@ async fn fdm_multilayer_field_vector_layer_scope_uses_native_layer_layout() {
         panic!("sampled field vector failed: {sampled_status} {sampled_error}");
     }
     assert_eq!(sampled.headers()["x-fullmag-point-count"], "1");
-    assert_eq!(sampled.headers()["x-fullmag-field-indexing"], "sampled_node_indices");
+    assert_eq!(
+        sampled.headers()["x-fullmag-field-indexing"],
+        "sampled_node_indices"
+    );
     let sampled_bytes = body_bytes(sampled).await;
     assert_eq!(decode_fmvp_node_indices(&sampled_bytes), vec![0]);
     assert_eq!(decode_fmvp_payload_f64(&sampled_bytes), vec![1.0, 0.0, 0.0]);
@@ -26831,9 +27178,8 @@ async fn fdm_multilayer_planar_layer_scope_uses_native_grid_and_local_region_mem
         top_membership_generation
     );
     if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
-        snapshot.metadata.as_mut().unwrap()["artifact_layout"]["layers"][1]
-            ["material_fields"]["mat_ms"]["value_sha256"] =
-            serde_json::json!(format!("sha256:{}", "0".repeat(64)));
+        snapshot.metadata.as_mut().unwrap()["artifact_layout"]["layers"][1]["material_fields"]
+            ["mat_ms"]["value_sha256"] = serde_json::json!(format!("sha256:{}", "0".repeat(64)));
     }
     {
         let guard = state.current_live_state.read().await;
@@ -26849,8 +27195,8 @@ async fn fdm_multilayer_planar_layer_scope_uses_native_grid_and_local_region_mem
         assert_eq!(error.status, StatusCode::CONFLICT);
     }
     if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
-        snapshot.metadata.as_mut().unwrap()["artifact_layout"]["layers"][1]
-            ["material_fields"] = serde_json::json!({});
+        snapshot.metadata.as_mut().unwrap()["artifact_layout"]["layers"][1]["material_fields"] =
+            serde_json::json!({});
     }
     fs::remove_file(artifact_dir.join(material_path)).unwrap();
     let base = "/v2/sessions/current/data/fields/mat_ms/planar-monitors/bottom-shared-region/meta?component=scalar&resolution_x=16&resolution_y=16";
@@ -26891,16 +27237,16 @@ async fn fdm_multilayer_planar_layer_scope_uses_native_grid_and_local_region_mem
     assert_eq!(descriptor["encoding"], "FMRM:u32_membership_le");
 
     if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
-        snapshot.metadata.as_mut().unwrap()["artifact_layout"]["layers"][1]
-            ["material_fields"]["mat_ms"] = serde_json::json!({
-                "available": true,
-                "unit": "A/m",
-                "value_count": 2,
-                "revision": 17,
-                "generation_id": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
-                "value_sha256": value_sha256,
-                "artifact_path": material_path
-            });
+        snapshot.metadata.as_mut().unwrap()["artifact_layout"]["layers"][1]["material_fields"]
+            ["mat_ms"] = serde_json::json!({
+            "available": true,
+            "unit": "A/m",
+            "value_count": 2,
+            "revision": 17,
+            "generation_id": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+            "value_sha256": value_sha256,
+            "artifact_path": material_path
+        });
     }
     let missing_declared_material = app
         .clone()
@@ -26914,8 +27260,8 @@ async fn fdm_multilayer_planar_layer_scope_uses_native_grid_and_local_region_mem
         .unwrap();
     assert_eq!(missing_declared_material.status(), StatusCode::CONFLICT);
     if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
-        snapshot.metadata.as_mut().unwrap()["artifact_layout"]["layers"][1]
-            ["material_fields"] = serde_json::json!({});
+        snapshot.metadata.as_mut().unwrap()["artifact_layout"]["layers"][1]["material_fields"] =
+            serde_json::json!({});
     }
 
     let membership = app
@@ -26988,9 +27334,8 @@ async fn fdm_multilayer_planar_layer_scope_uses_native_grid_and_local_region_mem
     if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
         snapshot.metadata.as_mut().unwrap()["execution_plan"]["backend_plan"]["layers"][1]
             ["native_region_legend"] = region_legend.clone();
-        snapshot.metadata.as_mut().unwrap()["artifact_layout"]["layers"][1]
-            ["native_region_mask"]["value_sha256"] =
-            serde_json::json!(format!("sha256:{}", "0".repeat(64)));
+        snapshot.metadata.as_mut().unwrap()["artifact_layout"]["layers"][1]["native_region_mask"]
+            ["value_sha256"] = serde_json::json!(format!("sha256:{}", "0".repeat(64)));
     }
     let persisted_hash_mismatch = app
         .clone()
@@ -27004,8 +27349,8 @@ async fn fdm_multilayer_planar_layer_scope_uses_native_grid_and_local_region_mem
         .unwrap();
     assert_eq!(persisted_hash_mismatch.status(), StatusCode::CONFLICT);
     if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
-        snapshot.metadata.as_mut().unwrap()["artifact_layout"]["layers"][1]
-            ["native_region_mask"]["value_sha256"] = serde_json::json!(region_mask_sha256);
+        snapshot.metadata.as_mut().unwrap()["artifact_layout"]["layers"][1]["native_region_mask"]
+            ["value_sha256"] = serde_json::json!(region_mask_sha256);
     }
     fs::remove_file(artifact_dir.join(membership_path)).unwrap();
     let missing_declared_membership = app
@@ -27022,7 +27367,10 @@ async fn fdm_multilayer_planar_layer_scope_uses_native_grid_and_local_region_mem
     if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
         let layer = &mut snapshot.metadata.as_mut().unwrap()["artifact_layout"]["layers"][1];
         layer.as_object_mut().unwrap().remove("native_region_mask");
-        layer.as_object_mut().unwrap().remove("native_region_legend");
+        layer
+            .as_object_mut()
+            .unwrap()
+            .remove("native_region_legend");
     }
 
     let missing = app
@@ -27041,7 +27389,9 @@ async fn fdm_multilayer_planar_layer_scope_uses_native_grid_and_local_region_mem
         .clone()
         .oneshot(
             Request::builder()
-                .uri(format!("{base}&scope_kind=layer&scope_id=layer%3Abottom&expected_field_revision=999"))
+                .uri(format!(
+                    "{base}&scope_kind=layer&scope_id=layer%3Abottom&expected_field_revision=999"
+                ))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -27050,13 +27400,18 @@ async fn fdm_multilayer_planar_layer_scope_uses_native_grid_and_local_region_mem
     assert_eq!(stale_revision.status(), StatusCode::CONFLICT);
 
     if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
-        snapshot.field_quantity_revisions.insert("mat_ms".into(), 41);
+        snapshot
+            .field_quantity_revisions
+            .insert("mat_ms".into(), 41);
     }
     let stale_token = app
         .clone()
         .oneshot(
             Request::builder()
-                .uri(format!("{base}&scope_kind=layer&scope_id=layer%3Abottom&sample_token={}", body["sample_token"].as_str().unwrap()))
+                .uri(format!(
+                    "{base}&scope_kind=layer&scope_id=layer%3Abottom&sample_token={}",
+                    body["sample_token"].as_str().unwrap()
+                ))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -27065,8 +27420,8 @@ async fn fdm_multilayer_planar_layer_scope_uses_native_grid_and_local_region_mem
     assert_eq!(stale_token.status(), StatusCode::CONFLICT);
 
     if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
-        let layer = &mut snapshot.metadata.as_mut().unwrap()["execution_plan"]["backend_plan"]
-            ["layers"][1];
+        let layer =
+            &mut snapshot.metadata.as_mut().unwrap()["execution_plan"]["backend_plan"]["layers"][1];
         layer["native_grid"] = serde_json::json!([3, 1, 1]);
     }
     let mismatched_grid = app
@@ -27082,8 +27437,8 @@ async fn fdm_multilayer_planar_layer_scope_uses_native_grid_and_local_region_mem
     assert_eq!(mismatched_grid.status(), StatusCode::CONFLICT);
 
     if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
-        let layer = &mut snapshot.metadata.as_mut().unwrap()["execution_plan"]["backend_plan"]
-            ["layers"][1];
+        let layer =
+            &mut snapshot.metadata.as_mut().unwrap()["execution_plan"]["backend_plan"]["layers"][1];
         layer["native_grid"] = serde_json::json!([2, 1, 1]);
         layer["native_region_legend"][0]["object_id"] = serde_json::json!("object:wrong");
     }
@@ -27100,8 +27455,8 @@ async fn fdm_multilayer_planar_layer_scope_uses_native_grid_and_local_region_mem
     assert_eq!(mismatched_legend.status(), StatusCode::CONFLICT);
 
     if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
-        let layer = &mut snapshot.metadata.as_mut().unwrap()["execution_plan"]["backend_plan"]
-            ["layers"][1];
+        let layer =
+            &mut snapshot.metadata.as_mut().unwrap()["execution_plan"]["backend_plan"]["layers"][1];
         layer["native_region_legend"] = region_legend.clone();
         layer["native_region_mask"] = serde_json::json!([2, 2]);
     }
@@ -27111,10 +27466,7 @@ async fn fdm_multilayer_planar_layer_scope_uses_native_grid_and_local_region_mem
             .as_mut()
             .and_then(|snapshot| snapshot.metadata.as_mut())
             .expect("multilayer metadata should remain present");
-        std::mem::replace(
-            &mut metadata["artifact_layout"],
-            serde_json::Value::Null,
-        )
+        std::mem::replace(&mut metadata["artifact_layout"], serde_json::Value::Null)
     };
     let empty_target = app
         .clone()
@@ -32305,15 +32657,27 @@ async fn v2_field_vector_prefers_fresh_m_preview_cache_over_stale_latest_field()
 }
 
 #[tokio::test]
-async fn v2_fdm_vector_ignores_max_samples_when_preview_would_be_downscaled() {
+async fn v2_fdm_vector_respects_max_samples_when_preview_would_be_downscaled() {
     let state = test_app_state_with_live_session().await;
+    let grid_fingerprint =
+        fullmag_ir::FdmGridCertificateIR::new([0.0, 0.0, 0.0], [4, 1, 1], [1.0, 1.0, 1.0], 4, 1)
+            .expect("FDM grid fixture should form a certificate")
+            .grid_fingerprint;
     if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
         snapshot.state_version = 26;
         // A reused session may still carry the previous FEM solver mesh.  The
         // requested FDM lane must not inherit its topology metadata.
         snapshot.fem_mesh = Some(sample_fem_mesh_payload());
         snapshot.metadata = Some(serde_json::json!({
-            "execution_plan": { "backend_plan": { "kind": "fdm" } }
+            "execution_plan": { "backend_plan": {
+                "kind": "fdm",
+                "grid_certificate": {
+                    "grid_fingerprint": grid_fingerprint.clone(),
+                    "counts": [4, 1, 1],
+                    "origin_m": [0.0, 0.0, 0.0],
+                    "cell_m": [1.0, 1.0, 1.0]
+                }
+            } }
         }));
         // The solver domain is a 4-cell FDM grid.  Both the legacy materialized
         // field and the preview cache below only carry a 2-cell display preview.
@@ -32405,38 +32769,42 @@ async fn v2_fdm_vector_ignores_max_samples_when_preview_would_be_downscaled() {
             .headers()
             .get("x-fullmag-encoding")
             .and_then(|value| value.to_str().ok()),
-        Some("FMVP;version=2"),
-        "FDM vectors must not inherit stale FEM topology metadata"
+        Some("FMVP;version=3"),
+        "sampled FDM vectors must carry explicit grid ordinals"
     );
     assert_eq!(
         response
             .headers()
             .get("x-fullmag-point-count")
             .and_then(|value| value.to_str().ok()),
-        Some("4"),
-        "full FDM requests must not return preview-grid cardinality"
+        Some("2"),
+        "full FDM requests must honor max_samples rather than preview cardinality"
     );
+    let expected_topology_hash = format!("sha256:{grid_fingerprint}");
     assert!(
         response
             .headers()
             .get("x-fullmag-mesh-topology-hash")
-            .is_none(),
-        "FDM vectors must not advertise stale FEM topology"
+            .and_then(|value| value.to_str().ok())
+            == Some(expected_topology_hash.as_str()),
+        "FDM vectors must advertise the current grid carrier"
     );
-    assert!(
-        response.headers().get("x-fullmag-field-indexing").is_none(),
-        "legacy full FDM FMVP v2 must not claim FEM indexing metadata"
+    assert_eq!(
+        response
+            .headers()
+            .get("x-fullmag-field-indexing")
+            .and_then(|value| value.to_str().ok()),
+        Some("sampled_node_indices")
     );
+    assert_eq!(response.headers()["x-fullmag-node-index-count"], "2");
     let bytes = body_bytes(response).await;
     assert_eq!(&bytes[..4], b"FMVP");
-    let values: Vec<f64> = bytes[48..]
-        .chunks_exact(8)
-        .map(|chunk| f64::from_le_bytes(chunk.try_into().unwrap()))
-        .collect();
+    assert_eq!(decode_fmvp_node_indices(&bytes), vec![1, 2]);
+    let values = decode_fmvp_payload_f64(&bytes);
     assert_eq!(
         values,
-        vec![1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, -1.0, 0.0, 0.0,],
-        "full FDM m must fall back to the solver-domain magnetization"
+        vec![0.0, 1.0, 0.0, 0.0, 0.0, 1.0],
+        "sampled FDM m must preserve the live solver-grid vectors"
     );
 }
 
@@ -33762,6 +34130,57 @@ async fn v2_field_vector_applies_max_samples_to_scoped_samples() {
         .and_then(|value| value.to_str().ok())
         .expect("unsampled vector response should include etag");
     assert_ne!(etag, unsampled_etag);
+}
+
+#[tokio::test]
+async fn v2_fem_field_vector_max_samples_one_preserves_sampled_node_ordinal() {
+    let state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.state_version = 29;
+        snapshot.mesh_revision = 31;
+        snapshot.fem_mesh = Some(sample_scoped_fem_mesh_payload());
+        snapshot.latest_fields = serde_json::from_value(serde_json::json!({
+            "H_demag": {
+                "values": [
+                    [0.0, 0.1, 0.2],
+                    [1.0, 1.1, 1.2],
+                    [2.0, 2.1, 2.2],
+                    [3.0, 3.1, 3.2],
+                    [4.0, 4.1, 4.2],
+                    [5.0, 5.1, 5.2],
+                    [6.0, 6.1, 6.2],
+                    [7.0, 7.1, 7.2]
+                ],
+                "layout": {
+                    "grid_cells": [8, 1, 1]
+                }
+            }
+        }))
+        .expect("scoped latest_fields should deserialize");
+    }
+    let app = build_v2_router().with_state(state);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/fields/h_demag/samples/vector?scope_kind=airbox&max_samples=1")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(response.headers()["x-fullmag-encoding"], "FMVP;version=3");
+    assert_eq!(
+        response.headers()["x-fullmag-field-indexing"],
+        "sampled_node_indices"
+    );
+    assert_eq!(response.headers()["x-fullmag-point-count"], "1");
+    assert_eq!(response.headers()["x-fullmag-node-index-count"], "1");
+    let bytes = body_bytes(response).await;
+    assert_eq!(decode_fmvp_node_indices(&bytes), vec![4]);
+    assert_eq!(decode_fmvp_payload_f64(&bytes), vec![4.0, 4.1, 4.2]);
 }
 
 #[tokio::test]
@@ -35945,9 +36364,8 @@ fn openapi_contains_planar_default_field_data_paths() {
         "probe",
         "render.png",
     ] {
-        let path = format!(
-            "/v2/sessions/current/data/fields/{{quantity_id}}/planar-default/{resource}"
-        );
+        let path =
+            format!("/v2/sessions/current/data/fields/{{quantity_id}}/planar-default/{resource}");
         let operation = paths
             .get(&path)
             .and_then(|entry| entry.get("get"))
@@ -36043,14 +36461,23 @@ async fn planar_default_meta_publishes_source_and_offset_domain_frame() {
     assert!(meta["source"]["domain_generation_id"]
         .as_str()
         .is_some_and(|value| !value.is_empty()));
-    assert_eq!(meta["frame"]["origin_m"], serde_json::json!([11.0, 22.0, 32.0]));
-    assert_eq!(meta["frame"]["bounds_uv_m"], serde_json::json!([-1.0, 1.0, -2.0, 2.0]));
+    assert_eq!(
+        meta["frame"]["origin_m"],
+        serde_json::json!([11.0, 22.0, 32.0])
+    );
+    assert_eq!(
+        meta["frame"]["bounds_uv_m"],
+        serde_json::json!([-1.0, 1.0, -2.0, 2.0])
+    );
     assert_eq!(meta["operator"]["kind"], "plane_sample");
     assert_eq!(meta["field_backend"], "fdm");
     assert_eq!(meta["field_device"], "cpu");
     assert_eq!(meta["field_precision"], "double");
     assert!(!meta["monitor_id"].is_string());
-    assert!(!meta["links"]["scalar"].as_str().unwrap().contains("planar-monitors"));
+    assert!(!meta["links"]["scalar"]
+        .as_str()
+        .unwrap()
+        .contains("planar-monitors"));
 }
 
 #[tokio::test]
@@ -36070,7 +36497,10 @@ async fn planar_default_child_resources_share_meta_identity_and_resolve_probe_wo
         .await
         .unwrap();
     assert_eq!(meta_response.status(), StatusCode::OK);
-    let meta_etag = meta_response.headers()["etag"].to_str().unwrap().to_string();
+    let meta_etag = meta_response.headers()["etag"]
+        .to_str()
+        .unwrap()
+        .to_string();
     let meta = body_json(meta_response).await;
     let token = meta["sample_token"].as_str().unwrap().to_string();
     assert!(token.starts_with("planar-sample-v3:"));
@@ -36115,7 +36545,10 @@ async fn planar_default_child_resources_share_meta_identity_and_resolve_probe_wo
     let probe = app
         .oneshot(
             Request::builder()
-                .uri(format!("{}&u_m=0&v_m=0", meta["links"]["probe"].as_str().unwrap()))
+                .uri(format!(
+                    "{}&u_m=0&v_m=0",
+                    meta["links"]["probe"].as_str().unwrap()
+                ))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -36151,9 +36584,9 @@ async fn planar_default_identity_changes_for_position_not_presentation_style() {
 
     {
         let mut presentation = state.current_display_presentation.write().await;
-        let planar = presentation
-            .visualization_planar
-            .get_or_insert_with(crate::schemas::visualization_state::default_planar_visualization_state);
+        let planar = presentation.visualization_planar.get_or_insert_with(
+            crate::schemas::visualization_state::default_planar_visualization_state,
+        );
         planar.colormap = "magma".to_string();
         planar.range.mode = crate::schemas::visualization_state::PlanarColorRangeMode::Symmetric;
     }
@@ -36173,8 +36606,14 @@ async fn planar_default_identity_changes_for_position_not_presentation_style() {
     let (moved, moved_etag) = request_meta(app).await;
     assert_ne!(moved["sample_token"], base["sample_token"]);
     assert_ne!(moved_etag, base_etag);
-    assert_ne!(moved["source"]["default_slice_hash"], base["source"]["default_slice_hash"]);
-    assert_eq!(moved["frame"]["origin_m"], serde_json::json!([11.0, 22.0, 31.0]));
+    assert_ne!(
+        moved["source"]["default_slice_hash"],
+        base["source"]["default_slice_hash"]
+    );
+    assert_eq!(
+        moved["frame"]["origin_m"],
+        serde_json::json!([11.0, 22.0, 31.0])
+    );
 }
 
 #[tokio::test]
@@ -36269,7 +36708,10 @@ async fn planar_child_rejects_sample_token_from_the_other_source_family() {
         .await
         .unwrap();
     assert_eq!(authored_child.status(), StatusCode::CONFLICT);
-    assert_eq!(body_json(authored_child).await["code"], "stale_sample_token");
+    assert_eq!(
+        body_json(authored_child).await["code"],
+        "stale_sample_token"
+    );
 }
 
 #[tokio::test]
@@ -36346,9 +36788,7 @@ fn openapi_contains_field_slice_contract() {
     }
     for parameter in ["expected_generation_id", "expected_carrier_revision"] {
         assert!(
-            vector_params
-                .iter()
-                .any(|entry| entry["name"] == parameter),
+            vector_params.iter().any(|entry| entry["name"] == parameter),
             "vector GET should expose query precondition {parameter}"
         );
     }
@@ -36356,6 +36796,56 @@ fn openapi_contains_field_slice_contract() {
         vector_get["responses"]["202"]["content"]["application/json"]["schema"]["$ref"],
         "#/components/schemas/FieldVectorPendingResponse"
     );
+    let vector_responses = vector_get
+        .get("responses")
+        .and_then(|responses| responses.as_object())
+        .expect("vector GET responses missing");
+    assert!(vector_responses["202"]["description"]
+        .as_str()
+        .is_some_and(|description| {
+            description.contains("reason_code") && description.contains("retry_after_ms")
+        }));
+    assert!(vector_responses["200"]["description"]
+        .as_str()
+        .is_some_and(|description| {
+            description.contains("max_samples")
+                && description.contains("FMVP v3 sampled indices")
+                && description.contains("FMVP v2")
+        }));
+    assert!(vector_responses["204"]["description"]
+        .as_str()
+        .is_some_and(|description| {
+            description.contains("no materialized source") && description.contains("pending")
+        }));
+    assert!(vector_responses["404"]["description"]
+        .as_str()
+        .is_some_and(|description| {
+            description.contains("Unknown quantity or scope") && description.contains("invalid")
+        }));
+    assert!(vector_responses["409"]["description"]
+        .as_str()
+        .is_some_and(|description| {
+            description.contains("Stale") && description.contains("carrier")
+        }));
+    for status in ["400", "404", "409"] {
+        assert_eq!(
+            vector_responses[status]["content"]["application/json"]["schema"]["$ref"],
+            "#/components/schemas/ApiErrorResponse",
+            "vector {status} response should expose the typed API error body"
+        );
+    }
+    let max_samples = vector_params
+        .iter()
+        .find(|parameter| parameter["name"] == "max_samples")
+        .expect("vector GET should expose max_samples");
+    assert_eq!(max_samples["schema"]["minimum"], 1);
+    assert!(max_samples["description"]
+        .as_str()
+        .is_some_and(|description| {
+            description.contains("at most `K`")
+                && description.contains("full-domain")
+                && description.contains("FMVP v3")
+        }));
     assert!(
         components.contains_key("FieldVectorPendingResponse"),
         "OpenAPI missing FieldVectorPendingResponse schema"

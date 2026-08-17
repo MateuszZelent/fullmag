@@ -57,15 +57,19 @@ export default function FieldMapModule() {
   );
   const activePinned = canonicalPlanar?.layers.probes ? pinned : null;
   const activeRenderEvidence = presentationPlanar?.layers.raster ? renderEvidence : null;
+  const canonicalSourceKind = canonicalPlanar?.source.kind;
+  const canonicalSourceMonitorId = canonicalSourceKind === "monitor"
+    ? canonicalPlanar?.source.monitor_id
+    : undefined;
   const source = useMemo<PlanarFieldSource>(() => {
-    if (canonicalPlanar?.source.kind === "monitor") {
+    if (canonicalSourceKind === "monitor" && canonicalSourceMonitorId) {
       return {
         kind: "monitor",
-        monitorId: canonicalPlanar.source.monitor_id,
+        monitorId: canonicalSourceMonitorId,
       };
     }
     return { kind: "default" };
-  }, [canonicalPlanar?.source]);
+  }, [canonicalSourceKind, canonicalSourceMonitorId]);
   const domain = useDomainMetaResource({ enabled: active });
   const runtime = useSessionStatusSelector(
     (status) => status.data?.domain.discretization ?? null,
@@ -111,6 +115,7 @@ export default function FieldMapModule() {
       domain.data?.discretization,
       canonicalPlanar,
       runtime,
+      source,
       selectedFieldSnapshot.snapshotId,
       selectedFieldSnapshot.stageId,
     ],

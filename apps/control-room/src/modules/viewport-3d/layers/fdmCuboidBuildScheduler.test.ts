@@ -12,6 +12,8 @@ import {
   type FdmCuboidBuildWorkerRequest,
   type FdmCuboidBuildWorkerResponse,
 } from "./fdmCuboidBuildWorker";
+import type { FdmCuboidBuildRequest } from "./fdmCuboidBuildModel";
+import type { Viewport3DBuildDiagnosticRecord } from "../build-engine/viewport3dBuildEngineTypes";
 
 class LoopbackFdmCuboidWorker {
   static instances: LoopbackFdmCuboidWorker[] = [];
@@ -66,10 +68,75 @@ class LoopbackFdmCuboidWorker {
   }
 }
 
+class ErroringFdmCuboidWorker {
+  static instances: ErroringFdmCuboidWorker[] = [];
+
+  readonly terminate = vi.fn();
+  private readonly listeners = new Map<string, Set<EventListener>>();
+
+  constructor() {
+    ErroringFdmCuboidWorker.instances.push(this);
+  }
+
+  addEventListener(type: string, listener: EventListener): void {
+    const listeners = this.listeners.get(type) ?? new Set<EventListener>();
+    listeners.add(listener);
+    this.listeners.set(type, listeners);
+  }
+
+  removeEventListener(type: string, listener: EventListener): void {
+    this.listeners.get(type)?.delete(listener);
+  }
+
+  postMessage(
+    _request: FdmCuboidBuildWorkerRequest,
+    _transferables?: Transferable[],
+  ): void {
+    void _transferables;
+    for (const listener of this.listeners.get("error") ?? []) {
+      listener(new Event("error"));
+    }
+  }
+}
+
+function createFallbackFdmCuboidRequest(
+  displayCellCount: number,
+): FdmCuboidBuildRequest {
+  const isLarge = displayCellCount > 2;
+  return {
+    cellSelection: "all",
+    domain: {
+      bounds: null,
+      displayCellBudget: displayCellCount,
+      displayCellCount,
+      kind: "fdm-grid",
+      origin: [0, 0, 0],
+      shape: [displayCellCount, 1, 1],
+      spacing: [1, 1, 1],
+      stride: 1,
+      totalCells: displayCellCount,
+    },
+    maxVectorGlyphs: 0,
+    realizedRegionIds: isLarge
+      ? null
+      : new Uint32Array([FMRM_INACTIVE_REGION_ID, 7]),
+    vectorAnchorMode: "center",
+    vectorScale: 0,
+    voxelFillRatio: 0.92,
+    voxelMagnitudeThreshold: 0,
+    voxelTopography: {
+      amplitudeCells: 0,
+      component: "magnitude",
+      enabled: false,
+    },
+  };
+}
+
 describe("FDM cuboid build scheduler", () => {
   afterEach(() => {
     disposeViewport3DFdmCuboidBuildWorker();
     LoopbackFdmCuboidWorker.instances = [];
+    ErroringFdmCuboidWorker.instances = [];
     vi.unstubAllGlobals();
   });
 
@@ -140,5 +207,80 @@ describe("FDM cuboid build scheduler", () => {
     expect(LoopbackFdmCuboidWorker.instances[0]?.requests[0]?.vectorOnly).toBeTruthy();
     expect(result.model).toBeNull();
     expect(result.vectorCellIndices).toEqual(new Uint32Array([0, 1]));
+  });
+
+  it("keeps a small full-cuboid fallback available when the worker is unavailable", async () => {
+    vi.stubGlobal("Worker", undefined);
+    const records: Viewport3DBuildDiagnosticRecord[] = [];
+
+    const result = await buildViewport3DFdmCuboidOffMainThread(
+      createFallbackFdmCuboidRequest(2),
+      {
+        buildKey: "fdm-cuboid:small-worker-unavailable",
+        onDiagnosticRecord: (record) => records.push(record),
+      },
+    );
+
+    expect(result.model?.count).toBe(2);
+    expect(records).toEqual([
+      expect.objectContaining({
+        fallbackReason: "worker-unavailable",
+        key: "fdm-cuboid:small-worker-unavailable",
+        state: "ready",
+      }),
+    ]);
+  });
+
+  it("fails closed instead of building a large cuboid on the main thread", async () => {
+    vi.stubGlobal("Worker", undefined);
+    const records: Viewport3DBuildDiagnosticRecord[] = [];
+
+    await expect(
+      buildViewport3DFdmCuboidOffMainThread(
+        createFallbackFdmCuboidRequest(4097),
+        {
+          buildKey: "fdm-cuboid:large-worker-unavailable",
+          onDiagnosticRecord: (record) => records.push(record),
+        },
+      ),
+    ).rejects.toMatchObject({
+      message: expect.stringContaining("worker is unavailable"),
+      name: "Viewport3DFdmCuboidWorkerUnavailableError",
+    });
+
+    expect(records).toEqual([
+      expect.objectContaining({
+        fallbackReason: "worker-unavailable",
+        key: "fdm-cuboid:large-worker-unavailable",
+        state: "failed",
+      }),
+    ]);
+  });
+
+  it("terminates a failed worker before rejecting a large fallback", async () => {
+    vi.stubGlobal("Worker", ErroringFdmCuboidWorker);
+    const records: Viewport3DBuildDiagnosticRecord[] = [];
+
+    await expect(
+      buildViewport3DFdmCuboidOffMainThread(
+        createFallbackFdmCuboidRequest(4097),
+        {
+          buildKey: "fdm-cuboid:large-worker-error",
+          onDiagnosticRecord: (record) => records.push(record),
+        },
+      ),
+    ).rejects.toMatchObject({
+      message: expect.stringContaining("worker failed"),
+      name: "Viewport3DFdmCuboidWorkerFailedError",
+    });
+
+    expect(ErroringFdmCuboidWorker.instances[0]?.terminate).toHaveBeenCalledOnce();
+    expect(records).toEqual([
+      expect.objectContaining({
+        fallbackReason: "worker-error",
+        key: "fdm-cuboid:large-worker-error",
+        state: "failed",
+      }),
+    ]);
   });
 });

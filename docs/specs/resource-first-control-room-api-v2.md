@@ -297,6 +297,27 @@ clear an otherwise compatible viewport payload. The thin session status owns
 only field-family revision pointers and never copies these per-quantity
 freshness fields.
 
+### Target-scoped field availability
+
+`GET /v2/sessions/current/data/fields/{quantity_id}/availability` is the
+control-plane read model for deciding whether one concrete viewport target can
+use a field carrier. It accepts optional `target_id`, `scope_kind`, `scope_id`,
+and `owner_object_id` query parameters. `scope_kind` defaults to `full` and
+supports `full`, `object`, `region`, `part`, `layer`, and `airbox`.
+
+The response identifies `quantity_id`, `target_id`, `scope_kind`, the optional
+scope and carrier identities, `generation`, and an optional field `revision`.
+Its boolean fields describe backend facts: `supported`, `materialized`, and
+`pending`. `state` is one of `supported`, `materializing`, `ready`, `stale`,
+or `unavailable`; `reason_code` is optional and machine-readable. A missing
+carrier is not replaced by a common-grid carrier for a dedicated multilayer
+Airbox target. The resource never contains `adopted`: renderer adoption is a
+frontend fact and must remain outside the backend availability contract.
+
+This resource is a thin readiness query, not a field payload. HTTP v2 remains
+the source of truth; realtime events may invalidate this resource, but must
+not carry its full snapshot or any field samples.
+
 ## 3.2 Capability ownership
 
 Capability resources have distinct scopes:

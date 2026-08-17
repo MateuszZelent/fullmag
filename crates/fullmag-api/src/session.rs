@@ -11,7 +11,9 @@ use crate::router_v2::handlers::data::field_resolution::{
 use crate::router_v2::handlers::data::fields::{
     load_fdm_multilayer_airbox_carrier, resolved_fdm_multilayer_airbox_field,
 };
-use crate::router_v2::handlers::data::resolved_spatial_field::resolve_current_spatial_field;
+use crate::router_v2::handlers::data::resolved_spatial_field::{
+    resolve_current_spatial_field, ResolvedSpatialField,
+};
 use crate::router_v2::handlers::sessions::status::domain_generation_id;
 use crate::types::*;
 use fullmag_runner::{LivePreviewField, RuntimeStatus};
@@ -295,7 +297,10 @@ pub(crate) fn command_readiness_matches_requirements(
                         quantity.n_comp as usize,
                     )
                     .map_err(|error| error.to_string())?;
-                    if resolved.is_none() {
+                    let Some(resolved) = resolved else {
+                        return Ok(false);
+                    };
+                    if !field_generation_matches_snapshot(&resolved, snapshot) {
                         return Ok(false);
                     }
                 }
@@ -338,6 +343,19 @@ pub(crate) fn command_readiness_matches_requirements(
         }
     }
     Ok(true)
+}
+
+fn field_generation_matches_snapshot(
+    field: &ResolvedSpatialField<'_>,
+    snapshot: &SessionStateResponse,
+) -> bool {
+    let Some(actual) = field.field_generation.as_deref() else {
+        return true;
+    };
+    let Some(expected) = snapshot.accepted_terminal_field_generation.as_ref() else {
+        return true;
+    };
+    actual == format!("{}:{}", expected.run_id, expected.sequence)
 }
 
 fn snapshot_runtime_accepts_commands(snapshot: &SessionStateResponse) -> bool {
@@ -719,6 +737,37 @@ pub(crate) fn preview_cache_precedes_latest(
     let Some(latest) = snapshot.latest_fields.get(quantity) else {
         return true;
     };
+    // A preview that was explicitly downscaled is a visualization carrier,
+    // not a replacement for a complete latest field.  Its source provenance
+    // may be newer because the preview was materialized after the full field;
+    // comparing revisions alone would therefore hide the higher-fidelity
+    // payload.  Only apply this guard when the latest payload publishes the
+    // original grid cardinality promised by the preview metadata.
+    if preview.auto_downscaled {
+        let original_point_count = preview
+            .original_grid
+            .into_iter()
+            .try_fold(1usize, |count, axis| {
+                usize::try_from(axis).ok()?.checked_mul(count)
+            });
+        let latest_point_count = latest
+            .get("layout")
+            .and_then(|layout| layout.get("grid_cells"))
+            .and_then(|grid| grid.as_array())
+            .and_then(|grid| {
+                grid.iter().try_fold(1usize, |count, axis| {
+                    axis.as_u64()
+                        .and_then(|axis| usize::try_from(axis).ok())
+                        .and_then(|axis| count.checked_mul(axis))
+                })
+            });
+        if original_point_count
+            .zip(latest_point_count)
+            .is_some_and(|(original, latest)| latest >= original)
+        {
+            return false;
+        }
+    }
     // The preview cache is the explicit materialized-field channel. A genuinely
     // newer source generation wins first. Within one generation, complete
     // scientific-time provenance precedes wall-clock materialization time.
@@ -3342,6 +3391,55 @@ mod tests {
         assert_eq!(
             ledger.front().and_then(|record| record.completion_status),
             Some(CommandCompletionState::Completed)
+        );
+    }
+
+    #[test]
+    fn snapshot_reconciliation_rejects_a_field_from_an_older_generation() {
+        let mut current = test_current_snapshot();
+        current.metadata = Some(json!({
+            "artifact_layout": {
+                "backend": "fdm",
+                "grid_cells": [1, 1, 1]
+            }
+        }));
+        current.accepted_terminal_field_generation =
+            Some(crate::types::CurrentLiveFieldGeneration {
+                run_id: "run-1".to_string(),
+                sequence: 2,
+            });
+        current.latest_fields = serde_json::from_value(json!({
+            "m": {
+                "field_generation": "run-1:1",
+                "values": [[1.0, 0.0, 0.0]],
+                "layout": { "grid_cells": [1, 1, 1] }
+            }
+        }))
+        .expect("stale field fixture should deserialize");
+
+        let mut command = session_command("cmd-fields", "compute_fields");
+        command.field_materialization_requirements =
+            vec![crate::schemas::runtime::FieldMaterializationRequirement {
+                quantity_ids: vec!["m".to_string()],
+                scope_kind: "full".to_string(),
+                scope_id: None,
+                generation_id: domain_generation_id(&current),
+                carrier_fingerprint: None,
+            }];
+        let record = TrackedCommandRecord {
+            command,
+            request_id: None,
+            status: CommandLifecycleState::Dispatched,
+            dispatched_at_unix_ms: Some(1_700_000_000_500),
+            completed_at_unix_ms: None,
+            completion_status: None,
+            error: None,
+        };
+
+        assert_eq!(
+            command_readiness_matches_requirements(&record, &current),
+            Ok(false),
+            "a stale field payload must not satisfy a current-generation requirement"
         );
     }
 

@@ -4805,6 +4805,72 @@
         ],
         "type": "object"
       },
+      "FieldAvailabilityResource": {
+        "description": "Target-scoped field availability. Unlike [`FieldCatalog`], this resource\nproves readiness for one concrete target/scope carrier; it deliberately\ndoes not include frontend renderer adoption state.",
+        "properties": {
+          "carrier_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "generation": {
+            "type": "string"
+          },
+          "materialized": {
+            "type": "boolean"
+          },
+          "pending": {
+            "type": "boolean"
+          },
+          "quantity_id": {
+            "type": "string"
+          },
+          "reason_code": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "revision": {
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "scope_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "scope_kind": {
+            "type": "string"
+          },
+          "state": {
+            "$ref": "#/components/schemas/TargetFieldAvailabilityState"
+          },
+          "supported": {
+            "type": "boolean"
+          },
+          "target_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "quantity_id",
+          "target_id",
+          "scope_kind",
+          "supported",
+          "materialized",
+          "pending",
+          "state",
+          "generation"
+        ],
+        "type": "object"
+      },
       "FieldCatalog": {
         "properties": {
           "domain_generation_id": {
@@ -6334,7 +6400,7 @@
         "type": "string"
       },
       "FieldVectorPendingResponse": {
-        "description": "JSON response returned while a requested field vector is being materialized.",
+        "description": "JSON response returned while a requested field vector is being materialized.\n\nThe stable `reason_code` and `retry_after_ms` fields let clients retry a\npending resource without parsing an error message. The `generation_id`\nidentifies the domain generation for which materialization is pending.",
         "properties": {
           "command_id": {
             "description": "Active compute-fields command, when one owns the materialization.",
@@ -6415,9 +6481,9 @@
             ]
           },
           "max_samples": {
-            "description": "Optional hard cap for vector samples returned by the binary payload.\n\nFMVP v3 encodes sampled FEM responses with `sampled_node_indices`.\nSampled responses with a complete `node_indices` mapping and matching\nmesh topology are valid for vector glyph placement and surface projection\nmodes (`surface_faces`, `thickness_average_z`). Raw nodal coloring still\nrequires complete field coverage.\nFull-domain FDM responses always return the complete cell-centred field,\neven when this cap is provided, because FMVP v2 has no cell-index\nmapping for a downsampled payload. Scoped FDM responses use FMVP v3\nexplicit cell ordinals; multilayer layer/object scopes carry the native\ngrid certificate fingerprint and scope provenance in FMMI metadata.",
+            "description": "Optional positive hard cap for vector samples returned by the binary payload.\n\nWhen `max_samples=K` is supplied, the response contains at most `K`\ndeterministic samples. FMVP v3 carries `sampled_node_indices` (FEM) or\nexplicit cell ordinals/native-grid provenance (FDM), so sampled vectors\nremain placeable on their source carrier. This applies to full-domain\nregular-grid FDM as well as scoped FDM and multilayer native-grid\nrequests. Without a cap, a full-domain FDM response remains the complete\ncell-centred field and may use the legacy FMVP v2 representation.\n\nA value of zero is invalid and returns HTTP 400. Raw FEM nodal coloring\nstill requires complete field coverage even when vector glyph transport\nis sampled.",
             "format": "int32",
-            "minimum": 0,
+            "minimum": 1,
             "type": [
               "integer",
               "null"
@@ -25429,6 +25495,17 @@
         ],
         "type": "object"
       },
+      "TargetFieldAvailabilityState": {
+        "description": "Backend availability states intentionally stop at `ready`; `adopted` is a\nrenderer/frontend fact and must not be inferred from an HTTP resource.",
+        "enum": [
+          "supported",
+          "materializing",
+          "ready",
+          "stale",
+          "unavailable"
+        ],
+        "type": "string"
+      },
       "TimeDependenceResource": {
         "oneOf": [
           {
@@ -27585,7 +27662,9 @@
           "object",
           "part",
           "region",
-          "selection"
+          "selection",
+          "fdm_domain",
+          "fdm_native_layer"
         ],
         "type": "string"
       },
@@ -30518,6 +30597,91 @@
           },
           "404": {
             "description": "No active workspace"
+          }
+        },
+        "tags": [
+          "data"
+        ]
+      }
+    },
+    "/v2/sessions/current/data/fields/{quantity_id}/availability": {
+      "get": {
+        "operationId": "data_get_sessions_current_data_fields_quantity_id_availability",
+        "parameters": [
+          {
+            "description": "Quantity identifier",
+            "in": "path",
+            "name": "quantity_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Stable frontend target identity, for example `airbox` or\n`fdm-universe-outside-support`.",
+            "in": "query",
+            "name": "target_id",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "description": "Field carrier scope. Defaults to the complete domain carrier.",
+            "in": "query",
+            "name": "scope_kind",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "description": "Scope identity for object, region, part, and native layer carriers.",
+            "in": "query",
+            "name": "scope_id",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "description": "Optional owner used to disambiguate duplicate FDM region identifiers.",
+            "in": "query",
+            "name": "owner_object_id",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FieldAvailabilityResource"
+                }
+              }
+            },
+            "description": "Target-scoped field availability"
+          },
+          "400": {
+            "description": "Invalid target or scope"
+          },
+          "404": {
+            "description": "No active workspace or unknown quantity"
           }
         },
         "tags": [
@@ -35604,13 +35768,13 @@
             }
           },
           {
-            "description": "Optional hard cap for vector samples returned by the binary payload.\n\nFMVP v3 encodes sampled FEM responses with `sampled_node_indices`.\nSampled responses with a complete `node_indices` mapping and matching\nmesh topology are valid for vector glyph placement and surface projection\nmodes (`surface_faces`, `thickness_average_z`). Raw nodal coloring still\nrequires complete field coverage.\nFull-domain FDM responses always return the complete cell-centred field,\neven when this cap is provided, because FMVP v2 has no cell-index\nmapping for a downsampled payload. Scoped FDM responses use FMVP v3\nexplicit cell ordinals; multilayer layer/object scopes carry the native\ngrid certificate fingerprint and scope provenance in FMMI metadata.",
+            "description": "Optional positive hard cap for vector samples returned by the binary payload.\n\nWhen `max_samples=K` is supplied, the response contains at most `K`\ndeterministic samples. FMVP v3 carries `sampled_node_indices` (FEM) or\nexplicit cell ordinals/native-grid provenance (FDM), so sampled vectors\nremain placeable on their source carrier. This applies to full-domain\nregular-grid FDM as well as scoped FDM and multilayer native-grid\nrequests. Without a cap, a full-domain FDM response remains the complete\ncell-centred field and may use the legacy FMVP v2 representation.\n\nA value of zero is invalid and returns HTTP 400. Raw FEM nodal coloring\nstill requires complete field coverage even when vector glyph transport\nis sampled.",
             "in": "query",
             "name": "max_samples",
             "required": false,
             "schema": {
               "format": "int32",
-              "minimum": 0,
+              "minimum": 1,
               "type": [
                 "integer",
                 "null"
@@ -35696,7 +35860,7 @@
             "content": {
               "application/octet-stream": {}
             },
-            "description": "Binary FMVP field vector. Scoped FEM and FDM payloads use FMVP v3 metadata with domain_generation_id, carrier topology revision/hash, scope kind/id, indexing, and optional node_indices. Multilayer FDM layer/object scopes identify their native grid carrier. FMVP v2 remains accepted for legacy full-domain payloads.",
+            "description": "Binary FMVP field vector. Scoped FEM and FDM payloads use FMVP v3 metadata with domain_generation_id, carrier topology revision/hash, scope kind/id, indexing, and optional node_indices. Multilayer FDM layer/object scopes identify their native grid carrier. Full-domain regular-grid FDM uses FMVP v3 sampled indices when max_samples is supplied and may use FMVP v2 for an uncapped complete payload.",
             "headers": {
               "x-fullmag-component": {
                 "description": "Resolved component projection",
@@ -35796,22 +35960,43 @@
                 }
               }
             },
-            "description": "Field vector materialization is pending"
+            "description": "Field vector materialization is pending. The JSON body contains a stable reason_code, retry_after_ms, requested quantity/scope, and domain generation; clients may retry this resource."
           },
           "204": {
-            "description": "Recognized field quantity is not available yet"
+            "description": "Recognized field quantity has no materialized source and no active pending materialization is reported (not requested or currently unavailable); no payload is returned."
           },
           "304": {
             "description": "Not modified — ETag matched"
           },
           "400": {
-            "description": "Invalid component or snapshot parameter"
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Invalid component, snapshot, or vector-sampling parameter (including max_samples=0)"
           },
           "404": {
-            "description": "Field not found"
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Unknown quantity or scope, or a requested field source is missing or invalid for the current domain"
           },
           "409": {
-            "description": "Snapshot does not match the current domain, or multilayer artifact and execution-plan layer identities cannot be correlated one-to-one"
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "Stale or mismatched domain generation/carrier revision, malformed or stale carrier, or inconsistent multilayer artifact and execution-plan identities"
           }
         },
         "tags": [
@@ -42154,8 +42339,8 @@
     }
   ],
   "x-fullmag-build-identity": {
-    "built_at_utc": "2026-08-16T13:55:53Z",
-    "git_commit": "f1adc7bb3a76bc90840feee5971f34fe9e50418e",
+    "built_at_utc": "2026-08-16T20:20:28Z",
+    "git_commit": "d8159bfedd697535f14bc65034944eaa29c66830",
     "source_snapshot_sha256": "unknown",
     "worktree_state": "dirty"
   },

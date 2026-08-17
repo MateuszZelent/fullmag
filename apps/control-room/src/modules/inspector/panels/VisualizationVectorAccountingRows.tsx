@@ -7,6 +7,7 @@ import type { VisualizationVectorCapacityDescriptor } from "@/kernel/visualizati
 import { FieldRow } from "../primitives/FieldRow";
 import { formatCount } from "./MeshResourceView";
 import {
+  DEFAULT_VISUALIZATION_VECTOR_SCENE_CAP,
   resolveVisualizationVectorAccounting,
   type VisualizationVectorAccounting,
 } from "./ObjectVisualizationPanelModel";
@@ -30,6 +31,7 @@ interface VisualizationVectorAccountingRowsProps {
   expectedVisualizationRevision?: string | number | null;
   effectiveAllocation?: number | null;
   requestedBudget?: number | null;
+  sceneCap?: number | null;
   targetId?: string;
   targetKind: VisualizationTargetKind;
 }
@@ -77,6 +79,7 @@ export function VisualizationVectorAccountingRows(
         props.availableAnchorCount ?? props.availableNodeCount ?? null
       }
       exact={props.exact}
+      sceneCap={props.sceneCap}
       targetKind={props.targetKind}
     />
   );
@@ -87,6 +90,7 @@ function VectorAccountingRows({
   anchorKind,
   availableAnchorCount,
   exact,
+  sceneCap,
   targetKind,
 }: VisualizationVectorAccountingRowsProps & {
   accounting: VisualizationVectorAccounting;
@@ -113,6 +117,11 @@ function VectorAccountingRows({
       <FieldRow
         label="Effective scene allocation"
         value={formatAccountingValue(accounting.allocatedBudget, status)}
+      />
+      <FieldRow
+        label="Scene policy cap"
+        unit="arrows"
+        value={formatCount(sceneCap ?? DEFAULT_VISUALIZATION_VECTOR_SCENE_CAP)}
       />
       <FieldRow
         label="Decoded field samples"

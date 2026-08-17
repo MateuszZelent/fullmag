@@ -15,8 +15,8 @@ use sha2::{Digest, Sha256};
 use super::fdm_region_membership::load_resolved_fdm_membership;
 use super::field_resolution::{
     extract_fdm_field, extract_fem_field, field_values_match_current_domain,
-    flatten_json_field_values, is_fdm_snapshot, json_field_grid, live_magnetization_available,
-    strict_flat_json_field_values,
+    flatten_json_field_values, is_fdm_snapshot, json_field_grid,
+    json_field_matches_current_domain, live_magnetization_available, strict_flat_json_field_values,
 };
 use super::multilayer_identity::correlate_multilayer_layers;
 use super::resolved_spatial_field::{
@@ -56,7 +56,7 @@ use crate::quantity_data_plane::{
 };
 use crate::router_v2::handlers::analysis::hysteresis::read_hysteresis_points_if_available;
 use crate::router_v2::handlers::sessions::status::{
-    domain_generation_id, domain_generation_revision, fdm_grid_shape,
+    domain_generation_id, domain_generation_revision, fdm_grid_fingerprint, fdm_grid_shape,
     field_catalog_revision as current_field_catalog_revision, field_quantity_revision,
 };
 use crate::schemas::fields::*;
@@ -555,7 +555,8 @@ fn requested_fdm_multilayer_airbox_carrier(
         ApiError::conflict(format!(
             "multilayer FDM Airbox carrier is malformed or stale: {reason}"
         ))
-    })? else {
+    })?
+    else {
         // A carrier may not have been published yet while the solver is still
         // producing the observation artifact. The caller distinguishes this
         // from an invalid carrier and reports either 202 or 204.
@@ -1707,11 +1708,13 @@ fn pending_field_scope_point_count(
             "field scope for '{quantity_id}' cannot be resolved before the FEM mesh is published"
         ))
     })?;
-    Ok(if quantity_spec(quantity_id).is_some_and(|spec| spec.location.as_str() == "cell") {
-        mesh.cell_count()
-    } else {
-        mesh.nodes.len()
-    })
+    Ok(
+        if quantity_spec(quantity_id).is_some_and(|spec| spec.location.as_str() == "cell") {
+            mesh.cell_count()
+        } else {
+            mesh.nodes.len()
+        },
+    )
 }
 
 fn validate_pending_field_vector_scope(
@@ -1749,7 +1752,27 @@ fn validate_pending_field_vector_scope(
     Ok(())
 }
 
-async fn active_compute_fields_command_id(state: &AppState) -> Option<String> {
+async fn active_compute_fields_command_id_for_pending_quantity(
+    state: &AppState,
+    snapshot: &SessionStateResponse,
+    query: &FieldVectorQuery,
+    quantity_id: &str,
+) -> Option<String> {
+    let scope_kind = query
+        .scope_kind
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("full")
+        .to_string();
+    let scope_id = query
+        .scope_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+        .or_else(|| (scope_kind == "airbox").then(|| "airbox".to_string()));
+    let generation_id = domain_generation_id(snapshot);
     let ledger = state.current_command_ledger.lock().await;
     ledger
         .iter()
@@ -1763,16 +1786,28 @@ async fn active_compute_fields_command_id(state: &AppState) -> Option<String> {
                         | CommandLifecycleState::Dispatched
                         | CommandLifecycleState::Running
                 )
+                && record
+                    .command
+                    .field_materialization_requirements
+                    .iter()
+                    .any(|requirement| {
+                        requirement.generation_id == generation_id
+                            && requirement.scope_kind == scope_kind
+                            && requirement.scope_id == scope_id
+                            && requirement.quantity_ids.iter().any(|requested| {
+                                canonical_quantity_id(requested).as_ref() == quantity_id
+                            })
+                    })
         })
         .map(|record| record.command.command_id.clone())
 }
 
 async fn pending_field_vector_response(
-    state: &AppState,
     query: &FieldVectorQuery,
     quantity_id: &str,
     generation_id: String,
     reason_code: &str,
+    command_id: Option<String>,
 ) -> axum::response::Response {
     let scope_kind = query
         .scope_kind
@@ -1787,7 +1822,6 @@ async fn pending_field_vector_response(
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(str::to_string);
-    let command_id = active_compute_fields_command_id(state).await;
     (
         StatusCode::ACCEPTED,
         Json(FieldVectorPendingResponse {
@@ -1811,6 +1845,21 @@ fn invalid_live_magnetization_is_present(snapshot: &SessionStateResponse) -> boo
         .and_then(|state| state.latest_step.magnetization.as_ref())
         .is_some()
         && !live_magnetization_available(snapshot)
+}
+
+fn invalid_current_field_source_is_present(
+    snapshot: &SessionStateResponse,
+    quantity_id: &str,
+    n_comp: usize,
+) -> bool {
+    let invalid_latest = snapshot
+        .latest_fields
+        .get(quantity_id)
+        .is_some_and(|value| {
+            !json_field_matches_current_domain(snapshot, quantity_id, n_comp, value)
+        });
+    let invalid_live = quantity_id == "m" && invalid_live_magnetization_is_present(snapshot);
+    invalid_latest || invalid_live
 }
 
 #[utoipa::path(
@@ -2062,6 +2111,460 @@ pub async fn get_field_catalog(
     }))
 }
 
+#[derive(Debug, Clone, Deserialize, utoipa::IntoParams)]
+pub struct TargetFieldAvailabilityQuery {
+    /// Stable frontend target identity, for example `airbox` or
+    /// `fdm-universe-outside-support`.
+    pub target_id: Option<String>,
+    /// Field carrier scope. Defaults to the complete domain carrier.
+    pub scope_kind: Option<String>,
+    /// Scope identity for object, region, part, and native layer carriers.
+    pub scope_id: Option<String>,
+    /// Optional owner used to disambiguate duplicate FDM region identifiers.
+    pub owner_object_id: Option<String>,
+}
+
+#[utoipa::path(
+    get,
+    path = "/v2/sessions/current/data/fields/{quantity_id}/availability",
+    params(
+        ("quantity_id" = String, Path, description = "Quantity identifier"),
+        TargetFieldAvailabilityQuery,
+    ),
+    responses(
+        (status = 200, description = "Target-scoped field availability", body = FieldAvailabilityResource),
+        (status = 400, description = "Invalid target or scope"),
+        (status = 404, description = "No active workspace or unknown quantity"),
+    ),
+    tag = "data"
+)]
+pub async fn get_field_availability(
+    State(state): State<Arc<AppState>>,
+    AxumPath(quantity_id): AxumPath<String>,
+    Query(query): Query<TargetFieldAvailabilityQuery>,
+) -> Result<Json<FieldAvailabilityResource>, ApiError> {
+    let guard = state.current_live_state.read().await;
+    let snapshot = guard
+        .as_ref()
+        .ok_or_else(|| ApiError::not_found("no active local live workspace"))?;
+    Ok(Json(resolve_target_field_availability(
+        snapshot,
+        &quantity_id,
+        &query,
+    )?))
+}
+
+/// Resolve target availability from the same field/scope carriers used by
+/// the vector endpoint. This is intentionally a read-only proof: it never
+/// marks a renderer buffer as adopted.
+pub(crate) fn resolve_target_field_availability(
+    snapshot: &SessionStateResponse,
+    requested_quantity_id: &str,
+    query: &TargetFieldAvailabilityQuery,
+) -> Result<FieldAvailabilityResource, ApiError> {
+    let quantity_id = canonical_quantity_id(requested_quantity_id).into_owned();
+    let spec = quantity_spec(&quantity_id)
+        .ok_or_else(|| ApiError::not_found(format!("unknown spatial quantity '{quantity_id}'")))?;
+    let scope_kind = normalized_availability_scope_kind(query.scope_kind.as_deref());
+    validate_availability_scope_kind(&scope_kind)?;
+    let scope_id = normalized_optional_query_value(query.scope_id.as_deref());
+    let target_id = query
+        .target_id
+        .as_deref()
+        .and_then(|value| normalized_optional_query_value(Some(value)))
+        .unwrap_or_else(|| {
+            default_availability_target_id(snapshot, &scope_kind, scope_id.as_deref())
+        });
+    let generation = domain_generation_id(snapshot);
+    let revision = nonzero_revision(field_quantity_revision(snapshot, &quantity_id));
+
+    let mut result = availability_resource(
+        &quantity_id,
+        &target_id,
+        &scope_kind,
+        scope_id.clone(),
+        false,
+        false,
+        false,
+        TargetFieldAvailabilityState::Unavailable,
+        None,
+        generation.clone(),
+        revision,
+        Some("quantity_not_supported"),
+    );
+
+    let (mut supported, support_reason) = target_quantity_support(
+        snapshot,
+        &scope_kind,
+        spec,
+        is_fdm_multilayer_snapshot(snapshot),
+    );
+    if !supported {
+        result.reason_code = support_reason.map(str::to_string);
+        return Ok(result);
+    }
+
+    let materializer = materializer_status(snapshot, &quantity_id);
+    let mut materializer_reason = None;
+    let mut materializer_pending = false;
+    let mut materializer_stale = false;
+    let mut materializer_error = false;
+    match materializer.map(|status| status.state) {
+        Some(fullmag_runner::LiveFieldMaterializationState::Pending) => {
+            materializer_pending = true;
+            materializer_reason = Some("field_materialization_pending");
+        }
+        Some(fullmag_runner::LiveFieldMaterializationState::Superseded) => {
+            materializer_stale = true;
+            materializer_reason = Some("field_stale_complete");
+        }
+        Some(fullmag_runner::LiveFieldMaterializationState::Error) => {
+            materializer_error = true;
+            materializer_reason = Some("field_materialization_error");
+        }
+        Some(fullmag_runner::LiveFieldMaterializationState::Complete) | None => {}
+    }
+
+    if materializer_error {
+        result.supported = supported;
+        result.state = TargetFieldAvailabilityState::Unavailable;
+        result.reason_code = materializer_reason.map(str::to_string);
+        return Ok(result);
+    }
+
+    // The multilayer Airbox is an independent immutable carrier. Do not
+    // advertise the common-grid field as a substitute for it.
+    if is_fdm_multilayer_snapshot(snapshot) && scope_kind == "airbox" {
+        match load_fdm_multilayer_airbox_carrier(snapshot) {
+            Ok(Some(carrier)) => {
+                let carrier_id = Some(format!("sha256:{}", carrier.carrier_fingerprint));
+                let carrier_generation = carrier.field_generation.clone();
+                let carrier_revision = Some(carrier.quantity_revision);
+                if let Some(reason) = carrier.unavailable_quantities.get(&quantity_id) {
+                    result.supported = supported;
+                    result.generation = carrier_generation;
+                    result.revision = carrier_revision;
+                    result.reason_code = Some(reason.clone());
+                    return Ok(result);
+                }
+                if !carrier.published_quantities.contains(&quantity_id) {
+                    result.supported = supported;
+                    result.generation = carrier_generation;
+                    result.revision = carrier_revision;
+                    result.reason_code = Some("target_carrier_quantity_unpublished".into());
+                    return Ok(result);
+                }
+                let n_comp = usize::from(spec.n_comp);
+                let field =
+                    resolved_fdm_multilayer_airbox_field(snapshot, &quantity_id, n_comp, &carrier)?;
+                let materialized = !field.values.is_empty();
+                result = availability_resource(
+                    &quantity_id,
+                    &target_id,
+                    &scope_kind,
+                    Some("airbox".to_string()),
+                    supported,
+                    materialized,
+                    materializer_pending,
+                    if materializer_pending || materializer_stale {
+                        if materialized {
+                            TargetFieldAvailabilityState::Stale
+                        } else {
+                            TargetFieldAvailabilityState::Materializing
+                        }
+                    } else {
+                        TargetFieldAvailabilityState::Ready
+                    },
+                    materialized.then_some(carrier_id).flatten(),
+                    carrier_generation,
+                    carrier_revision,
+                    materializer_reason,
+                );
+                return Ok(result);
+            }
+            Ok(None) => {
+                result.supported = supported;
+                result.pending = materializer_pending;
+                result.state = if materializer_pending {
+                    TargetFieldAvailabilityState::Materializing
+                } else {
+                    TargetFieldAvailabilityState::Supported
+                };
+                result.reason_code = Some(
+                    materializer_reason
+                        .unwrap_or("target_carrier_missing")
+                        .to_string(),
+                );
+                return Ok(result);
+            }
+            Err(_) => {
+                result.supported = supported;
+                result.pending = false;
+                result.reason_code = Some("target_carrier_invalid".to_string());
+                return Ok(result);
+            }
+        }
+    }
+
+    let source =
+        resolve_transport_spatial_field(snapshot, &quantity_id).and_then(
+            |transport| match transport {
+                Some(field) => Ok(Some(field)),
+                None => {
+                    resolve_current_spatial_field(snapshot, &quantity_id, usize::from(spec.n_comp))
+                }
+            },
+        );
+    let field = match source {
+        Ok(field) => field,
+        Err(_) => {
+            result.supported = supported;
+            result.reason_code = Some("target_carrier_invalid".to_string());
+            return Ok(result);
+        }
+    };
+
+    let Some(field) = field else {
+        result.supported = supported;
+        result.pending = materializer_pending;
+        result.state = if materializer_pending {
+            TargetFieldAvailabilityState::Materializing
+        } else {
+            TargetFieldAvailabilityState::Supported
+        };
+        result.reason_code = Some(
+            materializer_reason
+                .unwrap_or("target_carrier_missing")
+                .to_string(),
+        );
+        return Ok(result);
+    };
+
+    let raw_point_count = field.values.len() / usize::from(spec.n_comp).max(1);
+    let scope = if scope_kind == "full" {
+        None
+    } else {
+        let field_query = FieldVectorQuery {
+            component: None,
+            scope_kind: Some(scope_kind.clone()),
+            scope_id: scope_id.clone(),
+            owner_object_id: query.owner_object_id.clone(),
+            geometry_scope: None,
+            max_samples: None,
+            snapshot_id: None,
+            stage_id: None,
+            view: None,
+            phase_rad: None,
+            expected_generation_id: None,
+            expected_carrier_revision: None,
+        };
+        match resolve_field_scope(
+            &field_query,
+            snapshot,
+            None,
+            raw_point_count,
+            &quantity_id,
+            Some(&field),
+        ) {
+            Ok(scope) => scope,
+            Err(_) => {
+                result.supported = supported;
+                result.pending = materializer_pending;
+                result.state = TargetFieldAvailabilityState::Unavailable;
+                result.reason_code = Some("target_scope_unavailable".to_string());
+                return Ok(result);
+            }
+        }
+    };
+    let materialized = scope
+        .as_ref()
+        .map(|scope| !scope.value_indices.is_empty() || !scope.node_indices.is_empty())
+        .unwrap_or_else(|| !field.values.is_empty());
+    let carrier_id = materialized.then(|| target_carrier_id(&field, scope.as_ref(), &generation));
+    let field_generation = field
+        .field_generation
+        .clone()
+        .unwrap_or_else(|| generation.clone());
+    let field_revision = nonzero_revision(field.quantity_revision).or(revision);
+    let state = if materializer_pending || materializer_stale {
+        if materialized {
+            TargetFieldAvailabilityState::Stale
+        } else {
+            TargetFieldAvailabilityState::Materializing
+        }
+    } else if materialized {
+        TargetFieldAvailabilityState::Ready
+    } else {
+        TargetFieldAvailabilityState::Supported
+    };
+    supported = true;
+    Ok(availability_resource(
+        &quantity_id,
+        &target_id,
+        &scope_kind,
+        scope
+            .as_ref()
+            .and_then(|scope| scope.id.clone())
+            .or(scope_id),
+        supported,
+        materialized,
+        materializer_pending,
+        state,
+        carrier_id,
+        field_generation,
+        field_revision,
+        materializer_reason,
+    ))
+}
+
+fn normalized_availability_scope_kind(value: Option<&str>) -> String {
+    value
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("full")
+        .to_ascii_lowercase()
+}
+
+fn normalized_optional_query_value(value: Option<&str>) -> Option<String> {
+    value
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+}
+
+fn validate_availability_scope_kind(scope_kind: &str) -> Result<(), ApiError> {
+    if matches!(
+        scope_kind,
+        "full" | "object" | "region" | "part" | "layer" | "airbox"
+    ) {
+        Ok(())
+    } else {
+        Err(ApiError::bad_request(format!(
+            "unsupported target field availability scope_kind '{scope_kind}'"
+        )))
+    }
+}
+
+fn default_availability_target_id(
+    snapshot: &SessionStateResponse,
+    scope_kind: &str,
+    scope_id: Option<&str>,
+) -> String {
+    if let Some(scope_id) = scope_id {
+        return scope_id.to_string();
+    }
+    if scope_kind == "airbox" {
+        return "airbox".to_string();
+    }
+    if is_fdm_snapshot(snapshot) {
+        if is_fdm_multilayer_snapshot(snapshot) {
+            "fdm-multilayer-domain".to_string()
+        } else {
+            "fdm-universe-outside-support".to_string()
+        }
+    } else {
+        "fem-domain".to_string()
+    }
+}
+
+fn target_quantity_support(
+    snapshot: &SessionStateResponse,
+    scope_kind: &str,
+    spec: &fullmag_quantities::QuantitySpec,
+    is_multilayer: bool,
+) -> (bool, Option<&'static str>) {
+    if !spec.ui_exposed || !spec.supports_preview_3d {
+        return (false, Some("quantity_not_spatial"));
+    }
+    if scope_kind == "airbox" && spec.domain.as_str() == "magnetic_only" {
+        return (false, Some("quantity_domain_mismatch"));
+    }
+    if scope_kind != "airbox" && quantity_spatial_domain(spec.id.as_str()) == "airbox_only" {
+        return (false, Some("quantity_domain_mismatch"));
+    }
+    if is_multilayer && scope_kind == "region" {
+        return (false, Some("multilayer_region_scope_unavailable"));
+    }
+    if !is_multilayer && scope_kind == "layer" {
+        return (false, Some("native_layer_scope_unavailable"));
+    }
+    if !is_fdm_snapshot(snapshot) && scope_kind == "layer" {
+        return (false, Some("fem_layer_scope_unavailable"));
+    }
+    (true, None)
+}
+
+fn nonzero_revision(revision: u64) -> Option<u64> {
+    (revision > 0).then_some(revision)
+}
+
+fn availability_resource(
+    quantity_id: &str,
+    target_id: &str,
+    scope_kind: &str,
+    scope_id: Option<String>,
+    supported: bool,
+    materialized: bool,
+    pending: bool,
+    state: TargetFieldAvailabilityState,
+    carrier_id: Option<String>,
+    generation: String,
+    revision: Option<u64>,
+    reason_code: Option<impl Into<String>>,
+) -> FieldAvailabilityResource {
+    FieldAvailabilityResource {
+        quantity_id: quantity_id.to_string(),
+        target_id: target_id.to_string(),
+        scope_kind: scope_kind.to_string(),
+        scope_id,
+        supported,
+        materialized,
+        pending,
+        state,
+        carrier_id,
+        generation,
+        revision,
+        reason_code: reason_code.map(Into::into),
+    }
+}
+
+fn target_carrier_id(
+    field: &ResolvedSpatialField<'_>,
+    scope: Option<&ResolvedFieldScope>,
+    generation: &str,
+) -> String {
+    let scope_token = scope
+        .map(|scope| scope.cache_token())
+        .unwrap_or_else(|| "full".to_string());
+    match &field.carrier {
+        SpatialFieldCarrier::FdmCells {
+            grid_fingerprint, ..
+        } => format!(
+            "fdm:{}:{scope_token}",
+            grid_fingerprint.as_deref().unwrap_or(generation)
+        ),
+        SpatialFieldCarrier::FdmNativeLayerCells {
+            carrier_fingerprint,
+            ..
+        }
+        | SpatialFieldCarrier::FdmAirboxCells {
+            carrier_fingerprint,
+            ..
+        } => format!("sha256:{carrier_fingerprint}"),
+        SpatialFieldCarrier::FemNodes {
+            topology_fingerprint,
+            ..
+        }
+        | SpatialFieldCarrier::FemElements {
+            topology_fingerprint,
+            ..
+        } => format!("fem:{topology_fingerprint}:{scope_token}"),
+        SpatialFieldCarrier::ArtifactLinear {
+            artifact_identity, ..
+        } => format!("artifact:{artifact_identity}:{scope_token}"),
+    }
+}
+
 // ── Meta ─────────────────────────────────────────────────────────────────────
 
 #[utoipa::path(
@@ -2244,6 +2747,12 @@ pub async fn get_field_meta(
     let materializer_status = materializer_status(snapshot, quantity_id)
         .filter(|status| status.state != fullmag_runner::LiveFieldMaterializationState::Complete);
     let Some((raw_values, grid, freshness, resolved_field)) = raw_values_opt else {
+        if invalid_current_field_source_is_present(snapshot, quantity_id, n_comp as usize) {
+            return Err(ApiError::not_found(format!(
+                "field '{}' has no valid current value source",
+                quantity_id
+            )));
+        }
         if let Some(status) = materializer_status {
             let freshness = materializer_request_freshness(snapshot, status);
             return Ok(Json(FieldMeta {
@@ -3671,7 +4180,7 @@ fn sample_unscoped_field_values(
         FieldVectorQuery,
     ),
     responses(
-        (status = 200, description = "Binary FMVP field vector. Scoped FEM and FDM payloads use FMVP v3 metadata with domain_generation_id, carrier topology revision/hash, scope kind/id, indexing, and optional node_indices. Multilayer FDM layer/object scopes identify their native grid carrier. FMVP v2 remains accepted for legacy full-domain payloads.", content_type = "application/octet-stream", headers(
+        (status = 200, description = "Binary FMVP field vector. Scoped FEM and FDM payloads use FMVP v3 metadata with domain_generation_id, carrier topology revision/hash, scope kind/id, indexing, and optional node_indices. Multilayer FDM layer/object scopes identify their native grid carrier. Full-domain regular-grid FDM uses FMVP v3 sampled indices when max_samples is supplied and may use FMVP v2 for an uncapped complete payload.", content_type = "application/octet-stream", headers(
             ("x-fullmag-field-revision" = String, description = "Field revision"),
             ("x-fullmag-domain-generation-id" = String, description = "Domain generation identity"),
             ("x-fullmag-quantity-id" = String, description = "Canonical quantity identifier"),
@@ -3687,12 +4196,12 @@ fn sample_unscoped_field_values(
             ("x-fullmag-field-indexing" = String, description = "Optional FMVP v3 field indexing"),
             ("x-fullmag-node-index-count" = usize, description = "Optional FMVP v3 node-index count")
         )),
-        (status = 202, description = "Field vector materialization is pending", body = FieldVectorPendingResponse, content_type = "application/json"),
-        (status = 204, description = "Recognized field quantity is not available yet"),
+        (status = 202, description = "Field vector materialization is pending. The JSON body contains a stable reason_code, retry_after_ms, requested quantity/scope, and domain generation; clients may retry this resource.", body = FieldVectorPendingResponse, content_type = "application/json"),
+        (status = 204, description = "Recognized field quantity has no materialized source and no active pending materialization is reported (not requested or currently unavailable); no payload is returned."),
         (status = 304, description = "Not modified — ETag matched"),
-        (status = 400, description = "Invalid component or snapshot parameter"),
-        (status = 404, description = "Field not found"),
-        (status = 409, description = "Snapshot does not match the current domain, or multilayer artifact and execution-plan layer identities cannot be correlated one-to-one"),
+        (status = 400, description = "Invalid component, snapshot, or vector-sampling parameter (including max_samples=0)", body = crate::schemas::common::ApiErrorResponse, content_type = "application/json"),
+        (status = 404, description = "Unknown quantity or scope, or a requested field source is missing or invalid for the current domain", body = crate::schemas::common::ApiErrorResponse, content_type = "application/json"),
+        (status = 409, description = "Stale or mismatched domain generation/carrier revision, malformed or stale carrier, or inconsistent multilayer artifact and execution-plan identities", body = crate::schemas::common::ApiErrorResponse, content_type = "application/json"),
     ),
     tag = "data"
 )]
@@ -3844,11 +4353,25 @@ pub async fn get_field_vector(
     let (raw_values, grid, resolved_field) = match raw_values_opt {
         Some(values) => values,
         None if spec.is_some() => {
-            let materializer_pending = materializer_status(snapshot, quantity_id)
-                .is_some_and(|status| {
+            if invalid_current_field_source_is_present(snapshot, quantity_id, n_comp) {
+                return Err(ApiError::not_found(format!(
+                    "field '{}' has no valid current value source",
+                    quantity_id
+                )));
+            }
+            let materializer_pending =
+                materializer_status(snapshot, quantity_id).is_some_and(|status| {
                     status.state == fullmag_runner::LiveFieldMaterializationState::Pending
                 });
-            let selected_quantity = canonical_quantity_id(&snapshot.display_selection.selection.quantity);
+            let active_command_id = active_compute_fields_command_id_for_pending_quantity(
+                &state,
+                snapshot,
+                &query,
+                quantity_id,
+            )
+            .await;
+            let selected_quantity =
+                canonical_quantity_id(&snapshot.display_selection.selection.quantity);
             let legacy_pending = requested_snapshot_id.is_none()
                 && selected_quantity.as_ref() == quantity_id
                 && !is_fem_runtime(snapshot)
@@ -3860,22 +4383,33 @@ pub async fn get_field_vector(
             if materializer_pending {
                 let generation_id = domain_generation_id(snapshot);
                 return Ok(pending_field_vector_response(
-                    &state,
                     &query,
                     quantity_id,
                     generation_id,
                     "field_materialization_pending",
+                    active_command_id,
+                )
+                .await);
+            }
+            if active_command_id.is_some() {
+                let generation_id = domain_generation_id(snapshot);
+                return Ok(pending_field_vector_response(
+                    &query,
+                    quantity_id,
+                    generation_id,
+                    "field_materialization_pending",
+                    active_command_id,
                 )
                 .await);
             }
             if legacy_pending {
                 let generation_id = domain_generation_id(snapshot);
                 return Ok(pending_field_vector_response(
-                    &state,
                     &query,
                     quantity_id,
                     generation_id,
                     "field_unmaterialized",
+                    None,
                 )
                 .await);
             }
@@ -3923,6 +4457,33 @@ pub async fn get_field_vector(
         resolved_scope
             .as_ref()
             .and_then(|scope| scope.carrier_hash.clone())
+            .or_else(|| {
+                sample_limit.and_then(|_| {
+                    let field_carrier_hash = resolved_field.as_ref().and_then(|field| match &field
+                        .carrier
+                    {
+                        SpatialFieldCarrier::FdmCells {
+                            grid_fingerprint: Some(hash),
+                            ..
+                        }
+                        | SpatialFieldCarrier::FdmAirboxCells {
+                            carrier_fingerprint: hash,
+                            ..
+                        }
+                        | SpatialFieldCarrier::FdmNativeLayerCells {
+                            carrier_fingerprint: hash,
+                            ..
+                        } => Some(hash.as_str()),
+                        _ => None,
+                    });
+                    field_carrier_hash
+                        .or_else(|| fdm_grid_fingerprint(snapshot))
+                        .map(|hash| {
+                            hash.strip_prefix("sha256:")
+                                .map_or_else(|| format!("sha256:{hash}"), str::to_string)
+                        })
+                })
+            })
     } else {
         snapshot
             .fem_mesh
@@ -7127,9 +7688,9 @@ mod tests {
         apply_field_scope, decode_complex_f64_pairs_little_endian, is_fem_runtime,
         parse_analysis_eigen_mode_field_id, parse_analysis_frequency_response_field_id,
         parse_component, preview_cache_is_fresher, project_values, push_field_descriptor,
-        resolve_field_scope, resolve_transport_spatial_field,
+        resolve_field_scope, resolve_target_field_availability, resolve_transport_spatial_field,
         serialize_analysis_field_vector_binary, FieldFreshness, FieldMaterializationState,
-        FieldVectorQuery, ResolvedFieldScopeDomain,
+        FieldVectorQuery, ResolvedFieldScopeDomain, TargetFieldAvailabilityQuery,
     };
     use crate::router_v2::handlers::data::resolved_spatial_field::{
         resolve_current_spatial_field, ResolvedSpatialField, SpatialFieldSourceKind,
@@ -7139,6 +7700,358 @@ mod tests {
     use fullmag_runner::{
         BackendCapabilities, FemMeshPartPayload, FemMeshPayload, LivePreviewField, RuntimeEngineId,
     };
+
+    #[test]
+    fn target_availability_proves_fdm_single_grid_carrier_without_adoption() {
+        let request: CurrentLiveSnapshotRequest = serde_json::from_value(serde_json::json!({
+            "session_id": "target-availability-fdm-single-grid"
+        }))
+        .expect("minimal live snapshot request should deserialize");
+        let mut snapshot = default_current_live_state(&request);
+        snapshot.metadata = Some(serde_json::json!({
+            "artifact_layout": {
+                "backend": "fdm",
+                "grid_cells": [2, 1, 1],
+                "origin_m": [0.0, 0.0, 0.0],
+                "cell_size": [1.0, 1.0, 1.0]
+            }
+        }));
+        snapshot
+            .field_quantity_revisions
+            .insert("H_demag".to_string(), 7);
+        snapshot.preview_cache.insert(LivePreviewField {
+            config_revision: 1,
+            source_step: 3,
+            source_time_seconds: None,
+            source_revision: 3,
+            materialized_at_unix_ms: 1,
+            materialization_wall_time_ns: 1,
+            quantity: "H_demag".to_string(),
+            unit: "A/m".to_string(),
+            spatial_kind: "grid".to_string(),
+            quantity_domain: "full_domain".to_string(),
+            preview_grid: [2, 1, 1],
+            original_grid: [2, 1, 1],
+            vector_field_values: vec![1.0, 0.0, 0.0, 0.0, 1.0, 0.0],
+            x_chosen_size: 2,
+            y_chosen_size: 1,
+            applied_x_chosen_size: 2,
+            applied_y_chosen_size: 1,
+            applied_layer_stride: 1,
+            auto_downscaled: false,
+            auto_downscale_message: None,
+            active_mask: None,
+        });
+
+        let availability = resolve_target_field_availability(
+            &snapshot,
+            "H_demag",
+            &TargetFieldAvailabilityQuery {
+                target_id: Some("fdm-universe-outside-support".to_string()),
+                scope_kind: Some("full".to_string()),
+                scope_id: None,
+                owner_object_id: None,
+            },
+        )
+        .expect("single-grid availability should resolve");
+
+        assert!(availability.supported);
+        assert!(availability.materialized);
+        assert!(!availability.pending);
+        assert_eq!(
+            availability.state,
+            super::TargetFieldAvailabilityState::Ready
+        );
+        assert!(availability.carrier_id.is_some());
+        assert!(!availability.generation.is_empty());
+        assert_eq!(availability.reason_code, None);
+        let wire = serde_json::to_value(&availability).expect("availability should serialize");
+        assert_eq!(wire.get("scope_id"), Some(&serde_json::Value::Null));
+        assert!(wire.get("carrier_id").is_some_and(|value| !value.is_null()));
+        assert_eq!(
+            wire.get("revision").and_then(serde_json::Value::as_u64),
+            Some(7)
+        );
+        assert_eq!(wire.get("reason_code"), Some(&serde_json::Value::Null));
+        assert!(wire.get("adopted").is_none());
+    }
+
+    #[test]
+    fn target_availability_reports_pending_materialization_before_carrier_exists() {
+        let request: CurrentLiveSnapshotRequest = serde_json::from_value(serde_json::json!({
+            "session_id": "target-availability-pending"
+        }))
+        .expect("minimal live snapshot request should deserialize");
+        let mut snapshot = default_current_live_state(&request);
+        snapshot.metadata = Some(serde_json::json!({
+            "artifact_layout": {
+                "backend": "fdm",
+                "grid_cells": [1, 1, 1]
+            }
+        }));
+        snapshot.live_state = Some(
+            serde_json::from_value(serde_json::json!({
+                "status": "running",
+                "updated_at_unix_ms": 1,
+                "latest_step": {
+                    "step": 1,
+                    "time": 0.0,
+                    "dt": 0.0,
+                    "e_ex": 0.0,
+                    "e_demag": 0.0,
+                    "e_ext": 0.0,
+                    "e_total": 0.0,
+                    "max_dm_dt": 0.0,
+                    "max_h_eff": 0.0,
+                    "wall_time_ns": 0,
+                    "grid": [1, 1, 1],
+                    "field_materialization_states": [{
+                        "quantity": "H_demag",
+                        "source_step": 1,
+                        "request_revision": 4,
+                        "state": "pending",
+                        "error": null
+                    }],
+                    "finished": false
+                }
+            }))
+            .expect("pending live state should deserialize"),
+        );
+
+        let availability = resolve_target_field_availability(
+            &snapshot,
+            "H_demag",
+            &TargetFieldAvailabilityQuery {
+                target_id: Some("fdm-universe-outside-support".to_string()),
+                scope_kind: Some("full".to_string()),
+                scope_id: None,
+                owner_object_id: None,
+            },
+        )
+        .expect("pending availability should resolve");
+
+        assert!(availability.supported);
+        assert!(!availability.materialized);
+        assert!(availability.pending);
+        assert_eq!(
+            availability.state,
+            super::TargetFieldAvailabilityState::Materializing
+        );
+        assert_eq!(
+            availability.reason_code.as_deref(),
+            Some("field_materialization_pending")
+        );
+        assert_eq!(availability.carrier_id, None);
+    }
+
+    #[test]
+    fn target_availability_does_not_substitute_common_grid_for_multilayer_airbox() {
+        let request: CurrentLiveSnapshotRequest = serde_json::from_value(serde_json::json!({
+            "session_id": "target-availability-multilayer-airbox"
+        }))
+        .expect("minimal live snapshot request should deserialize");
+        let mut snapshot = default_current_live_state(&request);
+        snapshot.metadata = Some(serde_json::json!({
+            "artifact_layout": {
+                "backend": "fdm_multilayer",
+                "grid_cells": [2, 1, 1]
+            }
+        }));
+        snapshot.preview_cache.insert(LivePreviewField {
+            config_revision: 1,
+            source_step: 2,
+            source_time_seconds: None,
+            source_revision: 2,
+            materialized_at_unix_ms: 1,
+            materialization_wall_time_ns: 1,
+            quantity: "H_demag".to_string(),
+            unit: "A/m".to_string(),
+            spatial_kind: "grid".to_string(),
+            quantity_domain: "full_domain".to_string(),
+            preview_grid: [2, 1, 1],
+            original_grid: [2, 1, 1],
+            vector_field_values: vec![1.0, 0.0, 0.0, 0.0, 1.0, 0.0],
+            x_chosen_size: 2,
+            y_chosen_size: 1,
+            applied_x_chosen_size: 2,
+            applied_y_chosen_size: 1,
+            applied_layer_stride: 1,
+            auto_downscaled: false,
+            auto_downscale_message: None,
+            active_mask: None,
+        });
+
+        let availability = resolve_target_field_availability(
+            &snapshot,
+            "H_demag",
+            &TargetFieldAvailabilityQuery {
+                target_id: Some("airbox".to_string()),
+                scope_kind: Some("airbox".to_string()),
+                scope_id: Some("airbox".to_string()),
+                owner_object_id: None,
+            },
+        )
+        .expect("multilayer Airbox availability should resolve");
+
+        assert!(availability.supported);
+        assert!(!availability.materialized);
+        assert_eq!(
+            availability.state,
+            super::TargetFieldAvailabilityState::Supported
+        );
+        assert_eq!(
+            availability.reason_code.as_deref(),
+            Some("target_carrier_missing")
+        );
+        assert_eq!(availability.carrier_id, None);
+    }
+
+    #[test]
+    fn target_availability_proves_fem_topology_carrier() {
+        let request: CurrentLiveSnapshotRequest = serde_json::from_value(serde_json::json!({
+            "session_id": "target-availability-fem"
+        }))
+        .expect("minimal live snapshot request should deserialize");
+        let mut snapshot = default_current_live_state(&request);
+        snapshot.fem_mesh = Some(FemMeshPayload {
+            mesh_name: "availability-fem".to_string(),
+            mesh_id: "mesh:availability-fem".to_string(),
+            nodes: vec![
+                [0.0, 0.0, 0.0],
+                [1.0, 0.0, 0.0],
+                [0.0, 1.0, 0.0],
+                [0.0, 0.0, 1.0],
+            ],
+            cells: fullmag_ir::FemConnectivityIR::from_tet4(vec![[0, 1, 2, 3]]),
+            element_markers: vec![1],
+            facets: fullmag_ir::FemFacetConnectivityIR::empty(),
+            boundary_markers: Vec::new(),
+            periodic_boundary_pairs: Vec::new(),
+            periodic_node_pairs: Vec::new(),
+            object_segments: Vec::new(),
+            mesh_parts: Vec::new(),
+            domain_mesh_mode: None,
+            domain_frame: None,
+            generation_id: Some("mesh-generation-1".to_string()),
+            per_domain_quality: std::collections::HashMap::new(),
+            build_report: None,
+        });
+        snapshot.field_quantity_revisions.insert("m".to_string(), 9);
+        snapshot.preview_cache.insert(LivePreviewField {
+            config_revision: 1,
+            source_step: 2,
+            source_time_seconds: None,
+            source_revision: 2,
+            materialized_at_unix_ms: 1,
+            materialization_wall_time_ns: 1,
+            quantity: "m".to_string(),
+            unit: "1".to_string(),
+            spatial_kind: "fem_nodes".to_string(),
+            quantity_domain: "magnetic_only".to_string(),
+            preview_grid: [4, 1, 1],
+            original_grid: [4, 1, 1],
+            vector_field_values: vec![1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0],
+            x_chosen_size: 4,
+            y_chosen_size: 1,
+            applied_x_chosen_size: 4,
+            applied_y_chosen_size: 1,
+            applied_layer_stride: 1,
+            auto_downscaled: false,
+            auto_downscale_message: None,
+            active_mask: None,
+        });
+
+        let availability = resolve_target_field_availability(
+            &snapshot,
+            "m",
+            &TargetFieldAvailabilityQuery {
+                target_id: Some("fem-domain".to_string()),
+                scope_kind: Some("full".to_string()),
+                scope_id: None,
+                owner_object_id: None,
+            },
+        )
+        .expect("FEM availability should resolve");
+
+        assert!(availability.supported);
+        assert!(availability.materialized);
+        assert_eq!(
+            availability.state,
+            super::TargetFieldAvailabilityState::Ready
+        );
+        assert!(availability
+            .carrier_id
+            .as_deref()
+            .is_some_and(|carrier| carrier.starts_with("fem:")));
+    }
+
+    #[test]
+    fn target_availability_marks_materialization_error_unavailable() {
+        let request: CurrentLiveSnapshotRequest = serde_json::from_value(serde_json::json!({
+            "session_id": "target-availability-error"
+        }))
+        .expect("minimal live snapshot request should deserialize");
+        let mut snapshot = default_current_live_state(&request);
+        snapshot.metadata = Some(serde_json::json!({
+            "artifact_layout": {
+                "backend": "fdm",
+                "grid_cells": [1, 1, 1]
+            }
+        }));
+        snapshot.live_state = Some(
+            serde_json::from_value(serde_json::json!({
+                "status": "running",
+                "updated_at_unix_ms": 1,
+                "latest_step": {
+                    "step": 1,
+                    "time": 0.0,
+                    "dt": 0.0,
+                    "e_ex": 0.0,
+                    "e_demag": 0.0,
+                    "e_ext": 0.0,
+                    "e_total": 0.0,
+                    "max_dm_dt": 0.0,
+                    "max_h_eff": 0.0,
+                    "wall_time_ns": 0,
+                    "grid": [1, 1, 1],
+                    "field_materialization_states": [{
+                        "quantity": "H_demag",
+                        "source_step": 1,
+                        "request_revision": 4,
+                        "state": "error",
+                        "error": "solver rejected quantity"
+                    }],
+                    "finished": false
+                }
+            }))
+            .expect("error live state should deserialize"),
+        );
+
+        let availability = resolve_target_field_availability(
+            &snapshot,
+            "H_demag",
+            &TargetFieldAvailabilityQuery {
+                target_id: Some("fdm-universe-outside-support".to_string()),
+                scope_kind: Some("full".to_string()),
+                scope_id: None,
+                owner_object_id: None,
+            },
+        )
+        .expect("error availability should resolve");
+
+        assert!(availability.supported);
+        assert!(!availability.materialized);
+        assert!(!availability.pending);
+        assert_eq!(
+            availability.state,
+            super::TargetFieldAvailabilityState::Unavailable
+        );
+        assert_eq!(
+            availability.reason_code.as_deref(),
+            Some("field_materialization_error")
+        );
+        assert_eq!(availability.carrier_id, None);
+    }
 
     #[test]
     fn field_catalog_descriptors_transport_canonical_quantity_domains() {

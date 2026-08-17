@@ -129,6 +129,9 @@ type RibbonNodeTestContext = Omit<
   resources?: unknown;
   selection?: unknown;
   visualizationState?: VisualizationStateResource | null;
+  commandContext?: Partial<CommandContext> & {
+    visualizationState?: VisualizationStateResource | null;
+  };
 };
 
 async function runRibbonNode(
@@ -137,24 +140,28 @@ async function runRibbonNode(
   context: RibbonNodeTestContext,
 ) {
   const registry = createRibbonCommandRegistry();
+  const commandContext =
+    context.commandContext && typeof context.commandContext === "object"
+      ? { ...context.commandContext, ...context }
+      : context;
   const staticSelection =
-    context.selection &&
-    typeof context.selection === "object" &&
-    !("get" in context.selection) &&
-    !("set" in context.selection);
+    commandContext.selection &&
+    typeof commandContext.selection === "object" &&
+    !("get" in commandContext.selection) &&
+    !("set" in commandContext.selection);
   const selection = staticSelection
     ? ({
-        get: () => context.selection,
+        get: () => commandContext.selection,
       } as unknown as CommandContext["selection"])
-    : (context.selection as CommandContext["selection"]);
+    : (commandContext.selection as CommandContext["selection"]);
   const resourceData =
-    context.visualizationState &&
-    !context.resourceData?.[VISUALIZATION_STATE_PATH]
+    commandContext.visualizationState &&
+    !commandContext.resourceData?.[VISUALIZATION_STATE_PATH]
       ? {
-          ...context.resourceData,
-          [VISUALIZATION_STATE_PATH]: context.visualizationState,
+          ...commandContext.resourceData,
+          [VISUALIZATION_STATE_PATH]: commandContext.visualizationState,
         }
-      : context.resourceData;
+      : commandContext.resourceData;
   const commandId =
     "commandId" in node && typeof node.commandId === "string"
       ? node.commandId
@@ -169,7 +176,7 @@ async function runRibbonNode(
     commandId,
     {
       source: "test",
-      ...context,
+      ...commandContext,
       resourceData,
       selection,
     } as CommandContext,
@@ -783,7 +790,11 @@ describe("ribbon structure", () => {
   });
 
   it("enables selected display controls from the object visualization registry", async () => {
-    const visualization = new ObjectVisualizationController();
+    const { context: sessionContext } = createVisualizationRibbonContext({
+      overrides: [],
+      revision: 1,
+    });
+    const visualization = sessionContext.visualization;
     const content = buildRibbonTabContent("view", {
       selection: {
         kind: "object.visualization",
@@ -857,6 +868,7 @@ describe("ribbon structure", () => {
     }
 
     const commandContext = {
+      ...sessionContext.commandContext,
       selection: {
         get: () => ({
           kind: "object.visualization",
@@ -915,7 +927,11 @@ describe("ribbon structure", () => {
   });
 
   it("lets the selected surface color picker switch the target to solid coloring", async () => {
-    const visualization = new ObjectVisualizationController();
+    const { context: sessionContext } = createVisualizationRibbonContext({
+      overrides: [],
+      revision: 1,
+    });
+    const visualization = sessionContext.visualization;
     const content = buildRibbonTabContent("view", {
       selection: {
         kind: "object.visualization",
@@ -944,6 +960,7 @@ describe("ribbon structure", () => {
     }
 
     await runRibbonNode(solidColorNode, "#336699", {
+      ...sessionContext.commandContext,
       selection: {
         get: () => ({
           kind: "object.visualization",
@@ -1465,7 +1482,7 @@ describe("ribbon structure", () => {
     expect(invalidations).toEqual([[VISUALIZATION_STATE_PATH, 41]]);
   });
 
-  it("accepts FDM Airbox vector edits in the local structured-grid controller", async () => {
+  it("routes FDM Airbox vector edits through the session visualization resource", async () => {
     const { context, invalidations, patches } = createVisualizationRibbonContext({
       overrides: [],
       revision: 7,
@@ -1480,13 +1497,21 @@ describe("ribbon structure", () => {
     );
 
     expect(result).toMatchObject({ status: "completed" });
-    expect(patches).toEqual([]);
-    expect(invalidations).toEqual([]);
-    expect(context.visualization.getSnapshot().overrides).toMatchObject({
-      [FDM_UNIVERSE_OUTSIDE_SUPPORT_TARGET.id]: {
-        vectorsVisible: true,
+    expect(patches).toEqual([
+      {
+        overrides: [
+          {
+            display: { vectors: { visible: true } },
+            scope: "fdm_domain",
+            scope_id: FDM_UNIVERSE_OUTSIDE_SUPPORT_TARGET.id,
+          },
+        ],
       },
-    });
+    ]);
+    expect(invalidations).toEqual([[VISUALIZATION_STATE_PATH, 41]]);
+    expect(context.visualization.getSnapshot().overrides).not.toHaveProperty(
+      FDM_UNIVERSE_OUTSIDE_SUPPORT_TARGET.id,
+    );
   });
 
   it("routes physics interaction choices through the command registry", async () => {
@@ -2969,10 +2994,12 @@ describe("ribbon structure", () => {
     expect(patches).toEqual([
       {
         active_quantity_id: "H_eff",
+        overrides: [],
         quantity: { active_quantity_id: "H_eff" },
       },
       {
         active_quantity_id: "eden_total",
+        overrides: [],
         quantity: { active_quantity_id: "eden_total" },
       },
       {
@@ -4920,6 +4947,9 @@ function createVisualizationRibbonContext(
       },
       commands: createRibbonCommandRegistry(),
       resources,
+      resourceData: {
+        [VISUALIZATION_STATE_PATH]: visualizationState,
+      },
       selection: {
         kind: null,
         label: null,

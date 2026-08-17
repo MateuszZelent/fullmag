@@ -4,12 +4,14 @@ import {
   MODEL_GEOMETRY_DIAGNOSTICS_PATH,
   MODEL_GEOMETRY_VALIDATION_PATH,
   MODEL_SCENE_PATH,
+  VISUALIZATION_STATE_PATH,
 } from "@/kernel/api/apiPaths";
 import type { SceneResource } from "@/kernel/api/apiTypes";
 import {
   deleteObjectTransaction,
   patchObjectTransaction,
 } from "@/kernel/authoring/geometryLifecycleCommands";
+import { createCommandContext } from "@/kernel/commands/commandContext";
 import { useKernel } from "@/kernel/KernelContext";
 import {
   MESH_BUILD_CURRENT_RESOURCE_KEY,
@@ -19,16 +21,14 @@ import {
   useSceneResource,
 } from "@/kernel/resources/geometryLifecycleResources";
 import { useObjectMetricsResource } from "@/kernel/resources/studyRuntimeResources";
+import { useVisualizationStateResource } from "@/kernel/visualization/useVisualizationStateResource";
 import {
-  resolveVisualizationSettings,
+  resolveTargetVisualization,
   type ObjectVisualizationSnapshot,
   type VisualizationTargetRef,
   type VisualizationTargetSettings,
 } from "@/kernel/visualization/ObjectVisualizationController";
-import {
-  useObjectVisualizationController,
-  useObjectVisualizationSelector,
-} from "@/kernel/visualization/useObjectVisualization";
+import { useObjectVisualizationSelector } from "@/kernel/visualization/useObjectVisualization";
 import { Button } from "@/shared/ui/Button";
 
 import type { InspectorPanelProps } from "../inspectorTypes";
@@ -67,9 +67,14 @@ type GeometryObjectVisualizationColors = Pick<
 function resolveGeometryObjectVisualizationColors(
   snapshot: ObjectVisualizationSnapshot,
   target: VisualizationTargetRef | null,
+  visualizationState: Parameters<typeof resolveTargetVisualization>[0]["visualizationState"],
 ): GeometryObjectVisualizationColors | null {
   if (!target) return null;
-  const settings = resolveVisualizationSettings(snapshot, target);
+  const settings = resolveTargetVisualization({
+    snapshot,
+    target,
+    visualizationState,
+  }).settings;
   return {
     shaderMonoColor: settings.shaderMonoColor,
     wireframeColor: settings.wireframeColor,
@@ -109,11 +114,16 @@ function invalidateAuthoringResources(
 }
 
 export function ObjectGeneralPanel({ selection }: InspectorPanelProps) {
-  const { api, resources, selection: selectionController } = useKernel();
-  const visualization = useObjectVisualizationController();
+  const kernel = useKernel();
+  const { api, resources, selection: selectionController } = kernel;
   const scene = useSceneResource();
   const validation = useGeometryValidationResource();
   const object = resolveObjectGeneralPanelModel(selection, scene.data);
+  const visualizationState = useVisualizationStateResource({
+    enabled: object.mode === "committed",
+  });
+  const displayVisualizationState =
+    visualizationState.optimisticData ?? visualizationState.data;
   const objectMetrics = useObjectMetricsResource(
     object.mode === "committed" ? object.objectId : null,
   );
@@ -145,7 +155,12 @@ export function ObjectGeneralPanel({ selection }: InspectorPanelProps) {
       : null;
 
   const visualizationSettings = useObjectVisualizationSelector(
-    (snapshot) => resolveGeometryObjectVisualizationColors(snapshot, visualizationTarget),
+    (snapshot) =>
+      resolveGeometryObjectVisualizationColors(
+        snapshot,
+        visualizationTarget,
+        displayVisualizationState,
+      ),
     { isEqual: geometryObjectVisualizationColorsEquals },
   );
 
@@ -218,14 +233,21 @@ export function ObjectGeneralPanel({ selection }: InspectorPanelProps) {
     value: string,
   ): void {
     if (!visualizationTarget) return;
-    if (field === "primitiveColor") {
-      visualization.patchTarget(visualizationTarget, {
-        shaderColorMode: "monochrome",
-        shaderMonoColor: value,
-      });
-      return;
-    }
-    visualization.patchTarget(visualizationTarget, { wireframeColor: value });
+    const commandId =
+      field === "primitiveColor"
+        ? "visualization.target.set-shader-mono-color"
+        : "visualization.target.set-wireframe-color";
+    void kernel.commands.execute(
+      commandId,
+      createCommandContext("inspector", kernel, {
+        resourceData: displayVisualizationState
+          ? { [VISUALIZATION_STATE_PATH]: displayVisualizationState }
+          : undefined,
+        sourceDetail: "ObjectGeneralPanel",
+        visualizationTarget,
+      }),
+      value,
+    );
   }
 
   return (

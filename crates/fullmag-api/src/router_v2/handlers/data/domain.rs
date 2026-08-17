@@ -3,23 +3,23 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use axum::Json;
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::http::{HeaderMap, HeaderName, HeaderValue};
 use axum::response::IntoResponse;
+use axum::Json;
 use serde::Deserialize;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 
-use super::fields::{FdmMultilayerAirboxCarrier, load_fdm_multilayer_airbox_carrier};
+use super::fields::{load_fdm_multilayer_airbox_carrier, FdmMultilayerAirboxCarrier};
 use super::multilayer_identity::correlate_multilayer_layers;
 use super::resolved_spatial_field::{
     load_fdm_multilayer_native_layer_membership, native_layer_membership_generation_id,
 };
 use crate::error::ApiError;
-use crate::fem_slice_overlay::{FemSliceOverlayInput, collect_fem_slice_overlay};
-use crate::field_slice::{FieldSliceQuery, SlicePlane, resolve_slice_query};
+use crate::fem_slice_overlay::{collect_fem_slice_overlay, FemSliceOverlayInput};
+use crate::field_slice::{resolve_slice_query, FieldSliceQuery, SlicePlane};
 use crate::router_v2::handlers::data::field_resolution::is_fdm_snapshot;
 use crate::router_v2::handlers::sessions::status::{
     domain_generation_id, domain_generation_revision, fdm_grid_geometry, fdm_grid_shape,
@@ -925,9 +925,11 @@ fn build_fdm_multilayer_layer_layout(
                         .collect::<Option<Vec<_>>>()
                 })
                 .unwrap_or_else(|| Some(Vec::new()))
-                .ok_or_else(|| ApiError::conflict(format!(
-                    "multilayer FDM layer '{layer_id}' has malformed native_region_mask"
-                )))?;
+                .ok_or_else(|| {
+                    ApiError::conflict(format!(
+                        "multilayer FDM layer '{layer_id}' has malformed native_region_mask"
+                    ))
+                })?;
             prefixed_fingerprint(
                 fullmag_ir::FdmGridCertificateIR::new_with_topology_tokens(
                     native_origin,
@@ -962,14 +964,13 @@ fn build_fdm_multilayer_layer_layout(
         active_mask.as_deref(),
         membership_revision,
     )?;
-    let (available_material_quantities, material_field_revisions) =
-        native_material_field_summary(
-            artifact_layer,
-            plan_layer,
-            &layer_id,
-            field_quantity_revisions,
-            field_samples_revision,
-        )?;
+    let (available_material_quantities, material_field_revisions) = native_material_field_summary(
+        artifact_layer,
+        plan_layer,
+        &layer_id,
+        field_quantity_revisions,
+        field_samples_revision,
+    )?;
 
     Ok(FdmLayerLayoutResource {
         layer_id: layer_id.clone(),
@@ -1035,22 +1036,29 @@ fn native_region_membership_summary(
     ApiError,
 > {
     if let Some(plan_layer) = plan_layer {
-        let Some(mask) = plan_layer.get("native_region_mask").and_then(Value::as_array) else {
+        let Some(mask) = plan_layer
+            .get("native_region_mask")
+            .and_then(Value::as_array)
+        else {
             return Ok((false, None, None, None, None));
         };
         let legend = plan_layer
             .get("native_region_legend")
             .and_then(Value::as_array)
-            .ok_or_else(|| ApiError::conflict(format!(
+            .ok_or_else(|| {
+                ApiError::conflict(format!(
                 "multilayer FDM layer '{layer_id}' native_region_mask requires native_region_legend"
-            )))?;
+            ))
+            })?;
         let raw_mask_values = mask
             .iter()
             .map(|value| value.as_u64().and_then(|value| u32::try_from(value).ok()))
             .collect::<Option<Vec<_>>>()
-            .ok_or_else(|| ApiError::conflict(format!(
-                "multilayer FDM layer '{layer_id}' has malformed native_region_mask"
-            )))?;
+            .ok_or_else(|| {
+                ApiError::conflict(format!(
+                    "multilayer FDM layer '{layer_id}' has malformed native_region_mask"
+                ))
+            })?;
         let mask_values = match active_mask {
             Some(active_mask) if active_mask.len() == raw_mask_values.len() => raw_mask_values
                 .into_iter()
@@ -1193,7 +1201,11 @@ fn native_material_field_summary(
             ("mat_aex", "a_field"),
             ("mat_alpha", "alpha_field"),
         ] {
-            if material.and_then(|value| value.get(key)).and_then(Value::as_array).is_some() {
+            if material
+                .and_then(|value| value.get(key))
+                .and_then(Value::as_array)
+                .is_some()
+            {
                 quantities.push(quantity_id.to_string());
                 revisions.insert(
                     quantity_id.to_string(),

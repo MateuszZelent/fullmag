@@ -1,7 +1,9 @@
 import { DATA_FIELD_VECTOR_PATH } from "@/kernel/api/apiPaths";
 import type {
   DomainMetaResource,
+  FieldAvailabilityResource,
   FieldCatalogResource,
+  FieldAvailabilityQuery,
   FdmRegionMembershipResource,
   FieldMetaQuery,
   MeshSharedDomainManifestResource,
@@ -36,11 +38,10 @@ import {
 } from "@/shared/domain/physics/displayUnits";
 import {
   buildAirOnlyVisualizationNodeSelection,
-  countVisualizationNodeSelection,
+  visualizationNodeSelectionIndices,
 } from "@/shared/domain/mesh/visualizationNodeSelection";
 import {
   mergeVisualizationStateTargetOverride,
-  persistentVisualizationTargetPatch,
   resetAirboxVisualizationState,
   targetForFdmNativeLayer,
   visualizationStateOverrideMatchesTarget,
@@ -73,10 +74,205 @@ import {
   resolveVisualizationVectorCapacityDescriptor,
   type VisualizationVectorCapacityDescriptor,
 } from "@/kernel/visualization/visualizationVectorCapacity";
+import {
+  resolveTargetFieldAvailability,
+  targetFieldAvailabilityIsSelectable,
+  type TargetFieldAvailability,
+  type TargetFieldCarrierDescriptor,
+} from "@/kernel/visualization/targetFieldAvailability";
+export {
+  resolveTargetFieldAvailability,
+  resolveTargetFieldAvailabilityMap,
+  resolveTargetFieldAvailabilityFromBackend,
+  targetFieldAvailabilityIsLive,
+  targetFieldAvailabilityIsSelectable,
+} from "@/kernel/visualization/targetFieldAvailability";
+export type {
+  ResolveTargetFieldAvailabilityMapOptions,
+  ResolveTargetFieldAvailabilityOptions,
+  TargetFieldAvailability,
+  TargetFieldAvailabilityState,
+  TargetFieldCarrierDescriptor,
+  TargetFieldCarrierPayloadState,
+} from "@/kernel/visualization/targetFieldAvailability";
 export {
   resolveVisualizationRenderResolution,
 } from "@/kernel/visualization/visualizationDisplayResolution";
 export type { VisualizationVectorCapacityDescriptor } from "@/kernel/visualization/visualizationVectorCapacity";
+
+/**
+ * Resolve the overview's field state from target-scoped carrier evidence.
+ * A ready global catalog is capability/materialization evidence only; it is
+ * never sufficient to claim Live until the renderer has adopted a matching
+ * carrier for the selected target.
+ */
+export function resolveObjectVisualizationDataState({
+  backendAvailability,
+  backendAvailabilityStatus,
+  carrier,
+  fieldCatalog,
+  fieldCatalogStatus,
+  quantityId,
+  requiresFieldData,
+  target,
+}: {
+  backendAvailability?: FieldAvailabilityResource | null;
+  backendAvailabilityStatus?: string;
+  carrier?: TargetFieldCarrierDescriptor | null;
+  fieldCatalog: FieldCatalogResource | null | undefined;
+  fieldCatalogStatus: string;
+  quantityId: string;
+  requiresFieldData: boolean;
+  target: VisualizationTargetRef | null | undefined;
+}): string {
+  if (!target) return "Unavailable";
+  if (!requiresFieldData) return "Not required";
+  if (
+    backendAvailabilityStatus === "loading" ||
+    backendAvailabilityStatus === "idle"
+  ) {
+    return "Loading";
+  }
+  if (backendAvailabilityStatus === "error") {
+    return "Unavailable";
+  }
+  if (backendAvailability) {
+    const backendState = backendAvailability.state;
+    if (backendState === "unavailable") {
+      return carrier?.payloadState === "ready" ? "Stale" : "Unavailable";
+    }
+    if (backendState === "materializing") {
+      return carrier?.payloadState === "ready" ? "Stale" : "Materializing";
+    }
+    if (backendState === "stale") {
+      return carrier?.payloadState === "ready" ? "Stale" : "Materializing";
+    }
+    if (backendState === "supported") {
+      return "Supported";
+    }
+    if (
+      backendState === "ready" &&
+      (fieldCatalogStatus === "loading" ||
+        fieldCatalogStatus === "idle" ||
+        !fieldCatalog)
+    ) {
+      return "Ready";
+    }
+  }
+  if (fieldCatalogStatus === "loading" || fieldCatalogStatus === "idle") {
+    return "Loading";
+  }
+  if (!fieldCatalog) {
+    return fieldCatalogStatus === "error" ? "Unavailable" : "Loading";
+  }
+
+  const availability = resolveTargetFieldAvailability(quantityId, {
+    carrier,
+    fieldCatalog,
+    target,
+  });
+  if (backendAvailability?.state === "ready") {
+    if (availability.state === "adopted") return "Live";
+    if (availability.state === "stale") return "Stale";
+    return "Ready";
+  }
+  switch (availability.state) {
+    case "adopted":
+      return "Live";
+    case "materializing":
+      return "Materializing";
+    case "stale":
+      return "Stale";
+    case "ready":
+      return "Ready";
+    case "supported":
+      return "Supported";
+    case "unavailable":
+      return "Unavailable";
+  }
+}
+
+/**
+ * Convert an already-published viewport snapshot into the small carrier proof
+ * consumed by the Inspector. This function only reads bounded debug metadata;
+ * it never requests debug demand and therefore cannot start a field scan.
+ */
+export function targetFieldCarrierDescriptorFromDebugSnapshots({
+  pass,
+  quantityId,
+  snapshots,
+  target,
+}: {
+  pass: "surface" | "vector" | "any";
+  quantityId: string;
+  snapshots: readonly VisualizationDebugSnapshot[];
+  target: VisualizationTargetRef;
+}): TargetFieldCarrierDescriptor | null {
+  const canonicalQuantityId = resolveCanonicalQuantityId(quantityId);
+  const snapshot = [...snapshots]
+    .filter((candidate) => candidate.target.id === target.id)
+    .sort((left, right) => right.capturedAtMs - left.capturedAtMs)[0];
+  if (!snapshot) return null;
+
+  const carrier = snapshot.carriers.find((candidate) => {
+    const payloadQuantity = candidate.payload?.quantityId;
+    return (
+      payloadQuantity !== undefined &&
+      resolveCanonicalQuantityId(payloadQuantity) === canonicalQuantityId
+    );
+  });
+  if (!carrier) return null;
+
+  const payload = carrier.payload;
+  const payloadState: TargetFieldCarrierDescriptor["payloadState"] = payload
+    ? "ready"
+    : /pending|loading|inflight/i.test(carrier.render.fieldBufferState)
+      ? "pending"
+      : "missing";
+  const requestedFieldBufferId = carrier.render.requestedFieldBufferId;
+  const requestResourceKey = carrier.request.resourceKey;
+  const surfaceAdoption = carrier.render.adoption.surface;
+  const vectorAdoption = carrier.render.adoption.vector;
+  const surfaceAdopted = Boolean(
+    payloadState === "ready" &&
+      requestedFieldBufferId &&
+      requestResourceKey &&
+      surfaceAdoption.adoptedFieldBufferId === requestedFieldBufferId &&
+      surfaceAdoption.adoptedResourceKey === requestResourceKey &&
+      surfaceAdoption.adoptedScalarBufferKey,
+  );
+  const vectorAdopted = Boolean(
+    payloadState === "ready" &&
+      requestedFieldBufferId &&
+      requestResourceKey &&
+      carrier.render.vectors.buildKey &&
+      vectorAdoption.adoptedFieldBufferId === requestedFieldBufferId &&
+      vectorAdoption.adoptedResourceKey === requestResourceKey &&
+      vectorAdoption.adoptedVectorBuildKey === carrier.render.vectors.buildKey &&
+      vectorAdoption.adoptedVectorItemCount !== null,
+  );
+
+  return {
+    adopted:
+      pass === "surface"
+        ? surfaceAdopted
+        : pass === "vector"
+          ? vectorAdopted
+          : surfaceAdopted || vectorAdopted,
+    carrierId: carrier.carrierId,
+    fieldRevision:
+      carrier.revisions.fieldRevision ??
+      carrier.revisions.fieldBufferRevision ??
+      null,
+    generationId: carrier.revisions.domainGenerationId ?? null,
+    payloadPointCount: payload?.pointCount ?? null,
+    payloadState,
+    quantityId: payload?.quantityId ?? canonicalQuantityId,
+    scopeId: payload?.scopeId ?? null,
+    scopeKind: payload?.scopeKind ?? null,
+    targetIds: [target.id],
+  };
+}
 
 type AppliedVisualizationBaselineTarget = {
   preferences: ViewportTargetRenderingPreferences | null;
@@ -85,16 +281,14 @@ type AppliedVisualizationBaselineTarget = {
 };
 
 /**
- * Restore the inspector's applied baseline without serializing a viewport-only
- * FDM target into the FEM VisualizationState resource. FDM targets are local
- * controller state; FEM targets retain the existing backend override restore.
+ * Restore the inspector's applied baseline through the session visualization
+ * resource. Only explicit viewport preferences are restored locally.
  */
 export function restoreVisualizationAppliedBaseline({
   baseline,
   currentOverrides,
   queuePatch,
   visualization,
-  fdm = false,
 }: {
   baseline: {
     overrides: VisualizationStateResource["overrides"];
@@ -109,40 +303,23 @@ export function restoreVisualizationAppliedBaseline({
     ObjectVisualizationController,
     "clearTarget" | "patchTarget" | "patchViewportPreferences"
   >;
-  fdm?: boolean;
 }): void {
-  const isFdmBaseline =
-    baseline.targets.length > 0 &&
-    (fdm ||
-      baseline.targets.every(
-        ({ target }) =>
-          target.kind === "fdm-domain" || target.kind === "fdm-native-layer",
-      ));
+  const baselineTargets = baseline.targets.map((entry) => entry.target);
+  const retainedOverrides = currentOverrides.filter(
+    (entry) =>
+      !baselineTargets.some((baselineTarget) =>
+        visualizationStateOverrideMatchesTarget(entry, baselineTarget),
+      ),
+  );
+  queuePatch(
+    {
+      overrides: [...retainedOverrides, ...structuredClone(baseline.overrides)],
+    },
+    baseline.targets.map(({ target }) => visualizationTargetKey(target)),
+  );
 
-  if (!isFdmBaseline) {
-    const baselineTargets = baseline.targets.map((entry) => entry.target);
-    const retainedOverrides = currentOverrides.filter(
-      (entry) =>
-        !baselineTargets.some((baselineTarget) =>
-          visualizationStateOverrideMatchesTarget(entry, baselineTarget),
-        ),
-    );
-    queuePatch(
-      {
-        overrides: [...retainedOverrides, ...structuredClone(baseline.overrides)],
-      },
-      baseline.targets.map(({ target }) => visualizationTargetKey(target)),
-    );
-  }
-
-  for (const { preferences, settings, target } of baseline.targets) {
+  for (const { preferences, target } of baseline.targets) {
     visualization.clearTarget(target);
-    if (isFdmBaseline) {
-      const localPatch = persistentVisualizationTargetPatch(settings);
-      if (Object.keys(localPatch).length > 0) {
-        visualization.patchTarget(target, localPatch);
-      }
-    }
     if (preferences) {
       visualization.patchViewportPreferences(target, preferences);
     }
@@ -388,6 +565,79 @@ export function fieldMetaScopeQueryForVisualizationTarget(
   }
 }
 
+/**
+ * Build the target-scoped availability query used by the Inspector. The
+ * scope ids intentionally match the data-plane field requests: visualization
+ * target prefixes are UI identities, not backend carrier ids.
+ */
+export function fieldAvailabilityQueryForVisualizationTarget(
+  target: VisualizationTargetRef | null | undefined,
+): FieldAvailabilityQuery {
+  if (!target) {
+    return {
+      owner_object_id: null,
+      scope_id: null,
+      scope_kind: null,
+      target_id: null,
+    };
+  }
+
+  switch (target.kind) {
+    case "airbox":
+      return {
+        owner_object_id: null,
+        scope_id: null,
+        scope_kind: "airbox",
+        target_id: target.id,
+      };
+    case "fdm-domain":
+      return {
+        owner_object_id: null,
+        scope_id: null,
+        scope_kind: "full",
+        target_id: target.id,
+      };
+    case "object":
+      return {
+        owner_object_id: null,
+        scope_id: target.id.startsWith("object:")
+          ? target.id.slice("object:".length)
+          : target.id,
+        scope_kind: "object",
+        target_id: target.id,
+      };
+    case "part":
+      return {
+        owner_object_id: null,
+        scope_id: target.id.startsWith("part:")
+          ? target.id.slice("part:".length)
+          : target.id,
+        scope_kind: "part",
+        target_id: target.id,
+      };
+    case "fdm-native-layer": {
+      const encodedLayerId = target.id.startsWith("fdm-native-layer:")
+        ? target.id.slice("fdm-native-layer:".length)
+        : "";
+      return {
+        owner_object_id: null,
+        scope_id: encodedLayerId ? decodeSafe(encodedLayerId) : null,
+        scope_kind: encodedLayerId ? "layer" : null,
+        target_id: target.id,
+      };
+    }
+    case "region": {
+      const parsed = parseRegionVisualizationTargetId(target.id);
+      return {
+        owner_object_id: parsed?.objectId ?? null,
+        scope_id: parsed?.regionId ?? null,
+        scope_kind: parsed ? "region" : null,
+        target_id: target.id,
+      };
+    }
+  }
+}
+
 export interface VisualizationVectorScopeIdentity {
   scopeId: string | null;
   scopeKind: string | null;
@@ -539,15 +789,15 @@ export function resolveObjectVisualizationResourceGates({
 }
 
 export function isVisualizationBaselineReady({
-  femResourcesEnabled,
   target,
   visualizationState,
+  visualizationStateEnabled,
 }: {
-  femResourcesEnabled: boolean;
   target: VisualizationTargetRef | null | undefined;
   visualizationState: VisualizationStateResource | null | undefined;
+  visualizationStateEnabled: boolean;
 }): boolean {
-  return Boolean(target) && (!femResourcesEnabled || visualizationState != null);
+  return Boolean(target) && (!visualizationStateEnabled || visualizationState != null);
 }
 
 export function canonicalVisualizationStateForBaseline(
@@ -977,11 +1227,81 @@ export interface VisualizationVectorBudgetRange {
   carrierId?: string | null;
   exact: boolean;
   generation?: string | null;
-  max: number;
+  max: number | null;
   min: 0;
   revision?: string | number | null;
   step: 1;
   topologyHash?: string | null;
+}
+
+export interface VisualizationVectorBudgetValues {
+  effective: number | null;
+  max: number | null;
+  normalizedRequested: number;
+  policyCap: number;
+  requested: number;
+}
+
+export type VisualizationTargetMutationState =
+  | "acknowledged"
+  | "idle"
+  | "inflight"
+  | "queued"
+  | "rejected"
+  | "retrying";
+
+export interface VisualizationTargetMutationStatus {
+  error: string | null;
+  pending: boolean;
+  retryable: boolean;
+  state: VisualizationTargetMutationState;
+}
+
+interface VisualizationTargetMutationSnapshot {
+  error?: Error | null;
+  inflightTargetIds?: readonly string[];
+  mutation?: {
+    attempts?: number;
+    error: string | null;
+    requestId?: string | null;
+    status: "inflight" | "rejected" | "retrying" | "succeeded";
+    targetId: string;
+  } | null;
+  pendingTargetIds?: readonly string[];
+  rejectedTargetIds?: readonly string[];
+}
+
+export function resolveVisualizationTargetMutationStatus({
+  snapshot,
+  targetIds,
+}: {
+  snapshot: VisualizationTargetMutationSnapshot;
+  targetIds: readonly string[];
+}): VisualizationTargetMutationStatus {
+  const targetSet = new Set(targetIds);
+  const intersects = (candidateIds: readonly string[] | undefined) =>
+    (candidateIds ?? []).some((targetId) => targetSet.has(targetId));
+  const mutation = snapshot.mutation;
+  const mutationTargets = mutation && targetSet.has(mutation.targetId);
+  const error = mutation?.error ?? snapshot.error?.message ?? null;
+
+  if (intersects(snapshot.inflightTargetIds)) {
+    const state = mutation?.status === "retrying" ? "retrying" : "inflight";
+    return { error, pending: true, retryable: false, state };
+  }
+  if (intersects(snapshot.pendingTargetIds)) {
+    return { error, pending: true, retryable: false, state: "queued" };
+  }
+  if (
+    intersects(snapshot.rejectedTargetIds) ||
+    (mutationTargets && mutation?.status === "rejected")
+  ) {
+    return { error, pending: false, retryable: true, state: "rejected" };
+  }
+  if (mutationTargets && mutation?.status === "succeeded") {
+    return { error: null, pending: false, retryable: false, state: "acknowledged" };
+  }
+  return { error: null, pending: false, retryable: false, state: "idle" };
 }
 
 export interface VisualizationVectorAccounting {
@@ -1047,18 +1367,24 @@ export function resolveVisualizationVectorAccounting({
     effectiveAllocation !== undefined ||
     currentTargetId !== undefined
   ) {
+    const resolvedTargetId = currentTargetId ?? capacity?.targetId;
+    const resolvedTopologyHash = currentTopologyHash ?? capacity?.topologyHash;
+    const resolvedGeneration = currentGeneration ?? capacity?.generation;
+    const resolvedAvailableAnchorCount =
+      availableAnchorCount !== undefined
+        ? availableAnchorCount
+        : capacity?.exact
+          ? capacity.fullCount
+          : null;
     return resolveTargetVisualizationVectorAccounting({
       anchorKind: capacity?.anchorKind ?? anchorKind ?? null,
-      availableAnchorCount:
-        availableAnchorCount !== undefined
-          ? availableAnchorCount
-          : capacity?.fullCount ?? null,
+      availableAnchorCount: resolvedAvailableAnchorCount,
       currentComponent,
-      currentGeneration,
+      currentGeneration: resolvedGeneration,
       currentScopeId,
       currentScopeKind,
-      currentTargetId,
-      currentTopologyHash,
+      currentTargetId: resolvedTargetId,
+      currentTopologyHash: resolvedTopologyHash,
       currentVisualizationRevision,
       currentVectorBuildKey,
       expectedGeneration,
@@ -1067,6 +1393,8 @@ export function resolveVisualizationVectorAccounting({
       expectedScopeKind,
       expectedVisualizationRevision,
       expectedVectorBuildKey,
+      expectedCapacityRevision: capacity?.revision,
+      effectiveAllocation,
       requestedBudget,
       snapshots,
     });
@@ -1143,6 +1471,8 @@ function resolveTargetVisualizationVectorAccounting({
   expectedScopeKind,
   expectedVisualizationRevision,
   expectedVectorBuildKey,
+  expectedCapacityRevision,
+  effectiveAllocation,
   requestedBudget,
   snapshots,
 }: {
@@ -1162,14 +1492,17 @@ function resolveTargetVisualizationVectorAccounting({
   expectedScopeKind?: string | null;
   expectedVisualizationRevision?: string | number | null;
   expectedVectorBuildKey?: string | null;
+  expectedCapacityRevision?: string | number | null;
+  effectiveAllocation?: number | null;
   requestedBudget?: number | null;
   snapshots: readonly VisualizationDebugSnapshot[];
 }): VisualizationVectorAccounting {
   const available = normalizeVectorCount(availableAnchorCount);
   const requested = normalizeVectorCount(requestedBudget);
+  const effective = normalizeVectorCount(effectiveAllocation);
   const base: VisualizationVectorAccounting = {
     adoptedGlyphCount: null,
-    allocatedBudget: null,
+    allocatedBudget: effective,
     anchorKind,
     availableAnchorCount: available,
     availableNodeCount: available,
@@ -1204,6 +1537,8 @@ function resolveTargetVisualizationVectorAccounting({
       expectedScopeKind,
       expectedVisualizationRevision,
       expectedVectorBuildKey,
+      expectedCapacityRevision,
+      anchorKind,
     }),
   );
   if (matchingCarriers.length === 0) {
@@ -1241,13 +1576,21 @@ function resolveTargetVisualizationVectorAccounting({
     else adoptedGlyphCount += adoption.adoptedVectorItemCount ?? 0;
   }
 
+  if (decodedComplete && decodedSampleCount > available) {
+    decodedComplete = false;
+    adoptedComplete = false;
+  }
+  if (adoptedComplete && adoptedGlyphCount > available) {
+    adoptedComplete = false;
+  }
+
   return {
     ...base,
     allocatedBudget: publishedAllocations.every(
       (allocation): allocation is number => allocation !== null,
     )
       ? publishedAllocations.reduce((total, allocation) => total + allocation, 0)
-      : null,
+      : effective,
     adoptedGlyphCount: adoptedComplete ? adoptedGlyphCount : null,
     decodedSampleCount: decodedComplete ? decodedSampleCount : null,
     status:
@@ -1275,6 +1618,8 @@ function visualizationVectorCarrierMatchesIdentity(
     expectedScopeKind?: string | null;
     expectedVisualizationRevision?: string | number | null;
     expectedVectorBuildKey?: string | null;
+    expectedCapacityRevision?: string | number | null;
+    anchorKind: "cell" | "node" | null;
   },
 ): boolean {
   const payload = carrier.payload;
@@ -1288,6 +1633,18 @@ function visualizationVectorCarrierMatchesIdentity(
     expected.expectedVisualizationRevision ?? expected.currentVisualizationRevision;
   const expectedVectorBuildKey =
     expected.expectedVectorBuildKey ?? expected.currentVectorBuildKey;
+  // FEM node capacity revisions are mesh revisions and share the FMVP
+  // topologyRevision carrier. FDM cell capacities use membership/layout
+  // tokens, while FMVP uses a domain-generation/carrier revision instead.
+  const capacityRevisionMatches =
+    expected.expectedCapacityRevision == null ||
+    expected.anchorKind !== "node" ||
+    (revisions.topologyRevision != null
+      ? String(revisions.topologyRevision) ===
+        String(expected.expectedCapacityRevision)
+      : revisions.visualizationRevision != null &&
+        String(revisions.visualizationRevision) ===
+          String(expected.expectedCapacityRevision));
   return (
     (!expected.expectedQuantityId ||
       payload?.quantityId === expected.expectedQuantityId) &&
@@ -1301,7 +1658,8 @@ function visualizationVectorCarrierMatchesIdentity(
       revisions.domainGenerationId === expectedGeneration) &&
     (!expected.currentTopologyHash ||
       revisions.meshTopologyHash === expected.currentTopologyHash) &&
-    (!expectedVisualizationRevision ||
+    capacityRevisionMatches &&
+    (expectedVisualizationRevision == null ||
       String(revisions.visualizationRevision) ===
         String(expectedVisualizationRevision)) &&
     (!expectedVectorBuildKey ||
@@ -1318,6 +1676,15 @@ function normalizeVectorCount(
 }
 
 export const DEFAULT_VISUALIZATION_VECTOR_SCENE_CAP = 2_048;
+
+export function resolveVisualizationVectorSceneCap(
+  visualizationState: VisualizationStateResource | null | undefined,
+): number {
+  return (
+    normalizeVectorCount(visualizationState?.sampling?.max_glyphs) ??
+    DEFAULT_VISUALIZATION_VECTOR_SCENE_CAP
+  );
+}
 
 export function resolveVisualizationVectorEffectiveBudget({
   availableAnchorCount,
@@ -1341,6 +1708,40 @@ export function availableVectorAnchorCount(
   return range.availableAnchorCount === null
     ? null
     : range.availableAnchorCount ?? range.availableNodeCount;
+}
+
+export function resolveVisualizationVectorBudgetValues({
+  range,
+  requestedBudget,
+  sceneCap = DEFAULT_VISUALIZATION_VECTOR_SCENE_CAP,
+}: {
+  range: VisualizationVectorBudgetRange;
+  requestedBudget: number | null | undefined;
+  sceneCap?: number | null;
+}): VisualizationVectorBudgetValues {
+  const requested = normalizeVectorCount(requestedBudget) ?? 0;
+  const available = availableVectorAnchorCount(range);
+  const policyCap = normalizeVectorCount(sceneCap) ?? DEFAULT_VISUALIZATION_VECTOR_SCENE_CAP;
+  const rangeMax = normalizeVectorCount(range.max);
+  const max =
+    range.exact && available !== null && rangeMax !== null
+      ? Math.min(rangeMax, policyCap)
+      : null;
+  const normalizedRequested = max === null ? requested : Math.min(requested, max);
+  return {
+    effective:
+      max === null
+        ? null
+        : resolveVisualizationVectorEffectiveBudget({
+            availableAnchorCount: available,
+            requestedBudget: normalizedRequested,
+            sceneCap: policyCap,
+          }),
+    max,
+    normalizedRequested,
+    policyCap,
+    requested,
+  };
 }
 
 export function resolveVisualizationVectorCapacityForTarget({
@@ -1424,6 +1825,7 @@ export function resolveVisualizationVectorBudgetRange({
   manifestRegions,
   memberships,
   meshParts,
+  sceneCap = DEFAULT_VISUALIZATION_VECTOR_SCENE_CAP,
   target,
 }: {
   capacity?: VisualizationVectorCapacityDescriptor | null;
@@ -1432,6 +1834,7 @@ export function resolveVisualizationVectorBudgetRange({
   manifestRegions?: readonly MeshRegion[] | null | undefined;
   memberships?: readonly MeshRegionMembershipResource[] | null | undefined;
   meshParts?: readonly MeshPart[] | null | undefined;
+  sceneCap?: number | null;
   target: VisualizationTargetRef | null | undefined;
 }): VisualizationVectorBudgetRange {
   if (capacity !== undefined) {
@@ -1441,6 +1844,8 @@ export function resolveVisualizationVectorBudgetRange({
         ? capacity.surfaceExact ?? capacity.exact
         : capacity.fullExact ?? capacity.exact;
     if (!exact) return unknownVisualizationVectorBudgetRange();
+    const policyCap =
+      normalizeVectorCount(sceneCap) ?? DEFAULT_VISUALIZATION_VECTOR_SCENE_CAP;
     const available = Math.max(
       0,
       Math.floor(
@@ -1452,9 +1857,9 @@ export function resolveVisualizationVectorBudgetRange({
       availableNodeCount: available,
       anchorKind: capacity.anchorKind,
       carrierId: capacity.carrierId,
-      exact: capacity.exact,
+      exact,
       generation: capacity.generation,
-      max: Math.min(available, DEFAULT_VISUALIZATION_VECTOR_SCENE_CAP),
+      max: Math.min(available, policyCap),
       min: 0,
       revision: capacity.revision,
       step: 1,
@@ -1470,6 +1875,7 @@ export function resolveVisualizationVectorBudgetRange({
       cellCount >= 0
     ) {
       return {
+        anchorKind: "cell",
         availableNodeCount: cellCount,
         exact: true,
         max: cellCount,
@@ -1506,6 +1912,7 @@ export function resolveVisualizationVectorBudgetRange({
       return fallbackVisualizationVectorBudgetRange();
     }
     return {
+      anchorKind: "node",
       availableNodeCount: nodeCount,
       exact: true,
       max: nodeCount,
@@ -1536,17 +1943,19 @@ export function resolveVisualizationVectorBudgetRange({
               part.object_id ||
                 part.role === "magnetic" ||
                 part.role === "object",
-            ),
-        );
+        ),
+    );
   let exact = true;
-  const max = matchingParts.reduce((total, part) => {
+  const selectedNodeIndices = new Set<number>();
+  let unresolvedNodeCount = 0;
+  matchingParts.forEach((part) => {
     if (target.kind === "airbox") {
       if (
         geometryScope === "surface" &&
         part.surface_node_indices == null
       ) {
         exact = false;
-        return total;
+        return;
       }
       const airSelection =
         geometryScope === "surface"
@@ -1557,14 +1966,29 @@ export function resolveVisualizationVectorBudgetRange({
         magneticSelections: magneticParts,
         nodeCount: topologyNodeCount,
       });
-      return (
-        total + countVisualizationNodeSelection(selection, topologyNodeCount)
-      );
+      for (const nodeIndex of visualizationNodeSelectionIndices(
+        selection,
+        topologyNodeCount,
+      )) {
+        selectedNodeIndices.add(nodeIndex);
+      }
+      return;
     }
-    const count = meshPartVectorNodeCount(part, geometryScope);
+    const count = meshPartVectorNodeCount(
+      part,
+      geometryScope,
+      topologyNodeCount,
+    );
     if (!count.exact) exact = false;
-    return total + count.nodeCount;
-  }, 0);
+    if (count.nodeIndices) {
+      for (const nodeIndex of count.nodeIndices) {
+        selectedNodeIndices.add(nodeIndex);
+      }
+    } else {
+      unresolvedNodeCount += count.nodeCount;
+    }
+  });
+  const max = selectedNodeIndices.size + unresolvedNodeCount;
 
   if (target.kind === "airbox" && geometryScope === "surface" && !exact) {
     return fallbackVisualizationVectorBudgetRange();
@@ -1573,6 +1997,7 @@ export function resolveVisualizationVectorBudgetRange({
   if (max <= 0) {
     if (target.kind === "airbox" && matchingParts.length > 0) {
       return {
+        anchorKind: "node",
         availableNodeCount: 0,
         exact: true,
         max: 0,
@@ -1584,6 +2009,7 @@ export function resolveVisualizationVectorBudgetRange({
   }
 
   return {
+    anchorKind: "node",
     availableNodeCount: max,
     exact,
     max,
@@ -1681,31 +2107,46 @@ export function geometryScopeVectorBudgetPatch({
   currentRange,
   geometryScope,
   nextRange,
+  sceneCap,
   settings,
 }: {
   currentRange: VisualizationVectorBudgetRange;
   geometryScope: VisualizationGeometryScope;
   nextRange: VisualizationVectorBudgetRange;
+  sceneCap?: number | null;
   settings: VisualizationTargetSettings;
 }): VisualizationTargetPatch {
   if (geometryScope === settings.geometryScope) {
     return { geometryScope };
   }
 
-  const currentMax = Math.max(currentRange.min, currentRange.max);
-  const nextMax = Math.max(nextRange.min, nextRange.max);
+  const currentMax = Math.max(currentRange.min, currentRange.max ?? 0);
+  const nextMax = Math.max(nextRange.min, nextRange.max ?? 0);
   if (currentMax <= 0 || nextMax <= 0) {
     return { geometryScope };
   }
 
-  const displayedBudget = Math.max(
-    currentRange.min,
-    Math.min(currentMax, Math.floor(settings.vectorBudget)),
-  );
-  const coverage = displayedBudget / currentMax;
+  const currentBudget = resolveVisualizationVectorBudgetValues({
+    range: currentRange,
+    requestedBudget: settings.vectorBudget,
+    sceneCap,
+  });
+  const nextBudgetValues = resolveVisualizationVectorBudgetValues({
+    range: nextRange,
+    requestedBudget: settings.vectorBudget,
+    sceneCap,
+  });
+  const currentEffectiveMax = currentBudget.max ?? currentMax;
+  const nextEffectiveMax = nextBudgetValues.max ?? nextMax;
+  if (nextBudgetValues.max === null) {
+    return { geometryScope };
+  }
+  const displayedBudget = currentBudget.effective ?? 0;
+  const coverage =
+    currentEffectiveMax > 0 ? displayedBudget / currentEffectiveMax : 0;
   const nextBudget = Math.max(
     nextRange.min,
-    Math.min(nextMax, Math.round(nextMax * coverage)),
+    Math.min(nextEffectiveMax, Math.round(nextEffectiveMax * coverage)),
   );
 
   return {
@@ -1719,6 +2160,7 @@ export function visualizationQuantityItems(
   targetKind?: VisualizationTargetKind,
   fieldCatalog?: FieldCatalogResource | null,
   quantityCatalog?: QuantityCatalogResource | null,
+  targetAvailability?: ReadonlyMap<string, TargetFieldAvailability>,
 ): Array<{ disabled?: boolean; label: string; value: string }> {
   const staticItemsByQuantityId = new Map(
     VISUALIZATION_QUANTITY_ITEMS.map((item) => [
@@ -1765,17 +2207,45 @@ export function visualizationQuantityItems(
           fieldCatalogQuantitySupportsAirbox(fieldCatalog, item.value),
         )
       : fieldItems;
-  if (targetKind === "airbox" && !fieldCatalog && !quantityCatalog) return baseItems;
+  const targetAwareItems = baseItems.map((item) => {
+    const availability = targetAvailability?.get(
+      resolveCanonicalQuantityId(item.value),
+    );
+    return availability?.state === "unavailable"
+      ? { ...item, disabled: true }
+      : item;
+  });
+  if (
+    targetKind === "airbox" &&
+    !fieldCatalog &&
+    !quantityCatalog &&
+    !targetAvailability?.size
+  ) {
+    return baseItems;
+  }
 
   if (
     !activeQuantityId ||
-    baseItems.some(
+    targetAwareItems.some(
       (item) =>
         resolveCanonicalQuantityId(item.value) ===
         resolveCanonicalQuantityId(activeQuantityId),
     )
   ) {
-    return baseItems;
+    return targetAwareItems;
+  }
+
+  const activeCanonicalQuantityId = resolveCanonicalQuantityId(activeQuantityId);
+  const activeAvailability = targetAvailability?.get(activeCanonicalQuantityId);
+  if (activeAvailability && targetFieldAvailabilityIsSelectable(activeAvailability)) {
+    const staticItem = staticItemsByQuantityId.get(activeCanonicalQuantityId);
+    return [
+      {
+        label: staticItem?.label ?? activeQuantityId,
+        value: activeQuantityId,
+      },
+      ...targetAwareItems,
+    ];
   }
 
   return [
@@ -1786,7 +2256,7 @@ export function visualizationQuantityItems(
         : activeQuantityId,
       ...(fieldCatalog || quantityCatalog ? { disabled: true } : {}),
     },
-    ...baseItems,
+    ...targetAwareItems,
   ];
 }
 
@@ -1933,7 +2403,7 @@ function unknownVisualizationVectorBudgetRange(): VisualizationVectorBudgetRange
     availableNodeCount: 0,
     anchorKind: null,
     exact: false,
-    max: 0,
+    max: null,
     min: 0,
     step: 1,
   };
@@ -1952,9 +2422,41 @@ function fallbackVisualizationVectorBudgetRange(): VisualizationVectorBudgetRang
 function meshPartVectorNodeCount(
   part: MeshPart,
   geometryScope: VisualizationGeometryScope,
-): { exact: boolean; nodeCount: number } {
+  topologyNodeCount: number,
+): { exact: boolean; nodeCount: number; nodeIndices?: readonly number[] } {
   if (geometryScope !== "surface") {
-    return { exact: true, nodeCount: part.node_count };
+    if (part.node_indices && part.node_indices.length > 0) {
+      const nodeIndices = visualizationNodeSelectionIndices(
+        { nodeIndices: part.node_indices },
+        topologyNodeCount,
+      );
+      return {
+        exact: true,
+        nodeCount: nodeIndices.length,
+        nodeIndices,
+      };
+    }
+    const nodeIndices = visualizationNodeSelectionIndices(
+      { nodeStart: part.node_start, nodeCount: part.node_count },
+      topologyNodeCount,
+    );
+    return {
+      exact: true,
+      nodeCount: nodeIndices.length,
+      nodeIndices,
+    };
+  }
+
+  if (part.surface_node_indices && part.surface_node_indices.length > 0) {
+    const nodeIndices = visualizationNodeSelectionIndices(
+      { nodeIndices: part.surface_node_indices },
+      topologyNodeCount,
+    );
+    return {
+      exact: true,
+      nodeCount: nodeIndices.length,
+      nodeIndices,
+    };
   }
 
   const surfaceFaces = part.surface_faces;
@@ -1965,14 +2467,18 @@ function meshPartVectorNodeCount(
   const nodeIndices = new Set<number>();
   for (const face of surfaceFaces) {
     for (const nodeIndex of face) {
-      if (Number.isInteger(nodeIndex) && nodeIndex >= 0) {
+      if (
+        Number.isInteger(nodeIndex) &&
+        nodeIndex >= 0 &&
+        nodeIndex < topologyNodeCount
+      ) {
         nodeIndices.add(nodeIndex);
       }
     }
   }
 
   return nodeIndices.size > 0
-    ? { exact: true, nodeCount: nodeIndices.size }
+    ? { exact: true, nodeCount: nodeIndices.size, nodeIndices: [...nodeIndices] }
     : { exact: false, nodeCount: part.node_count };
 }
 
@@ -2605,8 +3111,20 @@ export function buildVisualizationPanelSections({
       { id: "vectorLengthScale", kind: "number", label: "Arrow length" },
       { id: "vectorBudget", kind: "number", label: "Arrow budget" },
       { id: "vectorCenteringEnabled", kind: "toggle", label: "Centered arrows" },
-      { id: "vectorSurfaceOffsetEnabled", kind: "toggle", label: "Lift above surface" },
-      { id: "vectorSurfaceOffsetScale", kind: "number", label: "Extra surface gap" },
+      ...(capabilities?.supportsVectorSurfaceOffset === false
+        ? []
+        : ([
+            {
+              id: "vectorSurfaceOffsetEnabled",
+              kind: "toggle",
+              label: "Lift above surface",
+            },
+            {
+              id: "vectorSurfaceOffsetScale",
+              kind: "number",
+              label: "Extra surface gap",
+            },
+          ] satisfies VisualizationPanelField[])),
     ];
     if (capabilities?.showGeometryScopeControl !== false) {
       vectorFields.push({ id: "geometryScope", kind: "mode", label: "Arrow extent" });
