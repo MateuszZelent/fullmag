@@ -427,7 +427,7 @@ PAGE_SPECS: tuple[PageSpec, ...] = (
         ),
         4,
     ),
-    _scaffold(
+    _reference(
         "getting-started/index.md",
         "Getting started",
         "the getting-started documentation family",
@@ -439,11 +439,11 @@ PAGE_SPECS: tuple[PageSpec, ...] = (
             "getting-started/choosing-a-solver.md",
         ),
     ),
-    _scaffold("getting-started/installation.md", "Installation", "installation guidance"),
+    _reference("getting-started/installation.md", "Installation", "installation guidance"),
     _reference("getting-started/control-room.md", "Control Room User Guide", "the Control Room visual user manual", status="implemented"),
-    _scaffold("getting-started/first-fdm-simulation.md", "First FDM Simulation", "the first FDM simulation guide"),
-    _scaffold("getting-started/first-fem-simulation.md", "First FEM Simulation", "the first FEM simulation guide"),
-    _scaffold("getting-started/choosing-a-solver.md", "Choosing a Solver", "solver-selection guidance"),
+    _reference("getting-started/first-fdm-simulation.md", "First FDM Simulation", "the first FDM simulation guide"),
+    _reference("getting-started/first-fem-simulation.md", "First FEM Simulation", "the first FEM simulation guide"),
+    _reference("getting-started/choosing-a-solver.md", "Choosing a Solver", "solver-selection guidance"),
     _scaffold(
         "python-api/index.md",
         "Python API",
