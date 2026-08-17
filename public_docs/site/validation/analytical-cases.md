@@ -61,6 +61,6 @@ residual contract gates and separate MFEM-visible runtime gates.
 ## Evidence boundary
 
 Local contract executables (no MFEM host) are valid source/unit/sign regression gates but are not
-runtime qualification. The runtime acceptance commands are listed in
-`docs/validation/fem_cpu_validation_matrix.md`; a row is qualified only when the executable
-runtime case passes in the matching environment.
+runtime qualification. A row is qualified only when the executable runtime case passes in the
+matching MFEM/CUDA environment; the individual solver pages record which acceptance commands they
+cover.

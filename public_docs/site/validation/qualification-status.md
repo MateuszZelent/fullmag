@@ -30,8 +30,9 @@ physical model.
 
 The relaxation promotion is backed by the managed production benchmark (`39` comparison pairs,
 `21/21` required coverage), managed native source/operator/energy-derivative contracts, and
-CPU/GPU consistency `6/6` rows / `3/3` pairs. The canonical report is
-`docs/validation/2026-07-11-relaxation-qualification-matrix.md`.
+CPU/GPU consistency `6/6` rows / `3/3` pairs. The public method pages under
+{doc}`../numerical-methods/relaxation/index` document the per-algorithm contracts this matrix
+summarizes.
 
 ## Per-interaction support matrices
 

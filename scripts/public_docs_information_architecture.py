@@ -503,7 +503,7 @@ PAGE_SPECS: tuple[PageSpec, ...] = (
         ),
     ),
     *_section("physics/foundations", "Physics foundations", ("conventions-and-units", "micromagnetic-energy", "effective-field", "llg-equation", "boundary-conditions", "observables"), "the physics foundations reference"),
-    _scaffold(
+    _reference(
         "physics/interactions/index.md",
         "Physical Interactions",
         "the canonical physical-interaction documentation family",
