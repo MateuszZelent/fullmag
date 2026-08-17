@@ -1,7 +1,7 @@
 ---
 title: Boundary Conditions
-status: planned
-doc_kind: scaffold
+status: partial
+doc_kind: reference
 audience: user
 owner: fullmag-public-docs
 ---
@@ -9,7 +9,9 @@ owner: fullmag-public-docs
 (public-docs-python-api-boundary-conditions-root)=
 # Boundary Conditions
 
-This page reserves the public documentation location for the Python API boundary-conditions reference.
+Boundary conditions constrain the solution at domain boundaries. This family covers periodic
+boundary conditions, Floquet boundary conditions for wave problems, and mechanical boundary
+conditions for magnetoelastic studies.
 
 ```{toctree}
 :maxdepth: 1

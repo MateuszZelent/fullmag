@@ -1,7 +1,7 @@
 ---
 title: Problem
-status: planned
-doc_kind: scaffold
+status: partial
+doc_kind: reference
 audience: user
 owner: fullmag-public-docs
 ---
@@ -9,7 +9,9 @@ owner: fullmag-public-docs
 (public-docs-python-api-problem-root)=
 # Problem
 
-This page reserves the public documentation location for the Python API Problem reference.
+The Problem family describes problem-level authoring: the canonical `Problem`/`ProblemIR` objects,
+validation semantics, and Python round-trip behavior. A study lowers into this canonical model;
+these pages document the mapping, not a parallel solver API.
 
 ```{toctree}
 :maxdepth: 1

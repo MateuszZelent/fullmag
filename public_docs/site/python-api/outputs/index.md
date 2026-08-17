@@ -1,7 +1,7 @@
 ---
 title: Outputs
-status: planned
-doc_kind: scaffold
+status: partial
+doc_kind: reference
 audience: user
 owner: fullmag-public-docs
 ---
@@ -9,7 +9,8 @@ owner: fullmag-public-docs
 (public-docs-python-api-outputs-root)=
 # Outputs
 
-This page reserves the public documentation location for the Python API outputs reference.
+Outputs turn solver results into inspectable scientific artifacts: fields and scalars, quantity
+selection, eigenmodes and spectra, dispersion and response, step snapshots, and autosave tables.
 
 ```{toctree}
 :maxdepth: 1

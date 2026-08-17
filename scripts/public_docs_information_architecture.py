@@ -319,6 +319,17 @@ def _reference(
 
 PYTHON_API_REFERENCE_PAGES = {
     "python-api/problem/problem.md",
+    "python-api/problem/index.md",
+    "python-api/geometry/index.md",
+    "python-api/materials/index.md",
+    "python-api/magnets-and-textures/index.md",
+    "python-api/current-and-excitations/index.md",
+    "python-api/boundary-conditions/index.md",
+    "python-api/discretization/index.md",
+    "python-api/dynamics/index.md",
+    "python-api/studies/index.md",
+    "python-api/outputs/index.md",
+    "python-api/runtime/index.md",
     "python-api/problem/problem-ir.md",
     "python-api/geometry/primitives.md",
     "python-api/materials/material.md",
@@ -444,7 +455,7 @@ PAGE_SPECS: tuple[PageSpec, ...] = (
     _reference("getting-started/first-fdm-simulation.md", "First FDM Simulation", "the first FDM simulation guide"),
     _reference("getting-started/first-fem-simulation.md", "First FEM Simulation", "the first FEM simulation guide"),
     _reference("getting-started/choosing-a-solver.md", "Choosing a Solver", "solver-selection guidance"),
-    _scaffold(
+    _reference(
         "python-api/index.md",
         "Python API",
         "the Python API documentation family",
@@ -467,7 +478,7 @@ PAGE_SPECS: tuple[PageSpec, ...] = (
     *_section("python-api/geometry", "Geometry", ("primitives", "transforms", "boolean-operations", "imported-geometry", "regions", "universe-and-domain", "auxiliary-geometry"), "the Python API geometry reference"),
     *_section("python-api/materials", "Materials", ("material", "spatial-parameter-fields", "elastic-materials", "magnetostriction-laws"), "the Python API materials reference"),
     *_section("python-api/magnets-and-textures", "Magnets and Textures", ("ferromagnet", "initial-magnetization", "uniform-texture", "preset-textures"), "the Python API magnets and textures reference"),
-    _scaffold(
+    _reference(
         "python-api/interactions/index.md",
         "Interactions",
         "the Python API interaction reference",

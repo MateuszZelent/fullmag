@@ -172,13 +172,13 @@ class PublicDocumentationInformationArchitectureTests(unittest.TestCase):
         self.assertEqual(exchange_api.status, "partial")
         self.assertEqual(exchange_api.title, "Exchange Python API")
 
-    def test_index_scaffold_links_to_every_direct_child(self) -> None:
+    def test_index_navigation_links_to_every_direct_child(self) -> None:
         index = next(spec for spec in PAGE_SPECS if spec.path == "python-api/index.md")
-        rendered = render_page(index, Path("public_docs/site"))
-        self.assertIn("```{toctree}\n:maxdepth: 1\n", rendered)
+        text = (PUBLIC_DOCS_ROOT / index.path).read_text()
+        self.assertIn("```{toctree}\n:maxdepth: 1\n", text)
         for child in index.children:
             relative = Path(child).relative_to(Path(index.path).parent)
-            self.assertIn(str(relative.with_suffix("")), rendered)
+            self.assertIn(str(relative.with_suffix("")), text)
 
     def test_scaffold_renders_declared_navigation_depth(self) -> None:
         index = PageSpec(

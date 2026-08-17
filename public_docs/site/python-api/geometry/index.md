@@ -1,7 +1,7 @@
 ---
 title: Geometry
-status: planned
-doc_kind: scaffold
+status: partial
+doc_kind: reference
 audience: user
 owner: fullmag-public-docs
 ---
@@ -9,7 +9,9 @@ owner: fullmag-public-docs
 (public-docs-python-api-geometry-root)=
 # Geometry
 
-This page reserves the public documentation location for the Python API geometry reference.
+Geometry objects define the physical domain. Create primitives, apply transforms and booleans,
+import CAD meshes, select regions, and declare the simulation universe. Geometry is a physics
+input: the same object lowers to FDM cells or FEM elements without changing its physical meaning.
 
 ```{toctree}
 :maxdepth: 1
