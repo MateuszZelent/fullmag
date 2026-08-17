@@ -558,7 +558,7 @@ PAGE_SPECS: tuple[PageSpec, ...] = (
     *_section("numerical-methods/frequency-domain", "Frequency Domain", ("response-solver", "floquet-response"), "the frequency-domain methods reference"),
     *_section("numerical-methods/meshing", "Meshing", ("fdm-grids", "fem-shared-domain", "airbox", "swept-meshes", "refinement"), "the meshing methods reference"),
     *_section("numerical-methods/interpolation-and-state-transfer", "Interpolation and State Transfer", ("fem-to-fdm", "fdm-to-fem"), "the interpolation and state-transfer reference"),
-    _scaffold(
+    _reference(
         "validation/index.md",
         "Validation",
         "the validation documentation family",
@@ -570,11 +570,11 @@ PAGE_SPECS: tuple[PageSpec, ...] = (
             "validation/qualification-status.md",
         ),
     ),
-    _scaffold("validation/analytical-cases.md", "Analytical Cases", "analytical validation cases"),
-    _scaffold("validation/mumag-standard-problems.md", "µMAG Standard Problems", "µMAG standard-problem validation"),
-    _scaffold("validation/cpu-gpu-parity.md", "CPU GPU Parity", "CPU/GPU parity validation"),
-    _scaffold("validation/fem-fdm-comparison.md", "FEM FDM Comparison", "FEM/FDM comparison validation"),
-    _scaffold("validation/qualification-status.md", "Qualification Status", "qualification status"),
+    _reference("validation/analytical-cases.md", "Analytical Cases", "analytical validation cases"),
+    _reference("validation/mumag-standard-problems.md", "µMAG Standard Problems", "µMAG standard-problem validation"),
+    _reference("validation/cpu-gpu-parity.md", "CPU GPU Parity", "CPU/GPU parity validation"),
+    _reference("validation/fem-fdm-comparison.md", "FEM FDM Comparison", "FEM/FDM comparison validation"),
+    _reference("validation/qualification-status.md", "Qualification Status", "qualification status"),
     _reference(
         "architecture/index.md",
         "FullMag architecture",
