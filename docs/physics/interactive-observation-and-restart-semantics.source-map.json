@@ -1,45 +1,70 @@
 {
   "document": {"path": "docs/physics/interactive-observation-and-restart-semantics.md"},
   "backend_matrix": [
-    {"solver": "FDM", "device": "CPU", "status": "documented"},
+    {"solver": "FDM", "device": "CPU", "status": "unqualified", "reason": "No persistent-observation runtime receipt."},
     {"solver": "FDM", "device": "GPU", "status": "unqualified", "reason": "No persistent-observation runtime receipt."},
-    {"solver": "FEM", "device": "CPU", "status": "documented"},
+    {"solver": "FEM", "device": "CPU", "status": "unqualified", "reason": "No persistent-observation runtime receipt."},
     {"solver": "FEM", "device": "GPU", "status": "unqualified", "reason": "No persistent-observation runtime receipt."}
   ],
   "equations": [
-    {"id": "eq-observation-functional", "symbols": ["q_i", "m", "t", "P", "Pi", "D", "C_i"], "sources": ["current-fields"]},
-    {"id": "eq-accepted-state-id", "symbols": ["I_acc", "Gamma", "n", "dt", "v"], "sources": ["adr-accepted-state"]},
-    {"id": "eq-quantity-availability", "symbols": ["A", "Q"], "sources": ["terminal-update"]},
-    {"id": "eq-resume-trajectory", "symbols": ["S_n", "K_n", "Phi"], "sources": ["checkpoint-capture"]}
+    {"id": "eq-observation-functional", "symbols": ["q_i", "F_i", "m", "t", "P", "Pi", "D", "C_i"], "sources": ["planned-observation-functional"]},
+    {"id": "eq-accepted-state-id", "symbols": ["I_acc", "R", "U", "n", "d_Gamma", "d_S", "d_D", "d_Pi", "Gamma", "dt"], "sources": ["planned-accepted-state"]},
+    {"id": "eq-quantity-availability", "symbols": ["A", "Q"], "sources": ["planned-quantity-availability"]},
+    {"id": "eq-resume-trajectory", "symbols": ["S_n", "K_n", "Phi"], "sources": ["planned-resume-trajectory"]}
   ],
   "symbols": [
-    {"id": "q_i", "latex": "q_i", "meaning": "kanoniczne pole albo skalar", "si_unit": "\\text{quantity-dependent}"},
+    {"id": "q_i", "latex": "q_i", "meaning": "kanoniczne pole albo skalar o identyfikatorze $i$", "si_unit": "\\text{quantity-dependent}"},
+    {"id": "F_i", "latex": "\\mathcal{F}_i", "meaning": "backend-neutralny funkcjonał quantity", "si_unit": "1"},
     {"id": "m", "latex": "\\mathbf{m}", "meaning": "zredukowana magnetyzacja", "si_unit": "1"},
     {"id": "t", "latex": "t", "meaning": "czas zaakceptowanego stanu", "si_unit": "\\mathrm{s}"},
+    {"id": "dt", "latex": "\\Delta t", "meaning": "ostatni zaakceptowany krok czasu, jeżeli istnieje", "si_unit": "\\mathrm{s}"},
+    {"id": "n", "latex": "n", "meaning": "numer zaakceptowanego kroku", "si_unit": "1"},
+    {"id": "Gamma", "latex": "\\Gamma", "meaning": "`ObservationClock`", "si_unit": "1"},
     {"id": "P", "latex": "\\mathcal{P}", "meaning": "znormalizowany `ProblemIR`", "si_unit": "1"},
     {"id": "Pi", "latex": "\\Pi", "meaning": "rozstrzygnięty plan wykonania", "si_unit": "1"},
     {"id": "D", "latex": "\\mathcal{D}", "meaning": "tożsamość domeny/gridu/mesha i materiałów", "si_unit": "1"},
-    {"id": "C_i", "latex": "\\mathcal{C}_i", "meaning": "dodatkowe pierwotne nośniki quantity", "si_unit": "\\text{carrier-dependent}"},
-    {"id": "I_acc", "latex": "I_{\\mathrm{acc}}", "meaning": "AcceptedStateId", "si_unit": "1"},
-    {"id": "Gamma", "latex": "\\Gamma", "meaning": "ObservationClock", "si_unit": "1"},
-    {"id": "n", "latex": "n", "meaning": "numer zaakceptowanego kroku", "si_unit": "1"},
-    {"id": "dt", "latex": "\\Delta t", "meaning": "ostatni zaakceptowany krok czasu", "si_unit": "\\mathrm{s}"},
-    {"id": "v", "latex": "v", "meaning": "wersja kanonicznego preimage digestu", "si_unit": "1"},
+    {"id": "C_i", "latex": "\\mathcal{C}_i", "meaning": "dodatkowe pierwotne nośniki quantity $i$", "si_unit": "\\text{carrier-dependent}"},
+    {"id": "I_acc", "latex": "I_{\\mathrm{acc}}", "meaning": "`AcceptedStateId`", "si_unit": "1"},
+    {"id": "R", "latex": "R", "meaning": "trwałe `run_id`", "si_unit": "1"},
+    {"id": "U", "latex": "U", "meaning": "opcjonalne `stage_id`", "si_unit": "1"},
+    {"id": "d_Gamma", "latex": "d_{\\Gamma}", "meaning": "`clock_digest`", "si_unit": "1"},
+    {"id": "d_S", "latex": "d_S", "meaning": "`state_digest` zegara i pierwotnych nośników", "si_unit": "1"},
+    {"id": "d_D", "latex": "d_D", "meaning": "`domain_digest`", "si_unit": "1"},
+    {"id": "d_Pi", "latex": "d_{\\Pi}", "meaning": "`plan_digest`", "si_unit": "1"},
     {"id": "A", "latex": "\\mathcal{A}", "meaning": "zbiór dostępnych quantity", "si_unit": "1"},
     {"id": "Q", "latex": "\\mathcal{Q}_{*}", "meaning": "zbiory ograniczeń katalogu, fizyki, planu, lane'u i nośników", "si_unit": "1"},
-    {"id": "S_n", "latex": "S_n", "meaning": "fizyczny stan pierwotny kroku", "si_unit": "\\text{carrier-dependent}"},
+    {"id": "S_n", "latex": "S_n", "meaning": "fizyczny stan pierwotny kroku $n$", "si_unit": "\\text{carrier-dependent}"},
     {"id": "K_n", "latex": "K_n", "meaning": "stan kontynuacji integratora, RNG i układów sprzężonych", "si_unit": "\\text{carrier-dependent}"},
     {"id": "Phi", "latex": "\\Phi", "meaning": "operator jednego kroku numerycznego", "si_unit": "1"}
   ],
   "sources": [
-    {"id": "terminal-update", "path": "crates/fullmag-runner/src/interactive/runtime.rs", "symbol": "build_atomic_terminal_update", "responsibility": "Build the current eager terminal update that the target contract supersedes."},
-    {"id": "current-fields", "path": "crates/fullmag-cli/src/interactive_runtime_host.rs", "symbol": "compute_current_fields", "responsibility": "Materialize fields for the current interactive runtime."},
-    {"id": "adr-accepted-state", "path": "docs/adr/0025-persistent-runtime-and-observation-sources.md", "symbol": "DOC-ANCHOR:accepted-state-identity", "responsibility": "Define planned AcceptedStateRef identity.", "evidence_status": "planned_contract"},
-    {"id": "checkpoint-capture", "path": "crates/fullmag-session/src/capture.rs", "symbol": "capture_checkpoint", "responsibility": "Capture current checkpoint state."}
+    {"id": "planned-observation-functional", "path": "docs/physics/interactive-observation-and-restart-semantics.md", "symbol": "DOC-ANCHOR:observation-functional", "responsibility": "Define the target backend-neutral observation functional.", "evidence_status": "planned_contract"},
+    {"id": "planned-accepted-state", "path": "docs/adr/0025-persistent-runtime-and-observation-sources.md", "symbol": "DOC-ANCHOR:accepted-state-identity", "responsibility": "Define the target AcceptedStateId, AcceptedStateGeneration, and AcceptedStateRef identity.", "evidence_status": "planned_contract"},
+    {"id": "planned-quantity-availability", "path": "docs/physics/interactive-observation-and-restart-semantics.md", "symbol": "DOC-ANCHOR:quantity-availability", "responsibility": "Define target quantity availability independently of cache and materialization.", "evidence_status": "planned_contract"},
+    {"id": "planned-resume-trajectory", "path": "docs/physics/interactive-observation-and-restart-semantics.md", "symbol": "DOC-ANCHOR:resume-trajectory", "responsibility": "Define the target logical and exact resume trajectory semantics.", "evidence_status": "planned_contract"},
+    {"id": "terminal-update-gap", "path": "crates/fullmag-runner/src/interactive/runtime.rs", "symbol": "build_atomic_terminal_update", "responsibility": "Current eager terminal update superseded by the target on-demand contract.", "evidence_status": "gap_evidence"},
+    {"id": "current-fields-gap", "path": "crates/fullmag-cli/src/interactive_runtime_host.rs", "symbol": "compute_current_fields", "responsibility": "Current-only field materialization that does not implement the target source-neutral functional.", "evidence_status": "gap_evidence"},
+    {"id": "checkpoint-capture-gap", "path": "crates/fullmag-session/src/capture.rs", "symbol": "capture_checkpoint", "responsibility": "Current checkpoint capture that does not prove exact restore semantics.", "evidence_status": "gap_evidence"},
+    {"id": "table-autosave-api", "path": "packages/fullmag-py/src/fullmag/model/study.py", "symbol": "class TableAutosave", "responsibility": "Validate and lower the public scalar-table autosave policy."},
+    {"id": "field-autosave-api", "path": "packages/fullmag-py/src/fullmag/model/study.py", "symbol": "class FieldAutosave", "responsibility": "Validate and lower the public field autosave policy."},
+    {"id": "stage-autosave-api", "path": "packages/fullmag-py/src/fullmag/model/study.py", "symbol": "class StageAutosave", "responsibility": "Validate and lower the public stage autosave policy."}
   ],
   "public_api": {
     "parameters": [
-      {"python": "StageAutosave.fields", "type": "list[FieldAutosave]", "default": "pusta lista", "si_unit": "1", "validation": "jawna lista pól autosave", "meaning": "`m` jest obserwacyjnym nośnikiem pierwotnym", "backend_support": "według stage/lane", "problem_ir": "sampling.stage_autosave.fields[]"}
+      {"python": "TableAutosave.t_sampl", "type": "float | \"auto\" | None", "default": "None", "si_unit": "\\mathrm{s}", "validation": "dokładnie jedno z `t_sampl`/`every_steps`; dodatnia skończona liczba lub `\"auto\"`", "meaning": "czasowa kadencja tabeli", "backend_support": "według stage/lane", "problem_ir": "sampling.stage_autosave.table.sample_period_s"},
+      {"python": "TableAutosave.every_steps", "type": "int | None", "default": "None", "si_unit": "1", "validation": "dokładnie jedno z `t_sampl`/`every_steps`; dodatni `int`, nie `bool`", "meaning": "krokowa kadencja tabeli", "backend_support": "według stage/lane", "problem_ir": "sampling.stage_autosave.table.every_steps"},
+      {"python": "TableAutosave.quantities", "type": "Sequence[str] | None", "default": "None", "si_unit": "zależnie od quantity", "validation": "`None` wybiera kanoniczny zestaw domyślny; jawna sekwencja nie może być pusta i zawiera tylko wspierane quantity", "meaning": "bazowe kolumny tabeli", "backend_support": "według katalogu i stage/lane", "problem_ir": "sampling.stage_autosave.table.quantities[]"},
+      {"python": "TableAutosave.extra_quantities", "type": "Sequence[str]", "default": "()", "si_unit": "zależnie od quantity", "validation": "tylko wspierane quantity; duplikaty są deterministycznie deduplikowane z listą bazową", "meaning": "dodatkowe kolumny scalane do `quantities`", "backend_support": "według katalogu i stage/lane", "problem_ir": "sampling.stage_autosave.table.quantities[]"},
+      {"python": "TableAutosave.expressions", "type": "Sequence[str]", "default": "()", "si_unit": "zależnie od wyrażenia", "validation": "każde wyrażenie jest normalizowane i walidowane; duplikat nie jest ponownie dodawany przez `add_expression`", "meaning": "pochodne kolumny skalarne", "backend_support": "według expression evaluator lane'u", "problem_ir": "sampling.stage_autosave.table.expressions[]"},
+      {"python": "TableAutosave.table_id", "type": "str", "default": "\"default\"", "si_unit": "1", "validation": "niepusty po usunięciu zewnętrznych białych znaków", "meaning": "stabilna tożsamość tabeli", "backend_support": "wszystkie lane'y obsługujące table autosave", "problem_ir": "sampling.stage_autosave.table.table_id"},
+      {"python": "FieldAutosave.quantity", "type": "str", "default": "wymagany", "si_unit": "zależnie od quantity", "validation": "niepusty i wspierany przez kanoniczny katalog `SaveField`", "meaning": "identyfikator zapisywanego pola", "backend_support": "według katalogu i stage/lane", "problem_ir": "sampling.stage_autosave.fields[].quantity"},
+      {"python": "FieldAutosave.every", "type": "float | \"auto\" | None", "default": "None", "si_unit": "\\mathrm{s}", "validation": "dokładnie jedno z `every`/`every_steps`; dodatnia skończona liczba lub `\"auto\"`", "meaning": "czasowa kadencja pola", "backend_support": "według stage/lane", "problem_ir": "sampling.stage_autosave.fields[].every_seconds"},
+      {"python": "FieldAutosave.every_steps", "type": "int | None", "default": "None", "si_unit": "1", "validation": "dokładnie jedno z `every`/`every_steps`; dodatni `int`, nie `bool`", "meaning": "krokowa kadencja pola", "backend_support": "według stage/lane", "problem_ir": "sampling.stage_autosave.fields[].every_steps"},
+      {"python": "StageAutosave.target", "type": "str", "default": "\"main\"", "si_unit": "1", "validation": "niepusty; zaczyna się alfanumerycznie i zawiera tylko litery, cyfry, `.`, `_`, `-`", "meaning": "logiczny cel zapisu", "backend_support": "wszystkie lane'y obsługujące autosave", "problem_ir": "sampling.stage_autosave.target"},
+      {"python": "StageAutosave.layout", "type": "str", "default": "\"continuous\"", "si_unit": "1", "validation": "jedno z `continuous`, `separate`", "meaning": "układ artefaktu autosave", "backend_support": "wszystkie lane'y obsługujące autosave", "problem_ir": "sampling.stage_autosave.layout"},
+      {"python": "StageAutosave.format", "type": "str", "default": "\"zarr\"", "si_unit": "1", "validation": "jedno z `zarr`, `hdf5`, `txt`; `txt` zabrania pól", "meaning": "format artefaktu autosave", "backend_support": "zależnie od formatu i stage/lane", "problem_ir": "sampling.stage_autosave.format"},
+      {"python": "StageAutosave.table", "type": "TableAutosave | None", "default": "None", "si_unit": "1", "validation": "`TableAutosave` lub `None`; co najmniej table albo jedno field", "meaning": "polityka tabeli zaakceptowanych próbek", "backend_support": "według stage/lane", "problem_ir": "sampling.stage_autosave.table"},
+      {"python": "StageAutosave.fields", "type": "Sequence[FieldAutosave]", "default": "()", "si_unit": "1", "validation": "wyłącznie `FieldAutosave`, unikalne quantity; co najmniej table albo jedno field; brak pól dla `txt`", "meaning": "jawna lista pól autosave; `m` jest obserwacyjnym nośnikiem pierwotnym", "backend_support": "według stage/lane", "problem_ir": "sampling.stage_autosave.fields[]"}
     ]
   }
 }

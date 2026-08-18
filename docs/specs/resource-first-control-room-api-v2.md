@@ -900,10 +900,26 @@ Post-cutover rules:
 ## 7. Persistent observation source contract
 
 HTTP v2 pozostaje źródłem prawdy dla bieżących i historycznych obserwacji;
-websocket przenosi tylko lifecycle, completion i invalidation. Istnieje jeden
-field data plane dla `Current` i `Frame`, z tym samym codec, scope, ETag i
-typed error vocabulary. WebSocket nie niesie pól, topologii, ramek ani pełnego
-stanu sesji.
+websocket przenosi tylko lifecycle, completion i invalidation. WebSocket nie
+niesie pól, topologii, ramek ani pełnego stanu sesji.
+
+Jeden koordynator `ComputeQuantities` tworzy atomowy wynik dla pól i skalarów,
+lecz nie zmienia ich kanonicznych ownerów transportowych. Cienki manifest,
+statusy quantity i skalary są dostępne przez:
+
+```text
+GET /v2/sessions/current/data/observation-results/{observation_id}
+GET /v2/sessions/current/data/observation-results/{observation_id}/scalars
+```
+
+Skalary należą do zasobu observation-results; manifest nie inline'uje ciężkich
+tablic. Pola korzystają z kanonicznego field data plane i istniejących,
+source-qualified zasobów `data/fields/{quantity_id}/availability`,
+`data/fields/{quantity_id}/meta` oraz
+`data/fields/{quantity_id}/samples/vector` (i istniejących wariantów slice lub
+projection). `Current` i `Frame` współdzielą codec, scope, ETag oraz typed error
+vocabulary. Nie powstaje drugi snapshot field API, drugi katalog pól ani drugi
+binary codec.
 
 Każde żądanie `ComputeQuantities` wskazuje `ObservationSource` i listę
 `quantity_ids`. `Current` używa pełnego `AcceptedStateRef`, czyli trwałego
@@ -915,8 +931,8 @@ Historyczne compute jest obsługiwane przez odrębny `ObservationRuntime` bez
 step/run/publisher API i nigdy nie swapuje `LiveRuntime`. Availability jest
 niezależne od cache/materialization. Brak primary carriera zwraca typed
 `unsupported_missing_primary_state`. `ComputeFields` i `ComputeEnergies`
-mogą być przejściowymi command aliases, ale wszystkie payloady przechodzą przez
-jeden `ComputeQuantities` i jeden field data plane.
+mogą być przejściowymi command aliases, ale wywołują ten sam koordynator
+`ComputeQuantities`; nie ustanawiają alternatywnego ownera pól lub skalarów.
 
 Autosave frame jest observation source, nie resume checkpointem. `.fms`
 powstaje wyłącznie po jawnym Save/Save As/Export; import waliduje kandydacki

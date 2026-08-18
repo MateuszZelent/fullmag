@@ -38,10 +38,49 @@ nie mutuje `LiveRuntime`.
 (accepted-state-identity)=
 ### D-04. Kanoniczny `AcceptedStateRef`
 
-`AcceptedStateId` jest trwałym, content-bound digestem wersji, kanonicznego
-`ObservationClock`, `ProblemIR`, planu, domeny i pierwotnych nośników. Clock
-jest częścią digestu. `AcceptedStateGeneration` jest lokalnym guardem epoki i
-rewizji. `AcceptedStateRef` zawsze łączy oba pojęcia dla live source.
+`AcceptedStateId` jest trwałym, content-bound rekordem:
+
+```rust
+pub struct AcceptedStateId {
+    pub run_id: String,
+    pub stage_id: Option<String>,
+    pub accepted_step: u64,
+    pub clock_digest: String,
+    pub state_digest: String,
+    pub domain_digest: String,
+    pub plan_digest: String,
+}
+
+pub struct AcceptedStateGeneration {
+    pub runtime_epoch: u64,
+    pub accepted_revision: u64,
+}
+
+pub struct AcceptedStateRef {
+    pub id: AcceptedStateId,
+    pub generation: AcceptedStateGeneration,
+}
+```
+
+`run_id` jest trwałą przestrzenią nazw gałęzi wykonania, `stage_id` zachowuje
+opcjonalną tożsamość stage, a `accepted_step` jest zaakceptowanym numerem kroku.
+Równość `AcceptedStateId` porównuje wszystkie siedem pól, więc identyczna treść
+w innym runie lub stage'u nie jest tym samym identyfikatorem.
+
+`clock_digest` używa dokładnego preimage
+`"fullmag.observation-clock.v1" || canon(accepted_step, t_bits, dt_bits)`.
+`state_digest` używa
+`"fullmag.accepted-state.v1" || canon(ObservationClock, primary_carriers)` i
+obejmuje kanoniczny clock z bitwise reprezentacją czasu `t` oraz `dt` i komplet
+pierwotnych nośników. `domain_digest` obejmuje domenę, grid/mesh, ownership i
+materiały. `plan_digest` obejmuje znormalizowany `ProblemIR`, resolved plan oraz
+requested/resolved execution. Wszystkie preimage są długościowo prefiksowane,
+mają ustaloną kolejność pól i nie zależą od kolejności mapy ani platformy.
+
+`AcceptedStateGeneration` jest lokalnym guardem epoki i rewizji. Pola
+`runtime_epoch` i `accepted_revision` nie wchodzą do trwałych digestów;
+odrzucają stale command względem bieżącego live runtime. `AcceptedStateRef`
+zawsze łączy `id` i `generation` dla live source.
 
 ### D-05. Jedno `ComputeQuantities`
 
@@ -73,8 +112,10 @@ charge/spin, dynamicznego Oersteda i nośników mechanicznych.
 - FDM/FEM oraz CPU/GPU mają jeden neutralny kontrakt i osobne realizacje.
 - Nie powstaje silent fallback ani nowy owner fizyki w `Context`,
   `mfem_bridge.cpp`, runnerowym `dispatch.rs` lub ogólnym `execute.rs`.
-- HTTP v2 pozostaje truth; WebSocket tylko invaliduje; istnieje jeden field
-  data plane.
+- HTTP v2 pozostaje źródłem prawdy; WebSocket tylko invaliduje. Manifest i
+  skalary batchu należą do `observation-results`, a pola używają istniejącego
+  kanonicznego field data plane; nie powstaje drugi snapshot field API ani
+  drugi codec.
 - Availability zależy od katalogu, fizyki, planu, lane'u i primary carriers,
   nie od materialization/cache.
 - Source presence, executability, validation i production qualification są

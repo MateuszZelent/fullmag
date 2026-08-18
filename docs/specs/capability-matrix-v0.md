@@ -636,21 +636,38 @@ be used as acceptance criteria.
 
 ## Persistent observation runtime evidence model
 
-Trwała obserwacja jest raportowana w czterech niezależnych osiach:
+Trwała obserwacja składa się z czterech niezależnie promowanych capability:
+`runtime.live_residency`, `runtime.historical_observation`,
+`runtime.logical_resume` i `runtime.exact_resume`. Każda ma osobne osie
 `source presence`, `executability`, `validation` i
-`production qualification`. Obecność kodu, kompilacja, cache albo
-materialization nigdy nie promują wyższej osi.
+`production qualification` dla kanonicznych lane'ów
+`fdm_cpu_reference`, `fdm_gpu_production`, `fem_cpu_public` oraz
+`fem_gpu_public`. Obecność kodu, kompilacja, cache albo materialization nigdy
+nie promują wyższej osi ani sąsiedniej capability.
 
-| Lane | source presence | executability | validation | production qualification |
-|---|---|---|---|---|
-| FDM CPU | partial | not demonstrated end-to-end | unvalidated | not qualified |
-| FDM GPU | partial | not demonstrated end-to-end | unvalidated | not qualified |
-| FEM CPU | partial | not demonstrated end-to-end | unvalidated | not qualified |
-| FEM GPU | partial | not demonstrated end-to-end | unvalidated | not qualified |
+| Capability | Zakres trybu | Lane | source presence | executability | validation | production qualification | Receipts |
+|---|---|---|---|---|---|---|---|
+| `runtime.live_residency` | strict, extended, future hybrid | `fdm_cpu_reference` | `source_visible` | `unsupported` | `unsupported` | `unsupported` | brak |
+| `runtime.live_residency` | strict, extended, future hybrid | `fdm_gpu_production` | `source_visible` | `unsupported` | `unsupported` | `unsupported` | brak |
+| `runtime.live_residency` | strict, extended, future hybrid | `fem_cpu_public` | `source_visible` | `unsupported` | `unsupported` | `unsupported` | brak |
+| `runtime.live_residency` | strict, extended, future hybrid | `fem_gpu_public` | `source_visible` | `unsupported` | `unsupported` | `unsupported` | brak |
+| `runtime.historical_observation` | strict, extended, future hybrid | `fdm_cpu_reference` | `source_visible` | `unsupported` | `unsupported` | `unsupported` | brak |
+| `runtime.historical_observation` | strict, extended, future hybrid | `fdm_gpu_production` | `source_visible` | `unsupported` | `unsupported` | `unsupported` | brak |
+| `runtime.historical_observation` | strict, extended, future hybrid | `fem_cpu_public` | `source_visible` | `unsupported` | `unsupported` | `unsupported` | brak |
+| `runtime.historical_observation` | strict, extended, future hybrid | `fem_gpu_public` | `source_visible` | `unsupported` | `unsupported` | `unsupported` | brak |
+| `runtime.logical_resume` | strict, extended, future hybrid | `fdm_cpu_reference` | `source_visible` | `unsupported` | `unsupported` | `unsupported` | brak |
+| `runtime.logical_resume` | strict, extended, future hybrid | `fdm_gpu_production` | `source_visible` | `unsupported` | `unsupported` | `unsupported` | brak |
+| `runtime.logical_resume` | strict, extended, future hybrid | `fem_cpu_public` | `source_visible` | `unsupported` | `unsupported` | `unsupported` | brak |
+| `runtime.logical_resume` | strict, extended, future hybrid | `fem_gpu_public` | `source_visible` | `unsupported` | `unsupported` | `unsupported` | brak |
+| `runtime.exact_resume` | strict, extended, future hybrid | `fdm_cpu_reference` | `source_visible` | `unsupported` | `unsupported` | `unsupported` | brak |
+| `runtime.exact_resume` | strict, extended, future hybrid | `fdm_gpu_production` | `source_visible` | `unsupported` | `unsupported` | `unsupported` | brak |
+| `runtime.exact_resume` | strict, extended, future hybrid | `fem_cpu_public` | `source_visible` | `unsupported` | `unsupported` | `unsupported` | brak |
+| `runtime.exact_resume` | strict, extended, future hybrid | `fem_gpu_public` | `source_visible` | `unsupported` | `unsupported` | `unsupported` | brak |
 
-Wszystkie lane'y docelowo realizują jeden kontrakt `AcceptedStateRef`,
-`ObservationSource`, `ComputeQuantities`, `LogicalResume` i `ExactResume`,
-ale osobne receipts są obowiązkowe. Wymuszony backend/device nie ma silent
-fallbacku. Brak primary carriera jest typed unsupported. Task 0 jest wyłącznie
-kontraktem źródłowym/dokumentacyjnym i nie zmienia statusu żadnej istniejącej
+Wartości osi pochodzą wyłącznie z `status_vocabulary`; szczegółowe tablice
+receipts znajdują się w czterech odpowiadających wpisach `features[]` JSON.
+Brak receipt oznacza brak wykonywalności i kwalifikacji, nie dowód negatywny o
+możliwościach docelowej architektury. Wymuszony backend/device nie ma silent
+fallbacku, a brak primary carriera jest typed unsupported. Task 0 jest
+wyłącznie kontraktem źródłowym/dokumentacyjnym i nie promuje żadnej z czterech
 capability.

@@ -1,6 +1,6 @@
 {
   "schema_version": "capability_matrix.v0",
-  "updated_at": "2026-08-14",
+  "updated_at": "2026-08-18",
   "status_vocabulary": {
     "unsupported": "The current lane has no legal executable realization for this feature.",
     "source_visible": "Source or planner scaffolding exists, but the lane is not a legal public executable path.",
@@ -18,37 +18,91 @@
     "fem_cpu_public",
     "fem_gpu_public"
   ],
-  "observation_runtime_contract": {
-    "schema": "observation-runtime-capability.v1",
-    "notes": "Documentation contract only. Cache or quantity materialization does not promote capability.",
-    "lanes": {
-      "fdm_cpu": {
-        "source_presence": "partial",
-        "executability": "not_demonstrated_end_to_end",
-        "validation": "unvalidated",
-        "production_qualification": "not_qualified"
-      },
-      "fdm_gpu": {
-        "source_presence": "partial",
-        "executability": "not_demonstrated_end_to_end",
-        "validation": "unvalidated",
-        "production_qualification": "not_qualified"
-      },
-      "fem_cpu": {
-        "source_presence": "partial",
-        "executability": "not_demonstrated_end_to_end",
-        "validation": "unvalidated",
-        "production_qualification": "not_qualified"
-      },
-      "fem_gpu": {
-        "source_presence": "partial",
-        "executability": "not_demonstrated_end_to_end",
-        "validation": "unvalidated",
-        "production_qualification": "not_qualified"
-      }
-    }
-  },
   "features": [
+    {
+      "id": "runtime.live_residency",
+      "label": "Persistent live runtime residency",
+      "lanes": {
+        "fdm_cpu_reference": "source_visible",
+        "fdm_gpu_production": "source_visible",
+        "fem_cpu_public": "source_visible",
+        "fem_gpu_public": "source_visible"
+      },
+      "execution_mode_scope": ["strict", "extended", "hybrid"],
+      "workload_scope": "Target LiveRuntime residency contract; no public end-to-end execution receipt.",
+      "lane_evidence": {
+        "fdm_cpu_reference": {"source_presence": "source_visible", "executability": "unsupported", "validation": "unsupported", "production_qualification": "unsupported", "receipts": []},
+        "fdm_gpu_production": {"source_presence": "source_visible", "executability": "unsupported", "validation": "unsupported", "production_qualification": "unsupported", "receipts": []},
+        "fem_cpu_public": {"source_presence": "source_visible", "executability": "unsupported", "validation": "unsupported", "production_qualification": "unsupported", "receipts": []},
+        "fem_gpu_public": {"source_presence": "source_visible", "executability": "unsupported", "validation": "unsupported", "production_qualification": "unsupported", "receipts": []}
+      },
+      "validated_workloads": [],
+      "notes": "Documentation and adjacent source gaps only. Stage completion, pause, and stop residency have no public runtime receipt; cache or materialization cannot promote this feature.",
+      "validation_state": "unvalidated"
+    },
+    {
+      "id": "runtime.historical_observation",
+      "label": "Isolated historical observation runtime",
+      "lanes": {
+        "fdm_cpu_reference": "source_visible",
+        "fdm_gpu_production": "source_visible",
+        "fem_cpu_public": "source_visible",
+        "fem_gpu_public": "source_visible"
+      },
+      "execution_mode_scope": ["strict", "extended", "hybrid"],
+      "workload_scope": "Target immutable-frame ObservationRuntime and ComputeQuantities contract; no public end-to-end execution receipt.",
+      "lane_evidence": {
+        "fdm_cpu_reference": {"source_presence": "source_visible", "executability": "unsupported", "validation": "unsupported", "production_qualification": "unsupported", "receipts": []},
+        "fdm_gpu_production": {"source_presence": "source_visible", "executability": "unsupported", "validation": "unsupported", "production_qualification": "unsupported", "receipts": []},
+        "fem_cpu_public": {"source_presence": "source_visible", "executability": "unsupported", "validation": "unsupported", "production_qualification": "unsupported", "receipts": []},
+        "fem_gpu_public": {"source_presence": "source_visible", "executability": "unsupported", "validation": "unsupported", "production_qualification": "unsupported", "receipts": []}
+      },
+      "validated_workloads": [],
+      "notes": "The target contract requires an isolated one-frame evaluator and zero LiveRuntime mutation. No lane has executable, validation, or production receipts.",
+      "validation_state": "unvalidated"
+    },
+    {
+      "id": "runtime.logical_resume",
+      "label": "Logical resume from accepted physical state",
+      "lanes": {
+        "fdm_cpu_reference": "source_visible",
+        "fdm_gpu_production": "source_visible",
+        "fem_cpu_public": "source_visible",
+        "fem_gpu_public": "source_visible"
+      },
+      "execution_mode_scope": ["strict", "extended", "hybrid"],
+      "workload_scope": "Target new-branch resume with explicit loss of continuation state; no public end-to-end execution receipt.",
+      "lane_evidence": {
+        "fdm_cpu_reference": {"source_presence": "source_visible", "executability": "unsupported", "validation": "unsupported", "production_qualification": "unsupported", "receipts": []},
+        "fdm_gpu_production": {"source_presence": "source_visible", "executability": "unsupported", "validation": "unsupported", "production_qualification": "unsupported", "receipts": []},
+        "fem_cpu_public": {"source_presence": "source_visible", "executability": "unsupported", "validation": "unsupported", "production_qualification": "unsupported", "receipts": []},
+        "fem_gpu_public": {"source_presence": "source_visible", "executability": "unsupported", "validation": "unsupported", "production_qualification": "unsupported", "receipts": []}
+      },
+      "validated_workloads": [],
+      "notes": "Current checkpoint/frame source fragments do not prove the target branch semantics. No lane has executable, validation, or production receipts.",
+      "validation_state": "unvalidated"
+    },
+    {
+      "id": "runtime.exact_resume",
+      "label": "Exact deterministic trajectory resume",
+      "lanes": {
+        "fdm_cpu_reference": "source_visible",
+        "fdm_gpu_production": "source_visible",
+        "fem_cpu_public": "source_visible",
+        "fem_gpu_public": "source_visible"
+      },
+      "execution_mode_scope": ["strict", "extended", "hybrid"],
+      "workload_scope": "Target full continuation-state restore in an identical deterministic runtime; no public end-to-end execution receipt.",
+      "lane_evidence": {
+        "fdm_cpu_reference": {"source_presence": "source_visible", "executability": "unsupported", "validation": "unsupported", "production_qualification": "unsupported", "receipts": []},
+        "fdm_gpu_production": {"source_presence": "source_visible", "executability": "unsupported", "validation": "unsupported", "production_qualification": "unsupported", "receipts": []},
+        "fem_cpu_public": {"source_presence": "source_visible", "executability": "unsupported", "validation": "unsupported", "production_qualification": "unsupported", "receipts": []},
+        "fem_gpu_public": {"source_presence": "source_visible", "executability": "unsupported", "validation": "unsupported", "production_qualification": "unsupported", "receipts": []}
+      },
+      "validated_workloads": [],
+      "notes": "Exact resume requires integrator, RNG, coupled-carrier, and deterministic-runtime identity. Current capture source is gap evidence only and no lane is executable or qualified.",
+      "validation_state": "unvalidated"
+    },
     {
       "id": "fem_auto_device_crossover",
       "label": "Calibrated FEM auto-device crossover",

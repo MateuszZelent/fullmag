@@ -26,6 +26,7 @@ rezydentnym ewaluatorem jednej wybranej ramki historycznej. Nie ma API
 
 Quantity deterministyczna dla wybranego źródła ma postać
 
+(observation-functional)=
 ```{math}
 :label: eq-observation-functional
 q_i = \mathcal{F}_i\!\left(\mathbf{m}, t, \mathcal{P}, \Pi, \mathcal{D}, \mathcal{C}_i\right),
@@ -36,21 +37,41 @@ przez $q_i$. Brak któregokolwiek wymaganego nośnika kończy się typowanym
 `unsupported_missing_primary_state`; zabronione jest podstawienie zera albo
 przybliżenia wyglądającego jak wynik fizyczny.
 
-Trwała tożsamość zaakceptowanego stanu jest content-bound:
+Trwała tożsamość zaakceptowanego stanu jest rekordem content-bound:
 
 ```{math}
 :label: eq-accepted-state-id
-I_{\mathrm{acc}} = \operatorname{SHA256}\!\left(v \parallel
-\operatorname{canon}(\Gamma,\mathcal{P},\Pi,\mathcal{D},\mathcal{C})\right),
+I_{\mathrm{acc}} = (R,U,n,d_{\Gamma},d_S,d_D,d_{\Pi}),
 \qquad \Gamma=(n,t,\Delta t).
 ```
 
-Zegar $\Gamma$, łącznie z bitowo jednoznacznymi $t$ i $\Delta t$, jest częścią
-digestu. Lokalna generacja $G=(e,r)$ chroni bieżącą epokę runtime; kanoniczny
-`AcceptedStateRef` jest parą `(AcceptedStateId, AcceptedStateGeneration)`.
+`AcceptedStateId` ma dokładnie pola `run_id`, `stage_id`, `accepted_step`,
+`clock_digest`, `state_digest`, `domain_digest` i `plan_digest`. `run_id`
+ustanawia trwałą przestrzeń nazw gałęzi wykonania, `stage_id` zachowuje
+opcjonalną tożsamość stage, a `accepted_step` jest zaakceptowanym numerem kroku.
+Równość identyfikatorów jest równością wszystkich siedmiu pól; zgodność samych
+digestów nie scala stanów pochodzących z różnych runów lub stage'y.
+
+Preimage jest wersjonowany i kanoniczny. `clock_digest` jest
+`SHA256("fullmag.observation-clock.v1" || canon(accepted_step, t_bits,
+dt_bits))`, gdzie `t_bits` i `dt_bits` są bitwise reprezentacjami wartości
+IEEE-754, również dla braku `dt`. `state_digest` jest
+`SHA256("fullmag.accepted-state.v1" || canon(ObservationClock,
+primary_carriers))`; obejmuje kanoniczny `ObservationClock` z bitwise `t` i
+`dt` oraz komplet pierwotnych nośników zaakceptowanego stanu. `domain_digest`
+obejmuje kanoniczną domenę, grid/mesh, ownership i materiały. `plan_digest`
+obejmuje znormalizowany `ProblemIR`, resolved plan i requested/resolved
+execution. Każdy digest jest liczony z długościowo prefiksowanych bajtów, z
+ustaloną kolejnością pól i bez zależności od kolejności mapy lub platformy.
+
+`AcceptedStateGeneration` ma dokładnie pola `runtime_epoch` i
+`accepted_revision`; jest lokalnym guardem przeciw stale command i nie wchodzi
+do trwałych digestów. Kanoniczny `AcceptedStateRef` jest parą
+`(AcceptedStateId, AcceptedStateGeneration)`.
 
 Dostępność nie wynika z cache:
 
+(quantity-availability)=
 ```{math}
 :label: eq-quantity-availability
 \mathcal{A}=\mathcal{Q}_{\mathrm{catalog}}
@@ -62,6 +83,7 @@ Dostępność nie wynika z cache:
 
 Kontynuacja zależy również od stanu algorytmicznego $K_n$:
 
+(resume-trajectory)=
 ```{math}
 :label: eq-resume-trajectory
 S_{n+1}=\Phi(S_n,K_n), \qquad
@@ -90,7 +112,12 @@ zdyskretyzowaną trajektorię w identycznym deterministycznym runtime.
 | $\mathcal{D}$ | tożsamość domeny/gridu/mesha i materiałów | $1$ |
 | $\mathcal{C}_i$ | dodatkowe pierwotne nośniki quantity $i$ | $\text{carrier-dependent}$ |
 | $I_{\mathrm{acc}}$ | `AcceptedStateId` | $1$ |
-| $v$ | wersja kanonicznego preimage digestu | $1$ |
+| $R$ | trwałe `run_id` | $1$ |
+| $U$ | opcjonalne `stage_id` | $1$ |
+| $d_{\Gamma}$ | `clock_digest` | $1$ |
+| $d_S$ | `state_digest` zegara i pierwotnych nośników | $1$ |
+| $d_D$ | `domain_digest` | $1$ |
+| $d_{\Pi}$ | `plan_digest` | $1$ |
 | $G$ | `AcceptedStateGeneration` | $1$ |
 | $e$ | lokalna epoka runtime | $1$ |
 | $r$ | lokalna rewizja accepted state | $1$ |
@@ -159,13 +186,22 @@ study.stages.add_relax(
 )
 ```
 
-| Publiczny obiekt/parametr | Typ | Domyślna wartość | Jednostka SI | Walidacja i znaczenie | Lane'y | `ProblemIR` |
-|---|---|---|---|---|---|---|
-| nowy parametr Task 0 | brak | nie dotyczy | $1$ | Task 0 nie zmienia publicznego authoring API | bez promocji | brak zmiany |
-| `StageAutosave.table` | `TableAutosave \| None` | `None` | $1$ | polityka tabeli zaakceptowanych próbek | według stage/lane | `sampling.stage_autosave.table` |
-| `StageAutosave.fields` | `list[FieldAutosave]` | pusta lista | $1$ | jawna lista pól autosave; `m` jest obserwacyjnym nośnikiem pierwotnym | według stage/lane | `sampling.stage_autosave.fields[]` |
-| `FieldAutosave.quantity` | `str` | wymagany | według quantity | niepusty kanoniczny identyfikator | według katalogu | `sampling.stage_autosave.fields[].quantity` |
-| `FieldAutosave.every_steps` | `int \| None` | `None` | $1$ | dodatnia kadencja zaakceptowanych kroków | relaxation | `sampling.stage_autosave.fields[].every_steps` |
+| Publiczny obiekt/parametr | Typ | Domyślna wartość | Jednostka SI | Walidacja | Znaczenie | Lane'y | `ProblemIR` |
+|---|---|---|---|---|---|---|---|
+| `TableAutosave.t_sampl` | `float \| "auto" \| None` | `None` | $\mathrm{s}$ albo polityka | dokładnie jedno z `t_sampl`/`every_steps`; dodatnia skończona liczba lub `"auto"` | czasowa kadencja tabeli | według stage/lane | `sampling.stage_autosave.table.sample_period_s` albo `.sample_period_policy` |
+| `TableAutosave.every_steps` | `int \| None` | `None` | $1$ | dokładnie jedno z `t_sampl`/`every_steps`; dodatni `int`, nie `bool` | krokowa kadencja tabeli | według stage/lane | `sampling.stage_autosave.table.every_steps` |
+| `TableAutosave.quantities` | `Sequence[str] \| None` | `None` | zależnie od quantity | `None` wybiera kanoniczny zestaw domyślny; jawna sekwencja nie może być pusta i zawiera tylko wspierane quantity | bazowe kolumny tabeli | według katalogu i stage/lane | `sampling.stage_autosave.table.quantities[]` |
+| `TableAutosave.extra_quantities` | `Sequence[str]` | `()` | zależnie od quantity | tylko wspierane quantity; duplikaty są deterministycznie deduplikowane z listą bazową | dodatkowe kolumny scalane do `quantities` | według katalogu i stage/lane | `sampling.stage_autosave.table.quantities[]` po scaleniu |
+| `TableAutosave.expressions` | `Sequence[str]` | `()` | zależnie od wyrażenia | każde wyrażenie jest normalizowane i walidowane; duplikat nie jest ponownie dodawany przez `add_expression` | pochodne kolumny skalarne | według expression evaluator lane'u | `sampling.stage_autosave.table.expressions[]` |
+| `TableAutosave.table_id` | `str` | `"default"` | $1$ | niepusty po usunięciu zewnętrznych białych znaków | stabilna tożsamość tabeli | wszystkie lane'y obsługujące table autosave | `sampling.stage_autosave.table.table_id` |
+| `FieldAutosave.quantity` | `str` | wymagany | zależnie od quantity | niepusty i wspierany przez kanoniczny katalog `SaveField` | identyfikator zapisywanego pola | według katalogu i stage/lane | `sampling.stage_autosave.fields[].quantity` |
+| `FieldAutosave.every` | `float \| "auto" \| None` | `None` | $\mathrm{s}$ albo polityka | dokładnie jedno z `every`/`every_steps`; dodatnia skończona liczba lub `"auto"` | czasowa kadencja pola | według stage/lane | `sampling.stage_autosave.fields[].every_seconds` albo `.sample_period_policy` |
+| `FieldAutosave.every_steps` | `int \| None` | `None` | $1$ | dokładnie jedno z `every`/`every_steps`; dodatni `int`, nie `bool` | krokowa kadencja pola | według stage/lane | `sampling.stage_autosave.fields[].every_steps` |
+| `StageAutosave.target` | `str` | `"main"` | $1$ | niepusty; zaczyna się alfanumerycznie i zawiera tylko litery, cyfry, `.`, `_`, `-` | logiczny cel zapisu | wszystkie lane'y obsługujące autosave | `sampling.stage_autosave.target` |
+| `StageAutosave.layout` | `str` | `"continuous"` | $1$ | jedno z `continuous`, `separate` | układ artefaktu autosave | wszystkie lane'y obsługujące autosave | `sampling.stage_autosave.layout` |
+| `StageAutosave.format` | `str` | `"zarr"` | $1$ | jedno z `zarr`, `hdf5`, `txt`; `txt` zabrania pól | format artefaktu autosave | zależnie od formatu i stage/lane | `sampling.stage_autosave.format` |
+| `StageAutosave.table` | `TableAutosave \| None` | `None` | $1$ | `TableAutosave` lub `None`; co najmniej table albo jedno field | polityka tabeli zaakceptowanych próbek | według stage/lane | `sampling.stage_autosave.table` |
+| `StageAutosave.fields` | `Sequence[FieldAutosave]` | `()` | $1$ | wyłącznie `FieldAutosave`, unikalne quantity; co najmniej table albo jedno field; brak pól dla `txt` | jawna lista pól autosave; `m` jest obserwacyjnym nośnikiem pierwotnym | według stage/lane | `sampling.stage_autosave.fields[]` |
 
 (problem-ir)=
 ## 6. `ProblemIR`, planner i proweniencja
@@ -215,9 +251,12 @@ fizyka i ownership nie trafiają do `Context`, `mfem_bridge.cpp`, runnerowego
 `LiveRuntime` pozostaje jedynym właścicielem step/run/publisher. Docelowy
 `ObservationRuntime` rekonstruuje wyłącznie neutralne operatory potrzebne do
 quantity. Jedna operacja `ComputeQuantities(source, quantity_ids)` materializuje
-kanoniczne payloady; osobny cache sampling/presentation nie zmienia ich
-tożsamości ani capability. HTTP v2 jest źródłem prawdy, WebSocket tylko
-invaliduje, a pola korzystają z jednego binarnego field data plane.
+kanoniczne payloady jako jeden atomowy batch; osobny cache sampling/presentation
+nie zmienia ich tożsamości ani capability. HTTP v2 jest źródłem prawdy,
+WebSocket tylko invaliduje. Pola pozostają wyłącznie w kanonicznym binarnym
+field data plane, a skalarne wyniki batchu należą do cienkiego zasobu
+`observation-results/{observation_id}/scalars`; nie powstaje drugi field API ani
+drugi codec.
 
 (validation)=
 ## 10. Walidacja i kryteria akceptacji
@@ -267,8 +306,13 @@ runtime receipts i nie kwalifikuje żadnej lane.
 
 | Twierdzenie | Ścieżka | Symbol | Odpowiedzialność | Lane | Dowód |
 |---|---|---|---|---|---|
-| obecny eager batch do zastąpienia | `crates/fullmag-runner/src/interactive/runtime.rs` | `build_atomic_terminal_update` | terminalny snapshot FDM | FDM CPU/GPU | source presence, nie target |
-| bieżąca komenda pól | `crates/fullmag-cli/src/interactive_runtime_host.rs` | `compute_current_fields` | materializacja current | wszystkie | source presence |
-| checkpoint session store | `crates/fullmag-session/src/capture.rs` | `capture_checkpoint` | obecny capture CAS | wszystkie | source presence, exact restore nieudowodniony |
+| docelowy funkcjonał obserwacji | `docs/physics/interactive-observation-and-restart-semantics.md` | `DOC-ANCHOR:observation-functional` | planowany backend-neutralny funkcjonał quantity | wszystkie | planned contract, bez runtime proof |
 | docelowa accepted-state identity | `docs/adr/0025-persistent-runtime-and-observation-sources.md` | `DOC-ANCHOR:accepted-state-identity` | planowany `AcceptedStateRef` | wszystkie | planned contract, bez runtime proof |
-| publiczne autosave | `packages/fullmag-py/src/fullmag/model/study.py` | `StageAutosave` | authoring i lowering | wszystkie | testy Python istnieją; bez promocji runtime |
+| docelowa availability | `docs/physics/interactive-observation-and-restart-semantics.md` | `DOC-ANCHOR:quantity-availability` | planowane przecięcie katalogu, fizyki, planu, lane'u i nośników | wszystkie | planned contract, bez runtime proof |
+| docelowa semantyka resume | `docs/physics/interactive-observation-and-restart-semantics.md` | `DOC-ANCHOR:resume-trajectory` | planowane rozróżnienie logical/exact | wszystkie | planned contract, bez runtime proof |
+| obecny eager batch do zastąpienia | `crates/fullmag-runner/src/interactive/runtime.rs` | `build_atomic_terminal_update` | bieżąca luka: terminalny snapshot FDM | FDM CPU/GPU | superseded/gap evidence, nie źródło równania docelowego |
+| bieżąca komenda pól | `crates/fullmag-cli/src/interactive_runtime_host.rs` | `compute_current_fields` | bieżąca luka: materializacja current | wszystkie | gap evidence, nie źródło równania docelowego |
+| checkpoint session store | `crates/fullmag-session/src/capture.rs` | `capture_checkpoint` | bieżący capture CAS | wszystkie | gap evidence, exact restore nieudowodniony |
+| publiczne `TableAutosave` | `packages/fullmag-py/src/fullmag/model/study.py` | `class TableAutosave` | authoring, walidacja i lowering tabeli | wszystkie | source presence; bez promocji runtime |
+| publiczne `FieldAutosave` | `packages/fullmag-py/src/fullmag/model/study.py` | `class FieldAutosave` | authoring, walidacja i lowering pola | wszystkie | source presence; bez promocji runtime |
+| publiczne `StageAutosave` | `packages/fullmag-py/src/fullmag/model/study.py` | `class StageAutosave` | authoring, walidacja i lowering polityki stage | wszystkie | source presence; bez promocji runtime |
