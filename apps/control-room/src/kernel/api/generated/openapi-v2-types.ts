@@ -7614,6 +7614,11 @@ export interface components {
         };
         /** @enum {string} */
         PlanarSurfaceVisibilityPolicySchema: "frontmost" | "backmost" | "nearest_to_origin" | "area_weighted_overlap";
+        PlanarTargetPresentationOverrideState: {
+            scope: components["schemas"]["VisualizationScopeKind"];
+            scope_id: string;
+            wireframe_style: components["schemas"]["PlanarWireframeStyleState"];
+        };
         PlanarVectorStyleState: {
             color_mode: string;
             length_mode: string;
@@ -7651,6 +7656,7 @@ export interface components {
             raster_opacity?: number | null;
             resolution?: null | components["schemas"]["PlanarResolutionPolicy"];
             source?: null | components["schemas"]["PlanarSourceSelectionState"];
+            target_overrides?: components["schemas"]["PlanarTargetPresentationOverrideState"][] | null;
             vector_style?: null | components["schemas"]["PlanarVectorStyleState"];
             view_scope?: null | components["schemas"]["PlanarViewScopeState"];
             viewport_colorbar_visible?: boolean | null;
@@ -7672,6 +7678,7 @@ export interface components {
             raster_opacity?: number;
             resolution: components["schemas"]["PlanarResolutionPolicy"];
             source: components["schemas"]["PlanarSourceSelectionState"];
+            target_overrides?: components["schemas"]["PlanarTargetPresentationOverrideState"][];
             vector_style: components["schemas"]["PlanarVectorStyleState"];
             view_scope: components["schemas"]["PlanarViewScopeState"];
             viewport_colorbar_visible: boolean;

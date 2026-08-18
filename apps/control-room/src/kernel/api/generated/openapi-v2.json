@@ -16321,6 +16321,26 @@
         ],
         "type": "string"
       },
+      "PlanarTargetPresentationOverrideState": {
+        "additionalProperties": false,
+        "properties": {
+          "scope": {
+            "$ref": "#/components/schemas/VisualizationScopeKind"
+          },
+          "scope_id": {
+            "type": "string"
+          },
+          "wireframe_style": {
+            "$ref": "#/components/schemas/PlanarWireframeStyleState"
+          }
+        },
+        "required": [
+          "scope",
+          "scope_id",
+          "wireframe_style"
+        ],
+        "type": "object"
+      },
       "PlanarVectorStyleState": {
         "properties": {
           "color_mode": {
@@ -16523,6 +16543,15 @@
               }
             ]
           },
+          "target_overrides": {
+            "items": {
+              "$ref": "#/components/schemas/PlanarTargetPresentationOverrideState"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
           "vector_style": {
             "oneOf": [
               {
@@ -16613,6 +16642,12 @@
           },
           "source": {
             "$ref": "#/components/schemas/PlanarSourceSelectionState"
+          },
+          "target_overrides": {
+            "items": {
+              "$ref": "#/components/schemas/PlanarTargetPresentationOverrideState"
+            },
+            "type": "array"
           },
           "vector_style": {
             "$ref": "#/components/schemas/PlanarVectorStyleState"
@@ -42475,8 +42510,8 @@
     }
   ],
   "x-fullmag-build-identity": {
-    "built_at_utc": "2026-08-18T12:35:19Z",
-    "git_commit": "737c518b4bc6cce538bfc22aa90fd1d1a016b3e0",
+    "built_at_utc": "2026-08-18T20:00:31Z",
+    "git_commit": "2fb09e81747c467c1f6fa741691883beabab7fe4",
     "source_snapshot_sha256": "unknown",
     "worktree_state": "dirty"
   },
