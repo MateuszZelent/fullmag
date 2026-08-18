@@ -28,6 +28,56 @@ pub(crate) struct ResolvedPlanarSamplingSource {
     pub operator: PlanarOperatorIR,
 }
 
+fn default_slice_coordinate(
+    domain: &DomainMeta,
+    axis: usize,
+    position_fraction: f64,
+) -> Result<f64, ApiError> {
+    let continuous = domain.bounds.min[axis]
+        + position_fraction * (domain.bounds.max[axis] - domain.bounds.min[axis]);
+    if domain.discretization != "fdm" {
+        return Ok(continuous);
+    }
+    let Some(grid) = domain.grid.as_ref() else {
+        return Ok(continuous);
+    };
+
+    for grid_axis in 0..3 {
+        let count = grid.shape[grid_axis];
+        let origin = grid.origin[grid_axis];
+        let spacing = grid.spacing[grid_axis];
+        if count == 0 || !origin.is_finite() || !spacing.is_finite() || spacing <= 0.0 {
+            return Err(ApiError::unprocessable(
+                "planar_default_grid_invalid: structured FDM grid shape, origin, and spacing must be valid",
+            ));
+        }
+        let grid_max = origin + f64::from(count) * spacing;
+        let scale = origin
+            .abs()
+            .max(grid_max.abs())
+            .max(domain.bounds.min[grid_axis].abs())
+            .max(domain.bounds.max[grid_axis].abs())
+            .max(1.0);
+        let tolerance = 32.0 * f64::EPSILON * scale;
+        if (origin - domain.bounds.min[grid_axis]).abs() > tolerance
+            || (grid_max - domain.bounds.max[grid_axis]).abs() > tolerance
+        {
+            return Err(ApiError::unprocessable(
+                "planar_default_grid_invalid: structured FDM grid does not match domain bounds",
+            ));
+        }
+    }
+
+    let count = grid.shape[axis];
+    let scaled = position_fraction * f64::from(count);
+    let index = if scaled <= 0.0 {
+        0
+    } else {
+        scaled.ceil() as u32 - 1
+    }
+    .min(count - 1);
+    Ok(grid.origin[axis] + (f64::from(index) + 0.5) * grid.spacing[axis])
+}
 pub(crate) fn resolve_default_planar_source(
     domain: &DomainMeta,
     default_slice: &DefaultPlanarSliceState,
@@ -63,7 +113,11 @@ pub(crate) fn resolve_default_planar_source(
     let q = default_slice.position_fraction;
     let (origin_m, u_axis, v_axis, normal, preset, u_length, v_length) = match default_slice.plane {
         PlanarAxisPlane::Xy => (
-            [centers[0], centers[1], bounds.min[2] + q * lengths[2]],
+            [
+                centers[0],
+                centers[1],
+                default_slice_coordinate(domain, 2, q)?,
+            ],
             [1.0, 0.0, 0.0],
             [0.0, 1.0, 0.0],
             [0.0, 0.0, 1.0],
@@ -72,7 +126,11 @@ pub(crate) fn resolve_default_planar_source(
             lengths[1],
         ),
         PlanarAxisPlane::Xz => (
-            [centers[0], bounds.min[1] + q * lengths[1], centers[2]],
+            [
+                centers[0],
+                default_slice_coordinate(domain, 1, q)?,
+                centers[2],
+            ],
             [1.0, 0.0, 0.0],
             [0.0, 0.0, 1.0],
             [0.0, -1.0, 0.0],
@@ -81,7 +139,11 @@ pub(crate) fn resolve_default_planar_source(
             lengths[2],
         ),
         PlanarAxisPlane::Yz => (
-            [bounds.min[0] + q * lengths[0], centers[1], centers[2]],
+            [
+                default_slice_coordinate(domain, 0, q)?,
+                centers[1],
+                centers[2],
+            ],
             [0.0, 1.0, 0.0],
             [0.0, 0.0, 1.0],
             [1.0, 0.0, 0.0],
@@ -181,7 +243,12 @@ fn default_operator_to_ir(operator: &DefaultPlanarOperatorState) -> PlanarOperat
 }
 
 fn default_source_hash(domain: &DomainMeta, default_slice: &DefaultPlanarSliceState) -> String {
-    digest_json(&(domain.generation_id.as_str(), &domain.bounds, default_slice))
+    digest_json(&(
+        domain.generation_id.as_str(),
+        &domain.bounds,
+        &domain.grid,
+        default_slice,
+    ))
 }
 
 fn digest_json<T: Serialize>(value: &T) -> String {
@@ -205,7 +272,7 @@ mod tests {
 
     use fullmag_ir::{MonitorTargetIR, PlanarExtentIR, PlanarFrameIR, PlanarOperatorIR};
 
-    use crate::schemas::domain::{Bounds3, DomainCounts, DomainMeta};
+    use crate::schemas::domain::{Bounds3, DomainCounts, DomainMeta, StructuredGridDescriptor};
     use crate::schemas::visualization_state::{
         DefaultPlanarOperatorState, DefaultPlanarSliceState, PlanarAxisPlane,
     };
@@ -250,6 +317,28 @@ mod tests {
             u[2] * v[0] - u[0] * v[2],
             u[0] * v[1] - u[1] * v[0],
         ]
+    }
+
+    #[test]
+    fn default_fdm_even_midplane_snaps_to_lower_cell_center() {
+        let mut d = domain([-1.0; 3], [1.0; 3], "generation-a");
+        d.grid = Some(StructuredGridDescriptor {
+            shape: [2, 2, 2],
+            origin: [-1.0; 3],
+            spacing: [1.0; 3],
+        });
+
+        let resolved = resolve_default_planar_source(
+            &d,
+            &slice(
+                PlanarAxisPlane::Xy,
+                0.5,
+                DefaultPlanarOperatorState::PlaneSample,
+            ),
+        )
+        .expect("valid structured FDM domain should resolve");
+
+        assert_eq!(resolved.frame.origin_m[2], -0.5);
     }
 
     #[test]
@@ -496,5 +585,100 @@ mod tests {
             .unwrap();
         assert_ne!(a.identity.source_hash, b.identity.source_hash);
         assert_ne!(a.identity.source_revision, b.identity.source_revision);
+    }
+
+    #[test]
+    fn default_fdm_slice_snaps_all_planes_and_boundary_fractions() {
+        let mut d = domain([10.0, 20.0, 30.0], [14.0, 32.0, 54.0], "generation-a");
+        d.grid = Some(StructuredGridDescriptor {
+            shape: [2, 3, 4],
+            origin: [10.0, 20.0, 30.0],
+            spacing: [2.0, 4.0, 6.0],
+        });
+        let cases = [
+            (PlanarAxisPlane::Xy, 0.0, 2, 33.0),
+            (PlanarAxisPlane::Xy, 0.5, 2, 39.0),
+            (PlanarAxisPlane::Xy, 1.0, 2, 51.0),
+            (PlanarAxisPlane::Xz, 0.0, 1, 22.0),
+            (PlanarAxisPlane::Xz, 0.5, 1, 26.0),
+            (PlanarAxisPlane::Xz, 1.0, 1, 30.0),
+            (PlanarAxisPlane::Yz, 0.0, 0, 11.0),
+            (PlanarAxisPlane::Yz, 0.5, 0, 11.0),
+            (PlanarAxisPlane::Yz, 1.0, 0, 13.0),
+        ];
+
+        for (plane, position, axis, expected) in cases {
+            let resolved = resolve_default_planar_source(
+                &d,
+                &slice(plane, position, DefaultPlanarOperatorState::PlaneSample),
+            )
+            .unwrap();
+            assert_eq!(
+                resolved.frame.origin_m[axis], expected,
+                "{plane:?} q={position}"
+            );
+        }
+    }
+
+    #[test]
+    fn default_fdm_slice_rejects_invalid_or_mismatched_grid() {
+        let mut invalid = domain([0.0; 3], [2.0; 3], "generation-a");
+        invalid.grid = Some(StructuredGridDescriptor {
+            shape: [2, 2, 2],
+            origin: [0.0; 3],
+            spacing: [1.0, 0.0, 1.0],
+        });
+        let error = resolve_default_planar_source(
+            &invalid,
+            &slice(
+                PlanarAxisPlane::Xy,
+                0.5,
+                DefaultPlanarOperatorState::PlaneSample,
+            ),
+        )
+        .unwrap_err();
+        assert_eq!(error.status, axum::http::StatusCode::UNPROCESSABLE_ENTITY);
+        assert!(error.message.starts_with("planar_default_grid_invalid:"));
+
+        invalid.grid.as_mut().unwrap().spacing = [1.0; 3];
+        invalid.grid.as_mut().unwrap().origin[0] = 0.25;
+        let error = resolve_default_planar_source(
+            &invalid,
+            &slice(
+                PlanarAxisPlane::Xy,
+                0.5,
+                DefaultPlanarOperatorState::PlaneSample,
+            ),
+        )
+        .unwrap_err();
+        assert!(error.message.starts_with("planar_default_grid_invalid:"));
+    }
+
+    #[test]
+    fn default_source_identity_changes_when_structured_grid_changes() {
+        let mut coarse = domain([0.0; 3], [2.0; 3], "generation-a");
+        coarse.grid = Some(StructuredGridDescriptor {
+            shape: [2, 2, 2],
+            origin: [0.0; 3],
+            spacing: [1.0; 3],
+        });
+        let mut fine = domain([0.0; 3], [2.0; 3], "generation-a");
+        fine.grid = Some(StructuredGridDescriptor {
+            shape: [4, 4, 4],
+            origin: [0.0; 3],
+            spacing: [0.5; 3],
+        });
+        let request = slice(
+            PlanarAxisPlane::Xy,
+            0.5,
+            DefaultPlanarOperatorState::PlaneSample,
+        );
+        let coarse = resolve_default_planar_source(&coarse, &request).unwrap();
+        let fine = resolve_default_planar_source(&fine, &request).unwrap();
+        assert_ne!(coarse.identity.source_hash, fine.identity.source_hash);
+        assert_ne!(
+            coarse.identity.source_revision,
+            fine.identity.source_revision
+        );
     }
 }
