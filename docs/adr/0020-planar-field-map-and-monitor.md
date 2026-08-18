@@ -44,6 +44,17 @@ heavy center surface. `viewport-3d` must remain the only WebGL/R3F surface.
 7. Migrate `cross-section-image` to export/fallback and remove it as a
    competing top-level workflow only after science, browser, lifecycle, and
    export parity gates pass.
+8. Use the existing canonical visualization target registry as the only owner
+   of the Airbox, object, and mesh-part identities that it currently publishes.
+   The planar resource stores sparse `target_overrides` keyed by the exact
+   registry `scope + scope_id`, but it does not duplicate target labels,
+   geometry ownership, carrier identity, or resolver rules. The first contract
+   permits only `airbox | object | part`; region, FDM-domain, and native-layer
+   support requires an explicit registry/OpenAPI extension and may not use a
+   second key scheme. The global planar profile remains the backward-compatible
+   fallback. A target override changes only planar presentation for that target;
+   it does not mutate the 3D target override, the authored monitor, the resolved
+   frame/operator, or the planar sample identity.
 
 This decision partially supersedes ADR 0016 only where ADR 0016 accepted a
 static PNG as the first replacement for interactive cross-section inspection.
@@ -69,6 +80,12 @@ single-WebGL invariants.
   mesh interior; it must not infer that boundary from projected float segments.
 - The frontend gains a dedicated renderer lifecycle and byte-bounded resource
   caches, but no second GPU context.
+- Airbox and magnetic-object planar presentation can be edited independently
+  without making Inspector selection a second server-side target registry.
+- A wireframe-only target override is presentation state: it does not refetch
+  scalar/vector payloads or change sampling `sample_token` and scalar/vector/
+  mask/mesh-overlay ETags. It does change visualization-state revision/ETag and
+  style-dependent `render.png` identity.
 
 ## Implementation obligations
 
@@ -90,6 +107,20 @@ single-WebGL invariants.
 - Prove active-only mount, no idle redraw, worker/object cleanup, bounded memory,
   and healthy 3D WebGL recovery in a real browser.
 
+- Define `PlanarTargetPresentationOverride` as `{scope, scope_id,
+  wireframe_style}`. `scope` is `airbox | object | part`, `scope_id` is non-empty,
+  and `(scope, scope_id)` is unique. PATCH replaces the complete ordered list;
+  omission leaves it unchanged and removing an entry restores global fallback.
+- Resolve overrides by exact canonical registry identity. Never match by display
+  label, array position, suffix, or the currently selected Explorer row.
+- PATCH accepts only identities present in the current canonical registry.
+  If a later scene or mesh revision removes a target, its persisted override is
+  dormant, emits a diagnostic, and is not applied. Reappearance of the same
+  canonical identity reactivates the explicitly authored preference; automatic
+  suffix/label remapping and silent pruning are forbidden.
+- Prove that changing an Airbox planar override leaves an object override and
+  its resource request identity byte-for-byte unchanged, and vice versa.
+
 ## Migration
 
 1. Add monitor/IR/sampler/API contracts without changing the existing ribbon.
@@ -109,9 +140,15 @@ single-WebGL invariants.
    authored monitor source. A stale authored ID repairs to `Default` at
    resolution time with a diagnostic.
 
+9. Add sparse per-target planar presentation overrides additively. Existing
+   persisted global planar style remains the fallback and is not dual-written.
+   A target receives an override only after an explicit target-scoped edit;
+   removing that override restores the global fallback.
+
 Rollback may hide `field-map` and restore the static PNG command. It must not
-delete authored monitors, change `ProblemIR`, or replace conservative FEM
-integration with node averaging.
+delete authored monitors, change `ProblemIR`, replace conservative FEM
+integration with node averaging, or rewrite sparse target overrides into the
+global fallback.
 
 ## Validation
 
@@ -124,3 +161,5 @@ integration with node averaging.
 - Managed FDM/FEM runtime reports and browser screenshots/smokes.
 - Full typecheck, zero-warning lint, tests, production build, API hygiene, and
   architecture hygiene.
+- Exact Airbox/object target isolation through optimistic update, HTTP ACK,
+  Inspector focus/scroll stability, and unchanged planar data request counts.

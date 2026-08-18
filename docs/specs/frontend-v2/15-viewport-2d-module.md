@@ -91,6 +91,34 @@ the planar visualization profile or data request. Range is explicit
 only transform presentation. Runtime mesh-part and airbox
 scopes narrow a monitor target but never enter canonical Python or `ProblemIR`.
 
+Planar target presentation reuses the canonical visualization target registry
+identity. The first additive contract is:
+
+```text
+PlanarTargetPresentationOverride {
+  scope: airbox | object | part,
+  scope_id: non-empty string,
+  wireframe_style: { color: string, opacity: finite 0..1 }
+}
+```
+
+`planar.target_overrides` is an ordered list with unique exact `(scope,
+scope_id)` pairs. A PATCH that omits this field leaves it unchanged; a supplied
+list replaces it, and removing an entry restores the global planar wireframe
+fallback. Unknown scopes, blank IDs, duplicates, invalid colors, invalid
+opacity, and identities absent from the current canonical target registry fail
+PATCH validation. If a later scene/mesh revision removes a target, the stored
+entry becomes dormant with a diagnostic and is not applied; the same canonical
+identity may reactivate only that previously explicit preference. Entries never
+copy target labels, ownership, carrier metadata, or selection state. Editing
+the Airbox cannot change an object/part entry, editing an object cannot change
+the Airbox, and wireframe-only changes cannot alter scalar/vector/mask/mesh
+sampling request identity or their ETags. The visualization-state revision and
+ETag do change, and styled `render.png` identity includes the effective target
+wireframe. Three-dimensional target overrides remain independent. Region,
+FDM-domain, and native-layer overrides remain unsupported until the canonical
+backend registry publishes them.
+
 The backend performs physical sampling. FDM uses explicit cell reconstruction
 and cell-intersection measure. FEM P1 uses barycentric point evaluation and
 conservative tetrahedron/boundary measure. Node count is diagnostics only.
@@ -177,5 +205,15 @@ Required tests:
   invalidation are covered below renderer integration;
 - object/region/part/airbox/result/monitor inspector coverage uses one registry
   with independent 3D and planar profiles;
+- schema-9 persisted planar state without `target_overrides` restores schema 10
+  with an empty list and the unchanged global fallback;
+- replacement PATCH, omitted-field no-op, removal-to-fallback, duplicate/
+  unsupported/unknown-target rejection, and expected-revision conflict are
+  covered by API tests;
+- Airbox/object/part overrides remain exact and independent through optimistic
+  state and HTTP ACK, while 3D overrides stay byte-identical;
+- wireframe-only edits change visualization-state and `render.png` identity but
+  leave `sample_token` plus scalar/vector/mask/mesh-overlay requests and ETags
+  unchanged;
 - a 100-switch browser audit proves no increasing worker/listener/canvas count,
   no idle RAF, bounded heap, and a healthy 3D WebGL context after returning.

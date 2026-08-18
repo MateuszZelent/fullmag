@@ -462,6 +462,31 @@ ETag. `FMCS v3` has no boundary proof and is degraded; FDM returns `204` with
 an unavailable descriptor. The sample token and canonical query identity do
 not change.
 
+Visualization schema 10 additively introduces
+`visualization/state.planar.target_overrides` as a list of
+`PlanarTargetPresentationOverride` records. Each record contains `scope`,
+`scope_id`, and a complete `wireframe_style`; permitted scopes are exactly
+`airbox | object | part`. IDs are non-empty, `(scope, scope_id)` pairs are
+unique, and wireframe color/opacity use the same validation as the global
+planar fallback. Every submitted identity must exist in the current canonical
+target registry. Region, FDM-domain, native-layer, full, magnetic, selection,
+and unknown identities fail closed.
+
+The PATCH field is optional. Omission preserves the list; a supplied list
+replaces it atomically under the normal expected-revision transaction, and
+removing an entry restores the global planar wireframe fallback. Existing
+schema-9 persisted input without the field migrates as an empty list and is not
+dual-written. If a later scene or mesh revision removes a registered target,
+its entry is retained as dormant with a diagnostic and is not applied. The same
+canonical identity may reactivate its previously explicit preference; no
+label/suffix remap and no silent prune are legal.
+
+These entries are presentation-only: they do not enter planar data queries,
+`sample_token`, or scalar/vector/mask/mesh-overlay ETags, and they do not mutate
+authored monitors or 3D target overrides. The `visualization/state` revision and
+ETag must change after a successful override mutation. The ETag of a styled
+`render.png` export must include the effective target wireframe style.
+
 The `model` family owns canonical authoring state. Geometry object creation is a model transaction first and a mesh build only after the scene commit succeeds.
 
 The control-room Model explorer is object-first. Ferromagnetic objects own the primary navigation path for geometry, regions, magnetic parameters, magnetic texture, mesh, and visualization. Material and magnetization entries may remain reusable assets in `SceneDocument`, but browser modules focus them through the selected object instead of exposing standalone top-level Model branches.
