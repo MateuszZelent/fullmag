@@ -36575,6 +36575,120 @@ async fn planar_default_fdm_even_depth_uses_cell_centered_midplane() {
 }
 
 #[tokio::test]
+async fn source_parity_across_meta_vector_and_planar() {
+    let state = test_app_state_with_live_session().await;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.metadata = Some(serde_json::json!({
+            "artifact_layout": {
+                "backend": "fdm",
+                "grid_cells": [2, 2, 2],
+                "origin_m": [-1.0, -1.0, -1.0],
+                "cell_size": [1.0, 1.0, 1.0]
+            }
+        }));
+        snapshot.latest_fields = serde_json::from_value(serde_json::json!({
+            "m": {
+                "values": [
+                    [1.0, 0.0, 0.0],
+                    [1.0, 0.0, 0.0],
+                    [1.0, 0.0, 0.0],
+                    [1.0, 0.0, 0.0],
+                    [0.0, 0.0, 0.0],
+                    [0.0, 0.0, 0.0],
+                    [0.0, 0.0, 0.0],
+                    [0.0, 0.0, 0.0]
+                ],
+                "field_revision": 8,
+                "layout": {"grid_cells": [2, 2, 2]}
+            }
+        }))
+        .expect("source parity FDM field should deserialize");
+        snapshot.field_quantity_revisions.insert("m".to_string(), 8);
+    }
+    let app = build_v2_router().with_state(state);
+
+    let field_meta_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/fields/m/meta")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(field_meta_response.status(), StatusCode::OK);
+    let field_meta = body_json(field_meta_response).await;
+    assert_eq!(field_meta["field_revision"], serde_json::json!(8));
+    assert_eq!(field_meta["stats"]["min"], serde_json::json!(0.0));
+    assert_eq!(field_meta["stats"]["max"], serde_json::json!(1.0));
+    assert_eq!(field_meta["stats"]["mean"], serde_json::json!(1.0 / 6.0));
+
+    let vector_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/fields/m/samples/vector?component=full&scope_kind=full")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(vector_response.status(), StatusCode::OK);
+    assert_eq!(vector_response.headers()["x-fullmag-field-revision"], "8");
+    assert_eq!(
+        vector_response.headers()["x-fullmag-domain-generation-id"],
+        field_meta["domain_generation_id"].as_str().unwrap()
+    );
+    assert_eq!(vector_response.headers()["x-fullmag-quantity-id"], "m");
+    let vector_values = decode_fmvp_payload_f64(&body_bytes(vector_response).await);
+    assert_eq!(vector_values.len(), 24);
+    assert_eq!(
+        &vector_values[..12],
+        &[1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0]
+    );
+    assert!(vector_values[12..].iter().all(|value| *value == 0.0));
+
+    let planar_meta_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/data/fields/m/planar-default/meta?component=magnitude&resolution_x=16&resolution_y=16")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(planar_meta_response.status(), StatusCode::OK);
+    let planar_meta = body_json(planar_meta_response).await;
+    assert_eq!(planar_meta["field_revision"], serde_json::json!("8"));
+    assert_eq!(
+        planar_meta["generation_id"],
+        field_meta["domain_generation_id"]
+    );
+    assert_eq!(planar_meta["field_source"], "live");
+    assert_eq!(planar_meta["scalar_min"], serde_json::json!(1.0));
+    assert_eq!(planar_meta["scalar_max"], serde_json::json!(1.0));
+
+    let scalar_response = app
+        .oneshot(
+            Request::builder()
+                .uri(
+                    planar_meta["links"]["scalar"]
+                        .as_str()
+                        .expect("planar meta scalar link"),
+                )
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(scalar_response.status(), StatusCode::OK);
+    let scalar_values = decode_fmvp_payload_f64(&body_bytes(scalar_response).await);
+    assert_eq!(scalar_values, vec![1.0; 256]);
+}
+
+#[tokio::test]
 async fn planar_default_meta_publishes_source_and_offset_domain_frame() {
     let state = test_app_state_with_live_session().await;
     if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
