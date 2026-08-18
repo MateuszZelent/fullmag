@@ -37,19 +37,34 @@ No constructor parameters are owned by this conceptual page.
 ### Spatial field authoring
 
 ```python
-# %% Define a spatially varying material parameter in SI units
+# %% Define a spatially varying material parameter through the stage-first body API
 import fullmag as fm
 
-study = fm.study("spatial_param_study", engine="fem", device="gpu", mode="strict")
-ms_profile = fm.MaterialParameterField.linear(
-    base=8.0e5,
-    gradient=(0.0, 0.0, 1.0e12),
-    frame="object",
-    unit="A/m",
+nm = 1.0e-9
+
+study = fm.study("spatial_param_study")
+study.engine("fdm")
+study.device("cpu", precision="double")
+study.mode("strict")
+
+study.objects.mesh.defaults(cell_size=(2 * nm, 2 * nm, 5 * nm))
+film = study.geometry(fm.Box(100 * nm, 50 * nm, 10 * nm), name="film")
+film.Ms = 800.0e3
+film.Aex = 13.0e-12
+film.alpha = 0.02
+film.m = fm.init.UniformMagnetization((1.0, 0.0, 0.0))
+
+film.set_material_field(
+    "Ms",
+    fm.MaterialParameterField.linear(
+        base=8.0e5,
+        gradient=(0.0, 0.0, 1.0e12),
+        frame="object",
+        unit="A/m",
+    ),
 )
-py = fm.Ferromagnet("Py", Ms=ms_profile, Aex=1.3e-11)
-study.set_state(film=fm.Box(size=(100e-9, 50e-9, 10e-9)), material=py)
-study.stages.add_relax(algorithm="llg_overdamped")
+study.exchange()
+study.stages.add_run(stage_id="run", until=1.0e-12)
 ```
 
 

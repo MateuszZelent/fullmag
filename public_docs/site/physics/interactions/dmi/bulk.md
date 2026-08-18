@@ -175,8 +175,8 @@ study = fm.study("bulk_dmi_helical_state")
 study.engine("fdm")
 study.device("cpu", precision="double")
 study.mode("strict")
-study.pbc(x=True, y=True, z=True)
 study.objects.mesh.defaults(cell_size=(2 * nm, 2 * nm, 2 * nm))
+study.pbc(x=True, y=True, z=True)
 
 # %% Geometry, B20 material, transverse helix, and interactions
 crystal = study.geometry(

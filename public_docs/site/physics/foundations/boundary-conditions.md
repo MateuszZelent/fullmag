@@ -113,9 +113,9 @@ study = fm.study("periodic-boundary-example")
 study.engine("fem")
 study.device("cpu", precision="double")
 study.mode("strict")
+study.objects.mesh.defaults(cell_size=(2 * nm, 2 * nm, 2 * nm))
 study.pbc(x=True, y=True, demag="open")
 study.exchange()
-study.objects.mesh.defaults(cell_size=(2 * nm, 2 * nm, 2 * nm))
 body = study.geometry(fm.Box(40 * nm, 40 * nm, 2 * nm), name="film")
 body.Ms = 800.0e3
 body.Aex = 13.0e-12

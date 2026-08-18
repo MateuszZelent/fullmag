@@ -115,8 +115,8 @@ study = fm.study("periodic_fdm_demag")
 study.engine("fdm")
 study.device("cpu", precision="double")
 study.mode("strict")
-study.pbc(x=True, y=True, z=False, demag="truncated_images", images=(4, 4, 0))
 study.objects.mesh.defaults(cell_size=(2 * nm, 2 * nm, 5 * nm))
+study.pbc(x=True, y=True, z=False, demag="truncated_images", images=(4, 4, 0))
 film = study.geometry(
     fm.Box(size=(100 * nm, 20 * nm, 5 * nm), name="film"),
     name="film",

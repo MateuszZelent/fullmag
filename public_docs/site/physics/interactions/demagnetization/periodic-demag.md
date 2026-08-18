@@ -79,6 +79,7 @@ study = fm.study("periodic_demag_convergence")
 study.engine("fdm")
 study.device("cpu", precision="double")
 study.mode("strict")
+study.objects.mesh.defaults(cell_size=(3 * nm, 3 * nm, 4 * nm))
 study.pbc(
     x=True,
     y=True,
@@ -86,7 +87,6 @@ study.pbc(
     demag="truncated_images",
     images=(4, 4, 0),
 )
-study.objects.mesh.defaults(cell_size=(3 * nm, 3 * nm, 4 * nm))
 
 # %% Geometry, material, initial state, and interactions
 film = study.geometry(

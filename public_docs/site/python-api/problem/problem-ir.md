@@ -36,15 +36,35 @@ No constructor parameters are owned by this conceptual page.
 
 ### Authoring-to-IR inspection
 
+Public examples do not construct `fm.Problem(...)` directly. Lowering is inspected through the
+individual object-level `to_ir()` fragments that the builder composes; the complete problem-level
+lowering remains the canonical `Problem.to_ir()` contract.
+
 ```python
-# %% Inspect the canonical IR lowering of a study scenario
+# %% Complete stage-first study plus object-level lowering fragments
 import fullmag as fm
 
-study = fm.study("ir_inspection_study", engine="fem", device="gpu", mode="strict")
-study.set_state(film=fm.Box(size=(100e-9, 50e-9, 10e-9)), material=fm.Ferromagnet.permalloy())
-stage = study.stages.add_relax(algorithm="llg_overdamped")
-ir_dict = stage.to_ir()
-assert ir_dict is not None
+nm = 1.0e-9
+
+study = fm.study("ir_inspection_study")
+study.engine("fdm")
+study.device("cpu", precision="double")
+study.mode("strict")
+
+study.objects.mesh.defaults(cell_size=(2 * nm, 2 * nm, 5 * nm))
+film = study.geometry(fm.Box(100 * nm, 50 * nm, 10 * nm), name="film")
+film.Ms = 800.0e3
+film.Aex = 13.0e-12
+film.alpha = 0.02
+film.m = fm.init.UniformMagnetization((1.0, 0.0, 0.0))
+study.exchange()
+study.stages.add_run(stage_id="run", until=1.0e-12)
+
+# Object-level lowering fragments used by the canonical ProblemIR build:
+geometry_ir = fm.Box(100 * nm, 50 * nm, 10 * nm).to_ir()
+state_ir = fm.init.UniformMagnetization((1.0, 0.0, 0.0)).to_ir()
+assert geometry_ir["kind"] == "box"
+assert state_ir["kind"] == "uniform"
 ```
 
 
