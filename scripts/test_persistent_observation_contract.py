@@ -1,11 +1,19 @@
 from __future__ import annotations
 
+import copy
 import json
 from pathlib import Path
+import sys
 import unittest
 
 
 ROOT = Path(__file__).resolve().parents[1]
+FULLMAG_PYTHON_ROOT = ROOT / "packages/fullmag-py/src"
+sys.path.insert(0, str(FULLMAG_PYTHON_ROOT))
+
+from fullmag import FieldAutosave, TableAutosave  # noqa: E402
+
+
 PHYSICS_NOTE = ROOT / "docs/physics/interactive-observation-and-restart-semantics.md"
 ADR = ROOT / "docs/adr/0025-persistent-runtime-and-observation-sources.md"
 OBSERVABLE_DESIGN = (
@@ -58,6 +66,41 @@ PUBLIC_API_PARAMETERS = {
     "StageAutosave.table",
     "StageAutosave.fields",
 }
+EXPECTED_EQUATION_SYMBOLS = {
+    "eq-observation-functional": {"q_i", "F_i", "m", "t", "P", "Pi", "D", "C_i"},
+    "eq-accepted-state-id": {
+        "I_acc",
+        "R",
+        "U",
+        "n",
+        "t",
+        "dt",
+        "d_Gamma",
+        "d_S",
+        "d_D",
+        "d_Pi",
+        "Gamma",
+    },
+    "eq-quantity-availability": {"A", "Q"},
+    "eq-resume-trajectory": {"S_n", "K_n", "Phi"},
+}
+
+
+def _assert_exact_equation_symbols(
+    case: unittest.TestCase,
+    source_map: dict[str, object],
+) -> None:
+    equations = {
+        equation["id"]: equation
+        for equation in source_map["equations"]
+    }
+    case.assertEqual(set(equations), set(EXPECTED_EQUATION_SYMBOLS))
+    for equation_id, expected_symbols in EXPECTED_EQUATION_SYMBOLS.items():
+        case.assertEqual(
+            set(equations[equation_id]["symbols"]),
+            expected_symbols,
+            f"{equation_id}: incomplete or unexpected symbols",
+        )
 
 
 class PersistentObservationContractTest(unittest.TestCase):
@@ -201,22 +244,7 @@ class PersistentObservationContractTest(unittest.TestCase):
         equations = {equation["id"]: equation for equation in source_map["equations"]}
         sources = {source["id"]: source for source in source_map["sources"]}
 
-        self.assertIn("F_i", equations["eq-observation-functional"]["symbols"])
-        self.assertTrue(
-            {
-                "I_acc",
-                "R",
-                "U",
-                "n",
-                "t",
-                "dt",
-                "d_Gamma",
-                "d_S",
-                "d_D",
-                "d_Pi",
-                "Gamma",
-            }.issubset(equations["eq-accepted-state-id"]["symbols"])
-        )
+        _assert_exact_equation_symbols(self, source_map)
         for equation in equations.values():
             self.assertTrue(equation["sources"], f"{equation['id']}: no sources")
             for source_id in equation["sources"]:
@@ -245,6 +273,28 @@ class PersistentObservationContractTest(unittest.TestCase):
                 "class FieldAutosave",
             }.issubset(class_symbols)
         )
+
+    def test_equation_symbol_gate_rejects_incomplete_or_extra_sets(self) -> None:
+        source_map = json.loads(SOURCE_MAP.read_text(encoding="utf-8"))
+        for equation_id, expected_symbols in EXPECTED_EQUATION_SYMBOLS.items():
+            equation_index = next(
+                index
+                for index, equation in enumerate(source_map["equations"])
+                if equation["id"] == equation_id
+            )
+            missing = copy.deepcopy(source_map)
+            missing["equations"][equation_index]["symbols"].remove(
+                sorted(expected_symbols)[0]
+            )
+            with self.subTest(equation=equation_id, mutation="missing"):
+                with self.assertRaises(AssertionError):
+                    _assert_exact_equation_symbols(self, missing)
+
+            extra = copy.deepcopy(source_map)
+            extra["equations"][equation_index]["symbols"].append("unexpected")
+            with self.subTest(equation=equation_id, mutation="extra"):
+                with self.assertRaises(AssertionError):
+                    _assert_exact_equation_symbols(self, extra)
 
     def test_autosave_auto_policies_map_both_problem_ir_variants(self) -> None:
         source_map = json.loads(SOURCE_MAP.read_text(encoding="utf-8"))
@@ -289,6 +339,56 @@ class PersistentObservationContractTest(unittest.TestCase):
                 si_unit == "1" or (si_unit.startswith("\\") and "{" in si_unit),
                 f"{parameter['python']}: SI unit is not LaTeX: {si_unit!r}",
             )
+
+    def test_public_autosave_to_ir_covers_numeric_and_auto_periods(self) -> None:
+        default_quantities = [
+            "step",
+            "t",
+            "mx",
+            "my",
+            "mz",
+            "e_total",
+            "max_torque",
+        ]
+        auto_policy = {
+            "kind": "auto_sinc_cutoff",
+            "nyquist_guard_factor": 1.3,
+        }
+
+        self.assertEqual(
+            TableAutosave(t_sampl=0.25).to_ir(),
+            {
+                "kind": "table_autosave",
+                "table_id": "default",
+                "quantities": default_quantities,
+                "sample_period_s": 0.25,
+            },
+        )
+        self.assertEqual(
+            TableAutosave(t_sampl="auto").to_ir(),
+            {
+                "kind": "table_autosave",
+                "table_id": "default",
+                "quantities": default_quantities,
+                "sample_period_policy": auto_policy,
+            },
+        )
+        self.assertEqual(
+            FieldAutosave(quantity="m", every=0.25).to_ir(),
+            {
+                "kind": "field_autosave",
+                "quantity": "m",
+                "every_seconds": 0.25,
+            },
+        )
+        self.assertEqual(
+            FieldAutosave(quantity="m", every="auto").to_ir(),
+            {
+                "kind": "field_autosave",
+                "quantity": "m",
+                "sample_period_policy": auto_policy,
+            },
+        )
 
 
 if __name__ == "__main__":
