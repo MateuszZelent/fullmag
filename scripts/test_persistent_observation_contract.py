@@ -202,6 +202,21 @@ class PersistentObservationContractTest(unittest.TestCase):
         sources = {source["id"]: source for source in source_map["sources"]}
 
         self.assertIn("F_i", equations["eq-observation-functional"]["symbols"])
+        self.assertTrue(
+            {
+                "I_acc",
+                "R",
+                "U",
+                "n",
+                "t",
+                "dt",
+                "d_Gamma",
+                "d_S",
+                "d_D",
+                "d_Pi",
+                "Gamma",
+            }.issubset(equations["eq-accepted-state-id"]["symbols"])
+        )
         for equation in equations.values():
             self.assertTrue(equation["sources"], f"{equation['id']}: no sources")
             for source_id in equation["sources"]:
@@ -218,9 +233,10 @@ class PersistentObservationContractTest(unittest.TestCase):
         self.assertEqual(backend_statuses, {"unqualified"})
 
         parameters = {
-            parameter["python"] for parameter in source_map["public_api"]["parameters"]
+            parameter["python"]: parameter
+            for parameter in source_map["public_api"]["parameters"]
         }
-        self.assertEqual(parameters, PUBLIC_API_PARAMETERS)
+        self.assertEqual(set(parameters), PUBLIC_API_PARAMETERS)
         class_symbols = {source["symbol"] for source in source_map["sources"]}
         self.assertTrue(
             {
@@ -229,6 +245,50 @@ class PersistentObservationContractTest(unittest.TestCase):
                 "class FieldAutosave",
             }.issubset(class_symbols)
         )
+
+    def test_autosave_auto_policies_map_both_problem_ir_variants(self) -> None:
+        source_map = json.loads(SOURCE_MAP.read_text(encoding="utf-8"))
+        parameters = {
+            parameter["python"]: parameter
+            for parameter in source_map["public_api"]["parameters"]
+        }
+        for parameter_name, numeric_path, policy_path in (
+            (
+                "TableAutosave.t_sampl",
+                "sampling.stage_autosave.table.sample_period_s",
+                "sampling.stage_autosave.table.sample_period_policy",
+            ),
+            (
+                "FieldAutosave.every",
+                "sampling.stage_autosave.fields[].every_seconds",
+                "sampling.stage_autosave.fields[].sample_period_policy",
+            ),
+        ):
+            problem_ir = parameters[parameter_name]["problem_ir"]
+            self.assertIn(numeric_path, problem_ir)
+            self.assertIn(policy_path, problem_ir)
+
+    def test_public_api_units_are_latex(self) -> None:
+        source_map = json.loads(SOURCE_MAP.read_text(encoding="utf-8"))
+        parameters = {
+            parameter["python"]: parameter
+            for parameter in source_map["public_api"]["parameters"]
+        }
+        expected_quantity_units = {
+            "TableAutosave.quantities": r"\text{quantity-dependent}",
+            "TableAutosave.extra_quantities": r"\text{quantity-dependent}",
+            "TableAutosave.expressions": r"\text{expression-dependent}",
+            "FieldAutosave.quantity": r"\text{quantity-dependent}",
+        }
+        for parameter_name, si_unit in expected_quantity_units.items():
+            self.assertEqual(parameters[parameter_name]["si_unit"], si_unit)
+
+        for parameter in parameters.values():
+            si_unit = parameter["si_unit"]
+            self.assertTrue(
+                si_unit == "1" or (si_unit.startswith("\\") and "{" in si_unit),
+                f"{parameter['python']}: SI unit is not LaTeX: {si_unit!r}",
+            )
 
 
 if __name__ == "__main__":
