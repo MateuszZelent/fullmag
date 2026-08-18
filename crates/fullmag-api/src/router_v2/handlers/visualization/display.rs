@@ -16,20 +16,20 @@ use crate::schemas::visualization_state::{
     BasicLayerState, ClipAxis, ClipVisualizationState, DefaultPlanarOperatorState,
     DomainVisualizationState, FdmVisualizationState, FemTopologyMode, FemVisualizationState,
     FerromagnetVisibilityMode, PlanarColorRangeMode, PlanarSourceSelectionState,
-    PlanarVisualizationPatch, PlanarVisualizationState, SamplingProfile,
-    SamplingVisualizationState, SliceAirboxRenderMode, SliceRenderMode, SliceVisualizationMode,
-    SliceVisualizationState, SurfaceColorSource, SurfaceFieldProjectionMode,
-    TrimAxisVisualizationAxes, TrimAxisVisualizationAxesPatch, TrimAxisVisualizationPatch,
-    TrimAxisVisualizationState, TrimVisualizationState, VectorColorMode, VectorLayerDomain,
-    VectorLayerPatch, VectorLayerState, VectorStyleVisualizationState, VisualizationCameraPatch,
-    VisualizationCameraProjection, VisualizationCameraState, VisualizationClientAckEntry,
-    VisualizationClientAckRequest, VisualizationClientAckResource, VisualizationDiagnostics,
-    VisualizationLayerPatch, VisualizationLayerState, VisualizationOverrideState,
-    VisualizationResolvedTargetSettings, VisualizationScopeKind, VisualizationStatePatch,
-    VisualizationStateResource, VisualizationTargetDisplayOverride,
-    VisualizationTargetGeometryScope, VisualizationTargetRegistryEntry,
-    VisualizationTargetRegistryState, VisualizationTargetRenderMode, VisualizationTargetSource,
-    DEFAULT_AIRBOX_VECTOR_BUDGET,
+    PlanarTargetPresentationOverrideState, PlanarVisualizationPatch, PlanarVisualizationState,
+    SamplingProfile, SamplingVisualizationState, SliceAirboxRenderMode, SliceRenderMode,
+    SliceVisualizationMode, SliceVisualizationState, SurfaceColorSource,
+    SurfaceFieldProjectionMode, TrimAxisVisualizationAxes, TrimAxisVisualizationAxesPatch,
+    TrimAxisVisualizationPatch, TrimAxisVisualizationState, TrimVisualizationState,
+    VectorColorMode, VectorLayerDomain, VectorLayerPatch, VectorLayerState,
+    VectorStyleVisualizationState, VisualizationCameraPatch, VisualizationCameraProjection,
+    VisualizationCameraState, VisualizationClientAckEntry, VisualizationClientAckRequest,
+    VisualizationClientAckResource, VisualizationDiagnostics, VisualizationLayerPatch,
+    VisualizationLayerState, VisualizationOverrideState, VisualizationResolvedTargetSettings,
+    VisualizationScopeKind, VisualizationStatePatch, VisualizationStateResource,
+    VisualizationTargetDisplayOverride, VisualizationTargetGeometryScope,
+    VisualizationTargetRegistryEntry, VisualizationTargetRegistryState,
+    VisualizationTargetRenderMode, VisualizationTargetSource, DEFAULT_AIRBOX_VECTOR_BUDGET,
 };
 use crate::types::{
     AppState, CurrentDisplaySelection, DisplayPresentationState, SessionStateResponse,
@@ -170,6 +170,8 @@ pub async fn replace_visualization_state(
 ) -> Result<Json<VisualizationStateResource>, ApiError> {
     validate_camera_state(&replacement.camera)?;
     validate_planar_visualization_state(&replacement.planar)?;
+    validate_planar_target_override_identities(&state, &replacement.planar.target_overrides)
+        .await?;
     validate_planar_source_selection(&state, &replacement.planar.source).await?;
     let display_replacement = visualization_state_to_display_selection(&replacement);
     apply_display_replace(state.clone(), display_replacement).await?;
@@ -232,6 +234,9 @@ pub async fn patch_visualization_state(
 ) -> Result<Json<VisualizationStateResource>, ApiError> {
     validate_visualization_state_patch(&update)?;
     if let Some(planar) = &update.planar {
+        if let Some(target_overrides) = &planar.target_overrides {
+            validate_planar_target_override_identities(&state, target_overrides).await?;
+        }
         if let Some(source) = &planar.source {
             validate_planar_source_selection(&state, source).await?;
         }
@@ -592,6 +597,9 @@ fn validate_planar_visualization_patch(patch: &PlanarVisualizationPatch) -> Resu
             "planar.wireframe_style requires a color and finite opacity between 0 and 1",
         ));
     }
+    if let Some(target_overrides) = &patch.target_overrides {
+        validate_planar_target_overrides(target_overrides)?;
+    }
     if matches!(
         patch.point_style.as_ref(),
         Some(style)
@@ -639,6 +647,86 @@ fn validate_planar_visualization_patch(patch: &PlanarVisualizationPatch) -> Resu
     Ok(())
 }
 
+fn validate_planar_target_overrides(
+    overrides: &[PlanarTargetPresentationOverrideState],
+) -> Result<(), ApiError> {
+    for (index, target_override) in overrides.iter().enumerate() {
+        if planar_target_override_scope_name(target_override.scope).is_none() {
+            return Err(ApiError::bad_request(format!(
+                "unsupported_planar_target_override_scope: planar.target_overrides[{index}].scope must be airbox, object, or part"
+            )));
+        }
+        if target_override.scope_id.trim().is_empty() {
+            return Err(ApiError::bad_request(format!(
+                "planar.target_overrides[{index}].scope_id must not be empty"
+            )));
+        }
+        if target_override.wireframe_style.color.trim().is_empty()
+            || !target_override.wireframe_style.opacity.is_finite()
+            || !(0.0..=1.0).contains(&target_override.wireframe_style.opacity)
+        {
+            return Err(ApiError::bad_request(format!(
+                "planar.target_overrides[{index}].wireframe_style requires a color and finite opacity between 0 and 1"
+            )));
+        }
+        if overrides[..index].iter().any(|previous| {
+            previous.scope == target_override.scope && previous.scope_id == target_override.scope_id
+        }) {
+            return Err(ApiError::bad_request(format!(
+                "planar.target_overrides contains duplicate scope and scope_id at index {index}"
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn planar_target_override_scope_name(scope: VisualizationScopeKind) -> Option<&'static str> {
+    match scope {
+        VisualizationScopeKind::Airbox => Some("airbox"),
+        VisualizationScopeKind::Object => Some("object"),
+        VisualizationScopeKind::Part => Some("part"),
+        _ => None,
+    }
+}
+
+fn planar_target_override_exists_in_registry(
+    target_override: &PlanarTargetPresentationOverrideState,
+    targets: &VisualizationTargetRegistryState,
+) -> bool {
+    match target_override.scope {
+        VisualizationScopeKind::Airbox => targets.airbox.scope_id == target_override.scope_id,
+        VisualizationScopeKind::Object => targets
+            .objects
+            .iter()
+            .any(|target| target.scope_id == target_override.scope_id),
+        VisualizationScopeKind::Part => targets
+            .parts
+            .iter()
+            .any(|target| target.scope_id == target_override.scope_id),
+        _ => false,
+    }
+}
+
+fn dormant_planar_target_override_reasons(
+    overrides: &[PlanarTargetPresentationOverrideState],
+    targets: &VisualizationTargetRegistryState,
+) -> Vec<String> {
+    overrides
+        .iter()
+        .filter(|target_override| {
+            !planar_target_override_exists_in_registry(target_override, targets)
+        })
+        .filter_map(|target_override| {
+            planar_target_override_scope_name(target_override.scope).map(|scope| {
+                format!(
+                    "planar_target_override_dormant:scope={scope},scope_id={}",
+                    target_override.scope_id
+                )
+            })
+        })
+        .collect()
+}
+
 fn validate_planar_visualization_state(state: &PlanarVisualizationState) -> Result<(), ApiError> {
     validate_planar_visualization_patch(&PlanarVisualizationPatch {
         source: Some(state.source.clone()),
@@ -646,10 +734,39 @@ fn validate_planar_visualization_state(state: &PlanarVisualizationState) -> Resu
         range: Some(state.range.clone()),
         raster_opacity: Some(state.raster_opacity),
         wireframe_style: Some(state.wireframe_style.clone()),
+        target_overrides: Some(state.target_overrides.clone()),
         point_style: Some(state.point_style.clone()),
         vector_style: Some(state.vector_style.clone()),
         ..PlanarVisualizationPatch::default()
     })
+}
+
+async fn validate_planar_target_override_identities(
+    state: &Arc<AppState>,
+    overrides: &[PlanarTargetPresentationOverrideState],
+) -> Result<(), ApiError> {
+    if overrides.is_empty() {
+        return Ok(());
+    }
+    let targets = {
+        let selection = state.current_display_selection.read().await;
+        let presentation = state.current_display_presentation.read().await;
+        let live_snapshot = state.current_live_state.read().await;
+        build_visualization_state_response(&selection, &presentation, live_snapshot.as_ref())
+            .targets
+    };
+
+    for (index, target_override) in overrides.iter().enumerate() {
+        if !planar_target_override_exists_in_registry(target_override, &targets) {
+            let scope = planar_target_override_scope_name(target_override.scope)
+                .expect("planar target override scope was validated");
+            return Err(ApiError::bad_request(format!(
+                "unknown_planar_target_override_identity: planar.target_overrides[{index}] target ({scope}, {}) does not exist in current target registry",
+                target_override.scope_id
+            )));
+        }
+    }
+    Ok(())
 }
 
 async fn validate_planar_source_selection(
@@ -731,6 +848,9 @@ fn apply_planar_visualization_patch(
     }
     if let Some(wireframe_style) = &patch.wireframe_style {
         state.wireframe_style = wireframe_style.clone();
+    }
+    if let Some(target_overrides) = &patch.target_overrides {
+        state.target_overrides = target_overrides.clone();
     }
     if let Some(point_style) = &patch.point_style {
         state.point_style = point_style.clone();
@@ -1943,10 +2063,12 @@ pub(crate) fn build_visualization_state_response(
         &overrides,
         live_snapshot,
     );
+    let degraded_reasons =
+        dormant_planar_target_override_reasons(&planar.target_overrides, &targets);
 
     VisualizationStateResource {
         revision: selection.revision,
-        schema_version: 9,
+        schema_version: 10,
         quantity: crate::schemas::visualization_state::QuantityVisualizationState {
             active_quantity_id: quantity.active_quantity_id.clone(),
             field_component: quantity.field_component,
@@ -1973,7 +2095,7 @@ pub(crate) fn build_visualization_state_response(
         targets,
         diagnostics: VisualizationDiagnostics {
             warnings: presentation.visualization_restore_warnings.clone(),
-            degraded_reasons: Vec::new(),
+            degraded_reasons,
         },
         active_quantity_id: quantity.active_quantity_id,
         view_mode: match selection.selection.view_mode {

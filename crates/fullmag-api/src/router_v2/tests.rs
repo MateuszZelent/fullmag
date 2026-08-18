@@ -5106,7 +5106,7 @@ async fn visualization_state_exposes_v2_layer_model_with_legacy_projection() {
     assert_eq!(response.status(), StatusCode::OK);
 
     let json = body_json(response).await;
-    assert_eq!(json["schema_version"], 9);
+    assert_eq!(json["schema_version"], 10);
     assert_eq!(json["planar"]["layers"]["bounds"], false);
     assert_eq!(json["planar"]["layers"]["points"], false);
     assert_eq!(
@@ -5370,7 +5370,7 @@ async fn visualization_state_patch_accepts_nested_v2_controls() {
     assert_eq!(response.status(), StatusCode::OK);
 
     let json = body_json(response).await;
-    assert_eq!(json["schema_version"], 9);
+    assert_eq!(json["schema_version"], 10);
     assert_eq!(json["active_quantity_id"], "h_eff");
     assert_eq!(json["quantity"]["active_quantity_id"], "h_eff");
     assert_eq!(json["field_component"], "magnitude");
@@ -5482,6 +5482,539 @@ async fn visualization_default_planar_source_is_xy_midplane() {
     assert_eq!(json["planar"]["point_style"]["size"], 3.0);
     assert_eq!(json["planar"]["vector_style"]["opacity"], 1.0);
     assert_eq!(json["planar"]["vector_style"]["thickness"], 1.0);
+}
+
+#[tokio::test]
+async fn visualization_planar_target_overrides_default_empty_for_legacy_payload() {
+    let app = build_v2_router().with_state(test_app_state_with_live_session().await);
+    let current = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/visualization/state")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let mut legacy = body_json(current).await;
+    legacy["planar"]
+        .as_object_mut()
+        .expect("planar state must be an object")
+        .remove("target_overrides");
+    legacy["schema_version"] = serde_json::json!(9);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("PUT")
+                .uri("/v2/sessions/current/visualization/state")
+                .header("content-type", "application/json")
+                .body(Body::from(legacy.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let json = body_json(response).await;
+    assert_eq!(json["schema_version"], 10);
+    assert_eq!(json["planar"]["target_overrides"], serde_json::json!([]));
+}
+
+#[tokio::test]
+async fn visualization_planar_target_overrides_replace_independently() {
+    let state = test_app_state_with_live_session().await;
+    let mut scene = sample_scene_document();
+    scene.objects[0].id = "object-1".to_string();
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.scene_document = Some(scene);
+    }
+    let app = build_v2_router().with_state(state);
+    let before = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/visualization/state")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let before = body_json(before).await;
+    let preserved_planar_fields = [
+        "source",
+        "default_slice",
+        "quantity_id",
+        "component",
+        "resolution",
+        "interaction",
+    ]
+    .map(|field| (field, before["planar"][field].clone()));
+    let global_wireframe_style = before["planar"]["wireframe_style"].clone();
+    let top_level_overrides = before["overrides"].clone();
+    let object_scope_id = before["targets"]["objects"][0]["scope_id"]
+        .as_str()
+        .expect("fixture must expose one canonical object target")
+        .to_string();
+    let object_override = serde_json::json!({
+        "scope": "object",
+        "scope_id": object_scope_id,
+        "wireframe_style": {
+            "color": "#224466",
+            "opacity": 0.35
+        }
+    });
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri("/v2/sessions/current/visualization/state")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "planar": {
+                            "target_overrides": [
+                                {
+                                    "scope": "airbox",
+                                    "scope_id": "airbox",
+                                    "wireframe_style": {
+                                        "color": "#ff8800",
+                                        "opacity": 0.8
+                                    }
+                                },
+                                object_override.clone()
+                            ]
+                        }
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let first = body_json(response).await;
+    assert_eq!(first["schema_version"], 10);
+    assert_eq!(first["planar"]["target_overrides"][1], object_override);
+    assert_eq!(first["planar"]["wireframe_style"], global_wireframe_style);
+    assert_eq!(first["overrides"], top_level_overrides);
+    for (field, value) in &preserved_planar_fields {
+        assert_eq!(
+            first["planar"].get(*field),
+            Some(value),
+            "planar.{field} changed"
+        );
+    }
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri("/v2/sessions/current/visualization/state")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "planar": {
+                            "target_overrides": [
+                                {
+                                    "scope": "airbox",
+                                    "scope_id": "airbox",
+                                    "wireframe_style": {
+                                        "color": "#00aaff",
+                                        "opacity": 0.55
+                                    }
+                                },
+                                object_override.clone()
+                            ]
+                        }
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let second = body_json(response).await;
+    assert_eq!(
+        second["planar"]["target_overrides"][0]["wireframe_style"]["color"],
+        "#00aaff"
+    );
+    assert_eq!(
+        second["planar"]["target_overrides"][0]["wireframe_style"]["opacity"],
+        0.55
+    );
+    assert_eq!(second["planar"]["target_overrides"][1], object_override);
+    assert_eq!(second["planar"]["wireframe_style"], global_wireframe_style);
+    assert_eq!(second["overrides"], top_level_overrides);
+    for (field, value) in &preserved_planar_fields {
+        assert_eq!(
+            second["planar"].get(*field),
+            Some(value),
+            "planar.{field} changed"
+        );
+    }
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri("/v2/sessions/current/visualization/state")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "planar": {
+                            "target_overrides": [
+                                {
+                                    "scope": "airbox",
+                                    "scope_id": "airbox",
+                                    "wireframe_style": {
+                                        "color": "#00aaff",
+                                        "opacity": 0.55
+                                    }
+                                }
+                            ]
+                        }
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let third = body_json(response).await;
+    assert_eq!(
+        third["planar"]["target_overrides"],
+        serde_json::json!([
+            {
+                "scope": "airbox",
+                "scope_id": "airbox",
+                "wireframe_style": {
+                    "color": "#00aaff",
+                    "opacity": 0.55
+                }
+            }
+        ])
+    );
+}
+
+#[tokio::test]
+async fn visualization_planar_target_overrides_remain_dormant_after_target_removal() {
+    let state = test_app_state_with_live_session().await;
+    let mut scene = sample_scene_document();
+    scene.objects[0].id = "temporary-object".to_string();
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.scene_document = Some(scene);
+    }
+    let app = build_v2_router().with_state(state.clone());
+    let object_override = serde_json::json!({
+        "scope": "object",
+        "scope_id": "temporary-object",
+        "wireframe_style": {
+            "color": "#335577",
+            "opacity": 0.45
+        }
+    });
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri("/v2/sessions/current/visualization/state")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "planar": {
+                            "target_overrides": [object_override.clone()]
+                        }
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    {
+        let mut live = state.current_live_state.write().await;
+        live.as_mut()
+            .and_then(|snapshot| snapshot.scene_document.as_mut())
+            .expect("fixture must retain a scene document")
+            .objects
+            .clear();
+    }
+
+    let dormant_reason = "planar_target_override_dormant:scope=object,scope_id=temporary-object";
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/visualization/state")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let dormant_get = body_json(response).await;
+    assert_eq!(
+        dormant_get["diagnostics"]["degraded_reasons"],
+        serde_json::json!([dormant_reason])
+    );
+    assert_eq!(
+        dormant_get["planar"]["target_overrides"][0],
+        object_override
+    );
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri("/v2/sessions/current/visualization/state")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "planar": {"raster_opacity": 0.42}
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let dormant = body_json(response).await;
+    assert_eq!(dormant["planar"]["raster_opacity"], 0.42);
+    assert_eq!(dormant["planar"]["target_overrides"][0], object_override);
+
+    assert_eq!(
+        dormant["diagnostics"]["degraded_reasons"],
+        serde_json::json!([dormant_reason])
+    );
+
+    let mut restored_scene = sample_scene_document();
+    restored_scene.objects[0].id = "temporary-object".to_string();
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.scene_document = Some(restored_scene);
+    }
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/visualization/state")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let reactivated = body_json(response).await;
+    assert_eq!(
+        reactivated["diagnostics"]["degraded_reasons"],
+        serde_json::json!([])
+    );
+    assert_eq!(
+        reactivated["planar"]["target_overrides"][0],
+        object_override
+    );
+    assert!(reactivated["targets"]["objects"]
+        .as_array()
+        .expect("reactivated target registry objects")
+        .iter()
+        .any(|target| target["scope_id"] == "temporary-object"));
+
+    {
+        let mut live = state.current_live_state.write().await;
+        live.as_mut()
+            .and_then(|snapshot| snapshot.scene_document.as_mut())
+            .expect("fixture must retain the restored scene document")
+            .objects
+            .clear();
+    }
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri("/v2/sessions/current/visualization/state")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "planar": {
+                            "target_overrides": [object_override]
+                        }
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let json = body_json(response).await;
+    assert_eq!(
+        json["error"],
+        "unknown_planar_target_override_identity: planar.target_overrides[0] target (object, temporary-object) does not exist in current target registry"
+    );
+}
+
+#[tokio::test]
+async fn visualization_planar_target_overrides_accept_current_part_target() {
+    let state = test_app_state_with_live_session().await;
+    let mut mesh = sample_fem_mesh_payload_with_manifest();
+    let part = &mut mesh.mesh_parts[1];
+    part.id = "part:interface".to_string();
+    part.label = "Interface".to_string();
+    part.role = "interface".to_string();
+    part.object_id = None;
+    part.geometry_id = None;
+    if let Some(snapshot) = state.current_live_state.write().await.as_mut() {
+        snapshot.fem_mesh = Some(mesh);
+    }
+    let app = build_v2_router().with_state(state);
+    let part_override = serde_json::json!({
+        "scope": "part",
+        "scope_id": "part:interface",
+        "wireframe_style": {
+            "color": "#557799",
+            "opacity": 0.65
+        }
+    });
+
+    let current = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v2/sessions/current/visualization/state")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(current.status(), StatusCode::OK);
+    let current = body_json(current).await;
+    assert!(current["targets"]["parts"]
+        .as_array()
+        .expect("canonical part target registry")
+        .iter()
+        .any(|target| target["scope_id"] == "part:interface"));
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri("/v2/sessions/current/visualization/state")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "planar": {
+                            "target_overrides": [part_override.clone()]
+                        }
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let json = body_json(response).await;
+    assert_eq!(json["planar"]["target_overrides"][0], part_override);
+    assert_eq!(
+        json["diagnostics"]["degraded_reasons"],
+        serde_json::json!([])
+    );
+}
+
+#[tokio::test]
+async fn visualization_planar_target_overrides_reject_invalid_entries() {
+    let app = build_v2_router().with_state(test_app_state_with_live_session().await);
+    for (target_overrides, expected_error) in [
+        (
+            serde_json::json!([
+                {
+                    "scope": "airbox",
+                    "scope_id": "airbox",
+                    "wireframe_style": {"color": "#ffffff", "opacity": 1.0}
+                },
+                {
+                    "scope": "airbox",
+                    "scope_id": "airbox",
+                    "wireframe_style": {"color": "#000000", "opacity": 0.5}
+                }
+            ]),
+            "planar.target_overrides contains duplicate scope and scope_id at index 1",
+        ),
+        (
+            serde_json::json!([{
+                "scope": "object",
+                "scope_id": "   ",
+                "wireframe_style": {"color": "#ffffff", "opacity": 1.0}
+            }]),
+            "planar.target_overrides[0].scope_id must not be empty",
+        ),
+        (
+            serde_json::json!([{
+                "scope": "object",
+                "scope_id": "object-1",
+                "wireframe_style": {"color": " ", "opacity": 1.1}
+            }]),
+            "planar.target_overrides[0].wireframe_style requires a color and finite opacity between 0 and 1",
+        ),
+        (
+            serde_json::json!([{
+                "scope": "full",
+                "scope_id": "full",
+                "wireframe_style": {"color": "#ffffff", "opacity": 1.0}
+            }]),
+            "unsupported_planar_target_override_scope: planar.target_overrides[0].scope must be airbox, object, or part",
+        ),
+        (
+            serde_json::json!([{
+                "scope": "object",
+                "scope_id": "missing-object",
+                "wireframe_style": {"color": "#ffffff", "opacity": 1.0}
+            }]),
+            "unknown_planar_target_override_identity: planar.target_overrides[0] target (object, missing-object) does not exist in current target registry",
+        ),
+        (
+            serde_json::json!([{
+                "scope": "part",
+                "scope_id": "missing-part",
+                "wireframe_style": {"color": "#ffffff", "opacity": 1.0}
+            }]),
+            "unknown_planar_target_override_identity: planar.target_overrides[0] target (part, missing-part) does not exist in current target registry",
+        ),
+    ] {
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("PATCH")
+                    .uri("/v2/sessions/current/visualization/state")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!({
+                            "planar": {"target_overrides": target_overrides}
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let json = body_json(response).await;
+        assert_eq!(json["error"], expected_error);
+    }
 }
 
 #[tokio::test]
@@ -5834,6 +6367,20 @@ fn openapi_planar_state_exposes_shared_inspector_style_contract() {
         "point_style",
     ] {
         assert!(planar_required.contains(&serde_json::json!(field)));
+    }
+    assert!(!planar_required.contains(&serde_json::json!("target_overrides")));
+    assert_eq!(planar["properties"]["target_overrides"]["type"], "array");
+    assert_eq!(
+        planar["properties"]["target_overrides"]["items"]["$ref"],
+        "#/components/schemas/PlanarTargetPresentationOverrideState"
+    );
+    let target_override =
+        &openapi["components"]["schemas"]["PlanarTargetPresentationOverrideState"];
+    let target_override_required = target_override["required"]
+        .as_array()
+        .expect("PlanarTargetPresentationOverrideState required fields");
+    for field in ["scope", "scope_id", "wireframe_style"] {
+        assert!(target_override_required.contains(&serde_json::json!(field)));
     }
     let vector_style = &openapi["components"]["schemas"]["PlanarVectorStyleState"];
     let vector_required = vector_style["required"]

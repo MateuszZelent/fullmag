@@ -221,6 +221,8 @@ pub struct PlanarVisualizationState {
     pub quality: PlanarRenderQuality,
     pub layers: PlanarLayerState,
     pub wireframe_style: PlanarWireframeStyleState,
+    #[serde(default)]
+    pub target_overrides: Vec<PlanarTargetPresentationOverrideState>,
     pub point_style: PlanarPointStyleState,
     pub vector_style: PlanarVectorStyleState,
     pub interaction: PlanarInteractionState,
@@ -245,6 +247,7 @@ pub struct PlanarVisualizationPatch {
     pub quality: Option<PlanarRenderQuality>,
     pub layers: Option<PlanarLayerState>,
     pub wireframe_style: Option<PlanarWireframeStyleState>,
+    pub target_overrides: Option<Vec<PlanarTargetPresentationOverrideState>>,
     pub point_style: Option<PlanarPointStyleState>,
     pub vector_style: Option<PlanarVectorStyleState>,
     pub interaction: Option<PlanarInteractionState>,
@@ -387,6 +390,14 @@ pub struct PlanarWireframeStyleState {
 
 #[derive(Debug, Serialize, Deserialize, ToSchema, Clone, PartialEq)]
 #[serde(deny_unknown_fields)]
+pub struct PlanarTargetPresentationOverrideState {
+    pub scope: VisualizationScopeKind,
+    pub scope_id: String,
+    pub wireframe_style: PlanarWireframeStyleState,
+}
+
+#[derive(Debug, Serialize, Deserialize, ToSchema, Clone, PartialEq)]
+#[serde(deny_unknown_fields)]
 pub struct PlanarPointStyleState {
     pub color: String,
     pub opacity: f64,
@@ -437,6 +448,7 @@ pub(crate) fn default_planar_visualization_state() -> PlanarVisualizationState {
             color: "var(--fm-border-strong)".to_string(),
             opacity: 1.0,
         },
+        target_overrides: Vec::new(),
         point_style: PlanarPointStyleState {
             color: "var(--fm-accent)".to_string(),
             opacity: 1.0,
