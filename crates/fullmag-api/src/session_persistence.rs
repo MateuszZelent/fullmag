@@ -2727,7 +2727,7 @@ mod planar_presentation_migration_tests {
     #[test]
     fn unknown_presentation_version_is_rejected_without_migration() {
         let document = serde_json::json!({});
-        assert!(restore_display_presentation(Some(10), &document)
+        assert!(restore_display_presentation(Some(DISPLAY_PRESENTATION_SCHEMA_VERSION + 1), &document)
             .expect_err("future schema must not mutate state")
             .contains("unsupported"));
     }
