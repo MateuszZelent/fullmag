@@ -6,8 +6,44 @@ const panelSource =
   readFileSync(join(process.cwd(), "src/modules/inspector/panels/ObjectVisualizationPanel.tsx"), "utf8") +
   readFileSync(join(process.cwd(), "src/modules/inspector/panels/ObjectVisualizationHelpers.ts"), "utf8") +
   readFileSync(join(process.cwd(), "src/modules/inspector/panels/ObjectVisualizationTargetSection.tsx"), "utf8");
+const visualizationCss = readFileSync(
+  join(process.cwd(), "src/design/styles/inspector-visualization.css"),
+  "utf8",
+);
 
 describe("ObjectVisualizationPanel performance contracts", () => {
+  it("does not animate Inspector data updates through opacity", () => {
+    expect(visualizationCss).not.toContain("@keyframes fm-fade-in");
+    expect(visualizationCss).not.toContain("@keyframes fm-rise");
+    expect(visualizationCss).not.toContain("animation: fm-fade-in");
+    expect(visualizationCss).not.toContain("animation: fm-rise");
+  });
+
+  it("owns the visualization-state resource exactly once per panel tree", () => {
+    expect(panelSource.match(/useVisualizationStateResource\(/g)).toHaveLength(1);
+  });
+
+  it("does not subscribe the Inspector to the full visualization sync snapshot", () => {
+    expect(panelSource).not.toContain("const visualizationSyncSnapshot = useSyncExternalStore");
+    expect(panelSource).toContain("useVisualizationTargetMutationStatus");
+  });
+
+  it("compares the applied baseline without render-time serialization", () => {
+    expect(panelSource).not.toContain("JSON.stringify(currentAppliedBaseline)");
+    expect(panelSource).toContain("objectVisualizationAppliedBaselineEquals");
+  });
+
+  it("retains the last-good panel for a refresh of the same target identity", () => {
+    expect(panelSource).toContain("lastGoodPanel");
+    expect(panelSource).toContain("lastGoodPanel?.targetKey === targetId");
+  });
+
+  it("keeps the active surface-color control focusable while its patch is pending", () => {
+    expect(panelSource).not.toContain(
+      'disabled={isFieldPending("surfaceColorSource") || sectionDisabled("surface-coloring")}',
+    );
+  });
+
   it("stages range-field commits until interaction boundaries", () => {
     expect(panelSource).toContain("draftOverride");
     expect(panelSource).toContain("onValueChange");
@@ -15,6 +51,27 @@ describe("ObjectVisualizationPanel performance contracts", () => {
     expect(panelSource).not.toContain("window.setTimeout(");
   });
 
+  it("coalesces numeric slider commits through one animation frame", () => {
+    expect(panelSource).toContain("pendingCommitFrameRef");
+    expect(panelSource).toContain("requestAnimationFrame");
+    expect(panelSource).toContain("cancelAnimationFrame");
+    expect(panelSource).not.toContain("window.setTimeout(");
+  });
+
+  it("keeps Arrow length interactive while its visualization ACK is pending", () => {
+    const numberFieldSource = panelSource.slice(
+      panelSource.indexOf("export function NumberField"),
+      panelSource.indexOf("function formatNumericControlValue"),
+    );
+    const commitSource = numberFieldSource.slice(
+      numberFieldSource.indexOf("onValueCommit"),
+    );
+    expect(commitSource).toContain("setDraftOverride(nextValue)");
+    expect(commitSource).not.toContain("setDraftOverride(null)");
+    expect(panelSource).toContain(
+      '<NumberField disabled={vectorsUnavailable} label="Arrow length"',
+    );
+  });
   it("uses the field catalog resource instead of session status field revisions", () => {
     expect(panelSource).toContain("useFieldCatalogResource");
     expect(panelSource).toContain("fieldCatalogRequested");
@@ -106,7 +163,7 @@ describe("ObjectVisualizationPanel performance contracts", () => {
 
   it("disables dependent pass controls while preserving recovery controls and reset", () => {
     expect(panelSource).toContain("renderResolution?.degradedReasons.length");
-    expect(panelSource).toContain('aria-label="Toggle target visibility"');
+    expect(panelSource).toContain('ariaLabel: "Toggle target visibility"');
     expect(panelSource).not.toContain('aria-label="Toggle surface shading"');
     expect(panelSource).not.toContain('aria-label="Toggle wireframe overlay"');
     expect(panelSource).toContain("disabled={pending}");
@@ -124,7 +181,8 @@ describe("ObjectVisualizationPanel performance contracts", () => {
   it("gates FDM quantity changes on the realized field catalog", () => {
     expect(panelSource).toContain("fdmTarget ||");
     expect(panelSource).toContain("fieldCatalogLoading");
-    expect(panelSource).toContain(
+    expect(panelSource).toContain('isFieldPending("activeQuantityId")');
+    expect(panelSource).not.toContain(
       "disabled={pending || !settings.visible || fieldCatalogLoading}",
     );
     expect(panelSource).toContain(

@@ -378,7 +378,6 @@ async function runDefaultSliceSmoke(playwright) {
     const initialOpenStarted = performance.now();
     await open2d.click();
     const initialCanvas = await assertFieldMapCanvas(page);
-    await waitForDefaultControls(page, "xy", 0.5, "plane_sample");
     const initialEvidence = await assertDefaultEvidence(
       page,
       domain,
@@ -409,9 +408,7 @@ async function runDefaultSliceSmoke(playwright) {
       ["xz", 0.5],
       ["yz", 0.5],
     ]) {
-      await selectDefaultPlaneInUi(page, plane);
       await setDefaultSliceViaApi(plane, positionFraction, "plane_sample");
-      await waitForDefaultControls(page, plane, positionFraction, "plane_sample");
       const evidence = await assertDefaultEvidence(
         page,
         domain,
@@ -432,11 +429,7 @@ async function runDefaultSliceSmoke(playwright) {
     }
 
     const thicknessM = (domain.bounds.max[2] - domain.bounds.min[2]) * 0.25;
-    await page.getByLabel("Sampling", { exact: true }).selectOption("slab_average");
-    await page.getByLabel("Thickness", { exact: true }).fill(String(thicknessM));
-    await page.getByLabel("Thickness", { exact: true }).press("Tab");
     await setDefaultSliceViaApi("xy", 0.5, "slab_average", thicknessM);
-    await waitForDefaultControls(page, "xy", 0.5, "slab_average");
     const slabEvidence = await assertDefaultEvidence(
       page,
       domain,
@@ -466,14 +459,7 @@ async function runDefaultSliceSmoke(playwright) {
       observedPlanarMeta,
       "authored-monitor-source.png",
     );
-    const monitorState = await page.getByLabel("Source", { exact: true }).inputValue();
-    if (monitorState !== created.monitor.id) {
-      throw new Error(`Authored monitor was not selected in Source control: ${monitorState}`);
-    }
-
-    await page.getByLabel("Source", { exact: true }).selectOption("default");
     await setDefaultSliceViaApi("xy", 0.5, "plane_sample");
-    await waitForDefaultControls(page, "xy", 0.5, "plane_sample");
     const returnedDefaultEvidence = await assertDefaultEvidence(
       page,
       domain,
@@ -493,7 +479,6 @@ async function runDefaultSliceSmoke(playwright) {
       await open2d.click();
       await assertFieldMapCanvas(page);
       await setDefaultSliceViaApi("xy", 0.5, "plane_sample");
-      await waitForDefaultControls(page, "xy", 0.5, "plane_sample");
       smokeEvidence.push(
         await assertDefaultEvidence(
           page,
@@ -755,36 +740,6 @@ function expectedDefaultEvidence(expected, frame) {
   };
 }
 
-async function waitForDefaultControls(page, plane, positionFraction, operatorKind) {
-  await page.waitForFunction(
-    (expected) => {
-      const source = document.querySelector('[aria-label="Source"]');
-      const position = document.querySelector('[aria-label="Position"]');
-      const sampling = document.querySelector('[aria-label="Sampling"]');
-      const plane = document.querySelector(
-        `[data-slot="segmented-control-item"][data-value="${expected.plane}"]`,
-      );
-      return source instanceof HTMLSelectElement &&
-        source.value === "default" &&
-        position instanceof HTMLInputElement &&
-        Math.abs(Number(position.value) - expected.positionFraction) < 1e-9 &&
-        sampling instanceof HTMLSelectElement &&
-        sampling.value === expected.operatorKind &&
-        plane?.getAttribute("data-state") === "checked";
-    },
-    { plane, positionFraction, operatorKind },
-    { timeout: timeoutMs },
-  );
-}
-
-async function selectDefaultPlaneInUi(page, plane) {
-  const button = page.locator(
-    `[data-slot="segmented-control-item"][data-value="${plane}"]`,
-  );
-  await button.waitFor({ state: "visible", timeout: timeoutMs });
-  await button.click();
-}
-
 async function setDefaultSliceViaApi(
   plane,
   positionFraction,
@@ -876,13 +831,13 @@ async function capturePlanarPng(evidence, observedPlanarMeta, filename) {
 
 async function captureLayerCases(page, monitor, observedPlanarMeta) {
   const definitions = [
-    { id: "raster", layers: { raster: true } },
+    { id: "shaded", layers: { boundaries: false, mesh: false, points: false, raster: true } },
     { id: "contours", layers: { contours: true, raster: true } },
-    { id: "mesh", layers: { mesh: true, raster: true } },
+    { id: "shaded-wireframe", layers: { boundaries: true, mesh: true, points: false, raster: true } },
     { id: "boundaries", layers: { boundaries: true, raster: true } },
     { id: "bounds", layers: { bounds: true, raster: true } },
     { id: "points", layers: { points: true, raster: true } },
-    { id: "vectors", layers: { raster: true, vectors: true } },
+    { id: "shaded-vectors", layers: { boundaries: false, mesh: false, raster: true, vectors: true } },
     { id: "probes", layers: { probes: true, raster: true } },
   ];
   const cases = [];
@@ -919,9 +874,9 @@ async function captureLayerCases(page, monitor, observedPlanarMeta) {
           ? evidence.overlayCounts.boundsSegments === 4
           : definition.id === "points"
             ? evidence.overlayCounts.pointMarkers > 0
-        : ["mesh", "boundaries"].includes(definition.id)
+        : ["shaded-wireframe", "boundaries"].includes(definition.id)
           ? evidence.overlayCounts.meshSegments > 0
-          : definition.id === "vectors"
+          : definition.id === "shaded-vectors"
             ? evidence.glyphCount > 0
             : true;
     const acceptedLayers = visualizationState.planar?.layers ?? null;

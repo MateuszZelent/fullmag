@@ -4207,10 +4207,7 @@ mod tests {
             .get("H_demag")
             .expect("current H_demag should be promoted to latest_fields");
         assert_eq!(field["source_step"], serde_json::json!(4));
-        assert_eq!(
-            field["source_time_seconds"],
-            serde_json::json!(4.0e-13)
-        );
+        assert_eq!(field["source_time_seconds"], serde_json::json!(4.0e-13));
         assert!(field["materialized_at_unix_ms"]
             .as_u64()
             .is_some_and(|timestamp| timestamp > 0));
@@ -5482,8 +5479,8 @@ pub(crate) fn replace_cached_preview_fields(
         return;
     }
     let source_step = state.live_state.latest_step.step;
-    let source_time_seconds = Some(state.live_state.latest_step.time)
-        .filter(|time| time.is_finite() && *time > 0.0);
+    let source_time_seconds =
+        Some(state.live_state.latest_step.time).filter(|time| time.is_finite() && *time > 0.0);
     let materialized_at_unix_ms = source_time_seconds
         .map(|_| unix_time_millis().unwrap_or(0) as u64)
         .unwrap_or(0);

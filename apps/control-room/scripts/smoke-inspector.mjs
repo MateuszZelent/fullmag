@@ -11,6 +11,10 @@ const INSPECTOR_REQUEST_TIMEOUT_MS = 5_000;
 const INSPECTOR_MAX_REQUESTS_PER_PATH = 8;
 const INSPECTOR_REQUEST_LIMITS = new Map([
   [
+    "PATCH /v2/sessions/current/visualization/state",
+    32,
+  ],
+  [
     "POST /v2/sessions/current/visualization/client-acks",
     32,
   ],
@@ -407,6 +411,9 @@ try {
   if ((await visibleToggle.getAttribute("aria-pressed")) === "true") {
     await visibleToggle.click();
   }
+  const resetElement = await resetButton.elementHandle();
+  assert(resetElement, "Reset control is unavailable after a live display change.");
+  await page.waitForFunction((button) => !button.disabled, resetElement, { timeout: 5_000 });
   assert(!(await resetButton.isDisabled()), "A live display change did not enable Reset.");
   const disabledControl = overview.locator("select:disabled").first();
   assert(await disabledControl.count(), "Hidden target did not expose a disabled readable control.");
@@ -440,11 +447,12 @@ try {
       visualizationRevision: await panel.getAttribute("data-visualization-revision"),
     })}`,
   );
+  const resetRenderMode = await renderModeControl
+    .locator('[role="radio"][aria-checked="true"]')
+    .getAttribute("aria-label");
   assert(
-    (await renderModeControl
-      .locator('[role="radio"][aria-checked="true"]')
-      .getAttribute("aria-label")) === initialRenderMode,
-    "Visualization Reset changed the initial render mode.",
+    resetRenderMode === initialRenderMode,
+    `Visualization Reset changed the initial render mode from ${initialRenderMode} to ${resetRenderMode}: ${JSON.stringify(fixture.visualizationMutationBodies.slice(-6))}.`,
   );
 
   if ((await visibleToggle.getAttribute("aria-pressed")) !== "true") {
@@ -492,6 +500,8 @@ try {
   const stableActions = await inspector.locator(".fm-inspector__action-bar").boundingBox();
   assert(stableHeader?.y === headerTop?.y, "Inspector header moved with content scroll.");
   assert(stableActions?.y === actionsTop?.y, "Inspector action bar moved with content scroll.");
+
+  await qualifyVisualizationMutationStability(page, inspector, fixture);
 
   await page.reload({ waitUntil: "domcontentloaded", timeout: 60_000 });
   await inspector.waitFor({ state: "visible" });
@@ -595,6 +605,7 @@ try {
         tabs: expectedTabs,
         themes: ["light", "dark"],
         visualizationReset: "verified",
+        visualizationMutationStability: "verified; mutation budget: 20",
         widths: [360, 416, 560],
       },
       null,
@@ -603,6 +614,118 @@ try {
   );
 } finally {
   await browser.close();
+}
+
+async function qualifyVisualizationMutationStability(page, inspector, fixture) {
+  const targets = [
+    { iterations: 4, label: "Object", nodeId: "model:object:film:visualization" },
+    { iterations: 16, label: "Airbox", nodeId: "model:airbox:visualization" },
+  ];
+  fixture.visualizationPatchDelayMs = 180;
+  try {
+    for (const target of targets) {
+      await selectInspectorNode(page, inspector, target.nodeId, {
+        owner: target.label === "Airbox" ? "airbox-visualization" : "object-visualization",
+        label: target.label === "Airbox" ? "Airbox" : "Film",
+      });
+      const overview = inspector.locator('[data-slot="object-visualization-overview"]');
+      await overview.waitFor({ state: "visible" });
+      const unrelatedVisibility = overview.getByRole("button", {
+        name: "Toggle target visibility",
+        exact: true,
+      });
+      let mutationControl;
+      let focusControl;
+      let expectedFocusedLabel;
+      if (target.label === "Object") {
+        const surfaceGroup = overview
+          .locator('[data-slot="inspector-group"]')
+          .filter({ hasText: "Surface Coloring" });
+        const surfaceTrigger = surfaceGroup.locator('[data-slot="inspector-group-trigger"]');
+        if ((await surfaceTrigger.getAttribute("aria-expanded")) !== "true") {
+          await surfaceTrigger.click();
+        }
+        mutationControl = surfaceGroup.locator('select[aria-label="Color source"]');
+        focusControl = mutationControl;
+        expectedFocusedLabel = "Color source";
+      } else {
+        mutationControl = overview.getByRole("button", {
+          name: "Toggle target bounds",
+          exact: true,
+        });
+        focusControl = unrelatedVisibility;
+        expectedFocusedLabel = "Toggle target visibility";
+      }
+      await mutationControl.waitFor({ state: "visible" });
+
+      const identity = `${target.label.toLowerCase()}-visualization-stability`;
+      const baseline = await overview.evaluate((element, marker) => {
+        element.dataset.mutationStabilityMarker = marker;
+        const scroller = element.closest(".fm-inspector");
+        if (scroller) scroller.scrollTop = Math.min(80, scroller.scrollHeight - scroller.clientHeight);
+        return {
+          opacity: getComputedStyle(element).opacity,
+          scrollTop: scroller?.scrollTop ?? 0,
+        };
+      }, identity);
+
+      for (let iteration = 0; iteration < target.iterations; iteration += 1) {
+        await focusControl.focus();
+        if (target.label === "Object") {
+          const nextValue = iteration % 2 === 0 ? "component_x" : "solid";
+          await mutationControl.selectOption(nextValue);
+        } else {
+          await mutationControl.evaluate((control) => control.click());
+        }
+        await page.waitForTimeout(40);
+        const duringMutation = await overview.evaluate((element, marker) => {
+          const scroller = element.closest(".fm-inspector");
+          const opacityAnimations = element
+            .getAnimations({ subtree: true })
+            .filter((animation) => {
+              const frames = animation.effect?.getKeyframes?.() ?? [];
+              return frames.some((frame) => Object.hasOwn(frame, "opacity"));
+            });
+          return {
+            connected: element.isConnected,
+            focusedLabel: document.activeElement?.getAttribute("aria-label") ??
+              document.activeElement?.labels?.[0]?.textContent?.trim() ?? null,
+            marker: element.dataset.mutationStabilityMarker,
+            opacity: getComputedStyle(element).opacity,
+            opacityAnimations: opacityAnimations.length,
+            scrollTop: scroller?.scrollTop ?? 0,
+          };
+        }, identity);
+        assert(
+          duringMutation.connected && duringMutation.marker === identity,
+          `${target.label}: Visualization Inspector remounted during mutation.`,
+        );
+        assert(
+          !(await unrelatedVisibility.isDisabled()),
+          `${target.label}: unrelated visibility control was disabled during mutation.`,
+        );
+        assert(
+          duringMutation.opacity === baseline.opacity && duringMutation.opacityAnimations === 0,
+          `${target.label}: mutation changed Inspector opacity or started an opacity animation.`,
+        );
+        assert(
+          Math.abs(duringMutation.scrollTop - baseline.scrollTop) <= 1,
+          `${target.label}: mutation changed Inspector scroll position.`,
+        );
+        assert(
+          duringMutation.focusedLabel === expectedFocusedLabel,
+          `${target.label}: mutation lost control focus.`,
+        );
+        await page.waitForTimeout(fixture.visualizationPatchDelayMs + 80);
+        assert(
+          (await overview.getAttribute("data-mutation-stability-marker")) === identity,
+          `${target.label}: Visualization Inspector remounted after mutation ACK.`,
+        );
+      }
+    }
+  } finally {
+    fixture.visualizationPatchDelayMs = 0;
+  }
 }
 
 async function qualifyInspectorRoutingMatrix(page, inspector, screenshotFiles, fixture) {
@@ -1027,6 +1150,7 @@ function createInspectorFixture() {
       topology_fingerprint: "inspector-routing-topology",
     },
     requests: [],
+    visualizationMutationBodies: [],
     requestCounts: new Map(),
     requestBudgetViolation: null,
     analysisProduct: "driven_response",
@@ -1035,6 +1159,7 @@ function createInspectorFixture() {
     revision,
     scene,
     topology: inspectorTopologyBuffer(),
+    visualizationPatchDelayMs: 0,
     visualization: inspectorVisualizationState(),
   };
 }
@@ -1133,8 +1258,12 @@ async function installInspectorFixtureApi(page, fixture) {
     if (request.method() === "OPTIONS") return fulfillEmpty(route, 204);
     if (path === "/v2/sessions/current/visualization/state" && request.method() === "PATCH") {
       const patch = request.postDataJSON() ?? {};
+      fixture.visualizationMutationBodies.push(patch);
       fixture.visualization = mergeInspectorVisualizationState(fixture.visualization, patch);
       fixture.visualization.revision += 1;
+      if (fixture.visualizationPatchDelayMs > 0) {
+        await new Promise((resolveDelay) => setTimeout(resolveDelay, fixture.visualizationPatchDelayMs));
+      }
       return fulfillJson(route, fixture.visualization);
     }
     if (path === "/v2/sessions/current/visualization/client-acks" && request.method() === "POST") {
@@ -1154,6 +1283,48 @@ async function installInspectorFixtureApi(page, fixture) {
       );
     }
     if (path === "/v2/sessions/current/status") return fulfillJson(route, inspectorSessionStatus(fixture));
+    if (path === "/v2/sessions/current/data/quantities") return fulfillJson(route, {
+      quantities: [{
+        capability_state: "supported",
+        description: "Magnetization",
+        domain: "magnetic",
+        id: "m",
+        interactive_preview: true,
+        label: "Magnetization",
+        location: "cell",
+        materializable: true,
+        materialization_reason_code: null,
+        materialization_state: "ready",
+        n_comp: 3,
+        normalization_hint: "unit_vector",
+        quick_access_label: "m",
+        scalar_metric_key: null,
+        shape: "vector",
+        supports_export: true,
+        supports_history: true,
+        supports_preview_2d: true,
+        supports_preview_3d: true,
+        unit: "1",
+      }],
+      schema_version: "quantity-catalog.v1",
+    });
+    if (/^\/v2\/sessions\/current\/data\/fields\/[^/]+\/availability$/.test(path)) {
+      const quantityId = decodeURIComponent(path.split("/").at(-2) ?? "m");
+      return fulfillJson(route, {
+        carrier_id: url.searchParams.get("scope_id"),
+        generation: "inspector-field-generation",
+        materialized: true,
+        pending: false,
+        quantity_id: quantityId,
+        reason_code: null,
+        revision: fixture.revision,
+        scope_id: url.searchParams.get("scope_id"),
+        scope_kind: url.searchParams.get("scope_kind") ?? "object",
+        state: "ready",
+        supported: true,
+        target_id: url.searchParams.get("target_id") ?? "object:film",
+      });
+    }
     if (path === "/v2/sessions/current/model/scene") return fulfillJson(route, fixture.scene);
     if (path === "/v2/sessions/current/model/regions") return fulfillJson(route, { regions: [], revision: fixture.revision });
     if (path === "/v2/sessions/current/model/material-fields") return fulfillJson(route, { fields: [], revision: fixture.revision });

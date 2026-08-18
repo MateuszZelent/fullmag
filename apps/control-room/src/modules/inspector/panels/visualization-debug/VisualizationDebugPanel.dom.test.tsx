@@ -109,11 +109,12 @@ describe("VisualizationDebugPanel mounted interaction", () => {
     expect(container.textContent).toContain("Requested componentfull");
     expect(container.textContent).toContain("Decoded component— (not encoded)");
 
+    const copyLog = findButton(container, "Copy log");
     const copySnapshot = findButton(container, "Copy snapshot");
     const copyResourceKey = findButton(container, "Copy resource key");
     const exportJson = findButton(container, "Export JSON");
     const rawJson = findButton(container, "Raw bounded JSON");
-    const focusOrder = [copySnapshot, copyResourceKey, exportJson, rawJson];
+    const focusOrder = [copyLog, copySnapshot, copyResourceKey, exportJson, rawJson];
 
     for (const button of focusOrder) {
       pressTab(dom.document, focusOrder);
@@ -124,6 +125,12 @@ describe("VisualizationDebugPanel mounted interaction", () => {
         expect(button.getAttribute("class")).toContain("fm-visualization-debug-action");
       }
     }
+
+    await act(async () => keyboardActivate(copyLog, "Enter"));
+    expect(clipboardWrite).toHaveBeenLastCalledWith(
+      expect.stringContaining("Fullmag Visualization Debug Log"),
+    );
+    expect(findAlert(container, "Debug log copied").textContent).toContain("Debug log copied");
 
     await act(async () => keyboardActivate(copySnapshot, "Enter"));
     expect(clipboardWrite).toHaveBeenLastCalledWith(
@@ -337,6 +344,7 @@ describe("VisualizationDebugPanel mounted interaction", () => {
       root.render(
         <VisualizationDebugPanelView
           createActions={() => ({
+            copyLog: async () => undefined,
             copyResourceKey: async () => undefined,
             copySnapshot: async () => undefined,
             dispose: () => undefined,

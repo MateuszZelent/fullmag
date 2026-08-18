@@ -4,6 +4,13 @@ import type { VisualizationStateResource } from "@/kernel/api/apiTypes";
 type Planar = NonNullable<VisualizationStateResource["planar"]>;
 type PlanarRange = NonNullable<Planar["range"]>;
 
+export type PlanarDisplayMode =
+  | "surface"
+  | "surface+edges"
+  | "wireframe"
+  | "points"
+  | "off";
+
 export const PLANAR_RANGE_MODE_ITEMS = [
   { label: "Auto", value: "auto" },
   { label: "Manual SI", value: "manual" },
@@ -38,11 +45,13 @@ export const PLANAR_QUALITY_ITEMS = [
  */
 export function planarVectorStyleFromThreeDimensional(
   settings: Pick<VisualizationTargetSettings, "vectorColorMode" | "vectorLengthScale">,
+  current: Planar["vector_style"],
 ): Planar["vector_style"] | null {
   if (!SHARED_VECTOR_COLOR_MODE_ITEMS.some((item) => item.value === settings.vectorColorMode)) {
     return null;
   }
   return {
+    ...current,
     color_mode: settings.vectorColorMode,
     length_mode: "uniform",
     scale: settings.vectorLengthScale,
@@ -59,15 +68,16 @@ export function planarPresentationPatchFromThreeDimensional(
     "vectorBudget" | "vectorColorMode" | "vectorLengthScale"
   >,
   resolution: Planar["resolution"],
+  vectorStyle: Planar["vector_style"],
 ): {
   resolution: Planar["resolution"];
   vector_style: Planar["vector_style"];
 } | null {
-  const vectorStyle = planarVectorStyleFromThreeDimensional(settings);
-  if (!vectorStyle) return null;
+  const nextVectorStyle = planarVectorStyleFromThreeDimensional(settings, vectorStyle);
+  if (!nextVectorStyle) return null;
   return {
     resolution: { ...resolution, vector_budget: settings.vectorBudget },
-    vector_style: vectorStyle,
+    vector_style: nextVectorStyle,
   };
 }
 
@@ -86,6 +96,32 @@ export function planarLayerPatch(
   key: keyof Planar["layers"],
 ): { layers: Planar["layers"] } {
   return { layers: { ...layers, [key]: !layers[key] } };
+}
+
+export function planarDisplayModePatch(
+  mode: PlanarDisplayMode,
+  layers: Planar["layers"],
+): { layers: Planar["layers"] } {
+  const primary = mode === "surface"
+    ? { boundaries: false, mesh: false, points: false, raster: true }
+    : mode === "surface+edges"
+      ? { boundaries: true, mesh: true, points: false, raster: true }
+      : mode === "wireframe"
+        ? { boundaries: true, mesh: true, points: false, raster: false }
+        : mode === "points"
+          ? { boundaries: false, mesh: false, points: true, raster: false }
+          : { boundaries: false, mesh: false, points: false, raster: false };
+  return { layers: { ...layers, ...primary } };
+}
+
+export function resolvePlanarDisplayMode(
+  layers: Pick<Planar["layers"], "boundaries" | "mesh" | "points" | "raster">,
+): PlanarDisplayMode {
+  if (layers.points) return "points";
+  if (layers.raster && (layers.mesh || layers.boundaries)) return "surface+edges";
+  if (layers.raster) return "surface";
+  if (layers.mesh || layers.boundaries) return "wireframe";
+  return "off";
 }
 
 export function planarResolutionPatch(

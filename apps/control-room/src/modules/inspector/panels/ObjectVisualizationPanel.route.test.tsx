@@ -231,20 +231,36 @@ vi.mock("../primitives/FeedbackBanner", () => ({ FeedbackBanner: () => null }));
 vi.mock("../primitives/InspectorGroup", () => ({
   InspectorGroup: ({
     children,
+    collapsible,
+    defaultOpen = true,
     title,
   }: {
+    collapsible?: boolean;
     children?: React.ReactNode;
+    defaultOpen?: boolean;
     title?: React.ReactNode;
   }) => (
-    <section>
+    <section
+      data-collapsible={collapsible ? "true" : undefined}
+      data-open={collapsible ? String(defaultOpen) : undefined}
+    >
       <h2>{title}</h2>
       {children}
     </section>
   ),
 }));
 vi.mock("./ObjectVisualizationOverview", () => ({
-  ObjectVisualizationOverview: ({ dataState }: { dataState: string }) => (
-    <div data-visualization-data-state={dataState} />
+  ObjectVisualizationOverview: ({
+    dataState,
+    display,
+  }: {
+    dataState: string;
+    display?: React.ReactNode;
+  }) => (
+    <>
+      <div data-visualization-data-state={dataState} />
+      {display}
+    </>
   ),
 }));
 vi.mock("../visualization/PlanarVisualizationSection", () => ({
@@ -260,9 +276,12 @@ vi.mock("../visualization/VisualizationContextSwitch", () => ({
 }));
 vi.mock("./ObjectVisualizationTargetSection", () => {
   const Component = () => null;
+  const DisplayPasses = () => (
+    <div data-slot="visualization-display-passes">Display passes</div>
+  );
   return {
     ColorField: Component,
-    VisualizationDisplayPassesSection: Component,
+    VisualizationDisplayPassesSection: DisplayPasses,
     VisualizationGeometryScopeSection: Component,
     VisualizationOverridesSection: Component,
     VisualizationPointsSection: Component,
@@ -382,7 +401,7 @@ function expectSharedVisualizationInspectorContract(
   owner: string,
   title: string,
 ): void {
-  expect(html).toContain('class="fm-scientific-inspector"');
+  expect(html).toMatch(/class="[^"]*fm-scientific-inspector/);
   expect(html).toContain(`<h3>${title}</h3>`);
   expect(html).toContain("Display controls");
   expect(html).toContain("Status");
@@ -402,6 +421,18 @@ afterEach(() => {
 });
 
 describe("ObjectVisualizationPanel lane routing", () => {
+  it("places visualization controls before scientific context", () => {
+    testState.discretization = "fdm";
+    const html = renderResolvedInspector(selection);
+
+    expect(html.indexOf("Display controls")).toBeLessThan(
+      html.indexOf("Display passes"),
+    );
+    expect(html.indexOf("Display passes")).toBeLessThan(html.indexOf("Status"));
+    expect(html.indexOf("Status")).toBeLessThan(html.lastIndexOf("Target"));
+    expect(html).toContain('data-collapsible="true" data-open="false"');
+  });
+
   it("gives object, Airbox, and mesh-part routes distinct owner identities", () => {
     testState.discretization = "fdm";
 

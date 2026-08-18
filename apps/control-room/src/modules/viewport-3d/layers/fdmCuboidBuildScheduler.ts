@@ -110,6 +110,7 @@ export async function buildViewport3DFdmVectorsOffMainThread(
         anchors: request.anchors,
         cellIndices: request.cellIndices,
         gridShape: request.gridShape,
+        cellSize: request.cellSize,
       },
       vectorScale: request.scale,
       voxelFillRatio: 1,
@@ -353,6 +354,7 @@ function cloneFdmCuboidBuildRequestForWorker(
           anchors: new Float32Array(input.vectorOnly.anchors),
           cellIndices: new Uint32Array(input.vectorOnly.cellIndices),
           gridShape: input.vectorOnly.gridShape,
+          cellSize: input.vectorOnly.cellSize,
         }
       : input.vectorOnly,
   };

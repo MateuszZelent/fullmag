@@ -69,7 +69,10 @@ export interface FieldMapRenderModelInput {
   vectors?: Float32Array | Float64Array | null;
   vectorBudget?: number;
   vectorScale?: number;
-  vectorStyle?: { colorMode: string; lengthMode: string };
+  vectorStyle?: { color: string; colorMode: string; lengthMode: string; opacity: number; thickness: number };
+  wireframeStyle?: { color: string; opacity: number };
+  pointStyle?: { color: string; opacity: number; size: number };
+  visible?: boolean;
 }
 
 export interface FieldMapRenderModel {
@@ -100,7 +103,9 @@ export interface FieldMapRenderModel {
   vectors: Float32Array | Float64Array | null;
   vectorBudget: number;
   vectorScale: number;
-  vectorStyle: { colorMode: string; lengthMode: string };
+  vectorStyle: { color: string; colorMode: string; lengthMode: string; opacity: number; thickness: number };
+  wireframeStyle: { color: string; opacity: number };
+  pointStyle: { color: string; opacity: number; size: number };
   viewport: readonly [number, number, number, number];
 }
 
@@ -249,7 +254,10 @@ export function buildFieldMapRenderModel(
     interaction,
     layers: {
       ...input.layers,
-      boundaries: Boolean(input.layers.boundaries && boundariesExact),
+      ...(!input.visible && input.visible !== undefined
+        ? { boundaries: false, bounds: false, contours: false, mesh: false, points: false, probes: false, raster: false, vectors: false }
+        : {}),
+      boundaries: Boolean(input.visible !== false && input.layers.boundaries && boundariesExact),
       probes: input.layers.probes ?? true,
       raster: Boolean(input.layers.raster && rasterOpacityValid && range !== null),
     },
@@ -265,7 +273,9 @@ export function buildFieldMapRenderModel(
     vectors: input.vectors ?? null,
     vectorBudget: Math.max(0, Math.floor(input.vectorBudget ?? 2_000)),
     vectorScale: Math.max(0, input.vectorScale ?? 1),
-    vectorStyle: input.vectorStyle ?? { colorMode: "orientation", lengthMode: "uniform" },
+    vectorStyle: input.vectorStyle ?? { color: "currentColor", colorMode: "orientation", lengthMode: "uniform", opacity: 1, thickness: 1 },
+    wireframeStyle: input.wireframeStyle ?? { color: "currentColor", opacity: 1 },
+    pointStyle: input.pointStyle ?? { color: "var(--fm-accent)", opacity: 1, size: 3 },
     viewport: resolvePlanarViewport(input.bounds, interaction),
   };
 }

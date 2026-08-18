@@ -1,0 +1,243 @@
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+import { describe, expect, it } from "vitest";
+
+const panelSource =
+  readFileSync(join(process.cwd(), "src/modules/inspector/panels/ObjectVisualizationPanel.tsx"), "utf8") +
+  readFileSync(join(process.cwd(), "src/modules/inspector/panels/ObjectVisualizationHelpers.ts"), "utf8") +
+  readFileSync(join(process.cwd(), "src/modules/inspector/panels/ObjectVisualizationTargetSection.tsx"), "utf8");
+const visualizationCss = readFileSync(
+  join(process.cwd(), "src/design/styles/inspector-visualization.css"),
+  "utf8",
+);
+
+describe("ObjectVisualizationPanel performance contracts", () => {
+  it("does not animate Inspector data updates through opacity", () => {
+    expect(visualizationCss).not.toContain("@keyframes fm-fade-in");
+    expect(visualizationCss).not.toContain("@keyframes fm-rise");
+    expect(visualizationCss).not.toContain("animation: fm-fade-in");
+    expect(visualizationCss).not.toContain("animation: fm-rise");
+  });
+
+  it("owns the visualization-state resource exactly once per panel tree", () => {
+    expect(panelSource.match(/useVisualizationStateResource\(/g)).toHaveLength(1);
+  });
+
+  it("does not subscribe the Inspector to the full visualization sync snapshot", () => {
+    expect(panelSource).not.toContain("const visualizationSyncSnapshot = useSyncExternalStore");
+    expect(panelSource).toContain("useVisualizationTargetMutationStatus");
+  });
+
+  it("compares the applied baseline without render-time serialization", () => {
+    expect(panelSource).not.toContain("JSON.stringify(currentAppliedBaseline)");
+    expect(panelSource).toContain("objectVisualizationAppliedBaselineEquals");
+  });
+
+  it("retains the last-good panel for a refresh of the same target identity", () => {
+    expect(panelSource).toContain("lastGoodPanel");
+    expect(panelSource).toContain("lastGoodPanel?.targetKey === targetId");
+  });
+
+  it("keeps the active surface-color control focusable while its patch is pending", () => {
+    expect(panelSource).not.toContain(
+      'disabled={isFieldPending("surfaceColorSource") || sectionDisabled("surface-coloring")}',
+    );
+  });
+
+  it("stages range-field commits until interaction boundaries", () => {
+    expect(panelSource).toContain("draftOverride");
+    expect(panelSource).toContain("onValueChange");
+    expect(panelSource).toContain("onValueCommit");
+    expect(panelSource).not.toContain("window.setTimeout(");
+  });
+
+  it("coalesces numeric slider commits through one animation frame", () => {
+    expect(panelSource).toContain("pendingCommitFrameRef");
+    expect(panelSource).toContain("requestAnimationFrame");
+    expect(panelSource).toContain("cancelAnimationFrame");
+    expect(panelSource).not.toContain("window.setTimeout(");
+  });
+
+  it("uses the field catalog resource instead of session status field revisions", () => {
+    expect(panelSource).toContain("useFieldCatalogResource");
+    expect(panelSource).toContain("fieldCatalogRequested");
+    expect(panelSource).toContain("shouldLoadObjectVisualizationFieldCatalog");
+    expect(panelSource).toContain("fieldCatalog");
+    expect(panelSource).not.toContain("status?.resources.field_revision");
+    expect(panelSource).not.toContain("status?.resources.fields_revision");
+  });
+
+  it("selects only the session status fields needed for mesh manifest gating", () => {
+    expect(panelSource).toContain("useSessionStatusSelector");
+    expect(panelSource).toContain("selectObjectVisualizationManifestStatus");
+    expect(panelSource).toContain("objectVisualizationManifestStatusEquals");
+    expect(panelSource).toContain("shouldLoadRuntimeMeshManifest(Boolean(target), manifestStatus)");
+    expect(panelSource).not.toContain("const sessionStatus = useSessionStatus();");
+    expect(panelSource).not.toContain("sessionStatus.data");
+  });
+
+  it("uses the structured-grid resource path for explicit FDM visualization targets", () => {
+    expect(panelSource).toContain("useDomainMetaResource");
+    expect(panelSource).toContain("useFdmRegionMembershipResource");
+    expect(panelSource).toContain(
+      "const fdmTarget = fdmResourcesEnabled && target !== null",
+    );
+    expect(panelSource).toContain("femResourcesEnabled &&");
+    expect(panelSource).toContain("useVisualizationStateResource({");
+    expect(panelSource).toContain("enabled: visualizationStateEnabled");
+    expect(panelSource).toContain(
+      "resolveObjectVisualizationTargetForLane({",
+    );
+    expect(panelSource).toContain("resolveVisualizationVectorCapacityForTarget");
+    expect(panelSource).toContain('value="Structured grid cells"');
+    expect(panelSource).not.toContain('"No airbox mesh part is present in the shared-domain manifest."');
+  });
+
+  it("selects only visualization overrides relevant to the inspected target", () => {
+    expect(panelSource).toContain("useObjectVisualizationController");
+    expect(panelSource).toContain("useObjectVisualizationSelector");
+    expect(panelSource).toContain("selectObjectVisualizationPanelSnapshot");
+    expect(panelSource).toContain("objectVisualizationPanelSnapshotEquals");
+    expect(panelSource).not.toContain("useObjectVisualizationRegistry()");
+  });
+
+  it("keeps ordinary visualization controls independent from opt-in Debug demand", () => {
+    expect(panelSource).not.toContain("useVisualizationDebugSnapshots");
+    expect(panelSource).not.toContain("kernel.visualizationDebug.request");
+    expect(panelSource).not.toContain("VisualizationDebugSnapshot");
+  });
+
+  it("uses a revision-bounded local target patch while remote visualization state is pending", () => {
+    expect(panelSource).toContain("visualization.patchTargetPending(");
+    expect(panelSource).toContain("visualizationState.rawData?.revision");
+  });
+
+  it("derives control pending state from target-scoped sync mutations", () => {
+    expect(panelSource).toContain("useSyncExternalStore");
+    expect(panelSource).toContain("resolveVisualizationTargetMutationStatus");
+    expect(panelSource).not.toContain("const pending = false");
+  });
+
+  it("rebases reset and restore operations on the optimistic target snapshot", () => {
+    expect(panelSource).toContain("resetAirboxVisualizationState(displayVisualizationState");
+    expect(panelSource).toContain("visualizationOverridesForTargetReset(");
+    expect(panelSource).toContain("currentOverrides: displayVisualizationState?.overrides");
+    expect(panelSource).toContain("if (!displayVisualizationState)");
+    expect(panelSource).not.toContain("if (!visualizationState.data)");
+  });
+
+  it("renders mutation rejection recovery through the shared target sync", () => {
+    expect(panelSource).toContain("resolveVisualizationTargetMutationStatus");
+    expect(panelSource).toContain("retryRejectedMutation");
+    expect(panelSource).toContain('state === "rejected"');
+    expect(panelSource).toContain("Retry display update");
+  });
+
+  it("uses one requested/normalized/effective budget contract for the slider", () => {
+    expect(panelSource).toContain("resolveVisualizationVectorBudgetValues");
+    expect(panelSource).toContain("budgetValues.normalizedRequested");
+    expect(panelSource).toContain("budgetValues.requested");
+    expect(panelSource).toContain("budgetValues.effective");
+    expect(panelSource).not.toContain("Math.min(vectorBudgetMax, settings.vectorBudget)");
+  });
+
+  it("labels and keeps viewport-only rendering preferences out of pending backend transactions", () => {
+    expect(panelSource).toContain("visualization.patchViewportPreferences(");
+    expect(panelSource).toContain("viewportPreferencesPatch");
+    expect(panelSource).toContain("Viewport-only settings");
+  });
+
+  it("disables dependent pass controls while preserving recovery controls and reset", () => {
+    expect(panelSource).toContain("renderResolution?.degradedReasons.length");
+    expect(panelSource).toContain('ariaLabel: "Toggle target visibility"');
+    expect(panelSource).not.toContain('aria-label="Toggle surface shading"');
+    expect(panelSource).not.toContain('aria-label="Toggle wireframe overlay"');
+    expect(panelSource).toContain("disabled={pending}");
+    expect(panelSource).toContain("resetLabel={visualizationResetActionLabel(target.kind)}");
+    expect(panelSource).toContain("disabled={pending}");
+  });
+
+  it("renders target quantity selection inside the visualization inspector", () => {
+    expect(panelSource).toContain("VisualizationQuantitySection");
+    expect(panelSource).toContain('label="Quantity Source"');
+    expect(panelSource).toContain("quantitySourcePatch(settings, event.target.value)");
+    expect(panelSource).toContain("onFieldCatalogRequest()");
+  });
+
+  it("gates FDM quantity changes on the realized field catalog", () => {
+    expect(panelSource).toContain("fdmTarget ||");
+    expect(panelSource).toContain("fieldCatalogLoading");
+    expect(panelSource).toContain('isFieldPending("activeQuantityId")');
+    expect(panelSource).not.toContain(
+      "disabled={pending || !settings.visible || fieldCatalogLoading}",
+    );
+    expect(panelSource).toContain(
+      "visualizationQuantityItems(\n        settings.activeQuantityId,\n        targetKind,\n        fieldCatalog,",
+    );
+  });
+
+  it("uses the FDM domain scope and catalog gate for inspector field metadata", () => {
+    expect(panelSource).toContain("fieldMetaTarget");
+    expect(panelSource).toContain("fieldMetaTarget={fieldMetaTarget}");
+    expect(panelSource).toContain("fieldCatalogQuantityAvailable");
+    expect(panelSource).toContain("fieldMetaQuantityAvailable");
+    expect(panelSource).toContain("fieldCatalogLoading");
+  });
+
+  it("keeps target controls from patching the active analysis overlay", () => {
+    expect(panelSource).not.toContain("settingsWithAnalysisField");
+    expect(panelSource).not.toContain("analysisFieldOverlay.update");
+    expect(panelSource).not.toContain("analysisAppearancePatchFromVisualizationPatch");
+  });
+
+  it("can propagate object visualization edits to child region targets", () => {
+    expect(panelSource).toContain("resolveObjectChildRegionVisualizationTargets");
+    expect(panelSource).toContain("patchChildRegions");
+    expect(panelSource).toContain("Apply edits to child regions");
+    expect(panelSource).toContain("patchTargets");
+    expect(panelSource).toContain("Clear child region overrides");
+    expect(panelSource).toContain("resetChildRegionTargets");
+  });
+
+  it("keeps the synthetic Airbox vector fallback out of the production inspector", () => {
+    expect(panelSource).not.toContain('label="Dev fallback +Z"');
+    expect(panelSource).toContain("visualization.patchViewportPreferences(resolvedTarget, localPatch)");
+  });
+
+  it("uses target capabilities and one geometry extent control", () => {
+    expect(panelSource).toContain("visualizationTargetCapabilities(target)");
+    expect(panelSource).toContain("targetKind={target.kind}");
+    expect(panelSource.match(/<VisualizationGeometryScopeSection/g)).toHaveLength(1);
+    expect(panelSource).not.toContain('label="Arrow extent"');
+    expect(panelSource).not.toContain('aria-label="Vectors geometry scope"');
+  });
+
+  it("does not promise per-part persistence for object-owned surface vector toggles", () => {
+    expect(panelSource).toContain('aria-label="Object target vector visibility"');
+    expect(panelSource).toContain(">Object surfaces<");
+    expect(panelSource).not.toContain("Per-part vector visibility");
+  });
+
+  it("shows the canonical selected target beside every surface-vector action", () => {
+    expect(panelSource).toContain("resolveSelectedTargetVectorMeshPartRows");
+    expect(panelSource).toContain("fm-visualization-part-toggle__target");
+    expect(panelSource).toContain("part.actionTargetLabel");
+  });
+
+  it("renders scalar colormap controls in the visualization inspector", () => {
+    expect(panelSource).toContain("resolveSurfaceColorSourceItems(settings.activeQuantityId)");
+    expect(panelSource).toContain("ScalarColorbarControl");
+    expect(panelSource).toContain("useFieldMetaResource");
+    expect(panelSource).toContain("shouldShowSurfaceFieldColorbar");
+    expect(panelSource).toContain("surfaceColorSourceFieldMetaComponent");
+    expect(panelSource).toContain("component: colorbarComponent ?? null");
+    expect(panelSource).toContain("SCALAR_COLOR_PALETTE_ITEMS.map");
+    expect(panelSource).toContain("scalarColorPalettePatch(event.target.value)");
+    expect(panelSource).toContain("formatScalarColorbarValue");
+    expect(panelSource).toContain("fieldMeta.data?.stats");
+    expect(panelSource).not.toContain(">min<");
+    expect(panelSource).not.toContain(">max<");
+    expect(panelSource).not.toContain("colormap: scalarColorPalette");
+    expect(panelSource).not.toContain("delete remotePatch.scalarColorPalette");
+  });
+});

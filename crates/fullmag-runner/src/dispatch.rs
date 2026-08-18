@@ -5381,13 +5381,10 @@ fn execute_cuda_fdm(
         &mut artifacts,
     )?;
     if let Some(session) = gpu_transport.as_mut() {
-        provenance.fdm_gpu_transport_telemetry = Some(
-            session
-                .transport_telemetry()
-                .map_err(|error| RunError {
-                    message: format!("reading public GPU M1 transport telemetry failed: {error}"),
-                })?,
-        );
+        provenance.fdm_gpu_transport_telemetry =
+            Some(session.transport_telemetry().map_err(|error| RunError {
+                message: format!("reading public GPU M1 transport telemetry failed: {error}"),
+            })?);
         artifacts.update_provenance(provenance.clone());
         backend.unbind_gpu_transport()?;
         session.close().map_err(|error| RunError {

@@ -7534,6 +7534,13 @@ export interface components {
             kind: "surface_projection";
             visibility_policy: components["schemas"]["PlanarSurfaceVisibilityPolicySchema"];
         };
+        PlanarPointStyleState: {
+            color: string;
+            /** Format: double */
+            opacity: number;
+            /** Format: double */
+            size: number;
+        };
         /** @enum {string} */
         PlanarReductionSchema: "mean_occupied" | "thickness_integral" | "rms" | "min" | "max" | "abs_max";
         /** @enum {string} */
@@ -7596,8 +7603,13 @@ export interface components {
         PlanarVectorStyleState: {
             color_mode: string;
             length_mode: string;
+            monochrome_color: string;
+            /** Format: double */
+            opacity: number;
             /** Format: double */
             scale: number;
+            /** Format: double */
+            thickness: number;
         };
         PlanarViewScopeState: {
             /** @enum {string} */
@@ -7617,6 +7629,7 @@ export interface components {
             display_unit?: string | null;
             interaction?: null | components["schemas"]["PlanarInteractionState"];
             layers?: null | components["schemas"]["PlanarLayerState"];
+            point_style?: null | components["schemas"]["PlanarPointStyleState"];
             quality?: null | components["schemas"]["PlanarRenderQuality"];
             quantity_id?: string | null;
             range?: null | components["schemas"]["PlanarColorRangeState"];
@@ -7626,6 +7639,9 @@ export interface components {
             source?: null | components["schemas"]["PlanarSourceSelectionState"];
             vector_style?: null | components["schemas"]["PlanarVectorStyleState"];
             view_scope?: null | components["schemas"]["PlanarViewScopeState"];
+            viewport_colorbar_visible?: boolean | null;
+            visible?: boolean | null;
+            wireframe_style?: null | components["schemas"]["PlanarWireframeStyleState"];
         };
         PlanarVisualizationState: {
             colormap: string;
@@ -7634,6 +7650,7 @@ export interface components {
             display_unit?: string | null;
             interaction: components["schemas"]["PlanarInteractionState"];
             layers: components["schemas"]["PlanarLayerState"];
+            point_style: components["schemas"]["PlanarPointStyleState"];
             quality: components["schemas"]["PlanarRenderQuality"];
             quantity_id: string;
             range?: components["schemas"]["PlanarColorRangeState"];
@@ -7643,6 +7660,14 @@ export interface components {
             source: components["schemas"]["PlanarSourceSelectionState"];
             vector_style: components["schemas"]["PlanarVectorStyleState"];
             view_scope: components["schemas"]["PlanarViewScopeState"];
+            viewport_colorbar_visible: boolean;
+            visible: boolean;
+            wireframe_style: components["schemas"]["PlanarWireframeStyleState"];
+        };
+        PlanarWireframeStyleState: {
+            color: string;
+            /** Format: double */
+            opacity: number;
         };
         PreparationClockAdjustment: {
             /** Format: int64 */

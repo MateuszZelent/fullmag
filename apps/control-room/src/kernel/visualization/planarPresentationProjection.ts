@@ -18,12 +18,16 @@ export function projectPlanarPresentationState(
 
   return {
     ...authoritative,
+    visible: optimistic.visible,
     colormap: optimistic.colormap,
     display_unit: optimistic.display_unit,
     interaction: optimistic.interaction,
     layers: optimistic.layers,
+    point_style: optimistic.point_style,
     range: optimistic.range,
     raster_opacity: optimistic.raster_opacity,
     vector_style: optimistic.vector_style,
+    viewport_colorbar_visible: optimistic.viewport_colorbar_visible,
+    wireframe_style: optimistic.wireframe_style,
   };
 }

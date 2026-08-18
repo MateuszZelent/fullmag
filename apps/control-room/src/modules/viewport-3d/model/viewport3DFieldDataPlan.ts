@@ -9,6 +9,7 @@ import {
   quantityCatalogSupportsQuantity,
   resolveCanonicalQuantityId,
 } from "@/kernel/api/quantityIds";
+import { FDM_DISPLAY_CELL_BUDGET } from "@/shared/domain/mesh/fdmDisplaySampling";
 import {
   surfaceColorSourceToColorMode,
   type SurfaceFieldProjectionMode,
@@ -37,7 +38,26 @@ export type Viewport3DPassDemandKind =
   | "vector-glyph";
 
 export const DEFAULT_VIEWPORT3D_SHADER_MONO_COLOR =
+
   "var(--fm-syntax-string)";
+export const VIEWPORT3D_VECTOR_CARRIER_OVERSAMPLING_FACTOR = 8;
+
+export function resolveViewport3DVectorCarrierSampleLimit(
+  requestedBudget: number,
+  targetId: string,
+): number {
+  const budget = Math.max(
+    0,
+    Math.floor(Number.isFinite(requestedBudget) ? requestedBudget : 0),
+  );
+  if (budget <= 0 || targetId !== "fdm-universe-outside-support") {
+    return budget;
+  }
+  return Math.min(
+    FDM_DISPLAY_CELL_BUDGET,
+    budget * VIEWPORT3D_VECTOR_CARRIER_OVERSAMPLING_FACTOR,
+  );
+}
 
 export type Viewport3DFieldScopeKind =
   | "airbox"
@@ -905,13 +925,22 @@ export function resolveViewport3DTargetQuantityFieldDemandPlan({
         }),
         {
           forceComplete: target.targetId !== "fdm-universe-outside-support",
-          maxSamples: clampViewport3DInteractiveVectorBudgetForPlanning(
-            target.settings.vectorBudget,
-            maxVectorGlyphs,
+          maxSamples: resolveViewport3DVectorCarrierSampleLimit(
+            clampViewport3DInteractiveVectorBudgetForPlanning(
+              target.settings.vectorBudget,
+              maxVectorGlyphs,
+            ),
+            target.targetId,
           ),
           replayQuery: selectedSnapshotQuery,
-          scopeId: null,
-          scopeKind: "full",
+          scopeId:
+            target.targetId === "fdm-universe-outside-support"
+              ? "airbox"
+              : null,
+          scopeKind:
+            target.targetId === "fdm-universe-outside-support"
+              ? "airbox"
+              : "full",
         },
       ),
     );
@@ -967,12 +996,18 @@ export function resolveViewport3DTargetQuantityFieldDemandPlan({
         }),
         {
           forceComplete: target.targetId !== "fdm-universe-outside-support",
-          maxSamples: clampViewport3DInteractiveVectorBudgetForPlanning(
-            target.settings.vectorBudget,
-            maxVectorGlyphs,
+          maxSamples: resolveViewport3DVectorCarrierSampleLimit(
+            clampViewport3DInteractiveVectorBudgetForPlanning(
+              target.settings.vectorBudget,
+              maxVectorGlyphs,
+            ),
+            target.targetId,
           ),
           replayQuery: selectedSnapshotQuery,
-          scopeId: null,
+          scopeId:
+            target.targetId === "fdm-universe-outside-support"
+              ? "airbox"
+              : null,
           scopeKind:
             target.targetId === "fdm-universe-outside-support"
               ? "airbox"
@@ -1116,16 +1151,14 @@ export function resolveViewport3DTargetFieldQuery({
     };
   }
 
-  const component = fieldColorModeScalarComponent(surfaceColorMode);
-  return component
-    ? {
-        component,
-        scope_kind: "full",
-      }
-    : {
-        component: "full",
-        scope_kind: "full",
-      };
+  // Surface coloring is a presentation projection of one vector carrier.
+  // Keep its resource identity stable across orientation/X/Y/Z/magnitude so a
+  // style-only switch never detaches the visible field while another component
+  // payload is fetched.
+  return {
+    component: "full",
+    scope_kind: "full",
+  };
 }
 
 export function resolveViewport3DScopedFieldQuery({
@@ -1343,9 +1376,7 @@ function resolveViewport3DPrimaryFieldPassDemands({
       scalarFieldComponentRequest.needsFullVector)
   ) {
     demands.push({
-      component: scalarFieldComponentRequest.needsFullVector
-        ? "full"
-        : scalarFieldComponentRequest.component ?? "full",
+      component: "full",
       completeness: "complete",
       maxSamples: null,
       passId: "primary-field:surface",

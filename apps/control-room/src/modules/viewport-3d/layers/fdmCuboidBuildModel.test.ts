@@ -82,19 +82,64 @@ describe("FDM cuboid realized membership", () => {
     expect(input?.anchors).toEqual(new Float32Array([1.5, 0.5, 0.5, 7.5, 0.5, 0.5]));
   });
 
-  it("builds a sampled vector stream from anchors without constructing a cuboid model", () => {
+  it("builds a bounded sampled vector stream from anchors without a cuboid model", () => {
     const result = buildFdmVectorSegmentsFromAnchors({
       anchorMode: "center",
       anchors: new Float32Array([0, 0, 0, 1, 0, 0, 2, 0, 0]),
+      cellSize: [2, 1, 1],
       cellIndices: new Uint32Array([0, 1, 2]),
       fieldVector: fieldVector([1, 0, 0, 0, 1, 0, 0, 0, 1]),
       gridShape: [3, 1, 1],
       maxVectors: 2,
-      scale: 1,
+      scale: 100,
     });
 
     expect(result?.cellIndices.length).toBe(2);
+    expect(Math.hypot(
+      (result?.segments?.[3] ?? 0) - (result?.segments?.[0] ?? 0),
+      (result?.segments?.[4] ?? 0) - (result?.segments?.[1] ?? 0),
+      (result?.segments?.[5] ?? 0) - (result?.segments?.[2] ?? 0),
+    )).toBeCloseTo(1.5 * Math.cbrt(3 / 2));
     expect(result?.segments.length).toBe(2 * 7);
+  });
+
+  it("spreads full-grid vector glyphs across distinct 3D bins", () => {
+    const gridShape: [number, number, number] = [4, 4, 4];
+    const cellIndices = Uint32Array.from({ length: 64 }, (_, index) => index);
+    const anchors = new Float32Array(64 * 3);
+    for (let cellIndex = 0; cellIndex < cellIndices.length; cellIndex += 1) {
+      const x = cellIndex % 4;
+      const y = Math.floor(cellIndex / 4) % 4;
+      const z = Math.floor(cellIndex / 16);
+      const offset = cellIndex * 3;
+      anchors[offset] = x;
+      anchors[offset + 1] = y;
+      anchors[offset + 2] = z;
+    }
+    const result = buildFdmVectorSegmentsFromAnchors({
+      anchorMode: "center",
+      anchors,
+      cellIndices,
+      fieldVector: fieldVector(
+        Array.from({ length: 64 * 3 }, (_, component) =>
+          component % 3 === 0 ? 1 : 0,
+        ),
+      ),
+      gridShape,
+      maxVectors: 8,
+      scale: 1,
+    });
+    const selected = result?.cellIndices;
+    expect(selected).not.toBeNull();
+    const bins = new Set(
+      Array.from(selected ?? [], (cellIndex) => [
+        Math.floor((cellIndex % 4) / 2),
+        Math.floor((Math.floor(cellIndex / 4) % 4) / 2),
+        Math.floor(Math.floor(cellIndex / 16) / 2),
+      ].join(":")),
+    );
+    expect(selected?.length).toBe(8);
+    expect(bins.size).toBe(8);
   });
 
   it("does not scan a copied selected set for every matching cell after the budget is full", () => {
@@ -758,5 +803,41 @@ describe("FDM cuboid realized membership", () => {
     );
 
     expect(model?.cellIndices).toEqual(new Uint32Array([3]));
+  });
+  it("caps built vector segment length at the realized cell scale", () => {
+    const result = buildViewport3DFdmCuboid({
+      cellSelection: "dense",
+      domain: {
+        bounds: null,
+        displayCellBudget: 1,
+        displayCellCount: 1,
+        kind: "fdm-grid",
+        origin: [0, 0, 0],
+        shape: [1, 1, 1],
+        spacing: [2, 1, 1],
+        stride: 1,
+        totalCells: 1,
+      },
+      maxVectorGlyphs: 1,
+      realizedRegionIds: null,
+      vectorAnchorMode: "center",
+      vectorField: fieldVector([1, 0, 0]),
+      vectorScale: 100,
+      voxelFillRatio: 1,
+      voxelMagnitudeThreshold: 0,
+      voxelTopography: {
+        amplitudeCells: 0,
+        component: "magnitude",
+        enabled: false,
+      },
+    });
+
+    const segments = result.vectorSegments;
+    expect(segments).not.toBeNull();
+    expect(Math.hypot(
+      (segments?.[3] ?? 0) - (segments?.[0] ?? 0),
+      (segments?.[4] ?? 0) - (segments?.[1] ?? 0),
+      (segments?.[5] ?? 0) - (segments?.[2] ?? 0),
+    )).toBeCloseTo(1.5);
   });
 });

@@ -34,8 +34,8 @@ vi.mock("@/kernel/api/codecs", () => ({
 
 vi.mock("./model/fieldMapRenderModel", () => ({
   buildFieldMapRenderModel: (input: unknown) => {
-    mocks.renderModel(input);
-    return {
+    const override = mocks.renderModel(input);
+    return override ?? {
       diagnostics: [],
       display: { axisUnit: "m", legendUnit: "A/m", probeScale: 1 },
       layers: (input as { layers: unknown }).layers,
@@ -273,6 +273,81 @@ describe("FieldMapModule planar state ownership", () => {
     expect(html).toContain('data-planar-field-device="cpu"');
     expect(html).toContain('data-planar-field-precision="double"');
     expect(html).toContain('data-planar-sample-token="planar-sample-v3:current"');
+  });
+
+  it("does not duplicate Inspector-owned planar selection controls", () => {
+    mocks.visualization.data = {
+      planar: {
+        colormap: "viridis",
+        component: "magnitude",
+        default_slice: {
+          operator: { kind: "plane_sample" },
+          plane: "xy",
+          position_fraction: 0.5,
+        },
+        display_unit: "A/m",
+        interaction: { pan_u_m: 0, pan_v_m: 0, zoom: 1 },
+        layers: { mesh: true, raster: true, vectors: false },
+        quantity_id: "m",
+        quality: "interactive",
+        range: { mode: "auto" },
+        resolution: { height: 128, width: 256 },
+        source: { kind: "default" },
+        vector_style: { color_mode: "orientation", length_mode: "uniform", scale: 1 },
+        view_scope: { kind: "monitor_target" },
+      },
+    };
+    mocks.visualization.status = "ready";
+    mocks.renderReady = true;
+
+    const html = renderToStaticMarkup(<FieldMapModule />);
+
+    expect(html).not.toContain('aria-label="Planar field selection controls"');
+    for (const label of ["Source", "Quantity", "Component", "Plane"]) {
+      expect(html).not.toContain(`aria-label="${label}"`);
+    }
+  });
+
+  it("renders a 3D-style scalar colorbar with the display-unit range", () => {
+    mocks.visualization.data = {
+      planar: {
+        colormap: "viridis",
+        component: "magnitude",
+        display_unit: "kA/m",
+        interaction: { pan_u_m: 0, pan_v_m: 0, zoom: 1 },
+        layers: { mesh: true, raster: true, vectors: false },
+        quantity_id: "m",
+        range: { mode: "auto" },
+        resolution: { height: 128, width: 256 },
+        source: { kind: "default" },
+        default_slice: {
+          operator: { kind: "plane_sample" },
+          plane: "xy",
+          position_fraction: 0.5,
+        },
+        vector_style: { color_mode: "orientation", length_mode: "uniform", scale: 1 },
+        view_scope: { kind: "monitor_target" },
+      },
+    };
+    mocks.visualization.status = "ready";
+    mocks.renderReady = true;
+    mocks.renderModel.mockImplementationOnce((input: unknown) => ({
+      diagnostics: [],
+      display: { axisUnit: "m", legendUnit: "kA/m", probeScale: 1e-3 },
+      layers: (input as { layers: unknown }).layers,
+      range: { max: 2_000, min: -1_000 },
+    }));
+
+    const html = renderToStaticMarkup(<FieldMapModule />);
+
+    expect(html).toContain('class="fm-field-map__colorbar"');
+    expect(html).toContain("Rendered range");
+    expect(html).toContain("-1 kA/m");
+    expect(html).toContain("2 kA/m");
+    expect(html).toContain('class="fm-field-map__colorbar-ramp" data-colormap="viridis"');
+    expect(html).toContain(
+      "background:linear-gradient(to top, rgb(68, 1, 84), rgb(49, 104, 142), rgb(53, 183, 121), rgb(253, 231, 37))",
+    );
   });
 
   it("keeps the canonical plan and sample identity stable while optimistic layers alter rendered flags", () => {

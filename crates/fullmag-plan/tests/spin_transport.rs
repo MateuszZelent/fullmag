@@ -165,8 +165,8 @@ fn resolves_bounded_public_fdm_gpu_m1_spin_transport() {
     );
     let serialized = serde_json::to_value(resolved).expect("serialize bounded GPU M1 spin plan");
     assert_eq!(serialized["resolved_execution_mode"], "strict");
-    let round_trip: ResolvedSpinTransportPlanIR = serde_json::from_value(serialized)
-        .expect("deserialize bounded GPU M1 spin plan");
+    let round_trip: ResolvedSpinTransportPlanIR =
+        serde_json::from_value(serialized).expect("deserialize bounded GPU M1 spin plan");
     assert_eq!(&round_trip, resolved);
     assert!(resolved.fdm_cpu_double.is_none());
     assert!(resolved.fdm_cpu_double_reciprocal.is_none());

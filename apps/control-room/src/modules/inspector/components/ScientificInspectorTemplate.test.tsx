@@ -1,9 +1,40 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
-import { ScientificInspectorTemplate } from "./ScientificInspectorTemplate";
+import {
+  ScientificInspectorContext,
+  ScientificInspectorIdentity,
+  ScientificInspectorTemplate,
+} from "./ScientificInspectorTemplate";
 
 describe("ScientificInspectorTemplate", () => {
+  it("renders identity separately from an optionally collapsed context", () => {
+    const identity = renderToStaticMarkup(
+      <ScientificInspectorIdentity
+        breadcrumbs={["Model", "Visualization"]}
+        methodLabel="Display controls"
+        physicalLabel="Airbox"
+        title="Airbox visualization"
+      />,
+    );
+    const context = renderToStaticMarkup(
+      <ScientificInspectorContext
+        collapsible
+        defaultOpen={false}
+        properties={[{ label: "Target scope", value: "Airbox" }]}
+        provenance={[{ label: "Target ID", value: "airbox" }]}
+        status={{ availability: "available", execution: "interactive", resource: "ready" }}
+      />,
+    );
+
+    expect(identity).toContain("Airbox visualization");
+    expect(identity).toContain("Display controls");
+    expect(context).toContain('data-collapsible="true"');
+    expect(context).toContain('data-open="false"');
+    expect(context).toContain("Status");
+    expect(context).toContain("Provenance");
+  });
+
   it("renders identity, independent statuses, SI properties, provenance, and diagnostics", () => {
     const html = renderToStaticMarkup(
       <ScientificInspectorTemplate

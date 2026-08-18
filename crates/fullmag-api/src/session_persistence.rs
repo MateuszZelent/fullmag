@@ -101,7 +101,7 @@ impl From<&SessionStateResponse> for PersistedCurrentLiveSnapshot {
     }
 }
 
-const DISPLAY_PRESENTATION_SCHEMA_VERSION: u32 = 9;
+const DISPLAY_PRESENTATION_SCHEMA_VERSION: u32 = 10;
 
 fn persisted_display_presentation(
     presentation: &DisplayPresentationState,
@@ -117,8 +117,9 @@ fn restore_display_presentation(
         6 => migrate_display_presentation_v6(document.clone()),
         7 => migrate_display_presentation_v7(document.clone()),
         8 => migrate_display_presentation_v8(document.clone()),
+        9 => migrate_display_presentation_v9(document.clone()),
         DISPLAY_PRESENTATION_SCHEMA_VERSION => serde_json::from_value(document.clone())
-            .map_err(|error| format!("invalid v9 display presentation: {error}")),
+            .map_err(|error| format!("invalid v10 display presentation: {error}")),
         other => Err(format!(
             "unsupported display presentation schema_version {other}; current version is {DISPLAY_PRESENTATION_SCHEMA_VERSION}"
         )),
@@ -175,8 +176,50 @@ fn migrate_display_presentation_v8(
         );
     }
 
+    migrate_display_presentation_v9(state)
+}
+
+fn migrate_display_presentation_v9(
+    mut state: serde_json::Value,
+) -> Result<DisplayPresentationState, String> {
+    let defaults = serde_json::to_value(default_planar_visualization_state())
+        .expect("default planar visualization serializes");
+    if let Some(planar_document) = state
+        .pointer_mut("/visualization_planar")
+        .and_then(serde_json::Value::as_object_mut)
+    {
+        let default_planar = defaults
+            .as_object()
+            .expect("default planar visualization is an object");
+        for field in [
+            "visible",
+            "viewport_colorbar_visible",
+            "wireframe_style",
+            "point_style",
+        ] {
+            if let Some(value) = default_planar.get(field) {
+                planar_document
+                    .entry(field)
+                    .or_insert_with(|| value.clone());
+            }
+        }
+        if let (Some(vector_style), Some(default_vector_style)) = (
+            planar_document
+                .get_mut("vector_style")
+                .and_then(serde_json::Value::as_object_mut),
+            default_planar
+                .get("vector_style")
+                .and_then(serde_json::Value::as_object),
+        ) {
+            for field in ["opacity", "thickness", "monochrome_color"] {
+                if let Some(value) = default_vector_style.get(field) {
+                    vector_style.entry(field).or_insert_with(|| value.clone());
+                }
+            }
+        }
+    }
     serde_json::from_value(state)
-        .map_err(|error| format!("invalid migrated v8 display presentation: {error}"))
+        .map_err(|error| format!("invalid migrated v9 display presentation: {error}"))
 }
 
 fn migrate_display_presentation_v6(
@@ -2585,8 +2628,8 @@ mod planar_presentation_migration_tests {
         planar.remove("source");
         planar.remove("default_slice");
 
-        let restored = restore_display_presentation(Some(8), &document)
-            .expect("migrate v8 default source");
+        let restored =
+            restore_display_presentation(Some(8), &document).expect("migrate v8 default source");
         let restored = serde_json::to_value(restored).expect("serialize migrated presentation");
         assert_eq!(
             restored["visualization_planar"]["source"],
@@ -2615,8 +2658,8 @@ mod planar_presentation_migration_tests {
         planar.remove("source");
         planar.remove("default_slice");
 
-        let restored = restore_display_presentation(Some(8), &document)
-            .expect("migrate v8 monitor source");
+        let restored =
+            restore_display_presentation(Some(8), &document).expect("migrate v8 monitor source");
         let restored = serde_json::to_value(restored).expect("serialize migrated presentation");
         assert_eq!(
             restored["visualization_planar"]["source"],
@@ -2671,8 +2714,8 @@ mod planar_presentation_migration_tests {
         layers.remove("points");
         layers.remove("bounds");
 
-        let restored = restore_display_presentation(Some(7), &document)
-            .expect("migrate v7 presentation");
+        let restored =
+            restore_display_presentation(Some(7), &document).expect("migrate v7 presentation");
         let layers = restored
             .visualization_planar
             .expect("planar presentation")

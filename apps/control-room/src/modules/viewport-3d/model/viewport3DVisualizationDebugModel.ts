@@ -501,7 +501,12 @@ function buildHealthEvidence(
         ? null
         : decoded.scopeKind == null && decoded.scopeId == null
           ? null
-          : (decoded.scopeId ?? null) === carrier.requestedScopeId,
+          : responseScopeIdMatchesRequestedScope(
+              decoded.scopeKind ?? null,
+              decoded.scopeId ?? null,
+              carrier.requestedScopeKind,
+              carrier.requestedScopeId,
+            ),
     scopeKindMatches: !decoded || !carrier.requestIdentityKnown
       ? null
       : compareWhenKnown(decoded.scopeKind, carrier.requestedScopeKind),
@@ -515,6 +520,19 @@ function buildHealthEvidence(
     valuesFinite: stats ? stats.nonFiniteCount === 0 : null,
     vectorPassPresent: !hasRequestedPass(carrier, "vector-glyph") || carrier.vectorSegmentByteLength != null,
   };
+}
+
+function responseScopeIdMatchesRequestedScope(
+  decodedScopeKind: string | null,
+  decodedScopeId: string | null,
+  requestedScopeKind: string,
+  requestedScopeId: string | null,
+): boolean {
+  if (decodedScopeKind !== requestedScopeKind) return false;
+  if (requestedScopeKind === "airbox" && requestedScopeId === null) {
+    return decodedScopeId === "airbox";
+  }
+  return decodedScopeId === requestedScopeId;
 }
 
 function completeHealthEvidence(): VisualizationDebugHealthEvidence {

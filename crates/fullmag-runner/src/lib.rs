@@ -449,10 +449,9 @@ pub use types::{
     fem_eigen_mesh_generation_id, fem_frequency_response_mesh_generation_id,
     fem_mesh_topology_fingerprint, fem_plan_mesh_generation_id, live_preview_values_sha256,
     AuxiliaryArtifact, ExecutionProvenance, FemCrossoverDecision, FemEigenRunResult,
-    FemMeshObjectSegment,
-    FemMeshPartPayload, FemMeshPayload, InitialTimestepReason, LegacyDtPolicy,
-    LiveFieldMaterializationState, LiveFieldMaterializationStatus, LivePreviewField,
-    LivePreviewRequest, LiveVectorFieldSnapshot, LlgTimestepCapabilityId,
+    FemMeshObjectSegment, FemMeshPartPayload, FemMeshPayload, InitialTimestepReason,
+    LegacyDtPolicy, LiveFieldMaterializationState, LiveFieldMaterializationStatus,
+    LivePreviewField, LivePreviewRequest, LiveVectorFieldSnapshot, LlgTimestepCapabilityId,
     LlgTimestepQualificationId, RequestedTimestepPolicy, ResolvedFallback, ResolvedTimestepPolicy,
     RunError, RunResult, RunStatus, RuntimeEngineInfo, SolverAttemptRecord, StageFemMeshAsset,
     StageFemMeshIdentity, StepAction, StepStats, StepUpdate, TimestepBackend, TimestepDevice,
@@ -460,9 +459,8 @@ pub use types::{
 };
 
 use crate::capabilities::{
-    capabilities_for_fdm_engine_with_precision,
-    capabilities_for_fem_eigen_engine, capabilities_for_fem_engine,
-    capabilities_for_fem_frequency_response_validation_engine,
+    capabilities_for_fdm_engine_with_precision, capabilities_for_fem_eigen_engine,
+    capabilities_for_fem_engine, capabilities_for_fem_frequency_response_validation_engine,
 };
 use crate::fdm::cpu::multilayer_reference;
 use crate::fdm::cpu::reference as cpu_reference;
@@ -470,6 +468,10 @@ use crate::fdm::gpu::cuda::native as native_fdm;
 use crate::native_fem::{
     native_frequency_domain_availability, FrequencyDomainAvailabilityRequest,
     FrequencyDomainPhaseConvention, FrequencyDomainStudyKind,
+};
+use crate::quantities::{
+    active_fdm_multilayer_preview_quantities, active_fdm_preview_quantities,
+    active_fem_preview_quantities,
 };
 use fullmag_ir::{BackendPlanIR, FdmMultilayerPlanIR, FdmPlanIR, OutputIR, ProblemIR};
 use interactive::InteractiveBackend;
@@ -4054,19 +4056,39 @@ pub fn resolve_planned_runtime_capabilities(
 ) -> Result<BackendCapabilities, RunError> {
     require_supported_fem_topology(problem, plan)?;
     match &plan.backend_plan {
-        BackendPlanIR::Fdm(fdm) => Ok(capabilities_for_fdm_engine_with_precision(
-            dispatch::resolve_fdm_engine_for_plan_with_trail(problem, fdm)?.engine,
-            capabilities::FdmCapabilityProfile::SingleGrid,
-            fdm.precision,
-        )),
-        BackendPlanIR::Fem(fem) => Ok(capabilities_for_fem_engine(
-            dispatch::resolve_fem_engine_for_plan_with_trail(problem, fem, false)?.engine,
-        )),
-        BackendPlanIR::FdmMultilayer(fdm) => Ok(capabilities_for_fdm_engine_with_precision(
-            dispatch::resolve_fdm_engine_with_trail(problem)?.engine,
-            capabilities::FdmCapabilityProfile::Multilayer,
-            fdm.precision,
-        )),
+        BackendPlanIR::Fdm(fdm) => {
+            let engine = dispatch::resolve_fdm_engine_for_plan_with_trail(problem, fdm)?.engine;
+            let mut capabilities = capabilities_for_fdm_engine_with_precision(
+                engine,
+                capabilities::FdmCapabilityProfile::SingleGrid,
+                fdm.precision,
+            );
+            restrict_capabilities_to_plan_active_quantities(&mut capabilities, |quantities| {
+                active_fdm_preview_quantities(engine, fdm, quantities)
+            });
+            Ok(capabilities)
+        }
+        BackendPlanIR::Fem(fem) => {
+            let engine =
+                dispatch::resolve_fem_engine_for_plan_with_trail(problem, fem, false)?.engine;
+            let mut capabilities = capabilities_for_fem_engine(engine);
+            restrict_capabilities_to_plan_active_quantities(&mut capabilities, |quantities| {
+                active_fem_preview_quantities(engine, fem, quantities)
+            });
+            Ok(capabilities)
+        }
+        BackendPlanIR::FdmMultilayer(fdm) => {
+            let engine = dispatch::resolve_fdm_engine_with_trail(problem)?.engine;
+            let mut capabilities = capabilities_for_fdm_engine_with_precision(
+                engine,
+                capabilities::FdmCapabilityProfile::Multilayer,
+                fdm.precision,
+            );
+            restrict_capabilities_to_plan_active_quantities(&mut capabilities, |quantities| {
+                active_fdm_multilayer_preview_quantities(fdm, quantities)
+            });
+            Ok(capabilities)
+        }
         BackendPlanIR::FemEigen(_) => Ok(capabilities_for_fem_eigen_engine(
             dispatch::resolve_fem_engine_with_trail(problem)?.engine,
         )),
@@ -4076,6 +4098,31 @@ pub fn resolve_planned_runtime_capabilities(
             ))
         }
     }
+}
+
+fn restrict_capabilities_to_plan_active_quantities(
+    capabilities: &mut BackendCapabilities,
+    filter: impl Fn(&[&str]) -> Vec<&'static str>,
+) {
+    let preview_quantities = capabilities
+        .preview_quantities
+        .iter()
+        .map(String::as_str)
+        .collect::<Vec<_>>();
+    capabilities.preview_quantities = filter(&preview_quantities)
+        .into_iter()
+        .map(str::to_string)
+        .collect();
+
+    let snapshot_quantities = capabilities
+        .snapshot_quantities
+        .iter()
+        .map(String::as_str)
+        .collect::<Vec<_>>();
+    capabilities.snapshot_quantities = filter(&snapshot_quantities)
+        .into_iter()
+        .map(str::to_string)
+        .collect();
 }
 
 pub fn resolve_session_runtime(problem: &ProblemIR) -> Result<ResolvedSessionRuntime, RunError> {
@@ -4514,6 +4561,45 @@ mod tests {
             "cpu"
         );
         assert_eq!(effective, "gpu");
+    }
+
+    #[test]
+    fn resolved_fdm_capabilities_advertise_only_plan_active_field_quantities() {
+        let problem = ProblemIR::bootstrap_example();
+        let plan = fullmag_plan::plan(&problem).expect("bootstrap FDM plan should resolve");
+        let capabilities = resolve_planned_runtime_capabilities(&problem, &plan)
+            .expect("bootstrap FDM capabilities should resolve");
+
+        assert!(capabilities.preview_quantities.iter().any(|id| id == "m"));
+        assert!(capabilities
+            .preview_quantities
+            .iter()
+            .any(|id| id == "H_ex"));
+        assert!(!capabilities
+            .preview_quantities
+            .iter()
+            .any(|id| id == "H_ext"));
+        assert!(!capabilities
+            .preview_quantities
+            .iter()
+            .any(|id| id == "H_demag"));
+
+        let mut zeeman_problem = problem;
+        zeeman_problem
+            .energy_terms
+            .push(fullmag_ir::EnergyTermIR::Zeeman {
+                b: [0.0, 0.0, 1.0e-3],
+            });
+        let zeeman_plan =
+            fullmag_plan::plan(&zeeman_problem).expect("FDM plan with Zeeman field should resolve");
+        let zeeman_capabilities =
+            resolve_planned_runtime_capabilities(&zeeman_problem, &zeeman_plan)
+                .expect("FDM Zeeman capabilities should resolve");
+
+        assert!(zeeman_capabilities
+            .preview_quantities
+            .iter()
+            .any(|id| id == "H_ext"));
     }
 
     #[test]
@@ -7742,7 +7828,9 @@ mod tests {
 
         assert_eq!(result.status, RunStatus::Completed);
         assert_eq!(updates.iter().filter(|update| update.finished).count(), 1);
-        let terminal = updates.last().expect("completed run should publish a terminal update");
+        let terminal = updates
+            .last()
+            .expect("completed run should publish a terminal update");
         assert!(terminal.finished, "completed update must be published last");
         let final_stats = result
             .steps

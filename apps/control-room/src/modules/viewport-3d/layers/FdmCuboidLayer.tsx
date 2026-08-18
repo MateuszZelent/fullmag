@@ -106,6 +106,8 @@ export {
   buildFdmVectorSampledCellIndices,
   resolveFdmCuboidMembershipRevision,
   resolveFdmVectorGlyphScale,
+  resolveFdmVectorGlyphScaleForCellSize,
+  resolveFdmVectorGlyphSamplingSpacingScale,
   type FdmCuboidInstanceModel,
   type FdmCuboidInstanceModelOptions,
   type FdmVoxelTopographyOptions,
@@ -949,6 +951,7 @@ export function useFdmCuboidBuildResult({
   if (!request) return undefined;
   return resolveFdmCuboidBuildState({
     currentBuildKey: buildKey,
+    currentTopologyKey: topologyKey ?? null,
     snapshot,
   });
 }
@@ -1298,6 +1301,25 @@ const FdmCuboidPointsPass = memo(function FdmCuboidPointsPass({
   );
 });
 
+export function fdmCuboidVectorPassCanRenderWithoutCellModel({
+  targetVisible,
+  vectorsEnabled,
+  vectorsVisible,
+  vectorSegments,
+}: {
+  targetVisible: boolean;
+  vectorsEnabled: boolean;
+  vectorsVisible: boolean;
+  vectorSegments: Float32Array | null;
+}): boolean {
+  return Boolean(
+    targetVisible &&
+      vectorsEnabled &&
+      vectorsVisible &&
+      (vectorSegments?.length ?? 0) > 0,
+  );
+}
+
 export const FdmCuboidLayer = memo(function FdmCuboidLayer({
   adoptionRegistry,
   carrierId = "fdm-domain",
@@ -1543,13 +1565,43 @@ export const FdmCuboidLayer = memo(function FdmCuboidLayer({
     rawInspectListenerEnabled,
   ]);
 
-  if (
-    !model ||
-    !preparedInstances ||
-    !renderSettings.visible ||
-    !passPlan.needsCellModel
-  ) {
+  if (!renderSettings.visible || !passPlan.needsCellModel) {
     return null;
+  }
+
+  const vectorsEnabled = viewport3DVectorLayersEnabledFromBrowserConfig();
+  const vectorPass =
+    vectorsEnabled && passPlan.needsVectors ? (
+      <VectorFieldLayer
+        adoptionRegistry={adoptionRegistry}
+        buildReference={vectorBuildReference}
+        carrierId={carrierId}
+        colors={colors}
+        colorMode={vectorColorModeFromSettings(renderSettings, vectorColorMode)}
+        glyphColorsOverride={vectorGlyphColors}
+        materialProfile={materialProfile.glyphs}
+        opacity={targetRenderPlan.vectors.opacity}
+        renderOnTop
+        fieldBufferId={
+          fieldVector
+            ? `decoded:${fieldVector.quantityId}:${fieldVector.pointCount}:${fieldVector.values.byteLength}`
+            : null
+        }
+        segments={vectorSegments}
+        style={vectorStyleFromSettings(renderSettings, vectorStyle)}
+        tracker={tracker}
+      />
+    ) : null;
+
+  if (!model || !preparedInstances) {
+    return fdmCuboidVectorPassCanRenderWithoutCellModel({
+      targetVisible: renderSettings.visible,
+      vectorsEnabled,
+      vectorsVisible: passPlan.needsVectors,
+      vectorSegments,
+    })
+      ? vectorPass
+      : null;
   }
 
   const handlePointerDown = (event: ThreeEvent<PointerEvent>) => {
@@ -1640,28 +1692,7 @@ export const FdmCuboidLayer = memo(function FdmCuboidLayer({
           tracker={tracker}
         />
       ) : null}
-      {viewport3DVectorLayersEnabledFromBrowserConfig() &&
-      passPlan.needsVectors ? (
-        <VectorFieldLayer
-          adoptionRegistry={adoptionRegistry}
-          buildReference={vectorBuildReference}
-          carrierId={carrierId}
-          colors={colors}
-          colorMode={vectorColorModeFromSettings(renderSettings, vectorColorMode)}
-          glyphColorsOverride={vectorGlyphColors}
-          materialProfile={materialProfile.glyphs}
-          opacity={targetRenderPlan.vectors.opacity}
-          renderOnTop
-          fieldBufferId={
-            fieldVector
-              ? `decoded:${fieldVector.quantityId}:${fieldVector.pointCount}:${fieldVector.values.byteLength}`
-              : null
-          }
-          segments={vectorSegments}
-          style={vectorStyleFromSettings(renderSettings, vectorStyle)}
-          tracker={tracker}
-        />
-      ) : null}
+      {vectorPass}
     </group>
   );
 });

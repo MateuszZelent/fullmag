@@ -98,6 +98,81 @@ describe("planar renderer lifecycle", () => {
     expect(context.fill).toHaveBeenCalledTimes(1);
   });
 
+  it("applies shared Inspector wireframe, point, and monochrome vector styles", () => {
+    const context = {
+      arc: vi.fn(), beginPath: vi.fn(), clearRect: vi.fn(), fill: vi.fn(), fillStyle: "",
+      globalAlpha: 1, lineTo: vi.fn(), lineWidth: 0, moveTo: vi.fn(), restore: vi.fn(),
+      save: vi.fn(), stroke: vi.fn(), strokeStyle: "",
+    } as unknown as CanvasRenderingContext2D;
+
+    drawPlanarOverlays(context, 100, 50, {
+      glyphs: [{ index: 0, normal: 0, u: 0.4, v: 0.2 }],
+      gridWidth: 2,
+      layers: { contours: false, mesh: true, points: true, vectors: true },
+      meshSegments: new Float32Array([0, 0, 1, 1]),
+      meshViewport: [0, 1, 0, 1],
+      pointStyle: { color: "#00ff00", opacity: 0.5, size: 8 },
+      samplePoints: [{ index: 0, u: 0.5, v: 0.5 }],
+      vectorColorMode: "monochrome",
+      vectorStyle: { color: "#0000ff", opacity: 0.6, thickness: 3 },
+      wireframeStyle: { color: "#ff0000", opacity: 0.4 },
+    });
+
+    expect(context.arc).toHaveBeenCalledWith(50, 25, 4, 0, Math.PI * 2);
+    expect(context.stroke).toHaveBeenCalledTimes(2);
+    expect(context.fill).toHaveBeenCalledTimes(1);
+    expect(context.globalAlpha).toBe(1);
+    expect(context.lineWidth).toBe(1);
+  });
+
+  it("draws an Amumax-style axis pointer in physical viewport coordinates", () => {
+    const context = {
+      beginPath: vi.fn(), clearRect: vi.fn(), lineTo: vi.fn(), lineWidth: 0,
+      moveTo: vi.fn(), restore: vi.fn(), save: vi.fn(), setLineDash: vi.fn(),
+      stroke: vi.fn(), strokeStyle: "",
+    } as unknown as CanvasRenderingContext2D;
+
+    drawPlanarOverlays(context, 200, 100, {
+      axisPointer: { u: 3, v: 2 },
+      gridWidth: 2,
+      layers: { contours: false, mesh: false, vectors: false },
+      meshViewport: [1, 5, 0, 4],
+    } as Parameters<typeof drawPlanarOverlays>[3]);
+
+    expect(context.setLineDash).toHaveBeenCalledWith([6, 4]);
+    expect(context.moveTo).toHaveBeenCalledWith(100, 0);
+    expect(context.lineTo).toHaveBeenCalledWith(100, 100);
+    expect(context.moveTo).toHaveBeenCalledWith(0, 50);
+    expect(context.lineTo).toHaveBeenCalledWith(200, 50);
+  });
+
+  it("resolves the accent token before painting the axis pointer", () => {
+    const canvas = {
+      ownerDocument: {
+        defaultView: {
+          getComputedStyle: vi.fn(() => ({
+            getPropertyValue: vi.fn(() => "rgb(203, 166, 247)"),
+          })),
+        },
+      },
+    } as unknown as HTMLCanvasElement;
+    const context = {
+      beginPath: vi.fn(), clearRect: vi.fn(), lineTo: vi.fn(), lineWidth: 0,
+      moveTo: vi.fn(), restore: vi.fn(), save: vi.fn(), setLineDash: vi.fn(),
+      stroke: vi.fn(), strokeStyle: "",
+      canvas,
+    } as unknown as CanvasRenderingContext2D;
+
+    drawPlanarOverlays(context, 200, 100, {
+      axisPointer: { u: 3, v: 2 },
+      gridWidth: 2,
+      layers: { contours: false, mesh: false, vectors: false },
+      meshViewport: [1, 5, 0, 4],
+    } as Parameters<typeof drawPlanarOverlays>[3]);
+
+    expect(context.strokeStyle).toBe("rgb(203, 166, 247)");
+  });
+
   it("maps fit, pan, and zoom in CSS pixels while the backing canvas remains DPR-scaled", () => {
     const context = {
       clearRect: vi.fn(),

@@ -1128,7 +1128,8 @@ impl ExchangeLlgProblem {
         let ext = self.terms.external_field.unwrap_or([0.0, 0.0, 0.0]);
         let per_node_field = self.terms.per_node_field.as_ref();
         let static_field = self.static_external_field.as_ref();
-        if self.terms.external_field.is_some() || per_node_field.is_some() || static_field.is_some() {
+        if self.terms.external_field.is_some() || per_node_field.is_some() || static_field.is_some()
+        {
             #[cfg(feature = "parallel")]
             {
                 h_eff.par_iter_mut().enumerate().for_each(|(i, h)| {
@@ -1621,7 +1622,8 @@ impl ExchangeLlgProblem {
         let ext = self.terms.external_field.unwrap_or([0.0, 0.0, 0.0]);
         let per_node_field = self.terms.per_node_field.as_ref();
         let static_field = self.static_external_field.as_ref();
-        if self.terms.external_field.is_none() && per_node_field.is_none() && static_field.is_none() {
+        if self.terms.external_field.is_none() && per_node_field.is_none() && static_field.is_none()
+        {
             return;
         }
 

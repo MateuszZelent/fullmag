@@ -1,6 +1,19 @@
 import { MAX_VISUALIZATION_DEBUG_SNAPSHOT_BYTES } from "@/kernel/visualization/VisualizationDebugController";
+import { copyTextToClipboard } from "@/shared/browser/copyTextToClipboard";
 
 import type { VisualizationDebugPanelModel } from "./VisualizationDebugPanelModel";
+import {
+  allIssues,
+  allObservations,
+  formatBackendStats,
+  formatBytes,
+  formatContext,
+  formatDrawingBuffer,
+  formatDuration,
+  formatTimestamp,
+  memoryGroups,
+  statisticsRows,
+} from "./visualizationDebugPresentation";
 
 export const VISUALIZATION_DEBUG_EXPORT_SCHEMA_VERSION =
   "fullmag.visualization-debug.v1" as const;
@@ -54,6 +67,7 @@ export interface VisualizationDebugEvidenceActionDependencies {
 }
 
 export interface VisualizationDebugEvidenceActions {
+  copyLog(): Promise<void>;
   copyResourceKey(): Promise<void>;
   copySnapshot(): Promise<void>;
   dispose(): void;
@@ -94,6 +108,250 @@ export function buildVisualizationDebugExport(
       "serialization",
     );
   }
+}
+
+export function buildVisualizationDebugLog(
+  model: VisualizationDebugPanelModel,
+  exportedAtMs: number,
+): string {
+  const lines: string[] = ["Fullmag Visualization Debug Log"];
+  const add = (label: string, value: unknown) => {
+    lines.push(`${label}\t${formatLogValue(value)}`);
+  };
+  const section = (title: string) => {
+    lines.push("", title);
+  };
+  const observations = allObservations(model);
+
+  add("Exported at", formatLogTimestamp(exportedAtMs));
+  add("State", model.state);
+  add("Health", model.disposition);
+  add("Target", model.target?.id ?? "—");
+  add("Target kind", model.target?.kind ?? "—");
+  add("Selection kind", model.target?.selectionKind ?? "—");
+
+  section("Viewport & carriers");
+  for (const viewport of model.viewports) {
+    lines.push(`Viewport\t${viewport.viewportId}`);
+    const snapshot = viewport.snapshots.at(-1) ?? null;
+    add("Committed frame", snapshot?.viewport.frameCommitId ?? "—");
+    add("Context", formatContext(snapshot));
+    add("Drawing buffer", formatDrawingBuffer(snapshot));
+    add("Client acknowledgements", `${viewport.clientAcks.length} (viewport-wide)`);
+    for (const carrier of viewport.carriers) {
+      lines.push(`Carrier\t${carrier.carrierId}`);
+      const observation = carrier.observations.at(-1);
+      add("Carrier role", observation?.carrier.carrierRole ?? "—");
+      add(
+        "Field resource",
+        formatFieldResourceLogValue(observation?.carrier.fieldResourceState ?? null),
+      );
+      add("Observations", carrier.observations.length);
+    }
+  }
+
+  section("Request & transport");
+  for (const observation of observations) {
+    lines.push(`Carrier\t${observation.carrier.carrierId}`);
+    add("Planner request ID", observation.carrier.request.plannerRequestId ?? "—");
+    add("Canonical resource key", observation.carrier.request.resourceKey ?? "—");
+    add("Requested component", observation.query?.component ?? "—");
+    add("Geometry scope", observation.query?.geometryScope ?? "full");
+    add("Maximum samples", observation.query?.maxSamples ?? "all");
+    add("Scope", observation.query
+      ? `${observation.query.scopeKind}:${observation.query.scopeId ?? "—"}`
+      : "—");
+  }
+  for (const entry of model.transport) {
+    add(
+      "Transport",
+      [
+        entry.requestId,
+        entry.path,
+        entry.status ?? entry.outcome,
+        formatDuration(entry.durationMs),
+        formatBytes(entry.byteLength),
+        entry.etag ?? "—",
+        formatTimestamp(entry.timestampMs),
+      ].join("\t"),
+    );
+    add("Transport detail", entry.detail ?? "—");
+  }
+
+  section("Backend metadata");
+  for (const observation of observations) {
+    lines.push(`Carrier\t${observation.carrier.carrierId}`);
+    if (!observation.backendMeta) {
+      add("Metadata", "not available for this exact query");
+      continue;
+    }
+    add(
+      "Quantity",
+      `${observation.backendMeta.quantity_id} — ${observation.backendMeta.label}`,
+    );
+    add(
+      "Kind / location",
+      `${observation.backendMeta.kind} / ${observation.backendMeta.location}`,
+    );
+    add("Components", observation.backendMeta.components);
+    add("Field revision", observation.backendMeta.field_revision);
+    add("Domain generation", observation.backendMeta.domain_generation_id);
+    add(
+      "Backend min / max / mean",
+      `${formatBackendStats(observation.backendMeta.stats)} ${observation.backendMeta.unit}`,
+    );
+  }
+
+  section("Decoded payload");
+  for (const observation of observations) {
+    lines.push(`Carrier\t${observation.carrier.carrierId}`);
+    const payload = observation.carrier.payload;
+    if (!payload) {
+      add("Payload", "not available");
+      continue;
+    }
+    add("Dtype / FMVP", `${payload.dtype} / v${payload.formatVersion ?? "—"}`);
+    add("Grid", payload.grid.join(" × "));
+    add("nComp", payload.nComp);
+    add("Decoded component", payload.component ?? "— (not encoded)");
+    add("Points / values", `${payload.pointCount} / ${payload.valueCount}`);
+    add(
+      "Indexing / node indices",
+      `${payload.indexing} / ${payload.nodeIndexCount ?? "—"}`,
+    );
+    add("Scope", `${payload.scopeKind ?? "—"}:${payload.scopeId ?? "—"}`);
+  }
+
+  section("Statistics");
+  for (const row of statisticsRows(observations)) {
+    add(
+      `${row.carrierId} · ${row.source}`,
+      [row.min, row.max, row.mean, row.p01, row.p99, row.unit, row.counts]
+        .map(formatLogValue)
+        .join("\t"),
+    );
+  }
+
+  section("Sample values");
+  for (const observation of observations) {
+    for (const sample of observation.carrier.samples.slice(0, 12)) {
+      add(
+        `${observation.carrier.carrierId} sample ${sample.pointIndex}`,
+        [
+          `node=${sample.nodeIndex ?? "—"}`,
+          `components=${JSON.stringify(sample.componentValues)}`,
+          `magnitude=${formatLogValue(sample.magnitude)}`,
+        ].join(" "),
+      );
+    }
+  }
+
+  section("Memory");
+  for (const group of memoryGroups(model)) {
+    lines.push(group.ownership);
+    for (const row of group.rows) {
+      add(`${row.label} · ${row.source}`, formatBytes(row.byteLength));
+    }
+    add("Group total", formatBytes(group.total));
+  }
+
+  section("Render passes");
+  for (const observation of observations) {
+    const carrier = observation.carrier;
+    lines.push(`Carrier\t${carrier.carrierId}`);
+    add("Requested source", carrier.request.resourceKey ?? "—");
+    add("Surface source", carrier.render.adoption.surface.adoptedResourceKey ?? "—");
+    add(
+      "Surface field buffer",
+      `${carrier.render.fieldBufferState} · ${carrier.render.adoption.surface.adoptedFieldBufferId ?? "not adopted"}`,
+    );
+    add("Vector source", carrier.render.adoption.vector.adoptedResourceKey ?? "—");
+    add(
+      "Vector field buffer",
+      `${carrier.render.fieldBufferState} · ${carrier.render.adoption.vector.adoptedFieldBufferId ?? "not adopted"}`,
+    );
+    add(
+      "Vectors",
+      `${carrier.render.vectors.buildKey ?? "not built"} · ${carrier.render.vectors.segmentCount ?? 0} segments · ${carrier.render.vectors.degradation ?? "not degraded"}`,
+    );
+  }
+
+  section("Revisions & provenance");
+  for (const observation of observations) {
+    const carrier = observation.carrier;
+    lines.push(`Carrier\t${carrier.carrierId}`);
+    add(
+      "Visualization / field",
+      `${carrier.revisions.visualizationRevision ?? "—"} / ${carrier.revisions.fieldRevision ?? "—"}`,
+    );
+    add(
+      "Topology / domain",
+      `${carrier.revisions.topologyRevision ?? "—"} / ${carrier.revisions.domainGenerationId ?? "—"}`,
+    );
+    add("Topology hash", carrier.revisions.meshTopologyHash ?? "—");
+    add("Cache ETag", carrier.cache.etag ?? "—");
+    add(
+      "Rendered acknowledgement",
+      carrier.render.adoption.frameCommitId ?? observation.snapshot.viewport.frameCommitId,
+    );
+  }
+
+  section("Detected inconsistencies");
+  const issues = allIssues(model);
+  if (issues.length === 0) {
+    add("Issues", "none");
+  } else {
+    for (const issue of issues) {
+      add(
+        `${issue.severity}: ${issue.code}`,
+        `${issue.source} — ${issue.message}`,
+      );
+      if (issue.evidence.length > 0) add("Evidence", issue.evidence.join(" · "));
+    }
+  }
+
+  return boundVisualizationDebugLog(lines.join("\n"));
+}
+
+function formatFieldResourceLogValue(
+  state: VisualizationDebugPanelModel["viewports"][number]["carriers"][number]["observations"][number]["carrier"]["fieldResourceState"] | null,
+): string {
+  if (!state) return "not tracked";
+  const reason = state.reasonCode ? ` · ${state.reasonCode}` : "";
+  const revision = state.revision ? ` · rev ${state.revision}` : "";
+  return `${state.status} · data ${state.dataAvailable ? "present" : "absent"} · last-valid ${state.lastValidDataAvailable ? "present" : "absent"}${reason}${revision}`;
+}
+
+function formatLogTimestamp(value: number): string {
+  return typeof value === "number" && Number.isFinite(value)
+    ? new Date(value).toISOString()
+    : "unknown";
+}
+
+function formatLogValue(value: unknown): string {
+  if (value == null) return "—";
+  if (typeof value === "string") return value.replace(/[\r\n]+/g, " ");
+  if (typeof value === "number") return Number.isFinite(value) ? String(value) : "—";
+  if (typeof value === "boolean") return value ? "true" : "false";
+  try {
+    return JSON.stringify(value) ?? "—";
+  } catch {
+    return "[unserializable]";
+  }
+}
+
+function boundVisualizationDebugLog(value: string): string {
+  if (utf8ByteLength(value) <= MAX_VISUALIZATION_DEBUG_EXPORT_BYTES) return value;
+  const marker = "\n[log truncated at the 64 KiB evidence limit]";
+  let bounded = "";
+  for (const line of value.split("\n")) {
+    const candidate = bounded ? `${bounded}\n${line}` : line;
+    if (utf8ByteLength(`${candidate}${marker}`) > MAX_VISUALIZATION_DEBUG_EXPORT_BYTES) {
+      break;
+    }
+    bounded = candidate;
+  }
+  return `${bounded}${marker}`;
 }
 
 function buildSafeBoundedVisualizationDebugExport(
@@ -209,8 +467,20 @@ export function createVisualizationDebugEvidenceActions(
     }, FEEDBACK_DURATION_MS);
   };
   const build = () => buildVisualizationDebugExport(model, dependencies.now());
+  const buildLog = () => buildVisualizationDebugLog(model, dependencies.now());
 
   return {
+    async copyLog() {
+      try {
+        await dependencies.clipboard.writeText(buildLog());
+        publishFeedback({ kind: "success", message: "Debug log copied." });
+      } catch {
+        publishFeedback({
+          kind: "error",
+          message: "Debug log could not be copied.",
+        });
+      }
+    },
     async copyResourceKey() {
       const resourceKey = firstExactResourceKey(model);
       if (!resourceKey) {
@@ -278,12 +548,7 @@ export function createBrowserVisualizationDebugEvidenceEnvironment(
 ): VisualizationDebugEvidenceActionEnvironment {
   return {
     clipboard: {
-      writeText: (text) => {
-        if (typeof navigator === "undefined" || !navigator.clipboard) {
-          return Promise.reject(new Error("Clipboard API is unavailable."));
-        }
-        return navigator.clipboard.writeText(text);
-      },
+      writeText: (text) => copyTextToClipboard(text),
     },
     createObjectURL: (blob) => URL.createObjectURL(blob),
     download: (url, filename) => {

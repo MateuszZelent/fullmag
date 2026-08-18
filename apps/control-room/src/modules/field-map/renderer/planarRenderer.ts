@@ -14,6 +14,7 @@ export interface PlanarRenderer {
 }
 
 export interface PlanarOverlayLayers {
+  axisPointer?: { u: number; v: number } | null;
   contours?: readonly (readonly [number, number, number, number])[];
   glyphs?: readonly {
     index: number;
@@ -30,6 +31,9 @@ export interface PlanarOverlayLayers {
   meshSegments?: Float32Array;
   meshViewport?: readonly [number, number, number, number];
   samplePoints?: readonly { index: number; u: number; v: number }[];
+  pointStyle?: { color: string; opacity: number; size: number };
+  wireframeStyle?: { color: string; opacity: number };
+  vectorStyle?: { color: string; opacity: number; thickness: number };
   vectorColorMode?: string;
   viewport?: readonly [number, number, number, number];
 }
@@ -42,7 +46,7 @@ export function drawPlanarOverlays(
 ): void {
   context.clearRect(0, 0, canvasWidth, canvasHeight);
   context.save();
-  context.strokeStyle = "currentColor";
+  setCanvasStrokeStyle(context, "currentColor");
   context.lineWidth = 1;
 
   const bounds = layers.meshViewport ?? layers.meshBounds ?? [0, canvasWidth, 0, canvasHeight];
@@ -51,7 +55,7 @@ export function drawPlanarOverlays(
     canvasHeight - ((v - bounds[2]) / (bounds[3] - bounds[2])) * canvasHeight,
   ];
   const drawMeshSegments = (segments: Float32Array, strokeStyle: string) => {
-    context.strokeStyle = strokeStyle;
+    setCanvasStrokeStyle(context, strokeStyle);
     context.beginPath();
     for (let index = 0; index < segments.length; index += 4) {
       const start = mapMesh(segments[index] ?? 0, segments[index + 1] ?? 0);
@@ -63,10 +67,14 @@ export function drawPlanarOverlays(
   };
 
   if (layers.layers?.mesh !== false && layers.meshSegments) {
-    drawMeshSegments(layers.meshSegments, "currentColor");
+    context.globalAlpha = layers.wireframeStyle?.opacity ?? 1;
+    drawMeshSegments(layers.meshSegments, layers.wireframeStyle?.color ?? "currentColor");
+    context.globalAlpha = 1;
   }
   if (layers.layers?.boundaries && layers.boundarySegments) {
-    drawMeshSegments(layers.boundarySegments, "var(--fm-accent)");
+    context.globalAlpha = layers.wireframeStyle?.opacity ?? 1;
+    drawMeshSegments(layers.boundarySegments, layers.wireframeStyle?.color ?? "var(--fm-accent)");
+    context.globalAlpha = 1;
   }
   if (layers.layers?.bounds && layers.boundsOutline) {
     const [uMin, uMax, vMin, vMax] = layers.boundsOutline;
@@ -77,21 +85,39 @@ export function drawPlanarOverlays(
       mapMesh(uMin, vMax),
       mapMesh(uMin, vMin),
     ];
-    context.strokeStyle = "var(--fm-info)";
+    setCanvasStrokeStyle(context, "var(--fm-info)");
     context.beginPath();
     context.moveTo(corners[0]![0]!, corners[0]![1]!);
     for (const corner of corners.slice(1)) context.lineTo(corner[0]!, corner[1]!);
     context.stroke();
   }
   if (layers.layers?.points && layers.samplePoints?.length) {
-    context.fillStyle = "var(--fm-accent)";
+    setCanvasFillStyle(context, layers.pointStyle?.color ?? "var(--fm-accent)");
+    context.globalAlpha = layers.pointStyle?.opacity ?? 1;
+    const radius = Math.max(0.25, (layers.pointStyle?.size ?? 3) / 2);
     context.beginPath();
     for (const point of layers.samplePoints) {
       const [x, y] = mapMesh(point.u, point.v);
-      context.moveTo(x + 1.5, y);
-      context.arc(x, y, 1.5, 0, Math.PI * 2);
+      context.moveTo(x + radius, y);
+      context.arc(x, y, radius, 0, Math.PI * 2);
     }
     context.fill();
+    context.globalAlpha = 1;
+  }
+
+  if (layers.axisPointer) {
+    const [x, y] = mapMesh(layers.axisPointer.u, layers.axisPointer.v);
+    setCanvasStrokeStyle(context, "var(--fm-accent)");
+    context.lineWidth = 2;
+    context.setLineDash([6, 4]);
+    context.beginPath();
+    context.moveTo(x, 0);
+    context.lineTo(x, canvasHeight);
+    context.moveTo(0, y);
+    context.lineTo(canvasWidth, y);
+    context.stroke();
+    context.setLineDash([]);
+    context.lineWidth = 1;
   }
 
   if (layers.layers?.contours !== false && layers.contours?.length) {
@@ -110,9 +136,13 @@ export function drawPlanarOverlays(
   }
 
   if (layers.layers?.vectors !== false && layers.glyphs?.length) {
+    context.globalAlpha = layers.vectorStyle?.opacity ?? 1;
+    context.lineWidth = layers.vectorStyle?.thickness ?? 1;
     for (const glyph of layers.glyphs) {
       context.beginPath();
-      context.strokeStyle = vectorGlyphStrokeStyle(glyph, layers.vectorColorMode);
+      setCanvasStrokeStyle(context, layers.vectorColorMode === "monochrome"
+        ? layers.vectorStyle?.color ?? "currentColor"
+        : vectorGlyphStrokeStyle(glyph, layers.vectorColorMode));
       const x = glyph.index % layers.gridWidth;
       const y = Math.floor(glyph.index / layers.gridWidth);
       const gridHeight = layers.gridHeight ?? layers.gridWidth;
@@ -133,8 +163,46 @@ export function drawPlanarOverlays(
       }
       context.stroke();
     }
+    context.globalAlpha = 1;
+    context.lineWidth = 1;
   }
   context.restore();
+}
+
+function resolveCanvasTokenColor(
+  context: CanvasRenderingContext2D,
+  token: string,
+): string | null {
+  const canvas = context.canvas;
+  const view = canvas?.ownerDocument?.defaultView;
+  if (!view) return null;
+  const value = view.getComputedStyle(canvas).getPropertyValue(token).trim();
+  return value || null;
+}
+
+function resolveCanvasPaintColor(
+  context: CanvasRenderingContext2D,
+  color: string,
+): string {
+  const normalized = color.trim();
+  const token = normalized === "currentColor"
+    ? "color"
+    : /^var\((--[\w-]+)\)$/.exec(normalized)?.[1];
+  return token ? resolveCanvasTokenColor(context, token) ?? normalized : normalized;
+}
+
+function setCanvasStrokeStyle(
+  context: CanvasRenderingContext2D,
+  color: string,
+): void {
+  context.strokeStyle = resolveCanvasPaintColor(context, color);
+}
+
+function setCanvasFillStyle(
+  context: CanvasRenderingContext2D,
+  color: string,
+): void {
+  context.fillStyle = resolveCanvasPaintColor(context, color);
 }
 
 export function partitionPlanarMeshSegments(overlay: {

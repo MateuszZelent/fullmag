@@ -8,7 +8,7 @@ use sha2::{Digest, Sha256};
 
 use crate::error::ApiError;
 use crate::router_v2::handlers::data::resolved_spatial_field::{
-    EntityMapping, ResolvedSpatialField, SpatialFieldCarrier, resolve_fdm_object_indices,
+    resolve_fdm_object_indices, EntityMapping, ResolvedSpatialField, SpatialFieldCarrier,
 };
 
 use super::{

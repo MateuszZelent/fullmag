@@ -5270,11 +5270,9 @@ mod tests {
         assert_eq!(layers[0]["object_id"], "bottom");
         assert_eq!(layers[0]["magnet_name"], "bottom");
         assert_eq!(layers[0]["native_grid"], serde_json::json!([2, 1, 1]));
-        assert!(
-            layers[0]["native_grid_fingerprint"]
-                .as_str()
-                .is_some_and(|value| value.starts_with("sha256:") && value.len() == 71)
-        );
+        assert!(layers[0]["native_grid_fingerprint"]
+            .as_str()
+            .is_some_and(|value| value.starts_with("sha256:") && value.len() == 71));
         assert_eq!(layers[0]["value_offset"], 0);
         assert_eq!(layers[0]["value_count"], 2);
         assert_eq!(layers[1]["layer_id"], "layer:top");
@@ -5289,11 +5287,9 @@ mod tests {
 
         assert_eq!(layers[0]["native_region_mask"]["available"], true);
         assert_eq!(layers[0]["native_region_mask"]["value_count"], 2);
-        assert!(
-            layers[0]["native_region_mask"]["value_sha256"]
-                .as_str()
-                .is_some_and(|value| value.starts_with("sha256:"))
-        );
+        assert!(layers[0]["native_region_mask"]["value_sha256"]
+            .as_str()
+            .is_some_and(|value| value.starts_with("sha256:")));
         assert_eq!(layers[0]["native_region_legend"]["available"], true);
         assert_eq!(
             layers[0]["native_region_legend"]["entries"][0],
@@ -5319,16 +5315,12 @@ mod tests {
             assert_eq!(field["unit"], unit);
             assert_eq!(field["value_count"], count);
             assert_eq!(field["revision"], 1);
-            assert!(
-                field["generation_id"]
-                    .as_str()
-                    .is_some_and(|value| value.starts_with("sha256:"))
-            );
-            assert!(
-                field["value_sha256"]
-                    .as_str()
-                    .is_some_and(|value| value.starts_with("sha256:"))
-            );
+            assert!(field["generation_id"]
+                .as_str()
+                .is_some_and(|value| value.starts_with("sha256:")));
+            assert!(field["value_sha256"]
+                .as_str()
+                .is_some_and(|value| value.starts_with("sha256:")));
         }
         assert_eq!(layers[1]["material_fields"]["mat_ms"]["value_count"], 3);
         assert_ne!(
@@ -5469,11 +5461,9 @@ mod tests {
         let assets = write_material_field_artifacts(&output_dir, &plan)
             .expect("missing arrays should remain unmaterialized");
         assert!(assets.is_empty());
-        assert!(
-            !output_dir
-                .join("material-fields/fdm-multilayer/layer-bottom/mat_ms.json")
-                .exists()
-        );
+        assert!(!output_dir
+            .join("material-fields/fdm-multilayer/layer-bottom/mat_ms.json")
+            .exists());
         if output_dir.exists() {
             fs::remove_dir_all(output_dir)
                 .expect("temporary artifact directory should be removable");
@@ -5507,11 +5497,9 @@ mod tests {
 
             assert_eq!(error.kind(), ErrorKind::InvalidData);
             assert!(error.to_string().contains("layer:bottom"));
-            assert!(
-                !output_dir
-                    .join("material-fields/fdm-multilayer/manifest.json")
-                    .exists()
-            );
+            assert!(!output_dir
+                .join("material-fields/fdm-multilayer/manifest.json")
+                .exists());
             if output_dir.exists() {
                 assert_eq!(
                     fs::read_dir(&output_dir)

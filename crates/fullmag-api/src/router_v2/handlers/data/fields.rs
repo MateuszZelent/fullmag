@@ -15,8 +15,8 @@ use sha2::{Digest, Sha256};
 use super::fdm_region_membership::load_resolved_fdm_membership;
 use super::field_resolution::{
     extract_fdm_field, extract_fem_field, field_values_match_current_domain,
-    flatten_json_field_values, is_fdm_snapshot, json_field_grid,
-    json_field_matches_current_domain, live_magnetization_available, strict_flat_json_field_values,
+    flatten_json_field_values, is_fdm_snapshot, json_field_grid, json_field_matches_current_domain,
+    live_magnetization_available, strict_flat_json_field_values,
 };
 use super::multilayer_identity::correlate_multilayer_layers;
 use super::resolved_spatial_field::{

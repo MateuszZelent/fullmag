@@ -13,33 +13,9 @@ import {
   DropdownMenuTrigger,
 } from "@/shared/ui/DropdownMenu";
 
+import { ICON_COLOR_ALIASES } from "./ribbonCommon";
 import { RibbonMenuRenderer } from "./RibbonMenuRenderer";
 import type { RibbonGroup as RibbonGroupData } from "./ribbonTypes";
-
-const ICON_COLOR_ALIASES: Record<string, string> = {
-  amber: "var(--fm-warning)",
-  blue: "var(--fm-accent)",
-  cyan: "var(--fm-accent)",
-  emerald: "var(--fm-success)",
-  fuchsia: "var(--fm-stale)",
-  green: "var(--fm-success)",
-  indigo: "var(--fm-accent-strong)",
-  lime: "var(--fm-success)",
-  muted: "var(--fm-text-muted)",
-  orange: "var(--fm-degraded)",
-  peach: "var(--fm-degraded)",
-  pink: "var(--fm-stale)",
-  purple: "var(--fm-stale)",
-  red: "var(--fm-danger)",
-  rose: "var(--fm-danger)",
-  sapphire: "var(--fm-accent-strong)",
-  sky: "var(--fm-accent)",
-  slate: "var(--fm-text-muted)",
-  stone: "var(--fm-text-muted)",
-  teal: "var(--fm-accent-strong)",
-  violet: "var(--fm-stale)",
-  yellow: "var(--fm-warning)",
-};
 
 export function resolveRibbonIconColor(iconColor?: string): string | undefined {
   if (!iconColor) {
@@ -92,6 +68,7 @@ export function resolveRibbonActionTriggerState({
 
 interface RibbonGroupsRowProps {
   groups: RibbonGroupData[];
+  activeTabId?: string;
   onAction?: (actionId: string, input?: unknown) => void;
   onCommandDetail?: (commandId: string) => void;
 }
@@ -155,6 +132,9 @@ function RibbonActionButton({
       target instanceof Element &&
       Boolean(target.closest("[data-ribbon-menu-trigger='true']"));
     if (event.button === 0 && !menuTrigger) {
+      // Radix DropdownMenuTrigger opens on bubble pointerdown; stop it so the
+      // split-button body runs the command without also opening the dropdown.
+      event.stopPropagation();
       event.preventDefault();
       runAction();
     }
@@ -163,6 +143,9 @@ function RibbonActionButton({
     event: ReactKeyboardEvent<HTMLButtonElement>,
   ) => {
     if (event.key === "Enter" || event.key === " ") {
+      // See runMenuActionFromPointer: keep the command from double-triggering
+      // Radix's bubble onKeyDown menu toggle.
+      event.stopPropagation();
       event.preventDefault();
       runAction();
     }
@@ -285,11 +268,17 @@ function RibbonGroup({
 
 export function RibbonGroupsRow({
   groups,
+  activeTabId,
   onAction,
   onCommandDetail,
 }: RibbonGroupsRowProps) {
   return (
-    <div className="fm-ribbon__groups" role="tabpanel">
+    <div
+      className="fm-ribbon__groups"
+      role="tabpanel"
+      id="fm-ribbon-tabpanel"
+      aria-labelledby={activeTabId ? `fm-ribbon-tab-${activeTabId}` : undefined}
+    >
       {groups.map((group) => (
         <RibbonGroup
           key={group.id}

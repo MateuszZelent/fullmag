@@ -8,6 +8,7 @@ import {
   ALL_TAB_CONTENT,
   buildRibbonTabContent,
   resolveRibbonVisualizationTarget,
+  stripProductionRibbonPlaceholders,
 } from "./ribbonContributions";
 import {
   RIBBON_CROSS_SECTION_BEGIN_DRAFT_COMMAND,
@@ -27,7 +28,8 @@ import {
   resolveRibbonIconColor,
   RibbonGroupsRow,
 } from "./RibbonGroupsRow";
-import { RIBBON_TABS, type RibbonMenuNode } from "./ribbonTypes";
+import { RIBBON_TABS, type RibbonMenuNode, type RibbonTabContent } from "./ribbonTypes";
+import { RibbonTabStrip } from "./RibbonTabStrip";
 import {
   MESHING_CAPABILITIES_PATH,
   MODEL_GEOMETRY_VALIDATION_PATH,
@@ -773,6 +775,27 @@ describe("ribbon structure", () => {
       runsActionFromButton: false,
       runsActionFromSplitBody: false,
     });
+  });
+
+  it("links ribbon tabs to their tabpanel with aria-controls and aria-labelledby", () => {
+    const tabHtml = renderToStaticMarkup(
+      createElement(RibbonTabStrip, {
+        tabs: RIBBON_TABS,
+        activeTabId: "home",
+        onTabClick: () => {},
+      }),
+    );
+    expect(tabHtml).toContain('id="fm-ribbon-tab-home"');
+    expect(tabHtml).toContain('aria-controls="fm-ribbon-tabpanel"');
+
+    const panelHtml = renderToStaticMarkup(
+      createElement(RibbonGroupsRow, {
+        groups: [],
+        activeTabId: "home",
+      }),
+    );
+    expect(panelHtml).toContain('id="fm-ribbon-tabpanel"');
+    expect(panelHtml).toContain('aria-labelledby="fm-ribbon-tab-home"');
   });
 
   it("keeps split-button bodies command-backed while the chevron opens the menu", () => {
@@ -4967,3 +4990,145 @@ function createVisualizationRibbonContext(
     patches,
   };
 }
+
+describe("stripProductionRibbonPlaceholders", () => {
+  const commands = createControlRoomCommandRegistry();
+
+  it("removes placeholder actions without a registered command and keeps command-backed actions", () => {
+    const content: RibbonTabContent = {
+      tabId: "home",
+      groups: [
+        {
+          id: "g",
+          title: "G",
+          actions: [
+            { id: "study.run", icon: null, label: "Compute" },
+            {
+              id: "builder-add-ellipsoid",
+              icon: null,
+              label: "Ellipsoid",
+              disabled: true,
+            },
+          ],
+        },
+      ],
+    };
+
+    const stripped = stripProductionRibbonPlaceholders(content, commands);
+
+    expect(stripped.groups).toHaveLength(1);
+    expect(stripped.groups[0].actions.map((action) => action.id)).toEqual([
+      "study.run",
+    ]);
+  });
+
+  it("keeps a split-button command while dropping its placeholder menu items", () => {
+    const content: RibbonTabContent = {
+      tabId: "geometry",
+      groups: [
+        {
+          id: "builder-create",
+          title: "Create",
+          actions: [
+            {
+              id: "geometry.add-box",
+              icon: null,
+              label: "Box",
+              splitButton: true,
+              commandId: "geometry.add-box",
+              menu: [
+                { type: "item", id: "geo:block", label: "Block" },
+                { type: "label", id: "geo:label", label: "Primitive" },
+              ],
+            },
+          ],
+        },
+      ],
+    };
+
+    const stripped = stripProductionRibbonPlaceholders(content, commands);
+
+    expect(stripped.groups[0].actions).toHaveLength(1);
+    expect(stripped.groups[0].actions[0].menu).toEqual([
+      { type: "label", id: "geo:label", label: "Primitive" },
+    ]);
+  });
+
+  it("keeps informational status and label menus even without commands", () => {
+    const content: RibbonTabContent = {
+      tabId: "view",
+      groups: [
+        {
+          id: "g",
+          title: "G",
+          actions: [
+            {
+              id: "view-3d-status",
+              icon: null,
+              label: "3D Active",
+              menu: [
+                {
+                  type: "label",
+                  id: "s:header",
+                  label: "3D",
+                  badge: "active",
+                },
+                {
+                  type: "status",
+                  id: "s:state",
+                  label: "Status",
+                  value: "rendering",
+                  tone: "success",
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    };
+
+    const stripped = stripProductionRibbonPlaceholders(content, commands);
+
+    expect(stripped.groups[0].actions).toHaveLength(1);
+    expect(stripped.groups[0].actions[0].menu).toHaveLength(2);
+  });
+
+  it("strips unregistered radio-group options and removes the group when empty", () => {
+    const content: RibbonTabContent = {
+      tabId: "home",
+      groups: [
+        {
+          id: "g",
+          title: "G",
+          actions: [
+            {
+              id: "panels",
+              icon: null,
+              label: "Panels",
+              menu: [
+                {
+                  type: "radio-group",
+                  id: "rg",
+                  label: "Mode",
+                  value: "x",
+                  items: [
+                    { value: "x", label: "X", commandId: "study.run" },
+                    { value: "y", label: "Y" },
+                  ],
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    };
+
+    const stripped = stripProductionRibbonPlaceholders(content, commands);
+
+    const radioGroup = stripped.groups[0].actions[0].menu?.[0];
+    expect(radioGroup?.type).toBe("radio-group");
+    if (radioGroup && radioGroup.type === "radio-group") {
+      expect(radioGroup.items.map((item) => item.value)).toEqual(["x"]);
+    }
+  });
+});

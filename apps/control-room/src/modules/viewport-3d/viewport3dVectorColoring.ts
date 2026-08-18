@@ -1,4 +1,10 @@
 import { magnetizationHslRgb } from "./orientation/magnetizationColor";
+import {
+  normalizeScalarColorPalette,
+  scalarColorPaletteGradientCss,
+  scalarColorRgb,
+  type ScalarColorPalette,
+} from "../../shared/visualization/scalarColorPalette";
 
 export type Viewport3DVectorColorMode =
   | "orientation"
@@ -8,12 +14,7 @@ export type Viewport3DVectorColorMode =
   | "magnitude"
   | "monochrome";
 
-export type Viewport3DColorPalette =
-  | "coolwarm"
-  | "inferno"
-  | "jet"
-  | "magma"
-  | "viridis";
+export type Viewport3DColorPalette = ScalarColorPalette;
 
 export interface Viewport3DScalarColorRange {
   max: number;
@@ -27,13 +28,6 @@ const VECTOR_COLOR_MODES = new Set<Viewport3DVectorColorMode>([
   "z",
   "magnitude",
   "monochrome",
-]);
-const COLOR_PALETTES = new Set<Viewport3DColorPalette>([
-  "coolwarm",
-  "inferno",
-  "jet",
-  "magma",
-  "viridis",
 ]);
 
 export function normalizeViewport3DVectorColorMode(
@@ -50,10 +44,7 @@ export function normalizeViewport3DColorPalette(
   value: string | null | undefined,
   fallback: Viewport3DColorPalette = "viridis",
 ): Viewport3DColorPalette {
-  const normalized = value?.trim().toLowerCase().replace(/[\s-]+/g, "_");
-  return COLOR_PALETTES.has(normalized as Viewport3DColorPalette)
-    ? (normalized as Viewport3DColorPalette)
-    : fallback;
+  return normalizeScalarColorPalette(value, fallback);
 }
 
 function normalizeVectorColorToken(
@@ -83,59 +74,10 @@ export function resolveViewport3DVectorColorScalar(
   return Math.hypot(x, y, z);
 }
 
-/**
- * Viridis-inspired gradient stops matching V1 legacy magnitudeColor:
- * dark-purple → blue → green → yellow.
- */
-const MAGNITUDE_STOPS: [number, number, number][] = [
-  [0x44 / 255, 0x01 / 255, 0x54 / 255],
-  [0x31 / 255, 0x68 / 255, 0x8e / 255],
-  [0x35 / 255, 0xb7 / 255, 0x79 / 255],
-  [0xfd / 255, 0xe7 / 255, 0x25 / 255],
-];
-const PALETTE_STOPS: Record<
-  Viewport3DColorPalette,
-  [number, number, number][]
-> = {
-  coolwarm: [
-    [0x3b / 255, 0x4c / 255, 0xc0 / 255],
-    [0xdd / 255, 0xdd / 255, 0xdd / 255],
-    [0xb4 / 255, 0x04 / 255, 0x26 / 255],
-  ],
-  inferno: [
-    [0x00 / 255, 0x00 / 255, 0x04 / 255],
-    [0x42 / 255, 0x0a / 255, 0x68 / 255],
-    [0x93 / 255, 0x2b / 255, 0x5d / 255],
-    [0xdd / 255, 0x51 / 255, 0x3a / 255],
-    [0xfc / 255, 0xff / 255, 0xa4 / 255],
-  ],
-  jet: [
-    [0x00 / 255, 0x00 / 255, 0x7f / 255],
-    [0x00 / 255, 0x7f / 255, 0xff / 255],
-    [0x7f / 255, 0xff / 255, 0x7f / 255],
-    [0xff / 255, 0x7f / 255, 0x00 / 255],
-    [0x7f / 255, 0x00 / 255, 0x00 / 255],
-  ],
-  magma: [
-    [0x00 / 255, 0x00 / 255, 0x04 / 255],
-    [0x3b / 255, 0x0f / 255, 0x70 / 255],
-    [0x8c / 255, 0x29 / 255, 0x80 / 255],
-    [0xde / 255, 0x49 / 255, 0x68 / 255],
-    [0xfc / 255, 0xfd / 255, 0xbf / 255],
-  ],
-  viridis: MAGNITUDE_STOPS,
-};
-
 export function viewport3DColorPaletteGradientCss(
   palette: string | null | undefined = "viridis",
 ): string {
-  const stops = PALETTE_STOPS[normalizeViewport3DColorPalette(palette)];
-  return `linear-gradient(90deg, ${stops
-    .map(
-      ([red, green, blue]) =>
-        `rgb(${Math.round(red * 255)}, ${Math.round(green * 255)}, ${Math.round(blue * 255)})`,
-    )
-    .join(", ")})`;
+  return scalarColorPaletteGradientCss(palette);
 }
 
 /**
@@ -145,18 +87,7 @@ export function magnitudeColorRgb(
   t: number,
   palette: string | null | undefined = "viridis",
 ): [number, number, number] {
-  const clamped = Math.min(Math.max(t, 0), 1);
-  const stops = PALETTE_STOPS[normalizeViewport3DColorPalette(palette)];
-  const scaled = clamped * (stops.length - 1);
-  const idx = Math.min(Math.floor(scaled), stops.length - 2);
-  const frac = scaled - idx;
-  const a = stops[idx]!;
-  const b = stops[idx + 1]!;
-  return [
-    a[0] + (b[0] - a[0]) * frac,
-    a[1] + (b[1] - a[1]) * frac,
-    a[2] + (b[2] - a[2]) * frac,
-  ];
+  return scalarColorRgb(t, palette);
 }
 
 /**
@@ -180,14 +111,14 @@ export function resolveViewport3DVectorColorRgb(
     return magnitudeColorRgb(relMag, palette);
   }
 
-  return scalarColorRgb(
+  return scalarValueColorRgb(
     resolveViewport3DVectorColorScalar(mode, x, y, z),
     range,
     palette,
   );
 }
 
-function scalarColorRgb(
+function scalarValueColorRgb(
   value: number,
   range: Viewport3DScalarColorRange,
   palette: string | null | undefined = "viridis",

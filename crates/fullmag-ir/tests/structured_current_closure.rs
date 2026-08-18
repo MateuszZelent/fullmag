@@ -1,7 +1,6 @@
 use fullmag_ir::{
-    ImpressedPotentialJumpIR, StructuredCurrentClosureIR, StructuredCurrentDriveIR,
-    StructuredCurrentSourceCutIR, StructuredCutAxisIR, StructuredCutNormalIR,
-    StructuredCutPlaneIR, RegionRefIR,
+    ImpressedPotentialJumpIR, RegionRefIR, StructuredCurrentClosureIR, StructuredCurrentDriveIR,
+    StructuredCurrentSourceCutIR, StructuredCutAxisIR, StructuredCutNormalIR, StructuredCutPlaneIR,
 };
 
 fn closure() -> StructuredCurrentClosureIR {
@@ -20,13 +19,11 @@ fn closure() -> StructuredCurrentClosureIR {
                 offset_m: 2.0e-9,
                 normal: StructuredCutNormalIR::PositiveAxis,
             },
-            drive: StructuredCurrentDriveIR::ImpressedPotentialJump(
-                ImpressedPotentialJumpIR {
+            drive: StructuredCurrentDriveIR::ImpressedPotentialJump(ImpressedPotentialJumpIR {
                 schema_version: "impressed_potential_jump.v1".to_string(),
                 drive_id: "drive-1".to_string(),
                 potential_jump_v: 0.05,
-                },
-            ),
+            }),
         }],
     }
 }
@@ -53,10 +50,7 @@ fn structured_current_closure_rejects_duplicate_circuit_and_nonfinite_plane() {
     let StructuredCurrentClosureIR::ClosedGeometry { source_cuts, .. } = &mut invalid;
     let mut duplicate = source_cuts[0].clone();
     duplicate.source_cut_id = "cut-2".to_string();
-    duplicate
-        .drive
-        .impressed_potential_jump_mut()
-        .drive_id = "drive-2".to_string();
+    duplicate.drive.impressed_potential_jump_mut().drive_id = "drive-2".to_string();
     duplicate.plane.offset_m = f64::NAN;
     source_cuts.push(duplicate);
 

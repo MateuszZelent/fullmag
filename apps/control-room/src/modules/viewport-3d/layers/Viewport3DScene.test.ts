@@ -14,6 +14,7 @@ import {
   resolveNextViewport3DModelLayerStage,
   resolveAuthoredRegionOverlayVisibility,
   resolveViewport3DAirboxFrameState,
+  resolveViewport3DModelLayerStageKey,
   resolveViewport3DModelLayerStageVisibility,
   resolveViewport3DRealizedFdmObjectIds,
   scheduleViewport3DProjectionRenderFrames,
@@ -203,6 +204,32 @@ describe("Viewport3DScene scale helpers", () => {
     ).toEqual({
       airboxVectorsVisible: false,
       airboxWireframeVisible: true,
+    });
+  });
+
+  it("reports vector-only FDM Airbox data as visible without a cell model", () => {
+    expect(
+      resolveViewport3DAirboxFrameState({
+        fdmAirboxInstanceModel: null,
+        fdmAirboxPassPlan: {
+          hasAnyEffectivePass: true,
+          needsExtentOverlay: false,
+          needsInactiveCellGeometry: true,
+          needsPointGeometry: false,
+          needsSurfaceInstances: false,
+          needsVectorAnchors: true,
+        },
+        fdmAirboxVectorSegments: new Float32Array(6),
+        fdmCuboidLayerEnabled: true,
+        fdmLaneActive: true,
+        multilayerAirboxView: null,
+        sceneLayersEnabled: true,
+        stageVisibility: resolveViewport3DModelLayerStageVisibility(2),
+        vectorLayersEnabled: true,
+      }),
+    ).toEqual({
+      airboxVectorsVisible: true,
+      airboxWireframeVisible: false,
     });
   });
 
@@ -811,6 +838,27 @@ describe("Viewport3DScene scale helpers", () => {
     expect(resolveNextViewport3DModelLayerStage(999)).toBe(
       VIEWPORT_3D_MODEL_LAYER_FINAL_STAGE,
     );
+  });
+
+  it("does not reset the global model stage when only Airbox carrier readiness changes", () => {
+    const base = {
+      fdmNativeLayerViews: [],
+      fdmTargetViews: [],
+      primitiveModel: null,
+      topologyModel: null,
+    } as const;
+    const emptyAirboxKey = resolveViewport3DModelLayerStageKey({
+      ...base,
+      fdmAirboxInstanceModel: null,
+      fdmMultilayerAirboxView: null,
+    });
+    const readyAirboxKey = resolveViewport3DModelLayerStageKey({
+      ...base,
+      fdmAirboxInstanceModel: { count: 4 } as never,
+      fdmMultilayerAirboxView: { model: { count: 4 } } as never,
+    });
+
+    expect(readyAirboxKey).toBe(emptyAirboxKey);
   });
 
   it("commits staged field layers without a transition that external-store updates can starve", () => {

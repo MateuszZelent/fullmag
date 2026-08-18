@@ -582,6 +582,49 @@ fn validate_planar_visualization_patch(patch: &PlanarVisualizationPatch) -> Resu
         ));
     }
     if matches!(
+        patch.wireframe_style.as_ref(),
+        Some(style)
+            if style.color.trim().is_empty()
+                || !style.opacity.is_finite()
+                || !(0.0..=1.0).contains(&style.opacity)
+    ) {
+        return Err(ApiError::bad_request(
+            "planar.wireframe_style requires a color and finite opacity between 0 and 1",
+        ));
+    }
+    if matches!(
+        patch.point_style.as_ref(),
+        Some(style)
+            if style.color.trim().is_empty()
+                || !style.opacity.is_finite()
+                || !(0.0..=1.0).contains(&style.opacity)
+                || !style.size.is_finite()
+                || style.size <= 0.0
+                || style.size > 64.0
+    ) {
+        return Err(ApiError::bad_request(
+            "planar.point_style requires a color, opacity between 0 and 1, and size in (0, 64]",
+        ));
+    }
+    if matches!(
+        patch.vector_style.as_ref(),
+        Some(style)
+            if style.length_mode.trim().is_empty()
+                || style.color_mode.trim().is_empty()
+                || style.monochrome_color.trim().is_empty()
+                || !style.scale.is_finite()
+                || style.scale <= 0.0
+                || !style.opacity.is_finite()
+                || !(0.0..=1.0).contains(&style.opacity)
+                || !style.thickness.is_finite()
+                || style.thickness <= 0.0
+                || style.thickness > 16.0
+    ) {
+        return Err(ApiError::bad_request(
+            "planar.vector_style requires finite positive scale/thickness, opacity between 0 and 1, and non-empty modes/color",
+        ));
+    }
+    if matches!(
         patch.interaction.as_ref(),
         Some(interaction)
             if !interaction.zoom.is_finite()
@@ -602,6 +645,9 @@ fn validate_planar_visualization_state(state: &PlanarVisualizationState) -> Resu
         default_slice: Some(state.default_slice.clone()),
         range: Some(state.range.clone()),
         raster_opacity: Some(state.raster_opacity),
+        wireframe_style: Some(state.wireframe_style.clone()),
+        point_style: Some(state.point_style.clone()),
+        vector_style: Some(state.vector_style.clone()),
         ..PlanarVisualizationPatch::default()
     })
 }
@@ -641,6 +687,9 @@ fn apply_planar_visualization_patch(
     state: &mut PlanarVisualizationState,
     patch: &PlanarVisualizationPatch,
 ) {
+    if let Some(visible) = patch.visible {
+        state.visible = visible;
+    }
     if let Some(source) = &patch.source {
         state.source = source.clone();
     }
@@ -665,6 +714,9 @@ fn apply_planar_visualization_patch(
     if let Some(raster_opacity) = patch.raster_opacity {
         state.raster_opacity = raster_opacity;
     }
+    if let Some(viewport_colorbar_visible) = patch.viewport_colorbar_visible {
+        state.viewport_colorbar_visible = viewport_colorbar_visible;
+    }
     if let Some(display_unit) = &patch.display_unit {
         state.display_unit = display_unit.clone();
     }
@@ -676,6 +728,12 @@ fn apply_planar_visualization_patch(
     }
     if let Some(layers) = &patch.layers {
         state.layers = layers.clone();
+    }
+    if let Some(wireframe_style) = &patch.wireframe_style {
+        state.wireframe_style = wireframe_style.clone();
+    }
+    if let Some(point_style) = &patch.point_style {
+        state.point_style = point_style.clone();
     }
     if let Some(vector_style) = &patch.vector_style {
         state.vector_style = vector_style.clone();

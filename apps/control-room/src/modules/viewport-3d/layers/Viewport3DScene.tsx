@@ -616,6 +616,12 @@ export function resolveViewport3DAirboxFrameState({
       fdmAirboxInstanceModel.count > 0 &&
       fdmAirboxPassPlan.needsInactiveCellGeometry,
   );
+  const singleGridVectorCarrierVisible = Boolean(
+    sharedCarrierVisible &&
+      fdmLaneActive &&
+      fdmAirboxPassPlan.needsVectorAnchors &&
+      (fdmAirboxVectorSegments?.length ?? 0) > 0,
+  );
 
   return {
     airboxVectorsVisible: Boolean(
@@ -624,9 +630,7 @@ export function resolveViewport3DAirboxFrameState({
           stageVisibility.fieldDrivenLayers &&
           multilayerPassPlan?.needsVectors &&
           (multilayerAirboxView?.vectorSegments?.length ?? 0) > 0) ||
-          (singleGridCarrierVisible &&
-            fdmAirboxPassPlan.needsVectorAnchors &&
-            (fdmAirboxVectorSegments?.length ?? 0) > 0)),
+          singleGridVectorCarrierVisible),
     ),
     airboxWireframeVisible: Boolean(
       (multilayerCarrierVisible &&
@@ -694,9 +698,7 @@ export function resolveAuthoredRegionOverlayVisibility({
   );
 }
 
-function resolveViewport3DModelLayerStageKey({
-  fdmAirboxInstanceModel,
-  fdmMultilayerAirboxView,
+export function resolveViewport3DModelLayerStageKey({
   fdmNativeLayerViews,
   fdmTargetViews,
   primitiveModel,
@@ -718,10 +720,6 @@ function resolveViewport3DModelLayerStageKey({
     topologyModel?.airboxParts.length ?? 0,
     primitiveModel?.sceneRevision ?? "no-scene-revision",
     primitiveModel?.objects.length ?? 0,
-    fdmAirboxInstanceModel ? "fdm-airbox-ready" : "fdm-airbox-empty",
-    fdmMultilayerAirboxView?.model
-      ? "fdm-multilayer-airbox-ready"
-      : "fdm-multilayer-airbox-empty",
     fdmNativeLayerViews.length > 0 ? "fdm-native-ready" : "fdm-native-empty",
     fdmTargetViews.length > 0 ? "fdm-ready" : "fdm-empty",
   ].join(":");

@@ -440,6 +440,47 @@ describe("planar field resources", () => {
     ).resolves.toEqual({ data: payload, etag: '"scalar-current"' });
   });
 
+  it("does not reuse the previous scalar buffer after the component identity changes", async () => {
+    const cache = new ResourceCache<ArrayBuffer>({ maxBytes: 1024 });
+    const source = monitorSource("plane-1");
+    const xKey = resolvePlanarFieldResourceKey(
+      "m",
+      source,
+      { component: "x" },
+      '"field-revision"',
+      DATA_PLANAR_FIELD_SCALAR_PATH,
+    );
+    const yKey = resolvePlanarFieldResourceKey(
+      "m",
+      source,
+      { component: "y" },
+      '"field-revision"',
+      DATA_PLANAR_FIELD_SCALAR_PATH,
+    );
+    const xPayload = new Uint8Array([1]).buffer;
+    const yPayload = new Uint8Array([2]).buffer;
+
+    await loadCachedPlanarScalar(cache, xKey, async () => ({
+      byteLength: xPayload.byteLength,
+      data: xPayload,
+      etag: '"scalar-x"',
+      status: "ready",
+    }));
+    const yRequest = vi.fn(async (_etag?: string | null) => ({
+      byteLength: yPayload.byteLength,
+      data: yPayload,
+      etag: '"scalar-y"',
+      status: "ready" as const,
+    }));
+
+    const current = await loadCachedPlanarScalar(cache, yKey, yRequest);
+
+    expect(xKey).not.toBe(yKey);
+    expect(yRequest).toHaveBeenCalledWith(undefined);
+    expect(current).toEqual({ data: yPayload, etag: '"scalar-y"' });
+    expect(current?.data).not.toBe(xPayload);
+  });
+
   it("delegates inactive resources to the shared no-load hook policy", () => {
     const source = readFileSync(
       new URL("./planarFieldResources.ts", import.meta.url),

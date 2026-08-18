@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { Clipboard } from "lucide-react";
 
 import type { Selection } from "@/kernel/selection/selectionTypes";
 import { useSessionStatusSelector } from "@/kernel/resources/useSessionStatus";
@@ -310,6 +311,17 @@ export function VisualizationDebugPanelView({
 
       <InspectorGroup title="Evidence export">
         <div className="fm-visualization-debug-actions" role="group" aria-label="Visualization evidence actions">
+          <Button
+            aria-label="Copy log"
+            className="fm-visualization-debug-action"
+            size="icon"
+            title="Copy debug log"
+            type="button"
+            variant="ghost"
+            onClick={() => void actions.copyLog()}
+          >
+            <Clipboard size={14} aria-hidden="true" />
+          </Button>
           <Button className="fm-visualization-debug-action" size="sm" aria-label="Copy snapshot" onClick={() => void actions.copySnapshot()}>Copy snapshot</Button>
           <Button className="fm-visualization-debug-action" size="sm" aria-label="Copy resource key" onClick={() => void actions.copyResourceKey()}>Copy resource key</Button>
           <Button className="fm-visualization-debug-action" size="sm" aria-label="Export JSON" onClick={() => actions.exportJson()}>Export JSON</Button>

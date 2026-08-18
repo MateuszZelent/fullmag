@@ -12,8 +12,8 @@ use sha2::{Digest, Sha256};
 
 use super::fdm_region_membership::{load_resolved_fdm_membership, ResolvedFdmMembership};
 use super::field_resolution::{
-    fem_magnetic_node_indices, flatten_json_field_values,
-    fem_nodal_visualization_projection_allowed, is_fdm_snapshot, json_field_grid,
+    fem_magnetic_node_indices, fem_nodal_visualization_projection_allowed,
+    flatten_json_field_values, is_fdm_snapshot, json_field_grid,
 };
 use crate::artifacts::read_json_artifact_value;
 use crate::error::ApiError;
@@ -2189,13 +2189,16 @@ pub(crate) fn resolve_spatial_field_from_values<'a>(
                     snapshot,
                     quantity_id,
                     point_count,
-                ) => SpatialFieldCarrier::FemNodes {
-                topology: mesh,
-                topology_fingerprint,
-                mapping: EntityMapping::Identity {
-                    entity_count: point_count,
-                },
-            },
+                ) =>
+            {
+                SpatialFieldCarrier::FemNodes {
+                    topology: mesh,
+                    topology_fingerprint,
+                    mapping: EntityMapping::Identity {
+                        entity_count: point_count,
+                    },
+                }
+            }
             QuantityLocation::Cell => {
                 return Err(ApiError::conflict(format!(
                     "element field '{quantity_id}' length does not match the FEM element layout"

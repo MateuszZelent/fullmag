@@ -107,6 +107,7 @@ function startDevServer() {
         ...process.env,
         FULLMAG_API_PROXY_TARGET: apiTarget,
         FULLMAG_API_URL: apiTarget,
+        FULLMAG_NEXT_DIST_DIR: `.next-control-room-${port}`,
         FULLMAG_WEB_PUBLIC_HOST: browserHost,
         NEXT_PUBLIC_API_URL: browserOrigin,
         NEXT_PUBLIC_CONTROL_ROOM_API_BASE_URL: browserOrigin,

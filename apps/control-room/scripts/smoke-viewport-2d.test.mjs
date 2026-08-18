@@ -76,6 +76,9 @@ test("2D smoke has a typed Default-source lane with full frame and operator cove
   assert.doesNotMatch(source, /bounds_uv_m: undefined/);
   assert.match(source, /render_png/);
   assert.match(source, /default-vs-monitor/);
+  assert.doesNotMatch(source, /waitForDefaultControls/);
+  assert.doesNotMatch(source, /getByLabel\("Source"/);
+  assert.doesNotMatch(source, /getByLabel\("Sampling"/);
 });
 
 test("2D smoke rejects an old painted raster while the new sample is loading", () => {

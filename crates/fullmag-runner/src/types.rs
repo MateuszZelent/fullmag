@@ -1306,10 +1306,7 @@ mod all_in_gpu_fem_transfer_audit_tests {
             value["fdm_multilayer_transfer_telemetry"]["data_residency"],
             "host_authoritative_with_cuda_field_roundtrips"
         );
-        assert_eq!(
-            value["fdm_multilayer_transfer_telemetry"]["layer_count"],
-            3
-        );
+        assert_eq!(value["fdm_multilayer_transfer_telemetry"]["layer_count"], 3);
         assert_eq!(
             value["fdm_multilayer_transfer_telemetry"]["host_snapshot_count"],
             2
@@ -1323,8 +1320,7 @@ mod all_in_gpu_fem_transfer_audit_tests {
             4_608
         );
         assert_eq!(
-            value["fdm_multilayer_transfer_telemetry"]
-                ["observed_snapshot_d2h_transfer_count"],
+            value["fdm_multilayer_transfer_telemetry"]["observed_snapshot_d2h_transfer_count"],
             36
         );
         assert_eq!(

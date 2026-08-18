@@ -6,6 +6,7 @@ import {
   VISUALIZATION_DEBUG_EXPORT_MIME,
   VISUALIZATION_DEBUG_EXPORT_SCHEMA_VERSION,
   buildVisualizationDebugExport,
+  buildVisualizationDebugLog,
   createVisualizationDebugEvidenceActions,
 } from "./visualizationDebugExport";
 
@@ -104,7 +105,55 @@ describe("visualization debug evidence export", () => {
     );
   });
 
-  it("copies snapshot and exact resource key with bounded success feedback", async () => {
+  it("builds a readable bounded log with the exact transport evidence", () => {
+    const model = exportModel(
+      "/v2/sessions/current/data/fields/H_eff/samples/vector?component=full&scope_kind=airbox",
+    );
+    model.transport = [
+      {
+        byteLength: 0,
+        channel: "http",
+        contentType: "application/json",
+        detail: "ResourcePartialLoadError: One or more quantity field vectors are not ready.",
+        direction: "rx",
+        durationMs: 12,
+        etag: null,
+        id: "transport-1",
+        messageType: null,
+        method: "GET",
+        outcome: "error",
+        path: "/v2/sessions/current/data/fields/H_eff/samples/vector",
+        requestId: "request-1",
+        resourceKey: "/v2/sessions/current/data/fields/H_eff/samples/vector?component=full&scope_kind=airbox",
+        status: 200,
+        timestampMs: 1_234,
+      },
+    ];
+    model.disposition = "blocked";
+    model.issues = [
+      {
+        code: "scope-id-mismatch",
+        evidence: ["requestedScopeId=none", "decodedScopeId=airbox"],
+        message: "Planned and decoded scope identifiers differ.",
+        severity: "error",
+        source: "decoded-payload",
+      },
+    ];
+
+    const log = buildVisualizationDebugLog(model, 1_234);
+
+    expect(log).toContain("Fullmag Visualization Debug Log");
+    expect(log).toContain("Health\tblocked");
+    expect(log).toContain("scope-id-mismatch");
+    expect(log).toContain("scope_kind=airbox");
+    expect(log).toContain("Planned and decoded scope identifiers differ.");
+    expect(log).toContain("ResourcePartialLoadError: One or more quantity field vectors are not ready.");
+    expect(new TextEncoder().encode(log).byteLength).toBeLessThanOrEqual(
+      MAX_VISUALIZATION_DEBUG_EXPORT_BYTES,
+    );
+  });
+
+  it("copies log, snapshot, and exact resource key with bounded success feedback", async () => {
     const writeText = vi.fn(async () => undefined);
     const feedback = vi.fn();
     const timers = fakeTimers();
@@ -125,6 +174,14 @@ describe("visualization debug evidence export", () => {
     expect(feedback).toHaveBeenLastCalledWith({
       kind: "success",
       message: "Snapshot copied.",
+    });
+    await actions.copyLog();
+    expect(writeText).toHaveBeenLastCalledWith(
+      expect.stringContaining("Fullmag Visualization Debug Log"),
+    );
+    expect(feedback).toHaveBeenLastCalledWith({
+      kind: "success",
+      message: "Debug log copied.",
     });
     await actions.copyResourceKey();
     expect(writeText).toHaveBeenLastCalledWith("resource:key");

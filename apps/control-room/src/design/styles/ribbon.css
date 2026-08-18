@@ -159,7 +159,7 @@
   flex-shrink: 0;
   height: 18px;
   color: var(--fm-text-muted);
-  font-size: 9px;
+  font-size: var(--fm-font-size-2xs);
   font-weight: 600;
   letter-spacing: 0.06em;
   line-height: 1;
@@ -177,7 +177,7 @@
   display: block;
   max-width: 100%;
   color: var(--fm-text-muted);
-  font-size: 8px;
+  font-size: var(--fm-font-size-2xs);
   font-weight: 500;
   letter-spacing: 0.02em;
   line-height: 1.1;
@@ -360,7 +360,7 @@
   -webkit-line-clamp: 2;
   line-clamp: 2;
   color: inherit;
-  font-size: 9px;
+  font-size: var(--fm-font-size-2xs);
   font-weight: 600;
   letter-spacing: 0;
   line-height: 1.15;
@@ -415,7 +415,7 @@
 
 /* ── Responsive: narrow viewport ──
    Below 1400px: hide labels, shrink action buttons to icon-only mode. */
-@media (max-width: 1400px) {
+@media (width < 1400px) {
   .fm-ribbon {
     --fm-ribbon-action-width: 36px;
   }
@@ -432,7 +432,7 @@
     display: none;
   }
   .fm-ribbon-group__label {
-    font-size: 8px;
+    font-size: var(--fm-font-size-2xs);
   }
   .fm-ribbon-group__label small {
     display: none;

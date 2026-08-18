@@ -439,6 +439,7 @@ export default function RibbonModule({ kernel }: ModuleProps) {
       />
       <RibbonGroupsRow
         groups={groups}
+        activeTabId={activeTab}
         onAction={handleAction}
         onCommandDetail={setSelectedCommandId}
       />

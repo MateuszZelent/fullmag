@@ -10,18 +10,36 @@ const resultA = {} as FdmCuboidBuildResult;
 const topologyModel = {} as FdmCuboidBuildResult["model"];
 
 describe("resolveFdmCuboidBuildState", () => {
-  it("returns pending with no result when the snapshot belongs to an old build key", () => {
+  it("keeps the previous model visible while a same-topology replacement starts", () => {
     expect(
       resolveFdmCuboidBuildState({
         currentBuildKey: "B",
+        currentTopologyKey: "carrier-a",
         snapshot: {
           buildKey: "A",
           error: null,
           result: resultA,
           status: "ready",
+          topologyKey: "carrier-a",
         },
       }),
-    ).toEqual({ buildKey: "B", error: null, result: null, status: "pending" });
+    ).toEqual({ buildKey: "B", error: null, result: resultA, status: "pending" });
+  });
+
+  it("does not display a previous model after topology changes", () => {
+    expect(
+      resolveFdmCuboidBuildState({
+        currentBuildKey: "B",
+        currentTopologyKey: "carrier-b",
+        snapshot: {
+          buildKey: "A",
+          error: null,
+          result: resultA,
+          status: "ready",
+          topologyKey: "carrier-a",
+        },
+      }).result,
+    ).toBeNull();
   });
 
   it("keeps B pending when A resolves after B begins", () => {
@@ -36,6 +54,7 @@ describe("resolveFdmCuboidBuildState", () => {
       error: null,
       result: null,
       status: "pending",
+      topologyKey: null,
     });
   });
 
@@ -50,6 +69,7 @@ describe("resolveFdmCuboidBuildState", () => {
       error: null,
       result: null,
       status: "pending",
+      topologyKey: null,
     });
   });
 
@@ -65,6 +85,7 @@ describe("resolveFdmCuboidBuildState", () => {
       error,
       result: null,
       status: "error",
+      topologyKey: null,
     });
   });
 
@@ -80,6 +101,7 @@ describe("resolveFdmCuboidBuildState", () => {
       error: null,
       result: resultA,
       status: "pending",
+      topologyKey: "carrier-a",
     });
   });
 

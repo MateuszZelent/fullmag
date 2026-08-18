@@ -105,9 +105,8 @@ pub(crate) fn fem_nodal_visualization_projection_allowed(
         return false;
     };
     point_count == mesh.nodes.len()
-        && quantity_spec(quantity_id).is_some_and(|spec| {
-            spec.location == QuantityLocation::Cell && spec.unit == "J/m³"
-        })
+        && quantity_spec(quantity_id)
+            .is_some_and(|spec| spec.location == QuantityLocation::Cell && spec.unit == "J/m³")
 }
 
 fn multilayer_native_point_count(snapshot: &SessionStateResponse) -> Option<usize> {

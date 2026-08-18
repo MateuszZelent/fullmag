@@ -48,17 +48,30 @@ export function PlanarSurface({
   const hoverPointerRef = useRef<readonly [number, number] | null>(null);
   const interactionRef = useRef<PlanarInteraction>(model.interaction);
   const dragRef = useRef<{ pointerId: number; u: number; v: number } | null>(null);
+  const pointersRef = useRef(new Map<number, { clientX: number; clientY: number }>());
+  const pinchRef = useRef<{
+    anchorU: number;
+    anchorV: number;
+    distance: number;
+    interaction: PlanarInteraction;
+  } | null>(null);
+  const gestureMovedRef = useRef(false);
   const rendererRef = useRef<PlanarRenderer | null>(null);
   const overlayContextRef = useRef<CanvasRenderingContext2D | null>(null);
   const colorizerRef = useRef<ReturnType<typeof createPlanarColorizer> | null>(null);
   const drawOverlayRef = useRef<(contours?: readonly ContourSegment[]) => void>(() => undefined);
   const modelRef = useRef(model);
   const renderStateRef = useRef<{
+    axisPointer: { u: number; v: number } | null;
     contours: readonly ContourSegment[];
     glyphs: ReturnType<typeof buildVectorGlyphs>;
     mesh: ReturnType<typeof decodePlanarMeshOverlayForDescriptor> | null;
-  }>({ contours: [], glyphs: [], mesh: null });
-  const [hoverValue, setHoverValue] = useState<number | null>(null);
+  }>({ axisPointer: null, contours: [], glyphs: [], mesh: null });
+  const [hoverProbe, setHoverProbe] = useState<{
+    u: number;
+    v: number;
+    value: number | null;
+  } | null>(null);
   const rangeMin = model.range?.min;
   const rangeMax = model.range?.max;
 
@@ -127,13 +140,19 @@ export function PlanarSurface({
     const mesh = (model.layers.mesh || model.layers.boundaries) && model.meshOverlay
       ? decodePlanarMeshOverlayForDescriptor(model.meshOverlay, model.meshOverlayDescriptor ?? {})
       : null;
-    renderStateRef.current = { contours: [], glyphs, mesh };
+    renderStateRef.current = {
+      axisPointer: model.layers.probes ? renderStateRef.current.axisPointer : null,
+      contours: [],
+      glyphs,
+      mesh,
+    };
     drawOverlayRef.current = (contours) => {
       if (contours) renderStateRef.current.contours = contours;
       const current = modelRef.current;
       const state = renderStateRef.current;
       const currentMeshSegments = state.mesh ? partitionPlanarMeshSegments(state.mesh) : null;
       drawPlanarOverlays(overlayContext, overlayCanvas.width, overlayCanvas.height, {
+        axisPointer: state.axisPointer,
         boundsOutline: current.boundsOutline,
         contours: state.contours,
         boundarySegments: currentMeshSegments?.boundarySegments,
@@ -145,7 +164,10 @@ export function PlanarSurface({
         meshSegments: currentMeshSegments?.meshSegments,
         meshViewport: current.viewport,
         samplePoints: current.samplePoints,
+        pointStyle: current.pointStyle,
         vectorColorMode: current.vectorStyle.colorMode,
+        vectorStyle: current.vectorStyle,
+        wireframeStyle: current.wireframeStyle,
         viewport: [
           ((current.viewport[0] - current.bounds[0]) / (current.bounds[1] - current.bounds[0])) * (current.resolution[0] - 1),
           ((current.viewport[1] - current.bounds[0]) / (current.bounds[1] - current.bounds[0])) * (current.resolution[0] - 1),
@@ -238,7 +260,12 @@ export function PlanarSurface({
     model.vectorBudget,
     model.vectorScale,
     model.vectorStyle.colorMode,
+    model.vectorStyle.color,
     model.vectorStyle.lengthMode,
+    model.vectorStyle.opacity,
+    model.vectorStyle.thickness,
+    model.wireframeStyle,
+    model.pointStyle,
     model.vectors,
     onRenderEvidence,
   ]);
@@ -250,7 +277,9 @@ export function PlanarSurface({
     }
     hoverFrameRef.current = null;
     hoverPointerRef.current = null;
-    resetHoverValue(setHoverValue);
+    renderStateRef.current.axisPointer = null;
+    drawOverlayRef.current();
+    resetHoverProbe(setHoverProbe);
   }, [model.layers.probes]);
 
   useEffect(() => {
@@ -275,6 +304,10 @@ export function PlanarSurface({
         data-probes-enabled={String(model.layers.probes)}
         tabIndex={model.layers.probes ? 0 : -1}
         onClick={(event) => {
+          if (gestureMovedRef.current) {
+            gestureMovedRef.current = false;
+            return;
+          }
           if (!model.layers.probes) return;
           const [u, v] = pointerUv(event.currentTarget, event.clientX, event.clientY, model.viewport);
           onPin?.(u, v);
@@ -322,13 +355,44 @@ export function PlanarSurface({
           onInteraction?.(interactionRef.current);
         }}
         onPointerDown={(event) => {
+          pointersRef.current.set(event.pointerId, {
+            clientX: event.clientX,
+            clientY: event.clientY,
+          });
           const [u, v] = pointerUv(event.currentTarget, event.clientX, event.clientY, model.viewport);
-          dragRef.current = { pointerId: event.pointerId, u, v };
+          if (pointersRef.current.size === 1) {
+            gestureMovedRef.current = false;
+            dragRef.current = { pointerId: event.pointerId, u, v };
+          } else if (pointersRef.current.size === 2) {
+            const [first, second] = [...pointersRef.current.values()];
+            if (first && second) {
+              const [anchorU, anchorV] = pointerUv(
+                event.currentTarget,
+                (first.clientX + second.clientX) / 2,
+                (first.clientY + second.clientY) / 2,
+                model.viewport,
+              );
+              pinchRef.current = {
+                anchorU,
+                anchorV,
+                distance: pointerDistance(first, second),
+                interaction: interactionRef.current,
+              };
+              gestureMovedRef.current = true;
+              dragRef.current = null;
+            }
+          }
           event.currentTarget.setPointerCapture(event.pointerId);
         }}
         onPointerUp={(event) => {
+          releasePlanarPointer(event.currentTarget, event.pointerId, pointersRef.current);
+          pinchRef.current = null;
           if (dragRef.current?.pointerId === event.pointerId) dragRef.current = null;
-          if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
+        }}
+        onPointerCancel={(event) => {
+          releasePlanarPointer(event.currentTarget, event.pointerId, pointersRef.current);
+          pinchRef.current = null;
+          dragRef.current = null;
         }}
         onWheel={(event) => {
           event.preventDefault();
@@ -343,11 +407,34 @@ export function PlanarSurface({
           onInteraction?.(interactionRef.current);
         }}
         onPointerMove={(event) => {
+          if (pointersRef.current.has(event.pointerId)) {
+            pointersRef.current.set(event.pointerId, {
+              clientX: event.clientX,
+              clientY: event.clientY,
+            });
+          }
           const [u, v] = pointerUv(event.currentTarget, event.clientX, event.clientY, model.viewport);
+          const pinch = pinchRef.current;
+          if (pinch && pointersRef.current.size >= 2) {
+            const [first, second] = [...pointersRef.current.values()];
+            if (first && second && pinch.distance > 0) {
+              interactionRef.current = zoomPlanarInteractionAt(
+                model.bounds,
+                pinch.interaction,
+                pinch.anchorU,
+                pinch.anchorV,
+                pinch.interaction.zoom * pointerDistance(first, second) / pinch.distance,
+              );
+              gestureMovedRef.current = true;
+              onInteraction?.(interactionRef.current);
+            }
+            return;
+          }
           const drag = dragRef.current;
           if (drag && drag.pointerId === event.pointerId) {
             interactionRef.current = panPlanarInteraction(interactionRef.current, drag.u - u, drag.v - v);
             dragRef.current = { ...drag, u, v };
+            gestureMovedRef.current = true;
             onInteraction?.(interactionRef.current);
           }
           if (!model.layers.probes) return;
@@ -364,16 +451,26 @@ export function PlanarSurface({
             const latestValues = valuesRef.current;
             const current = modelRef.current;
             if (!current.layers.probes || !point || !latestValues) return;
-            setHoverValue(localProbe(
+            const probe = localProbe(
               point[0],
               point[1],
               current.bounds,
               current.resolution,
               latestValues,
               maskRef.current ?? undefined,
-            ).value);
+            );
+            renderStateRef.current.axisPointer = { u: point[0], v: point[1] };
+            drawOverlayRef.current();
+            setHoverProbe({ u: point[0], v: point[1], value: probe.value });
           });
           if (hoverFrameRef.current === -1) hoverFrameRef.current = frame;
+        }}
+        onPointerLeave={() => {
+          if (dragRef.current) return;
+          hoverPointerRef.current = null;
+          renderStateRef.current.axisPointer = null;
+          drawOverlayRef.current();
+          resetHoverProbe(setHoverProbe);
         }}
       />
       <canvas
@@ -382,12 +479,16 @@ export function PlanarSurface({
         className="fm-field-map__canvas fm-field-map__canvas--overlay"
       />
       <output className="fm-field-map__probe" aria-live="polite">
-        {!model.layers.probes || hoverValue === null
+        {!model.layers.probes || hoverProbe?.value === null || hoverProbe === null
           ? "No sample"
-          : formatValueWithUnit(
-              hoverValue * model.display.probeScale,
-              model.display.legendUnit,
-            )}
+          : [
+              `u ${formatValueWithUnit(hoverProbe.u, model.display.axisUnit)}`,
+              `v ${formatValueWithUnit(hoverProbe.v, model.display.axisUnit)}`,
+              formatValueWithUnit(
+                hoverProbe.value * model.display.probeScale,
+                model.display.legendUnit,
+              ),
+            ].join(" · ")}
       </output>
     </div>
   );
@@ -408,8 +509,24 @@ function pointerUv(
   ];
 }
 
-function resetHoverValue(
-  setHoverValue: (value: number | null) => void,
+function resetHoverProbe(
+  setHoverProbe: (value: { u: number; v: number; value: number | null } | null) => void,
 ): void {
-  setHoverValue(null);
+  setHoverProbe(null);
+}
+
+function pointerDistance(
+  first: { clientX: number; clientY: number },
+  second: { clientX: number; clientY: number },
+): number {
+  return Math.hypot(second.clientX - first.clientX, second.clientY - first.clientY);
+}
+
+function releasePlanarPointer(
+  canvas: HTMLCanvasElement,
+  pointerId: number,
+  pointers: Map<number, { clientX: number; clientY: number }>,
+): void {
+  pointers.delete(pointerId);
+  if (canvas.hasPointerCapture(pointerId)) canvas.releasePointerCapture(pointerId);
 }

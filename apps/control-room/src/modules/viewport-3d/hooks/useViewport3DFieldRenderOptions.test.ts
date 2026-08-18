@@ -3,15 +3,31 @@ import { describe, expect, it } from "vitest";
 import {
   clampViewport3DInteractiveVectorBudget,
   limitViewport3DFieldRenderVectorBudgets,
+  resolveViewport3DNoTopologyFieldRenderOptions,
   resolveViewport3DAirboxVectorLengthScale,
   sameViewport3DFieldRenderOptions,
   viewport3DAirboxVectorsVisible,
 } from "./useViewport3DFieldRenderOptions";
+import { DEFAULT_OBJECT_VISUALIZATION } from "@/kernel/visualization/ObjectVisualizationController";
 
 describe("sameViewport3DFieldRenderOptions", () => {
+  it("keeps an FDM scalar component request when topology is unavailable", () => {
+    const options = resolveViewport3DNoTopologyFieldRenderOptions({
+      ...DEFAULT_OBJECT_VISUALIZATION,
+      scalarColorPalette: "magma",
+      surfaceColorSource: "component_y",
+      visible: true,
+    });
+
+    expect(options.scalarColorsVisible).toBe(true);
+    expect(options.scalarColorModes).toEqual(new Set(["y"]));
+    expect(options.fullScalarColorMode).toBe("y");
+    expect(options.fullScalarColorPalette).toBe("magma");
+  });
+
   it("gives Airbox glyphs a visible target-relative base length", () => {
-    expect(resolveViewport3DAirboxVectorLengthScale(1)).toBe(8);
-    expect(resolveViewport3DAirboxVectorLengthScale(2)).toBe(16);
+    expect(resolveViewport3DAirboxVectorLengthScale(1)).toBe(1);
+    expect(resolveViewport3DAirboxVectorLengthScale(2)).toBe(2);
     expect(resolveViewport3DAirboxVectorLengthScale(-1)).toBe(0);
   });
 

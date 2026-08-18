@@ -30,7 +30,7 @@ describe("ObjectVisualizationPanel accessibility controls", () => {
         displaySettings={DEFAULT_AIRBOX_VISUALIZATION}
         passControlsDisabled
         patch={vi.fn().mockResolvedValue(undefined)}
-        pending={false}
+        isFieldPending={() => false}
         primitiveDisplayToggleVisible={false}
         renderWarning={null}
         settings={DEFAULT_AIRBOX_VISUALIZATION}
@@ -51,7 +51,7 @@ describe("ObjectVisualizationPanel accessibility controls", () => {
         displaySettings={DEFAULT_FDM_UNIVERSE_OUTSIDE_SUPPORT_VISUALIZATION}
         passControlsDisabled={false}
         patch={vi.fn().mockResolvedValue(undefined)}
-        pending={false}
+        isFieldPending={() => false}
         primitiveDisplayToggleVisible={false}
         renderWarning={null}
         settings={DEFAULT_FDM_UNIVERSE_OUTSIDE_SUPPORT_VISUALIZATION}
@@ -174,7 +174,7 @@ describe("ObjectVisualizationPanel accessibility controls", () => {
       <VisualizationRenderModeSection
         displaySettings={DEFAULT_AIRBOX_VISUALIZATION}
         passControlsDisabled={false}
-        pending={false}
+        isFieldPending={() => false}
         patch={vi.fn().mockResolvedValue(undefined)}
         target={AIRBOX_VISUALIZATION_TARGET}
       />,

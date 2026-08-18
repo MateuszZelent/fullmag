@@ -28,10 +28,9 @@ export interface VectorGlyphInstances extends VectorGlyphTransforms {
   colors: Float32Array | null;
 }
 
-// V1-matched proportions: larger head, thicker shaft for better visibility.
-const DEFAULT_HEAD_LENGTH_RATIO = 0.35;
-const DEFAULT_HEAD_RADIUS_RATIO = 0.20;
-const DEFAULT_SHAFT_RADIUS_RATIO = 0.08;
+const DEFAULT_HEAD_LENGTH_RATIO = 0.28;
+const DEFAULT_HEAD_RADIUS_RATIO = 0.1;
+const DEFAULT_SHAFT_RADIUS_RATIO = 0.035;
 
 /**
  * Number of floats per segment in the production format:

@@ -40,6 +40,7 @@ import {
 } from "@/kernel/resources/ResourceCache";
 import {
   createResourcePartialLoadError,
+  type ResourcePartialLoadError,
   type ResourceRetryPolicy,
 } from "@/kernel/resources/ResourceRuntimeStore";
 import type { ResourceInvalidationController } from "@/kernel/resources/ResourceInvalidationController";
@@ -104,6 +105,39 @@ interface Viewport3DAirboxFieldVectorPartialLoadError extends Error {
     string,
     Viewport3DAirboxFieldVectorPartFailure
   >;
+}
+
+export interface Viewport3DFieldVectorRequestFailure {
+  readonly cause: unknown;
+  readonly key: string;
+  readonly quantityId: string;
+  readonly query: FieldVectorQuery;
+  readonly requestId: string;
+}
+
+export interface Viewport3DFieldVectorPartialLoadError<TData = unknown>
+  extends ResourcePartialLoadError<TData> {
+  requestFailures: readonly Viewport3DFieldVectorRequestFailure[];
+}
+
+export function createViewport3DFieldVectorPartialLoadError<TData>({
+  cause,
+  message,
+  partialData,
+  requestFailures,
+}: {
+  cause?: unknown;
+  message: string;
+  partialData: TData;
+  requestFailures: readonly Viewport3DFieldVectorRequestFailure[];
+}): Viewport3DFieldVectorPartialLoadError<TData> {
+  const error = createResourcePartialLoadError(
+    message,
+    partialData,
+    cause,
+  ) as Viewport3DFieldVectorPartialLoadError<TData>;
+  error.requestFailures = requestFailures;
+  return error;
 }
 
 export function resolveCachedFieldVectorEnvelope(
@@ -1288,6 +1322,7 @@ export function useViewport3DAirboxFieldVectors(
         string,
         Viewport3DAirboxFieldVectorPartFailure
       >();
+      const requestFailures: Viewport3DFieldVectorRequestFailure[] = [];
       let firstError: unknown = null;
       for (const request of uniqueRequests) {
         if (signal.aborted) {
@@ -1331,6 +1366,13 @@ export function useViewport3DAirboxFieldVectors(
         } catch (error) {
           if (signal.aborted) throw error;
           firstError ??= error;
+          requestFailures.push({
+            cause: error,
+            key: request.key,
+            quantityId: request.quantityId,
+            query: request.query,
+            requestId: request.requestId ?? request.key,
+          });
           failureByKey.set(request.key, airboxFieldVectorFailure(error));
           const cached = fieldVectorCache.peek(request.key);
           dataByKey.set(
@@ -1375,11 +1417,12 @@ export function useViewport3DAirboxFieldVectors(
         ),
       );
       if (firstError) {
-        const partialError = createResourcePartialLoadError(
-          "One or more Airbox field vectors are not ready",
-          partial,
-          firstError,
-        );
+        const partialError = createViewport3DFieldVectorPartialLoadError({
+          cause: firstError,
+          message: "One or more Airbox field vectors are not ready",
+          partialData: partial,
+          requestFailures,
+        });
         (partialError as unknown as Viewport3DAirboxFieldVectorPartialLoadError).partFailures =
           partFailures;
         throw partialError;
@@ -1527,6 +1570,7 @@ export function useViewport3DQuantityFieldVectors(
   const load = useCallback(
     async ({ signal }: { signal: AbortSignal }) => {
       const entries: Array<readonly [string, CachedFieldVectorEnvelope | null]> = [];
+      const requestFailures: Viewport3DFieldVectorRequestFailure[] = [];
       let firstError: unknown = null;
       for (const [requestId, request] of requestKeys) {
         if (signal.aborted) {
@@ -1579,6 +1623,13 @@ export function useViewport3DQuantityFieldVectors(
         } catch (error) {
           if (signal.aborted) throw error;
           firstError ??= error;
+          requestFailures.push({
+            cause: error,
+            key: request.key,
+            quantityId: request.quantityId,
+            query: request.query,
+            requestId,
+          });
           const cached = fieldVectorCache.peek(request.key);
           entries.push([
             requestId,
@@ -1601,11 +1652,12 @@ export function useViewport3DQuantityFieldVectors(
         ),
       );
       if (firstError) {
-        throw createResourcePartialLoadError(
-          "One or more quantity field vectors are not ready",
-          partial,
-          firstError,
-        );
+        throw createViewport3DFieldVectorPartialLoadError({
+          cause: firstError,
+          message: "One or more quantity field vectors are not ready",
+          partialData: partial,
+          requestFailures,
+        });
       }
       return partial;
     },
@@ -1716,6 +1768,7 @@ export function useViewport3DPartFieldVectors(
   const load = useCallback(
     async ({ signal }: { signal: AbortSignal }) => {
       const entries: Array<readonly [string, CachedFieldVectorEnvelope | null]> = [];
+      const requestFailures: Viewport3DFieldVectorRequestFailure[] = [];
       let firstError: unknown = null;
       for (const [partId, request] of requestKeys) {
         if (signal.aborted) {
@@ -1768,6 +1821,13 @@ export function useViewport3DPartFieldVectors(
         } catch (error) {
           if (signal.aborted) throw error;
           firstError ??= error;
+          requestFailures.push({
+            cause: error,
+            key: request.key,
+            quantityId: request.quantityId,
+            query: request.query,
+            requestId: request.requestId ?? partId,
+          });
           const cached = fieldVectorCache.peek(request.key);
           entries.push([
             partId,
@@ -1789,11 +1849,12 @@ export function useViewport3DPartFieldVectors(
         ),
       );
       if (firstError) {
-        throw createResourcePartialLoadError(
-          "One or more mesh-part field vectors are not ready",
-          partial,
-          firstError,
-        );
+        throw createViewport3DFieldVectorPartialLoadError({
+          cause: firstError,
+          message: "One or more mesh-part field vectors are not ready",
+          partialData: partial,
+          requestFailures,
+        });
       }
       return partial;
     },

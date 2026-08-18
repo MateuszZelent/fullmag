@@ -6,12 +6,11 @@ import {
   Palette,
   ArrowUpRight,
   Eye,
-  EyeOff,
   ArrowRightLeft,
   Box,
   SquareDashed,
 } from "lucide-react";
-import React, { useState, useId } from "react";
+import React, { useEffect, useId, useRef, useState } from "react";
 import {
   type FieldCatalogResource,
   type FieldMetaResource,
@@ -70,6 +69,7 @@ import {
   resolveVisualizationDisplayMode,
   type VisualizationDisplayMode,
   type VisualizationVectorBudgetRange,
+  type VisualizationVectorScopeIdentity,
   type TargetFieldAvailability,
   type RegionVisualizationCarrier,
   visualizationQuantityItems,
@@ -80,8 +80,12 @@ import { VisualizationVectorAccountingRows } from "./VisualizationVectorAccounti
 import { SHARED_VECTOR_COLOR_MODE_ITEMS } from "../visualization/presentationSemantics";
 import {
   visualizationSectionDisabledDescription,
-  nextVisualizationRadioValue,
 } from "./ObjectVisualizationPanelAccessibility";
+import {
+  VisualizationDisplayPassesControl,
+  VisualizationRenderModeControl,
+  type VisualizationRenderModeValue,
+} from "../visualization/VisualizationInspectorControls";
 import { surfaceFieldStatus } from "./ObjectVisualizationHelpers";
 import { FeedbackBanner } from "../primitives/FeedbackBanner";
 import { FormField } from "../primitives/FormField";
@@ -94,19 +98,18 @@ const GEOMETRY_SCOPES = [
   { label: "Full", value: "full" },
 ];
 
-const RENDER_MODE_OPTIONS = [
-  { value: "surface" as const, label: "Shaded", subLabel: undefined },
-  { value: "surface+edges" as const, label: "Shaded +", subLabel: "Wireframe" },
-  { value: "wireframe" as const, label: "Wireframe", subLabel: undefined },
-  { value: "points" as const, label: "Points", subLabel: undefined },
-  { value: "off" as const, label: "Off", subLabel: undefined },
-] satisfies Array<{
-  value: VisualizationDisplayMode;
-  label: string;
-  subLabel?: string;
-}>;
+const RENDER_MODE_VALUES: readonly VisualizationRenderModeValue[] = [
+  "surface",
+  "surface+edges",
+  "wireframe",
+  "points",
+  "off",
+];
 
 type PatchVisualizationTarget = (patchValue: VisualizationTargetPatch) => Promise<void>;
+export type IsVisualizationFieldPending = (
+  ...fields: Array<keyof VisualizationTargetPatch>
+) => boolean;
 type SectionDisabled = (
   id: ReturnType<typeof buildVisualizationPanelSections>[number]["id"],
 ) => boolean;
@@ -115,7 +118,7 @@ export function VisualizationDisplayPassesSection({
   displaySettings,
   passControlsDisabled,
   patch,
-  pending,
+  isFieldPending,
   renderWarning,
   settings,
   target,
@@ -124,7 +127,7 @@ export function VisualizationDisplayPassesSection({
   displaySettings: VisualizationTargetSettings;
   passControlsDisabled: boolean;
   patch: PatchVisualizationTarget;
-  pending: boolean;
+  isFieldPending: IsVisualizationFieldPending;
   renderWarning: string | null;
   settings: VisualizationTargetSettings;
   target: VisualizationTargetRef;
@@ -137,89 +140,56 @@ export function VisualizationDisplayPassesSection({
         <FeedbackBanner kind="warning" message={renderWarning} />
       ) : null}
 
-      <div className="fm-viz-layer-strip">
-        <button
-          aria-label="Toggle target visibility"
-          aria-pressed={settings.visible}
-          className={`fm-viz-layer-chip${
-            settings.visible
-              ? " fm-viz-layer-chip--on"
-              : ""
-          }`}
-          disabled={pending}
-          type="button"
-          onClick={() => void patch({ visible: !settings.visible })}
-        >
-          <Eye size={13} strokeWidth={1.75} aria-hidden="true" />
-          Visible
-        </button>
-
-        {capabilities.showBoundsControl ? (
-          <button
-            aria-label="Toggle target bounds"
-            aria-pressed={displaySettings.boundsVisible && displaySettings.visible}
-            className={`fm-viz-layer-chip${
-              displaySettings.boundsVisible && displaySettings.visible
-                ? " fm-viz-layer-chip--on"
-                : ""
-            }`}
-            disabled={passControlsDisabled}
-            type="button"
-            onClick={() =>
-              void patch(displayPassTogglePatch(settings, "boundsVisible"))
-            }
-          >
-            <SquareDashed size={13} strokeWidth={1.75} aria-hidden="true" />
-            Bounds
-          </button>
-        ) : null}
-
-        {primitiveDisplayToggleVisible ? (
-          <button
-            aria-label="Toggle monochrome primitive preview"
-            aria-pressed={Boolean(
-              displaySettings.primitiveVisible && displaySettings.visible,
-            )}
-            className={`fm-viz-layer-chip${
-              displaySettings.primitiveVisible && displaySettings.visible
-                ? " fm-viz-layer-chip--on"
-                : ""
-            }`}
-            disabled={passControlsDisabled}
-            type="button"
-            onClick={() =>
-              void patch({ primitiveVisible: !settings.primitiveVisible })
-            }
-          >
-            <Box size={13} strokeWidth={1.75} aria-hidden="true" />
-            Primitive
-          </button>
-        ) : null}
-
-        {capabilities.supportsVectors ? (
-        <button
-          aria-label="Toggle vector field arrows"
-          aria-pressed={displaySettings.vectorsVisible && displaySettings.visible}
-          className={`fm-viz-layer-chip${
-            displaySettings.vectorsVisible && displaySettings.visible
-              ? " fm-viz-layer-chip--on"
-              : ""
-          }`}
-          disabled={passControlsDisabled}
-          type="button"
-          onClick={() =>
-            void patch(displayPassTogglePatch(settings, "vectorsVisible"))
-          }
-        >
-          <ArrowRightLeft size={13} strokeWidth={1.75} aria-hidden="true" />
-          Vectors
-        </button>
-        ) : null}
-      </div>
+      <VisualizationDisplayPassesControl
+        items={[
+          {
+            ariaLabel: "Toggle target visibility",
+            disabled: isFieldPending("visible"),
+            icon: <Eye size={13} strokeWidth={1.75} aria-hidden="true" />,
+            id: "visible",
+            label: "Visible",
+            pressed: settings.visible,
+            onToggle: () => void patch({ visible: !settings.visible }),
+          },
+          ...(capabilities.showBoundsControl
+            ? [{
+                ariaLabel: "Toggle target bounds",
+                disabled: passControlsDisabled || isFieldPending("boundsVisible"),
+                icon: <SquareDashed size={13} strokeWidth={1.75} aria-hidden="true" />,
+                id: "bounds",
+                label: "Bounds",
+                pressed: displaySettings.boundsVisible && displaySettings.visible,
+                onToggle: () => void patch(displayPassTogglePatch(settings, "boundsVisible")),
+              }]
+            : []),
+          ...(primitiveDisplayToggleVisible
+            ? [{
+                ariaLabel: "Toggle monochrome primitive preview",
+                disabled: passControlsDisabled || isFieldPending("primitiveVisible"),
+                icon: <Box size={13} strokeWidth={1.75} aria-hidden="true" />,
+                id: "primitive",
+                label: "Primitive",
+                pressed: Boolean(displaySettings.primitiveVisible && displaySettings.visible),
+                onToggle: () => void patch({ primitiveVisible: !settings.primitiveVisible }),
+              }]
+            : []),
+          ...(capabilities.supportsVectors
+            ? [{
+                ariaLabel: "Toggle vector field arrows",
+                disabled: passControlsDisabled || isFieldPending("vectorsVisible"),
+                icon: <ArrowRightLeft size={13} strokeWidth={1.75} aria-hidden="true" />,
+                id: "vectors",
+                label: "Vectors",
+                pressed: displaySettings.vectorsVisible && displaySettings.visible,
+                onToggle: () => void patch(displayPassTogglePatch(settings, "vectorsVisible")),
+              }]
+            : []),
+        ]}
+      />
 
       {capabilities.showBoundsControl && settings.boundsVisible ? (
         <NumberField
-          disabled={pending || passControlsDisabled}
+          disabled={isFieldPending("boundsOpacityPercent") || passControlsDisabled}
           label="Bounds opacity"
           max={100}
           min={0}
@@ -233,13 +203,13 @@ export function VisualizationDisplayPassesSection({
       {primitiveDisplayToggleVisible && settings.primitiveVisible ? (
         <div className="grid min-w-0 gap-fm-inspector-row pt-fm-inspector-row">
           <ColorField
-            disabled={pending}
+            disabled={isFieldPending("primitiveMonoColor")}
             label="Primitive color"
             value={settings.primitiveMonoColor ?? settings.shaderMonoColor}
             onChange={(value) => void patch({ primitiveMonoColor: value })}
           />
           <NumberField
-            disabled={pending}
+            disabled={isFieldPending("primitiveOpacityPercent")}
             label="Primitive opacity"
             max={100}
             min={0}
@@ -263,33 +233,26 @@ export function VisualizationDisplayPassesSection({
 export function VisualizationRenderModeSection({
   displaySettings,
   passControlsDisabled,
-  pending,
+  isFieldPending,
   patch,
   target,
 }: {
   displaySettings: VisualizationTargetSettings;
   passControlsDisabled: boolean;
-  pending: boolean;
+  isFieldPending: IsVisualizationFieldPending;
   patch: PatchVisualizationTarget;
   target: VisualizationTargetRef;
 }) {
   const capabilities = visualizationTargetCapabilities(target);
   const currentMode = resolveVisualizationDisplayMode(displaySettings);
-  const renderModeOptions = RENDER_MODE_OPTIONS.filter(
+  const renderModeOptions = RENDER_MODE_VALUES.filter(
     (option) =>
-      option.value === "off" ||
-      capabilities.primaryRenderModes.includes(option.value),
+      option === "off" ||
+      capabilities.primaryRenderModes.includes(option),
   );
   const unsupportedCurrentMode =
     currentMode !== "off" &&
     !capabilities.primaryRenderModes.includes(currentMode);
-  const radioValues = renderModeOptions.map((option) => option.value);
-  const activeIndex = renderModeOptions.findIndex(
-    (option) => option.value === currentMode,
-  );
-  const tabStopIndex = activeIndex >= 0 ? activeIndex : 0;
-  const radioRefs = React.useRef<Array<HTMLButtonElement | null>>([]);
-
   const applyRenderMode = (value: VisualizationDisplayMode) =>
     void patch(
       target.id === "fdm-universe-outside-support"
@@ -299,111 +262,36 @@ export function VisualizationRenderModeSection({
 
   return (
     <div className="grid min-w-0 gap-1.5">
-      <span className="fm-viz-render-mode-label">Render Mode</span>
       {unsupportedCurrentMode ? (
         <FeedbackBanner
           kind="warning"
           message="This saved render mode is not available for this target. Choose a supported mode to replace it."
         />
       ) : null}
-      <div
-        className="fm-viz-render-mode-grid"
-        role="radiogroup"
-        aria-label="Render mode"
-      >
-        {renderModeOptions.map((option, index) => {
-          const isActive = currentMode === option.value;
-          return (
-            <button
-              key={option.value}
-              aria-checked={isActive}
-              aria-label={option.label}
-              className={`fm-viz-render-mode-tile ${isActive ? "fm-viz-render-mode-tile--active" : ""}`}
-              disabled={passControlsDisabled || pending}
-              ref={(element) => {
-                radioRefs.current[index] = element;
-              }}
-              role="radio"
-              tabIndex={index === tabStopIndex ? 0 : -1}
-              type="button"
-              onClick={() => applyRenderMode(option.value)}
-              onKeyDown={(event) => {
-                const nextValue = nextVisualizationRadioValue(
-                  radioValues,
-                  option.value,
-                  event.key,
-                );
-                if (nextValue === option.value) return;
-                event.preventDefault();
-                const nextIndex = renderModeOptions.findIndex(
-                  (candidate) => candidate.value === nextValue,
-                );
-                radioRefs.current[nextIndex]?.focus();
-                applyRenderMode(nextValue);
-              }}
-            >
-              <span className="fm-viz-render-mode-tile__icon" aria-hidden="true">
-                {option.value === "surface" && (
-                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-                    <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z" fill={isActive ? "currentColor" : "none"} fillOpacity={isActive ? "0.15" : "0"} />
-                    <polyline points="3.27 6.96 12 12.01 20.73 6.96" />
-                    <line x1="12" y1="22.08" x2="12" y2="12" />
-                  </svg>
-                )}
-                {option.value === "surface+edges" && (
-                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-                    <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z" fill={isActive ? "currentColor" : "none"} fillOpacity={isActive ? "0.15" : "0"} />
-                    <polyline points="3.27 6.96 12 12.01 20.73 6.96" />
-                    <line x1="12" y1="22.08" x2="12" y2="12" />
-                    <polyline points="7 9.5 12 12 17 9.5" />
-                    <polyline points="12 12 12 16.5" />
-                  </svg>
-                )}
-                {option.value === "wireframe" && (
-                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-                    <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z" />
-                    <polyline points="3.27 6.96 12 12.01 20.73 6.96" />
-                    <line x1="12" y1="22.08" x2="12" y2="12" />
-                    <line x1="7" y1="3.5" x2="12" y2="6.01" />
-                    <line x1="17" y1="3.5" x2="12" y2="6.01" />
-                  </svg>
-                )}
-                {option.value === "points" && (
-                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
-                    <circle cx="12" cy="12" r="1.5" fill="currentColor" />
-                    <circle cx="7" cy="9" r="1.5" fill="currentColor" />
-                    <circle cx="17" cy="9" r="1.5" fill="currentColor" />
-                    <circle cx="7" cy="15" r="1.5" fill="currentColor" />
-                    <circle cx="17" cy="15" r="1.5" fill="currentColor" />
-                    <circle cx="12" cy="6" r="1" fill="currentColor" />
-                    <circle cx="12" cy="18" r="1" fill="currentColor" />
-                    <circle cx="4" cy="12" r="1" fill="currentColor" />
-                    <circle cx="20" cy="12" r="1" fill="currentColor" />
-                  </svg>
-                )}
-                {option.value === "off" && (
-                  <EyeOff size={20} strokeWidth={1.5} />
-                )}
-              </span>
-              <span className="fm-viz-render-mode-tile__label">
-                {option.label}
-                {option.subLabel ? (
-                  <span className="fm-viz-render-mode-tile__sub-label">{option.subLabel}</span>
-                ) : null}
-              </span>
-            </button>
-          );
-        })}
-      </div>
+      <VisualizationRenderModeControl
+        disabled={
+          passControlsDisabled ||
+          isFieldPending(
+            "renderMode",
+            "shaderVisible",
+            "wireframeVisible",
+            "pointsVisible",
+          )
+        }
+        options={renderModeOptions}
+        value={currentMode}
+        onValueChange={applyRenderMode}
+      />
     </div>
   );
 }
 
 
 export function VisualizationSurfaceColoringSection({
+  airboxFieldCarrierIdentity,
   patch,
   patchColor,
-  pending,
+  isFieldPending,
   sectionDisabled,
   fieldCatalog,
   fieldCatalogLoading,
@@ -413,12 +301,13 @@ export function VisualizationSurfaceColoringSection({
   settings,
   target,
 }: {
+  airboxFieldCarrierIdentity?: VisualizationVectorScopeIdentity | null;
   patch: PatchVisualizationTarget;
   patchColor: (
     field: "pointColor" | "shaderMonoColor" | "vectorMonoColor" | "wireframeColor",
     value: string,
   ) => void;
-  pending: boolean;
+  isFieldPending: IsVisualizationFieldPending;
   sectionDisabled: SectionDisabled;
   fieldCatalog: { data: FieldCatalogResource | null; status: string };
   fieldCatalogLoading: boolean;
@@ -442,6 +331,7 @@ export function VisualizationSurfaceColoringSection({
   const fieldMetaScopeQuery = fieldMetaScopeQueryForVisualizationTarget(
     fieldMetaTarget,
     regionCarrier,
+    airboxFieldCarrierIdentity,
   );
   const regionFieldWarning =
     target.kind === "region" ? regionVisualizationFieldWarning(regionCarrier) : null;
@@ -489,7 +379,7 @@ export function VisualizationSurfaceColoringSection({
         />
       ) : null}
       <FormField
-        disabled={pending || sectionDisabled("surface-coloring")}
+        disabled={sectionDisabled("surface-coloring")}
         label="Color source"
         type="select"
         value={settings.surfaceColorSource}
@@ -509,7 +399,7 @@ export function VisualizationSurfaceColoringSection({
       </FormField>
       <FormField
         disabled={
-          pending ||
+          isFieldPending("surfaceProjectionMode") ||
           sectionDisabled("surface-coloring") ||
           settings.surfaceColorSource === "solid"
         }
@@ -528,7 +418,7 @@ export function VisualizationSurfaceColoringSection({
       </FormField>
       {showFieldMeta ? (
         <ScalarColorbarControl
-          disabled={pending || sectionDisabled("surface-coloring")}
+          disabled={isFieldPending("scalarColorPalette") || sectionDisabled("surface-coloring")}
           fieldMeta={fieldMeta}
           palette={settings.scalarColorPalette}
           patch={patch}
@@ -542,7 +432,7 @@ export function VisualizationSurfaceColoringSection({
           <Switch
             aria-label="Add colorbar to viewport"
             checked={settings.viewportColorbarVisible}
-            disabled={pending || sectionDisabled("surface-coloring")}
+            disabled={isFieldPending("viewportColorbarVisible") || sectionDisabled("surface-coloring")}
             onCheckedChange={(checked: boolean) =>
               void patch({ viewportColorbarVisible: checked })
             }
@@ -551,14 +441,14 @@ export function VisualizationSurfaceColoringSection({
       ) : null}
       {settings.surfaceColorSource === "solid" ? (
         <ColorField
-          disabled={pending || sectionDisabled("surface-coloring")}
+          disabled={isFieldPending("shaderMonoColor") || sectionDisabled("surface-coloring")}
           label="Solid color"
           value={settings.shaderMonoColor}
           onChange={(value) => patchColor("shaderMonoColor", value)}
         />
       ) : null}
       <NumberField
-        disabled={pending || sectionDisabled("surface-coloring")}
+        disabled={isFieldPending("surfaceOpacityPercent") || sectionDisabled("surface-coloring")}
         label="Surface opacity"
         max={100}
         min={0}
@@ -760,7 +650,7 @@ export function VisualizationQuantitySection({
   quantityCatalog,
   onFieldCatalogRequest,
   patch,
-  pending,
+  isFieldPending,
   settings,
   targetFieldAvailability,
   targetKind,
@@ -770,14 +660,18 @@ export function VisualizationQuantitySection({
   quantityCatalog: QuantityCatalogResource | null;
   onFieldCatalogRequest: () => void;
   patch: PatchVisualizationTarget;
-  pending: boolean;
+  isFieldPending: IsVisualizationFieldPending;
   settings: VisualizationTargetSettings;
   targetFieldAvailability?: ReadonlyMap<string, TargetFieldAvailability>;
   targetKind?: VisualizationTargetKind;
 }) {
   return (
     <FormField
-      disabled={pending || !settings.visible || fieldCatalogLoading}
+      disabled={
+        isFieldPending("activeQuantityId") ||
+        !settings.visible ||
+        fieldCatalogLoading
+      }
       inline
       label="Quantity Source"
       type="select"
@@ -810,26 +704,26 @@ export function VisualizationQuantitySection({
 export function VisualizationPointsSection({
   patch,
   patchColor,
-  pending,
+  isFieldPending,
   sectionDisabled,
   settings,
 }: {
   patch: PatchVisualizationTarget;
   patchColor: (field: "pointColor", value: string) => void;
-  pending: boolean;
+  isFieldPending: IsVisualizationFieldPending;
   sectionDisabled: SectionDisabled;
   settings: VisualizationTargetSettings;
 }) {
   return (
     <InspectorGroup title="Points">
       <ColorField
-        disabled={pending || sectionDisabled("points")}
+        disabled={isFieldPending("pointColor") || sectionDisabled("points")}
         label="Point color"
         value={settings.pointColor}
         onChange={(value) => patchColor("pointColor", value)}
       />
       <NumberField
-        disabled={pending || sectionDisabled("points")}
+        disabled={isFieldPending("pointOpacityPercent") || sectionDisabled("points")}
         label="Point opacity"
         max={100}
         min={0}
@@ -845,25 +739,26 @@ export function VisualizationPointsSection({
 export function VisualizationWireframeSection({
   patchColor,
   patchNumber,
-  pending,
+  isFieldPending,
   sectionDisabled,
   settings,
 }: {
   patchColor: (field: "wireframeColor", value: string) => void;
   patchNumber: (field: "wireframeOpacityPercent", value: number) => void;
-  pending: boolean;
+  isFieldPending: IsVisualizationFieldPending;
   sectionDisabled: SectionDisabled;
   settings: VisualizationTargetSettings;
 }) {
   return (
     <InspectorGroup title="Wireframe">
-      <ColorField disabled={pending || sectionDisabled("wireframe")} label="Wireframe color" value={settings.wireframeColor} onChange={(value) => patchColor("wireframeColor", value)} />
-      <NumberField disabled={pending || sectionDisabled("wireframe")} label="Wireframe opacity" max={100} min={0} step={1} unit="%" value={settings.wireframeOpacityPercent} onChange={(value) => patchNumber("wireframeOpacityPercent", value)} />
+      <ColorField disabled={isFieldPending("wireframeColor") || sectionDisabled("wireframe")} label="Wireframe color" value={settings.wireframeColor} onChange={(value) => patchColor("wireframeColor", value)} />
+      <NumberField disabled={isFieldPending("wireframeOpacityPercent") || sectionDisabled("wireframe")} label="Wireframe opacity" max={100} min={0} step={1} unit="%" value={settings.wireframeOpacityPercent} onChange={(value) => patchNumber("wireframeOpacityPercent", value)} />
     </InspectorGroup>
   );
 }
 
 export function VisualizationVectorsSection({
+  airboxFieldCarrierIdentity,
   fieldCatalog,
   fieldCatalogLoading,
   fieldMetaTarget,
@@ -872,7 +767,7 @@ export function VisualizationVectorsSection({
   patch,
   patchColor,
   patchNumber,
-  pending,
+  isFieldPending,
   regionCarrier,
   sceneCap,
   sectionDisabled,
@@ -884,6 +779,7 @@ export function VisualizationVectorsSection({
   visualizationRevision,
   vectorTopologyHash,
 }: {
+  airboxFieldCarrierIdentity?: VisualizationVectorScopeIdentity | null;
   fieldCatalog: { data: FieldCatalogResource | null; status: string };
   fieldCatalogLoading: boolean;
   fieldMetaTarget: VisualizationTargetRef;
@@ -905,7 +801,7 @@ export function VisualizationVectorsSection({
       | "vectorThickness",
     value: number,
   ) => void;
-  pending: boolean;
+  isFieldPending: IsVisualizationFieldPending;
   regionCarrier?: RegionVisualizationCarrier | null;
   sceneCap: number;
   sectionDisabled: SectionDisabled;
@@ -933,6 +829,7 @@ export function VisualizationVectorsSection({
   const fieldMetaScopeQuery = fieldMetaScopeQueryForVisualizationTarget(
     fieldMetaTarget,
     regionCarrier,
+    airboxFieldCarrierIdentity,
   );
   const regionFieldWarning =
     target.kind === "region" ? regionVisualizationFieldWarning(regionCarrier) : null;
@@ -971,8 +868,12 @@ export function VisualizationVectorsSection({
   const vectorBudgetUnavailable = budgetValues.max === null;
   const vectorBudgetValue = budgetValues.normalizedRequested;
   const effectiveAllocation = budgetValues.effective;
-  const vectorScope = resolveVisualizationVectorScopeForTarget(target);
-  const vectorsDisabled = pending || sectionDisabled("vectors");
+  const vectorScope = resolveVisualizationVectorScopeForTarget(
+    target,
+    airboxFieldCarrierIdentity,
+  );
+  const vectorsUnavailable = sectionDisabled("vectors");
+  const vectorColorPending = isFieldPending("vectorColorMode");
 
   const vectorsSummary = settings.geometryScope
     ? `${settings.geometryScope === "surface" ? "Surface" : "Volume"} • Density Auto`
@@ -988,10 +889,10 @@ export function VisualizationVectorsSection({
     >
       <ViewportPreferenceScopeNote />
       <VisualizationRadioGroup
-        disabled={vectorsDisabled}
+        disabled={vectorsUnavailable || vectorColorPending}
         disabledDescription={visualizationSectionDisabledDescription({
-          disabled: vectorsDisabled,
-          pending,
+          disabled: vectorsUnavailable || vectorColorPending,
+          pending: vectorColorPending,
           requiredPass: "Vectors",
           requiredPassEnabled: settings.vectorsVisible,
           targetVisible: settings.visible,
@@ -1011,7 +912,7 @@ export function VisualizationVectorsSection({
       ) : null}
       {showFieldMeta ? (
         <ScalarColorbarControl
-          disabled={vectorsDisabled}
+          disabled={vectorsUnavailable || isFieldPending("scalarColorPalette")}
           fieldMeta={fieldMeta}
           palette={settings.scalarColorPalette}
           patch={patch}
@@ -1025,7 +926,7 @@ export function VisualizationVectorsSection({
           <Switch
             aria-label="Add vector colorbar to viewport"
             checked={settings.viewportColorbarVisible}
-            disabled={vectorsDisabled}
+            disabled={vectorsUnavailable || isFieldPending("viewportColorbarVisible")}
             onCheckedChange={(checked: boolean) =>
               void patch({ viewportColorbarVisible: checked })
             }
@@ -1034,20 +935,20 @@ export function VisualizationVectorsSection({
       ) : null}
       {settings.vectorColorMode === "monochrome" ? (
         <ColorField
-          disabled={vectorsDisabled}
+          disabled={vectorsUnavailable || isFieldPending("vectorMonoColor")}
           label="Vector color"
           value={settings.vectorMonoColor}
           onChange={(value) => patchColor("vectorMonoColor", value)}
         />
       ) : null}
       <div className="fm-viz-vector-subgroup">
-        <NumberField disabled={vectorsDisabled} label="Vector opacity" max={100} min={0} step={1} unit="%" value={settings.vectorAlphaPercent} onChange={(value) => patchNumber("vectorAlphaPercent", value)} />
-        <NumberField disabled={vectorsDisabled} label="Thickness" max={8} min={0.1} step={0.1} value={settings.vectorThickness} onChange={(value) => patchNumber("vectorThickness", value)} />
-        <NumberField disabled={vectorsDisabled} label="Arrow length" max={5} min={0.1} step={0.1} unit="×" value={settings.vectorLengthScale} onChange={(value) => patchNumber("vectorLengthScale", value)} />
+        <NumberField disabled={vectorsUnavailable || isFieldPending("vectorAlphaPercent")} label="Vector opacity" max={100} min={0} step={1} unit="%" value={settings.vectorAlphaPercent} onChange={(value) => patchNumber("vectorAlphaPercent", value)} />
+        <NumberField disabled={vectorsUnavailable || isFieldPending("vectorThickness")} label="Thickness" max={8} min={0.1} step={0.1} value={settings.vectorThickness} onChange={(value) => patchNumber("vectorThickness", value)} />
+        <NumberField disabled={vectorsUnavailable} label="Arrow length" max={5} min={0.1} step={0.1} unit="×" value={settings.vectorLengthScale} onChange={(value) => patchNumber("vectorLengthScale", value)} />
       </div>
       <div className="fm-viz-vector-subgroup">
         <NumberField
-          disabled={vectorsDisabled || vectorBudgetUnavailable}
+          disabled={vectorsUnavailable || isFieldPending("vectorBudget") || vectorBudgetUnavailable}
           label="Arrow budget"
           max={vectorBudgetMax}
           min={vectorBudgetRange.min}
@@ -1078,10 +979,10 @@ export function VisualizationVectorsSection({
       <div className="fm-visualization-toggle-grid fm-visualization-toggle-grid--vectors">
         <ToggleButton
           active={settings.vectorCenteringEnabled}
-          disabled={vectorsDisabled}
+          disabled={vectorsUnavailable || isFieldPending("vectorCenteringEnabled")}
           disabledDescription={visualizationSectionDisabledDescription({
-            disabled: vectorsDisabled,
-            pending,
+            disabled: vectorsUnavailable || isFieldPending("vectorCenteringEnabled"),
+            pending: isFieldPending("vectorCenteringEnabled"),
             requiredPass: "Vectors",
             requiredPassEnabled: settings.vectorsVisible,
             targetVisible: settings.visible,
@@ -1096,10 +997,10 @@ export function VisualizationVectorsSection({
         {supportsVectorSurfaceOffset && settings.geometryScope === "surface" && (
           <ToggleButton
             active={settings.vectorSurfaceOffsetEnabled}
-            disabled={vectorsDisabled}
+            disabled={vectorsUnavailable || isFieldPending("vectorSurfaceOffsetEnabled")}
             disabledDescription={visualizationSectionDisabledDescription({
-              disabled: vectorsDisabled,
-              pending,
+              disabled: vectorsUnavailable || isFieldPending("vectorSurfaceOffsetEnabled"),
+              pending: isFieldPending("vectorSurfaceOffsetEnabled"),
               requiredPass: "Vectors",
               requiredPassEnabled: settings.vectorsVisible,
               targetVisible: settings.visible,
@@ -1117,7 +1018,7 @@ export function VisualizationVectorsSection({
       {supportsVectorSurfaceOffset &&
       settings.geometryScope === "surface" &&
       settings.vectorSurfaceOffsetEnabled ? (
-        <NumberField disabled={pending || sectionDisabled("vectors")} label="Extra surface gap" max={1} min={0} step={0.01} value={settings.vectorSurfaceOffsetScale} onChange={(value) => patchNumber("vectorSurfaceOffsetScale", value)} />
+        <NumberField disabled={vectorsUnavailable || isFieldPending("vectorSurfaceOffsetScale")} label="Extra surface gap" max={1} min={0} step={0.01} value={settings.vectorSurfaceOffsetScale} onChange={(value) => patchNumber("vectorSurfaceOffsetScale", value)} />
       ) : null}
       {meshParts && meshParts.length > 1 && onTogglePartVectors && (
         <fieldset className="fm-visualization-part-toggles" aria-label="Object target vector visibility">
@@ -1127,7 +1028,7 @@ export function VisualizationVectorsSection({
               <input
                 type="checkbox"
                 checked={part.vectorsVisible}
-                disabled={pending || sectionDisabled("vectors")}
+                disabled={vectorsUnavailable || isFieldPending("vectorsVisible")}
                 onChange={(e) => onTogglePartVectors(e.target.checked)}
               />
               <span>{part.label}</span>
@@ -1162,7 +1063,7 @@ function displayControlDisabledDescription(
 
 export function VisualizationGeometryScopeSection({
   passControlsDisabled,
-  pending,
+  isFieldPending,
   patch,
   sceneCap,
   settings,
@@ -1170,7 +1071,7 @@ export function VisualizationGeometryScopeSection({
   vectorBudgetRanges,
 }: {
   passControlsDisabled: boolean;
-  pending: boolean;
+  isFieldPending: IsVisualizationFieldPending;
   patch: PatchVisualizationTarget;
   sceneCap: number;
   settings: VisualizationTargetSettings;
@@ -1183,8 +1084,8 @@ export function VisualizationGeometryScopeSection({
   return (
     <InspectorGroup title="Geometry Scope">
       <VisualizationRadioGroup
-        disabled={passControlsDisabled}
-        disabledDescription={displayControlDisabledDescription(passControlsDisabled, settings.visible, pending)}
+        disabled={passControlsDisabled || isFieldPending("geometryScope")}
+        disabledDescription={displayControlDisabledDescription(passControlsDisabled, settings.visible, isFieldPending("geometryScope"))}
         items={GEOMETRY_SCOPES}
         label="Geometry scope"
         value={settings.geometryScope}
@@ -1326,6 +1227,41 @@ export function NumberField({
 }) {
   const [draftOverride, setDraftOverride] = useState<number | null>(null);
   const displayValue = draftOverride ?? value;
+  const pendingCommitFrameRef = useRef<number | null>(null);
+  const pendingCommitValueRef = useRef<number | null>(null);
+  const onChangeRef = useRef(onChange);
+
+  useEffect(() => {
+    onChangeRef.current = onChange;
+  }, [onChange]);
+
+  useEffect(() => {
+    return () => {
+      const frame = pendingCommitFrameRef.current;
+      if (frame !== null && typeof cancelAnimationFrame === "function") {
+        cancelAnimationFrame(frame);
+        pendingCommitFrameRef.current = null;
+      }
+      pendingCommitValueRef.current = null;
+    };
+  }, []);
+
+  const commitValueInAnimationFrame = (nextValue: number) => {
+    pendingCommitValueRef.current = nextValue;
+    if (pendingCommitFrameRef.current !== null) return;
+    if (typeof requestAnimationFrame !== "function") {
+      const valueToCommit = pendingCommitValueRef.current;
+      pendingCommitValueRef.current = null;
+      if (valueToCommit !== null) onChangeRef.current(valueToCommit);
+      return;
+    }
+    pendingCommitFrameRef.current = requestAnimationFrame(() => {
+      pendingCommitFrameRef.current = null;
+      const valueToCommit = pendingCommitValueRef.current;
+      pendingCommitValueRef.current = null;
+      if (valueToCommit !== null) onChangeRef.current(valueToCommit);
+    });
+  };
   const displayLabel = `${formatNumericControlValue(displayValue, step)}${unit ?? ""}`;
 
   return (
@@ -1353,8 +1289,10 @@ export function NumberField({
           if (nextValue !== undefined) setDraftOverride(nextValue);
         }}
         onValueCommit={([nextValue]: number[]) => {
-          setDraftOverride(null);
-          if (nextValue !== undefined) onChange(nextValue);
+          if (nextValue !== undefined) {
+            setDraftOverride(nextValue);
+            commitValueInAnimationFrame(nextValue);
+          }
         }}
       />
     </InspectorPropertyRow>

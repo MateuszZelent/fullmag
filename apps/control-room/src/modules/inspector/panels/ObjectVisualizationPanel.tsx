@@ -3,6 +3,7 @@
 import React, {
   useCallback,
   useMemo,
+  useRef,
   useState,
   useSyncExternalStore,
 } from "react";
@@ -11,6 +12,7 @@ import { useKernel } from "@/kernel/KernelContext";
 import { VISUALIZATION_STATE_PATH } from "@/kernel/api/apiPaths";
 import type { VisualizationStateResource } from "@/kernel/api/apiTypes";
 import { createCommandContext } from "@/kernel/commands/commandContext";
+import type { VisualizationRegistrySyncController } from "@/kernel/visualization/VisualizationRegistrySyncController";
 import {
   EMPTY_VISUALIZATION_DEBUG_SNAPSHOTS,
 } from "@/kernel/visualization/VisualizationDebugController";
@@ -69,7 +71,10 @@ import { manifestRenderableCarriers } from "@/modules/viewport-3d/public";
 
 import type { InspectorPanelProps } from "../inspectorTypes";
 import { useRegisterInspectorEditSession } from "../InspectorEditSession";
-import { ScientificInspectorTemplate } from "../components/ScientificInspectorTemplate";
+import {
+  ScientificInspectorContext,
+  ScientificInspectorIdentity,
+} from "../components/ScientificInspectorTemplate";
 import { FieldRow } from "../primitives/FieldRow";
 import { FeedbackBanner } from "../primitives/FeedbackBanner";
 import { InspectorGroup } from "../primitives/InspectorGroup";
@@ -91,6 +96,7 @@ import {
   fieldAvailabilityQueryForVisualizationTarget,
   isVisualizationBaselineReady,
   resolveObjectVisualizationLane,
+  resolveAirboxFieldCarrierIdentity,
   resolveObjectVisualizationResourceGates,
   resolveObjectVisualizationTargetForLane,
   resolveObjectVisualizationDataState,
@@ -98,6 +104,7 @@ import {
   resolveTargetFieldAvailabilityFromBackend,
   targetFieldCarrierDescriptorFromDebugSnapshots,
   resolveVisualizationTargetMutationStatus,
+  resolvePendingVisualizationFields,
   shouldLoadObjectVisualizationFieldCatalog,
   shouldShowPrimitiveDisplayToggle,
   queueTargetVectorVisibilityPatch,
@@ -132,6 +139,95 @@ interface ObjectVisualizationAppliedBaseline {
     target: VisualizationTargetRef;
   }>;
 }
+
+function primitiveRecordEquals(
+  previous: Record<string, unknown> | null | undefined,
+  next: Record<string, unknown> | null | undefined,
+): boolean {
+  if (previous === next) return true;
+  if (!previous || !next) return previous === next;
+  const keys = new Set([...Object.keys(previous), ...Object.keys(next)]);
+  for (const key of keys) {
+    if (!Object.is(previous[key], next[key])) return false;
+  }
+  return true;
+}
+
+function objectVisualizationAppliedBaselineEquals(
+  previous: ObjectVisualizationAppliedBaseline,
+  next: ObjectVisualizationAppliedBaseline,
+): boolean {
+  if (previous.targets.length !== next.targets.length) return false;
+  for (let index = 0; index < previous.targets.length; index += 1) {
+    const previousTarget = previous.targets[index];
+    const nextTarget = next.targets[index];
+    if (!previousTarget || !nextTarget) return false;
+    if (
+      visualizationTargetKey(previousTarget.target) !==
+      visualizationTargetKey(nextTarget.target)
+    ) {
+      return false;
+    }
+    if (
+      !primitiveRecordEquals(
+        previousTarget.settings as unknown as Record<string, unknown>,
+        nextTarget.settings as unknown as Record<string, unknown>,
+      ) ||
+      !primitiveRecordEquals(
+        previousTarget.preferences as unknown as Record<string, unknown> | null,
+        nextTarget.preferences as unknown as Record<string, unknown> | null,
+      )
+    ) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function visualizationMutationStatusEquals(
+  previous: ReturnType<typeof resolveVisualizationTargetMutationStatus>,
+  next: ReturnType<typeof resolveVisualizationTargetMutationStatus>,
+): boolean {
+  return (
+    previous.error === next.error &&
+    previous.pending === next.pending &&
+    previous.retryable === next.retryable &&
+    previous.state === next.state
+  );
+}
+
+function useVisualizationTargetMutationStatus(
+  visualizationSync: VisualizationRegistrySyncController,
+  targetIds: readonly string[],
+) {
+  const targetIdsKey = JSON.stringify(targetIds);
+  const stableTargetIds = useMemo(
+    () => JSON.parse(targetIdsKey) as string[],
+    [targetIdsKey],
+  );
+  const selectedRef = useRef<
+    ReturnType<typeof resolveVisualizationTargetMutationStatus> | undefined
+  >(undefined);
+  const subscribe = useCallback(
+    (onStoreChange: () => void) => visualizationSync.subscribe(onStoreChange),
+    [visualizationSync],
+  );
+  const getSnapshot = useCallback(() => {
+    const next = resolveVisualizationTargetMutationStatus({
+      snapshot: visualizationSync.getSnapshot(),
+      targetIds: stableTargetIds,
+    });
+    if (
+      selectedRef.current &&
+      visualizationMutationStatusEquals(selectedRef.current, next)
+    ) {
+      return selectedRef.current;
+    }
+    selectedRef.current = next;
+    return next;
+  }, [stableTargetIds, visualizationSync]);
+  return useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
+}
 import {
   VisualizationDisplayPassesSection,
   VisualizationRenderModeSection,
@@ -145,6 +241,7 @@ import {
   ColorField,
   VisualizationRadioGroup,
   VisualizationToggleButton,
+  type IsVisualizationFieldPending,
 } from "./ObjectVisualizationTargetSection";
 
 function useObjectVisualizationPanelState(
@@ -153,11 +250,6 @@ function useObjectVisualizationPanelState(
   const selectionTarget = resolveVisualizationTargetFromSelection(selection);
   const kernel = useKernel();
   const { visualizationDebug, visualizationSync } = kernel;
-  const visualizationSyncSnapshot = useSyncExternalStore(
-    (onStoreChange) => visualizationSync.subscribe(onStoreChange),
-    () => visualizationSync.getSnapshot(),
-    () => visualizationSync.getSnapshot(),
-  );
   const visualization = useObjectVisualizationController();
   const activeModuleTab = useLayoutSelector((layout) => layout.activeModuleTab);
   const manifestStatus = useSessionStatusSelector(
@@ -253,6 +345,16 @@ function useObjectVisualizationPanelState(
       visualizationState.data,
     ],
   );
+  const airboxFieldCarrierIdentity = useMemo(() => {
+    if (resolvedTarget?.kind !== "airbox") return null;
+    const airboxPartIds =
+      lane === "fem"
+        ? manifestRenderableCarriers(manifest.data)
+            .filter(isVisualizationAirboxIdentity)
+            .map((part) => part.id)
+        : [];
+    return resolveAirboxFieldCarrierIdentity({ airboxPartIds, lane });
+  }, [lane, manifest.data, resolvedTarget?.kind]);
   const targetDebugSnapshots = useSyncExternalStore(
     (onStoreChange) =>
       resolvedTarget
@@ -360,6 +462,10 @@ function useObjectVisualizationPanelState(
   const appliedBaselineTargets = resolvedTarget
     ? [resolvedTarget, ...childRegionTargets]
     : [];
+  const canonicalPanelSnapshot: ObjectVisualizationSnapshot = {
+    ...snapshot,
+    pendingOverrides: {},
+  };
   const appliedBaseline: ObjectVisualizationAppliedBaseline = {
     overrides: (baselineVisualizationState?.overrides ?? []).filter((entry) =>
       appliedBaselineTargets.some((baselineTarget) =>
@@ -368,16 +474,15 @@ function useObjectVisualizationPanelState(
     ),
     targets: appliedBaselineTargets.map((baselineTarget) => {
       const baselineSettings = resolveTargetVisualization({
-          snapshot,
+          snapshot: canonicalPanelSnapshot,
           target: baselineTarget,
           visualizationState: baselineVisualizationState,
         }).settings;
       return {
-        preferences: structuredClone(
+        preferences:
           snapshot.viewportPreferences?.[
             visualizationTargetKey(baselineTarget)
           ] ?? null,
-        ),
         settings: baselineSettings,
         target: baselineTarget,
       };
@@ -407,24 +512,28 @@ function useObjectVisualizationPanelState(
         ...(patchChildRegions ? childRegionTargetIds : []),
       ]
     : [];
-  const childRegionMutationStatus = resolveVisualizationTargetMutationStatus({
-    snapshot: visualizationSyncSnapshot,
-    targetIds: childRegionTargetIds,
-  });
-  const targetMutationStatus = resolveVisualizationTargetMutationStatus({
-    snapshot: visualizationSyncSnapshot,
-    targetIds: mutationTargetIds,
-  });
-  const mutationStatus = resolveVisualizationTargetMutationStatus({
-    snapshot: visualizationSyncSnapshot,
-    targetIds: [targetKey ?? "", ...childRegionTargetIds],
-  });
+  const childRegionMutationStatus = useVisualizationTargetMutationStatus(
+    visualizationSync,
+    childRegionTargetIds,
+  );
+  const targetMutationStatus = useVisualizationTargetMutationStatus(
+    visualizationSync,
+    mutationTargetIds,
+  );
+  const mutationStatus = useVisualizationTargetMutationStatus(
+    visualizationSync,
+    [targetKey ?? "", ...childRegionTargetIds],
+  );
   const pending = Boolean(
     targetMutationStatus.pending ||
       mutationTargetIds.some((mutationTargetId) =>
         Boolean(snapshot.pendingOverrides?.[mutationTargetId]),
       ),
   );
+  const pendingFields = resolvePendingVisualizationFields({
+    snapshot,
+    targetIds: mutationTargetIds,
+  });
   const childRegionPending = Boolean(
     childRegionMutationStatus.pending ||
       childRegionTargetIds.some((mutationTargetId) =>
@@ -463,15 +572,25 @@ function useObjectVisualizationPanelState(
         (settings.shaderVisible && settings.surfaceColorSource !== "solid")),
   );
   const fieldAvailabilityQuery = useMemo(
-    () => fieldAvailabilityQueryForVisualizationTarget(resolvedTarget),
-    [resolvedTarget],
+    () =>
+      fieldAvailabilityQueryForVisualizationTarget(
+        resolvedTarget,
+        airboxFieldCarrierIdentity,
+      ),
+    [airboxFieldCarrierIdentity, resolvedTarget],
   );
+  const airboxFieldCarrierReady =
+    resolvedTarget?.kind !== "airbox" || airboxFieldCarrierIdentity !== null;
   const fieldAvailability = useFieldAvailabilityResource({
     ...fieldAvailabilityQuery,
-    enabled: Boolean(resolvedTarget && requiresFieldData),
+    enabled: Boolean(
+      resolvedTarget && requiresFieldData && airboxFieldCarrierReady,
+    ),
     quantityId: settings?.activeQuantityId ?? "H_demag",
   });
-  const fieldAvailabilityEnabled = Boolean(resolvedTarget && requiresFieldData);
+  const fieldAvailabilityEnabled = Boolean(
+    resolvedTarget && requiresFieldData && airboxFieldCarrierReady,
+  );
   const targetFieldCarrier =
     resolvedTarget && settings
       ? targetFieldCarrierDescriptorFromDebugSnapshots({
@@ -542,7 +661,6 @@ function useObjectVisualizationPanelState(
       })
     : [];
   const passControlsDisabled =
-    pending ||
     !settings?.visible ||
     Boolean(renderResolution?.degradedReasons.length);
   const primitiveDisplayToggleVisible = resolvedTarget
@@ -920,6 +1038,7 @@ function useObjectVisualizationPanelState(
 
   return {
     appliedBaseline,
+    airboxFieldCarrierIdentity,
     displaySettings,
     effectiveSettings,
     feedback,
@@ -933,11 +1052,13 @@ function useObjectVisualizationPanelState(
     onFieldCatalogRequest: () => setFieldCatalogRequestedTargetKey(targetKey),
     onTogglePartVectors,
     passControlsDisabled,
+    planarVisualizationState: visualizationState.data?.planar ?? null,
     patch,
     patchChildRegions,
     patchColor,
     patchNumber,
     pending,
+    pendingFields,
     mutationError:
       mutationStatus.state === "rejected" ? mutationStatus.error : null,
     mutationStatus,
@@ -1004,30 +1125,74 @@ export function VisualizationTargetInspectorPanel({
   selection,
 }: InspectorPanelProps & { owner: VisualizationInspectorOwner }) {
   const panel = useObjectVisualizationPanelState(selection);
-  const { displaySettings, settings, target, visualizationBaselineReady } = panel;
-  const visualizationViewContext = useVisualizationViewContext();
-  const { visualizationSync } = useKernel();
-  const planarResource = useVisualizationStateResource();
-  const syncSharedQuiverIntent = useCallback(() => {
-    const planar = planarResource.data?.planar;
-    if (!planar) return;
-    const presentationPatch = planarPresentationPatchFromThreeDimensional({
-      vectorBudget: settings?.vectorBudget ?? planar.resolution.vector_budget,
-      vectorColorMode: settings?.vectorColorMode ?? "orientation",
-      vectorLengthScale: settings?.vectorLengthScale ?? 1,
-    }, planar.resolution);
-    if (presentationPatch) visualizationSync.queuePatch({ planar: presentationPatch });
-  }, [planarResource.data?.planar, settings?.vectorBudget, settings?.vectorColorMode, settings?.vectorLengthScale, visualizationSync]);
-
+  const {
+    displaySettings,
+    planarVisualizationState,
+    settings,
+    target,
+    visualizationBaselineReady,
+  } = panel;
+  const resolvedPanel =
+    target && settings && displaySettings
+      ? ({ ...panel, displaySettings, settings, target } satisfies ResolvedObjectVisualizationPanelState)
+      : null;
   const targetId = target
     ? target.kind === "airbox"
       ? "airbox"
       : target.id
     : null;
-  const scientificInspector = (
-    <ScientificInspectorTemplate
+  const [lastGoodPanel, setLastGoodPanel] = useState<{
+    panel: ResolvedObjectVisualizationPanelState;
+    revision: string | number | null;
+    targetKey: string;
+  } | null>(null);
+  if (
+    visualizationBaselineReady &&
+    resolvedPanel &&
+    targetId &&
+    (lastGoodPanel?.revision !== panel.visualizationResourceRevision ||
+      lastGoodPanel.targetKey !== targetId)
+  ) {
+    setLastGoodPanel((current) =>
+      current?.revision === panel.visualizationResourceRevision &&
+      current.targetKey === targetId
+        ? current
+        : {
+            panel: resolvedPanel,
+            revision: panel.visualizationResourceRevision,
+            targetKey: targetId,
+          },
+    );
+  }
+  const stablePanel = visualizationBaselineReady
+    ? resolvedPanel
+    : lastGoodPanel?.targetKey === targetId
+      ? lastGoodPanel.panel
+      : null;
+  const activeSettings = stablePanel?.settings ?? settings;
+  const visualizationViewContext = useVisualizationViewContext();
+  const { visualizationSync } = useKernel();
+  const syncSharedQuiverIntent = useCallback(() => {
+    const planar = planarVisualizationState;
+    if (!planar) return;
+    const presentationPatch = planarPresentationPatchFromThreeDimensional({
+      vectorBudget: activeSettings?.vectorBudget ?? planar.resolution.vector_budget,
+      vectorColorMode: activeSettings?.vectorColorMode ?? "orientation",
+      vectorLengthScale: activeSettings?.vectorLengthScale ?? 1,
+    }, planar.resolution, planar.vector_style);
+    if (presentationPatch) visualizationSync.queuePatch({ planar: presentationPatch });
+  }, [activeSettings?.vectorBudget, activeSettings?.vectorColorMode, activeSettings?.vectorLengthScale, planarVisualizationState, visualizationSync]);
+  const scientificInspectorIdentity = (
+    <ScientificInspectorIdentity
       methodLabel="Display controls"
       physicalLabel={owner.targetLabel}
+      title={owner.title}
+    />
+  );
+  const scientificInspectorContext = (
+    <ScientificInspectorContext
+      collapsible
+      defaultOpen={false}
       properties={[
         { label: "Target scope", value: owner.targetLabel },
         { label: "Capabilities", value: owner.capabilityDescription },
@@ -1050,55 +1215,45 @@ export function VisualizationTargetInspectorPanel({
             : "loading"
           : "unavailable",
       }}
-      title={owner.title}
     />
   );
 
-  if (!target || !settings || !displaySettings) {
+  if (!target || !stablePanel) {
     return (
-      <div className="fm-inspector-panel" data-inspector-owner={owner.id}>
-        {scientificInspector}
+      <div className="fm-inspector-panel fm-scientific-inspector" data-inspector-owner={owner.id}>
+        {scientificInspectorIdentity}
         <InspectorGroup title="Visualization">
           <FieldRow label="Target" value="No visualization target" />
         </InspectorGroup>
-      </div>
-    );
-  }
-
-  if (!visualizationBaselineReady) {
-    return (
-      <div className="fm-inspector-panel" data-inspector-owner={owner.id}>
-        {scientificInspector}
-        <InspectorGroup title="View">
-          <FieldRow label="Target" value={displayLabelForVisualizationTarget(target)} />
-          <FieldRow label="State" value="Loading applied visualization state" />
-        </InspectorGroup>
+        {scientificInspectorContext}
       </div>
     );
   }
 
   if (visualizationViewContext === "planar") {
     return (
-      <div className="fm-inspector-panel" data-inspector-owner={owner.id}>
-        {scientificInspector}
+      <div className="fm-inspector-panel fm-scientific-inspector" data-inspector-owner={owner.id}>
+        {scientificInspectorIdentity}
         <InspectorGroup title="View">
           <VisualizationContextSwitchControl onPlanarActivate={syncSharedQuiverIntent} />
         </InspectorGroup>
         <PlanarVisualizationSection selection={selection} />
+        {scientificInspectorContext}
       </div>
     );
   }
 
   return (
-    <div className="fm-inspector-panel" data-inspector-owner={owner.id}>
-      {scientificInspector}
+    <div className="fm-inspector-panel fm-scientific-inspector" data-inspector-owner={owner.id}>
+      {scientificInspectorIdentity}
       <InspectorGroup title="View">
         <VisualizationContextSwitchControl onPlanarActivate={syncSharedQuiverIntent} />
       </InspectorGroup>
       <ObjectVisualizationPanelView
-        key={visualizationTargetKey(target)}
-        panel={{ ...panel, displaySettings, settings, target }}
+        key={visualizationTargetKey(stablePanel.target)}
+        panel={stablePanel}
       />
+      {scientificInspectorContext}
     </div>
   );
 }
@@ -1119,6 +1274,7 @@ function ObjectVisualizationPanelView({
 }) {
   const {
     appliedBaseline: currentAppliedBaseline,
+    airboxFieldCarrierIdentity,
     displaySettings,
     childRegionOverrideCount,
     childRegionTargets,
@@ -1137,6 +1293,7 @@ function ObjectVisualizationPanelView({
     patchColor,
     patchNumber,
     pending,
+    pendingFields,
     childRegionPending,
     mutationError,
     mutationStatus,
@@ -1164,8 +1321,15 @@ function ObjectVisualizationPanelView({
   const [appliedBaseline] = useState<ObjectVisualizationAppliedBaseline>(() =>
     structuredClone(currentAppliedBaseline),
   );
-  const visualizationDirty =
-    JSON.stringify(currentAppliedBaseline) !== JSON.stringify(appliedBaseline);
+  const isFieldPending: IsVisualizationFieldPending = useCallback(
+    (...fields: Array<keyof VisualizationTargetPatch>) =>
+      fields.some((field) => pendingFields.has(field)),
+    [pendingFields],
+  );
+  const visualizationDirty = !objectVisualizationAppliedBaselineEquals(
+    currentAppliedBaseline,
+    appliedBaseline,
+  );
   const acceptLiveViewportChanges = useCallback(() => true, []);
   const resetLiveViewportChanges = useCallback(
     () => restoreAppliedBaseline(appliedBaseline),
@@ -1204,6 +1368,158 @@ function ObjectVisualizationPanelView({
       className="fm-inspector-panel grid min-w-0 gap-fm-inspector-group"
       data-visualization-revision={revision}
     >
+      <ObjectVisualizationOverview
+            advanced={
+              <p className="m-0 text-fm-help leading-snug text-fm-muted">
+                Advanced rendering uses the active viewport quality profile.
+              </p>
+            }
+            camera={
+              <p className="m-0 text-fm-help leading-snug text-fm-muted">
+                Camera framing follows the active viewport.
+              </p>
+            }
+            clipping={
+              <p className="m-0 text-fm-help leading-snug text-fm-muted">
+                No clipping plane is configured for this target.
+              </p>
+            }
+            dataState={dataState}
+            display={
+              <>
+                <VisualizationDisplayPassesSection
+              displaySettings={displaySettings}
+              passControlsDisabled={passControlsDisabled}
+              patch={patch}
+              isFieldPending={isFieldPending}
+              renderWarning={renderWarning}
+              settings={settings}
+              target={target}
+              primitiveDisplayToggleVisible={primitiveDisplayToggleVisible}
+                />
+                <VisualizationRenderModeSection
+              displaySettings={displaySettings}
+              passControlsDisabled={passControlsDisabled}
+              isFieldPending={isFieldPending}
+              patch={patch}
+              target={target}
+                />
+                {capabilities.supportsFieldData &&
+                (settings.shaderVisible ||
+                  settings.vectorsVisible ||
+                  target.kind === "airbox" ||
+                  isFdmUniverseOutsideSupportTarget(target)) ? (
+                  <VisualizationQuantitySection
+                    fieldCatalog={fieldCatalog.data}
+                    fieldCatalogLoading={fieldCatalogLoading}
+                    quantityCatalog={quantityCatalog.data}
+                    targetFieldAvailability={targetFieldAvailability}
+                    onFieldCatalogRequest={onFieldCatalogRequest}
+                    patch={patch}
+                    isFieldPending={isFieldPending}
+                    settings={settings}
+                    targetKind={
+                      target.kind === "airbox" ||
+                      isFdmUniverseOutsideSupportTarget(target)
+                        ? "airbox"
+                        : target.kind
+                    }
+                  />
+                ) : null}
+              </>
+            }
+            enabledPassCount={enabledPassCount}
+            meshState={meshState}
+            quantitySource={
+              capabilities.supportsFieldData
+                ? settings.activeQuantityId || "H_eff"
+                : "Not available"
+            }
+            surfaceColoring={!capabilities.supportsFieldData || target.kind === "airbox" || isFdmUniverseOutsideSupportTarget(target) ? null : (
+              <VisualizationSurfaceColoringSection
+              airboxFieldCarrierIdentity={airboxFieldCarrierIdentity}
+              patch={patch}
+              patchColor={patchColor}
+              isFieldPending={isFieldPending}
+              sectionDisabled={sectionDisabled}
+              fieldCatalog={fieldCatalog}
+              fieldCatalogLoading={fieldCatalogLoading}
+              fieldMetaTarget={fieldMetaTarget}
+              onFieldCatalogRequest={onFieldCatalogRequest}
+              regionCarrier={regionCarrier}
+              settings={settings}
+              target={target}
+              />
+            )}
+            vectors={capabilities.supportsVectors ? (
+              <VisualizationVectorsSection
+              airboxFieldCarrierIdentity={airboxFieldCarrierIdentity}
+              fieldCatalog={fieldCatalog}
+              fieldCatalogLoading={fieldCatalogLoading}
+              fieldMetaTarget={fieldMetaTarget}
+              meshParts={vectorMeshParts}
+              onTogglePartVectors={onTogglePartVectors}
+              patch={patch}
+              patchColor={patchColor}
+              patchNumber={patchNumber}
+              isFieldPending={isFieldPending}
+              regionCarrier={regionCarrier}
+              sectionDisabled={sectionDisabled}
+              settings={settings}
+              target={target}
+              targetKind={target.kind}
+              vectorBudgetRange={vectorBudgetRange}
+              vectorCapacity={vectorCapacity}
+              sceneCap={vectorSceneCap}
+              visualizationRevision={visualizationResourceRevision}
+              vectorTopologyHash={vectorTopologyHash}
+              />
+            ) : null}
+      />
+
+      {capabilities.supportsPoints && settings.pointsVisible ? (
+        <VisualizationPointsSection
+            patch={patch}
+            patchColor={patchColor}
+            isFieldPending={isFieldPending}
+            sectionDisabled={sectionDisabled}
+            settings={settings}
+        />
+      ) : null}
+      {settings.wireframeVisible ? (
+        <VisualizationWireframeSection
+            patchColor={patchColor}
+            patchNumber={patchNumber}
+            isFieldPending={isFieldPending}
+            sectionDisabled={sectionDisabled}
+            settings={settings}
+        />
+      ) : null}
+      {capabilities.showGeometryScopeControl ? <VisualizationGeometryScopeSection
+        passControlsDisabled={passControlsDisabled}
+        isFieldPending={isFieldPending}
+        patch={patch}
+        sceneCap={vectorSceneCap}
+        settings={settings}
+        vectorBudgetRange={vectorBudgetRange}
+        vectorBudgetRanges={vectorBudgetRanges}
+      /> : null}
+      {renderWarning ? (
+        <div className="fm-inspector__diagnostic-warning">{renderWarning}</div>
+      ) : null}
+      <VisualizationOverridesSection
+        childRegionOverrideCount={childRegionOverrideCount}
+        childRegionTargets={Math.max(childRegionTargets.length, childRegionOverrideCount)}
+        feedback={feedback}
+        mutationError={mutationError}
+        mutationStatus={mutationStatus.state}
+        onReset={() => void resetTarget()}
+        onResetChildRegions={() => void resetChildRegionTargets()}
+        onRetry={() => void panel.retryRejectedMutation()}
+        pending={pending}
+        childRegionPending={childRegionPending}
+        resetLabel={visualizationResetActionLabel(target.kind)}
+      />
       <InspectorGroup collapsible defaultOpen={false} title="Target">
         <FieldRow label="Name" value={displayLabelForVisualizationTarget(target)} />
         <FieldRow label="Target ID" value={target.kind === "airbox" ? "airbox" : target.id} />
@@ -1248,157 +1564,6 @@ function ObjectVisualizationPanelView({
         />
         {fdmNotice ? <FeedbackBanner kind="warning" message={fdmNotice} /> : null}
       </InspectorGroup>
-
-      <ObjectVisualizationOverview
-            advanced={
-              <p className="m-0 text-fm-help leading-snug text-fm-muted">
-                Advanced rendering uses the active viewport quality profile.
-              </p>
-            }
-            camera={
-              <p className="m-0 text-fm-help leading-snug text-fm-muted">
-                Camera framing follows the active viewport.
-              </p>
-            }
-            clipping={
-              <p className="m-0 text-fm-help leading-snug text-fm-muted">
-                No clipping plane is configured for this target.
-              </p>
-            }
-            dataState={dataState}
-            display={
-              <>
-                <VisualizationDisplayPassesSection
-              displaySettings={displaySettings}
-              passControlsDisabled={passControlsDisabled}
-              patch={patch}
-              pending={pending}
-              renderWarning={renderWarning}
-              settings={settings}
-              target={target}
-              primitiveDisplayToggleVisible={primitiveDisplayToggleVisible}
-                />
-                <VisualizationRenderModeSection
-              displaySettings={displaySettings}
-              passControlsDisabled={passControlsDisabled}
-              pending={pending}
-              patch={patch}
-              target={target}
-                />
-                {capabilities.supportsFieldData &&
-                (settings.shaderVisible ||
-                  settings.vectorsVisible ||
-                  target.kind === "airbox" ||
-                  isFdmUniverseOutsideSupportTarget(target)) ? (
-                  <VisualizationQuantitySection
-                    fieldCatalog={fieldCatalog.data}
-                    fieldCatalogLoading={fieldCatalogLoading}
-                    quantityCatalog={quantityCatalog.data}
-                    targetFieldAvailability={targetFieldAvailability}
-                    onFieldCatalogRequest={onFieldCatalogRequest}
-                    patch={patch}
-                    pending={pending}
-                    settings={settings}
-                    targetKind={
-                      target.kind === "airbox" ||
-                      isFdmUniverseOutsideSupportTarget(target)
-                        ? "airbox"
-                        : target.kind
-                    }
-                  />
-                ) : null}
-              </>
-            }
-            enabledPassCount={enabledPassCount}
-            meshState={meshState}
-            quantitySource={
-              capabilities.supportsFieldData
-                ? settings.activeQuantityId || "H_eff"
-                : "Not available"
-            }
-            surfaceColoring={!capabilities.supportsFieldData || target.kind === "airbox" || isFdmUniverseOutsideSupportTarget(target) ? null : (
-              <VisualizationSurfaceColoringSection
-              patch={patch}
-              patchColor={patchColor}
-              pending={pending}
-              sectionDisabled={sectionDisabled}
-              fieldCatalog={fieldCatalog}
-              fieldCatalogLoading={fieldCatalogLoading}
-              fieldMetaTarget={fieldMetaTarget}
-              onFieldCatalogRequest={onFieldCatalogRequest}
-              regionCarrier={regionCarrier}
-              settings={settings}
-              target={target}
-              />
-            )}
-            vectors={capabilities.supportsVectors ? (
-              <VisualizationVectorsSection
-              fieldCatalog={fieldCatalog}
-              fieldCatalogLoading={fieldCatalogLoading}
-              fieldMetaTarget={fieldMetaTarget}
-              meshParts={vectorMeshParts}
-              onTogglePartVectors={onTogglePartVectors}
-              patch={patch}
-              patchColor={patchColor}
-              patchNumber={patchNumber}
-              pending={pending}
-              regionCarrier={regionCarrier}
-              sectionDisabled={sectionDisabled}
-              settings={settings}
-              target={target}
-              targetKind={target.kind}
-              vectorBudgetRange={vectorBudgetRange}
-              vectorCapacity={vectorCapacity}
-              sceneCap={vectorSceneCap}
-              visualizationRevision={visualizationResourceRevision}
-              vectorTopologyHash={vectorTopologyHash}
-              />
-            ) : null}
-      />
-
-      {capabilities.supportsPoints && settings.pointsVisible ? (
-        <VisualizationPointsSection
-            patch={patch}
-            patchColor={patchColor}
-            pending={pending}
-            sectionDisabled={sectionDisabled}
-            settings={settings}
-        />
-      ) : null}
-      {settings.wireframeVisible ? (
-        <VisualizationWireframeSection
-            patchColor={patchColor}
-            patchNumber={patchNumber}
-            pending={pending}
-            sectionDisabled={sectionDisabled}
-            settings={settings}
-        />
-      ) : null}
-      {capabilities.showGeometryScopeControl ? <VisualizationGeometryScopeSection
-        passControlsDisabled={passControlsDisabled}
-        pending={pending}
-        patch={patch}
-        sceneCap={vectorSceneCap}
-        settings={settings}
-        vectorBudgetRange={vectorBudgetRange}
-        vectorBudgetRanges={vectorBudgetRanges}
-      /> : null}
-      {renderWarning ? (
-        <div className="fm-inspector__diagnostic-warning">{renderWarning}</div>
-      ) : null}
-      <VisualizationOverridesSection
-        childRegionOverrideCount={childRegionOverrideCount}
-        childRegionTargets={Math.max(childRegionTargets.length, childRegionOverrideCount)}
-        feedback={feedback}
-        mutationError={mutationError}
-        mutationStatus={mutationStatus.state}
-        onReset={() => void resetTarget()}
-        onResetChildRegions={() => void resetChildRegionTargets()}
-        onRetry={() => void panel.retryRejectedMutation()}
-        pending={pending}
-        childRegionPending={childRegionPending}
-        resetLabel={visualizationResetActionLabel(target.kind)}
-      />
     </div>
   );
 }

@@ -25,7 +25,10 @@ study.universe(
 cell_size = 5 * NM
 study.cell(cell_size, cell_size, cell_size)
 
-film = study.geometry(fm.Box(size=DOMAIN_SIZE, name="default_domain_film"), name="default_domain_film")
+film = study.geometry(
+    fm.Box(size=DOMAIN_SIZE, name="default_domain_film").translate(DOMAIN_CENTER),
+    name="default_domain_film",
+)
 film.Ms = 800e3
 film.Aex = 13e-12
 film.alpha = 0.1

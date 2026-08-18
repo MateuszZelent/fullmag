@@ -61,9 +61,7 @@ pub(crate) fn resolve_default_planar_source(
         (bounds.min[2] + bounds.max[2]) * 0.5,
     ];
     let q = default_slice.position_fraction;
-    let (origin_m, u_axis, v_axis, normal, preset, u_length, v_length) = match default_slice
-        .plane
-    {
+    let (origin_m, u_axis, v_axis, normal, preset, u_length, v_length) = match default_slice.plane {
         PlanarAxisPlane::Xy => (
             [centers[0], centers[1], bounds.min[2] + q * lengths[2]],
             [1.0, 0.0, 0.0],
@@ -132,11 +130,14 @@ pub(crate) fn resolve_authored_planar_source(
             "planar_source_monitor_not_found: monitor ID must not be empty",
         ));
     }
-    let monitor = monitors.iter().find(|monitor| monitor.id == monitor_id).ok_or_else(|| {
-        ApiError::not_found(format!(
-            "planar_source_monitor_not_found: monitor '{monitor_id}' does not exist"
-        ))
-    })?;
+    let monitor = monitors
+        .iter()
+        .find(|monitor| monitor.id == monitor_id)
+        .ok_or_else(|| {
+            ApiError::not_found(format!(
+                "planar_source_monitor_not_found: monitor '{monitor_id}' does not exist"
+            ))
+        })?;
     let source_hash = digest_json(monitor);
     Ok(ResolvedPlanarSamplingSource {
         identity: ResolvedPlanarSourceIdentity {
@@ -173,11 +174,9 @@ fn validate_default_slice(default_slice: &DefaultPlanarSliceState) -> Result<(),
 fn default_operator_to_ir(operator: &DefaultPlanarOperatorState) -> PlanarOperatorIR {
     match operator {
         DefaultPlanarOperatorState::PlaneSample => PlanarOperatorIR::PlaneSample,
-        DefaultPlanarOperatorState::SlabAverage { thickness_m } => {
-            PlanarOperatorIR::SlabAverage {
-                thickness_m: *thickness_m,
-            }
-        }
+        DefaultPlanarOperatorState::SlabAverage { thickness_m } => PlanarOperatorIR::SlabAverage {
+            thickness_m: *thickness_m,
+        },
     }
 }
 
@@ -192,7 +191,12 @@ fn digest_json<T: Serialize>(value: &T) -> String {
 
 fn source_revision(source_hash: &str) -> u64 {
     let digest = Sha256::digest(source_hash.as_bytes());
-    u64::from_be_bytes(digest[..8].try_into().expect("sha256 has eight-byte prefix")).max(1)
+    u64::from_be_bytes(
+        digest[..8]
+            .try_into()
+            .expect("sha256 has eight-byte prefix"),
+    )
+    .max(1)
 }
 
 #[cfg(test)]
@@ -430,7 +434,9 @@ mod tests {
     fn missing_authored_monitor_fails_with_stable_reason_code() {
         let error = resolve_authored_planar_source(&[], "missing").unwrap_err();
         assert_eq!(error.status, axum::http::StatusCode::NOT_FOUND);
-        assert!(error.message.starts_with("planar_source_monitor_not_found:"));
+        assert!(error
+            .message
+            .starts_with("planar_source_monitor_not_found:"));
     }
 
     #[test]
@@ -484,16 +490,10 @@ mod tests {
             0.5,
             DefaultPlanarOperatorState::PlaneSample,
         );
-        let a = resolve_default_planar_source(
-            &domain([0.0; 3], [1.0; 3], "generation-a"),
-            &slice,
-        )
-        .unwrap();
-        let b = resolve_default_planar_source(
-            &domain([0.0; 3], [1.0; 3], "generation-b"),
-            &slice,
-        )
-        .unwrap();
+        let a = resolve_default_planar_source(&domain([0.0; 3], [1.0; 3], "generation-a"), &slice)
+            .unwrap();
+        let b = resolve_default_planar_source(&domain([0.0; 3], [1.0; 3], "generation-b"), &slice)
+            .unwrap();
         assert_ne!(a.identity.source_hash, b.identity.source_hash);
         assert_ne!(a.identity.source_revision, b.identity.source_revision);
     }

@@ -3657,7 +3657,9 @@ fn propagate_disabled_transport_pipeline(
     for (source_id, transports) in &affected_sources {
         let active_dependent = snapshot.iter().any(|(id, kind, dependencies, active)| {
             id != source_id
-                && dependencies.iter().any(|dependency| dependency == source_id)
+                && dependencies
+                    .iter()
+                    .any(|dependency| dependency == source_id)
                 && if kind == "spin_transport" {
                     transports
                         .iter()
@@ -3678,7 +3680,10 @@ fn propagate_disabled_transport_pipeline(
         .context("physics_graph.v1 modules must be an array")?;
     for module in modules.iter_mut() {
         let id = module.get("id").and_then(Value::as_str).unwrap_or_default();
-        let kind = module.get("kind").and_then(Value::as_str).unwrap_or_default();
+        let kind = module
+            .get("kind")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
         if let Some(active) = desired_source.get(id) {
             set_graph_module_activation(module, *active);
             continue;
@@ -3708,7 +3713,10 @@ fn propagate_disabled_transport_pipeline(
         })
         .collect::<BTreeMap<_, _>>();
     for module in modules.iter_mut() {
-        let kind = module.get("kind").and_then(Value::as_str).unwrap_or_default();
+        let kind = module
+            .get("kind")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
         if !matches!(kind, "spin_interface" | "spin_torque" | "oersted_field") {
             continue;
         }
@@ -4237,9 +4245,8 @@ fn transfer_fdm_field_to_grid(
     for z in 0..target.cells[2] as usize {
         for y in 0..target.cells[1] as usize {
             for x in 0..target.cells[0] as usize {
-                let target_index = x
-                    + target.cells[0] as usize
-                        * (y + target.cells[1] as usize * z);
+                let target_index =
+                    x + target.cells[0] as usize * (y + target.cells[1] as usize * z);
                 if target
                     .active_mask
                     .as_ref()
@@ -4257,9 +4264,9 @@ fn transfer_fdm_field_to_grid(
                 let mut source_index = [0usize; 3];
                 let mut outside = false;
                 for axis in 0..3 {
-                    let coordinate =
-                        (target_center[axis] - source.origin_m[axis]) / source.cell_size_m[axis]
-                            - 0.5;
+                    let coordinate = (target_center[axis] - source.origin_m[axis])
+                        / source.cell_size_m[axis]
+                        - 0.5;
                     let nearest = coordinate.round();
                     if nearest < 0.0 || nearest >= source.cells[axis] as f64 {
                         outside = true;
@@ -4287,10 +4294,9 @@ fn transfer_fdm_field_to_grid(
             }
         }
     }
-    let target_active_count = target
-        .active_mask
-        .as_ref()
-        .map_or(target_count, |mask| mask.iter().filter(|active| **active).count());
+    let target_active_count = target.active_mask.as_ref().map_or(target_count, |mask| {
+        mask.iter().filter(|active| **active).count()
+    });
     if n_located != target_active_count {
         bail!(
             "FDM continuation cannot map {} active target cells from the source grid (located {}, outside {})",
@@ -6574,13 +6580,15 @@ mod tests {
                 ir,
                 default_until_seconds: None,
                 entrypoint_kind: "flat_set_transport_current".to_string(),
-                action: Some(crate::types::ScriptExecutionStageAction::SetTransportCurrent {
-                    module_id: "charge".to_string(),
-                    terminal_outward_current_density_apm2: BTreeMap::from([
-                        ("left".to_string(), -1.0e12),
-                        ("right".to_string(), 1.0e12),
-                    ]),
-                }),
+                action: Some(
+                    crate::types::ScriptExecutionStageAction::SetTransportCurrent {
+                        module_id: "charge".to_string(),
+                        terminal_outward_current_density_apm2: BTreeMap::from([
+                            ("left".to_string(), -1.0e12),
+                            ("right".to_string(), 1.0e12),
+                        ]),
+                    },
+                ),
             }],
         };
 
@@ -6646,10 +6654,14 @@ mod tests {
         propagate_disabled_transport_pipeline(object, "transport_torque")
             .expect("disable propagation");
         let modules = object["modules"].as_array().expect("modules");
-        assert!(modules.iter().all(|module| module["activation"] == "inactive"));
-        assert!(object["edges"].as_array().expect("edges").iter().all(|edge| {
-            edge["status"] == "inactive"
-        }));
+        assert!(modules
+            .iter()
+            .all(|module| module["activation"] == "inactive"));
+        assert!(object["edges"]
+            .as_array()
+            .expect("edges")
+            .iter()
+            .all(|edge| { edge["status"] == "inactive" }));
 
         object
             .get_mut("modules")
@@ -6664,10 +6676,14 @@ mod tests {
         propagate_disabled_transport_pipeline(object, "transport_torque")
             .expect("enable propagation");
         let modules = object["modules"].as_array().expect("modules");
-        assert!(modules.iter().all(|module| module["activation"] == "active"));
-        assert!(object["edges"].as_array().expect("edges").iter().all(|edge| {
-            edge["status"] == "active"
-        }));
+        assert!(modules
+            .iter()
+            .all(|module| module["activation"] == "active"));
+        assert!(object["edges"]
+            .as_array()
+            .expect("edges")
+            .iter()
+            .all(|edge| { edge["status"] == "active" }));
     }
 
     #[test]
@@ -8453,12 +8469,9 @@ mod tests {
             cell_size_m: [1.0e-9, 1.0e-9, 1.0e-9],
             active_mask: Some(vec![false, false, true, true]),
         };
-        let transfer = transfer_fdm_field_to_grid(
-            &[[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]],
-            &source,
-            &target,
-        )
-        .expect("FM-only state should transfer to FM+HM union grid");
+        let transfer =
+            transfer_fdm_field_to_grid(&[[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]], &source, &target)
+                .expect("FM-only state should transfer to FM+HM union grid");
         assert_eq!(transfer.n_total, 4);
         assert_eq!(transfer.n_located, 2);
         assert_eq!(transfer.values[0], [0.0, 0.0, 0.0]);

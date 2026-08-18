@@ -16,6 +16,7 @@ import { ResourceInvalidationController } from "@/kernel/resources/ResourceInval
 
 import {
   cachedBinaryResourceMatchesRevision,
+  createViewport3DFieldVectorPartialLoadError,
   getViewport3DFieldVectorCacheBudgetDiagnostics,
   getViewport3DFieldVectorCacheEntryDiagnostics,
   inspectViewport3DFieldVectorCacheEntryDiagnostics,
@@ -77,6 +78,31 @@ function fieldResponseMetadata(
 }
 
 describe("viewport3dResources", () => {
+  it("keeps the failing quantity request explicit in a partial collection error", () => {
+    const error = createViewport3DFieldVectorPartialLoadError({
+      cause: new Error("backend rejected H_demag"),
+      message: "One or more quantity field vectors are not ready",
+      partialData: new Map(),
+      requestFailures: [{
+        cause: new Error("backend rejected H_demag"),
+        key: "vector:H_demag:airbox",
+        quantityId: "H_demag",
+        query: { component: "full", scope_kind: "airbox" },
+        requestId: "quantity=H_demag&component=full&scope_kind=airbox",
+      }],
+    });
+
+    expect(error).toMatchObject({
+      name: "ResourcePartialLoadError",
+      requestFailures: expect.arrayContaining([
+        expect.objectContaining({
+          quantityId: "H_demag",
+          query: expect.objectContaining({ scope_kind: "airbox" }),
+        }),
+      ]),
+    });
+  });
+
   it("keeps FEM Airbox failures per carrier and exposes compatible last-good data", () => {
     const makeEnvelope = (
       partId: string,

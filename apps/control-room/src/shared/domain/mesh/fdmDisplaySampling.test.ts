@@ -5,6 +5,7 @@ import {
   formatFdmDisplaySamplingSummary,
   resolveFdmDisplaySampling,
   sampleFdmDisplayCellIndices,
+  sampleFdmSpatialCellIndices,
 } from "./fdmDisplaySampling";
 
 describe("FDM display sampling", () => {
@@ -31,5 +32,43 @@ describe("FDM display sampling", () => {
     expect(sampleFdmDisplayCellIndices(5, 8)).toEqual(
       new Uint32Array([0, 1, 2, 3, 4]),
     );
+  });
+
+  it("distributes a flattened candidate stream across 3D spatial bins", () => {
+    const candidates = new Uint32Array(
+      Array.from({ length: 16 * 8 * 4 }, (_, index) => index),
+    );
+
+    const sampled = sampleFdmSpatialCellIndices(
+      candidates,
+      [16, 8, 4],
+      64,
+    );
+
+    expect(sampled).toHaveLength(64);
+    expect(new Set(sampled).size).toBe(64);
+
+    const occupiedBins = new Set(
+      Array.from(sampled, (cellIndex) => {
+        const x = cellIndex % 16;
+        const y = Math.floor(cellIndex / 16) % 8;
+        const z = Math.floor(cellIndex / (16 * 8));
+        return `${Math.floor(x / 4)}:${Math.floor(y / 2)}:${z}`;
+      }),
+    );
+    expect(occupiedBins.size).toBe(64);
+  });
+
+  it("is deterministic and never returns more than the glyph budget", () => {
+    const candidates = new Uint32Array(
+      Array.from({ length: 32 * 16 * 8 }, (_, index) => index),
+    );
+
+    const first = sampleFdmSpatialCellIndices(candidates, [32, 16, 8], 97);
+    const second = sampleFdmSpatialCellIndices(candidates, [32, 16, 8], 97);
+
+    expect(first).toEqual(second);
+    expect(first.length).toBe(97);
+    expect(new Set(first).size).toBe(first.length);
   });
 });

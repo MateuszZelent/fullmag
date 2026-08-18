@@ -57,11 +57,11 @@ export function BuilderPrimitiveInspectorPanel(props: InspectorPanelProps) {
 }
 
 export function AirboxVisualizationInspectorPanel(props: InspectorPanelProps) {
-  return renderDedicatedPanel(props, "airbox.visualization", AirboxVisualizationPanel);
+  return <AirboxVisualizationPanel {...props} />;
 }
 
 export function MeshPartAirboxInspectorPanel(props: InspectorPanelProps) {
-  return renderDedicatedPanel(props, "mesh-part-airbox", AirboxVisualizationPanel);
+  return <AirboxVisualizationPanel {...props} />;
 }
 
 export function FieldDrivesInspectorPanel(props: InspectorPanelProps) {

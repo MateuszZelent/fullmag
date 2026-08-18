@@ -34,6 +34,7 @@ import {
   geometryScopeVectorBudgetPatch,
   quantitySourcePatch,
   resolveObjectVisualizationPanelTarget,
+  resolveAirboxFieldCarrierIdentity,
   resolveSelectedTargetVectorMeshPartRows,
   resolveSelectedTargetVectorMeshParts,
   visualizationVectorSurfaceActionTargetLabel,
@@ -54,6 +55,7 @@ import {
   resolveVisualizationVectorEffectiveBudget,
   resolveVisualizationVectorBudgetValues,
   resolveVisualizationTargetMutationStatus,
+  resolvePendingVisualizationFields,
   resolveVisualizationVectorScopeForTarget,
   shouldShowPrimitiveDisplayToggle,
   shouldLoadObjectVisualizationFieldCatalog,
@@ -96,6 +98,33 @@ import { OBJECT_VISUALIZATION_TARGET_KINDS } from "./ObjectVisualizationHelpers"
 type MeshPart = NonNullable<MeshSharedDomainManifestResource["mesh_parts"]>[number];
 
 describe("ObjectVisualizationPanelModel", () => {
+  it("resolves one explicit Airbox field carrier identity per backend lane", () => {
+    expect(
+      resolveAirboxFieldCarrierIdentity({ lane: "fdm", airboxPartIds: [] }),
+    ).toEqual({ scopeId: "airbox", scopeKind: "airbox" });
+    expect(
+      resolveAirboxFieldCarrierIdentity({
+        lane: "fem",
+        airboxPartIds: ["airbox-shell", "part:__air__"],
+      }),
+    ).toEqual({ scopeId: "part:__air__", scopeKind: "airbox" });
+    expect(
+      resolveAirboxFieldCarrierIdentity({
+        lane: "fem",
+        airboxPartIds: ["airbox-only"],
+      }),
+    ).toEqual({ scopeId: "airbox-only", scopeKind: "airbox" });
+    expect(
+      resolveAirboxFieldCarrierIdentity({
+        lane: "fem",
+        airboxPartIds: ["airbox-a", "airbox-b"],
+      }),
+    ).toBeNull();
+    expect(
+      resolveAirboxFieldCarrierIdentity({ lane: "unresolved", airboxPartIds: [] }),
+    ).toBeNull();
+  });
+
   it("maps each visualization target to the backend availability scope", () => {
     expect(
       fieldAvailabilityQueryForVisualizationTarget({
@@ -140,6 +169,17 @@ describe("ObjectVisualizationPanelModel", () => {
       scope_id: null,
       scope_kind: "full",
       target_id: "fdm-universe-outside-support",
+    });
+    expect(
+      fieldAvailabilityQueryForVisualizationTarget(
+        { id: "airbox", kind: "airbox" },
+        { scopeId: "airbox", scopeKind: "airbox" },
+      ),
+    ).toEqual({
+      owner_object_id: null,
+      scope_id: "airbox",
+      scope_kind: "airbox",
+      target_id: "airbox",
     });
   });
 
@@ -606,6 +646,21 @@ describe("ObjectVisualizationPanelModel", () => {
     });
   });
 
+  it("scopes pending visualization fields to the inspected targets", () => {
+    const controller = new ObjectVisualizationController();
+    const film = { id: "object:film", kind: "object" as const };
+    const other = { id: "object:other", kind: "object" as const };
+    controller.patchTargetPending(film, { surfaceColorSource: "component_x" }, 7);
+    controller.patchTargetPending(other, { vectorsVisible: true }, 7);
+
+    expect(
+      [...resolvePendingVisualizationFields({
+        snapshot: controller.getSnapshot(),
+        targetIds: ["object:film"],
+      })],
+    ).toEqual(["surfaceColorSource"]);
+  });
+
   it("keeps accounting stale when the current target identity changes", () => {
     const capacity = {
       anchorKind: "cell" as const,
@@ -963,8 +1018,11 @@ describe("ObjectVisualizationPanelModel", () => {
       }),
     ).toEqual({ scopeId: null, scopeKind: "full" });
     expect(
-      resolveVisualizationVectorScopeForTarget({ id: "airbox", kind: "airbox" }),
-    ).toEqual({ scopeId: null, scopeKind: "airbox" });
+      resolveVisualizationVectorScopeForTarget(
+        { id: "airbox", kind: "airbox" },
+        { scopeId: "part:__air__", scopeKind: "airbox" },
+      ),
+    ).toEqual({ scopeId: "part:__air__", scopeKind: "airbox" });
     expect(
       resolveVisualizationVectorScopeForTarget({
         id: "fdm-native-layer:layer%3Atop",
@@ -2393,12 +2451,16 @@ describe("ObjectVisualizationPanelModel", () => {
       }),
     ).toEqual({ scope_id: "part:body", scope_kind: "part" });
     expect(
-      fieldMetaScopeQueryForVisualizationTarget({
-        id: "airbox",
-        kind: "airbox",
-        label: "Airbox",
-      }),
-    ).toEqual({ scope_id: null, scope_kind: "airbox" });
+      fieldMetaScopeQueryForVisualizationTarget(
+        {
+          id: "airbox",
+          kind: "airbox",
+          label: "Airbox",
+        },
+        undefined,
+        { scopeId: "airbox", scopeKind: "airbox" },
+      ),
+    ).toEqual({ scope_id: "airbox", scope_kind: "airbox" });
     expect(
       fieldMetaScopeQueryForVisualizationTarget({
         id: "fdm-domain",

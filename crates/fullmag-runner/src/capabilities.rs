@@ -872,8 +872,14 @@ mod tests {
             "eden_dmi",
             "eden_total",
         ] {
-            assert!(capabilities.preview_quantities.iter().any(|id| id == quantity));
-            assert!(capabilities.snapshot_quantities.iter().any(|id| id == quantity));
+            assert!(capabilities
+                .preview_quantities
+                .iter()
+                .any(|id| id == quantity));
+            assert!(capabilities
+                .snapshot_quantities
+                .iter()
+                .any(|id| id == quantity));
         }
         assert!(capabilities.preview_quantities.iter().any(|id| id == "m"));
     }

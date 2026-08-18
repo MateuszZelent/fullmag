@@ -1578,20 +1578,14 @@ mod tests {
     #[test]
     fn launcher_device_override_supersedes_authored_runtime_selection() {
         let mut problem = ProblemIR::bootstrap_example();
-        problem
-            .problem_meta
-            .runtime_metadata
-            .insert(
-                "runtime_selection".to_string(),
-                serde_json::json!({"device": "cpu"}),
-            );
-        problem
-            .problem_meta
-            .runtime_metadata
-            .insert(
-                "runtime_device_override".to_string(),
-                serde_json::json!({"device": "gpu", "source": "managed_launcher"}),
-            );
+        problem.problem_meta.runtime_metadata.insert(
+            "runtime_selection".to_string(),
+            serde_json::json!({"device": "cpu"}),
+        );
+        problem.problem_meta.runtime_metadata.insert(
+            "runtime_device_override".to_string(),
+            serde_json::json!({"device": "gpu", "source": "managed_launcher"}),
+        );
 
         assert_eq!(runtime_selection_string(&problem, "device", "auto"), "gpu");
     }

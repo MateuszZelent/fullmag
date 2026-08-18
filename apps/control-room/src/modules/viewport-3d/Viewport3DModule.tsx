@@ -1413,12 +1413,29 @@ export default function Viewport3DModule({
     },
     [kernel.cameraRegistry],
   );
+  const cameraFieldUpdateHoldRef = useRef(false);
   const beginCameraInteraction = useCallback((epoch?: number) => {
+    if (!cameraFieldUpdateHoldRef.current) {
+      cameraFieldUpdateHoldRef.current = true;
+      beginViewport3DFieldUpdateHold();
+    }
     kernel.cameraRegistry.beginInteraction(epoch);
   }, [kernel.cameraRegistry]);
   const endCameraInteraction = useCallback((epoch?: number) => {
     kernel.cameraRegistry.endInteraction(epoch);
+    if (cameraFieldUpdateHoldRef.current) {
+      cameraFieldUpdateHoldRef.current = false;
+      endViewport3DFieldUpdateHold();
+    }
   }, [kernel.cameraRegistry]);
+  useEffect(
+    () => () => {
+      if (!cameraFieldUpdateHoldRef.current) return;
+      cameraFieldUpdateHoldRef.current = false;
+      endViewport3DFieldUpdateHold();
+    },
+    [],
+  );
   const changeRegionOverlaySource = useCallback(
     (source: RegionDiagnosticOverlaySource) => {
       setRegionDiagnosticOverlayState((state) => ({ ...state, source }));
@@ -1709,32 +1726,6 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
   const [orbitDebugCommitRevision, setOrbitDebugCommitRevision] = useState(0);
   const [dismissedResourceIssueKey, setDismissedResourceIssueKey] =
     useState<string | null>(null);
-  const fieldUpdatePointerHoldLifecycleRef =
-    useRef<Viewport3DPointerHoldLifecycle | null>(null);
-  const releaseFieldUpdatePointerHold = useCallback((event: ReactPointerEvent<HTMLElement>) => {
-    fieldUpdatePointerHoldLifecycleRef.current?.end(event.pointerId);
-  }, []);
-  const holdFieldUpdatesForPointerGesture = useCallback(
-    (event: ReactPointerEvent<HTMLElement>) => {
-      if (event.button < 0 || event.button > 2) return;
-      fieldUpdatePointerHoldLifecycleRef.current?.begin(event.pointerId);
-    },
-    [],
-  );
-  useEffect(() => {
-    const lifecycle = createViewport3DPointerHoldLifecycle({
-      onBegin: beginViewport3DFieldUpdateHold,
-      onEnd: endViewport3DFieldUpdateHold,
-      target: window,
-    });
-    fieldUpdatePointerHoldLifecycleRef.current = lifecycle;
-    return () => {
-      lifecycle.dispose();
-      if (fieldUpdatePointerHoldLifecycleRef.current === lifecycle) {
-        fieldUpdatePointerHoldLifecycleRef.current = null;
-      }
-    };
-  }, []);
   const [inspectHover, setInspectHover] =
     useState<Viewport3DInspectHover | null>(null);
   const lastRenderedMeshRevision = useRef<number | string | null>(null);
@@ -1892,7 +1883,7 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
         fdmTargetColorBuffers: new Map(
           sceneProps.fdmTargetViews.map((view) => [
             view.target.id,
-            view.surfaceColors ?? view.vectorColors,
+            [view.surfaceColors, view.vectorColors],
           ]),
         ),
         fdmVectorColors: sceneProps.fdmVectorColors,
@@ -2228,10 +2219,7 @@ const Viewport3DFrame = memo(function Viewport3DFrame({
         sceneProps.bounds ? JSON.stringify(sceneProps.bounds) : ""
       }
       data-visual-profile-id={sceneProps.visualProfileId}
-      onPointerCancelCapture={releaseFieldUpdatePointerHold}
       onPointerDown={() => kernel.layout.setFocusedSlot(slotId)}
-      onPointerDownCapture={holdFieldUpdatesForPointerGesture}
-      onPointerUpCapture={releaseFieldUpdatePointerHold}
     >
       <div aria-live="polite" className="fm-viewport-3d__hud">
         <span>{quantityId}</span>

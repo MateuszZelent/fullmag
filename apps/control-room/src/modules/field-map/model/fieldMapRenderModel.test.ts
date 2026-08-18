@@ -180,6 +180,22 @@ describe("field-map render model", () => {
     });
   });
 
+  it.each([
+    ["empty", new Float64Array(), undefined],
+    ["fully masked", new Float64Array([-4, 9]), new Uint8Array([1, 3])],
+    [
+      "entirely non-finite",
+      new Float64Array([Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY]),
+      undefined,
+    ],
+  ])("terminates the %s auto range at finite zero limits", (_name, values, mask) => {
+    const range = resolvePlanarDisplayRange(values, mask, { mode: "auto" });
+
+    expect(range).toEqual({ max: 0, min: 0 });
+    expect(Number.isFinite(range?.min)).toBe(true);
+    expect(Number.isFinite(range?.max)).toBe(true);
+  });
+
   it("fails closed for an unsupported display unit while converting compatible field units", () => {
     expect(resolvePlanarDisplayUnit("A/m", "MA/m")).toEqual({
       compatible: true,

@@ -53,6 +53,11 @@ export interface Viewport3DColorbarRangeFieldModel {
   >;
 }
 
+type FdmTargetColorBufferValue =
+  | ScalarColorBuffer
+  | readonly (ScalarColorBuffer | null)[]
+  | null;
+
 export function buildViewport3DColorbarGroupKey({
   colorMode,
   palette,
@@ -223,7 +228,7 @@ export function resolveViewport3DColorbarRangeStates({
   plans,
 }: {
   fdmSurfaceColors?: ScalarColorBuffer | null;
-  fdmTargetColorBuffers?: ReadonlyMap<string, ScalarColorBuffer | null>;
+  fdmTargetColorBuffers?: ReadonlyMap<string, FdmTargetColorBufferValue>;
   fdmVectorColors?: ScalarColorBuffer | null;
   fieldModel?: Viewport3DColorbarRangeFieldModel | null;
   plans: readonly Viewport3DColorbarPlan[];
@@ -234,7 +239,9 @@ export function resolveViewport3DColorbarRangeStates({
     (fieldModel?.targetPasses?.size ?? 0) > 0;
   for (const plan of plans) {
     const fdmTargetColorBuffer = plan.targetIds
-      .map((targetId) => fdmTargetColorBuffers?.get(targetId) ?? null)
+      .flatMap((targetId) =>
+        scalarColorBufferCandidates(fdmTargetColorBuffers?.get(targetId)),
+      )
       .find((buffer) =>
         scalarColorBufferMatchesColorbarRequest({
           buffer,
@@ -298,6 +305,16 @@ export function resolveViewport3DColorbarRangeStates({
     });
   }
   return rangeStates;
+}
+
+function scalarColorBufferCandidates(
+  value: FdmTargetColorBufferValue | undefined,
+): readonly (ScalarColorBuffer | null)[] {
+  if (!value) return [];
+  if (Array.isArray(value)) {
+    return value as readonly (ScalarColorBuffer | null)[];
+  }
+  return [value as ScalarColorBuffer | null];
 }
 
 export function scalarColorBufferMatchesColorbarRequest({

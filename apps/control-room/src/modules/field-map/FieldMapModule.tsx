@@ -19,6 +19,8 @@ import { useSessionStatusSelector } from "@/kernel/resources/useSessionStatus";
 import { useSelectionSelector } from "@/kernel/selection/useSelection";
 import { useVisualizationStateResource } from "@/kernel/visualization/useVisualizationStateResource";
 import { projectPlanarPresentationState } from "@/kernel/visualization/planarPresentationProjection";
+import { formatValueWithUnit } from "@/shared/domain/physics/displayUnits";
+import { scalarColorPaletteGradientCss } from "@/shared/visualization/scalarColorPalette";
 
 
 import {
@@ -55,8 +57,8 @@ export default function FieldMapModule() {
     ),
     [visualization.data, visualization.optimisticData],
   );
-  const activePinned = canonicalPlanar?.layers.probes ? pinned : null;
-  const activeRenderEvidence = presentationPlanar?.layers.raster ? renderEvidence : null;
+  const activePinned = canonicalPlanar?.visible !== false && canonicalPlanar?.layers.probes ? pinned : null;
+  const activeRenderEvidence = presentationPlanar?.visible !== false && presentationPlanar?.layers.raster ? renderEvidence : null;
   const canonicalSourceKind = canonicalPlanar?.source.kind;
   const canonicalSourceMonitorId = canonicalSourceKind === "monitor"
     ? canonicalPlanar?.source.monitor_id
@@ -92,7 +94,7 @@ export default function FieldMapModule() {
 
   const plan = useMemo(
     () => buildFieldMapDataPlan({
-      active: active && canonicalPlanar !== undefined,
+      active: active && canonicalPlanar !== undefined && canonicalPlanar.visible !== false,
       component: canonicalPlanar?.component ?? "",
       discretization:
         domain.data?.discretization ?? runtime ?? null,
@@ -240,14 +242,20 @@ export default function FieldMapModule() {
       meshOverlay: meshOverlay.data,
       range: normalizePlanarColorRange(presentationPlanar.range),
       rasterOpacity: presentationPlanar.raster_opacity ?? 1,
+      visible: presentationPlanar.visible,
+      wireframeStyle: presentationPlanar.wireframe_style,
+      pointStyle: presentationPlanar.point_style,
       resolution: meta.data.resolution as [number, number],
       sampleIdentity: scalar.data.etag ?? "",
       scalar: scalarValues,
       vectorBudget: canonicalPlanar?.resolution.vector_budget ?? 0,
       vectorScale: presentationPlanar.vector_style.scale,
       vectorStyle: {
+        color: presentationPlanar.vector_style.monochrome_color,
         colorMode: presentationPlanar.vector_style.color_mode,
         lengthMode: presentationPlanar.vector_style.length_mode,
+        opacity: presentationPlanar.vector_style.opacity,
+        thickness: presentationPlanar.vector_style.thickness,
       },
       vectors: vectorValues,
     });
@@ -429,10 +437,55 @@ export default function FieldMapModule() {
         />
         <div className="fm-field-map__axis fm-field-map__axis--u">u ({renderModel.display.axisUnit})</div>
         <div className="fm-field-map__axis fm-field-map__axis--v">v ({renderModel.display.axisUnit})</div>
-        <div className="fm-field-map__colorbar" aria-label="Scalar color range">
-          <span>{renderModel.range ? renderModel.range.max * renderModel.display.probeScale : "auto"}</span>
-          <span>{renderModel.range ? renderModel.range.min * renderModel.display.probeScale : "auto"}</span>
-        </div>
+        {presentationPlanar.viewport_colorbar_visible !== false ? <aside
+          aria-label="Scalar color range"
+          className="fm-field-map__colorbar"
+        >
+          <div className="fm-field-map__colorbar-header">
+            <div className="fm-field-map__colorbar-identity">
+              <span className="fm-field-map__colorbar-context">2D field</span>
+              <span className="fm-field-map__colorbar-quantity">{plan.quantityId}</span>
+              <span className="fm-field-map__colorbar-component">
+                {presentationPlanar.component}
+              </span>
+            </div>
+            <span className="fm-field-map__colorbar-unit" title="Display unit">
+              {renderModel.display.legendUnit}
+            </span>
+          </div>
+          <div className="fm-field-map__colorbar-range">
+            <span className="fm-field-map__colorbar-range-label">Rendered range</span>
+            <div className="fm-field-map__colorbar-row">
+              <span className="fm-field-map__colorbar-limit fm-field-map__colorbar-limit--max">
+                {renderModel.range
+                  ? formatValueWithUnit(
+                      renderModel.range.max * renderModel.display.probeScale,
+                      renderModel.display.legendUnit,
+                    )
+                  : "Loading field range"}
+              </span>
+              <span
+                aria-hidden="true"
+                className="fm-field-map__colorbar-ramp"
+                data-colormap={presentationPlanar.colormap}
+                style={{
+                  background: scalarColorPaletteGradientCss(
+                    presentationPlanar.colormap,
+                    "to top",
+                  ),
+                }}
+              />
+              <span className="fm-field-map__colorbar-limit fm-field-map__colorbar-limit--min">
+                {renderModel.range
+                  ? formatValueWithUnit(
+                      renderModel.range.min * renderModel.display.probeScale,
+                      renderModel.display.legendUnit,
+                    )
+                  : "Loading field range"}
+              </span>
+            </div>
+          </div>
+        </aside> : null}
       </div>
       {renderModel.diagnostics.length ? (
         <div className="fm-field-map__diagnostics" role="status" aria-label="Planar presentation diagnostics">

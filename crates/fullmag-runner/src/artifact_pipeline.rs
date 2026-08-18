@@ -455,11 +455,11 @@ impl ArtifactPipeline {
                     &autosave_root,
                     field_context,
                     rx,
-                writer_queue_depth,
-                writer_diagnostics,
-                stage_autosave,
-                field_storage,
-            )
+                    writer_queue_depth,
+                    writer_diagnostics,
+                    stage_autosave,
+                    field_storage,
+                )
             })
             .map_err(|error| RunError {
                 message: format!("failed to spawn artifact writer thread: {}", error),
@@ -1137,7 +1137,12 @@ impl ZarrFieldSeriesWriter {
             snapshot.time,
             snapshot.solver_dt,
             info.into(),
-            |writer| snapshot.write_payload(writer).map(|_| ()).map_err(|error| error.message),
+            |writer| {
+                snapshot
+                    .write_payload(writer)
+                    .map(|_| ())
+                    .map_err(|error| error.message)
+            },
         )
     }
 
@@ -1156,7 +1161,12 @@ impl ZarrFieldSeriesWriter {
             snapshot.time,
             snapshot.solver_dt,
             info.into(),
-            |writer| snapshot.write_payload(writer).map(|_| ()).map_err(|error| error.message),
+            |writer| {
+                snapshot
+                    .write_payload(writer)
+                    .map(|_| ())
+                    .map_err(|error| error.message)
+            },
         )
     }
 
@@ -1188,7 +1198,9 @@ impl ZarrFieldSeriesWriter {
                 for component in 0..component_count {
                     for cell in 0..cell_count {
                         writer
-                            .write_all(&snapshot.values[cell * component_count + component].to_le_bytes())
+                            .write_all(
+                                &snapshot.values[cell * component_count + component].to_le_bytes(),
+                            )
                             .map_err(|error| error.to_string())?;
                     }
                 }
@@ -1840,7 +1852,10 @@ mod tests {
         )
         .expect("decode zattrs");
         assert_eq!(zattrs["storage_layout"], "soa_component_major");
-        assert_eq!(zattrs["component_order"], serde_json::json!(["x", "y", "z"]));
+        assert_eq!(
+            zattrs["component_order"],
+            serde_json::json!(["x", "y", "z"])
+        );
         fs::remove_dir_all(fields_dir).expect("remove Zarr fixture");
     }
 

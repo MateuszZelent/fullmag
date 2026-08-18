@@ -30,9 +30,7 @@ use crate::region_conflict::{resolve_region_conflict, RegionConflictCandidate};
 use crate::spin_torque::{
     resolve_legacy_spin_torque, resolve_sot_fields, SpinTorqueExecutableLane,
 };
-use crate::util::{
-    generate_random_unit_vectors, runtime_requests_cuda, GRID_TOLERANCE, MU0,
-};
+use crate::util::{generate_random_unit_vectors, runtime_requests_cuda, GRID_TOLERANCE, MU0};
 use crate::validate::{
     planned_study_controls, validate_executable_outputs, validate_grid_asset_cell_size,
 };
@@ -596,11 +594,9 @@ fn resolve_static_external_field_map(
     problem: &ProblemIR,
     n_cells: usize,
 ) -> Result<Option<Vec<[f64; 3]>>, PlanError> {
-    let Some((id, field_b_t)) = problem.energy_terms.iter().find_map(|term| {
-        match term {
-            EnergyTermIR::StaticFieldMap { id, field_b_t } => Some((id.as_str(), field_b_t)),
-            _ => None,
-        }
+    let Some((id, field_b_t)) = problem.energy_terms.iter().find_map(|term| match term {
+        EnergyTermIR::StaticFieldMap { id, field_b_t } => Some((id.as_str(), field_b_t)),
+        _ => None,
     }) else {
         return Ok(None);
     };
@@ -628,13 +624,7 @@ fn resolve_static_external_field_map(
     }
     let field_h_apm = field_b_t
         .iter()
-        .map(|value| {
-            [
-                value[0] / MU0,
-                value[1] / MU0,
-                value[2] / MU0,
-            ]
-        })
+        .map(|value| [value[0] / MU0, value[1] / MU0, value[2] / MU0])
         .collect::<Vec<_>>();
     if field_h_apm
         .iter()

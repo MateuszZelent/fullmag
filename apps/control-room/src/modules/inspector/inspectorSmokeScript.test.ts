@@ -43,6 +43,15 @@ describe("explorer Inspector browser smoke script", () => {
     expect(smokeScript).toContain("isContextLost");
     expect(smokeScript).toContain("drawingBufferWidth");
     expect(smokeScript).toContain("drawingBufferHeight");
+    expect(smokeScript).toContain("qualifyVisualizationMutationStability");
+    expect(smokeScript).toContain("visualizationPatchDelayMs");
+    expect(smokeScript).toContain("getAnimations({ subtree: true })");
+    expect(smokeScript).toContain("Visualization Inspector remounted during mutation");
+    expect(smokeScript).toContain("unrelated visibility control was disabled");
+    expect(smokeScript).toContain("mutation changed Inspector opacity");
+    expect(smokeScript).toContain("mutation changed Inspector scroll position");
+    expect(smokeScript).toContain("mutation lost control focus");
+    expect(smokeScript).toContain("mutation budget: 20");
     expect(smokeScript).toContain("[360, 416, 560]");
     expect(smokeScript).toContain('document.body.style.zoom = "200%"');
     expect(smokeScript).toContain("visualization-overview-zoom-200.png");

@@ -125,6 +125,12 @@ export function assertPlanarEvidenceReady(
   if (!evidence.raster || evidence.raster.sampleCount <= 0) {
     throw new Error("Planar evidence raster is missing");
   }
+  if (
+    !Number.isFinite(evidence.raster.min) ||
+    !Number.isFinite(evidence.raster.max)
+  ) {
+    throw new Error("Planar evidence raster range is non-finite");
+  }
   return evidence;
 }
 

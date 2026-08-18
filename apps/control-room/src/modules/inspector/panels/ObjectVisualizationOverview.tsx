@@ -8,7 +8,8 @@ import {
 
 import { InspectorOverviewFrame } from "../primitives/InspectorOverviewFrame";
 
-export interface ObjectVisualizationOverviewProps {
+export interface VisualizationInspectorOverviewProps {
+  context?: ReactNode;
   advanced: ReactNode;
   camera: ReactNode;
   clipping: ReactNode;
@@ -21,10 +22,11 @@ export interface ObjectVisualizationOverviewProps {
   vectors: ReactNode;
 }
 
-export function ObjectVisualizationOverview({
+export function VisualizationInspectorOverview({
   advanced,
   camera,
   clipping,
+  context,
   dataState,
   display,
   enabledPassCount,
@@ -32,13 +34,14 @@ export function ObjectVisualizationOverview({
   quantitySource,
   surfaceColoring,
   vectors,
-}: ObjectVisualizationOverviewProps) {
+}: VisualizationInspectorOverviewProps) {
   return (
     <div className="fm-object-visualization-overview" data-slot="object-visualization-overview">
       <InspectorOverviewFrame
         className="fm-object-visualization-overview__frame"
         leadingSections={
           <>
+            {context}
             {surfaceColoring}
             {vectors}
           </>
@@ -95,3 +98,5 @@ export function ObjectVisualizationOverview({
     </div>
   );
 }
+
+export const ObjectVisualizationOverview = VisualizationInspectorOverview;

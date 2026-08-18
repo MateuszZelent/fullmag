@@ -16,11 +16,33 @@ function isIsolatedSmokeDistDir(value: string | undefined): value is string {
   return /^\.next-audit-target-smoke-[a-z0-9-]+$/.test(value ?? "");
 }
 
-const isolatedSmokeDistDir = isIsolatedSmokeDistDir(
-  process.env.FULLMAG_NEXT_DIST_DIR?.trim(),
-)
-  ? process.env.FULLMAG_NEXT_DIST_DIR.trim()
-  : null;
+function isIsolatedDevDistDir(value: string | undefined): value is string {
+  const match = /^\.next-control-room-(\d{1,5})$/.exec(value ?? "");
+  if (!match) {
+    return false;
+  }
+  const port = Number(match[1]);
+  return port >= 1 && port <= 65_535;
+}
+
+export function resolveControlRoomDistDir({
+  auditBuild,
+  requestedDistDir,
+}: {
+  auditBuild: boolean;
+  requestedDistDir?: string;
+}): string {
+  const normalized = requestedDistDir?.trim();
+  if (isIsolatedSmokeDistDir(normalized) || isIsolatedDevDistDir(normalized)) {
+    return normalized;
+  }
+  return auditBuild ? ".next-audit" : ".next";
+}
+
+const distDir = resolveControlRoomDistDir({
+  auditBuild,
+  requestedDistDir: process.env.FULLMAG_NEXT_DIST_DIR,
+});
 
 function configuredPublicDevHost(): string | null {
   const raw = process.env.FULLMAG_WEB_PUBLIC_HOST?.trim();
@@ -47,7 +69,7 @@ const allowedDevOrigins = [
 
 const nextConfig: NextConfig = {
   allowedDevOrigins,
-  distDir: isolatedSmokeDistDir ?? (auditBuild ? ".next-audit" : ".next"),
+  distDir,
   // R3F v9 force-loses WebGL during React development strict remounts.
   reactStrictMode: false,
   ...(staticExport

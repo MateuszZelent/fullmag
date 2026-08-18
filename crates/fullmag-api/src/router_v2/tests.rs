@@ -5472,6 +5472,16 @@ async fn visualization_default_planar_source_is_xy_midplane() {
         json["planar"]["default_slice"]["operator"],
         serde_json::json!({"kind": "plane_sample"})
     );
+    assert_eq!(json["planar"]["visible"], true);
+    assert_eq!(json["planar"]["viewport_colorbar_visible"], true);
+    assert_eq!(json["planar"]["layers"]["raster"], true);
+    assert_eq!(json["planar"]["layers"]["mesh"], false);
+    assert_eq!(json["planar"]["layers"]["boundaries"], false);
+    assert_eq!(json["planar"]["wireframe_style"]["opacity"], 1.0);
+    assert_eq!(json["planar"]["point_style"]["opacity"], 1.0);
+    assert_eq!(json["planar"]["point_style"]["size"], 3.0);
+    assert_eq!(json["planar"]["vector_style"]["opacity"], 1.0);
+    assert_eq!(json["planar"]["vector_style"]["thickness"], 1.0);
 }
 
 #[tokio::test]
@@ -5685,6 +5695,25 @@ async fn visualization_state_planar_profile_round_trips_without_mutating_three_d
                                 "max": 4.0
                             },
                             "raster_opacity": 0.35,
+                            "visible": false,
+                            "viewport_colorbar_visible": false,
+                            "wireframe_style": {
+                                "color": "#223344",
+                                "opacity": 0.4
+                            },
+                            "point_style": {
+                                "color": "#445566",
+                                "opacity": 0.6,
+                                "size": 4.5
+                            },
+                            "vector_style": {
+                                "length_mode": "magnitude",
+                                "color_mode": "monochrome",
+                                "scale": 1.25,
+                                "opacity": 0.7,
+                                "thickness": 2.0,
+                                "monochrome_color": "#667788"
+                            },
                             "resolution": {
                                 "width": 640,
                                 "height": 320,
@@ -5720,6 +5749,19 @@ async fn visualization_state_planar_profile_round_trips_without_mutating_three_d
     assert_eq!(json["planar"]["range"]["min"], -2.0);
     assert_eq!(json["planar"]["range"]["max"], 4.0);
     assert_eq!(json["planar"]["raster_opacity"], 0.35);
+    assert_eq!(json["planar"]["visible"], false);
+    assert_eq!(json["planar"]["viewport_colorbar_visible"], false);
+    assert_eq!(json["planar"]["wireframe_style"]["color"], "#223344");
+    assert_eq!(json["planar"]["wireframe_style"]["opacity"], 0.4);
+    assert_eq!(json["planar"]["point_style"]["color"], "#445566");
+    assert_eq!(json["planar"]["point_style"]["opacity"], 0.6);
+    assert_eq!(json["planar"]["point_style"]["size"], 4.5);
+    assert_eq!(json["planar"]["vector_style"]["opacity"], 0.7);
+    assert_eq!(json["planar"]["vector_style"]["thickness"], 2.0);
+    assert_eq!(
+        json["planar"]["vector_style"]["monochrome_color"],
+        "#667788"
+    );
     assert_eq!(json["planar"]["resolution"]["width"], 640);
     assert_eq!(json["planar"]["layers"]["bounds"], true);
     assert_eq!(json["planar"]["layers"]["points"], true);
@@ -5771,7 +5813,7 @@ async fn visualization_state_planar_profile_round_trips_without_mutating_three_d
 }
 
 #[test]
-fn openapi_planar_layer_state_exposes_points_and_bounds() {
+fn openapi_planar_state_exposes_shared_inspector_style_contract() {
     let openapi = crate::openapi_v2::openapi_json();
     let schema = &openapi["components"]["schemas"]["PlanarLayerState"];
     assert_eq!(schema["properties"]["bounds"]["type"], "boolean");
@@ -5781,6 +5823,25 @@ fn openapi_planar_layer_state_exposes_points_and_bounds() {
         .expect("PlanarLayerState required fields");
     assert!(required.contains(&serde_json::json!("bounds")));
     assert!(required.contains(&serde_json::json!("points")));
+    let planar = &openapi["components"]["schemas"]["PlanarVisualizationState"];
+    let planar_required = planar["required"]
+        .as_array()
+        .expect("PlanarVisualizationState required fields");
+    for field in [
+        "visible",
+        "viewport_colorbar_visible",
+        "wireframe_style",
+        "point_style",
+    ] {
+        assert!(planar_required.contains(&serde_json::json!(field)));
+    }
+    let vector_style = &openapi["components"]["schemas"]["PlanarVectorStyleState"];
+    let vector_required = vector_style["required"]
+        .as_array()
+        .expect("PlanarVectorStyleState required fields");
+    for field in ["opacity", "thickness", "monochrome_color"] {
+        assert!(vector_required.contains(&serde_json::json!(field)));
+    }
 }
 
 #[tokio::test]
@@ -5794,6 +5855,18 @@ async fn visualization_state_rejects_invalid_or_legacy_planar_ranges() {
             "range": { "mode": "symmetric", "min": -2.0, "max": 2.0 }
         }),
         serde_json::json!({ "raster_opacity": 1.1 }),
+        serde_json::json!({ "wireframe_style": {"color": "#ffffff", "opacity": 1.1} }),
+        serde_json::json!({ "point_style": {"color": "#ffffff", "opacity": 1.0, "size": 0.0} }),
+        serde_json::json!({
+            "vector_style": {
+                "length_mode": "uniform",
+                "color_mode": "orientation",
+                "scale": 1.0,
+                "opacity": -0.1,
+                "thickness": 1.0,
+                "monochrome_color": "#ffffff"
+            }
+        }),
         serde_json::json!({ "auto_contrast": true }),
     ] {
         let response = app
@@ -18547,8 +18620,7 @@ async fn compute_fields_completion_requires_exact_quantity_scope_generation_and_
             .iter_mut()
             .find(|record| record.command.command_id == command_id)
             .expect("compute_fields command should remain in the ledger");
-        record.command.field_materialization_requirements[1].scope_id =
-            Some("wrong-airbox".into());
+        record.command.field_materialization_requirements[1].scope_id = Some("wrong-airbox".into());
     }
     assert!(
         !reconcile_compute_fields_command(&state).await,
@@ -18652,7 +18724,9 @@ async fn compute_fields_command_stays_dispatched_until_airbox_carrier_is_readabl
     let availability = body_json(availability).await;
     assert_eq!(availability["state"], "supported");
     assert_eq!(availability["reason_code"], "target_carrier_missing");
-    assert!(availability["generation"].as_str().is_some_and(|value| !value.is_empty()));
+    assert!(availability["generation"]
+        .as_str()
+        .is_some_and(|value| !value.is_empty()));
 
     dispatch_compute_fields_command(&state, command_id).await;
     assert!(!reconcile_compute_fields_command(&state).await);
@@ -23365,7 +23439,10 @@ async fn session_checkpoint_create_captures_live_magnetization() {
     if response.status() != StatusCode::OK {
         let status = response.status();
         let body = body_bytes(response).await;
-        panic!("checkpoint create returned {status}: {}", String::from_utf8_lossy(&body));
+        panic!(
+            "checkpoint create returned {status}: {}",
+            String::from_utf8_lossy(&body)
+        );
     }
     let json = body_json(response).await;
     assert_eq!(json["checkpoint"]["checkpoint_id"], "cp-000042");

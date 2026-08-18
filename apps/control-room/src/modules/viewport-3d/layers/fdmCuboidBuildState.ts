@@ -9,7 +9,9 @@ export interface FdmCuboidBuildState {
   readonly status: FdmCuboidBuildStatus;
 }
 
-export type FdmCuboidBuildSnapshot = FdmCuboidBuildState;
+export interface FdmCuboidBuildSnapshot extends FdmCuboidBuildState {
+  readonly topologyKey: string | null;
+}
 
 export interface FdmCuboidBuildStateController {
   readonly begin: (buildKey: string, topologyKey?: string | null) => void;
@@ -25,23 +27,30 @@ export const EMPTY_FDM_CUBOID_BUILD_SNAPSHOT: FdmCuboidBuildSnapshot =
     error: null,
     result: null,
     status: "idle" as const,
+    topologyKey: null,
   });
 
 export function resolveFdmCuboidBuildState({
   currentBuildKey,
+  currentTopologyKey,
   snapshot,
 }: {
   currentBuildKey: string | null;
+  currentTopologyKey: string | null;
   snapshot: FdmCuboidBuildSnapshot;
 }): FdmCuboidBuildState {
   if (!currentBuildKey) {
     return { buildKey: null, error: null, result: null, status: "idle" };
   }
   if (snapshot.buildKey !== currentBuildKey) {
+    const retainLastGoodResult =
+      snapshot.topologyKey !== null &&
+      snapshot.topologyKey === currentTopologyKey &&
+      snapshot.result !== null;
     return {
       buildKey: currentBuildKey,
       error: null,
-      result: null,
+      result: retainLastGoodResult ? snapshot.result : null,
       status: "pending",
     };
   }
@@ -73,6 +82,7 @@ export function createFdmCuboidBuildStateController(): FdmCuboidBuildStateContro
         error: null,
         result: retainLastGood ? snapshot.result : null,
         status: "pending",
+        topologyKey: nextTopologyKey,
       });
     },
     getSnapshot: () => snapshot,
@@ -85,6 +95,7 @@ export function createFdmCuboidBuildStateController(): FdmCuboidBuildStateContro
         error: error instanceof Error ? error : new Error(String(error)),
         result: snapshot.result,
         status: "error",
+        topologyKey: snapshot.topologyKey,
       });
     },
     resolve: (buildKey, result) => {
@@ -94,6 +105,7 @@ export function createFdmCuboidBuildStateController(): FdmCuboidBuildStateContro
         error: null,
         result: mergeFdmCuboidBuildResult(snapshot.result, result),
         status: "ready",
+        topologyKey: snapshot.topologyKey,
       });
     },
     subscribe: (listener) => {

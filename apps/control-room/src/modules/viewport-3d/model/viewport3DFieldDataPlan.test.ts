@@ -21,6 +21,7 @@ import {
   resolveViewport3DScalarComponentRequest,
   resolveViewport3DScopedPartVectorFieldDemandPlan,
   resolveViewport3DScopedFieldQuery,
+  resolveViewport3DVectorCarrierSampleLimit,
   resolveViewport3DTargetQuantityFieldDemandPlan,
   resolveViewport3DTargetFieldQuery,
   summarizeViewport3DFieldDemandDiagnostics,
@@ -118,14 +119,14 @@ describe("viewport3DFieldDataPlan", () => {
     ]);
   });
 
-  it("uses scalar component data for component surfaces without vectors", () => {
+  it("uses complete vector data for warm component surface switches", () => {
     expect(
       resolveViewport3DTargetFieldQuery({
         surfaceColorMode: "x",
         vectorsVisible: false,
       }),
     ).toEqual({
-      component: "x",
+      component: "full",
       scope_kind: "full",
     });
 
@@ -140,7 +141,7 @@ describe("viewport3DFieldDataPlan", () => {
     expect(requests).toHaveLength(1);
     expect(requests[0]).toMatchObject({
       query: {
-        component: "x",
+        component: "full",
         scope_id: "object:mx",
         scope_kind: "object",
       },
@@ -190,7 +191,7 @@ describe("viewport3DFieldDataPlan", () => {
     );
 
     expect(vectorRequests).toMatchObject([
-      { quantityId: "H_demag", query: { component: "x" } },
+      { quantityId: "H_demag", query: { component: "full" } },
     ]);
     expect(scalarRequests).toMatchObject([
       { quantityId: "eden_demag", query: { component: "full" } },
@@ -302,6 +303,32 @@ describe("viewport3DFieldDataPlan", () => {
     });
   });
 
+  it("keeps vector surface color switches on one complete full-vector resource", () => {
+    const orientationRequest = planViewport3DFieldResourceRequests(
+      buildViewport3DPassDemands(
+        objectPlan("object:warm-color-switch", {
+          surfaceColorSource: "orientation",
+          vectorsVisible: false,
+        }),
+      ),
+    )[0];
+    const componentRequest = planViewport3DFieldResourceRequests(
+      buildViewport3DPassDemands(
+        objectPlan("object:warm-color-switch", {
+          surfaceColorSource: "component_x",
+          vectorsVisible: false,
+        }),
+      ),
+    )[0];
+
+    expect(orientationRequest?.query).toEqual(componentRequest?.query);
+    expect(componentRequest?.query).toMatchObject({
+      component: "full",
+      scope_id: "object:warm-color-switch",
+      scope_kind: "object",
+    });
+  });
+
   it("does not create a second equivalent request for viewport colorbars", () => {
     const plan = objectPlan("object:colorbar", {
       surfaceColorSource: "component_y",
@@ -321,7 +348,7 @@ describe("viewport3DFieldDataPlan", () => {
       "object:colorbar:surface",
     ]);
     expect(requests[0]?.query).toMatchObject({
-      component: "y",
+      component: "full",
       scope_id: "object:colorbar",
       scope_kind: "object",
     });
@@ -376,7 +403,7 @@ describe("viewport3DFieldDataPlan", () => {
         targetId: "object:component-x",
       },
       {
-        component: "x",
+        component: "full",
         completeness: "complete",
         maxSamples: null,
         passKind: "surface",
@@ -423,7 +450,7 @@ describe("viewport3DFieldDataPlan", () => {
           "object:component-x:surface",
         ],
         query: {
-          component: "x",
+          component: "full",
           scope_id: "object:component-x",
           scope_kind: "object",
         },
@@ -547,7 +574,7 @@ describe("viewport3DFieldDataPlan", () => {
 
     expect(requests).toHaveLength(1);
     expect(requests[0]?.query).toMatchObject({
-      component: "x",
+      component: "full",
       scope_id: "object:replay-mx",
       scope_kind: "object",
       snapshot_id: "snapshot-17",
@@ -589,7 +616,7 @@ describe("viewport3DFieldDataPlan", () => {
     ).toEqual([
       {
         demands: [
-          "surface:x:complete",
+          "surface:full:complete",
           "vector-glyph:full:complete",
         ],
         requests: [
@@ -624,7 +651,7 @@ describe("viewport3DFieldDataPlan", () => {
 
     expect(primary.request).toMatchObject({
       query: {
-        component: "x",
+        component: "full",
         scope_kind: "full",
       },
       quantityId: "m",
@@ -670,7 +697,7 @@ describe("viewport3DFieldDataPlan", () => {
 
     expect([...targetQuantity.requests.values()][0]).toMatchObject({
       query: {
-        component: "y",
+        component: "full",
         scope_id: "part-b",
         scope_kind: "part",
       },
@@ -707,7 +734,7 @@ describe("viewport3DFieldDataPlan", () => {
     ]);
     expect([...fdmTargetQuantity.requests.values()][0]).toMatchObject({
       query: {
-        component: "y",
+        component: "full",
         scope_kind: "full",
       },
       quantityId: "H_eff",
@@ -740,7 +767,7 @@ describe("viewport3DFieldDataPlan", () => {
         passId: "fdm-universe-outside-support:vector-glyph",
         passKind: "vector-glyph",
         quantityId: "H_demag",
-        scopeId: null,
+        scopeId: "airbox",
         scopeKind: "airbox",
         targetId: "fdm-universe-outside-support",
       }),
@@ -748,7 +775,8 @@ describe("viewport3DFieldDataPlan", () => {
     expect([...fdmAirboxTargetQuantity.requests.values()][0]).toMatchObject({
       query: {
         component: "full",
-        max_samples: 64,
+        max_samples: 512,
+        scope_id: "airbox",
         scope_kind: "airbox",
       },
       quantityId: "H_demag",
@@ -987,7 +1015,7 @@ describe("viewport3DFieldDataPlan", () => {
         quantityId: "H_eff",
         query: expect.objectContaining({
           component: "full",
-          max_samples: 64,
+          max_samples: 512,
           scope_kind: "airbox",
         }),
       }),
@@ -1058,5 +1086,16 @@ describe("viewport3DFieldDataPlan", () => {
 
     expect(plan.demands).toEqual([]);
     expect(plan.requests).toEqual(new Map());
+  });
+
+  it("oversamples the Airbox vector carrier without changing magnetic-target budgets", () => {
+    expect(
+      resolveViewport3DVectorCarrierSampleLimit(
+        1200,
+        "fdm-universe-outside-support",
+      ),
+    ).toBe(9600);
+    expect(resolveViewport3DVectorCarrierSampleLimit(1200, "part:free-layer"))
+      .toBe(1200);
   });
 });

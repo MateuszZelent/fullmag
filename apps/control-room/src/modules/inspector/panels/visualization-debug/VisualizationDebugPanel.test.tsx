@@ -214,7 +214,7 @@ describe("VisualizationDebugPanelView", () => {
       expect(html).toContain(`<th scope=\"col\">${heading}</th>`);
     }
     expect(html).toMatch(/data-sample-row=[^>]+>[\s\S]*?<td>A\/m<\/td>/);
-    for (const name of ["Copy snapshot", "Copy resource key", "Export JSON"]) {
+    for (const name of ["Copy log", "Copy snapshot", "Copy resource key", "Export JSON"]) {
       expect(html).toContain(`<button`);
       expect(html).toContain(`aria-label=\"${name}\"`);
     }
@@ -239,7 +239,7 @@ describe("VisualizationDebugPanelView", () => {
     expect(html).toContain("c7");
     expect(html).not.toContain("c8");
     expect(html).not.toContain("[0,0.1");
-    expect(html).not.toContain("title=\"");
+    expect(html).not.toMatch(/<tr[^>]*data-sample-row=[^>]*title=/);
     expect(html).toContain("Showing 12 of 18 samples");
   });
 

@@ -135,8 +135,10 @@ describe("viewport3dDiagnostics", () => {
         ]),
         airboxPartCount: 2,
         cache: { byteLength: 0, entryCount: 0 },
+        fieldRevision: null,
         objectCount: 0,
         quantityId: "H_demag",
+        topologyRevision: null,
         tracker: {
           contextLosses: 0,
           contextRestores: 0,

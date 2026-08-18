@@ -13,6 +13,7 @@ import {
   buildFdmCuboidUploadBatches,
   buildFdmCuboidColorUploadBatchesForView,
   fdmCuboidUsesInstanceColors,
+  fdmCuboidVectorPassCanRenderWithoutCellModel,
   buildFdmVectorSegments,
   fdmCuboidSurfaceMeshKey,
   hasAnyEffectiveFdmPass,
@@ -102,6 +103,25 @@ const viewport3DSceneModelPath = join(
 );
 
 describe("FdmCuboidLayer model", () => {
+  it("keeps a vector-only Airbox pass renderable without a cell instance model", () => {
+    expect(
+      fdmCuboidVectorPassCanRenderWithoutCellModel({
+        targetVisible: true,
+        vectorsEnabled: true,
+        vectorsVisible: true,
+        vectorSegments: new Float32Array(6),
+      }),
+    ).toBe(true);
+    expect(
+      fdmCuboidVectorPassCanRenderWithoutCellModel({
+        targetVisible: true,
+        vectorsEnabled: true,
+        vectorsVisible: true,
+        vectorSegments: null,
+      }),
+    ).toBe(false);
+  });
+
   it("does not clear a valid inspect sample when another target misses in the same frame", () => {
     const frames = new Map<number, FrameRequestCallback>();
     let nextFrame = 1;
@@ -1122,7 +1142,7 @@ describe("FdmCuboidLayer model", () => {
     ).toEqual([{ end: 1, start: 0 }]);
   });
 
-  it("caps FDM vector glyph scale using the realized sampling density", () => {
+  it("caps FDM vector glyph scale at the realized sampled cell scale", () => {
     const model = buildFdmCuboidInstanceModel(domainFixture(), {
       voxelFillRatio: 0.5,
     });
@@ -1132,7 +1152,7 @@ describe("FdmCuboidLayer model", () => {
       resolveFdmVectorGlyphScale(sampledModel, 100e-9, sampledModel.count) / 1e-9,
     ).toBeCloseTo(1.125);
     expect(resolveFdmVectorGlyphScale(sampledModel, 100e-9, 1) / 1e-9).toBeCloseTo(
-      1.125 * Math.cbrt(sampledModel.count),
+      4.5,
     );
     expect(resolveFdmVectorGlyphScale(sampledModel, 0.25e-9, 1) / 1e-9).toBeCloseTo(0.25);
   });

@@ -1001,9 +1001,88 @@ export function buildRibbonTabContent(
     resolvedContent = buildMeshTabContent(content, context);
   }
 
-  return context?.commands
+  const withCommandState = context?.commands
     ? applyCommandState(resolvedContent, context)
     : resolvedContent;
+
+  return isProductionRibbonBuild()
+    ? stripProductionRibbonPlaceholders(withCommandState, context?.commands)
+    : withCommandState;
+}
+
+function isProductionRibbonBuild(): boolean {
+  return process.env.NODE_ENV === "production";
+}
+
+function hasRegisteredRibbonCommand(
+  commands: CommandRegistry | undefined,
+  commandId: string,
+): boolean {
+  return Boolean(commands && commands.get(commandId));
+}
+
+function stripProductionMenuPlaceholders(
+  nodes: RibbonMenuNode[],
+  commands: CommandRegistry | undefined,
+): RibbonMenuNode[] {
+  if (!commands) return nodes;
+
+  const result: RibbonMenuNode[] = [];
+  for (const node of nodes) {
+    if (node.type === "submenu") {
+      const children = stripProductionMenuPlaceholders(node.nodes, commands);
+      if (children.length > 0) result.push({ ...node, nodes: children });
+      continue;
+    }
+
+    if (node.type === "radio-group") {
+      const items = node.items.filter((item) =>
+        hasRegisteredRibbonCommand(
+          commands,
+          item.commandId ?? node.commandId ?? node.id,
+        ),
+      );
+      if (items.length > 0) result.push({ ...node, items });
+      continue;
+    }
+
+    if (node.type === "label" || node.type === "separator" || node.type === "status") {
+      result.push(node);
+      continue;
+    }
+
+    if (hasRegisteredRibbonCommand(commands, node.commandId ?? node.id)) {
+      result.push(node);
+    }
+  }
+  return result;
+}
+
+export function stripProductionRibbonPlaceholders(
+  content: RibbonTabContent,
+  commands?: CommandRegistry,
+): RibbonTabContent {
+  if (!commands) return content;
+
+  return {
+    ...content,
+    groups: content.groups.flatMap((group) => {
+      const actions = group.actions.flatMap((action) => {
+        const actionCommandId = action.commandId ?? action.id;
+        const menu = stripProductionMenuPlaceholders(action.menu ?? [], commands);
+        const hasActionCommand = hasRegisteredRibbonCommand(commands, actionCommandId);
+        const hasInformationalMenu = Boolean(action.menu) && menu.length > 0;
+
+        if (!hasActionCommand && !hasInformationalMenu) {
+          return [];
+        }
+
+        return [{ ...action, menu: action.menu ? menu : action.menu }];
+      });
+
+      return actions.length > 0 ? [{ ...group, actions }] : [];
+    }),
+  };
 }
 
 function buildHomeWorkspaceGroup(

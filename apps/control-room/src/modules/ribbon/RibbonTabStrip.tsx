@@ -55,6 +55,8 @@ export function RibbonTabStrip({
           data-active={tab.id === activeTabId}
           role="tab"
           type="button"
+          id={`fm-ribbon-tab-${tab.id}`}
+          aria-controls="fm-ribbon-tabpanel"
           aria-selected={tab.id === activeTabId}
           tabIndex={tab.id === activeTabId ? 0 : -1}
           onClick={() => onTabClick(tab.id)}

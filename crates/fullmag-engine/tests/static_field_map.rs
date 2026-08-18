@@ -1,6 +1,6 @@
 use fullmag_engine::{
-    CellSize, EffectiveFieldTerms, ExchangeLlgProblem, GridShape, LlgConfig,
-    MaterialParameters, TimeIntegrator, MU0,
+    CellSize, EffectiveFieldTerms, ExchangeLlgProblem, GridShape, LlgConfig, MaterialParameters,
+    TimeIntegrator, MU0,
 };
 
 #[test]
@@ -16,7 +16,10 @@ fn static_field_map_contributes_to_external_field_and_zeeman_energy() {
             ..Default::default()
         },
     )
-    .with_static_external_field(Some(vec![[0.0, 0.0, 1.0e-3 / MU0], [0.0, 0.0, 2.0e-3 / MU0]]))
+    .with_static_external_field(Some(vec![
+        [0.0, 0.0, 1.0e-3 / MU0],
+        [0.0, 0.0, 2.0e-3 / MU0],
+    ]))
     .expect("static field map matches grid");
 
     let state = problem.uniform_state([0.0, 0.0, 1.0]).expect("valid state");

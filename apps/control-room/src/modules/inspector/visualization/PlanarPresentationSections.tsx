@@ -3,10 +3,13 @@ import type {
   VisualizationStateResource,
 } from "@/kernel/api/apiTypes";
 import type { FieldMapCapability, PlanarInspectorCapabilities } from "@/kernel/visualization/planarCapabilities";
+import { ArrowRightLeft, Crosshair, Eye, ScanLine, SquareDashed } from "lucide-react";
 
 import { FieldRow } from "../primitives/FieldRow";
 import { FormField } from "../primitives/FormField";
 import { InspectorGroup } from "../primitives/InspectorGroup";
+import { ColorField } from "../panels/ObjectVisualizationTargetSection";
+import { VisualizationDisplayPassesControl } from "./VisualizationInspectorControls";
 import {
   PLANAR_QUALITY_ITEMS,
   PLANAR_VECTOR_COLOR_MODE_ITEMS,
@@ -21,24 +24,17 @@ import {
 type Planar = NonNullable<VisualizationStateResource["planar"]>;
 type PlanarPatch = NonNullable<Parameters<(patch: { planar: Partial<Planar> }) => void>[0]["planar"]>;
 
-export function PlanarGeometryLayersSection({
+export function PlanarDisplayPassesSection({
   capabilities,
+  visible,
   layers,
   patch,
 }: {
   capabilities: PlanarInspectorCapabilities;
+  visible: boolean;
   layers: Planar["layers"];
   patch: (next: PlanarPatch) => void;
 }) {
-  const capabilityForLayer = (layer: keyof Planar["layers"]): FieldMapCapability => {
-    if (layer === "boundaries") return capabilities.boundaries;
-    if (layer === "bounds") return capabilities.bounds;
-    if (layer === "contours") return capabilities.contours;
-    if (layer === "mesh") return capabilities.mesh;
-    if (layer === "points") return capabilities.points;
-    if (layer === "vectors") return capabilities.vectors;
-    return capabilities.raster;
-  };
   const reason = (capability: FieldMapCapability): string | undefined => {
     if (capability.enabled) return undefined;
     switch (capability.reasonCode) {
@@ -54,15 +50,76 @@ export function PlanarGeometryLayersSection({
       default: return "Unavailable";
     }
   };
-  return <InspectorGroup collapsible defaultOpen={false} title="Geometry layers">
-    {(["raster", "bounds", "contours", "mesh", "boundaries", "points", "vectors", "probes"] as const).map((layer) => {
-      const capability = capabilityForLayer(layer);
-      return <FormField key={layer} disabled={!capability.enabled} hint={reason(capability)} label={`Layer ${layer}`} type="checkbox" checked={layers[layer]} onChange={() => patch(planarLayerPatch(layers, layer))} />;
-    })}
-    <FieldRow label="Points availability" value={capabilities.points.enabled ? "Occupancy-backed bin centers" : reason(capabilities.points) ?? "Unavailable"} />
-    <FieldRow label="Boundary availability" value={capabilities.boundaries.enabled ? "Exact boundaries" : reason(capabilities.boundaries) ?? "Unavailable"} />
-    <FieldRow label="Mesh overlay" value={capabilities.boundaries.enabled ? "Mesh overlay: exact boundaries" : "Mesh overlay degraded or unavailable"} />
-  </InspectorGroup>;
+  const toggle = (layer: keyof Planar["layers"]) =>
+    patch(planarLayerPatch(layers, layer));
+  return (
+    <div className="grid min-w-0 gap-0">
+      <VisualizationDisplayPassesControl
+        items={[
+          {
+            icon: <Eye aria-hidden="true" size={13} strokeWidth={1.75} />,
+            id: "visible",
+            label: "Visible",
+            pressed: visible,
+            onToggle: () => patch({ visible: !visible }),
+          },
+          {
+            disabled: !capabilities.bounds.enabled,
+            icon: <SquareDashed aria-hidden="true" size={13} strokeWidth={1.75} />,
+            id: "bounds",
+            label: "Bounds",
+            pressed: visible && layers.bounds,
+            onToggle: () => toggle("bounds"),
+          },
+          {
+            disabled: !capabilities.contours.enabled,
+            icon: <ScanLine aria-hidden="true" size={13} strokeWidth={1.75} />,
+            id: "contours",
+            label: "Contours",
+            pressed: visible && layers.contours,
+            onToggle: () => toggle("contours"),
+          },
+          {
+            disabled: !capabilities.vectors.enabled,
+            icon: <ArrowRightLeft aria-hidden="true" size={13} strokeWidth={1.75} />,
+            id: "vectors",
+            label: "Vectors",
+            pressed: visible && layers.vectors,
+            onToggle: () => toggle("vectors"),
+          },
+          {
+            ariaLabel: "Toggle Points",
+            disabled: !capabilities.points.enabled,
+            icon: <Crosshair aria-hidden="true" size={13} strokeWidth={1.75} />,
+            id: "points",
+            label: "Points",
+            pressed: visible && layers.points,
+            onToggle: () => toggle("points"),
+          },
+          {
+            disabled: !capabilities.raster.enabled,
+            icon: <Crosshair aria-hidden="true" size={13} strokeWidth={1.75} />,
+            id: "probes",
+            label: "Probes",
+            pressed: visible && layers.probes,
+            onToggle: () => toggle("probes"),
+          },
+        ]}
+      />
+      {!capabilities.mesh.enabled ? (
+        <FieldRow label="Mesh overlay" value={reason(capabilities.mesh) ?? "Unavailable"} />
+      ) : null}
+      {!capabilities.boundaries.enabled && capabilities.boundaries.reasonCode !== capabilities.mesh.reasonCode ? (
+        <FieldRow label="Boundaries" value={reason(capabilities.boundaries) ?? "Unavailable"} />
+      ) : null}
+      {!capabilities.points.enabled ? (
+        <FieldRow label="Points" value={reason(capabilities.points) ?? "Unavailable"} />
+      ) : null}
+      {!capabilities.raster.enabled ? (
+        <FieldRow label="Raster" value={reason(capabilities.raster) ?? "Unavailable"} />
+      ) : null}
+    </div>
+  );
 }
 
 export function PlanarVectorStyleSection({
@@ -77,13 +134,54 @@ export function PlanarVectorStyleSection({
   patch: (next: PlanarPatch) => void;
 }) {
   const hint = capability.enabled ? undefined : capability.reasonCode === "quantity_not_vector" ? "The selected scalar quantity has no vector components." : capability.reasonCode === "quantity_not_spatial" ? "The selected quantity is not spatially sampleable." : capability.reasonCode?.replaceAll("_", " ");
-  return <InspectorGroup collapsible defaultOpen={false} title="Vector style">
+  return <InspectorGroup
+    collapsible
+    defaultOpen={false}
+    icon={<ArrowRightLeft aria-hidden="true" size={16} strokeWidth={1.75} />}
+    summary={`Quiver • ${resolution.vector_budget}`}
+    title="Vectors"
+    variant="nav"
+  >
     <FormField disabled label="Glyph" type="select" value="quiver">{PLANAR_VECTOR_GLYPH_ITEMS.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}</FormField>
     <FormField disabled={!capability.enabled} hint={hint} label="Vector density" max="10000" min="0" step="1" type="number" value={resolution.vector_budget} onChange={(event) => { const value = Number(event.currentTarget.value); if (Number.isInteger(value) && value >= 0 && value <= 10000) patch(planarResolutionPatch(resolution, { vector_budget: value })); }} />
     <FormField disabled={!capability.enabled} hint={hint} label="Vector scale" min="0" step="0.1" type="number" value={vectorStyle.scale} onChange={(event) => { const value = Number(event.currentTarget.value); if (Number.isFinite(value) && value > 0) patch(planarVectorStylePatch(vectorStyle, { scale: value })); }} />
+    <FormField disabled={!capability.enabled} hint={hint} label="Vector opacity" max="1" min="0" step="0.05" type="number" value={vectorStyle.opacity} onChange={(event) => { const value = Number(event.currentTarget.value); if (Number.isFinite(value) && value >= 0 && value <= 1) patch(planarVectorStylePatch(vectorStyle, { opacity: value })); }} />
+    <FormField disabled={!capability.enabled} hint={hint} label="Vector thickness" max="16" min="0.1" step="0.1" type="number" value={vectorStyle.thickness} onChange={(event) => { const value = Number(event.currentTarget.value); if (Number.isFinite(value) && value > 0 && value <= 16) patch(planarVectorStylePatch(vectorStyle, { thickness: value })); }} />
     <FormField disabled={!capability.enabled} hint={hint} label="Vector length mode" type="select" value={vectorStyle.length_mode} onChange={(event) => patch(planarVectorStylePatch(vectorStyle, { length_mode: event.currentTarget.value }))}>{PLANAR_VECTOR_LENGTH_MODE_ITEMS.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}</FormField>
     <FormField disabled={!capability.enabled} hint={hint} label="Vector color mode" type="select" value={vectorStyle.color_mode} onChange={(event) => patch(planarVectorStylePatch(vectorStyle, { color_mode: event.currentTarget.value }))}>{PLANAR_VECTOR_COLOR_MODE_ITEMS.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}</FormField>
+    {vectorStyle.color_mode === "monochrome" ? <ColorField disabled={!capability.enabled} label="Vector color" value={vectorStyle.monochrome_color} onChange={(value) => patch(planarVectorStylePatch(vectorStyle, { monochrome_color: value }))} /> : null}
   </InspectorGroup>;
+}
+
+export function PlanarWireframeSection({
+  style,
+  patch,
+}: {
+  style: Planar["wireframe_style"];
+  patch: (next: PlanarPatch) => void;
+}) {
+  return (
+    <InspectorGroup title="Wireframe">
+      <ColorField label="Wireframe color" value={style.color} onChange={(color) => patch({ wireframe_style: { ...style, color } })} />
+      <FormField label="Wireframe opacity" max="1" min="0" step="0.05" type="number" value={style.opacity} onChange={(event) => { const opacity = Number(event.currentTarget.value); if (Number.isFinite(opacity) && opacity >= 0 && opacity <= 1) patch({ wireframe_style: { ...style, opacity } }); }} />
+    </InspectorGroup>
+  );
+}
+
+export function PlanarPointsSection({
+  style,
+  patch,
+}: {
+  style: Planar["point_style"];
+  patch: (next: PlanarPatch) => void;
+}) {
+  return (
+    <InspectorGroup title="Points">
+      <ColorField label="Point color" value={style.color} onChange={(color) => patch({ point_style: { ...style, color } })} />
+      <FormField label="Point opacity" max="1" min="0" step="0.05" type="number" value={style.opacity} onChange={(event) => { const opacity = Number(event.currentTarget.value); if (Number.isFinite(opacity) && opacity >= 0 && opacity <= 1) patch({ point_style: { ...style, opacity } }); }} />
+      <FormField label="Point size" max="64" min="0.5" step="0.5" type="number" value={style.size} onChange={(event) => { const size = Number(event.currentTarget.value); if (Number.isFinite(size) && size > 0) patch({ point_style: { ...style, size } }); }} />
+    </InspectorGroup>
+  );
 }
 
 export function PlanarQualitySection({
@@ -100,7 +198,7 @@ export function PlanarQualitySection({
   patch: (next: PlanarPatch) => void;
 }) {
   const hint = capability.enabled ? undefined : capability.reasonCode === "quantity_not_spatial" ? "The selected quantity is not spatially sampleable." : capability.reasonCode?.replaceAll("_", " ");
-  return <InspectorGroup collapsible defaultOpen={false} title="Quality">
+  return <InspectorGroup collapsible defaultOpen={false} title="Sampling & Resolution">
     <FormField disabled={!capability.enabled} hint={hint} label="Render quality" type="select" value={quality} onChange={(event) => patch({ quality: event.currentTarget.value as Planar["quality"] })}>{PLANAR_QUALITY_ITEMS.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}</FormField>
     <FormField disabled={!capability.enabled} hint={hint} label="Resolution width" max="2048" min="16" step="1" type="number" value={resolution.width} onChange={(event) => { const value = Number(event.currentTarget.value); if (Number.isInteger(value) && value >= 16 && value <= 2048) patch(planarResolutionPatch(resolution, { width: value })); }} />
     <FormField disabled={!capability.enabled} hint={hint} label="Resolution height" max="2048" min="16" step="1" type="number" value={resolution.height} onChange={(event) => { const value = Number(event.currentTarget.value); if (Number.isInteger(value) && value >= 16 && value <= 2048) patch(planarResolutionPatch(resolution, { height: value })); }} />

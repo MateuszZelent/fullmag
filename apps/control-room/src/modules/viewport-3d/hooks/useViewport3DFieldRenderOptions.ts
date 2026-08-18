@@ -29,7 +29,7 @@ const fieldRenderOptionsCache = new WeakMap<
   Viewport3DFieldRenderOptions
 >();
 
-const AIRBOX_VECTOR_VISIBILITY_MULTIPLIER = 8;
+const AIRBOX_VECTOR_VISIBILITY_MULTIPLIER = 1;
 
 export function resolveViewport3DAirboxVectorLengthScale(
   requestedScale: number,
@@ -53,6 +53,28 @@ function targetScalarColorModeForRendering(
     return settings.vectorColorMode;
   }
   return surfaceColorMode;
+}
+
+/**
+ * FDM has no FEM topology model. Keep the structured-grid target's scalar
+ * demand alive in that state so a component selection still requests and
+ * materializes the full-grid field payload.
+ */
+export function resolveViewport3DNoTopologyFieldRenderOptions(
+  settings: VisualizationTargetSettings,
+): Viewport3DFieldRenderOptions {
+  const scalarColorMode = targetScalarColorModeForRendering(settings);
+  if (!isNumericScalarColorMode(scalarColorMode)) {
+    return EMPTY_FIELD_RENDER_OPTIONS;
+  }
+  return {
+    ...EMPTY_FIELD_RENDER_OPTIONS,
+    fullScalarColorMode: scalarColorMode,
+    fullScalarColorPalette: settings.scalarColorPalette,
+    scalarColorModes: new Set([scalarColorMode]),
+    scalarColorPalette: settings.scalarColorPalette,
+    scalarColorsVisible: true,
+  };
 }
 
 function isNumericScalarColorMode(
@@ -95,7 +117,7 @@ export function useViewport3DFieldRenderOptions({
 
   return useMemo(() => {
     if (!topologyRenderModel) {
-      return EMPTY_FIELD_RENDER_OPTIONS;
+      return resolveViewport3DNoTopologyFieldRenderOptions(fallbackSettings);
     }
 
     const partVectorBudgets = new Map<string, number>();
@@ -258,13 +280,7 @@ export function useViewport3DFieldRenderOptions({
     airboxSettings.visible,
     airboxScalarColorMode,
     airboxQuantityCompatible,
-    fallbackSettings.scalarColorPalette,
-    fallbackSettings.vectorBudget,
-    fallbackSettings.vectorCenteringEnabled,
-    fallbackSettings.vectorSurfaceOffsetEnabled,
-    fallbackSettings.vectorSurfaceOffsetScale,
-    fallbackSettings.vectorsVisible,
-    fallbackSettings.visible,
+    fallbackSettings,
     fallbackScalarColorMode,
     getPartSettings,
     maxVectorGlyphs,

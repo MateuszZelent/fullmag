@@ -516,6 +516,7 @@ export function shouldShowVectorFieldColorbar(
 export function fieldMetaScopeQueryForVisualizationTarget(
   target: VisualizationTargetRef | null | undefined,
   carrier?: RegionVisualizationCarrier | null,
+  airboxFieldCarrierIdentity?: VisualizationVectorScopeIdentity | null,
 ): Pick<FieldMetaQuery, "owner_object_id" | "scope_id" | "scope_kind"> {
   switch (target?.kind) {
     case "object":
@@ -528,7 +529,10 @@ export function fieldMetaScopeQueryForVisualizationTarget(
     case "part":
       return { scope_id: target.id, scope_kind: "part" };
     case "airbox":
-      return { scope_id: null, scope_kind: "airbox" };
+      return {
+        scope_id: airboxFieldCarrierIdentity?.scopeId ?? null,
+        scope_kind: "airbox",
+      };
     case "fdm-domain":
       // FDM-domain is a viewport-local structured-grid target.  It has no
       // FEM VisualizationState scope and must never be serialized as one.
@@ -572,6 +576,7 @@ export function fieldMetaScopeQueryForVisualizationTarget(
  */
 export function fieldAvailabilityQueryForVisualizationTarget(
   target: VisualizationTargetRef | null | undefined,
+  airboxFieldCarrierIdentity?: VisualizationVectorScopeIdentity | null,
 ): FieldAvailabilityQuery {
   if (!target) {
     return {
@@ -586,7 +591,7 @@ export function fieldAvailabilityQueryForVisualizationTarget(
     case "airbox":
       return {
         owner_object_id: null,
-        scope_id: null,
+        scope_id: airboxFieldCarrierIdentity?.scopeId ?? null,
         scope_kind: "airbox",
         target_id: target.id,
       };
@@ -650,10 +655,11 @@ export interface VisualizationVectorScopeIdentity {
  */
 export function resolveVisualizationVectorScopeForTarget(
   target: VisualizationTargetRef | null | undefined,
+  airboxFieldCarrierIdentity?: VisualizationVectorScopeIdentity | null,
 ): VisualizationVectorScopeIdentity {
   switch (target?.kind) {
     case "airbox":
-      return { scopeId: null, scopeKind: "airbox" };
+      return airboxFieldCarrierIdentity ?? { scopeId: null, scopeKind: "airbox" };
     case "fdm-domain":
       return {
         scopeId: null,
@@ -685,6 +691,27 @@ export function isFdmVisualizationTarget(
 }
 
 export type ObjectVisualizationLane = "fdm" | "fem" | "unresolved";
+
+export function resolveAirboxFieldCarrierIdentity({
+  airboxPartIds,
+  lane,
+}: {
+  airboxPartIds: readonly string[];
+  lane: ObjectVisualizationLane;
+}): VisualizationVectorScopeIdentity | null {
+  if (lane === "fdm") {
+    return { scopeId: "airbox", scopeKind: "airbox" };
+  }
+  if (lane !== "fem") return null;
+  const uniquePartIds = Array.from(new Set(airboxPartIds.filter(Boolean)));
+  const canonicalPartId = uniquePartIds.find((partId) => partId === "part:__air__");
+  if (canonicalPartId) {
+    return { scopeId: canonicalPartId, scopeKind: "airbox" };
+  }
+  return uniquePartIds.length === 1 && uniquePartIds[0]
+    ? { scopeId: uniquePartIds[0], scopeKind: "airbox" }
+    : null;
+}
 
 export function resolveObjectVisualizationLane(
   discretization: string | null | undefined,
@@ -1269,6 +1296,24 @@ interface VisualizationTargetMutationSnapshot {
   } | null;
   pendingTargetIds?: readonly string[];
   rejectedTargetIds?: readonly string[];
+}
+
+export function resolvePendingVisualizationFields({
+  snapshot,
+  targetIds,
+}: {
+  snapshot: Pick<ObjectVisualizationSnapshot, "pendingOverrides">;
+  targetIds: readonly string[];
+}): ReadonlySet<keyof VisualizationTargetPatch> {
+  const fields = new Set<keyof VisualizationTargetPatch>();
+  for (const targetId of targetIds) {
+    const patch = snapshot.pendingOverrides?.[targetId]?.patch;
+    if (!patch) continue;
+    for (const field of Object.keys(patch) as Array<keyof VisualizationTargetPatch>) {
+      fields.add(field);
+    }
+  }
+  return fields;
 }
 
 export function resolveVisualizationTargetMutationStatus({

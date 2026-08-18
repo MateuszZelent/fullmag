@@ -24,6 +24,7 @@ const mocks = vi.hoisted(() => ({
     codec: "fmcs.v4",
   },
   planar: {
+    visible: true,
     colormap: "viridis",
     component: "magnitude",
     display_unit: "A/m",
@@ -48,10 +49,20 @@ const mocks = vi.hoisted(() => ({
     },
     range: { mode: "manual", min: -1, max: 1 },
     raster_opacity: 1,
+    viewport_colorbar_visible: true,
+    wireframe_style: { color: "#94a3b8", opacity: 1 },
+    point_style: { color: "#89b4fa", opacity: 1, size: 3 },
     interaction: { pan_u_m: 0, pan_v_m: 0, zoom: 1 },
     quality: "interactive",
     resolution: { height: 256, vector_budget: 512, width: 512 },
-    vector_style: { color_mode: "orientation", length_mode: "uniform", scale: 1 },
+    vector_style: {
+      color_mode: "orientation",
+      length_mode: "uniform",
+      monochrome_color: "#cdd6f4",
+      opacity: 1,
+      scale: 1,
+      thickness: 1,
+    },
     view_scope: { kind: "monitor_target" } as
       | { kind: "monitor_target" }
       | { kind: "mesh_part"; scope_id: string }
@@ -190,10 +201,24 @@ describe("PlanarVisualizationSection", () => {
     expect(html).not.toContain("Select monitor");
   });
 
+  it("owns the source, quantity, component, and default-plane controls", () => {
+    mocks.planar.source = { kind: "default" };
+    const html = renderToStaticMarkup(
+      <PlanarVisualizationSection selection={selection} />,
+    );
+
+    expect(html).toMatch(
+      /<div(?=[^>]*aria-label="Planar field selection controls")(?=[^>]*role="group")[^>]*>/,
+    );
+    for (const label of ["Source", "Quantity", "Component", "Plane"]) {
+      expect(html).toContain(`aria-label="${label}"`);
+    }
+  });
+
   it("fails closed for points while the canonical occupancy mask is unavailable", () => {
     mocks.maskStatus = "loading";
     const html = renderToStaticMarkup(<PlanarVisualizationSection selection={selection} />);
-    expect(html).toContain('aria-label="Layer points"');
+    expect(html).toContain('aria-label="Toggle Points"');
     expect(html).toContain("disabled");
     expect(html).toContain("Sample points require the canonical occupancy mask.");
   });
@@ -203,7 +228,7 @@ describe("PlanarVisualizationSection", () => {
       <PlanarVisualizationSection selection={selection} />,
     );
 
-    expect(html).toContain("2D visualization");
+    expect(html).toContain("Display");
     expect(html).toContain("Mid-plane");
     expect(html).toContain("Effective field (A/m)");
     expect(html).toContain("in plane magnitude");
@@ -228,25 +253,35 @@ describe("PlanarVisualizationSection", () => {
     expect(html).toContain("live");
   });
 
-  it("renders the complete v7 planar presentation contract without 3D-only controls", () => {
+  it("renders the same visualization Inspector composition as 3D plus planar controls", () => {
     const html = renderToStaticMarkup(
       <PlanarVisualizationSection selection={selection} />,
     );
 
+    for (const section of [
+      "Display",
+      "Surface Coloring",
+      "Vectors",
+      "Wireframe",
+      "Source &amp; Slice",
+      "Sampling &amp; Resolution",
+    ]) {
+      expect(html).toContain(section);
+    }
     for (const label of [
+      "Render mode",
+      "Toggle Visible",
+      "Toggle Bounds",
+      "Toggle Vectors",
       "Raster opacity",
       "Range mode",
-      "Layer raster",
-      "Layer bounds",
-      "Layer contours",
-      "Layer mesh",
-      "Layer boundaries",
-      "Layer points",
-      "Layer vectors",
-      "Layer probes",
-      "Glyph",
+      "Viewport colorbar",
+      "Wireframe color value",
+      "Wireframe opacity",
       "Vector density",
       "Vector scale",
+      "Vector opacity",
+      "Vector thickness",
       "Vector length mode",
       "Vector color mode",
       "Render quality",
@@ -256,9 +291,44 @@ describe("PlanarVisualizationSection", () => {
     ]) {
       expect(html).toContain(`aria-label="${label}"`);
     }
-    expect(html).toContain("Mesh overlay: exact boundaries");
-    expect(html).not.toContain("Surface opacity");
-    expect(html).not.toContain("Wireframe opacity");
+    expect(html).not.toContain("Geometry layers");
+  });
+
+  it("uses the canonical icon and summary navigation style for planar sections", () => {
+    const html = renderToStaticMarkup(
+      <PlanarVisualizationSection selection={selection} />,
+    );
+
+    expect(html).toContain("lucide-scan-line");
+    expect(html).toContain("lucide-palette");
+    expect(html).toContain("lucide-arrow-right-left");
+    expect(html).toContain("Mid-plane • Monitor");
+    expect(html).toContain("Viridis • Manual range");
+    expect(html).toContain("Quiver • 512");
+  });
+
+  it("maps Shaded to a continuous heatmap without mesh or boundaries", async () => {
+    const dom = installSimulationPreparationTestDom();
+    const container = dom.document.createElement("div");
+    const root = createRoot(container as unknown as Element);
+    try {
+      await act(async () => root.render(<PlanarVisualizationSection selection={selection} />));
+      await act(async () => clickControl(container, "Shaded"));
+      expect(mocks.queuePatch).toHaveBeenCalledWith({
+        planar: {
+          layers: {
+            ...mocks.planar.layers,
+            boundaries: false,
+            mesh: false,
+            points: false,
+            raster: true,
+          },
+        },
+      });
+    } finally {
+      await act(async () => root.unmount());
+      dom.restore();
+    }
   });
 
   it("patches every planar presentation control through the canonical resource", async () => {
@@ -276,16 +346,15 @@ describe("PlanarVisualizationSection", () => {
       await act(async () => change(findControl(container, "Range minimum"), "-2"));
       await act(async () => change(findControl(container, "Range maximum"), "4"));
       await act(async () => change(findControl(container, "Raster opacity"), "0.5"));
-      await act(async () => toggle(findControl(container, "Layer raster")));
-      await act(async () => toggle(findControl(container, "Layer bounds")));
-      await act(async () => toggle(findControl(container, "Layer contours")));
-      await act(async () => toggle(findControl(container, "Layer mesh")));
-      await act(async () => toggle(findControl(container, "Layer boundaries")));
-      await act(async () => toggle(findControl(container, "Layer points")));
-      await act(async () => toggle(findControl(container, "Layer vectors")));
-      await act(async () => toggle(findControl(container, "Layer probes")));
+      await act(async () => clickControl(container, "Toggle Bounds"));
+      await act(async () => clickControl(container, "Toggle Contours"));
+      await act(async () => clickControl(container, "Toggle Points"));
+      await act(async () => clickControl(container, "Toggle Vectors"));
+      await act(async () => clickControl(container, "Toggle Probes"));
       await act(async () => change(findControl(container, "Vector density"), "768"));
       await act(async () => change(findControl(container, "Vector scale"), "1.5"));
+      await act(async () => change(findControl(container, "Vector opacity"), "0.5"));
+      await act(async () => change(findControl(container, "Vector thickness"), "2"));
       await act(async () => change(findControl(container, "Render quality"), "export"));
       await act(async () => change(findControl(container, "Resolution width"), "768"));
       await act(async () => change(findControl(container, "Resolution height"), "384"));
@@ -303,22 +372,21 @@ describe("PlanarVisualizationSection", () => {
       expect(mocks.queuePatch).toHaveBeenCalledWith({ planar: { range: { mode: "manual", min: -2, max: 1 } } });
       expect(mocks.queuePatch).toHaveBeenCalledWith({ planar: { range: { mode: "manual", min: -1, max: 4 } } });
       expect(mocks.queuePatch).toHaveBeenCalledWith({ planar: { raster_opacity: 0.5 } });
-      expect(mocks.queuePatch).toHaveBeenCalledWith({ planar: { layers: { boundaries: true, bounds: false, contours: false, mesh: true, points: false, probes: true, raster: false, vectors: false } } });
       expect(mocks.queuePatch).toHaveBeenCalledWith({ planar: { layers: { boundaries: true, bounds: true, contours: false, mesh: true, points: false, probes: true, raster: true, vectors: false } } });
       expect(mocks.queuePatch).toHaveBeenCalledWith({ planar: { layers: { boundaries: true, bounds: false, contours: true, mesh: true, points: false, probes: true, raster: true, vectors: false } } });
-      expect(mocks.queuePatch).toHaveBeenCalledWith({ planar: { layers: { boundaries: true, bounds: false, contours: false, mesh: false, points: false, probes: true, raster: true, vectors: false } } });
-      expect(mocks.queuePatch).toHaveBeenCalledWith({ planar: { layers: { boundaries: false, bounds: false, contours: false, mesh: true, points: false, probes: true, raster: true, vectors: false } } });
       expect(mocks.queuePatch).toHaveBeenCalledWith({ planar: { layers: { boundaries: true, bounds: false, contours: false, mesh: true, points: true, probes: true, raster: true, vectors: false } } });
       expect(mocks.queuePatch).toHaveBeenCalledWith({ planar: { layers: { boundaries: true, bounds: false, contours: false, mesh: true, points: false, probes: true, raster: true, vectors: true } } });
       expect(mocks.queuePatch).toHaveBeenCalledWith({ planar: { layers: { boundaries: true, bounds: false, contours: false, mesh: true, points: false, probes: false, raster: true, vectors: false } } });
       expect(mocks.queuePatch).toHaveBeenCalledWith({ planar: { resolution: { height: 256, vector_budget: 768, width: 512 } } });
-      expect(mocks.queuePatch).toHaveBeenCalledWith({ planar: { vector_style: { color_mode: "orientation", length_mode: "uniform", scale: 1.5 } } });
+      expect(mocks.queuePatch).toHaveBeenCalledWith({ planar: { vector_style: { ...mocks.planar.vector_style, scale: 1.5 } } });
+      expect(mocks.queuePatch).toHaveBeenCalledWith({ planar: { vector_style: { ...mocks.planar.vector_style, opacity: 0.5 } } });
+      expect(mocks.queuePatch).toHaveBeenCalledWith({ planar: { vector_style: { ...mocks.planar.vector_style, thickness: 2 } } });
       expect(mocks.queuePatch).toHaveBeenCalledWith({ planar: { quality: "export" } });
       expect(mocks.queuePatch).toHaveBeenCalledWith({ planar: { resolution: { height: 256, vector_budget: 512, width: 768 } } });
       expect(mocks.queuePatch).toHaveBeenCalledWith({ planar: { resolution: { height: 384, vector_budget: 512, width: 512 } } });
       expect(mocks.queuePatch).toHaveBeenCalledWith({ planar: { interaction: { pan_u_m: 0, pan_v_m: 0, zoom: 2 } } });
-      expect(mocks.queuePatch).toHaveBeenCalledWith({ planar: { vector_style: { color_mode: "orientation", length_mode: "magnitude", scale: 1 } } });
-      expect(mocks.queuePatch).toHaveBeenCalledWith({ planar: { vector_style: { color_mode: "monochrome", length_mode: "uniform", scale: 1 } } });
+      expect(mocks.queuePatch).toHaveBeenCalledWith({ planar: { vector_style: { ...mocks.planar.vector_style, length_mode: "magnitude" } } });
+      expect(mocks.queuePatch).toHaveBeenCalledWith({ planar: { vector_style: { ...mocks.planar.vector_style, color_mode: "monochrome" } } });
       expect(mocks.queuePatch).toHaveBeenCalledWith({ planar: { view_scope: { kind: "monitor_target" } } });
     } finally {
       await act(async () => root.unmount());
@@ -353,8 +421,6 @@ describe("PlanarVisualizationSection", () => {
     mocks.overlay.available = true;
     mocks.overlay.boundary_classification = "degraded_v3";
     const html = renderToStaticMarkup(<PlanarVisualizationSection selection={selection} />);
-    expect(html).toContain('aria-label="Layer boundaries"');
-    expect(html).toContain("disabled");
     expect(html).toContain("Exact boundaries are unavailable for this overlay descriptor.");
     mocks.overlay.boundary_classification = "exact";
   });
@@ -362,9 +428,8 @@ describe("PlanarVisualizationSection", () => {
   it("fails closed for unavailable FDM boundary evidence with an explicit reason", () => {
     mocks.overlay.available = false;
     const html = renderToStaticMarkup(<PlanarVisualizationSection selection={selection} />);
-    expect(html).toContain('aria-label="Layer boundaries"');
+    expect(html).not.toContain('aria-label="Shaded + Wireframe"');
     expect(html).toContain("Mesh overlay is unavailable for this sample.");
-    expect(html).toContain("Mesh overlay degraded or unavailable");
     mocks.overlay.available = true;
   });
 
@@ -372,7 +437,7 @@ describe("PlanarVisualizationSection", () => {
     [
       "an unsupported fmcs.v3 descriptor",
       () => { mocks.overlay.codec = "fmcs.v3"; },
-      "Layer mesh",
+      "Mesh overlay",
       "Mesh overlay requires the fmcs.v4 or fmfg.v1 descriptor codec.",
     ],
     [
@@ -381,7 +446,7 @@ describe("PlanarVisualizationSection", () => {
         mocks.discretization = "fdm";
         mocks.planar.view_scope = { kind: "mesh_part", scope_id: "part-1" };
       },
-      "Layer mesh",
+      "Mesh overlay",
       "Structured FDM sampling does not support mesh-part or airbox scope.",
     ],
     [
@@ -390,7 +455,7 @@ describe("PlanarVisualizationSection", () => {
         mocks.discretization = "fdm";
         mocks.planar.view_scope = { kind: "airbox" };
       },
-      "Layer boundaries",
+      "Mesh overlay",
       "Structured FDM sampling does not support mesh-part or airbox scope.",
     ],
     [
@@ -406,7 +471,12 @@ describe("PlanarVisualizationSection", () => {
     const root = createRoot(container as unknown as Element);
     try {
       await act(async () => root.render(<PlanarVisualizationSection selection={selection} />));
-      expect(findControl(container, label).disabled).toBe(true);
+      if (label === "Mesh overlay") {
+        expect(container.textContent).toContain("Mesh overlay");
+        expect(findElements(container, (element) => element.getAttribute("aria-label") === "Shaded + Wireframe")).toHaveLength(0);
+      } else {
+        expect(findControl(container, label).disabled).toBe(true);
+      }
       expect(container.textContent).toContain(reason);
     } finally {
       await act(async () => root.unmount());
@@ -444,6 +514,16 @@ function clickButton(root: TestNode, label: string): void {
   const button = findElements(
     root,
     (element) => element.tagName === "BUTTON" && element.textContent === label,
+  )[0];
+  if (!button) throw new Error(`Missing button ${label}`);
+  button.click();
+}
+
+function clickControl(root: TestNode, label: string): void {
+  const button = findElements(
+    root,
+    (element) =>
+      element.tagName === "BUTTON" && element.getAttribute("aria-label") === label,
   )[0];
   if (!button) throw new Error(`Missing button ${label}`);
   button.click();

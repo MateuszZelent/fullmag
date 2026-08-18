@@ -9,7 +9,10 @@ import {
   buildFdmFieldIndexResolver,
   type FdmFieldIndexingResult,
 } from "../model/fdmFieldIndexing";
-import { sampleFdmDisplayCellIndices } from "@/shared/domain/mesh/fdmDisplaySampling";
+import {
+  sampleFdmDisplayCellIndices,
+  sampleFdmSpatialCellIndices,
+} from "@/shared/domain/mesh/fdmDisplaySampling";
 
 /** Number of floats per vector segment: [sx,sy,sz, ex,ey,ez, relMag] */
 const FDM_VECTOR_SEGMENT_STRIDE = 7;
@@ -119,6 +122,7 @@ export interface FdmVectorOnlyBuildInput {
   anchors: Float32Array;
   cellIndices: Uint32Array;
   gridShape: [number, number, number];
+  cellSize?: readonly [number, number, number];
 }
 
 /**
@@ -161,8 +165,9 @@ export function createFdmVectorOnlyBuildInput({
     if (!cellMatchesSelection(regionId, cellSelection)) continue;
     selectedCandidates.push(cellIndex);
   }
-  const selected = sampleFdmVectorAnchorCandidates(
+  const selected = sampleFdmSpatialCellIndices(
     selectedCandidates,
+    [nx, ny, nz],
     requestedSamples,
   );
   if (selected.length === 0) return null;
@@ -184,6 +189,7 @@ export function createFdmVectorOnlyBuildInput({
     anchors,
     cellIndices: selected,
     gridShape: [nx, ny, nz],
+    cellSize: domain.spacing,
   };
 }
 
@@ -220,20 +226,6 @@ function resolveFdmVectorAnchorCandidates(
     return Uint32Array.from(candidates);
   }
   return sampleFdmDisplayCellIndices(totalCells, maxSamples);
-}
-
-function sampleFdmVectorAnchorCandidates(
-  candidates: readonly number[],
-  maxSamples: number,
-): Uint32Array {
-  if (candidates.length <= maxSamples) return Uint32Array.from(candidates);
-  const sampled = new Uint32Array(maxSamples);
-  for (let ordinal = 0; ordinal < maxSamples; ordinal += 1) {
-    sampled[ordinal] = candidates[
-      Math.min(candidates.length - 1, Math.floor((ordinal * candidates.length) / maxSamples))
-    ] ?? 0;
-  }
-  return sampled;
 }
 
 function normalizeFdmVectorSampleLimit(
@@ -290,11 +282,7 @@ export function buildViewport3DFdmCuboid(
   const vectorSegments = buildFdmVectorSegmentsUncached(
     model,
     request.vectorField,
-    resolveFdmVectorGlyphScale(
-      model,
-      request.vectorScale,
-      request.maxVectorGlyphs,
-    ),
+    resolveFdmVectorGlyphScale(model, request.vectorScale, request.maxVectorGlyphs),
     request.maxVectorGlyphs,
     {
       anchorMode: request.vectorAnchorMode,
@@ -373,13 +361,14 @@ export function buildFdmVectorSegmentsFromAnchors(
         request.cellSelection,
       )
     : candidates;
-  const count = Math.min(scoped.length, Math.floor(maxVectors));
-  if (count <= 0) return null;
-  const stride = Math.max(1, Math.floor(scoped.length / count));
-  const selected = new Uint32Array(count);
-  for (let index = 0; index < count; index += 1) {
-    selected[index] = scoped[Math.min(scoped.length - 1, index * stride)] ?? 0;
-  }
+  const selected = sampleFdmVectorInstanceOrdinals(
+    scoped,
+    cellIndices,
+    request.gridShape,
+    maxVectors,
+  );
+  if (!selected) return null;
+  const count = selected.length;
 
   let maxMagnitude = 0;
   for (const ordinal of selected) {
@@ -396,10 +385,18 @@ export function buildFdmVectorSegmentsFromAnchors(
     );
   }
   const segments = new Float32Array(count * FDM_VECTOR_SEGMENT_STRIDE);
-  const halfScale = Math.max(request.scale, 1e-12) / 2;
+  const safeScale = resolveFdmVectorGlyphScaleForCellSize(
+    request.cellSize,
+    request.scale,
+    resolveFdmVectorGlyphSamplingSpacingScale(
+      request.gridShape[0] * request.gridShape[1] * request.gridShape[2],
+      count,
+    ),
+  );
+  const halfScale = safeScale / 2;
   const scaleMagnitude = Math.max(maxMagnitude, 1e-12);
   const surfaceOffsetDistance = resolveFdmSurfaceOffsetDistance(
-    request.scale,
+    safeScale,
     request.anchorMode,
     request.surfaceOffsetEnabled === true && request.geometryScope === "surface",
     request.surfaceOffsetScale ?? 0,
@@ -438,9 +435,9 @@ export function buildFdmVectorSegmentsFromAnchors(
     segments[target] = x - ux * half;
     segments[target + 1] = y - uy * half;
     segments[target + 2] = z - uz * half;
-    segments[target + 3] = request.anchorMode === "tail" ? x + ux * request.scale : x + ux * halfScale;
-    segments[target + 4] = request.anchorMode === "tail" ? y + uy * request.scale : y + uy * halfScale;
-    segments[target + 5] = request.anchorMode === "tail" ? z + uz * request.scale : z + uz * halfScale;
+    segments[target + 3] = request.anchorMode === "tail" ? x + ux * safeScale : x + ux * halfScale;
+    segments[target + 4] = request.anchorMode === "tail" ? y + uy * safeScale : y + uy * halfScale;
+    segments[target + 5] = request.anchorMode === "tail" ? z + uz * safeScale : z + uz * halfScale;
     segments[target + 6] = length / scaleMagnitude;
   }
   return {
@@ -1277,16 +1274,100 @@ function resolveFdmVectorSampledInstances(
       validInstances.push(instance);
     }
   }
-  const vectorCount = Math.min(validInstances.length, Math.floor(maxVectors));
-  if (vectorCount <= 0) return null;
+  return sampleFdmVectorInstanceOrdinals(
+    validInstances,
+    model.cellIndices,
+    model.gridShape,
+    maxVectors,
+  );
+}
+function sampleFdmVectorInstanceOrdinals(
+  instanceOrdinals: ArrayLike<number>,
+  cellIndices: Uint32Array,
+  gridShape: readonly [number, number, number],
+  maxVectors: number,
+): Uint32Array | null {
+  const budget = Math.max(
+    0,
+    Math.floor(Number.isFinite(maxVectors) ? maxVectors : 0),
+  );
+  if (budget <= 0 || instanceOrdinals.length === 0) return null;
 
-  const stride = Math.max(1, Math.floor(validInstances.length / vectorCount));
-  const sampledInstances = new Uint32Array(vectorCount);
-  for (let vector = 0; vector < vectorCount; vector += 1) {
-    sampledInstances[vector] =
-      validInstances[Math.min(validInstances.length - 1, vector * stride)] ?? 0;
+  const totalCells = gridShape[0] * gridShape[1] * gridShape[2];
+  const candidateCells: number[] = [];
+  const ordinalByCell = new Map<number, number>();
+  for (let index = 0; index < instanceOrdinals.length; index += 1) {
+    const ordinal = Number(instanceOrdinals[index]);
+    const cellIndex = cellIndices[ordinal] ?? -1;
+    if (
+      !Number.isSafeInteger(ordinal) ||
+      ordinal < 0 ||
+      ordinal >= cellIndices.length ||
+      !Number.isSafeInteger(cellIndex) ||
+      cellIndex < 0 ||
+      cellIndex >= totalCells ||
+      ordinalByCell.has(cellIndex)
+    ) {
+      continue;
+    }
+    candidateCells.push(cellIndex);
+    ordinalByCell.set(cellIndex, ordinal);
+  }
+  const sampledCellIndices = sampleFdmSpatialCellIndices(
+    candidateCells,
+    gridShape,
+    budget,
+  );
+  if (sampledCellIndices.length === 0) return null;
+
+  const sampledInstances = new Uint32Array(sampledCellIndices.length);
+  for (let index = 0; index < sampledCellIndices.length; index += 1) {
+    sampledInstances[index] =
+      ordinalByCell.get(sampledCellIndices[index] ?? -1) ?? 0;
   }
   return sampledInstances;
+}
+
+export function resolveFdmVectorGlyphScaleForCellSize(
+  cellSize: readonly [number, number, number] | null | undefined,
+  requestedScale: number,
+  samplingSpacingScale = 1,
+): number {
+  const safeScale = Number.isFinite(requestedScale)
+    ? Math.max(requestedScale, 1e-12)
+    : 1e-12;
+  if (!cellSize) return safeScale;
+  const safeSamplingSpacingScale = Number.isFinite(samplingSpacingScale)
+    ? Math.max(samplingSpacingScale, 1)
+    : 1;
+  const maxCellSize = Math.max(
+    ...cellSize.filter((size) => Number.isFinite(size) && size > 0),
+    1e-12,
+  );
+  return Math.min(
+    safeScale,
+    maxCellSize * 0.75 * safeSamplingSpacingScale,
+  );
+}
+
+export function resolveFdmVectorGlyphSamplingSpacingScale(
+  carrierCount: number,
+  renderedGlyphCount: number,
+): number {
+  const safeCarrierCount = Math.max(
+    1,
+    Math.floor(Number.isFinite(carrierCount) ? carrierCount : 0),
+  );
+  const safeRenderedGlyphCount = Math.max(
+    1,
+    Math.min(
+      safeCarrierCount,
+      Math.floor(
+        Number.isFinite(renderedGlyphCount) ? renderedGlyphCount : 0,
+      ),
+    ),
+  );
+  return Math.cbrt(safeCarrierCount / safeRenderedGlyphCount);
 }
 
 export function resolveFdmVectorGlyphScale(
@@ -1294,20 +1375,19 @@ export function resolveFdmVectorGlyphScale(
   requestedScale: number,
   maxVectorGlyphs: number,
 ): number {
-  const safeScale = Math.max(requestedScale, 1e-12);
-  if (!model) return safeScale;
-
-  const maxCellSize = Math.max(...model.cellSize);
-  const sampledGlyphCount = Math.min(
-    model.count,
-    Math.max(1, Math.floor(maxVectorGlyphs)),
+  const modelCount = model?.count ?? 0;
+  const renderedGlyphCount = Math.min(
+    modelCount,
+    Math.max(
+      1,
+      Math.floor(Number.isFinite(maxVectorGlyphs) ? maxVectorGlyphs : 0),
+    ),
   );
-  const samplingSpacingScale = Math.cbrt(model.count / sampledGlyphCount);
-  const localCap = Math.max(
-    maxCellSize * 0.75 * samplingSpacingScale,
-    1e-12,
+  return resolveFdmVectorGlyphScaleForCellSize(
+    model?.cellSize,
+    requestedScale,
+    resolveFdmVectorGlyphSamplingSpacingScale(modelCount, renderedGlyphCount),
   );
-  return Math.min(safeScale, localCap);
 }
 
 export function estimateFdmCuboidBuildInputBytes(

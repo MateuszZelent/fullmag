@@ -523,30 +523,21 @@ export function AppMenuBar() {
         ))}
       </div>
 
-      <label
+      <button
         className="fm-header__search"
+        title="Command search (Ctrl+Shift+P)"
+        type="button"
         onClick={() => runCommand("workspace.command-palette")}
       >
         <Search size={13} aria-hidden="true" />
-        <input
-          aria-label="Command search"
-          placeholder="Command search (Ctrl+Shift+P)"
-          readOnly
-          type="text"
-          onFocus={(e) => {
-            e.target.blur();
-            runCommand("workspace.command-palette");
-          }}
-        />
-      </label>
+        <span>Command search</span>
+      </button>
 
       <button
         className="fm-header__session-indicator"
         data-clickable={visibleSessionStatus.error ? "true" : undefined}
         type="button"
         onClick={openApiDialog}
-        onFocus={openApiDialog}
-        onPointerEnter={openApiDialog}
         aria-expanded={apiDialogOpen ? true : undefined}
         aria-haspopup={visibleSessionStatus.error ? "dialog" : undefined}
         title={
@@ -616,6 +607,7 @@ export function AppMenuBar() {
             disabled={
               (action.disabled || isCommandDisabled(action.id)) || undefined
             }
+            aria-label={action.label}
             size="icon"
             title={action.label}
             type="button"

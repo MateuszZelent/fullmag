@@ -1882,21 +1882,17 @@ describe("Viewport3DModule scene wiring", () => {
     expect(source).toContain("event.preventDefault();");
   });
 
-  it("holds live field updates from pointer down until pointer release", () => {
+  it("holds transport only for a real camera interaction", () => {
     const source = readFileSync(
       new URL("./Viewport3DModule.tsx", import.meta.url),
       "utf8",
     );
 
-    expect(source).toContain("onBegin: beginViewport3DFieldUpdateHold,");
-    expect(source).toContain("onEnd: endViewport3DFieldUpdateHold,");
-    expect(source).toContain("createViewport3DPointerHoldLifecycle");
-    expect(source).not.toContain("scheduleFieldUpdatePointerHoldRelease");
-    expect(source).not.toContain("fieldUpdatePointerHoldReleaseTimeoutRef");
-    expect(source).not.toContain("}, 150);");
-    expect(source).toContain("onPointerDownCapture={holdFieldUpdatesForPointerGesture}");
-    expect(source).toContain("onPointerUpCapture={releaseFieldUpdatePointerHold}");
-    expect(source).toContain("onPointerCancelCapture={releaseFieldUpdatePointerHold}");
+    expect(source).toContain("const beginCameraInteraction = useCallback");
+    expect(source).toContain("beginViewport3DFieldUpdateHold();");
+    expect(source).toContain("endViewport3DFieldUpdateHold();");
+    expect(source).not.toContain("onPointerDownCapture={holdFieldUpdatesForPointerGesture}");
+    expect(source).not.toContain("onPointerUpCapture={releaseFieldUpdatePointerHold}");
   });
 
   it("exposes camera diagnostics for browser smoke checks", () => {

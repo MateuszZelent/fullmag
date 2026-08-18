@@ -69,6 +69,7 @@ import {
   resolveViewport3DVisualizationQuantityId,
   resolveViewport3DFdmGridVectorScale,
   resolveViewport3DVectorScale,
+  mergeViewport3DQuantityCapabilityIds,
   mergeViewport3DFieldQuery,
   mergeViewport3DPrimaryTargetFieldBuffers,
   resolveViewport3DResolvedPartFieldBuffers,
@@ -95,7 +96,10 @@ import {
   identifyVectorGlyphBuildResult,
   recordVectorFieldAdoption,
 } from "../layers/VectorFieldLayer";
-import { recordFdmCuboidSurfaceAdoption } from "../layers/FdmCuboidLayer";
+import {
+  recordFdmCuboidSurfaceAdoption,
+  resolveFdmVectorGlyphScaleForCellSize,
+} from "../layers/FdmCuboidLayer";
 import { createViewport3DRenderAdoptionRegistry } from "../model/viewport3DRenderAdoptionRegistry";
 import { resolveViewport3DFieldVectorForDomain } from "../model/viewport3DFieldDomainCompatibility";
 import { buildFdmSampledScalarColors } from "../viewport3dFieldMapping";
@@ -104,9 +108,43 @@ const sceneModelSourceUrl = new URL("./useViewport3DSceneModel.ts", import.meta.
 const planarPreviewSourceUrl = new URL("../../../kernel/workspace/planarMonitorFramePreview.ts", import.meta.url);
 
 describe("viewport vector scale", () => {
-  it("keeps default glyphs readable across the longest scene dimension", () => {
-    expect(resolveViewport3DVectorScale([500e-9, 125e-9, 54e-9], 1)).toBeCloseTo(25e-9);
-    expect(resolveViewport3DVectorScale([500e-9, 125e-9, 54e-9], 4)).toBeCloseTo(100e-9);
+  it("derives glyphs from effective sample spacing", () => {
+    expect(resolveViewport3DVectorScale([500e-9, 125e-9, 54e-9], 1, 1200)).toBeCloseTo(12.1e-9, 1);
+    expect(resolveViewport3DVectorScale([500e-9, 125e-9, 54e-9], 2, 1200)).toBeCloseTo(24.2e-9, 1);
+  });
+
+  it("removes stale field-catalog ids rejected by the current quantity capabilities", () => {
+    const catalog = {
+      schema_version: "fullmag.quantity-catalog.v1",
+      quantities: [
+        {
+          capability_state: "unsupported",
+          description: "",
+          domain: "full_domain",
+          id: "H_ext",
+          interactive_preview: false,
+          label: "External field",
+          location: "cell",
+          materializable: false,
+          materialization_state: "unsupported",
+          n_comp: 3,
+          normalization_hint: "",
+          shape: "vector_field",
+          supports_export: false,
+          supports_history: false,
+          supports_preview_2d: false,
+          supports_preview_3d: false,
+          unit: "A/m",
+        },
+      ],
+    };
+
+    expect(
+      mergeViewport3DQuantityCapabilityIds(
+        new Set(["m", "H_ext"]),
+        catalog,
+      ),
+    ).toEqual(new Set(["m"]));
   });
 
   it("derives multilayer Airbox glyph length from its certified grid", () => {
@@ -116,7 +154,16 @@ describe("viewport vector scale", () => {
         [3.125e-9, 3.125e-9, 3e-9],
         1,
       ),
-    ).toBeCloseTo(25e-9);
+    ).toBeCloseTo(12.1e-9, 1);
+  });
+
+  it("caps the effective Airbox glyph length at the realized cell scale", () => {
+    expect(
+      resolveFdmVectorGlyphScaleForCellSize([2e-9, 1e-9, 1e-9], 100e-9),
+    ).toBeCloseTo(1.5e-9, 12);
+    expect(
+      resolveFdmVectorGlyphScaleForCellSize([2e-9, 1e-9, 1e-9], 0.5e-9),
+    ).toBeCloseTo(0.5e-9, 12);
   });
 });
 
@@ -217,7 +264,7 @@ describe("FDM Airbox mesh demand", () => {
     expect(accepted).toBe(decoded);
     expect(request).toMatchObject({
       consumers: [`${targetId}:surface`],
-      query: { component: "magnitude", scope_kind: "full" },
+      query: { component: "full", scope_kind: "full" },
       quantityId,
     });
     expect(buffer).toMatchObject({
@@ -397,6 +444,21 @@ describe("FDM Airbox mesh demand", () => {
     );
   });
 
+  it("does not block single-grid Airbox vectors or geometry on region membership", () => {
+    const source = readFileSync(sceneModelSourceUrl, "utf8");
+    const visibilityBlock = source.slice(
+      source.indexOf("const fdmAirboxVectorsVisible ="),
+      source.indexOf("const fdmInstanceModelEnabled ="),
+    );
+    const buildBlock = source.slice(
+      source.indexOf("const fdmAirboxInstanceModelEnabled ="),
+      source.indexOf("const fdmAirboxVectorOnlyBuildInput ="),
+    );
+
+    expect(visibilityBlock).not.toContain("fdmMembershipCurrent");
+    expect(buildBlock).not.toContain("fdmMembershipCurrent");
+  });
+
   it("keeps canonical FDM Airbox display settings on the subscribed local controller snapshot", () => {
     const source = readFileSync(sceneModelSourceUrl, "utf8");
     const settingsStart = source.indexOf("const airboxSettings = useMemo(");
@@ -438,6 +500,9 @@ describe("FDM Airbox mesh demand", () => {
     );
     expect(keyBlock).not.toContain(
       'field=${fdmAirboxFieldVector ? "ready" : "pending"}',
+    );
+    expect(keyBlock).toContain(
+      "`fill=${visualProfile.voxelFillRatio}|airbox=true|scale=${fdmAirboxVectorScale}`",
     );
   });
 
@@ -1290,14 +1355,11 @@ describe("useViewport3DSceneModel", () => {
     );
   });
 
-  it("pauses heavy field vector resource hooks while camera field updates are held", () => {
+  it("keeps camera transport hold outside the React scene model", () => {
     const source = readFileSync(sceneModelSourceUrl, "utf8");
 
-    expect(source).toContain("const fieldUpdateHoldActive =");
-    expect(source).toContain("{ pauseLoad: fieldUpdateHoldActive }");
-    expect(source).toContain("magneticPartFieldQueries.size > 0");
-    expect(source).toContain("targetQuantityFieldRequests.size > 0");
-    expect(source).toContain("fieldVectorEnabled,");
+    expect(source).not.toContain("useViewport3DFieldUpdateHoldActive");
+    expect(source).not.toContain("fieldUpdateHoldActive");
   });
 
   it("keeps the part scalar range revision resolver stable across renders", () => {
@@ -1722,7 +1784,7 @@ describe("useViewport3DSceneModel", () => {
 
     expect(plan.demands).toEqual([
       expect.objectContaining({
-        component: "x",
+        component: "full",
         passId: "primary-field:surface",
         passKind: "surface",
         quantityId: "m",
@@ -1732,14 +1794,14 @@ describe("useViewport3DSceneModel", () => {
       consumers: ["primary-field:surface"],
       quantityId: "m",
       query: {
-        component: "x",
+        component: "full",
         scope_kind: "full",
         snapshot_id: "snapshot-3",
         stage_id: "stage-relax",
       },
     });
     expect(plan.request?.requestId).toContain("quantity=m");
-    expect(plan.request?.requestId).toContain("component=x");
+    expect(plan.request?.requestId).toContain("component=full");
     expect(plan.request?.requestId).toContain("scope_kind=full");
     expect(plan.request?.requestId).toContain("snapshot_id=snapshot-3");
     expect(plan.request?.requestId).toContain("stage_id=stage-relax");
@@ -2425,7 +2487,7 @@ describe("useViewport3DSceneModel", () => {
         },
       ),
     ).toEqual({
-      component: "magnitude",
+      component: "full",
       scope_kind: "full",
       snapshot_id: "hysteresis_point_007",
       stage_id: "hysteresis-1",
@@ -2545,7 +2607,7 @@ describe("useViewport3DSceneModel", () => {
 
     expect(demandPlan.demands).toEqual([
       expect.objectContaining({
-        component: "x",
+        component: "full",
         passId: "part:a:surface",
         passKind: "surface",
         quantityId: "H_eff",
@@ -2624,14 +2686,14 @@ describe("useViewport3DSceneModel", () => {
     expect(demandPlan.requests).toHaveLength(2);
     expect(Array.from(demandPlan.requests.values())).toEqual([
       expect.objectContaining({
-        consumers: ["object:left:surface", "object:left:vector-glyph"],
-        quantityId: "H_eff",
+        consumers: ["region:right:core:surface"],
+        quantityId: "H_demag",
         query: { component: "full", scope_kind: "full" },
       }),
       expect.objectContaining({
-        consumers: ["region:right:core:surface"],
-        quantityId: "H_demag",
-        query: { component: "magnitude", scope_kind: "full" },
+        consumers: ["object:left:surface", "object:left:vector-glyph"],
+        quantityId: "H_eff",
+        query: { component: "full", scope_kind: "full" },
       }),
     ]);
   });
@@ -3729,7 +3791,7 @@ describe("useViewport3DSceneModel", () => {
     });
   });
 
-  it("resolves target-specific scalar field queries unless vectors need full components", () => {
+  it("keeps target surface field queries full-vector across color projections", () => {
     expect(
       resolveViewport3DTargetFieldQuery({
         surfaceColorMode: null,
@@ -3742,7 +3804,7 @@ describe("useViewport3DSceneModel", () => {
         vectorsVisible: false,
       }),
     ).toEqual({
-      component: "x",
+      component: "full",
       scope_kind: "full",
     });
     expect(
@@ -4064,7 +4126,7 @@ describe("useViewport3DSceneModel", () => {
       },
       {
         demands: [
-          "surface:y:complete",
+          "surface:full:complete",
           "vector-glyph:full:complete",
         ],
         requests: [
@@ -4101,8 +4163,8 @@ describe("useViewport3DSceneModel", () => {
       "part:ring:surface",
     ]);
     expect(scopedPlan.demands.map((demand) => demand.component)).toEqual([
-      "x",
-      "x",
+      "full",
+      "full",
     ]);
   });
 
@@ -4135,7 +4197,7 @@ describe("useViewport3DSceneModel", () => {
       .not.toHaveProperty("max_samples");
   });
 
-  it("keeps component-colored magnetic parts on scoped unsampled field requests", () => {
+  it("keeps component-colored magnetic parts on scoped full-vector field requests", () => {
     const part = { id: "part:arch_waveguide" };
     const scopedRequests = resolveViewport3DScopedPartVectorFieldRequests({
       getPartSettings: () =>
@@ -4155,7 +4217,7 @@ describe("useViewport3DSceneModel", () => {
     expect(scopedRequests.get("part:arch_waveguide")).toMatchObject({
       quantityId: "m",
       query: {
-        component: "x",
+        component: "full",
         scope_id: "part:arch_waveguide",
         scope_kind: "part",
       },
@@ -4265,7 +4327,7 @@ describe("useViewport3DSceneModel", () => {
     expect(scopedRequests.get("part:a")).toMatchObject({
       quantityId: "m",
       query: {
-        component: "magnitude",
+        component: "full",
         scope_id: "part:a",
         scope_kind: "part",
       },

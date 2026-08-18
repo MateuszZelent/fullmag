@@ -21,6 +21,41 @@ export const C = {
   sapphire: "var(--fm-accent-strong)",
 } as const;
 
+// Single canonical map from Tailwind-style color names to design tokens. The
+// `C` shorthand above is the direct-token variant; this map is what the
+// `text-<name>-<shade>` strings in ribbon definitions resolve through.
+export const ICON_COLOR_ALIASES: Record<string, string> = {
+  amber: "var(--fm-warning)",
+  blue: "var(--fm-accent)",
+  cyan: "var(--fm-accent)",
+  emerald: "var(--fm-success)",
+  fuchsia: "var(--fm-stale)",
+  green: "var(--fm-success)",
+  indigo: "var(--fm-accent-strong)",
+  lime: "var(--fm-success)",
+  muted: "var(--fm-text-muted)",
+  orange: "var(--fm-degraded)",
+  peach: "var(--fm-degraded)",
+  pink: "var(--fm-stale)",
+  purple: "var(--fm-stale)",
+  red: "var(--fm-danger)",
+  rose: "var(--fm-danger)",
+  sapphire: "var(--fm-accent-strong)",
+  sky: "var(--fm-accent)",
+  slate: "var(--fm-text-muted)",
+  stone: "var(--fm-text-muted)",
+  teal: "var(--fm-accent-strong)",
+  violet: "var(--fm-stale)",
+  yellow: "var(--fm-warning)",
+};
+
+// Compile-time-checked icon color vocabulary. Unknown names become a type
+// error instead of silently rendering with the default color.
+export type RibbonIconColor =
+  | `var(--${string})`
+  | `text-${keyof typeof ICON_COLOR_ALIASES}-${number}`
+  | "text-muted-foreground";
+
 export function menu(
   id: string,
   label: string,

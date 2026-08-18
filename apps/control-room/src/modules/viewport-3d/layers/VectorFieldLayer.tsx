@@ -46,8 +46,8 @@ import type {
 
 const UNIT_Y = new Vector3(0, 1, 0);
 // V1-matched proportions for better visual quality.
-const DEFAULT_HEAD_RADIUS_RATIO = 0.20;
-const DEFAULT_SHAFT_RADIUS_RATIO = 0.08;
+const DEFAULT_HEAD_RADIUS_RATIO = 0.1;
+const DEFAULT_SHAFT_RADIUS_RATIO = 0.035;
 
 const VECTOR_GLYPH_UPLOAD_BATCH_SIZE = 256;
 const VECTOR_GLYPH_UPLOAD_FRAME_BUDGET_MS = 3;

@@ -329,6 +329,47 @@ describe("viewport3DColorbarPlan", () => {
     });
   });
 
+  it("uses the matching FDM vector buffer when an orientation surface buffer is also present", () => {
+    const target = {
+      ...objectPlan("fdm", {
+        surfaceColorSource: "orientation",
+        vectorColorMode: "y",
+        vectorsVisible: true,
+      }),
+      targetKind: "fdm-domain" as const,
+    };
+    const [plan] = planViewport3DColorbars({ targets: [target] });
+    const surfaceColors = {
+      colors: new Float32Array(12),
+      colorMode: "orientation",
+      colorPalette: "viridis",
+      quantityId: "m",
+      range: { max: 1, min: -1 },
+    };
+    const vectorColors = {
+      colors: new Float32Array(12),
+      colorMode: "y",
+      colorPalette: "viridis",
+      quantityId: "m",
+      range: { max: 4, min: -2 },
+    };
+
+    const rangeStates = resolveViewport3DColorbarRangeStates({
+      fdmTargetColorBuffers: new Map([["fdm", [surfaceColors, vectorColors]]]),
+      fieldModel: {
+        scalarColorsByMode: new Map(),
+        scalarColorsByPartAndMode: new Map(),
+        targetPasses: new Map(),
+      },
+      plans: plan ? [plan] : [],
+    });
+
+    expect(rangeStates.get(plan!.groupKey)).toEqual({
+      range: { max: 4, min: -2 },
+      state: "current",
+    });
+  });
+
   it("resolves independent FDM target ranges from target color buffers", () => {
     const plans = planViewport3DColorbars({
       targets: [objectPlan("object:left"), objectPlan("region:right:core")],

@@ -16064,6 +16064,28 @@
           }
         ]
       },
+      "PlanarPointStyleState": {
+        "additionalProperties": false,
+        "properties": {
+          "color": {
+            "type": "string"
+          },
+          "opacity": {
+            "format": "double",
+            "type": "number"
+          },
+          "size": {
+            "format": "double",
+            "type": "number"
+          }
+        },
+        "required": [
+          "color",
+          "opacity",
+          "size"
+        ],
+        "type": "object"
+      },
       "PlanarReductionSchema": {
         "enum": [
           "mean_occupied",
@@ -16272,7 +16294,18 @@
           "length_mode": {
             "type": "string"
           },
+          "monochrome_color": {
+            "type": "string"
+          },
+          "opacity": {
+            "format": "double",
+            "type": "number"
+          },
           "scale": {
+            "format": "double",
+            "type": "number"
+          },
+          "thickness": {
             "format": "double",
             "type": "number"
           }
@@ -16280,7 +16313,10 @@
         "required": [
           "length_mode",
           "color_mode",
-          "scale"
+          "scale",
+          "opacity",
+          "thickness",
+          "monochrome_color"
         ],
         "type": "object"
       },
@@ -16389,6 +16425,16 @@
               }
             ]
           },
+          "point_style": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/PlanarPointStyleState"
+              }
+            ]
+          },
           "quality": {
             "oneOf": [
               {
@@ -16461,6 +16507,28 @@
                 "$ref": "#/components/schemas/PlanarViewScopeState"
               }
             ]
+          },
+          "viewport_colorbar_visible": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "visible": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "wireframe_style": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/PlanarWireframeStyleState"
+              }
+            ]
           }
         },
         "type": "object"
@@ -16489,6 +16557,9 @@
           "layers": {
             "$ref": "#/components/schemas/PlanarLayerState"
           },
+          "point_style": {
+            "$ref": "#/components/schemas/PlanarPointStyleState"
+          },
           "quality": {
             "$ref": "#/components/schemas/PlanarRenderQuality"
           },
@@ -16513,20 +16584,50 @@
           },
           "view_scope": {
             "$ref": "#/components/schemas/PlanarViewScopeState"
+          },
+          "viewport_colorbar_visible": {
+            "type": "boolean"
+          },
+          "visible": {
+            "type": "boolean"
+          },
+          "wireframe_style": {
+            "$ref": "#/components/schemas/PlanarWireframeStyleState"
           }
         },
         "required": [
+          "visible",
           "source",
           "default_slice",
           "view_scope",
           "quantity_id",
           "component",
           "colormap",
+          "viewport_colorbar_visible",
           "resolution",
           "quality",
           "layers",
+          "wireframe_style",
+          "point_style",
           "vector_style",
           "interaction"
+        ],
+        "type": "object"
+      },
+      "PlanarWireframeStyleState": {
+        "additionalProperties": false,
+        "properties": {
+          "color": {
+            "type": "string"
+          },
+          "opacity": {
+            "format": "double",
+            "type": "number"
+          }
+        },
+        "required": [
+          "color",
+          "opacity"
         ],
         "type": "object"
       },
@@ -42339,8 +42440,8 @@
     }
   ],
   "x-fullmag-build-identity": {
-    "built_at_utc": "2026-08-16T20:20:28Z",
-    "git_commit": "d8159bfedd697535f14bc65034944eaa29c66830",
+    "built_at_utc": "2026-08-17T11:09:01Z",
+    "git_commit": "439976a40351fedc5a0cc69b3c791d0f92912869",
     "source_snapshot_sha256": "unknown",
     "worktree_state": "dirty"
   },

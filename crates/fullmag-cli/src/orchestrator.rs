@@ -5,8 +5,8 @@ use fullmag_ir::{
     GeometryEntryIR, MagnetIR, MaterialIR, ObjectRegionIR, ProblemIR, RegionIR,
     RelaxationAlgorithmIR, StudyIR,
 };
-use std::ffi::OsString;
 use std::collections::HashMap;
+use std::ffi::OsString;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{mpsc, Arc, Mutex};
@@ -10957,8 +10957,8 @@ mod tests {
     use super::{
         adaptive_remesh_legality_reason, apply_current_fem_overrides,
         apply_initial_magnetization_state_override, apply_live_step_update_to_workspace_state,
-        apply_terminal_live_step_update_to_workspace_state,
         apply_remeshed_problem_snapshot_to_stages, apply_stage_heartbeat_progress,
+        apply_terminal_live_step_update_to_workspace_state,
         attach_initial_magnetization_state_override_metadata, attach_region_realization_revisions,
         classify_wait_for_solve_command, cumulative_rhs_evals, default_domain_region_markers,
         deferred_mesh_failure_stage, discard_active_paused_stage_execution,
@@ -10973,20 +10973,20 @@ mod tests {
         mesh_source_scene_revision, offset_step_update, own_preparation_boundary_failure,
         plan_materialized_stage_snapshot, prepare_remesh_stage_transaction,
         preserve_terminal_stage_history, project_script_export_failure,
-        resolve_adaptive_convergence_metric, resolve_preview_field_every_n,
-        resolved_shared_domain_object_region_markers, run_active_preparation_operation,
-        run_owned_preparation_stage, run_script_preparation_preflight, run_solver_initialization,
+        requested_execution_device_for_overrides, resolve_adaptive_convergence_metric,
+        resolve_preview_field_every_n, resolved_shared_domain_object_region_markers,
+        run_active_preparation_operation, run_owned_preparation_stage,
+        run_script_preparation_preflight, run_solver_initialization,
         run_solver_initialization_safety_check, scripted_stage_execution_state,
         scripted_stage_execution_state_with_completion, set_latest_scalar_row_if_due,
-        shared_domain_object_region_mesh_specs,
-        stage_allows_sampled_continuation_initial_state,
+        shared_domain_object_region_mesh_specs, stage_allows_sampled_continuation_initial_state,
         step_update_has_frequency_response_progress, user_cancelled_stage_completion,
         validate_periodic_remesh_candidate, wait_for_failed_preparation_close,
         wait_for_solve_prompt, wait_for_solve_should_block, wait_for_solve_supported,
         write_sampling_resolution_stage_record, ActiveSequenceState, LiveProgressCadence,
         LoadedInitialMagnetizationState, RuntimeCommandPrecondition, SceneProblemPatch,
         StageProgressHeartbeat, WaitForSolveCommandAction, FEM_FREQUENCY_RESPONSE_PROGRESS_KEY,
-        LIVE_PROGRESS_PUBLISH_INTERVAL, requested_execution_device_for_overrides,
+        LIVE_PROGRESS_PUBLISH_INTERVAL,
     };
     use crate::live_workspace::{CurrentLivePublisher, LocalLiveWorkspace};
     use crate::simulation_preparation::{
@@ -10996,9 +10996,8 @@ mod tests {
 
     #[test]
     fn fdm_override_wins_over_fem_override_in_summary_device() {
-        let runtime = super::requested_runtime_selection(
-            "fdm", true, "cpu", "double", "strict", None,
-        );
+        let runtime =
+            super::requested_runtime_selection("fdm", true, "cpu", "double", "strict", None);
         assert_eq!(
             requested_execution_device_for_overrides(&runtime, Some("cpu"), Some("gpu")),
             "gpu"

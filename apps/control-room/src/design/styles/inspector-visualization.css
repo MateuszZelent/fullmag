@@ -665,67 +665,6 @@ button:hover > .fm-inspector-group-icon-box {
   box-shadow: 0 0 0 2px color-mix(in srgb, var(--fm-accent) 14%, transparent);
 }
 
-/* Display card content: fade in when opened */
-@keyframes fm-slide-down {
-  from {
-    opacity: 0;
-    transform: translateY(-4px);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
-}
-
-.fm-viz-display-card [data-slot="inspector-group-content"]:not([hidden]) {
-  animation: fm-slide-down 180ms ease;
-}
-
-/* Accounting rows: fade in values */
-@keyframes fm-fade-in {
-  from { opacity: 0; }
-  to   { opacity: 1; }
-}
-
-.fm-viz-vector-accounting .fm-inspector-field-row__value {
-  animation: fm-fade-in var(--fm-duration-slow) ease;
-}
-
-/* Scope note: subtle slide in */
-.fm-visualization-scope-note {
-  animation: fm-slide-down var(--fm-duration-slow) ease;
-}
-
-/* Vector subgroup: fade in when visible */
-.fm-viz-vector-subgroup {
-  animation: fm-fade-in var(--fm-duration-moderate) ease;
-}
-
-/* Toggle grid: stagger children slightly (CSS only) */
-.fm-visualization-toggle-grid > :nth-child(1) { animation-delay: 0ms; }
-.fm-visualization-toggle-grid > :nth-child(2) { animation-delay: 30ms; }
-.fm-visualization-toggle-grid > :nth-child(3) { animation-delay: var(--fm-duration-instant); }
-
-/* Overview sections: fade up on mount */
-@keyframes fm-rise {
-  from {
-    opacity: 0;
-    transform: translateY(6px);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
-}
-
-.fm-object-visualization-overview > * {
-  animation: fm-rise 220ms ease both;
-}
-
-.fm-object-visualization-overview > :nth-child(1) { animation-delay: 0ms; }
-.fm-object-visualization-overview > :nth-child(2) { animation-delay: 40ms; }
-.fm-object-visualization-overview > :nth-child(3) { animation-delay: var(--fm-duration-fast); }
-
 /* Quantity source dropdown: smooth focus ring */
 .fm-viz-display-card select:focus-visible {
   box-shadow: 0 0 0 2px color-mix(in srgb, var(--fm-accent) 30%, transparent);
@@ -774,14 +713,6 @@ button:hover > .fm-inspector-group-icon-box {
 
 /* ── Reduced motion: disable all animations ── */
 @media (prefers-reduced-motion: reduce) {
-  .fm-object-visualization-overview > *,
-  .fm-viz-display-card [data-slot="inspector-group-content"]:not([hidden]),
-  .fm-viz-vector-accounting .fm-inspector-field-row__value,
-  .fm-visualization-scope-note,
-  .fm-viz-vector-subgroup {
-    animation: none !important;
-  }
-
   .fm-viz-render-mode-tile,
   .fm-viz-render-mode-tile__icon,
   .fm-inspector-metric-card,

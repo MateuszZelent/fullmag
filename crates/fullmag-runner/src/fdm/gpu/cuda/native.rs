@@ -889,10 +889,8 @@ impl NativeFdmBackend {
                 .flat_map(|value| value.iter().copied())
                 .collect()
         });
-        let static_external_field_flat: Option<Vec<f64>> = plan
-            .static_external_field_xyz
-            .as_ref()
-            .map(|field| {
+        let static_external_field_flat: Option<Vec<f64>> =
+            plan.static_external_field_xyz.as_ref().map(|field| {
                 field
                     .iter()
                     .flat_map(|value| value.iter().copied())
@@ -1484,10 +1482,7 @@ impl NativeFdmBackend {
     pub(crate) fn export_llg_checkpoint(&self) -> Result<NativeLlgCheckpointV1, RunError> {
         let mut required_bytes = 0u64;
         let rc = unsafe {
-            ffi::fullmag_fdm_backend_llg_checkpoint_query_size_v1(
-                self.handle,
-                &mut required_bytes,
-            )
+            ffi::fullmag_fdm_backend_llg_checkpoint_query_size_v1(self.handle, &mut required_bytes)
         };
         if rc != ffi::FULLMAG_FDM_OK {
             return Err(self.last_error_or("LLG checkpoint size query failed"));
@@ -1496,9 +1491,11 @@ impl NativeFdmBackend {
             message: "LLG checkpoint size exceeds host address space".to_string(),
         })?;
         let mut payload = Vec::new();
-        payload.try_reserve_exact(payload_len).map_err(|_| RunError {
-            message: format!("failed to allocate {required_bytes} bytes for LLG checkpoint"),
-        })?;
+        payload
+            .try_reserve_exact(payload_len)
+            .map_err(|_| RunError {
+                message: format!("failed to allocate {required_bytes} bytes for LLG checkpoint"),
+            })?;
         payload.resize(payload_len, 0);
         let mut info = ffi::fullmag_fdm_llg_checkpoint_info_v1 {
             schema_version: 0,
@@ -3610,9 +3607,7 @@ mod tests {
             problem
                 .anisotropy_energy_density(&state)
                 .expect("CPU anisotropy density"),
-            problem
-                .dmi_energy_density(&state)
-                .expect("CPU DMI density"),
+            problem.dmi_energy_density(&state).expect("CPU DMI density"),
             problem
                 .total_energy_density(&state)
                 .expect("CPU total density"),
@@ -4378,7 +4373,8 @@ mod tests {
     }
 
     #[test]
-    fn native_fdm_static_external_profile_reaches_single_grid_effective_field_when_cuda_is_available() {
+    fn native_fdm_static_external_profile_reaches_single_grid_effective_field_when_cuda_is_available(
+    ) {
         if !is_cuda_available() {
             eprintln!(
                 "skipping native CUDA FDM static external profile test: CUDA backend is not available on this host"
@@ -4400,7 +4396,10 @@ mod tests {
             [-12.0, -13.0, -14.0],
             [1.0, 2.0, 3.0],
         ]);
-        let expected = plan.static_external_field_xyz.clone().expect("static profile");
+        let expected = plan
+            .static_external_field_xyz
+            .clone()
+            .expect("static profile");
         let active_mask = plan.active_mask.clone().expect("active mask");
         let cell_count = plan.initial_magnetization.len();
 
@@ -4687,8 +4686,8 @@ mod tests {
     }
 
     #[test]
-    fn native_fdm_single_precision_energy_density_snapshots_match_double_and_global_energy_when_cuda_is_available()
-    {
+    fn native_fdm_single_precision_energy_density_snapshots_match_double_and_global_energy_when_cuda_is_available(
+    ) {
         if !is_cuda_available() {
             eprintln!(
                 "skipping native CUDA FDM single-precision energy-density qualification: CUDA backend is not available on this host"
@@ -4871,8 +4870,8 @@ mod tests {
                         5.0e-3,
                         1.0e-3,
                     );
-                    max_density_drift = max_density_drift
-                        .max((actual_value - expected_value).abs());
+                    max_density_drift =
+                        max_density_drift.max((actual_value - expected_value).abs());
                 } else {
                     assert_eq!(actual_value, 0.0, "inactive {quantity} must be zero");
                 }
@@ -5334,7 +5333,8 @@ mod exact_metric_contract_tests {
             "native average-m helper must publish averaged magnetization components"
         );
         assert!(
-            average_stats.contains("stats.per_object_scalars = single_object_scalars(\"free\", stats)"),
+            average_stats
+                .contains("stats.per_object_scalars = single_object_scalars(\"free\", stats)"),
             "native average-m helper must refresh object-scoped telemetry"
         );
     }

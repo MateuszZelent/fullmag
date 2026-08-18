@@ -5,14 +5,14 @@ mod frame;
 mod geometry;
 mod provenance;
 mod reduction;
-mod surface;
 mod source;
+mod surface;
 mod target;
 
 pub(crate) use contract::*;
 pub(crate) use fdm::MAX_FDM_PLANAR_GRID_SEGMENTS;
-pub(crate) use target::*;
 pub(crate) use source::*;
+pub(crate) use target::*;
 
 #[cfg(test)]
 mod target_tests;

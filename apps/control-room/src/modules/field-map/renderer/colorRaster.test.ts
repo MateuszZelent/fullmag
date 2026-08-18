@@ -15,7 +15,7 @@ describe("scalar raster colorization", () => {
       { max: 1, min: 0 },
       new Uint8Array([0, 1]),
     );
-    expect([...pixels]).toEqual([0, 0, 255, 255, 0, 0, 0, 0]);
+    expect([...pixels]).toEqual([68, 1, 84, 255, 0, 0, 0, 0]);
   });
 
   it("renders partial and overlap-ambiguous support while masking empty and undefined", () => {
@@ -40,6 +40,21 @@ describe("scalar raster colorization", () => {
         opacity: 0.5,
       })],
     ).toEqual([0, 0, 0, 128, 255, 255, 255, 128]);
+  });
+
+  it("renders every supported scientific palette with distinct colors", () => {
+    const palettes = ["coolwarm", "inferno", "jet", "magma", "viridis"];
+    const colors = palettes.map((colormap) =>
+      [...colorizeScalarRaster([0.5], { max: 1, min: 0 }, undefined, { colormap })].slice(0, 3).join(","),
+    );
+
+    expect(new Set(colors).size).toBe(palettes.length);
+  });
+
+  it("maps a finite constant field to the palette midpoint instead of its low endpoint", () => {
+    expect(
+      [...colorizeScalarRaster([5], { max: 5, min: 5 }, undefined, { colormap: "viridis" })],
+    ).toEqual([51, 144, 132, 255]);
   });
 
   it("uses the deterministic zero range for empty support and rejects invalid opacity", () => {

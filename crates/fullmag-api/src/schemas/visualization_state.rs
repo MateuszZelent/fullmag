@@ -204,6 +204,7 @@ pub struct QuantityVisualizationPatch {
 #[derive(Debug, Serialize, Deserialize, ToSchema, Clone, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct PlanarVisualizationState {
+    pub visible: bool,
     pub source: PlanarSourceSelectionState,
     pub default_slice: DefaultPlanarSliceState,
     pub view_scope: PlanarViewScopeState,
@@ -214,10 +215,13 @@ pub struct PlanarVisualizationState {
     pub range: PlanarColorRangeState,
     #[serde(default = "default_planar_raster_opacity")]
     pub raster_opacity: f64,
+    pub viewport_colorbar_visible: bool,
     pub display_unit: Option<String>,
     pub resolution: PlanarResolutionPolicy,
     pub quality: PlanarRenderQuality,
     pub layers: PlanarLayerState,
+    pub wireframe_style: PlanarWireframeStyleState,
+    pub point_style: PlanarPointStyleState,
     pub vector_style: PlanarVectorStyleState,
     pub interaction: PlanarInteractionState,
 }
@@ -225,6 +229,7 @@ pub struct PlanarVisualizationState {
 #[derive(Debug, Serialize, Deserialize, ToSchema, Default)]
 #[serde(deny_unknown_fields)]
 pub struct PlanarVisualizationPatch {
+    pub visible: Option<bool>,
     pub source: Option<PlanarSourceSelectionState>,
     pub default_slice: Option<DefaultPlanarSliceState>,
     pub view_scope: Option<PlanarViewScopeState>,
@@ -233,11 +238,14 @@ pub struct PlanarVisualizationPatch {
     pub colormap: Option<String>,
     pub range: Option<PlanarColorRangeState>,
     pub raster_opacity: Option<f64>,
+    pub viewport_colorbar_visible: Option<bool>,
     #[serde(default, deserialize_with = "deserialize_double_option")]
     pub display_unit: Option<Option<String>>,
     pub resolution: Option<PlanarResolutionPolicy>,
     pub quality: Option<PlanarRenderQuality>,
     pub layers: Option<PlanarLayerState>,
+    pub wireframe_style: Option<PlanarWireframeStyleState>,
+    pub point_style: Option<PlanarPointStyleState>,
     pub vector_style: Option<PlanarVectorStyleState>,
     pub interaction: Option<PlanarInteractionState>,
 }
@@ -365,6 +373,24 @@ pub struct PlanarVectorStyleState {
     pub length_mode: String,
     pub color_mode: String,
     pub scale: f64,
+    pub opacity: f64,
+    pub thickness: f64,
+    pub monochrome_color: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, ToSchema, Clone, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct PlanarWireframeStyleState {
+    pub color: String,
+    pub opacity: f64,
+}
+
+#[derive(Debug, Serialize, Deserialize, ToSchema, Clone, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct PlanarPointStyleState {
+    pub color: String,
+    pub opacity: f64,
+    pub size: f64,
 }
 
 #[derive(Debug, Serialize, Deserialize, ToSchema, Clone, PartialEq)]
@@ -376,6 +402,7 @@ pub struct PlanarInteractionState {
 
 pub(crate) fn default_planar_visualization_state() -> PlanarVisualizationState {
     PlanarVisualizationState {
+        visible: true,
         source: PlanarSourceSelectionState::Default,
         default_slice: DefaultPlanarSliceState {
             plane: PlanarAxisPlane::Xy,
@@ -388,6 +415,7 @@ pub(crate) fn default_planar_visualization_state() -> PlanarVisualizationState {
         colormap: "viridis".to_string(),
         range: default_planar_color_range_state(),
         raster_opacity: default_planar_raster_opacity(),
+        viewport_colorbar_visible: true,
         display_unit: None,
         resolution: PlanarResolutionPolicy {
             width: 512,
@@ -399,16 +427,28 @@ pub(crate) fn default_planar_visualization_state() -> PlanarVisualizationState {
             bounds: false,
             raster: true,
             contours: false,
-            mesh: true,
-            boundaries: true,
+            mesh: false,
+            boundaries: false,
             points: false,
             vectors: false,
             probes: true,
+        },
+        wireframe_style: PlanarWireframeStyleState {
+            color: "var(--fm-border-strong)".to_string(),
+            opacity: 1.0,
+        },
+        point_style: PlanarPointStyleState {
+            color: "var(--fm-accent)".to_string(),
+            opacity: 1.0,
+            size: 3.0,
         },
         vector_style: PlanarVectorStyleState {
             length_mode: "uniform".to_string(),
             color_mode: "orientation".to_string(),
             scale: 1.0,
+            opacity: 1.0,
+            thickness: 1.0,
+            monochrome_color: "var(--fm-text-primary)".to_string(),
         },
         interaction: PlanarInteractionState {
             zoom: 1.0,

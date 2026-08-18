@@ -784,8 +784,7 @@ pub struct fullmag_fdm_cpu_charge_request_v1 {
     pub operator_version: [c_char; FULLMAG_FDM_CPU_TRANSPORT_VERSION_TEXT_CAPACITY],
     pub solver_version: [c_char; FULLMAG_FDM_CPU_TRANSPORT_VERSION_TEXT_CAPACITY],
     pub residual_version: [c_char; FULLMAG_FDM_CPU_TRANSPORT_VERSION_TEXT_CAPACITY],
-    pub impressed_potential_jump_faces:
-        *const fullmag_fdm_cpu_impressed_potential_jump_face_v1,
+    pub impressed_potential_jump_faces: *const fullmag_fdm_cpu_impressed_potential_jump_face_v1,
     pub impressed_potential_jump_face_count: u64,
 }
 
@@ -1796,15 +1795,13 @@ mod tests {
             )
         );
 
-        let manifest =
-            unsafe { fullmag_fdm_cpu_oersted_abi_layout_manifest_get_v1() };
+        let manifest = unsafe { fullmag_fdm_cpu_oersted_abi_layout_manifest_get_v1() };
         assert!(!manifest.is_null());
         let manifest = unsafe { &*manifest };
         assert_eq!(manifest.abi_version, FULLMAG_FDM_CPU_OERSTED_ABI_V1);
         assert_eq!(manifest.reserved_flags, 0);
-        let records = unsafe {
-            std::slice::from_raw_parts(manifest.records, manifest.record_count as usize)
-        };
+        let records =
+            unsafe { std::slice::from_raw_parts(manifest.records, manifest.record_count as usize) };
         assert_eq!(records.len(), 8);
         assert_layout_record!(
             records,
@@ -1991,14 +1988,29 @@ mod tests {
     fn llg_checkpoint_info_v1_matches_the_frozen_c_layout() {
         assert_eq!(size_of::<fullmag_fdm_llg_checkpoint_info_v1>(), 96);
         assert_eq!(align_of::<fullmag_fdm_llg_checkpoint_info_v1>(), 8);
-        assert_eq!(offset_of!(fullmag_fdm_llg_checkpoint_info_v1, schema_version), 0);
-        assert_eq!(offset_of!(fullmag_fdm_llg_checkpoint_info_v1, cell_count), 16);
-        assert_eq!(offset_of!(fullmag_fdm_llg_checkpoint_info_v1, current_time), 40);
         assert_eq!(
-            offset_of!(fullmag_fdm_llg_checkpoint_info_v1, transport_attempt_generation),
+            offset_of!(fullmag_fdm_llg_checkpoint_info_v1, schema_version),
+            0
+        );
+        assert_eq!(
+            offset_of!(fullmag_fdm_llg_checkpoint_info_v1, cell_count),
+            16
+        );
+        assert_eq!(
+            offset_of!(fullmag_fdm_llg_checkpoint_info_v1, current_time),
+            40
+        );
+        assert_eq!(
+            offset_of!(
+                fullmag_fdm_llg_checkpoint_info_v1,
+                transport_attempt_generation
+            ),
             56
         );
-        assert_eq!(offset_of!(fullmag_fdm_llg_checkpoint_info_v1, abm_last_dt), 72);
+        assert_eq!(
+            offset_of!(fullmag_fdm_llg_checkpoint_info_v1, abm_last_dt),
+            72
+        );
         assert_eq!(
             offset_of!(fullmag_fdm_llg_checkpoint_info_v1, adaptive_previous_error),
             88

@@ -1,6 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
+import { Palette, ScanLine } from "lucide-react";
 
 import type {
   PlanarFieldSource,
@@ -32,14 +33,23 @@ import {
   scalarColorbarDisplayUnitItems,
   SCALAR_COLOR_PALETTE_ITEMS,
 } from "../panels/ObjectVisualizationPanelModel";
-import { PLANAR_RANGE_MODE_ITEMS, planarRangeForMode } from "./presentationSemantics";
+import { VisualizationInspectorOverview } from "../panels/ObjectVisualizationOverview";
+import {
+  PLANAR_RANGE_MODE_ITEMS,
+  planarDisplayModePatch,
+  planarRangeForMode,
+  resolvePlanarDisplayMode,
+} from "./presentationSemantics";
 import { DefaultPlanarSourceSection } from "./DefaultPlanarSourceSection";
 import {
-  PlanarGeometryLayersSection,
+  PlanarDisplayPassesSection,
+  PlanarPointsSection,
   PlanarProvenanceSection,
   PlanarQualitySection,
   PlanarVectorStyleSection,
+  PlanarWireframeSection,
 } from "./PlanarPresentationSections";
+import { VisualizationRenderModeControl } from "./VisualizationInspectorControls";
 import {
   planarViewScopeForSelection,
   planarVisualizationCoverage,
@@ -192,51 +202,74 @@ export function PlanarVisualizationSection({ selection }: { selection: Selection
     patch({ range: next });
   };
 
-  return (
-    <InspectorGroup title="2D visualization">
+  const renderModeOptions = capabilities.mesh.enabled
+    ? (["surface", "surface+edges", "wireframe", ...(capabilities.points.enabled ? ["points" as const] : []), "off"] as const)
+    : (["surface", ...(capabilities.points.enabled ? ["points" as const] : []), "off"] as const);
+  const enabledPassCount = [
+    planar.visible,
+    planar.layers.bounds,
+    planar.layers.contours,
+    planar.layers.vectors,
+    planar.layers.probes,
+  ].filter(Boolean).length;
+  const sourceAndSlice = (
+    <InspectorGroup
+      collapsible
+      defaultOpen
+      icon={<ScanLine size={16} strokeWidth={1.75} />}
+      summary={source.kind === "default"
+        ? `Default • ${planar.default_slice.plane.toUpperCase()}`
+        : `${(monitors.data?.monitors ?? []).find((monitor) => monitor.id === source.monitorId)?.name ?? source.monitorId} • Monitor`}
+      title="Source & Slice"
+      variant="nav"
+    >
       <FieldRow label="Target" value={coverage.targetKind} />
-      <FormField label="Source" type="select" value={sourceValue} onChange={(event) => {
-        const value = event.currentTarget.value;
-        patch({
-          source: value === "default"
-            ? { kind: "default" }
-            : { kind: "monitor", monitor_id: value },
-        });
-      }}>
-        <option value="default">Default</option>
-        <optgroup label="Monitors">
-          {(monitors.data?.monitors ?? []).map((monitor) => <option key={monitor.id} value={monitor.id}>{monitor.name}</option>)}
-        </optgroup>
-      </FormField>
-      {source.kind === "default" ? (
-        <DefaultPlanarSourceSection
-          defaultSlice={planar.default_slice}
-          domain={domain.data}
-          patch={patch}
-        />
-      ) : null}
-      <FormField label="Quantity" type="select" value={quantityId} onChange={(event) => patch({ component: "magnitude", quantity_id: event.currentTarget.value })}>
-        {(fieldCatalog.data?.quantities ?? []).filter((quantity) => quantity.available).map((quantity) => <option key={quantity.quantity_id} value={quantity.quantity_id}>{quantity.label} ({quantity.unit || "1"})</option>)}
-      </FormField>
-      <FormField label="Component" type="select" value={planar.component} onChange={(event) => patch({ component: event.currentTarget.value as PlanarState["component"] })}>
-        {componentItems.map((component) => <option key={component} value={component}>{component.replaceAll("_", " ")}</option>)}
-      </FormField>
-      <FormField disabled={!capabilities.raster.enabled} hint={scalarReason} label="Color map" type="select" value={planar.colormap} onChange={(event) => patch({ colormap: event.currentTarget.value })}>
-        {SCALAR_COLOR_PALETTE_ITEMS.map((palette) => <option key={palette.value} value={palette.value}>{palette.label}</option>)}
-      </FormField>
+      <div aria-label="Planar field selection controls" className="grid min-w-0 gap-fm-inspector-control" role="group">
+        <FormField label="Source" type="select" value={sourceValue} onChange={(event) => { const value = event.currentTarget.value; patch({ source: value === "default" ? { kind: "default" } : { kind: "monitor", monitor_id: value } }); }}>
+          <option value="default">Default</option>
+          <optgroup label="Monitors">{(monitors.data?.monitors ?? []).map((monitor) => <option key={monitor.id} value={monitor.id}>{monitor.name}</option>)}</optgroup>
+        </FormField>
+        {source.kind === "default" ? <DefaultPlanarSourceSection defaultSlice={planar.default_slice} domain={domain.data} patch={patch} /> : null}
+      </div>
+    </InspectorGroup>
+  );
+  const surfaceColoring = (
+    <InspectorGroup
+      collapsible
+      defaultOpen={false}
+      icon={<Palette size={16} strokeWidth={1.75} />}
+      summary={`${SCALAR_COLOR_PALETTE_ITEMS.find((item) => item.value === planar.colormap)?.label ?? planar.colormap} • ${range.mode === "auto" ? "Auto range" : range.mode === "manual" ? "Manual range" : "Symmetric range"}`}
+      title="Surface Coloring"
+      variant="nav"
+    >
+      <FormField disabled={!capabilities.raster.enabled} hint={scalarReason} label="Color map" type="select" value={planar.colormap} onChange={(event) => patch({ colormap: event.currentTarget.value })}>{SCALAR_COLOR_PALETTE_ITEMS.map((palette) => <option key={palette.value} value={palette.value}>{palette.label}</option>)}</FormField>
       {displayUnitItems.length > 1 ? <FormField disabled={!capabilities.raster.enabled} hint={scalarReason} label="Display unit" type="select" value={planar.display_unit ?? displayUnitItems[0]?.value ?? ""} onChange={(event) => patch({ display_unit: event.currentTarget.value || null })}>{displayUnitItems.map((unit) => <option key={unit.value} value={unit.value}>{unit.label}</option>)}</FormField> : <FieldRow label="Unit" value={canonicalUnit || "dimensionless"} />}
-
-      <FormField disabled={!capabilities.raster.enabled} hint={scalarReason} label="Range mode" type="select" value={range.mode} onChange={(event) => patch({ range: planarRangeForMode(event.currentTarget.value as PlanarRange["mode"], range) })}>
-        {PLANAR_RANGE_MODE_ITEMS.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}
-      </FormField>
+      <FormField disabled={!capabilities.raster.enabled} hint={scalarReason} label="Range mode" type="select" value={range.mode} onChange={(event) => patch({ range: planarRangeForMode(event.currentTarget.value as PlanarRange["mode"], range) })}>{PLANAR_RANGE_MODE_ITEMS.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}</FormField>
       {range.mode === "manual" ? <><FormField disabled={!capabilities.raster.enabled} error={validationError ?? undefined} hint={scalarReason} label="Range minimum" type="number" value={range.min ?? ""} onChange={(event) => updateManualRange("min", event.currentTarget.value)} /><FormField disabled={!capabilities.raster.enabled} error={validationError ?? undefined} hint={scalarReason} label="Range maximum" type="number" value={range.max ?? ""} onChange={(event) => updateManualRange("max", event.currentTarget.value)} /></> : null}
       <FormField disabled={!capabilities.raster.enabled} error={validationError ?? undefined} hint={scalarReason} label="Raster opacity" max="1" min="0" step="0.05" type="number" value={planar.raster_opacity ?? 1} onChange={(event) => { const value = finiteNumber(event.currentTarget.value); if (value === null || value < 0 || value > 1) { setValidationError("Raster opacity must be between 0 and 1."); return; } setValidationError(null); patch({ raster_opacity: value }); }} />
+      <FormField label="Viewport colorbar" type="checkbox" checked={planar.viewport_colorbar_visible} onChange={() => patch({ viewport_colorbar_visible: !planar.viewport_colorbar_visible })} />
+    </InspectorGroup>
+  );
 
-      <PlanarGeometryLayersSection capabilities={capabilities} layers={planar.layers} patch={patch} />
-      <PlanarVectorStyleSection capability={capabilities.vectors} patch={patch} resolution={planar.resolution} vectorStyle={vectorStyle} />
-      <PlanarQualitySection capability={capabilities.raster} interaction={interaction} patch={patch} quality={quality} resolution={planar.resolution} />
+  return (
+    <div className="fm-inspector-panel grid min-w-0 gap-fm-inspector-group">
+      <VisualizationInspectorOverview
+        advanced={<PlanarQualitySection capability={capabilities.raster} interaction={interaction} patch={patch} quality={quality} resolution={planar.resolution} />}
+        camera={<p className="m-0 text-fm-help leading-snug text-fm-muted">Pan and zoom follow the planar viewport.</p>}
+        clipping={<p className="m-0 text-fm-help leading-snug text-fm-muted">The active plane and slice position are controlled in Source &amp; Slice.</p>}
+        context={sourceAndSlice}
+        dataState={meta.status === "ready" ? "Live" : meta.status}
+        display={<><PlanarDisplayPassesSection capabilities={capabilities} layers={planar.layers} patch={patch} visible={planar.visible} /><VisualizationRenderModeControl disabled={!planar.visible} options={renderModeOptions} value={resolvePlanarDisplayMode(planar.layers)} onValueChange={(mode) => patch(planarDisplayModePatch(mode, planar.layers))} /><FormField label="Quantity" type="select" value={quantityId} onChange={(event) => patch({ component: "magnitude", quantity_id: event.currentTarget.value })}>{(fieldCatalog.data?.quantities ?? []).filter((quantity) => quantity.available).map((quantity) => <option key={quantity.quantity_id} value={quantity.quantity_id}>{quantity.label} ({quantity.unit || "1"})</option>)}</FormField><FormField label="Component" type="select" value={planar.component} onChange={(event) => patch({ component: event.currentTarget.value as PlanarState["component"] })}>{componentItems.map((component) => <option key={component} value={component}>{component.replaceAll("_", " ")}</option>)}</FormField></>}
+        enabledPassCount={enabledPassCount}
+        meshState={capabilities.mesh.enabled ? "Ready" : "Degraded"}
+        quantitySource={quantityId || "Not available"}
+        surfaceColoring={surfaceColoring}
+        vectors={<PlanarVectorStyleSection capability={capabilities.vectors} patch={patch} resolution={planar.resolution} vectorStyle={vectorStyle} />}
+      />
+      {planar.layers.points ? <PlanarPointsSection patch={patch} style={planar.point_style} /> : null}
+      {planar.layers.mesh || planar.layers.boundaries ? <PlanarWireframeSection patch={patch} style={planar.wireframe_style} /> : null}
       <PlanarProvenanceSection meta={meta} source={source} />
       <div className="fm-inspector-toolbar"><Button size="sm" type="button" variant="secondary" onClick={() => patch({ view_scope: viewScope })}>Use target scope</Button></div>
-    </InspectorGroup>
+    </div>
   );
 }

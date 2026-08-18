@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
 
 import type { RibbonTabId } from "@/kernel/layout/layoutTypes";
+import type { RibbonIconColor } from "./ribbonCommon";
 
 // Re-export kernel-canonical type so module-local files can import from here.
 export type { RibbonTabId };
@@ -25,7 +26,7 @@ export interface RibbonAction {
   commandId?: string;
   commandInput?: unknown;
   /** CSS color applied to the icon only (not label). Ignored when button is active. */
-  iconColor?: string;
+  iconColor?: RibbonIconColor;
   /**
    * When true the button behaves as a split-button: clicking the body runs the command
    * and clicking the chevron opens the dropdown. When false/undefined (default) the

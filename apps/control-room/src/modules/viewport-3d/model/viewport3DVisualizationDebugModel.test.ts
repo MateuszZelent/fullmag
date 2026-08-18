@@ -603,6 +603,20 @@ describe("buildViewport3DVisualizationDebugSnapshot", () => {
     );
   });
 
+  it("accepts the canonical Airbox id when the request intentionally omits scope_id", () => {
+    const result = snapshot([
+      carrier({
+        requestedScopeId: null,
+        requestedScopeKind: "airbox",
+      }),
+    ]);
+
+    expect(result.issues).not.toContainEqual(
+      expect.objectContaining({ code: "scope-id-mismatch" }),
+    );
+    expect(result.disposition).toBe("ready");
+  });
+
   it("requires separate matching adoption evidence for every requested render pass", () => {
     const missing = snapshot([
       carrier({

@@ -78,6 +78,38 @@ describe("field-map evidence", () => {
     expect(Object.isFrozen(evidence.overlayCounts)).toBe(true);
   });
 
+  it("accepts a terminal zero range for a fully empty or masked raster", () => {
+    const evidence = createPlanarEvidence({
+      ...requested,
+      glyphCount: 0,
+      overlayCounts: { contours: 0, meshSegments: 0 },
+      raster: { checksum: "fnv1a32:00000000", max: 0, min: 0, sampleCount: 4 },
+      status: "ready",
+    });
+
+    expect(assertPlanarEvidenceReady(evidence, requested).raster).toMatchObject({
+      max: 0,
+      min: 0,
+    });
+  });
+
+  it.each([
+    ["minimum", Number.NaN, 1],
+    ["maximum", 0, Number.POSITIVE_INFINITY],
+  ])("rejects ready raster evidence with a non-finite %s", (_name, min, max) => {
+    const evidence = createPlanarEvidence({
+      ...requested,
+      glyphCount: 0,
+      overlayCounts: { contours: 0, meshSegments: 0 },
+      raster: { checksum: "fnv1a32:00000000", max, min, sampleCount: 4 },
+      status: "ready",
+    });
+
+    expect(() => assertPlanarEvidenceReady(evidence, requested)).toThrow(
+      /range is non-finite/,
+    );
+  });
+
   it("keeps an already painted raster loading when the newly selected scalar identity differs", () => {
     expect(
       resolvePlanarEvidenceStatus({
