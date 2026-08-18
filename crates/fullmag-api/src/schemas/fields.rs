@@ -140,10 +140,12 @@ pub struct FieldVectorQuery {
     /// from current FMRM membership. Multilayer FDM supports native `layer`
     /// and `object` scopes without projecting payloads onto the common grid.
     /// `object` and `part` require `scope_id`; `airbox` may omit it and resolves
-    /// to the first mesh part with role `air`; `selection` resolves from the
-    /// current workspace selection.
+    /// to the aggregate of all FEM mesh parts with role `air`, while an explicit
+    /// Airbox mesh-part `scope_id` selects exactly that part; `selection` resolves
+    /// from the current workspace selection.
     pub scope_kind: Option<String>,
-    /// Scope identifier for `object`, `region`, and `part` scopes.
+    /// Scope identifier for `object`, `region`, and `part` scopes. For `airbox`,
+    /// omit it or use `airbox` for the aggregate, or pass an explicit air-part id.
     pub scope_id: Option<String>,
     /// Optional canonical owner of a `region` scope.
     ///
@@ -154,8 +156,9 @@ pub struct FieldVectorQuery {
     /// Optional geometric subset for scoped vector samples.
     ///
     /// Accepted values: `full` (default) and `surface`. `surface` is currently
-    /// supported for `airbox` scope and is resolved from the selected mesh
-    /// part's canonical surface-node membership before `max_samples` is applied.
+    /// Accepted values: `full` (default) and `surface`. `surface` is currently
+    /// supported for `airbox` scope and is resolved from the union of the
+    /// selected air-part surface-node memberships before `max_samples` is applied.
     pub geometry_scope: Option<String>,
     /// Optional positive hard cap for vector samples returned by the binary payload.
     ///

@@ -8,6 +8,7 @@ import {
   recordField,
 } from "../MeshResourceView";
 
+import { resolveMeshTopologyCounts } from "./meshTopologyCounts";
 export function MeshOverviewSection({
   activeBuildRevision,
   buildStatus,
@@ -138,7 +139,7 @@ export function SolverMeshIdentitySection({
 export function MeshCountsExtentsSection({
   edgeLength,
   meshStatistics,
-  meshSummary,
+  topologyCounts,
 }: {
   edgeLength: {
     max: number | null;
@@ -147,32 +148,28 @@ export function MeshCountsExtentsSection({
     std: number | null;
   } | null;
   meshStatistics: unknown;
-  meshSummary: unknown;
+  topologyCounts: unknown;
 }) {
+  const counts = resolveMeshTopologyCounts(topologyCounts);
   return (
     <InspectorGroup title="Counts And Extents" collapsible defaultOpen>
       <MeshResourceFields
         fields={[
           {
             label: "Nodes",
-            value: formatCount(
-              recordField(asRecord(meshSummary), "node_count") ??
-                recordField(asRecord(meshStatistics), "node_count"),
-            ),
+            value: formatCount(counts?.node_count),
           },
           {
             label: "Elements",
-            value: formatCount(
-              recordField(asRecord(meshSummary), "element_count") ??
-                recordField(asRecord(meshStatistics), "element_count"),
-            ),
+            value: formatCount(counts?.element_count),
           },
           {
             label: "Boundary faces",
-            value: formatCount(
-              recordField(asRecord(meshSummary), "boundary_face_count") ??
-                recordField(asRecord(meshStatistics), "boundary_face_count"),
-            ),
+            value: formatCount(counts?.boundary_face_count),
+          },
+          {
+            label: "Count source",
+            value: counts ? "shared-domain manifest" : "not published",
           },
           {
             label: "Min edge",

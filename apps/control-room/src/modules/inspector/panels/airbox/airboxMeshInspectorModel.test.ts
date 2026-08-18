@@ -9,6 +9,7 @@ import type {
 import {
   buildAirboxMeshBuildModel,
   buildAirboxMeshInspectorModel,
+  aggregateAirboxMeshParts,
   findCanonicalAirboxPart,
   isDegradedBuildStatus,
 } from "./airboxMeshInspectorModel";
@@ -434,6 +435,74 @@ describe("airboxMeshInspectorModel", () => {
     );
   });
 
+  it("aggregates multiple Airbox carriers with unique node coverage", () => {
+    const aggregate = aggregateAirboxMeshParts([
+      part({
+        boundary_face_count: 5,
+        element_count: 8,
+        id: "part:air-a",
+        node_count: 4,
+        node_start: 10,
+        surface_faces: [[0, 1, 2]],
+      }),
+      part({
+        boundary_face_count: 2,
+        element_count: 4,
+        id: "part:air-b",
+        node_count: 4,
+        node_start: 12,
+        surface_faces: [[3, 4, 5], [6, 7, 8]],
+      }),
+      part({ id: "part:film", role: "magnetic_object" }),
+    ]);
+
+    expect(aggregate).toMatchObject({
+      boundaryFaceCount: 7,
+      carrierCount: 2,
+      elementCount: 12,
+      nodeCount: 6,
+      nodeCountExact: true,
+      partIds: ["part:air-a", "part:air-b"],
+      surfaceFaceCount: 3,
+    });
+  });
+  it("aggregates typed element families across Airbox carriers", () => {
+    const first = part({ id: "part:air-a", element_count: 8 });
+    const second = part({ id: "part:air-b", element_count: 4 });
+    (first as unknown as Record<string, unknown>).element_counts_by_type = {
+      pyramid5: 2,
+      tet4: 6,
+    };
+    (second as unknown as Record<string, unknown>).element_counts_by_type = {
+      pyramid5: 1,
+      tet4: 3,
+    };
+
+    const model = buildAirboxMeshInspectorModel({
+      manifest: {
+        mesh_id: "mesh-airbox-families",
+        mesh_name: "Shared mesh",
+        mesh_parts: [first, second],
+        revision: 10,
+        topology_fingerprint: "topology-airbox-families",
+      },
+      policy: { config: {}, effective_config: {}, revision: 10 },
+      quality: null,
+      report: null,
+      summary: null,
+    });
+
+    expect(model.statistics).toMatchObject({
+      elementCount: 12,
+      volumeElementCountScope: "airbox-parts",
+    });
+    expect(model.statistics.volumeElementsByType).toEqual(
+      expect.arrayContaining([
+        { count: 3, family: "pyramid5" },
+        { count: 9, family: "tet4" },
+      ]),
+    );
+  });
   it("exposes counts, bounds, and shared interface nodes with honest ownership", () => {
     const airboxPart = part({
       bounds_max: [2, 3, 4],

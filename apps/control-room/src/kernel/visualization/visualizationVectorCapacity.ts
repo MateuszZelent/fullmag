@@ -538,11 +538,11 @@ export function femVisualizationVectorCapacitySource({
     femPartMatchesTarget(part, manifest, target),
   );
   if (parts.length === 0) return null;
-  const fullNodeIndices = parts.flatMap((part) =>
-    part.node_indices?.length
-      ? part.node_indices
-      : Array.from({ length: part.node_count }, (_, index) => part.node_start + index),
-  );
+  const fullNodeIndices = parts.flatMap((part) => {
+    if (part.node_indices?.length) return part.node_indices;
+    if (!hasValidNodeRange(part)) return [];
+    return Array.from({ length: part.node_count }, (_, index) => part.node_start + index);
+  });
   const surfaceNodeIndices = parts.flatMap((part) =>
     part.surface_node_indices?.length
       ? part.surface_node_indices
@@ -551,7 +551,7 @@ export function femVisualizationVectorCapacitySource({
   const exact = parts.every(
     (part) => Boolean(part.surface_node_indices?.length || part.surface_faces?.length),
   );
-  const fullExact = parts.every((part) => Boolean(part.node_indices?.length));
+  const fullExact = parts.every((part) => Boolean(part.node_indices?.length) || hasValidNodeRange(part));
   return {
     carrierId: manifest.mesh_id,
     fullExact,
@@ -563,6 +563,11 @@ export function femVisualizationVectorCapacitySource({
     surfaceNodeIndices: exact ? surfaceNodeIndices : fullNodeIndices,
     topologyHash: manifest.topology_fingerprint ?? null,
   };
+}
+function hasValidNodeRange(
+  part: NonNullable<MeshSharedDomainManifestResource["mesh_parts"]>[number],
+): boolean {
+  return validCount(part.node_start) && validCount(part.node_count) && part.node_start <= Number.MAX_SAFE_INTEGER - part.node_count;
 }
 
 function femPartMatchesTarget(

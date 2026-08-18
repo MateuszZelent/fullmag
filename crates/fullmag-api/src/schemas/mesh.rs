@@ -1041,6 +1041,12 @@ pub struct MeshRegionResource {
     pub bounds_max: Option<[f64; 3]>,
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, ToSchema)]
+pub struct MeshTopologyCountsResource {
+    pub node_count: u64,
+    pub element_count: u64,
+    pub boundary_face_count: u64,
+}
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, ToSchema)]
 pub struct MeshSharedDomainManifestResource {
     pub revision: u64,
@@ -1054,6 +1060,8 @@ pub struct MeshSharedDomainManifestResource {
     pub topology_fingerprint: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub topology_schema_version: Option<u8>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub topology_counts: Option<MeshTopologyCountsResource>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub element_counts_by_type: BTreeMap<String, u64>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]

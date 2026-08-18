@@ -38,8 +38,8 @@ orphan carrier with no scene-object mapping.
 
 This identity repair is a prerequisite for Visualization Debug. Debug always
 observes the canonical user-facing target (`airbox` for Airbox) and reports its
-mesh/data-plane carriers separately (`part:__air__` for the current Airbox
-manifest). It must not expose the carrier as a second selectable target or
+mesh/data-plane carriers separately (all manifest mesh parts with Airbox role or
+canonical Airbox identity). It must not expose a carrier as a second selectable target or
 reintroduce synthetic `object:__air__` identity. The target registry filtering,
 role-first mesh-part resolver, and canonical Airbox scoped vector path must be
 in place before the Debug inspector is enabled.

@@ -2,7 +2,7 @@
 
 import { useCallback, useMemo } from "react";
 
-import type { JsonObject, LiveStatusResource } from "@/kernel/api/apiTypes";
+import type { JsonObject, LiveStatusResource, MeshSharedDomainManifestResource } from "@/kernel/api/apiTypes";
 import { createCommandContext } from "@/kernel/commands/commandContext";
 import {
   useMeshBuildCurrent,
@@ -107,17 +107,7 @@ export interface MeshDetailsModel {
   latestSuccessAvailable: boolean;
   lane: MeshDetailsLane;
   lastBuildError: unknown;
-  manifest: {
-    domain_mesh_mode?: string | null;
-    generation_id?: string | null;
-    geometry_realization_revision?: number | null;
-    mesh_id?: string | null;
-    mesh_name?: string | null;
-    mesh_parts?: readonly unknown[] | null;
-    object_segments?: readonly unknown[] | null;
-    regions?: readonly unknown[] | null;
-    source_scene_revision?: number | null;
-  } | null | undefined;
+  manifest: MeshSharedDomainManifestResource | null | undefined;
   manifestStatus: string;
   meshFreshness: string;
   meshIsStale: boolean;

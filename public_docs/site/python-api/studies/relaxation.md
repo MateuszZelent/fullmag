@@ -22,7 +22,7 @@ relaxation numerical pages.
 Relaxation drives the magnetization toward $\mathbf m\times\mathbf H_{\mathrm{eff}}\approx 0$
 under the constraint $|\mathbf m|=1$; the underlying equation is LLG with precession disabled for
 the overdamped lane and the sphere-product descent condition for direct minimizers. Equations are
-owned by {doc}`../../../numerical-methods/relaxation/index`.
+owned by {doc}`../../numerical-methods/relaxation/index`.
 
 (python-api-studies-relaxation-symbols-and-si-units)=
 <!-- (symbols-and-si-units)= -->
@@ -125,7 +125,7 @@ capability checks without silent fallback.
 <!-- (discrete-realization)= -->
 ## Discrete realization
 This page owns authoring and lowering only. Numerical realization is documented in
-{doc}`../../../numerical-methods/relaxation/index`.
+{doc}`../../numerical-methods/relaxation/index`.
 
 (python-api-studies-relaxation-implementation-mapping)=
 <!-- (implementation-mapping)= -->

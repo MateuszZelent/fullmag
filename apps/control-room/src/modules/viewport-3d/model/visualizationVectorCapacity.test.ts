@@ -9,6 +9,7 @@ import type {
 import { resolveVisualizationVectorCapacityForTarget } from "@/modules/inspector/panels/ObjectVisualizationPanelModel";
 
 import {
+  femVisualizationVectorCapacitySource,
   fdmMultilayerAirboxVisualizationVectorCapacitySource,
   fdmVisualizationVectorCapacitySource,
   resolveVisualizationVectorCapacityDescriptor,
@@ -401,6 +402,50 @@ describe("visualization vector capacity", () => {
     });
   });
 
+  it("treats FEM node ranges as exact published anchors", () => {
+    const source = femVisualizationVectorCapacitySource({
+      manifest: {
+        revision: 6,
+        mesh_id: "mesh-range",
+        mesh_name: "range",
+        topology_fingerprint: "topology-range",
+        generation_id: "generation-range",
+        mesh_parts: [
+          {
+            boundary_face_count: 0,
+            boundary_face_start: 0,
+            element_count: 0,
+            element_start: 0,
+            id: "air-a",
+            label: "air-a",
+            role: "air",
+            node_start: 10,
+            node_count: 3,
+            node_indices: [],
+            surface_faces: [],
+          },
+          {
+            boundary_face_count: 0,
+            boundary_face_start: 0,
+            element_count: 0,
+            element_start: 0,
+            id: "air-b",
+            label: "air-b",
+            role: "air",
+            node_start: 12,
+            node_count: 2,
+            node_indices: [],
+            surface_faces: [],
+          },
+        ],
+      } as MeshSharedDomainManifestResource,
+      target: { id: "airbox", kind: "airbox" },
+    });
+    expect(source).toMatchObject({
+      fullExact: true,
+      fullNodeIndices: [10, 11, 12, 12, 13],
+    });
+  });
   it("fails closed when FEM node indices are not published", () => {
     const source: VisualizationVectorCapacitySource = {
       kind: "fem",

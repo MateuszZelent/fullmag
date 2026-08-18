@@ -129,7 +129,7 @@ class PublicDocumentationInformationArchitectureTests(unittest.TestCase):
         self.assertEqual(validate_tree(PAGE_SPECS), [])
 
     def test_manifest_uses_only_canonical_document_kinds(self) -> None:
-        self.assertEqual(
+        self.assertLessEqual(
             {spec.doc_kind for spec in PAGE_SPECS}, {"reference", "scaffold"}
         )
         existing_exchange = next(

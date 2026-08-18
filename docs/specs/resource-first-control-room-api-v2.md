@@ -796,7 +796,7 @@ Wymagane zakresy próbek pola:
 | FEM | `full` | Pominięty | Pełna domena węzłowa |
 | FEM | `object` | Wymagany identyfikator obiektu | Podzbiór węzłów kwalifikowany właścicielem; zgodność samej geometrii nie wystarcza |
 | FEM | `part` | Wymagany identyfikator części siatki | Podzbiór węzłów części siatki |
-| FEM | `airbox` | Opcjonalny identyfikator części powietrznej | Jawna część powietrzna albo pierwsza kanoniczna część airbox |
+| FEM | `airbox` | Opcjonalny identyfikator części powietrznej | Brak identyfikatora: agregat wszystkich części `role=air`; identyfikator: dokładnie wskazana część |
 | FEM | `selection` | Pominięty | Bieżące zaznaczenie workspace rozwiązane przez backend |
 | Jednosiatkowy FDM | `full` | Pominięty | Pełna siatka komórek |
 | Jednosiatkowy FDM | `object` | Wymagany identyfikator obiektu | Komórki należące do bieżących wpisów legendy FMRM obiektu |
@@ -856,8 +856,8 @@ legacy full-domain compatibility format and must not be treated as proof for
 scoped FEM surface mapping.
 
 The same rule applies to realtime fetch hints. If the active viewport consumes
-`component=magnitude&scope_kind=airbox&scope_id=part:__air__`, the invalidation
-system must prefer that scoped query. It must not fall back to
+`component=magnitude&scope_kind=airbox&scope_id=airbox`, the invalidation
+system must prefer that aggregate query. It must not fall back to
 `component=full&scope_kind=full` unless that exact resource changed and the
 frontend explicitly depends on it.
 

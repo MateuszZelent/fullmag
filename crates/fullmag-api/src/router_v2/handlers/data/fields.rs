@@ -2118,7 +2118,8 @@ pub struct TargetFieldAvailabilityQuery {
     pub target_id: Option<String>,
     /// Field carrier scope. Defaults to the complete domain carrier.
     pub scope_kind: Option<String>,
-    /// Scope identity for object, region, part, and native layer carriers.
+    /// Scope identity for object, region, part, and native layer carriers. For
+    /// `airbox`, omit it or use `airbox` for the aggregate Airbox carrier scope.
     pub scope_id: Option<String>,
     /// Optional owner used to disambiguate duplicate FDM region identifiers.
     pub owner_object_id: Option<String>,
@@ -3203,33 +3204,7 @@ fn resolve_field_scope(
             resolve_part_scope(mesh, part_id, "part")?
         }
         "airbox" => {
-            let part = if let Some(part_id) = query.scope_id.as_deref().filter(|id| !id.is_empty())
-            {
-                mesh.mesh_parts
-                    .iter()
-                    .find(|part| part.id == part_id && part.role == "air")
-                    .ok_or_else(|| {
-                        ApiError::not_found(format!("airbox mesh part not found: {part_id}"))
-                    })?
-            } else {
-                mesh.mesh_parts
-                    .iter()
-                    .find(|part| part.role == "air")
-                    .ok_or_else(|| ApiError::not_found("airbox mesh part not found"))?
-            };
-            ResolvedFieldScope {
-                domain: ResolvedFieldScopeDomain::Air,
-                kind: "airbox".to_string(),
-                id: Some(part.id.clone()),
-                node_indices: node_indices_for_airbox_part(
-                    mesh,
-                    part,
-                    geometry_scope == "surface",
-                )?,
-                value_indices: Vec::new(),
-                grid: None,
-                carrier_hash: None,
-            }
+            resolve_airbox_scope(mesh, query.scope_id.as_deref(), geometry_scope == "surface")?
         }
         "selection" => {
             let selection = workspace_selection.ok_or_else(|| {
@@ -3858,6 +3833,45 @@ fn node_indices_for_part(part: &fullmag_runner::FemMeshPartPayload) -> Vec<usize
     }
 }
 
+fn resolve_airbox_scope(
+    mesh: &FemMeshPayload,
+    requested_scope_id: Option<&str>,
+    surface_only: bool,
+) -> Result<ResolvedFieldScope, ApiError> {
+    let requested_scope_id = requested_scope_id
+        .map(str::trim)
+        .filter(|id| !id.is_empty());
+    let parts = if requested_scope_id.is_some_and(|id| id != "airbox") {
+        mesh.mesh_parts
+            .iter()
+            .filter(|part| part.role == "air" && Some(part.id.as_str()) == requested_scope_id)
+            .collect::<Vec<_>>()
+    } else {
+        mesh.mesh_parts
+            .iter()
+            .filter(|part| part.role == "air")
+            .collect::<Vec<_>>()
+    };
+    if parts.is_empty() {
+        let missing_id = requested_scope_id.unwrap_or("airbox");
+        return Err(ApiError::not_found(format!(
+            "airbox mesh part not found: {missing_id}"
+        )));
+    }
+    let mut node_indices = BTreeSet::new();
+    for part in parts {
+        node_indices.extend(node_indices_for_airbox_part(mesh, part, surface_only)?);
+    }
+    Ok(ResolvedFieldScope {
+        domain: ResolvedFieldScopeDomain::Air,
+        kind: "airbox".to_string(),
+        id: Some(requested_scope_id.unwrap_or("airbox").to_string()),
+        node_indices: node_indices.into_iter().collect(),
+        value_indices: Vec::new(),
+        grid: None,
+        carrier_hash: None,
+    })
+}
 fn node_indices_for_airbox_part(
     mesh: &FemMeshPayload,
     part: &fullmag_runner::FemMeshPartPayload,
@@ -3982,6 +3996,11 @@ fn resolve_selection_scope(
         return resolve_object_scope(mesh, object_id);
     }
     if let Some(entity_id) = selection.selected_entity_id.as_deref() {
+        if is_airbox_selection_id(entity_id) {
+            let mut scope = resolve_airbox_scope(mesh, Some("airbox"), false)?;
+            scope.kind = "selection".to_string();
+            return Ok(scope);
+        }
         if mesh.mesh_parts.iter().any(|part| part.id == entity_id) {
             return resolve_part_scope(mesh, entity_id, "selection");
         }
@@ -3996,14 +4015,10 @@ fn resolve_selection_scope(
         }
     }
     if let Some(node_id) = selection.selected_node_id.as_deref() {
-        if node_id == "universe-airbox" || node_id == "universe-airbox-mesh" {
-            let air_part_id = mesh
-                .mesh_parts
-                .iter()
-                .find(|part| part.role == "air")
-                .map(|part| part.id.clone())
-                .ok_or_else(|| ApiError::not_found("airbox mesh part not found"))?;
-            return resolve_part_scope(mesh, &air_part_id, "selection");
+        if is_airbox_selection_id(node_id) {
+            let mut scope = resolve_airbox_scope(mesh, Some("airbox"), false)?;
+            scope.kind = "selection".to_string();
+            return Ok(scope);
         }
         if mesh.mesh_parts.iter().any(|part| part.id == node_id) {
             return resolve_part_scope(mesh, node_id, "selection");
@@ -8470,6 +8485,45 @@ mod tests {
         let mut snapshot = default_current_live_state(&request);
         snapshot.fem_mesh = Some(mesh);
 
+        let aggregate_scope = resolve_field_scope(
+            &FieldVectorQuery {
+                component: Some("full".to_string()),
+                geometry_scope: None,
+                max_samples: None,
+                phase_rad: None,
+                scope_id: Some("airbox".to_string()),
+                owner_object_id: None,
+                scope_kind: Some("airbox".to_string()),
+                snapshot_id: None,
+                stage_id: None,
+                view: None,
+                expected_generation_id: None,
+                expected_carrier_revision: None,
+            },
+            &snapshot,
+            None,
+            8,
+            "H_demag",
+            None,
+        )
+        .expect("canonical airbox scope should resolve")
+        .expect("canonical airbox scope should be scoped");
+
+        assert_eq!(aggregate_scope.id.as_deref(), Some("airbox"));
+        assert_eq!(aggregate_scope.node_indices, vec![4, 5, 6, 7]);
+        assert_eq!(aggregate_scope.value_indices, vec![4, 5, 6, 7]);
+
+        let selection = super::resolve_selection_scope(
+            &snapshot.fem_mesh.as_ref().unwrap(),
+            &crate::schemas::workspace::WorkspaceSelectionResource {
+                selected_node_id: Some("universe-airbox".to_string()),
+                ..Default::default()
+            },
+        )
+        .expect("canonical Airbox selection should resolve");
+        assert_eq!(selection.kind, "selection");
+        assert_eq!(selection.id.as_deref(), Some("airbox"));
+        assert_eq!(selection.node_indices, vec![4, 5, 6, 7]);
         let scope = resolve_field_scope(
             &FieldVectorQuery {
                 component: Some("full".to_string()),
@@ -9020,4 +9074,7 @@ mod tests {
             error.message
         );
     }
+}
+fn is_airbox_selection_id(id: &str) -> bool {
+    matches!(id, "universe-airbox" | "universe-airbox-mesh")
 }

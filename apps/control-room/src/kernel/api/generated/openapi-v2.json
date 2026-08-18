@@ -6474,7 +6474,7 @@
             ]
           },
           "geometry_scope": {
-            "description": "Optional geometric subset for scoped vector samples.\n\nAccepted values: `full` (default) and `surface`. `surface` is currently\nsupported for `airbox` scope and is resolved from the selected mesh\npart's canonical surface-node membership before `max_samples` is applied.",
+            "description": "Optional geometric subset for scoped vector samples.\n\nAccepted values: `full` (default) and `surface`. `surface` is currently\nAccepted values: `full` (default) and `surface`. `surface` is currently\nsupported for `airbox` scope and is resolved from the union of the\nselected air-part surface-node memberships before `max_samples` is applied.",
             "type": [
               "string",
               "null"
@@ -6505,14 +6505,14 @@
             ]
           },
           "scope_id": {
-            "description": "Scope identifier for `object`, `region`, and `part` scopes.",
+            "description": "Scope identifier for `object`, `region`, and `part` scopes. For `airbox`,\nomit it or use `airbox` for the aggregate, or pass an explicit air-part id.",
             "type": [
               "string",
               "null"
             ]
           },
           "scope_kind": {
-            "description": "Optional FEM or FDM scope for large-domain samples.\n\nAccepted values: `full`, `object`, `region`, `part`, `layer`, `airbox`,\n`selection`. Single-grid FDM supports `object`, `region`, and `airbox`\nfrom current FMRM membership. Multilayer FDM supports native `layer`\nand `object` scopes without projecting payloads onto the common grid.\n`object` and `part` require `scope_id`; `airbox` may omit it and resolves\nto the first mesh part with role `air`; `selection` resolves from the\ncurrent workspace selection.",
+            "description": "Optional FEM or FDM scope for large-domain samples.\n\nAccepted values: `full`, `object`, `region`, `part`, `layer`, `airbox`,\n`selection`. Single-grid FDM supports `object`, `region`, and `airbox`\nfrom current FMRM membership. Multilayer FDM supports native `layer`\nand `object` scopes without projecting payloads onto the common grid.\n`object` and `part` require `scope_id`; `airbox` may omit it and resolves\nto the aggregate of all FEM mesh parts with role `air`, while an explicit\nAirbox mesh-part `scope_id` selects exactly that part; `selection` resolves\nfrom the current workspace selection.",
             "type": [
               "string",
               "null"
@@ -13974,6 +13974,16 @@
               "null"
             ]
           },
+          "topology_counts": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/MeshTopologyCountsResource"
+              }
+            ]
+          },
           "topology_fingerprint": {
             "type": "string"
           },
@@ -14180,6 +14190,31 @@
         },
         "required": [
           "geometry_name"
+        ],
+        "type": "object"
+      },
+      "MeshTopologyCountsResource": {
+        "properties": {
+          "boundary_face_count": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "element_count": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "node_count": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "node_count",
+          "element_count",
+          "boundary_face_count"
         ],
         "type": "object"
       },
@@ -30743,7 +30778,7 @@
             }
           },
           {
-            "description": "Scope identity for object, region, part, and native layer carriers.",
+            "description": "Scope identity for object, region, part, and native layer carriers. For\n`airbox`, omit it or use `airbox` for the aggregate Airbox carrier scope.",
             "in": "query",
             "name": "scope_id",
             "required": false,
@@ -35821,7 +35856,7 @@
             }
           },
           {
-            "description": "Optional FEM or FDM scope for large-domain samples.\n\nAccepted values: `full`, `object`, `region`, `part`, `layer`, `airbox`,\n`selection`. Single-grid FDM supports `object`, `region`, and `airbox`\nfrom current FMRM membership. Multilayer FDM supports native `layer`\nand `object` scopes without projecting payloads onto the common grid.\n`object` and `part` require `scope_id`; `airbox` may omit it and resolves\nto the first mesh part with role `air`; `selection` resolves from the\ncurrent workspace selection.",
+            "description": "Optional FEM or FDM scope for large-domain samples.\n\nAccepted values: `full`, `object`, `region`, `part`, `layer`, `airbox`,\n`selection`. Single-grid FDM supports `object`, `region`, and `airbox`\nfrom current FMRM membership. Multilayer FDM supports native `layer`\nand `object` scopes without projecting payloads onto the common grid.\n`object` and `part` require `scope_id`; `airbox` may omit it and resolves\nto the aggregate of all FEM mesh parts with role `air`, while an explicit\nAirbox mesh-part `scope_id` selects exactly that part; `selection` resolves\nfrom the current workspace selection.",
             "in": "query",
             "name": "scope_kind",
             "required": false,
@@ -35833,7 +35868,7 @@
             }
           },
           {
-            "description": "Scope identifier for `object`, `region`, and `part` scopes.",
+            "description": "Scope identifier for `object`, `region`, and `part` scopes. For `airbox`,\nomit it or use `airbox` for the aggregate, or pass an explicit air-part id.",
             "in": "query",
             "name": "scope_id",
             "required": false,
@@ -35857,7 +35892,7 @@
             }
           },
           {
-            "description": "Optional geometric subset for scoped vector samples.\n\nAccepted values: `full` (default) and `surface`. `surface` is currently\nsupported for `airbox` scope and is resolved from the selected mesh\npart's canonical surface-node membership before `max_samples` is applied.",
+            "description": "Optional geometric subset for scoped vector samples.\n\nAccepted values: `full` (default) and `surface`. `surface` is currently\nAccepted values: `full` (default) and `surface`. `surface` is currently\nsupported for `airbox` scope and is resolved from the union of the\nselected air-part surface-node memberships before `max_samples` is applied.",
             "in": "query",
             "name": "geometry_scope",
             "required": false,
@@ -42440,8 +42475,8 @@
     }
   ],
   "x-fullmag-build-identity": {
-    "built_at_utc": "2026-08-17T11:09:01Z",
-    "git_commit": "439976a40351fedc5a0cc69b3c791d0f92912869",
+    "built_at_utc": "2026-08-18T12:35:19Z",
+    "git_commit": "737c518b4bc6cce538bfc22aa90fd1d1a016b3e0",
     "source_snapshot_sha256": "unknown",
     "worktree_state": "dirty"
   },

@@ -206,8 +206,8 @@ export function MeshDetailsPanel({ selection }: InspectorPanelProps) {
       {showSection("counts") ? (
         <MeshCountsExtentsSection
           edgeLength={model.qualityStatistics?.edgeLength ?? null}
+          topologyCounts={model.manifest?.topology_counts}
           meshStatistics={model.meshStatistics}
-          meshSummary={model.meshSummary}
         />
       ) : null}
       {showSection("pipeline") ? (

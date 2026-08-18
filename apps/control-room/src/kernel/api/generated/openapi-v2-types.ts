@@ -5129,8 +5129,9 @@ export interface components {
              * @description Optional geometric subset for scoped vector samples.
              *
              *     Accepted values: `full` (default) and `surface`. `surface` is currently
-             *     supported for `airbox` scope and is resolved from the selected mesh
-             *     part's canonical surface-node membership before `max_samples` is applied.
+             *     Accepted values: `full` (default) and `surface`. `surface` is currently
+             *     supported for `airbox` scope and is resolved from the union of the
+             *     selected air-part surface-node memberships before `max_samples` is applied.
              */
             geometry_scope?: string | null;
             /**
@@ -5163,7 +5164,10 @@ export interface components {
              * @description Phase angle in radians for `view=phase_rotated_real`.
              */
             phase_rad?: number | null;
-            /** @description Scope identifier for `object`, `region`, and `part` scopes. */
+            /**
+             * @description Scope identifier for `object`, `region`, and `part` scopes. For `airbox`,
+             *     omit it or use `airbox` for the aggregate, or pass an explicit air-part id.
+             */
             scope_id?: string | null;
             /**
              * @description Optional FEM or FDM scope for large-domain samples.
@@ -5173,8 +5177,9 @@ export interface components {
              *     from current FMRM membership. Multilayer FDM supports native `layer`
              *     and `object` scopes without projecting payloads onto the common grid.
              *     `object` and `part` require `scope_id`; `airbox` may omit it and resolves
-             *     to the first mesh part with role `air`; `selection` resolves from the
-             *     current workspace selection.
+             *     to the aggregate of all FEM mesh parts with role `air`, while an explicit
+             *     Airbox mesh-part `scope_id` selects exactly that part; `selection` resolves
+             *     from the current workspace selection.
              */
             scope_kind?: string | null;
             /**
@@ -7000,6 +7005,7 @@ export interface components {
             revision: number;
             /** Format: int64 */
             source_scene_revision?: number | null;
+            topology_counts?: null | components["schemas"]["MeshTopologyCountsResource"];
             topology_fingerprint: string;
             /** Format: int32 */
             topology_schema_version?: number | null;
@@ -7057,6 +7063,14 @@ export interface components {
             /** Format: double */
             thickness?: number | null;
             warnings?: string[];
+        };
+        MeshTopologyCountsResource: {
+            /** Format: int64 */
+            boundary_face_count: number;
+            /** Format: int64 */
+            element_count: number;
+            /** Format: int64 */
+            node_count: number;
         };
         MeshUniverseConfigReplaceRequest: {
             config: {
@@ -12504,7 +12518,10 @@ export interface operations {
                 target_id?: string | null;
                 /** @description Field carrier scope. Defaults to the complete domain carrier. */
                 scope_kind?: string | null;
-                /** @description Scope identity for object, region, part, and native layer carriers. */
+                /**
+                 * @description Scope identity for object, region, part, and native layer carriers. For
+                 *     `airbox`, omit it or use `airbox` for the aggregate Airbox carrier scope.
+                 */
                 scope_id?: string | null;
                 /** @description Optional owner used to disambiguate duplicate FDM region identifiers. */
                 owner_object_id?: string | null;
@@ -14514,11 +14531,15 @@ export interface operations {
                  *     from current FMRM membership. Multilayer FDM supports native `layer`
                  *     and `object` scopes without projecting payloads onto the common grid.
                  *     `object` and `part` require `scope_id`; `airbox` may omit it and resolves
-                 *     to the first mesh part with role `air`; `selection` resolves from the
-                 *     current workspace selection.
+                 *     to the aggregate of all FEM mesh parts with role `air`, while an explicit
+                 *     Airbox mesh-part `scope_id` selects exactly that part; `selection` resolves
+                 *     from the current workspace selection.
                  */
                 scope_kind?: string | null;
-                /** @description Scope identifier for `object`, `region`, and `part` scopes. */
+                /**
+                 * @description Scope identifier for `object`, `region`, and `part` scopes. For `airbox`,
+                 *     omit it or use `airbox` for the aggregate, or pass an explicit air-part id.
+                 */
                 scope_id?: string | null;
                 /**
                  * @description Optional canonical owner of a `region` scope.
@@ -14532,8 +14553,9 @@ export interface operations {
                  * @description Optional geometric subset for scoped vector samples.
                  *
                  *     Accepted values: `full` (default) and `surface`. `surface` is currently
-                 *     supported for `airbox` scope and is resolved from the selected mesh
-                 *     part's canonical surface-node membership before `max_samples` is applied.
+                 *     Accepted values: `full` (default) and `surface`. `surface` is currently
+                 *     supported for `airbox` scope and is resolved from the union of the
+                 *     selected air-part surface-node memberships before `max_samples` is applied.
                  */
                 geometry_scope?: string | null;
                 /**

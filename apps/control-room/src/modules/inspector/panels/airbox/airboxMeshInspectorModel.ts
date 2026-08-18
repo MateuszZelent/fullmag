@@ -18,6 +18,16 @@ type AirboxMeshPart = NonNullable<
   MeshSharedDomainManifestResource["mesh_parts"]
 >[number];
 
+export interface AirboxMeshPartsAggregate {
+  boundaryFaceCount: number | null;
+  carrierCount: number;
+  elementCount: number | null;
+  nodeCount: number | null;
+  nodeCountExact: boolean;
+  partIds: readonly string[];
+  surfaceFaceCount: number | null;
+}
+
 type JsonRecord = Record<string, unknown>;
 
 export interface AirboxMeshBuildModel {
@@ -231,6 +241,7 @@ function boundedRawAggregate(value: Record<string, unknown>): AirboxMeshBuildMod
 
 export interface AirboxMeshInspectorModel {
   airboxPart: AirboxMeshPart | null;
+  airboxParts: readonly AirboxMeshPart[];
   build: {
     reason: string;
     revision: number | null;
@@ -257,7 +268,7 @@ export interface AirboxMeshInspectorModel {
     pyramid5Count: number | null;
     surfaceFaceCount: number | null;
     tet4Count: number | null;
-    volumeElementCountScope: "airbox-part" | "shared-domain" | "unpublished";
+    volumeElementCountScope: "airbox-parts" | "shared-domain" | "unpublished";
     volumeElementsByType: readonly { count: number; family: string }[];
   };
   topology: {
@@ -281,6 +292,154 @@ export function findCanonicalAirboxPart(
   );
 }
 
+export function findAirboxParts(
+  parts: readonly AirboxMeshPart[] | null | undefined,
+): AirboxMeshPart[] {
+  return (
+    parts?.filter(
+      (part) =>
+        isVisualizationAirboxRole(part.role) || isVisualizationAirboxId(part.id),
+    ) ?? []
+  );
+}
+
+export function aggregateAirboxMeshParts(
+  parts: readonly AirboxMeshPart[] | null | undefined,
+): AirboxMeshPartsAggregate {
+  const airboxParts = findAirboxParts(parts);
+  const nodeCoverage = resolveAirboxNodeCoverage(airboxParts);
+  return {
+    boundaryFaceCount: sumPartCount(airboxParts, "boundary_face_count"),
+    carrierCount: airboxParts.length,
+    elementCount: sumPartCount(airboxParts, "element_count"),
+    nodeCount: nodeCoverage.count,
+    nodeCountExact: nodeCoverage.exact,
+    partIds: airboxParts.map((part) => part.id),
+    surfaceFaceCount: sumSurfaceFaceCount(airboxParts),
+  };
+}
+
+function sumPartCount(
+  parts: readonly AirboxMeshPart[],
+  key: "boundary_face_count" | "element_count",
+): number | null {
+  if (!parts.length) return null;
+  let total = 0;
+  for (const part of parts) {
+    const count = safeMeshCount(part[key]);
+    if (count === null || total > Number.MAX_SAFE_INTEGER - count) return null;
+    total += count;
+  }
+  return total;
+}
+
+function sumSurfaceFaceCount(parts: readonly AirboxMeshPart[]): number | null {
+  if (!parts.length || parts.some((part) => !Array.isArray(part.surface_faces))) {
+    return null;
+  }
+  let total = 0;
+  for (const part of parts) {
+    const count = part.surface_faces?.length ?? 0;
+    if (total > Number.MAX_SAFE_INTEGER - count) return null;
+    total += count;
+  }
+  return total;
+}
+
+function resolveAirboxNodeCoverage(parts: readonly AirboxMeshPart[]): {
+  count: number | null;
+  exact: boolean;
+} {
+  if (!parts.length) return { count: null, exact: false };
+  const intervals: Array<readonly [number, number]> = [];
+  for (const part of parts) {
+    const explicit = part.node_indices ?? [];
+    const declaredCount = safeMeshCount(part.node_count);
+    if (explicit.length > 0 && declaredCount === explicit.length) {
+      const indices = explicit.map((index) => safeMeshCount(index));
+      if (indices.some((index): index is null => index === null)) {
+        return { count: null, exact: false };
+      }
+      const sorted = [...(indices as number[])].sort((a, b) => a - b);
+      let start = sorted[0];
+      let previous = sorted[0];
+      for (const index of sorted.slice(1)) {
+        if (index > previous + 1) {
+          intervals.push([start, previous + 1]);
+          start = index;
+        }
+        previous = index;
+      }
+      intervals.push([start, previous + 1]);
+      continue;
+    }
+
+    const start = safeMeshCount(part.node_start);
+    const count = safeMeshCount(part.node_count);
+    if (
+      start === null ||
+      count === null ||
+      start > Number.MAX_SAFE_INTEGER - count
+    ) {
+      return { count: null, exact: false };
+    }
+    if (count > 0) intervals.push([start, start + count]);
+  }
+
+  intervals.sort((a, b) => a[0] - b[0] || a[1] - b[1]);
+  let total = 0;
+  let currentStart: number | null = null;
+  let currentEnd: number | null = null;
+  for (const [start, end] of intervals) {
+    if (currentStart === null || currentEnd === null) {
+      currentStart = start;
+      currentEnd = end;
+      continue;
+    }
+    if (start > currentEnd) {
+      total += currentEnd - currentStart;
+      currentStart = start;
+      currentEnd = end;
+    } else if (end > currentEnd) {
+      currentEnd = end;
+    }
+  }
+  if (currentStart !== null && currentEnd !== null) {
+    total += currentEnd - currentStart;
+  }
+  return Number.isSafeInteger(total)
+    ? { count: total, exact: true }
+    : { count: null, exact: false };
+}
+
+function aggregateElementCountsByType(
+  parts: readonly AirboxMeshPart[],
+): JsonRecord | null {
+  if (!parts.length) return null;
+  const aggregate: JsonRecord = {};
+  for (const part of parts) {
+    const counts = asJsonRecord(asJsonRecord(part)?.element_counts_by_type);
+    if (!counts) return null;
+    for (const [family, rawCount] of Object.entries(counts)) {
+      const count = safeMeshCount(rawCount);
+      if (count === null) return null;
+      const previous = aggregate[family];
+      const previousCount = previous === undefined ? 0 : safeMeshCount(previous);
+      if (previousCount === null || previousCount > Number.MAX_SAFE_INTEGER - count) {
+        return null;
+      }
+      aggregate[family] = previousCount + count;
+    }
+  }
+  return Object.keys(aggregate).length ? aggregate : null;
+}
+
+function safeMeshCount(value: unknown): number | null {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0
+    ? value
+    : null;
+}
+
 export function buildAirboxMeshInspectorModel({
   manifest,
   policy,
@@ -295,6 +454,8 @@ export function buildAirboxMeshInspectorModel({
   summary: MeshSummaryResource | null;
 }): AirboxMeshInspectorModel {
   const airboxPart = findCanonicalAirboxPart(manifest?.mesh_parts);
+  const airboxParts = findAirboxParts(manifest?.mesh_parts);
+  const meshPartAggregate = aggregateAirboxMeshParts(airboxParts);
   const reportRecord = asJsonRecord(report?.report);
   const qualityRecord = asJsonRecord(quality?.quality);
   const resolvedTarget = asJsonRecord(summary?.effective_airbox_target);
@@ -310,17 +471,14 @@ export function buildAirboxMeshInspectorModel({
   const reportError = stringField(reportRecord, "error");
   const reportDegraded =
     isDegradedBuildStatus(reportStatus) || reportError !== null;
-  const airboxPartRecord = asJsonRecord(airboxPart);
-  const airboxElementCountsByType = asJsonRecord(
-    airboxPartRecord?.element_counts_by_type,
-  );
+  const airboxElementCountsByType = aggregateElementCountsByType(airboxParts);
   const sharedDomainElementCountsByType = asJsonRecord(
     asJsonRecord(manifest)?.element_counts_by_type,
   );
   const elementCountsByType =
-    airboxElementCountsByType ?? sharedDomainElementCountsByType;
+    aggregateElementCountsByType(airboxParts) ?? sharedDomainElementCountsByType;
   const volumeElementCountScope = airboxElementCountsByType
-    ? "airbox-part"
+    ? "airbox-parts"
     : sharedDomainElementCountsByType
       ? "shared-domain"
       : "unpublished";
@@ -332,6 +490,7 @@ export function buildAirboxMeshInspectorModel({
 
   return {
     airboxPart,
+    airboxParts,
     build: !report
       ? { reason: "Universe mesh report is not available.", revision: null, status: "missing" }
       : reportDegraded
@@ -365,11 +524,11 @@ export function buildAirboxMeshInspectorModel({
     },
     qualityGates: buildAirboxQualityGateModel(qualityRecord),
     statistics: {
-      boundaryFaceCount: airboxPart?.boundary_face_count ?? null,
-      elementCount: airboxPart?.element_count ?? null,
-      nodeCount: airboxPart?.node_count ?? null,
+      boundaryFaceCount: meshPartAggregate.boundaryFaceCount,
+      elementCount: meshPartAggregate.elementCount,
+      nodeCount: meshPartAggregate.nodeCount,
       pyramid5Count: numericField(elementCountsByType, "pyramid5"),
-      surfaceFaceCount: airboxPart?.surface_faces?.length ?? null,
+      surfaceFaceCount: meshPartAggregate.surfaceFaceCount,
       tet4Count: numericField(elementCountsByType, "tet4"),
       volumeElementCountScope,
       volumeElementsByType,

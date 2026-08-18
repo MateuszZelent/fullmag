@@ -43,8 +43,8 @@ use crate::schemas::mesh::{
     MeshSharedDomainConfigReplaceRequest, MeshSharedDomainConfigResource,
     MeshSharedDomainManifestResource, MeshSharedDomainQualityResource,
     MeshSharedDomainReportResource, MeshSolverMeshResource, MeshSummaryResource,
-    MeshUniverseConfigReplaceRequest, MeshUniverseConfigResource, MeshUniverseQualityResource,
-    MeshUniverseReportResource, PeriodicValidationStatus,
+    MeshTopologyCountsResource, MeshUniverseConfigReplaceRequest, MeshUniverseConfigResource,
+    MeshUniverseQualityResource, MeshUniverseReportResource, PeriodicValidationStatus,
 };
 use crate::session::current_artifact_dir;
 use crate::types::{AppState, SessionStateResponse};
@@ -1939,6 +1939,7 @@ pub async fn get_mesh_shared_domain_manifest(
                 mesh_id: mesh.mesh_id.clone(),
                 topology_fingerprint: topology_hash.clone(),
                 topology_schema_version: Some(2),
+                topology_counts: Some(mesh_topology_counts(mesh)),
                 element_counts_by_type: topology_truth
                     .as_ref()
                     .map(|truth| truth.element_counts_by_type.clone())
@@ -2026,6 +2027,13 @@ pub async fn get_mesh_shared_domain_manifest(
     }
 }
 
+fn mesh_topology_counts(mesh: &FemMeshPayload) -> MeshTopologyCountsResource {
+    MeshTopologyCountsResource {
+        node_count: mesh.nodes.len() as u64,
+        element_count: mesh.cell_count() as u64,
+        boundary_face_count: mesh.facet_count() as u64,
+    }
+}
 fn mesh_part_family_counts(
     mesh: &FemMeshPayload,
     part: &FemMeshPartPayload,
@@ -4954,6 +4962,39 @@ fn collect_part_source_node_indices(
 mod tests {
     use super::*;
 
+    #[test]
+    fn shared_domain_manifest_counts_are_global_topology_counts() {
+        let mesh = FemMeshPayload {
+            mesh_name: "counts-test".to_string(),
+            mesh_id: "counts-test:1".to_string(),
+            nodes: vec![[0.0, 0.0, 0.0]; 5],
+            cells: fullmag_ir::FemConnectivityIR::from_tet4(vec![[0, 1, 2, 3], [1, 2, 3, 4]]),
+            element_markers: Vec::new(),
+            facets: fullmag_ir::FemFacetConnectivityIR::from_tri3(vec![
+                [0, 1, 2],
+                [1, 2, 3],
+                [2, 3, 4],
+            ]),
+            boundary_markers: Vec::new(),
+            periodic_boundary_pairs: Vec::new(),
+            periodic_node_pairs: Vec::new(),
+            object_segments: Vec::new(),
+            mesh_parts: Vec::new(),
+            domain_mesh_mode: Some("shared_domain".to_string()),
+            domain_frame: None,
+            generation_id: Some("counts-generation".to_string()),
+            per_domain_quality: Default::default(),
+            build_report: None,
+        };
+        assert_eq!(
+            mesh_topology_counts(&mesh),
+            MeshTopologyCountsResource {
+                node_count: 5,
+                element_count: 2,
+                boundary_face_count: 3,
+            }
+        );
+    }
     #[test]
     fn periodic_pairs_etag_binds_generation_certificate_and_status() {
         let resource = MeshPeriodicPairsResource {

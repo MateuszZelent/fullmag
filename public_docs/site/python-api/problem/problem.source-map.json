@@ -305,6 +305,26 @@
         "meaning": "Requested periodic axes; canonical PBC section and backend capability checks.",
         "backend_support": "FEM/FDM CPU/GPU; planner checks combinations",
         "problem_ir": "backend_policy.pbc"
+      },
+      {
+        "python": "Problem.auxiliary_geometry_roles",
+        "type": "mapping",
+        "default": "{}",
+        "si_unit": "1",
+        "validation": "Maps auxiliary geometry names to roles; unknown names fail.",
+        "meaning": "Maps auxiliary geometry names to roles; unknown names fail.",
+        "backend_support": "FEM/FDM CPU/GPU; planner checks combinations",
+        "problem_ir": "geometry.entries[].type"
+      },
+      {
+        "python": "Problem.spin_torque_activation",
+        "type": "mapping",
+        "default": "{}",
+        "si_unit": "1",
+        "validation": "Stage-local activation for canonical torque modules; unknown ids fail.",
+        "meaning": "Stage-local activation for canonical torque modules; unknown ids fail.",
+        "backend_support": "FEM/FDM CPU/GPU; planner checks combinations",
+        "problem_ir": "study.spin_torques"
       }
     ]
   }

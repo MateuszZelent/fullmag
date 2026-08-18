@@ -6,7 +6,7 @@ import { shouldLoadRuntimeMeshManifest } from "@/kernel/resources/studyRuntimeRe
 import type { InspectorPanelProps } from "../../inspectorTypes";
 import { AirboxFieldRow as FieldRow } from "./airboxDisplay";
 import { InspectorGroup } from "../../primitives/InspectorGroup";
-import { findCanonicalAirboxPart } from "./airboxMeshInspectorModel";
+import { aggregateAirboxMeshParts, findCanonicalAirboxPart, findAirboxParts } from "./airboxMeshInspectorModel";
 import { useAirboxInspectorRuntimeStatus } from "./airboxInspectorRuntimeStatus";
 
 const vector = (value: readonly number[] | null | undefined) =>
@@ -18,6 +18,8 @@ export function AirboxMeshTopologyPanel({ selection }: InspectorPanelProps) {
   const manifest = useMeshSharedDomainManifestResource({
     enabled: shouldLoadRuntimeMeshManifest(true, runtimeStatus),
   });
+  const airboxParts = findAirboxParts(manifest.data?.mesh_parts);
+  const aggregate = aggregateAirboxMeshParts(airboxParts);
   const part = findCanonicalAirboxPart(manifest.data?.mesh_parts);
 
   return (
@@ -33,13 +35,33 @@ export function AirboxMeshTopologyPanel({ selection }: InspectorPanelProps) {
         <FieldRow label="Topology fingerprint" value={manifest.data?.topology_fingerprint ?? "not available"} />
         <FieldRow label="Carrier id" value={part?.id ?? "not available"} />
         <FieldRow label="Carrier role" value={part?.role ?? "not available"} />
+        <FieldRow label="Carrier count" value={aggregate.carrierCount.toLocaleString("en-US")} />
         <FieldRow label="Bounds min" value={vector(part?.bounds_min)} unit="m" />
         <FieldRow label="Bounds max" value={vector(part?.bounds_max)} unit="m" />
         <FieldRow
           label="Node source"
-          value={part?.node_indices?.length ? "explicit node_indices" : part ? "node_start/node_count range" : "not available"}
+          value={
+            part?.node_indices?.length
+              ? aggregate.carrierCount === 1
+                ? "explicit node_indices; deduplicated published carrier coverage"
+                : "explicit per-carrier node_indices; deduplicated published carrier coverage"
+              : aggregate.nodeCountExact
+                ? "deduplicated published carrier coverage"
+                : "not fully published"
+          }
         />
-        <FieldRow label="Boundary-face source" value={part?.boundary_face_indices?.length ? "explicit boundary_face_indices" : part ? "boundary_face_start/boundary_face_count range" : "not available"} />
+        <FieldRow
+          label="Boundary-face source"
+          value={
+            part?.boundary_face_indices?.length
+              ? aggregate.carrierCount === 1
+                ? "explicit boundary_face_indices"
+                : "explicit per-carrier boundary_face_indices"
+              : aggregate.carrierCount
+                ? "published per-carrier ranges"
+                : "not available"
+          }
+        />
         <FieldRow label="Shared-interface caveat" value="Interface nodes belong to the shared-domain mesh and are not exclusive Airbox ownership." />
         <FieldRow label="Topology source" value="shared-domain manifest metadata (binary topology is not refetched)" />
       </InspectorGroup>

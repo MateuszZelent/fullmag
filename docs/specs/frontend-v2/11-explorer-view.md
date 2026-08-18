@@ -132,7 +132,7 @@ The explorer does not own visibility or display style. It only exposes the node 
 selects an observation-only inspector for the same canonical target as its
 parent; it is not another appearance-settings page and does not create a second
 target for a mesh carrier. In particular, Airbox Debug selects target `airbox`
-and must report `part:__air__` separately as its data-plane carrier.
+and must report all of its mesh-part carriers separately as data-plane carriers.
 
 The Model tree and stable node ids are:
 

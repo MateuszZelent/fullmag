@@ -35,12 +35,14 @@ export function AirboxMeshStatisticsPanel({ selection }: InspectorPanelProps) {
     summary: null,
   });
   const statistics = normalizeMeshQualityStatistics(quality.data?.quality);
+  const warnings = boundedItems(statistics?.warnings ?? []);
+  const warningOccurrences = new Map<string, number>();
 
   return (
     <div className="fm-inspector-panel grid min-w-0 gap-fm-inspector-group">
       <InspectorGroup title="Airbox Mesh Statistics" badge={manifest.status}>
-        <FieldRow label="Points / nodes" value={formatCount(model.statistics.nodeCount)} />
-        <FieldRow label="Volume elements" value={formatCount(model.statistics.elementCount)} />
+        <FieldRow label="Points / nodes (unique across carriers)" value={formatCount(model.statistics.nodeCount)} />
+        <FieldRow label="Volume elements (all carriers)" value={formatCount(model.statistics.elementCount)} />
         {model.statistics.volumeElementsByType.map(({ count, family }) => (
           <FieldRow
             key={family}
@@ -72,9 +74,13 @@ export function AirboxMeshStatisticsPanel({ selection }: InspectorPanelProps) {
         {boundedItems(statistics?.sizeDistributions ?? []).map((distribution) => (
           <FieldRow key={distribution.id} label={distribution.label} value={`min ${distribution.min ?? "unknown"}; mean ${distribution.mean ?? "unknown"}; max ${distribution.max ?? "unknown"}`} />
         ))}
-        {boundedItems(statistics?.warnings ?? []).map((warning, index) => (
-          <FieldRow key={index} label={`Warning ${index + 1}`} value={warning} />
-        ))}
+        {warnings.map((warning) => {
+          const occurrence = warningOccurrences.get(warning) ?? 0;
+          warningOccurrences.set(warning, occurrence + 1);
+          return (
+            <FieldRow key={`${warning}:${occurrence}`} label={`Warning ${occurrence + 1}`} value={warning} />
+          );
+        })}
       </InspectorGroup>
     </div>
   );
