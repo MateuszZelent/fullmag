@@ -51,7 +51,13 @@ fn default_slice_coordinate(
                 "planar_default_grid_invalid: structured FDM grid shape, origin, and spacing must be valid",
             ));
         }
-        let grid_max = origin + f64::from(count) * spacing;
+        let grid_extent = f64::from(count) * spacing;
+        let grid_max = origin + grid_extent;
+        if !grid_extent.is_finite() || !grid_max.is_finite() {
+            return Err(ApiError::unprocessable(
+                "planar_default_grid_invalid: structured FDM grid extent must be finite",
+            ));
+        }
         let scale = origin
             .abs()
             .max(grid_max.abs())
@@ -76,7 +82,13 @@ fn default_slice_coordinate(
         scaled.ceil() as u32 - 1
     }
     .min(count - 1);
-    Ok(grid.origin[axis] + (f64::from(index) + 0.5) * grid.spacing[axis])
+    let coordinate = grid.origin[axis] + (f64::from(index) + 0.5) * grid.spacing[axis];
+    if !coordinate.is_finite() {
+        return Err(ApiError::unprocessable(
+            "planar_default_grid_invalid: structured FDM cell center must be finite",
+        ));
+    }
+    Ok(coordinate)
 }
 pub(crate) fn resolve_default_planar_source(
     domain: &DomainMeta,
@@ -651,6 +663,29 @@ mod tests {
             ),
         )
         .unwrap_err();
+        assert!(error.message.starts_with("planar_default_grid_invalid:"));
+    }
+
+    #[test]
+    fn default_fdm_slice_rejects_overflowing_grid_extent() {
+        let mut invalid = domain([0.0; 3], [f64::MAX; 3], "generation-a");
+        invalid.grid = Some(StructuredGridDescriptor {
+            shape: [2, 2, 2],
+            origin: [0.0; 3],
+            spacing: [f64::MAX; 3],
+        });
+
+        let error = resolve_default_planar_source(
+            &invalid,
+            &slice(
+                PlanarAxisPlane::Xy,
+                1.0,
+                DefaultPlanarOperatorState::PlaneSample,
+            ),
+        )
+        .expect_err("overflowing structured grid extent must be rejected");
+
+        assert_eq!(error.status, axum::http::StatusCode::UNPROCESSABLE_ENTITY);
         assert!(error.message.starts_with("planar_default_grid_invalid:"));
     }
 
