@@ -1,4 +1,4 @@
-import { act } from "react";
+import { act, type ReactNode } from "react";
 import { createRoot, hydrateRoot } from "react-dom/client";
 import { renderToStaticMarkup, renderToString } from "react-dom/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -9,6 +9,7 @@ import FieldMapModule from "./FieldMapModule";
 
 const mocks = vi.hoisted(() => ({
   meta: vi.fn(),
+  probeData: null as null | { occupancy: string; scalar: number | null; u_m: number; v_m: number },
   queuePatch: vi.fn(),
   renderModel: vi.fn(),
   renderReady: false,
@@ -49,9 +50,20 @@ vi.mock("./model/fieldMapRenderModel", () => ({
 }));
 
 vi.mock("./renderer/PlanarSurface", () => ({
-  PlanarSurface: ({ model }: { model: unknown }) => {
+  PlanarSurface: ({
+    model,
+    probeOverlay,
+  }: {
+    model: unknown;
+    probeOverlay?: ReactNode;
+  }) => {
     mocks.surface(model);
-    return <output data-planar-render-layers={JSON.stringify((model as { layers: unknown }).layers)} />;
+    return (
+      <div className="fm-field-map__canvas-stack">
+        <output data-planar-render-layers={JSON.stringify((model as { layers: unknown }).layers)} />
+        {probeOverlay}
+      </div>
+    );
   },
 }));
 
@@ -85,7 +97,7 @@ vi.mock("@/kernel/resources/planarFieldResources", () => ({
             frame: {
               bounds_uv_m: [0, 1, 0, 1],
               normal: [0, 0, 1],
-              origin_m: isDefault ? [11, 22, 32] : undefined,
+              origin_m: isDefault ? [11, 22, 32] : [0, 0, 0],
               u_axis: [1, 0, 0],
               v_axis: [0, 1, 0],
             },
@@ -120,7 +132,7 @@ vi.mock("@/kernel/resources/planarFieldResources", () => ({
   },
   usePlanarMaskResource: () => ({ data: null, error: null, status: "idle" }),
   usePlanarMeshOverlayResource: () => ({ data: null, error: null, status: "idle" }),
-  usePlanarProbeResource: () => ({ data: null, error: null, status: "idle" }),
+  usePlanarProbeResource: () => ({ data: mocks.probeData, error: null, status: mocks.probeData ? "ready" : "idle" }),
   usePlanarScalarResource: () => mocks.renderReady
     ? { data: { data: new ArrayBuffer(8), etag: "scalar-authoritative" }, error: null, status: "ready" }
     : { data: null, error: null, status: "idle" },
@@ -160,6 +172,7 @@ describe("FieldMapModule planar state ownership", () => {
     mocks.visualization.status = "loading";
     mocks.visualization.optimisticData = null;
     mocks.renderReady = false;
+    mocks.probeData = null;
   });
 
   it("does not invent a quantity or component while the server profile is loading", () => {
@@ -273,6 +286,9 @@ describe("FieldMapModule planar state ownership", () => {
     expect(html).toContain('data-planar-field-device="cpu"');
     expect(html).toContain('data-planar-field-precision="double"');
     expect(html).toContain('data-planar-sample-token="planar-sample-v3:current"');
+    expect(mocks.renderModel).toHaveBeenCalledWith(expect.objectContaining({
+      frame: expect.objectContaining({ origin: [11, 22, 32] }),
+    }));
   });
 
   it("does not duplicate Inspector-owned planar selection controls", () => {
@@ -308,14 +324,14 @@ describe("FieldMapModule planar state ownership", () => {
     }
   });
 
-  it("renders a 3D-style scalar colorbar with the display-unit range", () => {
+  it("renders a horizontal scalar instrument with min, ramp, and max in display units", () => {
     mocks.visualization.data = {
       planar: {
         colormap: "viridis",
         component: "magnitude",
         display_unit: "kA/m",
         interaction: { pan_u_m: 0, pan_v_m: 0, zoom: 1 },
-        layers: { mesh: true, raster: true, vectors: false },
+        layers: { mesh: true, probes: true, raster: true, vectors: false },
         quantity_id: "m",
         range: { mode: "auto" },
         resolution: { height: 128, width: 256 },
@@ -333,11 +349,20 @@ describe("FieldMapModule planar state ownership", () => {
     mocks.renderReady = true;
     mocks.renderModel.mockImplementationOnce((input: unknown) => ({
       diagnostics: [],
+      bounds: [0, 1, 0, 1],
+      frame: {
+        normal: [0, 0, 1],
+        origin: [11, 22, 32],
+        uAxis: [1, 0, 0],
+        vAxis: [0, 1, 0],
+      },
+      viewport: [0, 1, 0, 1],
       display: { axisUnit: "m", legendUnit: "kA/m", probeScale: 1e-3 },
       layers: (input as { layers: unknown }).layers,
       range: { max: 2_000, min: -1_000 },
     }));
 
+    mocks.probeData = { occupancy: "occupied", scalar: 1_000, u_m: 2, v_m: 3 };
     const html = renderToStaticMarkup(<FieldMapModule />);
 
     expect(html).toContain('class="fm-field-map__colorbar"');
@@ -346,7 +371,23 @@ describe("FieldMapModule planar state ownership", () => {
     expect(html).toContain("2 kA/m");
     expect(html).toContain('class="fm-field-map__colorbar-ramp" data-colormap="viridis"');
     expect(html).toContain(
-      "background:linear-gradient(to top, rgb(68, 1, 84), rgb(49, 104, 142), rgb(53, 183, 121), rgb(253, 231, 37))",
+      "background:linear-gradient(to right, rgb(68, 1, 84), rgb(49, 104, 142), rgb(53, 183, 121), rgb(253, 231, 37))",
+    );
+
+    const minIndex = html.indexOf("-1 kA/m");
+    const rampIndex = html.indexOf('class="fm-field-map__colorbar-ramp"');
+    const maxIndex = html.indexOf("2 kA/m");
+    expect(minIndex).toBeLessThan(rampIndex);
+    expect(rampIndex).toBeLessThan(maxIndex);
+    expect(html).toContain("<th scope=\"row\">x</th><td>13 m</td>");
+    expect(html).toContain("<th scope=\"row\">y</th><td>25 m</td>");
+    expect(html).not.toContain("<th scope=\"row\">u</th>");
+    expect(html).not.toContain("<th scope=\"row\">v</th>");
+    expect(html).toContain(
+      '<div class="fm-field-map__canvas-stack"><output data-planar-render-layers=',
+    );
+    expect(html).toMatch(
+      /<div class="fm-field-map__canvas-stack">[\s\S]*<table class="fm-field-map__pinned-probe">[\s\S]*<\/table><\/div>/,
     );
   });
 

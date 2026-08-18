@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 
-import { resolvePlanarAxes } from "./planarAxisModel";
+import {
+  resolvePlanarAxes,
+  resolvePlanarProbeCoordinates,
+} from "./planarAxisModel";
 
 const bounds = [-4e-6, 6e-6, -2e-6, 3e-6] as const;
 const origin = [0, 0, 0] as const;
@@ -272,6 +275,25 @@ describe("planar axis model", () => {
     expect(axes.vertical.rangeMetres).toEqual([-3, 3]);
     expect(axes.horizontal.ticks.length).toBeLessThanOrEqual(32);
     expect(axes.vertical.ticks.length).toBeLessThanOrEqual(32);
+    expect(axes).toMatchObject({
+      horizontal: { label: "x′" },
+      preset: "oblique",
+      vertical: { label: "y′" },
+    });
+    expect(resolvePlanarProbeCoordinates(
+      {
+        normal: [0, 0, 1],
+        origin: [Number.NaN, Number.POSITIVE_INFINITY, 0],
+        uAxis: [1, 0, 0],
+        vAxis: [0, 1, 0],
+      },
+      2,
+      3,
+    )).toMatchObject({
+      horizontal: { label: "x′", valueMetres: 2 },
+      preset: "oblique",
+      vertical: { label: "y′", valueMetres: 3 },
+    });
   });
 
   it("labels Cartesian ticks with world coordinates and preserves screen order for a reversed axis", () => {
@@ -316,5 +338,47 @@ describe("planar axis model", () => {
     expect(axes.preset).toBe("oblique");
     expect(axes.horizontal.rangeMetres).toEqual([-2, 3]);
     expect(axes.vertical.rangeMetres).toEqual([-1, 2]);
+  });
+
+  it.each([
+    [
+      "xy",
+      { normal: [0, 0, -1], origin: [10, 20, 30], uAxis: [-1, 0, 0], vAxis: [0, 1, 0] },
+      [2, 3],
+      { horizontal: { label: "x", valueMetres: 8 }, vertical: { label: "y", valueMetres: 23 } },
+    ],
+    [
+      "xz",
+      { normal: [0, -1, 0], origin: [10, 20, 30], uAxis: [1, 0, 0], vAxis: [0, 0, 1] },
+      [2, 3],
+      { horizontal: { label: "x", valueMetres: 12 }, vertical: { label: "z", valueMetres: 33 } },
+    ],
+    [
+      "yz",
+      { normal: [1, 0, 0], origin: [10, 20, 30], uAxis: [0, 1, 0], vAxis: [0, 0, 1] },
+      [2, 3],
+      { horizontal: { label: "y", valueMetres: 22 }, vertical: { label: "z", valueMetres: 33 } },
+    ],
+  ] as const)("reports %s probe positions in world coordinates", (_preset, frame, point, expected) => {
+    expect(resolvePlanarProbeCoordinates(frame, point[0], point[1])).toMatchObject(expected);
+  });
+
+  it("reports oblique probe positions in the local primed frame", () => {
+    const coordinates = resolvePlanarProbeCoordinates(
+      {
+        normal: [0, 0, 1],
+        origin: [100, 200, 300],
+        uAxis: [Math.SQRT1_2, Math.SQRT1_2, 0],
+        vAxis: [-Math.SQRT1_2, Math.SQRT1_2, 0],
+      },
+      -2,
+      3,
+    );
+
+    expect(coordinates).toMatchObject({
+      horizontal: { label: "x′", valueMetres: -2 },
+      preset: "oblique",
+      vertical: { label: "y′", valueMetres: 3 },
+    });
   });
 });

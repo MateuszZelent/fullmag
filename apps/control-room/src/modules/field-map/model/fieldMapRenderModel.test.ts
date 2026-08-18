@@ -44,6 +44,7 @@ describe("field-map render model", () => {
       vector as [number, number, number],
       {
         normal: normal as [number, number, number],
+        origin: [0, 0, 0],
         uAxis: uAxis as [number, number, number],
         vAxis: vAxis as [number, number, number],
       },
@@ -55,6 +56,7 @@ describe("field-map render model", () => {
     const inverseSqrt2 = 1 / Math.sqrt(2);
     const projected = resolvePlanarVectorComponents([1, 1, 0], {
         normal: [0, 0, 1],
+        origin: [0, 0, 0],
         uAxis: [inverseSqrt2, inverseSqrt2, 0],
         vAxis: [-inverseSqrt2, inverseSqrt2, 0],
       });
@@ -63,6 +65,7 @@ describe("field-map render model", () => {
     expect(
       resolvePlanarVectorComponents([1e-20, 0, 0], {
         normal: [0, 0, 1],
+        origin: [0, 0, 0],
         uAxis: [1, 0, 0],
         vAxis: [0, 1, 0],
       }),
@@ -127,6 +130,7 @@ describe("field-map render model", () => {
       displayUnit: "kA/m",
       frame: {
         normal: [0, 0, 1],
+        origin: [0, 0, 0],
         uAxis: [1, 0, 0],
         vAxis: [0, 1, 0],
       },
@@ -233,7 +237,7 @@ describe("field-map render model", () => {
       canonicalUnit: "Pa",
       component: "normal",
       displayUnit: "Pa",
-      frame: { normal: [0, 0, 1], uAxis: [1, 0, 0], vAxis: [0, 1, 0] },
+      frame: { normal: [0, 0, 1], origin: [0, 0, 0], uAxis: [1, 0, 0], vAxis: [0, 1, 0] },
       layers: { contours: false, mesh: false, raster: true, vectors: false },
       range: { mode: "auto" },
       resolution: [1, 1],
@@ -251,7 +255,7 @@ describe("field-map render model", () => {
       canonicalUnit: "A/m",
       component: "normal",
       displayUnit: "mT",
-      frame: { normal: [0, 0, 1], uAxis: [1, 0, 0], vAxis: [0, 1, 0] },
+      frame: { normal: [0, 0, 1], origin: [0, 0, 0], uAxis: [1, 0, 0], vAxis: [0, 1, 0] },
       layers: { boundaries: true, contours: false, mesh: false, probes: false, raster: false, vectors: false },
       meshOverlayDescriptor: {
         available: false,
@@ -277,7 +281,7 @@ describe("field-map render model", () => {
       bounds: [0, 1, 0, 1],
       canonicalUnit: "A/m",
       component: "normal",
-      frame: { normal: [0, 0, 1], uAxis: [1, 0, 0], vAxis: [0, 1, 0] },
+      frame: { normal: [0, 0, 1], origin: [0, 0, 0], uAxis: [1, 0, 0], vAxis: [0, 1, 0] },
       layers: { contours: false, mesh: false, raster: true, vectors: false },
       range: { mode: "symmetric" },
       rasterOpacity: 0.37,
@@ -296,7 +300,7 @@ describe("field-map render model", () => {
       bounds: [0, 1, 0, 1] as const,
       canonicalUnit: "A/m",
       component: "normal",
-      frame: { normal: [0, 0, 1] as const, uAxis: [1, 0, 0] as const, vAxis: [0, 1, 0] as const },
+      frame: { normal: [0, 0, 1] as const, origin: [0, 0, 0] as const, uAxis: [1, 0, 0] as const, vAxis: [0, 1, 0] as const },
       layers: { boundaries: true, contours: false, mesh: false, raster: false, vectors: false },
       range: { mode: "auto" as const },
       resolution: [1, 1] as const,
@@ -321,7 +325,7 @@ describe("field-map render model", () => {
       bounds: [0, 1, 0, 1],
       canonicalUnit: "A/m",
       component: "normal",
-      frame: { normal: [0, 0, 1], uAxis: [1, 0, 0], vAxis: [0, 1, 0] },
+      frame: { normal: [0, 0, 1], origin: [0, 0, 0], uAxis: [1, 0, 0], vAxis: [0, 1, 0] },
       layers: { boundaries: true, contours: false, mesh: false, raster: false, vectors: false },
       meshOverlayDescriptor: { available: true, boundaryClassification: "future", codec: "fmcs.v5" },
       range: null,
@@ -339,7 +343,7 @@ describe("field-map render model", () => {
   it("rejects equal manual limits and invalid raster opacity without expanding or clamping", () => {
     const model = buildFieldMapRenderModel({
       bounds: [0, 1, 0, 1], canonicalUnit: "A/m", component: "normal",
-      frame: { normal: [0, 0, 1], uAxis: [1, 0, 0], vAxis: [0, 1, 0] },
+      frame: { normal: [0, 0, 1], origin: [0, 0, 0], uAxis: [1, 0, 0], vAxis: [0, 1, 0] },
       layers: { contours: false, mesh: false, raster: true, vectors: false },
       range: { mode: "manual", min: 1, max: 1 }, rasterOpacity: 2,
       resolution: [1, 1], sampleIdentity: "sample", scalar: new Float64Array([1]),
@@ -350,5 +354,27 @@ describe("field-map render model", () => {
       "Planar color range is invalid and was not rendered.",
       "Planar raster opacity is invalid and was not rendered.",
     ]));
+  });
+  it("reports a non-finite planar origin instead of presenting fabricated world coordinates", () => {
+    const model = buildFieldMapRenderModel({
+      bounds: [0, 1, 0, 1],
+      canonicalUnit: "A/m",
+      component: "normal",
+      frame: {
+        normal: [0, 0, 1],
+        origin: [Number.NaN, 0, 0],
+        uAxis: [1, 0, 0],
+        vAxis: [0, 1, 0],
+      },
+      layers: { contours: false, mesh: false, raster: false, vectors: false },
+      range: { mode: "auto" },
+      resolution: [1, 1],
+      sampleIdentity: "invalid-origin",
+      scalar: new Float64Array([1]),
+    });
+
+    expect(model.diagnostics).toContain(
+      "Planar frame origin is non-finite; axes and probes use local primed coordinates.",
+    );
   });
 });

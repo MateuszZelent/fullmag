@@ -41,6 +41,12 @@ export interface ResolvedPlanarAxes {
   vertical: ResolvedPlanarAxis;
 }
 
+export interface ResolvedPlanarProbeCoordinates {
+  horizontal: { label: string; valueMetres: number };
+  preset: PlanarAxisPreset;
+  vertical: { label: string; valueMetres: number };
+}
+
 const CARTESIAN_TOLERANCE = 1e-9;
 const MAX_TICK_CANDIDATES = 64;
 const NICE_MANTISSAS = [1, 2, 2.5, 5, 10] as const;
@@ -74,7 +80,7 @@ export function resolvePlanarAxes(
   );
   const displayLengthUnit = resolveDisplayLengthUnit(largestVisibleSpan);
   const labels = resolveCartesianLabels(frame);
-  const origin = finiteVector(frame.origin, [0, 0, 0]);
+  const origin = frame.origin;
   const horizontalDirection = finiteVector(frame.uAxis, [1, 0, 0]);
   const verticalDirection = finiteVector(frame.vAxis, [0, 1, 0]);
   const normalDirection = finiteVector(frame.normal, [0, 0, 1]);
@@ -117,7 +123,42 @@ export function resolvePlanarAxes(
   };
 }
 
+export function resolvePlanarProbeCoordinates(
+  frame: PlanarAxisFrame,
+  u: number,
+  v: number,
+): ResolvedPlanarProbeCoordinates {
+  const labels = resolveCartesianLabels(frame);
+  if (
+    labels.horizontalWorldAxis === null ||
+    labels.verticalWorldAxis === null
+  ) {
+    return {
+      horizontal: { label: labels.horizontal, valueMetres: u },
+      preset: labels.preset,
+      vertical: { label: labels.vertical, valueMetres: v },
+    };
+  }
+  const origin = frame.origin;
+  const world = origin.map((component, axis) =>
+    component + u * frame.uAxis[axis]! + v * frame.vAxis[axis]!,
+  );
+
+  return {
+    horizontal: {
+      label: labels.horizontal,
+      valueMetres: world[labels.horizontalWorldAxis]!,
+    },
+    preset: labels.preset,
+    vertical: {
+      label: labels.vertical,
+      valueMetres: world[labels.verticalWorldAxis]!,
+    },
+  };
+}
+
 function resolveCartesianLabels(frame: PlanarAxisFrame): AxisLabels {
+  if (!frame.origin.every(Number.isFinite)) return obliqueLabels();
   if (!hasConsistentRightHandedNormal(frame)) return obliqueLabels();
   if (isWorldAxis(frame.uAxis, 0) && isWorldAxis(frame.vAxis, 1)) {
     return {

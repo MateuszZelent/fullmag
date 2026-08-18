@@ -30,6 +30,7 @@ function makeRenderModel(
     component: "magnitude",
     frame: {
       normal: [0, 0, 1],
+      origin: [0, 0, 0],
       uAxis: [1, 0, 0],
       vAxis: [0, 1, 0],
     },
@@ -49,9 +50,10 @@ describe("PlanarSurface lifecycle", () => {
     const root = createRoot(container as unknown as Element);
     const putImageData = vi.fn();
     const drawImage = vi.fn();
+    const clearRect = vi.fn();
     const canvasContext = {
       beginPath: vi.fn(),
-      clearRect: vi.fn(),
+      clearRect,
       drawImage,
       imageSmoothingEnabled: true,
       lineTo: vi.fn(),
@@ -79,12 +81,15 @@ describe("PlanarSurface lifecycle", () => {
       return element;
     }) as typeof dom.document.createElement;
 
-    const observers: Array<{ disconnect: ReturnType<typeof vi.fn> }> = [];
+    const observers: Array<{
+      callback: ResizeObserverCallback;
+      disconnect: ReturnType<typeof vi.fn>;
+    }> = [];
     class TestResizeObserver {
       readonly disconnect = vi.fn();
 
       constructor(
-        private readonly callback: ResizeObserverCallback,
+        readonly callback: ResizeObserverCallback,
       ) {
         observers.push(this);
       }
@@ -181,6 +186,35 @@ describe("PlanarSurface lifecycle", () => {
         "planar scalar canvas",
       );
       Object.assign(scalarCanvas, { clientHeight: 100, clientWidth: 200 });
+      const horizontalAxis = findElement(
+        container,
+        (element) => element.getAttribute("aria-label") === "Horizontal x axis",
+        "horizontal Cartesian axis",
+      );
+      const axes = findElement(
+        container,
+        (element) => element.getAttribute("data-planar-axis-preset") === "xy",
+        "resolved planar axes",
+      );
+      expect(horizontalAxis.textContent).toContain("x (m)");
+      expect(axes?.getAttribute("data-planar-axis-preset")).toBe("xy");
+      expect(axes?.getAttribute("data-planar-plot-width")).toBe("200");
+      expect(axes?.getAttribute("data-planar-plot-height")).toBe("100");
+      expect(container.textContent).toContain("y (m)");
+      expect(container.textContent).not.toContain("u (m)");
+      expect(container.textContent).not.toContain("v (m)");
+      const drawCountAfterFirstSize = clearRect.mock.calls.length;
+      await act(async () => {
+        for (let repeat = 0; repeat < 3; repeat += 1) {
+          observers[0]!.callback(
+            [{ contentRect: { height: 100, width: 200 } } as ResizeObserverEntry],
+            observers[0] as unknown as ResizeObserver,
+          );
+        }
+      });
+      expect(clearRect).toHaveBeenCalledTimes(drawCountAfterFirstSize);
+      expect(axes?.getAttribute("data-planar-plot-width")).toBe("200");
+      expect(axes?.getAttribute("data-planar-plot-height")).toBe("100");
 
       const raster = putImageData.mock.calls[0]?.[0] as { data: Uint8ClampedArray };
       expect(workerTransfers).toEqual([{
@@ -196,7 +230,8 @@ describe("PlanarSurface lifecycle", () => {
         glyphCount: 0,
         overlayCounts: { boundsSegments: 0, contours: 0, meshSegments: 0, pointMarkers: 0 },
         raster: {
-          checksum: "fnv1a32:4c4ff03b",
+          // Independent golden for transparent + viridis-midpoint RGBA pixels.
+          checksum: "fnv1a32:66c65e3b",
           max: 20,
           min: 20,
           sampleCount: 2,
@@ -233,7 +268,7 @@ describe("PlanarSurface lifecycle", () => {
         (element) => element.tagName === "OUTPUT",
         "probe output",
       );
-      expect(probeOutput.textContent).toBe("u 5 m · v 0 m · 20 m");
+      expect(probeOutput.textContent).toBe("x 5 m · y 0 m · 20 m");
       expect(canvasContext.setLineDash).toHaveBeenCalledWith([6, 4]);
 
       const emptyPointerMove = new TestEvent("pointermove", { bubbles: true });
@@ -309,7 +344,7 @@ describe("PlanarSurface lifecycle", () => {
     Object.defineProperty(globalThis, "ImageData", { configurable: true, value: class { constructor(readonly data: Uint8ClampedArray, readonly width: number, readonly height: number) {} } });
     const model = buildFieldMapRenderModel({
       bounds: [0, 1, 0, 1], canonicalUnit: "A/m", component: "normal", displayUnit: "kA/m",
-      frame: { normal: [0, 0, 1], uAxis: [1, 0, 0], vAxis: [0, 1, 0] },
+      frame: { normal: [0, 0, 1], origin: [0, 0, 0], uAxis: [1, 0, 0], vAxis: [0, 1, 0] },
       layers: { contours: false, mesh: false, raster: true, vectors: false }, range: { mode: "auto" },
       resolution: [1, 1], sampleIdentity: '"fm-planar-sha256:unit"', scalar: new Float64Array([1_000]),
     });
@@ -328,7 +363,7 @@ describe("PlanarSurface lifecycle", () => {
       Object.assign(move, { clientX: 50, clientY: 50 });
       await act(async () => { canvas.dispatchEvent(move); });
       const probe = findElement(container, (element) => element.tagName === "OUTPUT", "unit probe");
-      expect(probe.textContent).toBe("u 0.5 m · v 0.5 m · 1 kA/m");
+      expect(probe.textContent).toBe("x 0.5 m · y 0.5 m · 1 kA/m");
       await act(async () => { canvas.dispatchEvent(new TestEvent("keydown", { bubbles: true, key: "+" })); });
       expect(onInteraction).toHaveBeenLastCalledWith({ panU: 0, panV: 0, zoom: 1.25 });
 
@@ -373,7 +408,7 @@ describe("PlanarSurface lifecycle", () => {
     const onRenderEvidence = vi.fn();
     const model = buildFieldMapRenderModel({
       bounds: [0, 1, 0, 1], canonicalUnit: "A/m", component: "normal",
-      frame: { normal: [0, 0, 1], uAxis: [1, 0, 0], vAxis: [0, 1, 0] },
+      frame: { normal: [0, 0, 1], origin: [0, 0, 0], uAxis: [1, 0, 0], vAxis: [0, 1, 0] },
       layers: { boundaries: false, contours: false, mesh: false, probes: false, raster: false, vectors: false },
       range: { mode: "auto" }, resolution: [1, 1], sampleIdentity: "no-scalar-layers", scalar: new Float64Array([1]),
     });
@@ -420,7 +455,7 @@ describe("PlanarSurface lifecycle", () => {
     [0, 0, 1, 0].forEach((value, index) => view.setFloat32(160 + index * 4, value, true));
     const model = buildFieldMapRenderModel({
       bounds: [0, 1, 0, 1], canonicalUnit: "A/m", component: "normal",
-      frame: { normal: [0, 0, 1], uAxis: [1, 0, 0], vAxis: [0, 1, 0] },
+      frame: { normal: [0, 0, 1], origin: [0, 0, 0], uAxis: [1, 0, 0], vAxis: [0, 1, 0] },
       layers: { boundaries: false, contours: false, mesh: true, probes: false, raster: false, vectors: false },
       meshOverlay: overlay,
       meshOverlayDescriptor: { available: true, boundaryClassification: "unavailable", codec: "fmfg.v1", geometrySource: "fdm_structured_grid" },
@@ -506,7 +541,7 @@ describe("PlanarSurface lifecycle", () => {
       Object.assign(pointerMove, { clientX: 75, clientY: 50 });
       await act(async () => { canvas.dispatchEvent(pointerMove); frames[0]?.(0); });
       const probe = findElement(container, (element) => element.tagName === "OUTPUT", "transition probe");
-      expect(probe.textContent).toBe("u 0.75 m · v 0.5 m · 2 m");
+      expect(probe.textContent).toBe("x 0.75 m · y 0.5 m · 2 m");
       await act(async () => { canvas.dispatchEvent(pointerMove); });
       const drawsBeforeRelease = (context.drawImage as ReturnType<typeof vi.fn>).mock.calls.length;
       const evidenceBeforeRelease = onRenderEvidence.mock.calls.length;

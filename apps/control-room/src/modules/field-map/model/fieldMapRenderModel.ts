@@ -4,6 +4,7 @@ import { isRenderablePlanarOccupancy } from "./planarOccupancy";
 
 export interface PlanarFrame {
   normal: readonly [number, number, number];
+  origin: readonly [number, number, number];
   uAxis: readonly [number, number, number];
   vAxis: readonly [number, number, number];
 }
@@ -208,6 +209,9 @@ export function buildFieldMapRenderModel(
   const displayUnit = resolvePlanarDisplayUnit(input.canonicalUnit, requestedDisplayUnit);
   const interaction = input.interaction ?? { panU: 0, panV: 0, zoom: 1 };
   const diagnostics: string[] = [];
+  if (!input.frame.origin.every(Number.isFinite)) {
+    diagnostics.push("Planar frame origin is non-finite; axes and probes use local primed coordinates.");
+  }
   if (!displayUnit.compatible) {
     diagnostics.push(`Display unit '${requestedDisplayUnit}' is incompatible with canonical unit '${input.canonicalUnit}'.`);
   }

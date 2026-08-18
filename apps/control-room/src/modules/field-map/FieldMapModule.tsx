@@ -19,9 +19,8 @@ import { useSessionStatusSelector } from "@/kernel/resources/useSessionStatus";
 import { useSelectionSelector } from "@/kernel/selection/useSelection";
 import { useVisualizationStateResource } from "@/kernel/visualization/useVisualizationStateResource";
 import { projectPlanarPresentationState } from "@/kernel/visualization/planarPresentationProjection";
-import { formatValueWithUnit } from "@/shared/domain/physics/displayUnits";
-import { scalarColorPaletteGradientCss } from "@/shared/visualization/scalarColorPalette";
-
+import { PlanarColorLegend } from "./components/PlanarColorLegend";
+import { PlanarPinnedProbe } from "./components/PlanarPinnedProbe";
 
 import {
   buildFieldMapDataPlan,
@@ -35,6 +34,10 @@ import {
   surfaceProjectionStatus,
 } from "./model/fieldMapRenderModel";
 import {
+  resolvePlanarAxes,
+  resolvePlanarProbeCoordinates,
+} from "./model/planarAxisModel";
+import {
   createPlanarEvidence,
   resolvePlanarEvidenceStatus,
   type PlanarEvidenceStatus,
@@ -42,7 +45,7 @@ import {
 } from "./model/fieldMapEvidence";
 import { PlanarSurface } from "./renderer/PlanarSurface";
 
-export default function FieldMapModule() {
+function useFieldMapModuleController() {
   const { layout, visualizationSync } = useKernel();
   const [pinned, setPinned] = useState<readonly [number, number] | null>(null);
   const [renderEvidence, setRenderEvidence] =
@@ -181,6 +184,7 @@ export default function FieldMapModule() {
       meta.data
         ? {
             normal: meta.data.frame.normal as [number, number, number],
+            origin: meta.data.frame.origin_m as [number, number, number],
             uAxis: meta.data.frame.u_axis as [number, number, number],
             vAxis: meta.data.frame.v_axis as [number, number, number],
           }
@@ -260,6 +264,30 @@ export default function FieldMapModule() {
       vectors: vectorValues,
     });
   }, [canonicalPlanar?.resolution.vector_budget, frame, mask.data, meshOverlay.data, meta.data, presentationPlanar, scalar.data, vectors.data]);
+  const pinnedAxisState = useMemo(() => {
+    if (!renderModel || !probe.data) return null;
+    const axisFrame = {
+      normal: renderModel.frame.normal,
+      origin: renderModel.frame.origin,
+      uAxis: renderModel.frame.uAxis,
+      vAxis: renderModel.frame.vAxis,
+    };
+    return {
+      axes: resolvePlanarAxes(
+        axisFrame,
+        renderModel.bounds,
+        renderModel.viewport,
+        1,
+        1,
+      ),
+      coordinates: resolvePlanarProbeCoordinates(
+        axisFrame,
+        probe.data.u_m,
+        probe.data.v_m,
+      ),
+    };
+  }, [probe.data, renderModel]);
+
 
   const evidenceStatus: PlanarEvidenceStatus = resolvePlanarEvidenceStatus({
     metaIdentity: meta.data?.etag,
@@ -331,6 +359,49 @@ export default function FieldMapModule() {
     status: evidenceStatus,
   });
 
+  return {
+    canonicalPlanar,
+    canonicalSampleError,
+    evidence,
+    frame,
+    mask,
+    meshOverlay,
+    meta,
+    onInteraction,
+    onRenderEvidence,
+    pinnedAxisState,
+    plan,
+    presentationPlanar,
+    probe,
+    renderModel,
+    scalar,
+    setPinned,
+    vectors,
+    visualization,
+  };
+}
+
+export default function FieldMapModule() {
+  const {
+    canonicalPlanar,
+    canonicalSampleError,
+    evidence,
+    frame,
+    mask,
+    meshOverlay,
+    meta,
+    onInteraction,
+    onRenderEvidence,
+    pinnedAxisState,
+    plan,
+    presentationPlanar,
+    probe,
+    renderModel,
+    scalar,
+    setPinned,
+    vectors,
+    visualization,
+  } = useFieldMapModuleController();
   if (visualization.status === "error") {
     return (
       <FieldMapStatus
@@ -434,58 +505,25 @@ export default function FieldMapModule() {
           onInteraction={onInteraction}
           onPin={(u, v) => setPinned([u, v])}
           onRenderEvidence={onRenderEvidence}
+          probeOverlay={presentationPlanar.layers.probes && probe.data ? (
+            <PlanarPinnedProbe
+              axisState={pinnedAxisState}
+              legendUnit={renderModel.display.legendUnit}
+              probe={probe.data}
+              probeScale={renderModel.display.probeScale}
+            />
+          ) : null}
         />
-        <div className="fm-field-map__axis fm-field-map__axis--u">u ({renderModel.display.axisUnit})</div>
-        <div className="fm-field-map__axis fm-field-map__axis--v">v ({renderModel.display.axisUnit})</div>
-        {presentationPlanar.viewport_colorbar_visible !== false ? <aside
-          aria-label="Scalar color range"
-          className="fm-field-map__colorbar"
-        >
-          <div className="fm-field-map__colorbar-header">
-            <div className="fm-field-map__colorbar-identity">
-              <span className="fm-field-map__colorbar-context">2D field</span>
-              <span className="fm-field-map__colorbar-quantity">{plan.quantityId}</span>
-              <span className="fm-field-map__colorbar-component">
-                {presentationPlanar.component}
-              </span>
-            </div>
-            <span className="fm-field-map__colorbar-unit" title="Display unit">
-              {renderModel.display.legendUnit}
-            </span>
-          </div>
-          <div className="fm-field-map__colorbar-range">
-            <span className="fm-field-map__colorbar-range-label">Rendered range</span>
-            <div className="fm-field-map__colorbar-row">
-              <span className="fm-field-map__colorbar-limit fm-field-map__colorbar-limit--max">
-                {renderModel.range
-                  ? formatValueWithUnit(
-                      renderModel.range.max * renderModel.display.probeScale,
-                      renderModel.display.legendUnit,
-                    )
-                  : "Loading field range"}
-              </span>
-              <span
-                aria-hidden="true"
-                className="fm-field-map__colorbar-ramp"
-                data-colormap={presentationPlanar.colormap}
-                style={{
-                  background: scalarColorPaletteGradientCss(
-                    presentationPlanar.colormap,
-                    "to top",
-                  ),
-                }}
-              />
-              <span className="fm-field-map__colorbar-limit fm-field-map__colorbar-limit--min">
-                {renderModel.range
-                  ? formatValueWithUnit(
-                      renderModel.range.min * renderModel.display.probeScale,
-                      renderModel.display.legendUnit,
-                    )
-                  : "Loading field range"}
-              </span>
-            </div>
-          </div>
-        </aside> : null}
+        {presentationPlanar.viewport_colorbar_visible !== false ? (
+          <PlanarColorLegend
+            colormap={presentationPlanar.colormap}
+            component={presentationPlanar.component}
+            legendUnit={renderModel.display.legendUnit}
+            probeScale={renderModel.display.probeScale}
+            quantityId={plan.quantityId}
+            range={renderModel.range}
+          />
+        ) : null}
       </div>
       {renderModel.diagnostics.length ? (
         <div className="fm-field-map__diagnostics" role="status" aria-label="Planar presentation diagnostics">
@@ -499,17 +537,6 @@ export default function FieldMapModule() {
           { label: "Mesh overlay", requested: plan.requestMesh, resource: meshOverlay },
         ]}
       />
-      {presentationPlanar.layers.probes && probe.data ? (
-        <table className="fm-field-map__pinned-probe">
-          <caption>Pinned planar probe</caption>
-          <tbody>
-            <tr><th scope="row">u</th><td>{probe.data.u_m} m</td></tr>
-            <tr><th scope="row">v</th><td>{probe.data.v_m} m</td></tr>
-            <tr><th scope="row">Value</th><td>{probe.data.scalar == null ? "undefined" : probe.data.scalar * renderModel.display.probeScale} {renderModel.display.legendUnit}</td></tr>
-            <tr><th scope="row">Occupancy</th><td>{probe.data.occupancy}</td></tr>
-          </tbody>
-        </table>
-      ) : null}
     </section>
   );
 }
