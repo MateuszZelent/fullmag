@@ -18,6 +18,36 @@
     "fem_cpu_public",
     "fem_gpu_public"
   ],
+  "observation_runtime_contract": {
+    "schema": "observation-runtime-capability.v1",
+    "notes": "Documentation contract only. Cache or quantity materialization does not promote capability.",
+    "lanes": {
+      "fdm_cpu": {
+        "source_presence": "partial",
+        "executability": "not_demonstrated_end_to_end",
+        "validation": "unvalidated",
+        "production_qualification": "not_qualified"
+      },
+      "fdm_gpu": {
+        "source_presence": "partial",
+        "executability": "not_demonstrated_end_to_end",
+        "validation": "unvalidated",
+        "production_qualification": "not_qualified"
+      },
+      "fem_cpu": {
+        "source_presence": "partial",
+        "executability": "not_demonstrated_end_to_end",
+        "validation": "unvalidated",
+        "production_qualification": "not_qualified"
+      },
+      "fem_gpu": {
+        "source_presence": "partial",
+        "executability": "not_demonstrated_end_to_end",
+        "validation": "unvalidated",
+        "production_qualification": "not_qualified"
+      }
+    }
+  },
   "features": [
     {
       "id": "fem_auto_device_crossover",

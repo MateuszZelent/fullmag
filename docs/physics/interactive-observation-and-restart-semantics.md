@@ -78,7 +78,7 @@ zdyskretyzowaną trajektorię w identycznym deterministycznym runtime.
 
 | Symbol | Znaczenie | Jednostka SI |
 |---|---|---|
-| $q_i$ | kanoniczne pole albo skalar o identyfikatorze $i$ | zależna od quantity; jawna w katalogu |
+| $q_i$ | kanoniczne pole albo skalar o identyfikatorze $i$ | $\text{quantity-dependent}$ |
 | $\mathcal{F}_i$ | backend-neutralny funkcjonał quantity | $1$ |
 | $\mathbf{m}$ | zredukowana magnetyzacja | $1$ |
 | $t$ | czas zaakceptowanego stanu | $\mathrm{s}$ |
@@ -88,7 +88,7 @@ zdyskretyzowaną trajektorię w identycznym deterministycznym runtime.
 | $\mathcal{P}$ | znormalizowany `ProblemIR` | $1$ |
 | $\Pi$ | rozstrzygnięty plan wykonania | $1$ |
 | $\mathcal{D}$ | tożsamość domeny/gridu/mesha i materiałów | $1$ |
-| $\mathcal{C}_i$ | dodatkowe pierwotne nośniki quantity $i$ | zależna od nośnika |
+| $\mathcal{C}_i$ | dodatkowe pierwotne nośniki quantity $i$ | $\text{carrier-dependent}$ |
 | $I_{\mathrm{acc}}$ | `AcceptedStateId` | $1$ |
 | $v$ | wersja kanonicznego preimage digestu | $1$ |
 | $G$ | `AcceptedStateGeneration` | $1$ |
@@ -96,8 +96,8 @@ zdyskretyzowaną trajektorię w identycznym deterministycznym runtime.
 | $r$ | lokalna rewizja accepted state | $1$ |
 | $\mathcal{A}$ | zbiór dostępnych quantity | $1$ |
 | $\mathcal{Q}_{*}$ | zbiory ograniczeń katalogu, fizyki, planu, lane'u i nośników | $1$ |
-| $S_n$ | fizyczny stan pierwotny kroku $n$ | złożona jednostka nośników |
-| $K_n$ | stan kontynuacji integratora, RNG i układów sprzężonych | złożona jednostka nośników |
+| $S_n$ | fizyczny stan pierwotny kroku $n$ | $\text{carrier-dependent}$ |
+| $K_n$ | stan kontynuacji integratora, RNG i układów sprzężonych | $\text{carrier-dependent}$ |
 | $\Phi$ | operator jednego kroku numerycznego | $1$ |
 
 (assumptions-and-validity)=
@@ -146,7 +146,12 @@ film.m = fm.init.UniformMagnetization((1.0, 0.0, 0.0))
 study.demag()
 
 # %%
-study.stages.add_relax(stage_id="relax", max_steps=1000, tolT=1e-6).autosave(
+study.stages.add_relax(
+    stage_id="relax",
+    algorithm="projected_gradient_bb",
+    max_steps=1000,
+    tolT=1e-6,
+).autosave(
     fm.StageAutosave(
         table=fm.TableAutosave(every_steps=10, quantities=["step", "mx", "my", "mz"]),
         fields=[fm.FieldAutosave(quantity="m", every_steps=10)],
@@ -185,6 +190,10 @@ IR ani live accepted state. Brak nośnika zwraca
 uruchamia cichego fallbacku. `.fms` powstaje wyłącznie po jawnym Save/Export;
 import waliduje integralność, buduje kandydacki runtime i wykonuje jeden
 atomowy swap albo pozostawia aktywną sesję bez zmian.
+
+`requested intent` i `resolved execution` pozostają osobnymi polami
+proweniencji. `validation errors` są typowane, a `unsupported combinations`
+są odrzucane przed alokacją albo compute, bez degradacji lane'u.
 
 (discrete-realization)=
 ## 8. Realizacje dyskretne i status lane'ów
@@ -258,12 +267,8 @@ runtime receipts i nie kwalifikuje żadnej lane.
 
 | Twierdzenie | Ścieżka | Symbol | Odpowiedzialność | Lane | Dowód |
 |---|---|---|---|---|---|
-| obecny live runtime i cache | `crates/fullmag-runner/src/interactive/runtime.rs` | `InteractiveRuntime` | bieżący backend i snapshot cache | wszystkie przez adaptery | source presence |
 | obecny eager batch do zastąpienia | `crates/fullmag-runner/src/interactive/runtime.rs` | `build_atomic_terminal_update` | terminalny snapshot FDM | FDM CPU/GPU | source presence, nie target |
-| host aktywnego runtime | `crates/fullmag-cli/src/interactive_runtime_host.rs` | `InteractiveRuntimeHost` | lifecycle sesji | wszystkie | source presence |
 | bieżąca komenda pól | `crates/fullmag-cli/src/interactive_runtime_host.rs` | `compute_current_fields` | materializacja current | wszystkie | source presence |
-| status materializacji | `crates/fullmag-runner/src/types.rs` | `LiveFieldMaterializationStatus` | status cache/resource | wszystkie | source presence |
-| manifest autosave | `crates/fullmag-runner/src/autosave_storage.rs` | `StageManifest` | trwały zapis próbek | wszystkie | source presence |
 | checkpoint session store | `crates/fullmag-session/src/capture.rs` | `capture_checkpoint` | obecny capture CAS | wszystkie | source presence, exact restore nieudowodniony |
+| docelowa accepted-state identity | `docs/adr/0025-persistent-runtime-and-observation-sources.md` | `DOC-ANCHOR:accepted-state-identity` | planowany `AcceptedStateRef` | wszystkie | planned contract, bez runtime proof |
 | publiczne autosave | `packages/fullmag-py/src/fullmag/model/study.py` | `StageAutosave` | authoring i lowering | wszystkie | testy Python istnieją; bez promocji runtime |
-

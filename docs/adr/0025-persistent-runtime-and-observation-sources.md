@@ -35,6 +35,7 @@ Historyczne compute używa oddzielnego `ObservationRuntime` bez API
 step/run/relax/resume i bez live publishera. Nigdy nie swapuje ani tymczasowo
 nie mutuje `LiveRuntime`.
 
+(accepted-state-identity)=
 ### D-04. Kanoniczny `AcceptedStateRef`
 
 `AcceptedStateId` jest trwałym, content-bound digestem wersji, kanonicznego
@@ -111,4 +112,3 @@ Gate źródłowy wymaga pięciu definicji i braku starej reguły eager. Dalsze t
 muszą dowieść zerowej mutacji live state, atomowości batchu i importu, czasu
 ramki, typed missing-carrier, cache isolation oraz osobnych receipts dla FDM
 CPU/GPU i FEM CPU/GPU. GPU proof musi podać device identity i zero fallbacku.
-

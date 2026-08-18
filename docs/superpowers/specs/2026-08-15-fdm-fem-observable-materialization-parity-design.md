@@ -143,25 +143,31 @@ Całka `sum(eden_i * cell_volume)` musi być zgodna z globalnym `E_i` tego sameg
 snapshotu. Dla komórek niemagnetycznych gęstość energii jest zerowa;
 pełnodomenowy `H_demag` pozostaje tam niezerowy i jest odrębną obserwablą.
 
-### 5. Wspólny koordynator materializacji
+### 5. Wspólny koordynator materializacji on-demand
 
-Jawne `compute_fields`, publikacja terminalna i materializacja wywołana przez
-wybór ilości korzystają z jednego koordynatora.
+Normatywnym kontraktem jest jedna operacja `ComputeQuantities`, która przyjmuje
+`ObservationSource` oraz listę kanonicznych `quantity_ids`. `ComputeFields` i
+`ComputeEnergies` są wyłącznie przejściowymi aliasami. Zakończenie stage
+zatwierdza `AcceptedStateRef` i publikuje `m`, ale nie oblicza automatycznie
+pełnego terminalnego zestawu pól ani energii.
 
-Kolejność terminalna:
+Materializacja przebiega on-demand:
 
-1. zatwierdzenie magnetyzacji i tożsamości domeny;
-2. publikacja `m`;
-3. rozpoczęcie snapshotów aktywnych pól i gęstości energii;
-4. publikowanie kolejnych quantity jako `pending`;
-5. atomowy commit każdego kompletnego payloadu;
-6. jedno family-level invalidation katalogu oraz dokładne invalidacje payloadów;
-7. przejście runtime do `awaiting_command` z możliwością ponownego
-   `compute_fields` bez wykonania kroku solvera.
+1. sprawdzenie precondition `AcceptedStateRef` i dostępności quantity;
+2. wybór `Current` w `LiveRuntime` albo `Frame` w izolowanym
+   `ObservationRuntime`;
+3. rozpoczęcie jednego atomowego batchu dla pól i skalarów;
+4. typed unsupported, jeżeli źródło nie ma wymaganego primary carriera;
+5. atomowy commit kanonicznych payloadów związanych z jednym
+   `AcceptedStateId`;
+6. dokładne invalidacje zasobów HTTP v2;
+7. niezależne zbudowanie cache sampling/presentation.
 
-Aktualnie wybrana ilość ma priorytet, ale pełny aktywny zestaw terminalny musi
-zostać domknięty. Koordynator deduplikuje równoczesne żądania tej samej
-quantity i generation identity.
+Cache zachowuje wszystkie policzone quantity bieżącego source i deduplikuje
+równoczesne żądania tej samej identity. Historyczne compute nigdy nie swapuje
+`LiveRuntime`. Eager terminal-all-fields może istnieć wyłącznie jako jawna
+optymalizacja prefetch, nigdy jako źródło poprawności, availability lub
+capability.
 
 ## Kontrakt capability i API
 
@@ -328,7 +334,8 @@ na ten sam zaakceptowany stan magnetyzacji.
 2. Backend-neutralny kontrakt snapshotu i testy zgodności istniejącego FEM.
 3. Pełnodomenowy `H_demag` FDM CUDA FP64/FP32.
 4. Scalar snapshot i wszystkie aktywne `eden_*` FDM CUDA FP64/FP32.
-5. Wspólny koordynator terminalnej i jawnej materializacji.
+5. Wspólny koordynator `ComputeQuantities` on-demand związany z
+   `AcceptedStateRef` i `ObservationSource`.
 6. Resource-first API, readiness, reason codes, OpenAPI i generated transport.
 7. Backend-neutralny Control Room oraz warstwy Airbox.
 8. Testy kontraktowe, numeryczne, wydajnościowe i browser/WebGL.

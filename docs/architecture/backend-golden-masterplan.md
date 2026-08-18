@@ -859,3 +859,26 @@ cache. `data/fields` publikuje stan `unmaterialized`, `pending`, `complete`,
 nieznanego quantity do `m`; zwraca stabilny reason code. Scalar `eden_*` jest
 transportowany jako `spatial_scalar` z `n_comp=1`, a renderer nie wykonuje
 żadnych obliczeń fizycznych.
+
+### 15.1. Trwały runtime i historyczne źródła obserwacji
+
+`LiveRuntime` pozostaje rezydentny do jawnego close, udanego atomowego swapu
+albo fatalnego `failed_unusable`. RAM/VRAM przechowuje accepted primary state,
+plan, domenę, materiały, backendowe operatory/workspaces oraz wszystkie
+quantity policzone dla bieżącego `AcceptedStateRef`. Historia autosave
+pozostaje dyskowa; jedna wybrana immutable ramka i jej quantity żyją w osobnym
+`ObservationRuntime` bez step/run/publisher API.
+
+Jedno backend-neutralne `ComputeQuantities` materializuje pola i skalary
+on-demand. Cache presentation/sampling jest osobny. Brak wymaganego primary
+carriera daje typed unsupported, nigdy zero ani rekonstrukcję przybliżoną.
+Historical compute nie swapuje i nie mutuje `LiveRuntime`. Autosave frame nie
+jest checkpointem `ExactResume`, a `.fms` powstaje wyłącznie jawnie i jest
+importowane transakcyjnie.
+
+FDM/FEM oraz CPU/GPU realizują ten sam kontrakt identity, jednostek i błędów,
+ale mają osobne backendowe implementacje i działają bez silent fallbacku. Nie
+wolno tworzyć nowych ownerów fizyki w `Context`, `mfem_bridge.cpp`,
+runnerowym `dispatch.rs` ani ogólnym `execute.rs`. Source presence,
+executability, validation i production qualification pozostają czterema
+oddzielnymi osiami dowodu.

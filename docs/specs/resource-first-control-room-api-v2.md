@@ -896,3 +896,30 @@ Post-cutover rules:
 - OpenAPI v2 is the only browser transport contract,
 - frontend direct API allowlists are limited to the central transport/facade boundary,
 - contract gates fail on new direct `/v1/live/current` usage in frontend code.
+
+## 7. Persistent observation source contract
+
+HTTP v2 pozostaje źródłem prawdy dla bieżących i historycznych obserwacji;
+websocket przenosi tylko lifecycle, completion i invalidation. Istnieje jeden
+field data plane dla `Current` i `Frame`, z tym samym codec, scope, ETag i
+typed error vocabulary. WebSocket nie niesie pól, topologii, ramek ani pełnego
+stanu sesji.
+
+Każde żądanie `ComputeQuantities` wskazuje `ObservationSource` i listę
+`quantity_ids`. `Current` używa pełnego `AcceptedStateRef`, czyli trwałego
+content-bound `AcceptedStateId` oraz lokalnej `AcceptedStateGeneration`;
+`Frame` używa immutable frame ID i trwałego accepted-state ID. Clock jest
+częścią digestu. Stale generation odrzuca komendę przed compute.
+
+Historyczne compute jest obsługiwane przez odrębny `ObservationRuntime` bez
+step/run/publisher API i nigdy nie swapuje `LiveRuntime`. Availability jest
+niezależne od cache/materialization. Brak primary carriera zwraca typed
+`unsupported_missing_primary_state`. `ComputeFields` i `ComputeEnergies`
+mogą być przejściowymi command aliases, ale wszystkie payloady przechodzą przez
+jeden `ComputeQuantities` i jeden field data plane.
+
+Autosave frame jest observation source, nie resume checkpointem. `.fms`
+powstaje wyłącznie po jawnym Save/Save As/Export; import waliduje kandydacki
+runtime i wykonuje jeden atomowy swap albo nie zmienia aktywnej sesji. Task 0
+nie zmienia OpenAPI ani generowanych typów/transportu: opisuje obowiązek
+późniejszej implementacji, więc żadna runtime capability nie jest promowana.

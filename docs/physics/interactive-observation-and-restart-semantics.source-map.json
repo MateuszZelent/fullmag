@@ -7,41 +7,39 @@
     {"solver": "FEM", "device": "GPU", "status": "unqualified", "reason": "No persistent-observation runtime receipt."}
   ],
   "equations": [
-    {"id": "eq-observation-functional", "symbols": ["q_i", "m", "t", "P", "Pi", "D", "C_i"], "sources": ["interactive-runtime", "stage-manifest"]},
+    {"id": "eq-observation-functional", "symbols": ["q_i", "m", "t", "P", "Pi", "D", "C_i"], "sources": ["current-fields"]},
     {"id": "eq-accepted-state-id", "symbols": ["I_acc", "Gamma", "n", "dt", "v"], "sources": ["adr-accepted-state"]},
-    {"id": "eq-quantity-availability", "symbols": ["A", "Q"], "sources": ["materialization-status"]},
+    {"id": "eq-quantity-availability", "symbols": ["A", "Q"], "sources": ["terminal-update"]},
     {"id": "eq-resume-trajectory", "symbols": ["S_n", "K_n", "Phi"], "sources": ["checkpoint-capture"]}
   ],
   "symbols": [
-    {"id": "q_i", "latex": "q_i", "meaning": "Canonical quantity", "si_unit": "\\text{quantity-dependent}"},
-    {"id": "m", "latex": "\\mathbf{m}", "meaning": "Reduced magnetization", "si_unit": "1"},
-    {"id": "t", "latex": "t", "meaning": "Accepted-state time", "si_unit": "\\mathrm{s}"},
-    {"id": "P", "latex": "\\mathcal{P}", "meaning": "Normalized ProblemIR", "si_unit": "1"},
-    {"id": "Pi", "latex": "\\Pi", "meaning": "Resolved execution plan", "si_unit": "1"},
-    {"id": "D", "latex": "\\mathcal{D}", "meaning": "Domain and material identity", "si_unit": "1"},
-    {"id": "C_i", "latex": "\\mathcal{C}_i", "meaning": "Additional primary carriers", "si_unit": "\\text{carrier-dependent}"},
+    {"id": "q_i", "latex": "q_i", "meaning": "kanoniczne pole albo skalar", "si_unit": "\\text{quantity-dependent}"},
+    {"id": "m", "latex": "\\mathbf{m}", "meaning": "zredukowana magnetyzacja", "si_unit": "1"},
+    {"id": "t", "latex": "t", "meaning": "czas zaakceptowanego stanu", "si_unit": "\\mathrm{s}"},
+    {"id": "P", "latex": "\\mathcal{P}", "meaning": "znormalizowany `ProblemIR`", "si_unit": "1"},
+    {"id": "Pi", "latex": "\\Pi", "meaning": "rozstrzygnięty plan wykonania", "si_unit": "1"},
+    {"id": "D", "latex": "\\mathcal{D}", "meaning": "tożsamość domeny/gridu/mesha i materiałów", "si_unit": "1"},
+    {"id": "C_i", "latex": "\\mathcal{C}_i", "meaning": "dodatkowe pierwotne nośniki quantity", "si_unit": "\\text{carrier-dependent}"},
     {"id": "I_acc", "latex": "I_{\\mathrm{acc}}", "meaning": "AcceptedStateId", "si_unit": "1"},
     {"id": "Gamma", "latex": "\\Gamma", "meaning": "ObservationClock", "si_unit": "1"},
-    {"id": "n", "latex": "n", "meaning": "Accepted-step index", "si_unit": "1"},
-    {"id": "dt", "latex": "\\Delta t", "meaning": "Accepted time step", "si_unit": "\\mathrm{s}"},
-    {"id": "v", "latex": "v", "meaning": "Digest preimage version", "si_unit": "1"},
-    {"id": "A", "latex": "\\mathcal{A}", "meaning": "Available quantity set", "si_unit": "1"},
-    {"id": "Q", "latex": "\\mathcal{Q}_{*}", "meaning": "Quantity constraint sets", "si_unit": "1"},
-    {"id": "S_n", "latex": "S_n", "meaning": "Primary physical state", "si_unit": "\\text{carrier-dependent}"},
-    {"id": "K_n", "latex": "K_n", "meaning": "Continuation state", "si_unit": "\\text{carrier-dependent}"},
-    {"id": "Phi", "latex": "\\Phi", "meaning": "Discrete step operator", "si_unit": "1"}
+    {"id": "n", "latex": "n", "meaning": "numer zaakceptowanego kroku", "si_unit": "1"},
+    {"id": "dt", "latex": "\\Delta t", "meaning": "ostatni zaakceptowany krok czasu", "si_unit": "\\mathrm{s}"},
+    {"id": "v", "latex": "v", "meaning": "wersja kanonicznego preimage digestu", "si_unit": "1"},
+    {"id": "A", "latex": "\\mathcal{A}", "meaning": "zbiór dostępnych quantity", "si_unit": "1"},
+    {"id": "Q", "latex": "\\mathcal{Q}_{*}", "meaning": "zbiory ograniczeń katalogu, fizyki, planu, lane'u i nośników", "si_unit": "1"},
+    {"id": "S_n", "latex": "S_n", "meaning": "fizyczny stan pierwotny kroku", "si_unit": "\\text{carrier-dependent}"},
+    {"id": "K_n", "latex": "K_n", "meaning": "stan kontynuacji integratora, RNG i układów sprzężonych", "si_unit": "\\text{carrier-dependent}"},
+    {"id": "Phi", "latex": "\\Phi", "meaning": "operator jednego kroku numerycznego", "si_unit": "1"}
   ],
   "sources": [
-    {"id": "interactive-runtime", "path": "crates/fullmag-runner/src/interactive/runtime.rs", "symbol": "InteractiveRuntime", "responsibility": "Own the current interactive backend and cache."},
-    {"id": "stage-manifest", "path": "crates/fullmag-runner/src/autosave_storage.rs", "symbol": "StageManifest", "responsibility": "Describe current autosave storage."},
-    {"id": "adr-accepted-state", "path": "docs/adr/0025-persistent-runtime-and-observation-sources.md", "symbol": "D-04", "responsibility": "Define AcceptedStateRef identity."},
-    {"id": "materialization-status", "path": "crates/fullmag-runner/src/types.rs", "symbol": "LiveFieldMaterializationStatus", "responsibility": "Describe current materialization status."},
+    {"id": "terminal-update", "path": "crates/fullmag-runner/src/interactive/runtime.rs", "symbol": "build_atomic_terminal_update", "responsibility": "Build the current eager terminal update that the target contract supersedes."},
+    {"id": "current-fields", "path": "crates/fullmag-cli/src/interactive_runtime_host.rs", "symbol": "compute_current_fields", "responsibility": "Materialize fields for the current interactive runtime."},
+    {"id": "adr-accepted-state", "path": "docs/adr/0025-persistent-runtime-and-observation-sources.md", "symbol": "DOC-ANCHOR:accepted-state-identity", "responsibility": "Define planned AcceptedStateRef identity.", "evidence_status": "planned_contract"},
     {"id": "checkpoint-capture", "path": "crates/fullmag-session/src/capture.rs", "symbol": "capture_checkpoint", "responsibility": "Capture current checkpoint state."}
   ],
   "public_api": {
     "parameters": [
-      {"python": "StageAutosave.fields", "type": "list[FieldAutosave]", "default": "[]", "si_unit": "1", "validation": "Each quantity id is non-empty and cadence is valid for the stage.", "meaning": "Select immutable field autosave payloads; m is an observation carrier, not an exact-resume checkpoint.", "backend_support": "FDM/FEM CPU/GPU according to active capability", "problem_ir": "sampling.stage_autosave.fields[]"}
+      {"python": "StageAutosave.fields", "type": "list[FieldAutosave]", "default": "pusta lista", "si_unit": "1", "validation": "jawna lista pól autosave", "meaning": "`m` jest obserwacyjnym nośnikiem pierwotnym", "backend_support": "według stage/lane", "problem_ir": "sampling.stage_autosave.fields[]"}
     ]
   }
 }
-

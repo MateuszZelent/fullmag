@@ -633,3 +633,24 @@ be used as acceptance criteria.
 - **Time alignment**: Comparisons must be at identical simulation times. If adaptive stepping
   is used, outputs must be interpolated to common time points.
 - **Reproducibility**: Comparison scripts must be deterministic and checked into the repository.
+
+## Persistent observation runtime evidence model
+
+Trwała obserwacja jest raportowana w czterech niezależnych osiach:
+`source presence`, `executability`, `validation` i
+`production qualification`. Obecność kodu, kompilacja, cache albo
+materialization nigdy nie promują wyższej osi.
+
+| Lane | source presence | executability | validation | production qualification |
+|---|---|---|---|---|
+| FDM CPU | partial | not demonstrated end-to-end | unvalidated | not qualified |
+| FDM GPU | partial | not demonstrated end-to-end | unvalidated | not qualified |
+| FEM CPU | partial | not demonstrated end-to-end | unvalidated | not qualified |
+| FEM GPU | partial | not demonstrated end-to-end | unvalidated | not qualified |
+
+Wszystkie lane'y docelowo realizują jeden kontrakt `AcceptedStateRef`,
+`ObservationSource`, `ComputeQuantities`, `LogicalResume` i `ExactResume`,
+ale osobne receipts są obowiązkowe. Wymuszony backend/device nie ma silent
+fallbacku. Brak primary carriera jest typed unsupported. Task 0 jest wyłącznie
+kontraktem źródłowym/dokumentacyjnym i nie zmienia statusu żadnej istniejącej
+capability.
