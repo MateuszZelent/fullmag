@@ -50,6 +50,7 @@ describe("TopologyMeshLayer", () => {
         }}
         tracker={new Viewport3DResourceTracker()}
         vectorColorMode="orientation"
+        vectorScale={1}
         vectorStyle={{}}
       />,
     );
@@ -104,6 +105,7 @@ describe("TopologyMeshLayer", () => {
         }}
         tracker={new Viewport3DResourceTracker()}
         vectorColorMode="orientation"
+        vectorScale={1}
         vectorStyle={{}}
       />,
     );

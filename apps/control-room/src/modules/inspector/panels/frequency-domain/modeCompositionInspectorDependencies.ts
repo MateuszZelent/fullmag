@@ -11,6 +11,8 @@ import type {
   ModeCompositionCompatibleObject,
   ModeCompositionInspectorDependencies,
   ModeCompositionInspectorSpectrum,
+  ModeCompositionSpectrumParticipation,
+  ModeCompositionSpectrumParticipationFractions,
   ModeCompositionSpectrumMode,
   ModeCompositionSpectrumSample,
 } from "./modeCompositionInspectorTypes";
@@ -98,11 +100,13 @@ function mapSpectrumMode(value: unknown): ModeCompositionSpectrumMode | null {
   const branchId = modeBranchId(record.branch_id);
   const rawModeIndex = finiteInteger(record.raw_mode_index);
   const residualNorm = finiteNumber(record.residual_relative_l2);
+  const participation = mapSpectrumParticipation(record.component_participation);
   return {
     ...(branchId ? { branchId } : {}),
     fieldId: nonEmptyString(record.mode_field_id),
     frequencyHz,
     modeId,
+    ...(participation ? { participation } : {}),
     ...(rawModeIndex !== null
       ? { rawModeIndex }
       : {}),
@@ -110,6 +114,36 @@ function mapSpectrumMode(value: unknown): ModeCompositionSpectrumMode | null {
       ? { residualNorm }
       : {}),
   };
+}
+
+function mapSpectrumParticipation(value: unknown): ModeCompositionSpectrumParticipation | null {
+  const record = asRecord(value);
+  if (!record || record.status !== "ready") return null;
+  const global = mapParticipationFractions(record.global);
+  if (!global) return null;
+  const objects = array(record.objects)
+    .map((object) => {
+      const objectRecord = asRecord(object);
+      const objectId = nonEmptyString(objectRecord?.object_id);
+      const fractions = mapParticipationFractions(objectRecord?.components);
+      return objectId && fractions ? { fractions, objectId } : null;
+    })
+    .filter((object): object is NonNullable<typeof object> => object !== null);
+  return { global, objects };
+}
+
+function mapParticipationFractions(
+  value: unknown,
+): ModeCompositionSpectrumParticipationFractions | null {
+  const record = asRecord(value);
+  if (!record) return null;
+  const total = finiteNumber(record.total);
+  const x = finiteNumber(record.x);
+  const y = finiteNumber(record.y);
+  const z = finiteNumber(record.z);
+  return total === null || x === null || y === null || z === null
+    ? null
+    : { total, x, y, z };
 }
 
 function participatingObjectIds(payload: JsonRecord | null): ReadonlySet<string> {

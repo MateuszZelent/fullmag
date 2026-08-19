@@ -414,7 +414,7 @@ describe("MeshPartLayer", () => {
     );
 
     expect(source).toContain(
-      "(!renderSettings.visible && !modalSurfaceActive)",
+      "(!renderSettings.visible && !modalSurfaceActive && !modalVectorsActive)",
     );
     expect(source).toContain(
       "!hasAnyVisibleRenderableSubLayer",
@@ -558,6 +558,17 @@ describe("MeshPartLayer", () => {
     expect(source).toContain("vectorLayerInput.segments");
     expect(source).not.toContain("fieldModel?.partVectorBuilds.get(part.id)");
     expect(source).not.toContain("fieldModel?.partVectorSegments.get(part.id)");
+  });
+
+  it("gives a ready modal layer ownership of glyph-only vector segments", () => {
+    const source = readFileSync(
+      fileURLToPath(new URL("./MeshPartLayer.tsx", import.meta.url)),
+      "utf8",
+    );
+
+    expect(source).toContain("buildModeCompositionVectorLayerInput");
+    expect(source).toContain("modalVectorLayerInput?.segments ?? vectorLayerInput.segments");
+    expect(source).toContain("modalVectorsActive || renderPlan.vectors.visible");
   });
 
   it("uses volume edges for full magnetic-object wireframe and surface edges for surface mode", () => {

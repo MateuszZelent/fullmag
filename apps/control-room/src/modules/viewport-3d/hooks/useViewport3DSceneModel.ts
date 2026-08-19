@@ -115,6 +115,7 @@ import {
   type AnalysisFieldOverlayAppearanceState,
 } from "@/kernel/visualization/AnalysisFieldOverlayController";
 import { startAnalysisFieldOverlayPhaseAnimation } from "@/kernel/visualization/AnalysisFieldOverlayPhaseAnimation";
+import { useModeCompositionPhaseClock } from "@/kernel/visualization/ModeCompositionPhaseClock";
 import { useVisualizationStateResource } from "@/kernel/visualization/useVisualizationStateResource";
 import { resolveVisualizationEffectiveRenderMode } from "@/kernel/visualization/useVisualizationClientAck";
 import { resolveCrossSectionQueryFromVisualizationState } from "@/shared/domain/mesh/crossSectionQuery";
@@ -2626,6 +2627,9 @@ export function useViewport3DSceneModel({
   const { analysisFieldOverlay } = useKernel();
   const analysisOverlay = useRenderableAnalysisFieldOverlay(analysisFieldOverlay);
   const modeCompositionController = useModeCompositionControllerResource();
+  const modeCompositionPhaseClock = useModeCompositionPhaseClock(
+    modeCompositionController.controller.resource,
+  );
   useEffect(() => {
     const handle = startAnalysisFieldOverlayPhaseAnimation(analysisFieldOverlay);
     return () => {
@@ -6419,6 +6423,7 @@ export function useViewport3DSceneModel({
     modeCompositionFieldLayers,
     modeCompositionId:
       modeCompositionController.controller.resource?.composition_id ?? null,
+    modeCompositionPhaseByLayerId: modeCompositionPhaseClock.phaseByLayerId,
     primitiveModel,
     quantityId: primaryFieldQuantityId,
     regionOverlays,

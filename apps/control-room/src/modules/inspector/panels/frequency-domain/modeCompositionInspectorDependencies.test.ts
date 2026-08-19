@@ -11,6 +11,7 @@ import type {
 
 import {
   modeCompositionInspectorDependenciesFromResources,
+  modeCompositionSpectrumFromArtifact,
 } from "./modeCompositionInspectorDependencies";
 
 const controller = {} as Pick<
@@ -102,6 +103,37 @@ describe("modeCompositionInspectorDependenciesFromResources", () => {
       controller: null,
       resource: null,
       spectrum: null,
+    });
+  });
+
+  it("preserves published per-component participation for global and object spectrum scopes", () => {
+    const spectrum = modeCompositionSpectrumFromArtifact({
+      payload: {
+        samples: [{
+          sample_id: "sample-1",
+          modes: [{
+            mode_id: "mode-1",
+            frequency_hz: 5.2e9,
+            component_participation: {
+              status: "ready",
+              global: { total: 1, x: 0.2, y: 0.3, z: 0.5 },
+              objects: [{
+                object_id: "film",
+                total_fraction: 0.6,
+                components: { total: 0.6, x: 0.1, y: 0.2, z: 0.3 },
+              }],
+            },
+          }],
+        }],
+      },
+    } as unknown as FrequencyDomainJsonArtifactResource);
+
+    expect(spectrum?.samples[0]?.modes[0]?.participation).toEqual({
+      global: { total: 1, x: 0.2, y: 0.3, z: 0.5 },
+      objects: [{
+        objectId: "film",
+        fractions: { total: 0.6, x: 0.1, y: 0.2, z: 0.3 },
+      }],
     });
   });
 });

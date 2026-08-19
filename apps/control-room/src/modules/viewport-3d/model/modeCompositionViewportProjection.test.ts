@@ -5,6 +5,7 @@ import type { ModeCompositionLayer } from "@/kernel/visualization/ModeCompositio
 
 import {
   buildModeCompositionScalarColorBuffer,
+  buildModeCompositionVectorLayerInput,
   modeCompositionTargetIdForMeshPart,
   resolveModeCompositionMeshPartRenderPlan,
 } from "./modeCompositionViewportProjection";
@@ -173,6 +174,56 @@ describe("modeCompositionViewportProjection", () => {
       requiredSurfaceNodeIndices: new Uint32Array([1, 3]),
       topologyNodeCount: 5,
     })).toBeNull();
+  });
+
+  it("keeps a vector component glyph-only and projects its modal phasor into glyph segments", () => {
+    const vectorLayer = layer({
+      appearance: {
+        ...layer().appearance,
+        vector_budget: 2,
+        vector_length_scale: 2,
+        vectors_visible: true,
+      },
+      component: "vector",
+      phase_rad: 0,
+      representation: "phase_rotated_real",
+    });
+
+    expect(
+      buildModeCompositionScalarColorBuffer({
+        field: field(),
+        layer: vectorLayer,
+        requiredSurfaceNodeIndices: new Uint32Array([1, 3]),
+        topologyNodeCount: 5,
+      }),
+    ).toBeNull();
+
+    const vectorInput = buildModeCompositionVectorLayerInput({
+      field: field(),
+      layer: vectorLayer,
+      topologyNodeCount: 5,
+      topologyPositions: new Float32Array([
+        0, 0, 0,
+        1, 0, 0,
+        2, 0, 0,
+        3, 0, 0,
+        4, 0, 0,
+      ]),
+      vectorScale: 1,
+    });
+
+    expect(vectorInput?.segments).toHaveLength(14);
+    const firstSegment = vectorInput?.segments?.slice(0, 7);
+    expect(firstSegment?.[0]).toBeCloseTo(1 - 1 / Math.sqrt(14));
+    expect(firstSegment?.[1]).toBeCloseTo(-2 / Math.sqrt(14));
+    expect(firstSegment?.[2]).toBeCloseTo(-3 / Math.sqrt(14));
+    expect(firstSegment?.[3]).toBeCloseTo(1 + 1 / Math.sqrt(14));
+    expect(firstSegment?.[4]).toBeCloseTo(2 / Math.sqrt(14));
+    expect(firstSegment?.[5]).toBeCloseTo(3 / Math.sqrt(14));
+    expect(firstSegment?.[6]).toBeCloseTo(Math.sqrt(14 / 77));
+    expect(vectorInput?.buildReference?.resourceKey).toBe(
+      "data/fields/analysis%3Aeigen%3Asample-a%3Amode-a",
+    );
   });
 
   it("maps every mesh carrier to its canonical object target", () => {

@@ -174,7 +174,7 @@ export function EigenSpectrumCompositionInspectorPanel({
                   <td><Button aria-label={`Select mode ${mode.modeId}`} size="sm" type="button" variant="ghost" onClick={() => setSelectedModeId(mode.modeId)}>{mode.rawModeIndex ?? mode.modeId}</Button></td>
                   <td>{formatFrequency(mode.frequencyHz)}</td>
                   <td>{formatResidual(mode.residualNorm)}</td>
-                  <td>{scope === "global" ? "Global" : scope}; {componentLabel(component)}</td>
+                  <td>{formatSpectrumParticipation(mode, scope, component)}</td>
                 </tr>
               ))}
             </tbody>
@@ -400,6 +400,17 @@ function effectiveSurfaceLabel(layer: ModeCompositionLayer | null | undefined): 
 
 function formatFrequency(frequencyHz: number): string { return `${(frequencyHz / 1e9).toFixed(6)} GHz`; }
 function formatResidual(residual: number | undefined): string { return residual === undefined ? "Not published" : residual.toExponential(3); }
+function formatSpectrumParticipation(
+  mode: ModeCompositionSpectrumMode,
+  scope: SpectrumScope,
+  component: SpectrumComponent,
+): string {
+  const fractions = scope === "global"
+    ? mode.participation?.global
+    : mode.participation?.objects.find((object) => `object:${object.objectId}` === scope)?.fractions;
+  if (!fractions) return scope === "global" ? "Not published" : "Not available for this object";
+  return `${(fractions[component] * 100).toFixed(2)} %`;
+}
 function componentLabel(component: ModeFieldComponent | SpectrumComponent): string {
   if (component === "total") return "Total";
   if (component === "magnitude") return "|δm|";

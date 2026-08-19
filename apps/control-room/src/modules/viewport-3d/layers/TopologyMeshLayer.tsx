@@ -30,6 +30,7 @@ export function TopologyMeshLayer({
   adoptionRegistry,
   colors,
   vectorColorMode,
+  vectorScale,
   fieldModel,
   getPartSettings,
   materialProfile,
@@ -38,6 +39,7 @@ export function TopologyMeshLayer({
   meshQualityOverlayVisible,
   modeCompositionFieldLayers,
   modeCompositionId,
+  modeCompositionPhaseByLayerId,
   onSelectPart,
   tracker,
   topologyModel,
@@ -47,6 +49,7 @@ export function TopologyMeshLayer({
   adoptionRegistry?: Viewport3DRenderAdoptionRegistry;
   colors: Viewport3DColors;
   vectorColorMode: string;
+  vectorScale: number;
   fieldModel: Viewport3DFieldRenderModel | null;
   getPartSettings: (part: Viewport3DMeshPart) => VisualizationTargetSettings;
   materialProfile: Viewport3DMaterialProfile;
@@ -55,6 +58,7 @@ export function TopologyMeshLayer({
   meshQualityOverlayVisible: boolean;
   modeCompositionFieldLayers?: ModeCompositionFieldLayerSnapshotMap;
   modeCompositionId?: string | null;
+  modeCompositionPhaseByLayerId?: ReadonlyMap<string, number>;
   onSelectPart: (selection: Viewport3DPartSelection) => void;
   tracker: Viewport3DResourceTracker;
   topologyModel: Viewport3DTopologyRenderModel<Viewport3DMeshPart> | null;
@@ -72,6 +76,14 @@ export function TopologyMeshLayer({
         {topologyModel.magneticParts.map((partModel) => {
           const settings = getPartSettings(partModel.part);
           const modeTargetId = modeCompositionTargetIdForMeshPart(partModel.part);
+          const modeCompositionSnapshot = modeTargetId
+            ? modeCompositionFieldLayers?.get(modeTargetId) ?? null
+            : null;
+          const modeCompositionPhaseRad = modeCompositionSnapshot?.layer
+            ? modeCompositionPhaseByLayerId?.get(
+                modeCompositionSnapshot.layer.layer_id,
+              ) ?? null
+            : null;
           return (
             <MeshPartLayer
               adoptionRegistry={adoptionRegistry}
@@ -106,11 +118,8 @@ export function TopologyMeshLayer({
               materialProfile={materialProfile}
               meshQualityColors={meshQualityOverlayVisible ? meshQualityColors : null}
               modeCompositionId={modeCompositionId ?? null}
-              modeCompositionSnapshot={
-                modeTargetId
-                  ? modeCompositionFieldLayers?.get(modeTargetId) ?? null
-                  : null
-              }
+              modeCompositionPhaseRad={modeCompositionPhaseRad}
+              modeCompositionSnapshot={modeCompositionSnapshot}
               onSelectPart={onSelectPart}
               partModel={partModel}
               settings={
@@ -121,6 +130,7 @@ export function TopologyMeshLayer({
               topologyModel={topologyModel}
               tracker={tracker}
               vectorColorMode={vectorColorMode}
+              vectorScale={vectorScale}
               vectorStyle={vectorStyle}
             />
           );

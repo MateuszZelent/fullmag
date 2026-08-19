@@ -10,6 +10,7 @@ import {
   ModeCompositionActiveInspectorPanel,
   ModeCompositionObjectInspectorPanel,
   ModeCompositionObjectsInspectorPanel,
+  EigenSpectrumCompositionInspectorPanel,
   eigenModeLayerAppearanceDefaults,
   legalModeLayerComponents,
   type ModeCompositionInspectorDependencies,
@@ -93,6 +94,19 @@ const dependencies: ModeCompositionInspectorDependencies = {
             fieldId: "field-1",
             frequencyHz: 5.2e9,
             modeId: "mode-1",
+            participation: {
+              global: { total: 1, x: 0.2, y: 0.3, z: 0.5 },
+              objects: [
+                {
+                  fractions: { total: 0.6, x: 0.1, y: 0.2, z: 0.3 },
+                  objectId: "film",
+                },
+                {
+                  fractions: { total: 0.4, x: 0.1, y: 0.1, z: 0.2 },
+                  objectId: "reference",
+                },
+              ],
+            },
             residualNorm: 1e-9,
           },
         ],
@@ -116,6 +130,32 @@ describe("ModeComposition inspectors", () => {
     });
     expect(legalModeLayerComponents("abs")).not.toContain("vector");
     expect(legalModeLayerComponents("phase")).not.toContain("vector");
+  });
+
+  it("renders the selected spectrum metric from published participation data", () => {
+    const html = renderToStaticMarkup(
+      <EigenSpectrumCompositionInspectorPanel
+        dependencies={dependencies}
+        selection={{
+          kind: "results.eigen.spectrum",
+          label: "Spectrum",
+          moduleSource: "results-navigator",
+          nodeId: "results:spectrum",
+          objectId: null,
+          ref: {
+            artifactRevision: "sha256:spectrum-r1",
+            kind: "results.eigen.spectrum",
+            nodeId: "results:spectrum",
+            runId: "run-1",
+            stageId: "stage-1",
+            type: "eigen-spectrum",
+          },
+        }}
+      />,
+    );
+
+    expect(html).toContain("100.00 %");
+    expect(html).not.toContain("Global; Total");
   });
 
   it("renders the active composition with a bounded object summary and no legacy overlay controls", () => {

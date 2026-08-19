@@ -9,11 +9,29 @@ export interface ModeCompositionCompatibleObject {
   readonly targetId: `object:${string}`;
 }
 
+export interface ModeCompositionSpectrumParticipationFractions {
+  readonly total: number;
+  readonly x: number;
+  readonly y: number;
+  readonly z: number;
+}
+
+export interface ModeCompositionSpectrumObjectParticipation {
+  readonly fractions: ModeCompositionSpectrumParticipationFractions;
+  readonly objectId: string;
+}
+
+export interface ModeCompositionSpectrumParticipation {
+  readonly global: ModeCompositionSpectrumParticipationFractions | null;
+  readonly objects: readonly ModeCompositionSpectrumObjectParticipation[];
+}
+
 export interface ModeCompositionSpectrumMode {
   readonly branchId?: string;
   readonly fieldId: string | null;
   readonly frequencyHz: number;
   readonly modeId: string;
+  readonly participation?: ModeCompositionSpectrumParticipation;
   readonly rawModeIndex?: number;
   readonly residualNorm?: number;
 }
