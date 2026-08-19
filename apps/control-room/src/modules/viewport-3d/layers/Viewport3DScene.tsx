@@ -47,6 +47,7 @@ import type {
   VisualizationTargetRef,
   VisualizationTargetSettings,
 } from "@/kernel/visualization/ObjectVisualizationController";
+import type { ModeCompositionFieldLayerSnapshotMap } from "@/kernel/visualization/ModeCompositionFieldLayerController";
 import type { PeriodicOverlayModel } from "@/shared/domain/mesh/periodicOverlayModel";
 
 import type {
@@ -202,6 +203,8 @@ interface Viewport3DSceneProps {
   maxVectorGlyphs: number;
   meshQualityColors: ScalarColorBuffer | null;
   meshQualityOverlayVisible: boolean;
+  modeCompositionFieldLayers: ModeCompositionFieldLayerSnapshotMap;
+  modeCompositionId: string | null;
   meshRegionOverlayParts: readonly RegionMeshOverlayOwnerPart[];
   meshRegionOverlays: readonly RegionOverlayInput[];
   periodicOverlayModel: PeriodicOverlayModel | null;
@@ -903,6 +906,8 @@ function Viewport3DModelLayerStack({
   materialProfile,
   meshQualityColors,
   meshQualityOverlayVisible,
+  modeCompositionFieldLayers,
+  modeCompositionId,
   meshRegionOverlayParts,
   meshRegionOverlays,
   periodicOverlayModel,
@@ -952,6 +957,8 @@ function Viewport3DModelLayerStack({
   | "magnetizationTexturePreviews"
   | "meshQualityColors"
   | "meshQualityOverlayVisible"
+  | "modeCompositionFieldLayers"
+  | "modeCompositionId"
   | "meshRegionOverlayParts"
   | "meshRegionOverlays"
   | "periodicOverlayModel"
@@ -1259,6 +1266,8 @@ function Viewport3DModelLayerStack({
           magnetizationTexturePreviews={magnetizationTexturePreviews}
           meshQualityColors={stagedMeshQualityColors}
           meshQualityOverlayVisible={stagedMeshQualityOverlayVisible}
+          modeCompositionFieldLayers={modeCompositionFieldLayers}
+          modeCompositionId={modeCompositionId}
           onSelectPart={onSelectPart}
           tracker={tracker}
           topologyFreshness={topologyFreshness}
@@ -1473,6 +1482,8 @@ export function Viewport3DScene({
   magnetizationTexturePreviews,
   meshQualityColors,
   meshQualityOverlayVisible,
+  modeCompositionFieldLayers,
+  modeCompositionId,
   meshRegionOverlayParts,
   meshRegionOverlays,
   periodicOverlayModel,
@@ -1690,6 +1701,8 @@ export function Viewport3DScene({
         materialProfile={materialProfile}
         meshQualityColors={meshQualityColors}
         meshQualityOverlayVisible={meshQualityOverlayVisible}
+        modeCompositionFieldLayers={modeCompositionFieldLayers}
+        modeCompositionId={modeCompositionId}
         meshRegionOverlayParts={meshRegionOverlayParts}
         meshRegionOverlays={meshRegionOverlays}
         periodicOverlayModel={periodicOverlayModel}

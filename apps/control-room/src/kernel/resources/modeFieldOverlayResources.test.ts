@@ -101,4 +101,20 @@ describe("mode field overlay resource", () => {
     expect(next.metadata?.resourceRevision).toContain("sha256:artifact-v2");
     expect(next.metadata?.resourceRevision).not.toBe(first.metadata?.resourceRevision);
   });
+
+  it("changes the field build revision when payload content changes at the same artifact revision and path", () => {
+    const first = resolveModeFieldOverlayMetadataRevision(intent, {
+      ...metadata,
+      content_digest: "sha256:field-v1",
+      revision: "sha256:field-v1",
+    });
+    const next = resolveModeFieldOverlayMetadataRevision(intent, {
+      ...metadata,
+      content_digest: "sha256:field-v2",
+      revision: "sha256:field-v2",
+    });
+
+    expect(next).not.toBe(first);
+    expect(next).toContain("sha256:field-v2");
+  });
 });

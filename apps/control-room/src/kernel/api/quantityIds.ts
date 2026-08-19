@@ -160,6 +160,24 @@ export function sameQuantityId(
   return normalizeQuantityIdOrDefault(left) === normalizeQuantityIdOrDefault(right);
 }
 
+/**
+ * Analysis fields are emitted under stable artifact ids but use the same
+ * renderable spatial carrier as magnetization. This is a viewport/data-plane
+ * compatibility rule, not an API quantity alias.
+ */
+export function sameRenderableFieldQuantityId(
+  left: string | null | undefined,
+  right: string | null | undefined,
+): boolean {
+  const leftId = normalizeQuantityIdOrDefault(left);
+  const rightId = normalizeQuantityIdOrDefault(right);
+  return (
+    leftId === rightId ||
+    (leftId === "m" && isAnalysisFieldQuantityId(rightId)) ||
+    (rightId === "m" && isAnalysisFieldQuantityId(leftId))
+  );
+}
+
 export function isMagneticOnlyQuantityId(quantityId: string): boolean {
   return MAGNETIC_ONLY_QUANTITY_IDS.has(resolveCanonicalQuantityId(quantityId));
 }

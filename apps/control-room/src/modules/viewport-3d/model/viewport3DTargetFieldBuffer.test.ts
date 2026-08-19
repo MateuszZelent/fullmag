@@ -12,6 +12,7 @@ import {
   resolveViewport3DTargetFieldInput,
   viewport3DTargetFieldBufferCanServeSurface,
   viewport3DTargetFieldBufferCanServeVectors,
+  viewport3DTargetFieldBufferMatchesQuantity,
 } from "./viewport3DTargetFieldBuffer";
 
 type TargetFieldBufferOptions = Parameters<
@@ -561,5 +562,22 @@ describe("viewport3DTargetFieldBuffer", () => {
     expect(buffer.requestId).toBeNull();
     expect(viewport3DTargetFieldBufferCanServeVectors(buffer)).toBe(true);
     expect(viewport3DTargetFieldBufferCanServeSurface(buffer, "x")).toBe(false);
+  });
+
+  it("matches an analysis mode buffer to the renderable magnetization target", () => {
+    const buffer = buildViewport3DTargetFieldBuffer({
+      fieldVector: vectorFixture({
+        quantityId: "analysis:eigen:sample-0000:mode-0000",
+      }),
+      query: { component: "full", scope_kind: "full" },
+      targetIds: ["part:film"],
+    });
+
+    expect(
+      viewport3DTargetFieldBufferMatchesQuantity(buffer, "m"),
+    ).toBe(true);
+    expect(viewport3DTargetFieldBufferMatchesQuantity(buffer, "H_eff")).toBe(
+      false,
+    );
   });
 });

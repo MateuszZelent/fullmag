@@ -16,6 +16,26 @@ import {
 } from "./FrequencyDomainCharts";
 
 describe("FrequencyDomainCharts", () => {
+  it("keeps mode cards and chart content bounded in a responsive inspector", () => {
+    const css = readFileSync(
+      new URL("../../../design/styles/inspector-frequency-domain.css", import.meta.url),
+      "utf8",
+    );
+
+    expect(css).toMatch(
+      /\.fm-frequency-domain-chart\s*>\s*\.fm-analysis-chart-surface\s*\{[\s\S]*?display:\s*grid;/,
+    );
+    expect(css).toMatch(
+      /\.fm-frequency-domain-chart__point-actions\s*\{[\s\S]*?display:\s*grid;[\s\S]*?grid-template-columns:\s*minmax\(0, 1fr\) auto;/,
+    );
+    expect(css).toMatch(
+      /\.fm-frequency-domain-chart__mode\s*\{[\s\S]*?min-width:\s*0;[\s\S]*?width:\s*100%;/,
+    );
+    expect(css).toContain(".fm-frequency-domain-chart__summary > span,");
+    expect(css).not.toContain(".fm-frequency-domain-chart__summary span,");
+    expect(css).toContain("grid-template-columns: repeat(auto-fit, minmax(min(100%, 180px), 1fr));");
+  });
+
   it("never disposes an ECharts instance owned by another mounted frame", () => {
     const source = readFileSync(
       new URL("./FrequencyDomainCharts.tsx", import.meta.url),

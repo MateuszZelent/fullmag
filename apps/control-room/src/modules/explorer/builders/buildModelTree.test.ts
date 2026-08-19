@@ -12,7 +12,7 @@ import type {
 import { buildDomainPresentation } from "@/shared/domain/mesh/domainPresentation";
 import type { FdmDomainPresentation } from "@/shared/domain/mesh/domainPresentation";
 import {
-  ANALYSIS_EIGEN_MODE_V2_PATH,
+  ANALYSIS_FREQUENCY_DOMAIN_EIGEN_MODE_PATH,
   ANALYSIS_FREQUENCY_DOMAIN_EIGEN_BRANCHES_V2_PATH,
   ANALYSIS_FREQUENCY_DOMAIN_EIGEN_DIAGNOSTICS_V2_PATH,
   ANALYSIS_FREQUENCY_DOMAIN_EIGEN_DISPERSION_PATH,
@@ -181,6 +181,9 @@ const FREQUENCY_DOMAIN_RESPONSE_FIELD_RESULT_MANIFEST = {
   artifact_path: "frequency_domain/manifest.v1.json",
   missing_reason: null,
   payload: {
+    artifacts: {
+      response_sweep_v1_path: "response/magnetic_response_sweep.v1.json",
+    },
     resources: {
       response_field_resources: [
         {
@@ -188,12 +191,65 @@ const FREQUENCY_DOMAIN_RESPONSE_FIELD_RESULT_MANIFEST = {
           frequency_index: 1,
         },
       ],
+      response_sweep_resource_key:
+        ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_MAGNETIC_SWEEP_PATH,
     },
+    study_product: "driven_response",
     schema_version: "frequency_domain_manifest.v1",
   },
   resource_key: ANALYSIS_FREQUENCY_DOMAIN_MANIFEST_V1_PATH,
   schema_version: "frequency_domain_manifest.v1",
   status: "ready",
+} satisfies NonNullable<FrequencyDomainManifestResource["result_manifest"]>;
+
+const FREQUENCY_DOMAIN_MODAL_RESULT_MANIFEST = {
+  ...FREQUENCY_DOMAIN_RESPONSE_FIELD_RESULT_MANIFEST,
+  payload: {
+    artifacts: {
+      spectrum_v2_path: "eigen/spectrum.v2.json",
+    },
+    requested_execution: { calculation_mode: "fmr_modal" },
+    resources: {
+      spectrum_resource_key: ANALYSIS_FREQUENCY_DOMAIN_EIGEN_SPECTRUM_V2_PATH,
+    },
+    study_product: "modal_eigen",
+    schema_version: "frequency_domain_manifest.v1",
+  },
+} satisfies NonNullable<FrequencyDomainManifestResource["result_manifest"]>;
+
+const FREQUENCY_DOMAIN_MODAL_DISPERSION_RESULT_MANIFEST = {
+  ...FREQUENCY_DOMAIN_MODAL_RESULT_MANIFEST,
+  payload: {
+    ...FREQUENCY_DOMAIN_MODAL_RESULT_MANIFEST.payload,
+    requested_execution: { calculation_mode: "dispersion_modal" },
+    artifacts: {
+      ...FREQUENCY_DOMAIN_MODAL_RESULT_MANIFEST.payload.artifacts,
+      branches_v2_path: "eigen/branches.v2.json",
+      dispersion_csv_path: "eigen/dispersion.csv",
+    },
+    resources: {
+      ...FREQUENCY_DOMAIN_MODAL_RESULT_MANIFEST.payload.resources,
+      branches_resource_key: ANALYSIS_FREQUENCY_DOMAIN_EIGEN_BRANCHES_V2_PATH,
+      dispersion_resource_key: ANALYSIS_FREQUENCY_DOMAIN_EIGEN_DISPERSION_PATH,
+    },
+  },
+} satisfies NonNullable<FrequencyDomainManifestResource["result_manifest"]>;
+
+const FREQUENCY_DOMAIN_MODAL_STALE_DISPERSION_RESULT_MANIFEST = {
+  ...FREQUENCY_DOMAIN_MODAL_DISPERSION_RESULT_MANIFEST,
+  payload: {
+    ...FREQUENCY_DOMAIN_MODAL_DISPERSION_RESULT_MANIFEST.payload,
+    requested_execution: { calculation_mode: "free_modes" },
+  },
+} satisfies NonNullable<FrequencyDomainManifestResource["result_manifest"]>;
+
+const FREQUENCY_DOMAIN_DRIVEN_RESULT_MANIFEST = {
+  ...FREQUENCY_DOMAIN_RESPONSE_FIELD_RESULT_MANIFEST,
+  payload: {
+    ...FREQUENCY_DOMAIN_RESPONSE_FIELD_RESULT_MANIFEST.payload,
+    requested_execution: { calculation_mode: "fmr_response" },
+    study_product: "driven_response",
+  },
 } satisfies NonNullable<FrequencyDomainManifestResource["result_manifest"]>;
 
 const FREQUENCY_DOMAIN_SPECTRUM = {
@@ -1968,7 +2024,10 @@ describe("buildModelTree", () => {
       buildExplorerTree("results", {
         frequencyDomainBranches: FREQUENCY_DOMAIN_BRANCHES,
         frequencyDomainDispersion: FREQUENCY_DOMAIN_DISPERSION,
-        frequencyDomainManifest: FREQUENCY_DOMAIN_MANIFEST,
+        frequencyDomainManifest: {
+          ...FREQUENCY_DOMAIN_MANIFEST,
+          result_manifest: FREQUENCY_DOMAIN_MODAL_DISPERSION_RESULT_MANIFEST,
+        },
         frequencyDomainResponseSweep: FREQUENCY_DOMAIN_RESPONSE_SWEEP,
         frequencyDomainSpectrum: FREQUENCY_DOMAIN_SPECTRUM,
       }),
@@ -1979,7 +2038,6 @@ describe("buildModelTree", () => {
         "results:frequency-domain:run",
         "results:frequency-domain:fmr",
         "results:frequency-domain:fmr:modal-spectrum",
-        "results:frequency-domain:fmr:response-sweep",
         "results:frequency-domain:dispersion",
         "results:eigen:k-path",
         "results:eigen",
@@ -1988,14 +2046,6 @@ describe("buildModelTree", () => {
         "results:eigen:branches:branch:branch-0",
         "results:eigen:sample:0:mode:2",
         "results:eigen:dispersion",
-        "results:frequency-response",
-        "results:frequency-response:sweep",
-        "results:frequency-response:frequency-points",
-        "results:frequency-response:frequency-points:0",
-        "results:frequency-response:frequency-points:1",
-        "results:frequency-response:observables",
-        "results:frequency-response:observables:mx",
-        "results:frequency-response:observables:my",
       ]),
     );
     expect(results.map((node) => node.id)).not.toContain(
@@ -2037,64 +2087,6 @@ describe("buildModelTree", () => {
       status: "ready",
     });
     expect(
-      results.find((node) => node.id === "results:frequency-domain:fmr:peaks"),
-    ).toMatchObject({
-      artifactPath: "response/magnetic_response_sweep.v2.json",
-      badge: "3 peak(s)",
-      children: expect.any(Array),
-      calculationMode: "fmr_response",
-      kind: "results.frequency_domain.fmr_peaks",
-      resourceRef: ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_MAGNETIC_SWEEP_PATH,
-      status: "ready",
-    });
-    expect(
-      results.find(
-        (node) => node.id === "results:frequency-domain:fmr:peaks:peak:0",
-      ),
-    ).toMatchObject({
-      artifactPath: "response/magnetic_response_sweep.v2.json",
-      badge: "9.5 GHz",
-      calculationMode: "fmr_response",
-      fieldId: undefined,
-      fmrPeakIndex: 0,
-      frequencyIndex: 0,
-      kind: "results.frequency_domain.fmr_peak",
-      label: "Driven Peak 1",
-      parentId: "results:frequency-domain:fmr:peaks",
-      resourceRef: ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_MAGNETIC_SWEEP_PATH,
-      status: "ready",
-    });
-    expect(
-      results.find(
-        (node) => node.id === "results:frequency-domain:fmr:peaks:peak:1",
-      ),
-    ).toMatchObject({
-      artifactPath: "eigen/spectrum.v2.json",
-      badge: "12.5 GHz",
-      calculationMode: "fmr_modal",
-      contextCommands: [
-        "analysis.eigen.plot-mode-3d",
-        "analysis.eigen.plot-mode-3d-real",
-        "analysis.eigen.plot-mode-3d-imag",
-        "analysis.eigen.plot-mode-3d-amplitude",
-        "analysis.eigen.plot-mode-3d-abs",
-        "analysis.eigen.plot-mode-3d-phase",
-        "analysis.eigen.plot-mode-3d-phase-rotated-real",
-        "analysis.eigen.set-mode-3d-animation",
-      ],
-      fieldId: "analysis:eigen:sample-0000:mode-0002",
-      fmrPeakIndex: 1,
-      kind: "results.frequency_domain.fmr_peak",
-      label: "Modal Peak 2",
-      modeIndex: 2,
-      parentId: "results:frequency-domain:fmr:peaks",
-      resourceRef: analysisFieldVectorResourceKey(
-        "analysis:eigen:sample-0000:mode-0002",
-      ),
-      sampleIndex: 0,
-      status: "ready",
-    });
-    expect(
       results.find(
         (node) => node.id === "results:frequency-domain:fmr:modal-spectrum",
       ),
@@ -2122,8 +2114,8 @@ describe("buildModelTree", () => {
           node.id === "results:frequency-domain:calculation-modes:fmr",
       ),
     ).toMatchObject({
-      badge: "modal + driven",
-      calculationMode: "fmr_response",
+      badge: "modal",
+      calculationMode: "fmr_modal",
       kind: "results.frequency_domain.fmr",
       status: "ready",
     });
@@ -2134,25 +2126,6 @@ describe("buildModelTree", () => {
           "results:frequency-domain:calculation-modes:response-map",
       ),
     ).toBeUndefined();
-    expect(
-      results.find(
-        (node) => node.id === "results:frequency-domain:fmr:response-sweep",
-      ),
-    ).toMatchObject({
-      artifactPath: "response/magnetic_response_sweep.v2.json",
-      badge: "3 point(s)",
-      calculationMode: "fmr_response",
-      kind: "results.frequency_domain.fmr_response_sweep",
-      resourceRef: ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_MAGNETIC_SWEEP_PATH,
-      status: "ready",
-    });
-    expect(
-      results.find((node) => node.id === "results:frequency-response:sweep"),
-    ).toMatchObject({
-      badge: "3 point(s)",
-      kind: "results.frequency_response.sweep",
-      status: "ready",
-    });
     expect(
       results.find((node) => node.id === "results:eigen:dispersion"),
     ).toMatchObject({
@@ -2249,55 +2222,11 @@ describe("buildModelTree", () => {
       resourceRef: ANALYSIS_FREQUENCY_DOMAIN_EIGEN_BRANCHES_V2_PATH,
       status: "ready",
     });
-    expect(
-      results.find(
-        (node) => node.id === "results:frequency-response:frequency-points",
-      ),
-    ).toMatchObject({
-      badge: "2 listed",
-      kind: "results.frequency_response.frequency_points",
-      status: "ready",
-    });
-    expect(
-      results.find(
-        (node) => node.id === "results:frequency-response:frequency-points:0",
-      ),
-    ).toMatchObject({
-      badge: "frequency 0, 2 observable(s)",
-      contextCommands: undefined,
-      fieldId: undefined,
-      frequencyIndex: 0,
-      kind: "results.frequency_response.frequency_point",
-      label: "9.5 GHz",
-      resourceRef: ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_MAGNETIC_SWEEP_PATH,
-      status: "stale",
-    });
-    expect(
-      results.find(
-        (node) => node.id === "results:frequency-response:observables",
-      ),
-    ).toMatchObject({
-      badge: "2 observable(s)",
-      kind: "results.frequency_response.observables",
-      status: "ready",
-    });
-    expect(
-      results.find(
-        (node) => node.id === "results:frequency-response:observables:mx",
-      ),
-    ).toMatchObject({
-      badge: "2 point(s)",
-      kind: "results.frequency_response.observable",
-      label: "mx",
-      observableId: "mx",
-      resourceRef: ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_MAGNETIC_SWEEP_PATH,
-      status: "ready",
-    });
-
     const responseResults = flattenExplorerNodes(
       buildExplorerTree("results", {
         frequencyDomainManifest: {
           ...FREQUENCY_DOMAIN_MANIFEST,
+          result_manifest: FREQUENCY_DOMAIN_DRIVEN_RESULT_MANIFEST,
           response_progress: {
             complete: false,
             completed_frequency_points: 2,
@@ -2345,17 +2274,22 @@ describe("buildModelTree", () => {
     expect(responsePointNodes).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
+          badge: "field-ready",
           contextCommands: undefined,
           fieldId: undefined,
           frequencyIndex: 0,
           id: "results:frequency-response:frequency-points:0",
+          label: "Frequency 0",
           status: "stale",
         }),
         expect.objectContaining({
-          fieldId: undefined,
+          badge: "field-ready",
+          contextCommands: expect.any(Array),
+          fieldId: "analysis:frequency-response:field-0001",
           frequencyIndex: 1,
           id: "results:frequency-response:frequency-points:1",
-          status: "stale",
+          label: "Frequency 1",
+          status: "ready",
         }),
       ]),
     );
@@ -2556,7 +2490,7 @@ describe("buildModelTree", () => {
     ).toMatchObject({
       artifactPath: "eigen/modes/sample_0000/mode_0002.json",
       badge: "1 mode metadata",
-      resourceRef: ANALYSIS_EIGEN_MODE_V2_PATH,
+      resourceRef: ANALYSIS_FREQUENCY_DOMAIN_EIGEN_MODE_PATH,
       status: "ready",
     });
     expect(
@@ -2696,7 +2630,6 @@ describe("buildModelTree", () => {
     ).toEqual([
       "results.frequency_domain.root",
       "results.frequency_domain.run",
-      "results.frequency_domain.calculation_modes",
     ]);
     expect(emptyArtifactResults.map((node) => node.id)).not.toContain(
       "results:eigen",
@@ -2768,10 +2701,140 @@ describe("buildModelTree", () => {
     );
   });
 
+  it("projects Results from the active result product instead of capability or stale resources", () => {
+    const modalIds = flattenExplorerNodes(
+      buildExplorerTree("results", {
+        frequencyDomainBranches: FREQUENCY_DOMAIN_BRANCHES,
+        frequencyDomainDispersion: FREQUENCY_DOMAIN_DISPERSION,
+        frequencyDomainManifest: {
+          ...FREQUENCY_DOMAIN_MANIFEST,
+          result_manifest: FREQUENCY_DOMAIN_MODAL_RESULT_MANIFEST,
+        },
+        frequencyDomainResponseSweep: FREQUENCY_DOMAIN_RESPONSE_SWEEP,
+        frequencyDomainSpectrum: FREQUENCY_DOMAIN_SPECTRUM,
+      }),
+    ).map((node) => node.id);
+
+    expect(modalIds).toContain("results:eigen");
+    expect(modalIds).toContain("results:eigen:spectrum");
+    expect(modalIds).not.toContain("results:frequency-domain:dispersion");
+    expect(modalIds).not.toContain("results:eigen:dispersion");
+    expect(modalIds).not.toContain("results:frequency-response");
+    expect(modalIds).not.toContain(
+      "results:frequency-domain:fmr:response-sweep",
+    );
+    expect(
+      flattenExplorerNodes(
+        buildExplorerTree("results", {
+          frequencyDomainManifest: {
+            ...FREQUENCY_DOMAIN_MANIFEST,
+            result_manifest: FREQUENCY_DOMAIN_MODAL_RESULT_MANIFEST,
+          },
+          frequencyDomainSpectrum: FREQUENCY_DOMAIN_SPECTRUM,
+        }),
+      ).find((node) => node.id === "results:frequency-domain:fmr"),
+    ).toMatchObject({ badge: "modal" });
+
+    const drivenIds = flattenExplorerNodes(
+      buildExplorerTree("results", {
+        frequencyDomainBranches: FREQUENCY_DOMAIN_BRANCHES,
+        frequencyDomainDispersion: FREQUENCY_DOMAIN_DISPERSION,
+        frequencyDomainManifest: {
+          ...FREQUENCY_DOMAIN_MANIFEST,
+          result_manifest: FREQUENCY_DOMAIN_DRIVEN_RESULT_MANIFEST,
+          response_progress: FREQUENCY_DOMAIN_RESPONSE_PROGRESS,
+        },
+        frequencyDomainResponseSweep: FREQUENCY_DOMAIN_RESPONSE_SWEEP,
+        frequencyDomainSpectrum: FREQUENCY_DOMAIN_SPECTRUM,
+      }),
+    ).map((node) => node.id);
+
+    expect(drivenIds).toContain("results:frequency-response");
+    expect(drivenIds).not.toContain("results:eigen");
+    expect(drivenIds).not.toContain("results:eigen:spectrum");
+    expect(
+      flattenExplorerNodes(
+        buildExplorerTree("results", {
+          frequencyDomainManifest: {
+            ...FREQUENCY_DOMAIN_MANIFEST,
+            result_manifest: FREQUENCY_DOMAIN_DRIVEN_RESULT_MANIFEST,
+            response_progress: FREQUENCY_DOMAIN_RESPONSE_PROGRESS,
+          },
+        }),
+      ).find((node) => node.id === "results:frequency-domain:fmr"),
+    ).toBeUndefined();
+
+    const ambiguousIds = flattenExplorerNodes(
+      buildExplorerTree("results", {
+        frequencyDomainBranches: FREQUENCY_DOMAIN_BRANCHES,
+        frequencyDomainDispersion: FREQUENCY_DOMAIN_DISPERSION,
+        frequencyDomainManifest: FREQUENCY_DOMAIN_MANIFEST,
+        frequencyDomainResponseSweep: FREQUENCY_DOMAIN_RESPONSE_SWEEP,
+        frequencyDomainSpectrum: FREQUENCY_DOMAIN_SPECTRUM,
+      }),
+    ).map((node) => node.id);
+
+    expect(ambiguousIds).not.toContain("results:eigen");
+    expect(ambiguousIds).not.toContain("results:frequency-response");
+    expect(ambiguousIds).not.toContain(
+      "results:frequency-domain:calculation-modes",
+    );
+
+    const pendingIds = flattenExplorerNodes(
+      buildExplorerTree("results", {
+        frequencyDomainBranches: FREQUENCY_DOMAIN_BRANCHES,
+        frequencyDomainDispersion: FREQUENCY_DOMAIN_DISPERSION,
+        frequencyDomainManifest: {
+          ...FREQUENCY_DOMAIN_MANIFEST,
+          result_manifest: {
+            ...FREQUENCY_DOMAIN_MODAL_RESULT_MANIFEST,
+            status: "pending",
+          },
+        },
+        frequencyDomainResponseSweep: FREQUENCY_DOMAIN_RESPONSE_SWEEP,
+        frequencyDomainSpectrum: FREQUENCY_DOMAIN_SPECTRUM,
+      }),
+    ).map((node) => node.id);
+
+    expect(pendingIds).not.toContain("results:eigen");
+    expect(pendingIds).not.toContain("results:frequency-response");
+    expect(pendingIds).not.toContain(
+      "results:frequency-domain:calculation-modes",
+    );
+
+    const unknownProductIds = flattenExplorerNodes(
+      buildExplorerTree("results", {
+        frequencyDomainBranches: FREQUENCY_DOMAIN_BRANCHES,
+        frequencyDomainDispersion: FREQUENCY_DOMAIN_DISPERSION,
+        frequencyDomainManifest: {
+          ...FREQUENCY_DOMAIN_MANIFEST,
+          result_manifest: {
+            ...FREQUENCY_DOMAIN_MODAL_RESULT_MANIFEST,
+            payload: {
+              ...FREQUENCY_DOMAIN_MODAL_RESULT_MANIFEST.payload,
+              study_product: "unknown_product",
+            },
+          },
+        },
+        frequencyDomainResponseSweep: FREQUENCY_DOMAIN_RESPONSE_SWEEP,
+        frequencyDomainSpectrum: FREQUENCY_DOMAIN_SPECTRUM,
+      }),
+    ).map((node) => node.id);
+
+    expect(unknownProductIds).not.toContain("results:eigen");
+    expect(unknownProductIds).not.toContain("results:frequency-response");
+    expect(unknownProductIds).not.toContain(
+      "results:frequency-domain:calculation-modes",
+    );
+  });
+
   it("keeps modal namespace compatibility and gates response/comparison result roots", () => {
     const modalOnlyResults = flattenExplorerNodes(
       buildExplorerTree("results", {
-        frequencyDomainManifest: FREQUENCY_DOMAIN_MANIFEST,
+        frequencyDomainManifest: {
+          ...FREQUENCY_DOMAIN_MANIFEST,
+          result_manifest: FREQUENCY_DOMAIN_MODAL_RESULT_MANIFEST,
+        },
         frequencyDomainSpectrum: FREQUENCY_DOMAIN_SPECTRUM,
       }),
     );
@@ -2796,6 +2859,7 @@ describe("buildModelTree", () => {
       buildExplorerTree("results", {
         frequencyDomainManifest: {
           ...FREQUENCY_DOMAIN_MANIFEST,
+          result_manifest: FREQUENCY_DOMAIN_DRIVEN_RESULT_MANIFEST,
           response_progress: FREQUENCY_DOMAIN_RESPONSE_PROGRESS,
         },
       }),
@@ -2826,7 +2890,11 @@ describe("buildModelTree", () => {
 
     const drivenOnlyResults = flattenExplorerNodes(
       buildExplorerTree("results", {
-        frequencyDomainManifest: FREQUENCY_DOMAIN_MANIFEST,
+        frequencyDomainManifest: {
+          ...FREQUENCY_DOMAIN_MANIFEST,
+          result_manifest: FREQUENCY_DOMAIN_DRIVEN_RESULT_MANIFEST,
+          response_progress: FREQUENCY_DOMAIN_RESPONSE_PROGRESS,
+        },
         frequencyDomainResponseSweep: FREQUENCY_DOMAIN_RESPONSE_SWEEP,
       }),
     );
@@ -2848,10 +2916,10 @@ describe("buildModelTree", () => {
         (node) => node.id === "results:frequency-response:frequency-points:0",
       ),
     ).toMatchObject({
-      badge: "frequency 0, 2 observable(s)",
+      badge: "field-ready",
       fieldId: undefined,
       kind: "results.frequency_response.frequency_point",
-      label: "9.5 GHz",
+      label: "Frequency 0",
       status: "stale",
     });
     expect(
@@ -2859,16 +2927,20 @@ describe("buildModelTree", () => {
         (node) => node.id === "results:frequency-response:frequency-points:1",
       ),
     ).toMatchObject({
-      badge: "frequency 1, 1 observable(s)",
-      fieldId: undefined,
+      badge: "field-ready",
+      contextCommands: expect.any(Array),
+      fieldId: "analysis:frequency-response:field-0001",
       kind: "results.frequency_response.frequency_point",
-      label: "10.5 GHz",
-      status: "stale",
+      label: "Frequency 1",
+      status: "ready",
     });
 
     const modalAndDrivenResults = flattenExplorerNodes(
       buildExplorerTree("results", {
-        frequencyDomainManifest: FREQUENCY_DOMAIN_MANIFEST,
+        frequencyDomainManifest: {
+          ...FREQUENCY_DOMAIN_MANIFEST,
+          result_manifest: FREQUENCY_DOMAIN_MODAL_RESULT_MANIFEST,
+        },
         frequencyDomainResponseSweep: FREQUENCY_DOMAIN_RESPONSE_SWEEP,
         frequencyDomainSpectrum: FREQUENCY_DOMAIN_SPECTRUM,
       }),
@@ -2878,14 +2950,40 @@ describe("buildModelTree", () => {
       modalAndDrivenResults.find(
         (node) => node.id === "results:frequency-domain:comparison",
       ),
-    ).toMatchObject({
-      kind: "results.frequency_domain.comparison",
-      label: "Modal vs Driven Comparison",
-      status: "ready",
-    });
+    ).toBeUndefined();
   });
 
-  it("projects frequency-domain mode fields under object visualization nodes", () => {
+  it("does not project stale dispersion artifacts for a single free-mode solve", () => {
+    const results = flattenExplorerNodes(
+      buildExplorerTree("results", {
+        frequencyDomainBranches: FREQUENCY_DOMAIN_BRANCHES,
+        frequencyDomainDispersion: FREQUENCY_DOMAIN_DISPERSION,
+        frequencyDomainManifest: {
+          ...FREQUENCY_DOMAIN_MANIFEST,
+          result_manifest: FREQUENCY_DOMAIN_MODAL_STALE_DISPERSION_RESULT_MANIFEST,
+        },
+        frequencyDomainSpectrum: FREQUENCY_DOMAIN_SPECTRUM,
+      }),
+    );
+
+    expect(results.map((node) => node.id)).toContain(
+      "results:eigen:spectrum",
+    );
+    expect(results.map((node) => node.id)).not.toContain(
+      "results:frequency-domain:dispersion",
+    );
+    expect(results.map((node) => node.id)).not.toContain(
+      "results:frequency-domain:calculation-modes:dispersion",
+    );
+    expect(results.map((node) => node.id)).not.toContain(
+      "results:eigen:dispersion",
+    );
+    expect(results.map((node) => node.id)).not.toContain(
+      "results:eigen:branches",
+    );
+  });
+
+  it("does not project a global modal overlay under every object", () => {
     const flattened = flattenExplorerNodes(
       (
         buildModelTree as unknown as (
@@ -2906,19 +3004,19 @@ describe("buildModelTree", () => {
         },
         {
           activeAnalysisFieldOverlay: {
-            fieldId: "analysis:frequency-response:field-0001",
-            label: "Response field 1",
+            fieldId: "analysis:eigen:sample-0000:mode-0002",
+            label: "Sample 0 Mode 2",
             query: {
               component: "full",
               phase_rad: 0,
               scope_kind: "full",
               view: "real",
             },
-            source: "frequency-response",
+            source: "eigen-mode",
           },
           frequencyDomainManifest: {
             ...FREQUENCY_DOMAIN_MANIFEST,
-            result_manifest: FREQUENCY_DOMAIN_RESPONSE_FIELD_RESULT_MANIFEST,
+            result_manifest: FREQUENCY_DOMAIN_MODAL_RESULT_MANIFEST,
           } as FrequencyDomainManifestResource,
           frequencyDomainResponseSweep: FREQUENCY_DOMAIN_RESPONSE_SWEEP,
           frequencyDomainSpectrum: FREQUENCY_DOMAIN_SPECTRUM,
@@ -2927,78 +3025,10 @@ describe("buildModelTree", () => {
     );
 
     expect(
-      flattened.find(
-        (node) =>
-          node.id === "model:object:film:visualization:mode-visualization",
+      flattened.filter((node) =>
+        node.kind.startsWith("object.mode_visualization"),
       ),
-    ).toMatchObject({
-      badge: "2 field(s)",
-      kind: "object.mode_visualization",
-      label: "Mode visualization",
-      objectId: "film",
-      parentId: "model:object:film:visualization",
-      status: "ready",
-    });
-    expect(
-      flattened.find(
-        (node) =>
-          node.id ===
-          "model:object:film:visualization:mode-visualization:response:frequency:1",
-      ),
-    ).toMatchObject({
-      activeAnalysisField: true,
-      badge: "10.5 GHz",
-      fieldId: "analysis:frequency-response:field-0001",
-      frequencyIndex: 1,
-      kind: "object.mode_visualization.field",
-      objectId: "film",
-      status: "ready",
-    });
-    expect(
-      flattened.find(
-        (node) =>
-          node.id ===
-          "model:object:film:visualization:mode-visualization:response:frequency:1:view:real",
-      ),
-    ).toMatchObject({
-      activeAnalysisField: true,
-      fieldId: "analysis:frequency-response:field-0001",
-      frequencyIndex: 1,
-      kind: "object.mode_visualization.view",
-      label: "Real",
-      objectId: "film",
-      status: "ready",
-    });
-    expect(
-      flattened.find(
-        (node) =>
-          node.id ===
-          "model:object:film:visualization:mode-visualization:eigen:sample:0:mode:2:view:real",
-      ),
-    ).toMatchObject({
-      fieldId: "analysis:eigen:sample-0000:mode-0002",
-      kind: "object.mode_visualization.view",
-      label: "Real",
-      modeIndex: 2,
-      objectId: "film",
-      sampleIndex: 0,
-      status: "ready",
-    });
-    expect(
-      flattened.find(
-        (node) =>
-          node.id ===
-          "model:object:film:visualization:mode-visualization:response:frequency:1:view:phase_rotated_real",
-      ),
-    ).toMatchObject({
-      activeAnalysisField: false,
-      fieldId: "analysis:frequency-response:field-0001",
-      frequencyIndex: 1,
-      kind: "object.mode_visualization.view",
-      label: "Phase-rotated real",
-      objectId: "film",
-      status: "ready",
-    });
+    ).toEqual([]);
   });
 
   it("marks active frequency-domain result and resource nodes from the visualization field", () => {
@@ -3015,7 +3045,10 @@ describe("buildModelTree", () => {
           },
           source: "eigen-mode",
         },
-        frequencyDomainManifest: FREQUENCY_DOMAIN_MANIFEST,
+        frequencyDomainManifest: {
+          ...FREQUENCY_DOMAIN_MANIFEST,
+          result_manifest: FREQUENCY_DOMAIN_MODAL_RESULT_MANIFEST,
+        },
         frequencyDomainResponseSweep: FREQUENCY_DOMAIN_RESPONSE_SWEEP,
         frequencyDomainSpectrum: FREQUENCY_DOMAIN_SPECTRUM,
       }),
@@ -3034,11 +3067,7 @@ describe("buildModelTree", () => {
       activeEigenResults.find(
         (node) => node.id === "results:frequency-domain:fmr:peaks:peak:1",
       ),
-    ).toMatchObject({
-      activeAnalysisField: true,
-      fieldId: "analysis:eigen:sample-0000:mode-0002",
-      kind: "results.frequency_domain.fmr_peak",
-    });
+    ).toBeUndefined();
     expect(
       activeEigenResults.find(
         (node) => node.id === "results:eigen:modes:visualization",
@@ -3065,6 +3094,7 @@ describe("buildModelTree", () => {
         frequencyDomainManifest: {
           ...FREQUENCY_DOMAIN_MANIFEST,
           result_manifest: FREQUENCY_DOMAIN_RESPONSE_FIELD_RESULT_MANIFEST,
+          response_progress: FREQUENCY_DOMAIN_RESPONSE_PROGRESS,
         } as FrequencyDomainManifestResource,
         frequencyDomainResponseSweep: FREQUENCY_DOMAIN_RESPONSE_SWEEP,
       }),
@@ -3174,6 +3204,7 @@ describe("buildModelTree", () => {
         artifact_path: "frequency_domain/manifest.v1.json",
         missing_reason: null,
         payload: {
+          study_product: "driven_response",
           resources: {
             response_field_resources: [
               {
@@ -3194,7 +3225,10 @@ describe("buildModelTree", () => {
 
     const results = flattenExplorerNodes(
       buildExplorerTree("results", {
-        frequencyDomainManifest: manifest,
+        frequencyDomainManifest: {
+          ...manifest,
+          response_progress: FREQUENCY_DOMAIN_RESPONSE_PROGRESS,
+        },
         frequencyDomainResponseSweep: FREQUENCY_DOMAIN_RESPONSE_SWEEP,
       }),
     );
@@ -3204,9 +3238,11 @@ describe("buildModelTree", () => {
         (node) => node.id === "results:frequency-response:frequency-points:0",
       ),
     ).toMatchObject({
+      badge: "field-ready",
       fieldId: undefined,
       frequencyIndex: 0,
       kind: "results.frequency_response.frequency_point",
+      label: "Frequency 0",
       status: "stale",
     });
     expect(
@@ -3214,10 +3250,12 @@ describe("buildModelTree", () => {
         (node) => node.id === "results:frequency-response:frequency-points:1",
       ),
     ).toMatchObject({
+      badge: "field-ready",
+      contextCommands: expect.any(Array),
       fieldId: "analysis:frequency-response:frequency-0042",
       frequencyIndex: 1,
       kind: "results.frequency_response.frequency_point",
-      label: "10.5 GHz",
+      label: "Frequency 1",
       status: "ready",
     });
   });

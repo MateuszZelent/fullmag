@@ -35,10 +35,12 @@ import {
   isMagneticOnlyQuantityId,
   isScalarSpatialQuantityId,
   resolveCanonicalQuantityId,
-  sameQuantityId,
+  sameRenderableFieldQuantityId,
 } from "@/kernel/api/quantityIds";
 import { useCrossSectionResource } from "@/kernel/resources/crossSectionResources";
 import { useModeFieldOverlayIntentResource } from "@/kernel/resources/modeFieldOverlayResources";
+import { useModeCompositionControllerResource } from "@/kernel/resources/modeCompositionResources";
+import { useModeCompositionFieldLayerResources } from "@/kernel/resources/modeCompositionFieldLayerResources";
 import {
   useFdmRegionMembershipBinaryResource,
   useFdmMultilayerLayoutResource,
@@ -112,6 +114,7 @@ import {
   formatFdmDisplaySamplingSummary,
 } from "@/shared/domain/mesh/fdmDisplaySampling";
 import { buildPeriodicOverlayModel } from "@/shared/domain/mesh/periodicOverlayModel";
+import { modeCompositionTargetIdForMeshPart } from "../model/modeCompositionViewportProjection";
 
 import {
   mergeViewport3DFieldScalarColors,
@@ -1755,7 +1758,7 @@ export function resolveViewport3DDisplayedLiveValue<TValue>(
 }
 
 export function sameViewport3DQuantityId(left: string, right: string): boolean {
-  return sameQuantityId(left, right);
+  return sameRenderableFieldQuantityId(left, right);
 }
 
 export function applyViewport3DFieldLayerDiagnosticOverrides(
@@ -2523,6 +2526,18 @@ export function useViewport3DSceneModel({
 }) {
   const { analysisFieldOverlay } = useKernel();
   const analysisOverlay = useAnalysisFieldOverlay(analysisFieldOverlay);
+  const analysisOverlayActive = Boolean(analysisOverlay);
+  const legacyResponseOverlayActive =
+    analysisOverlay?.source === "frequency-response";
+  const modeCompositionController = useModeCompositionControllerResource();
+  const analysisOverlayCellOrigin = analysisOverlay?.cellOrigin ?? null;
+  const analysisOverlayFloquetSpatialConvention =
+    analysisOverlay?.floquetSpatialConvention ?? null;
+  const analysisOverlayModeIntent = analysisOverlay?.modeIntent ?? null;
+  const analysisOverlayPhasorConvention =
+    analysisOverlay?.phasorConvention ?? null;
+  const analysisOverlayQueryView = analysisOverlay?.query.view ?? null;
+  const analysisOverlayWavevectorKf = analysisOverlay?.wavevectorKf ?? null;
   useEffect(() => {
     const handle = startAnalysisFieldOverlayPhaseAnimation(analysisFieldOverlay);
     return () => {
@@ -3030,6 +3045,31 @@ export function useViewport3DSceneModel({
   const fieldCompatibleTopologyRenderModel = topologyCurrent
     ? fieldTopologyRenderModel
     : null;
+  const modeCompositionTopologyByTarget = useMemo(() => {
+    if (
+      !fieldCompatibleTopologyRenderModel?.meshGenerationId ||
+      !fieldCompatibleTopologyRenderModel.meshTopologyHash ||
+      fieldCompatibleTopologyRenderModel.meshRevision == null
+    ) {
+      return {};
+    }
+    const topologyIdentity = {
+      domainGenerationId: fieldCompatibleTopologyRenderModel.meshGenerationId,
+      meshTopologyHash: fieldCompatibleTopologyRenderModel.meshTopologyHash,
+      meshTopologyRevision: String(fieldCompatibleTopologyRenderModel.meshRevision),
+    };
+    return Object.fromEntries(
+      fieldCompatibleTopologyRenderModel.magneticParts.flatMap(({ part }) => {
+        const targetId = modeCompositionTargetIdForMeshPart(part);
+        return targetId ? [[targetId, topologyIdentity]] : [];
+      }),
+    );
+  }, [fieldCompatibleTopologyRenderModel]);
+  const modeCompositionFieldLayers = useModeCompositionFieldLayerResources({
+    composition: modeCompositionController.controller.resource,
+    enabled: Boolean(fieldCompatibleTopologyRenderModel),
+    topologyByTarget: modeCompositionTopologyByTarget,
+  });
   const modeFieldOverlayTopology = useMemo(() => {
     if (
       !fieldCompatibleTopologyRenderModel?.meshGenerationId ||
@@ -4981,17 +5021,19 @@ export function useViewport3DSceneModel({
           vectorScale,
           {
             ...fieldRenderModelBuildOptions,
+            analysisOverlayActive,
+            legacyResponseOverlayActive,
             buildDomainId: "shared-domain",
             buildSessionId: "current",
             complexFieldVector: analysisComplexField,
             fieldRevision: primaryFieldRevision,
             modeOverlay:
-              analysisOverlay?.modeIntent &&
+              analysisOverlayModeIntent &&
               modeFieldOverlay.phasorAmplitudeMax != null
                 ? {
                     phasorAmplitudeMax: modeFieldOverlay.phasorAmplitudeMax,
                     representation:
-                      analysisOverlay.query.view ??
+                      analysisOverlayQueryView ??
                       modeFieldOverlay.metadata?.availableViews[0] ??
                       "complex",
                   }
@@ -4999,10 +5041,10 @@ export function useViewport3DSceneModel({
             scalarRangesByMode: fieldScalarRangesByMode,
             targetVisualizationRevision: renderingState?.revision ?? null,
             topologyRevision: topology.revision,
-            wavevectorKf: analysisOverlay?.wavevectorKf,
-            cellOrigin: analysisOverlay?.cellOrigin,
-            floquetSpatialConvention: analysisOverlay?.floquetSpatialConvention,
-            phasorConvention: analysisOverlay?.phasorConvention,
+            wavevectorKf: analysisOverlayWavevectorKf,
+            cellOrigin: analysisOverlayCellOrigin,
+            floquetSpatialConvention: analysisOverlayFloquetSpatialConvention,
+            phasorConvention: analysisOverlayPhasorConvention,
           },
         ),
     );
@@ -5025,12 +5067,14 @@ export function useViewport3DSceneModel({
     topology.revision,
     vectorColorMode,
     vectorScale,
-    analysisOverlay?.cellOrigin,
-    analysisOverlay?.floquetSpatialConvention,
-    analysisOverlay?.phasorConvention,
-    analysisOverlay?.wavevectorKf,
-    analysisOverlay?.modeIntent,
-    analysisOverlay?.query.view,
+    analysisOverlayActive,
+    legacyResponseOverlayActive,
+    analysisOverlayCellOrigin,
+    analysisOverlayFloquetSpatialConvention,
+    analysisOverlayModeIntent,
+    analysisOverlayPhasorConvention,
+    analysisOverlayQueryView,
+    analysisOverlayWavevectorKf,
     modeFieldOverlay.metadata?.availableViews,
     modeFieldOverlay.phasorAmplitudeMax,
   ]);
@@ -5381,6 +5425,9 @@ export function useViewport3DSceneModel({
     meshQualityColors,
     meshQualityMetric,
     meshQualityOverlayVisible,
+    modeCompositionFieldLayers,
+    modeCompositionId:
+      modeCompositionController.controller.resource?.composition_id ?? null,
     meshRegionOverlayParts,
     periodicOverlayModel,
     meshSizeHighlightModel,

@@ -417,13 +417,17 @@ const ExplorerTreeRow = memo(function ExplorerTreeRow({
       </span>
       <span className="fm-explorer-tree-row__label">{node.label}</span>
       {node.status && node.status !== "ready" ? (
-        <span className="fm-explorer-tree-row__status">{node.status}</span>
+        <span className="fm-explorer-tree-row__status" title={node.status}>
+          {node.status}
+        </span>
       ) : null}
       {node.activeAnalysisField ? (
         <span className="fm-explorer-tree-row__active-field">active</span>
       ) : null}
       {node.badge ? (
-        <span className="fm-explorer-tree-row__badge">{node.badge}</span>
+        <span className="fm-explorer-tree-row__badge" title={node.badge}>
+          {node.badge}
+        </span>
       ) : null}
     </div>
   );

@@ -151,9 +151,13 @@ export function createScalarSurfaceShaderMaterial(
     transparent: options.transparent,
     uniforms: {
       fmColorModeId: { value: colorModeId },
+      fmAmplitudeScale: { value: finiteAmplitudeScale(buffer.amplitudeScale) },
       fmOpacity: { value: options.opacity },
       fmPaletteId: { value: scalarPaletteId(buffer.colorPalette) },
       fmPhaseRad: { value: finitePhaseRad(buffer.complexPhaseRad) ?? 0 },
+      fmRepresentationId: {
+        value: complexRepresentationId(buffer.complexRepresentation),
+      },
       fmScalarMax: { value: buffer.range.max },
       fmScalarMin: { value: buffer.range.min },
       fmWavevectorKf: { value: buffer.wavevectorKf ?? [0, 0, 0] },
@@ -201,9 +205,15 @@ export function updateScalarSurfaceShaderMaterial(
   const floquetActive = buffer.wavevectorKf ? 1 : 0;
 
   material.uniforms.fmColorModeId.value = nextColorModeId;
+  material.uniforms.fmAmplitudeScale.value = finiteAmplitudeScale(
+    buffer.amplitudeScale,
+  );
   material.uniforms.fmOpacity.value = opacity;
   material.uniforms.fmPaletteId.value = scalarPaletteId(buffer.colorPalette);
   material.uniforms.fmPhaseRad.value = finitePhaseRad(buffer.complexPhaseRad) ?? 0;
+  material.uniforms.fmRepresentationId.value = complexRepresentationId(
+    buffer.complexRepresentation,
+  );
   material.uniforms.fmScalarMax.value = buffer.range.max;
   material.uniforms.fmScalarMin.value = buffer.range.min;
   material.uniforms.fmWavevectorKf.value = buffer.wavevectorKf ?? [0, 0, 0];
@@ -234,6 +244,28 @@ function hasComplexShaderValues(buffer: ScalarColorBuffer): boolean {
 
 function finitePhaseRad(value: number | null | undefined): number | null {
   return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function finiteAmplitudeScale(value: number | null | undefined): number {
+  return typeof value === "number" && Number.isFinite(value) ? value : 1;
+}
+
+function complexRepresentationId(
+  representation: ScalarColorBuffer["complexRepresentation"],
+): number {
+  switch (representation) {
+    case "real":
+      return 1;
+    case "imag":
+      return 2;
+    case "abs":
+      return 3;
+    case "phase":
+      return 4;
+    case "phase_rotated_real":
+    default:
+      return 0;
+  }
 }
 
 function resolveSurfaceVertexShader(
@@ -313,6 +345,8 @@ function scalarPaletteId(palette: string | null | undefined): number {
       return 3;
     case "magma":
       return 4;
+    case "twilight":
+      return 5;
     case "viridis":
       return 0;
   }
@@ -342,7 +376,9 @@ const COMPLEX_SCALAR_SURFACE_VERTEX_SHADER = `
 attribute vec3 ${VIEWPORT_3D_COMPLEX_REAL_VALUE_ATTRIBUTE};
 attribute vec3 ${VIEWPORT_3D_COMPLEX_IMAG_VALUE_ATTRIBUTE};
 uniform int fmColorModeId;
+uniform int fmRepresentationId;
 uniform float fmPhaseRad;
+uniform float fmAmplitudeScale;
 uniform vec3 fmWavevectorKf;
 uniform vec3 fmCellOrigin;
 uniform float fmSpatialPhaseSign;
@@ -357,12 +393,24 @@ float scalarFromVector(vec3 value) {
   return length(value);
 }
 
+vec3 projectComplex(vec3 complexReal, vec3 complexImag, float theta) {
+  if (fmRepresentationId == 1) return fmAmplitudeScale * complexReal;
+  if (fmRepresentationId == 2) return fmAmplitudeScale * complexImag;
+  if (fmRepresentationId == 3) {
+    return fmAmplitudeScale * sqrt(complexReal * complexReal + complexImag * complexImag);
+  }
+  if (fmRepresentationId == 4) return atan(complexImag, complexReal);
+  return fmAmplitudeScale * (complexReal * cos(theta) - complexImag * sin(theta));
+}
+
 void main() {
   float theta = fmTemporalPhaseSign * fmPhaseRad;
   if (fmFloquetActive == 1) {
     theta += fmSpatialPhaseSign * dot(fmWavevectorKf, position - fmCellOrigin);
   }
-  vec3 projected = ${VIEWPORT_3D_COMPLEX_REAL_VALUE_ATTRIBUTE} * cos(theta) - ${VIEWPORT_3D_COMPLEX_IMAG_VALUE_ATTRIBUTE} * sin(theta);
+  vec3 complexReal = ${VIEWPORT_3D_COMPLEX_REAL_VALUE_ATTRIBUTE};
+  vec3 complexImag = ${VIEWPORT_3D_COMPLEX_IMAG_VALUE_ATTRIBUTE};
+  vec3 projected = projectComplex(complexReal, complexImag, theta);
   vScalarValue = scalarFromVector(projected);
   gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
 }
@@ -372,6 +420,8 @@ const COMPLEX_ORIENTATION_SURFACE_VERTEX_SHADER = `
 attribute vec3 ${VIEWPORT_3D_COMPLEX_REAL_VALUE_ATTRIBUTE};
 attribute vec3 ${VIEWPORT_3D_COMPLEX_IMAG_VALUE_ATTRIBUTE};
 uniform float fmPhaseRad;
+uniform int fmRepresentationId;
+uniform float fmAmplitudeScale;
 uniform vec3 fmWavevectorKf;
 uniform vec3 fmCellOrigin;
 uniform float fmSpatialPhaseSign;
@@ -379,12 +429,24 @@ uniform float fmTemporalPhaseSign;
 uniform int fmFloquetActive;
 varying vec3 vVectorValue;
 
+vec3 projectComplex(vec3 complexReal, vec3 complexImag, float theta) {
+  if (fmRepresentationId == 1) return fmAmplitudeScale * complexReal;
+  if (fmRepresentationId == 2) return fmAmplitudeScale * complexImag;
+  if (fmRepresentationId == 3) {
+    return fmAmplitudeScale * sqrt(complexReal * complexReal + complexImag * complexImag);
+  }
+  if (fmRepresentationId == 4) return atan(complexImag, complexReal);
+  return fmAmplitudeScale * (complexReal * cos(theta) - complexImag * sin(theta));
+}
+
 void main() {
   float theta = fmTemporalPhaseSign * fmPhaseRad;
   if (fmFloquetActive == 1) {
     theta += fmSpatialPhaseSign * dot(fmWavevectorKf, position - fmCellOrigin);
   }
-  vVectorValue = ${VIEWPORT_3D_COMPLEX_REAL_VALUE_ATTRIBUTE} * cos(theta) - ${VIEWPORT_3D_COMPLEX_IMAG_VALUE_ATTRIBUTE} * sin(theta);
+  vec3 complexReal = ${VIEWPORT_3D_COMPLEX_REAL_VALUE_ATTRIBUTE};
+  vec3 complexImag = ${VIEWPORT_3D_COMPLEX_IMAG_VALUE_ATTRIBUTE};
+  vVectorValue = projectComplex(complexReal, complexImag, theta);
   gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
 }
 `;
@@ -440,6 +502,9 @@ vec3 paletteColor(float t) {
   }
   if (fmPaletteId == 4) {
     return mixStops5(t, vec3(0.0, 0.0, 0.016), vec3(0.231, 0.059, 0.439), vec3(0.549, 0.161, 0.502), vec3(0.871, 0.286, 0.408), vec3(0.988, 0.992, 0.749));
+  }
+  if (fmPaletteId == 5) {
+    return mixStops5(t, vec3(0.184, 0.079, 0.213), vec3(0.384, 0.461, 0.731), vec3(0.886, 0.85, 0.886), vec3(0.698, 0.338, 0.322), vec3(0.184, 0.079, 0.213));
   }
   return mixStops4(t, vec3(0.267, 0.004, 0.329), vec3(0.192, 0.408, 0.557), vec3(0.208, 0.718, 0.475), vec3(0.992, 0.906, 0.145));
 }

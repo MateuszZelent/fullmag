@@ -5,8 +5,10 @@ import {
   ANALYSIS_FREQUENCY_DOMAIN_EIGEN_DIAGNOSTICS_V2_PATH,
   ANALYSIS_FREQUENCY_DOMAIN_EIGEN_DISPERSION_PATH,
   ANALYSIS_FREQUENCY_DOMAIN_EIGEN_FIELD_SWEEP_PATH,
+  ANALYSIS_FREQUENCY_DOMAIN_EIGEN_MODE_PATH,
   ANALYSIS_FREQUENCY_DOMAIN_EIGEN_MODE_FIELD_META_PATH,
   ANALYSIS_FREQUENCY_DOMAIN_EIGEN_SPECTRUM_V2_PATH,
+  ANALYSIS_FREQUENCY_DOMAIN_EIGEN_SPECTRUM_V3_PATH,
   ANALYSIS_FREQUENCY_DOMAIN_FMR_KITTEL_FIT_PATH,
   ANALYSIS_FREQUENCY_DOMAIN_FMR_PEAKS_PATH,
   ANALYSIS_FREQUENCY_DOMAIN_FMR_RESONANCE_FITS_PATH,
@@ -23,11 +25,13 @@ import {
 import {
   canonicalFrequencyDomainResourceKey,
   frequencyDomainModeFieldMetaResourceKey,
+  modeFieldComplexBinaryResourceKey,
 } from "./frequencyDomainResourceKeys";
 
 describe("frequency-domain resource keys", () => {
   it.each([
     ["spectrum", "eigen/spectrum.v2.json", ANALYSIS_FREQUENCY_DOMAIN_EIGEN_SPECTRUM_V2_PATH],
+    ["spectrum v3", "eigen/spectrum.v3.json", ANALYSIS_FREQUENCY_DOMAIN_EIGEN_SPECTRUM_V3_PATH],
     ["field sweep", "eigen/field_sweep.v1.json", ANALYSIS_FREQUENCY_DOMAIN_EIGEN_FIELD_SWEEP_PATH],
     ["branches", "eigen/branches.v2.json", ANALYSIS_FREQUENCY_DOMAIN_EIGEN_BRANCHES_V2_PATH],
     ["dispersion", "eigen/dispersion.csv", ANALYSIS_FREQUENCY_DOMAIN_EIGEN_DISPERSION_PATH],
@@ -77,8 +81,10 @@ describe("frequency-domain resource keys", () => {
     expect(canonicalFrequencyDomainResourceKey(artifactPath)).toBe(resourceKey);
   });
 
-  it("resolves concrete mode metadata keys from a mode artifact path", () => {
-    const expected = frequencyDomainModeFieldMetaResourceKey(3, 7);
+  it("resolves a mode artifact to the canonical frequency-domain mode resource", () => {
+    const expected = ANALYSIS_FREQUENCY_DOMAIN_EIGEN_MODE_PATH
+      .replace("{sample_index}", "3")
+      .replace("{mode_index}", "7");
 
     expect(
       canonicalFrequencyDomainResourceKey("eigen/modes/sample_0003/mode_0007.json"),
@@ -86,6 +92,16 @@ describe("frequency-domain resource keys", () => {
     expect(
       canonicalFrequencyDomainResourceKey(expected),
     ).toBe(expected);
+  });
+
+  it.each([
+    "eigen/mode_fields/sample_0003/mode_0007/vector.bin",
+    "eigen/mode_fields.zarr/sample_0003/mode_0007/vector_xyz_complex",
+    "eigen/mode_fields.zarr/sample_0003/mode_0007/vector_xyz_complex/0.0.0",
+  ])("resolves mode field payload %s to its metadata resource", (artifactPath) => {
+    const expected = frequencyDomainModeFieldMetaResourceKey(3, 7);
+
+    expect(canonicalFrequencyDomainResourceKey(artifactPath)).toBe(expected);
     expect(ANALYSIS_FREQUENCY_DOMAIN_EIGEN_MODE_FIELD_META_PATH).toContain(
       "{sample_index}/{mode_index}/meta",
     );
@@ -169,5 +185,50 @@ describe("frequency-domain resource keys", () => {
     expect(canonicalFrequencyDomainResourceKey("eigen/unknown.v1.json")).toBeNull();
     expect(canonicalFrequencyDomainResourceKey("response/points.v1.json")).toBeNull();
     expect(canonicalFrequencyDomainResourceKey("response/diagnostics.v1.json")).toBeNull();
+  });
+
+  it("uses every source identity for an object-scoped complex mode field", () => {
+    const base = {
+      artifactRevision: "artifact-7",
+      binaryEncoding: "FMVP;version=3",
+      fieldId: "mode-field",
+      fieldRevision: "field-9",
+      generationId: "generation-5",
+      modeId: "mode-2",
+      runId: "run-1",
+      sampleId: "sample-3",
+      scopeKind: "object" as const,
+      stageId: "stage-4",
+      topologyHash: "mesh-6",
+    };
+    const objectA = modeFieldComplexBinaryResourceKey({ ...base, scopeId: "a" });
+    const objectB = modeFieldComplexBinaryResourceKey({ ...base, scopeId: "b" });
+
+    expect(objectA).not.toBe(objectB);
+    expect(objectA).toContain("mode-field");
+    expect(objectA).toContain("field-9");
+    expect(objectA).toContain("generation-5");
+    expect(objectA).toContain("mesh-6");
+  });
+
+  it("keeps display-only choices out of the complex field cache identity", () => {
+    const identity = {
+      artifactRevision: "artifact-7",
+      binaryEncoding: "FMVP;version=3",
+      fieldId: "mode-field",
+      fieldRevision: "field-9",
+      generationId: "generation-5",
+      modeId: "mode-2",
+      runId: "run-1",
+      sampleId: "sample-3",
+      scopeId: "a",
+      scopeKind: "object" as const,
+      stageId: "stage-4",
+      topologyHash: "mesh-6",
+    };
+
+    expect(modeFieldComplexBinaryResourceKey(identity)).toBe(
+      modeFieldComplexBinaryResourceKey({ ...identity }),
+    );
   });
 });

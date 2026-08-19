@@ -1,17 +1,23 @@
 /* ── Explorer panel shell ── */
 .fm-explorer {
-  display: grid;
-  grid-template-rows: auto auto minmax(0, 1fr) auto;
+  display: flex;
+  flex-direction: column;
   height: 100%;
   min-height: 0;
+  min-width: 0;
+  container-name: fm-explorer-panel;
+  container-type: inline-size;
   background: var(--fm-bg-panel);
 }
 
 /* ── Tab bar: underline style scoped to Explorer ── */
 .fm-explorer-tabs {
+  flex: 0 0 auto;
+  min-width: 0;
   border-bottom: 1px solid var(--fm-border-subtle);
   padding: 0 var(--fm-space-2);
   overflow-x: auto;
+  overflow-y: hidden;
   scrollbar-width: none;
 }
 
@@ -23,11 +29,14 @@
 .fm-explorer-tabs .fm-tabs-list {
   gap: 0;
   min-height: var(--fm-panel-header-height);
+  width: max-content;
+  min-width: 100%;
   border: 0;
   background: transparent;
 }
 
 .fm-explorer-tabs .fm-tabs-trigger {
+  flex: 0 0 auto;
   height: var(--fm-panel-header-height);
   padding-inline: var(--fm-space-2);
   border: 0;
@@ -38,6 +47,7 @@
   font-size: var(--fm-font-size-sm);
   font-weight: 500;
   letter-spacing: 0.01em;
+  white-space: nowrap;
   transition:
     color var(--fm-transition-fast),
     border-color var(--fm-transition-fast);
@@ -57,6 +67,8 @@
 
 /* ── Filter bar ── */
 .fm-explorer-filter {
+  flex: 0 0 auto;
+  min-width: 0;
   display: flex;
   align-items: center;
   gap: var(--fm-space-2);
@@ -114,6 +126,9 @@
 
 /* ── Tree container ── */
 .fm-explorer-tree {
+  flex: 1 1 auto;
+  width: 100%;
+  min-width: 0;
   min-height: 0;
   overflow: auto;
   padding: var(--fm-space-1) var(--fm-space-1);
@@ -127,8 +142,9 @@
 
   position: relative;
   display: grid;
-  grid-template-columns: var(--fm-space-4) var(--fm-icon-sm) minmax(0, 1fr) auto auto;
+  grid-template-columns: var(--fm-space-4) var(--fm-icon-sm) minmax(0, 1fr) auto auto auto;
   min-height: var(--fm-control-height-compact);
+  min-width: 0;
   align-items: center;
   gap: var(--fm-space-1);
   border: 1px solid transparent;
@@ -339,6 +355,7 @@
 }
 
 .fm-explorer-tree-row__label {
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -351,11 +368,15 @@
   display: inline-flex;
   align-items: center;
   height: var(--fm-space-5);
+  min-width: 0;
+  max-width: 16ch;
+  overflow: hidden;
   padding: 0 6px;
   border-radius: var(--fm-radius-pill);
   font-family: var(--fm-font-ui);
   font-size: var(--fm-font-size-2xs);
   font-weight: 500;
+  text-overflow: ellipsis;
   white-space: nowrap;
   letter-spacing: 0.01em;
   border: 1px solid var(--fm-border-subtle);
@@ -368,6 +389,9 @@
   display: inline-flex;
   align-items: center;
   height: var(--fm-space-5);
+  min-width: 0;
+  max-width: 16ch;
+  overflow: hidden;
   padding: 0 6px;
   border-radius: var(--fm-radius-xs);
   border: 1px solid var(--fm-border-subtle);
@@ -375,6 +399,7 @@
   color: var(--fm-text-muted);
   font-family: var(--fm-font-mono);
   font-size: var(--fm-font-size-2xs);
+  text-overflow: ellipsis;
   white-space: nowrap;
 }
 
@@ -392,6 +417,32 @@
   font-size: var(--fm-font-size-2xs);
   font-weight: 500;
   white-space: nowrap;
+}
+
+/* The explorer is frequently docked below 360px. Preserve the node label and
+   keep the compact result badge usable instead of allowing auto grid tracks to
+   push the label out of the panel. This block follows all badge base rules so
+   the narrow-dock visibility policy cannot be overridden by them. */
+@container fm-explorer-panel (max-width: 360px) {
+  .fm-explorer-tree-row {
+    grid-template-columns: var(--fm-space-4) var(--fm-icon-sm) minmax(0, 1fr) auto;
+    gap: 2px;
+  }
+
+  .fm-explorer-tree-row__status,
+  .fm-explorer-tree-row__active-field {
+    display: none;
+  }
+
+  .fm-explorer-tree-row__badge {
+    max-width: 10ch;
+  }
+}
+
+@container fm-explorer-panel (max-width: 300px) {
+  .fm-explorer-tree-row__badge {
+    max-width: 7ch;
+  }
 }
 
 /* Semantic status badge colors */
@@ -446,6 +497,7 @@
   align-items: center;
   justify-content: flex-end;
   gap: var(--fm-space-1);
+  min-width: 0;
   padding: var(--fm-space-1) var(--fm-space-2);
   border-top: 1px solid var(--fm-border-subtle);
   background: var(--fm-bg-panel);
@@ -490,4 +542,25 @@
 .fm-explorer-toolbar__action:focus-visible {
   outline: none;
   box-shadow: 0 0 0 2px color-mix(in srgb, var(--fm-accent) 30%, transparent);
+}
+
+/* Keep the footer inside a narrow dock. Button names remain available to
+   assistive technology through aria-label while the visible text gives way to
+   the icon at the same breakpoint as the tree metadata. */
+@container fm-explorer-panel (max-width: 360px) {
+  .fm-explorer-toolbar {
+    justify-content: space-between;
+    gap: var(--fm-space-1);
+  }
+
+  .fm-explorer-toolbar__action {
+    width: var(--fm-control-height-compact);
+    min-width: var(--fm-control-height-compact);
+    padding-inline: 0;
+    justify-content: center;
+  }
+
+  .fm-explorer-toolbar__action > span {
+    display: none;
+  }
 }

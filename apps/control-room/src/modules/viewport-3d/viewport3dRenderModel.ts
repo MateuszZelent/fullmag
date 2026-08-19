@@ -139,6 +139,14 @@ export interface Viewport3DTopologyRenderModelOptions {
 }
 
 export interface Viewport3DFieldRenderModel {
+  /**
+   * Analysis overlay intent is active even while its binary payload is still
+   * loading. Mesh layers use this to suppress authored magnetization previews
+   * during the handoff to the analysis shader.
+   */
+  analysisOverlayActive?: boolean;
+  /** Legacy global overlay is retained only for driven frequency response. */
+  legacyResponseOverlayActive?: boolean;
   complexFieldVector: DecodedComplexFieldVector | null;
   derivedWorkItems: Viewport3DDerivedWorkItem[];
   fullVectorBuild: Viewport3DVectorBuildReference | null;
@@ -232,6 +240,8 @@ export interface Viewport3DVectorBuildReference {
 }
 
 export interface Viewport3DFieldRenderOptions {
+  analysisOverlayActive?: boolean;
+  legacyResponseOverlayActive?: boolean;
   buildDomainId?: string;
   buildSessionId?: string;
   fullScalarColorMode?: string;
@@ -1185,6 +1195,8 @@ export function buildViewport3DFieldRenderModel(
   });
 
   return {
+    analysisOverlayActive: Boolean(options.analysisOverlayActive),
+    legacyResponseOverlayActive: Boolean(options.legacyResponseOverlayActive),
     complexFieldVector: options.complexFieldVector ?? null,
     derivedWorkItems,
     fullVectorBuild,

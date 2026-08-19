@@ -1,4 +1,7 @@
-import { resolveCanonicalQuantityId } from "@/kernel/api/quantityIds";
+import {
+  resolveCanonicalQuantityId,
+  sameRenderableFieldQuantityId,
+} from "@/kernel/api/quantityIds";
 
 import type { ScalarColorBuffer, ScalarRange } from "../viewport3dFieldMapping";
 import {
@@ -318,8 +321,7 @@ export function scalarColorBufferMatchesColorbarRequest({
   }
   if (
     buffer.quantityId &&
-    resolveCanonicalQuantityId(buffer.quantityId) !==
-      resolveCanonicalQuantityId(quantityId)
+    !sameRenderableFieldQuantityId(buffer.quantityId, quantityId)
   ) {
     return false;
   }

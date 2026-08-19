@@ -25,6 +25,7 @@ import { useKernel } from "@/kernel/KernelContext";
 import {
   useFrequencyDomainEigenModeFieldMetaResource,
   useFrequencyDomainEigenModeResource,
+  frequencyDomainJsonArtifactPayload,
   useFrequencyDomainEigenBranchesResource,
   useFrequencyDomainEigenDispersionResource,
   useFrequencyDomainEigenSpectrumResource,
@@ -403,7 +404,7 @@ function useFrequencyDomainInspectorPanelView({ selection }: InspectorPanelProps
         ? "failed"
         : manifest.status;
   const responseFrequencyPointPayload = record(responseFrequencyPoint.data?.payload);
-  const eigenModePayload = record(eigenMode.data);
+  const eigenModePayload = record(frequencyDomainJsonArtifactPayload(eigenMode.data));
   const eigenModeComponentSummary = record(eigenModePayload?.component_summary);
   const activeEigenBranchId = selectedEigenBranchId ?? frequencyDomainRef?.branchId ?? null;
   const selectedBranch = branchesModel.branches.find(

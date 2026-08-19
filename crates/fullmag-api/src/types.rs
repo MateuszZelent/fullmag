@@ -5,6 +5,7 @@ use crate::schemas::commands::{
 };
 use crate::schemas::diagnostics::SolverProfileResource;
 use crate::schemas::hysteresis::HysteresisBookmarkSchema;
+use crate::schemas::mode_composition::ModeCompositionResource;
 use crate::schemas::realtime::RealtimeResourceChange;
 use crate::schemas::visualization_state::{
     ClipVisualizationState, DomainVisualizationState, FemVisualizationState,
@@ -63,6 +64,8 @@ pub(crate) struct DisplayPresentationState {
     pub visualization_vector_style: Option<VectorStyleVisualizationState>,
     #[serde(default)]
     pub visualization_overrides: Option<Vec<VisualizationOverrideState>>,
+    #[serde(default)]
+    pub mode_composition: ModeCompositionResource,
 }
 
 impl Default for DisplayPresentationState {
@@ -83,6 +86,7 @@ impl Default for DisplayPresentationState {
             visualization_clip: None,
             visualization_vector_style: None,
             visualization_overrides: None,
+            mode_composition: ModeCompositionResource::default(),
         }
     }
 }

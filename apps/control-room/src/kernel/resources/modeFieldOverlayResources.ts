@@ -35,6 +35,8 @@ export function resolveModeFieldOverlayMetadataRevision(
   return JSON.stringify({
     artifactRevision: intent.artifactRevision,
     artifactPath: metadata.artifact_path,
+    contentDigest: metadata.content_digest ?? null,
+    metadataRevision: metadata.revision ?? null,
     metadataStatus: metadata.status,
   });
 }

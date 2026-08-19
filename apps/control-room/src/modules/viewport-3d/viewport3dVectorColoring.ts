@@ -13,6 +13,7 @@ export type Viewport3DColorPalette =
   | "inferno"
   | "jet"
   | "magma"
+  | "twilight"
   | "viridis";
 
 export interface Viewport3DScalarColorRange {
@@ -33,6 +34,7 @@ const COLOR_PALETTES = new Set<Viewport3DColorPalette>([
   "inferno",
   "jet",
   "magma",
+  "twilight",
   "viridis",
 ]);
 
@@ -122,6 +124,13 @@ const PALETTE_STOPS: Record<
     [0x8c / 255, 0x29 / 255, 0x80 / 255],
     [0xde / 255, 0x49 / 255, 0x68 / 255],
     [0xfc / 255, 0xfd / 255, 0xbf / 255],
+  ],
+  twilight: [
+    [0.184, 0.079, 0.213],
+    [0.384, 0.461, 0.731],
+    [0.886, 0.85, 0.886],
+    [0.698, 0.338, 0.322],
+    [0.184, 0.079, 0.213],
   ],
   viridis: MAGNITUDE_STOPS,
 };

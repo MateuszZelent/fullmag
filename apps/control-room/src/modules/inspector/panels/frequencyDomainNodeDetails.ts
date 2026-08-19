@@ -291,6 +291,27 @@ const FREQUENCY_DOMAIN_RESULT_NODE_DETAILS: Record<
     title: "Eigen Spectrum",
     visualization: "mode frequency table and spectrum chart",
   },
+  "results.eigen.composition": {
+    artifact: "eigen/spectrum.v3.json",
+    focus: "active mode composition",
+    resource: "visualization/mode-compositions/active",
+    title: "Active Mode Composition",
+    visualization: "independent per-object modal layers and phase clock",
+  },
+  "results.eigen.composition.objects": {
+    artifact: "eigen/spectrum.v3.json",
+    focus: "mode composition objects",
+    resource: "visualization/mode-compositions/active",
+    title: "Mode Composition Objects",
+    visualization: "compatible object targets and effective surface owner",
+  },
+  "results.eigen.composition.object": {
+    artifact: "eigen/spectrum.v3.json",
+    focus: "object mode layer",
+    resource: "visualization/mode-compositions/active",
+    title: "Object Mode Layer",
+    visualization: "one object modal layer, component, phase, and appearance",
+  },
   "results.eigen.field_sweep": {
     artifact: "eigen/field_sweep.v1.json",
     focus: "eigen field sweep",

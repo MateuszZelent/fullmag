@@ -1,6 +1,9 @@
 //! Frequency-domain analysis family manifest and artifact resource endpoints.
 
-use std::{collections::BTreeMap, sync::Arc};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    sync::Arc,
+};
 
 use axum::extract::{Path, State};
 use axum::Json;
@@ -150,6 +153,7 @@ pub struct FrequencyDomainJsonArtifactResource {
 #[serde(untagged)]
 pub enum FrequencyDomainJsonArtifactPayload {
     Manifest(FrequencyDomainManifestArtifactPayload),
+    SpectrumV3(FrequencyDomainSpectrumV3ArtifactPayload),
     Spectrum(FrequencyDomainSpectrumArtifactPayload),
     Branches(FrequencyDomainBranchesArtifactPayload),
     FieldSweep(FrequencyDomainFieldSweepArtifactPayload),
@@ -227,6 +231,98 @@ pub struct FrequencyDomainSpectrumModePayload {
     pub frequency_real_hz: Option<f64>,
     #[serde(flatten)]
     pub extra: FrequencyDomainArtifactExtras,
+}
+
+/// Per-object modal-spectrum contract. Unlike `eigen_spectrum.v2`, this
+/// version owns stable sample/mode identities and component participation.
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct FrequencyDomainSpectrumV3ArtifactPayload {
+    pub schema_version: String,
+    pub samples: Vec<FrequencyDomainSpectrumV3SamplePayload>,
+    #[serde(flatten)]
+    pub extra: FrequencyDomainArtifactExtras,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct FrequencyDomainSpectrumV3SamplePayload {
+    pub sample_id: String,
+    pub sample_index: u64,
+    pub modes: Vec<FrequencyDomainSpectrumV3ModePayload>,
+    #[serde(flatten)]
+    pub extra: FrequencyDomainArtifactExtras,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct FrequencyDomainSpectrumV3ModePayload {
+    pub mode_id: String,
+    pub raw_mode_index: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub branch_id: Option<u64>,
+    pub frequency_hz: f64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mode_field_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mode_field_resource_key: Option<String>,
+    pub residual_relative_l2: f64,
+    pub component_participation: FrequencyDomainModalParticipationPayload,
+    #[serde(flatten)]
+    pub extra: FrequencyDomainArtifactExtras,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct FrequencyDomainModalParticipationPayload {
+    pub schema_version: String,
+    pub definition_id: String,
+    pub status: FrequencyDomainModalParticipationStatus,
+    pub quantity_id: String,
+    pub quantity_symbol: String,
+    pub unit: String,
+    pub component_basis: String,
+    pub integration_method: String,
+    pub qualification: String,
+    pub provenance: FrequencyDomainModalParticipationProvenancePayload,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub global: Option<FrequencyDomainModalParticipationFractionsPayload>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub objects: Vec<FrequencyDomainModalObjectParticipationPayload>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub unavailable: Option<FrequencyDomainModalParticipationUnavailablePayload>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum FrequencyDomainModalParticipationStatus {
+    Ready,
+    Unavailable,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct FrequencyDomainModalParticipationProvenancePayload {
+    pub solver_device: String,
+    pub observable_lane: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_mesh_identity: Option<FrequencyDomainModeSourceMeshIdentityPayload>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct FrequencyDomainModalParticipationFractionsPayload {
+    pub total: f64,
+    pub x: f64,
+    pub y: f64,
+    pub z: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct FrequencyDomainModalObjectParticipationPayload {
+    pub object_id: String,
+    pub total_fraction: f64,
+    pub components: FrequencyDomainModalParticipationFractionsPayload,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct FrequencyDomainModalParticipationUnavailablePayload {
+    pub reason_code: String,
+    pub detail: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
@@ -500,6 +596,12 @@ pub struct FrequencyDomainFieldResource {
     pub field_id: String,
     pub artifact_path: String,
     pub resource_key: String,
+    /// Content-addressed revision of the immutable field payload bytes.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub revision: Option<String>,
+    /// SHA-256 digest of the immutable field payload bytes.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub content_digest: Option<String>,
     pub source_family: String,
     pub quantity: String,
     pub value_kind: String,
@@ -800,6 +902,24 @@ pub async fn get_frequency_domain_eigen_spectrum_v2(
 
 #[utoipa::path(
     get,
+    path = "/v2/sessions/current/analysis/frequency-domain/eigen/spectrum.v3",
+    responses((status = 200, description = "Frequency-domain eigen spectrum v3 resource with per-object component participation", body = FrequencyDomainJsonArtifactResource)),
+    tag = "analysis"
+)]
+pub async fn get_frequency_domain_eigen_spectrum_v3(
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<FrequencyDomainJsonArtifactResource>, ApiError> {
+    json_artifact_resource(
+        &state,
+        "frequency_domain_eigen_spectrum.v3",
+        "eigen/spectrum.v3.json",
+        "/v2/sessions/current/analysis/frequency-domain/eigen/spectrum.v3",
+    )
+    .await
+}
+
+#[utoipa::path(
+    get,
     path = "/v2/sessions/current/analysis/frequency-domain/eigen/branches.v2",
     responses((status = 200, description = "Frequency-domain eigen branches v2 resource", body = FrequencyDomainJsonArtifactResource)),
     tag = "analysis"
@@ -883,6 +1003,33 @@ pub async fn get_frequency_domain_eigen_diagnostics_v2(
         "frequency_domain_eigen_diagnostics.v1",
         "eigen/diagnostics.v2.json",
         "/v2/sessions/current/analysis/frequency-domain/eigen/diagnostics.v2",
+    )
+    .await
+}
+
+#[utoipa::path(
+    get,
+    path = "/v2/sessions/current/analysis/frequency-domain/eigen/modes/{sample_index}/{mode_index}",
+    params(
+        ("sample_index" = u32, Path, description = "K-path sample index"),
+        ("mode_index" = u32, Path, description = "Raw mode index within the sample"),
+    ),
+    responses((status = 200, description = "Revisioned frequency-domain eigen mode resource", body = FrequencyDomainJsonArtifactResource)),
+    tag = "analysis"
+)]
+pub async fn get_frequency_domain_eigen_mode(
+    State(state): State<Arc<AppState>>,
+    Path((sample_index, mode_index)): Path<(u32, u32)>,
+) -> Result<Json<FrequencyDomainJsonArtifactResource>, ApiError> {
+    let artifact_path = eigen_mode_artifact_path(sample_index, mode_index);
+    let resource_key = format!(
+        "/v2/sessions/current/analysis/frequency-domain/eigen/modes/{sample_index}/{mode_index}"
+    );
+    json_artifact_resource(
+        &state,
+        "frequency_domain_eigen_mode_resource.v1",
+        &artifact_path,
+        &resource_key,
     )
     .await
 }
@@ -1568,6 +1715,12 @@ fn decode_frequency_domain_artifact_payload(
             serde_json::from_value::<FrequencyDomainSpectrumArtifactPayload>(value)
                 .map(FrequencyDomainJsonArtifactPayload::Spectrum),
         )
+    } else if artifact_path == "eigen/spectrum.v3.json" {
+        (
+            &["eigen_spectrum.v3" as &str][..],
+            serde_json::from_value::<FrequencyDomainSpectrumV3ArtifactPayload>(value)
+                .map(FrequencyDomainJsonArtifactPayload::SpectrumV3),
+        )
     } else if artifact_path == "eigen/branches.v2.json" {
         (
             &["eigen_branches.v2" as &str][..],
@@ -1662,7 +1815,183 @@ fn decode_frequency_domain_artifact_payload(
             artifact_path
         ))
     })?;
+    if let FrequencyDomainJsonArtifactPayload::SpectrumV3(spectrum) = &payload {
+        validate_frequency_domain_spectrum_v3(spectrum)?;
+    }
     Ok(payload)
+}
+
+fn validate_frequency_domain_spectrum_v3(
+    spectrum: &FrequencyDomainSpectrumV3ArtifactPayload,
+) -> Result<(), ApiError> {
+    let mut sample_ids = BTreeSet::new();
+    let mut mode_ids = BTreeSet::new();
+    for sample in &spectrum.samples {
+        if sample.sample_id.trim().is_empty() || !sample_ids.insert(&sample.sample_id) {
+            return Err(ApiError::internal(
+                "eigen spectrum v3 contains missing or duplicate sample_id",
+            ));
+        }
+        for mode in &sample.modes {
+            if mode.mode_id.trim().is_empty() || !mode_ids.insert(&mode.mode_id) {
+                return Err(ApiError::internal(
+                    "eigen spectrum v3 contains missing or duplicate mode_id",
+                ));
+            }
+            if !mode.frequency_hz.is_finite() {
+                return Err(ApiError::internal(
+                    "eigen spectrum v3 contains non-finite frequency_hz",
+                ));
+            }
+            if !mode.residual_relative_l2.is_finite() || mode.residual_relative_l2 < 0.0 {
+                return Err(ApiError::internal(
+                    "eigen spectrum v3 contains invalid residual_relative_l2",
+                ));
+            }
+            match (&mode.mode_field_id, &mode.mode_field_resource_key) {
+                (Some(field_id), Some(resource_key))
+                    if !field_id.trim().is_empty() && !resource_key.trim().is_empty() => {}
+                (None, None) => {}
+                _ => {
+                    return Err(ApiError::internal(
+                        "eigen spectrum v3 mode field identity and resource key must be published together",
+                    ))
+                }
+            }
+            validate_modal_participation(&mode.component_participation)?;
+        }
+    }
+    Ok(())
+}
+
+fn validate_modal_participation(
+    participation: &FrequencyDomainModalParticipationPayload,
+) -> Result<(), ApiError> {
+    if participation.schema_version != "modal_component_participation.v1"
+        || participation.definition_id != "volume_weighted_complex_l2_fraction.v1"
+        || participation.quantity_id.trim().is_empty()
+        || participation.quantity_symbol.trim().is_empty()
+        || participation.unit.trim().is_empty()
+        || participation.component_basis != "global_cartesian_xyz"
+        || participation.integration_method.trim().is_empty()
+        || participation.qualification.trim().is_empty()
+        || participation.provenance.solver_device.trim().is_empty()
+        || participation.provenance.observable_lane.trim().is_empty()
+    {
+        return Err(ApiError::internal(
+            "eigen spectrum v3 has invalid modal component participation metadata",
+        ));
+    }
+
+    match participation.status {
+        FrequencyDomainModalParticipationStatus::Ready => {
+            let Some(global) = participation.global.as_ref() else {
+                return Err(ApiError::internal(
+                    "ready modal component participation is missing global fractions",
+                ));
+            };
+            if participation.objects.is_empty() || participation.unavailable.is_some() {
+                return Err(ApiError::internal(
+                    "ready modal component participation has inconsistent availability fields",
+                ));
+            }
+            if participation
+                .provenance
+                .source_mesh_identity
+                .as_ref()
+                .is_none()
+            {
+                return Err(ApiError::internal(
+                    "ready modal component participation is missing source mesh identity",
+                ));
+            }
+            let tolerance = modal_participation_sum_tolerance(participation.objects.len());
+            validate_modal_participation_fractions(global, tolerance)?;
+            if (global.total - 1.0).abs() > tolerance {
+                return Err(ApiError::internal(
+                    "ready modal component participation global total must equal one",
+                ));
+            }
+            let mut object_ids = BTreeSet::new();
+            let mut object_total = 0.0;
+            let mut object_components = [0.0; 3];
+            for object in &participation.objects {
+                if object.object_id.trim().is_empty()
+                    || !object_ids.insert(&object.object_id)
+                    || !object.total_fraction.is_finite()
+                    || object.total_fraction < 0.0
+                {
+                    return Err(ApiError::internal(
+                        "ready modal component participation has invalid object coverage",
+                    ));
+                }
+                validate_modal_participation_fractions(&object.components, tolerance)?;
+                if (object.components.total - object.total_fraction).abs() > tolerance {
+                    return Err(ApiError::internal(
+                        "ready modal component participation object total does not match total_fraction",
+                    ));
+                }
+                object_total += object.total_fraction;
+                object_components[0] += object.components.x;
+                object_components[1] += object.components.y;
+                object_components[2] += object.components.z;
+            }
+            if (object_total - global.total).abs() > tolerance {
+                return Err(ApiError::internal(
+                    "ready modal component participation object totals do not match global total",
+                ));
+            }
+            if (object_components[0] - global.x).abs() > tolerance
+                || (object_components[1] - global.y).abs() > tolerance
+                || (object_components[2] - global.z).abs() > tolerance
+            {
+                return Err(ApiError::internal(
+                    "ready modal component participation object components do not match global components",
+                ));
+            }
+        }
+        FrequencyDomainModalParticipationStatus::Unavailable => {
+            let Some(unavailable) = participation.unavailable.as_ref() else {
+                return Err(ApiError::internal(
+                    "unavailable modal component participation is missing its reason",
+                ));
+            };
+            if participation.global.is_some()
+                || !participation.objects.is_empty()
+                || unavailable.reason_code != "component_participation_unavailable"
+                || unavailable.detail.trim().is_empty()
+            {
+                return Err(ApiError::internal(
+                    "unavailable modal component participation has inconsistent fields",
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn validate_modal_participation_fractions(
+    fractions: &FrequencyDomainModalParticipationFractionsPayload,
+    tolerance: f64,
+) -> Result<(), ApiError> {
+    if [fractions.total, fractions.x, fractions.y, fractions.z]
+        .into_iter()
+        .any(|value| !value.is_finite() || value < 0.0)
+    {
+        return Err(ApiError::internal(
+            "modal component participation fractions must be finite and non-negative",
+        ));
+    }
+    if (fractions.x + fractions.y + fractions.z - fractions.total).abs() > tolerance {
+        return Err(ApiError::internal(
+            "modal component participation component fractions must sum to total",
+        ));
+    }
+    Ok(())
+}
+
+fn modal_participation_sum_tolerance(object_count: usize) -> f64 {
+    128.0 * f64::EPSILON * (3_usize.saturating_mul(object_count)).max(1) as f64
 }
 
 fn response_sweep_total_frequency_points(payload: &Value) -> u64 {
@@ -2102,12 +2431,17 @@ async fn field_resource(
     let artifact_dir = require_current_live_artifact_dir(state).await?;
     let present = try_resolve_artifact_path(&artifact_dir, artifact_path)?.is_some();
     let metadata = metadata.unwrap_or_default();
+    let content_digest = present
+        .then(|| frequency_domain_field_content_digest(&artifact_dir, artifact_path, &metadata))
+        .transpose()?;
     Ok(Json(FrequencyDomainFieldResource {
         schema_version: schema_version.to_string(),
         status: if present { "ready" } else { "missing" }.to_string(),
         field_id: field_id.to_string(),
         artifact_path: artifact_path.to_string(),
         resource_key: resource_key.to_string(),
+        revision: content_digest.clone(),
+        content_digest,
         source_family: source_family.to_string(),
         quantity: quantity.to_string(),
         value_kind: metadata.value_kind,
@@ -2143,7 +2477,7 @@ async fn field_resource(
     }))
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 struct FrequencyDomainFieldMetadata {
     value_kind: String,
     component_basis: Option<String>,
@@ -2173,6 +2507,33 @@ struct FrequencyDomainFieldMetadata {
     available_views: Vec<String>,
     default_view: String,
     default_phase_rad: Option<f64>,
+}
+
+fn frequency_domain_field_content_digest(
+    artifact_dir: &std::path::Path,
+    artifact_path: &str,
+    metadata: &FrequencyDomainFieldMetadata,
+) -> Result<String, ApiError> {
+    let resolved = try_resolve_artifact_path(artifact_dir, artifact_path)?
+        .ok_or_else(|| ApiError::not_found(format!("artifact '{artifact_path}' is not present")))?;
+    let payload = std::fs::read(&resolved).map_err(|error| {
+        ApiError::internal(format!(
+            "failed to read frequency-domain field payload '{}': {error}",
+            artifact_path
+        ))
+    })?;
+    let metadata = serde_json::to_vec(metadata).map_err(|error| {
+        ApiError::internal(format!(
+            "failed to serialize frequency-domain field metadata '{}': {error}",
+            artifact_path
+        ))
+    })?;
+    let mut digest = Sha256::new();
+    digest.update((metadata.len() as u64).to_le_bytes());
+    digest.update(metadata);
+    digest.update((payload.len() as u64).to_le_bytes());
+    digest.update(payload);
+    Ok(format!("sha256:{:x}", digest.finalize()))
 }
 
 impl Default for FrequencyDomainFieldMetadata {

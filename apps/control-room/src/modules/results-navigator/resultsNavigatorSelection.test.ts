@@ -98,6 +98,38 @@ describe("results navigator stable selection references", () => {
     });
   });
 
+  it("uses Results Dynamics IDs for a modal selection", () => {
+    const mode = modalSelectionRef({
+      artifactRevision: "sha256:modal-r1",
+      modeId: "mode-a",
+      runId: "run-a",
+      sampleId: "sample-a",
+      stageId: "stage-a",
+    });
+
+    expect(buildModalNodeId(mode)).toBe(
+      "results:run:run-a:stage:stage-a:dynamics:eigen:sample:sample-a:mode:mode-a",
+    );
+  });
+
+  it("compares exact eigen result selections by their stable identity", () => {
+    const spectrum = {
+      artifactRevision: "sha256:spectrum-r1",
+      kind: "results.eigen.spectrum",
+      nodeId: "results:run:run-a:stage:stage-a:dynamics:eigen:spectrum",
+      runId: "run-a",
+      stageId: "stage-a",
+      type: "eigen-spectrum",
+    } as never;
+    const differentRevision = {
+      ...spectrum,
+      artifactRevision: "sha256:spectrum-r2",
+    } as never;
+
+    expect(selectionRefEquals(spectrum, spectrum)).toBe(true);
+    expect(selectionRefEquals(spectrum, differentRevision)).toBe(false);
+  });
+
   it("keeps distinct modal and response detail selections unequal", () => {
     const modal = modalSelectionRef({
       artifactRevision: "spectrum-r2",

@@ -40,8 +40,10 @@ describe("analysis field overlay commands", () => {
     expect(result.status).toBe("completed");
     expect(overlay.getSnapshot()).toEqual({
       appearance: {
+        scalarColorPalette: "coolwarm",
         shaderVisible: true,
-        surfaceColorSource: "magnitude",
+        surfaceColorSource: "colormap",
+        vectorsVisible: false,
       },
       fieldId: "analysis:eigen:sample-0000:mode-0002",
       label: "Mode 2",
@@ -86,8 +88,10 @@ describe("analysis field overlay commands", () => {
       expect(result.status).toBe("completed");
       expect(overlay.getSnapshot()?.query.view).toBe(expectedView);
       expect(overlay.getSnapshot()?.appearance).toMatchObject({
+        scalarColorPalette: "coolwarm",
         shaderVisible: true,
-        surfaceColorSource: "magnitude",
+        surfaceColorSource: "colormap",
+        vectorsVisible: false,
       });
     },
   );

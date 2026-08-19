@@ -95,6 +95,12 @@ import {
 } from "./panels/frequency-domain/FrequencyDomainFmrFitsPanel";
 import { FmrPeaksInspectorPanel } from "./panels/frequency-domain/FrequencyDomainFmrPeaksPanel";
 import { FmrModalSpectrumInspectorPanel } from "./panels/frequency-domain/FrequencyDomainModalPanel";
+import {
+  EigenSpectrumCompositionInspectorRoute,
+  ModeCompositionActiveInspectorRoute,
+  ModeCompositionObjectInspectorRoute,
+  ModeCompositionObjectsInspectorRoute,
+} from "./panels/frequency-domain/ModeCompositionInspectorRouteAdapter";
 import { GeometryObjectPanel } from "./panels/GeometryObjectPanel";
 import { FieldQuantityInspectorPanel } from "./panels/FieldQuantityInspectorPanel";
 import { MeshDetailsPanel } from "./panels/MeshDetailsPanel";
@@ -221,6 +227,9 @@ export const FREQUENCY_DOMAIN_INSPECTOR_SELECTION_KINDS = [
   "results.eigen.root",
   "results.eigen.study",
   "results.eigen.spectrum",
+  "results.eigen.composition",
+  "results.eigen.composition.objects",
+  "results.eigen.composition.object",
   "results.eigen.field_sweep",
   "results.eigen.samples",
   "results.eigen.sample",
@@ -375,7 +384,10 @@ const FREQUENCY_DOMAIN_NAMED_PANELS: Partial<
   "results.eigen.modes": EigenModesInspectorPanel,
   "results.eigen.modes.visualization": EigenModesVisualizationInspectorPanel,
   "results.eigen.provenance": EigenProvenanceInspectorPanel,
-  "results.eigen.spectrum": EigenSpectrumInspectorPanel,
+  "results.eigen.spectrum": EigenSpectrumCompositionInspectorRoute,
+  "results.eigen.composition": ModeCompositionActiveInspectorRoute,
+  "results.eigen.composition.objects": ModeCompositionObjectsInspectorRoute,
+  "results.eigen.composition.object": ModeCompositionObjectInspectorRoute,
   "results.eigen.field_sweep": EigenFieldSweepInspectorPanel,
   "results.eigen.dispersion": EigenDispersionInspectorPanel,
   "results.eigen.k_path": EigenKPathInspectorPanel,

@@ -30,6 +30,10 @@ const explorerTreeViewSource = readFileSync(
   fileURLToPath(import.meta.resolve("./ExplorerTreeView.tsx")),
   "utf8",
 );
+const explorerModuleSource = readFileSync(
+  fileURLToPath(import.meta.resolve("./ExplorerModule.tsx")),
+  "utf8",
+);
 
 describe("flattenVisibleExplorerRows", () => {
   it("keeps collapsed descendants out of the rendered row list", () => {
@@ -409,6 +413,32 @@ describe("flattenVisibleExplorerRows", () => {
     const css = readFileSync(fileURLToPath(explorerCssUrl), "utf8");
     expect(css).toContain('.fm-explorer-tree-row[data-status="completed"]');
     expect(css).toContain("var(--fm-success)");
+  });
+
+  it("keeps result labels readable when the explorer is docked narrowly", () => {
+    const explorerCssUrl = new URL("../../design/styles/explorer.css", import.meta.url);
+    const css = readFileSync(fileURLToPath(explorerCssUrl), "utf8");
+    expect(css).toContain("display: flex;\n  flex-direction: column;");
+    expect(css).toContain(".fm-explorer-tree {\n  flex: 1 1 auto;");
+    expect(css).toContain("container-name: fm-explorer-panel");
+    expect(css).toContain("@container fm-explorer-panel (max-width: 360px)");
+    expect(css).toContain("grid-template-columns: var(--fm-space-4) var(--fm-icon-sm) minmax(0, 1fr) auto auto auto");
+    expect(css).toContain("width: max-content;");
+    expect(css).toContain(".fm-explorer-tree-row__label {\n  min-width: 0;");
+    expect(css.indexOf("/* The explorer is frequently docked below 360px."))
+      .toBeGreaterThan(css.indexOf("/* Active field badge */"));
+    expect(explorerTreeViewSource).toContain('title={node.badge}');
+  });
+
+  it("keeps the narrow explorer toolbar usable without removing button names", () => {
+    const explorerCssUrl = new URL("../../design/styles/explorer.css", import.meta.url);
+    const css = readFileSync(fileURLToPath(explorerCssUrl), "utf8");
+    expect(css).toContain("@container fm-explorer-panel (max-width: 360px)");
+    expect(css).toContain(".fm-explorer-toolbar__action > span");
+    expect(css).toContain("width: var(--fm-control-height-compact);");
+    expect(explorerModuleSource).toContain('aria-label="Expand all explorer nodes"');
+    expect(explorerModuleSource).toContain('aria-label="Collapse all explorer nodes"');
+    expect(explorerModuleSource).toContain('aria-label="Refresh explorer"');
   });
 
   it("renders active analysis fields as a separate explorer row state", () => {

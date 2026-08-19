@@ -633,6 +633,7 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
         <footer className="fm-explorer-toolbar">
           <button
             className="fm-explorer-toolbar__action"
+            aria-label="Expand all explorer nodes"
             title="Expand All"
             type="button"
             onClick={() => {
@@ -644,6 +645,7 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
           </button>
           <button
             className="fm-explorer-toolbar__action"
+            aria-label="Collapse all explorer nodes"
             title="Collapse All"
             type="button"
             onClick={() => {
@@ -655,6 +657,7 @@ export default function ExplorerModule({ kernel, moduleId }: ModuleProps) {
           </button>
           <button
             className="fm-explorer-toolbar__action"
+            aria-label="Refresh explorer"
             title="Refresh"
             type="button"
             onClick={() => {

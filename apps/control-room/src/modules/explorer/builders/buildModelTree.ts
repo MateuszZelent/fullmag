@@ -211,7 +211,6 @@ function objectNodes(
           status: "ready",
           contextCommands: ["workspace.focus-selection"],
           children: compactExplorerNodes([
-            modeVisualizationNode(`${parentId}:visualization`, object, resources),
             visualizationDebugNode({
               kind: "object.visualization.debug",
               objectId,
@@ -293,7 +292,6 @@ function objectNodes(
         status: "ready",
         contextCommands: ["workspace.focus-selection"],
         children: compactExplorerNodes([
-          modeVisualizationNode(`${parentId}:visualization`, object, resources),
           visualizationDebugNode({
             kind: "object.visualization.debug",
             objectId,

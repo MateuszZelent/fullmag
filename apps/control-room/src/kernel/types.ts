@@ -19,6 +19,7 @@ import type { AnalysisFieldOverlayController } from "./visualization/AnalysisFie
 import type { ChartViewportHandoffController } from "./visualization/ChartViewportHandoffController";
 import type { CameraRegistryController } from "./visualization/CameraRegistryController";
 import type { ObjectVisualizationController } from "./visualization/ObjectVisualizationController";
+import type { ModeCompositionController } from "./visualization/ModeCompositionController";
 import type { VisualizationDebugController } from "./visualization/VisualizationDebugController";
 import type { VisualizationRegistrySyncController } from "./visualization/VisualizationRegistrySyncController";
 
@@ -81,4 +82,5 @@ export interface KernelApi {
   readonly visualizationDebug: VisualizationDebugController;
   readonly visualizationSync: VisualizationRegistrySyncController;
   readonly layout: LayoutController;
+  readonly modeComposition: ModeCompositionController;
 }

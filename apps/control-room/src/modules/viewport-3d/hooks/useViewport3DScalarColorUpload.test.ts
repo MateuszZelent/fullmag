@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 
 import type { ScalarColorBuffer } from "../viewport3dFieldMapping";
 import {
+  canReuseViewport3DScalarShaderAttributes,
   canRetainViewport3DScalarUploadBuffer,
   createViewport3DScalarColorUploadPlan,
   createViewport3DScalarShaderColorUploadPlan,
@@ -11,6 +12,38 @@ import {
   VIEWPORT_3D_SCALAR_VALUE_ATTRIBUTE,
   VIEWPORT_3D_VECTOR_VALUE_ATTRIBUTE,
 } from "../viewport3dScalarSurfaceShader";
+
+describe("canReuseViewport3DScalarShaderAttributes", () => {
+  it("keeps immutable complex attributes when only uniforms change", () => {
+    const real = new Float32Array([1, 2, 3, 4, 5, 6]);
+    const imag = new Float32Array([7, 8, 9, 10, 11, 12]);
+    const previous: ScalarColorBuffer = {
+      buildKey: "mode:raw-a",
+      colors: new Float32Array(),
+      colorMode: "x",
+      complexImagValues: imag,
+      complexRealValues: real,
+      complexRepresentation: "real",
+      range: { max: 1, min: -1 },
+    };
+    const next: ScalarColorBuffer = {
+      ...previous,
+      colorMode: "z",
+      complexPhaseRad: Math.PI / 2,
+      complexRepresentation: "imag",
+    };
+
+    expect(canReuseViewport3DScalarShaderAttributes(previous, next)).toBe(true);
+    expect(canReuseViewport3DScalarShaderAttributes(previous, {
+      ...next,
+      buildKey: "mode:raw-b",
+    })).toBe(false);
+    expect(canReuseViewport3DScalarShaderAttributes(previous, {
+      ...next,
+      complexImagValues: imag.slice(),
+    })).toBe(false);
+  });
+});
 
 function scalarColorBuffer(vertexCount: number): ScalarColorBuffer {
   const colors = new Float32Array(vertexCount * 3);

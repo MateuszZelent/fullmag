@@ -1327,6 +1327,24 @@ describe("viewport3dRenderModel", () => {
     });
   });
 
+  it("keeps the analysis handoff active while the binary mode payload is loading", () => {
+    const topologyModel = buildViewport3DTopologyRenderModel(
+      topologyFixture(),
+      [],
+      [],
+    );
+
+    const model = buildViewport3DFieldRenderModel(
+      topologyModel,
+      null,
+      0.5,
+      { analysisOverlayActive: true },
+    );
+
+    expect(model?.analysisOverlayActive).toBe(true);
+    expect(model?.modeOverlay).toBeNull();
+  });
+
   it("projects complex analysis fields locally using visualization phase", () => {
     const topologyModel = buildViewport3DTopologyRenderModel(
       topologyFixture(),

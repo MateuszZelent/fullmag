@@ -3207,6 +3207,12 @@ describe("useViewport3DSceneModel", () => {
   it("compares target quantities by canonical identity", () => {
     expect(sameViewport3DQuantityId("h_eff", "H_eff")).toBe(true);
     expect(sameViewport3DQuantityId("h_demag", "H_eff")).toBe(false);
+    expect(
+      sameViewport3DQuantityId(
+        "analysis:eigen:sample-0000:mode-0000",
+        "m",
+      ),
+    ).toBe(true);
   });
 
   it("keeps canonical-equivalent target quantities on the primary render path", () => {

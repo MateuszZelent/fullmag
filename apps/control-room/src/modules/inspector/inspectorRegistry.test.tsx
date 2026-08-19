@@ -61,7 +61,6 @@ import {
   EigenModesInspectorPanel,
   EigenOverviewInspectorPanel,
   EigenProvenanceInspectorPanel,
-  EigenSpectrumInspectorPanel,
   EigenStudyInspectorPanel,
   EigenSampleJobInspectorPanel,
   FrequencyDomainArtifactExportJobInspectorPanel,
@@ -97,6 +96,12 @@ import {
 import { FmrPeaksInspectorPanel } from "./panels/frequency-domain/FrequencyDomainFmrPeaksPanel";
 import { FmrModalSpectrumInspectorPanel } from "./panels/frequency-domain/FrequencyDomainModalPanel";
 import { FrequencyDomainInspectorPanel } from "./panels/FrequencyDomainInspectorPanel";
+import {
+  EigenSpectrumCompositionInspectorRoute,
+  ModeCompositionActiveInspectorRoute,
+  ModeCompositionObjectInspectorRoute,
+  ModeCompositionObjectsInspectorRoute,
+} from "./panels/frequency-domain/ModeCompositionInspectorRouteAdapter";
 import {
   EigenmodesBoundaryStageInspectorPanel,
   EigenmodesCalculationModeStageInspectorPanel,
@@ -204,6 +209,18 @@ describe("inspectorRegistry", () => {
     expect(
       resolveInspectorPanel({ kind: "object.mode_visualization.view" })?.id,
     ).toBe("object-mode-visualization");
+  });
+
+  it("routes mode-composition Results selections to exact dedicated inspectors", () => {
+    expect(resolveInspectorPanel({ kind: "results.eigen.composition" })?.id).toBe(
+      "frequency-domain-results-eigen-composition",
+    );
+    expect(
+      resolveInspectorPanel({ kind: "results.eigen.composition.objects" })?.id,
+    ).toBe("frequency-domain-results-eigen-composition-objects");
+    expect(
+      resolveInspectorPanel({ kind: "results.eigen.composition.object" })?.id,
+    ).toBe("frequency-domain-results-eigen-composition-object");
   });
 
   it("resolves object region and magnetic texture groups", () => {
@@ -651,7 +668,16 @@ describe("inspectorRegistry", () => {
     ).toBe(EigenModesInspectorPanel);
     expect(
       resolveInspectorPanel({ kind: "results.eigen.spectrum" })?.component,
-    ).toBe(EigenSpectrumInspectorPanel);
+    ).toBe(EigenSpectrumCompositionInspectorRoute);
+    expect(
+      resolveInspectorPanel({ kind: "results.eigen.composition" })?.component,
+    ).toBe(ModeCompositionActiveInspectorRoute);
+    expect(
+      resolveInspectorPanel({ kind: "results.eigen.composition.objects" })?.component,
+    ).toBe(ModeCompositionObjectsInspectorRoute);
+    expect(
+      resolveInspectorPanel({ kind: "results.eigen.composition.object" })?.component,
+    ).toBe(ModeCompositionObjectInspectorRoute);
     expect(
       resolveInspectorPanel({ kind: "results.eigen.k_path" })?.component,
     ).toBe(EigenKPathInspectorPanel);

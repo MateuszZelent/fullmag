@@ -251,6 +251,48 @@ export type SelectionRef =
   | LiveChartSelectionRef
   | LiveChartPointSelectionRef
   | {
+      artifactRevision: string;
+      kind: "results.eigen.spectrum";
+      nodeId: string;
+      runId: string;
+      stageId: string;
+      type: "eigen-spectrum";
+    }
+  | {
+      artifactRevision: string;
+      kind: "results.eigen.mode";
+      modeId: string;
+      nodeId: string;
+      runId: string;
+      sampleId: string;
+      stageId: string;
+      type: "eigen-mode";
+    }
+  | {
+      compositionId: string;
+      kind: "results.eigen.composition";
+      nodeId: string;
+      revision: string;
+      type: "mode-composition";
+    }
+  | {
+      compositionId: string;
+      kind: "results.eigen.composition.objects";
+      nodeId: string;
+      revision: string;
+      type: "mode-composition-objects";
+    }
+  | {
+      compositionId: string;
+      compositionRevision: string;
+      kind: "results.eigen.composition.object";
+      layerId?: string;
+      nodeId: string;
+      objectId: string;
+      targetId: `object:${string}`;
+      type: "mode-composition-object";
+    }
+  | {
       kind: "model.planar.monitor";
       monitorId: string;
       nodeId: string;
@@ -669,6 +711,53 @@ export function selectionRefEquals(
   if (left.type !== right.type) return false;
 
   switch (left.type) {
+    case "eigen-spectrum":
+      return (
+        right.type === "eigen-spectrum" &&
+        left.kind === right.kind &&
+        left.nodeId === right.nodeId &&
+        left.artifactRevision === right.artifactRevision &&
+        left.runId === right.runId &&
+        left.stageId === right.stageId
+      );
+    case "eigen-mode":
+      return (
+        right.type === "eigen-mode" &&
+        left.kind === right.kind &&
+        left.nodeId === right.nodeId &&
+        left.artifactRevision === right.artifactRevision &&
+        left.modeId === right.modeId &&
+        left.runId === right.runId &&
+        left.sampleId === right.sampleId &&
+        left.stageId === right.stageId
+      );
+    case "mode-composition":
+      return (
+        right.type === "mode-composition" &&
+        left.kind === right.kind &&
+        left.nodeId === right.nodeId &&
+        left.compositionId === right.compositionId &&
+        left.revision === right.revision
+      );
+    case "mode-composition-objects":
+      return (
+        right.type === "mode-composition-objects" &&
+        left.kind === right.kind &&
+        left.nodeId === right.nodeId &&
+        left.compositionId === right.compositionId &&
+        left.revision === right.revision
+      );
+    case "mode-composition-object":
+      return (
+        right.type === "mode-composition-object" &&
+        left.kind === right.kind &&
+        left.nodeId === right.nodeId &&
+        left.compositionId === right.compositionId &&
+        left.compositionRevision === right.compositionRevision &&
+        left.objectId === right.objectId &&
+        nullableStringEquals(left.layerId, right.layerId) &&
+        left.targetId === right.targetId
+      );
     case "live-chart":
       return (
         right.type === "live-chart" &&

@@ -170,6 +170,87 @@ describe("viewport3dScalarSurfaceShader", () => {
     material.dispose();
   });
 
+  it("changes modal representation and component through uniforms without replacing the program", () => {
+    const initial = complexBuffer();
+    initial.colorMode = "x";
+    initial.complexRepresentation = "real";
+    initial.colorPalette = "coolwarm";
+    const material = createScalarSurfaceShaderMaterial(initial, {
+      depthTest: true,
+      depthWrite: true,
+      opacity: 1,
+      polygonOffset: false,
+      polygonOffsetFactor: 0,
+      polygonOffsetUnits: 0,
+      side: 0,
+      transparent: false,
+    });
+    const vertexShader = material.vertexShader;
+    const version = material.version;
+
+    expect(material.uniforms.fmRepresentationId.value).toBe(1);
+    expect(material.uniforms.fmColorModeId.value).toBe(2);
+    expect(material.uniforms.fmPaletteId.value).toBe(1);
+
+    const updated = complexBuffer();
+    updated.colorMode = "z";
+    updated.complexRepresentation = "imag";
+    updated.colorPalette = "coolwarm";
+    updateScalarSurfaceShaderMaterial(material, updated, 0.75);
+
+    expect(material.uniforms.fmRepresentationId.value).toBe(2);
+    expect(material.uniforms.fmColorModeId.value).toBe(4);
+    expect(material.uniforms.fmOpacity.value).toBe(0.75);
+    expect(material.vertexShader).toBe(vertexShader);
+    expect(material.version).toBe(version);
+    material.dispose();
+  });
+
+  it("keeps exp(+i omega t) as Re(delta m exp(+i phi))", () => {
+    const buffer = complexBuffer();
+    buffer.complexRepresentation = "phase_rotated_real";
+    buffer.phasorConvention = "exp_i_omega_t";
+
+    const material = createScalarSurfaceShaderMaterial(buffer, {
+      depthTest: true,
+      depthWrite: true,
+      opacity: 1,
+      polygonOffset: false,
+      polygonOffsetFactor: 0,
+      polygonOffsetUnits: 0,
+      side: 0,
+      transparent: false,
+    });
+
+    expect(material.uniforms.fmTemporalPhaseSign.value).toBe(1);
+    expect(material.vertexShader).toContain(
+      "complexReal * cos(theta) - complexImag * sin(theta)",
+    );
+    material.dispose();
+  });
+
+  it("uses a cyclic palette for modal phase", () => {
+    const buffer = complexBuffer();
+    buffer.colorPalette = "twilight";
+    buffer.complexRepresentation = "phase";
+    buffer.range = { max: Math.PI, min: -Math.PI };
+
+    const material = createScalarSurfaceShaderMaterial(buffer, {
+      depthTest: true,
+      depthWrite: true,
+      opacity: 1,
+      polygonOffset: false,
+      polygonOffsetFactor: 0,
+      polygonOffsetUnits: 0,
+      side: 0,
+      transparent: false,
+    });
+
+    expect(material.uniforms.fmPaletteId.value).toBe(5);
+    expect(material.fragmentShader).toContain("fmPaletteId == 5");
+    material.dispose();
+  });
+
   it("switches shader programs when updating between scalar and orientation modes", () => {
     const material = createScalarSurfaceShaderMaterial(scalarBuffer([2, 4]), {
       depthTest: true,

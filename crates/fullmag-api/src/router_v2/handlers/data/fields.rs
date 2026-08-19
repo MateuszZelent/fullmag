@@ -83,8 +83,7 @@ const FDM_MULTILAYER_AIRBOX_MANIFEST: &str = "fields/H_demag/airbox/manifest.jso
 const FDM_MULTILAYER_AIRBOX_FIELD: &str = "fields/H_demag/airbox/H_demag.samples.v1.json";
 const FDM_MULTILAYER_AIRBOX_SCHEMA: &str = "fdm_multilayer_observation.v1";
 const FDM_MULTILAYER_AIRBOX_FIELD_SCHEMA: &str = "fdm_multilayer_observation_field.v1";
-const FDM_MULTILAYER_AIRBOX_H_EFF_REASON: &str =
-    "fdm_multilayer_airbox_h_eff_unavailable.v1";
+const FDM_MULTILAYER_AIRBOX_H_EFF_REASON: &str = "fdm_multilayer_airbox_h_eff_unavailable.v1";
 const STEADY_TRANSPORT_FIELDS: [&str; 5] = [
     "V_electric",
     "J_charge",
@@ -247,7 +246,10 @@ pub(crate) fn load_fdm_multilayer_airbox_carrier(
         || read_required_string(&manifest, "quantity_id", "Airbox manifest")? != "H_demag"
         || read_required_string(&manifest, "unit", "Airbox manifest")? != "A/m"
         || read_required_string(&manifest, "source_policy", "Airbox manifest")? != "target_only"
-        || manifest.get("target_only").and_then(serde_json::Value::as_bool) != Some(true)
+        || manifest
+            .get("target_only")
+            .and_then(serde_json::Value::as_bool)
+            != Some(true)
         || manifest.get("published_quantities") != Some(&serde_json::json!(["H_demag"]))
         || manifest
             .get("unavailable_quantities")
@@ -262,7 +264,8 @@ pub(crate) fn load_fdm_multilayer_airbox_carrier(
         .ok_or_else(|| "Airbox manifest grid is missing".to_string())?;
     let (cells, origin_m, cell_size_m) =
         validated_airbox_grid(Some(manifest_grid), "Airbox manifest")?;
-    let carrier_fingerprint = read_required_string(&manifest, "carrier_fingerprint", "Airbox manifest")?;
+    let carrier_fingerprint =
+        read_required_string(&manifest, "carrier_fingerprint", "Airbox manifest")?;
     if !raw_sha256_hex(carrier_fingerprint) {
         return Err("Airbox manifest carrier_fingerprint must be canonical raw sha256 hex".into());
     }
@@ -270,13 +273,18 @@ pub(crate) fn load_fdm_multilayer_airbox_carrier(
         .get("source_grid_fingerprints")
         .and_then(serde_json::Value::as_array)
         .filter(|values| !values.is_empty())
-        .ok_or_else(|| "Airbox manifest source_grid_fingerprints is missing or empty".to_string())?;
+        .ok_or_else(|| {
+            "Airbox manifest source_grid_fingerprints is missing or empty".to_string()
+        })?;
     let source_grid_fingerprints = source_grid_fingerprints_value
         .iter()
         .map(serde_json::Value::as_str)
         .collect::<Option<Vec<_>>>()
         .ok_or_else(|| "Airbox manifest source_grid_fingerprints is malformed".to_string())?;
-    if source_grid_fingerprints.iter().any(|value| !raw_sha256_hex(value)) {
+    if source_grid_fingerprints
+        .iter()
+        .any(|value| !raw_sha256_hex(value))
+    {
         return Err("Airbox manifest source_grid_fingerprints must use raw sha256 hex".into());
     }
     let source_common_grid = manifest
@@ -288,7 +296,9 @@ pub(crate) fn load_fdm_multilayer_airbox_carrier(
         .get("source_runtime_identity")
         .filter(|value| value.is_object())
         .cloned()
-        .ok_or_else(|| "Airbox manifest source_runtime_identity is missing or malformed".to_string())?;
+        .ok_or_else(|| {
+            "Airbox manifest source_runtime_identity is missing or malformed".to_string()
+        })?;
     for field in [
         "execution_engine",
         "precision",
@@ -297,16 +307,23 @@ pub(crate) fn load_fdm_multilayer_airbox_carrier(
         "problem_source_hash",
         "run_status",
     ] {
-        read_required_string(&source_runtime_identity, field, "Airbox source_runtime_identity")?;
+        read_required_string(
+            &source_runtime_identity,
+            field,
+            "Airbox source_runtime_identity",
+        )?;
     }
     if read_required_string(&manifest, "field_artifact", "Airbox manifest")?
         != "H_demag.samples.v1.json"
     {
         return Err("Airbox manifest field_artifact is not the canonical H_demag carrier".into());
     }
-    let expected_field_hash = read_required_string(&manifest, "field_artifact_sha256", "Airbox manifest")?;
+    let expected_field_hash =
+        read_required_string(&manifest, "field_artifact_sha256", "Airbox manifest")?;
     if !raw_sha256_hex(expected_field_hash) {
-        return Err("Airbox manifest field_artifact_sha256 must be canonical raw sha256 hex".into());
+        return Err(
+            "Airbox manifest field_artifact_sha256 must be canonical raw sha256 hex".into(),
+        );
     }
     let field_path = try_resolve_artifact_path(&artifact_dir, FDM_MULTILAYER_AIRBOX_FIELD)
         .map_err(|error| format!("failed to resolve Airbox field artifact: {error}"))?
@@ -322,7 +339,8 @@ pub(crate) fn load_fdm_multilayer_airbox_carrier(
     if read_required_string(&field_payload, "schema_version", "Airbox field artifact")?
         != FDM_MULTILAYER_AIRBOX_FIELD_SCHEMA
         || read_required_string(&field_payload, "observable", "Airbox field artifact")? != "H_demag"
-        || read_required_string(&field_payload, "quantity_id", "Airbox field artifact")? != "H_demag"
+        || read_required_string(&field_payload, "quantity_id", "Airbox field artifact")?
+            != "H_demag"
         || read_required_string(&field_payload, "scope_kind", "Airbox field artifact")? != "airbox"
         || read_required_string(&field_payload, "unit", "Airbox field artifact")? != "A/m"
     {
@@ -347,7 +365,9 @@ pub(crate) fn load_fdm_multilayer_airbox_carrier(
             let value = value
                 .as_f64()
                 .filter(|value| value.is_finite())
-                .ok_or_else(|| "Airbox field artifact values contain non-finite data".to_string())?;
+                .ok_or_else(|| {
+                    "Airbox field artifact values contain non-finite data".to_string()
+                })?;
             values.push(value);
         }
     }
@@ -361,7 +381,10 @@ pub(crate) fn load_fdm_multilayer_airbox_carrier(
         .iter()
         .try_fold(1usize, |total, axis| total.checked_mul(*axis as usize))
         .ok_or_else(|| "Airbox target grid cell count overflows usize".to_string())?;
-    if sample_count != vectors.len() || sample_count != grid_count || values.len() != sample_count * 3 {
+    if sample_count != vectors.len()
+        || sample_count != grid_count
+        || values.len() != sample_count * 3
+    {
         return Err("Airbox sample_count, target grid, and vector value count disagree".into());
     }
     let expected_carrier_fingerprint = fdm_multilayer_airbox_carrier_fingerprint(
@@ -372,7 +395,9 @@ pub(crate) fn load_fdm_multilayer_airbox_carrier(
         expected_field_hash,
     )?;
     if carrier_fingerprint != expected_carrier_fingerprint {
-        return Err("Airbox manifest carrier_fingerprint does not match runner carrier seed".into());
+        return Err(
+            "Airbox manifest carrier_fingerprint does not match runner carrier seed".into(),
+        );
     }
     Ok(Some(FdmMultilayerAirboxCarrier {
         cells,
@@ -382,7 +407,10 @@ pub(crate) fn load_fdm_multilayer_airbox_carrier(
         sample_count,
         values,
         source_policy: "target_only".to_string(),
-        source_grid_fingerprints: source_grid_fingerprints.into_iter().map(str::to_string).collect(),
+        source_grid_fingerprints: source_grid_fingerprints
+            .into_iter()
+            .map(str::to_string)
+            .collect(),
         source_runtime_identity,
     }))
 }
@@ -405,7 +433,11 @@ fn requested_fdm_multilayer_airbox_carrier(
         return Err(ApiError::not_found("multilayer FDM Airbox scope not found"));
     }
     let carrier = load_fdm_multilayer_airbox_carrier(snapshot)
-        .map_err(|reason| ApiError::not_found(format!("multilayer FDM Airbox carrier unavailable: {reason}")))?
+        .map_err(|reason| {
+            ApiError::not_found(format!(
+                "multilayer FDM Airbox carrier unavailable: {reason}"
+            ))
+        })?
         .ok_or_else(|| ApiError::not_found("multilayer FDM Airbox carrier is unavailable"))?;
     if quantity_id == "H_eff" {
         return Err(ApiError::not_found(format!(
@@ -1635,18 +1667,22 @@ pub async fn get_field_meta(
         .map(|field| field.spatial_kind.clone())
         .unwrap_or_else(|| quantity_spatial_domain(quantity_id).to_string());
     let component = parse_component(query.component.as_deref(), n_comp as usize)?;
-    let airbox_carrier = requested_fdm_multilayer_airbox_carrier(snapshot, &FieldVectorQuery {
-        component: query.component.clone(),
-        scope_kind: query.scope_kind.clone(),
-        scope_id: query.scope_id.clone(),
-        owner_object_id: query.owner_object_id.clone(),
-        geometry_scope: None,
-        max_samples: None,
-        snapshot_id: query.snapshot_id.clone(),
-        stage_id: query.stage_id.clone(),
-        view: None,
-        phase_rad: None,
-    }, quantity_id)?;
+    let airbox_carrier = requested_fdm_multilayer_airbox_carrier(
+        snapshot,
+        &FieldVectorQuery {
+            component: query.component.clone(),
+            scope_kind: query.scope_kind.clone(),
+            scope_id: query.scope_id.clone(),
+            owner_object_id: query.owner_object_id.clone(),
+            geometry_scope: None,
+            max_samples: None,
+            snapshot_id: query.snapshot_id.clone(),
+            stage_id: query.stage_id.clone(),
+            view: None,
+            phase_rad: None,
+        },
+        quantity_id,
+    )?;
     let transport_artifact = canonical_transport_field_artifact(snapshot, quantity_id)?;
     let transport_artifact_revision =
         canonical_transport_field_artifact_revision(transport_artifact.as_ref());
@@ -2954,7 +2990,9 @@ pub async fn get_field_vector(
             Some((values, grid))
         })
     };
-    let raw_values_opt: Option<(Vec<f64>, [u32; 3])> = if let Some(carrier) = airbox_carrier.as_ref() {
+    let raw_values_opt: Option<(Vec<f64>, [u32; 3])> = if let Some(carrier) =
+        airbox_carrier.as_ref()
+    {
         Some((carrier.values.clone(), carrier.cells))
     } else if let Some(snapshot_id) = requested_snapshot_id {
         if quantity_id != "m" {
@@ -3348,7 +3386,7 @@ fn analysis_frequency_response_vector_response(
     let point_count = raw_values.len() / n_comp;
     let out_grid = [point_count as u32, 1, 1];
     let binary = serialize_analysis_field_vector_binary(
-        snapshot, field_id, out_n_comp, out_grid, &projected,
+        snapshot, field_id, out_n_comp, out_grid, &projected, None,
     )?;
     let revision = analysis_payload_revision(snapshot, &relative_path, bytes.len());
     let etag = crate::router_v2::handlers::shared::stable_strong_etag(&format!(
@@ -3464,6 +3502,7 @@ fn serialize_analysis_field_vector_binary(
     out_n_comp: usize,
     out_grid: [u32; 3],
     projected: &[f64],
+    scope: Option<&ResolvedFieldScope>,
 ) -> Result<Vec<u8>, ApiError> {
     let Some(mesh) = snapshot.fem_mesh.as_ref() else {
         return serialize_field_vector_binary_v2(field_id, out_n_comp, out_grid, projected)
@@ -3475,7 +3514,25 @@ fn serialize_analysis_field_vector_binary(
         projected.len()
     };
     let full_node_count = mesh.nodes.len();
-    let magnetic_node_indices = if point_count == full_node_count {
+    let node_indices = if let Some(scope) = scope {
+        if scope.node_indices.len() != point_count {
+            return Err(ApiError::conflict(format!(
+                "mode_field_object_coverage_incomplete: object scope has {} nodes but the scoped mode payload has {point_count} points",
+                scope.node_indices.len()
+            )));
+        }
+        scope
+            .node_indices
+            .iter()
+            .map(|index| {
+                u32::try_from(*index).map_err(|_| {
+                    ApiError::internal(format!(
+                        "analysis field node index {index} exceeds u32 payload capacity"
+                    ))
+                })
+            })
+            .collect::<Result<Vec<_>, ApiError>>()?
+    } else if point_count == full_node_count {
         Vec::new()
     } else {
         let indices = magnetic_node_index_set(mesh);
@@ -3496,7 +3553,7 @@ fn serialize_analysis_field_vector_binary(
     };
     let topology_hash = fullmag_runner::fem_mesh_topology_fingerprint(mesh);
     let topology_hash_bytes = mesh_topology_hash_bytes(&topology_hash)?;
-    let indexing = if magnetic_node_indices.is_empty() {
+    let indexing = if node_indices.is_empty() {
         FieldVectorIndexing::FullDomain
     } else {
         FieldVectorIndexing::ExplicitNodeIndices
@@ -3505,14 +3562,16 @@ fn serialize_analysis_field_vector_binary(
         domain_generation_id: &domain_generation_id(snapshot),
         mesh_topology_revision: snapshot.mesh_revision,
         mesh_topology_hash: topology_hash_bytes,
-        scope_kind: if magnetic_node_indices.is_empty() {
-            "full"
-        } else {
-            "magnetic_only"
-        },
-        scope_id: "",
+        scope_kind: scope.map(|scope| scope.kind.as_str()).unwrap_or_else(|| {
+            if node_indices.is_empty() {
+                "full"
+            } else {
+                "magnetic_only"
+            }
+        }),
+        scope_id: scope.and_then(|scope| scope.id.as_deref()).unwrap_or(""),
         indexing,
-        node_indices: &magnetic_node_indices,
+        node_indices: &node_indices,
     };
     serialize_field_vector_binary_v3(field_id, out_n_comp, out_grid, projected, &metadata)
         .map_err(ApiError::internal)
@@ -3526,6 +3585,8 @@ struct ResponseFieldDataPlaneMetadata {
     default_view: String,
     default_phase_rad: f64,
     source_mesh_identity: Option<EigenModeSourceMeshIdentity>,
+    component_basis: Option<String>,
+    object_coverage: Option<Vec<EigenModeObjectCoverage>>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -3535,6 +3596,12 @@ struct EigenModeSourceMeshIdentity {
     topology_fingerprint: String,
     indexing: String,
     node_count: u64,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct EigenModeObjectCoverage {
+    object_id: String,
+    point_count: u64,
 }
 
 fn default_frequency_domain_field_views() -> Vec<String> {
@@ -3602,6 +3669,8 @@ fn response_field_data_plane_metadata_from_point_artifact(
             default_view: "complex".to_string(),
             default_phase_rad: 0.0,
             source_mesh_identity: None,
+            component_basis: None,
+            object_coverage: None,
         });
     }
     let point = read_json_artifact_value(artifact_dir, relative_path)?;
@@ -3661,6 +3730,8 @@ fn response_field_data_plane_metadata_from_point_artifact(
         default_view,
         default_phase_rad,
         source_mesh_identity: None,
+        component_basis: None,
+        object_coverage: None,
     })
 }
 
@@ -3742,6 +3813,21 @@ fn eigen_mode_data_plane_metadata_from_mode_artifact(
                 ))
             })
         })?;
+    let component_basis = mode
+        .get("component_basis")
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_string);
+    let object_coverage = mode
+        .get("object_coverage")
+        .cloned()
+        .map(serde_json::from_value::<Vec<EigenModeObjectCoverage>>)
+        .transpose()
+        .map_err(|error| {
+            ApiError::internal(format!(
+                "invalid eigen mode field object_coverage in '{}': {error}",
+                relative_path
+            ))
+        })?;
     let payload_path = eigen_mode_data_plane_payload_path(
         artifact_dir,
         &mode,
@@ -3757,6 +3843,8 @@ fn eigen_mode_data_plane_metadata_from_mode_artifact(
         default_view,
         default_phase_rad,
         source_mesh_identity: Some(source_mesh_identity),
+        component_basis,
+        object_coverage,
     })
 }
 
@@ -3921,13 +4009,13 @@ fn validate_eigen_mode_source_mesh_identity(
 ) -> Result<(), ApiError> {
     let mesh = snapshot.fem_mesh.as_ref().ok_or_else(|| {
         ApiError::conflict(format!(
-            "stale_eigen_mode_mesh: eigen mode metadata '{}' has no current FEM mesh for identity validation",
+            "mode_field_mesh_generation_mismatch: eigen mode metadata '{}' has no current FEM mesh for identity validation",
             relative_path
         ))
     })?;
     if source.indexing != "full_domain_node_order" {
         return Err(ApiError::conflict(format!(
-            "stale_eigen_mode_mesh: eigen mode metadata '{}' uses unsupported source indexing '{}'",
+            "mode_field_indexing_mismatch: eigen mode metadata '{}' uses unsupported source indexing '{}'",
             relative_path, source.indexing
         )));
     }
@@ -3936,14 +4024,14 @@ fn validate_eigen_mode_source_mesh_identity(
         || source.topology_fingerprint != current_topology_fingerprint
     {
         return Err(ApiError::conflict(format!(
-            "stale_eigen_mode_mesh: eigen mode metadata '{}' topology fingerprint '{}' does not match current mesh '{}'",
+            "mode_field_mesh_topology_mismatch: eigen mode metadata '{}' topology fingerprint '{}' does not match current mesh '{}'",
             relative_path, source.topology_fingerprint, current_topology_fingerprint
         )));
     }
     if let Some(source_generation_id) = source.mesh_generation_id.as_deref() {
         if mesh.generation_id.as_deref() != Some(source_generation_id) {
             return Err(ApiError::conflict(format!(
-                "stale_eigen_mode_mesh: eigen mode metadata '{}' mesh generation '{}' does not match current mesh generation '{}'",
+                "mode_field_mesh_generation_mismatch: eigen mode metadata '{}' mesh generation '{}' does not match current mesh generation '{}'",
                 relative_path,
                 source_generation_id,
                 mesh.generation_id.as_deref().unwrap_or("missing")
@@ -3955,19 +4043,103 @@ fn validate_eigen_mode_source_mesh_identity(
         .is_some_and(|revision| revision != snapshot.mesh_revision)
     {
         return Err(ApiError::conflict(format!(
-            "stale_eigen_mode_mesh: eigen mode metadata '{}' mesh revision {:?} does not match current mesh revision {}",
+            "mode_field_revision_stale: eigen mode metadata '{}' mesh revision {:?} does not match current mesh revision {}",
             relative_path, source.mesh_revision, snapshot.mesh_revision
         )));
     }
     if usize::try_from(source.node_count).ok() != Some(mesh.nodes.len()) {
         return Err(ApiError::conflict(format!(
-            "stale_eigen_mode_mesh: eigen mode metadata '{}' source node count {} does not match current mesh node count {}",
+            "mode_field_mesh_topology_mismatch: eigen mode metadata '{}' source node count {} does not match current mesh node count {}",
             relative_path,
             source.node_count,
             mesh.nodes.len()
         )));
     }
     Ok(())
+}
+
+fn resolve_eigen_mode_scope(
+    snapshot: &SessionStateResponse,
+    field_id: &str,
+    query: &FieldVectorQuery,
+    raw_point_count: usize,
+    object_coverage: Option<&[EigenModeObjectCoverage]>,
+) -> Result<Option<ResolvedFieldScope>, ApiError> {
+    let scope_kind = query
+        .scope_kind
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("full");
+    if scope_kind == "full" {
+        return Ok(None);
+    }
+    if scope_kind != "object" {
+        return Err(ApiError::bad_request(format!(
+            "unsupported eigen mode field scope_kind '{scope_kind}'"
+        )));
+    }
+    let object_id = required_scope_id(query, "object")?;
+    let mesh = snapshot.fem_mesh.as_ref().ok_or_else(|| {
+        ApiError::conflict(
+            "mode_field_mesh_generation_mismatch: object-scoped eigen mode field requires current FEM mesh topology",
+        )
+    })?;
+    let matches_nonmagnetic_part = mesh.mesh_parts.iter().any(|part| {
+        part.role != "magnetic_object"
+            && (object_ids_match(&part.id, object_id)
+                || part
+                    .object_id
+                    .as_deref()
+                    .is_some_and(|id| object_ids_match(id, object_id))
+                || part
+                    .geometry_id
+                    .as_deref()
+                    .is_some_and(|id| object_ids_match(id, object_id)))
+    });
+    let matches_air_segment = mesh.object_segments.iter().any(|segment| {
+        segment.object_id == "__air__" && object_segment_ids_match(segment, object_id)
+    });
+    if matches_nonmagnetic_part || matches_air_segment {
+        return Err(ApiError::unprocessable(format!(
+            "mode_field_object_not_magnetic: object '{object_id}' is not a magnetic mode-field carrier"
+        )));
+    }
+    let scope = resolve_field_scope(query, snapshot, None, raw_point_count, "m").map_err(
+        |error| {
+            if error.status == StatusCode::NOT_FOUND {
+                ApiError::not_found(format!(
+                    "mode_field_object_scope_missing: magnetic object scope '{object_id}' is not present in the current shared-domain mesh"
+                ))
+            } else {
+                error
+            }
+        },
+    )?;
+    let scope = scope.ok_or_else(|| {
+        ApiError::not_found(format!(
+            "mode_field_object_scope_missing: magnetic object scope '{object_id}' did not resolve"
+        ))
+    })?;
+    let coverage = object_coverage
+        .and_then(|coverage| {
+            coverage
+                .iter()
+                .find(|entry| object_ids_match(&entry.object_id, object_id))
+        })
+        .ok_or_else(|| {
+            ApiError::conflict(format!(
+                "mode_field_object_coverage_incomplete: eigen mode field '{field_id}' does not cover object '{object_id}'"
+            ))
+        })?;
+    if usize::try_from(coverage.point_count).ok() != Some(scope.node_indices.len()) {
+        return Err(ApiError::conflict(format!(
+            "mode_field_object_coverage_incomplete: eigen mode field '{field_id}' declares {} points for object '{object_id}', current membership has {}",
+            coverage.point_count,
+            scope.node_indices.len()
+        )));
+    }
+    Ok(Some(scope))
 }
 
 fn analysis_eigen_mode_vector_response(
@@ -3986,11 +4158,22 @@ fn analysis_eigen_mode_vector_response(
     let relative_path = metadata.payload_path.clone();
     let source_mesh_identity = metadata.source_mesh_identity.as_ref().ok_or_else(|| {
         ApiError::conflict(format!(
-            "stale_eigen_mode_mesh: eigen mode payload '{}' has no immutable source mesh identity",
+            "mode_field_mesh_generation_mismatch: eigen mode payload '{}' has no immutable source mesh identity",
             relative_path
         ))
     })?;
     validate_eigen_mode_source_mesh_identity(snapshot, &relative_path, source_mesh_identity)?;
+    if metadata.component_count != Some(3)
+        || !matches!(
+            metadata.component_basis.as_deref(),
+            Some("global_xyz" | "global_cartesian_xyz")
+        )
+    {
+        return Err(ApiError::unprocessable(format!(
+            "mode_field_basis_unsupported: eigen mode field '{}' must publish a three-component global Cartesian basis",
+            relative_path
+        )));
+    }
     let path = artifact_dir.join(&relative_path);
     let bytes = std::fs::read(&path).map_err(|error| {
         if error.kind() == std::io::ErrorKind::NotFound {
@@ -4039,17 +4222,56 @@ fn analysis_eigen_mode_vector_response(
     let point_count = raw_values.len() / n_comp;
     if u64::try_from(point_count).ok() != Some(source_mesh_identity.node_count) {
         return Err(ApiError::conflict(format!(
-            "stale_eigen_mode_mesh: eigen mode payload '{}' point count {} does not match its source mesh node count {}",
+            "mode_field_mesh_topology_mismatch: eigen mode payload '{}' point count {} does not match its source mesh node count {}",
             relative_path, point_count, source_mesh_identity.node_count
         )));
     }
-    let out_grid = [point_count as u32, 1, 1];
+    let resolved_scope = resolve_eigen_mode_scope(
+        snapshot,
+        field_id,
+        query,
+        point_count,
+        metadata.object_coverage.as_deref(),
+    )?;
+    let projected = apply_field_scope(
+        projected,
+        [point_count as u32, 1, 1],
+        out_n_comp,
+        resolved_scope.as_ref(),
+    );
+    let scoped_point_count = if out_n_comp > 0 {
+        projected.len() / out_n_comp
+    } else {
+        projected.len()
+    };
+    let out_grid = [scoped_point_count as u32, 1, 1];
     let binary = serialize_analysis_field_vector_binary(
-        snapshot, field_id, out_n_comp, out_grid, &projected,
+        snapshot,
+        field_id,
+        out_n_comp,
+        out_grid,
+        &projected,
+        resolved_scope.as_ref(),
     )?;
     let revision = analysis_payload_revision(snapshot, &relative_path, bytes.len());
+    let scope_token = resolved_scope
+        .as_ref()
+        .map(ResolvedFieldScope::cache_token)
+        .unwrap_or_else(|| "full-domain".to_string());
+    let node_indices_token = resolved_scope
+        .as_ref()
+        .map(|scope| {
+            let indices = scope
+                .node_indices
+                .iter()
+                .map(|index| u32::try_from(*index))
+                .collect::<Result<Vec<_>, _>>()
+                .unwrap_or_default();
+            field_node_indices_cache_token(Some(&indices))
+        })
+        .unwrap_or_else(|| "none".to_string());
     let etag = crate::router_v2::handlers::shared::stable_strong_etag(&format!(
-        "{field_id}:{revision}:{}:{}:{}",
+        "{field_id}:{revision}:{}:{}:{}:{scope_token}:{node_indices_token}",
         effective_view,
         query
             .component
@@ -4065,9 +4287,27 @@ fn analysis_eigen_mode_vector_response(
         &component,
         revision,
         &domain_generation_id(snapshot),
-        point_count,
+        scoped_point_count,
         projected.len(),
     );
+    let topology_hash = snapshot
+        .fem_mesh
+        .as_ref()
+        .map(fullmag_runner::fem_mesh_topology_fingerprint);
+    insert_field_vector_binary_headers(
+        &mut resp,
+        3,
+        topology_hash.as_deref(),
+        Some(if resolved_scope.is_some() {
+            FieldVectorIndexing::ExplicitNodeIndices
+        } else {
+            FieldVectorIndexing::FullDomain
+        }),
+        resolved_scope
+            .as_ref()
+            .map(|scope| scope.node_indices.len()),
+    );
+    insert_scope_headers(&mut resp, resolved_scope.as_ref());
     Ok(Some(resp))
 }
 
@@ -6950,6 +7190,7 @@ mod tests {
             3,
             [2, 1, 1],
             &values,
+            None,
         )
         .expect("analysis FEM field should serialize");
 

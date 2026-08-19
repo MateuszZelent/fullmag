@@ -38,6 +38,12 @@ const DEFAULT_ANALYSIS_FIELD_OVERLAY_APPEARANCE: AnalysisFieldOverlayAppearanceS
   shaderVisible: true,
   surfaceColorSource: "magnitude",
 };
+const DEFAULT_EIGEN_MODE_OVERLAY_APPEARANCE: AnalysisFieldOverlayAppearanceState = {
+  scalarColorPalette: "coolwarm",
+  shaderVisible: true,
+  surfaceColorSource: "colormap",
+  vectorsVisible: false,
+};
 const ANALYSIS_FIELD_VIEWS = new Set([
   "real",
   "imag",
@@ -264,7 +270,9 @@ function overlayStateFromContext(
   const appearance =
     appearancePatch ??
     activeOverlay?.appearance ??
-    DEFAULT_ANALYSIS_FIELD_OVERLAY_APPEARANCE;
+    (resolvedSource === "eigen-mode"
+      ? DEFAULT_EIGEN_MODE_OVERLAY_APPEARANCE
+      : DEFAULT_ANALYSIS_FIELD_OVERLAY_APPEARANCE);
   const phaseRad =
     numberValue(input.phaseRad) ??
     activeOverlay?.visualizationPhaseRad ??

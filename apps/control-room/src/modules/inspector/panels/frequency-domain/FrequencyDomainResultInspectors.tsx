@@ -38,6 +38,7 @@ import {
   useFrequencyDomainEigenSpectrumResource,
   useFrequencyDomainEigenModeFieldMetaResource,
   useFrequencyDomainEigenModeResource,
+  frequencyDomainJsonArtifactPayload,
   useFrequencyDomainFmrKittelFitResource,
   useFrequencyDomainFmrPeaksResource,
   useFrequencyDomainFmrResonanceFitsResource,
@@ -5848,7 +5849,7 @@ function useEigenModeSummary({ selection }: InspectorPanelProps) {
     (point) =>
       point.sampleIndex === sampleIndex && point.rawModeIndex === modeIndex,
   );
-  const modePayload = record(eigenMode.data);
+  const modePayload = record(frequencyDomainJsonArtifactPayload(eigenMode.data));
   const componentSummary = record(modePayload?.component_summary);
   const frequencyHz =
     finiteNumber(modePayload?.frequency_real_hz) ??

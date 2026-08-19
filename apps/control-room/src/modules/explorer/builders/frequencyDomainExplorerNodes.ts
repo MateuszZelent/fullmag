@@ -1,5 +1,5 @@
 import {
-  ANALYSIS_EIGEN_MODE_V2_PATH,
+  ANALYSIS_FREQUENCY_DOMAIN_EIGEN_MODE_PATH,
   ANALYSIS_FREQUENCY_DOMAIN_EIGEN_BRANCHES_V2_PATH,
   ANALYSIS_FREQUENCY_DOMAIN_EIGEN_DIAGNOSTICS_V2_PATH,
   ANALYSIS_FREQUENCY_DOMAIN_EIGEN_DISPERSION_PATH,
@@ -82,36 +82,61 @@ export function buildFrequencyDomainResultNode(
 ): ExplorerNode {
   const status: ExplorerNodeStatus = manifest ? "ready" : "stale";
   const parentId = "results:frequency-domain";
-  const spectrumModel = buildEigenSpectrumChartModel(spectrum);
-  const branchesModel = buildEigenBranchesModel(branches);
+  const activeProduct = activeFrequencyDomainProduct(manifest);
+  const calculationMode = frequencyDomainCalculationMode(manifest);
+  const modalActive = activeProduct === "modal_eigen";
+  const drivenActive = activeProduct === "driven_response";
+  const dispersionEnabled =
+    modalActive &&
+    (calculationMode === null || calculationMode === "dispersion_modal");
+  const activeSpectrum =
+    modalActive && publishedFrequencyDomainArtifact(manifest, "spectrum")
+      ? spectrum
+      : null;
+  const activeBranches =
+    dispersionEnabled && publishedFrequencyDomainArtifact(manifest, "branches")
+      ? branches
+      : null;
+  const activeDispersion =
+    dispersionEnabled &&
+    publishedFrequencyDomainArtifact(manifest, "dispersion")
+      ? dispersion
+      : null;
+  const activeResponseSweep =
+    drivenActive && publishedFrequencyDomainArtifact(manifest, "response")
+      ? responseSweep
+      : null;
+  const spectrumModel = buildEigenSpectrumChartModel(activeSpectrum);
+  const branchesModel = buildEigenBranchesModel(activeBranches);
   const dispersionModel = buildEigenDispersionChartModel(
-    dispersion,
+    activeDispersion,
     branchesModel,
   );
   const manifestPayload = frequencyDomainManifestPayload(manifest);
   const responseModel = buildFrequencyResponseChartModel(
-    responseSweep,
+    activeResponseSweep,
     manifestPayload,
   );
   const fmrPeaks = buildFmrPeakTableModel({
     manifestPayload,
-    responseSweep,
-    spectrum,
+    responseSweep: activeResponseSweep,
+    spectrum: activeSpectrum,
   });
   const hasEigenResults =
     spectrumModel.points.length > 0 ||
     dispersionModel.points.length > 0 ||
     branchesModel.branches.length > 0;
   const hasResponseResults =
-    responseModel.points.length > 0 ||
-    Boolean(manifest?.response_progress?.partial_artifacts_available) ||
-    Boolean(manifest?.response_cancel_requested?.partial_artifacts_available);
+    drivenActive &&
+    (responseModel.points.length > 0 ||
+      Boolean(manifest?.response_progress?.partial_artifacts_available) ||
+      Boolean(manifest?.response_cancel_requested?.partial_artifacts_available));
   const hasExports =
-    Boolean(spectrum?.artifact_path) ||
-    Boolean(branches?.artifact_path) ||
-    Boolean(dispersion?.artifact_path) ||
-    Boolean(responseSweep?.artifact_path) ||
-    Boolean(manifest?.result_manifest?.artifact_path);
+    Boolean(activeSpectrum?.artifact_path) ||
+    Boolean(activeBranches?.artifact_path) ||
+    Boolean(activeDispersion?.artifact_path) ||
+    Boolean(activeResponseSweep?.artifact_path) ||
+    Boolean(activeProduct && manifest?.result_manifest?.artifact_path);
   return {
     id: parentId,
     kind: "results.frequency_domain.root",
@@ -131,24 +156,28 @@ export function buildFrequencyDomainResultNode(
         resourceRef: ANALYSIS_FREQUENCY_DOMAIN_MANIFEST_V1_PATH,
         status,
       },
-      buildFrequencyDomainCalculationModesNode({
-        branchesModel,
-        dispersionModel,
-        fmrPeaks,
-        manifest,
-        parentId,
-        responseModel,
-        spectrumModel,
-        status,
-      }),
+      activeProduct
+        ? buildFrequencyDomainCalculationModesNode({
+            activeProduct,
+            branchesModel,
+            dispersionModel,
+            fmrPeaks,
+            manifest,
+            parentId,
+            responseModel,
+            spectrumModel,
+            status,
+          })
+        : null,
       fmrPeaks.peaks.length > 0 ||
       spectrumModel.points.length > 0 ||
       responseModel.points.length > 0
         ? buildFrequencyDomainFmrNode({
+            activeProduct,
             manifest,
             parentId,
-            responseSweep,
-            spectrum,
+            responseSweep: activeResponseSweep,
+            spectrum: activeSpectrum,
             status,
             activeAnalysisFieldOverlay,
           })
@@ -167,14 +196,14 @@ export function buildFrequencyDomainResultNode(
             status: "ready",
             children: compactExplorerNodes([
               buildEigenKPathNode({
-                branches,
-                dispersion,
+                branches: activeBranches,
+                dispersion: activeDispersion,
                 id: "results:eigen:k-path",
                 manifest,
                 parentId: `${parentId}:dispersion`,
               }),
               buildEigenBranchesNode({
-                branches,
+                branches: activeBranches,
                 id: `${parentId}:dispersion:branches`,
                 parentId: `${parentId}:dispersion`,
               }),
@@ -185,9 +214,9 @@ export function buildFrequencyDomainResultNode(
         ? buildEigenResultNode(
             manifest,
             parentId,
-            branches,
-            dispersion,
-            spectrum,
+            activeBranches,
+            activeDispersion,
+            activeSpectrum,
             activeAnalysisFieldOverlay,
           )
         : null,
@@ -195,7 +224,7 @@ export function buildFrequencyDomainResultNode(
         ? buildFrequencyResponseResultNode(
             manifest,
             parentId,
-            responseSweep,
+            activeResponseSweep,
             activeAnalysisFieldOverlay,
           )
         : null,
@@ -215,6 +244,7 @@ export function buildFrequencyDomainResultNode(
 }
 
 function buildFrequencyDomainCalculationModesNode({
+  activeProduct,
   branchesModel,
   dispersionModel,
   fmrPeaks,
@@ -224,6 +254,7 @@ function buildFrequencyDomainCalculationModesNode({
   spectrumModel,
   status,
 }: {
+  activeProduct: "modal_eigen" | "driven_response";
   branchesModel: ReturnType<typeof buildEigenBranchesModel>;
   dispersionModel: ReturnType<typeof buildEigenDispersionChartModel>;
   fmrPeaks: ReturnType<typeof buildFmrPeakTableModel>;
@@ -233,11 +264,14 @@ function buildFrequencyDomainCalculationModesNode({
   spectrumModel: ReturnType<typeof buildEigenSpectrumChartModel>;
   status: ExplorerNodeStatus;
 }): ExplorerNode {
-  const hasModalFmr = spectrumModel.points.length > 0;
-  const hasDrivenFmr = responseModel.points.length > 0;
+  const hasModalFmr =
+    activeProduct === "modal_eigen" && spectrumModel.points.length > 0;
+  const hasDrivenFmr =
+    activeProduct === "driven_response" && responseModel.points.length > 0;
   const hasFmr = hasModalFmr || hasDrivenFmr || fmrPeaks.peaks.length > 0;
   const hasDispersion =
-    dispersionModel.points.length > 0 || branchesModel.branches.length > 0;
+    activeProduct === "modal_eigen" &&
+    (dispersionModel.points.length > 0 || branchesModel.branches.length > 0);
   const responseMap = responseMapResultState(manifest);
   const children = compactExplorerNodes([
     hasFmr
@@ -274,7 +308,7 @@ function buildFrequencyDomainCalculationModesNode({
           status: "ready",
         }
       : null,
-    responseMap.show
+    activeProduct === "driven_response" && responseMap.show
       ? {
           id: `${parentId}:calculation-modes:response-map`,
           kind: "results.frequency_domain.response_map",
@@ -330,15 +364,14 @@ function responseMapResultState(
   const hasResourceRef =
     resourceRef !== ANALYSIS_FREQUENCY_DOMAIN_MANIFEST_V1_PATH;
   const available =
-    Boolean(artifactPath) ||
-    hasResourceRef ||
-    manifest?.floquet_nonzero_k_response_supported === true;
+    publishedFrequencyDomainArtifact(manifest, "response_map") &&
+    (Boolean(artifactPath) || hasResourceRef);
 
   return {
     artifactPath,
     badge: available ? "available" : "unsupported",
     resourceRef,
-    show: requested || Boolean(artifactPath) || hasResourceRef,
+    show: requested && available,
     status: available ? "ready" : "unsupported",
   };
 }
@@ -382,6 +415,7 @@ function buildEigenKPathNode({
 
 function buildFrequencyDomainFmrNode({
   activeAnalysisFieldOverlay,
+  activeProduct,
   manifest,
   parentId,
   responseSweep,
@@ -389,6 +423,7 @@ function buildFrequencyDomainFmrNode({
   status,
 }: {
   activeAnalysisFieldOverlay?: AnalysisFieldOverlayState | null;
+  activeProduct: ActiveFrequencyDomainProduct;
   manifest: FrequencyDomainManifestResource | null | undefined;
   parentId: string;
   responseSweep: FrequencyDomainJsonArtifactResource | null | undefined;
@@ -412,7 +447,7 @@ function buildFrequencyDomainFmrNode({
     kind: "results.frequency_domain.fmr",
     label: "FMR",
     parentId,
-    badge: fmrBadge(manifest),
+    badge: fmrBadge(manifest, activeProduct),
     icon: "activity",
     status,
     children: compactExplorerNodes([
@@ -1154,7 +1189,7 @@ function eigenResourceNode(
       status:
         artifactPaths.length > 0 ? "ready" : manifest ? "stale" : "unsupported",
       artifactPath: artifactPaths[0],
-      resourceRef: ANALYSIS_EIGEN_MODE_V2_PATH,
+      resourceRef: ANALYSIS_FREQUENCY_DOMAIN_EIGEN_MODE_PATH,
     };
   }
   if (key === "mode-field") {
@@ -1440,6 +1475,126 @@ function manifestString(
   if (!isRecord(sectionValue)) return undefined;
   const value = sectionValue[key];
   return typeof value === "string" ? value : undefined;
+}
+
+type ActiveFrequencyDomainProduct = "modal_eigen" | "driven_response";
+type PublishedFrequencyDomainArtifact =
+  | "branches"
+  | "dispersion"
+  | "response"
+  | "response_map"
+  | "spectrum";
+
+function activeFrequencyDomainProduct(
+  manifest: FrequencyDomainManifestResource | null | undefined,
+): ActiveFrequencyDomainProduct | null {
+  // Capability availability is not a published result. Keep Results fail-closed
+  // until the active run exposes a ready result manifest with a product identity.
+  const resultManifest = manifest?.result_manifest;
+  if (!resultManifest || resultManifest.status !== "ready") return null;
+  const payload = frequencyDomainManifestPayload(manifest);
+  if (!isRecord(payload)) return null;
+
+  if (Object.prototype.hasOwnProperty.call(payload, "study_product")) {
+    const studyProduct = payload.study_product;
+    return studyProduct === "modal_eigen" || studyProduct === "driven_response"
+      ? studyProduct
+      : null;
+  }
+
+  const requestedExecution = isRecord(payload.requested_execution)
+    ? payload.requested_execution
+    : null;
+  const calculationMode =
+    requestedExecution?.calculation_mode ?? payload.calculation_mode;
+  if (
+    calculationMode === "fmr_modal" ||
+    calculationMode === "dispersion_modal" ||
+    calculationMode === "free_modes"
+  ) {
+    return "modal_eigen";
+  }
+  if (
+    calculationMode === "fmr_response" ||
+    calculationMode === "response_map"
+  ) {
+    return "driven_response";
+  }
+  return null;
+}
+
+type FrequencyDomainCalculationMode =
+  | "dispersion_modal"
+  | "free_modes"
+  | "fmr_modal"
+  | "fmr_response"
+  | "response_map"
+  | "invalid";
+
+function frequencyDomainCalculationMode(
+  manifest: FrequencyDomainManifestResource | null | undefined,
+): FrequencyDomainCalculationMode | null {
+  const payload = frequencyDomainManifestPayload(manifest);
+  if (!isRecord(payload)) return null;
+  const requestedExecution = isRecord(payload.requested_execution)
+    ? payload.requested_execution
+    : null;
+  const hasRequestedMode =
+    requestedExecution !== null &&
+    Object.prototype.hasOwnProperty.call(requestedExecution, "calculation_mode");
+  const hasLegacyMode = Object.prototype.hasOwnProperty.call(
+    payload,
+    "calculation_mode",
+  );
+  if (!hasRequestedMode && !hasLegacyMode) return null;
+  const value = hasRequestedMode
+    ? requestedExecution?.calculation_mode
+    : payload.calculation_mode;
+  return value === "dispersion_modal" ||
+    value === "free_modes" ||
+    value === "fmr_modal" ||
+    value === "fmr_response" ||
+    value === "response_map"
+    ? value
+    : "invalid";
+}
+
+function publishedFrequencyDomainArtifact(
+  manifest: FrequencyDomainManifestResource | null | undefined,
+  artifact: PublishedFrequencyDomainArtifact,
+): boolean {
+  const resultManifest = manifest?.result_manifest;
+  if (!resultManifest || resultManifest.status !== "ready") return false;
+  const payload = frequencyDomainManifestPayload(manifest);
+  if (!isRecord(payload)) return false;
+
+  const artifacts = isRecord(payload.artifacts) ? payload.artifacts : null;
+  const resources = isRecord(payload.resources) ? payload.resources : null;
+  const artifactKeys: Record<PublishedFrequencyDomainArtifact, string[]> = {
+    branches: ["branches_v2_path"],
+    dispersion: ["dispersion_csv_path", "dispersion_v2_path"],
+    response: ["response_sweep_v1_path", "response_sweep_v2_path"],
+    response_map: ["response_map_v1_path", "response_map_v2_path"],
+    spectrum: ["spectrum_v1_path", "spectrum_v2_path"],
+  };
+  const resourceKeys: Record<PublishedFrequencyDomainArtifact, string[]> = {
+    branches: ["branches_resource_key"],
+    dispersion: ["dispersion_resource_key"],
+    response: ["response_sweep_resource_key"],
+    response_map: ["response_map_resource_key"],
+    spectrum: ["spectrum_resource_key"],
+  };
+
+  return (
+    artifactKeys[artifact].some((key) =>
+      nonEmptyString(artifacts?.[key]),
+    ) ||
+    resourceKeys[artifact].some((key) => nonEmptyString(resources?.[key]))
+  );
+}
+
+function nonEmptyString(value: unknown): value is string {
+  return typeof value === "string" && value.length > 0;
 }
 
 function manifestStringArray(
@@ -1771,8 +1926,11 @@ function availabilityBadge(available: boolean | null | undefined): string {
 
 function fmrBadge(
   manifest: FrequencyDomainManifestResource | null | undefined,
+  activeProduct?: ActiveFrequencyDomainProduct | null,
 ): string {
   if (!manifest) return "missing manifest";
+  if (activeProduct === "modal_eigen") return "modal";
+  if (activeProduct === "driven_response") return "driven";
   const modal = manifest.eigenmodes.modal_solver_available ? "modal" : null;
   const driven = manifest.response.driven_response_available ? "driven" : null;
   return [modal, driven].filter(Boolean).join(" + ") || "unavailable";

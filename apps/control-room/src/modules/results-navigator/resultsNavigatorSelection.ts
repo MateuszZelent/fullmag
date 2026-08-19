@@ -190,7 +190,7 @@ export function buildModalNodeId(ref: ModalSelectionRef): string {
     idSegment(ref.runId),
     "stage",
     idSegment(ref.stageId),
-    "frequency-domain",
+    "dynamics",
     "eigen",
     "sample",
     idSegment(ref.sampleId),

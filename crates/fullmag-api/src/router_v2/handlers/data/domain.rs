@@ -12,6 +12,7 @@ use serde::Deserialize;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 
+use super::fields::{load_fdm_multilayer_airbox_carrier, FdmMultilayerAirboxCarrier};
 use crate::error::ApiError;
 use crate::fem_slice_overlay::{collect_fem_slice_overlay, FemSliceOverlayInput};
 use crate::field_slice::{resolve_slice_query, FieldSliceQuery, SlicePlane};
@@ -21,7 +22,6 @@ use crate::router_v2::handlers::sessions::status::{
 };
 use crate::schemas::domain::*;
 use crate::types::{AppState, SessionStateResponse};
-use super::fields::{load_fdm_multilayer_airbox_carrier, FdmMultilayerAirboxCarrier};
 
 #[derive(Debug, Clone, Deserialize, utoipa::IntoParams)]
 #[into_params(parameter_in = Query)]
@@ -419,9 +419,13 @@ fn fdm_multilayer_airbox_resource(
     observation_revision: u64,
 ) -> FdmMultilayerAirboxResource {
     match load_fdm_multilayer_airbox_carrier(snapshot) {
-        Ok(Some(carrier)) => fdm_multilayer_airbox_resource_from_carrier(carrier, observation_revision),
+        Ok(Some(carrier)) => {
+            fdm_multilayer_airbox_resource_from_carrier(carrier, observation_revision)
+        }
         Ok(None) => unavailable_fdm_multilayer_airbox_resource("airbox_carrier_missing"),
-        Err(reason) => unavailable_fdm_multilayer_airbox_resource(&format!("airbox_carrier_invalid:{reason}")),
+        Err(reason) => {
+            unavailable_fdm_multilayer_airbox_resource(&format!("airbox_carrier_invalid:{reason}"))
+        }
     }
 }
 
