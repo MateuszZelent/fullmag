@@ -129,11 +129,6 @@ class PeriodicAntidotEigenmodesExampleTests(unittest.TestCase):
                     "quantity": "eigenfrequency",
                     "scope": "per_sample",
                 },
-                {
-                    "kind": "dispersion_curve",
-                    "name": "dispersion",
-                    "include_branch_table": True,
-                },
                 {"kind": "eigen_mode", "field": "mode", "indices": [0, 1, 2, 3]},
             ],
         )

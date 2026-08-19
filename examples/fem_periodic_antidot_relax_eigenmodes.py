@@ -289,7 +289,6 @@ else:
 study.solver(fix_dt=1e-11, g=2.115)
 
 study.save("spectrum")
-study.save("dispersion")
 study.save("mode", indices=tuple(range(save_mode_count)))
 
 study.stages.add_relax(
