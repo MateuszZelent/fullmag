@@ -3,6 +3,7 @@ import { createRoot, hydrateRoot } from "react-dom/client";
 import { renderToString, renderToStaticMarkup } from "react-dom/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+import type { VisualizationStateResource } from "@/kernel/api/apiTypes";
 import type { Selection } from "@/kernel/selection/selectionTypes";
 
 import { PlanarVisualizationSection } from "./PlanarVisualizationSection";
@@ -16,7 +17,16 @@ import {
 const mocks = vi.hoisted(() => ({
   components: 3,
   discretization: "fem",
+  metaCalls: 0,
+  maskCalls: 0,
+  optimisticPlanar: null as VisualizationStateResource["planar"] | null,
   queuePatch: vi.fn(),
+  queuePlanarTargetOverride: vi.fn(),
+  targets: {
+    airbox: { scope: "airbox", scope_id: "airbox" },
+    objects: [{ scope: "object", scope_id: "free-layer" }],
+    parts: [{ scope: "part", scope_id: "tetrahedra" }],
+  },
   maskStatus: "ready" as "error" | "idle" | "loading" | "ready" | "stale",
   overlay: {
     available: true,
@@ -51,6 +61,25 @@ const mocks = vi.hoisted(() => ({
     raster_opacity: 1,
     viewport_colorbar_visible: true,
     wireframe_style: { color: "#94a3b8", opacity: 1 },
+    target_overrides: [
+      {
+        scope: "object",
+        scope_id: "free-layer",
+        wireframe_style: { color: "#ff0000", opacity: 0.4 },
+      },
+      {
+        scope: "airbox",
+        scope_id: "airbox",
+        wireframe_style: { color: "#00ff00", opacity: 0.6 },
+      },
+      {
+        scope: "part",
+        scope_id: "tetrahedra",
+        wireframe_style: { color: "#0000ff", opacity: 0.8 },
+      },
+    ] as NonNullable<
+      NonNullable<VisualizationStateResource["planar"]>["target_overrides"]
+    >,
     point_style: { color: "#89b4fa", opacity: 1, size: 3 },
     interaction: { pan_u_m: 0, pan_v_m: 0, zoom: 1 },
     quality: "interactive",
@@ -74,14 +103,17 @@ vi.mock("@/kernel/KernelContext", () => ({
   useKernel: () => ({
     visualizationSync: {
       queuePatch: mocks.queuePatch,
+      queuePlanarTargetOverride: mocks.queuePlanarTargetOverride,
     },
   }),
 }));
 
 vi.mock("@/kernel/resources/planarFieldResources", () => ({
   planarFieldQueryFromMeta: () => ({ ok: true, query: { sample_token: "planar-sample-v2:sample" } }),
-  usePlanarFieldMetaResource: () => ({
-    data: {
+  usePlanarFieldMetaResource: () => {
+    mocks.metaCalls += 1;
+    return {
+      data: {
       canonical_unit: "A/m",
       component: "magnitude",
       field_backend: "fem",
@@ -100,10 +132,18 @@ vi.mock("@/kernel/resources/planarFieldResources", () => ({
       sampling_method: "fdm_cell_constant",
       sampling_execution: "cpu",
     },
-    error: null,
-    status: "ready",
-  }),
-  usePlanarMaskResource: () => ({ data: mocks.maskStatus === "ready" ? new ArrayBuffer(1) : null, error: null, status: mocks.maskStatus }),
+      error: null,
+      status: "ready",
+    };
+  },
+  usePlanarMaskResource: () => {
+    mocks.maskCalls += 1;
+    return {
+      data: mocks.maskStatus === "ready" ? new ArrayBuffer(1) : null,
+      error: null,
+      status: mocks.maskStatus,
+    };
+  },
 }));
 
 vi.mock("@/kernel/resources/planarMonitorResources", () => ({
@@ -154,8 +194,10 @@ vi.mock("@/kernel/resources/useSessionStatus", () => ({
 
 vi.mock("@/kernel/visualization/useVisualizationStateResource", () => ({
   useVisualizationStateResource: () => ({
-    data: { planar: mocks.planar },
-    optimisticData: null,
+    data: { planar: mocks.planar, targets: mocks.targets },
+    optimisticData: mocks.optimisticPlanar
+      ? { planar: mocks.optimisticPlanar, targets: mocks.targets }
+      : null,
   }),
 }));
 
@@ -168,6 +210,51 @@ const selection: Selection = {
   ref: null,
 };
 
+const airboxSelection: Selection = {
+  kind: "airbox.visualization",
+  label: "Free layer",
+  moduleSource: "inspector",
+  nodeId: "model:airbox:visualization",
+  objectId: null,
+  ref: {
+    kind: "airbox.visualization",
+    nodeId: "model:airbox:visualization",
+    type: "airbox",
+    visualizationTargetId: "airbox",
+  },
+};
+
+const partSelection: Selection = {
+  kind: "mesh-part",
+  label: "Free layer",
+  moduleSource: "inspector",
+  nodeId: "part:tetrahedra",
+  objectId: null,
+  ref: {
+    carrierPartId: "tetrahedra",
+    kind: "mesh-part",
+    nodeId: "part:tetrahedra",
+    objectId: null,
+    type: "mesh-part",
+    visualizationTargetId: "part:tetrahedra",
+  },
+};
+
+const regionSelection: Selection = {
+  kind: "object.region.visualization",
+  label: "Airbox",
+  moduleSource: "inspector",
+  nodeId: "model:object:free-layer:region:r1",
+  objectId: "free-layer",
+  ref: {
+    kind: "object.region.visualization",
+    nodeId: "model:object:free-layer:region:r1",
+    objectId: "free-layer",
+    regionId: "r1",
+    type: "scene-object",
+    visualizationTargetId: "region:free-layer:r1",
+  },
+};
 describe("PlanarVisualizationSection", () => {
   beforeEach(() => {
     mocks.queuePatch.mockClear();
@@ -179,7 +266,302 @@ describe("PlanarVisualizationSection", () => {
     mocks.discretization = "fem";
     mocks.planar.source = { kind: "monitor", monitor_id: "plane-1" };
     mocks.planar.view_scope = { kind: "monitor_target" };
+    mocks.queuePlanarTargetOverride.mockClear();
+    mocks.optimisticPlanar = null;
+    mocks.metaCalls = 0;
+    mocks.maskCalls = 0;
+    mocks.targets.airbox = { scope: "airbox", scope_id: "airbox" };
+    mocks.targets.objects = [
+      { scope: "object", scope_id: "free-layer" },
+    ];
+    mocks.targets.parts = [
+      { scope: "part", scope_id: "tetrahedra" },
+    ];
+    mocks.planar.target_overrides = [
+      {
+        scope: "object",
+        scope_id: "free-layer",
+        wireframe_style: { color: "#ff0000", opacity: 0.4 },
+      },
+      {
+        scope: "airbox",
+        scope_id: "airbox",
+        wireframe_style: { color: "#00ff00", opacity: 0.6 },
+      },
+      {
+        scope: "part",
+        scope_id: "tetrahedra",
+        wireframe_style: { color: "#0000ff", opacity: 0.8 },
+      },
+    ];
   });
+
+  it("queues only the selected Object target override", async () => {
+    const dom = installSimulationPreparationTestDom();
+    const container = dom.document.createElement("div");
+    const root = createRoot(container as unknown as Element);
+    try {
+      await act(async () =>
+        root.render(<PlanarVisualizationSection selection={selection} />),
+      );
+      await act(async () =>
+        change(findControl(container, "Wireframe opacity"), "0.2"),
+      );
+
+      expect(mocks.queuePlanarTargetOverride).toHaveBeenLastCalledWith({
+        kind: "upsert",
+        target: {
+          id: "object:free-layer",
+          kind: "object",
+          label: "Free layer",
+        },
+        wireframeStyle: { color: "#ff0000", opacity: 0.2 },
+      });
+      expect(mocks.queuePatch).not.toHaveBeenCalled();
+    } finally {
+      await act(async () => root.unmount());
+      dom.restore();
+    }
+  });
+
+  it("patches Airbox independently despite an Object-label collision", async () => {
+    const dom = installSimulationPreparationTestDom();
+    const container = dom.document.createElement("div");
+    const root = createRoot(container as unknown as Element);
+    try {
+      await act(async () =>
+        root.render(
+          <PlanarVisualizationSection selection={airboxSelection} />,
+        ),
+      );
+      await act(async () =>
+        change(findControl(container, "Wireframe opacity"), "0.25"),
+      );
+
+      expect(mocks.queuePlanarTargetOverride).toHaveBeenLastCalledWith({
+        kind: "upsert",
+        target: { id: "airbox", kind: "airbox", label: "Airbox" },
+        wireframeStyle: { color: "#00ff00", opacity: 0.25 },
+      });
+    } finally {
+      await act(async () => root.unmount());
+      dom.restore();
+    }
+  });
+
+  it("supports Part and reset removes only its exact override", async () => {
+    const dom = installSimulationPreparationTestDom();
+    const container = dom.document.createElement("div");
+    const root = createRoot(container as unknown as Element);
+    try {
+      await act(async () =>
+        root.render(<PlanarVisualizationSection selection={partSelection} />),
+      );
+      expect(findControl(container, "Wireframe color value").value).toBe(
+        "#0000ff",
+      );
+      await act(async () =>
+        clickButton(container, "Reset wireframe override"),
+      );
+
+      expect(mocks.queuePlanarTargetOverride).toHaveBeenLastCalledWith({
+        kind: "remove",
+        target: {
+          id: "part:tetrahedra",
+          kind: "part",
+          label: "Free layer",
+        },
+      });
+    } finally {
+      await act(async () => root.unmount());
+      dom.restore();
+    }
+  });
+
+  it("shows unsupported target wireframe as read-only fallback and cannot mutate global style", async () => {
+    const dom = installSimulationPreparationTestDom();
+    const container = dom.document.createElement("div");
+    const root = createRoot(container as unknown as Element);
+    try {
+      await act(async () =>
+        root.render(<PlanarVisualizationSection selection={regionSelection} />),
+      );
+      expect(container.textContent).toContain(
+        "Planar wireframe overrides support only Airbox, objects, and mesh parts.",
+      );
+      expect(findControl(container, "Wireframe color value").disabled).toBe(
+        true,
+      );
+      expect(findControl(container, "Wireframe opacity").disabled).toBe(true);
+      await act(async () =>
+        change(findControl(container, "Wireframe opacity"), "0.1"),
+      );
+      expect(mocks.queuePatch).not.toHaveBeenCalled();
+    } finally {
+      expect(mocks.queuePlanarTargetOverride).not.toHaveBeenCalled();
+      await act(async () => root.unmount());
+      dom.restore();
+    }
+  });
+
+  it("keeps a missing Object target dormant and reactivates only its exact registry identity", async () => {
+    mocks.targets.objects = [
+      { scope: "object", scope_id: "other-object" },
+    ];
+    const savedOverride = mocks.planar.target_overrides[0];
+    const dom = installSimulationPreparationTestDom();
+    const container = dom.document.createElement("div");
+    const root = createRoot(container as unknown as Element);
+    try {
+      await act(async () =>
+        root.render(<PlanarVisualizationSection selection={selection} />),
+      );
+      expect(container.textContent).toContain(
+        "The selected target is absent from the current visualization registry",
+      );
+      expect(findControl(container, "Wireframe color value").value).toBe(
+        "#94a3b8",
+      );
+      expect(findControl(container, "Wireframe opacity").disabled).toBe(true);
+      expect(mocks.planar.target_overrides[0]).toBe(savedOverride);
+
+      mocks.targets.objects = [
+        { scope: "object", scope_id: "free-layer" },
+      ];
+      await act(async () =>
+        root.render(<PlanarVisualizationSection selection={selection} />),
+      );
+      expect(findControl(container, "Wireframe color value").value).toBe(
+        "#ff0000",
+      );
+      expect(findControl(container, "Wireframe opacity").disabled).toBe(false);
+    } finally {
+      await act(async () => root.unmount());
+      dom.restore();
+    }
+  });
+
+  it.each([
+    {
+      name: "Object",
+      selected: selection,
+      target: {
+        id: "object:free-layer",
+        kind: "object" as const,
+        label: "Free layer",
+      },
+      scopeId: "free-layer",
+      color: "#ff0000",
+    },
+    {
+      name: "Airbox",
+      selected: airboxSelection,
+      target: {
+        id: "airbox",
+        kind: "airbox" as const,
+        label: "Airbox",
+      },
+      scopeId: "airbox",
+      color: "#00ff00",
+    },
+  ])(
+    "preserves the $name Inspector root, focus, scroll, and unrelated controls through pending and ACK",
+    async ({ selected, target, scopeId, color }) => {
+      const dom = installSimulationPreparationTestDom();
+      const container = dom.document.createElement("div");
+      const root = createRoot(container as unknown as Element);
+      try {
+        await act(async () =>
+          root.render(<PlanarVisualizationSection selection={selected} />),
+        );
+        const panel = findElements(container, (element) =>
+          (element.getAttribute("class") ?? "")
+            .split(" ")
+            .includes("fm-inspector-panel"),
+        )[0];
+        if (!panel) throw new Error("Missing planar Inspector root");
+        const wireframeOpacity = findControl(
+          container,
+          "Wireframe opacity",
+        );
+        const rasterOpacity = findControl(container, "Raster opacity");
+        panel.scrollTop = 127;
+        wireframeOpacity.focus();
+        const unrelatedState = {
+          className: rasterOpacity.getAttribute("class"),
+          disabled: rasterOpacity.disabled,
+        };
+        const initialMetaCalls = mocks.metaCalls;
+        const initialMaskCalls = mocks.maskCalls;
+
+        await act(async () => change(wireframeOpacity, "0.2"));
+        expect(mocks.queuePlanarTargetOverride).toHaveBeenCalledTimes(1);
+        expect(mocks.queuePlanarTargetOverride).toHaveBeenLastCalledWith({
+          kind: "upsert",
+          target,
+          wireframeStyle: { color, opacity: 0.2 },
+        });
+
+        const acknowledgedOverrides = mocks.planar.target_overrides.map(
+          (entry) =>
+            entry.scope === target.kind && entry.scope_id === scopeId
+              ? {
+                  ...entry,
+                  wireframe_style: {
+                    ...entry.wireframe_style,
+                    opacity: 0.2,
+                  },
+                }
+              : entry,
+        );
+        mocks.optimisticPlanar = {
+          ...mocks.planar,
+          target_overrides: acknowledgedOverrides,
+        } as VisualizationStateResource["planar"];
+        await act(async () =>
+          root.render(<PlanarVisualizationSection selection={selected} />),
+        );
+
+        expect(
+          findElements(container, (element) =>
+            (element.getAttribute("class") ?? "")
+              .split(" ")
+              .includes("fm-inspector-panel"),
+          )[0],
+        ).toBe(panel);
+        expect(dom.document.activeElement).toBe(wireframeOpacity);
+        expect(panel.scrollTop).toBe(127);
+        expect(findControl(container, "Raster opacity").disabled).toBe(
+          unrelatedState.disabled,
+        );
+        expect(
+          findControl(container, "Raster opacity").getAttribute("class"),
+        ).toBe(unrelatedState.className);
+
+        mocks.planar.target_overrides = acknowledgedOverrides;
+        mocks.optimisticPlanar = null;
+        await act(async () =>
+          root.render(<PlanarVisualizationSection selection={selected} />),
+        );
+        expect(
+          findElements(container, (element) =>
+            (element.getAttribute("class") ?? "")
+              .split(" ")
+              .includes("fm-inspector-panel"),
+          )[0],
+        ).toBe(panel);
+        expect(dom.document.activeElement).toBe(wireframeOpacity);
+        expect(panel.scrollTop).toBe(127);
+        expect(mocks.queuePlanarTargetOverride).toHaveBeenCalledTimes(1);
+        expect(mocks.queuePatch).not.toHaveBeenCalled();
+        expect(mocks.metaCalls).toBe(initialMetaCalls + 2);
+        expect(mocks.maskCalls).toBe(initialMaskCalls + 2);
+      } finally {
+        await act(async () => root.unmount());
+        dom.restore();
+      }
+    },
+  );
 
   it("always offers Default and exposes plane/position controls without a monitor", () => {
     mocks.planar.source = { kind: "default" };
@@ -504,11 +886,6 @@ function change(element: TestElement, value: string): void {
   ));
 }
 
-function toggle(element: TestElement): void {
-  const control = element as TestElement & { checked?: boolean };
-  control.checked = !control.checked;
-  element.dispatchEvent(new TestEvent("click", { bubbles: true }));
-}
 
 function clickButton(root: TestNode, label: string): void {
   const button = findElements(

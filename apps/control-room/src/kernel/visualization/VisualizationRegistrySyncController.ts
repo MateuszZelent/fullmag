@@ -8,9 +8,28 @@ import { ControlRoomApiError } from "../api/ControlRoomApi";
 import { VISUALIZATION_STATE_PATH } from "../api/apiPaths";
 import type { ResourceInvalidationController } from "../resources/ResourceInvalidationController";
 import { sharedResourceRuntimeStore } from "../resources/ResourceRuntimeStore";
-import { mergeVisualizationStateTargetOverrides } from "./ObjectVisualizationController";
+import {
+  mergeVisualizationStateTargetOverrides,
+  visualizationStateScopeIdForTarget,
+  visualizationTargetKey,
+  type VisualizationTargetRef,
+} from "./ObjectVisualizationController";
 
 type VisualizationRegistrySyncListener = () => void;
+type PlanarState = NonNullable<VisualizationStateResource["planar"]>;
+type PlanarTargetOverride = NonNullable<PlanarState["target_overrides"]>[number];
+type PlanarWireframeStyle = PlanarState["wireframe_style"];
+
+export type PlanarTargetOverrideOperation =
+  | {
+      kind: "upsert";
+      target: VisualizationTargetRef;
+      wireframeStyle: PlanarWireframeStyle;
+    }
+  | {
+      kind: "remove";
+      target: VisualizationTargetRef;
+    };
 
 interface VisualizationRegistrySyncApi {
   patch: (
@@ -23,13 +42,16 @@ export interface VisualizationRegistrySyncSnapshot {
   error: Error | null;
   inflightPatch: VisualizationStatePatch | null;
   inflightTargetIds: readonly string[];
+  inflightPlanarTargetIds: readonly string[];
   lastLocalChangedAt: number | null;
   lastRemoteRevision: ResourceRevision | null;
   mutation: VisualizationRegistryMutationState | null;
   pendingFingerprint: string | null;
   pendingPatch: VisualizationStatePatch | null;
   pendingTargetIds: readonly string[];
+  pendingPlanarTargetIds: readonly string[];
   rejectedTargetIds: readonly string[];
+  rejectedPlanarTargetIds: readonly string[];
   version: number;
 }
 
@@ -62,6 +84,7 @@ const INITIAL_SNAPSHOT: VisualizationRegistrySyncSnapshot = {
   error: null,
   inflightPatch: null,
   inflightTargetIds: EMPTY_TARGET_IDS,
+  inflightPlanarTargetIds: EMPTY_TARGET_IDS,
   lastLocalChangedAt: null,
   lastRemoteRevision: null,
   mutation: null,
@@ -69,7 +92,9 @@ const INITIAL_SNAPSHOT: VisualizationRegistrySyncSnapshot = {
   pendingPatch: null,
   pendingTargetIds: EMPTY_TARGET_IDS,
   rejectedTargetIds: EMPTY_TARGET_IDS,
+  pendingPlanarTargetIds: EMPTY_TARGET_IDS,
   version: 0,
+  rejectedPlanarTargetIds: EMPTY_TARGET_IDS,
 };
 
 export class VisualizationRegistrySyncController {
@@ -122,14 +147,16 @@ export class VisualizationRegistrySyncController {
     const activePatches = [
       {
         patch: this.snapshot.inflightPatch,
+        planarTargetIds: this.snapshot.inflightPlanarTargetIds,
         targetIds: this.snapshot.inflightTargetIds,
       },
       {
         patch: this.snapshot.pendingPatch,
+        planarTargetIds: this.snapshot.pendingPlanarTargetIds,
         targetIds: this.snapshot.pendingTargetIds,
       },
     ];
-    for (const { patch, targetIds } of activePatches) {
+    for (const { patch, planarTargetIds, targetIds } of activePatches) {
       if (!patch) continue;
       if (isCameraOnlyPatch(patch)) {
         const projectionPatch = cameraProjectionPatch(patch);
@@ -141,7 +168,12 @@ export class VisualizationRegistrySyncController {
         }
         continue;
       }
-      optimistic = applyVisualizationStatePatch(optimistic, patch, targetIds);
+      optimistic = applyVisualizationStatePatch(
+        optimistic,
+        patch,
+        targetIds,
+        planarTargetIds,
+      );
     }
     return optimistic;
   }
@@ -176,10 +208,12 @@ export class VisualizationRegistrySyncController {
     const patch = this.snapshot.pendingPatch;
     if (!patch) return Promise.resolve();
     const targetIds = this.snapshot.pendingTargetIds;
+    const planarTargetIds = this.snapshot.pendingPlanarTargetIds;
     const requestPatch = rebaseVisualizationStatePatch(
       this.remoteState,
       patch,
       targetIds,
+      planarTargetIds,
     );
     const renderAffectingPatch = !isCameraOnlyPatch(patch);
     if (!renderAffectingPatch) {
@@ -197,9 +231,14 @@ export class VisualizationRegistrySyncController {
         this.snapshot.inflightTargetIds,
         this.snapshot.pendingTargetIds,
       ),
+      inflightPlanarTargetIds: mergeTargetIds(
+        this.snapshot.inflightPlanarTargetIds,
+        this.snapshot.pendingPlanarTargetIds,
+      ),
       pendingFingerprint: null,
       pendingPatch: null,
       pendingTargetIds: EMPTY_TARGET_IDS,
+      pendingPlanarTargetIds: EMPTY_TARGET_IDS,
       mutation: {
         attempts: 0,
         error: null,
@@ -243,21 +282,26 @@ export class VisualizationRegistrySyncController {
             : null,
           rejectedTargetIds: EMPTY_TARGET_IDS,
           version: this.snapshot.version + 1,
+          rejectedPlanarTargetIds: EMPTY_TARGET_IDS,
         };
       })
       .catch((error: unknown) => {
         this.rejectedPatch = patch;
         const rejectedTargetIds = targetIds;
+        const rejectedPlanarTargetIds = planarTargetIds;
         const normalizedError = error instanceof Error ? error : new Error(String(error));
         this.snapshot = {
           ...this.snapshot,
           error: normalizedError,
           inflightPatch: null,
           inflightTargetIds: EMPTY_TARGET_IDS,
+          inflightPlanarTargetIds: EMPTY_TARGET_IDS,
           pendingFingerprint: null,
           pendingPatch: null,
           pendingTargetIds: EMPTY_TARGET_IDS,
           rejectedTargetIds,
+          pendingPlanarTargetIds: EMPTY_TARGET_IDS,
+          rejectedPlanarTargetIds,
           mutation: this.snapshot.mutation
             ? {
                 ...this.snapshot.mutation,
@@ -338,6 +382,7 @@ export class VisualizationRegistrySyncController {
         state,
         this.snapshot.pendingPatch,
         this.snapshot.pendingTargetIds,
+        this.snapshot.pendingPlanarTargetIds,
       )
         ? null
         : this.snapshot.pendingPatch;
@@ -347,21 +392,30 @@ export class VisualizationRegistrySyncController {
         state,
         this.snapshot.inflightPatch,
         this.snapshot.inflightTargetIds,
+        this.snapshot.inflightPlanarTargetIds,
       )
         ? null
         : this.snapshot.inflightPatch;
     const pendingTargetIds = pendingPatch
       ? this.snapshot.pendingTargetIds
       : EMPTY_TARGET_IDS;
+    const pendingPlanarTargetIds = pendingPatch
+      ? this.snapshot.pendingPlanarTargetIds
+      : EMPTY_TARGET_IDS;
     const inflightTargetIds = inflightPatch
       ? this.snapshot.inflightTargetIds
+      : EMPTY_TARGET_IDS;
+    const inflightPlanarTargetIds = inflightPatch
+      ? this.snapshot.inflightPlanarTargetIds
       : EMPTY_TARGET_IDS;
     if (
       this.snapshot.lastRemoteRevision === state.revision &&
       this.snapshot.pendingPatch === pendingPatch &&
       this.snapshot.inflightPatch === inflightPatch &&
       this.snapshot.pendingTargetIds === pendingTargetIds &&
-      this.snapshot.inflightTargetIds === inflightTargetIds
+      this.snapshot.pendingPlanarTargetIds === pendingPlanarTargetIds &&
+      this.snapshot.inflightTargetIds === inflightTargetIds &&
+      this.snapshot.inflightPlanarTargetIds === inflightPlanarTargetIds
     ) {
       return;
     }
@@ -370,10 +424,12 @@ export class VisualizationRegistrySyncController {
       ...this.snapshot,
       inflightPatch,
       inflightTargetIds,
+      inflightPlanarTargetIds,
       lastRemoteRevision: state.revision,
       pendingFingerprint: null,
       pendingPatch,
       pendingTargetIds,
+      pendingPlanarTargetIds,
       version: this.snapshot.version + 1,
     };
     if (!pendingPatch) {
@@ -388,10 +444,45 @@ export class VisualizationRegistrySyncController {
     patch: VisualizationStatePatch,
     targetIds: readonly string[] = [],
   ): void {
+    this.queuePatchForChannels(patch, targetIds, EMPTY_TARGET_IDS);
+  }
+
+  queuePlanarTargetOverride(operation: PlanarTargetOverrideOperation): void {
+    if (
+      operation.target.kind !== "airbox" &&
+      operation.target.kind !== "object" &&
+      operation.target.kind !== "part"
+    ) {
+      return;
+    }
+    const targetId = visualizationTargetKey(operation.target);
+    const targetOverrides: PlanarTargetOverride[] =
+      operation.kind === "upsert"
+        ? [
+            {
+              scope: operation.target.kind,
+              scope_id: visualizationStateScopeIdForTarget(operation.target),
+              wireframe_style: operation.wireframeStyle,
+            },
+          ]
+        : [];
+    this.queuePatchForChannels(
+      { planar: { target_overrides: targetOverrides } },
+      EMPTY_TARGET_IDS,
+      [targetId],
+    );
+  }
+
+  private queuePatchForChannels(
+    patch: VisualizationStatePatch,
+    targetIds: readonly string[],
+    planarTargetIds: readonly string[],
+  ): void {
     if (!hasPatchKeys(patch)) return;
     const effectiveTargetIds = normalizeTargetIds(
       targetIds.length > 0 ? targetIds : targetIdsFromPatch(patch),
     );
+    const effectivePlanarTargetIds = normalizeTargetIds(planarTargetIds);
     if (
       this.snapshot.pendingPatch &&
       visualizationPatchSatisfiesPatch(
@@ -399,6 +490,8 @@ export class VisualizationRegistrySyncController {
         patch,
         this.snapshot.pendingTargetIds,
         effectiveTargetIds,
+        this.snapshot.pendingPlanarTargetIds,
+        effectivePlanarTargetIds,
       )
     ) {
       return;
@@ -409,10 +502,15 @@ export class VisualizationRegistrySyncController {
       this.snapshot.pendingPatch,
       patch,
       effectiveTargetIds,
+      effectivePlanarTargetIds,
     );
     const pendingTargetIds = mergeTargetIds(
       this.snapshot.pendingTargetIds,
       effectiveTargetIds,
+    );
+    const pendingPlanarTargetIds = mergeTargetIds(
+      this.snapshot.pendingPlanarTargetIds,
+      effectivePlanarTargetIds,
     );
 
     this.firstPendingAt = this.firstPendingAt ?? now;
@@ -423,6 +521,7 @@ export class VisualizationRegistrySyncController {
       pendingFingerprint: null,
       pendingPatch,
       pendingTargetIds,
+      pendingPlanarTargetIds,
       version: this.snapshot.version + 1,
     };
     if (!isCameraOnlyPatch(pendingPatch)) {
@@ -435,12 +534,14 @@ export class VisualizationRegistrySyncController {
     const patch = this.rejectedPatch;
     if (!patch || this.flushPromise) return Promise.resolve();
     const targetIds = this.snapshot.rejectedTargetIds;
+    const planarTargetIds = this.snapshot.rejectedPlanarTargetIds;
     this.snapshot = {
       ...this.snapshot,
       rejectedTargetIds: EMPTY_TARGET_IDS,
+      rejectedPlanarTargetIds: EMPTY_TARGET_IDS,
       version: this.snapshot.version + 1,
     };
-    this.queuePatch(patch, targetIds);
+    this.queuePatchForChannels(patch, targetIds, planarTargetIds);
     return this.flushNow();
   }
 
@@ -566,6 +667,7 @@ function applyVisualizationStatePatch<TState>(
   state: TState,
   patch: VisualizationStatePatch | null | undefined,
   targetIds: readonly string[] = EMPTY_TARGET_IDS,
+  planarTargetIds: readonly string[] = EMPTY_TARGET_IDS,
 ): TState {
   if (!patch || !hasPatchKeys(patch)) return state;
   if (!isPlainObject(state)) return patch as TState;
@@ -573,6 +675,7 @@ function applyVisualizationStatePatch<TState>(
     state,
     patch as Record<string, unknown>,
     targetIds,
+    planarTargetIds,
   ) as TState;
 }
 
@@ -580,6 +683,7 @@ function mergeQueuedVisualizationPatch(
   current: VisualizationStatePatch | null | undefined,
   next: VisualizationStatePatch | null | undefined,
   targetIds: readonly string[] = EMPTY_TARGET_IDS,
+  planarTargetIds: readonly string[] = EMPTY_TARGET_IDS,
 ): VisualizationStatePatch | null {
   if (!current && !next) return null;
   if (!current) return next ?? null;
@@ -588,6 +692,7 @@ function mergeQueuedVisualizationPatch(
     current as Record<string, unknown>,
     next as Record<string, unknown>,
     targetIds,
+    planarTargetIds,
   ) as VisualizationStatePatch;
 }
 
@@ -595,15 +700,38 @@ function rebaseVisualizationStatePatch(
   remote: VisualizationStateResource | null,
   patch: VisualizationStatePatch,
   targetIds: readonly string[],
+  planarTargetIds: readonly string[],
 ): VisualizationStatePatch {
-  if (!remote || !Array.isArray(patch.overrides) || targetIds.length === 0) {
+  const planarPatch = patch.planar;
+  const hasTargetOverrides = Array.isArray(patch.overrides);
+  const hasPlanarTargetOverrides = Array.isArray(
+    planarPatch?.target_overrides,
+  );
+  if (
+    !remote ||
+    ((!hasTargetOverrides || targetIds.length === 0) &&
+      (!hasPlanarTargetOverrides || planarTargetIds.length === 0))
+  ) {
     return patch;
   }
 
-  const rebased = applyVisualizationStatePatch(remote, patch, targetIds);
+  const rebased = applyVisualizationStatePatch(
+    remote,
+    patch,
+    targetIds,
+    planarTargetIds,
+  );
   return {
     ...patch,
-    overrides: rebased.overrides,
+    ...(hasTargetOverrides ? { overrides: rebased.overrides } : {}),
+    ...(hasPlanarTargetOverrides
+      ? {
+          planar: {
+            ...planarPatch,
+            target_overrides: rebased.planar?.target_overrides ?? [],
+          },
+        }
+      : {}),
   };
 }
 
@@ -611,6 +739,7 @@ function mergeQueuedPatchRecords(
   current: Record<string, unknown>,
   next: Record<string, unknown>,
   targetIds: readonly string[] = EMPTY_TARGET_IDS,
+  planarTargetIds: readonly string[] = EMPTY_TARGET_IDS,
 ): Record<string, unknown> {
   const output: Record<string, unknown> = { ...current };
   for (const [key, value] of Object.entries(next)) {
@@ -623,12 +752,75 @@ function mergeQueuedPatchRecords(
       );
       continue;
     }
+    if (
+      key === "target_overrides" &&
+      planarTargetIds.length > 0 &&
+      Array.isArray(previous) &&
+      Array.isArray(value)
+    ) {
+      output[key] = mergeQueuedPlanarTargetOverrides(
+        previous as PlanarTargetOverride[],
+        value as PlanarTargetOverride[],
+        planarTargetIds,
+      );
+      continue;
+    }
     output[key] =
       isPlainObject(previous) && isPlainObject(value)
-        ? mergeQueuedPatchRecords(previous, value, targetIds)
+        ? mergeQueuedPatchRecords(previous, value, targetIds, planarTargetIds)
         : value;
   }
   return output;
+}
+
+function mergeQueuedPlanarTargetOverrides(
+  current: readonly PlanarTargetOverride[],
+  next: readonly PlanarTargetOverride[],
+  targetIds: readonly string[],
+): PlanarTargetOverride[] {
+  const targeted = new Set(normalizeTargetIds(targetIds));
+  const currentByIdentity = new Map(
+    current.map((entry) => [planarTargetOverrideIdentity(entry), entry]),
+  );
+  const nextByIdentity = new Map(
+    next.map((entry) => [planarTargetOverrideIdentity(entry), entry]),
+  );
+  const result: PlanarTargetOverride[] = [];
+
+  for (const entry of current) {
+    const identity = planarTargetOverrideIdentity(entry);
+    if (!targeted.has(planarTargetOverrideTargetId(entry))) {
+      result.push(entry);
+      continue;
+    }
+    const replacement = nextByIdentity.get(identity);
+    if (replacement) result.push(replacement);
+  }
+
+  for (const entry of next) {
+    const identity = planarTargetOverrideIdentity(entry);
+    if (
+      !currentByIdentity.has(identity) &&
+      targeted.has(planarTargetOverrideTargetId(entry))
+    ) {
+      result.push(entry);
+    }
+  }
+  return result;
+}
+
+function planarTargetOverrideIdentity(entry: PlanarTargetOverride): string {
+  return `${entry.scope}:${entry.scope_id}`;
+}
+
+function planarTargetOverrideTargetId(entry: PlanarTargetOverride): string {
+  if (entry.scope === "airbox") return "airbox";
+  if (entry.scope === "object" || entry.scope === "part") {
+    return entry.scope_id.startsWith(`${entry.scope}:`)
+      ? entry.scope_id
+      : `${entry.scope}:${entry.scope_id}`;
+  }
+  return `${entry.scope}:${entry.scope_id}`;
 }
 
 function mergeQueuedTargetOverrides(
@@ -724,12 +916,20 @@ function visualizationStateSatisfiesPatch(
   state: VisualizationStateResource,
   patch: VisualizationStatePatch,
   targetIds: readonly string[] = EMPTY_TARGET_IDS,
+  planarTargetIds: readonly string[] = EMPTY_TARGET_IDS,
 ): boolean {
-  return Object.entries(patch).every(([key, patchValue]) =>
-    key === "overrides" && Array.isArray(patchValue) && targetIds.length > 0
-      ? targetOverridesSatisfyPatch(state.overrides, patchValue, targetIds)
-      : valueSatisfiesPatch((state as Record<string, unknown>)[key], patchValue),
-  );
+  return Object.entries(patch).every(([key, patchValue]) => {
+    if (key === "overrides" && Array.isArray(patchValue) && targetIds.length > 0) {
+      return targetOverridesSatisfyPatch(state.overrides, patchValue, targetIds);
+    }
+    if (key === "planar" && isPlainObject(patchValue) && planarTargetIds.length > 0) {
+      return planarStateSatisfiesPatch(state.planar, patchValue, planarTargetIds);
+    }
+    return valueSatisfiesPatch(
+      (state as Record<string, unknown>)[key],
+      patchValue,
+    );
+  });
 }
 
 function visualizationPatchSatisfiesPatch(
@@ -737,6 +937,8 @@ function visualizationPatchSatisfiesPatch(
   patch: VisualizationStatePatch,
   currentTargetIds: readonly string[] = EMPTY_TARGET_IDS,
   targetIds: readonly string[] = EMPTY_TARGET_IDS,
+  currentPlanarTargetIds: readonly string[] = EMPTY_TARGET_IDS,
+  planarTargetIds: readonly string[] = EMPTY_TARGET_IDS,
 ): boolean {
   if (
     targetIds.length > 0 &&
@@ -746,15 +948,38 @@ function visualizationPatchSatisfiesPatch(
   ) {
     return false;
   }
-  return Object.entries(patch).every(([key, patchValue]) =>
-    key === "overrides" && Array.isArray(patchValue) && targetIds.length > 0
-      ? targetOverridesSatisfyPatch(
-          Array.isArray(current.overrides) ? current.overrides : [],
-          patchValue,
-          targetIds,
-        )
-      : valueSatisfiesPatch((current as Record<string, unknown>)[key], patchValue),
-  );
+  if (
+    planarTargetIds.length > 0 &&
+    !normalizeTargetIds(planarTargetIds).every((targetId) =>
+      normalizeTargetIds(currentPlanarTargetIds).includes(targetId),
+    )
+  ) {
+    return false;
+  }
+  return Object.entries(patch).every(([key, patchValue]) => {
+    if (key === "overrides" && Array.isArray(patchValue) && targetIds.length > 0) {
+      return targetOverridesSatisfyPatch(
+        Array.isArray(current.overrides) ? current.overrides : [],
+        patchValue,
+        targetIds,
+      );
+    }
+    if (
+      key === "planar" &&
+      isPlainObject(patchValue) &&
+      planarTargetIds.length > 0
+    ) {
+      return planarStateSatisfiesPatch(
+        current.planar,
+        patchValue,
+        planarTargetIds,
+      );
+    }
+    return valueSatisfiesPatch(
+      (current as Record<string, unknown>)[key],
+      patchValue,
+    );
+  });
 }
 
 function targetOverridesSatisfyPatch(
@@ -775,6 +1000,49 @@ function targetOverridesSatisfyPatch(
   });
 }
 
+function planarStateSatisfiesPatch(
+  current: unknown,
+  expected: Record<string, unknown>,
+  targetIds: readonly string[],
+): boolean {
+  if (!isPlainObject(current)) return false;
+  return Object.entries(expected).every(([key, patchValue]) => {
+    if (
+      key === "target_overrides" &&
+      Array.isArray(patchValue) &&
+      targetIds.length > 0
+    ) {
+      return planarTargetOverridesSatisfyPatch(
+        Array.isArray(current.target_overrides)
+          ? (current.target_overrides as PlanarTargetOverride[])
+          : [],
+        patchValue as PlanarTargetOverride[],
+        targetIds,
+      );
+    }
+    return valueSatisfiesPatch(current[key], patchValue);
+  });
+}
+
+function planarTargetOverridesSatisfyPatch(
+  current: readonly PlanarTargetOverride[],
+  expected: readonly PlanarTargetOverride[],
+  targetIds: readonly string[],
+): boolean {
+  return normalizeTargetIds(targetIds).every((targetId) => {
+    const currentEntry = current.find(
+      (entry) => planarTargetOverrideTargetId(entry) === targetId,
+    );
+    const expectedEntry = expected.find(
+      (entry) => planarTargetOverrideTargetId(entry) === targetId,
+    );
+    return expectedEntry
+      ? currentEntry !== undefined &&
+          valueSatisfiesPatch(currentEntry, expectedEntry)
+      : currentEntry === undefined;
+  });
+}
+
 function valueSatisfiesPatch(value: unknown, patch: unknown): boolean {
   if (Array.isArray(patch)) {
     if (!Array.isArray(value)) return false;
@@ -785,6 +1053,7 @@ function valueSatisfiesPatch(value: unknown, patch: unknown): boolean {
   }
   if (isPlainObject(patch)) {
     if (!isPlainObject(value)) return false;
+
     return Object.entries(patch).every(([key, nestedPatch]) =>
       valueSatisfiesPatch(
         (value as Record<string, unknown>)[key],

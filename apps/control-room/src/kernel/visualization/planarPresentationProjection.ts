@@ -28,6 +28,7 @@ export function projectPlanarPresentationState(
     raster_opacity: optimistic.raster_opacity,
     vector_style: optimistic.vector_style,
     viewport_colorbar_visible: optimistic.viewport_colorbar_visible,
+    target_overrides: optimistic.target_overrides ?? authoritative.target_overrides,
     wireframe_style: optimistic.wireframe_style,
   };
 }

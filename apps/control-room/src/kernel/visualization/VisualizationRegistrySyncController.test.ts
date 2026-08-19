@@ -920,3 +920,201 @@ describe("VisualizationRegistrySyncController", () => {
     expect(controller.getSnapshot().pendingTargetIds).toEqual([]);
   });
 });
+
+  it("rebases rapid planar upsert then remove without disturbing unrelated overrides", async () => {
+    const sentPatches: VisualizationStatePatch[] = [];
+    const { controller } = createController({
+      now: () => 0,
+      patch: async (patch) => {
+        sentPatches.push(patch);
+        return visualizationState(
+          12,
+          patch as Partial<VisualizationStateResource>,
+        );
+      },
+    });
+    const filmOverride = {
+      scope: "object" as const,
+      scope_id: "film",
+      wireframe_style: { color: "#111111", opacity: 0.4 },
+    };
+    const unrelatedOverride = {
+      scope: "object" as const,
+      scope_id: "other",
+      wireframe_style: { color: "#222222", opacity: 0.5 },
+    };
+    controller.observeRemoteState(
+      visualizationState(10, {
+        planar: {
+          target_overrides: [filmOverride, unrelatedOverride],
+        } as unknown as NonNullable<VisualizationStateResource["planar"]>,
+      }),
+    );
+
+    controller.queuePlanarTargetOverride({
+      kind: "upsert",
+      target: { id: "object:film", kind: "object", label: "Film" },
+      wireframeStyle: { color: "#abcdef", opacity: 0.25 },
+    });
+    controller.queuePlanarTargetOverride({
+      kind: "remove",
+      target: { id: "object:film", kind: "object", label: "Film" },
+    });
+
+    expect(controller.getSnapshot()).toMatchObject({
+      pendingPlanarTargetIds: ["object:film"],
+      pendingTargetIds: [],
+    });
+
+    const newestUnrelatedOverride = {
+      scope: "part" as const,
+      scope_id: "boundary",
+      wireframe_style: { color: "#333333", opacity: 0.6 },
+    };
+    const latest = visualizationState(11, {
+      planar: {
+        target_overrides: [
+          filmOverride,
+          unrelatedOverride,
+          newestUnrelatedOverride,
+        ],
+      } as unknown as NonNullable<VisualizationStateResource["planar"]>,
+    });
+    controller.observeRemoteState(latest);
+
+    const optimistic = controller.applyOptimisticState(latest);
+    expect(optimistic?.planar?.target_overrides).toEqual([
+      unrelatedOverride,
+      newestUnrelatedOverride,
+    ]);
+    expect(optimistic?.planar?.target_overrides?.[0]).toBe(unrelatedOverride);
+    expect(optimistic?.planar?.target_overrides?.[1]).toBe(
+      newestUnrelatedOverride,
+    );
+
+    await controller.flushNow();
+
+    expect(sentPatches[0]?.planar?.target_overrides).toEqual([
+      unrelatedOverride,
+      newestUnrelatedOverride,
+    ]);
+    expect(sentPatches[0]?.planar?.target_overrides?.[0]).toBe(
+      unrelatedOverride,
+    );
+    expect(sentPatches[0]?.planar?.target_overrides?.[1]).toBe(
+      newestUnrelatedOverride,
+    );
+  });
+
+  it("isolates root and planar target ids during mixed optimistic merge and rebase", async () => {
+    const sentPatches: VisualizationStatePatch[] = [];
+    const { controller } = createController({
+      now: () => 0,
+      patch: async (patch) => {
+        sentPatches.push(patch);
+        return visualizationState(
+          12,
+          patch as Partial<VisualizationStateResource>,
+        );
+      },
+    });
+    const rootTarget = {
+      scope: "object" as const,
+      scope_id: "root-film",
+      display: { vectors: { visible: false } },
+    };
+    const rootCrossChannelEntry = {
+      scope: "object" as const,
+      scope_id: "planar-film",
+      display: { points: { visible: true } },
+    };
+    const planarTarget = {
+      scope: "object" as const,
+      scope_id: "planar-film",
+      wireframe_style: { color: "#111111", opacity: 0.4 },
+    };
+    const planarCrossChannelEntry = {
+      scope: "object" as const,
+      scope_id: "root-film",
+      wireframe_style: { color: "#222222", opacity: 0.5 },
+    };
+    const initial = visualizationState(10, {
+      overrides: [rootTarget, rootCrossChannelEntry],
+      planar: {
+        target_overrides: [planarTarget, planarCrossChannelEntry],
+      } as unknown as NonNullable<VisualizationStateResource["planar"]>,
+    });
+    controller.observeRemoteState(initial);
+
+    controller.queuePatch(
+      {
+        overrides: [
+          {
+            scope: "object",
+            scope_id: "root-film",
+            display: { vectors: { visible: true } },
+          },
+        ],
+      },
+      ["object:root-film"],
+    );
+    controller.queuePlanarTargetOverride({
+      kind: "upsert",
+      target: {
+        id: "object:planar-film",
+        kind: "object",
+        label: "Planar film",
+      },
+      wireframeStyle: { color: "#abcdef", opacity: 0.25 },
+    });
+
+    expect(controller.getSnapshot()).toMatchObject({
+      pendingTargetIds: ["object:root-film"],
+      pendingPlanarTargetIds: ["object:planar-film"],
+    });
+
+    const latestRootUnrelated = {
+      ...rootCrossChannelEntry,
+      display: { points: { visible: false } },
+    };
+    const latestPlanarUnrelated = {
+      ...planarCrossChannelEntry,
+      wireframe_style: { color: "#333333", opacity: 0.75 },
+    };
+    const latest = visualizationState(11, {
+      overrides: [rootTarget, latestRootUnrelated],
+      planar: {
+        target_overrides: [planarTarget, latestPlanarUnrelated],
+      } as unknown as NonNullable<VisualizationStateResource["planar"]>,
+    });
+    controller.observeRemoteState(latest);
+
+    const optimistic = controller.applyOptimisticState(latest);
+    expect(optimistic?.overrides[0]).toMatchObject({
+      scope: "object",
+      scope_id: "root-film",
+      display: { vectors: { visible: true } },
+    });
+    expect(optimistic?.overrides).toHaveLength(2);
+    expect(optimistic?.overrides[1]).toBe(latestRootUnrelated);
+    expect(optimistic?.planar?.target_overrides).toEqual([
+      {
+        scope: "object",
+        scope_id: "planar-film",
+        wireframe_style: { color: "#abcdef", opacity: 0.25 },
+      },
+      latestPlanarUnrelated,
+    ]);
+    expect(optimistic?.planar?.target_overrides?.[1]).toBe(
+      latestPlanarUnrelated,
+    );
+
+    await controller.flushNow();
+
+    expect(sentPatches[0]?.overrides?.[1]).toBe(latestRootUnrelated);
+    expect(sentPatches[0]?.planar?.target_overrides?.[1]).toBe(
+      latestPlanarUnrelated,
+    );
+    expect(sentPatches[0]?.overrides).toHaveLength(2);
+    expect(sentPatches[0]?.planar?.target_overrides).toHaveLength(2);
+  });

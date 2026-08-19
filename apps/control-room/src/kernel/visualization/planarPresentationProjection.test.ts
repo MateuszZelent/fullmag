@@ -27,7 +27,22 @@ const base = {
     resolution: { height: 256, vector_budget: 512, width: 512 },
     vector_style: { color_mode: "orientation", length_mode: "uniform", monochrome_color: "#ffffff", opacity: 1, scale: 1, thickness: 1 },
     view_scope: { kind: "monitor_target" as const },
+    target_overrides: [
+      {
+        scope: "object" as const,
+        scope_id: "free-layer",
+        wireframe_style: { color: "#ffffff", opacity: 1 },
+      },
+    ],
   },
+  overrides: [
+    {
+      scope: "object" as const,
+      scope_id: "free-layer",
+      visible: true,
+    },
+  ],
+
 };
 
 describe("projectPlanarPresentationState", () => {
@@ -43,6 +58,13 @@ describe("projectPlanarPresentationState", () => {
         wireframe_style: { color: "#ff0000", opacity: 0.4 },
         point_style: { color: "#0000ff", opacity: 0.5, size: 6 },
         vector_style: { ...base.planar.vector_style, opacity: 0.3, thickness: 2 },
+        target_overrides: [
+          {
+            scope: "airbox" as const,
+            scope_id: "airbox",
+            wireframe_style: { color: "#ff00ff", opacity: 0.2 },
+          },
+        ],
         quality: "export",
         quantity_id: "m",
         resolution: { height: 1024, vector_budget: 1000, width: 1024 },
@@ -59,8 +81,22 @@ describe("projectPlanarPresentationState", () => {
       point_style: { color: "#0000ff", opacity: 0.5, size: 6 },
       vector_style: { opacity: 0.3, thickness: 2 },
       quality: "interactive",
+      target_overrides: [
+        {
+          scope: "airbox",
+          scope_id: "airbox",
+          wireframe_style: { color: "#ff00ff", opacity: 0.2 },
+        },
+      ],
       quantity_id: "h_eff",
       resolution: { height: 256, vector_budget: 512, width: 512 },
     });
+    expect((base as unknown as VisualizationStateResource).overrides).toEqual([
+      {
+        scope: "object",
+        scope_id: "free-layer",
+        visible: true,
+      },
+    ]);
   });
 });

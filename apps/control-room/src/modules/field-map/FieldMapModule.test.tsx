@@ -4,6 +4,7 @@ import { renderToStaticMarkup, renderToString } from "react-dom/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { installSimulationPreparationTestDom } from "@/kernel/layout/simulationPreparationTestDom.test-support";
+import type { Selection } from "@/kernel/selection/selectionTypes";
 
 import FieldMapModule from "./FieldMapModule";
 
@@ -13,6 +14,7 @@ const mocks = vi.hoisted(() => ({
   queuePatch: vi.fn(),
   renderModel: vi.fn(),
   renderReady: false,
+  selection: null as unknown as Selection,
   surface: vi.fn(),
   visualization: {
     data: null as Record<string, unknown> | null,
@@ -157,7 +159,8 @@ vi.mock("@/kernel/resources/useSessionStatus", () => ({
 }));
 
 vi.mock("@/kernel/selection/useSelection", () => ({
-  useSelectionSelector: () => ({ snapshotId: null, stageId: null }),
+  useSelectionSelector: (selector: (selection: Selection) => unknown) =>
+    selector(mocks.selection),
 }));
 
 vi.mock("@/kernel/visualization/useVisualizationStateResource", () => ({
@@ -173,6 +176,7 @@ describe("FieldMapModule planar state ownership", () => {
     mocks.visualization.optimisticData = null;
     mocks.renderReady = false;
     mocks.probeData = null;
+    mocks.selection = emptySelection();
   });
 
   it("does not invent a quantity or component while the server profile is loading", () => {
@@ -391,6 +395,97 @@ describe("FieldMapModule planar state ownership", () => {
     );
   });
 
+  it("resolves Airbox and object wireframes without changing the field query or sample identity", () => {
+    const globalWireframe = { color: "#94a3b8", opacity: 1 };
+    const airboxWireframe = { color: "#00ff00", opacity: 0.6 };
+    const objectWireframe = { color: "#ff0000", opacity: 0.4 };
+    const planar = {
+      colormap: "viridis",
+      component: "magnitude",
+      default_slice: {
+        operator: { kind: "plane_sample" },
+        plane: "xy",
+        position_fraction: 0.5,
+      },
+      display_unit: "A/m",
+      interaction: { pan_u_m: 0, pan_v_m: 0, zoom: 1 },
+      layers: { mesh: true, raster: true, vectors: false },
+      quantity_id: "m",
+      quality: "interactive",
+      range: { mode: "auto" },
+      resolution: { height: 128, vector_budget: 512, width: 256 },
+      source: { kind: "default" },
+      target_overrides: [
+        { scope: "airbox", scope_id: "airbox", wireframe_style: airboxWireframe },
+        { scope: "object", scope_id: "free-layer", wireframe_style: objectWireframe },
+      ],
+      vector_style: { color_mode: "orientation", length_mode: "uniform", scale: 1 },
+      view_scope: { kind: "monitor_target" },
+      wireframe_style: globalWireframe,
+    };
+    const registry = {
+      airbox: { label: "Airbox", scope: "airbox", scope_id: "airbox" },
+      objects: [{ label: "Free layer", scope: "object", scope_id: "free-layer" }],
+      parts: [],
+    };
+    mocks.visualization.data = { planar, targets: registry };
+    mocks.visualization.status = "ready";
+    mocks.renderReady = true;
+
+    mocks.selection = airboxSelection();
+    renderToStaticMarkup(<FieldMapModule />);
+    const airboxQueryCall = mocks.meta.mock.calls.at(-1);
+    const airboxRenderInput = mocks.renderModel.mock.calls.at(-1)?.[0] as {
+      sampleIdentity: string;
+      wireframeStyle: unknown;
+    };
+
+    mocks.meta.mockClear();
+    mocks.renderModel.mockClear();
+    mocks.selection = objectSelection("free-layer");
+    renderToStaticMarkup(<FieldMapModule />);
+    const objectQueryCall = mocks.meta.mock.calls.at(-1);
+    const objectRenderInput = mocks.renderModel.mock.calls.at(-1)?.[0] as {
+      sampleIdentity: string;
+      wireframeStyle: unknown;
+    };
+
+    expect(airboxRenderInput.wireframeStyle).toEqual(airboxWireframe);
+    expect(objectRenderInput.wireframeStyle).toEqual(objectWireframe);
+    expect(objectQueryCall).toEqual(airboxQueryCall);
+    expect(objectRenderInput.sampleIdentity).toBe(airboxRenderInput.sampleIdentity);
+    expect(objectRenderInput.sampleIdentity).toBe("scalar-authoritative");
+
+    const fallbackCases = [
+      { selection: emptySelection(), targets: registry },
+      { selection: regionSelection("free-layer", "region-1"), targets: registry },
+      { selection: airboxSelection(), targets: undefined },
+      {
+        selection: objectSelection("dormant-layer"),
+        targets: registry,
+      },
+    ];
+    for (const fallbackCase of fallbackCases) {
+      mocks.meta.mockClear();
+      mocks.renderModel.mockClear();
+      mocks.selection = fallbackCase.selection;
+      mocks.visualization.data = fallbackCase.targets
+        ? { planar, targets: fallbackCase.targets }
+        : { planar };
+      renderToStaticMarkup(<FieldMapModule />);
+
+      const fallbackRenderInput = mocks.renderModel.mock.calls.at(-1)?.[0] as {
+        sampleIdentity: string;
+        wireframeStyle: unknown;
+      };
+      expect(fallbackRenderInput.wireframeStyle).toEqual(globalWireframe);
+      expect(mocks.meta.mock.calls.at(-1)).toEqual(airboxQueryCall);
+      expect(fallbackRenderInput.sampleIdentity).toBe(
+        airboxRenderInput.sampleIdentity,
+      );
+    }
+  });
+
   it("keeps the canonical plan and sample identity stable while optimistic layers alter rendered flags", () => {
     const planar = {
       colormap: "viridis",
@@ -446,3 +541,64 @@ describe("FieldMapModule planar state ownership", () => {
     );
   });
 });
+function emptySelection(): Selection {
+  return {
+    kind: null,
+    label: null,
+    moduleSource: null,
+    nodeId: null,
+    objectId: null,
+    ref: null,
+  };
+}
+
+function airboxSelection(): Selection {
+  return {
+    kind: "airbox.visualization",
+    label: "Airbox",
+    moduleSource: "inspector",
+    nodeId: "model:airbox:visualization",
+    objectId: null,
+    ref: {
+      kind: "airbox.visualization",
+      nodeId: "model:airbox:visualization",
+      type: "airbox",
+      visualizationTargetId: "airbox",
+    },
+  };
+}
+
+function regionSelection(objectId: string, regionId: string): Selection {
+  return {
+    kind: "object.region.visualization",
+    label: "Region",
+    moduleSource: "inspector",
+    nodeId: `model:object:${objectId}:region:${regionId}`,
+    objectId,
+    ref: {
+      kind: "object.region.visualization",
+      nodeId: `model:object:${objectId}:region:${regionId}`,
+      objectId,
+      regionId,
+      type: "scene-object",
+      visualizationTargetId: `region:${objectId}:${regionId}`,
+    },
+  };
+}
+
+function objectSelection(objectId: string): Selection {
+  return {
+    kind: "object.visualization",
+    label: "Free layer",
+    moduleSource: "inspector",
+    nodeId: `model:object:${objectId}:visualization`,
+    objectId,
+    ref: {
+      kind: "object.visualization",
+      nodeId: `model:object:${objectId}:visualization`,
+      objectId,
+      type: "scene-object",
+      visualizationTargetId: `object:${objectId}`,
+    },
+  };
+}

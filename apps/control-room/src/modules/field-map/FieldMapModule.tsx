@@ -17,6 +17,11 @@ import {
 import { useDomainMetaResource } from "@/kernel/resources/geometryLifecycleResources";
 import { useSessionStatusSelector } from "@/kernel/resources/useSessionStatus";
 import { useSelectionSelector } from "@/kernel/selection/useSelection";
+import { resolveVisualizationTargetFromSelection } from "@/kernel/visualization/ObjectVisualizationController";
+import {
+  planarTargetPresentationReason,
+  resolvePlanarTargetWireframeStyle,
+} from "@/kernel/visualization/planarTargetPresentation";
 import { useVisualizationStateResource } from "@/kernel/visualization/useVisualizationStateResource";
 import { projectPlanarPresentationState } from "@/kernel/visualization/planarPresentationProjection";
 import { PlanarColorLegend } from "./components/PlanarColorLegend";
@@ -80,20 +85,51 @@ function useFieldMapModuleController() {
     (status) => status.data?.domain.discretization ?? null,
     { enabled: active },
   );
-  const selectedFieldSnapshot = useSelectionSelector((selection) => {
+  const selectedFieldContext = useSelectionSelector((selection) => {
     const ref = selection.ref;
-    if (!ref || typeof ref !== "object") {
-      return { snapshotId: null, stageId: null };
-    }
-    const candidate = ref as { snapshotId?: unknown; stageId?: unknown };
+    const candidate = ref && typeof ref === "object"
+      ? ref as { snapshotId?: unknown; stageId?: unknown }
+      : null;
     return {
-      snapshotId: typeof candidate.snapshotId === "string" ? candidate.snapshotId : null,
-      stageId: typeof candidate.stageId === "string" ? candidate.stageId : null,
+      snapshotId:
+        candidate && typeof candidate.snapshotId === "string"
+          ? candidate.snapshotId
+          : null,
+      stageId:
+        candidate && typeof candidate.stageId === "string"
+          ? candidate.stageId
+          : null,
+      target: resolveVisualizationTargetFromSelection(selection),
     };
   }, {
     isEqual: (left, right) =>
-      left.snapshotId === right.snapshotId && left.stageId === right.stageId,
+      left.snapshotId === right.snapshotId &&
+      left.stageId === right.stageId &&
+      left.target?.id === right.target?.id &&
+      left.target?.kind === right.target?.kind,
   });
+  const effectiveWireframeStyle = useMemo(() => {
+    if (!presentationPlanar) return undefined;
+    const target = selectedFieldContext.target;
+    if (
+      !target ||
+      planarTargetPresentationReason(
+        target,
+        visualization.data?.targets,
+      ) !== undefined
+    ) {
+      return presentationPlanar.wireframe_style;
+    }
+    return resolvePlanarTargetWireframeStyle(
+      presentationPlanar.wireframe_style,
+      presentationPlanar.target_overrides,
+      target,
+    );
+  }, [
+    presentationPlanar,
+    selectedFieldContext.target,
+    visualization.data?.targets,
+  ]);
 
   const plan = useMemo(
     () => buildFieldMapDataPlan({
@@ -110,8 +146,8 @@ function useFieldMapModuleController() {
         canonicalPlanar?.resolution.height ?? 0,
       ],
       showVectors: canonicalPlanar?.layers.vectors ?? false,
-      snapshotId: selectedFieldSnapshot.snapshotId,
-      stageId: selectedFieldSnapshot.stageId,
+      snapshotId: selectedFieldContext.snapshotId,
+      stageId: selectedFieldContext.stageId,
       viewScope: canonicalPlanar?.view_scope,
       vectorBudget: canonicalPlanar?.resolution.vector_budget ?? 0,
     }),
@@ -121,8 +157,8 @@ function useFieldMapModuleController() {
       canonicalPlanar,
       runtime,
       source,
-      selectedFieldSnapshot.snapshotId,
-      selectedFieldSnapshot.stageId,
+      selectedFieldContext.snapshotId,
+      selectedFieldContext.stageId,
     ],
   );
   const planQuantityId = plan.quantityId;
@@ -247,7 +283,7 @@ function useFieldMapModuleController() {
       range: normalizePlanarColorRange(presentationPlanar.range),
       rasterOpacity: presentationPlanar.raster_opacity ?? 1,
       visible: presentationPlanar.visible,
-      wireframeStyle: presentationPlanar.wireframe_style,
+      wireframeStyle: effectiveWireframeStyle,
       pointStyle: presentationPlanar.point_style,
       resolution: meta.data.resolution as [number, number],
       sampleIdentity: scalar.data.etag ?? "",
@@ -263,7 +299,7 @@ function useFieldMapModuleController() {
       },
       vectors: vectorValues,
     });
-  }, [canonicalPlanar?.resolution.vector_budget, frame, mask.data, meshOverlay.data, meta.data, presentationPlanar, scalar.data, vectors.data]);
+  }, [canonicalPlanar?.resolution.vector_budget, effectiveWireframeStyle, frame, mask.data, meshOverlay.data, meta.data, presentationPlanar, scalar.data, vectors.data]);
   const pinnedAxisState = useMemo(() => {
     if (!renderModel || !probe.data) return null;
     const axisFrame = {

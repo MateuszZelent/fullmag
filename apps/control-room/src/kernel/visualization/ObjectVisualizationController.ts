@@ -1391,7 +1391,7 @@ export function visualizationStateOverrideFromTargetPatch(
   };
 }
 
-function visualizationStateScopeIdForTarget(target: VisualizationTargetRef): string {
+export function visualizationStateScopeIdForTarget(target: VisualizationTargetRef): string {
   if (target.kind === "object" && target.id.startsWith("object:")) {
     return canonicalVisualizationSceneObjectId(
       target.id.slice("object:".length),

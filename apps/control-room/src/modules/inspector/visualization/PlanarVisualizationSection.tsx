@@ -17,6 +17,12 @@ import { usePlanarMonitorsResource } from "@/kernel/resources/planarMonitorResou
 import { useDomainMetaResource } from "@/kernel/resources/geometryLifecycleResources";
 import { useFieldCatalogResource } from "@/kernel/resources/studyRuntimeResources";
 import { useSessionStatusSelector } from "@/kernel/resources/useSessionStatus";
+import { resolveVisualizationTargetFromSelection } from "@/kernel/visualization/ObjectVisualizationController";
+import {
+  findPlanarTargetWireframeOverride,
+  planarTargetPresentationReason,
+  resolvePlanarTargetWireframeStyle,
+} from "@/kernel/visualization/planarTargetPresentation";
 import { useVisualizationStateResource } from "@/kernel/visualization/useVisualizationStateResource";
 import { projectPlanarPresentationState } from "@/kernel/visualization/planarPresentationProjection";
 import {
@@ -102,6 +108,11 @@ export function PlanarVisualizationSection({ selection }: { selection: Selection
     visualization.data,
     visualization.optimisticData,
   );
+  const planarTarget = resolveVisualizationTargetFromSelection(selection);
+  const planarTargetReason = planarTargetPresentationReason(
+    planarTarget,
+    visualization.data?.targets,
+  );
   const coverage = planarVisualizationCoverage(selection);
   const viewScope = planarViewScopeForSelection(selection);
   const [validationError, setValidationError] = useState<string | null>(null);
@@ -165,6 +176,9 @@ export function PlanarVisualizationSection({ selection }: { selection: Selection
   const componentItems = (selectedDescriptor?.components ?? 3) > 1 ? PLANAR_COMPONENTS : ["magnitude"];
   const canonicalUnit = meta.data?.canonical_unit ?? selectedDescriptor?.unit ?? "";
   const displayUnitItems = scalarColorbarDisplayUnitItems(canonicalUnit);
+  const availableQuantities = (fieldCatalog.data?.quantities ?? []).filter(
+    (quantity) => quantity.available,
+  );
 
   if (!coverage.supported) {
     return <InspectorGroup title="2D visualization"><FieldRow label="Availability" value="Not a spatial target" /><FieldRow label="Reason" value="quantity_or_target_not_spatial" /></InspectorGroup>;
@@ -174,6 +188,38 @@ export function PlanarVisualizationSection({ selection }: { selection: Selection
   }
 
   const range = planar.range ?? { mode: "auto" as const, min: null, max: null };
+  const planarTargetOverride =
+    planarTarget && planarTargetReason === undefined
+      ? findPlanarTargetWireframeOverride(
+          planar.target_overrides,
+          planarTarget,
+        )
+      : undefined;
+  const planarWireframeStyle =
+    planarTarget && planarTargetReason === undefined
+      ? resolvePlanarTargetWireframeStyle(
+          planar.wireframe_style,
+          planar.target_overrides,
+          planarTarget,
+        )
+      : planar.wireframe_style;
+  const queuePlanarWireframeStyle = (
+    wireframeStyle: PlanarState["wireframe_style"],
+  ) => {
+    if (!planarTarget || planarTargetReason !== undefined) return;
+    visualizationSync.queuePlanarTargetOverride({
+      kind: "upsert",
+      target: planarTarget,
+      wireframeStyle,
+    });
+  };
+  const resetPlanarWireframeStyle = () => {
+    if (!planarTarget || planarTargetReason !== undefined) return;
+    visualizationSync.queuePlanarTargetOverride({
+      kind: "remove",
+      target: planarTarget,
+    });
+  };
   const vectorStyle = planar.vector_style;
   const interaction = planar.interaction;
   const quality = planar.quality;
@@ -259,7 +305,7 @@ export function PlanarVisualizationSection({ selection }: { selection: Selection
         clipping={<p className="m-0 text-fm-help leading-snug text-fm-muted">The active plane and slice position are controlled in Source &amp; Slice.</p>}
         context={sourceAndSlice}
         dataState={meta.status === "ready" ? "Live" : meta.status}
-        display={<><PlanarDisplayPassesSection capabilities={capabilities} layers={planar.layers} patch={patch} visible={planar.visible} /><VisualizationRenderModeControl disabled={!planar.visible} options={renderModeOptions} value={resolvePlanarDisplayMode(planar.layers)} onValueChange={(mode) => patch(planarDisplayModePatch(mode, planar.layers))} /><FormField label="Quantity" type="select" value={quantityId} onChange={(event) => patch({ component: "magnitude", quantity_id: event.currentTarget.value })}>{(fieldCatalog.data?.quantities ?? []).filter((quantity) => quantity.available).map((quantity) => <option key={quantity.quantity_id} value={quantity.quantity_id}>{quantity.label} ({quantity.unit || "1"})</option>)}</FormField><FormField label="Component" type="select" value={planar.component} onChange={(event) => patch({ component: event.currentTarget.value as PlanarState["component"] })}>{componentItems.map((component) => <option key={component} value={component}>{component.replaceAll("_", " ")}</option>)}</FormField></>}
+        display={<><PlanarDisplayPassesSection capabilities={capabilities} layers={planar.layers} patch={patch} visible={planar.visible} /><VisualizationRenderModeControl disabled={!planar.visible} options={renderModeOptions} value={resolvePlanarDisplayMode(planar.layers)} onValueChange={(mode) => patch(planarDisplayModePatch(mode, planar.layers))} /><FormField label="Quantity" type="select" value={quantityId} onChange={(event) => patch({ component: "magnitude", quantity_id: event.currentTarget.value })}>{availableQuantities.map((quantity) => <option key={quantity.quantity_id} value={quantity.quantity_id}>{quantity.label} ({quantity.unit || "1"})</option>)}</FormField><FormField label="Component" type="select" value={planar.component} onChange={(event) => patch({ component: event.currentTarget.value as PlanarState["component"] })}>{componentItems.map((component) => <option key={component} value={component}>{component.replaceAll("_", " ")}</option>)}</FormField></>}
         enabledPassCount={enabledPassCount}
         meshState={capabilities.mesh.enabled ? "Ready" : "Degraded"}
         quantitySource={quantityId || "Not available"}
@@ -267,7 +313,16 @@ export function PlanarVisualizationSection({ selection }: { selection: Selection
         vectors={<PlanarVectorStyleSection capability={capabilities.vectors} patch={patch} resolution={planar.resolution} vectorStyle={vectorStyle} />}
       />
       {planar.layers.points ? <PlanarPointsSection patch={patch} style={planar.point_style} /> : null}
-      {planar.layers.mesh || planar.layers.boundaries ? <PlanarWireframeSection patch={patch} style={planar.wireframe_style} /> : null}
+      {planar.layers.mesh || planar.layers.boundaries ? (
+        <PlanarWireframeSection
+          disabled={planarTargetReason !== undefined}
+          hasOverride={planarTargetOverride !== undefined}
+          onReset={resetPlanarWireframeStyle}
+          onStyleChange={queuePlanarWireframeStyle}
+          reason={planarTargetReason}
+          style={planarWireframeStyle}
+        />
+      ) : null}
       <PlanarProvenanceSection meta={meta} source={source} />
       <div className="fm-inspector-toolbar"><Button size="sm" type="button" variant="secondary" onClick={() => patch({ view_scope: viewScope })}>Use target scope</Button></div>
     </div>

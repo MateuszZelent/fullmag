@@ -3,6 +3,7 @@ import type {
   VisualizationStateResource,
 } from "@/kernel/api/apiTypes";
 import type { FieldMapCapability, PlanarInspectorCapabilities } from "@/kernel/visualization/planarCapabilities";
+import { Button } from "@/shared/ui/Button";
 import { ArrowRightLeft, Crosshair, Eye, ScanLine, SquareDashed } from "lucide-react";
 
 import { FieldRow } from "../primitives/FieldRow";
@@ -24,6 +25,22 @@ import {
 type Planar = NonNullable<VisualizationStateResource["planar"]>;
 type PlanarPatch = NonNullable<Parameters<(patch: { planar: Partial<Planar> }) => void>[0]["planar"]>;
 
+function reason(capability: FieldMapCapability): string | undefined {
+  if (capability.enabled) return undefined;
+  switch (capability.reasonCode) {
+    case "mesh_overlay_unavailable": return "Mesh overlay is unavailable for this sample.";
+    case "mesh_overlay_codec_unsupported": return "Mesh overlay requires the fmcs.v4 or fmfg.v1 descriptor codec.";
+    case "target_boundaries_unavailable": return "FDM structured-grid overlays do not publish exact target boundaries.";
+    case "occupancy_mask_unavailable": return "Sample points require the canonical occupancy mask.";
+    case "planar_meta_unavailable": return "Planar sample metadata is not materialized.";
+    case "boundaries_not_exact": return "Exact boundaries are unavailable for this overlay descriptor.";
+    case "fdm_scope_not_supported": return "Structured FDM sampling does not support mesh-part or airbox scope.";
+    case "quantity_not_vector": return "The selected scalar quantity has no vector components.";
+    case "quantity_not_spatial": return "The selected quantity is not spatially sampleable.";
+    default: return "Unavailable";
+  }
+}
+
 export function PlanarDisplayPassesSection({
   capabilities,
   visible,
@@ -35,21 +52,6 @@ export function PlanarDisplayPassesSection({
   layers: Planar["layers"];
   patch: (next: PlanarPatch) => void;
 }) {
-  const reason = (capability: FieldMapCapability): string | undefined => {
-    if (capability.enabled) return undefined;
-    switch (capability.reasonCode) {
-      case "mesh_overlay_unavailable": return "Mesh overlay is unavailable for this sample.";
-      case "mesh_overlay_codec_unsupported": return "Mesh overlay requires the fmcs.v4 or fmfg.v1 descriptor codec.";
-      case "target_boundaries_unavailable": return "FDM structured-grid overlays do not publish exact target boundaries.";
-      case "occupancy_mask_unavailable": return "Sample points require the canonical occupancy mask.";
-      case "planar_meta_unavailable": return "Planar sample metadata is not materialized.";
-      case "boundaries_not_exact": return "Exact boundaries are unavailable for this overlay descriptor.";
-      case "fdm_scope_not_supported": return "Structured FDM sampling does not support mesh-part or airbox scope.";
-      case "quantity_not_vector": return "The selected scalar quantity has no vector components.";
-      case "quantity_not_spatial": return "The selected quantity is not spatially sampleable.";
-      default: return "Unavailable";
-    }
-  };
   const toggle = (layer: keyof Planar["layers"]) =>
     patch(planarLayerPatch(layers, layer));
   return (
@@ -154,16 +156,59 @@ export function PlanarVectorStyleSection({
 }
 
 export function PlanarWireframeSection({
+  disabled = false,
+  hasOverride,
+  reason,
   style,
-  patch,
+  onReset,
+  onStyleChange,
 }: {
+  disabled?: boolean;
+  hasOverride: boolean;
+  reason?: string;
   style: Planar["wireframe_style"];
-  patch: (next: PlanarPatch) => void;
+  onReset: () => void;
+  onStyleChange: (style: Planar["wireframe_style"]) => void;
 }) {
   return (
     <InspectorGroup title="Wireframe">
-      <ColorField label="Wireframe color" value={style.color} onChange={(color) => patch({ wireframe_style: { ...style, color } })} />
-      <FormField label="Wireframe opacity" max="1" min="0" step="0.05" type="number" value={style.opacity} onChange={(event) => { const opacity = Number(event.currentTarget.value); if (Number.isFinite(opacity) && opacity >= 0 && opacity <= 1) patch({ wireframe_style: { ...style, opacity } }); }} />
+      <FieldRow
+        label="Target style"
+        value={reason ?? (hasOverride ? "Target override" : "Global fallback")}
+      />
+      <ColorField
+        disabled={disabled}
+        label="Wireframe color"
+        value={style.color}
+        onChange={(color) => onStyleChange({ ...style, color })}
+      />
+      <FormField
+        disabled={disabled}
+        hint={reason}
+        label="Wireframe opacity"
+        max="1"
+        min="0"
+        step="0.05"
+        type="number"
+        value={style.opacity}
+        onChange={(event) => {
+          const opacity = Number(event.currentTarget.value);
+          if (Number.isFinite(opacity) && opacity >= 0 && opacity <= 1) {
+            onStyleChange({ ...style, opacity });
+          }
+        }}
+      />
+      <div className="fm-inspector-toolbar">
+        <Button
+          disabled={disabled || !hasOverride}
+          size="sm"
+          type="button"
+          variant="secondary"
+          onClick={onReset}
+        >
+          Reset wireframe override
+        </Button>
+      </div>
     </InspectorGroup>
   );
 }
