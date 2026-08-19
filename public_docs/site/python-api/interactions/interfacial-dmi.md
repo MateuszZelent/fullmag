@@ -101,6 +101,30 @@ The stage builder does not currently expose a DMI registration method. This page
 documents the constructor/IR contract and publishes no standalone Python cell. Use the stage
 boundary and capability statement on the physics owner page for the current executable surface.
 
+(interfacial-dmi-api-example)=
+````python
+# %% InterfacialDMI constructor
+import fullmag as fm
+
+nm = 1e-9
+
+# Constructor-level example: Interfacial DMI at a heavy-metal / ferromagnet interface
+# DMI acts at the interface; interface_normal defines which side of the film is the HM
+idmi = fm.InterfacialDMI(D=3e-3, interface_normal=(0, 0, 1))
+print(f"Registered InterfacialDMI: {idmi}")
+
+# Equivalent registration via material property (when stage builder supports it)
+mat = fm.Material(
+    name="cobalt",
+    Ms=1.4e6,
+    A=2.0e-11,
+    alpha=0.02,
+    Dind=3e-3,
+)
+print(f"Material with Dind: {mat}")
+
+# Note: stage-first study example requires stage builder DMI registration support
+````
 
 (interfacial-dmi-api-problem-ir)=
 ## ProblemIR lowering

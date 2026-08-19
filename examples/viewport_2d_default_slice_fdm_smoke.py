@@ -11,10 +11,11 @@ NM = 1e-9
 DOMAIN_SIZE = (80 * NM, 60 * NM, 40 * NM)
 DOMAIN_CENTER = (12.5 * NM, -7.5 * NM, 3.0 * NM)
 CELL_SIZE = 5 * NM
-UNIVERSE_SIZE = (
-    DOMAIN_SIZE[0] + 2 * CELL_SIZE,
-    DOMAIN_SIZE[1] + 2 * CELL_SIZE,
-    DOMAIN_SIZE[2] + 2 * CELL_SIZE,
+GEOMETRY_INSET = 1e-6 * NM
+GEOMETRY_SIZE = (
+    DOMAIN_SIZE[0] - 2 * GEOMETRY_INSET,
+    DOMAIN_SIZE[1] - 2 * GEOMETRY_INSET,
+    DOMAIN_SIZE[2] - 2 * GEOMETRY_INSET,
 )
 
 study = fm.study("viewport_2d_default_slice_fdm_smoke")
@@ -24,14 +25,14 @@ study.interactive(True)
 study.wait_for_solve(True)
 study.universe(
     mode="manual",
-    size=UNIVERSE_SIZE,
+    size=DOMAIN_SIZE,
     center=DOMAIN_CENTER,
     padding=(0.0, 0.0, 0.0),
 )
 study.cell(CELL_SIZE, CELL_SIZE, CELL_SIZE)
 
 film = study.geometry(
-    fm.Box(size=DOMAIN_SIZE, name="default_domain_film").translate(DOMAIN_CENTER),
+    fm.Box(size=GEOMETRY_SIZE, name="default_domain_film").translate(DOMAIN_CENTER),
     name="default_domain_film",
 )
 film.Ms = 800e3

@@ -109,7 +109,7 @@ export function buildDefaultScriptBuilderMagnetization(
     texture_transform: { ...DEFAULT_MAGNETIZATION_TEXTURE_TRANSFORM },
     preset_kind: "uniform",
     preset_params: { direction: [...direction] },
-    preset_version: 1,
+    preset_version: 2,
     ui_label: "Uniform",
   };
 }
@@ -132,7 +132,7 @@ export function buildDefaultMagnetizationAsset(
     texture_transform: { ...DEFAULT_MAGNETIZATION_TEXTURE_TRANSFORM },
     preset_kind: "uniform",
     preset_params: { direction: [...direction] },
-    preset_version: 1,
+    preset_version: 2,
     ui_label: "Uniform",
   };
 }

@@ -68,6 +68,9 @@ export interface ObjectMagneticTextureDraft {
   core_radius: string;
   radius: string;
   wall_width: string;
+  vorticity: string;
+  helicity_rad: string;
+  background_sign: string;
   normal_axis: string;
   center_offset: string;
   leftX: string;
@@ -124,6 +127,7 @@ const PRESET_IDS = new Set<string>([
   "antivortex",
   "bloch_skyrmion",
   "neel_skyrmion",
+  "bimeron",
   "domain_wall",
   "two_domain",
   "helical",
@@ -260,6 +264,103 @@ function requiredInteger(value: string | undefined, label: string): number {
     throw new Error(`${label} must be an integer.`);
   }
   return parsed;
+}
+
+function requiredNonNegativeInteger(value: string | undefined, label: string): number {
+  const parsed = requiredInteger(value, label);
+  if (parsed < 0) {
+    throw new Error(`${label} must be non-negative.`);
+  }
+  return parsed;
+}
+function requiredPositiveNumber(value: string | undefined, label: string): number {
+  const parsed = requiredNumber(value, label);
+  if (parsed <= 0) {
+    throw new Error(`${label} must be positive.`);
+  }
+  return parsed;
+}
+
+function requiredSign(value: string | undefined, label: string): number {
+  const parsed = requiredInteger(value, label);
+  if (parsed !== -1 && parsed !== 1) {
+    throw new Error(`${label} must be -1 or 1.`);
+  }
+  return parsed;
+}
+
+function requiredPlane(value: string | undefined, label: string): string {
+  const parsed = value?.trim();
+  if (parsed !== "xy" && parsed !== "xz" && parsed !== "yz") {
+    throw new Error(`${label} must be xy, xz, or yz.`);
+  }
+  return parsed;
+}
+
+type TextureVector3 = [number, number, number];
+
+function wallCenterDirection(
+  left: TextureVector3,
+  normalAxis: string,
+  kind: string,
+): TextureVector3 {
+  if (kind !== "neel" && kind !== "bloch") {
+    throw new Error("Domain-wall kind must be bloch or neel.");
+  }
+  const axis: TextureVector3 =
+    normalAxis === "x"
+      ? [1, 0, 0]
+      : normalAxis === "y"
+        ? [0, 1, 0]
+        : normalAxis === "z"
+          ? [0, 0, 1]
+          : (() => {
+              throw new Error("Normal axis must be x, y, or z.");
+            })();
+  const dot = axis[0] * left[0] + axis[1] * left[1] + axis[2] * left[2];
+  const projected: TextureVector3 = [
+    axis[0] - dot * left[0],
+    axis[1] - dot * left[1],
+    axis[2] - dot * left[2],
+  ];
+  const cross = (a: TextureVector3, b: TextureVector3): TextureVector3 => [
+    a[1] * b[2] - a[2] * b[1],
+    a[2] * b[0] - a[0] * b[2],
+    a[0] * b[1] - a[1] * b[0],
+  ];
+  const length = (value: TextureVector3) => Math.hypot(value[0], value[1], value[2]);
+  let direction = kind === "bloch" ? cross(axis, left) : projected;
+  if (length(direction) <= 1e-12) {
+    const candidates: TextureVector3[] = [
+      [1, 0, 0],
+      [0, 1, 0],
+      [0, 0, 1],
+    ];
+    for (const candidate of candidates) {
+      const candidateDot =
+        candidate[0] * left[0] + candidate[1] * left[1] + candidate[2] * left[2];
+      const candidateProjected: TextureVector3 = [
+        candidate[0] - candidateDot * left[0],
+        candidate[1] - candidateDot * left[1],
+        candidate[2] - candidateDot * left[2],
+      ];
+      const candidateDirection =
+        kind === "bloch" ? cross(candidate, left) : candidateProjected;
+      if (length(candidateDirection) > 1e-12) {
+        direction = candidateDirection;
+        break;
+      }
+    }
+  }
+  const directionLength = length(direction);
+  if (directionLength <= 1e-12) {
+    throw new Error("Domain-wall direction must be nonzero and orthogonal to the domain.");
+  }
+  return [
+    direction[0] / directionLength,
+    direction[1] / directionLength,
+    direction[2] / directionLength,
+  ];
 }
 
 function stringOrDefault(value: string | undefined, fallback: string): string {
@@ -402,6 +503,9 @@ export function objectMagneticTextureDraftFromModel(
     core_radius: numberText(asNumber(params?.core_radius) ?? 1e-9),
     radius: numberText(asNumber(params?.radius) ?? 10e-9),
     wall_width: numberText(wallWidth ?? (presetKind === "domain_wall" ? 10e-9 : 2e-9)),
+    vorticity: numberText(asNumber(params?.vorticity) ?? 1),
+    helicity_rad: numberText(asNumber(params?.helicity_rad) ?? 0.0),
+    background_sign: numberText(asNumber(params?.background_sign) ?? 1),
     normal_axis: asString(params?.normal_axis) ?? "x",
     center_offset: numberText(asNumber(params?.center_offset) ?? 0.0),
     leftX: left[0],
@@ -494,6 +598,9 @@ const NUMERIC_TEXTURE_DRAFT_FIELDS = new Set<keyof ObjectMagneticTextureDraft>([
   "wallY",
   "wallZ",
   "wall_width",
+  "vorticity",
+  "helicity_rad",
+  "background_sign",
   "wavevectorX",
   "wavevectorY",
   "wavevectorZ",
@@ -584,6 +691,17 @@ function defaultPresetDraftPatch(
       core_polarity: "-1",
       plane: "xy",
       radius: numberText(10e-9),
+      wall_width: numberText(2e-9),
+    };
+  }
+
+  if (presetKind === "bimeron") {
+    return {
+      background_sign: "1",
+      helicity_rad: "0",
+      plane: "xy",
+      radius: numberText(10e-9),
+      vorticity: "1",
       wall_width: numberText(2e-9),
     };
   }
@@ -694,6 +812,8 @@ export function buildObjectMagneticTextureAssetDraft(
     presetChanged && (!draftLabel || draftLabel === oldDefaultLabel)
       ? defaultLabel(presetKind)
       : stringOrDefault(draft.assetLabel, defaultLabel(presetKind));
+  const presetVersion =
+    presetChanged || !model.asset ? 2 : model.asset.preset_version ?? 1;
   const asset = presetMagnetizationAsset({
     id: assetId,
     label,
@@ -703,6 +823,7 @@ export function buildObjectMagneticTextureAssetDraft(
       space: stringOrDefault(draft.mappingSpace, "object"),
     },
     presetKind,
+    presetVersion,
     presetParams: presetParamsFromDraft(presetKind, draft),
     textureTransform: {
       pivot: [
@@ -737,45 +858,60 @@ function presetParamsFromDraft(
 ): JsonObject {
   if (presetKind === "random_seeded") {
     return {
-      seed: requiredInteger(draft.seed, "Random seed"),
+      seed: requiredNonNegativeInteger(draft.seed, "Random seed"),
     };
   }
 
   if (presetKind === "vortex" || presetKind === "antivortex") {
     return {
       plane: stringOrDefault(draft.plane, "xy"),
-      circulation: requiredInteger(draft.circulation, "Circulation"),
-      core_polarity: requiredInteger(draft.core_polarity, "Core polarity"),
-      core_radius: requiredNumber(draft.core_radius, "Core radius"),
+      circulation: requiredSign(draft.circulation, "Circulation"),
+      core_polarity: requiredSign(draft.core_polarity, "Core polarity"),
+      core_radius: requiredPositiveNumber(draft.core_radius, "Core radius"),
     };
   }
 
   if (presetKind === "bloch_skyrmion" || presetKind === "neel_skyrmion") {
     return {
       plane: stringOrDefault(draft.plane, "xy"),
-      radius: requiredNumber(draft.radius, "Radius"),
-      wall_width: requiredNumber(draft.wall_width, "Wall width"),
-      core_polarity: requiredInteger(draft.core_polarity, "Core polarity"),
-      chirality: requiredInteger(draft.chirality, "Chirality"),
+      radius: requiredPositiveNumber(draft.radius, "Radius"),
+      wall_width: requiredPositiveNumber(draft.wall_width, "Wall width"),
+      core_polarity: requiredSign(draft.core_polarity, "Core polarity"),
+      chirality: requiredSign(draft.chirality, "Chirality"),
+    };
+  }
+
+  if (presetKind === "bimeron") {
+    return {
+      plane: requiredPlane(draft.plane, "Plane"),
+      radius: requiredPositiveNumber(draft.radius, "Radius"),
+      wall_width: requiredPositiveNumber(draft.wall_width, "Wall width"),
+      vorticity: requiredSign(draft.vorticity, "Vorticity"),
+      helicity_rad: requiredNumber(draft.helicity_rad, "Helicity (rad)"),
+      background_sign: requiredSign(draft.background_sign, "Background sign"),
     };
   }
 
   if (presetKind === "domain_wall") {
+    const normalAxis = stringOrDefault(draft.normal_axis, "x");
+    const left: TextureVector3 = [
+      requiredNumber(draft.leftX, "Left X"),
+      requiredNumber(draft.leftY, "Left Y"),
+      requiredNumber(draft.leftZ, "Left Z"),
+    ];
+    const kind = stringOrDefault(draft.kind, "neel");
     return {
-      normal_axis: stringOrDefault(draft.normal_axis, "x"),
+      normal_axis: normalAxis,
       center_offset: requiredNumber(draft.center_offset, "Center offset"),
-      width: requiredNumber(draft.wall_width, "Wall width"),
-      left: [
-        requiredNumber(draft.leftX, "Left X"),
-        requiredNumber(draft.leftY, "Left Y"),
-        requiredNumber(draft.leftZ, "Left Z"),
-      ],
+      width: requiredPositiveNumber(draft.wall_width, "Wall width"),
+      left,
       right: [
         requiredNumber(draft.rightX, "Right X"),
         requiredNumber(draft.rightY, "Right Y"),
         requiredNumber(draft.rightZ, "Right Z"),
       ],
-      kind: stringOrDefault(draft.kind, "neel"),
+      kind,
+      wall_center_direction: wallCenterDirection(left, normalAxis, kind),
     };
   }
 
@@ -792,6 +928,7 @@ function presetParamsFromDraft(
         requiredNumber(draft.rightY, "Right Y"),
         requiredNumber(draft.rightZ, "Right Z"),
       ],
+      sharp: true,
       wall: [
         requiredNumber(draft.wallX, "Wall X"),
         requiredNumber(draft.wallY, "Wall Y"),
@@ -861,6 +998,8 @@ function defaultLabel(presetKind: MagnetizationTexturePresetId): string {
       return "Bloch Skyrmion texture";
     case "neel_skyrmion":
       return "Néel Skyrmion texture";
+    case "bimeron":
+      return "Bimeron texture";
     case "domain_wall":
       return "Domain Wall texture";
     case "two_domain":

@@ -342,7 +342,7 @@ function magnetizationPreviewColor(
   if (presetKind === "vortex") return rgbToHex(VORTEX_PREVIEW_RGB);
   if (presetKind === "antivortex") return rgbToHex(ANTIVORTEX_PREVIEW_RGB);
   if (presetKind === "random_seeded" || presetKind === "random") return rgbToHex(RANDOM_SEEDED_PREVIEW_RGB);
-  if (presetKind === "bloch_skyrmion" || presetKind === "neel_skyrmion") return rgbToHex(SKYRMION_PREVIEW_RGB);
+  if (presetKind === "bloch_skyrmion" || presetKind === "neel_skyrmion" || presetKind === "bimeron") return rgbToHex(SKYRMION_PREVIEW_RGB);
   if (presetKind === "domain_wall") return rgbToHex(DOMAIN_WALL_PREVIEW_RGB);
   if (presetKind === "two_domain") return rgbToHex(TWO_DOMAIN_PREVIEW_RGB);
   if (presetKind === "helical") return rgbToHex(HELICAL_PREVIEW_RGB);

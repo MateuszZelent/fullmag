@@ -24,7 +24,8 @@ use crate::geometry::{
     ir_to_shape, shape_local_bounds, validate_realized_grid, voxelize_shape, GeometryShape,
     LoweredBody, FDM_GRID_ESTIMATED_BYTES_PER_CELL,
 };
-use crate::magnetization_textures::{sample_preset_texture, TextureSamplePoint};
+use crate::magnetization_textures::TextureSamplePoint;
+use crate::magnetization_textures_v2::sample_preset_texture_versioned;
 use crate::oersted::{resolve_fdm_oersted_term, ResolvedOerstedTerm};
 use crate::region_conflict::{resolve_region_conflict, RegionConflictCandidate};
 use crate::spin_torque::{
@@ -1099,8 +1100,10 @@ fn apply_region_texture_overrides(
                 preset_params,
                 mapping,
                 texture_transform,
-            } => match sample_preset_texture(
+                preset_version,
+            } => match sample_preset_texture_versioned(
                 preset_kind,
+                *preset_version,
                 preset_params,
                 mapping,
                 texture_transform,
@@ -2112,6 +2115,7 @@ pub(crate) fn plan_fdm(
             preset_params,
             mapping,
             texture_transform,
+            preset_version,
         }) => {
             eprintln!(
                 "[fullmag-plan][mag-texture] sampling preset '{}' for FDM magnet '{}' (cells={} active={}) mapping=({}/{}/{}) T=[{:+.3e},{:+.3e},{:+.3e}]m S=[{:+.3e},{:+.3e},{:+.3e}]",
@@ -2139,8 +2143,9 @@ pub(crate) fn plan_fdm(
                 top_level_translation,
                 active_mask.as_ref(),
             );
-            match sample_preset_texture(
+            match sample_preset_texture_versioned(
                 preset_kind,
+                *preset_version,
                 &preset_params,
                 mapping,
                 texture_transform,
@@ -3645,6 +3650,7 @@ pub(crate) fn plan_fdm_multilayer(
                 preset_params,
                 mapping,
                 texture_transform,
+                preset_version,
             }) => {
                 let points = grid_sample_points(
                     grid_cells,
@@ -3653,8 +3659,9 @@ pub(crate) fn plan_fdm_multilayer(
                     placed.translation,
                     active_mask.as_ref(),
                 );
-                match sample_preset_texture(
+                match sample_preset_texture_versioned(
                     preset_kind,
+                    *preset_version,
                     &preset_params,
                     mapping,
                     texture_transform,

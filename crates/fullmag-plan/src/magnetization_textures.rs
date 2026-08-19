@@ -111,7 +111,7 @@ fn parse_vec3(
 
 fn plane_coords(point: [f64; 3], plane: &str) -> [f64; 3] {
     match plane {
-        "xz" => [point[0], point[2], point[1]],
+        "xz" => [point[0], point[2], -point[1]],
         "yz" => [point[1], point[2], point[0]],
         _ => [point[0], point[1], point[2]],
     }
@@ -121,7 +121,7 @@ fn plane_coords(point: [f64; 3], plane: &str) -> [f64; 3] {
 /// Inverse of `plane_coords` applied to vector components.
 fn plane_vec_to_world(mu: f64, mv: f64, mn: f64, plane: &str) -> [f64; 3] {
     match plane {
-        "xz" => [mu, mn, mv],
+        "xz" => [mu, -mn, mv],
         "yz" => [mn, mu, mv],
         _ => [mu, mv, mn],
     }
@@ -275,8 +275,75 @@ fn eval_vortex(
     Ok(normalize(plane_vec_to_world(mu, mv, mn, plane.as_str())))
 }
 
+fn two_atan_exp(x: f64) -> f64 {
+    if x >= 0.0 {
+        std::f64::consts::PI - 2.0 * (-x).exp().atan()
+    } else {
+        2.0 * x.exp().atan()
+    }
+}
+
 fn skyrmion_theta(radius: f64, r: f64, wall_width: f64) -> f64 {
-    2.0 * ((radius - r) / wall_width.max(1e-30)).exp().atan()
+    two_atan_exp((radius - r) / wall_width.max(1e-30))
+}
+
+fn bimeron_theta(radius: f64, r: f64, wall_width: f64) -> f64 {
+    let width = wall_width.max(1e-30);
+    ((r - radius) / width).tanh().asin() + ((r + radius) / width).tanh().asin()
+}
+
+fn eval_bimeron(params: &BTreeMap<String, Value>, point: [f64; 3]) -> Result<[f64; 3], String> {
+    let plane = match params.get("plane") {
+        Some(value) => value
+            .as_str()
+            .map(str::to_string)
+            .ok_or_else(|| "preset param 'plane' must be a string".to_string())?,
+        None => "xy".to_string(),
+    };
+    if !matches!(plane.as_str(), "xy" | "xz" | "yz") {
+        return Err(format!(
+            "preset param 'plane' must be xy, xz, or yz, got '{plane}'"
+        ));
+    }
+
+    let p = plane_coords(point, plane.as_str());
+    let radius = parse_f64(params, "radius", None)?;
+    if !radius.is_finite() || radius <= 0.0 {
+        return Err("preset param 'radius' must be finite and positive".to_string());
+    }
+
+    let wall_width = parse_f64(params, "wall_width", None)?;
+    if !wall_width.is_finite() || wall_width <= 0.0 {
+        return Err("preset param 'wall_width' must be finite and positive".to_string());
+    }
+
+    let vorticity = parse_i64(params, "vorticity", Some(1))?;
+    if vorticity != -1 && vorticity != 1 {
+        return Err("preset param 'vorticity' must be either -1 or 1".to_string());
+    }
+
+    let helicity = parse_f64(params, "helicity_rad", Some(0.0))?;
+    if !helicity.is_finite() {
+        return Err("preset param 'helicity_rad' must be finite".to_string());
+    }
+
+    let background_sign = parse_i64(params, "background_sign", Some(1))?;
+    if background_sign != -1 && background_sign != 1 {
+        return Err("preset param 'background_sign' must be either -1 or 1".to_string());
+    }
+
+    let r = p[0].hypot(p[1]);
+    let phi = p[1].atan2(p[0]);
+    let theta = bimeron_theta(radius, r, wall_width);
+    let phase = (vorticity as f64) * phi + helicity;
+    let sin_theta = theta.sin();
+    let background = background_sign as f64;
+
+    let mu = -background * theta.cos();
+    let mv = -background * sin_theta * phase.sin();
+    let mn = -background * sin_theta * phase.cos();
+
+    Ok(normalize(plane_vec_to_world(mu, mv, mn, plane.as_str())))
 }
 
 fn skyrmion_phase(phi: f64, chirality: i64, helicity: f64) -> f64 {
@@ -398,6 +465,7 @@ fn eval_preset(
         "antivortex" => eval_vortex(params, point, true),
         "bloch_skyrmion" => eval_skyrmion(params, point, 0.5 * std::f64::consts::PI),
         "neel_skyrmion" => eval_skyrmion(params, point, 0.0),
+        "bimeron" => eval_bimeron(params, point),
         "domain_wall" => eval_domain_wall(params, point),
         "two_domain" => eval_two_domain(params, point),
         "helical" => eval_helical(params, point),

@@ -91,6 +91,42 @@ w_{\mathrm c}=K_{c1}\Sigma+K_{c2}\alpha_1^2\alpha_2^2\alpha_3^2+K_{c3}\Sigma^2.
 
 ### Canonical material example
 
+(cubic-api-example)=
+````python
+# %% Cubic anisotropy registration
+import fullmag as fm
+
+nm = 1e-9
+
+# Stage-first authoring using explicit term + material property
+study = fm.study("cubic_anisotropy_example")
+study.discretization("fem")
+study.device("cpu")
+
+study.universe(bounds=((0, 0, 0), (100 * nm, 100 * nm, 10 * nm)))
+
+# Register material with cubic anisotropy via material property
+mat = fm.Material(
+    name="cobalt",
+    Ms=1.4e6,
+    A=2.0e-11,
+    alpha=0.02,
+    Kc1=2e5,
+    Kc2=1e4,
+    anisC1=(1, 0, 0),
+    anisC2=(0, 1, 0),
+)
+study.material(mat)
+
+# Register geometry
+film = fm.Box(size=(100 * nm, 100 * nm, 10 * nm), material="cobalt")
+study.geometry(film)
+
+# Explicit CubicAnisotropy term (equivalent to material properties above)
+study.terms.add(fm.CubicAnisotropy(kc1=2e5, kc2=1e4, axis1=(1, 0, 0), axis2=(0, 1, 0)))
+
+study.stages.add_relax(stage_id="relax", tolA=795.7747154594767)
+````
 
 ### Outputs
 

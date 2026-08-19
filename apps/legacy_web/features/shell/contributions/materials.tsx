@@ -177,6 +177,22 @@ function buildMaterialsGroups(ctx: RibbonBuildContext): RibbonGroup[] {
           },
           iconColor: "text-emerald-400",
         }),
+        selectionAction(objectId, {
+          id: "materials-mag-bimeron",
+          icon: <Target size={20} />,
+          label: "Bimeron",
+          tooltip: "Assign bimeron magnetic texture",
+          action: () => {
+            if (!objectId) return;
+            ctx.run({
+              id: "object.assign-magnetization-preset",
+              objectId,
+              kind: "bimeron",
+            });
+            ctx.run({ id: "navigation.select-node", nodeId: `mag-${objectId}` });
+          },
+          iconColor: "text-fuchsia-400",
+        }),
       ],
     },
     {

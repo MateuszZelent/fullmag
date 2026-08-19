@@ -10,7 +10,8 @@ use std::fs;
 use std::path::Path;
 use std::sync::{Mutex, OnceLock};
 
-use crate::magnetization_textures::{sample_preset_texture, TextureSamplePoint};
+use crate::magnetization_textures::TextureSamplePoint;
+use crate::magnetization_textures_v2::sample_preset_texture_versioned;
 use crate::util::{generate_random_unit_vectors, study_universe_metadata, StudyUniverseMetadata};
 
 pub(crate) const AIR_OBJECT_SEGMENT_ID: &str = "__air__";
@@ -257,6 +258,7 @@ pub(crate) fn initial_vectors_for_magnet(
             preset_params,
             mapping,
             texture_transform,
+            preset_version,
         }) => {
             let log_key = preset_texture_sample_log_key(
                 magnet_name,
@@ -321,13 +323,15 @@ pub(crate) fn initial_vectors_for_magnet(
                     active: true,
                 })
                 .collect::<Vec<_>>();
-            sample_preset_texture(
+            sample_preset_texture_versioned(
                 preset_kind,
+                *preset_version,
                 &preset_params,
                 mapping,
                 texture_transform,
                 &points,
-            )?
+            )
+            .map_err(|error| error.to_string())?
         }
         None => vec![[1.0, 0.0, 0.0]; n_nodes],
     })

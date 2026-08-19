@@ -58,7 +58,7 @@ def _plane_coords(point: Sequence[float], plane: str) -> tuple[float, float, flo
     if plane == "xy":
         return x, y, z
     if plane == "xz":
-        return x, z, y
+        return x, z, -y
     if plane == "yz":
         return y, z, x
     return x, y, z
@@ -69,13 +69,13 @@ def _plane_vec_to_world(mu: float, mv: float, mn: float, plane: str) -> Vec3:
 
     This is the inverse of ``_plane_coords`` applied to vector components:
       xy: u=x, v=y, n=z  →  (mu, mv, mn)
-      xz: u=x, v=z, n=y  →  (mu, mn, mv)
+      xz: u=x, v=z, n=-y →  (mu, -mn, mv)
       yz: u=y, v=z, n=x  →  (mn, mu, mv)
     """
     if plane == "xy":
         return (mu, mv, mn)
     if plane == "xz":
-        return (mu, mn, mv)
+        return (mu, -mn, mv)
     if plane == "yz":
         return (mn, mu, mv)
     return (mu, mv, mn)
@@ -86,9 +86,22 @@ def _domain_wall_profile(distance: float, width: float) -> float:
     return math.tanh(distance / width)
 
 
+def _two_atan_exp(value: float) -> float:
+    if value >= 0.0:
+        return math.pi - 2.0 * math.atan(math.exp(-value))
+    return 2.0 * math.atan(math.exp(value))
+
+
 def _skyrmion_theta(radius: float, r: float, wall_width: float) -> float:
     wall_width = max(wall_width, 1e-30)
-    return 2.0 * math.atan(math.exp((radius - r) / wall_width))
+    return _two_atan_exp((radius - r) / wall_width)
+
+
+def _bimeron_theta(radius: float, r: float, wall_width: float) -> float:
+    width = max(wall_width, 1e-30)
+    return math.asin(math.tanh((r - radius) / width)) + math.asin(
+        math.tanh((r + radius) / width)
+    )
 
 
 def _skyrmion_phase(phi: float, chirality: int, helicity: float) -> float:
@@ -129,6 +142,45 @@ def _skyrmion(point: Sequence[float], params: Mapping[str, object], helicity: fl
     mu = sin_t * math.cos(phase)
     mv = sin_t * math.sin(phase)
     mn = core_polarity * math.cos(theta)
+    return _normalize(_plane_vec_to_world(mu, mv, mn, plane))
+
+
+def _bimeron(point: Sequence[float], params: Mapping[str, object]) -> Vec3:
+    plane = str(params.get("plane", "xy"))
+    if plane not in {"xy", "xz", "yz"}:
+        raise ValueError(f"invalid bimeron plane: {plane!r}")
+
+    pu, pv, _pn = _plane_coords(point, plane)
+    try:
+        radius = float(params["radius"])
+        wall_width = float(params["wall_width"])
+    except (KeyError, TypeError, ValueError) as exc:
+        raise ValueError("bimeron radius and wall_width must be numeric") from exc
+    if not math.isfinite(radius) or radius <= 0.0:
+        raise ValueError("bimeron radius must be finite and positive")
+    if not math.isfinite(wall_width) or wall_width <= 0.0:
+        raise ValueError("bimeron wall_width must be finite and positive")
+
+    vorticity = params.get("vorticity", 1)
+    if isinstance(vorticity, bool) or not isinstance(vorticity, int) or vorticity not in {-1, 1}:
+        raise ValueError("bimeron vorticity must be -1 or 1")
+
+    helicity = float(params.get("helicity_rad", 0.0))
+    if not math.isfinite(helicity):
+        raise ValueError("bimeron helicity_rad must be finite")
+
+    background_sign = params.get("background_sign", 1)
+    if isinstance(background_sign, bool) or not isinstance(background_sign, int) or background_sign not in {-1, 1}:
+        raise ValueError("bimeron background_sign must be -1 or 1")
+
+    radius_local = math.hypot(pu, pv)
+    phi = math.atan2(pv, pu)
+    theta = _bimeron_theta(radius, radius_local, wall_width)
+    phase = vorticity * phi + helicity
+    sin_theta = math.sin(theta)
+    mu = -background_sign * math.cos(theta)
+    mv = -background_sign * sin_theta * math.sin(phase)
+    mn = -background_sign * sin_theta * math.cos(phase)
     return _normalize(_plane_vec_to_world(mu, mv, mn, plane))
 
 
@@ -186,7 +238,17 @@ def evaluate_preset_texture(
     preset_kind: str,
     params: Mapping[str, object],
     points: Iterable[Sequence[float]],
+    *,
+    preset_version: int = 1,
 ) -> EvaluatedTexture:
+    if preset_version == 2:
+        from .preset_eval_v2 import evaluate_preset_texture_v2
+
+        result = evaluate_preset_texture_v2(preset_kind, params, points)
+        return EvaluatedTexture(values=result.values)
+    if preset_version != 1:
+        raise ValueError(f"unsupported preset texture version: {preset_version}")
+
     values: list[Vec3] = []
     for point in points:
         if preset_kind == "uniform":
@@ -211,6 +273,8 @@ def evaluate_preset_texture(
             values.append(_skyrmion(point, params, helicity=0.5 * math.pi))
         elif preset_kind == "neel_skyrmion":
             values.append(_skyrmion(point, params, helicity=0.0))
+        elif preset_kind == "bimeron":
+            values.append(_bimeron(point, params))
         elif preset_kind == "domain_wall":
             values.append(_domain_wall(point, params))
         elif preset_kind == "two_domain":

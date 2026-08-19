@@ -218,6 +218,76 @@ The API does not invent a new energy quantity.
 | CurrentTransport.solve_region | str or None | None | $1$ | non-empty when supplied; required by some source-bound planners | source region identifier | lane-dependent source resolution | current_modules[].solve_region |
 | CurrentTransport.conductivity_s_per_m | float or None | None | $\mathrm{S\,m^{-1}}$ | positive when supplied | conductivity metadata for future transport solve | serialized metadata; not Ohmic execution proof | current_modules[].conductivity_s_per_m |
 
+(stt-api-example)=
+````python
+# %% Spin-transfer torque variants (Slonczewski, Zhang-Li, Interface CPP, Drift-Diffusion)
+import fullmag as fm
+
+nm = 1e-9
+
+# Slonczewski STT
+stt_slonc = fm.SlonczewskiSTT(
+    current_density=1e12,
+    polarization=(0, 0, 1),
+    efficiency=0.6,
+    direction_fixed=True,
+)
+print(f"SlonczewskiSTT: {stt_slonc}")
+
+# Zhang-Li STT
+stt_zhangli = fm.ZhangLiSTT(
+    current_density=1e12,
+    polarization=(0, 0, 1),
+    degree=0.4,
+    beta=0.0,
+)
+print(f"ZhangLiSTT: {stt_zhangli}")
+
+# Interface CPP (spin-valve-like) STT
+stt_cpp = fm.InterfaceCppSTT(
+    current_density=5e11,
+    polarization=(0, 0, 1),
+    interface_inPlane=True,
+)
+print(f"InterfaceCppSTT: {stt_cpp}")
+
+# DriftDiffusionSpinTorque (equivalent to Zhang-Li in FDM)
+dd_stt = fm.DriftDiffusionSpinTorque(
+    current_density=1e12,
+    spin_polarization=(0, 0, 1),
+    degree=0.5,
+    beta=0.0,
+)
+print(f"DriftDiffusionSpinTorque: {dd_stt}")
+
+# Stage-first example
+study = fm.study("stt_example")
+study.discretization("fdm")
+study.device("cpu")
+
+study.universe(bounds=((0, 0, 0), (200 * nm, 200 * nm, 30 * nm)))
+mat = fm.Material(name="cofeb", Ms=1.4e6, A=2.0e-11, alpha=0.02)
+study.material(mat)
+layer = fm.Box(size=(200 * nm, 200 * nm, 10 * nm), material="cofeb")
+study.geometry(layer)
+
+# CurrentTransport as named source
+transport = fm.CurrentTransport(
+    name="stt_charge_source",
+    current_density=(0, 0, 1e12),
+    model="prescribed_density",
+)
+study.current_module(transport)
+
+stt_named = fm.SlonczewskiSTT(
+    current_source="stt_charge_source",
+    polarization=(0, 0, 1),
+    efficiency=0.6,
+)
+study.spin_transfer_torque(stt_named)
+print(f"STT with named source: {stt_named}")
+````
+
 (stt-api-problem-ir)=
 ## Canonical ProblemIR lowering
 

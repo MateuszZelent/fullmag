@@ -613,6 +613,7 @@ fn fem_domain_preset_texture_samples_final_mesh_node_order() {
         geometry_name: "free_geom".to_string(),
         initial_magnetization: Some(InitialMagnetizationIR::PresetTexture {
             preset_kind: "vortex".to_string(),
+            preset_version: 1,
             preset_params: std::collections::BTreeMap::from([
                 ("circulation".to_string(), serde_json::json!(1)),
                 ("core_polarity".to_string(), serde_json::json!(1)),
@@ -1615,6 +1616,7 @@ fn pack_preserves_shared_interface_nodes_within_one_object() {
         magnet_name: "body".to_string(),
         geometry_name: "body_geom".to_string(),
         initial_magnetization: Some(InitialMagnetizationIR::PresetTexture {
+            preset_version: 1,
             preset_kind: "neel_skyrmion".to_string(),
             preset_params: std::collections::BTreeMap::from([
                 ("core_polarity".to_string(), serde_json::json!(1)),

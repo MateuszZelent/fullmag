@@ -167,6 +167,48 @@ The half-open pulse convention is fixed: the source is active at t_on and inacti
 | CurrentTransport.conductivity_s_per_m | float or None | None | $\mathrm{S\,m^{-1}}$ | finite and positive when supplied | conductivity metadata for transport | not used by prescribed-density Oersted lowering | current_modules[].conductivity_s_per_m |
 | SaveField("H_oe", every=...) | field request | — | $\mathrm{A\,m^{-1}}$ | requires one Oersted term and a lane that materializes H_oe | sampled realized Oersted field | planner/lane-dependent | study.sampling.outputs[] |
 
+(oersted-api-example)=
+````python
+# %% Oersted field registration
+import fullmag as fm
+
+nm = 1e-9
+
+# Stage-first authoring: OerstedCylinder for a STNO pillar
+study = fm.study("oersted_stno_example")
+study.discretization("fem")
+study.device("cpu")
+
+study.universe(bounds=((0, 0, 0), (500 * nm, 500 * nm, 200 * nm)))
+
+# Register Oersted cylinder (cylindrical microwave antenna)
+oersted = fm.OerstedCylinder(
+    current=1e6,  # A (positive = +z direction)
+    radius=50 * nm,
+    center=(250 * nm, 250 * nm, 0),
+    axis=(0, 0, 1),
+)
+study.oersted(oersted)
+
+# Register a material and geometry for context
+mat = fm.Material(name="cobalt", Ms=1.4e6, A=2.0e-11, alpha=0.02)
+study.material(mat)
+disk = fm.Cylinder(radius=100 * nm, thickness=20 * nm, material="cobalt")
+study.geometry(disk)
+
+# OerstedField: bind to a named CurrentTransport source
+transport = fm.CurrentTransport(
+    name="antenna_current",
+    current_density=(0, 0, 1e12),
+    model="prescribed_density",
+)
+study.current_module(transport)
+oersted_field = fm.OerstedField(source="antenna_current", model="from_current_solution")
+print(f"OerstedField bound to source: {oersted_field}")
+
+study.stages.add_relax(stage_id="relax", tolA=795.7747154594767)
+````
+
 (oersted-api-problem-ir)=
 ## Canonical ProblemIR lowering
 

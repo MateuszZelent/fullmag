@@ -26,6 +26,57 @@ def _vec3(value: Sequence[float], name: str) -> Vec3:
         raise ValueError(f"{name} must have 3 components")
     return (float(value[0]), float(value[1]), float(value[2]))
 
+def _require_finite_positive(value: object, name: str) -> float:
+    try:
+        value = float(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{name} must be finite and positive") from exc
+    if not math.isfinite(value) or value <= 0.0:
+        raise ValueError(f"{name} must be finite and positive")
+    return value
+
+
+def _require_sign(value: int, name: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or value not in (-1, 1):
+        raise ValueError(f"{name} must be -1 or 1")
+    return value
+
+
+def _require_plane(value: str) -> str:
+    if value not in ("xy", "xz", "yz"):
+        raise ValueError("plane must be one of 'xy', 'xz', or 'yz'")
+    return value
+
+
+def _require_nonzero_vector(value: Vec3, name: str) -> Vec3:
+    if not all(math.isfinite(component) for component in value):
+        raise ValueError(f"{name} must have finite components")
+    if math.sqrt(sum(component * component for component in value)) <= 1e-30:
+        raise ValueError(f"{name} must be nonzero")
+
+    return value
+
+def _normalized_vec3(value: Vec3, name: str) -> Vec3:
+    value = _require_nonzero_vector(value, name)
+    norm = math.sqrt(sum(component * component for component in value))
+    return tuple(component / norm for component in value)  # type: ignore[return-value]
+
+def _dot_vec3(lhs: Vec3, rhs: Vec3) -> float:
+    return sum(left * right for left, right in zip(lhs, rhs))
+
+def _cross_vec3(lhs: Vec3, rhs: Vec3) -> Vec3:
+    return (lhs[1] * rhs[2] - lhs[2] * rhs[1], lhs[2] * rhs[0] - lhs[0] * rhs[2], lhs[0] * rhs[1] - lhs[1] * rhs[0])
+def _validate_vortex_arguments(
+    circulation: int,
+    core_polarity: int,
+    core_radius: float | None,
+    plane: str,
+) -> None:
+    _require_sign(circulation, "circulation")
+    _require_sign(core_polarity, "core_polarity")
+    if core_radius is not None:
+        _require_finite_positive(core_radius, "core_radius")
+    _require_plane(plane)
 
 def _quat(value: Sequence[float], name: str) -> Quat:
     if len(value) != 4:
@@ -132,11 +183,17 @@ class TextureMapping:
 @dataclass(frozen=True, slots=True)
 class PresetTexture:
     preset_kind: str
+    preset_version: int = 2
     params: Mapping[str, object] = field(default_factory=dict)
     mapping: TextureMapping = field(default_factory=TextureMapping)
     transform: TextureTransform3D = field(default_factory=TextureTransform3D)
     ui_label: str | None = None
     preview_proxy: str | None = None
+
+    def __post_init__(self) -> None:
+        if isinstance(self.preset_version, bool) or not isinstance(self.preset_version, int) or self.preset_version not in (1, 2):
+            raise ValueError("preset_version must be 1 or 2")
+
 
     def copy(self) -> "PresetTexture":
         return replace(self)
@@ -188,6 +245,7 @@ class PresetTexture:
         return {
             "kind": "preset_texture",
             "preset_kind": self.preset_kind,
+            "preset_version": self.preset_version,
             "preset_params": dict(self.params),
             "mapping": self.mapping.to_ir(),
             "texture_transform": self.transform.to_ir(),
@@ -204,6 +262,8 @@ class texture:
         direction_or_x: Sequence[float] | float = (1.0, 0.0, 0.0),
         y: float | None = None,
         z: float | None = None,
+        *,
+        preset_version: int = 2,
     ) -> PresetTexture:
         if isinstance(direction_or_x, (list, tuple)):
             direction = list(_vec3(direction_or_x, "direction"))
@@ -214,23 +274,42 @@ class texture:
                 "texture.uniform() requires 3 components: "
                 "texture.uniform(x, y, z) or texture.uniform((x, y, z))"
             )
+        if preset_version == 1:
+            return PresetTexture(
+                preset_version=1,
+                preset_kind="uniform",
+                params={"direction": direction},
+                preview_proxy="none",
+            )
+        direction = list(_require_nonzero_vector(tuple(direction), "direction"))
         return PresetTexture(
+            preset_version=preset_version,
             preset_kind="uniform",
             params={"direction": direction},
             preview_proxy="none",
         )
 
     @staticmethod
-    def random(seed: int) -> PresetTexture:
+    def random(seed: int, *, preset_version: int = 2) -> PresetTexture:
+        if preset_version == 1:
+            return PresetTexture(
+                preset_version=1,
+                preset_kind="random",
+                params={"seed": int(seed)},
+                preview_proxy="none",
+            )
+        if isinstance(seed, bool) or not isinstance(seed, int) or seed < 0:
+            raise ValueError("seed must be a non-negative integer")
         return PresetTexture(
+            preset_version=preset_version,
             preset_kind="random",
-            params={"seed": int(seed)},
+            params={"seed": seed},
             preview_proxy="none",
         )
 
     @staticmethod
-    def random_seeded(seed: int) -> PresetTexture:
-        return texture.random(seed)
+    def random_seeded(seed: int, *, preset_version: int = 2) -> PresetTexture:
+        return texture.random(seed, preset_version=preset_version)
 
     @staticmethod
     def vortex(
@@ -238,6 +317,8 @@ class texture:
         core_polarity: int = 1,
         core_radius: float | None = None,
         plane: str = "xy",
+        *,
+        preset_version: int = 2,
     ) -> PresetTexture:
         if isinstance(core_radius, str):
             plane = core_radius
@@ -248,7 +329,10 @@ class texture:
         if isinstance(circulation, str):
             plane = circulation
             circulation = 1
+        if preset_version == 2:
+            _validate_vortex_arguments(circulation, core_polarity, core_radius, plane)
         return PresetTexture(
+            preset_version=preset_version,
             preset_kind="vortex",
             params=_drop_none_params(
                 {
@@ -267,6 +351,8 @@ class texture:
         core_polarity: int = 1,
         core_radius: float | None = None,
         plane: str = "xy",
+        *,
+        preset_version: int = 2,
     ) -> PresetTexture:
         if isinstance(core_radius, str):
             plane = core_radius
@@ -277,7 +363,10 @@ class texture:
         if isinstance(circulation, str):
             plane = circulation
             circulation = 1
+        if preset_version == 2:
+            _validate_vortex_arguments(circulation, core_polarity, core_radius, plane)
         return PresetTexture(
+            preset_version=preset_version,
             preset_kind="antivortex",
             params=_drop_none_params(
                 {
@@ -297,6 +386,8 @@ class texture:
         chirality: int = 1,
         core_polarity: int = -1,
         plane: str = "xy",
+        *,
+        preset_version: int = 2,
     ) -> PresetTexture:
         if isinstance(core_polarity, str):
             plane = core_polarity
@@ -304,7 +395,26 @@ class texture:
         if isinstance(chirality, str):
             plane = chirality
             chirality = 1
+        if preset_version == 1:
+            return PresetTexture(
+                preset_version=1,
+                preset_kind="bloch_skyrmion",
+                params={
+                    "radius": float(radius),
+                    "wall_width": float(wall_width),
+                    "chirality": int(chirality),
+                    "core_polarity": int(core_polarity),
+                    "plane": plane,
+                },
+                preview_proxy="disc",
+            )
+        radius = _require_finite_positive(radius, "radius")
+        wall_width = _require_finite_positive(wall_width, "wall_width")
+        chirality = _require_sign(chirality, "chirality")
+        core_polarity = _require_sign(core_polarity, "core_polarity")
+        plane = _require_plane(plane)
         return PresetTexture(
+            preset_version=preset_version,
             preset_kind="bloch_skyrmion",
             params={
                 "radius": float(radius),
@@ -323,6 +433,8 @@ class texture:
         chirality: int = 1,
         core_polarity: int = -1,
         plane: str = "xy",
+        *,
+        preset_version: int = 2,
     ) -> PresetTexture:
         if isinstance(core_polarity, str):
             plane = core_polarity
@@ -330,7 +442,26 @@ class texture:
         if isinstance(chirality, str):
             plane = chirality
             chirality = 1
+        if preset_version == 1:
+            return PresetTexture(
+                preset_version=1,
+                preset_kind="neel_skyrmion",
+                params={
+                    "radius": float(radius),
+                    "wall_width": float(wall_width),
+                    "chirality": int(chirality),
+                    "core_polarity": int(core_polarity),
+                    "plane": plane,
+                },
+                preview_proxy="disc",
+            )
+        radius = _require_finite_positive(radius, "radius")
+        wall_width = _require_finite_positive(wall_width, "wall_width")
+        chirality = _require_sign(chirality, "chirality")
+        core_polarity = _require_sign(core_polarity, "core_polarity")
+        plane = _require_plane(plane)
         return PresetTexture(
+            preset_version=preset_version,
             preset_kind="neel_skyrmion",
             params={
                 "radius": float(radius),
@@ -343,6 +474,46 @@ class texture:
         )
 
     @staticmethod
+    def bimeron(
+        radius: float,
+        wall_width: float,
+        vorticity: int = 1,
+        helicity_rad: float = 0.0,
+        background_sign: int = 1,
+        plane: Literal["xy", "xz", "yz"] = "xy",
+        *,
+        preset_version: int = 2,
+    ) -> PresetTexture:
+        radius = float(radius)
+        wall_width = float(wall_width)
+        helicity_rad = float(helicity_rad)
+        if not math.isfinite(radius) or radius <= 0.0:
+            raise ValueError("radius must be finite and positive")
+        if not math.isfinite(wall_width) or wall_width <= 0.0:
+            raise ValueError("wall_width must be finite and positive")
+        if isinstance(vorticity, bool) or not isinstance(vorticity, int) or vorticity not in (-1, 1):
+            raise ValueError("vorticity must be -1 or 1")
+        if not math.isfinite(helicity_rad):
+            raise ValueError("helicity_rad must be finite")
+        if isinstance(background_sign, bool) or not isinstance(background_sign, int) or background_sign not in (-1, 1):
+            raise ValueError("background_sign must be -1 or 1")
+        if plane not in ("xy", "xz", "yz"):
+            raise ValueError("plane must be one of 'xy', 'xz', or 'yz'")
+        return PresetTexture(
+            preset_version=preset_version,
+            preset_kind="bimeron",
+            params={
+                "plane": plane,
+                "radius": radius,
+                "wall_width": wall_width,
+                "vorticity": int(vorticity),
+                "helicity_rad": helicity_rad,
+                "background_sign": int(background_sign),
+            },
+            preview_proxy="disc",
+        )
+
+    @staticmethod
     def domain_wall(
         width: float,
         kind: Literal["bloch", "neel"] = "neel",
@@ -350,16 +521,72 @@ class texture:
         normal_axis: Literal["x", "y", "z"] = "x",
         left: Sequence[float] = (1.0, 0.0, 0.0),
         right: Sequence[float] = (-1.0, 0.0, 0.0),
+        wall_center_direction: Sequence[float] | None = None,
+        *,
+        preset_version: int = 2,
     ) -> PresetTexture:
+        if preset_version == 1:
+            return PresetTexture(
+                preset_version=1,
+                preset_kind="domain_wall",
+                params={
+                    "kind": kind,
+                    "width": float(width),
+                    "center_offset": float(center_offset),
+                    "normal_axis": normal_axis,
+                    "left": list(_vec3(left, "left")),
+                    "right": list(_vec3(right, "right")),
+                },
+                preview_proxy="box",
+            )
+        width = _require_finite_positive(width, "width")
+        center_offset = float(center_offset)
+        if not math.isfinite(center_offset):
+            raise ValueError("center_offset must be finite")
+        if kind not in ("bloch", "neel"):
+            raise ValueError("kind must be 'bloch' or 'neel'")
+        if normal_axis not in ("x", "y", "z"):
+            raise ValueError("normal_axis must be 'x', 'y', or 'z'")
+        left_vec = _normalized_vec3(_vec3(left, "left"), "left")
+        right_vec = _normalized_vec3(_vec3(right, "right"), "right")
+        if _dot_vec3(left_vec, right_vec) > -1.0 + 1e-10:
+            raise ValueError("right must be antiparallel to left")
+        if wall_center_direction is None:
+            axis_vec = {"x": (1.0, 0.0, 0.0), "y": (0.0, 1.0, 0.0), "z": (0.0, 0.0, 1.0)}[normal_axis]
+            projected = tuple(
+                axis_vec[index] - left_vec[index] * _dot_vec3(axis_vec, left_vec)
+                for index in range(3)
+            )
+            wall_direction = projected if kind == "neel" else _cross_vec3(axis_vec, left_vec)
+            if math.sqrt(sum(component * component for component in wall_direction)) <= 1e-14:
+                helper = (
+                    (1.0, 0.0, 0.0)
+                    if abs(axis_vec[0]) < 0.9
+                    else (0.0, 1.0, 0.0)
+                    if abs(axis_vec[1]) < 0.9
+                    else (0.0, 0.0, 1.0)
+                )
+                tangent_one = _cross_vec3(axis_vec, helper)
+                tangent_two = _cross_vec3(tangent_one, axis_vec)
+                wall_direction = tangent_one if kind == "bloch" else tangent_two
+            if math.sqrt(sum(component * component for component in wall_direction)) <= 1e-14:
+                raise ValueError("wall_center_direction could not be derived")
+        else:
+            wall_direction = _vec3(wall_center_direction, "wall_center_direction")
+        wall_direction = _normalized_vec3(wall_direction, "wall_center_direction")
+        if abs(_dot_vec3(wall_direction, left_vec)) > 1e-10:
+            raise ValueError("wall_center_direction must be orthogonal to left")
         return PresetTexture(
+            preset_version=preset_version,
             preset_kind="domain_wall",
             params={
                 "kind": kind,
                 "width": float(width),
                 "center_offset": float(center_offset),
                 "normal_axis": normal_axis,
-                "left": list(_vec3(left, "left")),
-                "right": list(_vec3(right, "right")),
+                "left": list(left_vec),
+                "right": list(right_vec),
+                "wall_center_direction": list(wall_direction),
             },
             preview_proxy="box",
         )
@@ -370,15 +597,51 @@ class texture:
         right: Sequence[float],
         wall: Sequence[float],
         normal_axis: Literal["x", "y", "z"] = "x",
+        wall_width: float | None = None,
+        sharp: bool | None = None,
+        *,
+        preset_version: int = 2,
     ) -> PresetTexture:
+        if preset_version == 1:
+            return PresetTexture(
+                preset_version=1,
+                preset_kind="two_domain",
+                params={
+                    "left": list(_vec3(left, "left")),
+                    "right": list(_vec3(right, "right")),
+                    "wall": list(_vec3(wall, "wall")),
+                    "normal_axis": normal_axis,
+                },
+                preview_proxy="box",
+            )
+        if normal_axis not in ("x", "y", "z"):
+            raise ValueError("normal_axis must be 'x', 'y', or 'z'")
+        left_vec = _normalized_vec3(_vec3(left, "left"), "left")
+        right_vec = _normalized_vec3(_vec3(right, "right"), "right")
+        wall_vec = _normalized_vec3(_vec3(wall, "wall"), "wall")
+        if sharp is None:
+            sharp = wall_width is None
+        if not isinstance(sharp, bool):
+            raise ValueError("sharp must be boolean")
+        if sharp:
+            if wall_width is not None:
+                raise ValueError("wall_width is only valid for a smooth two_domain")
+            wall_width_value = None
+        else:
+            wall_width_value = _require_finite_positive(wall_width, "wall_width")
         return PresetTexture(
+            preset_version=preset_version,
             preset_kind="two_domain",
-            params={
-                "left": list(_vec3(left, "left")),
-                "right": list(_vec3(right, "right")),
-                "wall": list(_vec3(wall, "wall")),
-                "normal_axis": normal_axis,
-            },
+            params=_drop_none_params(
+                {
+                    "left": list(left_vec),
+                    "right": list(right_vec),
+                    "wall": list(wall_vec),
+                    "normal_axis": normal_axis,
+                    "wall_width": wall_width_value,
+                    "sharp": sharp,
+                }
+            ),
             preview_proxy="box",
         )
 
@@ -388,14 +651,37 @@ class texture:
         e1: Sequence[float] = (1.0, 0.0, 0.0),
         e2: Sequence[float] = (0.0, 1.0, 0.0),
         phase_rad: float = 0.0,
+        *,
+        preset_version: int = 2,
     ) -> PresetTexture:
+        if preset_version == 1:
+            return PresetTexture(
+                preset_version=1,
+                preset_kind="helical",
+                params={
+                    "wavevector": list(_vec3(wavevector, "wavevector")),
+                    "e1": list(_vec3(e1, "e1")),
+                    "e2": list(_vec3(e2, "e2")),
+                    "phase_rad": float(phase_rad),
+                },
+                preview_proxy="box",
+            )
+        wavevector_vec = _require_nonzero_vector(_vec3(wavevector, "wavevector"), "wavevector")
+        e1_vec = _normalized_vec3(_vec3(e1, "e1"), "e1")
+        e2_vec = _normalized_vec3(_vec3(e2, "e2"), "e2")
+        if abs(_dot_vec3(e1_vec, e2_vec)) > 1e-12:
+            raise ValueError("e1 and e2 must be orthogonal")
+        phase_value = float(phase_rad)
+        if not math.isfinite(phase_value):
+            raise ValueError("phase_rad must be finite")
         return PresetTexture(
+            preset_version=preset_version,
             preset_kind="helical",
             params={
-                "wavevector": list(_vec3(wavevector, "wavevector")),
-                "e1": list(_vec3(e1, "e1")),
-                "e2": list(_vec3(e2, "e2")),
-                "phase_rad": float(phase_rad),
+                "wavevector": list(wavevector_vec),
+                "e1": list(e1_vec),
+                "e2": list(e2_vec),
+                "phase_rad": phase_value,
             },
             preview_proxy="box",
         )
@@ -406,14 +692,37 @@ class texture:
         cone_axis: Sequence[float] = (0.0, 0.0, 1.0),
         cone_angle_rad: float = math.pi / 4.0,
         phase_rad: float = 0.0,
+        *,
+        preset_version: int = 2,
     ) -> PresetTexture:
+        if preset_version == 1:
+            return PresetTexture(
+                preset_version=1,
+                preset_kind="conical",
+                params={
+                    "wavevector": list(_vec3(wavevector, "wavevector")),
+                    "cone_axis": list(_vec3(cone_axis, "cone_axis")),
+                    "cone_angle_rad": float(cone_angle_rad),
+                    "phase_rad": float(phase_rad),
+                },
+                preview_proxy="box",
+            )
+        wavevector_vec = _require_nonzero_vector(_vec3(wavevector, "wavevector"), "wavevector")
+        axis_vec = _normalized_vec3(_vec3(cone_axis, "cone_axis"), "cone_axis")
+        angle_value = float(cone_angle_rad)
+        if not math.isfinite(angle_value) or not 0.0 <= angle_value <= math.pi:
+            raise ValueError("cone_angle_rad must be finite and lie in [0, pi]")
+        phase_value = float(phase_rad)
+        if not math.isfinite(phase_value):
+            raise ValueError("phase_rad must be finite")
         return PresetTexture(
+            preset_version=preset_version,
             preset_kind="conical",
             params={
-                "wavevector": list(_vec3(wavevector, "wavevector")),
-                "cone_axis": list(_vec3(cone_axis, "cone_axis")),
-                "cone_angle_rad": float(cone_angle_rad),
-                "phase_rad": float(phase_rad),
+                "wavevector": list(wavevector_vec),
+                "cone_axis": list(axis_vec),
+                "cone_angle_rad": angle_value,
+                "phase_rad": phase_value,
             },
             preview_proxy="box",
         )

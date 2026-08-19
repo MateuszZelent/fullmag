@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import numbers
 from typing import TYPE_CHECKING, Callable, Sequence, TypeAlias
 
-from fullmag._validation import as_vector3, require_positive_int
+from fullmag._validation import as_vector3
 
 if TYPE_CHECKING:
     from fullmag.init.textures import PresetTexture
@@ -25,7 +26,9 @@ class RandomMagnetization:
     seed: int
 
     def __post_init__(self) -> None:
-        object.__setattr__(self, "seed", require_positive_int(self.seed, "seed"))
+        if isinstance(self.seed, bool) or not isinstance(self.seed, numbers.Integral) or self.seed < 0:
+            raise ValueError("seed must be a non-negative integer")
+        object.__setattr__(self, "seed", int(self.seed))
 
     def to_ir(self) -> dict[str, object]:
         return {"kind": "random", "seed": self.seed}

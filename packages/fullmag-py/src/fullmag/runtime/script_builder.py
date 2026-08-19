@@ -6548,6 +6548,7 @@ def _render_initial_magnetization_expr(
             initializer.params,
             mapping=initializer.mapping.to_ir(),
             transform=initializer.transform.to_ir(),
+            preset_version=initializer.preset_version,
             ui_label=initializer.ui_label,
             preview_proxy=initializer.preview_proxy,
         )
@@ -7023,7 +7024,7 @@ def _export_geometry_entry(
                 "texture_transform": magnet.m0.transform.to_ir(),
                 "preset_kind": magnet.m0.preset_kind,
                 "preset_params": dict(magnet.m0.params),
-                "preset_version": 1,
+                "preset_version": magnet.m0.preset_version,
                 "ui_label": magnet.m0.ui_label,
             }
 
@@ -8032,6 +8033,7 @@ _DEFAULT_TEXTURE_PREVIEW_PROXY = {
     "antivortex": "disc",
     "bloch_skyrmion": "disc",
     "neel_skyrmion": "disc",
+    "bimeron": "disc",
     "domain_wall": "box",
     "two_domain": "box",
     "helical": "box",
@@ -8079,6 +8081,21 @@ def _render_texture_factory_call(
         if params.get("plane") not in {None, "xy"}:
             kwargs.append(f"plane={_py_repr(str(params['plane']))}")
         return f"fm.texture.{preset_kind}({', '.join(kwargs)})"
+    if preset_kind == "bimeron":
+        radius = params.get("radius")
+        wall_width = params.get("wall_width")
+        if radius is None or wall_width is None:
+            return None
+        kwargs = [
+            f"radius={_py_number(float(radius))}",
+            f"wall_width={_py_number(float(wall_width))}",
+            f"vorticity={int(str(params.get('vorticity', 1)))}",
+            f"helicity_rad={_py_number(float(params.get('helicity_rad', 0.0)))}",
+            f"background_sign={int(str(params.get('background_sign', 1)))}",
+        ]
+        if params.get("plane") not in {None, "xy"}:
+            kwargs.append(f"plane={_py_repr(str(params['plane']))}")
+        return f"fm.texture.bimeron({', '.join(kwargs)})"
     if preset_kind == "domain_wall":
         width = params.get("width")
         if width is None:
@@ -8095,6 +8112,9 @@ def _render_texture_factory_call(
             kwargs.append(f"left={_render_vector_literal(left)}")
         if isinstance(right, list) and len(right) == 3:
             kwargs.append(f"right={_render_vector_literal(right)}")
+        wall_direction = params.get("wall_center_direction")
+        if isinstance(wall_direction, list) and len(wall_direction) == 3:
+            kwargs.append(f"wall_center_direction={_render_vector_literal(wall_direction)}")
         return f"fm.texture.domain_wall({', '.join(kwargs)})"
     if preset_kind == "two_domain":
         left = params.get("left")
@@ -8106,14 +8126,21 @@ def _render_texture_factory_call(
             and isinstance(wall, list) and len(wall) == 3
         ):
             return None
-        return (
-            "fm.texture.two_domain("
-            f"left={_render_vector_literal(left)}, "
-            f"right={_render_vector_literal(right)}, "
-            f"wall={_render_vector_literal(wall)}, "
-            f"normal_axis={_py_repr(str(params.get('normal_axis', 'x')))}"
-            ")"
-        )
+        kwargs = [
+            f"left={_render_vector_literal(left)}",
+            f"right={_render_vector_literal(right)}",
+            f"wall={_render_vector_literal(wall)}",
+            f"normal_axis={_py_repr(str(params.get('normal_axis', 'x')))}",
+        ]
+        sharp = params.get("sharp")
+        wall_width = params.get("wall_width")
+        if sharp is not None:
+            kwargs.append(f"sharp={_py_literal(sharp)}")
+        elif wall_width is not None:
+            kwargs.append("sharp=False")
+        if wall_width is not None:
+            kwargs.append(f"wall_width={_py_number(float(wall_width))}")
+        return f"fm.texture.two_domain({', '.join(kwargs)})"
     if preset_kind == "helical":
         wavevector = params.get("wavevector")
         if not (isinstance(wavevector, list) and len(wavevector) == 3):
@@ -8148,6 +8175,7 @@ def _render_preset_texture_expr(
     *,
     mapping: Mapping[str, object] | None = None,
     transform: Mapping[str, object] | None = None,
+    preset_version: int = 2,
     ui_label: str | None = None,
     preview_proxy: str | None = None,
 ) -> str:
@@ -8157,6 +8185,7 @@ def _render_preset_texture_expr(
     if (
         factory_expr is not None
         and normalized_mapping == _DEFAULT_TEXTURE_MAPPING
+        and preset_version == 2
         and normalized_transform == _DEFAULT_TEXTURE_TRANSFORM
         and ui_label is None
         and preview_proxy in {None, _DEFAULT_TEXTURE_PREVIEW_PROXY.get(preset_kind)}
@@ -8178,6 +8207,7 @@ def _render_preset_texture_expr(
     )
     return (
         "fm.PresetTexture("
+        f"preset_version={preset_version}, "
         f"preset_kind={_py_repr(preset_kind)}, "
         f"params={_py_literal(dict(params))}, "
         f"mapping={mapping_expr}, "

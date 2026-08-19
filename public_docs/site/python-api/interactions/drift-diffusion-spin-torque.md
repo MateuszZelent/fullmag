@@ -77,6 +77,35 @@ method; this page publishes no executable Python cell until that stage hook exis
 | beta | float | 0.0 | $1$ | beta >= 0 | non-adiabatic coefficient | semantic only | beta |
 | spin_diffusion_length_m | float | 5e-9 | $\mathrm{m}$ | strictly positive | diffusion length | semantic only | spin_diffusion_length_m |
 
+(api-ddst-example)=
+````python
+# %% DriftDiffusionSpinTorque constructor
+import fullmag as fm
+
+nm = 1e-9
+
+# Constructor-level example (stage builder support pending)
+# Register a drift-diffusion spin torque term with explicit current density
+ddst = fm.DriftDiffusionSpinTorque(
+    current_density=(0, 0, 5e11),  # A/m² along +z
+    spin_polarization=(0, 0, 1),
+    degree=0.4,
+    beta=0.01,
+    spin_diffusion_length_m=5e-9,
+)
+print(f"Registered DriftDiffusionSpinTorque: {ddst}")
+
+# Constructor-level example with named current source
+transport = fm.CurrentTransport(name="spin_channel", current_density=(0, 0, 5e11))
+ddst_source = fm.DriftDiffusionSpinTorque(
+    current_source="spin_channel",
+    spin_polarization=(0, 0, 1),
+    degree=0.4,
+    beta=0.01,
+)
+print(f"Registered with source: {ddst_source}")
+````
+
 (api-ddst-problem-ir)=
 ## ProblemIR lowering
 

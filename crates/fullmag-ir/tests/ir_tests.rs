@@ -3504,6 +3504,7 @@ fn object_region_texture_override_initial_magnetization_is_validated() {
         texture_override: Some(RegionTextureOverrideIR {
             initial_magnetization: InitialMagnetizationIR::PresetTexture {
                 preset_kind: "".to_string(),
+                preset_version: 1,
                 preset_params: Default::default(),
                 mapping: Default::default(),
                 texture_transform: Default::default(),
@@ -4449,6 +4450,7 @@ fn sampled_field_initial_magnetization_must_not_be_empty() {
 fn preset_texture_initial_magnetization_requires_preset_kind() {
     let mut ir = ProblemIR::bootstrap_example();
     ir.magnets[0].initial_magnetization = Some(InitialMagnetizationIR::PresetTexture {
+        preset_version: 1,
         preset_kind: String::new(),
         preset_params: BTreeMap::new(),
         mapping: TextureMappingIR::default(),

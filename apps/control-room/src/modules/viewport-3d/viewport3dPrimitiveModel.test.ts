@@ -293,6 +293,18 @@ describe("viewport3dPrimitiveModel", () => {
     });
   });
 
+  it("uses skyrmion preview color for bimeron", () => {
+    const preview = buildViewport3DMagnetizationTexturePreviewMap({
+      magnetization_assets: [{ id: "mag-bimeron", preset_kind: "bimeron" }],
+      objects: [{ id: "box", magnetization_ref: "mag-bimeron" }],
+    } as never).get("box");
+
+    expect(preview).toMatchObject({
+      color: "#c254f0",
+      presetKind: "bimeron",
+    });
+  });
+
   it("attaches texture pivot metadata for v2 pivot gizmo layers", () => {
     const model = buildViewport3DPrimitiveRenderModel(
       {

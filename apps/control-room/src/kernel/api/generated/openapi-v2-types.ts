@@ -8350,6 +8350,8 @@ export interface components {
             preset_params?: {
                 [key: string]: unknown;
             };
+            /** Format: int32 */
+            preset_version?: number;
             texture_transform?: components["schemas"]["SceneTextureTransform3D"];
         };
         SceneLinearTransportSolverPolicy: {

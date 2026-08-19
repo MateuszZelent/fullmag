@@ -106,8 +106,44 @@ does not yet register magnetoelastic bodies, loads, or couplings, so this page d
 disconnected Python constructor example. A copyable example belongs here only after a complete
 study and ordered stage workflow can execute it.
 
+(magnetoelastic-api-example)=
+````python
+# %% Magnetoelastic coupling constructor (IR contract only)
+import fullmag as fm
 
+nm = 1e-9
 
+# Constructor-level example: magnetoelastic coupling between ferromagnet and elastic body
+# Note: full study execution requires stage builder mechanics graph support
+coupling = fm.Magnetoelastic(
+    magnet="cobalt_layer",
+    body="substrate",
+    law="cubic_b1_b2",
+)
+print(f"Magnetoelastic coupling (constructor): {coupling}")
+
+# ElasticMaterial and ElasticBody are defined for the mechanics graph contract
+elastic_mat = fm.ElasticMaterial(
+    name="silicon",
+    density_kg_m3=2329.0,
+    c11=1.66e11,
+    c12=6.39e10,
+    c44=7.96e10,
+)
+print(f"ElasticMaterial: {elastic_mat}")
+
+elastic_body = fm.ElasticBody(name="substrate", material="silicon")
+print(f"ElasticBody: {elastic_body}")
+
+# Magnetostriction law parameters (cubic)
+law = fm.MagnetostrictionLaw(
+    name="cubic_b1_b2",
+    b1=2.4e6,
+    b2=3.1e6,
+)
+print(f"MagnetostrictionLaw: {law}")
+# Full study example pending stage builder mechanics graph support
+````
 
 (magnetoelastic-api-parameter-reference)=
 ## Exhaustive parameter reference
@@ -286,3 +322,4 @@ elastic energies are not inferred from prescribed-strain data.
 | local energy | crates/fullmag-engine/src/magnetoelastic.rs | e_mel_density_single |
 | FEM GPU upload | backends/fem/gpu/cuda/interactions/magnetoelastic/magnetoelastic_upload.cpp | gpu_magnetoelastic_upload_strain |
 | FEM GPU kernel | backends/fem/gpu/cuda/interactions/magnetoelastic/magnetoelastic_kernels.cu | fullmag_cuda_magnetoelastic_field_energy_blocks |
+

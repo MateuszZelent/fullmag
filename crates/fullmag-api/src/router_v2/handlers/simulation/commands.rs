@@ -1074,6 +1074,7 @@ fn initial_magnetization_for_object(
 
         return InitialMagnetizationIR::PresetTexture {
             preset_kind,
+            preset_version: asset.preset_version.unwrap_or(1),
             preset_params,
             mapping,
             texture_transform,

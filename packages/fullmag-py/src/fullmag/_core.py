@@ -43,6 +43,30 @@ def run_problem_json(
     return json.loads(result_json)
 
 
+def sample_preset_texture_v2(
+    preset_kind: str,
+    params: dict[str, Any],
+    points: list[tuple[float, float, float]],
+    *,
+    projection: str | None = None,
+    rotation_quat: list[float] | tuple[float, ...] | None = None,
+) -> dict[str, Any] | None:
+    """Evaluate a v2 texture through the canonical Rust planner evaluator.
+
+    Returns None only when the optional native extension is unavailable.
+    """
+    if _native_core is None:
+        return None
+    result_json = _native_core.sample_preset_texture_v2_json(
+        preset_kind,
+        json.dumps(params),
+        json.dumps(points),
+        projection,
+        list(rotation_quat) if rotation_quat is not None else None,
+    )
+    return json.loads(result_json)
+
+
 def resample_fem_to_fdm_grid(
     fem_mesh_ir: dict[str, Any],
     magnetization: list[list[float]],

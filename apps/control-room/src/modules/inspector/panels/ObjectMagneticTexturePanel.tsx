@@ -187,6 +187,14 @@ const SKYRMION_FIELDS = [
   { field: "chirality", label: "Chirality" },
 ] as const satisfies readonly DraftNumberFieldSpec[];
 
+const BIMERON_FIELDS = [
+  { field: "radius", label: "Radius", unit: "m" },
+  { field: "wall_width", label: "Wall Width", unit: "m" },
+  { field: "vorticity", label: "Vorticity" },
+  { field: "helicity_rad", label: "Helicity", unit: "rad" },
+  { field: "background_sign", label: "Background Sign" },
+] as const satisfies readonly DraftNumberFieldSpec[];
+
 function patchDraftField(
   updateDraft: UpdateMagneticTextureDraft,
   field: MagneticTextureDraftField,
@@ -338,6 +346,12 @@ export function MagneticTexturePresetParametersSection({
         <>
           <PlaneSelect draft={draft} updateDraft={updateDraft} />
           <DraftNumberFields draft={draft} fields={SKYRMION_FIELDS} updateDraft={updateDraft} />
+        </>
+      ) : null}
+      {draft.presetKind === "bimeron" ? (
+        <>
+          <PlaneSelect draft={draft} updateDraft={updateDraft} />
+          <DraftNumberFields draft={draft} fields={BIMERON_FIELDS} updateDraft={updateDraft} />
         </>
       ) : null}
       {draft.presetKind === "domain_wall" ? (

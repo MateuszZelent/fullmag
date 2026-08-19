@@ -123,6 +123,54 @@ The source is exclusive with the direct scalar current argument. The canonical m
 serialization is an inspection/tooling contract, not a simulation authoring workflow.
 
 
+(sot-api-example)=
+````python
+# %% Spin-orbit torque constructor registration
+import fullmag as fm
+
+nm = 1e-9
+
+# SpinOrbitTorque is a deprecated alias for PrescribedSpinOrbitTorque
+# Direct scalar current example
+sot_direct = fm.PrescribedSpinOrbitTorque(
+    charge_current_density_a_per_m2=1e12,
+    spin_polarization=(0, 0, 1),
+    damping_like_efficiency=0.5,
+    field_like_efficiency=0.1,
+)
+print(f"PrescribedSpinOrbitTorque (direct): {sot_direct}")
+
+# Named current source example (shared by several physics modules)
+study = fm.study("sot_example")
+study.discretization("fdm")
+study.device("cpu")
+
+study.universe(bounds=((0, 0, 0), (200 * nm, 200 * nm, 50 * nm)))
+mat = fm.Material(name="heavy_metal", Ms=0, A=1e-12, alpha=0.1)
+study.material(mat)
+fm_layer = fm.Box(size=(200 * nm, 200 * nm, 5 * nm), material="heavy_metal")
+study.geometry(fm_layer)
+
+# CurrentTransport as named source for SOT
+transport = fm.CurrentTransport(
+    name="shared_charge_source",
+    current_density=(0, 0, 1e12),
+    model="prescribed_density",
+)
+study.current_module(transport)
+
+# PrescribedSpinOrbitTorque using named source
+sot_named = fm.PrescribedSpinOrbitTorque(
+    current_source="shared_charge_source",
+    spin_polarization=(0, 0, 1),
+    damping_like_efficiency=0.5,
+    field_like_efficiency=0.1,
+)
+study.spin_orbit_torque(sot_named)
+print(f"PrescribedSpinOrbitTorque (named source): {sot_named}")
+# Note: stage builder has no SOT registration method; constructor-level only
+````
+
 (sot-api-parameter-reference)=
 ## Complete parameter reference
 

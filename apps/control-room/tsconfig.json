@@ -46,7 +46,11 @@
     ".next-audit-target-smoke-3113111-ee0eeba98d2a4e79950843187c3a8f75/types/**/*.ts",
     ".next-audit-target-smoke-3113111-ee0eeba98d2a4e79950843187c3a8f75/dev/types/**/*.ts",
     ".next-control-room-3100/types/**/*.ts",
-    ".next-control-room-3100/dev/types/**/*.ts"
+    ".next-control-room-3100/dev/types/**/*.ts",
+    ".next-control-room-3196/types/**/*.ts",
+    ".next-control-room-3196/dev/types/**/*.ts",
+    ".next-control-room-3197/types/**/*.ts",
+    ".next-control-room-3197/dev/types/**/*.ts"
   ],
   "exclude": [
     "node_modules",

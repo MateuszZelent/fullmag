@@ -70,6 +70,34 @@ units $\mathrm{J\,m^{-3}}$.
 The other required Material parameters (name, Ms, A, alpha) are documented
 by the canonical Material API page.
 
+(bulk-dmi-api-example)=
+````python
+# %% BulkDMI registration
+import fullmag as fm
+
+nm = 1e-9
+
+# Stage-first authoring using explicit term registration
+study = fm.study("bulk_dmi_example")
+study.discretization("fem")
+study.device("cpu")
+
+study.universe(bounds=((0, 0, 0), (200 * nm, 200 * nm, 20 * nm)))
+
+# Register material with bulk DMI via material property
+mat = fm.Material(name="cobalt", Ms=1.4e6, A=2.0e-11, alpha=0.02, Dbulk=-3e-3)
+study.material(mat)
+
+# Register geometry
+film = fm.Box(size=(200 * nm, 200 * nm, 20 * nm), material="cobalt")
+study.geometry(film)
+
+# Alternatively register BulkDMI as explicit term
+study.terms.add(fm.BulkDMI(D=-3e-3))
+
+study.stages.add_relax(stage_id="relax", tolA=795.7747154594767)
+````
+
 (bulk-dmi-api-problem-ir)=
 ## 6. ProblemIR
 

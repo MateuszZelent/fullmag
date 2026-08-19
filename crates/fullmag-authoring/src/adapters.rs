@@ -1909,8 +1909,10 @@ impl From<crate::SceneInitialMagnetization> for fullmag_ir::InitialMagnetization
                 preset_params,
                 mapping,
                 texture_transform,
+                preset_version,
             } => fullmag_ir::InitialMagnetizationIR::PresetTexture {
                 preset_kind,
+                preset_version,
                 preset_params,
                 mapping: mapping.into(),
                 texture_transform: texture_transform.into(),

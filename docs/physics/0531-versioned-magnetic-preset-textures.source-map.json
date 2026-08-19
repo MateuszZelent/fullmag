@@ -1,0 +1,184 @@
+{
+  "document": {
+    "path": "docs/physics/0531-versioned-magnetic-preset-textures.md",
+    "title": "Wersjonowany kontrakt analitycznych tekstur magnetyzacji",
+    "status": "accepted_contract_not_production_qualified",
+    "updated": "2026-08-19"
+  },
+  "backend_matrix": [
+    {
+      "solver": "FEM",
+      "device": "CPU",
+      "role": "planner point/node sampling",
+      "status": "source_and_test_evidence_runtime_separate"
+    },
+    {
+      "solver": "FEM",
+      "device": "GPU",
+      "role": "shared semantic descriptor",
+      "status": "not_runtime_qualified"
+    },
+    {
+      "solver": "FDM",
+      "device": "CPU",
+      "role": "cell-center sampling",
+      "status": "source_and_test_evidence_runtime_separate"
+    },
+    {
+      "solver": "FDM",
+      "device": "GPU",
+      "role": "shared initial-state vector contract",
+      "status": "not_runtime_qualified"
+    }
+  ],
+  "equations": [
+    {
+      "id": "texture-plane-frames",
+      "symbols": ["e_u", "e_v", "e_n"],
+      "sources": ["rust-plane-coords", "rust-plane-vector"]
+    },
+    {
+      "id": "texture-vortex-v2",
+      "symbols": ["r", "r_c", "p", "q", "c", "m_perp", "psi"],
+      "sources": ["rust-evaluator", "python-evaluator"]
+    },
+    {
+      "id": "texture-skyrmion-v2",
+      "symbols": ["theta", "R", "Delta"],
+      "sources": ["rust-evaluator", "python-evaluator"]
+    },
+    {
+      "id": "texture-domain-wall-v2",
+      "symbols": ["xi", "a", "b"],
+      "sources": ["rust-evaluator", "python-evaluator"]
+    },
+    {
+      "id": "texture-helical-v2",
+      "symbols": ["q_vector", "varphi"],
+      "sources": ["rust-evaluator", "python-evaluator"]
+    },
+    {
+      "id": "texture-conical-v2",
+      "symbols": ["beta", "a", "e_1", "e_2"],
+      "sources": ["rust-evaluator", "python-evaluator"]
+    }
+  ],
+  "symbols": [
+    {"id": "r", "latex": "r", "meaning": "lokalny promień", "si_unit": "\\mathrm{m}"},
+    {"id": "R", "latex": "R", "meaning": "promień presetu", "si_unit": "\\mathrm{m}"},
+    {"id": "Delta", "latex": "\\Delta", "meaning": "szerokość ściany", "si_unit": "\\mathrm{m}"},
+    {"id": "r_c", "latex": "r_c", "meaning": "promień rdzenia vortexu", "si_unit": "\\mathrm{m}"},
+    {"id": "p", "latex": "p", "meaning": "polarity rdzenia", "si_unit": "1"},
+    {"id": "q", "latex": "q", "meaning": "winding/vorticity", "si_unit": "1"},
+    {"id": "c", "latex": "c", "meaning": "circulation/helicity sign", "si_unit": "1"},
+    {"id": "m_perp", "latex": "m_\\perp", "meaning": "amplituda składowej in-plane", "si_unit": "1"},
+    {"id": "psi", "latex": "\\psi", "meaning": "lokalna faza azymutalna", "si_unit": "\\mathrm{rad}"},
+    {"id": "theta", "latex": "\\theta", "meaning": "profil polarny", "si_unit": "\\mathrm{rad}"},
+    {"id": "xi", "latex": "\\xi", "meaning": "bezwymiarowa odległość od środka ściany", "si_unit": "1"},
+    {"id": "a", "latex": "\\mathbf a", "meaning": "kierunek domeny/osi stożka", "si_unit": "1"},
+    {"id": "b", "latex": "\\mathbf b", "meaning": "kierunek środka ściany", "si_unit": "1"},
+    {"id": "q_vector", "latex": "\\mathbf q", "meaning": "fizyczny wektor falowy", "si_unit": "\\mathrm{m^{-1}}"},
+    {"id": "varphi", "latex": "\\varphi", "meaning": "faza helisy/stożka", "si_unit": "\\mathrm{rad}"},
+    {"id": "beta", "latex": "\\beta", "meaning": "kąt stożka", "si_unit": "\\mathrm{rad}"},
+    {"id": "e_u", "latex": "\\mathbf e_u", "meaning": "pierwsza oś frame", "si_unit": "1"},
+    {"id": "e_v", "latex": "\\mathbf e_v", "meaning": "druga oś frame", "si_unit": "1"},
+    {"id": "e_n", "latex": "\\mathbf e_n", "meaning": "normalna frame", "si_unit": "1"},
+    {"id": "e_1", "latex": "\\mathbf e_1", "meaning": "pierwsza oś płaszczyzny spinowej", "si_unit": "1"},
+    {"id": "e_2", "latex": "\\mathbf e_2", "meaning": "druga oś płaszczyzny spinowej", "si_unit": "1"}
+  ],
+  "sources": [
+    {
+      "id": "rust-plane-coords",
+      "path": "crates/fullmag-plan/src/magnetization_textures_v2.rs",
+      "symbol": "metric_point",
+      "responsibility": "lokalne współrzędne prawoskrętnego frame"
+    },
+    {
+      "id": "rust-plane-vector",
+      "path": "crates/fullmag-plan/src/magnetization_textures_v2.rs",
+      "symbol": "metric_vector",
+      "responsibility": "osadzenie lokalnego wektora w świecie"
+    },
+    {
+      "id": "rust-evaluator",
+      "path": "crates/fullmag-plan/src/magnetization_textures_v2.rs",
+      "symbol": "sample_preset_texture_versioned",
+      "responsibility": "plannerowy sampling presetów"
+    },
+    {
+      "id": "python-evaluator",
+      "path": "packages/fullmag-py/src/fullmag/init/preset_eval_v2.py",
+      "symbol": "evaluate_preset_texture_v2",
+      "responsibility": "Python reference evaluator"
+    },
+    {
+      "id": "ir-model",
+      "path": "crates/fullmag-ir/src/model.rs",
+      "symbol": "default_preset_version",
+      "responsibility": "canonical initial-state IR"
+    },
+    {
+      "id": "python-factory",
+      "path": "packages/fullmag-py/src/fullmag/init/textures.py",
+      "symbol": "class PresetTexture",
+      "responsibility": "public authoring and serialization"
+    },
+    {
+      "id": "rust-python-binding",
+      "path": "crates/fullmag-py-core/src/lib.rs",
+      "symbol": "sample_preset_texture_v2_json",
+      "responsibility": "canonical Rust evaluator bridge for Python runtime"
+    },
+    {
+      "id": "python-native-adapter",
+      "path": "packages/fullmag-py/src/fullmag/_core.py",
+      "symbol": "sample_preset_texture_v2",
+      "responsibility": "optional native dispatch with explicit fallback"
+    }
+  ],
+  "public_api": {
+    "parameters": [
+      {
+        "python": "texture.vortex.preset_version",
+        "type": "int",
+        "default": "2",
+        "si_unit": "1",
+        "validation": "1 or 2",
+        "meaning": "wybór kontraktu reprodukowalności",
+        "backend_support": "FEM/FDM CPU/GPU semantic descriptor",
+        "problem_ir": "magnets[].initial_magnetization.preset_version"
+      },
+      {
+        "python": "texture.vortex.core_radius",
+        "type": "float",
+        "default": "required for v2",
+        "si_unit": "\\mathrm{m}",
+        "validation": "finite and > 0",
+        "meaning": "promień regularizacji rdzenia",
+        "backend_support": "FEM/FDM CPU/GPU",
+        "problem_ir": "preset_params.core_radius"
+      },
+      {
+        "python": "texture.helical.wavevector",
+        "type": "Sequence[float]",
+        "default": "required",
+        "si_unit": "\\mathrm{m^{-1}}",
+        "validation": "finite and nonzero",
+        "meaning": "fizyczny wektor falowy",
+        "backend_support": "FEM/FDM CPU/GPU",
+        "problem_ir": "preset_params.wavevector"
+      },
+      {
+        "python": "texture.domain_wall.wall_center_direction",
+        "type": "Sequence[float]",
+        "default": "derived when possible; explicit for degenerate geometry",
+        "si_unit": "1",
+        "validation": "finite, nonzero, orthogonal to domain direction",
+        "meaning": "kierunek magnetyzacji w środku ściany",
+        "backend_support": "FEM/FDM CPU/GPU",
+        "problem_ir": "preset_params.wall_center_direction"
+      }
+    ]
+  }
+}
+

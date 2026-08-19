@@ -195,34 +195,32 @@ impl From<&DeclaredUniverseIR> for StudyUniverseMetadata {
     }
 }
 
+fn splitmix64(mut state: u64) -> u64 {
+    state = state.wrapping_add(0x9e3779b97f4a7c15);
+    let mut result = state;
+    result = (result ^ (result >> 30)).wrapping_mul(0xbf58476d1ce4e5b9);
+    result = (result ^ (result >> 27)).wrapping_mul(0x94d049bb133111eb);
+    result ^ (result >> 31)
+}
+
+fn unit_from_u64(value: u64) -> f64 {
+    ((value >> 11) as f64) * (1.0 / 9007199254740992.0)
+}
 /// Generate deterministic random unit vectors from a seed.
 pub fn generate_random_unit_vectors(seed: u64, count: usize) -> Vec<[f64; 3]> {
-    // Simple xorshift64-based PRNG for deterministic random unit vectors.
-    let mut state = seed;
     let mut vectors = Vec::with_capacity(count);
-
-    for _ in 0..count {
-        // Generate 3 random f64 in [-1, 1]
-        let mut components = [0.0f64; 3];
-        loop {
-            for c in &mut components {
-                state ^= state << 13;
-                state ^= state >> 7;
-                state ^= state << 17;
-                *c = (state as f64 / u64::MAX as f64) * 2.0 - 1.0;
-            }
-            let norm = (components[0] * components[0]
-                + components[1] * components[1]
-                + components[2] * components[2])
-                .sqrt();
-            if norm > 1e-10 {
-                components[0] /= norm;
-                components[1] /= norm;
-                components[2] /= norm;
-                break;
-            }
-        }
-        vectors.push(components);
+    for index in 0..count {
+        let state = splitmix64(seed.wrapping_add(index as u64));
+        let phi_hash = splitmix64(state);
+        let cos_hash = splitmix64(phi_hash);
+        let phi = unit_from_u64(phi_hash) * std::f64::consts::TAU;
+        let cos_theta = unit_from_u64(cos_hash) * 2.0 - 1.0;
+        let sin_theta = (1.0 - cos_theta * cos_theta).max(0.0).sqrt();
+        vectors.push([
+            sin_theta * phi.cos(),
+            sin_theta * phi.sin(),
+            cos_theta,
+        ]);
     }
     vectors
 }

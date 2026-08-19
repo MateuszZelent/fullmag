@@ -98,6 +98,7 @@ export function buildRegionTextureOverridePatch(
         mapping: asset.mapping,
         preset_kind: asset.preset_kind ?? asset.kind,
         preset_params: asset.preset_params,
+        preset_version: asset.preset_version ?? 1,
         texture_transform: asset.texture_transform,
       } satisfies components["schemas"]["SceneInitialMagnetization"],
     },

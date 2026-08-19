@@ -18,6 +18,7 @@ mod fdm;
 mod fem;
 mod geometry;
 mod magnetization_textures;
+mod magnetization_textures_v2;
 mod material;
 mod material_transition;
 mod mesh;
@@ -49,6 +50,9 @@ pub use geometry::{
     FDM_GRID_MAX_CELLS,
 };
 pub use magnetization_textures::{sample_preset_texture, TextureSamplePoint};
+pub use magnetization_textures_v2::{
+    sample_preset_texture_versioned, OrientedPlaneFrame, TextureError,
+};
 pub use physics_graph::{
     physics_graph_provenance_notes, physics_graph_realization_provenance,
     physics_graph_runtime_provenance, physics_graph_sha256, resolve_physics_graph,

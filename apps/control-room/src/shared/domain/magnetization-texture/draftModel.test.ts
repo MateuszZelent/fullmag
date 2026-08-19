@@ -181,6 +181,7 @@ describe("magnetization texture draft model", () => {
             space: "object",
           },
           preset_kind: "vortex",
+          preset_version: 1,
           preset_params: { chirality: 1, polarity: -1 },
           texture_transform: {
             pivot: [0, 0, 0],

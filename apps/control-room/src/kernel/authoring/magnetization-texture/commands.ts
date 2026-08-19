@@ -191,16 +191,29 @@ export const MAGNETIZATION_TEXTURE_COMMANDS: CommandContribution[] = [
     { plane: "xy", radius: 10e-9, wall_width: 2e-9, core_polarity: -1, chirality: 1 },
   ),
   presetCommand(
+    "magnetization-texture.assign-bimeron",
+    "Assign Bimeron Magnetization",
+    "bimeron",
+    {
+      plane: "xy",
+      radius: 10e-9,
+      wall_width: 2e-9,
+      vorticity: 1,
+      helicity_rad: 0,
+      background_sign: 1,
+    },
+  ),
+  presetCommand(
     "magnetization-texture.assign-domain-wall",
     "Assign Domain Wall Magnetization",
     "domain_wall",
-    { normal_axis: "x", center_offset: 0.0, width: 10e-9, left: [1, 0, 0], right: [-1, 0, 0], kind: "neel" },
+    { normal_axis: "x", center_offset: 0.0, width: 10e-9, left: [1, 0, 0], right: [-1, 0, 0], kind: "neel", wall_center_direction: [0, 1, 0] },
   ),
   presetCommand(
     "magnetization-texture.assign-two-domain",
     "Assign Two Domain Magnetization",
     "two_domain",
-    { normal_axis: "x", left: [1, 0, 0], right: [-1, 0, 0], wall: [0, 1, 0] },
+    { normal_axis: "x", left: [1, 0, 0], right: [-1, 0, 0], sharp: true, wall: [0, 1, 0] },
   ),
   presetCommand(
     "magnetization-texture.assign-helical",

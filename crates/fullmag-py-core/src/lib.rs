@@ -1,8 +1,12 @@
 use fullmag_engine::fem::MeshTopology;
 use fullmag_engine::fem_solution_transfer::{normalize_unit_vectors, transfer_fem_field_to_grid};
-use fullmag_ir::{validate_mesh_for_execution, BackendPlanIR, MeshIR, ProblemIR};
+use fullmag_ir::{
+    validate_mesh_for_execution, BackendPlanIR, MeshIR, ProblemIR, TextureMappingIR,
+    TextureProjectionMode,
+};
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 #[pyfunction]
@@ -46,6 +50,107 @@ fn run_problem_json(
         .map_err(|err| PyValueError::new_err(err.to_string()))?;
 
     serde_json::to_string(&result).map_err(|err| PyValueError::new_err(err.to_string()))
+}
+
+fn rotate_vector_by_quaternion(vector: [f64; 3], quaternion: [f64; 4]) -> [f64; 3] {
+    let q = [quaternion[0], quaternion[1], quaternion[2]];
+    let t = [
+        2.0 * (q[1] * vector[2] - q[2] * vector[1]),
+        2.0 * (q[2] * vector[0] - q[0] * vector[2]),
+        2.0 * (q[0] * vector[1] - q[1] * vector[0]),
+    ];
+    [
+        vector[0] + quaternion[3] * t[0] + q[1] * t[2] - q[2] * t[1],
+        vector[1] + quaternion[3] * t[1] + q[2] * t[0] - q[0] * t[2],
+        vector[2] + quaternion[3] * t[2] + q[0] * t[1] - q[1] * t[0],
+    ]
+}
+
+/// Evaluate a v2 analytic texture through the canonical Rust planner evaluator.
+///
+/// The Python runtime has already applied the inverse texture transform before
+/// calling this function. The optional quaternion therefore rotates only the
+/// output vectors, matching the Python v2 evaluator.
+#[pyfunction]
+#[pyo3(signature = (preset_kind, params_json, points_json, projection = None, rotation_quat = None))]
+fn sample_preset_texture_v2_json(
+    preset_kind: &str,
+    params_json: &str,
+    points_json: &str,
+    projection: Option<String>,
+    rotation_quat: Option<Vec<f64>>,
+) -> PyResult<String> {
+    let params: BTreeMap<String, serde_json::Value> = serde_json::from_str(params_json)
+        .map_err(|err| PyValueError::new_err(format!("invalid preset params JSON: {err}")))?;
+    let positions: Vec<[f64; 3]> = serde_json::from_str(points_json)
+        .map_err(|err| PyValueError::new_err(format!("invalid texture points JSON: {err}")))?;
+    let projection = match projection.as_deref() {
+        None | Some("object_local") => TextureProjectionMode::ObjectLocal,
+        Some("planar_xy") => TextureProjectionMode::PlanarXy,
+        Some("planar_xz") => TextureProjectionMode::PlanarXz,
+        Some("planar_yz") => TextureProjectionMode::PlanarYz,
+        Some(other) => {
+            return Err(PyValueError::new_err(format!(
+                "invalid texture projection '{other}'"
+            )))
+        }
+    };
+    let output_quaternion = match rotation_quat {
+        None => None,
+        Some(raw) => {
+            if raw.len() != 4 || raw.iter().any(|component| !component.is_finite()) {
+                return Err(PyValueError::new_err("invalid texture rotation quaternion"));
+            }
+            let length = raw
+                .iter()
+                .map(|component| component * component)
+                .sum::<f64>()
+                .sqrt();
+            if !length.is_finite() || length <= 1.0e-14 {
+                return Err(PyValueError::new_err(
+                    "texture rotation quaternion must be nonzero",
+                ));
+            }
+            Some([
+                raw[0] / length,
+                raw[1] / length,
+                raw[2] / length,
+                raw[3] / length,
+            ])
+        }
+    };
+    let points = positions
+        .iter()
+        .copied()
+        .map(|position| fullmag_plan::TextureSamplePoint {
+            position_world: position,
+            position_object: position,
+            active: true,
+        })
+        .collect::<Vec<_>>();
+    let mapping = TextureMappingIR {
+        space: "object".to_string(),
+        projection,
+        clamp_mode: "none".to_string(),
+    };
+    let values = fullmag_plan::sample_preset_texture_versioned(
+        preset_kind,
+        2,
+        &params,
+        &mapping,
+        &fullmag_ir::TextureTransform3DIR::default(),
+        &points,
+    )
+    .map_err(|err| PyValueError::new_err(err.to_string()))?;
+    let values = match output_quaternion {
+        Some(quaternion) => values
+            .into_iter()
+            .map(|value| rotate_vector_by_quaternion(value, quaternion))
+            .collect::<Vec<_>>(),
+        None => values,
+    };
+    serde_json::to_string(&serde_json::json!({ "values": values }))
+        .map_err(|err| PyValueError::new_err(err.to_string()))
 }
 
 /// Resample FEM node-based magnetization to FDM grid cell centers.
@@ -139,6 +244,7 @@ fn fullmag_py_core(_py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()
     module.add_function(wrap_pyfunction!(validate_ir_json, module)?)?;
     module.add_function(wrap_pyfunction!(validate_mesh_ir_json, module)?)?;
     module.add_function(wrap_pyfunction!(run_problem_json, module)?)?;
+    module.add_function(wrap_pyfunction!(sample_preset_texture_v2_json, module)?)?;
     module.add_function(wrap_pyfunction!(resample_fem_to_fdm_grid_json, module)?)?;
     module.add_function(wrap_pyfunction!(extract_fem_mesh_ir_json, module)?)?;
     Ok(())
@@ -157,15 +263,40 @@ mod tests {
                 [0.0, 1.0, 0.0],
                 fourth_node,
             ],
-            elements: vec![element],
+            cells: fullmag_ir::FemConnectivityIR::from_tet4(vec![element]),
             element_markers: vec![1],
-            boundary_faces: Vec::new(),
+            facets: fullmag_ir::FemFacetConnectivityIR::empty(),
             boundary_markers: Vec::new(),
             periodic_boundary_pairs: Vec::new(),
             periodic_node_pairs: Vec::new(),
             per_domain_quality: std::collections::HashMap::new(),
         })
         .expect("mesh fixture should serialize")
+    }
+
+    #[test]
+    fn sample_preset_texture_v2_json_uses_canonical_rust_evaluator() {
+        Python::initialize();
+        let result = sample_preset_texture_v2_json(
+            "uniform",
+            r#"{ "direction": [1.0, 0.0, 0.0] }"#,
+            r#"[[0.0, 0.0, 0.0]]"#,
+            Some("object_local".to_string()),
+            Some(vec![
+                0.0,
+                0.0,
+                std::f64::consts::FRAC_1_SQRT_2,
+                std::f64::consts::FRAC_1_SQRT_2,
+            ]),
+        )
+        .expect("v2 PyO3 sampling should succeed");
+        let payload: serde_json::Value =
+            serde_json::from_str(&result).expect("v2 PyO3 result should be JSON");
+        let value = payload["values"][0]
+            .as_array()
+            .expect("vector should be an array");
+        assert!(value[0].as_f64().unwrap().abs() < 1.0e-12);
+        assert!((value[1].as_f64().unwrap() - 1.0).abs() < 1.0e-12);
     }
 
     #[test]

@@ -80,7 +80,7 @@ export function assignMagneticPreset(
     sample_index: null,
     preset_kind: descriptor.kind,
     preset_params: descriptor.defaultParams ? structuredClone(descriptor.defaultParams) : {},
-    preset_version: 1,
+    preset_version: 2,
     mapping: existing?.mapping ?? {
       space: "object",
       projection: "object_local",

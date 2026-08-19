@@ -6,6 +6,7 @@ export type MagneticPresetKind =
   | "antivortex"
   | "bloch_skyrmion"
   | "neel_skyrmion"
+  | "bimeron"
   | "domain_wall"
   | "two_domain"
   | "helical"
@@ -22,6 +23,7 @@ export const METRIC_ANALYTIC_PRESETS: ReadonlySet<MagneticPresetKind> = new Set(
   "antivortex",
   "bloch_skyrmion",
   "neel_skyrmion",
+  "bimeron",
   "domain_wall",
 ]);
 
@@ -127,12 +129,35 @@ export const MAGNETIC_PRESET_CATALOG: MagneticPresetDescriptor[] = [
     ],
   },
   {
+    kind: "bimeron",
+    label: "Bimeron",
+    category: "topological",
+    icon: "◈",
+    previewProxy: "disc",
+    defaultParams: {
+      plane: "xy",
+      radius: 10e-9,
+      wall_width: 2e-9,
+      vorticity: 1,
+      helicity_rad: 0,
+      background_sign: 1,
+    },
+    parameters: [
+      { key: "radius", label: "Radius", type: "number", unit: "m", min: 0 },
+      { key: "wall_width", label: "Wall width", type: "number", unit: "m", min: 0 },
+      { key: "vorticity", label: "Vorticity", type: "integer", options: [{ value: 1, label: "+1" }, { value: -1, label: "-1" }] },
+      { key: "helicity_rad", label: "Helicity", type: "number", unit: "rad" },
+      { key: "background_sign", label: "Background sign", type: "integer", options: [{ value: 1, label: "+1" }, { value: -1, label: "-1" }] },
+      { key: "plane", label: "Plane", type: "enum", options: [{ value: "xy", label: "XY" }, { value: "xz", label: "XZ" }, { value: "yz", label: "YZ" }] },
+    ],
+  },
+  {
     kind: "domain_wall",
     label: "Domain wall",
     category: "domains",
     icon: "║",
     previewProxy: "wall",
-    defaultParams: { kind: "neel", width: 10e-9, center_offset: 0, normal_axis: "x", left: [1, 0, 0], right: [-1, 0, 0] },
+    defaultParams: { kind: "neel", width: 10e-9, center_offset: 0, normal_axis: "x", left: [1, 0, 0], right: [-1, 0, 0], wall_center_direction: [0, 1, 0] },
     parameters: [
       { key: "kind", label: "Type", type: "enum", options: [{ value: "neel", label: "Néel" }, { value: "bloch", label: "Bloch" }] },
       { key: "width", label: "Width", type: "number", unit: "m", min: 0 },
@@ -148,7 +173,7 @@ export const MAGNETIC_PRESET_CATALOG: MagneticPresetDescriptor[] = [
     category: "domains",
     icon: "⊟",
     previewProxy: "wall",
-    defaultParams: { left: [1, 0, 0], right: [-1, 0, 0], wall: [0, 1, 0], normal_axis: "x" },
+    defaultParams: { left: [1, 0, 0], right: [-1, 0, 0], sharp: true, wall: [0, 1, 0], normal_axis: "x" },
     parameters: [
       { key: "left", label: "Left domain", type: "vector3" },
       { key: "right", label: "Right domain", type: "vector3" },

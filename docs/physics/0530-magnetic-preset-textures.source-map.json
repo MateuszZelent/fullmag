@@ -1,0 +1,376 @@
+{
+  "document": {
+    "path": "docs/physics/0530-magnetic-preset-textures.md",
+    "title": "Analityczne tekstury magnetyzacji: bimeron i wspólne bazy płaszczyzn",
+    "status": "accepted_contract_not_production_qualified",
+    "updated": "2026-08-19"
+  },
+  "backend_matrix": [
+    {
+      "solver": "FEM",
+      "device": "CPU",
+      "role": "planner-provided point/node sampling",
+      "status": "documented_shared_sampling_not_runtime_qualified"
+    },
+    {
+      "solver": "FEM",
+      "device": "GPU",
+      "role": "same semantic initial-state contract",
+      "status": "documented_shared_sampling_not_runtime_qualified"
+    },
+    {
+      "solver": "FDM",
+      "device": "CPU",
+      "role": "cell-center sampling",
+      "status": "documented_shared_sampling_not_runtime_qualified"
+    },
+    {
+      "solver": "FDM",
+      "device": "GPU",
+      "role": "same initial-state vector contract",
+      "status": "documented_shared_sampling_not_runtime_qualified"
+    }
+  ],
+  "equations": [
+    {
+      "id": "bimeron-stable-theta-profile",
+      "symbols": [
+        "r",
+        "R",
+        "Delta"
+      ],
+      "sources": [
+        "rust-bimeron-theta",
+        "python-bimeron"
+      ]
+    },
+    {
+      "id": "bimeron-phase",
+      "symbols": [
+        "Q_v",
+        "phi",
+        "eta"
+      ],
+      "sources": [
+        "rust-eval-bimeron",
+        "python-bimeron"
+      ]
+    },
+    {
+      "id": "bimeron-magnetization",
+      "symbols": [
+        "theta",
+        "chi",
+        "s_bg"
+      ],
+      "sources": [
+        "rust-eval-bimeron",
+        "python-bimeron"
+      ]
+    },
+    {
+      "id": "bimeron-normalization",
+      "symbols": [
+        "m"
+      ],
+      "sources": [
+        "rust-normalize",
+        "python-normalize"
+      ]
+    },
+    {
+      "id": "bimeron-topological-density",
+      "symbols": [
+        "m",
+        "u",
+        "v"
+      ],
+      "sources": [
+        "physics-contract"
+      ]
+    }
+  ],
+  "symbols": [
+    {
+      "id": "r",
+      "latex": "r",
+      "meaning": "promień lokalny i parametr położenia przejścia",
+      "si_unit": "m"
+    },
+    {
+      "id": "R",
+      "latex": "R",
+      "meaning": "promień lokalny i parametr położenia przejścia",
+      "si_unit": "m"
+    },
+    {
+      "id": "Delta",
+      "latex": "\\Delta",
+      "meaning": "wall_width, szerokość profilu",
+      "si_unit": "m"
+    },
+    {
+      "id": "phi",
+      "latex": "\\phi",
+      "meaning": "azymut i helicity",
+      "si_unit": "rad"
+    },
+    {
+      "id": "eta",
+      "latex": "\\eta",
+      "meaning": "azymut i helicity",
+      "si_unit": "rad"
+    },
+    {
+      "id": "Q_v",
+      "latex": "Q_{\\mathrm v}",
+      "meaning": "vorticity, znak nawinięcia",
+      "si_unit": "1"
+    },
+    {
+      "id": "s_bg",
+      "latex": "s_{\\mathrm{bg}}",
+      "meaning": "background_sign",
+      "si_unit": "1"
+    },
+    {
+      "id": "theta",
+      "latex": "\\theta",
+      "meaning": "profil polarny",
+      "si_unit": "rad"
+    },
+    {
+      "id": "chi",
+      "latex": "\\chi",
+      "meaning": "faza azymutalna",
+      "si_unit": "rad"
+    },
+    {
+      "id": "m",
+      "latex": "\\mathbf m",
+      "meaning": "znormalizowana magnetyzacja",
+      "si_unit": "1"
+    },
+    {
+      "id": "u",
+      "latex": "u",
+      "meaning": "punkt świata/obiektu i jego współrzędne w płaszczyźnie",
+      "si_unit": "m"
+    },
+    {
+      "id": "v",
+      "latex": "v",
+      "meaning": "punkt świata/obiektu i jego współrzędne w płaszczyźnie",
+      "si_unit": "m"
+    }
+  ],
+  "sources": [
+    {
+      "id": "rust-bimeron-theta",
+      "path": "crates/fullmag-plan/src/magnetization_textures.rs",
+      "symbol": "bimeron_theta",
+      "responsibility": "stable radial profile"
+    },
+    {
+      "id": "rust-eval-bimeron",
+      "path": "crates/fullmag-plan/src/magnetization_textures.rs",
+      "symbol": "eval_bimeron",
+      "responsibility": "local bimeron vector and parameter validation"
+    },
+    {
+      "id": "rust-normalize",
+      "path": "crates/fullmag-plan/src/magnetization_textures.rs",
+      "symbol": "normalize",
+      "responsibility": "shared vector normalization"
+    },
+    {
+      "id": "rust-plane-coords",
+      "path": "crates/fullmag-plan/src/magnetization_textures.rs",
+      "symbol": "plane_coords",
+      "responsibility": "right-handed plane coordinates"
+    },
+    {
+      "id": "rust-plane-vector",
+      "path": "crates/fullmag-plan/src/magnetization_textures.rs",
+      "symbol": "plane_vec_to_world",
+      "responsibility": "right-handed world vector mapping"
+    },
+    {
+      "id": "python-bimeron",
+      "path": "packages/fullmag-py/src/fullmag/init/preset_eval.py",
+      "symbol": "_bimeron",
+      "responsibility": "reference evaluator and stable profile"
+    },
+    {
+      "id": "python-factory",
+      "path": "packages/fullmag-py/src/fullmag/init/textures.py",
+      "symbol": "bimeron",
+      "responsibility": "public factory and IR parameters"
+    },
+    {
+      "id": "python-normalize",
+      "path": "packages/fullmag-py/src/fullmag/init/preset_eval.py",
+      "symbol": "_normalize",
+      "responsibility": "reference vector normalization"
+    },
+    {
+      "id": "python-plane-coords",
+      "path": "packages/fullmag-py/src/fullmag/init/preset_eval.py",
+      "symbol": "_plane_coords",
+      "responsibility": "reference plane coordinates"
+    },
+    {
+      "id": "python-plane-vector",
+      "path": "packages/fullmag-py/src/fullmag/init/preset_eval.py",
+      "symbol": "_plane_vec_to_world",
+      "responsibility": "reference world vector mapping"
+    },
+    {
+      "id": "python-runtime",
+      "path": "packages/fullmag-py/src/fullmag/runtime/initial_state.py",
+      "symbol": "prepare_initial_magnetization",
+      "responsibility": "metric preset semantics and runtime sampling"
+    },
+    {
+      "id": "control-room",
+      "path": "apps/control-room/src/modules/inspector/panels/ObjectMagneticTexturePanelModel.ts",
+      "symbol": "buildObjectMagneticTextureAssetDraft",
+      "responsibility": "UI-to-IR parameter serialization"
+    },
+    {
+      "id": "legacy-catalog",
+      "path": "apps/legacy_web/lib/textureTransform.ts",
+      "symbol": "textureScaleSemantics",
+      "responsibility": "reference-only metric catalog set"
+    },
+    {
+      "id": "legacy-fit",
+      "path": "apps/legacy_web/lib/textureTransform.ts",
+      "symbol": "fitPresetParamsToBounds",
+      "responsibility": "metric UI fitting"
+    },
+    {
+      "id": "rust-tests",
+      "path": "crates/fullmag-plan/tests/bimeron_textures.rs",
+      "symbol": "bimeron_has_in_plane_background_and_opposite_meron_cores",
+      "responsibility": "Rust behavior and handedness regression tests"
+    },
+    {
+      "id": "python-tests",
+      "path": "packages/fullmag-py/tests/test_bimeron_textures.py",
+      "symbol": "test_bimeron_factory_serializes_canonical_parameters",
+      "responsibility": "Python round-trip and parity tests"
+    },
+    {
+      "id": "control-room-tests",
+      "path": "apps/control-room/src/shared/domain/magnetization-texture/bimeron.test.ts",
+      "symbol": "describe",
+      "responsibility": "Control Room catalog and command tests"
+    },
+    {
+      "id": "legacy-tests",
+      "path": "apps/legacy_web/features/viewport-fem/model/__tests__/textureTransform.bimeron.test.ts",
+      "symbol": "describe",
+      "responsibility": "legacy metric fitting regression tests"
+    },
+    {
+      "id": "physics-contract",
+      "path": "docs/physics/0530-magnetic-preset-textures.md",
+      "symbol": "DOC-ANCHOR:bimeron-topological-density",
+      "responsibility": "documented continuum contract",
+      "evidence_status": "planned_contract"
+    },
+    {
+      "id": "python-script-builder",
+      "path": "packages/fullmag-py/src/fullmag/runtime/script_builder.py",
+      "symbol": "_render_texture_factory_call",
+      "responsibility": "canonical Python export for bimeron"
+    },
+    {
+      "id": "control-room-preview",
+      "path": "apps/control-room/src/modules/viewport-3d/viewport3dPrimitiveModel.ts",
+      "symbol": "function magnetizationPreviewColor",
+      "responsibility": "bimeron viewport preview color"
+    },
+    {
+      "id": "legacy-menu",
+      "path": "apps/legacy_web/features/shell/contributions/materials.tsx",
+      "symbol": "buildMaterialsGroups",
+      "responsibility": "legacy reference menu action"
+    },
+    {
+      "id": "rust-parity-tests",
+      "path": "crates/fullmag-plan/tests/bimeron_textures.rs",
+      "symbol": "bimeron_matches_shared_rust_python_parity_fixture",
+      "responsibility": "Rust comparison against shared parity fixture"
+    }
+  ],
+  "public_api": {
+    "name": "texture.bimeron",
+    "parameters": [
+      {
+        "python": "texture.bimeron(radius=...)",
+        "type": "float",
+        "default": "required",
+        "si_unit": "m",
+        "validation": "finite and > 0",
+        "meaning": "promień przejścia profilu",
+        "backend_support": "FEM/FDM CPU/GPU",
+        "problem_ir": "preset_params.radius"
+      },
+      {
+        "python": "texture.bimeron(wall_width=...)",
+        "type": "float",
+        "default": "required",
+        "si_unit": "m",
+        "validation": "finite and > 0",
+        "meaning": "szerokość ściany",
+        "backend_support": "FEM/FDM CPU/GPU",
+        "problem_ir": "preset_params.wall_width"
+      },
+      {
+        "python": "texture.bimeron(vorticity=...)",
+        "type": "int",
+        "default": "+1",
+        "si_unit": "1",
+        "validation": "-1 or +1",
+        "meaning": "znak nawinięcia",
+        "backend_support": "FEM/FDM CPU/GPU",
+        "problem_ir": "preset_params.vorticity"
+      },
+      {
+        "python": "texture.bimeron(helicity_rad=...)",
+        "type": "float",
+        "default": "0.0",
+        "si_unit": "rad",
+        "validation": "finite",
+        "meaning": "przesunięcie fazy",
+        "backend_support": "FEM/FDM CPU/GPU",
+        "problem_ir": "preset_params.helicity_rad"
+      },
+      {
+        "python": "texture.bimeron(background_sign=...)",
+        "type": "int",
+        "default": "+1",
+        "si_unit": "1",
+        "validation": "-1 or +1",
+        "meaning": "znak tła",
+        "backend_support": "FEM/FDM CPU/GPU",
+        "problem_ir": "preset_params.background_sign"
+      },
+      {
+        "python": "texture.bimeron(plane=...)",
+        "type": "string",
+        "default": "xy",
+        "si_unit": "1",
+        "validation": "xy, xz, or yz",
+        "meaning": "lokalna baza płaszczyzny",
+        "backend_support": "FEM/FDM CPU/GPU",
+        "problem_ir": "preset_params.plane"
+      }
+    ]
+  }
+}
+
+
+

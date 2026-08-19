@@ -5,6 +5,7 @@ export type MagnetizationTexturePresetId =
   | "antivortex"
   | "bloch_skyrmion"
   | "neel_skyrmion"
+  | "bimeron"
   | "domain_wall"
   | "two_domain"
   | "helical"
@@ -46,6 +47,11 @@ export const MAGNETIZATION_TEXTURE_PRESETS: readonly MagnetizationTexturePreset[
     defaultParams: { plane: "xy", radius: 10e-9, wall_width: 2e-9, core_polarity: -1, chirality: 1 },
     id: "neel_skyrmion",
     label: "Néel Skyrmion",
+  },
+  {
+    defaultParams: { plane: "xy", radius: 10e-9, wall_width: 2e-9, vorticity: 1, helicity_rad: 0, background_sign: 1 },
+    id: "bimeron",
+    label: "Bimeron",
   },
   {
     defaultParams: { normal_axis: "x", center_offset: 0.0, width: 10e-9, left: [1, 0, 0], right: [-1, 0, 0], kind: "neel" },

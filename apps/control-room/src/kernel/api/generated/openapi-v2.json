@@ -19377,6 +19377,11 @@
                 },
                 "type": "object"
               },
+              "preset_version": {
+                "format": "int32",
+                "minimum": 0,
+                "type": "integer"
+              },
               "texture_transform": {
                 "$ref": "#/components/schemas/SceneTextureTransform3D"
               }
@@ -42510,8 +42515,8 @@
     }
   ],
   "x-fullmag-build-identity": {
-    "built_at_utc": "2026-08-18T20:00:31Z",
-    "git_commit": "2fb09e81747c467c1f6fa741691883beabab7fe4",
+    "built_at_utc": "2026-08-19T19:49:47Z",
+    "git_commit": "6d2e6378b1d086be6c5468829bad9640e96b572c",
     "source_snapshot_sha256": "unknown",
     "worktree_state": "dirty"
   },

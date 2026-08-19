@@ -18,6 +18,7 @@ export type MagneticPresetKind =
   | "antivortex"
   | "bloch_skyrmion"
   | "neel_skyrmion"
+  | "bimeron"
   | "domain_wall"
   | "helical"
   | "conical"
@@ -100,8 +101,8 @@ export function validateUniformDirection(v: [number, number, number]): Validatio
 }
 
 export function validateSeed(seed: unknown): ValidationResult {
-  if (typeof seed !== "number" || !Number.isInteger(seed) || seed < 1) {
-    return { ok: false, message: "Seed must be an integer ≥ 1." };
+  if (typeof seed !== "number" || !Number.isInteger(seed) || seed < 0) {
+    return { ok: false, message: "Seed must be a non-negative integer." };
   }
   return { ok: true };
 }

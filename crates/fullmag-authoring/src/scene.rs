@@ -608,6 +608,10 @@ fn default_scene_version() -> String {
     "scene.v2".to_string()
 }
 
+fn default_preset_version() -> u32 {
+    1
+}
+
 fn default_scene_name() -> String {
     "Scene".to_string()
 }
@@ -1061,6 +1065,8 @@ pub enum SceneInitialMagnetization {
         preset_kind: String,
         #[serde(default, alias = "params")]
         preset_params: BTreeMap<String, serde_json::Value>,
+        #[serde(default = "default_preset_version")]
+        preset_version: u32,
         #[serde(default)]
         mapping: SceneTextureMapping,
         #[serde(default)]

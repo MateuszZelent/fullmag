@@ -233,7 +233,7 @@ describe("ObjectMagneticTexturePanelModel", () => {
     const draft = {
       ...objectMagneticTextureDraftFromModel(model),
       assetLabel: "Edited vortex",
-      circulation: "2",
+      circulation: "1",
       core_polarity: "-1",
       core_radius: "5e-9",
       plane: "xz",
@@ -247,7 +247,7 @@ describe("ObjectMagneticTexturePanelModel", () => {
       name: "Edited vortex",
       preset_kind: "vortex",
       preset_params: {
-        circulation: 2,
+        circulation: 1,
         core_polarity: -1,
         core_radius: 5e-9,
         plane: "xz",

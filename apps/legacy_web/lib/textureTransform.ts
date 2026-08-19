@@ -12,7 +12,7 @@ export interface TextureTransform3D {
  *   `scale` carries the spatial extent; the planner uses it to map texture coordinates
  *   onto geometry.
  *
- * - `"identity_metric"` — Metric analytic presets (vortex, skyrmion, domain_wall).
+ * - `"identity_metric"` — Metric analytic presets (vortex, skyrmion, bimeron, domain_wall).
  *   Physical dimensions are encoded in `preset_params` (radius, wall_width, etc.);
  *   `scale` MUST remain `[1, 1, 1]` to avoid double-scaling in the planner.
  */
@@ -24,6 +24,7 @@ const METRIC_PRESET_KINDS = new Set([
   "antivortex",
   "bloch_skyrmion",
   "neel_skyrmion",
+  "bimeron",
   "domain_wall",
 ]);
 
@@ -118,6 +119,7 @@ export function fitPresetParamsToBounds(
 
     case "bloch_skyrmion":
     case "neel_skyrmion":
+    case "bimeron":
       next.radius = 0.40 * minInPlane;
       next.wall_width = 0.10 * minInPlane;
       break;

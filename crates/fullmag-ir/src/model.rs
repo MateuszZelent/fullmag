@@ -521,6 +521,8 @@ pub enum InitialMagnetizationIR {
     },
     PresetTexture {
         preset_kind: String,
+        #[serde(default = "default_preset_version")]
+        preset_version: u32,
         #[serde(default, alias = "params")]
         preset_params: BTreeMap<String, Value>,
         #[serde(default)]
@@ -657,4 +659,8 @@ pub enum TimeDependenceIR {
 
 fn default_unit_amplitude() -> f64 {
     1.0
+}
+
+fn default_preset_version() -> u32 {
+    1
 }

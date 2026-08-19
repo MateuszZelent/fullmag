@@ -410,12 +410,70 @@ def planar_source_identities_are_distinct(
     )
 
 
+def _default_slice_coordinate(
+    bounds_min: list[float],
+    bounds_max: list[float],
+    domain_grid: dict[str, Any] | None,
+    axis: int,
+    position_fraction: float,
+) -> float:
+    continuous = bounds_min[axis] + position_fraction * (
+        bounds_max[axis] - bounds_min[axis]
+    )
+    if domain_grid is None:
+        return continuous
+
+    shape = domain_grid.get("shape")
+    origin = domain_grid.get("origin")
+    spacing = domain_grid.get("spacing")
+    if not all(
+        isinstance(values, list) and len(values) == 3
+        for values in (shape, origin, spacing)
+    ):
+        raise ValueError(
+            "default FDM validation requires three-dimensional shape, origin, and spacing"
+        )
+    if any(
+        isinstance(value, bool) or not isinstance(value, int) or value <= 0
+        for value in shape
+    ):
+        raise ValueError("default FDM validation requires positive integer grid shape")
+    origin = [float(value) for value in origin]
+    spacing = [float(value) for value in spacing]
+    if any(not math.isfinite(value) for value in origin) or any(
+        not math.isfinite(value) or value <= 0.0 for value in spacing
+    ):
+        raise ValueError("default FDM validation requires finite grid geometry")
+    for grid_axis, count in enumerate(shape):
+        grid_max = origin[grid_axis] + count * spacing[grid_axis]
+        scale = max(
+            abs(origin[grid_axis]),
+            abs(grid_max),
+            abs(bounds_min[grid_axis]),
+            abs(bounds_max[grid_axis]),
+            1.0,
+        )
+        tolerance = 32.0 * math.ulp(1.0) * scale
+        if (
+            abs(origin[grid_axis] - bounds_min[grid_axis]) > tolerance
+            or abs(grid_max - bounds_max[grid_axis]) > tolerance
+        ):
+            raise ValueError("default FDM grid does not match published domain bounds")
+
+    count = shape[axis]
+    scaled = position_fraction * count
+    index = 0 if scaled <= 0.0 else math.ceil(scaled) - 1
+    index = min(index, count - 1)
+    return origin[axis] + (index + 0.5) * spacing[axis]
+
+
 def validate_default_slice_evidence(
     report: dict[str, Any],
     *,
     plane: str,
     position_fraction: float,
     domain_bounds: dict[str, list[float]],
+    domain_grid: dict[str, Any] | None = None,
     operator_kind: str,
     quantity_id: str,
     thickness_m: float | None = None,
@@ -455,10 +513,15 @@ def validate_default_slice_evidence(
             "v_length": lengths[2],
         },
     }[plane]
-    expected_origin = centers.copy()
-    expected_origin[normal_axis] = (
-        bounds_min[normal_axis] + position_fraction * lengths[normal_axis]
+    expected_coordinate = _default_slice_coordinate(
+        bounds_min,
+        bounds_max,
+        domain_grid,
+        normal_axis,
+        position_fraction,
     )
+    expected_origin = centers.copy()
+    expected_origin[normal_axis] = expected_coordinate
     expected_bounds = [
         -0.5 * specs["u_length"],
         0.5 * specs["u_length"],
@@ -727,6 +790,9 @@ def monitor_report(
         "carrier_revision": meta["carrier_revision"],
         "exact_sample_identity": exact_sample_identity,
         "field_revision": meta["field_revision"],
+        "quantity_id": meta["quantity_id"],
+        "component": meta["component"],
+        "canonical_unit": meta["canonical_unit"],
         "field_source": meta["field_source"],
         "field_backend": meta.get("field_backend"),
         "field_device": meta.get("field_device"),
@@ -1910,6 +1976,7 @@ def run_default_slice_validation(args: argparse.Namespace) -> dict[str, Any]:
                     plane=plane,
                     position_fraction=position_fraction,
                     domain_bounds=domain_bounds,
+                    domain_grid=domain.get("grid"),
                     operator_kind="plane_sample",
                     quantity_id="m",
                 )
@@ -1939,6 +2006,7 @@ def run_default_slice_validation(args: argparse.Namespace) -> dict[str, Any]:
             plane="xy",
             position_fraction=0.5,
             domain_bounds=domain_bounds,
+            domain_grid=domain.get("grid"),
             operator_kind="slab_average",
             thickness_m=slab_thickness,
             quantity_id="m",

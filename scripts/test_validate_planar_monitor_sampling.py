@@ -103,6 +103,144 @@ class PlanarMonitorSamplingValidationTests(unittest.TestCase):
             )["pass"]
         )
 
+    def test_default_slice_evidence_snaps_fdm_positions_to_cell_centers(self) -> None:
+        domain_bounds = {"min": [10.0, 20.0, 30.0], "max": [14.0, 26.0, 42.0]}
+        domain_grid = {
+            "shape": [4, 6, 6],
+            "origin": [10.0, 20.0, 30.0],
+            "spacing": [1.0, 1.0, 2.0],
+        }
+        for position_fraction, expected_y in (
+            (0.0, 20.5),
+            (0.5, 22.5),
+            (1.0, 25.5),
+        ):
+            with self.subTest(position_fraction=position_fraction):
+                report = {
+                    "exact_sample_identity": True,
+                    "frame": {
+                        "origin_m": [12.0, expected_y, 36.0],
+                        "preset": "xz",
+                        "u_axis": [1.0, 0.0, 0.0],
+                        "v_axis": [0.0, 0.0, 1.0],
+                        "normal": [0.0, -1.0, 0.0],
+                        "bounds_uv_m": [-2.0, 2.0, -6.0, 6.0],
+                    },
+                    "mask_exact_sample_identity": True,
+                    "operator": {"kind": "plane_sample"},
+                    "probe": {
+                        "scalar": 1.0,
+                        "source": {"kind": "default"},
+                        "world_m": [12.0, expected_y, 36.0],
+                    },
+                    "quantity_id": "m",
+                    "sample_token": "sample:default",
+                    "source": {
+                        "default_slice_hash": "sha256:default",
+                        "default_slice_revision": "7",
+                        "domain_generation_id": "generation-a",
+                        "kind": "default",
+                    },
+                    "source_hash": "sha256:default",
+                    "source_id": "default",
+                    "source_kind": "default",
+                    "source_revision": "7",
+                    "stats": {"count": 3},
+                    "target": {"kind": "domain"},
+                    "vector_exact_sample_identity": True,
+                    "vector_value_count": 9,
+                }
+
+                evidence = validation.validate_default_slice_evidence(
+                    report,
+                    plane="xz",
+                    position_fraction=position_fraction,
+                    domain_bounds=domain_bounds,
+                    domain_grid=domain_grid,
+                    operator_kind="plane_sample",
+                    quantity_id="m",
+                )
+
+                self.assertTrue(evidence["pass"], evidence)
+                self.assertEqual(evidence["resolved_coordinate_m"], expected_y)
+
+    def test_monitor_report_preserves_quantity_component_and_canonical_unit(self) -> None:
+        etag = '"fm-planar:sample"'
+        meta = {
+            "basis_order": 0,
+            "canonical_unit": "dimensionless",
+            "carrier_revision": "4",
+            "component": "magnitude",
+            "etag": etag,
+            "field_revision": "5",
+            "field_source": "live",
+            "frame": {
+                "bounds_uv_m": [-1.0, 1.0, -1.0, 1.0],
+                "normal": [0.0, 0.0, 1.0],
+                "origin_m": [0.0, 0.0, 0.0],
+                "u_axis": [1.0, 0.0, 0.0],
+                "v_axis": [0.0, 1.0, 0.0],
+            },
+            "generation_id": "generation-a",
+            "links": {
+                "empty_mask": "/mask",
+                "probe": "/probe?sample_token=sample",
+                "scalar": "/scalar",
+                "vectors": "/vectors",
+            },
+            "mesh_revision": "0",
+            "occupancy": {"empty": 0, "occupied": 1, "partial": 0},
+            "operator": {"kind": "plane_sample"},
+            "quantity_id": "m",
+            "resolution": [1, 1],
+            "sample_token": "sample",
+            "sampling_execution": "cpu",
+            "sampling_method": "fdm_cell_constant_plane",
+            "scene_revision": "1",
+            "scope_kind": "monitor_target",
+            "source": {
+                "default_slice_hash": "sha256:default",
+                "default_slice_revision": "7",
+                "domain_generation_id": "generation-a",
+                "kind": "default",
+            },
+        }
+        probe = {
+            "cell_id": 0,
+            "element_id": None,
+            "occupancy": "occupied",
+            "scalar": 1.0,
+            "source": meta["source"],
+            "world_m": [0.0, 0.0, 0.0],
+        }
+        with (
+            patch.object(validation, "canonical_sample_links_match", return_value=True),
+            patch.object(validation, "decode_fmvp", return_value=[1.0, 0.0, 0.0]),
+            patch.object(validation, "decode_fmvp_scalar", return_value=[1.0]),
+            patch.object(
+                validation,
+                "request_bytes_with_headers",
+                side_effect=[
+                    (b"scalar", {"etag": etag}),
+                    (b"vectors", {"etag": etag}),
+                    (bytes([0]), {"etag": etag}),
+                ],
+            ),
+            patch.object(validation, "wait_json", side_effect=[meta, probe]),
+        ):
+            report = validation.monitor_report(
+                "http://127.0.0.1:8197",
+                "default",
+                source_kind="default",
+                component="magnitude",
+                quantity_id="m",
+                resolution=1,
+            )
+
+        self.assertEqual(report["quantity_id"], "m")
+        self.assertEqual(report["component"], "magnitude")
+        self.assertEqual(report["canonical_unit"], "dimensionless")
+
     def test_default_and_authored_monitor_identities_are_typed_and_distinct(self) -> None:
         self.assertTrue(
             validation.planar_source_identities_are_distinct(
@@ -320,7 +458,7 @@ class PlanarMonitorSamplingValidationTests(unittest.TestCase):
             self.assertIn("study.engine(", source)
             self.assertIn("study.device(", source)
 
-    def test_fdm_default_slice_fixture_has_one_cell_universe_margin_and_keeps_default_recipe(
+    def test_fdm_default_slice_fixture_fills_grid_centers_inside_strict_universe(
         self,
     ) -> None:
         root = Path(__file__).resolve().parents[1]
@@ -339,7 +477,8 @@ class PlanarMonitorSamplingValidationTests(unittest.TestCase):
                 "DOMAIN_SIZE",
                 "DOMAIN_CENTER",
                 "CELL_SIZE",
-                "UNIVERSE_SIZE",
+                "GEOMETRY_INSET",
+                "GEOMETRY_SIZE",
             }:
                 continue
             constants[target.id] = eval(
@@ -349,27 +488,41 @@ class PlanarMonitorSamplingValidationTests(unittest.TestCase):
             )
 
         self.assertIn("CELL_SIZE", constants)
-        self.assertIn("UNIVERSE_SIZE", constants)
+        self.assertIn("GEOMETRY_INSET", constants)
+        self.assertIn("GEOMETRY_SIZE", constants)
         domain_size = constants["DOMAIN_SIZE"]
         cell_size = constants["CELL_SIZE"]
-        universe_size = constants["UNIVERSE_SIZE"]
+        geometry_inset = constants["GEOMETRY_INSET"]
+        geometry_size = constants["GEOMETRY_SIZE"]
         self.assertIsInstance(domain_size, tuple)
         self.assertIsInstance(cell_size, float)
-        self.assertIsInstance(universe_size, tuple)
+        self.assertIsInstance(geometry_inset, float)
+        self.assertIsInstance(geometry_size, tuple)
         self.assertEqual(len(domain_size), 3)
-        self.assertEqual(len(universe_size), 3)
-        for domain_extent, universe_extent in zip(domain_size, universe_size):
-            self.assertGreater(universe_extent, domain_extent)
-            margin = (universe_extent - domain_extent) / 2
+        self.assertEqual(len(geometry_size), 3)
+        self.assertGreater(geometry_inset, 0.0)
+        self.assertLess(geometry_inset, 0.5 * cell_size)
+        self.assertEqual(
+            [round(extent / cell_size) for extent in domain_size],
+            [16, 12, 8],
+        )
+        for domain_extent, geometry_extent in zip(domain_size, geometry_size):
             self.assertTrue(
-                margin >= cell_size
-                or math.isclose(margin, cell_size, rel_tol=1e-12, abs_tol=0.0),
-                (domain_extent, universe_extent, cell_size),
+                math.isclose(
+                    geometry_extent,
+                    domain_extent - 2 * geometry_inset,
+                    rel_tol=1e-12,
+                    abs_tol=0.0,
+                )
             )
+            first_cell_center = -0.5 * domain_extent + 0.5 * cell_size
+            last_cell_center = 0.5 * domain_extent - 0.5 * cell_size
+            self.assertGreater(first_cell_center, -0.5 * geometry_extent)
+            self.assertLess(last_cell_center, 0.5 * geometry_extent)
 
         self.assertLess(source.index("CELL_SIZE ="), source.index("study.universe("))
-        self.assertIn("size=UNIVERSE_SIZE", source)
-        self.assertIn("fm.Box(size=DOMAIN_SIZE", source)
+        self.assertIn("size=DOMAIN_SIZE", source)
+        self.assertIn("fm.Box(size=GEOMETRY_SIZE", source)
 
         recipe = (root / "justfile").read_text()
         start = recipe.index("run-viewport-2d-default-slice-smoke ")

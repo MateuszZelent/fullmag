@@ -8,6 +8,7 @@ export interface PresetMagnetizationAssetInput {
   label?: string | null;
   mapping?: JsonObject | null;
   presetKind: MagnetizationTexturePresetId;
+  presetVersion?: number | null;
   presetParams: JsonObject;
   textureTransform?: JsonObject | null;
 }
@@ -43,6 +44,7 @@ export function presetMagnetizationAsset({
   label,
   mapping,
   presetKind,
+  presetVersion,
   presetParams,
   textureTransform,
 }: PresetMagnetizationAssetInput): JsonObject {
@@ -57,7 +59,7 @@ export function presetMagnetizationAsset({
     name: resolvedLabel,
     preset_kind: presetKind,
     preset_params: presetParams,
-    preset_version: 1,
+    preset_version: presetVersion ?? 2,
     texture_transform: textureTransform ?? defaultTextureTransform(),
     ui_label: resolvedLabel,
   };

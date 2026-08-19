@@ -1,6 +1,6 @@
 ---
 title: FEM Bem
-status: partial
+status: implemented
 doc_kind: reference
 audience: user
 owner: fullmag-public-docs

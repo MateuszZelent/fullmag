@@ -82,6 +82,30 @@ def _mapping_clamp_mode(mapping_ir: dict[str, object]) -> str:
     return str(raw).strip().lower() if isinstance(raw, str) and raw.strip() else "clamp"
 
 
+def _validate_v2_texture_transform(transform: dict[str, object]) -> None:
+    defaults: dict[str, Sequence[float]] = {
+        "translation": (0.0, 0.0, 0.0),
+        "rotation_quat": (0.0, 0.0, 0.0, 1.0),
+        "scale": (1.0, 1.0, 1.0),
+        "pivot": (0.0, 0.0, 0.0),
+    }
+    arrays: dict[str, np.ndarray] = {}
+    for key, default in defaults.items():
+        raw = transform.get(key, default)
+        try:
+            array = np.asarray(raw, dtype=np.float64).reshape(-1)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"texture_transform.{key} must be a finite vector") from exc
+        expected = 4 if key == "rotation_quat" else 3
+        if array.size != expected or not np.all(np.isfinite(array)):
+            raise ValueError(f"texture_transform.{key} must have finite components")
+        arrays[key] = array
+    if np.any(np.abs(arrays["scale"]) <= 1e-30):
+        raise ValueError("texture_transform.scale components must be nonzero")
+    if float(np.linalg.norm(arrays["rotation_quat"])) <= 1e-30:
+        raise ValueError("texture_transform.rotation_quat must be nonzero")
+
+
 def _map_points_into_mapping_space(
     points: np.ndarray,
     *,
@@ -159,6 +183,7 @@ def prepare_initial_magnetization(
         (N, 3) float64 array of normalized magnetization vectors.
     """
     from fullmag.init.preset_eval import evaluate_preset_texture
+    from fullmag.init.preset_eval_v2 import evaluate_preset_texture_v2
 
     pts = np.asarray(sample_points, dtype=np.float64)
     if pts.ndim == 1:
@@ -170,12 +195,13 @@ def prepare_initial_magnetization(
     if kind == "uniform":
         direction = np.array(spec.get("value", [1.0, 0.0, 0.0]), dtype=np.float64)
         norm = np.linalg.norm(direction)
-        if norm > 1e-30:
-            direction /= norm
+        if not np.all(np.isfinite(direction)) or norm <= 1e-30:
+            raise ValueError("uniform direction must be finite and nonzero")
+        direction /= norm
         return np.tile(direction, (n, 1))
 
     elif kind in {"random", "random_seeded"}:
-        result = evaluate_preset_texture(
+        result = evaluate_preset_texture_v2(
             "random",
             {"seed": int(spec.get("seed", 1))},
             pts.tolist(),
@@ -199,16 +225,28 @@ def prepare_initial_magnetization(
         mapping_ir = spec.get("mapping", {})
         if not isinstance(mapping_ir, dict):
             mapping_ir = {}
+        raw_preset_version = spec.get("preset_version", 1)
+        if raw_preset_version is None:
+            raw_preset_version = 1
+        if isinstance(raw_preset_version, bool) or not isinstance(raw_preset_version, int):
+            raise ValueError("preset_version must be an integer")
+        preset_version = raw_preset_version
 
         mapped_pts = _map_points_into_mapping_space(
             pts,
             space=_mapping_space(mapping_ir),
             object_transform=object_transform,
         )
-        mapped_pts = _project_mapping_coordinates(
-            mapped_pts,
-            projection=_mapping_projection(mapping_ir),
-        )
+        if preset_version == 2:
+            if not isinstance(transform_ir, dict):
+                raise ValueError("texture_transform must be an object")
+            _validate_v2_texture_transform(transform_ir)
+
+        if preset_version == 1:
+            mapped_pts = _project_mapping_coordinates(
+                mapped_pts,
+                projection=_mapping_projection(mapping_ir),
+            )
 
         # Apply inverse texture transform to get texture-local coordinates
         if isinstance(transform_ir, dict) and any(transform_ir.values()):
@@ -221,7 +259,7 @@ def prepare_initial_magnetization(
         # texture mappings, not for preset evaluators using physical coordinates.
         preset_kind = str(spec["preset_kind"])
         _METRIC_ANALYTIC_PRESETS = frozenset({
-            "vortex", "antivortex", "bloch_skyrmion", "neel_skyrmion", "domain_wall",
+            "vortex", "antivortex", "bloch_skyrmion", "neel_skyrmion", "bimeron", "domain_wall",
             "helical", "conical", "two_domain",
         })
         clamp_mode = _mapping_clamp_mode(mapping_ir)
@@ -230,7 +268,19 @@ def prepare_initial_magnetization(
 
         params = dict(spec.get("preset_params") or spec.get("params") or {})
 
-        result = evaluate_preset_texture(preset_kind, params, local_pts.tolist())
+        if preset_version == 1:
+            result = evaluate_preset_texture(preset_kind, params, local_pts.tolist())
+        elif preset_version == 2:
+            rotation_quat = transform_ir.get("rotation_quat") if isinstance(transform_ir, dict) else None
+            result = evaluate_preset_texture_v2(
+                preset_kind,
+                params,
+                local_pts.tolist(),
+                projection=_mapping_projection(mapping_ir),
+                rotation_quat=rotation_quat,
+            )
+        else:
+            raise ValueError(f"unsupported preset texture version {preset_version}")
         arr = np.array(result.values, dtype=np.float64)
         norms = np.linalg.norm(arr, axis=1, keepdims=True)
         norms = np.where(norms > 1e-30, norms, 1.0)

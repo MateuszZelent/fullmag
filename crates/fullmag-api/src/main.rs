@@ -15,7 +15,7 @@ use fullmag_authoring::{
     validate_scene_document, MagnetizationAsset, SceneDocument,
 };
 use fullmag_ir::{TextureMappingIR, TextureProjectionMode, TextureTransform3DIR};
-use fullmag_plan::{sample_preset_texture, TextureSamplePoint};
+use fullmag_plan::{sample_preset_texture_versioned, TextureSamplePoint};
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::net::SocketAddr;
@@ -3397,8 +3397,9 @@ fn apply_live_scene_magnetization_asset(
                     }
                 })
                 .collect::<Vec<_>>();
-            match sample_preset_texture(
+            match sample_preset_texture_versioned(
                 preset_kind,
+                asset.preset_version.unwrap_or(1),
                 &params,
                 &mapping,
                 &texture_transform,
