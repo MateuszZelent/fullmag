@@ -1,3 +1,4 @@
+import ast
 import json
 import math
 import tempfile
@@ -318,6 +319,64 @@ class PlanarMonitorSamplingValidationTests(unittest.TestCase):
             self.assertNotIn("study.monitors.add_planar", source)
             self.assertIn("study.engine(", source)
             self.assertIn("study.device(", source)
+
+    def test_fdm_default_slice_fixture_has_one_cell_universe_margin_and_keeps_default_recipe(
+        self,
+    ) -> None:
+        root = Path(__file__).resolve().parents[1]
+        fixture = root / "examples/viewport_2d_default_slice_fdm_smoke.py"
+        source = fixture.read_text()
+        tree = ast.parse(source, filename=str(fixture))
+        constants: dict[str, object] = {}
+        for statement in tree.body:
+            if not isinstance(statement, ast.Assign) or len(statement.targets) != 1:
+                continue
+            target = statement.targets[0]
+            if not isinstance(target, ast.Name):
+                continue
+            if target.id not in {
+                "NM",
+                "DOMAIN_SIZE",
+                "DOMAIN_CENTER",
+                "CELL_SIZE",
+                "UNIVERSE_SIZE",
+            }:
+                continue
+            constants[target.id] = eval(
+                compile(ast.Expression(statement.value), str(fixture), "eval"),
+                {"__builtins__": {}},
+                constants,
+            )
+
+        self.assertIn("CELL_SIZE", constants)
+        self.assertIn("UNIVERSE_SIZE", constants)
+        domain_size = constants["DOMAIN_SIZE"]
+        cell_size = constants["CELL_SIZE"]
+        universe_size = constants["UNIVERSE_SIZE"]
+        self.assertIsInstance(domain_size, tuple)
+        self.assertIsInstance(cell_size, float)
+        self.assertIsInstance(universe_size, tuple)
+        self.assertEqual(len(domain_size), 3)
+        self.assertEqual(len(universe_size), 3)
+        for domain_extent, universe_extent in zip(domain_size, universe_size):
+            self.assertGreater(universe_extent, domain_extent)
+            margin = (universe_extent - domain_extent) / 2
+            self.assertTrue(
+                margin >= cell_size
+                or math.isclose(margin, cell_size, rel_tol=1e-12, abs_tol=0.0),
+                (domain_extent, universe_extent, cell_size),
+            )
+
+        self.assertLess(source.index("CELL_SIZE ="), source.index("study.universe("))
+        self.assertIn("size=UNIVERSE_SIZE", source)
+        self.assertIn("fm.Box(size=DOMAIN_SIZE", source)
+
+        recipe = (root / "justfile").read_text()
+        start = recipe.index("run-viewport-2d-default-slice-smoke ")
+        end = recipe.index("\nrun-viewport-2d-default-slice-smoke-fdm-cpu", start)
+        default_recipe = recipe[start:end]
+        self.assertIn("--source-kind default", default_recipe)
+        self.assertIn("viewport_2d_default_slice_${backend}_smoke.py", default_recipe)
 
     def test_default_slice_recipe_exposes_the_required_runtime_matrix(self) -> None:
         recipe = (Path(__file__).resolve().parents[1] / "justfile").read_text()

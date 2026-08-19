@@ -10,6 +10,12 @@ import fullmag as fm
 NM = 1e-9
 DOMAIN_SIZE = (80 * NM, 60 * NM, 40 * NM)
 DOMAIN_CENTER = (12.5 * NM, -7.5 * NM, 3.0 * NM)
+CELL_SIZE = 5 * NM
+UNIVERSE_SIZE = (
+    DOMAIN_SIZE[0] + 2 * CELL_SIZE,
+    DOMAIN_SIZE[1] + 2 * CELL_SIZE,
+    DOMAIN_SIZE[2] + 2 * CELL_SIZE,
+)
 
 study = fm.study("viewport_2d_default_slice_fdm_smoke")
 study.engine("fdm")
@@ -18,12 +24,11 @@ study.interactive(True)
 study.wait_for_solve(True)
 study.universe(
     mode="manual",
-    size=DOMAIN_SIZE,
+    size=UNIVERSE_SIZE,
     center=DOMAIN_CENTER,
     padding=(0.0, 0.0, 0.0),
 )
-cell_size = 5 * NM
-study.cell(cell_size, cell_size, cell_size)
+study.cell(CELL_SIZE, CELL_SIZE, CELL_SIZE)
 
 film = study.geometry(
     fm.Box(size=DOMAIN_SIZE, name="default_domain_film").translate(DOMAIN_CENTER),

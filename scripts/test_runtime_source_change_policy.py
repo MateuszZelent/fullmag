@@ -43,6 +43,7 @@ def test_non_runtime_path_policy_covers_docs_ci_and_packaging_helpers() -> None:
         "examples/assets/fem_performance/relaxation_torque_calibration_suite_v2.json"
     )
     assert is_non_runtime_path("examples/dyspersje.png")
+    assert is_non_runtime_path("examples/viewport_2d_default_slice_fdm_smoke.py")
     assert is_non_runtime_path("apps/control-room/src/modules/viewport-3d/layers/Viewport3DScene.tsx")
     assert not is_non_runtime_path("runtime-source/")
     assert not is_non_runtime_path("solver.cpp")
