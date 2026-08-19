@@ -570,6 +570,7 @@ def validate_bundle(
     allow_unaddressed_staging: bool,
     allow_active_alias: bool,
 ) -> Mapping[str, object]:
+    requested_runtime_root = runtime_root.absolute()
     runtime_root = runtime_root.resolve()
     manifest_path = runtime_root / "manifest.json"
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
@@ -584,8 +585,8 @@ def validate_bundle(
         # symlink publication is unavailable. The hash-addressed sibling is
         # validated separately before this alias is published.
         if not (
-            runtime_root.name == "fem-gpu-host"
-            and runtime_root.parent.name == "runtimes"
+            requested_runtime_root.name == "fem-gpu-host"
+            and requested_runtime_root.parent.name == "runtimes"
         ):
             raise ValueError(
                 "managed FEM active-alias validation requires "

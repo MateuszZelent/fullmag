@@ -1460,6 +1460,33 @@ def test_managed_runtime_validator_allows_materialized_active_alias(
     assert valid.returncode == 0, valid.stderr
 
 
+def test_managed_runtime_validator_allows_symlinked_active_alias(
+    tmp_path: Path,
+) -> None:
+    runtime, ldd, readelf = write_fake_schema_v2_bundle(tmp_path)
+    original_runtime = str(runtime)
+    runtime_parent = tmp_path / ".fullmag/runtimes"
+    variant = runtime_parent / "fem-gpu-variants/test-variant"
+    variant.parent.mkdir(parents=True)
+    runtime.rename(variant)
+    active = runtime_parent / "fem-gpu-host"
+    active.symlink_to("fem-gpu-variants/test-variant")
+    ldd.write_text(
+        ldd.read_text(encoding="utf-8").replace(original_runtime, str(variant)),
+        encoding="utf-8",
+    )
+
+    valid = validate_fake_bundle(
+        active,
+        ldd,
+        readelf,
+        "--allow-active-alias",
+        allow_unaddressed_staging=False,
+    )
+
+    assert valid.returncode == 0, valid.stderr
+
+
 def test_validator_requires_native_sm89_in_fullmag_separately(tmp_path: Path) -> None:
     runtime, ldd, readelf = write_fake_schema_v2_bundle(
         tmp_path, fullmag_cubins=("sm_52",), hypre_cubins=("sm_89",)
