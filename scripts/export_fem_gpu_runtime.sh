@@ -463,13 +463,16 @@ if [ "${FULLMAG_FEM_RUNTIME_REUSE_BUILD}" = "0" ]; then
   # knows how to clean build-script directories belonging to the current
   # snapshot path, so remove stale fullmag-fem-sys native outputs explicitly.
   # This remains scoped to the one package; the shared target cache is kept.
-  find target/release/build -maxdepth 1 -type d -name "fullmag-fem-sys-*" \
-    -exec rm -rf -- {} +
-  mapfile -t stale_fem_native_artifacts < <(
-    find target/release/build \
-      -path "*fullmag-fem-sys*/out/native-build/backends/fem/libfullmag_fem.so.0" \
-      -print 2>/dev/null
-  )
+  stale_fem_native_artifacts=()
+  if [ -d target/release/build ]; then
+    find target/release/build -maxdepth 1 -type d -name "fullmag-fem-sys-*" \
+      -exec rm -rf -- {} +
+    mapfile -t stale_fem_native_artifacts < <(
+      find target/release/build \
+        -path "*fullmag-fem-sys*/out/native-build/backends/fem/libfullmag_fem.so.0" \
+        -print 2>/dev/null
+    )
+  fi
   if [ "${#stale_fem_native_artifacts[@]}" -ne 0 ]; then
     echo "[export_fem_gpu_runtime] stale fullmag-fem-sys native artifacts remain after targeted clean" >&2
     printf "  %s\n" "${stale_fem_native_artifacts[@]}" >&2

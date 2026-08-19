@@ -582,6 +582,9 @@ def test_export_script_refreshes_identity_before_configured_release_clean() -> N
         'find target/release/build -maxdepth 1 -type d -name "fullmag-fem-sys-*"'
     )
     assert release_clean_index < stale_native_clean_index < build_index
+    build_dir_guard_index = script.find("if [ -d target/release/build ]; then")
+    assert release_clean_index < build_dir_guard_index < stale_native_clean_index
+    assert script.find("fi", stale_native_clean_index) < build_index
     assert "stale_fem_native_artifacts" in script
     assert "stale fullmag-fem-sys native artifacts remain after targeted clean" in script
 
