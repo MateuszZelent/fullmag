@@ -320,7 +320,7 @@ fn coupled_checkpoint_state(value: Value) -> Result<Value> {
 fn handle_session(cmd: args::SessionSubcommand) -> Result<()> {
     use args::SessionSubcommand;
     use fullmag_session::{
-        inspect_fms, pack_fms, unpack_fms, FmsExportProfile, FmsSessionManifest,
+        hex_sha256, inspect_fms, pack_fms, unpack_fms, FmsExportProfile, FmsSessionManifest,
         FmsWorkspaceManifest, PackOptions, SessionStore,
     };
     use std::collections::HashMap;
@@ -339,10 +339,17 @@ fn handle_session(cmd: args::SessionSubcommand) -> Result<()> {
             let session_id = uuid::Uuid::new_v4().to_string();
 
             let session = FmsSessionManifest::new(&session_id, &session_name, profile);
+            let script = store
+                .read_document("project/main.py")?
+                .filter(|bytes| !bytes.is_empty())
+                .ok_or_else(|| anyhow!("session store has no non-empty project/main.py"))?;
+            let script_sha256 = hex_sha256(&script);
             let workspace = FmsWorkspaceManifest {
                 workspace_id: "local-live".into(),
                 problem_name: session_name.clone(),
                 project_ref: "project/".into(),
+                script_ref: "project/main.py".into(),
+                script_sha256,
                 ui_state_ref: "project/ui_state.json".into(),
                 scene_document_ref: "project/scene_document.json".into(),
                 script_builder_ref: None,
@@ -350,7 +357,8 @@ fn handle_session(cmd: args::SessionSubcommand) -> Result<()> {
                 asset_index_ref: None,
             };
             let export_profile = FmsExportProfile::for_profile(profile);
-            let docs: HashMap<String, Vec<u8>> = HashMap::new();
+            let mut docs: HashMap<String, Vec<u8>> = HashMap::new();
+            docs.insert("main.py".into(), script);
             let opts = PackOptions::default();
 
             store.commit_session(&session)?;
@@ -1629,9 +1637,11 @@ mod tests {
             k_sampling: Some(fullmag_ir::KSamplingIR::Single {
                 k_vector: [0.0, 0.0, 0.0],
             }),
+            bias_field_sweep: None,
             normalization: fullmag_ir::EigenNormalizationIR::UnitL2,
             damping_policy: fullmag_ir::EigenDampingPolicyIR::Ignore,
             spin_wave_bc: fullmag_ir::SpinWaveBoundaryConditionIR::default(),
+            magnetostatic_bc: fullmag_ir::MagnetostaticBoundaryConditionIR::default(),
             mode_tracking: None,
             sampling: fullmag_ir::SamplingIR {
                 table_autosave: None,

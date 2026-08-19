@@ -382,6 +382,81 @@ int context_copy_field_f64(
     return FULLMAG_FEM_OK;
 }
 
+int context_copy_linearization_field_f64(
+    const Context &ctx,
+    fullmag_fem_observable observable,
+    double *out_xyz,
+    uint64_t out_len,
+    std::string &error)
+{
+    if (out_xyz == nullptr) {
+        error = "linearization field output buffer pointer is null";
+        return FULLMAG_FEM_ERR_INVALID;
+    }
+    const uint64_t expected_len = static_cast<uint64_t>(ctx.mesh.n_nodes) * 3ull;
+    if (out_len != expected_len) {
+        error = "linearization field output length mismatch";
+        return FULLMAG_FEM_ERR_INVALID;
+    }
+
+    const std::vector<double> *source = nullptr;
+    const FemGpuComponentField *gpu_field = nullptr;
+    const char *label = nullptr;
+    switch (observable) {
+        case FULLMAG_FEM_OBSERVABLE_H_EX:
+            source = &ctx.exchange.h_xyz;
+            gpu_field = &ctx.gpu_state.device.fields.h_ex;
+            label = "linearization_H_ex";
+            break;
+        case FULLMAG_FEM_OBSERVABLE_H_DEMAG:
+            source = &ctx.demag.h_xyz;
+            gpu_field = &ctx.gpu_state.device.fields.h_demag;
+            label = "linearization_H_demag";
+            break;
+        case FULLMAG_FEM_OBSERVABLE_H_EXT:
+            source = &ctx.zeeman.h_ext_xyz;
+            gpu_field = &ctx.gpu_state.device.fields.h_ext;
+            label = "linearization_H_ext";
+            break;
+        case FULLMAG_FEM_OBSERVABLE_H_EFF:
+            source = &ctx.effective_field.h_xyz;
+            gpu_field = &ctx.gpu_state.device.fields.h_eff;
+            label = "linearization_H_eff";
+            break;
+        default:
+            error = "linearization field copy supports only H_ex, H_demag, H_ext, and H_eff";
+            return FULLMAG_FEM_ERR_INVALID;
+    }
+
+    if (ctx.gpu_state.device.lifecycle.allocated) {
+        std::vector<double> tmp;
+        if (!gpu_state_download_component_aos(
+                const_cast<FemGpuState &>(ctx.gpu_state.device),
+                *gpu_field,
+                tmp,
+                const_cast<TransferAudit &>(ctx.transfer_audit.audit),
+                label,
+                error)) {
+            error = std::string("GPU linearization field download failed: ") + error;
+            return FULLMAG_FEM_ERR_INTERNAL;
+        }
+        if (tmp.size() != static_cast<size_t>(out_len)) {
+            error = "GPU linearization field download returned mismatched length";
+            return FULLMAG_FEM_ERR_INTERNAL;
+        }
+        std::memcpy(out_xyz, tmp.data(), static_cast<size_t>(sizeof(double) * out_len));
+        return FULLMAG_FEM_OK;
+    }
+    if (source == nullptr || source->size() != static_cast<size_t>(out_len)) {
+        error = "linearization field has not been computed yet";
+        return FULLMAG_FEM_ERR_INVALID;
+    }
+    const uint64_t bytes = sizeof(double) * out_len;
+    record_device_to_host(ctx.transfer_audit.audit, bytes);
+    std::memcpy(out_xyz, source->data(), static_cast<size_t>(bytes));
+    return FULLMAG_FEM_OK;
+}
+
 int context_upload_magnetization_f64(
     Context &ctx,
     const double *m_xyz,

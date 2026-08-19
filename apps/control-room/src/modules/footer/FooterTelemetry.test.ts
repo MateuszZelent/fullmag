@@ -80,6 +80,7 @@ const status: LiveStatusResource = {
     fields_revision: 0,
     mesh_build_revision: 0,
     mesh_revision: 0,
+    mode_composition_revision: 0,
     region_coefficients_revision: 0,
     region_initial_state_revision: 0,
     region_membership_revision: 0,

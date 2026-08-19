@@ -214,6 +214,7 @@ mod tests {
             relaxation_steps: 0,
             solver_model: EigenSolverModel::ReferenceScalarTangent,
             solver_notes: Vec::new(),
+            solver_diagnostics: None,
         }
     }
 
@@ -244,6 +245,8 @@ mod tests {
             amplitude: None,
             phase: None,
             node_mass_weights: None,
+            component_participation:
+                crate::eigen::ModalParticipationObservable::unavailable_without_context("cpu"),
         }
     }
 
@@ -270,6 +273,8 @@ mod tests {
             amplitude: None,
             phase: None,
             node_mass_weights: None,
+            component_participation:
+                crate::eigen::ModalParticipationObservable::unavailable_without_context("cpu"),
         }
     }
 

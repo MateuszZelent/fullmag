@@ -40,8 +40,10 @@ describe("analysis field overlay commands", () => {
     expect(result.status).toBe("completed");
     expect(overlay.getSnapshot()).toEqual({
       appearance: {
+        scalarColorPalette: "coolwarm",
         shaderVisible: true,
-        surfaceColorSource: "magnitude",
+        surfaceColorSource: "colormap",
+        vectorsVisible: false,
       },
       fieldId: "analysis:eigen:sample-0000:mode-0002",
       label: "Mode 2",
@@ -86,8 +88,10 @@ describe("analysis field overlay commands", () => {
       expect(result.status).toBe("completed");
       expect(overlay.getSnapshot()?.query.view).toBe(expectedView);
       expect(overlay.getSnapshot()?.appearance).toMatchObject({
+        scalarColorPalette: "coolwarm",
         shaderVisible: true,
-        surfaceColorSource: "magnitude",
+        surfaceColorSource: "colormap",
+        vectorsVisible: false,
       });
     },
   );
@@ -130,6 +134,50 @@ describe("analysis field overlay commands", () => {
         view: "imag",
       },
       source: "eigen-mode",
+    });
+  });
+
+  it("hands a canonical eigenmode SelectionRef to the overlay as a stable mode intent", async () => {
+    const commands = commandRegistry();
+    const overlay = new AnalysisFieldOverlayController();
+    const selection = new SelectionController(new EventBus<KernelEventMap>());
+    selection.set(
+      {
+        kind: "results.eigen.mode",
+        label: "Mode 2",
+        nodeId: "results:eigen:sample-k0:mode-2",
+        objectId: null,
+        ref: {
+          analysisRunId: "run-k0",
+          analysisStageId: "stage-eigen",
+          artifactRevision: "sha256:artifact-v1",
+          fieldId: "analysis:eigen:sample-k0:mode-2:delta_m_xyz",
+          kind: "results.eigen.mode",
+          modeId: "mode-2",
+          modeIndex: 2,
+          nodeId: "results:eigen:sample-k0:mode-2",
+          sampleId: "sample-k0",
+          sampleIndex: 0,
+          type: "frequency-domain",
+        },
+      },
+      "test",
+    );
+
+    const result = await commands.execute(
+      "analysis.eigen.plot-mode-3d",
+      {
+        analysisFieldOverlay: overlay,
+        selection,
+        source: "test",
+      },
+    );
+
+    expect(result.status).toBe("completed");
+    expect(overlay.getSnapshot()?.modeIntent).toMatchObject({
+      artifactRevision: "sha256:artifact-v1",
+      modeId: "mode-2",
+      sampleId: "sample-k0",
     });
   });
 

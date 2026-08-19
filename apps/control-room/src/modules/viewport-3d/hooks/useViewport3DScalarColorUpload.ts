@@ -102,6 +102,22 @@ export function canRetainViewport3DScalarUploadBuffer({
   );
 }
 
+export function canReuseViewport3DScalarShaderAttributes(
+  previous: ScalarColorBuffer | null | undefined,
+  next: ScalarColorBuffer | null | undefined,
+): boolean {
+  return Boolean(
+    previous &&
+      next &&
+      previous.buildKey &&
+      previous.buildKey === next.buildKey &&
+      previous.scalarValues === next.scalarValues &&
+      previous.vectorValues === next.vectorValues &&
+      previous.complexRealValues === next.complexRealValues &&
+      previous.complexImagValues === next.complexImagValues,
+  );
+}
+
 function createViewport3DScalarColorUploadStore(): Viewport3DScalarColorUploadStore {
   const listeners = new Set<() => void>();
   let snapshot = EMPTY_VIEWPORT_3D_SCALAR_COLOR_UPLOAD_SNAPSHOT;
@@ -379,6 +395,17 @@ export function useViewport3DScalarShaderColorUpload({
         return;
       }
       store.publish(null, geometry, null);
+      tracker.recordDirtyFrame(dirtyReason);
+      invalidate();
+      return;
+    }
+
+    const current = store.getSnapshot();
+    if (
+      current.geometry === geometry &&
+      canReuseViewport3DScalarShaderAttributes(current.buffer, colorBuffer)
+    ) {
+      store.publish(colorBuffer, geometry, retentionKey ?? null);
       tracker.recordDirtyFrame(dirtyReason);
       invalidate();
       return;

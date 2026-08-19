@@ -3,16 +3,27 @@ set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 source "${REPO_ROOT}/scripts/lib/managed_fem_runtime_storage.sh"
+resolve_managed_fem_native_storage_profile
+readonly FULLMAG_NATIVE_STORAGE_PROFILE FULLMAG_NATIVE_BUILD_STORAGE_ROOT
+readonly FULLMAG_NATIVE_BUILD_IMAGE FULLMAG_NATIVE_MOUNT_VIEW
 : "${FULLMAG_BUILD_ROOT:=/zfn2/mateuszz/git/fullmag}"
 archive="${FULLMAG_BUILD_ROOT}/runtimes/fem-gpu-host-latest.tar"
 runtime_parent="${REPO_ROOT}/.fullmag/runtimes"
-readonly FULLMAG_NATIVE_BUILD_IMAGE="/zfn2/mateuszz/git/fullmag/build-volumes/fullmag-native.ext4"
-readonly FULLMAG_NATIVE_MOUNT_VIEW="/mnt/fullmag-zfn2-native"
+RUNTIME_LOCK="$(managed_fem_runtime_lock_path "${REPO_ROOT}")"
 worktree_slug="$(basename "${REPO_ROOT}" | sed 's/[^A-Za-z0-9._-]/-/g')"
 worktree_digest="$(printf '%s' "${REPO_ROOT}" | sha256sum | cut -c1-64)"
 : "${FULLMAG_RUNTIME_VARIANTS_ROOT:=${FULLMAG_NATIVE_MOUNT_VIEW}/managed-fem-runtime/${worktree_slug}-${worktree_digest}/runtime-variants}"
 : "${FULLMAG_LOOP_SYSFS_ROOT:=/sys/class/block}"
 staging="${FULLMAG_RUNTIME_VARIANTS_ROOT}/fem-gpu-host.restore.$$"
+
+mkdir -p "${runtime_parent}"
+if [ "${FULLMAG_RUNTIME_EXPORT_LOCK_HELD:-0}" != "1" ]; then
+  if ! flock -n --close "${RUNTIME_LOCK}" true; then
+    echo "[restore_persistent_fem_runtime] waiting for existing runtime export or restore to finish"
+  fi
+  export FULLMAG_RUNTIME_EXPORT_LOCK_HELD=1
+  exec flock --close "${RUNTIME_LOCK}" bash "$0" "$@"
+fi
 
 [ -f "${archive}" ] || exit 1
 validate_managed_fem_runtime_storage_target \
@@ -54,10 +65,10 @@ else
 fi
 python3 "${REPO_ROOT}/scripts/validate_managed_fem_runtime_bundle.py" --runtime-root "${variant_root}" >/dev/null
 variants_alias="${runtime_parent}/fem-gpu-variants"
-migrate_managed_fem_runtime_variants "${variants_alias}" \
+prepare_managed_fem_runtime_variants_for_rebind "${variants_alias}" \
   "${FULLMAG_RUNTIME_VARIANTS_ROOT}" \
   "${REPO_ROOT}/scripts/validate_managed_fem_runtime_bundle.py"
-next="${runtime_parent}/.fem-gpu-host.next.$$"
-ln -sfn "fem-gpu-variants/${variant_name}" "${next}"
-mv -Tf "${next}" "${runtime_parent}/fem-gpu-host"
+rebind_managed_fem_runtime_aliases "${runtime_parent}/fem-gpu-host" \
+  "${variants_alias}" "${FULLMAG_RUNTIME_VARIANTS_ROOT}" "${variant_root}" \
+  "${REPO_ROOT}/scripts/validate_managed_fem_runtime_bundle.py"
 echo "Restored managed FEM runtime from ${archive}"

@@ -436,6 +436,24 @@ def loader_trace(
     return parse_ldd(result.stdout)
 
 
+def loader_trace_path_matches(
+    actual: Path,
+    expected: Path,
+    soname: str,
+    readelf: str,
+) -> bool:
+    """Accept a byte-identical SONAME alias materialized by a no-symlink FS."""
+    if actual == expected:
+        return True
+    if actual.name != soname or not actual.is_file() or not expected.is_file():
+        return False
+    if read_soname(actual, readelf) != soname:
+        return False
+    if read_soname(expected, readelf) != soname:
+        return False
+    return sha256(actual) == sha256(expected)
+
+
 def validate_hypre_symbol_provider(
     worker: Path,
     runtime_root: Path,
@@ -550,6 +568,7 @@ def validate_bundle(
     required_worktree_state: str | None,
     required_source_snapshot_sha256: str | None,
     allow_unaddressed_staging: bool,
+    allow_active_alias: bool,
 ) -> Mapping[str, object]:
     runtime_root = runtime_root.resolve()
     manifest_path = runtime_root / "manifest.json"
@@ -560,7 +579,19 @@ def validate_bundle(
     variant = manifest.get("variant")
     if not isinstance(variant, str) or not variant:
         raise ValueError("managed FEM manifest has no variant")
-    if not allow_unaddressed_staging:
+    if allow_active_alias:
+        # On CIFS the stable active path is a materialized directory because
+        # symlink publication is unavailable. The hash-addressed sibling is
+        # validated separately before this alias is published.
+        if not (
+            runtime_root.name == "fem-gpu-host"
+            and runtime_root.parent.name == "runtimes"
+        ):
+            raise ValueError(
+                "managed FEM active-alias validation requires "
+                "<repo>/.fullmag/runtimes/fem-gpu-host"
+            )
+    elif not allow_unaddressed_staging:
         expected_directory = f"{variant}-{sha256(manifest_path)}"
         if runtime_root.name != expected_directory:
             raise ValueError(
@@ -693,7 +724,9 @@ def validate_bundle(
                 runtime_root, relative, f"loader trace {source_name}:{soname}"
             )
             actual_path = actual_trace.get(str(soname))
-            if actual_path is None or actual_path != expected_path:
+            if actual_path is None or not loader_trace_path_matches(
+                actual_path, expected_path, str(soname), readelf
+            ):
                 raise ValueError(
                     f"loader trace mismatch for {source_name}:{soname}: "
                     f"expected {expected_path}, got {actual_path}"
@@ -770,6 +803,7 @@ def main() -> None:
     parser.add_argument("--require-source-snapshot-sha256")
     parser.add_argument("--compare-exact", type=Path)
     parser.add_argument("--allow-unaddressed-staging", action="store_true")
+    parser.add_argument("--allow-active-alias", action="store_true")
     args = parser.parse_args()
     try:
         if args.compare_exact is not None:
@@ -791,6 +825,7 @@ def main() -> None:
             required_worktree_state=args.require_worktree_state,
             required_source_snapshot_sha256=args.require_source_snapshot_sha256,
             allow_unaddressed_staging=args.allow_unaddressed_staging,
+            allow_active_alias=args.allow_active_alias,
         )
         print(json.dumps(result, sort_keys=True))
     except (OSError, ValueError, json.JSONDecodeError) as exc:

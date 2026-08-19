@@ -85,7 +85,12 @@ fn is_gamma_k_sampling(k_sampling: Option<&KSamplingIR>) -> bool {
     match k_sampling {
         None => true,
         Some(KSamplingIR::Single { k_vector }) => k_vector.iter().all(|value| *value == 0.0),
-        Some(KSamplingIR::Path { .. }) => false,
+        Some(KSamplingIR::Path { points, .. }) => {
+            !points.is_empty()
+                && points
+                    .iter()
+                    .all(|point| point.k_vector.iter().all(|value| *value == 0.0))
+        }
     }
 }
 

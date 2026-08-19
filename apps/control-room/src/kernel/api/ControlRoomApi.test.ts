@@ -320,6 +320,7 @@ const resourceRevisions: LiveStatusResource["resources"] = {
   fields_revision: 0,
   mesh_build_revision: 0,
   mesh_revision: 0,
+  mode_composition_revision: 0,
   region_coefficients_revision: 0,
   region_initial_state_revision: 0,
   region_membership_revision: 0,
@@ -1275,7 +1276,7 @@ describe("ControlRoomApi", () => {
     ]);
   });
 
-  it("loads modal eigen artifacts through both eigen and family namespaces", async () => {
+  it("loads modal eigen artifacts through the canonical frequency-domain family", async () => {
     const observedUrls: string[] = [];
     const fetchImpl = vi.fn(async (url: RequestInfo | URL) => {
       const target = String(url);
@@ -1323,14 +1324,21 @@ describe("ControlRoomApi", () => {
           value_kind: "complex_spatial_vector",
         });
       }
-      if (target.endsWith("/analysis/eigen/modes/1/2")) {
+      if (target.endsWith("/analysis/frequency-domain/eigen/modes/1/2")) {
         return jsonResponse({
-          branch_id: "branch-0",
-          field_id: "analysis:eigen:sample-0001:mode-0002",
-          frequency_hz: 3.2e9,
-          raw_mode_index: 2,
-          sample_index: 1,
-          schema_version: "eigen_mode.v2",
+          artifact_path: "eigen/modes/sample_0001/mode_0002.json",
+          payload: {
+            branch_id: "branch-0",
+            field_id: "analysis:eigen:sample-0001:mode-0002",
+            frequency_hz: 3.2e9,
+            raw_mode_index: 2,
+            sample_index: 1,
+            schema_version: "eigen_mode.v2",
+          },
+          resource_key:
+            "/v2/sessions/current/analysis/frequency-domain/eigen/modes/1/2",
+          schema_version: "frequency_domain_eigen_artifact.v1",
+          status: "ready",
         });
       }
       return jsonResponse({
@@ -1354,11 +1362,11 @@ describe("ControlRoomApi", () => {
     await api.analysis.eigen.eigenBranchesV2();
     await api.analysis.eigen.eigenDiagnosticsV2();
     await api.analysis.eigen.eigenDispersion();
-    const mode = await api.analysis.eigen.modeV2(1, 2);
+    const mode = await api.analysis.frequencyDomain.eigenMode(1, 2);
     const modeMeta = await api.analysis.eigen.eigenModeFieldMeta(1, 2);
     await api.analysis.frequencyDomain.eigenSpectrumV2();
 
-    expect(mode).toMatchObject({
+    expect(mode.payload).toMatchObject({
       field_id: "analysis:eigen:sample-0001:mode-0002",
       schema_version: "eigen_mode.v2",
     });
@@ -1376,7 +1384,7 @@ describe("ControlRoomApi", () => {
       "http://127.0.0.1:8765/v2/sessions/current/analysis/frequency-domain/eigen/branches.v2",
       "http://127.0.0.1:8765/v2/sessions/current/analysis/frequency-domain/eigen/diagnostics.v2",
       "http://127.0.0.1:8765/v2/sessions/current/analysis/frequency-domain/eigen/dispersion",
-      "http://127.0.0.1:8765/v2/sessions/current/analysis/eigen/modes/1/2",
+      "http://127.0.0.1:8765/v2/sessions/current/analysis/frequency-domain/eigen/modes/1/2",
       "http://127.0.0.1:8765/v2/sessions/current/analysis/frequency-domain/eigen/mode-field/1/2/meta",
       "http://127.0.0.1:8765/v2/sessions/current/analysis/frequency-domain/eigen/spectrum.v2",
     ]);
@@ -5563,6 +5571,36 @@ describe("ControlRoomApi", () => {
         method: "POST",
         url: "http://127.0.0.1:8765/v2/sessions/current/model/transport-validation",
       },
+    ]);
+  });
+
+  it("loads dedicated frequency-domain field-sweep and FMR artifact resources", async () => {
+    const observedUrls: string[] = [];
+    const api = new ControlRoomApi({
+      baseUrl: "http://127.0.0.1:8765",
+      fetchImpl: async (url) => {
+        observedUrls.push(String(url));
+        return jsonResponse({
+          artifact_path: "frequency-domain/artifact.json",
+          missing_reason: null,
+          payload: { schema_version: "frequency_domain_artifact.v1" },
+          resource_key: String(url).replace("http://127.0.0.1:8765", ""),
+          schema_version: "frequency_domain_json_artifact.v1",
+          status: "ready",
+        });
+      },
+    });
+
+    await api.analysis.frequencyDomain.eigenFieldSweep();
+    await api.analysis.frequencyDomain.fmrPeaks();
+    await api.analysis.frequencyDomain.fmrResonanceFits();
+    await api.analysis.frequencyDomain.fmrKittelFit();
+
+    expect(observedUrls).toEqual([
+      "http://127.0.0.1:8765/v2/sessions/current/analysis/frequency-domain/eigen/field-sweep",
+      "http://127.0.0.1:8765/v2/sessions/current/analysis/frequency-domain/fmr/peaks",
+      "http://127.0.0.1:8765/v2/sessions/current/analysis/frequency-domain/fmr/resonance-fits",
+      "http://127.0.0.1:8765/v2/sessions/current/analysis/frequency-domain/fmr/kittel-fit",
     ]);
   });
 });

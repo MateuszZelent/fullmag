@@ -49,6 +49,8 @@ export interface ChartRenderModel {
   droppedPointCount?: number;
   key: string;
   provenance?: {
+    artifactPath?: string | null;
+    contentDigest?: string | null;
     dataRevision: string | number | null;
     decimation: string;
     descriptorId?: string;
@@ -61,6 +63,9 @@ export interface ChartRenderModel {
     backend?: string | null;
     device?: string | null;
     precision?: string | null;
+    provenance?: string | null;
+    qualification?: string | null;
+    schemaVersion?: string | null;
     scientificTrust?: ChartScientificTrust;
   };
   series: readonly ChartRenderSeries[];

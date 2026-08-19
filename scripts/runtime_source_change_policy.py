@@ -15,6 +15,7 @@ from typing import Any
 
 NON_RUNTIME_PREFIXES = (
     ".agents/",
+    ".claude/",
     ".codex/",
     ".impl-racetrack/",
     ".worktrees/",

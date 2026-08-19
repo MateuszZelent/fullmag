@@ -716,19 +716,23 @@ pub(crate) async fn export_session(
         }
     }
 
+    let export_profile = FmsExportProfile::for_profile(req.profile);
+    let docs = collect_project_documents(&state, req.ui_state.as_ref()).await;
+    let script = docs.get("main.py").ok_or_else(|| {
+        ApiError::conflict("session has no readable canonical Python script to save")
+    })?;
     let workspace_manifest = FmsWorkspaceManifest {
         workspace_id: "local-live".into(),
         problem_name: name.clone(),
         project_ref: "project/".into(),
+        script_ref: "project/main.py".into(),
+        script_sha256: fullmag_session::hex_sha256(script),
         ui_state_ref: "project/ui_state.json".into(),
         scene_document_ref: "project/scene_document.json".into(),
         script_builder_ref: Some("project/script_builder.json".into()),
         model_builder_graph_ref: None,
         asset_index_ref: None,
     };
-
-    let export_profile = FmsExportProfile::for_profile(req.profile);
-    let docs = collect_project_documents(&state, req.ui_state.as_ref()).await;
 
     let opts = PackOptions {
         compression: req
@@ -2727,8 +2731,11 @@ mod planar_presentation_migration_tests {
     #[test]
     fn unknown_presentation_version_is_rejected_without_migration() {
         let document = serde_json::json!({});
-        assert!(restore_display_presentation(Some(DISPLAY_PRESENTATION_SCHEMA_VERSION + 1), &document)
-            .expect_err("future schema must not mutate state")
-            .contains("unsupported"));
+        assert!(restore_display_presentation(
+            Some(DISPLAY_PRESENTATION_SCHEMA_VERSION + 1),
+            &document
+        )
+        .expect_err("future schema must not mutate state")
+        .contains("unsupported"));
     }
 }

@@ -17,12 +17,14 @@ vi.mock("@radix-ui/react-dialog", async (importOriginal) => {
 
 import {
   CommandDetailDialog,
+  deriveK0ModalExecutionReadiness,
   ImportStateDialog,
   RestoreCheckpointDialog,
   StudyBoundarySection,
   StudyCommandButton,
   StudyRuntimeSection,
   StudySelectedStageSection,
+  studyInspectorRuntimeStatusEquals,
 } from "./StudyInspectorPanel";
 import {
   StudyPipelineSection,
@@ -56,6 +58,152 @@ function testRequested(overrides: Record<string, string> = {}) {
 }
 
 describe("StudyInspectorPanel", () => {
+  it("rerenders when the runtime advertises a new relaxation algorithm", () => {
+    const previous = {
+      capabilities: {
+        algorithms_available: ["llg_overdamped"],
+        binary_fields: true,
+        explicit_topology: true,
+      },
+      domain: { discretization: "fem" },
+      resources: {
+        mesh_build_revision: 1,
+        mesh_revision: 1,
+        commands_revision: 1,
+        scalars_revision: 1,
+        scene_revision: 1,
+        stages_revision: 1,
+      },
+      run: null,
+    } as NonNullable<Parameters<typeof studyInspectorRuntimeStatusEquals>[0]>;
+    const next = {
+      ...previous,
+      capabilities: {
+        ...previous.capabilities,
+        algorithms_available: [
+          "llg_overdamped",
+          "projected_gradient_bb",
+        ],
+      },
+    };
+
+    expect(studyInspectorRuntimeStatusEquals(previous, next)).toBe(false);
+  });
+
+  it("derives K0 production readiness by selected equilibrium provenance", () => {
+    const resources = {
+        checkpoints: [
+          { artifact_ref: "artifact://provided", mesh_revision: 42 },
+        ] as never,
+        frequencyManifest: {
+          capabilities: { modal: { production_gpu: { reason: "not qualified", status: "contract_only" } } },
+        } as never,
+        meshManifest: { mesh_id: "shared", revision: 42 } as never,
+        periodicPairs: {
+          pairs: [{ paired_node_count: 8, status: "certified", unpaired_destination_node_count: 0, unpaired_source_node_count: 0 }],
+          revision: 42,
+        } as never,
+        solverStatus: {
+          converged: true,
+          is_busy: false,
+          revision: 42,
+        } as never,
+        stageExecution: {
+          stages: [{ converged: true, kind: "relax", status: "completed" }],
+          revision: 8,
+        } as never,
+    };
+    expect(deriveK0ModalExecutionReadiness({
+      ...resources,
+      equilibriumArtifact: "",
+      equilibriumSource: "relax",
+    })).toEqual({
+      acceptedEquilibriumReady: true,
+      periodicCertificateReady: true,
+      sharedDomainMeshReady: true,
+      strictGpuReady: false,
+    });
+    expect(deriveK0ModalExecutionReadiness({
+      ...resources,
+      equilibriumArtifact: "",
+      equilibriumSource: "provided",
+    }).acceptedEquilibriumReady).toBe(true);
+    expect(deriveK0ModalExecutionReadiness({
+      ...resources,
+      equilibriumArtifact: "artifact://provided",
+      equilibriumSource: "artifact",
+    }).acceptedEquilibriumReady).toBe(true);
+    expect(deriveK0ModalExecutionReadiness({
+      ...resources,
+      equilibriumArtifact: "artifact://missing",
+      equilibriumSource: "artifact",
+    }).acceptedEquilibriumReady).toBe(false);
+  });
+
+  it("renders unavailable K0 modal prerequisites in the study pipeline", () => {
+    const draft = {
+      ...createDefaultStudyStageDraft("eigenmodes", 0),
+      bc: "periodic",
+      dampingPolicy: "ignore",
+      deviceTarget: "gpu",
+      includeDemag: true,
+      kVector: "0,0,0",
+      magnetostaticBc: "periodic_airbox_k0",
+    };
+    const html = renderToStaticMarkup(
+      <Accordion type="multiple" defaultValue={["pipeline"]}>
+        <StudyPipelineSection
+          activeStageIndex={null}
+          authoringBusy={false}
+          authoringFeedback={null}
+          commandDisabledReason={() => null}
+          demagEnabled
+          draft={draft}
+          draftIndex={0}
+          drafts={[draft]}
+          k0ModalReadinessFor={() => ({
+            acceptedEquilibriumReady: false,
+            periodicCertificateReady: false,
+            sharedDomainMeshReady: false,
+            strictGpuReady: false,
+          })}
+          model={{
+            boundary: testBoundary(),
+            requested: testRequested({ backend: "fem", device: "gpu" }),
+            runtime: {
+              activeStageLabel: "none",
+              commandBadge: "idle",
+              commandError: null,
+              commandId: null,
+              commandLabel: "No active command",
+              maxTorque: "unavailable",
+              progressPercent: 0,
+              relaxEnergyStop: null,
+              relaxTimeStop: null,
+              relaxTorqueStop: null,
+              runId: "none",
+              state: "idle",
+            },
+            selectedStage: null,
+            stages: [],
+          }}
+          onAddStage={() => undefined}
+          onCommit={() => undefined}
+          onDuplicateStage={() => undefined}
+          onMoveStage={() => undefined}
+          onRemoveStage={() => undefined}
+          onSelectDraft={() => undefined}
+          onUpdateDraft={() => undefined}
+          runCommand={() => undefined}
+        />
+      </Accordion>,
+    );
+    expect(html).toContain("periodic_airbox_k0 requires a shared-domain mesh.");
+    expect(html).toContain("periodic_airbox_k0 requires a periodic certificate.");
+    expect(html).toContain("periodic_airbox_k0 requires an accepted equilibrium.");
+    expect(html).toContain("Strict GPU K0 modal demag prerequisites are unavailable.");
+  });
+
   it("renders requested, resolved, and fallback runtime provenance rows", () => {
     const html = renderToStaticMarkup(
       <StudyRuntimeSection
@@ -421,6 +569,9 @@ describe("StudyInspectorPanel", () => {
               kind: "relax",
               label: "Relax 1",
               maxSteps: "1000",
+              meshGenerationId: "mesh-generation-7",
+              meshRevision: 19,
+              meshTopologyFingerprint: "sha256:stage-topology-7",
               progressPercent: 100,
               runtimeMetric: {
                 name: "max_torque_apm",
@@ -451,6 +602,12 @@ describe("StudyInspectorPanel", () => {
     expect(html).toContain("max_torque_apm");
     expect(html).toContain("simulation/stages/execution@13");
     expect(html).toContain("runs/run-1/stages/stage-relax");
+    expect(html).toContain("Mesh generation");
+    expect(html).toContain("mesh-generation-7");
+    expect(html).toContain("Mesh revision");
+    expect(html).toContain("19");
+    expect(html).toContain("Topology fingerprint");
+    expect(html).toContain("sha256:stage-topology-7");
   });
 
   it("renders selected stage transition metadata", () => {
@@ -487,6 +644,9 @@ describe("StudyInspectorPanel", () => {
               kind: "run",
               label: "Run 2",
               maxSteps: null,
+              meshGenerationId: null,
+              meshRevision: null,
+              meshTopologyFingerprint: null,
               progressPercent: 0,
               runtimeMetric: null,
               stageId: "stage-run",
@@ -515,6 +675,8 @@ describe("StudyInspectorPanel", () => {
     expect(html).toContain("Change device");
     expect(html).toContain("backend_transfer");
     expect(html).toContain("identity_copy");
+    expect(html).toContain("Mesh generation");
+    expect(html).toContain(">unknown<");
     expect(html).toContain("simulation/stages/execution@16");
   });
 
@@ -553,6 +715,9 @@ describe("StudyInspectorPanel", () => {
               label: "Eigenmodes 2",
               lastProgressUnixMs: 1_781_445_105_275,
               maxSteps: null,
+              meshGenerationId: null,
+              meshRevision: null,
+              meshTopologyFingerprint: null,
               progressDetail: "heartbeat 8.5s since last solver update",
               progressLabel: "solving",
               progressPercent: 35,
@@ -623,6 +788,9 @@ describe("StudyInspectorPanel", () => {
                 kind: "relax",
                 label: "Relax 1",
                 maxSteps: "50000",
+                meshGenerationId: null,
+                meshRevision: null,
+                meshTopologyFingerprint: null,
                 progressPercent: 0,
                 runtimeMetric: null,
                 stageId: "relax-1",
@@ -748,6 +916,9 @@ describe("StudyInspectorPanel", () => {
                 label: "Frequency response 1",
                 lastProgressUnixMs: 1_781_467_092_000,
                 maxSteps: null,
+                meshGenerationId: null,
+                meshRevision: null,
+                meshTopologyFingerprint: null,
                 progressDetail:
                   "demag=periodic_airbox_k0; range=2.000000-5.000000 GHz; frequency point 2/7",
                 progressLabel: "solving frequency point",
@@ -1077,6 +1248,9 @@ describe("StudyInspectorPanel", () => {
                 kind: "relax",
                 label: "Relax 1",
                 maxSteps: "50000",
+                meshGenerationId: null,
+                meshRevision: null,
+                meshTopologyFingerprint: null,
                 progressPercent: 0,
                 runtimeMetric: null,
                 stageId: "relax-1",
@@ -1402,8 +1576,11 @@ describe("StudyInspectorPanel", () => {
     expect(html).toContain("Frequencies");
     expect(html).toContain("Excitation");
     expect(html).toContain("Include demag");
-    expect(html).toContain("Solver method");
-    expect(html).toContain("GPU operator host Krylov");
+    expect(html).toContain(
+      "Solver implementation is resolved from device, precision, certificates, and active capabilities.",
+    );
+    expect(html).not.toContain("Solver method");
+    expect(html).not.toContain("GPU operator host Krylov");
     expect(html).toContain("k sampling");
     expect(html).toContain("BC");
   });
@@ -1459,6 +1636,29 @@ describe("StudyInspectorPanel", () => {
     expect(windowHtml).toContain('aria-label="Frequency max"');
     expect(windowHtml).toContain('value="1500000000"');
     expect(windowHtml).toContain('value="2500000000"');
+  });
+
+  it("renders canonical frequency-window controls for K0 modal authoring", () => {
+    const draft = {
+      ...createDefaultStudyStageDraft("eigenmodes", 0),
+      frequencyMax: "2e9",
+      frequencyMin: "1e9",
+      target: "frequency_window",
+    };
+    const html = renderToStaticMarkup(
+      <StudyStageDraftEditor
+        draft={draft}
+        index={0}
+        validation={[]}
+        onUpdate={() => undefined}
+      />,
+    );
+
+    expect(html).toContain('aria-label="Frequency min"');
+    expect(html).toContain('aria-label="Frequency max"');
+    expect(html).toContain('value="1e9"');
+    expect(html).toContain('value="2e9"');
+    expect(html).toContain('value="frequency_window"');
   });
 
   it("renders change-device stage authoring controls", () => {

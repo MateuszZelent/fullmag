@@ -5,6 +5,7 @@ use crate::schemas::commands::{
 };
 use crate::schemas::diagnostics::SolverProfileResource;
 use crate::schemas::hysteresis::HysteresisBookmarkSchema;
+use crate::schemas::mode_composition::ModeCompositionResource;
 use crate::schemas::realtime::RealtimeResourceChange;
 use crate::schemas::runtime::FieldMaterializationRequirement;
 use crate::schemas::visualization_state::{
@@ -67,6 +68,8 @@ pub(crate) struct DisplayPresentationState {
     /// Bounded restore diagnostics for presentation-schema migrations.
     #[serde(default)]
     pub visualization_restore_warnings: Vec<String>,
+    #[serde(default)]
+    pub mode_composition: ModeCompositionResource,
 }
 
 impl Default for DisplayPresentationState {
@@ -88,6 +91,7 @@ impl Default for DisplayPresentationState {
             visualization_vector_style: None,
             visualization_overrides: None,
             visualization_restore_warnings: Vec::new(),
+            mode_composition: ModeCompositionResource::default(),
         }
     }
 }
@@ -1144,6 +1148,12 @@ pub(crate) struct StageExecutionRecord {
     pub status: StageLifecycleState,
     #[serde(default)]
     pub command_id: Option<String>,
+    #[serde(default)]
+    pub mesh_generation_id: Option<String>,
+    #[serde(default)]
+    pub mesh_topology_fingerprint: Option<String>,
+    #[serde(default)]
+    pub mesh_revision: Option<u64>,
     #[serde(default)]
     pub started_at_unix_ms: Option<u64>,
     #[serde(default)]

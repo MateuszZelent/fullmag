@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import hashlib
 import json
 import math
 import sys
@@ -35,6 +36,7 @@ ALLOWED_MODAL_ALGEBRAIC_FORMS = {
     "gyrotropic_generalized",
     "k0_macrospin_field_generalized_to_gyrotropic_modal",
     "full_coupled_poisson_airbox_augmented_gauge",
+    "schur_reduced_descriptor",
 }
 ALLOWED_TRACKING_SCORE_SUMMARY_SOURCES = {
     "seed_only",
@@ -91,12 +93,96 @@ def fail(message: str) -> None:
 
 
 def load_json(path: Path) -> dict:
-    return json.loads(path.read_text())
+    require_file(path)
+    try:
+        value = json.loads(path.read_text())
+    except json.JSONDecodeError as error:
+        fail(f"invalid JSON artifact {path}: {error}")
+    if not isinstance(value, dict):
+        fail(f"JSON artifact {path} must be an object")
+    return value
 
 
 def require_file(path: Path) -> None:
     if not path.is_file():
         fail(f"missing required artifact: {path}")
+
+
+def require_bundle_path(root: Path, value: object, name: str) -> tuple[str, Path]:
+    """Resolve an artifact path without permitting escape from the bundle."""
+    relative_path = require_non_empty_string(value, name)
+    candidate = Path(relative_path)
+    if candidate.is_absolute() or ".." in candidate.parts:
+        fail(f"{name} must be a relative path inside the artifact bundle")
+    root_resolved = root.resolve()
+    resolved = (root / candidate).resolve()
+    try:
+        resolved.relative_to(root_resolved)
+    except ValueError:
+        fail(f"{name} escapes the artifact bundle")
+    require_file(resolved)
+    return relative_path, resolved
+
+
+def sha256_file_token(path: Path) -> str:
+    return "sha256:" + hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def serde_json_compact_bytes(value: object) -> bytes:
+    """Serialize JSON with the compact, key-sorted serde_json::Value form."""
+
+    def encode(item: object) -> str:
+        if item is None:
+            return "null"
+        if item is True:
+            return "true"
+        if item is False:
+            return "false"
+        if isinstance(item, int):
+            return str(item)
+        if isinstance(item, float):
+            if not math.isfinite(item):
+                fail("field_sweep canonical digest contains a non-finite number")
+            rendered = repr(item)
+            if "e" in rendered:
+                mantissa, exponent = rendered.split("e", 1)
+                sign = ""
+                if exponent[0] in "+-":
+                    sign, exponent = exponent[0], exponent[1:]
+                exponent_value = int(f"{sign}{exponent}")
+                if -5 <= exponent_value < 0:
+                    digits = mantissa.replace(".", "").lstrip("-")
+                    prefix = "-" if mantissa.startswith("-") else ""
+                    zero_count = -exponent_value - 1
+                    rendered = f"{prefix}0.{('0' * zero_count)}{digits}"
+                else:
+                    rendered = f"{mantissa}e{sign}{int(exponent)}"
+            return rendered
+        if isinstance(item, str):
+            return json.dumps(item, ensure_ascii=False)
+        if isinstance(item, list):
+            return "[" + ",".join(encode(entry) for entry in item) + "]"
+        if isinstance(item, dict):
+            if not all(isinstance(key, str) for key in item):
+                fail("field_sweep canonical digest requires string object keys")
+            return "{" + ",".join(
+                f"{json.dumps(key, ensure_ascii=False)}:{encode(item[key])}"
+                for key in sorted(item)
+            ) + "}"
+        fail("field_sweep canonical digest contains a non-JSON value")
+
+    return encode(value).encode("utf-8")
+
+
+def canonical_artifact_self_digest(artifact: dict, name: str) -> str:
+    normalized = dict(artifact)
+    normalized["revision"] = ""
+    normalized["content_sha256"] = ""
+    try:
+        canonical_bytes = serde_json_compact_bytes(normalized)
+    except (TypeError, ValueError) as error:
+        fail(f"{name} cannot be canonically serialized: {error}")
+    return "sha256:" + hashlib.sha256(canonical_bytes).hexdigest()
 
 
 def require_equal(actual: object, expected: object, name: str) -> None:
@@ -143,6 +229,153 @@ def require_sha256_token(value: object, name: str) -> str:
     if any(char not in "0123456789abcdef" for char in suffix):
         fail(f"{name} must use lowercase hex sha256 encoding")
     return token
+
+
+def equilibrium_artifact_v7_digest(artifact: dict) -> str:
+    preimage = dict(artifact)
+    preimage.pop("content_sha256", None)
+    preimage.pop("equilibrium_id", None)
+    try:
+        canonical_bytes = serde_json_compact_bytes(preimage)
+    except (TypeError, ValueError) as error:
+        fail(
+            "equilibrium_artifact cannot be canonically serialized for "
+            f"content_sha256 validation: {error}"
+        )
+    return "sha256:" + hashlib.sha256(canonical_bytes).hexdigest()
+
+
+def validate_equilibrium_artifact_v7(root: Path, manifest: dict) -> None:
+    declared_path = manifest.get("artifacts", {}).get(
+        "equilibrium_artifact_v7_path"
+    )
+    if declared_path is None:
+        return
+    relative_path, artifact_path = require_bundle_path(
+        root,
+        declared_path,
+        "manifest.artifacts.equilibrium_artifact_v7_path",
+    )
+    require_equal(
+        relative_path,
+        "eigen/metadata/equilibrium_artifact.v7.json",
+        "manifest.artifacts.equilibrium_artifact_v7_path",
+    )
+    artifact = load_json(artifact_path)
+    schema_version = artifact.get("schema_version")
+    if schema_version == "equilibrium_artifact.v6":
+        fail(
+            "equilibrium_artifact_v6_uncertified: rerun relaxation or migrate "
+            "with source completion evidence"
+        )
+    require_equal(
+        schema_version,
+        "equilibrium_artifact.v7",
+        "equilibrium_artifact.schema_version",
+    )
+    require_equal(
+        artifact.get("accepted_for_linearization"),
+        True,
+        "equilibrium_artifact.accepted_for_linearization",
+    )
+    certificate = artifact.get("acceptance_certificate")
+    if not isinstance(certificate, dict):
+        fail("equilibrium_artifact.acceptance_certificate must be an object")
+    criterion = certificate.get("criterion")
+    expected = {
+        "torque": ("max_torque_apm", "A/m", "torque"),
+        "energy": ("total_energy_plateau_range_j", "J", "energy"),
+    }.get(criterion)
+    if expected is None:
+        fail("equilibrium_artifact.acceptance_certificate.criterion is invalid")
+    metric_kind, unit, stop_reason = expected
+    require_equal(
+        certificate.get("metric_kind"),
+        metric_kind,
+        "equilibrium_artifact.acceptance_certificate.metric_kind",
+    )
+    require_equal(
+        certificate.get("unit"),
+        unit,
+        "equilibrium_artifact.acceptance_certificate.unit",
+    )
+    require_equal(
+        certificate.get("stop_reason"),
+        stop_reason,
+        "equilibrium_artifact.acceptance_certificate.stop_reason",
+    )
+    require_equal(
+        certificate.get("status"),
+        "completed",
+        "equilibrium_artifact.acceptance_certificate.status",
+    )
+    require_equal(
+        certificate.get("converged"),
+        True,
+        "equilibrium_artifact.acceptance_certificate.converged",
+    )
+    metric_value = require_finite_number(
+        certificate.get("metric_value"),
+        "equilibrium_artifact.acceptance_certificate.metric_value",
+    )
+    threshold = require_finite_number(
+        certificate.get("threshold"),
+        "equilibrium_artifact.acceptance_certificate.threshold",
+    )
+    if threshold < 0.0 or metric_value > threshold:
+        fail(
+            "equilibrium_artifact.acceptance_certificate.metric_value must "
+            "satisfy its non-negative threshold"
+        )
+    completion_sha256 = require_sha256_token(
+        certificate.get("completion_sha256"),
+        "equilibrium_artifact.acceptance_certificate.completion_sha256",
+    )
+    require_equal(
+        artifact.get("completion_sha256"),
+        completion_sha256,
+        "equilibrium_artifact.completion_sha256",
+    )
+    content_sha256 = require_sha256_token(
+        artifact.get("content_sha256"),
+        "equilibrium_artifact.content_sha256",
+    )
+    require_equal(
+        content_sha256,
+        equilibrium_artifact_v7_digest(artifact),
+        "equilibrium_artifact.content_sha256",
+    )
+    require_equal(
+        artifact.get("equilibrium_id"),
+        "equilibrium_artifact.v7:" + content_sha256.removeprefix("sha256:"),
+        "equilibrium_artifact.equilibrium_id",
+    )
+    manifest_digest = manifest.get("equilibrium_artifact_sha256")
+    require_equal(
+        manifest_digest,
+        content_sha256,
+        "manifest.equilibrium_artifact_sha256",
+    )
+    observables = artifact.get("observables")
+    if not isinstance(observables, dict):
+        fail("equilibrium_artifact.observables must be an object")
+    for field_name in ["max_torque_Apm", "max_torque_T", "max_torque_relative"]:
+        require_finite_number(
+            observables.get(field_name),
+            f"equilibrium_artifact.observables.{field_name}",
+        )
+    integrity = artifact.get("representation_integrity")
+    if not isinstance(integrity, dict):
+        fail("equilibrium_artifact.representation_integrity must be an object")
+    m0_norm_tolerance = require_finite_number(
+        integrity.get("m0_norm_tolerance"),
+        "equilibrium_artifact.representation_integrity.m0_norm_tolerance",
+    )
+    if m0_norm_tolerance < 0.0:
+        fail(
+            "equilibrium_artifact.representation_integrity.m0_norm_tolerance "
+            "must be non-negative"
+        )
 
 
 def validate_periodic_mesh_certificate(
@@ -483,6 +716,54 @@ def require_mode_metadata_summaries(metadata: dict, metadata_path: str) -> None:
     )
 
 
+def require_mode_source_mesh_identity(
+    metadata: dict,
+    metadata_path: str,
+    sample_count: int,
+) -> None:
+    identity = metadata.get("source_mesh_identity")
+    if not isinstance(identity, dict):
+        fail(f"{metadata_path}.source_mesh_identity must be an object")
+    require_non_empty_string(
+        identity.get("mesh_id"),
+        f"{metadata_path}.source_mesh_identity.mesh_id",
+    )
+    topology_fingerprint = require_sha256_token(
+        identity.get("topology_fingerprint"),
+        f"{metadata_path}.source_mesh_identity.topology_fingerprint",
+    )
+    source_mesh_topology_sha256 = metadata.get("source_mesh_topology_sha256")
+    if source_mesh_topology_sha256 is not None:
+        require_equal(
+            require_sha256_token(
+                source_mesh_topology_sha256,
+                f"{metadata_path}.source_mesh_topology_sha256",
+            ),
+            topology_fingerprint,
+            f"{metadata_path}.source_mesh_topology_sha256 vs source_mesh_identity.topology_fingerprint",
+        )
+    require_equal(
+        identity.get("indexing"),
+        "full_domain_node_order",
+        f"{metadata_path}.source_mesh_identity.indexing",
+    )
+    require_equal(
+        identity.get("node_count"),
+        sample_count,
+        f"{metadata_path}.source_mesh_identity.node_count",
+    )
+    if identity.get("mesh_generation_id") is not None:
+        require_non_empty_string(
+            identity.get("mesh_generation_id"),
+            f"{metadata_path}.source_mesh_identity.mesh_generation_id",
+        )
+    if identity.get("mesh_revision") is not None:
+        require_non_negative_int(
+            identity.get("mesh_revision"),
+            f"{metadata_path}.source_mesh_identity.mesh_revision",
+        )
+
+
 def require_mode_field_metadata(
     metadata: dict,
     metadata_path: str,
@@ -616,10 +897,14 @@ def validate_manifest_physics(manifest: dict) -> None:
         "manifest.physics.analysis_family",
     )
     phase_convention = physics.get("phase_convention")
-    if phase_convention not in {"exp_i_omega_t", "exp_minus_i_omega_t"}:
+    if phase_convention not in {
+        "exp_i_omega_t",
+        "exp_plus_i_omega_t",
+        "exp_minus_i_omega_t",
+    }:
         fail(
-            "manifest.physics.phase_convention must be exp_i_omega_t "
-            "or exp_minus_i_omega_t"
+            "manifest.physics.phase_convention must be exp_i_omega_t, "
+            "exp_plus_i_omega_t, or exp_minus_i_omega_t"
         )
     require_equal(
         physics.get("frequency_units"),
@@ -642,6 +927,17 @@ def validate_mode_diagnostics_fields(
     payload_path: str,
     frequency_hz: float,
 ) -> None:
+    relax_to_eigen_handoff_sha256 = payload.get("relax_to_eigen_handoff_sha256")
+    source_mesh_topology_sha256 = payload.get("source_mesh_topology_sha256")
+    if relax_to_eigen_handoff_sha256 is not None or source_mesh_topology_sha256 is not None:
+        require_sha256_token(
+            relax_to_eigen_handoff_sha256,
+            f"{payload_path}.relax_to_eigen_handoff_sha256",
+        )
+        require_sha256_token(
+            source_mesh_topology_sha256,
+            f"{payload_path}.source_mesh_topology_sha256",
+        )
     frequency_imag_hz = require_finite_number(
         payload.get("frequency_imag_hz"),
         f"{payload_path}.frequency_imag_hz",
@@ -836,6 +1132,8 @@ def require_mode_metadata_matches_summary(
     for field_name in [
         "phasor_convention",
         "eigenvalue_mapping",
+        "relax_to_eigen_handoff_sha256",
+        "source_mesh_topology_sha256",
     ]:
         require_equal(
             metadata.get(field_name),
@@ -870,6 +1168,8 @@ def require_eigen_summary_mode_matches_spectrum(
     for field_name in [
         "phasor_convention",
         "eigenvalue_mapping",
+        "relax_to_eigen_handoff_sha256",
+        "source_mesh_topology_sha256",
     ]:
         require_equal(
             mode.get(field_name),
@@ -910,12 +1210,18 @@ def validate_mode_summary(
     raw_mode_index = require_non_negative_int(mode.get("raw_mode_index"), "mode.raw_mode_index")
     expected_field_id = mode_field_id(sample_index, raw_mode_index)
     expected_resource_key = mode_field_resource_key(expected_field_id)
-    require_equal(mode.get("mode_field_id"), expected_field_id, "mode.mode_field_id")
-    require_equal(
-        mode.get("mode_field_resource_key"),
-        expected_resource_key,
-        "mode.mode_field_resource_key",
-    )
+    has_field_id = mode.get("mode_field_id") is not None
+    has_resource_key = mode.get("mode_field_resource_key") is not None
+    if has_field_id != has_resource_key:
+        missing_name = "mode.mode_field_resource_key" if has_field_id else "mode.mode_field_id"
+        fail(f"{missing_name} requires the paired mode field handoff")
+    if has_field_id:
+        require_equal(mode.get("mode_field_id"), expected_field_id, "mode.mode_field_id")
+        require_equal(
+            mode.get("mode_field_resource_key"),
+            expected_resource_key,
+            "mode.mode_field_resource_key",
+        )
     frequency_hz = require_finite_number(mode.get("frequency_hz"), "mode.frequency_hz")
     require_frequency_inside_window(frequency_hz, requested_window_hz, "mode.frequency_hz")
     frequency_real_hz = require_finite_number(mode.get("frequency_real_hz"), "mode.frequency_real_hz")
@@ -936,6 +1242,16 @@ def validate_mode_summary(
     )
     validate_mode_diagnostics_fields(mode, "mode", frequency_hz)
     require_non_empty_string(mode.get("dominant_polarization"), "mode.dominant_polarization")
+
+    if not has_field_id:
+        return (
+            sample_index,
+            raw_mode_index,
+            frequency_hz,
+            frequency_real_hz,
+            frequency_imag_hz,
+            angular_frequency_rad_per_s,
+        )
 
     metadata_path = nested_mode_path(sample_index, raw_mode_index)
     if manifest_mode_paths and metadata_path not in manifest_mode_paths:
@@ -980,6 +1296,14 @@ def validate_mode_summary(
     require_mode_metadata_matches_summary(mode, metadata, metadata_path)
     validate_mode_diagnostics_fields(metadata, metadata_path, frequency_hz)
     require_mode_metadata_summaries(metadata, metadata_path)
+    require_mode_source_mesh_identity(
+        metadata,
+        metadata_path,
+        require_non_negative_int(
+            metadata.get("mode_field_sample_count"),
+            f"{metadata_path}.mode_field_sample_count",
+        ),
+    )
     require_mode_field_metadata(
         metadata,
         metadata_path,
@@ -1144,6 +1468,10 @@ def validate_solver_window_diagnostics(
     *,
     require_window: bool,
 ) -> list[float] | None:
+    if diagnostics.get("target_kind") == "nearest_frequency":
+        if require_window:
+            fail("solver diagnostics require a frequency_window target")
+        return None
     if "window_completeness" not in diagnostics:
         if require_window:
             fail("solver_diagnostics.window_completeness is required")
@@ -1208,8 +1536,132 @@ def validate_solver_window_diagnostics(
                 f"solver_diagnostics.window_completeness.{key}",
             )
 
+    top_level_subwindows = diagnostics.get("subwindows")
+    if top_level_subwindows is None and "sample_solver_diagnostics" in diagnostics:
+        sample_diagnostics = require_object_list(
+            diagnostics.get("sample_solver_diagnostics"),
+            "solver_diagnostics.sample_solver_diagnostics",
+        )
+        sample_count = require_non_negative_int(
+            diagnostics.get("sample_count"),
+            "solver_diagnostics.sample_count",
+        )
+        if not sample_diagnostics or len(sample_diagnostics) != sample_count:
+            fail(
+                "solver_diagnostics.sample_solver_diagnostics must contain one entry "
+                "per field/k sample"
+            )
+        seen_sample_indices: set[int] = set()
+        valid_sample_statuses = {"ok", "unavailable", "validation_error", "operator_error", "solve_error"}
+        for sample_position, sample in enumerate(sample_diagnostics):
+            sample_name = f"solver_diagnostics.sample_solver_diagnostics[{sample_position}]"
+            sample_index = require_non_negative_int(
+                sample.get("sample_index"),
+                f"{sample_name}.sample_index",
+            )
+            if sample_index in seen_sample_indices:
+                fail(f"{sample_name}.sample_index must be unique")
+            seen_sample_indices.add(sample_index)
+            executed = sample.get("diagnostics")
+            if not isinstance(executed, dict):
+                fail(f"{sample_name}.diagnostics must be an object")
+            if "requested_window_hz" in executed:
+                sample_requested = require_frequency_pair(
+                    executed.get("requested_window_hz"),
+                    f"{sample_name}.diagnostics.requested_window_hz",
+                )
+                require_close(sample_requested[0], requested[0], f"{sample_name}.diagnostics.requested_window_hz[0]")
+                require_close(sample_requested[1], requested[1], f"{sample_name}.diagnostics.requested_window_hz[1]")
+            subwindows = require_object_list(
+                executed.get("subwindows"),
+                f"{sample_name}.diagnostics.subwindows",
+            )
+            if not subwindows:
+                fail(f"{sample_name}.diagnostics.subwindows must not be empty")
+            seen_subwindow_indices: set[int] = set()
+            for subwindow_position, subwindow in enumerate(subwindows):
+                name = f"{sample_name}.diagnostics.subwindows[{subwindow_position}]"
+                subwindow_index = require_non_negative_int(
+                    subwindow.get("subwindow_index"),
+                    f"{name}.subwindow_index",
+                )
+                if subwindow_index in seen_subwindow_indices:
+                    fail(f"{name}.subwindow_index must be unique within its sample")
+                seen_subwindow_indices.add(subwindow_index)
+                shift_frequency_hz = require_finite_number(
+                    subwindow.get("shift_frequency_hz"),
+                    f"{name}.shift_frequency_hz",
+                )
+                if shift_frequency_hz < requested[0] or shift_frequency_hz > requested[1]:
+                    fail(f"{name}.shift_frequency_hz must be inside requested_window_hz")
+                if subwindow.get("status") not in valid_sample_statuses:
+                    fail(f"{name}.status is invalid")
+                require_non_negative_int(
+                    subwindow.get("converged_eigenpair_count"),
+                    f"{name}.converged_eigenpair_count",
+                )
+                candidate_mode_count = None
+                if "candidate_mode_count" in subwindow:
+                    candidate_mode_count = require_non_negative_int(
+                        subwindow.get("candidate_mode_count"),
+                        f"{name}.candidate_mode_count",
+                    )
+                candidate_count_kind = subwindow.get("candidate_mode_count_kind")
+                raw_ritz_in_window_count = None
+                if candidate_count_kind is not None:
+                    if candidate_count_kind != "raw_ritz_in_window":
+                        fail(f"{name}.candidate_mode_count_kind is invalid")
+                    raw_ritz_in_window_count = require_non_negative_int(
+                        subwindow.get("raw_ritz_in_window_count"),
+                        f"{name}.raw_ritz_in_window_count",
+                    )
+                    if candidate_mode_count != raw_ritz_in_window_count:
+                        fail(
+                            f"{name}.candidate_mode_count must match "
+                            "raw_ritz_in_window_count"
+                        )
+                accepted_mode_count = require_non_negative_int(
+                    subwindow.get("accepted_mode_count"),
+                    f"{name}.accepted_mode_count",
+                )
+                for counter_name in (
+                    "action_residual_evaluated_count",
+                    "reconstructed_mode_count",
+                    "full_residual_accepted_count",
+                ):
+                    if counter_name in subwindow:
+                        require_non_negative_int(
+                            subwindow.get(counter_name), f"{name}.{counter_name}"
+                        )
+                if (
+                    candidate_mode_count is not None
+                    and accepted_mode_count > candidate_mode_count
+                ):
+                    fail(f"{name}.accepted_mode_count must not exceed candidate_mode_count")
+                if (
+                    raw_ritz_in_window_count is not None
+                    and accepted_mode_count > raw_ritz_in_window_count
+                ):
+                    fail(
+                        f"{name}.accepted_mode_count must not exceed "
+                        "raw_ritz_in_window_count"
+                    )
+                accepted_frequencies = subwindow.get("accepted_frequencies_hz")
+                if not isinstance(accepted_frequencies, list):
+                    fail(f"{name}.accepted_frequencies_hz must be a list")
+                if len(accepted_frequencies) != accepted_mode_count:
+                    fail(f"{name}.accepted_frequencies_hz must match accepted_mode_count")
+                for frequency_position, frequency in enumerate(accepted_frequencies):
+                    value = require_finite_number(
+                        frequency,
+                        f"{name}.accepted_frequencies_hz[{frequency_position}]",
+                    )
+                    if value < 0.0:
+                        fail(f"{name}.accepted_frequencies_hz must be non-negative")
+        return requested
+
     subwindows = require_object_list(
-        diagnostics.get("subwindows"),
+        top_level_subwindows,
         "solver_diagnostics.subwindows",
     )
     if not subwindows:
@@ -2536,36 +2988,71 @@ def validate_k0_kittel_summary_artifacts(
                     "unless eigen_summary.equilibrium_source.handoff=stage_continuation"
                 )
             solver_diagnostics = load_json(root / "eigen/diagnostics/solver.v1.json")
-            require_equal(
-                solver_diagnostics.get("solver_adapter"),
+            if solver_diagnostics.get("solver_adapter") not in {
                 "k0_poisson_airbox_cpu_full_coupled_slepc",
-                "solver_diagnostics.solver_adapter",
-            )
-            require_equal(
-                solver_diagnostics.get("solver_model"),
+                "k0_poisson_airbox_cpu_schur_slepc",
+                "k0_poisson_airbox_gpu_petsc_slepc",
+                "k0_poisson_airbox_gpu_modal_device_krylov",
+            }:
+                fail(
+                    "solver_diagnostics.solver_adapter must be a certified "
+                    "CPU or GPU K0 periodic-airbox adapter"
+                )
+            if solver_diagnostics.get("solver_model") not in {
                 "k0_poisson_airbox_cpu_full_coupled_slepc",
-                "solver_diagnostics.solver_model",
-            )
-            require_equal(
-                solver_diagnostics.get("resolved_solver_family"),
+                "k0_poisson_airbox_cpu_schur_slepc",
+                "k0_poisson_airbox_gpu_petsc_slepc",
+                "k0_poisson_airbox_gpu_modal_device_krylov",
+            }:
+                fail("solver_diagnostics.solver_model is not a certified K0 periodic-airbox model")
+            if solver_diagnostics.get("resolved_solver_family") not in {
                 "k0_poisson_airbox_full_coupled",
-                "solver_diagnostics.resolved_solver_family",
-            )
+                "k0_poisson_airbox_schur",
+                "device_resident_arnoldi_shift_invert",
+            }:
+                fail("solver_diagnostics.resolved_solver_family is not a certified K0 periodic-airbox family")
             require_equal(
                 solver_diagnostics.get("demag_kind"),
                 "periodic_airbox_k0",
                 "solver_diagnostics.demag_kind",
             )
-            require_equal(
-                solver_diagnostics.get("assembly_kind"),
-                "mfem_weak_form_shared_domain",
-                "solver_diagnostics.assembly_kind",
-            )
-            require_equal(
+            assembly_kind = solver_diagnostics.get("assembly_kind")
+            if assembly_kind is None:
+                sampled = require_object_list(
+                    solver_diagnostics.get("sample_solver_diagnostics"),
+                    "solver_diagnostics.sample_solver_diagnostics",
+                )
+                if not sampled:
+                    fail("solver_diagnostics.assembly_kind is required")
+                sampled_assembly_kinds: list[object] = []
+                for sample_position, sample in enumerate(sampled):
+                    sample_payload = sample.get("diagnostics")
+                    if not isinstance(sample_payload, dict):
+                        fail(
+                            "solver_diagnostics.sample_solver_diagnostics"
+                            f"[{sample_position}].diagnostics must be an object"
+                        )
+                    sampled_assembly_kinds.append(sample_payload.get("assembly_kind"))
+                if any(
+                    value != "mfem_weak_form_shared_domain"
+                    for value in sampled_assembly_kinds
+                ):
+                    fail(
+                        "every sampled solver diagnostic must use "
+                        "assembly_kind=mfem_weak_form_shared_domain"
+                    )
+            else:
+                require_equal(
+                    assembly_kind,
+                    "mfem_weak_form_shared_domain",
+                    "solver_diagnostics.assembly_kind",
+                )
+            gauge_policy = require_non_empty_string(
                 demag.get("gauge_policy"),
-                "mean_zero_augmented",
                 f"{summary_name}.demag.gauge_policy",
             )
+            if gauge_policy not in {"none", "mean_zero_augmented"}:
+                fail(f"{summary_name}.demag.gauge_policy is invalid")
             phi_dof_count = require_non_negative_int(
                 demag.get("phi_dof_count"),
                 f"{summary_name}.demag.phi_dof_count",
@@ -2576,10 +3063,15 @@ def validate_k0_kittel_summary_artifacts(
                 demag.get("augmented_phi_dof_count"),
                 f"{summary_name}.demag.augmented_phi_dof_count",
             )
-            if augmented_phi_dof_count <= phi_dof_count:
+            if gauge_policy == "mean_zero_augmented" and augmented_phi_dof_count <= phi_dof_count:
                 fail(
                     f"{summary_name}.demag.augmented_phi_dof_count must exceed "
                     f"{summary_name}.demag.phi_dof_count for mean-zero gauge"
+                )
+            if gauge_policy == "none" and augmented_phi_dof_count != phi_dof_count:
+                fail(
+                    f"{summary_name}.demag.augmented_phi_dof_count must equal "
+                    f"{summary_name}.demag.phi_dof_count when no gauge is present"
                 )
             poisson_residual = require_finite_number(
                 demag.get("poisson_constraint_relative_residual"),
@@ -3082,6 +3574,188 @@ def validate_gpu_modal_k0_kittel_provenance(root: Path) -> None:
         )
 
 
+def validate_gpu_modal_k0_periodic_airbox_provenance(root: Path) -> None:
+    manifest = load_json(root / "frequency_domain/manifest.v1.json")
+    requested = manifest.get("requested_execution")
+    resolved = manifest.get("resolved_execution")
+    if not isinstance(requested, dict) or not isinstance(resolved, dict):
+        fail("GPU periodic-airbox provenance requires requested/resolved execution objects")
+    require_equal(requested.get("backend"), "fem", "manifest.requested_execution.backend")
+    require_equal(requested.get("device"), "gpu", "manifest.requested_execution.device")
+    require_equal(requested.get("precision"), "double", "manifest.requested_execution.precision")
+    require_equal(requested.get("include_demag"), True, "manifest.requested_execution.include_demag")
+    require_equal(resolved.get("backend"), "fem", "manifest.resolved_execution.backend")
+    require_equal(resolved.get("device"), "gpu", "manifest.resolved_execution.device")
+    require_equal(resolved.get("native_backend"), "native_gpu", "manifest.resolved_execution.native_backend")
+    require_equal(
+        resolved.get("reference_or_production"),
+        "production",
+        "manifest.resolved_execution.reference_or_production",
+    )
+    if resolved.get("solver_algorithm") not in {
+        "k0_poisson_airbox_gpu_petsc_slepc",
+        "k0_poisson_airbox_gpu_modal_device_krylov",
+    }:
+        fail("manifest.resolved_execution.solver_algorithm must identify a GPU K0 PETSc/SLEPc adapter")
+    require_equal(
+        resolved.get("device_residency"),
+        "gpu_device_resident",
+        "manifest.resolved_execution.device_residency",
+    )
+    engine = require_non_empty_string(resolved.get("engine"), "manifest.resolved_execution.engine")
+    if "cpu" in engine.lower():
+        fail("manifest.resolved_execution.engine must not contain a CPU solver for strict GPU K0 demag")
+
+    solver = load_json(root / "eigen/diagnostics/solver.v1.json")
+    if solver.get("solver_adapter") not in {
+        "k0_poisson_airbox_gpu_petsc_slepc",
+        "k0_poisson_airbox_gpu_modal_device_krylov",
+    }:
+        fail("solver_diagnostics.solver_adapter must identify a GPU K0 PETSc/SLEPc adapter")
+    require_equal(solver.get("execution_lane"), "production_gpu", "solver_diagnostics.execution_lane")
+    require_equal(solver.get("demag_kind"), "periodic_airbox_k0", "solver_diagnostics.demag_kind")
+    require_equal(solver.get("algebraic_form"), "schur_reduced_descriptor", "solver_diagnostics.algebraic_form")
+    require_equal(solver.get("matrix_equation"), "L_eff q = lambda B_qq q; phi(q) = -P^-1 A_phiq q", "solver_diagnostics.matrix_equation")
+    require_equal(solver.get("spectral_transform"), "shift_invert", "solver_diagnostics.spectral_transform")
+    require_equal(
+        solver.get("production_periodic_airbox_claim"),
+        True,
+        "solver_diagnostics.production_periodic_airbox_claim",
+    )
+    samples = require_object_list(
+        solver.get("sample_solver_diagnostics"),
+        "solver_diagnostics.sample_solver_diagnostics",
+    )
+    if not samples:
+        fail("GPU periodic-airbox provenance requires executed per-sample native diagnostics")
+    for sample_index, sample in enumerate(samples):
+        diagnostics = sample.get("diagnostics")
+        if not isinstance(diagnostics, dict):
+            fail(f"solver_diagnostics.sample_solver_diagnostics[{sample_index}].diagnostics must be an object")
+        prefix = f"solver_diagnostics.sample_solver_diagnostics[{sample_index}].diagnostics"
+        if diagnostics.get("solver_adapter") not in {
+            "k0_poisson_airbox_gpu_petsc_slepc",
+            "k0_poisson_airbox_gpu_modal_device_krylov",
+        }:
+            fail(f"{prefix}.solver_adapter must identify a GPU K0 PETSc/SLEPc adapter")
+        require_equal(diagnostics.get("assembly_kind"), "mfem_weak_form_shared_domain", f"{prefix}.assembly_kind")
+        require_equal(diagnostics.get("demag_kind"), "periodic_airbox_k0", f"{prefix}.demag_kind")
+        require_equal(diagnostics.get("algebraic_form"), "schur_reduced_descriptor", f"{prefix}.algebraic_form")
+        require_equal(diagnostics.get("matrix_equation"), "L_eff q = lambda B_qq q; phi(q) = -P^-1 A_phiq q", f"{prefix}.matrix_equation")
+        require_equal(diagnostics.get("spectral_transform"), "shift_invert", f"{prefix}.spectral_transform")
+        spectral = diagnostics.get("spectral")
+        if isinstance(spectral, dict):
+            require_equal(spectral.get("spectral_scalar_mode"), "real_split", f"{prefix}.spectral.spectral_scalar_mode")
+        require_equal(diagnostics.get("persistent_solver_context"), True, f"{prefix}.persistent_solver_context")
+        require_equal(diagnostics.get("gpu_device_resident_modal_eigensolver"), True, f"{prefix}.gpu_device_resident_modal_eigensolver")
+        require_equal(diagnostics.get("scalable_selected_spectrum"), True, f"{prefix}.scalable_selected_spectrum")
+        require_equal(diagnostics.get("production_implication"), True, f"{prefix}.production_implication")
+        require_equal(diagnostics.get("validation_only"), False, f"{prefix}.validation_only")
+        require_equal(diagnostics.get("cpu_fallback"), "disabled", f"{prefix}.cpu_fallback")
+        require_equal(diagnostics.get("fallback_used"), False, f"{prefix}.fallback_used")
+        require_equal(diagnostics.get("per_iteration_h2d_transfer_count"), 0, f"{prefix}.per_iteration_h2d_transfer_count")
+        require_equal(diagnostics.get("per_iteration_d2h_transfer_count"), 0, f"{prefix}.per_iteration_d2h_transfer_count")
+        require_equal(diagnostics.get("full_residual_certified"), True, f"{prefix}.full_residual_certified")
+
+
+def validate_cpu_modal_k0_periodic_airbox_provenance(root: Path) -> None:
+    """Validate a fresh CPU P1 artifact without accepting Kittel metadata."""
+    manifest = load_json(root / "frequency_domain/manifest.v1.json")
+    requested = manifest.get("requested_execution")
+    resolved = manifest.get("resolved_execution")
+    if not isinstance(requested, dict) or not isinstance(resolved, dict):
+        fail("CPU periodic-airbox provenance requires requested/resolved execution objects")
+    require_equal(requested.get("backend"), "fem", "manifest.requested_execution.backend")
+    require_equal(requested.get("device"), "cpu", "manifest.requested_execution.device")
+    require_equal(requested.get("precision"), "double", "manifest.requested_execution.precision")
+    require_equal(requested.get("include_demag"), True, "manifest.requested_execution.include_demag")
+    require_equal(resolved.get("backend"), "fem", "manifest.resolved_execution.backend")
+    require_equal(resolved.get("device"), "cpu", "manifest.resolved_execution.device")
+    require_equal(resolved.get("native_backend"), "native_cpu", "manifest.resolved_execution.native_backend")
+    require_equal(
+        resolved.get("reference_or_production"),
+        "production",
+        "manifest.resolved_execution.reference_or_production",
+    )
+    if resolved.get("solver_algorithm") not in {
+        "k0_poisson_airbox_cpu_full_coupled_slepc",
+        "k0_poisson_airbox_cpu_schur_slepc",
+    }:
+        fail("manifest.resolved_execution.solver_algorithm must identify a CPU K0 PETSc/SLEPc adapter")
+    require_equal(
+        resolved.get("device_residency"),
+        "host",
+        "manifest.resolved_execution.device_residency",
+    )
+    require_equal(resolved.get("fallback_used"), False, "manifest.resolved_execution.fallback_used")
+    validation = manifest.get("validation")
+    if not isinstance(validation, dict):
+        fail("manifest.validation must be an object")
+    if validation.get("k0_kittel_validation") is not None:
+        fail("production CPU artifact must not carry analytical Kittel validation metadata")
+
+    solver = load_json(root / "eigen/diagnostics/solver.v1.json")
+    if solver.get("solver_adapter") not in {
+        "k0_poisson_airbox_cpu_full_coupled_slepc",
+        "k0_poisson_airbox_cpu_schur_slepc",
+    }:
+        fail("solver_diagnostics.solver_adapter must identify a CPU K0 PETSc/SLEPc adapter")
+    require_equal(solver.get("execution_lane"), "production_cpu", "solver_diagnostics.execution_lane")
+    require_equal(solver.get("demag_kind"), "periodic_airbox_k0", "solver_diagnostics.demag_kind")
+    require_equal(solver.get("algebraic_form"), "schur_reduced_descriptor", "solver_diagnostics.algebraic_form")
+    require_equal(
+        solver.get("matrix_equation"),
+        "L_eff q = lambda B_qq q; phi(q) = -P^-1 A_phiq q",
+        "solver_diagnostics.matrix_equation",
+    )
+    require_equal(solver.get("spectral_transform"), "shift_invert", "solver_diagnostics.spectral_transform")
+    require_equal(
+        solver.get("production_periodic_airbox_claim"),
+        True,
+        "solver_diagnostics.production_periodic_airbox_claim",
+    )
+    samples = require_object_list(
+        solver.get("sample_solver_diagnostics"),
+        "solver_diagnostics.sample_solver_diagnostics",
+    )
+    if not samples:
+        fail("CPU periodic-airbox provenance requires executed per-sample native diagnostics")
+    for sample_index, sample in enumerate(samples):
+        diagnostics = sample.get("diagnostics")
+        if not isinstance(diagnostics, dict):
+            fail(f"solver_diagnostics.sample_solver_diagnostics[{sample_index}].diagnostics must be an object")
+        prefix = f"solver_diagnostics.sample_solver_diagnostics[{sample_index}].diagnostics"
+        if diagnostics.get("solver_adapter") not in {
+            "k0_poisson_airbox_cpu_full_coupled_slepc",
+            "k0_poisson_airbox_cpu_schur_slepc",
+        }:
+            fail(f"{prefix}.solver_adapter must identify a CPU K0 PETSc/SLEPc adapter")
+        require_equal(diagnostics.get("assembly_kind"), "mfem_weak_form_shared_domain", f"{prefix}.assembly_kind")
+        require_equal(diagnostics.get("demag_kind"), "periodic_airbox_k0", f"{prefix}.demag_kind")
+        require_equal(diagnostics.get("spectral_transform"), "shift_invert", f"{prefix}.spectral_transform")
+        require_equal(diagnostics.get("fallback_used"), False, f"{prefix}.fallback_used")
+        require_equal(diagnostics.get("full_residual_certified"), True, f"{prefix}.full_residual_certified")
+
+
+def validate_k0_periodic_airbox_production_provenance(root: Path) -> None:
+    manifest = load_json(root / "frequency_domain/manifest.v1.json")
+    requested = manifest.get("requested_execution")
+    if not isinstance(requested, dict):
+        fail("K0 production provenance requires manifest.requested_execution")
+    device = requested.get("device")
+    if device == "cpu":
+        validate_cpu_modal_k0_periodic_airbox_provenance(root)
+    elif device == "gpu":
+        validate_gpu_modal_k0_periodic_airbox_provenance(root)
+        validation = manifest.get("validation")
+        if not isinstance(validation, dict):
+            fail("manifest.validation must be an object for GPU K0 production provenance")
+        if validation.get("k0_kittel_validation") is not None:
+            fail("production GPU artifact must not carry analytical Kittel validation metadata")
+    else:
+        fail("K0 production provenance requires requested device cpu or gpu")
+
+
 def validate_exchange_only_reciprocal_dispersion(
     known_modes: dict[tuple[int, int], tuple[float, float, float, float]],
     known_samples: dict[int, tuple[float, tuple[float, float, float], str]],
@@ -3513,6 +4187,7 @@ def validate_low_k_de_bv_analytic_dispersion(
 def validate_dispersion(
     root: Path,
     known_modes: dict[tuple[int, int], tuple[float, float, float, float]],
+    known_mode_summaries: dict[tuple[int, int], dict],
     known_samples: dict[int, tuple[float, tuple[float, float, float], str]],
     branch_ids_by_mode: dict[tuple[int, int], int],
     tracking_sources_by_mode: dict[tuple[int, int], str],
@@ -3661,18 +4336,30 @@ def validate_dispersion(
                     f"dispersion row {row_index}.overlap_score",
                     absolute_tolerance=1.0e-12,
                 )
-        expected_field_id = mode_field_id(sample_index, raw_mode_index)
-        expected_resource_key = mode_field_resource_key(expected_field_id)
-        require_equal(
-            row.get("mode_field_id"),
-            expected_field_id,
-            f"dispersion row {row_index}.mode_field_id",
-        )
-        require_equal(
-            row.get("mode_field_resource_key"),
-            expected_resource_key,
-            f"dispersion row {row_index}.mode_field_resource_key",
-        )
+        if known_mode_summaries[mode_key].get("mode_field_id") is None:
+            require_equal(
+                row.get("mode_field_id"),
+                "",
+                f"dispersion row {row_index}.mode_field_id",
+            )
+            require_equal(
+                row.get("mode_field_resource_key"),
+                "",
+                f"dispersion row {row_index}.mode_field_resource_key",
+            )
+        else:
+            expected_field_id = mode_field_id(sample_index, raw_mode_index)
+            expected_resource_key = mode_field_resource_key(expected_field_id)
+            require_equal(
+                row.get("mode_field_id"),
+                expected_field_id,
+                f"dispersion row {row_index}.mode_field_id",
+            )
+            require_equal(
+                row.get("mode_field_resource_key"),
+                expected_resource_key,
+                f"dispersion row {row_index}.mode_field_resource_key",
+            )
         frequency_hz = require_finite_number(
             float(row["frequency_hz"]),
             f"dispersion row {row_index}.frequency_hz",
@@ -3715,6 +4402,285 @@ def validate_dispersion(
     if missing_mode_keys:
         fail(f"missing dispersion rows for modes: {sorted(missing_mode_keys)!r}")
     return rows_by_mode
+
+
+def validate_typed_modal_field_sweep(
+    root: Path,
+    manifest: dict,
+    solver_diagnostics: dict,
+    known_modes: dict[tuple[int, int], tuple[float, float, float, float]],
+    known_mode_summaries: dict[tuple[int, int], dict],
+    branch_ids_by_mode: dict[tuple[int, int], int],
+) -> None:
+    """Validate the optional A1S native modal field-sweep envelope.
+
+    This is deliberately stricter than the v2 transport decoder: discovering a
+    field-sweep artifact in the manifest means the on-disk source graph, every
+    mode reference and every completion claim must be scientifically usable.
+    """
+    def declares_bias_field_sweep(value: object) -> bool:
+        return (
+            isinstance(value, dict)
+            and isinstance(value.get("field_sweep"), dict)
+            and value["field_sweep"].get("kind") == "bias_field_sweep"
+        )
+
+    declared = any(
+        declares_bias_field_sweep(value)
+        for value in [manifest, manifest.get("diagnostics"), solver_diagnostics]
+    )
+    artifact_path = manifest.get("artifacts", {}).get("field_sweep_v1_path")
+    if artifact_path is None:
+        if declared:
+            fail(
+                "manifest.artifacts.field_sweep_v1_path is required for a declared "
+                "bias_field_sweep"
+            )
+        return
+    relative_path, path = require_bundle_path(
+        root, artifact_path, "manifest.artifacts.field_sweep_v1_path"
+    )
+    require_equal(relative_path, "eigen/field_sweep.v1.json", "manifest.artifacts.field_sweep_v1_path")
+    resources = manifest.get("resources")
+    if not isinstance(resources, dict):
+        fail("manifest.resources must be an object")
+    require_equal(
+        resources.get("field_sweep_resource_key"),
+        "/v2/sessions/current/analysis/frequency-domain/eigen/field-sweep.v1",
+        "manifest.resources.field_sweep_resource_key",
+    )
+    field_sweep = load_json(path)
+    prefix = "field_sweep"
+    require_equal(field_sweep.get("schema_version"), "eigen/field_sweep.v1", f"{prefix}.schema_version")
+    require_non_empty_string(field_sweep.get("artifact_id"), f"{prefix}.artifact_id")
+    source = field_sweep.get("source")
+    if not isinstance(source, dict):
+        fail(f"{prefix}.source must be an object")
+    require_equal(source.get("kind"), "modal_eigensolve", f"{prefix}.source.kind")
+    source_artifact, source_path = require_bundle_path(
+        root, source.get("artifact"), f"{prefix}.source.artifact"
+    )
+    require_equal(source_artifact, "eigen/spectrum.v2.json", f"{prefix}.source.artifact")
+    source_revision = require_sha256_token(source.get("revision"), f"{prefix}.source.revision")
+    require_equal(source_revision, sha256_file_token(source_path), f"{prefix}.source.revision")
+    require_equal(field_sweep.get("source_revision"), source_revision, f"{prefix}.source_revision")
+    for name in ["run_id", "stage_id", "scope_id", "runtime_id"]:
+        require_non_empty_string(field_sweep.get(name), f"{prefix}.{name}")
+    self_revision = require_sha256_token(
+        field_sweep.get("revision"), f"{prefix}.revision"
+    )
+    content_sha256 = require_sha256_token(
+        field_sweep.get("content_sha256"), f"{prefix}.content_sha256"
+    )
+
+    status = require_non_empty_string(field_sweep.get("status"), f"{prefix}.status")
+    if status not in {"complete", "partial", "interrupted", "corrupt"}:
+        fail(f"{prefix}.status is invalid")
+    complete = require_boolean(field_sweep.get("complete"), f"{prefix}.complete")
+    interrupted = require_boolean(field_sweep.get("interrupted"), f"{prefix}.interrupted")
+    stop_reason = field_sweep.get("stop_reason")
+    if stop_reason is not None:
+        require_non_empty_string(stop_reason, f"{prefix}.stop_reason")
+    if complete:
+        require_equal(status, "complete", f"{prefix}.status")
+        require_equal(interrupted, False, f"{prefix}.interrupted")
+        require_equal(stop_reason, None, f"{prefix}.stop_reason")
+    elif status == "interrupted":
+        require_equal(interrupted, True, f"{prefix}.interrupted")
+        require_non_empty_string(stop_reason, f"{prefix}.stop_reason")
+    elif interrupted:
+        fail(f"{prefix}.interrupted requires status='interrupted'")
+    if not complete and ("promotion_binding" in field_sweep or "promotion" in field_sweep):
+        fail(f"{prefix} must not carry a promotion binding when incomplete")
+
+    requested_sample_count = require_non_negative_int(
+        field_sweep.get("requested_sample_count"), f"{prefix}.requested_sample_count"
+    )
+    completed_sample_count = require_non_negative_int(
+        field_sweep.get("completed_sample_count"), f"{prefix}.completed_sample_count"
+    )
+    samples = require_object_list(field_sweep.get("samples"), f"{prefix}.samples")
+    if complete:
+        require_equal(requested_sample_count, len(samples), f"{prefix}.requested_sample_count")
+        require_equal(completed_sample_count, len(samples), f"{prefix}.completed_sample_count")
+    elif requested_sample_count < len(samples):
+        fail(f"{prefix}.requested_sample_count must cover all published samples")
+
+    scan_axis = field_sweep.get("scan_axis")
+    if not isinstance(scan_axis, dict):
+        fail(f"{prefix}.scan_axis must be an object")
+    require_equal(scan_axis.get("kind"), "bias_field", f"{prefix}.scan_axis.kind")
+    require_equal(scan_axis.get("coordinate"), "bias_field_a_per_m", f"{prefix}.scan_axis.coordinate")
+    require_equal(scan_axis.get("unit"), "A/m", f"{prefix}.scan_axis.unit")
+    units = field_sweep.get("units")
+    if not isinstance(units, dict):
+        fail(f"{prefix}.units must be an object")
+    for field_name, expected in [
+        ("frequency", "Hz"),
+        ("angular_frequency", "rad/s"),
+        ("bias_field", "A/m"),
+        ("bias_field_display", "mu0 H (T)"),
+    ]:
+        require_equal(units.get(field_name), expected, f"{prefix}.units.{field_name}")
+
+    topology = field_sweep.get("topology")
+    if not isinstance(topology, dict):
+        fail(f"{prefix}.topology must be an object")
+    for field_name in ["mesh_id", "topology_revision", "indexing", "sample_axis", "mode_axis"]:
+        require_non_empty_string(topology.get(field_name), f"{prefix}.topology.{field_name}")
+    require_equal(topology.get("indexing"), "sample_index_then_raw_mode_index", f"{prefix}.topology.indexing")
+    require_equal(topology.get("sample_axis"), "sample_id", f"{prefix}.topology.sample_axis")
+    require_equal(topology.get("mode_axis"), "mode_id", f"{prefix}.topology.mode_axis")
+    node_count = topology.get("node_count")
+    if node_count is not None:
+        require_non_negative_int(node_count, f"{prefix}.topology.node_count")
+    for execution_name in ["requested_execution", "resolved_execution"]:
+        execution = field_sweep.get(execution_name)
+        if not isinstance(execution, dict):
+            fail(f"{prefix}.{execution_name} must be an object")
+        for field_name in ["backend", "device", "precision", "execution_mode", "engine", "status"]:
+            require_non_empty_string(execution.get(field_name), f"{prefix}.{execution_name}.{field_name}")
+
+    references = require_object_list(field_sweep.get("cross_artifact_refs"), f"{prefix}.cross_artifact_refs")
+    required_refs = {
+        "source_spectrum": "eigen/spectrum.v2.json",
+        "source_branches": "eigen/branches.v2.json",
+    }
+    seen_ref_relations: set[str] = set()
+    for index, reference in enumerate(references):
+        ref_prefix = f"{prefix}.cross_artifact_refs[{index}]"
+        relation = require_non_empty_string(reference.get("relation"), f"{ref_prefix}.relation")
+        if relation in seen_ref_relations:
+            fail(f"{prefix}.cross_artifact_refs contains duplicate relation {relation!r}")
+        seen_ref_relations.add(relation)
+        expected_path = required_refs.get(relation)
+        if expected_path is None:
+            fail(f"{ref_prefix}.relation is not a supported modal source relation")
+        artifact, ref_path = require_bundle_path(root, reference.get("artifact"), f"{ref_prefix}.artifact")
+        require_equal(artifact, expected_path, f"{ref_prefix}.artifact")
+        revision = require_sha256_token(reference.get("revision"), f"{ref_prefix}.revision")
+        require_equal(revision, sha256_file_token(ref_path), f"{ref_prefix}.revision")
+    if seen_ref_relations != set(required_refs):
+        fail(f"{prefix}.cross_artifact_refs must contain spectrum and branches source refs")
+
+    seen_sample_ids: set[str] = set()
+    seen_sample_indices: set[int] = set()
+    completed_from_rows = 0
+    known_branch_ids = set(branch_ids_by_mode.values())
+    covered_modes: set[tuple[int, int]] = set()
+    for sample_position, sample in enumerate(samples):
+        sample_prefix = f"{prefix}.samples[{sample_position}]"
+        sample_id = require_non_empty_string(sample.get("sample_id"), f"{sample_prefix}.sample_id")
+        if sample_id in seen_sample_ids:
+            fail(f"{prefix}.samples contains duplicate sample_id {sample_id!r}")
+        seen_sample_ids.add(sample_id)
+        sample_index = require_non_negative_int(sample.get("sample_index"), f"{sample_prefix}.sample_index")
+        if sample_index in seen_sample_indices:
+            fail(f"{prefix}.samples contains duplicate sample_index {sample_index}")
+        seen_sample_indices.add(sample_index)
+        require_equal(sample_id, f"bias-field-sample-{sample_index:04d}", f"{sample_prefix}.sample_id")
+        if sample_index not in {sample_key[0] for sample_key in known_modes}:
+            fail(f"{sample_prefix}.sample_index does not resolve in spectrum")
+        require_equal(sample.get("scan_axis"), scan_axis, f"{sample_prefix}.scan_axis")
+        for field_name, scale in [("bias_field_a_per_m", 1.0), ("bias_field_mu0_t", MU0)]:
+            values = sample.get(field_name)
+            if not isinstance(values, list) or len(values) != 3:
+                fail(f"{sample_prefix}.{field_name} must be a length-3 array")
+            for component_index, value in enumerate(values):
+                finite = require_finite_number(value, f"{sample_prefix}.{field_name}[{component_index}]")
+                if field_name == "bias_field_mu0_t":
+                    source_value = require_finite_number(
+                        sample["bias_field_a_per_m"][component_index],
+                        f"{sample_prefix}.bias_field_a_per_m[{component_index}]",
+                    )
+                    require_close(finite, source_value * scale, f"{sample_prefix}.{field_name}[{component_index}]", absolute_tolerance=1.0e-12)
+        sample_topology = sample.get("topology")
+        if not isinstance(sample_topology, dict):
+            fail(f"{sample_prefix}.topology must be an object")
+        require_equal(sample_topology, topology, f"{sample_prefix}.topology")
+        sample_status = require_non_empty_string(sample.get("status"), f"{sample_prefix}.status")
+        if sample_status not in {"complete", "partial", "interrupted", "corrupt"}:
+            fail(f"{sample_prefix}.status is invalid")
+        if sample_status == "complete":
+            completed_from_rows += 1
+            for handoff in [
+                "equilibrium_artifact_sha256",
+                "linearization_state_sha256",
+                "operator_input_signature_sha256",
+            ]:
+                require_sha256_token(sample.get(handoff), f"{sample_prefix}.{handoff}")
+        sample_stop_reason = sample.get("stop_reason")
+        if sample_status in {"partial", "interrupted", "corrupt"}:
+            require_non_empty_string(sample_stop_reason, f"{sample_prefix}.stop_reason")
+        elif sample_stop_reason is not None:
+            fail(f"{sample_prefix}.stop_reason must be null for a complete sample")
+        branch_ids = sample.get("branch_ids")
+        if not isinstance(branch_ids, list):
+            fail(f"{sample_prefix}.branch_ids must be an integer list")
+        sample_branch_ids: set[int] = set()
+        for branch_position, branch_id in enumerate(branch_ids):
+            numeric_branch_id = require_non_negative_int(branch_id, f"{sample_prefix}.branch_ids[{branch_position}]")
+            if numeric_branch_id in sample_branch_ids:
+                fail(f"{sample_prefix}.branch_ids contains duplicate branch_id")
+            sample_branch_ids.add(numeric_branch_id)
+            if numeric_branch_id not in known_branch_ids:
+                fail(f"{sample_prefix}.branch_ids references an unknown branch")
+        modes = require_object_list(sample.get("modes"), f"{sample_prefix}.modes")
+        for mode_position, mode in enumerate(modes):
+            mode_prefix = f"{sample_prefix}.modes[{mode_position}]"
+            require_equal(mode.get("sample_id"), sample_id, f"{mode_prefix}.sample_id")
+            raw_mode_index = require_non_negative_int(mode.get("raw_mode_index"), f"{mode_prefix}.raw_mode_index")
+            mode_key = (sample_index, raw_mode_index)
+            if mode_key not in known_modes:
+                fail(f"{mode_prefix}.raw_mode_index does not resolve in spectrum")
+            if mode_key in covered_modes:
+                fail(f"{prefix}.samples contains duplicate sample/mode mapping {mode_key!r}")
+            covered_modes.add(mode_key)
+            require_equal(mode.get("mode_id"), f"sample-{sample_index:04d}/mode-{raw_mode_index:04d}", f"{mode_prefix}.mode_id")
+            expected_branch_id = branch_ids_by_mode.get(mode_key)
+            require_equal(mode.get("branch_id"), expected_branch_id, f"{mode_prefix}.branch_id")
+            if expected_branch_id not in sample_branch_ids:
+                fail(f"{mode_prefix}.branch_id is absent from {sample_prefix}.branch_ids")
+            expected_frequency, _, _, expected_omega = known_modes[mode_key]
+            require_close(
+                require_finite_number(mode.get("frequency_hz"), f"{mode_prefix}.frequency_hz"),
+                expected_frequency,
+                f"{mode_prefix}.frequency_hz",
+            )
+            require_close(
+                require_finite_number(mode.get("angular_frequency_rad_per_s"), f"{mode_prefix}.angular_frequency_rad_per_s"),
+                expected_omega,
+                f"{mode_prefix}.angular_frequency_rad_per_s",
+                absolute_tolerance=1.0e-3,
+            )
+            metadata_rel, metadata_path = require_bundle_path(root, mode.get("mode_artifact_path"), f"{mode_prefix}.mode_artifact_path")
+            require_equal(metadata_rel, nested_mode_path(sample_index, raw_mode_index), f"{mode_prefix}.mode_artifact_path")
+            metadata = load_json(metadata_path)
+            expected_summary = known_mode_summaries[mode_key]
+            require_equal(mode.get("mode_field_id"), expected_summary.get("mode_field_id"), f"{mode_prefix}.mode_field_id")
+            require_equal(mode.get("mode_field_resource_key"), expected_summary.get("mode_field_resource_key"), f"{mode_prefix}.mode_field_resource_key")
+            require_equal(metadata.get("mode_field_id"), mode.get("mode_field_id"), f"{mode_prefix}.mode_field_id")
+            require_equal(metadata.get("mode_field_resource_key"), mode.get("mode_field_resource_key"), f"{mode_prefix}.mode_field_resource_key")
+            require_equal(metadata.get("component_basis"), "global_xyz", f"{mode_prefix}.component_basis")
+            require_equal(metadata.get("value_kind"), "complex_spatial_vector", f"{mode_prefix}.value_kind")
+            require_equal(mode.get("source_revision"), source_revision, f"{mode_prefix}.source_revision")
+            require_finite_number(mode.get("residual_relative_l2"), f"{mode_prefix}.residual_relative_l2")
+            require_equal(mode.get("status"), sample_status, f"{mode_prefix}.status")
+    require_equal(completed_sample_count, completed_from_rows, f"{prefix}.completed_sample_count")
+    visualizable_modes = {
+        mode_key
+        for mode_key, mode_summary in known_mode_summaries.items()
+        if mode_summary.get("mode_field_id") is not None
+    }
+    if complete and covered_modes != visualizable_modes:
+        fail(f"{prefix}.complete requires every visualizable spectrum mode to resolve in the field sweep")
+    expected_self_digest = canonical_artifact_self_digest(field_sweep, prefix)
+    require_equal(
+        content_sha256,
+        expected_self_digest,
+        f"{prefix}.content_sha256",
+    )
+    require_equal(self_revision, expected_self_digest, f"{prefix}.revision")
 
 
 def parse_args(argv: list[str]) -> argparse.Namespace:
@@ -3813,6 +4779,31 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--require-gpu-modal-k0-periodic-airbox-provenance",
+        action="store_true",
+        help=(
+            "require strict production GPU K0 periodic-airbox modal execution, "
+            "persistent device Krylov residency, zero iterative vector transfers, "
+            "full residual certification, and no CPU fallback"
+        ),
+    )
+    parser.add_argument(
+        "--require-k0-periodic-airbox-production",
+        action="store_true",
+        help=(
+            "require a fresh CPU or GPU P1 periodic-airbox modal artifact "
+            "without analytical Kittel metadata"
+        ),
+    )
+    parser.add_argument(
+        "--require-gpu-modal-k0-periodic-airbox-production",
+        action="store_true",
+        help=(
+            "require a fresh GPU P1 periodic-airbox modal artifact without "
+            "analytical Kittel metadata"
+        ),
+    )
+    parser.add_argument(
         "--require-low-k-de-bv-analytic-dispersion",
         action="store_true",
         help=(
@@ -3828,6 +4819,11 @@ def main(argv: list[str] | None = None) -> int:
     args = parse_args(sys.argv[1:] if argv is None else argv)
     if args.require_k0_kittel_periodic_airbox_demag:
         args.require_k0_kittel_demag = True
+    if args.require_gpu_modal_k0_periodic_airbox_provenance:
+        args.require_k0_kittel_periodic_airbox_demag = True
+        args.require_k0_kittel_demag = True
+    if args.require_gpu_modal_k0_periodic_airbox_production:
+        args.require_k0_periodic_airbox_production = True
     if args.require_k0_kittel_demag:
         args.require_k0_kittel_field_sweep = True
     if args.require_production_modal_k_path and args.require_production_gamma_k_path:
@@ -3859,6 +4855,7 @@ def main(argv: list[str] | None = None) -> int:
         "manifest.schema_version",
     )
     require_equal(manifest.get("stage_kind"), "eigenmodes", "manifest.stage_kind")
+    validate_equilibrium_artifact_v7(root, manifest)
     validate_manifest_physics(manifest)
     require_equal(
         manifest.get("artifacts", {}).get("solver_diagnostics_path"),
@@ -3941,8 +4938,16 @@ def main(argv: list[str] | None = None) -> int:
         and (
             args.require_low_k_de_bv_analytic_dispersion
             or args.require_k0_kittel_demag
+            or args.require_k0_periodic_airbox_production
         )
     ):
+        require_equal(
+            manifest.get("artifacts", {}).get("mode_field_zarr_store_path"),
+            None,
+            "manifest.artifacts.mode_field_zarr_store_path",
+        )
+        require_zarr_mode_fields = False
+    elif mode_field_storage_format == "none":
         require_equal(
             manifest.get("artifacts", {}).get("mode_field_zarr_store_path"),
             None,
@@ -4025,6 +5030,11 @@ def main(argv: list[str] | None = None) -> int:
             known_mode_summaries[(known_sample_index, known_raw_mode_index)] = mode
     if not known_modes:
         fail("spectrum.samples must include at least one mode")
+    if mode_field_storage_format == "none":
+        if manifest_mode_paths or manifest_mode_resources:
+            fail("spectrum-only manifest must not declare mode metadata paths or field resources")
+        if any(mode.get("mode_field_id") is not None for mode in known_mode_summaries.values()):
+            fail("spectrum-only manifest must not publish mode field handoffs")
     spectrum_mode_count = require_non_negative_int(
         spectrum.get("mode_count"),
         "spectrum.mode_count",
@@ -4121,13 +5131,18 @@ def main(argv: list[str] | None = None) -> int:
                         "branch point.tracking_confidence",
                         absolute_tolerance=1.0e-12,
                     )
-            require_mode_field_handoff(
-                point,
-                "branch point",
-                sample_index,
-                raw_mode_index,
-            )
             if branch_mode_key in known_modes:
+                spectrum_mode = known_mode_summaries[branch_mode_key]
+                if spectrum_mode.get("mode_field_id") is None:
+                    if point.get("mode_field_id") is not None or point.get("mode_field_resource_key") is not None:
+                        fail("spectrum-only mode must not acquire a branch mode field handoff")
+                else:
+                    require_mode_field_handoff(
+                        point,
+                        "branch point",
+                        sample_index,
+                        raw_mode_index,
+                    )
                 frequency_hz = require_finite_number(
                     point.get("frequency_hz"),
                     "branch point.frequency_hz",
@@ -4176,10 +5191,19 @@ def main(argv: list[str] | None = None) -> int:
     dispersion_rows_by_mode = validate_dispersion(
         root,
         known_modes,
+        known_mode_summaries,
         known_samples,
         branch_ids_by_mode,
         tracking_sources_by_mode,
         overlap_by_mode,
+    )
+    validate_typed_modal_field_sweep(
+        root,
+        manifest,
+        solver_diagnostics,
+        known_modes,
+        known_mode_summaries,
+        branch_ids_by_mode,
     )
 
     if args.require_reference_full_2x2_floquet:
@@ -4212,6 +5236,19 @@ def main(argv: list[str] | None = None) -> int:
         )
     if args.require_gpu_modal_k0_kittel_provenance:
         validate_gpu_modal_k0_kittel_provenance(root)
+    if args.require_gpu_modal_k0_periodic_airbox_provenance:
+        validate_gpu_modal_k0_periodic_airbox_provenance(root)
+    if args.require_k0_periodic_airbox_production:
+        validate_k0_periodic_airbox_production_provenance(root)
+        if args.require_gpu_modal_k0_periodic_airbox_production:
+            requested_execution = manifest.get("requested_execution")
+            if not isinstance(requested_execution, dict):
+                fail("GPU K0 production provenance requires requested execution metadata")
+            require_equal(
+                requested_execution.get("device"),
+                "gpu",
+                "manifest.requested_execution.device",
+            )
     if args.require_low_k_de_bv_analytic_dispersion:
         validate_low_k_de_bv_analytic_dispersion(
             root,

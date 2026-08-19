@@ -183,7 +183,7 @@
 
   position: relative;
   display: grid;
-  grid-template-columns: var(--fm-space-4) var(--fm-icon-sm) minmax(0, 1fr) auto;
+  grid-template-columns: var(--fm-space-4) var(--fm-icon-sm) minmax(0, 1fr) auto auto auto;
   min-height: var(--fm-control-height-compact);
   align-items: center;
   gap: var(--fm-space-1);

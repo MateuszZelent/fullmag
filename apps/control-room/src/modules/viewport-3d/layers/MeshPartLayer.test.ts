@@ -365,6 +365,7 @@ describe("MeshPartLayer", () => {
     expect(source).toContain("field-scalar-shader");
     expect(source).toContain("<primitive attach=\"material\" object={scalarShaderMaterial} />");
     expect(source).not.toContain("applyScalarShaderColorBuffer");
+    expect(source).not.toContain("scalarShaderBufferRef.current =");
   });
 
   it("lets diagnostics bypass field-color buffer application without hiding surfaces", () => {
@@ -413,7 +414,10 @@ describe("MeshPartLayer", () => {
     );
 
     expect(source).toContain(
-      "if (!renderSettings.visible || !hasAnyVisibleRenderableSubLayer) return null;",
+      "(!renderSettings.visible && !modalSurfaceActive)",
+    );
+    expect(source).toContain(
+      "!hasAnyVisibleRenderableSubLayer",
     );
     expect(source).not.toContain(
       "if (!geometry || !renderSettings.visible",
@@ -651,6 +655,31 @@ describe("MeshPartLayer", () => {
         },
       }),
     ).toBe(partEffectiveFieldY);
+  });
+
+  it("accepts an analysis mode scalar buffer for an m target", () => {
+    const modeColors = {
+      colors: new Float32Array(0),
+      colorMode: "magnitude",
+      colorPalette: "coolwarm",
+      quantityId: "analysis:eigen:sample-0000:mode-0000",
+      range: { max: 1, min: -1 },
+    };
+
+    expect(
+      resolveMeshPartScalarColors({
+        fieldModel: {
+          scalarColorsByMode: new Map([["magnitude", modeColors]]),
+          scalarColorsByPartAndMode: new Map(),
+        },
+        partId: "part-a",
+        scalarColorMode: "magnitude",
+        settings: {
+          activeQuantityId: "m",
+          scalarColorPalette: "coolwarm",
+        },
+      }),
+    ).toBe(modeColors);
   });
 
   it("uses target-pass scalar colors before legacy part/global maps", () => {

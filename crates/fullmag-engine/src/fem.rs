@@ -1625,6 +1625,76 @@ impl FemLlgProblem {
         self.observe_vectors(state.magnetization())
     }
 
+    /// Reconstruct the scalar Poisson potential used by the FEM demag solve.
+    ///
+    /// The potential is part of the accepted static equilibrium handoff for
+    /// shared-domain frequency operators.  Keep this accessor on the same
+    /// solver object as [`observe`] so the artifact cannot accidentally use a
+    /// different boundary, periodic reduction, or CG configuration.
+    pub fn demag_potential_from_vectors(&self, magnetization: &[Vector3]) -> Result<Vec<f64>> {
+        if magnetization.len() != self.topology.n_nodes {
+            return Err(EngineError::new(format!(
+                "magnetization length {} does not match FEM node count {}",
+                magnetization.len(),
+                self.topology.n_nodes
+            )));
+        }
+        if !self.terms.demag {
+            return Ok(vec![0.0; self.topology.n_nodes]);
+        }
+
+        if let Some(periodic) = self.periodic_demag_reduced.as_ref() {
+            let reduced_n = periodic.reduced_n;
+            let mut full_rhs = vec![0.0; self.topology.n_nodes];
+            self.demag_rhs_from_vectors_into(magnetization, &mut full_rhs);
+            let reduced_rhs =
+                reduce_rhs_by_periodic_classes(&full_rhs, &periodic.full_to_reduced, reduced_n);
+            let tol = self.sparse_cg_tol.unwrap_or(SPARSE_CG_TOL);
+            let max_iter = self.sparse_cg_max_iter.unwrap_or(SPARSE_CG_MAX_ITER);
+            let mut workspace = periodic.ws.lock().unwrap();
+            workspace.ensure_size(reduced_n);
+            solve_sparse_cg_cached(
+                &periodic.reduced_csr,
+                &reduced_rhs,
+                tol,
+                max_iter,
+                &mut workspace.cg,
+                &periodic.reduced_inv_diag,
+                CgInitialGuess::Workspace,
+            )?;
+            return Ok(lift_scalar_by_periodic_classes(
+                &workspace.cg.x[..reduced_n],
+                &periodic.full_to_reduced,
+                self.topology.n_nodes,
+            ));
+        }
+
+        let n = self.demag_csr.n;
+        let mut workspace = self.demag_ws.lock().unwrap();
+        workspace.ensure_size(n);
+        self.demag_rhs_from_vectors_into(magnetization, &mut workspace.rhs[..n]);
+        if self.demag_dirichlet_boundary {
+            for &node in &self.topology.boundary_nodes {
+                if let Some(value) = workspace.rhs.get_mut(node as usize) {
+                    *value = 0.0;
+                }
+            }
+        }
+        let tol = self.sparse_cg_tol.unwrap_or(SPARSE_CG_TOL);
+        let max_iter = self.sparse_cg_max_iter.unwrap_or(SPARSE_CG_MAX_ITER);
+        let rhs = workspace.rhs[..n].to_vec();
+        solve_sparse_cg_cached(
+            &self.demag_csr,
+            &rhs,
+            tol,
+            max_iter,
+            &mut workspace.cg,
+            &self.demag_inv_diag,
+            CgInitialGuess::Workspace,
+        )?;
+        Ok(workspace.cg.x[..n].to_vec())
+    }
+
     pub fn step(&self, state: &mut FemLlgState, dt: f64) -> Result<StepReport> {
         let mut ws = FemIntegratorWorkspace::new(self.topology.n_nodes);
         self.step_with_workspace(state, dt, &mut ws)
@@ -4340,6 +4410,25 @@ mod tests {
             energy_from_rhs,
             energy_from_field_integral
         );
+    }
+
+    #[test]
+    fn demag_potential_accessor_reuses_the_same_poisson_contract() {
+        let problem = coarse_box_problem(true);
+        let magnetization = vec![[0.0, 0.0, 1.0]; problem.topology.n_nodes];
+        let potential = problem
+            .demag_potential_from_vectors(&magnetization)
+            .expect("demag potential");
+        assert_eq!(potential.len(), problem.topology.n_nodes);
+        assert!(potential.iter().all(|value| value.is_finite()));
+
+        let (_field, _energy) = problem
+            .robin_demag_observables_from_vectors(&magnetization)
+            .expect("demag observables");
+        let cached = problem.demag_ws.lock().expect("demag workspace");
+        for (actual, expected) in potential.iter().zip(cached.cg.x.iter()) {
+            assert!((actual - expected).abs() < 1e-12);
+        }
     }
 
     #[test]

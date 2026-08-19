@@ -14,6 +14,7 @@ import type { FdmDomainPresentation } from "@/shared/domain/mesh/domainPresentat
 import {
   ANALYSIS_FREQUENCY_DOMAIN_EIGEN_DISPERSION_PATH,
   ANALYSIS_FREQUENCY_DOMAIN_EIGEN_SPECTRUM_V2_PATH,
+  ANALYSIS_FREQUENCY_DOMAIN_MANIFEST_V1_PATH,
   ANALYSIS_FREQUENCY_DOMAIN_RESPONSE_MAGNETIC_SWEEP_PATH,
   ANALYSIS_HYSTERESIS_POINT_PATH,
   ANALYSIS_HYSTERESIS_SETTLE_TRACE_PATH,
@@ -1907,6 +1908,7 @@ describe("buildModelTree", () => {
         frequencyDomainManifest: {
           ...FREQUENCY_DOMAIN_MANIFEST,
           result_manifest: {
+            artifact_path: "frequency_domain/manifest.v1.json",
             payload: {
               equilibrium_identity: "equilibrium-r4",
               requested_execution: { boundary_context: "finite_open" },
@@ -1915,6 +1917,8 @@ describe("buildModelTree", () => {
               stage_label: "Eigenmodes",
               study_product: "modal_eigen",
             },
+            resource_key: ANALYSIS_FREQUENCY_DOMAIN_MANIFEST_V1_PATH,
+            schema_version: "frequency_domain_manifest.v1",
             status: "ready",
           },
         } as FrequencyDomainManifestResource,
@@ -1954,6 +1958,7 @@ describe("buildModelTree", () => {
         frequencyDomainManifest: {
           ...FREQUENCY_DOMAIN_MANIFEST,
           result_manifest: {
+            artifact_path: "frequency_domain/manifest.v1.json",
             payload: {
               equilibrium_identity: "equilibrium-r4",
               requested_execution: { boundary_context: "finite_open" },
@@ -1961,6 +1966,8 @@ describe("buildModelTree", () => {
               stage_id: "eigen-stage",
               study_product: "modal_eigen",
             },
+            resource_key: ANALYSIS_FREQUENCY_DOMAIN_MANIFEST_V1_PATH,
+            schema_version: "frequency_domain_manifest.v1",
             status: "ready",
           },
         } as FrequencyDomainManifestResource,
@@ -2070,6 +2077,7 @@ describe("buildModelTree", () => {
         frequencyDomainManifest: {
           ...FREQUENCY_DOMAIN_MANIFEST,
           result_manifest: {
+            artifact_path: "frequency_domain/manifest.v1.json",
             payload: {
               resources: {
                 response_field_resources: [
@@ -2080,6 +2088,9 @@ describe("buildModelTree", () => {
                 ],
               },
             },
+            resource_key: ANALYSIS_FREQUENCY_DOMAIN_MANIFEST_V1_PATH,
+            schema_version: "frequency_domain_manifest.v1",
+            status: "ready",
           },
         } as FrequencyDomainManifestResource,
       }),
@@ -2112,6 +2123,7 @@ describe("buildModelTree", () => {
         frequencyDomainManifest: {
           ...FREQUENCY_DOMAIN_MANIFEST,
           result_manifest: {
+            artifact_path: "frequency_domain/manifest.v1.json",
             payload: {
               resources: {
                 response_field_resources: [
@@ -2122,6 +2134,8 @@ describe("buildModelTree", () => {
                 ],
               },
             },
+            resource_key: ANALYSIS_FREQUENCY_DOMAIN_MANIFEST_V1_PATH,
+            schema_version: "frequency_domain_manifest.v1",
             status: "ready",
           },
         } as FrequencyDomainManifestResource,
@@ -3137,6 +3151,7 @@ describe("buildModelTree", () => {
         frequencyDomainManifest: {
           ...FREQUENCY_DOMAIN_MANIFEST,
           result_manifest: {
+            artifact_path: "frequency_domain/manifest.v1.json",
             payload: {
               equilibrium_identity: "equilibrium-r5",
               requested_execution: { boundary_context: "floquet_periodic" },
@@ -3145,6 +3160,8 @@ describe("buildModelTree", () => {
               stage_label: "Driven k sweep",
               study_product: "driven_response",
             },
+            resource_key: ANALYSIS_FREQUENCY_DOMAIN_MANIFEST_V1_PATH,
+            schema_version: "frequency_domain_manifest.v1",
             status: "ready",
           },
         } as FrequencyDomainManifestResource,

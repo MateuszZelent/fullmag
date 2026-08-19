@@ -103,6 +103,10 @@ pub struct FmsWorkspaceManifest {
     pub problem_name: String,
     /// Paths (within the archive) holding project sources.
     pub project_ref: String,
+    /// Canonical Python source retained as archive provenance.
+    pub script_ref: String,
+    /// SHA-256 of the exact raw bytes at `script_ref`.
+    pub script_sha256: String,
     /// Reference to UI state.
     pub ui_state_ref: String,
     /// Reference to scene document.

@@ -8,6 +8,7 @@ import type {
 } from "@/shared/domain/analysis/phasorConventionAdapter";
 
 import type { FieldVectorQuery } from "../api/apiTypes";
+import type { ModeFieldOverlayIntent } from "./ModeFieldOverlayIntent";
 import type {
   SurfaceColorSource,
   VisualizationGeometryScope,
@@ -53,6 +54,8 @@ export interface AnalysisFieldOverlayState {
   kPathCoordinateRadPerM?: number;
   label: string;
   modeIndex?: number;
+  /** Stable eigenmode identity verified against the published mode resources. */
+  modeIntent?: ModeFieldOverlayIntent;
   query: FieldVectorQuery;
   sampleIndex?: number;
   source: AnalysisFieldOverlaySource;
@@ -388,6 +391,7 @@ function analysisFieldOverlayStateEquals(
       (right.kPathCoordinateRadPerM ?? null) &&
     left.label === right.label &&
     (left.modeIndex ?? null) === (right.modeIndex ?? null) &&
+    modeFieldOverlayIntentEquals(left.modeIntent, right.modeIntent) &&
     (left.sampleIndex ?? null) === (right.sampleIndex ?? null) &&
     left.source === right.source &&
     (left.visualizationPhaseRad ?? null) ===
@@ -400,6 +404,24 @@ function analysisFieldOverlayStateEquals(
     analysisFieldOverlayProvenanceEquals(left.provenance, right.provenance) &&
     left.floquetSpatialConvention === right.floquetSpatialConvention &&
     left.phasorConvention === right.phasorConvention
+  );
+}
+
+function modeFieldOverlayIntentEquals(
+  left: ModeFieldOverlayIntent | undefined,
+  right: ModeFieldOverlayIntent | undefined,
+): boolean {
+  if (left === right) return true;
+  if (!left || !right) return false;
+  return (
+    left.analysisRunId === right.analysisRunId &&
+    left.analysisStageId === right.analysisStageId &&
+    left.artifactRevision === right.artifactRevision &&
+    left.fieldId === right.fieldId &&
+    left.metadataResourceKey === right.metadataResourceKey &&
+    left.modeId === right.modeId &&
+    left.nodeId === right.nodeId &&
+    left.sampleId === right.sampleId
   );
 }
 

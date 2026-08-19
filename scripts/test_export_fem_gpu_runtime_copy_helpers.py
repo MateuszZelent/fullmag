@@ -365,6 +365,89 @@ def test_runtime_copy_replaces_existing_symlink_with_source_symlink(tmp_path: Pa
     assert result.returncode == 0, result.stderr + result.stdout
 
 
+def test_runtime_copy_normalizes_symlink_target_from_parent_directory(
+    tmp_path: Path,
+) -> None:
+    source_root = tmp_path / "source"
+    source_dir = source_root / "lib"
+    dest_dir = tmp_path / "dest"
+    source_dir.mkdir(parents=True)
+    dest_dir.mkdir()
+    resolved = source_root / "libfoo.so.1.2.3"
+    resolved.write_text("foo\n", encoding="utf-8")
+    requested = source_dir / "libfoo.so"
+    requested.symlink_to("../libfoo.so.1.2.3")
+
+    result = run_bash(
+        f"""
+        source {HELPER}
+        copy_runtime_entry_replace {resolved} {dest_dir}
+        copy_runtime_entry_replace {requested} {dest_dir}
+        test -L {dest_dir / requested.name}
+        test "$(readlink {dest_dir / requested.name})" = "{resolved.name}"
+        test -e {dest_dir / requested.name}
+        """
+    )
+
+    assert result.returncode == 0, result.stderr + result.stdout
+
+
+def test_runtime_copy_materializes_same_basename_symlink_target(
+    tmp_path: Path,
+) -> None:
+    source_root = tmp_path / "source"
+    source_dir = source_root / "lib"
+    real_dir = source_root / "real"
+    dest_dir = tmp_path / "dest"
+    source_dir.mkdir(parents=True)
+    real_dir.mkdir()
+    dest_dir.mkdir()
+    resolved = real_dir / "libpmix.so.2.5.2"
+    resolved.write_text("pmix\n", encoding="utf-8")
+    same_basename = source_dir / "libpmix.so.2.5.2"
+    same_basename.symlink_to("../real/libpmix.so.2.5.2")
+
+    result = run_bash(
+        f"""
+        source {HELPER}
+        copy_runtime_entry_replace {same_basename} {dest_dir}
+        test ! -L {dest_dir / same_basename.name}
+        test \"$(cat {dest_dir / same_basename.name})\" = pmix
+        """
+    )
+
+    assert result.returncode == 0, result.stderr + result.stdout
+
+
+def test_runtime_copy_materializes_resolved_target_outside_globbed_directory(
+    tmp_path: Path,
+) -> None:
+    source_root = tmp_path / "source"
+    source_dir = source_root / "openmpi" / "lib"
+    external_dir = source_root / "system-lib"
+    dest_dir = tmp_path / "dest"
+    source_dir.mkdir(parents=True)
+    external_dir.mkdir()
+    dest_dir.mkdir()
+    resolved = external_dir / "liboshmem.so.40.30.1"
+    resolved.write_text("oshmem\n", encoding="utf-8")
+    requested = source_dir / "liboshmem.so"
+    requested.symlink_to("../../system-lib/liboshmem.so.40.30.1")
+
+    result = run_bash(
+        f"""
+        source {HELPER}
+        copy_runtime_entry_replace {requested} {dest_dir}
+        test -L {dest_dir / requested.name}
+        test "$(readlink {dest_dir / requested.name})" = "{resolved.name}"
+        test -f {dest_dir / resolved.name}
+        test "$(cat {dest_dir / resolved.name})" = oshmem
+        """
+    )
+
+    assert result.returncode == 0, result.stderr + result.stdout
+
+
 def test_runtime_copy_dependency_closure_can_copy_same_resolved_library_twice(
     tmp_path: Path,
 ) -> None:
@@ -450,6 +533,39 @@ def test_export_script_recreates_unversioned_fullmag_native_library_links() -> N
     assert 'copy_native_library_group "$FDM_LIB" libfullmag_fdm' in script
 
 
+def test_export_script_resolves_petsc_and_slepc_library_names_from_pkg_config() -> None:
+    script = EXPORT_SCRIPT.read_text(encoding="utf-8")
+
+    assert "resolve_pkg_primary_library_stem()" in script
+    assert 'petsc_library_stem="$(resolve_pkg_primary_library_stem PETSc)"' in script
+    assert 'slepc_library_stem="$(resolve_pkg_primary_library_stem SLEPc)"' in script
+    assert "copy_pkg_library_group PETSc $petsc_library_stem" in script
+    assert "copy_pkg_library_group SLEPc $slepc_library_stem" in script
+    assert 'copy_shared_library_dependency_closure ${runtime_root}/lib/${petsc_library_stem}.so' in script
+    assert 'copy_shared_library_dependency_closure ${runtime_root}/lib/${slepc_library_stem}.so' in script
+    assert '"petsc_library_stem": os.environ["PETSC_LIBRARY_STEM"]' in script
+    assert '"slepc_library_stem": os.environ["SLEPC_LIBRARY_STEM"]' in script
+    resolver = script[
+        script.index("resolve_pkg_primary_library_stem()") : script.index(
+            "copy_pkg_library_group()"
+        )
+    ]
+    assert "'" not in resolver
+
+
+def test_export_bundles_application_and_native_library_dependency_closures() -> None:
+    script = EXPORT_SCRIPT.read_text(encoding="utf-8")
+
+    for artifact in (
+        "${runtime_root}/bin/fullmag-fem-gpu-bin",
+        "${runtime_root}/bin/fullmag-api",
+        "${runtime_root}/_fullmag_core.so",
+        "${runtime_root}/lib/libfullmag_fem.so.0",
+        "${runtime_root}/lib/libfullmag_fdm.so.0",
+    ):
+        assert f"copy_shared_library_dependency_closure {artifact}" in script
+
+
 def test_export_script_refreshes_identity_before_configured_release_clean() -> None:
     script = EXPORT_SCRIPT.read_text(encoding="utf-8")
     identity_clean_index = script.find("cargo +nightly clean -p fullmag-build-info")
@@ -462,6 +578,10 @@ def test_export_script_refreshes_identity_before_configured_release_clean() -> N
     assert build_index != -1
     assert copy_index != -1
     assert identity_clean_index < release_clean_index < build_index < copy_index
+    stale_native_clean_index = script.find(
+        'find target/release/build -maxdepth 1 -type d -name "fullmag-fem-sys-*"'
+    )
+    assert release_clean_index < stale_native_clean_index < build_index
     assert "stale_fem_native_artifacts" in script
     assert "stale fullmag-fem-sys native artifacts remain after targeted clean" in script
 
@@ -519,7 +639,7 @@ def test_export_script_restores_staging_owner_when_container_build_fails() -> No
 def test_export_script_serializes_runtime_bundle_mutation_with_flock() -> None:
     script = EXPORT_SCRIPT.read_text(encoding="utf-8")
     lock_index = script.find(
-        'RUNTIME_LOCK="${RUNTIME_PARENT}/.fem-gpu-host.export.v2.lock"'
+        'RUNTIME_LOCK="$(managed_fem_runtime_lock_path "${REPO_ROOT}")"'
     )
     flock_index = script.find(
         'setsid flock -E 75 -w "${FULLMAG_RUNTIME_EXPORT_LOCK_TIMEOUT_SECONDS}" '
@@ -1113,6 +1233,59 @@ def test_failed_nested_bootstrap_verify_cleans_owned_snapshot_without_relaunch(
     assert not identity.exists()
 
 
+def test_failed_export_cleans_owned_materialized_source_cache(tmp_path: Path) -> None:
+    exporter = EXPORT_SCRIPT.read_text(encoding="utf-8")
+
+    def bash_function(name: str) -> str:
+        start = exporter.index(f"{name}() {{")
+        end = exporter.index("\n}\n", start) + len("\n}")
+        return exporter[start:end]
+
+    snapshot = tmp_path / "source-cache.test"
+    snapshot.mkdir()
+    functions = "\n".join(
+        bash_function(name)
+        for name in (
+            "is_canonical_source_snapshot_path",
+            "is_materialized_source_snapshot_path",
+            "cleanup_failed_export",
+        )
+    )
+    result = subprocess.run(
+        [
+            "bash",
+            "-euo",
+            "pipefail",
+            "-c",
+            (
+                f'FULLMAG_CONTAINER_TARGET_DIR={str(tmp_path)!r}\n'
+                f'SOURCE_SNAPSHOT_ROOT={str(snapshot)!r}\n'
+                'source_snapshot_owned=1\n'
+                'source_snapshot_materialize_root=""\n'
+                'source_identity_owned=0\n'
+                'source_identity_file=""\n'
+                'source_provenance_owned=0\n'
+                'source_provenance_json=""\n'
+                'docker_build_ref=""\n'
+                'docker_build_ref_marker=""\n'
+                'persistent_staging_archive=""\n'
+                'persistent_validation_root=""\n'
+                'STAGING_ROOT=""\n'
+                f"{functions}\n"
+                'trap cleanup_failed_export EXIT\n'
+                'exit 19\n'
+            ),
+        ],
+        cwd=REPO_ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 19, result.stderr + result.stdout
+    assert not snapshot.exists()
+
+
 def test_source_bootstrap_launches_once_only_when_both_handoff_vars_are_absent() -> None:
     exporter = EXPORT_SCRIPT.read_text(encoding="utf-8")
     start = exporter.index("resolve_source_snapshot_bootstrap() {")
@@ -1156,13 +1329,12 @@ def test_export_revalidates_source_immediately_before_alias_switch() -> None:
     publication = exporter[function_start:function_end]
 
     verify_index = publication.rindex("verify_source_snapshot_identity")
-    prune_index = publication.index('FULLMAG_RUNTIME_PARENT="${RUNTIME_PARENT}"')
-    migrate_index = publication.index("migrate_managed_fem_runtime_variants")
-    link_index = publication.index('ln -sfn "${alias_target}"')
-    switch_index = publication.index('mv -Tf "${repo_next_alias}"')
+    latest_index = publication.index('mv -f "${persistent_staging_archive}"')
+    rebind_index = publication.index("rebind_managed_fem_runtime_aliases")
 
-    assert prune_index < migrate_index < verify_index < link_index < switch_index
-    assert "source_identity_file" not in publication[verify_index:link_index]
+    assert latest_index < verify_index < rebind_index
+    assert 'FULLMAG_RUNTIME_PARENT="${RUNTIME_PARENT}"' not in publication
+    assert "source_identity_file" not in publication[verify_index:rebind_index]
 
 
 def test_managed_runtime_validator_rejects_mismatched_mesh_abi(tmp_path: Path) -> None:
@@ -1261,6 +1433,30 @@ def test_managed_runtime_validator_rejects_unaddressed_variant_by_default(
     assert "hash-addressed variant directory mismatch" in invalid.stderr
 
 
+def test_managed_runtime_validator_allows_materialized_active_alias(
+    tmp_path: Path,
+) -> None:
+    runtime, ldd, readelf = write_fake_schema_v2_bundle(tmp_path)
+    original_runtime = str(runtime)
+    active = tmp_path / ".fullmag/runtimes/fem-gpu-host"
+    active.parent.mkdir(parents=True)
+    runtime.rename(active)
+    ldd.write_text(
+        ldd.read_text(encoding="utf-8").replace(original_runtime, str(active)),
+        encoding="utf-8",
+    )
+
+    valid = validate_fake_bundle(
+        active,
+        ldd,
+        readelf,
+        "--allow-active-alias",
+        allow_unaddressed_staging=False,
+    )
+
+    assert valid.returncode == 0, valid.stderr
+
+
 def test_validator_requires_native_sm89_in_fullmag_separately(tmp_path: Path) -> None:
     runtime, ldd, readelf = write_fake_schema_v2_bundle(
         tmp_path, fullmag_cubins=("sm_52",), hypre_cubins=("sm_89",)
@@ -1314,6 +1510,35 @@ def test_validator_hashes_resolved_library_target_not_symlink(tmp_path: Path) ->
 
     assert invalid.returncode != 0
     assert "fullmag_fem hash mismatch" in invalid.stderr
+
+
+def test_validator_accepts_materialized_soname_alias_with_matching_payload(
+    tmp_path: Path,
+) -> None:
+    runtime, ldd, readelf = write_fake_schema_v2_bundle(tmp_path)
+    target = runtime / "lib/libfullmag_fem.so.0.1.0"
+    alias = runtime / "lib/libfullmag_fem.so.0"
+    alias.unlink()
+    alias.write_bytes(target.read_bytes())
+    readelf.write_text(
+        readelf.read_text(encoding="utf-8").replace(
+            " 'libfullmag_fem.so.0.1.0': 'libfullmag_fem.so.0',\n",
+            " 'libfullmag_fem.so.0.1.0': 'libfullmag_fem.so.0',\n"
+            " 'libfullmag_fem.so.0': 'libfullmag_fem.so.0',\n",
+        ),
+        encoding="utf-8",
+    )
+    ldd.write_text(
+        ldd.read_text(encoding="utf-8").replace(
+            "{ROOT}/lib/libfullmag_fem.so.0.1.0",
+            "{ROOT}/lib/libfullmag_fem.so.0",
+        ),
+        encoding="utf-8",
+    )
+
+    valid = validate_fake_bundle(runtime, ldd, readelf)
+
+    assert valid.returncode == 0, valid.stderr
 
 
 def test_validator_rejects_loaded_hypre_path_that_differs_from_manifest(
@@ -1479,9 +1704,7 @@ def test_export_uses_hash_addressed_variants_and_atomic_active_alias() -> None:
     assert '.fullmag/runtimes/fem-gpu-host.staging' not in exporter
     assert 'manifest_sha256="$(sha256sum "${STAGING_ROOT}/manifest.json"' in exporter
     assert 'variant_root="${VARIANTS_ROOT}/${FULLMAG_FEM_RUNTIME_VARIANT}-${manifest_sha256}"' in exporter
-    assert 'alias_target="fem-gpu-variants/$(basename "${variant_root}")"' in exporter
-    assert 'migrate_managed_fem_runtime_variants "${variants_alias}" "${VARIANTS_ROOT}"' in exporter
-    assert 'ln -sfn "${alias_target}" "${repo_next_alias}"' in exporter
+    assert 'rebind_managed_fem_runtime_aliases "${RUNTIME_ROOT}"' in exporter
     assert 'PERSISTENT_LATEST_ARCHIVE=' in exporter
     assert '--allow-unaddressed-staging' in exporter
     assert '--runtime-root "${variant_root}" --compare-exact "${STAGING_ROOT}"' in exporter
@@ -1540,10 +1763,9 @@ def test_export_defaults_to_exact_persistent_build_root() -> None:
         REPO_ROOT / "scripts/lib/managed_fem_runtime_storage.sh"
     ).read_text(encoding="utf-8")
 
-    assert (
-        'readonly FULLMAG_NATIVE_BUILD_STORAGE_ROOT="/zfn2/mateuszz/git/fullmag"'
-        in exporter
-    )
+    assert "resolve_managed_fem_native_storage_profile" in exporter
+    assert '/zfn2/mateuszz/git/fullmag/build-volumes/fullmag-native.ext4' in storage_helper
+    assert '/zfn2/mateuszz/git/fullmag/build-volumes/fullmag-native-2.ext4' in storage_helper
     assert 'readonly FULLMAG_BUILD_ROOT="${FULLMAG_NATIVE_BUILD_STORAGE_ROOT}"' in exporter
     assert (
         'readonly FULLMAG_CONTAINER_TARGET_ROOT='
@@ -1563,7 +1785,7 @@ def test_export_publishes_durable_copy_before_switching_aliases() -> None:
 
     archive_index = exporter.index('tar -C "${variant_root}"')
     latest_index = exporter.index('mv -f "${persistent_staging_archive}"')
-    repo_alias_index = exporter.index('mv -Tf "${repo_next_alias}"')
+    repo_alias_index = exporter.index('rebind_managed_fem_runtime_aliases "${RUNTIME_ROOT}"')
     assert archive_index < latest_index < repo_alias_index
 
 
@@ -1574,7 +1796,7 @@ def test_export_validates_persistent_archive_before_switching_repo_alias() -> No
     validate_index = exporter.index(
         'validate_persistent_runtime_archive "${persistent_archive}" "${variant_root}"'
     )
-    alias_index = exporter.index('mv -Tf "${repo_next_alias}"')
+    alias_index = exporter.index('rebind_managed_fem_runtime_aliases "${RUNTIME_ROOT}"')
     assert archive_index < validate_index < alias_index
 
 
@@ -1740,6 +1962,7 @@ def test_ensure_managed_runtime_rebuilds_an_invalid_bundle() -> None:
     assert "bash scripts/restore_persistent_fem_runtime.sh" in ensure_recipe
     assert "if ! validate_current >/dev/null 2>&1; then" in ensure_recipe
     assert "FULLMAG_FEM_RUNTIME_REUSE_BUILD=0 just rebuild-fem-runtime" in ensure_recipe
+    assert "FULLMAG_NATIVE_STORAGE_PROFILE=" not in ensure_recipe
     assert (
         "FULLMAG_ALLOW_DIRTY_RUNTIME_EXPORT=1 "
         "FULLMAG_FEM_RUNTIME_REUSE_BUILD=0 just rebuild-fem-runtime"
@@ -1989,4 +2212,4 @@ def test_export_script_replaces_existing_versioned_native_symlinks() -> None:
 
     assert function_start != -1
     assert function_end != -1
-    assert 'ln -sfn "$(readlink "$src")" "$dest"' in copy_entry_function
+    assert 'ln -sfn "$(basename "$resolved")" "$dest"' in copy_entry_function

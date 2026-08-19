@@ -1657,7 +1657,7 @@ describe("useViewport3DSceneModel", () => {
     expect(source).toContain("useRenderableAnalysisFieldOverlay");
     expect(source).toContain("startAnalysisFieldOverlayPhaseAnimation");
     expect(source).toContain("const primaryFieldQuantityId = analysisOverlay?.fieldId ?? quantityId;");
-    expect(source).toContain("if (analysisOverlay) {");
+    expect(source).toContain("const analysisPrimaryFieldDemandPlan = useMemo(() => {");
     expect(source).toContain("query: analysisOverlay.query,");
     expect(source).toContain("consumers: [\"primary-field-vector\"],");
     expect(source).toContain("visualizationPhaseRad:");
@@ -3725,6 +3725,12 @@ describe("useViewport3DSceneModel", () => {
   it("compares target quantities by canonical identity", () => {
     expect(sameViewport3DQuantityId("h_eff", "H_eff")).toBe(true);
     expect(sameViewport3DQuantityId("h_demag", "H_eff")).toBe(false);
+    expect(
+      sameViewport3DQuantityId(
+        "analysis:eigen:sample-0000:mode-0000",
+        "m",
+      ),
+    ).toBe(true);
   });
 
   it("keeps canonical-equivalent target quantities on the primary render path", () => {
@@ -3921,7 +3927,9 @@ describe("useViewport3DSceneModel", () => {
   it("derives primary field resource keys and loads from the primary request object", () => {
     const source = readFileSync(sceneModelSourceUrl, "utf8");
 
-    expect(source).toContain("const primaryFieldDemandPlan = useMemo");
+    expect(source).toContain("const analysisPrimaryFieldDemandPlan = useMemo");
+    expect(source).toContain("const livePrimaryFieldDemandPlan = useMemo");
+    expect(source).toContain("const primaryFieldDemandPlan =");
     expect(source).toContain("resolveViewport3DPrimaryFieldDemandPlan({");
     expect(source).toContain("const primaryFieldRequest = primaryFieldDemandPlan.request;");
     expect(source).toContain(
@@ -3929,6 +3937,9 @@ describe("useViewport3DSceneModel", () => {
     );
     expect(source).toContain("useViewport3DFieldVectorRequest(");
     expect(source).toContain("primaryFieldRequest,");
+    expect(source).toContain("useModeFieldOverlayIntentResource({");
+    expect(source).toContain("modeFieldOverlay.binary ?? displayedFieldVector");
+    expect(source).not.toContain("const analysisComplexFieldVector = useViewport3DFieldVector(");
   });
 
   it("keeps vector-only magnetic parts on scoped sampled field requests", () => {

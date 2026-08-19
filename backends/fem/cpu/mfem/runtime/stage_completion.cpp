@@ -361,20 +361,28 @@ void update_stage_completion_from_stats(
         ctx.stage_completion.relax_torque_confirmation_count = 0;
     }
 
-    bool energy_ok = ctx.stage_completion.relax_stop.has_energy_tolerance_j == 0;
-    if (!energy_ok) {
-        double energy_plateau_range_j = 0.0;
-        energy_ok = relax_energy_plateau_range(ctx, energy_plateau_range_j) &&
-            energy_plateau_range_j <= ctx.stage_completion.relax_stop.energy_tolerance_j;
-    }
-    if (torque_ok && energy_ok &&
-        ctx.stage_completion.relax_torque_confirmation_count >= RELAX_TORQUE_CONFIRMATION_STEPS) {
+    double energy_plateau_range_j = 0.0;
+    const bool energy_ok =
+        ctx.stage_completion.relax_stop.has_energy_tolerance_j != 0 &&
+        relax_energy_plateau_range(ctx, energy_plateau_range_j) &&
+        energy_plateau_range_j <= ctx.stage_completion.relax_stop.energy_tolerance_j;
+    if (ctx.stage_completion.relax_torque_confirmation_count >=
+        RELAX_TORQUE_CONFIRMATION_STEPS) {
         set_stage_completion(
             ctx,
             FULLMAG_FEM_STAGE_STOP_REASON_TORQUE,
             "max_torque_apm",
             stats.max_torque_Apm,
             ctx.stage_completion.relax_stop.torque_tolerance_apm);
+        return;
+    }
+    if (energy_ok) {
+        set_stage_completion(
+            ctx,
+            FULLMAG_FEM_STAGE_STOP_REASON_ENERGY,
+            "total_energy_plateau_range_J",
+            energy_plateau_range_j,
+            ctx.stage_completion.relax_stop.energy_tolerance_j);
         return;
     }
     if (ctx.stage_completion.relax_stop.has_max_physical_time_s != 0 &&

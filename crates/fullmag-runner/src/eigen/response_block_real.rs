@@ -60,6 +60,7 @@ pub struct FieldDrivenResponseSweepArtifact {
 
 #[derive(Clone, Debug, Serialize)]
 pub struct FieldDrivenResponseSweepPointArtifact {
+    pub point_id: String,
     pub frequency_hz: f64,
     pub angular_frequency_rad_per_s: f64,
     pub m_complex: Vec<[f64; 2]>,
@@ -208,7 +209,10 @@ pub fn build_field_driven_response_sweep_artifact(
         point_count: points.len(),
         points: points
             .iter()
-            .map(field_driven_response_sweep_point_artifact)
+            .enumerate()
+            .map(|(frequency_index, point)| {
+                field_driven_response_sweep_point_artifact(frequency_index, point)
+            })
             .collect(),
     }
 }
@@ -266,9 +270,11 @@ pub fn solve_block_real_harmonic_response(
 }
 
 fn field_driven_response_sweep_point_artifact(
+    frequency_index: usize,
     point: &FieldDrivenBlockRealResponsePoint,
 ) -> FieldDrivenResponseSweepPointArtifact {
     FieldDrivenResponseSweepPointArtifact {
+        point_id: format!("frequency-point-{frequency_index:04}"),
         frequency_hz: point.frequency_rad_per_s / (2.0 * std::f64::consts::PI),
         angular_frequency_rad_per_s: point.frequency_rad_per_s,
         m_complex: complex_vector_pairs(&point.response),

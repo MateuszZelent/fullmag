@@ -2,7 +2,7 @@
 
 - Status: szkic resetu backends-first
 - Właściciele: Fullmag core
-- Ostatnia aktualizacja: 2026-08-09
+- Ostatnia aktualizacja: 2026-08-11
 - Zakres: własność backendów solverów, natywna implementacja kompilowana,
   orkiestracja Rust runnera, bramki walidacyjne i kolejność migracji po
   resecie układu źródeł z 2026-06-03.
@@ -332,7 +332,7 @@ maskować ani obcinać komórek mieszanych.
 
 ## 7.1 Architektura FEM Frequency-Domain I Eigenmodes
 
-Produkcyjne FEM frequency-domain obejmuje dwa różne produkty:
+Docelowe (planned) FEM frequency-domain obejmuje dwa różne produkty:
 `modal_eigen` i `driven_response`. Współdzielą kontrakt operatora z
 `docs/physics/0831-fem-dynamic-pencil-modal-response-and-krylov.md`, ale nie
 mogą wzajemnie promować swojej dostępności ani walidacji. W szczególności
@@ -349,12 +349,34 @@ count = maksymalna liczba modów do zwrócenia
 ```
 
 Kontrakt przechodzi przez Python DSL, ProblemIR, planner, runtime, artefakty,
-API i control room bez degradacji do `lowest`. Produkcyjna realizacja CPU używa
-MFEM z PETSc/SLEPc: pełny descriptor albo certyfikowany Schur `MatShell`,
-Krylov-Schur/Arnoldi oraz jawny transform spektralny z celem odpowiadającym
-`sigma=i*omega_target`. Shifted systems należą do PETSc/hypre. Produkcyjna
-realizacja GPU używa tych samych kontraktów przez PETSc CUDA vectors,
-device-capable `MatShell`/`MatNest`, hypre device i SLEPc na urządzeniu.
+API i control room bez degradacji do `lowest`. Managed runtime używa
+`libpetsc-real-dev` oraz `libslepc-real-dev`; CPU i GPU realizują więc ten sam
+ADR-017 `real_frequency_rotated` pencil `R(L)y=omega R(i B_alpha)y` z
+`tau=omega_target`, który dokładnie reprezentuje `sigma=i*omega_target`.
+Realny target na oryginalnym pencilu `lambda=i omega` jest zabroniony.
+Wymagana docelowa realizacja CPU użyje MFEM z PETSc/SLEPc: pełny descriptor
+albo certyfikowany Schur `MatShell` i Krylov-Schur/Arnoldi. Shifted systems
+będą należeć do PETSc/hypre. Wymagana docelowa realizacja GPU użyje tych samych
+kontraktów przez PETSc CUDA vectors, device-capable `MatShell`/`MatNest`, hypre
+device i SLEPc na urządzeniu.
+
+Aktualny snapshot K0 Poisson-airbox ma publiczny physics-owned
+`BiasFieldSweep` w Python/`ProblemIR`/plannerze/runnerze, ABI v18 oraz
+natywnego właściciela MFEM `A_qq`:
+`backends/fem/cpu/frequency_domain/operators/poisson_airbox_shared_domain.cpp::
+assemble_native_magnetic_a_qq`. Descriptor ABI celowo nie przenosi
+preassembled `A_qq`. Natywny producent obejmuje P1 `tet4|prism6`, jednorodne
+skalarne `A_ex` i równoległy static-field restoring block; anisotropy/DMI są
+`unavailable`, a dynamiczny demag pozostaje w blokach mieszanych/Schur.
+CPU i GPU window certificates są widoczne w źródle, ale oba lane'y produkcyjne
+pozostają `source_visible / unvalidated` z null `executable_scope` i
+`validated_scope`. Stary managed bundle nie odpowiada dirty ABI-v18 snapshotowi,
+więc nie dowodzi wykonania, residency ani fizyki. To stan implementacji
+źródłowej, nie produkcyjna kwalifikacja.
+
+ADR 0023 zamraża `BiasFieldSweep` jako physical input, Kittel/FMR jako
+postsolve analysis oraz Results jako widok nad artefaktami `modal_eigen` i
+`driven_response`, nigdy jako trzeci solver.
 
 Runner przekazuje deskryptor okna i pojedynczy wybrany engine, odbiera wyniki,
 mapuje progress oraz publikuje artefakty i proweniencję. Nie może wybierać

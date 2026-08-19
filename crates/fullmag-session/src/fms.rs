@@ -374,10 +374,13 @@ mod tests {
         let session = FmsSessionManifest::new("s-001", "Test", SaveProfile::Compact);
         store.commit_session(&session).unwrap();
 
+        let script = b"# fullmag script\nprint('hello')".to_vec();
         let workspace = FmsWorkspaceManifest {
             workspace_id: "local-live".into(),
             problem_name: "test_problem".into(),
             project_ref: "project/".into(),
+            script_ref: "project/main.py".into(),
+            script_sha256: crate::cas::hex_sha256(&script),
             ui_state_ref: "project/ui_state.json".into(),
             scene_document_ref: "project/scene_document.json".into(),
             script_builder_ref: None,
@@ -387,10 +390,7 @@ mod tests {
         let export_profile = FmsExportProfile::for_profile(SaveProfile::Compact);
 
         let mut docs = HashMap::new();
-        docs.insert(
-            "main.py".into(),
-            b"# fullmag script\nprint('hello')".to_vec(),
-        );
+        docs.insert("main.py".into(), script);
         docs.insert("ui_state.json".into(), b"{}".to_vec());
         docs.insert("scene_document.json".into(), b"{}".to_vec());
 

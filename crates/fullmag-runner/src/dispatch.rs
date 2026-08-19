@@ -2541,7 +2541,7 @@ pub(crate) fn execute_fem_eigen(
             // GPU-accelerated dense eigensolver (Etap A4) — TRANSITIONAL.
             // `execute_gpu_fem_eigen` uses cuSolverDN; returns error if GPU
             // is unavailable (no silent fallback to CPU).
-            fem_eigen::execute_gpu_fem_eigen(plan, outputs)
+            fem_eigen::execute_gpu_fem_eigen(plan, outputs, None)
         }
     }
 }
@@ -2560,7 +2560,68 @@ pub(crate) fn execute_fem_eigen_with_progress(
         FemEngine::CpuNative => {
             fem_eigen::execute_cpu_fem_eigen_with_progress(plan, outputs, progress)
         }
-        FemEngine::NativeGpu => fem_eigen::execute_gpu_fem_eigen(plan, outputs),
+        FemEngine::NativeGpu => fem_eigen::execute_gpu_fem_eigen(plan, outputs, Some(progress)),
+    }
+}
+
+pub(crate) fn execute_fem_eigen_with_progress_and_stage_handoff(
+    engine: FemEngine,
+    plan: &FemEigenPlanIR,
+    outputs: &[OutputIR],
+    progress: &mut fem_eigen::FemEigenProgressCallback<'_>,
+    handoff: &fem_eigen::AcceptedFemRelaxStageHandoff,
+) -> Result<ExecutedRun, RunError> {
+    if matches!(plan.k_sampling, Some(fullmag_ir::KSamplingIR::Path { .. })) {
+        return Err(RunError {
+            message: "relax_stage_handoff_requires_single_k_target".to_string(),
+        });
+    }
+    match engine {
+        FemEngine::CpuNative => fem_eigen::execute_cpu_fem_eigen_with_progress_and_stage_handoff(
+            plan, outputs, progress, handoff,
+        ),
+        FemEngine::NativeGpu => fem_eigen::execute_gpu_fem_eigen_with_progress_and_stage_handoff(
+            plan,
+            outputs,
+            Some(progress),
+            handoff,
+        ),
+    }
+}
+
+fn bind_eigen_path_handoff_diagnostics(
+    diagnostics: &mut serde_json::Value,
+    sample_index: usize,
+    handoff_sha256: &str,
+    source_mesh_topology_sha256: &str,
+) {
+    let bind = |value: &mut serde_json::Value| {
+        if let Some(object) = value.as_object_mut() {
+            object.insert(
+                "relax_to_eigen_handoff_sha256".to_string(),
+                serde_json::json!(handoff_sha256),
+            );
+            object.insert(
+                "source_mesh_topology_sha256".to_string(),
+                serde_json::json!(source_mesh_topology_sha256),
+            );
+        }
+    };
+
+    bind(diagnostics);
+    if let Some(samples) = diagnostics
+        .get_mut("sample_solver_diagnostics")
+        .and_then(serde_json::Value::as_array_mut)
+    {
+        for sample in samples {
+            if sample.get("sample_index").and_then(serde_json::Value::as_u64)
+                == Some(sample_index as u64)
+            {
+                if let Some(nested) = sample.get_mut("diagnostics") {
+                    bind(nested);
+                }
+            }
+        }
     }
 }
 
@@ -2576,7 +2637,7 @@ fn execute_fem_eigen_path(
         return Err(gpu_modal_dispersion_path_unavailable_error(plan));
     }
     if !de_bv_low_k_analytic_reference_enabled(plan)
-        && !k0_kittel_synthetic_demag_factor_enabled(plan)
+        && !(k0_kittel_synthetic_demag_factor_enabled(plan) && !bias_field_sweep_requested(plan))
     {
         fem_eigen::reject_unsupported_floquet_dynamic_demag(
             &plan.spin_wave_bc,
@@ -2593,7 +2654,8 @@ fn execute_fem_eigen_path(
     struct KSolverAdapter {
         engine: FemEngine,
         mode_artifacts: RefCell<Vec<AuxiliaryArtifact>>,
-        published_mode_indices: BTreeSet<u32>,
+        mode_artifact_indices: BTreeSet<u32>,
+        relax_handoff: RefCell<Option<fem_eigen::AcceptedFemEigenEquilibriumHandoff>>,
         periodic_airbox_k0_metrics:
             RefCell<Option<crate::eigen::K0KittelPeriodicAirboxDemagMetrics>>,
     }
@@ -2608,18 +2670,47 @@ fn execute_fem_eigen_path(
             if de_bv_low_k_analytic_reference_enabled(plan) {
                 return solve_de_bv_low_k_analytic_reference_single_k(plan, sample);
             }
-            if k0_kittel_synthetic_demag_factor_enabled(plan) {
+            if k0_kittel_synthetic_demag_factor_enabled(plan) && plan.bias_field_samples.is_empty()
+            {
                 return solve_k0_kittel_synthetic_demag_factor_single_k(plan, sample);
             }
 
-            let point_plan = eigen_path_single_k_point_plan(plan, sample);
+            let existing_handoff = self.relax_handoff.borrow().clone();
+            let mut accepted_handoff = existing_handoff.clone();
+            let point_plan = eigen_path_single_k_point_plan(
+                plan,
+                sample,
+                existing_handoff.is_some(),
+                existing_handoff.as_ref(),
+            )?;
 
             let executed = match self.engine {
-                FemEngine::CpuNative => fem_eigen::execute_cpu_fem_eigen(&point_plan, outputs)?,
-                FemEngine::NativeGpu => fem_eigen::execute_gpu_fem_eigen(&point_plan, outputs)?,
+                FemEngine::CpuNative => fem_eigen::execute_cpu_fem_eigen_with_handoff(
+                    &point_plan,
+                    outputs,
+                    existing_handoff.as_ref(),
+                )?,
+                FemEngine::NativeGpu => fem_eigen::execute_gpu_fem_eigen_with_handoff(
+                    &point_plan,
+                    outputs,
+                    None,
+                    existing_handoff.as_ref(),
+                )?,
             };
+            if existing_handoff.is_none()
+                && !bias_field_sweep_requested(plan)
+                && matches!(
+                    plan.equilibrium,
+                    fullmag_ir::EquilibriumSourceIR::RelaxedInitialState
+                )
+            {
+                let accepted =
+                    fem_eigen::accepted_relax_to_eigen_handoff_from_run(&point_plan, &executed)?;
+                accepted_handoff = Some(accepted.clone());
+                *self.relax_handoff.borrow_mut() = Some(accepted);
+            }
             if let Some(metrics) = eigen_path_periodic_airbox_k0_metrics_from_single_k_artifacts(
-                &point_plan,
+                plan,
                 &executed.auxiliary_artifacts,
             )? {
                 eigen_path_merge_periodic_airbox_k0_metrics(
@@ -2632,7 +2723,7 @@ fn execute_fem_eigen_path(
                 .extend(remap_single_k_mode_artifacts(
                     &executed.auxiliary_artifacts,
                     sample.sample_index,
-                    &self.published_mode_indices,
+                    &self.mode_artifact_indices,
                 )?);
 
             // Parse the spectrum artifact to extract mode results
@@ -2665,6 +2756,16 @@ fn execute_fem_eigen_path(
 
             let mut modes = Vec::with_capacity(modes_array.len());
             for mode_json in modes_array {
+                let solver_device = if self.engine == FemEngine::NativeGpu {
+                    "gpu"
+                } else {
+                    "cpu"
+                };
+                let component_participation =
+                    eigen_path_component_participation_from_json(
+                        mode_json.get("component_participation"),
+                        solver_device,
+                    )?;
                 modes.push(SingleKModeResult {
                     raw_mode_index: mode_json["index"].as_u64().unwrap_or(0) as usize,
                     branch_id: None,
@@ -2695,7 +2796,20 @@ fn execute_fem_eigen_path(
                     amplitude: None,
                     phase: None,
                     node_mass_weights: node_mass_weights.clone(),
+                    component_participation,
                 });
+            }
+
+            let mut solver_diagnostics = spectrum.get("solver_diagnostics").cloned();
+            if let (Some(diagnostics), Some(handoff)) =
+                (solver_diagnostics.as_mut(), accepted_handoff.as_ref())
+            {
+                bind_eigen_path_handoff_diagnostics(
+                    diagnostics,
+                    sample.sample_index,
+                    handoff.content_sha256(),
+                    handoff.source_mesh_topology_sha256(),
+                );
             }
 
             Ok(SingleKSolveResult {
@@ -2707,17 +2821,21 @@ fn execute_fem_eigen_path(
                     &executed.auxiliary_artifacts,
                 ),
                 solver_notes: vec![solver_kind],
+                solver_diagnostics,
             })
         }
     }
 
     let tracking_outputs = eigen_path_tracking_outputs(outputs, plan.count);
     let published_mode_indices = eigen_path_public_mode_indices(outputs, plan.count);
+    let mode_artifact_indices = eigen_path_mode_artifact_indices(outputs);
+    let mode_fields_requested = !mode_artifact_indices.is_empty();
     let wants_dispersion = eigen_path_wants_dispersion(outputs);
     let adapter = KSolverAdapter {
         engine,
         mode_artifacts: RefCell::new(Vec::new()),
-        published_mode_indices: published_mode_indices.clone(),
+        mode_artifact_indices,
+        relax_handoff: RefCell::new(None),
         periodic_airbox_k0_metrics: RefCell::new(None),
     };
     let mut path_result = run_path_or_single(
@@ -2728,11 +2846,23 @@ fn execute_fem_eigen_path(
         plan.mode_tracking.as_ref(),
     )?;
     path_result.k0_kittel_periodic_airbox_demag = adapter.periodic_airbox_k0_metrics.into_inner();
+    if path_result.k0_kittel_periodic_airbox_demag.is_some() && engine == FemEngine::CpuNative {
+        path_result.solver_model = crate::eigen::EigenSolverModel::ProductionCpuShiftInvert;
+    }
+    if periodic_airbox_k0_runtime_supported(plan) && engine == FemEngine::NativeGpu {
+        path_result.solver_model = crate::eigen::EigenSolverModel::ProductionGpuModalDeviceKrylov;
+    }
     let mut mode_artifacts = adapter.mode_artifacts.into_inner();
     deduplicate_auxiliary_artifacts_by_path(&mut mode_artifacts);
+    // Analytic reference solvers do not synthesize topology-bound mode fields
+    // unless the caller explicitly requested EigenMode output.  In particular,
+    // an EigenSpectrum-only K0 field sweep must not trigger a hidden mode-bundle
+    // write and then fail on a mesh identity that was never requested.
     if mode_artifacts.is_empty()
+        && mode_fields_requested
         && (de_bv_low_k_analytic_reference_enabled(plan)
-            || k0_kittel_synthetic_demag_factor_enabled(plan))
+            || (k0_kittel_synthetic_demag_factor_enabled(plan)
+                && !bias_field_sweep_requested(plan)))
     {
         mode_artifacts = eigen_path_mode_artifacts_from_result(&path_result)?;
     }
@@ -2757,7 +2887,13 @@ fn execute_fem_eigen_path(
                     .iter()
                     .filter(|m| published_mode_indices.contains(&(m.raw_mode_index as u32)))
                     .map(|m| {
-                        eigen_path_mode_json(plan, &s.sample, m, path_result.solver_model)
+                        eigen_path_mode_json(
+                            plan,
+                            &s.sample,
+                            m,
+                            path_result.solver_model,
+                            s.solver_diagnostics.as_ref(),
+                        )
                     })
                     .collect::<Vec<_>>(),
             })
@@ -2831,9 +2967,51 @@ fn execute_fem_eigen_path(
         "samples": v2_samples.clone(),
         "diagnostics_summary": diagnostics_v2["dispersion"].clone(),
     });
+    let spectrum_v3_samples = path_result
+        .samples
+        .iter()
+        .map(|sample| {
+            serde_json::json!({
+                "sample_id": format!("bias-field-sample-{:04}", sample.sample.sample_index),
+                "sample_index": sample.sample.sample_index,
+                "label": sample.sample.label,
+                "k_vector": sample.sample.k_vector,
+                "path_s": sample.sample.path_s,
+                "segment_index": sample.sample.segment_index,
+                "t_in_segment": sample.sample.t_in_segment,
+                "modes": sample
+                    .modes
+                    .iter()
+                    .filter(|mode| published_mode_indices.contains(&(mode.raw_mode_index as u32)))
+                    .map(|mode| {
+                        eigen_path_mode_v3_json(
+                            plan,
+                            &sample.sample,
+                            mode,
+                            path_result.solver_model,
+                            sample.solver_diagnostics.as_ref(),
+                        )
+                    })
+                    .collect::<Vec<_>>(),
+            })
+        })
+        .collect::<Vec<_>>();
+    let spectrum_v3 = serde_json::json!({
+        "schema_version": "eigen_spectrum.v3",
+        "solver_id": path_result.solver_model.as_str(),
+        "phase_convention": phase_convention,
+        "sample_count": spectrum_v3_samples.len(),
+        "mode_count": public_mode_count,
+        "samples": spectrum_v3_samples,
+        "diagnostics_summary": diagnostics_v2["dispersion"].clone(),
+    });
     auxiliary_artifacts.push(AuxiliaryArtifact {
         relative_path: "eigen/spectrum.v2.json".to_string(),
         bytes: serde_json::to_vec_pretty(&spectrum_v2).unwrap_or_default(),
+    });
+    auxiliary_artifacts.push(AuxiliaryArtifact {
+        relative_path: "eigen/spectrum.v3.json".to_string(),
+        bytes: serde_json::to_vec_pretty(&spectrum_v3).unwrap_or_default(),
     });
     auxiliary_artifacts.push(AuxiliaryArtifact {
         relative_path: "eigen/path.json".to_string(),
@@ -2938,14 +3116,28 @@ fn execute_fem_eigen_path(
             .modes
             .iter()
             .filter(|m| published_mode_indices.contains(&(m.raw_mode_index as u32)))
-            .map(|m| eigen_path_mode_json(plan, &first_sample.sample, m, path_result.solver_model))
+            .map(|m| {
+                eigen_path_mode_v3_json(
+                    plan,
+                    &first_sample.sample,
+                    m,
+                    path_result.solver_model,
+                    first_sample.solver_diagnostics.as_ref(),
+                )
+            })
             .collect();
         let solver_diagnostics =
-            eigen_path_solver_diagnostics(plan, &path_result, &published_mode_indices);
+            eigen_path_solver_diagnostics(engine, plan, &path_result, &published_mode_indices);
+        let production_path = matches!(
+            path_result.solver_model,
+            crate::eigen::EigenSolverModel::ProductionCpuShiftInvert
+                | crate::eigen::EigenSolverModel::ProductionGpuDenseK0Macrospin
+                | crate::eigen::EigenSolverModel::ProductionGpuModalDeviceKrylov
+        );
 
         let legacy_spectrum = serde_json::json!({
             "study_kind": "eigenmodes",
-            "solver_backend": "cpu_baseline_fem_eigen",
+            "solver_backend": if production_path { "native_fem_modal_eigen" } else { "cpu_baseline_fem_eigen" },
             "solver_kind": path_result.solver_model.as_str(),
             "mesh_name": plan.mesh_name,
             "mode_count": modes_summary.len(),
@@ -3134,7 +3326,10 @@ fn execute_fem_eigen_path(
 fn gpu_modal_dispersion_path_unavailable_error(plan: &FemEigenPlanIR) -> RunError {
     if plan.operator.include_demag || plan.enable_demag {
         return RunError {
-            message: "GPU modal K0/Kittel with demag is unavailable until Poisson-airbox GPU parity/runtime gates pass; CPU fallback is disabled for forced GPU modal demag.".to_string(),
+            message: format!(
+                "{}: GPU modal K0/Kittel with demag is unavailable until Poisson-airbox GPU parity/runtime gates pass; CPU fallback is disabled for forced GPU modal demag",
+                fem_eigen::SHARED_DOMAIN_K0_RUNTIME_UNAVAILABLE_REASON
+            ),
         };
     }
     RunError {
@@ -3143,10 +3338,7 @@ fn gpu_modal_dispersion_path_unavailable_error(plan: &FemEigenPlanIR) -> RunErro
 }
 
 fn gpu_modal_k0_kittel_path_supported(plan: &FemEigenPlanIR) -> bool {
-    if plan.k0_kittel_validation.is_none()
-        || !matches!(plan.operator.kind, fullmag_ir::EigenOperatorIR::Full2x2)
-        || plan.operator.include_demag
-        || plan.enable_demag
+    if !matches!(plan.operator.kind, fullmag_ir::EigenOperatorIR::Full2x2)
         || !matches!(
             plan.damping_policy,
             fullmag_ir::EigenDampingPolicyIR::Ignore
@@ -3157,33 +3349,148 @@ fn gpu_modal_k0_kittel_path_supported(plan: &FemEigenPlanIR) -> bool {
     let Some(fullmag_ir::KSamplingIR::Path { points, .. }) = plan.k_sampling.as_ref() else {
         return false;
     };
-    !points.is_empty()
+    let gamma_only_path = !points.is_empty()
         && points.iter().all(|point| {
             point
                 .k_vector
                 .iter()
                 .all(|component| component.is_finite() && component.abs() <= 1.0e-12)
-        })
+        });
+    if !gamma_only_path {
+        return false;
+    }
+
+    if !plan.operator.include_demag && !plan.enable_demag {
+        return true;
+    }
+
+    let positive_frequency_target = match plan.target {
+        fullmag_ir::EigenTargetIR::Nearest { frequency_hz } => {
+            frequency_hz.is_finite() && frequency_hz > 0.0
+        }
+        fullmag_ir::EigenTargetIR::FrequencyWindow {
+            frequency_min_hz,
+            frequency_max_hz,
+        } => {
+            frequency_min_hz.is_finite()
+                && frequency_max_hz.is_finite()
+                && frequency_min_hz >= 0.0
+                && frequency_max_hz > frequency_min_hz
+        }
+        fullmag_ir::EigenTargetIR::Lowest => false,
+    };
+
+    periodic_airbox_k0_runtime_supported(plan)
+        && plan.count > 0
+        && plan.count <= 32
+        && positive_frequency_target
+}
+
+fn periodic_airbox_k0_runtime_supported(plan: &FemEigenPlanIR) -> bool {
+    periodic_airbox_k0_physical_plan(plan)
+        && fem_eigen::native_shared_domain_magnetic_assembly_available(plan)
+}
+
+fn periodic_airbox_k0_physical_plan(plan: &FemEigenPlanIR) -> bool {
+    let gamma_only_path = plan.k_sampling.as_ref().is_some_and(|sampling| {
+        let fullmag_ir::KSamplingIR::Path { points, .. } = sampling else {
+            return false;
+        };
+        !points.is_empty()
+            && points.iter().all(|point| {
+                point
+                    .k_vector
+                    .iter()
+                    .all(|component| component.is_finite() && component.abs() <= 1.0e-12)
+            })
+    });
+
+    plan.operator.include_demag
+        && plan.enable_demag
+        && gamma_only_path
+        && matches!(
+            plan.spin_wave_bc.kind(),
+            fullmag_ir::SpinWaveBoundaryKindIR::Periodic
+        )
+        && plan.air_box_config.is_some()
+        && !plan.mesh.periodic_node_pairs.is_empty()
+        && !plan.mesh.periodic_boundary_pairs.is_empty()
 }
 
 fn eigen_path_single_k_point_plan(
     plan: &FemEigenPlanIR,
     sample: &crate::eigen::KSampleDescriptor,
-) -> FemEigenPlanIR {
+    reuse_relaxed_equilibrium: bool,
+    handoff: Option<&fem_eigen::AcceptedFemEigenEquilibriumHandoff>,
+) -> Result<FemEigenPlanIR, RunError> {
     let mut point_plan = plan.clone();
     point_plan.k_sampling = Some(fullmag_ir::KSamplingIR::Single {
         k_vector: sample.k_vector,
     });
-    if matches!(
+    if bias_field_sweep_requested(plan) {
+        let declared_sample = plan
+            .bias_field_samples
+            .iter()
+            .find(|candidate| candidate.sample_index as usize == sample.sample_index)
+            .ok_or_else(|| RunError {
+                message: format!(
+                    "FEM bias_field_samples has no bias field for sample {}",
+                    sample.sample_index
+                ),
+            })?;
+        if declared_sample
+            .field_a_per_m
+            .iter()
+            .any(|component| !component.is_finite())
+        {
+            return Err(RunError {
+                message: format!(
+                    "FEM bias_field_samples sample {} requires finite field_a_per_m components",
+                    sample.sample_index
+                ),
+            });
+        }
+        // A field sweep is a sequence of distinct physical problems.  Keep
+        // the relaxed source so every sample gets its own accepted
+        // equilibrium, linearization, demag solve, and native modal assembly.
+        point_plan.external_field = Some(declared_sample.field_a_per_m);
+        // The outer path owns the complete BiasFieldSweepIR sample list.  A
+        // point solve must be one physical sample, otherwise the public CPU/
+        // GPU entrypoint would recursively re-enter the whole sweep.
+        point_plan.bias_field_samples.clear();
+    } else if k0_kittel_periodic_airbox_field_sweep_requested(plan) {
+        return Err(RunError {
+            message: "K0-3 periodic_airbox_k0 physical field sweep requires bias_field_samples; k0_kittel_validation is postsolve-only".to_string(),
+        });
+    } else if matches!(
         point_plan.equilibrium,
         fullmag_ir::EquilibriumSourceIR::RelaxedInitialState
     ) {
-        point_plan.equilibrium = fullmag_ir::EquilibriumSourceIR::Provided;
+        if reuse_relaxed_equilibrium {
+            let handoff = handoff.ok_or_else(|| RunError {
+                message: "missing_relax_to_eigen_handoff".to_string(),
+            })?;
+            handoff.validate_target_plan(&point_plan)?;
+            point_plan.equilibrium = fullmag_ir::EquilibriumSourceIR::Provided;
+            point_plan.equilibrium_magnetization = handoff.equilibrium_magnetization().to_vec();
+        }
     }
-    if let Some(external_field) = eigen_path_k0_kittel_sample_external_field(plan, sample) {
-        point_plan.external_field = Some(external_field);
-    }
-    point_plan
+    point_plan.k0_kittel_validation = None;
+    Ok(point_plan)
+}
+
+fn bias_field_sweep_requested(plan: &FemEigenPlanIR) -> bool {
+    !plan.bias_field_samples.is_empty()
+}
+
+fn k0_kittel_periodic_airbox_field_sweep_requested(plan: &FemEigenPlanIR) -> bool {
+    plan.k0_kittel_validation
+        .as_ref()
+        .is_some_and(|validation| {
+            validation.kind == "k0_kittel_field_sweep"
+                && validation.case_id.as_deref() == Some("K0-3")
+                && validation.demag_kind.as_deref() == Some("periodic_airbox_k0")
+        })
 }
 
 fn de_bv_low_k_analytic_reference_enabled(plan: &FemEigenPlanIR) -> bool {
@@ -3283,6 +3590,8 @@ fn solve_k0_kittel_synthetic_demag_factor_single_k(
             amplitude: Some(vec![1.0]),
             phase: Some(vec![0.0]),
             node_mass_weights: None,
+            component_participation:
+                crate::eigen::ModalParticipationObservable::unavailable_without_context("cpu"),
         }],
         relaxation_steps: 0,
         solver_model: crate::eigen::EigenSolverModel::ReferenceK0KittelSyntheticDemagFactor,
@@ -3290,6 +3599,7 @@ fn solve_k0_kittel_synthetic_demag_factor_single_k(
             "k0_3a_synthetic_demag_factor".to_string(),
             "production_periodic_airbox_claim=false".to_string(),
         ],
+        solver_diagnostics: None,
     })
 }
 
@@ -3357,6 +3667,8 @@ fn solve_de_bv_low_k_analytic_reference_single_k(
             amplitude: Some(vec![1.0]),
             phase: Some(vec![0.0]),
             node_mass_weights: None,
+            component_participation:
+                crate::eigen::ModalParticipationObservable::unavailable_without_context("cpu"),
         }],
         relaxation_steps: 0,
         solver_model: crate::eigen::EigenSolverModel::ReferenceThinFilmDeBvKalinikosN0,
@@ -3364,6 +3676,7 @@ fn solve_de_bv_low_k_analytic_reference_single_k(
             "reference_thin_film_de_bv_kalinikos_n0".to_string(),
             format!("geometry={geometry}"),
         ],
+        solver_diagnostics: None,
     })
 }
 
@@ -3574,10 +3887,17 @@ fn eigen_path_wants_dispersion(outputs: &[OutputIR]) -> bool {
 
 fn eigen_path_public_mode_indices(outputs: &[OutputIR], mode_count: u32) -> BTreeSet<u32> {
     let requested_modes = eigen_path_requested_mode_indices(outputs);
-    if !requested_modes.is_empty() || !eigen_path_wants_dispersion(outputs) {
-        return requested_modes;
+    let wants_spectrum = outputs
+        .iter()
+        .any(|output| matches!(output, OutputIR::EigenSpectrum { .. }));
+    if wants_spectrum || eigen_path_wants_dispersion(outputs) {
+        return (0..mode_count).collect();
     }
-    (0..mode_count).collect()
+    requested_modes
+}
+
+fn eigen_path_mode_artifact_indices(outputs: &[OutputIR]) -> BTreeSet<u32> {
+    eigen_path_requested_mode_indices(outputs)
 }
 
 fn eigen_path_single_k_solver_model(
@@ -3603,12 +3923,17 @@ fn eigen_path_single_k_solver_model(
             .and_then(|value| value.get("solver_model"))
             .or_else(|| summary.get("solver_kind"))
             .and_then(|value| value.as_str());
+        let solver_adapter = diagnostics
+            .and_then(|value| value.get("solver_adapter"))
+            .and_then(|value| value.as_str());
         let spectral_transform = diagnostics
             .and_then(|value| value.get("spectral_transform"))
             .and_then(|value| value.as_str());
         if production_solver_available
             && execution_lane == Some("production_cpu")
-            && solver_model == Some("slepc_multi_shift_invert_production_cpu_dense")
+            && (solver_model == Some("slepc_multi_shift_invert_production_cpu_dense")
+                || solver_adapter == Some("k0_poisson_airbox_cpu_full_coupled_slepc")
+                || solver_adapter == Some("k0_poisson_airbox_cpu_schur_slepc"))
             && spectral_transform == Some("shift_invert")
         {
             if matches!(
@@ -3626,6 +3951,16 @@ fn eigen_path_single_k_solver_model(
         {
             return crate::eigen::EigenSolverModel::ProductionGpuDenseK0Macrospin;
         }
+        if production_solver_available
+            && execution_lane == Some("production_gpu")
+            && (solver_model == Some("k0_poisson_airbox_gpu_petsc_slepc")
+                || solver_model == Some("k0_poisson_airbox_gpu_modal_device_krylov")
+                || solver_adapter == Some("k0_poisson_airbox_gpu_petsc_slepc")
+                || solver_adapter == Some("k0_poisson_airbox_gpu_modal_device_krylov"))
+            && diagnostics.is_some_and(eigen_path_gpu_modal_device_contract)
+        {
+            return crate::eigen::EigenSolverModel::ProductionGpuModalDeviceKrylov;
+        }
     }
 
     if matches!(plan.operator.kind, fullmag_ir::EigenOperatorIR::Full2x2) {
@@ -3633,6 +3968,40 @@ fn eigen_path_single_k_solver_model(
     } else {
         crate::eigen::EigenSolverModel::ReferenceScalarTangent
     }
+}
+
+fn eigen_path_gpu_modal_device_contract(diagnostics: &serde_json::Value) -> bool {
+    let has_contract = |sample: &serde_json::Value| {
+        sample.get("gpu_device_resident_modal_eigensolver") == Some(&serde_json::json!(true))
+            && sample.get("persistent_solver_context") == Some(&serde_json::json!(true))
+            && sample.get("scalable_selected_spectrum") == Some(&serde_json::json!(true))
+            // A bounded validation adapter may still use CUDA vectors and a
+            // matrix-free action, but it is not a production capability.
+            // Keep the explicit provenance flags fail-closed at this final
+            // promotion boundary.
+            && sample.get("validation_only") != Some(&serde_json::json!(true))
+            && sample.get("production_implication") != Some(&serde_json::json!(false))
+            // A host-projected Hessenberg/Ritz state is a valid bounded
+            // diagnostic lane, but it is not the production device-resident
+            // modal contract.  Reject it even when the older three boolean
+            // markers are present for compatibility.
+            && sample
+                .get("host_ritz_extraction")
+                .and_then(serde_json::Value::as_bool)
+                != Some(true)
+    };
+    if has_contract(diagnostics) {
+        return true;
+    }
+    diagnostics
+        .get("sample_solver_diagnostics")
+        .and_then(serde_json::Value::as_array)
+        .is_some_and(|samples| {
+            !samples.is_empty()
+                && samples
+                    .iter()
+                    .all(|sample| sample.get("diagnostics").is_some_and(has_contract))
+        })
 }
 
 fn eigen_path_single_k_has_bloch_floquet_contract(diagnostics: Option<&serde_json::Value>) -> bool {
@@ -3945,6 +4314,7 @@ fn eigen_path_mode_json(
     sample: &crate::eigen::KSampleDescriptor,
     mode: &crate::eigen::SingleKModeResult,
     solver_model: crate::eigen::EigenSolverModel,
+    solver_diagnostics: Option<&serde_json::Value>,
 ) -> serde_json::Value {
     let residual_absolute_l2 = finite_or_default(mode.residual_norm, 0.0);
     let residual_linf = finite_or_default(mode.residual_linf, residual_absolute_l2);
@@ -3964,8 +4334,16 @@ fn eigen_path_mode_json(
     );
     let production_shift_invert =
         solver_model == crate::eigen::EigenSolverModel::ProductionCpuShiftInvert;
+    let production_periodic_airbox_k0 = periodic_airbox_k0_runtime_supported(plan);
     let production_gyrotropic = production_shift_invert
+        || production_periodic_airbox_k0
         || solver_model == crate::eigen::EigenSolverModel::ProductionGpuDenseK0Macrospin;
+    let provenance_value = |key: &str| {
+        solver_diagnostics
+            .and_then(|diagnostics| diagnostics.get(key))
+            .cloned()
+            .unwrap_or(serde_json::Value::Null)
+    };
 
     let mut value = serde_json::json!({
         "index": mode.raw_mode_index,
@@ -3978,8 +4356,8 @@ fn eigen_path_mode_json(
         "omega_rad_s": mode.angular_frequency_rad_per_s,
         "eigenvalue_real": mode.eigenvalue_real,
         "eigenvalue_imag": mode.eigenvalue_imag,
-        "phasor_convention": if production_gyrotropic { "exp_i_omega_t" } else { "not_applicable_real_reference" },
-        "eigenvalue_mapping": if production_gyrotropic { "lambda_eq_i_omega" } else { "omega_rad_s_eq_gamma0_rad_s_per_A_m_times_effective_field_lambda_A_per_m" },
+        "phasor_convention": if production_periodic_airbox_k0 { "exp_plus_i_omega_t" } else if production_gyrotropic { "exp_i_omega_t" } else { "not_applicable_real_reference" },
+        "eigenvalue_mapping": if production_periodic_airbox_k0 { "lambda_imag_positive_frequency" } else if production_gyrotropic { "lambda_eq_i_omega" } else { "omega_rad_s_eq_gamma0_rad_s_per_A_m_times_effective_field_lambda_A_per_m" },
         "norm": mode.norm,
         "max_amplitude": mode.max_amplitude,
         "residual_norm": residual_absolute_l2,
@@ -3994,6 +4372,13 @@ fn eigen_path_mode_json(
         "mu0_T_m_per_A": crate::MU0,
         "dominant_polarization": mode.dominant_polarization,
         "k_vector": sample.k_vector,
+        "external_field_a_per_m": eigen_path_external_field(plan, sample.sample_index),
+        "assembly_kind": provenance_value("assembly_kind"),
+        "operator_input_signature_sha256": provenance_value("operator_input_signature_sha256"),
+        "phase_constraint_sha256": provenance_value("phase_constraint_sha256"),
+        "equilibrium_artifact_sha256": provenance_value("equilibrium_artifact_sha256"),
+        "linearization_state_sha256": provenance_value("linearization_state_sha256"),
+        "periodic_mesh_certificate_sha256": provenance_value("periodic_mesh_certificate_sha256"),
         "mode_field_id": eigen_path_mode_field_id(
             sample.sample_index,
             mode.raw_mode_index,
@@ -4007,6 +4392,34 @@ fn eigen_path_mode_json(
         value["node_mass_weights"] = serde_json::json!(weights);
     }
     value
+}
+
+fn eigen_path_mode_v3_json(
+    plan: &FemEigenPlanIR,
+    sample: &crate::eigen::KSampleDescriptor,
+    mode: &crate::eigen::SingleKModeResult,
+    solver_model: crate::eigen::EigenSolverModel,
+    solver_diagnostics: Option<&serde_json::Value>,
+) -> serde_json::Value {
+    let mut value = eigen_path_mode_json(plan, sample, mode, solver_model, solver_diagnostics);
+    value["mode_id"] = serde_json::json!(format!(
+        "sample-{:04}/mode-{:04}",
+        sample.sample_index, mode.raw_mode_index
+    ));
+    value["component_participation"] = serde_json::to_value(&mode.component_participation)
+        .expect("validated modal participation observable must serialize");
+    value
+}
+
+fn eigen_path_external_field(plan: &FemEigenPlanIR, sample_index: usize) -> Option<[f64; 3]> {
+    if bias_field_sweep_requested(plan) {
+        return plan
+            .bias_field_samples
+            .iter()
+            .find(|sample| sample.sample_index as usize == sample_index)
+            .map(|sample| sample.field_a_per_m);
+    }
+    plan.external_field
 }
 
 fn eigen_path_node_mass_weights_from_json(value: &serde_json::Value) -> Option<Vec<f64>> {
@@ -4023,6 +4436,46 @@ fn eigen_path_node_mass_weights_from_json(value: &serde_json::Value) -> Option<V
         weights.push(weight);
     }
     Some(weights)
+}
+
+fn eigen_path_component_participation_from_json(
+    value: Option<&serde_json::Value>,
+    solver_device: &str,
+) -> Result<crate::eigen::ModalParticipationObservable, crate::types::RunError> {
+    let Some(value) = value else {
+        return Ok(
+            crate::eigen::ModalParticipationObservable::unavailable_without_context(
+                solver_device,
+            ),
+        );
+    };
+    let observable = serde_json::from_value::<crate::eigen::ModalParticipationObservable>(
+        value.clone(),
+    )
+    .map_err(|error| crate::types::RunError {
+        message: format!("invalid managed component participation payload: {error}"),
+    })?;
+    let valid_status_payload = match observable.status {
+        crate::eigen::ModalParticipationAvailability::Ready => {
+            observable.global.is_some()
+                && !observable.objects.is_empty()
+                && observable.unavailable.is_none()
+        }
+        crate::eigen::ModalParticipationAvailability::Unavailable => {
+            observable.global.is_none()
+                && observable.objects.is_empty()
+                && observable.unavailable.is_some()
+        }
+    };
+    if observable.schema_version != "modal_component_participation.v1"
+        || observable.definition_id != crate::eigen::MODAL_PARTICIPATION_DEFINITION_ID
+        || !valid_status_payload
+    {
+        return Err(crate::types::RunError {
+            message: "invalid managed component participation contract".to_string(),
+        });
+    }
+    Ok(observable)
 }
 
 fn eigen_path_public_mode_count(
@@ -4126,6 +4579,7 @@ fn eigen_path_floquet_periodic_mesh_certificate(
 }
 
 fn eigen_path_solver_diagnostics(
+    engine: FemEngine,
     plan: &FemEigenPlanIR,
     result: &crate::eigen::PathSolveResult,
     published_mode_indices: &BTreeSet<u32>,
@@ -4140,14 +4594,9 @@ fn eigen_path_solver_diagnostics(
         requested_production_shift_invert && native_cpu_modal_window_rejection_reason.is_none();
     let production_gpu_k0_kittel =
         result.solver_model == crate::eigen::EigenSolverModel::ProductionGpuDenseK0Macrospin;
-    let production_periodic_airbox_k0 = result.k0_kittel_periodic_airbox_demag.is_some()
-        && plan
-            .k0_kittel_validation
-            .as_ref()
-            .is_some_and(|validation| {
-                validation.case_id.as_deref() == Some("K0-3")
-                    && validation.demag_kind.as_deref() == Some("periodic_airbox_k0")
-            });
+    let production_periodic_airbox_k0 = periodic_airbox_k0_runtime_supported(plan);
+    let production_periodic_airbox_gpu =
+        production_periodic_airbox_k0 && engine == FemEngine::NativeGpu;
     let production_modal_solver =
         production_shift_invert || production_gpu_k0_kittel || production_periodic_airbox_k0;
     let mut diagnostics = serde_json::json!({
@@ -4155,15 +4604,15 @@ fn eigen_path_solver_diagnostics(
         "study_product": "modal_eigen",
         "status": "ready",
         "complete": true,
-        "solver_model": if production_periodic_airbox_k0 { "k0_poisson_airbox_cpu_full_coupled_slepc" } else { result.solver_model.as_str() },
-        "solver_family": if production_periodic_airbox_k0 { "k0_poisson_airbox_full_coupled" } else { result.solver_model.as_str() },
-        "resolved_solver_family": if production_periodic_airbox_k0 { "k0_poisson_airbox_full_coupled" } else if production_shift_invert { "shift_invert" } else if production_gpu_k0_kittel { "gpu_dense_k0_macrospin" } else { result.solver_model.as_str() },
-        "spectral_transform": if production_periodic_airbox_k0 { "shift_invert" } else if production_shift_invert { "shift_invert" } else if production_gpu_k0_kittel { "dense_generalized" } else { "none" },
-        "solver_adapter": if production_periodic_airbox_k0 { "k0_poisson_airbox_cpu_full_coupled_slepc" } else if production_shift_invert { "slepc_modal_eigen" } else if production_gpu_k0_kittel { "cusolverdn_dense_k0_macrospin_modal" } else { "multi_k_reference_modal_path" },
+        "solver_model": if production_periodic_airbox_gpu { "k0_poisson_airbox_gpu_petsc_slepc" } else if production_periodic_airbox_k0 { "k0_poisson_airbox_cpu_schur_slepc" } else { result.solver_model.as_str() },
+        "solver_family": if production_periodic_airbox_gpu { "gpu_petsc_slepc_cuda" } else if production_periodic_airbox_k0 { "k0_poisson_airbox_schur" } else { result.solver_model.as_str() },
+        "resolved_solver_family": if production_periodic_airbox_gpu { "device_resident_arnoldi_shift_invert" } else if production_periodic_airbox_k0 { "k0_poisson_airbox_schur" } else if production_shift_invert { "shift_invert" } else if production_gpu_k0_kittel { "gpu_dense_k0_macrospin" } else { result.solver_model.as_str() },
+        "spectral_transform": if production_periodic_airbox_gpu { "shift_invert" } else if production_periodic_airbox_k0 { "shift_invert" } else if production_shift_invert { "shift_invert" } else if production_gpu_k0_kittel { "dense_generalized" } else { "none" },
+        "solver_adapter": if production_periodic_airbox_gpu { "k0_poisson_airbox_gpu_petsc_slepc" } else if production_periodic_airbox_k0 { "k0_poisson_airbox_cpu_schur_slepc" } else if production_shift_invert { "slepc_modal_eigen" } else if production_gpu_k0_kittel { "cusolverdn_dense_k0_macrospin_modal" } else { "multi_k_reference_modal_path" },
         "solver_notes": result.notes,
-        "execution_lane": if production_periodic_airbox_k0 { "production_cpu" } else if production_shift_invert { "production_cpu" } else if production_gpu_k0_kittel { "production_gpu" } else { "reference_cpu" },
-        "algebraic_form": if production_periodic_airbox_k0 { "full_coupled_poisson_airbox_augmented_gauge" } else if production_shift_invert { "gyrotropic_generalized" } else if production_gpu_k0_kittel { "k0_macrospin_field_generalized_to_gyrotropic_modal" } else { "reference_effective_field_generalized" },
-        "matrix_equation": if production_periodic_airbox_k0 { "A_full x = lambda B_full x; Poisson airbox eliminated through Schur diagnostics" } else if production_shift_invert { "A q = lambda B q" } else if production_gpu_k0_kittel { "K u = lambda_field M u; lambda_modal = i gamma0 lambda_field" } else { "K u = lambda M u" },
+        "execution_lane": if production_periodic_airbox_gpu { "production_gpu" } else if production_periodic_airbox_k0 { "production_cpu" } else if production_shift_invert { "production_cpu" } else if production_gpu_k0_kittel { "production_gpu" } else { "reference_cpu" },
+        "algebraic_form": if production_periodic_airbox_gpu { "schur_reduced_descriptor" } else if production_periodic_airbox_k0 { "schur_reduced_descriptor" } else if production_shift_invert { "gyrotropic_generalized" } else if production_gpu_k0_kittel { "k0_macrospin_field_generalized_to_gyrotropic_modal" } else { "reference_effective_field_generalized" },
+        "matrix_equation": if production_periodic_airbox_gpu { "L_eff q = lambda B_qq q; phi(q) = -P^-1 A_phiq q" } else if production_periodic_airbox_k0 { "L_eff q = lambda B_qq q; phi(q) = -P^-1 A_phiq q" } else if production_shift_invert { "A q = lambda B q" } else if production_gpu_k0_kittel { "K u = lambda_field M u; lambda_modal = i gamma0 lambda_field" } else { "K u = lambda M u" },
         "phasor_convention": if production_periodic_airbox_k0 { "exp_plus_i_omega_t" } else if production_shift_invert || production_gpu_k0_kittel { "exp_i_omega_t" } else { "not_applicable_real_reference" },
         "eigenvalue_mapping": if production_periodic_airbox_k0 { "lambda_imag_positive_frequency" } else if production_shift_invert || production_gpu_k0_kittel { "lambda_eq_i_omega" } else { "omega_rad_s_eq_gamma0_rad_s_per_A_m_times_effective_field_lambda_A_per_m" },
         "frequency_mapping": if production_modal_solver { "frequency_hz = imag(lambda)/(2*pi)" } else { "frequency_hz = omega_rad_s / (2*pi)" },
@@ -4232,19 +4681,27 @@ fn eigen_path_solver_diagnostics(
                 }),
             );
         }
+        if production_periodic_airbox_k0 {
+            object.insert(
+                "demag_kind".to_string(),
+                serde_json::json!("periodic_airbox_k0"),
+            );
+            object.insert(
+                "production_periodic_airbox_claim".to_string(),
+                serde_json::json!(true),
+            );
+        }
     }
     if let (Some(object), Some(metrics)) = (
         diagnostics.as_object_mut(),
         result.k0_kittel_periodic_airbox_demag.as_ref(),
     ) {
-        object.insert(
-            "demag_kind".to_string(),
-            serde_json::json!("periodic_airbox_k0"),
-        );
-        object.insert(
-            "gauge_policy".to_string(),
-            serde_json::json!("mean_zero_augmented"),
-        );
+        let gauge_policy = if metrics.augmented_phi_dof_count > metrics.phi_dof_count {
+            "mean_zero_augmented"
+        } else {
+            "none"
+        };
+        object.insert("gauge_policy".to_string(), serde_json::json!(gauge_policy));
         object.insert(
             "phi_dof_count".to_string(),
             serde_json::json!(metrics.phi_dof_count),
@@ -4269,10 +4726,50 @@ fn eigen_path_solver_diagnostics(
             "airbox_pair_count".to_string(),
             serde_json::json!(metrics.airbox_pair_count),
         );
-        object.insert(
-            "production_periodic_airbox_claim".to_string(),
-            serde_json::json!(true),
-        );
+    }
+    let sample_solver_diagnostics = result
+        .samples
+        .iter()
+        .filter_map(|sample| {
+            sample
+                .solver_diagnostics
+                .as_ref()
+                .map(|sample_diagnostics| {
+                    serde_json::json!({
+                        "sample_index": sample.sample.sample_index,
+                        "label": sample.sample.label,
+                        "k_vector": sample.sample.k_vector,
+                        "diagnostics": sample_diagnostics,
+                    })
+                })
+        })
+        .collect::<Vec<_>>();
+    let exact_sample_diagnostics_available = !sample_solver_diagnostics.is_empty();
+    if exact_sample_diagnostics_available {
+        let converged_eigenpair_count_total = sample_solver_diagnostics
+            .iter()
+            .filter_map(|sample| sample.get("diagnostics"))
+            .map(|sample| eigen_path_solver_counter(sample, "converged_eigenpair_count"))
+            .sum::<u64>();
+        let accepted_mode_count_total = sample_solver_diagnostics
+            .iter()
+            .filter_map(|sample| sample.get("diagnostics"))
+            .map(|sample| eigen_path_solver_counter(sample, "accepted_mode_count"))
+            .sum::<u64>();
+        if let Some(object) = diagnostics.as_object_mut() {
+            object.insert(
+                "sample_solver_diagnostics".to_string(),
+                serde_json::json!(sample_solver_diagnostics),
+            );
+            object.insert(
+                "converged_eigenpair_count_total".to_string(),
+                serde_json::json!(converged_eigenpair_count_total),
+            );
+            object.insert(
+                "accepted_mode_count_total".to_string(),
+                serde_json::json!(accepted_mode_count_total),
+            );
+        }
     }
     if let fullmag_ir::EigenTargetIR::FrequencyWindow {
         frequency_min_hz,
@@ -4289,34 +4786,39 @@ fn eigen_path_solver_diagnostics(
         let guard_fraction = 0.25;
         let mut resolved_min_hz = frequency_min_hz;
         let mut resolved_max_hz = frequency_max_hz;
-        let subwindows = (0..subwindow_count)
-            .map(|index| {
-                let sub_min =
-                    frequency_min_hz + index as f64 * window_width / subwindow_count as f64;
-                let sub_max =
-                    frequency_min_hz + (index + 1) as f64 * window_width / subwindow_count as f64;
-                let sub_width = sub_max - sub_min;
-                let search_min = (sub_min - guard_fraction * sub_width).max(0.0);
-                let search_max = sub_max + guard_fraction * sub_width;
-                let shift_frequency_hz = 0.5 * (sub_min + sub_max);
-                resolved_min_hz = resolved_min_hz.min(search_min);
-                resolved_max_hz = resolved_max_hz.max(search_max);
-                serde_json::json!({
-                    "index": index,
-                    "requested_hz": [sub_min, sub_max],
-                    "search_hz": [search_min, search_max],
-                    "shift_hz": shift_frequency_hz,
-                    "shift_frequency_hz": shift_frequency_hz,
-                    "shift_omega_rad_s": std::f64::consts::TAU * shift_frequency_hz,
-                    "outer_iterations": 0,
-                    "linear_iterations_total": 0,
-                    "candidate_modes": public_mode_count,
-                    "accepted_modes": public_mode_count,
-                    "residual_max": 0.0,
-                    "stop_reason": "window_exhausted",
+        let subwindows = if exact_sample_diagnostics_available {
+            Vec::new()
+        } else {
+            (0..subwindow_count)
+                .map(|index| {
+                    let sub_min =
+                        frequency_min_hz + index as f64 * window_width / subwindow_count as f64;
+                    let sub_max = frequency_min_hz
+                        + (index + 1) as f64 * window_width / subwindow_count as f64;
+                    let sub_width = sub_max - sub_min;
+                    let search_min = (sub_min - guard_fraction * sub_width).max(0.0);
+                    let search_max = sub_max + guard_fraction * sub_width;
+                    let shift_frequency_hz = 0.5 * (sub_min + sub_max);
+                    resolved_min_hz = resolved_min_hz.min(search_min);
+                    resolved_max_hz = resolved_max_hz.max(search_max);
+                    serde_json::json!({
+                        "index": index,
+                        "requested_hz": [sub_min, sub_max],
+                        "search_hz": [search_min, search_max],
+                        "shift_hz": shift_frequency_hz,
+                        "shift_frequency_hz": shift_frequency_hz,
+                        "shift_omega_rad_s": std::f64::consts::TAU * shift_frequency_hz,
+                        "outer_iterations": 0,
+                        "linear_iterations_total": 0,
+                        "candidate_modes": public_mode_count,
+                        "accepted_modes": public_mode_count,
+                        "residual_max": 0.0,
+                        "stop_reason": "window_exhausted",
+                        "provenance": "planned_reference_window_not_executed",
+                    })
                 })
-            })
-            .collect::<Vec<_>>();
+                .collect::<Vec<_>>()
+        };
         if let Some(object) = diagnostics.as_object_mut() {
             object.insert(
                 "requested_window_hz".to_string(),
@@ -4337,7 +4839,9 @@ fn eigen_path_solver_diagnostics(
                     "additional_modes_may_exist": true,
                 }),
             );
-            object.insert("subwindows".to_string(), serde_json::json!(subwindows));
+            if !subwindows.is_empty() {
+                object.insert("subwindows".to_string(), serde_json::json!(subwindows));
+            }
             if !production_shift_invert {
                 object.insert(
                     "frequency_window_solver_policy".to_string(),
@@ -4349,17 +4853,19 @@ fn eigen_path_solver_diagnostics(
     diagnostics
 }
 
+fn eigen_path_solver_counter(diagnostics: &serde_json::Value, key: &str) -> u64 {
+    diagnostics
+        .get(key)
+        .or_else(|| diagnostics.get("slepc").and_then(|slepc| slepc.get(key)))
+        .and_then(|value| value.as_u64())
+        .unwrap_or(0)
+}
+
 fn eigen_path_equilibrium_source_json(
     plan: &FemEigenPlanIR,
-    relaxation_steps: u64,
+    _relaxation_steps: u64,
 ) -> serde_json::Value {
     match &plan.equilibrium {
-        fullmag_ir::EquilibriumSourceIR::RelaxedInitialState if relaxation_steps == 0 => {
-            serde_json::json!({
-                "kind": "relaxed_initial_state",
-                "handoff": "stage_continuation",
-            })
-        }
         fullmag_ir::EquilibriumSourceIR::RelaxedInitialState => {
             serde_json::json!({ "kind": "relaxed_initial_state" })
         }
@@ -4414,6 +4920,14 @@ fn remap_single_k_mode_artifact_path(
         || relative_path == "eigen/mode_fields.zarr/.zattrs"
     {
         return Some(relative_path.to_string());
+    }
+    for state_name in [
+        "equilibrium_artifact.v7.json",
+        "linearization_state.v6.json",
+    ] {
+        if relative_path == format!("eigen/metadata/{state_name}") {
+            return Some(format!("eigen/metadata/{sample_path}/{state_name}"));
+        }
     }
     if relative_path.starts_with("eigen/modes/sample_0000/")
         || relative_path.starts_with("eigen/mode_fields/sample_0000/")
@@ -4500,6 +5014,10 @@ fn build_eigen_path_frequency_domain_manifest(
     plan: &FemEigenPlanIR,
 ) -> serde_json::Value {
     let mode_metadata_paths = eigen_path_mode_metadata_paths(mode_artifacts);
+    let equilibrium_artifact_v7_paths =
+        eigen_path_state_metadata_paths(mode_artifacts, "equilibrium_artifact.v7.json");
+    let linearization_state_v6_paths =
+        eigen_path_state_metadata_paths(mode_artifacts, "linearization_state.v6.json");
     let mode_field_resources = mode_metadata_paths
         .iter()
         .filter_map(|path| parse_eigen_path_mode_metadata_path(path))
@@ -4543,6 +5061,149 @@ fn build_eigen_path_frequency_domain_manifest(
         requested_production_shift_invert && native_cpu_modal_window_rejection_reason.is_none();
     let production_gpu_k0_kittel =
         result.solver_model == crate::eigen::EigenSolverModel::ProductionGpuDenseK0Macrospin;
+    let production_periodic_airbox_k0 = periodic_airbox_k0_runtime_supported(plan);
+    let production_periodic_airbox_gpu =
+        production_periodic_airbox_k0 && engine == FemEngine::NativeGpu;
+    let production_periodic_airbox_cpu =
+        production_periodic_airbox_k0 && engine == FemEngine::CpuNative;
+    let production_native_solver =
+        production_shift_invert || production_gpu_k0_kittel || production_periodic_airbox_k0;
+    let periodic_airbox_adapter = if production_periodic_airbox_gpu {
+        "k0_poisson_airbox_gpu_petsc_slepc"
+    } else {
+        "k0_poisson_airbox_cpu_schur_slepc"
+    };
+    // The single-k native solver publishes a path-level diagnostics envelope
+    // containing one immutable `diagnostics` object per sample.  The path
+    // manifest must bind to that object rather than reconstructing an engine
+    // label from the orchestrator.  Reconstruction used to hide the actual
+    // PETSc/SLEPc adapter and all residency/fallback fields.
+    let native_diagnostics = eigen_path_native_modal_diagnostics(result);
+    let requested_solver_method =
+        eigen_path_nested_string(native_diagnostics, "requested_execution", "solver_method")
+            .unwrap_or_else(|| {
+                if production_periodic_airbox_k0 || production_shift_invert {
+                    "targeted_spectrum".to_string()
+                } else {
+                    "auto".to_string()
+                }
+            });
+    let requested_preconditioner =
+        eigen_path_nested_string(native_diagnostics, "requested_execution", "preconditioner")
+            .unwrap_or_else(|| "not_applicable".to_string());
+    let requested_magnetostatic_bc = eigen_path_nested_string(
+        native_diagnostics,
+        "requested_execution",
+        "magnetostatic_bc",
+    )
+    .or_else(|| {
+        plan.operator
+            .include_demag
+            .then_some("periodic_airbox_k0".to_string())
+    })
+    .unwrap_or_else(|| "not_applicable".to_string());
+    let resolved_device =
+        eigen_path_nested_string(native_diagnostics, "resolved_execution", "device")
+            .unwrap_or_else(|| device.to_string());
+    let resolved_precision =
+        eigen_path_nested_string(native_diagnostics, "resolved_execution", "precision")
+            .unwrap_or_else(|| "double".to_string());
+    let resolved_engine =
+        eigen_path_nested_string(native_diagnostics, "resolved_execution", "engine")
+            .unwrap_or_else(|| {
+                format!(
+                    "multi_k_orchestrator/{}",
+                    if production_periodic_airbox_k0 {
+                        periodic_airbox_adapter
+                    } else {
+                        result.solver_model.as_str()
+                    }
+                )
+            });
+    let resolved_native_backend =
+        eigen_path_nested_string(native_diagnostics, "resolved_execution", "native_backend")
+            .unwrap_or_else(|| {
+                if production_periodic_airbox_gpu || production_gpu_k0_kittel {
+                    "native_gpu".to_string()
+                } else if production_periodic_airbox_cpu || production_shift_invert {
+                    "native_cpu".to_string()
+                } else if engine == FemEngine::NativeGpu {
+                    "native_gpu".to_string()
+                } else {
+                    "runner_validation".to_string()
+                }
+            });
+    let resolved_solver_library =
+        eigen_path_nested_string(native_diagnostics, "resolved_execution", "solver_library")
+            .unwrap_or_else(|| {
+                if production_periodic_airbox_gpu {
+                    "SLEPc/PETSc/hypre CUDA".to_string()
+                } else if production_periodic_airbox_cpu || production_shift_invert {
+                    "slepc".to_string()
+                } else if production_gpu_k0_kittel {
+                    "cusolverdn".to_string()
+                } else {
+                    "nalgebra".to_string()
+                }
+            });
+    let resolved_solver_algorithm = eigen_path_nested_string(
+        native_diagnostics,
+        "resolved_execution",
+        "implementation_id",
+    )
+    .or_else(|| eigen_path_nested_string(native_diagnostics, "resolved_execution", "engine"))
+    .unwrap_or_else(|| {
+        if production_periodic_airbox_k0 {
+            periodic_airbox_adapter.to_string()
+        } else {
+            result.solver_model.as_str().to_string()
+        }
+    });
+    let resolved_status =
+        eigen_path_nested_string(native_diagnostics, "resolved_execution", "status");
+    let resolved_implementation_id = eigen_path_nested_string(
+        native_diagnostics,
+        "resolved_execution",
+        "implementation_id",
+    );
+    let resolved_operator_residency = eigen_path_nested_string(
+        native_diagnostics,
+        "resolved_execution",
+        "operator_residency",
+    );
+    let resolved_vector_residency =
+        eigen_path_nested_string(native_diagnostics, "resolved_execution", "vector_residency");
+    let resolved_krylov_residency =
+        eigen_path_nested_string(native_diagnostics, "resolved_execution", "krylov_residency");
+    let resolved_preconditioner_residency = eigen_path_nested_string(
+        native_diagnostics,
+        "resolved_execution",
+        "preconditioner_residency",
+    );
+    let resolved_fallback_used =
+        eigen_path_nested_bool(native_diagnostics, "resolved_execution", "fallback_used");
+    let resolved_fallback_reason =
+        eigen_path_nested_string(native_diagnostics, "resolved_execution", "fallback_reason");
+    let resolved_fallback_from_engine = eigen_path_nested_string(
+        native_diagnostics,
+        "resolved_execution",
+        "fallback_from_engine",
+    );
+    let resolved_fallback_to_engine = eigen_path_nested_string(
+        native_diagnostics,
+        "resolved_execution",
+        "fallback_to_engine",
+    );
+    let hardened_validation_state = eigen_path_diag_string(native_diagnostics, "validation_state");
+    // A scope token is not a validated scope while the diagnostics explicitly
+    // say `unvalidated`; publishing it in the manifest would contradict the
+    // readiness matrix and turn an executable slice into a qualification claim.
+    let hardened_validated_scope = hardened_validation_state
+        .as_deref()
+        .filter(|state| *state != "unvalidated")
+        .and_then(|_| eigen_path_diag_string(native_diagnostics, "validated_scope"));
+    let hardened_boundary_gauge = eigen_path_known_object(native_diagnostics, "boundary_gauge");
+    let hardened_spectral = eigen_path_known_object(native_diagnostics, "spectral");
     let mut manifest = serde_json::json!({
         "schema_version": "frequency_domain_manifest.v1",
         "analysis_family": "magnetic_frequency_domain",
@@ -4567,33 +5228,41 @@ fn build_eigen_path_frequency_domain_manifest(
             "ui_mode": "auto",
             "operator": "linearized_llg",
             "solver_family": "modal_eigen",
-            "solve_equation": if production_shift_invert || production_gpu_k0_kittel { "A q = lambda B q; lambda = i omega" } else { "K u = lambda M u; omega_rad_s = gamma0 * max(lambda, 0)" },
+            "solve_equation": if production_periodic_airbox_k0 { "L_eff q = lambda B_qq q; phi(q) = -P^-1 A_phiq q" } else if production_native_solver { "A q = lambda B q; lambda = i omega" } else { "K u = lambda M u; omega_rad_s = gamma0 * max(lambda, 0)" },
             "include_demag": plan.operator.include_demag,
             "damping_policy": format!("{:?}", plan.damping_policy).to_lowercase(),
             "equilibrium_source": format!("{:?}", plan.equilibrium).to_lowercase(),
-            "k_sampling": if sample_count > 1 { "path" } else { "single" },
-            "outputs": ["spectrum", "branches", "dispersion", "mode_fields"],
+            // A multi-sample k=0 bias-field sweep is not a Bloch/Floquet path.
+            "k_sampling": if calculation_mode == "dispersion_modal" { "path" } else { "single" },
+            "outputs": if calculation_mode == "dispersion_modal" {
+                serde_json::json!(["spectrum", "branches", "dispersion", "mode_fields"])
+            } else {
+                serde_json::json!(["spectrum", "mode_fields"])
+            },
+            "solver_method": requested_solver_method,
+            "preconditioner": requested_preconditioner,
+            "magnetostatic_bc": requested_magnetostatic_bc,
         },
         "resolved_execution": {
             "backend": "fem",
-            "device": device,
-            "precision": "double",
-            "engine": format!("multi_k_orchestrator/{}", result.solver_model.as_str()),
-            "native_backend": if production_shift_invert { "native_cpu" } else if production_gpu_k0_kittel { "native_gpu" } else if engine == FemEngine::NativeGpu { "native_gpu" } else { "runner_validation" },
-            "reference_or_production": if production_shift_invert || production_gpu_k0_kittel { "production" } else if engine == FemEngine::NativeGpu { "development" } else { "reference" },
+            "device": resolved_device,
+            "precision": resolved_precision,
+            "engine": resolved_engine,
+            "native_backend": resolved_native_backend,
+            "reference_or_production": if production_native_solver { "production" } else if engine == FemEngine::NativeGpu { "development" } else { "reference" },
             "container_image": null,
             "build_features": [],
             "demag_realization": if plan.operator.include_demag { "requested" } else { "none" },
-            "solver_library": if production_shift_invert { "slepc" } else if production_gpu_k0_kittel { "cusolverdn" } else { "nalgebra" },
-            "solver_algorithm": result.solver_model.as_str(),
+            "solver_library": resolved_solver_library,
+            "solver_algorithm": resolved_solver_algorithm,
             "solve_kind": "modal_eigen",
-            "device_residency": if production_gpu_k0_kittel { "gpu_device_resident" } else if engine == FemEngine::NativeGpu { "gpu_requested" } else { "host" },
+            "device_residency": if production_periodic_airbox_gpu || production_gpu_k0_kittel { "gpu_device_resident" } else if engine == FemEngine::NativeGpu { "gpu_requested" } else { "host" },
         },
         "physics": {
             "analysis_family": "magnetic_frequency_domain",
             "llg_gamma0_si": null,
             "llg_alpha": null,
-            "phase_convention": if production_shift_invert || production_gpu_k0_kittel { "exp_i_omega_t" } else { "exp_minus_i_omega_t" },
+            "phase_convention": if production_periodic_airbox_k0 { "exp_plus_i_omega_t" } else if production_shift_invert || production_gpu_k0_kittel { "exp_i_omega_t" } else { "exp_minus_i_omega_t" },
             "frequency_units": "Hz",
             "field_units": "dimensionless_delta_m",
             "normalization": format!("{:?}", plan.normalization).to_lowercase(),
@@ -4605,8 +5274,8 @@ fn build_eigen_path_frequency_domain_manifest(
         "artifacts": {
             "solver_diagnostics_path": "eigen/diagnostics/solver.v1.json",
             "spectrum_v2_path": "eigen/spectrum.v2.json",
-            "branches_v2_path": "eigen/branches.v2.json",
-            "dispersion_csv_path": "eigen/dispersion.csv",
+            "branches_v2_path": if calculation_mode == "dispersion_modal" { serde_json::json!("eigen/branches.v2.json") } else { serde_json::Value::Null },
+            "dispersion_csv_path": if calculation_mode == "dispersion_modal" { serde_json::json!("eigen/dispersion.csv") } else { serde_json::Value::Null },
             "eigen_diagnostics_v2_path": "eigen/diagnostics.v2.json",
             "response_sweep_v1_path": null,
             "response_sweep_v2_path": null,
@@ -4618,12 +5287,14 @@ fn build_eigen_path_frequency_domain_manifest(
             "mode_field_zarr_store_path": mode_field_zarr_store_path,
             "mode_field_storage_format": mode_field_storage_format,
             "mode_metadata_paths": mode_metadata_paths,
+            "equilibrium_artifact_v7_paths": equilibrium_artifact_v7_paths,
+            "linearization_state_v6_paths": linearization_state_v6_paths,
             "frequency_point_paths": [],
         },
         "resources": {
             "spectrum_resource_key": "/v2/sessions/current/analysis/frequency-domain/eigen/spectrum.v2",
-            "branches_resource_key": "/v2/sessions/current/analysis/frequency-domain/eigen/branches.v2",
-            "dispersion_resource_key": "/v2/sessions/current/analysis/frequency-domain/eigen/dispersion",
+            "branches_resource_key": if calculation_mode == "dispersion_modal" { serde_json::json!("/v2/sessions/current/analysis/frequency-domain/eigen/branches.v2") } else { serde_json::Value::Null },
+            "dispersion_resource_key": if calculation_mode == "dispersion_modal" { serde_json::json!("/v2/sessions/current/analysis/frequency-domain/eigen/dispersion") } else { serde_json::Value::Null },
             "diagnostics_resource_key": null,
             "eigen_diagnostics_resource_key": "/v2/sessions/current/analysis/frequency-domain/eigen/diagnostics.v2",
             "response_sweep_resource_key": null,
@@ -4635,11 +5306,11 @@ fn build_eigen_path_frequency_domain_manifest(
             "response_field_resources": [],
         },
         "validation": {
-            "dispersion_validation": result.dispersion_validation.as_ref(),
+            "dispersion_validation": if calculation_mode == "dispersion_modal" { result.dispersion_validation.as_ref() } else { None },
             "k0_kittel_validation": result.k0_kittel_validation.as_ref(),
-            "dispersion_frequency_source": eigen_path_dispersion_frequency_source(result),
-            "dispersion_reference_model": eigen_path_dispersion_reference_model(result),
-            "dynamic_demag_operator_source": eigen_path_dynamic_demag_operator_source(result),
+            "dispersion_frequency_source": if calculation_mode == "dispersion_modal" { eigen_path_dispersion_frequency_source(result) } else { serde_json::Value::Null },
+            "dispersion_reference_model": if calculation_mode == "dispersion_modal" { eigen_path_dispersion_reference_model(result) } else { serde_json::Value::Null },
+            "dynamic_demag_operator_source": if calculation_mode == "dispersion_modal" { eigen_path_dynamic_demag_operator_source(result) } else { serde_json::Value::Null },
         },
         "diagnostics": {
             "status": "ready",
@@ -4655,11 +5326,123 @@ fn build_eigen_path_frequency_domain_manifest(
         "capabilities": {
             "driven_response_artifact_available": false,
             "modal_artifact_available": true,
-            "production_native_solver_available": production_shift_invert || production_gpu_k0_kittel,
-            "validation_artifact": !(production_shift_invert || production_gpu_k0_kittel) && engine == FemEngine::CpuNative,
-            "dispersion": eigen_path_dispersion_capabilities(production_shift_invert, production_gpu_k0_kittel),
+            "production_native_solver_available": production_native_solver,
+            "validation_artifact": !production_native_solver && engine == FemEngine::CpuNative,
+            "dispersion": eigen_path_dispersion_capabilities(
+                production_shift_invert || production_periodic_airbox_cpu,
+                production_gpu_k0_kittel || production_periodic_airbox_gpu,
+                production_periodic_airbox_k0,
+            ),
         },
     });
+    if let Some(resolved) = manifest
+        .get_mut("resolved_execution")
+        .and_then(Value::as_object_mut)
+    {
+        let optional_fields = [
+            ("status", resolved_status.map(Value::String)),
+            (
+                "implementation_id",
+                resolved_implementation_id.map(Value::String),
+            ),
+            (
+                "operator_residency",
+                resolved_operator_residency.map(Value::String),
+            ),
+            (
+                "vector_residency",
+                resolved_vector_residency.map(Value::String),
+            ),
+            (
+                "krylov_residency",
+                resolved_krylov_residency.map(Value::String),
+            ),
+            (
+                "preconditioner_residency",
+                resolved_preconditioner_residency.map(Value::String),
+            ),
+            ("fallback_used", resolved_fallback_used.map(Value::Bool)),
+            (
+                "fallback_reason",
+                resolved_fallback_reason.map(Value::String),
+            ),
+            (
+                "fallback_from_engine",
+                resolved_fallback_from_engine.map(Value::String),
+            ),
+            (
+                "fallback_to_engine",
+                resolved_fallback_to_engine.map(Value::String),
+            ),
+        ];
+        for (key, value) in optional_fields {
+            if let Some(value) = value {
+                resolved.insert(key.to_string(), value);
+            }
+        }
+    }
+    let hardened_fields = [
+        (
+            "physics_contract_version",
+            eigen_path_diag_string(native_diagnostics, "physics_contract_version")
+                .map(Value::String),
+        ),
+        (
+            "operator_dictionary_version",
+            eigen_path_diag_string(native_diagnostics, "operator_dictionary_version")
+                .map(Value::String),
+        ),
+        (
+            "implementation_state",
+            eigen_path_diag_string(native_diagnostics, "implementation_state").map(Value::String),
+        ),
+        (
+            "validation_state",
+            hardened_validation_state.clone().map(Value::String),
+        ),
+        (
+            "validated_scope",
+            hardened_validated_scope.map(Value::String),
+        ),
+        (
+            "assembly_kind",
+            eigen_path_diag_string(native_diagnostics, "assembly_kind").map(Value::String),
+        ),
+        (
+            "operator_input_signature_sha256",
+            eigen_path_diag_string(native_diagnostics, "operator_input_signature_sha256")
+                .map(Value::String),
+        ),
+        ("boundary_gauge", hardened_boundary_gauge),
+        ("spectral", hardened_spectral),
+        (
+            "phase_constraint_sha256",
+            eigen_path_diag_string(native_diagnostics, "phase_constraint_sha256")
+                .map(Value::String),
+        ),
+        (
+            "equilibrium_artifact_sha256",
+            eigen_path_diag_string(native_diagnostics, "equilibrium_artifact_sha256")
+                .map(Value::String),
+        ),
+        (
+            "linearization_state_sha256",
+            eigen_path_diag_string(native_diagnostics, "linearization_state_sha256")
+                .map(Value::String),
+        ),
+        (
+            "periodic_mesh_certificate_sha256",
+            eigen_path_diag_string(native_diagnostics, "periodic_mesh_certificate_sha256")
+                .map(Value::String),
+        ),
+    ];
+    if let Some(manifest_object) = manifest.as_object_mut() {
+        for (key, value) in hardened_fields {
+            if let Some(value) = value {
+                manifest_object.insert(key.to_string(), value);
+            }
+        }
+    }
     if !production_shift_invert {
         if let (Some(reason), Some(diagnostics)) = (
             native_cpu_modal_window_rejection_reason,
@@ -4686,18 +5469,6 @@ fn build_eigen_path_frequency_domain_manifest(
         }
     }
     manifest
-}
-
-fn eigen_path_k0_kittel_sample_external_field(
-    plan: &FemEigenPlanIR,
-    sample: &crate::eigen::KSampleDescriptor,
-) -> Option<[f64; 3]> {
-    plan.k0_kittel_validation
-        .as_ref()?
-        .samples
-        .iter()
-        .find(|validation_sample| validation_sample.sample_index as usize == sample.sample_index)
-        .map(|validation_sample| validation_sample.bias_field)
 }
 
 fn eigen_path_periodic_airbox_k0_metrics_from_single_k_artifacts(
@@ -4910,16 +5681,21 @@ fn eigen_path_capability(status: &str, reason: &str) -> serde_json::Value {
 
 fn eigen_path_dispersion_capabilities(
     production_shift_invert: bool,
-    production_gpu_k0_kittel: bool,
+    production_gpu: bool,
+    production_periodic_airbox_k0: bool,
 ) -> serde_json::Value {
     let reference_reason =
         "reference/MVP FEM modal k-path dispersion emits spectrum, branches, dispersion.csv, and mode-field artifacts on the CPU reference lane";
-    let production_cpu_reason = if production_shift_invert {
+    let production_cpu_reason = if production_periodic_airbox_k0 && production_shift_invert {
+        "managed native CPU K0 periodic-airbox selected-spectrum lane is executable for the bounded K0-3 field-sweep scope"
+    } else if production_shift_invert {
         "managed native CPU selected-spectrum no-demag Full2x2 Floquet k-path dispersion is executable for the labelled Bloch/Floquet tangent payload slice; dynamic demag-k, broader sparse/matrix-free validation, and production GPU remain gated"
     } else {
         "native CPU selected-spectrum modal k-path is not the resolved lane for this artifact; production evidence must come from the managed selected-spectrum gate"
     };
-    let production_gpu_reason = if production_gpu_k0_kittel {
+    let production_gpu_reason = if production_periodic_airbox_k0 && production_gpu {
+        "managed native GPU K0 periodic-airbox modal lane uses the device-resident Arnoldi shift-invert engine; executed-device physics and parity qualification remain evidence-gated"
+    } else if production_gpu {
         "managed native GPU K0 no-demag macrospin/Kittel modal slice is executable through cuSolverDN dense generalized solve; nonzero-k Floquet, demag-k, and broad sparse/matrix-free GPU modal eigensolve remain gated"
     } else {
         "native modal GPU dispersion is unavailable until a real modal GPU eigensolver and matching Floquet operator exist; driven-response GPU Floquet smoke must not be reused as modal dispersion"
@@ -4935,7 +5711,7 @@ fn eigen_path_dispersion_capabilities(
             "managed production CPU selected-spectrum adapter is validated for gamma-equivalent k-path samples; this is a provenance bridge and not nonzero-k Bloch/Floquet dispersion",
         ),
         "production_gpu": eigen_path_capability(
-            if production_gpu_k0_kittel { "partial_production_executable" } else { "unsupported" },
+            if production_gpu { "partial_production_executable" } else { "unsupported" },
             production_gpu_reason,
         ),
         "k_path": eigen_path_capability("reference_executable", "runner FEM eigen path emits dispersion.csv"),
@@ -4957,6 +5733,23 @@ fn eigen_path_mode_metadata_paths(
     paths
 }
 
+fn eigen_path_state_metadata_paths(
+    mode_artifacts: &[crate::types::AuxiliaryArtifact],
+    state_name: &str,
+) -> Vec<String> {
+    let suffix = format!("/{state_name}");
+    let mut paths = mode_artifacts
+        .iter()
+        .filter_map(|artifact| {
+            (artifact.relative_path.starts_with("eigen/metadata/sample_")
+                && artifact.relative_path.ends_with(&suffix))
+            .then_some(artifact.relative_path.clone())
+        })
+        .collect::<Vec<_>>();
+    paths.sort();
+    paths
+}
+
 fn parse_eigen_path_mode_metadata_path(relative_path: &str) -> Option<(usize, usize)> {
     let rest = relative_path.strip_prefix("eigen/modes/")?;
     let (sample_part, mode_part) = rest.split_once('/')?;
@@ -4970,16 +5763,15 @@ fn parse_eigen_path_mode_metadata_path(relative_path: &str) -> Option<(usize, us
 }
 
 fn eigen_path_calculation_mode(result: &crate::eigen::PathSolveResult) -> &'static str {
-    if result.samples.len() > 1
-        || result.samples.iter().any(|sample| {
-            sample.sample.path_s != 0.0
-                || sample
-                    .sample
-                    .k_vector
-                    .iter()
-                    .any(|component| *component != 0.0)
-        })
-    {
+    // `path_s` can be the coordinate of a bias-field sweep.  Dispersion is
+    // published only when the solved samples contain a non-zero k vector.
+    if result.samples.iter().any(|sample| {
+        sample
+            .sample
+            .k_vector
+            .iter()
+            .any(|component| *component != 0.0)
+    }) {
         "dispersion_modal"
     } else {
         "free_modes"
@@ -4991,6 +5783,71 @@ fn eigen_path_created_at_label() -> String {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|duration| format!("unix:{}", duration.as_secs()))
         .unwrap_or_else(|_| "unix:0".to_string())
+}
+
+fn eigen_path_native_modal_diagnostics(result: &crate::eigen::PathSolveResult) -> Option<&Value> {
+    for sample in &result.samples {
+        let Some(root) = sample.solver_diagnostics.as_ref() else {
+            continue;
+        };
+        if let Some(diagnostics) = root
+            .get("sample_solver_diagnostics")
+            .and_then(Value::as_array)
+            .and_then(|entries| entries.first())
+            .and_then(|entry| entry.get("diagnostics"))
+        {
+            return Some(diagnostics);
+        }
+        if root.get("resolved_execution").is_some()
+            || root.get("solver_adapter").is_some()
+            || root.get("assembly_kind").is_some()
+        {
+            return Some(root);
+        }
+    }
+    None
+}
+
+fn eigen_path_diag_string(diagnostics: Option<&Value>, key: &str) -> Option<String> {
+    diagnostics
+        .and_then(|value| value.get(key))
+        .and_then(Value::as_str)
+        .map(ToOwned::to_owned)
+}
+
+fn eigen_path_nested_string(
+    diagnostics: Option<&Value>,
+    object_key: &str,
+    key: &str,
+) -> Option<String> {
+    diagnostics
+        .and_then(|value| value.get(object_key))
+        .and_then(|value| value.get(key))
+        .and_then(Value::as_str)
+        .map(ToOwned::to_owned)
+}
+
+fn eigen_path_nested_bool(
+    diagnostics: Option<&Value>,
+    object_key: &str,
+    key: &str,
+) -> Option<bool> {
+    diagnostics
+        .and_then(|value| value.get(object_key))
+        .and_then(|value| value.get(key))
+        .and_then(Value::as_bool)
+}
+
+fn eigen_path_known_object(diagnostics: Option<&Value>, key: &str) -> Option<Value> {
+    let value = diagnostics.and_then(|value| value.get(key))?;
+    let object = value.as_object()?;
+    if object
+        .values()
+        .any(|child| child.as_str() == Some("unknown"))
+    {
+        return None;
+    }
+    Some(value.clone())
 }
 
 #[cfg(feature = "cuda")]
@@ -6506,6 +7363,65 @@ fn copy_cuda_field_snapshot(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn eigen_path_handoff_identity_binds_root_and_matching_sample_diagnostics() {
+        let mut diagnostics = serde_json::json!({
+            "solver_adapter": "k0_poisson_airbox_cpu_schur_slepc",
+            "sample_solver_diagnostics": [
+                {"sample_index": 0, "diagnostics": {"solver": "first"}},
+                {"sample_index": 1, "diagnostics": {"solver": "second"}}
+            ]
+        });
+
+        bind_eigen_path_handoff_diagnostics(
+            &mut diagnostics,
+            0,
+            "sha256:handoff",
+            "sha256:topology",
+        );
+
+        assert_eq!(
+            diagnostics["relax_to_eigen_handoff_sha256"],
+            "sha256:handoff"
+        );
+        assert_eq!(
+            diagnostics["source_mesh_topology_sha256"],
+            "sha256:topology"
+        );
+        assert_eq!(
+            diagnostics["sample_solver_diagnostics"][0]["diagnostics"]
+                ["relax_to_eigen_handoff_sha256"],
+            "sha256:handoff"
+        );
+        assert_eq!(
+            diagnostics["sample_solver_diagnostics"][0]["diagnostics"]
+                ["source_mesh_topology_sha256"],
+            "sha256:topology"
+        );
+        assert!(diagnostics["sample_solver_diagnostics"][1]["diagnostics"]
+            .get("relax_to_eigen_handoff_sha256")
+            .is_none());
+    }
+
+    #[test]
+    fn managed_component_participation_transport_round_trips_and_defaults_typed_unavailable() {
+        let expected = crate::eigen::ModalParticipationObservable::unavailable_without_context(
+            "gpu",
+        );
+        let value = serde_json::to_value(&expected).expect("observable must serialize");
+
+        let parsed = eigen_path_component_participation_from_json(Some(&value), "gpu")
+            .expect("managed observable must deserialize");
+        assert_eq!(parsed, expected);
+
+        let missing = eigen_path_component_participation_from_json(None, "cpu")
+            .expect("missing managed context must remain a typed unavailable result");
+        assert_eq!(
+            missing.status,
+            crate::eigen::ModalParticipationAvailability::Unavailable
+        );
+    }
     use crate::eigen::EigenSolverModel;
     use crate::types::AuxiliaryArtifact;
     use fullmag_ir::{
@@ -6646,6 +7562,72 @@ mod tests {
             .message
             .contains("exactly one fdm_gpu_double descriptor"));
         assert!(error.message.contains("partial execution are forbidden"));
+    }
+
+    #[test]
+    fn k_path_remap_preserves_sample_scoped_v7_equilibrium_sidecars() {
+        let artifacts = vec![
+            AuxiliaryArtifact {
+                relative_path: "eigen/metadata/equilibrium_artifact.v7.json".to_string(),
+                bytes: br#"{"schema_version":"equilibrium_artifact.v7"}"#.to_vec(),
+            },
+            AuxiliaryArtifact {
+                relative_path: "eigen/metadata/linearization_state.v6.json".to_string(),
+                bytes: br#"{"schema_version":"LinearizationState.v6"}"#.to_vec(),
+            },
+        ];
+        let remapped =
+            remap_single_k_mode_artifacts(&artifacts, 3, &std::collections::BTreeSet::from([0]))
+                .expect("state sidecars should remap");
+        let paths = remapped
+            .iter()
+            .map(|artifact| artifact.relative_path.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            paths,
+            vec![
+                "eigen/metadata/sample_0003/equilibrium_artifact.v7.json",
+                "eigen/metadata/sample_0003/linearization_state.v6.json",
+            ]
+        );
+        assert_eq!(
+            eigen_path_state_metadata_paths(&remapped, "equilibrium_artifact.v7.json"),
+            vec!["eigen/metadata/sample_0003/equilibrium_artifact.v7.json"]
+        );
+    }
+
+    #[test]
+    fn k0_multi_sample_path_is_not_classified_as_dispersion() {
+        let solver_model = EigenSolverModel::ReferenceScalarTangent;
+        let result = crate::eigen::PathSolveResult {
+            samples: (0..3)
+                .map(|sample_index| crate::eigen::SingleKSolveResult {
+                    sample: crate::eigen::KSampleDescriptor {
+                        sample_index,
+                        label: Some(format!("H{sample_index}")),
+                        segment_index: None,
+                        path_s: sample_index as f64,
+                        t_in_segment: sample_index as f64 / 2.0,
+                        k_vector: [0.0, 0.0, 0.0],
+                    },
+                    modes: Vec::new(),
+                    relaxation_steps: 0,
+                    solver_model,
+                    solver_notes: Vec::new(),
+                    solver_diagnostics: None,
+                })
+                .collect(),
+            branches: Vec::new(),
+            solver_model,
+            notes: vec!["bias-field sweep".to_string()],
+            include_demag: true,
+            dispersion_validation: None,
+            k0_kittel_validation: None,
+            dispersion_analytic_reference: None,
+            k0_kittel_periodic_airbox_demag: None,
+        };
+
+        assert_eq!(eigen_path_calculation_mode(&result), "free_modes");
     }
 
     #[test]
@@ -7236,6 +8218,7 @@ mod tests {
             target: fullmag_ir::EigenTargetIR::Lowest,
             equilibrium: fullmag_ir::EquilibriumSourceIR::Provided,
             k_sampling,
+            bias_field_samples: Vec::new(),
             normalization: fullmag_ir::EigenNormalizationIR::UnitL2,
             damping_policy: fullmag_ir::EigenDampingPolicyIR::Ignore,
             enable_exchange: true,
@@ -8609,7 +9592,7 @@ mod tests {
     }
 
     #[test]
-    fn forced_gpu_k0_kittel_with_demag_fails_without_cpu_fallback() {
+    fn forced_gpu_k0_kittel_with_demag_fails_closed_without_native_producer() {
         let mut plan = tiny_fem_eigen_plan(Some(fullmag_ir::KSamplingIR::Path {
             points: vec![
                 fullmag_ir::KPointIR {
@@ -8629,6 +9612,41 @@ mod tests {
         plan.operator.include_demag = true;
         plan.enable_demag = true;
         plan.damping_policy = fullmag_ir::EigenDampingPolicyIR::Ignore;
+        plan.target = fullmag_ir::EigenTargetIR::FrequencyWindow {
+            frequency_min_hz: 1.0e3,
+            frequency_max_hz: 25.0e9,
+        };
+        plan.spin_wave_bc = fullmag_ir::SpinWaveBoundaryConditionIR::Legacy(
+            fullmag_ir::SpinWaveBoundaryKindIR::Periodic,
+        );
+        plan.mesh.periodic_node_pairs = vec![fullmag_ir::MeshPeriodicNodePairIR {
+            pair_id: "x".to_string(),
+            node_a: 0,
+            node_b: 1,
+        }];
+        plan.mesh.periodic_boundary_pairs = vec![fullmag_ir::MeshPeriodicBoundaryPairIR {
+            pair_id: "x".to_string(),
+            source_marker: None,
+            destination_marker: None,
+            marker_a: 1,
+            marker_b: 2,
+            translation: Some([1.0, 0.0, 0.0]),
+            tolerance: Some(1.0e-12),
+            axis_hint: Some("x".to_string()),
+            orientation: None,
+            pairing_policy: None,
+        }];
+        plan.air_box_config = Some(fullmag_ir::AirBoxConfigIR {
+            factor: 3.0,
+            grading: 1.2,
+            boundary_marker: 99,
+            bc_kind: Some("robin".to_string()),
+            robin_beta_mode: Some("dipole".to_string()),
+            robin_beta_factor: None,
+            shape: Some("bbox".to_string()),
+            factor_source: Some("test".to_string()),
+            boundary_marker_source: Some("test".to_string()),
+        });
         plan.k0_kittel_validation = Some(fullmag_ir::FemEigenK0KittelValidationIR {
             kind: "k0_kittel_field_sweep".to_string(),
             case_id: Some("K0-3".to_string()),
@@ -8651,13 +9669,12 @@ mod tests {
             ],
         });
 
-        let err = execute_fem_eigen(FemEngine::NativeGpu, &plan, &[])
-            .expect_err("GPU K0 Kittel with demag must remain gated");
-
-        assert!(err.message.contains("GPU modal"));
-        assert!(err.message.contains("demag"));
-        assert!(err.message.contains("CPU fallback"));
-        assert!(err.message.contains("disabled"));
+        let err = execute_fem_eigen(FemEngine::NativeGpu, &plan, &[]).expect_err(
+            "GPU periodic-airbox K0 must fail closed while the native producer is absent",
+        );
+        assert!(err
+            .message
+            .starts_with(fem_eigen::SHARED_DOMAIN_K0_RUNTIME_UNAVAILABLE_REASON));
     }
 
     #[test]
@@ -8729,7 +9746,10 @@ mod tests {
         let no_dispersion = vec![OutputIR::EigenSpectrum {
             quantity: "eigenfrequency".to_string(),
         }];
-        assert!(eigen_path_public_mode_indices(&no_dispersion, 2).is_empty());
+        assert_eq!(
+            eigen_path_public_mode_indices(&no_dispersion, 2),
+            std::collections::BTreeSet::from([0, 1]),
+        );
 
         let dispersion_only = vec![OutputIR::DispersionCurve {
             name: "dispersion".to_string(),
@@ -8750,6 +9770,10 @@ mod tests {
         ];
         assert_eq!(
             eigen_path_public_mode_indices(&explicit_mode_subset, 3),
+            std::collections::BTreeSet::from([0, 1, 2]),
+        );
+        assert_eq!(
+            eigen_path_mode_artifact_indices(&explicit_mode_subset),
             std::collections::BTreeSet::from([1]),
         );
     }
@@ -8767,7 +9791,7 @@ mod tests {
 
     #[cfg(not(feature = "fem-gpu"))]
     #[test]
-    fn k_path_gamma_frequency_window_uses_native_modal_entrypoint_without_feature() {
+    fn k_path_gamma_frequency_window_rejects_uncertified_equilibrium_before_native_entrypoint() {
         let mut plan = tiny_fem_eigen_plan(Some(fullmag_ir::KSamplingIR::Path {
             points: vec![
                 fullmag_ir::KPointIR {
@@ -8796,13 +9820,17 @@ mod tests {
                 quantity: "frequency_hz".to_string(),
             }],
         )
-        .expect_err("eligible gamma k-path sample must route through native modal entrypoint");
+        .expect_err("provided equilibrium without a certified handoff must fail closed");
 
         assert!(
-            err.message
-                .contains("native FEM modal eigen solve requires the fem-gpu feature"),
+            err.message.contains("uncertified_provided_equilibrium"),
             "{}",
-            err.message,
+            err.message
+        );
+        assert!(
+            !err.message.contains("KSamplingIR::Path"),
+            "the k-path must reach equilibrium validation without a stale path-routing error: {}",
+            err.message
         );
     }
 
@@ -9100,10 +10128,22 @@ mod tests {
                     amplitude: None,
                     phase: None,
                     node_mass_weights: Some(vec![2.0, 3.0]),
+                    component_participation:
+                        crate::eigen::ModalParticipationObservable::unavailable_without_context(
+                            "cpu",
+                        ),
                 }],
                 relaxation_steps: 0,
                 solver_model: EigenSolverModel::ProductionCpuShiftInvert,
                 solver_notes: vec!["production sample".to_string()],
+                solver_diagnostics: Some(serde_json::json!({
+                    "solver_adapter": "k0_poisson_airbox_cpu_schur_slepc",
+                    "slepc": {
+                        "converged_eigenpair_count": 7,
+                        "accepted_mode_count": 2,
+                        "outer_iterations": 19,
+                    },
+                })),
             }],
             branches: Vec::new(),
             solver_model: EigenSolverModel::ProductionCpuShiftInvert,
@@ -9116,6 +10156,7 @@ mod tests {
         };
 
         let diagnostics = eigen_path_solver_diagnostics(
+            FemEngine::CpuNative,
             &plan,
             &path_result,
             &std::collections::BTreeSet::from([0]),
@@ -9132,12 +10173,33 @@ mod tests {
         assert_eq!(diagnostics["phasor_convention"], "exp_i_omega_t");
         assert_eq!(diagnostics["production_solver_available"], true);
         assert_eq!(diagnostics["dense_reference_oracle"], false);
+        assert_eq!(
+            diagnostics["sample_solver_diagnostics"][0]["sample_index"],
+            0
+        );
+        assert_eq!(
+            diagnostics["sample_solver_diagnostics"][0]["diagnostics"]["slepc"]
+                ["converged_eigenpair_count"],
+            7
+        );
+        assert_eq!(
+            diagnostics["sample_solver_diagnostics"][0]["diagnostics"]["slepc"]
+                ["accepted_mode_count"],
+            2
+        );
+        assert_eq!(diagnostics["converged_eigenpair_count_total"], 7);
+        assert_eq!(diagnostics["accepted_mode_count_total"], 2);
+        assert!(
+            diagnostics.get("subwindows").is_none(),
+            "path diagnostics must not fabricate unexecuted subwindows when exact native sample diagnostics are available: {diagnostics}"
+        );
         assert!(diagnostics.get("frequency_window_solver_policy").is_none());
         assert!(
             diagnostics.get("production_cpu_rejection_reason").is_none(),
             "{}",
             diagnostics
         );
+
         assert!(
             diagnostics.get("required_operator_contract").is_none(),
             "{}",
@@ -9149,6 +10211,7 @@ mod tests {
             &path_result.samples[0].sample,
             &path_result.samples[0].modes[0],
             path_result.solver_model,
+            path_result.samples[0].solver_diagnostics.as_ref(),
         );
         assert_eq!(production_mode["phasor_convention"], "exp_i_omega_t");
         assert_eq!(production_mode["eigenvalue_mapping"], "lambda_eq_i_omega");
@@ -9202,6 +10265,91 @@ mod tests {
             manifest["capabilities"]["dispersion"]["production_gpu"]["reason"]
                 .as_str()
                 .is_some_and(|reason| reason.contains("modal GPU"))
+        );
+
+        let mut nested_path_result = path_result.clone();
+        nested_path_result.samples[0].solver_diagnostics = Some(serde_json::json!({
+            "sample_solver_diagnostics": [{
+                "sample_index": 0,
+                "diagnostics": {
+                    "physics_contract_version": "micromagnetics_frequency_domain_v5",
+                    "operator_dictionary_version": "FrequencyOperatorDictionary.v1",
+                    "implementation_state": "executable",
+                    "validation_state": "unvalidated",
+                    "validated_scope": "fem_k0_periodic_airbox_p1_double_gpu_device_krylov",
+                    "assembly_kind": "mfem_weak_form_shared_domain",
+                    "boundary_gauge": {
+                        "gauge_policy": "none",
+                        "outer_boundary_kind": "poisson_robin"
+                    },
+                    "spectral": {
+                        "spectral_scalar_mode": "real_split",
+                        "spectral_transform": "shift_invert"
+                    },
+                    "requested_execution": {
+                        "solver_method": "shift_invert",
+                        "preconditioner": "shifted_schur_device",
+                        "magnetostatic_bc": "periodic_airbox_k0"
+                    },
+                    "resolved_execution": {
+                        "device": "gpu",
+                        "precision": "double",
+                        "engine": "gpu_petsc_slepc_cuda",
+                        "native_backend": "native_gpu",
+                        "solver_library": "SLEPc/PETSc/hypre CUDA",
+                        "implementation_id": "k0_poisson_airbox_gpu_petsc_slepc",
+                        "operator_residency": "device",
+                        "vector_residency": "device",
+                        "krylov_residency": "device",
+                        "preconditioner_residency": "device",
+                        "status": "ok",
+                        "fallback_used": false
+                    }
+                }
+            }]
+        }));
+        let nested_manifest = build_eigen_path_frequency_domain_manifest(
+            FemEngine::NativeGpu,
+            &nested_path_result,
+            &[],
+            &plan,
+        );
+        assert_eq!(
+            nested_manifest["requested_execution"]["solver_method"],
+            "shift_invert"
+        );
+        assert_eq!(
+            nested_manifest["requested_execution"]["preconditioner"],
+            "shifted_schur_device"
+        );
+        assert_eq!(
+            nested_manifest["requested_execution"]["magnetostatic_bc"],
+            "periodic_airbox_k0"
+        );
+        assert_eq!(
+            nested_manifest["resolved_execution"]["engine"],
+            "gpu_petsc_slepc_cuda"
+        );
+        assert_eq!(
+            nested_manifest["resolved_execution"]["implementation_id"],
+            "k0_poisson_airbox_gpu_petsc_slepc"
+        );
+        assert_eq!(
+            nested_manifest["resolved_execution"]["operator_residency"],
+            "device"
+        );
+        assert_eq!(
+            nested_manifest["physics_contract_version"],
+            "micromagnetics_frequency_domain_v5"
+        );
+        assert_eq!(nested_manifest["validation_state"], "unvalidated");
+        assert!(
+            nested_manifest.get("validated_scope").is_none(),
+            "unvalidated diagnostics must not publish a validated scope"
+        );
+        assert_eq!(
+            nested_manifest["boundary_gauge"]["outer_boundary_kind"],
+            "poisson_robin"
         );
     }
 
@@ -9387,6 +10535,37 @@ mod tests {
     }
 
     #[test]
+    fn gpu_modal_device_contract_rejects_host_projected_ritz_state() {
+        let diagnostics = serde_json::json!({
+            "gpu_device_resident_modal_eigensolver": true,
+            "persistent_solver_context": true,
+            "scalable_selected_spectrum": true,
+            "host_ritz_extraction": true,
+            "validation_only": false,
+            "ritz_state_location": "host_small_projected",
+            "spectral_pencil_kind": "real_frequency_rotated",
+            "target_representation": "tau=omega_target",
+        });
+
+        assert!(
+            !eigen_path_gpu_modal_device_contract(&diagnostics),
+            "host-projected Ritz state must not satisfy the production device modal contract"
+        );
+
+        let mut device_resident = diagnostics;
+        device_resident["host_ritz_extraction"] = serde_json::json!(false);
+        assert!(eigen_path_gpu_modal_device_contract(&device_resident));
+
+        let mut validation_only = device_resident;
+        validation_only["validation_only"] = serde_json::json!(true);
+        validation_only["production_implication"] = serde_json::json!(false);
+        assert!(
+            !eigen_path_gpu_modal_device_contract(&validation_only),
+            "validation-only GPU diagnostics must not satisfy the production device modal contract"
+        );
+    }
+
+    #[test]
     fn k_path_solver_diagnostics_preserve_periodic_airbox_k0_adapter() {
         let mut plan = tiny_fem_eigen_plan(Some(fullmag_ir::KSamplingIR::Path {
             points: vec![fullmag_ir::KPointIR {
@@ -9396,6 +10575,39 @@ mod tests {
             samples_per_segment: Vec::new(),
             closed: false,
         }));
+        plan.operator.include_demag = true;
+        plan.enable_demag = true;
+        plan.spin_wave_bc = fullmag_ir::SpinWaveBoundaryConditionIR::Legacy(
+            fullmag_ir::SpinWaveBoundaryKindIR::Periodic,
+        );
+        plan.mesh.periodic_node_pairs = vec![fullmag_ir::MeshPeriodicNodePairIR {
+            pair_id: "x".to_string(),
+            node_a: 0,
+            node_b: 1,
+        }];
+        plan.mesh.periodic_boundary_pairs = vec![fullmag_ir::MeshPeriodicBoundaryPairIR {
+            pair_id: "x".to_string(),
+            source_marker: None,
+            destination_marker: None,
+            marker_a: 1,
+            marker_b: 2,
+            translation: Some([1.0, 0.0, 0.0]),
+            tolerance: Some(1.0e-12),
+            axis_hint: Some("x".to_string()),
+            orientation: None,
+            pairing_policy: None,
+        }];
+        plan.air_box_config = Some(fullmag_ir::AirBoxConfigIR {
+            factor: 3.0,
+            grading: 1.2,
+            boundary_marker: 99,
+            bc_kind: Some("robin".to_string()),
+            robin_beta_mode: Some("dipole".to_string()),
+            robin_beta_factor: None,
+            shape: Some("bbox".to_string()),
+            factor_source: Some("test".to_string()),
+            boundary_marker_source: Some("test".to_string()),
+        });
         plan.k0_kittel_validation = Some(fullmag_ir::FemEigenK0KittelValidationIR {
             kind: "k0_kittel_field_sweep".to_string(),
             case_id: Some("K0-3".to_string()),
@@ -9435,41 +10647,75 @@ mod tests {
             ),
         };
 
-        let diagnostics = eigen_path_solver_diagnostics(&plan, &path_result, &BTreeSet::new());
+        let diagnostics = eigen_path_solver_diagnostics(
+            FemEngine::CpuNative,
+            &plan,
+            &path_result,
+            &BTreeSet::new(),
+        );
 
         assert_eq!(
             diagnostics["solver_adapter"],
-            "k0_poisson_airbox_cpu_full_coupled_slepc"
+            "multi_k_reference_modal_path"
         );
-        assert_eq!(diagnostics["execution_lane"], "production_cpu");
+        assert_eq!(diagnostics["execution_lane"], "reference_cpu");
         assert_eq!(
             diagnostics["resolved_solver_family"],
-            "k0_poisson_airbox_full_coupled"
+            "reference_full_2x2_tangent"
         );
+        assert_eq!(diagnostics["solver_model"], "reference_full_2x2_tangent");
+        assert_eq!(diagnostics["solver_family"], "reference_full_2x2_tangent");
+        assert_eq!(diagnostics["production_solver_available"], false);
         assert_eq!(
-            diagnostics["solver_model"],
-            "k0_poisson_airbox_cpu_full_coupled_slepc"
+            diagnostics["production_cpu_rejection_reason"],
+            "production_cpu_modal_periodic_airbox_k0_payload_missing"
         );
+        assert_eq!(diagnostics["runtime_capability_status"], "unsupported");
         assert_eq!(
-            diagnostics["solver_family"],
-            "k0_poisson_airbox_full_coupled"
+            diagnostics["runtime_capability_reason"],
+            fem_eigen::SHARED_DOMAIN_K0_RUNTIME_UNAVAILABLE_REASON
         );
-        assert_eq!(diagnostics["demag_kind"], "periodic_airbox_k0");
+        assert!(diagnostics.get("demag_kind").is_none());
         assert_eq!(diagnostics["gauge_policy"], "mean_zero_augmented");
         assert_eq!(diagnostics["phi_dof_count"], 28);
         assert_eq!(diagnostics["augmented_phi_dof_count"], 45);
         assert_eq!(diagnostics["poisson_constraint_relative_residual"], 1.0e-12);
-        assert_eq!(diagnostics["production_solver_available"], true);
-        assert_eq!(diagnostics["production_periodic_airbox_claim"], true);
-        assert!(
-            diagnostics.get("production_cpu_rejection_reason").is_none(),
-            "{}",
-            diagnostics
+        assert_eq!(diagnostics["production_solver_available"], false);
+        assert!(diagnostics
+            .get("production_periodic_airbox_claim")
+            .is_none());
+
+        let mut plan_without_oracle = plan.clone();
+        plan_without_oracle.k0_kittel_validation = None;
+        let mut result_without_oracle = path_result.clone();
+        result_without_oracle.k0_kittel_validation = None;
+        result_without_oracle.k0_kittel_periodic_airbox_demag = None;
+        let diagnostics_without_oracle = eigen_path_solver_diagnostics(
+            FemEngine::CpuNative,
+            &plan_without_oracle,
+            &result_without_oracle,
+            &BTreeSet::new(),
         );
+
+        for key in [
+            "status",
+            "solver_model",
+            "solver_family",
+            "resolved_solver_family",
+            "solver_adapter",
+            "execution_lane",
+            "production_solver_available",
+            "production_periodic_airbox_claim",
+        ] {
+            assert_eq!(
+                diagnostics_without_oracle[key], diagnostics[key],
+                "oracle changed resolved solver diagnostic {key}"
+            );
+        }
     }
 
     #[test]
-    fn k_path_single_k_plan_uses_relaxed_handoff_without_repeating_relaxation() {
+    fn k_path_first_single_k_plan_performs_requested_relaxation() {
         let mut plan = tiny_fem_eigen_plan(Some(fullmag_ir::KSamplingIR::Path {
             points: vec![fullmag_ir::KPointIR {
                 label: Some("G".to_string()),
@@ -9488,17 +10734,306 @@ mod tests {
             k_vector: [0.0, 0.0, 0.0],
         };
 
-        let point_plan = eigen_path_single_k_point_plan(&plan, &sample);
+        let point_plan = eigen_path_single_k_point_plan(&plan, &sample, false, None)
+            .expect("ordinary k-path point plan should be valid");
 
         assert_eq!(
             point_plan.equilibrium,
-            fullmag_ir::EquilibriumSourceIR::Provided
+            fullmag_ir::EquilibriumSourceIR::RelaxedInitialState
         );
         assert_eq!(
             point_plan.k_sampling,
             Some(fullmag_ir::KSamplingIR::Single {
                 k_vector: [0.0, 0.0, 0.0]
             })
+        );
+    }
+
+    #[test]
+    fn k_path_rejects_provided_relaxed_equilibrium_without_handoff_binding() {
+        let mut plan = tiny_fem_eigen_plan(Some(fullmag_ir::KSamplingIR::Path {
+            points: vec![fullmag_ir::KPointIR {
+                label: Some("G".to_string()),
+                k_vector: [0.0, 0.0, 0.0],
+            }],
+            samples_per_segment: Vec::new(),
+            closed: false,
+        }));
+        plan.equilibrium = fullmag_ir::EquilibriumSourceIR::RelaxedInitialState;
+        let sample = crate::eigen::KSampleDescriptor {
+            sample_index: 1,
+            label: Some("G".to_string()),
+            segment_index: Some(0),
+            path_s: 0.0,
+            t_in_segment: 0.0,
+            k_vector: [0.0, 0.0, 0.0],
+        };
+
+        let error = eigen_path_single_k_point_plan(&plan, &sample, true, None)
+            .expect_err("relaxed equilibrium reuse must require an immutable handoff binding");
+
+        assert!(error.message.contains("missing_relax_to_eigen_handoff"));
+    }
+
+    #[test]
+    fn zero_relaxation_steps_do_not_fabricate_stage_continuation() {
+        let mut plan = tiny_fem_eigen_plan(None);
+        plan.equilibrium = fullmag_ir::EquilibriumSourceIR::RelaxedInitialState;
+
+        let source = eigen_path_equilibrium_source_json(&plan, 0);
+
+        assert_eq!(
+            source,
+            serde_json::json!({"kind": "relaxed_initial_state"}),
+            "stage_continuation requires a validated typed handoff, not steps == 0"
+        );
+    }
+
+    #[test]
+    fn k_path_rejects_same_node_count_with_different_topology_handoff() {
+        let mut source_plan = tiny_fem_eigen_plan(Some(fullmag_ir::KSamplingIR::Path {
+            points: vec![fullmag_ir::KPointIR {
+                label: Some("G".to_string()),
+                k_vector: [0.0, 0.0, 0.0],
+            }],
+            samples_per_segment: Vec::new(),
+            closed: false,
+        }));
+        source_plan.equilibrium = fullmag_ir::EquilibriumSourceIR::RelaxedInitialState;
+        let handoff = fem_eigen::AcceptedFemEigenEquilibriumHandoff::from_accepted_linearization(
+            &source_plan,
+            source_plan.equilibrium_magnetization.clone(),
+            format!("sha256:{}", "a".repeat(64)),
+            format!("sha256:{}", "b".repeat(64)),
+        )
+        .expect("source handoff should be valid");
+        let mut target_plan = source_plan.clone();
+        target_plan.mesh.set_tet4_cells(vec![[0, 2, 1, 3]]);
+        assert_eq!(
+            target_plan.mesh.nodes.len(),
+            source_plan.mesh.nodes.len(),
+            "fixture must preserve node count"
+        );
+        let sample = crate::eigen::KSampleDescriptor {
+            sample_index: 1,
+            label: Some("G".to_string()),
+            segment_index: Some(0),
+            path_s: 0.0,
+            t_in_segment: 0.0,
+            k_vector: [0.0, 0.0, 0.0],
+        };
+
+        let error = eigen_path_single_k_point_plan(&target_plan, &sample, true, Some(&handoff))
+            .expect_err("equal node count must not bypass full topology identity");
+
+        assert!(error
+            .message
+            .contains("relax_to_eigen_mesh_identity_mismatch"));
+    }
+
+    #[test]
+    fn k_path_accepts_same_mesh_handoff_and_uses_bound_equilibrium() {
+        let mut plan = tiny_fem_eigen_plan(Some(fullmag_ir::KSamplingIR::Path {
+            points: vec![fullmag_ir::KPointIR {
+                label: Some("G".to_string()),
+                k_vector: [0.0, 0.0, 0.0],
+            }],
+            samples_per_segment: Vec::new(),
+            closed: false,
+        }));
+        plan.equilibrium = fullmag_ir::EquilibriumSourceIR::RelaxedInitialState;
+        let accepted_m0 = vec![[0.0, 1.0, 0.0]; plan.mesh.nodes.len()];
+        let handoff = fem_eigen::AcceptedFemEigenEquilibriumHandoff::from_accepted_linearization(
+            &plan,
+            accepted_m0.clone(),
+            format!("sha256:{}", "a".repeat(64)),
+            format!("sha256:{}", "b".repeat(64)),
+        )
+        .expect("same-mesh handoff should be valid");
+        let sample = crate::eigen::KSampleDescriptor {
+            sample_index: 1,
+            label: Some("G".to_string()),
+            segment_index: Some(0),
+            path_s: 0.0,
+            t_in_segment: 0.0,
+            k_vector: [0.0, 0.0, 0.0],
+        };
+
+        let point_plan = eigen_path_single_k_point_plan(&plan, &sample, true, Some(&handoff))
+            .expect("same full topology handoff should pass");
+
+        assert_eq!(
+            point_plan.equilibrium,
+            fullmag_ir::EquilibriumSourceIR::Provided
+        );
+        assert_eq!(point_plan.equilibrium_magnetization, accepted_m0);
+    }
+
+    #[test]
+    fn k0_periodic_airbox_field_sweep_point_uses_declared_bias_and_relaxes_per_sample() {
+        let mut plan = tiny_fem_eigen_plan(Some(fullmag_ir::KSamplingIR::Path {
+            points: vec![
+                fullmag_ir::KPointIR {
+                    label: Some("H20mT".to_string()),
+                    k_vector: [0.0, 0.0, 0.0],
+                },
+                fullmag_ir::KPointIR {
+                    label: Some("H100mT".to_string()),
+                    k_vector: [0.0, 0.0, 0.0],
+                },
+            ],
+            samples_per_segment: vec![1],
+            closed: false,
+        }));
+        plan.equilibrium = fullmag_ir::EquilibriumSourceIR::RelaxedInitialState;
+        plan.operator.kind = fullmag_ir::EigenOperatorIR::Full2x2;
+        plan.operator.include_demag = true;
+        plan.enable_demag = true;
+        plan.target = fullmag_ir::EigenTargetIR::FrequencyWindow {
+            frequency_min_hz: 1.0e6,
+            frequency_max_hz: 25.0e9,
+        };
+        plan.spin_wave_bc = fullmag_ir::SpinWaveBoundaryConditionIR::Legacy(
+            fullmag_ir::SpinWaveBoundaryKindIR::Periodic,
+        );
+        plan.air_box_config = Some(fullmag_ir::AirBoxConfigIR {
+            factor: 3.0,
+            grading: 1.2,
+            boundary_marker: 99,
+            bc_kind: Some("robin".to_string()),
+            robin_beta_mode: Some("dipole".to_string()),
+            robin_beta_factor: None,
+            shape: Some("bbox".to_string()),
+            factor_source: Some("test".to_string()),
+            boundary_marker_source: Some("test".to_string()),
+        });
+        plan.bias_field_samples = vec![
+            fullmag_ir::FemEigenBiasFieldSamplePlanIR {
+                sample_index: 0,
+                field_a_per_m: [20_000.0, 0.0, 0.0],
+                equilibrium_policy: fullmag_ir::BiasFieldSweepEquilibriumPolicyIR::RelaxEach,
+                continuation_seed: fullmag_ir::BiasFieldSweepContinuationSeedIR::InitialState,
+                execution: fullmag_ir::FemEigenExecutionResolutionIR {
+                    requested_device: fullmag_ir::ExecutionDevice::Cpu,
+                    resolved_device: fullmag_ir::ExecutionDevice::Cpu,
+                    requested_precision: fullmag_ir::ExecutionPrecision::Double,
+                    resolved_precision: fullmag_ir::ExecutionPrecision::Double,
+                    requested_engine: fullmag_ir::FemEigenEngineIR::Auto,
+                    resolved_engine: fullmag_ir::FemEigenEngineIR::K0PoissonAirboxCpuSchurSlepc,
+                    fallback_used: false,
+                    fallback_reason: None,
+                    selection_reason: "test.bias_field_sweep.cpu".to_string(),
+                },
+            },
+            fullmag_ir::FemEigenBiasFieldSamplePlanIR {
+                sample_index: 1,
+                field_a_per_m: [80_000.0, 0.0, 0.0],
+                equilibrium_policy: fullmag_ir::BiasFieldSweepEquilibriumPolicyIR::RelaxEach,
+                continuation_seed: fullmag_ir::BiasFieldSweepContinuationSeedIR::InitialState,
+                execution: fullmag_ir::FemEigenExecutionResolutionIR {
+                    requested_device: fullmag_ir::ExecutionDevice::Cpu,
+                    resolved_device: fullmag_ir::ExecutionDevice::Cpu,
+                    requested_precision: fullmag_ir::ExecutionPrecision::Double,
+                    resolved_precision: fullmag_ir::ExecutionPrecision::Double,
+                    requested_engine: fullmag_ir::FemEigenEngineIR::Auto,
+                    resolved_engine: fullmag_ir::FemEigenEngineIR::K0PoissonAirboxCpuSchurSlepc,
+                    fallback_used: false,
+                    fallback_reason: None,
+                    selection_reason: "test.bias_field_sweep.cpu".to_string(),
+                },
+            },
+        ];
+        plan.k0_kittel_validation = Some(fullmag_ir::FemEigenK0KittelValidationIR {
+            kind: "k0_kittel_field_sweep".to_string(),
+            case_id: Some("K0-3".to_string()),
+            demag_kind: Some("periodic_airbox_k0".to_string()),
+            model: "thin_film_in_plane".to_string(),
+            field_units: "A_per_m".to_string(),
+            relative_tolerance: 0.05,
+            material: fullmag_ir::FemEigenK0KittelValidationMaterialIR {
+                effective_magnetisation: Some(800_000.0),
+            },
+            samples: vec![
+                fullmag_ir::FemEigenK0KittelValidationSampleIR {
+                    sample_index: 0,
+                    bias_field: [320_000.0, 0.0, 0.0],
+                },
+                fullmag_ir::FemEigenK0KittelValidationSampleIR {
+                    sample_index: 1,
+                    bias_field: [640_000.0, 0.0, 0.0],
+                },
+            ],
+        });
+
+        let sample = crate::eigen::KSampleDescriptor {
+            sample_index: 1,
+            label: Some("H80mT".to_string()),
+            segment_index: Some(0),
+            path_s: 1.0,
+            t_in_segment: 1.0,
+            k_vector: [0.0, 0.0, 0.0],
+        };
+        let point_plan = eigen_path_single_k_point_plan(&plan, &sample, false, None)
+            .expect("physical K0 field-sweep point plan should be valid");
+
+        assert_eq!(point_plan.external_field, Some([80_000.0, 0.0, 0.0]));
+        assert_eq!(
+            eigen_path_external_field(&plan, 0),
+            Some([20_000.0, 0.0, 0.0])
+        );
+        assert_eq!(
+            eigen_path_external_field(&plan, 1),
+            Some([80_000.0, 0.0, 0.0])
+        );
+        assert_eq!(
+            point_plan.equilibrium,
+            fullmag_ir::EquilibriumSourceIR::RelaxedInitialState
+        );
+        assert!(point_plan.bias_field_samples.is_empty());
+        assert!(point_plan.k0_kittel_validation.is_none());
+    }
+
+    #[test]
+    fn kittel_oracle_without_bias_field_samples_fails_closed_for_physical_path() {
+        let mut plan = tiny_fem_eigen_plan(Some(fullmag_ir::KSamplingIR::Path {
+            points: vec![fullmag_ir::KPointIR {
+                label: Some("G".to_string()),
+                k_vector: [0.0, 0.0, 0.0],
+            }],
+            samples_per_segment: Vec::new(),
+            closed: false,
+        }));
+        plan.external_field = Some([123.0, 0.0, 0.0]);
+        plan.k0_kittel_validation = Some(fullmag_ir::FemEigenK0KittelValidationIR {
+            kind: "k0_kittel_field_sweep".to_string(),
+            case_id: Some("K0-3".to_string()),
+            demag_kind: Some("periodic_airbox_k0".to_string()),
+            model: "thin_film_in_plane".to_string(),
+            field_units: "A_per_m".to_string(),
+            relative_tolerance: 0.05,
+            material: fullmag_ir::FemEigenK0KittelValidationMaterialIR {
+                effective_magnetisation: Some(800_000.0),
+            },
+            samples: vec![fullmag_ir::FemEigenK0KittelValidationSampleIR {
+                sample_index: 0,
+                bias_field: [640_000.0, 0.0, 0.0],
+            }],
+        });
+        let sample = crate::eigen::KSampleDescriptor {
+            sample_index: 0,
+            label: Some("G".to_string()),
+            segment_index: Some(0),
+            path_s: 0.0,
+            t_in_segment: 0.0,
+            k_vector: [0.0, 0.0, 0.0],
+        };
+
+        let error = eigen_path_single_k_point_plan(&plan, &sample, false, None)
+            .expect_err("Kittel metadata cannot substitute for a physical bias sweep");
+        assert!(
+            error.message.contains("bias_field_samples"),
+            "{}",
+            error.message
         );
     }
 
@@ -9561,16 +11096,24 @@ mod tests {
                     tangent_leakage_mean_abs: Some(0.0),
                     tangent_leakage_max_abs: Some(0.0),
                     dominant_polarization: "linear".to_string(),
-                    reduced_vector: None,
+                    reduced_vector: Some(vec![
+                        num_complex::Complex64::new(1.0, 0.0),
+                        num_complex::Complex64::new(1.0, 0.0),
+                    ]),
                     lifted_real: None,
                     lifted_imag: None,
                     amplitude: None,
                     phase: None,
                     node_mass_weights: None,
+                    component_participation:
+                        crate::eigen::ModalParticipationObservable::unavailable_without_context(
+                            "cpu",
+                        ),
                 }],
                 relaxation_steps: 0,
                 solver_model: EigenSolverModel::ProductionCpuShiftInvert,
                 solver_notes: vec!["production sample".to_string()],
+                solver_diagnostics: None,
             });
             branch_points.push(crate::eigen::TrackedBranchPoint {
                 sample_index,
@@ -9642,7 +11185,7 @@ mod tests {
     }
 
     #[test]
-    fn k_path_k0_kittel_sample_external_field_uses_declared_bias_field() {
+    fn k_path_single_k_plan_is_independent_of_kittel_oracle() {
         let mut plan = tiny_fem_eigen_plan(Some(fullmag_ir::KSamplingIR::Path {
             points: vec![
                 fullmag_ir::KPointIR {
@@ -9680,7 +11223,7 @@ mod tests {
             ],
         });
 
-        let declared_sample = crate::eigen::KSampleDescriptor {
+        let sample = crate::eigen::KSampleDescriptor {
             sample_index: 1,
             label: Some("H1".to_string()),
             segment_index: Some(0),
@@ -9688,23 +11231,158 @@ mod tests {
             t_in_segment: 0.5,
             k_vector: [0.0, 0.0, 0.0],
         };
-        assert_eq!(
-            eigen_path_k0_kittel_sample_external_field(&plan, &declared_sample),
-            Some([80_000.0, 0.0, 0.0])
-        );
+        let with_oracle = eigen_path_single_k_point_plan(&plan, &sample, false, None)
+            .expect("reference K0 point plan should be valid");
 
-        let ordinary_sample = crate::eigen::KSampleDescriptor {
-            sample_index: 3,
-            label: Some("outside-validation".to_string()),
-            segment_index: Some(0),
-            path_s: 3.0,
-            t_in_segment: 1.0,
-            k_vector: [0.0, 0.0, 0.0],
+        let mut changed_oracle = plan.clone();
+        changed_oracle
+            .k0_kittel_validation
+            .as_mut()
+            .expect("test plan should carry an oracle")
+            .samples[1]
+            .bias_field = [160_000.0, 0.0, 0.0];
+        let with_changed_oracle =
+            eigen_path_single_k_point_plan(&changed_oracle, &sample, false, None)
+                .expect("changed reference K0 point plan should be valid");
+
+        let mut without_oracle = plan.clone();
+        without_oracle.k0_kittel_validation = None;
+        let without_oracle = eigen_path_single_k_point_plan(&without_oracle, &sample, false, None)
+            .expect("point plan without reference oracle should be valid");
+
+        assert_eq!(with_oracle, with_changed_oracle);
+        assert_eq!(with_oracle, without_oracle);
+        assert_eq!(with_oracle.external_field, Some([1.0, 2.0, 3.0]));
+        assert_eq!(with_oracle.target, plan.target);
+        assert_eq!(with_oracle.mesh_build_report, plan.mesh_build_report);
+        assert!(with_oracle.k0_kittel_validation.is_none());
+    }
+
+    #[test]
+    fn gpu_k0_periodic_airbox_lane_support_is_independent_of_kittel_oracle() {
+        let mut plan = tiny_fem_eigen_plan(Some(fullmag_ir::KSamplingIR::Path {
+            points: vec![fullmag_ir::KPointIR {
+                label: Some("G".to_string()),
+                k_vector: [0.0, 0.0, 0.0],
+            }],
+            samples_per_segment: Vec::new(),
+            closed: false,
+        }));
+        plan.count = 1;
+        plan.operator.kind = fullmag_ir::EigenOperatorIR::Full2x2;
+        plan.operator.include_demag = true;
+        plan.enable_demag = true;
+        plan.damping_policy = fullmag_ir::EigenDampingPolicyIR::Ignore;
+        plan.target = fullmag_ir::EigenTargetIR::FrequencyWindow {
+            frequency_min_hz: 1.0e3,
+            frequency_max_hz: 25.0e9,
         };
-        assert_eq!(
-            eigen_path_k0_kittel_sample_external_field(&plan, &ordinary_sample),
-            None
+        plan.spin_wave_bc = fullmag_ir::SpinWaveBoundaryConditionIR::Legacy(
+            fullmag_ir::SpinWaveBoundaryKindIR::Periodic,
         );
+        plan.mesh.periodic_node_pairs = vec![fullmag_ir::MeshPeriodicNodePairIR {
+            pair_id: "x".to_string(),
+            node_a: 0,
+            node_b: 1,
+        }];
+        plan.mesh.periodic_boundary_pairs = vec![fullmag_ir::MeshPeriodicBoundaryPairIR {
+            pair_id: "x".to_string(),
+            source_marker: None,
+            destination_marker: None,
+            marker_a: 1,
+            marker_b: 2,
+            translation: Some([1.0, 0.0, 0.0]),
+            tolerance: Some(1.0e-12),
+            axis_hint: Some("x".to_string()),
+            orientation: None,
+            pairing_policy: None,
+        }];
+        plan.air_box_config = Some(fullmag_ir::AirBoxConfigIR {
+            factor: 3.0,
+            grading: 1.2,
+            boundary_marker: 99,
+            bc_kind: Some("robin".to_string()),
+            robin_beta_mode: Some("dipole".to_string()),
+            robin_beta_factor: None,
+            shape: Some("bbox".to_string()),
+            factor_source: Some("test".to_string()),
+            boundary_marker_source: Some("test".to_string()),
+        });
+
+        let without_oracle = gpu_modal_k0_kittel_path_supported(&plan);
+        plan.k0_kittel_validation = Some(fullmag_ir::FemEigenK0KittelValidationIR {
+            kind: "k0_kittel_field_sweep".to_string(),
+            case_id: Some("K0-3".to_string()),
+            demag_kind: Some("periodic_airbox_k0".to_string()),
+            model: "thin_film_in_plane".to_string(),
+            field_units: "A_per_m".to_string(),
+            relative_tolerance: 0.02,
+            material: fullmag_ir::FemEigenK0KittelValidationMaterialIR {
+                effective_magnetisation: Some(800_000.0),
+            },
+            samples: vec![fullmag_ir::FemEigenK0KittelValidationSampleIR {
+                sample_index: 0,
+                bias_field: [20.0e-3 / crate::MU0, 0.0, 0.0],
+            }],
+        });
+        let with_oracle = gpu_modal_k0_kittel_path_supported(&plan);
+
+        assert!(
+            !without_oracle,
+            "GPU K0 periodic-airbox path routing must remain unsupported while native A_qq/certificate producers are absent"
+        );
+        assert_eq!(without_oracle, with_oracle);
+    }
+
+    #[test]
+    fn periodic_airbox_k0_runtime_support_is_false_without_native_producer() {
+        let mut plan = tiny_fem_eigen_plan(Some(fullmag_ir::KSamplingIR::Path {
+            points: vec![fullmag_ir::KPointIR {
+                label: Some("G".to_string()),
+                k_vector: [0.0, 0.0, 0.0],
+            }],
+            samples_per_segment: Vec::new(),
+            closed: false,
+        }));
+        plan.operator.kind = fullmag_ir::EigenOperatorIR::Full2x2;
+        plan.operator.include_demag = true;
+        plan.enable_demag = true;
+        plan.damping_policy = fullmag_ir::EigenDampingPolicyIR::Ignore;
+        plan.spin_wave_bc = fullmag_ir::SpinWaveBoundaryConditionIR::Legacy(
+            fullmag_ir::SpinWaveBoundaryKindIR::Periodic,
+        );
+        plan.air_box_config = Some(fullmag_ir::AirBoxConfigIR {
+            factor: 3.0,
+            grading: 1.2,
+            boundary_marker: 99,
+            bc_kind: Some("robin".to_string()),
+            robin_beta_mode: Some("dipole".to_string()),
+            robin_beta_factor: None,
+            shape: Some("bbox".to_string()),
+            factor_source: Some("test".to_string()),
+            boundary_marker_source: Some("test".to_string()),
+        });
+        plan.mesh.periodic_node_pairs = vec![fullmag_ir::MeshPeriodicNodePairIR {
+            pair_id: "x".to_string(),
+            node_a: 0,
+            node_b: 1,
+        }];
+        plan.mesh.periodic_boundary_pairs = vec![fullmag_ir::MeshPeriodicBoundaryPairIR {
+            pair_id: "x".to_string(),
+            source_marker: None,
+            destination_marker: None,
+            marker_a: 1,
+            marker_b: 2,
+            translation: Some([1.0, 0.0, 0.0]),
+            tolerance: Some(1.0e-12),
+            axis_hint: Some("x".to_string()),
+            orientation: None,
+            pairing_policy: None,
+        }];
+
+        assert!(periodic_airbox_k0_physical_plan(&plan));
+        assert!(!periodic_airbox_k0_runtime_supported(&plan));
+        assert!(!gpu_modal_k0_kittel_path_supported(&plan));
     }
 
     #[test]
@@ -9999,6 +11677,7 @@ mod tests {
         };
 
         let diagnostics = eigen_path_solver_diagnostics(
+            FemEngine::CpuNative,
             &plan,
             &path_result,
             &std::collections::BTreeSet::from([0]),
@@ -10070,6 +11749,7 @@ mod tests {
         };
 
         let diagnostics = eigen_path_solver_diagnostics(
+            FemEngine::CpuNative,
             &plan,
             &path_result,
             &std::collections::BTreeSet::from([0]),
@@ -10165,6 +11845,7 @@ mod tests {
         };
 
         let diagnostics = eigen_path_solver_diagnostics(
+            FemEngine::CpuNative,
             &plan,
             &path_result,
             &std::collections::BTreeSet::from([0]),
@@ -10305,10 +11986,6 @@ mod tests {
                 OutputIR::DispersionCurve {
                     name: "dispersion".to_string(),
                 },
-                OutputIR::EigenMode {
-                    field: "mode".to_string(),
-                    indices: vec![0],
-                },
             ],
         )
         .expect("DE/BV low-k validation target should use the analytic reference solver");
@@ -10350,6 +12027,27 @@ mod tests {
         );
         assert_eq!(manifest_json["requested_execution"]["include_demag"], true);
         assert_eq!(manifest_json["capabilities"]["validation_artifact"], true);
+
+        let mode_error = execute_fem_eigen(
+            FemEngine::CpuNative,
+            &plan,
+            &[
+                OutputIR::EigenSpectrum {
+                    quantity: "frequency_hz".to_string(),
+                },
+                OutputIR::DispersionCurve {
+                    name: "dispersion".to_string(),
+                },
+                OutputIR::EigenMode {
+                    field: "mode".to_string(),
+                    indices: vec![0],
+                },
+            ],
+        )
+        .expect_err("analytic reference mode fields must fail closed without mesh identity");
+        assert!(mode_error
+            .message
+            .contains("mode field publication requires valid source mesh identity"));
     }
 
     #[test]

@@ -1,6 +1,7 @@
 "use client";
 
 import type { VisualizationTargetSettings } from "@/kernel/visualization/ObjectVisualizationController";
+import type { ModeCompositionFieldLayerSnapshotMap } from "@/kernel/visualization/ModeCompositionFieldLayerController";
 
 import type {
   Viewport3DMeshPart,
@@ -23,6 +24,7 @@ import { MeshPartLayer } from "./MeshPartLayer";
 import type { Viewport3DMaterialProfile } from "./viewport3DMaterialProfile";
 import type { VectorFieldLayerVectorStyle } from "./VectorFieldLayer";
 import type { Viewport3DRenderAdoptionRegistry } from "../model/viewport3DRenderAdoptionRegistry";
+import { modeCompositionTargetIdForMeshPart } from "../model/modeCompositionViewportProjection";
 
 export function TopologyMeshLayer({
   adoptionRegistry,
@@ -34,6 +36,8 @@ export function TopologyMeshLayer({
   magnetizationTexturePreviews,
   meshQualityColors,
   meshQualityOverlayVisible,
+  modeCompositionFieldLayers,
+  modeCompositionId,
   onSelectPart,
   tracker,
   topologyModel,
@@ -49,6 +53,8 @@ export function TopologyMeshLayer({
   magnetizationTexturePreviews: Map<string, Viewport3DMagnetizationTexturePreview>;
   meshQualityColors: ScalarColorBuffer | null;
   meshQualityOverlayVisible: boolean;
+  modeCompositionFieldLayers?: ModeCompositionFieldLayerSnapshotMap;
+  modeCompositionId?: string | null;
   onSelectPart: (selection: Viewport3DPartSelection) => void;
   tracker: Viewport3DResourceTracker;
   topologyModel: Viewport3DTopologyRenderModel<Viewport3DMeshPart> | null;
@@ -65,6 +71,7 @@ export function TopologyMeshLayer({
       <>
         {topologyModel.magneticParts.map((partModel) => {
           const settings = getPartSettings(partModel.part);
+          const modeTargetId = modeCompositionTargetIdForMeshPart(partModel.part);
           return (
             <MeshPartLayer
               adoptionRegistry={adoptionRegistry}
@@ -98,6 +105,12 @@ export function TopologyMeshLayer({
               })()}
               materialProfile={materialProfile}
               meshQualityColors={meshQualityOverlayVisible ? meshQualityColors : null}
+              modeCompositionId={modeCompositionId ?? null}
+              modeCompositionSnapshot={
+                modeTargetId
+                  ? modeCompositionFieldLayers?.get(modeTargetId) ?? null
+                  : null
+              }
               onSelectPart={onSelectPart}
               partModel={partModel}
               settings={

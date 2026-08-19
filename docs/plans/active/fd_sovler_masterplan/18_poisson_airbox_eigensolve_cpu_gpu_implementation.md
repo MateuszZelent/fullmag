@@ -55,31 +55,50 @@ precision = double
 initial modal qualification = alpha=0
 ```
 
+Dokładne przyszłe wiązania katalogowe tego kontraktu to:
+
+- `modal_cpu_k0_periodic_airbox_real_shared_domain.production` dla CPU;
+- `modal_gpu_k0_periodic_airbox_scalable.production` dla GPU.
+
+Są to wiązania docelowego zakresu, a nie bieżące promocje. Obie komórki
+readiness pozostają `implementation_state=source_visible` i
+`validation_state=unvalidated`, z `validated_scope=null` oraz
+`executable_scope=null`. Materializowany deskryptor o wymiarze nie większym niż
+1024 jest wyłącznie `validation_only`. Produkcyjny operator ma rodzaj
+`matrix_free_schur_selected_spectrum`, a kwalifikacja wymaga zmierzonego
+`operator_dimension > 1024`; nazwa przypadku lub oczekiwany rozmiar nie
+zastępuje pomiaru z artefaktu native.
+
 Nonzero-k dynamic demag, fully periodic three-dimensional K0 demag, arbitrary
 high-order FE, broad damped/nonconservative modal qualification and hidden CPU
 fallback for strict GPU are outside this contract and reject explicitly.
 
 ### 1.2 Current implementation boundary
 
+Until all K0-P1 through K0-P6 and K0-G1 through K0-G4 gates are evidenced,
+`production_periodic_airbox_claim = false`; a synthetic or partial path must
+remain a validation-only result.
+
 | Current repository evidence | Honest current status | Target boundary |
 |---|---|---|
-| `dense_poisson_airbox_eigen_oracle.cpp` and PA-E1 fixtures construct tiny dense blocks. | `synthetic_algebraic_oracle`; bounded algebra evidence only. | Never selected for physical K0 Poisson-airbox execution and never a production fallback. |
-| `PoissonAirboxEigenBlockProblem` accepts CSR blocks through ABI v2. | The current validator accepts only `synthetic_algebraic_oracle`; Robin and Dirichlet are rejected because the current descriptor assumes a gauge row. | Replace supplied synthetic blocks with backend-owned `mfem_weak_form_shared_domain` assembly and the exact BC-dependent descriptor. |
-| `poisson_airbox_modal_eigen.cpp` creates a monolithic SeqAIJ descriptor and calls SLEPc. | Source-visible/executable for bounded synthetic payloads. It currently passes real `omega_target` to the unrotated lambda pencil. | Use the real-PETSc representation in section 6 and qualify selected interior spectra. |
-| Current residual code reports SLEPc backward error and reconstructed magnetic, scalar and gauge blocks. | Useful source evidence; current input validation still requires a pure-Neumann augmentation and overconstrains mean weights. | Certify every accepted mode or response from the original unscaled BC-correct blocks. |
-| `poisson_airbox_schur_matshell.cpp` builds and certifies a Schur MatShell. | Algebra-validated against synthetic fixtures only. | Admit Schur only with an exact-signature certificate generated from real shared-domain blocks. |
+| `dense_poisson_airbox_eigen_oracle.cpp` and PA-E1 fixtures construct tiny dense blocks. | `assembly_kind = synthetic_algebraic_oracle`; bounded algebra evidence only. | Never selected for physical K0 Poisson-airbox execution and never a production fallback. |
+| ABI v18 carries `FullmagFemModalLinearizationDescriptor` without preassembled `A_qq`. | `assemble_native_magnetic_a_qq` owns bounded P1 `tet4|prism6` exchange and parallel-field assembly on the native MFEM mesh. Anisotropy/DMI return `unavailable`; dynamic demag stays in mixed blocks. | Keep runner ownership to physical descriptor, ABI and provenance; qualify only backend-owned shared-domain assembly. |
+| `BiasFieldSweep`, `BiasFieldSweepIR` and `execute_bias_field_sweep` carry declared A/m samples, equilibrium policy and continuation seed. | Physical sweep is source-visible; `validate_bias_field_sweep_oracle_contract` keeps Kittel postsolve-only. No fresh managed sweep convergence exists. | Preserve physical input independently from analytical validation and per-sample requested/resolved execution. |
+| `poisson_airbox_modal_eigen.cpp` dispatches the shared-domain descriptor to CPU Schur and GPU PETSc/SLEPc adapters. | `source_visible / unvalidated` with real-split `real_frequency_rotated` pencil and `tau=omega_target`; no current-snapshot executable or validated scope. | Qualify selected interior spectra and preserve exact CPU/GPU parity. |
+| Native residual code reports SLEPc backward error plus reconstructed magnetic, scalar and gauge blocks. | Production CPU/GPU paths certify the original unscaled blocks and expose block residuals; synthetic and interrupted paths remain separately labelled. | Keep every accepted mode tied to the original BC-correct residual and finite/positive-branch policy. |
+| `poisson_airbox_schur_matshell.cpp` builds and certifies a persistent Schur MatShell. | Shared-domain assembly and Schur reduction are implemented and covered by native/independent quadrature contracts; promotion still requires fresh managed physics evidence. | Admit Schur only with an exact-signature certificate generated from real shared-domain blocks. |
 | Current driven periodic-airbox provider/Schur paths execute for bounded CPU/GPU slices. | They are not the target full coupled `MatNest/PCFIELDSPLIT` solve and do not qualify modal solving. | Cross-check full coupled and Schur driven results on the same P1 blocks and physical RHS. |
-| The CUDA frequency-domain source owns a persistent magnetic operator context and bounded dense/apply probes. | Operator residency or a one-shot dense solve is not device Krylov residency. `production_loop_available=false` remains current device-Krylov truth. | Only `gpu_device_krylov` and `gpu_modal_device_krylov` are scalable GPU solver claims. |
-| No dedicated frequency-domain shared-domain modal assembler exists. | Real K0 Poisson-airbox modal production is not implemented or qualified. | Stages K0-P1 through K0-P7 and K0-G1 through K0-G4 must pass before scoped promotion. |
-| `crates/fullmag-runner/src/fem_eigen.rs::build_pa_e4b_k0_kittel_poisson_airbox_payload` computes `expected_reference_frequency_hz` from the analytical Kittel expression and assigns it to both `target_frequency_hz` and `expected_reference_frequency_hz`. | The analytical answer currently contaminates the synthetic PA-E4b solve request; it is not postsolve-only validation. | K0-P3 removes analytical reference data from descriptor assembly/request construction; only a user-requested target or window may reach the eigensolver. |
-| `backends/fem/cpu/frequency_domain/poisson_airbox_modal_eigen.cpp` converts that `target_frequency_hz` into the SLEPc target, selects the nearest accepted mode by distance to it, and uses `expected_reference_frequency_hz` for `reference_frequency_certified` pass/fail. | Kittel data currently influences targeting, nearest-mode selection and solver success. | K0-P4 removes analytical-reference selection and pass/fail from the solver. Analytical Kittel comparison is postsolve validation owned by K0-P6 and its independent verifier only. |
+| The CUDA frequency-domain source owns PETSc/SLEPc adapter and bounded materialized/window contracts. | Materialized descriptor dimensions at or below 1024 are validation-only. Device residency, persistent EPS/ST/KSP/BV ownership, allocation/transfer bounds and no-fallback behavior are source claims until fresh managed GPU evidence exists. | Only `gpu_modal_device_krylov` with executed matrix-free evidence, including a measured `operator_dimension > 1024`, can satisfy `modal_gpu_k0_periodic_airbox_scalable.production`. |
+| `operators/poisson_airbox_shared_domain.cpp` is the dedicated shared-domain modal assembler. | Real MFEM weak-form scalar/mixed blocks and native bounded `A_qq` are implemented in source; managed production promotion remains evidence-gated. | Modal promotion requires K0-P1 through K0-P6 and K0-G1 through K0-G4. K0-P7 is a separate driven-response cross-check and does not gate modal promotion. |
+| Production runner construction supplies `target_frequency_hz` from the user target/window and leaves `expected_reference_frequency_hz=0` for shared-domain solves. | The production path no longer uses an analytical Kittel value for assembly or targeting. Historical/synthetic validation fixtures may carry an expected reference only for postsolve verification. | Keep analytical Kittel comparison postsolve-only and out of descriptor construction, targeting, preconditioning and solver acceptance. |
+| `poisson_airbox_modal_eigen.cpp` converts the user target into `tau=omega_target` on the rotated real pencil and reports reference error only when an explicit validation reference is present. | Production acceptance is based on finite positive-branch modes and original-block residual certification; Kittel pass/fail is owned by independent validation scripts. | Keep analytical-reference selection and pass/fail outside the production eigensolver. |
 
 Analytical frequencies and demag factors are verifier inputs only. They must
 not enter block assembly, spectral targeting, preconditioning, convergence,
-mode selection or solver pass/fail. The current
-`expected_reference_frequency_hz` payload field is active contamination, not
-solver evidence; K0-P3/P4 remove it from solve construction and acceptance,
-while K0-P6 performs the analytical Kittel comparison after the solve.
+mode selection or solver pass/fail. The production shared-domain request
+leaves `expected_reference_frequency_hz=0`; legacy/synthetic validation may
+carry an explicit reference only for postsolve reporting. K0-P6 performs the
+analytical Kittel comparison after the solve.
 
 ## 2. Mathematical model and FE spaces
 
@@ -301,7 +320,7 @@ scalar hashes are mandatory. Pair-only postsolve projection is not an operator.
 For pure Neumann, `c_i=int_D Psi_i dV / int_D 1 dV` on the active reduced
 scalar space and `sum_i c_i=1` within assembly tolerance. Eliminated or
 inactive entries may have zero weight. Robin or Dirichlet must not carry `c`
-or `eta`. Lateral periodicity alone does not create a gauge when the open
+or `eta`; their explicit contract is `gauge_policy = none`. Lateral periodicity alone does not create a gauge when the open
 boundary is coercive.
 
 Fully periodic 3D K0 rejects before assembly because no macroscopic-field
@@ -555,9 +574,11 @@ rejects when unavailable. A permitted non-strict fallback may select another
 full CPU engine for the identical physical problem only before execution and
 must publish requested/resolved engines and `fallback_reason`.
 
-K0-P7 compares full coupled response against direct/Schur response on identical
-blocks and against modal resonance only after the modal basis has its own
-completeness and full-residual certificate.
+K0-P7 is a separate driven-response scope. It compares full coupled response
+against direct/Schur response on identical blocks and against modal resonance
+only after the modal basis has its own completeness and full-residual
+certificate. It is not a predecessor for the K0 modal CPU/GPU promotion scope,
+which ends at K0-P6 and K0-G4.
 
 ## 8. Certified Schur algorithms
 
@@ -762,7 +783,7 @@ not promote until all predecessor gates for its claimed scope pass.
 | K0-P4 CPU sparse-direct and SLEPc parity | `backends/fem/cpu/frequency_domain/poisson_airbox_modal_eigen.*`; `backends/fem/cpu/frequency_domain/slepc_modal_eigen.*`; `backends/fem/cpu/frequency_domain/engines/sparse_direct/` | K0-P3 descriptor, user-requested complex or rotated-real target/window, tiny admitted case; no expected frequency | direct baseline and selected finite physical mode classes | `validation/k0_poisson_airbox/interior_window.v1.json` | `k0_poisson_airbox_real_split_target_unavailable`; `k0_poisson_airbox_cpu_solver_parity_failed`; `k0_poisson_airbox_no_finite_modes` | Complex/real-split and direct/SLEPc frequency clusters, physical multiplicities and invariant subspaces agree; wrong-axis negative control fails; analytical Kittel data cannot affect selection or solver pass/fail. |
 | K0-P5 residual and finite-mode certification | `backends/fem/cpu/frequency_domain/poisson_airbox_modal_eigen.*` | K0-P4 candidates, original unscaled blocks | accepted/rejected modes, reconstructed `phi/eta`, block errors | `eigen/diagnostics/solver.v1.json#residuals`; `eigen/spectrum.v2.json` | `k0_poisson_airbox_interior_window_incomplete`; `k0_poisson_airbox_full_residual_not_certified` | Every accepted mode passes finite classification, branch/window completeness and all original block tolerances. |
 | K0-P6 real-film Kittel convergence | `examples/`; `scripts/verify_fem_frequency_domain_eigen_artifacts.py`; managed `justfile` gate | accepted real equilibria, at least three mesh levels, independent airbox-padding levels, field sweep | solved spectra and independent Kittel comparison | `kittel_convergence.v1.csv` plus equilibrium/mesh/airbox provenance | `k0_poisson_airbox_kittel_convergence_failed` plus any exact predecessor token | Mesh and padding convergence, field sweep, demag sign and managed-runtime evidence pass without analytical data entering the solver. |
-| K0-P7 CPU driven full-coupled/modal cross-check | `backends/fem/cpu/frequency_domain/engines/field_split/`; `backends/fem/cpu/frequency_domain/production_cpu_driven_response.*`; `backends/fem/cpu/frequency_domain/modal_response.*` | same K0-P3 blocks, physical drive, frequency sweep, qualified modal basis when used | full coupled, Schur and qualified reduced responses | `response/diagnostics/solver.v1.json`; `response/frequency-points/{frequency_index}.json` | `k0_poisson_airbox_physical_drive_rhs_invalid`; `k0_poisson_airbox_schur_certificate_invalid`; `k0_poisson_airbox_full_residual_not_certified`; `k0_poisson_airbox_driven_crosscheck_failed` | Full/Schur responses agree on certified samples; resonance agrees with independently qualified modes; original driven residual passes at every point. |
+| K0-P7 separate driven full-coupled/modal cross-check | `backends/fem/cpu/frequency_domain/engines/field_split/`; `backends/fem/cpu/frequency_domain/production_cpu_driven_response.*`; `backends/fem/cpu/frequency_domain/modal_response.*` | same K0-P3 blocks, physical drive, frequency sweep, qualified modal basis when used | full coupled, Schur and qualified reduced responses | `response/diagnostics/solver.v1.json`; `response/frequency-points/{frequency_index}.json` | `k0_poisson_airbox_physical_drive_rhs_invalid`; `k0_poisson_airbox_schur_certificate_invalid`; `k0_poisson_airbox_full_residual_not_certified`; `k0_poisson_airbox_driven_crosscheck_failed` | This separate driven-response promotion is not a prerequisite for modal K0 CPU/GPU promotion; its own claim requires full/Schur agreement, modal resonance with independently qualified modes, and original driven residuals at every point. |
 
 The planned `operators/poisson_airbox_shared_domain.*` owner is a dedicated
 frequency-domain subsystem. It may reuse static demag mesh, boundary and MFEM
@@ -780,8 +801,8 @@ utilities, but it must not add frequency-domain assembly or solver ownership to
 
 ## 12. Definition of done
 
-This contract is implemented for an exact scope only when all of the following
-are true:
+The K0 modal production scope is implemented for an exact CPU or GPU scope
+only when all of the following modal requirements are true:
 
 1. A physical request consumes an accepted equilibrium, shared-domain P1 mesh,
    complete K0 magnetic/scalar certificate and valid BC/gauge tuple.
@@ -791,9 +812,10 @@ are true:
 3. Modal full and certified Schur paths represent `sigma=i*omega_target`
    correctly for the PETSc scalar build, detect the wrong-axis negative control,
    select finite positive-window modes and reconstruct the full descriptor.
-4. Driven full field-split and certified Schur paths consume the physical drive
-   conversion, reuse the same blocks and pass full/block residuals at every
-   accepted frequency.
+4. A driven-response claim, if made, separately completes K0-P7: its full
+   field-split and certified Schur paths consume the physical drive conversion,
+   reuse the same blocks, and pass full/block residuals at every accepted
+   frequency. K0-P7 is not required for modal promotion.
 5. `eps_full=max(eps_q,eps_phi,eps_gauge)` from the original unscaled operator
    is within tolerance; backend, transformed and preconditioned residuals remain
    separate diagnostics.
@@ -814,3 +836,125 @@ are true:
 Until these conditions pass, current capability rows remain bounded by their
 existing exact evidence and the target stage remains unimplemented or
 unqualified as appropriate.
+
+### 12.1 Production-scope documentation assertions
+
+The following assertions are normative documentation gates. They deliberately
+do not claim that the feature is qualified today; they define the complete
+evidence set that the final production record must bind for each exact CPU or
+GPU scope:
+
+1. CPU stages `K0-P1` through `K0-P6` and GPU stages `K0-G1` through `K0-G4`
+   have passed with their required artifacts and exact rejection controls.
+2. The managed `libpetsc-real-dev`/`libslepc-real-dev` runtime records
+   `spectral_scalar_mode=real_split`,
+   `spectral_pencil_kind=real_frequency_rotated`, `sigma=i*omega_target`, and
+   `tau=omega_target`; a real target on the original `lambda=i omega` pencil
+   is a required wrong-axis negative control.
+3. `Spectrum` publishes bounded selected-window metadata, physical
+   J-equivalence classes, counts, branch completeness, residuals, stop reason,
+   requested/resolved execution, and the exact validation-scope identity.
+4. Native `q` and reconstructed `phi` are published as revisioned Cartesian
+   mode fields on the binary data plane, with mesh/topology identity, units,
+   representation, mode identity, and validation sidecars. Fabricated or
+   runner-synthesized mode vectors cannot satisfy this assertion.
+5. The unified viewport proves selected-mode real, imaginary, magnitude, and
+   phase-rotated rendering through a visible, non-lost WebGL canvas with a
+   nonzero drawing buffer, a selected-mode visual difference, a phase-change
+   visual difference, and bounded memory across repeated mode switches.
+6. `frequency_domain_production_dod.v1` binds immutable passing evidence for
+   `DOD-01` through `DOD-14` for the exact CPU or GPU scope. A partial,
+   stale, hidden-fallback, or scope-mismatched record cannot promote a
+   capability.
+
+## 13. Historical revalidation after the master branch update (2026-08-01)
+
+This chapter was rechecked only after the eigensolve branch was merged with
+the current master. The branch is now based on `origin/master` (`25 0` ahead/
+behind), with merge commit
+`d5f63b35a4f4a57798089915b312c4695caea917` and master
+`eee245ac200bf138d880b793791848106b7386ba`. No implementation claim below is
+changed by that merge.
+
+### 13.1 Current CPU implementation evidence
+
+`crates/fullmag-runner/src/fem_eigen.rs::build_pa_e4b_k0_kittel_poisson_airbox_payload`
+still derives `expected_reference_frequency_hz` from the Kittel expression,
+assigns it to `target_frequency_hz`, constructs dense matrices and labels the
+payload `synthetic_algebraic_oracle`. This is the exact contamination that
+K0-P3/K0-P4 must remove. The payload also hard-codes the v6 schema string
+without transporting a certificate identity or digest.
+
+`backends/fem/cpu/frequency_domain/poisson_airbox_modal_eigen.cpp::validate_problem`
+still rejects every assembly kind except `synthetic_algebraic_oracle` and
+rejects Robin/Dirichlet modal solves. Its SLEPc setup
+(`solve_poisson_airbox_modal_eigen_cpu_slepc`) still applies a real
+`EPSSetTarget(target_omega)` to the original lambda pencil, selects one mode,
+and uses `expected_reference_frequency_hz` in solver acceptance. The current
+native result ABI
+(`backends/fem/include/frequency_domain/modal_eigen_result.hpp::FrequencyDomainContractResult`)
+does not carry a multi-mode q/phi result collection. These are open production
+gates, not documentation-only gaps.
+
+### 13.2 Current GPU implementation evidence
+
+The CUDA source contains bounded dense/action probes and explicit diagnostics,
+but not a persistent selected-spectrum modal engine. In particular,
+`fullmag_fem_frequency_domain_apply_modal_shift_invert_gpu_action` reports
+zero per-action transfers while also reporting
+`gpu_device_resident_modal_eigensolver=false`; that is compatible with a
+one-shot action and does not establish a device-resident Arnoldi/Krylov loop.
+`gpu_device_krylov.hpp::validate_fgmres_device_engine` continues to report
+`production_loop_available=false`.
+
+### 13.3 Product-chain boundary
+
+The Python/IR authoring and negative-validation paths, the v2 spectrum/branch
+resources, and the mode-field metadata/preview UI are present as reference or
+artifact-backed surfaces. They do not make a physical K0 result available:
+the current capability snapshot still marks production CPU/GPU modal solving
+unsupported, and the inspector explicitly reports 3D plotting as waiting for
+mode-field artifacts. Production mode fields must be native q and reconstructed
+phi vectors from the accepted solve; the runner test
+`native_poisson_airbox_result_without_modes_maps_to_uniform_k0_mode` documents
+the fallback that K0-P5 must remove.
+
+### 13.4 Verification boundary
+
+The managed runtime bundle was rebuilt and identity-validated for the merge
+commit. The aggregate native-contract recipe was attempted but failed before
+build because a fresh worktree had no `native/build` directory. The explicit
+K0 CPU SLEPc recipe configured PETSc/SLEPc and built the contract binary, but
+the small SLEPc fixture produced no result after approximately 19 minutes and
+was terminated with exit code 130. This is a timeout/non-convergence boundary,
+not a passing contract.
+Neither event changes the readiness matrix or qualifies a CPU/GPU production
+cell. The authoritative completion gates remain K0-P1 through K0-P6,
+K0-G1 through K0-G4, and DOD-01 through DOD-14.
+
+## 14. Current recovery status (2026-08-05)
+
+The historical chapter above is retained for audit provenance; its statements
+about a synthetic-only CPU path, real-target misuse, and a non-persistent GPU
+adapter do not describe the current dirty recovery snapshot. The current
+implementation is:
+
+- `poisson_airbox_modal_eigen.cpp` validates ABI v3 and dispatches the
+  shared-domain production request to the CPU Schur MatShell or GPU
+  PETSc/SLEPc CUDA lane. The requested target is represented as
+  `tau=omega_target` on the real-frequency rotated pencil; analytical Kittel
+  data is postsolve-only.
+- The CPU Schur route reconstructs the original unscaled magnetic/scalar/gauge
+  blocks and emits cancellation/progress-aware partial results. The GPU route
+  keeps the modal operator, residual workspace and accepted vectors on the
+  device and emits explicit no-fallback transfer diagnostics.
+- The synthetic dense oracle, bounded CUDA `modal_krylov.cu` path and historical
+  no-demag macrospin artifacts remain validation lanes. They are not a broad
+  production substitute for the shared-domain solver.
+
+Fresh managed execution remains pending because the runtime-export lock is
+held by a stale process. The current source snapshot is dirty, so syntax
+checks and existing build outputs are not qualification evidence. K0-P1..P6,
+K0-G1..G4 and DOD-01..DOD-14 therefore remain open until a fresh managed
+CPU/GPU run binds convergence, parity, mode fields, performance telemetry,
+browser proof and release provenance.

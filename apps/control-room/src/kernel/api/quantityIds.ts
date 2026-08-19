@@ -181,6 +181,24 @@ export function sameQuantityId(
   return normalizeQuantityIdOrDefault(left) === normalizeQuantityIdOrDefault(right);
 }
 
+/**
+ * Analysis fields retain their artifact quantity id while using the
+ * magnetization-compatible spatial carrier in the viewport data plane.
+ * This must not be used as a canonical quantity alias or a catalog gate.
+ */
+export function sameRenderableFieldQuantityId(
+  left: string | null | undefined,
+  right: string | null | undefined,
+): boolean {
+  const leftId = normalizeQuantityIdOrDefault(left);
+  const rightId = normalizeQuantityIdOrDefault(right);
+  return (
+    leftId === rightId ||
+    (leftId === "m" && isAnalysisFieldQuantityId(rightId)) ||
+    (rightId === "m" && isAnalysisFieldQuantityId(leftId))
+  );
+}
+
 export function fieldCatalogQuantitySupportsAirbox(
   fieldCatalog: FieldCatalogResource | null | undefined,
   quantityId: string,

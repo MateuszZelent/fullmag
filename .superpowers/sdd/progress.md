@@ -304,3 +304,83 @@ source-layout and FEM physics-validation failures.
 - Task 1 FDM midplane RED: complete (commit `b1464b481`, expected RED `z=0.0` vs `-0.5`, independent review approved).
 - Task 2 cell-centered FDM default slice: complete (commits `a750062ca`, `d47029f97`; overflow RED then source tests 15/15 and endpoint 1/1 pass; independent re-review approved).
 - Task 3 source parity: complete (commit `48ed0c3f6`; field meta/vector/planar revision, generation, stats and payload parity; focused 1/1 pass; independent re-review approved).
+
+## Plan: FEM K0 eigensolve Poisson-airbox CPU/GPU i Control Room — odzyskany ledger recovery
+
+- Worktree źródłowy: `/home/kkingstoun/git/fullmag/fullmag/.worktrees/eigensolve-k0-demag-recovery`
+- Branch źródłowy: `codex/eigensolve-k0-demag`
+- Source plan: `docs/plans/active/fd_sovler_masterplan/27_fem_k0_eigensolve_production_completion_and_control_room.md`
+- Poniższe wpisy zachowują stan udokumentowany na branchu recovery przed
+  integracją; nie zastępują świeżej kwalifikacji scalonego `master`.
+
+N1b canonical map binding: complete source-level, independent review approved;
+managed MFEM/runtime proof remains open.
+
+N1c runner linearization descriptor: complete source-level, independent
+re-review approved after fixing full-global `3N` importer semantics, runner FFI
+envelope tests and validation-only `A_qq` oracle. `certificate_binding_v6`
+remains `NULL`, aggregate gate remains closed, and N1d owns the full typed v6
+preimage/relation producer.
+
+N1d runner-owned certificate v6 producer: complete source-level, final
+independent re-review `SPEC APPROVED / QUALITY APPROVED`. The canonical IR
+producer separates magnetic-prefix and global-scalar evidence; the runner
+regenerates and compares the complete accepted certificate, constructs all four
+owned views, byte-aligns the native preimage and
+`shared_domain_map_binding.v1`, validates the trusted ordered multi-part
+registry for one physical magnetic object plus airbox, and keeps all nested ABI
+v18 pointers alive. The real-plan-like fixture covers `body +
+hole_transition_refinement + air` with magnetic markers 1/2, shared nodes,
+x/y edge/corner closure and open z. Fresh focused evidence recorded on recovery:
+IR 6/6, `modal_v6_` 8/8, `shared_domain` 13/13, `native_fem` 22/22, routing 1/1,
+no-default and fem-native no-link checks PASS. Managed MFEM/CUDA runtime proof
+remained open and belonged to N1e/integration.
+
+N1e periodic-antidot eigen script slice: complete source-level, final
+independent re-review `SPEC APPROVED / QUALITY APPROVED`. Added the separate
+`examples/fem_periodic_antidot_relax_eigenmodes.py` without changing the
+frequency-driven FMR example. Canonical Python export proves CPU
+`relax -> eigenmodes` and GPU `relax -> change_device -> eigenmodes` with
+devices `[cpu,gpu,gpu]`, strict/double, `full_2x2`, K0,
+`periodic_airbox_k0`, bounded window and spectrum/dispersion/mode outputs.
+Recorded recovery evidence: Python 7/7 plus 5 subtests, canonical pipeline and
+public CPU/GPU run-config PASS, three focused Rust typed producer/CPU
+routing/strict GPU rejection tests each real 1/1, py_compile and diff-check
+PASS. Managed MFEM solve remained open at that checkpoint.
+
+Task 3 (GPU K0 B_qq compile blocker): complete (commit `f6f018c4c`, independent
+spec/quality review approved with no findings; source contract and diff-check
+pass). Fresh managed GREEN remained the next integration gate.
+
+Task 4 (CLI Eigenmodes bias_field_sweep merge blocker): complete (commit
+`7766c1231`, independent spec/quality review approved with no findings; focused
+regression, cargo check, rustfmt, and diff-check pass). Fresh managed GREEN
+remained the next integration gate.
+
+Task 11 (N1a mixed-P1 native A_qq): complete (commits `50b3a3b5..78050779c`,
+independent spec/quality review approved with no Critical/Important findings;
+focused MFEM container contract exit 0). Authoritative managed runtime
+qualification remained open at that checkpoint.
+
+Task A2-RI (canonical realtime invalidation for frequency-domain resources):
+complete source-level (four frontend files, no solver/API schema changes),
+independent review `APPROVE` with no Critical/Important/Minor findings. The
+canonical key catalog covers eigen branches/dispersion/diagnostics, response
+sweep/progress/cancel/diagnostics/frequency-point/field-meta and existing
+manifest/spectrum/field-sweep/FMR/mode-field resources. Indexed paths are strict
+non-negative `u32`, artifact aliases converge to hook keys, and
+`resource.updated`/`resource.batch_changed` tests cover sibling isolation and
+compatibility diagnostics routing. Recorded recovery verification: Vitest
+93/93 and Control Room typecheck pass; targeted ESLint and diff-check were green
+in the independent review. Managed/native/browser qualification was not claimed.
+
+Task N2-CW1 (CPU frequency-window completion certificate): complete source-level
+and focused-contract level; independent remediation re-review `APPROVE` with no
+findings. The CPU Schur frequency-window path runs base and refinement shift
+schedules, compares frequencies, physical cluster ranks and invariant-subspace
+overlap, requires positive coverage margins, and fails closed on disagreement,
+truncation, cancellation or incomplete schedules. Focused container evidence
+recorded on recovery passed the positive, rank-two degeneracy, split-cluster
+disagreement, empty failure and cancellation cases; documentation validation
+was green (21/21). Managed runtime, full legacy monolithic binary, GPU parity
+and production qualification remained explicitly open.

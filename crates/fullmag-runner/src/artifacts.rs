@@ -4839,6 +4839,7 @@ mod tests {
             provenance: ProvenancePlanIR {
                 notes: Vec::new(),
                 integrator_resolution: None,
+                fem_eigen_execution_resolution: None,
                 physics_graph: None,
             },
         }
@@ -5218,6 +5219,7 @@ mod tests {
             provenance: ProvenancePlanIR {
                 notes: Vec::new(),
                 integrator_resolution: None,
+                fem_eigen_execution_resolution: None,
                 physics_graph: None,
             },
         }
@@ -5905,6 +5907,7 @@ mod tests {
             provenance: ProvenancePlanIR {
                 notes: Vec::new(),
                 integrator_resolution: None,
+                fem_eigen_execution_resolution: None,
                 physics_graph: None,
             },
         }

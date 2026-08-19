@@ -1005,6 +1005,11 @@ def _extract_periodic_pairs(
                     "pair_id": pair_id,
                     "marker_a": marker_a,
                     "marker_b": marker_b,
+                    **(
+                        {"axis_hint": str(spec["axis_hint"])}
+                        if spec.get("axis_hint") is not None
+                        else {}
+                    ),
                     "translation": list(spec.get("translation", [0.0, 0.0, 0.0])),
                     "tolerance_m": float(spec.get("tolerance_m", 0.0)),
                 }
@@ -1026,6 +1031,25 @@ def _extract_periodic_pairs(
                 }
             )
 
+    # Gmsh does not guarantee the order of node correspondences returned by
+    # getPeriodicNodes().  Pair ordering is part of the MeshIR/topology
+    # fingerprint, so canonicalize it before the mesh crosses the Python
+    # boundary; otherwise identical CPU/GPU meshes acquire different
+    # certificates solely because they were generated in separate processes.
+    node_pairs.sort(
+        key=lambda pair: (
+            str(pair["pair_id"]),
+            int(pair["node_a"]),
+            int(pair["node_b"]),
+        )
+    )
+    boundary_pairs.sort(
+        key=lambda pair: (
+            str(pair["pair_id"]),
+            int(pair["marker_a"]),
+            int(pair["marker_b"]),
+        )
+    )
     return boundary_pairs, node_pairs
 
 

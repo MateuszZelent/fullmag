@@ -3,7 +3,7 @@
 use fullmag_ir::{FemMeshPartRole, FemMeshPartSelector, MeshQualityIR, StageCompletionIR};
 use serde::{de::Error as DeError, Deserialize, Deserializer, Serialize};
 use sha2::{Digest, Sha256};
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::HashMap;
 use std::fmt;
 use std::sync::atomic::AtomicBool;
 
@@ -90,6 +90,87 @@ pub struct RunResult {
     pub final_magnetization: Vec<[f64; 3]>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub completion: Option<StageCompletionIR>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct CertifiedFemEquilibriumFields {
+    pub schema_version: String,
+    pub h_ex_a_per_m: Vec<[f64; 3]>,
+    pub h_demag_a_per_m: Vec<[f64; 3]>,
+    pub h_ext_a_per_m: Vec<[f64; 3]>,
+    pub h_eff_a_per_m: Vec<[f64; 3]>,
+    pub phi_a: Vec<f64>,
+    pub content_sha256: String,
+}
+
+impl CertifiedFemEquilibriumFields {
+    pub fn from_fields(
+        h_ex_a_per_m: Vec<[f64; 3]>,
+        h_demag_a_per_m: Vec<[f64; 3]>,
+        h_ext_a_per_m: Vec<[f64; 3]>,
+        h_eff_a_per_m: Vec<[f64; 3]>,
+        phi_a: Vec<f64>,
+    ) -> Result<Self, RunError> {
+        let node_count = h_eff_a_per_m.len();
+        if node_count == 0
+            || h_ex_a_per_m.len() != node_count
+            || h_demag_a_per_m.len() != node_count
+            || h_ext_a_per_m.len() != node_count
+            || phi_a.len() != node_count
+            || [
+                &h_ex_a_per_m,
+                &h_demag_a_per_m,
+                &h_ext_a_per_m,
+                &h_eff_a_per_m,
+            ]
+            .into_iter()
+            .flat_map(|values| values.iter())
+            .flat_map(|value| value.iter())
+            .any(|value| !value.is_finite())
+            || phi_a.iter().any(|value| !value.is_finite())
+        {
+            return Err(RunError {
+                message: "certified FEM equilibrium fields are incomplete or non-finite"
+                    .to_string(),
+            });
+        }
+        let mut value = Self {
+            schema_version: "CertifiedFemEquilibriumFields.v1".to_string(),
+            h_ex_a_per_m,
+            h_demag_a_per_m,
+            h_ext_a_per_m,
+            h_eff_a_per_m,
+            phi_a,
+            content_sha256: String::new(),
+        };
+        value.content_sha256 = certified_equilibrium_fields_sha256(&value);
+        Ok(value)
+    }
+}
+
+pub(crate) fn certified_equilibrium_fields_sha256(
+    fields: &CertifiedFemEquilibriumFields,
+) -> String {
+    let mut hash = Sha256::new();
+    hash.update(b"CertifiedFemEquilibriumFields.v1\0");
+    for vectors in [
+        &fields.h_ex_a_per_m,
+        &fields.h_demag_a_per_m,
+        &fields.h_ext_a_per_m,
+        &fields.h_eff_a_per_m,
+    ] {
+        hash.update((vectors.len() as u64).to_le_bytes());
+        for vector in vectors {
+            for value in vector {
+                hash.update(value.to_bits().to_le_bytes());
+            }
+        }
+    }
+    hash.update((fields.phi_a.len() as u64).to_le_bytes());
+    for value in &fields.phi_a {
+        hash.update(value.to_bits().to_le_bytes());
+    }
+    format!("sha256:{:x}", hash.finalize())
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -2041,118 +2122,18 @@ fn digest_hex(bytes: &[u8]) -> String {
     out
 }
 
-fn normalized_payload_element_markers(
-    element_markers: &[u32],
-    magnetic_markers: Option<&BTreeSet<u32>>,
-) -> Vec<u32> {
-    if element_markers.is_empty() {
-        return Vec::new();
-    }
-
-    if let Some(magnetic_markers) = magnetic_markers {
-        return element_markers
-            .iter()
-            .map(|marker| u32::from(magnetic_markers.contains(marker)))
-            .collect();
-    }
-
-    let has_air = element_markers.contains(&0);
-    let has_magnetic = element_markers.iter().any(|marker| *marker != 0);
-    if has_air && has_magnetic {
-        element_markers
-            .iter()
-            .map(|marker| u32::from(*marker != 0))
-            .collect()
-    } else if element_markers
-        .first()
-        .is_some_and(|first| element_markers.iter().all(|marker| marker == first))
-    {
-        vec![1; element_markers.len()]
-    } else {
-        element_markers.to_vec()
-    }
-}
-
-fn stable_fem_mesh_generation_id(
-    mesh: &fullmag_ir::MeshIR,
-    element_markers: &[u32],
-    object_segments: &[fullmag_ir::FemObjectSegmentIR],
-    mesh_parts: &[fullmag_ir::FemMeshPartIR],
-    domain_mesh_mode: fullmag_ir::FemDomainMeshModeIR,
-    domain_frame: &Option<fullmag_ir::DomainFrameIR>,
-) -> String {
+fn stable_fem_mesh_generation_id(mesh: &fullmag_ir::MeshIR) -> String {
     #[cfg(test)]
     FEM_MESH_FINGERPRINT_COUNT.with(|count| count.set(count.get().saturating_add(1)));
-    let mut hasher = Sha256::new();
-    update_hash_bytes(&mut hasher, "schema", b"fullmag:fem-mesh-payload:v2");
-    update_hash_str(&mut hasher, "mesh_name", &mesh.mesh_name);
-    update_hash_nodes(&mut hasher, "nodes", &mesh.nodes);
-    update_hash_serialized(&mut hasher, "cells", &mesh.cells);
-    update_hash_u32_slice(&mut hasher, "element_markers", element_markers);
-    update_hash_serialized(&mut hasher, "facets", &mesh.facets);
-    update_hash_u32_slice(&mut hasher, "boundary_markers", &mesh.boundary_markers);
-    update_hash_serialized(
-        &mut hasher,
-        "periodic_boundary_pairs",
+    fullmag_ir::fem_mesh_topology_fingerprint_v2(
+        &mesh.nodes,
+        &mesh.cells,
+        &mesh.element_markers,
+        &mesh.facets,
+        &mesh.boundary_markers,
         &mesh.periodic_boundary_pairs,
-    );
-    update_hash_serialized(
-        &mut hasher,
-        "periodic_node_pairs",
         &mesh.periodic_node_pairs,
-    );
-    update_hash_serialized(&mut hasher, "object_segments", object_segments);
-    update_hash_serialized(&mut hasher, "mesh_parts", mesh_parts);
-    update_hash_str(
-        &mut hasher,
-        "domain_mesh_mode",
-        domain_mesh_mode_name(domain_mesh_mode),
-    );
-    update_hash_serialized(&mut hasher, "domain_frame", domain_frame);
-    let quality_by_marker = mesh
-        .per_domain_quality
-        .iter()
-        .map(|(marker, quality)| (*marker, quality))
-        .collect::<BTreeMap<_, _>>();
-    update_hash_serialized(&mut hasher, "per_domain_quality", &quality_by_marker);
-
-    let digest = hasher.finalize();
-    let mut revision_bytes = [0u8; 8];
-    revision_bytes.copy_from_slice(&digest[..8]);
-    u64::from_le_bytes(revision_bytes).to_string()
-}
-
-fn update_hash_str(hasher: &mut Sha256, label: &str, value: &str) {
-    update_hash_bytes(hasher, label, value.as_bytes());
-}
-
-fn update_hash_bytes(hasher: &mut Sha256, label: &str, value: &[u8]) {
-    hasher.update(label.as_bytes());
-    hasher.update((value.len() as u64).to_le_bytes());
-    hasher.update(value);
-}
-
-fn update_hash_nodes(hasher: &mut Sha256, label: &str, nodes: &[[f64; 3]]) {
-    hasher.update(label.as_bytes());
-    hasher.update((nodes.len() as u64).to_le_bytes());
-    for node in nodes {
-        for component in node {
-            hasher.update(component.to_bits().to_le_bytes());
-        }
-    }
-}
-
-fn update_hash_u32_slice(hasher: &mut Sha256, label: &str, values: &[u32]) {
-    hasher.update(label.as_bytes());
-    hasher.update((values.len() as u64).to_le_bytes());
-    for value in values {
-        hasher.update(value.to_le_bytes());
-    }
-}
-
-fn update_hash_serialized<T: Serialize + ?Sized>(hasher: &mut Sha256, label: &str, value: &T) {
-    let bytes = serde_json::to_vec(value).unwrap_or_default();
-    update_hash_bytes(hasher, label, &bytes);
+    )
 }
 
 impl FemMeshPayload {
@@ -2161,22 +2142,12 @@ impl FemMeshPayload {
         generation_id: String,
     ) -> Self {
         record_fem_mesh_payload_build();
-        let magnetic_markers = (!plan.region_materials.is_empty()).then(|| {
-            plan.region_materials
-                .iter()
-                .map(|region| region.element_marker)
-                .collect::<BTreeSet<_>>()
-        });
-        let element_markers = normalized_payload_element_markers(
-            &plan.mesh.element_markers,
-            magnetic_markers.as_ref(),
-        );
         Self {
             mesh_name: plan.mesh.mesh_name.clone(),
             mesh_id: format!("{}:{}", plan.mesh.mesh_name, generation_id),
             nodes: plan.mesh.nodes.clone(),
             cells: plan.mesh.cells.clone(),
-            element_markers,
+            element_markers: plan.mesh.element_markers.clone(),
             facets: plan.mesh.facets.clone(),
             boundary_markers: plan.mesh.boundary_markers.clone(),
             periodic_boundary_pairs: plan.mesh.periodic_boundary_pairs.clone(),
@@ -2243,22 +2214,7 @@ impl From<&fullmag_ir::FemPlanIR> for FemMeshPayload {
 }
 
 pub fn fem_plan_mesh_generation_id(plan: &fullmag_ir::FemPlanIR) -> String {
-    let magnetic_markers = (!plan.region_materials.is_empty()).then(|| {
-        plan.region_materials
-            .iter()
-            .map(|region| region.element_marker)
-            .collect::<BTreeSet<_>>()
-    });
-    let element_markers =
-        normalized_payload_element_markers(&plan.mesh.element_markers, magnetic_markers.as_ref());
-    stable_fem_mesh_generation_id(
-        &plan.mesh,
-        &element_markers,
-        &plan.object_segments,
-        &plan.mesh_parts,
-        plan.domain_mesh_mode,
-        &plan.domain_frame,
-    )
+    stable_fem_mesh_generation_id(&plan.mesh)
 }
 
 impl From<&fullmag_ir::FemEigenPlanIR> for FemMeshPayload {
@@ -2273,13 +2229,12 @@ impl FemMeshPayload {
         generation_id: String,
     ) -> Self {
         record_fem_mesh_payload_build();
-        let element_markers = normalized_payload_element_markers(&plan.mesh.element_markers, None);
         Self {
             mesh_name: plan.mesh.mesh_name.clone(),
             mesh_id: format!("{}:{}", plan.mesh.mesh_name, generation_id),
             nodes: plan.mesh.nodes.clone(),
             cells: plan.mesh.cells.clone(),
-            element_markers,
+            element_markers: plan.mesh.element_markers.clone(),
             facets: plan.mesh.facets.clone(),
             boundary_markers: plan.mesh.boundary_markers.clone(),
             periodic_boundary_pairs: plan.mesh.periodic_boundary_pairs.clone(),
@@ -2329,15 +2284,7 @@ impl StageFemMeshAsset {
 }
 
 pub fn fem_eigen_mesh_generation_id(plan: &fullmag_ir::FemEigenPlanIR) -> String {
-    let element_markers = normalized_payload_element_markers(&plan.mesh.element_markers, None);
-    stable_fem_mesh_generation_id(
-        &plan.mesh,
-        &element_markers,
-        &plan.object_segments,
-        &plan.mesh_parts,
-        plan.domain_mesh_mode,
-        &plan.domain_frame,
-    )
+    stable_fem_mesh_generation_id(&plan.mesh)
 }
 
 impl From<&fullmag_ir::FemFrequencyResponsePlanIR> for FemMeshPayload {
@@ -2352,13 +2299,12 @@ impl FemMeshPayload {
         generation_id: String,
     ) -> Self {
         record_fem_mesh_payload_build();
-        let element_markers = normalized_payload_element_markers(&plan.mesh.element_markers, None);
         Self {
             mesh_name: plan.mesh.mesh_name.clone(),
             mesh_id: format!("{}:{}", plan.mesh.mesh_name, generation_id),
             nodes: plan.mesh.nodes.clone(),
             cells: plan.mesh.cells.clone(),
-            element_markers,
+            element_markers: plan.mesh.element_markers.clone(),
             facets: plan.mesh.facets.clone(),
             boundary_markers: plan.mesh.boundary_markers.clone(),
             periodic_boundary_pairs: plan.mesh.periodic_boundary_pairs.clone(),
@@ -2412,15 +2358,7 @@ impl StageFemMeshAsset {
 pub fn fem_frequency_response_mesh_generation_id(
     plan: &fullmag_ir::FemFrequencyResponsePlanIR,
 ) -> String {
-    let element_markers = normalized_payload_element_markers(&plan.mesh.element_markers, None);
-    stable_fem_mesh_generation_id(
-        &plan.mesh,
-        &element_markers,
-        &plan.object_segments,
-        &plan.mesh_parts,
-        plan.domain_mesh_mode,
-        &plan.domain_frame,
-    )
+    stable_fem_mesh_generation_id(&plan.mesh)
 }
 
 impl From<&fullmag_ir::FemMeshPartIR> for FemMeshPartPayload {
@@ -3449,8 +3387,9 @@ pub(crate) struct StateObservables {
 #[cfg(test)]
 mod tests {
     use super::{
+        fem_eigen_mesh_generation_id, fem_frequency_response_mesh_generation_id,
         fem_mesh_fingerprint_count, fem_mesh_payload_build_count, fem_mesh_topology_fingerprint,
-        normalized_payload_element_markers, reset_fem_mesh_fingerprint_count,
+        fem_plan_mesh_generation_id, reset_fem_mesh_fingerprint_count,
         reset_fem_mesh_payload_build_count, ExecutionProvenance, FemMeshPartPayload,
         FemMeshPayload, FemPoissonDemagProvenance, InitialTimestepReason, LegacyDtPolicy,
         LivePreviewField, LlgTimestepCapabilityId, LlgTimestepQualificationId,
@@ -3462,7 +3401,6 @@ mod tests {
         ExchangeBoundaryCondition, ExecutionPrecision, FemDomainMeshModeIR, FemMeshPartIR,
         FemMeshPartRole, FemMeshPartSelector, FemPlanIR, IntegratorChoice, MaterialIR, MeshIR,
     };
-    use std::collections::BTreeSet;
 
     fn fdm_cpu_timestep_identity() -> TimestepExecutionIdentity {
         TimestepExecutionIdentity {
@@ -3597,6 +3535,154 @@ mod tests {
             mfem_device_string: None,
             use_consistent_mass: None,
         }
+    }
+
+    fn tiny_fem_eigen_plan(plan: &FemPlanIR) -> fullmag_ir::FemEigenPlanIR {
+        fullmag_ir::FemEigenPlanIR {
+            mesh_name: plan.mesh_name.clone(),
+            mesh_source: plan.mesh_source.clone(),
+            mesh: plan.mesh.clone(),
+            object_segments: plan.object_segments.clone(),
+            mesh_parts: plan.mesh_parts.clone(),
+            mesh_build_report: plan.mesh_build_report.clone(),
+            domain_mesh_mode: plan.domain_mesh_mode,
+            domain_frame: plan.domain_frame.clone(),
+            fe_order: plan.fe_order,
+            hmax: plan.hmax,
+            equilibrium_magnetization: plan.initial_magnetization.clone(),
+            material: plan.material.clone(),
+            operator: fullmag_ir::EigenOperatorConfigIR {
+                kind: fullmag_ir::EigenOperatorIR::LinearizedLlg,
+                include_demag: false,
+            },
+            count: 1,
+            target: fullmag_ir::EigenTargetIR::Lowest,
+            equilibrium: fullmag_ir::EquilibriumSourceIR::Provided,
+            k_sampling: None,
+            bias_field_samples: Vec::new(),
+            normalization: fullmag_ir::EigenNormalizationIR::UnitL2,
+            damping_policy: fullmag_ir::EigenDampingPolicyIR::Ignore,
+            enable_exchange: true,
+            enable_demag: false,
+            interfacial_dmi: None,
+            dmi_interface_normal: None,
+            bulk_dmi: None,
+            external_field: None,
+            gyromagnetic_ratio: plan.gyromagnetic_ratio,
+            precision: plan.precision,
+            exchange_bc: plan.exchange_bc,
+            spin_wave_bc: fullmag_ir::SpinWaveBoundaryConditionIR::default(),
+            demag_realization: None,
+            air_box_config: None,
+            mode_tracking: None,
+            dispersion_validation: None,
+            k0_kittel_validation: None,
+        }
+    }
+
+    fn tiny_fem_frequency_response_plan(
+        plan: &FemPlanIR,
+    ) -> fullmag_ir::FemFrequencyResponsePlanIR {
+        fullmag_ir::FemFrequencyResponsePlanIR {
+            mesh_name: plan.mesh_name.clone(),
+            mesh_source: plan.mesh_source.clone(),
+            mesh: plan.mesh.clone(),
+            object_segments: plan.object_segments.clone(),
+            mesh_parts: plan.mesh_parts.clone(),
+            mesh_build_report: plan.mesh_build_report.clone(),
+            domain_mesh_mode: plan.domain_mesh_mode,
+            domain_mesh_workflow_mode: None,
+            domain_frame: plan.domain_frame.clone(),
+            fe_order: plan.fe_order,
+            hmax: plan.hmax,
+            equilibrium_magnetization: plan.initial_magnetization.clone(),
+            material: plan.material.clone(),
+            operator: fullmag_ir::EigenOperatorConfigIR {
+                kind: fullmag_ir::EigenOperatorIR::LinearizedLlg,
+                include_demag: false,
+            },
+            equilibrium: fullmag_ir::EquilibriumSourceIR::Provided,
+            k_sampling: None,
+            normalization: fullmag_ir::FrequencyResponseNormalizationIR::UnitMaxAmplitude,
+            damping_policy: fullmag_ir::EigenDampingPolicyIR::Include,
+            spin_wave_bc: fullmag_ir::SpinWaveBoundaryConditionIR::default(),
+            magnetostatic_bc: fullmag_ir::MagnetostaticBoundaryConditionIR::default(),
+            excitation: fullmag_ir::FrequencyExcitationIR {
+                field_au_per_m: [0.0, 0.0, 1.0],
+                phase_rad: 0.0,
+            },
+            frequencies_hz: fullmag_ir::FrequencySweepIR {
+                values_hz: vec![1.0e9],
+            },
+            solver_policy: None,
+            enable_exchange: true,
+            enable_demag: false,
+            interfacial_dmi: None,
+            dmi_interface_normal: None,
+            bulk_dmi: None,
+            external_field: None,
+            gyromagnetic_ratio: plan.gyromagnetic_ratio,
+            precision: plan.precision,
+            requested_device: fullmag_ir::ExecutionDevice::Cpu,
+            exchange_bc: plan.exchange_bc,
+            demag_realization: None,
+            air_box_config: None,
+            demag_solver_policy: None,
+            periodic_constraint_sets: Vec::new(),
+            equilibrium_provenance: None,
+        }
+    }
+
+    #[test]
+    fn fem_plan_families_share_full_topology_sha256_identity() {
+        let mut time_domain = tiny_fem_plan();
+        time_domain
+            .mesh
+            .set_tet4_cells(vec![[0, 1, 2, 3], [0, 2, 1, 3]]);
+        time_domain.mesh.element_markers = vec![7, 9];
+        time_domain.region_materials = vec![
+            fullmag_ir::FemRegionMaterialIR {
+                object_id: "film-left".to_string(),
+                material: time_domain.material.clone(),
+                element_marker: 7,
+            },
+            fullmag_ir::FemRegionMaterialIR {
+                object_id: "film-right".to_string(),
+                material: time_domain.material.clone(),
+                element_marker: 9,
+            },
+        ];
+        let modal = tiny_fem_eigen_plan(&time_domain);
+        let driven = tiny_fem_frequency_response_plan(&time_domain);
+        let canonical = fullmag_ir::fem_mesh_topology_fingerprint_v2(
+            &time_domain.mesh.nodes,
+            &time_domain.mesh.cells,
+            &time_domain.mesh.element_markers,
+            &time_domain.mesh.facets,
+            &time_domain.mesh.boundary_markers,
+            &time_domain.mesh.periodic_boundary_pairs,
+            &time_domain.mesh.periodic_node_pairs,
+        );
+
+        assert_eq!(fem_plan_mesh_generation_id(&time_domain), canonical);
+        assert_eq!(fem_eigen_mesh_generation_id(&modal), canonical);
+        assert_eq!(
+            fem_frequency_response_mesh_generation_id(&driven),
+            canonical
+        );
+
+        let time_domain_payload = FemMeshPayload::from(&time_domain);
+        let modal_payload = FemMeshPayload::from(&modal);
+        let driven_payload = FemMeshPayload::from(&driven);
+        assert_eq!(time_domain_payload.element_markers, vec![7, 9]);
+        assert_eq!(modal_payload.element_markers, vec![7, 9]);
+        assert_eq!(driven_payload.element_markers, vec![7, 9]);
+        assert_eq!(
+            fem_mesh_topology_fingerprint(&time_domain_payload),
+            canonical
+        );
+        assert_eq!(fem_mesh_topology_fingerprint(&modal_payload), canonical);
+        assert_eq!(fem_mesh_topology_fingerprint(&driven_payload), canonical);
     }
 
     #[test]
@@ -3774,31 +3860,6 @@ mod tests {
         assert_eq!(
             fem_mesh_topology_fingerprint(&base),
             fem_mesh_topology_fingerprint(&repartitioned)
-        );
-    }
-
-    #[test]
-    fn normalized_payload_markers_use_region_material_contract_when_available() {
-        let magnetic_markers = [7u32].into_iter().collect::<BTreeSet<_>>();
-        assert_eq!(
-            normalized_payload_element_markers(&[7, 99, 0], Some(&magnetic_markers)),
-            vec![1, 0, 0]
-        );
-    }
-
-    #[test]
-    fn normalized_payload_markers_preserve_simple_air_split_without_region_materials() {
-        assert_eq!(
-            normalized_payload_element_markers(&[2, 0], None),
-            vec![1, 0]
-        );
-    }
-
-    #[test]
-    fn normalized_payload_markers_treat_uniform_marker_mesh_as_fully_magnetic() {
-        assert_eq!(
-            normalized_payload_element_markers(&[5, 5], None),
-            vec![1, 1]
         );
     }
 

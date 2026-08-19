@@ -162,12 +162,14 @@ set(FEM_SOURCES
     cpu/mfem/runtime/step_metrics.cpp
     cpu/frequency_domain/dense_poisson_airbox_eigen_oracle.cpp
     cpu/frequency_domain/floquet_bloch_scalar.cpp
+    cpu/frequency_domain/operators/poisson_airbox_shared_domain.cpp
     cpu/frequency_domain/poisson_airbox_modal_eigen.cpp
     cpu/frequency_domain/poisson_airbox_schur_matshell.cpp
     cpu/frequency_domain/dense_driven_response.cpp
     cpu/frequency_domain/modal_response.cpp
     cpu/frequency_domain/engines/field_split/full_coupled_field_split_engine.cpp
     cpu/frequency_domain/engines/sparse_direct/assemble_real_split_csr.cpp
+    src/frequency_domain/real_frequency_rotated_pencil.cpp
     cpu/frequency_domain/engines/sparse_direct/cpu_sparse_direct_engine.cpp
     cpu/frequency_domain/contour_interval_solver.cpp
     cpu/frequency_domain/contour_quadrature.cpp
@@ -179,6 +181,7 @@ set(FEM_SOURCES
     cpu/frequency_domain/slepc_modal_eigen.cpp
     cpu/frequency_domain/spectral_transform.cpp
     gpu/cuda/demag_poisson/hypre_device_solver.cpp
+    gpu/cuda/runtime/hypre_device_policy.cpp
     gpu/cuda/demag_poisson/operators.cpp
     gpu/cuda/demag_poisson/poisson.cpp
     gpu/cuda/demag_poisson/stage_compute.cpp
@@ -235,6 +238,7 @@ if(FULLMAG_USE_MFEM_STACK)
             gpu/cuda/exchange/exchange_kernels.cu
             gpu/cuda/fields/vector_field_kernels.cu
             gpu/cuda/frequency_domain/driven_response_gpu.cu
+            gpu/cuda/frequency_domain/modal_krylov.cu
             gpu/cuda/integrators/llg/llg_rhs_kernels.cu
             gpu/cuda/integrators/rk/adaptive_error_kernels.cu
             gpu/cuda/integrators/rk/heun_stage_sequence.cu
@@ -302,6 +306,12 @@ if(FULLMAG_USE_MFEM_STACK)
             gpu/cuda/transfer/transfer_kernels.cu
             gpu/cuda/integrators/rk/rk_step.cu
         )
+        if(FULLMAG_FEM_WITH_SLEPC)
+            # The GPU modal lane calls PETSc/SLEPc directly.  Keep it out of
+            # demag-only builds, whose contract intentionally disables the
+            # PETSc/SLEPc dependency slice.
+            list(APPEND FEM_SOURCES gpu/frequency_domain/modal_petsc_slepc.cpp)
+        endif()
     endif()
 endif()
 
@@ -801,6 +811,10 @@ add_fem_source_facade_contract(
     tests/frequency_domain/linearized_dynamic_pencil_test.cpp
 )
 add_fem_source_facade_contract(
+    fem_real_frequency_rotated_pencil_contract
+    tests/frequency_domain/real_frequency_rotated_pencil_test.cpp
+)
+add_fem_source_facade_contract(
     fem_operator_contract
     tests/frequency_domain/operator_contract_test.cpp
 )
@@ -817,13 +831,94 @@ add_fem_source_facade_contract(
     tests/frequency_domain/poisson_airbox_modal_eigen_slepc_test.cpp
 )
 add_fem_source_facade_contract(
+    fem_poisson_airbox_real_split_cpu_contract
+    tests/frequency_domain/poisson_airbox_real_split_cpu_test.cpp
+)
+add_fem_source_facade_contract(
     fem_poisson_airbox_schur_matshell_contract
     tests/frequency_domain/poisson_airbox_schur_matshell_test.cpp
 )
+if(FULLMAG_USE_MFEM_STACK AND FULLMAG_ENABLE_CUDA AND FULLMAG_FEM_WITH_SLEPC)
+    find_package(MPI REQUIRED COMPONENTS CXX)
+    add_executable(
+        fem_gpu_petsc_slepc_runtime_contract
+        tests/frequency_domain/gpu_petsc_slepc_runtime_test.cpp
+    )
+    target_link_libraries(
+        fem_gpu_petsc_slepc_runtime_contract
+        PRIVATE
+            PETSC::petsc
+            SLEPC::slepc
+            MPI::MPI_CXX
+    )
+    add_test(
+        NAME fem_gpu_petsc_slepc_runtime_contract
+        COMMAND fem_gpu_petsc_slepc_runtime_contract
+    )
+    add_executable(
+        fem_gpu_k0_modal_petsc_slepc_contract
+        tests/frequency_domain/gpu_k0_modal_petsc_slepc_test.cpp
+    )
+    target_link_libraries(
+        fem_gpu_k0_modal_petsc_slepc_contract
+        PRIVATE
+            fullmag_fem
+            PETSC::petsc
+            SLEPC::slepc
+            MPI::MPI_CXX
+    )
+    target_include_directories(
+        fem_gpu_k0_modal_petsc_slepc_contract
+        PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}
+            ${CMAKE_CURRENT_SOURCE_DIR}/include
+    )
+    add_test(
+        NAME fem_gpu_k0_modal_petsc_slepc_contract
+        COMMAND fem_gpu_k0_modal_petsc_slepc_contract
+    )
+    add_executable(
+        fem_gpu_hypre_device_policy_contract
+        tests/frequency_domain/gpu_hypre_device_policy_test.cpp
+    )
+    target_link_libraries(
+        fem_gpu_hypre_device_policy_contract
+        PRIVATE
+            fullmag_fem
+            PETSC::petsc
+            SLEPC::slepc
+            MPI::MPI_CXX
+    )
+    target_include_directories(
+        fem_gpu_hypre_device_policy_contract
+        PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}
+            ${CMAKE_CURRENT_SOURCE_DIR}/include
+    )
+    add_test(
+        NAME fem_gpu_hypre_device_policy_contract
+        COMMAND fem_gpu_hypre_device_policy_contract
+    )
+endif()
 add_fem_source_facade_contract(
     fem_floquet_bloch_scalar_contract
     tests/frequency_domain/floquet_bloch_scalar_test.cpp
 )
+add_fem_source_facade_contract(
+    fem_poisson_airbox_shared_domain_contract
+    tests/frequency_domain/poisson_airbox_shared_domain_test.cpp
+)
+add_fem_source_facade_contract(
+    fem_mesh_symmetry_certificate_v6_contract
+    tests/frequency_domain/mesh_symmetry_certificate_v6_test.cpp
+)
+if(FULLMAG_USE_MFEM_STACK)
+    if(TARGET MFEM::mfem)
+        target_link_libraries(fem_poisson_airbox_shared_domain_contract PRIVATE MFEM::mfem)
+    else()
+        target_link_libraries(fem_poisson_airbox_shared_domain_contract PRIVATE mfem)
+    endif()
+endif()
 if(FULLMAG_USE_MFEM_STACK)
     if(TARGET MFEM::mfem)
         target_link_libraries(fem_floquet_bloch_scalar_contract PRIVATE MFEM::mfem)

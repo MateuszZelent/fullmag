@@ -27,6 +27,12 @@ int context_copy_field_f64(
     double *out_xyz,
     uint64_t out_len,
     std::string &error);
+int context_copy_linearization_field_f64(
+    const Context &ctx,
+    fullmag_fem_observable observable,
+    double *out_xyz,
+    uint64_t out_len,
+    std::string &error);
 int context_upload_magnetization_f64(
     Context &ctx,
     const double *m_xyz,

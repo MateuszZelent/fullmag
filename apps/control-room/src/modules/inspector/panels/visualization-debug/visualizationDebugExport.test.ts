@@ -1,5 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 
+import { DATA_FIELD_VECTOR_PATH } from "@/kernel/api/apiPaths";
+import { fieldVectorResourceKey } from "@/kernel/api/fieldQueryIdentity";
+
 import type { VisualizationDebugPanelModel } from "./VisualizationDebugPanelModel";
 import {
   MAX_VISUALIZATION_DEBUG_EXPORT_BYTES,
@@ -106,9 +109,12 @@ describe("visualization debug evidence export", () => {
   });
 
   it("builds a readable bounded log with the exact transport evidence", () => {
-    const model = exportModel(
-      "/v2/sessions/current/data/fields/H_eff/samples/vector?component=full&scope_kind=airbox",
-    );
+    const fieldPath = DATA_FIELD_VECTOR_PATH.replace("{quantity_id}", "H_eff");
+    const resourceKey = fieldVectorResourceKey("H_eff", {
+      component: "full",
+      scope_kind: "airbox",
+    });
+    const model = exportModel(resourceKey);
     model.transport = [
       {
         byteLength: 0,
@@ -122,9 +128,9 @@ describe("visualization debug evidence export", () => {
         messageType: null,
         method: "GET",
         outcome: "error",
-        path: "/v2/sessions/current/data/fields/H_eff/samples/vector",
+        path: fieldPath,
         requestId: "request-1",
-        resourceKey: "/v2/sessions/current/data/fields/H_eff/samples/vector?component=full&scope_kind=airbox",
+        resourceKey,
         status: 200,
         timestampMs: 1_234,
       },

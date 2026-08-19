@@ -155,7 +155,7 @@ or short dashboard summaries, but must not copy full read-model payloads from an
 | `model/geometry/*` | geometry capability, validation, realization, and diagnostic projections derived from the current scene |
 | `simulation/runs/current` and `simulation/runs/{run_id}` | run metadata, requested/resolved execution, artifact location, run-level totals |
 | `simulation/preparation` | bounded startup preparation aggregate: canonical stage order/status, current progress, stage timing, requested/resolved execution summaries, safe log tail, and safe failure correlation |
-| `simulation/stages/execution` | full stage tree and stage state, including tolerance-qualified completion duration |
+| `simulation/stages/execution` | full stage tree and stage state, including tolerance-qualified completion duration and optional stage-owned mesh generation, topology fingerprint, and mesh revision identity; missing legacy identity remains unknown and is never synthesized from mesh names or element counts |
 | `simulation/solver/status` | live solver state: runtime state, algorithm, step, algorithm-appropriate `dt`, exact torque, separate RHS norm, convergence, stop reason/metric/unit, warnings |
 | `diagnostics/solver-profile` | opt-in bounded phase profile plus explicit solver, end-to-end, and successful-publication rate objects |
 | `simulation/solver/energies/*` | current and historical energy samples |

@@ -482,6 +482,31 @@ Evidence from another physical signature, precision, device, product, k scope,
 demag realization or solver engine is stale for this record even if its files
 are newer.
 
+### 3.4 `verifier` execution proof
+
+A declared verifier identity and `result = pass` are not evidence that a gate
+was executed. Every passing `item_evidence.<gate_id>` therefore carries a
+closed execution proof with exactly these fields:
+
+| Field | Type and constraint |
+|---|---|
+| `id`, `version` | non-empty verifier identifiers |
+| `result` | literal `pass` |
+| `command` | non-empty argv array of strings |
+| `exit_code` | integer `0` |
+| `stdout_path`, `stderr_path` | regular files inside the immutable bundle |
+| `stdout_sha256`, `stderr_sha256` | SHA-256 digests of those exact files |
+| `executed_at` | RFC3339 UTC timestamp |
+| `scope_id` | exact `validated_scope` identifier |
+| `scope_catalog_sha256` | exact catalog digest in the promotion record |
+| `runtime_fullmag_commit`, `runtime_build_id` | exact runtime identity from `validated_scope.runtime_scope` |
+
+The stdout and stderr files must themselves have deterministic
+`validation_artifact_manifest.v1` sidecars bound to the same scope. The
+fail-closed validator checks the hashes, sidecars, scope/catalog identity and
+runtime identity before consuming metrics. A manifest containing only copied
+metrics or a verifier name/result cannot promote a readiness cell.
+
 ## 4. Product checklist
 
 | DoD item | Required exact-scope evidence | Pass condition | Does not satisfy the item |
@@ -497,8 +522,8 @@ are newer.
 | DOD-09 Artifacts/OpenAPI/UI | Complete artifacts-v2 bundle, typed OpenAPI/resource exposure and UI state for complete/partial/failed/unavailable outcomes | Cross-artifact hashes, sidecar manifests for CSV/Zarr/non-object evidence, scope catalog digest, units, revisions, requested/resolved state, accepted `verified_coverage_of` binding, and resource links agree; UI cannot overstate capability | Abbreviated scope tuple, untyped coverage claim, opaque scope hash without a verified catalog, CSV/Zarr/raw files without `validation_artifact_manifest.v1`, UI claim inferred from route presence, or JSON carrying heavy payloads outside the data plane |
 | DOD-10 Analytical validation | Applicable chapter 09 independent physics gate: Larmor/Kittel, ellipsoid, DE/BV, modal/driven resonance or another physics-note oracle | Production tolerance passes after solve and after independent selection; for K0-3, fixture-owned independently provenanced `M_eff_reference`, fitted-`M_eff` agreement, uncertainty and conditioning all pass; oracle inputs never enter assembly/request target/selection/certificate/solver status | Best-fit-only agreement, solver-derived `M_eff_reference`, nearest-expected mode selection, synthetic operator built from the answer, or fast CI subset |
 | DOD-11 Convergence | Raw distinct mesh and truncation sequences plus solver tolerance evidence | At least three levels per applicable dimension; monotonicity/asymptotic fit, observed order where applicable, Richardson/finest-two delta and separate frequency and fitted-`M_eff` budgets pass | Best row only, duplicated synthetic rows, simultaneous mesh/padding changes without independent sequences, or analytical values copied as solved rows |
-| DOD-12 CPU/GPU parity | For GPU: exact qualified CPU oracle and chapter 09 operator/solver/physics parity; for CPU-only: explicit `not_applicable` reason excluding GPU | GPU blocks, modes/responses, residuals and accepted/rejected outcomes pass production tolerances on identical signatures | No-demag macrospin parity used for demag, CPU result copied into GPU artifacts, or precision mismatch |
-| DOD-13 Performance/residency | Raw performance envelope, memory scaling and, for GPU, independent transfer/residency audit | Bounded release performance passes; GPU hot loop, vectors, basis, operator and preconditioner are device-resident with zero per-iteration H2D/D2H and hidden host solves | One-shot GPU kernel, device matrix with host Krylov, unbounded workload, or timing without environment identity |
+| DOD-12 CPU/GPU parity | For GPU: exact qualified CPU oracle and chapter 09 operator/solver/physics parity; for CPU-only: explicit `not_applicable` reason excluding GPU | GPU blocks, modes/responses, residuals and accepted/rejected outcomes pass production tolerances on an exact lane-independent `operator_input_signature_sha256`; independently materialized CPU/GPU v6 equilibrium states agree within the explicit physical state tolerance, while lane-specific provenance hashes remain bound and validated | No-demag macrospin parity used for demag, CPU result copied into GPU artifacts, bitwise comparison of independent floating-point state hashes as a substitute for state tolerance, or precision mismatch |
+| DOD-13 Performance/residency | Raw performance envelope, memory scaling and, for GPU, independent transfer/residency audit plus managed execution proof | Bounded release performance passes; GPU hot loop, vectors, basis, operator and preconditioner are device-resident with zero per-iteration H2D/D2H and hidden host solves, and the exact managed command's stdout/stderr and runtime/source identity are hash-bound | One-shot GPU kernel, device matrix with host Krylov, unbounded workload, copied timing rows, or timing without environment identity |
 | DOD-14 Release regression | Managed/container-backed release gate and immutable regression bundle for the exact scope | All applicable DoD validators run from a clean release candidate, expected negative controls fail, and accepted baselines are versioned | Host-only check, docs-only assertion, stale artifact, skipped negative control or unrelated lane's managed gate |
 
 ## 5. Product-specific applicability
@@ -602,9 +627,9 @@ Current source and canonical physics/status documents identify blockers that
 prevent broad FEM frequency-domain production qualification, including:
 
 - real shared-domain Poisson-airbox modal assembly is not yet qualified;
-- the current Kittel path allows expected frequency and validation `M_eff` to
-  influence assembly, targeting, selection or solver certification as detailed
-  in chapter 15;
+- source now separates physical `BiasFieldSweepIR` from postsolve Kittel
+  metadata and fails closed on oracle influence, but fresh managed
+  negative-control and K0-3 convergence evidence is still missing;
 - real-PETSc imaginary-axis target representation is not yet broadly
   qualified;
 - general GPU modal device Krylov and device-resident driven Krylov are not

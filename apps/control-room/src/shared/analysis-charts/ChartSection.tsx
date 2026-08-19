@@ -7,6 +7,7 @@ import {
   type ChartScientificTrust,
 } from "./chartScientificTrust";
 import type { ChartDataPresentationState } from "./chartPresentationState";
+import type { ChartSeriesSourceIdentity } from "@/shared/domain/analysis/chartSeries";
 
 export type { ChartScientificTrust } from "./chartScientificTrust";
 
@@ -27,6 +28,8 @@ export interface ChartSectionStatus {
   pointSummary?: string;
   /** Resource presentation state, independent from scientific trust. */
   presentation?: ChartDataPresentationState;
+  /** Typed artifact and resolved-execution identity shown beside chart status. */
+  sourceIdentity?: ChartSeriesSourceIdentity;
 }
 
 interface ChartSectionProps {
@@ -131,6 +134,20 @@ export function ChartSection({
             {displayedStatus.detail ? (
               <span className="fm-chart-section__status-detail">
                 {displayedStatus.detail}
+              </span>
+            ) : null}
+            {status?.sourceIdentity ? (
+              <span className="fm-chart-section__source-identity">
+                Artifact: {status.sourceIdentity.artifactPath ?? "unknown"}
+                {" · "}Schema: {status.sourceIdentity.schemaVersion ?? "unknown"}
+                {" · "}Digest: {status.sourceIdentity.contentDigest ?? "unknown"}
+                {" · "}Run: {status.sourceIdentity.runId ?? "unknown"}
+                {" · "}Stage: {status.sourceIdentity.stageId ?? "unknown"}
+                {" · "}Backend: {status.sourceIdentity.backend ?? "unknown"}
+                {" · "}Device: {status.sourceIdentity.device ?? "unknown"}
+                {" · "}Precision: {status.sourceIdentity.precision ?? "unknown"}
+                {" · "}Qualification: {status.sourceIdentity.qualification}
+                {" · "}Provenance: {status.sourceIdentity.provenance ?? "unknown"}
               </span>
             ) : null}
           </div>

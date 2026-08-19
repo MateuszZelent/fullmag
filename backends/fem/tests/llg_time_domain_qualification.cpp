@@ -128,7 +128,9 @@ fullmag_fem_plan_desc base_plan(
     plan.hmax = kEdge;
     plan.precision = FULLMAG_FEM_PRECISION_DOUBLE;
     plan.integrator = integrator;
-    plan.enable_exchange = g_use_gpu ? 1 : 0;
+    // CPU and GPU parity must exercise the same physical Hamiltonian.  The
+    // device lane is not a valid comparator when exchange is omitted on CPU.
+    plan.enable_exchange = 1;
     plan.initial_magnetization_xyz = initial_m.data();
     plan.initial_magnetization_len = initial_m.size();
     plan.dt_seconds = dt;
@@ -669,6 +671,7 @@ struct RelaxToRunResult {
     double energy_budget_j = 0.0;
     double demag_residual = 0.0;
     double accepted_dt = 0.0;
+    std::vector<double> handoff_m;
     std::vector<double> endpoint_m;
     std::vector<fullmag_fem_solver_attempt_record_v1> attempts;
     bool trace_replay_exact = false;
@@ -701,8 +704,12 @@ RelaxToRunResult execute_relax_to_run_once()
     plan.demag_solver.solver = FULLMAG_FEM_LINEAR_SOLVER_GMRES;
     plan.demag_solver.preconditioner = FULLMAG_FEM_PRECONDITIONER_JACOBI;
     plan.demag_solver.relative_tolerance = 1.0e-11;
-    plan.demag_solver.has_absolute_tolerance = 1;
-    plan.demag_solver.absolute_tolerance = 1.0e-14;
+    // The production LLG qualification is relative-residual based.  An
+    // absolute stop at 1e-14 is valid for the tiny Poisson RHS, but it would
+    // leave the published relative residual above the gate budget and make
+    // the qualification assert a different contract than the runtime stats.
+    plan.demag_solver.has_absolute_tolerance = 0;
+    plan.demag_solver.absolute_tolerance = 0.0;
     plan.demag_solver.max_iterations = 500;
     plan.relax_stop.has_torque_tolerance_apm = 1;
     plan.relax_stop.torque_tolerance_apm = 80.0;
@@ -857,6 +864,7 @@ RelaxToRunResult execute_relax_to_run_once()
         energy_budget,
         run_stats.demag_linear_residual,
         run_stats.dt_seconds,
+        handed_off_m,
         endpoint_m,
         attempts,
         false,
@@ -917,6 +925,14 @@ RelaxToRunResult qualify_relax_to_run()
         result.state_replay_max_abs_error = std::max(
             result.state_replay_max_abs_error,
             std::abs(result.endpoint_m[i] - replay.endpoint_m[i]));
+    }
+    require(
+        result.handoff_m.size() == replay.handoff_m.size(),
+        "relax-to-run replay handoff shape changed");
+    for (size_t i = 0; i < result.handoff_m.size(); ++i) {
+        result.state_replay_max_abs_error = std::max(
+            result.state_replay_max_abs_error,
+            std::abs(result.handoff_m[i] - replay.handoff_m[i]));
     }
     result.demag_residual_replay_abs_error =
         std::abs(result.demag_residual - replay.demag_residual);
@@ -1070,6 +1086,14 @@ void write_partial_artifact(
          << "    \"energy_budget_j\": " << json_number(relax_to_run.energy_budget_j) << ",\n"
          << "    \"demag_residual\": " << json_number(relax_to_run.demag_residual) << ",\n"
          << "    \"accepted_dt_s\": " << json_number(relax_to_run.accepted_dt) << ",\n"
+         << "    \"handoff_m\": [";
+    for (size_t i = 0; i < relax_to_run.handoff_m.size(); ++i) {
+        file << json_number(relax_to_run.handoff_m[i]);
+        if (i + 1 != relax_to_run.handoff_m.size()) {
+            file << ", ";
+        }
+    }
+    file << "],\n"
          << "    \"endpoint_m\": [";
     for (size_t i = 0; i < relax_to_run.endpoint_m.size(); ++i) {
         file << json_number(relax_to_run.endpoint_m[i]);
