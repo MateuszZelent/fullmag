@@ -189,6 +189,10 @@ mod tests {
                     amplitude: Some(vec![1.0]),
                     phase: Some(vec![0.0]),
                     node_mass_weights: None,
+                    component_participation:
+                        crate::eigen::ModalParticipationObservable::unavailable_without_context(
+                            "cpu",
+                        ),
                 }],
                 relaxation_steps: 0,
                 solver_model: EigenSolverModel::ReferenceScalarTangent,
@@ -360,6 +364,10 @@ mod tests {
                     amplitude: Some(vec![1.0]),
                     phase: Some(vec![0.0]),
                     node_mass_weights: None,
+                    component_participation:
+                        crate::eigen::ModalParticipationObservable::unavailable_without_context(
+                            "cpu",
+                        ),
                 }],
                 relaxation_steps: 0,
                 solver_model: self.models[sample.sample_index],

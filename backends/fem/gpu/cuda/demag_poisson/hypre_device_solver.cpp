@@ -15,6 +15,7 @@
 #include "cpu/mfem/interactions/demag_poisson_periodic.hpp"
 #include "cpu/mfem/runtime/mpi_init.hpp"
 #include "fem_common.hpp"
+#include "gpu/cuda/runtime/hypre_device_policy.hpp"
 
 #if FULLMAG_HAS_MFEM_STACK
 #include <mfem.hpp>
@@ -44,27 +45,6 @@ void configure_demag_amg(mfem::HypreBoomerAMG &amg, const Context &ctx)
     amg.SetAggressiveCoarsening(policy.aggressive_coarsening);
     if (policy.strength_threshold_is_set) amg.SetStrengthThresh(policy.strength_threshold);
     if (policy.max_levels_is_set) amg.SetMaxLevels(policy.max_levels);
-}
-
-void configure_hypre_device_vendor_kernels()
-{
-#if defined(HYPRE_USING_CUDA) || defined(HYPRE_USING_GPU) || defined(HYPRE_USING_HIP) || defined(HYPRE_USING_DEVICE_OPENMP)
-    if (HYPRE_SetMemoryLocation(HYPRE_MEMORY_DEVICE) != 0) {
-        HYPRE_ClearAllErrors();
-    }
-    if (HYPRE_SetExecutionPolicy(HYPRE_EXEC_DEVICE) != 0) {
-        HYPRE_ClearAllErrors();
-    }
-    if (HYPRE_SetSpTransUseVendor(1) != 0) {
-        HYPRE_ClearAllErrors();
-    }
-    if (HYPRE_SetSpMVUseVendor(1) != 0) {
-        HYPRE_ClearAllErrors();
-    }
-    if (HYPRE_SetSpGemmUseVendor(1) != 0) {
-        HYPRE_ClearAllErrors();
-    }
-#endif
 }
 
 bool configure_demag_poisson_hypre_preconditioner(
@@ -155,7 +135,14 @@ bool initialize_demag_poisson_hypre_device_solver(
 #if FULLMAG_HAS_MFEM_STACK && defined(MFEM_USE_MPI)
     mfem::Hypre::Init();
     mfem::Hypre::InitDevice();
-    configure_hypre_device_vendor_kernels();
+    const HypreDevicePolicySnapshot hypre_policy =
+        configure_hypre_cuda_device_policy();
+    if (!hypre_cuda_device_policy_is_available(hypre_policy)) {
+        error = hypre_policy.failure_reason.empty()
+            ? kHypreCudaDevicePolicyUnavailable
+            : hypre_policy.failure_reason;
+        return false;
+    }
 
     auto *A_bc = static_cast<mfem::SparseMatrix *>(
         demag_periodic_poisson_reduction_requested(ctx)

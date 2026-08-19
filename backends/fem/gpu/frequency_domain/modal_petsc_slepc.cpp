@@ -1,12 +1,14 @@
 #include "frequency_domain/modal_gpu_krylov.hpp"
 
 #include "frequency_domain/mode_kinematics.hpp"
+#include "gpu/cuda/runtime/hypre_device_policy.hpp"
 
 #include <petscdevice.h>
 #include <petscksp.h>
 #include <slepceps.h>
 
 #include <algorithm>
+#include <array>
 #include <cstdlib>
 #include <cmath>
 #include <complex>
@@ -15,6 +17,7 @@
 #include <limits>
 #include <mutex>
 #include <new>
+#include <string>
 #include <vector>
 
 namespace fullmag::fem::frequency_domain {
@@ -36,6 +39,27 @@ void copy_message(char *destination, std::size_t size, const char *message) noex
 bool string_equals(const char *actual, const char *expected) noexcept
 {
     return actual != nullptr && expected != nullptr && std::strcmp(actual, expected) == 0;
+}
+
+void publish_hypre_device_policy(
+    const HypreDevicePolicySnapshot &snapshot,
+    PoissonAirboxModalEigenResult *result) noexcept
+{
+    if (result == nullptr) {
+        return;
+    }
+    result->hypre_device_policy_observed = true;
+    result->hypre_device_policy_configured = snapshot.configured;
+    result->hypre_memory_location_device = snapshot.memory_location_device;
+    result->hypre_execution_policy_device = snapshot.execution_policy_device;
+    result->hypre_vendor_sptrans_enabled = snapshot.vendor_sptrans_enabled;
+    result->hypre_vendor_spmv_enabled = snapshot.vendor_spmv_enabled;
+    result->hypre_vendor_spgemm_enabled = snapshot.vendor_spgemm_enabled;
+    result->hypre_first_error_code = snapshot.first_error_code;
+    copy_message(
+        result->hypre_failure_reason,
+        sizeof(result->hypre_failure_reason),
+        snapshot.failure_reason.c_str());
 }
 
 bool valid_csr(
@@ -338,6 +362,8 @@ struct GpuSchurContext {
     std::uint64_t operator_apply_count = 0;
     std::uint64_t poisson_solve_count = 0;
     std::uint64_t poisson_iteration_count = 0;
+    HypreDevicePolicySnapshot hypre_device_policy{};
+    bool convergence_callback_installed = false;
     char error_message[256]{};
 };
 
@@ -357,48 +383,188 @@ struct GpuSplitContext {
     double operator_scale = 1.0;
 };
 
-struct GpuEpsControl {
-    const PoissonAirboxEigenBlockProblem *problem = nullptr;
+std::uint64_t next_solve_control_generation() noexcept
+{
+    static std::uint64_t generation = 0u;
+    return ++generation;
+}
+
+struct GpuSolveControl {
+    // PETSc/SLEPc keep this address in persistent callback registrations.  The
+    // current request's callable state is copied in only while the synchronous
+    // solve is active and is cleared before the request returns.
+    PoissonAirboxEigenBlockProblem callback_problem{};
+    std::uint64_t generation = 0u;
     std::uint32_t monitor_iteration_count = 0;
     std::uint32_t last_converged_count = 0;
     double last_error_estimate = 0.0;
+    bool armed = false;
+    bool cancel_poll_enabled = false;
+    bool progress_enabled = false;
     bool cancellation_observed = false;
+
+    void arm(const PoissonAirboxEigenBlockProblem &problem) noexcept
+    {
+        callback_problem = PoissonAirboxEigenBlockProblem{};
+        callback_problem.residual_tolerance = problem.residual_tolerance;
+        callback_problem.max_outer_iterations = problem.max_outer_iterations;
+        callback_problem.max_linear_iterations = problem.max_linear_iterations;
+        callback_problem.cancel_user_data = problem.cancel_user_data;
+        callback_problem.cancel_requested = problem.cancel_requested;
+        callback_problem.progress_user_data = problem.progress_user_data;
+        callback_problem.progress_callback = problem.progress_callback;
+        generation = next_solve_control_generation();
+        monitor_iteration_count = 0u;
+        last_converged_count = 0u;
+        last_error_estimate = 0.0;
+        cancellation_observed = false;
+        cancel_poll_enabled = problem.cancel_requested != nullptr;
+        progress_enabled = problem.progress_callback != nullptr;
+        armed = true;
+    }
+
+    void disarm() noexcept
+    {
+        armed = false;
+        cancel_poll_enabled = false;
+        progress_enabled = false;
+        callback_problem = PoissonAirboxEigenBlockProblem{};
+    }
 };
+
+struct GpuSolveControlArm {
+    GpuSolveControl *control = nullptr;
+
+    ~GpuSolveControlArm()
+    {
+        if (control != nullptr) {
+            control->disarm();
+        }
+    }
+};
+
+struct GpuKspConvergenceContext {
+    GpuSolveControl *solve_control = nullptr;
+    void *default_context = nullptr;
+};
+
+PetscErrorCode gpu_modal_ksp_convergence_test(
+    KSP,
+    PetscInt,
+    PetscReal,
+    KSPConvergedReason *,
+    void *);
+
+PetscErrorCode destroy_gpu_modal_ksp_convergence_context(void **raw_context)
+{
+    PetscFunctionBeginUser;
+    if (raw_context == nullptr || *raw_context == nullptr) {
+        PetscFunctionReturn(PETSC_SUCCESS);
+    }
+    auto *context = static_cast<GpuKspConvergenceContext *>(*raw_context);
+    PetscCall(KSPConvergedDefaultDestroy(&context->default_context));
+    delete context;
+    *raw_context = nullptr;
+    PetscFunctionReturn(PETSC_SUCCESS);
+}
+
+PetscErrorCode install_gpu_modal_ksp_convergence_test(
+    KSP ksp,
+    GpuSolveControl *solve_control)
+{
+    PetscFunctionBeginUser;
+    PetscCheck(ksp != nullptr && solve_control != nullptr,
+               PETSC_COMM_SELF,
+               PETSC_ERR_ARG_NULL,
+               "missing GPU modal KSP convergence installation input");
+    auto *context = new (std::nothrow) GpuKspConvergenceContext{};
+    PetscCheck(context != nullptr,
+               PETSC_COMM_SELF,
+               PETSC_ERR_MEM,
+               "failed to allocate GPU modal KSP convergence context");
+    context->solve_control = solve_control;
+    PetscErrorCode status = KSPConvergedDefaultCreate(&context->default_context);
+    if (status == PETSC_SUCCESS) {
+        status = KSPSetConvergenceTest(
+            ksp,
+            gpu_modal_ksp_convergence_test,
+            context,
+            destroy_gpu_modal_ksp_convergence_context);
+    }
+    if (status != PETSC_SUCCESS) {
+        const PetscErrorCode destroy_status =
+            destroy_gpu_modal_ksp_convergence_context(
+                reinterpret_cast<void **>(&context));
+        PetscFunctionReturn(
+            status != PETSC_SUCCESS ? status : destroy_status);
+    }
+    PetscFunctionReturn(PETSC_SUCCESS);
+}
+
+bool gpu_modal_cancel_requested(const GpuSolveControl &control) noexcept
+{
+    return control.armed && control.cancel_poll_enabled &&
+        poisson_airbox_modal_cancel_requested(control.callback_problem);
+}
+
+void gpu_modal_emit_progress(
+    const GpuSolveControl &control,
+    const char *solver_phase,
+    std::uint32_t outer_iteration,
+    std::uint32_t candidate_mode_count,
+    std::uint32_t linear_iteration,
+    double residual_relative,
+    const char *stop_reason = nullptr) noexcept
+{
+    if (!control.armed || !control.progress_enabled) {
+        return;
+    }
+    poisson_airbox_modal_emit_progress(
+        control.callback_problem,
+        solver_phase,
+        "production_gpu",
+        outer_iteration,
+        candidate_mode_count,
+        0,
+        linear_iteration,
+        residual_relative,
+        stop_reason);
+}
 
 PetscErrorCode gpu_modal_ksp_convergence_test(
     KSP ksp,
     PetscInt iteration,
     PetscReal residual_norm,
     KSPConvergedReason *reason,
-    void *raw_problem)
+    void *raw_control)
 {
     PetscFunctionBeginUser;
-    auto *problem = static_cast<const PoissonAirboxEigenBlockProblem *>(raw_problem);
-    PetscCheck(problem != nullptr, PETSC_COMM_SELF, PETSC_ERR_ARG_NULL,
-               "missing GPU modal callback problem");
-    if (poisson_airbox_modal_cancel_requested(*problem)) {
+    auto *context = static_cast<GpuKspConvergenceContext *>(raw_control);
+    PetscCheck(context != nullptr && context->solve_control != nullptr &&
+                   context->default_context != nullptr,
+               PETSC_COMM_SELF, PETSC_ERR_ARG_NULL,
+               "missing GPU modal solve control");
+    GpuSolveControl *control = context->solve_control;
+    if (gpu_modal_cancel_requested(*control)) {
         if (reason != nullptr) {
             *reason = KSP_DIVERGED_USER;
         }
-        poisson_airbox_modal_emit_progress(
-            *problem,
+        gpu_modal_emit_progress(
+            *control,
             "cancelling_shift_invert",
-            "production_gpu",
             static_cast<std::uint32_t>(std::max<PetscInt>(0, iteration)),
-            0,
             0,
             static_cast<std::uint32_t>(std::max<PetscInt>(0, iteration)),
             static_cast<double>(residual_norm),
             "cancel_requested");
         PetscFunctionReturn(PETSC_SUCCESS);
     }
-    PetscCall(KSPConvergedDefault(ksp, iteration, residual_norm, reason, nullptr));
-    poisson_airbox_modal_emit_progress(
-        *problem,
+    PetscCall(KSPConvergedDefault(
+        ksp, iteration, residual_norm, reason, context->default_context));
+    gpu_modal_emit_progress(
+        *control,
         "solving_shift_invert",
-        "production_gpu",
         static_cast<std::uint32_t>(std::max<PetscInt>(0, iteration)),
-        0,
         0,
         static_cast<std::uint32_t>(std::max<PetscInt>(0, iteration)),
         static_cast<double>(residual_norm));
@@ -416,11 +582,14 @@ PetscErrorCode gpu_modal_eps_monitor(
     void *raw_control)
 {
     PetscFunctionBeginUser;
-    auto *control = static_cast<GpuEpsControl *>(raw_control);
-    PetscCheck(control != nullptr && control->problem != nullptr,
+    auto *control = static_cast<GpuSolveControl *>(raw_control);
+    PetscCheck(control != nullptr,
                PETSC_COMM_SELF,
                PETSC_ERR_ARG_NULL,
                "missing GPU modal EPS monitor context");
+    if (!control->armed) {
+        PetscFunctionReturn(PETSC_SUCCESS);
+    }
     control->monitor_iteration_count = static_cast<std::uint32_t>(
         std::min<PetscInt>(std::max<PetscInt>(0, iteration),
                            static_cast<PetscInt>(std::numeric_limits<std::uint32_t>::max())));
@@ -431,13 +600,11 @@ PetscErrorCode gpu_modal_eps_monitor(
         std::isfinite(static_cast<double>(error_estimates[0]))) {
         control->last_error_estimate = static_cast<double>(error_estimates[0]);
     }
-    poisson_airbox_modal_emit_progress(
-        *control->problem,
+    gpu_modal_emit_progress(
+        *control,
         "solving_eigensystem",
-        "production_gpu",
         control->monitor_iteration_count,
         control->last_converged_count,
-        0,
         0,
         control->last_error_estimate);
     PetscFunctionReturn(PETSC_SUCCESS);
@@ -453,8 +620,8 @@ PetscErrorCode gpu_modal_eps_stopping_test(
     void *raw_control)
 {
     PetscFunctionBeginUser;
-    auto *control = static_cast<GpuEpsControl *>(raw_control);
-    PetscCheck(control != nullptr && control->problem != nullptr && reason != nullptr,
+    auto *control = static_cast<GpuSolveControl *>(raw_control);
+    PetscCheck(control != nullptr && reason != nullptr,
                PETSC_COMM_SELF,
                PETSC_ERR_ARG_NULL,
                "missing GPU modal EPS stopping context");
@@ -466,16 +633,14 @@ PetscErrorCode gpu_modal_eps_stopping_test(
         requested,
         reason,
         nullptr));
-    if (poisson_airbox_modal_cancel_requested(*control->problem)) {
+    if (gpu_modal_cancel_requested(*control)) {
         control->cancellation_observed = true;
         *reason = EPS_CONVERGED_USER;
-        poisson_airbox_modal_emit_progress(
-            *control->problem,
+        gpu_modal_emit_progress(
+            *control,
             "cancelling_eigensystem",
-            "production_gpu",
             static_cast<std::uint32_t>(std::max<PetscInt>(0, iteration)),
             static_cast<std::uint32_t>(std::max<PetscInt>(0, converged)),
-            0,
             0,
             control->last_error_estimate,
             "cancel_requested");
@@ -514,6 +679,7 @@ void destroy_schur_context(GpuSchurContext *context) noexcept
     if (context->phi_solution) VecDestroy(&context->phi_solution);
     if (context->phi_rhs) VecDestroy(&context->phi_rhs);
     if (context->poisson_ksp) KSPDestroy(&context->poisson_ksp);
+    context->convergence_callback_installed = false;
     if (context->poisson) MatDestroy(&context->poisson);
     if (context->a_phiq) MatDestroy(&context->a_phiq);
     if (context->a_qphi) MatDestroy(&context->a_qphi);
@@ -545,6 +711,18 @@ bool configure_schur_context(
 {
     context->q_count = static_cast<PetscInt>(problem.q_dof_count);
     context->phi_count = static_cast<PetscInt>(problem.phi_dof_count);
+    if (!problem.validation_only_adapter) {
+        context->hypre_device_policy = configure_hypre_cuda_device_policy();
+        if (!hypre_cuda_device_policy_is_available(context->hypre_device_policy)) {
+            copy_message(
+                context->error_message,
+                sizeof(context->error_message),
+                context->hypre_device_policy.failure_reason.empty()
+                    ? kHypreCudaDevicePolicyUnavailable
+                    : context->hypre_device_policy.failure_reason.c_str());
+            return false;
+        }
+    }
     if (!create_cuda_csr_matrix(
             problem.A_qq,
             &context->a_qq,
@@ -570,14 +748,19 @@ bool configure_schur_context(
     PC pc = nullptr;
     if (KSPCreate(PETSC_COMM_SELF, &context->poisson_ksp) != PETSC_SUCCESS ||
         KSPSetOperators(context->poisson_ksp, context->poisson, context->poisson) != PETSC_SUCCESS ||
-        KSPSetType(context->poisson_ksp, KSPCG) != PETSC_SUCCESS ||
+        KSPSetType(
+            context->poisson_ksp,
+            problem.validation_only_adapter ? KSPPREONLY : KSPCG) != PETSC_SUCCESS ||
         KSPGetPC(context->poisson_ksp, &pc) != PETSC_SUCCESS ||
-        PCSetType(pc, PCHYPRE) != PETSC_SUCCESS ||
-        PCHYPRESetType(pc, "boomeramg") != PETSC_SUCCESS ||
+        (problem.validation_only_adapter
+             ? PCSetType(pc, PCILU) != PETSC_SUCCESS ||
+                 PCFactorSetMatSolverType(pc, MATSOLVERCUSPARSE) != PETSC_SUCCESS
+             : PCSetType(pc, PCHYPRE) != PETSC_SUCCESS ||
+                 PCHYPRESetType(pc, "boomeramg") != PETSC_SUCCESS) ||
         KSPSetTolerances(
             context->poisson_ksp,
             inner_linear_tolerance(problem.residual_tolerance),
-            1.0e-14,
+            1.0e-50,
             PETSC_DEFAULT,
             std::max<PetscInt>(256, static_cast<PetscInt>(problem.max_linear_iterations))) != PETSC_SUCCESS ||
         KSPSetUp(context->poisson_ksp) != PETSC_SUCCESS ||
@@ -598,6 +781,9 @@ PetscErrorCode apply_schur(GpuSchurContext *context, Vec q, Vec y, Vec phi_outpu
     PetscCall(MatMult(context->a_qq, q, y));
     PetscCall(MatMult(context->a_phiq, q, context->phi_rhs));
     PetscCall(VecScale(context->phi_rhs, -1.0));
+    // KSPSolve may converge immediately for a zero or tiny right-hand side.
+    // Never let that path expose phi from the preceding persistent solve.
+    PetscCall(VecSet(context->phi_solution, 0.0));
     PetscCall(KSPSolve(context->poisson_ksp, context->phi_rhs, context->phi_solution));
     ++context->poisson_solve_count;
     PetscInt poisson_iterations = 0;
@@ -835,7 +1021,122 @@ bool configure_split_context(GpuSchurContext *schur, GpuSplitContext *context)
     return true;
 }
 
+struct GpuOperatorIdentity {
+    std::string mesh_generation_identity;
+    std::string equilibrium_digest;
+    std::string bias_field_sample_signature;
+    std::string boundary_gauge_digest;
+    std::string operator_input_digest;
+    std::uint64_t validation_content_signature = 0u;
+    std::uint64_t aggregate = 0u;
+    bool canonical_shared_domain_identity = false;
+};
+
+struct GpuSolverObjectIds {
+    PetscObjectId shell = 0;
+    PetscObjectId mass = 0;
+    PetscObjectId preconditioner = 0;
+    PetscObjectId eps = 0;
+    PetscObjectId st = 0;
+    PetscObjectId ksp = 0;
+    PetscObjectId pc = 0;
+    PetscObjectId basis = 0;
+    PetscObjectId xr = 0;
+    PetscObjectId xi = 0;
+    PetscObjectId residual_workspace = 0;
+    bool valid = false;
+};
+
+struct GpuSolverState {
+    Mat shell = nullptr;
+    Mat mass = nullptr;
+    Mat preconditioner = nullptr;
+    Mat materialized_operator = nullptr;
+    EPS eps = nullptr;
+    ST st = nullptr;
+    KSP st_ksp = nullptr;
+    PC st_pc = nullptr;
+    BV basis = nullptr;
+    Vec xr = nullptr;
+    Vec xi = nullptr;
+    PetscInt dimension = 0;
+    PetscInt nev_capacity = 0;
+    PetscInt ncv_capacity = 0;
+    double mass_scale = 1.0;
+    double angular_frequency_scale = 1.0;
+    double operator_scale = 1.0;
+    double target_eigenvalue = 0.0;
+    double target_omega = 0.0;
+    std::uint64_t generation = 0u;
+    GpuSolverObjectIds last_successful_object_ids{};
+    bool exact_shifted_preconditioner = false;
+    bool materialized_eigensolver_operator = false;
+    bool convergence_callbacks_installed = false;
+    bool ready = false;
+};
+
+struct GpuPersistenceSnapshot {
+    std::uint64_t operator_context_generation = 0u;
+    std::uint64_t solver_context_generation = 0u;
+    std::uint64_t solve_control_generation = 0u;
+    std::uint32_t reuse_mask = 0u;
+    const char *invalidation_reason = "not_started";
+    bool operator_context_reused = false;
+    bool solver_context_reused = false;
+    bool public_petsc_object_ids_reused = false;
+    bool persistence_verified = false;
+};
+
+constexpr std::uint32_t kReuseShell = 1u << 0u;
+constexpr std::uint32_t kReuseMass = 1u << 1u;
+constexpr std::uint32_t kReusePreconditioner = 1u << 2u;
+constexpr std::uint32_t kReuseEps = 1u << 3u;
+constexpr std::uint32_t kReuseSt = 1u << 4u;
+constexpr std::uint32_t kReuseKsp = 1u << 5u;
+constexpr std::uint32_t kReusePc = 1u << 6u;
+constexpr std::uint32_t kReuseBasis = 1u << 7u;
+constexpr std::uint32_t kReuseSolutionVectors = 1u << 8u;
+constexpr std::uint32_t kReuseResidualWorkspace = 1u << 9u;
+
+GpuPersistenceSnapshot &latest_persistence_snapshot() noexcept
+{
+    static GpuPersistenceSnapshot snapshot{};
+    return snapshot;
+}
+
+std::uint64_t next_operator_context_generation() noexcept
+{
+    static std::uint64_t generation = 0u;
+    return ++generation;
+}
+
+std::uint64_t next_solver_context_generation() noexcept
+{
+    static std::uint64_t generation = 0u;
+    return ++generation;
+}
+
+void destroy_gpu_solver_state(GpuSolverState *state) noexcept
+{
+    if (state == nullptr) {
+        return;
+    }
+    state->basis = nullptr;
+    state->st_pc = nullptr;
+    state->st_ksp = nullptr;
+    state->st = nullptr;
+    if (state->xi) VecDestroy(&state->xi);
+    if (state->xr) VecDestroy(&state->xr);
+    if (state->eps) EPSDestroy(&state->eps);
+    if (state->materialized_operator) MatDestroy(&state->materialized_operator);
+    if (state->preconditioner) MatDestroy(&state->preconditioner);
+    if (state->mass) MatDestroy(&state->mass);
+    if (state->shell) MatDestroy(&state->shell);
+    *state = GpuSolverState{};
+}
+
 struct GpuPersistentContext {
+    GpuSolveControl solve_control{};
     GpuSchurContext schur{};
     GpuSplitContext split{};
     // Modal candidate extraction and full descriptor residual checks run after
@@ -846,8 +1147,103 @@ struct GpuPersistentContext {
     Vec action_probe = nullptr;
     Vec mass_action_probe = nullptr;
     Vec residual_probe = nullptr;
+    GpuSolverState solver{};
+    GpuOperatorIdentity identity{};
     std::uint64_t operator_signature = 0;
+    std::uint64_t operator_generation = 0u;
 };
+
+bool capture_gpu_solver_object_ids(
+    const GpuPersistentContext &persistent,
+    GpuSolverObjectIds *ids) noexcept
+{
+    const GpuSolverState &state = persistent.solver;
+    if (ids == nullptr || state.shell == nullptr || state.mass == nullptr ||
+        state.preconditioner == nullptr || state.eps == nullptr ||
+        state.st == nullptr || state.st_ksp == nullptr || state.st_pc == nullptr ||
+        state.basis == nullptr || state.xr == nullptr || state.xi == nullptr ||
+        persistent.residual_workspace.a_qq_real == nullptr) {
+        return false;
+    }
+    GpuSolverObjectIds captured{};
+    const bool ok =
+        PetscObjectGetId(
+            reinterpret_cast<PetscObject>(state.shell), &captured.shell) == PETSC_SUCCESS &&
+        PetscObjectGetId(
+            reinterpret_cast<PetscObject>(state.mass), &captured.mass) == PETSC_SUCCESS &&
+        PetscObjectGetId(
+            reinterpret_cast<PetscObject>(state.preconditioner),
+            &captured.preconditioner) == PETSC_SUCCESS &&
+        PetscObjectGetId(
+            reinterpret_cast<PetscObject>(state.eps), &captured.eps) == PETSC_SUCCESS &&
+        PetscObjectGetId(
+            reinterpret_cast<PetscObject>(state.st), &captured.st) == PETSC_SUCCESS &&
+        PetscObjectGetId(
+            reinterpret_cast<PetscObject>(state.st_ksp), &captured.ksp) == PETSC_SUCCESS &&
+        PetscObjectGetId(
+            reinterpret_cast<PetscObject>(state.st_pc), &captured.pc) == PETSC_SUCCESS &&
+        PetscObjectGetId(
+            reinterpret_cast<PetscObject>(state.basis), &captured.basis) == PETSC_SUCCESS &&
+        PetscObjectGetId(
+            reinterpret_cast<PetscObject>(state.xr), &captured.xr) == PETSC_SUCCESS &&
+        PetscObjectGetId(
+            reinterpret_cast<PetscObject>(state.xi), &captured.xi) == PETSC_SUCCESS &&
+        PetscObjectGetId(
+            reinterpret_cast<PetscObject>(
+                persistent.residual_workspace.a_qq_real),
+            &captured.residual_workspace) == PETSC_SUCCESS;
+    if (!ok) {
+        return false;
+    }
+    captured.valid = true;
+    *ids = captured;
+    return true;
+}
+
+std::uint32_t gpu_solver_object_reuse_mask(
+    const GpuSolverObjectIds &previous,
+    const GpuSolverObjectIds &current) noexcept
+{
+    if (!previous.valid || !current.valid) {
+        return 0u;
+    }
+    std::uint32_t mask = 0u;
+    if (previous.shell == current.shell) mask |= kReuseShell;
+    if (previous.mass == current.mass) mask |= kReuseMass;
+    if (previous.preconditioner == current.preconditioner) {
+        mask |= kReusePreconditioner;
+    }
+    if (previous.eps == current.eps) mask |= kReuseEps;
+    if (previous.st == current.st) mask |= kReuseSt;
+    if (previous.ksp == current.ksp) mask |= kReuseKsp;
+    if (previous.pc == current.pc) mask |= kReusePc;
+    if (previous.basis == current.basis) mask |= kReuseBasis;
+    if (previous.xr == current.xr && previous.xi == current.xi) {
+        mask |= kReuseSolutionVectors;
+    }
+    if (previous.residual_workspace == current.residual_workspace) {
+        mask |= kReuseResidualWorkspace;
+    }
+    return mask;
+}
+
+bool same_gpu_solver_object_graph(
+    const GpuSolverObjectIds &previous,
+    const GpuSolverObjectIds &current) noexcept
+{
+    return previous.valid && current.valid &&
+        previous.shell == current.shell &&
+        previous.mass == current.mass &&
+        previous.preconditioner == current.preconditioner &&
+        previous.eps == current.eps &&
+        previous.st == current.st &&
+        previous.ksp == current.ksp &&
+        previous.pc == current.pc &&
+        previous.basis == current.basis &&
+        previous.xr == current.xr &&
+        previous.xi == current.xi &&
+        previous.residual_workspace == current.residual_workspace;
+}
 
 GpuPersistentContext *&cached_gpu_context() noexcept
 {
@@ -875,7 +1271,14 @@ std::uint64_t fnv1a_value(std::uint64_t hash, const T &value) noexcept
     return fnv1a_update(hash, &value, sizeof(value));
 }
 
-std::uint64_t fnv1a_csr(
+std::uint64_t fnv1a_string(std::uint64_t hash, const char *value) noexcept
+{
+    const bool present = value != nullptr;
+    hash = fnv1a_value(hash, present);
+    return present ? fnv1a_update(hash, value, std::strlen(value)) : hash;
+}
+
+std::uint64_t fnv1a_csr_structure(
     std::uint64_t hash,
     const CsrMatrixView &matrix) noexcept
 {
@@ -885,31 +1288,168 @@ std::uint64_t fnv1a_csr(
         hash,
         matrix.row_offsets,
         static_cast<std::size_t>(matrix.row_offsets_len) * sizeof(matrix.row_offsets[0]));
-    hash = fnv1a_update(
+    return fnv1a_update(
         hash,
         matrix.column_indices,
         static_cast<std::size_t>(matrix.column_indices_len) * sizeof(matrix.column_indices[0]));
+}
+
+std::uint64_t fnv1a_csr_values(
+    std::uint64_t hash,
+    const CsrMatrixView &matrix) noexcept
+{
     return fnv1a_update(
         hash,
         matrix.values,
         static_cast<std::size_t>(matrix.values_len) * sizeof(matrix.values[0]));
 }
 
+GpuOperatorIdentity modal_operator_identity(
+    const PoissonAirboxEigenBlockProblem &problem)
+{
+    constexpr std::uint64_t kFnvOffset = 1469598103934665603ull;
+    GpuOperatorIdentity identity{};
+    const auto present = [](const char *value) noexcept {
+        return value != nullptr && value[0] != '\0';
+    };
+    identity.canonical_shared_domain_identity =
+        present(problem.mesh_generation_identity) &&
+        present(problem.equilibrium_digest) &&
+        present(problem.bias_field_sample_signature) &&
+        present(problem.boundary_gauge_digest) &&
+        present(problem.operator_input_digest);
+    if (identity.canonical_shared_domain_identity) {
+        identity.mesh_generation_identity = problem.mesh_generation_identity;
+        identity.equilibrium_digest = problem.equilibrium_digest;
+        identity.bias_field_sample_signature = problem.bias_field_sample_signature;
+        identity.boundary_gauge_digest = problem.boundary_gauge_digest;
+        identity.operator_input_digest = problem.operator_input_digest;
+        identity.aggregate = fnv1a_string(
+            kFnvOffset, identity.mesh_generation_identity.c_str());
+        identity.aggregate = fnv1a_string(
+            identity.aggregate, identity.equilibrium_digest.c_str());
+        identity.aggregate = fnv1a_string(
+            identity.aggregate, identity.bias_field_sample_signature.c_str());
+        identity.aggregate = fnv1a_string(
+            identity.aggregate, identity.boundary_gauge_digest.c_str());
+        identity.aggregate = fnv1a_string(
+            identity.aggregate, identity.operator_input_digest.c_str());
+        return identity;
+    }
+
+    const bool validation_content_identity =
+        problem.validation_only_adapter &&
+        string_equals(problem.assembly_kind, "synthetic_algebraic_oracle");
+    if (!validation_content_identity) {
+        return identity;
+    }
+
+    std::uint64_t signature = fnv1a_value(kFnvOffset, problem.q_dof_count);
+    signature = fnv1a_value(signature, problem.phi_dof_count);
+    const CsrMatrixView blocks[] = {
+        problem.A_qq,
+        problem.A_qphi,
+        problem.A_phiq,
+        problem.A_phiphi,
+        problem.B_qq,
+    };
+    for (const CsrMatrixView &block : blocks) {
+        signature = fnv1a_csr_structure(signature, block);
+        signature = fnv1a_csr_values(signature, block);
+    }
+    signature = fnv1a_value(signature, problem.phi_mean_weights_count);
+    const bool phi_mean_weights_present = problem.phi_mean_weights != nullptr;
+    signature = fnv1a_value(signature, phi_mean_weights_present);
+    if (phi_mean_weights_present) {
+        signature = fnv1a_update(
+            signature,
+            problem.phi_mean_weights,
+            static_cast<std::size_t>(problem.phi_mean_weights_count) * sizeof(double));
+    }
+    signature = fnv1a_string(signature, problem.outer_boundary_kind);
+    signature = fnv1a_value(signature, problem.robin_beta);
+    signature = fnv1a_string(signature, problem.gauge_policy);
+    signature = fnv1a_string(signature, problem.gauge_reason);
+    signature = fnv1a_string(signature, problem.assembly_kind);
+    signature = fnv1a_string(signature, problem.demag_kind);
+    signature = fnv1a_string(signature, problem.phasor_convention);
+    signature = fnv1a_string(signature, problem.eigenvalue_convention);
+    signature = fnv1a_string(
+        signature, problem.periodic_mesh_certificate_schema);
+    signature = fnv1a_value(signature, problem.magnetic_pair_count);
+    signature = fnv1a_value(signature, problem.airbox_pair_count);
+    signature = fnv1a_value(signature, problem.production_shared_domain);
+    signature = fnv1a_value(signature, problem.validation_only_adapter);
+    const std::size_t scalar_size = sizeof(PetscScalar);
+    const std::size_t real_size = sizeof(PetscReal);
+    const int real_digits = std::numeric_limits<PetscReal>::digits;
+#if defined(PETSC_USE_COMPLEX)
+    constexpr bool complex_scalar = true;
+#else
+    constexpr bool complex_scalar = false;
+#endif
+    signature = fnv1a_value(signature, scalar_size);
+    signature = fnv1a_value(signature, real_size);
+    signature = fnv1a_value(signature, real_digits);
+    signature = fnv1a_value(signature, complex_scalar);
+    identity.validation_content_signature = signature;
+    identity.aggregate = signature;
+    return identity;
+}
+
+bool same_operator_identity(
+    const GpuOperatorIdentity &left,
+    const GpuOperatorIdentity &right) noexcept
+{
+    if (left.canonical_shared_domain_identity !=
+        right.canonical_shared_domain_identity) {
+        return false;
+    }
+    if (!left.canonical_shared_domain_identity) {
+        return left.validation_content_signature ==
+            right.validation_content_signature;
+    }
+    return left.mesh_generation_identity == right.mesh_generation_identity &&
+        left.equilibrium_digest == right.equilibrium_digest &&
+        left.bias_field_sample_signature == right.bias_field_sample_signature &&
+        left.boundary_gauge_digest == right.boundary_gauge_digest &&
+        left.operator_input_digest == right.operator_input_digest;
+}
+
+const char *operator_invalidation_reason(
+    const GpuOperatorIdentity &cached,
+    const GpuOperatorIdentity &requested) noexcept
+{
+    if (cached.canonical_shared_domain_identity !=
+        requested.canonical_shared_domain_identity) {
+        return "canonical_operator_identity_binding_changed";
+    }
+    if (!cached.canonical_shared_domain_identity) {
+        return "validation_operator_content_changed";
+    }
+    if (cached.mesh_generation_identity != requested.mesh_generation_identity) {
+        return "mesh_generation_identity_changed";
+    }
+    if (cached.equilibrium_digest != requested.equilibrium_digest) {
+        return "equilibrium_identity_changed";
+    }
+    if (cached.bias_field_sample_signature !=
+        requested.bias_field_sample_signature) {
+        return "bias_identity_changed";
+    }
+    if (cached.boundary_gauge_digest != requested.boundary_gauge_digest) {
+        return "boundary_gauge_identity_changed";
+    }
+    if (cached.operator_input_digest != requested.operator_input_digest) {
+        return "operator_input_identity_changed";
+    }
+    return "canonical_operator_identity_changed";
+}
+
 std::uint64_t modal_operator_signature(
     const PoissonAirboxEigenBlockProblem &problem) noexcept
 {
-    constexpr std::uint64_t kFnvOffset = 1469598103934665603ull;
-    std::uint64_t hash = kFnvOffset;
-    hash = fnv1a_value(hash, problem.q_dof_count);
-    hash = fnv1a_value(hash, problem.phi_dof_count);
-    hash = fnv1a_csr(hash, problem.A_qq);
-    hash = fnv1a_csr(hash, problem.A_qphi);
-    hash = fnv1a_csr(hash, problem.A_phiq);
-    hash = fnv1a_csr(hash, problem.A_phiphi);
-    hash = fnv1a_csr(hash, problem.B_qq);
-    hash = fnv1a_value(hash, problem.residual_tolerance);
-    hash = fnv1a_value(hash, problem.max_linear_iterations);
-    return hash;
+    return modal_operator_identity(problem).aggregate;
 }
 
 void destroy_cached_gpu_context() noexcept
@@ -918,6 +1458,8 @@ void destroy_cached_gpu_context() noexcept
     if (context == nullptr) {
         return;
     }
+    context->solve_control.disarm();
+    destroy_gpu_solver_state(&context->solver);
     if (context->residual_probe) VecDestroy(&context->residual_probe);
     if (context->mass_action_probe) VecDestroy(&context->mass_action_probe);
     if (context->action_probe) VecDestroy(&context->action_probe);
@@ -930,20 +1472,31 @@ void destroy_cached_gpu_context() noexcept
 
 GpuPersistentContext *acquire_cached_gpu_context(
     const PoissonAirboxEigenBlockProblem &problem,
-    bool *reused) noexcept
+    bool *reused,
+    const char **invalidation_reason) noexcept
 {
     if (reused != nullptr) {
         *reused = false;
     }
-    const std::uint64_t signature = modal_operator_signature(problem);
+    if (invalidation_reason != nullptr) {
+        *invalidation_reason = "cold_start";
+    }
+    const GpuOperatorIdentity identity = modal_operator_identity(problem);
+    const std::uint64_t signature = identity.aggregate;
     auto *cached = cached_gpu_context();
-    if (cached != nullptr && cached->operator_signature == signature) {
+    if (cached != nullptr && same_operator_identity(cached->identity, identity)) {
         if (reused != nullptr) {
             *reused = true;
+        }
+        if (invalidation_reason != nullptr) {
+            *invalidation_reason = "none";
         }
         return cached;
     }
     if (cached != nullptr) {
+        if (invalidation_reason != nullptr) {
+            *invalidation_reason = operator_invalidation_reason(cached->identity, identity);
+        }
         destroy_cached_gpu_context();
     }
     auto *created = new (std::nothrow) GpuPersistentContext{};
@@ -966,7 +1519,9 @@ GpuPersistentContext *acquire_cached_gpu_context(
         }
         return nullptr;
     }
+    created->identity = identity;
     created->operator_signature = signature;
+    created->operator_generation = next_operator_context_generation();
     cached_gpu_context() = created;
     static bool cleanup_registered = false;
     if (!cleanup_registered) {
@@ -1084,6 +1639,238 @@ bool create_materialized_shifted_operator_cuda(
     return ok;
 }
 
+PetscInt requested_gpu_nev(
+    const PoissonAirboxEigenBlockProblem &problem,
+    PetscInt dimension) noexcept
+{
+    const std::uint64_t requested =
+        4u * static_cast<std::uint64_t>(
+            std::max<std::uint32_t>(1u, problem.requested_mode_count));
+    const PetscInt maximum_nev = dimension - 2;
+    return static_cast<PetscInt>(std::min<std::uint64_t>(
+        static_cast<std::uint64_t>(maximum_nev),
+        requested));
+}
+
+bool create_gpu_solver_state(
+    const PoissonAirboxEigenBlockProblem &problem,
+    GpuPersistentContext *persistent,
+    PetscInt dimension,
+    double mass_scale,
+    double angular_frequency_scale,
+    double operator_scale,
+    double target_omega,
+    double target_eigenvalue,
+    std::uint64_t *setup_h2d_transfer_count)
+{
+    if (persistent == nullptr) {
+        return false;
+    }
+    GpuSolverState &state = persistent->solver;
+    destroy_gpu_solver_state(&state);
+    persistent->split.operator_scale = operator_scale;
+    const PetscInt nev = requested_gpu_nev(problem, dimension);
+    const PetscInt solver_nev = problem.validation_only_adapter ? dimension : nev;
+    state.dimension = dimension;
+    state.nev_capacity = solver_nev;
+    state.ncv_capacity = problem.validation_only_adapter
+        ? dimension
+        : std::min(
+              dimension,
+              std::max<PetscInt>(nev + 1, 2 * nev));
+    state.mass_scale = mass_scale;
+    state.angular_frequency_scale = angular_frequency_scale;
+    state.operator_scale = operator_scale;
+    state.target_omega = target_omega;
+    state.target_eigenvalue = target_eigenvalue;
+
+    bool configured =
+        MatCreateShell(
+            PETSC_COMM_SELF,
+            dimension,
+            dimension,
+            dimension,
+            dimension,
+            &persistent->split,
+            &state.shell) == PETSC_SUCCESS &&
+        MatShellSetVecType(state.shell, VECCUDA) == PETSC_SUCCESS &&
+        MatShellSetOperation(
+            state.shell,
+            MATOP_MULT,
+            reinterpret_cast<void (*)(void)>(split_schur_matmult)) == PETSC_SUCCESS &&
+        MatSetUp(state.shell) == PETSC_SUCCESS &&
+        create_split_mass_cuda(
+            problem.B_qq,
+            mass_scale,
+            &state.mass,
+            setup_h2d_transfer_count);
+    if (!configured) {
+        destroy_gpu_solver_state(&state);
+        return false;
+    }
+
+    state.exact_shifted_preconditioner =
+        problem.validation_only_adapter &&
+        create_materialized_shifted_operator_cuda(
+            state.shell,
+            state.mass,
+            dimension,
+            target_eigenvalue,
+            &state.preconditioner,
+            &state.materialized_operator);
+    state.materialized_eigensolver_operator =
+        problem.validation_only_adapter && state.exact_shifted_preconditioner;
+    if (!state.exact_shifted_preconditioner &&
+        !create_hypre_shift_preconditioner_cuda(
+            problem.A_qq,
+            problem.B_qq,
+            target_omega,
+            operator_scale,
+            &state.preconditioner)) {
+        destroy_gpu_solver_state(&state);
+        return false;
+    }
+
+    configured =
+        EPSCreate(PETSC_COMM_SELF, &state.eps) == PETSC_SUCCESS &&
+        EPSSetOperators(
+            state.eps,
+            state.materialized_eigensolver_operator
+                ? state.materialized_operator
+                : state.shell,
+            state.mass) == PETSC_SUCCESS &&
+        EPSSetProblemType(state.eps, EPS_GNHEP) == PETSC_SUCCESS &&
+        EPSSetType(
+            state.eps,
+            problem.validation_only_adapter ? EPSLAPACK : EPSKRYLOVSCHUR) == PETSC_SUCCESS &&
+        EPSSetTrueResidual(state.eps, PETSC_TRUE) == PETSC_SUCCESS &&
+        EPSSetDimensions(
+            state.eps, solver_nev, state.ncv_capacity, PETSC_DEFAULT) == PETSC_SUCCESS &&
+        EPSSetWhichEigenpairs(state.eps, EPS_TARGET_MAGNITUDE) == PETSC_SUCCESS &&
+        EPSSetTarget(state.eps, target_eigenvalue) == PETSC_SUCCESS &&
+        EPSSetTolerances(
+            state.eps,
+            transformed_eigensolver_tolerance(problem.residual_tolerance),
+            std::max<PetscInt>(
+                128, static_cast<PetscInt>(problem.max_outer_iterations))) == PETSC_SUCCESS &&
+        EPSGetST(state.eps, &state.st) == PETSC_SUCCESS &&
+        STSetType(
+            state.st,
+            problem.validation_only_adapter ? STSHIFT : STSINVERT) == PETSC_SUCCESS &&
+        STSetShift(state.st, target_eigenvalue) == PETSC_SUCCESS &&
+        (problem.validation_only_adapter ||
+         STSetPreconditionerMat(state.st, state.preconditioner) == PETSC_SUCCESS) &&
+        STGetKSP(state.st, &state.st_ksp) == PETSC_SUCCESS &&
+        KSPSetType(
+            state.st_ksp,
+            problem.validation_only_adapter ? KSPPREONLY : KSPGMRES) == PETSC_SUCCESS &&
+        (problem.validation_only_adapter ||
+         (KSPGMRESSetRestart(
+              state.st_ksp, std::min<PetscInt>(dimension, 128)) == PETSC_SUCCESS &&
+          KSPGMRESSetCGSRefinementType(
+              state.st_ksp, KSP_GMRES_CGS_REFINE_ALWAYS) == PETSC_SUCCESS)) &&
+        KSPGetPC(state.st_ksp, &state.st_pc) == PETSC_SUCCESS &&
+        KSPSetTolerances(
+            state.st_ksp,
+            inner_linear_tolerance(problem.residual_tolerance),
+            PETSC_DEFAULT,
+            PETSC_DEFAULT,
+            std::max<PetscInt>(
+                512, static_cast<PetscInt>(problem.max_linear_iterations))) == PETSC_SUCCESS &&
+        KSPSetErrorIfNotConverged(state.st_ksp, PETSC_TRUE) == PETSC_SUCCESS &&
+        EPSSetStoppingTestFunction(
+            state.eps,
+            gpu_modal_eps_stopping_test,
+            &persistent->solve_control,
+            nullptr) == PETSC_SUCCESS &&
+        EPSSetStoppingTest(state.eps, EPS_STOP_USER) == PETSC_SUCCESS &&
+        EPSMonitorSet(
+            state.eps,
+            gpu_modal_eps_monitor,
+            &persistent->solve_control,
+            nullptr) == PETSC_SUCCESS &&
+        create_cuda_vector(dimension, &state.xr) == PETSC_SUCCESS &&
+        create_cuda_vector(dimension, &state.xi) == PETSC_SUCCESS;
+    if (configured) {
+        configured = state.exact_shifted_preconditioner
+            ? PCSetType(state.st_pc, PCILU) == PETSC_SUCCESS &&
+                PCFactorSetMatSolverType(
+                    state.st_pc, MATSOLVERCUSPARSE) == PETSC_SUCCESS
+            : PCSetType(state.st_pc, PCHYPRE) == PETSC_SUCCESS &&
+                PCHYPRESetType(state.st_pc, "boomeramg") == PETSC_SUCCESS;
+    }
+    if (!configured) {
+        destroy_gpu_solver_state(&state);
+        return false;
+    }
+    state.generation = next_solver_context_generation();
+    state.ready = true;
+    return true;
+}
+
+bool configure_gpu_solver_request(
+    const PoissonAirboxEigenBlockProblem &problem,
+    GpuPersistentContext *persistent)
+{
+    if (persistent == nullptr || !persistent->solver.ready) {
+        return false;
+    }
+    GpuSolverState &state = persistent->solver;
+    const PetscInt nev = requested_gpu_nev(problem, state.dimension);
+    const PetscInt solver_nev = problem.validation_only_adapter
+        ? state.dimension
+        : nev;
+    bool configured = solver_nev <= state.nev_capacity &&
+        // EPSSetDimensions explicitly returns a solved EPS to INITIAL without
+        // destroying the persistent EPS/ST/KSP/BV graph when capacities stay
+        // unchanged.
+        EPSSetDimensions(
+            state.eps, solver_nev, state.ncv_capacity, PETSC_DEFAULT) == PETSC_SUCCESS &&
+        EPSSetTolerances(
+            state.eps,
+            transformed_eigensolver_tolerance(problem.residual_tolerance),
+            std::max<PetscInt>(
+                128, static_cast<PetscInt>(problem.max_outer_iterations))) == PETSC_SUCCESS &&
+        KSPSetTolerances(
+            state.st_ksp,
+            inner_linear_tolerance(problem.residual_tolerance),
+            PETSC_DEFAULT,
+            PETSC_DEFAULT,
+            std::max<PetscInt>(
+                512, static_cast<PetscInt>(problem.max_linear_iterations))) == PETSC_SUCCESS &&
+        KSPSetTolerances(
+            persistent->schur.poisson_ksp,
+            inner_linear_tolerance(problem.residual_tolerance),
+            1.0e-50,
+            PETSC_DEFAULT,
+            std::max<PetscInt>(
+                256, static_cast<PetscInt>(problem.max_linear_iterations))) == PETSC_SUCCESS;
+    const bool apply_options =
+        std::getenv("FULLMAG_FEM_GPU_K0_PETSC_OPTIONS") != nullptr;
+    if (configured && apply_options) {
+        configured =
+            KSPSetFromOptions(state.st_ksp) == PETSC_SUCCESS &&
+            KSPSetFromOptions(persistent->schur.poisson_ksp) == PETSC_SUCCESS;
+    }
+    if (configured &&
+        (apply_options || !state.convergence_callbacks_installed)) {
+        configured =
+            install_gpu_modal_ksp_convergence_test(
+                state.st_ksp, &persistent->solve_control) == PETSC_SUCCESS;
+        state.convergence_callbacks_installed = configured;
+    }
+    if (configured &&
+        (apply_options ||
+         !persistent->schur.convergence_callback_installed)) {
+        configured =
+            install_gpu_modal_ksp_convergence_test(
+                persistent->schur.poisson_ksp,
+                &persistent->solve_control) == PETSC_SUCCESS;
+        persistent->schur.convergence_callback_installed = configured;
+    }
+    return configured;
+}
+
 bool copy_cuda_vector_to_host(
     Vec vector,
     std::vector<double> *values,
@@ -1118,6 +1905,7 @@ FrequencyDomainStatus fail(
 {
     result->status = status;
     copy_message(result->error_message, sizeof(result->error_message), message);
+    const GpuPersistenceSnapshot &persistence = latest_persistence_snapshot();
     std::snprintf(
         result->diagnostics_json,
         sizeof(result->diagnostics_json),
@@ -1138,12 +1926,26 @@ FrequencyDomainStatus fail(
         "\"observed_positive_frequency_min_hz\":%.17g,"
         "\"observed_positive_frequency_max_hz\":%.17g,"
         "\"executed_subwindows\":%s,"
+        "\"window_certificate\":%s,"
+        "\"window_subwindow_count\":%u,"
+        "\"window_completed_subwindow_count\":%u,"
+        "\"window_failed_subwindow_count\":%u,"
+        "\"window_empty_subwindow_count\":%u,"
         "\"window_complete\":%s,"
         "\"window_failed_subwindow\":%s,"
         "\"window_cancelled\":%s,"
+        "\"stop_reason\":\"%s\","
         "\"persistent_solver_context\":%s,"
         "\"persistent_context_verified\":%s,"
         "\"operator_context_reused\":%s,"
+        "\"solver_context_reused\":%s,"
+        "\"public_petsc_object_ids_reused\":%s,"
+        "\"persistence_verified\":%s,"
+        "\"operator_context_generation\":%llu,"
+        "\"solver_context_generation\":%llu,"
+        "\"solve_control_generation\":%llu,"
+        "\"reuse_mask\":\"0x%08x\","
+        "\"invalidation_reason\":\"%s\","
         "\"operator_context_signature\":\"%s\","
         "\"eps_converged_reason\":%d,"
         "\"eps_reason_available\":%s,"
@@ -1179,12 +1981,28 @@ FrequencyDomainStatus fail(
         result->executed_subwindows_json[0] != '\0'
             ? result->executed_subwindows_json
             : "[]",
+        result->window_certificate_json[0] != '\0'
+            ? result->window_certificate_json
+            : "{}",
+        result->window_subwindow_count,
+        result->window_completed_subwindow_count,
+        result->window_failed_subwindow_count,
+        result->window_empty_subwindow_count,
         result->window_complete ? "true" : "false",
         result->window_failed_subwindow ? "true" : "false",
         result->window_cancelled ? "true" : "false",
-        result->persistent_context_verified ? "true" : "false",
-        result->persistent_context_verified ? "true" : "false",
-        result->operator_context_reused ? "true" : "false",
+        result->stop_reason[0] != '\0' ? result->stop_reason : "unknown",
+        persistence.persistence_verified ? "true" : "false",
+        persistence.persistence_verified ? "true" : "false",
+        persistence.operator_context_reused ? "true" : "false",
+        persistence.solver_context_reused ? "true" : "false",
+        persistence.public_petsc_object_ids_reused ? "true" : "false",
+        persistence.persistence_verified ? "true" : "false",
+        static_cast<unsigned long long>(persistence.operator_context_generation),
+        static_cast<unsigned long long>(persistence.solver_context_generation),
+        static_cast<unsigned long long>(persistence.solve_control_generation),
+        persistence.reuse_mask,
+        persistence.invalidation_reason,
         result->operator_context_signature,
         static_cast<int>(result->eps_converged_reason),
         result->eps_reason_available ? "true" : "false",
@@ -1225,6 +2043,15 @@ bool validate_problem(
     const bool validation_scope =
         problem.validation_only_adapter &&
         string_equals(problem.assembly_kind, "synthetic_algebraic_oracle");
+    const auto present = [](const char *value) noexcept {
+        return value != nullptr && value[0] != '\0';
+    };
+    const bool canonical_identity_complete =
+        present(problem.mesh_generation_identity) &&
+        present(problem.equilibrium_digest) &&
+        present(problem.bias_field_sample_signature) &&
+        present(problem.boundary_gauge_digest) &&
+        present(problem.operator_input_digest);
     const bool nearest_target = string_equals(problem.target_kind, "nearest_frequency");
     const bool window_target = string_equals(problem.target_kind, "frequency_window");
     const bool valid_nearest_target = nearest_target &&
@@ -1266,7 +2093,11 @@ bool validate_problem(
         !valid_csr(problem.A_phiq, problem.phi_dof_count, problem.q_dof_count) ||
         !valid_csr(problem.A_phiphi, problem.phi_dof_count, problem.phi_dof_count) ||
         !valid_csr(problem.B_qq, problem.q_dof_count, problem.q_dof_count);
-    if (!valid_requested_count) {
+    if (production_scope && !canonical_identity_complete) {
+        if (failure_reason != nullptr) {
+            *failure_reason = "gpu_k0_canonical_identity_incomplete";
+        }
+    } else if (!valid_requested_count) {
         if (failure_reason != nullptr) {
             *failure_reason = "gpu_k0_requested_mode_count_invalid";
         }
@@ -1287,7 +2118,8 @@ bool validate_problem(
             *failure_reason = "gpu_k0_scope_mismatch";
         }
     }
-    if (!valid_requested_count || !valid_target || !valid_conventions ||
+    if ((production_scope && !canonical_identity_complete) ||
+        !valid_requested_count || !valid_target || !valid_conventions ||
         !valid_iteration_budgets || structural_invalid) {
         copy_message(
             result->error_message,
@@ -1311,6 +2143,7 @@ void write_success_diagnostics(
 {
     const bool validation_only = problem.validation_only_adapter;
     const bool complete = result.status == FrequencyDomainStatus::ok;
+    const GpuPersistenceSnapshot &persistence = latest_persistence_snapshot();
     const char *status = complete
         ? "ok"
         : result.status == FrequencyDomainStatus::interrupted ? "interrupted" : "failed";
@@ -1322,6 +2155,17 @@ void write_success_diagnostics(
     const bool scalable_selected_spectrum =
         production_implication &&
         string_equals(eigensolver_operator_kind, "matrix_free_schur_cuda");
+    const bool modal_solver_device_resident =
+        production_implication && result.device_residency_verified;
+    const char *spectral_transform = validation_only
+        ? "bounded_full_spectrum_shift"
+        : "shift_invert";
+    const char *eigensolver = validation_only
+        ? "slepc_lapack"
+        : "slepc_krylovschur";
+    const char *poisson_solver = validation_only
+        ? "preonly_cuda_ilu"
+        : "cg_hypre_boomeramg";
     std::snprintf(
         out->diagnostics_json,
         sizeof(out->diagnostics_json),
@@ -1355,6 +2199,14 @@ void write_success_diagnostics(
         "\"persistent_solver_context\":%s,"
         "\"persistent_context_verified\":%s,"
         "\"operator_context_reused\":%s,"
+        "\"solver_context_reused\":%s,"
+        "\"public_petsc_object_ids_reused\":%s,"
+        "\"persistence_verified\":%s,"
+        "\"operator_context_generation\":%llu,"
+        "\"solver_context_generation\":%llu,"
+        "\"solve_control_generation\":%llu,"
+        "\"reuse_mask\":\"0x%08x\","
+        "\"invalidation_reason\":\"%s\","
         "\"operator_context_signature\":\"%s\","
         "\"gpu_device_resident_modal_eigensolver\":%s,"
         "\"device_residency_verified\":%s,"
@@ -1367,9 +2219,9 @@ void write_success_diagnostics(
         "\"eigensolver_operator_kind\":\"%s\","
         "\"poisson_pc_type\":\"%s\","
         "\"shift_pc_type\":\"%s\","
-        "\"poisson_solver\":\"cg_hypre_boomeramg\","
-        "\"spectral_transform\":\"shift_invert\","
-        "\"krylov_solver\":\"slepc_krylovschur\","
+        "\"poisson_solver\":\"%s\","
+        "\"spectral_transform\":\"%s\","
+        "\"eigensolver\":\"%s\","
         "\"true_residual_convergence\":true,"
         "\"certified_residual_tolerance\":%.17g,"
         "\"transformed_eigensolver_tolerance\":%.17g,"
@@ -1402,6 +2254,13 @@ void write_success_diagnostics(
         "\"window_complete\":%s,"
         "\"window_failed_subwindow\":%s,"
         "\"window_cancelled\":%s,"
+        "\"window_subwindow_count\":%u,"
+        "\"window_completed_subwindow_count\":%u,"
+        "\"window_failed_subwindow_count\":%u,"
+        "\"window_empty_subwindow_count\":%u,"
+        "\"stop_reason\":\"%s\","
+        "\"window_certificate\":%s,"
+        "\"executed_subwindows\":%s,"
         "\"fallback_used\":false,"
         "\"cpu_fallback\":\"disabled\","
         "\"converged_eigenpair_count\":%u,"
@@ -1454,11 +2313,19 @@ void write_success_diagnostics(
         problem.phasor_convention != nullptr ? problem.phasor_convention : "",
         problem.eigenvalue_convention != nullptr ? problem.eigenvalue_convention : "",
         2.0 * 3.14159265358979323846264338327950288 * problem.target_frequency_hz,
-        result.persistent_context_verified ? "true" : "false",
-        result.persistent_context_verified ? "true" : "false",
-        result.operator_context_reused ? "true" : "false",
+        persistence.persistence_verified ? "true" : "false",
+        persistence.persistence_verified ? "true" : "false",
+        persistence.operator_context_reused ? "true" : "false",
+        persistence.solver_context_reused ? "true" : "false",
+        persistence.public_petsc_object_ids_reused ? "true" : "false",
+        persistence.persistence_verified ? "true" : "false",
+        static_cast<unsigned long long>(persistence.operator_context_generation),
+        static_cast<unsigned long long>(persistence.solver_context_generation),
+        static_cast<unsigned long long>(persistence.solve_control_generation),
+        persistence.reuse_mask,
+        persistence.invalidation_reason,
         result.operator_context_signature,
-        result.device_residency_verified ? "true" : "false",
+        modal_solver_device_resident ? "true" : "false",
         result.device_residency_verified ? "true" : "false",
         result.device_residency_verified ? "true" : "false",
         matrix_type != nullptr ? matrix_type : "",
@@ -1467,6 +2334,9 @@ void write_success_diagnostics(
         eigensolver_operator_kind != nullptr ? eigensolver_operator_kind : "",
         poisson_pc_type != nullptr ? poisson_pc_type : "",
         shift_pc_type != nullptr ? shift_pc_type : "",
+        poisson_solver,
+        spectral_transform,
+        eigensolver,
         problem.residual_tolerance,
         transformed_eigensolver_tolerance(problem.residual_tolerance),
         inner_linear_tolerance(problem.residual_tolerance),
@@ -1491,6 +2361,17 @@ void write_success_diagnostics(
         result.window_complete ? "true" : "false",
         result.window_failed_subwindow ? "true" : "false",
         result.window_cancelled ? "true" : "false",
+        result.window_subwindow_count,
+        result.window_completed_subwindow_count,
+        result.window_failed_subwindow_count,
+        result.window_empty_subwindow_count,
+        result.stop_reason[0] != '\0' ? result.stop_reason : "unknown",
+        result.window_certificate_json[0] != '\0'
+            ? result.window_certificate_json
+            : "{}",
+        result.executed_subwindows_json[0] != '\0'
+            ? result.executed_subwindows_json
+            : "[]",
         result.converged_eigenpair_count,
         result.accepted_mode_count,
         result.action_residual_evaluated_count,
@@ -1519,6 +2400,978 @@ void write_success_diagnostics(
         result.full_residual_certified ? "true" : "false");
 }
 
+FrequencyDomainStatus solve_gpu_frequency_window(
+    const PoissonAirboxEigenBlockProblem &problem,
+    PoissonAirboxModalEigenResult *out_result) noexcept
+{
+    struct WindowCandidate {
+        PoissonAirboxModalEigenResult::AcceptedMode mode{};
+        PoissonAirboxModalEigenResult source{};
+        std::uint32_t pass_index = 0u;
+    };
+    struct WindowTotals {
+        std::uint64_t converged = 0u;
+        std::uint64_t finite = 0u;
+        std::uint64_t positive = 0u;
+        std::uint64_t residual = 0u;
+        std::uint64_t reconstructed = 0u;
+        std::uint64_t accepted = 0u;
+        std::uint64_t iterations = 0u;
+        std::uint64_t setup_h2d = 0u;
+        std::uint64_t final_d2h = 0u;
+        std::uint64_t hot_loop_allocations = 0u;
+        std::uint64_t hot_loop_h2d_bytes = 0u;
+        std::uint64_t hot_loop_d2h_bytes = 0u;
+        std::uint64_t operator_applies = 0u;
+        std::uint64_t poisson_solves = 0u;
+        std::uint64_t poisson_iterations = 0u;
+        std::uint64_t shift_iterations = 0u;
+        std::uint32_t eps_monitor_iterations = 0u;
+        std::int32_t eps_reason = 0;
+        bool eps_reason_available = false;
+        bool eps_cancellation_observed = false;
+        bool device_residency_observed = false;
+        bool device_residency_verified = true;
+        bool persistent_context_verified = false;
+        bool operator_context_reused = false;
+        bool hypre_policy_observed = false;
+        bool hypre_policy_configured = true;
+        bool hypre_memory_location_device = true;
+        bool hypre_execution_policy_device = true;
+        bool hypre_vendor_sptrans_enabled = true;
+        bool hypre_vendor_spmv_enabled = true;
+        bool hypre_vendor_spgemm_enabled = true;
+        int hypre_first_error_code = 0;
+        std::string hypre_failure_reason{};
+    } totals{};
+    constexpr std::uint32_t base_subwindow_count = 16u;
+    constexpr std::uint32_t refinement_partition_count = 32u;
+    constexpr std::uint32_t refinement_subwindow_count =
+        refinement_partition_count + 2u;
+    constexpr std::uint32_t pass_count = 2u;
+    constexpr double cluster_frequency_relative_tolerance = 1.0e-8;
+    constexpr double cluster_frequency_absolute_tolerance_hz = 1.0;
+    constexpr double subspace_overlap_threshold = 1.0 - 1.0e-6;
+    const std::uint64_t split_dimension = 2u * problem.q_dof_count;
+    const std::uint64_t maximum_nev = split_dimension >= 4u
+        ? split_dimension - 2u
+        : 0u;
+    const auto resolved_nev = [maximum_nev](std::uint32_t requested_count) {
+        return std::min<std::uint64_t>(
+            maximum_nev,
+            4u * static_cast<std::uint64_t>(requested_count));
+    };
+    if (problem.requested_mode_count >
+            std::numeric_limits<std::uint32_t>::max() / 4u ||
+        maximum_nev == 0u) {
+        copy_message(
+            out_result->stop_reason,
+            sizeof(out_result->stop_reason),
+            "gpu_k0_requested_mode_count_invalid");
+        return fail(
+            out_result,
+            FrequencyDomainStatus::validation_error,
+            "GPU K0 frequency window cannot form a guarded nev",
+            out_result->stop_reason);
+    }
+    const std::uint32_t refined_requested_mode_count =
+        2u * problem.requested_mode_count;
+    const std::uint64_t requested_nev = resolved_nev(problem.requested_mode_count);
+    const std::uint64_t refined_nev = resolved_nev(refined_requested_mode_count);
+    const bool refined_nev_increased = refined_nev > requested_nev;
+    std::array<std::uint32_t, pass_count> pass_planned_subwindow_count{
+        base_subwindow_count,
+        refinement_subwindow_count};
+    std::array<std::uint32_t, pass_count> pass_completed_subwindow_count{};
+    std::array<std::uint32_t, pass_count> pass_failed_subwindow_count{};
+    std::array<bool, pass_count> pass_cancelled{};
+    std::vector<WindowCandidate> candidates;
+    candidates.reserve(
+        static_cast<std::size_t>(problem.requested_mode_count) * 4u);
+    bool window_interrupted = false;
+    bool window_failed = false;
+    std::uint32_t empty_subwindow_count = 0u;
+    char executed_subwindows[sizeof(out_result->executed_subwindows_json)]{};
+    std::size_t executed_subwindows_size = 1u;
+    executed_subwindows[0] = '[';
+    bool schedule_complete = true;
+    auto append_schedule = [&](const char *format, auto... values) {
+        if (!schedule_complete ||
+            executed_subwindows_size >= sizeof(executed_subwindows)) {
+            schedule_complete = false;
+            return;
+        }
+        const int written = std::snprintf(
+            executed_subwindows + executed_subwindows_size,
+            sizeof(executed_subwindows) - executed_subwindows_size,
+            format,
+            values...);
+        if (written < 0 ||
+            static_cast<std::size_t>(written) >=
+                sizeof(executed_subwindows) - executed_subwindows_size) {
+            schedule_complete = false;
+            return;
+        }
+        executed_subwindows_size += static_cast<std::size_t>(written);
+    };
+    const auto accumulate = [&](const PoissonAirboxModalEigenResult &result) {
+        totals.converged += result.converged_eigenpair_count;
+        totals.finite += result.finite_real_eigenpair_count;
+        totals.positive += result.positive_frequency_eigenpair_count;
+        totals.residual += result.action_residual_evaluated_count;
+        totals.reconstructed += result.reconstructed_mode_count;
+        totals.accepted += result.full_residual_accepted_count;
+        totals.iterations += result.outer_iterations;
+        totals.setup_h2d += result.setup_h2d_transfer_count;
+        totals.final_d2h += result.final_d2h_transfer_count;
+        totals.hot_loop_allocations += result.hot_loop_allocations;
+        totals.hot_loop_h2d_bytes += result.hot_loop_h2d_bytes;
+        totals.hot_loop_d2h_bytes += result.hot_loop_d2h_bytes;
+        totals.operator_applies += result.operator_apply_count;
+        totals.poisson_solves += result.poisson_solve_count;
+        totals.poisson_iterations += result.poisson_iteration_count;
+        totals.shift_iterations += result.shift_linear_iteration_count;
+        totals.eps_monitor_iterations = std::max(
+            totals.eps_monitor_iterations,
+            result.eps_monitor_iteration_count);
+        totals.eps_reason = result.eps_converged_reason;
+        totals.eps_reason_available =
+            totals.eps_reason_available || result.eps_reason_available;
+        totals.eps_cancellation_observed =
+            totals.eps_cancellation_observed || result.eps_cancellation_observed;
+        totals.persistent_context_verified =
+            totals.persistent_context_verified || result.persistent_context_verified;
+        totals.operator_context_reused =
+            totals.operator_context_reused || result.operator_context_reused;
+        if (result.hypre_device_policy_observed) {
+            totals.hypre_policy_observed = true;
+            totals.hypre_policy_configured =
+                totals.hypre_policy_configured && result.hypre_device_policy_configured;
+            totals.hypre_memory_location_device =
+                totals.hypre_memory_location_device && result.hypre_memory_location_device;
+            totals.hypre_execution_policy_device =
+                totals.hypre_execution_policy_device && result.hypre_execution_policy_device;
+            totals.hypre_vendor_sptrans_enabled =
+                totals.hypre_vendor_sptrans_enabled && result.hypre_vendor_sptrans_enabled;
+            totals.hypre_vendor_spmv_enabled =
+                totals.hypre_vendor_spmv_enabled && result.hypre_vendor_spmv_enabled;
+            totals.hypre_vendor_spgemm_enabled =
+                totals.hypre_vendor_spgemm_enabled && result.hypre_vendor_spgemm_enabled;
+            if (totals.hypre_first_error_code == 0 && result.hypre_first_error_code != 0) {
+                totals.hypre_first_error_code = result.hypre_first_error_code;
+                totals.hypre_failure_reason = result.hypre_failure_reason;
+            }
+        }
+    };
+    const auto q_duplicate = [&](const WindowCandidate &existing,
+                                 const PoissonAirboxModalEigenResult::AcceptedMode &mode,
+                                 std::uint32_t pass_index) {
+        if (existing.pass_index != pass_index ||
+            existing.mode.full_vector.size() <
+                static_cast<std::size_t>(problem.q_dof_count) ||
+            mode.full_vector.size() <
+                static_cast<std::size_t>(problem.q_dof_count)) {
+            return false;
+        }
+        const double frequency_scale = std::max(
+            std::abs(existing.mode.frequency_hz),
+            std::abs(mode.frequency_hz));
+        const double frequency_tolerance_hz = std::max(
+            cluster_frequency_absolute_tolerance_hz,
+            cluster_frequency_relative_tolerance * frequency_scale);
+        if (std::abs(existing.mode.frequency_hz - mode.frequency_hz) >
+            frequency_tolerance_hz) {
+            return false;
+        }
+        Complex overlap = 0.0;
+        double existing_norm = 0.0;
+        double candidate_norm = 0.0;
+        for (std::size_t component = 0;
+             component < static_cast<std::size_t>(problem.q_dof_count);
+             ++component) {
+            overlap += std::conj(existing.mode.full_vector[component]) *
+                mode.full_vector[component];
+            existing_norm += std::norm(existing.mode.full_vector[component]);
+            candidate_norm += std::norm(mode.full_vector[component]);
+        }
+        return std::abs(overlap) /
+            (std::sqrt(existing_norm * candidate_norm) + 1.0e-300) >=
+            1.0 - 1.0e-6;
+    };
+    const double window_width =
+        problem.frequency_max_hz - problem.frequency_min_hz;
+    const double refinement_spacing =
+        window_width / static_cast<double>(refinement_partition_count);
+    const double refinement_first_shift_hz =
+        problem.frequency_min_hz - 0.5 * refinement_spacing;
+    const double refinement_last_shift_hz =
+        problem.frequency_max_hz + 0.5 * refinement_spacing;
+    const double lower_coverage_margin_hz =
+        problem.frequency_min_hz - refinement_first_shift_hz;
+    const double upper_coverage_margin_hz =
+        refinement_last_shift_hz - problem.frequency_max_hz;
+    for (std::uint32_t pass_index = 0u;
+         pass_index < pass_count && !window_interrupted;
+         ++pass_index) {
+        if (poisson_airbox_modal_cancel_requested(problem)) {
+            window_interrupted = true;
+            pass_cancelled[pass_index] = true;
+            break;
+        }
+        for (std::uint32_t subwindow_index = 0u;
+             subwindow_index < pass_planned_subwindow_count[pass_index];
+             ++subwindow_index) {
+            poisson_airbox_modal_emit_progress(
+                problem,
+                pass_index == 0u
+                    ? "frequency_window_base_subwindow"
+                    : "frequency_window_refinement_subwindow",
+                "production_gpu",
+                subwindow_index,
+                0u,
+                0u,
+                0u,
+                0.0);
+            if (poisson_airbox_modal_cancel_requested(problem)) {
+                window_interrupted = true;
+                pass_cancelled[pass_index] = true;
+                break;
+            }
+            PoissonAirboxEigenBlockProblem shifted = problem;
+            shifted.target_kind = "nearest_frequency";
+            shifted.target_frequency_hz = pass_index == 0u
+                ? problem.frequency_min_hz +
+                    (static_cast<double>(subwindow_index) + 0.5) *
+                        window_width /
+                        static_cast<double>(base_subwindow_count)
+                : problem.frequency_min_hz +
+                    (static_cast<double>(subwindow_index) - 0.5) *
+                        refinement_spacing;
+            shifted.frequency_min_hz = 0.0;
+            shifted.frequency_max_hz = 0.0;
+            shifted.requested_mode_count = pass_index == 0u
+                ? problem.requested_mode_count
+                : refined_requested_mode_count;
+            PoissonAirboxModalEigenResult shifted_result{};
+            const FrequencyDomainStatus shifted_status =
+                solve_poisson_airbox_modal_eigen_gpu_petsc_slepc(
+                    shifted,
+                    &shifted_result);
+            accumulate(shifted_result);
+            std::vector<const PoissonAirboxModalEigenResult::AcceptedMode *>
+                in_window_modes;
+            in_window_modes.reserve(shifted_result.accepted_modes.size());
+            for (const auto &mode : shifted_result.accepted_modes) {
+                if (mode.frequency_hz >= problem.frequency_min_hz &&
+                    mode.frequency_hz <= problem.frequency_max_hz) {
+                    in_window_modes.push_back(&mode);
+                }
+            }
+            append_schedule(
+                "%s{\"pass\":\"%s\",\"subwindow_index\":%u,"
+                "\"shift_frequency_hz\":%.17g,\"requested_nev\":%llu,"
+                "\"status\":\"%s\",\"converged_eigenpair_count\":%u,"
+                "\"candidate_mode_count\":%u,"
+                "\"candidate_mode_count_kind\":\"raw_ritz_in_window\","
+                "\"raw_ritz_in_window_count\":%u,"
+                "\"action_residual_evaluated_count\":%u,"
+                "\"reconstructed_mode_count\":%u,"
+                "\"full_residual_accepted_count\":%u,"
+                "\"accepted_mode_count\":%zu,"
+                "\"stop_reason\":\"%s\",\"accepted_frequencies_hz\":[",
+                pass_index == 0u && subwindow_index == 0u ? "" : ",",
+                pass_index == 0u ? "base" : "refinement",
+                subwindow_index,
+                shifted.target_frequency_hz,
+                static_cast<unsigned long long>(
+                    pass_index == 0u ? requested_nev : refined_nev),
+                shifted_status == FrequencyDomainStatus::ok ? "ok" : "failed",
+                shifted_result.converged_eigenpair_count,
+                shifted_result.raw_ritz_in_window_count,
+                shifted_result.raw_ritz_in_window_count,
+                shifted_result.action_residual_evaluated_count,
+                shifted_result.reconstructed_mode_count,
+                shifted_result.full_residual_accepted_count,
+                in_window_modes.size(),
+                shifted_result.stop_reason[0] != '\0'
+                    ? shifted_result.stop_reason
+                    : (shifted_status == FrequencyDomainStatus::ok
+                           ? "converged"
+                           : "subwindow_failed"));
+            for (std::size_t mode_index = 0u;
+                 mode_index < in_window_modes.size();
+                 ++mode_index) {
+                append_schedule(
+                    "%s%.17g",
+                    mode_index == 0u ? "" : ",",
+                    in_window_modes[mode_index]->frequency_hz);
+            }
+            append_schedule("%s", "]}");
+            if (shifted_status != FrequencyDomainStatus::ok) {
+                if (shifted_status == FrequencyDomainStatus::interrupted) {
+                    window_interrupted = true;
+                    pass_cancelled[pass_index] = true;
+                    totals.eps_cancellation_observed = true;
+                    break;
+                }
+                window_failed = true;
+                ++pass_failed_subwindow_count[pass_index];
+                continue;
+            }
+            ++pass_completed_subwindow_count[pass_index];
+            totals.device_residency_observed = true;
+            totals.device_residency_verified =
+                totals.device_residency_verified &&
+                shifted_result.device_residency_verified;
+            if (in_window_modes.empty()) {
+                ++empty_subwindow_count;
+            }
+            for (const auto &mode : shifted_result.accepted_modes) {
+                if (mode.frequency_hz < problem.frequency_min_hz ||
+                    mode.frequency_hz > problem.frequency_max_hz) {
+                    continue;
+                }
+                const bool duplicate = std::any_of(
+                    candidates.begin(),
+                    candidates.end(),
+                    [&](const WindowCandidate &existing) {
+                        return q_duplicate(existing, mode, pass_index);
+                    });
+                if (!duplicate) {
+                    candidates.push_back(WindowCandidate{
+                        mode,
+                        shifted_result,
+                        pass_index});
+                }
+            }
+            if (poisson_airbox_modal_cancel_requested(problem)) {
+                window_interrupted = true;
+                pass_cancelled[pass_index] = true;
+                break;
+            }
+        }
+        if (pass_index == 0u &&
+            pass_completed_subwindow_count[0] == base_subwindow_count &&
+            pass_failed_subwindow_count[0] == 0u) {
+            poisson_airbox_modal_emit_progress(
+                problem,
+                "frequency_window_base_complete",
+                "production_gpu",
+                base_subwindow_count,
+                static_cast<std::uint32_t>(candidates.size()),
+                0u,
+                0u,
+                0.0);
+            if (poisson_airbox_modal_cancel_requested(problem)) {
+                window_interrupted = true;
+                pass_cancelled[1] = true;
+            }
+        }
+    }
+    append_schedule("%s", "]");
+    if (!schedule_complete) {
+        window_failed = true;
+        std::snprintf(
+            executed_subwindows,
+            sizeof(executed_subwindows),
+            "[{\"status\":\"diagnostics_truncated\"}]");
+    }
+    std::sort(
+        candidates.begin(),
+        candidates.end(),
+        [](const WindowCandidate &left, const WindowCandidate &right) {
+            if (left.pass_index != right.pass_index) {
+                return left.pass_index < right.pass_index;
+            }
+            return left.mode.frequency_hz < right.mode.frequency_hz;
+        });
+
+    struct WindowCluster {
+        double frequency_sum_hz = 0.0;
+        std::size_t frequency_sample_count = 0u;
+        std::vector<std::size_t> independent_candidate_indices{};
+        std::vector<std::vector<Complex>> orthonormal_basis{};
+
+        double frequency_hz() const noexcept
+        {
+            return frequency_sample_count > 0u
+                ? frequency_sum_hz /
+                    static_cast<double>(frequency_sample_count)
+                : 0.0;
+        }
+    };
+    const auto frequencies_match = [&](double left_hz, double right_hz) {
+        const double tolerance_hz = std::max(
+            cluster_frequency_absolute_tolerance_hz,
+            cluster_frequency_relative_tolerance *
+                std::max(std::abs(left_hz), std::abs(right_hz)));
+        return std::abs(left_hz - right_hz) <= tolerance_hz;
+    };
+    const auto build_clusters = [&](std::uint32_t pass_index) {
+        std::vector<WindowCluster> clusters;
+        for (std::size_t candidate_index = 0u;
+             candidate_index < candidates.size();
+             ++candidate_index) {
+            const WindowCandidate &candidate = candidates[candidate_index];
+            if (candidate.pass_index != pass_index ||
+                candidate.mode.full_vector.size() <
+                    static_cast<std::size_t>(problem.q_dof_count)) {
+                continue;
+            }
+            if (clusters.empty() ||
+                !frequencies_match(
+                    clusters.back().frequency_hz(),
+                    candidate.mode.frequency_hz)) {
+                clusters.emplace_back();
+            }
+            WindowCluster &cluster = clusters.back();
+            cluster.frequency_sum_hz += candidate.mode.frequency_hz;
+            ++cluster.frequency_sample_count;
+            std::vector<Complex> vector(
+                candidate.mode.full_vector.begin(),
+                candidate.mode.full_vector.begin() +
+                    static_cast<std::ptrdiff_t>(problem.q_dof_count));
+            for (int orthogonalization_pass = 0;
+                 orthogonalization_pass < 2;
+                 ++orthogonalization_pass) {
+                for (const auto &basis_vector : cluster.orthonormal_basis) {
+                    Complex projection = 0.0;
+                    for (std::size_t component = 0u;
+                         component < vector.size();
+                         ++component) {
+                        projection += std::conj(basis_vector[component]) *
+                            vector[component];
+                    }
+                    for (std::size_t component = 0u;
+                         component < vector.size();
+                         ++component) {
+                        vector[component] -=
+                            projection * basis_vector[component];
+                    }
+                }
+            }
+            double norm_squared = 0.0;
+            for (const Complex value : vector) {
+                norm_squared += std::norm(value);
+            }
+            const double norm = std::sqrt(norm_squared);
+            if (!(norm > 1.0e-8) || !std::isfinite(norm)) {
+                continue;
+            }
+            for (Complex &value : vector) {
+                value /= norm;
+            }
+            cluster.orthonormal_basis.push_back(std::move(vector));
+            cluster.independent_candidate_indices.push_back(candidate_index);
+        }
+        return clusters;
+    };
+    const std::vector<WindowCluster> base_clusters = build_clusters(0u);
+    const std::vector<WindowCluster> refinement_clusters = build_clusters(1u);
+    struct ClusterSelection {
+        std::vector<std::size_t> cluster_indices{};
+        std::size_t covered_mode_count = 0u;
+        std::size_t split_cluster_index =
+            std::numeric_limits<std::size_t>::max();
+        bool complete = false;
+        bool splits_cluster = false;
+    };
+    const std::size_t requested_mode_count = static_cast<std::size_t>(
+        problem.requested_mode_count);
+    const auto select_clusters = [requested_mode_count](
+        const std::vector<WindowCluster> &clusters) {
+        ClusterSelection selection{};
+        for (std::size_t cluster_index = 0u;
+             cluster_index < clusters.size();
+             ++cluster_index) {
+            const std::size_t rank =
+                clusters[cluster_index].orthonormal_basis.size();
+            if (rank == 0u) {
+                continue;
+            }
+            if (selection.covered_mode_count + rank > requested_mode_count) {
+                selection.splits_cluster = true;
+                selection.split_cluster_index = cluster_index;
+                break;
+            }
+            selection.cluster_indices.push_back(cluster_index);
+            selection.covered_mode_count += rank;
+            if (selection.covered_mode_count == requested_mode_count) {
+                selection.complete = true;
+                break;
+            }
+        }
+        return selection;
+    };
+    const ClusterSelection base_selection = select_clusters(base_clusters);
+    const ClusterSelection refinement_selection =
+        select_clusters(refinement_clusters);
+    const bool base_pass_complete =
+        pass_completed_subwindow_count[0] == pass_planned_subwindow_count[0] &&
+        pass_failed_subwindow_count[0] == 0u &&
+        !pass_cancelled[0];
+    const bool refinement_pass_complete =
+        pass_completed_subwindow_count[1] == pass_planned_subwindow_count[1] &&
+        pass_failed_subwindow_count[1] == 0u &&
+        !pass_cancelled[1];
+    const bool coverage_margins_positive =
+        std::isfinite(lower_coverage_margin_hz) &&
+        std::isfinite(upper_coverage_margin_hz) &&
+        lower_coverage_margin_hz > 0.0 &&
+        upper_coverage_margin_hz > 0.0;
+    bool refinement_disagreement = false;
+    const char *perturbation_result = "stable";
+    double min_subspace_overlap = 1.0;
+    if (!refined_nev_increased) {
+        refinement_disagreement = true;
+        perturbation_result = "refined_nev_not_greater";
+    } else if (base_selection.splits_cluster ||
+               refinement_selection.splits_cluster) {
+        refinement_disagreement = true;
+        perturbation_result = "requested_count_splits_cluster";
+        min_subspace_overlap = 0.0;
+    } else if (base_selection.complete && refinement_selection.complete) {
+        if (base_selection.cluster_indices.size() !=
+            refinement_selection.cluster_indices.size()) {
+            refinement_disagreement = true;
+            perturbation_result = "cluster_count_mismatch";
+        } else {
+            for (std::size_t selected_cluster = 0u;
+                 selected_cluster < base_selection.cluster_indices.size();
+                 ++selected_cluster) {
+                const WindowCluster &base_cluster = base_clusters[
+                    base_selection.cluster_indices[selected_cluster]];
+                const WindowCluster &refinement_cluster = refinement_clusters[
+                    refinement_selection.cluster_indices[selected_cluster]];
+                const std::size_t base_rank =
+                    base_cluster.orthonormal_basis.size();
+                const std::size_t refinement_rank =
+                    refinement_cluster.orthonormal_basis.size();
+                if (!frequencies_match(
+                        base_cluster.frequency_hz(),
+                        refinement_cluster.frequency_hz())) {
+                    refinement_disagreement = true;
+                    perturbation_result = "cluster_frequency_mismatch";
+                    break;
+                }
+                if (base_rank == 0u || base_rank != refinement_rank) {
+                    refinement_disagreement = true;
+                    perturbation_result = "cluster_rank_mismatch";
+                    break;
+                }
+                double squared_overlap_sum = 0.0;
+                for (const auto &base_vector : base_cluster.orthonormal_basis) {
+                    for (const auto &refinement_vector :
+                         refinement_cluster.orthonormal_basis) {
+                        Complex overlap = 0.0;
+                        for (std::size_t component = 0u;
+                             component < base_vector.size();
+                             ++component) {
+                            overlap += std::conj(base_vector[component]) *
+                                refinement_vector[component];
+                        }
+                        squared_overlap_sum += std::norm(overlap);
+                    }
+                }
+                const double subspace_overlap = std::sqrt(std::max(
+                    0.0,
+                    squared_overlap_sum /
+                        static_cast<double>(base_rank)));
+                min_subspace_overlap = std::min(
+                    min_subspace_overlap,
+                    std::min(1.0, subspace_overlap));
+                if (!std::isfinite(subspace_overlap) ||
+                    subspace_overlap < subspace_overlap_threshold) {
+                    refinement_disagreement = true;
+                    perturbation_result = "invariant_subspace_mismatch";
+                    break;
+                }
+            }
+        }
+    } else {
+        min_subspace_overlap = 0.0;
+        if (base_selection.complete != refinement_selection.complete ||
+            base_selection.covered_mode_count !=
+                refinement_selection.covered_mode_count) {
+            refinement_disagreement = true;
+            perturbation_result = "cluster_coverage_mismatch";
+        } else {
+            perturbation_result = "insufficient_requested_mode_coverage";
+        }
+    }
+    if (!coverage_margins_positive && !refinement_disagreement) {
+        refinement_disagreement = true;
+        perturbation_result = "nonpositive_coverage_margin";
+    }
+    if (window_interrupted) {
+        perturbation_result = "cancelled";
+        min_subspace_overlap = 0.0;
+    } else if (window_failed || !base_pass_complete ||
+               !refinement_pass_complete) {
+        perturbation_result = "pass_incomplete";
+        min_subspace_overlap = 0.0;
+    }
+
+    std::vector<WindowCandidate> selected_base_candidates;
+    for (const std::size_t cluster_index : base_selection.cluster_indices) {
+        for (const std::size_t candidate_index :
+             base_clusters[cluster_index].independent_candidate_indices) {
+            selected_base_candidates.push_back(candidates[candidate_index]);
+        }
+    }
+    if (!base_selection.complete || base_selection.splits_cluster) {
+        selected_base_candidates.clear();
+    }
+    char cluster_frequencies_json[2048] = "[]";
+    char cluster_ranks_json[1024] = "[]";
+    bool cluster_json_complete = true;
+    const std::vector<WindowCluster> *reported_clusters = &base_clusters;
+    const std::vector<std::size_t> *reported_cluster_indices =
+        &base_selection.cluster_indices;
+    std::vector<std::size_t> split_cluster_indices;
+    if (base_selection.splits_cluster &&
+        base_selection.split_cluster_index < base_clusters.size()) {
+        split_cluster_indices.push_back(base_selection.split_cluster_index);
+        reported_cluster_indices = &split_cluster_indices;
+    } else if (refinement_selection.splits_cluster &&
+               refinement_selection.split_cluster_index < refinement_clusters.size()) {
+        split_cluster_indices.push_back(refinement_selection.split_cluster_index);
+        reported_clusters = &refinement_clusters;
+        reported_cluster_indices = &split_cluster_indices;
+    }
+    std::size_t frequencies_size = 1u;
+    std::size_t ranks_size = 1u;
+    cluster_frequencies_json[0] = '[';
+    cluster_ranks_json[0] = '[';
+    for (std::size_t index = 0u;
+         index < reported_cluster_indices->size();
+         ++index) {
+        const WindowCluster &cluster =
+            (*reported_clusters)[(*reported_cluster_indices)[index]];
+        const int frequency_written = std::snprintf(
+            cluster_frequencies_json + frequencies_size,
+            sizeof(cluster_frequencies_json) - frequencies_size,
+            "%s%.17g",
+            index == 0u ? "" : ",",
+            cluster.frequency_hz());
+        const int rank_written = std::snprintf(
+            cluster_ranks_json + ranks_size,
+            sizeof(cluster_ranks_json) - ranks_size,
+            "%s%zu",
+            index == 0u ? "" : ",",
+            cluster.orthonormal_basis.size());
+        if (frequency_written < 0 || rank_written < 0 ||
+            static_cast<std::size_t>(frequency_written) >=
+                sizeof(cluster_frequencies_json) - frequencies_size ||
+            static_cast<std::size_t>(rank_written) >=
+                sizeof(cluster_ranks_json) - ranks_size) {
+            cluster_json_complete = false;
+            break;
+        }
+        frequencies_size += static_cast<std::size_t>(frequency_written);
+        ranks_size += static_cast<std::size_t>(rank_written);
+    }
+    if (cluster_json_complete) {
+        cluster_json_complete =
+            std::snprintf(
+                cluster_frequencies_json + frequencies_size,
+                sizeof(cluster_frequencies_json) - frequencies_size,
+                "]") == 1 &&
+            std::snprintf(
+                cluster_ranks_json + ranks_size,
+                sizeof(cluster_ranks_json) - ranks_size,
+                "]") == 1;
+    }
+    if (!cluster_json_complete) {
+        window_failed = true;
+        std::snprintf(
+            cluster_frequencies_json,
+            sizeof(cluster_frequencies_json),
+            "[]");
+        std::snprintf(
+            cluster_ranks_json,
+            sizeof(cluster_ranks_json),
+            "[]");
+    }
+
+    PoissonAirboxModalEigenResult aggregate{};
+    if (!selected_base_candidates.empty()) {
+        aggregate = selected_base_candidates.front().source;
+    } else if (!candidates.empty()) {
+        aggregate = candidates.front().source;
+    } else {
+        aggregate.q_dof_count = problem.q_dof_count;
+        aggregate.phi_dof_count = problem.phi_dof_count;
+        aggregate.augmented_dof_count =
+            problem.q_dof_count + problem.phi_dof_count;
+        aggregate.magnetic_pair_count = problem.magnetic_pair_count;
+        aggregate.airbox_pair_count = problem.airbox_pair_count;
+    }
+    aggregate.accepted_modes.clear();
+    for (const WindowCandidate &candidate : selected_base_candidates) {
+        aggregate.accepted_modes.push_back(candidate.mode);
+    }
+    aggregate.accepted_mode_count = static_cast<std::uint32_t>(
+        aggregate.accepted_modes.size());
+    if (!aggregate.accepted_modes.empty()) {
+        const auto &selected = aggregate.accepted_modes.front();
+        aggregate.selected_eigenpair_index = selected.eigenpair_index;
+        aggregate.eigenvalue_real = selected.eigenvalue_real;
+        aggregate.eigenvalue_imag = selected.eigenvalue_imag;
+        aggregate.omega_rad_s = selected.omega_rad_s;
+        aggregate.frequency_hz = selected.frequency_hz;
+        aggregate.eigen_residual_relative = selected.relative_residual;
+        aggregate.slepc_reported_backward_error =
+            selected.slepc_reported_backward_error;
+        aggregate.full_residual_reconstruction_relative_error =
+            selected.full_residual_reconstruction_relative_error;
+        aggregate.reconstructed_full_descriptor_backward_error =
+            selected.full_residual_reconstruction_relative_error;
+        aggregate.magnetic_block_backward_error =
+            selected.magnetic_block_backward_error;
+        aggregate.poisson_block_backward_error =
+            selected.poisson_block_backward_error;
+        aggregate.gauge_constraint_backward_error =
+            selected.gauge_constraint_backward_error;
+        aggregate.magnetic_residual_l2 = selected.magnetic_residual_l2;
+        aggregate.poisson_residual_l2 = selected.poisson_residual_l2;
+        aggregate.gauge_residual_abs = selected.gauge_residual_abs;
+        aggregate.gauge_mean_abs = selected.gauge_mean_abs;
+        aggregate.positive_frequency_branch_found = true;
+        aggregate.full_residual_certified = std::all_of(
+            aggregate.accepted_modes.begin(),
+            aggregate.accepted_modes.end(),
+            [&](const auto &mode) {
+                return mode.relative_residual <= problem.residual_tolerance;
+            });
+    } else {
+        aggregate.positive_frequency_branch_found = false;
+        aggregate.full_residual_certified = false;
+    }
+    const auto bounded_u32 = [](std::uint64_t value) {
+        return static_cast<std::uint32_t>(std::min<std::uint64_t>(
+            value,
+            std::numeric_limits<std::uint32_t>::max()));
+    };
+    aggregate.converged_eigenpair_count = bounded_u32(totals.converged);
+    aggregate.finite_real_eigenpair_count = bounded_u32(totals.finite);
+    aggregate.positive_frequency_eigenpair_count = bounded_u32(totals.positive);
+    aggregate.action_residual_evaluated_count = bounded_u32(totals.residual);
+    aggregate.reconstructed_mode_count = bounded_u32(totals.reconstructed);
+    aggregate.full_residual_accepted_count = bounded_u32(totals.accepted);
+    aggregate.outer_iterations = bounded_u32(totals.iterations);
+    aggregate.setup_h2d_transfer_count = totals.setup_h2d;
+    aggregate.final_d2h_transfer_count = totals.final_d2h;
+    aggregate.hot_loop_allocations = totals.hot_loop_allocations;
+    aggregate.hot_loop_h2d_bytes = totals.hot_loop_h2d_bytes;
+    aggregate.hot_loop_d2h_bytes = totals.hot_loop_d2h_bytes;
+    aggregate.operator_apply_count = totals.operator_applies;
+    aggregate.poisson_solve_count = totals.poisson_solves;
+    aggregate.poisson_iteration_count = totals.poisson_iterations;
+    aggregate.shift_linear_iteration_count = totals.shift_iterations;
+    aggregate.eps_monitor_iteration_count = totals.eps_monitor_iterations;
+    aggregate.eps_converged_reason = totals.eps_reason;
+    aggregate.eps_reason_available = totals.eps_reason_available;
+    aggregate.eps_cancellation_observed =
+        totals.eps_cancellation_observed || window_interrupted;
+    aggregate.device_residency_verified =
+        totals.device_residency_observed && totals.device_residency_verified;
+    aggregate.persistent_context_verified = totals.persistent_context_verified;
+    aggregate.operator_context_reused = totals.operator_context_reused;
+    aggregate.hypre_device_policy_observed = totals.hypre_policy_observed;
+    aggregate.hypre_device_policy_configured =
+        totals.hypre_policy_observed && totals.hypre_policy_configured;
+    aggregate.hypre_memory_location_device =
+        totals.hypre_policy_observed && totals.hypre_memory_location_device;
+    aggregate.hypre_execution_policy_device =
+        totals.hypre_policy_observed && totals.hypre_execution_policy_device;
+    aggregate.hypre_vendor_sptrans_enabled =
+        totals.hypre_policy_observed && totals.hypre_vendor_sptrans_enabled;
+    aggregate.hypre_vendor_spmv_enabled =
+        totals.hypre_policy_observed && totals.hypre_vendor_spmv_enabled;
+    aggregate.hypre_vendor_spgemm_enabled =
+        totals.hypre_policy_observed && totals.hypre_vendor_spgemm_enabled;
+    aggregate.hypre_first_error_code = totals.hypre_first_error_code;
+    copy_message(
+        aggregate.hypre_failure_reason,
+        sizeof(aggregate.hypre_failure_reason),
+        totals.hypre_failure_reason.c_str());
+    aggregate.window_subwindow_count =
+        base_subwindow_count + refinement_subwindow_count;
+    aggregate.window_completed_subwindow_count =
+        pass_completed_subwindow_count[0] +
+        pass_completed_subwindow_count[1];
+    aggregate.window_failed_subwindow_count =
+        pass_failed_subwindow_count[0] +
+        pass_failed_subwindow_count[1];
+    aggregate.window_empty_subwindow_count = empty_subwindow_count;
+    aggregate.window_failed_subwindow = window_failed;
+    aggregate.window_cancelled = window_interrupted;
+    const bool mode_coverage_complete =
+        base_selection.complete && refinement_selection.complete;
+    aggregate.window_complete =
+        !window_failed && !window_interrupted &&
+        base_pass_complete && refinement_pass_complete &&
+        mode_coverage_complete && !refinement_disagreement &&
+        coverage_margins_positive && cluster_json_complete &&
+        schedule_complete;
+    const auto pass_state = [&](std::uint32_t pass_index) {
+        if (pass_cancelled[pass_index]) {
+            return "cancelled";
+        }
+        if (pass_failed_subwindow_count[pass_index] > 0u) {
+            return "failed";
+        }
+        if (pass_completed_subwindow_count[pass_index] ==
+            pass_planned_subwindow_count[pass_index]) {
+            return "completed";
+        }
+        return pass_completed_subwindow_count[pass_index] == 0u
+            ? "not_run"
+            : "incomplete";
+    };
+    const char *window_stop_reason = aggregate.window_complete
+        ? "window_complete"
+        : (window_interrupted
+               ? "cancel_requested"
+               : (!schedule_complete || !cluster_json_complete
+                      ? "frequency_window_certificate_truncated"
+                      : (window_failed || !base_pass_complete ||
+                                 !refinement_pass_complete
+                             ? "frequency_window_subwindow_failed"
+                             : (refinement_disagreement
+                                    ? "frequency_window_refinement_disagreement"
+                                    : "frequency_window_incomplete_mode_coverage"))));
+    copy_message(
+        aggregate.stop_reason,
+        sizeof(aggregate.stop_reason),
+        window_stop_reason);
+    copy_message(
+        aggregate.eps_stop_reason,
+        sizeof(aggregate.eps_stop_reason),
+        window_stop_reason);
+    copy_message(
+        aggregate.executed_subwindows_json,
+        sizeof(aggregate.executed_subwindows_json),
+        executed_subwindows);
+    const char *certificate_status = aggregate.window_complete
+        ? "certified"
+        : (window_failed ? "failed" : "not_certified");
+    const int certificate_written = std::snprintf(
+        aggregate.window_certificate_json,
+        sizeof(aggregate.window_certificate_json),
+        "{\"schema_version\":\"poisson_airbox_frequency_window_certificate.v1\","
+        "\"status\":\"%s\","
+        "\"method\":\"shift_nev_refinement_subspace_v1\","
+        "\"requested_min_hz\":%.17g,\"requested_max_hz\":%.17g,"
+        "\"requested_mode_count\":%u,\"requested_nev\":%llu,"
+        "\"refined_requested_mode_count\":%u,\"refined_nev\":%llu,"
+        "\"discovered_mode_count\":%zu,\"accepted_mode_count\":%u,"
+        "\"base_schedule\":{\"state\":\"%s\","
+        "\"planned_subwindow_count\":%u,\"completed_subwindow_count\":%u,"
+        "\"failed_subwindow_count\":%u,\"cancelled\":%s,"
+        "\"first_shift_hz\":%.17g,\"last_shift_hz\":%.17g},"
+        "\"refinement_schedule\":{\"state\":\"%s\","
+        "\"planned_subwindow_count\":%u,\"completed_subwindow_count\":%u,"
+        "\"failed_subwindow_count\":%u,\"cancelled\":%s,"
+        "\"first_shift_hz\":%.17g,\"last_shift_hz\":%.17g},"
+        "\"accepted_cluster_frequencies_hz\":%s,\"cluster_ranks\":%s,"
+        "\"coverage_margins_hz\":{\"lower\":%.17g,\"upper\":%.17g},"
+        "\"min_subspace_overlap\":%.17g,"
+        "\"subspace_overlap_threshold\":%.17g,"
+        "\"perturbation_result\":\"%s\","
+        "\"base_schedule_summary_ref\":\"executed_subwindows_json#pass=base\","
+        "\"refinement_schedule_summary_ref\":\"executed_subwindows_json#pass=refinement\","
+        "\"stop_reason\":\"%s\"}",
+        certificate_status,
+        problem.frequency_min_hz,
+        problem.frequency_max_hz,
+        problem.requested_mode_count,
+        static_cast<unsigned long long>(requested_nev),
+        refined_requested_mode_count,
+        static_cast<unsigned long long>(refined_nev),
+        candidates.size(),
+        aggregate.accepted_mode_count,
+        pass_state(0u),
+        pass_planned_subwindow_count[0],
+        pass_completed_subwindow_count[0],
+        pass_failed_subwindow_count[0],
+        pass_cancelled[0] ? "true" : "false",
+        problem.frequency_min_hz +
+            0.5 * window_width / static_cast<double>(base_subwindow_count),
+        problem.frequency_max_hz -
+            0.5 * window_width / static_cast<double>(base_subwindow_count),
+        pass_state(1u),
+        pass_planned_subwindow_count[1],
+        pass_completed_subwindow_count[1],
+        pass_failed_subwindow_count[1],
+        pass_cancelled[1] ? "true" : "false",
+        refinement_first_shift_hz,
+        refinement_last_shift_hz,
+        cluster_frequencies_json,
+        cluster_ranks_json,
+        lower_coverage_margin_hz,
+        upper_coverage_margin_hz,
+        min_subspace_overlap,
+        subspace_overlap_threshold,
+        perturbation_result,
+        window_stop_reason);
+    const bool certificate_complete =
+        schedule_complete && cluster_json_complete &&
+        certificate_written > 0 &&
+        static_cast<std::size_t>(certificate_written) <
+            sizeof(aggregate.window_certificate_json);
+    if (!certificate_complete) {
+        aggregate.window_complete = false;
+        aggregate.window_failed_subwindow = true;
+        copy_message(
+            aggregate.stop_reason,
+            sizeof(aggregate.stop_reason),
+            "frequency_window_certificate_truncated");
+        copy_message(
+            aggregate.eps_stop_reason,
+            sizeof(aggregate.eps_stop_reason),
+            aggregate.stop_reason);
+        std::snprintf(
+            aggregate.window_certificate_json,
+            sizeof(aggregate.window_certificate_json),
+            "{\"schema_version\":\"poisson_airbox_frequency_window_certificate.v1\","
+            "\"status\":\"failed\","
+            "\"method\":\"shift_nev_refinement_subspace_v1\","
+            "\"truncated\":true,"
+            "\"perturbation_result\":\"certificate_truncated\","
+            "\"stop_reason\":\"frequency_window_certificate_truncated\"}");
+    }
+    aggregate.status = aggregate.window_complete
+        ? FrequencyDomainStatus::ok
+        : (window_interrupted
+               ? FrequencyDomainStatus::interrupted
+               : FrequencyDomainStatus::solve_error);
+    copy_message(
+        aggregate.error_message,
+        sizeof(aggregate.error_message),
+        aggregate.window_complete
+            ? ""
+            : (window_interrupted
+                   ? "GPU K0 frequency window was cancelled"
+                   : "GPU K0 frequency window was not certified"));
+    const bool validation_only = problem.validation_only_adapter;
+    write_success_diagnostics(
+        problem,
+        aggregate,
+        "seqaijcusparse",
+        "seqcuda",
+        "seqcuda",
+        validation_only ? "ilu" : "hypre",
+        validation_only ? "none" : "hypre",
+        validation_only
+            ? "materialized_schur_cuda"
+            : "matrix_free_schur_cuda",
+        &aggregate);
+    *out_result = std::move(aggregate);
+    return out_result->status;
+}
+
 } // namespace
 
 FrequencyDomainStatus solve_poisson_airbox_modal_eigen_gpu_petsc_slepc(
@@ -1528,6 +3381,7 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_gpu_petsc_slepc(
     if (out_result == nullptr) {
         return FrequencyDomainStatus::validation_error;
     }
+    latest_persistence_snapshot() = GpuPersistenceSnapshot{};
     *out_result = PoissonAirboxModalEigenResult{};
     const char *validation_failure_reason = "gpu_k0_scope_mismatch";
     if (!validate_problem(problem, out_result, &validation_failure_reason)) {
@@ -1550,487 +3404,8 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_gpu_petsc_slepc(
         problem.frequency_min_hz >= 0.0 &&
         problem.frequency_max_hz > problem.frequency_min_hz;
     if (requested_frequency_window) {
-        struct WindowCandidate {
-            PoissonAirboxModalEigenResult::AcceptedMode mode{};
-            PoissonAirboxModalEigenResult source{};
-        };
-        constexpr std::uint32_t subwindow_count = 16u;
-        const double width = problem.frequency_max_hz - problem.frequency_min_hz;
-        std::vector<WindowCandidate> candidates;
-        candidates.reserve(static_cast<std::size_t>(problem.requested_mode_count) * 2u);
-        std::uint64_t converged_total = 0;
-        std::uint64_t finite_total = 0;
-        std::uint64_t positive_total = 0;
-        std::uint64_t residual_total = 0;
-        std::uint64_t reconstructed_total = 0;
-        std::uint64_t accepted_total = 0;
-        std::uint64_t iterations_total = 0;
-        std::uint64_t setup_h2d_transfer_total = 0;
-        std::uint64_t final_d2h_transfer_total = 0;
-        std::uint64_t hot_loop_allocations_total = 0;
-        std::uint64_t hot_loop_h2d_bytes_total = 0;
-        std::uint64_t hot_loop_d2h_bytes_total = 0;
-        std::uint64_t operator_apply_total = 0;
-        std::uint64_t poisson_solve_total = 0;
-        std::uint64_t poisson_iteration_total = 0;
-        std::uint64_t shift_linear_iteration_total = 0;
-        std::uint32_t eps_monitor_iteration_max = 0;
-        std::int32_t eps_reason_last = 0;
-        bool eps_reason_available = false;
-        bool eps_cancellation_observed = false;
-        bool device_residency_verified = true;
-        bool device_residency_observed = false;
-        bool persistent_context_verified = false;
-        bool operator_context_reused = false;
-        bool window_interrupted = false;
-        bool window_failed = false;
-        double best_action_residual = std::numeric_limits<double>::infinity();
-        double best_full_residual = std::numeric_limits<double>::infinity();
-        double best_magnetic_residual = std::numeric_limits<double>::infinity();
-        double best_poisson_residual = std::numeric_limits<double>::infinity();
-        char subwindows[sizeof(out_result->executed_subwindows_json)]{};
-        std::size_t subwindows_size = 1u;
-        subwindows[0] = '[';
-        bool subwindows_complete = true;
-        auto append_subwindow = [&](const char *format, auto... values) {
-            if (!subwindows_complete || subwindows_size >= sizeof(subwindows)) {
-                subwindows_complete = false;
-                return;
-            }
-            const int written = std::snprintf(
-                subwindows + subwindows_size,
-                sizeof(subwindows) - subwindows_size,
-                format,
-                values...);
-            if (written < 0 || static_cast<std::size_t>(written) >=
-                    sizeof(subwindows) - subwindows_size) {
-                subwindows_complete = false;
-                return;
-            }
-            subwindows_size += static_cast<std::size_t>(written);
-        };
-        for (std::uint32_t subwindow = 0; subwindow < subwindow_count; ++subwindow) {
-            PoissonAirboxEigenBlockProblem shifted = problem;
-            shifted.target_kind = "nearest_frequency";
-            shifted.target_frequency_hz = problem.frequency_min_hz +
-                (static_cast<double>(subwindow) + 0.5) * width /
-                    static_cast<double>(subwindow_count);
-            shifted.frequency_min_hz = 0.0;
-            shifted.frequency_max_hz = 0.0;
-            // One physical branch per shift is enough to cover the window;
-            // aggregation below applies the original publication count.
-            shifted.requested_mode_count = 1u;
-            PoissonAirboxModalEigenResult shifted_result{};
-            const FrequencyDomainStatus shifted_status =
-                solve_poisson_airbox_modal_eigen_gpu_petsc_slepc(
-                    shifted, &shifted_result);
-            operator_context_reused =
-                operator_context_reused || shifted_result.operator_context_reused;
-            persistent_context_verified = persistent_context_verified ||
-                shifted_result.persistent_context_verified;
-            append_subwindow(
-                "%s{\"subwindow_index\":%u,\"shift_frequency_hz\":%.17g,"
-                "\"status\":\"%s\",\"converged_eigenpair_count\":%u,"
-                "\"finite_real_eigenpair_count\":%u,"
-                "\"positive_frequency_eigenpair_count\":%u,"
-                "\"action_residual_evaluated_count\":%u,"
-                "\"reconstructed_mode_count\":%u,"
-                "\"full_residual_accepted_count\":%u,"
-                "\"accepted_mode_count\":%u,"
-                "\"eps_converged_reason\":%d,"
-                "\"eps_stop_reason\":\"%s\","
-                "\"operator_apply_count\":%llu,"
-                "\"poisson_iteration_count\":%llu,"
-                "\"error_message\":\"%.120s\"}",
-                subwindow == 0u ? "" : ",",
-                subwindow,
-                shifted.target_frequency_hz,
-                shifted_status == FrequencyDomainStatus::ok ? "ok" : "failed",
-                shifted_result.converged_eigenpair_count,
-                shifted_result.finite_real_eigenpair_count,
-                shifted_result.positive_frequency_eigenpair_count,
-                shifted_result.action_residual_evaluated_count,
-                shifted_result.reconstructed_mode_count,
-                shifted_result.full_residual_accepted_count,
-                shifted_result.accepted_mode_count,
-                static_cast<int>(shifted_result.eps_converged_reason),
-                shifted_result.eps_stop_reason[0] != '\0'
-                    ? shifted_result.eps_stop_reason
-                    : "unknown",
-                static_cast<unsigned long long>(shifted_result.operator_apply_count),
-                static_cast<unsigned long long>(shifted_result.poisson_iteration_count),
-                shifted_result.error_message);
-            converged_total += shifted_result.converged_eigenpair_count;
-            finite_total += shifted_result.finite_real_eigenpair_count;
-            positive_total += shifted_result.positive_frequency_eigenpair_count;
-            residual_total += shifted_result.action_residual_evaluated_count;
-            reconstructed_total += shifted_result.reconstructed_mode_count;
-            accepted_total += shifted_result.full_residual_accepted_count;
-            iterations_total += shifted_result.outer_iterations;
-            setup_h2d_transfer_total += shifted_result.setup_h2d_transfer_count;
-            final_d2h_transfer_total += shifted_result.final_d2h_transfer_count;
-            hot_loop_allocations_total += shifted_result.hot_loop_allocations;
-            hot_loop_h2d_bytes_total += shifted_result.hot_loop_h2d_bytes;
-            hot_loop_d2h_bytes_total += shifted_result.hot_loop_d2h_bytes;
-            operator_apply_total += shifted_result.operator_apply_count;
-            poisson_solve_total += shifted_result.poisson_solve_count;
-            poisson_iteration_total += shifted_result.poisson_iteration_count;
-            shift_linear_iteration_total += shifted_result.shift_linear_iteration_count;
-            eps_monitor_iteration_max = std::max(
-                eps_monitor_iteration_max,
-                shifted_result.eps_monitor_iteration_count);
-            eps_reason_last = shifted_result.eps_converged_reason;
-            eps_reason_available = eps_reason_available || shifted_result.eps_reason_available;
-            eps_cancellation_observed = eps_cancellation_observed ||
-                shifted_result.eps_cancellation_observed;
-            if (shifted_result.action_residual_evaluated_count > 0u) {
-                best_action_residual = std::min(
-                    best_action_residual, shifted_result.slepc_reported_backward_error);
-            }
-            if (shifted_result.reconstructed_mode_count > 0u) {
-                best_full_residual = std::min(
-                    best_full_residual,
-                    shifted_result.full_residual_reconstruction_relative_error);
-                best_magnetic_residual = std::min(
-                    best_magnetic_residual, shifted_result.magnetic_block_backward_error);
-                best_poisson_residual = std::min(
-                    best_poisson_residual, shifted_result.poisson_block_backward_error);
-            }
-            if (shifted_status != FrequencyDomainStatus::ok) {
-                device_residency_verified = false;
-                window_interrupted =
-                    window_interrupted || shifted_status == FrequencyDomainStatus::interrupted;
-                window_failed = window_failed || shifted_status != FrequencyDomainStatus::interrupted;
-                continue;
-            }
-            device_residency_observed = true;
-            device_residency_verified = device_residency_verified &&
-                shifted_result.device_residency_verified;
-            for (const auto &mode : shifted_result.accepted_modes) {
-                if (mode.frequency_hz < problem.frequency_min_hz ||
-                    mode.frequency_hz > problem.frequency_max_hz) {
-                    continue;
-                }
-                const bool duplicate = std::any_of(
-                    candidates.begin(),
-                    candidates.end(),
-                    [&mode](const WindowCandidate &existing) {
-                        const double frequency_difference =
-                            std::abs(existing.mode.frequency_hz - mode.frequency_hz) /
-                            std::max({1.0, std::abs(existing.mode.frequency_hz),
-                                      std::abs(mode.frequency_hz)});
-                        if (frequency_difference > 1.0e-8 ||
-                            existing.mode.full_vector.size() != mode.full_vector.size()) {
-                            return false;
-                        }
-                        Complex overlap = 0.0;
-                        double left_norm = 0.0;
-                        double right_norm = 0.0;
-                        for (std::size_t component = 0;
-                             component < mode.full_vector.size(); ++component) {
-                            overlap += std::conj(existing.mode.full_vector[component]) *
-                                mode.full_vector[component];
-                            left_norm += std::norm(existing.mode.full_vector[component]);
-                            right_norm += std::norm(mode.full_vector[component]);
-                        }
-                        return std::abs(overlap) /
-                            (std::sqrt(left_norm * right_norm) + 1.0e-300) >= 1.0 - 1.0e-6;
-                    });
-                if (!duplicate) {
-                    candidates.push_back(WindowCandidate{mode, shifted_result});
-                }
-            }
-        }
-        append_subwindow("%s", "]");
-        if (candidates.empty()) {
-            out_result->converged_eigenpair_count = static_cast<std::uint32_t>(
-                std::min<std::uint64_t>(converged_total, std::numeric_limits<std::uint32_t>::max()));
-            out_result->finite_real_eigenpair_count = static_cast<std::uint32_t>(
-                std::min<std::uint64_t>(finite_total, std::numeric_limits<std::uint32_t>::max()));
-            out_result->positive_frequency_eigenpair_count = static_cast<std::uint32_t>(
-                std::min<std::uint64_t>(positive_total, std::numeric_limits<std::uint32_t>::max()));
-            out_result->action_residual_evaluated_count = static_cast<std::uint32_t>(
-                std::min<std::uint64_t>(residual_total, std::numeric_limits<std::uint32_t>::max()));
-            out_result->reconstructed_mode_count = static_cast<std::uint32_t>(
-                std::min<std::uint64_t>(reconstructed_total, std::numeric_limits<std::uint32_t>::max()));
-            out_result->full_residual_accepted_count = static_cast<std::uint32_t>(
-                std::min<std::uint64_t>(accepted_total, std::numeric_limits<std::uint32_t>::max()));
-            out_result->outer_iterations = static_cast<std::uint32_t>(
-                std::min<std::uint64_t>(iterations_total, std::numeric_limits<std::uint32_t>::max()));
-            out_result->setup_h2d_transfer_count = setup_h2d_transfer_total;
-            out_result->final_d2h_transfer_count = final_d2h_transfer_total;
-            out_result->hot_loop_allocations = hot_loop_allocations_total;
-            out_result->hot_loop_h2d_bytes = hot_loop_h2d_bytes_total;
-            out_result->hot_loop_d2h_bytes = hot_loop_d2h_bytes_total;
-            out_result->operator_apply_count = operator_apply_total;
-            out_result->poisson_solve_count = poisson_solve_total;
-            out_result->poisson_iteration_count = poisson_iteration_total;
-            out_result->shift_linear_iteration_count = shift_linear_iteration_total;
-            out_result->eps_monitor_iteration_count = eps_monitor_iteration_max;
-            out_result->eps_converged_reason = eps_reason_last;
-            out_result->eps_reason_available = eps_reason_available;
-            out_result->eps_cancellation_observed = eps_cancellation_observed;
-            out_result->device_residency_verified = device_residency_observed &&
-                device_residency_verified;
-            out_result->persistent_context_verified = persistent_context_verified;
-            out_result->operator_context_reused = operator_context_reused;
-            out_result->window_failed_subwindow = window_failed || !subwindows_complete;
-            out_result->window_cancelled = window_interrupted;
-            out_result->window_complete = false;
-            std::snprintf(
-                out_result->eps_stop_reason,
-                sizeof(out_result->eps_stop_reason),
-                "%s",
-                window_interrupted
-                    ? "cancel_requested"
-                    : (window_failed ? "failed_subwindow" : "no_certified_mode"));
-            out_result->slepc_reported_backward_error =
-                std::isfinite(best_action_residual) ? best_action_residual : 0.0;
-            out_result->full_residual_reconstruction_relative_error =
-                std::isfinite(best_full_residual) ? best_full_residual : 0.0;
-            out_result->magnetic_block_backward_error =
-                std::isfinite(best_magnetic_residual) ? best_magnetic_residual : 0.0;
-            out_result->poisson_block_backward_error =
-                std::isfinite(best_poisson_residual) ? best_poisson_residual : 0.0;
-            std::snprintf(
-                out_result->executed_subwindows_json,
-                sizeof(out_result->executed_subwindows_json),
-                "%s",
-                subwindows_complete ? subwindows : "[{\"status\":\"diagnostics_truncated\"}]");
-            return fail(
-                out_result,
-                window_interrupted
-                    ? FrequencyDomainStatus::interrupted
-                    : FrequencyDomainStatus::solve_error,
-                window_interrupted
-                    ? "GPU K0 frequency window was cancelled before preserving a mode"
-                    : "GPU K0 multi-shift frequency window found no certified mode",
-                window_interrupted
-                    ? "cancel_requested"
-                    : "gpu_frequency_window_no_certified_mode");
-        }
-        if (!subwindows_complete || window_failed || window_interrupted ||
-            candidates.size() < static_cast<std::size_t>(problem.requested_mode_count)) {
-            std::sort(
-                candidates.begin(),
-                candidates.end(),
-                [](const WindowCandidate &left, const WindowCandidate &right) {
-                    return left.mode.frequency_hz < right.mode.frequency_hz;
-                });
-            // A failed or under-covered window may expose already certified
-            // modes as a partial artifact, but it must never advertise a
-            // complete spectrum.
-            if (candidates.empty()) {
-                out_result->window_failed_subwindow = window_failed || !subwindows_complete;
-                out_result->window_cancelled = window_interrupted;
-                out_result->window_complete = false;
-                return fail(
-                    out_result,
-                    window_interrupted
-                        ? FrequencyDomainStatus::interrupted
-                        : FrequencyDomainStatus::solve_error,
-                    window_interrupted
-                        ? "GPU K0 frequency window was cancelled"
-                        : "GPU K0 frequency window coverage is incomplete",
-                    window_interrupted
-                        ? "cancel_requested"
-                        : (window_failed
-                            ? "gpu_frequency_window_failed_subwindow"
-                            : "gpu_frequency_window_incomplete"));
-            }
-            PoissonAirboxModalEigenResult partial = candidates.front().source;
-            partial.accepted_modes.clear();
-            for (const WindowCandidate &candidate : candidates) {
-                partial.accepted_modes.push_back(candidate.mode);
-            }
-            partial.accepted_mode_count = static_cast<std::uint32_t>(partial.accepted_modes.size());
-            partial.converged_eigenpair_count = static_cast<std::uint32_t>(
-                std::min<std::uint64_t>(converged_total, std::numeric_limits<std::uint32_t>::max()));
-            partial.finite_real_eigenpair_count = static_cast<std::uint32_t>(
-                std::min<std::uint64_t>(finite_total, std::numeric_limits<std::uint32_t>::max()));
-            partial.positive_frequency_eigenpair_count = static_cast<std::uint32_t>(
-                std::min<std::uint64_t>(positive_total, std::numeric_limits<std::uint32_t>::max()));
-            partial.action_residual_evaluated_count = static_cast<std::uint32_t>(
-                std::min<std::uint64_t>(residual_total, std::numeric_limits<std::uint32_t>::max()));
-            partial.reconstructed_mode_count = static_cast<std::uint32_t>(
-                std::min<std::uint64_t>(reconstructed_total, std::numeric_limits<std::uint32_t>::max()));
-            partial.full_residual_accepted_count = static_cast<std::uint32_t>(
-                std::min<std::uint64_t>(accepted_total, std::numeric_limits<std::uint32_t>::max()));
-            partial.outer_iterations = static_cast<std::uint32_t>(
-                std::min<std::uint64_t>(iterations_total, std::numeric_limits<std::uint32_t>::max()));
-            partial.setup_h2d_transfer_count = setup_h2d_transfer_total;
-            partial.final_d2h_transfer_count = final_d2h_transfer_total;
-            partial.hot_loop_allocations = hot_loop_allocations_total;
-            partial.hot_loop_h2d_bytes = hot_loop_h2d_bytes_total;
-            partial.hot_loop_d2h_bytes = hot_loop_d2h_bytes_total;
-            partial.operator_apply_count = operator_apply_total;
-            partial.poisson_solve_count = poisson_solve_total;
-            partial.poisson_iteration_count = poisson_iteration_total;
-            partial.shift_linear_iteration_count = shift_linear_iteration_total;
-            partial.eps_monitor_iteration_count = eps_monitor_iteration_max;
-            partial.eps_converged_reason = eps_reason_last;
-            partial.eps_reason_available = eps_reason_available;
-            partial.eps_cancellation_observed = eps_cancellation_observed;
-            partial.device_residency_verified = device_residency_observed &&
-                device_residency_verified;
-            partial.persistent_context_verified = persistent_context_verified;
-            partial.operator_context_reused = operator_context_reused;
-            partial.window_failed_subwindow = window_failed || !subwindows_complete ||
-                candidates.size() < static_cast<std::size_t>(problem.requested_mode_count);
-            partial.window_cancelled = window_interrupted;
-            partial.window_complete = false;
-            partial.status = window_interrupted
-                ? FrequencyDomainStatus::interrupted
-                : FrequencyDomainStatus::solve_error;
-            copy_message(
-                partial.error_message,
-                sizeof(partial.error_message),
-                window_interrupted
-                    ? "GPU K0 frequency window was cancelled"
-                    : "GPU K0 frequency window coverage is incomplete");
-            std::snprintf(
-                partial.executed_subwindows_json,
-                sizeof(partial.executed_subwindows_json),
-                "%s",
-                subwindows_complete ? subwindows : "[{\"status\":\"diagnostics_truncated\"}]");
-            std::snprintf(
-                partial.eps_stop_reason,
-                sizeof(partial.eps_stop_reason),
-                "%s",
-                window_interrupted
-                    ? "cancel_requested"
-                    : (window_failed ? "failed_subwindow" : "incomplete_window"));
-            write_success_diagnostics(
-                problem,
-                partial,
-                "seqaijcusparse",
-                "seqcuda",
-                "seqcuda",
-                "hypre",
-                "unknown",
-                "matrix_free_schur_cuda",
-                &partial);
-            *out_result = std::move(partial);
-            return out_result->status;
-        }
-        std::sort(
-            candidates.begin(), candidates.end(),
-            [](const WindowCandidate &left, const WindowCandidate &right) {
-                return left.mode.frequency_hz < right.mode.frequency_hz;
-            });
-        const std::size_t requested_count = static_cast<std::size_t>(
-            std::max<std::uint32_t>(1u, problem.requested_mode_count));
-        if (candidates.size() > requested_count) {
-            candidates.resize(requested_count);
-        }
-        PoissonAirboxModalEigenResult aggregate = candidates.front().source;
-        aggregate.accepted_modes.clear();
-        for (const WindowCandidate &candidate : candidates) {
-            aggregate.accepted_modes.push_back(candidate.mode);
-        }
-        const auto &selected = aggregate.accepted_modes.front();
-        aggregate.accepted_mode_count = static_cast<std::uint32_t>(aggregate.accepted_modes.size());
-        aggregate.selected_eigenpair_index = selected.eigenpair_index;
-        aggregate.eigenvalue_real = selected.eigenvalue_real;
-        aggregate.eigenvalue_imag = selected.eigenvalue_imag;
-        aggregate.omega_rad_s = selected.omega_rad_s;
-        aggregate.frequency_hz = selected.frequency_hz;
-        aggregate.eigen_residual_relative = selected.relative_residual;
-        aggregate.slepc_reported_backward_error = selected.slepc_reported_backward_error;
-        aggregate.full_residual_reconstruction_relative_error =
-            selected.full_residual_reconstruction_relative_error;
-        aggregate.reconstructed_full_descriptor_backward_error =
-            selected.full_residual_reconstruction_relative_error;
-        aggregate.magnetic_block_backward_error = selected.magnetic_block_backward_error;
-        aggregate.poisson_block_backward_error = selected.poisson_block_backward_error;
-        aggregate.gauge_constraint_backward_error = selected.gauge_constraint_backward_error;
-        aggregate.gauge_mean_abs = selected.gauge_mean_abs;
-        aggregate.converged_eigenpair_count = static_cast<std::uint32_t>(
-            std::min<std::uint64_t>(converged_total, std::numeric_limits<std::uint32_t>::max()));
-        aggregate.finite_real_eigenpair_count = static_cast<std::uint32_t>(
-            std::min<std::uint64_t>(finite_total, std::numeric_limits<std::uint32_t>::max()));
-        aggregate.positive_frequency_eigenpair_count = static_cast<std::uint32_t>(
-            std::min<std::uint64_t>(positive_total, std::numeric_limits<std::uint32_t>::max()));
-        aggregate.action_residual_evaluated_count = static_cast<std::uint32_t>(
-            std::min<std::uint64_t>(residual_total, std::numeric_limits<std::uint32_t>::max()));
-        aggregate.reconstructed_mode_count = static_cast<std::uint32_t>(
-            std::min<std::uint64_t>(reconstructed_total, std::numeric_limits<std::uint32_t>::max()));
-        aggregate.full_residual_accepted_count = static_cast<std::uint32_t>(
-            std::min<std::uint64_t>(accepted_total, std::numeric_limits<std::uint32_t>::max()));
-        aggregate.outer_iterations = static_cast<std::uint32_t>(
-            std::min<std::uint64_t>(iterations_total, std::numeric_limits<std::uint32_t>::max()));
-        aggregate.setup_h2d_transfer_count = setup_h2d_transfer_total;
-        aggregate.final_d2h_transfer_count = final_d2h_transfer_total;
-        aggregate.hot_loop_allocations = hot_loop_allocations_total;
-        aggregate.hot_loop_h2d_bytes = hot_loop_h2d_bytes_total;
-        aggregate.hot_loop_d2h_bytes = hot_loop_d2h_bytes_total;
-        aggregate.operator_apply_count = operator_apply_total;
-        aggregate.poisson_solve_count = poisson_solve_total;
-        aggregate.poisson_iteration_count = poisson_iteration_total;
-        aggregate.shift_linear_iteration_count = shift_linear_iteration_total;
-        aggregate.eps_monitor_iteration_count = eps_monitor_iteration_max;
-        aggregate.eps_converged_reason = eps_reason_last;
-        aggregate.eps_reason_available = eps_reason_available;
-        aggregate.eps_cancellation_observed = eps_cancellation_observed;
-        aggregate.device_residency_verified = device_residency_observed &&
-            device_residency_verified;
-        aggregate.persistent_context_verified = persistent_context_verified;
-        aggregate.operator_context_reused = operator_context_reused;
-        aggregate.window_failed_subwindow = window_failed || !subwindows_complete;
-        aggregate.window_cancelled = window_interrupted;
-        aggregate.window_complete = !window_failed && !window_interrupted &&
-            subwindows_complete && aggregate.accepted_mode_count >= problem.requested_mode_count;
-        aggregate.status = window_interrupted
-            ? FrequencyDomainStatus::interrupted
-            : aggregate.window_complete
-                ? FrequencyDomainStatus::ok
-                : FrequencyDomainStatus::solve_error;
-        if (aggregate.status != FrequencyDomainStatus::ok) {
-            copy_message(
-                aggregate.error_message,
-                sizeof(aggregate.error_message),
-                aggregate.status == FrequencyDomainStatus::interrupted
-                    ? "GPU K0 frequency window was cancelled"
-                    : "GPU K0 frequency window coverage is incomplete");
-        }
-        std::snprintf(
-            aggregate.eps_stop_reason,
-            sizeof(aggregate.eps_stop_reason),
-            "%s",
-            aggregate.window_complete
-                ? "converged_tolerance"
-                : (window_failed ? "failed_subwindow" :
-                   (window_interrupted ? "cancel_requested" : "incomplete_window")));
-        std::snprintf(
-            aggregate.executed_subwindows_json,
-            sizeof(aggregate.executed_subwindows_json),
-            "%s",
-            subwindows_complete ? subwindows : "[{\"status\":\"diagnostics_truncated\"}]");
-        // The source result belongs to one subwindow. Rebuild diagnostics
-        // after aggregation so counts, transfer telemetry and the complete
-        // executed-subwindow list describe the published result.
-        const bool source_used_materialized_operator =
-            std::strstr(
-                aggregate.diagnostics_json,
-                "\"eigensolver_operator_kind\":\"materialized_schur_cuda\"") != nullptr;
-        const bool source_used_ilu =
-            std::strstr(aggregate.diagnostics_json, "\"shift_pc_type\":\"ilu\"") != nullptr;
-        write_success_diagnostics(
-            problem,
-            aggregate,
-            "seqaijcusparse",
-            "seqcuda",
-            "seqcuda",
-            "hypre",
-            source_used_ilu ? "ilu" : "hypre",
-            source_used_materialized_operator
-                ? "materialized_schur_cuda"
-                : "matrix_free_schur_cuda",
-            &aggregate);
-        *out_result = std::move(aggregate);
-        return out_result->status;
+        return solve_gpu_frequency_window(problem, out_result);
     }
-
     const std::lock_guard<std::mutex> lock(gpu_slepc_mutex());
     if (!ensure_slepc_initialized(out_result->error_message)) {
         return fail(
@@ -2038,6 +3413,18 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_gpu_petsc_slepc(
             FrequencyDomainStatus::unavailable,
             out_result->error_message,
             "slepc_cuda_initialization_failed");
+    }
+    if (!problem.validation_only_adapter) {
+        const HypreDevicePolicySnapshot hypre_policy =
+            configure_hypre_cuda_device_policy();
+        publish_hypre_device_policy(hypre_policy, out_result);
+        if (!hypre_cuda_device_policy_is_available(hypre_policy)) {
+            return fail(
+                out_result,
+                FrequencyDomainStatus::unavailable,
+                "GPU K0 HYPRE CUDA device policy is unavailable",
+                kHypreCudaDevicePolicyUnavailable);
+        }
     }
 
     GpuPersistentContext *persistent = nullptr;
@@ -2054,24 +3441,20 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_gpu_petsc_slepc(
         static_cast<unsigned long long>(operator_signature));
     Mat shell = nullptr;
     Mat mass = nullptr;
-    Mat preconditioner = nullptr;
-    Mat materialized_operator = nullptr;
     EPS eps = nullptr;
+    KSP st_ksp = nullptr;
+    PC st_pc = nullptr;
     Vec xr = nullptr;
     Vec xi = nullptr;
-    auto cleanup = [&]() noexcept {
-        if (xi) VecDestroy(&xi);
-        if (xr) VecDestroy(&xr);
-        if (eps) EPSDestroy(&eps);
-        if (materialized_operator) MatDestroy(&materialized_operator);
-        if (preconditioner) MatDestroy(&preconditioner);
-        if (mass) MatDestroy(&mass);
-        if (shell) MatDestroy(&shell);
-    };
+    bool materialized_shifted_operator = false;
+    auto cleanup = []() noexcept {};
+    GpuSolveControlArm solve_control_arm{};
 
     try {
         bool context_reused = false;
-        persistent = acquire_cached_gpu_context(problem, &context_reused);
+        const char *invalidation_reason = "cold_start";
+        persistent = acquire_cached_gpu_context(
+            problem, &context_reused, &invalidation_reason);
         if (persistent == nullptr) {
             cleanup();
             return fail(
@@ -2080,39 +3463,37 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_gpu_petsc_slepc(
                 "GPU K0 PETSc CUDA Schur context setup failed",
                 "gpu_schur_context_setup_failed");
         }
-        out_result->operator_context_reused = context_reused;
-        out_result->persistent_context_verified = context_reused;
+        persistent->solve_control.arm(problem);
+        solve_control_arm.control = &persistent->solve_control;
+        GpuPersistenceSnapshot &persistence = latest_persistence_snapshot();
+        persistence.operator_context_generation = persistent->operator_generation;
+        persistence.solve_control_generation = persistent->solve_control.generation;
+        persistence.operator_context_reused = context_reused;
+        persistence.invalidation_reason = invalidation_reason;
+        persistence.reuse_mask = context_reused ? kReuseResidualWorkspace : 0u;
         schur = &persistent->schur;
+        if (!problem.validation_only_adapter) {
+            publish_hypre_device_policy(schur->hypre_device_policy, out_result);
+        }
         split = &persistent->split;
         operator_apply_before = schur->operator_apply_count;
         poisson_solve_before = schur->poisson_solve_count;
         poisson_iteration_before = schur->poisson_iteration_count;
-        // A reused context has already uploaded its five immutable operator CSR
-        // blocks.  The split mass is materialized for each solve because its
-        // scaling belongs to the current spectral normalization; that upload
-        // is counted at the successful assembly boundary below.
+        // An identical operator identity reuses all five uploaded CSR blocks.
+        // Solver-only rebuilds account separately for a new split-mass upload.
         out_result->setup_h2d_transfer_count = context_reused
             ? 0u
             : schur->setup_h2d_transfer_count;
-        if (KSPSetConvergenceTest(
-                schur->poisson_ksp,
-                gpu_modal_ksp_convergence_test,
-                const_cast<PoissonAirboxEigenBlockProblem *>(&problem),
-                nullptr) != PETSC_SUCCESS) {
-            cleanup();
-            return fail(
-                out_result,
-                FrequencyDomainStatus::operator_error,
-                "GPU K0 Poisson cancellation monitor setup failed",
-                "gpu_poisson_cancellation_monitor_setup_failed");
-        }
         const PetscInt base = schur->q_count;
         const PetscInt dimension = 2 * base;
         const double target_omega =
             2.0 * 3.14159265358979323846264338327950288 * problem.target_frequency_hz;
-        const double angular_frequency_scale = std::max(1.0, std::abs(target_omega));
         const double mass_norm = csr_infinity_norm(problem.B_qq);
+        const double operator_norm = csr_infinity_norm(problem.A_qq);
+        const double angular_frequency_scale = std::max(
+            1.0, operator_norm / std::max(mass_norm, 1.0e-300));
         if (!std::isfinite(mass_norm) || mass_norm <= 0.0 ||
+            !std::isfinite(operator_norm) ||
             !std::isfinite(angular_frequency_scale * mass_norm) ||
             angular_frequency_scale * mass_norm <= 0.0) {
             cleanup();
@@ -2126,140 +3507,42 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_gpu_petsc_slepc(
         const double operator_scale = mass_scale / angular_frequency_scale;
         const double target_eigenvalue = target_omega / angular_frequency_scale;
         split->operator_scale = operator_scale;
-        const double eps_tolerance =
-            transformed_eigensolver_tolerance(problem.residual_tolerance);
-        if (MatCreateShell(
-                PETSC_COMM_SELF,
+        const PetscInt nev = requested_gpu_nev(problem, dimension);
+        bool solver_reused = persistent->solver.ready;
+        const bool target_reconfigured = solver_reused &&
+            (persistent->solver.target_omega != target_omega ||
+             persistent->solver.target_eigenvalue != target_eigenvalue);
+        if (solver_reused &&
+            (persistent->solver.dimension != dimension ||
+             nev > persistent->solver.nev_capacity ||
+             persistent->solver.mass_scale != mass_scale ||
+             persistent->solver.angular_frequency_scale != angular_frequency_scale ||
+             persistent->solver.operator_scale != operator_scale ||
+             target_reconfigured)) {
+            destroy_gpu_solver_state(&persistent->solver);
+            solver_reused = false;
+            if (persistence.invalidation_reason == nullptr ||
+                string_equals(persistence.invalidation_reason, "none")) {
+                persistence.invalidation_reason = target_reconfigured
+                    ? "target_reconfigured"
+                    : "solver_capacity_changed";
+            }
+        }
+        const GpuSolverObjectIds previous_successful_object_ids =
+            solver_reused
+                ? persistent->solver.last_successful_object_ids
+                : GpuSolverObjectIds{};
+        if (!persistent->solver.ready &&
+            !create_gpu_solver_state(
+                problem,
+                persistent,
                 dimension,
-                dimension,
-                dimension,
-                dimension,
-                split,
-                &shell) != PETSC_SUCCESS ||
-            MatShellSetVecType(shell, VECCUDA) != PETSC_SUCCESS ||
-            MatShellSetOperation(
-                shell,
-                MATOP_MULT,
-                reinterpret_cast<void (*)(void)>(split_schur_matmult)) != PETSC_SUCCESS ||
-            MatSetUp(shell) != PETSC_SUCCESS ||
-            !create_split_mass_cuda(
-                problem.B_qq,
                 mass_scale,
-                &mass,
-                &out_result->setup_h2d_transfer_count)) {
-            cleanup();
-            return fail(
-                out_result,
-                FrequencyDomainStatus::operator_error,
-                "GPU K0 real-split CUDA operator setup failed",
-                "gpu_real_split_operator_setup_failed");
-        }
-        // Keep the selected-spectrum operator matrix-free for production, but
-        // use an exact shifted preconditioner for the bounded small systems
-        // used by the production K0 qualification fixture.  The previous
-        // HYPRE-only path could stall in device AMG setup for these tiny,
-        // strongly SI-scaled Schur systems even though the same descriptor
-        // was well-conditioned after exact shifted assembly.  Larger systems
-        // retain the scalable HYPRE/AMG preconditioner.
-        const bool exact_shifted_preconditioner =
-            (problem.validation_only_adapter ||
-             (problem.production_shared_domain && dimension <= 256)) &&
-            create_materialized_shifted_operator_cuda(
-                shell,
-                mass,
-                dimension,
-                target_eigenvalue,
-                &preconditioner,
-                &materialized_operator);
-        const bool materialized_shifted_operator =
-            problem.validation_only_adapter && exact_shifted_preconditioner;
-        if (!exact_shifted_preconditioner &&
-            !create_hypre_shift_preconditioner_cuda(
-                problem.A_qq,
-                problem.B_qq,
-                target_omega,
+                angular_frequency_scale,
                 operator_scale,
-                &preconditioner)) {
-            cleanup();
-            return fail(
-                out_result,
-                FrequencyDomainStatus::operator_error,
-                "GPU K0 shifted preconditioner setup failed",
-                "gpu_shifted_preconditioner_setup_failed");
-        }
-        std::snprintf(
-            out_result->shifted_preconditioner_kind,
-            sizeof(out_result->shifted_preconditioner_kind),
-            "%s",
-            materialized_shifted_operator
-                ? "materialized_shifted_schur_cuda"
-                : "magnetic_shift_preconditioner_cuda");
-
-        ST st = nullptr;
-        KSP st_ksp = nullptr;
-        PC st_pc = nullptr;
-        GpuEpsControl eps_control{&problem};
-        const PetscInt requested = static_cast<PetscInt>(
-            std::max<std::uint32_t>(1u, problem.requested_mode_count) * 4u);
-        const PetscInt nev = std::min(dimension - 1, requested);
-        bool configured =
-            EPSCreate(PETSC_COMM_SELF, &eps) == PETSC_SUCCESS &&
-            EPSSetOperators(
-                eps,
-                materialized_shifted_operator ? materialized_operator : shell,
-                mass) == PETSC_SUCCESS &&
-            EPSSetProblemType(eps, EPS_GNHEP) == PETSC_SUCCESS &&
-            EPSSetType(eps, EPSKRYLOVSCHUR) == PETSC_SUCCESS &&
-            EPSSetTrueResidual(eps, PETSC_TRUE) == PETSC_SUCCESS &&
-            EPSSetDimensions(eps, nev, PETSC_DEFAULT, PETSC_DEFAULT) == PETSC_SUCCESS &&
-            EPSSetWhichEigenpairs(eps, EPS_TARGET_MAGNITUDE) == PETSC_SUCCESS &&
-            EPSSetTarget(eps, target_eigenvalue) == PETSC_SUCCESS &&
-            EPSSetTolerances(
-                eps,
-                eps_tolerance,
-                std::max<PetscInt>(128, static_cast<PetscInt>(problem.max_outer_iterations))) ==
-                PETSC_SUCCESS &&
-            EPSGetST(eps, &st) == PETSC_SUCCESS &&
-            STSetType(st, STSINVERT) == PETSC_SUCCESS &&
-            STSetShift(st, target_eigenvalue) == PETSC_SUCCESS &&
-            STSetPreconditionerMat(st, preconditioner) == PETSC_SUCCESS &&
-            STGetKSP(st, &st_ksp) == PETSC_SUCCESS &&
-            KSPSetType(st_ksp, KSPGMRES) == PETSC_SUCCESS &&
-            KSPGMRESSetRestart(st_ksp, std::min<PetscInt>(dimension, 128)) == PETSC_SUCCESS &&
-            KSPGetPC(st_ksp, &st_pc) == PETSC_SUCCESS &&
-            KSPSetTolerances(
-                st_ksp,
-                inner_linear_tolerance(problem.residual_tolerance),
-                PETSC_DEFAULT,
-                PETSC_DEFAULT,
-                std::max<PetscInt>(512, static_cast<PetscInt>(problem.max_linear_iterations))) ==
-                PETSC_SUCCESS &&
-            KSPSetErrorIfNotConverged(st_ksp, PETSC_TRUE) == PETSC_SUCCESS &&
-            KSPSetConvergenceTest(
-                st_ksp,
-                gpu_modal_ksp_convergence_test,
-                const_cast<PoissonAirboxEigenBlockProblem *>(&problem),
-                nullptr) == PETSC_SUCCESS &&
-            create_cuda_vector(dimension, &xr) == PETSC_SUCCESS &&
-            create_cuda_vector(dimension, &xi) == PETSC_SUCCESS;
-        if (configured) {
-            configured =
-                EPSSetStoppingTest(eps, EPS_STOP_USER) == PETSC_SUCCESS &&
-                EPSSetStoppingTestFunction(
-                    eps,
-                    gpu_modal_eps_stopping_test,
-                    &eps_control,
-                    nullptr) == PETSC_SUCCESS &&
-                EPSMonitorSet(eps, gpu_modal_eps_monitor, &eps_control, nullptr) == PETSC_SUCCESS;
-        }
-        if (configured) {
-            configured = exact_shifted_preconditioner
-                ? PCSetType(st_pc, PCILU) == PETSC_SUCCESS &&
-                    PCFactorSetMatSolverType(st_pc, MATSOLVERCUSPARSE) == PETSC_SUCCESS
-                : PCSetType(st_pc, PCHYPRE) == PETSC_SUCCESS &&
-                    PCHYPRESetType(st_pc, "boomeramg") == PETSC_SUCCESS;
-        }
-        if (!configured) {
+                target_omega,
+                target_eigenvalue,
+                &out_result->setup_h2d_transfer_count)) {
             cleanup();
             return fail(
                 out_result,
@@ -2267,16 +3550,57 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_gpu_petsc_slepc(
                 "GPU K0 SLEPc CUDA solver configuration failed",
                 "gpu_slepc_configuration_failed");
         }
-        if (std::getenv("FULLMAG_FEM_GPU_K0_PETSC_OPTIONS") != nullptr &&
-            KSPSetFromOptions(st_ksp) != PETSC_SUCCESS) {
+        if (!configure_gpu_solver_request(problem, persistent)) {
+            destroy_gpu_solver_state(&persistent->solver);
             cleanup();
             return fail(
                 out_result,
                 FrequencyDomainStatus::solve_error,
-                "GPU K0 PETSc diagnostic options are invalid",
-                "gpu_k0_petsc_options_invalid");
+                "GPU K0 persistent SLEPc state reconfiguration failed",
+                "gpu_slepc_reconfiguration_failed");
         }
+        ST configured_st = nullptr;
+        KSP configured_st_ksp = nullptr;
+        PC configured_st_pc = nullptr;
+        BV configured_basis = nullptr;
+        if (EPSGetST(persistent->solver.eps, &configured_st) != PETSC_SUCCESS ||
+            STGetKSP(configured_st, &configured_st_ksp) != PETSC_SUCCESS ||
+            KSPGetPC(configured_st_ksp, &configured_st_pc) != PETSC_SUCCESS ||
+            EPSGetBV(persistent->solver.eps, &configured_basis) != PETSC_SUCCESS) {
+            destroy_gpu_solver_state(&persistent->solver);
+            cleanup();
+            return fail(
+                out_result,
+                FrequencyDomainStatus::solve_error,
+                "GPU K0 persistent SLEPc object graph inspection failed",
+                "gpu_slepc_persistence_inspection_failed");
+        }
+        persistent->solver.st = configured_st;
+        persistent->solver.st_ksp = configured_st_ksp;
+        persistent->solver.st_pc = configured_st_pc;
+        persistent->solver.basis = configured_basis;
+        persistence.solver_context_generation = persistent->solver.generation;
+        persistence.solver_context_reused = solver_reused;
+        persistence.persistence_verified = false;
+        out_result->operator_context_reused = persistence.operator_context_reused;
+        out_result->persistent_context_verified = false;
 
+        GpuSolverState &solver = persistent->solver;
+        shell = solver.shell;
+        mass = solver.mass;
+        eps = solver.eps;
+        st_ksp = solver.st_ksp;
+        st_pc = solver.st_pc;
+        xr = solver.xr;
+        xi = solver.xi;
+        materialized_shifted_operator = solver.materialized_eigensolver_operator;
+        std::snprintf(
+            out_result->shifted_preconditioner_kind,
+            sizeof(out_result->shifted_preconditioner_kind),
+            "%s",
+            materialized_shifted_operator
+                ? "materialized_shifted_schur_cuda"
+                : "magnetic_shift_preconditioner_cuda");
         if (poisson_airbox_modal_cancel_requested(problem)) {
             cleanup();
             return fail(
@@ -2289,26 +3613,83 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_gpu_petsc_slepc(
         PetscInt iterations = 0;
         PetscInt converged = 0;
         EPSConvergedReason eps_reason = EPS_CONVERGED_ITERATING;
-        const PetscErrorCode eps_solve_status = EPSSolve(eps);
-        const bool solve_interrupted = eps_control.cancellation_observed ||
+        if (PetscPushErrorHandler(PetscReturnErrorHandler, nullptr) != PETSC_SUCCESS) {
+            destroy_gpu_solver_state(&persistent->solver);
+            cleanup();
+            return fail(
+                out_result,
+                FrequencyDomainStatus::solve_error,
+                "GPU K0 PETSc error handler installation failed",
+                "gpu_slepc_error_handler_failed");
+        }
+        const PetscErrorCode eps_solve_status =
+            std::getenv("FULLMAG_N3_W2_FOCUSED") != nullptr &&
+                std::getenv("FULLMAG_N3_W2_TEST_EPSSOLVE_ERROR") != nullptr
+            ? PETSC_ERR_USER
+            : EPSSolve(eps);
+        const bool solve_interrupted = persistent->solve_control.cancellation_observed ||
             poisson_airbox_modal_cancel_requested(problem);
+        if (eps_solve_status != PETSC_SUCCESS) {
+            persistence.solver_context_reused = false;
+            persistence.persistence_verified = false;
+            persistence.reuse_mask = 0u;
+            persistence.invalidation_reason = "eps_solve_failed";
+            out_result->persistent_context_verified = false;
+            out_result->eps_reason_available = false;
+            out_result->eps_cancellation_observed = solve_interrupted;
+            std::snprintf(
+                out_result->eps_stop_reason,
+                sizeof(out_result->eps_stop_reason),
+                "%s",
+                solve_interrupted ? "cancel_requested" : "gpu_slepc_solve_failed");
+            destroy_gpu_solver_state(&persistent->solver);
+            const PetscErrorCode pop_status = PetscPopErrorHandler();
+            cleanup();
+            return fail(
+                out_result,
+                solve_interrupted
+                    ? FrequencyDomainStatus::interrupted
+                    : FrequencyDomainStatus::solve_error,
+                pop_status != PETSC_SUCCESS
+                    ? "GPU K0 PETSc error handler restoration failed"
+                    : solve_interrupted
+                        ? "GPU K0 SLEPc CUDA solve was cancelled"
+                        : "GPU K0 SLEPc CUDA solve failed",
+                pop_status != PETSC_SUCCESS
+                    ? "gpu_slepc_error_handler_failed"
+                    : solve_interrupted
+                        ? "cancel_requested"
+                        : "gpu_slepc_solve_failed");
+        }
+        if (PetscPopErrorHandler() != PETSC_SUCCESS) {
+            destroy_gpu_solver_state(&persistent->solver);
+            cleanup();
+            return fail(
+                out_result,
+                FrequencyDomainStatus::solve_error,
+                "GPU K0 PETSc error handler restoration failed",
+                "gpu_slepc_error_handler_failed");
+        }
         const PetscErrorCode iteration_status = EPSGetIterationNumber(eps, &iterations);
         const PetscErrorCode converged_status = EPSGetConverged(eps, &converged);
         const PetscErrorCode reason_status = EPSGetConvergedReason(eps, &eps_reason);
         out_result->eps_reason_available = reason_status == PETSC_SUCCESS;
         out_result->eps_converged_reason = static_cast<std::int32_t>(eps_reason);
         out_result->eps_cancellation_observed = solve_interrupted;
-        out_result->eps_monitor_iteration_count = eps_control.monitor_iteration_count;
+        out_result->eps_monitor_iteration_count =
+            persistent->solve_control.monitor_iteration_count;
         std::snprintf(
             out_result->eps_stop_reason,
             sizeof(out_result->eps_stop_reason),
             "%s",
             gpu_eps_reason_name(eps_reason, solve_interrupted));
-        if ((eps_solve_status != PETSC_SUCCESS && !solve_interrupted) ||
-            iteration_status != PETSC_SUCCESS ||
+        if (iteration_status != PETSC_SUCCESS ||
             converged_status != PETSC_SUCCESS ||
             reason_status != PETSC_SUCCESS ||
             (!solve_interrupted && eps_reason <= EPS_CONVERGED_ITERATING)) {
+            persistence.persistence_verified = false;
+            out_result->persistent_context_verified = false;
+            destroy_gpu_solver_state(&persistent->solver);
             cleanup();
             return fail(
                 out_result,
@@ -2326,6 +3707,53 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_gpu_petsc_slepc(
                             ? "gpu_slepc_breakdown"
                             : "gpu_slepc_solve_failed");
         }
+        configured_st = nullptr;
+        configured_st_ksp = nullptr;
+        configured_st_pc = nullptr;
+        configured_basis = nullptr;
+        if (EPSGetST(persistent->solver.eps, &configured_st) != PETSC_SUCCESS ||
+            STGetKSP(configured_st, &configured_st_ksp) != PETSC_SUCCESS ||
+            KSPGetPC(configured_st_ksp, &configured_st_pc) != PETSC_SUCCESS ||
+            EPSGetBV(persistent->solver.eps, &configured_basis) != PETSC_SUCCESS) {
+            persistence.persistence_verified = false;
+            out_result->persistent_context_verified = false;
+            destroy_gpu_solver_state(&persistent->solver);
+            cleanup();
+            return fail(
+                out_result,
+                FrequencyDomainStatus::solve_error,
+                "GPU K0 post-solve SLEPc object graph inspection failed",
+                "gpu_slepc_persistence_inspection_failed");
+        }
+        persistent->solver.st = configured_st;
+        persistent->solver.st_ksp = configured_st_ksp;
+        persistent->solver.st_pc = configured_st_pc;
+        persistent->solver.basis = configured_basis;
+        GpuSolverObjectIds current_object_ids{};
+        if (!capture_gpu_solver_object_ids(*persistent, &current_object_ids)) {
+            persistence.persistence_verified = false;
+            out_result->persistent_context_verified = false;
+            destroy_gpu_solver_state(&persistent->solver);
+            cleanup();
+            return fail(
+                out_result,
+                FrequencyDomainStatus::solve_error,
+                "GPU K0 PETSc object identity evidence capture failed",
+                "gpu_slepc_persistence_evidence_failed");
+        }
+        persistence.reuse_mask = gpu_solver_object_reuse_mask(
+            previous_successful_object_ids, current_object_ids);
+        persistence.public_petsc_object_ids_reused =
+            persistence.operator_context_reused &&
+            persistence.solver_context_reused &&
+            same_gpu_solver_object_graph(
+                previous_successful_object_ids, current_object_ids);
+        // Public PetscObject identities do not prove that PETSc/SLEPc made no
+        // internal EPSSolve allocations.  Leave the stronger claim false until
+        // hot-loop object creation is measured directly.
+        persistence.persistence_verified = false;
+        out_result->persistent_context_verified = false;
+        persistent->solver.last_successful_object_ids = current_object_ids;
         out_result->outer_iterations = static_cast<std::uint32_t>(std::max<PetscInt>(0, iterations));
         out_result->converged_eigenpair_count =
             static_cast<std::uint32_t>(std::max<PetscInt>(0, converged));
@@ -2336,27 +3764,11 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_gpu_petsc_slepc(
                 std::max<PetscInt>(0, shift_linear_iterations));
         }
 
-        // Preserve converged Ritz pairs on cancellation.  Their final Schur
-        // action still needs the cached Poisson KSP, but cancellation must no
-        // longer abort that read-only reconstruction pass.  The temporary
-        // problem copy lives until all candidates have been inspected; the
-        // next request rebinds the persistent KSP to its own live callbacks.
-        PoissonAirboxEigenBlockProblem extraction_problem = problem;
-        if (solve_interrupted && schur->poisson_ksp != nullptr) {
-            extraction_problem.cancel_requested = nullptr;
-            extraction_problem.progress_callback = nullptr;
-            if (KSPSetConvergenceTest(
-                    schur->poisson_ksp,
-                    gpu_modal_ksp_convergence_test,
-                    &extraction_problem,
-                    nullptr) != PETSC_SUCCESS) {
-                cleanup();
-                return fail(
-                    out_result,
-                    FrequencyDomainStatus::interrupted,
-                    "GPU K0 cancellation extraction setup failed",
-                    "cancel_requested");
-            }
+        // Preserve converged Ritz pairs on cancellation without ever rebinding
+        // a persistent PETSc callback to request-local storage.
+        if (solve_interrupted) {
+            persistent->solve_control.cancel_poll_enabled = false;
+            persistent->solve_control.progress_enabled = false;
         }
 
         struct Candidate {
@@ -2502,8 +3914,147 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_gpu_petsc_slepc(
         std::sort(candidates.begin(), candidates.end(), [target_omega](const Candidate &left, const Candidate &right) {
             return std::abs(left.omega - target_omega) < std::abs(right.omega - target_omega);
         });
-        if (candidates.size() > problem.requested_mode_count) {
-            candidates.resize(problem.requested_mode_count);
+
+        struct DeviceComplexBasisVector {
+            Vec real = nullptr;
+            Vec imag = nullptr;
+            double frequency_hz = 0.0;
+
+            DeviceComplexBasisVector() = default;
+            DeviceComplexBasisVector(const DeviceComplexBasisVector &) = delete;
+            DeviceComplexBasisVector &operator=(const DeviceComplexBasisVector &) = delete;
+            DeviceComplexBasisVector(DeviceComplexBasisVector &&other) noexcept
+                : real(other.real), imag(other.imag), frequency_hz(other.frequency_hz)
+            {
+                other.real = nullptr;
+                other.imag = nullptr;
+            }
+            DeviceComplexBasisVector &operator=(DeviceComplexBasisVector &&other) noexcept
+            {
+                if (this != &other) {
+                    if (real != nullptr) VecDestroy(&real);
+                    if (imag != nullptr) VecDestroy(&imag);
+                    real = other.real;
+                    imag = other.imag;
+                    frequency_hz = other.frequency_hz;
+                    other.real = nullptr;
+                    other.imag = nullptr;
+                }
+                return *this;
+            }
+            ~DeviceComplexBasisVector()
+            {
+                if (real != nullptr) VecDestroy(&real);
+                if (imag != nullptr) VecDestroy(&imag);
+            }
+        };
+        std::vector<DeviceComplexBasisVector> selected_basis;
+        std::vector<Candidate> independent_candidates;
+        selected_basis.reserve(problem.requested_mode_count);
+        independent_candidates.reserve(problem.requested_mode_count);
+        for (const Candidate &candidate : candidates) {
+            PetscScalar candidate_kr = 0.0;
+            PetscScalar candidate_ki = 0.0;
+            if (EPSGetEigenpair(
+                    eps,
+                    candidate.index,
+                    &candidate_kr,
+                    &candidate_ki,
+                    xr,
+                    xi) != PETSC_SUCCESS ||
+                scatter_split_input(split, xr) != PETSC_SUCCESS) {
+                cleanup();
+                return fail(
+                    out_result,
+                    FrequencyDomainStatus::solve_error,
+                    "GPU K0 physical-mode rank selection failed",
+                    "gpu_mode_rank_selection_failed");
+            }
+            for (const DeviceComplexBasisVector &basis : selected_basis) {
+                const double frequency_tolerance_hz = std::max(
+                    1.0,
+                    1.0e-8 * std::max(
+                        std::abs(candidate.frequency),
+                        std::abs(basis.frequency_hz)));
+                if (std::abs(candidate.frequency - basis.frequency_hz) >
+                    frequency_tolerance_hz) {
+                    continue;
+                }
+                PetscScalar real_real = 0.0;
+                PetscScalar imag_imag = 0.0;
+                PetscScalar real_imag = 0.0;
+                PetscScalar imag_real = 0.0;
+                if (VecDot(basis.real, split->q_real, &real_real) != PETSC_SUCCESS ||
+                    VecDot(basis.imag, split->q_imag, &imag_imag) != PETSC_SUCCESS ||
+                    VecDot(basis.real, split->q_imag, &real_imag) != PETSC_SUCCESS ||
+                    VecDot(basis.imag, split->q_real, &imag_real) != PETSC_SUCCESS) {
+                    cleanup();
+                    return fail(
+                        out_result,
+                        FrequencyDomainStatus::solve_error,
+                        "GPU K0 physical-mode overlap evaluation failed",
+                        "gpu_mode_rank_selection_failed");
+                }
+                const PetscScalar projection_real = real_real + imag_imag;
+                const PetscScalar projection_imag = real_imag - imag_real;
+                if (VecAXPY(split->q_real, -projection_real, basis.real) != PETSC_SUCCESS ||
+                    VecAXPY(split->q_real, projection_imag, basis.imag) != PETSC_SUCCESS ||
+                    VecAXPY(split->q_imag, -projection_real, basis.imag) != PETSC_SUCCESS ||
+                    VecAXPY(split->q_imag, -projection_imag, basis.real) != PETSC_SUCCESS) {
+                    cleanup();
+                    return fail(
+                        out_result,
+                        FrequencyDomainStatus::solve_error,
+                        "GPU K0 physical-mode orthogonalization failed",
+                        "gpu_mode_rank_selection_failed");
+                }
+            }
+            PetscReal q_real_norm = 0.0;
+            PetscReal q_imag_norm = 0.0;
+            if (VecNorm(split->q_real, NORM_2, &q_real_norm) != PETSC_SUCCESS ||
+                VecNorm(split->q_imag, NORM_2, &q_imag_norm) != PETSC_SUCCESS) {
+                cleanup();
+                return fail(
+                    out_result,
+                    FrequencyDomainStatus::solve_error,
+                    "GPU K0 physical-mode norm evaluation failed",
+                    "gpu_mode_rank_selection_failed");
+            }
+            const double q_norm = std::hypot(
+                static_cast<double>(q_real_norm),
+                static_cast<double>(q_imag_norm));
+            if (!(q_norm > 1.0e-8) || !std::isfinite(q_norm)) {
+                continue;
+            }
+            DeviceComplexBasisVector basis{};
+            basis.frequency_hz = candidate.frequency;
+            if (VecDuplicate(split->q_real, &basis.real) != PETSC_SUCCESS ||
+                VecDuplicate(split->q_imag, &basis.imag) != PETSC_SUCCESS ||
+                VecCopy(split->q_real, basis.real) != PETSC_SUCCESS ||
+                VecCopy(split->q_imag, basis.imag) != PETSC_SUCCESS ||
+                VecScale(basis.real, 1.0 / q_norm) != PETSC_SUCCESS ||
+                VecScale(basis.imag, 1.0 / q_norm) != PETSC_SUCCESS) {
+                cleanup();
+                return fail(
+                    out_result,
+                    FrequencyDomainStatus::solve_error,
+                    "GPU K0 physical-mode basis construction failed",
+                    "gpu_mode_rank_selection_failed");
+            }
+            selected_basis.push_back(std::move(basis));
+            independent_candidates.push_back(candidate);
+            if (independent_candidates.size() >= problem.requested_mode_count) {
+                break;
+            }
+        }
+        candidates = std::move(independent_candidates);
+        if (candidates.empty()) {
+            cleanup();
+            return fail(
+                out_result,
+                FrequencyDomainStatus::solve_error,
+                "GPU K0 found no independent physical mode",
+                "gpu_no_independent_physical_mode");
         }
         for (const Candidate &candidate : candidates) {
             PetscScalar candidate_kr = 0.0;
@@ -2615,7 +4166,10 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_gpu_petsc_slepc(
         PCGetType(st_pc, &shift_pc_type);
         BV basis = nullptr;
         Vec basis_column = nullptr;
-        if (EPSGetBV(eps, &basis) == PETSC_SUCCESS &&
+        if (EPSGetBV(eps, &basis) == PETSC_SUCCESS) {
+            solver.basis = basis;
+        }
+        if (basis != nullptr &&
             BVGetColumn(basis, 0, &basis_column) == PETSC_SUCCESS) {
             VecGetType(basis_column, &basis_type);
             BVRestoreColumn(basis, 0, &basis_column);

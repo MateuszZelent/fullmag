@@ -12,7 +12,7 @@ RUNTIME_PARENT="${REPO_ROOT}/.fullmag/runtimes"
 RUNTIME_ROOT="${RUNTIME_PARENT}/fem-gpu-host"
 VARIANTS_ROOT=""
 STAGING_ROOT=""
-RUNTIME_LOCK="${RUNTIME_PARENT}/.fem-gpu-host.export.v2.lock"
+RUNTIME_LOCK="$(managed_fem_runtime_lock_path "${REPO_ROOT}")"
 docker_build_ref=""
 docker_compatibility_ref="fullmag/fem-gpu:local"
 docker_build_ref_marker=""
@@ -468,7 +468,17 @@ copy_library_group_entry_replace() {
 
   rm -rf -- "$dest"
   if [ -L "$src" ]; then
-    ln -sfn "$(readlink "$src")" "$dest"
+    resolved="$(readlink -f "$src" 2>/dev/null || true)"
+    if [ -z "$resolved" ] || [ ! -e "$resolved" ]; then
+      echo "[export_fem_gpu_runtime] source library symlink is dangling: $src" >&2
+      exit 2
+    fi
+    if [ "$(basename "$resolved")" = "$(basename "$src")" ]; then
+      cp -L --remove-destination "$src" "$dest"
+    else
+      copy_library_group_entry_replace "$resolved" "$dest_dir"
+      ln -sfn "$(basename "$resolved")" "$dest"
+    fi
   else
     install -m 755 "$src" "$dest"
   fi
@@ -1189,7 +1199,8 @@ publish_runtime_bundle() {
   else
     mv "${STAGING_ROOT}" "${variant_root}"
   fi
-  if [ -e "${RUNTIME_ROOT}" ] && [ ! -L "${RUNTIME_ROOT}" ]; then
+  if [ -e "${RUNTIME_ROOT}" ] && [ ! -L "${RUNTIME_ROOT}" ] && \
+     managed_fem_runtime_symlink_supported "${RUNTIME_PARENT}"; then
     echo "[export_fem_gpu_runtime] refusing to replace non-symlink active runtime: ${RUNTIME_ROOT}" >&2
     echo "Select an already preserved schema-v3 variant first." >&2
     return 2

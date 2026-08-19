@@ -1367,12 +1367,28 @@ void FrequencyWindowPublishesCompleteCertificateForSyntheticFixture()
         result.error_message);
     check(result.window_complete,
           "synthetic CPU frequency window must expose a complete-window certificate");
-    check(result.window_subwindow_count > 0u,
-          "complete-window certificate must record executed subwindow count");
+    check(result.window_subwindow_count == 50u,
+          "complete-window certificate must preserve the exact 16+34 subwindow schedule");
     check(result.window_completed_subwindow_count == result.window_subwindow_count,
           "complete-window certificate must account for every subwindow");
     check(result.window_failed_subwindow_count == 0u,
           "complete-window certificate must report no failed subwindows");
+    check(contains(
+              result.diagnostics_json,
+              "\"operator_context_scope\":\"frequency_window\""),
+          "CPU diagnostics must identify frequency-window operator ownership");
+    check(json_number_after(
+              result.diagnostics_json,
+              "\"operator_context_setup_count\":") == 1.0,
+          "a complete CPU window must configure one persistent operator context");
+    check(json_number_after(
+              result.diagnostics_json,
+              "\"poisson_factorization_setup_count\":") == 1.0,
+          "a complete CPU window must factorize Poisson exactly once");
+    check(json_number_after(
+              result.diagnostics_json,
+              "\"shift_solver_setup_count\":") == 50.0,
+          "a complete CPU window must configure one shift solver per planned subwindow");
     check(contains(result.diagnostics_json, "\"window_completeness\":{\"status\":\"certified\""),
           "CPU diagnostics must publish a certified window-completeness object");
     check(contains(result.diagnostics_json, "\"window_certificate\":"),
@@ -1881,6 +1897,15 @@ void SolvesSharedDomainCpuSchurModalFixture()
                    "\"persistent_solver_context\":true"),
           "shared-domain CPU diagnostics must disclose the persistent Poisson context");
     check(contains(result.diagnostics_json,
+                   "\"operator_context_scope\":\"single_shift\""),
+          "single-shift CPU diagnostics must identify owned operator scope");
+    check(result.operator_context_setup_count == 1u,
+          "single-shift CPU solve must configure one operator context");
+    check(result.poisson_factorization_setup_count == 1u,
+          "single-shift CPU solve must configure one Poisson factorization");
+    check(result.shift_solver_setup_count == 1u,
+          "single-shift CPU solve must configure one shift solver");
+    check(contains(result.diagnostics_json,
                    "\"gpu_device_resident_modal_eigensolver\":false"),
           "shared-domain CPU diagnostics must identify host-resident execution");
     check(contains(result.diagnostics_json,
@@ -1893,8 +1918,144 @@ void SolvesSharedDomainCpuSchurModalFixture()
                    "\"target_representation\":\"tau=omega_target\""),
           "shared-domain CPU Schur diagnostics must publish the real tau target");
     check(contains(result.diagnostics_json,
+                   "\"raw_ritz_classification\":{"),
+          "shared-domain CPU diagnostics must publish bounded raw Ritz classification");
+    check(contains(result.diagnostics_json,
+                   "\"complex_rejected_count\":"),
+          "raw Ritz diagnostics must count pairs rejected away from the real axis");
+    check(contains(result.diagnostics_json,
+                   "\"kr_scaled_range\":["),
+          "raw Ritz diagnostics must publish the observed real-part range");
+    check(contains(result.diagnostics_json,
+                   "\"ki_scaled_range\":["),
+          "raw Ritz diagnostics must publish the observed imaginary-part range");
+    check(contains(result.diagnostics_json,
+                   "\"samples\":[{"),
+          "raw Ritz diagnostics must retain bounded per-pair samples");
+    check(contains(result.diagnostics_json,
                    "\"ksp_type\":\"preonly\""),
           "bounded shared-domain CPU Schur diagnostics must report the exact direct shifted solve");
+}
+
+void solve_shared_domain_cpu_schur_fixture_above_exact_preconditioner_cap(
+    double descriptor_scale,
+    bool require_scaled_pencil_diagnostics)
+{
+    constexpr std::uint64_t q_count = 514;
+    constexpr std::uint64_t pair_count = q_count / 2;
+    CsrOwned a_qq{};
+    CsrOwned a_qphi{};
+    CsrOwned a_phiq{};
+    CsrOwned a_phiphi{};
+    CsrOwned b_qq{};
+    a_qq.rows = q_count;
+    a_qq.columns = q_count;
+    a_qphi.rows = q_count;
+    a_qphi.columns = 1;
+    a_phiq.rows = 1;
+    a_phiq.columns = q_count;
+    a_phiphi.rows = 1;
+    a_phiphi.columns = 1;
+    b_qq.rows = q_count;
+    b_qq.columns = q_count;
+    a_qq.row_offsets.push_back(0);
+    a_qphi.row_offsets.push_back(0);
+    b_qq.row_offsets.push_back(0);
+    for (std::uint64_t pair = 0; pair < pair_count; ++pair) {
+        const double omega = kTwoPi * (2.0e9 + static_cast<double>(pair) * 1.0e7);
+        for (std::uint64_t component = 0; component < 2; ++component) {
+            const std::uint64_t row = 2 * pair + component;
+            a_qq.column_indices.push_back(static_cast<std::uint32_t>(row));
+            a_qq.values.push_back(descriptor_scale * omega);
+            a_qq.row_offsets.push_back(static_cast<std::uint32_t>(a_qq.values.size()));
+            if (row == 0) {
+                a_qphi.column_indices.push_back(0);
+                a_qphi.values.push_back(descriptor_scale * 1.0e-6);
+            }
+            a_qphi.row_offsets.push_back(static_cast<std::uint32_t>(a_qphi.values.size()));
+            b_qq.column_indices.push_back(static_cast<std::uint32_t>(
+                component == 0 ? row + 1 : row - 1));
+            b_qq.values.push_back(
+                descriptor_scale * (component == 0 ? -1.0 : 1.0));
+            b_qq.row_offsets.push_back(static_cast<std::uint32_t>(b_qq.values.size()));
+        }
+    }
+    a_phiq.row_offsets = {0, 1};
+    a_phiq.column_indices = {0};
+    // Scale only the magnetic equations.  The scalar Poisson row remains in
+    // its natural conditioning so this fixture isolates the modal pencil
+    // normalization from an unrelated tiny-Poisson-factorization test.
+    a_phiq.values = {1.0e-6};
+    a_phiphi.row_offsets = {0, 1};
+    a_phiphi.column_indices = {0};
+    a_phiphi.values = {1.0};
+
+    fd::PoissonAirboxEigenBlockProblem problem{};
+    problem.q_dof_count = q_count;
+    problem.phi_dof_count = 1;
+    problem.A_qq = a_qq.view();
+    problem.A_qphi = a_qphi.view();
+    problem.A_phiq = a_phiq.view();
+    problem.A_phiphi = a_phiphi.view();
+    problem.B_qq = b_qq.view();
+    problem.outer_boundary_kind = "poisson_robin";
+    problem.robin_beta = 1.0;
+    problem.gauge_policy = "none";
+    problem.gauge_reason = "coercive_outer_boundary";
+    problem.assembly_kind = "mfem_weak_form_shared_domain";
+    problem.production_shared_domain = true;
+    problem.periodic_mesh_certificate_schema = "periodic_mesh_certificate.v6";
+    problem.magnetic_pair_count = 1;
+    problem.airbox_pair_count = 1;
+    problem.target_frequency_hz = 1.9e9;
+    problem.residual_tolerance = 1.0e-8;
+    problem.requested_mode_count = 1;
+    problem.max_outer_iterations = 64;
+    problem.max_linear_iterations = 512;
+
+    fd::PoissonAirboxModalEigenResult result{};
+    check(fd::solve_poisson_airbox_modal_eigen_cpu_schur(problem, &result) ==
+              fd::FrequencyDomainStatus::ok,
+          result.error_message);
+    check(result.accepted_mode_count == 1u,
+          "shared-domain CPU Schur GMRES fixture must return one accepted mode");
+    check(result.full_residual_certified,
+          "shared-domain CPU Schur GMRES fixture must certify the full descriptor residual");
+    check(result.reconstructed_full_descriptor_backward_error <=
+              problem.residual_tolerance,
+          "shared-domain CPU Schur GMRES fixture must satisfy the requested full residual");
+    check(std::abs(result.frequency_hz - 2.0e9) / 2.0e9 <= 1.0e-8,
+          "dimensionless CPU scaling must preserve the physical two-gigahertz mode");
+    check(contains(result.diagnostics_json, "\"ksp_type\":\"gmres\""),
+          "fixture above the exact-preconditioner cap must exercise GMRES convergence");
+    check(contains(result.diagnostics_json, "\"refinement_attempted_count\":"),
+          "shared-domain CPU Schur diagnostics must publish Ritz refinement attempts");
+    check(contains(result.diagnostics_json, "\"refinement_succeeded_count\":"),
+          "shared-domain CPU Schur diagnostics must publish Ritz refinement successes");
+    check(contains(result.diagnostics_json, "\"refinement_failed_count\":"),
+          "shared-domain CPU Schur diagnostics must publish Ritz refinement failures");
+    if (require_scaled_pencil_diagnostics) {
+        check(contains(result.diagnostics_json,
+                       "\"descriptor_scaling\":{"
+                       "\"kind\":\"dimensionless_frequency\",\"applied\":true"),
+              "SI-scaled CPU Schur diagnostics must report dimensionless pencil scaling");
+        check(json_number_after(result.diagnostics_json,
+                                "\"angular_frequency_scale\":") > 1.0,
+              "SI-scaled CPU Schur diagnostics must publish a nontrivial frequency scale");
+        check(json_number_after(result.diagnostics_json,
+                                "\"mass_scale\":") > 1.0,
+              "SI-scaled CPU Schur diagnostics must publish mass normalization");
+    }
+}
+
+void SolvesSharedDomainCpuSchurModalFixtureAboveExactPreconditionerCap()
+{
+    solve_shared_domain_cpu_schur_fixture_above_exact_preconditioner_cap(1.0, false);
+}
+
+void SolvesSiScaledSharedDomainCpuSchurModalFixtureAboveExactPreconditionerCap()
+{
+    solve_shared_domain_cpu_schur_fixture_above_exact_preconditioner_cap(1.0e-30, true);
 }
 
 void ReturnsRequestedSharedDomainCpuSchurModes()
@@ -1965,6 +2126,13 @@ void ReturnsRequestedSharedDomainCpuSchurModes()
           "shared-domain CPU Schur fixture must reconstruct every residual-evaluated candidate");
     check(result.full_residual_accepted_count >= result.accepted_mode_count,
           "shared-domain CPU Schur fixture must count every full-residual accepted candidate before publication capping");
+    check(result.action_residual_evaluation_failed_count == 0u &&
+              result.q_vector_extraction_failed_count == 0u &&
+              result.full_vector_reconstruction_failed_count == 0u &&
+              result.full_vector_nonfinite_count == 0u &&
+              result.full_residual_evaluation_failed_count == 0u &&
+              result.full_residual_rejected_count == 0u,
+          "shared-domain CPU Schur fixture must not report rejection-stage failures for accepted synthetic modes");
     check(contains(result.diagnostics_json,
                    "\"full_residual_accepted_count\":"),
           "shared-domain CPU Schur diagnostics must publish rejection-stage counters");
@@ -2001,6 +2169,27 @@ void ReturnsRequestedSharedDomainCpuSchurModes()
           "frequency-window Schur diagnostics must publish accepted frequencies per shift");
     check(contains(result.diagnostics_json, "\"candidate_mode_count\":"),
           "frequency-window Schur diagnostics must distinguish raw shifted candidates from globally in-window accepted modes");
+    check(contains(result.diagnostics_json,
+                   "\"candidate_mode_count_kind\":\"raw_ritz_in_window\""),
+          "frequency-window Schur diagnostics must identify the candidate count semantics");
+    check(contains(result.diagnostics_json,
+                   "\"raw_ritz_in_window_count\":"),
+          "frequency-window Schur diagnostics must expose raw in-window Ritz counts");
+    check(contains(result.diagnostics_json,
+                   "\"full_residual_accepted_count\":"),
+          "frequency-window Schur diagnostics must expose residual-stage counts per subwindow");
+    check(contains(result.diagnostics_json,
+                   "\"action_residual_evaluation_failed_count\":"),
+          "frequency-window Schur diagnostics must expose action-residual failures per subwindow");
+    check(contains(result.diagnostics_json,
+                   "\"q_vector_extraction_failed_count\":"),
+          "frequency-window Schur diagnostics must expose q-vector extraction failures per subwindow");
+    check(contains(result.diagnostics_json,
+                   "\"full_vector_reconstruction_failed_count\":"),
+          "frequency-window Schur diagnostics must expose full-vector reconstruction failures per subwindow");
+    check(contains(result.diagnostics_json,
+                   "\"full_residual_rejected_count\":"),
+          "frequency-window Schur diagnostics must expose full-residual rejection counts per subwindow");
 }
 
 void SolvesSharedDomainGpuValidationModalFixture()
@@ -2198,6 +2387,10 @@ int main()
     // Hosts without a CUDA driver may run the CPU/SLEPc contract explicitly;
     // GPU qualification remains a separate device-backed test lane.
     const bool skip_gpu_tests = std::getenv("FULLMAG_SKIP_GPU_TESTS") != nullptr;
+    if (std::getenv("FULLMAG_REFINEMENT_TELEMETRY_FOCUSED") != nullptr) {
+        SolvesSharedDomainCpuSchurModalFixtureAboveExactPreconditionerCap();
+        return 0;
+    }
     if (std::getenv("FULLMAG_N2_CW1_FOCUSED") != nullptr) {
         FrequencyWindowPublishesCompleteCertificateForSyntheticFixture();
         FrequencyWindowCertifiesDegenerateClusterByInvariantSubspace();
@@ -2208,6 +2401,8 @@ int main()
     }
     ReturnsRequestedSharedDomainCpuSchurModes();
     SolvesSharedDomainCpuSchurModalFixture();
+    SolvesSharedDomainCpuSchurModalFixtureAboveExactPreconditionerCap();
+    SolvesSiScaledSharedDomainCpuSchurModalFixtureAboveExactPreconditionerCap();
     SolvesSparseFullCoupledDescriptorAndMatchesDenseOracle();
     ReconstructedResidualCannotBeHiddenBySlepcBackwardError();
     ResidualCertificationRejectsBackendAndReconstructionDisagreement();

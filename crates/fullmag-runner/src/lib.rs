@@ -410,6 +410,7 @@ pub use capabilities::{
     BackendCapabilities, FeatureCapability, FeatureCapabilityStatus, RuntimeEngineId,
     MIXED_P1_FEATURE_CAPABILITY_IDS, MIXED_P1_MESH_FEATURE_CAPABILITY_IDS,
 };
+pub use fem_eigen::AcceptedFemRelaxStageHandoff;
 pub use interactive::backend::BackendGeometry;
 pub use interactive::checkpoints::RunOutcome;
 pub use interactive::commands::{
@@ -448,16 +449,15 @@ pub use timestep_qualification::{
 pub use types::{
     fem_eigen_mesh_generation_id, fem_frequency_response_mesh_generation_id,
     fem_mesh_topology_fingerprint, fem_plan_mesh_generation_id, live_preview_values_sha256,
-    ExecutionProvenance, FemCrossoverDecision, FemEigenRunResult, FemMeshObjectSegment,
-    FemMeshPartPayload, FemMeshPayload, InitialTimestepReason, LegacyDtPolicy,
-    LiveFieldMaterializationState, LiveFieldMaterializationStatus, LivePreviewField,
-    LivePreviewRequest, LiveVectorFieldSnapshot, LlgTimestepCapabilityId,
+    CertifiedFemEquilibriumFields, ExecutionProvenance, FemCrossoverDecision, FemEigenRunResult,
+    FemMeshObjectSegment, FemMeshPartPayload, FemMeshPayload, InitialTimestepReason,
+    LegacyDtPolicy, LiveFieldMaterializationState, LiveFieldMaterializationStatus,
+    LivePreviewField, LivePreviewRequest, LiveVectorFieldSnapshot, LlgTimestepCapabilityId,
     LlgTimestepQualificationId, RequestedTimestepPolicy, ResolvedFallback, ResolvedTimestepPolicy,
     RunError, RunResult, RunStatus, RuntimeEngineInfo, SolverAttemptRecord, StageFemMeshAsset,
     StageFemMeshIdentity, StepAction, StepStats, StepUpdate, TimestepBackend, TimestepDevice,
     TimestepExecutionIdentity, TimestepPolicyProvenance, TimestepValidationState,
 };
-pub use fem_eigen::AcceptedFemRelaxStageHandoff;
 
 use crate::capabilities::{
     capabilities_for_fdm_engine, capabilities_for_fem_eigen_engine, capabilities_for_fem_engine,

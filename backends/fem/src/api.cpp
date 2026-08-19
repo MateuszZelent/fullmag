@@ -28,6 +28,7 @@
 #include "cpu/mfem/runtime/state_io.hpp"
 #include "frequency_domain/driven_response_solver.hpp"
 #include "frequency_domain/frequency_domain_contract.hpp"
+#include "frequency_domain/linearization_state.hpp"
 #include "frequency_domain/modal_gpu_krylov.hpp"
 #include "frequency_domain/modal_eigen_solver.hpp"
 #include "frequency_domain/mesh_symmetry_certificate.hpp"
@@ -1056,7 +1057,7 @@ FullmagFemFrequencyDomainResult copy_frequency_domain_contract_result(
     const fullmag::fem::frequency_domain::FrequencyDomainContractResult &native_result) noexcept
 {
     FullmagFemFrequencyDomainResult result{};
-    result.abi_version = FULLMAG_FEM_FREQUENCY_DOMAIN_ABI_VERSION;
+    result.abi_version = FULLMAG_FEM_FREQUENCY_DOMAIN_RESULT_ABI_VERSION;
     result.status = to_frequency_domain_contract_status(native_result.status);
     result.error_message = duplicate_c_string(native_result.error_message.c_str());
     result.diagnostics_json = duplicate_c_string(native_result.diagnostics_json.c_str());
@@ -1130,7 +1131,7 @@ FullmagFemFrequencyDomainResult copy_frequency_domain_contract_result(
         delete[] result.resolved_certificate_binding_reason;
         release_modal_buffers(result);
         result = {};
-        result.abi_version = FULLMAG_FEM_FREQUENCY_DOMAIN_ABI_VERSION;
+        result.abi_version = FULLMAG_FEM_FREQUENCY_DOMAIN_RESULT_ABI_VERSION;
         result.struct_size = sizeof(result);
         result.status = FULLMAG_FEM_FD_ARTIFACT_ERROR;
         result.resolved_execution_target = FULLMAG_FEM_MODAL_EXECUTION_AUTO;
@@ -1996,10 +1997,11 @@ int fullmag_fem_get_frequency_domain_modal_abi_layout_v3(
     if (fullmag_fem_get_frequency_domain_modal_abi_layout_v2(&out_layout->v2) != FULLMAG_FEM_OK) {
         return FULLMAG_FEM_ERR_INVALID;
     }
-    /* v3's nested envelope is the V18 view: retain the v2 field ordering and
-       append the descriptor and scalar material-carrier pointers. */
+    /* v3's nested envelope is the frozen V18 view: retain the v2 field
+       ordering and append only the descriptor/material pointers. */
     out_layout->v2.modal_shared_domain_payload_size =
-        sizeof(FullmagFemModalSharedDomainPayload);
+        offsetof(FullmagFemModalSharedDomainPayload, exchange_material_view) +
+        sizeof(const FullmagFemModalExchangeMaterialView *);
     out_layout->v2.modal_shared_domain_payload_field_count =
         FULLMAG_FEM_MODAL_SHARED_DOMAIN_PAYLOAD_FIELD_COUNT + 2u;
     out_layout->v2.modal_shared_domain_payload_field_offsets[
@@ -2040,6 +2042,116 @@ int fullmag_fem_get_frequency_domain_modal_abi_layout_v3(
         material_view_offsets,
         material_view_offsets + FULLMAG_FEM_MODAL_EXCHANGE_MATERIAL_VIEW_FIELD_COUNT,
         out_layout->modal_exchange_material_view_field_offsets);
+    fullmag_fem_clear_global_error();
+    return FULLMAG_FEM_OK;
+}
+
+int fullmag_fem_get_frequency_domain_modal_abi_layout_v4(
+    fullmag_fem_frequency_domain_modal_abi_layout_v4 *out_layout
+) {
+    static_assert(
+        FULLMAG_FEM_MODAL_SHARED_DOMAIN_PAYLOAD_FIELD_COUNT + 2u + 6u <= 128u,
+        "modal v4 payload manifest capacity must cover the acceptance tail");
+    if (out_layout == nullptr ||
+        out_layout->v3.v2.struct_size <
+            sizeof(fullmag_fem_frequency_domain_modal_abi_layout_v4)) {
+        fullmag_fem_set_global_error(
+            "fullmag_fem_get_frequency_domain_modal_abi_layout_v4 requires its full v4 struct");
+        return FULLMAG_FEM_ERR_INVALID;
+    }
+    *out_layout = {};
+    out_layout->v3.v2.struct_size =
+        sizeof(fullmag_fem_frequency_domain_modal_abi_layout_v3);
+    if (fullmag_fem_get_frequency_domain_modal_abi_layout_v3(&out_layout->v3) !=
+        FULLMAG_FEM_OK) {
+        return FULLMAG_FEM_ERR_INVALID;
+    }
+    constexpr std::uint64_t acceptance_offsets[] = {
+        offsetof(FullmagFemModalSharedDomainPayload, acceptance_criterion),
+        offsetof(FullmagFemModalSharedDomainPayload, acceptance_metric_kind),
+        offsetof(FullmagFemModalSharedDomainPayload, acceptance_unit),
+        offsetof(FullmagFemModalSharedDomainPayload, acceptance_metric_value),
+        offsetof(FullmagFemModalSharedDomainPayload, acceptance_threshold),
+        offsetof(FullmagFemModalSharedDomainPayload, acceptance_certificate_sha256),
+    };
+    constexpr std::size_t acceptance_field_count =
+        sizeof(acceptance_offsets) / sizeof(acceptance_offsets[0]);
+    out_layout->v3.v2.modal_shared_domain_payload_size =
+        sizeof(FullmagFemModalSharedDomainPayload);
+    out_layout->v3.v2.modal_shared_domain_payload_field_count +=
+        acceptance_field_count;
+    std::copy(
+        acceptance_offsets,
+        acceptance_offsets + acceptance_field_count,
+        out_layout->v3.v2.modal_shared_domain_payload_field_offsets +
+            FULLMAG_FEM_MODAL_SHARED_DOMAIN_PAYLOAD_FIELD_COUNT + 2u);
+    out_layout->v3.v2.abi_version =
+        FULLMAG_FEM_FREQUENCY_DOMAIN_MODAL_ABI_LAYOUT_V4;
+    out_layout->v3.v2.modal_abi_schema = 4u;
+    out_layout->modal_acceptance_certificate_field_count =
+        acceptance_field_count;
+    std::copy(
+        acceptance_offsets,
+        acceptance_offsets + acceptance_field_count,
+        out_layout->modal_acceptance_certificate_field_offsets);
+    fullmag_fem_clear_global_error();
+    return FULLMAG_FEM_OK;
+}
+
+int fullmag_fem_get_frequency_domain_modal_abi_layout_v5(
+    fullmag_fem_frequency_domain_modal_abi_layout_v5 *out_layout
+) {
+    static_assert(
+        FULLMAG_FEM_MODAL_GPU_ATTESTATION_V1_FIELD_COUNT <= 128u,
+        "modal GPU attestation manifest capacity must cover V1");
+    if (out_layout == nullptr ||
+        out_layout->v4.v3.v2.struct_size <
+            sizeof(fullmag_fem_frequency_domain_modal_abi_layout_v5)) {
+        fullmag_fem_set_global_error(
+            "fullmag_fem_get_frequency_domain_modal_abi_layout_v5 requires its full v5 struct");
+        return FULLMAG_FEM_ERR_INVALID;
+    }
+    *out_layout = {};
+    out_layout->v4.v3.v2.struct_size =
+        sizeof(fullmag_fem_frequency_domain_modal_abi_layout_v4);
+    if (fullmag_fem_get_frequency_domain_modal_abi_layout_v4(&out_layout->v4) !=
+        FULLMAG_FEM_OK) {
+        return FULLMAG_FEM_ERR_INVALID;
+    }
+    constexpr std::uint64_t result_offsets[] = {
+        offsetof(FullmagFemFrequencyDomainResultV20, abi_version),
+        offsetof(FullmagFemFrequencyDomainResultV20, struct_size),
+        offsetof(FullmagFemFrequencyDomainResultV20, scientific_result_v18),
+        offsetof(FullmagFemFrequencyDomainResultV20, gpu_attestation),
+    };
+#define FULLMAG_FEM_V5_ATTESTATION_OFFSET(member) \
+    offsetof(FullmagFemModalGpuAttestationV1, member),
+    constexpr std::uint64_t attestation_offsets[] = {
+        FULLMAG_FEM_MODAL_GPU_ATTESTATION_V1_FIELD_LIST(
+            FULLMAG_FEM_V5_ATTESTATION_OFFSET)
+    };
+#undef FULLMAG_FEM_V5_ATTESTATION_OFFSET
+    out_layout->modal_frequency_domain_result_v20_size =
+        sizeof(FullmagFemFrequencyDomainResultV20);
+    out_layout->modal_frequency_domain_result_v20_align =
+        alignof(FullmagFemFrequencyDomainResultV20);
+    out_layout->modal_frequency_domain_result_v20_field_count =
+        sizeof(result_offsets) / sizeof(result_offsets[0]);
+    std::copy(
+        result_offsets,
+        result_offsets + sizeof(result_offsets) / sizeof(result_offsets[0]),
+        out_layout->modal_frequency_domain_result_v20_field_offsets);
+    out_layout->modal_gpu_attestation_v1_size = sizeof(FullmagFemModalGpuAttestationV1);
+    out_layout->modal_gpu_attestation_v1_align = alignof(FullmagFemModalGpuAttestationV1);
+    out_layout->modal_gpu_attestation_v1_field_count =
+        sizeof(attestation_offsets) / sizeof(attestation_offsets[0]);
+    std::copy(
+        attestation_offsets,
+        attestation_offsets + sizeof(attestation_offsets) / sizeof(attestation_offsets[0]),
+        out_layout->modal_gpu_attestation_v1_field_offsets);
+    out_layout->v4.v3.v2.abi_version =
+        FULLMAG_FEM_FREQUENCY_DOMAIN_MODAL_ABI_LAYOUT_V5;
+    out_layout->v4.v3.v2.modal_abi_schema = 5u;
     fullmag_fem_clear_global_error();
     return FULLMAG_FEM_OK;
 }
@@ -2169,6 +2281,7 @@ static int fullmag_fem_frequency_domain_solve_driven_response_from_c_abi(
         request->abi_version != 9u &&
         request->abi_version != FULLMAG_FEM_FREQUENCY_DOMAIN_V16_ABI_VERSION &&
         request->abi_version != FULLMAG_FEM_FREQUENCY_DOMAIN_V17_ABI_VERSION &&
+        request->abi_version != FULLMAG_FEM_FREQUENCY_DOMAIN_V18_ABI_VERSION &&
         request->abi_version != FULLMAG_FEM_FREQUENCY_DOMAIN_ABI_VERSION) {
         if (!fill_frequency_domain_validation_result(
                 out_result,
@@ -2714,10 +2827,15 @@ void fullmag_fem_frequency_domain_solve_result_release(
     *result = {};
 }
 
-FullmagFemFrequencyDomainResult fullmag_fem_modal_eigen_solve(
-    const FullmagFemModalEigenRequest *request
+static FullmagFemFrequencyDomainResult fullmag_fem_modal_eigen_solve_impl(
+    const FullmagFemModalEigenRequest *request,
+    bool caller_supports_v20,
+    fullmag::fem::frequency_domain::ModalGpuExecutionAttestation *out_gpu_attestation
 )
 {
+    if (out_gpu_attestation != nullptr) {
+        *out_gpu_attestation = {};
+    }
     if (request == nullptr) {
         return copy_frequency_domain_contract_result(
             fullmag::fem::frequency_domain::solve_modal_eigen_contract({}));
@@ -2761,6 +2879,7 @@ FullmagFemFrequencyDomainResult fullmag_fem_modal_eigen_solve(
         return version == FULLMAG_FEM_FREQUENCY_DOMAIN_V15_ABI_VERSION ||
             version == FULLMAG_FEM_FREQUENCY_DOMAIN_V16_ABI_VERSION ||
             version == FULLMAG_FEM_FREQUENCY_DOMAIN_V17_ABI_VERSION ||
+            version == FULLMAG_FEM_FREQUENCY_DOMAIN_V18_ABI_VERSION ||
             version == FULLMAG_FEM_FREQUENCY_DOMAIN_ABI_VERSION;
     };
     /* Read only the mandatory ABI discriminant before this gate.  An unknown
@@ -2852,6 +2971,9 @@ FullmagFemFrequencyDomainResult fullmag_fem_modal_eigen_solve(
         constexpr std::size_t kModalPayloadV18LinearizationDescriptorTailSize =
             offsetof(FullmagFemModalSharedDomainPayload, exchange_material_view) +
             sizeof(payload->exchange_material_view);
+        constexpr std::size_t kModalPayloadV19AcceptanceCertificateTailSize =
+            offsetof(FullmagFemModalSharedDomainPayload, acceptance_certificate_sha256) +
+            sizeof(payload->acceptance_certificate_sha256);
         const auto nonempty = [](const char *value) {
             return value != nullptr && value[0] != '\0';
         };
@@ -2882,8 +3004,11 @@ FullmagFemFrequencyDomainResult fullmag_fem_modal_eigen_solve(
             payload->abi_version >= FULLMAG_FEM_FREQUENCY_DOMAIN_V17_ABI_VERSION &&
             payload->struct_size >= kModalPayloadV6RelationViewTailSize;
         const bool has_payload_v18_linearization_descriptor_tail =
-            payload->abi_version >= FULLMAG_FEM_FREQUENCY_DOMAIN_ABI_VERSION &&
+            payload->abi_version >= FULLMAG_FEM_FREQUENCY_DOMAIN_V18_ABI_VERSION &&
             payload->struct_size >= kModalPayloadV18LinearizationDescriptorTailSize;
+        const bool has_payload_v19_acceptance_certificate_tail =
+            payload->abi_version >= FULLMAG_FEM_FREQUENCY_DOMAIN_ABI_VERSION &&
+            payload->struct_size >= kModalPayloadV19AcceptanceCertificateTailSize;
         if (has_modal_v17_certificate_tail && !has_payload_v17_certificate_tail) {
             return validation_error(
                 "native FEM shared-domain payload has no v17 certificate binding prefix",
@@ -2892,43 +3017,48 @@ FullmagFemFrequencyDomainResult fullmag_fem_modal_eigen_solve(
                 "",
                 "canonical_certificate_binding_unverifiable");
         }
-        if (payload->abi_version >= FULLMAG_FEM_FREQUENCY_DOMAIN_ABI_VERSION &&
+        if (payload->abi_version >= FULLMAG_FEM_FREQUENCY_DOMAIN_V18_ABI_VERSION &&
             !has_payload_v18_linearization_descriptor_tail) {
             return validation_error(
                 "native FEM shared-domain payload has no v18 descriptor/material prefix",
                 "shared_payload_struct_size_too_small",
                 FULLMAG_FEM_MODAL_CERTIFICATE_BINDING_INVALID,
                 "",
-                    "linearization_descriptor_missing");
+                "linearization_descriptor_missing");
+        }
+        if (payload->abi_version >= FULLMAG_FEM_FREQUENCY_DOMAIN_ABI_VERSION &&
+            !has_payload_v19_acceptance_certificate_tail) {
+            return validation_error(
+                "native FEM shared-domain payload has no v19 acceptance-certificate prefix",
+                "shared_payload_struct_size_too_small",
+                FULLMAG_FEM_MODAL_CERTIFICATE_BINDING_INVALID,
+                "",
+                "equilibrium_acceptance_certificate_missing");
         }
 #if FULLMAG_HAS_MFEM_STACK
         if (payload->abi_version >= FULLMAG_FEM_FREQUENCY_DOMAIN_ABI_VERSION &&
-            has_payload_v18_linearization_descriptor_tail) {
-            fullmag::fem::frequency_domain::ModalSharedDomainValidationResult
-                shared_payload_validation{};
-            char shared_payload_validation_error[256]{};
-            if (fullmag::fem::frequency_domain::validate_modal_shared_domain_payload_contract(
-                    *payload,
-                    payload->mesh != nullptr && payload->mesh->nodes_xyz_len % 3u == 0u
-                        ? payload->mesh->nodes_xyz_len / 3u
-                        : 0u,
-                    &shared_payload_validation,
-                    shared_payload_validation_error) != fd::FrequencyDomainStatus::ok) {
+            has_payload_v19_acceptance_certificate_tail) {
+            const fd::EquilibriumAcceptanceCertificateDescriptor acceptance{
+                payload->acceptance_criterion,
+                payload->acceptance_metric_kind,
+                payload->acceptance_unit,
+                payload->acceptance_metric_value,
+                payload->acceptance_threshold,
+                payload->acceptance_certificate_sha256};
+            char acceptance_error[128]{};
+            if (fd::validate_equilibrium_acceptance_certificate(
+                    acceptance, acceptance_error) != fd::FrequencyDomainStatus::ok) {
                 return validation_error(
-                    "native FEM shared-domain payload failed the shared native contract",
-                    shared_payload_validation_error[0] != '\0'
-                        ? shared_payload_validation_error
-                        : "shared_payload_contract_invalid",
+                    "native FEM shared-domain payload has an invalid equilibrium acceptance certificate",
+                    acceptance_error[0] != '\0'
+                        ? acceptance_error
+                        : "equilibrium_acceptance_certificate_invalid",
                     FULLMAG_FEM_MODAL_CERTIFICATE_BINDING_INVALID,
                     "",
-                    shared_payload_validation_error[0] != '\0'
-                        ? shared_payload_validation_error
-                        : "shared_payload_contract_invalid");
+                    acceptance_error[0] != '\0'
+                        ? acceptance_error
+                        : "equilibrium_acceptance_certificate_invalid");
             }
-            accepted_certificate_binding_status =
-                FULLMAG_FEM_MODAL_CERTIFICATE_BINDING_ACCEPTED;
-            accepted_certificate_binding_digest =
-                shared_payload_validation.canonical_preimage_sha256;
         }
 #endif
         if (has_payload_v18_linearization_descriptor_tail &&
@@ -3306,7 +3436,15 @@ FullmagFemFrequencyDomainResult fullmag_fem_modal_eigen_solve(
             accepted_certificate_binding_digest = v6_binding.canonical_preimage_sha256;
             accepted_certificate_binding_reason = "none";
         }
-        if (payload->abi_version >= FULLMAG_FEM_FREQUENCY_DOMAIN_ABI_VERSION) {
+        if (payload->abi_version == FULLMAG_FEM_FREQUENCY_DOMAIN_V18_ABI_VERSION) {
+            return validation_error(
+                "native FEM shared-domain payload ABI v18 has no accepted equilibrium certificate",
+                "equilibrium_acceptance_certificate_missing",
+                FULLMAG_FEM_MODAL_CERTIFICATE_BINDING_UNVERIFIABLE,
+                "",
+                "equilibrium_acceptance_certificate_missing");
+        }
+        if (payload->abi_version >= FULLMAG_FEM_FREQUENCY_DOMAIN_V18_ABI_VERSION) {
             const FullmagFemModalLinearizationDescriptor *descriptor =
                 payload->linearization_descriptor;
             if (descriptor == nullptr) {
@@ -3633,10 +3771,10 @@ FullmagFemFrequencyDomainResult fullmag_fem_modal_eigen_solve(
         }
     }
     fd::ModalEigenRequest native_request{};
-    /* Public v18 adds the backend-neutral linearization descriptor after the
-       V17 certificate tail.  The boundary validates that descriptor but does
+    /* Public v19 appends the accepted-equilibrium certificate after the frozen
+       v18 descriptor/material prefix.  The boundary validates both but does
        not synthesize an A_qq matrix or solver policy from it.  Normalize both
-       internal ABI discriminants explicitly; public v18 result/provenance
+       internal ABI discriminants explicitly; public v19 result/provenance
        remains intact at the C ABI boundary. */
     native_request.abi_version = fd::kFrequencyDomainAbiVersion;
     native_request.operator_request.abi_version = fd::kFrequencyDomainAbiVersion;
@@ -4008,6 +4146,12 @@ FullmagFemFrequencyDomainResult fullmag_fem_modal_eigen_solve(
         native_request.poisson_airbox_shared_domain_payload =
             request->shared_domain_payload;
     }
+    if (native_request.execution_target == fd::ModalExecutionTarget::production_gpu &&
+        !caller_supports_v20) {
+        return validation_error(
+            "strict production GPU requires the caller-sized result v20 attestation ABI",
+            "k0_poisson_airbox_gpu_attestation_abi_required");
+    }
 
     fd::FrequencyDomainContractResult native_result =
         fd::solve_modal_eigen_contract(native_request);
@@ -4018,7 +4162,144 @@ FullmagFemFrequencyDomainResult fullmag_fem_modal_eigen_solve(
             accepted_certificate_binding_digest;
         native_result.certificate_binding.reason = accepted_certificate_binding_reason;
     }
+    if (out_gpu_attestation != nullptr) {
+        *out_gpu_attestation = native_result.modal_gpu_attestation;
+    }
     return copy_frequency_domain_contract_result(native_result);
+}
+
+FullmagFemFrequencyDomainResult fullmag_fem_modal_eigen_solve(
+    const FullmagFemModalEigenRequest *request
+)
+{
+    return fullmag_fem_modal_eigen_solve_impl(request, false, nullptr);
+}
+
+int fullmag_fem_modal_eigen_solve_v20(
+    const FullmagFemModalEigenRequest *request,
+    FullmagFemFrequencyDomainResultV20 *out_result
+)
+{
+    if (out_result == nullptr ||
+        out_result->abi_version != FULLMAG_FEM_FREQUENCY_DOMAIN_RESULT_V20_ABI_VERSION ||
+        out_result->struct_size < sizeof(FullmagFemFrequencyDomainResultV20)) {
+        return FULLMAG_FEM_ERR_INVALID;
+    }
+
+    const std::uint32_t caller_abi_version = out_result->abi_version;
+    const std::uint32_t caller_struct_size = out_result->struct_size;
+    fullmag::fem::frequency_domain::ModalGpuExecutionAttestation gpu_snapshot{};
+    out_result->scientific_result_v18 =
+        fullmag_fem_modal_eigen_solve_impl(request, true, &gpu_snapshot);
+    const bool gpu_requested = request != nullptr &&
+        request->struct_size >=
+            offsetof(FullmagFemModalEigenRequest, execution_target) +
+                sizeof(request->execution_target) &&
+        request->execution_target == FULLMAG_FEM_MODAL_EXECUTION_PRODUCTION_GPU;
+    if (!gpu_requested) {
+        out_result->gpu_attestation = nullptr;
+        out_result->abi_version = caller_abi_version;
+        out_result->struct_size = caller_struct_size;
+        return FULLMAG_FEM_OK;
+    }
+    out_result->gpu_attestation = new (std::nothrow) FullmagFemModalGpuAttestationV1{};
+    if (out_result->gpu_attestation == nullptr) {
+        fullmag_fem_frequency_domain_result_destroy(&out_result->scientific_result_v18);
+        out_result->abi_version = caller_abi_version;
+        out_result->struct_size = caller_struct_size;
+        return FULLMAG_FEM_ERR_INTERNAL;
+    }
+    out_result->gpu_attestation->abi_version =
+        FULLMAG_FEM_MODAL_GPU_ATTESTATION_V1_ABI_VERSION;
+    out_result->gpu_attestation->struct_size = sizeof(FullmagFemModalGpuAttestationV1);
+    out_result->gpu_attestation->measurement_state =
+        FULLMAG_FEM_MODAL_GPU_MEASUREMENT_UNAVAILABLE;
+    out_result->gpu_attestation->fallback_state =
+        FULLMAG_FEM_MODAL_GPU_FALLBACK_NONE;
+    if (gpu_snapshot.hypre_policy_observed) {
+        out_result->gpu_attestation->measurement_coverage_flags |=
+            FULLMAG_FEM_MODAL_GPU_COVERAGE_SETUP;
+    }
+    if (gpu_snapshot.hypre_memory_location_device) {
+        out_result->gpu_attestation->hypre_memory_location =
+            FULLMAG_FEM_MODAL_HYPRE_MEMORY_DEVICE;
+    }
+    if (gpu_snapshot.hypre_execution_policy_device) {
+        out_result->gpu_attestation->hypre_execution_policy =
+            FULLMAG_FEM_MODAL_HYPRE_EXEC_DEVICE;
+    }
+    out_result->gpu_attestation->last_invalidation_reason = duplicate_c_string(
+        gpu_snapshot.hypre_failure_reason.empty()
+            ? "full_gpu_measurement_incomplete"
+            : gpu_snapshot.hypre_failure_reason.c_str());
+    if (out_result->gpu_attestation->last_invalidation_reason == nullptr) {
+        fullmag_fem_frequency_domain_result_v20_destroy(out_result);
+        out_result->abi_version = caller_abi_version;
+        out_result->struct_size = caller_struct_size;
+        return FULLMAG_FEM_ERR_INTERNAL;
+    }
+    if (out_result->scientific_result_v18.status == FULLMAG_FEM_FD_OK) {
+        out_result->scientific_result_v18.status = FULLMAG_FEM_FD_UNAVAILABLE;
+        delete[] out_result->scientific_result_v18.error_message;
+        delete[] out_result->scientific_result_v18.diagnostics_json;
+        delete[] out_result->scientific_result_v18.result_json;
+        out_result->scientific_result_v18.error_message = duplicate_c_string(
+            "strict production GPU execution attestation is incomplete");
+        out_result->scientific_result_v18.diagnostics_json = duplicate_c_string(
+            "{\"schema_version\":\"frequency_domain_modal_diagnostics.v1\","
+            "\"study_product\":\"modal_eigen\",\"status\":\"unavailable\","
+            "\"complete\":false,\"reason\":"
+            "\"k0_poisson_airbox_gpu_transfer_measurement_unavailable\"}");
+        out_result->scientific_result_v18.result_json = duplicate_c_string(
+            "{\"schema_version\":\"frequency_domain_modal_result.v1\","
+            "\"study_product\":\"modal_eigen\",\"status\":\"unavailable\","
+            "\"complete\":false}");
+        if (out_result->scientific_result_v18.error_message == nullptr ||
+            out_result->scientific_result_v18.diagnostics_json == nullptr ||
+            out_result->scientific_result_v18.result_json == nullptr) {
+            fullmag_fem_frequency_domain_result_v20_destroy(out_result);
+            out_result->abi_version = caller_abi_version;
+            out_result->struct_size = caller_struct_size;
+            return FULLMAG_FEM_ERR_INTERNAL;
+        }
+    }
+    out_result->abi_version = caller_abi_version;
+    out_result->struct_size = caller_struct_size;
+    return 0;
+}
+
+void fullmag_fem_frequency_domain_result_v20_destroy(
+    FullmagFemFrequencyDomainResultV20 *result
+)
+{
+    if (result == nullptr) {
+        return;
+    }
+    const std::uint32_t abi_version = result->abi_version;
+    const std::uint32_t struct_size = result->struct_size;
+    fullmag_fem_frequency_domain_result_destroy(&result->scientific_result_v18);
+    if (result->gpu_attestation != nullptr) {
+        auto *attestation = result->gpu_attestation;
+        delete[] attestation->device_name;
+        delete[] attestation->mfem_version;
+        delete[] attestation->hypre_version;
+        delete[] attestation->petsc_version;
+        delete[] attestation->slepc_version;
+        delete[] attestation->petsc_vec_type;
+        delete[] attestation->petsc_matrix_type;
+        delete[] attestation->matshell_vec_type;
+        delete[] attestation->slepc_bv_type;
+        delete[] attestation->eps_type;
+        delete[] attestation->st_type;
+        delete[] attestation->ksp_type;
+        delete[] attestation->poisson_pc_type;
+        delete[] attestation->shift_pc_type;
+        delete[] attestation->last_invalidation_reason;
+        delete attestation;
+    }
+    *result = {};
+    result->abi_version = abi_version;
+    result->struct_size = struct_size;
 }
 
 int fullmag_fem_modal_eigen_gpu_runtime_finalize(void)
@@ -4426,6 +4707,26 @@ int fullmag_fem_backend_copy_field_f64(
         return FULLMAG_FEM_ERR_INTERNAL;
     }
     return fullmag::fem::context_copy_field_f64(
+        handle->context,
+        observable,
+        out_xyz,
+        out_len,
+        handle->last_error);
+}
+
+int fullmag_fem_backend_copy_linearization_field_f64(
+    fullmag_fem_backend *handle,
+    fullmag_fem_observable observable,
+    double *out_xyz,
+    uint64_t out_len
+) {
+    if (handle == nullptr) {
+        fullmag_fem_set_global_error(
+            "fullmag_fem_backend_copy_linearization_field_f64 received null handle");
+        return FULLMAG_FEM_ERR_INVALID;
+    }
+    handle->last_error.clear();
+    return fullmag::fem::context_copy_linearization_field_f64(
         handle->context,
         observable,
         out_xyz,

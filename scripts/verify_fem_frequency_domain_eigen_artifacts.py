@@ -350,13 +350,11 @@ def validate_equilibrium_artifact_v7(root: Path, manifest: dict) -> None:
         "equilibrium_artifact.v7:" + content_sha256.removeprefix("sha256:"),
         "equilibrium_artifact.equilibrium_id",
     )
-    manifest_digest = manifest.get("diagnostics", {}).get(
-        "equilibrium_artifact_sha256"
-    )
+    manifest_digest = manifest.get("equilibrium_artifact_sha256")
     require_equal(
         manifest_digest,
         content_sha256,
-        "manifest.diagnostics.equilibrium_artifact_sha256",
+        "manifest.equilibrium_artifact_sha256",
     )
     observables = artifact.get("observables")
     if not isinstance(observables, dict):
@@ -1470,6 +1468,10 @@ def validate_solver_window_diagnostics(
     *,
     require_window: bool,
 ) -> list[float] | None:
+    if diagnostics.get("target_kind") == "nearest_frequency":
+        if require_window:
+            fail("solver diagnostics require a frequency_window target")
+        return None
     if "window_completeness" not in diagnostics:
         if require_window:
             fail("solver_diagnostics.window_completeness is required")
@@ -1604,15 +1606,46 @@ def validate_solver_window_diagnostics(
                         subwindow.get("candidate_mode_count"),
                         f"{name}.candidate_mode_count",
                     )
+                candidate_count_kind = subwindow.get("candidate_mode_count_kind")
+                raw_ritz_in_window_count = None
+                if candidate_count_kind is not None:
+                    if candidate_count_kind != "raw_ritz_in_window":
+                        fail(f"{name}.candidate_mode_count_kind is invalid")
+                    raw_ritz_in_window_count = require_non_negative_int(
+                        subwindow.get("raw_ritz_in_window_count"),
+                        f"{name}.raw_ritz_in_window_count",
+                    )
+                    if candidate_mode_count != raw_ritz_in_window_count:
+                        fail(
+                            f"{name}.candidate_mode_count must match "
+                            "raw_ritz_in_window_count"
+                        )
                 accepted_mode_count = require_non_negative_int(
                     subwindow.get("accepted_mode_count"),
                     f"{name}.accepted_mode_count",
                 )
+                for counter_name in (
+                    "action_residual_evaluated_count",
+                    "reconstructed_mode_count",
+                    "full_residual_accepted_count",
+                ):
+                    if counter_name in subwindow:
+                        require_non_negative_int(
+                            subwindow.get(counter_name), f"{name}.{counter_name}"
+                        )
                 if (
                     candidate_mode_count is not None
                     and accepted_mode_count > candidate_mode_count
                 ):
                     fail(f"{name}.accepted_mode_count must not exceed candidate_mode_count")
+                if (
+                    raw_ritz_in_window_count is not None
+                    and accepted_mode_count > raw_ritz_in_window_count
+                ):
+                    fail(
+                        f"{name}.accepted_mode_count must not exceed "
+                        "raw_ritz_in_window_count"
+                    )
                 accepted_frequencies = subwindow.get("accepted_frequencies_hz")
                 if not isinstance(accepted_frequencies, list):
                     fail(f"{name}.accepted_frequencies_hz must be a list")

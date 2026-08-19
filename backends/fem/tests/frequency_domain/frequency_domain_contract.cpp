@@ -5977,7 +5977,7 @@ void accepted_equilibrium_builds_linearization_state_with_tangent_diagnostics()
     artifact.physics_snapshot_id = "physics:v1";
     artifact.boundary_snapshot_id = "bc:v1";
     artifact.producer_run_id = "run:equilibrium";
-    artifact.content_sha256 = "sha256:equilibrium-v6";
+    artifact.content_sha256 = "sha256:equilibrium-v7";
     artifact.m0_unit = {m0_x, m0_y, m0_z, 2};
     artifact.h_eff0_a_per_m = {h_eff_x, h_eff_y, h_eff_z, 2};
     artifact.h_demag0_a_per_m = {h_demag_x, h_demag_y, h_demag_z, 2};
@@ -5985,6 +5985,13 @@ void accepted_equilibrium_builds_linearization_state_with_tangent_diagnostics()
     artifact.magnetic_node_count = 2;
     artifact.airbox_node_count = 2;
     artifact.accepted_for_linearization = true;
+    artifact.acceptance = {
+        "torque",
+        "max_torque_apm",
+        "A/m",
+        0.25,
+        0.5,
+        "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"};
     artifact.demag_model = "poisson_airbox_dirichlet";
 
     fd::LinearizationBuildOptions options{};
@@ -6003,16 +6010,21 @@ void accepted_equilibrium_builds_linearization_state_with_tangent_diagnostics()
     check(state.h_eff0_xyz.size() == 6, "linearization state packs h_eff0 xyz");
     check(state.h_demag0_xyz.size() == 6, "linearization state packs h_demag0 xyz");
     check(state.phi0.size() == 2, "linearization state preserves airbox phi0");
-    check(state.schema_version == "LinearizationState.v6", "linearization state records v6 schema");
+    check(state.schema_version == "LinearizationState.v6", "linearization state preserves v6 schema");
     check(state.producer_run_id == "run:equilibrium", "linearization state preserves producer run id");
     check(state.equilibrium_id == "eq:accepted", "linearization state preserves equilibrium id");
     check(!state.linearization_signature_hash.empty(), "linearization state emits signature hash");
+    check(state.acceptance_criterion == "torque", "linearization state preserves acceptance criterion");
+    check(state.acceptance_metric_kind == "max_torque_apm", "linearization state preserves acceptance metric");
+    check(state.acceptance_unit == "A/m", "linearization state preserves acceptance unit");
+    check(state.acceptance_metric_value == 0.25 && state.acceptance_threshold == 0.5,
+          "linearization state preserves acceptance values");
+    check(state.acceptance_certificate_sha256 == artifact.acceptance.certificate_sha256,
+          "linearization state preserves acceptance certificate identity");
     check(diagnostics.static_demag_available, "linearization diagnostics report static demag availability");
     check(diagnostics.max_m0_norm_error <= options.m0_norm_tolerance, "linearization diagnostics bound m0 norm error");
-    check(
-        diagnostics.max_m0_cross_heff0_relative <=
-            options.equilibrium_torque_relative_tolerance,
-        "linearization diagnostics bound equilibrium torque residual");
+    check(std::strlen(diagnostics.acceptance_certificate_sha256) > 0,
+          "linearization diagnostics retain acceptance certificate identity");
     check(
         std::fabs(fd::dot3(state.tangent_frames[1].m, state.tangent_frames[1].e1)) < 1.0e-12,
         "linearization tangent frame e1 is orthogonal to m0");
@@ -6060,7 +6072,7 @@ void linearization_state_reports_v5_reject_reasons_and_signature_mismatches()
     artifact.physics_snapshot_id = "physics:v1";
     artifact.boundary_snapshot_id = "bc:v1";
     artifact.producer_run_id = "run:equilibrium";
-    artifact.content_sha256 = "sha256:equilibrium-v6";
+    artifact.content_sha256 = "sha256:equilibrium-v7";
     artifact.m0_unit = {m0_x, m0_y, m0_z, 1};
     artifact.h_eff0_a_per_m = {h_parallel_x, h_parallel_y, h_parallel_z, 1};
     artifact.h_demag0_a_per_m = {h_demag_x, h_demag_y, h_demag_z, 1};
@@ -6068,6 +6080,13 @@ void linearization_state_reports_v5_reject_reasons_and_signature_mismatches()
     artifact.magnetic_node_count = 1;
     artifact.airbox_node_count = 1;
     artifact.accepted_for_linearization = true;
+    artifact.acceptance = {
+        "energy",
+        "total_energy_plateau_range_j",
+        "J",
+        2.5e-19,
+        1.0e-18,
+        "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"};
     artifact.demag_model = "periodic_airbox_k0";
 
     fd::LinearizationBuildOptions options{};
@@ -6092,6 +6111,87 @@ void linearization_state_reports_v5_reject_reasons_and_signature_mismatches()
             diagnostics.reject_reason,
             "equilibrium_artifact_not_accepted_for_linearization") == 0,
         "linearization builder reports exact unaccepted artifact reject reason");
+
+    fd::EquilibriumArtifactDescriptor missing_certificate = artifact;
+    missing_certificate.acceptance.certificate_sha256 = nullptr;
+    check(
+        fd::build_linearization_state_from_equilibrium(
+            missing_certificate,
+            options,
+            state,
+            diagnostics) == fd::FrequencyDomainStatus::validation_error,
+        "linearization builder rejects a missing acceptance certificate");
+    check(std::strcmp(
+              diagnostics.reject_reason,
+              "equilibrium_acceptance_certificate_missing") == 0,
+          "missing certificate rejection has a stable reason");
+
+    fd::EquilibriumArtifactDescriptor forged_certificate = artifact;
+    forged_certificate.acceptance.certificate_sha256 = "sha256:forged";
+    check(
+        fd::build_linearization_state_from_equilibrium(
+            forged_certificate,
+            options,
+            state,
+            diagnostics) == fd::FrequencyDomainStatus::validation_error,
+        "linearization builder rejects a forged acceptance certificate digest");
+    check(std::strcmp(
+              diagnostics.reject_reason,
+              "equilibrium_acceptance_certificate_digest_invalid") == 0,
+          "forged certificate rejection has a stable reason");
+
+    fd::EquilibriumArtifactDescriptor nonfinite_certificate = artifact;
+    nonfinite_certificate.acceptance.metric_value =
+        std::numeric_limits<double>::infinity();
+    check(
+        fd::build_linearization_state_from_equilibrium(
+            nonfinite_certificate,
+            options,
+            state,
+            diagnostics) == fd::FrequencyDomainStatus::validation_error,
+        "linearization builder rejects a non-finite acceptance metric");
+
+    fd::EquilibriumArtifactDescriptor unsatisfied_certificate = artifact;
+    unsatisfied_certificate.acceptance.metric_value = 2.0e-18;
+    check(
+        fd::build_linearization_state_from_equilibrium(
+            unsatisfied_certificate,
+            options,
+            state,
+            diagnostics) == fd::FrequencyDomainStatus::validation_error,
+        "linearization builder rejects an unsatisfied acceptance threshold");
+    check(std::strcmp(
+              diagnostics.reject_reason,
+              "equilibrium_acceptance_certificate_metric_invalid") == 0,
+          "unsatisfied certificate rejection has a stable reason");
+
+    fd::EquilibriumArtifactDescriptor negative_certificate = artifact;
+    negative_certificate.acceptance.metric_value = -1.0e-19;
+    check(
+        fd::build_linearization_state_from_equilibrium(
+            negative_certificate,
+            options,
+            state,
+            diagnostics) == fd::FrequencyDomainStatus::validation_error,
+        "linearization builder rejects a negative acceptance metric");
+    check(std::strcmp(
+              diagnostics.reject_reason,
+              "equilibrium_acceptance_certificate_metric_invalid") == 0,
+          "negative certificate rejection has a stable reason");
+
+    fd::EquilibriumArtifactDescriptor incoherent_certificate = artifact;
+    incoherent_certificate.acceptance.unit = "A/m";
+    check(
+        fd::build_linearization_state_from_equilibrium(
+            incoherent_certificate,
+            options,
+            state,
+            diagnostics) == fd::FrequencyDomainStatus::validation_error,
+        "linearization builder rejects an incoherent criterion/metric/unit tuple");
+    check(std::strcmp(
+              diagnostics.reject_reason,
+              "equilibrium_acceptance_certificate_incoherent") == 0,
+          "incoherent certificate rejection has a stable reason");
 
     fd::LinearizationBuildOptions mesh_mismatch_options = options;
     mesh_mismatch_options.expected_mesh_snapshot_id = "mesh:v2";
@@ -6180,13 +6280,13 @@ void linearization_state_reports_v5_reject_reasons_and_signature_mismatches()
             torque_artifact,
             options,
             state,
-            diagnostics) == fd::FrequencyDomainStatus::validation_error,
-        "linearization builder rejects large equilibrium torque residual");
+            diagnostics) == fd::FrequencyDomainStatus::ok,
+        "relative torque diagnostic must not reject certified equilibrium");
     check(
-        std::strcmp(
-            diagnostics.reject_reason,
-            "equilibrium_torque_residual_too_large") == 0,
-        "linearization builder reports exact torque residual reject reason");
+        diagnostics.max_m0_cross_heff0_relative > 1.0e-6,
+        "fixture must exercise the removed hidden gate");
+    check(std::strlen(diagnostics.acceptance_certificate_sha256) > 0,
+          "native diagnostics retain certificate identity");
 
     fd::EquilibriumArtifactDescriptor legacy_artifact = artifact;
     legacy_artifact.schema_version = "equilibrium_artifact.v5";
@@ -6196,10 +6296,10 @@ void linearization_state_reports_v5_reject_reasons_and_signature_mismatches()
             options,
             state,
             diagnostics) == fd::FrequencyDomainStatus::validation_error,
-        "linearization builder rejects legacy equilibrium artifact without fabricating v6 state");
+        "linearization builder rejects legacy equilibrium artifact without fabricating v7 state");
     check(
-        std::strcmp(diagnostics.reject_reason, "equilibrium_artifact_schema_not_v6") == 0,
-        "legacy equilibrium rejection names v6 contract");
+        std::strcmp(diagnostics.reject_reason, "equilibrium_artifact_schema_not_v7") == 0,
+        "legacy equilibrium rejection names v7 contract");
 
     fd::EquilibriumArtifactDescriptor missing_provenance = artifact;
     missing_provenance.content_sha256 = nullptr;
@@ -6209,10 +6309,10 @@ void linearization_state_reports_v5_reject_reasons_and_signature_mismatches()
             options,
             state,
             diagnostics) == fd::FrequencyDomainStatus::validation_error,
-        "linearization builder rejects a v6 artifact without content provenance");
+        "linearization builder rejects a v7 artifact without content provenance");
     check(
         std::strcmp(diagnostics.reject_reason, "equilibrium_artifact_provenance_missing") == 0,
-        "missing equilibrium provenance names the v6 requirement");
+        "missing equilibrium provenance names the v7 requirement");
 
     fd::EquilibriumArtifactDescriptor missing_phi = artifact;
     missing_phi.phi0 = nullptr;

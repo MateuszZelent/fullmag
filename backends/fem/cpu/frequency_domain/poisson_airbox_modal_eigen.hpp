@@ -9,7 +9,7 @@
 
 namespace fullmag::fem::frequency_domain {
 
-constexpr std::uint32_t kPoissonAirboxEigenBlockProblemAbiVersion = 3;
+constexpr std::uint32_t kPoissonAirboxEigenBlockProblemAbiVersion = 4;
 
 struct PoissonAirboxEigenBlockProblem {
     std::uint32_t abi_version = kPoissonAirboxEigenBlockProblemAbiVersion;
@@ -50,6 +50,16 @@ struct PoissonAirboxEigenBlockProblem {
     const char *periodic_mesh_certificate_schema = "periodic_mesh_certificate.v5";
     std::uint64_t magnetic_pair_count = 0;
     std::uint64_t airbox_pair_count = 0;
+
+    // Canonical shared-domain identities validated by the public request
+    // boundary.  Production persistence compares these exact identities;
+    // direct algebraic fixtures without them use a validation-only content
+    // signature and must not claim canonical identity provenance.
+    const char *mesh_generation_identity = nullptr;
+    const char *equilibrium_digest = nullptr;
+    const char *bias_field_sample_signature = nullptr;
+    const char *boundary_gauge_digest = nullptr;
+    const char *operator_input_digest = nullptr;
 
     bool k0_only = true;
     bool alpha_zero_required = true;
@@ -144,11 +154,42 @@ struct PoissonAirboxModalEigenResult {
     std::uint32_t finite_real_eigenpair_count = 0;
     std::uint32_t positive_frequency_eigenpair_count = 0;
     std::uint32_t action_residual_evaluated_count = 0;
+    std::uint32_t action_residual_evaluation_failed_count = 0;
+    std::uint32_t q_vector_extraction_failed_count = 0;
+    std::uint32_t full_vector_reconstruction_failed_count = 0;
+    std::uint32_t full_vector_nonfinite_count = 0;
     std::uint32_t reconstructed_mode_count = 0;
+    std::uint32_t full_residual_evaluation_failed_count = 0;
+    std::uint32_t full_residual_rejected_count = 0;
     std::uint32_t full_residual_accepted_count = 0;
+    // Post-EPS correction telemetry. These counters explain whether a
+    // positive Ritz pair was actually refined before the original descriptor
+    // residual was evaluated; they do not change the acceptance gate.
+    std::uint32_t refinement_attempted_count = 0;
+    std::uint32_t refinement_succeeded_count = 0;
+    std::uint32_t refinement_failed_count = 0;
     std::uint32_t accepted_mode_count = 0;
     std::uint32_t selected_eigenpair_index = 0;
     std::uint32_t outer_iterations = 0;
+
+    // Bounded classification of the raw real-scalar SLEPc Ritz values.  This
+    // is diagnostic evidence for the rotated-pencil convention and does not
+    // alter the production acceptance filter.
+    std::uint32_t raw_ritz_retrieval_failed_count = 0;
+    std::uint32_t raw_ritz_nonfinite_count = 0;
+    std::uint32_t raw_ritz_finite_count = 0;
+    std::uint32_t raw_ritz_complex_rejected_count = 0;
+    std::uint32_t raw_ritz_real_axis_count = 0;
+    std::uint32_t raw_ritz_positive_count = 0;
+    std::uint32_t raw_ritz_negative_count = 0;
+    std::uint32_t raw_ritz_zero_count = 0;
+    std::uint32_t raw_ritz_in_window_count = 0;
+    std::uint32_t raw_ritz_out_of_window_count = 0;
+    std::uint32_t operator_context_setup_count = 0;
+    std::uint32_t poisson_factorization_setup_count = 0;
+    std::uint32_t shift_solver_setup_count = 0;
+    std::uint64_t refinement_linear_iteration_count = 0;
+    int refinement_last_ksp_reason_code = 0;
 
     double eigenvalue_real = 0.0;
     double eigenvalue_imag = 0.0;
@@ -167,15 +208,24 @@ struct PoissonAirboxModalEigenResult {
     double gauge_residual_abs = 0.0;
     double poisson_constraint_relative_residual = 0.0;
     double gauge_mean_abs = 0.0;
+    double refinement_final_action_residual = 0.0;
     double expected_reference_frequency_hz = 0.0;
     double relative_reference_frequency_error = 0.0;
+    double descriptor_mass_norm = 0.0;
+    double descriptor_operator_norm = 0.0;
+    double angular_frequency_scale = 1.0;
+    double mass_scale = 1.0;
+    double operator_scale = 1.0;
+    double target_eigenvalue_scaled = 0.0;
 
     // The Schur operator remains a MatShell.  This records only the bounded
     // shifted-system preconditioner selected for the outer SLEPc transform.
     char shifted_preconditioner_kind[64]{};
+    char operator_context_scope[32]{};
+    char raw_ritz_classification_json[2048]{};
     // Exact provenance for every shift executed by a frequency-window solve.
     // Kept separate so the common diagnostics writer can embed it verbatim.
-    char executed_subwindows_json[16384]{};
+    char executed_subwindows_json[65536]{};
     // Stable solver/window outcome fields.  These are native diagnostics, not
     // part of the public C ABI request/result layout.
     char slepc_converged_reason[64]{};
@@ -218,6 +268,15 @@ struct PoissonAirboxModalEigenResult {
     bool eps_cancellation_observed = false;
     bool persistent_context_verified = false;
     bool device_residency_verified = false;
+    bool hypre_device_policy_observed = false;
+    bool hypre_device_policy_configured = false;
+    bool hypre_memory_location_device = false;
+    bool hypre_execution_policy_device = false;
+    bool hypre_vendor_sptrans_enabled = false;
+    bool hypre_vendor_spmv_enabled = false;
+    bool hypre_vendor_spgemm_enabled = false;
+    int hypre_first_error_code = 0;
+    char hypre_failure_reason[96]{};
     bool hot_loop_telemetry_measured = false;
     bool window_complete = false;
     bool window_failed_subwindow = false;
@@ -253,7 +312,7 @@ struct PoissonAirboxModalEigenResult {
     };
     std::vector<AcceptedMode> accepted_modes{};
 
-    char diagnostics_json[32768]{};
+    char diagnostics_json[131072]{};
 };
 
 struct PoissonAirboxModalResidualMetrics {

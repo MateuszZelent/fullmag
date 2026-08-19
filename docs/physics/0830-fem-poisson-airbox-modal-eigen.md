@@ -5,7 +5,7 @@
   implemented at source level, but no current-snapshot managed CPU/GPU
   qualification is available
 - Owners: Fullmag FEM frequency-domain backend
-- Last updated: 2026-08-12
+- Last updated: 2026-08-14
 - Related physics notes:
   - `0700-frequency-domain-linearized-llg.md`
   - `0800-fem-static-pbc-demag.md`
@@ -33,7 +33,7 @@ is not a FEM Poisson-airbox model and must not be labeled production physics.
 
 | Solver | Device | Current state | Boundary |
 |---|---|---|---|
-| FEM | CPU | `source_visible / unvalidated` | The public sweep, ABI-v18 native P1 assembly, Schur solver and two-pass window certificate exist in source. No matching fresh managed runtime, physical K0-3 convergence or production evidence exists for this snapshot. |
+| FEM | CPU | `source_visible / unvalidated` | The public sweep, request/shared-payload ABI v19, frozen legacy result ABI v18, native P1 assembly, Schur solver and two-pass window certificate exist in source. A managed antidot run reached native shared-domain assembly after one accepted relaxation, but did not produce a spectrum; physical K0-3 convergence and production evidence remain absent. |
 | FEM | GPU | `source_visible / unvalidated` | The PETSc/SLEPc CUDA adapter and two-pass window certificate exist in source. Executed device residency, matrix-free convergence, parity, sanitizer, scaling and production evidence are open. |
 | FDM | CPU | not applicable | FDM demagnetization has a separate canonical physics owner. |
 | FDM | GPU | not applicable | FDM demagnetization has a separate canonical physics owner. |
@@ -184,6 +184,22 @@ $\rho_\tau$ is retained for diagnosis only; it has no default acceptance
 threshold and cannot reverse a completed relaxation stage. An imported state
 must carry an equivalent immutable acceptance certificate.
 
+For a torque-certified handoff, the native magnetic-block consistency check
+uses the same user-authored absolute threshold as the completed relaxation:
+
+```{math}
+:label: eq-poisson-airbox-accepted-torque-threshold
+\tau_{\max}
+=\max_{\Omega_m}|\mathbf m_0\times\mathbf H_{\mathrm{eff},0}|
+\le \tau_{\mathrm{user}} .
+```
+
+There is no second hidden relative threshold. The native importer verifies the
+certificate kind, SI unit, measured value and threshold before using
+$\tau_{\mathrm{user}}$. An energy-certified handoff has no authored torque
+threshold, so the native magnetic-block representation check retains its
+strict numerical parallel-field guard instead of inventing one.
+
 (symbols-and-si-units)=
 ### 2.2 Symbols and SI units
 
@@ -233,14 +249,27 @@ must carry an equivalent immutable acceptance certificate.
 | $u_i^\ast v_j$, $s(U,V)$ | Hermitian overlap and normalized invariant-subspace overlap | $1$ |
 | $\mathbf H_{\mathrm{eff},0}$ | effective field evaluated at the accepted equilibrium | $\mathrm{A\,m^{-1}}$ |
 | $\rho_\tau$ | relative torque diagnostic, never an eigensolve acceptance threshold | $1$ |
+| $\tau_{\max}$ | maximum accepted absolute equilibrium torque-field residual | $\mathrm{A\,m^{-1}}$ |
+| $\tau_{\mathrm{user}}$ | user-authored relaxation torque threshold carried by the immutable acceptance certificate | $\mathrm{A\,m^{-1}}$ |
+| $\mathcal O$, $o$ | complete set of covered magnetic objects and one object identity | $1$ |
+| $c$ | global Cartesian modal component in $\{x,y,z\}$ | $1$ |
+| $N_i$, $V_e$ | P1 basis function and tet4 element volume | $1$, $\mathrm{m^3}$ |
+| $\mathbf d^o_c$ | complex P1 coefficient vector of $\delta m_c$ restricted to object $o$ | $1$ |
+| $M_o$, $M_e$ | object consistent mass matrix and local P1/tet4 consistent mass matrix | $\mathrm{m^3}$ |
+| $E[o,c]$, $E_{\mathrm{total}}$ | component quadratic mass measure and summed modal measure | $\mathrm{m^3}$ |
+| $p[o,c]$, $p_{\mathrm{object}}[o]$, $p_{\mathrm{global}}[c]$ | object-component, object-total and global-component participation fractions | $1$ |
+| $\varepsilon_{\mathrm{sum}}$, $\varepsilon_{\mathrm{mach}}$ | participation-sum tolerance and float64 machine epsilon | $1$ |
 
 (assumptions-and-validity)=
 ### 2.3 Assumptions and validity limits
 
-- $\mathbf m_0$ originates in an accepted relaxation handoff or certified
-  equilibrium artifact with matching mesh, material, physics and boundary
-  signatures. Acceptance is owned by the user's completed relaxation stop
-  contract; eigensolve does not impose an additional relative-torque limit.
+- $\mathbf m_0$ must originate in an accepted relaxation handoff or certified
+  equilibrium artifact with matching mesh, material, static physics and static
+  boundary signatures. Acceptance is owned by the user's completed relaxation
+  stop contract; eigensolve does not impose an additional relative-torque
+  limit. The source-level v3 handoff now binds certified fields and the three
+  source-equilibrium signatures; fresh managed execution is still required
+  before this becomes a production qualification claim.
 - A completed relaxation is accepted only according to the canonical contract
   in {ref}`relaxation-stop-semantics`. `max_steps`, time limits, cancellation,
   numerical stagnation, and backend failure do not establish equilibrium.
@@ -248,9 +277,10 @@ must carry an equivalent immutable acceptance certificate.
   completed, converged relaxation stage.
 - The source-level native magnetic producer supports P1 `tet4` and `prism6`
   magnetic elements, one homogeneous scalar $A_{\mathrm{ex}}$, accepted
-  tangent frames, positive $M_s$, a static restoring field parallel to
-  $\mathbf m_0$, and dynamic-demag provenance bound to the operator-input
-  digest. Anisotropy and DMI return `unavailable`.
+  tangent frames, positive $M_s$, a static restoring field whose nodal
+  transverse residual satisfies the carried torque certificate (or the strict
+  numerical guard for a non-torque certificate), and dynamic-demag provenance
+  bound to the operator-input digest. Anisotropy and DMI return `unavailable`.
 - The requested modal scope is exact $k=0$, $\alpha=0$, double precision,
   x/y-periodic and open-z, with `spin_wave_bc="periodic"` and
   `magnetostatic_bc="periodic_airbox_k0"`.
@@ -271,7 +301,7 @@ These IDs freeze the intended qualification envelopes; they are not
 
 | Scope ID | Exact envelope | Current evidence |
 |---|---|---|
-| `modal_cpu_k0_periodic_airbox_real_shared_domain.production` | FEM CPU; P1 `tet4|prism6` shared magnetic/airbox mesh; one homogeneous scalar $A_{\mathrm{ex}}$; exchange, accepted parallel static restoring field and dynamic Poisson-airbox demag; x/y periodic, open z; Robin outer boundary with no gauge or pure Neumann with mean-zero gauge; exact Gamma; $\alpha=0$; double; `full_2x2`; real-frequency rotated target; three-to-five-sample physical `BiasFieldSweep`; production `matrix_free_schur_selected_spectrum` with a measured operator dimension greater than 1024 | Future catalog binding only; `source_visible / unvalidated`; `validated_scope=null`, `executable_scope=null` |
+| `modal_cpu_k0_periodic_airbox_real_shared_domain.production` | FEM CPU; P1 `tet4|prism6` shared magnetic/airbox mesh; one homogeneous scalar $A_{\mathrm{ex}}$; exchange, certificate-consistent static restoring field and dynamic Poisson-airbox demag; x/y periodic, open z; Robin outer boundary with no gauge or pure Neumann with mean-zero gauge; exact Gamma; $\alpha=0$; double; `full_2x2`; real-frequency rotated target; three-to-five-sample physical `BiasFieldSweep`; production `matrix_free_schur_selected_spectrum` with a measured operator dimension greater than 1024 | Future catalog binding only; `source_visible / unvalidated`; `validated_scope=null`, `executable_scope=null` |
 | `modal_gpu_k0_periodic_airbox_scalable.production` | Same physics, geometry, BC/gauge, precision, target and sweep as CPU; PETSc/SLEPc CUDA `matrix_free_schur_selected_spectrum`, persistent device solver state, no permitted CPU fallback, and a measured operator dimension greater than 1024 | Future catalog binding only; `source_visible / unvalidated`; `validated_scope=null`, `executable_scope=null` |
 
 The materialized CPU and GPU descriptors at dimensions up to and including
@@ -290,16 +320,27 @@ against one accepted MFEM mesh/space and tangent-frame source. The selected
 spectrum solve is Schur reduced, with the original descriptor reconstructed
 for certification.
 
-ABI v18 deliberately does not carry a preassembled `A_qq`.
+Request and shared-payload ABI v19 deliberately do not carry a preassembled
+`A_qq`; the legacy by-value frequency-domain result remains frozen at ABI v18.
 `assemble_native_magnetic_a_qq` owns the magnetic block on the native MFEM
-mesh. It assembles the P1 exchange weak form for `tet4|prism6` and the accepted
-parallel-field restoring block. Anisotropy and DMI fail closed as
+mesh. It assembles the P1 exchange weak form for `tet4|prism6` and the
+certificate-consistent restoring-field block. For torque acceptance, the
+maximum permitted nodal transverse residual is exactly the carried
+`max_torque_apm` threshold; it is not a fixed eigensolve tolerance. Anisotropy
+and DMI fail closed as
 `unavailable`. A DEMAG presence bit is accepted only with a provider signature
 equal to the operator-input digest; the dynamic response remains in
 `A_{q\phi}P^{-1}A_{\phi q}` rather than becoming a duplicate local `A_qq`
 term. `assemble_poisson_airbox_shared_domain_payload` imports this descriptor
 and `assemble_poisson_airbox_shared_domain` owns the complete shared-domain
 block assembly.
+
+Geometry part markers remain authoritative in `MeshIR` and the periodic mesh
+certificate. At the native operator boundary, the runner derives a separate
+role map with `1=magnetic` and `0=airbox`. This allows one physical magnetic
+object to contain multiple conformal geometry parts (for example body marker 1
+and hole-transition marker 2) without collapsing their identities in the
+certificate or asking the native operator to interpret geometry-specific IDs.
 
 Consequently, the demagnetizing contribution to the energy Hessian is
 positive semidefinite. For an in-plane, x/y-periodic thin film, the uniform
@@ -312,6 +353,90 @@ The accepted full residual is
 `max(epsilon_q, epsilon_phi, epsilon_g)` from
 {eq}`eq-poisson-airbox-full-residuals` and is not
 replaced by a smaller backend-reported residual.
+
+#### Udział komponentów pola modalnego
+
+Identyfikator definicji obserwable to
+`volume_weighted_complex_l2_fraction.v1`. Definicja dotyczy wyłącznie
+opublikowanego, znormalizowanego pola $\delta\mathbf m$ w globalnej bazie
+kartezjańskiej. Nie jest to energia magnetyczna: $E[o,c]$ jest dodatnią
+kwadratową miarą masową pola modalnego, której jednostką jest $\mathrm{m^3}$.
+
+Niech $\mathcal O$ będzie zbiorem obiektów magnetycznych z pełnym,
+kanonicznym membership w source mesh, $c\in\{x,y,z\}$, a
+$\mathbf d^o_c$ wektorem zespolonych współczynników składowej
+$\delta m_c$ na ograniczeniu do obiektu $o$. Dla P1/tet4 macierz
+$M_o$ jest złożeniem **consistent element mass**, a nie średnią węzłową:
+
+```{math}
+:label: eq-poisson-airbox-component-consistent-mass
+(M_o)_{ij}=\int_{\Omega_o}N_i(\mathbf r)N_j(\mathbf r)\,\mathrm{d}V,
+\qquad
+M_e=\frac{V_e}{20}
+\begin{bmatrix}
+2&1&1&1\\
+1&2&1&1\\
+1&1&2&1\\
+1&1&1&2
+\end{bmatrix}.
+```
+
+```{math}
+:label: eq-poisson-airbox-component-participation
+\begin{aligned}
+E[o,c]&=(\mathbf d^o_c)^{\mathrm H}M_o\mathbf d^o_c,\\
+E_{\mathrm{total}}&=\sum_{o\in\mathcal O}\sum_{c\in\{x,y,z\}}E[o,c],\\
+p[o,c]&=\frac{E[o,c]}{E_{\mathrm{total}}},\\
+p_{\mathrm{object}}[o]&=\sum_c p[o,c],\qquad
+p_{\mathrm{global}}[c]=\sum_o p[o,c].
+\end{aligned}
+```
+
+W kanonicznej notacji ASCII:
+`E[o,c] = (d_c^o)^H M_o d_c^o`,
+`E_total = sum_{o in O} sum_{c in {x,y,z}} E[o,c]` oraz
+`p[o,c] = E[o,c] / E_total`.
+
+Hermitowska forma oznacza, że część rzeczywista i urojona są liczone razem,
+$E[o,c]\ge0$, a mnożenie całego moda przez niezerowy skalar zespolony nie
+zmienia $p$. Obiektowy `totalFraction` jest
+$p_{\mathrm{object}}[o]$; w globalnym scope `total=1` i kolumny
+`x/y/z` są $p_{\mathrm{global}}[c]$, wyłącznie gdy membership pokrywa
+całą domenę magnetyczną. W object scope `total` oznacza
+$p_{\mathrm{object}}[o]$, a `x/y/z` oznaczają $p[o,x]$,
+$p[o,y]$, $p[o,z]$. Zatem suma `x/y/z` musi równać się `total`,
+a suma `totalFraction` wszystkich obiektów musi równać się globalnemu
+`total`. Dla float64 artefakt odrzuca wynik, gdy odpowiednia różnica
+przekracza
+$\varepsilon_{\mathrm{sum}}=128\,\varepsilon_{\mathrm{mach}}
+\max(1,3|\mathcal O|)$.
+
+$\delta\mathbf M=M_s\delta\mathbf m$ ma jednostkę
+$\mathrm{A\,m^{-1}}$ i nie jest tym samym obserwable. UI wyświetla symbol i
+jednostkę z metadata pola: dla tej definicji są to $\delta m_c$ oraz $1$.
+Nie wolno podmieniać go na $\delta M_c$ ani mnożyć przez $M_s$ po stronie UI.
+Miara oparta na $\delta\mathbf M$ wymaga osobnego definition ID, osobnej formy
+kwadratowej i osobnej kwalifikacji.
+
+Obserwable jest fail-closed. Aktualny artefakt go jeszcze nie publikuje, więc
+każdy brak zwraca `component_participation_unavailable` wraz z jednym z
+następujących szczegółów: `mode_field_missing`,
+`consistent_mass_basis_unsupported`, `object_membership_missing`,
+`object_coverage_incomplete`, `component_basis_unsupported`,
+`component_total_nonfinite` albo `component_total_zero`. Baza inna niż
+P1/tet4, niepełne membership lub zerowa/nieskończona norma nie są
+normalizowane do syntetycznego zera.
+
+FDM nie publikuje obecnie artefaktu eigensolve z tym obserwable. Gdy taki
+backend rzeczywiście go opublikuje, jego odrębna realizacja musi użyć
+$E[o,c]=\sum_{k\in o}V_k|\delta m_{k,c}|^2$ z objętościami komórek $V_k$;
+nie może deklarować parytetu FEM ani używać nieważonej średniej węzłowej.
+
+Postprocessing może wykonać CPU po eksporcie zespolonego pola z solvera GPU.
+Nie jest to fallback solve: provenance rozdziela `solver_device=gpu` od
+`observable_lane=postprocess_cpu`, a także zapisuje field ID/revision,
+source-mesh identity, quantity, basis, metodę `consistent_mass_p1_tet4` i
+definition ID. Bez tych wejść wynik pozostaje unavailable.
 
 The managed runtime is the real-scalar `libpetsc-real-dev` plus
 `libslepc-real-dev` lane. It represents the complex target
@@ -368,14 +493,41 @@ cluster, that offending cluster frequency and rank remain visible in the
 certificate even though `accepted_mode_count` is zero. Cancellation remains
 `interrupted` with `cancel_requested`.
 
+Każde podokno publikuje również diagnostykę etapów odrzucania kandydatów.
+`candidate_mode_count` ma jawnie określony typ
+`raw_ritz_in_window`: jest to liczba skończonych, dodatnich wartości Ritz
+wewnątrz żądanego przedziału przed sprawdzeniem residualu. Osobne liczniki
+`action_residual_evaluated_count`, `reconstructed_mode_count` i
+`full_residual_accepted_count` pokazują, na którym etapie kandydat odpadł.
+Runtime publikuje również liczniki przyczyn odrzucenia:
+`action_residual_evaluation_failed_count`,
+`q_vector_extraction_failed_count`,
+`full_vector_reconstruction_failed_count`,
+`full_vector_nonfinite_count`,
+`full_residual_evaluation_failed_count` oraz
+`full_residual_rejected_count`. Są to liczniki diagnostyczne, agregowane także
+przez całe okno; nie zmieniają bramki akceptacji, którą pozostaje pełny
+oryginalny, nieprzeskalowany residual deskryptora względem tolerancji podanej
+przez użytkownika.
+`accepted_mode_count` oznacza wyłącznie mody zachowane po wszystkich filtrach i
+deduplikacji. Stary artefakt bez `candidate_mode_count_kind` pozostaje
+czytelny, lecz nowy runtime musi publikować oba pola zgodnie z tym kontraktem.
+
+Podsumowanie walidacji K0 Kittela czerpie `execution_lane` i identyfikator
+solvera z diagnostyki native, gdy ścieżka orkiestratora zachowała historyczny
+model referencyjny, ale faktycznie wykonała produkcyjny adapter CPU/GPU. Dzięki
+temu raport nie może oznaczyć produkcyjnego GPU jako `reference` ani rozjechać
+`solver_algorithm` względem `frequency_domain/manifest.v1.json`.
+
 ### 3.2 GPU
 
 A GPU result can become production-capable only when the assembled blocks,
 vectors, Krylov basis and preconditioner remain resident on the device through
 the full selected-spectrum iteration. Source contains a PETSc/SLEPc CUDA
 adapter with `seqaijcusparse` matrices, `seqcuda` vectors, a device Schur
-operator and fail-closed no-CPU-fallback policy. This snapshot has no matching
-fresh ABI-v18 managed execution, so these are source claims only.
+operator and fail-closed no-CPU-fallback policy. This snapshot has no completed
+matching request-v19/result-v18 managed GPU execution, so these are source
+claims only.
 For `target="frequency_window"`, the source-level GPU adapter uses the same
 16-midpoint base schedule and 32-half-step plus two-guard refinement schedule
 as the CPU lane. It compares q-space cluster ranks and invariant-subspace
@@ -403,12 +555,16 @@ This note does not alter FDM demagnetization or introduce hybrid semantics.
 (python-api)=
 ## 4. Python API
 
-The public API is stage-first and physics-first. This complete authoring
-example declares the shared domain, x/y periodicity with open z, an explicit
-relax stage, the physical three-sample bias sweep, `full_2x2`, exact Gamma and
-an independent postsolve Kittel oracle. It requests CPU; changing the requested
-device to `"cuda"` preserves the same physical intent but does not turn the
-unvalidated GPU lane into a qualified one.
+The public API is stage-first and physics-first. This authoring example
+declares the shared domain, x/y periodicity with open z, an explicit relax
+stage, the physical three-sample bias sweep, `full_2x2`, exact Gamma and an
+independent postsolve Kittel oracle. Single-field `relax -> eigenmodes` has a
+typed certified handoff. The multi-field execution lifecycle remains
+fail-closed until the public sweep contract explicitly owns or references the
+user-authored relaxation control for every sample; the runner must not restore
+a hidden default tolerance. It requests CPU; changing the requested device to
+`"cuda"` preserves the same physical intent but does not turn the unvalidated
+GPU lane into a qualified one.
 
 ```python
 # %%
@@ -596,17 +752,50 @@ resolved:  solver_adapter=k0_poisson_airbox_cpu_schur_slepc
 
 `BiasFieldSweepIR` is the physics-owned request. The planner creates one
 sample plan per declared field and preserves requested and resolved execution
-for each sample. `execute_bias_field_sweep` performs the sample lifecycle,
-including `relax_each` or continuation from the explicitly selected seed.
+for each sample. The former runner-local `execute_bias_field_sweep` lifecycle
+is not a valid production executor after removal of hidden relaxation: it has
+no user-owned stop contract from which to create a per-sample accepted handoff.
+Production execution therefore remains fail-closed pending an approved
+stage-materialization contract that expands every sample to an explicit
+`relax -> AcceptedFemRelaxStageHandoff.v3 -> eigenmodes` sequence (with an
+optional certificate-preserving device change).
 `validate_bias_field_sweep_oracle_contract` prevents analytical Kittel metadata
 from becoming a field, equilibrium, target or solve-acceptance input.
 
 ### 5.2 Native and artifact provenance
 
+The schema migration is append-only and fail-closed. The legacy
+`AcceptedFemRelaxStageHandoff.v2`, `LinearizationState.v6` and
+`equilibrium_artifact.v7` contracts are frozen. The production handoff uses:
+
+```text
+CertifiedFemEquilibriumFields.v1
+AcceptedFemRelaxStageHandoff.v3
+LinearizationState.v7
+equilibrium_artifact.v8
+```
+
+Handoff v3 binds the full v2 completion/equilibrium identity, the exact
+certified field-bundle digest, `equilibrium_material_signature`,
+`equilibrium_static_physics_signature` and
+`equilibrium_boundary_signature`. `modal_operator_signature` and
+`modal_dynamic_boundary_signature` are target-eigensolve identities and remain
+separate. This split prevents modal-only fields such as `operator.kind` and
+`spin_wave_bc` from being misused as proof of the preceding relaxation.
+
+`CertifiedFemEquilibriumFields.v1` carries final `H_ex`, `H_demag`, `H_ext`,
+`H_eff` and `phi`. Its content digest proves exact transport, but shape,
+finiteness and hash checks alone do not prove source material/physics/BC
+identity or the component relation for `H_eff`; v3 validation must establish
+those facts before native assembly. Because v8 publicly adds the source-field
+digest and split source/modal signatures, this is a real payload change and
+cannot be written under `equilibrium_artifact.v7`.
+
 The native modal payload carries:
 
 ```text
-frequency_domain_abi_version = 18
+frequency_domain_request_payload_abi_version = 19
+frequency_domain_legacy_result_abi_version = 18
 assembly_kind = mfem_weak_form_shared_domain | synthetic_algebraic_oracle
 outer_boundary_kind = poisson_robin | poisson_dirichlet | pure_neumann
 gauge_policy = none | mean_zero_augmented
@@ -634,17 +823,85 @@ solved physical samples with {eq}`eq-poisson-airbox-kittel-oracle`, but must not
 change the authored field, assembled blocks, equilibrium, target, lane, status
 or signatures.
 
+### 5.2.1 Klasyfikacja produktu dla skanu pola przy `k=0`
+
+Wielopunktowy `BiasFieldSweep` przy stałym wektorze Blocha
+`k=(0,0,0)` pozostaje modalnym skanem pola, a nie skanem dyspersji. Każda
+próbka musi mieć własny zaakceptowany stan równowagi i własny wynik modalny,
+natomiast `path_s` opisuje wyłącznie kolejność/współrzędną skanu pola. Nie
+wolno używać liczby próbek ani obecności `path_s` jako sygnału dyspersji.
+
+Klasyfikacja źródłowa jest fail-closed względem fizycznego wektora:
+
+| Warunek próbek | `calculation_mode` | `k_sampling` | Publikowane podprodukty |
+|---|---|---|---|
+| wszystkie `k_vector == (0,0,0)` | `free_modes` | `single` | `spectrum`, `mode_fields` oraz zadeklarowany `field_sweep` |
+| co najmniej jedna niezerowa składowa `k_vector` | `dispersion_modal` | `path` | `spectrum`, `branches`, `dispersion`, `mode_fields` zgodnie z manifestem |
+
+Reguła jest zaimplementowana wspólnie w
+`crates/fullmag-runner/src/eigen/artifacts.rs` (`modal_manifest_execution`,
+`eigen_calculation_mode`) i
+`crates/fullmag-runner/src/dispatch.rs`
+(`build_eigen_path_frequency_domain_manifest`,
+`eigen_path_calculation_mode`). Dzięki temu pozostałe po poprzednim runie
+`branches.v2.json` lub `dispersion.csv` nie są publikowane w manifeście
+bieżącego skanu `k=0` i nie mogą zasilić drzewa `Results`.
+
+Analityczne reference solvery (`kalinikos_slab_n0` oraz
+`synthetic_demag_factor`) mogą dostarczyć widmo i metadane walidacji, ale nie
+mają prawa tworzyć mode fields bez topology-bound payloadu. Runner publikuje
+ich mode bundle tylko po jawnym `EigenMode` i poprawnej `mesh_id`/fingerprint;
+przy samym `EigenSpectrum` lub `DispersionCurve` nie wykonuje ukrytej próby
+zapisu mode fields. Jawne żądanie bez tożsamości siatki jest odrzucane
+fail-closed. Ta reguła chroni przed wizualizacją placeholdera jako pola
+fizycznego i pozostawia produkcyjne mode fields wyłącznie ścieżce FEM z
+certyfikowanym źródłem siatki.
+
 ### 5.3 Current ABI and managed-runtime status
 
-The C1 audit snapshot is HEAD
-`fe73ad661c55cc490faf076eb88f9ba387a9ac01` plus dirty source changes. Public
-modal ABI is v18. The last inspected active managed bundle was built from
-`dab10a48e9c4a49561610a7481d201d02b1e1c11`, 140 commits behind this HEAD, and
-did not publish matching ABI-v18 evidence for the dirty snapshot. Managed
-export lock files are present. This establishes a source/bundle/ABI evidence
-mismatch and a missing fresh managed proof; it does not establish the host-wide
-owner of a lock or the true mount write permissions. Neither CPU nor GPU is
-promoted beyond `source_visible / unvalidated`.
+The current recovery worktree is based on HEAD
+`2e7ce7579ca5879901a297f23d8bffbe475d9b8d` plus dirty source changes. The
+request and shared payload use append-only ABI v19 while the legacy by-value
+result stays frozen at ABI v18. A managed bundle matched source snapshot
+`0ff044a0cb15314d18bc481b76064abcb20b32476ec4f48bd909d2a567650c07` and
+executed the periodic-antidot CPU workflow through accepted relaxation and
+native shared-domain assembly. Subsequent source changes that bind the native
+field consistency check to the acceptance certificate have not yet been
+exported: the durable ext4 runtime store lacked staging headroom. No spectrum
+or mode-field artifact was produced. This is partial debugging evidence, not
+CPU or GPU execution qualification, so both lanes remain
+`source_visible / unvalidated`.
+
+The recovery source emits `AcceptedFemRelaxStageHandoff.v3` while retaining the
+frozen v2 record and hash for backward compatibility. It binds
+`CertifiedFemEquilibriumFields.v1`, completion and acceptance-certificate
+digests, and source material/static-physics/static-boundary signatures; the
+negative source-to-target signature tests are present. The managed validator
+now accepts both the frozen v2 fixture contract and the current v3 handoff,
+including the certified-field digest and split source signatures. It still
+checks the published `equilibrium_artifact.v7` and `LinearizationState.v6`
+names emitted by the current runner; fresh managed runtime evidence is still
+missing, so an accepted handoff can reach assembly but cannot by itself qualify
+a production spectrum or mode set.
+
+The full-GPU execution attestation is only partially implemented. The accepted
+version split reserves request/shared payload v19, keeps the legacy by-value
+result at v18 and assigns the caller-sized attestation envelope v20. Source now
+contains the v20 symbol, complete-prefix sidecar, idempotent ownership boundary,
+append-only layout query v5 and a fail-closed Rust consumer. It intentionally
+publishes `MEASUREMENT_UNAVAILABLE`: HYPRE device policy, measured object graph,
+transfer counters and production attestation population remain absent. GPU
+diagnostics therefore must not synthesize a device-resident or
+production-qualified claim.
+
+Control Room already has typed spectrum/mode metadata resources, a binary FMVP
+mode-field path, five complex display views and a topology-bound viewport
+overlay at source level. The Results resolver now projects only a ready
+`result_manifest` product and explicitly published subproducts; responsive
+Explorer rows and a stale-`Dispersion` regression smoke are also covered.
+Execution/residency qualification remains unknown, and no real CPU/GPU
+browser/WebGL smoke has selected and animated published modes. These are K0-G9
+blockers, not presentation-only follow-up.
 
 (round-trip-and-failure-semantics)=
 ## 6. Round-trip and failure semantics
@@ -675,15 +932,20 @@ managed assembly and physics evidence.
 |---|---|---|
 | Public physical sweep | `packages/fullmag-py/src/fullmag/model/eigen.py` + `BiasFieldSweep` | Python constructor and round-trip tests; no solve qualification |
 | Canonical sweep IR and legality | `crates/fullmag-ir/src/study.rs` + `BiasFieldSweepIR`; `crates/fullmag-ir/src/lib.rs` + `ProblemIR::validate` | IR rejection tests for exact Gamma, double, strict, demag and x/y-periodic/open-z |
-| Per-sample execution and Kittel separation | `crates/fullmag-runner/src/fem_eigen.rs` + `execute_bias_field_sweep` and `validate_bias_field_sweep_oracle_contract` | Runner lifecycle/oracle-isolation unit tests; no managed CPU/GPU proof |
-| ABI-v18 native magnetic block | `backends/fem/cpu/frequency_domain/operators/poisson_airbox_shared_domain.cpp` + `assemble_native_magnetic_a_qq` | Native MFEM source tests for P1 `tet4|prism6` exchange, field, unsupported anisotropy/DMI and demag identity |
+| Per-sample execution and Kittel separation | `crates/fullmag-runner/src/fem_eigen.rs` + `execute_bias_field_sweep` and `validate_bias_field_sweep_oracle_contract` | Oracle isolation is source tested; current runner-local lifecycle is explicitly non-production because it cannot create certified per-sample equilibria |
+| Request-v19/result-v18 native magnetic block | `backends/fem/cpu/frequency_domain/operators/poisson_airbox_shared_domain.cpp` + `assemble_native_magnetic_a_qq` | Native MFEM source tests for P1 `tet4|prism6` exchange, certificate-bound field tolerance, unsupported anisotropy/DMI and demag identity |
 | Shared-domain import and assembly | same path + `assemble_poisson_airbox_shared_domain_payload` and `assemble_poisson_airbox_shared_domain` | Native shared-domain source tests; no current-snapshot runtime promotion |
 | CPU Schur and two-pass window | `backends/fem/cpu/frequency_domain/poisson_airbox_schur_matshell.cpp` + `solve_poisson_airbox_modal_eigen_cpu_schur` | Focused synthetic certificate tests; source evidence only |
 | GPU PETSc/SLEPc, persistent state and Schur application | `backends/fem/gpu/frequency_domain/modal_petsc_slepc.cpp` + `solve_poisson_airbox_modal_eigen_gpu_petsc_slepc`, `create_gpu_solver_state` and `apply_schur` | Focused synthetic GPU adapter tests; no fresh device execution or production scaling proof |
+| Caller-sized GPU attestation result v20 | `native/include/fullmag_fem.h`, `backends/fem/src/api.cpp`, `crates/fullmag-fem-sys/src/lib.rs` and `crates/fullmag-runner/src/native_fem/frequency_domain.rs` | Symbols, V1 sidecar, layout v5, destroy and fail-closed consumer are source-visible; managed ABI parity and measured attestation remain unvalidated |
 | Native diagnostics and eigen-v2 artifact writer | `crates/fullmag-runner/src/fem_eigen.rs` + `native_solver_diagnostics_json` and `write_eigen_v2_bundle` | Source serialization contracts; no managed-runtime or scientific qualification implied |
 | Diagnostics and mode-field API resources | `crates/fullmag-api/src/router_v2/handlers/analysis/frequency_domain.rs` + `get_frequency_domain_eigen_diagnostics_v2` and `get_frequency_domain_eigen_mode_field_meta` | API source contracts; native browser evidence remains open |
 | Results Inspector mode-field resource | `apps/control-room/src/modules/inspector/panels/frequency-domain/FrequencyDomainResultInspectors.tsx` + `EigenModeFieldResourceInspectorPanel` | React source/tests only; no native browser qualification |
 | Unified viewport mode-field overlay | `apps/control-room/src/kernel/visualization/ModeFieldOverlayIntentController.ts` + `class ModeFieldOverlayIntentController` | Controller source/tests only; no WebGL/runtime qualification |
+| Field-sweep plot and Inspector | `apps/control-room/src/modules/analysis-plots/hooks/useAnalysisFrequencyData.ts` and `apps/control-room/src/modules/inspector/panels/frequency-domain/FrequencyDomainFieldSweepPanel.tsx` | Currently hardcoded unsupported; requires typed series/availability implementation and real browser proof |
+| Results mode availability and execution qualification | `apps/control-room/src/modules/explorer/builders/frequencyDomainExplorerNodes.ts` (`activeFrequencyDomainProduct`, `publishedFrequencyDomainArtifact`) and `apps/control-room/src/modules/inspector/panels/frequency-domain/FrequencyDomainPublishedState.ts` | Results children are now gated by the ready published manifest; backend/device/residency qualification and real browser evidence remain open |
+| Results product classification for field sweeps | `crates/fullmag-runner/src/eigen/artifacts.rs` (`eigen_calculation_mode`) + `crates/fullmag-runner/src/dispatch.rs` (`eigen_path_calculation_mode`, `build_eigen_path_frequency_domain_manifest`) | Multi-sample `k=0` sweep is `free_modes`/`single`; nonzero `k_vector` is required for `dispersion_modal`/`path`; Rust regression tests pass, managed runtime unvalidated |
+| Reference mode-field publication gate | `crates/fullmag-runner/src/dispatch.rs` (`mode_fields_requested`, `eigen_path_mode_artifacts_from_result`) + `crates/fullmag-runner/src/eigen/artifacts.rs` (`write_mode_bundle`, `mode_source_mesh_identity`) | No hidden mode bundle for spectrum-only requests; explicit analytic mode request fails closed without mesh identity; dispatch and artifact tests pass |
 | Field-sweep artifact axis | `crates/fullmag-runner/src/eigen/artifacts.rs` + `field_sweep_axis` | Writer emits `bias_field_a_per_m` and `mu0_H`; verifier consistency is a separate gate |
 
 ## 8. Discrete realization and validation strategy
@@ -718,18 +980,25 @@ Validation proceeds in this order:
    separate gate.
 8. CPU/GPU parity applies only after both operate on the same real assembled
    blocks and both certify the original descriptor residual.
+9. Component-participation oracle uses a complex two-object P1/tet4 fixture,
+   checks global/object/component sums, scale invariance, consistent-mass
+   weighting against a hand-evaluated element result, unavailable reasons and
+   solver-device versus `observable_lane` provenance. It is not complete
+   until Task 2 adds the runner implementation and its focused oracle.
 
 (validation)=
 ## 9. Validation evidence and completion gates
 
-The current snapshot has source contracts and focused synthetic tests only for
-the claims introduced here. Historical managed artifacts do not match HEAD plus
-dirty ABI-v18 sources and therefore are not current execution evidence. Older
+The current snapshot has source contracts and focused synthetic tests for the
+claims introduced here. A managed CPU antidot run reached shared-domain
+assembly but stopped before spectrum production, and it predates the latest
+certificate-bound field-tolerance source change; it is therefore not current
+completion evidence. Older
 Kittel-driven fixtures also cannot qualify the physical field-sweep contract
 when analytical samples supplied the field.
 
 Promotion of either exact scope requires a fresh managed runtime tied to the
-exact source snapshot and ABI v18, then:
+exact source snapshot, request/shared-payload ABI v19 and result ABI v18, then:
 
 1. three-to-five physical bias samples with accepted equilibrium provenance;
 2. P1 mesh and airbox-padding convergence plus original-block residuals;
@@ -765,12 +1034,18 @@ materialized oracle cannot replace measured managed-runtime evidence.
 ## 10. Completeness checklist
 
 - [x] Public `BiasFieldSweep` Python/IR/planner/runner source contract
-- [x] ABI-v18 native MFEM `A_qq` source owner for bounded P1 `tet4|prism6` exchange and parallel-field terms
+- [x] Request-v19/result-v18 native MFEM `A_qq` source owner for bounded P1 `tet4|prism6` exchange and certificate-consistent field terms
 - [x] Shared-domain BC/gauge, rotated-pencil and original-block residual source contracts
 - [x] Source-level two-pass CPU window refinement certificate with cluster-rank
   and invariant-subspace comparison
 - [x] Source-level two-pass GPU window refinement certificate with cluster-rank
   and invariant-subspace comparison
+- [x] `AcceptedFemRelaxStageHandoff.v3` with certified fields and source material/static-physics/static-BC identity checks at source/test level
+- [x] Publication contract for `volume_weighted_complex_l2_fraction.v1`, including consistent P1/tet4 mass form, scopes, units and unavailable semantics
+- [x] Runner source implementation, managed transport, append-only `spectrum.v3`
+  publication and complex two-object oracle for
+  `volume_weighted_complex_l2_fraction.v1`; managed-runtime qualification remains open
+- [ ] `LinearizationState.v7` and `equilibrium_artifact.v8` migration with old-schema rejection tests
 - [ ] Fresh authoritative managed-runtime execution of the CPU window certificate
 - [ ] Fresh authoritative managed-runtime execution of the GPU window certificate
 - [ ] Independent K0-3 physical sweep convergence and managed CPU/GPU parity
@@ -786,6 +1061,11 @@ qualification, arbitrary mesh-size coverage, GPU matrix-free convergence,
 large-problem scaling, anisotropy/DMI in native `A_qq` and broad
 periodic-airbox release gates remain open.
 They must fail explicitly rather than reuse this bounded k=0 path.
+
+The component-participation contract is documentation-complete but artifact
+unavailable until its P1/tet4 consistent-mass implementation, membership
+oracle and provenance writer land. It must not be presented as FEM/FDM parity
+or GPU postprocessing qualification before the corresponding runtime evidence.
 
 The two-pass window certificate establishes stability of the requested modal
 prefix under one deterministic shift-grid and `nev` perturbation. It is not a
@@ -812,18 +1092,24 @@ proof that every eigenvalue in an arbitrary interval was found.
 (source-code-index)=
 ## 13. Source-code index
 
-All immutable links resolve the audited HEAD. Stable `path + symbol` remains
-the primary identity when line numbers move.
+Stable `path + symbol` is the primary current-source identity. The immutable
+links below preserve the last committed documentation baseline
+`fe73ad661c55cc490faf076eb88f9ba387a9ac01`; they do not include dirty recovery
+changes based on `2e7ce7579ca5879901a297f23d8bffbe475d9b8d`. Runtime or
+qualification claims therefore require a fresh committed source and matching
+managed manifest, not these links alone.
 
 | Equation/claim | Lane | Repository path + stable symbol | Responsibility | Tests | Evidence status | Immutable link |
 |---|---|---|---|---|---|---|
 | Physical sweep API | common | `packages/fullmag-py/src/fullmag/model/eigen.py` + `class BiasFieldSweep` | Validate SI samples and lower declared ordering/policies | `test_eigenmodes_bias_field_sweep_serializes_declared_si_samples` | source tested | [blob](https://github.com/MateuszZelent/fullmag/blob/fe73ad661c55cc490faf076eb88f9ba387a9ac01/packages/fullmag-py/src/fullmag/model/eigen.py) |
 | Stage-first modal authoring | common | `packages/fullmag-py/src/fullmag/world.py` + `eigenmodes_stage` | Lower the stage builder to public `Eigenmodes` | `test_study_stage_builder_bias_field_sweep_roundtrips_cpu_and_gpu_intent` | source tested | [blob](https://github.com/MateuszZelent/fullmag/blob/fe73ad661c55cc490faf076eb88f9ba387a9ac01/packages/fullmag-py/src/fullmag/world.py) |
 | User-authored relaxation stop | common | `packages/fullmag-py/src/fullmag/world.py` + `_resolve_flat_relax_stop` | Normalize authored `tolA`, `tolT` and energy tolerance into the canonical relaxation stop contract | focused Python relaxation serialization tests | source tested | [blob](https://github.com/MateuszZelent/fullmag/blob/fe73ad661c55cc490faf076eb88f9ba387a9ac01/packages/fullmag-py/src/fullmag/world.py) |
-| Accepted relaxation handoff | common | `crates/fullmag-runner/src/fem_eigen.rs` + `from_completed_relax` | Validate and bind a completed user-authored relaxation criterion to the immutable stage handoff | runner handoff acceptance tests | design approved; implementation pending | [blob](https://github.com/MateuszZelent/fullmag/blob/fe73ad661c55cc490faf076eb88f9ba387a9ac01/crates/fullmag-runner/src/fem_eigen.rs) |
-| Equilibrium materialization | common | `crates/fullmag-runner/src/fem_eigen.rs` + `build_shared_domain_linearization_state` | Materialize the accepted equilibrium and retain relative torque as diagnostics | runner equilibrium materialization tests | design approved; implementation pending | [blob](https://github.com/MateuszZelent/fullmag/blob/fe73ad661c55cc490faf076eb88f9ba387a9ac01/crates/fullmag-runner/src/fem_eigen.rs) |
+| Accepted relaxation handoff | common | `crates/fullmag-runner/src/fem_eigen.rs` + `from_completed_relax` | Validate and bind a completed user-authored relaxation criterion to the immutable stage handoff | runner handoff acceptance tests | source tested; managed CPU reached native assembly | [blob](https://github.com/MateuszZelent/fullmag/blob/fe73ad661c55cc490faf076eb88f9ba387a9ac01/crates/fullmag-runner/src/fem_eigen.rs) |
+| Certified final FEM fields | common | `crates/fullmag-runner/src/types.rs` + `CertifiedFemEquilibriumFields::from_fields`; `crates/fullmag-runner/src/fem/relax/finalize.rs` + `finalize_native_fem_relaxation` | Freeze and write accepted `H_ex/H_demag/H_ext/H_eff/phi` with an exact digest | focused runner tests | source implemented; managed runtime unvalidated | [types](https://github.com/MateuszZelent/fullmag/blob/fe73ad661c55cc490faf076eb88f9ba387a9ac01/crates/fullmag-runner/src/types.rs) |
+| Handoff v3 and split equilibrium signatures | common | `crates/fullmag-runner/src/fem_eigen.rs` + `AcceptedFemRelaxStageHandoff`, `materialize_equilibrium`, `build_shared_domain_linearization_state` | Bind certified fields plus source material/static-physics/static-BC identities separately from modal identities | runner v3 negative tests and offline validator v2/v3 tests | source/test implemented; managed runtime unvalidated | [blob](https://github.com/MateuszZelent/fullmag/blob/fe73ad661c55cc490faf076eb88f9ba387a9ac01/crates/fullmag-runner/src/fem_eigen.rs) |
+| Equilibrium materialization | common | `crates/fullmag-runner/src/fem_eigen.rs` + `build_shared_domain_linearization_state` | Materialize the accepted equilibrium, retain relative torque as diagnostics and extend operator-only air nodes deterministically | runner equilibrium materialization tests | source tested; managed CPU reached native assembly | [blob](https://github.com/MateuszZelent/fullmag/blob/fe73ad661c55cc490faf076eb88f9ba387a9ac01/crates/fullmag-runner/src/fem_eigen.rs) |
 | Sweep `ProblemIR` | common | `crates/fullmag-ir/src/study.rs` + `BiasFieldSweepIR` | Canonical physical request | `eigenmodes_bias_field_sweep_deserializes_and_rejects_invalid_physical_samples` | source tested | [blob](https://github.com/MateuszZelent/fullmag/blob/fe73ad661c55cc490faf076eb88f9ba387a9ac01/crates/fullmag-ir/src/study.rs) |
-| Sweep lifecycle and oracle isolation | common | `crates/fullmag-runner/src/fem_eigen.rs` + `execute_bias_field_sweep`, `validate_bias_field_sweep_oracle_contract` | Execute declared samples; keep Kittel postsolve-only | runner bias-sweep lifecycle and fail-closed oracle tests | source tested | [blob](https://github.com/MateuszZelent/fullmag/blob/fe73ad661c55cc490faf076eb88f9ba387a9ac01/crates/fullmag-runner/src/fem_eigen.rs) |
+| Sweep lifecycle and oracle isolation | common | `crates/fullmag-runner/src/fem_eigen.rs` + `execute_bias_field_sweep`, `validate_bias_field_sweep_oracle_contract` | Keep Kittel postsolve-only and reject execution that lacks a certified per-sample relaxation contract | runner oracle and fail-closed tests; stage-expansion design pending approval | source-visible / incomplete | [blob](https://github.com/MateuszZelent/fullmag/blob/fe73ad661c55cc490faf076eb88f9ba387a9ac01/crates/fullmag-runner/src/fem_eigen.rs) |
 | {eq}`eq-poisson-airbox-weak-form` and native `A_qq` | FEM CPU/common assembly | `backends/fem/cpu/frequency_domain/operators/poisson_airbox_shared_domain.cpp` + `assemble_native_magnetic_a_qq`, `assemble_poisson_airbox_shared_domain_payload`, `assemble_poisson_airbox_shared_domain` | MFEM P1 magnetic, scalar and mixed assembly | `poisson_airbox_shared_domain_test.cpp` | source tested; runtime unvalidated | [blob](https://github.com/MateuszZelent/fullmag/blob/fe73ad661c55cc490faf076eb88f9ba387a9ac01/backends/fem/cpu/frequency_domain/operators/poisson_airbox_shared_domain.cpp) |
 | Native magnetic `A_qq` declaration | FEM CPU/common assembly | `backends/fem/cpu/frequency_domain/operators/poisson_airbox_shared_domain.hpp` + `assemble_native_magnetic_a_qq` | Stable declaration for the implementation in `poisson_airbox_shared_domain.cpp` | `poisson_airbox_shared_domain_test.cpp` | source tested; runtime unvalidated | [blob](https://github.com/MateuszZelent/fullmag/blob/fe73ad661c55cc490faf076eb88f9ba387a9ac01/backends/fem/cpu/frequency_domain/operators/poisson_airbox_shared_domain.hpp) |
 | {eq}`eq-poisson-airbox-modal-block`, residuals and CPU window | FEM CPU | `backends/fem/cpu/frequency_domain/poisson_airbox_schur_matshell.hpp` + `solve_poisson_airbox_modal_eigen_cpu_schur` | Stable declaration for the Schur solve, original residuals and two-pass certificate | focused CPU synthetic window tests | source tested; managed runtime missing | [blob](https://github.com/MateuszZelent/fullmag/blob/fe73ad661c55cc490faf076eb88f9ba387a9ac01/backends/fem/cpu/frequency_domain/poisson_airbox_schur_matshell.hpp) |
@@ -832,9 +1118,15 @@ the primary identity when line numbers move.
 | GPU matrix-free Schur action | FEM GPU | `backends/fem/gpu/frequency_domain/modal_petsc_slepc.cpp` + `split_schur_matmult` (entrypoint `apply_schur`) | Apply the Schur operator used by the scalable selected-spectrum lane | focused GPU adapter tests | source tested; greater-than-1024 convergence unvalidated | [blob](https://github.com/MateuszZelent/fullmag/blob/fe73ad661c55cc490faf076eb88f9ba387a9ac01/backends/fem/gpu/frequency_domain/modal_petsc_slepc.cpp) |
 | Native solver diagnostics projection | common | `crates/fullmag-runner/src/fem_eigen.rs` + `native_solver_diagnostics_json` | Project native convergence, solver-state and residency diagnostics into artifact JSON | runner tests | source tested; managed evidence missing | [blob](https://github.com/MateuszZelent/fullmag/blob/fe73ad661c55cc490faf076eb88f9ba387a9ac01/crates/fullmag-runner/src/fem_eigen.rs) |
 | Eigen-v2 bundle writer | common | `crates/fullmag-runner/src/fem_eigen.rs` + `write_eigen_v2_bundle` | Write spectrum, diagnostics and mode-field resources with source provenance | runner artifact tests | source tested; qualification bundle missing | [blob](https://github.com/MateuszZelent/fullmag/blob/fe73ad661c55cc490faf076eb88f9ba387a9ac01/crates/fullmag-runner/src/fem_eigen.rs) |
+| Component participation observable | common CPU postprocess after CPU/GPU solve | `crates/fullmag-runner/src/eigen/types.rs` + `ModalParticipationMeshContext::compute`; `crates/fullmag-runner/src/fem_eigen.rs` + `modal_participation_mesh_context`; `crates/fullmag-runner/src/dispatch.rs` + `eigen_path_component_participation_from_json` | Evaluate `volume_weighted_complex_l2_fraction.v1` with the full consistent P1/tet4 mass form, aggregate canonical mesh parts by object ID, carry typed unavailable states through managed execution, and publish the result append-only in `eigen/spectrum.v3.json` while leaving v2 unchanged | focused two-object scale-invariance, incomplete-membership, same-object multipart, managed round-trip and dual-writer tests | source tested; managed runtime and real-artifact qualification missing | — |
+| Component participation publication guard | documentation | `scripts/test_frequency_domain_math_contract_docs.py` + `test_component_participation_publication_contract_is_mass_consistent_and_mapped` | Require definition ID, mass-consistent equations, unit, scope semantics, unavailable behavior and source-map identities | focused pytest | source tested | — |
 | Eigen diagnostics API | common | `crates/fullmag-api/src/router_v2/handlers/analysis/frequency_domain.rs` + `frequency_domain_artifact_content_digest` (handler `get_frequency_domain_eigen_diagnostics_v2`) | Serve the typed session-scoped diagnostics resource | API tests | source visible; native browser proof missing | [blob](https://github.com/MateuszZelent/fullmag/blob/fe73ad661c55cc490faf076eb88f9ba387a9ac01/crates/fullmag-api/src/router_v2/handlers/analysis/frequency_domain.rs) |
 | Mode-field metadata API | common | `crates/fullmag-api/src/router_v2/handlers/analysis/frequency_domain.rs` + `eigen_mode_field_metadata` (handler `get_frequency_domain_eigen_mode_field_meta`) | Serve typed metadata for the binary mode-field data plane | API tests | source visible; native browser proof missing | [blob](https://github.com/MateuszZelent/fullmag/blob/fe73ad661c55cc490faf076eb88f9ba387a9ac01/crates/fullmag-api/src/router_v2/handlers/analysis/frequency_domain.rs) |
 | Results mode-field Inspector | UI | `apps/control-room/src/modules/inspector/panels/frequency-domain/FrequencyDomainResultInspectors.tsx` + `EigenModeFieldResourceInspectorPanel` | Inspect selected mode-field identity, availability and provenance | focused React tests | source visible; browser qualification missing | [blob](https://github.com/MateuszZelent/fullmag/blob/fe73ad661c55cc490faf076eb88f9ba387a9ac01/apps/control-room/src/modules/inspector/panels/frequency-domain/FrequencyDomainResultInspectors.tsx) |
 | Unified viewport overlay intent | UI | `apps/control-room/src/kernel/visualization/ModeFieldOverlayIntentController.ts` + `activate` on `class ModeFieldOverlayIntentController` | Bind the selected eigen mode and phase to the unified viewport overlay | focused controller tests | source visible; WebGL qualification missing | [blob](https://github.com/MateuszZelent/fullmag/blob/fe73ad661c55cc490faf076eb88f9ba387a9ac01/apps/control-room/src/kernel/visualization/ModeFieldOverlayIntentController.ts) |
 | Artifact axis `bias_field_a_per_m` | common | `crates/fullmag-runner/src/eigen/artifacts.rs` + `field_sweep_axis` | Freeze writer axis, unit and display conversion | field-sweep artifact writer tests | source tested | [blob](https://github.com/MateuszZelent/fullmag/blob/fe73ad661c55cc490faf076eb88f9ba387a9ac01/crates/fullmag-runner/src/eigen/artifacts.rs) |
-| ABI v18 | common | `native/include/fullmag_fem.h` + `FULLMAG_FEM_FREQUENCY_DOMAIN_ABI_VERSION`, `FullmagFemModalLinearizationDescriptor` | Version and backend-neutral physical handoff without preassembled `A_qq` | FFI ABI tests | source tested; active bundle mismatched | [blob](https://github.com/MateuszZelent/fullmag/blob/fe73ad661c55cc490faf076eb88f9ba387a9ac01/native/include/fullmag_fem.h) |
+| K0 field-sweep product classification | common | `crates/fullmag-runner/src/eigen/artifacts.rs` + `eigen_calculation_mode`; `crates/fullmag-runner/src/dispatch.rs` + `eigen_path_calculation_mode` | Distinguish a multi-sample Gamma-field sweep from nonzero-k dispersion and condition manifest paths/resources | `eigen_manifest_does_not_publish_dispersion_for_multi_sample_k0_field_sweep`, `k0_multi_sample_path_is_not_classified_as_dispersion` | source tested; managed runtime unvalidated | [runner](https://github.com/MateuszZelent/fullmag/blob/fe73ad661c55cc490faf076eb88f9ba387a9ac01/crates/fullmag-runner/src/eigen/artifacts.rs) |
+| Reference mode-field publication gate | common/UI | `crates/fullmag-runner/src/dispatch.rs` + `mode_fields_requested`; `crates/fullmag-runner/src/eigen/artifacts.rs` + `mode_source_mesh_identity` | Prevent placeholder analytic vectors from entering the mesh-bound mode-field data plane | `de_bv_low_k_dispersion_validation_uses_analytic_reference_solver`, `mode_bundle_rejects_invalid_source_mesh_identity_before_publication` | source tested; native browser qualification missing | [runner](https://github.com/MateuszZelent/fullmag/blob/fe73ad661c55cc490faf076eb88f9ba387a9ac01/crates/fullmag-runner/src/dispatch.rs) |
+| Request v19 and legacy result v18 | common | `native/include/fullmag_fem.h` + `FULLMAG_FEM_FREQUENCY_DOMAIN_ABI_VERSION`, `FULLMAG_FEM_FREQUENCY_DOMAIN_RESULT_ABI_VERSION`, `FullmagFemModalLinearizationDescriptor` | Version the append-only request/acceptance handoff while preserving the frozen by-value result layout | FFI ABI tests | source tested; latest source snapshot not exported | [blob](https://github.com/MateuszZelent/fullmag/blob/fe73ad661c55cc490faf076eb88f9ba387a9ac01/native/include/fullmag_fem.h) |
+| Caller-sized GPU attestation boundary | common/GPU | `backends/fem/src/api.cpp` + `fullmag_fem_modal_eigen_solve_v20` | Return the frozen v18 scientific result plus a caller-sized v20 attestation envelope without promoting unavailable measurements | ABI layout and ownership tests | source visible; measurement unavailable | [blob](https://github.com/MateuszZelent/fullmag/blob/fe73ad661c55cc490faf076eb88f9ba387a9ac01/backends/fem/src/api.cpp) |
+| Runner GPU attestation validation | GPU | `crates/fullmag-runner/src/native_fem/frequency_domain.rs` + `validate_modal_gpu_attestation_v1` | Fail closed on invalid, incomplete or unavailable device execution evidence | focused Rust FFI/validation tests | source visible; managed GPU proof absent | [blob](https://github.com/MateuszZelent/fullmag/blob/fe73ad661c55cc490faf076eb88f9ba387a9ac01/crates/fullmag-runner/src/native_fem/frequency_domain.rs) |

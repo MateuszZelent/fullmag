@@ -11,6 +11,9 @@ import math
 import os
 
 import fullmag as fm
+from fullmag.runtime.periodic_antidot_equilibrium_cache import (
+    load_periodic_antidot_equilibrium_cache,
+)
 
 
 device = os.environ.get("FULLMAG_PERIODIC_ANTIDOT_EIGEN_DEVICE", "cpu")
@@ -21,6 +24,22 @@ domain_mesh_override = os.environ.get("FULLMAG_PERIODIC_ANTIDOT_EIGEN_DOMAIN_MES
 equilibrium_state_override = os.environ.get(
     "FULLMAG_PERIODIC_ANTIDOT_EIGEN_EQUILIBRIUM_STATE"
 )
+equilibrium_cache_override = os.environ.get(
+    "FULLMAG_PERIODIC_ANTIDOT_EQUILIBRIUM_CACHE"
+)
+equilibrium_cache = None
+if equilibrium_cache_override:
+    if domain_mesh_override or equilibrium_state_override:
+        raise ValueError(
+            "FULLMAG_PERIODIC_ANTIDOT_EQUILIBRIUM_CACHE cannot be combined with "
+            "FULLMAG_PERIODIC_ANTIDOT_EIGEN_DOMAIN_MESH or "
+            "FULLMAG_PERIODIC_ANTIDOT_EIGEN_EQUILIBRIUM_STATE"
+        )
+    equilibrium_cache = load_periodic_antidot_equilibrium_cache(
+        equilibrium_cache_override
+    )
+    domain_mesh_override = str(equilibrium_cache.domain_mesh_path)
+    equilibrium_state_override = str(equilibrium_cache.equilibrium_state_path)
 if bool(domain_mesh_override) != bool(equilibrium_state_override):
     raise ValueError(
         "FULLMAG_PERIODIC_ANTIDOT_EIGEN_DOMAIN_MESH and "
@@ -101,11 +120,48 @@ if frequency_max_hz <= frequency_min_hz:
         "FULLMAG_PERIODIC_ANTIDOT_EIGEN_FMIN_GHZ"
     )
 
+modal_target = os.environ.get(
+    "FULLMAG_PERIODIC_ANTIDOT_EIGEN_TARGET", "frequency_window"
+)
+if modal_target not in {"frequency_window", "nearest"}:
+    raise ValueError(
+        "FULLMAG_PERIODIC_ANTIDOT_EIGEN_TARGET must be 'frequency_window' or 'nearest', "
+        f"got {modal_target!r}"
+    )
+target_frequency_ghz_raw = os.environ.get(
+    "FULLMAG_PERIODIC_ANTIDOT_EIGEN_TARGET_GHZ", "2.0"
+)
+try:
+    target_frequency_ghz = float(target_frequency_ghz_raw)
+except ValueError as exc:
+    raise ValueError(
+        "FULLMAG_PERIODIC_ANTIDOT_EIGEN_TARGET_GHZ must be a number, "
+        f"got {target_frequency_ghz_raw!r}"
+    ) from exc
+if not math.isfinite(target_frequency_ghz) or target_frequency_ghz <= 0.0:
+    raise ValueError(
+        "FULLMAG_PERIODIC_ANTIDOT_EIGEN_TARGET_GHZ must be finite and positive"
+    )
+target_frequency_hz = target_frequency_ghz * 1.0e9
+
 mu0_t_m_per_a = 4.0e-7 * math.pi
-# The native modal gate checks a relative torque <= 1e-6.  A 1e-9 T
-# absolute stop is several orders tighter for this geometry while staying
-# above the direct-minimizer energy round-off floor.
-equilibrium_torque_tolerance_t = 1.0e-9
+# This is the user-authored acceptance criterion for the relaxation stage.
+# Eigensolve consumes the resulting certified handoff and does not impose a
+# second hidden torque threshold.
+equilibrium_torque_tolerance_t_raw = os.environ.get(
+    "FULLMAG_PERIODIC_ANTIDOT_RELAX_TOL_T", "1e-6"
+)
+try:
+    equilibrium_torque_tolerance_t = float(equilibrium_torque_tolerance_t_raw)
+except ValueError as exc:
+    raise ValueError(
+        "FULLMAG_PERIODIC_ANTIDOT_RELAX_TOL_T must be a number, "
+        f"got {equilibrium_torque_tolerance_t_raw!r}"
+    ) from exc
+if not math.isfinite(equilibrium_torque_tolerance_t):
+    raise ValueError("FULLMAG_PERIODIC_ANTIDOT_RELAX_TOL_T must be finite")
+if equilibrium_torque_tolerance_t <= 0.0:
+    raise ValueError("FULLMAG_PERIODIC_ANTIDOT_RELAX_TOL_T must be positive")
 equilibrium_torque_tolerance_a_per_m = (
     equilibrium_torque_tolerance_t / mu0_t_m_per_a
 )
@@ -173,11 +229,29 @@ study.runtime_metadata(
         "hole_radius_m": 25e-9,
         "bias_field_t": [10e-3, 0.0, 0.0],
         "requested_modal_device": device,
+        "modal_target": modal_target,
+        "target_frequency_hz": target_frequency_hz
+        if modal_target == "nearest"
+        else None,
         "frequency_window_hz": [frequency_min_hz, frequency_max_hz],
         "mode_count": mode_count,
         "saved_mode_indices": list(range(save_mode_count)),
         "equilibrium_torque_tolerance_t": equilibrium_torque_tolerance_t,
         "equilibrium_torque_tolerance_a_per_m": equilibrium_torque_tolerance_a_per_m,
+        "equilibrium_state_source": (
+            {
+                "kind": "reusable_cache",
+                "schema_version": equilibrium_cache.manifest["schema_version"],
+                "mesh_generation_id": equilibrium_cache.manifest["mesh"][
+                    "mesh_generation_id"
+                ],
+                "topology_fingerprint": equilibrium_cache.manifest["mesh"][
+                    "topology_fingerprint"
+                ],
+            }
+            if equilibrium_cache is not None
+            else {"kind": "stage_relaxation"}
+        ),
     },
 )
 
@@ -220,16 +294,17 @@ study.save("mode", indices=tuple(range(save_mode_count)))
 
 study.stages.add_relax(
     algorithm="nonlinear_cg",
-    max_steps=4000,
+    max_steps=16000,
     tolA=equilibrium_torque_tolerance_a_per_m,
 )
 if device == "gpu":
     study.stages.change_device("gpu")
 study.stages.add_eigenmodes(
     count=mode_count,
-    target="frequency_window",
-    frequency_min=frequency_min_hz,
-    frequency_max=frequency_max_hz,
+    target=modal_target,
+    target_frequency=target_frequency_hz if modal_target == "nearest" else None,
+    frequency_min=frequency_min_hz if modal_target == "frequency_window" else None,
+    frequency_max=frequency_max_hz if modal_target == "frequency_window" else None,
     operator="full_2x2",
     include_demag=True,
     # Materialize and certify the accepted equilibrium at the first modal

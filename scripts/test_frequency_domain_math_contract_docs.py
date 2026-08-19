@@ -349,3 +349,71 @@ def test_t1_k0_production_scope_is_scalable_future_only_and_source_mapped() -> N
     ):
         source = sources_by_id[source_id]
         assert source[field_name] in read(REPO_ROOT / source["path"])
+
+
+def test_component_participation_publication_contract_is_mass_consistent_and_mapped() -> None:
+    physics = read(REPO_ROOT / "docs/physics/0830-fem-poisson-airbox-modal-eigen.md")
+    normalized_physics = " ".join(physics.split())
+    source_map = read_json(
+        REPO_ROOT
+        / "docs/physics/0830-fem-poisson-airbox-modal-eigen.source-map.json"
+    )
+
+    for token in (
+        "volume_weighted_complex_l2_fraction.v1",
+        "E[o,c] = (d_c^o)^H M_o d_c^o",
+        "E_total = sum_{o in O} sum_{c in {x,y,z}} E[o,c]",
+        "p[o,c] = E[o,c] / E_total",
+        "P1/tet4",
+        "consistent element mass",
+        "delta m",
+        "delta M",
+        "component_participation_unavailable",
+        "postprocess_cpu",
+    ):
+        assert token in normalized_physics
+
+    symbols = source_map["symbols"]
+    assert isinstance(symbols, list)
+    symbols_by_id = {
+        symbol["id"]: symbol
+        for symbol in symbols
+        if isinstance(symbol, dict) and isinstance(symbol.get("id"), str)
+    }
+    assert symbols_by_id["component_participation_fraction"]["si_unit"] == "$1$"
+
+    equations = source_map["equations"]
+    assert isinstance(equations, list)
+    equations_by_id = {
+        equation["id"]: equation
+        for equation in equations
+        if isinstance(equation, dict) and isinstance(equation.get("id"), str)
+    }
+    participation_equation = equations_by_id[
+        "eq-poisson-airbox-component-participation"
+    ]
+    assert participation_equation["symbols"] == [
+        "modal_object_set",
+        "modal_component",
+        "modal_component_coefficients",
+        "object_consistent_mass",
+        "component_quadratic_measure",
+        "component_total_measure",
+        "component_participation_fraction",
+    ]
+
+    sources = source_map["sources"]
+    assert isinstance(sources, list)
+    source_identities = {
+        (source.get("path"), source.get("symbol"))
+        for source in sources
+        if isinstance(source, dict)
+    }
+    assert (
+        "crates/fullmag-runner/src/fem_eigen.rs",
+        "write_eigen_v2_bundle",
+    ) in source_identities
+    assert (
+        "scripts/test_frequency_domain_math_contract_docs.py",
+        "test_component_participation_publication_contract_is_mass_consistent_and_mapped",
+    ) in source_identities

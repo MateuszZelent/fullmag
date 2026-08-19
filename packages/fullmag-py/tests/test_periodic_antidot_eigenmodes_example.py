@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 import subprocess
 import sys
@@ -85,8 +86,12 @@ class PeriodicAntidotEigenmodesExampleTests(unittest.TestCase):
         relax = loaded.stages[0].problem.study.to_ir()
         self.assertEqual(relax["kind"], "relaxation")
         self.assertEqual(relax["algorithm"], "nonlinear_cg")
-        self.assertEqual(relax["stop"]["max_steps"], 4000)
-        self.assertGreater(relax["stop"]["torque_tolerance_apm"], 0.0)
+        self.assertEqual(relax["stop"]["max_steps"], 16000)
+        self.assertAlmostEqual(
+            relax["stop"]["torque_tolerance_apm"],
+            1.0e-6 / (4.0e-7 * math.pi),
+            places=12,
+        )
 
         eigen = loaded.stages[1].problem.study.to_ir()
         self.assertEqual(eigen["kind"], "eigenmodes")
@@ -231,6 +236,26 @@ class PeriodicAntidotEigenmodesExampleTests(unittest.TestCase):
             "gpu",
         )
 
+    def test_exchange_coupled_eigenmodes_supports_nearest_smoke_target(self) -> None:
+        loaded = self.load_example(
+            {
+                "FULLMAG_PERIODIC_ANTIDOT_EIGEN_DEVICE": "cpu",
+                "FULLMAG_PERIODIC_ANTIDOT_EIGEN_TARGET": "nearest",
+                "FULLMAG_PERIODIC_ANTIDOT_EIGEN_TARGET_GHZ": "2.0",
+                "FULLMAG_PERIODIC_ANTIDOT_EIGEN_MODE_COUNT": "1",
+                "FULLMAG_PERIODIC_ANTIDOT_EIGEN_SAVE_MODE_COUNT": "1",
+            }
+        )
+        eigen = loaded.stages[1].problem.study.to_ir()
+        self.assertEqual(
+            eigen["target"], {"kind": "nearest", "frequency_hz": 2.0e9}
+        )
+        scenario = loaded.stages[1].problem.runtime_metadata[
+            "periodic_antidot_eigensolve"
+        ]
+        self.assertEqual(scenario["modal_target"], "nearest")
+        self.assertEqual(scenario["target_frequency_hz"], 2.0e9)
+
     def test_canonical_ir_embeds_the_complete_cpu_study_pipeline(self) -> None:
         loaded = self.load_example()
         problem_ir = loaded.to_ir(
@@ -343,6 +368,20 @@ class PeriodicAntidotEigenmodesExampleTests(unittest.TestCase):
         eigen = loaded.stages[-1].problem.study.to_ir()
         self.assertEqual(eigen["dynamics"]["fixed_timestep"], 1e-11)
 
+    def test_relaxation_threshold_is_authored_by_the_script_user(self) -> None:
+        loaded = self.load_example(
+            {"FULLMAG_PERIODIC_ANTIDOT_RELAX_TOL_T": "2.5e-6"}
+        )
+        relax = loaded.stages[0].problem.study.to_ir()
+        expected_apm = 2.5e-6 / (4.0e-7 * math.pi)
+        self.assertAlmostEqual(
+            relax["stop"]["torque_tolerance_apm"], expected_apm, places=12
+        )
+        scenario = self.problem_ir(loaded)["problem_meta"]["runtime_metadata"][
+            "periodic_antidot_eigensolve"
+        ]
+        self.assertEqual(scenario["equilibrium_torque_tolerance_t"], 2.5e-6)
+
     def test_eigenmodes_example_rejects_invalid_environment(self) -> None:
         invalid_cases = [
             (
@@ -370,6 +409,10 @@ class PeriodicAntidotEigenmodesExampleTests(unittest.TestCase):
                     "FULLMAG_PERIODIC_ANTIDOT_EIGEN_SAVE_MODE_COUNT": "3",
                 },
                 "must not exceed",
+            ),
+            (
+                {"FULLMAG_PERIODIC_ANTIDOT_RELAX_TOL_T": "0"},
+                "must be positive",
             ),
         ]
         for environment, message in invalid_cases:

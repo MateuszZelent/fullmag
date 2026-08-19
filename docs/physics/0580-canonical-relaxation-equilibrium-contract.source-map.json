@@ -113,6 +113,24 @@
       "path": "crates/fullmag-runner/src/native_fem/runtime_info.rs",
       "symbol": "stage_completion_from_ffi",
       "responsibility": "Map the native typed completion reason and metric into public runner completion provenance."
+    },
+    {
+      "id": "certified-fem-equilibrium-fields",
+      "path": "crates/fullmag-runner/src/types.rs",
+      "symbol": "from_fields",
+      "responsibility": "Freeze final accepted FEM fields in the CertifiedFemEquilibriumFields.v1 schema and compute their exact content digest."
+    },
+    {
+      "id": "native-fem-relax-finalization",
+      "path": "crates/fullmag-runner/src/fem/relax/finalize.rs",
+      "symbol": "finalize_native_fem_relaxation",
+      "responsibility": "Write the certified equilibrium field bundle from the final accepted native FEM state."
+    },
+    {
+      "id": "accepted-fem-relax-handoff",
+      "path": "crates/fullmag-runner/src/fem_eigen.rs",
+      "symbol": "from_completed_relax",
+      "responsibility": "Bind completion, equilibrium and certified fields; current expanded v2 labeling must migrate fail-closed to v3 with source-equilibrium signatures."
     }
   ],
   "public_api": {

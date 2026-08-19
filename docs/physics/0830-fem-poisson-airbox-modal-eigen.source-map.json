@@ -73,6 +73,11 @@
       "sources": ["source-relax-handoff", "source-equilibrium-materialization"]
     },
     {
+      "id": "eq-poisson-airbox-accepted-torque-threshold",
+      "symbols": ["magnetization", "equilibrium_effective_field", "accepted_torque_residual", "accepted_torque_threshold", "norm_operators", "schedule_operators"],
+      "sources": ["source-relax-handoff", "source-native-aqq", "source-shared-payload"]
+    },
+    {
       "id": "eq-poisson-airbox-window-refinement-schedule",
       "symbols": ["window_frequencies", "schedule_operators"],
       "sources": ["source-cpu-schur", "source-gpu-petsc"]
@@ -81,6 +86,16 @@
       "id": "eq-poisson-airbox-window-subspace-overlap",
       "symbols": ["cluster_bases", "cluster_indices", "cluster_overlap", "complex_operators", "norm_operators"],
       "sources": ["source-cpu-schur", "source-gpu-petsc"]
+    },
+    {
+      "id": "eq-poisson-airbox-component-consistent-mass",
+      "symbols": ["modal_object_set", "p1_basis_and_tet_volume", "object_consistent_mass"],
+      "sources": ["source-native-aqq", "source-runner-component-participation", "source-runner-eigen-v2-writer", "source-component-participation-doc-test"]
+    },
+    {
+      "id": "eq-poisson-airbox-component-participation",
+      "symbols": ["modal_object_set", "modal_component", "modal_component_coefficients", "object_consistent_mass", "component_quadratic_measure", "component_total_measure", "component_participation_fraction"],
+      "sources": ["source-runner-component-participation", "source-runner-eigen-v2-writer", "source-component-participation-doc-test"]
     }
   ],
   "symbols": [
@@ -127,7 +142,18 @@
     {"id": "cluster_indices", "latex": "$i$, $j$, $r$", "meaning": "cluster-basis indices and paired cluster rank", "si_unit": "$1$"},
     {"id": "cluster_overlap", "latex": "$u_i^\\ast v_j$, $s(U,V)$", "meaning": "Hermitian overlap and normalized invariant-subspace overlap", "si_unit": "$1$"},
     {"id": "equilibrium_effective_field", "latex": "$\\mathbf H_{\\mathrm{eff},0}$", "meaning": "effective field evaluated at the accepted equilibrium", "si_unit": "$\\mathrm{A\\,m^{-1}}$"},
-    {"id": "relative_torque_diagnostic", "latex": "$\\rho_\\tau$", "meaning": "relative torque diagnostic, never an eigensolve acceptance threshold", "si_unit": "$1$"}
+    {"id": "relative_torque_diagnostic", "latex": "$\\rho_\\tau$", "meaning": "relative torque diagnostic, never an eigensolve acceptance threshold", "si_unit": "$1$"},
+    {"id": "accepted_torque_residual", "latex": "$\\tau_{\\max}$", "meaning": "maximum accepted absolute equilibrium torque-field residual", "si_unit": "$\\mathrm{A\\,m^{-1}}$"},
+    {"id": "accepted_torque_threshold", "latex": "$\\tau_{\\mathrm{user}}$", "meaning": "user-authored relaxation torque threshold carried by the immutable acceptance certificate", "si_unit": "$\\mathrm{A\\,m^{-1}}$"},
+    {"id": "modal_object_set", "latex": "$\\mathcal O$, $o$", "meaning": "complete set of covered magnetic objects and one object identity", "si_unit": "$1$"},
+    {"id": "modal_component", "latex": "$c$", "meaning": "global Cartesian modal component in $\\{x,y,z\\}$", "si_unit": "$1$"},
+    {"id": "p1_basis_and_tet_volume", "latex": "$N_i$, $V_e$", "meaning": "P1 basis function and tet4 element volume", "si_unit": "$1$, $\\mathrm{m^3}$"},
+    {"id": "modal_component_coefficients", "latex": "$\\mathbf d^o_c$", "meaning": "complex P1 coefficient vector of $\\delta m_c$ restricted to object $o$", "si_unit": "$1$"},
+    {"id": "object_consistent_mass", "latex": "$M_o$, $M_e$", "meaning": "object consistent mass matrix and local P1/tet4 consistent mass matrix", "si_unit": "$\\mathrm{m^3}$"},
+    {"id": "component_quadratic_measure", "latex": "$E[o,c]$", "meaning": "component quadratic mass measure", "si_unit": "$\\mathrm{m^3}$"},
+    {"id": "component_total_measure", "latex": "$E_{\\mathrm{total}}$", "meaning": "summed modal measure", "si_unit": "$\\mathrm{m^3}$"},
+    {"id": "component_participation_fraction", "latex": "$p[o,c]$, $p_{\\mathrm{object}}[o]$, $p_{\\mathrm{global}}[c]$", "meaning": "object-component, object-total and global-component participation fractions", "si_unit": "$1$"},
+    {"id": "component_participation_tolerance", "latex": "$\\varepsilon_{\\mathrm{sum}}$, $\\varepsilon_{\\mathrm{mach}}$", "meaning": "participation-sum tolerance and float64 machine epsilon", "si_unit": "$1$"}
   ],
   "sources": [
     {
@@ -152,7 +178,19 @@
       "id": "source-relax-handoff",
       "path": "crates/fullmag-runner/src/fem_eigen.rs",
       "symbol": "from_completed_relax",
-      "responsibility": "Validate and bind a completed user-authored relaxation criterion to the immutable stage handoff."
+      "responsibility": "Validate a completed user-authored relaxation criterion; production requires migration of the expanded v2 source schema to v3 with source-equilibrium signatures."
+    },
+    {
+      "id": "source-certified-equilibrium-fields",
+      "path": "crates/fullmag-runner/src/types.rs",
+      "symbol": "from_fields",
+      "responsibility": "Freeze the final H_ex, H_demag, H_ext, H_eff and phi snapshot as CertifiedFemEquilibriumFields.v1 with an exact content digest."
+    },
+    {
+      "id": "source-relax-field-finalization",
+      "path": "crates/fullmag-runner/src/fem/relax/finalize.rs",
+      "symbol": "finalize_native_fem_relaxation",
+      "responsibility": "Write the certified field snapshot from the accepted native FEM relaxation state."
     },
     {
       "id": "source-equilibrium-materialization",
@@ -164,7 +202,7 @@
       "id": "source-runner-sweep",
       "path": "crates/fullmag-runner/src/fem_eigen.rs",
       "symbol": "execute_bias_field_sweep",
-      "responsibility": "Execute the declared physical sample lifecycle with explicit equilibrium and continuation provenance."
+      "responsibility": "Retain typed sweep artifact aggregation and fail closed until every declared sample is expanded by the stage layer into an explicit user-controlled relaxation and certified eigensolve handoff."
     },
     {
       "id": "source-oracle-guard",
@@ -176,13 +214,25 @@
       "id": "source-native-aqq",
       "path": "backends/fem/cpu/frequency_domain/operators/poisson_airbox_shared_domain.hpp",
       "symbol": "assemble_native_magnetic_a_qq",
-      "responsibility": "Assemble the bounded native MFEM P1 exchange and parallel-field magnetic restoring block."
+      "responsibility": "Assemble the bounded native MFEM P1 exchange and certificate-consistent magnetic restoring block, using the carried user torque threshold when the handoff is torque-certified."
     },
     {
       "id": "source-shared-payload",
       "path": "backends/fem/cpu/frequency_domain/operators/poisson_airbox_shared_domain.cpp",
       "symbol": "assemble_poisson_airbox_shared_domain_payload",
-      "responsibility": "Import ABI-v18 shared-domain payloads and invoke backend-owned magnetic assembly."
+      "responsibility": "Import request/shared-payload ABI v19 while preserving legacy result ABI v18, validate acceptance metadata, normalize operator role markers and invoke backend-owned magnetic assembly."
+    },
+    {
+      "id": "source-gpu-attestation-boundary",
+      "path": "backends/fem/src/api.cpp",
+      "symbol": "fullmag_fem_modal_eigen_solve_v20",
+      "responsibility": "Publikuje caller-sized result ABI v20 i kompletny prefiks sidecara GPU attestation V1, pozostawiajac naukowy result v18 bez zmian oraz zachowujac fail-closed status pomiaru."
+    },
+    {
+      "id": "source-runner-gpu-attestation",
+      "path": "crates/fullmag-runner/src/native_fem/frequency_domain.rs",
+      "symbol": "validate_modal_gpu_attestation_v1",
+      "responsibility": "Waliduje wersje, rozmiar, stan pomiaru, UUID, digesty i generacje sidecara przed dopuszczeniem wyniku strict production GPU."
     },
     {
       "id": "source-shared-assembly",
@@ -222,10 +272,22 @@
       "responsibility": "Project native convergence, solver-state and residency diagnostics into the eigen artifact contract."
     },
     {
+      "id": "source-runner-component-participation",
+      "path": "crates/fullmag-runner/src/eigen/types.rs",
+      "symbol": "compute",
+      "responsibility": "Evaluate the volume-weighted complex modal participation observable with the full consistent P1/tet4 mass form and fail closed on incomplete object membership or invalid component totals."
+    },
+    {
       "id": "source-runner-eigen-v2-writer",
       "path": "crates/fullmag-runner/src/fem_eigen.rs",
       "symbol": "write_eigen_v2_bundle",
-      "responsibility": "Write spectrum, diagnostics and mode-field resources with requested and resolved execution provenance."
+      "responsibility": "Write spectrum, diagnostics and mode-field resources with requested and resolved execution provenance; publish component participation append-only in eigen/spectrum.v3.json while preserving the v2 payload."
+    },
+    {
+      "id": "source-component-participation-doc-test",
+      "path": "scripts/test_frequency_domain_math_contract_docs.py",
+      "symbol": "test_component_participation_publication_contract_is_mass_consistent_and_mapped",
+      "responsibility": "Require the published component-participation definition ID, mass-consistent equations, dimensionless fraction, global/object/component semantics, unavailable behavior and source identities."
     },
     {
       "id": "source-api-eigen-diagnostics",

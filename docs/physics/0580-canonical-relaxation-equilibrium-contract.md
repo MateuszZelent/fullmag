@@ -2,7 +2,7 @@
 
 - Status: approved contract; implementation incomplete
 - Owners: Fullmag physics, planner, backend, API, and Control Room maintainers
-- Last updated: 2026-08-12
+- Last updated: 2026-08-13
 - Related ADRs: `docs/adr/0011-resource-first-api.md`
 - Related specs: `docs/specs/capability-matrix-v0.md`,
   `docs/specs/resource-first-control-room-api-v2.md`,
@@ -669,6 +669,39 @@ Runtime records:
 produce failed completion. They cannot be represented by
 `status="completed"`.
 
+For native FEM, successful finalization also freezes the accepted-state field
+snapshot as `CertifiedFemEquilibriumFields.v1`. The bundle contains nodal
+`H_ex`, `H_demag`, `H_ext`, `H_eff` in `A/m`, scalar potential `phi` in `A`,
+and an exact content SHA-256 over their canonical bit representation. It is
+created only from the final accepted state and is never a substitute for
+`StageCompletionIR`, the acceptance criterion, or the source identities.
+
+The version boundaries are fail-closed:
+
+- `AcceptedFemRelaxStageHandoff.v2` is frozen as the legacy completion and
+  equilibrium identity contract. Adding the certified-field bundle or new
+  signature fields under the v2 schema name is an incompatible mutation.
+- `AcceptedFemRelaxStageHandoff.v3` is the required production handoff. It
+  binds the v2 data, `CertifiedFemEquilibriumFields.v1`, and separate source
+  signatures for equilibrium material, static physics, and static boundary
+  conditions into one digest.
+- modal operator and dynamic modal-boundary signatures remain separate from
+  those source-equilibrium signatures. A signature that includes
+  `operator.kind` or `spin_wave_bc` cannot prove the identity of the preceding
+  relaxation stage.
+- consuming v3 requires `LinearizationState.v7`. Publishing the new source
+  field digest and split source/modal signatures in the public equilibrium
+  payload requires `equilibrium_artifact.v8`; v7 remains frozen and is not
+  rewritten in place.
+
+The current source-visible implementation produces and carries
+`CertifiedFemEquilibriumFields.v1`, but still labels the expanded handoff v2
+and computes the material/physics/boundary signatures only from the target
+eigensolve request. Therefore source-to-target material, static-physics and
+static-BC identity is not yet certified. This is an implementation gap and
+blocks production `relax -> eigenmodes` qualification; it does not invalidate
+the accepted relaxation itself.
+
 ### 4.5 OpenAPI and resources
 
 OpenAPI uses typed relaxation algorithm, stop-reason, and metric-kind enums.
@@ -791,6 +824,9 @@ run through their repository-owned commands.
 - [x] Analytical and cross-backend tests
 - [x] Managed runtime verification
 - [x] Canonical physics contract
+- [x] Final native FEM certified-field bundle source implementation
+- [ ] Frozen-v2 to v3 handoff migration with source material/static-physics/static-BC signatures
+- [ ] `LinearizationState.v7` and `equilibrium_artifact.v8` consumers and migration tests
 
 (limitations)=
 ## 7. Known limits and deferred work
@@ -842,6 +878,9 @@ from the current runs.
 | `crates/fullmag-runner/src/relaxation/convergence.rs` | `relaxation_stop_criteria_satisfied` | Rust implementation owner that must be aligned with the canonical user-enabled torque-or-energy predicate. |
 | `backends/fem/cpu/mfem/runtime/stage_completion.hpp` | `update_stage_completion_from_stats` | Declares the FEM completion owner that must implement deterministic reason selection for the canonical predicate. |
 | `crates/fullmag-runner/src/native_fem/runtime_info.rs` | `stage_completion_from_ffi` | Maps the native typed completion reason and metric into public runner completion provenance. |
+| `crates/fullmag-runner/src/types.rs` | `CertifiedFemEquilibriumFields::from_fields` | Freezes the accepted FEM field snapshot as `CertifiedFemEquilibriumFields.v1` and computes its exact content digest. |
+| `crates/fullmag-runner/src/fem/relax/finalize.rs` | `finalize_native_fem_relaxation` | Writes the certified field bundle only from the final accepted native FEM state. |
+| `crates/fullmag-runner/src/fem_eigen.rs` | `AcceptedFemRelaxStageHandoff::from_completed_relax` | Current source owner of the handoff; it must migrate from the incompatible expanded v2 label to v3 and bind source-equilibrium signatures. |
 
 (scientific-bibliography)=
 ## 8. References

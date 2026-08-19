@@ -24,6 +24,7 @@ SCHEMA = "fullmag.source-snapshot.v2"
 # contents.
 NON_RUNTIME_PREFIXES = (
     ".agents/",
+    ".claude/",
     ".codex/",
     ".github/",
     # The managed native FEM bundle does not compile the browser application.

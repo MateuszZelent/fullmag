@@ -9,7 +9,7 @@ readonly FULLMAG_NATIVE_BUILD_IMAGE FULLMAG_NATIVE_MOUNT_VIEW
 : "${FULLMAG_BUILD_ROOT:=/zfn2/mateuszz/git/fullmag}"
 archive="${FULLMAG_BUILD_ROOT}/runtimes/fem-gpu-host-latest.tar"
 runtime_parent="${REPO_ROOT}/.fullmag/runtimes"
-RUNTIME_LOCK="${runtime_parent}/.fem-gpu-host.export.v2.lock"
+RUNTIME_LOCK="$(managed_fem_runtime_lock_path "${REPO_ROOT}")"
 worktree_slug="$(basename "${REPO_ROOT}" | sed 's/[^A-Za-z0-9._-]/-/g')"
 worktree_digest="$(printf '%s' "${REPO_ROOT}" | sha256sum | cut -c1-64)"
 : "${FULLMAG_RUNTIME_VARIANTS_ROOT:=${FULLMAG_NATIVE_MOUNT_VIEW}/managed-fem-runtime/${worktree_slug}-${worktree_digest}/runtime-variants}"

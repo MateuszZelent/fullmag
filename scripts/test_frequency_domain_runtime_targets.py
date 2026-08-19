@@ -828,6 +828,9 @@ def test_periodic_antidot_frequency_driven_example_uses_gpu_transition() -> None
     assert "load_periodic_antidot_fixture_config" in example
     assert "os.environ" not in example
     assert "fm.load_magnetization(fixture_config.relaxed_state_path, format=\"json\")" in example
+    assert "if fixture_config.domain_mesh_path:" in example
+    assert "study.domain_mesh(" in example
+    assert "region_markers={\"periodic_antidot_film\": 1}" in example
     assert "run_stage = fixture_config.run_stage" in example
     assert "study.stages.add_minimize(" in example
     assert "method=\"bb\"" in example

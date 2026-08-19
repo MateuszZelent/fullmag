@@ -32,6 +32,8 @@ pub(crate) use availability::{
 };
 #[allow(unused_imports)]
 pub(crate) use eigen::{gpu_eigen_dense_solve, GpuEigenResult};
+#[cfg(test)]
+pub(crate) use frequency_domain::measured_modal_gpu_attestation_fixture;
 #[allow(unused_imports)]
 pub(crate) use frequency_domain::{
     solve_native_driven_frequency_response, solve_native_driven_response_contract,
@@ -49,7 +51,7 @@ pub(crate) use frequency_domain::{
     NativeModalEigenFloquetPeriodicPair, NativeModalEigenMfemOperatorProblem,
     NativeModalEigenPoissonAirboxBlockProblem, NativeModalEigenRequest,
     NativeModalEigenSharedDomainProblem, NativeModalEigenSparseOperatorProblem,
-    NativeModalExecutionTarget,
+    NativeModalExecutionTarget, NativeModalGpuAttestation,
 };
 #[allow(unused_imports)]
 #[cfg(feature = "fem-gpu")]
@@ -272,6 +274,7 @@ fn optional_slice_ptr<T>(slice: &[T]) -> *const T {
 pub(crate) struct PackedNativeMesh {
     nodes_xyz: Vec<f64>,
     cell_types: Vec<u32>,
+    cell_markers: Vec<u32>,
     facet_types: Vec<u32>,
     facet_roles: Vec<u32>,
     periodic_node_pairs: Vec<u32>,
@@ -294,6 +297,7 @@ impl PackedNativeMesh {
                     fullmag_ir::FemCellTypeIR::Hex8 => ffi::FULLMAG_FEM_CELL_HEX8,
                 })
                 .collect(),
+            cell_markers: mesh.element_markers.clone(),
             facet_types: mesh
                 .facets
                 .types
@@ -344,8 +348,8 @@ impl PackedNativeMesh {
             cell_nodes_len: mesh.cells.nodes.len() as u64,
             cell_global_ordinals: optional_slice_ptr(&mesh.cells.global_ordinals),
             cell_global_ordinals_len: mesh.cells.global_ordinals.len() as u64,
-            cell_markers: optional_slice_ptr(&mesh.element_markers),
-            cell_markers_len: mesh.element_markers.len() as u64,
+            cell_markers: optional_slice_ptr(&self.cell_markers),
+            cell_markers_len: self.cell_markers.len() as u64,
             facet_types: optional_slice_ptr(&self.facet_types),
             facet_types_len: self.facet_types.len() as u64,
             facet_roles: optional_slice_ptr(&self.facet_roles),
@@ -365,6 +369,11 @@ impl PackedNativeMesh {
             ),
             periodic_boundary_pair_markers_len: self.periodic_boundary_pair_markers.len() as u64,
         }
+    }
+
+    pub(crate) fn replace_cell_markers(&mut self, cell_markers: &[u32]) {
+        self.cell_markers.clear();
+        self.cell_markers.extend_from_slice(cell_markers);
     }
 }
 
@@ -3480,6 +3489,27 @@ impl NativeFemBackend {
         };
         if rc != ffi::FULLMAG_FEM_OK {
             return Err(self.last_error_or("FEM GPU copy_field failed"));
+        }
+        Ok(flat.chunks_exact(3).map(|c| [c[0], c[1], c[2]]).collect())
+    }
+
+    pub fn copy_linearization_field(
+        &self,
+        observable: ffi::fullmag_fem_observable,
+        node_count: usize,
+    ) -> Result<Vec<[f64; 3]>, RunError> {
+        let len = node_count * 3;
+        let mut flat = vec![0.0f64; len];
+        let rc = unsafe {
+            ffi::fullmag_fem_backend_copy_linearization_field_f64(
+                self.handle,
+                observable,
+                flat.as_mut_ptr(),
+                len as u64,
+            )
+        };
+        if rc != ffi::FULLMAG_FEM_OK {
+            return Err(self.last_error_or("FEM copy_linearization_field failed"));
         }
         Ok(flat.chunks_exact(3).map(|c| [c[0], c[1], c[2]]).collect())
     }

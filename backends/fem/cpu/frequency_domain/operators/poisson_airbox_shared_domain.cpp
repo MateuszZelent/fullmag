@@ -1080,13 +1080,26 @@ FrequencyDomainStatus validate_modal_shared_domain_payload_contract(
     }
     copy_error(error_message, "");
     try {
-        constexpr std::size_t kV18PayloadSize =
-            offsetof(FullmagFemModalSharedDomainPayload, exchange_material_view) +
-            sizeof(payload.exchange_material_view);
+        constexpr std::size_t kV19PayloadSize =
+            offsetof(FullmagFemModalSharedDomainPayload, acceptance_certificate_sha256) +
+            sizeof(payload.acceptance_certificate_sha256);
         if (payload.abi_version != FULLMAG_FEM_FREQUENCY_DOMAIN_ABI_VERSION ||
-            payload.struct_size < kV18PayloadSize) {
+            payload.struct_size < kV19PayloadSize) {
             copy_error(error_message,
-                       "shared-domain native importer requires a full v18 descriptor/material prefix");
+                       "shared-domain native importer requires a full v19 acceptance-certificate prefix");
+            return FrequencyDomainStatus::validation_error;
+        }
+        const EquilibriumAcceptanceCertificateDescriptor acceptance{
+            payload.acceptance_criterion,
+            payload.acceptance_metric_kind,
+            payload.acceptance_unit,
+            payload.acceptance_metric_value,
+            payload.acceptance_threshold,
+            payload.acceptance_certificate_sha256};
+        char acceptance_error[128]{};
+        if (validate_equilibrium_acceptance_certificate(
+                acceptance, acceptance_error) != FrequencyDomainStatus::ok) {
+            copy_error(error_message, acceptance_error);
             return FrequencyDomainStatus::validation_error;
         }
         if (payload.mesh == nullptr || payload.mesh->nodes_xyz == nullptr ||
@@ -1398,7 +1411,8 @@ FrequencyDomainStatus assemble_native_magnetic_a_qq(
     char error_message[256],
     const FullmagFemModalExchangeMaterialView *exchange_material_view,
     const TangentFrameNode *accepted_tangent_frames,
-    std::uint64_t accepted_tangent_frame_count) noexcept
+    std::uint64_t accepted_tangent_frame_count,
+    double accepted_max_transverse_field_a_per_m) noexcept
 {
     if (out_a_qq != nullptr) {
         *out_a_qq = PoissonAirboxSharedDomainCsrMatrix{};
@@ -1759,6 +1773,30 @@ FrequencyDomainStatus assemble_native_magnetic_a_qq(
 
         if ((descriptor.term_presence_mask & FULLMAG_FEM_MODAL_LINEARIZATION_TERM_FIELD) != 0u) {
             constexpr double kStaticFieldParallelRelativeTolerance = 1.0e-8;
+            for (std::uint64_t node = 0u; node < node_count; ++node) {
+                if (magnetic_node_mask[static_cast<std::size_t>(node)] == 0u) {
+                    continue;
+                }
+                const double *m0 = &descriptor.equilibrium_m0_xyz[3u * node];
+                const double *h_eff0 = &descriptor.effective_field_h_eff0_xyz[3u * node];
+                const double h_parallel = dot3(m0, h_eff0);
+                double h_transverse_squared = 0.0;
+                double h_eff0_squared = 0.0;
+                for (int axis = 0; axis < 3; ++axis) {
+                    const double transverse = h_eff0[axis] - h_parallel * m0[axis];
+                    h_transverse_squared += transverse * transverse;
+                    h_eff0_squared += h_eff0[axis] * h_eff0[axis];
+                }
+                const double tolerance = accepted_max_transverse_field_a_per_m >= 0.0
+                    ? accepted_max_transverse_field_a_per_m
+                    : kStaticFieldParallelRelativeTolerance *
+                        std::max(1.0, std::sqrt(h_eff0_squared));
+                if (std::sqrt(h_transverse_squared) > tolerance) {
+                    copy_error(error_message,
+                               "native magnetic A_qq static field exceeds the accepted equilibrium torque threshold");
+                    return FrequencyDomainStatus::unavailable;
+                }
+            }
             for (int element = 0; element < mesh->GetNE(); ++element) {
                 if (magnetic_element_mask[static_cast<std::size_t>(element)] == 0u) {
                     continue;
@@ -1799,20 +1837,6 @@ FrequencyDomainStatus assemble_native_magnetic_a_qq(
                         m0[axis] /= m_norm;
                     }
                     const double h_parallel = dot3(m0, h_eff0);
-                    double h_transverse_squared = 0.0;
-                    double h_eff0_squared = 0.0;
-                    for (int axis = 0; axis < 3; ++axis) {
-                        const double transverse = h_eff0[axis] - h_parallel * m0[axis];
-                        h_transverse_squared += transverse * transverse;
-                        h_eff0_squared += h_eff0[axis] * h_eff0[axis];
-                    }
-                    if (std::sqrt(h_transverse_squared) >
-                        kStaticFieldParallelRelativeTolerance *
-                            std::max(1.0, std::sqrt(h_eff0_squared))) {
-                        copy_error(error_message,
-                                   "native magnetic A_qq static field must be parallel to equilibrium m0");
-                        return FrequencyDomainStatus::unavailable;
-                    }
                     const double field_block[2][2] = {
                         {h_parallel, 0.0},
                         {0.0, h_parallel},
@@ -2295,13 +2319,13 @@ FrequencyDomainStatus assemble_poisson_airbox_shared_domain_payload(
         constexpr std::size_t kV16PayloadSize =
             offsetof(FullmagFemModalSharedDomainPayload, airbox_part_identity) +
             sizeof(payload.airbox_part_identity);
-        constexpr std::size_t kV18PayloadSize =
-            offsetof(FullmagFemModalSharedDomainPayload, exchange_material_view) +
-            sizeof(payload.exchange_material_view);
+        constexpr std::size_t kV19PayloadSize =
+            offsetof(FullmagFemModalSharedDomainPayload, acceptance_certificate_sha256) +
+            sizeof(payload.acceptance_certificate_sha256);
         if (payload.abi_version != FULLMAG_FEM_FREQUENCY_DOMAIN_ABI_VERSION ||
-            payload.struct_size < kV18PayloadSize) {
+            payload.struct_size < kV19PayloadSize) {
             copy_error(out_result->error_message,
-                       "shared-domain native importer requires a full v18 descriptor/material prefix");
+                       "shared-domain native importer requires a full v19 acceptance-certificate prefix");
             return out_result->status;
         }
         if (payload.linearization_descriptor == nullptr) {
@@ -2346,8 +2370,6 @@ FrequencyDomainStatus assemble_poisson_airbox_shared_domain_payload(
             payload.airbox_part_identity == nullptr ||
             payload.airbox_part_identity[0] == '\0' ||
             !std::isfinite(payload.m0_norm_tolerance) || payload.m0_norm_tolerance < 0.0 ||
-            !std::isfinite(payload.equilibrium_torque_relative_tolerance) ||
-            payload.equilibrium_torque_relative_tolerance < 0.0 ||
             std::strcmp(payload.mesh_certificate_schema, "periodic_mesh_certificate.v6") != 0) {
             copy_error(out_result->error_message,
                        "shared-domain modal payload is incomplete or uses an unsupported certificate");
@@ -2548,11 +2570,16 @@ FrequencyDomainStatus assemble_poisson_airbox_shared_domain_payload(
         equilibrium_artifact.magnetic_node_count = magnetic_node_count;
         equilibrium_artifact.airbox_node_count = payload.linearization_phi0_count;
         equilibrium_artifact.accepted_for_linearization = true;
+        equilibrium_artifact.acceptance = {
+            payload.acceptance_criterion,
+            payload.acceptance_metric_kind,
+            payload.acceptance_unit,
+            payload.acceptance_metric_value,
+            payload.acceptance_threshold,
+            payload.acceptance_certificate_sha256};
         equilibrium_artifact.demag_model = payload.demag_model;
         LinearizationBuildOptions linearization_options{};
         linearization_options.m0_norm_tolerance = payload.m0_norm_tolerance;
-        linearization_options.equilibrium_torque_relative_tolerance =
-            payload.equilibrium_torque_relative_tolerance;
         linearization_options.allow_m0_renormalization = false;
         LinearizationStateNative linearization_state{};
         LinearizationDiagnostics linearization_diagnostics{};
@@ -2634,6 +2661,12 @@ FrequencyDomainStatus assemble_poisson_airbox_shared_domain_payload(
         request.mu0_T_m_A = 1.25663706212e-6;
         PoissonAirboxSharedDomainCsrMatrix native_magnetic_a_qq{};
         char native_error[256]{};
+        const double accepted_max_transverse_field_a_per_m =
+            std::strcmp(payload.acceptance_criterion, "torque") == 0 &&
+                std::strcmp(payload.acceptance_metric_kind, "max_torque_apm") == 0 &&
+                std::strcmp(payload.acceptance_unit, "A/m") == 0
+            ? payload.acceptance_threshold
+            : -1.0;
         const FrequencyDomainStatus native_status =
             assemble_native_magnetic_a_qq(
                 *payload.linearization_descriptor,
@@ -2644,7 +2677,8 @@ FrequencyDomainStatus assemble_poisson_airbox_shared_domain_payload(
                 native_error,
                 payload.exchange_material_view,
                 tangent_frames.data(),
-                tangent_frames.size());
+                tangent_frames.size(),
+                accepted_max_transverse_field_a_per_m);
         if (native_status != FrequencyDomainStatus::ok) {
             copy_error(out_result->error_message, native_error);
             out_result->status = native_status;

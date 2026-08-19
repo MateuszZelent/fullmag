@@ -12,8 +12,8 @@ use crate::native_fem::NativeFemBackend;
 use crate::relaxation::{resolve_stage_completion, RelaxationCompletionMetrics};
 use crate::schedules::{same_time, OutputSchedule};
 use crate::types::{
-    AuxiliaryArtifact, ExecutedRun, FieldSnapshot, LiveStepConsumer, RunError, RunResult,
-    RunStatus, StepStats, StepUpdate,
+    AuxiliaryArtifact, CertifiedFemEquilibriumFields, ExecutedRun, FieldSnapshot, LiveStepConsumer,
+    RunError, RunResult, RunStatus, StepStats, StepUpdate,
 };
 
 use super::preview::FemPreviewHandoff;
@@ -313,12 +313,44 @@ pub(crate) fn finalize_native_fem_relaxation(
 
     let copy_start = std::time::Instant::now();
     let final_magnetization = copy_native_fem_field_snapshot(backend, "m", node_count)?;
+    let h_ex_a_per_m = backend.copy_linearization_field(
+        fullmag_fem_sys::fullmag_fem_observable::FULLMAG_FEM_OBSERVABLE_H_EX,
+        node_count,
+    )?;
+    let h_demag_a_per_m = backend.copy_linearization_field(
+        fullmag_fem_sys::fullmag_fem_observable::FULLMAG_FEM_OBSERVABLE_H_DEMAG,
+        node_count,
+    )?;
+    let h_ext_a_per_m = backend.copy_linearization_field(
+        fullmag_fem_sys::fullmag_fem_observable::FULLMAG_FEM_OBSERVABLE_H_EXT,
+        node_count,
+    )?;
+    let h_eff_a_per_m = backend.copy_linearization_field(
+        fullmag_fem_sys::fullmag_fem_observable::FULLMAG_FEM_OBSERVABLE_H_EFF,
+        node_count,
+    )?;
+    let phi_a = backend.copy_demag_phi(node_count)?;
+    let certified_fem_equilibrium_fields = CertifiedFemEquilibriumFields::from_fields(
+        h_ex_a_per_m,
+        h_demag_a_per_m,
+        h_ext_a_per_m,
+        h_eff_a_per_m,
+        phi_a,
+    )?;
     finalization_field_copy_wall_time_ns =
         finalization_field_copy_wall_time_ns.saturating_add(elapsed_ns(copy_start));
     finalization_field_copy_bytes =
         finalization_field_copy_bytes.saturating_add(vector3_f64_bytes(final_magnetization.len()));
     let (mut field_snapshots, field_snapshot_count, mut provenance) = artifacts.finish();
     let mut auxiliary_artifacts = Vec::new();
+    auxiliary_artifacts.push(AuxiliaryArtifact {
+        relative_path: "equilibrium/certified_fem_equilibrium_fields.v1.json".into(),
+        bytes: serde_json::to_vec_pretty(&certified_fem_equilibrium_fields).map_err(|error| {
+            RunError {
+                message: format!("failed to encode certified FEM equilibrium fields: {error}"),
+            }
+        })?,
+    });
     if let Some(telemetry) = backend.stage_oersted_telemetry() {
         auxiliary_artifacts.push(AuxiliaryArtifact {
             relative_path: "transport/fem_stage_oersted_callback.v1.json".into(),

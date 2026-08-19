@@ -29,7 +29,13 @@ def recipe_source(name: str) -> str:
     return source[match.start() :] if following == -1 else source[match.start() : following]
 
 
-def runtime_metadata(device: str) -> dict[str, object]:
+def runtime_metadata(
+    device: str,
+    *,
+    modal_target: str = "frequency_window",
+    mode_count: int = 8,
+    saved_mode_count: int = 4,
+) -> dict[str, object]:
     return {
         "periodic_antidot_eigensolve": {
             "scenario": "relax_then_eigenmodes_k0",
@@ -42,9 +48,11 @@ def runtime_metadata(device: str) -> dict[str, object]:
             "hole_radius_m": 25e-9,
             "bias_field_t": [10e-3, 0.0, 0.0],
             "requested_modal_device": device,
+            "modal_target": modal_target,
+            "target_frequency_hz": 2.0e9 if modal_target == "nearest" else None,
             "frequency_window_hz": [0.5e9, 30.0e9],
-            "mode_count": 8,
-            "saved_mode_indices": [0, 1, 2, 3],
+            "mode_count": mode_count,
+            "saved_mode_indices": list(range(saved_mode_count)),
         }
     }
 
@@ -69,7 +77,14 @@ def mesh_metadata() -> dict[str, object]:
     }
 
 
-def write_runtime_fixture(root: Path, device: str) -> Path:
+def write_runtime_fixture(
+    root: Path,
+    device: str,
+    *,
+    modal_target: str = "frequency_window",
+    mode_count: int = 8,
+    saved_mode_count: int = 4,
+) -> Path:
     report_root = root / device
     session_root = report_root / "workspace-history/session-123"
     relax_root = session_root / "stages/stage_00_flat_relax"
@@ -82,7 +97,12 @@ def write_runtime_fixture(root: Path, device: str) -> Path:
         "status": "completed",
         "problem_meta": {
             "entrypoint_kind": "flat_relax",
-            "runtime_metadata": runtime_metadata(device),
+            "runtime_metadata": runtime_metadata(
+                device,
+                modal_target=modal_target,
+                mode_count=mode_count,
+                saved_mode_count=saved_mode_count,
+            ),
         },
         "requested_execution": requested_execution("cpu"),
         "mesh": mesh_metadata(),
@@ -105,7 +125,12 @@ def write_runtime_fixture(root: Path, device: str) -> Path:
         "status": "completed",
         "problem_meta": {
             "entrypoint_kind": "flat_eigenmodes",
-            "runtime_metadata": runtime_metadata(device),
+            "runtime_metadata": runtime_metadata(
+                device,
+                modal_target=modal_target,
+                mode_count=mode_count,
+                saved_mode_count=saved_mode_count,
+            ),
         },
         "requested_execution": requested_execution(device),
         "mesh": mesh_metadata(),
@@ -140,13 +165,13 @@ def write_runtime_fixture(root: Path, device: str) -> Path:
                 "equilibrium_content_sha256": equilibrium_sha256,
             },
             "relaxation_steps": 0,
-            "mode_count": 8,
+            "mode_count": mode_count,
             "operator": {"kind": "full2x2", "include_demag": True},
             "k_sampling": [0.0, 0.0, 0.0],
             "solver_diagnostics": {
                 "relax_to_eigen_handoff_sha256": handoff_sha256,
                 "relax_to_eigen_handoff": {
-                    "schema_version": "AcceptedFemRelaxStageHandoff.v1",
+                    "schema_version": "AcceptedFemRelaxStageHandoff.v2",
                     "source_run_id": "run-session-123",
                     "source_stage_id": "stage-000",
                     "source_stage_kind": "flat_relax",
@@ -157,7 +182,7 @@ def write_runtime_fixture(root: Path, device: str) -> Path:
         },
     )
     write_json(
-        artifacts / "eigen/metadata/equilibrium_artifact.v6.json",
+        artifacts / "eigen/metadata/equilibrium_artifact.v7.json",
         {"accepted_for_linearization": True},
     )
     write_json(
@@ -171,7 +196,7 @@ def write_runtime_fixture(root: Path, device: str) -> Path:
         "node_count": 2,
     }
     spectrum_modes = []
-    for mode_index in range(8):
+    for mode_index in range(mode_count):
         mode_path = f"eigen/modes/sample_0000/mode_{mode_index:04}.json"
         mode_field_path = (
             f"eigen/mode_fields.zarr/sample_0000/mode_{mode_index:04}/"
@@ -257,9 +282,33 @@ def write_runtime_fixture(root: Path, device: str) -> Path:
     return report_root
 
 
-def run_validator(report_root: Path, device: str) -> subprocess.CompletedProcess[str]:
+def run_validator(
+    report_root: Path,
+    device: str,
+    *,
+    modal_target: str = "frequency_window",
+    mode_count: int = 8,
+    saved_mode_count: int = 4,
+) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
-        [sys.executable, str(VALIDATOR), str(report_root), "--device", device],
+        [
+            sys.executable,
+            str(VALIDATOR),
+            str(report_root),
+            "--device",
+            device,
+            "--expected-target",
+            modal_target,
+            "--expected-mode-count",
+            str(mode_count),
+            "--expected-saved-mode-count",
+            str(saved_mode_count),
+            *(
+                ["--expected-target-frequency-ghz", "2.0"]
+                if modal_target == "nearest"
+                else []
+            ),
+        ],
         cwd=REPO_ROOT,
         text=True,
         capture_output=True,
@@ -277,7 +326,13 @@ def test_managed_recipe_is_fail_closed_for_cpu_and_gpu() -> None:
     assert "fem-gpu" in recipe
     assert "FULLMAG_FEM_EXECUTION=cpu" in recipe
     assert "FULLMAG_RELAX_DEVICE=cpu" in recipe
+    assert 'FULLMAG_PERIODIC_ANTIDOT_RELAX_TOL_T="${FULLMAG_PERIODIC_ANTIDOT_RELAX_TOL_T:-1e-6}"' in recipe
     assert 'FULLMAG_PERIODIC_ANTIDOT_EIGEN_DEVICE="$mode"' in recipe
+    assert 'FULLMAG_PERIODIC_ANTIDOT_EIGEN_TARGET="${FULLMAG_PERIODIC_ANTIDOT_EIGEN_TARGET:-frequency_window}"' in recipe
+    assert 'FULLMAG_PERIODIC_ANTIDOT_EIGEN_TARGET_GHZ="${FULLMAG_PERIODIC_ANTIDOT_EIGEN_TARGET_GHZ:-2.0}"' in recipe
+    assert 'FULLMAG_PERIODIC_ANTIDOT_EIGEN_MODE_COUNT="${FULLMAG_PERIODIC_ANTIDOT_EIGEN_MODE_COUNT:-8}"' in recipe
+    assert 'FULLMAG_PERIODIC_ANTIDOT_EIGEN_SAVE_MODE_COUNT="${FULLMAG_PERIODIC_ANTIDOT_EIGEN_SAVE_MODE_COUNT:-4}"' in recipe
+    assert 'root="${FULLMAG_ANTIDOT_E2E_REPORT_ROOT:-.fullmag/reports/fem-periodic-antidot-relax-eigenmodes/$mode}"' in recipe
     assert "/usr/bin/time" not in recipe
     assert "TIMEFORMAT=" in recipe
     assert '2> "$root/time.txt"' in recipe
@@ -302,6 +357,97 @@ def test_validator_accepts_complete_relax_to_eigen_handoff(
     assert summary["device"] == device
     assert summary["stage_count"] == (2 if device == "cpu" else 3)
     assert summary["mesh_generation_id"] == "mesh-generation-1"
+
+
+def test_validator_accepts_current_v3_relax_to_eigen_handoff(tmp_path: Path) -> None:
+    report_root = write_runtime_fixture(tmp_path, "cpu")
+    summary_path = report_root / "artifacts/eigen/metadata/eigen_summary.json"
+    summary = json.loads(summary_path.read_text(encoding="utf-8"))
+    handoff = summary["solver_diagnostics"]["relax_to_eigen_handoff"]
+    digest = "sha256:" + "c" * 64
+    handoff.update(
+        {
+            "schema_version": "AcceptedFemRelaxStageHandoff.v3",
+            "legacy_v2_content_sha256": handoff["content_sha256"],
+            "acceptance_certificate_sha256": digest,
+            "certified_fields_content_sha256": digest,
+            "equilibrium_material_signature": digest,
+            "equilibrium_static_physics_signature": digest,
+            "equilibrium_boundary_signature": digest,
+            "certified_fields": {
+                "schema_version": "CertifiedFemEquilibriumFields.v1",
+                "h_ex_a_per_m": [[0.0, 0.0, 0.0], [0.0, 0.0, 0.0]],
+                "h_demag_a_per_m": [[0.0, 0.0, 0.0], [0.0, 0.0, 0.0]],
+                "h_ext_a_per_m": [[0.0, 0.0, 0.0], [0.0, 0.0, 0.0]],
+                "h_eff_a_per_m": [[0.0, 0.0, 0.0], [0.0, 0.0, 0.0]],
+                "phi_a": [0.0, 0.0],
+                "content_sha256": digest,
+            },
+        }
+    )
+    write_json(summary_path, summary)
+
+    result = run_validator(report_root, "cpu")
+
+    assert result.returncode == 0, result.stderr
+
+
+def test_validator_accepts_one_mode_nearest_frequency_run(tmp_path: Path) -> None:
+    report_root = write_runtime_fixture(
+        tmp_path,
+        "cpu",
+        modal_target="nearest",
+        mode_count=1,
+        saved_mode_count=1,
+    )
+    spectrum_path = report_root / "artifacts/eigen/spectrum.v2.json"
+    spectrum = json.loads(spectrum_path.read_text(encoding="utf-8"))
+    spectrum["complete"] = False
+    spectrum["samples"][0].pop("status")
+    write_json(spectrum_path, spectrum)
+    diagnostics_path = report_root / "artifacts/eigen/diagnostics/solver.v1.json"
+    diagnostics = json.loads(diagnostics_path.read_text(encoding="utf-8"))
+    diagnostics.pop("eps_phi")
+    write_json(diagnostics_path, diagnostics)
+
+    result = run_validator(
+        report_root,
+        "cpu",
+        modal_target="nearest",
+        mode_count=1,
+        saved_mode_count=1,
+    )
+
+    assert result.returncode == 0, result.stderr
+
+
+def test_validator_rejects_incomplete_v3_certified_fields(tmp_path: Path) -> None:
+    report_root = write_runtime_fixture(tmp_path, "cpu")
+    summary_path = report_root / "artifacts/eigen/metadata/eigen_summary.json"
+    summary = json.loads(summary_path.read_text(encoding="utf-8"))
+    handoff = summary["solver_diagnostics"]["relax_to_eigen_handoff"]
+    digest = "sha256:" + "c" * 64
+    handoff.update(
+        {
+            "schema_version": "AcceptedFemRelaxStageHandoff.v3",
+            "legacy_v2_content_sha256": handoff["content_sha256"],
+            "acceptance_certificate_sha256": digest,
+            "certified_fields_content_sha256": digest,
+            "equilibrium_material_signature": digest,
+            "equilibrium_static_physics_signature": digest,
+            "equilibrium_boundary_signature": digest,
+            "certified_fields": {
+                "schema_version": "CertifiedFemEquilibriumFields.v1",
+                "content_sha256": digest,
+            },
+        }
+    )
+    write_json(summary_path, summary)
+
+    result = run_validator(report_root, "cpu")
+
+    assert result.returncode != 0
+    assert "certified_fields" in result.stderr
 
 
 def test_validator_rejects_mesh_identity_drift(tmp_path: Path) -> None:

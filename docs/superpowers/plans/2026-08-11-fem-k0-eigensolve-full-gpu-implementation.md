@@ -118,7 +118,7 @@ T0 baseline/inventory
   -> T0A synchronize current master
   -> T1 exact scope/docs
   -> T1A remove Kittel oracle from production solve
-  -> T2 versioned v19 ABI + handoff + attestation
+  -> T2 request/shared-payload v19 + caller-sized result v20 + handoff + attestation
        -> T2B freeze validation-registration schemas
        -> T3 shared HYPRE device policy
   T2B -> T9 independent validators
@@ -458,7 +458,7 @@ git commit -m "fix(fem): isolate Kittel reference from production eigensolve"
 
 ---
 
-## Zadanie T2: dodać bezpieczne ABI v19 attestation i ścisły handoff
+## Zadanie T2: dodać bezpieczny result ABI v20 attestation i ścisły handoff
 
 **Zależność:** T1A.
 **Lane:** wyłącznie integrator.
@@ -485,7 +485,7 @@ nowy caller-sized interfejs:
 
 ```c
 #define FULLMAG_FEM_MODAL_GPU_ATTESTATION_V1 1u
-#define FULLMAG_FEM_FREQUENCY_DOMAIN_RESULT_V19 19u
+#define FULLMAG_FEM_FREQUENCY_DOMAIN_RESULT_V20 20u
 
 typedef enum {
     FULLMAG_FEM_MODAL_GPU_MEASUREMENT_UNSPECIFIED = 0,
@@ -613,22 +613,22 @@ typedef struct {
     uint32_t struct_size;
     FullmagFemFrequencyDomainResult scientific_result_v18;
     FullmagFemModalGpuAttestationV1 *gpu_attestation;
-} FullmagFemFrequencyDomainResultV19;
+} FullmagFemFrequencyDomainResultV20;
 
-int fullmag_fem_modal_eigen_solve_v19(
+int fullmag_fem_modal_eigen_solve_v20(
     const FullmagFemModalEigenRequest *request,
-    FullmagFemFrequencyDomainResultV19 *out_result);
+    FullmagFemFrequencyDomainResultV20 *out_result);
 
-void fullmag_fem_frequency_domain_result_v19_destroy(
-    FullmagFemFrequencyDomainResultV19 *result);
+void fullmag_fem_frequency_domain_result_v20_destroy(
+    FullmagFemFrequencyDomainResultV20 *result);
 ```
 
-Caller zeruje cały envelope, następnie ustawia `abi_version=19` i
-`struct_size=sizeof(FullmagFemFrequencyDomainResultV19)`; callee sprawdza oba
+Caller zeruje cały envelope, następnie ustawia `abi_version=20` i
+`struct_size=sizeof(FullmagFemFrequencyDomainResultV20)`; callee sprawdza oba
 pola przed jakimkolwiek zapisem. `scientific_result_v18` ma dokładnie istniejący
 v18 layout i ownership. Wskaźnik attestation jest null dla CPU. Wszystkie
 `char *` i sidecar są read-only dla callera, alokowane przez bibliotekę i
-zwalniane wyłącznie przez destroy v19; caller nie zwalnia pól osobno. Tablice
+zwalniane wyłącznie przez destroy v20; caller nie zwalnia pól osobno. Tablice
 SHA mają dokładnie surowe 32 bajty, UUID dokładnie 16 bajtów; all-zero oznacza
 brak danych i jest niedozwolone dla odpowiedniego pola przy `MEASURED`.
 Producent ustawia sidecar `abi_version=FULLMAG_FEM_MODAL_GPU_ATTESTATION_V1` i
@@ -645,31 +645,31 @@ zero/partial/full state oraz podwójne wywołanie są idempotentne.
 Dodaj dokładnie:
 
 ```c
-#define FULLMAG_FEM_FREQUENCY_DOMAIN_MODAL_ABI_LAYOUT_V4 4u
+#define FULLMAG_FEM_FREQUENCY_DOMAIN_MODAL_ABI_LAYOUT_V5 5u
 typedef struct {
-    fullmag_fem_frequency_domain_modal_abi_layout_v3 v3;
-    uint64_t modal_frequency_domain_result_v19_size;
-    uint64_t modal_frequency_domain_result_v19_align;
-    uint64_t modal_frequency_domain_result_v19_field_count;
-    uint64_t modal_frequency_domain_result_v19_field_offsets[4];
+    fullmag_fem_frequency_domain_modal_abi_layout_v4 v4;
+    uint64_t modal_frequency_domain_result_v20_size;
+    uint64_t modal_frequency_domain_result_v20_align;
+    uint64_t modal_frequency_domain_result_v20_field_count;
+    uint64_t modal_frequency_domain_result_v20_field_offsets[4];
     uint64_t modal_gpu_attestation_v1_size;
     uint64_t modal_gpu_attestation_v1_align;
     uint64_t modal_gpu_attestation_v1_field_count;
     uint64_t modal_gpu_attestation_v1_field_offsets[128];
-} fullmag_fem_frequency_domain_modal_abi_layout_v4;
+} fullmag_fem_frequency_domain_modal_abi_layout_v5;
 
-int fullmag_fem_get_frequency_domain_modal_abi_layout_v4(
-    fullmag_fem_frequency_domain_modal_abi_layout_v4 *out_layout);
+int fullmag_fem_get_frequency_domain_modal_abi_layout_v5(
+    fullmag_fem_frequency_domain_modal_abi_layout_v5 *out_layout);
 ```
 
 Manifest publikuje wszystkie `sizeof`, `alignof` i `offsetof`; C++
 `static_assert` oraz Rust layout test porównują każde pole, nie tylko prefix.
-Strict production GPU wymaga symbolu v19;
+Strict production GPU wymaga symbolu v20;
 legacy v18 pozostaje dla binary-compatible CPU i validation-only call sites i
 nie może poświadczyć full-GPU.
 
 Handoff request pozostaje oparty o istniejący `FullmagFemModalSharedDomainPayload`
-v18 i musi wymagać przed solve: mesh generation identity, canonical preimage
+v19 i musi wymagać przed solve: mesh generation identity, canonical preimage
 SHA-256, certificate binding v6, equilibrium content SHA-256, linearization,
 material/physics/boundary/gauge oraz bias sample signature.
 
@@ -680,7 +680,7 @@ material/physics/boundary/gauge oraz bias sample signature.
      wykonują legacy CPU fixture;
    - strict production GPU przez v18 jest odrzucony tokenem
      `k0_poisson_airbox_gpu_attestation_abi_required`;
-   - result v19 z za małym `struct_size` jest odrzucony przed zapisem;
+   - result v20 z za małym `struct_size` jest odrzucony przed zapisem;
    - sidecar z `abi_version != FULLMAG_FEM_MODAL_GPU_ATTESTATION_V1` jest
      odrzucony przed odczytem taila tokenem
      `k0_poisson_airbox_gpu_attestation_abi_mismatch`;
@@ -695,8 +695,10 @@ material/physics/boundary/gauge oraz bias sample signature.
    - partial allocation + podwójny destroy nie crashuje.
 2. Rust layout tests porównują C++ `sizeof/alignof/offsetof` z Rust dla każdego
    pola envelope i sidecara, w tym wszystkich pointerów, digestów i liczników.
-3. Handoff negative tests zmieniają osobno mesh, equilibrium, boundary/gauge i
-   bias signature i oczekują `k0_poisson_airbox_signature_mismatch`.
+3. Handoff v3 negative tests zmieniają osobno mesh, equilibrium, certified
+   fields, source material, source static physics, source static BC,
+   modal operator, modal dynamic boundary/gauge i bias signature. Każda mutacja
+   ma zostać odrzucona przed native setup stabilnym reason tokenem.
 4. Uruchom najpierw:
 
    ```bash
@@ -707,20 +709,25 @@ material/physics/boundary/gauge oraz bias sample signature.
 
 ### GREEN
 
-1. Dodaj enum, sidecar, osobny result v19, nowy out-param symbol i layout query;
+1. Dodaj enum, sidecar, osobny result v20, nowy out-param symbol i layout query;
    nie zmieniaj size/offset ani sygnatury v18.
-2. Dodaj Rust FFI v19 z identycznymi typami i zachowaj równolegle binding v18.
-   Dynamic loader wymaga v19 dla strict GPU i failuje przed solve, gdy symbolu
+2. Dodaj Rust FFI result v20 z identycznymi typami i zachowaj równolegle binding
+   result v18 oraz request/shared-payload v19. Dynamic loader wymaga v20 dla
+   strict GPU i failuje przed solve, gdy symbolu
    brak.
-3. Zaimplementuj ownership/destroy v19 w native solver boundary; legacy destroy
+3. Zaimplementuj ownership/destroy v20 w native solver boundary; legacy destroy
    pozostaje bez zmian.
 4. Dodaj parser `NativeModalGpuAttestation` po stronie runnera. Przed każdym
    odczytem taila parser waliduje pointer/header/version/full V1 prefix, nie
    zamienia null/unknown/short na wartości domyślne i zachowuje operator kind,
    dimension, generation/reuse/invalidation oraz trzy key digests. Przy błędzie
    parser zwraca stabilny rejection, ale nadal oddaje cały envelope do biblioteki
-   przez destroy v19.
-5. Rozszerz handoff validation przed wejściem do adaptera GPU.
+   przez destroy v20.
+5. Zamroź v2 i dodaj `AcceptedFemRelaxStageHandoff.v3`. Waliduj przed wejściem
+   do adaptera GPU certified-field digest oraz trzy source-equilibrium
+   signatures; nie używaj target-only operator/BC signature jako dowodu Relax.
+   Emituj `LinearizationState.v7` i `equilibrium_artifact.v8`, ponieważ nowy
+   publiczny payload publikuje digest pól i rozdzielone podpisy.
 6. Nie ustawiaj jeszcze `MEASURED` w produkcyjnym solve; do T5 poprawnym
    wynikiem jest `UNAVAILABLE`, który utrzymuje fail-closed.
 7. Dodaj cross-version test: v18 header+caller linkuje z nową biblioteką, nowy
@@ -1013,7 +1020,9 @@ scripts, a T8 jedynym właścicielem core artifact verifiera.
 - `backends/fem/CMakeLists.txt` przez integratora
 - `backends/fem/tests/frequency_domain/gpu_k0_modal_petsc_slepc_test.cpp`
 
-ABI v19 jest zamrożone w T2. Jeżeli implementacja T5 odkryje brak pola, T5
+Caller-sized result ABI v20 jest zamrożone w T2; request/shared-payload ABI v19
+pozostaje osobnym, append-only kontraktem certyfikatu relaksacji. Jeżeli
+implementacja T5 odkryje brak pola, T5
 zatrzymuje się i wraca przez integrator review/versioned ABI correction; Native
 GPU lane nie edytuje samodzielnie `native/include/fullmag_fem.h` ani Rust FFI.
 
@@ -1326,7 +1335,7 @@ jest przyczynowo zamknięty.
 7. `direct` z innym scope ID oraz `coverage` z niepełnym zbiorem source run
    scopes są odrzucane osobnymi reason tokens.
 8. Stary diagnostics z `per_iteration_transfer_telemetry_measured=false`,
-   brakującym v19 attestation, syntetycznym zerem, niezgodnym native/external
+   brakującym result-v20 attestation, syntetycznym zerem, niezgodnym native/external
    digestem, złym operator kind/dimension albo brakującym lifecycle key/generation
    jest odrzucony i nie tworzy qualification record.
 
@@ -1667,6 +1676,10 @@ Dodaj fixtures odrzucające osobno:
 - zmianę mesh generation/revision/topology fingerprint;
 - zmianę node count/indexing/part registry;
 - equilibrium niezaakceptowane lub content SHA mismatch;
+- schema v2 z rozszerzonym payloadem, handoff inny niż v3,
+  `LinearizationState` inny niż v7 albo equilibrium artifact inny niż v8;
+- zmianę certified-fields content SHA, materiału, statycznej fizyki albo
+  statycznych BC przy niezmienionym mesh/m0;
 - resampling/interpolation marker;
 - pusty spectrum albo mniej modów niż żądano bez window certificate;
 - brak complex `delta_m` field chunks albo brak natywnego `eps_phi` w
@@ -1683,14 +1696,17 @@ Dodaj fixtures odrzucające osobno:
 2. Geometry/mesh powstaje raz. Relax i eigensolve używają tego samego frozen
    mesh asset/generation.
 3. Eigensolve pobiera accepted equilibrium z poprzedniego stage przez canonical
-   handoff; nie ładuje ponownie geometrii.
+   handoff v3; nie ładuje ponownie geometrii.
 4. Validator wiąże:
 
    ```text
    script intent
    -> ProblemIR plan
    -> mesh certificate
-   -> accepted equilibrium
+   -> AcceptedFemRelaxStageHandoff.v3
+   -> CertifiedFemEquilibriumFields.v1
+   -> source material/static-physics/static-BC signatures
+   -> LinearizationState.v7/equilibrium_artifact.v8
    -> native request/result
    -> spectrum/mode fields
    -> source mesh identity
@@ -1898,6 +1914,14 @@ git commit -m "feat(api): type modal GPU execution attestation"
 **Lane:** Control Room.
 **Cel:** użytkownik widzi spectrum, wybiera mode, widzi jego pole i potrafi
 odróżnić measured full-GPU od unqualified source claim.
+
+Przed zbudowaniem któregokolwiek dziecka Results resolver musi rozstrzygnąć
+aktywny `result_manifest.payload.study_product`. Capability snapshot, postęp,
+zasób z poprzedniego odświeżenia i sam fakt dostępności endpointu nie są
+aktywacją wyniku. Dla każdego podproduktu (spectrum, branches, dispersion,
+response sweep/map) wymagany jest jawny wpis artefaktu lub typed resource key w
+gotowym manifeście; brak wpisu ukrywa węzeł fail-closed. Szczegółowy kontrakt
+jest w `docs/specs/frequency-domain-results-product-projection-v1.md`.
 
 **Modyfikuj:**
 

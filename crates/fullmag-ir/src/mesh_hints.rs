@@ -4109,18 +4109,19 @@ mod mesh_validation_tests {
         ])
         .unwrap();
         mesh.boundary_markers.extend([20, 21]);
-        mesh.periodic_boundary_pairs.push(MeshPeriodicBoundaryPairIR {
-            pair_id: "air_x_faces".to_string(),
-            source_marker: None,
-            destination_marker: None,
-            marker_a: 20,
-            marker_b: 21,
-            translation: Some([1.0, 0.0, 0.0]),
-            tolerance: Some(1.0e-12),
-            axis_hint: Some("x".to_string()),
-            orientation: None,
-            pairing_policy: None,
-        });
+        mesh.periodic_boundary_pairs
+            .push(MeshPeriodicBoundaryPairIR {
+                pair_id: "air_x_faces".to_string(),
+                source_marker: None,
+                destination_marker: None,
+                marker_a: 20,
+                marker_b: 21,
+                translation: Some([1.0, 0.0, 0.0]),
+                tolerance: Some(1.0e-12),
+                axis_hint: Some("x".to_string()),
+                orientation: None,
+                pairing_policy: None,
+            });
         mesh.periodic_node_pairs.extend([
             MeshPeriodicNodePairIR {
                 pair_id: "air_x_faces".to_string(),

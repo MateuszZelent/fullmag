@@ -19,5 +19,6 @@
 //! Entry point for higher-level code: `fem::relax::execute_fem_relax(engine, plan, …)`.
 
 pub mod engine;
+pub(crate) mod equilibrium_identity;
 pub mod integrators;
 pub mod relax;

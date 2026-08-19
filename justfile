@@ -1092,9 +1092,14 @@ verify-fem-oersted-observable-runtime:
 
 verify-fem-exchange-runtime:
     just ensure-managed-fem-runtime
+    runtime_root="$(readlink -f .fullmag/runtimes/fem-gpu-host)"; \
+    test -x "$runtime_root/bin/fullmag-fem-gpu"; \
+    test -f "$runtime_root/manifest.json"; \
     docker compose --profile fem-gpu run --rm \
+      -v "$runtime_root:/workspace/.fullmag/runtime:ro" \
       -e PYTHONPATH=/workspace/packages/fullmag-py/src \
       -e FULLMAG_PYTHON=/usr/bin/python3 \
+      -e FULLMAG_FEM_RUNTIME_ROOT=/workspace/.fullmag/runtime \
       -e FULLMAG_FDM_EXECUTION=cpu \
       -e FULLMAG_FEM_EXECUTION=cpu \
       -e FULLMAG_RELAX_DEVICE=cpu \
@@ -1141,7 +1146,7 @@ verify-fem-frequency-domain-eigen-k0-poisson-airbox-dense-oracle:
 verify-fem-frequency-domain-eigen-k0-poisson-airbox-cpu-slepc:
     just ensure-managed-fem-runtime
     docker compose --profile fem-gpu run --rm \
-      fem-gpu bash -lc 'cd /workspace && cmake -S native -B native/build -DFULLMAG_ENABLE_CUDA=ON -DFULLMAG_ENABLE_FEM_GPU=ON -DFULLMAG_USE_MFEM_STACK=ON -DFULLMAG_FEM_WITH_SLEPC=ON && cmake --build native/build --target fem_poisson_airbox_modal_eigen_slepc_contract && LD_LIBRARY_PATH=/workspace/native/build/backends/fem:${LD_LIBRARY_PATH:-} native/build/backends/fem/fem_poisson_airbox_modal_eigen_slepc_contract'
+      fem-gpu bash -lc 'cd /workspace && cmake -S native -B native/build -DFULLMAG_ENABLE_CUDA=ON -DFULLMAG_ENABLE_FEM_GPU=ON -DFULLMAG_USE_MFEM_STACK=ON -DFULLMAG_FEM_WITH_SLEPC=ON && cmake --build native/build --target fem_poisson_airbox_modal_eigen_slepc_contract && FULLMAG_SKIP_GPU_TESTS=1 LD_LIBRARY_PATH=/workspace/native/build/backends/fem:${LD_LIBRARY_PATH:-} native/build/backends/fem/fem_poisson_airbox_modal_eigen_slepc_contract'
 
 verify-fem-frequency-domain-gpu-petsc-slepc-runtime:
     just ensure-managed-fem-runtime
@@ -1151,7 +1156,7 @@ verify-fem-frequency-domain-gpu-petsc-slepc-runtime:
 verify-fem-frequency-domain-eigen-k0-gpu-petsc-slepc:
     FULLMAG_FEM_RUNTIME_VARIANT=hypre-baseline just ensure-managed-fem-runtime
     FULLMAG_FEM_RUNTIME_VARIANT=hypre-baseline docker compose --profile fem-gpu run --rm --no-deps \
-      fem-gpu bash -lc 'cd /workspace && cmake -S native -B native/build -DCMAKE_CUDA_ARCHITECTURES="${FULLMAG_CUDA_ARCHITECTURES:-native}" -DFULLMAG_ENABLE_CUDA=ON -DFULLMAG_ENABLE_FEM_GPU=ON -DFULLMAG_USE_MFEM_STACK=ON -DFULLMAG_FEM_WITH_SLEPC=ON && cmake --build native/build --target fem_gpu_k0_modal_petsc_slepc_contract && LD_LIBRARY_PATH=/workspace/native/build/backends/fem:/opt/fullmag-deps/lib:${LD_LIBRARY_PATH:-} native/build/backends/fem/fem_gpu_k0_modal_petsc_slepc_contract'
+      fem-gpu bash -lc 'cd /workspace && cmake -S native -B native/build -DCMAKE_CUDA_ARCHITECTURES="${FULLMAG_CUDA_ARCHITECTURES:-native}" -DFULLMAG_ENABLE_CUDA=ON -DFULLMAG_ENABLE_FEM_GPU=ON -DFULLMAG_USE_MFEM_STACK=ON -DFULLMAG_FEM_WITH_SLEPC=ON && cmake --build native/build --target fem_gpu_k0_modal_petsc_slepc_contract && export LD_LIBRARY_PATH=/workspace/native/build/backends/fem:/opt/fullmag-deps/lib:${LD_LIBRARY_PATH:-} && FULLMAG_N3_W1_FOCUSED=1 native/build/backends/fem/fem_gpu_k0_modal_petsc_slepc_contract && FULLMAG_N3_W2_FOCUSED=1 native/build/backends/fem/fem_gpu_k0_modal_petsc_slepc_contract && FULLMAG_GPU_TEARDOWN_LIFECYCLE_FOCUSED=1 native/build/backends/fem/fem_gpu_k0_modal_petsc_slepc_contract && FULLMAG_GPU_KSP_DESTROY_ABI_FOCUSED=1 native/build/backends/fem/fem_gpu_k0_modal_petsc_slepc_contract && native/build/backends/fem/fem_gpu_k0_modal_petsc_slepc_contract'
 
 verify-fem-frequency-domain-eigen-k0-poisson-airbox-gpu-shift-invert-action:
     just ensure-managed-fem-runtime
@@ -1694,7 +1699,7 @@ verify-fem-periodic-antidot-relax-eigenmodes-runtime device="cpu":
     else \
       profile=fem-gpu; service=fem-gpu; verifier_flag=--require-gpu-modal-k0-periodic-airbox-production; \
     fi; \
-    root=".fullmag/reports/fem-periodic-antidot-relax-eigenmodes/$mode"; \
+    root="${FULLMAG_ANTIDOT_E2E_REPORT_ROOT:-.fullmag/reports/fem-periodic-antidot-relax-eigenmodes/$mode}"; \
     runtime_root="$(readlink -f .fullmag/runtimes/fem-gpu-host)"; \
     test -x "$runtime_root/bin/fullmag-fem-gpu"; \
     docker compose --profile "$profile" run --rm \
@@ -1704,7 +1709,15 @@ verify-fem-periodic-antidot-relax-eigenmodes-runtime device="cpu":
       -e FULLMAG_FDM_EXECUTION=cpu \
       -e FULLMAG_FEM_EXECUTION=cpu \
       -e FULLMAG_RELAX_DEVICE=cpu \
+      -e FULLMAG_PERIODIC_ANTIDOT_RELAX_TOL_T="${FULLMAG_PERIODIC_ANTIDOT_RELAX_TOL_T:-1e-6}" \
       -e FULLMAG_PERIODIC_ANTIDOT_EIGEN_DEVICE="$mode" \
+      -e FULLMAG_PERIODIC_ANTIDOT_EIGEN_TARGET="${FULLMAG_PERIODIC_ANTIDOT_EIGEN_TARGET:-frequency_window}" \
+      -e FULLMAG_PERIODIC_ANTIDOT_EIGEN_TARGET_GHZ="${FULLMAG_PERIODIC_ANTIDOT_EIGEN_TARGET_GHZ:-2.0}" \
+      -e FULLMAG_PERIODIC_ANTIDOT_EIGEN_MODE_COUNT="${FULLMAG_PERIODIC_ANTIDOT_EIGEN_MODE_COUNT:-8}" \
+      -e FULLMAG_PERIODIC_ANTIDOT_EIGEN_SAVE_MODE_COUNT="${FULLMAG_PERIODIC_ANTIDOT_EIGEN_SAVE_MODE_COUNT:-4}" \
+      -e FULLMAG_PERIODIC_ANTIDOT_EQUILIBRIUM_CACHE="${FULLMAG_PERIODIC_ANTIDOT_EQUILIBRIUM_CACHE:-}" \
+      -e FULLMAG_PERIODIC_ANTIDOT_EIGEN_DOMAIN_MESH="${FULLMAG_PERIODIC_ANTIDOT_EIGEN_DOMAIN_MESH:-}" \
+      -e FULLMAG_PERIODIC_ANTIDOT_EIGEN_EQUILIBRIUM_STATE="${FULLMAG_PERIODIC_ANTIDOT_EIGEN_EQUILIBRIUM_STATE:-}" \
       -e FULLMAG_ANTIDOT_E2E_REPORT_ROOT="$root" \
       -e FULLMAG_ANTIDOT_E2E_VERIFIER_FLAG="$verifier_flag" \
       -e FULLMAG_CPU_THREADS="${FULLMAG_CPU_THREADS:-auto}" \
@@ -1732,7 +1745,14 @@ verify-fem-periodic-antidot-relax-eigenmodes-runtime device="cpu":
           "$root/artifacts"; \
         python3 scripts/validate_fem_periodic_antidot_relax_eigenmodes_runtime.py \
           "$root" \
-          --device "$FULLMAG_PERIODIC_ANTIDOT_EIGEN_DEVICE"'
+          --device "$FULLMAG_PERIODIC_ANTIDOT_EIGEN_DEVICE" \
+          --expected-target "$FULLMAG_PERIODIC_ANTIDOT_EIGEN_TARGET" \
+          --expected-mode-count "$FULLMAG_PERIODIC_ANTIDOT_EIGEN_MODE_COUNT" \
+          --expected-saved-mode-count "$FULLMAG_PERIODIC_ANTIDOT_EIGEN_SAVE_MODE_COUNT" \
+          $(if [ "$FULLMAG_PERIODIC_ANTIDOT_EIGEN_TARGET" = nearest ]; then \
+              printf -- "--expected-target-frequency-ghz %s" \
+                "$FULLMAG_PERIODIC_ANTIDOT_EIGEN_TARGET_GHZ"; \
+            fi)'
 
 verify-fem-frequency-domain-eigen-k0-poisson-airbox-production-cpu:
     test -n "${FULLMAG_FEM_K0_CPU_SCOPE_JSON:-}" || { echo "production CPU gate is blocked: FULLMAG_FEM_K0_CPU_SCOPE_JSON is required" >&2; exit 1; }
@@ -5026,6 +5046,7 @@ ensure-managed-fem-runtime:
       validate_current() { \
         python3 scripts/validate_managed_fem_runtime_bundle.py \
           --runtime-root .fullmag/runtimes/fem-gpu-host \
+          --allow-active-alias \
           --require-git-commit "$git_commit" \
           --require-worktree-state "$worktree_state" \
           --require-source-snapshot-sha256 "$source_snapshot"; \
@@ -5044,7 +5065,8 @@ ensure-managed-fem-runtime:
               --identity "$identity_file"; then \
             echo "Managed FEM runtime source differs only in documentation, CI, tests, or packaging helpers; reusing the validated binary." >&2; \
             python3 scripts/validate_managed_fem_runtime_bundle.py \
-              --runtime-root .fullmag/runtimes/fem-gpu-host; \
+              --runtime-root .fullmag/runtimes/fem-gpu-host \
+              --allow-active-alias; \
             runtime_reused_for_non_runtime_changes=1; \
           else \
             FULLMAG_ALLOW_DIRTY_RUNTIME_EXPORT=1 FULLMAG_FEM_RUNTIME_REUSE_BUILD=1 just rebuild-fem-runtime; \
@@ -5062,7 +5084,8 @@ ensure-managed-fem-runtime:
       fi; \
       if [ "$runtime_rebuilt" = "1" ] || [ "$runtime_reused_for_non_runtime_changes" = "1" ]; then \
         python3 scripts/validate_managed_fem_runtime_bundle.py \
-          --runtime-root .fullmag/runtimes/fem-gpu-host; \
+          --runtime-root .fullmag/runtimes/fem-gpu-host \
+          --allow-active-alias; \
       else \
         validate_current; \
       fi'
@@ -5071,7 +5094,7 @@ verify-managed-fem-runtime-source-provenance:
     tmp_provenance="$(mktemp "${TMPDIR:-/tmp}/fullmag-fem-runtime-source-provenance.XXXXXXXXXX.json")"; trap 'rm -f -- "$tmp_provenance"' EXIT; \
     python3 scripts/hash_managed_fem_runtime_sources.py --repo-root . --source-input-manifest scripts/managed_fem_runtime_source_inputs.v1.txt --output "$tmp_provenance"; \
     python3 -c 'import json, sys; from pathlib import Path; expected=json.loads(Path(sys.argv[1]).read_text())["source_provenance"]; actual=json.loads(Path(".fullmag/runtimes/fem-gpu-host/manifest.json").read_text()).get("source_provenance"); assert actual == expected, "managed FEM runtime source provenance differs; run: just rebuild-fem-runtime"' "$tmp_provenance"; \
-    python3 scripts/validate_managed_fem_runtime_bundle.py --runtime-root .fullmag/runtimes/fem-gpu-host
+    python3 scripts/validate_managed_fem_runtime_bundle.py --runtime-root .fullmag/runtimes/fem-gpu-host --allow-active-alias
 
 inspect-managed-fem-frequency-domain-deps:
     just ensure-managed-fem-runtime

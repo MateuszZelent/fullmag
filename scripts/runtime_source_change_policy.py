@@ -15,6 +15,7 @@ from typing import Any
 
 NON_RUNTIME_PREFIXES = (
     ".agents/",
+    ".claude/",
     ".codex/",
     ".github/",
     # Control Room is not an input to the managed native FEM binary.

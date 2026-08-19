@@ -1655,8 +1655,16 @@ FrequencyDomainStatus solve_poisson_airbox_modal_eigen_cpu_slepc(
         const double split_eigenvalue = petsc_eigenvalue_real_part(kr);
         const double split_eigenvalue_imag =
             petsc_eigenvalue_imaginary_part(kr, ki);
+        // The rotated real-scalar descriptor is mathematically real, but
+        // SLEPc may return a tiny projected imaginary component.  Compare it
+        // in the dimensionless scaled pencil, where the solver tolerance is
+        // defined; comparing the unscaled rad/s value against 1e-10 would
+        // reject harmless roundoff after the physical scaling.
+        const double scaled_real_axis_tolerance = std::max(
+            1.0e-8,
+            10.0 * std::max(problem.residual_tolerance, 0.0));
         if (std::abs(split_eigenvalue_imag) >
-            std::max(1.0e-10, 1.0e-10 * std::abs(split_eigenvalue))) {
+            scaled_real_axis_tolerance * std::max(1.0, std::abs(split_eigenvalue))) {
             continue;
         }
         // Recover the original lambda=i*omega convention after solving the

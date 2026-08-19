@@ -245,6 +245,8 @@ mod tests {
             amplitude: None,
             phase: None,
             node_mass_weights: None,
+            component_participation:
+                crate::eigen::ModalParticipationObservable::unavailable_without_context("cpu"),
         }
     }
 
@@ -271,6 +273,8 @@ mod tests {
             amplitude: None,
             phase: None,
             node_mass_weights: None,
+            component_participation:
+                crate::eigen::ModalParticipationObservable::unavailable_without_context("cpu"),
         }
     }
 

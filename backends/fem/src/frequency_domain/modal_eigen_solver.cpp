@@ -46,6 +46,9 @@ namespace {
 bool supported_frequency_domain_abi(std::uint32_t version) noexcept
 {
     return version == kFrequencyDomainAbiVersion ||
+        version == kFrequencyDomainV18AbiVersion ||
+        version == kFrequencyDomainV17AbiVersion ||
+        version == kFrequencyDomainV16AbiVersion ||
         version == kFrequencyDomainV15AbiVersion ||
         version == kFrequencyDomainPreviousAbiVersion ||
         version == kFrequencyDomainPriorAbiVersion ||
@@ -1770,6 +1773,19 @@ FrequencyDomainContractResult solve_modal_eigen_contract(
         problem.cancel_requested = request.cancel_requested;
         problem.progress_user_data = request.progress_user_data;
         problem.progress_callback = request.progress_callback;
+        if (request.poisson_airbox_shared_domain_payload != nullptr) {
+            const FullmagFemModalSharedDomainPayload &payload =
+                *request.poisson_airbox_shared_domain_payload;
+            problem.mesh_generation_identity = payload.mesh_generation_identity;
+            problem.equilibrium_digest = payload.equilibrium_digest;
+            problem.bias_field_sample_signature =
+                payload.bias_field_sample_signature;
+            problem.boundary_gauge_digest = payload.boundary_gauge_digest;
+            problem.operator_input_digest =
+                payload.linearization_descriptor != nullptr
+                    ? payload.linearization_descriptor->operator_input_digest
+                    : nullptr;
+        }
 
         if (request.poisson_airbox_shift_invert_action_enabled != 0) {
             if (request.poisson_airbox_shift_invert_action_device != 0 &&
@@ -2061,6 +2077,24 @@ FrequencyDomainContractResult solve_modal_eigen_contract(
         result.status = status;
         result.error_message = poisson_result.error_message;
         result.diagnostics_json = poisson_result.diagnostics_json;
+        result.modal_gpu_attestation.hypre_policy_observed =
+            poisson_result.hypre_device_policy_observed;
+        result.modal_gpu_attestation.hypre_policy_configured =
+            poisson_result.hypre_device_policy_configured;
+        result.modal_gpu_attestation.hypre_memory_location_device =
+            poisson_result.hypre_memory_location_device;
+        result.modal_gpu_attestation.hypre_execution_policy_device =
+            poisson_result.hypre_execution_policy_device;
+        result.modal_gpu_attestation.hypre_vendor_sptrans_enabled =
+            poisson_result.hypre_vendor_sptrans_enabled;
+        result.modal_gpu_attestation.hypre_vendor_spmv_enabled =
+            poisson_result.hypre_vendor_spmv_enabled;
+        result.modal_gpu_attestation.hypre_vendor_spgemm_enabled =
+            poisson_result.hypre_vendor_spgemm_enabled;
+        result.modal_gpu_attestation.hypre_first_error_code =
+            poisson_result.hypre_first_error_code;
+        result.modal_gpu_attestation.hypre_failure_reason =
+            poisson_result.hypre_failure_reason;
         const char *modal_status_text =
             status == FrequencyDomainStatus::ok ? "ok" :
             status == FrequencyDomainStatus::interrupted ? "interrupted" :

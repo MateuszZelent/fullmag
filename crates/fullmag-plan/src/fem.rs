@@ -3195,8 +3195,7 @@ pub(crate) fn plan_fem_eigen(
     if bias_field_sweep.is_some() {
         let mut reasons = Vec::new();
         if let Some(sweep) = bias_field_sweep.as_ref() {
-            if sweep.equilibrium_policy
-                == fullmag_ir::BiasFieldSweepEquilibriumPolicyIR::RelaxEach
+            if sweep.equilibrium_policy == fullmag_ir::BiasFieldSweepEquilibriumPolicyIR::RelaxEach
                 && sweep.continuation_seed
                     == fullmag_ir::BiasFieldSweepContinuationSeedIR::PreviousAcceptedEquilibrium
             {
@@ -3514,10 +3513,9 @@ pub(crate) fn plan_fem_eigen(
             None
         }
     };
-    if let (Some(sweep), Some(validation)) = (
-        bias_field_sweep.as_ref(),
-        k0_kittel_validation.as_ref(),
-    ) {
+    if let (Some(sweep), Some(validation)) =
+        (bias_field_sweep.as_ref(), k0_kittel_validation.as_ref())
+    {
         errors.extend(bias_field_sweep_kittel_mapping_errors(sweep, validation));
     }
     if operator.include_demag

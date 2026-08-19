@@ -38,6 +38,11 @@ pub use response_block_real::{
 };
 pub use tracking::track_branches;
 pub use types::{
-    EigenSolverModel, K0KittelPeriodicAirboxDemagMetrics, KSampleDescriptor, PathSolveResult,
+    EigenSolverModel, K0KittelPeriodicAirboxDemagMetrics, KSampleDescriptor,
+    ModalObjectParticipation, ModalParticipationAvailability, ModalParticipationFractions,
+    ModalParticipationMeshContext, ModalParticipationObjectMarkerMembership,
+    ModalParticipationObservable, ModalParticipationProvenance, ModalParticipationSourceMeshIdentity,
+    ModalParticipationUnavailable, ModalParticipationUnavailableDetail, PathSolveResult,
     SingleKModeResult, SingleKSolveResult, TrackedBranch, TrackedBranchPoint,
+    MODAL_PARTICIPATION_DEFINITION_ID,
 };

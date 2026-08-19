@@ -8,8 +8,7 @@ use fullmag_engine::{
 };
 use fullmag_ir::{
     EigenDampingPolicyIR, EigenNormalizationIR, EquilibriumSourceIR, FemEigenPlanIR, KSamplingIR,
-    OutputIR, RelaxationAlgorithmIR, RelaxationControlIR, SpinWaveBoundaryConditionIR,
-    SpinWaveBoundaryKindIR,
+    OutputIR, SpinWaveBoundaryConditionIR, SpinWaveBoundaryKindIR,
 };
 use nalgebra::{DMatrix, DVector, SymmetricEigen};
 use num_complex::Complex64;
@@ -20,20 +19,11 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use crate::native_fem;
-use crate::relaxation::{RelaxationEnergyPlateauWindow, RelaxationTorqueConfirmation};
 use crate::types::{
     AuxiliaryArtifact, ExecutedRun, RunError, RunResult, RunStatus, StageFemMeshIdentity,
     StepAction, StepStats,
 };
 use crate::ExecutionProvenance;
-
-/// Internal relaxation timestep for equilibrium preparation in eigen analysis.
-/// This is NOT the user's simulation dt.  It is deliberately larger than the
-/// time-domain example default: the modal path must reach an accepted static
-/// state within its bounded pre-eigen budget, while the overdamped RHS remains
-/// stable for the FEM fields used here.
-const RELAX_DT: f64 = 1e-11;
-const RELAX_MAX_STEPS: u64 = 4_000;
 
 /// DOF threshold above which LOBPCG sparse eigensolver is used instead of
 /// the dense O(n³) path. Below this, Cholesky + SymmetricEigen is used.
@@ -295,7 +285,8 @@ struct SharedDomainLinearizationState {
     equilibrium_content_sha256: String,
     demag_model: String,
     m0_norm_tolerance: f64,
-    equilibrium_torque_relative_tolerance: f64,
+    acceptance_certificate: AcceptedEquilibriumCriterion,
+    acceptance_certificate_sha256: String,
     equilibrium_artifact_digest: String,
     linearization_state_digest: String,
     periodic_mesh_certificate_digest: String,
@@ -319,8 +310,82 @@ struct AcceptedEquilibriumCriterion {
     stop_reason: fullmag_ir::StageStopReason,
 }
 
+const ACCEPTED_FEM_RELAX_STAGE_HANDOFF_V2: &str = "AcceptedFemRelaxStageHandoff.v2";
+#[allow(dead_code)] // Wired by the next migration slice; defined here to freeze the namespace now.
+const ACCEPTED_FEM_RELAX_STAGE_HANDOFF_V3: &str = "AcceptedFemRelaxStageHandoff.v3";
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+struct AcceptedFemRelaxStageHandoffV2Record {
+    schema_version: String,
+    source_run_id: String,
+    source_stage_id: String,
+    source_stage_kind: String,
+    stage_fem_mesh_generation_id: String,
+    source_mesh_topology_sha256: String,
+    node_count: usize,
+    indexing_sha256: String,
+    part_registry_sha256: String,
+    completion_sha256: String,
+    completion: fullmag_ir::StageCompletionIR,
+    acceptance: AcceptedEquilibriumCriterion,
+    equilibrium_content_sha256: String,
+    content_sha256: String,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+#[allow(dead_code)] // Wired by the next migration slice.
+struct AcceptedFemRelaxStageHandoffV3HashPreimage {
+    schema_version: String,
+    legacy_v2_content_sha256: String,
+    acceptance_certificate_sha256: String,
+    certified_fields_content_sha256: String,
+    equilibrium_material_signature: String,
+    equilibrium_static_physics_signature: String,
+    equilibrium_boundary_signature: String,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+struct AcceptedFemRelaxStageHandoffV3Record {
+    schema_version: String,
+    source_run_id: String,
+    source_stage_id: String,
+    source_stage_kind: String,
+    stage_fem_mesh_generation_id: String,
+    source_mesh_topology_sha256: String,
+    node_count: usize,
+    indexing_sha256: String,
+    part_registry_sha256: String,
+    completion_sha256: String,
+    completion: fullmag_ir::StageCompletionIR,
+    acceptance: AcceptedEquilibriumCriterion,
+    equilibrium_content_sha256: String,
+    legacy_v2_content_sha256: String,
+    acceptance_certificate_sha256: String,
+    equilibrium_magnetization: Vec<Vector3>,
+    certified_fields: crate::types::CertifiedFemEquilibriumFields,
+    certified_fields_content_sha256: String,
+    equilibrium_material_signature: String,
+    equilibrium_static_physics_signature: String,
+    equilibrium_boundary_signature: String,
+    content_sha256: String,
+}
+
+impl AcceptedEquilibriumCriterion {
+    fn metric_kind_name(&self) -> &'static str {
+        match self.metric_kind {
+            fullmag_ir::StageMetricKind::MaxTorqueApm => "max_torque_apm",
+            fullmag_ir::StageMetricKind::TotalEnergyPlateauRangeJ => "total_energy_plateau_range_j",
+            _ => unreachable!("accepted equilibrium uses only torque or energy"),
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct AcceptedFemRelaxStageHandoff {
+    schema_version: String,
     source_run_id: String,
     source_stage_id: String,
     source_stage_kind: String,
@@ -334,6 +399,12 @@ pub struct AcceptedFemRelaxStageHandoff {
     acceptance: AcceptedEquilibriumCriterion,
     equilibrium_content_sha256: String,
     equilibrium_magnetization: Vec<Vector3>,
+    certified_fields: crate::types::CertifiedFemEquilibriumFields,
+    legacy_v2_content_sha256: String,
+    acceptance_certificate_sha256: String,
+    equilibrium_material_signature: String,
+    equilibrium_static_physics_signature: String,
+    equilibrium_boundary_signature: String,
     content_sha256: String,
 }
 
@@ -343,9 +414,11 @@ impl AcceptedFemRelaxStageHandoff {
         source_stage_id: &str,
         source_stage_kind: &str,
         source_stage_is_relaxation: bool,
+        source_plan: &fullmag_ir::FemPlanIR,
         source_mesh: &crate::types::FemMeshPayload,
         completion: &fullmag_ir::StageCompletionIR,
         equilibrium_magnetization: Vec<Vector3>,
+        certified_fields: crate::types::CertifiedFemEquilibriumFields,
     ) -> Result<Self, RunError> {
         if source_run_id.trim().is_empty()
             || source_stage_id.trim().is_empty()
@@ -357,57 +430,7 @@ impl AcceptedFemRelaxStageHandoff {
                     .to_string(),
             });
         }
-        let accepted_metric = match (completion.reason, completion.metric) {
-            (
-                Some(fullmag_ir::StageStopReason::Torque),
-                Some(fullmag_ir::StageMetricKind::MaxTorqueApm),
-            ) => Some(("torque", fullmag_ir::StageMetricKind::MaxTorqueApm)),
-            (
-                Some(fullmag_ir::StageStopReason::Energy),
-                Some(fullmag_ir::StageMetricKind::TotalEnergyPlateauRangeJ),
-            ) => Some((
-                "energy",
-                fullmag_ir::StageMetricKind::TotalEnergyPlateauRangeJ,
-            )),
-            _ => None,
-        };
-        let accepted_values = match (completion.metric_value, completion.threshold) {
-            (Some(value), Some(threshold))
-                if value.is_finite()
-                    && threshold.is_finite()
-                    && threshold >= 0.0
-                    && value <= threshold =>
-            {
-                Some((value, threshold))
-            }
-            _ => None,
-        };
-        let (Some((criterion, metric_kind)), Some((metric_value, threshold))) =
-            (accepted_metric, accepted_values)
-        else {
-            return Err(RunError {
-                message: "relax_stage_handoff_completion_not_accepted: completion must be completed, converged, use a coherent equilibrium metric, and satisfy its threshold"
-                    .to_string(),
-            });
-        };
-        if completion.status != "completed" || !completion.converged {
-            return Err(RunError {
-                message: "relax_stage_handoff_completion_not_accepted: completion must be completed, converged, use a coherent equilibrium metric, and satisfy its threshold"
-                    .to_string(),
-            });
-        }
-        let acceptance = AcceptedEquilibriumCriterion {
-            criterion: criterion.to_string(),
-            metric_kind,
-            metric_value,
-            threshold,
-            unit: metric_kind.unit().to_string(),
-            status: completion.status.clone(),
-            converged: completion.converged,
-            stop_reason: completion
-                .reason
-                .expect("accepted completion has a stop reason"),
-        };
+        let acceptance = accepted_equilibrium_criterion(completion)?;
         if equilibrium_magnetization.len() != source_mesh.nodes.len()
             || equilibrium_magnetization
                 .iter()
@@ -422,6 +445,27 @@ impl AcceptedFemRelaxStageHandoff {
                 ),
             });
         }
+        validate_certified_equilibrium_fields(&certified_fields, source_mesh.nodes.len())?;
+        let source_plan_mesh = crate::types::FemMeshPayload::from(source_plan);
+        if crate::types::fem_mesh_topology_fingerprint(&source_plan_mesh)
+            != crate::types::fem_mesh_topology_fingerprint(source_mesh)
+        {
+            return Err(RunError {
+                message: "relax_stage_handoff_source_plan_mesh_identity_mismatch".to_string(),
+            });
+        }
+        let source_topology =
+            MeshTopology::from_ir(&source_plan.mesh).map_err(|error| RunError {
+                message: format!("relax_stage_handoff_source_mesh_topology_invalid: {error}"),
+            })?;
+        validate_handoff_m0_norms(
+            &equilibrium_magnetization,
+            &source_topology.magnetic_node_volumes,
+        )?;
+        let source_signatures =
+            crate::fem::equilibrium_identity::EquilibriumIdentitySignaturesV1::from_relax_plan(
+                source_plan,
+            )?;
 
         let source_mesh_topology_sha256 = crate::types::fem_mesh_topology_fingerprint(source_mesh);
         let stage_fem_mesh_generation_id = source_mesh
@@ -465,23 +509,49 @@ impl AcceptedFemRelaxStageHandoff {
                 message: format!("relax_stage_handoff_completion_serialization_failed: {error}"),
             })?,
         )?;
+        let acceptance_certificate_sha256 = shared_domain_content_digest(
+            "relax_stage_acceptance_certificate",
+            &serde_json::to_value(&acceptance).map_err(|error| RunError {
+                message: format!("relax_stage_handoff_acceptance_serialization_failed: {error}"),
+            })?,
+        )?;
         let equilibrium_content_sha256 = vector_field_content_sha256(&equilibrium_magnetization);
         let node_count = source_mesh.nodes.len();
-        let content_sha256 = relax_stage_handoff_content_sha256(
-            source_run_id,
-            source_stage_id,
-            source_stage_kind,
-            &stage_fem_mesh_generation_id,
-            &source_mesh_topology_sha256,
+        let v2_record = AcceptedFemRelaxStageHandoffV2Record {
+            schema_version: ACCEPTED_FEM_RELAX_STAGE_HANDOFF_V2.to_string(),
+            source_run_id: source_run_id.to_string(),
+            source_stage_id: source_stage_id.to_string(),
+            source_stage_kind: source_stage_kind.to_string(),
+            stage_fem_mesh_generation_id: stage_fem_mesh_generation_id.clone(),
+            source_mesh_topology_sha256: source_mesh_topology_sha256.clone(),
             node_count,
-            &indexing_sha256,
-            &part_registry_sha256,
-            &completion_sha256,
-            completion,
-            &acceptance,
-            &equilibrium_content_sha256,
-        )?;
+            indexing_sha256: indexing_sha256.clone(),
+            part_registry_sha256: part_registry_sha256.clone(),
+            completion_sha256: completion_sha256.clone(),
+            completion: completion.clone(),
+            acceptance: acceptance.clone(),
+            equilibrium_content_sha256: equilibrium_content_sha256.clone(),
+            content_sha256: String::new(),
+        };
+        let legacy_v2_content_sha256 = relax_stage_handoff_v2_content_sha256(&v2_record)?;
+        let v3_preimage = AcceptedFemRelaxStageHandoffV3HashPreimage {
+            schema_version: ACCEPTED_FEM_RELAX_STAGE_HANDOFF_V3.to_string(),
+            legacy_v2_content_sha256: legacy_v2_content_sha256.clone(),
+            acceptance_certificate_sha256: acceptance_certificate_sha256.clone(),
+            certified_fields_content_sha256: certified_fields.content_sha256.clone(),
+            equilibrium_material_signature: source_signatures
+                .equilibrium_material_signature
+                .clone(),
+            equilibrium_static_physics_signature: source_signatures
+                .equilibrium_static_physics_signature
+                .clone(),
+            equilibrium_boundary_signature: source_signatures
+                .equilibrium_boundary_signature
+                .clone(),
+        };
+        let content_sha256 = relax_stage_handoff_v3_content_sha256(&v3_preimage)?;
         Ok(Self {
+            schema_version: ACCEPTED_FEM_RELAX_STAGE_HANDOFF_V3.to_string(),
             source_run_id: source_run_id.to_string(),
             source_stage_id: source_stage_id.to_string(),
             source_stage_kind: source_stage_kind.to_string(),
@@ -495,11 +565,74 @@ impl AcceptedFemRelaxStageHandoff {
             acceptance,
             equilibrium_content_sha256,
             equilibrium_magnetization,
+            certified_fields,
+            legacy_v2_content_sha256,
+            acceptance_certificate_sha256,
+            equilibrium_material_signature: source_signatures.equilibrium_material_signature,
+            equilibrium_static_physics_signature: source_signatures
+                .equilibrium_static_physics_signature,
+            equilibrium_boundary_signature: source_signatures.equilibrium_boundary_signature,
             content_sha256,
         })
     }
 
     fn validate_target_plan(&self, plan: &FemEigenPlanIR) -> Result<(), RunError> {
+        if self.schema_version != ACCEPTED_FEM_RELAX_STAGE_HANDOFF_V3 {
+            return Err(RunError {
+                message: "relax_stage_handoff_v3_schema_version_mismatch".to_string(),
+            });
+        }
+        let accepted = accepted_equilibrium_criterion(&self.completion)?;
+        if accepted != self.acceptance {
+            return Err(RunError {
+                message: "relax_stage_handoff_acceptance_certificate_mismatch".to_string(),
+            });
+        }
+        let completion_sha256 = shared_domain_content_digest(
+            "relax_stage_completion",
+            &serde_json::to_value(&self.completion).map_err(|error| RunError {
+                message: format!("relax_stage_handoff_completion_serialization_failed: {error}"),
+            })?,
+        )?;
+        if completion_sha256 != self.completion_sha256 {
+            return Err(RunError {
+                message: "relax_stage_handoff_completion_sha256_mismatch".to_string(),
+            });
+        }
+        let acceptance_certificate_sha256 = shared_domain_content_digest(
+            "relax_stage_acceptance_certificate",
+            &serde_json::to_value(&self.acceptance).map_err(|error| RunError {
+                message: format!("relax_stage_handoff_acceptance_serialization_failed: {error}"),
+            })?,
+        )?;
+        if acceptance_certificate_sha256 != self.acceptance_certificate_sha256 {
+            return Err(RunError {
+                message: "relax_stage_handoff_acceptance_certificate_sha256_mismatch".to_string(),
+            });
+        }
+        validate_certified_equilibrium_fields(&self.certified_fields, self.node_count)?;
+        let target_signatures =
+            crate::fem::equilibrium_identity::EquilibriumIdentitySignaturesV1::from_eigen_plan(
+                plan,
+            )?;
+        if target_signatures.equilibrium_material_signature != self.equilibrium_material_signature {
+            return Err(RunError {
+                message: "relax_stage_handoff_equilibrium_material_signature_mismatch".to_string(),
+            });
+        }
+        if target_signatures.equilibrium_static_physics_signature
+            != self.equilibrium_static_physics_signature
+        {
+            return Err(RunError {
+                message: "relax_stage_handoff_equilibrium_static_physics_signature_mismatch"
+                    .to_string(),
+            });
+        }
+        if target_signatures.equilibrium_boundary_signature != self.equilibrium_boundary_signature {
+            return Err(RunError {
+                message: "relax_stage_handoff_equilibrium_boundary_signature_mismatch".to_string(),
+            });
+        }
         if !matches!(plan.equilibrium, EquilibriumSourceIR::RelaxedInitialState) {
             return Err(RunError {
                 message: "relax_stage_handoff_requires_relaxed_initial_state_target".to_string(),
@@ -548,6 +681,13 @@ impl AcceptedFemRelaxStageHandoff {
         }
         let target_equilibrium_sha256 =
             vector_field_content_sha256(&plan.equilibrium_magnetization);
+        let target_topology = MeshTopology::from_ir(&plan.mesh).map_err(|error| RunError {
+            message: format!("relax_stage_handoff_target_mesh_topology_invalid: {error}"),
+        })?;
+        validate_handoff_m0_norms(
+            &plan.equilibrium_magnetization,
+            &target_topology.magnetic_node_volumes,
+        )?;
         if target_equilibrium_sha256 != self.equilibrium_content_sha256
             || plan.equilibrium_magnetization != self.equilibrium_magnetization
         {
@@ -555,26 +695,40 @@ impl AcceptedFemRelaxStageHandoff {
                 message: "relax_stage_handoff_equilibrium_content_mismatch".to_string(),
             });
         }
-        let recomputed = relax_stage_handoff_content_sha256(
-            &self.source_run_id,
-            &self.source_stage_id,
-            &self.source_stage_kind,
-            &self.stage_fem_mesh_generation_id,
-            &self.source_mesh_topology_sha256,
-            self.node_count,
-            &self.indexing_sha256,
-            &self.part_registry_sha256,
-            &self.completion_sha256,
-            &self.completion,
-            &self.acceptance,
-            &self.equilibrium_content_sha256,
-        )?;
+        let legacy_v2_content_sha256 = relax_stage_handoff_v2_content_sha256(&self.v2_record())?;
+        if legacy_v2_content_sha256 != self.legacy_v2_content_sha256 {
+            return Err(RunError {
+                message: "relax_stage_handoff_v2_content_sha256_mismatch".to_string(),
+            });
+        }
+        let recomputed = relax_stage_handoff_v3_content_sha256(&self.v3_hash_preimage())?;
         if recomputed != self.content_sha256 {
             return Err(RunError {
                 message: "relax_stage_handoff_content_sha256_mismatch".to_string(),
             });
         }
         Ok(())
+    }
+
+    fn v3_hash_preimage(&self) -> AcceptedFemRelaxStageHandoffV3HashPreimage {
+        AcceptedFemRelaxStageHandoffV3HashPreimage {
+            schema_version: self.schema_version.clone(),
+            legacy_v2_content_sha256: self.legacy_v2_content_sha256.clone(),
+            acceptance_certificate_sha256: self.acceptance_certificate_sha256.clone(),
+            certified_fields_content_sha256: self.certified_fields.content_sha256.clone(),
+            equilibrium_material_signature: self.equilibrium_material_signature.clone(),
+            equilibrium_static_physics_signature: self.equilibrium_static_physics_signature.clone(),
+            equilibrium_boundary_signature: self.equilibrium_boundary_signature.clone(),
+        }
+    }
+
+    #[cfg(test)]
+    fn legacy_v2_provenance_json(&self) -> serde_json::Value {
+        serde_json::to_value(self.v2_record()).expect("frozen v2 handoff must serialize")
+    }
+
+    fn provenance_json(&self) -> serde_json::Value {
+        serde_json::to_value(self.v3_record()).expect("typed v3 handoff must serialize")
     }
 
     pub fn content_sha256(&self) -> &str {
@@ -590,24 +744,148 @@ impl AcceptedFemRelaxStageHandoff {
             .expect("accepted equilibrium criterion must serialize")
     }
 
-    fn provenance_json(&self) -> serde_json::Value {
-        serde_json::json!({
-            "schema_version": "AcceptedFemRelaxStageHandoff.v2",
-            "source_run_id": self.source_run_id,
-            "source_stage_id": self.source_stage_id,
-            "source_stage_kind": self.source_stage_kind,
-            "stage_fem_mesh_generation_id": self.stage_fem_mesh_generation_id,
-            "source_mesh_topology_sha256": self.source_mesh_topology_sha256,
-            "node_count": self.node_count,
-            "indexing_sha256": self.indexing_sha256,
-            "part_registry_sha256": self.part_registry_sha256,
-            "completion_sha256": self.completion_sha256,
-            "completion": self.completion,
-            "acceptance": self.acceptance_json(),
-            "equilibrium_content_sha256": self.equilibrium_content_sha256,
-            "content_sha256": self.content_sha256,
-        })
+    fn v2_record(&self) -> AcceptedFemRelaxStageHandoffV2Record {
+        AcceptedFemRelaxStageHandoffV2Record {
+            schema_version: ACCEPTED_FEM_RELAX_STAGE_HANDOFF_V2.to_string(),
+            source_run_id: self.source_run_id.clone(),
+            source_stage_id: self.source_stage_id.clone(),
+            source_stage_kind: self.source_stage_kind.clone(),
+            stage_fem_mesh_generation_id: self.stage_fem_mesh_generation_id.clone(),
+            source_mesh_topology_sha256: self.source_mesh_topology_sha256.clone(),
+            node_count: self.node_count,
+            indexing_sha256: self.indexing_sha256.clone(),
+            part_registry_sha256: self.part_registry_sha256.clone(),
+            completion_sha256: self.completion_sha256.clone(),
+            completion: self.completion.clone(),
+            acceptance: self.acceptance.clone(),
+            equilibrium_content_sha256: self.equilibrium_content_sha256.clone(),
+            content_sha256: self.legacy_v2_content_sha256.clone(),
+        }
     }
+
+    fn v3_record(&self) -> AcceptedFemRelaxStageHandoffV3Record {
+        AcceptedFemRelaxStageHandoffV3Record {
+            schema_version: self.schema_version.clone(),
+            source_run_id: self.source_run_id.clone(),
+            source_stage_id: self.source_stage_id.clone(),
+            source_stage_kind: self.source_stage_kind.clone(),
+            stage_fem_mesh_generation_id: self.stage_fem_mesh_generation_id.clone(),
+            source_mesh_topology_sha256: self.source_mesh_topology_sha256.clone(),
+            node_count: self.node_count,
+            indexing_sha256: self.indexing_sha256.clone(),
+            part_registry_sha256: self.part_registry_sha256.clone(),
+            completion_sha256: self.completion_sha256.clone(),
+            completion: self.completion.clone(),
+            acceptance: self.acceptance.clone(),
+            equilibrium_content_sha256: self.equilibrium_content_sha256.clone(),
+            legacy_v2_content_sha256: self.legacy_v2_content_sha256.clone(),
+            acceptance_certificate_sha256: self.acceptance_certificate_sha256.clone(),
+            equilibrium_magnetization: self.equilibrium_magnetization.clone(),
+            certified_fields: self.certified_fields.clone(),
+            certified_fields_content_sha256: self.certified_fields.content_sha256.clone(),
+            equilibrium_material_signature: self.equilibrium_material_signature.clone(),
+            equilibrium_static_physics_signature: self.equilibrium_static_physics_signature.clone(),
+            equilibrium_boundary_signature: self.equilibrium_boundary_signature.clone(),
+            content_sha256: self.content_sha256.clone(),
+        }
+    }
+}
+
+fn validate_handoff_m0_norms(
+    equilibrium: &[Vector3],
+    magnetic_node_volumes: &[f64],
+) -> Result<(), RunError> {
+    if equilibrium.len() != magnetic_node_volumes.len() {
+        return Err(RunError {
+            message: format!(
+                "relax_stage_handoff_m0_norm_mismatch: topology has {} nodes, equilibrium has {}",
+                magnetic_node_volumes.len(),
+                equilibrium.len()
+            ),
+        });
+    }
+    for (node, magnetization) in equilibrium.iter().enumerate() {
+        let norm = magnetization
+            .iter()
+            .map(|component| component * component)
+            .sum::<f64>()
+            .sqrt();
+        if !norm.is_finite() {
+            return Err(RunError {
+                message: format!(
+                    "relax_stage_handoff_m0_norm_mismatch: node {node} has non-finite norm"
+                ),
+            });
+        }
+        if magnetic_node_volumes[node] <= 0.0 {
+            continue;
+        }
+        let norm_error = (norm - 1.0).abs();
+        if norm_error > 1.0e-8 {
+            return Err(RunError {
+                message: format!(
+                    "relax_stage_handoff_m0_norm_mismatch: node {node} has norm error {norm_error:.3e}"
+                ),
+            });
+        }
+    }
+    Ok(())
+}
+
+fn accepted_equilibrium_criterion(
+    completion: &fullmag_ir::StageCompletionIR,
+) -> Result<AcceptedEquilibriumCriterion, RunError> {
+    let accepted_metric = match (completion.reason, completion.metric) {
+        (
+            Some(fullmag_ir::StageStopReason::Torque),
+            Some(fullmag_ir::StageMetricKind::MaxTorqueApm),
+        ) => Some(("torque", fullmag_ir::StageMetricKind::MaxTorqueApm)),
+        (
+            Some(fullmag_ir::StageStopReason::Energy),
+            Some(fullmag_ir::StageMetricKind::TotalEnergyPlateauRangeJ),
+        ) => Some((
+            "energy",
+            fullmag_ir::StageMetricKind::TotalEnergyPlateauRangeJ,
+        )),
+        _ => None,
+    };
+    let accepted_values = match (completion.metric_value, completion.threshold) {
+        (Some(value), Some(threshold))
+            if value.is_finite()
+                && threshold.is_finite()
+                && threshold >= 0.0
+                && value <= threshold =>
+        {
+            Some((value, threshold))
+        }
+        _ => None,
+    };
+    let (Some((criterion, metric_kind)), Some((metric_value, threshold))) =
+        (accepted_metric, accepted_values)
+    else {
+        return Err(RunError {
+            message: "relax_stage_handoff_completion_not_accepted: completion must be completed, converged, use a coherent equilibrium metric, and satisfy its threshold"
+                .to_string(),
+        });
+    };
+    if completion.status != "completed" || !completion.converged {
+        return Err(RunError {
+            message: "relax_stage_handoff_completion_not_accepted: completion must be completed, converged, use a coherent equilibrium metric, and satisfy its threshold"
+                .to_string(),
+        });
+    }
+    Ok(AcceptedEquilibriumCriterion {
+        criterion: criterion.to_string(),
+        metric_kind,
+        metric_value,
+        threshold,
+        unit: metric_kind.unit().to_string(),
+        status: completion.status.clone(),
+        converged: completion.converged,
+        stop_reason: completion
+            .reason
+            .expect("accepted completion has a stop reason"),
+    })
 }
 
 fn vector_field_content_sha256(values: &[Vector3]) -> String {
@@ -622,48 +900,115 @@ fn vector_field_content_sha256(values: &[Vector3]) -> String {
     format!("sha256:{:x}", hash.finalize())
 }
 
-#[allow(clippy::too_many_arguments)]
-fn relax_stage_handoff_content_sha256(
-    source_run_id: &str,
-    source_stage_id: &str,
-    source_stage_kind: &str,
-    generation_id: &str,
-    topology_sha256: &str,
-    node_count: usize,
-    indexing_sha256: &str,
-    part_registry_sha256: &str,
-    completion_sha256: &str,
-    completion: &fullmag_ir::StageCompletionIR,
-    acceptance: &AcceptedEquilibriumCriterion,
-    equilibrium_content_sha256: &str,
+fn relax_stage_handoff_v2_content_sha256(
+    record: &AcceptedFemRelaxStageHandoffV2Record,
 ) -> Result<String, RunError> {
-    let completion_json = serde_json::to_vec(completion).map_err(|error| RunError {
+    if record.schema_version != ACCEPTED_FEM_RELAX_STAGE_HANDOFF_V2 {
+        return Err(RunError {
+            message: "relax_stage_handoff_v2_schema_version_mismatch".to_string(),
+        });
+    }
+    let completion_json = serde_json::to_vec(&record.completion).map_err(|error| RunError {
         message: format!("relax_stage_handoff_completion_serialization_failed: {error}"),
     })?;
-    let acceptance_json = serde_json::to_vec(acceptance).map_err(|error| RunError {
+    let acceptance_json = serde_json::to_vec(&record.acceptance).map_err(|error| RunError {
         message: format!("relax_stage_handoff_acceptance_serialization_failed: {error}"),
     })?;
-    let node_count = (node_count as u64).to_le_bytes();
+    let node_count = (record.node_count as u64).to_le_bytes();
     let mut hash = Sha256::new();
     hash.update(b"AcceptedFemRelaxStageHandoff.v2\0");
     for field in [
-        source_run_id.as_bytes(),
-        source_stage_id.as_bytes(),
-        source_stage_kind.as_bytes(),
-        generation_id.as_bytes(),
-        topology_sha256.as_bytes(),
+        record.source_run_id.as_bytes(),
+        record.source_stage_id.as_bytes(),
+        record.source_stage_kind.as_bytes(),
+        record.stage_fem_mesh_generation_id.as_bytes(),
+        record.source_mesh_topology_sha256.as_bytes(),
         node_count.as_slice(),
-        indexing_sha256.as_bytes(),
-        part_registry_sha256.as_bytes(),
-        completion_sha256.as_bytes(),
+        record.indexing_sha256.as_bytes(),
+        record.part_registry_sha256.as_bytes(),
+        record.completion_sha256.as_bytes(),
         completion_json.as_slice(),
         acceptance_json.as_slice(),
-        equilibrium_content_sha256.as_bytes(),
+        record.equilibrium_content_sha256.as_bytes(),
     ] {
         hash.update((field.len() as u64).to_le_bytes());
         hash.update(field);
     }
     Ok(format!("sha256:{:x}", hash.finalize()))
+}
+
+#[allow(dead_code)] // Wired by the next migration slice.
+fn relax_stage_handoff_v3_content_sha256(
+    preimage: &AcceptedFemRelaxStageHandoffV3HashPreimage,
+) -> Result<String, RunError> {
+    if preimage.schema_version != ACCEPTED_FEM_RELAX_STAGE_HANDOFF_V3 {
+        return Err(RunError {
+            message: "relax_stage_handoff_v3_schema_version_mismatch".to_string(),
+        });
+    }
+    let mut hash = Sha256::new();
+    hash.update(b"AcceptedFemRelaxStageHandoff.v3\0");
+    for field in [
+        preimage.legacy_v2_content_sha256.as_bytes(),
+        preimage.acceptance_certificate_sha256.as_bytes(),
+        preimage.certified_fields_content_sha256.as_bytes(),
+        preimage.equilibrium_material_signature.as_bytes(),
+        preimage.equilibrium_static_physics_signature.as_bytes(),
+        preimage.equilibrium_boundary_signature.as_bytes(),
+    ] {
+        hash.update((field.len() as u64).to_le_bytes());
+        hash.update(field);
+    }
+    Ok(format!("sha256:{:x}", hash.finalize()))
+}
+
+fn validate_certified_equilibrium_fields(
+    fields: &crate::types::CertifiedFemEquilibriumFields,
+    expected_node_count: usize,
+) -> Result<(), RunError> {
+    let valid_shape = expected_node_count > 0
+        && fields.schema_version == "CertifiedFemEquilibriumFields.v1"
+        && fields.h_ex_a_per_m.len() == expected_node_count
+        && fields.h_demag_a_per_m.len() == expected_node_count
+        && fields.h_ext_a_per_m.len() == expected_node_count
+        && fields.h_eff_a_per_m.len() == expected_node_count
+        && fields.phi_a.len() == expected_node_count;
+    let finite = [
+        &fields.h_ex_a_per_m,
+        &fields.h_demag_a_per_m,
+        &fields.h_ext_a_per_m,
+        &fields.h_eff_a_per_m,
+    ]
+    .into_iter()
+    .flat_map(|values| values.iter())
+    .flat_map(|value| value.iter())
+    .all(|value| value.is_finite())
+        && fields.phi_a.iter().all(|value| value.is_finite());
+    let digest = crate::types::certified_equilibrium_fields_sha256(fields);
+    if !valid_shape || !finite || fields.content_sha256 != digest {
+        return Err(RunError {
+            message: "relax_stage_handoff_certified_fields_invalid: native static fields must be finite, complete, and digest-bound"
+                .to_string(),
+        });
+    }
+    let decomposes_exactly = fields
+        .h_ex_a_per_m
+        .iter()
+        .zip(&fields.h_demag_a_per_m)
+        .zip(&fields.h_ext_a_per_m)
+        .zip(&fields.h_eff_a_per_m)
+        .all(|(((h_ex, h_demag), h_ext), h_eff)| {
+            (0..3).all(|component| {
+                h_eff[component] == (h_ex[component] + h_demag[component]) + h_ext[component]
+            })
+        });
+    if !decomposes_exactly {
+        return Err(RunError {
+            message: "relax_stage_handoff_certified_fields_decomposition_mismatch: H_eff must equal H_ex + H_demag + H_ext exactly"
+                .to_string(),
+        });
+    }
+    Ok(())
 }
 
 fn prepare_single_k_stage_continuation(
@@ -698,10 +1043,22 @@ fn bind_stage_continuation_artifacts(
     for artifact in &mut run.auxiliary_artifacts {
         let is_summary = artifact.relative_path == "eigen/metadata/eigen_summary.json";
         let is_spectrum = artifact.relative_path == "eigen/spectrum.json";
+        let is_spectrum_bundle = matches!(
+            artifact.relative_path.as_str(),
+            "eigen/spectrum.v2.json" | "eigen/spectrum.v3.json"
+        );
+        let is_solver_diagnostics =
+            artifact.relative_path == "eigen/diagnostics/solver.v1.json";
         let is_source = artifact.relative_path == "eigen/metadata/equilibrium_source.json";
         let is_mode = artifact.relative_path.starts_with("eigen/modes/")
             && artifact.relative_path.ends_with(".json");
-        if !(is_summary || is_spectrum || is_source || is_mode) {
+        if !(is_summary
+            || is_spectrum
+            || is_spectrum_bundle
+            || is_solver_diagnostics
+            || is_source
+            || is_mode)
+        {
             continue;
         }
         let mut value: serde_json::Value =
@@ -735,9 +1092,30 @@ fn bind_stage_continuation_artifacts(
                     serde_json::json!(handoff.content_sha256),
                 );
                 diagnostics.insert(
+                    "source_mesh_topology_sha256".to_string(),
+                    serde_json::json!(handoff.source_mesh_topology_sha256),
+                );
+                diagnostics.insert(
                     "relax_to_eigen_handoff".to_string(),
                     handoff.provenance_json(),
                 );
+                if let Some(modes) = object
+                    .get_mut("modes")
+                    .and_then(serde_json::Value::as_array_mut)
+                {
+                    for mode in modes {
+                        if let Some(mode) = mode.as_object_mut() {
+                            mode.insert(
+                                "relax_to_eigen_handoff_sha256".to_string(),
+                                serde_json::json!(handoff.content_sha256),
+                            );
+                            mode.insert(
+                                "source_mesh_topology_sha256".to_string(),
+                                serde_json::json!(handoff.source_mesh_topology_sha256),
+                            );
+                        }
+                    }
+                }
                 bound_summary |= is_summary;
             } else if is_mode {
                 object.insert(
@@ -748,6 +1126,65 @@ fn bind_stage_continuation_artifacts(
                     "equilibrium_content_sha256".to_string(),
                     serde_json::json!(handoff.equilibrium_content_sha256),
                 );
+                object.insert(
+                    "source_mesh_topology_sha256".to_string(),
+                    serde_json::json!(handoff.source_mesh_topology_sha256),
+                );
+            } else if is_solver_diagnostics {
+                object.insert(
+                    "relax_to_eigen_handoff_sha256".to_string(),
+                    serde_json::json!(handoff.content_sha256),
+                );
+                object.insert(
+                    "source_mesh_topology_sha256".to_string(),
+                    serde_json::json!(handoff.source_mesh_topology_sha256),
+                );
+                if let Some(samples) = object
+                    .get_mut("sample_solver_diagnostics")
+                    .and_then(serde_json::Value::as_array_mut)
+                {
+                    for sample in samples {
+                        if let Some(diagnostics) = sample
+                            .get_mut("diagnostics")
+                            .and_then(serde_json::Value::as_object_mut)
+                        {
+                            diagnostics.insert(
+                                "relax_to_eigen_handoff_sha256".to_string(),
+                                serde_json::json!(handoff.content_sha256),
+                            );
+                            diagnostics.insert(
+                                "source_mesh_topology_sha256".to_string(),
+                                serde_json::json!(handoff.source_mesh_topology_sha256),
+                            );
+                        }
+                    }
+                }
+            } else if is_spectrum_bundle {
+                if let Some(samples) = object
+                    .get_mut("samples")
+                    .and_then(serde_json::Value::as_array_mut)
+                {
+                    for sample in samples {
+                        let Some(modes) = sample
+                            .get_mut("modes")
+                            .and_then(serde_json::Value::as_array_mut)
+                        else {
+                            continue;
+                        };
+                        for mode in modes {
+                            if let Some(mode) = mode.as_object_mut() {
+                                mode.insert(
+                                    "relax_to_eigen_handoff_sha256".to_string(),
+                                    serde_json::json!(handoff.content_sha256),
+                                );
+                                mode.insert(
+                                    "source_mesh_topology_sha256".to_string(),
+                                    serde_json::json!(handoff.source_mesh_topology_sha256),
+                                );
+                            }
+                        }
+                    }
+                }
             }
         }
         artifact.bytes = serde_json::to_vec_pretty(&value).map_err(|error| RunError {
@@ -983,7 +1420,6 @@ struct LoadedEquilibriumArtifactV7 {
     static_demag_signature: String,
     demag_model: String,
     m0_norm_tolerance: f64,
-    equilibrium_torque_relative_tolerance: f64,
     phi0_requirement: String,
     periodic_mesh_certificate: serde_json::Value,
     acceptance_certificate: AcceptedEquilibriumCriterion,
@@ -1204,7 +1640,7 @@ pub(crate) fn execute_gpu_fem_eigen_with_handoff(
         return execute_bias_field_sweep(plan, outputs, true, progress);
     }
     if native_gpu_k0_kittel_modal_supported(plan) {
-        return execute_native_gpu_k0_kittel_modal(plan, outputs);
+        return execute_native_gpu_k0_kittel_modal(plan, outputs, handoff);
     }
 
     if native_gpu_shared_domain_modal_supported(plan) {
@@ -1328,10 +1764,12 @@ fn k_sampling_is_single_k0(k_sampling: Option<&KSamplingIR>) -> bool {
 fn execute_native_gpu_k0_kittel_modal(
     plan: &FemEigenPlanIR,
     outputs: &[OutputIR],
+    expected_handoff: Option<&AcceptedFemEigenEquilibriumHandoff>,
 ) -> Result<ExecutedRun, RunError> {
+    validate_eigen_equilibrium_certificate(plan, expected_handoff, None)?;
     let initial_magnetization = plan.equilibrium_magnetization.clone();
     let (problem, equilibrium, relaxation_steps, observables, _source_artifact) =
-        materialize_equilibrium(plan, &initial_magnetization)?;
+        materialize_equilibrium(plan, &initial_magnetization, None)?;
     let reduction = build_reduction_map(
         &problem.topology,
         &plan.spin_wave_bc,
@@ -4112,6 +4550,159 @@ struct ModalV6PartRegistry {
     magnetic_node_count: usize,
 }
 
+fn modal_participation_source_mesh_identity(
+    plan: &FemEigenPlanIR,
+) -> crate::eigen::ModalParticipationSourceMeshIdentity {
+    crate::eigen::ModalParticipationSourceMeshIdentity {
+        mesh_id: plan.mesh_name.clone(),
+        topology_fingerprint: plan.mesh.topology_fingerprint_v6(),
+        indexing: "full_domain_node_order".to_string(),
+        node_count: plan.mesh.nodes.len(),
+    }
+}
+
+fn modal_participation_for_mode(
+    context: &Result<
+        crate::eigen::ModalParticipationMeshContext,
+        crate::eigen::ModalParticipationUnavailableDetail,
+    >,
+    plan: &FemEigenPlanIR,
+    real: &[[f64; 3]],
+    imag: &[[f64; 3]],
+    solver_device: &str,
+) -> crate::eigen::ModalParticipationObservable {
+    match context {
+        Ok(context) => context.compute(real, imag, solver_device),
+        Err(detail) => crate::eigen::ModalParticipationObservable::unavailable(
+            *detail,
+            solver_device,
+            Some(modal_participation_source_mesh_identity(plan)),
+        ),
+    }
+}
+
+fn modal_participation_mesh_context(
+    plan: &FemEigenPlanIR,
+) -> Result<crate::eigen::ModalParticipationMeshContext, crate::eigen::ModalParticipationUnavailableDetail>
+{
+    use crate::eigen::{
+        ModalParticipationMeshContext, ModalParticipationObjectMarkerMembership,
+        ModalParticipationUnavailableDetail,
+    };
+    use fullmag_ir::{FemMeshPartRole, FemMeshPartSelector};
+
+    if plan.fe_order != 1 {
+        return Err(ModalParticipationUnavailableDetail::ConsistentMassBasisUnsupported);
+    }
+    let tet4_elements = plan
+        .mesh
+        .require_tet4_elements()
+        .map_err(|_| ModalParticipationUnavailableDetail::ConsistentMassBasisUnsupported)?;
+    if tet4_elements.is_empty() || plan.mesh.element_markers.len() != tet4_elements.len() {
+        return Err(ModalParticipationUnavailableDetail::ConsistentMassBasisUnsupported);
+    }
+
+    let mut element_owners = vec![None::<String>; tet4_elements.len()];
+    let mut saw_magnetic_part = false;
+    for part in plan
+        .mesh_parts
+        .iter()
+        .filter(|part| part.role == FemMeshPartRole::MagneticObject)
+    {
+        saw_magnetic_part = true;
+        let object_id = part
+            .object_id
+            .as_deref()
+            .filter(|value| !value.trim().is_empty())
+            .ok_or(ModalParticipationUnavailableDetail::ObjectMembershipMissing)?;
+        let selected = match &part.element_selector {
+            FemMeshPartSelector::ElementRange { start, count } => {
+                let start = *start as usize;
+                let end = start
+                    .checked_add(*count as usize)
+                    .filter(|end| *end <= tet4_elements.len())
+                    .ok_or(ModalParticipationUnavailableDetail::ObjectMembershipMissing)?;
+                (start..end).collect::<Vec<_>>()
+            }
+            FemMeshPartSelector::ElementMarkerSet { markers } => {
+                if markers.is_empty() {
+                    return Err(ModalParticipationUnavailableDetail::ObjectMembershipMissing);
+                }
+                let marker_set = markers.iter().copied().collect::<BTreeSet<_>>();
+                if marker_set.len() != markers.len() {
+                    return Err(ModalParticipationUnavailableDetail::ObjectMembershipMissing);
+                }
+                plan.mesh
+                    .element_markers
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(index, marker)| marker_set.contains(marker).then_some(index))
+                    .collect()
+            }
+            _ => return Err(ModalParticipationUnavailableDetail::ObjectMembershipMissing),
+        };
+        if selected.is_empty() {
+            return Err(ModalParticipationUnavailableDetail::ObjectMembershipMissing);
+        }
+        for element_index in selected {
+            if plan.mesh.element_markers[element_index] == 0 {
+                return Err(ModalParticipationUnavailableDetail::ObjectMembershipMissing);
+            }
+            match &element_owners[element_index] {
+                Some(existing) if existing != object_id => {
+                    return Err(ModalParticipationUnavailableDetail::ObjectMembershipMissing)
+                }
+                Some(_) => {}
+                None => element_owners[element_index] = Some(object_id.to_string()),
+            }
+        }
+    }
+    if !saw_magnetic_part {
+        return Err(ModalParticipationUnavailableDetail::ObjectMembershipMissing);
+    }
+
+    let mut marker_owners = BTreeMap::<u32, String>::new();
+    for (marker, owner) in plan.mesh.element_markers.iter().zip(&element_owners) {
+        if *marker == 0 {
+            if owner.is_some() {
+                return Err(ModalParticipationUnavailableDetail::ObjectMembershipMissing);
+            }
+            continue;
+        }
+        let owner = owner
+            .as_deref()
+            .ok_or(ModalParticipationUnavailableDetail::ObjectCoverageIncomplete)?;
+        if marker_owners
+            .insert(*marker, owner.to_string())
+            .is_some_and(|existing| existing != owner)
+        {
+            return Err(ModalParticipationUnavailableDetail::ObjectMembershipMissing);
+        }
+    }
+
+    let mut object_markers = BTreeMap::<String, BTreeSet<u32>>::new();
+    for (marker, object_id) in marker_owners {
+        object_markers.entry(object_id).or_default().insert(marker);
+    }
+    if object_markers.is_empty() {
+        return Err(ModalParticipationUnavailableDetail::ObjectMembershipMissing);
+    }
+
+    Ok(ModalParticipationMeshContext {
+        source_mesh_identity: modal_participation_source_mesh_identity(plan),
+        nodes_m: plan.mesh.nodes.clone(),
+        tet4_elements,
+        element_markers: plan.mesh.element_markers.clone(),
+        object_marker_membership: object_markers
+            .into_iter()
+            .map(|(object_id, markers)| ModalParticipationObjectMarkerMembership {
+                object_id,
+                markers: markers.into_iter().collect(),
+            })
+            .collect(),
+    })
+}
+
 fn modal_v6_part_registry(
     mesh: &fullmag_ir::MeshIR,
     mesh_parts: &[fullmag_ir::FemMeshPartIR],
@@ -4760,6 +5351,11 @@ fn build_owned_modal_certificate_v6_binding(
         &(bias_field_sample_index, bias_field_a_per_m),
     )?;
     let bias_field_sample_id = format!("bias-field-sample:{bias_field_sample_index}");
+    let operator_cell_markers = mesh
+        .element_markers
+        .iter()
+        .map(|marker| u32::from(*marker != 0))
+        .collect::<Vec<_>>();
     let shared_domain_map_binding_sha256 = modal_shared_domain_map_binding_digest(
         &mesh_generation_identity,
         &mesh_magnetic,
@@ -4767,7 +5363,7 @@ fn build_owned_modal_certificate_v6_binding(
         &canonical_preimage_sha256,
         &magnetic_class_digest_sha256,
         &scalar_class_digest_sha256,
-        &mesh.element_markers,
+        &operator_cell_markers,
         scalar_reduced_node,
         scalar_reduced_class_count,
         magnetic_reduced_node,
@@ -4793,7 +5389,7 @@ fn build_owned_modal_certificate_v6_binding(
         bias_field_sample_id,
         bias_field_sample_signature,
         bias_field_sample_a_per_m: bias_field_a_per_m.to_vec(),
-        cell_markers: mesh.element_markers.clone(),
+        cell_markers: operator_cell_markers,
         scalar_reduced_node: scalar_reduced_node.to_vec(),
         scalar_reduced_class_count,
         magnetic_reduced_node: magnetic_reduced_node.to_vec(),
@@ -4977,6 +5573,23 @@ fn max_scalar_field_difference(left: &[f64], right: &[f64]) -> Option<f64> {
     )
 }
 
+fn extend_equilibrium_m0_to_air_nodes(
+    topology: &MeshTopology,
+    equilibrium: &[Vector3],
+) -> Vec<Vector3> {
+    equilibrium
+        .iter()
+        .zip(topology.magnetic_node_volumes.iter())
+        .map(|(m, magnetic_volume)| {
+            if *magnetic_volume > 0.0 {
+                *m
+            } else {
+                [0.0, 0.0, 1.0]
+            }
+        })
+        .collect()
+}
+
 fn build_shared_domain_linearization_state(
     plan: &FemEigenPlanIR,
     topology: &MeshTopology,
@@ -4987,13 +5600,18 @@ fn build_shared_domain_linearization_state(
     observables: &EffectiveFieldObservables,
 ) -> Result<SharedDomainLinearizationState, RunError> {
     validate_shared_domain_modal_scope(plan, topology, equilibrium, observables)?;
-    let phi0 = problem
-        .demag_potential_from_vectors(equilibrium)
-        .map_err(|error| RunError {
-            message: format!(
-                "shared-domain modal equilibrium potential materialization failed: {error}"
-            ),
-        })?;
+    let phi0 = if let Some(handoff) = source_relax_handoff {
+        validate_certified_equilibrium_fields(&handoff.certified_fields, topology.n_nodes)?;
+        handoff.certified_fields.phi_a.clone()
+    } else {
+        problem
+            .demag_potential_from_vectors(equilibrium)
+            .map_err(|error| RunError {
+                message: format!(
+                    "shared-domain modal equilibrium potential materialization failed: {error}"
+                ),
+            })?
+    };
     if phi0.len() != topology.n_nodes || phi0.iter().any(|value| !value.is_finite()) {
         return Err(RunError {
             message: format!(
@@ -5289,7 +5907,7 @@ fn build_shared_domain_linearization_state(
             },
             "max_m0_norm_error": max_m0_norm_error,
             "max_m0_cross_h_eff0_relative": max_m0_cross_h_eff0_relative,
-            "producer_run_id": "fem_eigen:in_memory_materialization",
+            "producer_run_id": source_relax_handoff.source_run_id,
             "demag_model": resolved_demag_realization(plan)
                 .map(|value| value.model_name())
                 .unwrap_or("none"),
@@ -5313,7 +5931,7 @@ fn build_shared_domain_linearization_state(
             serde_json::json!(observables.demag_field),
             serde_json::json!(phi0),
             serde_json::json!("required_for_restart_or_provenance"),
-            "recomputed_verified",
+            "certified_native_relax_handoff",
         )
     };
 
@@ -5353,7 +5971,30 @@ fn build_shared_domain_linearization_state(
     let m0_norm_tolerance = source_artifact
         .map(|artifact| artifact.m0_norm_tolerance)
         .unwrap_or(1.0e-8);
+    let (acceptance_certificate, acceptance_certificate_sha256) = if let Some(artifact) =
+        source_artifact
+    {
+        (
+            artifact.acceptance_certificate.clone(),
+            artifact.completion_sha256.clone(),
+        )
+    } else {
+        let handoff = source_relax_handoff.ok_or_else(|| RunError {
+                message: "equilibrium_artifact_v7_uncertified: accepted relaxation completion evidence is required"
+                    .to_string(),
+            })?;
+        (
+            handoff.acceptance.clone(),
+            handoff.completion_sha256.clone(),
+        )
+    };
+    if !is_sha256_digest(&acceptance_certificate_sha256) {
+        return Err(RunError {
+            message: "equilibrium_acceptance_certificate_digest_invalid".to_string(),
+        });
+    }
 
+    let operator_m0 = extend_equilibrium_m0_to_air_nodes(topology, equilibrium);
     let mut linearization_state = serde_json::json!({
         "schema_version": "LinearizationState.v6",
         "source_equilibrium_artifact": equilibrium_artifact_digest,
@@ -5361,7 +6002,8 @@ fn build_shared_domain_linearization_state(
         "operator_dictionary": "FrequencyOperatorDictionary.v1",
         "accepted_for_frequency_operator": true,
         "external_field_a_per_m": plan.external_field,
-        "m0": equilibrium,
+        "m0": operator_m0,
+        "m0_air_extension_policy": "fixed_unit_z_on_nonmagnetic_nodes_v1",
         "h_eff0_a_per_m": artifact_h_eff0,
         "h_demag0_a_per_m": artifact_h_demag0,
         "phi0_requirement": artifact_phi0_requirement,
@@ -5389,6 +6031,8 @@ fn build_shared_domain_linearization_state(
             },
         },
         "tangent_frame_policy": "orthonormal_right_handed_m0_v1",
+        "equilibrium_acceptance_certificate": acceptance_certificate.clone(),
+        "equilibrium_acceptance_certificate_sha256": acceptance_certificate_sha256.clone(),
         "acceptance": {
             "max_m0_norm_error": max_m0_norm_error,
             "max_m0_cross_h_eff0_relative": max_m0_cross_h_eff0_relative,
@@ -5418,14 +6062,14 @@ fn build_shared_domain_linearization_state(
     let (linearization_m0, linearization_h_eff0, linearization_h_demag0) = source_artifact
         .map(|artifact| {
             (
-                artifact.m0.clone(),
+                extend_equilibrium_m0_to_air_nodes(topology, &artifact.m0),
                 artifact.h_eff0.clone(),
                 artifact.h_demag0.clone(),
             )
         })
         .unwrap_or_else(|| {
             (
-                equilibrium.to_vec(),
+                operator_m0,
                 observables.effective_field.clone(),
                 observables.demag_field.clone(),
             )
@@ -5447,7 +6091,8 @@ fn build_shared_domain_linearization_state(
         equilibrium_content_sha256,
         demag_model,
         m0_norm_tolerance,
-        equilibrium_torque_relative_tolerance: 1.0e-6,
+        acceptance_certificate,
+        acceptance_certificate_sha256,
         equilibrium_artifact_digest,
         linearization_state_digest,
         periodic_mesh_certificate_digest,
@@ -5698,8 +6343,15 @@ fn build_native_shared_domain_modal_problem<'a>(
         equilibrium_content_sha256: linearization_state.equilibrium_content_sha256.clone(),
         demag_model,
         m0_norm_tolerance: linearization_state.m0_norm_tolerance,
-        equilibrium_torque_relative_tolerance: linearization_state
-            .equilibrium_torque_relative_tolerance,
+        acceptance_criterion: linearization_state.acceptance_certificate.criterion.clone(),
+        acceptance_metric_kind: linearization_state
+            .acceptance_certificate
+            .metric_kind_name()
+            .to_string(),
+        acceptance_unit: linearization_state.acceptance_certificate.unit.clone(),
+        acceptance_metric_value: linearization_state.acceptance_certificate.metric_value,
+        acceptance_threshold: linearization_state.acceptance_certificate.threshold,
+        acceptance_certificate_sha256: linearization_state.acceptance_certificate_sha256.clone(),
         saturation_magnetisation_a_per_m: ms_values,
         uniform_saturation_magnetisation_a_per_m: plan.material.saturation_magnetisation,
         gamma0_m_per_a_s: plan.gyromagnetic_ratio,
@@ -6205,6 +6857,59 @@ pub(crate) fn insert_native_cpu_modal_window_rejection_contract(
     );
 }
 
+fn validate_eigen_equilibrium_certificate(
+    plan: &FemEigenPlanIR,
+    expected_handoff: Option<&AcceptedFemEigenEquilibriumHandoff>,
+    source_relax_handoff: Option<&AcceptedFemRelaxStageHandoff>,
+) -> Result<(), RunError> {
+    match &plan.equilibrium {
+        EquilibriumSourceIR::RelaxedInitialState if source_relax_handoff.is_none() => {
+            return Err(RunError {
+                message: "accepted relaxation handoff is required before FEM eigensolve"
+                    .to_string(),
+            });
+        }
+        EquilibriumSourceIR::Provided
+            if source_relax_handoff.is_none() && expected_handoff.is_none() =>
+        {
+            return Err(RunError {
+                message: "uncertified_provided_equilibrium: provide equilibrium_artifact.v7 or an accepted relaxation handoff"
+                    .to_string(),
+            });
+        }
+        _ => {}
+    }
+    if let Some(handoff) = expected_handoff {
+        if !matches!(plan.equilibrium, EquilibriumSourceIR::Provided) {
+            return Err(RunError {
+                message: "relax_to_eigen_handoff_requires_provided_equilibrium_target".to_string(),
+            });
+        }
+        handoff.validate_target_plan(plan)?;
+    }
+    Ok(())
+}
+
+/// Explicit validation-only adapter for unit fixtures that need to exercise
+/// post-certificate solver code with a raw `Provided` vector. Production code
+/// cannot name this function and must supply a real artifact or relax handoff.
+#[cfg(test)]
+fn validation_only_raw_provided_fixture_handoff(
+    plan: &FemEigenPlanIR,
+) -> Result<AcceptedFemEigenEquilibriumHandoff, RunError> {
+    if !matches!(plan.equilibrium, EquilibriumSourceIR::Provided) {
+        return Err(RunError {
+            message: "validation_only_raw_provided_requires_provided_equilibrium".to_string(),
+        });
+    }
+    AcceptedFemEigenEquilibriumHandoff::from_accepted_linearization(
+        plan,
+        plan.equilibrium_magnetization.clone(),
+        sha256_text("validation-only raw provided equilibrium artifact"),
+        sha256_text("validation-only raw provided linearization state"),
+    )
+}
+
 fn execute_fem_eigen_inner(
     plan: &FemEigenPlanIR,
     outputs: &[OutputIR],
@@ -6216,14 +6921,7 @@ fn execute_fem_eigen_inner(
     expected_handoff: Option<&AcceptedFemEigenEquilibriumHandoff>,
     source_relax_handoff: Option<&AcceptedFemRelaxStageHandoff>,
 ) -> Result<ExecutedRun, RunError> {
-    if let Some(handoff) = expected_handoff {
-        if !matches!(plan.equilibrium, fullmag_ir::EquilibriumSourceIR::Provided) {
-            return Err(RunError {
-                message: "relax_to_eigen_handoff_requires_provided_equilibrium_target".to_string(),
-            });
-        }
-        handoff.validate_target_plan(plan)?;
-    }
+    validate_eigen_equilibrium_certificate(plan, expected_handoff, source_relax_handoff)?;
     if plan.precision != fullmag_ir::ExecutionPrecision::Double {
         return Err(RunError {
             message: if try_gpu {
@@ -6272,7 +6970,7 @@ fn execute_fem_eigen_inner(
         .map(<[Vector3]>::to_vec)
         .unwrap_or_else(|| plan.equilibrium_magnetization.clone());
     let (problem, equilibrium, relaxation_steps, observables, source_artifact) =
-        materialize_equilibrium(plan, &initial_magnetization)?;
+        materialize_equilibrium(plan, &initial_magnetization, source_relax_handoff)?;
     let topology = &problem.topology;
     let mut solver_kind = solver_kind_label(plan);
     let reduction = build_reduction_map(topology, &plan.spin_wave_bc, plan.k_sampling.as_ref())?;
@@ -6615,6 +7313,8 @@ fn execute_fem_eigen_inner(
         real_eigenpairs.len()
     };
     let mut modes_summary = Vec::with_capacity(total_modes);
+    let participation_context = modal_participation_mesh_context(plan);
+    let participation_solver_device = if try_gpu { "gpu" } else { "cpu" };
     let damping_factor = damping_imaginary_factor(plan.material.damping, plan.damping_policy);
     let gamma_rad_s_t = plan.gyromagnetic_ratio / MU0;
     let gamma0_rad_s_per_a_m = plan.gyromagnetic_ratio;
@@ -6761,6 +7461,13 @@ fn execute_fem_eigen_inner(
         );
         let (tangent_leakage_mean_abs, tangent_leakage_max_abs) =
             mode_tangent_leakage(&equilibrium, &real, &imag);
+        let component_participation = modal_participation_for_mode(
+            &participation_context,
+            plan,
+            &real,
+            &imag,
+            participation_solver_device,
+        );
         let mut mode_summary = serde_json::json!({
             "index": mode_index,
             "frequency_hz": frequency_hz,
@@ -6788,6 +7495,7 @@ fn execute_fem_eigen_inner(
             "mu0_T_m_per_A": mu0_t_m_per_a,
             "dominant_polarization": dominant_polarization,
             "k_vector": k_vector_json(plan.k_sampling.as_ref()),
+            "component_participation": component_participation.clone(),
         });
         if damping_included {
             if let Some(object) = mode_summary.as_object_mut() {
@@ -6844,6 +7552,7 @@ fn execute_fem_eigen_inner(
                 "imag": imag,
                 "amplitude": amplitude,
                 "phase": phase,
+                "component_participation": component_participation,
             });
             if damping_included {
                 if let Some(object) = payload.as_object_mut() {
@@ -7392,6 +8101,7 @@ fn execute_native_modal_window(
         plan,
         &native_result.diagnostics_json,
         Some(&native_result.result_json),
+        native_result.modal_gpu_attestation.as_ref(),
     )?;
     if let (Some(identity), Some(diagnostics)) = (
         shared_domain_identity.as_ref(),
@@ -7602,7 +8312,10 @@ fn execute_native_modal_window(
         auxiliary_artifacts,
         provenance: match execution_target {
             native_fem::NativeModalExecutionTarget::ProductionGpu => {
-                native_gpu_modal_shared_domain_execution_provenance(plan)
+                native_gpu_modal_shared_domain_execution_provenance(
+                    plan,
+                    native_result.modal_gpu_attestation.as_ref(),
+                )
             }
             _ => native_modal_execution_provenance(plan),
         },
@@ -7728,6 +8441,7 @@ fn execute_native_cpu_modal_window_from_bloch_floquet_complex(
         plan,
         &native_result.diagnostics_json,
         Some(&native_result.result_json),
+        None,
     )?;
     let modes =
         native_bloch_floquet_modes_from_result_json(plan, &native_result.result_json, &payload)?;
@@ -8129,6 +8843,7 @@ fn native_solver_diagnostics_json(
     plan: &FemEigenPlanIR,
     raw: &str,
     result_raw: Option<&str>,
+    gpu_attestation: Option<&native_fem::NativeModalGpuAttestation>,
 ) -> Result<serde_json::Value, RunError> {
     let mut diagnostics =
         serde_json::from_str::<serde_json::Value>(raw).map_err(|error| RunError {
@@ -8253,32 +8968,38 @@ fn native_solver_diagnostics_json(
     if let Some(result_raw) = result_raw {
         merge_poisson_airbox_modal_result_diagnostics(object, result_raw)?;
     }
-    insert_native_poisson_airbox_hardened_contract(object, plan)?;
+    insert_native_poisson_airbox_hardened_contract(object, plan, gpu_attestation)?;
     // The hardened contract normalizes the lane-specific execution object;
     // enrich it last so native provenance fields cannot be discarded by that
     // normalization step.
-    insert_native_poisson_airbox_execution_provenance(object, plan);
+    insert_native_poisson_airbox_execution_provenance(object, plan, gpu_attestation)?;
     Ok(diagnostics)
 }
 
 fn insert_native_poisson_airbox_execution_provenance(
     diagnostics: &mut serde_json::Map<String, serde_json::Value>,
     plan: &FemEigenPlanIR,
-) {
+    gpu_attestation: Option<&native_fem::NativeModalGpuAttestation>,
+) -> Result<(), RunError> {
     let Some(adapter) = diagnostics
         .get("solver_adapter")
         .and_then(|value| value.as_str())
         .map(str::to_owned)
     else {
-        return;
+        return Ok(());
     };
     if !is_native_poisson_airbox_modal_adapter(Some(adapter.as_str())) {
-        return;
+        return Ok(());
     }
     let gpu = matches!(
         adapter.as_str(),
         "k0_poisson_airbox_gpu_petsc_slepc" | "k0_poisson_airbox_gpu_modal_device_krylov"
     );
+    if gpu && gpu_attestation.is_none() {
+        return Err(RunError {
+            message: "k0_poisson_airbox_gpu_attestation_missing".to_string(),
+        });
+    }
 
     let mut requested = diagnostics
         .get("requested_execution")
@@ -8356,11 +9077,19 @@ fn insert_native_poisson_airbox_execution_provenance(
             .or_insert_with(|| serde_json::json!(false));
     }
     diagnostics.insert("resolved_execution".to_string(), resolved);
+    if let Some(attestation) = gpu_attestation {
+        diagnostics.insert(
+            "gpu_execution_attestation".to_string(),
+            attestation.artifact_json(),
+        );
+    }
+    Ok(())
 }
 
 fn insert_native_poisson_airbox_hardened_contract(
     diagnostics: &mut serde_json::Map<String, serde_json::Value>,
     plan: &FemEigenPlanIR,
+    gpu_attestation: Option<&native_fem::NativeModalGpuAttestation>,
 ) -> Result<(), RunError> {
     let Some(adapter) = diagnostics
         .get("solver_adapter")
@@ -8453,6 +9182,11 @@ fn insert_native_poisson_airbox_hardened_contract(
         adapter.as_str(),
         "k0_poisson_airbox_gpu_petsc_slepc" | "k0_poisson_airbox_gpu_modal_device_krylov"
     );
+    if gpu && gpu_attestation.is_none() {
+        return Err(RunError {
+            message: "k0_poisson_airbox_gpu_attestation_missing".to_string(),
+        });
+    }
     let cpu_schur = adapter == "k0_poisson_airbox_cpu_schur_slepc";
     let eps_q = diagnostics_number(diagnostics, "magnetic_block_backward_error").unwrap_or(0.0);
     let eps_phi = diagnostics_number(diagnostics, "poisson_block_backward_error").unwrap_or(0.0);
@@ -8534,18 +9268,29 @@ fn insert_native_poisson_airbox_hardened_contract(
         .and_then(|value| value.as_f64())
         .filter(|value| value.is_finite() && *value >= 0.0)
         .unwrap_or(target_omega);
-    let linear_control_d2h_transfer_count =
-        diagnostics_number(diagnostics, "linear_control_d2h_transfer_count")
-            .unwrap_or(0.0)
-            .max(0.0) as u64;
-    let setup_h2d_transfer_count = diagnostics_number(diagnostics, "setup_h2d_transfer_count")
-        .or_else(|| diagnostics_number(diagnostics, "setup_h2d_block_transfers"))
-        .unwrap_or(0.0)
-        .max(0.0) as u64;
-    let final_d2h_transfer_count = diagnostics_number(diagnostics, "final_d2h_transfer_count")
-        .or_else(|| diagnostics_number(diagnostics, "final_d2h_vector_transfers"))
-        .unwrap_or(0.0)
-        .max(0.0) as u64;
+    let linear_control_d2h_transfer_count = gpu_attestation
+        .map(|value| value.hot_loop_scalar_telemetry_syncs)
+        .or_else(|| {
+            diagnostics_number(diagnostics, "linear_control_d2h_transfer_count")
+                .map(|value| value.max(0.0) as u64)
+        })
+        .unwrap_or(0);
+    let setup_h2d_transfer_count = gpu_attestation
+        .map(|value| value.setup_h2d_count)
+        .or_else(|| {
+            diagnostics_number(diagnostics, "setup_h2d_transfer_count")
+                .or_else(|| diagnostics_number(diagnostics, "setup_h2d_block_transfers"))
+                .map(|value| value.max(0.0) as u64)
+        })
+        .unwrap_or(0);
+    let final_d2h_transfer_count = gpu_attestation
+        .map(|value| value.export_d2h_count)
+        .or_else(|| {
+            diagnostics_number(diagnostics, "final_d2h_transfer_count")
+                .or_else(|| diagnostics_number(diagnostics, "final_d2h_vector_transfers"))
+                .map(|value| value.max(0.0) as u64)
+        })
+        .unwrap_or(0);
     diagnostics.insert(
         "physics_contract_version".to_string(),
         serde_json::json!("micromagnetics_frequency_domain_v5"),
@@ -8577,9 +9322,9 @@ fn insert_native_poisson_airbox_hardened_contract(
     diagnostics.insert(
         "validated_scope".to_string(),
         serde_json::json!(if gpu {
-            "fem_k0_periodic_airbox_p1_double_gpu_device_krylov"
+            serde_json::Value::Null
         } else {
-            "fem_k0_periodic_airbox_p1_double_cpu_slepc"
+            serde_json::json!("fem_k0_periodic_airbox_p1_double_cpu_slepc")
         }),
     );
     diagnostics.insert(
@@ -8657,11 +9402,11 @@ fn insert_native_poisson_airbox_hardened_contract(
         serde_json::json!({
             "setup_h2d_transfer_count": setup_h2d_transfer_count,
             "final_d2h_transfer_count": final_d2h_transfer_count,
-            "hot_loop_h2d_bytes": 0,
-            "hot_loop_d2h_bytes": 0,
+            "hot_loop_h2d_bytes": gpu_attestation.map(|value| value.hot_loop_computational_h2d_bytes),
+            "hot_loop_d2h_bytes": gpu_attestation.map(|value| value.hot_loop_computational_d2h_bytes),
             "hot_loop_host_sync_count": linear_control_d2h_transfer_count,
-            "control_scalar_d2h_bytes": linear_control_d2h_transfer_count * 4,
-            "device_resident_claim": gpu,
+            "control_scalar_d2h_bytes": gpu_attestation.map(|value| value.hot_loop_scalar_telemetry_d2h_bytes),
+            "device_resident_claim": gpu_attestation.map(|value| value.device_residency_verified).unwrap_or(false),
         }),
     );
     Ok(())
@@ -9736,6 +10481,12 @@ fn native_modal_artifacts(
         .get("execution_lane")
         .and_then(|value| value.as_str())
         .unwrap_or("production_cpu");
+    let participation_context = modal_participation_mesh_context(plan);
+    let participation_solver_device = if execution_lane.contains("gpu") {
+        "gpu"
+    } else {
+        "cpu"
+    };
     let resolved_solver_family = solver_diagnostics
         .get("resolved_solver_family")
         .and_then(|value| value.as_str())
@@ -9904,6 +10655,13 @@ fn native_modal_artifacts(
         );
         let (tangent_leakage_mean_abs, tangent_leakage_max_abs) =
             mode_tangent_leakage(equilibrium, &real, &imag);
+        let component_participation = modal_participation_for_mode(
+            &participation_context,
+            plan,
+            &real,
+            &imag,
+            participation_solver_device,
+        );
         let q_real = mode
             .q_vector
             .iter()
@@ -9977,6 +10735,7 @@ fn native_modal_artifacts(
             "periodic_mesh_certificate_sha256": mode_periodic_certificate.clone(),
             "relax_to_eigen_handoff_sha256": mode_relax_to_eigen_handoff.clone(),
             "source_mesh_topology_sha256": mode_source_mesh_topology.clone(),
+            "component_participation": component_participation.clone(),
         });
         modes_summary.push(mode_summary.clone());
 
@@ -10047,6 +10806,7 @@ fn native_modal_artifacts(
                 "imag": imag,
                 "amplitude": amplitude,
                 "phase": phase,
+                "component_participation": component_participation,
             });
             auxiliary_artifacts.push(json_artifact(
                 format!("eigen/modes/mode_{mode_index:04}.json"),
@@ -10216,6 +10976,7 @@ fn native_modal_execution_provenance(plan: &FemEigenPlanIR) -> ExecutionProvenan
 
 fn native_gpu_modal_shared_domain_execution_provenance(
     plan: &FemEigenPlanIR,
+    attestation: Option<&native_fem::NativeModalGpuAttestation>,
 ) -> ExecutionProvenance {
     let resolved_demag = resolved_demag_realization(plan);
     ExecutionProvenance {
@@ -10232,7 +10993,38 @@ fn native_gpu_modal_shared_domain_execution_provenance(
         },
         resolved_demag_realization: resolved_demag
             .map(|resolved| demag_realization_label(resolved).to_string()),
-        device_name: Some("cuda".to_string()),
+        device_name: attestation.map(|value| value.device_name.clone()),
+        compute_capability: attestation.map(|value| {
+            format!(
+                "{}.{}",
+                value.compute_capability_major, value.compute_capability_minor
+            )
+        }),
+        cuda_driver_version: attestation
+            .and_then(|value| value.cuda_driver_version.try_into().ok()),
+        cuda_runtime_version: attestation
+            .and_then(|value| value.cuda_runtime_version.try_into().ok()),
+        mfem_version: attestation.map(|value| value.mfem_version.clone()),
+        hypre_version: attestation.map(|value| value.hypre_version.clone()),
+        fem_execution_mode: attestation.map(|_| "full_gpu_modal_matrix_free".to_string()),
+        fem_gpu_qualification_status: attestation.map(|_| "source_visible".to_string()),
+        fem_data_residency: attestation.map(|_| "device_source_of_truth".to_string()),
+        uses_cuda_kernels: attestation.map(|_| true),
+        uses_gpu_poisson: attestation.map(|_| true),
+        fem_demag_operator_mode: attestation.map(|_| "poisson_airbox_schur_cuda".to_string()),
+        hypre_execution_policy: attestation.map(|_| "device".to_string()),
+        demag_residency: attestation.map(|_| "device".to_string()),
+        hot_loop_host_sync_count: attestation.map(|value| {
+            value.hot_loop_computational_host_syncs + value.hot_loop_scalar_telemetry_syncs
+        }),
+        hot_loop_compute_h2d_bytes: attestation.map(|value| value.hot_loop_computational_h2d_bytes),
+        hot_loop_compute_d2h_bytes: attestation.map(|value| value.hot_loop_computational_d2h_bytes),
+        hot_loop_compute_host_sync_count: attestation
+            .map(|value| value.hot_loop_computational_host_syncs),
+        hot_loop_control_scalar_d2h_bytes: attestation
+            .map(|value| value.hot_loop_scalar_telemetry_d2h_bytes),
+        hot_loop_control_scalar_host_sync_count: attestation
+            .map(|value| value.hot_loop_scalar_telemetry_syncs),
         ..Default::default()
     }
 }
@@ -10263,6 +11055,7 @@ fn native_gpu_k0_kittel_execution_provenance(plan: &FemEigenPlanIR) -> Execution
 fn materialize_equilibrium(
     plan: &FemEigenPlanIR,
     initial_magnetization: &[Vector3],
+    source_relax_handoff: Option<&AcceptedFemRelaxStageHandoff>,
 ) -> Result<
     (
         FemLlgProblem,
@@ -10377,64 +11170,44 @@ fn materialize_equilibrium(
     if let Some(normal) = plan.dmi_interface_normal {
         problem.set_dmi_interface_normal(normal);
     }
-    let mut state = problem
+    let state = problem
         .new_state(equilibrium_guess)
         .map_err(|error| RunError {
             message: format!("State: {}", error),
         })?;
 
-    let mut steps_taken = 0;
-    if matches!(plan.equilibrium, EquilibriumSourceIR::RelaxedInitialState) {
-        let control = RelaxationControlIR {
-            algorithm: RelaxationAlgorithmIR::LlgOverdamped,
-            stop: fullmag_ir::RelaxStopIR {
-                torque_tolerance_apm: Some(1e-5),
-                energy_tolerance_j: Some(1e-12),
-                max_steps: Some(RELAX_MAX_STEPS),
-                max_relaxation_time_s: None,
-            },
-        };
-        let mut energy_plateau = RelaxationEnergyPlateauWindow::default();
-        let mut torque_confirmation = RelaxationTorqueConfirmation::default();
-        while steps_taken < RELAX_MAX_STEPS {
-            let report = problem
-                .step(&mut state, RELAX_DT)
-                .map_err(|error| RunError {
-                    message: format!("FEM eigen relaxation step {}: {}", steps_taken, error),
-                })?;
-            steps_taken += 1;
-            let stats = StepStats {
-                step: steps_taken,
-                time: report.time_seconds,
-                dt: report.dt_used,
-                e_ex: report.exchange_energy_joules,
-                e_demag: report.demag_energy_joules,
-                e_ext: report.external_energy_joules,
-                e_total: report.total_energy_joules,
-                max_dm_dt: report.max_rhs_amplitude,
-                max_h_eff: report.max_effective_field_amplitude,
-                max_h_demag: report.max_demag_field_amplitude,
-                max_torque_Apm: report.max_torque_Apm,
-                max_torque_T: report.max_torque_Apm * MU0,
-                ..StepStats::default()
-            };
-            let energy_plateau_range = energy_plateau.record(report.total_energy_joules);
-            if torque_confirmation.observe_stats(
-                &control,
-                &stats,
-                energy_plateau_range,
-                plan.gyromagnetic_ratio,
-                plan.material.damping,
-                true,
-            ) {
-                break;
-            }
-        }
-    }
+    let steps_taken = 0;
 
-    let observables = problem.observe(&state).map_err(|error| RunError {
+    let mut observables = problem.observe(&state).map_err(|error| RunError {
         message: format!("FEM eigen observables: {}", error),
     })?;
+    if let Some(handoff) = source_relax_handoff {
+        validate_certified_equilibrium_fields(
+            &handoff.certified_fields,
+            state.magnetization().len(),
+        )?;
+        observables.magnetization = state.magnetization().to_vec();
+        observables.exchange_field = handoff.certified_fields.h_ex_a_per_m.clone();
+        observables.demag_field = handoff.certified_fields.h_demag_a_per_m.clone();
+        observables.external_field = handoff.certified_fields.h_ext_a_per_m.clone();
+        observables.effective_field = handoff.certified_fields.h_eff_a_per_m.clone();
+        observables.max_effective_field_amplitude = observables
+            .effective_field
+            .iter()
+            .map(|field| vector_norm(*field))
+            .fold(0.0_f64, f64::max);
+        observables.max_demag_field_amplitude = observables
+            .demag_field
+            .iter()
+            .map(|field| vector_norm(*field))
+            .fold(0.0_f64, f64::max);
+        observables.max_torque_Apm = observables
+            .magnetization
+            .iter()
+            .zip(&observables.effective_field)
+            .map(|(m, h)| vector_norm(cross(*m, *h)))
+            .fold(0.0_f64, f64::max);
+    }
     if std::env::var_os("FULLMAG_TRACE_CONTINUATION").is_some() {
         let max_exchange = observables
             .exchange_field
@@ -10463,13 +11236,29 @@ fn materialize_equilibrium(
             steps_taken,
         );
     }
-    Ok((
-        problem,
-        state.magnetization().to_vec(),
-        steps_taken,
-        observables,
-        source_artifact,
-    ))
+    let equilibrium = if source_relax_handoff.is_some() {
+        let normalization_delta = max_vector_field_difference(
+            state.magnetization(),
+            initial_magnetization,
+        )
+        .unwrap_or(f64::INFINITY);
+        if !normalization_delta.is_finite() || normalization_delta > 1.0e-8 {
+            return Err(RunError {
+                message: format!(
+                    "relax_stage_handoff_equilibrium_normalization_drift: state normalization changed the accepted m0 by {normalization_delta:.3e}"
+                ),
+            });
+        }
+        // FemLlgState normalizes each vector on construction.  The accepted
+        // relaxation handoff is a stronger identity contract than that
+        // internal representation: preserve its exact m0 for stage
+        // continuation while using the normalized state for observations.
+        initial_magnetization.to_vec()
+    } else {
+        state.magnetization().to_vec()
+    };
+
+    Ok((problem, equilibrium, steps_taken, observables, source_artifact))
 }
 
 fn load_equilibrium_artifact_v7(
@@ -10855,7 +11644,6 @@ fn load_equilibrium_artifact_v7(
             .unwrap_or("poisson_robin")
             .to_string(),
         m0_norm_tolerance,
-        equilibrium_torque_relative_tolerance: 1.0e-6,
         phi0_requirement: phi0_requirement.to_string(),
         periodic_mesh_certificate,
         acceptance_certificate,
@@ -13345,7 +14133,7 @@ fn write_eigen_v2_bundle(
         visualizable_mode_indices.insert(raw_mode_index);
     }
 
-    let spectrum_modes: Vec<serde_json::Value> = modes
+    let spectrum_v2_modes: Vec<serde_json::Value> = modes
         .iter()
         .map(|mode| {
             let raw_mode_index = mode
@@ -13354,6 +14142,7 @@ fn write_eigen_v2_bundle(
                 .unwrap_or(0);
             let mut mode = mode.clone();
             if let Some(object) = mode.as_object_mut() {
+                object.remove("component_participation");
                 object.insert(
                     "raw_mode_index".to_string(),
                     serde_json::json!(raw_mode_index),
@@ -13377,7 +14166,7 @@ fn write_eigen_v2_bundle(
         "schema_version": "eigen_spectrum.v2",
         "solver_model": summary_payload["solver_kind"],
         "sample_count": 1,
-        "mode_count": spectrum_modes.len(),
+        "mode_count": spectrum_v2_modes.len(),
         "samples": [{
             "sample_index": sample_index,
             "label": label,
@@ -13388,10 +14177,94 @@ fn write_eigen_v2_bundle(
             "external_field_a_per_m": plan.external_field,
             "mesh_id": plan.mesh_name,
             "topology_revision": plan.mesh.topology_fingerprint_v6(),
-            "modes": spectrum_modes,
+            "modes": spectrum_v2_modes,
         }],
     });
     auxiliary_artifacts.push(json_artifact("eigen/spectrum.v2.json", &spectrum_v2)?);
+
+    let participation_solver_device = if solver_model.contains("gpu") {
+        "gpu"
+    } else {
+        "cpu"
+    };
+    let spectrum_v3_modes = modes
+        .iter()
+        .map(|mode| {
+            let raw_mode_index = mode
+                .get("index")
+                .and_then(serde_json::Value::as_u64)
+                .unwrap_or(0);
+            let participation = match mode.get("component_participation") {
+                Some(value) => serde_json::from_value::<
+                    crate::eigen::ModalParticipationObservable,
+                >(value.clone())
+                .map_err(|error| RunError {
+                    message: format!(
+                        "mode {raw_mode_index} has invalid component participation: {error}"
+                    ),
+                })?,
+                None => crate::eigen::ModalParticipationObservable::unavailable_without_context(
+                    participation_solver_device,
+                ),
+            };
+            let mut mode = mode.clone();
+            let object = mode.as_object_mut().ok_or_else(|| RunError {
+                message: format!("mode {raw_mode_index} summary is not a JSON object"),
+            })?;
+            object.insert(
+                "mode_id".to_string(),
+                serde_json::json!(format!(
+                    "sample-{sample_index:04}/mode-{raw_mode_index:04}"
+                )),
+            );
+            object.insert(
+                "raw_mode_index".to_string(),
+                serde_json::json!(raw_mode_index),
+            );
+            object.insert("branch_id".to_string(), serde_json::json!(raw_mode_index));
+            object.insert(
+                "component_participation".to_string(),
+                serde_json::to_value(participation).map_err(|error| RunError {
+                    message: format!(
+                        "mode {raw_mode_index} component participation cannot serialize: {error}"
+                    ),
+                })?,
+            );
+            if visualizable_mode_indices.contains(&raw_mode_index) {
+                object.insert(
+                    "mode_field_id".to_string(),
+                    serde_json::json!(mode_field_id(sample_index, raw_mode_index)),
+                );
+                object.insert(
+                    "mode_field_resource_key".to_string(),
+                    serde_json::json!(mode_field_resource_key(sample_index, raw_mode_index)),
+                );
+            }
+            Ok(mode)
+        })
+        .collect::<Result<Vec<_>, RunError>>()?;
+    auxiliary_artifacts.push(json_artifact(
+        "eigen/spectrum.v3.json",
+        &serde_json::json!({
+            "schema_version": "eigen_spectrum.v3",
+            "solver_model": summary_payload["solver_kind"],
+            "sample_count": 1,
+            "mode_count": spectrum_v3_modes.len(),
+            "samples": [{
+                "sample_id": format!("bias-field-sample-{sample_index:04}"),
+                "sample_index": sample_index,
+                "label": label,
+                "k_vector": k_vector,
+                "path_s": 0.0,
+                "segment_index": 0,
+                "t_in_segment": 0.0,
+                "external_field_a_per_m": plan.external_field,
+                "mesh_id": plan.mesh_name,
+                "topology_revision": plan.mesh.topology_fingerprint_v6(),
+                "modes": spectrum_v3_modes,
+            }],
+        }),
+    )?);
 
     let branches: Vec<serde_json::Value> = modes
         .iter()
@@ -14435,6 +15308,218 @@ fn classify_polarization(
 mod tests {
     use super::*;
 
+    fn frozen_v2_record_fixture() -> AcceptedFemRelaxStageHandoffV2Record {
+        let completion = fullmag_ir::StageCompletionIR {
+            status: "completed".to_string(),
+            converged: true,
+            reason: Some(fullmag_ir::StageStopReason::Torque),
+            metric: Some(fullmag_ir::StageMetricKind::MaxTorqueApm),
+            metric_name: Some("max_torque_apm".to_string()),
+            metric_value: Some(1.0),
+            threshold: Some(2.0),
+        };
+        AcceptedFemRelaxStageHandoffV2Record {
+            schema_version: ACCEPTED_FEM_RELAX_STAGE_HANDOFF_V2.to_string(),
+            source_run_id: "run-relax".to_string(),
+            source_stage_id: "stage-000".to_string(),
+            source_stage_kind: "flat_relax".to_string(),
+            stage_fem_mesh_generation_id: format!("sha256:{}", "1".repeat(64)),
+            source_mesh_topology_sha256: format!("sha256:{}", "2".repeat(64)),
+            node_count: 4,
+            indexing_sha256: format!("sha256:{}", "3".repeat(64)),
+            part_registry_sha256: format!("sha256:{}", "4".repeat(64)),
+            completion_sha256: format!("sha256:{}", "5".repeat(64)),
+            completion,
+            acceptance: AcceptedEquilibriumCriterion {
+                criterion: "torque".to_string(),
+                metric_kind: fullmag_ir::StageMetricKind::MaxTorqueApm,
+                metric_value: 1.0,
+                threshold: 2.0,
+                unit: "A/m".to_string(),
+                status: "completed".to_string(),
+                converged: true,
+                stop_reason: fullmag_ir::StageStopReason::Torque,
+            },
+            equilibrium_content_sha256: format!("sha256:{}", "6".repeat(64)),
+            content_sha256: String::new(),
+        }
+    }
+
+    #[test]
+    fn accepted_relax_stage_handoff_v2_hash_is_frozen_golden() {
+        let record = frozen_v2_record_fixture();
+
+        assert_eq!(
+            relax_stage_handoff_v2_content_sha256(&record).unwrap(),
+            "sha256:b50d79726a4593164767a289f05fb1ffa45c74b43add44324873da35fd82bc08"
+        );
+    }
+
+    #[test]
+    fn accepted_relax_stage_handoff_v2_rejects_extended_payload() {
+        let mut value = serde_json::to_value(frozen_v2_record_fixture()).unwrap();
+        value.as_object_mut().unwrap().insert(
+            "certified_fields_content_sha256".to_string(),
+            serde_json::json!(format!("sha256:{}", "7".repeat(64))),
+        );
+
+        let error = serde_json::from_value::<AcceptedFemRelaxStageHandoffV2Record>(value)
+            .expect_err("frozen v2 must reject fields introduced by v3");
+        assert!(error.to_string().contains("unknown field"));
+    }
+
+    #[test]
+    fn accepted_relax_stage_handoff_v3_hash_uses_a_distinct_namespace_and_binds_source_signatures()
+    {
+        let baseline = AcceptedFemRelaxStageHandoffV3HashPreimage {
+            schema_version: ACCEPTED_FEM_RELAX_STAGE_HANDOFF_V3.to_string(),
+            legacy_v2_content_sha256: format!("sha256:{}", "1".repeat(64)),
+            acceptance_certificate_sha256: format!("sha256:{}", "2".repeat(64)),
+            certified_fields_content_sha256: format!("sha256:{}", "3".repeat(64)),
+            equilibrium_material_signature: format!("sha256:{}", "4".repeat(64)),
+            equilibrium_static_physics_signature: format!("sha256:{}", "5".repeat(64)),
+            equilibrium_boundary_signature: format!("sha256:{}", "6".repeat(64)),
+        };
+        let baseline_digest = relax_stage_handoff_v3_content_sha256(&baseline).unwrap();
+
+        let mut changed = baseline.clone();
+        changed.equilibrium_boundary_signature = format!("sha256:{}", "7".repeat(64));
+        assert_ne!(
+            baseline_digest,
+            relax_stage_handoff_v3_content_sha256(&changed).unwrap()
+        );
+        assert_ne!(
+            baseline_digest,
+            relax_stage_handoff_v2_content_sha256(&frozen_v2_record_fixture()).unwrap(),
+            "v2 and v3 must never share a hash namespace"
+        );
+    }
+
+    #[test]
+    fn equilibrium_and_modal_identity_signatures_are_separated_by_semantics() {
+        use crate::fem::equilibrium_identity::{
+            EquilibriumIdentitySignaturesV1, ModalIdentitySignaturesV1,
+        };
+
+        let plan = minimal_native_modal_plan();
+        let source = EquilibriumIdentitySignaturesV1::from_eigen_plan(&plan).unwrap();
+        let modal = ModalIdentitySignaturesV1::from_eigen_plan(&plan).unwrap();
+
+        let mut operator_changed = plan.clone();
+        operator_changed.operator.kind = fullmag_ir::EigenOperatorIR::Full2x2;
+        assert_eq!(
+            source,
+            EquilibriumIdentitySignaturesV1::from_eigen_plan(&operator_changed).unwrap(),
+            "modal operator fields must not contaminate source equilibrium identity"
+        );
+        assert_ne!(
+            modal.modal_operator_signature,
+            ModalIdentitySignaturesV1::from_eigen_plan(&operator_changed)
+                .unwrap()
+                .modal_operator_signature
+        );
+
+        let mut dynamic_boundary_changed = plan.clone();
+        dynamic_boundary_changed.spin_wave_bc =
+            SpinWaveBoundaryConditionIR::Config(fullmag_ir::SpinWaveBoundaryConfigIR {
+                kind: SpinWaveBoundaryKindIR::Pinned,
+                boundary_pair_id: None,
+                pair_ids: Vec::new(),
+                phase_convention: fullmag_ir::PhaseConventionIR::default(),
+                surface_anisotropy_ks: None,
+                surface_anisotropy_axis: None,
+            });
+        assert_eq!(
+            source,
+            EquilibriumIdentitySignaturesV1::from_eigen_plan(&dynamic_boundary_changed).unwrap(),
+            "dynamic spin-wave BC must not contaminate source boundary identity"
+        );
+        assert_ne!(
+            modal.modal_dynamic_boundary_signature,
+            ModalIdentitySignaturesV1::from_eigen_plan(&dynamic_boundary_changed)
+                .unwrap()
+                .modal_dynamic_boundary_signature
+        );
+    }
+
+    #[test]
+    fn equilibrium_identity_signatures_mutate_only_in_the_owning_source_family() {
+        use crate::fem::equilibrium_identity::EquilibriumIdentitySignaturesV1;
+
+        let plan = minimal_native_modal_plan();
+        let baseline = EquilibriumIdentitySignaturesV1::from_eigen_plan(&plan).unwrap();
+
+        let mut material_changed = plan.clone();
+        material_changed.material.saturation_magnetisation += 1.0;
+        let material = EquilibriumIdentitySignaturesV1::from_eigen_plan(&material_changed).unwrap();
+        assert_ne!(
+            baseline.equilibrium_material_signature,
+            material.equilibrium_material_signature
+        );
+        assert_eq!(
+            baseline.equilibrium_static_physics_signature,
+            material.equilibrium_static_physics_signature
+        );
+        assert_eq!(
+            baseline.equilibrium_boundary_signature,
+            material.equilibrium_boundary_signature
+        );
+
+        let mut physics_changed = plan.clone();
+        physics_changed.external_field = Some([1.0, 2.0, 3.0]);
+        let physics = EquilibriumIdentitySignaturesV1::from_eigen_plan(&physics_changed).unwrap();
+        assert_eq!(
+            baseline.equilibrium_material_signature,
+            physics.equilibrium_material_signature
+        );
+        assert_ne!(
+            baseline.equilibrium_static_physics_signature,
+            physics.equilibrium_static_physics_signature
+        );
+        assert_eq!(
+            baseline.equilibrium_boundary_signature,
+            physics.equilibrium_boundary_signature
+        );
+
+        let mut boundary_changed = plan;
+        boundary_changed.air_box_config = Some(fullmag_ir::AirBoxConfigIR {
+            factor: 3.0,
+            grading: 1.4,
+            boundary_marker: 99,
+            bc_kind: Some("robin".to_string()),
+            robin_beta_mode: Some("dipole".to_string()),
+            robin_beta_factor: Some(2.0),
+            shape: Some("bbox".to_string()),
+            factor_source: Some("user".to_string()),
+            boundary_marker_source: Some("user_policy".to_string()),
+        });
+        let boundary = EquilibriumIdentitySignaturesV1::from_eigen_plan(&boundary_changed).unwrap();
+        assert_eq!(
+            baseline.equilibrium_material_signature,
+            boundary.equilibrium_material_signature
+        );
+        assert_eq!(
+            baseline.equilibrium_static_physics_signature,
+            boundary.equilibrium_static_physics_signature
+        );
+        assert_ne!(
+            baseline.equilibrium_boundary_signature,
+            boundary.equilibrium_boundary_signature
+        );
+    }
+
+    fn certified_fields(node_count: usize) -> crate::types::CertifiedFemEquilibriumFields {
+        let zeros = vec![[0.0, 0.0, 0.0]; node_count];
+        crate::types::CertifiedFemEquilibriumFields::from_fields(
+            zeros.clone(),
+            zeros.clone(),
+            zeros.clone(),
+            zeros,
+            vec![0.0; node_count],
+        )
+        .expect("certified field fixture")
+    }
+
     fn accepted_relax_completion() -> fullmag_ir::StageCompletionIR {
         fullmag_ir::StageCompletionIR {
             status: "completed".to_string(),
@@ -14459,18 +15544,96 @@ mod tests {
         }
     }
 
+    fn relax_source_plan_from_eigen(plan: &FemEigenPlanIR) -> fullmag_ir::FemPlanIR {
+        fullmag_ir::FemPlanIR {
+            mesh_name: plan.mesh_name.clone(),
+            mesh_source: plan.mesh_source.clone(),
+            mesh: plan.mesh.clone(),
+            object_segments: plan.object_segments.clone(),
+            mesh_parts: plan.mesh_parts.clone(),
+            mesh_build_report: plan.mesh_build_report.clone(),
+            domain_mesh_mode: plan.domain_mesh_mode,
+            domain_frame: plan.domain_frame.clone(),
+            fe_order: plan.fe_order,
+            hmax: plan.hmax,
+            initial_magnetization: plan.equilibrium_magnetization.clone(),
+            material: plan.material.clone(),
+            anisotropy_axis_field: None,
+            ms_element_field: None,
+            a_element_field: None,
+            region_materials: Vec::new(),
+            enable_exchange: plan.enable_exchange,
+            enable_demag: plan.enable_demag,
+            external_field: plan.external_field,
+            antenna_zeeman_masks: Vec::new(),
+            field_drives: Vec::new(),
+            field_drive_geometry_masks: Vec::new(),
+            time_stage: Default::default(),
+            current_modules: Vec::new(),
+            spin_transport_plans: Vec::new(),
+            gyromagnetic_ratio: plan.gyromagnetic_ratio,
+            precision: plan.precision,
+            exchange_bc: plan.exchange_bc,
+            integrator: Some(fullmag_ir::IntegratorChoice::Heun),
+            fixed_timestep: Some(1.0e-13),
+            adaptive_timestep: None,
+            field_refresh: None,
+            relaxation: None,
+            demag_realization: plan.demag_realization.clone(),
+            air_box_config: plan.air_box_config.clone(),
+            interfacial_dmi: plan.interfacial_dmi,
+            dmi_interface_normal: plan.dmi_interface_normal,
+            bulk_dmi: plan.bulk_dmi,
+            dind_field: None,
+            dbulk_field: None,
+            temperature: None,
+            current_density: None,
+            stt_degree: None,
+            stt_beta: None,
+            stt_spin_polarization: None,
+            stt_lambda: None,
+            stt_epsilon_prime: None,
+            stt_thickness: None,
+            stt_fixed_layer_position: None,
+            spin_torque_contract: None,
+            has_oersted_cylinder: false,
+            oersted_current: None,
+            oersted_radius: None,
+            oersted_center: None,
+            oersted_axis: None,
+            oersted_field_xyz: None,
+            oersted_time_dep_kind: 0,
+            oersted_time_dep_freq: 0.0,
+            oersted_time_dep_phase: 0.0,
+            oersted_time_dep_offset: 0.0,
+            oersted_time_dep_t_on: 0.0,
+            oersted_time_dep_t_off: 0.0,
+            magnetoelastic: None,
+            mechanics: None,
+            demag_solver_policy: None,
+            thermal_seed_config: None,
+            oersted_realization: None,
+            gpu_device_index: None,
+            mfem_device_string: None,
+            use_consistent_mass: None,
+        }
+    }
+
     fn relax_handoff_from_completion(
         plan: &FemEigenPlanIR,
         completion: &fullmag_ir::StageCompletionIR,
     ) -> Result<AcceptedFemRelaxStageHandoff, RunError> {
+        let source_plan = relax_source_plan_from_eigen(plan);
         AcceptedFemRelaxStageHandoff::from_completed_relax(
             "run-relax",
             "stage-000",
             "flat_relax",
             true,
+            &source_plan,
             &crate::types::FemMeshPayload::from(plan),
             completion,
             plan.equilibrium_magnetization.clone(),
+            certified_fields(plan.mesh.nodes.len()),
         )
     }
 
@@ -14497,16 +15660,60 @@ mod tests {
         );
         assert_eq!(energy_handoff.acceptance_json()["unit"], "J");
         assert_eq!(
-            energy_handoff.provenance_json()["schema_version"],
+            energy_handoff.legacy_v2_provenance_json()["schema_version"],
             "AcceptedFemRelaxStageHandoff.v2"
         );
         assert_eq!(
-            energy_handoff.provenance_json()["completion"],
+            energy_handoff.legacy_v2_provenance_json()["completion"],
             serde_json::to_value(&energy_completion).unwrap()
         );
         assert_eq!(
-            energy_handoff.provenance_json()["acceptance"],
+            energy_handoff.legacy_v2_provenance_json()["acceptance"],
             energy_handoff.acceptance_json()
+        );
+        assert!(
+            energy_handoff
+                .legacy_v2_provenance_json()
+                .get("certified_fields_content_sha256")
+                .is_none(),
+            "frozen v2 provenance must not publish v3 fields"
+        );
+        serde_json::from_value::<AcceptedFemRelaxStageHandoffV2Record>(
+            energy_handoff.legacy_v2_provenance_json(),
+        )
+        .expect("emitted v2 provenance must round-trip through the frozen schema");
+
+        let node_count = plan.mesh.nodes.len();
+        let changed_certified_fields = crate::types::CertifiedFemEquilibriumFields::from_fields(
+            vec![[1.0, 0.0, 0.0]; node_count],
+            vec![[0.0, 1.0, 0.0]; node_count],
+            vec![[0.0, 0.0, 1.0]; node_count],
+            vec![[1.0, 1.0, 1.0]; node_count],
+            vec![2.0; node_count],
+        )
+        .unwrap();
+        let source_plan = relax_source_plan_from_eigen(&plan);
+        let same_v2_with_v3_only_state = AcceptedFemRelaxStageHandoff::from_completed_relax(
+            "run-relax",
+            "stage-000",
+            "flat_relax",
+            true,
+            &source_plan,
+            &crate::types::FemMeshPayload::from(&plan),
+            &energy_completion,
+            plan.equilibrium_magnetization.clone(),
+            changed_certified_fields,
+        )
+        .unwrap();
+        assert_eq!(
+            energy_handoff.legacy_v2_content_sha256,
+            same_v2_with_v3_only_state.legacy_v2_content_sha256,
+            "v3-only certified fields must not mutate the frozen v2 hash preimage"
+        );
+        assert_ne!(
+            energy_handoff.content_sha256(),
+            same_v2_with_v3_only_state.content_sha256(),
+            "v3 must bind the certified static fields digest"
         );
 
         let mut completion_snapshot_drift = energy_completion;
@@ -14522,6 +15729,224 @@ mod tests {
             energy_handoff.content_sha256(),
             "the v2 digest must include the full completion snapshot"
         );
+    }
+
+    #[test]
+    fn accepted_relax_stage_handoff_v3_round_trips_and_rejects_unknown_fields() {
+        let plan = minimal_native_modal_plan();
+        let handoff = relax_handoff_from_completion(&plan, &accepted_relax_completion()).unwrap();
+        let value = handoff.provenance_json();
+
+        let record = serde_json::from_value::<AcceptedFemRelaxStageHandoffV3Record>(value.clone())
+            .expect("emitted v3 provenance must round-trip through the typed schema");
+        assert_eq!(record, handoff.v3_record());
+        assert_eq!(record.schema_version, ACCEPTED_FEM_RELAX_STAGE_HANDOFF_V3);
+        assert_eq!(
+            record.certified_fields_content_sha256,
+            record.certified_fields.content_sha256
+        );
+
+        let mut extended = value;
+        extended
+            .as_object_mut()
+            .unwrap()
+            .insert("unexpected_tail".to_string(), serde_json::json!(true));
+        let error = serde_json::from_value::<AcceptedFemRelaxStageHandoffV3Record>(extended)
+            .expect_err("v3 must reject unknown fields");
+        assert!(error.to_string().contains("unknown field"));
+    }
+
+    #[test]
+    fn accepted_relax_stage_handoff_allows_zero_m0_on_air_nodes() {
+        let mut plan = minimal_native_modal_plan();
+        add_minimal_shared_domain_periodic_airbox(&mut plan);
+        let topology = MeshTopology::from_ir(&plan.mesh).expect("fixture topology must be valid");
+        let air_nodes = topology
+            .magnetic_node_volumes
+            .iter()
+            .enumerate()
+            .filter_map(|(node, volume)| (*volume <= 0.0).then_some(node))
+            .collect::<Vec<_>>();
+        assert!(!air_nodes.is_empty(), "fixture must include air-only nodes");
+
+        let mut equilibrium = vec![[1.0, 0.0, 0.0]; plan.mesh.nodes.len()];
+        for node in air_nodes {
+            equilibrium[node] = [0.0, 0.0, 0.0];
+        }
+        plan.equilibrium_magnetization = equilibrium.clone();
+        let source_plan = relax_source_plan_from_eigen(&plan);
+        let source_mesh = crate::types::FemMeshPayload::from(&plan);
+        let handoff = AcceptedFemRelaxStageHandoff::from_completed_relax(
+            "run-relax",
+            "stage-000",
+            "flat_relax",
+            true,
+            &source_plan,
+            &source_mesh,
+            &accepted_relax_completion(),
+            equilibrium,
+            certified_fields(source_mesh.nodes.len()),
+        )
+        .expect("air-only nodes may carry zero equilibrium magnetization");
+        handoff
+            .validate_target_plan(&plan)
+            .expect("the exact relaxed target must accept the certified handoff");
+
+        let magnetic_node = topology
+            .magnetic_node_volumes
+            .iter()
+            .position(|volume| *volume > 0.0)
+            .expect("fixture must include a magnetic node");
+        plan.equilibrium_magnetization[magnetic_node] = [0.0, 0.0, 0.0];
+        let error = handoff
+            .validate_target_plan(&plan)
+            .expect_err("a magnetic node still requires a unit m0 norm");
+        assert!(error.message.contains("m0_norm_mismatch"));
+    }
+
+    #[test]
+    fn accepted_relax_stage_handoff_rejects_source_identity_mutations_before_materialization() {
+        let mut plan = minimal_native_modal_plan();
+        let handoff = relax_handoff_from_completion(&plan, &accepted_relax_completion()).unwrap();
+
+        plan.material.saturation_magnetisation *= 1.01;
+        let error = prepare_single_k_stage_continuation(&plan, &handoff).unwrap_err();
+        assert!(error.message.contains("material_signature_mismatch"));
+
+        let mut plan = minimal_native_modal_plan();
+        plan.external_field = Some([1.0, 0.0, 0.0]);
+        let error = prepare_single_k_stage_continuation(&plan, &handoff).unwrap_err();
+        assert!(error.message.contains("static_physics_signature_mismatch"));
+
+        let mut plan = minimal_native_modal_plan();
+        plan.air_box_config = Some(fullmag_ir::AirBoxConfigIR {
+            factor: 2.0,
+            grading: 1.0,
+            boundary_marker: 99,
+            bc_kind: None,
+            robin_beta_mode: None,
+            robin_beta_factor: None,
+            shape: None,
+            factor_source: None,
+            boundary_marker_source: None,
+        });
+        let error = prepare_single_k_stage_continuation(&plan, &handoff).unwrap_err();
+        assert!(error.message.contains("boundary_signature_mismatch"));
+
+        let mut modal_only = minimal_native_modal_plan();
+        modal_only.spin_wave_bc = fullmag_ir::SpinWaveBoundaryConditionIR::Legacy(
+            fullmag_ir::SpinWaveBoundaryKindIR::Pinned,
+        );
+        prepare_single_k_stage_continuation(&modal_only, &handoff)
+            .expect("modal-only dynamic BC must not impersonate or invalidate source identity");
+    }
+
+    #[test]
+    fn accepted_relax_stage_handoff_rejects_certified_field_and_m0_mutations() {
+        let plan = minimal_native_modal_plan();
+        let handoff = relax_handoff_from_completion(&plan, &accepted_relax_completion()).unwrap();
+
+        let mut digest_drift = handoff.clone();
+        digest_drift.certified_fields.h_ex_a_per_m[0][0] = 1.0;
+        let error = prepare_single_k_stage_continuation(&plan, &digest_drift).unwrap_err();
+        assert!(error.message.contains("certified_fields_invalid"));
+
+        let mut component_drift = handoff.clone();
+        component_drift.certified_fields.h_ex_a_per_m[0][0] = 1.0;
+        component_drift.certified_fields.h_eff_a_per_m[0][0] = 1.0;
+        component_drift.certified_fields.content_sha256 =
+            crate::types::certified_equilibrium_fields_sha256(&component_drift.certified_fields);
+        let error = prepare_single_k_stage_continuation(&plan, &component_drift).unwrap_err();
+        assert!(error.message.contains("content_sha256_mismatch"));
+
+        let mut phi_drift = handoff.clone();
+        phi_drift.certified_fields.phi_a[0] = 1.0;
+        phi_drift.certified_fields.content_sha256 =
+            crate::types::certified_equilibrium_fields_sha256(&phi_drift.certified_fields);
+        let error = prepare_single_k_stage_continuation(&plan, &phi_drift).unwrap_err();
+        assert!(error.message.contains("content_sha256_mismatch"));
+
+        let mut decomposition_drift = handoff.clone();
+        decomposition_drift.certified_fields.h_eff_a_per_m[0][0] = 1.0;
+        decomposition_drift.certified_fields.content_sha256 =
+            crate::types::certified_equilibrium_fields_sha256(
+                &decomposition_drift.certified_fields,
+            );
+        let error = prepare_single_k_stage_continuation(&plan, &decomposition_drift).unwrap_err();
+        assert!(error.message.contains("decomposition_mismatch"));
+
+        let mut non_unit_source = relax_source_plan_from_eigen(&plan);
+        non_unit_source.initial_magnetization[0] = [0.5, 0.0, 0.0];
+        let error = AcceptedFemRelaxStageHandoff::from_completed_relax(
+            "run-relax",
+            "stage-000",
+            "flat_relax",
+            true,
+            &non_unit_source,
+            &crate::types::FemMeshPayload::from(&non_unit_source),
+            &accepted_relax_completion(),
+            non_unit_source.initial_magnetization.clone(),
+            certified_fields(non_unit_source.mesh.nodes.len()),
+        )
+        .unwrap_err();
+        assert!(error.message.contains("m0_norm_mismatch"));
+    }
+
+    #[test]
+    fn accepted_relax_stage_handoff_revalidates_schema_completion_and_all_hash_layers() {
+        let plan = minimal_native_modal_plan();
+        let handoff = relax_handoff_from_completion(&plan, &accepted_relax_completion()).unwrap();
+
+        let mutations: Vec<(&str, Box<dyn Fn(&mut AcceptedFemRelaxStageHandoff)>, &str)> = vec![
+            (
+                "schema",
+                Box::new(|handoff| handoff.schema_version = "unexpected".to_string()),
+                "schema_version_mismatch",
+            ),
+            (
+                "completion snapshot",
+                Box::new(|handoff| handoff.completion.metric_value = Some(4.0e-5)),
+                "acceptance_certificate_mismatch",
+            ),
+            (
+                "completion digest",
+                Box::new(|handoff| {
+                    handoff.completion_sha256 = format!("sha256:{}", "0".repeat(64))
+                }),
+                "completion_sha256_mismatch",
+            ),
+            (
+                "acceptance digest",
+                Box::new(|handoff| {
+                    handoff.acceptance_certificate_sha256 = format!("sha256:{}", "0".repeat(64))
+                }),
+                "acceptance_certificate_sha256_mismatch",
+            ),
+            (
+                "legacy v2 digest",
+                Box::new(|handoff| {
+                    handoff.legacy_v2_content_sha256 = format!("sha256:{}", "0".repeat(64))
+                }),
+                "v2_content_sha256_mismatch",
+            ),
+            (
+                "v3 content digest",
+                Box::new(|handoff| handoff.content_sha256 = format!("sha256:{}", "0".repeat(64))),
+                "content_sha256_mismatch",
+            ),
+        ];
+
+        for (name, mutate, expected) in mutations {
+            let mut drift = handoff.clone();
+            mutate(&mut drift);
+            let error = prepare_single_k_stage_continuation(&plan, &drift)
+                .expect_err("integrity mutation must fail closed");
+            assert!(
+                error.message.contains(expected),
+                "{name} returned unexpected error: {}",
+                error.message
+            );
+        }
     }
 
     #[test]
@@ -14561,6 +15986,133 @@ mod tests {
     }
 
     #[test]
+    fn operator_m0_uses_a_deterministic_unit_extension_on_air_nodes() {
+        let plan = minimal_native_modal_plan();
+        let mut topology = MeshTopology::from_ir(&plan.mesh).unwrap();
+        let air_node = topology.n_nodes - 1;
+        topology.magnetic_node_volumes[air_node] = 0.0;
+        let mut equilibrium = vec![[1.0, 0.0, 0.0]; topology.n_nodes];
+        equilibrium[air_node] = [0.0, 0.0, 0.0];
+
+        let extended = extend_equilibrium_m0_to_air_nodes(&topology, &equilibrium);
+
+        assert_eq!(extended[..air_node], equilibrium[..air_node]);
+        assert_eq!(extended[air_node], [0.0, 0.0, 1.0]);
+    }
+
+    #[test]
+    fn relaxed_initial_state_without_handoff_fails_before_materialization() {
+        let mut plan = minimal_native_modal_plan();
+        plan.equilibrium = EquilibriumSourceIR::RelaxedInitialState;
+        // A missing topology makes any attempt to materialize/assemble visible:
+        // the certification gate must win before progress or mesh access.
+        plan.mesh.nodes.clear();
+        plan.mesh.cells = fullmag_ir::FemConnectivityIR::empty();
+        plan.equilibrium_magnetization.clear();
+        let mut progress_events = 0usize;
+        let mut progress = |_event: FemEigenProgress| {
+            progress_events += 1;
+            StepAction::Continue
+        };
+
+        let error = execute_fem_eigen_inner(
+            &plan,
+            &[],
+            false,
+            false,
+            Some(&mut progress),
+            0,
+            None,
+            None,
+            None,
+        )
+        .expect_err("uncertified relaxed_initial_state must fail closed");
+
+        assert!(error
+            .message
+            .contains("accepted relaxation handoff is required"));
+        assert_eq!(progress_events, 0, "failure must precede materialization");
+    }
+
+    #[test]
+    fn provided_equilibrium_without_certificate_fails_before_materialization() {
+        let mut plan = minimal_native_modal_plan();
+        plan.equilibrium = EquilibriumSourceIR::Provided;
+        plan.mesh.nodes.clear();
+        plan.mesh.cells = fullmag_ir::FemConnectivityIR::empty();
+        plan.equilibrium_magnetization.clear();
+        let mut progress_events = 0usize;
+        let mut progress = |_event: FemEigenProgress| {
+            progress_events += 1;
+            StepAction::Continue
+        };
+
+        let error = execute_fem_eigen_inner(
+            &plan,
+            &[],
+            false,
+            false,
+            Some(&mut progress),
+            0,
+            None,
+            None,
+            None,
+        )
+        .expect_err("uncertified provided equilibrium must fail closed");
+
+        assert!(error.message.contains("uncertified_provided_equilibrium"));
+        assert_eq!(progress_events, 0, "failure must precede materialization");
+    }
+
+    #[test]
+    fn gpu_kittel_provided_equilibrium_without_certificate_fails_before_materialization() {
+        let mut plan = minimal_native_modal_plan();
+        plan.operator.kind = fullmag_ir::EigenOperatorIR::Full2x2;
+        plan.operator.include_demag = false;
+        plan.enable_demag = false;
+        plan.damping_policy = EigenDampingPolicyIR::Ignore;
+        plan.k_sampling = Some(KSamplingIR::Single {
+            k_vector: [0.0, 0.0, 0.0],
+        });
+        plan.equilibrium = EquilibriumSourceIR::Provided;
+        plan.mesh.nodes.clear();
+        plan.mesh.cells = fullmag_ir::FemConnectivityIR::empty();
+        plan.equilibrium_magnetization.clear();
+
+        let error = execute_gpu_fem_eigen(&plan, &[], None)
+            .expect_err("GPU Kittel must reject uncertified provided equilibrium");
+
+        assert!(error.message.contains("uncertified_provided_equilibrium"));
+    }
+
+    #[test]
+    fn raw_provided_fixture_requires_explicit_validation_only_adapter() {
+        let mut plan = minimal_native_modal_plan();
+        plan.equilibrium = EquilibriumSourceIR::Provided;
+
+        let handoff = validation_only_raw_provided_fixture_handoff(&plan)
+            .expect("test adapter should build a validation-only typed handoff");
+
+        validate_eigen_equilibrium_certificate(&plan, Some(&handoff), None)
+            .expect("explicit validation-only handoff should satisfy the test boundary");
+        assert!(handoff.content_sha256().starts_with("sha256:"));
+    }
+
+    #[test]
+    fn validation_only_raw_provided_adapter_rejects_non_provided_source() {
+        let mut plan = minimal_native_modal_plan();
+        plan.equilibrium = EquilibriumSourceIR::RelaxedInitialState;
+
+        let error = validation_only_raw_provided_fixture_handoff(&plan)
+            .expect_err("test adapter must not certify a production equilibrium source");
+
+        assert_eq!(
+            error.message,
+            "validation_only_raw_provided_requires_provided_equilibrium"
+        );
+    }
+
+    #[test]
     fn accepted_relax_stage_handoff_prepares_single_k_without_second_relaxation() {
         let mut plan = minimal_native_modal_plan();
         plan.equilibrium = EquilibriumSourceIR::RelaxedInitialState;
@@ -14570,26 +16122,66 @@ mod tests {
         let accepted_m0 = vec![[0.0, 1.0, 0.0]; plan.mesh.nodes.len()];
         plan.equilibrium_magnetization = accepted_m0.clone();
         let source_mesh = crate::types::FemMeshPayload::from(&plan);
+        let source_plan = relax_source_plan_from_eigen(&plan);
         let handoff = AcceptedFemRelaxStageHandoff::from_completed_relax(
             "run-relax",
             "stage-000",
             "flat_relax",
             true,
+            &source_plan,
             &source_mesh,
             &accepted_relax_completion(),
             accepted_m0.clone(),
+            certified_fields(source_mesh.nodes.len()),
         )
         .expect("accepted relax completion should create a typed handoff");
 
         let prepared = prepare_single_k_stage_continuation(&plan, &handoff)
             .expect("same-mesh single-k target should accept the handoff");
         let (_problem, consumed_m0, relaxation_steps, _observables, _source) =
-            materialize_equilibrium(&prepared, &prepared.equilibrium_magnetization)
+            materialize_equilibrium(&prepared, &prepared.equilibrium_magnetization, None)
                 .expect("provided equilibrium should materialize without relaxation");
 
         assert_eq!(prepared.equilibrium, EquilibriumSourceIR::Provided);
         assert_eq!(consumed_m0, accepted_m0);
         assert_eq!(relaxation_steps, 0);
+    }
+
+    #[test]
+    fn accepted_relax_stage_handoff_preserves_exact_equilibrium_after_state_normalization() {
+        let mut plan = minimal_native_modal_plan();
+        plan.equilibrium = EquilibriumSourceIR::RelaxedInitialState;
+        plan.k_sampling = Some(KSamplingIR::Single {
+            k_vector: [0.0, 0.0, 0.0],
+        });
+        let scale = 1.0 + 5.0e-9;
+        let accepted_m0 = vec![[0.6 * scale, 0.8 * scale, 0.0]; plan.mesh.nodes.len()];
+        plan.equilibrium_magnetization = accepted_m0.clone();
+        let source_mesh = crate::types::FemMeshPayload::from(&plan);
+        let source_plan = relax_source_plan_from_eigen(&plan);
+        let handoff = AcceptedFemRelaxStageHandoff::from_completed_relax(
+            "run-relax",
+            "stage-000",
+            "flat_relax",
+            true,
+            &source_plan,
+            &source_mesh,
+            &accepted_relax_completion(),
+            accepted_m0.clone(),
+            certified_fields(source_mesh.nodes.len()),
+        )
+        .expect("accepted relax completion should create a typed handoff");
+
+        let prepared = prepare_single_k_stage_continuation(&plan, &handoff)
+            .expect("same-mesh single-k target should accept the handoff");
+        let (_problem, consumed_m0, _steps, _observables, _source) = materialize_equilibrium(
+            &prepared,
+            &prepared.equilibrium_magnetization,
+            Some(&handoff),
+        )
+        .expect("provided continuation equilibrium should materialize without relaxation");
+
+        assert_eq!(consumed_m0, accepted_m0);
     }
 
     #[test]
@@ -14694,15 +16286,18 @@ mod tests {
         });
         let accepted_m0 = plan.equilibrium_magnetization.clone();
         let source_mesh = crate::types::FemMeshPayload::from(&plan);
+        let source_plan = relax_source_plan_from_eigen(&plan);
 
         let error = AcceptedFemRelaxStageHandoff::from_completed_relax(
             "run-relax",
             "stage-000",
             "flat_run",
             false,
+            &source_plan,
             &source_mesh,
             &accepted_relax_completion(),
             accepted_m0.clone(),
+            certified_fields(source_mesh.nodes.len()),
         )
         .expect_err("a non-relaxation source stage must not create a handoff");
         assert!(error.message.contains("invalid_source_stage"));
@@ -14714,9 +16309,11 @@ mod tests {
             "stage-000",
             "flat_relax",
             true,
+            &source_plan,
             &source_mesh,
             &rejected_completion,
             accepted_m0.clone(),
+            certified_fields(source_mesh.nodes.len()),
         )
         .expect_err("unaccepted completion must not create a handoff");
         assert!(error.message.contains("completion_not_accepted"));
@@ -14726,9 +16323,11 @@ mod tests {
             "stage-000",
             "flat_relax",
             true,
+            &source_plan,
             &source_mesh,
             &accepted_relax_completion(),
             accepted_m0.clone(),
+            certified_fields(source_mesh.nodes.len()),
         )
         .expect("accepted completion should create a handoff");
 
@@ -14753,14 +16352,17 @@ mod tests {
             k_vector: [0.0, 0.0, 0.0],
         });
         let source_mesh = crate::types::FemMeshPayload::from(&plan);
+        let source_plan = relax_source_plan_from_eigen(&plan);
         let handoff = AcceptedFemRelaxStageHandoff::from_completed_relax(
             "run-relax",
             "stage-000",
             "flat_relax",
             true,
+            &source_plan,
             &source_mesh,
             &accepted_relax_completion(),
             plan.equilibrium_magnetization.clone(),
+            certified_fields(source_mesh.nodes.len()),
         )
         .expect("accepted completion should create a handoff");
         let mut run = ExecutedRun {
@@ -14780,12 +16382,29 @@ mod tests {
                         "equilibrium_source": "provided",
                         "relaxation_steps": 0,
                         "solver_diagnostics": {},
+                        "modes": [{"index": 0}],
                     }),
                 )
                 .unwrap(),
                 json_artifact(
                     "eigen/modes/mode_0000.json",
                     &serde_json::json!({"index": 0}),
+                )
+                .unwrap(),
+                json_artifact(
+                    "eigen/diagnostics/solver.v1.json",
+                    &serde_json::json!({"solver_adapter": "test"}),
+                )
+                .unwrap(),
+                json_artifact(
+                    "eigen/spectrum.v3.json",
+                    &serde_json::json!({
+                        "schema_version": "eigen_spectrum.v3",
+                        "samples": [{
+                            "sample_index": 0,
+                            "modes": [{"raw_mode_index": 0}]
+                        }]
+                    }),
                 )
                 .unwrap(),
             ],
@@ -14798,6 +16417,10 @@ mod tests {
             serde_json::from_slice(&run.auxiliary_artifacts[0].bytes).unwrap();
         let mode: serde_json::Value =
             serde_json::from_slice(&run.auxiliary_artifacts[1].bytes).unwrap();
+        let solver: serde_json::Value =
+            serde_json::from_slice(&run.auxiliary_artifacts[2].bytes).unwrap();
+        let spectrum_v3: serde_json::Value =
+            serde_json::from_slice(&run.auxiliary_artifacts[3].bytes).unwrap();
 
         assert_eq!(
             summary["equilibrium_source"]["handoff"],
@@ -14810,6 +16433,38 @@ mod tests {
         assert_eq!(
             mode["relax_to_eigen_handoff_sha256"],
             handoff.content_sha256()
+        );
+        assert_eq!(
+            mode["source_mesh_topology_sha256"],
+            handoff.source_mesh_topology_sha256
+        );
+        assert_eq!(
+            summary["solver_diagnostics"]["source_mesh_topology_sha256"],
+            handoff.source_mesh_topology_sha256
+        );
+        assert_eq!(
+            summary["modes"][0]["relax_to_eigen_handoff_sha256"],
+            handoff.content_sha256()
+        );
+        assert_eq!(
+            summary["modes"][0]["source_mesh_topology_sha256"],
+            handoff.source_mesh_topology_sha256
+        );
+        assert_eq!(
+            solver["relax_to_eigen_handoff_sha256"],
+            handoff.content_sha256()
+        );
+        assert_eq!(
+            solver["source_mesh_topology_sha256"],
+            handoff.source_mesh_topology_sha256
+        );
+        assert_eq!(
+            spectrum_v3["samples"][0]["modes"][0]["relax_to_eigen_handoff_sha256"],
+            handoff.content_sha256()
+        );
+        assert_eq!(
+            spectrum_v3["samples"][0]["modes"][0]["source_mesh_topology_sha256"],
+            handoff.source_mesh_topology_sha256
         );
         assert_eq!(
             summary["solver_diagnostics"]["relax_to_eigen_handoff"]["source_run_id"],
@@ -15872,6 +17527,11 @@ mod tests {
         assert_eq!(binding.mesh_scalar.node_count(), 19);
         assert_eq!(&binding.mesh_scalar.region_ids[..11], &[1; 11]);
         assert_eq!(&binding.mesh_scalar.region_ids[11..], &[0; 8]);
+        assert_eq!(
+            binding.cell_markers,
+            vec![1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0],
+            "the native operator marker map must encode magnetic/air roles, not geometry part ids"
+        );
         binding
             .validate()
             .expect("owned producer must self-validate");
@@ -16796,6 +18456,21 @@ mod tests {
         });
     }
 
+    #[test]
+    fn modal_participation_context_aggregates_same_object_parts_by_markers() {
+        let mut plan = minimal_native_modal_plan();
+        add_minimal_shared_domain_periodic_airbox(&mut plan);
+
+        let context = modal_participation_mesh_context(&plan)
+            .expect("canonical magnetic mesh parts must define participation membership");
+
+        assert_eq!(context.source_mesh_identity.mesh_id, plan.mesh_name);
+        assert_eq!(context.source_mesh_identity.node_count, plan.mesh.nodes.len());
+        assert_eq!(context.object_marker_membership.len(), 1);
+        assert_eq!(context.object_marker_membership[0].object_id, "body");
+        assert_eq!(context.object_marker_membership[0].markers, vec![1, 2]);
+    }
+
     fn add_x_floquet_pair_to_plan(plan: &mut FemEigenPlanIR) {
         plan.mesh.periodic_boundary_pairs = vec![fullmag_ir::MeshPeriodicBoundaryPairIR {
             pair_id: "x_faces".to_string(),
@@ -16888,6 +18563,25 @@ mod tests {
             0,
         )
         .expect("native v2 bundle should write");
+
+        let spectrum_v2 = artifacts
+            .iter()
+            .find(|artifact| artifact.relative_path == "eigen/spectrum.v2.json")
+            .and_then(|artifact| serde_json::from_slice::<serde_json::Value>(&artifact.bytes).ok())
+            .expect("spectrum.v2 must be emitted");
+        assert!(spectrum_v2["samples"][0]["modes"][0]
+            .get("component_participation")
+            .is_none());
+        let spectrum_v3 = artifacts
+            .iter()
+            .find(|artifact| artifact.relative_path == "eigen/spectrum.v3.json")
+            .and_then(|artifact| serde_json::from_slice::<serde_json::Value>(&artifact.bytes).ok())
+            .expect("spectrum.v3 must be emitted");
+        assert_eq!(spectrum_v3["schema_version"], "eigen_spectrum.v3");
+        assert_eq!(
+            spectrum_v3["samples"][0]["modes"][0]["component_participation"]["status"],
+            "unavailable"
+        );
 
         let nested = artifacts
             .iter()
@@ -17451,7 +19145,7 @@ mod tests {
 
         let diagnostics_raw =
             serde_json::to_string(&diagnostics_json).expect("diagnostics JSON should serialize");
-        let diagnostics = native_solver_diagnostics_json(&plan, &diagnostics_raw, None)
+        let diagnostics = native_solver_diagnostics_json(&plan, &diagnostics_raw, None, None)
             .expect("native diagnostics should be normalized");
 
         assert_eq!(
@@ -17515,7 +19209,7 @@ mod tests {
         .to_string();
 
         let diagnostics =
-            native_solver_diagnostics_json(&plan, &diagnostics_raw, Some(&result_raw))
+            native_solver_diagnostics_json(&plan, &diagnostics_raw, Some(&result_raw), None)
                 .expect("native PA-E2 diagnostics should be normalized");
 
         assert_eq!(
@@ -17647,9 +19341,13 @@ mod tests {
         })
         .to_string();
 
-        let diagnostics =
-            native_solver_diagnostics_json(&plan, &diagnostics_raw, Some(&result_raw))
-                .expect("native GPU PA-E2 diagnostics should be normalized");
+        let diagnostics = native_solver_diagnostics_json(
+            &plan,
+            &diagnostics_raw,
+            Some(&result_raw),
+            Some(&native_fem::measured_modal_gpu_attestation_fixture()),
+        )
+        .expect("native GPU PA-E2 diagnostics should be normalized");
 
         assert_eq!(
             diagnostics["solver_model"],
@@ -17700,6 +19398,21 @@ mod tests {
     }
 
     #[test]
+    fn native_poisson_airbox_gpu_adapter_without_attestation_fails_closed() {
+        let plan = minimal_native_modal_plan();
+        let diagnostics_raw = serde_json::json!({
+            "status": "ok",
+            "solver_adapter": "k0_poisson_airbox_gpu_petsc_slepc",
+            "assembly_kind": "mfem_weak_form_shared_domain",
+        })
+        .to_string();
+
+        let error = native_solver_diagnostics_json(&plan, &diagnostics_raw, None, None)
+            .expect_err("adapter text must not create a GPU execution claim");
+        assert_eq!(error.message, "k0_poisson_airbox_gpu_attestation_missing");
+    }
+
+    #[test]
     fn native_production_poisson_airbox_diagnostics_reject_missing_boundary_contract() {
         let plan = minimal_native_modal_plan();
         let diagnostics_raw = serde_json::json!({
@@ -17717,7 +19430,7 @@ mod tests {
         })
         .to_string();
 
-        let error = native_solver_diagnostics_json(&plan, &diagnostics_raw, None)
+        let error = native_solver_diagnostics_json(&plan, &diagnostics_raw, None, None)
             .expect_err("production diagnostics must not default missing boundary metadata");
         assert!(error.message.contains("outer_boundary_kind"));
     }
@@ -17738,7 +19451,7 @@ mod tests {
         .to_string();
 
         let diagnostics =
-            native_solver_diagnostics_json(&plan, &diagnostics_raw, Some(&result_raw))
+            native_solver_diagnostics_json(&plan, &diagnostics_raw, Some(&result_raw), None)
                 .expect("native Schur diagnostics should be normalized");
 
         assert_eq!(diagnostics["accepted_mode_count"], 3);

@@ -112,9 +112,11 @@ def test_export_and_restore_use_the_validated_storage_migration() -> None:
     )
 
     assert 'source "${SOURCE_ROOT}/scripts/lib/managed_fem_runtime_storage.sh"' in exporter
+    assert 'RUNTIME_LOCK="$(managed_fem_runtime_lock_path "${REPO_ROOT}")"' in exporter
     assert "prepare_managed_fem_runtime_variants_for_rebind" in exporter
     assert 'rebind_managed_fem_runtime_aliases "${RUNTIME_ROOT}"' in exporter
     assert 'source "${REPO_ROOT}/scripts/lib/managed_fem_runtime_storage.sh"' in restorer
+    assert 'RUNTIME_LOCK="$(managed_fem_runtime_lock_path "${REPO_ROOT}")"' in restorer
     assert "prepare_managed_fem_runtime_variants_for_rebind" in restorer
     assert 'rebind_managed_fem_runtime_aliases "${runtime_parent}/fem-gpu-host"' in restorer
     assert "validate_managed_fem_runtime_storage_target" in restorer
@@ -160,6 +162,150 @@ def test_rebind_switches_profiles_without_copying_or_deleting_old_variants(
     assert (old_variant / "bin/worker").read_text(encoding="utf-8") == "old-payload"
     assert sorted(path.name for path in old_root.iterdir()) == ["old"]
     assert sorted(path.name for path in new_root.iterdir()) == ["new"]
+
+
+def test_rebind_materializes_runtime_when_publication_filesystem_rejects_symlinks(
+    tmp_path: Path,
+) -> None:
+    runtime_parent = tmp_path / "repo/.fullmag/runtimes"
+    runtime_parent.mkdir(parents=True)
+    active = runtime_parent / "fem-gpu-host"
+    alias = runtime_parent / "fem-gpu-variants"
+    old_variant = _variant(alias, "old", "old-payload")
+    new_root = tmp_path / "new/variants"
+    new_variant = _variant(new_root, "new", "new-payload")
+    validator = tmp_path / "validator.py"
+    _validator(validator)
+    active.mkdir()
+    (active / "manifest.json").write_text('{"schema": 2}\n', encoding="utf-8")
+
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    fake_ln = fake_bin / "ln"
+    fake_ln.write_text("#!/bin/sh\nexit 95\n", encoding="utf-8")
+    fake_ln.chmod(0o755)
+    environment = os.environ.copy()
+    environment["PATH"] = f"{fake_bin}:{environment['PATH']}"
+    result = subprocess.run(
+        [
+            "bash", "-euo", "pipefail", "-c",
+            (
+                'source "$1"; rebind_managed_fem_runtime_aliases '
+                '"$2" "$3" "$4" "$5" "$6"'
+            ),
+            "bash",
+            str(STORAGE_HELPER),
+            str(active),
+            str(alias),
+            str(new_root),
+            str(new_variant),
+            str(validator),
+        ],
+        env=environment,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert active.is_dir() and not active.is_symlink()
+    assert (active / "bin/worker").read_text(encoding="utf-8") == "new-payload"
+    assert (alias / "new/bin/worker").read_text(encoding="utf-8") == "new-payload"
+    assert old_variant.is_dir()
+
+
+def test_materialized_copy_dereferences_bundle_symlinks(tmp_path: Path) -> None:
+    source = tmp_path / "source"
+    destination = tmp_path / "destination"
+    source.mkdir()
+    (source / "lib").mkdir()
+    (source / "manifest.json").write_text('{"schema": 2}\n', encoding="utf-8")
+    (source / "lib/libx.so.1.2.3").write_text("payload", encoding="utf-8")
+    (source / "lib/libx.so.1").symlink_to("libx.so.1.2.3")
+    (source / "lib/libx.so").symlink_to("libx.so.1")
+    validator = tmp_path / "validator.py"
+    _validator(validator)
+
+    result = subprocess.run(
+        [
+            "bash", "-euo", "pipefail", "-c",
+            (
+                'source "$1"; materialize_managed_fem_runtime_tree '
+                '"$2" "$3" "$4" 1'
+            ),
+            "bash",
+            str(STORAGE_HELPER),
+            str(source),
+            str(destination),
+            str(validator),
+        ],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert destination.joinpath("lib/libx.so").is_file()
+    assert not destination.joinpath("lib/libx.so").is_symlink()
+    assert destination.joinpath("lib/libx.so").read_text(encoding="utf-8") == "payload"
+
+
+def test_materialized_copy_validates_hash_addressed_destination_after_staging(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "source"
+    destination = tmp_path / ("a" * 64)
+    source.mkdir()
+    (source / "manifest.json").write_text('{"schema": 2}\n', encoding="utf-8")
+    validator = tmp_path / "validator.py"
+    validator.write_text(
+        """#!/usr/bin/env python3
+import argparse
+from pathlib import Path
+p = argparse.ArgumentParser()
+p.add_argument('--runtime-root', type=Path, required=True)
+p.add_argument('--allow-unaddressed-staging', action='store_true')
+a = p.parse_args()
+if not (a.runtime_root / 'manifest.json').is_file(): raise SystemExit(2)
+if not a.allow_unaddressed_staging and len(a.runtime_root.name) != 64: raise SystemExit(3)
+""",
+        encoding="utf-8",
+    )
+    validator.chmod(0o755)
+
+    result = subprocess.run(
+        [
+            "bash", "-euo", "pipefail", "-c",
+            (
+                'source "$1"; materialize_managed_fem_runtime_tree '
+                '"$2" "$3" "$4" 0'
+            ),
+            "bash",
+            str(STORAGE_HELPER),
+            str(source),
+            str(destination),
+            str(validator),
+        ],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert (destination / "manifest.json").is_file()
+    assert not list(destination.parent.glob(f"{destination.name}.materialized-next.*"))
+
+
+def test_materialized_copy_uses_tar_dereference_for_nested_links() -> None:
+    helper = STORAGE_HELPER.read_text(encoding="utf-8")
+    start = helper.index("materialize_managed_fem_runtime_tree() {")
+    end = helper.index("migrate_managed_fem_runtime_variants() {", start)
+    body = helper[start:end]
+
+    assert 'tar -C "${source_root}" -ch --hard-dereference -f - .' in body
+    assert '--hard-dereference' in body
+    assert 'tar -C "${staging}" -xf -' in body
+    assert 'cp -RL "${source_root}/."' not in body
 
 
 def test_rebind_keeps_active_runtime_resolvable_after_each_atomic_switch_failure(

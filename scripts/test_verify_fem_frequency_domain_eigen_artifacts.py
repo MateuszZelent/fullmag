@@ -770,9 +770,7 @@ def attach_certified_equilibrium_v7(root: Path) -> dict[str, object]:
     manifest["artifacts"]["equilibrium_artifact_v7_path"] = (
         "eigen/metadata/equilibrium_artifact.v7.json"
     )
-    manifest["diagnostics"]["equilibrium_artifact_sha256"] = artifact[
-        "content_sha256"
-    ]
+    manifest["equilibrium_artifact_sha256"] = artifact["content_sha256"]
     manifest_path.write_text(json.dumps(manifest))
     return artifact
 
@@ -880,7 +878,7 @@ class CertifiedEquilibriumArtifactV7Tests(unittest.TestCase):
             )
             manifest_path = root / "frequency_domain/manifest.v1.json"
             manifest = json.loads(manifest_path.read_text())
-            manifest["diagnostics"]["equilibrium_artifact_sha256"] = forged_sha256
+            manifest["equilibrium_artifact_sha256"] = forged_sha256
             manifest_path.write_text(json.dumps(manifest))
 
         result = self.run_case(mutate)
@@ -2943,6 +2941,55 @@ def test_validator_accepts_executed_subwindows_scoped_per_field_sample(
     result = run_validator(tmp_path)
 
     assert result.returncode == 0, result.stderr + result.stdout
+
+
+def test_validator_rejects_inconsistent_raw_ritz_candidate_count(
+    tmp_path: Path,
+) -> None:
+    requested_window = [1.0e8, 5.0e9]
+    write_eigen_fixture(
+        tmp_path,
+        solver_diagnostics_override={
+            "requested_mode_count": 1,
+            "requested_window_hz": requested_window,
+            "resolved_search_window_hz": requested_window,
+            "window_completeness": {
+                "policy": "best_effort",
+                "status": "not_certified",
+                "certification_method": "none",
+                "additional_modes_may_exist": True,
+            },
+            "sample_solver_diagnostics": [
+                {
+                    "sample_index": 0,
+                    "label": "H0",
+                    "k_vector": [0.0, 0.0, 0.0],
+                    "diagnostics": {
+                        "requested_window_hz": requested_window,
+                        "resolved_search_window_hz": requested_window,
+                        "subwindows": [
+                            {
+                                "subwindow_index": 0,
+                                "shift_frequency_hz": 2.55e9,
+                                "status": "ok",
+                                "converged_eigenpair_count": 4,
+                                "candidate_mode_count": 2,
+                                "candidate_mode_count_kind": "raw_ritz_in_window",
+                                "raw_ritz_in_window_count": 1,
+                                "accepted_mode_count": 1,
+                                "accepted_frequencies_hz": [1.0e9],
+                            }
+                        ],
+                    },
+                }
+            ],
+        },
+    )
+
+    result = run_validator(tmp_path)
+
+    assert result.returncode != 0
+    assert "raw_ritz_in_window_count" in (result.stderr + result.stdout)
 
 
 def test_validator_rejects_frequency_window_without_requested_mode_count(
@@ -6185,6 +6232,31 @@ def test_validator_rejects_production_window_mode_outside_requested_range(
 
     assert result.returncode != 0
     assert "requested_window_hz" in (result.stderr + result.stdout)
+
+
+def test_validator_accepts_nearest_target_without_frequency_window(
+    tmp_path: Path,
+) -> None:
+    write_eigen_fixture(
+        tmp_path,
+        solver_diagnostics_override={
+            "target_kind": "nearest_frequency",
+            "target_omega_rad_s": 2.0e9 * 2.0 * math.pi,
+            "target_tau_rad_s": 2.0e9 * 2.0 * math.pi,
+            "requested_window_hz": [0.0, 0.0],
+            "window_completeness": {
+                "status": "not_certified",
+                "subwindow_count": 0,
+                "completed_subwindow_count": 0,
+                "failed_subwindow_count": 0,
+                "empty_subwindow_count": 0,
+            },
+        },
+    )
+
+    result = run_validator(tmp_path)
+
+    assert result.returncode == 0, result.stderr + result.stdout
 
 
 def test_validator_accepts_exp_i_omega_t_phase_convention(tmp_path: Path) -> None:

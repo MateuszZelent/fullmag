@@ -164,8 +164,10 @@ do produkcyjnej ścieżki.
 - współdzielona, mała warstwa GPU runtime policy posiada konfigurację i
   odczyt attestation HYPRE device; nie wolno duplikować globalnej polityki
   HYPRE między time-domain i frequency-domain;
-- `native/include/fullmag_fem.h` oraz `crates/fullmag-fem-sys` zachowują
-  zamrożone v18 i definiują osobny caller-sized ABI v19;
+- `native/include/fullmag_fem.h` oraz `crates/fullmag-fem-sys` rozdzielają
+  przestrzenie wersji: request/shared-domain payload ma append-only ABI v19,
+  zwracany przez wartość result pozostaje zamrożony jako v18, a osobny
+  caller-sized result z attestation otrzymuje ABI v20;
 - Rust runner serializuje natywny wynik i egzekwuje fail-closed, ale nie
   syntetyzuje claimów wykonawczych;
 - API publikuje typowane zasoby; React konsumuje je wyłącznie przez centralny
@@ -213,6 +215,17 @@ oracle o ograniczonym rozmiarze. Taki wynik nigdy nie ustawia
 
 Handoff jest testowalną granicą stage, nie luźnym przekazaniem tablicy:
 
+- `AcceptedFemRelaxStageHandoff.v2` jest zamrożony. Produkcyjny kontrakt to
+  `AcceptedFemRelaxStageHandoff.v3` z `CertifiedFemEquilibriumFields.v1`;
+- v3 wiąże `equilibrium_material_signature`,
+  `equilibrium_static_physics_signature` i
+  `equilibrium_boundary_signature` ze źródła Relax;
+- `modal_operator_signature` i `modal_dynamic_boundary_signature` należą do
+  target Eigen i nie mogą zastąpić podpisów źródłowej równowagi;
+- konsumentem v3 jest `LinearizationState.v7`. Publiczny payload z digestem
+  certified fields i rozdzielonymi podpisami ma schema
+  `equilibrium_artifact.v8`; v7 artifact pozostaje zamrożony.
+
 1. Relax publikuje zaakceptowaną magnetyzację, equilibrium ID, content SHA-256,
    mesh generation/revision, topology fingerprint i certificate binding.
 2. Eigensolve ponownie sprawdza identity, indexing, node count, part registry,
@@ -226,6 +239,13 @@ Handoff jest testowalną granicą stage, nie luźnym przekazaniem tablicy:
 6. `source_mesh_identity` w każdym mode musi być bitowo zgodne z tożsamością
    wejścia. Brak zgodności unieważnia stage i nie może być naprawiony przez
    resampling.
+
+Przed native setup runner recomputuje podpisy targetu i porównuje source
+material/static-physics/static-BC z v3. Osobne negatywne testy mutują każdy z
+tych podpisów oraz certified field digest. Sama zgodność shape/finiteness/hash
+pól ani target-only podpis obejmujący `operator.kind` lub `spin_wave_bc` nie
+jest wystarczającym dowodem. Do zakończenia tej migracji capability pozostaje
+`source_visible / unvalidated`.
 
 ## 8. Kontrakt pełnej rezydencji i pomiaru
 
@@ -285,22 +305,27 @@ pozostają bitowo bez zmian. Dopisanie taila do struct zwracanego przez wartoś�
 nie jest bezpiecznym rozszerzeniem ABI, ponieważ odbiorca nie może podać swojego
 rozmiaru przed wywołaniem.
 
-Nowy symbol v19 przyjmuje caller-sized out-parameter i zwraca status:
+Nowy symbol result v20 przyjmuje caller-sized out-parameter i zwraca status.
+Numer v19 jest już zajęty przez append-only request/shared-domain payload z
+certyfikatem zaakceptowanej relaksacji i nie może równocześnie oznaczać nowego
+layoutu wyniku:
 
 ```c
-int fullmag_fem_modal_eigen_solve_v19(
+int fullmag_fem_modal_eigen_solve_v20(
     const FullmagFemModalEigenRequest *request,
-    FullmagFemFrequencyDomainResultV19 *out_result);
+    FullmagFemFrequencyDomainResultV20 *out_result);
 ```
 
-`FullmagFemFrequencyDomainResultV19` ma `abi_version`, `struct_size`,
+`FullmagFemFrequencyDomainResultV20` ma `abi_version`, `struct_size`,
 kompatybilny wynik naukowy oraz owned opaque/typed sidecar
-`FullmagFemModalGpuAttestationV1`. Strict production GPU wymaga symbolu v19;
+`FullmagFemModalGpuAttestationV1`. Strict production GPU wymaga symbolu v20;
 legacy v18 może obsługiwać CPU i validation-only, ale nie może poświadczyć
-full-GPU. Osobny destroy v19 jest idempotentny. Manifest ABI publikuje wszystkie
-size/offset, a cross-version test uruchamia starego v18 producenta/odbiorcę.
+full-GPU. Osobny destroy v20 jest idempotentny. Manifest ABI publikuje wszystkie
+size/offset przez append-only layout query v5 (v4 jest już zamrożone dla taila
+certyfikatu payloadu v19), a cross-version test uruchamia starego v18
+producenta/odbiorcę.
 
-Attestation v19 zawiera co najmniej:
+Attestation result v20 zawiera co najmniej:
 
 - `measurement_state`, `measurement_coverage`,
   `device_residency_verified`, `fallback_state`;
@@ -327,7 +352,7 @@ niezgodność hashy blokują completion i production claim.
 Native boundary i Rust parser sprawdzają pointer, `abi_version` i `struct_size`
 przed odczytem pierwszego pola poza headerem; dla V1 wymagają co najmniej pełnego
 rozmiaru V1. Nieznana wersja lub krótszy sidecar są odrzucane fail-closed bez
-dereferencji taila, a envelope nadal jest zwalniany wyłącznie przez destroy v19.
+dereferencji taila, a envelope nadal jest zwalniany wyłącznie przez destroy v20.
 
 ## 9. HYPRE device policy
 

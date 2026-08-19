@@ -193,7 +193,8 @@ FrequencyDomainStatus assemble_native_magnetic_a_qq(
     char error_message[256],
     const FullmagFemModalExchangeMaterialView *exchange_material_view = nullptr,
     const TangentFrameNode *accepted_tangent_frames = nullptr,
-    std::uint64_t accepted_tangent_frame_count = 0) noexcept;
+    std::uint64_t accepted_tangent_frame_count = 0,
+    double accepted_max_transverse_field_a_per_m = -1.0) noexcept;
 
 /* Import and assemble the versioned public shared-domain modal payload.  The
  * returned CSR buffers own their storage and remain valid until the result is

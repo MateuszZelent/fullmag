@@ -1536,7 +1536,11 @@ typedef struct {
 #define FULLMAG_FEM_FREQUENCY_DOMAIN_V15_ABI_VERSION 15u
 #define FULLMAG_FEM_FREQUENCY_DOMAIN_V16_ABI_VERSION 16u
 #define FULLMAG_FEM_FREQUENCY_DOMAIN_V17_ABI_VERSION 17u
-#define FULLMAG_FEM_FREQUENCY_DOMAIN_ABI_VERSION 18u
+#define FULLMAG_FEM_FREQUENCY_DOMAIN_V18_ABI_VERSION 18u
+#define FULLMAG_FEM_FREQUENCY_DOMAIN_ABI_VERSION 19u
+#define FULLMAG_FEM_FREQUENCY_DOMAIN_RESULT_ABI_VERSION 18u
+#define FULLMAG_FEM_FREQUENCY_DOMAIN_RESULT_V20_ABI_VERSION 20u
+#define FULLMAG_FEM_MODAL_GPU_ATTESTATION_V1_ABI_VERSION 1u
 
 typedef enum {
     FULLMAG_FEM_FD_OK = 0,
@@ -1547,6 +1551,44 @@ typedef enum {
     FULLMAG_FEM_FD_ARTIFACT_ERROR = 5,
     FULLMAG_FEM_FD_INTERRUPTED = 6,
 } FullmagFemFrequencyDomainStatus;
+
+typedef enum {
+    FULLMAG_FEM_MODAL_GPU_MEASUREMENT_UNSPECIFIED = 0,
+    FULLMAG_FEM_MODAL_GPU_MEASUREMENT_MEASURED = 1,
+    FULLMAG_FEM_MODAL_GPU_MEASUREMENT_UNAVAILABLE = 2,
+    FULLMAG_FEM_MODAL_GPU_MEASUREMENT_FAILED = 3,
+} FullmagFemModalGpuMeasurementState;
+
+typedef enum {
+    FULLMAG_FEM_MODAL_GPU_FALLBACK_UNSPECIFIED = 0,
+    FULLMAG_FEM_MODAL_GPU_FALLBACK_NONE = 1,
+    FULLMAG_FEM_MODAL_GPU_FALLBACK_ATTEMPTED = 2,
+} FullmagFemModalGpuFallbackState;
+
+typedef enum {
+    FULLMAG_FEM_MODAL_OPERATOR_UNSPECIFIED = 0,
+    FULLMAG_FEM_MODAL_OPERATOR_MATRIX_FREE_SCHUR_CUDA = 1,
+    FULLMAG_FEM_MODAL_OPERATOR_MATERIALIZED_VALIDATION_CUDA = 2,
+} FullmagFemModalOperatorKind;
+
+typedef enum {
+    FULLMAG_FEM_MODAL_HYPRE_MEMORY_UNSPECIFIED = 0,
+    FULLMAG_FEM_MODAL_HYPRE_MEMORY_HOST = 1,
+    FULLMAG_FEM_MODAL_HYPRE_MEMORY_DEVICE = 2,
+    FULLMAG_FEM_MODAL_HYPRE_MEMORY_UNIFIED = 3,
+} FullmagFemModalHypreMemoryLocation;
+
+typedef enum {
+    FULLMAG_FEM_MODAL_HYPRE_EXEC_UNSPECIFIED = 0,
+    FULLMAG_FEM_MODAL_HYPRE_EXEC_HOST = 1,
+    FULLMAG_FEM_MODAL_HYPRE_EXEC_DEVICE = 2,
+} FullmagFemModalHypreExecutionPolicy;
+
+#define FULLMAG_FEM_MODAL_GPU_COVERAGE_SETUP UINT64_C(1)
+#define FULLMAG_FEM_MODAL_GPU_COVERAGE_FULLMAG_HOT_LOOP UINT64_C(2)
+#define FULLMAG_FEM_MODAL_GPU_COVERAGE_OBJECT_GRAPH UINT64_C(4)
+#define FULLMAG_FEM_MODAL_GPU_COVERAGE_SCALAR_TELEMETRY UINT64_C(8)
+#define FULLMAG_FEM_MODAL_GPU_COVERAGE_EXPORT UINT64_C(16)
 
 typedef struct {
     uint32_t abi_version;
@@ -1766,6 +1808,9 @@ typedef struct {
     const char *equilibrium_content_sha256;
     const char *demag_model;
     double m0_norm_tolerance;
+    /* Frozen v16 field retained only to preserve the historical ABI prefix.
+       ABI v19 producers set it to zero and native code never treats it as an
+       equilibrium-acceptance threshold. */
     double equilibrium_torque_relative_tolerance;
     /* v16 append-only certificate binding.  Every identity is required by
        the modal boundary before the payload may enter a shared-domain solve. */
@@ -1794,6 +1839,13 @@ typedef struct {
     const FullmagFemModalLinearizationDescriptor *linearization_descriptor;
     /* v18 append-only scalar material carrier for native exchange. */
     const FullmagFemModalExchangeMaterialView *exchange_material_view;
+    /* v19: immutable user-owned relaxation acceptance certificate. */
+    const char *acceptance_criterion;
+    const char *acceptance_metric_kind;
+    const char *acceptance_unit;
+    double acceptance_metric_value;
+    double acceptance_threshold;
+    const char *acceptance_certificate_sha256;
 } FullmagFemModalSharedDomainPayload;
 
 typedef struct {
@@ -1940,6 +1992,130 @@ typedef struct {
     uint32_t resolved_certificate_binding_status;
     char *resolved_certificate_binding_reason;
 } FullmagFemFrequencyDomainResult;
+
+/* Caller-sized GPU execution evidence. V1 is deliberately complete-prefix:
+   readers reject a shorter record before dereferencing any tail field. */
+typedef struct {
+    uint32_t abi_version;
+    uint32_t struct_size;
+    uint32_t measurement_state;
+    uint32_t fallback_state;
+    uint64_t measurement_coverage_flags;
+    uint32_t device_residency_verified;
+    uint32_t production_shared_domain;
+    uint32_t validation_only;
+    uint32_t operator_kind;
+    uint32_t hypre_memory_location;
+    uint32_t hypre_execution_policy;
+    uint32_t compute_capability_major;
+    uint32_t compute_capability_minor;
+    uint32_t cuda_driver_version;
+    uint32_t cuda_runtime_version;
+    char *device_name;
+    char *mfem_version;
+    char *hypre_version;
+    char *petsc_version;
+    char *slepc_version;
+    char *petsc_vec_type;
+    char *petsc_matrix_type;
+    char *matshell_vec_type;
+    char *slepc_bv_type;
+    char *eps_type;
+    char *st_type;
+    char *ksp_type;
+    char *poisson_pc_type;
+    char *shift_pc_type;
+    char *last_invalidation_reason;
+    uint8_t device_uuid[16];
+    uint8_t object_graph_sha256[32];
+    uint8_t native_trace_sha256[32];
+    uint8_t source_snapshot_sha256[32];
+    uint8_t runtime_manifest_sha256[32];
+    uint8_t mesh_identity_sha256[32];
+    uint8_t equilibrium_sha256[32];
+    uint8_t certificate_sha256[32];
+    uint8_t linearization_sha256[32];
+    uint8_t material_sha256[32];
+    uint8_t physics_sha256[32];
+    uint8_t boundary_sha256[32];
+    uint8_t gauge_sha256[32];
+    uint8_t operator_terms_sha256[32];
+    uint8_t solver_policy_sha256[32];
+    uint8_t operator_key_sha256[32];
+    uint8_t target_key_sha256[32];
+    uint8_t session_context_sha256[32];
+    uint64_t setup_h2d_count;
+    uint64_t setup_h2d_bytes;
+    uint64_t hot_loop_computational_h2d_count;
+    uint64_t hot_loop_computational_h2d_bytes;
+    uint64_t hot_loop_computational_d2h_count;
+    uint64_t hot_loop_computational_d2h_bytes;
+    uint64_t hot_loop_scalar_telemetry_d2h_count;
+    uint64_t hot_loop_scalar_telemetry_d2h_bytes;
+    uint64_t hot_loop_full_vector_crossings;
+    uint64_t hot_loop_computational_host_syncs;
+    uint64_t hot_loop_scalar_telemetry_syncs;
+    uint64_t hot_loop_allocations;
+    uint64_t export_d2h_count;
+    uint64_t export_d2h_bytes;
+    uint64_t device_memory_baseline_bytes;
+    uint64_t device_memory_peak_bytes;
+    uint64_t device_memory_final_bytes;
+    uint64_t operator_dimension;
+    uint64_t operator_apply_count;
+    uint64_t poisson_solve_count;
+    uint64_t poisson_iteration_count;
+    uint64_t eps_iteration_count;
+    uint64_t eps_restart_count;
+    int64_t eps_converged_reason;
+    uint64_t operator_state_generation;
+    uint64_t target_state_generation;
+    uint64_t operator_reuse_count;
+    uint64_t target_rebuild_count;
+    uint64_t invalidation_flags;
+} FullmagFemModalGpuAttestationV1;
+
+typedef struct {
+    uint32_t abi_version;
+    uint32_t struct_size;
+    FullmagFemFrequencyDomainResult scientific_result_v18;
+    FullmagFemModalGpuAttestationV1 *gpu_attestation;
+} FullmagFemFrequencyDomainResultV20;
+
+#define FULLMAG_FEM_MODAL_GPU_ATTESTATION_V1_FIELD_LIST(X) \
+    X(abi_version) X(struct_size) X(measurement_state) X(fallback_state) \
+    X(measurement_coverage_flags) X(device_residency_verified) \
+    X(production_shared_domain) X(validation_only) X(operator_kind) \
+    X(hypre_memory_location) X(hypre_execution_policy) \
+    X(compute_capability_major) X(compute_capability_minor) \
+    X(cuda_driver_version) X(cuda_runtime_version) X(device_name) \
+    X(mfem_version) X(hypre_version) X(petsc_version) X(slepc_version) \
+    X(petsc_vec_type) X(petsc_matrix_type) X(matshell_vec_type) \
+    X(slepc_bv_type) X(eps_type) X(st_type) X(ksp_type) X(poisson_pc_type) \
+    X(shift_pc_type) X(last_invalidation_reason) X(device_uuid) \
+    X(object_graph_sha256) X(native_trace_sha256) X(source_snapshot_sha256) \
+    X(runtime_manifest_sha256) X(mesh_identity_sha256) X(equilibrium_sha256) \
+    X(certificate_sha256) X(linearization_sha256) X(material_sha256) \
+    X(physics_sha256) X(boundary_sha256) X(gauge_sha256) \
+    X(operator_terms_sha256) X(solver_policy_sha256) X(operator_key_sha256) \
+    X(target_key_sha256) X(session_context_sha256) X(setup_h2d_count) \
+    X(setup_h2d_bytes) X(hot_loop_computational_h2d_count) \
+    X(hot_loop_computational_h2d_bytes) X(hot_loop_computational_d2h_count) \
+    X(hot_loop_computational_d2h_bytes) X(hot_loop_scalar_telemetry_d2h_count) \
+    X(hot_loop_scalar_telemetry_d2h_bytes) X(hot_loop_full_vector_crossings) \
+    X(hot_loop_computational_host_syncs) X(hot_loop_scalar_telemetry_syncs) \
+    X(hot_loop_allocations) X(export_d2h_count) X(export_d2h_bytes) \
+    X(device_memory_baseline_bytes) X(device_memory_peak_bytes) \
+    X(device_memory_final_bytes) X(operator_dimension) X(operator_apply_count) \
+    X(poisson_solve_count) X(poisson_iteration_count) X(eps_iteration_count) \
+    X(eps_restart_count) X(eps_converged_reason) X(operator_state_generation) \
+    X(target_state_generation) X(operator_reuse_count) X(target_rebuild_count) \
+    X(invalidation_flags)
+
+#define FULLMAG_FEM_MODAL_GPU_ATTESTATION_V1_COUNT_ONE(member) + 1u
+#define FULLMAG_FEM_MODAL_GPU_ATTESTATION_V1_FIELD_COUNT \
+    (0u FULLMAG_FEM_MODAL_GPU_ATTESTATION_V1_FIELD_LIST( \
+        FULLMAG_FEM_MODAL_GPU_ATTESTATION_V1_COUNT_ONE))
 
 typedef enum {
     FULLMAG_FEM_MODAL_CERTIFICATE_BINDING_UNSPECIFIED = 0,
@@ -2446,6 +2622,29 @@ typedef struct {
     uint64_t modal_exchange_material_view_field_offsets[16];
 } fullmag_fem_frequency_domain_modal_abi_layout_v3;
 
+#define FULLMAG_FEM_FREQUENCY_DOMAIN_MODAL_ABI_LAYOUT_V4 4u
+typedef struct {
+    /* v3 remains the frozen V18 descriptor/material manifest.  This wrapper
+       publishes the six append-only V19 acceptance-certificate fields. */
+    fullmag_fem_frequency_domain_modal_abi_layout_v3 v3;
+    uint64_t modal_acceptance_certificate_field_count;
+    uint64_t modal_acceptance_certificate_field_offsets[8];
+} fullmag_fem_frequency_domain_modal_abi_layout_v4;
+
+#define FULLMAG_FEM_FREQUENCY_DOMAIN_MODAL_ABI_LAYOUT_V5 5u
+typedef struct {
+    /* v4 remains the frozen request/shared-payload v19 manifest. */
+    fullmag_fem_frequency_domain_modal_abi_layout_v4 v4;
+    uint64_t modal_frequency_domain_result_v20_size;
+    uint64_t modal_frequency_domain_result_v20_align;
+    uint64_t modal_frequency_domain_result_v20_field_count;
+    uint64_t modal_frequency_domain_result_v20_field_offsets[4];
+    uint64_t modal_gpu_attestation_v1_size;
+    uint64_t modal_gpu_attestation_v1_align;
+    uint64_t modal_gpu_attestation_v1_field_count;
+    uint64_t modal_gpu_attestation_v1_field_offsets[128];
+} fullmag_fem_frequency_domain_modal_abi_layout_v5;
+
 typedef struct {
     uint64_t h2d_bytes;
     uint64_t d2h_bytes;
@@ -2558,6 +2757,12 @@ int fullmag_fem_get_frequency_domain_modal_abi_layout_v2(
 int fullmag_fem_get_frequency_domain_modal_abi_layout_v3(
     fullmag_fem_frequency_domain_modal_abi_layout_v3 *out_layout
 );
+int fullmag_fem_get_frequency_domain_modal_abi_layout_v4(
+    fullmag_fem_frequency_domain_modal_abi_layout_v4 *out_layout
+);
+int fullmag_fem_get_frequency_domain_modal_abi_layout_v5(
+    fullmag_fem_frequency_domain_modal_abi_layout_v5 *out_layout
+);
 int fullmag_fem_get_mesh_abi_layout(fullmag_fem_mesh_abi_layout *out_layout);
 int fullmag_fem_frequency_domain_initial_sweep_progress(
     uint64_t total_frequency_points,
@@ -2606,6 +2811,13 @@ void fullmag_fem_frequency_domain_solve_result_release(
 );
 FullmagFemFrequencyDomainResult fullmag_fem_modal_eigen_solve(
     const FullmagFemModalEigenRequest *request
+);
+int fullmag_fem_modal_eigen_solve_v20(
+    const FullmagFemModalEigenRequest *request,
+    FullmagFemFrequencyDomainResultV20 *out_result
+);
+void fullmag_fem_frequency_domain_result_v20_destroy(
+    FullmagFemFrequencyDomainResultV20 *result
 );
 int fullmag_fem_modal_eigen_gpu_runtime_finalize(void);
 FullmagFemFrequencyDomainResult fullmag_fem_driven_response_solve(
@@ -2679,6 +2891,15 @@ int fullmag_fem_backend_set_step_profile(
 );
 
 int fullmag_fem_backend_copy_field_f64(
+    fullmag_fem_backend *handle,
+    fullmag_fem_observable observable,
+    double *out_xyz,
+    uint64_t out_len
+);
+
+/* Internal scientific handoff: copy the magnetic-domain LLG field, never the
+ * full-domain visualization field used by the public observable API. */
+int fullmag_fem_backend_copy_linearization_field_f64(
     fullmag_fem_backend *handle,
     fullmag_fem_observable observable,
     double *out_xyz,

@@ -1049,6 +1049,9 @@ fn sample_native_solver_diagnostics(sample: &SingleKSolveResult) -> Option<&serd
         .get("sample_solver_diagnostics")
         .and_then(serde_json::Value::as_array)
     {
+        if entries.len() == 1 {
+            return Some(root);
+        }
         return entries
             .iter()
             .find(|entry| {
@@ -1323,17 +1326,9 @@ fn modal_solver_classification(
 
 fn modal_native_solver_diagnostics(result: &PathSolveResult) -> Option<&serde_json::Value> {
     for sample in &result.samples {
-        let Some(root) = sample.solver_diagnostics.as_ref() else {
+        let Some(root) = sample_native_solver_diagnostics(sample) else {
             continue;
         };
-        if let Some(diagnostics) = root
-            .get("sample_solver_diagnostics")
-            .and_then(serde_json::Value::as_array)
-            .and_then(|entries| entries.first())
-            .and_then(|entry| entry.get("diagnostics"))
-        {
-            return Some(diagnostics);
-        }
         if root.get("resolved_execution").is_some()
             || root.get("solver_adapter").is_some()
             || root.get("assembly_kind").is_some()
@@ -1437,6 +1432,7 @@ fn modal_manifest_execution(
                     .map(|_| "periodic_airbox_k0".to_string())
             })
             .unwrap_or_else(|| "not_applicable".to_string());
+    let calculation_mode = eigen_calculation_mode(result);
 
     let resolved_device = diagnostic_nested_string(diagnostics, "resolved_execution", "device")
         .unwrap_or_else(|| requested_device.clone());
@@ -1526,7 +1522,7 @@ fn modal_manifest_execution(
         ),
     };
     let requested = FrequencyDomainRequestedExecution {
-        calculation_mode: eigen_calculation_mode(result),
+        calculation_mode,
         backend: "fem",
         device: requested_device,
         precision: requested_precision,
@@ -1538,12 +1534,18 @@ fn modal_manifest_execution(
         include_demag: result.include_demag,
         damping_policy: "ignore",
         equilibrium_source: "provided_or_planned",
-        k_sampling: if result.samples.len() > 1 {
+        // Multiple samples can also be an authored bias-field sweep at Gamma.
+        // Only non-zero k samples are a Bloch/Floquet dispersion path.
+        k_sampling: if calculation_mode == "dispersion_modal" {
             "path"
         } else {
             "single"
         },
-        outputs: vec!["spectrum", "branches", "dispersion", "mode_fields"],
+        outputs: if calculation_mode == "dispersion_modal" {
+            vec!["spectrum", "branches", "dispersion", "mode_fields"]
+        } else {
+            vec!["spectrum", "mode_fields"]
+        },
         solver_method: requested_solver_method,
         preconditioner: requested_preconditioner,
         magnetostatic_bc: requested_magnetostatic_bc,
@@ -4168,6 +4170,32 @@ pub(crate) fn k0_kittel_validation_auxiliary_artifacts(
         "failed"
     };
     let solver_classification = modal_solver_classification(result.solver_model);
+    // A native selected-spectrum adapter can be orchestrated through a path
+    // result whose legacy solver_model remains the reference enum.  When that
+    // happens, the first native sample diagnostics are the authoritative lane
+    // and adapter identity for the Kittel summary; otherwise preserve the
+    // established classification for reference and CPU fixtures.
+    let native_diagnostics = modal_native_solver_diagnostics(result);
+    let summary_execution_lane = if solver_classification.reference_or_production == "reference" {
+        diagnostic_string(native_diagnostics, "execution_lane")
+            .or_else(|| {
+                diagnostic_nested_string(
+                    native_diagnostics,
+                    "resolved_execution",
+                    "reference_or_production",
+                )
+            })
+            .unwrap_or_else(|| solver_classification.reference_or_production.to_string())
+    } else {
+        solver_classification.reference_or_production.to_string()
+    };
+    let summary_solver_algorithm = if solver_classification.reference_or_production == "reference" {
+        diagnostic_nested_string(native_diagnostics, "resolved_execution", "solver_algorithm")
+            .or_else(|| diagnostic_string(native_diagnostics, "solver_adapter"))
+            .unwrap_or_else(|| result.solver_model.as_str().to_string())
+    } else {
+        result.solver_model.as_str().to_string()
+    };
     let max_eigen_residual_relative = selected_branch
         .points
         .iter()
@@ -4223,8 +4251,8 @@ pub(crate) fn k0_kittel_validation_auxiliary_artifacts(
         },
         "solver": {
             "backend": "modal_eigen",
-            "execution_lane": solver_classification.reference_or_production,
-            "solver_algorithm": result.solver_model.as_str(),
+            "execution_lane": summary_execution_lane,
+            "solver_algorithm": summary_solver_algorithm,
             "requested_mode_count": result
                 .samples
                 .iter()
@@ -4288,6 +4316,7 @@ pub fn write_frequency_domain_eigen_manifest(
         .is_some()
         .then_some("fmr/kittel_fit.v1.json");
     let calculation_mode = eigen_calculation_mode(result);
+    let dispersion_published = calculation_mode == "dispersion_modal";
     let tracking = tracking_summary(result);
     let solver_classification = modal_solver_classification(result.solver_model);
     let (requested_execution, resolved_execution) =
@@ -4368,8 +4397,8 @@ pub fn write_frequency_domain_eigen_manifest(
         artifacts: FrequencyDomainArtifactIndex {
             solver_diagnostics_path: Some("eigen/diagnostics/solver.v1.json"),
             spectrum_v2_path: Some("eigen/spectrum.v2.json"),
-            branches_v2_path: Some("eigen/branches.v2.json"),
-            dispersion_csv_path: Some("eigen/dispersion.csv"),
+            branches_v2_path: dispersion_published.then_some("eigen/branches.v2.json"),
+            dispersion_csv_path: dispersion_published.then_some("eigen/dispersion.csv"),
             eigen_diagnostics_v2_path: None,
             response_sweep_v1_path: None,
             response_sweep_v2_path: None,
@@ -4389,12 +4418,10 @@ pub fn write_frequency_domain_eigen_manifest(
             spectrum_resource_key: Some(
                 "/v2/sessions/current/analysis/frequency-domain/eigen/spectrum.v2",
             ),
-            branches_resource_key: Some(
-                "/v2/sessions/current/analysis/frequency-domain/eigen/branches.v2",
-            ),
-            dispersion_resource_key: Some(
-                "/v2/sessions/current/analysis/frequency-domain/eigen/dispersion",
-            ),
+            branches_resource_key: dispersion_published
+                .then_some("/v2/sessions/current/analysis/frequency-domain/eigen/branches.v2"),
+            dispersion_resource_key: dispersion_published
+                .then_some("/v2/sessions/current/analysis/frequency-domain/eigen/dispersion"),
             diagnostics_resource_key: None,
             eigen_diagnostics_resource_key: Some(
                 "/v2/sessions/current/analysis/frequency-domain/eigen/diagnostics.v2",
@@ -4408,11 +4435,19 @@ pub fn write_frequency_domain_eigen_manifest(
             response_field_resources: Vec::new(),
         },
         validation: FrequencyDomainValidation {
-            dispersion_validation: result.dispersion_validation.as_ref(),
+            dispersion_validation: dispersion_published
+                .then(|| result.dispersion_validation.as_ref())
+                .flatten(),
             k0_kittel_validation: result.k0_kittel_validation.as_ref(),
-            dispersion_frequency_source: dispersion_frequency_source(result),
-            dispersion_reference_model: dispersion_reference_model(result),
-            dynamic_demag_operator_source: dispersion_dynamic_demag_operator_source(result),
+            dispersion_frequency_source: dispersion_published
+                .then(|| dispersion_frequency_source(result))
+                .flatten(),
+            dispersion_reference_model: dispersion_published
+                .then(|| dispersion_reference_model(result))
+                .flatten(),
+            dynamic_demag_operator_source: dispersion_published
+                .then(|| dispersion_dynamic_demag_operator_source(result))
+                .flatten(),
         },
         diagnostics: FrequencyDomainDiagnostics {
             status: "ready",
@@ -4486,16 +4521,15 @@ fn eigen_mode_field_resources(result: &PathSolveResult) -> Vec<String> {
 }
 
 fn eigen_calculation_mode(result: &PathSolveResult) -> &'static str {
-    if result.samples.len() > 1
-        || result.samples.iter().any(|sample| {
-            sample.sample.path_s != 0.0
-                || sample
-                    .sample
-                    .k_vector
-                    .iter()
-                    .any(|component| *component != 0.0)
-        })
-    {
+    // `path_s` is also used as the scan coordinate for a physical bias-field
+    // sweep.  It must not turn a k=0 sweep into a Dispersion product.
+    if result.samples.iter().any(|sample| {
+        sample
+            .sample
+            .k_vector
+            .iter()
+            .any(|component| *component != 0.0)
+    }) {
         "dispersion_modal"
     } else {
         "free_modes"
@@ -4590,6 +4624,51 @@ pub fn write_path_bundle(base_dir: &Path, result: &PathSolveResult) -> std::io::
     fs::write(
         eigen_dir.join("spectrum.v2.json"),
         serde_json::to_vec_pretty(&spectrum_artifact).unwrap(),
+    )?;
+    let spectrum_v3_samples = result
+        .samples
+        .iter()
+        .map(|sample| {
+            let modes = sample
+                .modes
+                .iter()
+                .map(|mode| {
+                    let mut value = serde_json::to_value(summarize_mode(
+                        sample,
+                        mode,
+                        result.solver_model,
+                    ))
+                    .expect("mode summary must serialize");
+                    value["component_participation"] =
+                        serde_json::to_value(&mode.component_participation)
+                            .expect("validated component participation must serialize");
+                    value
+                })
+                .collect::<Vec<_>>();
+            serde_json::json!({
+                "sample_id": format!(
+                    "bias-field-sample-{:04}",
+                    sample.sample.sample_index
+                ),
+                "sample_index": sample.sample.sample_index,
+                "label": sample.sample.label,
+                "k_vector": sample.sample.k_vector,
+                "path_s": sample.sample.path_s,
+                "segment_index": sample.sample.segment_index,
+                "t_in_segment": sample.sample.t_in_segment,
+                "modes": modes,
+            })
+        })
+        .collect::<Vec<_>>();
+    fs::write(
+        eigen_dir.join("spectrum.v3.json"),
+        serde_json::to_vec_pretty(&serde_json::json!({
+            "schema_version": "eigen_spectrum.v3",
+            "solver_model": result.solver_model.as_str(),
+            "sample_count": spectrum_v3_samples.len(),
+            "samples": spectrum_v3_samples,
+        }))
+        .unwrap(),
     )?;
     let path_artifact = PathArtifact {
         schema_version: "2",
@@ -5142,6 +5221,10 @@ mod tests {
                     amplitude: Some(vec![1.0]),
                     phase: Some(vec![0.0]),
                     node_mass_weights: None,
+                    component_participation:
+                        crate::eigen::ModalParticipationObservable::unavailable_without_context(
+                            "cpu",
+                        ),
                 }],
                 relaxation_steps: 0,
                 solver_model,
@@ -5173,6 +5256,29 @@ mod tests {
             dispersion_analytic_reference: None,
             k0_kittel_periodic_airbox_demag: None,
         }
+    }
+
+    #[test]
+    fn single_sample_mode_provenance_prefers_enriched_root_diagnostics() {
+        let mut result = sample_result_with_solver_model(EigenSolverModel::ProductionCpuShiftInvert);
+        result.samples[0].solver_diagnostics = Some(serde_json::json!({
+            "relax_to_eigen_handoff_sha256": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "sample_solver_diagnostics": [{
+                "sample_index": 0,
+                "diagnostics": {"status": "ready"},
+            }],
+        }));
+
+        let summary = summarize_mode(
+            &result.samples[0],
+            &result.samples[0].modes[0],
+            result.solver_model,
+        );
+
+        assert_eq!(
+            summary.relax_to_eigen_handoff_sha256.as_deref(),
+            Some("sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+        );
     }
 
     fn sample_result_with_modal_overlap_tracking() -> PathSolveResult {
@@ -5315,6 +5421,21 @@ mod tests {
         assert_eq!(
             spectrum["samples"][0]["modes"][0]["mode_field_resource_key"],
             "/v2/sessions/current/data/fields/analysis:eigen:sample-0000:mode-0000/samples/vector?view=phase_rotated_real&phase_rad=0"
+        );
+        assert!(spectrum["samples"][0]["modes"][0]
+            .get("component_participation")
+            .is_none());
+
+        let spectrum_v3: Value = serde_json::from_slice(
+            &std::fs::read(eigen_dir.join("spectrum.v3.json"))
+                .expect("spectrum.v3.json should be written"),
+        )
+        .expect("spectrum.v3.json should be valid JSON");
+        assert_eq!(spectrum_v3["schema_version"], "eigen_spectrum.v3");
+        assert_eq!(
+            spectrum_v3["samples"][0]["modes"][0]["component_participation"]
+                ["definition_id"],
+            crate::eigen::MODAL_PARTICIPATION_DEFINITION_ID
         );
 
         let branches: Value = serde_json::from_slice(
@@ -5538,6 +5659,65 @@ mod tests {
     }
 
     #[test]
+    fn eigen_manifest_does_not_publish_dispersion_for_single_free_modes() {
+        let temp = TempDirGuard::new("eigen-manifest-free-modes");
+        let result = sample_result();
+
+        write_frequency_domain_eigen_manifest(&temp.path, &result)
+            .expect("frequency-domain eigen manifest should write");
+
+        let manifest: Value = serde_json::from_slice(
+            &std::fs::read(temp.path.join("frequency_domain/manifest.v1.json"))
+                .expect("frequency-domain eigen manifest should be written"),
+        )
+        .expect("frequency-domain eigen manifest should be valid JSON");
+        assert_eq!(
+            manifest["requested_execution"]["calculation_mode"],
+            "free_modes"
+        );
+        assert_eq!(
+            manifest["requested_execution"]["outputs"],
+            serde_json::json!(["spectrum", "mode_fields"])
+        );
+        assert!(manifest["artifacts"]["branches_v2_path"].is_null());
+        assert!(manifest["artifacts"]["dispersion_csv_path"].is_null());
+        assert!(manifest["resources"]["branches_resource_key"].is_null());
+        assert!(manifest["resources"]["dispersion_resource_key"].is_null());
+    }
+
+    #[test]
+    fn eigen_manifest_does_not_publish_dispersion_for_multi_sample_k0_field_sweep() {
+        let temp = TempDirGuard::new("eigen-manifest-k0-field-sweep");
+        let result = sample_result_with_k0_kittel_sweep();
+
+        write_frequency_domain_eigen_manifest(&temp.path, &result)
+            .expect("frequency-domain eigen manifest should write");
+
+        let manifest: Value = serde_json::from_slice(
+            &std::fs::read(temp.path.join("frequency_domain/manifest.v1.json"))
+                .expect("frequency-domain eigen manifest should be written"),
+        )
+        .expect("frequency-domain eigen manifest should be valid JSON");
+        assert_eq!(
+            manifest["requested_execution"]["calculation_mode"],
+            "free_modes"
+        );
+        assert_eq!(manifest["requested_execution"]["k_sampling"], "single");
+        assert_eq!(
+            manifest["requested_execution"]["outputs"],
+            serde_json::json!(["spectrum", "mode_fields"])
+        );
+        assert!(manifest["artifacts"]["branches_v2_path"].is_null());
+        assert!(manifest["artifacts"]["dispersion_csv_path"].is_null());
+        assert!(manifest["resources"]["branches_resource_key"].is_null());
+        assert!(manifest["resources"]["dispersion_resource_key"].is_null());
+        assert_eq!(
+            manifest["validation"]["k0_kittel_validation"]["kind"],
+            "k0_kittel_field_sweep"
+        );
+    }
+
+    #[test]
     fn eigen_branch_writer_reports_modal_overlap_statistics() {
         let temp = TempDirGuard::new("eigen-branch-overlap-stats");
         let result = sample_result_with_modal_overlap_tracking();
@@ -5754,6 +5934,34 @@ mod tests {
         assert_eq!(kittel_fit["source"]["artifact"], "eigen/spectrum.v2.json");
         assert_eq!(kittel_fit["model"], "macrospin_larmor");
         assert_eq!(kittel_fit["complete"], false);
+    }
+
+    #[test]
+    fn k0_kittel_summary_prefers_native_lane_when_path_model_is_reference() {
+        let mut result = sample_result_with_k0_kittel_sweep();
+        result.solver_model = EigenSolverModel::ReferenceFull2x2Tangent;
+        result.samples[0].solver_diagnostics = Some(serde_json::json!({
+            "execution_lane": "production_gpu",
+            "resolved_execution": {
+                "reference_or_production": "production",
+                "solver_algorithm": "k0_poisson_airbox_gpu_petsc_slepc"
+            },
+            "solver_adapter": "k0_poisson_airbox_gpu_petsc_slepc"
+        }));
+
+        let artifacts = k0_kittel_validation_auxiliary_artifacts(&result)
+            .expect("Kittel summary should be emitted for the diagnostic fixture");
+        let summary_artifact = artifacts
+            .iter()
+            .find(|artifact| artifact.relative_path == "validation/kittel_k0_pbc/summary.v1.json")
+            .expect("Kittel summary should be present");
+        let summary: Value =
+            serde_json::from_slice(&summary_artifact.bytes).expect("summary should be valid JSON");
+        assert_eq!(summary["solver"]["execution_lane"], "production_gpu");
+        assert_eq!(
+            summary["solver"]["solver_algorithm"],
+            "k0_poisson_airbox_gpu_petsc_slepc"
+        );
     }
 
     #[test]
@@ -6733,6 +6941,8 @@ mod tests {
         let mut result =
             sample_result_with_solver_model(EigenSolverModel::ReferenceThinFilmDeBvKalinikosN0);
         result.include_demag = true;
+        result.samples[0].sample.path_s = 1.0;
+        result.samples[0].sample.k_vector = [3.0e6, 0.0, 0.0];
         result.dispersion_validation = Some(fullmag_ir::FemEigenDispersionValidationIR {
             kind: "thin_film_de_bv_low_k".to_string(),
             analytic_model: "kalinikos_slab_n0".to_string(),

@@ -93,6 +93,87 @@ pub struct RunResult {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct CertifiedFemEquilibriumFields {
+    pub schema_version: String,
+    pub h_ex_a_per_m: Vec<[f64; 3]>,
+    pub h_demag_a_per_m: Vec<[f64; 3]>,
+    pub h_ext_a_per_m: Vec<[f64; 3]>,
+    pub h_eff_a_per_m: Vec<[f64; 3]>,
+    pub phi_a: Vec<f64>,
+    pub content_sha256: String,
+}
+
+impl CertifiedFemEquilibriumFields {
+    pub fn from_fields(
+        h_ex_a_per_m: Vec<[f64; 3]>,
+        h_demag_a_per_m: Vec<[f64; 3]>,
+        h_ext_a_per_m: Vec<[f64; 3]>,
+        h_eff_a_per_m: Vec<[f64; 3]>,
+        phi_a: Vec<f64>,
+    ) -> Result<Self, RunError> {
+        let node_count = h_eff_a_per_m.len();
+        if node_count == 0
+            || h_ex_a_per_m.len() != node_count
+            || h_demag_a_per_m.len() != node_count
+            || h_ext_a_per_m.len() != node_count
+            || phi_a.len() != node_count
+            || [
+                &h_ex_a_per_m,
+                &h_demag_a_per_m,
+                &h_ext_a_per_m,
+                &h_eff_a_per_m,
+            ]
+            .into_iter()
+            .flat_map(|values| values.iter())
+            .flat_map(|value| value.iter())
+            .any(|value| !value.is_finite())
+            || phi_a.iter().any(|value| !value.is_finite())
+        {
+            return Err(RunError {
+                message: "certified FEM equilibrium fields are incomplete or non-finite"
+                    .to_string(),
+            });
+        }
+        let mut value = Self {
+            schema_version: "CertifiedFemEquilibriumFields.v1".to_string(),
+            h_ex_a_per_m,
+            h_demag_a_per_m,
+            h_ext_a_per_m,
+            h_eff_a_per_m,
+            phi_a,
+            content_sha256: String::new(),
+        };
+        value.content_sha256 = certified_equilibrium_fields_sha256(&value);
+        Ok(value)
+    }
+}
+
+pub(crate) fn certified_equilibrium_fields_sha256(
+    fields: &CertifiedFemEquilibriumFields,
+) -> String {
+    let mut hash = Sha256::new();
+    hash.update(b"CertifiedFemEquilibriumFields.v1\0");
+    for vectors in [
+        &fields.h_ex_a_per_m,
+        &fields.h_demag_a_per_m,
+        &fields.h_ext_a_per_m,
+        &fields.h_eff_a_per_m,
+    ] {
+        hash.update((vectors.len() as u64).to_le_bytes());
+        for vector in vectors {
+            for value in vector {
+                hash.update(value.to_bits().to_le_bytes());
+            }
+        }
+    }
+    hash.update((fields.phi_a.len() as u64).to_le_bytes());
+    for value in &fields.phi_a {
+        hash.update(value.to_bits().to_le_bytes());
+    }
+    format!("sha256:{:x}", hash.finalize())
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct FemCpuRelaxationQualificationMetadata {
     pub schema_version: String,
     pub benchmark_gate_version: String,
@@ -918,8 +999,7 @@ impl Default for StepStats {
 #[cfg(test)]
 mod all_in_gpu_fem_transfer_audit_tests {
     use super::{
-        ExecutionProvenance, FdmMultilayerStageTelemetry, FdmMultilayerTransferTelemetry,
-        StepStats,
+        ExecutionProvenance, FdmMultilayerStageTelemetry, FdmMultilayerTransferTelemetry, StepStats,
     };
 
     #[test]
@@ -1325,7 +1405,10 @@ mod all_in_gpu_fem_transfer_audit_tests {
         let value = serde_json::to_value(provenance).expect("provenance should serialize");
         let telemetry = &value["fdm_multilayer_stage_telemetry"];
         assert_eq!(telemetry["status"], "recorded");
-        assert_eq!(telemetry["execution_engine"], "cuda_native_multilayer_demag_v2");
+        assert_eq!(
+            telemetry["execution_engine"],
+            "cuda_native_multilayer_demag_v2"
+        );
         assert_eq!(telemetry["data_residency"], "device_resident_per_refresh");
         assert_eq!(telemetry["fft_backend"], "cuFFT");
         assert_eq!(telemetry["layer_count"], 3);
@@ -3437,10 +3520,7 @@ mod tests {
             canonical
         );
         assert_eq!(fem_mesh_topology_fingerprint(&modal_payload), canonical);
-        assert_eq!(
-            fem_mesh_topology_fingerprint(&driven_payload),
-            canonical
-        );
+        assert_eq!(fem_mesh_topology_fingerprint(&driven_payload), canonical);
     }
 
     #[test]

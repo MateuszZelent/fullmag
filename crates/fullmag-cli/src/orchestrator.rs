@@ -2194,10 +2194,8 @@ struct ContinuationStageSource {
 
 fn accepted_relax_handoff_for_eigen_stage(
     backend_plan: &BackendPlanIR,
-    source_stage: Option<&ContinuationStageSource>,
-    source_mesh: Option<&fullmag_runner::FemMeshPayload>,
-    completion: Option<&fullmag_ir::StageCompletionIR>,
     continuation_magnetization: Option<&[[f64; 3]]>,
+    prepared_handoff: Option<&fullmag_runner::AcceptedFemRelaxStageHandoff>,
 ) -> Result<Option<fullmag_runner::AcceptedFemRelaxStageHandoff>> {
     let BackendPlanIR::FemEigen(eigen) = backend_plan else {
         return Ok(None);
@@ -2209,32 +2207,38 @@ fn accepted_relax_handoff_for_eigen_stage(
     {
         return Ok(None);
     }
-    let source_mesh = source_mesh.ok_or_else(|| {
-        anyhow!("relax-to-eigen continuation is missing the immutable source FEM mesh payload")
-    })?;
-    let source_stage = source_stage.ok_or_else(|| {
-        anyhow!("relax-to-eigen continuation is missing the authoritative source stage")
-    })?;
+    prepared_handoff.cloned().map(Some).ok_or_else(|| {
+        anyhow!("relax-to-eigen continuation is missing the accepted Relax handoff v3")
+    })
+}
+
+fn accepted_relax_handoff_from_completed_stage(
+    backend_plan: &BackendPlanIR,
+    source_stage: &ContinuationStageSource,
+    source_mesh: &fullmag_runner::FemMeshPayload,
+    completion: &fullmag_ir::StageCompletionIR,
+    equilibrium_magnetization: &[[f64; 3]],
+    certified_fields: &fullmag_runner::CertifiedFemEquilibriumFields,
+) -> Result<Option<fullmag_runner::AcceptedFemRelaxStageHandoff>> {
+    let BackendPlanIR::Fem(source_plan) = backend_plan else {
+        return Ok(None);
+    };
     if !source_stage.is_relaxation {
-        bail!(
-            "relax-to-eigen continuation source stage '{}' is not a relaxation stage",
-            source_stage.stage_id
-        );
+        return Ok(None);
     }
-    let completion = completion.ok_or_else(|| {
-        anyhow!("relax-to-eigen continuation is missing an authoritative stage completion")
-    })?;
-    let handoff = fullmag_runner::AcceptedFemRelaxStageHandoff::from_completed_relax(
+    fullmag_runner::AcceptedFemRelaxStageHandoff::from_completed_relax(
         &source_stage.run_id,
         &source_stage.stage_id,
         &source_stage.stage_kind,
-        source_stage.is_relaxation,
+        true,
+        source_plan,
         source_mesh,
         completion,
-        continuation_magnetization.expect("checked above").to_vec(),
+        equilibrium_magnetization.to_vec(),
+        certified_fields.clone(),
     )
-    .map_err(|error| anyhow!(error.to_string()))?;
-    Ok(Some(handoff))
+    .map(Some)
+    .map_err(|error| anyhow!(error.to_string()))
 }
 
 fn replace_continuation_after_synthetic_stage(
@@ -2243,13 +2247,21 @@ fn replace_continuation_after_synthetic_stage(
     continuation_fem_mesh_payload: &mut Option<fullmag_runner::FemMeshPayload>,
     continuation_completion: &mut Option<fullmag_ir::StageCompletionIR>,
     continuation_stage_source: &mut Option<ContinuationStageSource>,
+    continuation_certified_fields: &mut Option<fullmag_runner::CertifiedFemEquilibriumFields>,
+    continuation_relax_handoff: &mut Option<fullmag_runner::AcceptedFemRelaxStageHandoff>,
     magnetization: Vec<[f64; 3]>,
+    preserves_certified_equilibrium: bool,
 ) {
     *continuation_magnetization = Some(magnetization);
     *continuation_source = None;
+    if preserves_certified_equilibrium {
+        return;
+    }
     *continuation_fem_mesh_payload = None;
     *continuation_completion = None;
     *continuation_stage_source = None;
+    *continuation_certified_fields = None;
+    *continuation_relax_handoff = None;
 }
 
 struct StageProgressHeartbeat {
@@ -7290,6 +7302,9 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
     let mut continuation_fem_mesh_payload: Option<fullmag_runner::FemMeshPayload> = None;
     let mut continuation_completion: Option<fullmag_ir::StageCompletionIR> = None;
     let mut continuation_stage_source: Option<ContinuationStageSource> = None;
+    let mut continuation_certified_fields: Option<fullmag_runner::CertifiedFemEquilibriumFields> =
+        None;
+    let mut continuation_relax_handoff: Option<fullmag_runner::AcceptedFemRelaxStageHandoff> = None;
     let mut start_solver_command_id: Option<String> = None;
     let mut paused_stage: Option<PausedInteractiveStage> = None;
 
@@ -8027,6 +8042,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                             continuation_magnetization = Some(loaded_state.values.clone());
                             continuation_source = None; // loaded from file — unknown source backend
                             continuation_completion = None;
+                            continuation_relax_handoff = None;
                             live_workspace.update(|state| {
                                 state.live_state.updated_at_unix_ms =
                                     unix_time_millis().unwrap_or(0);
@@ -8157,6 +8173,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                     }
                     continuation_source = None;
                     continuation_completion = None;
+                    continuation_relax_handoff = None;
                 }
                 WaitForSolveCommandAction::Stop => {
                     eprintln!("[fullmag] aborted by user during wait_for_solve");
@@ -8288,10 +8305,8 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
         }
         let relax_handoff = accepted_relax_handoff_for_eigen_stage(
             &execution_plan.backend_plan,
-            continuation_stage_source.as_ref(),
-            continuation_fem_mesh_payload.as_ref(),
-            continuation_completion.as_ref(),
             continuation_magnetization.as_deref(),
+            continuation_relax_handoff.as_ref(),
         )?;
         emit_initial_state_warnings(Some(&live_workspace), &stage.ir, &execution_plan)?;
         let use_live_callback = matches!(
@@ -8558,7 +8573,10 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                 &mut continuation_fem_mesh_payload,
                 &mut continuation_completion,
                 &mut continuation_stage_source,
+                &mut continuation_certified_fields,
+                &mut continuation_relax_handoff,
                 synthetic_outcome.magnetization,
+                matches!(action, ResolvedScriptStageAction::ChangeDevice { .. }),
             );
             live_workspace.push_log("success", synthetic_outcome.message);
             eprintln!(
@@ -8955,16 +8973,60 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
             time_offset = last.time;
         }
         aggregated_steps.extend(offset_steps);
-        continuation_magnetization = Some(stage_result.final_magnetization.clone());
-        continuation_completion = stage_result.completion.clone();
-        continuation_stage_source = Some(ContinuationStageSource {
+        let next_continuation_magnetization = stage_result.final_magnetization.clone();
+        let next_continuation_completion = stage_result.completion.clone();
+        let next_continuation_certified_fields =
+            if matches!(&stage.ir.study, fullmag_ir::StudyIR::Relaxation { .. })
+                && stage_result.completion.as_ref().is_some_and(|completion| {
+                    completion.status == "completed" && completion.converged
+                })
+            {
+                let path = current_stage_artifact_dir
+                    .join("equilibrium/certified_fem_equilibrium_fields.v1.json");
+                let bytes = fs::read(&path).with_context(|| {
+                    format!(
+                        "accepted native FEM relaxation did not publish {}",
+                        path.display()
+                    )
+                })?;
+                Some(
+                    serde_json::from_slice(&bytes)
+                        .with_context(|| format!("failed to decode {}", path.display()))?,
+                )
+            } else {
+                None
+            };
+        let next_continuation_stage_source = ContinuationStageSource {
             run_id: run_id.clone(),
             stage_id: current_stage_id.clone(),
             stage_kind: stage.entrypoint_kind.clone(),
             is_relaxation: matches!(&stage.ir.study, fullmag_ir::StudyIR::Relaxation { .. }),
-        });
-        continuation_fem_mesh_payload =
+        };
+        let next_continuation_fem_mesh_payload =
             fem_mesh_payload_from_backend_plan(&execution_plan.backend_plan);
+        let next_relax_handoff = match (
+            next_continuation_completion.as_ref(),
+            next_continuation_fem_mesh_payload.as_ref(),
+            next_continuation_certified_fields.as_ref(),
+        ) {
+            (Some(completion), Some(source_mesh), Some(certified_fields)) => {
+                accepted_relax_handoff_from_completed_stage(
+                    &execution_plan.backend_plan,
+                    &next_continuation_stage_source,
+                    source_mesh,
+                    completion,
+                    &next_continuation_magnetization,
+                    certified_fields,
+                )?
+            }
+            _ => None,
+        };
+        continuation_magnetization = Some(next_continuation_magnetization);
+        continuation_completion = next_continuation_completion;
+        continuation_certified_fields = next_continuation_certified_fields;
+        continuation_stage_source = Some(next_continuation_stage_source);
+        continuation_fem_mesh_payload = next_continuation_fem_mesh_payload;
+        continuation_relax_handoff = next_relax_handoff;
         continuation_source = Some(continuation_source_from_backend_plan(
             &execution_plan.backend_plan,
         ));
@@ -9487,6 +9549,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                         continuation_magnetization = Some(loaded_state.values);
                         continuation_source = None; // loaded from file — unknown source
                         continuation_completion = None;
+                        drop(continuation_relax_handoff.take());
                         live_workspace.push_log(
                             "success",
                             format!(
@@ -9560,6 +9623,7 @@ pub(crate) fn run_script_mode(raw_args: Vec<OsString>) -> Result<()> {
                 }
                 continuation_source = None;
                 continuation_completion = None;
+                drop(continuation_relax_handoff.take());
                 if let Some(remesh_stage) = remesh_stages.into_iter().next() {
                     interactive_template_ir = remesh_stage.ir;
                     current_plan_summary = interactive_template_ir
@@ -10992,14 +11056,15 @@ pub(crate) fn prepare_live_workspace_for_ui(
 #[cfg(test)]
 mod tests {
     use super::{
-        accepted_relax_handoff_for_eigen_stage, adaptive_remesh_backend_legality_reason,
-        adaptive_remesh_legality_reason, apply_current_fem_overrides,
-        apply_initial_magnetization_state_override, apply_live_step_update_to_workspace_state,
-        apply_remeshed_problem_snapshot_to_stages, apply_stage_heartbeat_progress,
-        attach_initial_magnetization_state_override_metadata, attach_region_realization_revisions,
-        attach_stage_fem_mesh_identity, classify_wait_for_solve_command,
-        continuation_source_from_backend_plan, cumulative_rhs_evals, default_domain_region_markers,
-        deferred_mesh_failure_stage, discard_active_paused_stage_execution,
+        accepted_relax_handoff_for_eigen_stage, accepted_relax_handoff_from_completed_stage,
+        adaptive_remesh_backend_legality_reason, adaptive_remesh_legality_reason,
+        apply_current_fem_overrides, apply_initial_magnetization_state_override,
+        apply_live_step_update_to_workspace_state, apply_remeshed_problem_snapshot_to_stages,
+        apply_stage_heartbeat_progress, attach_initial_magnetization_state_override_metadata,
+        attach_region_realization_revisions, attach_stage_fem_mesh_identity,
+        classify_wait_for_solve_command, continuation_source_from_backend_plan,
+        cumulative_rhs_evals, default_domain_region_markers, deferred_mesh_failure_stage,
+        discard_active_paused_stage_execution,
         ensure_frequency_response_relaxed_continuation_is_qualified, execute_synthetic_stage,
         fail_owned_preparation_stage, fem_gpu_memory_preflight_message,
         fem_interactive_dense_ram_estimate, fem_live_mesh_payload_and_initial_magnetization,
@@ -13959,6 +14024,18 @@ mod tests {
         }
     }
 
+    fn certified_fields(node_count: usize) -> fullmag_runner::CertifiedFemEquilibriumFields {
+        let zeros = vec![[0.0, 0.0, 0.0]; node_count];
+        fullmag_runner::CertifiedFemEquilibriumFields::from_fields(
+            zeros.clone(),
+            zeros.clone(),
+            zeros.clone(),
+            zeros,
+            vec![0.0; node_count],
+        )
+        .expect("certified field fixture")
+    }
+
     #[test]
     fn frequency_response_rejects_max_steps_relaxation_continuation() {
         let stage = frequency_response_relaxed_stage();
@@ -14408,7 +14485,7 @@ mod tests {
             material: source.material,
             operator: fullmag_ir::EigenOperatorConfigIR {
                 kind: fullmag_ir::EigenOperatorIR::Full2x2,
-                include_demag: false,
+                include_demag: true,
             },
             count: 2,
             target: fullmag_ir::EigenTargetIR::Lowest,
@@ -14420,7 +14497,7 @@ mod tests {
             normalization: fullmag_ir::EigenNormalizationIR::UnitL2,
             damping_policy: fullmag_ir::EigenDampingPolicyIR::Ignore,
             enable_exchange: source.enable_exchange,
-            enable_demag: false,
+            enable_demag: source.enable_demag,
             interfacial_dmi: source.interfacial_dmi,
             dmi_interface_normal: source.dmi_interface_normal,
             bulk_dmi: source.bulk_dmi,
@@ -14443,16 +14520,24 @@ mod tests {
             stage_kind: "flat_relax".to_string(),
             is_relaxation: true,
         };
+        let fields = certified_fields(source_mesh.nodes.len());
 
-        let handoff = accepted_relax_handoff_for_eigen_stage(
-            &backend,
-            Some(&source_stage),
-            Some(&source_mesh),
-            Some(&completion),
-            Some(&m0),
+        let handoff = accepted_relax_handoff_from_completed_stage(
+            &source_backend,
+            &source_stage,
+            &source_mesh,
+            &completion,
+            &m0,
+            &fields,
         )
         .expect("accepted relax output should create a typed handoff");
         assert!(handoff.is_some());
+        let handoff = handoff.expect("accepted Relax must publish handoff v3 immediately");
+        assert!(
+            accepted_relax_handoff_for_eigen_stage(&backend, Some(&m0), Some(&handoff))
+                .expect("Eigen should consume the prepared handoff")
+                .is_some()
+        );
 
         let artifact_dir = temp_test_dir("relax-save-eigen-handoff");
         let save_action = ResolvedScriptStageAction::SaveState {
@@ -14473,6 +14558,8 @@ mod tests {
         let mut continuation_fem_mesh_payload = Some(source_mesh.clone());
         let mut continuation_completion = Some(completion.clone());
         let mut continuation_stage_source = Some(source_stage.clone());
+        let mut continuation_certified_fields = Some(fields.clone());
+        let mut continuation_relax_handoff = Some(handoff.clone());
 
         replace_continuation_after_synthetic_stage(
             &mut continuation_magnetization,
@@ -14480,7 +14567,10 @@ mod tests {
             &mut continuation_fem_mesh_payload,
             &mut continuation_completion,
             &mut continuation_stage_source,
+            &mut continuation_certified_fields,
+            &mut continuation_relax_handoff,
             save_outcome.magnetization,
+            false,
         );
 
         assert_eq!(continuation_magnetization.as_deref(), Some(m0.as_slice()));
@@ -14488,27 +14578,54 @@ mod tests {
         assert!(continuation_fem_mesh_payload.is_none());
         assert!(continuation_completion.is_none());
         assert!(continuation_stage_source.is_none());
+        assert!(continuation_certified_fields.is_none());
+        assert!(continuation_relax_handoff.is_none());
         let error = accepted_relax_handoff_for_eigen_stage(
             &backend,
-            continuation_stage_source.as_ref(),
-            continuation_fem_mesh_payload.as_ref(),
-            continuation_completion.as_ref(),
             continuation_magnetization.as_deref(),
+            continuation_relax_handoff.as_ref(),
         )
         .expect_err("save_state must invalidate the preceding relaxation handoff");
         assert!(error
             .to_string()
-            .contains("missing the immutable source FEM mesh payload"));
+            .contains("missing the accepted Relax handoff v3"));
+
+        let mut continuation_magnetization = Some(m0.clone());
+        let mut continuation_source = Some(continuation_source_from_backend_plan(&source_backend));
+        let mut continuation_fem_mesh_payload = Some(source_mesh.clone());
+        let mut continuation_completion = Some(completion.clone());
+        let mut continuation_stage_source = Some(source_stage.clone());
+        let mut continuation_certified_fields = Some(fields.clone());
+        let mut continuation_relax_handoff = Some(handoff.clone());
+        replace_continuation_after_synthetic_stage(
+            &mut continuation_magnetization,
+            &mut continuation_source,
+            &mut continuation_fem_mesh_payload,
+            &mut continuation_completion,
+            &mut continuation_stage_source,
+            &mut continuation_certified_fields,
+            &mut continuation_relax_handoff,
+            m0.clone(),
+            true,
+        );
+        assert!(accepted_relax_handoff_for_eigen_stage(
+            &backend,
+            continuation_magnetization.as_deref(),
+            continuation_relax_handoff.as_ref(),
+        )
+        .expect("change_device must preserve the certified relaxation handoff")
+        .is_some());
         let _ = fs::remove_dir_all(&artifact_dir);
 
         let mut rejected = completion;
         rejected.converged = false;
-        let error = accepted_relax_handoff_for_eigen_stage(
-            &backend,
-            Some(&source_stage),
-            Some(&source_mesh),
-            Some(&rejected),
-            Some(&m0),
+        let error = accepted_relax_handoff_from_completed_stage(
+            &source_backend,
+            &source_stage,
+            &source_mesh,
+            &rejected,
+            &m0,
+            &fields,
         )
         .expect_err("unaccepted relax output must fail closed before the runner");
         assert!(error.to_string().contains("completion_not_accepted"));
@@ -14518,15 +14635,16 @@ mod tests {
             is_relaxation: false,
             ..source_stage
         };
-        let error = accepted_relax_handoff_for_eigen_stage(
-            &backend,
-            Some(&non_relax_source),
-            Some(&source_mesh),
-            Some(&stage_completion(fullmag_ir::StageStopReason::Torque)),
-            Some(&m0),
+        assert!(accepted_relax_handoff_from_completed_stage(
+            &source_backend,
+            &non_relax_source,
+            &source_mesh,
+            &stage_completion(fullmag_ir::StageStopReason::Torque),
+            &m0,
+            &fields,
         )
-        .expect_err("a completed non-relaxation stage must not source the handoff");
-        assert!(error.to_string().contains("not a relaxation stage"));
+        .expect("a non-relaxation stage should invalidate rather than create a handoff")
+        .is_none());
     }
 
     #[test]

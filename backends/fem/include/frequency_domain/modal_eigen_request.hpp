@@ -14,7 +14,8 @@ constexpr std::uint32_t kFrequencyDomainPreviousAbiVersion = 14;
 constexpr std::uint32_t kFrequencyDomainV15AbiVersion = 15;
 constexpr std::uint32_t kFrequencyDomainV16AbiVersion = 16;
 constexpr std::uint32_t kFrequencyDomainV17AbiVersion = 17;
-constexpr std::uint32_t kFrequencyDomainAbiVersion = 18;
+constexpr std::uint32_t kFrequencyDomainV18AbiVersion = 18;
+constexpr std::uint32_t kFrequencyDomainAbiVersion = 19;
 
 enum class ModalExecutionTarget : std::uint32_t {
     auto_select = 0,

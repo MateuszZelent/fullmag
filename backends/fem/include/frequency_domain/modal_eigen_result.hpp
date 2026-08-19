@@ -40,6 +40,25 @@ struct ModalCertificateBindingProvenance {
     std::string reason = "none";
 };
 
+/*
+ * Native execution evidence accumulated by the modal adapter.  This is an
+ * internal typed bridge to the caller-sized result v20 sidecar; it is not
+ * part of the frozen by-value v18 result layout.  A partial T3 snapshot may
+ * attest HYPRE setup while the overall v20 measurement remains unavailable
+ * until the complete T4 object graph and digest set have been measured.
+ */
+struct ModalGpuExecutionAttestation {
+    bool hypre_policy_observed = false;
+    bool hypre_policy_configured = false;
+    bool hypre_memory_location_device = false;
+    bool hypre_execution_policy_device = false;
+    bool hypre_vendor_sptrans_enabled = false;
+    bool hypre_vendor_spmv_enabled = false;
+    bool hypre_vendor_spgemm_enabled = false;
+    int hypre_first_error_code = 0;
+    std::string hypre_failure_reason{};
+};
+
 struct FrequencyDomainContractResult {
     FrequencyDomainStatus status = FrequencyDomainStatus::unavailable;
     std::string error_message;
@@ -49,6 +68,7 @@ struct FrequencyDomainContractResult {
     ModalEigenTypedResult modal_eigen{};
     ModalExecutionProvenance modal_execution{};
     ModalCertificateBindingProvenance certificate_binding{};
+    ModalGpuExecutionAttestation modal_gpu_attestation{};
 };
 
 } // namespace fullmag::fem::frequency_domain

@@ -4,7 +4,7 @@
 
 **Goal:** Usunąć ukrytą bramkę względnego momentu `1e-6` z FEM K0 eigensolve i zastąpić ją certyfikatem równowagi wynikającym dokładnie z kryterium relaksacji wybranego przez użytkownika, z pełnym round-tripem artefaktów, API/UI i dowodem CPU/GPU dla periodycznej warstwy z dziurą.
 
-**Architecture:** `StageCompletionIR` pozostaje kanonicznym wynikiem relaksacji, a runner zamraża go w `AcceptedFemRelaxStageHandoff.v2`. Handoff albo certyfikowany import produkuje `equilibrium_artifact.v7`; natywny backend sprawdza integralność reprezentacji i zgodność digestów, lecz względny moment tylko mierzy. CPU i GPU konsumują ten sam backend-neutralny certyfikat, a Results pokazuje kryterium akceptacji oddzielnie od diagnostyki momentu.
+**Architecture:** `StageCompletionIR` pozostaje kanonicznym wynikiem relaksacji. `AcceptedFemRelaxStageHandoff.v2` i `equilibrium_artifact.v7` są zamrożonymi kontraktami bazowymi. Produkcyjny przepływ używa `CertifiedFemEquilibriumFields.v1` w `AcceptedFemRelaxStageHandoff.v3`, następnie `LinearizationState.v7` i `equilibrium_artifact.v8`, z rozdzielonymi podpisami źródłowej równowagi i operatora modalnego. Natywny backend sprawdza integralność reprezentacji i zgodność digestów, lecz względny moment tylko mierzy. CPU i GPU konsumują ten sam backend-neutralny certyfikat, a Results pokazuje kryterium akceptacji oddzielnie od diagnostyki momentu.
 
 **Tech Stack:** Rust (`fullmag-ir`, `fullmag-runner`, `fullmag-api`), C++17/MFEM ABI, Python validators, React/TypeScript Control Room, container-backed `just` managed FEM runtime.
 
@@ -16,6 +16,9 @@
 - Produkcyjne `equilibrium_source="artifact"` i `"provided"` wymagają certyfikatu; surowy wektor jest dozwolony tylko w jawnie oznaczonym adapterze testowym bez production implication.
 - Nie wolno przebudować meshu między `relax` i `eigenmodes`; generation, topology, indexing, part registry, materiały, fizyka, BC, demag i magnetyzacja muszą zachować tożsamość.
 - `equilibrium_artifact.v6` nie podlega automatycznej promocji; brak dowodu źródłowego kończy się fail-closed z komunikatem wymagającym ponownej relaksacji lub migracji.
+- Nie rozszerzać w miejscu `AcceptedFemRelaxStageHandoff.v2`,
+  `LinearizationState.v6` ani `equilibrium_artifact.v7`. Nowe publiczne pola
+  wymagają odpowiednio v3, v7 i v8.
 - Natywne FEM/MFEM/CUDA buildy i dowody runtime używają wyłącznie kontenerowych receptur repozytorium `justfile` jako ścieżki autorytatywnej.
 - Nie zmieniać publicznych `tolA`, `tolT`, `energy_tolerance` ani ich istniejącego loweringu do `ProblemIR`.
 
@@ -69,7 +72,10 @@ git commit -m "docs(physics): define independent relaxation criteria"
 
 ---
 
-### Task 1: Kanoniczny certyfikat ukończenia i handoff v2
+### Task 1: Kanoniczny certyfikat ukończenia i zamrożona baza handoff v2
+
+Ten task opisuje historyczną bazę. Po jego wykonaniu v2 jest zamrożone; kolejne
+pola są wdrażane wyłącznie przez Task 1A.
 
 **Files:**
 - Modify: `crates/fullmag-runner/src/relaxation/convergence.rs`
@@ -161,7 +167,47 @@ git commit -m "fix(runner): preserve authored equilibrium criterion"
 
 ---
 
-### Task 2: Certyfikowany equilibrium_artifact.v7 i migracja fail-closed
+### Task 1A: Handoff v3, certified fields i rozdzielone podpisy źródła
+
+**Files:**
+- Modify: `crates/fullmag-runner/src/types.rs`
+- Modify: `crates/fullmag-runner/src/fem/relax/finalize.rs`
+- Modify: `crates/fullmag-runner/src/fem_eigen.rs`
+- Modify: `crates/fullmag-cli/src/orchestrator.rs`
+- Test: focused runner/orchestrator handoff tests
+
+**Interfaces:**
+- Consumes: zamrożony v2, `CertifiedFemEquilibriumFields.v1`, source Relax
+  material/static-physics/static-BC inputs.
+- Produces: `AcceptedFemRelaxStageHandoff.v3` i jeden content SHA-256 wiążący
+  completion, mesh/indexing/parts, `m0`, certified fields oraz trzy podpisy
+  równowagi.
+
+- [ ] **Step 1: RED schema tests** — snapshot v2 nie zmienia layoutu ani hash
+  namespace; rozszerzony payload deklarujący v2 jest odrzucony; v3 round-trip
+  zachowuje `certified_fields.content_sha256` i trzy source signatures.
+- [ ] **Step 2: RED mutation matrix** — osobno zmienić materiał, statyczną
+  fizykę, statyczne BC, każdy field component i `phi`; oczekiwać odrzucenia
+  przed `build_shared_domain_linearization_state` i przed native ABI.
+- [ ] **Step 3: Split signatures** — wdrożyć
+  `equilibrium_material_signature`, `equilibrium_static_physics_signature`,
+  `equilibrium_boundary_signature`; nie włączać `operator.kind` ani
+  `spin_wave_bc`. Zachować osobne `modal_operator_signature` i
+  `modal_dynamic_boundary_signature`.
+- [ ] **Step 4: Bind certified fields** — walidować schema, shape, finiteness,
+  content digest oraz wspieraną relację
+  `H_eff = H_ex + H_demag + H_ext`. W provenance oznaczyć źródło jako carried
+  certified snapshot, nie `recomputed_from_equilibrium`.
+- [ ] **Step 5: GREEN** — uruchomić focused runner/CLI tests, test zmiany
+  urządzenia zachowującej v3 oraz test innego synthetic stage czyszczącego
+  handoff. Żaden test nie może akceptować nowego pola pod nazwą v2.
+
+---
+
+### Task 2: Zamrożona baza equilibrium_artifact.v7 i migracja fail-closed
+
+Ten task opisuje historyczną bazę certyfikatu. v7 pozostaje czytelne wyłącznie
+zgodnie z jego dotychczasowym kontraktem; nowy publiczny payload wdraża Task 2A.
 
 **Files:**
 - Modify: `crates/fullmag-runner/src/fem_eigen.rs`
@@ -242,6 +288,35 @@ git commit -m "feat(eigen): require certified equilibrium artifact v7"
 
 ---
 
+### Task 2A: LinearizationState.v7 i equilibrium_artifact.v8
+
+**Files:**
+- Modify: `crates/fullmag-runner/src/fem_eigen.rs`
+- Modify: `scripts/verify_fem_frequency_domain_eigen_artifacts.py`
+- Modify: `scripts/validate_fem_periodic_antidot_relax_eigenmodes_runtime.py`
+- Test: matching Python validator tests and runner schema tests
+
+**Interfaces:**
+- Consumes: wyłącznie poprawny handoff v3 albo równoważny certyfikowany import.
+- Produces: `LinearizationState.v7`, `equilibrium_artifact.v8`, jawny
+  `certified_fields_content_sha256`, trzy source-equilibrium signatures i dwa
+  modal signatures.
+
+- [ ] **Step 1: RED old-schema tests** — v6 state, v7 artifact i rozszerzony v2
+  handoff nie mogą wejść do produkcyjnej ścieżki wymagającej v3/v7/v8.
+- [ ] **Step 2: Writer/loader v8** — zapisać wszystkie digests/signatures,
+  acceptance certificate i dokładną provenance carried fields. Loader
+  waliduje content SHA przed odczytem `m0` lub pól.
+- [ ] **Step 3: Runtime validator** — wymagać v3/v7/v8, pełnego completion,
+  certified-field digest, trzech source signatures, dwóch modal signatures i
+  artifact content SHA. Fixture zawierający tylko booleany acceptance musi
+  failować.
+- [ ] **Step 4: GREEN** — runner tests, oba validator test modules i negatywna
+  macierz pojedynczych mutacji przechodzą; `rg` nie znajduje writerów, które
+  emitują nowe pola pod v2/v6/v7.
+
+---
+
 ### Task 3: Natywna linearyzacja bez fizycznej bramki względnego momentu
 
 **Files:**
@@ -256,8 +331,12 @@ git commit -m "feat(eigen): require certified equilibrium artifact v7"
 - Test: `backends/fem/tests/frequency_domain/modal_eigen_contract_test.cpp`
 
 **Interfaces:**
-- Consumes: v7 accepted flag, acceptance certificate digest oraz pola `m0/H_eff0`.
-- Produces: ABI v19, native representation-integrity result i diagnostyczny `max_m0_cross_heff0_relative` bez porównania z progiem.
+- Consumes: v8 accepted flag, acceptance certificate digest, v3 source signatures oraz certified `m0/H_eff0`.
+- Produces: request/shared-domain payload ABI v19, native
+  representation-integrity result i diagnostyczny
+  `max_m0_cross_heff0_relative`. Dla certyfikatu torque natywna kontrola używa
+  dokładnie zaakceptowanego progu użytkownika; dla certyfikatu energy pozostaje
+  wyłącznie ścisły, niezależny guard integralności reprezentacji.
 
 - [ ] **Step 1: Dodać RED test native energy-certified high-torque**
 
@@ -278,9 +357,11 @@ Run: `just verify-fem-frequency-domain-native-contract`
 
 Expected: FAIL `equilibrium_torque_residual_too_large`.
 
-- [ ] **Step 3: Podnieść ABI do v19 i usunąć tolerance field**
+- [x] **Step 3: Podnieść request/shared-domain payload ABI do v19 przez append-only tail**
 
-W `FullmagFemPoissonAirboxSharedDomainPayload` zastąpić `equilibrium_torque_relative_tolerance` polami:
+W `FullmagFemPoissonAirboxSharedDomainPayload` zachować zamrożony prefix v18,
+w tym historyczne pole `equilibrium_torque_relative_tolerance`, ale nie używać
+go jako fizycznej bramki. Dopisać append-only tail v19:
 
 ```c
 const char *acceptance_criterion;
@@ -291,7 +372,13 @@ double acceptance_threshold;
 const char *acceptance_certificate_sha256;
 ```
 
-`LinearizationBuildOptions` zachowuje tylko tolerancje integralności reprezentacji. C++ nadal oblicza relative torque, sprawdza jego skończoność i publikuje go w diagnostics, ale usuwa porównanie oraz reject reason `equilibrium_torque_residual_too_large`.
+`LinearizationBuildOptions` zachowuje tylko tolerancje integralności
+reprezentacji. C++ nadal oblicza relative torque, sprawdza jego skończoność i
+publikuje go w diagnostics. Certyfikat torque przekazuje
+`acceptance_threshold` w `A/m`, więc kontrola statycznego pola nie może być
+ostrzejsza niż próg zaakceptowany przez użytkownika. Certyfikat energy nie jest
+reinterpretowany jako certyfikat torque; stosuje wyłącznie niezależny guard
+integralności reprezentacji.
 
 - [ ] **Step 4: Dodać negatywne testy integralności certyfikatu**
 
@@ -326,10 +413,10 @@ git commit -m "fix(fem): make relative torque diagnostic only"
 - Test: `crates/fullmag-runner/src/fem/eigen_equilibrium.rs`
 
 **Interfaces:**
-- Consumes: handoff v2 lub artifact v7.
+- Consumes: handoff v3 lub artifact v8.
 - Produces: jedną ścieżkę `SharedDomainLinearizationState` z certyfikatem, identyczną dla CPU/GPU; brak wewnętrznego `RELAX_*`.
 
-- [ ] **Step 1: Dodać RED test braku samodzielnej relaksacji**
+- [x] **Step 1: Dodać RED test braku samodzielnej relaksacji**
 
 Test dla `RelaxedInitialState` bez handoffu wymaga błędu przed assembly:
 
@@ -339,13 +426,13 @@ assert!(error.message.contains("accepted relaxation handoff is required"));
 
 Test dla `Provided` bez certyfikatu produkcyjnego wymaga `uncertified_provided_equilibrium`, natomiast jawny validation-only fixture pozostaje dostępny wyłącznie w `#[cfg(test)]`.
 
-- [ ] **Step 2: Potwierdzić RED**
+- [x] **Step 2: Potwierdzić RED**
 
 Run: `cargo test -p fullmag-runner --quiet fem_eigen`
 
 Expected: FAIL, ponieważ `materialize_equilibrium` nadal wykonuje wewnętrzne 4000 kroków.
 
-- [ ] **Step 3: Usunąć ukrytą relaksację i przepiąć certyfikat**
+- [x] **Step 3: Usunąć ukrytą relaksację i przepiąć certyfikat**
 
 Usunąć `RELAX_DT`, `RELAX_MAX_STEPS`, `RelaxationControlIR` i pętlę pre-eigen z `eigen_equilibrium.rs`. `build_shared_domain_linearization_state` otrzymuje certyfikat zaakceptowanego źródła, zapisuje v7 i wypełnia ABI v19. Relative torque pozostaje w `observables`; komunikat z `> 1e-6` znika.
 
@@ -363,6 +450,12 @@ rg -n "equilibrium_torque_relative_tolerance|relative torque .*1e-6|RELAX_MAX_ST
 ```
 
 Expected: tests PASS; brak aktywnego pola/bramki/pętli, poza testem regresyjnym i opisem migracji.
+
+Stan 2026-08-13: focused handoff 5/5, jawny adapter `Provided` pod
+`#[cfg(test)]` 2/2 oraz GPU Kittel fail-closed 1/1 przechodzą. Pełny gate i
+parytet requestów CPU/GPU pozostają otwarte; managed build najnowszego źródła
+blokuje pojemność magazynu runtimu, dlatego Step 4–5 nie są oznaczone jako
+ukończone.
 
 - [ ] **Step 6: Commit**
 
@@ -383,7 +476,7 @@ git commit -m "fix(runner): require certified eigen equilibrium"
 - Test: `apps/control-room/src/modules/inspector/panels/FrequencyDomainInspectorPanel.test.tsx`
 
 **Interfaces:**
-- Consumes: v7 artifact/provenance resource.
+- Consumes: v8 artifact/provenance resource.
 - Produces: typed Results fields `acceptanceCriterion`, `metricKind`, `metricValue`, `threshold`, `unit`, torque observables i representation integrity.
 
 - [ ] **Step 1: Dodać RED test serializacji API i renderu Inspectora**
@@ -454,7 +547,7 @@ git commit -m "feat(results): expose equilibrium acceptance certificate"
 Walidator wymaga:
 
 ```python
-require(equilibrium["schema_version"] == "equilibrium_artifact.v7", "v7")
+require(equilibrium["schema_version"] == "equilibrium_artifact.v8", "v8")
 require(equilibrium["acceptance_certificate"]["criterion"] in {"torque", "energy"}, "criterion")
 require(summary["equilibrium_source"]["handoff"] == "stage_continuation", "handoff")
 require(relax_mesh_digest == eigen_mesh_digest, "no remesh")

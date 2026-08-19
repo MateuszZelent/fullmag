@@ -11,6 +11,14 @@
 **Dokument nadrzędny DoD:** `24_production_definition_of_done.md`
 **Plan poprzedzający:** `docs/superpowers/plans/2026-07-12-fem-k0-demag-final-production.md`
 
+**Rewizja certified handoff 2026-08-13:** snapshot bazowy
+`2e7ce7579ca5879901a297f23d8bffbe475d9b8d` plus dirty source produkuje
+`CertifiedFemEquilibriumFields.v1`, lecz rozszerza schema handoff v2 w miejscu i
+nie porównuje source material/static-physics/static-BC z targetem. Obowiązujący
+następny kontrakt to `AcceptedFemRelaxStageHandoff.v3`,
+`LinearizationState.v7` i `equilibrium_artifact.v8`; szczegóły i brak promocji
+capability zapisuje checkpoint 6.9.
+
 **Rewizja scope T1 2026-08-12:** zgodnie z zaakceptowanym projektem
 `docs/superpowers/specs/2026-08-11-fem-k0-eigensolve-full-gpu-design.md` i planem
 `docs/superpowers/plans/2026-08-11-fem-k0-eigensolve-full-gpu-implementation.md`
@@ -473,6 +481,57 @@ Dodatkowo:
 - Obecny smoke authoring przechwytuje `/v2/**` i deklaruje fixture jako źródło
   prawdy; nie jest native/browser qualification.
 
+### 6.9 Checkpoint 2026-08-13 — certified-fields istnieją, lecz handoff wymaga migracji v3/v7/v8
+
+Ten checkpoint zastępuje wyłącznie nieaktualne szczegóły ABI/certyfikatu w
+sekcjach 6.2–6.3; pozostałe bramki historycznego audytu pozostają w mocy.
+
+Stan źródłowy:
+
+- request/shared-domain payload używa append-only ABI v19, legacy by-value
+  result pozostaje v18, a caller-sized GPU attestation envelope używa v20;
+- finalizacja native FEM zapisuje `CertifiedFemEquilibriumFields.v1` z
+  `H_ex/H_demag/H_ext/H_eff/phi` i content SHA-256;
+- handoff wiąże mesh/topology/indexing/parts, `m0`, completion oraz digest
+  certified fields i zachowuje je przez dozwolony `change_device`;
+- importer natywny ma jawny magnetic/airbox role map zamiast interpretowania
+  każdego niezerowego geometry marker jako materiału.
+
+Niezamknięta wada schematu i tożsamości:
+
+- rozszerzony handoff nadal deklaruje `AcceptedFemRelaxStageHandoff.v2`, więc
+  v2 zostało niekompatybilnie zmienione w miejscu;
+- podpisy materiału, fizyki i BC są obecnie wyliczane tylko z target Eigen.
+  Podpis fizyki zawiera operator modalny, a podpis BC zawiera `spin_wave_bc`,
+  zatem nie dowodzą one tożsamości źródłowego Relax;
+- carried certified fields są w provenance opisane jako
+  `recomputed_from_equilibrium`, mimo że zastępują recomputed observables;
+- runtime validator może przejść na fixture zawierającym głównie booleany i
+  nie wymaga pełnego completion, certified-field digest ani source signatures.
+
+Obowiązująca korekta produkcyjna:
+
+1. Zamrozić legacy `AcceptedFemRelaxStageHandoff.v2`,
+   `LinearizationState.v6` i `equilibrium_artifact.v7`.
+2. Dodać `AcceptedFemRelaxStageHandoff.v3` wiążący
+   `CertifiedFemEquilibriumFields.v1` oraz
+   `equilibrium_material_signature`,
+   `equilibrium_static_physics_signature` i
+   `equilibrium_boundary_signature` zapisane przez Relax.
+3. Oddzielić `modal_operator_signature` i
+   `modal_dynamic_boundary_signature`; nie używać target-only digestu jako
+   dowodu źródła.
+4. Emitować `LinearizationState.v7`. Ponieważ publiczny equilibrium payload
+   dostaje source-field digest i rozdzielone source/modal signatures, emitować
+   `equilibrium_artifact.v8`, nie mutować v7.
+5. Dodać fail-closed mutation matrix dla materiału, statycznej fizyki,
+   statycznych BC, każdego certified field, operatora modalnego i dynamicznych
+   BC oraz wzmocnić periodic-antidot runtime validator.
+
+Do zamknięcia punktów 1–5 status certified handoff, modal CPU i modal GPU
+pozostaje `source_visible / unvalidated`; ten checkpoint nie promuje żadnego
+`executable_scope` ani `validated_scope`.
+
 ## 7. Decyzje architektoniczne zamrożone przez ten plan
 
 1. Produkcyjny eigensolve K0 w tym planie dotyczy FEM. FDM modal eigensolve
@@ -846,7 +905,9 @@ oraz świeży managed-native runtime proof pozostają otwarte.
 
 1. Zdefiniuj kompletne, wersjonowane pola dla:
 
-   - `LinearizationState.v6` i acceptance tolerances;
+   - zamrożony `LinearizationState.v6` oraz produkcyjny
+     `LinearizationState.v7` z acceptance criterion, certified-field digest i
+     rozdzielonymi source/modal signatures;
    - magnetic/scalar equivalence classes, corner classes, orientation,
      translation, seam i frame cycles;
    - region/part identity oraz magnetic/airbox cell map;

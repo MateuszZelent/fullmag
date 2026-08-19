@@ -292,7 +292,12 @@ pub(crate) struct NativeModalEigenSharedDomainProblem<'a> {
     pub equilibrium_content_sha256: String,
     pub demag_model: String,
     pub m0_norm_tolerance: f64,
-    pub equilibrium_torque_relative_tolerance: f64,
+    pub acceptance_criterion: String,
+    pub acceptance_metric_kind: String,
+    pub acceptance_unit: String,
+    pub acceptance_metric_value: f64,
+    pub acceptance_threshold: f64,
+    pub acceptance_certificate_sha256: String,
     pub saturation_magnetisation_a_per_m: Vec<f64>,
     pub uniform_saturation_magnetisation_a_per_m: f64,
     pub gamma0_m_per_a_s: f64,
@@ -352,9 +357,10 @@ impl NativeModalCertificateV6FfiView {
     fn new(view: &crate::fem_eigen::OwnedModalCertificateV6View) -> Result<Self, String> {
         let part_identity = CString::new(view.part_identity.as_bytes())
             .map_err(|_| "native FEM modal certificate part identity contains NUL".to_string())?;
-        let topology_fingerprint = CString::new(view.topology_fingerprint.as_bytes()).map_err(
-            |_| "native FEM modal certificate topology fingerprint contains NUL".to_string(),
-        )?;
+        let topology_fingerprint =
+            CString::new(view.topology_fingerprint.as_bytes()).map_err(|_| {
+                "native FEM modal certificate topology fingerprint contains NUL".to_string()
+            })?;
         let expected_class_digest_strings = view
             .expected_class_digests
             .iter()
@@ -365,11 +371,13 @@ impl NativeModalCertificateV6FfiView {
             .expected_class_digests
             .iter()
             .zip(&expected_class_digest_strings)
-            .map(|(digest, text)| ffi::FullmagFemModalCertificateV6ClassDigest {
-                canonical_class_id: digest.canonical_class_id,
-                member_count: digest.member_count,
-                sha256: text.as_ptr(),
-            })
+            .map(
+                |(digest, text)| ffi::FullmagFemModalCertificateV6ClassDigest {
+                    canonical_class_id: digest.canonical_class_id,
+                    member_count: digest.member_count,
+                    sha256: text.as_ptr(),
+                },
+            )
             .collect();
         let convert_relation = |relation: &crate::fem_eigen::OwnedModalCertificateV6Relation| {
             ffi::FullmagFemModalCertificateV6Relation {
@@ -470,7 +478,7 @@ impl NativeModalCertificateV6FfiBinding {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 struct NativeModalSharedDomainFfiEnvelopeContract {
     descriptor_required: bool,
     node_count: u64,
@@ -483,6 +491,12 @@ struct NativeModalSharedDomainFfiEnvelopeContract {
     term_presence_mask: u32,
     exchange_material_view_present: bool,
     demag_provider_bound_to_operator_input: bool,
+    acceptance_criterion: String,
+    acceptance_metric_kind: String,
+    acceptance_unit: String,
+    acceptance_metric_value: f64,
+    acceptance_threshold: f64,
+    acceptance_certificate_sha256: String,
 }
 
 impl<'a> NativeModalEigenSharedDomainProblem<'a> {
@@ -587,6 +601,37 @@ impl<'a> NativeModalEigenSharedDomainProblem<'a> {
                     .to_string(),
             );
         }
+        if !digest_valid(&self.acceptance_certificate_sha256) {
+            return Err(
+                "native FEM modal_eigen requires a canonical accepted-equilibrium certificate digest"
+                    .to_string(),
+            );
+        }
+        if !self.acceptance_metric_value.is_finite()
+            || self.acceptance_metric_value < 0.0
+            || !self.acceptance_threshold.is_finite()
+            || self.acceptance_threshold < 0.0
+            || self.acceptance_metric_value > self.acceptance_threshold
+        {
+            return Err(
+                "native FEM modal_eigen accepted-equilibrium metric is invalid or unsatisfied"
+                    .to_string(),
+            );
+        }
+        let coherent_acceptance = matches!(
+            (
+                self.acceptance_criterion.as_str(),
+                self.acceptance_metric_kind.as_str(),
+                self.acceptance_unit.as_str(),
+            ),
+            ("torque", "max_torque_apm", "A/m") | ("energy", "total_energy_plateau_range_j", "J")
+        );
+        if !coherent_acceptance {
+            return Err(
+                "native FEM modal_eigen accepted-equilibrium criterion tuple is incoherent"
+                    .to_string(),
+            );
+        }
         let term_digest_matches = |term: u32, digest: Option<&String>| {
             if self.term_presence_mask & term != 0 {
                 digest.is_some_and(|value| digest_valid(value))
@@ -632,7 +677,24 @@ impl<'a> NativeModalEigenSharedDomainProblem<'a> {
             exchange_material_view_present: self.exchange_stiffness_j_per_m.is_some(),
             demag_provider_bound_to_operator_input: self.demag_provider_signature.as_deref()
                 == Some(&self.operator_input_digest),
+            acceptance_criterion: self.acceptance_criterion.clone(),
+            acceptance_metric_kind: self.acceptance_metric_kind.clone(),
+            acceptance_unit: self.acceptance_unit.clone(),
+            acceptance_metric_value: self.acceptance_metric_value,
+            acceptance_threshold: self.acceptance_threshold,
+            acceptance_certificate_sha256: self.acceptance_certificate_sha256.clone(),
         })
+    }
+
+    fn ffi_envelope_contract_for_target(
+        &self,
+        execution_target: NativeModalExecutionTarget,
+    ) -> Result<NativeModalSharedDomainFfiEnvelopeContract, String> {
+        match execution_target {
+            NativeModalExecutionTarget::Auto
+            | NativeModalExecutionTarget::ProductionCpu
+            | NativeModalExecutionTarget::ProductionGpu => self.ffi_envelope_contract(),
+        }
     }
 
     #[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
@@ -665,6 +727,10 @@ impl<'a> NativeModalEigenSharedDomainProblem<'a> {
         producer_run_id: &'b CString,
         equilibrium_content_sha256: &'b CString,
         demag_model: &'b CString,
+        acceptance_criterion: &'b CString,
+        acceptance_metric_kind: &'b CString,
+        acceptance_unit: &'b CString,
+        acceptance_certificate_sha256: &'b CString,
         linearization_descriptor: &'b ffi::FullmagFemModalLinearizationDescriptor,
         exchange_material_view: Option<&'b ffi::FullmagFemModalExchangeMaterialView>,
         envelope: &'b NativeModalSharedDomainFfiEnvelopeContract,
@@ -698,7 +764,7 @@ impl<'a> NativeModalEigenSharedDomainProblem<'a> {
             saturation_magnetisation_count: self.saturation_magnetisation_a_per_m.len() as u64,
             uniform_saturation_magnetisation_a_per_m: self.uniform_saturation_magnetisation_a_per_m,
             gamma0_m_per_a_s: self.gamma0_m_per_a_s,
-            // ABI v18 forbids the legacy runner-owned magnetic A_qq CSR.
+            // ABI v19 forbids the legacy runner-owned magnetic A_qq CSR.
             // Native MFEM assembles A_qq from the physical descriptor below.
             magnetic_a_qq_csr: ffi::FullmagFemCsrMatrixView {
                 row_count: 0,
@@ -739,7 +805,7 @@ impl<'a> NativeModalEigenSharedDomainProblem<'a> {
             equilibrium_content_sha256: equilibrium_content_sha256.as_ptr(),
             demag_model: demag_model.as_ptr(),
             m0_norm_tolerance: self.m0_norm_tolerance,
-            equilibrium_torque_relative_tolerance: self.equilibrium_torque_relative_tolerance,
+            equilibrium_torque_relative_tolerance: 0.0,
             mesh_generation_identity: mesh_generation_identity.as_ptr(),
             canonical_preimage: canonical_preimage.as_ptr(),
             canonical_preimage_len: self.canonical_preimage.as_bytes().len() as u64,
@@ -752,6 +818,12 @@ impl<'a> NativeModalEigenSharedDomainProblem<'a> {
             linearization_descriptor,
             exchange_material_view: exchange_material_view
                 .map_or(std::ptr::null(), |value| value as *const _),
+            acceptance_criterion: acceptance_criterion.as_ptr(),
+            acceptance_metric_kind: acceptance_metric_kind.as_ptr(),
+            acceptance_unit: acceptance_unit.as_ptr(),
+            acceptance_metric_value: self.acceptance_metric_value,
+            acceptance_threshold: self.acceptance_threshold,
+            acceptance_certificate_sha256: acceptance_certificate_sha256.as_ptr(),
         }
     }
 }
@@ -887,6 +959,7 @@ pub(crate) struct NativeFrequencyDomainContractResult {
     pub result_json: String,
     pub artifact_manifest_path: String,
     pub modal_eigen: Option<NativeModalEigenTypedResult>,
+    pub modal_gpu_attestation: Option<NativeModalGpuAttestation>,
     pub resolved_fallback_state: u32,
     pub resolved_engine_id: String,
     pub resolved_fallback_reason: String,
@@ -1638,10 +1711,13 @@ fn solve_native_modal_eigen_impl(
         })?;
     let shared_domain = request.shared_domain_problem.as_ref();
     let shared_ffi_envelope = shared_domain
-        .map(NativeModalEigenSharedDomainProblem::ffi_envelope_contract)
+        .map(|problem| problem.ffi_envelope_contract_for_target(request.execution_target))
         .transpose()?;
-    let shared_packed_mesh =
-        shared_domain.map(|problem| super::PackedNativeMesh::new(problem.mesh));
+    let shared_packed_mesh = shared_domain.map(|problem| {
+        let mut packed = super::PackedNativeMesh::new(problem.mesh);
+        packed.replace_cell_markers(&problem.certificate_binding_v6.cell_markers);
+        packed
+    });
     let shared_mesh_descriptor = shared_domain
         .zip(shared_packed_mesh.as_ref())
         .map(|(problem, packed)| packed.descriptor(problem.mesh));
@@ -1702,28 +1778,59 @@ fn solve_native_modal_eigen_impl(
             "native FEM modal_eigen certificate binding reason contains NUL".to_string()
         })?;
     let shared_boundary_gauge_digest = shared_domain
-        .map(|problem| CString::new(problem.certificate_binding_v6.boundary_gauge_digest.as_bytes()))
+        .map(|problem| {
+            CString::new(
+                problem
+                    .certificate_binding_v6
+                    .boundary_gauge_digest
+                    .as_bytes(),
+            )
+        })
         .transpose()
         .map_err(|_| "native FEM modal_eigen boundary gauge digest contains NUL".to_string())?;
     let shared_bias_field_sample_id = shared_domain
-        .map(|problem| CString::new(problem.certificate_binding_v6.bias_field_sample_id.as_bytes()))
+        .map(|problem| {
+            CString::new(
+                problem
+                    .certificate_binding_v6
+                    .bias_field_sample_id
+                    .as_bytes(),
+            )
+        })
         .transpose()
         .map_err(|_| "native FEM modal_eigen bias field sample id contains NUL".to_string())?;
     let shared_bias_field_sample_signature = shared_domain
         .map(|problem| {
-            CString::new(problem.certificate_binding_v6.bias_field_sample_signature.as_bytes())
+            CString::new(
+                problem
+                    .certificate_binding_v6
+                    .bias_field_sample_signature
+                    .as_bytes(),
+            )
         })
         .transpose()
         .map_err(|_| "native FEM modal_eigen bias field signature contains NUL".to_string())?;
     let shared_magnetic_part_identity = shared_domain
         .map(|problem| {
-            CString::new(problem.certificate_binding_v6.mesh_magnetic.part_identity.as_bytes())
+            CString::new(
+                problem
+                    .certificate_binding_v6
+                    .mesh_magnetic
+                    .part_identity
+                    .as_bytes(),
+            )
         })
         .transpose()
         .map_err(|_| "native FEM modal_eigen magnetic part identity contains NUL".to_string())?;
     let shared_airbox_part_identity = shared_domain
         .map(|problem| {
-            CString::new(problem.certificate_binding_v6.mesh_scalar.part_identity.as_bytes())
+            CString::new(
+                problem
+                    .certificate_binding_v6
+                    .mesh_scalar
+                    .part_identity
+                    .as_bytes(),
+            )
         })
         .transpose()
         .map_err(|_| "native FEM modal_eigen airbox part identity contains NUL".to_string())?;
@@ -1765,6 +1872,24 @@ fn solve_native_modal_eigen_impl(
         .map(|problem| CString::new(problem.demag_model.as_bytes()))
         .transpose()
         .map_err(|_| "native FEM modal_eigen demag model contains NUL".to_string())?;
+    let shared_acceptance_criterion = shared_domain
+        .map(|problem| CString::new(problem.acceptance_criterion.as_bytes()))
+        .transpose()
+        .map_err(|_| "native FEM modal_eigen acceptance criterion contains NUL".to_string())?;
+    let shared_acceptance_metric_kind = shared_domain
+        .map(|problem| CString::new(problem.acceptance_metric_kind.as_bytes()))
+        .transpose()
+        .map_err(|_| "native FEM modal_eigen acceptance metric contains NUL".to_string())?;
+    let shared_acceptance_unit = shared_domain
+        .map(|problem| CString::new(problem.acceptance_unit.as_bytes()))
+        .transpose()
+        .map_err(|_| "native FEM modal_eigen acceptance unit contains NUL".to_string())?;
+    let shared_acceptance_certificate_sha256 = shared_domain
+        .map(|problem| CString::new(problem.acceptance_certificate_sha256.as_bytes()))
+        .transpose()
+        .map_err(|_| {
+            "native FEM modal_eigen acceptance certificate digest contains NUL".to_string()
+        })?;
     let shared_exchange_term_digest = shared_domain
         .and_then(|problem| problem.exchange_term_digest.as_deref())
         .map(CString::new)
@@ -1791,86 +1916,92 @@ fn solve_native_modal_eigen_impl(
         .map_err(|_| "native FEM modal_eigen demag provider signature contains NUL".to_string())?;
     // All backing vectors and C strings are owned above this point and remain
     // alive until fullmag_fem_modal_eigen_solve() returns.
-    let shared_linearization_descriptor = shared_domain
-        .zip(shared_ffi_envelope.as_ref())
-        .map(|(problem, envelope)| {
-        debug_assert!(envelope.descriptor_required);
-        ffi::FullmagFemModalLinearizationDescriptor {
-            abi_version: ffi::FULLMAG_FEM_MODAL_LINEARIZATION_DESCRIPTOR_V1_ABI_VERSION,
-            reserved0: 0,
-            struct_size: std::mem::size_of::<ffi::FullmagFemModalLinearizationDescriptor>() as u64,
-            schema_version: c"modal_linearization_descriptor.v1".as_ptr(),
-            node_count: envelope.node_count,
-            tangent_dof_count: envelope.node_count * 2,
-            coordinate_unit: c"m".as_ptr(),
-            magnetisation_unit: c"A/m".as_ptr(),
-            time_unit: c"s".as_ptr(),
-            frequency_unit: c"Hz".as_ptr(),
-            angular_frequency_unit: c"rad/s".as_ptr(),
-            linearization_state_digest: shared_linearization_state_digest
-                .as_ref()
-                .expect("shared-domain state CString must exist")
-                .as_ptr(),
-            equilibrium_digest: shared_equilibrium_digest
-                .as_ref()
-                .expect("shared-domain equilibrium CString must exist")
-                .as_ptr(),
-            exchange_term_digest: optional_str_ptr(shared_exchange_term_digest.as_ref()),
-            field_term_digest: optional_str_ptr(shared_field_term_digest.as_ref()),
-            anisotropy_term_digest: std::ptr::null(),
-            dmi_term_digest: std::ptr::null(),
-            demag_term_digest: optional_str_ptr(shared_demag_term_digest.as_ref()),
-            operator_input_digest: shared_operator_input_digest
-                .as_ref()
-                .expect("shared-domain operator digest CString must exist")
-                .as_ptr(),
-            demag_provider_signature: optional_str_ptr(shared_demag_provider_signature.as_ref()),
-            term_presence_mask: envelope.term_presence_mask,
-            reserved_contract_flags: 0,
-            tangent_frame_xyz: problem.tangent_frame_xyz.as_ptr(),
-            tangent_frame_xyz_count: envelope.tangent_frame_count,
-            equilibrium_m0_xyz: problem.linearization_m0_xyz.as_ptr(),
-            equilibrium_m0_xyz_count: envelope.equilibrium_m0_count,
-            effective_field_h_eff0_xyz: problem.linearization_h_eff0_xyz.as_ptr(),
-            effective_field_h_eff0_xyz_count: envelope.effective_field_count,
-            external_field_h_ext0_xyz: problem.external_field_h_ext0_xyz.as_ptr(),
-            external_field_h_ext0_xyz_count: envelope.external_field_count,
-            alpha_per_node: problem.alpha_per_node.as_ptr(),
-            alpha_per_node_count: envelope.alpha_count,
-            uniaxial_axis_xyz: std::ptr::null(),
-            uniaxial_axis_xyz_count: 0,
-            uniaxial_anisotropy_field_a_per_m: std::ptr::null(),
-            uniaxial_anisotropy_field_count: 0,
-            saturation_magnetisation_a_per_m: if problem
-                .saturation_magnetisation_a_per_m
-                .is_empty()
-            {
-                std::ptr::null()
-            } else {
-                problem.saturation_magnetisation_a_per_m.as_ptr()
-            },
-            saturation_magnetisation_count: problem.saturation_magnetisation_a_per_m.len() as u64,
-            uniform_saturation_magnetisation_a_per_m: problem
-                .uniform_saturation_magnetisation_a_per_m,
-            exchange_edges: std::ptr::null(),
-            exchange_edge_count: 0,
-            dmi_elements: std::ptr::null(),
-            dmi_element_count: 0,
-            dmi_lumped_mass: std::ptr::null(),
-            dmi_lumped_mass_count: 0,
-            dmi_ms_field: std::ptr::null(),
-            dmi_ms_field_count: 0,
-            dmi_uniform_ms: 0.0,
-        }
-    });
-    let shared_exchange_material_view = shared_domain
-        .zip(shared_ffi_envelope.as_ref())
-        .and_then(|(problem, envelope)| {
-        debug_assert_eq!(
-            envelope.exchange_material_view_present,
-            problem.exchange_stiffness_j_per_m.is_some()
-        );
-        problem.exchange_stiffness_j_per_m.map(|exchange_stiffness_j_per_m| {
+    let shared_linearization_descriptor =
+        shared_domain
+            .zip(shared_ffi_envelope.as_ref())
+            .map(|(problem, envelope)| {
+                debug_assert!(envelope.descriptor_required);
+                ffi::FullmagFemModalLinearizationDescriptor {
+                    abi_version: ffi::FULLMAG_FEM_MODAL_LINEARIZATION_DESCRIPTOR_V1_ABI_VERSION,
+                    reserved0: 0,
+                    struct_size: std::mem::size_of::<ffi::FullmagFemModalLinearizationDescriptor>()
+                        as u64,
+                    schema_version: c"modal_linearization_descriptor.v1".as_ptr(),
+                    node_count: envelope.node_count,
+                    tangent_dof_count: envelope.node_count * 2,
+                    coordinate_unit: c"m".as_ptr(),
+                    magnetisation_unit: c"A/m".as_ptr(),
+                    time_unit: c"s".as_ptr(),
+                    frequency_unit: c"Hz".as_ptr(),
+                    angular_frequency_unit: c"rad/s".as_ptr(),
+                    linearization_state_digest: shared_linearization_state_digest
+                        .as_ref()
+                        .expect("shared-domain state CString must exist")
+                        .as_ptr(),
+                    equilibrium_digest: shared_equilibrium_digest
+                        .as_ref()
+                        .expect("shared-domain equilibrium CString must exist")
+                        .as_ptr(),
+                    exchange_term_digest: optional_str_ptr(shared_exchange_term_digest.as_ref()),
+                    field_term_digest: optional_str_ptr(shared_field_term_digest.as_ref()),
+                    anisotropy_term_digest: std::ptr::null(),
+                    dmi_term_digest: std::ptr::null(),
+                    demag_term_digest: optional_str_ptr(shared_demag_term_digest.as_ref()),
+                    operator_input_digest: shared_operator_input_digest
+                        .as_ref()
+                        .expect("shared-domain operator digest CString must exist")
+                        .as_ptr(),
+                    demag_provider_signature: optional_str_ptr(
+                        shared_demag_provider_signature.as_ref(),
+                    ),
+                    term_presence_mask: envelope.term_presence_mask,
+                    reserved_contract_flags: 0,
+                    tangent_frame_xyz: problem.tangent_frame_xyz.as_ptr(),
+                    tangent_frame_xyz_count: envelope.tangent_frame_count,
+                    equilibrium_m0_xyz: problem.linearization_m0_xyz.as_ptr(),
+                    equilibrium_m0_xyz_count: envelope.equilibrium_m0_count,
+                    effective_field_h_eff0_xyz: problem.linearization_h_eff0_xyz.as_ptr(),
+                    effective_field_h_eff0_xyz_count: envelope.effective_field_count,
+                    external_field_h_ext0_xyz: problem.external_field_h_ext0_xyz.as_ptr(),
+                    external_field_h_ext0_xyz_count: envelope.external_field_count,
+                    alpha_per_node: problem.alpha_per_node.as_ptr(),
+                    alpha_per_node_count: envelope.alpha_count,
+                    uniaxial_axis_xyz: std::ptr::null(),
+                    uniaxial_axis_xyz_count: 0,
+                    uniaxial_anisotropy_field_a_per_m: std::ptr::null(),
+                    uniaxial_anisotropy_field_count: 0,
+                    saturation_magnetisation_a_per_m: if problem
+                        .saturation_magnetisation_a_per_m
+                        .is_empty()
+                    {
+                        std::ptr::null()
+                    } else {
+                        problem.saturation_magnetisation_a_per_m.as_ptr()
+                    },
+                    saturation_magnetisation_count: problem.saturation_magnetisation_a_per_m.len()
+                        as u64,
+                    uniform_saturation_magnetisation_a_per_m: problem
+                        .uniform_saturation_magnetisation_a_per_m,
+                    exchange_edges: std::ptr::null(),
+                    exchange_edge_count: 0,
+                    dmi_elements: std::ptr::null(),
+                    dmi_element_count: 0,
+                    dmi_lumped_mass: std::ptr::null(),
+                    dmi_lumped_mass_count: 0,
+                    dmi_ms_field: std::ptr::null(),
+                    dmi_ms_field_count: 0,
+                    dmi_uniform_ms: 0.0,
+                }
+            });
+    let shared_exchange_material_view =
+        shared_domain
+            .zip(shared_ffi_envelope.as_ref())
+            .and_then(|(problem, envelope)| {
+                debug_assert_eq!(
+                    envelope.exchange_material_view_present,
+                    problem.exchange_stiffness_j_per_m.is_some()
+                );
+                problem.exchange_stiffness_j_per_m.map(|exchange_stiffness_j_per_m| {
             ffi::FullmagFemModalExchangeMaterialView {
                 abi_version: ffi::FULLMAG_FEM_MODAL_EXCHANGE_MATERIAL_VIEW_V1_ABI_VERSION,
                 reserved0: 0,
@@ -1881,7 +2012,7 @@ fn solve_native_modal_eigen_impl(
                 exchange_stiffness_j_per_m,
             }
         })
-    });
+            });
     let shared_payload = match (
         shared_domain,
         shared_mesh_descriptor.as_ref(),
@@ -1911,6 +2042,10 @@ fn solve_native_modal_eigen_impl(
         shared_producer_run_id.as_ref(),
         shared_equilibrium_content_sha256.as_ref(),
         shared_demag_model.as_ref(),
+        shared_acceptance_criterion.as_ref(),
+        shared_acceptance_metric_kind.as_ref(),
+        shared_acceptance_unit.as_ref(),
+        shared_acceptance_certificate_sha256.as_ref(),
     ) {
         (
             Some(problem),
@@ -1941,42 +2076,52 @@ fn solve_native_modal_eigen_impl(
             Some(producer_run_id),
             Some(equilibrium_content_sha256),
             Some(demag_model),
-        ) => Some(problem.ffi_payload(
-            mesh_descriptor,
-            boundary_kind,
-            equilibrium_digest,
-            mesh_certificate_digest,
-            mesh_certificate_schema,
-            mesh_certificate_map_binding_digest,
-            linearization_state_digest,
-            mesh_generation_identity,
-            canonical_preimage,
-            canonical_preimage_sha256,
-            magnetic_class_digest_sha256,
-            scalar_class_digest_sha256,
-            certificate_binding_reason,
-            boundary_gauge_digest,
-            bias_field_sample_id,
-            bias_field_sample_signature,
-            magnetic_part_identity,
-            airbox_part_identity,
-            certificate_binding_v6,
-            equilibrium_id,
-            mesh_snapshot_id,
-            material_snapshot_id,
-            physics_snapshot_id,
-            boundary_snapshot_id,
-            producer_run_id,
-            equilibrium_content_sha256,
-            demag_model,
-            shared_linearization_descriptor
-                .as_ref()
-                .expect("shared-domain descriptor must exist"),
-            shared_exchange_material_view.as_ref(),
-            shared_ffi_envelope
-                .as_ref()
-                .expect("shared-domain envelope must exist"),
-        )),
+            Some(acceptance_criterion),
+            Some(acceptance_metric_kind),
+            Some(acceptance_unit),
+            Some(acceptance_certificate_sha256),
+        ) => Some(
+            problem.ffi_payload(
+                mesh_descriptor,
+                boundary_kind,
+                equilibrium_digest,
+                mesh_certificate_digest,
+                mesh_certificate_schema,
+                mesh_certificate_map_binding_digest,
+                linearization_state_digest,
+                mesh_generation_identity,
+                canonical_preimage,
+                canonical_preimage_sha256,
+                magnetic_class_digest_sha256,
+                scalar_class_digest_sha256,
+                certificate_binding_reason,
+                boundary_gauge_digest,
+                bias_field_sample_id,
+                bias_field_sample_signature,
+                magnetic_part_identity,
+                airbox_part_identity,
+                certificate_binding_v6,
+                equilibrium_id,
+                mesh_snapshot_id,
+                material_snapshot_id,
+                physics_snapshot_id,
+                boundary_snapshot_id,
+                producer_run_id,
+                equilibrium_content_sha256,
+                demag_model,
+                acceptance_criterion,
+                acceptance_metric_kind,
+                acceptance_unit,
+                acceptance_certificate_sha256,
+                shared_linearization_descriptor
+                    .as_ref()
+                    .expect("shared-domain descriptor must exist"),
+                shared_exchange_material_view.as_ref(),
+                shared_ffi_envelope
+                    .as_ref()
+                    .expect("shared-domain envelope must exist"),
+            ),
+        ),
         _ => None,
     };
     let floquet_k_vector_rad_per_m = request.k_vector_rad_m.and_then(|values| {
@@ -2256,10 +2401,54 @@ fn solve_native_modal_eigen_impl(
             .map_or(std::ptr::null(), |value| value.as_ptr()),
     };
 
-    let mut ffi_result = NativeFrequencyDomainContractFfiResult {
-        inner: unsafe { ffi::fullmag_fem_modal_eigen_solve(&ffi_request) },
+    let (mut ffi_result, modal_gpu_attestation) = if request.execution_target
+        == NativeModalExecutionTarget::ProductionGpu
+    {
+        let mut result_v20 = ffi::FullmagFemFrequencyDomainResultV20 {
+            abi_version: ffi::FULLMAG_FEM_FREQUENCY_DOMAIN_RESULT_V20_ABI_VERSION,
+            struct_size: std::mem::size_of::<ffi::FullmagFemFrequencyDomainResultV20>() as u32,
+            scientific_result_v18: NativeFrequencyDomainContractFfiResult::default().inner,
+            gpu_attestation: std::ptr::null_mut(),
+        };
+        let status =
+            unsafe { ffi::fullmag_fem_modal_eigen_solve_v20(&ffi_request, &mut result_v20) };
+        if status != 0 {
+            unsafe { ffi::fullmag_fem_frequency_domain_result_v20_destroy(&mut result_v20) };
+            return Err(format!(
+                "native FEM modal_eigen v20 boundary rejected caller envelope with status {status}"
+            ));
+        }
+        let attestation = match unsafe {
+            validate_modal_gpu_attestation_v1(result_v20.gpu_attestation)
+        } {
+            Ok(attestation) => attestation,
+            Err(error) => {
+                unsafe { ffi::fullmag_fem_frequency_domain_result_v20_destroy(&mut result_v20) };
+                return Err(error);
+            }
+        };
+        let inner = result_v20.scientific_result_v18;
+        result_v20.scientific_result_v18 = NativeFrequencyDomainContractFfiResult::default().inner;
+        unsafe { ffi::fullmag_fem_frequency_domain_result_v20_destroy(&mut result_v20) };
+        (
+            NativeFrequencyDomainContractFfiResult { inner },
+            Some(attestation),
+        )
+    } else {
+        (
+            NativeFrequencyDomainContractFfiResult {
+                inner: unsafe { ffi::fullmag_fem_modal_eigen_solve(&ffi_request) },
+            },
+            None,
+        )
     };
-    let owned = ffi_result.to_owned_result();
+    let mut owned = ffi_result.to_owned_result();
+    owned.modal_gpu_attestation = modal_gpu_attestation;
+    if request.execution_target == NativeModalExecutionTarget::ProductionGpu
+        && owned.resolved_fallback_state != MODAL_GPU_FALLBACK_NONE
+    {
+        return Err("k0_poisson_airbox_gpu_attestation_fallback_forbidden".to_string());
+    }
     if ffi_result.inner.error_message.is_null() {
         ffi_result.inner.diagnostics_json = std::ptr::null_mut();
         ffi_result.inner.result_json = std::ptr::null_mut();
@@ -2546,12 +2735,718 @@ struct NativeFrequencyDomainContractFfiResult {
     inner: ffi::FullmagFemFrequencyDomainResult,
 }
 
+const MODAL_GPU_MEASUREMENT_MEASURED: u32 = 1;
+const MODAL_GPU_MEASUREMENT_UNAVAILABLE: u32 = 2;
+const MODAL_GPU_MEASUREMENT_FAILED: u32 = 3;
+const MODAL_GPU_FALLBACK_NONE: u32 = 1;
+const MODAL_GPU_OPERATOR_MATRIX_FREE_SCHUR_CUDA: u32 = 1;
+const MODAL_GPU_HYPRE_MEMORY_DEVICE: u32 = 2;
+const MODAL_GPU_HYPRE_EXECUTION_DEVICE: u32 = 2;
+const MODAL_GPU_COVERAGE_SETUP: u64 = 1;
+const MODAL_GPU_COVERAGE_FULLMAG_HOT_LOOP: u64 = 2;
+const MODAL_GPU_COVERAGE_OBJECT_GRAPH: u64 = 4;
+const MODAL_GPU_COVERAGE_SCALAR_TELEMETRY: u64 = 8;
+const MODAL_GPU_COVERAGE_EXPORT: u64 = 16;
+const MODAL_GPU_REQUIRED_COVERAGE: u64 = MODAL_GPU_COVERAGE_SETUP
+    | MODAL_GPU_COVERAGE_FULLMAG_HOT_LOOP
+    | MODAL_GPU_COVERAGE_OBJECT_GRAPH
+    | MODAL_GPU_COVERAGE_SCALAR_TELEMETRY
+    | MODAL_GPU_COVERAGE_EXPORT;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum NativeModalGpuMeasurementState {
+    Measured,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum NativeModalGpuFallbackState {
+    None,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum NativeModalGpuOperatorKind {
+    MatrixFreeSchurCuda,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum NativeModalGpuHypreMemoryLocation {
+    Device,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum NativeModalGpuHypreExecutionPolicy {
+    Device,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct NativeModalGpuAttestation {
+    pub(crate) measurement_state: NativeModalGpuMeasurementState,
+    pub(crate) measurement_coverage_flags: u64,
+    pub(crate) device_residency_verified: bool,
+    pub(crate) production_shared_domain: bool,
+    pub(crate) validation_only: bool,
+    pub(crate) fallback_state: NativeModalGpuFallbackState,
+    pub(crate) operator_kind: NativeModalGpuOperatorKind,
+    pub(crate) hypre_memory_location: NativeModalGpuHypreMemoryLocation,
+    pub(crate) hypre_execution_policy: NativeModalGpuHypreExecutionPolicy,
+    pub(crate) compute_capability_major: u32,
+    pub(crate) compute_capability_minor: u32,
+    pub(crate) cuda_driver_version: u32,
+    pub(crate) cuda_runtime_version: u32,
+    pub(crate) device_name: String,
+    pub(crate) mfem_version: String,
+    pub(crate) hypre_version: String,
+    pub(crate) petsc_version: String,
+    pub(crate) slepc_version: String,
+    pub(crate) petsc_vec_type: String,
+    pub(crate) petsc_matrix_type: String,
+    pub(crate) matshell_vec_type: String,
+    pub(crate) slepc_bv_type: String,
+    pub(crate) eps_type: String,
+    pub(crate) st_type: String,
+    pub(crate) ksp_type: String,
+    pub(crate) poisson_pc_type: String,
+    pub(crate) shift_pc_type: String,
+    pub(crate) last_invalidation_reason: String,
+    pub(crate) device_uuid: [u8; 16],
+    pub(crate) object_graph_sha256: [u8; 32],
+    pub(crate) native_trace_sha256: [u8; 32],
+    pub(crate) source_snapshot_sha256: [u8; 32],
+    pub(crate) runtime_manifest_sha256: [u8; 32],
+    pub(crate) mesh_identity_sha256: [u8; 32],
+    pub(crate) equilibrium_sha256: [u8; 32],
+    pub(crate) certificate_sha256: [u8; 32],
+    pub(crate) linearization_sha256: [u8; 32],
+    pub(crate) material_sha256: [u8; 32],
+    pub(crate) physics_sha256: [u8; 32],
+    pub(crate) boundary_sha256: [u8; 32],
+    pub(crate) gauge_sha256: [u8; 32],
+    pub(crate) operator_terms_sha256: [u8; 32],
+    pub(crate) solver_policy_sha256: [u8; 32],
+    pub(crate) operator_key_sha256: [u8; 32],
+    pub(crate) target_key_sha256: [u8; 32],
+    pub(crate) session_context_sha256: [u8; 32],
+    pub(crate) setup_h2d_count: u64,
+    pub(crate) setup_h2d_bytes: u64,
+    pub(crate) hot_loop_computational_h2d_count: u64,
+    pub(crate) hot_loop_computational_h2d_bytes: u64,
+    pub(crate) hot_loop_computational_d2h_count: u64,
+    pub(crate) hot_loop_computational_d2h_bytes: u64,
+    pub(crate) hot_loop_scalar_telemetry_d2h_count: u64,
+    pub(crate) hot_loop_scalar_telemetry_d2h_bytes: u64,
+    pub(crate) hot_loop_full_vector_crossings: u64,
+    pub(crate) hot_loop_computational_host_syncs: u64,
+    pub(crate) hot_loop_scalar_telemetry_syncs: u64,
+    pub(crate) hot_loop_allocations: u64,
+    pub(crate) export_d2h_count: u64,
+    pub(crate) export_d2h_bytes: u64,
+    pub(crate) device_memory_baseline_bytes: u64,
+    pub(crate) device_memory_peak_bytes: u64,
+    pub(crate) device_memory_final_bytes: u64,
+    pub(crate) operator_dimension: u64,
+    pub(crate) operator_apply_count: u64,
+    pub(crate) poisson_solve_count: u64,
+    pub(crate) poisson_iteration_count: u64,
+    pub(crate) eps_iteration_count: u64,
+    pub(crate) eps_restart_count: u64,
+    pub(crate) eps_converged_reason: i64,
+    pub(crate) operator_state_generation: u64,
+    pub(crate) target_state_generation: u64,
+    pub(crate) operator_reuse_count: u64,
+    pub(crate) target_rebuild_count: u64,
+    pub(crate) invalidation_flags: u64,
+}
+
+#[derive(Debug, Clone)]
+struct NativeModalGpuAttestationSnapshot {
+    measurement_state: u32,
+    fallback_state: u32,
+    measurement_coverage_flags: u64,
+    device_residency_verified: u32,
+    production_shared_domain: u32,
+    validation_only: u32,
+    operator_kind: u32,
+    hypre_memory_location: u32,
+    hypre_execution_policy: u32,
+    compute_capability_major: u32,
+    compute_capability_minor: u32,
+    cuda_driver_version: u32,
+    cuda_runtime_version: u32,
+    device_name: String,
+    mfem_version: String,
+    hypre_version: String,
+    petsc_version: String,
+    slepc_version: String,
+    petsc_vec_type: String,
+    petsc_matrix_type: String,
+    matshell_vec_type: String,
+    slepc_bv_type: String,
+    eps_type: String,
+    st_type: String,
+    ksp_type: String,
+    poisson_pc_type: String,
+    shift_pc_type: String,
+    last_invalidation_reason: String,
+    device_uuid: [u8; 16],
+    object_graph_sha256: [u8; 32],
+    native_trace_sha256: [u8; 32],
+    source_snapshot_sha256: [u8; 32],
+    runtime_manifest_sha256: [u8; 32],
+    mesh_identity_sha256: [u8; 32],
+    equilibrium_sha256: [u8; 32],
+    certificate_sha256: [u8; 32],
+    linearization_sha256: [u8; 32],
+    material_sha256: [u8; 32],
+    physics_sha256: [u8; 32],
+    boundary_sha256: [u8; 32],
+    gauge_sha256: [u8; 32],
+    operator_terms_sha256: [u8; 32],
+    solver_policy_sha256: [u8; 32],
+    operator_key_sha256: [u8; 32],
+    target_key_sha256: [u8; 32],
+    session_context_sha256: [u8; 32],
+    setup_h2d_count: u64,
+    setup_h2d_bytes: u64,
+    hot_loop_computational_h2d_count: u64,
+    hot_loop_computational_h2d_bytes: u64,
+    hot_loop_computational_d2h_count: u64,
+    hot_loop_computational_d2h_bytes: u64,
+    hot_loop_scalar_telemetry_d2h_count: u64,
+    hot_loop_scalar_telemetry_d2h_bytes: u64,
+    hot_loop_full_vector_crossings: u64,
+    hot_loop_computational_host_syncs: u64,
+    hot_loop_scalar_telemetry_syncs: u64,
+    hot_loop_allocations: u64,
+    export_d2h_count: u64,
+    export_d2h_bytes: u64,
+    device_memory_baseline_bytes: u64,
+    device_memory_peak_bytes: u64,
+    device_memory_final_bytes: u64,
+    operator_dimension: u64,
+    operator_apply_count: u64,
+    poisson_solve_count: u64,
+    poisson_iteration_count: u64,
+    eps_iteration_count: u64,
+    eps_restart_count: u64,
+    eps_converged_reason: i64,
+    operator_state_generation: u64,
+    target_state_generation: u64,
+    operator_reuse_count: u64,
+    target_rebuild_count: u64,
+    invalidation_flags: u64,
+}
+
+fn digest_is_missing(digest: &[u8; 32]) -> bool {
+    digest.iter().all(|byte| *byte == 0)
+}
+
+fn prefixed_hex(bytes: &[u8]) -> String {
+    let mut value = String::with_capacity(7 + bytes.len() * 2);
+    value.push_str("sha256:");
+    for byte in bytes {
+        use std::fmt::Write as _;
+        let _ = write!(value, "{byte:02x}");
+    }
+    value
+}
+
+impl NativeModalGpuAttestation {
+    pub(crate) fn artifact_json(&self) -> serde_json::Value {
+        serde_json::json!({
+            "schema_version": "fem_modal_gpu_attestation.v1",
+            "measurement_state": "measured",
+            "measurement_coverage_flags": self.measurement_coverage_flags,
+            "device_residency_verified": self.device_residency_verified,
+            "production_shared_domain": self.production_shared_domain,
+            "validation_only": self.validation_only,
+            "fallback_state": "none",
+            "operator_kind": "matrix_free_schur_cuda",
+            "hypre_memory_location": "device",
+            "hypre_execution_policy": "device",
+            "device": {
+                "uuid": prefixed_hex(&self.device_uuid),
+                "name": self.device_name,
+                "compute_capability_major": self.compute_capability_major,
+                "compute_capability_minor": self.compute_capability_minor,
+                "cuda_driver_version": self.cuda_driver_version,
+                "cuda_runtime_version": self.cuda_runtime_version,
+            },
+            "runtime": {
+                "mfem_version": self.mfem_version,
+                "hypre_version": self.hypre_version,
+                "petsc_version": self.petsc_version,
+                "slepc_version": self.slepc_version,
+            },
+            "object_graph": {
+                "petsc_vec_type": self.petsc_vec_type,
+                "petsc_matrix_type": self.petsc_matrix_type,
+                "matshell_vec_type": self.matshell_vec_type,
+                "slepc_bv_type": self.slepc_bv_type,
+                "eps_type": self.eps_type,
+                "st_type": self.st_type,
+                "ksp_type": self.ksp_type,
+                "poisson_pc_type": self.poisson_pc_type,
+                "shift_pc_type": self.shift_pc_type,
+                "sha256": prefixed_hex(&self.object_graph_sha256),
+            },
+            "bindings": {
+                "native_trace_sha256": prefixed_hex(&self.native_trace_sha256),
+                "source_snapshot_sha256": prefixed_hex(&self.source_snapshot_sha256),
+                "runtime_manifest_sha256": prefixed_hex(&self.runtime_manifest_sha256),
+                "mesh_identity_sha256": prefixed_hex(&self.mesh_identity_sha256),
+                "equilibrium_sha256": prefixed_hex(&self.equilibrium_sha256),
+                "certificate_sha256": prefixed_hex(&self.certificate_sha256),
+                "linearization_sha256": prefixed_hex(&self.linearization_sha256),
+                "material_sha256": prefixed_hex(&self.material_sha256),
+                "physics_sha256": prefixed_hex(&self.physics_sha256),
+                "boundary_sha256": prefixed_hex(&self.boundary_sha256),
+                "gauge_sha256": prefixed_hex(&self.gauge_sha256),
+                "operator_terms_sha256": prefixed_hex(&self.operator_terms_sha256),
+                "solver_policy_sha256": prefixed_hex(&self.solver_policy_sha256),
+                "operator_key_sha256": prefixed_hex(&self.operator_key_sha256),
+                "target_key_sha256": prefixed_hex(&self.target_key_sha256),
+                "session_context_sha256": prefixed_hex(&self.session_context_sha256),
+            },
+            "transfers": {
+                "setup_h2d_count": self.setup_h2d_count,
+                "setup_h2d_bytes": self.setup_h2d_bytes,
+                "hot_loop_computational_h2d_count": self.hot_loop_computational_h2d_count,
+                "hot_loop_computational_h2d_bytes": self.hot_loop_computational_h2d_bytes,
+                "hot_loop_computational_d2h_count": self.hot_loop_computational_d2h_count,
+                "hot_loop_computational_d2h_bytes": self.hot_loop_computational_d2h_bytes,
+                "hot_loop_scalar_telemetry_d2h_count": self.hot_loop_scalar_telemetry_d2h_count,
+                "hot_loop_scalar_telemetry_d2h_bytes": self.hot_loop_scalar_telemetry_d2h_bytes,
+                "hot_loop_full_vector_crossings": self.hot_loop_full_vector_crossings,
+                "hot_loop_computational_host_syncs": self.hot_loop_computational_host_syncs,
+                "hot_loop_scalar_telemetry_syncs": self.hot_loop_scalar_telemetry_syncs,
+                "hot_loop_allocations": self.hot_loop_allocations,
+                "export_d2h_count": self.export_d2h_count,
+                "export_d2h_bytes": self.export_d2h_bytes,
+            },
+            "memory": {
+                "device_baseline_bytes": self.device_memory_baseline_bytes,
+                "device_peak_bytes": self.device_memory_peak_bytes,
+                "device_final_bytes": self.device_memory_final_bytes,
+            },
+            "solver": {
+                "operator_dimension": self.operator_dimension,
+                "operator_apply_count": self.operator_apply_count,
+                "poisson_solve_count": self.poisson_solve_count,
+                "poisson_iteration_count": self.poisson_iteration_count,
+                "eps_iteration_count": self.eps_iteration_count,
+                "eps_restart_count": self.eps_restart_count,
+                "eps_converged_reason": self.eps_converged_reason,
+            },
+            "state": {
+                "operator_generation": self.operator_state_generation,
+                "target_generation": self.target_state_generation,
+                "operator_reuse_count": self.operator_reuse_count,
+                "target_rebuild_count": self.target_rebuild_count,
+                "invalidation_flags": self.invalidation_flags,
+                "last_invalidation_reason": self.last_invalidation_reason,
+            },
+        })
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn measured_modal_gpu_attestation_fixture() -> NativeModalGpuAttestation {
+    NativeModalGpuAttestation {
+        measurement_state: NativeModalGpuMeasurementState::Measured,
+        measurement_coverage_flags: MODAL_GPU_REQUIRED_COVERAGE,
+        device_residency_verified: true,
+        production_shared_domain: true,
+        validation_only: false,
+        fallback_state: NativeModalGpuFallbackState::None,
+        operator_kind: NativeModalGpuOperatorKind::MatrixFreeSchurCuda,
+        hypre_memory_location: NativeModalGpuHypreMemoryLocation::Device,
+        hypre_execution_policy: NativeModalGpuHypreExecutionPolicy::Device,
+        compute_capability_major: 8,
+        compute_capability_minor: 6,
+        cuda_driver_version: 12_060,
+        cuda_runtime_version: 12_060,
+        device_name: "NVIDIA test device".to_string(),
+        mfem_version: "4.8".to_string(),
+        hypre_version: "2.32.0".to_string(),
+        petsc_version: "3.23.0".to_string(),
+        slepc_version: "3.23.0".to_string(),
+        petsc_vec_type: "seqcuda".to_string(),
+        petsc_matrix_type: "shell".to_string(),
+        matshell_vec_type: "seqcuda".to_string(),
+        slepc_bv_type: "vecs".to_string(),
+        eps_type: "krylovschur".to_string(),
+        st_type: "sinvert".to_string(),
+        ksp_type: "gmres".to_string(),
+        poisson_pc_type: "hypre".to_string(),
+        shift_pc_type: "shell".to_string(),
+        last_invalidation_reason: "initial_setup".to_string(),
+        device_uuid: [1; 16],
+        object_graph_sha256: [2; 32],
+        native_trace_sha256: [3; 32],
+        source_snapshot_sha256: [4; 32],
+        runtime_manifest_sha256: [5; 32],
+        mesh_identity_sha256: [6; 32],
+        equilibrium_sha256: [7; 32],
+        certificate_sha256: [8; 32],
+        linearization_sha256: [9; 32],
+        material_sha256: [10; 32],
+        physics_sha256: [11; 32],
+        boundary_sha256: [12; 32],
+        gauge_sha256: [13; 32],
+        operator_terms_sha256: [14; 32],
+        solver_policy_sha256: [15; 32],
+        operator_key_sha256: [16; 32],
+        target_key_sha256: [17; 32],
+        session_context_sha256: [18; 32],
+        setup_h2d_count: 4,
+        setup_h2d_bytes: 4096,
+        hot_loop_computational_h2d_count: 0,
+        hot_loop_computational_h2d_bytes: 0,
+        hot_loop_computational_d2h_count: 0,
+        hot_loop_computational_d2h_bytes: 0,
+        hot_loop_scalar_telemetry_d2h_count: 2,
+        hot_loop_scalar_telemetry_d2h_bytes: 32,
+        hot_loop_full_vector_crossings: 0,
+        hot_loop_computational_host_syncs: 0,
+        hot_loop_scalar_telemetry_syncs: 2,
+        hot_loop_allocations: 0,
+        export_d2h_count: 1,
+        export_d2h_bytes: 8192,
+        device_memory_baseline_bytes: 1024,
+        device_memory_peak_bytes: 8192,
+        device_memory_final_bytes: 2048,
+        operator_dimension: 2048,
+        operator_apply_count: 41,
+        poisson_solve_count: 43,
+        poisson_iteration_count: 47,
+        eps_iteration_count: 53,
+        eps_restart_count: 2,
+        eps_converged_reason: 1,
+        operator_state_generation: 19,
+        target_state_generation: 23,
+        operator_reuse_count: 29,
+        target_rebuild_count: 31,
+        invalidation_flags: 37,
+    }
+}
+
+fn parse_modal_gpu_attestation_snapshot(
+    snapshot: NativeModalGpuAttestationSnapshot,
+) -> Result<NativeModalGpuAttestation, String> {
+    match snapshot.measurement_state {
+        MODAL_GPU_MEASUREMENT_MEASURED => {}
+        MODAL_GPU_MEASUREMENT_UNAVAILABLE => {
+            return Err("k0_poisson_airbox_gpu_attestation_unavailable".to_string());
+        }
+        MODAL_GPU_MEASUREMENT_FAILED => {
+            return Err("k0_poisson_airbox_gpu_attestation_failed".to_string());
+        }
+        _ => {
+            return Err("k0_poisson_airbox_gpu_attestation_measurement_unknown".to_string());
+        }
+    }
+    if snapshot.measurement_coverage_flags & MODAL_GPU_REQUIRED_COVERAGE
+        != MODAL_GPU_REQUIRED_COVERAGE
+    {
+        return Err("k0_poisson_airbox_gpu_attestation_coverage_incomplete".to_string());
+    }
+    if snapshot.device_residency_verified != 1 {
+        return Err("k0_poisson_airbox_gpu_attestation_residency_not_verified".to_string());
+    }
+    if snapshot.production_shared_domain != 1 {
+        return Err(
+            "k0_poisson_airbox_gpu_attestation_production_shared_domain_required".to_string(),
+        );
+    }
+    if snapshot.validation_only != 0 {
+        return Err("k0_poisson_airbox_gpu_attestation_validation_only_forbidden".to_string());
+    }
+    if snapshot.fallback_state != MODAL_GPU_FALLBACK_NONE {
+        return Err("k0_poisson_airbox_gpu_attestation_fallback_forbidden".to_string());
+    }
+    if snapshot.operator_kind != MODAL_GPU_OPERATOR_MATRIX_FREE_SCHUR_CUDA {
+        return Err("k0_poisson_airbox_gpu_attestation_operator_kind_invalid".to_string());
+    }
+    if snapshot.operator_dimension == 0 {
+        return Err("k0_poisson_airbox_gpu_attestation_operator_dimension_invalid".to_string());
+    }
+    if snapshot.hypre_memory_location != MODAL_GPU_HYPRE_MEMORY_DEVICE {
+        return Err("k0_poisson_airbox_gpu_attestation_hypre_memory_not_device".to_string());
+    }
+    if snapshot.hypre_execution_policy != MODAL_GPU_HYPRE_EXECUTION_DEVICE {
+        return Err("k0_poisson_airbox_gpu_attestation_hypre_execution_not_device".to_string());
+    }
+    let required_identity_strings = [
+        snapshot.device_name.as_str(),
+        snapshot.mfem_version.as_str(),
+        snapshot.hypre_version.as_str(),
+        snapshot.petsc_version.as_str(),
+        snapshot.slepc_version.as_str(),
+        snapshot.petsc_vec_type.as_str(),
+        snapshot.petsc_matrix_type.as_str(),
+        snapshot.matshell_vec_type.as_str(),
+        snapshot.slepc_bv_type.as_str(),
+        snapshot.eps_type.as_str(),
+        snapshot.st_type.as_str(),
+        snapshot.ksp_type.as_str(),
+        snapshot.poisson_pc_type.as_str(),
+        snapshot.shift_pc_type.as_str(),
+    ];
+    if snapshot.compute_capability_major == 0
+        || snapshot.cuda_driver_version == 0
+        || snapshot.cuda_runtime_version == 0
+        || required_identity_strings
+            .iter()
+            .any(|value| value.is_empty())
+    {
+        return Err("k0_poisson_airbox_gpu_attestation_device_identity_missing".to_string());
+    }
+    if snapshot.device_uuid.iter().all(|byte| *byte == 0) {
+        return Err("k0_poisson_airbox_gpu_attestation_device_identity_missing".to_string());
+    }
+    let required_input_digests = [
+        &snapshot.object_graph_sha256,
+        &snapshot.native_trace_sha256,
+        &snapshot.source_snapshot_sha256,
+        &snapshot.runtime_manifest_sha256,
+        &snapshot.mesh_identity_sha256,
+        &snapshot.equilibrium_sha256,
+        &snapshot.certificate_sha256,
+        &snapshot.linearization_sha256,
+        &snapshot.material_sha256,
+        &snapshot.physics_sha256,
+        &snapshot.boundary_sha256,
+        &snapshot.gauge_sha256,
+        &snapshot.operator_terms_sha256,
+        &snapshot.solver_policy_sha256,
+    ];
+    if required_input_digests
+        .iter()
+        .any(|digest| digest_is_missing(digest))
+    {
+        return Err("k0_poisson_airbox_gpu_attestation_digest_missing".to_string());
+    }
+    if digest_is_missing(&snapshot.operator_key_sha256)
+        || digest_is_missing(&snapshot.target_key_sha256)
+        || digest_is_missing(&snapshot.session_context_sha256)
+        || snapshot.operator_state_generation == 0
+        || snapshot.target_state_generation == 0
+    {
+        return Err("k0_poisson_airbox_gpu_attestation_state_identity_incomplete".to_string());
+    }
+    if snapshot.hot_loop_computational_h2d_count != 0
+        || snapshot.hot_loop_computational_h2d_bytes != 0
+        || snapshot.hot_loop_computational_d2h_count != 0
+        || snapshot.hot_loop_computational_d2h_bytes != 0
+        || snapshot.hot_loop_full_vector_crossings != 0
+        || snapshot.hot_loop_computational_host_syncs != 0
+        || snapshot.hot_loop_allocations != 0
+    {
+        return Err("k0_poisson_airbox_gpu_transfer_audit_failed".to_string());
+    }
+    let scalar_telemetry_limit = snapshot
+        .hot_loop_scalar_telemetry_d2h_count
+        .checked_mul(256)
+        .ok_or_else(|| "k0_poisson_airbox_gpu_transfer_audit_failed".to_string())?;
+    if snapshot.hot_loop_scalar_telemetry_d2h_bytes > scalar_telemetry_limit
+        || (snapshot.hot_loop_scalar_telemetry_d2h_count == 0
+            && (snapshot.hot_loop_scalar_telemetry_d2h_bytes != 0
+                || snapshot.hot_loop_scalar_telemetry_syncs != 0))
+        || snapshot.device_memory_peak_bytes < snapshot.device_memory_baseline_bytes
+        || snapshot.device_memory_peak_bytes < snapshot.device_memory_final_bytes
+    {
+        return Err("k0_poisson_airbox_gpu_transfer_audit_failed".to_string());
+    }
+
+    let device_residency_verified = snapshot.device_residency_verified == 1;
+    let production_shared_domain = snapshot.production_shared_domain == 1;
+    let validation_only = snapshot.validation_only != 0;
+    let fallback_state = NativeModalGpuFallbackState::None;
+    let operator_kind = NativeModalGpuOperatorKind::MatrixFreeSchurCuda;
+    let hypre_memory_location = NativeModalGpuHypreMemoryLocation::Device;
+    let hypre_execution_policy = NativeModalGpuHypreExecutionPolicy::Device;
+
+    Ok(NativeModalGpuAttestation {
+        measurement_state: NativeModalGpuMeasurementState::Measured,
+        measurement_coverage_flags: snapshot.measurement_coverage_flags,
+        device_residency_verified,
+        production_shared_domain,
+        validation_only,
+        fallback_state,
+        operator_kind,
+        hypre_memory_location,
+        hypre_execution_policy,
+        compute_capability_major: snapshot.compute_capability_major,
+        compute_capability_minor: snapshot.compute_capability_minor,
+        cuda_driver_version: snapshot.cuda_driver_version,
+        cuda_runtime_version: snapshot.cuda_runtime_version,
+        device_name: snapshot.device_name,
+        mfem_version: snapshot.mfem_version,
+        hypre_version: snapshot.hypre_version,
+        petsc_version: snapshot.petsc_version,
+        slepc_version: snapshot.slepc_version,
+        petsc_vec_type: snapshot.petsc_vec_type,
+        petsc_matrix_type: snapshot.petsc_matrix_type,
+        matshell_vec_type: snapshot.matshell_vec_type,
+        slepc_bv_type: snapshot.slepc_bv_type,
+        eps_type: snapshot.eps_type,
+        st_type: snapshot.st_type,
+        ksp_type: snapshot.ksp_type,
+        poisson_pc_type: snapshot.poisson_pc_type,
+        shift_pc_type: snapshot.shift_pc_type,
+        last_invalidation_reason: snapshot.last_invalidation_reason,
+        device_uuid: snapshot.device_uuid,
+        object_graph_sha256: snapshot.object_graph_sha256,
+        native_trace_sha256: snapshot.native_trace_sha256,
+        source_snapshot_sha256: snapshot.source_snapshot_sha256,
+        runtime_manifest_sha256: snapshot.runtime_manifest_sha256,
+        mesh_identity_sha256: snapshot.mesh_identity_sha256,
+        equilibrium_sha256: snapshot.equilibrium_sha256,
+        certificate_sha256: snapshot.certificate_sha256,
+        linearization_sha256: snapshot.linearization_sha256,
+        material_sha256: snapshot.material_sha256,
+        physics_sha256: snapshot.physics_sha256,
+        boundary_sha256: snapshot.boundary_sha256,
+        gauge_sha256: snapshot.gauge_sha256,
+        operator_terms_sha256: snapshot.operator_terms_sha256,
+        solver_policy_sha256: snapshot.solver_policy_sha256,
+        operator_key_sha256: snapshot.operator_key_sha256,
+        target_key_sha256: snapshot.target_key_sha256,
+        session_context_sha256: snapshot.session_context_sha256,
+        setup_h2d_count: snapshot.setup_h2d_count,
+        setup_h2d_bytes: snapshot.setup_h2d_bytes,
+        hot_loop_computational_h2d_count: snapshot.hot_loop_computational_h2d_count,
+        hot_loop_computational_h2d_bytes: snapshot.hot_loop_computational_h2d_bytes,
+        hot_loop_computational_d2h_count: snapshot.hot_loop_computational_d2h_count,
+        hot_loop_computational_d2h_bytes: snapshot.hot_loop_computational_d2h_bytes,
+        hot_loop_scalar_telemetry_d2h_count: snapshot.hot_loop_scalar_telemetry_d2h_count,
+        hot_loop_scalar_telemetry_d2h_bytes: snapshot.hot_loop_scalar_telemetry_d2h_bytes,
+        hot_loop_full_vector_crossings: snapshot.hot_loop_full_vector_crossings,
+        hot_loop_computational_host_syncs: snapshot.hot_loop_computational_host_syncs,
+        hot_loop_scalar_telemetry_syncs: snapshot.hot_loop_scalar_telemetry_syncs,
+        hot_loop_allocations: snapshot.hot_loop_allocations,
+        export_d2h_count: snapshot.export_d2h_count,
+        export_d2h_bytes: snapshot.export_d2h_bytes,
+        device_memory_baseline_bytes: snapshot.device_memory_baseline_bytes,
+        device_memory_peak_bytes: snapshot.device_memory_peak_bytes,
+        device_memory_final_bytes: snapshot.device_memory_final_bytes,
+        operator_dimension: snapshot.operator_dimension,
+        operator_apply_count: snapshot.operator_apply_count,
+        poisson_solve_count: snapshot.poisson_solve_count,
+        poisson_iteration_count: snapshot.poisson_iteration_count,
+        eps_iteration_count: snapshot.eps_iteration_count,
+        eps_restart_count: snapshot.eps_restart_count,
+        eps_converged_reason: snapshot.eps_converged_reason,
+        operator_state_generation: snapshot.operator_state_generation,
+        target_state_generation: snapshot.target_state_generation,
+        operator_reuse_count: snapshot.operator_reuse_count,
+        target_rebuild_count: snapshot.target_rebuild_count,
+        invalidation_flags: snapshot.invalidation_flags,
+    })
+}
+
+#[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
+unsafe fn validate_modal_gpu_attestation_v1(
+    attestation: *const ffi::FullmagFemModalGpuAttestationV1,
+) -> Result<NativeModalGpuAttestation, String> {
+    if attestation.is_null() {
+        return Err("k0_poisson_airbox_gpu_attestation_missing".to_string());
+    }
+    let abi_version =
+        unsafe { std::ptr::read_unaligned(std::ptr::addr_of!((*attestation).abi_version)) };
+    let struct_size =
+        unsafe { std::ptr::read_unaligned(std::ptr::addr_of!((*attestation).struct_size)) };
+    if abi_version != ffi::FULLMAG_FEM_MODAL_GPU_ATTESTATION_V1_ABI_VERSION
+        || (struct_size as usize) < std::mem::size_of::<ffi::FullmagFemModalGpuAttestationV1>()
+    {
+        return Err("k0_poisson_airbox_gpu_attestation_abi_mismatch".to_string());
+    }
+    let attestation = unsafe { std::ptr::read_unaligned(attestation) };
+    parse_modal_gpu_attestation_snapshot(NativeModalGpuAttestationSnapshot {
+        measurement_state: attestation.measurement_state,
+        fallback_state: attestation.fallback_state,
+        measurement_coverage_flags: attestation.measurement_coverage_flags,
+        device_residency_verified: attestation.device_residency_verified,
+        production_shared_domain: attestation.production_shared_domain,
+        validation_only: attestation.validation_only,
+        operator_kind: attestation.operator_kind,
+        hypre_memory_location: attestation.hypre_memory_location,
+        hypre_execution_policy: attestation.hypre_execution_policy,
+        compute_capability_major: attestation.compute_capability_major,
+        compute_capability_minor: attestation.compute_capability_minor,
+        cuda_driver_version: attestation.cuda_driver_version,
+        cuda_runtime_version: attestation.cuda_runtime_version,
+        device_name: ffi_string(attestation.device_name),
+        mfem_version: ffi_string(attestation.mfem_version),
+        hypre_version: ffi_string(attestation.hypre_version),
+        petsc_version: ffi_string(attestation.petsc_version),
+        slepc_version: ffi_string(attestation.slepc_version),
+        petsc_vec_type: ffi_string(attestation.petsc_vec_type),
+        petsc_matrix_type: ffi_string(attestation.petsc_matrix_type),
+        matshell_vec_type: ffi_string(attestation.matshell_vec_type),
+        slepc_bv_type: ffi_string(attestation.slepc_bv_type),
+        eps_type: ffi_string(attestation.eps_type),
+        st_type: ffi_string(attestation.st_type),
+        ksp_type: ffi_string(attestation.ksp_type),
+        poisson_pc_type: ffi_string(attestation.poisson_pc_type),
+        shift_pc_type: ffi_string(attestation.shift_pc_type),
+        last_invalidation_reason: ffi_string(attestation.last_invalidation_reason),
+        device_uuid: attestation.device_uuid,
+        object_graph_sha256: attestation.object_graph_sha256,
+        native_trace_sha256: attestation.native_trace_sha256,
+        source_snapshot_sha256: attestation.source_snapshot_sha256,
+        runtime_manifest_sha256: attestation.runtime_manifest_sha256,
+        mesh_identity_sha256: attestation.mesh_identity_sha256,
+        equilibrium_sha256: attestation.equilibrium_sha256,
+        certificate_sha256: attestation.certificate_sha256,
+        linearization_sha256: attestation.linearization_sha256,
+        material_sha256: attestation.material_sha256,
+        physics_sha256: attestation.physics_sha256,
+        boundary_sha256: attestation.boundary_sha256,
+        gauge_sha256: attestation.gauge_sha256,
+        operator_terms_sha256: attestation.operator_terms_sha256,
+        solver_policy_sha256: attestation.solver_policy_sha256,
+        operator_key_sha256: attestation.operator_key_sha256,
+        target_key_sha256: attestation.target_key_sha256,
+        session_context_sha256: attestation.session_context_sha256,
+        setup_h2d_count: attestation.setup_h2d_count,
+        setup_h2d_bytes: attestation.setup_h2d_bytes,
+        hot_loop_computational_h2d_count: attestation.hot_loop_computational_h2d_count,
+        hot_loop_computational_h2d_bytes: attestation.hot_loop_computational_h2d_bytes,
+        hot_loop_computational_d2h_count: attestation.hot_loop_computational_d2h_count,
+        hot_loop_computational_d2h_bytes: attestation.hot_loop_computational_d2h_bytes,
+        hot_loop_scalar_telemetry_d2h_count: attestation.hot_loop_scalar_telemetry_d2h_count,
+        hot_loop_scalar_telemetry_d2h_bytes: attestation.hot_loop_scalar_telemetry_d2h_bytes,
+        hot_loop_full_vector_crossings: attestation.hot_loop_full_vector_crossings,
+        hot_loop_computational_host_syncs: attestation.hot_loop_computational_host_syncs,
+        hot_loop_scalar_telemetry_syncs: attestation.hot_loop_scalar_telemetry_syncs,
+        hot_loop_allocations: attestation.hot_loop_allocations,
+        export_d2h_count: attestation.export_d2h_count,
+        export_d2h_bytes: attestation.export_d2h_bytes,
+        device_memory_baseline_bytes: attestation.device_memory_baseline_bytes,
+        device_memory_peak_bytes: attestation.device_memory_peak_bytes,
+        device_memory_final_bytes: attestation.device_memory_final_bytes,
+        operator_dimension: attestation.operator_dimension,
+        operator_apply_count: attestation.operator_apply_count,
+        poisson_solve_count: attestation.poisson_solve_count,
+        poisson_iteration_count: attestation.poisson_iteration_count,
+        eps_iteration_count: attestation.eps_iteration_count,
+        eps_restart_count: attestation.eps_restart_count,
+        eps_converged_reason: attestation.eps_converged_reason,
+        operator_state_generation: attestation.operator_state_generation,
+        target_state_generation: attestation.target_state_generation,
+        operator_reuse_count: attestation.operator_reuse_count,
+        target_rebuild_count: attestation.target_rebuild_count,
+        invalidation_flags: attestation.invalidation_flags,
+    })
+}
+
 #[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
 impl Default for NativeFrequencyDomainContractFfiResult {
     fn default() -> Self {
         Self {
             inner: ffi::FullmagFemFrequencyDomainResult {
-                abi_version: ffi::FULLMAG_FEM_FREQUENCY_DOMAIN_ABI_VERSION,
+                abi_version: ffi::FULLMAG_FEM_FREQUENCY_DOMAIN_RESULT_ABI_VERSION,
                 status: ffi::FullmagFemFrequencyDomainStatus::FULLMAG_FEM_FD_UNAVAILABLE,
                 error_message: std::ptr::null_mut(),
                 diagnostics_json: std::ptr::null_mut(),
@@ -2636,6 +3531,7 @@ impl NativeFrequencyDomainContractFfiResult {
             result_json: ffi_string(self.inner.result_json),
             artifact_manifest_path: ffi_string(self.inner.artifact_manifest_path),
             modal_eigen,
+            modal_gpu_attestation: None,
             resolved_fallback_state: self.inner.resolved_fallback_state,
             resolved_engine_id: ffi_string(self.inner.resolved_engine_id),
             resolved_fallback_reason: ffi_string(self.inner.resolved_fallback_reason),
@@ -2755,6 +3651,566 @@ fn map_contract_status(
 mod tests {
     use super::*;
 
+    fn complete_measured_gpu_attestation_snapshot() -> NativeModalGpuAttestationSnapshot {
+        NativeModalGpuAttestationSnapshot {
+            measurement_state: MODAL_GPU_MEASUREMENT_MEASURED,
+            fallback_state: MODAL_GPU_FALLBACK_NONE,
+            measurement_coverage_flags: MODAL_GPU_REQUIRED_COVERAGE,
+            device_residency_verified: 1,
+            production_shared_domain: 1,
+            validation_only: 0,
+            operator_kind: MODAL_GPU_OPERATOR_MATRIX_FREE_SCHUR_CUDA,
+            hypre_memory_location: MODAL_GPU_HYPRE_MEMORY_DEVICE,
+            hypre_execution_policy: MODAL_GPU_HYPRE_EXECUTION_DEVICE,
+            compute_capability_major: 8,
+            compute_capability_minor: 6,
+            cuda_driver_version: 12_060,
+            cuda_runtime_version: 12_060,
+            device_name: "NVIDIA test device".to_string(),
+            mfem_version: "4.8".to_string(),
+            hypre_version: "2.32.0".to_string(),
+            petsc_version: "3.23.0".to_string(),
+            slepc_version: "3.23.0".to_string(),
+            petsc_vec_type: "seqcuda".to_string(),
+            petsc_matrix_type: "shell".to_string(),
+            matshell_vec_type: "seqcuda".to_string(),
+            slepc_bv_type: "vecs".to_string(),
+            eps_type: "krylovschur".to_string(),
+            st_type: "sinvert".to_string(),
+            ksp_type: "gmres".to_string(),
+            poisson_pc_type: "hypre".to_string(),
+            shift_pc_type: "shell".to_string(),
+            last_invalidation_reason: "initial_setup".to_string(),
+            device_uuid: [1; 16],
+            object_graph_sha256: [2; 32],
+            native_trace_sha256: [3; 32],
+            source_snapshot_sha256: [4; 32],
+            runtime_manifest_sha256: [5; 32],
+            mesh_identity_sha256: [6; 32],
+            equilibrium_sha256: [7; 32],
+            certificate_sha256: [8; 32],
+            linearization_sha256: [9; 32],
+            material_sha256: [10; 32],
+            physics_sha256: [11; 32],
+            boundary_sha256: [12; 32],
+            gauge_sha256: [13; 32],
+            operator_terms_sha256: [14; 32],
+            solver_policy_sha256: [15; 32],
+            operator_key_sha256: [16; 32],
+            target_key_sha256: [17; 32],
+            session_context_sha256: [18; 32],
+            setup_h2d_count: 4,
+            setup_h2d_bytes: 4096,
+            hot_loop_computational_h2d_count: 0,
+            hot_loop_computational_h2d_bytes: 0,
+            hot_loop_computational_d2h_count: 0,
+            hot_loop_computational_d2h_bytes: 0,
+            hot_loop_scalar_telemetry_d2h_count: 2,
+            hot_loop_scalar_telemetry_d2h_bytes: 32,
+            hot_loop_full_vector_crossings: 0,
+            hot_loop_computational_host_syncs: 0,
+            hot_loop_scalar_telemetry_syncs: 2,
+            hot_loop_allocations: 0,
+            export_d2h_count: 1,
+            export_d2h_bytes: 8192,
+            device_memory_baseline_bytes: 1024,
+            device_memory_peak_bytes: 8192,
+            device_memory_final_bytes: 2048,
+            operator_dimension: 2048,
+            operator_apply_count: 41,
+            poisson_solve_count: 43,
+            poisson_iteration_count: 47,
+            eps_iteration_count: 53,
+            eps_restart_count: 2,
+            eps_converged_reason: 1,
+            operator_state_generation: 19,
+            target_state_generation: 23,
+            operator_reuse_count: 29,
+            target_rebuild_count: 31,
+            invalidation_flags: 37,
+        }
+    }
+
+    #[test]
+    fn measured_gpu_attestation_snapshot_is_fail_closed_and_owned() {
+        let mut snapshot = complete_measured_gpu_attestation_snapshot();
+        snapshot.measurement_coverage_flags &= !MODAL_GPU_COVERAGE_EXPORT;
+        assert_eq!(
+            parse_modal_gpu_attestation_snapshot(snapshot).unwrap_err(),
+            "k0_poisson_airbox_gpu_attestation_coverage_incomplete"
+        );
+
+        let snapshot = complete_measured_gpu_attestation_snapshot();
+        let parsed = parse_modal_gpu_attestation_snapshot(snapshot).unwrap();
+        assert_eq!(
+            parsed.measurement_state,
+            NativeModalGpuMeasurementState::Measured
+        );
+        assert_eq!(
+            parsed.measurement_coverage_flags,
+            MODAL_GPU_REQUIRED_COVERAGE
+        );
+        assert!(parsed.device_residency_verified);
+        assert!(parsed.production_shared_domain);
+        assert!(!parsed.validation_only);
+        assert_eq!(parsed.fallback_state, NativeModalGpuFallbackState::None);
+        assert_eq!(
+            parsed.operator_kind,
+            NativeModalGpuOperatorKind::MatrixFreeSchurCuda
+        );
+        assert_eq!(
+            parsed.hypre_memory_location,
+            NativeModalGpuHypreMemoryLocation::Device
+        );
+        assert_eq!(
+            parsed.hypre_execution_policy,
+            NativeModalGpuHypreExecutionPolicy::Device
+        );
+        assert_eq!(parsed.device_uuid, [1; 16]);
+        assert_eq!(parsed.mesh_identity_sha256, [6; 32]);
+        assert_eq!(parsed.solver_policy_sha256, [15; 32]);
+        assert_eq!(parsed.operator_dimension, 2048);
+        assert_eq!(parsed.operator_state_generation, 19);
+        assert_eq!(parsed.target_state_generation, 23);
+        assert_eq!(parsed.operator_reuse_count, 29);
+        assert_eq!(parsed.target_rebuild_count, 31);
+        assert_eq!(parsed.invalidation_flags, 37);
+        assert_eq!(parsed.operator_key_sha256, [16; 32]);
+        assert_eq!(parsed.target_key_sha256, [17; 32]);
+        assert_eq!(parsed.session_context_sha256, [18; 32]);
+    }
+
+    #[test]
+    fn measured_gpu_attestation_serializes_owned_values_without_synthetic_defaults() {
+        let parsed =
+            parse_modal_gpu_attestation_snapshot(complete_measured_gpu_attestation_snapshot())
+                .unwrap();
+        let artifact = parsed.artifact_json();
+
+        assert_eq!(artifact["measurement_state"], "measured");
+        assert_eq!(artifact["device"]["name"], "NVIDIA test device");
+        assert_eq!(artifact["device"]["compute_capability_major"], 8);
+        assert_eq!(artifact["runtime"]["mfem_version"], "4.8");
+        assert_eq!(artifact["object_graph"]["petsc_vec_type"], "seqcuda");
+        assert_eq!(
+            artifact["bindings"]["runtime_manifest_sha256"],
+            format!("sha256:{}", "05".repeat(32))
+        );
+        assert_eq!(artifact["transfers"]["setup_h2d_bytes"], 4096);
+        assert_eq!(
+            artifact["transfers"]["hot_loop_scalar_telemetry_d2h_bytes"],
+            32
+        );
+        assert_eq!(artifact["solver"]["operator_apply_count"], 41);
+        assert_eq!(artifact["state"]["operator_generation"], 19);
+        assert_eq!(
+            artifact["state"]["last_invalidation_reason"],
+            "initial_setup"
+        );
+    }
+
+    #[test]
+    fn measured_gpu_attestation_rejects_hot_loop_compute_transfers_and_allows_bounded_telemetry() {
+        let mut snapshot = complete_measured_gpu_attestation_snapshot();
+        snapshot.hot_loop_computational_d2h_bytes = 8;
+        assert_gpu_attestation_snapshot_rejected(
+            snapshot,
+            "k0_poisson_airbox_gpu_transfer_audit_failed",
+        );
+
+        let mut snapshot = complete_measured_gpu_attestation_snapshot();
+        snapshot.hot_loop_computational_host_syncs = 1;
+        assert_gpu_attestation_snapshot_rejected(
+            snapshot,
+            "k0_poisson_airbox_gpu_transfer_audit_failed",
+        );
+
+        let mut snapshot = complete_measured_gpu_attestation_snapshot();
+        snapshot.hot_loop_scalar_telemetry_d2h_count = 1;
+        snapshot.hot_loop_scalar_telemetry_d2h_bytes = 257;
+        assert_gpu_attestation_snapshot_rejected(
+            snapshot,
+            "k0_poisson_airbox_gpu_transfer_audit_failed",
+        );
+
+        let parsed =
+            parse_modal_gpu_attestation_snapshot(complete_measured_gpu_attestation_snapshot())
+                .expect("bounded scalar telemetry must remain legal");
+        assert_eq!(parsed.hot_loop_scalar_telemetry_d2h_count, 2);
+        assert_eq!(parsed.hot_loop_scalar_telemetry_d2h_bytes, 32);
+    }
+
+    fn assert_gpu_attestation_snapshot_rejected(
+        snapshot: NativeModalGpuAttestationSnapshot,
+        token: &str,
+    ) {
+        assert_eq!(
+            parse_modal_gpu_attestation_snapshot(snapshot).unwrap_err(),
+            token
+        );
+    }
+
+    #[test]
+    fn measured_gpu_attestation_snapshot_validates_production_execution_contract() {
+        let mut snapshot = complete_measured_gpu_attestation_snapshot();
+        snapshot.device_residency_verified = 0;
+        assert_gpu_attestation_snapshot_rejected(
+            snapshot,
+            "k0_poisson_airbox_gpu_attestation_residency_not_verified",
+        );
+
+        let mut snapshot = complete_measured_gpu_attestation_snapshot();
+        snapshot.production_shared_domain = 0;
+        assert_gpu_attestation_snapshot_rejected(
+            snapshot,
+            "k0_poisson_airbox_gpu_attestation_production_shared_domain_required",
+        );
+
+        let mut snapshot = complete_measured_gpu_attestation_snapshot();
+        snapshot.validation_only = 1;
+        assert_gpu_attestation_snapshot_rejected(
+            snapshot,
+            "k0_poisson_airbox_gpu_attestation_validation_only_forbidden",
+        );
+
+        let mut snapshot = complete_measured_gpu_attestation_snapshot();
+        snapshot.fallback_state = 2;
+        assert_gpu_attestation_snapshot_rejected(
+            snapshot,
+            "k0_poisson_airbox_gpu_attestation_fallback_forbidden",
+        );
+    }
+
+    #[test]
+    fn measured_gpu_attestation_snapshot_validates_operator_and_hypre_policy() {
+        let mut snapshot = complete_measured_gpu_attestation_snapshot();
+        snapshot.operator_kind = 2;
+        assert_gpu_attestation_snapshot_rejected(
+            snapshot,
+            "k0_poisson_airbox_gpu_attestation_operator_kind_invalid",
+        );
+
+        let mut snapshot = complete_measured_gpu_attestation_snapshot();
+        snapshot.operator_dimension = 0;
+        assert_gpu_attestation_snapshot_rejected(
+            snapshot,
+            "k0_poisson_airbox_gpu_attestation_operator_dimension_invalid",
+        );
+
+        let mut snapshot = complete_measured_gpu_attestation_snapshot();
+        snapshot.hypre_memory_location = 1;
+        assert_gpu_attestation_snapshot_rejected(
+            snapshot,
+            "k0_poisson_airbox_gpu_attestation_hypre_memory_not_device",
+        );
+
+        let mut snapshot = complete_measured_gpu_attestation_snapshot();
+        snapshot.hypre_execution_policy = 1;
+        assert_gpu_attestation_snapshot_rejected(
+            snapshot,
+            "k0_poisson_airbox_gpu_attestation_hypre_execution_not_device",
+        );
+    }
+
+    #[test]
+    fn measured_gpu_attestation_snapshot_validates_identity_digests_and_generations() {
+        let mut snapshot = complete_measured_gpu_attestation_snapshot();
+        snapshot.device_uuid = [0; 16];
+        assert_gpu_attestation_snapshot_rejected(
+            snapshot,
+            "k0_poisson_airbox_gpu_attestation_device_identity_missing",
+        );
+
+        let mut snapshot = complete_measured_gpu_attestation_snapshot();
+        snapshot.mesh_identity_sha256 = [0; 32];
+        assert_gpu_attestation_snapshot_rejected(
+            snapshot,
+            "k0_poisson_airbox_gpu_attestation_digest_missing",
+        );
+
+        let mut snapshot = complete_measured_gpu_attestation_snapshot();
+        snapshot.operator_key_sha256 = [0; 32];
+        assert_gpu_attestation_snapshot_rejected(
+            snapshot,
+            "k0_poisson_airbox_gpu_attestation_state_identity_incomplete",
+        );
+
+        let mut snapshot = complete_measured_gpu_attestation_snapshot();
+        snapshot.target_state_generation = 0;
+        assert_gpu_attestation_snapshot_rejected(
+            snapshot,
+            "k0_poisson_airbox_gpu_attestation_state_identity_incomplete",
+        );
+    }
+
+    #[test]
+    #[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
+    fn legacy_frequency_domain_result_uses_frozen_result_abi_v18() {
+        let result = NativeFrequencyDomainContractFfiResult::default();
+        assert_eq!(
+            result.inner.abi_version,
+            ffi::FULLMAG_FEM_FREQUENCY_DOMAIN_RESULT_ABI_VERSION
+        );
+        assert_eq!(result.inner.abi_version, 18);
+        assert_ne!(
+            result.inner.abi_version,
+            ffi::FULLMAG_FEM_FREQUENCY_DOMAIN_ABI_VERSION,
+            "request/shared-payload v19 must not leak into the frozen by-value result"
+        );
+    }
+
+    #[test]
+    #[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
+    fn measured_gpu_attestation_requires_complete_identity_and_state_prefix() {
+        let mut attestation: ffi::FullmagFemModalGpuAttestationV1 = unsafe { std::mem::zeroed() };
+        attestation.abi_version = ffi::FULLMAG_FEM_MODAL_GPU_ATTESTATION_V1_ABI_VERSION;
+        attestation.struct_size =
+            std::mem::size_of::<ffi::FullmagFemModalGpuAttestationV1>() as u32;
+        attestation.measurement_state = ffi::FULLMAG_FEM_MODAL_GPU_MEASUREMENT_MEASURED;
+
+        assert_eq!(
+            unsafe { validate_modal_gpu_attestation_v1(&attestation) }.unwrap_err(),
+            "k0_poisson_airbox_gpu_attestation_coverage_incomplete"
+        );
+
+        attestation.measurement_state = ffi::FULLMAG_FEM_MODAL_GPU_MEASUREMENT_UNAVAILABLE;
+        assert_eq!(
+            unsafe { validate_modal_gpu_attestation_v1(&attestation) }.unwrap_err(),
+            "k0_poisson_airbox_gpu_attestation_unavailable"
+        );
+
+        attestation.measurement_state = u32::MAX;
+        assert_eq!(
+            unsafe { validate_modal_gpu_attestation_v1(&attestation) }.unwrap_err(),
+            "k0_poisson_airbox_gpu_attestation_measurement_unknown"
+        );
+    }
+
+    #[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
+    fn complete_measured_gpu_attestation() -> ffi::FullmagFemModalGpuAttestationV1 {
+        let mut attestation: ffi::FullmagFemModalGpuAttestationV1 = unsafe { std::mem::zeroed() };
+        attestation.abi_version = ffi::FULLMAG_FEM_MODAL_GPU_ATTESTATION_V1_ABI_VERSION;
+        attestation.struct_size =
+            std::mem::size_of::<ffi::FullmagFemModalGpuAttestationV1>() as u32;
+        attestation.measurement_state = ffi::FULLMAG_FEM_MODAL_GPU_MEASUREMENT_MEASURED;
+        attestation.fallback_state = 1;
+        attestation.measurement_coverage_flags = ffi::FULLMAG_FEM_MODAL_GPU_COVERAGE_SETUP
+            | ffi::FULLMAG_FEM_MODAL_GPU_COVERAGE_FULLMAG_HOT_LOOP
+            | ffi::FULLMAG_FEM_MODAL_GPU_COVERAGE_OBJECT_GRAPH
+            | ffi::FULLMAG_FEM_MODAL_GPU_COVERAGE_SCALAR_TELEMETRY
+            | ffi::FULLMAG_FEM_MODAL_GPU_COVERAGE_EXPORT;
+        attestation.device_residency_verified = 1;
+        attestation.production_shared_domain = 1;
+        attestation.validation_only = 0;
+        attestation.operator_kind = 1;
+        attestation.hypre_memory_location = 2;
+        attestation.hypre_execution_policy = 2;
+        attestation.compute_capability_major = 8;
+        attestation.compute_capability_minor = 6;
+        attestation.cuda_driver_version = 12_060;
+        attestation.cuda_runtime_version = 12_060;
+        let string_pointer = b"measured\0".as_ptr().cast_mut().cast();
+        attestation.device_name = string_pointer;
+        attestation.mfem_version = string_pointer;
+        attestation.hypre_version = string_pointer;
+        attestation.petsc_version = string_pointer;
+        attestation.slepc_version = string_pointer;
+        attestation.petsc_vec_type = string_pointer;
+        attestation.petsc_matrix_type = string_pointer;
+        attestation.matshell_vec_type = string_pointer;
+        attestation.slepc_bv_type = string_pointer;
+        attestation.eps_type = string_pointer;
+        attestation.st_type = string_pointer;
+        attestation.ksp_type = string_pointer;
+        attestation.poisson_pc_type = string_pointer;
+        attestation.shift_pc_type = string_pointer;
+        attestation.device_uuid = [1; 16];
+        attestation.object_graph_sha256 = [2; 32];
+        attestation.native_trace_sha256 = [3; 32];
+        attestation.source_snapshot_sha256 = [4; 32];
+        attestation.runtime_manifest_sha256 = [5; 32];
+        attestation.mesh_identity_sha256 = [6; 32];
+        attestation.equilibrium_sha256 = [7; 32];
+        attestation.certificate_sha256 = [8; 32];
+        attestation.linearization_sha256 = [9; 32];
+        attestation.material_sha256 = [10; 32];
+        attestation.physics_sha256 = [11; 32];
+        attestation.boundary_sha256 = [12; 32];
+        attestation.gauge_sha256 = [13; 32];
+        attestation.operator_terms_sha256 = [14; 32];
+        attestation.solver_policy_sha256 = [15; 32];
+        attestation.operator_key_sha256 = [16; 32];
+        attestation.target_key_sha256 = [17; 32];
+        attestation.session_context_sha256 = [18; 32];
+        attestation.setup_h2d_count = 4;
+        attestation.setup_h2d_bytes = 4096;
+        attestation.hot_loop_scalar_telemetry_d2h_count = 2;
+        attestation.hot_loop_scalar_telemetry_d2h_bytes = 32;
+        attestation.hot_loop_scalar_telemetry_syncs = 2;
+        attestation.export_d2h_count = 1;
+        attestation.export_d2h_bytes = 8192;
+        attestation.device_memory_baseline_bytes = 1024;
+        attestation.device_memory_peak_bytes = 8192;
+        attestation.device_memory_final_bytes = 2048;
+        attestation.operator_dimension = 2048;
+        attestation.operator_apply_count = 41;
+        attestation.poisson_solve_count = 43;
+        attestation.poisson_iteration_count = 47;
+        attestation.eps_iteration_count = 53;
+        attestation.eps_restart_count = 2;
+        attestation.eps_converged_reason = 1;
+        attestation.operator_state_generation = 19;
+        attestation.target_state_generation = 23;
+        attestation.operator_reuse_count = 29;
+        attestation.target_rebuild_count = 31;
+        attestation.invalidation_flags = 37;
+        attestation
+    }
+
+    #[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
+    fn assert_gpu_attestation_rejected(
+        attestation: &ffi::FullmagFemModalGpuAttestationV1,
+        token: &str,
+    ) {
+        assert_eq!(
+            unsafe { validate_modal_gpu_attestation_v1(attestation) }.unwrap_err(),
+            token
+        );
+    }
+
+    #[test]
+    #[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
+    fn measured_gpu_attestation_requires_complete_measurement_coverage() {
+        let mut attestation = complete_measured_gpu_attestation();
+        attestation.measurement_coverage_flags &= !ffi::FULLMAG_FEM_MODAL_GPU_COVERAGE_EXPORT;
+
+        assert_gpu_attestation_rejected(
+            &attestation,
+            "k0_poisson_airbox_gpu_attestation_coverage_incomplete",
+        );
+    }
+
+    #[test]
+    #[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
+    fn measured_gpu_attestation_requires_verified_device_residency() {
+        let mut attestation = complete_measured_gpu_attestation();
+        attestation.device_residency_verified = 0;
+
+        assert_gpu_attestation_rejected(
+            &attestation,
+            "k0_poisson_airbox_gpu_attestation_residency_not_verified",
+        );
+    }
+
+    #[test]
+    #[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
+    fn measured_gpu_attestation_requires_production_shared_domain_not_validation() {
+        let mut attestation = complete_measured_gpu_attestation();
+        attestation.production_shared_domain = 0;
+        assert_gpu_attestation_rejected(
+            &attestation,
+            "k0_poisson_airbox_gpu_attestation_production_shared_domain_required",
+        );
+
+        let mut attestation = complete_measured_gpu_attestation();
+        attestation.validation_only = 1;
+        assert_gpu_attestation_rejected(
+            &attestation,
+            "k0_poisson_airbox_gpu_attestation_validation_only_forbidden",
+        );
+    }
+
+    #[test]
+    #[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
+    fn measured_gpu_attestation_requires_matrix_free_operator_and_nonzero_dimension() {
+        let mut attestation = complete_measured_gpu_attestation();
+        attestation.operator_kind = 2;
+        assert_gpu_attestation_rejected(
+            &attestation,
+            "k0_poisson_airbox_gpu_attestation_operator_kind_invalid",
+        );
+
+        let mut attestation = complete_measured_gpu_attestation();
+        attestation.operator_dimension = 0;
+        assert_gpu_attestation_rejected(
+            &attestation,
+            "k0_poisson_airbox_gpu_attestation_operator_dimension_invalid",
+        );
+    }
+
+    #[test]
+    #[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
+    fn measured_gpu_attestation_requires_hypre_device_policy() {
+        let mut attestation = complete_measured_gpu_attestation();
+        attestation.hypre_memory_location = 1;
+        assert_gpu_attestation_rejected(
+            &attestation,
+            "k0_poisson_airbox_gpu_attestation_hypre_memory_not_device",
+        );
+
+        let mut attestation = complete_measured_gpu_attestation();
+        attestation.hypre_execution_policy = 1;
+        assert_gpu_attestation_rejected(
+            &attestation,
+            "k0_poisson_airbox_gpu_attestation_hypre_execution_not_device",
+        );
+    }
+
+    #[test]
+    #[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
+    fn measured_gpu_attestation_forbids_fallback() {
+        let mut attestation = complete_measured_gpu_attestation();
+        attestation.fallback_state = 2;
+
+        assert_gpu_attestation_rejected(
+            &attestation,
+            "k0_poisson_airbox_gpu_attestation_fallback_forbidden",
+        );
+    }
+
+    #[test]
+    #[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
+    fn measured_gpu_attestation_requires_uuid_and_every_input_digest() {
+        let mut attestation = complete_measured_gpu_attestation();
+        attestation.device_uuid = [0; 16];
+        assert_gpu_attestation_rejected(
+            &attestation,
+            "k0_poisson_airbox_gpu_attestation_device_identity_missing",
+        );
+
+        let mut attestation = complete_measured_gpu_attestation();
+        attestation.mesh_identity_sha256 = [0; 32];
+        assert_gpu_attestation_rejected(
+            &attestation,
+            "k0_poisson_airbox_gpu_attestation_digest_missing",
+        );
+
+        let mut attestation = complete_measured_gpu_attestation();
+        attestation.solver_policy_sha256 = [0; 32];
+        assert_gpu_attestation_rejected(
+            &attestation,
+            "k0_poisson_airbox_gpu_attestation_digest_missing",
+        );
+    }
+
+    #[test]
+    #[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
+    fn measured_gpu_attestation_requires_state_generations_and_keys() {
+        let mut attestation = complete_measured_gpu_attestation();
+        attestation.operator_state_generation = 0;
+        assert_gpu_attestation_rejected(
+            &attestation,
+            "k0_poisson_airbox_gpu_attestation_state_identity_incomplete",
+        );
+
+        let mut attestation = complete_measured_gpu_attestation();
+        attestation.target_key_sha256 = [0; 32];
+        assert_gpu_attestation_rejected(
+            &attestation,
+            "k0_poisson_airbox_gpu_attestation_state_identity_incomplete",
+        );
+    }
+
     fn shared_domain_mesh_with_air_only_node() -> fullmag_ir::MeshIR {
         fullmag_ir::MeshIR {
             mesh_name: "runner-ffi-film-airbox".to_string(),
@@ -2765,10 +4221,7 @@ mod tests {
                 [0.0, 0.0, 1.0],
                 [0.0, 0.0, -1.0],
             ],
-            cells: fullmag_ir::FemConnectivityIR::from_tet4(vec![
-                [0, 1, 2, 3],
-                [0, 1, 2, 4],
-            ]),
+            cells: fullmag_ir::FemConnectivityIR::from_tet4(vec![[0, 1, 2, 3], [0, 1, 2, 4]]),
             element_markers: vec![1, 0],
             facets: fullmag_ir::FemFacetConnectivityIR::from_tri3(Vec::new()),
             boundary_markers: Vec::new(),
@@ -2781,8 +4234,7 @@ mod tests {
     fn shared_domain_ffi_problem(
         mesh: &fullmag_ir::MeshIR,
     ) -> NativeModalEigenSharedDomainProblem<'_> {
-        let digest =
-            "sha256:1111111111111111111111111111111111111111111111111111111111111111";
+        let digest = "sha256:1111111111111111111111111111111111111111111111111111111111111111";
         let node_count = mesh.nodes.len();
         let mut frames = vec![0.0; 6 * node_count];
         for node in 0..node_count {
@@ -2794,8 +4246,8 @@ mod tests {
             .cycle()
             .take(3 * node_count)
             .collect::<Vec<_>>();
-        let view = |view_kind, part_role, identity: &str| {
-            crate::fem_eigen::OwnedModalCertificateV6View {
+        let view =
+            |view_kind, part_role, identity: &str| crate::fem_eigen::OwnedModalCertificateV6View {
                 view_kind,
                 part_role,
                 part_identity: identity.to_string(),
@@ -2826,8 +4278,7 @@ mod tests {
                         sha256: digest.to_string(),
                     },
                 ],
-            }
-        };
+            };
         let certificate_binding_v6 = crate::fem_eigen::OwnedModalCertificateV6Binding {
             mesh_generation_identity: "mesh-generation:fixture".to_string(),
             mesh_magnetic: view(1, 1, "magnetic:fixture"),
@@ -2870,7 +4321,12 @@ mod tests {
             equilibrium_content_sha256: digest.to_string(),
             demag_model: "poisson_robin".to_string(),
             m0_norm_tolerance: 1.0e-8,
-            equilibrium_torque_relative_tolerance: 1.0e-6,
+            acceptance_criterion: "energy".to_string(),
+            acceptance_metric_kind: "total_energy_plateau_range_j".to_string(),
+            acceptance_unit: "J".to_string(),
+            acceptance_metric_value: 2.5e-19,
+            acceptance_threshold: 1.0e-18,
+            acceptance_certificate_sha256: digest.to_string(),
             saturation_magnetisation_a_per_m: Vec::new(),
             uniform_saturation_magnetisation_a_per_m: 8.0e5,
             gamma0_m_per_a_s: 2.211e5,
@@ -2904,9 +4360,7 @@ mod tests {
             magnetic_class_digest_sha256: certificate_binding_v6
                 .magnetic_class_digest_sha256
                 .clone(),
-            scalar_class_digest_sha256: certificate_binding_v6
-                .scalar_class_digest_sha256
-                .clone(),
+            scalar_class_digest_sha256: certificate_binding_v6.scalar_class_digest_sha256.clone(),
             certificate_binding_status: 1,
             certificate_binding_reason: "none".to_string(),
             certificate_binding_v6,
@@ -2919,9 +4373,38 @@ mod tests {
         let mesh = shared_domain_mesh_with_air_only_node();
         let problem = shared_domain_ffi_problem(&mesh);
 
-        let envelope = problem
-            .ffi_envelope_contract()
+        assert_eq!(problem.acceptance_criterion, "energy");
+        assert_eq!(
+            problem.acceptance_metric_kind,
+            "total_energy_plateau_range_j"
+        );
+        assert_eq!(problem.acceptance_unit, "J");
+        assert_eq!(problem.acceptance_metric_value, 2.5e-19);
+        assert_eq!(problem.acceptance_threshold, 1.0e-18);
+        assert!(problem.acceptance_certificate_sha256.starts_with("sha256:"));
+
+        let cpu_envelope = problem
+            .ffi_envelope_contract_for_target(NativeModalExecutionTarget::ProductionCpu)
             .expect("complete full-node descriptor must validate");
+        let gpu_envelope = problem
+            .ffi_envelope_contract_for_target(NativeModalExecutionTarget::ProductionGpu)
+            .expect("the same complete certificate must validate for GPU");
+        assert_eq!(cpu_envelope, gpu_envelope);
+        let envelope = cpu_envelope;
+
+        let mut torque_problem = shared_domain_ffi_problem(&mesh);
+        torque_problem.acceptance_criterion = "torque".to_string();
+        torque_problem.acceptance_metric_kind = "max_torque_apm".to_string();
+        torque_problem.acceptance_unit = "A/m".to_string();
+        torque_problem.acceptance_metric_value = 0.25;
+        torque_problem.acceptance_threshold = 0.5;
+        let torque_cpu = torque_problem
+            .ffi_envelope_contract_for_target(NativeModalExecutionTarget::ProductionCpu)
+            .expect("torque certificate must validate for CPU");
+        let torque_gpu = torque_problem
+            .ffi_envelope_contract_for_target(NativeModalExecutionTarget::ProductionGpu)
+            .expect("torque certificate must validate for GPU");
+        assert_eq!(torque_cpu, torque_gpu);
 
         assert!(envelope.descriptor_required);
         assert_eq!(envelope.node_count, 5);
@@ -3010,13 +4493,33 @@ mod tests {
 
         let mut provider_mutation = shared_domain_ffi_problem(&mesh);
         provider_mutation.demag_provider_signature = Some(
-            "sha256:2222222222222222222222222222222222222222222222222222222222222222"
-                .to_string(),
+            "sha256:2222222222222222222222222222222222222222222222222222222222222222".to_string(),
         );
         assert!(provider_mutation
             .ffi_envelope_contract()
             .expect_err("provider mutation must fail")
             .contains("does not bind operator input"));
+
+        let mut missing_acceptance = shared_domain_ffi_problem(&mesh);
+        missing_acceptance.acceptance_certificate_sha256.clear();
+        assert!(missing_acceptance
+            .ffi_envelope_contract()
+            .expect_err("missing acceptance certificate must fail")
+            .contains("certificate digest"));
+
+        let mut unsatisfied_acceptance = shared_domain_ffi_problem(&mesh);
+        unsatisfied_acceptance.acceptance_metric_value = 2.0e-18;
+        assert!(unsatisfied_acceptance
+            .ffi_envelope_contract()
+            .expect_err("unsatisfied acceptance metric must fail")
+            .contains("invalid or unsatisfied"));
+
+        let mut incoherent_acceptance = shared_domain_ffi_problem(&mesh);
+        incoherent_acceptance.acceptance_unit = "A/m".to_string();
+        assert!(incoherent_acceptance
+            .ffi_envelope_contract()
+            .expect_err("incoherent acceptance tuple must fail")
+            .contains("tuple is incoherent"));
     }
 
     #[cfg(any(feature = "fem-gpu", feature = "fem-native"))]
@@ -3026,13 +4529,18 @@ mod tests {
         let problem = shared_domain_ffi_problem(&mesh);
         let envelope = problem.ffi_envelope_contract().unwrap();
         let mesh_descriptor = unsafe { std::mem::zeroed::<ffi::fullmag_fem_mesh_desc>() };
-        let descriptor = unsafe {
-            std::mem::zeroed::<ffi::FullmagFemModalLinearizationDescriptor>()
-        };
-        let material = unsafe {
-            std::mem::zeroed::<ffi::FullmagFemModalExchangeMaterialView>()
-        };
+        let descriptor =
+            unsafe { std::mem::zeroed::<ffi::FullmagFemModalLinearizationDescriptor>() };
+        let material = unsafe { std::mem::zeroed::<ffi::FullmagFemModalExchangeMaterialView>() };
         let value = std::ffi::CString::new("fixture").unwrap();
+        let acceptance_criterion = std::ffi::CString::new("energy").unwrap();
+        let acceptance_metric_kind =
+            std::ffi::CString::new("total_energy_plateau_range_j").unwrap();
+        let acceptance_unit = std::ffi::CString::new("J").unwrap();
+        let acceptance_digest = std::ffi::CString::new(
+            "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+        )
+        .unwrap();
         let certificate_ffi =
             NativeModalCertificateV6FfiBinding::new(&problem.certificate_binding_v6).unwrap();
         let certificate_request = certificate_ffi.as_request();
@@ -3064,6 +4572,10 @@ mod tests {
             &value, // producer run id
             &value, // equilibrium content digest
             &value, // demag model
+            &acceptance_criterion,
+            &acceptance_metric_kind,
+            &acceptance_unit,
+            &acceptance_digest,
             &descriptor,
             Some(&material),
             &envelope,
@@ -3086,10 +4598,39 @@ mod tests {
         assert!(!payload.bias_field_sample_signature.is_null());
         assert!(!payload.magnetic_part_identity.is_null());
         assert!(!payload.airbox_part_identity.is_null());
+        assert_eq!(
+            unsafe { std::ffi::CStr::from_ptr(payload.acceptance_criterion) }
+                .to_str()
+                .unwrap(),
+            "energy"
+        );
+        assert_eq!(
+            unsafe { std::ffi::CStr::from_ptr(payload.acceptance_metric_kind) }
+                .to_str()
+                .unwrap(),
+            "total_energy_plateau_range_j"
+        );
+        assert_eq!(
+            unsafe { std::ffi::CStr::from_ptr(payload.acceptance_unit) }
+                .to_str()
+                .unwrap(),
+            "J"
+        );
+        assert_eq!(payload.acceptance_metric_value, 2.5e-19);
+        assert_eq!(payload.acceptance_threshold, 1.0e-18);
+        assert_eq!(
+            unsafe { std::ffi::CStr::from_ptr(payload.acceptance_certificate_sha256) }
+                .to_str()
+                .unwrap(),
+            acceptance_digest.to_str().unwrap()
+        );
         assert_eq!(certificate_request.mesh_magnetic.node_count, 2);
         assert_eq!(certificate_request.payload_magnetic.view_kind, 2);
         assert_eq!(certificate_request.mesh_scalar.part_role, 2);
-        assert_eq!(certificate_request.payload_scalar.require_complete_closure, 1);
+        assert_eq!(
+            certificate_request.payload_scalar.require_complete_closure,
+            1
+        );
 
         let nested_request = unsafe {
             payload
@@ -3215,10 +4756,7 @@ mod tests {
                 )
             };
             assert_eq!(ffi_digests.len(), owned_view.expected_class_digests.len());
-            for (actual, expected) in ffi_digests
-                .iter()
-                .zip(&owned_view.expected_class_digests)
-            {
+            for (actual, expected) in ffi_digests.iter().zip(&owned_view.expected_class_digests) {
                 assert_eq!(actual.canonical_class_id, expected.canonical_class_id);
                 assert_eq!(actual.member_count, expected.member_count);
                 assert_eq!(

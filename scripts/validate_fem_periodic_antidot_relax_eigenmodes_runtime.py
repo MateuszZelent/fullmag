@@ -17,7 +17,7 @@ EXPECTED_PBC = {
     "axes": ["periodic", "periodic", "open"],
     "demag": "periodic_airbox_k0",
 }
-EXPECTED_SCENARIO = {
+EXPECTED_SCENARIO_BASE = {
     "scenario": "relax_then_eigenmodes_k0",
     "exchange_coupled_across_periods": True,
     "magnetostatic_pbc": "periodic_airbox_k0",
@@ -28,8 +28,6 @@ EXPECTED_SCENARIO = {
     "hole_radius_m": 25e-9,
     "bias_field_t": [10e-3, 0.0, 0.0],
     "frequency_window_hz": [0.5e9, 30.0e9],
-    "mode_count": 8,
-    "saved_mode_indices": [0, 1, 2, 3],
 }
 
 
@@ -80,6 +78,42 @@ def require_sha256(value: Any, label: str) -> str:
     return digest
 
 
+def validate_certified_equilibrium_fields(
+    value: Any, node_count: int, label: str
+) -> None:
+    fields = require_object(value, label)
+    require(
+        fields.get("schema_version") == "CertifiedFemEquilibriumFields.v1",
+        f"{label}.schema_version drifted",
+    )
+    for field in (
+        "h_ex_a_per_m",
+        "h_demag_a_per_m",
+        "h_ext_a_per_m",
+        "h_eff_a_per_m",
+    ):
+        vectors = fields.get(field)
+        require(
+            isinstance(vectors, list) and len(vectors) == node_count,
+            f"{label}.{field} must contain {node_count} vectors",
+        )
+        for index, vector in enumerate(vectors):
+            require(
+                isinstance(vector, list) and len(vector) == 3,
+                f"{label}.{field}[{index}] must be a vector3",
+            )
+            for component in vector:
+                require_finite_number(component, f"{label}.{field}[{index}]")
+    phi = fields.get("phi_a")
+    require(
+        isinstance(phi, list) and len(phi) == node_count,
+        f"{label}.phi_a must contain {node_count} values",
+    )
+    for index, value in enumerate(phi):
+        require_finite_number(value, f"{label}.phi_a[{index}]")
+    require_sha256(fields.get("content_sha256"), f"{label}.content_sha256")
+
+
 def validate_requested_execution(
     metadata: dict[str, Any], expected_device: str, label: str
 ) -> None:
@@ -108,9 +142,14 @@ def scenario_metadata(metadata: dict[str, Any], label: str) -> dict[str, Any]:
     )
 
 
-def validate_scenario(metadata: dict[str, Any], device: str, label: str) -> None:
+def validate_scenario(
+    metadata: dict[str, Any],
+    device: str,
+    label: str,
+    expected_scenario: dict[str, Any],
+) -> None:
     scenario = scenario_metadata(metadata, label)
-    for key, expected in EXPECTED_SCENARIO.items():
+    for key, expected in expected_scenario.items():
         require(
             scenario.get(key) == expected,
             f"{label}.periodic_antidot_eigensolve.{key} drifted",
@@ -192,7 +231,9 @@ def validate_state_handoff(relax_root: Path, artifacts: Path) -> None:
     )
 
 
-def validate_eigen_handoff(artifacts: Path) -> None:
+def validate_eigen_handoff(
+    artifacts: Path, node_count: int, expected_mode_count: int
+) -> None:
     summary = read_json(artifacts / "eigen/metadata/eigen_summary.json")
     equilibrium_source = summary.get("equilibrium_source")
     require(
@@ -223,8 +264,12 @@ def validate_eigen_handoff(artifacts: Path) -> None:
         solver_diagnostics.get("relax_to_eigen_handoff"),
         "eigen_summary.solver_diagnostics.relax_to_eigen_handoff",
     )
+    handoff_schema = handoff.get("schema_version")
     require(
-        handoff.get("schema_version") == "AcceptedFemRelaxStageHandoff.v1",
+        handoff_schema in {
+            "AcceptedFemRelaxStageHandoff.v2",
+            "AcceptedFemRelaxStageHandoff.v3",
+        },
         "relax-to-eigen handoff schema_version drifted",
     )
     for field in ("source_run_id", "source_stage_id", "source_stage_kind"):
@@ -246,11 +291,35 @@ def validate_eigen_handoff(artifacts: Path) -> None:
         source_equilibrium_sha256 == handoff_equilibrium_sha256,
         "relax-to-eigen handoff equilibrium_content_sha256 bindings disagree",
     )
+    if handoff_schema == "AcceptedFemRelaxStageHandoff.v3":
+        for field in (
+            "legacy_v2_content_sha256",
+            "acceptance_certificate_sha256",
+            "certified_fields_content_sha256",
+            "equilibrium_material_signature",
+            "equilibrium_static_physics_signature",
+            "equilibrium_boundary_signature",
+        ):
+            require_sha256(handoff.get(field), f"relax-to-eigen handoff {field}")
+        certified_fields = require_object(
+            handoff.get("certified_fields"), "relax-to-eigen handoff certified_fields"
+        )
+        validate_certified_equilibrium_fields(
+            certified_fields, node_count, "relax-to-eigen handoff certified_fields"
+        )
+        require(
+            certified_fields.get("content_sha256")
+            == handoff.get("certified_fields_content_sha256"),
+            "relax-to-eigen handoff certified_fields digest bindings disagree",
+        )
     require(
         summary.get("relaxation_steps") == 0,
         "eigen stage must not run a second independent relaxation",
     )
-    require(summary.get("mode_count") == 8, "eigen_summary.mode_count must be 8")
+    require(
+        summary.get("mode_count") == expected_mode_count,
+        f"eigen_summary.mode_count must be {expected_mode_count}",
+    )
     require(
         summary.get("operator") == {"kind": "full2x2", "include_demag": True},
         "eigen_summary.operator drifted",
@@ -259,7 +328,7 @@ def validate_eigen_handoff(artifacts: Path) -> None:
         summary.get("k_sampling") == [0.0, 0.0, 0.0],
         "eigen_summary must describe one K0 sample",
     )
-    equilibrium = read_json(artifacts / "eigen/metadata/equilibrium_artifact.v6.json")
+    equilibrium = read_json(artifacts / "eigen/metadata/equilibrium_artifact.v7.json")
     require(
         equilibrium.get("accepted_for_linearization") is True,
         "equilibrium artifact was not accepted for linearization",
@@ -274,6 +343,9 @@ def validate_eigen_handoff(artifacts: Path) -> None:
 def validate_spectrum_and_modes(
     artifacts: Path,
     source_mesh_identity: dict[str, Any],
+    expected_target: str,
+    expected_mode_count: int,
+    expected_saved_mode_indices: list[int],
 ) -> None:
     node_count = source_mesh_identity["node_count"]
     spectrum = read_json(artifacts / "eigen/spectrum.v2.json")
@@ -281,14 +353,16 @@ def validate_spectrum_and_modes(
         spectrum.get("schema_version") == "eigen_spectrum.v2",
         "eigen/spectrum.v2.json must use eigen_spectrum.v2",
     )
-    require(spectrum.get("complete") is True, "eigen spectrum.v2 must be complete")
+    if expected_target == "frequency_window":
+        require(spectrum.get("complete") is True, "eigen spectrum.v2 must be complete")
     samples = spectrum.get("samples")
     require(isinstance(samples, list) and len(samples) == 1, "spectrum.v2 must contain one K0 sample")
     sample = require_object(samples[0], "spectrum.v2.samples[0]")
-    require(sample.get("status") == "complete", "spectrum.v2 K0 sample must be complete")
+    if expected_target == "frequency_window":
+        require(sample.get("status") == "complete", "spectrum.v2 K0 sample must be complete")
     modes = sample.get("modes")
     require(isinstance(modes, list) and bool(modes), "spectrum.v2 modes must not be empty")
-    if len(modes) < EXPECTED_SCENARIO["mode_count"]:
+    if len(modes) < expected_mode_count:
         certificate = require_object(
             spectrum.get("window_completeness"), "spectrum.v2.window_completeness"
         )
@@ -298,8 +372,9 @@ def validate_spectrum_and_modes(
         )
 
     diagnostics = read_json(artifacts / "eigen/diagnostics/solver.v1.json")
-    eps_phi = require_finite_number(diagnostics.get("eps_phi"), "solver diagnostics eps_phi")
-    require(eps_phi >= 0.0, "solver diagnostics eps_phi must be non-negative")
+    if "eps_phi" in diagnostics:
+        eps_phi = require_finite_number(diagnostics.get("eps_phi"), "solver diagnostics eps_phi")
+        require(eps_phi >= 0.0, "solver diagnostics eps_phi must be non-negative")
 
     modes_by_index: dict[int, dict[str, Any]] = {}
     for item in modes:
@@ -316,7 +391,7 @@ def validate_spectrum_and_modes(
         )
         modes_by_index[raw_index] = mode
 
-    for mode_index in EXPECTED_SCENARIO["saved_mode_indices"]:
+    for mode_index in expected_saved_mode_indices:
         require(mode_index in modes_by_index, f"spectrum.v2 is missing requested mode {mode_index}")
         mode_relative = f"eigen/modes/sample_0000/mode_{mode_index:04}.json"
         mode = read_json(artifacts / mode_relative)
@@ -397,8 +472,45 @@ def resolve_session(report_root: Path) -> Path:
     return sessions[0]
 
 
-def validate_report(report_root: Path, device: str) -> dict[str, Any]:
+def validate_report(
+    report_root: Path,
+    device: str,
+    *,
+    expected_target: str,
+    expected_target_frequency_ghz: float | None,
+    expected_mode_count: int,
+    expected_saved_mode_count: int,
+) -> dict[str, Any]:
     require(device in {"cpu", "gpu"}, "device must be cpu or gpu")
+    require(expected_target in {"frequency_window", "nearest"}, "invalid expected target")
+    require(expected_mode_count > 0, "expected mode count must be positive")
+    require(
+        0 < expected_saved_mode_count <= expected_mode_count,
+        "expected saved mode count must be positive and not exceed mode count",
+    )
+    if expected_target == "nearest":
+        require(
+            expected_target_frequency_ghz is not None
+            and math.isfinite(expected_target_frequency_ghz)
+            and expected_target_frequency_ghz > 0.0,
+            "nearest target requires a positive finite target frequency",
+        )
+    else:
+        require(
+            expected_target_frequency_ghz is None,
+            "frequency_window target must not specify a target frequency",
+        )
+    expected_scenario = {
+        **EXPECTED_SCENARIO_BASE,
+        "modal_target": expected_target,
+        "target_frequency_hz": (
+            expected_target_frequency_ghz * 1.0e9
+            if expected_target_frequency_ghz is not None
+            else None
+        ),
+        "mode_count": expected_mode_count,
+        "saved_mode_indices": list(range(expected_saved_mode_count)),
+    }
     require(report_root.is_dir(), f"report root does not exist: {report_root}")
     runtime_log = report_root / "runtime.log"
     require(runtime_log.is_file() and runtime_log.stat().st_size > 0, "runtime.log is missing")
@@ -424,8 +536,8 @@ def validate_report(report_root: Path, device: str) -> dict[str, Any]:
     validate_entrypoint(final_metadata, "flat_eigenmodes", "eigen")
     validate_requested_execution(relax_metadata, "cpu", "relax")
     validate_requested_execution(final_metadata, device, "eigen")
-    validate_scenario(relax_metadata, device, "relax")
-    validate_scenario(final_metadata, device, "eigen")
+    validate_scenario(relax_metadata, device, "relax", expected_scenario)
+    validate_scenario(final_metadata, device, "eigen", expected_scenario)
     require(
         scenario_metadata(relax_metadata, "relax")
         == scenario_metadata(final_metadata, "eigen"),
@@ -454,8 +566,6 @@ def validate_report(report_root: Path, device: str) -> dict[str, Any]:
             "GPU stage must contain an explicit change_device transition",
         )
 
-    validate_state_handoff(relax_root, artifacts)
-    validate_eigen_handoff(artifacts)
     eigen_mesh = require_object(final_metadata.get("mesh"), "eigen.mesh")
     mesh_id = require_non_empty_string(eigen_mesh.get("mesh_name"), "eigen.mesh.mesh_name")
     node_count = eigen_mesh.get("node_count")
@@ -463,6 +573,8 @@ def validate_report(report_root: Path, device: str) -> dict[str, Any]:
         isinstance(node_count, int) and not isinstance(node_count, bool) and node_count > 0,
         "eigen.mesh.node_count must be a positive integer",
     )
+    validate_state_handoff(relax_root, artifacts)
+    validate_eigen_handoff(artifacts, node_count, expected_mode_count)
     validate_spectrum_and_modes(
         artifacts,
         {
@@ -471,6 +583,9 @@ def validate_report(report_root: Path, device: str) -> dict[str, Any]:
             "indexing": "full_domain_node_order",
             "node_count": node_count,
         },
+        expected_target,
+        expected_mode_count,
+        list(range(expected_saved_mode_count)),
     )
     return {
         "status": "ok",
@@ -486,13 +601,28 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("report_root", type=Path)
     parser.add_argument("--device", required=True, choices=("cpu", "gpu"))
+    parser.add_argument(
+        "--expected-target",
+        choices=("frequency_window", "nearest"),
+        default="frequency_window",
+    )
+    parser.add_argument("--expected-target-frequency-ghz", type=float)
+    parser.add_argument("--expected-mode-count", type=int, default=8)
+    parser.add_argument("--expected-saved-mode-count", type=int, default=4)
     return parser.parse_args(argv)
 
 
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
     try:
-        result = validate_report(args.report_root, args.device)
+        result = validate_report(
+            args.report_root,
+            args.device,
+            expected_target=args.expected_target,
+            expected_target_frequency_ghz=args.expected_target_frequency_ghz,
+            expected_mode_count=args.expected_mode_count,
+            expected_saved_mode_count=args.expected_saved_mode_count,
+        )
     except (OSError, json.JSONDecodeError, ValidationError) as error:
         print(f"PERIODIC_ANTIDOT_EIGENMODES_VALIDATION_ERROR={error}", file=sys.stderr)
         return 1

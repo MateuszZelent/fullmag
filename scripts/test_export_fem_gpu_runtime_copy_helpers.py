@@ -365,6 +365,89 @@ def test_runtime_copy_replaces_existing_symlink_with_source_symlink(tmp_path: Pa
     assert result.returncode == 0, result.stderr + result.stdout
 
 
+def test_runtime_copy_normalizes_symlink_target_from_parent_directory(
+    tmp_path: Path,
+) -> None:
+    source_root = tmp_path / "source"
+    source_dir = source_root / "lib"
+    dest_dir = tmp_path / "dest"
+    source_dir.mkdir(parents=True)
+    dest_dir.mkdir()
+    resolved = source_root / "libfoo.so.1.2.3"
+    resolved.write_text("foo\n", encoding="utf-8")
+    requested = source_dir / "libfoo.so"
+    requested.symlink_to("../libfoo.so.1.2.3")
+
+    result = run_bash(
+        f"""
+        source {HELPER}
+        copy_runtime_entry_replace {resolved} {dest_dir}
+        copy_runtime_entry_replace {requested} {dest_dir}
+        test -L {dest_dir / requested.name}
+        test "$(readlink {dest_dir / requested.name})" = "{resolved.name}"
+        test -e {dest_dir / requested.name}
+        """
+    )
+
+    assert result.returncode == 0, result.stderr + result.stdout
+
+
+def test_runtime_copy_materializes_same_basename_symlink_target(
+    tmp_path: Path,
+) -> None:
+    source_root = tmp_path / "source"
+    source_dir = source_root / "lib"
+    real_dir = source_root / "real"
+    dest_dir = tmp_path / "dest"
+    source_dir.mkdir(parents=True)
+    real_dir.mkdir()
+    dest_dir.mkdir()
+    resolved = real_dir / "libpmix.so.2.5.2"
+    resolved.write_text("pmix\n", encoding="utf-8")
+    same_basename = source_dir / "libpmix.so.2.5.2"
+    same_basename.symlink_to("../real/libpmix.so.2.5.2")
+
+    result = run_bash(
+        f"""
+        source {HELPER}
+        copy_runtime_entry_replace {same_basename} {dest_dir}
+        test ! -L {dest_dir / same_basename.name}
+        test \"$(cat {dest_dir / same_basename.name})\" = pmix
+        """
+    )
+
+    assert result.returncode == 0, result.stderr + result.stdout
+
+
+def test_runtime_copy_materializes_resolved_target_outside_globbed_directory(
+    tmp_path: Path,
+) -> None:
+    source_root = tmp_path / "source"
+    source_dir = source_root / "openmpi" / "lib"
+    external_dir = source_root / "system-lib"
+    dest_dir = tmp_path / "dest"
+    source_dir.mkdir(parents=True)
+    external_dir.mkdir()
+    dest_dir.mkdir()
+    resolved = external_dir / "liboshmem.so.40.30.1"
+    resolved.write_text("oshmem\n", encoding="utf-8")
+    requested = source_dir / "liboshmem.so"
+    requested.symlink_to("../../system-lib/liboshmem.so.40.30.1")
+
+    result = run_bash(
+        f"""
+        source {HELPER}
+        copy_runtime_entry_replace {requested} {dest_dir}
+        test -L {dest_dir / requested.name}
+        test "$(readlink {dest_dir / requested.name})" = "{resolved.name}"
+        test -f {dest_dir / resolved.name}
+        test "$(cat {dest_dir / resolved.name})" = oshmem
+        """
+    )
+
+    assert result.returncode == 0, result.stderr + result.stdout
+
+
 def test_runtime_copy_dependency_closure_can_copy_same_resolved_library_twice(
     tmp_path: Path,
 ) -> None:
@@ -556,7 +639,7 @@ def test_export_script_restores_staging_owner_when_container_build_fails() -> No
 def test_export_script_serializes_runtime_bundle_mutation_with_flock() -> None:
     script = EXPORT_SCRIPT.read_text(encoding="utf-8")
     lock_index = script.find(
-        'RUNTIME_LOCK="${RUNTIME_PARENT}/.fem-gpu-host.export.v2.lock"'
+        'RUNTIME_LOCK="$(managed_fem_runtime_lock_path "${REPO_ROOT}")"'
     )
     flock_index = script.find('flock --close "${RUNTIME_LOCK}"')
     compose_index = script.find(
@@ -1342,6 +1425,30 @@ def test_managed_runtime_validator_rejects_unaddressed_variant_by_default(
     assert "hash-addressed variant directory mismatch" in invalid.stderr
 
 
+def test_managed_runtime_validator_allows_materialized_active_alias(
+    tmp_path: Path,
+) -> None:
+    runtime, ldd, readelf = write_fake_schema_v2_bundle(tmp_path)
+    original_runtime = str(runtime)
+    active = tmp_path / ".fullmag/runtimes/fem-gpu-host"
+    active.parent.mkdir(parents=True)
+    runtime.rename(active)
+    ldd.write_text(
+        ldd.read_text(encoding="utf-8").replace(original_runtime, str(active)),
+        encoding="utf-8",
+    )
+
+    valid = validate_fake_bundle(
+        active,
+        ldd,
+        readelf,
+        "--allow-active-alias",
+        allow_unaddressed_staging=False,
+    )
+
+    assert valid.returncode == 0, valid.stderr
+
+
 def test_validator_requires_native_sm89_in_fullmag_separately(tmp_path: Path) -> None:
     runtime, ldd, readelf = write_fake_schema_v2_bundle(
         tmp_path, fullmag_cubins=("sm_52",), hypre_cubins=("sm_89",)
@@ -1395,6 +1502,35 @@ def test_validator_hashes_resolved_library_target_not_symlink(tmp_path: Path) ->
 
     assert invalid.returncode != 0
     assert "fullmag_fem hash mismatch" in invalid.stderr
+
+
+def test_validator_accepts_materialized_soname_alias_with_matching_payload(
+    tmp_path: Path,
+) -> None:
+    runtime, ldd, readelf = write_fake_schema_v2_bundle(tmp_path)
+    target = runtime / "lib/libfullmag_fem.so.0.1.0"
+    alias = runtime / "lib/libfullmag_fem.so.0"
+    alias.unlink()
+    alias.write_bytes(target.read_bytes())
+    readelf.write_text(
+        readelf.read_text(encoding="utf-8").replace(
+            " 'libfullmag_fem.so.0.1.0': 'libfullmag_fem.so.0',\n",
+            " 'libfullmag_fem.so.0.1.0': 'libfullmag_fem.so.0',\n"
+            " 'libfullmag_fem.so.0': 'libfullmag_fem.so.0',\n",
+        ),
+        encoding="utf-8",
+    )
+    ldd.write_text(
+        ldd.read_text(encoding="utf-8").replace(
+            "{ROOT}/lib/libfullmag_fem.so.0.1.0",
+            "{ROOT}/lib/libfullmag_fem.so.0",
+        ),
+        encoding="utf-8",
+    )
+
+    valid = validate_fake_bundle(runtime, ldd, readelf)
+
+    assert valid.returncode == 0, valid.stderr
 
 
 def test_validator_rejects_loaded_hypre_path_that_differs_from_manifest(
@@ -2068,4 +2204,4 @@ def test_export_script_replaces_existing_versioned_native_symlinks() -> None:
 
     assert function_start != -1
     assert function_end != -1
-    assert 'ln -sfn "$(readlink "$src")" "$dest"' in copy_entry_function
+    assert 'ln -sfn "$(basename "$resolved")" "$dest"' in copy_entry_function

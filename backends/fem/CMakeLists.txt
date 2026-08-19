@@ -181,6 +181,7 @@ set(FEM_SOURCES
     cpu/frequency_domain/slepc_modal_eigen.cpp
     cpu/frequency_domain/spectral_transform.cpp
     gpu/cuda/demag_poisson/hypre_device_solver.cpp
+    gpu/cuda/runtime/hypre_device_policy.cpp
     gpu/cuda/demag_poisson/operators.cpp
     gpu/cuda/demag_poisson/poisson.cpp
     gpu/cuda/demag_poisson/stage_compute.cpp
@@ -875,6 +876,28 @@ if(FULLMAG_USE_MFEM_STACK AND FULLMAG_ENABLE_CUDA AND FULLMAG_FEM_WITH_SLEPC)
     add_test(
         NAME fem_gpu_k0_modal_petsc_slepc_contract
         COMMAND fem_gpu_k0_modal_petsc_slepc_contract
+    )
+    add_executable(
+        fem_gpu_hypre_device_policy_contract
+        tests/frequency_domain/gpu_hypre_device_policy_test.cpp
+    )
+    target_link_libraries(
+        fem_gpu_hypre_device_policy_contract
+        PRIVATE
+            fullmag_fem
+            PETSC::petsc
+            SLEPC::slepc
+            MPI::MPI_CXX
+    )
+    target_include_directories(
+        fem_gpu_hypre_device_policy_contract
+        PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}
+            ${CMAKE_CURRENT_SOURCE_DIR}/include
+    )
+    add_test(
+        NAME fem_gpu_hypre_device_policy_contract
+        COMMAND fem_gpu_hypre_device_policy_contract
     )
 endif()
 add_fem_source_facade_contract(

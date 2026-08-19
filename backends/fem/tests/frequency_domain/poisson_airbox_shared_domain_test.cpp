@@ -980,8 +980,22 @@ int main()
             producer_frames.data(),
             producer_frames.size()) == fd::FrequencyDomainStatus::unavailable,
         "native A_qq producer must reject transverse static fields outside the certified scope");
-    check(std::strstr(producer_error, "parallel to equilibrium") != nullptr,
+    check(std::strstr(producer_error, "accepted equilibrium torque threshold") != nullptr,
           "transverse static field rejection must use a stable unsupported reason");
+
+    check(
+        fd::assemble_native_magnetic_a_qq(
+            transverse_static_field,
+            &scalar_space,
+            magnetic_elements.data(),
+            magnetic_elements.size(),
+            &produced_a_qq,
+            producer_error,
+            nullptr,
+            producer_frames.data(),
+            producer_frames.size(),
+            1.0) == fd::FrequencyDomainStatus::ok,
+        "a transverse residual within the user-accepted torque threshold must be accepted");
 
     FullmagFemModalLinearizationDescriptor missing_demag_provider = producer_descriptor;
     missing_demag_provider.term_presence_mask |=
@@ -1405,7 +1419,7 @@ int main()
     const std::vector<std::uint32_t> payload_a_qq_offsets(9u, 0u);
     const char *payload_boundary = "robin";
     const char *payload_digest = "sha256:payload-test";
-    const char *payload_equilibrium_id = "equilibrium_artifact.v6:payload-test";
+    const char *payload_equilibrium_id = "equilibrium_artifact.v7:payload-test";
     const char *payload_snapshot_id = "sha256:snapshot-test";
     const char *payload_producer = "test:poisson-airbox-shared-domain";
     const char *payload_demag_model = "poisson_robin";
@@ -1489,7 +1503,7 @@ int main()
     payload.equilibrium_content_sha256 = payload_digest;
     payload.demag_model = payload_demag_model;
     payload.m0_norm_tolerance = 1.0e-8;
-    payload.equilibrium_torque_relative_tolerance = 1.0e-6;
+    payload.equilibrium_torque_relative_tolerance = 0.0;
     payload.mesh_certificate_map_binding_digest = payload_digest;
     payload.boundary_gauge_digest = payload_digest;
     payload.magnetic_part_identity = "part:magnetic";
@@ -1497,6 +1511,13 @@ int main()
     payload.mesh_generation_identity = "mesh-generation:fixture";
     payload.linearization_descriptor = &payload_descriptor;
     payload.exchange_material_view = &payload_material_view;
+    payload.acceptance_criterion = "energy";
+    payload.acceptance_metric_kind = "total_energy_plateau_range_j";
+    payload.acceptance_unit = "J";
+    payload.acceptance_metric_value = 2.5e-19;
+    payload.acceptance_threshold = 1.0e-18;
+    payload.acceptance_certificate_sha256 =
+        "sha256:2222222222222222222222222222222222222222222222222222222222222222";
     FullmagFemModalSharedDomainPayload missing_descriptor = payload;
     missing_descriptor.linearization_descriptor = nullptr;
     missing_descriptor.exchange_material_view = nullptr;
@@ -1505,7 +1526,7 @@ int main()
         fd::assemble_poisson_airbox_shared_domain_payload(
             missing_descriptor, &missing_descriptor_result) ==
             fd::FrequencyDomainStatus::validation_error,
-        "v18 payload must reject legacy A_qq without a linearization descriptor");
+        "v19 payload must reject legacy A_qq without a linearization descriptor");
     check(std::strstr(missing_descriptor_result.error_message,
                       "linearization_descriptor_missing") != nullptr,
           "legacy A_qq rejection must use stable missing-descriptor reason");
@@ -1518,9 +1539,9 @@ int main()
         fd::assemble_poisson_airbox_shared_domain_payload(
             v17_prefix_payload, &v17_prefix_result) ==
             fd::FrequencyDomainStatus::validation_error,
-        "v17 payload must fail before any v18 tail read");
+        "v17 payload must fail before any v19 tail read");
     check(std::strstr(v17_prefix_result.error_message,
-                      "requires a full v18 descriptor/material prefix") != nullptr,
+                      "requires a full v19 acceptance-certificate prefix") != nullptr,
           "v17 prefix rejection must use a stable ABI reason");
     FullmagFemModalSharedDomainPayload v16_prefix_payload = payload;
     v16_prefix_payload.abi_version = FULLMAG_FEM_FREQUENCY_DOMAIN_V16_ABI_VERSION;
@@ -1531,9 +1552,9 @@ int main()
         fd::assemble_poisson_airbox_shared_domain_payload(
             v16_prefix_payload, &v16_prefix_result) ==
             fd::FrequencyDomainStatus::validation_error,
-        "v16 payload must fail before any v18 tail read");
+        "v16 payload must fail before any v19 tail read");
     check(std::strstr(v16_prefix_result.error_message,
-                      "requires a full v18 descriptor/material prefix") != nullptr,
+                      "requires a full v19 acceptance-certificate prefix") != nullptr,
           "v16 prefix rejection must use a stable ABI reason");
     fd::PoissonAirboxSharedDomainAssemblyResult payload_result{};
     check(
@@ -1908,6 +1929,40 @@ int main()
           "magnetic+airbox importer compacts scalar Poisson to declared classes");
     check(film_air_result.a_qq.row_count == 2u && film_air_result.a_qq.values.size() > 0u,
           "magnetic+airbox importer compacts native magnetic exchange to declared classes");
+    auto expect_acceptance_rejection = [&](FullmagFemModalSharedDomainPayload candidate,
+                                           const char *reason,
+                                           const char *message) {
+        fd::PoissonAirboxSharedDomainAssemblyResult candidate_result{};
+        check(fd::assemble_poisson_airbox_shared_domain_payload(
+                  candidate, &candidate_result) == fd::FrequencyDomainStatus::validation_error,
+              message);
+        check(std::strstr(candidate_result.error_message, reason) != nullptr,
+              "acceptance-certificate rejection must use the expected stable reason");
+    };
+    FullmagFemModalSharedDomainPayload missing_acceptance_digest = film_air_payload;
+    missing_acceptance_digest.acceptance_certificate_sha256 = nullptr;
+    expect_acceptance_rejection(
+        missing_acceptance_digest,
+        "equilibrium_acceptance_certificate_missing",
+        "shared-domain payload must reject a missing acceptance digest");
+    FullmagFemModalSharedDomainPayload invalid_acceptance_digest = film_air_payload;
+    invalid_acceptance_digest.acceptance_certificate_sha256 = "sha256:forged";
+    expect_acceptance_rejection(
+        invalid_acceptance_digest,
+        "equilibrium_acceptance_certificate_digest_invalid",
+        "shared-domain payload must reject a malformed acceptance digest");
+    FullmagFemModalSharedDomainPayload unsatisfied_acceptance = film_air_payload;
+    unsatisfied_acceptance.acceptance_metric_value = 2.0e-18;
+    expect_acceptance_rejection(
+        unsatisfied_acceptance,
+        "equilibrium_acceptance_certificate_metric_invalid",
+        "shared-domain payload must reject an unsatisfied acceptance threshold");
+    FullmagFemModalSharedDomainPayload incoherent_acceptance = film_air_payload;
+    incoherent_acceptance.acceptance_unit = "A/m";
+    expect_acceptance_rejection(
+        incoherent_acceptance,
+        "equilibrium_acceptance_certificate_incoherent",
+        "shared-domain payload must reject an incoherent acceptance tuple");
     auto expect_linearization_rejection = [&](FullmagFemModalSharedDomainPayload candidate,
                                                 const char *reason,
                                                 const char *message) {

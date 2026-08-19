@@ -1,9 +1,12 @@
 #include "cpu/frequency_domain/mfem_modal_operator_payload.hpp"
 #include "frequency_domain/linearized_dynamic_pencil.hpp"
+#include "frequency_domain/linearization_state.hpp"
 #include "frequency_domain/mesh_symmetry_certificate.hpp"
 #include "fullmag_fem.h"
 
+#include <array>
 #include <cmath>
+#include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -195,8 +198,8 @@ void modal_invalid_abi_returns_validation_error()
     invalid.struct_size = 0u;
     FullmagFemFrequencyDomainResult invalid_result =
         fullmag_fem_modal_eigen_solve(&invalid);
-    check(invalid_result.abi_version == FULLMAG_FEM_FREQUENCY_DOMAIN_ABI_VERSION,
-          "modal result returns ABI version");
+    check(invalid_result.abi_version == FULLMAG_FEM_FREQUENCY_DOMAIN_RESULT_ABI_VERSION,
+          "legacy by-value modal result remains frozen at result ABI v18");
     check(invalid_result.status == FULLMAG_FEM_FD_VALIDATION_ERROR,
           "invalid modal ABI must return validation_error");
     check(contains(invalid_result.diagnostics_json, "unknown_abi"),
@@ -562,7 +565,8 @@ void modal_abi_layout_publishes_versioned_modal_structs()
           "modal v3 ABI layout query succeeds");
     check(v3.v2.abi_version == FULLMAG_FEM_FREQUENCY_DOMAIN_MODAL_ABI_LAYOUT_V3 &&
               v3.v2.modal_shared_domain_payload_size ==
-                  sizeof(FullmagFemModalSharedDomainPayload) &&
+                  offsetof(FullmagFemModalSharedDomainPayload, exchange_material_view) +
+                      sizeof(const FullmagFemModalExchangeMaterialView *) &&
               v3.v2.modal_shared_domain_payload_field_count ==
                   FULLMAG_FEM_MODAL_SHARED_DOMAIN_PAYLOAD_FIELD_COUNT + 2u &&
               v3.v2.modal_shared_domain_payload_field_offsets[
@@ -610,6 +614,40 @@ void modal_abi_layout_publishes_versioned_modal_structs()
     check(v3.modal_exchange_material_view_field_offsets[
                   FULLMAG_FEM_MODAL_EXCHANGE_MATERIAL_VIEW_FIELD_COUNT] == 0u,
           "modal v3 scalar exchange material manifest zero-fills unused capacity");
+
+    fullmag_fem_frequency_domain_modal_abi_layout_v4 short_v4{};
+    short_v4.v3.v2.struct_size = sizeof(short_v4) - 1u;
+    check(fullmag_fem_get_frequency_domain_modal_abi_layout_v4(&short_v4) ==
+              FULLMAG_FEM_ERR_INVALID,
+          "modal v4 ABI layout query rejects a short caller struct_size");
+
+    fullmag_fem_frequency_domain_modal_abi_layout_v4 v4{};
+    v4.v3.v2.struct_size = sizeof(v4);
+    check(fullmag_fem_get_frequency_domain_modal_abi_layout_v4(&v4) == FULLMAG_FEM_OK,
+          "modal v4 ABI layout query succeeds");
+    constexpr std::uint64_t acceptance_offsets[] = {
+        offsetof(FullmagFemModalSharedDomainPayload, acceptance_criterion),
+        offsetof(FullmagFemModalSharedDomainPayload, acceptance_metric_kind),
+        offsetof(FullmagFemModalSharedDomainPayload, acceptance_unit),
+        offsetof(FullmagFemModalSharedDomainPayload, acceptance_metric_value),
+        offsetof(FullmagFemModalSharedDomainPayload, acceptance_threshold),
+        offsetof(FullmagFemModalSharedDomainPayload, acceptance_certificate_sha256),
+    };
+    check(v4.v3.v2.abi_version == FULLMAG_FEM_FREQUENCY_DOMAIN_MODAL_ABI_LAYOUT_V4 &&
+              v4.v3.v2.modal_abi_schema == 4u &&
+              v4.v3.v2.modal_shared_domain_payload_size ==
+                  sizeof(FullmagFemModalSharedDomainPayload) &&
+              v4.v3.v2.modal_shared_domain_payload_field_count == 65u &&
+              v4.modal_acceptance_certificate_field_count == 6u,
+          "modal v4 manifest publishes the complete ABI v19 payload");
+    for (std::size_t i = 0u; i < 6u; ++i) {
+        check(v4.modal_acceptance_certificate_field_offsets[i] == acceptance_offsets[i] &&
+                  v4.v3.v2.modal_shared_domain_payload_field_offsets[59u + i] ==
+                      acceptance_offsets[i],
+              "modal v4 manifest publishes acceptance-certificate offsets");
+    }
+    check(v4.modal_acceptance_certificate_field_offsets[6] == 0u,
+          "modal v4 acceptance manifest zero-fills unused capacity");
 }
 
 FullmagFemModalSharedDomainPayload certificate_payload()
@@ -735,6 +773,8 @@ struct ModalCertificateV6CAbiGoldenFixture {
     fd::MeshSymmetryCertificateV6ClassDigest scalar_class_digest[1] = {
         {0, 4, "sha256:7ff33f86d0dc4a728a5beaf03ef9b05fb20ee1821b92218d846272a01db7366c"},
     };
+    std::string magnetic_class_digest_sha256{};
+    std::string scalar_class_digest_sha256{};
     FullmagFemModalCertificateV6Relation c_generators[4] = {
         {0, 1, 1, 1}, {2, 3, 1, 1}, {0, 2, 2, 1}, {1, 3, 2, 1},
     };
@@ -855,6 +895,25 @@ struct ModalCertificateV6CAbiGoldenFixture {
             scalar_roles,
             scalar_class_digest);
         fd::verify_mesh_symmetry_certificate_v6(native_request, native_binding);
+        check(native_binding.magnetic_class_digests.size() == 1u &&
+                  native_binding.scalar_class_digests.size() == 1u,
+              "v6 golden fixture bootstrap must compute one digest per class");
+        magnetic_class_digest_sha256 = native_binding.magnetic_class_digests[0];
+        scalar_class_digest_sha256 = native_binding.scalar_class_digests[0];
+        magnetic_class_digest[0].sha256 = magnetic_class_digest_sha256.c_str();
+        scalar_class_digest[0].sha256 = scalar_class_digest_sha256.c_str();
+        fd::verify_mesh_symmetry_certificate_v6(native_request, native_binding);
+        const std::string canonical_preimage_sha256 =
+            native_binding.canonical_preimage_sha256;
+        native_request.payload_binding_digest = canonical_preimage_sha256.c_str();
+        fd::verify_mesh_symmetry_certificate_v6(native_request, native_binding);
+        check(native_binding.accepted,
+              "v6 golden fixture native relation binding must be accepted");
+
+        c_magnetic_class_digest[0].sha256 =
+            magnetic_class_digest_sha256.c_str();
+        c_scalar_class_digest[0].sha256 =
+            scalar_class_digest_sha256.c_str();
 
         c_views[0] = c_view(
             1,
@@ -979,27 +1038,33 @@ void modal_v6_c_abi_relation_views_accept_golden_and_reject_digest_tamper()
     result = fullmag_fem_modal_eigen_solve(&request);
     check(result.status == FULLMAG_FEM_FD_VALIDATION_ERROR,
           "modal C ABI rejects a stale v6 canonical binding digest");
-    check(contains(result.diagnostics_json, "certificate_binding_digest_mismatch"),
+    check(contains(result.diagnostics_json,
+                   "periodic_mesh_certificate_v6_binding_digest_mismatch"),
           "modal C ABI reports a stable v6 binding digest mismatch");
     fullmag_fem_frequency_domain_result_destroy(&result);
 }
 
-void modal_v18_linearization_descriptor_is_fail_closed()
+void modal_v18_is_fail_closed_and_v19_descriptor_validation_is_preserved()
 {
     ModalCertificateV6CAbiGoldenFixture certificate_fixture{};
     certificate_fixture.initialize();
     ModalLinearizationDescriptorFixture descriptor_fixture{};
+    double nodes_xyz[6] = {0.0, 0.0, 0.0, 1.0, 0.0, 0.0};
     fullmag_fem_mesh_desc sentinel_mesh{};
+    sentinel_mesh.nodes_xyz = nodes_xyz;
+    sentinel_mesh.nodes_xyz_len = 6;
     std::uint32_t reduced_node[] = {0u};
     fullmag_fem_frequency_domain_exchange_edge exchange_edge{0u, 1u, 1.0};
     FullmagFemModalSharedDomainPayload payload = certificate_payload();
-    payload.abi_version = FULLMAG_FEM_FREQUENCY_DOMAIN_ABI_VERSION;
+    payload.abi_version = FULLMAG_FEM_FREQUENCY_DOMAIN_V18_ABI_VERSION;
     payload.struct_size = sizeof(payload);
     payload.mesh = &sentinel_mesh;
     payload.scalar_reduced_node = reduced_node;
     payload.scalar_reduced_node_count = 1;
     payload.magnetic_reduced_node = reduced_node;
     payload.magnetic_reduced_node_count = 1;
+    payload.equilibrium_m0_xyz = descriptor_fixture.equilibrium;
+    payload.equilibrium_m0_xyz_count = 6;
     payload.canonical_preimage = certificate_fixture.native_binding.canonical_preimage.c_str();
     payload.canonical_preimage_len = certificate_fixture.native_binding.canonical_preimage.size();
     payload.canonical_preimage_sha256 =
@@ -1037,9 +1102,9 @@ void modal_v18_linearization_descriptor_is_fail_closed()
     request.shared_domain_payload = &v17_prefix_payload;
     result = fullmag_fem_modal_eigen_solve(&request);
     check(result.status == FULLMAG_FEM_FD_VALIDATION_ERROR,
-          "v17 modal payload must fail before reading v18 tail fields");
-    check(contains(result.diagnostics_json, "shared_payload_struct_size_too_small"),
-          "v17 modal payload reports a stable short-prefix reason");
+          "complete v17 modal payload reaches the v17 solver boundary without reading v18 fields");
+    check(contains(result.diagnostics_json, "shared_domain_assembly_failed"),
+          "complete v17 modal payload reports the sentinel shared-domain assembly failure");
     fullmag_fem_frequency_domain_result_destroy(&result);
     FullmagFemModalSharedDomainPayload v16_prefix_payload = payload;
     v16_prefix_payload.abi_version = FULLMAG_FEM_FREQUENCY_DOMAIN_V16_ABI_VERSION;
@@ -1056,27 +1121,46 @@ void modal_v18_linearization_descriptor_is_fail_closed()
 
     result = fullmag_fem_modal_eigen_solve(&request);
     check(result.status == FULLMAG_FEM_FD_VALIDATION_ERROR,
-          "v18 modal payload without a descriptor must fail closed");
-    check(contains(result.diagnostics_json, "linearization_descriptor_missing"),
-          "v18 modal payload reports a missing descriptor reason");
+          "v18 modal payload without an acceptance tail must fail closed");
+    check(contains(result.diagnostics_json, "equilibrium_acceptance_certificate_missing"),
+          "v18 modal payload reports the missing acceptance-tail reason");
     fullmag_fem_frequency_domain_result_destroy(&result);
 
+    payload.abi_version = FULLMAG_FEM_FREQUENCY_DOMAIN_ABI_VERSION;
+    payload.acceptance_criterion = "energy";
+    payload.acceptance_metric_kind = "total_energy_plateau_range_j";
+    payload.acceptance_unit = "J";
+    payload.acceptance_metric_value = 1.0e-19;
+    payload.acceptance_threshold = 1.0e-18;
+    payload.acceptance_certificate_sha256 =
+        "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+    const fd::EquilibriumAcceptanceCertificateDescriptor acceptance{
+        payload.acceptance_criterion,
+        payload.acceptance_metric_kind,
+        payload.acceptance_unit,
+        payload.acceptance_metric_value,
+        payload.acceptance_threshold,
+        payload.acceptance_certificate_sha256};
+    char acceptance_error[128]{};
+    check(fd::validate_equilibrium_acceptance_certificate(
+              acceptance, acceptance_error) == fd::FrequencyDomainStatus::ok,
+          "v19 descriptor fixture starts from a valid acceptance certificate");
     payload.linearization_descriptor = &descriptor_fixture.descriptor;
     descriptor_fixture.descriptor.coordinate_unit = "mm";
     result = fullmag_fem_modal_eigen_solve(&request);
     check(result.status == FULLMAG_FEM_FD_VALIDATION_ERROR,
-          "v18 modal payload rejects a non-SI descriptor unit");
+          "v19 modal payload rejects a non-SI descriptor unit");
     check(contains(result.diagnostics_json, "linearization_descriptor_unit_invalid"),
-          "v18 modal payload reports the unit validation reason");
+          "v19 modal payload reports the descriptor unit reason");
     fullmag_fem_frequency_domain_result_destroy(&result);
     descriptor_fixture.descriptor.coordinate_unit = "m";
 
     descriptor_fixture.descriptor.linearization_state_digest = "not-a-digest";
     result = fullmag_fem_modal_eigen_solve(&request);
     check(result.status == FULLMAG_FEM_FD_VALIDATION_ERROR,
-          "v18 modal payload rejects a malformed descriptor digest");
+          "v19 modal payload rejects a malformed descriptor digest");
     check(contains(result.diagnostics_json, "linearization_descriptor_digest_invalid"),
-          "v18 modal payload reports the descriptor digest reason");
+          "v19 modal payload reports the descriptor digest reason");
     fullmag_fem_frequency_domain_result_destroy(&result);
     descriptor_fixture.descriptor.linearization_state_digest =
         payload.linearization_state_digest;
@@ -1085,9 +1169,9 @@ void modal_v18_linearization_descriptor_is_fail_closed()
         ModalLinearizationDescriptorFixture::kDigest;
     result = fullmag_fem_modal_eigen_solve(&request);
     check(result.status == FULLMAG_FEM_FD_VALIDATION_ERROR,
-          "v18 modal payload rejects a descriptor state-digest mismatch");
+          "v19 modal payload rejects a descriptor state-digest mismatch");
     check(contains(result.diagnostics_json, "linearization_descriptor_state_digest_mismatch"),
-          "v18 modal payload reports the state-digest mismatch reason");
+          "v19 modal payload reports the state-digest mismatch reason");
     fullmag_fem_frequency_domain_result_destroy(&result);
     descriptor_fixture.descriptor.linearization_state_digest =
         payload.linearization_state_digest;
@@ -1096,35 +1180,35 @@ void modal_v18_linearization_descriptor_is_fail_closed()
         "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff";
     result = fullmag_fem_modal_eigen_solve(&request);
     check(result.status == FULLMAG_FEM_FD_VALIDATION_ERROR,
-          "v18 modal payload rejects a descriptor equilibrium-digest mismatch");
+          "v19 modal payload rejects a descriptor equilibrium-digest mismatch");
     check(contains(result.diagnostics_json, "linearization_descriptor_equilibrium_digest_mismatch"),
-          "v18 modal payload reports the equilibrium-digest mismatch reason");
+          "v19 modal payload reports the equilibrium-digest mismatch reason");
     fullmag_fem_frequency_domain_result_destroy(&result);
     descriptor_fixture.descriptor.equilibrium_digest = payload.equilibrium_digest;
 
     descriptor_fixture.descriptor.tangent_frame_xyz_count = 0;
     result = fullmag_fem_modal_eigen_solve(&request);
     check(result.status == FULLMAG_FEM_FD_VALIDATION_ERROR,
-          "v18 modal payload rejects a descriptor with an incompatible array count");
+          "v19 modal payload rejects a descriptor with an incompatible array count");
     check(contains(result.diagnostics_json, "linearization_descriptor_state_arrays_invalid"),
-          "v18 modal payload reports the descriptor array-count reason");
+          "v19 modal payload reports the descriptor array-count reason");
     fullmag_fem_frequency_domain_result_destroy(&result);
 
     descriptor_fixture.descriptor.tangent_frame_xyz_count = 12;
     descriptor_fixture.descriptor.exchange_edge_count = 1;
     result = fullmag_fem_modal_eigen_solve(&request);
     check(result.status == FULLMAG_FEM_FD_VALIDATION_ERROR,
-          "v18 modal payload rejects an inactive exchange view with a non-zero count");
+          "v19 modal payload rejects an inactive exchange view with a non-zero count");
     check(contains(result.diagnostics_json, "linearization_descriptor_exchange_invalid"),
-          "v18 modal payload reports the inactive exchange-view reason");
+          "v19 modal payload reports the inactive exchange-view reason");
     fullmag_fem_frequency_domain_result_destroy(&result);
     descriptor_fixture.descriptor.exchange_edge_count = 0;
     descriptor_fixture.descriptor.exchange_edges = &exchange_edge;
     result = fullmag_fem_modal_eigen_solve(&request);
     check(result.status == FULLMAG_FEM_FD_VALIDATION_ERROR,
-          "v18 modal payload rejects an inactive exchange view with a non-null pointer");
+          "v19 modal payload rejects an inactive exchange view with a non-null pointer");
     check(contains(result.diagnostics_json, "linearization_descriptor_exchange_invalid"),
-          "v18 modal payload reports the inactive exchange-pointer reason");
+          "v19 modal payload reports the inactive exchange-pointer reason");
     fullmag_fem_frequency_domain_result_destroy(&result);
 
     descriptor_fixture.descriptor.term_presence_mask =
@@ -1134,7 +1218,7 @@ void modal_v18_linearization_descriptor_is_fail_closed()
     result = fullmag_fem_modal_eigen_solve(&request);
     check(result.status == FULLMAG_FEM_FD_VALIDATION_ERROR &&
               contains(result.diagnostics_json, "linearization_descriptor_exchange_invalid"),
-          "v18 modal payload rejects graph-only exchange without scalar material carrier");
+          "v19 modal payload rejects graph-only exchange without scalar material carrier");
     fullmag_fem_frequency_domain_result_destroy(&result);
 
     FullmagFemModalExchangeMaterialView material_view{};
@@ -1148,15 +1232,15 @@ void modal_v18_linearization_descriptor_is_fail_closed()
     descriptor_fixture.descriptor.exchange_edge_count = 0;
     result = fullmag_fem_modal_eigen_solve(&request);
     check(!contains(result.diagnostics_json, "linearization_descriptor_exchange_invalid"),
-          "v18 modal payload accepts scalar exchange material carrier without graph edges");
+          "v19 modal payload accepts scalar exchange material carrier without graph edges");
     check(!contains(result.diagnostics_json, "exchange_material_view_invalid"),
-          "v18 modal payload accepts a valid append-only exchange material view");
+          "v19 modal payload accepts a valid append-only exchange material view");
     fullmag_fem_frequency_domain_result_destroy(&result);
 
     material_view.exchange_stiffness_j_per_m = -1.0;
     result = fullmag_fem_modal_eigen_solve(&request);
     check(result.status == FULLMAG_FEM_FD_VALIDATION_ERROR,
-          "v18 modal payload rejects non-positive scalar exchange material");
+          "v19 modal payload rejects non-positive scalar exchange material");
     check(contains(result.diagnostics_json, "exchange_material_view_invalid"),
           "invalid scalar exchange material uses a stable reason");
     fullmag_fem_frequency_domain_result_destroy(&result);
@@ -1169,7 +1253,7 @@ void modal_v18_linearization_descriptor_is_fail_closed()
     descriptor_fixture.descriptor.exchange_edge_count = 0;
     result = fullmag_fem_modal_eigen_solve(&request);
     check(!contains(result.diagnostics_json, "linearization_descriptor_"),
-          "v18 modal payload accepts a complete inactive-term descriptor");
+          "v19 modal payload accepts a complete inactive-term descriptor");
     fullmag_fem_frequency_domain_result_destroy(&result);
 }
 
@@ -1228,7 +1312,14 @@ void modal_certificate_boundary_rejects_stale_and_mismatched_identity()
           "modal C ABI reports an absent shared payload prefix reason");
     fullmag_fem_frequency_domain_result_destroy(&result);
 
+    fullmag_fem_mesh_desc sentinel_mesh{};
+    std::uint32_t reduced_node[] = {0u};
     payload = certificate_payload();
+    payload.mesh = &sentinel_mesh;
+    payload.scalar_reduced_node = reduced_node;
+    payload.scalar_reduced_node_count = 1;
+    payload.magnetic_reduced_node = reduced_node;
+    payload.magnetic_reduced_node_count = 1;
     payload.magnetic_pair_count = 2;
     result = fullmag_fem_modal_eigen_solve(&request);
     check(result.status == FULLMAG_FEM_FD_VALIDATION_ERROR,
@@ -1247,8 +1338,6 @@ void modal_certificate_boundary_rejects_stale_and_mismatched_identity()
           "modal C ABI reports the missing identity with a stable token");
     fullmag_fem_frequency_domain_result_destroy(&result);
 
-    fullmag_fem_mesh_desc sentinel_mesh{};
-    std::uint32_t reduced_node[] = {0u};
     payload = certificate_payload();
     payload.mesh = &sentinel_mesh;
     payload.scalar_reduced_node = reduced_node;
@@ -1346,8 +1435,9 @@ void modal_v17_certificate_preimage_validation_is_fail_closed()
     result = fullmag_fem_modal_eigen_solve(&request);
     check(result.status == FULLMAG_FEM_FD_VALIDATION_ERROR,
           "v17 modal payload rejects a mismatched canonical preimage digest");
-    check(contains(result.diagnostics_json, "certificate_binding_digest_mismatch"),
-          "v17 modal payload reports the v6 binding digest mismatch");
+    check(contains(result.diagnostics_json,
+                   "periodic_mesh_certificate_v6_binding_digest_mismatch"),
+          "v17 modal payload reports the specific v6 binding digest mismatch");
     check(result.resolved_certificate_binding_status ==
               FULLMAG_FEM_MODAL_CERTIFICATE_BINDING_INVALID,
           "v17 digest mismatch reports invalid binding status");
@@ -1440,6 +1530,100 @@ void modal_result_destroy_is_safe_for_partial_allocation_and_repeated_calls()
               partial.resolved_certificate_binding_reason == nullptr,
           "destroy clears a partially allocated modal result");
     fullmag_fem_frequency_domain_result_destroy(&partial);
+}
+
+void modal_v18_result_is_frozen_and_strict_gpu_requires_v20_attestation()
+{
+    static_assert(FULLMAG_FEM_FREQUENCY_DOMAIN_RESULT_ABI_VERSION == 18u,
+                  "the by-value modal result ABI must remain frozen at v18");
+
+    FullmagFemModalEigenRequest request = base_request();
+    request.execution_target = FULLMAG_FEM_MODAL_EXECUTION_PRODUCTION_GPU;
+    FullmagFemFrequencyDomainResult result = fullmag_fem_modal_eigen_solve(&request);
+    check(result.abi_version == FULLMAG_FEM_FREQUENCY_DOMAIN_RESULT_ABI_VERSION,
+          "legacy by-value modal callers continue to receive the frozen v18 result");
+    check(result.status == FULLMAG_FEM_FD_VALIDATION_ERROR,
+          "strict production GPU through the v18 result ABI must fail closed");
+    check(contains(result.diagnostics_json, "k0_poisson_airbox_gpu_attestation_abi_required"),
+          "strict production GPU through v18 reports the v20 attestation requirement");
+    fullmag_fem_frequency_domain_result_destroy(&result);
+}
+
+void modal_v20_short_envelope_is_rejected_before_any_write()
+{
+    FullmagFemFrequencyDomainResultV20 result{};
+    std::memset(&result, 0xa5, sizeof(result));
+    result.abi_version = FULLMAG_FEM_FREQUENCY_DOMAIN_RESULT_V20_ABI_VERSION;
+    result.struct_size =
+        static_cast<std::uint32_t>(offsetof(FullmagFemFrequencyDomainResultV20,
+                                            scientific_result_v18));
+    std::array<std::uint8_t, sizeof(result)> before{};
+    std::memcpy(before.data(), &result, sizeof(result));
+
+    const FullmagFemModalEigenRequest request = base_request();
+    check(fullmag_fem_modal_eigen_solve_v20(&request, &result) == FULLMAG_FEM_ERR_INVALID,
+          "v20 modal solve rejects a short caller envelope");
+    check(std::memcmp(before.data(), &result, sizeof(result)) == 0,
+          "v20 modal solve rejects a short caller envelope before any write");
+}
+
+void modal_v20_strict_gpu_attestation_is_present_complete_and_known()
+{
+    FullmagFemModalEigenRequest request = base_request();
+    request.execution_target = FULLMAG_FEM_MODAL_EXECUTION_PRODUCTION_GPU;
+
+    FullmagFemFrequencyDomainResultV20 result{};
+    result.abi_version = FULLMAG_FEM_FREQUENCY_DOMAIN_RESULT_V20_ABI_VERSION;
+    result.struct_size = sizeof(result);
+    check(fullmag_fem_modal_eigen_solve_v20(&request, &result) == FULLMAG_FEM_OK,
+          "v20 modal solve accepts a complete caller envelope");
+    check(result.scientific_result_v18.abi_version ==
+              FULLMAG_FEM_FREQUENCY_DOMAIN_RESULT_ABI_VERSION,
+          "v20 envelope embeds the frozen scientific v18 result");
+    check(result.gpu_attestation != nullptr,
+          "strict production GPU v20 result rejects completion without an attestation");
+    check(result.gpu_attestation->abi_version ==
+              FULLMAG_FEM_MODAL_GPU_ATTESTATION_V1_ABI_VERSION,
+          "strict production GPU v20 result rejects an unknown attestation ABI");
+    check(result.gpu_attestation->struct_size >= sizeof(FullmagFemModalGpuAttestationV1),
+          "strict production GPU v20 result rejects a short attestation before tail access");
+    check(result.gpu_attestation->measurement_state ==
+              FULLMAG_FEM_MODAL_GPU_MEASUREMENT_UNAVAILABLE,
+          "strict production GPU v20 result rejects an unknown attestation measurement state");
+    check(result.gpu_attestation->device_residency_verified == 0u,
+          "T3-only v20 sidecar must not promote full object-graph residency");
+    check((result.gpu_attestation->measurement_coverage_flags &
+               ~FULLMAG_FEM_MODAL_GPU_COVERAGE_SETUP) == 0u,
+          "T3-only v20 sidecar must not claim T4 or export coverage");
+    check(result.scientific_result_v18.status != FULLMAG_FEM_FD_OK,
+          "unavailable GPU attestation cannot mark a strict production result complete");
+
+    fullmag_fem_frequency_domain_result_v20_destroy(&result);
+    check(result.abi_version == FULLMAG_FEM_FREQUENCY_DOMAIN_RESULT_V20_ABI_VERSION &&
+              result.struct_size == sizeof(result) &&
+              result.gpu_attestation == nullptr &&
+              result.scientific_result_v18.status ==
+                  static_cast<FullmagFemFrequencyDomainStatus>(0),
+          "v20 destroy clears the complete envelope while preserving its caller header");
+    fullmag_fem_frequency_domain_result_v20_destroy(&result);
+}
+
+void modal_v20_destroy_is_safe_for_partial_allocation_and_repeated_calls()
+{
+    FullmagFemFrequencyDomainResultV20 partial{};
+    partial.abi_version = FULLMAG_FEM_FREQUENCY_DOMAIN_RESULT_V20_ABI_VERSION;
+    partial.struct_size = sizeof(partial);
+    partial.scientific_result_v18.error_message = new char[1]{'\0'};
+    partial.gpu_attestation = new FullmagFemModalGpuAttestationV1{};
+    partial.gpu_attestation->device_name = new char[1]{'\0'};
+
+    fullmag_fem_frequency_domain_result_v20_destroy(&partial);
+    check(partial.abi_version == FULLMAG_FEM_FREQUENCY_DOMAIN_RESULT_V20_ABI_VERSION &&
+              partial.struct_size == sizeof(partial) &&
+              partial.scientific_result_v18.error_message == nullptr &&
+              partial.gpu_attestation == nullptr,
+          "v20 destroy clears a partially allocated result envelope");
+    fullmag_fem_frequency_domain_result_v20_destroy(&partial);
 }
 
 void modal_shift_invert_finds_macrospin_mode()
@@ -2841,9 +3025,13 @@ int main()
     modal_certificate_boundary_rejects_stale_and_mismatched_identity();
     modal_v17_certificate_preimage_validation_is_fail_closed();
     modal_v6_c_abi_relation_views_accept_golden_and_reject_digest_tamper();
-    modal_v18_linearization_descriptor_is_fail_closed();
+    modal_v18_is_fail_closed_and_v19_descriptor_validation_is_preserved();
     modal_result_provenance_is_resolved_or_explicitly_unavailable();
     modal_result_destroy_is_safe_for_partial_allocation_and_repeated_calls();
+    modal_v18_result_is_frozen_and_strict_gpu_requires_v20_attestation();
+    modal_v20_short_envelope_is_rejected_before_any_write();
+    modal_v20_strict_gpu_attestation_is_present_complete_and_known();
+    modal_v20_destroy_is_safe_for_partial_allocation_and_repeated_calls();
     modal_shift_invert_finds_macrospin_mode();
     modal_shift_invert_residual_below_tolerance();
     modal_shift_invert_validation_reports_slepc_adapter_configuration();
