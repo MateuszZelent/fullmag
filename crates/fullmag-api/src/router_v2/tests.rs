@@ -23962,6 +23962,373 @@ async fn session_import_commit_round_trips_exported_session() {
 }
 
 #[tokio::test]
+async fn session_import_restore_mode_is_typed_defaulted_and_rejects_unknown_values() {
+    use crate::session_persistence::{SessionImportCommitRequest, SessionRestoreMode};
+
+    let defaulted: SessionImportCommitRequest = serde_json::from_value(serde_json::json!({
+        "fms_base64": "Zm1z"
+    }))
+    .expect("missing restore mode must use visualization_only");
+    assert_eq!(
+        defaulted.restore_mode,
+        SessionRestoreMode::VisualizationOnly
+    );
+
+    for (value, expected) in [
+        ("visualization_only", SessionRestoreMode::VisualizationOnly),
+        ("replace_project", SessionRestoreMode::ReplaceProject),
+        ("resume", SessionRestoreMode::Resume),
+    ] {
+        let request: SessionImportCommitRequest = serde_json::from_value(serde_json::json!({
+            "fms_base64": "Zm1z",
+            "restore_mode": value,
+        }))
+        .expect("supported restore mode must deserialize");
+        assert_eq!(request.restore_mode, expected);
+    }
+
+    assert!(
+        serde_json::from_value::<SessionImportCommitRequest>(serde_json::json!({
+            "fms_base64": "Zm1z",
+            "restore_mode": "initial_condition",
+        }))
+        .is_err()
+    );
+
+    let (app, repo_root) = test_router_with_session_store().await;
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v2/sessions/current/persistence/imports")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "fms_base64": "Zm1z",
+                        "restore_mode": "initial_condition",
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+    let _ = fs::remove_dir_all(&repo_root);
+}
+
+#[tokio::test]
+async fn session_import_replace_project_reports_semantic_differences_without_comparing_scripts() {
+    let (app, state, repo_root) = test_router_with_session_store_state().await;
+    let source_script = repo_root.join("different-model.py");
+    fs::write(
+        &source_script,
+        b"study = fullmag.Study(name='different-model')\n",
+    )
+    .expect("different source script fixture should be written");
+
+    let active_snapshot = {
+        let mut current = state.current_live_state.write().await;
+        let current = current.as_mut().expect("fixture must have active state");
+        current.scene_document = Some(sample_scene_document());
+        current.clone()
+    };
+
+    let mut imported_snapshot = active_snapshot.clone();
+    imported_snapshot.session.script_path = source_script.display().to_string();
+    let imported_scene = imported_snapshot
+        .scene_document
+        .as_mut()
+        .expect("fixture scene must be present");
+    imported_scene.objects[0].geometry.geometry_params = serde_json::json!({
+        "size": [2.0, 1.0, 1.0]
+    });
+    *state.current_live_state.write().await = Some(imported_snapshot);
+
+    let export_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v2/sessions/current/persistence/exports")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({ "profile": "compact" }).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(export_response.status(), StatusCode::OK);
+    let fms_base64 = body_json(export_response).await["fms_base64"]
+        .as_str()
+        .expect("export must include fms payload")
+        .to_string();
+
+    *state.current_live_state.write().await = Some(active_snapshot);
+    let import_response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v2/sessions/current/persistence/imports")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "fms_base64": fms_base64,
+                        "restore_mode": "replace_project",
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(import_response.status(), StatusCode::OK);
+    let imported = body_json(import_response).await;
+    assert_eq!(imported["restore_mode"], "replace_project");
+    assert_eq!(imported["compatibility"]["geometry"]["basis"], "available");
+    assert_eq!(
+        imported["compatibility"]["geometry"]["differences"],
+        serde_json::json!(["geometry differs"])
+    );
+    assert!(imported["warnings"]
+        .as_array()
+        .expect("warnings must be an array")
+        .iter()
+        .any(|warning| warning == "non-blocking semantic difference in geometry"));
+
+    let _ = fs::remove_dir_all(&repo_root);
+}
+
+#[tokio::test]
+async fn session_import_resume_without_backend_restore_leaves_active_snapshot_unchanged() {
+    let (app, state, repo_root) = test_router_with_session_store_state().await;
+    let active_before = serde_json::to_value(
+        state
+            .current_live_state
+            .read()
+            .await
+            .clone()
+            .expect("fixture must have active state"),
+    )
+    .expect("active snapshot must serialize");
+    let selection_before =
+        serde_json::to_value(state.current_display_selection.read().await.clone())
+            .expect("selection must serialize");
+    let presentation_before =
+        serde_json::to_value(state.current_display_presentation.read().await.clone())
+            .expect("presentation must serialize");
+
+    let export_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v2/sessions/current/persistence/exports")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({ "profile": "compact" }).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let fms_base64 = body_json(export_response).await["fms_base64"]
+        .as_str()
+        .expect("export must include fms payload")
+        .to_string();
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v2/sessions/current/persistence/imports")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "fms_base64": fms_base64,
+                        "restore_mode": "resume",
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+    assert_eq!(
+        body_json(response).await["code"],
+        "checkpoint_restore_unsupported"
+    );
+    assert_eq!(
+        serde_json::to_value(
+            state
+                .current_live_state
+                .read()
+                .await
+                .clone()
+                .expect("active snapshot must remain present"),
+        )
+        .expect("active snapshot must serialize"),
+        active_before
+    );
+    assert_eq!(
+        serde_json::to_value(state.current_display_selection.read().await.clone())
+            .expect("selection must serialize"),
+        selection_before
+    );
+    assert_eq!(
+        serde_json::to_value(state.current_display_presentation.read().await.clone())
+            .expect("presentation must serialize"),
+        presentation_before
+    );
+
+    let _ = fs::remove_dir_all(&repo_root);
+}
+
+#[tokio::test]
+async fn session_import_missing_snapshot_rejects_before_mutating_state_or_store() {
+    use std::io::Cursor;
+
+    let (app, state, repo_root) = test_router_with_session_store_state().await;
+    let active_before = serde_json::to_value(
+        state
+            .current_live_state
+            .read()
+            .await
+            .clone()
+            .expect("fixture must have active state"),
+    )
+    .expect("active snapshot must serialize");
+    let source_store =
+        fullmag_session::SessionStore::open(repo_root.join("missing-snapshot-source"))
+            .expect("source store should open");
+    let session = fullmag_session::FmsSessionManifest::new(
+        "missing-snapshot-session",
+        "missing snapshot",
+        fullmag_session::SaveProfile::Compact,
+    );
+    let script = b"study = fullmag.Study()\n".to_vec();
+    let workspace = fullmag_session::FmsWorkspaceManifest {
+        workspace_id: "missing-snapshot".to_string(),
+        problem_name: "missing snapshot".to_string(),
+        project_ref: "project/".to_string(),
+        script_ref: "project/main.py".to_string(),
+        script_sha256: fullmag_session::hex_sha256(&script),
+        ui_state_ref: "project/ui_state.json".to_string(),
+        scene_document_ref: "project/scene_document.json".to_string(),
+        script_builder_ref: None,
+        model_builder_graph_ref: None,
+        asset_index_ref: None,
+    };
+    let documents = HashMap::from([
+        ("main.py".to_string(), script),
+        ("ui_state.json".to_string(), b"{}".to_vec()),
+    ]);
+    let mut archive = Cursor::new(Vec::new());
+    fullmag_session::pack_fms(
+        &mut archive,
+        &source_store,
+        &session,
+        &workspace,
+        &fullmag_session::FmsExportProfile::for_profile(fullmag_session::SaveProfile::Compact),
+        &documents,
+        &fullmag_session::PackOptions::default(),
+    )
+    .expect("fixture archive should pack");
+    use base64::Engine;
+    let fms_base64 = base64::engine::general_purpose::STANDARD.encode(archive.into_inner());
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v2/sessions/current/persistence/imports")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({ "fms_base64": fms_base64 }).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(
+        serde_json::to_value(
+            state
+                .current_live_state
+                .read()
+                .await
+                .clone()
+                .expect("active snapshot must remain present"),
+        )
+        .expect("active snapshot must serialize"),
+        active_before
+    );
+    assert!(
+        !repo_root.join(".fullmag/local-live/session-store").exists(),
+        "preflight failure must not initialize the active SessionStore"
+    );
+
+    let mut corrupt_documents = documents;
+    corrupt_documents.insert(
+        "current_live_snapshot.json".to_string(),
+        b"{not valid JSON".to_vec(),
+    );
+    let mut corrupt_archive = Cursor::new(Vec::new());
+    fullmag_session::pack_fms(
+        &mut corrupt_archive,
+        &source_store,
+        &session,
+        &workspace,
+        &fullmag_session::FmsExportProfile::for_profile(fullmag_session::SaveProfile::Compact),
+        &corrupt_documents,
+        &fullmag_session::PackOptions::default(),
+    )
+    .expect("corrupt snapshot fixture archive should pack");
+    let corrupt_fms_base64 =
+        base64::engine::general_purpose::STANDARD.encode(corrupt_archive.into_inner());
+    let corrupt_response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v2/sessions/current/persistence/imports")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({ "fms_base64": corrupt_fms_base64 }).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(corrupt_response.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(
+        serde_json::to_value(
+            state
+                .current_live_state
+                .read()
+                .await
+                .clone()
+                .expect("active snapshot must remain present"),
+        )
+        .expect("active snapshot must serialize"),
+        active_before
+    );
+    assert!(
+        !repo_root.join(".fullmag/local-live/session-store").exists(),
+        "corrupt snapshot must not initialize the active SessionStore"
+    );
+
+    let _ = fs::remove_dir_all(&repo_root);
+}
+
+#[tokio::test]
 async fn solved_session_export_restores_frequency_artifacts_after_source_history_is_removed() {
     use base64::Engine;
 

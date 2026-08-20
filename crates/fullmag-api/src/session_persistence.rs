@@ -22,10 +22,10 @@ use crate::{
 };
 
 use fullmag_session::{
-    capture_checkpoint, determine_restore_class, inspect_fms, pack_fms, unpack_fms, CaptureRequest,
-    CheckpointCompatibility, CheckpointSnapshotProvider, FieldCapturePolicy, FmsExportProfile,
-    FmsRunManifest, FmsSessionManifest, FmsWorkspaceManifest, PackOptions, SaveProfile,
-    SessionInspection, SessionStore, SolverEnergies,
+    capture_checkpoint, determine_restore_class, inspect_fms, pack_fms, preflight_fms, unpack_fms,
+    CaptureRequest, CheckpointCompatibility, CheckpointSnapshotProvider, FieldCapturePolicy,
+    FmsExportProfile, FmsRunManifest, FmsSessionManifest, FmsWorkspaceManifest, PackOptions,
+    SaveProfile, SessionInspection, SessionStore, SolverEnergies,
 };
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -392,17 +392,76 @@ pub(crate) struct SessionImportInspectResponse {
 pub(crate) struct SessionImportCommitRequest {
     /// Base64-encoded `.fms` file content.
     pub fms_base64: String,
-    /// Restore mode: "resume", "initial_condition", "config_only".
+    /// Requested import behavior. Defaults to a visualization-only restore.
     #[serde(default)]
-    #[allow(dead_code)]
-    pub restore_mode: Option<String>,
+    pub restore_mode: SessionRestoreMode,
+}
+
+/// Explicit import behavior for an FMS archive.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum SessionRestoreMode {
+    VisualizationOnly,
+    ReplaceProject,
+    Resume,
+}
+
+impl Default for SessionRestoreMode {
+    fn default() -> Self {
+        Self::VisualizationOnly
+    }
+}
+
+/// Whether a semantic category could be compared from both snapshots.
+#[derive(Debug, Clone, Copy, Serialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum SessionRestoreCompatibilityBasis {
+    Available,
+    Unavailable,
+}
+
+/// Non-blocking semantic differences in one restore category.
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub(crate) struct SessionRestoreCompatibilityCategory {
+    pub basis: SessionRestoreCompatibilityBasis,
+    pub differences: Vec<String>,
+}
+
+/// Semantic compatibility report returned with every accepted FMS import.
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub(crate) struct SessionRestoreCompatibility {
+    pub geometry: SessionRestoreCompatibilityCategory,
+    pub materials_physics: SessionRestoreCompatibilityCategory,
+    pub mesh: SessionRestoreCompatibilityCategory,
+    pub study_stages: SessionRestoreCompatibilityCategory,
+    pub execution: SessionRestoreCompatibilityCategory,
+    pub problem_ir: SessionRestoreCompatibilityCategory,
+}
+
+impl SessionRestoreCompatibility {
+    fn warnings(&self) -> Vec<String> {
+        [
+            ("geometry", &self.geometry),
+            ("materials_physics", &self.materials_physics),
+            ("mesh", &self.mesh),
+            ("study_stages", &self.study_stages),
+            ("execution", &self.execution),
+            ("problem_ir", &self.problem_ir),
+        ]
+        .into_iter()
+        .filter(|(_, category)| !category.differences.is_empty())
+        .map(|(name, _)| format!("non-blocking semantic difference in {name}"))
+        .collect()
+    }
 }
 
 #[derive(Debug, Serialize, ToSchema)]
 pub(crate) struct SessionImportCommitResponse {
     pub session_id: String,
+    pub restore_mode: SessionRestoreMode,
     pub restore_class: fullmag_session::RestoreClass,
     pub warnings: Vec<String>,
+    pub compatibility: SessionRestoreCompatibility,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ui_state: Option<serde_json::Value>,
 }
@@ -1016,6 +1075,188 @@ pub(crate) async fn import_session_inspect(
     Ok(Json(SessionImportInspectResponse { inspection }))
 }
 
+fn json_field_subset(value: &serde_json::Value, fields: &[&str]) -> serde_json::Value {
+    let source = value.as_object();
+    serde_json::Value::Object(
+        fields
+            .iter()
+            .map(|field| {
+                (
+                    (*field).to_string(),
+                    source
+                        .and_then(|object| object.get(*field))
+                        .cloned()
+                        .unwrap_or(serde_json::Value::Null),
+                )
+            })
+            .collect(),
+    )
+}
+
+fn scene_objects_subset(
+    scene: &fullmag_authoring::SceneDocument,
+    fields: &[&str],
+) -> Option<serde_json::Value> {
+    scene
+        .objects
+        .iter()
+        .map(|object| {
+            serde_json::to_value(object)
+                .ok()
+                .map(|value| json_field_subset(&value, fields))
+        })
+        .collect::<Option<Vec<_>>>()
+        .map(serde_json::Value::Array)
+}
+
+fn scene_study_subset(
+    scene: &fullmag_authoring::SceneDocument,
+    fields: &[&str],
+) -> Option<serde_json::Value> {
+    serde_json::to_value(&scene.study)
+        .ok()
+        .map(|value| json_field_subset(&value, fields))
+}
+
+fn scene_semantic_section(
+    snapshot: &SessionStateResponse,
+    category: &str,
+) -> Option<serde_json::Value> {
+    let scene = snapshot.scene_document.as_ref()?;
+    let scene_value = serde_json::to_value(scene).ok()?;
+    let scene_fields = |fields: &[&str]| json_field_subset(&scene_value, fields);
+
+    match category {
+        "geometry" => Some(serde_json::json!({
+            "objects": scene_objects_subset(scene, &["id", "geometry", "transform", "region_name"])?,
+            "universe": scene_fields(&["universe"]),
+        })),
+        "materials_physics" => Some(serde_json::json!({
+            "scene": scene_fields(&[
+                "materials",
+                "magnetization_assets",
+                "couplings",
+                "field_drives",
+                "current_modules",
+                "current_transports",
+                "spin_transports",
+                "spin_torques",
+                "oersted_fields",
+            ]),
+            "objects": scene_objects_subset(scene, &[
+                "id",
+                "material_ref",
+                "magnetization_ref",
+                "region_overrides",
+                "physics_stack",
+                "material_parameter_fields",
+                "absorbing_boundary",
+            ])?,
+        })),
+        "mesh" => Some(serde_json::json!({
+            "universe": scene_fields(&["universe"]),
+            "study": scene_study_subset(scene, &[
+                "fdm",
+                "universe_mesh",
+                "shared_domain_mesh",
+                "mesh_defaults",
+                "mesh_interfaces",
+            ])?,
+            "objects": scene_objects_subset(scene, &[
+                "id",
+                "object_mesh",
+                "mesh_override",
+                "regions",
+                "allocated_region_ids",
+            ])?,
+        })),
+        "study_stages" => Some(serde_json::json!({
+            "study": scene_study_subset(scene, &["stages", "study_pipeline", "initial_state"])?,
+            "outputs": scene_fields(&["outputs"]),
+        })),
+        _ => None,
+    }
+}
+
+fn execution_semantic_section(snapshot: &SessionStateResponse) -> serde_json::Value {
+    serde_json::json!({
+        "requested_backend": snapshot.session.requested_backend,
+        "authored_requested_device": snapshot.session.authored_requested_device,
+        "requested_device": snapshot.session.requested_device,
+        "requested_precision": snapshot.session.requested_precision,
+        "requested_mode": snapshot.session.requested_mode,
+        "resolved_backend": snapshot.session.resolved_backend,
+        "resolved_device": snapshot.session.resolved_device,
+        "resolved_precision": snapshot.session.resolved_precision,
+        "resolved_mode": snapshot.session.resolved_mode,
+        "resolved_runtime_family": snapshot.session.resolved_runtime_family,
+        "resolved_engine_id": snapshot.session.resolved_engine_id,
+        "plan_summary": snapshot.session.plan_summary,
+        "runtime_status": snapshot.runtime_status,
+    })
+}
+
+fn problem_ir_semantic_section(snapshot: &SessionStateResponse) -> Option<serde_json::Value> {
+    snapshot
+        .metadata
+        .as_ref()
+        .and_then(|metadata| {
+            metadata
+                .get("problem_ir")
+                .or_else(|| metadata.get("normalized_problem_ir"))
+        })
+        .cloned()
+}
+
+fn compare_restore_category(
+    active: Option<serde_json::Value>,
+    imported: Option<serde_json::Value>,
+    difference: &str,
+) -> SessionRestoreCompatibilityCategory {
+    match (active, imported) {
+        (Some(active), Some(imported)) => SessionRestoreCompatibilityCategory {
+            basis: SessionRestoreCompatibilityBasis::Available,
+            differences: (active != imported)
+                .then(|| vec![difference.to_string()])
+                .unwrap_or_default(),
+        },
+        _ => SessionRestoreCompatibilityCategory {
+            basis: SessionRestoreCompatibilityBasis::Unavailable,
+            differences: Vec::new(),
+        },
+    }
+}
+
+fn session_restore_compatibility(
+    active: Option<&SessionStateResponse>,
+    imported: &SessionStateResponse,
+) -> SessionRestoreCompatibility {
+    let compare_scene = |category, difference| {
+        compare_restore_category(
+            active.and_then(|snapshot| scene_semantic_section(snapshot, category)),
+            scene_semantic_section(imported, category),
+            difference,
+        )
+    };
+
+    SessionRestoreCompatibility {
+        geometry: compare_scene("geometry", "geometry differs"),
+        materials_physics: compare_scene("materials_physics", "materials or physics differs"),
+        mesh: compare_scene("mesh", "mesh differs"),
+        study_stages: compare_scene("study_stages", "study stages differ"),
+        execution: compare_restore_category(
+            active.map(execution_semantic_section),
+            Some(execution_semantic_section(imported)),
+            "execution differs",
+        ),
+        problem_ir: compare_restore_category(
+            active.and_then(problem_ir_semantic_section),
+            problem_ir_semantic_section(imported),
+            "ProblemIR differs",
+        ),
+    }
+}
+
 /// `POST /v2/sessions/current/persistence/imports`
 pub(crate) async fn import_session_commit(
     State(state): State<Arc<AppState>>,
@@ -1024,75 +1265,82 @@ pub(crate) async fn import_session_commit(
     let fms_bytes = base64_decode(&req.fms_base64)
         .map_err(|e| ApiError::bad_request(format!("invalid base64: {e}")))?;
 
+    // The archive, persisted snapshot, presentation migration, and semantic
+    // report must all be valid before opening a SessionStore or mutating live
+    // application state.
+    let preflight = preflight_fms(
+        Cursor::new(&fms_bytes),
+        &["project/current_live_snapshot.json"],
+    )
+    .map_err(|error| ApiError::bad_request(format!("invalid_fms_preflight: {error}")))?;
+    let snapshot_bytes = preflight
+        .documents
+        .get("project/current_live_snapshot.json")
+        .expect("preflight required the current snapshot document");
+    let mut persisted: PersistedCurrentLiveSnapshot = serde_json::from_slice(snapshot_bytes)
+        .map_err(|error| ApiError::bad_request(format!("invalid_fms_snapshot: {error}")))?;
+    let restored_display_presentation = restore_display_presentation(
+        persisted.display_presentation_schema_version,
+        &persisted.display_presentation,
+    )
+    .map_err(|error| {
+        ApiError::bad_request(format!(
+            "invalid_fms_snapshot: unsupported or invalid persisted display presentation ({error})"
+        ))
+    })?;
+    let imported_snapshot: SessionStateResponse = persisted.clone().into();
+    let active_snapshot = state.current_live_state.read().await.clone();
+    let compatibility = session_restore_compatibility(active_snapshot.as_ref(), &imported_snapshot);
+    let mut warnings = preflight.inspection.warnings.clone();
+    warnings.extend(compatibility.warnings());
+
+    if matches!(req.restore_mode, SessionRestoreMode::Resume) {
+        return Err(ApiError::conflict(
+            "checkpoint_restore_unsupported: this runtime cannot restore an FMS checkpoint",
+        ));
+    }
+
     let store = open_store(&state)?;
-
     let session = unpack_fms(Cursor::new(&fms_bytes), &store)
-        .map_err(|e| ApiError::internal(format!("unpacking .fms: {e}")))?;
+        .map_err(|error| ApiError::internal(format!("unpacking preflighted .fms: {error}")))?;
 
-    // Determine restore class.
-    let inspection = inspect_fms(Cursor::new(&fms_bytes))
-        .map_err(|e| ApiError::internal(format!("re-inspecting .fms: {e}")))?;
-    let warnings = inspection.warnings.clone();
+    let restored_artifact_dir = session_store_run_artifact_dir(&store, &persisted.session.run_id)
+        .display()
+        .to_string();
+    persisted.session.artifact_dir = restored_artifact_dir.clone();
+    if let Some(run) = persisted.run.as_mut() {
+        run.artifact_dir = restored_artifact_dir;
+    }
+    let restored: SessionStateResponse = persisted.clone().into();
+    store
+        .write_document(
+            "project/current_live_snapshot.json",
+            &serde_json::to_vec_pretty(&persisted).map_err(|error| {
+                ApiError::internal(format!(
+                    "serializing rebased imported session snapshot: {error}"
+                ))
+            })?,
+        )
+        .map_err(|error| {
+            ApiError::internal(format!(
+                "persisting rebased imported session snapshot: {error}"
+            ))
+        })?;
 
-    // Try to restore the current live workspace snapshot from packaged docs.
-    if let Some(snapshot_bytes) = store
-        .read_document("project/current_live_snapshot.json")
-        .map_err(|e| ApiError::internal(format!("reading snapshot document: {e}")))?
-    {
-        if let Ok(snapshot_document) = serde_json::from_slice::<serde_json::Value>(&snapshot_bytes)
-        {
-            if let Ok(mut persisted) =
-                serde_json::from_value::<PersistedCurrentLiveSnapshot>(snapshot_document.clone())
+    match req.restore_mode {
+        SessionRestoreMode::VisualizationOnly => {
             {
-                let restored_display_presentation = restore_display_presentation(
-                    persisted.display_presentation_schema_version,
-                    &persisted.display_presentation,
-                )
-                .map_err(|error| {
-                    ApiError::bad_request(format!(
-                        "unsupported or invalid persisted display presentation ({error}); session restore did not mutate the active workspace"
-                    ))
-                })?;
-                let restored_artifact_dir = session_store_run_artifact_dir(
-                    &store,
-                    &persisted.session.run_id,
-                );
-                let restored_artifact_dir = restored_artifact_dir.display().to_string();
-                persisted.session.artifact_dir = restored_artifact_dir.clone();
-                if let Some(run) = persisted.run.as_mut() {
-                    run.artifact_dir = restored_artifact_dir;
-                }
-                let restored: SessionStateResponse = persisted.clone().into();
-                store
-                    .write_document(
-                        "project/current_live_snapshot.json",
-                        &serde_json::to_vec_pretty(&persisted).map_err(|error| {
-                            ApiError::internal(format!(
-                                "serializing rebased imported session snapshot: {error}"
-                            ))
-                        })?,
-                    )
-                    .map_err(|error| {
-                        ApiError::internal(format!(
-                            "persisting rebased imported session snapshot: {error}"
-                        ))
-                    })?;
-                // Refresh the in-memory active workspace.
-                {
-                    let mut current = state.current_live_state.write().await;
-                    *current = Some(restored.clone());
-                }
-                {
-                    let mut selection = state.current_display_selection.write().await;
-                    *selection = restored.display_selection.clone();
-                }
-                {
-                    let mut presentation = state.current_display_presentation.write().await;
-                    *presentation = restored_display_presentation;
-                }
+                let mut selection = state.current_display_selection.write().await;
+                *selection = restored.display_selection.clone();
+            }
+            {
+                let mut presentation = state.current_display_presentation.write().await;
+                *presentation = restored_display_presentation;
+            }
+            if let Some(active) = active_snapshot.as_ref() {
                 let realtime_state = current_live_realtime_state_from_snapshot(
                     &state,
-                    &restored,
+                    active,
                     restored.display_selection.revision,
                 )
                 .await;
@@ -1100,6 +1348,28 @@ pub(crate) async fn import_session_commit(
                     .await?;
             }
         }
+        SessionRestoreMode::ReplaceProject => {
+            {
+                let mut current = state.current_live_state.write().await;
+                *current = Some(restored.clone());
+            }
+            {
+                let mut selection = state.current_display_selection.write().await;
+                *selection = restored.display_selection.clone();
+            }
+            {
+                let mut presentation = state.current_display_presentation.write().await;
+                *presentation = restored_display_presentation;
+            }
+            let realtime_state = current_live_realtime_state_from_snapshot(
+                &state,
+                &restored,
+                restored.display_selection.revision,
+            )
+            .await;
+            publish_current_live_realtime_batch_changed(&state, &realtime_state, false, 0).await?;
+        }
+        SessionRestoreMode::Resume => unreachable!("resume returns before any mutation"),
     }
 
     let restored_ui_state = store
@@ -1109,8 +1379,10 @@ pub(crate) async fn import_session_commit(
 
     Ok(Json(SessionImportCommitResponse {
         session_id: session.session_id,
-        restore_class: inspection.restore_class,
+        restore_mode: req.restore_mode,
+        restore_class: preflight.inspection.restore_class,
         warnings,
+        compatibility,
         ui_state: restored_ui_state,
     }))
 }
