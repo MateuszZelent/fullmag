@@ -105,6 +105,7 @@ pub fn pack_fms<W: Write + Seek>(
     let canonical_root = canonical_store_root(store.root())?;
     let run_entries = plan_run_entries(store.root(), &canonical_root, session, export_profile)?;
     let cas_entries = plan_cas_entries(store.root(), &canonical_root, &run_entries)?;
+    validate_export_plan(documents, &run_entries, &cas_entries)?;
 
     let mut zip = zip::ZipWriter::new(writer);
     let fopts = zip_options(opts.compression);
@@ -121,11 +122,7 @@ pub fn pack_fms<W: Write + Seek>(
 
     // ── project/ ───────────────────────────────────────────────────────
     for (name, data) in documents {
-        let archive_path = if name.starts_with("project/") {
-            name.clone()
-        } else {
-            format!("project/{name}")
-        };
+        let archive_path = project_archive_path(name)?;
         zip.start_file(&archive_path, fopts)?;
         zip.write_all(data)?;
     }
@@ -435,15 +432,7 @@ fn validate_pack_input(
     let mut archive_paths = HashSet::new();
     let mut script: Option<&[u8]> = None;
     for (name, data) in documents {
-        let archive_path = if name.starts_with("project/") {
-            name.clone()
-        } else {
-            // `documents` is a project-relative map by API contract.
-            if name.starts_with('/') || name.starts_with('\\') {
-                anyhow::bail!("unsafe project document path `{name}`");
-            }
-            format!("project/{name}")
-        };
+        let archive_path = project_archive_path(name)?;
         validate_portable_namespace_path(&archive_path)?;
         if !archive_paths.insert(portable_extraction_key(&archive_path)) {
             anyhow::bail!("duplicate archive path or case-fold collision `{archive_path}`");
@@ -463,6 +452,48 @@ fn validate_pack_input(
             "script SHA-256 mismatch: expected {}, got {actual}",
             workspace.script_sha256
         );
+    }
+    Ok(())
+}
+
+fn project_archive_path(name: &str) -> Result<String> {
+    if name.starts_with("project/") {
+        return Ok(name.to_string());
+    }
+    // `documents` is a project-relative map by API contract.
+    if name.starts_with('/') || name.starts_with('\\') {
+        anyhow::bail!("unsafe project document path `{name}`");
+    }
+    Ok(format!("project/{name}"))
+}
+
+fn validate_export_plan(
+    documents: &HashMap<String, Vec<u8>>,
+    run_entries: &[PackEntry],
+    cas_entries: &[PackEntry],
+) -> Result<()> {
+    let mut registry = HashSet::new();
+    for path in [
+        "manifest/session.json",
+        "manifest/workspace.json",
+        "manifest/export_profile.json",
+    ]
+    .into_iter()
+    .map(str::to_owned)
+    .chain(
+        documents
+            .keys()
+            .map(|name| project_archive_path(name))
+            .collect::<Result<Vec<_>>>()?
+            .into_iter(),
+    )
+    .chain(run_entries.iter().map(|entry| entry.archive_path.clone()))
+    .chain(cas_entries.iter().map(|entry| entry.archive_path.clone()))
+    {
+        validate_portable_namespace_path(&path)?;
+        if !registry.insert(portable_extraction_key(&path)) {
+            anyhow::bail!("duplicate archive path or case-fold collision `{path}`");
+        }
     }
     Ok(())
 }
@@ -1165,6 +1196,31 @@ mod tests {
         }
     }
 
+    #[test]
+    fn pack_rejects_case_folded_dynamic_artifact_collision_before_output() {
+        let (_directory, store, mut session, workspace, profile, documents) =
+            pack_fixture(SaveProfile::Solved);
+        session
+            .run_refs
+            .push("runs/run-001/run_manifest.json".to_string());
+        store
+            .write_document("runs/run-001/run_manifest.json", b"{}")
+            .unwrap();
+        let artifacts = store.root().join("runs/run-001/artifacts");
+        std::fs::create_dir_all(&artifacts).unwrap();
+        std::fs::write(artifacts.join("result.bin"), b"first").unwrap();
+        std::fs::write(artifacts.join("RESULT.bin"), b"second").unwrap();
+
+        assert_pack_rejected_without_output(
+            &store,
+            &session,
+            &workspace,
+            &profile,
+            &documents,
+            "case-fold collision",
+        );
+    }
+
     fn rename_central_directory_entry(mut archive: Vec<u8>, from: &str, to: &str) -> Vec<u8> {
         assert_eq!(from.len(), to.len());
         let eocd = archive
@@ -1651,6 +1707,11 @@ mod tests {
 
         let fms_data = buf.into_inner();
         assert!(!fms_data.is_empty());
+
+        // Every archive emitted by pack_fms must satisfy the same preflight gate
+        // that protects inspect and unpack.
+        let preflight = preflight_fms(Cursor::new(&fms_data), &[]).unwrap();
+        assert_eq!(preflight.session.session_id, "s-001");
 
         // Inspect.
         let inspection = inspect_fms(Cursor::new(&fms_data)).unwrap();
