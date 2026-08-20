@@ -65,6 +65,40 @@ struct PackEntry {
     data: Vec<u8>,
 }
 
+#[derive(Default)]
+struct ArchiveLimitAccounting {
+    entries: u64,
+    uncompressed_bytes: u64,
+}
+
+impl ArchiveLimitAccounting {
+    fn validate_declared_entry_count(entry_count: u64) -> Result<()> {
+        if entry_count > MAX_ZIP_ENTRIES as u64 {
+            anyhow::bail!("too many ZIP entries: {entry_count} exceeds {MAX_ZIP_ENTRIES}");
+        }
+        Ok(())
+    }
+
+    fn account_entry(&mut self, uncompressed_size: u64) -> Result<()> {
+        self.entries = self
+            .entries
+            .checked_add(1)
+            .context("ZIP entry count overflow")?;
+        Self::validate_declared_entry_count(self.entries)?;
+        self.uncompressed_bytes = self
+            .uncompressed_bytes
+            .checked_add(uncompressed_size)
+            .context("uncompressed ZIP size overflow")?;
+        if self.uncompressed_bytes > MAX_UNCOMPRESSED_ZIP_BYTES {
+            anyhow::bail!(
+                "uncompressed ZIP size exceeds {} bytes",
+                MAX_UNCOMPRESSED_ZIP_BYTES
+            );
+        }
+        Ok(())
+    }
+}
+
 impl Default for PackOptions {
     fn default() -> Self {
         Self {
@@ -105,7 +139,14 @@ pub fn pack_fms<W: Write + Seek>(
     let canonical_root = canonical_store_root(store.root())?;
     let run_entries = plan_run_entries(store.root(), &canonical_root, session, export_profile)?;
     let cas_entries = plan_cas_entries(store.root(), &canonical_root, &run_entries)?;
-    validate_export_plan(documents, &run_entries, &cas_entries)?;
+    validate_export_plan(
+        session,
+        workspace,
+        export_profile,
+        documents,
+        &run_entries,
+        &cas_entries,
+    )?;
 
     let mut zip = zip::ZipWriter::new(writer);
     let fopts = zip_options(opts.compression);
@@ -186,6 +227,12 @@ fn plan_cas_entries(
         validate_portable_namespace_path(&archive_path)?;
         let source = store_root.join(&archive_path);
         if let Some(data) = read_store_file_if_exists(store_root, canonical_root, &source)? {
+            let actual = crate::cas::hex_sha256(&data);
+            if actual != hash {
+                anyhow::bail!(
+                    "CAS SHA-256 mismatch for `{archive_path}`: expected {hash}, got {actual}"
+                );
+            }
             entries.push(PackEntry { archive_path, data });
         }
     }
@@ -468,32 +515,61 @@ fn project_archive_path(name: &str) -> Result<String> {
 }
 
 fn validate_export_plan(
+    session: &FmsSessionManifest,
+    workspace: &FmsWorkspaceManifest,
+    export_profile: &FmsExportProfile,
     documents: &HashMap<String, Vec<u8>>,
     run_entries: &[PackEntry],
     cas_entries: &[PackEntry],
 ) -> Result<()> {
-    let mut registry = HashSet::new();
-    for path in [
-        "manifest/session.json",
-        "manifest/workspace.json",
-        "manifest/export_profile.json",
-    ]
-    .into_iter()
-    .map(str::to_owned)
-    .chain(
+    let mut entries = vec![
+        (
+            "manifest/session.json".to_string(),
+            archive_entry_size(&serde_json::to_vec_pretty(session)?)?,
+        ),
+        (
+            "manifest/workspace.json".to_string(),
+            archive_entry_size(&serde_json::to_vec_pretty(workspace)?)?,
+        ),
+        (
+            "manifest/export_profile.json".to_string(),
+            archive_entry_size(&serde_json::to_vec_pretty(export_profile)?)?,
+        ),
+    ];
+    entries.extend(
         documents
-            .keys()
-            .map(|name| project_archive_path(name))
-            .collect::<Result<Vec<_>>>()?
-            .into_iter(),
-    )
-    .chain(run_entries.iter().map(|entry| entry.archive_path.clone()))
-    .chain(cas_entries.iter().map(|entry| entry.archive_path.clone()))
-    {
+            .iter()
+            .map(|(name, data)| Ok((project_archive_path(name)?, archive_entry_size(data)?)))
+            .collect::<Result<Vec<_>>>()?,
+    );
+    entries.extend(
+        run_entries
+            .iter()
+            .map(|entry| Ok((entry.archive_path.clone(), archive_entry_size(&entry.data)?)))
+            .collect::<Result<Vec<_>>>()?,
+    );
+    entries.extend(
+        cas_entries
+            .iter()
+            .map(|entry| Ok((entry.archive_path.clone(), archive_entry_size(&entry.data)?)))
+            .collect::<Result<Vec<_>>>()?,
+    );
+    validate_export_entry_metadata(entries)
+}
+
+fn archive_entry_size(data: &[u8]) -> Result<u64> {
+    u64::try_from(data.len()).context("archive entry size does not fit u64")
+}
+
+fn validate_export_entry_metadata(entries: Vec<(String, u64)>) -> Result<()> {
+    let mut registry = HashSet::new();
+    let mut limits = ArchiveLimitAccounting::default();
+    for (path, uncompressed_size) in entries {
         validate_portable_namespace_path(&path)?;
         if !registry.insert(portable_extraction_key(&path)) {
             anyhow::bail!("duplicate archive path or case-fold collision `{path}`");
         }
+        limits.account_entry(uncompressed_size)?;
     }
     Ok(())
 }
@@ -636,9 +712,7 @@ fn scan_zip_directory(bytes: &[u8]) -> Result<ZipDirectoryScan> {
         )
     };
 
-    if entry_count > MAX_ZIP_ENTRIES as u64 {
-        anyhow::bail!("too many ZIP entries: {entry_count} exceeds {MAX_ZIP_ENTRIES}");
-    }
+    ArchiveLimitAccounting::validate_declared_entry_count(entry_count)?;
     let directory_end = directory_offset
         .checked_add(directory_size)
         .context("ZIP central directory size overflow")?;
@@ -650,7 +724,7 @@ fn scan_zip_directory(bytes: &[u8]) -> Result<ZipDirectoryScan> {
     let directory_end = directory_end as usize;
     let mut names = Vec::with_capacity(entry_count as usize);
     let mut seen_names = HashSet::new();
-    let mut total_uncompressed = 0u64;
+    let mut limits = ArchiveLimitAccounting::default();
     let mut total_compressed = 0u64;
     for _ in 0..entry_count {
         if offset + 46 > directory_end || &bytes[offset..offset + 4] != b"PK\x01\x02" {
@@ -688,15 +762,7 @@ fn scan_zip_directory(bytes: &[u8]) -> Result<ZipDirectoryScan> {
                 compressed_size = zip64_compressed.context("ZIP64 compressed size is missing")?;
             }
         }
-        total_uncompressed = total_uncompressed
-            .checked_add(uncompressed_size)
-            .context("uncompressed ZIP size overflow")?;
-        if total_uncompressed > MAX_UNCOMPRESSED_ZIP_BYTES {
-            anyhow::bail!(
-                "uncompressed ZIP size exceeds {} bytes",
-                MAX_UNCOMPRESSED_ZIP_BYTES
-            );
-        }
+        limits.account_entry(uncompressed_size)?;
         total_compressed = total_compressed.saturating_add(compressed_size);
         names.push(name);
         offset = entry_end;
@@ -1219,6 +1285,74 @@ mod tests {
             &documents,
             "case-fold collision",
         );
+    }
+
+    #[test]
+    fn pack_rejects_more_than_100000_entries_before_output() {
+        let (_directory, store, session, workspace, profile, mut documents) =
+            pack_fixture(SaveProfile::Compact);
+        documents.extend(
+            (0..MAX_ZIP_ENTRIES).map(|index| (format!("document-{index}.json"), Vec::new())),
+        );
+
+        assert_pack_rejected_without_output(
+            &store,
+            &session,
+            &workspace,
+            &profile,
+            &documents,
+            "too many ZIP entries",
+        );
+    }
+
+    #[test]
+    fn pack_rejects_tampered_cas_object_before_output() {
+        let (_directory, store, mut session, workspace, profile, documents) =
+            pack_fixture(SaveProfile::Resume);
+        session
+            .run_refs
+            .push("runs/run-001/run_manifest.json".to_string());
+        store
+            .write_document("runs/run-001/run_manifest.json", b"{}")
+            .unwrap();
+        let hash = store.cas().put(b"original CAS bytes").unwrap();
+        let mut checkpoint = FmsCheckpoint::new("run-001", 0, 0.0, 1e-12);
+        checkpoint.field_refs.push(FieldRef {
+            name: "m".to_string(),
+            role: FieldRole::Primary,
+            tensor_descriptor_ref: hash.clone(),
+        });
+        store
+            .write_document(
+                "runs/run-001/checkpoints/cp-000000/checkpoint.json",
+                &serde_json::to_vec(&checkpoint).unwrap(),
+            )
+            .unwrap();
+        std::fs::write(
+            store.root().join("objects/sha256").join(hash),
+            b"tampered CAS bytes",
+        )
+        .unwrap();
+
+        assert_pack_rejected_without_output(
+            &store,
+            &session,
+            &workspace,
+            &profile,
+            &documents,
+            "CAS SHA-256",
+        );
+    }
+
+    #[test]
+    fn export_metadata_rejects_more_than_64_gib_without_allocating_payload() {
+        let error = validate_export_entry_metadata(vec![(
+            "project/main.py".to_string(),
+            MAX_UNCOMPRESSED_ZIP_BYTES + 1,
+        )])
+        .unwrap_err();
+
+        assert!(error.to_string().contains("uncompressed ZIP size"));
     }
 
     fn rename_central_directory_entry(mut archive: Vec<u8>, from: &str, to: &str) -> Vec<u8> {
